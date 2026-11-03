@@ -1,0 +1,14 @@
+[package]
+name = "rc2fx-dfn"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "DeepFilterNet3 speech enhancement in plain Rust, for the suppression worker"
+
+[dependencies]
+realfft = "3.3"
+
+# `--cfg dfn_profile` (RUSTFLAGS) prints per-stage timings to stderr.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dfn_profile)'] }

@@ -1,0 +1,2568 @@
+{
+  "schemaVersion": 1,
+  "baselineProfile": "rodecaster-duo-1.7.6",
+  "candidateProfile": "rodecaster-duo-1.7.7",
+  "baselineArchiveSha256": "47d2ccb0d613b223ca6d5ed57c62ae6ee32ba71b662be5fbfb4ad3f44c757daa",
+  "candidateArchiveSha256": "4f3c7a022f07fd5b05955846e6a9052ad6ae214e12c04cda2d4749d775a304ed",
+  "baselineMixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
+  "candidateMixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
+  "method": "Full unwind-bounded ARM64 instruction comparison, retaining registers, fields, widths, stack sizes, internal branches and import names; PC-relative external addresses and RTTI locations normalized. Unmapped internal callee implementations are outside this comparison.",
+  "functions": {
+    "callback": {
+      "baselineOffset": "0x618480",
+      "candidateOffset": "0x6190f0",
+      "bytes": 760,
+      "instructions": 190,
+      "canonicalSha256": "6ba26ef8a4fb5a22c7c42ba245edf2c6f6250d3dbcaeba682ec757cad3e82aed",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x18c",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0x1c0",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x1ec",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x200",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x210",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x22c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x240",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x250",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x29c",
+          "instruction": "bl",
+          "baselineTarget": "0xb5b80",
+          "candidateTarget": "0xb3c30",
+          "import": "memset"
+        },
+        {
+          "relative": "0x2b8",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0x2ec",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x2f4",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        }
+      ]
+    },
+    "enqueue": {
+      "baselineOffset": "0x5c9120",
+      "candidateOffset": "0x5c9df0",
+      "bytes": 476,
+      "instructions": 119,
+      "canonicalSha256": "f1a5df2292302f44442f28e957b475bbdfa7a07db5a724d4658d56344af16af2",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x28",
+          "instruction": "bl",
+          "baselineTarget": "0x22cf50",
+          "candidateTarget": "0x22e980",
+          "import": null
+        },
+        {
+          "relative": "0x30",
+          "instruction": "bl",
+          "baselineTarget": "0xb6980",
+          "candidateTarget": "0xb4a80",
+          "import": "_Znwm"
+        },
+        {
+          "relative": "0x40",
+          "instruction": "bl",
+          "baselineTarget": "0x5db6d0",
+          "candidateTarget": "0x5dc3a0",
+          "import": null
+        },
+        {
+          "relative": "0x6c",
+          "instruction": "bl",
+          "baselineTarget": "0x6dba20",
+          "candidateTarget": "0x6d43c0",
+          "import": null
+        },
+        {
+          "relative": "0x84",
+          "instruction": "bl",
+          "baselineTarget": "0x5d9d50",
+          "candidateTarget": "0x5daa20",
+          "import": null
+        },
+        {
+          "relative": "0xa4",
+          "instruction": "bl",
+          "baselineTarget": "0x5d9060",
+          "candidateTarget": "0x5d9d30",
+          "import": null
+        },
+        {
+          "relative": "0xf0",
+          "instruction": "bl",
+          "baselineTarget": "0x5c82d0",
+          "candidateTarget": "0x5c8fa0",
+          "import": null
+        },
+        {
+          "relative": "0x14c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        },
+        {
+          "relative": "0x184",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x18c",
+          "instruction": "bl",
+          "baselineTarget": "0xb5810",
+          "candidateTarget": "0xb38d0",
+          "import": "pthread_mutex_destroy"
+        },
+        {
+          "relative": "0x1a8",
+          "instruction": "bl",
+          "baselineTarget": "0x6dba20",
+          "candidateTarget": "0x6d43c0",
+          "import": null
+        },
+        {
+          "relative": "0x1b4",
+          "instruction": "bl",
+          "baselineTarget": "0xb5bf0",
+          "candidateTarget": "0xb3ca0",
+          "import": "_ZdaPv"
+        },
+        {
+          "relative": "0x1c8",
+          "instruction": "bl",
+          "baselineTarget": "0xb58e0",
+          "candidateTarget": "0xb39a0",
+          "import": "_ZdlPvm"
+        }
+      ]
+    },
+    "manager": {
+      "baselineOffset": "0x411000",
+      "candidateOffset": "0x414020",
+      "bytes": 176,
+      "instructions": 44,
+      "canonicalSha256": "1fda7a2ee49989126941bed83ae6718033513adae898fbe359aa23b734164272",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x3c",
+          "instruction": "bl",
+          "baselineTarget": "0xb58e0",
+          "candidateTarget": "0xb39a0",
+          "import": "_ZdlPvm"
+        },
+        {
+          "relative": "0x9c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6980",
+          "candidateTarget": "0xb4a80",
+          "import": "_Znwm"
+        }
+      ]
+    },
+    "invoker": {
+      "baselineOffset": "0x41c1f0",
+      "candidateOffset": "0x41f230",
+      "bytes": 12,
+      "instructions": 3,
+      "canonicalSha256": "c2ca858b7c84ce319a1d5808df548d898372fe97aab96405aa601cec49010b52",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x8",
+          "instruction": "b",
+          "baselineTarget": "0x41ba40",
+          "candidateTarget": "0x41ea80",
+          "import": null
+        }
+      ]
+    },
+    "body": {
+      "baselineOffset": "0x41ba40",
+      "candidateOffset": "0x41ea80",
+      "bytes": 1968,
+      "instructions": 492,
+      "canonicalSha256": "f80dbc9af74c2469c3f4437a10643462a7b90f88cb39a41010f1f76d0147e3c7",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x40",
+          "instruction": "bl",
+          "baselineTarget": "0x6db9c0",
+          "candidateTarget": "0x6d4360",
+          "import": null
+        },
+        {
+          "relative": "0x114",
+          "instruction": "bl",
+          "baselineTarget": "0xb5b80",
+          "candidateTarget": "0xb3c30",
+          "import": "memset"
+        },
+        {
+          "relative": "0x130",
+          "instruction": "bl",
+          "baselineTarget": "0xb5b80",
+          "candidateTarget": "0xb3c30",
+          "import": "memset"
+        },
+        {
+          "relative": "0x14c",
+          "instruction": "bl",
+          "baselineTarget": "0x2179b0",
+          "candidateTarget": "0x219390",
+          "import": null
+        },
+        {
+          "relative": "0x1ac",
+          "instruction": "bl",
+          "baselineTarget": "0x64ff70",
+          "candidateTarget": "0x650190",
+          "import": null
+        },
+        {
+          "relative": "0x1c8",
+          "instruction": "bl",
+          "baselineTarget": "0x6501c0",
+          "candidateTarget": "0x6503e0",
+          "import": null
+        },
+        {
+          "relative": "0x2a4",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x328",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x354",
+          "instruction": "bl",
+          "baselineTarget": "0x6cc3e0",
+          "candidateTarget": "0x6cba30",
+          "import": null
+        },
+        {
+          "relative": "0x368",
+          "instruction": "bl",
+          "baselineTarget": "0x6cc3e0",
+          "candidateTarget": "0x6cba30",
+          "import": null
+        },
+        {
+          "relative": "0x3b0",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x44c",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x57c",
+          "instruction": "bl",
+          "baselineTarget": "0x4122b0",
+          "candidateTarget": "0x4152a0",
+          "import": null
+        },
+        {
+          "relative": "0x5a8",
+          "instruction": "bl",
+          "baselineTarget": "0x4122b0",
+          "candidateTarget": "0x4152a0",
+          "import": null
+        },
+        {
+          "relative": "0x5b0",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x5f4",
+          "instruction": "bl",
+          "baselineTarget": "0x219560",
+          "candidateTarget": "0x21af40",
+          "import": null
+        },
+        {
+          "relative": "0x604",
+          "instruction": "bl",
+          "baselineTarget": "0x219560",
+          "candidateTarget": "0x21af40",
+          "import": null
+        },
+        {
+          "relative": "0x618",
+          "instruction": "bl",
+          "baselineTarget": "0x6501c0",
+          "candidateTarget": "0x6503e0",
+          "import": null
+        },
+        {
+          "relative": "0x660",
+          "instruction": "bl",
+          "baselineTarget": "0x6943c0",
+          "candidateTarget": "0x693b80",
+          "import": null
+        },
+        {
+          "relative": "0x6f8",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x738",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x750",
+          "instruction": "bl",
+          "baselineTarget": "0xb5b80",
+          "candidateTarget": "0xb3c30",
+          "import": "memset"
+        },
+        {
+          "relative": "0x76c",
+          "instruction": "bl",
+          "baselineTarget": "0xb5b80",
+          "candidateTarget": "0xb3c30",
+          "import": "memset"
+        },
+        {
+          "relative": "0x778",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x77c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x780",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x79c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x7a4",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x7ac",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        }
+      ]
+    },
+    "mixerProcess": {
+      "baselineOffset": "0x657250",
+      "candidateOffset": "0x657470",
+      "bytes": 8572,
+      "instructions": 2143,
+      "canonicalSha256": "627268ecacd82d12a706f115b90e224670258033c6a081cf0fbe8f5d9647ea98",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x6c",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x78",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x84",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x90",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x9c",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0xa8",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0xb4",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0xc0",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0xcc",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0xd8",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0xe4",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0xf0",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0xfc",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x108",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x114",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x120",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x12c",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x138",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x144",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x150",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x15c",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x168",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x174",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x180",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x18c",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x198",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1a4",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1b0",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1bc",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1c8",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1d4",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1e0",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1ec",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x1f8",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x204",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x210",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x21c",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x228",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x234",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x240",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x2fc",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x304",
+          "instruction": "bl",
+          "baselineTarget": "0x412330",
+          "candidateTarget": "0x415320",
+          "import": null
+        },
+        {
+          "relative": "0x364",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x36c",
+          "instruction": "bl",
+          "baselineTarget": "0x415cc0",
+          "candidateTarget": "0x418cb0",
+          "import": null
+        },
+        {
+          "relative": "0x378",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x384",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x390",
+          "instruction": "bl",
+          "baselineTarget": "0x415de0",
+          "candidateTarget": "0x418dd0",
+          "import": null
+        },
+        {
+          "relative": "0x448",
+          "instruction": "bl",
+          "baselineTarget": "0x2572f0",
+          "candidateTarget": "0x259640",
+          "import": null
+        },
+        {
+          "relative": "0xb90",
+          "instruction": "bl",
+          "baselineTarget": "0x2179b0",
+          "candidateTarget": "0x219390",
+          "import": null
+        },
+        {
+          "relative": "0xbc4",
+          "instruction": "bl",
+          "baselineTarget": "0x22cf00",
+          "candidateTarget": "0x22e930",
+          "import": null
+        },
+        {
+          "relative": "0xcc0",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0xcd4",
+          "instruction": "bl",
+          "baselineTarget": "0x5c82d0",
+          "candidateTarget": "0x5c8fa0",
+          "import": null
+        },
+        {
+          "relative": "0xce8",
+          "instruction": "bl",
+          "baselineTarget": "0x5c82d0",
+          "candidateTarget": "0x5c8fa0",
+          "import": null
+        },
+        {
+          "relative": "0xd00",
+          "instruction": "bl",
+          "baselineTarget": "0x5c82d0",
+          "candidateTarget": "0x5c8fa0",
+          "import": null
+        },
+        {
+          "relative": "0xfe8",
+          "instruction": "bl",
+          "baselineTarget": "0x5c7850",
+          "candidateTarget": "0x5c8520",
+          "import": null
+        },
+        {
+          "relative": "0xff4",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0x102c",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x1030",
+          "instruction": "bl",
+          "baselineTarget": "0x5c7850",
+          "candidateTarget": "0x5c8520",
+          "import": null
+        },
+        {
+          "relative": "0x1044",
+          "instruction": "bl",
+          "baselineTarget": "0x5da990",
+          "candidateTarget": "0x5db660",
+          "import": null
+        },
+        {
+          "relative": "0x104c",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0x106c",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x108c",
+          "instruction": "bl",
+          "baselineTarget": "0x5c82d0",
+          "candidateTarget": "0x5c8fa0",
+          "import": null
+        },
+        {
+          "relative": "0x109c",
+          "instruction": "bl",
+          "baselineTarget": "0x5c82d0",
+          "candidateTarget": "0x5c8fa0",
+          "import": null
+        },
+        {
+          "relative": "0x110c",
+          "instruction": "bl",
+          "baselineTarget": "0x42d8f0",
+          "candidateTarget": "0x430930",
+          "import": null
+        },
+        {
+          "relative": "0x114c",
+          "instruction": "bl",
+          "baselineTarget": "0x21c110",
+          "candidateTarget": "0x21dae0",
+          "import": null
+        },
+        {
+          "relative": "0x1158",
+          "instruction": "bl",
+          "baselineTarget": "0x21de10",
+          "candidateTarget": "0x21f7e0",
+          "import": null
+        },
+        {
+          "relative": "0x1174",
+          "instruction": "bl",
+          "baselineTarget": "0x21c110",
+          "candidateTarget": "0x21dae0",
+          "import": null
+        },
+        {
+          "relative": "0x1184",
+          "instruction": "bl",
+          "baselineTarget": "0x21de10",
+          "candidateTarget": "0x21f7e0",
+          "import": null
+        },
+        {
+          "relative": "0x11a0",
+          "instruction": "bl",
+          "baselineTarget": "0x21de10",
+          "candidateTarget": "0x21f7e0",
+          "import": null
+        },
+        {
+          "relative": "0x11cc",
+          "instruction": "bl",
+          "baselineTarget": "0x21c110",
+          "candidateTarget": "0x21dae0",
+          "import": null
+        },
+        {
+          "relative": "0x11e8",
+          "instruction": "bl",
+          "baselineTarget": "0x21de10",
+          "candidateTarget": "0x21f7e0",
+          "import": null
+        },
+        {
+          "relative": "0x1220",
+          "instruction": "bl",
+          "baselineTarget": "0x5c7850",
+          "candidateTarget": "0x5c8520",
+          "import": null
+        },
+        {
+          "relative": "0x122c",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0x1264",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x1268",
+          "instruction": "bl",
+          "baselineTarget": "0x5c7850",
+          "candidateTarget": "0x5c8520",
+          "import": null
+        },
+        {
+          "relative": "0x127c",
+          "instruction": "bl",
+          "baselineTarget": "0x5da990",
+          "candidateTarget": "0x5db660",
+          "import": null
+        },
+        {
+          "relative": "0x1284",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0x12a4",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x14f4",
+          "instruction": "bl",
+          "baselineTarget": "0x2179b0",
+          "candidateTarget": "0x219390",
+          "import": null
+        },
+        {
+          "relative": "0x151c",
+          "instruction": "bl",
+          "baselineTarget": "0x2179b0",
+          "candidateTarget": "0x219390",
+          "import": null
+        },
+        {
+          "relative": "0x1530",
+          "instruction": "bl",
+          "baselineTarget": "0x42e880",
+          "candidateTarget": "0x4318c0",
+          "import": null
+        },
+        {
+          "relative": "0x153c",
+          "instruction": "bl",
+          "baselineTarget": "0x42e880",
+          "candidateTarget": "0x4318c0",
+          "import": null
+        },
+        {
+          "relative": "0x1548",
+          "instruction": "bl",
+          "baselineTarget": "0x42e880",
+          "candidateTarget": "0x4318c0",
+          "import": null
+        },
+        {
+          "relative": "0x1554",
+          "instruction": "bl",
+          "baselineTarget": "0x42e880",
+          "candidateTarget": "0x4318c0",
+          "import": null
+        },
+        {
+          "relative": "0x1560",
+          "instruction": "bl",
+          "baselineTarget": "0x42e880",
+          "candidateTarget": "0x4318c0",
+          "import": null
+        },
+        {
+          "relative": "0x156c",
+          "instruction": "bl",
+          "baselineTarget": "0x42e880",
+          "candidateTarget": "0x4318c0",
+          "import": null
+        },
+        {
+          "relative": "0x15e0",
+          "instruction": "bl",
+          "baselineTarget": "0x2572f0",
+          "candidateTarget": "0x259640",
+          "import": null
+        },
+        {
+          "relative": "0x1604",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1624",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1640",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x165c",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x16c8",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x16d0",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x16d8",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x16e0",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x174c",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x1780",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x17c8",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x17ec",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x1838",
+          "instruction": "bl",
+          "baselineTarget": "0x21c110",
+          "candidateTarget": "0x21dae0",
+          "import": null
+        },
+        {
+          "relative": "0x1944",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1964",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x198c",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x19d0",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1a0c",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1a4c",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1aac",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1aec",
+          "instruction": "bl",
+          "baselineTarget": "0xb6980",
+          "candidateTarget": "0xb4a80",
+          "import": "_Znwm"
+        },
+        {
+          "relative": "0x1b30",
+          "instruction": "bl",
+          "baselineTarget": "0x5c9120",
+          "candidateTarget": "0x5c9df0",
+          "import": null
+        },
+        {
+          "relative": "0x1b50",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1b58",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1b60",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1b68",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1b70",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1b78",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1bdc",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x1bfc",
+          "instruction": "bl",
+          "baselineTarget": "0xb6ff0",
+          "candidateTarget": "0xb50e0",
+          "import": "printf"
+        },
+        {
+          "relative": "0x1c30",
+          "instruction": "bl",
+          "baselineTarget": "0x21c110",
+          "candidateTarget": "0x21dae0",
+          "import": null
+        },
+        {
+          "relative": "0x1d24",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1d48",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1d74",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1db0",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1dd4",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1e0c",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1e40",
+          "instruction": "bl",
+          "baselineTarget": "0x21bf00",
+          "candidateTarget": "0x21d8d0",
+          "import": null
+        },
+        {
+          "relative": "0x1e5c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1e64",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1e6c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x1e7c",
+          "instruction": "bl",
+          "baselineTarget": "0x42e880",
+          "candidateTarget": "0x4318c0",
+          "import": null
+        },
+        {
+          "relative": "0x1f14",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x1f3c",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x1f5c",
+          "instruction": "bl",
+          "baselineTarget": "0xb5b80",
+          "candidateTarget": "0xb3c30",
+          "import": "memset"
+        },
+        {
+          "relative": "0x1f94",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x1fc8",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0x1fd4",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x1ff8",
+          "instruction": "bl",
+          "baselineTarget": "0xb5b80",
+          "candidateTarget": "0xb3c30",
+          "import": "memset"
+        },
+        {
+          "relative": "0x2000",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x2004",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x2008",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x200c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x2010",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x2014",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x2018",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x201c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66e0",
+          "candidateTarget": "0xb47a0",
+          "import": "_ZSt25__throw_bad_function_callv"
+        },
+        {
+          "relative": "0x2034",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x203c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x2044",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x204c",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x2054",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x2060",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x2068",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        },
+        {
+          "relative": "0x2090",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x2098",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x20a0",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x20a8",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x20bc",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x20dc",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x20e4",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        }
+      ]
+    },
+    "functionCopyConstructor": {
+      "baselineOffset": "0x22cf50",
+      "candidateOffset": "0x22e980",
+      "bytes": 120,
+      "instructions": 30,
+      "canonicalSha256": "f65e777539d7744c62ad6609d2d5f01ce8be77d91751900852756c3436854e9a",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x74",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        }
+      ]
+    },
+    "jackRegistrationTeardown": {
+      "baselineOffset": "0x617d70",
+      "candidateOffset": "0x6189e0",
+      "bytes": 1156,
+      "instructions": 289,
+      "canonicalSha256": "1ed3c827735648a1ed48915ab211a102ceb72edf797d8bc63b7b1719e63229da",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x5c",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0x68",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x94",
+          "instruction": "bl",
+          "baselineTarget": "0x5add50",
+          "candidateTarget": "0x5ae9e0",
+          "import": null
+        },
+        {
+          "relative": "0xa0",
+          "instruction": "bl",
+          "baselineTarget": "0xb73e0",
+          "candidateTarget": "0xb54f0",
+          "import": "pthread_mutex_lock"
+        },
+        {
+          "relative": "0xdc",
+          "instruction": "bl",
+          "baselineTarget": "0x62f530",
+          "candidateTarget": "0x630450",
+          "import": null
+        },
+        {
+          "relative": "0x11c",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x2b0",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x2c8",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x2dc",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x2e4",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x2fc",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x310",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x318",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x330",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x344",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x34c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x364",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x378",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x380",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x398",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x3ac",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x3b4",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x3cc",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x3e0",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x3e8",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x400",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x414",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x478",
+          "instruction": "bl",
+          "baselineTarget": "0xb7110",
+          "candidateTarget": "0xb5210",
+          "import": "pthread_mutex_unlock"
+        },
+        {
+          "relative": "0x480",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        }
+      ]
+    },
+    "jackRegistrationActive": {
+      "baselineOffset": "0x61ec10",
+      "candidateOffset": "0x61f880",
+      "bytes": 3656,
+      "instructions": 914,
+      "canonicalSha256": "4e3da5d7a7acec798e7eeb89096871293cc6698276495001d4a3b8760d14fc7e",
+      "relocationNormalizedEqual": true,
+      "externalCalls": [
+        {
+          "relative": "0x3c",
+          "instruction": "bl",
+          "baselineTarget": "0x5b8b10",
+          "candidateTarget": "0x5b97e0",
+          "import": null
+        },
+        {
+          "relative": "0x1c8",
+          "instruction": "bl",
+          "baselineTarget": "0x5b48e0",
+          "candidateTarget": "0x5b5590",
+          "import": null
+        },
+        {
+          "relative": "0x1ec",
+          "instruction": "bl",
+          "baselineTarget": "0x618f70",
+          "candidateTarget": "0x619be0",
+          "import": null
+        },
+        {
+          "relative": "0x234",
+          "instruction": "bl",
+          "baselineTarget": "0x5dcb80",
+          "candidateTarget": "0x5dd880",
+          "import": null
+        },
+        {
+          "relative": "0x24c",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0x25c",
+          "instruction": "bl",
+          "baselineTarget": "0x694130",
+          "candidateTarget": "0x6938f0",
+          "import": null
+        },
+        {
+          "relative": "0x268",
+          "instruction": "bl",
+          "baselineTarget": "0x5bbae0",
+          "candidateTarget": "0x5bc7b0",
+          "import": null
+        },
+        {
+          "relative": "0x274",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0x294",
+          "instruction": "bl",
+          "baselineTarget": "0x619410",
+          "candidateTarget": "0x61a080",
+          "import": null
+        },
+        {
+          "relative": "0x2b8",
+          "instruction": "bl",
+          "baselineTarget": "0x5b4b20",
+          "candidateTarget": "0x5b57d0",
+          "import": null
+        },
+        {
+          "relative": "0x2d8",
+          "instruction": "bl",
+          "baselineTarget": "0x5bfe50",
+          "candidateTarget": "0x5c0b20",
+          "import": null
+        },
+        {
+          "relative": "0x39c",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0x3a4",
+          "instruction": "bl",
+          "baselineTarget": "0x5b4b20",
+          "candidateTarget": "0x5b57d0",
+          "import": null
+        },
+        {
+          "relative": "0x3b8",
+          "instruction": "bl",
+          "baselineTarget": "0x5b48e0",
+          "candidateTarget": "0x5b5590",
+          "import": null
+        },
+        {
+          "relative": "0x3dc",
+          "instruction": "bl",
+          "baselineTarget": "0x618f70",
+          "candidateTarget": "0x619be0",
+          "import": null
+        },
+        {
+          "relative": "0x424",
+          "instruction": "bl",
+          "baselineTarget": "0x5dcb80",
+          "candidateTarget": "0x5dd880",
+          "import": null
+        },
+        {
+          "relative": "0x43c",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0x44c",
+          "instruction": "bl",
+          "baselineTarget": "0x694130",
+          "candidateTarget": "0x6938f0",
+          "import": null
+        },
+        {
+          "relative": "0x458",
+          "instruction": "bl",
+          "baselineTarget": "0x5bbae0",
+          "candidateTarget": "0x5bc7b0",
+          "import": null
+        },
+        {
+          "relative": "0x464",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0x48c",
+          "instruction": "bl",
+          "baselineTarget": "0x619410",
+          "candidateTarget": "0x61a080",
+          "import": null
+        },
+        {
+          "relative": "0x4a4",
+          "instruction": "bl",
+          "baselineTarget": "0x5b4b20",
+          "candidateTarget": "0x5b57d0",
+          "import": null
+        },
+        {
+          "relative": "0x4c4",
+          "instruction": "bl",
+          "baselineTarget": "0x5bfe50",
+          "candidateTarget": "0x5c0b20",
+          "import": null
+        },
+        {
+          "relative": "0x584",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0x58c",
+          "instruction": "bl",
+          "baselineTarget": "0x5b4b20",
+          "candidateTarget": "0x5b57d0",
+          "import": null
+        },
+        {
+          "relative": "0x5a4",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x5b0",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x5c4",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x5d0",
+          "instruction": "bl",
+          "baselineTarget": "0xb6030",
+          "candidateTarget": "0xb4100",
+          "import": "calloc"
+        },
+        {
+          "relative": "0x5e8",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0x5f4",
+          "instruction": "bl",
+          "baselineTarget": "0xb6030",
+          "candidateTarget": "0xb4100",
+          "import": "calloc"
+        },
+        {
+          "relative": "0x600",
+          "instruction": "bl",
+          "baselineTarget": "0x61cc90",
+          "candidateTarget": "0x61d900",
+          "import": null
+        },
+        {
+          "relative": "0x65c",
+          "instruction": "bl",
+          "baselineTarget": "0x5b8ac0",
+          "candidateTarget": "0x5b9790",
+          "import": null
+        },
+        {
+          "relative": "0x680",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x698",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x6b0",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x6c0",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x6d8",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x6f0",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x704",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x71c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x730",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x744",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x75c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x770",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x778",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x790",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x7a4",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x7b8",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x7d0",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x7e4",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x7f8",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x810",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x824",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x838",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x850",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x864",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x878",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0x890",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0x8a4",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0x8c0",
+          "instruction": "bl",
+          "baselineTarget": "0x5b4840",
+          "candidateTarget": "0x5b54f0",
+          "import": null
+        },
+        {
+          "relative": "0x918",
+          "instruction": "bl",
+          "baselineTarget": "0x617790",
+          "candidateTarget": "0x618400",
+          "import": null
+        },
+        {
+          "relative": "0x940",
+          "instruction": "bl",
+          "baselineTarget": "0x5b4840",
+          "candidateTarget": "0x5b54f0",
+          "import": null
+        },
+        {
+          "relative": "0x998",
+          "instruction": "bl",
+          "baselineTarget": "0x617790",
+          "candidateTarget": "0x618400",
+          "import": null
+        },
+        {
+          "relative": "0x9b0",
+          "instruction": "bl",
+          "baselineTarget": "0xb7670",
+          "candidateTarget": "0xb5750",
+          "import": "strlen"
+        },
+        {
+          "relative": "0x9cc",
+          "instruction": "bl",
+          "baselineTarget": "0x5b5f70",
+          "candidateTarget": "0x5b6c20",
+          "import": null
+        },
+        {
+          "relative": "0x9e4",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0xa04",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0xa1c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0xa30",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0xa8c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6410",
+          "candidateTarget": "0xb44e0",
+          "import": "realloc"
+        },
+        {
+          "relative": "0xaf0",
+          "instruction": "bl",
+          "baselineTarget": "0xb7670",
+          "candidateTarget": "0xb5750",
+          "import": "strlen"
+        },
+        {
+          "relative": "0xb0c",
+          "instruction": "bl",
+          "baselineTarget": "0x5b5f70",
+          "candidateTarget": "0x5b6c20",
+          "import": null
+        },
+        {
+          "relative": "0xb28",
+          "instruction": "bl",
+          "baselineTarget": "0xb5d90",
+          "candidateTarget": "0xb3e60",
+          "import": "memcpy"
+        },
+        {
+          "relative": "0xb44",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0xb5c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0xb70",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0xbd0",
+          "instruction": "bl",
+          "baselineTarget": "0xb6410",
+          "candidateTarget": "0xb44e0",
+          "import": "realloc"
+        },
+        {
+          "relative": "0xc38",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0xc54",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0xc68",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0xc84",
+          "instruction": "bl",
+          "baselineTarget": "0xb6cf0",
+          "candidateTarget": "0xb4df0",
+          "import": "__cxa_guard_acquire"
+        },
+        {
+          "relative": "0xca0",
+          "instruction": "bl",
+          "baselineTarget": "0xb6a20",
+          "candidateTarget": "0xb4b20",
+          "import": "dlsym"
+        },
+        {
+          "relative": "0xcb4",
+          "instruction": "bl",
+          "baselineTarget": "0xb7050",
+          "candidateTarget": "0xb5140",
+          "import": "__cxa_guard_release"
+        },
+        {
+          "relative": "0xcdc",
+          "instruction": "bl",
+          "baselineTarget": "0x5bb1a0",
+          "candidateTarget": "0x5bbe70",
+          "import": null
+        },
+        {
+          "relative": "0xcf4",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0xcfc",
+          "instruction": "bl",
+          "baselineTarget": "0x5b8ac0",
+          "candidateTarget": "0x5b9790",
+          "import": null
+        },
+        {
+          "relative": "0xd20",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0xd48",
+          "instruction": "bl",
+          "baselineTarget": "0xb66d0",
+          "candidateTarget": "0xb4790",
+          "import": "free"
+        },
+        {
+          "relative": "0xd74",
+          "instruction": "bl",
+          "baselineTarget": "0xb5e60",
+          "candidateTarget": "0xb3f30",
+          "import": "malloc"
+        },
+        {
+          "relative": "0xd8c",
+          "instruction": "bl",
+          "baselineTarget": "0xb5e60",
+          "candidateTarget": "0xb3f30",
+          "import": "malloc"
+        },
+        {
+          "relative": "0xe14",
+          "instruction": "bl",
+          "baselineTarget": "0x5b3840",
+          "candidateTarget": "0x5b44f0",
+          "import": null
+        },
+        {
+          "relative": "0xe1c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        },
+        {
+          "relative": "0xe34",
+          "instruction": "bl",
+          "baselineTarget": "0x619410",
+          "candidateTarget": "0x61a080",
+          "import": null
+        },
+        {
+          "relative": "0xe3c",
+          "instruction": "bl",
+          "baselineTarget": "0xb6070",
+          "candidateTarget": "0xb4140",
+          "import": "_Unwind_Resume"
+        }
+      ]
+    }
+  },
+  "identicalAssetSha256": {
+    "usr/bin/audio-start.sh": "f27368e6d68296ebb9c6f22401f2fe00317643bee23c08b86d44d183408fa263",
+    "usr/bin/rode-update.sh": "096051b96fc3e8485ab10581fe80c928f00a7477f036db6ab8f9d9b113addace",
+    "etc/init.d/uac2_gadget.sh": "18d1860f3fd67bf19797804c77eb4f9411cf144ba1da7d71ed1ff1cf0b74bec2",
+    "lib/libc.so.6": "4520886bf77ca58d8a2ae48553558f193541a7b13106a6dbdcbc41689470bc23",
+    "usr/lib/libstdc++.so.6": "aada2c755609345ea3844fd6ace767b3b9db5ed6e7c2f3869095b693d427508e",
+    "usr/lib/libjack.so.0": "3395d474fafc7723870d920eec74d1c42f9ed22d2816c98603a00f8c19c7f53e"
+  },
+  "emulation": {
+    "baseline": {
+      "managerCopies32Bytes": true,
+      "managerSizedDelete32Bytes": true,
+      "managerTypeName": "*ZN5Mixer7ProcessEPPKfiPPfijllEUlvE_",
+      "enqueueManagerOperations": [
+        2,
+        2,
+        3
+      ],
+      "enqueueAllocationSizes": [
+        32,
+        128,
+        32
+      ],
+      "queuedCaptureSurvivesTemporaryDestruction": true,
+      "invokerPassesCaptureToMappedBody": true,
+      "callbackNullContextReturnsZero": true,
+      "constructorCaptureOffsets": [
+        0,
+        8,
+        16,
+        24
+      ],
+      "constructorCaptureReferences": [
+        "mixer",
+        "output-table-u64",
+        "frame-count-u32",
+        "flag-u8"
+      ],
+      "constructorFunctionOffsets": {
+        "manager": 16,
+        "invoker": 24
+      },
+      "constructorCallSite": "0x658d80",
+      "constructorParent": "0x657250"
+    },
+    "candidate": {
+      "managerCopies32Bytes": true,
+      "managerSizedDelete32Bytes": true,
+      "managerTypeName": "*ZN5Mixer7ProcessEPPKfiPPfijllEUlvE_",
+      "enqueueManagerOperations": [
+        2,
+        2,
+        3
+      ],
+      "enqueueAllocationSizes": [
+        32,
+        128,
+        32
+      ],
+      "queuedCaptureSurvivesTemporaryDestruction": true,
+      "invokerPassesCaptureToMappedBody": true,
+      "callbackNullContextReturnsZero": true,
+      "constructorCaptureOffsets": [
+        0,
+        8,
+        16,
+        24
+      ],
+      "constructorCaptureReferences": [
+        "mixer",
+        "output-table-u64",
+        "frame-count-u32",
+        "flag-u8"
+      ],
+      "constructorFunctionOffsets": {
+        "manager": 16,
+        "invoker": 24
+      },
+      "constructorCallSite": "0x658fa0",
+      "constructorParent": "0x657470"
+    }
+  },
+  "limitations": [
+    "Offline fixtures stub allocation, strings, events and thread-pool submission; PAC/BTI hints skipped.",
+    "No mixer flash, deployment, audio playback, real-time or device transport validation performed."
+  ]
+}

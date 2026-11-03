@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "profiles": [
+    {
+      "id": "rodecaster-pro-ii-1.7.6",
+      "model": "rodecaster-pro-ii",
+      "version": "1.7.6",
+      "mixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
+      "launcherSha256": "f27368e6d68296ebb9c6f22401f2fe00317643bee23c08b86d44d183408fa263",
+      "archiveSha256": "77091e7857f446d42e8da6c2c3107d7ee3f3eb2fbe89f7a479902ff2c3bcda98",
+      "archiveMd5": "fc6cacc2218f59182df386247fac3518",
+      "runtime": {
+        "callbackAbi": "jack-process-v1",
+        "routeLayout": "pro-ii-25-v1",
+        "sourceEnum": "pro-ii-sources-v1",
+        "sampleRate": 48000,
+        "blockFrames": 112,
+        "showPath": "/Application/update-staging/system-config-2026.bin",
+        "callback": { "offset": "0x618480", "expected": "5f2403d5211300b43f2303d5fd7bb9a9" },
+        "jobLifetime": {
+          "abi": "capture-values-v1",
+          "enqueue": { "offset": "0x5c9120", "expected": "3f2303d5fd7bb8a9fd030091f55b02a9" },
+          "manager": { "offset": "0x411000", "expected": "3f2303d5fd7bbea9fd030091f35301a9" },
+          "invoker": { "offset": "0x41c1f0", "expected": "5f2403d5000040f912feff171f2003d5" },
+          "body": { "offset": "0x41ba40", "expected": "3f2303d5ff430bd1fd7b00a9fd030091" }
+        }
+      },
+      "notes": "Qualified Pro II callback, routes and capture-values-v1 job repair."
+    },
+    {
+      "id": "rodecaster-pro-ii-1.7.7",
+      "model": "rodecaster-pro-ii",
+      "version": "1.7.7",
+      "mixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
+      "launcherSha256": "f27368e6d68296ebb9c6f22401f2fe00317643bee23c08b86d44d183408fa263",
+      "archiveSha256": "29028734fb2fcc26433bd9f519004c58526c195392ad704826df2fc2909fe57e",
+      "archiveMd5": "4476bb557ee4cb444918303bed844f11",
+      "runtime": {
+        "callbackAbi": "jack-process-v1",
+        "routeLayout": "pro-ii-25-v1",
+        "sourceEnum": "pro-ii-sources-v1",
+        "sampleRate": 48000,
+        "blockFrames": 112,
+        "showPath": "/Application/update-staging/system-config-2026.bin",
+        "callback": { "offset": "0x6190f0", "expected": "5f2403d5211300b43f2303d5fd7bb9a9" },
+        "jobLifetime": {
+          "abi": "capture-values-v1",
+          "enqueue": { "offset": "0x5c9df0", "expected": "3f2303d5fd7bb8a9fd030091f55b02a9" },
+          "manager": { "offset": "0x414020", "expected": "3f2303d5fd7bbea9fd030091f35301a9" },
+          "invoker": { "offset": "0x41f230", "expected": "5f2403d5000040f912feff171f2003d5" },
+          "body": { "offset": "0x41ea80", "expected": "3f2303d5ff430bd1fd7b00a9fd030091" }
+        }
+      },
+      "notes": "Qualified Pro II 1.7.7: full relocated instruction comparison, ARM64 closure emulation and prior hardware validation. Stable archive re-downloaded on 2026-11-03: byte-identical to the qualified beta archive; archive, executable and hook-site checks pass unchanged. See docs/reference/firmware.md."
+    },
+    {
+      "id": "rodecaster-duo-1.7.6",
+      "model": "rodecaster-duo",
+      "version": "1.7.6",
+      "mixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
+      "launcherSha256": "f27368e6d68296ebb9c6f22401f2fe00317643bee23c08b86d44d183408fa263",
+      "archiveSha256": "47d2ccb0d613b223ca6d5ed57c62ae6ee32ba71b662be5fbfb4ad3f44c757daa",
+      "archiveMd5": "50fb0c434ea5d4b643f7ff5a38253fe5",
+      "runtime": {
+        "callbackAbi": "jack-process-v1",
+        "routeLayout": "duo-23-v1",
+        "sourceEnum": "duo-sources-v1",
+        "sampleRate": 48000,
+        "blockFrames": 112,
+        "showPath": "/Application/update-staging/system-config-2026.bin",
+        "callback": {
+          "offset": "0x618480",
+          "expected": "5f2403d5211300b43f2303d5fd7bb9a9"
+        },
+        "jobLifetime": {
+          "abi": "capture-values-v1",
+          "enqueue": {
+            "offset": "0x5c9120",
+            "expected": "3f2303d5fd7bb8a9fd030091f55b02a9"
+          },
+          "manager": {
+            "offset": "0x411000",
+            "expected": "3f2303d5fd7bbea9fd030091f35301a9"
+          },
+          "invoker": {
+            "offset": "0x41c1f0",
+            "expected": "5f2403d5000040f912feff171f2003d5"
+          },
+          "body": {
+            "offset": "0x41ba40",
+            "expected": "3f2303d5ff430bd1fd7b00a9fd030091"
+          }
+        }
+      },
+      "notes": "Experimental opt-in only; NOT tested on a Duo. Exact official Duo 1.7.6 archive and model-specific routes checked offline. Flashing, recovery, audio and performance still require device testing. Use at your own risk; never flash Pro II firmware onto a Duo."
+    },
+    {
+      "id": "rodecaster-duo-1.7.7",
+      "model": "rodecaster-duo",
+      "version": "1.7.7",
+      "mixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
+      "launcherSha256": "f27368e6d68296ebb9c6f22401f2fe00317643bee23c08b86d44d183408fa263",
+      "archiveSha256": "4f3c7a022f07fd5b05955846e6a9052ad6ae214e12c04cda2d4749d775a304ed",
+      "archiveMd5": "09393fef8a9f3b627a39801148d85d1d",
+      "runtime": {
+        "callbackAbi": "jack-process-v1",
+        "routeLayout": "duo-23-v1",
+        "sourceEnum": "duo-sources-v1",
+        "sampleRate": 48000,
+        "blockFrames": 112,
+        "showPath": "/Application/update-staging/system-config-2026.bin",
+        "callback": {
+          "offset": "0x6190f0",
+          "expected": "5f2403d5211300b43f2303d5fd7bb9a9"
+        },
+        "jobLifetime": {
+          "abi": "capture-values-v1",
+          "enqueue": {
+            "offset": "0x5c9df0",
+            "expected": "3f2303d5fd7bb8a9fd030091f55b02a9"
+          },
+          "manager": {
+            "offset": "0x414020",
+            "expected": "3f2303d5fd7bbea9fd030091f35301a9"
+          },
+          "invoker": {
+            "offset": "0x41f230",
+            "expected": "5f2403d5000040f912feff171f2003d5"
+          },
+          "body": {
+            "offset": "0x41ea80",
+            "expected": "3f2303d5ff430bd1fd7b00a9fd030091"
+          }
+        }
+      },
+      "notes": "Experimental opt-in only; NOT tested on a Duo. Exact official Duo 1.7.7 archive, board identity, shared executable ABI and model-specific routes checked offline. Stable archive re-downloaded on 2026-11-03: byte-identical to the qualified beta archive; archive, executable and hook-site checks pass unchanged. Flashing, recovery, audio and performance still require device testing. Use at your own risk; never flash Pro II firmware onto a Duo."
+    }
+  ]
+}

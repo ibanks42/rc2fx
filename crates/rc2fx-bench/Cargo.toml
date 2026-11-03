@@ -1,0 +1,22 @@
+[package]
+name = "rc2fx-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Times one suppression model on the mixer over a recording and writes the denoised audio"
+license = "MIT OR Apache-2.0"
+
+# Its own workspace: Linux-only (it sets the mixer worker's scheduling),
+# cross-built for the mixer by `just bench-build`.
+[workspace]
+
+[dependencies]
+hound = "3.5"
+libc = "0.2"
+rc2fx-core = { path = "../rc2fx-core" }
+rc2fx-suppression = { path = "../rc2fx-suppression" }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

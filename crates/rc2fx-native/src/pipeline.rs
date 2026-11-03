@@ -1,0 +1,2864 @@
+//! Callback-owned signal state; construction and destruction are control work.
+use super::parameters;
+use rc2fx_core::{Target, TargetKind};
+#[cfg(test)]
+use rc2fx_dsp::Dsp;
+use rc2fx_dsp::Prepared;
+use rc2fx_native_control::{MAX_PATHS, PathMode};
+use rc2fx_suppression::{PRODUCTION_WORKER, WorkerOptions};
+use serde::Deserialize;
+use std::{
+    cell::UnsafeCell,
+    collections::HashSet,
+    ffi::c_void,
+    sync::{
+        Arc,
+        atomic::{
+            AtomicBool, AtomicI32, AtomicI64, AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering,
+        },
+    },
+    thread,
+};
+
+pub const FRAMES: usize = 112;
+/// Hardware outputs (heard only on the mixer's own outputs) are processed in
+/// the callback, in place, after the mixer's own processing returns, rather
+/// than by the helper one frame later. Every hardware output does, meter-only
+/// ones included: ownership is fixed at construction, not chosen per mode or
+/// history. Sources stay with the helper.
+pub const DIRECT_OUTPUT: bool = true;
+/// Unprocessed paths only feed level meters; fetch and meter their buffers on
+/// one callback in this many. Every callback still counts their frames.
+const METER_STRIDE: u32 = 8;
+/// Whether path `path` (plan order) meters on callback `cycle`: each path once
+/// in METER_STRIDE callbacks, the paths staggered so that they do not all
+/// meter on the same one.
+fn meters(cycle: u32, path: usize) -> bool {
+    cycle.wrapping_add(path as u32).is_multiple_of(METER_STRIDE)
+}
+/// Callback time spent per bound path (plan order) and resolving buffers.
+pub static PATH_COST_NS: [AtomicU64; MAX_PATHS] = [const { AtomicU64::new(0) }; MAX_PATHS];
+pub static RESOLVE_NS: AtomicU64 = AtomicU64::new(0);
+fn charge(counter: &AtomicU64, since: u64) {
+    counter.fetch_add(
+        super::timing::monotonic().saturating_sub(since),
+        Ordering::Relaxed,
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    Input,
+    Output,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Plan {
+    version: u32,
+    sample_rate: u32,
+    frames: usize,
+    /// Omitted: the production worker policy. An explicit object sets each
+    /// field; an absent field inherits (unprivileged fixtures use `{}`).
+    #[serde(default)]
+    worker: Option<WorkerPlan>,
+    pub paths: Vec<PathPlan>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WorkerPlan {
+    cpu_mask: Option<u64>,
+    realtime_priority: Option<u8>,
+    #[serde(default)]
+    nice: Option<i8>,
+}
+impl Plan {
+    fn worker_options(&self) -> WorkerOptions {
+        self.worker
+            .as_ref()
+            .map_or(PRODUCTION_WORKER, |worker| WorkerOptions {
+                cpu_mask: worker.cpu_mask,
+                realtime_priority: worker.realtime_priority,
+                nice: worker.nice,
+            })
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathPlan {
+    pub direction: Direction,
+    pub ports: Vec<String>,
+    pub target: Target,
+    pub mode: PathMode,
+    /// An output heard only on the mixer's own hardware outputs.
+    pub hardware: bool,
+}
+impl Plan {
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        let plan: Self = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+        if plan.version != 1
+            || plan.sample_rate != 48_000
+            || plan.frames != FRAMES
+            || plan.paths.len() > MAX_PATHS
+        {
+            return Err("unsupported native plan geometry/count".into());
+        }
+        let mut ids = HashSet::new();
+        let mut ports = HashSet::new();
+        let worker = plan.worker_options();
+        if worker
+            .realtime_priority
+            .is_some_and(|priority| !(1..=10).contains(&priority))
+        {
+            return Err("native worker priority exceeds the admitted bound".into());
+        }
+        if worker.realtime_priority.is_some() && worker.nice.is_some() {
+            return Err("native worker asks for both a real-time priority and a nice".into());
+        }
+        let mut suppressors = 0;
+        for path in &plan.paths {
+            path.target.validate().map_err(|error| error.to_string())?;
+            if path.target.suppression.enabled {
+                suppressors += 1;
+                let mic = path.direction == Direction::Input
+                    && path.target.kind == TargetKind::Mic
+                    && path.target.channels == 1;
+                let chat = path.direction == Direction::Output
+                    && path.target.is_chat_output()
+                    && !path.hardware;
+                if suppressors > 1 || !(mic || chat) {
+                    return Err("native plan admits one mono microphone or the Chat voice mix with suppression".into());
+                }
+            }
+            if path.ports.len() != path.target.channels as usize
+                || (path.hardware && path.direction != Direction::Output)
+                || !ids.insert(&path.target.id)
+                || (path.direction == Direction::Output) != (path.target.kind == TargetKind::Output)
+            {
+                return Err("native plan target identity/direction mismatch".into());
+            }
+            for port in &path.ports {
+                if port.is_empty()
+                    || port.len() > 64
+                    || port.contains([':', '\0'])
+                    || !ports.insert((path.direction as u8, port))
+                {
+                    return Err("native plan duplicate/invalid port".into());
+                }
+            }
+        }
+        Ok(plan)
+    }
+}
+
+pub struct Pin {
+    pub client: usize,
+    pub pointer: usize,
+    pub name: String,
+    pub direction: Direction,
+    pub alive: AtomicBool,
+}
+#[derive(Default)]
+pub struct Registry {
+    pub ports: Vec<Arc<Pin>>,
+}
+impl Registry {
+    pub fn register(&mut self, client: usize, pointer: usize, name: &[u8], flags: usize) -> bool {
+        // Invalidate the old identity even if the new registration cannot be
+        // tracked. A full registry or invalid replacement must not leave an old
+        // pipeline attached to a pointer now owned by a different port.
+        self.retire(client, pointer);
+        let direction = match flags & 3 {
+            1 => Direction::Input,
+            2 => Direction::Output,
+            _ => return false,
+        };
+        let Ok(name) = std::str::from_utf8(name) else {
+            return false;
+        };
+        if name.is_empty() || name.len() > 64 || self.ports.len() >= 512 {
+            return false;
+        }
+        self.ports.push(Arc::new(Pin {
+            client,
+            pointer,
+            name: name.into(),
+            direction,
+            alive: AtomicBool::new(true),
+        }));
+        true
+    }
+    pub fn retire(&mut self, client: usize, pointer: usize) {
+        self.ports.retain(|pin| {
+            if pin.client == client && pin.pointer == pointer {
+                pin.alive.store(false, Ordering::Release);
+                false
+            } else {
+                true
+            }
+        });
+    }
+    pub fn close(&mut self, client: usize) {
+        self.ports.retain(|pin| {
+            if pin.client == client {
+                pin.alive.store(false, Ordering::Release);
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
+/// Which side processes a path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Owner {
+    /// In the callback, before it returns: outputs, which jackd hands on as
+    /// soon as the graph completes.
+    Callback,
+    /// By the helper, from a copy the callback makes: sources, and outputs
+    /// heard only on the mixer's own hardware. Both reach the mixer one
+    /// frame later, and the helper never touches a jackd buffer.
+    Helper,
+}
+/// What the helper does with the frame the callback copied for a path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Job {
+    /// Nothing to apply: the path was inactive, incomplete or failed.
+    None,
+    /// Count the frames of an unprocessed path left alone (METER_STRIDE).
+    Count,
+    /// Meter an unprocessed path's copied buffers.
+    Meter,
+    /// Process a copied source; the mixer reads the result next frame.
+    Input,
+    /// Process a copied hardware output; the callback writes it next frame.
+    Output,
+}
+
+/// The callback's view of a path.
+struct Port {
+    direction: Direction,
+    pins: Vec<Arc<Pin>>,
+    owner: Owner,
+    /// Callback-processed paths keep their settings reader here.
+    reader: Option<parameters::Reader>,
+    /// The source's mode was Processed at the last look (for a helper-owned
+    /// source, the helper's latest snapshot, while the helper was idle).
+    processed_intent: bool,
+    /// This frame's outcome so far: processed only while every request was.
+    outcome: Option<Outcome>,
+    chat: Option<Box<super::chat_mix::Capture>>,
+    native: [usize; 2],
+    observed: u8,
+    active: bool,
+    /// An unprocessed path left alone this frame, its buffers not resolved.
+    counted: bool,
+    failed: bool,
+}
+impl Port {
+    fn fail(&mut self, counters: &mut Counters) {
+        self.active = false;
+        if !self.failed {
+            counters.faults += 1;
+            LIVE_FAULTS.fetch_add(1, Ordering::Relaxed);
+        }
+        self.failed = true;
+    }
+    /// Records what one buffer request of a source meant to be processed
+    /// returned. The frame's outcome keeps its first raw cause.
+    fn note(&mut self, outcome: Outcome, counters: &mut Counters) {
+        if self.direction != Direction::Input || !self.processed_intent {
+            return;
+        }
+        if outcome != Outcome::Processed {
+            counters.sources.raw_returns += 1;
+            SOURCE_RAW_RETURNS.fetch_add(1, Ordering::Relaxed);
+        }
+        if matches!(self.outcome, None | Some(Outcome::Processed)) {
+            self.outcome = Some(outcome);
+        }
+    }
+    /// Counts this frame's outcome for a source meant to be processed;
+    /// `usable`: the frame completed (native success, every channel).
+    fn tally_source(&mut self, usable: bool, counters: &mut Counters) {
+        if self.direction == Direction::Input && self.processed_intent {
+            let outcome = match self.outcome {
+                None => Outcome::Unobserved,
+                Some(Outcome::Processed) if !usable => Outcome::ProcessedUnacknowledged,
+                Some(outcome) => outcome,
+            };
+            tally(&mut counters.sources, outcome);
+        }
+    }
+    fn complete(&self) -> bool {
+        self.observed == (1 << self.pins.len()) - 1
+    }
+    fn alive(&self) -> bool {
+        self.pins
+            .iter()
+            .all(|pin| pin.alive.load(Ordering::Acquire))
+    }
+    /// # Safety
+    /// The resolved native buffers stay valid for this callback.
+    unsafe fn slices<'a>(&self, frames: usize) -> [&'a mut [f32]; 2] {
+        let left = unsafe { std::slice::from_raw_parts_mut(self.native[0] as *mut f32, frames) };
+        let right = if self.pins.len() == 2 {
+            unsafe { std::slice::from_raw_parts_mut(self.native[1] as *mut f32, frames) }
+        } else {
+            &mut []
+        };
+        [left, right]
+    }
+}
+/// A helper-owned path's audio, by frame parity, and its settings reader.
+/// The callback writes `raw[slot]` and reads `processed[slot ^ 1]`; the
+/// helper reads `raw[slot]` and writes `processed[slot]`; `slot` is the
+/// parity of the frame being handed off. Each `processed` slot is its own
+/// cell: the mixer holds raw pointers into one while the helper writes the
+/// other, and the callback hands them out without a mutable borrow.
+struct Work {
+    /// The path's settings reader.
+    reader: parameters::Reader,
+    stereo: bool,
+    raw: Box<[[[f32; FRAMES]; 2]; 2]>,
+    processed: Box<[UnsafeCell<[[f32; FRAMES]; 2]>; 2]>,
+    /// The frame whose complete audio the callback copied into `raw[slot]`.
+    captured: [u64; 2],
+    /// `processed[slot]` holds the DSP output for `raw[slot]`.
+    done: [bool; 2],
+    /// The mode of the helper's latest snapshot, for the callback.
+    processed_mode: bool,
+}
+/// Everything the callback hands to the helper. The callback owns it while
+/// the helper is idle; the helper from `queue` until it stores IDLE.
+struct Handoff {
+    seq: u64,
+    frames: usize,
+    cycle_start: u64,
+    native_success: bool,
+    jobs: Vec<Job>,
+    /// By path; callback-owned paths have none.
+    work: Vec<Option<Work>>,
+    counters: Counters,
+    /// The frame the helper finished last.
+    done_seq: u64,
+}
+/// Callback-only state.
+struct Front {
+    ports: Vec<Port>,
+    counters: Counters,
+    cycle: u32,
+    /// This frame's sequence number; `seq - 1` is the frame the helper
+    /// should have finished.
+    seq: u64,
+    /// The helper was idle when this callback began: the handoff may be
+    /// used and this frame handed off.
+    idle: bool,
+    /// The helper finished the previous frame in time.
+    previous_ready: bool,
+    sampler: Sampler,
+}
+#[derive(Clone, Copy, Default)]
+pub struct Counters {
+    pub input_blocks: u64,
+    pub output_blocks: u64,
+    pub faults: u64,
+    pub skipped_outputs: u64,
+    pub sources: SourceCounts,
+}
+impl Counters {
+    fn add(self, other: Self) -> Self {
+        Self {
+            input_blocks: self.input_blocks + other.input_blocks,
+            output_blocks: self.output_blocks + other.output_blocks,
+            faults: self.faults + other.faults,
+            skipped_outputs: self.skipped_outputs + other.skipped_outputs,
+            sources: self.sources.add(other.sources),
+        }
+    }
+}
+/// Per frame, for each source meant to be processed: what the mixer read.
+/// Every raw outcome is a fallback to unprocessed audio, whatever its cause.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct SourceCounts {
+    /// Every request got processed audio and the frame was acknowledged.
+    pub processed: u64,
+    /// Every request got processed audio, but the frame did not complete:
+    /// the mixer's callback failed, a channel went unrequested, or the path
+    /// was unusable at the end. Not a raw fallback, and not counted processed.
+    pub processed_unacknowledged: u64,
+    /// Helper still busy, or it had not finished the previous frame.
+    pub raw_helper_unready: u64,
+    /// No frame was handed to the helper last time: the first frame, the
+    /// frame after a stall, inactive frame or switch to processing.
+    pub raw_no_handoff: u64,
+    /// The helper was handed the previous frame but produced no result for
+    /// it (a mode change or DSP error under that frame).
+    pub raw_not_done: u64,
+    /// The path failed or was unusable this frame (settings fence, frame
+    /// size, dead port, buffer mismatch).
+    pub raw_invalid: u64,
+    /// Meant to be processed, but the mixer never requested the buffer.
+    pub unobserved: u64,
+    /// Individual buffer requests answered with raw input, for any reason.
+    /// A frame counts once above, under its first raw cause, even when an
+    /// earlier request in it got processed audio.
+    pub raw_returns: u64,
+}
+impl SourceCounts {
+    fn add(self, other: Self) -> Self {
+        Self {
+            processed: self.processed + other.processed,
+            processed_unacknowledged: self.processed_unacknowledged
+                + other.processed_unacknowledged,
+            raw_helper_unready: self.raw_helper_unready + other.raw_helper_unready,
+            raw_no_handoff: self.raw_no_handoff + other.raw_no_handoff,
+            raw_not_done: self.raw_not_done + other.raw_not_done,
+            raw_invalid: self.raw_invalid + other.raw_invalid,
+            unobserved: self.unobserved + other.unobserved,
+            raw_returns: self.raw_returns + other.raw_returns,
+        }
+    }
+}
+/// Live totals of `SourceCounts` across pipelines, for the native report.
+pub static SOURCE_PROCESSED: AtomicU64 = AtomicU64::new(0);
+pub static SOURCE_PROCESSED_UNACKNOWLEDGED: AtomicU64 = AtomicU64::new(0);
+pub static SOURCE_RAW_HELPER_UNREADY: AtomicU64 = AtomicU64::new(0);
+pub static SOURCE_RAW_NO_HANDOFF: AtomicU64 = AtomicU64::new(0);
+pub static SOURCE_RAW_NOT_DONE: AtomicU64 = AtomicU64::new(0);
+pub static SOURCE_RAW_INVALID: AtomicU64 = AtomicU64::new(0);
+pub static SOURCE_UNOBSERVED: AtomicU64 = AtomicU64::new(0);
+pub static SOURCE_RAW_RETURNS: AtomicU64 = AtomicU64::new(0);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Processed,
+    ProcessedUnacknowledged,
+    HelperUnready,
+    NoHandoff,
+    NotDone,
+    Invalid,
+    Unobserved,
+}
+fn tally(counts: &mut SourceCounts, outcome: Outcome) {
+    let (count, total) = match outcome {
+        Outcome::Processed => (&mut counts.processed, &SOURCE_PROCESSED),
+        Outcome::ProcessedUnacknowledged => (
+            &mut counts.processed_unacknowledged,
+            &SOURCE_PROCESSED_UNACKNOWLEDGED,
+        ),
+        Outcome::HelperUnready => (&mut counts.raw_helper_unready, &SOURCE_RAW_HELPER_UNREADY),
+        Outcome::NoHandoff => (&mut counts.raw_no_handoff, &SOURCE_RAW_NO_HANDOFF),
+        Outcome::NotDone => (&mut counts.raw_not_done, &SOURCE_RAW_NOT_DONE),
+        Outcome::Invalid => (&mut counts.raw_invalid, &SOURCE_RAW_INVALID),
+        Outcome::Unobserved => (&mut counts.unobserved, &SOURCE_UNOBSERVED),
+    };
+    *count += 1;
+    total.fetch_add(1, Ordering::Relaxed);
+}
+pub fn sources() -> serde_json::Value {
+    let read = |value: &AtomicU64| value.load(Ordering::Relaxed);
+    serde_json::json!({
+        "processed": read(&SOURCE_PROCESSED),
+        "processedUnacknowledged": read(&SOURCE_PROCESSED_UNACKNOWLEDGED),
+        "rawHelperUnready": read(&SOURCE_RAW_HELPER_UNREADY),
+        "rawNoHandoff": read(&SOURCE_RAW_NO_HANDOFF),
+        "rawNotDone": read(&SOURCE_RAW_NOT_DONE),
+        "rawInvalid": read(&SOURCE_RAW_INVALID),
+        "unobserved": read(&SOURCE_UNOBSERVED),
+        "rawReturns": read(&SOURCE_RAW_RETURNS),
+    })
+}
+pub struct Pipeline {
+    front: UnsafeCell<Front>,
+    handoff: UnsafeCell<Handoff>,
+    helper: Helper,
+}
+// `front` belongs to the callback; the callback and the helper alternate
+// ownership of `handoff` (see Handoff).
+unsafe impl Sync for Pipeline {}
+unsafe impl Send for Pipeline {}
+fn native_meter(buffers: [&[f32]; 2]) -> rc2fx_dsp::Meter {
+    let mut meter = rc2fx_dsp::Meter::default();
+    for sample in buffers.into_iter().flatten().copied() {
+        let value = f64::from(sample);
+        if value.is_finite() {
+            meter.input_peak = meter.input_peak.max(value.abs());
+            meter.sum_squares += value * value;
+            meter.clipped += u64::from(value.abs() >= 1.0);
+        }
+        meter.samples += 1;
+    }
+    meter.output_peak = meter.input_peak;
+    meter
+}
+fn copy(from: [&[f32]; 2], into: &mut [[f32; FRAMES]; 2], frames: usize) {
+    for (channel, source) in from.into_iter().enumerate() {
+        if !source.is_empty() {
+            into[channel][..frames].copy_from_slice(source);
+        }
+    }
+}
+fn split(buffers: &mut [[f32; FRAMES]; 2], frames: usize, stereo: bool) -> [&mut [f32]; 2] {
+    let [left, right] = buffers;
+    [
+        &mut left[..frames],
+        if stereo {
+            &mut right[..frames]
+        } else {
+            &mut []
+        },
+    ]
+}
+fn view(buffers: &[[f32; FRAMES]; 2], frames: usize, stereo: bool) -> [&[f32]; 2] {
+    [
+        &buffers[0][..frames],
+        if stereo { &buffers[1][..frames] } else { &[] },
+    ]
+}
+const IDLE: u8 = 0;
+const QUEUED: u8 = 1;
+
+/// Helper timing, for the native report.
+pub static HELPER_FRAMES: AtomicU64 = AtomicU64::new(0);
+pub static HELPER_NS: AtomicU64 = AtomicU64::new(0);
+pub static HELPER_MAX_NS: AtomicU64 = AtomicU64::new(0);
+/// The longest a callback waits for a busy helper before passing its frame
+/// through.
+const HELPER_WAIT_NS: u64 = 200_000;
+/// Callbacks that found the helper still busy after the wait: their frame
+/// was not handed off, and the previous frame's processed audio not ready.
+pub static HELPER_STALLS: AtomicU64 = AtomicU64::new(0);
+/// Callbacks that found the helper still busy at all.
+pub static HELPER_LATE: AtomicU64 = AtomicU64::new(0);
+/// The least time between the helper finishing a frame and the next callback
+/// starting, which consumes it.
+pub static HELPER_MIN_MARGIN_NS: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Live cumulative processing counters, since process load, across contexts.
+///
+/// The per-pipeline `Counters` are only summed into the audit's
+/// `inputBlocks`/`outputBlocks`/`dspFaults`/`skippedOutputs` when a client
+/// closes (`Pipeline::counters` waits for the helper, so it must never be called
+/// from the callback or while reporting). These atomics mirror the same four
+/// events at their existing increment sites, so an audit can read what the DSP
+/// is doing while callbacks run. One relaxed increment per actual block or
+/// event; no clock, allocation, lock or I/O on the audio thread. They are never
+/// summed at retirement and never reset, so they already include retired
+/// pipelines: do not add the retirement-only fields to them.
+pub static LIVE_INPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
+pub static LIVE_OUTPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
+pub static LIVE_FAULTS: AtomicU64 = AtomicU64::new(0);
+pub static LIVE_SKIPPED_OUTPUTS: AtomicU64 = AtomicU64::new(0);
+/// Hardware outputs that got no result from their own DSP for this frame, so an
+/// untreated (unprocessed) block was handed on instead: `noFrame` when no copied
+/// slot was available (first frame after construction, an inactive frame, a
+/// gap), `rawFrame` when the copied slot was written back instead of processed
+/// audio (the helper was late, or the frame before failed).
+///
+/// These are fallback deliveries, not the DSP's error counter: a frame can be
+/// counted here with `dspFaults` unchanged, and a DSP error can happen in a frame
+/// whose delivery is counted here too. Whether such a frame is audible is NOT
+/// established. Outside a planned warm-up an increment is a qualification
+/// failure of that frame, not something to dismiss. `rawFrame` does not prove
+/// the slot held the actual captured mixer block: the first frame's slot is
+/// still zero-initialised (`captured` starts at 0), so startup can select an
+/// unwritten slot. Counted once per hardware-output frame without a result.
+pub static LIVE_OUTPUT_NO_FRAME: AtomicU64 = AtomicU64::new(0);
+pub static LIVE_OUTPUT_RAW_FRAME: AtomicU64 = AtomicU64::new(0);
+
+/// The audit's live view (see `LIVE_*`). Read-only, lock-free, no clocks.
+pub fn processing_counters() -> serde_json::Value {
+    let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+    serde_json::json!({
+        "scope": "live cumulative since process load, all contexts, read with relaxed atomics; includes retired pipelines, so do not add the retirement-only inputBlocks/outputBlocks/dspFaults/skippedOutputs to these",
+        "inputBlocks": read(&LIVE_INPUT_BLOCKS),
+        "outputBlocks": read(&LIVE_OUTPUT_BLOCKS),
+        "dspFaults": read(&LIVE_FAULTS),
+        "skippedOutputs": read(&LIVE_SKIPPED_OUTPUTS),
+        "hardwareOutputsWithoutResult": {
+            "noCopiedFrame": read(&LIVE_OUTPUT_NO_FRAME),
+            "copiedFrameRaw": read(&LIVE_OUTPUT_RAW_FRAME),
+            "note": "frames whose own DSP result was missing: an untreated block was handed on. NOT the dspFaults error counter; audibility not established; outside planned warm-up an increment is a qualification failure; copiedFrameRaw may be a zero-initialised startup slot, not necessarily the captured mixer frame",
+        },
+    })
+}
+
+/// The mixer's audio cores (docs/reference/hardware.md). The helper runs on those the
+/// callback is not pinned to, one real-time priority below it: RØDE's own
+/// real-time threads there are short, so the helper is rarely kept waiting,
+/// and it never competes with the callback for its core.
+const AUDIO_CPUS: u64 = 0b1110;
+/// Callbacks between re-reads of the callback thread's placement. RØDE pins
+/// and reprioritises that thread after its first callbacks have run.
+const PLACE_EVERY: u32 = 2048;
+/// Until the callback is real-time on its own cores and the helper has taken
+/// the placement derived from it, re-read every this many callbacks instead
+/// (150 ms), for at most PLACE_FAST_UNTIL callbacks (19 s).
+const PLACE_FAST_EVERY: u32 = 64;
+const PLACE_FAST_UNTIL: u32 = 8192;
+/// When the callback samples its placement (see Helper::place).
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct Sampler {
+    settled: bool,
+    /// The first boundary not yet sampled: its callback had no handoff.
+    pending: Option<u32>,
+    /// Samples taken after their boundary's callback.
+    deferred: u64,
+}
+impl Sampler {
+    /// Every callback: note a boundary, with or without a handoff. Later
+    /// boundaries before the sample do not replace the first.
+    fn mark(&mut self, cycle: u32) {
+        if self.pending.is_none() && self.due(cycle) {
+            self.pending = Some(cycle);
+        }
+    }
+    /// With a handoff: whether to sample now (the boundary's own callback
+    /// or the first one after it that hands off), and if so whether late.
+    fn take(&mut self, cycle: u32) -> Option<bool> {
+        let deferred = self.pending.take()? != cycle;
+        if deferred {
+            self.deferred += 1;
+            PLACEMENT_DEFERRED.fetch_add(1, Ordering::Relaxed);
+        }
+        Some(deferred)
+    }
+    fn due(&self, cycle: u32) -> bool {
+        let every = if !self.settled && cycle < PLACE_FAST_UNTIL {
+            PLACE_FAST_EVERY
+        } else {
+            PLACE_EVERY
+        };
+        cycle.is_multiple_of(every)
+    }
+    /// After a sample: settled once the callback is real-time, leaves the
+    /// helper some audio core of its own, and the helper has applied the
+    /// placement of the latest generation.
+    fn observe(&mut self, policy: i32, cpus: u64, generation: u64, applied: u64) {
+        let realtime = matches!(policy, libc::SCHED_FIFO | libc::SCHED_RR);
+        let separate = AUDIO_CPUS & !cpus != 0;
+        if realtime && separate && generation != 0 && applied == generation {
+            self.settled = true;
+        }
+    }
+}
+/// The first placement changes since load, across pipelines, for the report:
+/// what the callback sampled, and what the helper then requested and got.
+/// Each record is claimed once and never reused.
+const PLACEMENT_HISTORY: usize = 16;
+static PLACEMENT_NEXT: AtomicUsize = AtomicUsize::new(0);
+/// Pipelines created, to tell their records apart.
+static PIPELINE_IDS: AtomicU64 = AtomicU64::new(0);
+struct PlacementRecord {
+    /// Written last by the callback: the generation, 0 for an empty slot.
+    generation: AtomicU64,
+    pipeline: AtomicU64,
+    cycle: AtomicU64,
+    /// Sampled after its boundary, whose callback had no handoff.
+    deferred: AtomicBool,
+    at_ns: AtomicU64,
+    cpus: AtomicU64,
+    policy: AtomicI64,
+    priority: AtomicI64,
+    /// Written by the helper when it applies this generation: what it
+    /// requested, then its actual mask, policy and priority read back.
+    applied_at_ns: AtomicU64,
+    requested_cpus: AtomicU64,
+    applied_cpus: AtomicU64,
+    applied_policy: AtomicI64,
+    applied_priority: AtomicI64,
+    /// sched_setaffinity and pthread_setschedparam results (0 is success).
+    affinity_result: AtomicI64,
+    sched_result: AtomicI64,
+}
+static PLACEMENTS: [PlacementRecord; PLACEMENT_HISTORY] = [const {
+    PlacementRecord {
+        generation: AtomicU64::new(0),
+        pipeline: AtomicU64::new(0),
+        cycle: AtomicU64::new(0),
+        deferred: AtomicBool::new(false),
+        at_ns: AtomicU64::new(0),
+        cpus: AtomicU64::new(0),
+        policy: AtomicI64::new(-1),
+        priority: AtomicI64::new(-1),
+        applied_at_ns: AtomicU64::new(0),
+        requested_cpus: AtomicU64::new(0),
+        applied_cpus: AtomicU64::new(0),
+        applied_policy: AtomicI64::new(-1),
+        applied_priority: AtomicI64::new(-1),
+        affinity_result: AtomicI64::new(i64::MIN),
+        sched_result: AtomicI64::new(i64::MIN),
+    }
+}; PLACEMENT_HISTORY];
+/// Placement samples taken, and the cycle at which sampling settled (0: not).
+static PLACEMENT_SAMPLES: AtomicU64 = AtomicU64::new(0);
+static PLACEMENT_DEFERRED: AtomicU64 = AtomicU64::new(0);
+static PLACEMENT_SETTLED_CYCLE: AtomicU64 = AtomicU64::new(0);
+struct Shared {
+    state: AtomicU8,
+    handoff: AtomicPtr<Handoff>,
+    stop: AtomicBool,
+    /// CLOCK_MONOTONIC when the helper began and finished its latest frame.
+    started: AtomicU64,
+    finished: AtomicU64,
+    /// The callback thread's CPUs, policy and priority; `generation` counts
+    /// changes, and the helper derives its placement from each one.
+    generation: AtomicU64,
+    /// The generation whose placement the helper last applied.
+    applied: AtomicU64,
+    /// PLACEMENTS index of the latest generation's record, or usize::MAX.
+    record: AtomicUsize,
+    id: u64,
+    cpus: AtomicU64,
+    policy: AtomicI32,
+    priority: AtomicI32,
+}
+/// Callback and helper thread placement, for the report: [tid, cpu, policy,
+/// priority] each, from the pipeline that last sampled them.
+static CALLBACK_PLACEMENT: [AtomicI64; 4] = [const { AtomicI64::new(-1) }; 4];
+static HELPER_PLACEMENT: [AtomicI64; 4] = [const { AtomicI64::new(-1) }; 4];
+pub fn placement() -> serde_json::Value {
+    let read = |values: &[AtomicI64; 4]| {
+        super::probe::placement_json(std::array::from_fn(|i| values[i].load(Ordering::Relaxed)))
+    };
+    let history: Vec<_> = PLACEMENTS
+        .iter()
+        .filter(|record| record.generation.load(Ordering::Acquire) != 0)
+        .map(|record| {
+            let get = |value: &AtomicU64| value.load(Ordering::Relaxed);
+            let geti = |value: &AtomicI64| value.load(Ordering::Relaxed);
+            serde_json::json!({
+                "pipeline": get(&record.pipeline),
+                "generation": get(&record.generation),
+                "cycle": get(&record.cycle),
+                "deferred": record.deferred.load(Ordering::Relaxed),
+                "atNs": get(&record.at_ns),
+                "callbackCpus": get(&record.cpus),
+                "callbackPolicy": geti(&record.policy),
+                "callbackPriority": geti(&record.priority),
+                "appliedAtNs": get(&record.applied_at_ns),
+                "helperRequestedCpus": get(&record.requested_cpus),
+                "helperCpus": get(&record.applied_cpus),
+                "helperPolicy": geti(&record.applied_policy),
+                "helperPriority": geti(&record.applied_priority),
+                "affinityResult": geti(&record.affinity_result),
+                "schedResult": geti(&record.sched_result),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "callback": read(&CALLBACK_PLACEMENT),
+        "helper": read(&HELPER_PLACEMENT),
+        "samples": PLACEMENT_SAMPLES.load(Ordering::Relaxed),
+        "deferred": PLACEMENT_DEFERRED.load(Ordering::Relaxed),
+        "settledCycle": PLACEMENT_SETTLED_CYCLE.load(Ordering::Relaxed),
+        "history": history,
+    })
+}
+fn store_placement(target: &[AtomicI64; 4]) {
+    for (slot, value) in target.iter().zip(super::probe::placement()) {
+        slot.store(value, Ordering::Relaxed);
+    }
+}
+struct Helper {
+    shared: Arc<Shared>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+impl Helper {
+    fn start() -> Result<Self, String> {
+        let shared = Arc::new(Shared {
+            state: AtomicU8::new(IDLE),
+            handoff: AtomicPtr::new(std::ptr::null_mut()),
+            stop: AtomicBool::new(false),
+            started: AtomicU64::new(0),
+            finished: AtomicU64::new(0),
+            generation: AtomicU64::new(0),
+            applied: AtomicU64::new(0),
+            record: AtomicUsize::new(usize::MAX),
+            id: PIPELINE_IDS.fetch_add(1, Ordering::Relaxed) + 1,
+            cpus: AtomicU64::new(0),
+            policy: AtomicI32::new(0),
+            priority: AtomicI32::new(0),
+        });
+        let worker = Arc::clone(&shared);
+        let thread = thread::Builder::new()
+            .name("rc2fx-dsp".into())
+            .spawn(move || helper_loop(&worker))
+            .map_err(|error| format!("native helper thread: {error}"))?;
+        Ok(Self {
+            shared,
+            thread: Some(thread),
+        })
+    }
+    fn idle(&self) -> bool {
+        self.shared.state.load(Ordering::Acquire) == IDLE
+    }
+    /// Spin until the helper finishes, at most `limit` ns. The helper runs on
+    /// another core, so spinning here does not hold it up.
+    fn wait(&self, limit: u64) -> bool {
+        let deadline = super::timing::monotonic().saturating_add(limit);
+        while !self.idle() {
+            if super::timing::monotonic() >= deadline {
+                return false;
+            }
+            std::hint::spin_loop();
+        }
+        true
+    }
+    /// From the callback thread, when `sampler` says so (every
+    /// PLACE_FAST_EVERY callbacks until settled, then every PLACE_EVERY; a
+    /// boundary without a handoff at the next callback with one, since the
+    /// helper reads the placement only when it starts a queued frame):
+    /// record its placement for the helper, which follows any change.
+    fn place(&self, cycle: u32, sampler: &mut Sampler) {
+        let Some(deferred) = sampler.take(cycle) else {
+            return;
+        };
+        PLACEMENT_SAMPLES.fetch_add(1, Ordering::Relaxed);
+        store_placement(&CALLBACK_PLACEMENT);
+        {
+            let (mask, policy, priority) = current_placement();
+            // As before: an unreadable policy counts as ordinary.
+            let (policy, priority) = if policy < 0 {
+                (libc::SCHED_OTHER, 0)
+            } else {
+                (policy, priority)
+            };
+            let param = libc::sched_param {
+                sched_priority: priority,
+            };
+            let shared = &self.shared;
+            if shared.cpus.load(Ordering::Relaxed) != mask
+                || shared.policy.load(Ordering::Relaxed) != policy
+                || shared.priority.load(Ordering::Relaxed) != param.sched_priority
+                || shared.generation.load(Ordering::Relaxed) == 0
+            {
+                shared.cpus.store(mask, Ordering::Relaxed);
+                shared.policy.store(policy, Ordering::Relaxed);
+                shared
+                    .priority
+                    .store(param.sched_priority, Ordering::Relaxed);
+                let generation = shared.generation.fetch_add(1, Ordering::Release) + 1;
+                // Claim a record only while any are left.
+                let index = PLACEMENT_NEXT.load(Ordering::Relaxed);
+                let claimed = index < PLACEMENT_HISTORY
+                    && PLACEMENT_NEXT
+                        .compare_exchange(index, index + 1, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok();
+                shared
+                    .record
+                    .store(if claimed { index } else { usize::MAX }, Ordering::Release);
+                if let Some(record) = claimed.then(|| &PLACEMENTS[index]) {
+                    record.pipeline.store(shared.id, Ordering::Relaxed);
+                    record.cycle.store(u64::from(cycle), Ordering::Relaxed);
+                    record.deferred.store(deferred, Ordering::Relaxed);
+                    record
+                        .at_ns
+                        .store(super::timing::monotonic(), Ordering::Relaxed);
+                    record.cpus.store(mask, Ordering::Relaxed);
+                    record.policy.store(i64::from(policy), Ordering::Relaxed);
+                    record
+                        .priority
+                        .store(i64::from(param.sched_priority), Ordering::Relaxed);
+                    record.generation.store(generation, Ordering::Release);
+                }
+            }
+            let settled = sampler.settled;
+            sampler.observe(
+                policy,
+                mask,
+                shared.generation.load(Ordering::Relaxed),
+                shared.applied.load(Ordering::Acquire),
+            );
+            if sampler.settled && !settled {
+                PLACEMENT_SETTLED_CYCLE.store(u64::from(cycle), Ordering::Relaxed);
+            }
+        }
+    }
+    fn queue(&self, handoff: *mut Handoff) {
+        self.shared.handoff.store(handoff, Ordering::Relaxed);
+        self.shared.state.store(QUEUED, Ordering::Release);
+        if let Some(thread) = &self.thread {
+            thread.thread().unpark();
+        }
+    }
+}
+impl Drop for Helper {
+    fn drop(&mut self) {
+        self.shared.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+fn helper_loop(shared: &Shared) {
+    let mut placed = 0;
+    loop {
+        while shared.state.load(Ordering::Acquire) != QUEUED {
+            if shared.stop.load(Ordering::Acquire) {
+                return;
+            }
+            thread::park();
+        }
+        let generation = shared.generation.load(Ordering::Acquire);
+        if generation != placed {
+            let taken = take_placement(shared);
+            if let Some(record) = PLACEMENTS.get(shared.record.load(Ordering::Acquire))
+                && record.generation.load(Ordering::Acquire) == generation
+                && record.pipeline.load(Ordering::Relaxed) == shared.id
+            {
+                record
+                    .applied_at_ns
+                    .store(super::timing::monotonic(), Ordering::Relaxed);
+                record
+                    .requested_cpus
+                    .store(taken.requested_cpus, Ordering::Relaxed);
+                record.applied_cpus.store(taken.cpus, Ordering::Relaxed);
+                record
+                    .applied_policy
+                    .store(i64::from(taken.policy), Ordering::Relaxed);
+                record
+                    .applied_priority
+                    .store(i64::from(taken.priority), Ordering::Relaxed);
+                record
+                    .affinity_result
+                    .store(i64::from(taken.affinity), Ordering::Relaxed);
+                record
+                    .sched_result
+                    .store(i64::from(taken.sched), Ordering::Relaxed);
+            }
+            shared.applied.store(generation, Ordering::Release);
+            store_placement(&HELPER_PLACEMENT);
+            placed = generation;
+        }
+        let started = super::timing::monotonic();
+        shared.started.store(started, Ordering::Relaxed);
+        // SAFETY: the callback handed the frame over with QUEUED and does not
+        // touch it again until it observes IDLE.
+        let handoff = unsafe { &mut *shared.handoff.load(Ordering::Relaxed) };
+        let slot = (handoff.seq & 1) as usize;
+        // Sources first: the next callback reads them before it writes the
+        // hardware outputs at its end.
+        for wanted in [Job::Input, Job::Output, Job::Meter, Job::Count, Job::None] {
+            for (work, job) in handoff.work.iter_mut().zip(&handoff.jobs) {
+                if let Some(work) = work
+                    && *job == wanted
+                {
+                    work.run(
+                        *job,
+                        slot,
+                        handoff.frames,
+                        handoff.native_success,
+                        &mut handoff.counters,
+                    );
+                }
+            }
+        }
+        handoff.done_seq = handoff.seq;
+        let finished = super::timing::monotonic();
+        let spent = finished.saturating_sub(started);
+        shared.finished.store(finished, Ordering::Relaxed);
+        HELPER_FRAMES.fetch_add(1, Ordering::Relaxed);
+        HELPER_NS.fetch_add(spent, Ordering::Relaxed);
+        HELPER_MAX_NS.fetch_max(spent, Ordering::Relaxed);
+        if handoff.cycle_start != 0 {
+            let position = finished.saturating_sub(handoff.cycle_start);
+            super::probe::HELPER_POS.record(position);
+            if position >= super::probe::HELPER_LATE_NS {
+                super::probe::HELPER_LATE_FINISHES.fetch_add(1, Ordering::Relaxed);
+                super::probe::record(super::probe::Kind::HelperLateFinish, position);
+            }
+        }
+        shared.state.store(IDLE, Ordering::Release);
+    }
+}
+/// Best effort: unprivileged hosts (tests) keep ordinary scheduling.
+/// The helper's cores for a callback on `callback`: the audio cores the
+/// callback is not on, else (callback not pinned yet, or on every audio core,
+/// or its mask unknown) all of them. Never CPU 0, the suppression worker's.
+fn helper_mask(callback: u64) -> u64 {
+    let mask = AUDIO_CPUS & !callback;
+    if mask == 0 { AUDIO_CPUS } else { mask }
+}
+/// What the helper requested and then actually had, and the two calls'
+/// results (0 is success).
+struct Taken {
+    requested_cpus: u64,
+    cpus: u64,
+    policy: i32,
+    priority: i32,
+    affinity: i32,
+    sched: i32,
+}
+/// This thread's affinity mask, policy and priority (0, -1, -1 if unreadable).
+fn current_placement() -> (u64, i32, i32) {
+    unsafe {
+        let mut cpus: libc::cpu_set_t = std::mem::zeroed();
+        let mut mask = 0u64;
+        if libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut cpus) == 0 {
+            for cpu in 0..64 {
+                if libc::CPU_ISSET(cpu, &cpus) {
+                    mask |= 1 << cpu;
+                }
+            }
+        }
+        let mut policy = -1;
+        let mut param: libc::sched_param = std::mem::zeroed();
+        if libc::pthread_getschedparam(libc::pthread_self(), &mut policy, &mut param) != 0 {
+            return (mask, -1, -1);
+        }
+        (mask, policy, param.sched_priority)
+    }
+}
+fn take_placement(shared: &Shared) -> Taken {
+    unsafe {
+        let mask = helper_mask(shared.cpus.load(Ordering::Relaxed));
+        let mut cpus: libc::cpu_set_t = std::mem::zeroed();
+        for cpu in (0..64).filter(|cpu| mask & (1 << cpu) != 0) {
+            libc::CPU_SET(cpu, &mut cpus);
+        }
+        let affinity = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &cpus);
+        let policy = shared.policy.load(Ordering::Relaxed);
+        let mut priority = shared.priority.load(Ordering::Relaxed);
+        if matches!(policy, libc::SCHED_FIFO | libc::SCHED_RR) && priority > 1 {
+            priority -= 1;
+        }
+        let param = libc::sched_param {
+            sched_priority: priority,
+        };
+        let sched = libc::pthread_setschedparam(libc::pthread_self(), policy, &param);
+        let (actual, policy, priority) = current_placement();
+        Taken {
+            requested_cpus: mask,
+            cpus: actual,
+            policy,
+            priority,
+            affinity,
+            sched,
+        }
+    }
+}
+impl Work {
+    fn new(reader: parameters::Reader, stereo: bool, processed_mode: bool) -> Self {
+        Self {
+            reader,
+            stereo,
+            raw: Box::new([[[0.0; FRAMES]; 2]; 2]),
+            processed: Box::new([const { UnsafeCell::new([[0.0; FRAMES]; 2]) }; 2]),
+            captured: [0; 2],
+            done: [false; 2],
+            processed_mode,
+        }
+    }
+    /// The helper's share of the frame: one snapshot read, the job, and the
+    /// acknowledgement. Only a processed, complete frame applies settings.
+    fn run(
+        &mut self,
+        job: Job,
+        slot: usize,
+        frames: usize,
+        native_success: bool,
+        counters: &mut Counters,
+    ) {
+        let reader = &mut self.reader;
+        if !reader.begin() {
+            return;
+        }
+        let processed = reader.mode() == Some(PathMode::Processed);
+        self.processed_mode = processed;
+        let latency = reader.latency_samples() as u32;
+        let stereo = self.stereo;
+        let mut applied = native_success && job != Job::None;
+        self.done[slot] = false;
+        match job {
+            Job::None => {}
+            Job::Count => reader.record(frames, rc2fx_dsp::Meter::default(), latency),
+            Job::Meter => {
+                let meter = native_meter(view(&self.raw[slot], frames, stereo));
+                reader.record(frames, meter, latency);
+            }
+            // A mode change under a copied frame leaves it unprocessed.
+            Job::Input | Job::Output if !processed => {
+                let meter = native_meter(view(&self.raw[slot], frames, stereo));
+                reader.record(frames, meter, latency);
+            }
+            Job::Input => {
+                let input = view(&self.raw[slot], frames, stereo);
+                // SAFETY: the helper owns `processed[slot]` while handed off.
+                let output = split(unsafe { &mut *self.processed[slot].get() }, frames, stereo);
+                match reader.input(input, output) {
+                    Ok(meter) => {
+                        self.done[slot] = true;
+                        counters.input_blocks += 1;
+                        LIVE_INPUT_BLOCKS.fetch_add(1, Ordering::Relaxed);
+                        // Processed sources reach the mixer one frame later.
+                        reader.record(frames, meter, latency + FRAMES as u32);
+                    }
+                    Err(_) => {
+                        applied = false;
+                        counters.faults += 1;
+                        LIVE_FAULTS.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            Job::Output => {
+                // SAFETY: as above.
+                let (raw, processed) =
+                    (&self.raw[slot], unsafe { &mut *self.processed[slot].get() });
+                copy(view(raw, frames, stereo), processed, frames);
+                match reader.output(split(processed, frames, stereo)) {
+                    Ok(meter) => {
+                        self.done[slot] = true;
+                        counters.output_blocks += 1;
+                        LIVE_OUTPUT_BLOCKS.fetch_add(1, Ordering::Relaxed);
+                        // Hardware outputs are written one frame later.
+                        reader.record(frames, meter, latency + FRAMES as u32);
+                    }
+                    Err(_) => {
+                        applied = false;
+                        counters.faults += 1;
+                        LIVE_FAULTS.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        reader.finish(applied);
+    }
+}
+impl Pipeline {
+    /// Control-only readiness: native hosts may install their callback before
+    /// registering USB/other ports. Do not construct any worker until the whole
+    /// selected plan has exact live identities on this client.
+    pub fn ports_ready(plan: &Plan, registry: &Registry, client: usize) -> bool {
+        plan.paths.iter().all(|path| {
+            path.ports.iter().all(|name| {
+                registry
+                    .ports
+                    .iter()
+                    .filter(|pin| {
+                        pin.client == client
+                            && pin.name == *name
+                            && pin.direction == path.direction
+                            && pin.alive.load(Ordering::Acquire)
+                    })
+                    .count()
+                    == 1
+            })
+        })
+    }
+    pub fn new(
+        plan: &Plan,
+        registry: &Registry,
+        client: usize,
+    ) -> Result<(Self, Vec<parameters::Control>), String> {
+        Self::with_ownership(plan, registry, client, DIRECT_OUTPUT)
+    }
+    /// `direct_output`: every hardware output is callback-owned (see
+    /// DIRECT_OUTPUT), fixed here rather than per mode. Tests also build the
+    /// helper-owned arrangement.
+    fn with_ownership(
+        plan: &Plan,
+        registry: &Registry,
+        client: usize,
+        direct_output: bool,
+    ) -> Result<(Self, Vec<parameters::Control>), String> {
+        let mut ports = Vec::with_capacity(plan.paths.len());
+        let mut work = Vec::with_capacity(plan.paths.len());
+        let mut controls = Vec::with_capacity(plan.paths.len());
+        let admission = super::suppression::Admission::default();
+        for target in &plan.paths {
+            let pins = target
+                .ports
+                .iter()
+                .map(|name| {
+                    let matches: Vec<_> = registry
+                        .ports
+                        .iter()
+                        .filter(|pin| {
+                            pin.client == client
+                                && pin.name == *name
+                                && pin.direction == target.direction
+                                && pin.alive.load(Ordering::Acquire)
+                        })
+                        .collect();
+                    if matches.len() != 1 {
+                        return Err(format!(
+                            "native port {name} {:?}: {} matches; registered for client: {:?}",
+                            target.direction,
+                            matches.len(),
+                            registry
+                                .ports
+                                .iter()
+                                .filter(|pin| pin.client == client)
+                                .map(|pin| &pin.name)
+                                .collect::<Vec<_>>()
+                        ));
+                    }
+                    Ok(Arc::clone(matches[0]))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let prepared =
+                Prepared::new(&target.target, 48_000).map_err(|error| error.to_string())?;
+            let (control, reader) = parameters::channel_with_options(
+                &target.target,
+                prepared,
+                plan.worker_options(),
+                admission.clone(),
+                target.mode,
+            )
+            .map_err(|error| format!("native path construction: {error:?}"))?;
+            controls.push(control);
+            let owner = match target.direction {
+                Direction::Input => Owner::Helper,
+                Direction::Output if target.hardware && !direct_output => Owner::Helper,
+                Direction::Output => Owner::Callback,
+            };
+            let reader = if owner == Owner::Helper {
+                work.push(Some(Work::new(
+                    reader,
+                    pins.len() == 2,
+                    target.mode == PathMode::Processed,
+                )));
+                None
+            } else {
+                work.push(None);
+                Some(reader)
+            };
+            ports.push(Port {
+                direction: target.direction,
+                pins,
+                owner,
+                reader,
+                processed_intent: target.mode == PathMode::Processed,
+                outcome: None,
+                chat: target
+                    .target
+                    .is_chat_output()
+                    .then(|| Box::new(super::chat_mix::Capture::new())),
+                native: [0; 2],
+                observed: 0,
+                active: false,
+                counted: false,
+                failed: false,
+            });
+        }
+        let jobs = vec![Job::None; ports.len()];
+        Ok((
+            Self {
+                front: UnsafeCell::new(Front {
+                    ports,
+                    counters: Counters::default(),
+                    cycle: 0,
+                    seq: 0,
+                    idle: true,
+                    previous_ready: false,
+                    sampler: Sampler::default(),
+                }),
+                handoff: UnsafeCell::new(Handoff {
+                    seq: 0,
+                    frames: FRAMES,
+                    cycle_start: 0,
+                    native_success: false,
+                    jobs,
+                    work,
+                    counters: Counters::default(),
+                    done_seq: 0,
+                }),
+                helper: Helper::start()?,
+            },
+            controls,
+        ))
+    }
+    /// Control only, after callbacks have stopped.
+    pub fn counters(&self) -> Counters {
+        while !self.helper.idle() {
+            thread::yield_now();
+        }
+        let front = unsafe { &*self.front.get() };
+        let handoff = unsafe { &*self.handoff.get() };
+        front.counters.add(handoff.counters)
+    }
+    /// # Safety
+    /// The original JACK getter is valid for these live ports during this
+    /// callback. Native client/port mutation must obey JACK's lifetime rules.
+    pub unsafe fn begin(&self, frames: usize, get: super::GetBuffer, cycle_start: u64) {
+        super::chat_mix::disarm();
+        // SAFETY: the callback owns `front`.
+        let front = unsafe { &mut *self.front.get() };
+        front.seq += 1;
+        front.idle = self.helper.idle();
+        if !front.idle {
+            // Rare: the helper is almost done. The callback has the time to
+            // spare, and waiting beats passing a frame through.
+            HELPER_LATE.fetch_add(1, Ordering::Relaxed);
+            let running = super::timing::monotonic()
+                .saturating_sub(self.helper.shared.started.load(Ordering::Relaxed));
+            super::probe::record(super::probe::Kind::HelperBusy, running);
+            front.idle = self.helper.wait(HELPER_WAIT_NS);
+        }
+        front.previous_ready = false;
+        // SAFETY: the helper is idle; the callback owns the handoff until
+        // `end` queues it again.
+        let handoff = front.idle.then(|| unsafe { &mut *self.handoff.get() });
+        if let Some(handoff) = &handoff {
+            front.previous_ready = handoff.done_seq == front.seq - 1;
+            let finished = self.helper.shared.finished.load(Ordering::Relaxed);
+            if finished != 0 && front.previous_ready {
+                let margin = super::timing::monotonic().saturating_sub(finished);
+                HELPER_MIN_MARGIN_NS.fetch_min(margin, Ordering::Relaxed);
+            }
+        } else {
+            HELPER_STALLS.fetch_add(1, Ordering::Relaxed);
+            super::probe::record(super::probe::Kind::HelperStall, HELPER_WAIT_NS);
+        }
+        let resolving = super::timing::monotonic();
+        let cycle = front.cycle;
+        front.cycle = front.cycle.wrapping_add(1);
+        // Resolve all buffers before touching any signal or DSP history.
+        // Unprocessed paths are left alone between meter readings, their
+        // buffers not even resolved.
+        for (index, port) in front.ports.iter_mut().enumerate() {
+            port.active = false;
+            port.counted = false;
+            port.observed = 0;
+            port.outcome = None;
+            if let Some(reader) = &mut port.reader
+                && !reader.begin()
+            {
+                port.fail(&mut front.counters);
+                continue;
+            }
+            if port.failed {
+                continue;
+            }
+            let unprocessed = match port.owner {
+                Owner::Callback => port
+                    .reader
+                    .as_ref()
+                    .is_some_and(|reader| reader.mode() != Some(PathMode::Processed)),
+                Owner::Helper => handoff
+                    .as_ref()
+                    .and_then(|handoff| handoff.work[index].as_ref())
+                    .is_some_and(|work| !work.processed_mode),
+            };
+            // A busy helper's mode is unknown; keep the last one seen.
+            if port.owner == Owner::Callback || handoff.is_some() {
+                port.processed_intent = !unprocessed;
+            }
+            if unprocessed && !meters(cycle, index) {
+                port.counted = true;
+                continue;
+            }
+            if frames != FRAMES || !port.alive() {
+                port.fail(&mut front.counters);
+                continue;
+            }
+            let mut valid = true;
+            for (channel, pin) in port.pins.iter().enumerate() {
+                let pointer = unsafe { get(pin.pointer as *mut c_void, frames as u32) } as usize;
+                if pointer == 0
+                    || !pointer.is_multiple_of(std::mem::align_of::<f32>())
+                    || pointer.checked_add(frames * 4).is_none()
+                {
+                    valid = false;
+                    break;
+                }
+                port.native[channel] = pointer;
+            }
+            if !valid {
+                port.fail(&mut front.counters);
+                continue;
+            }
+            if port.direction == Direction::Output && port.pins.len() == 2 {
+                let [a, b] = port.native;
+                if a < b + frames * 4 && b < a + frames * 4 {
+                    port.fail(&mut front.counters);
+                    continue;
+                }
+            }
+            port.active = true;
+            if port
+                .reader
+                .as_ref()
+                .is_some_and(parameters::Reader::needs_chat_stem)
+                && let Some(capture) = &mut port.chat
+            {
+                // Capture is boxed in this Port and remains live until end().
+                unsafe {
+                    capture.arm(port.native);
+                }
+            }
+        }
+        charge(&RESOLVE_NS, resolving);
+        if let Some(handoff) = handoff {
+            handoff.frames = frames;
+            handoff.cycle_start = cycle_start;
+            handoff.seq = front.seq;
+        }
+    }
+    pub fn buffer(&self, port: usize, frames: usize, native: *mut c_void) -> *mut c_void {
+        // SAFETY: called by the mixer inside the callback, between `begin`
+        // and `end`.
+        let front = unsafe { &mut *self.front.get() };
+        for (index, item) in front.ports.iter_mut().enumerate() {
+            let Some(channel) = item.pins.iter().position(|pin| pin.pointer == port) else {
+                continue;
+            };
+            if !item.active {
+                item.note(Outcome::Invalid, &mut front.counters);
+                return native;
+            }
+            if frames != FRAMES
+                || !item.pins[channel].alive.load(Ordering::Acquire)
+                || item.native[channel] != native as usize
+            {
+                item.fail(&mut front.counters);
+                item.note(Outcome::Invalid, &mut front.counters);
+                return native;
+            }
+            item.observed |= 1 << channel;
+            if item.direction != Direction::Input {
+                return native;
+            }
+            if !front.idle || !front.previous_ready {
+                item.note(Outcome::HelperUnready, &mut front.counters);
+                return native;
+            }
+            // The mixer reads the source processed over the last frame.
+            // SAFETY: the helper is idle (see `begin`).
+            let handoff = unsafe { &mut *self.handoff.get() };
+            let Some(work) = &mut handoff.work[index] else {
+                return native;
+            };
+            let previous = ((front.seq - 1) & 1) as usize;
+            return if work.done[previous] {
+                item.note(Outcome::Processed, &mut front.counters);
+                let cell = &work.processed[previous];
+                // In bounds, and without a mutable borrow of the slot.
+                unsafe { cell.get().cast::<[f32; FRAMES]>().add(channel).cast() }
+            } else {
+                // No frame was handed off last time (the first frame, or
+                // the path inactive), or the helper produced no result.
+                // (`captured` starts at zero, as if frame 0 had been.)
+                let outcome = if front.seq > 1 && work.captured[previous] == front.seq - 1 {
+                    Outcome::NotDone
+                } else {
+                    Outcome::NoHandoff
+                };
+                item.note(outcome, &mut front.counters);
+                native
+            };
+        }
+        native
+    }
+    /// # Safety
+    /// Native output buffers remain live and uniquely writable until this
+    /// callback returns. No caller may unregister them concurrently.
+    pub unsafe fn end(&self, frames: usize, native_success: bool) {
+        // No subsequent vendor call may retain this callback's capture pointer.
+        super::chat_mix::disarm();
+        // SAFETY: the callback owns `front`.
+        let front = unsafe { &mut *self.front.get() };
+        let slot = (front.seq & 1) as usize;
+        let previous = slot ^ 1;
+        // SAFETY: the helper is idle (see `begin`), so the callback owns the
+        // handoff until it is queued below.
+        let mut handoff = front.idle.then(|| unsafe { &mut *self.handoff.get() });
+        for (index, port) in front.ports.iter_mut().enumerate() {
+            let started = super::timing::monotonic();
+            let complete = port.complete();
+            let usable = native_success && port.active && complete;
+            if port.direction == Direction::Output && port.active && !complete {
+                front.counters.skipped_outputs += 1;
+                LIVE_SKIPPED_OUTPUTS.fetch_add(1, Ordering::Relaxed);
+            }
+            if usable && !port.alive() {
+                port.fail(&mut front.counters);
+            }
+            let usable = usable && !port.failed;
+            // An unprocessed path left alone applies trivially.
+            let counted = native_success && port.counted;
+            port.tally_source(usable, &mut front.counters);
+            match port.owner {
+                Owner::Callback => {
+                    let mut applied = counted;
+                    if usable {
+                        let buffers = unsafe { port.slices(frames) };
+                        let reader = port.reader.as_mut().expect("callback-owned output");
+                        let latency = reader.latency_samples() as u32;
+                        if reader.mode() == Some(PathMode::Processed) {
+                            let result = if reader.needs_chat_stem() {
+                                match port.chat.as_ref().and_then(|capture| capture.voice()) {
+                                    Some(voice) => reader.chat_output(voice, buffers),
+                                    None => Err(rc2fx_dsp::DspError::MissingChatStem),
+                                }
+                            } else {
+                                reader.output(buffers)
+                            };
+                            match result {
+                                Ok(meter) => {
+                                    reader.record(frames, meter, latency);
+                                    front.counters.output_blocks += 1;
+                                    LIVE_OUTPUT_BLOCKS.fetch_add(1, Ordering::Relaxed);
+                                    applied = true;
+                                }
+                                Err(_) => port.fail(&mut front.counters),
+                            }
+                        } else {
+                            let [left, right] = buffers;
+                            reader.record(frames, native_meter([left, right]), latency);
+                            applied = true;
+                        }
+                    } else if counted {
+                        let reader = port.reader.as_mut().expect("callback-owned output");
+                        let latency = reader.latency_samples() as u32;
+                        reader.record(frames, rc2fx_dsp::Meter::default(), latency);
+                    }
+                    if let Some(reader) = &mut port.reader {
+                        reader.finish(applied);
+                    }
+                }
+                Owner::Helper => {
+                    let Some(handoff) = &mut handoff else {
+                        continue;
+                    };
+                    let Some(work) = &mut handoff.work[index] else {
+                        continue;
+                    };
+                    let mut job = if counted { Job::Count } else { Job::None };
+                    if usable {
+                        let [left, right] = unsafe { port.slices(frames) };
+                        if work.processed_mode {
+                            copy([&*left, &*right], &mut work.raw[slot], frames);
+                            work.captured[slot] = front.seq;
+                            if port.direction == Direction::Input {
+                                job = Job::Input;
+                            } else {
+                                job = Job::Output;
+                                // Write the previous frame: processed if the
+                                // helper finished it, else as the mixer made it.
+                                let source = if front.previous_ready && work.done[previous] {
+                                    // SAFETY: the helper is idle.
+                                    Some(unsafe { &*work.processed[previous].get() })
+                                } else if work.captured[previous] == front.seq - 1 {
+                                    // An unprocessed slot taken from the copy:
+                                    // counted as a fallback, not as a DSP error
+                                    // (see LIVE_OUTPUT_RAW_FRAME).
+                                    LIVE_OUTPUT_RAW_FRAME.fetch_add(1, Ordering::Relaxed);
+                                    Some(&work.raw[previous])
+                                } else {
+                                    LIVE_OUTPUT_NO_FRAME.fetch_add(1, Ordering::Relaxed);
+                                    None
+                                };
+                                if let Some(source) = source {
+                                    left.copy_from_slice(&source[0][..frames]);
+                                    if !right.is_empty() {
+                                        right.copy_from_slice(&source[1][..frames]);
+                                    }
+                                }
+                            }
+                        } else {
+                            copy([&*left, &*right], &mut work.raw[slot], frames);
+                            job = Job::Meter;
+                        }
+                    }
+                    handoff.jobs[index] = job;
+                }
+            }
+            charge(&PATH_COST_NS[index], started);
+        }
+        front.sampler.mark(front.cycle);
+        if let Some(handoff) = handoff {
+            handoff.native_success = native_success;
+            self.helper.place(front.cycle, &mut front.sampler);
+            self.helper.queue(handoff);
+        }
+    }
+    /// Wait for the helper to finish the frame just handed off, as the next
+    /// callback would find it.
+    #[cfg(test)]
+    fn settle(&self) {
+        while !self.helper.idle() {
+            thread::yield_now();
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::UnsafeCell;
+    #[path = "direct_output.rs"]
+    mod direct_output;
+    #[path = "passthrough_invariance.rs"]
+    mod passthrough_invariance;
+    #[path = "processing_counters.rs"]
+    mod processing_counters;
+
+    #[test]
+    fn expanded_route_plan_uses_the_shared_bounded_path_capacity() {
+        let paths: Vec<_> = (0..MAX_PATHS).map(|index| {
+            serde_json::json!({
+                "direction": "input", "ports": [format!("in_{}", index + 1)],
+                "target": Target::new(format!("path-{index}"), "Playback", TargetKind::Playback, 1),
+                "mode": "passthrough", "hardware": false,
+            })
+        }).collect();
+        let mut value = serde_json::json!({
+            "version": 1, "sampleRate": 48000, "frames": FRAMES, "paths": paths,
+        });
+        let plan = Plan::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(plan.paths.len(), MAX_PATHS);
+        assert!(plan.paths.len() >= 25, "the expanded Pro II catalog must fit");
+        let extra = value["paths"][0].clone();
+        value["paths"].as_array_mut().unwrap().push(extra);
+        assert!(Plan::parse(&serde_json::to_vec(&value).unwrap()).err().unwrap().contains("geometry/count"));
+    }
+
+    struct Buffers {
+        input: [UnsafeCell<[f32; FRAMES]>; 2],
+        output: [UnsafeCell<[f32; FRAMES]>; 2],
+    }
+    impl Buffers {
+        fn new() -> Self {
+            Self {
+                input: [
+                    UnsafeCell::new([0.25; FRAMES]),
+                    UnsafeCell::new([-0.125; FRAMES]),
+                ],
+                output: [const { UnsafeCell::new([0.0; FRAMES]) }; 2],
+            }
+        }
+        fn input(&self, channel: usize) -> *mut f32 {
+            self.input[channel].get().cast()
+        }
+        fn output(&self, channel: usize) -> *mut f32 {
+            self.output[channel].get().cast()
+        }
+    }
+    unsafe extern "C" fn test_buffer(port: *mut c_void, _: u32) -> *mut c_void {
+        port
+    }
+    fn plan_with_source_and_output(highpass: bool) -> Plan {
+        let mut paths = Vec::new();
+        for (id, kind, channels, direction, ports) in [
+            (
+                "source",
+                TargetKind::Mic,
+                1,
+                Direction::Input,
+                vec!["in_1".into()],
+            ),
+            (
+                "headphones",
+                TargetKind::Output,
+                2,
+                Direction::Output,
+                vec!["out_1".into(), "out_2".into()],
+            ),
+        ] {
+            let mut target = Target::new(id, id, kind, channels);
+            target.limiter.enabled = false;
+            target.gain.enabled = false;
+            target.eq.enabled = true;
+            target.eq.input_gain_db = 20.0 * 0.5_f64.log10();
+            target.highpass.enabled = direction == Direction::Input && highpass;
+            target.highpass.frequency = 120.0;
+            paths.push(PathPlan {
+                direction,
+                ports,
+                target,
+                mode: PathMode::Processed,
+                hardware: direction == Direction::Output,
+            });
+        }
+        Plan {
+            version: 1,
+            sample_rate: 48_000,
+            frames: FRAMES,
+            worker: None,
+            paths,
+        }
+    }
+    fn pipeline(plan: &Plan, buffers: &Buffers) -> (Pipeline, Vec<parameters::Control>) {
+        let mut registry = Registry::default();
+        for channel in 0..2 {
+            assert!(registry.register(
+                1,
+                buffers.input(channel) as usize,
+                format!("in_{}", channel + 1).as_bytes(),
+                1
+            ));
+            assert!(registry.register(
+                1,
+                buffers.output(channel) as usize,
+                format!("out_{}", channel + 1).as_bytes(),
+                2
+            ));
+        }
+        // These tests describe helper-owned sources; the direct ones say so.
+        Pipeline::with_ownership(plan, &registry, 1, false).unwrap()
+    }
+    fn block(pipeline: &mut Pipeline, buffers: &Buffers, native_success: bool) {
+        unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
+        for channel in 0..2 {
+            let raw = buffers.input(channel);
+            let input = pipeline
+                .buffer(raw as usize, FRAMES, raw.cast())
+                .cast::<f32>();
+            let raw = buffers.output(channel);
+            let output = pipeline
+                .buffer(raw as usize, FRAMES, raw.cast())
+                .cast::<f32>();
+            for index in 0..FRAMES {
+                unsafe { output.add(index).write(input.add(index).read() * 2.0) };
+            }
+        }
+        unsafe { pipeline.end(FRAMES, native_success) };
+        pipeline.settle();
+    }
+
+    #[test]
+    fn chat_without_a_verified_stem_leaves_the_completed_stereo_mix_untouched() {
+        let mut target = Target::new("send-chat", "Chat", TargetKind::Output, 2);
+        target.suppression.enabled = true;
+        let plan = Plan {
+            version: 1,
+            sample_rate: 48_000,
+            frames: FRAMES,
+            worker: Some(WorkerPlan {
+                cpu_mask: None,
+                realtime_priority: None,
+                nice: None,
+            }),
+            paths: vec![PathPlan {
+                direction: Direction::Output,
+                ports: vec!["out_1".into(), "out_2".into()],
+                target,
+                mode: PathMode::Processed,
+                hardware: false,
+            }],
+        };
+        let buffers = Buffers::new();
+        let (mut pipeline, mut controls) = pipeline(&plan, &buffers);
+        block(&mut pipeline, &buffers, true);
+        assert!(
+            unsafe { &*buffers.output[0].get() }
+                .iter()
+                .all(|&v| v == 0.5)
+        );
+        assert!(
+            unsafe { &*buffers.output[1].get() }
+                .iter()
+                .all(|&v| v == -0.25)
+        );
+        assert_eq!(pipeline.counters().faults, 1);
+        assert_eq!(controls[0].status().unwrap().applied, 0);
+        assert_eq!(
+            controls[0].worker_status().unwrap().completed_frames,
+            0,
+            "the mixed output never becomes model input"
+        );
+    }
+
+    #[test]
+    fn live_source_and_output_updates_remain_independent_and_keep_raw_fanout() {
+        let plan = plan_with_source_and_output(false);
+        let buffers = Buffers::new();
+        let (mut pipeline, mut controls) = pipeline(&plan, &buffers);
+        block(&mut pipeline, &buffers, true);
+        assert_eq!(controls[0].status().unwrap().applied, 1);
+        assert_eq!(controls[1].status().unwrap().applied, 1);
+        let mut source = plan.paths[0].target.clone();
+        source.eq.input_gain_db = 20.0 * 0.25_f64.log10();
+        controls[0].publish(&source, 2).unwrap();
+        for _ in 0..100 {
+            block(&mut pipeline, &buffers, true);
+        }
+        assert_eq!(controls[0].status().unwrap().applied, 2);
+        assert_eq!(controls[1].status().unwrap().published, 1);
+        for channel in 0..2 {
+            let expected = [0.0625, -0.125][channel];
+            assert!(
+                unsafe { &*buffers.output[channel].get() }
+                    .iter()
+                    .all(|value| (value - expected).abs() < 2e-6)
+            );
+            assert!(
+                unsafe { &*buffers.input[channel].get() }
+                    .iter()
+                    .all(|value| *value == [0.25, -0.125][channel])
+            );
+        }
+        let mut output = plan.paths[1].target.clone();
+        output.eq.input_gain_db = 0.0;
+        controls[1].publish(&output, 2).unwrap();
+        for _ in 0..100 {
+            block(&mut pipeline, &buffers, true);
+        }
+        assert_eq!(controls[1].status().unwrap().applied, 2);
+        assert_eq!(controls[0].status().unwrap().published, 2);
+        for channel in 0..2 {
+            let expected = [0.125, -0.25][channel];
+            assert!(
+                unsafe { &*buffers.output[channel].get() }
+                    .iter()
+                    .all(|value| (value - expected).abs() < 2e-6)
+            );
+        }
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    #[test]
+    fn native_pass_and_replacement_change_only_one_bound_path_without_callback_memory_work() {
+        use super::super::{
+            CALLBACK_ALLOCATIONS, CALLBACK_FREES, CALLBACK_REALLOCATIONS, CallbackFrame, INSIDE,
+        };
+        let plan = plan_with_source_and_output(false);
+        let buffers = Buffers::new();
+        let (mut pipeline, mut controls) = pipeline(&plan, &buffers);
+        for _ in 0..8 {
+            block(&mut pipeline, &buffers, true);
+        }
+        let output_epoch = controls[1].status().unwrap().runtime_epoch;
+        let staged = controls[0]
+            .prepare_mode(&plan.paths[0].target, 2, PathMode::Passthrough)
+            .unwrap();
+        controls[0].reserve(staged).unwrap().commit();
+        let memory = [
+            CALLBACK_ALLOCATIONS.load(Ordering::Relaxed),
+            CALLBACK_FREES.load(Ordering::Relaxed),
+            CALLBACK_REALLOCATIONS.load(Ordering::Relaxed),
+        ];
+        let previous = INSIDE.with(|inside| {
+            inside.replace(CallbackFrame {
+                owner: 1,
+                processing: true,
+                pipeline: 0,
+                started: 0,
+            })
+        });
+        for _ in 0..100 {
+            block(&mut pipeline, &buffers, true);
+        }
+        INSIDE.with(|inside| inside.set(previous));
+        assert_eq!(
+            [
+                CALLBACK_ALLOCATIONS.load(Ordering::Relaxed),
+                CALLBACK_FREES.load(Ordering::Relaxed),
+                CALLBACK_REALLOCATIONS.load(Ordering::Relaxed)
+            ],
+            memory
+        );
+        assert_eq!(controls[0].status().unwrap().runtime_epoch, 0);
+        assert_eq!(controls[1].status().unwrap().runtime_epoch, output_epoch);
+        assert_eq!(
+            controls[0].status().unwrap().meter.unwrap().latency_samples,
+            0
+        );
+        for (channel, expected) in [0.25_f32, -0.125].into_iter().enumerate() {
+            assert!(
+                unsafe { &*buffers.output[channel].get() }
+                    .iter()
+                    .all(|value| (*value - expected).abs() < 1e-7)
+            );
+            assert!(
+                unsafe { &*buffers.input[channel].get() }
+                    .iter()
+                    .all(|value| value.to_bits() == [0.25_f32, -0.125][channel].to_bits())
+            );
+        }
+        let staged = controls[0]
+            .prepare_mode(&plan.paths[0].target, 3, PathMode::Processed)
+            .unwrap();
+        controls[0].reserve(staged).unwrap().commit();
+        let previous = INSIDE.with(|inside| {
+            inside.replace(CallbackFrame {
+                owner: 1,
+                processing: true,
+                pipeline: 0,
+                started: 0,
+            })
+        });
+        for _ in 0..100 {
+            block(&mut pipeline, &buffers, true);
+        }
+        INSIDE.with(|inside| inside.set(previous));
+        assert_eq!(
+            [
+                CALLBACK_ALLOCATIONS.load(Ordering::Relaxed),
+                CALLBACK_FREES.load(Ordering::Relaxed),
+                CALLBACK_REALLOCATIONS.load(Ordering::Relaxed)
+            ],
+            memory
+        );
+        assert_eq!(controls[0].status().unwrap().runtime_epoch, 2);
+        assert_eq!(controls[1].status().unwrap().runtime_epoch, output_epoch);
+        for (channel, expected) in [0.125_f32, -0.125].into_iter().enumerate() {
+            assert!(
+                unsafe { &*buffers.output[channel].get() }
+                    .iter()
+                    .all(|value| (*value - expected).abs() < 1e-7)
+            );
+        }
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    #[test]
+    fn live_parameters_preserve_filter_tail_and_native_failure_does_not_apply() {
+        let plan = plan_with_source_and_output(true);
+        let buffers = Buffers::new();
+        unsafe {
+            (*buffers.input[0].get()).fill(0.0);
+            buffers.input(0).write(0.25);
+        }
+        let (mut pipeline, mut controls) = pipeline(&plan, &buffers);
+        let prepared = Prepared::new(&plan.paths[0].target, 48_000).unwrap();
+        let mut reference = Dsp::without_suppression(&prepared).unwrap();
+        let mut expected = [0.0; FRAMES];
+        reference
+            .process(
+                &prepared,
+                [unsafe { &*buffers.input[0].get() }, &[]],
+                [&mut expected, &mut []],
+            )
+            .unwrap();
+        block(&mut pipeline, &buffers, true);
+        let mut source = plan.paths[0].target.clone();
+        source.eq.input_gain_db = 20.0 * 0.25_f64.log10();
+        controls[0].publish(&source, 2).unwrap();
+        let prepared = Prepared::new(&source, 48_000).unwrap();
+        unsafe {
+            (*buffers.input[0].get()).fill(0.0);
+        }
+        reference
+            .process(
+                &prepared,
+                [unsafe { &*buffers.input[0].get() }, &[]],
+                [&mut expected, &mut []],
+            )
+            .unwrap();
+        // The mixer hears a processed source one frame later, and its
+        // hardware output is written one frame after that.
+        block(&mut pipeline, &buffers, true);
+        block(&mut pipeline, &buffers, true);
+        block(&mut pipeline, &buffers, true);
+        assert!(expected.iter().any(|value| value.abs() > 1e-6));
+        for (actual, expected) in unsafe { &*buffers.output[0].get() }.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-7, "filter history changed");
+        }
+        controls[0].publish(&source, 3).unwrap();
+        block(&mut pipeline, &buffers, false);
+        let status = controls[0].status().unwrap();
+        assert_eq!(status.seen, 3);
+        assert_eq!(status.applied, 2);
+        controls[0].publish(&source, 4).unwrap();
+        block(&mut pipeline, &buffers, true);
+        assert_eq!(controls[0].status().unwrap().applied, 4);
+    }
+
+    #[test]
+    fn output_settings_are_not_acknowledged_when_native_callback_skips_output() {
+        let plan = plan_with_source_and_output(false);
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline(&plan, &buffers);
+        controls[1].publish(&plan.paths[1].target, 2).unwrap();
+        unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
+        let input = buffers.input(0);
+        pipeline.buffer(input as usize, FRAMES, input.cast());
+        unsafe { pipeline.end(FRAMES, true) };
+        pipeline.settle();
+        let source = controls[0].status().unwrap();
+        let output = controls[1].status().unwrap();
+        assert_eq!(source.applied, 1);
+        assert_eq!(output.published, 2);
+        assert_eq!(output.seen, 2);
+        assert_eq!(output.applied, 0);
+        assert_eq!(pipeline.counters().skipped_outputs, 1);
+        controls[1].publish(&plan.paths[1].target, 3).unwrap();
+    }
+
+    #[test]
+    fn a_stereo_output_never_processes_only_one_observed_channel() {
+        for hardware in [false, true] {
+            let mut plan = plan_with_source_and_output(false);
+            plan.paths[1].hardware = hardware;
+            let buffers = Buffers::new();
+            let (pipeline, mut controls) = pipeline(&plan, &buffers);
+            controls[1].publish(&plan.paths[1].target, 2).unwrap();
+            unsafe {
+                (*buffers.output[0].get()).fill(0.7);
+                (*buffers.output[1].get()).fill(-0.4);
+                pipeline.begin(FRAMES, test_buffer, 0);
+            }
+            let left = buffers.output(0);
+            pipeline.buffer(left as usize, FRAMES, left.cast());
+            unsafe { pipeline.end(FRAMES, true) };
+            pipeline.settle();
+            assert_eq!(controls[1].status().unwrap().applied, 0);
+            assert_eq!(pipeline.counters().skipped_outputs, 1);
+            assert_eq!(unsafe { &*buffers.output[0].get() }, &[0.7; FRAMES]);
+            assert_eq!(unsafe { &*buffers.output[1].get() }, &[-0.4; FRAMES]);
+        }
+    }
+
+    #[test]
+    fn a_missing_monitor_port_is_not_replaced_by_the_next_registered_output() {
+        let mut plan = plan_with_source_and_output(false);
+        plan.paths[1].ports = vec!["out_5".into(), "out_6".into()];
+        let buffers = Buffers::new();
+        let mut registry = Registry::default();
+        assert!(registry.register(1, buffers.input(0) as usize, b"in_1", 1));
+        assert!(registry.register(1, buffers.output(0) as usize, b"out_5", 2));
+        assert!(registry.register(1, buffers.output(1) as usize, b"out_7", 2));
+        assert!(Pipeline::new(&plan, &registry, 1).is_err());
+    }
+
+    /// One source path (mono mic or stereo playback) on in_1/in_2, EQ input
+    /// gain 0.5, optionally a 120 Hz high-pass (stateful).
+    fn source_plan(channels: u8, highpass: bool, mode: PathMode) -> Plan {
+        let kind = if channels == 1 {
+            TargetKind::Mic
+        } else {
+            TargetKind::Playback
+        };
+        let mut target = Target::new("source", "source", kind, channels);
+        target.limiter.enabled = false;
+        target.gain.enabled = false;
+        target.eq.enabled = true;
+        target.eq.input_gain_db = 20.0 * 0.5_f64.log10();
+        target.highpass.enabled = highpass;
+        target.highpass.frequency = 120.0;
+        Plan {
+            version: 1,
+            sample_rate: 48_000,
+            frames: FRAMES,
+            worker: Some(WorkerPlan {
+                cpu_mask: None,
+                realtime_priority: None,
+                nice: None,
+            }),
+            paths: vec![PathPlan {
+                direction: Direction::Input,
+                ports: (1..=channels).map(|c| format!("in_{c}")).collect(),
+                target,
+                mode,
+                hardware: false,
+            }],
+        }
+    }
+    fn pipeline_owned(plan: &Plan, buffers: &Buffers) -> (Pipeline, Vec<parameters::Control>) {
+        let mut registry = Registry::default();
+        for channel in 0..2 {
+            assert!(registry.register(
+                1,
+                buffers.input(channel) as usize,
+                format!("in_{}", channel + 1).as_bytes(),
+                1
+            ));
+        }
+        Pipeline::with_ownership(plan, &registry, 1, false).unwrap()
+    }
+    /// One callback in which the mixer requests the source channels in
+    /// `order` (repeats allowed) and copies what each request returned.
+    fn source_block(
+        pipeline: &Pipeline,
+        buffers: &Buffers,
+        order: &[usize],
+        native_success: bool,
+    ) -> [[f32; FRAMES]; 2] {
+        let mut seen = [[f32::NAN; FRAMES]; 2];
+        unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
+        for &channel in order {
+            let raw = buffers.input(channel);
+            let got = pipeline
+                .buffer(raw as usize, FRAMES, raw.cast())
+                .cast::<f32>();
+            let values = unsafe { std::slice::from_raw_parts(got, FRAMES) };
+            seen[channel].copy_from_slice(values);
+        }
+        unsafe { pipeline.end(FRAMES, native_success) };
+        pipeline.settle();
+        seen
+    }
+    /// One callback as `source_block`, without waiting for the helper.
+    fn source_block_unsettled(
+        pipeline: &Pipeline,
+        buffers: &Buffers,
+        order: &[usize],
+        native_success: bool,
+    ) {
+        unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
+        for &channel in order {
+            let raw = buffers.input(channel);
+            pipeline.buffer(raw as usize, FRAMES, raw.cast());
+        }
+        unsafe { pipeline.end(FRAMES, native_success) };
+    }
+
+    /// Helper-owned stages each add one frame: the source's, then the hardware
+    /// output's, written by the helper one frame after the mixer made it.
+    #[test]
+    fn helper_owned_source_and_output_each_add_a_frame() {
+        let plan = plan_with_source_and_output(false);
+        let buffers = Buffers::new();
+        let mut registry = Registry::default();
+        for channel in 0..2 {
+            assert!(registry.register(
+                1,
+                buffers.input(channel) as usize,
+                format!("in_{}", channel + 1).as_bytes(),
+                1
+            ));
+            assert!(registry.register(
+                1,
+                buffers.output(channel) as usize,
+                format!("out_{}", channel + 1).as_bytes(),
+                2
+            ));
+        }
+        let (mut pipeline, _controls) =
+            Pipeline::with_ownership(&plan, &registry, 1, false).unwrap();
+        // Source 0.25 x 0.5, mixer x 2, output x 0.5: 0.125 once both
+        // stages have been applied.
+        let mut first = None;
+        for frame in 0..4 {
+            block(&mut pipeline, &buffers, true);
+            let left = unsafe { &*buffers.output[0].get() };
+            if first.is_none() && left.iter().all(|v| (v - 0.125).abs() < 1e-6) {
+                first = Some(frame);
+            }
+        }
+        assert_eq!(first, Some(2));
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    /// The mixer may keep every pointer a callback's requests returned and
+    /// read them all afterwards, until the callback returns: later and
+    /// repeated requests never move or rewrite what an earlier one got.
+    #[test]
+    fn every_returned_source_pointer_stays_valid_through_the_callback() {
+        let plan = source_plan(2, true, PathMode::Processed);
+        let buffers = Buffers::new();
+        let (pipeline, _controls) = pipeline_owned(&plan, &buffers);
+        let prepared = Prepared::new(&plan.paths[0].target, 48_000).unwrap();
+        let mut reference = Dsp::without_suppression(&prepared).unwrap();
+        let mut expected = [[0.0; FRAMES]; 2];
+        for frame in 0..4 {
+            unsafe {
+                (*buffers.input[0].get()).fill(0.0);
+                (*buffers.input[1].get()).fill(0.0);
+                buffers.input(0).add(5 * frame).write(0.5);
+                buffers.input(1).add(7 * frame + 2).write(-0.25);
+            }
+            // The helper hands the mixer the previous frame's result.
+            let current = expected;
+            let [left, right] = &mut expected;
+            reference
+                .process(
+                    &prepared,
+                    unsafe { [&*buffers.input[0].get(), &*buffers.input[1].get()] },
+                    [left, right],
+                )
+                .unwrap();
+            let wanted = current;
+            unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
+            let mut held = Vec::new();
+            for channel in [1, 0, 1, 0, 0, 1] {
+                let raw = buffers.input(channel);
+                let got = pipeline
+                    .buffer(raw as usize, FRAMES, raw.cast())
+                    .cast::<f32>();
+                held.push((channel, got));
+            }
+            // Read every held pointer only after all requests.
+            for &(channel, got) in &held {
+                let values = unsafe { std::slice::from_raw_parts(got, FRAMES) };
+                if frame > 0 {
+                    assert_eq!(
+                        values.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        wanted[channel].map(f32::to_bits).to_vec(),
+                        "frame {frame} channel {channel}"
+                    );
+                }
+            }
+            let first = held.iter().find(|(c, _)| *c == 0).unwrap().1;
+            assert!(
+                held.iter().all(|&(c, p)| c != 0 || p == first),
+                "one pointer per channel"
+            );
+            unsafe { pipeline.end(FRAMES, true) };
+            // Still readable after end, until the next callback begins.
+            for &(channel, got) in &held {
+                let values = unsafe { std::slice::from_raw_parts(got, FRAMES) };
+                if frame > 0 {
+                    assert_eq!(
+                        values[..].iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        wanted[channel].map(f32::to_bits).to_vec()
+                    );
+                }
+            }
+            pipeline.settle();
+        }
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    #[test]
+    fn a_processed_frame_the_mixer_failed_is_counted_apart() {
+        let plan = source_plan(2, false, PathMode::Processed);
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        for _ in 0..2 {
+            source_block(&pipeline, &buffers, &[0, 1], true);
+        }
+        let before = pipeline.counters().sources;
+        controls[0].publish(&plan.paths[0].target, 2).unwrap();
+        // Processed audio delivered, but the mixer's callback failed.
+        source_block(&pipeline, &buffers, &[0, 1], false);
+        // Processed audio delivered for one channel; the other never asked.
+        source_block(&pipeline, &buffers, &[0], true);
+        let after = pipeline.counters().sources;
+        assert_eq!(after.processed, before.processed);
+        assert_eq!(after.raw_invalid, before.raw_invalid);
+        // The helper is handed only completed frames: the failed one
+        // still delivered last frame's result, but the next has none.
+        assert_eq!(
+            after.processed_unacknowledged,
+            before.processed_unacknowledged + 1
+        );
+        assert_eq!(after.raw_no_handoff, before.raw_no_handoff + 1);
+        assert_eq!(after.raw_returns, before.raw_returns + 1);
+        let status = controls[0].status().unwrap();
+        assert_eq!((status.seen, status.applied), (2, 1));
+        source_block(&pipeline, &buffers, &[0, 1], true);
+        assert_eq!(controls[0].status().unwrap().applied, 2);
+        let last = pipeline.counters().sources;
+        // Its previous frame was incomplete, so not handed off either.
+        assert_eq!(last.processed, before.processed);
+        assert_eq!(last.raw_no_handoff, after.raw_no_handoff + 1);
+    }
+
+    #[test]
+    fn the_helper_never_shares_the_suppression_workers_core() {
+        // Pinned callback: the other audio cores.
+        assert_eq!(helper_mask(0b0100), 0b1010);
+        // Before RØDE pins the callback (every core), or with no mask known,
+        // the helper still keeps to the audio cores, never CPU 0, where the
+        // suppression worker runs (rc2fx_suppression::PRODUCTION_WORKER).
+        for callback in [0b1111, 0b1110, 0] {
+            let mask = helper_mask(callback);
+            assert_ne!(mask, 0, "callback {callback:#b}");
+            assert_eq!(mask & !AUDIO_CPUS, 0, "callback {callback:#b}: {mask:#b}");
+        }
+        assert_eq!(
+            rc2fx_suppression::PRODUCTION_WORKER.cpu_mask.unwrap() & AUDIO_CPUS,
+            0
+        );
+    }
+
+    #[test]
+    fn placement_is_sampled_fast_until_settled_then_at_the_steady_cadence() {
+        let rr = libc::SCHED_RR;
+        let mut sampler = Sampler::default();
+        let samples = |sampler: &Sampler, cycles: std::ops::Range<u32>| {
+            cycles
+                .filter(|&cycle| sampler.due(cycle))
+                .collect::<Vec<_>>()
+        };
+        // Startup: every 64 callbacks.
+        assert_eq!(&samples(&sampler, 1..300), &[64, 128, 192, 256]);
+        // Real-time but not yet pinned (every core): not settled.
+        sampler.observe(rr, 0b1111, 1, 1);
+        assert!(!sampler.settled);
+        // Pinned and real-time, but the helper has not applied it yet.
+        sampler.observe(rr, 0b0100, 2, 1);
+        assert!(!sampler.settled);
+        // Ordinary policy: not settled.
+        sampler.observe(libc::SCHED_OTHER, 0b0100, 2, 2);
+        assert!(!sampler.settled);
+        // A promotion at callback 100 is seen at 128, not 2048.
+        let promoted = 100;
+        let seen = (promoted..).find(|&cycle| sampler.due(cycle)).unwrap();
+        assert!(seen - promoted <= PLACE_FAST_EVERY, "seen at {seen}");
+        sampler.observe(rr, 0b0100, 2, 2);
+        assert!(sampler.settled);
+        // Settled: the steady cadence, unchanged.
+        assert_eq!(&samples(&sampler, 1..8193), &[2048, 4096, 6144, 8192]);
+        // Never settled: fast only until PLACE_FAST_UNTIL, then steady.
+        let unsettled = Sampler::default();
+        assert!(unsettled.due(PLACE_FAST_UNTIL - PLACE_FAST_EVERY));
+        assert!(!unsettled.due(PLACE_FAST_UNTIL + PLACE_FAST_EVERY));
+        assert!(unsettled.due(4 * PLACE_EVERY));
+    }
+
+    /// A placement boundary whose callback finds the helper busy has no
+    /// handoff to sample with; the sample is taken at the next handoff, not
+    /// a whole interval later.
+    #[test]
+    fn a_placement_boundary_without_a_handoff_is_sampled_at_the_next_one() {
+        let _events = super::super::probe::EVENT_TESTS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let plan = source_plan(1, false, PathMode::Processed);
+        let buffers = Buffers::new();
+        let (pipeline, _controls) = pipeline_owned(&plan, &buffers);
+        let shared = &pipeline.helper.shared;
+        for _ in 1..PLACE_FAST_EVERY {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        assert_eq!(shared.generation.load(Ordering::Acquire), 0);
+        // Callback 64: neither idle nor queued, so the helper stays parked
+        // and the callback gives up waiting for it.
+        shared.state.store(QUEUED + 1, Ordering::Release);
+        source_block_unsettled(&pipeline, &buffers, &[0], true);
+        assert_eq!(unsafe { &*pipeline.front.get() }.cycle, PLACE_FAST_EVERY);
+        assert_eq!(shared.generation.load(Ordering::Acquire), 0);
+        shared.state.store(IDLE, Ordering::Release);
+        // Callback 65 hands off and takes the deferred sample.
+        source_block(&pipeline, &buffers, &[0], true);
+        let generation = shared.generation.load(Ordering::Acquire);
+        assert!(
+            generation >= 1,
+            "sample not taken after the missed boundary"
+        );
+        source_block(&pipeline, &buffers, &[0], true);
+        assert_eq!(shared.applied.load(Ordering::Acquire), generation);
+        let sampler = unsafe { &*pipeline.front.get() }.sampler;
+        assert_eq!(sampler.pending, None);
+        assert_eq!(sampler.deferred, 1, "one deferral, counted once");
+    }
+
+    #[test]
+    fn a_missed_boundary_stays_pending_until_sampled_and_counts_once() {
+        let mut sampler = Sampler::default();
+        for cycle in 60..64 {
+            sampler.mark(cycle);
+            assert_eq!(sampler.pending, None);
+        }
+        // Boundary 64 and the callbacks after it without a handoff.
+        for cycle in 64..70 {
+            sampler.mark(cycle);
+            assert_eq!(sampler.pending, Some(64));
+        }
+        assert_eq!(sampler.take(70), Some(true));
+        assert_eq!(sampler.pending, None);
+        assert_eq!(sampler.take(71), None);
+        assert_eq!(sampler.deferred, 1);
+        // On time: taken at the boundary, not a deferral.
+        sampler.mark(128);
+        assert_eq!(sampler.take(128), Some(false));
+        assert_eq!(sampler.deferred, 1);
+        // Missed through the next boundary: still the first boundary's
+        // sample, deferred, counted once.
+        sampler.mark(192);
+        for cycle in 193..256 {
+            sampler.mark(cycle);
+        }
+        sampler.mark(256);
+        assert_eq!(sampler.take(256), Some(true));
+        assert_eq!(sampler.deferred, 2);
+        assert_eq!(sampler.take(257), None);
+        // The callback counter wraps onto a boundary.
+        sampler.mark(u32::MAX);
+        sampler.mark(0);
+        assert_eq!(sampler.take(1), Some(true));
+        assert_eq!(sampler.deferred, 3);
+    }
+
+    /// Runs a pipeline past its first fast placement sample; the report's
+    /// history shows what the callback had and what the helper then got.
+    #[test]
+    fn placement_changes_are_recorded_with_actual_masks() {
+        let plan = source_plan(1, false, PathMode::Processed);
+        let buffers = Buffers::new();
+        let (pipeline, _controls) = pipeline_owned(&plan, &buffers);
+        for _ in 0..PLACE_FAST_EVERY + 2 {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        let report = placement();
+        assert!(report["samples"].as_u64().unwrap() >= 1);
+        let history = report["history"].as_array().unwrap();
+        assert!(!history.is_empty());
+        for record in history {
+            assert!(record["generation"].as_u64().unwrap() >= 1);
+            // On a boundary, unless its callback had no handoff.
+            let boundary = record["cycle"]
+                .as_u64()
+                .unwrap()
+                .is_multiple_of(u64::from(PLACE_FAST_EVERY));
+            assert!(boundary || record["deferred"] == true, "{record}");
+            assert!(record["atNs"].as_u64().unwrap() > 0);
+            if record["appliedAtNs"].as_u64().unwrap() != 0 {
+                let requested = record["helperRequestedCpus"].as_u64().unwrap();
+                assert_eq!(requested & !AUDIO_CPUS, 0, "never CPU 0: {record}");
+                assert!(record["appliedAtNs"].as_u64() >= record["atNs"].as_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn a_helper_source_reaches_the_mixer_a_frame_later() {
+        let plan = source_plan(1, false, PathMode::Processed);
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        let first = source_block(&pipeline, &buffers, &[0], true);
+        let second = source_block(&pipeline, &buffers, &[0], true);
+        // Enough frames for one telemetry window.
+        for _ in 0..48 {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        // The first frame passes raw; processing arrives a frame (112
+        // samples) later.
+        assert!(first[0].iter().all(|v| (v - 0.25).abs() < 1e-6));
+        assert!(second[0].iter().all(|v| (v - 0.125).abs() < 1e-6));
+        let status = controls[0].status().unwrap();
+        assert_eq!(status.applied, 1);
+        let latency = status.meter.unwrap().latency_samples;
+        assert_eq!(latency, FRAMES as u32);
+        let counts = pipeline.counters().sources;
+        assert_eq!(counts.processed, 49);
+        assert_eq!(counts.raw_no_handoff, 1);
+        assert_eq!(counts.raw_returns, 1);
+        assert_eq!(pipeline.counters().input_blocks, 50);
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    #[test]
+    fn a_later_raw_request_counts_the_whole_frame_raw() {
+        let plan = source_plan(2, false, PathMode::Processed);
+        let buffers = Buffers::new();
+        let (pipeline, _controls) = pipeline_owned(&plan, &buffers);
+        for _ in 0..2 {
+            source_block(&pipeline, &buffers, &[0, 1], true);
+        }
+        let before = pipeline.counters().sources;
+        assert_eq!(before.processed, 1);
+        // Left is served processed, then right arrives with a buffer that
+        // is not the one resolved for this frame.
+        unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
+        let left = buffers.input(0);
+        let got = pipeline.buffer(left as usize, FRAMES, left.cast());
+        assert_ne!(got, left.cast(), "left processed");
+        let right = buffers.input(1);
+        let mut elsewhere = [0.0f32; FRAMES];
+        let got = pipeline.buffer(right as usize, FRAMES, elsewhere.as_mut_ptr().cast());
+        assert_eq!(got, elsewhere.as_mut_ptr().cast(), "right raw");
+        unsafe { pipeline.end(FRAMES, true) };
+        pipeline.settle();
+        let after = pipeline.counters().sources;
+        assert_eq!(after.processed, before.processed);
+        assert_eq!(after.raw_invalid, before.raw_invalid + 1);
+        assert_eq!(after.raw_returns, before.raw_returns + 1);
+        // The failed path stays raw, and each frame says so.
+        source_block(&pipeline, &buffers, &[0, 1], true);
+        let failed = pipeline.counters().sources;
+        assert_eq!(failed.raw_invalid, after.raw_invalid + 1);
+        assert_eq!(failed.raw_returns, after.raw_returns + 2);
+        assert_eq!(pipeline.counters().faults, 1);
+    }
+
+    #[test]
+    fn an_unrequested_source_frame_is_counted_and_not_acknowledged() {
+        let plan = source_plan(1, false, PathMode::Processed);
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        source_block(&pipeline, &buffers, &[0], true);
+        controls[0].publish(&plan.paths[0].target, 2).unwrap();
+        source_block(&pipeline, &buffers, &[], true);
+        let status = controls[0].status().unwrap();
+        assert_eq!((status.seen, status.applied), (2, 1));
+        let counts = pipeline.counters().sources;
+        assert_eq!(counts.unobserved, 1);
+        source_block(&pipeline, &buffers, &[0], true);
+        assert_eq!(controls[0].status().unwrap().applied, 2);
+    }
+
+    /// The mic to headphones path of the Pro II profile: DeepFilterNet3's
+    /// 240-sample frame, 120 intrinsic, the 320 lead and the helper's period,
+    /// 792 samples (16.5 ms).
+    #[test]
+    fn a_deepfilternet_mic_reports_the_profile_latency() {
+        let mut plan = source_plan(1, false, PathMode::Processed);
+        plan.paths[0].target.suppression.enabled = true;
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        for _ in 0..40 {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        assert_eq!(
+            controls[0].status().unwrap().meter.unwrap().latency_samples,
+            240 + 120 + 320 + FRAMES as u32
+        );
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    /// DeepFilterNet3's lookahead is a live setting: a transaction that
+    /// changes it replaces only that path's suppression worker (the old
+    /// runtime is admitted out and a new one published), the callback does no
+    /// memory work meanwhile, and the reported latency follows by one hop.
+    #[test]
+    fn a_live_lookahead_switch_rebuilds_the_worker_and_moves_the_latency_by_one_hop() {
+        use super::super::{
+            CALLBACK_ALLOCATIONS, CALLBACK_FREES, CALLBACK_REALLOCATIONS, CallbackFrame, INSIDE,
+        };
+        let mut plan = source_plan(1, false, PathMode::Processed);
+        plan.paths[0].target.suppression.enabled = true;
+        plan.paths[0].target.suppression.lookahead = 0;
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        for _ in 0..40 {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        let hop = rc2fx_core::DFN_HOP_SAMPLES;
+        let base = rc2fx_suppression::Geometry::for_lookahead(0)
+            .unwrap()
+            .latency_samples() as u32;
+        let helper = FRAMES as u32;
+        let latency = |controls: &mut [parameters::Control]| {
+            controls[0].status().unwrap().meter.unwrap().latency_samples
+        };
+        assert_eq!(latency(&mut controls), base + helper);
+        // Every switch is a live transaction on this path alone, and the
+        // callbacks either side of it do no memory work (the transaction
+        // itself is control work and may allocate).
+        let memory = [
+            CALLBACK_ALLOCATIONS.load(Ordering::Relaxed),
+            CALLBACK_FREES.load(Ordering::Relaxed),
+            CALLBACK_REALLOCATIONS.load(Ordering::Relaxed),
+        ];
+        // Revisions must climb past the one the plan was built with.
+        let first = controls[0].status().unwrap().applied + 1;
+        for (revision, lookahead, expected) in [
+            (first, 1, base + hop + helper),
+            (first + 1, 0, base + helper),
+            (first + 2, 1, base + hop + helper),
+        ] {
+            let mut target = plan.paths[0].target.clone();
+            target.suppression.lookahead = lookahead;
+            let staged = controls[0]
+                .prepare_mode(&target, revision, PathMode::Processed)
+                .unwrap();
+            controls[0].reserve(staged).unwrap().commit();
+            let previous = INSIDE.with(|inside| {
+                inside.replace(CallbackFrame {
+                    owner: 1,
+                    processing: true,
+                    pipeline: 0,
+                    started: 0,
+                })
+            });
+            for _ in 0..40 {
+                source_block(&pipeline, &buffers, &[0], true);
+            }
+            INSIDE.with(|inside| inside.set(previous));
+            assert_eq!(latency(&mut controls), expected, "lookahead {lookahead}");
+            let status = controls[0].status().unwrap();
+            assert_eq!(status.applied, revision);
+            assert!(status.runtime_epoch > 0, "a fresh runtime was published");
+        }
+        assert_eq!(
+            [
+                CALLBACK_ALLOCATIONS.load(Ordering::Relaxed),
+                CALLBACK_FREES.load(Ordering::Relaxed),
+                CALLBACK_REALLOCATIONS.load(Ordering::Relaxed)
+            ],
+            memory,
+            "no callback allocation across the switches"
+        );
+        let counters = pipeline.counters();
+        assert_eq!(counters.faults, 0);
+        assert!(counters.sources.processed >= 100, "{:?}", counters.sources);
+    }
+
+    #[test]
+    fn a_suppressed_mic_reports_its_dsp_delay_and_the_helper_frame() {
+        let mut plan = source_plan(1, false, PathMode::Processed);
+        plan.paths[0].target.suppression.enabled = true;
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        for _ in 0..40 {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        let worker = rc2fx_suppression::Geometry::for_lookahead(0,
+        )
+        .unwrap()
+        .latency_samples() as u32;
+        let latency = controls[0].status().unwrap().meter.unwrap().latency_samples;
+        assert_eq!(latency, worker + FRAMES as u32);
+        let counters = pipeline.counters();
+        assert_eq!(counters.faults, 0);
+        assert_eq!(counters.sources.processed, 39);
+        // The worker runs asynchronously; give it time to catch up.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while controls[0].worker_status().unwrap().completed_frames == 0 {
+            assert!(std::time::Instant::now() < deadline, "worker never ran");
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // The report's outlier records come from the same worker.
+        let outliers = controls[0].worker_outliers().unwrap();
+        assert_eq!(outliers["worst"]["state"], "stable");
+        assert!(outliers["worst"]["turnaroundNs"].as_u64().unwrap() > 0);
+        // Cumulative turnaround counts above 5.5, 6.0, 6.5 and 7.0 ms,
+        // alongside the worst; each threshold counts at most its
+        // predecessor, and the worst must exceed the top one it counts.
+        let above = &outliers["turnaroundsAboveMs"];
+        let counts: Vec<u64> = ["5.5", "6.0", "6.5", "7.0"]
+            .iter()
+            .map(|key| above[key].as_u64().unwrap())
+            .collect();
+        assert!(
+            counts.windows(2).all(|pair| pair[1] <= pair[0]),
+            "{counts:?}"
+        );
+        assert!(["empty", "stable"].contains(&outliers["lastMiss"]["state"].as_str().unwrap()));
+        for kind in ["missHistory", "lateHistory"] {
+            let history = &outliers[kind];
+            let count = |key: &str| history[key].as_u64().unwrap();
+            assert_eq!(
+                count("total"),
+                count("recorded") + count("lost") + count("unpublished")
+            );
+            assert_eq!(
+                count("recorded"),
+                history["events"].as_array().unwrap().len() as u64
+            );
+        }
+        // The history holds the latest miss whenever it has room.
+        if outliers["lastMiss"]["state"] == "stable" && outliers["missHistory"]["lost"] == 0 {
+            let events = outliers["missHistory"]["events"].as_array().unwrap();
+            assert_eq!(
+                events.last().unwrap()["sequence"],
+                outliers["lastMiss"]["sequence"]
+            );
+        }
+    }
+
+    fn full_registry() -> Registry {
+        let mut registry = Registry::default();
+        for pointer in 1..=512 {
+            assert!(registry.register(1, pointer, format!("in_{pointer}").as_bytes(), 1));
+        }
+        registry
+    }
+
+    #[test]
+    fn replacement_at_capacity_retires_old_identity_before_admitting_new_one() {
+        let mut registry = full_registry();
+        let retired = Arc::clone(&registry.ports[0]);
+        assert!(registry.register(1, retired.pointer, b"replacement", 1));
+        assert_eq!(registry.ports.len(), 512);
+        assert!(!retired.alive.load(Ordering::Acquire));
+        let replacement = registry.ports.last().unwrap();
+        assert!(replacement.alive.load(Ordering::Acquire));
+        assert_eq!(replacement.pointer, retired.pointer);
+        assert_eq!(replacement.name, "replacement");
+        assert!(!Arc::ptr_eq(replacement, &retired));
+    }
+
+    #[test]
+    fn registry_capacity_refuses_new_identity_without_retiring_other_ports() {
+        let mut registry = full_registry();
+        assert!(!registry.register(1, 513, b"extra", 1));
+        assert_eq!(registry.ports.len(), 512);
+        assert!(
+            registry
+                .ports
+                .iter()
+                .all(|pin| pin.alive.load(Ordering::Acquire))
+        );
+    }
+
+    #[test]
+    fn untrackable_replacement_does_not_leave_old_pointer_identity_alive() {
+        let mut registry = Registry::default();
+        assert!(registry.register(1, 1, b"source", 1));
+        let retired = Arc::clone(&registry.ports[0]);
+        assert!(!registry.register(1, 1, &[0xff], 1));
+        assert!(!retired.alive.load(Ordering::Acquire));
+        assert!(registry.ports.is_empty());
+    }
+
+    thread_local! {
+        /// The pins `begin` resolved, in order (`recording_buffer`).
+        static RESOLVED: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    unsafe extern "C" fn recording_buffer(port: *mut c_void, _: u32) -> *mut c_void {
+        RESOLVED.with(|resolved| resolved.borrow_mut().push(port as usize));
+        port
+    }
+
+    #[test]
+    fn unprocessed_paths_meter_once_in_the_stride_on_staggered_cycles() {
+        // Three meter-only paths: two mics and a hardware output.
+        let mut plan = plan_with_source_and_output(false);
+        let second = PathPlan {
+            direction: Direction::Input,
+            ports: vec!["in_2".into()],
+            target: Target::new("second", "second", TargetKind::Mic, 1),
+            mode: PathMode::Passthrough,
+            hardware: false,
+        };
+        plan.paths.insert(1, second);
+        for path in &mut plan.paths {
+            path.mode = PathMode::Passthrough;
+        }
+        let buffers = Buffers::new();
+        let mut registry = Registry::default();
+        for channel in 0..2 {
+            assert!(registry.register(
+                1,
+                buffers.input(channel) as usize,
+                format!("in_{}", channel + 1).as_bytes(),
+                1
+            ));
+            assert!(registry.register(
+                1,
+                buffers.output(channel) as usize,
+                format!("out_{}", channel + 1).as_bytes(),
+                2
+            ));
+        }
+        let (pipeline, _controls) = Pipeline::with_ownership(&plan, &registry, 1, false).unwrap();
+        let first_pin = [buffers.input(0), buffers.input(1), buffers.output(0)];
+        let mut metered = [const { Vec::new() }; 3];
+        for cycle in 0..2 * METER_STRIDE {
+            RESOLVED.with(|resolved| resolved.borrow_mut().clear());
+            unsafe { pipeline.begin(FRAMES, recording_buffer, 0) };
+            // The mixer asks for every buffer every cycle and always gets
+            // its own: metering never changes the audio.
+            for pin in [
+                buffers.input(0),
+                buffers.input(1),
+                buffers.output(0),
+                buffers.output(1),
+            ] {
+                assert_eq!(
+                    pipeline.buffer(pin as usize, FRAMES, pin.cast()),
+                    pin.cast()
+                );
+            }
+            unsafe { pipeline.end(FRAMES, true) };
+            pipeline.settle();
+            let resolved = RESOLVED.with(|resolved| resolved.borrow().clone());
+            for (path, pin) in first_pin.iter().enumerate() {
+                if resolved.contains(&(*pin as usize)) {
+                    metered[path].push(cycle);
+                }
+            }
+        }
+        for (path, cycles) in metered.iter().enumerate() {
+            assert_eq!(cycles.len(), 2, "path {path}: {cycles:?}");
+            assert_eq!(cycles[1] - cycles[0], METER_STRIDE);
+            let expected: Vec<u32> = (0..2 * METER_STRIDE)
+                .filter(|&cycle| meters(cycle, path))
+                .collect();
+            assert_eq!(*cycles, expected);
+        }
+        for a in 0..3 {
+            for b in a + 1..3 {
+                assert!(
+                    metered[a].iter().all(|cycle| !metered[b].contains(cycle)),
+                    "paths {a} and {b} meter on the same cycle: {metered:?}"
+                );
+            }
+        }
+        let counters = pipeline.counters();
+        assert_eq!(counters.faults, 0);
+        assert_eq!(counters.sources, SourceCounts::default());
+    }
+
+    #[test]
+    fn the_meter_stagger_survives_the_cycle_counter_wrapping() {
+        for path in 0..MAX_PATHS {
+            let hits = (0..2 * METER_STRIDE)
+                .filter(|&k| meters((u32::MAX - METER_STRIDE + 1).wrapping_add(k), path))
+                .count();
+            assert_eq!(hits, 2, "path {path}");
+        }
+    }
+
+    /// Fills the mono source with `x`; one settled callback; what the mixer
+    /// read (every sample equal).
+    fn source_value(pipeline: &Pipeline, buffers: &Buffers, x: f32) -> f32 {
+        unsafe { (*buffers.input[0].get()).fill(x) };
+        let seen = source_block(pipeline, buffers, &[0], true);
+        assert!(seen[0].iter().all(|v| v.to_bits() == seen[0][0].to_bits()));
+        seen[0][0]
+    }
+    fn source_owner(pipeline: &Pipeline) -> Owner {
+        unsafe { &*pipeline.front.get() }.ports[0].owner
+    }
+    fn commit_mode(control: &mut parameters::Control, plan: &Plan, revision: u64, mode: PathMode) {
+        let staged = control
+            .prepare_mode(&plan.paths[0].target, revision, mode)
+            .unwrap();
+        control.reserve(staged).unwrap().commit();
+    }
+    /// The source plan's EQ halves the input.
+    fn processed(x: f32) -> f32 {
+        0.5 * x
+    }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    /// Sources stay with the helper: it processes the source one frame later,
+    /// before and after a live change.
+    #[test]
+    fn a_helper_source_keeps_its_owner_across_live_mode_changes() {
+        let plan = source_plan(1, false, PathMode::Passthrough);
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        let mut out = Vec::new();
+        for k in 0..30 {
+            if k == 5 {
+                commit_mode(&mut controls[0], &plan, 2, PathMode::Processed);
+            }
+            if k == 20 {
+                commit_mode(&mut controls[0], &plan, 3, PathMode::Passthrough);
+            }
+            let x = 0.1 + 0.001 * k as f32;
+            out.push((x, source_value(&pipeline, &buffers, x)));
+            assert!(source_owner(&pipeline) == Owner::Helper);
+            let port = &unsafe { &*pipeline.front.get() }.ports[0];
+            assert!(port.reader.is_none());
+        }
+        // Adopted under frame 5; frame 6 is raw (nothing handed off yet),
+        // then each frame gets the previous one processed.
+        for k in 7..20 {
+            assert!(
+                close(out[k].1, processed(out[k - 1].0)),
+                "frame {k}: {:?}",
+                out[k]
+            );
+        }
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    /// A suppressed mic switched live to Processed reports its DSP delay plus
+    /// the helper frame, as a mic planned Processed does.
+    #[test]
+    fn a_suppressed_mic_switched_live_reports_the_helper_frame() {
+        let mut plan = source_plan(1, false, PathMode::Passthrough);
+        plan.paths[0].target.suppression.enabled = true;
+        let worker = rc2fx_suppression::Geometry::for_lookahead(0,
+        )
+        .unwrap()
+        .latency_samples() as u32;
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
+        for _ in 0..5 {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        commit_mode(&mut controls[0], &plan, 2, PathMode::Processed);
+        for _ in 0..40 {
+            source_block(&pipeline, &buffers, &[0], true);
+        }
+        let latency = controls[0].status().unwrap().meter.unwrap().latency_samples;
+        assert_eq!(latency, worker + FRAMES as u32);
+        assert!(source_owner(&pipeline) == Owner::Helper);
+        assert_eq!(pipeline.counters().faults, 0);
+    }
+}

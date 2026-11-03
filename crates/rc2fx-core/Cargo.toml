@@ -1,0 +1,12 @@
+[package]
+name = "rc2fx-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+description = "Typed RC2FX configuration, EQ response and preset interchange"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+

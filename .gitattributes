@@ -1,0 +1,3 @@
+# Unix line endings for every text file on every OS, overriding core.autocrlf.
+# Binary files are detected and left untouched.
+* text=auto eol=lf

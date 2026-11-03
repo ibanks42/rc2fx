@@ -1,0 +1,7 @@
+# Copy to .rc2fx-mixer.conf (git-ignored) and fill in. RC2FX_MIXER_* environment
+# variables override these.
+ip = 192.168.0.100
+# user = root
+# Private key and known_hosts file for the mixer, if not your SSH defaults.
+# key = C:/Users/you/.ssh/rodecaster_ed25519
+# known_hosts = C:/Users/you/.ssh/rodecaster_known_hosts

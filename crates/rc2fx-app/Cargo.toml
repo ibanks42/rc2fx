@@ -1,0 +1,22 @@
+[package]
+name = "rc2fx-app"
+version = "0.1.0"
+edition = "2024"
+publish = false
+default-run = "rc2fx"
+license.workspace = true
+
+[[bin]]
+name = "rc2fx"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = "=0.8.0"
+rc2fx-core = { path = "../rc2fx-core" }
+rc2fx-transport = { path = "../rc2fx-transport" }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rc2fx-installer = { path = "../rc2fx-installer", features = ["embedded"] }
+
+[dev-dependencies]
+tempfile = "3"

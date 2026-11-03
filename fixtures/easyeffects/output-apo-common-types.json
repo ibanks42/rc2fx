@@ -1,0 +1,178 @@
+{
+  "output": {
+    "blocklist": [],
+    "plugins_order": [
+      "equalizer#0"
+    ],
+    "equalizer#0": {
+      "bypass": false,
+      "input-gain": 0,
+      "output-gain": 0,
+      "mode": "IIR",
+      "decramp": "Off",
+      "split-channels": false,
+      "balance": 0,
+      "pitch-left": 0,
+      "pitch-right": 0,
+      "num-bands": 7,
+      "left": {
+        "band0": {
+          "type": "Bell",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 4,
+          "frequency": 1000,
+          "q": 1.2,
+          "width": 4
+        },
+        "band1": {
+          "type": "Lo-shelf",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 3,
+          "frequency": 100,
+          "q": 0.7071067811865476,
+          "width": 4
+        },
+        "band2": {
+          "type": "Hi-shelf",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": -2,
+          "frequency": 9000,
+          "q": 0.8,
+          "width": 4
+        },
+        "band3": {
+          "type": "Hi-pass",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 50,
+          "q": 0.7071067811865476,
+          "width": 4
+        },
+        "band4": {
+          "type": "Lo-pass",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 16000,
+          "q": 0.7071067811865476,
+          "width": 4
+        },
+        "band5": {
+          "type": "Notch",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 4000,
+          "q": 5,
+          "width": 4
+        },
+        "band6": {
+          "type": "Off",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 1000,
+          "q": 1,
+          "width": 4
+        }
+      },
+      "right": {
+        "band0": {
+          "type": "Bell",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 4,
+          "frequency": 1000,
+          "q": 1.2,
+          "width": 4
+        },
+        "band1": {
+          "type": "Lo-shelf",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 3,
+          "frequency": 100,
+          "q": 0.7071067811865476,
+          "width": 4
+        },
+        "band2": {
+          "type": "Hi-shelf",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": -2,
+          "frequency": 9000,
+          "q": 0.8,
+          "width": 4
+        },
+        "band3": {
+          "type": "Hi-pass",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 50,
+          "q": 0.7071067811865476,
+          "width": 4
+        },
+        "band4": {
+          "type": "Lo-pass",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 16000,
+          "q": 0.7071067811865476,
+          "width": 4
+        },
+        "band5": {
+          "type": "Notch",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 4000,
+          "q": 5,
+          "width": 4
+        },
+        "band6": {
+          "type": "Off",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 1000,
+          "q": 1,
+          "width": 4
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+[package]
+name = "rc2fx-installer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Guided RØDECaster Pro II firmware preparation, USB update and RC2FX runtime installation"
+
+[dependencies]
+flate2 = "1"
+getrandom = "0.3"
+rc2fx-usb = { path = "../rc2fx-usb" }
+rc2fx-firmware = { path = "../rc2fx-firmware" }
+md-5 = "0.10"
+plist = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
+ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_Security"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+# The build script checks the payload it embeds with the library's own rules,
+# including the catalog's typed shape.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[features]
+# Embed the mixer runtime, catalog and scripts in this binary so the desktop
+# app installs RC2FX without files beside it. Off for core tools and fixtures;
+# the app enables it, which makes a missing or corrupt payload a build error.
+embedded = []
+
+[[example]]
+# A host check of the embedded payload: no window, no USB, no network.
+name = "embedded-probe"
+required-features = ["embedded"]

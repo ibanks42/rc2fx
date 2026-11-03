@@ -1,0 +1,6 @@
+[toolchain]
+channel = "1.97.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+# The mixer (a Cortex-A53 running glibc 2.35).
+targets = ["aarch64-unknown-linux-gnu"]

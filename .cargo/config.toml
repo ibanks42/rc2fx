@@ -1,0 +1,6 @@
+[alias]
+xtask = "run --locked --quiet --package xtask --"
+
+# The mixer's Cortex-A53, as `cargo xtask mixer-build` builds for it.
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=cortex-a53"]

@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>RC2FX third-party licenses</title></head>
+<body>
+<h1>Third-party licenses</h1>
+<p>RC2FX is MIT OR Apache-2.0. It uses the crates below; see also THIRD_PARTY_NOTICES.md.</p>
+<ul>
+{{#each overview}}<li>{{name}} ({{count}})</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h2>{{name}}</h2>
+<p>Used by:</p>
+<ul>{{#each used_by}}<li>{{crate.name}} {{crate.version}}</li>{{/each}}</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body></html>

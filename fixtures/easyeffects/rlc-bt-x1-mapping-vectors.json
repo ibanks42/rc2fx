@@ -1,0 +1,101 @@
+{
+  "sampleRate": 48000,
+  "mode": "IIR",
+  "decramp": "Off",
+  "slope": "x1",
+  "coefficientOrder": [
+    "b0",
+    "b1",
+    "b2",
+    "a1",
+    "a2"
+  ],
+  "transferFunction": "(b0+b1*z^-1+b2*z^-2)/(1+a1*z^-1+a2*z^-2)",
+  "provenance": "New double-precision algebraic vectors derived from lsp-dsp-units Filter::calc_rlc_filter and Filter::bilinear_transform, commit 8dd2a6905ca7ccefd2c3624560235680cb8761e2. Not captured runtime output.",
+  "vectors": [
+    {
+      "type": "Bell",
+      "frequency": 1000,
+      "gain": 6,
+      "easyeffectsQ": 1.6,
+      "rbjQ": 1.3291007341073648,
+      "coefficients": [
+        1.0334354132312764,
+        -1.9162753877376686,
+        0.8993754392878974,
+        -1.9162753877376686,
+        0.9328108525191738
+      ]
+    },
+    {
+      "type": "Lo-shelf",
+      "frequency": 1000,
+      "gain": 6,
+      "easyeffectsQ": 1.6,
+      "rbjQ": 1.3,
+      "coefficients": [
+        1.0196347011947995,
+        -1.9014197695281352,
+        0.9050022860038317,
+        -1.907210291814984,
+        0.9188464649117822
+      ]
+    },
+    {
+      "type": "Hi-shelf",
+      "frequency": 1000,
+      "gain": 6,
+      "easyeffectsQ": 1.6,
+      "rbjQ": 1.3,
+      "coefficients": [
+        1.9568403396146172,
+        -3.732106035151726,
+        1.798035828451662,
+        -1.8648048828664492,
+        0.8875750157810022
+      ]
+    },
+    {
+      "type": "Lo-pass",
+      "frequency": 1000,
+      "gain": 0,
+      "easyeffectsQ": 1.6,
+      "rbjQ": 1.3,
+      "coefficients": [
+        0.004073090470889785,
+        0.00814618094177957,
+        0.004073090470889785,
+        -1.8881024814312912,
+        0.9043948433148503
+      ]
+    },
+    {
+      "type": "Hi-pass",
+      "frequency": 1000,
+      "gain": 0,
+      "easyeffectsQ": 1.6,
+      "rbjQ": 1.3,
+      "coefficients": [
+        0.9481243311865354,
+        -1.8962486623730708,
+        0.9481243311865354,
+        -1.8881024814312912,
+        0.9043948433148503
+      ]
+    },
+    {
+      "type": "Notch",
+      "frequency": 1000,
+      "gain": 0,
+      "easyeffectsQ": 1.6,
+      "rbjQ": 1.3,
+      "coefficients": [
+        0.9521974216574252,
+        -1.8881024814312912,
+        0.9521974216574252,
+        -1.8881024814312912,
+        0.9043948433148503
+      ]
+    }
+  ]
+}

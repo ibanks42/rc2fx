@@ -1,0 +1,20 @@
+# Lets the person logged in at the desktop open the RØDECaster Pro II's USB 1
+# control interface, which the RC2FX desktop app uses. Install with:
+#
+#   sudo cp 70-rc2fx.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger --action=add --subsystem-match=hidraw
+#
+# The mixer has a different product ID in each of its five normal USB modes.
+# USB update mode (0030) is not listed: the installer reaches it through its
+# administrator helper (pkexec), never as you.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0037", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0078", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="008d", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0092", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0094", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0050", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0079", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="008e", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0093", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", ATTRS{idProduct}=="0095", TAG+="uaccess"

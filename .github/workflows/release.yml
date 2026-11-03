@@ -1,0 +1,200 @@
+name: Release
+run-name: Release (${{ inputs.bump }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        default: patch
+        options: [patch, minor, major]
+      dry-run:
+        description: Build without pushing or publishing
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Require main
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: test "$RELEASE_REF" = refs/heads/main
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - uses: taiki-e/install-action@v2.87.9
+        with:
+          tool: git-cliff@2.14.1,cargo-zigbuild@0.24.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-runtime
+          cache-bin: false
+          workspaces: |
+            . -> target
+            . -> target/mixer-build
+      - name: Test release versioning
+        run: python3 .github/scripts/test_release.py
+      - name: Bump version and prepare notes
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: python3 .github/scripts/release.py prepare --bump "$BUMP"
+      - name: Cross-build bundled runtime
+        run: |
+          cargo xtask mixer-build
+          cp -R target/mixer target/release-input/runtime
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: release-input
+          path: target/release-input/
+          if-no-files-found: error
+
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang \
+            libfontconfig1-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libxcb1-dev libvulkan1 libasound2-dev \
+            libssl-dev libudev-dev libdbus-1-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: taiki-e/install-action@v2.87.9
+        with:
+          tool: cargo-about@0.8.4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-desktop
+          cache-bin: false
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: release-input
+          path: target/release-input
+      - name: Apply version and bundled runtime
+        run: |
+          tar -xf target/release-input/versioned.tar
+          mkdir -p target/mixer
+          cp -R target/release-input/runtime/. target/mixer/
+      - name: Build release archive
+        env:
+          # The app's embedded rc2fx.sh defaults the GUI to quiet diagnostics.
+          RC2FX_RELEASE_BUILD: "1"
+        run: cargo xtask package
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: rc2fx-package-${{ matrix.os }}
+          path: |
+            target/package/*.tar.gz
+            target/package/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: release-input
+          path: target/release-input
+      - name: Apply version and changelog
+        run: tar -xf target/release-input/versioned.tar
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: rc2fx-package-*
+          merge-multiple: true
+          path: target/release-assets
+      - name: Check archives and generate SHA256SUMS
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          directory = Path('target/release-assets')
+          archives = sorted(directory.iterdir())
+          assert len(archives) == (1 if os.environ.get('ACT') else 3), 'Missing platform archive'
+          for archive in archives:
+              assert archive.name.startswith('rc2fx-'), archive
+              if archive.name.endswith('.tar.gz'):
+                  with tarfile.open(archive) as package:
+                      assert 'rc2fx/SHA256SUMS' in package.getnames()
+              else:
+                  assert archive.suffix == '.zip', archive
+                  with zipfile.ZipFile(archive) as package:
+                      assert package.testzip() is None
+                      assert 'rc2fx/SHA256SUMS' in package.namelist()
+          sums = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in archives)
+          (directory / 'SHA256SUMS').write_text(sums)
+          print(sums)
+          PY
+      - name: Commit version and create local tag
+        run: python3 .github/scripts/release.py commit
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: release-assets
+          path: target/release-assets/
+          if-no-files-found: error
+      - name: Push version and tag
+        if: ${{ !inputs.dry-run && !env.ACT }}
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA" || {
+            echo 'main changed during the build. Start a new release run.'
+            exit 1
+          }
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
+      - name: Create and publish GitHub release
+        if: ${{ !inputs.dry-run && !env.ACT }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file target/release-input/release-notes.md
+          gh release upload "$TAG" target/release-assets/*
+          gh release edit "$TAG" --draft=false --latest

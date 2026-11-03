@@ -1,0 +1,458 @@
+{
+  "schemaVersion": 1,
+  "firmware": {
+    "1.7.6": {
+      "archiveSha256": "47d2ccb0d613b223ca6d5ed57c62ae6ee32ba71b662be5fbfb4ad3f44c757daa",
+      "mixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
+      "locations": {
+        "board": "0x2572f0",
+        "portEvents": "0x3716e0",
+        "jackActiveMask": "0x61cc90",
+        "callbackBridge": "0x370a70",
+        "sourceChange": "0x40a360"
+      },
+      "usbConnections": [
+        [
+          "JUCEJack:out_15",
+          "usb1out:playback_1"
+        ],
+        [
+          "JUCEJack:out_16",
+          "usb1out:playback_2"
+        ],
+        [
+          "JUCEJack:out_17",
+          "usb1-chat-out:playback_1"
+        ],
+        [
+          "JUCEJack:out_18",
+          "usb1-chat-out:playback_2"
+        ],
+        [
+          "JUCEJack:out_19",
+          "usb2out:playback_1"
+        ],
+        [
+          "JUCEJack:out_20",
+          "usb2out:playback_2"
+        ]
+      ],
+      "monitorFields": {
+        "defaultStore": "0x66b494",
+        "duoOverride": "0x66f77c",
+        "proIi": [
+          10,
+          4,
+          7
+        ],
+        "duo": [
+          8,
+          4,
+          5
+        ]
+      },
+      "monitorWrite": {
+        "start": "0x41bcb0",
+        "packedOutputIndices": [
+          4,
+          5
+        ],
+        "samplesCopiedToExpectedBuffers": true,
+        "headphoneAndHeadsetBuffersUntouched": true
+      },
+      "sourceTable": {
+        "initializer": "0x135730",
+        "lookupFunction": "0x40a360",
+        "table": "0x1dbaa98",
+        "sourceIdAndInternalSlots": [
+          [
+            0,
+            0,
+            -1
+          ],
+          [
+            1,
+            1,
+            -1
+          ],
+          [
+            2,
+            2,
+            -1
+          ],
+          [
+            3,
+            3,
+            -1
+          ],
+          [
+            4,
+            0,
+            1
+          ],
+          [
+            5,
+            1,
+            2
+          ],
+          [
+            6,
+            2,
+            3
+          ],
+          [
+            7,
+            4,
+            5
+          ],
+          [
+            8,
+            6,
+            7
+          ],
+          [
+            9,
+            8,
+            9
+          ],
+          [
+            10,
+            10,
+            11
+          ],
+          [
+            11,
+            12,
+            13
+          ],
+          [
+            12,
+            22,
+            23
+          ],
+          [
+            13,
+            24,
+            25
+          ],
+          [
+            14,
+            26,
+            27
+          ],
+          [
+            15,
+            28,
+            29
+          ],
+          [
+            16,
+            14,
+            15
+          ],
+          [
+            17,
+            16,
+            17
+          ],
+          [
+            18,
+            18,
+            19
+          ],
+          [
+            19,
+            20,
+            -1
+          ],
+          [
+            20,
+            21,
+            -1
+          ],
+          [
+            21,
+            4,
+            5
+          ],
+          [
+            22,
+            22,
+            23
+          ],
+          [
+            23,
+            24,
+            25
+          ],
+          [
+            24,
+            26,
+            27
+          ],
+          [
+            25,
+            28,
+            29
+          ],
+          [
+            26,
+            30,
+            31
+          ],
+          [
+            27,
+            32,
+            33
+          ],
+          [
+            28,
+            34,
+            35
+          ],
+          [
+            29,
+            36,
+            37
+          ],
+          [
+            -1,
+            -1,
+            -1
+          ]
+        ],
+        "note": "Internal source slots are not JACK port indices. Unexposed enum values do not grant independent processing paths."
+      }
+    },
+    "1.7.7": {
+      "archiveSha256": "4f3c7a022f07fd5b05955846e6a9052ad6ae214e12c04cda2d4749d775a304ed",
+      "mixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
+      "locations": {
+        "board": "0x259640",
+        "portEvents": "0x374410",
+        "jackActiveMask": "0x61d900",
+        "callbackBridge": "0x3737a0",
+        "sourceChange": "0x40cfd0"
+      },
+      "usbConnections": [
+        [
+          "JUCEJack:out_15",
+          "usb1out:playback_1"
+        ],
+        [
+          "JUCEJack:out_16",
+          "usb1out:playback_2"
+        ],
+        [
+          "JUCEJack:out_17",
+          "usb1-chat-out:playback_1"
+        ],
+        [
+          "JUCEJack:out_18",
+          "usb1-chat-out:playback_2"
+        ],
+        [
+          "JUCEJack:out_19",
+          "usb2out:playback_1"
+        ],
+        [
+          "JUCEJack:out_20",
+          "usb2out:playback_2"
+        ]
+      ],
+      "monitorFields": {
+        "defaultStore": "0x67488c",
+        "duoOverride": "0x678ad4",
+        "proIi": [
+          10,
+          4,
+          7
+        ],
+        "duo": [
+          8,
+          4,
+          5
+        ]
+      },
+      "monitorWrite": {
+        "start": "0x41ecf0",
+        "packedOutputIndices": [
+          4,
+          5
+        ],
+        "samplesCopiedToExpectedBuffers": true,
+        "headphoneAndHeadsetBuffersUntouched": true
+      },
+      "sourceTable": {
+        "initializer": "0x1342a8",
+        "lookupFunction": "0x40cfd0",
+        "table": "0x1dada78",
+        "sourceIdAndInternalSlots": [
+          [
+            0,
+            0,
+            -1
+          ],
+          [
+            1,
+            1,
+            -1
+          ],
+          [
+            2,
+            2,
+            -1
+          ],
+          [
+            3,
+            3,
+            -1
+          ],
+          [
+            4,
+            0,
+            1
+          ],
+          [
+            5,
+            1,
+            2
+          ],
+          [
+            6,
+            2,
+            3
+          ],
+          [
+            7,
+            4,
+            5
+          ],
+          [
+            8,
+            6,
+            7
+          ],
+          [
+            9,
+            8,
+            9
+          ],
+          [
+            10,
+            10,
+            11
+          ],
+          [
+            11,
+            12,
+            13
+          ],
+          [
+            12,
+            22,
+            23
+          ],
+          [
+            13,
+            24,
+            25
+          ],
+          [
+            14,
+            26,
+            27
+          ],
+          [
+            15,
+            28,
+            29
+          ],
+          [
+            16,
+            14,
+            15
+          ],
+          [
+            17,
+            16,
+            17
+          ],
+          [
+            18,
+            18,
+            19
+          ],
+          [
+            19,
+            20,
+            -1
+          ],
+          [
+            20,
+            21,
+            -1
+          ],
+          [
+            21,
+            4,
+            5
+          ],
+          [
+            22,
+            22,
+            23
+          ],
+          [
+            23,
+            24,
+            25
+          ],
+          [
+            24,
+            26,
+            27
+          ],
+          [
+            25,
+            28,
+            29
+          ],
+          [
+            26,
+            30,
+            31
+          ],
+          [
+            27,
+            32,
+            33
+          ],
+          [
+            28,
+            34,
+            35
+          ],
+          [
+            29,
+            36,
+            37
+          ],
+          [
+            -1,
+            -1,
+            -1
+          ]
+        ],
+        "note": "Internal source slots are not JACK port indices. Unexposed enum values do not grant independent processing paths."
+      }
+    }
+  },
+  "limitations": [
+    "Offline ARM64 fixtures stub JUCE strings, allocations and JACK connections; PAC/BTI hints skipped.",
+    "Monitor fixture uses the Duo's eight active hardware buffers. Port numbers and packed indices are not interchangeable when connections change.",
+    "The native pipeline processes stereo outputs only when BOTH named ports are observed in the vendor callback; it never substitutes another packed index.",
+    "The shared legacy startup callback also contains Pro II balanced-monitor rewiring. This audit does not claim live Duo connection/lifecycle validation.",
+    "No device has been flashed or used for audio, timing, recovery or USB tests."
+  ]
+}

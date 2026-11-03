@@ -1,0 +1,33 @@
+[package]
+name = "rc2fx-device"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Rust device control, persistence and audio lifecycle orchestration"
+
+[[bin]]
+name = "rc2fxd"
+path = "src/bin/rc2fxd.rs"
+required-features = ["native-pipeline"]
+
+[features]
+default = []
+native-pipeline = []
+
+[dependencies]
+rc2fx-usb = { path = "../rc2fx-usb" }
+rc2fx-firmware = { path = "../rc2fx-firmware" }
+rc2fx-core = { path = "../rc2fx-core" }
+rc2fx-dsp = { path = "../rc2fx-dsp" }
+rc2fx-suppression = { path = "../rc2fx-suppression" }
+rc2fx-native-control = { path = "../rc2fx-native-control" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10.9"
+libc = "0.2"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3"
+

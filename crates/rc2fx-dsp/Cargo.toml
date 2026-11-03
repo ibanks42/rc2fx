@@ -1,0 +1,16 @@
+[package]
+name = "rc2fx-dsp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Owned Rust audio effects and callback-local processing state"
+
+
+[dependencies]
+rc2fx-core = { path = "../rc2fx-core" }
+
+[dev-dependencies]
+libc = "0.2"
+serde_json = "1"
+

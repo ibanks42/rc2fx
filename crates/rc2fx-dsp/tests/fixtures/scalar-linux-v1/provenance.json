@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "kind": "frozen-independent-scalar-dsp-oracle",
+  "generatedDate": "2026-10-23",
+  "supportedNumericalTarget": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "endianness": "little",
+    "compilerTarget": "x86_64-linux-gnu"
+  },
+  "sampleRate": 48000,
+  "blocks": 180,
+  "samplesPerChannel": 43280,
+  "chunks": [
+    112,
+    7,
+    480,
+    1,
+    240,
+    63,
+    1024,
+    13
+  ],
+  "suppression": "disabled; oracle aborts on construction/use",
+  "gate": {
+    "f32": "bit-exact",
+    "f64Meters": "abs(actual-expected)<=1e-10*max(abs(expected),1)",
+    "u64Counters": "exact"
+  },
+  "compiler": {
+    "version": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "flags": [
+      "-std=c11",
+      "-O2",
+      "-ffp-contract=off",
+      "-Wall",
+      "-Wextra",
+      "-Wno-misleading-indentation",
+      "-Werror"
+    ],
+    "link": [
+      "-lm"
+    ],
+    "tools": [
+      {
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
+        "sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26"
+      },
+      {
+        "path": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1",
+        "sha256": "5d1679131184e2de4435b426eb264bf13472fe026db8e5c6bc97445814e8e2f4"
+      },
+      {
+        "path": "/usr/bin/x86_64-linux-gnu-as",
+        "sha256": "7a2ef948033b05ad0c5dcb0d5be059bc68562b5d45713d91aee21df2b4bf4e92"
+      },
+      {
+        "path": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+        "sha256": "e46a122cc3a29feba3b1d0fc2a274b6e46538be016ebe381370c0801bb98b0b8"
+      }
+    ]
+  },
+  "runtimeProviders": [
+    {
+      "path": "/lib/x86_64-linux-gnu/libm.so.6",
+      "sha256": "fce00b6f25f459cf4ae0b7fae4257909a1a8a86f9149e7c029a5d617baf1ccd0"
+    },
+    {
+      "path": "/lib/x86_64-linux-gnu/libc.so.6",
+      "sha256": "3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf"
+    },
+    {
+      "path": "/lib64/ld-linux-x86-64.so.2",
+      "sha256": "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"
+    }
+  ],
+  "sourceFiles": [
+    {
+      "path": "crates/rc2fx-dsp/tests/c_oracle.c (retired)",
+      "sha256": "bcd32505bc298039870044bf9ffd28f6324f6208e228fbd77b89d101937ab126"
+    },
+    {
+      "path": "device/audio/config.h",
+      "sha256": "c2d53fb519a48a20d1488f29253a0499653298adcc31cc4497ed8aa5d947b6ad"
+    },
+    {
+      "path": "crates/rc2fx-dsp/tests/differential.rs (before conversion)",
+      "sha256": "e0fa57c6836cb6a405d492b76f9a33ff1f4042e64602a4aea908a3b14963f387"
+    },
+    {
+      "path": "device/audio/dsp.c",
+      "sha256": "1f5da2e5545184ec7e4064565fff241e3b7bd21f325b943ff1224f4cbc53c43e"
+    },
+    {
+      "path": "device/audio/dsp.h",
+      "sha256": "3467832ec983d6ba63bbfcdfd7fb286f646a75a02c3445b1d85bf2d0d3bc4582"
+    },
+    {
+      "path": "device/audio/noise.h",
+      "sha256": "1ade56aea492a36965834d008684f27161fd012ae981bb3f0516c39f41c83d33"
+    },
+    {
+      "path": "device/audio/performance.h",
+      "sha256": "c06035a89b6538029eaaba09e41af8f91b0ed2f3941fa01639faf4f9d0531ff5"
+    },
+    {
+      "path": "device/audio/suppressor.h",
+      "sha256": "c2828451e46f8d6ed1867f7bf93e586d5e3baa2adbffaeb3afd55cc40eeba8b9"
+    }
+  ],
+  "unchangedRustScenarioSha256": "70fd0b40dd530a598a2b563a32d717f0ecb1c449889ccbe4e6c1a1487435b7d0",
+  "oracleExecutableSha256": "489be40f9dd84c43dd4103fe7bdf31995010d027589f3c22eac82dab644ab19d",
+  "fixtures": [
+    {
+      "path": "mono.bin",
+      "channels": 1,
+      "bytes": 181760,
+      "sha256": "20c4a1cd67b1249e9fa79e7a2fefe269df21541bede7632c95312926ae0a39ef"
+    },
+    {
+      "path": "stereo.bin",
+      "channels": 2,
+      "bytes": 354880,
+      "sha256": "cd356d1f66e8a83b07d21c3e24e3c226bdf1a65315b20e4d1da6fffceeb9f347"
+    }
+  ],
+  "freshGenerationEvidence": ".local/rust-dsp-golden.daIS4jmt",
+  "priorIndependentEvidence": ".local/rust-dsp-oracle-1792768055044714121",
+  "freshAndPriorByteIdentical": true,
+  "hardwareQualified": false,
+  "notes": [
+    "Reference values came from the separate C oracle, never from Rust DSP output.",
+    "Original generator sources and compiler/runtime evidence are preserved in the local generation archive; ordinary tests have no dependency on that archive.",
+    "A changed numerical target must be qualified, not silently skipped or admitted by tolerance changes."
+  ]
+}

@@ -1,0 +1,13 @@
+[package]
+name = "rc2fx-transport"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[dependencies]
+rc2fx-installer = { path = "../rc2fx-installer" }
+rc2fx-core = { path = "../rc2fx-core" }
+serde = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

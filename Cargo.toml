@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/rc2fx-usb", "crates/rc2fx-core", "crates/rc2fx-dfn", "crates/rc2fx-transport", "crates/rc2fx-app", "crates/rc2fx-device", "crates/rc2fx-dsp", "crates/rc2fx-suppression", "crates/rc2fx-native-control", "crates/rc2fx-firmware", "crates/rc2fx-installer", "xtask"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# Unoptimized GPUI layout, text shaping and path tessellation make `make run`
+# sluggish. Optimize dependencies only; workspace crates keep fast rebuilds.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

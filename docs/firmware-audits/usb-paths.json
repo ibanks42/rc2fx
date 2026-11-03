@@ -1,0 +1,5777 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "rodecaster-pro-ii-1.7.6": {
+      "archiveSha256": "77091e7857f446d42e8da6c2c3107d7ee3f3eb2fbe89f7a479902ff2c3bcda98",
+      "mixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
+      "locations": {
+        "mixerProcess": "0x657250",
+        "jobBody": "0x41ba40",
+        "jackRegistrationActive": "0x61ec10",
+        "callbackBridge": "0x370a70",
+        "portEvents": "0x3716e0",
+        "sourceChange": "0x40a360",
+        "activeMask": "0x61cc90"
+      },
+      "processOffsets": {
+        "inputGather": [
+          "0x270",
+          "0xb94"
+        ],
+        "outputGather": [
+          "0x12d4",
+          "0x14cc"
+        ],
+        "outputDispatch": [
+          "0x1ba4",
+          "0x1a68"
+        ]
+      },
+      "portConnections": {
+        "usb1in:capture_1": [
+          "usb1in:capture_1",
+          "JUCEJack:in_7"
+        ],
+        "usb1in:capture_2": [
+          "usb1in:capture_2",
+          "JUCEJack:in_8"
+        ],
+        "usb1in:capture_3": [
+          "usb1in:capture_3",
+          "JUCEJack:in_13"
+        ],
+        "usb1in:capture_4": [
+          "usb1in:capture_4",
+          "JUCEJack:in_14"
+        ],
+        "usb1in:capture_5": [
+          "usb1in:capture_5",
+          "JUCEJack:in_15"
+        ],
+        "usb1in:capture_6": [
+          "usb1in:capture_6",
+          "JUCEJack:in_16"
+        ],
+        "usb1in:capture_7": [
+          "usb1in:capture_7",
+          "JUCEJack:in_17"
+        ],
+        "usb1in:capture_8": [
+          "usb1in:capture_8",
+          "JUCEJack:in_18"
+        ],
+        "usb1in:capture_9": [
+          "usb1in:capture_9",
+          "JUCEJack:in_19"
+        ],
+        "usb1in:capture_10": [
+          "usb1in:capture_10",
+          "JUCEJack:in_20"
+        ],
+        "usb1in:capture_11": [
+          "usb1in:capture_11",
+          "JUCEJack:in_21"
+        ],
+        "usb1in:capture_12": [
+          "usb1in:capture_12",
+          "JUCEJack:in_22"
+        ],
+        "usb1in:capture_13": [
+          "usb1in:capture_13",
+          "JUCEJack:in_23"
+        ],
+        "usb1in:capture_14": [
+          "usb1in:capture_14",
+          "JUCEJack:in_24"
+        ],
+        "usb1in:capture_15": [
+          "usb1in:capture_15",
+          "JUCEJack:in_25"
+        ],
+        "usb1in:capture_16": [
+          "usb1in:capture_16",
+          "JUCEJack:in_26"
+        ],
+        "usb1in:capture_17": [
+          "usb1in:capture_17",
+          "JUCEJack:in_27"
+        ],
+        "usb1in:capture_18": [
+          "usb1in:capture_18",
+          "JUCEJack:in_28"
+        ],
+        "usb2in:capture_1": [
+          "usb2in:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2in:capture_2": [
+          "usb2in:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb2dev:capture_1": [
+          "usb2dev:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2dev:capture_2": [
+          "usb2dev:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb1-chat-in:capture_1": [
+          "usb1-chat-in:capture_1",
+          "JUCEJack:in_11"
+        ],
+        "usb1-chat-in:capture_2": [
+          "usb1-chat-in:capture_2",
+          "JUCEJack:in_12"
+        ],
+        "btphone:capture_1": [
+          "btphone:capture_1",
+          "JUCEJack:in_5"
+        ],
+        "btphone:capture_2": [
+          "btphone:capture_2",
+          "JUCEJack:in_6"
+        ],
+        "sip-audio-in:capture_1": [
+          "sip-audio-in:capture_1",
+          "JUCEJack:in_29"
+        ],
+        "sip-audio-in:capture_2": [
+          "sip-audio-in:capture_2",
+          "JUCEJack:in_30"
+        ],
+        "sip-audio-in:capture_3": [
+          "sip-audio-in:capture_3",
+          "JUCEJack:in_31"
+        ],
+        "sip-audio-in:capture_4": [
+          "sip-audio-in:capture_4",
+          "JUCEJack:in_32"
+        ],
+        "sip-audio-in:capture_5": [
+          "sip-audio-in:capture_5",
+          "JUCEJack:in_33"
+        ],
+        "sip-audio-in:capture_6": [
+          "sip-audio-in:capture_6",
+          "JUCEJack:in_34"
+        ],
+        "RodeRfSPI:TX1": [
+          "RodeRfSPI:TX1",
+          "JUCEJack:in_35"
+        ],
+        "RodeRfSPI:TX2": [
+          "RodeRfSPI:TX2",
+          "JUCEJack:in_36"
+        ],
+        "usb1out:playback_1": [
+          "JUCEJack:out_15",
+          "usb1out:playback_1"
+        ],
+        "usb1out:playback_2": [
+          "JUCEJack:out_16",
+          "usb1out:playback_2"
+        ],
+        "usb1out:playback_3": [
+          "JUCEJack:out_27",
+          "usb1out:playback_3"
+        ],
+        "usb1out:playback_4": [
+          "JUCEJack:out_28",
+          "usb1out:playback_4"
+        ],
+        "usb1out:playback_5": [
+          "JUCEJack:out_29",
+          "usb1out:playback_5"
+        ],
+        "usb1out:playback_6": [
+          "JUCEJack:out_30",
+          "usb1out:playback_6"
+        ],
+        "usb1out:playback_7": [
+          "JUCEJack:out_31",
+          "usb1out:playback_7"
+        ],
+        "usb1out:playback_8": [
+          "JUCEJack:out_32",
+          "usb1out:playback_8"
+        ],
+        "usb1out:playback_9": [
+          "JUCEJack:out_33",
+          "usb1out:playback_9"
+        ],
+        "usb1out:playback_10": [
+          "JUCEJack:out_34",
+          "usb1out:playback_10"
+        ],
+        "usb1out:playback_11": [
+          "JUCEJack:out_35",
+          "usb1out:playback_11"
+        ],
+        "usb1out:playback_12": [
+          "JUCEJack:out_36",
+          "usb1out:playback_12"
+        ],
+        "usb1out:playback_13": [
+          "JUCEJack:out_37",
+          "usb1out:playback_13"
+        ],
+        "usb1out:playback_14": [
+          "JUCEJack:out_38",
+          "usb1out:playback_14"
+        ],
+        "usb1out:playback_15": [
+          "JUCEJack:out_39",
+          "usb1out:playback_15"
+        ],
+        "usb1out:playback_16": [
+          "JUCEJack:out_40",
+          "usb1out:playback_16"
+        ],
+        "usb1out:playback_17": [
+          "JUCEJack:out_41",
+          "usb1out:playback_17"
+        ],
+        "usb1out:playback_18": [
+          "JUCEJack:out_42",
+          "usb1out:playback_18"
+        ],
+        "usb1out:playback_19": [
+          "JUCEJack:out_43",
+          "usb1out:playback_19"
+        ],
+        "usb1out:playback_20": [
+          "JUCEJack:out_44",
+          "usb1out:playback_20"
+        ],
+        "usb2out:playback_1": [
+          "JUCEJack:out_19",
+          "usb2out:playback_1"
+        ],
+        "usb2out:playback_2": [
+          "JUCEJack:out_20",
+          "usb2out:playback_2"
+        ],
+        "usb1-chat-out:playback_1": [
+          "JUCEJack:out_17",
+          "usb1-chat-out:playback_1"
+        ],
+        "usb1-chat-out:playback_2": [
+          "JUCEJack:out_18",
+          "usb1-chat-out:playback_2"
+        ],
+        "btspeaker:playback_1": [
+          "JUCEJack:out_13",
+          "btspeaker:playback_1"
+        ],
+        "btspeaker:playback_2": [
+          "JUCEJack:out_14",
+          "btspeaker:playback_2"
+        ],
+        "sip-audio-out:playback_1": [
+          "JUCEJack:out_21",
+          "sip-audio-out:playback_1"
+        ],
+        "sip-audio-out:playback_2": [
+          "JUCEJack:out_22",
+          "sip-audio-out:playback_2"
+        ],
+        "sip-audio-out:playback_3": [
+          "JUCEJack:out_23",
+          "sip-audio-out:playback_3"
+        ],
+        "sip-audio-out:playback_4": [
+          "JUCEJack:out_24",
+          "sip-audio-out:playback_4"
+        ],
+        "sip-audio-out:playback_5": [
+          "JUCEJack:out_25",
+          "sip-audio-out:playback_5"
+        ],
+        "sip-audio-out:playback_6": [
+          "JUCEJack:out_26",
+          "sip-audio-out:playback_6"
+        ],
+        "sip-audio-out:playback_7": [
+          "JUCEJack:out_45",
+          "sip-audio-out:playback_7"
+        ],
+        "sip-audio-out:playback_8": [
+          "JUCEJack:out_46",
+          "sip-audio-out:playback_8"
+        ]
+      },
+      "slotPorts": {
+        "0": "JUCEJack:in_1",
+        "1": "JUCEJack:in_2",
+        "2": "JUCEJack:in_3",
+        "3": "JUCEJack:in_4",
+        "4": "JUCEJack:in_7",
+        "5": "JUCEJack:in_8",
+        "6": "JUCEJack:in_11",
+        "7": "JUCEJack:in_12",
+        "8": "JUCEJack:in_9",
+        "9": "JUCEJack:in_10",
+        "10": "JUCEJack:in_5",
+        "11": "JUCEJack:in_6",
+        "14": "JUCEJack:in_29",
+        "15": "JUCEJack:in_30",
+        "16": "JUCEJack:in_31",
+        "17": "JUCEJack:in_32",
+        "18": "JUCEJack:in_33",
+        "19": "JUCEJack:in_34",
+        "20": "JUCEJack:in_35",
+        "21": "JUCEJack:in_36",
+        "22": "JUCEJack:in_13",
+        "23": "JUCEJack:in_14",
+        "24": "JUCEJack:in_15",
+        "25": "JUCEJack:in_16",
+        "26": "JUCEJack:in_17",
+        "27": "JUCEJack:in_18",
+        "28": "JUCEJack:in_19",
+        "29": "JUCEJack:in_20",
+        "30": "JUCEJack:in_21",
+        "31": "JUCEJack:in_22",
+        "32": "JUCEJack:in_23",
+        "33": "JUCEJack:in_24",
+        "34": "JUCEJack:in_25",
+        "35": "JUCEJack:in_26",
+        "36": "JUCEJack:in_27",
+        "37": "JUCEJack:in_28"
+      },
+      "inputGather": {
+        "allInputsProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "stereoUsbProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "noBluetoothNoUsb2ProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "micsOnlyProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "allInputsDuo": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "silence",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ]
+      },
+      "outputGather": {
+        "stereoUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbNoUsb2ProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "scratch",
+              "scratch"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "scratch",
+              "scratch"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbWithBluetoothSpeakerProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "out_13",
+              "out_14"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2078": [
+              "out_13",
+              "out_14"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2688",
+              "vtableIndex": 7
+            },
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "multitrackUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 1,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42",
+            "out_43",
+            "out_44"
+          ]
+        },
+        "multitrackRawUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": true
+          },
+          "dispatch": {
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_15",
+            "out_16",
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42"
+          ]
+        },
+        "stereoUsbDuo": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        }
+      },
+      "bridge": {
+        "inputBits": 36,
+        "outputBits": 46,
+        "process": "0x657250",
+        "activeChannelGetters": [
+          "vtable+0x90",
+          "vtable+0x88"
+        ]
+      },
+      "activeMask": {
+        "dlsym": "0x7cd748",
+        "calledFromRegistration": "0x61f210"
+      },
+      "registration": {
+        "strings": {
+          "in_": "0x7cdb50",
+          "out_": "0x7cdb70",
+          "32 bit float mono audio": "0x7290f0"
+        },
+        "portFlags": {
+          "in_": 1,
+          "out_": 2
+        },
+        "note": "Registers in_<n>/out_<n> for n = registered+1 .. size of the channel-name array passed to open; the array sizes are not pinned offline."
+      },
+      "jobOutputUse": {
+        "outputTableReads": 1,
+        "indices": [
+          "mixer+0xc7d3c",
+          "mixer+0xc7d40"
+        ],
+        "note": "Monitor left/right packed indices only; the USB sends are written in Mixer::Process before it returns."
+      },
+      "sources": {
+        "table": {
+          "initializer": "0x135730",
+          "lookupFunction": "0x40a360",
+          "table": "0x1dbaa98",
+          "sourceIdAndInternalSlots": [
+            [
+              0,
+              0,
+              -1
+            ],
+            [
+              1,
+              1,
+              -1
+            ],
+            [
+              2,
+              2,
+              -1
+            ],
+            [
+              3,
+              3,
+              -1
+            ],
+            [
+              4,
+              0,
+              1
+            ],
+            [
+              5,
+              1,
+              2
+            ],
+            [
+              6,
+              2,
+              3
+            ],
+            [
+              7,
+              4,
+              5
+            ],
+            [
+              8,
+              6,
+              7
+            ],
+            [
+              9,
+              8,
+              9
+            ],
+            [
+              10,
+              10,
+              11
+            ],
+            [
+              11,
+              12,
+              13
+            ],
+            [
+              12,
+              22,
+              23
+            ],
+            [
+              13,
+              24,
+              25
+            ],
+            [
+              14,
+              26,
+              27
+            ],
+            [
+              15,
+              28,
+              29
+            ],
+            [
+              16,
+              14,
+              15
+            ],
+            [
+              17,
+              16,
+              17
+            ],
+            [
+              18,
+              18,
+              19
+            ],
+            [
+              19,
+              20,
+              -1
+            ],
+            [
+              20,
+              21,
+              -1
+            ],
+            [
+              21,
+              4,
+              5
+            ],
+            [
+              22,
+              22,
+              23
+            ],
+            [
+              23,
+              24,
+              25
+            ],
+            [
+              24,
+              26,
+              27
+            ],
+            [
+              25,
+              28,
+              29
+            ],
+            [
+              26,
+              30,
+              31
+            ],
+            [
+              27,
+              32,
+              33
+            ],
+            [
+              28,
+              34,
+              35
+            ],
+            [
+              29,
+              36,
+              37
+            ],
+            [
+              -1,
+              -1,
+              -1
+            ]
+          ],
+          "note": "Internal source slots are not JACK port indices. Unexposed enum values do not grant independent processing paths."
+        },
+        "sourceToPorts": {
+          "7": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "8": {
+            "slots": [
+              6,
+              7
+            ],
+            "ports": [
+              "JUCEJack:in_11",
+              "JUCEJack:in_12"
+            ]
+          },
+          "9": {
+            "slots": [
+              8,
+              9
+            ],
+            "ports": [
+              "JUCEJack:in_9",
+              "JUCEJack:in_10"
+            ]
+          },
+          "10": {
+            "slots": [
+              10,
+              11
+            ],
+            "ports": [
+              "JUCEJack:in_5",
+              "JUCEJack:in_6"
+            ]
+          },
+          "11": {
+            "slots": [
+              12,
+              13
+            ],
+            "ports": [
+              "internal:smartpad",
+              "internal:smartpad"
+            ]
+          },
+          "12": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "13": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "14": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "15": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "16": {
+            "slots": [
+              14,
+              15
+            ],
+            "ports": [
+              "JUCEJack:in_29",
+              "JUCEJack:in_30"
+            ]
+          },
+          "17": {
+            "slots": [
+              16,
+              17
+            ],
+            "ports": [
+              "JUCEJack:in_31",
+              "JUCEJack:in_32"
+            ]
+          },
+          "18": {
+            "slots": [
+              18,
+              19
+            ],
+            "ports": [
+              "JUCEJack:in_33",
+              "JUCEJack:in_34"
+            ]
+          },
+          "19": {
+            "slots": [
+              20,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_35",
+              null
+            ]
+          },
+          "20": {
+            "slots": [
+              21,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_36",
+              null
+            ]
+          },
+          "21": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "22": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "23": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "24": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "25": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "26": {
+            "slots": [
+              30,
+              31
+            ],
+            "ports": [
+              "JUCEJack:in_21",
+              "JUCEJack:in_22"
+            ]
+          },
+          "27": {
+            "slots": [
+              32,
+              33
+            ],
+            "ports": [
+              "JUCEJack:in_23",
+              "JUCEJack:in_24"
+            ]
+          },
+          "28": {
+            "slots": [
+              34,
+              35
+            ],
+            "ports": [
+              "JUCEJack:in_25",
+              "JUCEJack:in_26"
+            ]
+          },
+          "29": {
+            "slots": [
+              36,
+              37
+            ],
+            "ports": [
+              "JUCEJack:in_27",
+              "JUCEJack:in_28"
+            ]
+          }
+        },
+        "aliases": {
+          "12": 22,
+          "13": 23,
+          "14": 24,
+          "15": 25
+        }
+      }
+    },
+    "rodecaster-pro-ii-1.7.7": {
+      "archiveSha256": "29028734fb2fcc26433bd9f519004c58526c195392ad704826df2fc2909fe57e",
+      "mixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
+      "locations": {
+        "mixerProcess": "0x657470",
+        "jobBody": "0x41ea80",
+        "jackRegistrationActive": "0x61f880",
+        "callbackBridge": "0x3737a0",
+        "portEvents": "0x374410",
+        "sourceChange": "0x40cfd0",
+        "activeMask": "0x61d900"
+      },
+      "processOffsets": {
+        "inputGather": [
+          "0x270",
+          "0xb94"
+        ],
+        "outputGather": [
+          "0x12d4",
+          "0x14cc"
+        ],
+        "outputDispatch": [
+          "0x1ba4",
+          "0x1a68"
+        ]
+      },
+      "portConnections": {
+        "usb1in:capture_1": [
+          "usb1in:capture_1",
+          "JUCEJack:in_7"
+        ],
+        "usb1in:capture_2": [
+          "usb1in:capture_2",
+          "JUCEJack:in_8"
+        ],
+        "usb1in:capture_3": [
+          "usb1in:capture_3",
+          "JUCEJack:in_13"
+        ],
+        "usb1in:capture_4": [
+          "usb1in:capture_4",
+          "JUCEJack:in_14"
+        ],
+        "usb1in:capture_5": [
+          "usb1in:capture_5",
+          "JUCEJack:in_15"
+        ],
+        "usb1in:capture_6": [
+          "usb1in:capture_6",
+          "JUCEJack:in_16"
+        ],
+        "usb1in:capture_7": [
+          "usb1in:capture_7",
+          "JUCEJack:in_17"
+        ],
+        "usb1in:capture_8": [
+          "usb1in:capture_8",
+          "JUCEJack:in_18"
+        ],
+        "usb1in:capture_9": [
+          "usb1in:capture_9",
+          "JUCEJack:in_19"
+        ],
+        "usb1in:capture_10": [
+          "usb1in:capture_10",
+          "JUCEJack:in_20"
+        ],
+        "usb1in:capture_11": [
+          "usb1in:capture_11",
+          "JUCEJack:in_21"
+        ],
+        "usb1in:capture_12": [
+          "usb1in:capture_12",
+          "JUCEJack:in_22"
+        ],
+        "usb1in:capture_13": [
+          "usb1in:capture_13",
+          "JUCEJack:in_23"
+        ],
+        "usb1in:capture_14": [
+          "usb1in:capture_14",
+          "JUCEJack:in_24"
+        ],
+        "usb1in:capture_15": [
+          "usb1in:capture_15",
+          "JUCEJack:in_25"
+        ],
+        "usb1in:capture_16": [
+          "usb1in:capture_16",
+          "JUCEJack:in_26"
+        ],
+        "usb1in:capture_17": [
+          "usb1in:capture_17",
+          "JUCEJack:in_27"
+        ],
+        "usb1in:capture_18": [
+          "usb1in:capture_18",
+          "JUCEJack:in_28"
+        ],
+        "usb2in:capture_1": [
+          "usb2in:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2in:capture_2": [
+          "usb2in:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb2dev:capture_1": [
+          "usb2dev:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2dev:capture_2": [
+          "usb2dev:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb1-chat-in:capture_1": [
+          "usb1-chat-in:capture_1",
+          "JUCEJack:in_11"
+        ],
+        "usb1-chat-in:capture_2": [
+          "usb1-chat-in:capture_2",
+          "JUCEJack:in_12"
+        ],
+        "btphone:capture_1": [
+          "btphone:capture_1",
+          "JUCEJack:in_5"
+        ],
+        "btphone:capture_2": [
+          "btphone:capture_2",
+          "JUCEJack:in_6"
+        ],
+        "sip-audio-in:capture_1": [
+          "sip-audio-in:capture_1",
+          "JUCEJack:in_29"
+        ],
+        "sip-audio-in:capture_2": [
+          "sip-audio-in:capture_2",
+          "JUCEJack:in_30"
+        ],
+        "sip-audio-in:capture_3": [
+          "sip-audio-in:capture_3",
+          "JUCEJack:in_31"
+        ],
+        "sip-audio-in:capture_4": [
+          "sip-audio-in:capture_4",
+          "JUCEJack:in_32"
+        ],
+        "sip-audio-in:capture_5": [
+          "sip-audio-in:capture_5",
+          "JUCEJack:in_33"
+        ],
+        "sip-audio-in:capture_6": [
+          "sip-audio-in:capture_6",
+          "JUCEJack:in_34"
+        ],
+        "RodeRfSPI:TX1": [
+          "RodeRfSPI:TX1",
+          "JUCEJack:in_35"
+        ],
+        "RodeRfSPI:TX2": [
+          "RodeRfSPI:TX2",
+          "JUCEJack:in_36"
+        ],
+        "usb1out:playback_1": [
+          "JUCEJack:out_15",
+          "usb1out:playback_1"
+        ],
+        "usb1out:playback_2": [
+          "JUCEJack:out_16",
+          "usb1out:playback_2"
+        ],
+        "usb1out:playback_3": [
+          "JUCEJack:out_27",
+          "usb1out:playback_3"
+        ],
+        "usb1out:playback_4": [
+          "JUCEJack:out_28",
+          "usb1out:playback_4"
+        ],
+        "usb1out:playback_5": [
+          "JUCEJack:out_29",
+          "usb1out:playback_5"
+        ],
+        "usb1out:playback_6": [
+          "JUCEJack:out_30",
+          "usb1out:playback_6"
+        ],
+        "usb1out:playback_7": [
+          "JUCEJack:out_31",
+          "usb1out:playback_7"
+        ],
+        "usb1out:playback_8": [
+          "JUCEJack:out_32",
+          "usb1out:playback_8"
+        ],
+        "usb1out:playback_9": [
+          "JUCEJack:out_33",
+          "usb1out:playback_9"
+        ],
+        "usb1out:playback_10": [
+          "JUCEJack:out_34",
+          "usb1out:playback_10"
+        ],
+        "usb1out:playback_11": [
+          "JUCEJack:out_35",
+          "usb1out:playback_11"
+        ],
+        "usb1out:playback_12": [
+          "JUCEJack:out_36",
+          "usb1out:playback_12"
+        ],
+        "usb1out:playback_13": [
+          "JUCEJack:out_37",
+          "usb1out:playback_13"
+        ],
+        "usb1out:playback_14": [
+          "JUCEJack:out_38",
+          "usb1out:playback_14"
+        ],
+        "usb1out:playback_15": [
+          "JUCEJack:out_39",
+          "usb1out:playback_15"
+        ],
+        "usb1out:playback_16": [
+          "JUCEJack:out_40",
+          "usb1out:playback_16"
+        ],
+        "usb1out:playback_17": [
+          "JUCEJack:out_41",
+          "usb1out:playback_17"
+        ],
+        "usb1out:playback_18": [
+          "JUCEJack:out_42",
+          "usb1out:playback_18"
+        ],
+        "usb1out:playback_19": [
+          "JUCEJack:out_43",
+          "usb1out:playback_19"
+        ],
+        "usb1out:playback_20": [
+          "JUCEJack:out_44",
+          "usb1out:playback_20"
+        ],
+        "usb2out:playback_1": [
+          "JUCEJack:out_19",
+          "usb2out:playback_1"
+        ],
+        "usb2out:playback_2": [
+          "JUCEJack:out_20",
+          "usb2out:playback_2"
+        ],
+        "usb1-chat-out:playback_1": [
+          "JUCEJack:out_17",
+          "usb1-chat-out:playback_1"
+        ],
+        "usb1-chat-out:playback_2": [
+          "JUCEJack:out_18",
+          "usb1-chat-out:playback_2"
+        ],
+        "btspeaker:playback_1": [
+          "JUCEJack:out_13",
+          "btspeaker:playback_1"
+        ],
+        "btspeaker:playback_2": [
+          "JUCEJack:out_14",
+          "btspeaker:playback_2"
+        ],
+        "sip-audio-out:playback_1": [
+          "JUCEJack:out_21",
+          "sip-audio-out:playback_1"
+        ],
+        "sip-audio-out:playback_2": [
+          "JUCEJack:out_22",
+          "sip-audio-out:playback_2"
+        ],
+        "sip-audio-out:playback_3": [
+          "JUCEJack:out_23",
+          "sip-audio-out:playback_3"
+        ],
+        "sip-audio-out:playback_4": [
+          "JUCEJack:out_24",
+          "sip-audio-out:playback_4"
+        ],
+        "sip-audio-out:playback_5": [
+          "JUCEJack:out_25",
+          "sip-audio-out:playback_5"
+        ],
+        "sip-audio-out:playback_6": [
+          "JUCEJack:out_26",
+          "sip-audio-out:playback_6"
+        ],
+        "sip-audio-out:playback_7": [
+          "JUCEJack:out_45",
+          "sip-audio-out:playback_7"
+        ],
+        "sip-audio-out:playback_8": [
+          "JUCEJack:out_46",
+          "sip-audio-out:playback_8"
+        ]
+      },
+      "slotPorts": {
+        "0": "JUCEJack:in_1",
+        "1": "JUCEJack:in_2",
+        "2": "JUCEJack:in_3",
+        "3": "JUCEJack:in_4",
+        "4": "JUCEJack:in_7",
+        "5": "JUCEJack:in_8",
+        "6": "JUCEJack:in_11",
+        "7": "JUCEJack:in_12",
+        "8": "JUCEJack:in_9",
+        "9": "JUCEJack:in_10",
+        "10": "JUCEJack:in_5",
+        "11": "JUCEJack:in_6",
+        "14": "JUCEJack:in_29",
+        "15": "JUCEJack:in_30",
+        "16": "JUCEJack:in_31",
+        "17": "JUCEJack:in_32",
+        "18": "JUCEJack:in_33",
+        "19": "JUCEJack:in_34",
+        "20": "JUCEJack:in_35",
+        "21": "JUCEJack:in_36",
+        "22": "JUCEJack:in_13",
+        "23": "JUCEJack:in_14",
+        "24": "JUCEJack:in_15",
+        "25": "JUCEJack:in_16",
+        "26": "JUCEJack:in_17",
+        "27": "JUCEJack:in_18",
+        "28": "JUCEJack:in_19",
+        "29": "JUCEJack:in_20",
+        "30": "JUCEJack:in_21",
+        "31": "JUCEJack:in_22",
+        "32": "JUCEJack:in_23",
+        "33": "JUCEJack:in_24",
+        "34": "JUCEJack:in_25",
+        "35": "JUCEJack:in_26",
+        "36": "JUCEJack:in_27",
+        "37": "JUCEJack:in_28"
+      },
+      "inputGather": {
+        "allInputsProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "stereoUsbProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "noBluetoothNoUsb2ProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "micsOnlyProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "allInputsDuo": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "silence",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ]
+      },
+      "outputGather": {
+        "stereoUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbNoUsb2ProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "scratch",
+              "scratch"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "scratch",
+              "scratch"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbWithBluetoothSpeakerProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "out_13",
+              "out_14"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2078": [
+              "out_13",
+              "out_14"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2688",
+              "vtableIndex": 7
+            },
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "multitrackUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 1,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42",
+            "out_43",
+            "out_44"
+          ]
+        },
+        "multitrackRawUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": true
+          },
+          "dispatch": {
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_15",
+            "out_16",
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42"
+          ]
+        },
+        "stereoUsbDuo": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        }
+      },
+      "bridge": {
+        "inputBits": 36,
+        "outputBits": 46,
+        "process": "0x657470",
+        "activeChannelGetters": [
+          "vtable+0x90",
+          "vtable+0x88"
+        ]
+      },
+      "activeMask": {
+        "dlsym": "0x7c59d8",
+        "calledFromRegistration": "0x61fe80"
+      },
+      "registration": {
+        "strings": {
+          "in_": "0x7c5de0",
+          "out_": "0x7c5e00",
+          "32 bit float mono audio": "0x721630"
+        },
+        "portFlags": {
+          "in_": 1,
+          "out_": 2
+        },
+        "note": "Registers in_<n>/out_<n> for n = registered+1 .. size of the channel-name array passed to open; the array sizes are not pinned offline."
+      },
+      "jobOutputUse": {
+        "outputTableReads": 1,
+        "indices": [
+          "mixer+0xc7d3c",
+          "mixer+0xc7d40"
+        ],
+        "note": "Monitor left/right packed indices only; the USB sends are written in Mixer::Process before it returns."
+      },
+      "sources": {
+        "table": {
+          "initializer": "0x1342a8",
+          "lookupFunction": "0x40cfd0",
+          "table": "0x1dada78",
+          "sourceIdAndInternalSlots": [
+            [
+              0,
+              0,
+              -1
+            ],
+            [
+              1,
+              1,
+              -1
+            ],
+            [
+              2,
+              2,
+              -1
+            ],
+            [
+              3,
+              3,
+              -1
+            ],
+            [
+              4,
+              0,
+              1
+            ],
+            [
+              5,
+              1,
+              2
+            ],
+            [
+              6,
+              2,
+              3
+            ],
+            [
+              7,
+              4,
+              5
+            ],
+            [
+              8,
+              6,
+              7
+            ],
+            [
+              9,
+              8,
+              9
+            ],
+            [
+              10,
+              10,
+              11
+            ],
+            [
+              11,
+              12,
+              13
+            ],
+            [
+              12,
+              22,
+              23
+            ],
+            [
+              13,
+              24,
+              25
+            ],
+            [
+              14,
+              26,
+              27
+            ],
+            [
+              15,
+              28,
+              29
+            ],
+            [
+              16,
+              14,
+              15
+            ],
+            [
+              17,
+              16,
+              17
+            ],
+            [
+              18,
+              18,
+              19
+            ],
+            [
+              19,
+              20,
+              -1
+            ],
+            [
+              20,
+              21,
+              -1
+            ],
+            [
+              21,
+              4,
+              5
+            ],
+            [
+              22,
+              22,
+              23
+            ],
+            [
+              23,
+              24,
+              25
+            ],
+            [
+              24,
+              26,
+              27
+            ],
+            [
+              25,
+              28,
+              29
+            ],
+            [
+              26,
+              30,
+              31
+            ],
+            [
+              27,
+              32,
+              33
+            ],
+            [
+              28,
+              34,
+              35
+            ],
+            [
+              29,
+              36,
+              37
+            ],
+            [
+              -1,
+              -1,
+              -1
+            ]
+          ],
+          "note": "Internal source slots are not JACK port indices. Unexposed enum values do not grant independent processing paths."
+        },
+        "sourceToPorts": {
+          "7": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "8": {
+            "slots": [
+              6,
+              7
+            ],
+            "ports": [
+              "JUCEJack:in_11",
+              "JUCEJack:in_12"
+            ]
+          },
+          "9": {
+            "slots": [
+              8,
+              9
+            ],
+            "ports": [
+              "JUCEJack:in_9",
+              "JUCEJack:in_10"
+            ]
+          },
+          "10": {
+            "slots": [
+              10,
+              11
+            ],
+            "ports": [
+              "JUCEJack:in_5",
+              "JUCEJack:in_6"
+            ]
+          },
+          "11": {
+            "slots": [
+              12,
+              13
+            ],
+            "ports": [
+              "internal:smartpad",
+              "internal:smartpad"
+            ]
+          },
+          "12": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "13": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "14": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "15": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "16": {
+            "slots": [
+              14,
+              15
+            ],
+            "ports": [
+              "JUCEJack:in_29",
+              "JUCEJack:in_30"
+            ]
+          },
+          "17": {
+            "slots": [
+              16,
+              17
+            ],
+            "ports": [
+              "JUCEJack:in_31",
+              "JUCEJack:in_32"
+            ]
+          },
+          "18": {
+            "slots": [
+              18,
+              19
+            ],
+            "ports": [
+              "JUCEJack:in_33",
+              "JUCEJack:in_34"
+            ]
+          },
+          "19": {
+            "slots": [
+              20,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_35",
+              null
+            ]
+          },
+          "20": {
+            "slots": [
+              21,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_36",
+              null
+            ]
+          },
+          "21": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "22": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "23": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "24": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "25": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "26": {
+            "slots": [
+              30,
+              31
+            ],
+            "ports": [
+              "JUCEJack:in_21",
+              "JUCEJack:in_22"
+            ]
+          },
+          "27": {
+            "slots": [
+              32,
+              33
+            ],
+            "ports": [
+              "JUCEJack:in_23",
+              "JUCEJack:in_24"
+            ]
+          },
+          "28": {
+            "slots": [
+              34,
+              35
+            ],
+            "ports": [
+              "JUCEJack:in_25",
+              "JUCEJack:in_26"
+            ]
+          },
+          "29": {
+            "slots": [
+              36,
+              37
+            ],
+            "ports": [
+              "JUCEJack:in_27",
+              "JUCEJack:in_28"
+            ]
+          }
+        },
+        "aliases": {
+          "12": 22,
+          "13": 23,
+          "14": 24,
+          "15": 25
+        }
+      }
+    },
+    "rodecaster-duo-1.7.6": {
+      "archiveSha256": "47d2ccb0d613b223ca6d5ed57c62ae6ee32ba71b662be5fbfb4ad3f44c757daa",
+      "mixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
+      "locations": {
+        "mixerProcess": "0x657250",
+        "jobBody": "0x41ba40",
+        "jackRegistrationActive": "0x61ec10",
+        "callbackBridge": "0x370a70",
+        "portEvents": "0x3716e0",
+        "sourceChange": "0x40a360",
+        "activeMask": "0x61cc90"
+      },
+      "processOffsets": {
+        "inputGather": [
+          "0x270",
+          "0xb94"
+        ],
+        "outputGather": [
+          "0x12d4",
+          "0x14cc"
+        ],
+        "outputDispatch": [
+          "0x1ba4",
+          "0x1a68"
+        ]
+      },
+      "portConnections": {
+        "usb1in:capture_1": [
+          "usb1in:capture_1",
+          "JUCEJack:in_7"
+        ],
+        "usb1in:capture_2": [
+          "usb1in:capture_2",
+          "JUCEJack:in_8"
+        ],
+        "usb1in:capture_3": [
+          "usb1in:capture_3",
+          "JUCEJack:in_13"
+        ],
+        "usb1in:capture_4": [
+          "usb1in:capture_4",
+          "JUCEJack:in_14"
+        ],
+        "usb1in:capture_5": [
+          "usb1in:capture_5",
+          "JUCEJack:in_15"
+        ],
+        "usb1in:capture_6": [
+          "usb1in:capture_6",
+          "JUCEJack:in_16"
+        ],
+        "usb1in:capture_7": [
+          "usb1in:capture_7",
+          "JUCEJack:in_17"
+        ],
+        "usb1in:capture_8": [
+          "usb1in:capture_8",
+          "JUCEJack:in_18"
+        ],
+        "usb1in:capture_9": [
+          "usb1in:capture_9",
+          "JUCEJack:in_19"
+        ],
+        "usb1in:capture_10": [
+          "usb1in:capture_10",
+          "JUCEJack:in_20"
+        ],
+        "usb1in:capture_11": [
+          "usb1in:capture_11",
+          "JUCEJack:in_21"
+        ],
+        "usb1in:capture_12": [
+          "usb1in:capture_12",
+          "JUCEJack:in_22"
+        ],
+        "usb1in:capture_13": [
+          "usb1in:capture_13",
+          "JUCEJack:in_23"
+        ],
+        "usb1in:capture_14": [
+          "usb1in:capture_14",
+          "JUCEJack:in_24"
+        ],
+        "usb1in:capture_15": [
+          "usb1in:capture_15",
+          "JUCEJack:in_25"
+        ],
+        "usb1in:capture_16": [
+          "usb1in:capture_16",
+          "JUCEJack:in_26"
+        ],
+        "usb1in:capture_17": [
+          "usb1in:capture_17",
+          "JUCEJack:in_27"
+        ],
+        "usb1in:capture_18": [
+          "usb1in:capture_18",
+          "JUCEJack:in_28"
+        ],
+        "usb2in:capture_1": [
+          "usb2in:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2in:capture_2": [
+          "usb2in:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb2dev:capture_1": [
+          "usb2dev:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2dev:capture_2": [
+          "usb2dev:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb1-chat-in:capture_1": [
+          "usb1-chat-in:capture_1",
+          "JUCEJack:in_11"
+        ],
+        "usb1-chat-in:capture_2": [
+          "usb1-chat-in:capture_2",
+          "JUCEJack:in_12"
+        ],
+        "btphone:capture_1": [
+          "btphone:capture_1",
+          "JUCEJack:in_5"
+        ],
+        "btphone:capture_2": [
+          "btphone:capture_2",
+          "JUCEJack:in_6"
+        ],
+        "sip-audio-in:capture_1": [
+          "sip-audio-in:capture_1",
+          "JUCEJack:in_29"
+        ],
+        "sip-audio-in:capture_2": [
+          "sip-audio-in:capture_2",
+          "JUCEJack:in_30"
+        ],
+        "sip-audio-in:capture_3": [
+          "sip-audio-in:capture_3",
+          "JUCEJack:in_31"
+        ],
+        "sip-audio-in:capture_4": [
+          "sip-audio-in:capture_4",
+          "JUCEJack:in_32"
+        ],
+        "sip-audio-in:capture_5": [
+          "sip-audio-in:capture_5",
+          "JUCEJack:in_33"
+        ],
+        "sip-audio-in:capture_6": [
+          "sip-audio-in:capture_6",
+          "JUCEJack:in_34"
+        ],
+        "RodeRfSPI:TX1": [
+          "RodeRfSPI:TX1",
+          "JUCEJack:in_35"
+        ],
+        "RodeRfSPI:TX2": [
+          "RodeRfSPI:TX2",
+          "JUCEJack:in_36"
+        ],
+        "usb1out:playback_1": [
+          "JUCEJack:out_15",
+          "usb1out:playback_1"
+        ],
+        "usb1out:playback_2": [
+          "JUCEJack:out_16",
+          "usb1out:playback_2"
+        ],
+        "usb1out:playback_3": [
+          "JUCEJack:out_27",
+          "usb1out:playback_3"
+        ],
+        "usb1out:playback_4": [
+          "JUCEJack:out_28",
+          "usb1out:playback_4"
+        ],
+        "usb1out:playback_5": [
+          "JUCEJack:out_29",
+          "usb1out:playback_5"
+        ],
+        "usb1out:playback_6": [
+          "JUCEJack:out_30",
+          "usb1out:playback_6"
+        ],
+        "usb1out:playback_7": [
+          "JUCEJack:out_31",
+          "usb1out:playback_7"
+        ],
+        "usb1out:playback_8": [
+          "JUCEJack:out_32",
+          "usb1out:playback_8"
+        ],
+        "usb1out:playback_9": [
+          "JUCEJack:out_33",
+          "usb1out:playback_9"
+        ],
+        "usb1out:playback_10": [
+          "JUCEJack:out_34",
+          "usb1out:playback_10"
+        ],
+        "usb1out:playback_11": [
+          "JUCEJack:out_35",
+          "usb1out:playback_11"
+        ],
+        "usb1out:playback_12": [
+          "JUCEJack:out_36",
+          "usb1out:playback_12"
+        ],
+        "usb1out:playback_13": [
+          "JUCEJack:out_37",
+          "usb1out:playback_13"
+        ],
+        "usb1out:playback_14": [
+          "JUCEJack:out_38",
+          "usb1out:playback_14"
+        ],
+        "usb1out:playback_15": [
+          "JUCEJack:out_39",
+          "usb1out:playback_15"
+        ],
+        "usb1out:playback_16": [
+          "JUCEJack:out_40",
+          "usb1out:playback_16"
+        ],
+        "usb1out:playback_17": [
+          "JUCEJack:out_41",
+          "usb1out:playback_17"
+        ],
+        "usb1out:playback_18": [
+          "JUCEJack:out_42",
+          "usb1out:playback_18"
+        ],
+        "usb1out:playback_19": [
+          "JUCEJack:out_43",
+          "usb1out:playback_19"
+        ],
+        "usb1out:playback_20": [
+          "JUCEJack:out_44",
+          "usb1out:playback_20"
+        ],
+        "usb2out:playback_1": [
+          "JUCEJack:out_19",
+          "usb2out:playback_1"
+        ],
+        "usb2out:playback_2": [
+          "JUCEJack:out_20",
+          "usb2out:playback_2"
+        ],
+        "usb1-chat-out:playback_1": [
+          "JUCEJack:out_17",
+          "usb1-chat-out:playback_1"
+        ],
+        "usb1-chat-out:playback_2": [
+          "JUCEJack:out_18",
+          "usb1-chat-out:playback_2"
+        ],
+        "btspeaker:playback_1": [
+          "JUCEJack:out_13",
+          "btspeaker:playback_1"
+        ],
+        "btspeaker:playback_2": [
+          "JUCEJack:out_14",
+          "btspeaker:playback_2"
+        ],
+        "sip-audio-out:playback_1": [
+          "JUCEJack:out_21",
+          "sip-audio-out:playback_1"
+        ],
+        "sip-audio-out:playback_2": [
+          "JUCEJack:out_22",
+          "sip-audio-out:playback_2"
+        ],
+        "sip-audio-out:playback_3": [
+          "JUCEJack:out_23",
+          "sip-audio-out:playback_3"
+        ],
+        "sip-audio-out:playback_4": [
+          "JUCEJack:out_24",
+          "sip-audio-out:playback_4"
+        ],
+        "sip-audio-out:playback_5": [
+          "JUCEJack:out_25",
+          "sip-audio-out:playback_5"
+        ],
+        "sip-audio-out:playback_6": [
+          "JUCEJack:out_26",
+          "sip-audio-out:playback_6"
+        ],
+        "sip-audio-out:playback_7": [
+          "JUCEJack:out_45",
+          "sip-audio-out:playback_7"
+        ],
+        "sip-audio-out:playback_8": [
+          "JUCEJack:out_46",
+          "sip-audio-out:playback_8"
+        ]
+      },
+      "slotPorts": {
+        "0": "JUCEJack:in_1",
+        "1": "JUCEJack:in_2",
+        "2": "JUCEJack:in_3",
+        "3": "JUCEJack:in_4",
+        "4": "JUCEJack:in_7",
+        "5": "JUCEJack:in_8",
+        "6": "JUCEJack:in_11",
+        "7": "JUCEJack:in_12",
+        "8": "JUCEJack:in_9",
+        "9": "JUCEJack:in_10",
+        "10": "JUCEJack:in_5",
+        "11": "JUCEJack:in_6",
+        "14": "JUCEJack:in_29",
+        "15": "JUCEJack:in_30",
+        "16": "JUCEJack:in_31",
+        "17": "JUCEJack:in_32",
+        "18": "JUCEJack:in_33",
+        "19": "JUCEJack:in_34",
+        "20": "JUCEJack:in_35",
+        "21": "JUCEJack:in_36",
+        "22": "JUCEJack:in_13",
+        "23": "JUCEJack:in_14",
+        "24": "JUCEJack:in_15",
+        "25": "JUCEJack:in_16",
+        "26": "JUCEJack:in_17",
+        "27": "JUCEJack:in_18",
+        "28": "JUCEJack:in_19",
+        "29": "JUCEJack:in_20",
+        "30": "JUCEJack:in_21",
+        "31": "JUCEJack:in_22",
+        "32": "JUCEJack:in_23",
+        "33": "JUCEJack:in_24",
+        "34": "JUCEJack:in_25",
+        "35": "JUCEJack:in_26",
+        "36": "JUCEJack:in_27",
+        "37": "JUCEJack:in_28"
+      },
+      "inputGather": {
+        "allInputsProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "stereoUsbProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "noBluetoothNoUsb2ProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "micsOnlyProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "allInputsDuo": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "silence",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ]
+      },
+      "outputGather": {
+        "stereoUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbNoUsb2ProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "scratch",
+              "scratch"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "scratch",
+              "scratch"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbWithBluetoothSpeakerProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "out_13",
+              "out_14"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2078": [
+              "out_13",
+              "out_14"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2688",
+              "vtableIndex": 7
+            },
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "multitrackUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 1,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42",
+            "out_43",
+            "out_44"
+          ]
+        },
+        "multitrackRawUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": true
+          },
+          "dispatch": {
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_15",
+            "out_16",
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42"
+          ]
+        },
+        "stereoUsbDuo": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        }
+      },
+      "bridge": {
+        "inputBits": 36,
+        "outputBits": 46,
+        "process": "0x657250",
+        "activeChannelGetters": [
+          "vtable+0x90",
+          "vtable+0x88"
+        ]
+      },
+      "activeMask": {
+        "dlsym": "0x7cd748",
+        "calledFromRegistration": "0x61f210"
+      },
+      "registration": {
+        "strings": {
+          "in_": "0x7cdb50",
+          "out_": "0x7cdb70",
+          "32 bit float mono audio": "0x7290f0"
+        },
+        "portFlags": {
+          "in_": 1,
+          "out_": 2
+        },
+        "note": "Registers in_<n>/out_<n> for n = registered+1 .. size of the channel-name array passed to open; the array sizes are not pinned offline."
+      },
+      "jobOutputUse": {
+        "outputTableReads": 1,
+        "indices": [
+          "mixer+0xc7d3c",
+          "mixer+0xc7d40"
+        ],
+        "note": "Monitor left/right packed indices only; the USB sends are written in Mixer::Process before it returns."
+      },
+      "sources": {
+        "table": {
+          "initializer": "0x135730",
+          "lookupFunction": "0x40a360",
+          "table": "0x1dbaa98",
+          "sourceIdAndInternalSlots": [
+            [
+              0,
+              0,
+              -1
+            ],
+            [
+              1,
+              1,
+              -1
+            ],
+            [
+              2,
+              2,
+              -1
+            ],
+            [
+              3,
+              3,
+              -1
+            ],
+            [
+              4,
+              0,
+              1
+            ],
+            [
+              5,
+              1,
+              2
+            ],
+            [
+              6,
+              2,
+              3
+            ],
+            [
+              7,
+              4,
+              5
+            ],
+            [
+              8,
+              6,
+              7
+            ],
+            [
+              9,
+              8,
+              9
+            ],
+            [
+              10,
+              10,
+              11
+            ],
+            [
+              11,
+              12,
+              13
+            ],
+            [
+              12,
+              22,
+              23
+            ],
+            [
+              13,
+              24,
+              25
+            ],
+            [
+              14,
+              26,
+              27
+            ],
+            [
+              15,
+              28,
+              29
+            ],
+            [
+              16,
+              14,
+              15
+            ],
+            [
+              17,
+              16,
+              17
+            ],
+            [
+              18,
+              18,
+              19
+            ],
+            [
+              19,
+              20,
+              -1
+            ],
+            [
+              20,
+              21,
+              -1
+            ],
+            [
+              21,
+              4,
+              5
+            ],
+            [
+              22,
+              22,
+              23
+            ],
+            [
+              23,
+              24,
+              25
+            ],
+            [
+              24,
+              26,
+              27
+            ],
+            [
+              25,
+              28,
+              29
+            ],
+            [
+              26,
+              30,
+              31
+            ],
+            [
+              27,
+              32,
+              33
+            ],
+            [
+              28,
+              34,
+              35
+            ],
+            [
+              29,
+              36,
+              37
+            ],
+            [
+              -1,
+              -1,
+              -1
+            ]
+          ],
+          "note": "Internal source slots are not JACK port indices. Unexposed enum values do not grant independent processing paths."
+        },
+        "sourceToPorts": {
+          "7": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "8": {
+            "slots": [
+              6,
+              7
+            ],
+            "ports": [
+              "JUCEJack:in_11",
+              "JUCEJack:in_12"
+            ]
+          },
+          "9": {
+            "slots": [
+              8,
+              9
+            ],
+            "ports": [
+              "JUCEJack:in_9",
+              "JUCEJack:in_10"
+            ]
+          },
+          "10": {
+            "slots": [
+              10,
+              11
+            ],
+            "ports": [
+              "JUCEJack:in_5",
+              "JUCEJack:in_6"
+            ]
+          },
+          "11": {
+            "slots": [
+              12,
+              13
+            ],
+            "ports": [
+              "internal:smartpad",
+              "internal:smartpad"
+            ]
+          },
+          "12": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "13": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "14": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "15": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "16": {
+            "slots": [
+              14,
+              15
+            ],
+            "ports": [
+              "JUCEJack:in_29",
+              "JUCEJack:in_30"
+            ]
+          },
+          "17": {
+            "slots": [
+              16,
+              17
+            ],
+            "ports": [
+              "JUCEJack:in_31",
+              "JUCEJack:in_32"
+            ]
+          },
+          "18": {
+            "slots": [
+              18,
+              19
+            ],
+            "ports": [
+              "JUCEJack:in_33",
+              "JUCEJack:in_34"
+            ]
+          },
+          "19": {
+            "slots": [
+              20,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_35",
+              null
+            ]
+          },
+          "20": {
+            "slots": [
+              21,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_36",
+              null
+            ]
+          },
+          "21": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "22": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "23": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "24": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "25": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "26": {
+            "slots": [
+              30,
+              31
+            ],
+            "ports": [
+              "JUCEJack:in_21",
+              "JUCEJack:in_22"
+            ]
+          },
+          "27": {
+            "slots": [
+              32,
+              33
+            ],
+            "ports": [
+              "JUCEJack:in_23",
+              "JUCEJack:in_24"
+            ]
+          },
+          "28": {
+            "slots": [
+              34,
+              35
+            ],
+            "ports": [
+              "JUCEJack:in_25",
+              "JUCEJack:in_26"
+            ]
+          },
+          "29": {
+            "slots": [
+              36,
+              37
+            ],
+            "ports": [
+              "JUCEJack:in_27",
+              "JUCEJack:in_28"
+            ]
+          }
+        },
+        "aliases": {
+          "12": 22,
+          "13": 23,
+          "14": 24,
+          "15": 25
+        }
+      }
+    },
+    "rodecaster-duo-1.7.7": {
+      "archiveSha256": "4f3c7a022f07fd5b05955846e6a9052ad6ae214e12c04cda2d4749d775a304ed",
+      "mixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
+      "locations": {
+        "mixerProcess": "0x657470",
+        "jobBody": "0x41ea80",
+        "jackRegistrationActive": "0x61f880",
+        "callbackBridge": "0x3737a0",
+        "portEvents": "0x374410",
+        "sourceChange": "0x40cfd0",
+        "activeMask": "0x61d900"
+      },
+      "processOffsets": {
+        "inputGather": [
+          "0x270",
+          "0xb94"
+        ],
+        "outputGather": [
+          "0x12d4",
+          "0x14cc"
+        ],
+        "outputDispatch": [
+          "0x1ba4",
+          "0x1a68"
+        ]
+      },
+      "portConnections": {
+        "usb1in:capture_1": [
+          "usb1in:capture_1",
+          "JUCEJack:in_7"
+        ],
+        "usb1in:capture_2": [
+          "usb1in:capture_2",
+          "JUCEJack:in_8"
+        ],
+        "usb1in:capture_3": [
+          "usb1in:capture_3",
+          "JUCEJack:in_13"
+        ],
+        "usb1in:capture_4": [
+          "usb1in:capture_4",
+          "JUCEJack:in_14"
+        ],
+        "usb1in:capture_5": [
+          "usb1in:capture_5",
+          "JUCEJack:in_15"
+        ],
+        "usb1in:capture_6": [
+          "usb1in:capture_6",
+          "JUCEJack:in_16"
+        ],
+        "usb1in:capture_7": [
+          "usb1in:capture_7",
+          "JUCEJack:in_17"
+        ],
+        "usb1in:capture_8": [
+          "usb1in:capture_8",
+          "JUCEJack:in_18"
+        ],
+        "usb1in:capture_9": [
+          "usb1in:capture_9",
+          "JUCEJack:in_19"
+        ],
+        "usb1in:capture_10": [
+          "usb1in:capture_10",
+          "JUCEJack:in_20"
+        ],
+        "usb1in:capture_11": [
+          "usb1in:capture_11",
+          "JUCEJack:in_21"
+        ],
+        "usb1in:capture_12": [
+          "usb1in:capture_12",
+          "JUCEJack:in_22"
+        ],
+        "usb1in:capture_13": [
+          "usb1in:capture_13",
+          "JUCEJack:in_23"
+        ],
+        "usb1in:capture_14": [
+          "usb1in:capture_14",
+          "JUCEJack:in_24"
+        ],
+        "usb1in:capture_15": [
+          "usb1in:capture_15",
+          "JUCEJack:in_25"
+        ],
+        "usb1in:capture_16": [
+          "usb1in:capture_16",
+          "JUCEJack:in_26"
+        ],
+        "usb1in:capture_17": [
+          "usb1in:capture_17",
+          "JUCEJack:in_27"
+        ],
+        "usb1in:capture_18": [
+          "usb1in:capture_18",
+          "JUCEJack:in_28"
+        ],
+        "usb2in:capture_1": [
+          "usb2in:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2in:capture_2": [
+          "usb2in:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb2dev:capture_1": [
+          "usb2dev:capture_1",
+          "JUCEJack:in_9"
+        ],
+        "usb2dev:capture_2": [
+          "usb2dev:capture_2",
+          "JUCEJack:in_10"
+        ],
+        "usb1-chat-in:capture_1": [
+          "usb1-chat-in:capture_1",
+          "JUCEJack:in_11"
+        ],
+        "usb1-chat-in:capture_2": [
+          "usb1-chat-in:capture_2",
+          "JUCEJack:in_12"
+        ],
+        "btphone:capture_1": [
+          "btphone:capture_1",
+          "JUCEJack:in_5"
+        ],
+        "btphone:capture_2": [
+          "btphone:capture_2",
+          "JUCEJack:in_6"
+        ],
+        "sip-audio-in:capture_1": [
+          "sip-audio-in:capture_1",
+          "JUCEJack:in_29"
+        ],
+        "sip-audio-in:capture_2": [
+          "sip-audio-in:capture_2",
+          "JUCEJack:in_30"
+        ],
+        "sip-audio-in:capture_3": [
+          "sip-audio-in:capture_3",
+          "JUCEJack:in_31"
+        ],
+        "sip-audio-in:capture_4": [
+          "sip-audio-in:capture_4",
+          "JUCEJack:in_32"
+        ],
+        "sip-audio-in:capture_5": [
+          "sip-audio-in:capture_5",
+          "JUCEJack:in_33"
+        ],
+        "sip-audio-in:capture_6": [
+          "sip-audio-in:capture_6",
+          "JUCEJack:in_34"
+        ],
+        "RodeRfSPI:TX1": [
+          "RodeRfSPI:TX1",
+          "JUCEJack:in_35"
+        ],
+        "RodeRfSPI:TX2": [
+          "RodeRfSPI:TX2",
+          "JUCEJack:in_36"
+        ],
+        "usb1out:playback_1": [
+          "JUCEJack:out_15",
+          "usb1out:playback_1"
+        ],
+        "usb1out:playback_2": [
+          "JUCEJack:out_16",
+          "usb1out:playback_2"
+        ],
+        "usb1out:playback_3": [
+          "JUCEJack:out_27",
+          "usb1out:playback_3"
+        ],
+        "usb1out:playback_4": [
+          "JUCEJack:out_28",
+          "usb1out:playback_4"
+        ],
+        "usb1out:playback_5": [
+          "JUCEJack:out_29",
+          "usb1out:playback_5"
+        ],
+        "usb1out:playback_6": [
+          "JUCEJack:out_30",
+          "usb1out:playback_6"
+        ],
+        "usb1out:playback_7": [
+          "JUCEJack:out_31",
+          "usb1out:playback_7"
+        ],
+        "usb1out:playback_8": [
+          "JUCEJack:out_32",
+          "usb1out:playback_8"
+        ],
+        "usb1out:playback_9": [
+          "JUCEJack:out_33",
+          "usb1out:playback_9"
+        ],
+        "usb1out:playback_10": [
+          "JUCEJack:out_34",
+          "usb1out:playback_10"
+        ],
+        "usb1out:playback_11": [
+          "JUCEJack:out_35",
+          "usb1out:playback_11"
+        ],
+        "usb1out:playback_12": [
+          "JUCEJack:out_36",
+          "usb1out:playback_12"
+        ],
+        "usb1out:playback_13": [
+          "JUCEJack:out_37",
+          "usb1out:playback_13"
+        ],
+        "usb1out:playback_14": [
+          "JUCEJack:out_38",
+          "usb1out:playback_14"
+        ],
+        "usb1out:playback_15": [
+          "JUCEJack:out_39",
+          "usb1out:playback_15"
+        ],
+        "usb1out:playback_16": [
+          "JUCEJack:out_40",
+          "usb1out:playback_16"
+        ],
+        "usb1out:playback_17": [
+          "JUCEJack:out_41",
+          "usb1out:playback_17"
+        ],
+        "usb1out:playback_18": [
+          "JUCEJack:out_42",
+          "usb1out:playback_18"
+        ],
+        "usb1out:playback_19": [
+          "JUCEJack:out_43",
+          "usb1out:playback_19"
+        ],
+        "usb1out:playback_20": [
+          "JUCEJack:out_44",
+          "usb1out:playback_20"
+        ],
+        "usb2out:playback_1": [
+          "JUCEJack:out_19",
+          "usb2out:playback_1"
+        ],
+        "usb2out:playback_2": [
+          "JUCEJack:out_20",
+          "usb2out:playback_2"
+        ],
+        "usb1-chat-out:playback_1": [
+          "JUCEJack:out_17",
+          "usb1-chat-out:playback_1"
+        ],
+        "usb1-chat-out:playback_2": [
+          "JUCEJack:out_18",
+          "usb1-chat-out:playback_2"
+        ],
+        "btspeaker:playback_1": [
+          "JUCEJack:out_13",
+          "btspeaker:playback_1"
+        ],
+        "btspeaker:playback_2": [
+          "JUCEJack:out_14",
+          "btspeaker:playback_2"
+        ],
+        "sip-audio-out:playback_1": [
+          "JUCEJack:out_21",
+          "sip-audio-out:playback_1"
+        ],
+        "sip-audio-out:playback_2": [
+          "JUCEJack:out_22",
+          "sip-audio-out:playback_2"
+        ],
+        "sip-audio-out:playback_3": [
+          "JUCEJack:out_23",
+          "sip-audio-out:playback_3"
+        ],
+        "sip-audio-out:playback_4": [
+          "JUCEJack:out_24",
+          "sip-audio-out:playback_4"
+        ],
+        "sip-audio-out:playback_5": [
+          "JUCEJack:out_25",
+          "sip-audio-out:playback_5"
+        ],
+        "sip-audio-out:playback_6": [
+          "JUCEJack:out_26",
+          "sip-audio-out:playback_6"
+        ],
+        "sip-audio-out:playback_7": [
+          "JUCEJack:out_45",
+          "sip-audio-out:playback_7"
+        ],
+        "sip-audio-out:playback_8": [
+          "JUCEJack:out_46",
+          "sip-audio-out:playback_8"
+        ]
+      },
+      "slotPorts": {
+        "0": "JUCEJack:in_1",
+        "1": "JUCEJack:in_2",
+        "2": "JUCEJack:in_3",
+        "3": "JUCEJack:in_4",
+        "4": "JUCEJack:in_7",
+        "5": "JUCEJack:in_8",
+        "6": "JUCEJack:in_11",
+        "7": "JUCEJack:in_12",
+        "8": "JUCEJack:in_9",
+        "9": "JUCEJack:in_10",
+        "10": "JUCEJack:in_5",
+        "11": "JUCEJack:in_6",
+        "14": "JUCEJack:in_29",
+        "15": "JUCEJack:in_30",
+        "16": "JUCEJack:in_31",
+        "17": "JUCEJack:in_32",
+        "18": "JUCEJack:in_33",
+        "19": "JUCEJack:in_34",
+        "20": "JUCEJack:in_35",
+        "21": "JUCEJack:in_36",
+        "22": "JUCEJack:in_13",
+        "23": "JUCEJack:in_14",
+        "24": "JUCEJack:in_15",
+        "25": "JUCEJack:in_16",
+        "26": "JUCEJack:in_17",
+        "27": "JUCEJack:in_18",
+        "28": "JUCEJack:in_19",
+        "29": "JUCEJack:in_20",
+        "30": "JUCEJack:in_21",
+        "31": "JUCEJack:in_22",
+        "32": "JUCEJack:in_23",
+        "33": "JUCEJack:in_24",
+        "34": "JUCEJack:in_25",
+        "35": "JUCEJack:in_26",
+        "36": "JUCEJack:in_27",
+        "37": "JUCEJack:in_28"
+      },
+      "inputGather": {
+        "allInputsProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "stereoUsbProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "noBluetoothNoUsb2ProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ],
+        "micsOnlyProII": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "in_4",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "padL",
+          "padR",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence",
+          "silence"
+        ],
+        "allInputsDuo": [
+          "in_1",
+          "in_2",
+          "in_3",
+          "silence",
+          "in_7",
+          "in_8",
+          "in_11",
+          "in_12",
+          "in_9",
+          "in_10",
+          "in_5",
+          "in_6",
+          "padL",
+          "padR",
+          "in_29",
+          "in_30",
+          "in_31",
+          "in_32",
+          "in_33",
+          "in_34",
+          "in_35",
+          "in_36",
+          "in_13",
+          "in_14",
+          "in_15",
+          "in_16",
+          "in_17",
+          "in_18",
+          "in_19",
+          "in_20",
+          "in_21",
+          "in_22",
+          "in_23",
+          "in_24",
+          "in_25",
+          "in_26",
+          "in_27",
+          "in_28"
+        ]
+      },
+      "outputGather": {
+        "stereoUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbNoUsb2ProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "scratch",
+              "scratch"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "scratch",
+              "scratch"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "stereoUsbWithBluetoothSpeakerProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "out_13",
+              "out_14"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2078": [
+              "out_13",
+              "out_14"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2688",
+              "vtableIndex": 7
+            },
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        },
+        "multitrackUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 1,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42",
+            "out_43",
+            "out_44"
+          ]
+        },
+        "multitrackRawUsbProII": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": true,
+            "rawStripCopyMode": true
+          },
+          "dispatch": {
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": [
+            "out_15",
+            "out_16",
+            "out_27",
+            "out_28",
+            "out_29",
+            "out_30",
+            "out_31",
+            "out_32",
+            "out_33",
+            "out_34",
+            "out_35",
+            "out_36",
+            "out_37",
+            "out_38",
+            "out_39",
+            "out_40",
+            "out_41",
+            "out_42"
+          ]
+        },
+        "stereoUsbDuo": {
+          "assignment": {
+            "out_13/out_14": [
+              "scratch",
+              "scratch"
+            ],
+            "out_15/out_16": [
+              "out_15",
+              "out_16"
+            ],
+            "out_17/out_18": [
+              "out_17",
+              "out_18"
+            ],
+            "out_19/out_20": [
+              "out_19",
+              "out_20"
+            ],
+            "out_21/out_22": [
+              "out_21",
+              "out_22"
+            ],
+            "out_23/out_24": [
+              "out_23",
+              "out_24"
+            ],
+            "out_25/out_26": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "flags": {
+            "ownedOutputsActive": 0,
+            "usb1Channel18Active": false,
+            "rawStripCopyMode": false
+          },
+          "dispatch": {
+            "0x2088": [
+              "out_17",
+              "out_18"
+            ],
+            "0x2080": [
+              "out_15",
+              "out_16"
+            ],
+            "0x2090": [
+              "out_19",
+              "out_20"
+            ],
+            "0x2098": [
+              "out_21",
+              "out_22"
+            ],
+            "0x20a0": [
+              "out_23",
+              "out_24"
+            ],
+            "0x20a8": [
+              "out_25",
+              "out_26"
+            ]
+          },
+          "otherVirtualCalls": [
+            {
+              "member": "0x2330",
+              "vtableIndex": 7
+            }
+          ],
+          "multitrackCopies": []
+        }
+      },
+      "bridge": {
+        "inputBits": 36,
+        "outputBits": 46,
+        "process": "0x657470",
+        "activeChannelGetters": [
+          "vtable+0x90",
+          "vtable+0x88"
+        ]
+      },
+      "activeMask": {
+        "dlsym": "0x7c59d8",
+        "calledFromRegistration": "0x61fe80"
+      },
+      "registration": {
+        "strings": {
+          "in_": "0x7c5de0",
+          "out_": "0x7c5e00",
+          "32 bit float mono audio": "0x721630"
+        },
+        "portFlags": {
+          "in_": 1,
+          "out_": 2
+        },
+        "note": "Registers in_<n>/out_<n> for n = registered+1 .. size of the channel-name array passed to open; the array sizes are not pinned offline."
+      },
+      "jobOutputUse": {
+        "outputTableReads": 1,
+        "indices": [
+          "mixer+0xc7d3c",
+          "mixer+0xc7d40"
+        ],
+        "note": "Monitor left/right packed indices only; the USB sends are written in Mixer::Process before it returns."
+      },
+      "sources": {
+        "table": {
+          "initializer": "0x1342a8",
+          "lookupFunction": "0x40cfd0",
+          "table": "0x1dada78",
+          "sourceIdAndInternalSlots": [
+            [
+              0,
+              0,
+              -1
+            ],
+            [
+              1,
+              1,
+              -1
+            ],
+            [
+              2,
+              2,
+              -1
+            ],
+            [
+              3,
+              3,
+              -1
+            ],
+            [
+              4,
+              0,
+              1
+            ],
+            [
+              5,
+              1,
+              2
+            ],
+            [
+              6,
+              2,
+              3
+            ],
+            [
+              7,
+              4,
+              5
+            ],
+            [
+              8,
+              6,
+              7
+            ],
+            [
+              9,
+              8,
+              9
+            ],
+            [
+              10,
+              10,
+              11
+            ],
+            [
+              11,
+              12,
+              13
+            ],
+            [
+              12,
+              22,
+              23
+            ],
+            [
+              13,
+              24,
+              25
+            ],
+            [
+              14,
+              26,
+              27
+            ],
+            [
+              15,
+              28,
+              29
+            ],
+            [
+              16,
+              14,
+              15
+            ],
+            [
+              17,
+              16,
+              17
+            ],
+            [
+              18,
+              18,
+              19
+            ],
+            [
+              19,
+              20,
+              -1
+            ],
+            [
+              20,
+              21,
+              -1
+            ],
+            [
+              21,
+              4,
+              5
+            ],
+            [
+              22,
+              22,
+              23
+            ],
+            [
+              23,
+              24,
+              25
+            ],
+            [
+              24,
+              26,
+              27
+            ],
+            [
+              25,
+              28,
+              29
+            ],
+            [
+              26,
+              30,
+              31
+            ],
+            [
+              27,
+              32,
+              33
+            ],
+            [
+              28,
+              34,
+              35
+            ],
+            [
+              29,
+              36,
+              37
+            ],
+            [
+              -1,
+              -1,
+              -1
+            ]
+          ],
+          "note": "Internal source slots are not JACK port indices. Unexposed enum values do not grant independent processing paths."
+        },
+        "sourceToPorts": {
+          "7": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "8": {
+            "slots": [
+              6,
+              7
+            ],
+            "ports": [
+              "JUCEJack:in_11",
+              "JUCEJack:in_12"
+            ]
+          },
+          "9": {
+            "slots": [
+              8,
+              9
+            ],
+            "ports": [
+              "JUCEJack:in_9",
+              "JUCEJack:in_10"
+            ]
+          },
+          "10": {
+            "slots": [
+              10,
+              11
+            ],
+            "ports": [
+              "JUCEJack:in_5",
+              "JUCEJack:in_6"
+            ]
+          },
+          "11": {
+            "slots": [
+              12,
+              13
+            ],
+            "ports": [
+              "internal:smartpad",
+              "internal:smartpad"
+            ]
+          },
+          "12": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "13": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "14": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "15": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "16": {
+            "slots": [
+              14,
+              15
+            ],
+            "ports": [
+              "JUCEJack:in_29",
+              "JUCEJack:in_30"
+            ]
+          },
+          "17": {
+            "slots": [
+              16,
+              17
+            ],
+            "ports": [
+              "JUCEJack:in_31",
+              "JUCEJack:in_32"
+            ]
+          },
+          "18": {
+            "slots": [
+              18,
+              19
+            ],
+            "ports": [
+              "JUCEJack:in_33",
+              "JUCEJack:in_34"
+            ]
+          },
+          "19": {
+            "slots": [
+              20,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_35",
+              null
+            ]
+          },
+          "20": {
+            "slots": [
+              21,
+              -1
+            ],
+            "ports": [
+              "JUCEJack:in_36",
+              null
+            ]
+          },
+          "21": {
+            "slots": [
+              4,
+              5
+            ],
+            "ports": [
+              "JUCEJack:in_7",
+              "JUCEJack:in_8"
+            ]
+          },
+          "22": {
+            "slots": [
+              22,
+              23
+            ],
+            "ports": [
+              "JUCEJack:in_13",
+              "JUCEJack:in_14"
+            ]
+          },
+          "23": {
+            "slots": [
+              24,
+              25
+            ],
+            "ports": [
+              "JUCEJack:in_15",
+              "JUCEJack:in_16"
+            ]
+          },
+          "24": {
+            "slots": [
+              26,
+              27
+            ],
+            "ports": [
+              "JUCEJack:in_17",
+              "JUCEJack:in_18"
+            ]
+          },
+          "25": {
+            "slots": [
+              28,
+              29
+            ],
+            "ports": [
+              "JUCEJack:in_19",
+              "JUCEJack:in_20"
+            ]
+          },
+          "26": {
+            "slots": [
+              30,
+              31
+            ],
+            "ports": [
+              "JUCEJack:in_21",
+              "JUCEJack:in_22"
+            ]
+          },
+          "27": {
+            "slots": [
+              32,
+              33
+            ],
+            "ports": [
+              "JUCEJack:in_23",
+              "JUCEJack:in_24"
+            ]
+          },
+          "28": {
+            "slots": [
+              34,
+              35
+            ],
+            "ports": [
+              "JUCEJack:in_25",
+              "JUCEJack:in_26"
+            ]
+          },
+          "29": {
+            "slots": [
+              36,
+              37
+            ],
+            "ports": [
+              "JUCEJack:in_27",
+              "JUCEJack:in_28"
+            ]
+          }
+        },
+        "aliases": {
+          "12": 22,
+          "13": 23,
+          "14": 24,
+          "15": 25
+        }
+      }
+    }
+  },
+  "crossRelease": {
+    "compared": true,
+    "baseline": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
+    "candidate": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
+    "roles": {
+      "callbackBridge": "0x3737a0",
+      "portEvents": "0x374410",
+      "sourceChange": "0x40cfd0",
+      "activeMask": "0x61d900"
+    }
+  },
+  "method": "Unicorn execution of the vendor port-event handler and of three excerpts of Mixer::Process (input gather, output gather, output dispatch) with buffers replaced by recognisable pointers and processors replaced by recording vtables; static instruction checks for the bridge, active-mask source, registration loop and queued job.",
+  "findings": [
+    "Source IDs 12-15 and 22-25 share internal slots 22-29, which the gather fills from JUCEJack in_13..in_20 when those channels are active; the port-event handler connects usb1in:capture_3..10 to exactly those ports. These are four physical stereo pairs, not eight independent paths: IDs 12/22, 13/23, 14/24, 15/25 alias.",
+    "Slots 30-37 (IDs 26-29) are in_21..in_28 (usb1in:capture_11..18). Slots 12-13 (ID 11, SMART Pads) are two mixer-internal buffer channels (object mixer+0xc73c8, channel-table pointer at +0x10), never a JACK port.",
+    "JUCEJack out_15/16 (usb1out:playback_1/2) and out_19/20 (usb2out:playback_1/2) are written inside Mixer::Process, before it returns, by the processor members at mixer+0xc2080 and mixer+0xc2090; the queued job only writes the monitor outputs. Inactive (unconnected) outputs receive a mixer scratch buffer instead. In raw-strip multitrack mode, the first source strip is copied to out_15/16 instead of the main mix processor running: the port is still callback-owned, but its audio is not the stereo main mix in that mode. The synchronous Chat output processor dispatch is also skipped in that branch; Secondary continues to be dispatched.",
+    "The active channel masks are rebuilt from jack_port_connected: an unconnected port is neither requested from jackd nor processed by the mixer in that period, so a path bound to it stays unobserved."
+  ],
+  "limitations": [
+    "The bridge consumes up to 36 input / 46 output bits; the engine construction of the channel-name arrays passed to JACK device open was not located. Sequential registration of old catalog in_35/36 implies registration of in_13..20 whenever the old plan successfully binds. Old out_18 does not by itself prove out_19/20 exists. The native pipeline requires every plan port registered before it can attach; absent new ports would prevent the whole pipeline from attaching, not merely skip those paths. Live port counts and USB-mode startup tests remain separate evidence.",
+    "Both raw-strip and table-copy multitrack branches are emulated with synthetic active masks; the writer of the mask at mixer+0xc7d48 and its relationship to GUI multitrack mode settings were not located.",
+    "Fixtures stub buffer constructors, processors, allocation, printf and memcpy; PAC/BTI hints are skipped.",
+    "No device was flashed, probed or used for audio; live port snapshots are separate evidence."
+  ]
+}

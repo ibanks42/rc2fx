@@ -1,0 +1,16 @@
+[package]
+name = "rc2fx-native-control"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Internal native-audio control messages and device-local client"
+
+[dependencies]
+rc2fx-core = { path = "../rc2fx-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10.9"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

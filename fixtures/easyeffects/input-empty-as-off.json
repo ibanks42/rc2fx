@@ -1,0 +1,46 @@
+{
+  "input": {
+    "blocklist": [],
+    "plugins_order": [
+      "equalizer#0"
+    ],
+    "equalizer#0": {
+      "bypass": false,
+      "input-gain": 0,
+      "output-gain": 0,
+      "mode": "IIR",
+      "decramp": "Off",
+      "split-channels": false,
+      "balance": 0,
+      "pitch-left": 0,
+      "pitch-right": 0,
+      "num-bands": 1,
+      "left": {
+        "band0": {
+          "type": "Off",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 1000,
+          "q": 1,
+          "width": 4
+        }
+      },
+      "right": {
+        "band0": {
+          "type": "Off",
+          "mode": "APO (DR)",
+          "slope": "x1",
+          "solo": false,
+          "mute": false,
+          "gain": 0,
+          "frequency": 1000,
+          "q": 1,
+          "width": 4
+        }
+      }
+    }
+  }
+}
