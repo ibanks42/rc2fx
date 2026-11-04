@@ -33,6 +33,7 @@ pub use embed::{
     newest_supported_firmware,
 };
 pub use rc2fx_core::{DeviceVersions, MixerRelease, compare_versions};
+pub use ssh::{PinnedHost, mixer_host_alias, pin_mixer_host_keys, ssh_key_path, ssh_public_key};
 pub use runtime::{Bundle, PAYLOAD_NAMES, bundle_files};
 
 use serde::{Deserialize, Serialize};

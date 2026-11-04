@@ -99,8 +99,6 @@ pub(crate) struct Model {
     pub choice: Option<(String, String)>,
     /// Flash unchanged RØDE firmware rather than firmware with RC2FX.
     pub stock: bool,
-    /// Developer option: build RC2FX's SSH key into the firmware.
-    pub ssh: bool,
     pub run: Option<Run>,
     pub busy: Option<Request>,
     /// Requests in flight, oldest first; `true` for background refreshes,
@@ -133,7 +131,6 @@ impl Model {
             releases: Vec::new(),
             choice: None,
             stock: false,
-            ssh: false,
             run: None,
             busy: None,
             queue: VecDeque::new(),
@@ -203,6 +200,14 @@ impl Model {
         self.status.as_ref().map_or(&[], |s| s.usb.as_slice())
     }
 
+    /// Whether the app's USB 1 session is with the mixer the installer sees:
+    /// the only one connected, in normal mode, with the same serial. RC2FX's
+    /// readiness from any other mixer must not count for this one.
+    pub fn is_session_mixer(&self, session_serial: Option<&str>) -> bool {
+        self.usb_one(false)
+            .is_some_and(|m| !m.serial.is_empty() && Some(m.serial.as_str()) == session_serial)
+    }
+
     fn usb_one(&self, update_mode: bool) -> Option<&UsbMixer> {
         match self.usb() {
             [one] if one.update_mode == update_mode => Some(one),
@@ -260,6 +265,10 @@ impl Model {
         let s = self.status.as_ref()?;
         s.saved.prepared.as_ref().filter(|p| {
             s.prepared_present
+                // Firmware prepared with an SSH key is never reused.
+                && p.key_sha.is_empty()
+                && p.key.is_empty()
+                && p.host_key.is_empty()
                 && p.model.unwrap_or_default() == self.device
                 && (self.device != DeviceModel::Duo || self.allow_duo)
         })
@@ -416,15 +425,6 @@ impl Model {
     pub fn select(&mut self, stock: bool, index: usize) {
         self.set_stock(stock);
         self.choose(index);
-    }
-
-    pub fn set_ssh(&mut self, ssh: bool) {
-        if self.running() || self.busy.is_some() {
-            return;
-        }
-        self.ssh = ssh;
-        self.run = None;
-        self.finished = false;
     }
 
     pub fn start(&mut self) -> Option<Request> {
@@ -593,7 +593,9 @@ impl Model {
                         version,
                         serial,
                         stock: self.stock,
-                        ssh: self.ssh && !self.stock,
+                        // SSH is managed over USB 1 from Settings, never
+                        // built into firmware.
+                        ssh: false,
                     }),
                     None => self.fail("Choose a firmware version.".into()),
                 },
@@ -1165,24 +1167,43 @@ mod tests {
     }
 
     #[test]
-    fn ssh_is_a_developer_option_and_never_goes_into_stock_firmware() {
+    fn readiness_counts_only_for_the_same_mixer() {
+        let m = model(status(&[("GV1", false)], absent(), false, false));
+        assert!(m.is_session_mixer(Some("GV1")));
+        assert!(!m.is_session_mixer(Some("GV2")));
+        assert!(!m.is_session_mixer(None));
+        let updating = model(status(&[("GV1", true)], absent(), false, false));
+        assert!(!updating.is_session_mixer(Some("GV1")));
+        let two = model(status(
+            &[("GV1", false), ("GV2", false)],
+            absent(),
+            false,
+            false,
+        ));
+        assert!(!two.is_session_mixer(Some("GV1")));
+    }
+
+    #[test]
+    fn firmware_is_never_prepared_with_ssh_and_keyed_images_are_not_reused() {
         let mut m = model(status(&[("GV1", false)], absent(), false, false));
-        m.set_ssh(true);
         assert!(matches!(
             m.start(),
-            Some(Request::Prepare { ssh: true, .. })
+            Some(Request::Prepare { ssh: false, .. })
         ));
-        let mut m = model(status(&[("GV1", false)], absent(), false, false));
-        m.set_ssh(true);
-        m.set_stock(true);
-        assert!(matches!(
-            m.start(),
-            Some(Request::Prepare {
-                ssh: false,
-                stock: true,
-                ..
-            })
-        ));
+        assert!(
+            model(status(&[("GV1", false)], absent(), true, false))
+                .prepared()
+                .is_some()
+        );
+        let mut s = status(&[("GV1", false)], absent(), true, false);
+        s.status.saved.prepared.as_mut().unwrap().key_sha = "abc".into();
+        assert!(model(s).prepared().is_none());
+        let mut s = status(&[("GV1", false)], absent(), true, false);
+        s.status.saved.prepared.as_mut().unwrap().host_key = "abc".into();
+        assert!(
+            model(s).prepared().is_none(),
+            "a partial keyed cache fails closed"
+        );
     }
 
     #[test]

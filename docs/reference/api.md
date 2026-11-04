@@ -15,6 +15,8 @@ sends a single request.
 | `GET /api/v1/events` | | The next `state`, `engine`, `meter` or `usb` event as `{"event", "data"}`, or `null` after 50 ms |
 | `GET /api/v1/inputs` | | The show's input names and order, read from the stock show file |
 | `GET /api/v1/version` | | The installed RC2FX mixer software and RØDE firmware versions; see [Versions](#versions) |
+| `GET /api/v1/ssh` | | Developer SSH access status; USB 1 only, see [Developer SSH](#developer-ssh) |
+| `PUT /api/v1/ssh` | `{"enabled", "publicKey"}` | Add or remove RC2FX's developer SSH key; USB 1 only |
 | `GET /api/v1/diagnostics` | | State plus bounded telemetry history (callback timing, worker counters) |
 | `GET /api/v1/diagnostics/events?after=SEQ` | | The diagnostic event log after sequence number `SEQ`, up to 256 events per page |
 | `POST /api/v1/diagnostics/reset` | | Reset the telemetry baselines and clear the event log |
@@ -62,6 +64,44 @@ The versions are not part of `GET /api/v1/state` or its events, so the state's
 strict schema is unchanged. They can't change without a restart, so the app
 reads them again after each reconnect. Clients should ignore fields they
 don't know.
+
+## Developer SSH
+
+`GET /api/v1/ssh` and `PUT /api/v1/ssh` exist only on USB 1. The touchscreen
+socket answers them with 404, as does `rc2fxd` from before them. `rc2fxd` runs
+`rc2fx.sh developer-ssh`, which owns the behaviour, off its async executor,
+one call at a time, with a ten-second limit for the script and everything it
+starts, and with bounded input and output.
+
+```json
+{"managed": true, "managedFingerprint": "SHA256:…", "unmanagedKeys": 1,
+ "hostKeys": ["ssh-ed25519 AAAA…"], "serverRunning": true}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `managed`, `managedFingerprint` | RC2FX's key is in root's `authorized_keys`, and its fingerprint |
+| `unmanagedKeys` | Other key lines in that file. RC2FX never changes them. |
+| `hostKeys` | The SSH server's public host keys, for pinning |
+| `serverRunning` | Whether `sshd` was seen running; omitted if unknown |
+
+`managed`, `unmanagedKeys` and `hostKeys` are always present; a reply without
+them is malformed, not "off". Unknown fields should be ignored.
+
+`PUT` takes `{"enabled": true, "publicKey": "ssh-ed25519 …"}` or
+`{"enabled": false}` and returns the new status. Only one plain `ssh-ed25519`
+key is accepted, without options; a comment is dropped. Enabling writes it
+as one line marked `rc2fx-managed-developer-key`, replacing an earlier
+managed line. Disabling removes only that line, which stops new logins but
+doesn't end open sessions. Every other byte of `authorized_keys` is kept, the
+file is replaced atomically, and `sshd` is never restarted.
+
+| Status | Meaning |
+| --- | --- |
+| 400 | Invalid request or key |
+| 404 | Not available here (touchscreen socket or older `rc2fxd`) |
+| 409 | First boot after an update, another SSH change in progress, or `~/.ssh` unsafe to change |
+| 500 | The script failed, timed out or reported something unreadable |
 
 ## On-device touchscreen control (in development)
 

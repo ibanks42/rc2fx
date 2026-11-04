@@ -10,9 +10,7 @@ pub(super) mod signature;
 
 use super::*;
 use flow::{Goal, Model, STEPS, Step, StepState};
-use gpui_kit::component::{
-    collapsible::Collapsible, progress::Progress as ProgressBar, spinner::Spinner,
-};
+use gpui_kit::component::{progress::Progress as ProgressBar, spinner::Spinner};
 use gpui_kit::prelude::FluentBuilder as _;
 use rc2fx_installer::{Engine, Progress, Reply, Request, helper::Helper};
 use std::{
@@ -263,11 +261,7 @@ pub(super) struct Installer {
     engine: Option<String>,
     progress: Option<Progress>,
     confirming: bool,
-    developer_open: bool,
     controls_scroll: ScrollHandle,
-    developer_anchor: ScrollAnchor,
-    /// The SSH key the developer option builds in.
-    key: PathBuf,
     access: Access,
 }
 
@@ -350,7 +344,6 @@ impl Rc2FxApp {
             return;
         };
         // The key the engine builds in, as it chooses it.
-        let key = rc2fx_installer::default_key();
         let access = if rc2fx_installer::helper::needed() {
             Access::Needed
         } else {
@@ -358,17 +351,13 @@ impl Rc2FxApp {
         };
         let runner = Runner::start(work);
         let controls_scroll = ScrollHandle::new();
-        let developer_anchor = ScrollAnchor::for_handle(controls_scroll.clone());
         let mut installer = Installer {
             model: Model::new(),
             runner,
             engine: None,
             progress: None,
             confirming: false,
-            developer_open: false,
             controls_scroll,
-            developer_anchor,
-            key,
             access,
         };
         installer.model.privileged = installer.access.allows_flashing();
@@ -456,7 +445,6 @@ impl Rc2FxApp {
         let device = installer.model.device;
         let choice = installer.model.choice.clone();
         let stock = installer.model.stock;
-        let ssh = installer.model.ssh;
         let usb = installer.model.usb().to_vec();
         // The device sits above the question, so the title stays short and
         // clear of the dialog's close button.
@@ -494,7 +482,6 @@ impl Rc2FxApp {
                         i.model.device == device
                             && i.model.choice == choice
                             && i.model.stock == stock
-                            && i.model.ssh == ssh
                             && i.model.usb() == usb
                             && i.access.allows_flashing()
                             && !i.busy()
@@ -519,11 +506,16 @@ impl Rc2FxApp {
     /// redraw.
     pub(super) fn poll_installer(&mut self, cx: &mut Context<Self>) -> bool {
         // RC2FX's readiness, as this app's USB connection sees it.
+        let session_mixer = self.connected_mixer.as_deref();
+        let same_mixer = self
+            .installer
+            .as_ref()
+            .is_some_and(|i| i.model.is_session_mixer(session_mixer));
         let engine = self
             .session
             .saved
             .as_ref()
-            .filter(|_| self.session.connected && self.stream_connected)
+            .filter(|_| self.session.connected && self.stream_connected && same_mixer)
             .map(|s| {
                 serde_json::json!({"engine": s.engine, "config": {"revision": s.config.revision}})
                     .to_string()
@@ -719,7 +711,6 @@ impl Rc2FxApp {
             if m.duo_connected() {
                 content = content.child(self.duo_option(installer, cx));
             }
-            content = content.child(self.developer_options(installer, cx));
         } else if m.device == rc2fx_installer::DeviceModel::Duo {
             content = content.child(paragraph(rc2fx_installer::DUO_WARNING, WARN));
         }
@@ -1162,110 +1153,6 @@ impl Rc2FxApp {
                     }))))
             .child(paragraph(rc2fx_installer::DUO_WARNING, WARN))
             .child(paragraph("Saved on this computer. Every Duo flash still requires risk confirmation. Switching this off does not uninstall an existing Duo runtime.", MUTED))
-    }
-
-    /// Options for working on RC2FX itself.
-    fn developer_options(&self, installer: &Installer, cx: &mut Context<Self>) -> Stateful<Div> {
-        let m = &installer.model;
-        let small_viewport =
-            !self.session.connected && installer.controls_scroll.bounds().size.height < px(500.);
-        let card = desk::card().w_full().child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_3()
-                        .child(
-                            div()
-                                .v_flex()
-                                .gap_1()
-                                .flex_1()
-                                .min_w_0()
-                                .child(div().text_sm().font_semibold().child("SSH access"))
-                                .child(paragraph(
-                                    "Adds this computer's RC2FX key to the firmware, so you can log in to the mixer as root. Development commands use the same key.",
-                                    MUTED,
-                                ))
-                                .child(
-                                    div()
-                                        .mt_1()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_md()
-                                        .bg(rgb(surface().sunken))
-                                        .text_xs()
-                                        .font_family(Theme::global(cx).mono_font_family.clone())
-                                        .text_color(rgb(TEXT))
-                                        // The mixer doesn't report its network
-                                        // address, so the command says where it goes.
-                                        .child(format!(
-                                            "ssh -i {} root@<mixer's IP>",
-                                            installer.key.display()
-                                        )),
-                                )
-                                .child(paragraph(
-                                    "The mixer's IP address is on its screen under Settings › Network.",
-                                    FAINT,
-                                )),
-                        )
-                        .child(
-                            Switch::new("installer-ssh")
-                                .checked(m.ssh && !m.stock)
-                                .disabled(m.stock || m.running() || m.busy.is_some())
-                                .on_click(cx.listener(|app, value: &bool, _, cx| {
-                                    let ssh = *value;
-                                    app.installer_event(cx, |m| {
-                                        m.set_ssh(ssh);
-                                        None
-                                    })
-                                })),
-                        ),
-                );
-        div()
-            .id("installer-developer-section")
-            .anchor_scroll(Some(installer.developer_anchor.clone()))
-            .w_full()
-            .pt_3()
-            .border_t_1()
-            .border_color(rgb(surface().line))
-            .child(
-                Collapsible::new()
-                    .when(!small_viewport, |disclosure| {
-                        disclosure.motion_id("installer-developer-options")
-                    })
-                    .open(installer.developer_open)
-                    .child(
-                        Button::new("installer-developer-toggle")
-                            .ghost()
-                            .w_full()
-                            .justify_start()
-                            .icon(if installer.developer_open {
-                                IconName::ChevronDown
-                            } else {
-                                IconName::ChevronRight
-                            })
-                            .label(if m.ssh {
-                                "Developer options · SSH access on"
-                            } else {
-                                "Developer options"
-                            })
-                            .on_click(cx.listener(|app, _, window, cx| {
-                                let standalone = !app.session.connected;
-                                if let Some(installer) = app.installer.as_mut() {
-                                    installer.developer_open = !installer.developer_open;
-                                    let height = installer.controls_scroll.bounds().size.height;
-                                    if standalone
-                                        && installer.developer_open
-                                        && height > px(0.)
-                                        && height < px(500.)
-                                    {
-                                        installer.developer_anchor.scroll_to(window, cx);
-                                    }
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .content(div().pt_3().child(card)),
-            )
     }
 
     /// The action card's footer: leaving or cancelling, and the next step.

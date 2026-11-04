@@ -5,3 +5,5 @@ ip = 192.168.0.100
 # Private key and known_hosts file for the mixer, if not your SSH defaults.
 # key = C:/Users/you/.ssh/rodecaster_ed25519
 # known_hosts = C:/Users/you/.ssh/rodecaster_known_hosts
+# The alias the app pinned the mixer's host key under (Settings > Developer).
+# host_key_alias = rc2fx-0123456789ab

@@ -16,9 +16,13 @@
 #                                    RAM-only touchscreen preview; audio stays up
 #   rc2fx.sh ui-run --restart-gui /run/.../librc2fx_ui.so
 #                                    keep the launcher running from RAM
+#   rc2fx.sh developer-ssh status|enable|disable
+#                                    RC2FX's own developer SSH key; called by
+#                                    rc2fxd for the desktop app over USB 1
 #
-# Nothing here changes firmware or stock files. The launcher (audio-start.sh)
-# runs `rc_audio_mixer` by name with /usr/sbin ahead of /usr/bin, so the shim
+# Nothing here changes firmware or stock files, with one exception:
+# developer-ssh adds or removes one marked line in root's authorized_keys.
+# The launcher (audio-start.sh) runs `rc_audio_mixer` by name with /usr/sbin ahead of /usr/bin, so the shim
 # installed as /usr/sbin/rc_audio_mixer runs `launch` as the launcher's own
 # child and execs the stock executable, injected unless this boot has fallen
 # back to stock. Every start and stop is one of the launcher's own mixer
@@ -996,6 +1000,10 @@ supervise() {
     test -f "$home/mixer-release.json" && versions+=(--release "$home/mixer-release.json")
     test -n "$profile_id" && versions+=(--firmware-catalog "$home/firmware-profiles.json" --firmware-profile "$profile_id")
   fi
+  # Developer SSH over USB 1, handled by this script's developer-ssh.
+  if grep -F -- '--developer-ssh' >/dev/null <<< "$help"; then
+    versions+=(--developer-ssh "$home/rc2fx.sh")
+  fi
   while true; do
     if ! mixer_alive; then
       age=$(( $(uptime_s) - native_start / $(getconf CLK_TCK) ))
@@ -1511,6 +1519,142 @@ gui_status() {
   return 0
 }
 
+# Developer SSH access without reflashing. RØDE's sshd already runs with
+# key-only root login and an empty authorized_keys; this adds or removes ONE
+# line, marked with $ssh_marker, and keeps every other byte of the file. A
+# missing final newline is kept too, except that one is added before a new
+# managed line. Removing the line stops new logins; it does not end sessions
+# already open, and sshd is never restarted. `status` changes nothing. rc2fxd
+# validates the key first and serializes calls; every check is repeated here.
+# Exit status: 0 ok, 2 bad input, 3 unsafe path, 4 first boot after an update,
+# 1 anything else.
+ssh_dir=${RC2FX_SSH_DIR:-/home/root/.ssh}
+ssh_host_dir=${RC2FX_SSH_HOST_DIR:-/etc/ssh}
+ssh_first_boot=${RC2FX_FIRST_BOOT:-/usr/bin/first-boot}
+ssh_marker=rc2fx-managed-developer-key
+# An Ed25519 public key blob: its fixed 19-byte header encodes to these 25
+# characters, followed by 43 more for the 32-byte key.
+ssh_key_pattern='^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$'
+ssh_managed_pattern="^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43} $ssh_marker\$"
+ssh_max_keys_bytes=1048576
+
+ssh_unsafe() { echo "unsafe path: $*" >&2; return 3; }
+
+# `ssh_paths_safe create` may create a missing directory (0700); plain
+# `ssh_paths_safe` never changes anything. Refuses links, other owners,
+# group- or world-writable modes, extra hard links and oversized files.
+ssh_paths_safe() {
+  local keys=$ssh_dir/authorized_keys parent me mode owner
+  me=$(id -u)
+  # Every ancestor: a real directory, owned by root or this user, and not
+  # writable by anyone else unless it is root's sticky directory (like /tmp).
+  parent=$(dirname "$ssh_dir")
+  while :; do
+    if test -L "$parent" || ! test -d "$parent"; then ssh_unsafe "$parent"; return; fi
+    owner=$(stat -c %u "$parent"); mode=$(stat -c %a "$parent")
+    if test "$owner" != 0 && test "$owner" != "$me"; then ssh_unsafe "$parent owner"; return; fi
+    if (( 8#$mode & 8#022 )) && ! { test "$owner" = 0 && (( 8#$mode & 8#1000 )); }; then
+      ssh_unsafe "$parent is writable by others"; return
+    fi
+    test "$parent" != / || break
+    parent=$(dirname "$parent")
+  done
+  if test -L "$ssh_dir"; then ssh_unsafe "$ssh_dir is a link"; return; fi
+  if ! test -e "$ssh_dir"; then
+    test "${1:-}" = create || return 0
+    mkdir -m 700 "$ssh_dir" || { ssh_unsafe "cannot create $ssh_dir"; return; }
+  fi
+  if ! test -d "$ssh_dir"; then ssh_unsafe "$ssh_dir is not a directory"; return; fi
+  if test "$(stat -c %u "$ssh_dir")" != "$me"; then ssh_unsafe "$ssh_dir owner"; return; fi
+  mode=$(stat -c %a "$ssh_dir")
+  if (( 8#$mode & 8#022 )); then ssh_unsafe "$ssh_dir is writable by others"; return; fi
+  test -e "$keys" || test -L "$keys" || return 0
+  if test -L "$keys" || ! test -f "$keys"; then ssh_unsafe "$keys is not a regular file"; return; fi
+  if test "$(stat -c %h "$keys")" != 1; then ssh_unsafe "$keys has other links"; return; fi
+  if test "$(stat -c %u "$keys")" != "$me"; then ssh_unsafe "$keys owner"; return; fi
+  mode=$(stat -c %a "$keys")
+  if (( 8#$mode & 8#022 )); then ssh_unsafe "$keys is writable by others"; return; fi
+  if test "$(stat -c %s "$keys")" -gt "$ssh_max_keys_bytes"; then ssh_unsafe "$keys is too large"; return; fi
+  # The shell reader cannot keep NUL bytes, so such a file is never rewritten.
+  if ! tr -d '\000' < "$keys" | cmp -s - "$keys"; then ssh_unsafe "$keys contains NUL bytes"; return; fi
+}
+
+# Print authorized_keys without its managed lines, byte for byte (a last
+# line without a newline stays without one). Sets ssh_unmanaged to the number
+# of other key lines and ssh_managed to the managed key, if any.
+ssh_filter() {
+  local keys=$ssh_dir/authorized_keys line
+  ssh_unmanaged=0 ssh_managed=
+  test -f "$keys" || return 0
+  while IFS= read -r line; do ssh_line "$line" $'\n'; done < "$keys" || return 1
+  if test -n "$line"; then ssh_line "$line" ''; fi
+}
+ssh_line() {
+  if [[ $1 =~ $ssh_managed_pattern ]]; then
+    test -n "$ssh_managed" || ssh_managed=${1% "$ssh_marker"}
+    return 0
+  fi
+  [[ $1 =~ ^[[:space:]]*(#|$) ]] || ssh_unmanaged=$((ssh_unmanaged + 1))
+  printf '%s%s' "$1" "$2"
+}
+
+# Replace authorized_keys atomically with its unmanaged content, plus the
+# managed line `$1` when given.
+ssh_write_keys() {
+  local tmp
+  tmp=$(mktemp "$ssh_dir/.authorized_keys.XXXXXX") || return 1
+  if ! { ssh_filter > "$tmp" && ssh_append "$tmp" "${1:-}"; }; then rm -f "$tmp"; return 1; fi
+  chmod 600 "$tmp" && mv -f "$tmp" "$ssh_dir/authorized_keys" || { rm -f "$tmp"; return 1; }
+}
+ssh_append() {
+  test -n "$2" || return 0
+  if test -s "$1" && test "$(tail -c 1 "$1" | od -An -c | tr -d ' ')" != '\n'; then printf '\n' >> "$1"; fi
+  printf '%s\n' "$2" >> "$1"
+}
+
+ssh_status() {
+  local line pub
+  ssh_filter > /dev/null || { echo 'cannot read authorized_keys' >&2; return 1; }
+  test -z "$ssh_managed" || echo "managed $ssh_managed"
+  echo "unmanaged $ssh_unmanaged"
+  for pub in "$ssh_host_dir"/ssh_host_*_key.pub; do
+    test -f "$pub" && ! test -L "$pub" || continue
+    line=$(head -c 1024 "$pub" | head -n 1 | cut -d' ' -f1-2)
+    if [[ $line =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa)\ [A-Za-z0-9+/=]{16,1024}$ ]]; then
+      echo "host $line"
+    fi
+  done
+  if ! command -v pgrep > /dev/null; then echo 'server unknown'
+  elif pgrep -x sshd > /dev/null 2>&1; then echo 'server running'
+  else echo 'server stopped'; fi
+}
+
+developer_ssh() {
+  local raw= key
+  case "${1:-}" in
+    status) ssh_paths_safe || return; ssh_status ;;
+    enable|disable)
+      if test -e "$ssh_first_boot"; then echo 'first boot after an update: try again once it finishes' >&2; return 4; fi
+      if test "$1" = enable; then
+        # Exactly one key line and at most one newline, nothing else. read
+        # succeeds only if it stopped early: at a NUL byte or after 513
+        # characters. Both are refused; reaching end of input is the normal case.
+        if IFS= read -r -d '' -n 513 raw; then echo 'invalid public key' >&2; return 2; fi
+        key=${raw%$'\n'}
+        if test "${#raw}" -gt 512 || ! [[ $key =~ $ssh_key_pattern ]]; then echo 'invalid public key' >&2; return 2; fi
+        ssh_paths_safe create || return
+        ssh_write_keys "$key $ssh_marker" || { echo 'could not write authorized_keys' >&2; return 1; }
+      else
+        ssh_paths_safe || return
+        ssh_filter > /dev/null || { echo 'cannot read authorized_keys' >&2; return 1; }
+        if test -n "$ssh_managed"; then
+          ssh_write_keys || { echo 'could not write authorized_keys' >&2; return 1; }
+        fi
+      fi
+      ssh_status ;;
+    *) echo 'usage: rc2fx.sh developer-ssh status|enable|disable' >&2; return 2 ;;
+  esac
+}
 
 case "${1:-}" in
   gui-launch) shift; gui_launch "$@" ;;
@@ -1526,5 +1670,6 @@ case "${1:-}" in
   launch) shift; launch "$@" ;;
   usb-quiesce) usb_quiesce ;;
   supervise) supervise ;;
-  *) sed -n '2,19s/^# \{0,1\}//p' "$0"; exit 2 ;;
+  developer-ssh) shift; developer_ssh "$@" ;;
+  *) sed -n '2,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

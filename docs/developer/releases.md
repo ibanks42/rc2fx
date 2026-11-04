@@ -81,9 +81,14 @@ pre-release suffix; the app compares versions numerically and treats anything
 else as unknown. Bump it by hand when anything that ends up on the mixer
 changes, and leave it alone otherwise: the crates built into the runtime,
 `xtask/mixer/`, `config/firmware-profiles.json`, the runtime's dependencies,
-and the toolchain and build settings that compile it. Nothing checks this
-automatically, so when reviewing such a change, check that it bumps the
-version. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
+and the toolchain and build settings that compile it. When reviewing such a
+change, check that it bumps the version. The release run only warns: if
+mixer-side paths changed since the previous app release while the version
+stayed the same, its prepare step shows a **Mixer version unchanged**
+warning and carries on. The check compares paths (the runtime crates,
+`xtask/mixer/`, the mixer build code, `config/`, the root Cargo files,
+toolchain and `.cargo/`), so shared dependencies and build settings can
+trigger it too. It never blocks a release; whether to bump is your call. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
 bump it only when an older desktop app can no longer drive the mixer.
 
 `cargo xtask mixer-build` copies the file into `target/mixer` and adds it to

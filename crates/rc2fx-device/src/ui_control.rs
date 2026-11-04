@@ -245,6 +245,12 @@ async fn connection(
     if stream.peer_cred()?.uid() != unsafe { libc::geteuid() } {
         return Err(io::Error::from(io::ErrorKind::PermissionDenied));
     }
+    // Developer SSH is a USB 1 feature only: the touchscreen never gets it,
+    // whatever it is handed.
+    let options = Options {
+        developer_ssh: None,
+        ..options
+    };
     let mut api = Api::new(controller, options);
     loop {
         let length = tokio::time::timeout(IO_WAIT, stream.read_u32()).await?? as usize;
@@ -315,6 +321,28 @@ mod tests {
         b.extend_from_slice(id);
         b
     }
+    #[test]
+    fn no_touchscreen_command_can_reach_developer_ssh() {
+        // Every command byte, flag and a few payloads: the touchscreen
+        // protocol only ever builds its fixed preset, routing and state paths.
+        for op in 0..=u8::MAX {
+            for enabled in [0, 1] {
+                for id in [&b""[..], b"voice", b"../ssh", b"ssh"] {
+                    if let Ok(Some(request)) = decode(&packet(op, enabled, 1, 0, id)) {
+                        assert_ne!(request.path, "api/v1/ssh");
+                        assert!(
+                            request.path == "api/v1/routing"
+                                || (request.path.starts_with("api/v1/presets/")
+                                    && request.path.ends_with("/apply")),
+                            "{}",
+                            request.path
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn strict_versioned_requests() {
         assert!(matches!(decode(&packet(0, 0, 0, 0, b"")), Ok(None)));

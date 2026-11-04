@@ -6,6 +6,8 @@ pub mod audio;
 pub mod catalog;
 pub mod controller;
 pub mod coordinator;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub mod developer_ssh;
 pub mod diagnostic_history;
 pub mod diagnostics;
 pub mod diagnostics_log;

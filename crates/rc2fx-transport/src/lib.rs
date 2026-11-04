@@ -64,6 +64,17 @@ pub enum Command {
     Version {
         generation: u64,
     },
+    /// Read SSH access on the mixer. `id` comes back with the reply.
+    Ssh {
+        generation: u64,
+        id: u64,
+    },
+    /// Add or remove RC2FX's managed SSH key on the mixer.
+    SetSsh {
+        generation: u64,
+        id: u64,
+        request: rc2fx_core::SshRequest,
+    },
 }
 
 #[derive(Debug)]
@@ -82,6 +93,12 @@ pub enum EventKind {
     Settings(Result<String, String>),
     /// `Ok(None)`: this runtime predates version reporting.
     Version(Result<Option<rc2fx_core::DeviceVersions>, String>),
+    /// `Ok(None)`: the mixer software predates SSH management.
+    /// The reply to the SSH request with this `id`.
+    Ssh {
+        id: u64,
+        result: Result<Option<rc2fx_core::SshStatus>, String>,
+    },
     Inputs(Result<rc2fx_core::StockInventory, String>),
     Routing(Result<rc2fx_core::DeviceState, String>),
     Preset(Result<PresetReply, PresetError>),
@@ -138,6 +155,20 @@ pub struct PresetError {
 fn version_reply(
     result: Result<Value, RequestError>,
 ) -> Result<Option<rc2fx_core::DeviceVersions>, RequestError> {
+    match result {
+        Ok(value) if value.is_object() => serde_json::from_value(value)
+            .map(Some)
+            .map_err(|_| RequestError::Protocol),
+        Ok(_) => Err(RequestError::Protocol),
+        Err(RequestError::Status(404, _)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// An SSH reply; 404 means the mixer software predates SSH management.
+fn ssh_reply(
+    result: Result<Value, RequestError>,
+) -> Result<Option<rc2fx_core::SshStatus>, RequestError> {
     match result {
         Ok(value) if value.is_object() => serde_json::from_value(value)
             .map(Some)
@@ -515,6 +546,46 @@ async fn run(mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>)
                 )
                 .await;
             }
+            Command::Ssh {
+                generation: requested,
+                id,
+            } if requested == generation => {
+                let result = match &current {
+                    Some(device) => ssh_reply(device.request("GET", "api/v1/ssh", None).await),
+                    None => Err(no_mixer()),
+                };
+                emit(
+                    &events,
+                    generation,
+                    EventKind::Ssh {
+                        id,
+                        result: result.map_err(|e| e.message()),
+                    },
+                )
+                .await;
+            }
+            Command::SetSsh {
+                generation: requested,
+                id,
+                request,
+            } if requested == generation => {
+                let result = match (&current, serde_json::to_value(&request)) {
+                    (Some(device), Ok(body)) => {
+                        ssh_reply(device.request("PUT", "api/v1/ssh", Some(body)).await)
+                    }
+                    (None, _) => Err(no_mixer()),
+                    (_, Err(_)) => Err(RequestError::Protocol),
+                };
+                emit(
+                    &events,
+                    generation,
+                    EventKind::Ssh {
+                        id,
+                        result: result.map_err(|e| e.message()),
+                    },
+                )
+                .await;
+            }
             Command::Inputs {
                 generation: requested,
             } if requested == generation => {
@@ -713,6 +784,33 @@ fn apply_body(update: &rc2fx_core::ConfigUpdate) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_replies_treat_old_mixer_software_as_unsupported() {
+        assert!(matches!(
+            ssh_reply(Err(RequestError::Status(404, None))),
+            Ok(None)
+        ));
+        let status = ssh_reply(Ok(json!({
+            "managed": true,
+            "managedFingerprint": "SHA256:abc",
+            "unmanagedKeys": 1,
+            "hostKeys": [],
+            "serverRunning": null,
+            "future": 1
+        })))
+        .unwrap()
+        .unwrap();
+        assert!(status.managed && status.unmanaged_keys == 1 && status.server_running.is_none());
+        assert!(matches!(
+            ssh_reply(Ok(json!([]))),
+            Err(RequestError::Protocol)
+        ));
+        assert!(matches!(
+            ssh_reply(Err(RequestError::Status(409, Some("busy".into())))),
+            Err(RequestError::Status(409, _))
+        ));
+    }
 
     #[test]
     fn version_replies_treat_old_runtimes_as_unknown() {

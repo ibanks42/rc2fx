@@ -381,6 +381,7 @@ impl Rc2FxApp {
             .child(self.preset_panel(cx))
             .child(self.files_section(cx))
             .child(self.appearance_section(cx))
+            .child(self.developer_section(cx))
             .child(self.diagnostics_entry(cx))
     }
 }

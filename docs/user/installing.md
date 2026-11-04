@@ -83,9 +83,10 @@ a Duo.
 
 ## SSH access (developers only)
 
-**Developer options › SSH access** adds this computer's SSH key to the
-firmware so a developer can log in to the mixer. Installing and using RC2FX
-don't require it. Leave it off unless you are developing RC2FX.
+The installer doesn't add SSH access. Developers can turn it on and off
+without reflashing under **Settings › Developer**; see [Working on a
+mixer](../developer/mixer-workflow.md#1-enable-ssh-access). Installing and
+using RC2FX don't need it.
 
 ## Installer files
 

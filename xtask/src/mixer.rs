@@ -163,6 +163,17 @@ impl Mixer {
         if let Some(known) = setting("known_hosts") {
             options.extend(["-o".into(), format!("UserKnownHostsFile={known}")]);
         }
+        // The app pins the mixer's host key under `rc2fx-<id>`, not its
+        // address, so the key stays trusted when the address changes.
+        if let Some(alias) = setting("host_key_alias") {
+            if !alias
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            {
+                return Err(format!("host_key_alias {alias:?} is not an RC2FX alias"));
+            }
+            options.extend(["-o".into(), format!("HostKeyAlias={alias}")]);
+        }
         Ok(Self {
             host: format!("{user}@{ip}"),
             options,

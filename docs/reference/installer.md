@@ -71,10 +71,10 @@ the first error and offers **Retry** from that step.
    - `/usr/sbin/rc_audio_mixer`: the audio engine shim (see
      [Architecture](../developer/architecture.md#starting-with-the-mixer)).
    - `/usr/sbin/rc_gui_juce`: the matching shim for the screen program.
-   - With **Developer options › SSH access** enabled: RC2FX's SSH public key
-     in root's `authorized_keys`, and a host key kept in the cache folder so
-     the mixer keeps the same identity across flashes. Without the option,
-     `authorized_keys` stays empty, as RØDE ships it.
+
+   `authorized_keys` stays empty, as RØDE ships it. SSH access is managed
+   after installing, over USB 1 (see [Developer SSH](api.md#developer-ssh)). A cached image built by an older installer
+   with its SSH option is never reused for a new install.
 
    Files in RØDE's image are left as they are. The installer refuses an image
    that already contains any of these paths, requires the audio binaries to
@@ -111,7 +111,7 @@ archive must match the catalog's SHA-256 and MD5.
 ### Stock firmware
 
 The **Stock firmware** card flashes one of the same pinned releases exactly
-as RØDE publishes it. This removes RC2FX and its SSH key. A cached stock
+as RØDE publishes it. This removes RC2FX and any SSH key RC2FX added. A cached stock
 image that is not pinned is refused. Settings are saved first. The plan
 finishes when the mixer is back in normal USB mode.
 

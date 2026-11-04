@@ -12,6 +12,10 @@ The **Settings** page, at the bottom of the sidebar, has these sections:
 - **Appearance**: the app's colors. These affect only the app.
 - **Mixer display**: [screen conversion](#screen-conversion).
 - **Diagnostics**: telemetry, events and diagnostics files.
+- **Developer**: the **Developer mode** switch, which shows developer controls
+  such as SSH access for the connected mixer. Turning it off only hides them:
+  it doesn't remove access. See [Working on a
+  mixer](../developer/mixer-workflow.md#1-enable-ssh-access).
 
 ## Screen conversion
 

@@ -2,22 +2,48 @@
 
 Flashing firmware for each change is slow, so development uses SSH instead.
 `just mixer-run` runs a build from the mixer's RAM and `just mixer-install`
-installs it. The desktop app and its installer don't use SSH.
+installs it. The desktop app turns SSH access on and off over USB 1, but never
+uses SSH itself.
 
-## 1. Install your SSH key
+## 1. Enable SSH access
 
-Stock RØDE firmware has no SSH login. In the app's installer, turn on
-**Developer options › SSH access** and install. The flashed firmware then
-includes:
+RØDE's firmware runs an SSH server that only accepts root logins with a key,
+and ships with no keys, so nobody can log in. RC2FX can add one key of its
+own without reflashing:
 
-- this computer's public key in root's `authorized_keys`. The key defaults to
-  `~/.ssh/rc2fx_rodecaster_pro_ii` and is created if it doesn't exist.
-- an SSH host key stored in the installer's cache folder, so the mixer keeps
-  the same host identity across flashes. The installer also writes a
-  `known_hosts` file for it in that folder.
+1. With RC2FX installed and the mixer connected over USB 1, turn on
+   **Settings › Developer › Developer mode** in the app.
+2. Under **SSH access**, press **Enable** and confirm.
 
-Flashing again without the option, or flashing stock firmware, removes the
-key.
+The app adds this computer's public key to root's `authorized_keys` on the
+mixer, marked as RC2FX's, and audio keeps running. The key is
+`~/.ssh/rc2fx_rodecaster_pro_ii`, created if it doesn't exist; the private
+key never leaves the computer. The app also reads the mixer's SSH host key
+over USB and pins it in the installer cache's `known_hosts`, under an alias
+of the form `rc2fx-0123456789ab` derived from the mixer's serial number, so
+you don't have to trust it on first connection. The app then shows the exact
+`ssh` command for this mixer.
+
+The status line says which key is on:
+
+- **On with this computer's key** and its `SHA256:` fingerprint, when the
+  managed key is this computer's.
+- **On with an RC2FX key from another computer**, when the managed key is a
+  different computer's.
+- **On with an RC2FX-managed key**, when this computer's key can't be read.
+
+If other keys can also log in, for example one added by an earlier
+installer's SSH option or by hand, the app says how many. RC2FX didn't add
+them and never changes or removes them.
+
+**Disable** removes only RC2FX's key. That stops new logins with it; sessions
+already open stay open until they end. Turning **Developer mode** off only
+hides these controls: it doesn't remove access. The key also goes away when
+the mixer is flashed again, since an update replaces the root filesystem.
+
+Enabling and disabling are refused during the first boot after a firmware
+update, and if `/home/root/.ssh` or `authorized_keys` isn't safe to change: a
+link, owned by someone else, writable by others, or containing NUL bytes.
 
 ## 2. Configure the mixer address
 
@@ -28,9 +54,11 @@ The mixer must be on your network. Copy `.rc2fx-mixer.conf.example` to
 ip = 192.168.0.100
 # key = ~/.ssh/rc2fx_rodecaster_pro_ii
 # known_hosts = ~/.local/share/RC2FX/installer/known_hosts
+# host_key_alias = rc2fx-0123456789ab
 ```
 
-Set `known_hosts` to the file in the installer's cache folder:
+Set `known_hosts` to the file in the installer's cache folder, and
+`host_key_alias` to the alias the app shows in its `ssh` command:
 
 | Platform | Cache folder |
 | --- | --- |
@@ -39,7 +67,8 @@ Set `known_hosts` to the file in the installer's cache folder:
 | Linux | `~/.local/share/RC2FX/installer` |
 
 The environment variables `RC2FX_MIXER_IP`, `RC2FX_MIXER_USER`,
-`RC2FX_MIXER_KEY` and `RC2FX_MIXER_KNOWN_HOSTS` override the file.
+`RC2FX_MIXER_KEY`, `RC2FX_MIXER_KNOWN_HOSTS` and
+`RC2FX_MIXER_HOST_KEY_ALIAS` override the file.
 
 Test the connection:
 

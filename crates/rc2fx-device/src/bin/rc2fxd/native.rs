@@ -31,6 +31,8 @@ Usage: rc2fxd --data ABSOLUTE_DIRECTORY --native-socket ABSOLUTE_SOCKET
   --firmware-catalog FILE  Firmware catalog the launcher validated against
   --firmware-profile ID    Profile the launcher selected; with the catalog,
                            reported as the RODE firmware version
+  --developer-ssh SCRIPT   Installed rc2fx.sh; enables developer SSH status
+                           and key management over USB 1 only
   --help                   Show help without starting or modifying anything
   --version                Print the build version
 
@@ -51,6 +53,7 @@ struct Arguments {
     release: Option<PathBuf>,
     firmware_catalog: Option<PathBuf>,
     firmware_profile: Option<String>,
+    developer_ssh: Option<PathBuf>,
 }
 #[derive(Debug)]
 enum Command {
@@ -100,6 +103,7 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
     let mut release = None;
     let mut firmware_catalog = None;
     let mut firmware_profile = None;
+    let mut developer_ssh = None;
     while let Some(key) = args.next() {
         let key = key.to_str().ok_or_else(|| invalid("option is not UTF-8"))?;
         if matches!(key, "--help" | "--version") {
@@ -123,6 +127,7 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
                 | "--release"
                 | "--firmware-catalog"
                 | "--firmware-profile"
+                | "--developer-ssh"
         ) {
             return Err(invalid(format!("unknown option {key}; use --help")));
         }
@@ -142,6 +147,7 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
             "--ui-socket" => ui = Some(PathBuf::from(value)),
             "--release" => release = Some(PathBuf::from(value)),
             "--firmware-catalog" => firmware_catalog = Some(PathBuf::from(value)),
+            "--developer-ssh" => developer_ssh = Some(PathBuf::from(value)),
             "--firmware-profile" => {
                 firmware_profile = Some(
                     value
@@ -162,6 +168,7 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
         .chain(ui.iter())
         .chain(release.iter())
         .chain(firmware_catalog.iter())
+        .chain(developer_ssh.iter())
         .any(|path| !path.is_absolute())
     {
         return Err(invalid("native controller paths must be absolute"));
@@ -180,6 +187,7 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
         ));
     }
     Ok(Command::Start(Arguments {
+        developer_ssh,
         release,
         firmware_catalog,
         firmware_profile,
@@ -283,6 +291,14 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
                 stock_config: args.stock,
                 catalog: rc2fx_device::catalog::physical_catalog_for(model).to_vec(),
                 versions,
+                developer_ssh: None,
+            };
+            // Only the USB 1 server can manage developer SSH.
+            let usb_options = api::Options {
+                developer_ssh: args.developer_ssh.clone().map(|script| {
+                    std::sync::Arc::new(rc2fx_device::developer_ssh::DeveloperSsh::new(script))
+                }),
+                ..options.clone()
             };
             let show_watch = async {
                 if let Some(path) = options.stock_config.clone() {
@@ -291,7 +307,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
                 }
                 std::future::pending::<()>().await
             };
-            let usb = rc2fx_device::usb_control::serve(&args.usb, handle.clone(), options.clone());
+            let usb = rc2fx_device::usb_control::serve(&args.usb, handle.clone(), usb_options);
             // An optional display endpoint must never take USB/audio down if
             // it cannot bind. Accepted mutations still use the same owner.
             let ui = async {

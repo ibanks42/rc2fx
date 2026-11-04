@@ -56,8 +56,8 @@ only for Linux and are cross-compiled for the mixer.
 - [Building from source](building.md): tools, builds and tests on Windows,
   Linux or macOS.
 - [Linux setup](linux.md): package lists for Debian/Ubuntu, Fedora and Arch.
-- [Working on a mixer](mixer-workflow.md): running a build on a mixer over
-  SSH without reflashing.
+- [Working on a mixer](mixer-workflow.md): enabling SSH from the app and
+  running a build on a mixer over SSH without reflashing.
 - [Commands](commands.md): all `just` recipes.
 - [Architecture](architecture.md): start-up, fallback to stock, and how
   settings are applied.

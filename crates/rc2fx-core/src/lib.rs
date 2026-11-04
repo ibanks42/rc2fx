@@ -7,6 +7,7 @@ pub mod inputs;
 pub mod model;
 pub mod selection;
 pub mod session;
+pub mod ssh;
 mod strict_json;
 pub mod usb;
 pub mod versions;
@@ -16,6 +17,7 @@ pub use inputs::*;
 pub use model::*;
 pub use selection::*;
 pub use session::*;
+pub use ssh::*;
 pub use usb::*;
 pub use versions::*;
 

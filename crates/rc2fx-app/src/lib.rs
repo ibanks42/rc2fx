@@ -1,6 +1,7 @@
 mod app_update;
 mod connection;
 mod desk;
+mod developer;
 mod diagnostics;
 mod draft_files;
 mod editing;
@@ -107,6 +108,9 @@ struct Rc2FxApp {
     /// What the connected mixer reported; `None` is unknown.
     device_versions: Option<rc2fx_core::DeviceVersions>,
     app_update: app_update::AppUpdate,
+    /// Shows developer controls in Settings; grants nothing by itself.
+    developer_mode: bool,
+    ssh: developer::Ssh,
     /// The RC2FX mixer software this app installs, read at start.
     bundled_mixer_software: Option<String>,
     selected: usize,
@@ -216,6 +220,8 @@ impl Rc2FxApp {
             connected_mixer: None,
             device_versions: None,
             app_update: Default::default(),
+            developer_mode: connection::remembered_developer(),
+            ssh: Default::default(),
             bundled_mixer_software: versions::bundled_mixer_software(),
             selected: 0,
             inputs: inputs::ShowInputs::default(),
@@ -412,6 +418,7 @@ impl Rc2FxApp {
         self.reset_events(cx);
         self.session.disconnect();
         self.device_versions = None;
+        self.ssh.clear();
         self.usb.clear();
         self.inputs = inputs::ShowInputs::default();
         self.pending = None;
@@ -447,6 +454,7 @@ impl Rc2FxApp {
         });
         self.session.disconnect();
         self.device_versions = None;
+        self.ssh.clear();
         self.usb.clear();
         self.inputs = inputs::ShowInputs::default();
         self.pending = None;
@@ -617,6 +625,7 @@ impl Rc2FxApp {
                 // A failed read leaves the versions unknown; it is not an error
                 // worth interrupting the user for.
                 EventKind::Version(result) => self.device_versions = result.ok().flatten(),
+                EventKind::Ssh { id, result } => self.receive_ssh(id, result, cx),
                 EventKind::Connected { mixer, state } => {
                     self.connecting = false;
                     self.message.clear();
@@ -709,9 +718,12 @@ impl Rc2FxApp {
                         self.command(Command::Version {
                             generation: self.generation,
                         });
+                        self.ssh.clear();
+                        self.read_ssh();
                     } else {
                         // Never show a pre-restart observation as current.
                         self.device_versions = None;
+                        self.ssh.clear();
                         // A refresh asked for before the loss won't arrive.
                         self.awaiting_refresh = false;
                         self.usb.clear();

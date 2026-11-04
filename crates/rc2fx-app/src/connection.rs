@@ -88,9 +88,31 @@ pub(super) fn remember_duo(allow: bool) -> std::result::Result<(), String> {
 }
 
 fn save_duo(path: &std::path::Path, allow: bool) -> std::result::Result<(), String> {
+    save_flag(path, "experimentalDuoFlash", allow)
+}
+
+/// Whether Developer mode was left on. It only shows developer controls in
+/// Settings; it grants nothing by itself.
+pub(super) fn remembered_developer() -> bool {
+    developer_enabled(&remembered_view())
+}
+
+fn developer_enabled(view: &serde_json::Map<String, serde_json::Value>) -> bool {
+    view.get("developerMode")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Like the Duo opt-in, a failed save is reported rather than ignored.
+pub(super) fn remember_developer(on: bool) -> std::result::Result<(), String> {
+    let path = view_path().ok_or("No application settings folder")?;
+    save_flag(&path, "developerMode", on)
+}
+
+fn save_flag(path: &std::path::Path, key: &str, on: bool) -> std::result::Result<(), String> {
     fs::create_dir_all(path.parent().ok_or("No settings parent")?).map_err(|e| e.to_string())?;
     let mut view = read_view(Some(path));
-    view.insert("experimentalDuoFlash".into(), allow.into());
+    view.insert(key.into(), on.into());
     interchange::write_export(path, &serde_json::Value::Object(view).to_string())
         .map_err(|e| e.to_string())
 }
@@ -521,7 +543,8 @@ fn connection_status(auto_connect: bool, last_result: &str) -> (u32, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACCENT, FAINT, WARN, connection_status, duo_enabled, mixer_found, read_view, save_duo,
+        ACCENT, FAINT, WARN, connection_status, developer_enabled, duo_enabled, mixer_found,
+        read_view, save_duo, save_flag,
     };
     use std::fs;
 
@@ -606,5 +629,28 @@ mod tests {
             fs::write(&path, invalid).unwrap();
             assert!(!duo_enabled(&read_view(Some(&path))));
         }
+    }
+
+    #[test]
+    fn developer_mode_is_off_by_default_and_persists_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("RC2FX/view.json");
+        assert!(!developer_enabled(&read_view(Some(&path))));
+        save_duo(&path, true).unwrap();
+        save_flag(&path, "developerMode", true).unwrap();
+        let view = read_view(Some(&path));
+        assert!(developer_enabled(&view) && duo_enabled(&view));
+        save_flag(&path, "developerMode", false).unwrap();
+        assert!(!developer_enabled(&read_view(Some(&path))));
+        fs::write(&path, r#"{"developerMode":"yes"}"#).unwrap();
+        assert!(!developer_enabled(&read_view(Some(&path))));
+    }
+
+    #[test]
+    fn a_failed_developer_save_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("file");
+        fs::write(&blocker, "").unwrap();
+        assert!(save_flag(&blocker.join("view.json"), "developerMode", true).is_err());
     }
 }

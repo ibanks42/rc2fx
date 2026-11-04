@@ -52,3 +52,12 @@ jobs:
       - name: Check the native library
         if: runner.os == 'Linux'
         run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets
+      - name: Test developer SSH controls
+        if: runner.os == 'Linux'
+        run: |
+          python3 xtask/mixer/tests/developer_ssh.py
+          cargo test --locked -p rc2fx-core ssh
+          cargo test --locked -p rc2fx-device developer_ssh
+          cargo test --locked -p rc2fx-installer developer_ssh
+          cargo test --locked -p rc2fx-transport ssh
+          cargo test --locked -p rc2fx-app --no-default-features developer

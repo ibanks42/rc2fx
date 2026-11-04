@@ -24,6 +24,9 @@ pub struct Options {
     pub catalog: Vec<crate::stock_inputs::CatalogChannel<'static>>,
     /// What `GET api/v1/version` reports, read once at startup.
     pub versions: rc2fx_core::DeviceVersions,
+    /// Developer SSH access. Set only for the USB 1 server; the touchscreen
+    /// socket never has it, so `api/v1/ssh` answers 404 there.
+    pub developer_ssh: Option<Arc<crate::developer_ssh::DeveloperSsh>>,
 }
 
 /// A response body, carried as validated JSON text rather than a `Value`
@@ -97,6 +100,13 @@ pub(crate) fn failure(status: u16, message: impl AsRef<str>) -> Reply {
 
 fn error(status: u16, message: impl AsRef<str>) -> Reply {
     reply(status, &json!({"error": message.as_ref()}))
+}
+
+fn ssh_reply(result: Result<rc2fx_core::SshStatus, crate::developer_ssh::SshError>) -> Reply {
+    match result {
+        Ok(status) => reply(200, &status),
+        Err(e) => error(e.status(), e.to_string()),
+    }
 }
 
 fn operation_error(error_value: Error) -> Reply {
@@ -196,6 +206,17 @@ impl Api {
             // Installed RC2FX release and validated RØDE firmware. Separate
             // from the state so DeviceState's strict schema is unchanged.
             ("GET", "api/v1/version") => reply(200, &self.options.versions),
+            ("GET", "api/v1/ssh") => match &self.options.developer_ssh {
+                Some(ssh) => ssh_reply(ssh.status().await),
+                None => error(404, "Developer SSH is not available here"),
+            },
+            ("PUT", "api/v1/ssh") => match &self.options.developer_ssh {
+                Some(ssh) => match parse::<rc2fx_core::SshRequest>(body) {
+                    Ok(request) => ssh_reply(ssh.set(request).await),
+                    Err(reply) => reply,
+                },
+                None => error(404, "Developer SSH is not available here"),
+            },
             // The saved settings file, for the installer to carry across a reflash.
             ("GET", "api/v1/settings") => match receive(controller.settings()).await {
                 Ok(data) => reply_bytes(200, &data),
@@ -695,6 +716,69 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn developer_ssh_answers_only_where_it_was_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, owner) = Coordinator::new(
+            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
+            None,
+        )
+        .unwrap();
+        let thread = std::thread::spawn(move || owner.run());
+        let call = |method: &str, body: Option<Value>| Request {
+            method: method.into(),
+            path: "api/v1/ssh".into(),
+            body,
+        };
+        let key =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEPzD7gW9u5+SC5iq8gzujWEOTBQO1CbVCLO8fAOGkip";
+        // Without the USB handle (the touchscreen, or an older rc2fxd).
+        let mut without = Api::new(handle.clone(), Options::default());
+        assert_eq!(without.request(call("GET", None)).await.status, 404);
+        let enable = json!({"enabled": true, "publicKey": key});
+        assert_eq!(
+            without
+                .request(call("PUT", Some(enable.clone())))
+                .await
+                .status,
+            404
+        );
+        // With it: a stand-in script reports, and bad input never runs it.
+        let script = dir.path().join("rc2fx.sh");
+        std::fs::write(&script, "echo 'unmanaged 2'\necho 'server stopped'\n").unwrap();
+        let ssh = Arc::new(crate::developer_ssh::DeveloperSsh::new(script));
+        let mut with = Api::new(
+            handle.clone(),
+            Options {
+                developer_ssh: Some(ssh),
+                ..Options::default()
+            },
+        );
+        let reply = with.request(call("GET", None)).await;
+        assert_eq!(reply.status, 200);
+        let status: rc2fx_core::SshStatus = serde_json::from_str(reply.body.get()).unwrap();
+        assert!(!status.managed);
+        assert_eq!(status.unmanaged_keys, 2);
+        assert_eq!(status.server_running, Some(false));
+        for bad in [
+            json!({"enabled": true}),
+            json!({"enabled": false, "publicKey": key}),
+            json!({"enabled": true, "publicKey": "ssh-rsa AAAA"}),
+            json!({"enabled": true, "publicKey": key, "extra": 1}),
+            json!("on"),
+        ] {
+            assert_eq!(
+                with.request(call("PUT", Some(bad.clone()))).await.status,
+                400,
+                "{bad}"
+            );
+        }
+        assert_eq!(with.request(call("PUT", None)).await.status, 400);
+        handle.close();
+        handle.shutdown().await.unwrap();
+        thread.join().unwrap();
+    }
+
     #[tokio::test]
     async fn version_reports_what_was_read_and_omits_what_is_unknown() {
         let dir = tempfile::tempdir().unwrap();
