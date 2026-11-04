@@ -6,8 +6,7 @@ Download the app from the [latest release](https://github.com/ibanks42/rc2fx/rel
 Downloads include the app version, system and processor in their names:
 
 - Windows (x64): a zip.
-- macOS (Apple silicon): a zip. It can appear on a new release a little after
-  the others.
+- macOS (Apple silicon): a zip.
 - Linux (x64): an AppImage, a `.deb` package (Debian, Ubuntu) or an `.rpm`
   package (Fedora, openSUSE).
 

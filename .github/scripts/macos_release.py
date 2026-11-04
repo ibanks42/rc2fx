@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""Add the macOS package to an app release that is already published.
+"""Finish an app release by adding the macOS package, then publish it.
 
-The Release workflow publishes Linux and Windows without waiting for a macOS
-runner. The Release macOS workflow then builds the macOS package from exactly
-the same source and version files and attaches it to the same release:
+The Release workflow creates the release as a DRAFT with the Linux and Windows
+packages and never publishes it. The Release macOS workflow builds the macOS
+package from exactly the same source and version files and calls this script,
+which adds it, rewrites SHA256SUMS, removes the pending notice and, as the
+very last step after every check, publishes the release as latest. A
+published release is never changed afterwards by this script.
 
   prepare --run-id N [--automatic]
       Check that run N is a successful Release run on main, download its
-      release-input artifact to .release-input, and check that its tag is
-      published as a release commit on top of its source. Writes source, tag
-      and ready to GITHUB_OUTPUT. With --automatic, a run that published
-      nothing (a dry run) gives ready=false instead of an error.
+      release-input artifact to .release-input, and check that its tag is the
+      release commit on top of its source and has a draft release. Writes
+      source, tag and ready to GITHUB_OUTPUT. With --automatic, a run that
+      created no release (a dry run) gives ready=false. A release that is
+      already published and complete also gives ready=false. One published by
+      hand before it was complete is finished like a draft, unless it is
+      immutable, which is refused.
   stage --source SHA --tag TAG
       In the checkout of SHA, apply the version files from
-      .release-input/versioned.tar, extracting only the files the plan lists.
+      .release-input/versioned.tar, extracting only version files.
   publish --tag TAG --source SHA --package-dir DIR
-      Upload DIR's macOS zip to the release (never replacing a different
-      one), rebuild the release's SHA256SUMS from its actual assets, and
-      remove the pending-macOS notice. Which release is latest is not touched.
+      Finish the draft and publish it as latest, last. A release someone
+      published by hand before it was complete is finished but not published
+      again, so which release is latest is left as they chose. On a complete
+      published release, only check that it holds this exact macOS zip.
 
 Needs `gh` with GH_TOKEN, and GH_REPO (or GITHUB_REPOSITORY). Every refusal
 exits 1.
@@ -56,16 +63,18 @@ def require(condition, message):
 
 
 class Gh:
-    """The GitHub operations this script uses, through the `gh` CLI. Tests
-    replace it with an in-memory fake."""
+    """The GitHub operations this script uses, by release ID through the REST
+    API (which, unlike lookups by tag, also sees drafts). Tests replace it
+    with an in-memory fake."""
 
     def __init__(self, repo):
         self.repo = repo
 
-    def _run(self, *args, capture=True):
-        result = subprocess.run(["gh", *args], capture_output=capture, text=True)
+    def _gh(self, *args, data=None, binary=False):
+        result = subprocess.run(["gh", *args], input=data, capture_output=True, text=not binary)
         if result.returncode != 0:
-            raise Refused(f"gh {' '.join(args[:3])} failed: {(result.stderr or '').strip()}")
+            error = result.stderr.decode() if binary else result.stderr
+            raise Refused(f"gh {' '.join(args[:4])} failed: {error.strip()}")
         return result.stdout
 
     def api(self, path):
@@ -79,25 +88,40 @@ class Gh:
             raise Refused(f"GitHub API repos/{self.repo}/{path}: {result.stderr.strip()}")
         return json.loads(result.stdout)
 
+    def releases(self):
+        """Every release, drafts included. `--slurp` gives a list of pages,
+        each a list of releases; they are flattened here."""
+        pages = json.loads(self._gh("api", "--paginate", "--slurp",
+                                    f"repos/{self.repo}/releases?per_page=100") or "[]")
+        require(isinstance(pages, list) and all(isinstance(p, list) for p in pages),
+                "unexpected release list from GitHub")
+        releases = [release for page in pages for release in page]
+        require(all(isinstance(r, dict) for r in releases), "unexpected release list from GitHub")
+        return releases
+
     def download_artifact(self, run_id, name, directory):
-        self._run("run", "download", str(run_id), "-R", self.repo, "-n", name, "-D", str(directory))
+        self._gh("run", "download", str(run_id), "-R", self.repo, "-n", name, "-D", str(directory))
 
-    def download_asset(self, tag, name, directory):
-        self._run("release", "download", tag, "-R", self.repo, "-p", name, "-D", str(directory))
-        return Path(directory) / name
+    def asset_bytes(self, asset_id):
+        return self._gh("api", "-H", "Accept: application/octet-stream",
+                        f"repos/{self.repo}/releases/assets/{asset_id}", binary=True)
 
-    def upload_asset(self, tag, path, clobber=False):
-        args = ["release", "upload", tag, str(path), "-R", self.repo]
-        self._run(*(args + ["--clobber"] if clobber else args))
+    def upload_asset(self, release_id, path):
+        url = (f"https://uploads.github.com/repos/{self.repo}/releases/{release_id}/assets"
+               f"?name={Path(path).name}")
+        self._gh("api", "--method", "POST", "-H", "Content-Type: application/octet-stream",
+                 url, "--input", str(path))
 
-    def edit_notes(self, tag, notes):
-        """Replace the notes only. No --latest: the latest release stays as it is."""
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
-            handle.write(notes)
-        try:
-            self._run("release", "edit", tag, "-R", self.repo, "--notes-file", handle.name)
-        finally:
-            os.unlink(handle.name)
+    def delete_asset(self, asset_id):
+        self._gh("api", "--method", "DELETE", f"repos/{self.repo}/releases/assets/{asset_id}")
+
+    def set_notes(self, release_id, notes):
+        self._gh("api", "--method", "PATCH", f"repos/{self.repo}/releases/{release_id}",
+                 "-f", f"body={notes}")
+
+    def publish(self, release_id):
+        self._gh("api", "--method", "PATCH", f"repos/{self.repo}/releases/{release_id}",
+                 "-F", "draft=false", "-f", "make_latest=true")
 
 
 def sha256(data):
@@ -132,14 +156,15 @@ def read_plan(directory=INPUT):
     return plan
 
 
-def published(gh, tag, source):
-    """Whether TAG is a published release whose commit is the release commit
-    on top of SOURCE. Returns the release, or None if it is not published."""
-    release = gh.api(f"releases/tags/{tag}")
-    if release is None:
-        return None
-    require(release.get("tag_name") == tag, "release tag differs")
-    require(release.get("draft") is False, f"release {tag} is a draft")
+def find_release(gh, tag):
+    """The one release (draft or published) for TAG, or None."""
+    found = [r for r in gh.releases() if r.get("tag_name") == tag]
+    require(len(found) <= 1, f"more than one release uses tag {tag}")
+    return found[0] if found else None
+
+
+def check_tag(gh, tag, source):
+    """TAG must point at the release commit on top of SOURCE."""
     commit = gh.api(f"commits/{tag}")
     require(commit is not None, f"tag {tag} has no commit")
     message = (commit.get("commit") or {}).get("message", "")
@@ -147,7 +172,21 @@ def published(gh, tag, source):
             f"tag {tag} is not on the release commit")
     parents = [p.get("sha") for p in commit.get("parents", [])]
     require(parents == [source], f"release commit for {tag} is not on top of {source}")
-    return release
+
+
+def release_state(gh, tag, source):
+    """(release, state) with state "missing", "draft", "complete", "open"
+    (published early, still changeable) or "locked" (published, incomplete
+    and immutable). The tag is checked whenever a release exists."""
+    release = find_release(gh, tag)
+    if release is None:
+        return None, "missing"
+    check_tag(gh, tag, source)
+    if release.get("draft"):
+        return release, "draft"
+    if complete(gh, release, tag[1:]):
+        return release, "complete"
+    return release, ("locked" if release.get("immutable") else "open")
 
 
 def prepare(gh, run_id, automatic, output=print):
@@ -168,22 +207,25 @@ def prepare(gh, run_id, automatic, output=print):
     gh.download_artifact(run_id, ARTIFACT, INPUT)
     plan = read_plan()
     require(plan["source"] == run.get("head_sha"), "plan source is not the run's commit")
-    release = published(gh, plan["tag"], plan["source"])
-    if release is None:
-        require(automatic, f"release {plan['tag']} is not published (was run {run_id} a dry run?)")
-        ready = "false"
+    release, state = release_state(gh, plan["tag"], plan["source"])
+    if state == "missing":
+        require(automatic, f"run {run_id} created no release for {plan['tag']} (a dry run?)")
+        ready, why = "false", f"Skipped: Release run {run_id} created no release (a dry run)."
+    elif state == "draft":
+        ready, why = "true", (f"Finishing draft release {plan['tag']} from Release run {run_id} "
+                              f"(source `{plan['source'][:12]}`).")
+    elif state == "complete":
+        ready, why = "false", f"Release {plan['tag']} is already published and complete."
+    elif state == "open":
+        ready, why = "true", (f"Finishing release {plan['tag']}, which was published before it "
+                              "was complete. It stays published as it is.")
     else:
-        ready = "true"
+        raise Refused(f"release {plan['tag']} is published, incomplete and immutable; "
+                      "it can't be finished")
     lines = [f"source={plan['source']}", f"tag={plan['tag']}", f"ready={ready}"]
     for line in lines:
         output(line)
-    summary(
-        f"### Release macOS for {plan['tag']}\n\n"
-        + (f"Building the macOS package for {plan['tag']} from Release run {run_id} "
-           f"(source `{plan['source'][:12]}`).\n"
-           if ready == "true" else
-           f"Skipped: Release run {run_id} published no release (a dry run).\n")
-    )
+    summary(f"### Release macOS for {plan['tag']}\n\n{why}\n")
     return dict(line.split("=", 1) for line in lines)
 
 
@@ -285,11 +327,49 @@ def asset_digest(asset):
     return digest.removeprefix("sha256:") if digest.startswith("sha256:") else None
 
 
+def verified_bytes(gh, asset):
+    """An asset's bytes, which must match GitHub's digest when it has one."""
+    data = gh.asset_bytes(asset["id"])
+    claimed = asset_digest(asset)
+    require(claimed in (None, sha256(data)), f"{asset['name']} does not match GitHub's digest")
+    return data
+
+
+def sums_for(gh, assets, version):
+    """SHA256SUMS text for the six packages, from their actual bytes."""
+    names = set(assets) - {"SHA256SUMS"}
+    require(names == expected_assets(version),
+            f"release assets are not exactly the expected packages: {sorted(names)}")
+    return "".join(f"{sha256(verified_bytes(gh, assets[n]))}  {n}\n" for n in sorted(names))
+
+
+def complete(gh, release, version, mac_sha=None):
+    """Whether a release holds exactly the six packages and a SHA256SUMS that
+    matches them, has no pending notice, and (if given) this macOS zip."""
+    assets = asset_map(release)
+    if set(assets) != expected_assets(version) | {"SHA256SUMS"}:
+        return False
+    mac = assets[f"rc2fx-{version}-macos-arm64.zip"]
+    if mac_sha is not None and sha256(verified_bytes(gh, mac)) != mac_sha:
+        return False
+    if PENDING.search(release.get("body") or ""):
+        return False
+    return verified_bytes(gh, assets["SHA256SUMS"]).decode() == sums_for(gh, assets, version)
+
+
+def changeable(gh, tag):
+    """The release as it is now, which must still accept changes: a draft, or
+    a published release that is not immutable (published early by hand)."""
+    release = find_release(gh, tag)
+    require(release is not None, f"release {tag} disappeared")
+    require(release.get("draft") or not release.get("immutable"),
+            f"release {tag} became immutable before it was complete; it can't be finished")
+    return release
+
+
 def publish(gh, tag, source, package_dir):
     require(re.fullmatch("v" + STABLE, tag), f"{tag!r} is not a stable app tag")
     require(re.fullmatch("[0-9a-f]{40}", source), f"{source!r} is not a commit id")
-    release = published(gh, tag, source)
-    require(release is not None, f"release {tag} is not published")
     version = tag[1:]
     name = f"rc2fx-{version}-macos-arm64.zip"
     files = sorted(p.name for p in Path(package_dir).iterdir())
@@ -298,40 +378,49 @@ def publish(gh, tag, source, package_dir):
     require(package.is_file() and not package.is_symlink(), f"{name} is not a regular file")
     check_package(package)
     ours = sha256(package.read_bytes())
+    release = find_release(gh, tag)
+    require(release is not None, f"release {tag} does not exist")
+    check_tag(gh, tag, source)
+    if not release.get("draft") and complete(gh, release, version, mac_sha=ours):
+        return "already complete\n"  # read only: nothing to change
+    # The release is re-read before every change: someone may publish the
+    # draft by hand meanwhile, which is fine while it stays changeable.
+    release = changeable(gh, tag)
+    release_id = release["id"]
     assets = asset_map(release)
-    # Before uploading anything: the release holds the other packages and at
-    # most this macOS zip and SHA256SUMS, nothing else.
     present = set(assets) - {"SHA256SUMS", name}
     require(present == expected_assets(version) - {name},
             f"release {tag} does not hold exactly the other packages: {sorted(present)}")
-    with tempfile.TemporaryDirectory() as work:
-        if name in assets:
-            theirs = asset_digest(assets[name])
-            if theirs is None:
-                theirs = sha256(gh.download_asset(tag, name, Path(work) / "existing").read_bytes())
-            require(theirs == ours, f"release {tag} already has a different {name}; not replacing it")
-        else:
-            gh.upload_asset(tag, package)
-        release = gh.api(f"releases/tags/{tag}")
-        assets = asset_map(release)
-        names = set(assets) - {"SHA256SUMS"}
-        require(names == expected_assets(version),
-                f"release {tag} assets are not exactly the expected packages: {sorted(names)}")
-        lines = []
-        for asset_name in sorted(names):
-            data = gh.download_asset(tag, asset_name, Path(work) / "assets").read_bytes()
-            digest = sha256(data)
-            claimed = asset_digest(assets[asset_name])
-            require(claimed in (None, digest), f"{asset_name} does not match GitHub's digest")
-            lines.append(f"{digest}  {asset_name}\n")
-        sums = Path(work) / "SHA256SUMS"
-        sums.write_text("".join(lines))
-        gh.upload_asset(tag, sums, clobber=True)
+    if name in assets:
+        require(sha256(verified_bytes(gh, assets[name])) == ours,
+                f"release {tag} already has a different {name}; not replacing it")
+    else:
+        gh.upload_asset(release_id, package)
+    release = changeable(gh, tag)
+    assets = asset_map(release)
+    require(name in assets and sha256(verified_bytes(gh, assets[name])) == ours,
+            f"uploaded {name} does not match")
+    sums = sums_for(gh, assets, version)
+    if "SHA256SUMS" not in assets or verified_bytes(gh, assets["SHA256SUMS"]).decode() != sums:
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / "SHA256SUMS"
+            path.write_text(sums)
+            release = changeable(gh, tag)
+            old = asset_map(release).get("SHA256SUMS")
+            if old is not None:
+                gh.delete_asset(old["id"])
+            gh.upload_asset(release_id, path)
+    release = changeable(gh, tag)
     notes = release.get("body") or ""
-    cleaned = PENDING.sub("\n", notes).strip("\n") + "\n" if PENDING.search(notes) else None
-    if cleaned is not None:
-        gh.edit_notes(tag, cleaned)
-    return "".join(lines)
+    if PENDING.search(notes):
+        gh.set_notes(release_id, PENDING.sub("\n", notes).strip("\n") + "\n")
+    # Last: everything checked again on the release as it now is. A draft is
+    # published as latest; a release already published by hand is left so.
+    release = changeable(gh, tag)
+    require(complete(gh, release, version, mac_sha=ours), f"release {tag} is not complete")
+    if release.get("draft"):
+        gh.publish(release_id)
+    return sums
 
 
 def main():

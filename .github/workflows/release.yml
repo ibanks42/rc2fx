@@ -287,7 +287,7 @@ jobs:
             exit 1
           }
           git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
-      - name: Create and publish GitHub release
+      - name: Create draft release and upload Linux and Windows packages
         if: ${{ !inputs.dry-run && !env.ACT }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -297,12 +297,11 @@ jobs:
           cat >> target/release-input/release-notes.md <<'EOF'
 
           <!-- rc2fx:macos-pending -->
-          macOS download is pending. It will be added to this release when a macOS runner is available.
+          macOS build is pending. This draft will publish only after all platform packages are verified.
           <!-- /rc2fx:macos-pending -->
           EOF
           gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file target/release-input/release-notes.md
           gh release upload "$TAG" target/release-assets/*
-          gh release edit "$TAG" --draft=false --latest
       - name: Show macOS retry instructions
         if: ${{ !inputs.dry-run && !env.ACT }}
         env:
@@ -311,5 +310,5 @@ jobs:
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ### macOS
-          The macOS zip is added by the **Release macOS** workflow, which starts automatically after this run. If it fails or no macOS runner is available, run [Release macOS]($RETRY_URL) by hand with run ID $RELEASE_RUN (within 90 days).
+          This release remains a draft until **Release macOS** adds the macOS zip, verifies every package and checksum, and publishes it. That workflow starts automatically after this run. If no runner is available or it fails, retry [Release macOS]($RETRY_URL) with run ID $RELEASE_RUN (within 90 days); the completed builds stay in the draft.
           EOF

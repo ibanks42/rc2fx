@@ -78,7 +78,12 @@ def mac_zip(tamper=False, unlisted=False):
     return raw.getvalue()
 
 
+MAC = f"rc2fx-{VERSION}-macos-arm64.zip"
+
+
 class FakeGh:
+    """An in-memory repository. `ops` records every mutating call in order."""
+
     def __init__(self, input_files=None):
         self.repo = REPO
         self.run = {
@@ -87,36 +92,44 @@ class FakeGh:
             "conclusion": "success", "head_sha": SOURCE,
         }
         self.artifact = {"name": "release-input", "expired": False}
-        self.release = {"tag_name": TAG, "draft": False, "body": "Notes.\n\n" + PENDING, "assets": []}
-        self.published = True
+        self.exists = True
+        self.draft = True
+        self.body = "Notes.\n\n" + PENDING
         self.commit = {"sha": RELEASE_COMMIT, "commit": {"message": f"chore(release): {TAG}\n"},
                        "parents": [{"sha": SOURCE}]}
-        self.latest = TAG
         self.input_files = input_files if input_files is not None else {
             "plan.json": json.dumps(plan()).encode()}
         self.assets = {}
-        for name in mr.expected_assets(VERSION) - {f"rc2fx-{VERSION}-macos-arm64.zip"}:
+        for name in mr.expected_assets(VERSION) - {MAC}:
             self.assets[name] = name.encode()
-        self.assets["SHA256SUMS"] = b"old\n"
-        self.uploads = []
-        self.edits = []
+        self.assets["SHA256SUMS"] = b"partial\n"
+        self.bad_digest = set()
+        self.immutable = False
+        self.fail_upload = False
+        self.publish_by_hand_after = None  # publish the draft after N writes
+        self.ops = []
 
-    def _release(self):
-        release = dict(self.release)
-        release["assets"] = [{"name": n, "digest": "sha256:" + sha(d)} for n, d in sorted(self.assets.items())]
-        return release
+    # Reads
+    def _assets(self):
+        return [
+            {"id": n, "name": n,
+             "digest": "sha256:" + (sha(b"lie") if n in self.bad_digest else sha(d))}
+            for n, d in sorted(self.assets.items())
+        ]
+
+    def releases(self):
+        if not self.exists:
+            return [{"tag_name": "v0.9.0", "draft": False, "assets": []}]
+        return [{"id": 99, "tag_name": TAG, "draft": self.draft, "immutable": self.immutable,
+                 "body": self.body, "assets": self._assets()}]
 
     def api(self, path):
         if path == "actions/runs/7":
             return self.run
         if path == "actions/runs/7/artifacts?name=release-input":
             return {"artifacts": [self.artifact] if self.artifact else []}
-        if path == f"releases/tags/{TAG}":
-            return self._release() if self.published else None
         if path == f"commits/{TAG}":
-            return self.commit if self.published else None
-        if path == "releases/latest":
-            return {"tag_name": self.latest}
+            return self.commit if self.exists else None
         return None
 
     def download_artifact(self, run_id, name, directory):
@@ -125,22 +138,51 @@ class FakeGh:
         for file, data in self.input_files.items():
             (directory / file).write_bytes(data)
 
-    def download_asset(self, tag, name, directory):
-        Path(directory).mkdir(parents=True, exist_ok=True)
-        path = Path(directory) / name
-        path.write_bytes(self.assets[name])
-        return path
+    def asset_bytes(self, asset_id):
+        return self.assets[asset_id]
 
-    def upload_asset(self, tag, path, clobber=False):
+    # Writes
+    def _write(self, op):
+        assert self.draft or not self.immutable, f"{op[0]} on an immutable release"
+        self.ops.append(op)
+        if self.publish_by_hand_after == len(self.ops):
+            self.draft = False
+
+    def upload_asset(self, release_id, path):
         path = Path(path)
-        if path.name in self.assets and not clobber:
-            raise AssertionError("upload without clobber over an existing asset")
-        self.uploads.append((path.name, clobber))
+        if self.fail_upload:
+            raise mr.Refused("upload failed")
+        assert release_id == 99, "upload to another release"
+        assert path.name not in self.assets, "upload over an existing asset"
+        self._write(("upload", path.name))
         self.assets[path.name] = path.read_bytes()
 
-    def edit_notes(self, tag, notes, **options):
-        self.edits.append((notes, options))
-        self.release["body"] = notes
+    def delete_asset(self, asset_id):
+        self._write(("delete", asset_id))
+        del self.assets[asset_id]
+
+    def set_notes(self, release_id, notes):
+        self._write(("notes", notes))
+        self.body = notes
+
+    def publish(self, release_id):
+        assert self.draft
+        self.ops.append(("publish", release_id))
+        self.draft = False
+
+
+def complete_sums(gh):
+    return "".join(f"{sha(d)}  {n}\n" for n, d in sorted(gh.assets.items()) if n != "SHA256SUMS")
+
+
+def published_complete(zip_bytes):
+    """A fake whose release is already published and complete."""
+    gh = FakeGh()
+    gh.assets[MAC] = zip_bytes
+    gh.assets["SHA256SUMS"] = complete_sums(gh).encode()
+    gh.body = "Notes.\n"
+    gh.draft = False
+    return gh
 
 
 class InTemp(unittest.TestCase):
@@ -159,12 +201,28 @@ class Prepare(InTemp):
         lines = []
         return mr.prepare(gh, 7, automatic, lines.append)
 
-    def test_a_published_release_is_ready(self):
+    def test_a_draft_release_is_ready(self):
         self.assertEqual(self.outputs(FakeGh()), {"source": SOURCE, "tag": TAG, "ready": "true"})
+
+    def test_published_complete_is_nothing_to_do_and_incomplete_is_refused(self):
+        self.assertEqual(self.outputs(published_complete(mac_zip()))["ready"], "false")
+        for path in Path(".release-input").iterdir():
+            path.unlink()
+        early = FakeGh()
+        early.draft = False  # published by hand before macOS: finished
+        self.assertEqual(self.outputs(early, automatic=True)["ready"], "true")
+        for path in Path(".release-input").iterdir():
+            path.unlink()
+        locked = FakeGh()
+        locked.draft = False
+        locked.immutable = True  # incomplete and immutable: can't be finished
+        with self.assertRaises(mr.Refused):
+            self.outputs(locked, automatic=True)
+        self.assertEqual(locked.ops, [])
 
     def test_a_dry_run_is_skipped_automatically_and_refused_by_hand(self):
         gh = FakeGh()
-        gh.published = False
+        gh.exists = False
         self.assertEqual(self.outputs(gh, automatic=True)["ready"], "false")
         for path in Path(".release-input").iterdir():
             path.unlink()
@@ -209,7 +267,6 @@ class Prepare(InTemp):
             lambda gh: gh.commit.update(parents=[{"sha": "c" * 40}]),
             lambda gh: gh.commit.update(parents=[{"sha": SOURCE}, {"sha": "d" * 40}]),
             lambda gh: gh.commit.update(commit={"message": "feat: something"}),
-            lambda gh: gh.release.update(draft=True),
         ]:
             gh = FakeGh()
             change(gh)
@@ -294,49 +351,105 @@ class Publish(InTemp):
     def package(self, data=None):
         directory = Path("target/macos-assets")
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"rc2fx-{VERSION}-macos-arm64.zip").write_bytes(data or mac_zip())
+        (directory / MAC).write_bytes(data or mac_zip())
         return directory
 
-    def test_upload_rebuilds_sums_and_removes_only_the_pending_notice(self):
+    def test_the_draft_is_finished_and_published_last(self):
         gh = FakeGh()
         sums = mr.publish(gh, TAG, SOURCE, self.package())
-        name = f"rc2fx-{VERSION}-macos-arm64.zip"
-        self.assertIn((name, False), gh.uploads)
-        self.assertIn(("SHA256SUMS", True), gh.uploads)
-        expected = "".join(f"{sha(d)}  {n}\n" for n, d in sorted(gh.assets.items()) if n != "SHA256SUMS")
-        self.assertEqual(sums, expected)
-        self.assertEqual(gh.assets["SHA256SUMS"].decode(), expected)
-        # Only the notes change: no latest flag is passed either way.
-        self.assertEqual(gh.edits, [("Notes.\n", {})])
+        self.assertEqual(gh.ops[-1], ("publish", 99), "publishing is the last call")
+        self.assertEqual([op for op, _ in gh.ops].count("publish"), 1)
+        self.assertEqual(gh.ops[0], ("upload", MAC))
+        self.assertIn(("delete", "SHA256SUMS"), gh.ops)
+        self.assertIn(("upload", "SHA256SUMS"), gh.ops)
+        self.assertIn(("notes", "Notes.\n"), gh.ops)
+        self.assertEqual(sums, complete_sums(gh))
+        self.assertEqual(gh.assets["SHA256SUMS"].decode(), complete_sums(gh))
+        self.assertFalse(gh.draft)
 
-    def test_publishing_again_is_idempotent_and_keeps_latest(self):
-        gh = FakeGh()
-        mr.publish(gh, TAG, SOURCE, self.package())
-        gh.uploads.clear()
-        mr.publish(gh, TAG, SOURCE, self.package())
-        self.assertEqual(gh.uploads, [("SHA256SUMS", True)])
-        self.assertEqual(len(gh.edits), 1, "no notice left to remove")
+    def test_a_published_retry_is_read_only(self):
+        gh = published_complete(mac_zip())
+        self.assertEqual(mr.publish(gh, TAG, SOURCE, self.package()), "already complete\n")
+        self.assertEqual(gh.ops, [])
 
-    def test_a_different_existing_mac_package_is_never_replaced(self):
+    def test_a_release_published_early_by_hand_is_finished_but_not_republished(self):
         gh = FakeGh()
-        gh.assets[f"rc2fx-{VERSION}-macos-arm64.zip"] = b"someone else's build"
-        with self.assertRaises(mr.Refused):
+        gh.draft = False
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertIn(("upload", MAC), gh.ops)
+        self.assertNotIn("publish", [op for op, _ in gh.ops], "latest is left as chosen")
+        self.assertEqual(gh.assets["SHA256SUMS"].decode(), complete_sums(gh))
+        self.assertNotIn("rc2fx:macos-pending", gh.body)
+
+    def test_a_draft_published_by_hand_mid_run_is_finished_without_publishing_again(self):
+        gh = FakeGh()
+        gh.publish_by_hand_after = 1  # right after the macOS upload
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertFalse(gh.draft)
+        self.assertNotIn("publish", [op for op, _ in gh.ops])
+        self.assertEqual(gh.assets["SHA256SUMS"].decode(), complete_sums(gh))
+
+    def test_immutable_incomplete_releases_and_different_zips_are_refused(self):
+        changes = [
+            lambda gh: (setattr(gh, "draft", False), setattr(gh, "immutable", True)),
+            lambda gh: (setattr(gh, "draft", False), gh.assets.update({MAC: b"another build"})),
+            lambda gh: gh.assets.pop(f"rc2fx-{VERSION}-windows-x64.zip"),
+        ]
+        for change in changes:
+            gh = FakeGh()
+            change(gh)
+            with self.assertRaises(mr.Refused):
+                mr.publish(gh, TAG, SOURCE, self.package())
+            self.assertEqual(gh.ops, [])
+        # Published by hand, then made immutable before it was complete.
+        gh = FakeGh()
+        gh.draft = False
+        original = gh._write
+        def lock_after_first(op):
+            original(op)
+            gh.immutable = True
+        gh._write = lock_after_first
+        with self.assertRaises(mr.Refused) as caught:
             mr.publish(gh, TAG, SOURCE, self.package())
-        self.assertEqual(gh.uploads, [])
-        self.assertEqual(gh.assets["SHA256SUMS"], b"old\n")
+        self.assertIn("immutable", str(caught.exception))
+
+    def test_nothing_is_published_when_any_step_fails(self):
+        failures = {
+            "upload failure": lambda gh: setattr(gh, "fail_upload", True),
+            "digest mismatch": lambda gh: gh.bad_digest.add(f"rc2fx-{VERSION}-linux-x64.deb"),
+            "missing package": lambda gh: gh.assets.pop(f"rc2fx-{VERSION}-linux-x64.rpm"),
+            "unexpected asset": lambda gh: gh.assets.update({"surprise.txt": b"x"}),
+            "different mac zip": lambda gh: gh.assets.update({MAC: b"another build"}),
+            "bad tag": lambda gh: gh.commit.update(parents=[{"sha": "c" * 40}]),
+        }
+        for label, change in failures.items():
+            gh = FakeGh()
+            change(gh)
+            with self.assertRaises(mr.Refused, msg=label):
+                mr.publish(gh, TAG, SOURCE, self.package())
+            self.assertTrue(gh.draft, label)
+            self.assertNotIn("publish", [op for op, _ in gh.ops], label)
+
+    def test_a_partly_finished_draft_resumes_without_reuploading(self):
+        gh = FakeGh()
+        gh.assets[MAC] = mac_zip()
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertNotIn(("upload", MAC), gh.ops)
+        self.assertEqual(gh.ops[-1], ("publish", 99))
 
     def test_bad_packages_and_package_directories_are_refused(self):
         for data in [mac_zip(tamper=True), mac_zip(unlisted=True), b"not a zip"]:
             gh = FakeGh()
             with self.assertRaises(mr.Refused):
                 mr.publish(gh, TAG, SOURCE, self.package(data))
-            self.assertEqual(gh.uploads, [])
+            self.assertEqual(gh.ops, [])
         directory = self.package()
         (directory / "other.zip").write_bytes(b"x")
         with self.assertRaises(mr.Refused):
             mr.publish(FakeGh(), TAG, SOURCE, directory)
 
     def test_duplicate_or_unsafe_zip_entries_are_refused_even_with_good_sums(self):
+        import warnings
         body = b"binary"
         sums = f"{sha(body)}  rc2fx\n".encode()
         for entries in [
@@ -345,52 +458,85 @@ class Publish(InTemp):
             [("rc2fx/rc2fx", body), ("rc2fx/../x", b"x"), ("rc2fx/SHA256SUMS", sums)],
         ]:
             gh = FakeGh()
-            import warnings
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # zipfile warns on the duplicate
+                warnings.simplefilter("ignore")
                 data = raw_zip(entries)
-            with self.assertRaises(mr.Refused, msg=entries):
+            with self.assertRaises(mr.Refused):
                 mr.publish(gh, TAG, SOURCE, self.package(data))
-            self.assertEqual(gh.uploads, [])
-        # The real layout passes.
+            self.assertEqual(gh.ops, [])
         good = raw_zip([("rc2fx/rc2fx", body), ("rc2fx/SHA256SUMS", sums)])
         mr.publish(FakeGh(), TAG, SOURCE, self.package(good))
 
-    def test_repeated_release_asset_names_are_refused(self):
+    def test_missing_release_or_bad_arguments_are_refused(self):
         gh = FakeGh()
-        original = gh._release
-        def doubled():
-            release = original()
-            release["assets"].append(dict(release["assets"][0]))
-            return release
-        gh._release = doubled
+        gh.exists = False
         with self.assertRaises(mr.Refused):
             mr.publish(gh, TAG, SOURCE, self.package())
-
-    def test_unexpected_or_missing_release_assets_are_refused(self):
-        for change in [
-            lambda gh: gh.assets.update({"surprise.txt": b"x"}),
-            lambda gh: gh.assets.pop(f"rc2fx-{VERSION}-windows-x64.zip"),
-        ]:
+        for tag, source in [("mixer-v1.0.0", SOURCE), (TAG, "not-a-commit"), (TAG, "c" * 40)]:
             gh = FakeGh()
-            change(gh)
             with self.assertRaises(mr.Refused):
-                mr.publish(gh, TAG, SOURCE, self.package())
-            # Refused before anything was uploaded.
-            self.assertEqual(gh.uploads, [])
-            self.assertEqual(gh.assets["SHA256SUMS"], b"old\n")
-        with self.assertRaises(mr.Refused):
-            mr.publish(FakeGh(), TAG, "not-a-commit", self.package())
+                mr.publish(gh, tag, source, self.package())
+            self.assertEqual(gh.ops, [])
 
-    def test_an_unpublished_or_mismatched_release_is_refused(self):
-        gh = FakeGh()
-        gh.published = False
+
+class Adapter(unittest.TestCase):
+    """The real Gh class against a mocked subprocess.run, with the shapes the
+    gh CLI actually returns."""
+
+    def setUp(self):
+        self.calls = []
+        self.replies = []
+        self.original = mr.subprocess.run
+
+        def run(args, input=None, capture_output=False, text=False):
+            self.calls.append(args)
+            stdout, returncode, stderr = self.replies.pop(0)
+            if not text and isinstance(stdout, str):
+                stdout = stdout.encode()
+            return mr.subprocess.CompletedProcess(args, returncode, stdout,
+                                                  stderr if text else stderr.encode())
+
+        mr.subprocess.run = run
+        self.gh = mr.Gh(REPO)
+
+    def tearDown(self):
+        mr.subprocess.run = self.original
+
+    def test_slurped_release_pages_are_flattened(self):
+        pages = [[{"tag_name": "v0.9.0", "draft": False}], [{"tag_name": TAG, "draft": True, "id": 5}]]
+        self.replies.append((json.dumps(pages), 0, ""))
+        self.assertEqual(mr.find_release(self.gh, TAG)["id"], 5)
+        self.assertIn("--paginate", self.calls[0])
+        self.assertIn("--slurp", self.calls[0])
+        for bad in ['{"message": "x"}', "[1, 2]", "[[1]]"]:
+            self.replies.append((bad, 0, ""))
+            with self.assertRaises(mr.Refused):
+                self.gh.releases()
+
+    def test_asset_bytes_are_binary_and_publish_sends_typed_fields(self):
+        payload = bytes(range(256))
+        self.replies.append((payload, 0, ""))
+        self.assertEqual(self.gh.asset_bytes(42), payload)
+        self.assertIn("Accept: application/octet-stream", self.calls[-1])
+        self.replies.append(("{}", 0, ""))
+        self.gh.publish(5)
+        args = self.calls[-1]
+        self.assertEqual(args[args.index("--method") + 1], "PATCH")
+        self.assertEqual(args[args.index("-F") + 1], "draft=false")
+        self.assertEqual(args[args.index("-f") + 1], "make_latest=true")
+        self.assertTrue(args[args.index("-F") - 1].endswith("/releases/5") or
+                        f"repos/{REPO}/releases/5" in args)
+
+    def test_failures_and_not_found_are_reported(self):
+        self.replies.append(("", 1, "gh: Not Found (HTTP 404)"))
+        self.assertIsNone(self.gh.api("commits/vX"))
+        self.replies.append(("", 1, "gh: Server Error (HTTP 500)"))
         with self.assertRaises(mr.Refused):
-            mr.publish(gh, TAG, SOURCE, self.package())
+            self.gh.api("commits/vX")
+        self.replies.append(("", 1, "upload refused"))
         with self.assertRaises(mr.Refused):
-            mr.publish(FakeGh(), TAG, "c" * 40, self.package())
-        with self.assertRaises(mr.Refused):
-            mr.publish(FakeGh(), "mixer-v0.2.0", SOURCE, self.package())
+            self.gh.upload_asset(5, Path("rc2fx-1.0.0-macos-arm64.zip"))
+        self.assertTrue(self.calls[-1][-3].startswith("https://uploads.github.com/repos/"))
 
 
 if __name__ == "__main__":

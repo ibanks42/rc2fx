@@ -43,8 +43,10 @@ check the official releases.
 5. Run it. Enable **dry-run** to build without publishing.
 
 A successful run builds the mixer runtime once from that commit, packages it
-into the app for every platform, and creates a GitHub release for the app and
-a `chore(release): vX.Y.Z` commit on `main` with a `vX.Y.Z` tag.
+into the app for Linux and Windows, pushes a `chore(release): vX.Y.Z` commit
+on `main` with a `vX.Y.Z` tag, and creates the GitHub release as a draft.
+**Release macOS** then adds the macOS package and publishes the release (see
+[Workflow jobs](#workflow-jobs)).
 
 A dry run doesn't push or publish anything.
 
@@ -115,23 +117,20 @@ version in every workspace crate and in all three lockfiles (`Cargo.lock` and
 the standalone lockfiles in `crates/rc2fx-native` and `crates/rc2fx-bench`),
 and adds the release's section to `CHANGELOG.md`.
 
-On GitHub, the app release is marked latest and contains:
+On GitHub, the published app release is marked latest and contains:
 
 - the app packages, named `rc2fx-VERSION-OS-ARCH.EXT`, each built by
   `cargo xtask package` (see [packaging](building.md#3-package-it)): a zip
   for Windows x64, a zip for macOS arm64 (GitHub's macOS runners are Apple
-  silicon), and for Linux x64 an AppImage, a `.deb` and an `.rpm`. The macOS
-  zip is added after the release is published, by a separate workflow (see
-  [Workflow jobs](#workflow-jobs)); until then the release notes say it is
-  pending.
+  silicon), and for Linux x64 an AppImage, a `.deb` and an `.rpm`. A
+  release is only published once all of them are there.
   The zips hold the app, with its licence notices built in, and their own
   `SHA256SUMS`. The AppImage is the app and its licence notices in one file.
 - `rc2fx-VERSION-appimage-runtime-sources.tar.gz`: the source of the AppImage type 2
   runtime at the start of the AppImage, and of the libraries it links
   statically, including its modified LGPL-2.1 libfuse. See [AppImage runtime
   sources](#appimage-runtime-sources).
-- a `SHA256SUMS` file for the archives, rewritten when the macOS zip is
-  added.
+- a `SHA256SUMS` file for the archives.
 - the release notes.
 
 Every app package in a release embeds the same mixer payload: the runtime
@@ -216,9 +215,11 @@ line naming the mixer version the packages carry, even when it didn't change. Th
 ## Workflow jobs
 
 Two workflows make a release. **Release** (`.github/workflows/release.yml`)
-publishes it for Linux and Windows; **Release macOS**
-(`.github/workflows/macos-release.yml`) then adds the macOS zip, so a
-shortage of macOS runners never holds up or fails the release.
+builds Linux and Windows and leaves a draft release; **Release macOS**
+(`.github/workflows/macos-release.yml`) adds the macOS zip and publishes the
+draft once every package is verified. A shortage of macOS runners never fails
+**Release**: the draft waits until **Release macOS** succeeds. Nothing is
+public until the release is complete.
 
 **Release** runs three jobs in order:
 
@@ -236,12 +237,13 @@ shortage of macOS runners never holds up or fails the release.
    `mixer-release.json` and scripts embedded in the executable with the build
    inputs, including with `--skip-build`, and rejects a stale or development
    executable.
-3. **release** (Ubuntu) checks each archive, writes the checksums, creates the
-   release commit and tag (`release.py commit`), and publishes, with a
-   pending notice for macOS in the release notes. If `main` has moved since
-   the run started, it stops without pushing. Start a new run in that case.
+3. **release** (Ubuntu) checks each archive, writes checksums for them,
+   creates and pushes the release commit and tag (`release.py commit`), and
+   creates a draft release with these packages and a pending notice for
+   macOS in its notes. It never publishes. If `main` has moved since the run
+   started, it stops without pushing. Start a new run in that case.
 
-A dry run does everything except push and publish. Only one release runs at a
+A dry run does everything except push and create the draft. Only one release runs at a
 time. Starting another one queues it. The run's `release-input` artifact (the
 version files, release plan and mixer runtime) is kept for 90 days, because
 **Release macOS** builds from it.
@@ -250,23 +252,35 @@ version files, release plan and mixer runtime) is kept for 90 days, because
 `.github/scripts/macos_release.py`:
 
 1. **prepare** (Ubuntu) checks that the run was a successful **Release** run
-   on `main`, that its artifact hasn't expired, and that its tag is published
-   as the release commit on top of the run's source commit. After a dry run
-   nothing was published, so the automatic run skips the build.
+   on `main`, that its artifact hasn't expired, and that its tag is the
+   release commit on top of the run's source commit, with a draft release.
+   After a dry run there is no release, so the automatic run skips the build.
+   A release that is already published and complete needs nothing; one that
+   is published but incomplete is refused and never changed.
 2. **build** (macOS) checks out the release's source commit, applies the
    version files from the artifact (only the manifests, lockfiles and
    changelog a version bump writes), stages the run's mixer runtime and runs
    `cargo xtask package`. It builds the same version and runtime as the other
    platforms, without a version bump or rebuilding them.
-3. **publish** (Ubuntu) checks the zip, uploads it to the release, rebuilds
-   `SHA256SUMS` from the release's actual assets and removes the pending
-   notice. Which release is marked latest doesn't change. It never replaces
-   a different macOS zip that is already there, and running it again after
-   success changes nothing but `SHA256SUMS`.
+3. **publish** (Ubuntu) checks the zip, uploads it to the draft, rebuilds
+   `SHA256SUMS` from the draft's actual assets, removes the pending notice,
+   checks the whole draft again, and only then publishes it as the latest
+   release, as its very last step. It re-reads the release before every
+   change. A failed upload, a digest that doesn't match, or a missing or
+   unexpected package leaves the draft unpublished. It
+   never replaces a different macOS zip already on the draft. Run again on a
+   published release, it only checks that the release is complete and holds
+   the same macOS zip, and changes nothing.
+
+If you publish the draft by hand before **Release macOS** finishes, the
+release is public but incomplete until it does. **Release macOS** then adds
+what's missing without publishing it again or changing which release is
+latest. That needs immutable releases to stay off in the repository settings:
+a published release that is immutable and incomplete can't be finished.
 
 If no macOS runner is available, only **Release macOS** is cancelled or
-fails; the release stays published without the macOS zip. A real build error
-shows as a failed **Release macOS** run. To retry, open **Actions › Release
+fails, and the release stays a draft that can be finished later. A real build
+error shows as a failed **Release macOS** run. To retry, open **Actions › Release
 macOS › Run workflow** and enter the ID of the original **Release** run (the
 number in its URL). A retry is refused once that run's artifact has expired;
 make a new release then.
