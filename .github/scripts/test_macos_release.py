@@ -106,6 +106,7 @@ class FakeGh:
         self.assets["SHA256SUMS"] = b"partial\n"
         self.bad_digest = set()
         self.immutable = False
+        self.tag_name = TAG
         self.fail_upload = False
         self.publish_by_hand_after = None  # publish the draft after N writes
         self.ops = []
@@ -118,11 +119,17 @@ class FakeGh:
             for n, d in sorted(self.assets.items())
         ]
 
+    def _release(self):
+        return {"id": 99, "tag_name": self.tag_name, "draft": self.draft,
+                "immutable": self.immutable, "body": self.body, "assets": self._assets()}
+
+    def release(self, release_id):
+        return self._release() if self.exists and release_id == 99 else None
+
     def releases(self):
         if not self.exists:
             return [{"tag_name": "v0.9.0", "draft": False, "assets": []}]
-        return [{"id": 99, "tag_name": TAG, "draft": self.draft, "immutable": self.immutable,
-                 "body": self.body, "assets": self._assets()}]
+        return [self._release()]
 
     def api(self, path):
         if path == "actions/runs/7":
@@ -163,12 +170,19 @@ class FakeGh:
         self._write(("delete", asset_id))
         del self.assets[asset_id]
 
-    def set_notes(self, release_id, notes):
+    def _patch(self, tag):
+        # GitHub: a PATCH on a draft without tag_name untags the draft.
+        if self.draft and tag is None:
+            self.tag_name = "untagged-0123456789abcdef"
+
+    def set_notes(self, release_id, tag, notes):
+        self._patch(tag)
         self._write(("notes", notes))
         self.body = notes
 
-    def publish(self, release_id):
-        assert self.draft
+    def publish(self, release_id, tag):
+        self._patch(tag)
+        assert self.draft and tag == self.tag_name == TAG, "published with the wrong tag"
         self.ops.append(("publish", release_id))
         self.draft = False
 
@@ -448,6 +462,25 @@ class Publish(InTemp):
             self.assertTrue(gh.draft, label)
             self.assertNotIn("publish", [op for op, _ in gh.ops], label)
 
+    def test_a_draft_that_loses_its_tag_is_never_published(self):
+        gh = FakeGh()
+        original = gh._write
+        def untag_after_first(op):
+            original(op)
+            gh.tag_name = "untagged-0123456789abcdef"
+        gh._write = untag_after_first
+        with self.assertRaises(mr.Refused) as caught:
+            mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertIn("no longer carries tag", str(caught.exception))
+        self.assertTrue(gh.draft)
+        self.assertNotIn("publish", [op for op, _ in gh.ops])
+
+    def test_the_draft_keeps_its_tag_through_every_update(self):
+        gh = FakeGh()
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertEqual(gh.tag_name, TAG)
+        self.assertFalse(gh.draft)
+
     def test_a_partly_finished_draft_resumes_without_reuploading(self):
         gh = FakeGh()
         gh.assets[MAC] = mac_zip()
@@ -531,17 +564,26 @@ class Adapter(unittest.TestCase):
             with self.assertRaises(mr.Refused):
                 self.gh.releases()
 
+    def test_both_patches_always_send_the_tag(self):
+        for call in (lambda: self.gh.set_notes(5, TAG, "notes"), lambda: self.gh.publish(5, TAG)):
+            self.replies.append(("{}", 0, ""))
+            call()
+            args = self.calls[-1]
+            self.assertEqual(args[args.index("--method") + 1], "PATCH")
+            self.assertIn(f"tag_name={TAG}", args)
+
     def test_asset_bytes_are_binary_and_publish_sends_typed_fields(self):
         payload = bytes(range(256))
         self.replies.append((payload, 0, ""))
         self.assertEqual(self.gh.asset_bytes(42), payload)
         self.assertIn("Accept: application/octet-stream", self.calls[-1])
         self.replies.append(("{}", 0, ""))
-        self.gh.publish(5)
+        self.gh.publish(5, TAG)
         args = self.calls[-1]
         self.assertEqual(args[args.index("--method") + 1], "PATCH")
         self.assertEqual(args[args.index("-F") + 1], "draft=false")
-        self.assertEqual(args[args.index("-f") + 1], "make_latest=true")
+        self.assertIn("make_latest=true", args)
+        self.assertIn(f"tag_name={TAG}", args)
         self.assertTrue(args[args.index("-F") - 1].endswith("/releases/5") or
                         f"repos/{REPO}/releases/5" in args)
 

@@ -115,13 +115,19 @@ class Gh:
     def delete_asset(self, asset_id):
         self._gh("api", "--method", "DELETE", f"repos/{self.repo}/releases/assets/{asset_id}")
 
-    def set_notes(self, release_id, notes):
-        self._gh("api", "--method", "PATCH", f"repos/{self.repo}/releases/{release_id}",
-                 "-f", f"body={notes}")
+    def release(self, release_id):
+        """One release by ID, drafts included, or None."""
+        return self.api(f"releases/{release_id}")
 
-    def publish(self, release_id):
+    # A PATCH on a draft that omits tag_name leaves the draft untagged, so
+    # both updates always send it.
+    def set_notes(self, release_id, tag, notes):
         self._gh("api", "--method", "PATCH", f"repos/{self.repo}/releases/{release_id}",
-                 "-F", "draft=false", "-f", "make_latest=true")
+                 "-f", f"tag_name={tag}", "-f", f"body={notes}")
+
+    def publish(self, release_id, tag):
+        self._gh("api", "--method", "PATCH", f"repos/{self.repo}/releases/{release_id}",
+                 "-f", f"tag_name={tag}", "-F", "draft=false", "-f", "make_latest=true")
 
 
 def sha256(data):
@@ -365,11 +371,15 @@ def complete(gh, release, version, mac_sha=None):
     return verified_bytes(gh, assets["SHA256SUMS"]).decode() == sums_for(gh, assets, version)
 
 
-def changeable(gh, tag):
-    """The release as it is now, which must still accept changes: a draft, or
-    a published release that is not immutable (published early by hand)."""
-    release = find_release(gh, tag)
+def changeable(gh, tag, release_id):
+    """The release as it is now, by ID, which must still carry TAG and accept
+    changes: a draft, or a published release that is not immutable
+    (published early by hand)."""
+    release = gh.release(release_id)
     require(release is not None, f"release {tag} disappeared")
+    require(release.get("tag_name") == tag,
+            f"release {release_id} no longer carries tag {tag} "
+            f"(now {release.get('tag_name')!r}); not changing or publishing it")
     require(release.get("draft") or not release.get("immutable"),
             f"release {tag} became immutable before it was complete; it can't be finished")
     return release
@@ -393,8 +403,8 @@ def publish(gh, tag, source, package_dir):
         return "already complete\n"  # read only: nothing to change
     # The release is re-read before every change: someone may publish the
     # draft by hand meanwhile, which is fine while it stays changeable.
-    release = changeable(gh, tag)
     release_id = release["id"]
+    release = changeable(gh, tag, release_id)
     assets = asset_map(release)
     present = set(assets) - {"SHA256SUMS", name}
     require(present == expected_assets(version) - {name},
@@ -404,7 +414,7 @@ def publish(gh, tag, source, package_dir):
                 f"release {tag} already has a different {name}; not replacing it")
     else:
         gh.upload_asset(release_id, package)
-    release = changeable(gh, tag)
+    release = changeable(gh, tag, release_id)
     assets = asset_map(release)
     require(name in assets and sha256(verified_bytes(gh, assets[name])) == ours,
             f"uploaded {name} does not match")
@@ -413,21 +423,21 @@ def publish(gh, tag, source, package_dir):
         with tempfile.TemporaryDirectory() as work:
             path = Path(work) / "SHA256SUMS"
             path.write_text(sums)
-            release = changeable(gh, tag)
+            release = changeable(gh, tag, release_id)
             old = asset_map(release).get("SHA256SUMS")
             if old is not None:
                 gh.delete_asset(old["id"])
             gh.upload_asset(release_id, path)
-    release = changeable(gh, tag)
+    release = changeable(gh, tag, release_id)
     notes = release.get("body") or ""
     if PENDING.search(notes):
-        gh.set_notes(release_id, PENDING.sub("\n", notes).strip("\n") + "\n")
+        gh.set_notes(release_id, tag, PENDING.sub("\n", notes).strip("\n") + "\n")
     # Last: everything checked again on the release as it now is. A draft is
     # published as latest; a release already published by hand is left so.
-    release = changeable(gh, tag)
+    release = changeable(gh, tag, release_id)
     require(complete(gh, release, version, mac_sha=ours), f"release {tag} is not complete")
     if release.get("draft"):
-        gh.publish(release_id)
+        gh.publish(release_id, tag)
     return sums
 
 
