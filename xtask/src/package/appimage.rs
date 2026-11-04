@@ -59,6 +59,8 @@ fn appimage_arch(arch: &str) -> Result<&'static str> {
 }
 
 fn write_member(path: &Path, data: &[u8], mode: u32) -> Result {
+    #[cfg(not(unix))]
+    let _ = mode; // Windows does not have Unix file permission bits.
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }

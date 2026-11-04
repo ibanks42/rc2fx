@@ -153,12 +153,6 @@ jobs:
         with:
           tool: cargo-about@0.8.4
           fallback: none
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: release-desktop
-          cache-bin: false
-          cache-workspace-crates: true
-          cache-on-failure: true
       - uses: actions/cache@v6.1.0
         if: runner.os == 'Linux'
         with:
@@ -170,14 +164,23 @@ jobs:
       - uses: actions/download-artifact@v8.0.2
         with:
           name: release-input
-          path: target/release-input
-      # Always stage THIS run's runtime after cache restoration.
-      - name: Apply version and bundled runtime
+          path: .release-input
+      - name: Apply release version
+        run: tar -xf .release-input/versioned.tar
+      # Key the cache against the manifests actually being compiled.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-desktop
+          cache-bin: false
+          cache-workspace-crates: true
+          cache-on-failure: true
+      # The downloaded artifact lives outside target, so cached files cannot
+      # overwrite it. Stage this run's verified runtime last.
+      - name: Stage bundled runtime
         run: |
-          tar -xf target/release-input/versioned.tar
           rm -rf target/mixer
           mkdir -p target/mixer
-          cp -R target/release-input/runtime/. target/mixer/
+          cp -R .release-input/runtime/. target/mixer/
       - name: Build release package
         env:
           RC2FX_RELEASE_BUILD: "1"
