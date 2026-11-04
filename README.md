@@ -7,6 +7,8 @@ engine, so every device connected to the mixer hears the result. A desktop
 app for Windows, Linux and macOS changes the settings over USB. The settings
 are stored on the mixer and stay in effect after the app is closed.
 
+![The RC2FX app with noise suppression on a microphone channel](docs/public/screenshots/mic-noise-suppression.png)
+
 ## Features
 
 - Parametric EQ with up to 32 bands per channel. It can import Equalizer APO

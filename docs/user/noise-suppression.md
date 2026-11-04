@@ -4,7 +4,9 @@ Noise suppression removes background noise such as fans, computers, traffic,
 keyboards and mouse clicks from a voice. It uses a small neural network
 trained to separate speech from noise.
 
-Turn it on with the **Suppression** effect in a channel's chain.
+Turn it on with the **Noise suppression** effect in a channel's chain.
+
+![Noise suppression on Mic 4: lookahead, blend and the voice gate, with live readings from the mixer](/screenshots/mic-noise-suppression.png)
 
 ## Where you can use it
 

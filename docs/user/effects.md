@@ -18,6 +18,8 @@ Available on microphones and Chat Mix Out. See
 
 ## EQ
 
+![A 10-band EQ on Headphones 1](/screenshots/headphones-eq.png)
+
 The EQ has up to 32 bands. You can drag points on the curve, scroll on a
 point to change its Q, and double-click to add a band. Each band's values can
 also be typed in.
