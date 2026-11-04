@@ -36,6 +36,7 @@ All notable changes to RC2FX are documented here.
 
 - Warn when mixer changes lack a version bump
 - Publish macOS builds after the main release
+- Publish releases only after every package is uploaded
 
 ### Other
 
