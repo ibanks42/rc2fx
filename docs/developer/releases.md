@@ -55,7 +55,7 @@ A dry run doesn't push or publish anything.
 The current version is `[workspace.package] version` in `Cargo.toml`.
 
 - First release (no stable `vX.Y.Z` tag yet): the
-  version in `Cargo.toml` is released unchanged, so `0.1.0` becomes `v0.1.0`.
+  version in `Cargo.toml` is released unchanged, so `1.0.0` becomes `v1.0.0`.
   The bump choice is ignored.
 - Later releases: each one increases the version. The bump is applied to the tag matching the version in
   `Cargo.toml`. That tag must exist, be in `main`'s history, and have commits
@@ -73,7 +73,7 @@ release keeps the mixer version, although the runtime is rebuilt for it.
 The file is strict JSON with three fields:
 
 ```json
-{ "schemaVersion": 1, "version": "0.1.0", "protocolVersion": 1 }
+{ "schemaVersion": 1, "version": "1.0.0", "protocolVersion": 1 }
 ```
 
 `version` is dotted numbers such as `MAJOR.MINOR.PATCH`, without a

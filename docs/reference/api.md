@@ -46,7 +46,7 @@ generation is stale, the write is refused with 409. Errors are
 `GET /api/v1/version` returns what the mixer has installed:
 
 ```json
-{"runtime": "0.1.0", "protocol": 1, "firmware": "1.7.7", "firmwareProfile": "rodecaster-pro-ii-1.7.7"}
+{"runtime": "1.0.0", "protocol": 1, "firmware": "1.7.7", "firmwareProfile": "rodecaster-pro-ii-1.7.7"}
 ```
 
 | Field | Source |
