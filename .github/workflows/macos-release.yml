@@ -25,6 +25,10 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # GitHub only exposes draft releases to tokens with push access.
+    permissions:
+      contents: write
+      actions: read
     outputs:
       ready: ${{ steps.release.outputs.ready }}
       source: ${{ steps.release.outputs.source }}

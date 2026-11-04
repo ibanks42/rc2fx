@@ -254,7 +254,10 @@ version files, release plan and mixer runtime) is kept for 90 days, because
 1. **prepare** (Ubuntu) checks that the run was a successful **Release** run
    on `main`, that its artifact hasn't expired, and that its tag is the
    release commit on top of the run's source commit, with a draft release.
-   After a dry run there is no release, so the automatic run skips the build.
+   After a dry run there is no release or tag, so the automatic run skips the
+   build. GitHub only lists drafts to a token with `contents: write`, so this
+   job needs it; if the tag is pushed but no release is visible, it fails
+   rather than skipping.
    A release that is already published and complete needs nothing; one that
    is published but incomplete is refused and never changed.
 2. **build** (macOS) checks out the release's source commit, applies the

@@ -209,6 +209,14 @@ def prepare(gh, run_id, automatic, output=print):
     require(plan["source"] == run.get("head_sha"), "plan source is not the run's commit")
     release, state = release_state(gh, plan["tag"], plan["source"])
     if state == "missing":
+        # A dry run pushes no tag. If the tag is there, the release exists
+        # but is a draft this token cannot see.
+        if gh.api(f"commits/{plan['tag']}") is not None:
+            check_tag(gh, plan["tag"], plan["source"])
+            raise Refused(
+                f"tag {plan['tag']} is pushed but its release is not visible: it is probably a "
+                "draft, and listing drafts needs a token with contents: write"
+            )
         require(automatic, f"run {run_id} created no release for {plan['tag']} (a dry run?)")
         ready, why = "false", f"Skipped: Release run {run_id} created no release (a dry run)."
     elif state == "draft":

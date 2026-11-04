@@ -93,6 +93,7 @@ class FakeGh:
         }
         self.artifact = {"name": "release-input", "expired": False}
         self.exists = True
+        self.tag_pushed = None  # defaults to whether the release exists
         self.draft = True
         self.body = "Notes.\n\n" + PENDING
         self.commit = {"sha": RELEASE_COMMIT, "commit": {"message": f"chore(release): {TAG}\n"},
@@ -129,7 +130,8 @@ class FakeGh:
         if path == "actions/runs/7/artifacts?name=release-input":
             return {"artifacts": [self.artifact] if self.artifact else []}
         if path == f"commits/{TAG}":
-            return self.commit if self.exists else None
+            pushed = self.exists if self.tag_pushed is None else self.tag_pushed
+            return self.commit if pushed else None
         return None
 
     def download_artifact(self, run_id, name, directory):
@@ -219,6 +221,22 @@ class Prepare(InTemp):
         with self.assertRaises(mr.Refused):
             self.outputs(locked, automatic=True)
         self.assertEqual(locked.ops, [])
+
+    def test_a_pushed_tag_without_a_visible_release_is_a_loud_error(self):
+        # The draft exists, but this token cannot list drafts.
+        gh = FakeGh()
+        gh.exists = False
+        gh.tag_pushed = True
+        with self.assertRaises(mr.Refused) as caught:
+            self.outputs(gh, automatic=True)
+        self.assertIn("contents: write", str(caught.exception))
+        for path in Path(".release-input").iterdir():
+            path.unlink()
+        # A pushed tag that is not the release commit on this source.
+        gh.commit["parents"] = [{"sha": "c" * 40}]
+        with self.assertRaises(mr.Refused) as caught:
+            self.outputs(gh, automatic=True)
+        self.assertIn("not on top of", str(caught.exception))
 
     def test_a_dry_run_is_skipped_automatically_and_refused_by_hand(self):
         gh = FakeGh()
