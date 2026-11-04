@@ -76,6 +76,33 @@ def update_versions(version):
     return [str(path) for path in updates]
 
 
+def warn_mixer_version(previous):
+    if not previous:
+        return
+    manifest = "config/mixer-release.json"
+    if not Path(manifest).exists() or not git("ls-tree", previous, "--", manifest):
+        return
+    before = json.loads(git("show", f"{previous}:{manifest}"))["version"]
+    after = json.loads(Path(manifest).read_text())["version"]
+    if before != after:
+        return
+    paths = [
+        "crates/rc2fx-core", "crates/rc2fx-device", "crates/rc2fx-dfn",
+        "crates/rc2fx-dsp", "crates/rc2fx-firmware", "crates/rc2fx-native",
+        "crates/rc2fx-native-control", "crates/rc2fx-suppression",
+        "crates/rc2fx-usb", "crates/rc2fx-gui", "xtask/mixer",
+        "xtask/src/setup.rs", "xtask/src/elf.rs", "config",
+        "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo",
+    ]
+    if git("diff", "--name-only", previous, "HEAD", "--", *paths):
+        print("::warning title=Mixer version unchanged::Mixer inputs changed since "
+              f"{previous}, but the mixer version is still {after}. Review whether "
+              "config/mixer-release.json needs a version bump: users with this "
+              "mixer version will not receive a mixer update notice. This is a "
+              "path-based warning; shared dependencies and build settings may "
+              "also trigger it.", flush=True)
+
+
 def prepare(bump):
     if not os.environ.get("ACT") and git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("Release checkout must be clean")
@@ -104,6 +131,7 @@ def prepare(bump):
         raise ValueError("Version must increase")
     if git("tag", "--list", tag):
         raise ValueError(f"Tag {tag} already exists")
+    warn_mixer_version(previous)
     files = update_versions(version)
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)

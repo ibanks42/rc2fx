@@ -101,6 +101,31 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(plan["tag"], expected)
                 self.git("restore", ".")
 
+    def test_mixer_warning(self):
+        self.put("config/mixer-release.json", '{"version":"0.1.0"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: add mixer manifest")
+        self.git("tag", "v0.1.0")
+        self.put("xtask/mixer/rc2fx.sh", "changed")
+        self.git("add", ".")
+        self.git("commit", "-m", "fix: change mixer startup")
+        self.assertIn("::warning title=Mixer version unchanged::", self.prepare().stdout)
+        self.git("restore", ".")
+        self.put("config/mixer-release.json", '{"version":"0.1.1"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "fix: bump mixer version")
+        self.assertNotIn("::warning", self.prepare().stdout)
+
+    def test_app_only_change_does_not_warn_about_mixer(self):
+        self.put("config/mixer-release.json", '{"version":"0.1.0"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: add mixer manifest")
+        self.git("tag", "v0.1.0")
+        self.put("crates/rc2fx-app/src/settings.rs", "changed")
+        self.git("add", ".")
+        self.git("commit", "-m", "fix: change desktop settings")
+        self.assertNotIn("::warning", self.prepare().stdout)
+
     def test_act_commit_uses_isolated_index(self):
         self.prepare()
         self.put(".git/index.lock", "copied host lock")
