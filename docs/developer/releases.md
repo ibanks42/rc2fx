@@ -1,21 +1,23 @@
 # Releases
 
-The desktop app and the RC2FX mixer runtime are versioned independently. RØDE
-firmware is a third version, published by RØDE and only supported by RC2FX. A
-desktop release therefore names two versions: its own and the mixer runtime it
-bundles. The **Release** workflow does all of it and is started manually.
+The desktop app and the RC2FX mixer runtime are versioned independently, but
+released together: the mixer runtime is only ever published inside the app
+that bundles it. RØDE firmware is a third version, published by RØDE and only
+supported by RC2FX. A desktop release therefore names two versions: its own
+and the mixer runtime it bundles. The **Release** workflow does all of it and
+is started manually.
 
 ## The three versions
 
 | Version | Where it lives | Released as |
 | --- | --- | --- |
 | Desktop app | `[workspace.package] version` in `Cargo.toml` | `vX.Y.Z`, with the app packages |
-| RC2FX mixer runtime | `config/mixer-release.json` | `mixer-vVERSION`, with `rc2fx-mixer-VERSION.tar.gz` |
+| RC2FX mixer runtime | `config/mixer-release.json` | Inside each app package only; never released on its own |
 | RØDE firmware | the versions pinned in `config/firmware-profiles.json` | RØDE's own releases; RC2FX publishes nothing |
 
-Each desktop build embeds one mixer runtime. `config/mixer-release.json` names
-the bundled runtime and records the protocol version the app speaks, so an
-app-only release can reuse the same mixer build byte for byte. **Settings › Versions**
+Each desktop build embeds one mixer runtime, built from the same checkout.
+`config/mixer-release.json` names the bundled runtime and records the protocol
+version the app speaks. **Settings › Versions**
 shows the app version, the installed and bundled RC2FX mixer software versions,
 and the installed and newest supported RØDE firmware versions; see [Versions
 and updates](../user/getting-started.md#versions-and-updates). Mixer software
@@ -23,7 +25,7 @@ and firmware are compared only with what the app bundles. For the app itself,
 `rc2fx_installer::app_update` asks GitHub's `releases/latest` API for this
 repository and, when a newer app is out, pages through the release list for
 the notes since the installed version. It accepts only published, stable
-`vMAJOR.MINOR.PATCH` tags, so mixer releases are never offered, and it links
+`vMAJOR.MINOR.PATCH` tags, and it links
 to release pages built from the validated tag. It never downloads anything.
 The repository is a fixed constant in that module, so builds from forks also
 check the official releases.
@@ -40,16 +42,11 @@ check the official releases.
    ignores this choice (see [Desktop app](#desktop-app)).
 5. Run it. Enable **dry-run** to build without publishing.
 
-A successful run reuses the mixer runtime release named by
-`config/mixer-release.json`, creates a GitHub release for the app and a
-`chore(release): vX.Y.Z` commit on `main` with a `vX.Y.Z` tag.
+A successful run builds the mixer runtime once from that commit, packages it
+into the app for every platform, and creates a GitHub release for the app and
+a `chore(release): vX.Y.Z` commit on `main` with a `vX.Y.Z` tag.
 
-If there is no `mixer-vVERSION` release yet, the run builds the runtime from
-that commit, publishes it as a separate release before the app release, and
-packages the app with exactly those bytes. That mixer release is never marked
-latest. Later app releases reuse it until the mixer version changes.
-
-A dry run doesn't push or publish either release.
+A dry run doesn't push or publish anything.
 
 ## Version selection
 
@@ -57,7 +54,7 @@ A dry run doesn't push or publish either release.
 
 The current version is `[workspace.package] version` in `Cargo.toml`.
 
-- First release (no stable `vX.Y.Z` tag yet; `mixer-v` tags don't count): the
+- First release (no stable `vX.Y.Z` tag yet): the
   version in `Cargo.toml` is released unchanged, so `0.1.0` becomes `v0.1.0`.
   The bump choice is ignored.
 - Later releases: each one increases the version. The bump is applied to the tag matching the version in
@@ -68,8 +65,8 @@ The run stops before building if these conditions aren't met, if the new tag
 already exists, or if the checkout has uncommitted changes.
 
 Every mixer runtime change reaches users in a desktop release that bundles it.
-An app-only release leaves the runtime version and its archive unchanged, and
-releasing the app does not rewrite `config/mixer-release.json`.
+Releasing the app doesn't change `config/mixer-release.json`: an app-only
+release keeps the mixer version, although the runtime is rebuilt for it.
 
 ### Mixer runtime version
 
@@ -81,18 +78,13 @@ The file is strict JSON with three fields:
 
 `version` is dotted numbers such as `MAJOR.MINOR.PATCH`, without a
 pre-release suffix; the app compares versions numerically and treats anything
-else as unknown. Bump it by hand when the mixer runtime or anything else in its
-archive changes, and leave it alone otherwise. When reviewing a change to
-mixer-side sources, check that it bumps the version; the release run refuses
-to reuse a version whose sources changed. Mixer-side means everything the
-source fingerprint covers: the crates built into the runtime, `xtask/mixer/`,
-`config/`, the licence inputs, the `Cargo.lock` entries in the runtime's
-dependency closure, the root Cargo profiles, toolchain and `.cargo/`
-configuration, and the mixer build code in `xtask` (`setup.rs`, `elf.rs`). The desktop app, installer, transport and bench crates, and
-lockfile entries only they use, are excluded, so app-only changes and
-dependency updates don't need a bump. `protocolVersion` must equal
-`rc2fx_core::MIXER_PROTOCOL_VERSION`; bump it only when an older desktop app
-can no longer drive the mixer.
+else as unknown. Bump it by hand when anything that ends up on the mixer
+changes, and leave it alone otherwise: the crates built into the runtime,
+`xtask/mixer/`, `config/firmware-profiles.json`, the runtime's dependencies,
+and the toolchain and build settings that compile it. Nothing checks this
+automatically, so when reviewing such a change, check that it bumps the
+version. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
+bump it only when an older desktop app can no longer drive the mixer.
 
 `cargo xtask mixer-build` copies the file into `target/mixer` and adds it to
 `SHA256SUMS`. Building the app with the embedded payload, packaging and
@@ -103,15 +95,6 @@ the bundle's `SHA256SUMS`. The mixer reports the runtime, protocol, firmware
 and firmware profile through [`GET api/v1/version`](../reference/api.md#versions),
 omitting any value it doesn't know. A runtime too old to answer returns 404, which the app shows
 as **Unknown** rather than offering an update or downgrade.
-
-When the `mixer-vVERSION` release exists, prepare computes a fingerprint of the
-mixer-side sources and compares it with the one recorded with that release. If
-they differ, the run fails until the version in `config/mixer-release.json` is
-bumped, so two different runtimes can't share a version.
-
-A published `mixer-vVERSION` release is immutable. To change the runtime,
-bump the version; don't replace its assets. Only the release workflow publishes
-it, so don't create the release or upload the archive from a local machine.
 
 ### RØDE firmware
 
@@ -142,19 +125,11 @@ On GitHub, the app release is marked latest and contains:
 - a `SHA256SUMS` file for the archives.
 - the release notes.
 
-Each app package embeds the same mixer payload: the runtime files, catalog,
-`mixer-release.json` and scripts from that archive, as one checksummed
-envelope inside the executable. The `.tar.gz` itself isn't shipped in the app.
-An app-only release therefore ships new app files with an unchanged runtime.
-
-The separate `mixer-vVERSION` release contains:
-
-- `rc2fx-mixer-VERSION.tar.gz`, holding `runtime/`, `xtask/mixer/`, the
-  `firmware-profiles.json` and `mixer-release.json` files it runs with, and
-  `LICENSES.html`, the consolidated third-party notices (`cargo xtask licenses
-  FILE` writes the same file).
-- the archive's SHA-256, so the app release can be checked against the
-  immutable asset it reused.
+Every app package in a release embeds the same mixer payload: the runtime
+built once in that run, with the catalog, `mixer-release.json` and scripts
+from the same checkout, as one checksummed envelope inside the executable.
+The runtime is rebuilt for every release, so two releases with the same mixer
+version aren't promised to carry byte-identical runtimes.
 
 ## AppImage runtime sources
 
@@ -225,33 +200,30 @@ hardware or none).
 - Don't use `chore(release)`: it is reserved for the release workflow's own
   commit, which the changelog skips.
 
-An app-only release reuses the mixer runtime unchanged, so its notes and
-changelog describe app changes only. Every app release's notes include a
-`Bundled RC2FX mixer software VERSION` line, naming the runtime the package
-carries even when it didn't change. The same version is visible in the app's
+Every app release's notes end with a `Bundled RC2FX mixer software: VERSION.`
+line naming the mixer version the packages carry, even when it didn't change. The same version is visible in the app's
 **Settings › Versions**.
 
 ## Workflow jobs
 
 `.github/workflows/release.yml` runs three jobs in order:
 
-1. **prepare** (Ubuntu) runs the versioning tests, computes the app version,
-   reads `config/mixer-release.json`, and resolves the matching mixer runtime
-   release. It verifies the archive's SHA-256 and checks the source fingerprint
-   against the recorded one. If the release doesn't exist, it cross-builds the
-   runtime and prepares the `mixer-vVERSION` release. It then rewrites the
-   version files and changelog (`.github/scripts/release.py prepare`). The
-   later jobs use this output, so every platform packages the same version
-   files and runtime bytes.
+1. **prepare** (Ubuntu) runs the versioning tests, computes the app version
+   and rewrites the version files and changelog (`.github/scripts/release.py
+   prepare`). It then cross-builds the mixer runtime from the checkout with
+   `cargo xtask mixer-build` and shares `target/mixer` with the later jobs,
+   with the version files, so every platform packages the same version files
+   and runtime.
 2. **build** runs on Ubuntu, Windows and macOS in parallel. Each job applies
-   the prepare output, stages the verified runtime from the reused archive and
-   runs `cargo xtask package` with `RC2FX_RELEASE_BUILD=1`, which selects the
+   the prepare output, stages the shared runtime into `target/mixer`, takes
+   the scripts and catalog from its own checkout of the same commit, and runs
+   `cargo xtask package` with `RC2FX_RELEASE_BUILD=1`, which selects the
    launcher's quieter diagnostics. Packaging compares the runtime, catalog,
-   `mixer-release.json` and scripts embedded in the executable with the build inputs, including with
-   `--skip-build`, and rejects a stale or development executable.
+   `mixer-release.json` and scripts embedded in the executable with the build
+   inputs, including with `--skip-build`, and rejects a stale or development
+   executable.
 3. **release** (Ubuntu) checks each archive, writes the checksums, creates the
-   release commit and tag (`release.py commit`), and publishes. A pending
-   mixer release is published first and is never marked latest. If `main` has
+   release commit and tag (`release.py commit`), and publishes. If `main` has
    moved since the run started, it stops without pushing. Start a new run in
    that case.
 
@@ -277,9 +249,8 @@ nothing is pushed or published. Don't pass `--bind`, which would create the
 commit in your own checkout. The Linux archive and checksums are written to
 `.local/act-artifacts`.
 
-act can't run the Windows and macOS builds, publish either release, or fetch
-the immutable mixer asset from GitHub. Use a real workflow run to exercise
-payload reuse. act builds your working tree instead of a clean checkout, so a
+act can't run the Windows and macOS builds or publish the release. act builds
+your working tree instead of a clean checkout, so a
 passing local run doesn't guarantee the real run will pass.
 
 ## Before the first release

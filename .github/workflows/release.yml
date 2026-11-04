@@ -39,8 +39,6 @@ jobs:
         with:
           cache: false
           rustflags: ""
-      - name: Install standard-library license notices
-        run: rustup component add rust-docs
       - uses: actions/cache@v6.1.0
         id: zig-tool
         with:
@@ -54,12 +52,11 @@ jobs:
           path: |
             ~/.cargo/bin/git-cliff*
             ~/.cargo/bin/cargo-zigbuild*
-            ~/.cargo/bin/cargo-about*
-          key: release-tools-${{ runner.os }}-${{ runner.arch }}-cliff2.14.1-zigbuild0.24.0-about0.8.4
+          key: release-tools-${{ runner.os }}-${{ runner.arch }}-cliff2.14.1-zigbuild0.24.0
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         if: steps.runtime-tools.outputs.cache-hit != 'true'
         with:
-          tool: git-cliff@2.14.1,cargo-zigbuild@0.24.0,cargo-about@0.8.4
+          tool: git-cliff@2.14.1,cargo-zigbuild@0.24.0
           fallback: none
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -95,13 +92,12 @@ jobs:
         env:
           BUMP: ${{ inputs.bump }}
         run: python3 .github/scripts/release.py prepare --bump "$BUMP"
-      - name: Test mixer release reuse
-        run: python3 .github/scripts/test_mixer_release.py
-      - name: Build or reuse immutable mixer release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: python3 .github/scripts/mixer_release.py prepare
+      - name: Build bundled mixer software
+        run: cargo xtask mixer-build
+      - name: Stage mixer payload for the desktop builds
+        run: |
+          mkdir -p target/release-input/runtime
+          cp -R target/mixer/. target/release-input/runtime/
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-input
@@ -194,7 +190,6 @@ jobs:
           rm -rf target/mixer
           mkdir -p target/mixer
           cp -R .release-input/runtime/. target/mixer/
-          cp -R .release-input/xtask/mixer/. xtask/mixer/
       - name: Build release package
         env:
           RC2FX_RELEASE_BUILD: "1"
@@ -289,12 +284,6 @@ jobs:
             exit 1
           }
           git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
-      - name: Publish immutable mixer release
-        if: ${{ !inputs.dry-run && !env.ACT }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: python3 .github/scripts/mixer_release.py publish
       - name: Create and publish GitHub release
         if: ${{ !inputs.dry-run && !env.ACT }}
         env:

@@ -3,10 +3,11 @@
 //! Unauthenticated HTTPS requests to GitHub's releases API for the official
 //! repository: the latest release, then, when it is newer, the release notes
 //! of every app version between this one and it. Nothing is downloaded or
-//! installed: the result is versions, release notes and links. GitHub's latest release excludes
-//! drafts and prereleases, and the release workflow never marks a mixer
-//! release as latest; this module still refuses anything that is not a
-//! published, stable `vMAJOR.MINOR.PATCH` app release.
+//! installed: the result is versions, release notes and links. GitHub's
+//! latest release excludes drafts and prereleases; this module still refuses
+//! anything that is not a published, stable `vMAJOR.MINOR.PATCH` app release,
+//! such as a `mixer-v` tag left from before mixer runtimes were only released
+//! inside the app.
 
 use rc2fx_core::compare_versions;
 use std::{
