@@ -147,9 +147,8 @@ def prepare(bump):
         with notes.open("a") as output:
             output.write(f"\nBundled RC2FX mixer software: {mixer_version}.\n")
     changelog = Path("CHANGELOG.md")
-    if not changelog.exists():
-        changelog.write_text(tomllib.loads(Path("cliff.toml").read_text())["changelog"]["header"])
-    subprocess.run(cliff + history + ["--unreleased", "--tag", tag, "--prepend", str(changelog)], check=True)
+    destination = "--prepend" if previous and changelog.exists() else "--output"
+    subprocess.run(cliff + history + ["--unreleased", "--tag", tag, destination, str(changelog)], check=True)
     files.append(str(changelog))
     plan = {"tag": tag, "previous": previous, "source": git("rev-parse", "HEAD"), "files": files}
     (OUTPUT / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")

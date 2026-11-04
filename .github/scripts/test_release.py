@@ -101,6 +101,17 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(plan["tag"], expected)
                 self.git("restore", ".")
 
+    def test_replacement_first_release_regenerates_changelog(self):
+        self.put("CHANGELOG.md", "# Changelog\n\n## [0.1.0] - old\nStale entry\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "fix: replace first release")
+        self.prepare()
+        changelog = (self.root / "CHANGELOG.md").read_text()
+        self.assertEqual(changelog.count("## [0.1.0]"), 1)
+        self.assertEqual(changelog.count("# Changelog"), 1)
+        self.assertNotIn("Stale entry", changelog)
+        self.assertIn("Replace first release", changelog)
+
     def test_mixer_warning(self):
         self.put("config/mixer-release.json", '{"version":"0.1.0"}')
         self.git("add", ".")
