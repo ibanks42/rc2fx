@@ -83,10 +83,10 @@ bench-build:
 bench recording *flags: bench-build
     cargo xtask bench {{recording}} {{flags}}
 
-# Build the documentation book into target/book (needs mdbook)
-book:
-    mdbook build
+# Build the documentation site into target/docs (needs Node.js)
+docs:
+    cd docs && npm ci --no-audit --no-fund && npm run build
 
-# Serve the documentation book on localhost:3000, rebuilding on change
-book-serve:
-    mdbook serve --open
+# Serve the documentation site on localhost, rebuilding on change
+docs-serve:
+    cd docs && npm ci --no-audit --no-fund && npm run dev -- --open

@@ -705,7 +705,7 @@ pub(super) fn open(
             title: Some("RC2FX diagnostic events".into()),
             ..Default::default()
         }),
-        ..Default::default()
+        ..ui::window_options()
     };
     gpui_kit::open_window(options, cx, |_, cx| {
         cx.new(|cx| EventsView::new(log, app, cx))

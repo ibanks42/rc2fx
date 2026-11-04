@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+# Always locate the copied AppRun itself. Do not trust an APPDIR inherited
+# from the AppImage/FUSE mount: the user-private helper copies this directory
+# and then runs the copied AppRun.
+APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export APPDIR
+
+case "${LD_LIBRARY_PATH:-}" in
+    "") LD_LIBRARY_PATH="$APPDIR/usr/lib" ;;
+    *) LD_LIBRARY_PATH="$APPDIR/usr/lib:$LD_LIBRARY_PATH" ;;
+esac
+export LD_LIBRARY_PATH
+
+exec "$APPDIR/usr/bin/rc2fx" "$@"

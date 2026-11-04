@@ -1,1 +1,1 @@
-{{#include ../../crates/rc2fx-native-control/README.md}}
+<!--@include: ../../crates/rc2fx-native-control/README.md-->

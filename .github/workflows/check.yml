@@ -1,0 +1,54 @@
+name: Check
+
+# `cargo check` on every platform the app ships for, with warnings as errors
+# (setup-rust-toolchain's default `build-warnings: deny`). It builds nothing to
+# download and skips the mixer runtime: `--no-default-features` turns off the
+# app's embedded installer payload, which only real builds need.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang \
+            libfontconfig1-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libxcb1-dev libvulkan1 libasound2-dev \
+            libssl-dev libudev-dev libdbus-1-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: ""
+          cache-key: check
+          # The native library is its own workspace with its own target folder.
+          cache-workspaces: |
+            . -> target
+            crates/rc2fx-native -> target
+      - name: Check the workspace
+        run: cargo check --locked --workspace --all-targets --no-default-features
+      - name: Check the native library
+        if: runner.os == 'Linux'
+        run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets

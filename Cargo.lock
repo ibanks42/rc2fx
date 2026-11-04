@@ -5380,6 +5380,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "gpui-kit",
+ "image",
  "rc2fx-core",
  "rc2fx-installer",
  "rc2fx-transport",
@@ -8660,7 +8661,6 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
- "flate2",
  "object",
  "rc2fx-firmware",
  "rc2fx-installer",
@@ -8668,6 +8668,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tar",
+ "tempfile",
  "zip",
 ]
 

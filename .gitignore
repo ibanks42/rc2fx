@@ -10,3 +10,4 @@ target/
 id_ed25519*
 __pycache__/
 *.pyc
+docs/node_modules/

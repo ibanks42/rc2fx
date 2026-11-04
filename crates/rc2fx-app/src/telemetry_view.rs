@@ -882,7 +882,7 @@ pub(super) mod preview {
                         title: Some("RC2FX telemetry preview".into()),
                         ..Default::default()
                     }),
-                    ..Default::default()
+                    ..ui::window_options()
                 };
                 gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| Preview { reported }))
                     .expect("Open telemetry preview window");

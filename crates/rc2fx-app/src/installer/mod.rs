@@ -16,7 +16,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use rc2fx_installer::{Engine, Progress, Reply, Request, helper::Helper};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -64,6 +64,33 @@ fn privileged(request: &Request) -> bool {
     )
 }
 
+/// The installer over the payload this executable embeds. A build without it
+/// (`--no-default-features`, which only checks the code) installs from the
+/// source checkout it was built from instead.
+#[cfg(feature = "embedded")]
+fn engine(work: PathBuf) -> Engine {
+    Engine::embedded(work)
+}
+#[cfg(not(feature = "embedded"))]
+fn engine(work: PathBuf) -> Engine {
+    Engine::new(checkout(), work)
+}
+
+/// The privileged helper for the same payload as [`engine`].
+#[cfg(feature = "embedded")]
+fn start_helper(work: &Path) -> rc2fx_installer::Result<Helper> {
+    Helper::start_embedded(work)
+}
+#[cfg(not(feature = "embedded"))]
+fn start_helper(work: &Path) -> rc2fx_installer::Result<Helper> {
+    Helper::start(&checkout(), work)
+}
+
+#[cfg(not(feature = "embedded"))]
+fn checkout() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+}
+
 struct Runner {
     jobs: mpsc::Sender<Request>,
     done: mpsc::Receiver<Outcome>,
@@ -99,7 +126,7 @@ impl Runner {
         std::thread::Builder::new()
             .name("rc2fx-installer-access".into())
             .spawn(move || {
-                let outcome = Helper::start_embedded(&work).and_then(|mut helper| {
+                let outcome = start_helper(&work).and_then(|mut helper| {
                     helper.handle(&Request::Probe, |_| {})?;
                     Ok(helper)
                 });
@@ -143,7 +170,7 @@ impl Runner {
                         *slot = Some(p);
                     }
                 };
-                let mut engine = Engine::embedded(thread_work);
+                let mut engine = engine(thread_work);
                 engine.progress = Some(Box::new(report.clone()));
                 engine.cancel = stop.clone();
                 let separate = rc2fx_installer::helper::needed();

@@ -15,6 +15,25 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering, mpsc},
 };
 
+#[cfg(target_os = "linux")]
+#[path = "helper_appimage.rs"]
+mod appimage;
+
+// Keep the staged AppDir alive until the helper has exited, including on the
+// long-lived request path. Both privilege entry points use this same planner.
+fn privileged_launch() -> Result<(Command, Option<tempfile::TempDir>)> {
+    let exe = std::env::current_exe()?;
+    #[cfg(target_os = "linux")]
+    let launch = appimage::prepare(&exe, std::env::var_os("APPDIR").as_deref())?;
+    #[cfg(target_os = "linux")]
+    let (exe, guard) = (launch.executable, launch.guard);
+    #[cfg(not(target_os = "linux"))]
+    let guard = None;
+    let mut command = Command::new("pkexec");
+    command.arg(exe);
+    Ok((command, guard))
+}
+
 pub const FLAG: &str = "--installer-helper";
 
 /// The start of the error the app gets when Linux refuses it the mixer's
@@ -106,6 +125,7 @@ pub struct Helper {
     child: Child,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     stdout: BufReader<ChildStdout>,
+    _appdir: Option<tempfile::TempDir>,
 }
 
 /// Asks a running helper to stop its current download, from any thread.
@@ -153,9 +173,8 @@ impl Helper {
     }
 
     fn spawn(root: &Path, work: &Path) -> Result<Self> {
-        let exe = std::env::current_exe()?;
-        let mut child = Command::new("pkexec")
-            .arg(exe)
+        let (mut command, appdir) = privileged_launch()?;
+        let mut child = command
             .arg(FLAG)
             .arg(root)
             .arg(work)
@@ -174,6 +193,7 @@ impl Helper {
             child,
             stdin,
             stdout,
+            _appdir: appdir,
         })
     }
 
@@ -272,9 +292,8 @@ pub fn install_usb_rule() -> Result<()> {
 /// The desktop side: ask the system for permission (its own password
 /// prompt) to run this app's [`USB_RULE_FLAG`] once, and wait for it.
 pub fn request_usb_rule() -> Result<()> {
-    let exe = std::env::current_exe()?;
-    let status = Command::new("pkexec")
-        .arg(exe)
+    let (mut command, _appdir) = privileged_launch()?;
+    let status = command
         .arg(USB_RULE_FLAG)
         .stdin(Stdio::null())
         .status()

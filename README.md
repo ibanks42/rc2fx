@@ -25,8 +25,9 @@ stock RØDE firmware removes RC2FX.
 
 ## Quick start
 
-1. Download the app for your computer from the releases page, extract the
-   whole archive and run it.
+1. Download the app for your computer from the releases page and run it. On
+   Windows and macOS, extract the zip first. On Linux, make the AppImage
+   executable.
 2. Connect the computer to the mixer's **USB 1** port.
 3. Choose **Install RC2FX**. The app downloads official RØDE firmware, adds
    RC2FX to it and flashes it through the mixer's USB update mode. The

@@ -1,8 +1,12 @@
-//! `cargo xtask package`: the self-contained desktop executable, documentation,
-//! licences and a SHA256SUMS manifest. Installer inputs are embedded in the
-//! executable; packaging verifies those bytes, including for --skip-build.
+//! `cargo xtask package`: the self-contained desktop executable, legal notices
+//! and a SHA256SUMS manifest. Installer inputs are embedded in the executable;
+//! packaging verifies those bytes, including for --skip-build. Linux releases
+//! are a single AppImage; Windows and macOS use a minimal zip.
 
 use crate::{Result, root, run, sha256};
+
+mod appimage;
+mod native_linux;
 use std::{
     collections::BTreeMap,
     fs,
@@ -10,63 +14,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-
-/// Files copied from the repository unchanged, at their repository paths. The
-/// installer and user pages come first; the rest is what their relative links
-/// (and the crate chapters' `{{#include}}`s) reach, so every link inside the
-/// package resolves (`packaged_documentation_links_resolve`).
-const DOCUMENTS: [&str; 47] = [
-    "docs/user/getting-started.md",
-    "docs/user/how-it-works.md",
-    "docs/user/installing.md",
-    "docs/user/using-the-app.md",
-    "docs/user/effects.md",
-    "docs/user/noise-suppression.md",
-    "docs/user/settings-and-diagnostics.md",
-    "docs/user/troubleshooting.md",
-    "docs/developer/architecture.md",
-    "docs/developer/building.md",
-    "docs/developer/commands.md",
-    "docs/developer/linux.md",
-    "docs/developer/mixer-workflow.md",
-    "docs/developer/releases.md",
-    "docs/reference/api.md",
-    "docs/reference/duo.md",
-    "docs/reference/duo-routing.md",
-    "docs/reference/eq-format.md",
-    "docs/reference/firmware.md",
-    "docs/reference/source-name-evidence.md",
-    "docs/reference/suppression.md",
-    "docs/reference/usb-paths.md",
-    "docs/firmware-audits/usb-paths.json",
-    "docs/firmware-audits/rodecaster-pro-ii-ui-1.7.7.json",
-    "docs/reference/hardware.md",
-    "docs/reference/installer.md",
-    "docs/reference/usb-control.md",
-    "docs/crates/rc2fx-native.md",
-    "docs/crates/rc2fx-dfn.md",
-    "crates/rc2fx-dfn/model/README.md",
-    "crates/rc2fx-dfn/model/la1/README.md",
-    "crates/rc2fx-dfn/model/PROVENANCE.md",
-    "docs/crates/rc2fx-native-control.md",
-    "docs/crates/rc2fx-suppression.md",
-    "docs/firmware-audits/rodecaster-pro-ii-1.7.7.json",
-    "docs/firmware-audits/rodecaster-duo-1.7.7.json",
-    "docs/firmware-audits/rodecaster-duo-routes.json",
-    "crates/rc2fx-native/README.md",
-    "crates/rc2fx-native/jackerr/README.md",
-    "crates/rc2fx-native-control/README.md",
-    "crates/rc2fx-suppression/README.md",
-    "crates/rc2fx-dfn/LICENSE-DEEPFILTERNET",
-    "experiments/device-panel/README.md",
-    "experiments/device-panel/ui-1.7.7-map.md",
-    "LICENSE-MIT",
-    "LICENSE-APACHE",
-    "THIRD_PARTY_NOTICES.md",
-];
-
-/// Files only the Linux package needs: the USB permission rule.
-const LINUX_FILES: [&str; 1] = ["config/udev/70-rc2fx.rules"];
 
 #[cfg(test)]
 const SCRIPTS: [&str; 4] = [
@@ -127,76 +74,26 @@ fn host_target() -> Result<String> {
         .ok_or_else(|| "rustc did not report its host".into())
 }
 
-fn readme(os: &str, arch: &str) -> String {
-    let start = match os {
-        "windows" => "Run rc2fx.exe.",
-        "macos" => {
-            "Run ./rc2fx from Terminal. This build is unsigned, so macOS may ask you to\napprove it in System Settings > Privacy & Security."
-        }
-        _ => {
-            "First let the app reach the mixer over USB, once:\n\n  \
-             sudo cp config/udev/70-rc2fx.rules /etc/udev/rules.d/\n  \
-             sudo udevadm control --reload-rules\n  \
-             sudo udevadm trigger --action=add --subsystem-match=hidraw\n\n\
-             Then run ./rc2fx. The installer asks for administrator permission once through\npkexec (polkit), because raw USB, mounting and media ejection need it; the\napp itself runs as you."
-        }
-    };
-    format!(
-        "RC2FX - {os} / {arch}\n\n\
-         Extract the whole archive, then {start}\n\n\
-         The executable embeds its mixer runtime, catalog and installer scripts;\n\
-         no runtime/config/xtask folders are required beside it for flashing.\n\
-         Official RODE firmware is downloaded when needed.\n\n\
-         To install or update RC2FX on a RODECaster Pro II, choose Open installer.\n\
-         It saves any RC2FX settings, builds official RODE firmware with RC2FX and\n\
-         those settings in it, and flashes it after one confirmation. Keep mixer\n\
-         power and USB 1 connected until RC2FX reports that it is running.\n\n\
-         Progress, downloads and backups are kept in RC2FX/installer in your\n\
-         user data folder (%LOCALAPPDATA% on Windows, ~/.local/share on Linux).\n\
-         See docs/user/installing.md and docs/user/troubleshooting.md for help,\n\
-         docs/reference/installer.md for what the installer does and how far it\n\
-         has been tested, and\n\
-         THIRD_PARTY_NOTICES.md and licenses/ for third-party licences.\n"
-    )
-}
-
 /// Official release builds embed the quiet-diagnostics launcher policy.
 fn release_build() -> bool {
     std::env::var_os("RC2FX_RELEASE_BUILD").is_some_and(|value| value == "1")
 }
 
-/// Everything in the package except SHA256SUMS. `licenses` maps file names
-/// under `licenses/` to their contents.
-pub fn collect(
-    root: &Path,
-    os: &str,
-    arch: &str,
-    executable: Vec<u8>,
-    licenses: Vec<(String, Vec<u8>)>,
-) -> Result<Files> {
-    collect_with(root, os, arch, executable, licenses, release_build())
+fn validate_executable(root: &Path, executable: &[u8], release: bool) -> Result {
+    let embedded = rc2fx_installer::Envelope::find(executable)?;
+    let expected = rc2fx_installer::Envelope::expected(root, release)?;
+    embedded.require_matches(&expected)
 }
 
 fn collect_with(
     root: &Path,
     os: &str,
-    arch: &str,
     executable: Vec<u8>,
     licenses: Vec<(String, Vec<u8>)>,
     release: bool,
 ) -> Result<Files> {
     let mut files = Files::new();
-    let embedded = rc2fx_installer::Envelope::find(&executable)?;
-    let expected = rc2fx_installer::Envelope::expected(root, release)?;
-    embedded.require_matches(&expected)?;
-    for name in DOCUMENTS {
-        files.insert(name.to_owned(), file(read(&root.join(name))?));
-    }
-    if os == "linux" {
-        for name in LINUX_FILES {
-            files.insert(name.to_owned(), file(read(&root.join(name))?));
-        }
-    }
+    validate_executable(root, &executable, release)?;
     for (name, data) in licenses {
         files.insert(format!("licenses/{name}"), file(data));
     }
@@ -212,7 +109,6 @@ fn collect_with(
             mode: 0o755,
         },
     );
-    files.insert("README.txt".into(), file(readme(os, arch).into_bytes()));
     Ok(files)
 }
 
@@ -224,7 +120,7 @@ pub fn manifest(files: &Files) -> String {
         .collect()
 }
 
-/// Write the executable and accompanying documentation as an unpacked package.
+/// Write the executable and legal notices as an unpacked package.
 fn write_folder(dir: &Path, files: &Files) -> Result {
     let _ = fs::remove_dir_all(dir);
     for (name, m) in files {
@@ -239,28 +135,6 @@ fn write_folder(dir: &Path, files: &Files) -> Result {
                 .map_err(|e| e.to_string())?;
         }
     }
-    Ok(())
-}
-
-pub fn write_tar(out: impl Write, files: &Files) -> Result<()> {
-    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
-        out,
-        flate2::Compression::best(),
-    ));
-    for (name, m) in files {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(m.data.len() as u64);
-        header.set_mode(m.mode);
-        header.set_mtime(0);
-        header.set_entry_type(tar::EntryType::Regular);
-        builder
-            .append_data(&mut header, format!("{TOP}/{name}"), m.data.as_slice())
-            .map_err(|e| e.to_string())?;
-    }
-    builder
-        .into_inner()
-        .and_then(|gz| gz.finish())
-        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -315,8 +189,26 @@ fn licence_reports(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     Ok(reports)
 }
 
+fn release_licenses(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut licenses = licence_reports(root)?;
+    for (name, path) in [
+        ("LICENSE-MIT", "LICENSE-MIT"),
+        ("LICENSE-APACHE", "LICENSE-APACHE"),
+        ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
+        (
+            "LICENSE-DEEPFILTERNET",
+            "crates/rc2fx-dfn/LICENSE-DEEPFILTERNET",
+        ),
+    ] {
+        licenses.push((name.to_owned(), read(&root.join(path))?));
+    }
+    Ok(licenses)
+}
+
 fn usage() -> String {
-    "usage: cargo xtask package [--target TRIPLE] [--skip-build]".into()
+    "usage: cargo xtask package [--target TRIPLE] [--skip-build]\n\
+     Linux requires RC2FX_LINUXDEPLOY, RC2FX_APPIMAGETOOL, RC2FX_APPIMAGE_RUNTIME, RC2FX_PATCHELF and RC2FX_NFPM to name the pinned tools."
+        .into()
 }
 
 pub fn run_package(args: &[&str]) -> Result {
@@ -356,30 +248,32 @@ pub fn run_package(args: &[&str]) -> Result {
     });
     let executable = read(&exe).map_err(|e| format!("{e}\nBuild the app or drop --skip-build."))?;
 
-    let mut files = collect(&root, os, arch, executable, licence_reports(&root)?)?;
+    let release = release_build();
+    validate_executable(&root, &executable, release)?;
+    let out = root.join("target").join("package");
+    let name = format!("rc2fx-{os}-{arch}");
+    if os == "linux" {
+        let tools = appimage::Tools::from_env()?;
+        let licenses = release_licenses(&root)?;
+        appimage::package(&out, &name, &executable, licenses.clone(), arch, &tools)?;
+        native_linux::package(&out, &name, &exe, &licenses, arch)?;
+        return Ok(());
+    }
+    let licenses = release_licenses(&root)?;
+    let mut files = collect_with(&root, os, executable, licenses, release)?;
     let sums = manifest(&files);
     files.insert("SHA256SUMS".into(), file(sums.into_bytes()));
 
-    let out = root.join("target").join("package");
-    let name = format!("rc2fx-{os}-{arch}");
     let folder = out.join(&name).join(TOP);
     write_folder(&folder, &files)?;
-    // collect() checked the actual executable's embedded payload against the
-    // staged build inputs; the package deliberately has no payload sidecars.
+    // collect_with() checked the actual executable's embedded payload against
+    // the staged build inputs; the package deliberately has no payload sidecars.
 
-    let archive = out.join(if os == "linux" {
-        format!("{name}.tar.gz")
-    } else {
-        format!("{name}.zip")
-    });
+    let archive = out.join(format!("{name}.zip"));
     let part = PathBuf::from(format!("{}.part", archive.display()));
     let result = (|| {
         let f = fs::File::create(&part).map_err(|e| e.to_string())?;
-        if os == "linux" {
-            write_tar(std::io::BufWriter::new(&f), &files)?;
-        } else {
-            write_zip(std::io::BufWriter::new(&f), &files)?;
-        }
+        write_zip(std::io::BufWriter::new(&f), &files)?;
         f.sync_all().map_err(|e| e.to_string())?;
         fs::rename(&part, &archive).map_err(|e| e.to_string())
     })();
@@ -456,9 +350,6 @@ mod tests {
             };
             put(&format!("xtask/mixer/{name}"), script);
         }
-        for name in DOCUMENTS.iter().chain(&LINUX_FILES) {
-            put(name, name.as_bytes());
-        }
         put("config/firmware-profiles.json", catalog);
         let exe = synthetic_executable(&root, false);
         (root, exe)
@@ -479,12 +370,12 @@ mod tests {
         for release in [false, true] {
             let (root, _) = fixture();
             let exe = synthetic_executable(&root, release);
-            let files = collect_with(&root, "linux", "x64", exe.clone(), vec![], release).unwrap();
+            let files = collect_with(&root, "windows", exe.clone(), vec![], release).unwrap();
             assert_eq!(
-                files["rc2fx"].data, exe,
+                files["rc2fx.exe"].data, exe,
                 "packaging must not rewrite the executable"
             );
-            let envelope = rc2fx_installer::Envelope::find(&files["rc2fx"].data).unwrap();
+            let envelope = rc2fx_installer::Envelope::find(&files["rc2fx.exe"].data).unwrap();
             let bundle = envelope.bundle().unwrap();
             let script = String::from_utf8(bundle["rc2fx.sh"].clone()).unwrap();
             let kind = if release { "release" } else { "development" };
@@ -496,8 +387,7 @@ mod tests {
     #[test]
     fn packaging_refuses_old_corrupt_stale_and_wrong_policy_executables() {
         let (root, exe) = fixture();
-        let old =
-            collect_with(&root, "linux", "x64", b"old app".to_vec(), vec![], false).unwrap_err();
+        let old = collect_with(&root, "windows", b"old app".to_vec(), vec![], false).unwrap_err();
         assert!(old.contains("embed"), "{old}");
 
         let mut corrupt = exe.clone();
@@ -507,16 +397,15 @@ mod tests {
             .position(|w| w == marker)
             .unwrap();
         corrupt[offset] ^= 1;
-        assert!(collect_with(&root, "linux", "x64", corrupt, vec![], false).is_err());
+        assert!(collect_with(&root, "windows", corrupt, vec![], false).is_err());
 
-        let wrong_policy =
-            collect_with(&root, "linux", "x64", exe.clone(), vec![], true).unwrap_err();
+        let wrong_policy = collect_with(&root, "windows", exe.clone(), vec![], true).unwrap_err();
         assert!(wrong_policy.contains("rc2fx.sh"), "{wrong_policy}");
         let script_path = root.join("xtask/mixer/rc2fx.sh");
         let mut script = fs::read(&script_path).unwrap();
         script.extend_from_slice(b"\n# changed after desktop compilation\n");
         fs::write(script_path, script).unwrap();
-        let stale = collect_with(&root, "linux", "x64", exe, vec![], false).unwrap_err();
+        let stale = collect_with(&root, "windows", exe, vec![], false).unwrap_err();
         assert!(stale.contains("rc2fx.sh"), "{stale}");
         fs::remove_dir_all(root).unwrap();
     }
@@ -526,9 +415,11 @@ mod tests {
         let mut files = collect_with(
             &root,
             os,
-            "x64",
             exe,
-            vec![("rust-crates.html".into(), b"<html>".to_vec())],
+            vec![
+                ("rust-crates.html".into(), b"<html>".to_vec()),
+                ("LICENSE-MIT".into(), b"MIT terms".to_vec()),
+            ],
             false,
         )
         .unwrap();
@@ -559,8 +450,23 @@ mod tests {
     fn package_has_self_contained_executable_licences_and_complete_manifest() {
         let (root, files) = package("windows");
         assert_eq!(files["rc2fx.exe"].mode, 0o755);
-        assert!(!files.contains_key("config/udev/70-rc2fx.rules"));
         assert!(files.contains_key("licenses/rust-crates.html"));
+        assert_eq!(files["licenses/LICENSE-MIT"].data, b"MIT terms");
+        for forbidden in [
+            "config/",
+            "crates/",
+            "docs/",
+            "experiments/",
+            "runtime/",
+            "xtask/",
+            "README",
+        ] {
+            assert!(
+                files.keys().all(|name| !name.starts_with(forbidden)),
+                "{forbidden} leaked into archive: {:?}",
+                files.keys().collect::<Vec<_>>()
+            );
+        }
         let envelope = rc2fx_installer::Envelope::find(&files["rc2fx.exe"].data).unwrap();
         let bundle = envelope.bundle().unwrap();
         for name in rc2fx_installer::PAYLOAD_NAMES {
@@ -589,32 +495,13 @@ mod tests {
         assert!(!folder.join("config/firmware-profiles.json").exists());
         // A missing source payload is refused, not silently packaged stale.
         fs::remove_file(root.join("target/mixer/rc2fxd")).unwrap();
-        assert!(collect_with(&root, "linux", "x64", copied_executable, vec![], false).is_err());
+        assert!(collect_with(&root, "windows", copied_executable, vec![], false).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn archives_round_trip_under_one_folder() {
-        let (root, files) = package("linux");
-        assert!(files.contains_key("config/udev/70-rc2fx.rules"));
-        let mut tar_bytes = Vec::new();
-        write_tar(&mut tar_bytes, &files).unwrap();
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tar_bytes.as_slice()));
-        let mut seen = Files::new();
-        for entry in archive.entries().unwrap() {
-            let mut entry = entry.unwrap();
-            let name = entry.path().unwrap().to_string_lossy().into_owned();
-            let mode = entry.header().mode().unwrap();
-            let mut data = Vec::new();
-            entry.read_to_end(&mut data).unwrap();
-            let name = name
-                .strip_prefix("rc2fx/")
-                .expect("single top folder")
-                .to_owned();
-            assert!(seen.insert(name, Member { data, mode }).is_none());
-        }
-        assert_eq!(seen, files);
-
+    fn zip_round_trips_under_one_folder() {
+        let (root, files) = package("windows");
         let mut zip_bytes = std::io::Cursor::new(Vec::new());
         write_zip(&mut zip_bytes, &files).unwrap();
         let mut zip = zip::ZipArchive::new(zip_bytes).unwrap();
@@ -646,7 +533,7 @@ mod tests {
         assert!(platform("riscv64gc-unknown-linux-gnu").is_err());
     }
 
-    /// The relative targets of a Markdown file's links and mdBook includes,
+    /// The relative targets of a Markdown file's links and VitePress includes,
     /// outside code. URLs and same-page anchors are not files.
     fn local_targets(text: &str) -> Vec<String> {
         let mut targets = Vec::new();
@@ -661,13 +548,16 @@ mod tests {
             }
             // Drop inline code spans: every other backtick-separated piece.
             let prose: String = line.split('`').step_by(2).collect();
-            let links = prose.match_indices("](").map(|(at, _)| &prose[at + 2..]);
-            let includes = prose
-                .match_indices("{{#include ")
-                .map(|(at, _)| &prose[at + 11..]);
-            for rest in links.chain(includes) {
-                let end = rest.find([')', '}', ' ']).unwrap_or(rest.len());
-                let target = rest[..end].split('#').next().unwrap_or_default();
+            let links = prose.match_indices("](").map(|(at, _)| {
+                let rest = &prose[at + 2..];
+                &rest[..rest.find([')', ' ']).unwrap_or(rest.len())]
+            });
+            let includes = prose.match_indices("<!--@include: ").map(|(at, _)| {
+                let rest = &prose[at + 14..];
+                rest[..rest.find("-->").unwrap_or(rest.len())].trim()
+            });
+            for target in links.chain(includes) {
+                let target = target.split('#').next().unwrap_or_default();
                 if !target.is_empty() && !target.contains(':') {
                     targets.push(target.to_owned());
                 }
@@ -695,29 +585,8 @@ mod tests {
     #[test]
     fn link_targets_skip_code_urls_and_anchors() {
         let text = "See [a](../a.md#x), [b](https://b), [c](#c) and `[d](d.md)`.\n\
-                    ```\n[e](e.md)\n```\n{{#include ../../crates/f/README.md}}\n";
+                    ```\n[e](e.md)\n```\n<!--@include: ../../crates/f/README.md-->\n";
         assert_eq!(local_targets(text), ["../a.md", "../../crates/f/README.md"]);
         assert_eq!(resolve("docs/user/x.md", "../a.md"), "docs/a.md");
-    }
-
-    /// Every local link in the packaged documentation points at a file the
-    /// package also ships, at the same relative path.
-    #[test]
-    fn packaged_documentation_links_resolve() {
-        let shipped: Vec<&str> = DOCUMENTS.iter().chain(&LINUX_FILES).copied().collect();
-        let mut broken = Vec::new();
-        for name in DOCUMENTS.iter().filter(|name| name.ends_with(".md")) {
-            let text = fs::read_to_string(root().join(name)).unwrap();
-            for target in local_targets(&text) {
-                let path = resolve(name, &target);
-                if !shipped.contains(&path.as_str()) {
-                    broken.push(format!("{name}: {target}"));
-                }
-            }
-        }
-        assert!(
-            broken.is_empty(),
-            "links to files the package doesn't ship: {broken:#?}"
-        );
     }
 }

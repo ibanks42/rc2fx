@@ -46,7 +46,7 @@ It also contains the installer, which builds and flashes RC2FX firmware.
 | `config/firmware-profiles.json` | [Firmware catalog](../reference/firmware.md) |
 | `tools/firmware_audit` | Audits a new RØDE firmware against the hooks RC2FX depends on |
 | `experiments/` | Unfinished work outside the build (currently the on-screen panel) |
-| `docs/` | This book |
+| `docs/` | This documentation |
 
 `rc2fx-native` and `rc2fx-bench` are separate Cargo workspaces. They build
 only for Linux and are cross-compiled for the mixer.
@@ -82,15 +82,18 @@ everywhere:
 - Leave a mixer alone during its first boot after an update, and restart
   audio only when the person using it expects it.
 
-## Building this book
+## Building the documentation
 
 ```sh
-just book         # build into target/book
-just book-serve   # serve on http://localhost:3000 and rebuild on change
+just docs         # build into target/docs
+just docs-serve   # serve on http://localhost:5173/rc2fx/ and rebuild on change
 ```
 
-Both need [mdBook](https://rust-lang.github.io/mdBook/)
-(`cargo install --locked mdbook`). The book reads `docs/` in place, and each
-crate chapter includes that crate's `README.md`. User pages are in
+Both need [Node.js](https://nodejs.org/). The site is built with
+[VitePress](https://vitepress.dev/), configured in `docs/.vitepress/config.mjs`,
+which also holds the sidebar. It reads `docs/` in place, and each crate page
+includes that crate's `README.md`. Links to files outside `docs/` open on
+GitHub. Pushing a change under `docs/` to `main` publishes the site to GitHub
+Pages. User pages are in
 `docs/user/`, developer pages in `docs/developer/` and the technical
 reference in `docs/reference/`.

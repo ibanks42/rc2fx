@@ -1,1 +1,1 @@
-{{#include ../../crates/rc2fx-transport/README.md}}
+<!--@include: ../../crates/rc2fx-transport/README.md-->

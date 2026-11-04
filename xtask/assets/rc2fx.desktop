@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=RC2FX
+Comment=Audio processing for the RØDECaster
+Exec=rc2fx
+Icon=rc2fx
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupNotify=true
+StartupWMClass=rc2fx

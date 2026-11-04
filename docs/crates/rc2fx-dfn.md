@@ -1,1 +1,1 @@
-{{#include ../../crates/rc2fx-dfn/model/README.md}}
+<!--@include: ../../crates/rc2fx-dfn/model/README.md-->

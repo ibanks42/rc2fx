@@ -59,18 +59,16 @@ library is a separate workspace, and its tests run under `just test-mixer`.
 just package
 ```
 
-This builds the self-contained desktop app for the current computer and
-writes `target/package/rc2fx-<os>-<arch>.zip` (`.tar.gz` on Linux). The
-package contains the app, documentation, licence reports, and on Linux the
-USB rule. It needs `cargo-about` (`cargo install --locked cargo-about`).
-Each platform is packaged on its own machine; [Releases](releases.md#per-platform-build-runners)
-explains why.
+This builds the self-contained desktop app for the current computer into
+`target/package`. On Windows and macOS that's `rc2fx-<os>-<arch>.zip`,
+holding the app, its licence notices and a `SHA256SUMS`. On Linux it's a
+single `rc2fx-linux-x64.AppImage`. The documentation isn't packaged.
 
-The packaged documentation is the user and installer pages plus every page
-they link to, at their repository paths, so links work inside the package.
-The list is `DOCUMENTS` in `xtask/src/package.rs`. When you add a link from a
-packaged page, add its target to that list. `just test` fails if a packaged
-page links to a file the package doesn't include.
+Packaging needs `cargo-about` (`cargo install --locked cargo-about`). On Linux
+it also needs `linuxdeploy`, `appimagetool` and the AppImage type 2 runtime,
+given by absolute path in `RC2FX_LINUXDEPLOY`, `RC2FX_APPIMAGETOOL` and
+`RC2FX_APPIMAGE_RUNTIME`. Each platform is packaged on its own machine;
+[Releases](releases.md#per-platform-build-runners) explains why.
 
 ## Next steps
 

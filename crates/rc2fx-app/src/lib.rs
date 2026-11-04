@@ -1813,7 +1813,7 @@ pub fn run() {
                     title: Some("RC2FX".into()),
                     ..Default::default()
                 }),
-                ..Default::default()
+                ..ui::window_options()
             };
             // Home's animated indicators wrap the same app in a shell
             // (line_overlay.rs); RC2FX_ANIMATED_LINE=0 opens the window

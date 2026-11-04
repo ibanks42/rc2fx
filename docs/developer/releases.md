@@ -38,10 +38,11 @@ and adds the release's section to `CHANGELOG.md`.
 
 On GitHub, the release is marked latest and contains:
 
-- `rc2fx-linux-x64.tar.gz`, `rc2fx-windows-x64.zip` and
-  `rc2fx-macos-arm64.zip` (GitHub's macOS runners are Apple silicon). Each is
-  built by `cargo xtask package` (see [packaging](building.md#3-package-it))
-  and includes the documentation and its own `SHA256SUMS`.
+- `rc2fx-linux-x64.AppImage`, `rc2fx-windows-x64.zip` and
+  `rc2fx-macos-arm64.zip` (GitHub's macOS runners are Apple silicon), each
+  built by `cargo xtask package` (see [packaging](building.md#3-package-it)).
+  The zips hold the app, its licence notices and their own `SHA256SUMS`. The
+  AppImage is the app and its licence notices in one file.
 - a `SHA256SUMS` file for the archives.
 - the release notes.
 

@@ -2,19 +2,21 @@
 
 ## Download the app
 
-There is one download per operating system: `rc2fx-windows-x64.zip`,
-`rc2fx-macos-arm64.zip` or `rc2fx-linux-x64.tar.gz`. Extract the whole
-archive. The installer is built into the app, and it downloads official RØDE
-firmware when needed.
+There is one download per operating system:
+[`rc2fx-windows-x64.zip`](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64.zip),
+[`rc2fx-macos-arm64.zip`](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.zip) or
+[`rc2fx-linux-x64.AppImage`](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage).
+The installer is built into the app, and it downloads official RØDE firmware
+when needed.
 
 To start the app:
 
-- Windows: run `rc2fx.exe`.
-- macOS: run `rc2fx`. The build is unsigned, so macOS may ask you to allow it
+- Windows: extract the zip and run `rc2fx.exe`.
+- macOS: extract the zip and run `rc2fx`. The build is unsigned, so macOS may ask you to allow it
   under **System Settings › Privacy & Security**. The macOS build has not been
   tested on a real Mac yet.
-- Linux: run `rc2fx`. Linux needs some one-time setup, described
-  [below](#linux).
+- Linux: make the file executable (`chmod +x rc2fx-linux-x64.AppImage`) and
+  run it. Linux needs some one-time setup, described [below](#linux).
 
 If there is no download for your platform, you can
 [build it from source](../developer/building.md).
@@ -30,10 +32,12 @@ how to remove it later. **Allow access** installs the rule through your
 system's password prompt. The password goes to the system prompt, and the app
 does not see it.
 
-To install the rule by hand, run this from the extracted `rc2fx` folder:
+To install the rule by hand, save
+[`config/udev/70-rc2fx.rules`](../../config/udev/70-rc2fx.rules) from the
+repository, then run this from the folder you saved it in:
 
 ```bash
-sudo cp config/udev/70-rc2fx.rules /etc/udev/rules.d/
+sudo cp 70-rc2fx.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --subsystem-match=hidraw
 ```

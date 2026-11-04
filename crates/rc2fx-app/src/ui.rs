@@ -9,6 +9,23 @@ use gpui_kit::component::{
 };
 use std::rc::Rc;
 
+/// The desktop entry and all windows share one identity and waveform icon.
+pub(super) fn window_options() -> WindowOptions {
+    static ICON: std::sync::OnceLock<std::sync::Arc<image::RgbaImage>> = std::sync::OnceLock::new();
+    let icon = ICON.get_or_init(|| {
+        std::sync::Arc::new(
+            image::load_from_memory(include_bytes!("../assets/rc2fx.png"))
+                .expect("embedded application icon")
+                .into_rgba8(),
+        )
+    });
+    WindowOptions {
+        app_id: Some("rc2fx".into()),
+        icon: Some(icon.clone()),
+        ..Default::default()
+    }
+}
+
 /// RC2FX's cyan→violet: only where RC2FX is processing.
 pub(super) fn gradient() -> Background {
     linear_gradient(
@@ -397,4 +414,19 @@ pub(super) fn confirm(
             })
             .on_close(move |_, window, cx| on_close(window, cx))
     });
+}
+
+#[cfg(test)]
+mod icon_tests {
+    #[test]
+    fn windows_match_the_packaged_desktop_identity_and_icon() {
+        let options = super::window_options();
+        assert_eq!(options.app_id.as_deref(), Some("rc2fx"));
+        let icon = options.icon.unwrap();
+        assert_eq!((icon.width(), icon.height()), (64, 64));
+        assert!(icon.pixels().any(|pixel| pixel[3] != 0));
+        let desktop = include_str!("../../../xtask/assets/rc2fx.desktop");
+        assert!(desktop.contains("Icon=rc2fx\n"));
+        assert!(desktop.contains("StartupWMClass=rc2fx\n"));
+    }
 }
