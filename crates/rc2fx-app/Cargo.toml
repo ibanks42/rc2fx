@@ -1,6 +1,6 @@
 [package]
 name = "rc2fx-app"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 publish = false
 default-run = "rc2fx"

@@ -2,6 +2,12 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.1.1] - 2026-11-04
+
+### Other
+
+- *(docs)* Pin vite 6.4.5 to fix dependency security alerts
+
 ## [0.1.0] - 2026-11-04
 
 ### Features
