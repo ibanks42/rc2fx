@@ -177,6 +177,13 @@ pub fn license_sections(root: &Path) -> Result<Vec<(String, String)>> {
             ],
         ),
         (
+            "libXdmcp",
+            [
+                "/usr/share/doc/libxdmcp6/copyright",
+                "/usr/share/doc/libXdmcp/COPYING",
+            ],
+        ),
+        (
             "libxcb-xkb",
             [
                 "/usr/share/doc/libxcb-xkb1/copyright",
@@ -240,6 +247,7 @@ fn covered_library(name: &str) -> bool {
         "libxkbcommon.so",
         "libxkbcommon-x11.so",
         "libXau.so",
+        "libXdmcp.so",
         "libxcb-xkb.so",
     ]
     .iter()
@@ -446,6 +454,7 @@ mod tests {
     fn unexpected_bundled_libraries_need_reviewed_notices() {
         assert!(super::covered_library("libxkbcommon-x11.so.0"));
         assert!(super::covered_library("libxcb-xkb.so.1.0.0"));
+        assert!(super::covered_library("libXdmcp.so.6"));
         assert!(!super::covered_library("libnew.so.1"));
         assert!(!super::covered_library("libXau.something"));
     }
