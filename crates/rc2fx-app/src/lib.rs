@@ -1,6 +1,7 @@
 mod app_update;
 mod connection;
 mod desk;
+mod dev_page;
 mod developer;
 mod diagnostics;
 mod draft_files;
@@ -110,6 +111,8 @@ struct Rc2FxApp {
     app_update: app_update::AppUpdate,
     /// Shows developer controls in Settings; grants nothing by itself.
     developer_mode: bool,
+    /// The page `RC2FX_DEV_PAGE` asked for, until it has been opened.
+    dev_page: Option<dev_page::DevPage>,
     ssh: developer::Ssh,
     /// The RC2FX mixer software this app installs, read at start.
     bundled_mixer_software: Option<String>,
@@ -221,6 +224,7 @@ impl Rc2FxApp {
             device_versions: None,
             app_update: Default::default(),
             developer_mode: connection::remembered_developer(),
+            dev_page: dev_page::DevPage::from_env(),
             ssh: Default::default(),
             bundled_mixer_software: versions::bundled_mixer_software(),
             selected: 0,
@@ -296,6 +300,7 @@ impl Rc2FxApp {
         app.connect(cx);
         // Notification only, in the background; a failure here stays quiet.
         app.check_app_update(false, window, cx);
+        app.open_dev_page(window, cx);
         let view = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             view.update(cx, |app, cx| {
@@ -649,6 +654,7 @@ impl Rc2FxApp {
                     }
                     self.connected_mixer = Some(mixer);
                     self.receive(state, false, false, window, cx);
+                    self.open_dev_page(window, cx);
                     // Versions change only across a restart: read once per connection.
                     self.command(Command::Version {
                         generation: self.generation,
