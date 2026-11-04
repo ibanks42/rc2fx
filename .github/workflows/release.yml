@@ -171,11 +171,6 @@ jobs:
           path: .release-input
       - name: Apply release version
         run: tar -xf .release-input/versioned.tar
-      - name: Prepare AppImage runtime licenses and corresponding sources
-        if: runner.os == 'Linux'
-        run: |
-          python3 .github/scripts/test_prepare_appimage_notices.py
-          python3 .github/scripts/prepare-appimage-notices.py
       # Key the cache against the manifests actually being compiled.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -190,6 +185,11 @@ jobs:
           rm -rf target/mixer
           mkdir -p target/mixer
           cp -R .release-input/runtime/. target/mixer/
+      - name: Prepare AppImage runtime licenses and corresponding sources
+        if: runner.os == 'Linux'
+        run: |
+          python3 .github/scripts/test_prepare_appimage_notices.py
+          python3 .github/scripts/prepare-appimage-notices.py
       - name: Build release package
         env:
           RC2FX_RELEASE_BUILD: "1"
