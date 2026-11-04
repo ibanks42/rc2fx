@@ -10,7 +10,7 @@
 //! only view notified on each animation tick. That the cached app is then
 //! reused, and the frame rate, are unverified: check with
 //! `RC2FX_RENDER_STATS=1`. The tick aims at 60 Hz; it doesn't guarantee 60
-//! frames a second.
+//! frames a second. It stops while the window is not focused.
 //!
 //! Who draws an indicator (never both, never neither): in each render, Home
 //! claims a slot for the overlay only for an indicator that can animate
@@ -164,6 +164,11 @@ pub(super) struct LineOverlay {
     epoch: Instant,
     /// The one shared ticker; runs only while some claim can animate.
     ticker: Option<Task<()>>,
+    /// When the window lost focus. While set, every paint draws the picture
+    /// from that moment, so other redraws don't move the lines.
+    frozen: Option<Instant>,
+    /// Each indicator's level as last drawn while focused, held while frozen.
+    held: Rc<RefCell<Vec<(Source, f32)>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -176,12 +181,18 @@ impl LineOverlay {
     ) -> Self {
         // A parked overlay is woken by the window becoming visible as well as
         // by any frame (it renders in every frame the window draws).
-        let subscriptions = vec![cx.observe_window_visibility(window, |_, _, _, cx| cx.notify())];
+        let subscriptions = vec![
+            cx.observe_window_visibility(window, |_, _, _, cx| cx.notify()),
+            // Pause and resume with focus: render decides from the new state.
+            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+        ];
         Self {
             app,
             slots,
             epoch: Instant::now(),
             ticker: None,
+            frozen: None,
+            held: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -219,10 +230,22 @@ impl Render for LineOverlay {
             let s = self.slots.borrow();
             s.painted.0 != generation || s.painted.1 > 0
         };
+        // Freeze on losing focus; on regaining it, move the clock on by the
+        // pause so the lines continue from where they stopped.
+        let focused = window.is_window_active();
+        match (focused, self.frozen) {
+            (false, None) => self.frozen = Some(Instant::now()),
+            (true, Some(at)) => {
+                self.epoch += Instant::now().saturating_duration_since(at);
+                self.frozen = None;
+            }
+            _ => {}
+        }
         let animate =
-            // Unfocused windows keep animating (the user's choice). Visibility
-            // is GPUI-reported; what counts as hidden is platform-dependent.
-            any && on_screen && !reduced && window.is_visible();
+            // Paused while the window is not focused, to save GPU (the user's
+            // choice). Visibility is GPUI-reported; what counts as hidden is
+            // platform-dependent.
+            any && on_screen && !reduced && window.is_visible() && window.is_window_active();
         if !animate {
             self.ticker = None;
         } else if self.ticker.is_none() {
@@ -243,6 +266,8 @@ impl Render for LineOverlay {
         let ticking = self.ticker.is_some();
         let slots = self.slots.clone();
         let epoch = self.epoch;
+        let frozen = self.frozen;
+        let held = self.held.clone();
         let app = app.downgrade();
         // Noninteractive: a bare canvas has no hitbox, focus or key context.
         div()
@@ -260,7 +285,11 @@ impl Render for LineOverlay {
                         }
                         count(&OVERLAY_PAINTS);
                         let now = Instant::now();
-                        let phase = now.saturating_duration_since(epoch).as_secs_f32();
+                        let phase = frozen
+                            .unwrap_or(now)
+                            .saturating_duration_since(epoch)
+                            .as_secs_f32();
+                        let mut held = held.borrow_mut();
                         let scale = window.scale_factor();
                         let layout = (window.viewport_size(), scale);
                         let mut refused = Vec::new();
@@ -276,8 +305,19 @@ impl Render for LineOverlay {
                             }
                             on_screen += 1;
                             let Source::Path(id) = &claim.source;
-                            let history = app.levels.get(id);
-                            let level = live_line::level_of(history, now);
+                            let kept = held
+                                .iter()
+                                .find(|(source, _)| *source == claim.source)
+                                .map(|(_, level)| *level);
+                            let level = match (frozen, kept) {
+                                (Some(_), Some(level)) => level,
+                                _ => {
+                                    let level = live_line::level_of(app.levels.get(id), now);
+                                    held.retain(|(source, _)| *source != claim.source);
+                                    held.push((claim.source.clone(), level));
+                                    level
+                                }
+                            };
                             window.with_content_mask(Some(mask), |window| {
                                 live_line::paint_line(
                                     window,
@@ -300,7 +340,12 @@ impl Render for LineOverlay {
                         s.painted = (app.render_generation, on_screen);
                         // Claims made after this view rendered: one more frame
                         // lets render start the ticker.
-                        if !ticking && on_screen > 0 && !app.reduced_motion && window.is_visible() {
+                        if !ticking
+                            && on_screen > 0
+                            && !app.reduced_motion
+                            && window.is_visible()
+                            && window.is_window_active()
+                        {
                             window.request_animation_frame();
                         }
                     },
