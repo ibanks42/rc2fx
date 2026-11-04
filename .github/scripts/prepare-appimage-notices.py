@@ -61,9 +61,8 @@ ALPINE_BRANCH = "v3.21"
 # RUNTIME_COMMIT was built (2025-12-08 11:23 +01:00). Inferred, not proven.
 APORTS_COMMIT = "590fd1489813473277cf110fd88b1c3888d19367"
 ALPINE_DISTFILES = "https://distfiles.alpinelinux.org/distfiles/{branch}/{name}"
-APORTS_ARCHIVE = (
-    "https://gitlab.alpinelinux.org/alpine/aports/-/archive/{commit}/aports-{commit}.tar.gz?path={path}"
-)
+APORTS_REPO = "https://github.com/alpinelinux/aports"
+
 # The aports that build the -dev/-static packages the runtime's Dockerfile
 # installs for the libraries it links (src/runtime/Makefile LIBS).
 # mimalloc-dev is provided by community/mimalloc2.
@@ -201,20 +200,22 @@ def aport_files(archive: bytes, path: str) -> dict[str, bytes]:
     return files
 
 
-def runtime_source() -> bytes:
-    """`git archive` of the runtime at the pinned commit; git checks the id.
-    Not cached, so the commit is checked on every run."""
+def git_source(repo: str, commit: str, prefix: str, paths: tuple[str, ...] = ()) -> bytes:
+    """`git archive` of `repo` at the pinned `commit`, under `prefix`, limited
+    to `paths` when given. Fetching by commit id means git checks the content.
+    Used for the runtime and for the Alpine aports recipes. Not cached, so the
+    commit is checked on every run."""
     with tempfile.TemporaryDirectory() as work:
         git = ["git", "-C", work, "-c", "advice.detachedHead=false"]
         subprocess.run(["git", "init", "-q", work], check=True)
-        subprocess.run(git + ["fetch", "-q", "--depth", "1", RUNTIME_REPO, RUNTIME_COMMIT], check=True)
+        subprocess.run(git + ["fetch", "-q", "--depth", "1", repo, commit], check=True)
         head = subprocess.run(
             git + ["rev-parse", "FETCH_HEAD"], check=True, capture_output=True, text=True
         ).stdout.strip()
-        if head != RUNTIME_COMMIT:
-            raise Failure(f"fetched runtime commit {head}, expected {RUNTIME_COMMIT}")
+        if head != commit:
+            raise Failure(f"fetched commit {head}, expected {commit}")
         data = subprocess.run(
-            git + ["archive", "--format=tar", f"--prefix=type2-runtime-{RUNTIME_COMMIT}/", head],
+            git + ["archive", "--format=tar", f"--prefix={prefix}/", head, *paths],
             check=True,
             capture_output=True,
         ).stdout
@@ -235,7 +236,7 @@ def collect(cache: Path | None) -> tuple[dict[str, bytes], list[dict], list[dict
         )
     binary_url = RUNTIME_BINARY.format(tag=RUNTIME_RELEASE)
     require("sha256", fetch(binary_url, cache), RUNTIME_SHA256, binary_url)
-    runtime = runtime_source()
+    runtime = git_source(RUNTIME_REPO, RUNTIME_COMMIT, f"type2-runtime-{RUNTIME_COMMIT}")
     files[f"type2-runtime-{RUNTIME_COMMIT}.tar"] = runtime
     script = member(runtime, "scripts/common/install-dependencies.sh").decode()
     dockerfile = member(runtime, "scripts/docker/Dockerfile").decode()
@@ -287,9 +288,11 @@ def collect(cache: Path | None) -> tuple[dict[str, bytes], list[dict], list[dict
             )
         sections.append({"title": title, "text": text})
 
+    aport = git_source(
+        APORTS_REPO, APORTS_COMMIT, f"aports-{APORTS_COMMIT}", tuple(ALPINE_PACKAGES.values())
+    )
     for component, path in ALPINE_PACKAGES.items():
         commit = APORTS_COMMIT
-        aport = fetch(APORTS_ARCHIVE.format(commit=commit, path=path), cache)
         recipe: dict[str, bytes] = {}
         recipe.update(aport_files(aport, path))
         if "APKBUILD" not in recipe:

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Offline tests for prepare-appimage-notices.py: no network, no git."""
+"""Offline tests for prepare-appimage-notices.py: no network. One test runs
+the local `git` binary on a temporary repository to check that git_source
+pins the commit and archives only the requested recipe directories."""
 
 import importlib.util
 import io
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -36,6 +39,28 @@ SHA = "a" * 128
 
 
 class Paths(unittest.TestCase):
+    def test_git_source_pins_commit_and_archives_only_requested_recipes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recipe = root / "main/zstd/APKBUILD"
+            recipe.parent.mkdir(parents=True)
+            recipe.write_text("pkgver=1.5.6\n")
+            (root / "unrelated").write_text("not bundled")
+            def git(*args):
+                return subprocess.check_output(["git", "-C", tmp, *args], text=True).strip()
+            git("init", "-q")
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "fixture")
+            commit = git("rev-parse", "HEAD")
+            archive = notices.git_source(tmp, commit, "aports-test", ("main/zstd",))
+            self.assertEqual(notices.aport_files(archive, "main/zstd"),
+                             {"APKBUILD": b"pkgver=1.5.6\n"})
+            with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+                self.assertFalse(any("unrelated" in name for name in tar.getnames()))
+            with self.assertRaises(notices.Failure):
+                notices.git_source(tmp, "HEAD", "aports-test")
+
     def test_unsafe_names_are_refused(self):
         for name in ["../x", "a/../../x", "/etc/passwd", "a//b", "./a", "a\\b", "", "a/."]:
             with self.assertRaises(notices.Failure, msg=name):

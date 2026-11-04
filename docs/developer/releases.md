@@ -169,8 +169,10 @@ release attaches beside the AppImage as
 
 The script fetches the runtime at a pinned commit (checked by git), libfuse
 and squashfuse at the SHA-256 sums the runtime's own build recipe pins, and
-the Alpine build recipes and sources of zstd, zlib, musl and mimalloc,
-checked against Alpine's SHA-512 sums. It fails if any download, checksum or
+the Alpine build recipes of zstd, zlib, musl and mimalloc at a pinned aports
+commit, from Alpine's official GitHub mirror (`alpinelinux/aports`, also
+checked by git). Their sources come from Alpine's distfiles mirror, checked
+against the recipes' SHA-512 sums. It fails if any download, checksum or
 licence text is missing or wrong. The runtime's recipe doesn't pin those four
 Alpine packages, so the script uses the aports commit current when the runtime
 was built; the archive's README and `SOURCES.json` mark those revisions as
