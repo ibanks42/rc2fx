@@ -437,7 +437,9 @@ pub(super) fn login_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{SshStatus, action, describe, login_command, uses_local_key};
+    use super::{SshStatus, action, describe, uses_local_key};
+    #[cfg(not(target_os = "windows"))]
+    use super::login_command;
 
     fn status(managed: bool, unmanaged: u32, running: Option<bool>) -> SshStatus {
         SshStatus {
