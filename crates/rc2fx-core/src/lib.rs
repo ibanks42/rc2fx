@@ -9,6 +9,7 @@ pub mod selection;
 pub mod session;
 mod strict_json;
 pub mod usb;
+pub mod versions;
 
 pub use diagnostics::*;
 pub use inputs::*;
@@ -16,6 +17,7 @@ pub use model::*;
 pub use selection::*;
 pub use session::*;
 pub use usb::*;
+pub use versions::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreError(pub String);

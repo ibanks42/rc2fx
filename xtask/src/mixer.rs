@@ -242,10 +242,22 @@ impl Mixer {
         let recorder_snapshot = read(crate::setup::JACKERR_SNAPSHOT)?;
         let profiles = read("firmware-profiles.json")?;
         rc2fx_firmware::Catalog::parse(std::str::from_utf8(&profiles).map_err(|e| e.to_string())?)?;
+        let release = read("mixer-release.json")?;
+        rc2fx_installer::MixerRelease::parse(&release).map_err(|e| e.0)?;
+        let source = fs::read_to_string(root().join("config/mixer-release.json"))
+            .map_err(|e| format!("config/mixer-release.json: {e}"))?
+            .replace("\r\n", "\n");
+        if release != source.as_bytes() {
+            return Err(
+                "target/mixer/mixer-release.json differs from config/mixer-release.json; \
+                 run `just mixer-build`"
+                    .into(),
+            );
+        }
         let sums = read("SHA256SUMS")?;
         let expected = format!(
             "{}  librc2fx_native.so\n{}  rc2fxd\n{}  rc2fx-firmware\n{}  firmware-profiles.json\n\
-             {}  {}\n{}  {}\n{}  {}\n",
+             {}  {}\n{}  {}\n{}  {}\n{}  mixer-release.json\n",
             sha256(&library),
             sha256(&controller),
             sha256(&profile_checker),
@@ -255,7 +267,8 @@ impl Mixer {
             sha256(&recorder),
             crate::setup::JACKERR_MODULE,
             sha256(&recorder_snapshot),
-            crate::setup::JACKERR_SNAPSHOT
+            crate::setup::JACKERR_SNAPSHOT,
+            sha256(&release)
         );
         if sums != expected.as_bytes() {
             return Err("target/mixer does not match its SHA256SUMS; rebuild it".into());
@@ -270,6 +283,7 @@ impl Mixer {
             (crate::setup::GUI_MODULE, gui_module, 0o600),
             (crate::setup::JACKERR_MODULE, recorder, 0o600),
             (crate::setup::JACKERR_SNAPSHOT, recorder_snapshot, 0o700),
+            ("mixer-release.json", release, 0o600),
             ("SHA256SUMS", sums, 0o600),
             ("rc2fx.sh", unix(RC2FX_SH), 0o700),
             ("rc2fx-shim.sh", unix(RC2FX_SHIM), 0o755),

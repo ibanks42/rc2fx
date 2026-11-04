@@ -5448,6 +5448,7 @@ dependencies = [
  "libc",
  "md-5",
  "plist",
+ "rc2fx-core",
  "rc2fx-firmware",
  "rc2fx-usb",
  "reqwest",

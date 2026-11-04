@@ -19,7 +19,7 @@ use std::{
 /// The runtime, catalog and scripts the installer adds to official firmware,
 /// in the order their bytes appear in an embedded envelope. The order is
 /// pinned: the checksummed files first, then the manifest itself.
-pub const PAYLOAD_NAMES: [&str; 12] = [
+pub const PAYLOAD_NAMES: [&str; 13] = [
     "librc2fx_native.so",
     "rc2fxd",
     "rc2fx-firmware",
@@ -27,6 +27,7 @@ pub const PAYLOAD_NAMES: [&str; 12] = [
     "librc2fx_gui.so",
     "librc2fx_jackerr.so",
     "rc2fx_jackerr_snapshot",
+    "mixer-release.json",
     "SHA256SUMS",
     "rc2fx.sh",
     "rc2fx-shim.sh",
@@ -34,7 +35,7 @@ pub const PAYLOAD_NAMES: [&str; 12] = [
     "install.sh",
 ];
 /// The order of the bundle's SHA256SUMS lines.
-pub const PINNED: [&str; 7] = [
+pub const PINNED: [&str; 8] = [
     "librc2fx_native.so",
     "rc2fxd",
     "rc2fx-firmware",
@@ -42,7 +43,12 @@ pub const PINNED: [&str; 7] = [
     "librc2fx_gui.so",
     "librc2fx_jackerr.so",
     "rc2fx_jackerr_snapshot",
+    "mixer-release.json",
 ];
+/// The mixer runtime's release identity, beside the catalog in `config/`.
+pub const RELEASE_MANIFEST: &str = "mixer-release.json";
+/// The only `mixer-release.json` schema a payload may carry.
+pub const RELEASE_SCHEMA: u64 = 1;
 /// Payload files that are ARM64 ELF executables or libraries.
 pub const BINARIES: [&str; 6] = [
     "librc2fx_native.so",
@@ -215,6 +221,16 @@ pub fn read(root: &Path, release: bool) -> Result<Files, String> {
     if installer != bundled {
         return Err("runtime and installer catalogs differ".to_owned());
     }
+    // The runtime must carry exactly the release the source tree names, so a
+    // reused runtime build can never ship under another version.
+    let release_path = root.join("config").join(RELEASE_MANIFEST);
+    let source_release = std::fs::read(&release_path)
+        .map_err(|e| format!("mixer release manifest missing {release_path:?}: {e}"))?;
+    if crlf_to_lf(&source_release) != data_of(&view, RELEASE_MANIFEST)? {
+        return Err(format!(
+            "the runtime's {RELEASE_MANIFEST} differs from config/{RELEASE_MANIFEST}; rebuild the mixer runtime"
+        ));
+    }
     validate(&view)?;
     Ok(files)
 }
@@ -262,8 +278,49 @@ pub fn validate(files: &[(&str, &[u8])]) -> Result<(), String> {
     if catalog.schema != 1 {
         return Err("unsupported runtime catalog".to_owned());
     }
+    release_version(data_of(files, RELEASE_MANIFEST)?)?;
     build_kind(data_of(files, "rc2fx.sh")?)?;
     Ok(())
+}
+
+/// Check a `mixer-release.json` and return its version. The same rules as
+/// `rc2fx_core::MixerRelease::parse`, using only what this module may use:
+/// exactly `schemaVersion` 1, a dotted numeric `version` and a positive
+/// integer `protocolVersion`.
+pub fn release_version(data: &[u8]) -> Result<String, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(data).map_err(|e| format!("{RELEASE_MANIFEST} is not JSON: {e}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{RELEASE_MANIFEST} is not an object"))?;
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    if keys != ["protocolVersion", "schemaVersion", "version"] {
+        return Err(format!(
+            "{RELEASE_MANIFEST} must have exactly schemaVersion, version and protocolVersion"
+        ));
+    }
+    if object["schemaVersion"].as_u64() != Some(RELEASE_SCHEMA) {
+        return Err(format!("unsupported {RELEASE_MANIFEST} schema"));
+    }
+    if !object["protocolVersion"]
+        .as_u64()
+        .is_some_and(|p| p >= 1 && p <= u32::MAX as u64)
+    {
+        return Err(format!(
+            "{RELEASE_MANIFEST} protocolVersion must be a positive integer"
+        ));
+    }
+    let version = object["version"]
+        .as_str()
+        .filter(|v| {
+            !v.is_empty()
+                && v.split('.').all(|part| {
+                    !part.is_empty() && part.len() <= 9 && part.bytes().all(|b| b.is_ascii_digit())
+                })
+        })
+        .ok_or_else(|| format!("{RELEASE_MANIFEST} version must be dotted numeric"))?;
+    Ok(version.to_owned())
 }
 
 fn data_of<'a>(files: &[(&str, &'a [u8])], name: &str) -> Result<&'a [u8], String> {
@@ -515,6 +572,7 @@ mod tests {
     use super::*;
 
     const CATALOG: &[u8] = br#"{"schemaVersion":1,"profiles":[]}"#;
+    const RELEASE_JSON: &[u8] = br#"{"schemaVersion":1,"version":"0.1.0","protocolVersion":1}"#;
 
     fn elf(marker: u8) -> Vec<u8> {
         let mut b = vec![marker; 96];
@@ -544,6 +602,7 @@ mod tests {
             .map(|name| {
                 let data = match *name {
                     "firmware-profiles.json" => CATALOG.to_vec(),
+                    RELEASE_MANIFEST => RELEASE_JSON.to_vec(),
                     "SHA256SUMS" => Vec::new(),
                     "rc2fx.sh" => format!("#!/bin/sh\n{BUILD_LINE}\nexit 0\n").into_bytes(),
                     n if SCRIPTS.contains(&n) => b"#!/bin/sh\nexit 0\n".to_vec(),
@@ -895,6 +954,11 @@ mod tests {
             &files[3].1,
         )
         .unwrap();
+        std::fs::write(
+            dir.path().join("config").join(RELEASE_MANIFEST),
+            RELEASE_JSON,
+        )
+        .unwrap();
         dir
     }
 
@@ -945,6 +1009,51 @@ mod tests {
         std::fs::remove_file(dir.path().join("runtime").join("rc2fx_jackerr_snapshot")).unwrap();
         let error = read(dir.path(), false).unwrap_err();
         assert!(error.contains("rc2fx_jackerr_snapshot"), "{error}");
+    }
+
+    #[test]
+    fn the_release_manifest_is_required_checked_and_must_match_its_source() {
+        // A runtime built for another release than the tree names is refused.
+        let dir = folder(1, false);
+        std::fs::write(
+            dir.path().join("config").join(RELEASE_MANIFEST),
+            br#"{"schemaVersion":1,"version":"0.2.0","protocolVersion":1}"#,
+        )
+        .unwrap();
+        let error = read(dir.path(), false).unwrap_err();
+        assert!(error.contains("differs from config/"), "{error}");
+        // No source manifest at all.
+        let dir = folder(1, false);
+        std::fs::remove_file(dir.path().join("config").join(RELEASE_MANIFEST)).unwrap();
+        let error = read(dir.path(), false).unwrap_err();
+        assert!(error.contains("manifest missing"), "{error}");
+        // A runtime that predates the manifest.
+        let dir = folder(1, false);
+        std::fs::remove_file(dir.path().join("runtime").join(RELEASE_MANIFEST)).unwrap();
+        let error = read(dir.path(), false).unwrap_err();
+        assert!(error.contains(RELEASE_MANIFEST), "{error}");
+        // A pinned, well-formed manifest is still checked for its shape.
+        for bad in [
+            &br#"{"schemaVersion":2,"version":"0.1.0","protocolVersion":1}"#[..],
+            br#"{"schemaVersion":1,"version":"0.1.0-rc1","protocolVersion":1}"#,
+            br#"{"schemaVersion":1,"version":"0.1.0","protocolVersion":0}"#,
+            br#"{"schemaVersion":1,"version":"0.1.0","protocolVersion":1,"extra":1}"#,
+            b"not json",
+        ] {
+            let mut files = payload(1);
+            set(&mut files, RELEASE_MANIFEST, bad.to_vec());
+            assert!(
+                validate(&view(&files)).is_err(),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+        assert_eq!(release_version(RELEASE_JSON).unwrap(), "0.1.0");
+        // The real manifest passes the payload rules too.
+        assert_eq!(
+            release_version(include_bytes!("../../../../config/mixer-release.json")).unwrap(),
+            "0.1.0"
+        );
     }
 
     #[test]

@@ -182,6 +182,9 @@ impl Fixture {
 fn write_runtime(root: &Path, catalog: &[u8]) {
     let mut bundle: HashMap<&str, Vec<u8>> = HashMap::new();
     bundle.insert("firmware-profiles.json", catalog.to_vec());
+    let release = include_bytes!("../../../config/mixer-release.json");
+    bundle.insert("mixer-release.json", release.to_vec());
+    put(&root.join("config").join("mixer-release.json"), release);
     for n in [
         "librc2fx_native.so",
         "rc2fxd",
@@ -204,6 +207,7 @@ fn write_runtime(root: &Path, catalog: &[u8]) {
         "librc2fx_gui.so",
         "librc2fx_jackerr.so",
         "rc2fx_jackerr_snapshot",
+        "mixer-release.json",
     ] {
         manifest.push_str(&format!("{}  {n}\n", sum(&bundle[n])));
         put(&root.join("runtime").join(n), &bundle[n]);
@@ -1248,6 +1252,12 @@ fn image_gets_rc2fx_autostart_and_settings_and_nothing_is_replaced() {
     assert_eq!(found["opt"].1, 0o755, "the stock image has no /opt");
     assert_eq!(found["opt/rc2fx/rc2fxd"].1, 0o700);
     assert_eq!(found["opt/rc2fx/firmware-profiles.json"].1, 0o600);
+    // The installed release identity the device reports as its version.
+    assert_eq!(found["opt/rc2fx/mixer-release.json"].1, 0o600);
+    assert_eq!(
+        found["opt/rc2fx/mixer-release.json"].2,
+        include_bytes!("../../../config/mixer-release.json")
+    );
     assert_eq!(found["opt/rc2fx/install.sh"].2, b"#!/bin/sh\nexit 0\n");
     assert_eq!(
         found["opt/rc2fx/bundle.sha256"].2,

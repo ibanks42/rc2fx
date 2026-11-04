@@ -1,7 +1,16 @@
-# Licences accepted for `cargo about generate about.hbs` (see THIRD_PARTY_NOTICES.md).
+# Licences accepted for RC2FX's release license reports (see THIRD_PARTY_NOTICES.md).
+# Release targets: Linux, Windows and macOS desktops plus the mixer's ARM Linux.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+]
+# Build and dev tools are not shipped in a release.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
 accepted = [
-    "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
-    "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "CC0-1.0", "0BSD",
-    "BSL-1.0", "MPL-2.0", "Unlicense", "MIT-0", "NCSA",
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+    "Unicode-3.0", "CC0-1.0", "0BSD", "MPL-2.0",
 ]
 workarounds = ["ring"]

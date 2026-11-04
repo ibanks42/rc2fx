@@ -26,6 +26,11 @@ Usage: rc2fxd --data ABSOLUTE_DIRECTORY --native-socket ABSOLUTE_SOCKET
   --ui-socket SOCKET       Optional owner-only local touchscreen control socket
   --initial-config FILE    Seed new storage; existing saved settings win
   --stock-config FILE      Read-only saved RODE show for input discovery
+  --release FILE           Installed mixer-release.json, reported as the
+                           RC2FX mixer version
+  --firmware-catalog FILE  Firmware catalog the launcher validated against
+  --firmware-profile ID    Profile the launcher selected; with the catalog,
+                           reported as the RODE firmware version
   --help                   Show help without starting or modifying anything
   --version                Print the build version
 
@@ -43,6 +48,9 @@ struct Arguments {
     ui: Option<PathBuf>,
     initial: Option<PathBuf>,
     stock: Option<PathBuf>,
+    release: Option<PathBuf>,
+    firmware_catalog: Option<PathBuf>,
+    firmware_profile: Option<String>,
 }
 #[derive(Debug)]
 enum Command {
@@ -89,6 +97,9 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
     let mut stock = None;
     let mut usb = None;
     let mut ui = None;
+    let mut release = None;
+    let mut firmware_catalog = None;
+    let mut firmware_profile = None;
     while let Some(key) = args.next() {
         let key = key.to_str().ok_or_else(|| invalid("option is not UTF-8"))?;
         if matches!(key, "--help" | "--version") {
@@ -109,6 +120,9 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
                 | "--ui-socket"
                 | "--initial-config"
                 | "--stock-config"
+                | "--release"
+                | "--firmware-catalog"
+                | "--firmware-profile"
         ) {
             return Err(invalid(format!("unknown option {key}; use --help")));
         }
@@ -126,6 +140,15 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
             "--stock-config" => stock = Some(PathBuf::from(value)),
             "--usb-socket" => usb = Some(PathBuf::from(value)),
             "--ui-socket" => ui = Some(PathBuf::from(value)),
+            "--release" => release = Some(PathBuf::from(value)),
+            "--firmware-catalog" => firmware_catalog = Some(PathBuf::from(value)),
+            "--firmware-profile" => {
+                firmware_profile = Some(
+                    value
+                        .into_string()
+                        .map_err(|_| invalid("--firmware-profile is not UTF-8"))?,
+                )
+            }
             _ => unreachable!(),
         }
     }
@@ -137,6 +160,8 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
         .chain(initial.iter())
         .chain(stock.iter())
         .chain(ui.iter())
+        .chain(release.iter())
+        .chain(firmware_catalog.iter())
         .any(|path| !path.is_absolute())
     {
         return Err(invalid("native controller paths must be absolute"));
@@ -149,7 +174,15 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
             "--ui-socket must differ from USB and native sockets",
         ));
     }
+    if firmware_catalog.is_some() != firmware_profile.is_some() {
+        return Err(invalid(
+            "--firmware-catalog and --firmware-profile go together",
+        ));
+    }
     Ok(Command::Start(Arguments {
+        release,
+        firmware_catalog,
+        firmware_profile,
         data,
         socket,
         usb,
@@ -211,6 +244,17 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
         Command::Start(args) => args,
     };
     let model = device_model()?;
+    // Reported versions never stop the controller: what cannot be read stays
+    // unknown, and the log says why.
+    let (versions, problems) = rc2fx_device::versions::read(
+        args.release.as_deref(),
+        args.firmware_catalog.as_deref(),
+        args.firmware_profile.as_deref(),
+        model,
+    );
+    for problem in problems {
+        eprintln!("{problem}");
+    }
     let initial = if let Some(path) = args.initial {
         let mut text = String::new();
         std::fs::File::open(path)?
@@ -238,6 +282,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
             let options = api::Options {
                 stock_config: args.stock,
                 catalog: rc2fx_device::catalog::physical_catalog_for(model).to_vec(),
+                versions,
             };
             let show_watch = async {
                 if let Some(path) = options.stock_config.clone() {
@@ -354,6 +399,45 @@ mod tests {
             ],
         ] {
             assert!(command(&values).is_err());
+        }
+    }
+
+    #[test]
+    fn version_sources_are_optional_absolute_and_paired() {
+        let command = |extra: &[&str]| {
+            let mut values = vec![
+                "--data",
+                "/tmp/state",
+                "--native-socket",
+                "/tmp/s",
+                "--usb-socket",
+                "/tmp/u",
+            ];
+            values.extend_from_slice(extra);
+            parse(values.into_iter().map(OsString::from))
+        };
+        let Ok(Command::Start(args)) = command(&[
+            "--release",
+            "/opt/rc2fx/mixer-release.json",
+            "--firmware-catalog",
+            "/opt/rc2fx/firmware-profiles.json",
+            "--firmware-profile",
+            "rodecaster-pro-ii-1.7.7",
+        ]) else {
+            panic!("all version sources are accepted");
+        };
+        assert_eq!(
+            args.firmware_profile.as_deref(),
+            Some("rodecaster-pro-ii-1.7.7")
+        );
+        assert!(matches!(command(&[]), Ok(Command::Start(a)) if a.release.is_none()));
+        for extra in [
+            vec!["--release", "relative.json"],
+            vec!["--firmware-profile", "rodecaster-pro-ii-1.7.7"],
+            vec!["--firmware-catalog", "/opt/rc2fx/firmware-profiles.json"],
+            vec!["--release", "/a", "--release", "/b"],
+        ] {
+            assert!(command(&extra).is_err(), "{extra:?}");
         }
     }
 

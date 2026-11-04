@@ -12,9 +12,9 @@ is the exact run configuration.
 
 The model is DeepFilterNet3 with the GRUs narrowed to 128 units
 (`emb_hidden_dim = df_hidden_dim = 128`, `nb_df = 64`, 601,660 parameters),
-retrained by RC2FX on DNS-4 speech and noise, VCTK, room impulse responses,
-and mouse-click and keyboard recordings (Freesound, FSD50K, ESC-50, AudioSet)
-weighted to a quarter of the noise. The weights are the best checkpoint by
+retrained by RC2FX on the same data as LA0, credited in
+[PROVENANCE.md](../PROVENANCE.md#training-data), with the click and keyboard
+recordings weighted to a quarter of the noise. The weights are the best checkpoint by
 validation loss from run `a960s360d64-la1-b20` (epoch 102, 0.9706).
 
 `reference.wav` is the output of DeepFilterNet's own runtime (libDF with

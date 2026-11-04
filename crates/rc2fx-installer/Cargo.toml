@@ -9,6 +9,7 @@ description = "Guided RØDECaster Pro II firmware preparation, USB update and RC
 [dependencies]
 flate2 = "1"
 getrandom = "0.3"
+rc2fx-core = { path = "../rc2fx-core" }
 rc2fx-usb = { path = "../rc2fx-usb" }
 rc2fx-firmware = { path = "../rc2fx-firmware" }
 md-5 = "0.10"

@@ -133,6 +133,14 @@ pub fn build_mixer() -> Result {
             sha256(&fs::read(&file).map_err(|e| e.to_string())?)
         );
     }
+    // The runtime's release identity, pinned last; the installer refuses a
+    // runtime whose manifest differs from config/mixer-release.json.
+    let release = fs::read_to_string(root.join("config/mixer-release.json"))
+        .map_err(|e| format!("config/mixer-release.json: {e}"))?
+        .replace("\r\n", "\n");
+    rc2fx_installer::MixerRelease::parse(release.as_bytes()).map_err(|e| e.0)?;
+    fs::write(out.join("mixer-release.json"), &release).map_err(|e| e.to_string())?;
+    sums += &format!("{}  mixer-release.json\n", sha256(release.as_bytes()));
     fs::write(out.join("SHA256SUMS"), &sums).map_err(|e| e.to_string())?;
     if same_files(&out, &staging) {
         fs::remove_dir_all(&out).map_err(|e| e.to_string())?;

@@ -61,9 +61,12 @@ mixer and the project layout.
 
 ## License
 
-RC2FX is licensed under either [MIT](LICENSE-MIT) or
-[Apache-2.0](LICENSE-APACHE), at your option. Third-party components and
-their licences are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+RC2FX's own code and its trained noise suppression weights are licensed under
+[MIT](LICENSE-MIT). Third-party components keep their own licences, listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The datasets the weights
+were trained on are credited in
+[crates/rc2fx-dfn/model/PROVENANCE.md](crates/rc2fx-dfn/model/PROVENANCE.md);
+their own terms are not changed by this licence.
 
 RC2FX is an unofficial project and is not affiliated with or endorsed by
 RØDE. It needs root access to the mixer and only runs on firmware it has been

@@ -44,25 +44,38 @@ class ReleaseTests(unittest.TestCase):
         return subprocess.run(["python3", str(SCRIPT), "prepare", "--bump", bump], cwd=self.root,
                               env=self.env, check=check, capture_output=True, text=True)
 
-    def test_bootstrap_updates_all_local_versions_and_keeps_history(self):
+    def test_bootstrap_preserves_all_local_versions_and_keeps_history(self):
         self.prepare()
         plan = json.loads((self.root / "target/release-input/plan.json").read_text())
-        self.assertEqual(plan["tag"], "v0.1.1")
+        self.assertEqual(plan["tag"], "v0.1.0")
         self.assertEqual(self.git("tag"), "")
         for filename in ("Cargo.lock", "crates/rc2fx-native/Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
             packages = tomllib.loads((self.root / filename).read_text())["package"]
-            self.assertTrue(all(p["version"] == "0.1.1" for p in packages))
+            self.assertTrue(all(p["version"] == "0.1.0" for p in packages))
         self.assertIn("Initial project", (self.root / "target/release-input/release-notes.md").read_text())
-        self.assertIn('version = "0.1.1"', (self.root / "crates/app/Cargo.toml").read_text())
+        self.assertIn('version = "0.1.0"', (self.root / "crates/app/Cargo.toml").read_text())
         self.assertIn("version.workspace = true", (self.root / "crates/core/Cargo.toml").read_text())
+
+    def test_desktop_bump_keeps_mixer_identity_and_mentions_it_in_notes(self):
+        manifest = '{"schemaVersion":1,"version":"0.4.2","protocolVersion":1}\n'
+        self.put("config/mixer-release.json", manifest)
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: mixer identity")
+        self.git("tag", "mixer-v0.4.2")
+        self.prepare()
+        self.assertEqual((self.root / "config/mixer-release.json").read_text(), manifest)
+        self.assertIn("Bundled RC2FX mixer software: 0.4.2", (self.root / "target/release-input/release-notes.md").read_text())
+        plan = json.loads((self.root / "target/release-input/plan.json").read_text())
+        self.assertEqual(plan["tag"], "v0.1.0")
+        self.assertNotIn("config/mixer-release.json", plan["files"])
 
     def test_bootstrap_minor(self):
         self.prepare("minor")
-        self.assertIn('version = "0.2.0"', (self.root / "Cargo.toml").read_text())
+        self.assertIn('version = "0.1.0"', (self.root / "Cargo.toml").read_text())
 
     def test_bootstrap_major(self):
         self.prepare("major")
-        self.assertIn('version = "1.0.0"', (self.root / "Cargo.toml").read_text())
+        self.assertIn('version = "0.1.0"', (self.root / "Cargo.toml").read_text())
 
     def test_existing_tag_and_changelog(self):
         self.git("tag", "v0.1.0")
@@ -70,9 +83,23 @@ class ReleaseTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-m", "fix: repair release")
         self.prepare()
+        plan = json.loads((self.root / "target/release-input/plan.json").read_text())
+        self.assertEqual(plan["tag"], "v0.1.1")
         changelog = (self.root / "CHANGELOG.md").read_text()
         self.assertLess(changelog.index("Repair release"), changelog.index("Older entry"))
         self.assertNotIn("Initial project", (self.root / "target/release-input/release-notes.md").read_text())
+
+    def test_subsequent_release_uses_selected_bump(self):
+        self.git("tag", "v0.1.0")
+        self.put("extra", "new")
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: add feature")
+        for bump, expected in (("patch", "v0.1.1"), ("minor", "v0.2.0"), ("major", "v1.0.0")):
+            with self.subTest(bump=bump):
+                self.prepare(bump)
+                plan = json.loads((self.root / "target/release-input/plan.json").read_text())
+                self.assertEqual(plan["tag"], expected)
+                self.git("restore", ".")
 
     def test_act_commit_uses_isolated_index(self):
         self.prepare()
@@ -80,8 +107,8 @@ class ReleaseTests(unittest.TestCase):
         env = dict(self.env, ACT="true")
         subprocess.run(["python3", str(SCRIPT), "commit"], cwd=self.root, env=env,
                        check=True, capture_output=True, text=True)
-        self.assertEqual(self.git("tag"), "v0.1.1")
-        self.assertEqual(self.git("log", "-1", "--format=%s"), "chore(release): v0.1.1")
+        self.assertEqual(self.git("tag"), "v0.1.0")
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "chore(release): v0.1.0")
         self.assertEqual((self.root / ".git/index.lock").read_text(), "copied host lock")
 
     def test_no_new_commits_rejected(self):

@@ -22,6 +22,8 @@ pub struct Options {
     /// Read-only local startup setting; inaccessible through API writes.
     pub stock_config: Option<PathBuf>,
     pub catalog: Vec<crate::stock_inputs::CatalogChannel<'static>>,
+    /// What `GET api/v1/version` reports, read once at startup.
+    pub versions: rc2fx_core::DeviceVersions,
 }
 
 /// A response body, carried as validated JSON text rather than a `Value`
@@ -88,6 +90,7 @@ fn empty() -> Reply {
 
 /// An error page, for the USB layer's own failures (a bad request, a reply
 /// that would not fit): the same shape the API's errors have.
+#[cfg(target_os = "linux")]
 pub(crate) fn failure(status: u16, message: impl AsRef<str>) -> Reply {
     error(status, message)
 }
@@ -190,6 +193,9 @@ impl Api {
                 }
             }
             ("GET", "api/v1/inputs") => self.inputs().await,
+            // Installed RC2FX release and validated RØDE firmware. Separate
+            // from the state so DeviceState's strict schema is unchanged.
+            ("GET", "api/v1/version") => reply(200, &self.options.versions),
             // The saved settings file, for the installer to carry across a reflash.
             ("GET", "api/v1/settings") => match receive(controller.settings()).await {
                 Ok(data) => reply_bytes(200, &data),
@@ -689,6 +695,46 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn version_reports_what_was_read_and_omits_what_is_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, owner) = Coordinator::new(
+            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
+            None,
+        )
+        .unwrap();
+        let thread = std::thread::spawn(move || owner.run());
+        let get = || Request {
+            method: "GET".into(),
+            path: "api/v1/version".into(),
+            body: None,
+        };
+        let mut unknown = Api::new(handle.clone(), Options::default());
+        let reply = unknown.request(get()).await;
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.body.get(), "{}");
+        let versions = rc2fx_core::DeviceVersions {
+            runtime: Some("0.1.0".into()),
+            protocol: Some(1),
+            firmware: Some("1.7.7".into()),
+            firmware_profile: Some("rodecaster-pro-ii-1.7.7".into()),
+        };
+        let mut known = Api::new(
+            handle.clone(),
+            Options {
+                versions: versions.clone(),
+                ..Options::default()
+            },
+        );
+        let reply = known.request(get()).await;
+        assert_eq!(reply.status, 200);
+        let decoded: rc2fx_core::DeviceVersions = serde_json::from_str(reply.body.get()).unwrap();
+        assert_eq!(decoded, versions);
+        handle.close();
+        handle.shutdown().await.unwrap();
+        thread.join().unwrap();
+    }
+
     #[tokio::test]
     async fn diagnostics_reset_and_event_pages_round_trip() {
         let dir = tempfile::tempdir().unwrap();

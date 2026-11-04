@@ -1,0 +1,298 @@
+RC2FX's noise suppression weights (DeepFilterNet3, LA0 and LA1) were trained
+by the RC2FX project on the datasets below. No dataset audio is included in
+RC2FX. RC2FX releases the weights under the MIT licence; that does not
+relicense these datasets, whose own terms still apply to them.
+
+A licence is named only where it was checked. "See the dataset's terms" means
+it was not verified here.
+
+- DNS Challenge 4 (ICASSP 2022): fullband clean speech, noise and room impulse
+  responses. Microsoft DNS Challenge. See the dataset's terms.
+  https://github.com/microsoft/DNS-Challenge
+
+- CSTR VCTK Corpus, as distributed with DNS Challenge 4. Centre for Speech
+  Technology Research (CSTR), University of Edinburgh. See the dataset's
+  terms. https://datashare.ed.ac.uk/handle/10283/3443
+
+- AudioSet and Freesound clips, as distributed with the DNS Challenge 4 noise
+  set. See the dataset's terms. https://research.google.com/audioset/ and
+  https://freesound.org
+
+- OpenSLR SLR26 (simulated room impulse responses) and SLR28 (room impulse
+  responses and noise), as distributed with DNS Challenge 4. Apache 2.0.
+  https://www.openslr.org/26/ and https://www.openslr.org/28/
+
+- FSD50K, keyboard and click sounds. Each clip has its own Creative Commons
+  licence. https://zenodo.org/records/4060432
+
+- ESC-50, mouse click and keyboard typing classes. Karol J. Piczak.
+  Creative Commons Attribution-NonCommercial 3.0 (CC BY-NC 3.0), a
+  non-commercial licence. https://github.com/karolpiczak/ESC-50
+
+- Freesound keyboard and mouse sounds: 796 sounds under CC0 1.0 and the
+  156 sounds under CC BY 4.0 listed at the end of this file.
+  https://freesound.org
+
+- SKAID keystroke dataset. Benjamin Quattrone and Youakim Badr. CC BY 4.0.
+  https://zenodo.org/records/17282184
+
+- Keystrokes dataset. Pedro Pinto, Diogo Rafael Gonçalves Rodrigues, Gonçalo
+  da Costa Macedo and Silvestre Malta. CC BY 4.0.
+  https://zenodo.org/records/19453177
+
+- Keyboard and click recordings. Yoshiyuki Kobayashi / Sony Group Corporation.
+  MIT. https://zenodo.org/records/16564409
+
+- About 14 typing clips, probably from an OpenGameArt keyboard pack (CC0);
+  source not confirmed.
+
+- Keyboard and mouse recordings by the RC2FX project author.
+
+
+Freesound sounds under CC BY 4.0
+--------------------------------
+
+Licence: Creative Commons Attribution 4.0 International,
+https://creativecommons.org/licenses/by/4.0/
+
+These sounds were cut into short excerpts and mixed with speech as training
+noise; no audio from them is included in RC2FX. Sound titles were not
+recorded in the training records, so each sound is credited by its author's
+Freesound username and its page, which gives the title.
+
+  alexarje:
+    https://freesound.org/people/alexarje/sounds/720060/
+  andersmmg:
+    https://freesound.org/people/andersmmg/sounds/506905/
+    https://freesound.org/people/andersmmg/sounds/538450/
+    https://freesound.org/people/andersmmg/sounds/538668/
+  Artninja:
+    https://freesound.org/people/Artninja/sounds/751294/
+  Australopithecusman:
+    https://freesound.org/people/Australopithecusman/sounds/388912/
+    https://freesound.org/people/Australopithecusman/sounds/388915/
+  avakas:
+    https://freesound.org/people/avakas/sounds/144120/
+  BarkersPinhead:
+    https://freesound.org/people/BarkersPinhead/sounds/274810/
+  BismarckBall:
+    https://freesound.org/people/BismarckBall/sounds/843370/
+  BockelSound:
+    https://freesound.org/people/BockelSound/sounds/489383/
+  Bpianoholic:
+    https://freesound.org/people/Bpianoholic/sounds/487611/
+  Brandon6642:
+    https://freesound.org/people/Brandon6642/sounds/753092/
+  btherad2000:
+    https://freesound.org/people/btherad2000/sounds/328078/
+  byronabadia:
+    https://freesound.org/people/byronabadia/sounds/412511/
+    https://freesound.org/people/byronabadia/sounds/724294/
+  cdangels:
+    https://freesound.org/people/cdangels/sounds/403203/
+  CGEffex:
+    https://freesound.org/people/CGEffex/sounds/97793/
+  copyc4t:
+    https://freesound.org/people/copyc4t/sounds/788370/
+  CorrosionAudio:
+    https://freesound.org/people/CorrosionAudio/sounds/248115/
+  Cpfcfan10:
+    https://freesound.org/people/Cpfcfan10/sounds/617256/
+  crumptetr:
+    https://freesound.org/people/crumptetr/sounds/822526/
+    https://freesound.org/people/crumptetr/sounds/822527/
+  Daawesomeprieto:
+    https://freesound.org/people/Daawesomeprieto/sounds/662061/
+    https://freesound.org/people/Daawesomeprieto/sounds/662062/
+  Danielardot:
+    https://freesound.org/people/Danielardot/sounds/608261/
+  DBS_Sounds:
+    https://freesound.org/people/DBS_Sounds/sounds/613764/
+  designerschoice:
+    https://freesound.org/people/designerschoice/sounds/805429/
+    https://freesound.org/people/designerschoice/sounds/805431/
+    https://freesound.org/people/designerschoice/sounds/805432/
+    https://freesound.org/people/designerschoice/sounds/805433/
+    https://freesound.org/people/designerschoice/sounds/807553/
+    https://freesound.org/people/designerschoice/sounds/807554/
+    https://freesound.org/people/designerschoice/sounds/807581/
+    https://freesound.org/people/designerschoice/sounds/808773/
+    https://freesound.org/people/designerschoice/sounds/808920/
+    https://freesound.org/people/designerschoice/sounds/817060/
+    https://freesound.org/people/designerschoice/sounds/833951/
+    https://freesound.org/people/designerschoice/sounds/836692/
+    https://freesound.org/people/designerschoice/sounds/836696/
+    https://freesound.org/people/designerschoice/sounds/852080/
+  Eelke:
+    https://freesound.org/people/Eelke/sounds/158058/
+  emilijoan:
+    https://freesound.org/people/emilijoan/sounds/648086/
+  EmilZendera98:
+    https://freesound.org/people/EmilZendera98/sounds/446054/
+  Emmonsounds:
+    https://freesound.org/people/Emmonsounds/sounds/872774/
+  EtherAudio:
+    https://freesound.org/people/EtherAudio/sounds/756455/
+  FairSonicStudio:
+    https://freesound.org/people/FairSonicStudio/sounds/647425/
+  Garuda1982:
+    https://freesound.org/people/Garuda1982/sounds/541379/
+  halimturk:
+    https://freesound.org/people/halimturk/sounds/392634/
+  hannagreen:
+    https://freesound.org/people/hannagreen/sounds/332102/
+  HendrikOdendaalOW:
+    https://freesound.org/people/HendrikOdendaalOW/sounds/708232/
+    https://freesound.org/people/HendrikOdendaalOW/sounds/708233/
+  ibrizie:
+    https://freesound.org/people/ibrizie/sounds/793582/
+  ImATaco:
+    https://freesound.org/people/ImATaco/sounds/706311/
+  JackAmadon:
+    https://freesound.org/people/JackAmadon/sounds/495820/
+  jaromarsalek:
+    https://freesound.org/people/jaromarsalek/sounds/456025/
+  Jay_You:
+    https://freesound.org/people/Jay_You/sounds/460430/
+  john_pork3:
+    https://freesound.org/people/john_pork3/sounds/554786/
+  Jovica:
+    https://freesound.org/people/Jovica/sounds/6570/
+    https://freesound.org/people/Jovica/sounds/6571/
+  kgatto:
+    https://freesound.org/people/kgatto/sounds/240280/
+  Kyster:
+    https://freesound.org/people/Kyster/sounds/77332/
+    https://freesound.org/people/Kyster/sounds/77333/
+    https://freesound.org/people/Kyster/sounds/77334/
+  Lextao:
+    https://freesound.org/people/Lextao/sounds/471625/
+  LG:
+    https://freesound.org/people/LG/sounds/15519/
+  LilMati:
+    https://freesound.org/people/LilMati/sounds/506962/
+    https://freesound.org/people/LilMati/sounds/659393/
+  llupo2:
+    https://freesound.org/people/llupo2/sounds/723374/
+  mak2142962:
+    https://freesound.org/people/mak2142962/sounds/813549/
+    https://freesound.org/people/mak2142962/sounds/813591/
+  marianasasousa:
+    https://freesound.org/people/marianasasousa/sounds/508677/
+  MaslovyTygr:
+    https://freesound.org/people/MaslovyTygr/sounds/736170/
+    https://freesound.org/people/MaslovyTygr/sounds/736172/
+  MattRuthSound:
+    https://freesound.org/people/MattRuthSound/sounds/561658/
+    https://freesound.org/people/MattRuthSound/sounds/561659/
+    https://freesound.org/people/MattRuthSound/sounds/561660/
+    https://freesound.org/people/MattRuthSound/sounds/561661/
+    https://freesound.org/people/MattRuthSound/sounds/561662/
+    https://freesound.org/people/MattRuthSound/sounds/561663/
+    https://freesound.org/people/MattRuthSound/sounds/561664/
+    https://freesound.org/people/MattRuthSound/sounds/561665/
+    https://freesound.org/people/MattRuthSound/sounds/561666/
+    https://freesound.org/people/MattRuthSound/sounds/561667/
+    https://freesound.org/people/MattRuthSound/sounds/561668/
+    https://freesound.org/people/MattRuthSound/sounds/561669/
+    https://freesound.org/people/MattRuthSound/sounds/561670/
+    https://freesound.org/people/MattRuthSound/sounds/561671/
+    https://freesound.org/people/MattRuthSound/sounds/561672/
+    https://freesound.org/people/MattRuthSound/sounds/561673/
+    https://freesound.org/people/MattRuthSound/sounds/561674/
+    https://freesound.org/people/MattRuthSound/sounds/561675/
+    https://freesound.org/people/MattRuthSound/sounds/561682/
+    https://freesound.org/people/MattRuthSound/sounds/561685/
+    https://freesound.org/people/MattRuthSound/sounds/561693/
+    https://freesound.org/people/MattRuthSound/sounds/561694/
+    https://freesound.org/people/MattRuthSound/sounds/561695/
+    https://freesound.org/people/MattRuthSound/sounds/561696/
+    https://freesound.org/people/MattRuthSound/sounds/561697/
+    https://freesound.org/people/MattRuthSound/sounds/561698/
+    https://freesound.org/people/MattRuthSound/sounds/561699/
+  Metris:
+    https://freesound.org/people/Metris/sounds/697245/
+  mokasza:
+    https://freesound.org/people/mokasza/sounds/810334/
+    https://freesound.org/people/mokasza/sounds/810335/
+  moodyfingers:
+    https://freesound.org/people/moodyfingers/sounds/719522/
+  Mryellolarva:
+    https://freesound.org/people/Mryellolarva/sounds/712900/
+    https://freesound.org/people/Mryellolarva/sounds/719127/
+  multijoy:
+    https://freesound.org/people/multijoy/sounds/737641/
+  NataliaRea777:
+    https://freesound.org/people/NataliaRea777/sounds/828309/
+  NextQueenLiz:
+    https://freesound.org/people/NextQueenLiz/sounds/539156/
+  Ninafoletti:
+    https://freesound.org/people/Ninafoletti/sounds/256290/
+  PeteBarry:
+    https://freesound.org/people/PeteBarry/sounds/463103/
+  pfranzen:
+    https://freesound.org/people/pfranzen/sounds/391310/
+    https://freesound.org/people/pfranzen/sounds/466049/
+  pipnone:
+    https://freesound.org/people/pipnone/sounds/320102/
+    https://freesound.org/people/pipnone/sounds/320103/
+  PixaPexelAudio:
+    https://freesound.org/people/PixaPexelAudio/sounds/674624/
+    https://freesound.org/people/PixaPexelAudio/sounds/674626/
+  PixelProphecy:
+    https://freesound.org/people/PixelProphecy/sounds/497022/
+  qfox123:
+    https://freesound.org/people/qfox123/sounds/462227/
+    https://freesound.org/people/qfox123/sounds/462228/
+  qubodup:
+    https://freesound.org/people/qubodup/sounds/211608/
+  rainial.co:
+    https://freesound.org/people/rainial.co/sounds/571855/
+    https://freesound.org/people/rainial.co/sounds/571856/
+  RAMON850:
+    https://freesound.org/people/RAMON850/sounds/661704/
+    https://freesound.org/people/RAMON850/sounds/661709/
+  Ramon_Qfwfq:
+    https://freesound.org/people/Ramon_Qfwfq/sounds/507879/
+  Ricmorth:
+    https://freesound.org/people/Ricmorth/sounds/403411/
+    https://freesound.org/people/Ricmorth/sounds/403412/
+    https://freesound.org/people/Ricmorth/sounds/403418/
+    https://freesound.org/people/Ricmorth/sounds/403421/
+    https://freesound.org/people/Ricmorth/sounds/403422/
+    https://freesound.org/people/Ricmorth/sounds/403423/
+    https://freesound.org/people/Ricmorth/sounds/403425/
+  rocketmanX14:
+    https://freesound.org/people/rocketmanX14/sounds/739381/
+  Rslebs:
+    https://freesound.org/people/Rslebs/sounds/661825/
+  sagegreenseth:
+    https://freesound.org/people/sagegreenseth/sounds/796571/
+  ScouseMouseJB:
+    https://freesound.org/people/ScouseMouseJB/sounds/329051/
+    https://freesound.org/people/ScouseMouseJB/sounds/329052/
+    https://freesound.org/people/ScouseMouseJB/sounds/329053/
+    https://freesound.org/people/ScouseMouseJB/sounds/329054/
+  SmartWentCody:
+    https://freesound.org/people/SmartWentCody/sounds/179010/
+    https://freesound.org/people/SmartWentCody/sounds/179017/
+  Taira Komori:
+    https://freesound.org/people/Taira Komori/sounds/212519/
+    https://freesound.org/people/Taira Komori/sounds/212520/
+  The_Egyptian_GameDev:
+    https://freesound.org/people/The_Egyptian_GameDev/sounds/538835/
+  TheArbuzikYT:
+    https://freesound.org/people/TheArbuzikYT/sounds/842705/
+  theplax:
+    https://freesound.org/people/theplax/sounds/618187/
+    https://freesound.org/people/theplax/sounds/618188/
+    https://freesound.org/people/theplax/sounds/618189/
+    https://freesound.org/people/theplax/sounds/618190/
+  ultradust:
+    https://freesound.org/people/ultradust/sounds/167096/
+  xtrgamr:
+    https://freesound.org/people/xtrgamr/sounds/252713/
+    https://freesound.org/people/xtrgamr/sounds/252715/
+    https://freesound.org/people/xtrgamr/sounds/257786/
+  Yahujiki:
+    https://freesound.org/people/Yahujiki/sounds/845965/

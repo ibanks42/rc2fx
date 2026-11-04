@@ -30,13 +30,14 @@ PAYLOAD_NAMES = [
     "librc2fx_gui.so",
     "librc2fx_jackerr.so",
     "rc2fx_jackerr_snapshot",
+    "mixer-release.json",
     "SHA256SUMS",
     "rc2fx.sh",
     "rc2fx-shim.sh",
     "rc2fx-gui-shim.sh",
     "install.sh",
 ]
-PINNED = PAYLOAD_NAMES[:7]
+PINNED = PAYLOAD_NAMES[:8]
 SCRIPTS = {"rc2fx.sh", "rc2fx-shim.sh", "rc2fx-gui-shim.sh", "install.sh"}
 PRO_II = "rodecaster-pro-ii"
 
@@ -75,6 +76,7 @@ def expected_identity(files: dict[str, bytes]) -> dict:
         "kind": "embedded",
         "build": "development",
         "catalog": sha(files["firmware-profiles.json"]),
+        "release": json.loads(files["mixer-release.json"])["version"],
         "runtime": sha(manifest.encode()),
         "files": [
             {"name": name, "sha256": sha(files[name]), "size": len(files[name])}

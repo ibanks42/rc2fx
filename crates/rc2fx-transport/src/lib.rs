@@ -60,6 +60,10 @@ pub enum Command {
     Settings {
         generation: u64,
     },
+    /// Read the versions the mixer reports. Older runtimes do not report any.
+    Version {
+        generation: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -76,6 +80,8 @@ pub enum EventKind {
     ResetDiagnostics(Result<Value, String>),
     DiagnosticsEvents(Result<rc2fx_core::DiagnosticsEvents, String>),
     Settings(Result<String, String>),
+    /// `Ok(None)`: this runtime predates version reporting.
+    Version(Result<Option<rc2fx_core::DeviceVersions>, String>),
     Inputs(Result<rc2fx_core::StockInventory, String>),
     Routing(Result<rc2fx_core::DeviceState, String>),
     Preset(Result<PresetReply, PresetError>),
@@ -126,6 +132,20 @@ pub enum PresetReply {
 pub struct PresetError {
     pub message: String,
     pub conflict: bool,
+}
+
+/// A version reply; 404 means the runtime predates version reporting.
+fn version_reply(
+    result: Result<Value, RequestError>,
+) -> Result<Option<rc2fx_core::DeviceVersions>, RequestError> {
+    match result {
+        Ok(value) if value.is_object() => serde_json::from_value(value)
+            .map(Some)
+            .map_err(|_| RequestError::Protocol),
+        Ok(_) => Err(RequestError::Protocol),
+        Err(RequestError::Status(404, _)) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn preset_path(id: &str, apply: bool) -> Result<String, RequestError> {
@@ -479,6 +499,22 @@ async fn run(mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>)
                 )
                 .await;
             }
+            Command::Version {
+                generation: requested,
+            } if requested == generation => {
+                let result = match &current {
+                    Some(device) => {
+                        version_reply(device.request("GET", "api/v1/version", None).await)
+                    }
+                    None => Err(no_mixer()),
+                };
+                emit(
+                    &events,
+                    generation,
+                    EventKind::Version(result.map_err(|e| e.message())),
+                )
+                .await;
+            }
             Command::Inputs {
                 generation: requested,
             } if requested == generation => {
@@ -677,6 +713,28 @@ fn apply_body(update: &rc2fx_core::ConfigUpdate) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_replies_treat_old_runtimes_as_unknown() {
+        assert!(matches!(
+            version_reply(Err(RequestError::Status(404, None))),
+            Ok(None)
+        ));
+        let known = version_reply(Ok(json!({"runtime":"0.3.0","firmware":"1.7.7","future":1})))
+            .unwrap()
+            .unwrap();
+        assert_eq!(known.runtime.as_deref(), Some("0.3.0"));
+        assert_eq!(known.firmware.as_deref(), Some("1.7.7"));
+        assert!(matches!(version_reply(Ok(json!({}))), Ok(Some(_))));
+        assert!(matches!(
+            version_reply(Ok(json!([]))),
+            Err(RequestError::Protocol)
+        ));
+        assert!(matches!(
+            version_reply(Err(RequestError::Status(500, None))),
+            Err(RequestError::Status(500, _))
+        ));
+    }
 
     #[test]
     fn a_settings_save_round_trips_the_complete_update() {

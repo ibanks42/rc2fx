@@ -19,7 +19,7 @@ SCRIPT = Path(__file__).parents[1] / 'install.sh'
 GUI_CASE = '  gui-launch) '
 BINARIES = ['librc2fx_native.so', 'rc2fxd', 'rc2fx-firmware', 'firmware-profiles.json',
             'librc2fx_gui.so', 'librc2fx_jackerr.so',
-            'rc2fx_jackerr_snapshot']
+            'rc2fx_jackerr_snapshot', 'mixer-release.json']
 SCRIPTS = ['rc2fx.sh', 'rc2fx-shim.sh', 'rc2fx-gui-shim.sh', 'install.sh']
 # A runtime script with the GUI shim's case, and one from before it.
 RC2FX_SH = f'''#!/bin/bash

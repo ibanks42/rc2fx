@@ -14,6 +14,7 @@ sends a single request.
 | `GET /api/v1/state` | | Saved settings, revision, engine and selection status |
 | `GET /api/v1/events` | | The next `state`, `engine`, `meter` or `usb` event as `{"event", "data"}`, or `null` after 50 ms |
 | `GET /api/v1/inputs` | | The show's input names and order, read from the stock show file |
+| `GET /api/v1/version` | | The installed RC2FX mixer software and RØDE firmware versions; see [Versions](#versions) |
 | `GET /api/v1/diagnostics` | | State plus bounded telemetry history (callback timing, worker counters) |
 | `GET /api/v1/diagnostics/events?after=SEQ` | | The diagnostic event log after sequence number `SEQ`, up to 256 events per page |
 | `POST /api/v1/diagnostics/reset` | | Reset the telemetry baselines and clear the event log |
@@ -37,6 +38,30 @@ generation is stale, the write is refused with 409. Errors are
 | 404 | Unknown preset |
 | 409 | Revision or generation conflict |
 | 503 | Engine busy or stopped |
+
+## Versions
+
+`GET /api/v1/version` returns what the mixer has installed:
+
+```json
+{"runtime": "0.1.0", "protocol": 1, "firmware": "1.7.7", "firmwareProfile": "rodecaster-pro-ii-1.7.7"}
+```
+
+| Field | Source |
+| --- | --- |
+| `runtime`, `protocol` | `version` and `protocolVersion` of the installed `/opt/rc2fx/mixer-release.json` |
+| `firmware`, `firmwareProfile` | The firmware profile the launcher selected after `rc2fx-firmware check-device` verified the stock mixer, looked up in the installed catalog for the mixer's own model |
+
+`rc2fxd` reads these once at startup, from `--release`, `--firmware-catalog`
+and `--firmware-profile`, which `rc2fx.sh` passes. A field it can't read or
+check is omitted, never guessed, and `rc2fx.sh`'s controller log says why. A
+mixer with nothing known returns `{}`. RC2FX mixer software from before this
+endpoint returns 404; the app shows those versions as **Unknown**.
+
+The versions are not part of `GET /api/v1/state` or its events, so the state's
+strict schema is unchanged. They can't change without a restart, so the app
+reads them again after each reconnect. Clients should ignore fields they
+don't know.
 
 ## On-device touchscreen control (in development)
 

@@ -65,7 +65,9 @@ the first error and offers **Retry** from that step.
    RØDE's MD5 and the catalog's SHA-256, and builds a copy of the root
    filesystem with these additions, all owned by root:
    - `/opt/rc2fx/`: the runtime bundle with `bundle.sha256`,
-     `data/state.json` (the newest saved settings for this mixer) and `logs/`.
+     `mixer-release.json` (the RC2FX mixer software version, listed in the
+     bundle's `SHA256SUMS` and reported by
+     [`GET /api/v1/version`](api.md#versions)), `data/state.json` (the newest saved settings for this mixer) and `logs/`.
    - `/usr/sbin/rc_audio_mixer`: the audio engine shim (see
      [Architecture](../developer/architecture.md#starting-with-the-mixer)).
    - `/usr/sbin/rc_gui_juce`: the matching shim for the screen program.
@@ -131,16 +133,17 @@ and `0030` in update mode.
 ## Release package
 
 `just package`, or `cargo xtask package` after `just mixer-build`, writes
-`target/package/rc2fx-<os>-<arch>.zip` (`.tar.gz` on Linux) and an unpacked
-copy. The archive contains one `rc2fx/` folder with:
+`target/package/rc2fx-<os>-<arch>.zip` on Windows and macOS, or
+`rc2fx-linux-x64.AppImage` on Linux (see
+[packaging](../developer/building.md#3-package-it)). It holds:
 
 - the self-contained app,
-- the documentation (see [packaging](../developer/building.md#3-package-it)),
-- licences and cargo-about reports,
-- the Linux USB rule, on Linux,
-- `SHA256SUMS` covering every file.
+- the project licence, third-party notices, training-data credits and every
+  crate's licence text, built into the app under **Settings › Versions › Licenses › View licenses** (the
+  AppImage also carries them as `LICENSES.html`),
+- on Windows and macOS, a `SHA256SUMS` covering every file.
 
-The runtime, catalog and scripts are embedded in the app and are not shipped
+The runtime, catalog, `mixer-release.json` and scripts are embedded in the app and are not shipped
 as separate files. Packaging inspects the executable's embedded payload and
 fails if it is missing, corrupt, stale or from the wrong build kind. This
 check also runs with `--skip-build`.

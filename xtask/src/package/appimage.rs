@@ -157,6 +157,115 @@ fn ensure_regular_apprun(appdir: &Path) -> Result {
     Ok(())
 }
 
+/// Notices for the libraries linuxdeploy is allowed to copy. Take the exact
+/// build host's copyright files; never substitute generic license templates.
+pub fn license_sections(root: &Path) -> Result<Vec<(String, String)>> {
+    let mut sections = Vec::new();
+    for (name, locations) in [
+        (
+            "libxkbcommon / libxkbcommon-x11",
+            [
+                "/usr/share/doc/libxkbcommon0/copyright",
+                "/usr/share/licenses/libxkbcommon/LICENSE",
+            ],
+        ),
+        (
+            "libXau",
+            [
+                "/usr/share/doc/libxau6/copyright",
+                "/usr/share/doc/libXau/COPYING",
+            ],
+        ),
+        (
+            "libxcb-xkb",
+            [
+                "/usr/share/doc/libxcb-xkb1/copyright",
+                "/usr/share/licenses/libxcb/COPYING",
+            ],
+        ),
+    ] {
+        let path = locations
+            .iter()
+            .map(Path::new)
+            .find(|path| path.is_file())
+            .ok_or_else(|| format!("missing build-host copyright file for bundled {name}"))?;
+        let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if text.trim().is_empty() {
+            return Err(format!("empty copyright file for {name}"));
+        }
+        sections.push((format!("AppImage library — {name}"), text));
+    }
+    let path = root.join("target/appimage-legal/notices.json");
+    let data = fs::read(&path).map_err(|e| {
+        format!(
+            "{}: {e}; run python3 .github/scripts/prepare-appimage-notices.py",
+            path.display()
+        )
+    })?;
+    let document: serde_json::Value = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
+    let runtime_path = tool("RC2FX_APPIMAGE_RUNTIME")?;
+    let runtime_bytes = fs::read(&runtime_path).map_err(|e| e.to_string())?;
+    let expected = document["runtimeSha256"]
+        .as_str()
+        .ok_or("AppImage notices do not identify the runtime")?;
+    if sha256(&runtime_bytes) != expected {
+        return Err(
+            "AppImage runtime differs from the version covered by its notices and source bundle"
+                .into(),
+        );
+    }
+    if document["schemaVersion"] != 1 {
+        return Err("unsupported AppImage notices schema".into());
+    }
+    let runtime = document["sections"]
+        .as_array()
+        .filter(|v| !v.is_empty())
+        .ok_or("missing AppImage runtime notices")?;
+    for section in runtime {
+        let title = section["title"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("missing runtime notice title")?;
+        let text = section["text"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("missing runtime license text")?;
+        sections.push((title.to_owned(), text.to_owned()));
+    }
+    Ok(sections)
+}
+
+fn covered_library(name: &str) -> bool {
+    [
+        "libxkbcommon.so",
+        "libxkbcommon-x11.so",
+        "libXau.so",
+        "libxcb-xkb.so",
+    ]
+    .iter()
+    .any(|prefix| name == *prefix || name.starts_with(&format!("{prefix}.")))
+}
+
+fn verify_library_notices(directory: &Path) -> Result {
+    if !directory.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            verify_library_notices(&entry.path())?;
+        } else {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !covered_library(&name) {
+                return Err(format!(
+                    "linuxdeploy bundled {name} without a reviewed license notice; add its build-host copyright to AppImage license_sections"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Deploy shared libraries with linuxdeploy, then package the AppDir with the
 /// separately pinned appimagetool. linuxdeploy is never asked to produce the
 /// image itself, so its bundled/older appimagetool cannot be selected.
@@ -187,6 +296,7 @@ pub fn build(appdir: &Path, out: &Path, name: &str, arch: &str, tools: &Tools) -
         .env("PATCHELF", &tools.patchelf)
         .env("PATH", tool_path(tool_dir)?);
     run(&mut deploy)?;
+    verify_library_notices(&appdir.join("usr/lib"))?;
     ensure_regular_apprun(appdir)?;
     ensure_root_entries(appdir)?;
 
@@ -305,7 +415,7 @@ mod tests {
         let appimagetool = dir.join("appimagetool");
         fs::write(
             &linuxdeploy,
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" > \"$0.args\"\nprintf '%s\\n' \"${NO_STRIP:-}\" > \"$0.env\"\nappdir=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --appdir ]; then appdir=$2; fi\n  shift\ndone\nmkdir -p \"$appdir/usr/lib\"\nprintf host > \"$appdir/usr/lib/libhost.so\"\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" > \"$0.args\"\nprintf '%s\\n' \"${NO_STRIP:-}\" > \"$0.env\"\nappdir=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --appdir ]; then appdir=$2; fi\n  shift\ndone\nmkdir -p \"$appdir/usr/lib\"\nprintf host > \"$appdir/usr/lib/libXau.so.6\"\n",
         )
         .unwrap();
         fs::write(
@@ -330,6 +440,14 @@ mod tests {
             runtime,
             patchelf,
         }
+    }
+
+    #[test]
+    fn unexpected_bundled_libraries_need_reviewed_notices() {
+        assert!(super::covered_library("libxkbcommon-x11.so.0"));
+        assert!(super::covered_library("libxcb-xkb.so.1.0.0"));
+        assert!(!super::covered_library("libnew.so.1"));
+        assert!(!super::covered_library("libXau.something"));
     }
 
     #[test]
@@ -468,7 +586,7 @@ printf '%s\n' "$APPDIR" "$APPIMAGE" "$LD_LIBRARY_PATH" "$1" "$2"
             seen.insert(path, data);
         }
         assert_eq!(seen["./usr/bin/rc2fx"], exe);
-        assert_eq!(seen["./usr/lib/libhost.so"], b"host");
+        assert_eq!(seen["./usr/lib/libXau.so.6"], b"host");
         assert_eq!(seen["./AppRun"], APPRUN.as_bytes());
         assert!(seen.contains_key("./rc2fx.desktop"));
         assert!(seen.contains_key("./rc2fx.svg"));
@@ -490,12 +608,7 @@ printf '%s\n' "$APPDIR" "$APPIMAGE" "$LD_LIBRARY_PATH" "$1" "$2"
             );
         }
         let deploy_args = fs::read_to_string(root.join("linuxdeploy.args")).unwrap();
-        for arg in [
-            "--appdir",
-            "--executable",
-            "--desktop-file",
-            "--icon-file",
-        ] {
+        for arg in ["--appdir", "--executable", "--desktop-file", "--icon-file"] {
             assert!(
                 deploy_args.contains(arg),
                 "{arg} missing from {deploy_args:?}"

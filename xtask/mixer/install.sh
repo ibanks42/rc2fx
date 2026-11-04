@@ -10,7 +10,7 @@ gui_shim=$root/usr/sbin/rc_gui_juce
 previous=$opt/.rc2fx-previous
 pending=$opt/.rc2fx-install-pending
 files="librc2fx_native.so rc2fxd rc2fx-firmware firmware-profiles.json librc2fx_gui.so
- librc2fx_jackerr.so rc2fx_jackerr_snapshot
+ librc2fx_jackerr.so rc2fx_jackerr_snapshot mixer-release.json
  SHA256SUMS rc2fx.sh rc2fx-shim.sh rc2fx-gui-shim.sh install.sh"
 # One rollback is kept, .rc2fx-previous. Earlier installs moved every older
 # one to a .rc2fx-retained.* copy and never deleted it, until they filled the

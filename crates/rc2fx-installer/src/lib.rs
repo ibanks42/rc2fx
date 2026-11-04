@@ -11,6 +11,7 @@
 //! log of USB commands sent. Device commands are only sent when explicitly
 //! requested, and an unacknowledged command is never repeated automatically.
 
+pub mod app_update;
 pub mod control;
 pub mod embed;
 mod files;
@@ -27,7 +28,11 @@ pub use platform::{Hid, Platform, Reports, Volume};
 pub use rc2fx_firmware::Model as DeviceModel;
 
 pub const DUO_WARNING: &str = "RØDECaster Duo support is experimental and has NOT been tested on hardware. Flashing, recovery and audio routing may fail, cause loud or incorrect audio, or leave the mixer unusable. Back up your RØDE show, disconnect speakers and headphones before testing, and proceed entirely at your own risk. Only Duo firmware is allowed; never flash Pro II firmware onto a Duo.";
-pub use embed::{Catalog, Envelope, Identity, JobLifetime, Profile, RuntimeProfile};
+pub use embed::{
+    Catalog, Envelope, Identity, JobLifetime, Profile, RuntimeProfile, bundled_release,
+    newest_supported_firmware,
+};
+pub use rc2fx_core::{DeviceVersions, MixerRelease, compare_versions};
 pub use runtime::{Bundle, PAYLOAD_NAMES, bundle_files};
 
 use serde::{Deserialize, Serialize};

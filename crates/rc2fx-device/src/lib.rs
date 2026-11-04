@@ -23,5 +23,6 @@ pub mod store;
 #[cfg(target_os = "linux")]
 pub mod ui_control;
 mod usb;
+pub mod versions;
 #[cfg(any(target_os = "linux", test))]
 pub mod usb_control;

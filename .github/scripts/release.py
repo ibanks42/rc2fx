@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import tarfile
-import tempfile
 import tomllib
 
 
@@ -81,7 +80,7 @@ def prepare(bump):
     if not os.environ.get("ACT") and git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("Release checkout must be clean")
     current = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
-    numbers = list(version_tuple(current))
+    version_tuple(current)
     previous = "v" + current
     tags = [tag for tag in git("tag", "--list", "v[0-9]*").splitlines()
             if re.fullmatch("v" + STABLE, tag)]
@@ -94,23 +93,14 @@ def prepare(bump):
         history = [f"{previous}..HEAD"]
         tag = subprocess.check_output(cliff + history + ["--bump", bump, "--bumped-version"], text=True).strip()
     else:
-        # No baseline tag: bump the checked-in version, not git-cliff's default.
-        index = {"major": 0, "minor": 1, "patch": 2}[bump]
-        numbers[index] += 1
-        numbers[index + 1:] = [0] * (2 - index)
-        initial = "v" + ".".join(map(str, numbers))
+        # The first release publishes the checked-in version unchanged.
+        tag = previous
         history = []
         previous = ""
-        with tempfile.TemporaryDirectory() as temporary:
-            config = Path(temporary) / "cliff.toml"
-            config.write_text(Path("cliff.toml").read_text() + f'\n[bump]\ninitial_tag = "{initial}"\n')
-            tag = subprocess.check_output([
-                "git-cliff", "--config", str(config), "--bump", bump, "--bumped-version"
-            ], text=True).strip()
     if not tag.startswith("v"):
         tag = "v" + tag
     version = tag[1:]
-    if version_tuple(version) <= version_tuple(current):
+    if tags and version_tuple(version) <= version_tuple(current):
         raise ValueError("Version must increase")
     if git("tag", "--list", tag):
         raise ValueError(f"Tag {tag} already exists")
@@ -122,6 +112,12 @@ def prepare(bump):
     subprocess.run(cliff + history + ["--tag", tag, "--strip", "all", "--output", str(notes)], check=True)
     if not notes.read_text().strip():
         raise ValueError("Release notes are empty")
+    mixer_manifest = Path("config/mixer-release.json")
+    if mixer_manifest.exists():
+        mixer_version = json.loads(mixer_manifest.read_text())["version"]
+        version_tuple(mixer_version)
+        with notes.open("a") as output:
+            output.write(f"\nBundled RC2FX mixer software: {mixer_version}.\n")
     changelog = Path("CHANGELOG.md")
     if not changelog.exists():
         changelog.write_text(tomllib.loads(Path("cliff.toml").read_text())["changelog"]["header"])

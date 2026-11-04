@@ -83,7 +83,10 @@ The [developer guide](developer/index.md) covers building RC2FX, and the
 
 ## License and disclaimer
 
-RC2FX is licensed under either MIT or Apache-2.0, at your option.
+RC2FX's own code and its trained noise suppression weights are licensed under
+MIT. Third-party components keep their own licences, and the datasets the
+weights were trained on keep their own terms. The app lists them all under
+**Settings › Versions › Licenses**.
 
 RC2FX is an unofficial project and is not affiliated with or endorsed by
 RØDE. It is provided as is, without warranty. Installing custom firmware may

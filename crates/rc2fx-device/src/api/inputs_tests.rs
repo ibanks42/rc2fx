@@ -95,6 +95,7 @@ async fn inputs_read_the_current_show_without_changing_settings() {
     let options = Options {
         stock_config: Some(show_path.clone()),
         catalog: crate::catalog::physical_catalog().to_vec(),
+        ..Options::default()
     };
     let mut api = Api::new(handle.clone(), options);
     let inputs = || Request {
@@ -138,6 +139,7 @@ async fn show_reads_never_change_selected_mic4_or_its_effects() {
     let options = Options {
         stock_config: Some(show_path.clone()),
         catalog: crate::catalog::physical_catalog().to_vec(),
+        ..Options::default()
     };
     let mut api = Api::new(handle.clone(), options);
     let inputs = || Request {
@@ -215,10 +217,12 @@ async fn show_reads_never_change_selected_mic4_or_its_effects() {
     let removed = inventory(api.request(inputs()).await);
     assert!(removed.available, "{}", removed.message);
     assert!(removed.inputs.iter().all(|source| source.source_id != 3));
-    assert!(removed
-        .inputs
-        .iter()
-        .all(|source| source.target_id != "mic-1"));
+    assert!(
+        removed
+            .inputs
+            .iter()
+            .all(|source| source.target_id != "mic-1")
+    );
     assert_eq!(
         removed
             .inputs

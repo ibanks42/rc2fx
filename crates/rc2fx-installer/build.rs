@@ -49,6 +49,7 @@ fn main() {
         watch_existing(&root.join("xtask").join("mixer").join(name));
     }
     watch_existing(&root.join("config").join("firmware-profiles.json"));
+    watch_existing(&root.join("config").join(format::RELEASE_MANIFEST));
 
     match format::read(&root, release) {
         Ok(files) => {
@@ -119,7 +120,8 @@ fn fail(why: &str) {
          The desktop app installs RC2FX from this payload, so it must be present\n\
          and valid when the app is built.\n\n\
          In a source checkout the payload is target/mixer (runtime) and\n\
-         xtask/mixer (scripts), with config/firmware-profiles.json:\n\
+         xtask/mixer (scripts), with config/firmware-profiles.json and\n\
+         config/mixer-release.json:\n\
          - `cargo xtask mixer-build` builds and stages it;\n\
          - if target/mixer is a promoted link to a verified bundle, keep it and\n\
            do not run a generic rebuild: `cargo xtask mixer install` deploys the\n\

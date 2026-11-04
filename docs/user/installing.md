@@ -22,7 +22,10 @@ Open installer**.
 ## Install steps
 
 Choose **RC2FX firmware** and a version, press **Install…** (or **Update…**)
-and confirm. The installer then runs these steps. If a step fails, the
+and confirm. The version you choose is RØDE's firmware; the RC2FX mixer
+software installed with it is always the one bundled with this app (see
+[Versions and updates](getting-started.md#versions-and-updates)). The installer
+then runs these steps. If a step fails, the
 installer stops, and **Retry** continues from that step.
 
 1. **Save settings.** If RC2FX is already running, its settings and presets

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 description = "Times one suppression model on the mixer over a recording and writes the denoised audio"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 # Its own workspace: Linux-only (it sets the mixer worker's scheduling),
 # cross-built for the mixer by `just bench-build`.

@@ -3,7 +3,7 @@ name = "rc2fx-native"
 version = "0.1.0"
 edition = "2024"
 publish = false
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 # Mixer-side audio library injected into the stock rc_audio_mixer with LD_AUDIT.
 # Its own workspace: a cdylib with Linux-only code, cross-built for the mixer

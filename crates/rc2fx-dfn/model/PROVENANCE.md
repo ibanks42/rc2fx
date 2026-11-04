@@ -1,4 +1,78 @@
-# LA0 export provenance
+# DeepFilterNet3 weights provenance
+
+## Training data
+
+Both embedded weight sets, LA0 (run `a960s360d64-la0-b20`) and LA1 (run
+`a960s360d64-la1-b20`), were trained on the same data: each run loaded the
+same dataset cache, uploaded once with SHA-256 checks. No dataset audio is
+included in RC2FX; only the trained weights are.
+
+Licence decision: the RC2FX project releases these weights under the MIT
+licence, as it does its own code. That is the project's decision, not a legal
+conclusion about the training data. It does not relicense any dataset, and the
+credits below do not replace any dataset's own terms, which still apply to
+that dataset.
+
+A shorter list of these credits, shown in the app, is
+[licenses/TRAINING-CREDITS.txt](../../../licenses/TRAINING-CREDITS.txt).
+
+Each licence below says where it comes from: the training kit's own records,
+or the dataset's upstream page as checked on 2026-11-04. Where it says "see
+the dataset's terms", the licence was not verified and is not stated here.
+
+Clip counts are the training split.
+
+1. DNS Challenge 4 (ICASSP 2022), fullband clean read speech, lowest DNSMOS
+   bin skipped: 310,962 clips. Microsoft DNS Challenge. Licence: see the
+   dataset's terms, https://github.com/microsoft/DNS-Challenge
+2. CSTR VCTK Corpus, from the DNS Challenge 4 fullband archives: 80,260
+   clips. Centre for Speech Technology Research (CSTR), University of
+   Edinburgh. Licence: see the dataset's terms,
+   https://datashare.ed.ac.uk/handle/10283/3443
+3. DNS Challenge 4 fullband noise (its AudioSet 000-006 and Freesound 000-001
+   parts): 61,271 clips. Licence: see the dataset's terms,
+   https://github.com/microsoft/DNS-Challenge . AudioSet:
+   https://research.google.com/audioset/ . Freesound: https://freesound.org
+4. DNS Challenge 4 room impulse responses (OpenSLR SLR26 simulated rooms at
+   48 kHz, SLR28 real rooms): 58,334 impulse responses. Licence: Apache 2.0,
+   per the OpenSLR pages, https://www.openslr.org/26/ and
+   https://www.openslr.org/28/
+5. Keyboard and click sounds selected from item 3: 1,176 Freesound clips and
+   810 AudioSet clips. Licence: as item 3.
+6. FSD50K keyboard and click sounds: 855 clips. The training kit excluded
+   clips under non-commercial and Sampling+ licences; that filter has not been
+   re-verified. Licence: each FSD50K clip has its own Creative Commons
+   licence, per its Zenodo record, https://zenodo.org/records/4060432
+7. ESC-50 mouse_click and keyboard_typing classes: 66 clips (plus 9 in
+   validation and 5 in test). Karol J. Piczak. Licence: Creative Commons
+   Attribution-NonCommercial 3.0 (CC BY-NC 3.0) per the training kit; the
+   upstream README also states a Creative Commons Attribution Non-Commercial
+   licence. This is a non-commercial licence.
+   https://github.com/karolpiczak/ESC-50
+8. About 14 further typing clips, probably the OpenGameArt keyboard pack
+   (CC0 per the training kit); not matched to that source. Licence: unverified.
+9. Freesound keyboard and mouse sounds, downloaded directly: 770 + 904
+   training clips (keyboard + mouse). Across all splits these come from 952
+   Freesound sounds: 796 under CC0 1.0 and 156 under CC BY 4.0, per the
+   training kit's per-sound records. Each CC BY 4.0 sound is credited by
+   author and page in [licenses/TRAINING-CREDITS.txt](../../../licenses/TRAINING-CREDITS.txt).
+   https://freesound.org
+10. SKAID keystroke dataset. Benjamin Quattrone and Youakim Badr. CC BY 4.0
+    per its Zenodo record (its README separately describes academic and
+    research use). https://zenodo.org/records/17282184
+11. Keystrokes dataset. Pedro Pinto, Diogo Rafael Gonçalves Rodrigues,
+    Gonçalo da Costa Macedo and Silvestre Malta. CC BY 4.0 per the training
+    kit. https://zenodo.org/records/19453177
+12. Keyboard and click recordings (Zenodo record 16564409) by Yoshiyuki
+    Kobayashi / Sony Group Corporation. MIT per the training kit; the record's
+    copyright line has not been verified. https://zenodo.org/records/16564409
+13. 29 clips of the project author's own keyboard and mouse recordings.
+
+Items 10 to 12 together contribute 209 training clips. The keyboard and click
+sets (items 5 to 13) make up 25% of the noise drawn during training; item 13
+alone is 3% of all noise draws.
+
+## LA0 export
 
 Exported 2026-10-30. The checkpoint was not retrained, and its lookahead was
 not changed.
@@ -16,7 +90,7 @@ not changed.
 - Only that checkpoint and config were copied into the private export run,
   `target/la0-export/run`. The original training mirror was left unchanged.
 
-## Artifacts (SHA256)
+### Artifacts (SHA256)
 
 | Artifact | SHA256 |
 | --- | --- |
@@ -32,7 +106,7 @@ change if it is exported again. `weights.bin` stores the original f32 tensors
 plus the framing tensors. The engine quantises the weights when it loads them.
 The export itself is unquantised.
 
-## Conversion and reference
+### Conversion and reference
 
 The existing `target/dfn-training/export/to_engine.py` and `export_onnx.py`
 were run with `~/dfn/venv-rocm/bin/python` against the private run above. The
@@ -74,7 +148,7 @@ Source hashes:
 - Patched libDF `src/lib.rs`: `c316946c14ca13adf61c573d530149eda09f7c1b636a12f73936e39c81fcbd0b`
 - Patched libDF `src/tract.rs`: `76aad90917888f4b9e8fbd1418cd414314c9f470a4c9a8921868b7c5b9cb2805`
 
-## Timing
+### Timing
 
 At 48 kHz the engine processes one 240-sample hop per call. The intrinsic delay
 is **360 - 240 + 0*240 = 120 samples**, or 2.5 ms. With the 320-sample worker
@@ -91,7 +165,7 @@ no extra queued frame is inserted between collecting a frame and playing it.
 These figures cover the processing path only. ADC, DAC, host driver and other
 hardware latency are not included.
 
-## LA1
+### LA1
 
 `la1/` holds the LA1 weights, reference and configuration (epoch 102,
 validation loss about 0.9706). Tests check the LA1 engine against its own

@@ -25,5 +25,8 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rc2fx-installer = { path = "../rc2fx-installer" }
 
+[build-dependencies]
+serde_json = "1"
+
 [dev-dependencies]
 tempfile = "3"

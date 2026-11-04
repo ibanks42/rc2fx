@@ -981,12 +981,20 @@ supervise() {
   umask 077
   mkdir -p -m 700 "$boot"
   say "Supervising RC2FX mixer $native_pid from $home"
-  local stock=() ui=() age count
+  local stock=() ui=() versions=() help age count
   test -r "$show" && stock=(--stock-config "$show")
   # Older bundles remain valid USB-only controllers. Never turn an optional
   # UI endpoint into an unknown-argument exit/audio fallback on upgrade.
-  if "$home/rc2fxd" --help | grep -F -- '--ui-socket' >/dev/null; then
+  help=$("$home/rc2fxd" --help) || help=
+  if grep -F -- '--ui-socket' >/dev/null <<< "$help"; then
     ui=(--ui-socket "$run/ui.sock")
+  fi
+  # What GET api/v1/version reports: the installed release manifest and the
+  # profile launch() selected after check-device verified the stock mixer.
+  # A bundle without the manifest reports its version as unknown.
+  if grep -F -- '--release' >/dev/null <<< "$help"; then
+    test -f "$home/mixer-release.json" && versions+=(--release "$home/mixer-release.json")
+    test -n "$profile_id" && versions+=(--firmware-catalog "$home/firmware-profiles.json" --firmware-profile "$profile_id")
   fi
   while true; do
     if ! mixer_alive; then
@@ -1009,7 +1017,7 @@ supervise() {
       end_mixer 'Mixer not ready after 60 s; restoring stock audio' stock || true; break
     fi
     if test -z "$controller_pid" && test -S "$run/control.sock"; then
-      "$home/rc2fxd" --data "$data" --native-socket "$run/control.sock" --usb-socket "$run/usb.sock" "${ui[@]}" "${stock[@]}" \
+      "$home/rc2fxd" --data "$data" --native-socket "$run/control.sock" --usb-socket "$run/usb.sock" "${ui[@]}" "${stock[@]}" "${versions[@]}" \
         < /dev/null > "$run/controller.log" 2>&1 &
       controller_pid=$!
       say "Controller started (PID $controller_pid)"

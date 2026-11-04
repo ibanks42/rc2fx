@@ -41,8 +41,11 @@ first. It cross-builds the mixer runtime into `target/mixer` on your computer
 and does not contact the mixer. Files that haven't changed are left in place,
 so repeat runs are quick.
 
-The desktop build embeds that runtime, the firmware catalog and the installer
-scripts in the executable, and fails if any of them is missing or corrupt.
+The desktop build embeds that runtime, the firmware catalog, the mixer release
+manifest and the installer scripts in the executable, and fails if any of them
+is missing or corrupt. `target/mixer` carries a copy of
+`config/mixer-release.json`, and the build fails if the two differ, so run
+`just mixer-build` after bumping the mixer version.
 Rebuild the app after changing any of them. Putting new files beside an
 already-built app does not change its installer.
 
@@ -61,7 +64,7 @@ just package
 
 This builds the self-contained desktop app for the current computer into
 `target/package`. On Windows and macOS that's `rc2fx-<os>-<arch>.zip`,
-holding the app, its licence notices and a `SHA256SUMS`. On Linux it's a
+holding the app, with its licence notices built in, and a `SHA256SUMS`. On Linux it's a
 single `rc2fx-linux-x64.AppImage`. The documentation isn't packaged.
 
 Packaging needs `cargo-about` (`cargo install --locked cargo-about`). On Linux

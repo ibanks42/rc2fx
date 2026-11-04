@@ -33,6 +33,7 @@ const HELP: &str = "cargo xtask <command>
                         Time every suppression model on the mixer over a 48 kHz
                         recording and fetch the denoised audio
   check-elf FILE [--shared]  Check a mixer binary against the mixer ABI baseline
+  licenses FILE         Write consolidated licence notices to FILE
   package [--target TRIPLE] [--skip-build]
                         Build the desktop app with its embedded mixer runtime and bundle
                         documentation, licences and SHA256SUMS in target/package
@@ -54,6 +55,7 @@ fn main() -> ExitCode {
         ["bench", input, flags @ ..] => bench::run(input, flags),
         ["check-elf", file] => elf::check(Path::new(file), false),
         ["check-elf", file, "--shared"] => elf::check(Path::new(file), true),
+        ["licenses", destination] => package::write_licenses(Path::new(destination)),
         ["package", rest @ ..] => package::run_package(rest),
         [] | ["help" | "--help" | "-h"] => {
             println!("{HELP}");

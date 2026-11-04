@@ -10,9 +10,12 @@ saved setting `Suppression.lookahead` selects which, and defaults to 0.
 DeepFilterNet3 with the GRUs narrowed to 128 units
 (`emb_hidden_dim = df_hidden_dim = 128`, `nb_df = 64`, 601,660 parameters).
 RC2FX retrained it on DNS-4 speech and noise, VCTK, room impulse responses,
-and mouse-click and keyboard recordings (Freesound, FSD50K, ESC-50, AudioSet),
-with the click and keyboard recordings weighted to a quarter of the noise. The
-training kit is kept outside this repository.
+and mouse-click and keyboard recordings (Freesound, FSD50K, ESC-50, AudioSet,
+three Zenodo keystroke datasets and the project author's own recordings), with
+the click and keyboard recordings weighted to a quarter of the noise. The
+training kit is kept outside this repository. The weights are released under
+MIT; [PROVENANCE.md](PROVENANCE.md#training-data) credits every training
+dataset and notes the licences that still apply to them.
 
 The weights here are the best checkpoint by validation loss from run
 `a960s360d64-la0-b20` (epoch 120, 0.997914731502533). They were exported

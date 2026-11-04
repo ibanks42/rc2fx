@@ -36,6 +36,8 @@ pub struct Identity {
     pub build: String,
     /// SHA-256 of the payload's `firmware-profiles.json`.
     pub catalog: String,
+    /// The RC2FX mixer release version from the payload's `mixer-release.json`.
+    pub release: String,
     /// The digest the prepared firmware records as its RC2FX runtime.
     pub runtime: String,
     pub files: Vec<FilePin>,
@@ -103,6 +105,7 @@ fn identity_of(kind: &str, bundle: &Bundle) -> std::result::Result<Identity, Str
         kind: kind.to_owned(),
         build: format::build_kind(script)?.to_owned(),
         catalog: files::sum(bundle.get("firmware-profiles.json").expect("checked above")),
+        release: release_of(bundle).map_err(|e| e.0)?.version,
         runtime: runtime::digest(bundle),
         files: format::PAYLOAD_NAMES
             .iter()
@@ -153,6 +156,45 @@ pub fn service(state: &[u8]) -> Service {
 /// The identity of the payload this binary serves.
 pub fn identity() -> Result<Identity> {
     Ok(payload()?.identity.clone())
+}
+
+fn release_of(bundle: &Bundle) -> Result<rc2fx_core::MixerRelease> {
+    let data = bundle
+        .get(format::RELEASE_MANIFEST)
+        .ok_or("the payload has no mixer-release.json")?;
+    rc2fx_core::MixerRelease::parse(data).map_err(|e| Error(e.0))
+}
+
+/// The RC2FX mixer release this binary bundles. An error when the build
+/// embeds no payload.
+pub fn bundled_release() -> Result<rc2fx_core::MixerRelease> {
+    release_of(&payload()?.bundle)
+}
+
+/// The newest RØDE firmware version the bundled catalog supports for the
+/// same mixer model as `firmware_profile` (the `firmwareProfile` the device
+/// reports), compared numerically. `None` when the build embeds no payload,
+/// the profile is not in the bundled catalog, or nothing is supported for
+/// that model.
+pub fn newest_supported_firmware(firmware_profile: &str) -> Option<String> {
+    let catalog = Source::Embedded.catalog().ok()?;
+    newest_supported(&catalog, firmware_profile)
+}
+
+fn newest_supported(catalog: &Catalog, firmware_profile: &str) -> Option<String> {
+    let model = &catalog
+        .profiles
+        .iter()
+        .find(|p| p.id == firmware_profile)?
+        .model;
+    catalog
+        .profiles
+        .iter()
+        .filter(|p| &p.model == model && crate::firmware::supported(p))
+        .map(|p| p.version.as_str())
+        .filter(|v| rc2fx_core::compare_versions(v, v).is_some())
+        .max_by(|a, b| rc2fx_core::compare_versions(a, b).expect("both versions are comparable"))
+        .map(str::to_owned)
 }
 
 /// Where an installer's payload and catalog come from.
@@ -243,6 +285,87 @@ mod tests {
             Service::Starting { detail } => assert!(!detail.is_empty(), "a reason is given"),
             Service::Ready => panic!("a missing payload claimed readiness"),
         }
+    }
+
+    #[test]
+    fn the_newest_supported_firmware_is_per_model_and_numeric() {
+        let mut catalog: Catalog =
+            serde_json::from_str(include_str!("../../../../config/firmware-profiles.json"))
+                .unwrap();
+        let pro = rc2fx_firmware::Model::ProIi;
+        let reported = catalog
+            .profiles
+            .iter()
+            .find(|p| p.model == pro.id())
+            .unwrap()
+            .id
+            .clone();
+        let newest = newest_supported(&catalog, &reported).expect("a supported Pro II profile");
+        for p in catalog.profiles.iter().filter(|p| p.model == pro.id()) {
+            if crate::firmware::supported(p) {
+                assert_ne!(
+                    rc2fx_core::compare_versions(&p.version, &newest),
+                    Some(std::cmp::Ordering::Greater)
+                );
+            }
+        }
+        // 1.7.10 is newer than 1.7.9, though it sorts lower as text; an
+        // unsupported profile never counts, nor does another model's.
+        let template = catalog
+            .profiles
+            .iter()
+            .find(|p| p.model == pro.id() && crate::firmware::supported(p))
+            .unwrap()
+            .clone();
+        assert_eq!(newest_supported(&catalog, "no-such-profile"), None);
+        catalog.profiles = vec![
+            Profile {
+                version: "1.7.9".into(),
+                ..template.clone()
+            },
+            Profile {
+                version: "1.7.10".into(),
+                ..template.clone()
+            },
+            Profile {
+                version: "9.0.0".into(),
+                runtime: None,
+                ..template.clone()
+            },
+            Profile {
+                version: "1.8-beta".into(),
+                ..template.clone()
+            },
+            Profile {
+                id: "duo-newer".into(),
+                version: "8.0.0".into(),
+                model: rc2fx_firmware::Model::Duo.id().into(),
+                ..template.clone()
+            },
+        ];
+        // Every Pro II entry above shares the template's id.
+        assert_eq!(
+            newest_supported(&catalog, &template.id).as_deref(),
+            Some("1.7.10")
+        );
+        // The Duo entry carries a Pro II runtime, so it is not supported and
+        // its higher version never counts for either model.
+        assert_eq!(newest_supported(&catalog, "duo-newer"), None);
+    }
+
+    #[test]
+    fn the_bundled_release_is_the_source_manifest() {
+        if !PRESENT {
+            assert!(bundled_release().is_err());
+            assert_eq!(newest_supported_firmware("rodecaster-pro-ii-1.7.7"), None);
+            return;
+        }
+        let source = rc2fx_core::MixerRelease::parse(include_bytes!(
+            "../../../../config/mixer-release.json"
+        ))
+        .unwrap();
+        assert_eq!(bundled_release().unwrap(), source);
+        assert_eq!(identity().unwrap().release, source.version);
     }
 
     #[test]

@@ -60,7 +60,7 @@ fn config(
     json!({
         "name":"rc2fx", "arch":arch, "platform":"linux", "version":version,
         "maintainer":"RC2FX maintainers", "description":"Audio processing for the RODECaster Pro II",
-        "homepage":"https://github.com/ibanks42/rc2fx", "license":"MIT OR Apache-2.0",
+        "homepage":"https://github.com/ibanks42/rc2fx", "license":"MIT",
         "contents":contents,
         "scripts":{"postinstall":stage.join("udev-refresh"),"postremove":stage.join("udev-refresh")},
         "overrides":{
@@ -165,6 +165,7 @@ mod tests {
             &[("LICENSE-MIT".into(), vec![])],
         );
         assert_eq!(value["version"], "0.2.0");
+        assert_eq!(value["license"], "MIT");
         let destinations: Vec<_> = value["contents"]
             .as_array()
             .unwrap()

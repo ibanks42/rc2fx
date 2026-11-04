@@ -1,11 +1,12 @@
 //! `cargo xtask package`: the self-contained desktop executable, legal notices
 //! and a SHA256SUMS manifest. Installer inputs are embedded in the executable;
 //! packaging verifies those bytes, including for --skip-build. Linux releases
-//! are a single AppImage; Windows and macOS use a minimal zip.
+//! are AppImage, DEB and RPM packages; Windows and macOS use a minimal zip.
 
-use crate::{Result, root, run, sha256};
+use crate::{Result, root, sha256};
 
 mod appimage;
+mod licenses;
 mod native_linux;
 use std::{
     collections::BTreeMap,
@@ -155,54 +156,13 @@ pub fn write_zip(out: impl Write + std::io::Seek, files: &Files) -> Result<()> {
     Ok(())
 }
 
-/// Third-party licence reports from cargo-about: the desktop workspace
-/// (desktop app, rc2fxd and the profile checker) and the separate
-/// mixer-library workspace.
-fn licence_reports(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut reports = Vec::new();
-    for (name, manifest) in [
-        ("rust-crates.html", "Cargo.toml"),
-        (
-            "rust-crates-mixer-library.html",
-            "crates/rc2fx-native/Cargo.toml",
-        ),
-    ] {
-        let output = Command::new("cargo")
-            .current_dir(root)
-            .args([
-                "about",
-                "generate",
-                "--manifest-path",
-                manifest,
-                "about.hbs",
-            ])
-            .output()
-            .map_err(|e| format!("could not run cargo-about: {e}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "cargo about failed for {manifest}. Install it with `cargo install --locked cargo-about`.\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        reports.push((name.to_owned(), output.stdout));
+/// Generate consolidated notices for a standalone mixer release.
+pub fn write_licenses(destination: &Path) -> Result {
+    let document = licenses::generate(&root(), vec![])?;
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    Ok(reports)
-}
-
-fn release_licenses(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut licenses = licence_reports(root)?;
-    for (name, path) in [
-        ("LICENSE-MIT", "LICENSE-MIT"),
-        ("LICENSE-APACHE", "LICENSE-APACHE"),
-        ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
-        (
-            "LICENSE-DEEPFILTERNET",
-            "crates/rc2fx-dfn/LICENSE-DEEPFILTERNET",
-        ),
-    ] {
-        licenses.push((name.to_owned(), read(&root.join(path))?));
-    }
-    Ok(licenses)
+    fs::write(destination, document.html).map_err(|e| e.to_string())
 }
 
 fn usage() -> String {
@@ -226,15 +186,17 @@ pub fn run_package(args: &[&str]) -> Result {
     let host = host_target()?;
     let triple = target.clone().unwrap_or_else(|| host.clone());
     let (os, arch) = platform(&triple)?;
+    let extra = if os == "linux" {
+        appimage::license_sections(&root)?
+    } else {
+        vec![]
+    };
+    let document = licenses::generate(&root, extra)?;
+    let document_path = root.join("target/package-licenses.json");
+    fs::create_dir_all(root.join("target")).map_err(|e| e.to_string())?;
+    fs::write(&document_path, &document.json).map_err(|e| e.to_string())?;
     if build {
-        let mut cargo = Command::new("cargo");
-        cargo
-            .current_dir(&root)
-            .args(["build", "--locked", "--release", "-p", "rc2fx-app"]);
-        if let Some(t) = &target {
-            cargo.args(["--target", t]);
-        }
-        run(&mut cargo)?;
+        licenses::build_app(&root, target.as_deref(), &document_path)?;
     }
     let mut release = root.join("target");
     if let Some(t) = &target {
@@ -248,19 +210,20 @@ pub fn run_package(args: &[&str]) -> Result {
     });
     let executable = read(&exe).map_err(|e| format!("{e}\nBuild the app or drop --skip-build."))?;
 
+    licenses::verify_embedded(&executable, &document.json)?;
     let release = release_build();
     validate_executable(&root, &executable, release)?;
     let out = root.join("target").join("package");
     let name = format!("rc2fx-{os}-{arch}");
     if os == "linux" {
         let tools = appimage::Tools::from_env()?;
-        let licenses = release_licenses(&root)?;
+        let licenses = vec![("LICENSES.html".into(), document.html)];
         appimage::package(&out, &name, &executable, licenses.clone(), arch, &tools)?;
         native_linux::package(&out, &name, &exe, &licenses, arch)?;
         return Ok(());
     }
-    let licenses = release_licenses(&root)?;
-    let mut files = collect_with(&root, os, executable, licenses, release)?;
+    // ZIP apps carry the notices in their Settings dialog.
+    let mut files = collect_with(&root, os, executable, vec![], release)?;
     let sums = manifest(&files);
     files.insert("SHA256SUMS".into(), file(sums.into_bytes()));
 
@@ -341,6 +304,9 @@ mod tests {
         sums += &format!("{}  librc2fx_jackerr.so\n", sha256(&elf));
         put("target/mixer/rc2fx_jackerr_snapshot", &elf);
         sums += &format!("{}  rc2fx_jackerr_snapshot\n", sha256(&elf));
+        let release = br#"{"schemaVersion":1,"version":"0.1.0","protocolVersion":1}"#;
+        put("target/mixer/mixer-release.json", release);
+        sums += &format!("{}  mixer-release.json\n", sha256(release));
         put("target/mixer/SHA256SUMS", sums.as_bytes());
         for name in SCRIPTS {
             let script: &[u8] = if name == "rc2fx.sh" {
@@ -351,6 +317,7 @@ mod tests {
             put(&format!("xtask/mixer/{name}"), script);
         }
         put("config/firmware-profiles.json", catalog);
+        put("config/mixer-release.json", release);
         let exe = synthetic_executable(&root, false);
         (root, exe)
     }

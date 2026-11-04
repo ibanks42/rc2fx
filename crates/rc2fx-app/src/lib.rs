@@ -1,3 +1,4 @@
+mod app_update;
 mod connection;
 mod desk;
 mod diagnostics;
@@ -12,6 +13,7 @@ mod inputs;
 mod installer;
 mod interchange;
 mod level_history;
+mod licenses;
 mod line_overlay;
 mod live_line;
 mod onboarding;
@@ -26,6 +28,7 @@ mod telemetry;
 mod telemetry_view;
 mod ui;
 mod usb;
+mod versions;
 
 use desk::surface;
 use gpui_kit::component::{
@@ -101,6 +104,11 @@ struct Rc2FxApp {
     generation: u64,
     /// The USB serial of the mixer the session belongs to.
     connected_mixer: Option<String>,
+    /// What the connected mixer reported; `None` is unknown.
+    device_versions: Option<rc2fx_core::DeviceVersions>,
+    app_update: app_update::AppUpdate,
+    /// The RC2FX mixer software this app installs, read at start.
+    bundled_mixer_software: Option<String>,
     selected: usize,
     inputs: inputs::ShowInputs,
     effect: Effect,
@@ -206,6 +214,9 @@ impl Rc2FxApp {
             transport,
             generation: 0,
             connected_mixer: None,
+            device_versions: None,
+            app_update: Default::default(),
+            bundled_mixer_software: versions::bundled_mixer_software(),
             selected: 0,
             inputs: inputs::ShowInputs::default(),
             effect: Effect::Suppression,
@@ -277,6 +288,8 @@ impl Rc2FxApp {
         };
         window.focus(&app.focus, cx);
         app.connect(cx);
+        // Notification only, in the background; a failure here stays quiet.
+        app.check_app_update(false, window, cx);
         let view = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             view.update(cx, |app, cx| {
@@ -398,6 +411,7 @@ impl Rc2FxApp {
         self.diagnostics_pending = false;
         self.reset_events(cx);
         self.session.disconnect();
+        self.device_versions = None;
         self.usb.clear();
         self.inputs = inputs::ShowInputs::default();
         self.pending = None;
@@ -432,6 +446,7 @@ impl Rc2FxApp {
             generation: self.generation,
         });
         self.session.disconnect();
+        self.device_versions = None;
         self.usb.clear();
         self.inputs = inputs::ShowInputs::default();
         self.pending = None;
@@ -599,6 +614,9 @@ impl Rc2FxApp {
                     self.installer_event(cx, |m| m.settings_read(result))
                 }
                 EventKind::Routing(result) => self.routing_reply(result),
+                // A failed read leaves the versions unknown; it is not an error
+                // worth interrupting the user for.
+                EventKind::Version(result) => self.device_versions = result.ok().flatten(),
                 EventKind::Connected { mixer, state } => {
                     self.connecting = false;
                     self.message.clear();
@@ -622,6 +640,10 @@ impl Rc2FxApp {
                     }
                     self.connected_mixer = Some(mixer);
                     self.receive(state, false, false, window, cx);
+                    // Versions change only across a restart: read once per connection.
+                    self.command(Command::Version {
+                        generation: self.generation,
+                    });
                     if self.presets.open {
                         self.list_presets();
                     }
@@ -682,7 +704,14 @@ impl Rc2FxApp {
                 EventKind::StreamStatus { connected, message } => {
                     self.stream_connected = connected;
                     self.stream_error = if connected { None } else { Some(message) };
-                    if !connected {
+                    if connected {
+                        // The mixer may have been flashed or restarted meanwhile.
+                        self.command(Command::Version {
+                            generation: self.generation,
+                        });
+                    } else {
+                        // Never show a pre-restart observation as current.
+                        self.device_versions = None;
                         // A refresh asked for before the loss won't arrive.
                         self.awaiting_refresh = false;
                         self.usb.clear();
