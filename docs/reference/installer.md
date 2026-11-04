@@ -132,9 +132,8 @@ and `0030` in update mode.
 
 ## Release package
 
-`just package`, or `cargo xtask package` after `just mixer-build`, writes
-`target/package/rc2fx-<os>-<arch>.zip` on Windows and macOS, or
-`rc2fx-linux-x64.AppImage` on Linux (see
+`just package`, or `cargo xtask package` after `just mixer-build`, writes a
+zip on Windows and macOS, or an AppImage on Linux, to `target/package` (see
 [packaging](../developer/building.md#3-package-it)). It holds:
 
 - the self-contained app,

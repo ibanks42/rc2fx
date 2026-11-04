@@ -2,10 +2,14 @@
 
 ## Download the app
 
-There is one download per operating system:
-[`rc2fx-windows-x64.zip`](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64.zip),
-[`rc2fx-macos-arm64.zip`](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.zip) or
-[`rc2fx-linux-x64.AppImage`](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage).
+Download the app from the [latest release](https://github.com/ibanks42/rc2fx/releases/latest).
+Downloads include the app version, system and processor in their names:
+
+- Windows (x64): a zip.
+- macOS (Apple silicon): a zip.
+- Linux (x64): an AppImage, a `.deb` package (Debian, Ubuntu) or an `.rpm`
+  package (Fedora, openSUSE).
+
 The installer is built into the app, and it downloads official RØDE firmware
 when needed. Updating the app is separate from updating the mixer: the app
 never flashes the mixer by itself.
@@ -13,12 +17,13 @@ never flashes the mixer by itself.
 To start the app:
 
 - Windows: extract the zip and run `rc2fx.exe`.
-- macOS: extract the zip and run `rc2fx`. The download is still a ZIP, and
-  Apple signing and notarization are still deferred, so macOS may ask you to
-  allow the unsigned build under **System Settings › Privacy & Security**. The
+- macOS: extract the zip and run `rc2fx`. The build isn't signed or
+  notarized by Apple, so macOS may ask you to allow it under **System Settings › Privacy & Security**. The
   macOS build has not been tested on a real Mac yet.
-- Linux: make the file executable (`chmod +x rc2fx-linux-x64.AppImage`) and
-  run it. Linux needs some one-time setup, described [below](#linux).
+- Linux: either make the downloaded AppImage executable (for example
+  `chmod +x rc2fx-*-linux-x64.AppImage`) and run it, or install the `.deb` or
+  `.rpm` package with your distribution's package manager and start RC2FX
+  from your applications. Linux needs some one-time setup, described [below](#linux).
 
 If there is no download for your platform, you can
 [build it from source](../developer/building.md).
@@ -99,7 +104,9 @@ the mixer; see above for updating the mixer software.
 ### Device access
 
 Linux only lets a program open the mixer's control interface if a udev rule
-allows it. The first time access is refused, the app explains what it needs:
+allows it. The `.deb` and `.rpm` packages install this rule
+(`/usr/lib/udev/rules.d/70-rc2fx.rules`) and reload udev, so with them there is
+nothing to set up. With the AppImage, the first time access is refused, the app explains what it needs:
 the file `/etc/udev/rules.d/70-rc2fx.rules`, which it can show in full, and
 how to remove it later. **Allow access** installs the rule through your
 system's password prompt. The password goes to the system prompt, and the app

@@ -12,7 +12,7 @@ zlib, musl and mimalloc. This script:
   mimalloc at the aports 3.21-stable commit current when the runtime was
   built, checked against Alpine's SHA-512 sums,
 - writes target/appimage-legal/notices.json with the full licence texts, and
-- writes target/package/rc2fx-appimage-runtime-sources.tar.gz with all of the
+- writes the AppImage runtime source archive to target/package with all of the
   above, the build scripts and patches, and a README on rebuilding and
   relinking.
 
@@ -38,6 +38,7 @@ import json
 import re
 import shutil
 import subprocess
+import tomllib
 import sys
 import tarfile
 import tempfile
@@ -281,7 +282,7 @@ def collect(cache: Path | None) -> tuple[dict[str, bytes], list[dict], list[dict
                 "patches/libfuse/mount.c.diff in the runtime source (it reads the fusermount "
                 "program from $FUSERMOUNT_PROG). The library is licensed under the GNU Lesser "
                 "General Public License 2.1; its source, the patch and build scripts are in "
-                "rc2fx-appimage-runtime-sources.tar.gz, published with each RC2FX release.\n\n"
+                "the AppImage runtime source archive published with each RC2FX release.\n\n"
                 + text
             )
         sections.append({"title": title, "text": text})
@@ -335,7 +336,7 @@ def collect(cache: Path | None) -> tuple[dict[str, bytes], list[dict], list[dict
 
 README = """# AppImage runtime sources
 
-`rc2fx-linux-x64.AppImage` starts with the AppImage type 2 runtime
+The RC2FX Linux AppImage starts with the AppImage type 2 runtime
 ({repo}, commit {commit}). The runtime is a static executable. It links a
 modified libfuse 3.15.0, which is licensed under the GNU Lesser General Public
 License 2.1, together with squashfuse, zstd, zlib, musl and mimalloc. This
@@ -397,8 +398,9 @@ An AppImage is the runtime followed by a SquashFS image of the application.
 To combine your runtime with RC2FX's application image:
 
 ```sh
-offset=$(./rc2fx-linux-x64.AppImage --appimage-offset)
-tail -c +$((offset + 1)) rc2fx-linux-x64.AppImage > rc2fx.squashfs
+appimage=./rc2fx-0.1.0-linux-x64.AppImage   # the RC2FX AppImage you downloaded
+offset=$("$appimage" --appimage-offset)
+tail -c +$((offset + 1)) "$appimage" > rc2fx.squashfs
 cat out/runtime-x86_64 rc2fx.squashfs > rc2fx-relinked.AppImage
 chmod +x rc2fx-relinked.AppImage
 ```
@@ -442,7 +444,8 @@ def main() -> int:
     legal = args.root / "target" / "appimage-legal"
     legal.mkdir(parents=True, exist_ok=True)
     (legal / "notices.json").write_bytes(files["LICENSES.json"])
-    bundle = args.root / "target" / "package" / "rc2fx-appimage-runtime-sources.tar.gz"
+    version = tomllib.loads((args.root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    bundle = args.root / "target" / "package" / f"rc2fx-{version}-appimage-runtime-sources.tar.gz"
     write_bundle(bundle, files)
     print(f"wrote {legal / 'notices.json'} ({len(sections)} sections)")
     print(f"wrote {bundle} ({bundle.stat().st_size} bytes, sha256 {digest('sha256', bundle.read_bytes())})")

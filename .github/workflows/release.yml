@@ -169,17 +169,17 @@ jobs:
       - name: Set up verified AppImage tools
         if: runner.os == 'Linux'
         run: bash .github/scripts/setup-release-tools.sh appimage
-      - name: Prepare AppImage runtime licenses and corresponding sources
-        if: runner.os == 'Linux'
-        run: |
-          python3 .github/scripts/test_prepare_appimage_notices.py
-          python3 .github/scripts/prepare-appimage-notices.py
       - uses: actions/download-artifact@v8.0.2
         with:
           name: release-input
           path: .release-input
       - name: Apply release version
         run: tar -xf .release-input/versioned.tar
+      - name: Prepare AppImage runtime licenses and corresponding sources
+        if: runner.os == 'Linux'
+        run: |
+          python3 .github/scripts/test_prepare_appimage_notices.py
+          python3 .github/scripts/prepare-appimage-notices.py
       # Key the cache against the manifests actually being compiled.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -207,7 +207,7 @@ jobs:
             target/package/*.deb
             target/package/*.rpm
             target/package/*.zip
-            target/package/rc2fx-appimage-runtime-sources.tar.gz
+            target/package/rc2fx-*-appimage-runtime-sources.tar.gz
           if-no-files-found: error
 
   release:
@@ -237,16 +237,20 @@ jobs:
           from pathlib import Path
           import zipfile
           import tarfile
+          import tomllib
 
           directory = Path('target/release-assets')
           archives = sorted(directory.iterdir())
-          expected = {'rc2fx-linux-x64.AppImage', 'rc2fx-linux-x64.deb', 'rc2fx-linux-x64.rpm', 'rc2fx-appimage-runtime-sources.tar.gz'}
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          prefix = f'rc2fx-{version}'
+          sources_name = f'{prefix}-appimage-runtime-sources.tar.gz'
+          expected = {f'{prefix}-linux-x64.AppImage', f'{prefix}-linux-x64.deb', f'{prefix}-linux-x64.rpm', sources_name}
           if not os.environ.get('ACT'):
-              expected |= {'rc2fx-windows-x64.zip', 'rc2fx-macos-arm64.zip'}
+              expected |= {f'{prefix}-windows-x64.zip', f'{prefix}-macos-arm64.zip'}
           assert {p.name for p in archives} == expected, 'Missing or unexpected release package'
           for archive in archives:
               assert archive.name.startswith('rc2fx-'), archive
-              if archive.name == 'rc2fx-appimage-runtime-sources.tar.gz':
+              if archive.name == sources_name:
                   with tarfile.open(archive, 'r:gz') as sources:
                       assert sources.getmembers(), 'Empty runtime source archive'
               elif archive.suffix == '.AppImage':

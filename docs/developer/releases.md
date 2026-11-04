@@ -129,12 +129,13 @@ and adds the release's section to `CHANGELOG.md`.
 
 On GitHub, the app release is marked latest and contains:
 
-- `rc2fx-linux-x64.AppImage`, `rc2fx-windows-x64.zip` and
-  `rc2fx-macos-arm64.zip` (GitHub's macOS runners are Apple silicon), each
-  built by `cargo xtask package` (see [packaging](building.md#3-package-it)).
+- the app packages, named `rc2fx-VERSION-OS-ARCH.EXT`, each built by
+  `cargo xtask package` (see [packaging](building.md#3-package-it)): a zip
+  for Windows x64, a zip for macOS arm64 (GitHub's macOS runners are Apple
+  silicon), and for Linux x64 an AppImage, a `.deb` and an `.rpm`.
   The zips hold the app, with its licence notices built in, and their own
   `SHA256SUMS`. The AppImage is the app and its licence notices in one file.
-- `rc2fx-appimage-runtime-sources.tar.gz`: the source of the AppImage type 2
+- `rc2fx-VERSION-appimage-runtime-sources.tar.gz`: the source of the AppImage type 2
   runtime at the start of the AppImage, and of the libraries it links
   statically, including its modified LGPL-2.1 libfuse. See [AppImage runtime
   sources](#appimage-runtime-sources).
@@ -162,9 +163,9 @@ modified libfuse 3.15.0 (LGPL-2.1) with squashfuse, zstd, zlib, musl and
 mimalloc. `.github/scripts/prepare-appimage-notices.py` runs before Linux
 packaging. It writes the runtime's licence notices to
 `target/appimage-legal/notices.json`, which packaging adds to the app's
-notices, and the corresponding source to
-`target/package/rc2fx-appimage-runtime-sources.tar.gz`, which the release
-attaches beside the AppImage.
+notices, and the corresponding source archive to `target/package`, which the
+release attaches beside the AppImage as
+`rc2fx-VERSION-appimage-runtime-sources.tar.gz`.
 
 The script fetches the runtime at a pinned commit (checked by git), libfuse
 and squashfuse at the SHA-256 sums the runtime's own build recipe pins, and
@@ -284,7 +285,7 @@ passing local run doesn't guarantee the real run will pass.
 - Add the GitHub repository as the `origin` remote.
 - Apple signing and notarization remain deferred. The macOS app is unsigned,
   so users have to allow it in Privacy & Security. The macOS download is
-  `rc2fx-macos-arm64.zip`, built only for the runner's architecture.
+  built only for the runner's architecture (`arm64`).
 - The Linux build links against the runner's system libraries and may not run
   on very old distributions.
 

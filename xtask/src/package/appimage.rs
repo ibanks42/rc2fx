@@ -560,7 +560,7 @@ printf '%s\n' "$APPDIR" "$APPIMAGE" "$LD_LIBRARY_PATH" "$1" "$2"
         let out = root.join("out");
         let exe = b"registry-pinned executable bytes";
         let tools = fake_tools(&root);
-        let name = "rc2fx-linux-x64";
+        let name = "rc2fx-0.1.0-linux-x64";
         fs::create_dir_all(&out).unwrap();
         fs::write(out.join(format!("{name}.tar.gz")), b"old").unwrap();
         fs::create_dir_all(out.join(name)).unwrap();

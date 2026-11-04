@@ -214,7 +214,8 @@ pub fn run_package(args: &[&str]) -> Result {
     let release = release_build();
     validate_executable(&root, &executable, release)?;
     let out = root.join("target").join("package");
-    let name = format!("rc2fx-{os}-{arch}");
+    let version = env!("CARGO_PKG_VERSION");
+    let name = format!("rc2fx-{version}-{os}-{arch}");
     if os == "linux" {
         let tools = appimage::Tools::from_env()?;
         let licenses = vec![("LICENSES.html".into(), document.html)];

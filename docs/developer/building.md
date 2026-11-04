@@ -63,9 +63,10 @@ just package
 ```
 
 This builds the self-contained desktop app for the current computer into
-`target/package`. On Windows and macOS that's `rc2fx-<os>-<arch>.zip`,
-holding the app, with its licence notices built in, and a `SHA256SUMS`. On Linux it's a
-single `rc2fx-linux-x64.AppImage`. The documentation isn't packaged.
+`target/package`. On Windows and macOS that's a zip holding the app, with its
+licence notices built in, and a `SHA256SUMS`. On Linux it's a single AppImage.
+Releases publish them as `rc2fx-VERSION-OS-ARCH.EXT` (see
+[Releases](releases.md#release-contents)). The documentation isn't packaged.
 
 Packaging needs `cargo-about` (`cargo install --locked cargo-about`). On Linux
 it also needs `linuxdeploy`, `appimagetool` and the AppImage type 2 runtime,
