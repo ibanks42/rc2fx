@@ -52,6 +52,9 @@ jobs:
       - name: Check the native library
         if: runner.os == 'Linux'
         run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets
+      - name: Test deferred macOS releases
+        if: runner.os == 'Linux'
+        run: python3 .github/scripts/test_macos_release.py
       - name: Test developer SSH controls
         if: runner.os == 'Linux'
         run: |

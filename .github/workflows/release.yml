@@ -86,7 +86,9 @@ jobs:
             mv "$RUNNER_TEMP/rc2fx-native-cache" target/mixer-build
           fi
       - name: Test release versioning
-        run: python3 .github/scripts/test_release.py
+        run: |
+          python3 .github/scripts/test_release.py
+          python3 .github/scripts/test_macos_release.py
       - name: Bump version and prepare notes
         id: version
         env:
@@ -101,6 +103,7 @@ jobs:
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-input
+          retention-days: 90
           path: target/release-input/
           if-no-files-found: error
       - name: Preserve native build progress
@@ -126,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     defaults:
       run:
         shell: bash
@@ -241,7 +244,7 @@ jobs:
           sources_name = f'{prefix}-appimage-runtime-sources.tar.gz'
           expected = {f'{prefix}-linux-x64.AppImage', f'{prefix}-linux-x64.deb', f'{prefix}-linux-x64.rpm', sources_name}
           if not os.environ.get('ACT'):
-              expected |= {f'{prefix}-windows-x64.zip', f'{prefix}-macos-arm64.zip'}
+              expected.add(f'{prefix}-windows-x64.zip')
           assert {p.name for p in archives} == expected, 'Missing or unexpected release package'
           for archive in archives:
               assert archive.name.startswith('rc2fx-'), archive
@@ -291,6 +294,22 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
+          cat >> target/release-input/release-notes.md <<'EOF'
+
+          <!-- rc2fx:macos-pending -->
+          macOS download is pending. It will be added to this release when a macOS runner is available.
+          <!-- /rc2fx:macos-pending -->
+          EOF
           gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file target/release-input/release-notes.md
           gh release upload "$TAG" target/release-assets/*
           gh release edit "$TAG" --draft=false --latest
+      - name: Show macOS retry instructions
+        if: ${{ !inputs.dry-run && !env.ACT }}
+        env:
+          RELEASE_RUN: ${{ github.run_id }}
+          RETRY_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/macos-release.yml
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ### macOS
+          The macOS zip is added by the **Release macOS** workflow, which starts automatically after this run. If it fails or no macOS runner is available, run [Release macOS]($RETRY_URL) by hand with run ID $RELEASE_RUN (within 90 days).
+          EOF

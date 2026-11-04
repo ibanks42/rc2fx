@@ -120,14 +120,18 @@ On GitHub, the app release is marked latest and contains:
 - the app packages, named `rc2fx-VERSION-OS-ARCH.EXT`, each built by
   `cargo xtask package` (see [packaging](building.md#3-package-it)): a zip
   for Windows x64, a zip for macOS arm64 (GitHub's macOS runners are Apple
-  silicon), and for Linux x64 an AppImage, a `.deb` and an `.rpm`.
+  silicon), and for Linux x64 an AppImage, a `.deb` and an `.rpm`. The macOS
+  zip is added after the release is published, by a separate workflow (see
+  [Workflow jobs](#workflow-jobs)); until then the release notes say it is
+  pending.
   The zips hold the app, with its licence notices built in, and their own
   `SHA256SUMS`. The AppImage is the app and its licence notices in one file.
 - `rc2fx-VERSION-appimage-runtime-sources.tar.gz`: the source of the AppImage type 2
   runtime at the start of the AppImage, and of the libraries it links
   statically, including its modified LGPL-2.1 libfuse. See [AppImage runtime
   sources](#appimage-runtime-sources).
-- a `SHA256SUMS` file for the archives.
+- a `SHA256SUMS` file for the archives, rewritten when the macOS zip is
+  added.
 - the release notes.
 
 Every app package in a release embeds the same mixer payload: the runtime
@@ -211,7 +215,12 @@ line naming the mixer version the packages carry, even when it didn't change. Th
 
 ## Workflow jobs
 
-`.github/workflows/release.yml` runs three jobs in order:
+Two workflows make a release. **Release** (`.github/workflows/release.yml`)
+publishes it for Linux and Windows; **Release macOS**
+(`.github/workflows/macos-release.yml`) then adds the macOS zip, so a
+shortage of macOS runners never holds up or fails the release.
+
+**Release** runs three jobs in order:
 
 1. **prepare** (Ubuntu) runs the versioning tests, computes the app version
    and rewrites the version files and changelog (`.github/scripts/release.py
@@ -219,7 +228,7 @@ line naming the mixer version the packages carry, even when it didn't change. Th
    `cargo xtask mixer-build` and shares `target/mixer` with the later jobs,
    with the version files, so every platform packages the same version files
    and runtime.
-2. **build** runs on Ubuntu, Windows and macOS in parallel. Each job applies
+2. **build** runs on Ubuntu and Windows in parallel. Each job applies
    the prepare output, stages the shared runtime into `target/mixer`, takes
    the scripts and catalog from its own checkout of the same commit, and runs
    `cargo xtask package` with `RC2FX_RELEASE_BUILD=1`, which selects the
@@ -228,12 +237,39 @@ line naming the mixer version the packages carry, even when it didn't change. Th
    inputs, including with `--skip-build`, and rejects a stale or development
    executable.
 3. **release** (Ubuntu) checks each archive, writes the checksums, creates the
-   release commit and tag (`release.py commit`), and publishes. If `main` has
-   moved since the run started, it stops without pushing. Start a new run in
-   that case.
+   release commit and tag (`release.py commit`), and publishes, with a
+   pending notice for macOS in the release notes. If `main` has moved since
+   the run started, it stops without pushing. Start a new run in that case.
 
 A dry run does everything except push and publish. Only one release runs at a
-time. Starting another one queues it.
+time. Starting another one queues it. The run's `release-input` artifact (the
+version files, release plan and mixer runtime) is kept for 90 days, because
+**Release macOS** builds from it.
+
+**Release macOS** starts by itself when a **Release** run succeeds. It uses
+`.github/scripts/macos_release.py`:
+
+1. **prepare** (Ubuntu) checks that the run was a successful **Release** run
+   on `main`, that its artifact hasn't expired, and that its tag is published
+   as the release commit on top of the run's source commit. After a dry run
+   nothing was published, so the automatic run skips the build.
+2. **build** (macOS) checks out the release's source commit, applies the
+   version files from the artifact (only the manifests, lockfiles and
+   changelog a version bump writes), stages the run's mixer runtime and runs
+   `cargo xtask package`. It builds the same version and runtime as the other
+   platforms, without a version bump or rebuilding them.
+3. **publish** (Ubuntu) checks the zip, uploads it to the release, rebuilds
+   `SHA256SUMS` from the release's actual assets and removes the pending
+   notice. Which release is marked latest doesn't change. It never replaces
+   a different macOS zip that is already there, and running it again after
+   success changes nothing but `SHA256SUMS`.
+
+If no macOS runner is available, only **Release macOS** is cancelled or
+fails; the release stays published without the macOS zip. A real build error
+shows as a failed **Release macOS** run. To retry, open **Actions › Release
+macOS › Run workflow** and enter the ID of the original **Release** run (the
+number in its URL). A retry is refused once that run's artifact has expired;
+make a new release then.
 
 Every push and pull request also runs the **Desktop** workflow, a Linux build
 of the app used as a compile check. It doesn't package, test or lint.
@@ -254,7 +290,9 @@ nothing is pushed or published. Don't pass `--bind`, which would create the
 commit in your own checkout. The Linux archive and checksums are written to
 `.local/act-artifacts`.
 
-act can't run the Windows and macOS builds or publish the release. act builds
+act can't run the Windows or macOS builds, **Release macOS**, or publish the
+release. `python3 .github/scripts/test_macos_release.py` tests the macOS
+helper offline. act builds
 your working tree instead of a clean checkout, so a
 passing local run doesn't guarantee the real run will pass.
 
