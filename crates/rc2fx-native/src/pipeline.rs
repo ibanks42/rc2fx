@@ -2530,11 +2530,14 @@ mod tests {
         ];
         // Revisions must climb past the one the plan was built with.
         let first = controls[0].status().unwrap().applied + 1;
+        let mut previous_epoch = controls[0].status().unwrap().runtime_epoch;
         for (revision, lookahead, expected) in [
             (first, 1, base + hop + helper),
             (first + 1, 0, base + helper),
             (first + 2, 1, base + hop + helper),
+            (first + 3, 0, base + helper),
         ] {
+            let retiring = controls[0].worker_telemetry().unwrap().unwrap().1;
             let mut target = plan.paths[0].target.clone();
             target.suppression.lookahead = lookahead;
             let staged = controls[0]
@@ -2556,7 +2559,27 @@ mod tests {
             assert_eq!(latency(&mut controls), expected, "lookahead {lookahead}");
             let status = controls[0].status().unwrap();
             assert_eq!(status.applied, revision);
-            assert!(status.runtime_epoch > 0, "a fresh runtime was published");
+            assert!(
+                status.runtime_epoch > previous_epoch,
+                "a fresh runtime was published"
+            );
+            previous_epoch = status.runtime_epoch;
+            let retired = controls[0].retired_workers();
+            assert_eq!(retired.len(), 1);
+            let worker = &retired[0].worker;
+            assert!(worker.completed_frames > 0);
+            let terminal = retiring.snapshot();
+            for (reported, raw) in [
+                (worker.wall, terminal.wall),
+                (worker.cpu, terminal.cpu),
+                (worker.turnaround, terminal.turnaround),
+            ] {
+                assert_eq!(
+                    reported.calls, raw.calls,
+                    "retirement must contain only this worker's timing"
+                );
+                assert_eq!(reported.total_ns, raw.total_ns);
+            }
         }
         assert_eq!(
             [

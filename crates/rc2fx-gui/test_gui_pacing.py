@@ -738,6 +738,64 @@ class RotationTests(unittest.TestCase):
 class CpuPathTests(unittest.TestCase):
     """Fixed CPU rotation of large redraws; small damage still uses GE2D."""
     @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_failed_medium_token_refreshes_damage_on_reuse(self):
+        for direction in ('cw', 'ccw'):
+            out, lines = run('partial-' + direction, 'partial', '8',
+                             module='partial-plan3.so', extra={
+                                 'RC2FX_TEST_CPU_ROTATE': '1',
+                                 'PARTIAL_EVENT_CASE': 'B',
+                                 'FAKE_GE2D_DIR': direction,
+                                 'FAKE_GE2D_FAIL_QBUF': '3',
+                                 'PARTIAL_RECOVER_QUEUES': '1',
+                                 'PARTIAL_REAL_DEST_FDS': '1'})
+            # One failed presentation is unavoidable; its damage must not
+            # remain stale when the alternating destination is reused.
+            self.assertIn('bad_frames 1', out)
+            self.assertIn('failed_qbuf_cpu_writes 0', out)
+            frames = [line for line in out.splitlines() if line.startswith('frame ')]
+            self.assertTrue(all(line.endswith('mismatches 0') for line in frames[3:]), out)
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_cpu_regions_keep_offsets_edges_and_alternating_destinations(self):
+        for direction in ('cw', 'ccw'):
+            out, lines = run('partial-verify-' + direction, 'partial', '40',
+                             module='partial-plan3.so', extra={
+                                 'RC2FX_TEST_CPU_ROTATE': '1', 'PARTIAL_CPU_REGIONS': '1',
+                                 'FAKE_GE2D_DIR': direction})
+            self.assertIn('bad_frames 0', out)
+            updates = [f for k, f in lines if k == 'convert'][2:]
+            self.assertEqual(len(updates), 38)
+            self.assertTrue(all(c['kind'] == 'cpu' and c['reason'] == 'medium' for c in updates))
+            self.assertTrue(all(32768 <= int(c['cpu_px']) < 1280 * 720 for c in updates))
+            verifies = [f for k, f in lines if k == 'verify']
+            self.assertTrue(verifies)
+            self.assertTrue(all(v['mismatches'] == '0' for v in verifies))
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_notification_redraw_avoids_large_ge2d_jobs_without_losing_pixels(self):
+        for direction in ('cw', 'ccw'):
+            for event in ('A', 'B'):
+                with self.subTest(direction=direction, event=event):
+                    out, lines = run('partial-' + direction, 'partial', '6',
+                                     module='partial-plan3.so', extra={
+                                         'RC2FX_TEST_CPU_ROTATE': '1',
+                                         'PARTIAL_EVENT_CASE': event,
+                                         'FAKE_GE2D_DIR': direction})
+                    self.assertIn('bad_frames 0', out)
+                    conversions = [f for k, f in lines if k == 'convert']
+                    updates = conversions[2:4]
+                    self.assertTrue(updates)
+                    self.assertTrue(all(c['kind'] == 'partial' and c['job_px'] == '64'
+                                        for c in conversions[4:]))
+                    if event == 'B':
+                        self.assertTrue(all(c['kind'] == 'cpu' and c['reason'] == 'medium'
+                                            for c in updates), updates)
+                        self.assertTrue(all(c['job_px'] == '256' for c in updates))
+                        self.assertTrue(all(c.get('cpu_px') == '34686' for c in updates), updates)
+                    else:
+                        self.assertTrue(all(c['kind'] == 'partial' for c in updates), updates)
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
     def test_fixed_cpu_rotation_is_pixel_identical_in_both_directions(self):
         for direction in ('cw', 'ccw'):
             for module in ('partial.so', 'partial-plan3.so'):

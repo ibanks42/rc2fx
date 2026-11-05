@@ -291,7 +291,7 @@ static struct {
     bool open;
     const char *kind, *reason;
     int dest, jobs;
-    long long px, job_px[PARTIAL_MAX_JOBS];
+    long long px, cpu_px, job_px[PARTIAL_MAX_JOBS];
     uint64_t job_ns[PARTIAL_MAX_JOBS], extra_ns, last_start;
 } record;
 
@@ -312,18 +312,18 @@ static void convert_line(int64_t last_ns) {
     }
     /* The last job is the vendor's: -1 if it was never dequeued. */
     snprintf(times + used, sizeof times - used, "%lld", last_ns < 0 ? -1LL : (long long)(last_ns / 1000));
-    char line[320];
+    char line[384];
     int n = snprintf(line, sizeof line, "convert pid=%d t=%llu dest_fd=%d kind=%s reason=%s jobs=%d px=%lld "
-                     "job_px=%s job_us=%s extra_us=%llu\n", (int)gui_pid, (unsigned long long)now_ns(),
+                     "job_px=%s job_us=%s extra_us=%llu cpu_px=%lld\n", (int)gui_pid, (unsigned long long)now_ns(),
                      record.dest, record.kind, record.reason, record.jobs, record.px, pixels, times,
-                     (unsigned long long)(record.extra_ns / 1000));
+                     (unsigned long long)(record.extra_ns / 1000), record.cpu_px);
     if (n > 0 && (size_t)n < sizeof line) log_line(line, (size_t)n);
 }
 static void convert_open(const char *kind, const char *reason, int jobs, long long px, const uint64_t *job_ns,
                          const long long *job_px, uint64_t extra_ns) {
     convert_line(-1); /* the previous one, if its dequeue never came */
     record.open = true, record.kind = kind, record.reason = reason, record.dest = cap_dest;
-    record.jobs = jobs, record.px = px, record.extra_ns = extra_ns;
+    record.jobs = jobs, record.px = px, record.extra_ns = extra_ns, record.cpu_px = 0;
     memcpy(record.job_ns, job_ns, sizeof record.job_ns);
     memcpy(record.job_px, job_px, sizeof record.job_px);
     record.last_start = now_ns();
@@ -441,13 +441,18 @@ static int ensure_source(int fd) {
 }
 
 
-/* Rotate a complete large redraw in 16-row strips, first copying each strip
+/* Rotate planned damage in 16-row strips, first copying each strip
  * into cacheable staging with contiguous reads. The copy turns small
  * non-cacheable reads into 64-byte ones. This runs on the pump thread while
  * the vendor's token job completes its normal handshake. */
 static uint32_t cpu_stage[CPU_STRIP * SRC_W];
-static int cpu_rotate_frame(int fd) {
-    const int rows = SRC_H;
+static int cpu_rotate_regions(int fd, const struct rot_rect *regions, int count) {
+    if (count <= 0) return -1;
+    for (int i = 0; i < count; i++) {
+        struct rot_rect r = regions[i];
+        if (r.x < 0 || r.y < 0 || r.x >= SRC_W || r.y >= SRC_H || r.w <= 0 || r.h <= 0 ||
+            r.w > SRC_W - r.x || r.h > SRC_H - r.y) return -1;
+    }
     const uint8_t *const *global = destination_global();
     const uint8_t *descriptor = global ? *global : NULL;
     if (!descriptor) return -1;
@@ -458,22 +463,33 @@ static int cpu_rotate_frame(int fd) {
     if (!dst || dfd != cap_dest) return -1;
     if (ensure_source(fd) != 0) return -1;
     uint64_t t0 = now_ns();
-    for (int y = 0; y < rows; y += CPU_STRIP) {
-        int strip = CPU_STRIP < rows - y ? CPU_STRIP : rows - y;
-        memcpy(cpu_stage, (const void *)(verify_source + (size_t)y * SRC_W), (size_t)strip * SRC_W * 4);
-        /* The staged strip is rows 0..strip-1 of the buffer, but it belongs at
-         * source row y, and rotate_rect derives the destination column from the
-         * rect's row: CW writes column sh-1-y, so shrinking sh by y keeps the
-         * column right; CCW writes column y itself, so the destination pointer
-         * moves forward by y pixels (still inside the destination). */
-        if (partial_dir == ROT_CW)
-            rotate_rect(cpu_stage, SRC_W * 4, SRC_W, SRC_H - y, dst, DST_PITCH,
-                        (struct rot_rect){0, 0, SRC_W, strip}, ROT_CW);
-        else
-            rotate_rect(cpu_stage, SRC_W * 4, SRC_W, SRC_H, dst + y, DST_PITCH,
-                        (struct rot_rect){0, 0, SRC_W, strip}, ROT_CCW);
-        /* Raw syscall: no libc call and no cancellation point on the pump. */
-        (void)syscall(SYS_sched_yield);
+    for (int i = 0; i < count; i++) {
+        struct rot_rect r = regions[i];
+        for (int y = r.y; y < r.y + r.h; y += CPU_STRIP) {
+            int strip = CPU_STRIP < r.y + r.h - y ? CPU_STRIP : r.y + r.h - y;
+            if (r.x == 0 && r.w == SRC_W) {
+                memcpy(cpu_stage, (const void *)(verify_source + (size_t)y * SRC_W), (size_t)strip * SRC_W * 4);
+            } else {
+                for (int row = 0; row < strip; row++)
+                    memcpy(cpu_stage + (size_t)row * SRC_W + r.x,
+                           (const void *)(verify_source + (size_t)(y + row) * SRC_W + r.x),
+                           (size_t)r.w * 4);
+            }
+            /* The staged strip is rows 0..strip-1 of the buffer, but it belongs at
+             * source row y, and rotate_rect derives the destination column from the
+             * rect's row: CW writes column sh-1-y, so shrinking sh by y keeps the
+             * column right; CCW writes column y itself, so the destination pointer
+             * moves forward by y pixels (still inside the destination). */
+            if (partial_dir == ROT_CW)
+                rotate_rect(cpu_stage, SRC_W * 4, SRC_W, SRC_H - y, dst, DST_PITCH,
+                            (struct rot_rect){r.x, 0, r.w, strip}, ROT_CW);
+            else
+                rotate_rect(cpu_stage, SRC_W * 4, SRC_W, SRC_H, dst + y, DST_PITCH,
+                            (struct rot_rect){r.x, 0, r.w, strip}, ROT_CCW);
+            record.cpu_px += (long long)r.w * strip;
+            /* Raw syscall: no libc call and no cancellation point on the pump. */
+            (void)syscall(SYS_sched_yield);
+        }
     }
     uint64_t spent = now_ns() - t0;
     cpu_frames++, cpu_ns += spent;
@@ -488,6 +504,10 @@ static bool cpu_eligible(const char *reason, long long pending_px) {
     if (!test_cpu_rotation) return false;
 #endif
     if (disabled || !reason) return false;
+    /* A 32,880-pixel redraw job overlapped downstream audio failures.
+     * Use the strip-staged CPU path for planned jobs at
+     * least 32K pixels; smaller meter updates retain the compact GE2D plan. */
+    if (strcmp(reason, "medium") == 0) return pending_px >= 32768;
     bool deliberate = strcmp(reason, "forced") == 0 || strcmp(reason, "forced-full") == 0 ||
                       strcmp(reason, "area") == 0 || strcmp(reason, "budget") == 0 ||
                       strcmp(reason, "third-destination") == 0;
@@ -550,6 +570,14 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
 #endif
     }
     if (!reason) {
+        for (int i = 0; i < k; i++) {
+            if (cpu_eligible("medium", area_of(jobs[i]))) {
+                reason = "medium";
+                break;
+            }
+        }
+    }
+    if (!reason) {
         uint64_t spent = 0;
         bool merged = false;
 #ifdef RC2FX_GUI_RECT_PLAN3
@@ -605,23 +633,39 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
             return vendor_ioctl(fd, request, output);
         }
     }
-    /* A full frame covers everything pending. */
+    /* Either the full fallback or all planned CPU regions cover the pending damage. */
     if (p) p->n = 0, p->force = false;
-    count_full(reason);
+    bool medium = strcmp(reason, "medium") == 0;
+    if (medium) {
+        p->partials++;
+        partial_count++;
+        verify_due = partial_verify && (p->partials <= PARTIAL_VERIFY_FIRST ||
+                                        (verify_every && p->partials % verify_every == 0));
+    } else {
+        count_full(reason);
+    }
     /* GE2D gets a 16x16 token job to preserve the vendor handshake. The CPU
-     * rotates the complete frame before this call returns and before present. */
+     * rotates every planned region (or the full fallback) before present. */
     if (cpu_eligible(reason, px)) {
         const struct rot_rect ge2d_crop = {0, 0, 16, 16};
         if (select_rect(fd, ge2d_crop) != 0) {
             cpu_fail++;
+            if (medium) {
+                partial_count--;
+                p->partials--;
+                verify_due = false;
+                reason = "selection";
+                count_full(reason);
+            }
         } else {
             job_px[0] = area_of(ge2d_crop);
             convert_open("cpu", reason, 1, job_px[0], job_ns, job_px, 0);
             int result = vendor_ioctl(fd, request, output);
-            if (result == 0 && cpu_rotate_frame(fd) != 0) {
+            if (result != 0 || cpu_rotate_regions(fd, medium ? jobs : &full, medium ? k : 1) != 0) {
                 cpu_fail++;
-                /* Refresh this destination next time: one frame may be
-                 * partially converted, exactly as after a failed GE2D job. */
+                /* A failed token submission must not consume pending damage.
+                 * After caller/driver queue recovery, refresh both destinations.
+                 * Do not touch destination pixels when submission failed. */
                 for (int s = 0; s < 2; s++) slots[s].force = true;
             }
             return result;

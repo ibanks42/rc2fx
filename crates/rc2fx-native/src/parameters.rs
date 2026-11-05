@@ -114,9 +114,19 @@ fn same_runtime(a: &Snapshot, b: &Snapshot) -> bool {
     }
 }
 fn worker_meter(worker: &super::suppression::Record) -> rc2fx_native_control::WorkerMeter {
+    let mut meter = worker_only_meter(worker);
+    let archived = archived_timings();
+    meter.wall = merge_timing(meter.wall, archived[0]);
+    meter.cpu = merge_timing(meter.cpu, archived[1]);
+    meter.turnaround = merge_timing(meter.turnaround, archived[2]);
+    meter
+}
+/// A retirement receipt and its archive contribution must exclude all prior
+/// workers. Feeding the cumulative display meter back into its archive doubles
+/// the prior history at every runtime replacement.
+fn worker_only_meter(worker: &super::suppression::Record) -> rc2fx_native_control::WorkerMeter {
     let value = worker.telemetry().snapshot();
     let geometry = worker.geometry();
-    let archived = archived_timings();
     rc2fx_native_control::WorkerMeter {
         completed_frames: value.completed_frames,
         missed_deadlines: value.missed_deadlines,
@@ -127,10 +137,10 @@ fn worker_meter(worker: &super::suppression::Record) -> rc2fx_native_control::Wo
         frame_budget_ns: geometry.frame_budget_ns(),
         worker_allowance_ns: geometry.worker_allowance_ns(),
         allowance_overruns: value.allowance_overruns,
-        wall: merge_timing(worker_timing(value.wall), archived[0]),
-        cpu: merge_timing(worker_timing(value.cpu), archived[1]),
+        wall: worker_timing(value.wall),
+        cpu: worker_timing(value.cpu),
         queue_wait: worker_timing(value.queue_wait),
-        turnaround: merge_timing(worker_timing(value.turnaround), archived[2]),
+        turnaround: worker_timing(value.turnaround),
     }
 }
 fn outliers_json(value: rc2fx_suppression::Outliers) -> serde_json::Value {
@@ -249,7 +259,7 @@ fn archive(versions: &mut Versions, snapshot: &Snapshot) {
             .telemetry()
             .terminal()
             .expect("joined runtime terminal receipt");
-        let meter = worker_meter(worker);
+        let meter = worker_only_meter(worker);
         versions.retired_worker_count = versions.retired_worker_count.saturating_add(1);
         versions.latest_worker = Some(RetiredWorker {
             runtime_epoch: runtime.epoch(),
@@ -761,11 +771,10 @@ mod tests {
     fn target() -> Target {
         Target::new("headphones", "Headphones", TargetKind::Output, 2)
     }
-    /// A worker's timings start at zero, so the meter must add what already
-    /// retired: the app's fault counters need a number that only grows within
-    /// an engine generation, and nothing may be counted twice.
+    /// Arithmetic for disjoint worker totals. The live lookahead-switch test
+    /// covers retirement at the real call site, including archive feedback.
     #[test]
-    fn retired_worker_timings_accumulate_and_never_double_count() {
+    fn timing_merge_sums_disjoint_workers() {
         let first = rc2fx_native_control::Timing {
             calls: 10,
             total_ns: 1_000,
@@ -794,8 +803,7 @@ mod tests {
             ),
             (15, 1_400, 300, 3, 1, [1, 2, 0, 0, 0, 0, 0, 0])
         );
-        // Merging a zero (a rebuilt worker that has not run yet) changes
-        // nothing, so a rebuild cannot duplicate the retired total.
+        // A worker that has not run contributes nothing.
         assert_eq!(merge_timing(once, ZERO_TIMING), once);
     }
 

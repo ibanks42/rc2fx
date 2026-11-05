@@ -8,6 +8,8 @@
 #   rc2fx.sh stop                     stop RC2FX; the launcher restarts stock audio
 #   rc2fx.sh status                   show what is running
 #   rc2fx.sh logs                     print the current and last-exit logs
+#   rc2fx.sh arm-power-recovery       explicitly arm one-shot power-on after
+#                                    outlet recovery; never part of startup
 #   rc2fx.sh launch                   entry used by /usr/sbin/rc_audio_mixer
 #   rc2fx.sh gui-launch               entry used by /usr/sbin/rc_gui_juce: the
 #                                    stock GUI, with the partial-conversion
@@ -20,8 +22,9 @@
 #                                    RC2FX's own developer SSH key; called by
 #                                    rc2fxd for the desktop app over USB 1
 #
-# Nothing here changes firmware or stock files, with one exception:
 # developer-ssh adds or removes one marked line in root's authorized_keys.
+# arm-power-recovery explicitly sets the bootloader's one-shot power flag.
+# Other commands do not change firmware or stock files.
 # The launcher (audio-start.sh) runs `rc_audio_mixer` by name with /usr/sbin ahead of /usr/bin, so the shim
 # installed as /usr/sbin/rc_audio_mixer runs `launch` as the launcher's own
 # child and execs the stock executable, injected unless this boot has fallen
@@ -781,7 +784,11 @@ launch() {
   trap - EXIT
   relax_rt_throttle >> "$logs/rc2fx.log"
   jack_recorder || true
-  env LD_AUDIT="$home/librc2fx_native.so" \
+  # Explicit RAM-only measurement switch. Never inherit a caller's probe flag;
+  # removal takes effect at the next mixer start, reboot clears the marker.
+  local client_timing=0
+  test -f /run/rc2fx-client-timing && client_timing=1
+  env RC2FX_CLIENT_TIMING="$client_timing" LD_AUDIT="$home/librc2fx_native.so" \
     RC2FX_NATIVE_PROBE_REPORT_SELECTED_ONLY=1 \
     RC2FX_FIRMWARE_PROFILE="$profile_id" RC2FX_FIRMWARE_PROFILES="$home/firmware-profiles.json" \
     RC2FX_NATIVE_PROBE_PLAN="$run/plan.json" RC2FX_USB_SOCKET="$run/usb.sock" \
@@ -1656,7 +1663,23 @@ developer_ssh() {
   esac
 }
 
+# Explicit one-shot recovery authorization; never called by normal startup.
+arm_power_recovery() {
+  test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot || {
+    echo 'Refusing recovery arming during firmware first boot' >&2; return 4;
+  }
+  local current
+  current=$(fw_printenv -n reboot_pwr_button_bypass) || return 1
+  case "$current" in 0|1) ;; *) echo 'Unexpected power-button bypass value' >&2; return 1 ;; esac
+  if test "$current" != 1; then
+    fw_setenv reboot_pwr_button_bypass 1 || return 1
+  fi
+  test "$(fw_printenv -n reboot_pwr_button_bypass)" = 1 || return 1
+  echo 'Power recovery armed for the next boot; the bootloader consumes this flag'
+}
+
 case "${1:-}" in
+  arm-power-recovery) arm_power_recovery ;;
   gui-launch) shift; gui_launch "$@" ;;
   ui-stop) shift; ui_stop "$@" ;;
   ui-run) shift; test $# -eq 2 || exit 2; ui_preview "$@" keep ;;

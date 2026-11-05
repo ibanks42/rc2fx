@@ -229,6 +229,9 @@ pub struct Stamp {
     cpu: Option<u64>,
 }
 impl Stamp {
+    pub(crate) fn wall_ns(self) -> Option<u64> {
+        self.wall
+    }
     fn entry(cpu: bool) -> Self {
         Self {
             wall: now(false),

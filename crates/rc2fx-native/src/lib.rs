@@ -2,6 +2,8 @@
 #![cfg(all(target_os = "linux", target_pointer_width = "64"))]
 
 mod chat_mix;
+mod client_timing;
+mod client_timing_events;
 mod ipc;
 mod parameters;
 mod pipeline;
@@ -105,6 +107,7 @@ static SELECTOR_SEEN: AtomicBool = AtomicBool::new(false);
 // asked (CPU clocks only every 16th callback). Nothing else in the callback
 // changed when the old RC2FX_NATIVE_PROBE_TIMING switch was removed.
 static RETIRED_TIMING: timing::Shared = timing::Shared::new();
+static MAIN_TAIL: client_timing_events::MainEvents = client_timing_events::MainEvents::new();
 static PLAN: OnceLock<pipeline::Plan> = OnceLock::new();
 static CONTROL_SOCKET: OnceLock<PathBuf> = OnceLock::new();
 static CONTROL_ADMISSION: ipc::Admission = ipc::Admission::new();
@@ -575,6 +578,11 @@ unsafe extern "C" fn set_process(
     if offset == 0
         || MAIN_BASE.load(Ordering::Acquire).checked_add(offset) != Some(callback as usize)
     {
+        let (callback, argument) = if client_timing::enabled() {
+            client_timing::wrap(client as usize, callback, argument)
+        } else {
+            (callback, argument)
+        };
         return unsafe { native_registration(original, client, Some(callback), argument, None) };
     }
     // The retained stock JUCE teardown registers the same callback with a null
@@ -734,6 +742,25 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     INSIDE.with(|value| value.set(previous));
     let ended = timing::monotonic();
     context.ended.store(ended, Ordering::Relaxed);
+    if client_timing::active() {
+        // Keep evidence before USB's deadline: the main callback must leave
+        // time for downstream work. This threshold is NOT a JACK deadline.
+        MAIN_TAIL.record_partitioned(
+            [
+                started,
+                ended,
+                cycle_start,
+                probe::PERIOD_NS * 3 / 4,
+                context.token.load(Ordering::Relaxed),
+            ],
+            before_native.zip(after_native).and_then(|(before, after)| {
+                before
+                    .wall_ns()
+                    .zip(after.wall_ns())
+                    .map(|(before, after)| [before, after])
+            }),
+        );
+    }
     let wall = ended.saturating_sub(started);
     if wall > probe::PERIOD_NS {
         probe::record(probe::Kind::Overrun, wall);
@@ -1198,6 +1225,8 @@ fn write_report() {
     report["controlServerErrors"] = read(&SERVER_ERRORS).into();
     report["controlRequired"] = CONTROL_ADMISSION.required().into();
     report["processPid"] = std::process::id().into();
+    report["clientTiming"] = client_timing::snapshot();
+    report["mainCallbackTail"] = MAIN_TAIL.snapshot();
     report["retiredCallbackTiming"] =
         serde_json::to_value(RETIRED_TIMING.snapshot()).unwrap_or(serde_json::Value::Null);
     report["callbackTiming"] = CONTEXTS

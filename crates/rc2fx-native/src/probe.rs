@@ -440,6 +440,29 @@ fn stamp(time: std::time::SystemTime) -> String {
 /// without a cycle clock. JACK supplies an elapsed frame count, which is
 /// subtracted from our CLOCK_MONOTONIC time. JACK's absolute timestamps may
 /// use CLOCK_MONOTONIC_RAW instead; their epochs must not be equated.
+/// Read the JACK-owned name during registration, never from an audio callback.
+/// Use libjack's observed map directly rather than the audit namespace.
+pub fn client_name(client: usize) -> Option<String> {
+    let map = JACK_MAP.load(Ordering::Acquire);
+    if map == 0 || client == 0 {
+        return None;
+    }
+    let address = unsafe { dynamic_symbol(map as *const LinkMap, c"jack_get_client_name") };
+    if address == 0 {
+        return None;
+    }
+    let get: unsafe extern "C" fn(*mut c_void) -> *const c_char =
+        unsafe { std::mem::transmute(address) };
+    let name = unsafe { get(client as *mut c_void) };
+    if name.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(name) }
+        .to_str()
+        .ok()
+        .map(str::to_owned)
+}
+
 pub fn cycle_start(client: usize) -> u64 {
     let clock = cycle_clock();
     if clock <= 1 || client == 0 {

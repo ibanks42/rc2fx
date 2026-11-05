@@ -104,6 +104,7 @@ __attribute__((visibility("default"))) const uint8_t *test_current_destination =
 extern "C" int fake_v4l2_open(uint32_t **src);
 extern "C" void fake_v4l2_add_dest(int fd, uint32_t *p, size_t pitch);
 extern "C" unsigned long long fake_jobs, fake_pixels;
+extern "C" void fake_v4l2_recover_queues(void);
 extern "C" __attribute__((noinline)) int test_capture_qbuf_site(int fd, v4l2_buffer *b) {
     int r = ioctl(fd, VIDIOC_QBUF, b);
     asm volatile("" ::: "memory");
@@ -425,6 +426,12 @@ int main(int argc, char **argv) {
                                      {0, 701, 3, 19}, {1263, 0, 17, 1}};
                 memcpy(rects[f % n], edge[f % 4], sizeof edge[0]);
             }
+            if (getenv("PARTIAL_CPU_REGIONS")) {
+                n = 3;
+                int32_t regions[3][4] = {{(f * 43) % (SW - 301), (f * 37) % (SH - 129), 301, 129},
+                                          {0, 701, 3, 19}, {1263, 0, 17, 1}};
+                memcpy(rects, regions, sizeof regions);
+            }
             // PARTIAL_WIDE adds a far-corner rect, so a bounding box over the
             // paint spans most of the frame.
             if (getenv("PARTIAL_WIDE")) {
@@ -455,6 +462,7 @@ int main(int argc, char **argv) {
             std::vector<uint32_t> before;
             if (getenv("PARTIAL_REAL_DEST_FDS")) before.assign(dest_ptrs[d], dest_ptrs[d] + SW * SH);
             int r = test_convert(video, dest_fds[d]);
+            if (r == -2 && getenv("PARTIAL_RECOVER_QUEUES")) fake_v4l2_recover_queues();
             if (r == -2 && !before.empty())
                 printf("failed_qbuf_cpu_writes %d\n", memcmp(before.data(), dest_ptrs[d], SW * SH * 4) != 0);
             test_pump_unlock_site(&repaint_mutex);

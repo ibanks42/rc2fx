@@ -51,6 +51,14 @@ static int token_was_clamped;
 /* Counters the test program prints. */
 unsigned long long fake_jobs, fake_pixels;
 
+/* Explicit test-side queue recovery, leaving source/destination pixels intact.
+ * This tests module recovery once the caller can submit again; it does not
+ * claim that the vendor recovers its queues this way. */
+void fake_v4l2_recover_queues(void) {
+    capture_queued = -1;
+    output_queued = job_done = 0;
+}
+
 int fake_v4l2_open(uint32_t **src) {
     video = memfd_create("fake-ge2d", MFD_CLOEXEC);
     if (video < 0 || ftruncate(video, SW * SH * 4) != 0) return -1;

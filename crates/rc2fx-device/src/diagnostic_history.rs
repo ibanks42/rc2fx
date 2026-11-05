@@ -20,6 +20,9 @@ pub const MAX_EVENT_HISTORY_BYTES: usize = 128 * 1024;
 pub const MAX_SAMPLES: usize = 300;
 pub const MAX_EVENTS: usize = 256;
 const MAX_RECORD_BYTES: usize = 32 * 1024;
+// Native windows cover the full path catalog, including per-path workers.
+// Keep room for the observation wrapper even when event history is full.
+const MAX_NATIVE_TELEMETRY_BYTES: usize = 128 * 1024;
 const MAX_IDENTITY_BYTES: usize = 16 * 1024;
 const NOTES: &str = "resources describes only the controller process; nativeMixerResources, when present, separately describes the vendor mixer process including RC2FX native processing. Shared memory/RSS must not be summed. Independent recovery watcher resources are not included. Native telemetry retains wire counters and optional timing in nativeDiagnostics; callbackDiagnostics is absent because the main-service callback does not execute there. Native wall/owned/native clocks are distinct; CPU clocks are sampled at cpuSampleEvery, and their calls count identifies the sampled population. Absent timing is unavailable, never zero cost. History clears on daemon restart. Samples are at most once per second with no catch-up. telemetryStatus explains missing telemetry (no fresh window, epoch change or oversized record); null is never zero audio or zero cost. Fresh means previously unconsumed, not contemporaneous: telemetry.at is control receipt time and observation.at is later process-sample start time; neither is callback time. CPU ticks are cumulative process CPU at the reported ticksPerSecond. Callback wall includes buffer acquisition, DSP, shared progress and preemption, but excludes subsequent metrics recording; it is not the entire callback deadline. Thread CPU excludes descheduling. Cadence is observed entry-to-entry monotonic time, including time between entries such as prior metrics recording, not execution duration or causal scheduler lateness. Its rounded expected period and ordinary jitter can produce abovePeriod counts without a fault; bins are <=P/2, <=P, <=2P, <=4P, >4P. Missing/invalid starts reset the baseline; effect revisions do not. Counters are individually sampled; shared JACK xruns must not be summed across clients. Peaks describe the latest consumed window, not the whole second. No recorded audio or saved effect parameters are included.";
 
@@ -515,7 +518,7 @@ impl Counters {
         }
         v
     }
-    fn faults(&self) -> [u64; 11] {
+    fn faults(&self, include_xruns: bool) -> [u64; 11] {
         let mut v = [
             self.missed_deadlines,
             self.stale_results,
@@ -531,7 +534,7 @@ impl Counters {
         ];
         if let Some(p) = &self.performance {
             v[4..].copy_from_slice(&[
-                p.xruns,
+                if include_xruns { p.xruns } else { 0 },
                 p.callback.overruns,
                 p.callback.clock_errors,
                 p.worker_wall.overruns,
@@ -583,6 +586,8 @@ pub(crate) struct History {
     retention: Retention,
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     native_retirements: Vec<(String, u64)>,
+    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    native_fault_counters: Vec<(u64, u64, rc2fx_native_control::EngineCounters)>,
 }
 impl Default for History {
     fn default() -> Self {
@@ -606,6 +611,8 @@ impl History {
             retention: Retention::default(),
             #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             native_retirements: Vec::new(),
+            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+            native_fault_counters: Vec::new(),
         }
     }
     fn stamp(&self, now: Instant) -> Stamp {
@@ -735,6 +742,7 @@ impl History {
         {
             return;
         }
+        self.capture_native_faults(&meter, &native);
         for target in targets {
             let previous = self
                 .native_retirements
@@ -801,6 +809,66 @@ impl History {
             self.telemetry_status = TelemetryStatus::Fresh;
         }
     }
+    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    fn capture_native_faults(
+        &mut self,
+        meter: &Meter,
+        contexts: &[rc2fx_native_control::ContextStatus],
+    ) {
+        use rc2fx_native_control::{CallbackTiming, EngineCounters, NativeEvent, WorkerMeter};
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Worker<'a> {
+            id: &'a str,
+            runtime_epoch: u64,
+            worker: &'a WorkerMeter,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Fault<'a> {
+            at: Stamp,
+            kind: &'static str,
+            scope: &'static str,
+            generation: u64,
+            revision: u64,
+            context: u64,
+            previous_counters: Option<EngineCounters>,
+            counters: EngineCounters,
+            timing: &'a Option<CallbackTiming>,
+            events: &'a [NativeEvent],
+            workers: Vec<Worker<'a>>,
+        }
+        for context in contexts {
+            let previous = self
+                .native_fault_counters
+                .iter()
+                .find(|(generation, id, _)| {
+                    *generation == meter.generation && *id == context.context
+                })
+                .map(|(_, _, counters)| *counters);
+            let old = previous.unwrap_or_default();
+            let now = context.counters;
+            if now.xruns > old.xruns
+                || now.helper_late > old.helper_late
+                || now.helper_stalls > old.helper_stalls
+            {
+                self.push(false, encoded(&Fault {
+                    at: self.stamp(Instant::now()), kind: "native-engine-fault",
+                    scope: "observation time; cumulative engine counters are shared across contexts, not additive; null previousCounters means no baseline; clocks independently sampled",
+                    generation: meter.generation, revision: meter.revision, context: context.context,
+                    previous_counters: previous, counters: now, timing: &context.timing, events: &context.events,
+                    workers: context.targets.iter().filter_map(|target| target.worker.as_ref().map(|worker| Worker {
+                        id: &target.id, runtime_epoch: target.runtime_epoch, worker,
+                    })).collect(),
+                }, MAX_RECORD_BYTES));
+            }
+        }
+        // Keep only the currently observed contexts, not an unbounded lifetime list.
+        self.native_fault_counters = contexts
+            .iter()
+            .map(|c| (meter.generation, c.context, c.counters))
+            .collect();
+    }
     fn accept_meter(&mut self, meter: &Meter, callback: Option<&[CallbackDiagnostic]>) -> bool {
         let Some(current) = &self.identity else {
             return false;
@@ -844,14 +912,18 @@ impl History {
                     )
                     .any(|(n, o)| *n < o)
             });
+            // Native xruns are engine-wide and retained with timing by
+            // capture_native_faults. Repeating them for every target crowds
+            // that evidence out of the bounded event history during a burst.
+            let include_xruns = callback.is_some();
             let fault = old.map_or_else(
-                || counters.worker_failed || counters.faults().iter().any(|v| *v > 0),
+                || counters.worker_failed || counters.faults(include_xruns).iter().any(|v| *v > 0),
                 |old| {
                     counters.worker_failed != old.worker_failed
                         || counters
-                            .faults()
+                            .faults(include_xruns)
                             .iter()
-                            .zip(old.faults())
+                            .zip(old.faults(include_xruns))
                             .any(|(n, o)| *n > o)
                 },
             );
@@ -1018,7 +1090,7 @@ impl History {
                         callback_diagnostics: None,
                         native_diagnostics: Some(&contexts),
                     },
-                    MAX_RECORD_BYTES,
+                    MAX_NATIVE_TELEMETRY_BYTES,
                 );
                 if let Ok(value) = &bytes {
                     self.retention.native_serialized_bytes = self
@@ -1086,7 +1158,7 @@ impl History {
             usb: rc2fx_core::UsbStatus,
         }
         let record = (|| {
-            let mut out = Limited::new(MAX_RECORD_BYTES + 2048);
+            let mut out = Limited::new(MAX_NATIVE_TELEMETRY_BYTES + 2048);
             out.raw(b"{\"observation\":")?;
             out.json(&Sample {
                 at: ticket.at,

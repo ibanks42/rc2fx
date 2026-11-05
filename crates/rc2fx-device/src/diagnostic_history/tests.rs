@@ -79,6 +79,157 @@ fn native_payload(callbacks: u64) -> (Meter, Vec<rc2fx_native_control::ContextSt
 
 #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
+fn native_shared_xruns_do_not_flood_per_target_fault_history() {
+    let mut history = History::new(Instant::now());
+    history.state(&state(9, 12));
+    for xruns in 0..=2 {
+        let (mut value, mut native) = native_payload(100 + xruns);
+        native[0].counters.xruns = xruns;
+        for target in &mut value.targets {
+            let mut performance = meter(9, 12, 100).targets[0].performance.clone().unwrap();
+            performance.xruns = xruns;
+            performance.callback = Timing::default();
+            performance.worker_wall = Timing::default();
+            performance.worker_cpu = Timing::default();
+            target.performance = Some(performance);
+        }
+        // Target-specific faults still need their own event.
+        value.targets[0].missed_deadlines = u64::from(xruns == 2);
+        history.native_meter(value, native);
+    }
+    let exported = report(&history);
+    let events = exported["events"].as_array().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["kind"] == "native-engine-fault")
+            .count(),
+        2
+    );
+    let targets: Vec<_> = events
+        .iter()
+        .filter(|e| e["kind"] == "audio-fault")
+        .collect();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0]["counters"]["id"], "mic-1");
+}
+
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+#[test]
+fn native_fault_baselines_follow_resets_and_generation_not_settings_revision() {
+    let start = Instant::now();
+    let mut history = History::new(start);
+    for (index, generation, revision, xruns) in [
+        (1, 9, 12, 7),
+        (2, 9, 13, 7),
+        (3, 9, 13, 0),
+        (4, 9, 13, 1),
+        (5, 10, 13, 1),
+    ] {
+        history.state(&state(generation, revision));
+        let (mut meter, mut native) = native_payload(index * 100);
+        meter.generation = generation;
+        meter.revision = revision;
+        native[0].counters.xruns = xruns;
+        history.native_meter(meter, native);
+    }
+    let exported = report(&history);
+    let faults: Vec<_> = exported["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "native-engine-fault")
+        .collect();
+    assert_eq!(faults.len(), 3);
+    assert!(faults[0]["previousCounters"].is_null());
+    assert_eq!(faults[1]["previousCounters"]["xruns"], 0);
+    assert_eq!(faults[1]["counters"]["xruns"], 1);
+    assert!(faults[2]["previousCounters"].is_null());
+    assert_eq!(faults[2]["generation"], 10);
+}
+
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+#[test]
+fn native_fault_timing_survives_sample_eviction_without_duplicate_snapshots() {
+    let start = Instant::now();
+    let mut history = History::new(start);
+    history.state(&state(9, 12));
+    for second in 1..=310 {
+        let (meter, mut native) = native_payload(second * 100);
+        native[0].counters.xruns = u64::from(second >= 2);
+        history.native_meter(meter, native);
+        sample(&mut history, start + Duration::from_secs(second));
+    }
+    let exported = report(&history);
+    let faults: Vec<_> = exported["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "native-engine-fault")
+        .collect();
+    assert_eq!(faults.len(), 1);
+    assert_eq!(faults[0]["counters"]["xruns"], 1);
+    assert_eq!(faults[0]["previousCounters"]["xruns"], 0);
+    assert_eq!(faults[0]["timing"]["attempts"], 200);
+    assert_eq!(faults[0]["workers"][0]["id"], "mic-1");
+    assert!(history.retention.evicted_samples > 0);
+    assert!(history.event_bytes <= MAX_EVENT_HISTORY_BYTES);
+}
+
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+#[test]
+fn full_native_catalog_retains_timing_with_bounded_history() {
+    let start = Instant::now();
+    let mut history = History::new(start);
+    history.state(&state(9, 12));
+    for second in 1..=10 {
+        let (mut meter, mut native) = native_payload(second * 100);
+        let mut meter_template = meter.targets[0].clone();
+        // Native meters also carry the shared callback counters on each path.
+        // Include those repeated fields, as in the failing device export.
+        meter_template.performance = self::meter(9, 12, second * 100).targets[0]
+            .performance
+            .clone();
+        let target_template = native[0].targets[0].clone();
+        meter.targets = (0..29)
+            .map(|index| {
+                let mut target = meter_template.clone();
+                target.id = format!("path-{index}");
+                target
+            })
+            .collect();
+        native[0].targets = meter
+            .targets
+            .iter()
+            .map(|meter| {
+                let mut target = target_template.clone();
+                target.id = meter.id.clone();
+                target
+            })
+            .collect();
+        history.native_meter(meter, native);
+        sample(&mut history, start + Duration::from_secs(second));
+    }
+    let exported = report(&history);
+    let samples = exported["samples"].as_array().unwrap();
+    assert!(!samples.is_empty());
+    for sample in samples {
+        assert!(sample["telemetry"]["nativeDiagnostics"][0]["timing"].is_object());
+        assert_eq!(
+            sample["telemetry"]["nativeDiagnostics"][0]["targets"]
+                .as_array()
+                .unwrap()
+                .len(),
+            29
+        );
+    }
+    assert_eq!(history.retention.rejected_records, 0);
+    assert!(history.bytes <= MAX_HISTORY_BYTES);
+    assert!(serde_json::to_vec(&exported).unwrap().len() <= MAX_RESPONSE_BYTES);
+}
+
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+#[test]
 fn native_pending_encodes_only_latest_window_and_keeps_fault_detection_at_poll_rate() {
     let start = Instant::now();
     let mut history = History::new(start);
@@ -146,7 +297,7 @@ fn lazy_native_epoch_changes_and_oversize_records_never_export_stale_telemetry()
             joined: true,
             drained: true
         };
-        100
+        1000
     ];
     history.native_meter(meter, native);
     sample(&mut history, start + Duration::from_secs(1));
@@ -413,9 +564,7 @@ fn ordinary_export_retains_worker_queue_timing_without_requiring_a_runtime_fault
     let mut history = History::new(start);
     history.state(&state(9, 12));
     // The threaded worker's geometry (DeepFilterNet3: a 320-sample lead).
-    let geometry = rc2fx_suppression::Geometry::for_lookahead(0,
-    )
-    .unwrap();
+    let geometry = rc2fx_suppression::Geometry::for_lookahead(0).unwrap();
     let worker = rc2fx_suppression::Snapshot {
         completed_frames: 7,
         queue_wait: rc2fx_suppression::Timing {
