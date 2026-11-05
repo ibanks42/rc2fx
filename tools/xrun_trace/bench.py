@@ -26,8 +26,9 @@ def save(path, value):
 
 
 def snapshot():
-    lines = run.ssh('cat /proc/sys/kernel/random/boot_id; cat /proc/uptime; cat /run/rc2fx/home; cat /sys/kernel/debug/tracing/tracing_on; cat /run/rc2fx/audit.json').decode().splitlines()
-    return dict(hostUtc=utc(), bootId=lines[0], uptime=float(lines[1].split()[0]), home=lines[2], tracing=int(lines[3]), audit=json.loads('\n'.join(lines[4:])))
+    output=run.ssh('printf "boot="; cat /proc/sys/kernel/random/boot_id; printf "uptime="; cat /proc/uptime; printf "home="; cat /run/rc2fx/home; printf "tracing="; cat /sys/kernel/debug/tracing/tracing_on; printf "audit="; cat /run/rc2fx/audit.json').decode()
+    fields=dict(line.split('=',1) for line in output.splitlines() if '=' in line)
+    return dict(hostUtc=utc(),bootId=fields['boot'],uptime=float(fields['uptime'].split()[0]),home=fields['home'],tracing=int(fields['tracing']),audit=json.loads(fields['audit']))
 
 
 def check(base, previous, current):

@@ -1762,6 +1762,10 @@ xrun_trace() {
       # remain visible as scheduler competitors/wakers, without tracing every
       # syscall they execute. This bounds observer overhead on the audio CPUs.
       filter="common_pid == $tid"
+      for gui in $(pgrep -x callme-t); do
+        cp "/proc/$gui/maps" "$dir/jack-client-maps.$gui"
+        for f in /proc/"$gui"/task/*; do filter="$filter || common_pid == ${f##*/}"; done
+      done
       for f in sys_enter sys_exit; do
         cat "$instance/events/raw_syscalls/$f/filter" > "$dir/original-filter-$f"
         echo "$filter" > "$instance/events/raw_syscalls/$f/filter"
