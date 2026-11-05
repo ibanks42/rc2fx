@@ -117,6 +117,21 @@ fn save_flag(path: &std::path::Path, key: &str, on: bool) -> std::result::Result
         .map_err(|e| e.to_string())
 }
 
+/// A sunken box for exact text, such as a command.
+pub(super) fn code_box(mono: SharedString) -> Div {
+    div()
+        .relative()
+        .px(px(6.))
+        .py(px(4.))
+        .rounded(px(10.))
+        .bg(rgb(surface().sunken))
+        .border_1()
+        .border_color(rgb(surface().line))
+        .font_family(mono)
+        .text_size(px(12.))
+        .text_color(rgb(MUTED))
+}
+
 impl Rc2FxApp {
     /// While disconnected: whether the app is looking for the mixer, why the
     /// last attempt failed, or a way to connect again after Disconnect.
@@ -263,6 +278,48 @@ impl Rc2FxApp {
             .into_any_element()
     }
 
+    /// A small Copy button that says Copied for a moment after a click.
+    pub(super) fn copy_button(
+        &self,
+        id: &'static str,
+        text: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let text = text.into();
+        let done = self.copied == Some(id);
+        div()
+            .id(id)
+            .px(px(10.))
+            .py(px(4.))
+            .rounded(px(7.))
+            .bg(rgb(surface().sunken))
+            .border_1()
+            .border_color(rgb(surface().line_strong))
+            .cursor_pointer()
+            .font_family("Inter")
+            .text_size(px(12.))
+            .text_color(rgb(if done { ACCENT } else { MUTED }))
+            .hover(|s| s.text_color(rgb(TEXT)))
+            .child(if done { "Copied" } else { "Copy" })
+            .on_click(cx.listener(move |app, _, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                app.copied = Some(id);
+                cx.notify();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(1500))
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        if app.copied == Some(id) {
+                            app.copied = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }))
+    }
+
     /// Linux without the udev rule: what RC2FX needs, exactly what it will
     /// add (the file, shown byte for byte), and how to undo it, before the
     /// system's own password prompt.
@@ -289,54 +346,7 @@ impl Rc2FxApp {
         // Exact text in a read-only box (select it or copy it), with a Copy
         // button pinned to the box's corner, outside what scrolls. Copy puts
         // the constant on the clipboard, never the field's contents.
-        let copied = self.usb_rule_copied;
-        let copy_button = |id: &'static str, text: &'static str| {
-            let done = copied == Some(id);
-            div()
-                .id(id)
-                .px(px(10.))
-                .py(px(4.))
-                .rounded(px(7.))
-                .bg(rgb(surface().sunken))
-                .border_1()
-                .border_color(rgb(surface().line_strong))
-                .cursor_pointer()
-                .font_family("Inter")
-                .text_size(px(12.))
-                .text_color(rgb(if done { ACCENT } else { MUTED }))
-                .hover(|s| s.text_color(rgb(TEXT)))
-                .child(if done { "Copied" } else { "Copy" })
-                .on_click(cx.listener(move |app, _, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
-                    app.usb_rule_copied = Some(id);
-                    cx.notify();
-                    cx.spawn(async move |this, cx| {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(1500))
-                            .await;
-                        let _ = this.update(cx, |app, cx| {
-                            if app.usb_rule_copied == Some(id) {
-                                app.usb_rule_copied = None;
-                                cx.notify();
-                            }
-                        });
-                    })
-                    .detach();
-                }))
-        };
-        let code_box = || {
-            div()
-                .relative()
-                .px(px(6.))
-                .py(px(4.))
-                .rounded(px(10.))
-                .bg(rgb(surface().sunken))
-                .border_1()
-                .border_color(rgb(surface().line))
-                .font_family(mono.clone())
-                .text_size(px(12.))
-                .text_color(rgb(MUTED))
-        };
+        let code_box = || code_box(mono.clone());
         let card = div()
             .w_full()
             .max_w(px(640.))
@@ -397,7 +407,7 @@ impl Rc2FxApp {
                                 .absolute()
                                 .top(px(8.))
                                 .right(px(8.))
-                                .child(copy_button("copy-usb-rule", rc2fx_installer::helper::USB_RULE)),
+                                .child(self.copy_button("copy-usb-rule", rc2fx_installer::helper::USB_RULE, cx)),
                         ),
                 )
             })
@@ -415,7 +425,7 @@ impl Rc2FxApp {
                             .right(px(8.))
                             .flex()
                             .items_center()
-                            .child(copy_button("copy-usb-undo", USB_UNDO)),
+                            .child(self.copy_button("copy-usb-undo", USB_UNDO, cx)),
                     ),
             )
             .when_some(

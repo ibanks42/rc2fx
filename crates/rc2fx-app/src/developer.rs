@@ -3,7 +3,12 @@
 //! Developer mode only shows these controls. Hiding them changes nothing on
 //! the mixer; only Disable removes RC2FX's key. Nothing here flashes.
 use super::*;
+use crate::versions::Tone;
+use gpui_kit::component::input::InputEvent;
 use rc2fx_core::{SshRequest, SshStatus};
+
+/// Stands in for the address until one is typed.
+const ADDRESS_PLACEHOLDER: &str = "MIXER_IP";
 
 /// What the mixer last said about SSH, for the current connection only.
 #[derive(Default)]
@@ -68,59 +73,101 @@ impl Ssh {
     }
 }
 
-/// The status line and an optional caution, in plain words.
+/// What the SSH row shows.
+#[derive(Debug, PartialEq)]
+pub(super) struct Summary {
+    pub line: String,
+    pub flag: Option<(&'static str, Tone)>,
+    pub caution: Option<String>,
+}
+
+impl Summary {
+    fn plain(line: impl Into<String>, flag: Option<(&'static str, Tone)>) -> Self {
+        Self {
+            line: line.into(),
+            flag,
+            caution: None,
+        }
+    }
+}
+
+/// The SSH row's sentence, flag and any caution, in plain words.
 pub(super) fn describe(
     status: Option<&std::result::Result<Option<SshStatus>, String>>,
     pending: Option<bool>,
     local_fingerprint: Option<&str>,
-) -> (String, Option<String>) {
+) -> Summary {
     if let Some(enable) = pending {
         let what = if enable { "Enabling" } else { "Disabling" };
-        return (format!("{what} SSH access…"), None);
+        return Summary::plain(
+            format!("{what} SSH access…"),
+            Some(("Working", Tone::Unknown)),
+        );
     }
     let status = match status {
-        None => return ("Checking…".into(), None),
-        Some(Err(error)) => return (format!("Could not read SSH access: {error}"), None),
+        None => return Summary::plain("Checking…", None),
+        Some(Err(error)) => {
+            return Summary::plain(
+                format!("Could not read SSH access: {error}"),
+                Some(("Unknown", Tone::Bad)),
+            );
+        }
         Some(Ok(None)) => {
-            return (
-                "Update the RC2FX mixer software to manage SSH access from here.".into(),
-                None,
+            return Summary::plain(
+                "Update the RC2FX mixer software to manage SSH access from here.",
+                Some(("Update needed", Tone::Warn)),
             );
         }
         Some(Ok(Some(status))) => status,
     };
-    let mut line = match (status.managed, status.managed_fingerprint.as_deref()) {
-        (false, _) => "Off: no RC2FX-managed key on the mixer".into(),
-        (true, Some(fp)) if Some(fp) == local_fingerprint => {
-            format!("On with this computer's key ({fp})")
-        }
-        (true, Some(fp)) if local_fingerprint.is_some() => {
-            format!("On with an RC2FX key from another computer ({fp})")
-        }
-        (true, Some(fp)) => format!("On with an RC2FX-managed key ({fp})"),
-        (true, None) => "On with an RC2FX-managed key".into(),
+    let stopped = status.server_running == Some(false);
+    let (line, flag) = match (status.managed, status.managed_fingerprint.as_deref()) {
+        (false, _) if stopped => (
+            "Log in to the mixer as root over the network. The SSH server is not running.".into(),
+            ("Off", Tone::Unknown),
+        ),
+        (false, _) => (
+            "Log in to the mixer as root over the network.".into(),
+            ("Off", Tone::Unknown),
+        ),
+        (true, _) if stopped => (
+            "The key is in place, but the SSH server is not running.".into(),
+            ("Not running", Tone::Warn),
+        ),
+        (true, Some(fp)) if Some(fp) == local_fingerprint => (
+            "Logins use this computer's key.".into(),
+            ("On", Tone::Update),
+        ),
+        (true, Some(_)) if local_fingerprint.is_some() => (
+            "Logins use a key from another computer. To use this one, disable SSH and enable it \
+             again here."
+                .into(),
+            ("On", Tone::Update),
+        ),
+        (true, _) => (
+            "Logins use an RC2FX-managed key. To use this computer's key, disable SSH and enable \
+             it again here."
+                .into(),
+            ("On", Tone::Update),
+        ),
     };
-    if status.server_running == Some(false) {
-        line.push_str(". The SSH server is not running");
-    }
-    let caution = (status.unmanaged_keys > 0).then(|| {
+    let keys = status.unmanaged_keys;
+    let caution = (keys > 0).then(|| {
+        let (noun, pronoun) = if keys == 1 {
+            ("key", "it")
+        } else {
+            ("keys", "them")
+        };
         format!(
-            "{} other key{} can also log in. RC2FX did not add {} and leaves {} alone.",
-            status.unmanaged_keys,
-            if status.unmanaged_keys == 1 { "" } else { "s" },
-            if status.unmanaged_keys == 1 {
-                "it"
-            } else {
-                "them"
-            },
-            if status.unmanaged_keys == 1 {
-                "it"
-            } else {
-                "them"
-            },
+            "{keys} other {noun} can also log in. RC2FX did not add {pronoun} and leaves \
+             {pronoun} alone."
         )
     });
-    (line, caution)
+    Summary {
+        line,
+        flag: Some(flag),
+        caution,
+    }
 }
 
 /// Whether the mixer's managed key is this computer's, so the login
@@ -129,6 +176,31 @@ pub(super) fn uses_local_key(status: &SshStatus, local_fingerprint: Option<&str>
     status.managed
         && local_fingerprint.is_some()
         && status.managed_fingerprint.as_deref() == local_fingerprint
+}
+
+/// Whether the text could be a host name or an IP address. The field refuses
+/// anything else, so a pasted command holds nothing but the address.
+pub(super) fn valid_address(text: &str) -> bool {
+    text.len() <= 253
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-'))
+}
+
+/// The Mixer address field. Only real edits redraw the page, not its cursor.
+pub(super) fn address_input(window: &mut Window, cx: &mut Context<Rc2FxApp>) -> Entity<InputState> {
+    let input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("192.168.1.20")
+            .validate(|text, _| valid_address(text))
+    });
+    cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
+        if matches!(event, InputEvent::Change) {
+            cx.notify();
+        }
+    })
+    .detach();
+    input
 }
 
 /// This computer's key fingerprint from its public half. Never creates a key.
@@ -240,12 +312,13 @@ impl Rc2FxApp {
         }
     }
 
-    /// Prepare this computer's key off the UI thread, then send it, but only
-    /// for the connection the user confirmed on.
+    /// Whether a confirmation still applies to what the user confirmed it on.
     fn same_connection(&self, epoch: u64, serial: &Option<String>) -> bool {
         self.ssh.epoch == epoch && &self.connected_mixer == serial && self.developer_visible()
     }
 
+    /// Prepare this computer's key off the UI thread, then send it, but only
+    /// for the connection the user confirmed on.
     fn enable_ssh(&mut self, epoch: u64, serial: Option<String>, cx: &mut Context<Self>) {
         if !self.same_connection(epoch, &serial) || self.ssh.pending.is_some() {
             self.message = "The mixer connection changed; SSH was not enabled.".into();
@@ -308,106 +381,234 @@ impl Rc2FxApp {
         );
     }
 
+    fn disable_ssh(&mut self, epoch: u64, serial: Option<String>) {
+        if !self.same_connection(epoch, &serial) || self.ssh.pending.is_some() {
+            self.message = "The mixer connection changed; SSH was not disabled.".into();
+            return;
+        }
+        self.send_ssh(SshRequest {
+            enabled: false,
+            public_key: None,
+        });
+    }
+
+    /// The confirmation only counts for the connection it was asked on.
+    fn confirm_disable_ssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let epoch = self.ssh.epoch;
+        let serial = self.connected_mixer.clone();
+        let app = cx.weak_entity();
+        ui::confirm(
+            window,
+            cx,
+            ui::Confirm {
+                eyebrow: Some("Developer mode".into()),
+                title: "Disable SSH access?".into(),
+                detail: "This removes the RC2FX-managed key, so new logins with it stop working. \
+                         Sessions already open stay open until they end."
+                    .into(),
+                cancel: Some("Cancel"),
+                action: "Disable SSH".into(),
+            },
+            move |_, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    app.disable_ssh(epoch, serial.clone());
+                    cx.notify();
+                });
+            },
+            |_, _| {},
+        );
+    }
+
+    /// The address field, the login command and its Copy button.
+    fn ssh_login(&self, command: String, cx: &mut Context<Self>) -> [Div; 2] {
+        let mono = Theme::global(cx).mono_font_family.clone();
+        let highlights = command
+            .find(ADDRESS_PLACEHOLDER)
+            .map(|at| {
+                let style = HighlightStyle {
+                    color: Some(rgb(WARN).into()),
+                    ..Default::default()
+                };
+                (at..at + ADDRESS_PLACEHOLDER.len(), style)
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        [
+            detail_row(
+                "Mixer address",
+                div()
+                    .v_flex()
+                    .gap(px(6.))
+                    .child(div().max_w(px(240.)).child(Input::new(&self.ssh_address)))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(rgb(FAINT))
+                            .child("On the mixer, under Settings › Network."),
+                    ),
+            )
+            .items_start(),
+            detail_row(
+                "Login command",
+                crate::connection::code_box(mono)
+                    .px(px(12.))
+                    .py(px(9.))
+                    .pr(px(76.))
+                    .text_color(rgb(TEXT))
+                    .child(StyledText::new(command.clone()).with_highlights(highlights))
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(6.))
+                            .right(px(6.))
+                            .child(self.copy_button("copy-ssh-login", command, cx)),
+                    ),
+            )
+            .items_start(),
+        ]
+    }
+
+    /// What the mixer reported, with what's needed to log in when it can work.
+    fn ssh_rows(&self, cx: &mut Context<Self>) -> Div {
+        let pending = self.ssh.pending.or(self.ssh.preparing_key.then_some(true));
+        let local = self.ssh.local_fingerprint.as_deref();
+        let summary = describe(self.ssh.status.as_ref(), pending, local);
+        let reported = match (&self.ssh.status, pending) {
+            (Some(Ok(Some(status))), None) if status.managed => Some(status),
+            _ => None,
+        };
+        let serial = self.connected_mixer.as_deref();
+        let pinned = self
+            .ssh
+            .pinned
+            .as_ref()
+            .filter(|(pinned_for, _)| Some(pinned_for.as_str()) == serial)
+            .map(|(_, pinned)| pinned);
+        let mut caution = summary.caution;
+        let mut details: Vec<Div> = Vec::new();
+        if let Some(status) = reported {
+            let running = status.server_running != Some(false);
+            let login = (running && uses_local_key(status, local))
+                .then_some(pinned)
+                .flatten();
+            match (login, rc2fx_installer::ssh_key_path()) {
+                (Some(Ok(pinned)), Ok(key)) => {
+                    let address = self.ssh_address.read(cx).value();
+                    let command =
+                        login_command(&key, &pinned.known_hosts, &pinned.alias, address.trim());
+                    details.extend(self.ssh_login(command, cx));
+                }
+                (Some(Err(e)), _) => {
+                    let warning = format!(
+                        "Could not save the mixer's host identity, so no login command is shown: \
+                         {e}"
+                    );
+                    caution = Some(match caution {
+                        Some(first) => format!("{first} {warning}"),
+                        None => warning,
+                    });
+                }
+                _ => {}
+            }
+            if let Some(fingerprint) = &status.managed_fingerprint {
+                let mono = Theme::global(cx).mono_font_family.clone();
+                details.push(detail_row(
+                    "Key",
+                    div()
+                        .font_family(mono)
+                        .text_size(px(12.5))
+                        .child(fingerprint.clone()),
+                ));
+            }
+        }
+        let button = match action(self.ssh.status.as_ref(), pending) {
+            Some(true) => Some(
+                settings::ghost("enable-ssh", "Enable SSH")
+                    .on_click(cx.listener(|app, _, window, cx| app.confirm_enable_ssh(window, cx))),
+            ),
+            Some(false) => {
+                Some(settings::ghost("disable-ssh", "Disable SSH").on_click(
+                    cx.listener(|app, _, window, cx| app.confirm_disable_ssh(window, cx)),
+                ))
+            }
+            None if matches!(self.ssh.status, Some(Err(_))) && pending.is_none() => Some(
+                settings::ghost("retry-ssh", "Try again").on_click(cx.listener(|app, _, _, cx| {
+                    app.ssh.status = None;
+                    app.ssh.pinned = None;
+                    app.read_ssh();
+                    cx.notify();
+                })),
+            ),
+            None => None,
+        };
+        let open = caution.is_some() || !details.is_empty();
+        let row = settings::row(
+            settings::labelled("SSH access", summary.line),
+            div()
+                .h_flex()
+                .items_center()
+                .gap(px(16.))
+                .children(
+                    summary
+                        .flag
+                        .map(|(text, tone)| crate::versions_dialog::flag(text, tone)),
+                )
+                .children(button),
+        )
+        .when(open, |row| row.border_b_0().pb(px(12.)));
+        let block = div()
+            .v_flex()
+            .gap(px(14.))
+            .pb(px(18.))
+            .border_b_1()
+            .border_color(rgb(surface().line))
+            .when_some(caution, |block, caution| {
+                block.child(
+                    div()
+                        .text_size(px(13.5))
+                        .text_color(rgb(WARN))
+                        .child(caution),
+                )
+            })
+            .children(details);
+        div().child(row).when(open, |rows| rows.child(block))
+    }
+
     pub(super) fn developer_section(&self, cx: &mut Context<Self>) -> Div {
         let mut rows = div().child(settings::row(
             settings::labelled(
                 "Developer mode",
-                "Shows developer controls, such as SSH access, for the connected mixer. \
-                 Turning it off only hides them: it does not remove access.",
+                "Shows developer controls for the connected mixer. Turning it off only hides \
+                 them: it does not remove access.",
             ),
             Switch::new("developer-mode")
                 .checked(self.developer_mode)
                 .on_click(cx.listener(|app, on: &bool, _, cx| app.set_developer_mode(*on, cx))),
         ));
         if self.developer_mode {
-            if !self.developer_visible() {
-                rows = rows.child(settings::row(
+            rows = rows.child(if self.developer_visible() {
+                self.ssh_rows(cx)
+            } else {
+                settings::row(
                     settings::labelled("SSH access", "Connect the mixer over USB 1 to manage SSH."),
                     div(),
-                ));
-            } else {
-                let pending = self.ssh.pending.or(self.ssh.preparing_key.then_some(true));
-                let local = self.ssh.local_fingerprint.as_deref();
-                let (line, caution) = describe(self.ssh.status.as_ref(), pending, local);
-                let button = action(self.ssh.status.as_ref(), pending).map(|enable| {
-                    if enable {
-                        settings::ghost("enable-ssh", "Enable SSH").on_click(
-                            cx.listener(|app, _, window, cx| app.confirm_enable_ssh(window, cx)),
-                        )
-                    } else {
-                        settings::ghost("disable-ssh", "Disable SSH").on_click(cx.listener(
-                            |app, _, _, cx| {
-                                app.send_ssh(SshRequest {
-                                    enabled: false,
-                                    public_key: None,
-                                });
-                                cx.notify();
-                            },
-                        ))
-                    }
-                });
-                let mut detail = div().v_flex().gap_1().child(line);
-                if let Some(caution) = caution {
-                    detail = detail.child(div().text_color(rgb(WARN)).child(caution));
-                }
-                let managed = match &self.ssh.status {
-                    Some(Ok(Some(s))) if s.managed => Some(uses_local_key(s, local)),
-                    _ => None,
-                };
-                if let Some(ours) = managed {
-                    detail = detail.child(
-                        "Disabling removes the RC2FX-managed key and stops new logins with it. \
-                         Sessions already open stay open until they end.",
-                    );
-                    if !ours {
-                        detail = detail.child(
-                            "The login command is shown only when the managed key is this \
-                             computer's. To use this computer's key, disable SSH and enable it again \
-                             from here.",
-                        );
-                    }
-                    let serial = self.connected_mixer.as_deref();
-                    match (&self.ssh.pinned, rc2fx_installer::ssh_key_path()) {
-                        (Some((pinned_for, Ok(pinned))), Ok(key))
-                            if ours && Some(pinned_for.as_str()) == serial =>
-                        {
-                            detail =
-                                detail.child(div().text_xs().font_family("monospace").child(
-                                    login_command(&key, &pinned.known_hosts, &pinned.alias),
-                                ));
-                            detail = detail.child(div().text_color(rgb(FAINT)).child(
-                                "Replace MIXER_IP with the address on the mixer's screen under \
-                                 Settings › Network.",
-                            ));
-                        }
-                        (Some((_, Err(e))), _) => {
-                            detail = detail.child(div().text_color(rgb(WARN)).child(format!(
-                                "Could not save the mixer's host identity, so no login command \
-                                 is shown: {e}"
-                            )));
-                        }
-                        _ => {}
-                    }
-                }
-                let refresh = (pending.is_none()).then(|| {
-                    settings::ghost("refresh-ssh", "Refresh").on_click(cx.listener(
-                        |app, _, _, cx| {
-                            app.ssh.status = None;
-                            app.ssh.pinned = None;
-                            app.read_ssh();
-                            cx.notify();
-                        },
-                    ))
-                });
-                rows = rows.child(settings::row(
-                    settings::labelled("SSH access", ""),
-                    div().h_flex().gap_2().children(refresh).children(button),
-                ));
-                rows = rows.child(div().text_sm().text_color(rgb(MUTED)).child(detail));
-            }
+                )
+            });
         }
         settings::section("Developer", div(), rows)
     }
+}
+
+/// A label on the left and what it names on the right.
+fn detail_row(label: &'static str, value: impl IntoElement) -> Div {
+    div()
+        .h_flex()
+        .items_center()
+        .gap(px(12.))
+        .text_size(px(13.5))
+        .text_color(rgb(MUTED))
+        .child(div().w(px(112.)).flex_shrink_0().child(label))
+        .child(div().flex_1().min_w_0().child(value))
 }
 
 /// Quote a path for the user's shell, so spaces and quotes survive pasting.
@@ -420,26 +621,33 @@ fn quote(path: &std::path::Path) -> String {
     }
 }
 
-/// The login command, with this mixer's pinned host identity. MIXER_IP is a
-/// placeholder: the mixer does not report its network address.
+/// The login command, with this mixer's pinned host identity. The mixer does
+/// not report its network address, so an empty `address` leaves a placeholder.
 pub(super) fn login_command(
     key: &std::path::Path,
     known_hosts: &std::path::Path,
     alias: &str,
+    address: &str,
 ) -> String {
+    let address = if address.is_empty() {
+        ADDRESS_PLACEHOLDER
+    } else {
+        address
+    };
     format!(
-        "ssh -i {} -o UserKnownHostsFile={} -o HostKeyAlias={} root@MIXER_IP",
+        "ssh -i {} -o UserKnownHostsFile={} -o HostKeyAlias={} root@{}",
         quote(key),
         quote(known_hosts),
-        alias
+        alias,
+        address
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SshStatus, action, describe, uses_local_key};
     #[cfg(not(target_os = "windows"))]
     use super::login_command;
+    use super::{SshStatus, Tone, action, describe, uses_local_key, valid_address};
 
     fn status(managed: bool, unmanaged: u32, running: Option<bool>) -> SshStatus {
         SshStatus {
@@ -455,38 +663,39 @@ mod tests {
     #[test]
     fn old_mixer_software_says_update_and_is_never_shown_as_off() {
         let old = Some(Ok(None));
-        let (line, _) = describe(old.as_ref(), None, None);
-        assert!(line.contains("Update the RC2FX mixer software"));
-        assert!(!line.contains("Off"));
+        let summary = describe(old.as_ref(), None, None);
+        assert!(summary.line.contains("Update the RC2FX mixer software"));
+        assert_eq!(summary.flag, Some(("Update needed", Tone::Warn)));
         assert_eq!(action(old.as_ref(), None), None);
     }
 
     #[test]
     fn managed_and_unmanaged_access_are_both_reported() {
         let s = Some(Ok(Some(status(true, 2, Some(true)))));
-        let (line, caution) = describe(s.as_ref(), None, Some("SHA256:abc"));
-        assert!(line.contains("this computer's key") && line.contains("SHA256:abc"));
-        assert!(caution.unwrap().contains("2 other keys"));
+        let on = describe(s.as_ref(), None, Some("SHA256:abc"));
+        assert!(on.line.contains("this computer's key"));
+        assert_eq!(on.flag, Some(("On", Tone::Update)));
+        assert!(on.caution.unwrap().contains("2 other keys"));
         assert_eq!(action(s.as_ref(), None), Some(false));
         let off = Some(Ok(Some(status(false, 1, None))));
-        let (line, caution) = describe(off.as_ref(), None, None);
-        assert!(line.starts_with("Off"));
-        assert!(caution.unwrap().contains("1 other key can"));
+        let summary = describe(off.as_ref(), None, None);
+        assert_eq!(summary.flag, Some(("Off", Tone::Unknown)));
+        assert!(summary.caution.unwrap().contains("1 other key can"));
         assert_eq!(action(off.as_ref(), None), Some(true));
     }
 
     #[test]
     fn unknown_or_pending_offers_no_action() {
-        assert_eq!(describe(None, None, None).0, "Checking…");
+        assert_eq!(describe(None, None, None).line, "Checking…");
         assert_eq!(action(None, None), None);
         let err = Some(Err("busy".to_owned()));
-        assert!(describe(err.as_ref(), None, None).0.contains("busy"));
+        assert!(describe(err.as_ref(), None, None).line.contains("busy"));
         assert_eq!(action(err.as_ref(), None), None);
         let s = Some(Ok(Some(status(false, 0, Some(true)))));
         assert_eq!(action(s.as_ref(), Some(true)), None);
         assert!(
             describe(s.as_ref(), Some(true), None)
-                .0
+                .line
                 .starts_with("Enabling")
         );
     }
@@ -498,12 +707,32 @@ mod tests {
             std::path::Path::new("/home/a b/.ssh/rc2fx"),
             std::path::Path::new("/tmp/it's/known_hosts"),
             "rc2fx-0123456789ab",
+            "",
         );
         assert_eq!(
             cmd,
             "ssh -i '/home/a b/.ssh/rc2fx' -o UserKnownHostsFile='/tmp/it'\\''s/known_hosts' \
              -o HostKeyAlias=rc2fx-0123456789ab root@MIXER_IP"
         );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn a_typed_address_replaces_the_placeholder() {
+        let path = std::path::Path::new("/k");
+        let cmd = login_command(path, path, "rc2fx-0", "192.168.1.20");
+        assert!(cmd.ends_with("root@192.168.1.20") && !cmd.contains("MIXER_IP"));
+    }
+
+    #[test]
+    fn the_address_field_accepts_addresses_and_nothing_else() {
+        for ok in ["", "192.168.1.20", "fe80::1", "rodecaster.local", "mixer-1"] {
+            assert!(valid_address(ok), "{ok}");
+        }
+        for bad in ["a b", "1.2.3.4;rm", "$(x)", "a'b", "a\nb", "a\"b", "a`b"] {
+            assert!(!valid_address(bad), "{bad}");
+        }
+        assert!(!valid_address(&"a".repeat(254)));
     }
 
     #[test]
@@ -537,13 +766,13 @@ mod tests {
     fn another_computers_key_is_named_and_gets_no_login_command() {
         let s = status(true, 0, Some(true));
         let st = Some(Ok(Some(s.clone())));
-        let (line, _) = describe(st.as_ref(), None, Some("SHA256:mine"));
+        let line = describe(st.as_ref(), None, Some("SHA256:mine")).line;
         assert!(line.contains("another computer"));
         assert!(!uses_local_key(&s, Some("SHA256:mine")));
         assert!(!uses_local_key(&s, None));
         assert!(uses_local_key(&s, Some("SHA256:abc")));
-        let (line, _) = describe(st.as_ref(), None, None);
-        assert!(line.contains("RC2FX-managed key") && !line.contains("this computer"));
+        let line = describe(st.as_ref(), None, None).line;
+        assert!(line.starts_with("Logins use an RC2FX-managed key"));
     }
 
     #[test]
@@ -560,6 +789,8 @@ mod tests {
     #[test]
     fn a_stopped_server_is_mentioned() {
         let s = Some(Ok(Some(status(true, 0, Some(false)))));
-        assert!(describe(s.as_ref(), None, None).0.contains("not running"));
+        let summary = describe(s.as_ref(), None, None);
+        assert!(summary.line.contains("not running"));
+        assert_eq!(summary.flag, Some(("Not running", Tone::Warn)));
     }
 }

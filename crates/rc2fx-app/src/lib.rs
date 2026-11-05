@@ -115,6 +115,9 @@ struct Rc2FxApp {
     /// The page `RC2FX_DEV_PAGE` asked for, until it has been opened.
     dev_page: Option<dev_page::DevPage>,
     ssh: developer::Ssh,
+    /// The address typed for the login command. Kept for this run of the app,
+    /// across reconnects; the pinned host key rejects a wrong mixer.
+    ssh_address: Entity<InputState>,
     /// The RC2FX mixer software this app installs, read at start.
     bundled_mixer_software: Option<String>,
     selected: usize,
@@ -141,8 +144,8 @@ struct Rc2FxApp {
     usb_rule: connection::UsbRule,
     /// Its "Show the exact file" disclosure.
     usb_rule_open: bool,
-    /// Which of its Copy buttons just copied, briefly.
-    usb_rule_copied: Option<&'static str>,
+    /// Which Copy button just copied, briefly.
+    copied: Option<&'static str>,
     /// Its read-only boxes: the rule's exact text, and the undo command.
     usb_rule_text: Entity<gpui_kit::component::input::TextareaState>,
     usb_undo_text: Entity<InputState>,
@@ -227,6 +230,7 @@ impl Rc2FxApp {
             developer_mode: connection::remembered_developer(),
             dev_page: dev_page::DevPage::from_env(),
             ssh: Default::default(),
+            ssh_address: developer::address_input(window, cx),
             bundled_mixer_software: versions::bundled_mixer_software(),
             selected: 0,
             inputs: inputs::ShowInputs::default(),
@@ -245,7 +249,7 @@ impl Rc2FxApp {
             diagnostics_open: false,
             usb_rule: connection::UsbRule::Idle,
             usb_rule_open: false,
-            usb_rule_copied: None,
+            copied: None,
             usb_rule_text: cx.new(|cx| {
                 gpui_kit::component::input::TextareaState::new(window, cx)
                     .default_value(rc2fx_installer::helper::USB_RULE)

@@ -13,7 +13,7 @@ own without reflashing:
 
 1. With RC2FX installed and the mixer connected over USB 1, turn on
    **Settings › Developer › Developer mode** in the app.
-2. Under **SSH access**, press **Enable** and confirm.
+2. Under **SSH access**, press **Enable SSH** and confirm.
 
 The app adds this computer's public key to root's `authorized_keys` on the
 mixer, marked as RC2FX's, and audio keeps running. The key is
@@ -22,24 +22,30 @@ key never leaves the computer. The app also reads the mixer's SSH host key
 over USB and pins it in the installer cache's `known_hosts`, under an alias
 of the form `rc2fx-0123456789ab` derived from the mixer's serial number, so
 you don't have to trust it on first connection. The app then shows the exact
-`ssh` command for this mixer.
+`ssh` command for this mixer, with a **Copy** button. Type the address from
+the mixer's **Settings › Network** screen into **Mixer address** to fill it in.
+The app keeps the address until it closes.
 
-The status line says which key is on:
+The row says which key is on, and a **Key** line below it shows the key's
+`SHA256:` fingerprint:
 
-- **On with this computer's key** and its `SHA256:` fingerprint, when the
-  managed key is this computer's.
-- **On with an RC2FX key from another computer**, when the managed key is a
+- **Logins use this computer's key**, when the managed key is this computer's.
+  Only this case shows the `ssh` command.
+- **Logins use a key from another computer**, when the managed key is a
   different computer's.
-- **On with an RC2FX-managed key**, when this computer's key can't be read.
+- **Logins use an RC2FX-managed key**, when this computer's key can't be read.
+
+The app reads this status when Settings opens.
 
 If other keys can also log in, for example one added by an earlier
 installer's SSH option or by hand, the app says how many. RC2FX didn't add
 them and never changes or removes them.
 
-**Disable** removes only RC2FX's key. That stops new logins with it; sessions
-already open stay open until they end. Turning **Developer mode** off only
-hides these controls: it doesn't remove access. The key also goes away when
-the mixer is flashed again, since an update replaces the root filesystem.
+**Disable SSH**, once confirmed, removes only RC2FX's key. That stops new
+logins with it; sessions already open stay open until they end. Turning
+**Developer mode** off only hides these controls: it doesn't remove access.
+The key also goes away when the mixer is flashed again, since an update
+replaces the root filesystem.
 
 Enabling and disabling are refused during the first boot after a firmware
 update, and if `/home/root/.ssh` or `authorized_keys` isn't safe to change: a

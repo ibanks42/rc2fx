@@ -85,6 +85,7 @@ impl Rc2FxApp {
     pub(super) fn set_settings_open(&mut self, open: bool) {
         if open && !self.settings_open {
             self.list_presets();
+            self.read_ssh();
         }
         self.settings_open = open;
         self.presets.open = open;
