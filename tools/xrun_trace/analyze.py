@@ -71,9 +71,9 @@ def callback_detail(rows, tid, start, end, initial_state='running'):
             if nxt == tid:
                 state = 'running'
                 cpu = row['cpu']
-        elif event in ('sched_wakeup', 'sched_wakeup_new'):
+        elif event in ('sched_waking', 'sched_wakeup', 'sched_wakeup_new'):
             m = WAKE.search(data)
-            if m and int(m[2]) == tid:
+            if m and int(m[2]) == tid and state != 'running':
                 state = 'runnable'
                 cpu = int(m[3])
                 wakes.append({'at': row['time'], 'wakerTid': row['tid'], 'waker': row['comm'], 'cpu': cpu})
@@ -218,7 +218,7 @@ def analyze(text, audit, stats='', fault_records=None, flight_audit=None, client
     for row in rows:
         if row['time'] > fault['time']:
             break
-        if row['event'] in ('sched_wakeup', 'sched_wakeup_new'):
+        if row['event'] in ('sched_waking', 'sched_wakeup', 'sched_wakeup_new'):
             match = WAKE.search(row['data'])
             if match and int(match[2]) == tid:
                 latest_wake = dict(row, cpu=int(match[3]))
@@ -237,11 +237,12 @@ def analyze(text, audit, stats='', fault_records=None, flight_audit=None, client
         for row in rows:
             if row['time'] > start['time']:
                 break
-            if row['event'] in ('sched_wakeup', 'sched_wakeup_new'):
+            if row['event'] in ('sched_waking', 'sched_wakeup', 'sched_wakeup_new'):
                 match = WAKE.search(row['data'])
                 if match and int(match[2]) == tid:
                     wake = dict(row, cpu=int(match[3]))
-        if wake and start['time'] - wake['time'] < 0.100:
+        previous_end=max((p[1] for p in pairs if p[1]<start['time']),default=0)
+        if wake and wake['time']>=previous_end and start['time'] - wake['time'] < 0.100:
             detail['dispatch'] = callback_detail(rows, tid, wake, start['time'], 'runnable')
         if start.get('estimatedCycleStart'):
             cycle=start['estimatedCycleStart'];budget=start['budgetSeconds']

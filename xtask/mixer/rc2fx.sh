@@ -1742,7 +1742,7 @@ xrun_trace() {
       # Leave a failed setup stopped and recoverable via explicit clear.
       echo 0 > "$instance/tracing_on"
       echo nop > "$instance/current_tracer"
-      echo local > "$instance/trace_clock"
+      echo global > "$instance/trace_clock"
       echo 4096 > "$instance/buffer_size_kb"
       echo 1 > "$instance/options/overwrite"
       echo > "$instance/trace"
@@ -1755,13 +1755,14 @@ xrun_trace() {
       echo "p:rc2fx_xrun/fault $lib:$offset kind=%x0:u64 client=+0(%x1):string mono_ns=%x2:u64" >> "$base/uprobe_events"
       echo 'traceoff:1 if kind >= 1 && kind <= 10' > "$instance/events/rc2fx_xrun/fault/trigger"
       echo 1 > "$instance/events/rc2fx_xrun/fault/enable"
-      for f in sched/sched_switch sched/sched_wakeup sched/sched_wakeup_new; do
+      for f in sched/sched_switch sched/sched_waking sched/sched_wakeup_new; do
         echo 1 > "$instance/events/$f/enable"
       done
       # Keep syscall probes on the deadline path. GUI and vendor pool threads
       # remain visible as scheduler competitors/wakers, without tracing every
       # syscall they execute. This bounds observer overhead on the audio CPUs.
       filter="common_pid == $tid"
+      for f in /proc/"$jack"/task/*; do filter="$filter || common_pid == ${f##*/}"; done
       for gui in $(pgrep -x callme-t); do
         cp "/proc/$gui/maps" "$dir/jack-client-maps.$gui"
         for f in /proc/"$gui"/task/*; do filter="$filter || common_pid == ${f##*/}"; done

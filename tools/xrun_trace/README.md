@@ -12,7 +12,7 @@ The report thread reads the arm token. Changing that token explicitly starts a
 new capture; reading reports cannot accidentally unfreeze an existing capture.
 
 The mixer kernel's `mono` trace clock failed cross-CPU timestamp calibration.
-The tool uses the calibrated hardware `local` clock, validates 32 bracketed clock samples across four CPUs
+The tool uses `global`, validates 32 bracketed clock samples across four CPUs
 on every arm, and aligns the frozen trace to a monotonic timestamp carried by
 the fault hook. Alignment retains user-to-probe latency uncertainty.
 
@@ -20,7 +20,8 @@ The mixer kernel's uprobe `traceoff` affects global tracing even when installed
 in an instance. This tool therefore requires exclusive use of an idle global
 tracer, refuses existing tracing instances, saves the prior buffer/clock/on/off
 settings, and restores them on `clear`. Capture uses a rolling 4 MiB buffer per
-CPU, scheduling events and syscalls filtered to the measured USB callback. Kernel tracing adds overhead: this is an instrumented qualification,
+CPU, scheduling events and syscalls filtered to the measured USB callback, JACK
+driver and external SIP process. Kernel tracing adds overhead: this is an instrumented qualification,
 not a claim that observation is free. There are no per-callback uprobes.
 
 Set the usual `RC2FX_MIXER_IP`, `RC2FX_MIXER_KEY`,
@@ -94,3 +95,8 @@ IRQ and broad syscall tracing are intentionally omitted from the qualification
 profile because they materially perturb this mixer. A capture may establish
 CPU occupancy without distinguishing hard IRQ time from execution; that
 limitation requires a targeted follow-up rather than an invented conclusion.
+
+Wake attribution uses `sched_waking`, before the target becomes runnable.
+`sched_wakeup` can be logged after the target has already run on another CPU;
+a late wake notification must never turn an executing callback into a runnable
+delay. Dispatch lookup also rejects wakes from an earlier completed callback.
