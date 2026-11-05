@@ -1704,6 +1704,16 @@ xrun_trace() {
       touch /run/rc2fx-client-timing
       echo 'Client identity probe enabled for next audio start; restart explicitly'
       ;;
+    prune-saved)
+      # Only delete generated payloads whose exact bytes are backed up on host.
+      for sha in "$@"; do [[ $sha =~ ^[0-9a-f]{64}$ ]] || return 2; done
+      filter=" $* "
+      for f in /run/rc2fx-xrun-trace.saved.*/trace.txt.gz /run/rc2fx-xrun-trace.saved.*/jack.snapshot; do
+        test -f "$f" && test ! -L "$f" || continue
+        sha=$(sha256sum "$f" | cut -d ' ' -f 1)
+        case "$filter" in *" $sha "*) rm -- "$f";; esac
+      done
+      ;;
     unprepare)
       rm -f /run/rc2fx-client-timing
       ;;
