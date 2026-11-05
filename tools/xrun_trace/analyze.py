@@ -299,5 +299,14 @@ if __name__ == '__main__':
     result = analyze(text, json.loads((root/'arm-audit.json').read_text()), (root/'buffer-stats').read_text(), records,
                      json.loads((root/'collected-audit.json').read_text()),
                      {p.name:p.read_text() for p in root.glob('jack-client-maps.*')})
+    if (root/'profile').exists() and (root/'profile').read_text().strip()=='minimal':
+        result['schedulerScope']='Critical thread transitions only; intermediate competitors may be missing. Competitor interval is not proof of continuous CPU occupancy.'
+        def scope(value):
+            if isinstance(value,dict):
+                if 'observedCpuUs' in value:value['intervalSinceObservedSwitchUs']=value.pop('observedCpuUs')
+                for child in value.values():scope(child)
+            elif isinstance(value,list):
+                for child in value:scope(child)
+        scope(result)
     (root/'analysis.json').write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result, indent=2))

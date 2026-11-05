@@ -2,6 +2,7 @@
 """Explicit opt-in xrun flight recording; connection uses the mixer env vars."""
 import argparse
 import hashlib
+import gzip
 import io
 import json
 import os
@@ -22,10 +23,13 @@ def ssh(command, data=None, timeout=60):
     for variable,flag in [('RC2FX_MIXER_KEY','-i'),('RC2FX_MIXER_KNOWN_HOSTS','UserKnownHostsFile'),('RC2FX_MIXER_HOST_KEY_ALIAS','HostKeyAlias')]:
         value=os.environ.get(variable)
         if value:args.extend([flag,value] if flag=='-i' else ['-o',flag+'='+value])
+    compressed=data is None
+    if compressed:
+        command=shlex.join(['bash','-o','pipefail','-c','{ '+command+'; } | gzip -1'])
     args.extend([os.environ.get('RC2FX_MIXER_USER','root')+'@'+host,command])
     p=subprocess.run(args,input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
     if p.returncode:raise RuntimeError(p.stderr.decode(errors='replace')+p.stdout.decode(errors='replace'))
-    return p.stdout
+    return gzip.decompress(p.stdout) if compressed else p.stdout
 
 def remote(action,*args):
     return ssh(shlex.join(['bash','-s','--','xrun-trace',action,*map(str,args)]),(ROOT/'xtask/mixer/rc2fx.sh').read_bytes(),timeout=240 if action=='collect' else 60)
@@ -70,6 +74,7 @@ def main():
     p.add_argument('action',choices=['prepare','arm','status','stop','collect','clear','self-test'])
     p.add_argument('--bundle',type=Path,default=ROOT/'target/mixer')
     p.add_argument('--out',type=Path)
+    p.add_argument('--deep',action='store_true')
     p.add_argument('--cpu',type=int,default=3)
     args=p.parse_args()
     if args.action=='arm':
@@ -95,7 +100,7 @@ def main():
         if offset is None:raise ValueError('Callback does not map to the current vendor executable')
         binary=(args.bundle/'librc2fx_jackerr.so').read_bytes()
         token=time.time_ns()
-        print(remote('arm',hex(symbol_offset(binary,'rc2fx_jackerr_fault')),hashlib.sha256(binary).hexdigest(),row['tid'],token,audit['placement']['callback']['tid']).decode(),end='')
+        print(remote('arm',hex(symbol_offset(binary,'rc2fx_jackerr_fault')),hashlib.sha256(binary).hexdigest(),row['tid'],token,audit['placement']['callback']['tid'],'deep' if args.deep else 'minimal').decode(),end='')
         calibration=validate_clock(ssh('cat /run/rc2fx-xrun-trace/clock-calibration').decode(),ssh('cat /run/rc2fx-xrun-trace/clock-trace').decode())
         print('Cross-CPU clock calibration:',json.dumps(calibration))
         refreshed=json.loads(ssh('cat /run/rc2fx/audit.json'))['clientTiming']

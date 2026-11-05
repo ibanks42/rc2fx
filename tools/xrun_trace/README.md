@@ -110,3 +110,18 @@ This is an experimental bench policy, not a production fix. The ordinary bench
 leaves affinity unchanged. The qualification trace filters scheduler events to
 RT priorities below kernel priority 80, retaining the critical audio clients,
 helpers and IRQ threads while reducing background event volume.
+
+The default profile records only transitions involving the measured USB thread,
+main callback or JACK threads. It omits syscall events. `--deep` on `arm` or
+`bench.py` restores the broader RT scheduling/syscall capture, including
+external SIP-client semaphore identity. The minimal profile cannot establish
+continuous occupancy by an intermediate competitor; analysis marks that scope
+and reports intervals since observed switches. Use the deep profile when the
+minimal evidence does not distinguish the mechanism.
+
+All report and map downloads use device-side `gzip -1` with shell `pipefail`,
+then host-side decompression. Uploads stay plain. This applies to baseline and
+checkpoint reads as well as arm verification: plain SSH report transfers were
+already shown to interfere with audio. Capture archives are already compressed.
+The default trace clock is `mono_raw`, validated across four CPUs on each arm
+and aligned using the fault hook's monotonic timestamp.

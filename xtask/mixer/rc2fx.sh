@@ -1684,7 +1684,7 @@ arm_power_recovery() {
 # No files or syscalls are added to an audio callback.
 xrun_trace() {
   local base=/sys/kernel/debug/tracing instance=/sys/kernel/debug/tracing
-  local dir=/run/rc2fx-xrun-trace action=${1:-} pid jack started lib offset sha token tid main_tid gui f filter
+  local dir=/run/rc2fx-xrun-trace action=${1:-} pid jack started lib offset sha token tid main_tid gui f filter profile
   shift || true
   case "$action" in
     prepare)
@@ -1740,8 +1740,9 @@ xrun_trace() {
       )
       ;;
     arm)
-      test $# -eq 5 || { echo 'arm requires fault-hook offset, SHA256, callback TID, arm token, main callback TID' >&2; return 2; }
-      offset=$1 sha=$2 tid=$3 token=$4 main_tid=$5
+      test $# -ge 5 && test $# -le 6 || { echo 'arm requires fault-hook offset, SHA256, callback TID, arm token, main callback TID' >&2; return 2; }
+      offset=$1 sha=$2 tid=$3 token=$4 main_tid=$5 profile=${6:-minimal}
+      case "$profile" in minimal|deep) ;; *) return 2;; esac
       [[ $main_tid =~ ^[1-9][0-9]*$ && $offset =~ ^0x[0-9a-f]+$ && $sha =~ ^[0-9a-f]{64}$ && $tid =~ ^[1-9][0-9]*$ && $token =~ ^[1-9][0-9]{0,18}$ ]] || return 2
       test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot || return 4
       test ! -e "$dir" || { echo 'Existing capture must be collected and explicitly cleared first' >&2; return 1; }
@@ -1762,7 +1763,7 @@ xrun_trace() {
       # Leave a failed setup stopped and recoverable via explicit clear.
       echo 0 > "$instance/tracing_on"
       echo nop > "$instance/current_tracer"
-      echo global > "$instance/trace_clock"
+      echo mono_raw > "$instance/trace_clock"
       echo 4096 > "$instance/buffer_size_kb"
       echo 1 > "$instance/options/overwrite"
       echo > "$instance/trace"
@@ -1777,8 +1778,18 @@ xrun_trace() {
       echo 1 > "$instance/events/rc2fx_xrun/fault/enable"
       cat "$instance/events/sched/sched_switch/filter" > "$dir/original-switch-filter"
       cat "$instance/events/sched/sched_waking/filter" > "$dir/original-waking-filter"
-      echo 'prev_prio < 80 || next_prio < 80' > "$instance/events/sched/sched_switch/filter"
-      echo 'prio < 80' > "$instance/events/sched/sched_waking/filter"
+      filter="prev_pid == $tid || next_pid == $tid || prev_pid == $main_tid || next_pid == $main_tid"
+      for f in /proc/"$jack"/task/*; do
+        gui=${f##*/}; filter="$filter || prev_pid == $gui || next_pid == $gui"
+      done
+      if test "$profile" = deep; then
+        echo 'prev_prio < 80 || next_prio < 80' > "$instance/events/sched/sched_switch/filter"
+        echo 'prio < 80' > "$instance/events/sched/sched_waking/filter"
+      else
+        echo "$filter" > "$instance/events/sched/sched_switch/filter"
+        echo "pid == $tid || pid == $main_tid" > "$instance/events/sched/sched_waking/filter"
+      fi
+      echo "$profile" > "$dir/profile"
       for f in sched/sched_switch sched/sched_waking sched/sched_wakeup_new; do
         echo 1 > "$instance/events/$f/enable"
       done
@@ -1794,7 +1805,7 @@ xrun_trace() {
       for f in sys_enter sys_exit; do
         cat "$instance/events/raw_syscalls/$f/filter" > "$dir/original-filter-$f"
         echo "$filter" > "$instance/events/raw_syscalls/$f/filter"
-        echo 1 > "$instance/events/raw_syscalls/$f/enable"
+        if test "$profile" = deep; then echo 1 > "$instance/events/raw_syscalls/$f/enable"; fi
       done
       printf 'mixer=%s jack=%s callback_tid=%s\n' "$pid" "$jack" "$tid" > "$dir/identity"
       cat /proc/sys/kernel/random/boot_id >> "$dir/identity"
