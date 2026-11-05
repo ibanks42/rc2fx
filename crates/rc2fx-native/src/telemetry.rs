@@ -66,9 +66,10 @@ impl Producer {
     }
     /// `cycles` callbacks of unmetered frames, left alone and counted together.
     /// Stops at each window boundary, so the windows are exactly those of
-    /// recording the cycles one at a time.
-    pub fn record_skipped(&mut self, revision: u64, cycles: u64, frames: usize, latency: u32) {
-        self.adopt(revision);
+    /// recording the cycles one at a time. They ran before any newer settings
+    /// were read, so they belong to the revision last recorded.
+    pub fn record_skipped(&mut self, cycles: u64, frames: usize, latency: u32) {
+        let revision = self.revision;
         let frames = frames.max(1) as u64;
         let mut left = cycles;
         while left > 0 {
@@ -179,9 +180,12 @@ mod tests {
         };
         let (mut batched, mut batched_out) = channel();
         let (mut single, mut single_out) = channel();
+        // A path is always recorded before any frame is left alone.
+        batched.record(1, 112, loud, 9);
+        single.record(1, 112, loud, 9);
         // Every eighth cycle metered, the rest left alone, across many windows.
         for _ in 0..40 {
-            batched.record_skipped(1, 7, 112, 9);
+            batched.record_skipped(7, 112, 9);
             batched.record(1, 112, loud, 9);
             for _ in 0..7 {
                 single.record(1, 112, Meter::default(), 9);
@@ -199,6 +203,13 @@ mod tests {
             );
         }
         assert!(batched_out.latest().is_some());
+    }
+    #[test]
+    fn skipped_cycles_stay_with_the_revision_they_ran_under() {
+        let (mut producer, mut consumer) = channel();
+        producer.record(1, 112, Meter::default(), 0);
+        producer.record_skipped(21, 112, 0);
+        assert_eq!(consumer.latest().map(|value| value.revision), Some(1));
     }
     #[test]
     fn windows_are_coherent_bounded_and_never_mix_revisions() {

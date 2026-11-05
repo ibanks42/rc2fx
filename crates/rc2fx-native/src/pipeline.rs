@@ -1694,8 +1694,15 @@ impl Pipeline {
         } else {
             for &index in &front.visits[front.phase] {
                 let port = &mut front.ports[index];
+                let planned = port.processed_intent;
                 unsafe {
                     begin_port(index, port, &mut front.counters, seen, cycle, frames, get);
+                }
+                // A new mode can be seen before its publication is counted.
+                // Every following frame must then be visited, or a processed
+                // frame would sit alone between unprocessed ones.
+                if port.processed_intent != planned {
+                    front.full_left = METER_STRIDE;
                 }
             }
         }

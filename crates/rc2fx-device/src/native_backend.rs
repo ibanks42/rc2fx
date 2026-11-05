@@ -13,9 +13,10 @@ use std::{
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 // With nobody watching the meters and every path behaving. Any path that stops
-// advancing returns polling to POLL_INTERVAL, so a stall is still reported on
-// the same schedule as with a client attached.
-const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+// advancing returns polling to POLL_INTERVAL, so a stall is reported at most
+// about one idle interval later than with a client attached. Must stay below
+// the 400 ms a path's telemetry ring holds, or meter windows are dropped.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const BUSY_RETRY: Duration = Duration::from_secs(2);
 const REGISTRY_WAIT: Duration = Duration::from_secs(60);
 // Native USB ports exist before their hardware streams have finished startup.

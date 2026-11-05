@@ -140,6 +140,29 @@ fn a_callback_owned_mode_change_takes_effect_on_the_next_frame() {
     assert_eq!(pipeline.counters().faults, 0);
 }
 
+#[test]
+fn a_mode_seen_before_its_publication_is_counted_is_never_a_lone_frame() {
+    let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
+    let buffers = Buffers::new();
+    let (pipeline, mut controls) = build(&plan, &buffers, true);
+    let mut index = 0;
+    run_until(&pipeline, &buffers, &mut index, false);
+    publish(&mut controls[OUTPUT], &plan, 2, PathMode::Processed);
+    // As if the control thread stopped between the store and the count.
+    pipeline.publications.fetch_sub(1, Ordering::Release);
+    let mut processed = false;
+    for _ in 0..3 * METER_STRIDE as usize {
+        let frame = run(&pipeline, &buffers, index, [true, true], true);
+        index += 1;
+        assert!(
+            !(processed && same(&frame)),
+            "frame {index} went back to unprocessed"
+        );
+        processed |= !same(&frame);
+    }
+    assert!(processed);
+}
+
 /// Frames from a Passthrough-to-Processed publication until the mixer is first
 /// handed something other than its own source buffer.
 fn frames_until_processed(pipeline: &Pipeline, buffers: &Buffers) -> usize {

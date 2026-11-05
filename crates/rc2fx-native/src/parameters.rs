@@ -753,10 +753,7 @@ impl Reader {
     }
     /// As `record` once per cycle, for `cycles` unmetered frames left alone.
     pub fn record_skipped(&mut self, cycles: u64, frames: usize, latency: u32) {
-        if let Some(snapshot) = unsafe { self.current.as_ref() } {
-            self.telemetry
-                .record_skipped(snapshot.revision, cycles, frames, latency);
-        }
+        self.telemetry.record_skipped(cycles, frames, latency);
     }
     pub fn begin(&mut self) -> bool {
         if !self.current.is_null() {
