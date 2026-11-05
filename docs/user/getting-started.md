@@ -37,7 +37,7 @@ versions** to see each part:
 | Line | Installed | Available |
 | --- | --- | --- |
 | **App** | The desktop app's version. | The newest published app. |
-| **Mixer software** | The RC2FX mixer software on the mixer now. | The mixer software this app installs, or the published version when only a newer app carries it. |
+| **Mixer software** | The RC2FX mixer software on the mixer now. | The newest compatible signed mixer release, or an optional bundled version. |
 | **RØDE firmware** | The RØDE firmware on the mixer now. | The newest firmware this app installs for your mixer model. |
 
 Each line ends with a status. **Too old** means the mixer software doesn't speak
@@ -54,45 +54,33 @@ A version the app can't read shows **Unknown**. That includes a mixer running
 RC2FX mixer software too old to report its version. The mixer's versions are
 cleared when it disconnects and read again when it reconnects.
 
-The bundled mixer software is the one included in the app you downloaded. An
-app update can include newer mixer software, or keep the same one when only the
-app changed. The Versions dialog can also show the newest mixer software
-published in any app release. That is information only: the installer always
-installs the mixer software bundled with the app you are running, so a newer
-published version never changes what this app can install. If a newer mixer
-version is only published in a newer app, update the app to get it.
+RC2FX mixer software has its own releases. The app checks signed update metadata
+and offers only payloads compatible with its installer format, control protocol,
+and the qualified RØDE firmware for your mixer. A new mixer release can therefore
+be installed without updating the desktop app. Releases that require a newer app
+cannot be selected by an older one.
 
-The newest supported firmware is the newest version this app has
-been checked against for your model, not necessarily the newest one RØDE has
-published. The firmware versions are compared only with what this app bundles.
-The mixer software is compared with both the bundled version and, for display,
-the newest published version.
+Normal builds download the selected mixer payload from GitHub. Builds made with
+`--features embedded` also include a bundled payload; the installer offers it as
+an explicit choice. It is never substituted automatically after a network or
+verification failure. If no authenticated release information is available, the
+available version stays **Unknown** rather than claiming that you are current.
 
-The installer flashes the mixer software and the firmware together as one
-image, so the app compares both:
+The newest supported RØDE firmware comes from the signed firmware catalog on
+GitHub, not a list compiled into normal app builds. It is the newest qualified
+version compatible with your app and mixer, not necessarily the newest one RØDE
+has published. Both mixer releases and individual firmware profiles declare a
+minimum app version. If yours is too old, the app shows the required version and
+asks you to update the app first; that combination cannot be installed.
 
-- If the mixer software is older than this app supports, the app offers the
-  installer, as long as the installed mixer software isn't newer than the
-  bundled one and the installed firmware is known and not newer than the newest
-  supported one. If the firmware is newer or unknown, the dialog says this app
-  can't update the mixer safely and offers nothing.
-- If the mixer software was made for a newer app, the dialog says
-  compatibility is unknown and asks you to update the app before changing
-  anything on the mixer. It doesn't offer the installer.
-- If both are known, neither is newer than what this app installs, and at
-  least one is older, the dialog offers **Open installer**. The installer
-  explains what happens before anything is flashed.
-- If either is newer than what this app installs, the dialog says installing
-  would replace it with older versions and ends with *Update the app first.* It
-  doesn't offer the installer.
-- Otherwise there is no offer to install: for example when both
-  are current, when a version or whether the mixer software works with this
-  app is unknown, or when a version can't be compared (such as a pre-release).
+The installer flashes RC2FX and RØDE firmware together as one image. Review both
+versions in its confirmation dialog. Older versions require an explicit downgrade
+confirmation; an unknown installed version is identified before proceeding.
 
-Nothing is flashed automatically. To update, open the installer from the Versions
-dialog or from **Settings › Mixer › Open installer** and confirm there. Downloading a
-new app doesn't flash the mixer, and an app update with the same bundled mixer
-software leaves the mixer alone. See [Installing RC2FX](installing.md).
+Nothing is flashed automatically. Open the installer from the Versions dialog
+or **Settings › Mixer › Open installer**, choose the versions, and confirm.
+Downloading a new desktop app does not change the mixer. See
+[Installing RC2FX](installing.md).
 
 ### App updates
 
@@ -101,8 +89,8 @@ when you press **Check for updates** in the Versions dialog. It asks
 GitHub's public releases API for the official repository
 (`github.com/ibanks42/rc2fx`), without signing in, and considers only
 published app releases: drafts, pre-releases and mixer software releases are
-ignored. It also reads the RC2FX update feed for the release notes and the
-newest published mixer version. The check at startup stays quiet if it fails,
+ignored. A separate signed check discovers compatible mixer releases. The RC2FX
+update feed supplies release notes, not permission to install a mixer payload. The check at startup stays quiet if it fails,
 for example when you're offline.
 
 When a newer app is out, the app shows its version and the notes of every app
@@ -110,8 +98,8 @@ version since yours, newest first. The full histories are at
 [App release history](https://ibanks42.github.io/rc2fx/updates/app) and
 [Mixer software history](https://ibanks42.github.io/rc2fx/updates/mixer). If
 the feed can't be loaded, the app falls back to GitHub's release notes and
-says that some notes may be missing. The app never downloads or installs
-anything itself: to update, download the new app from the release page.
+says that some notes may be missing. The desktop app does not update itself: download a new desktop version from
+the release page. Mixer payloads are downloaded through the installer.
 Updating the app doesn't change the mixer; see above for updating the mixer
 software.
 

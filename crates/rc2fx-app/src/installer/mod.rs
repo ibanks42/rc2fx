@@ -9,7 +9,7 @@ mod flow;
 pub(super) mod signature;
 
 use super::*;
-use flow::{Goal, Model, STEPS, Step, StepState};
+use flow::{FirmwareCheck, Goal, MixerChange, Model, Offers, STEPS, Step, StepState};
 use gpui_kit::component::{progress::Progress as ProgressBar, spinner::Spinner};
 use gpui_kit::prelude::FluentBuilder as _;
 use rc2fx_installer::{Engine, Progress, Reply, Request, helper::Helper};
@@ -62,16 +62,131 @@ fn privileged(request: &Request) -> bool {
     )
 }
 
-/// The installer over the payload this executable embeds. A build without it
-/// (`--no-default-features`, which only checks the code) installs from the
-/// source checkout it was built from instead.
+/// A request that chooses the mixer software to install.
+fn selection(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::SelectMixer { .. } | Request::SelectBundledMixer
+    )
+}
+
+/// A request that can change the catalog RC2FX's readiness is judged against,
+/// which the mixer's own state says nothing about.
+fn changes_catalog(request: &Request) -> bool {
+    selection(request) || matches!(request, Request::Releases | Request::MixerReleases)
+}
+
+/// Which mixer software the engine and the helper each hold. The helper
+/// verifies the payload itself, so it gets the same request rather than a
+/// path or anything else from this process, and a restarted helper holds
+/// nothing until it is sent again.
+#[derive(Debug, Default, PartialEq)]
+struct Selection {
+    wanted: Option<Request>,
+    helper: Option<Request>,
+}
+
+impl Selection {
+    /// The engine answered `request`. A failed selection leaves it with
+    /// nothing selected, which the helper must not outlive.
+    fn engine_answered(&mut self, request: &Request, selected: bool) {
+        self.wanted = selected.then(|| request.clone());
+    }
+
+    /// Stock firmware needs no mixer software, so a helper that lost its
+    /// selection must not have to download one.
+    fn clear(&mut self) {
+        self.wanted = None;
+    }
+
+    /// What the helper must be sent before it acts.
+    fn pending(&self) -> Option<&Request> {
+        self.wanted.as_ref().filter(|_| self.wanted != self.helper)
+    }
+
+    fn helper_answered(&mut self) {
+        self.helper = self.wanted.clone();
+    }
+
+    /// The helper holds nothing: it restarted, or it was sent a selection,
+    /// which clears what it had until that selection succeeds.
+    fn helper_cleared(&mut self) {
+        self.helper = None;
+    }
+}
+
+/// The request thread's side of the privileged helper.
+struct HelperLink {
+    slot: Arc<Mutex<Option<Helper>>>,
+    canceller: Arc<Mutex<Option<rc2fx_installer::helper::Canceller>>>,
+    lost: mpsc::Sender<std::result::Result<(), String>>,
+    /// What the helper should be told about Duo flashing, and was last told.
+    allow_duo: bool,
+    helper_duo: Option<bool>,
+    selection: Selection,
+}
+
+impl HelperLink {
+    /// Bring the helper up to date, then have it handle `request`, if any.
+    fn run(
+        &mut self,
+        request: Option<&Request>,
+        report: &(impl Fn(Progress) + Clone),
+    ) -> std::result::Result<Option<Reply>, String> {
+        let slot = self.slot.clone();
+        let mut guard = slot.lock().ok();
+        let Some(helper) = guard.as_mut().and_then(|g| g.as_mut()) else {
+            return Err("Grant administrator access first.".into());
+        };
+        let result = self.sync(helper, report).and_then(|()| {
+            request
+                .map(|request| helper.handle(request, report))
+                .transpose()
+        });
+        let result = result.map_err(|e| e.0);
+        if result.is_err() && !helper.alive() {
+            if let Some(guard) = guard.as_mut() {
+                guard.take();
+            }
+            if let Ok(mut c) = self.canceller.lock() {
+                c.take();
+            }
+            self.helper_duo = None;
+            self.selection.helper_cleared();
+            let _ = self.lost.send(Err(
+                "Administrator access ended. Grant it again to continue.".into(),
+            ));
+        }
+        result
+    }
+
+    fn sync(
+        &mut self,
+        helper: &mut Helper,
+        report: &(impl Fn(Progress) + Clone),
+    ) -> rc2fx_installer::Result<()> {
+        if self.helper_duo != Some(self.allow_duo) {
+            helper.handle(&Request::AllowExperimentalDuo(self.allow_duo), |_| {})?;
+            self.helper_duo = Some(self.allow_duo);
+        }
+        if let Some(request) = self.selection.pending().cloned() {
+            self.selection.helper_cleared();
+            helper.handle(&request, report)?;
+            self.selection.helper_answered();
+        }
+        Ok(())
+    }
+}
+
+/// The installer over the payload this executable embeds. Without one it has
+/// no mixer software until a signed release is selected.
 #[cfg(feature = "embedded")]
 fn engine(work: PathBuf) -> Engine {
     Engine::embedded(work)
 }
 #[cfg(not(feature = "embedded"))]
 fn engine(work: PathBuf) -> Engine {
-    Engine::new(checkout(), work)
+    Engine::download_only(work)
 }
 
 /// The privileged helper for the same payload as [`engine`].
@@ -81,12 +196,7 @@ fn start_helper(work: &Path) -> rc2fx_installer::Result<Helper> {
 }
 #[cfg(not(feature = "embedded"))]
 fn start_helper(work: &Path) -> rc2fx_installer::Result<Helper> {
-    Helper::start(&checkout(), work)
-}
-
-#[cfg(not(feature = "embedded"))]
-fn checkout() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+    Helper::start_download_only(work)
 }
 
 struct Runner {
@@ -102,6 +212,14 @@ struct Runner {
     access: mpsc::Receiver<std::result::Result<(), String>>,
     access_sender: mpsc::Sender<std::result::Result<(), String>>,
     work: PathBuf,
+}
+
+impl Drop for Runner {
+    /// Closing the page ends a release check rather than leaving it, and any
+    /// helper, running until the network gives up.
+    fn drop(&mut self) {
+        self.cancel();
+    }
 }
 
 impl Runner {
@@ -172,48 +290,43 @@ impl Runner {
                 engine.progress = Some(Box::new(report.clone()));
                 engine.cancel = stop.clone();
                 let separate = rc2fx_installer::helper::needed();
-                // What the helper was last told about Duo flashing.
-                let mut allow_duo = false;
-                let mut helper_duo = None;
+                let mut link = HelperLink {
+                    slot,
+                    canceller,
+                    lost,
+                    allow_duo: false,
+                    helper_duo: None,
+                    selection: Selection::default(),
+                };
                 for request in requests {
                     stop.store(false, Ordering::Relaxed);
                     report(Progress::default());
                     if let Request::AllowExperimentalDuo(allow) = request {
-                        allow_duo = allow;
+                        link.allow_duo = allow;
+                    }
+                    if matches!(request, Request::Prepare { stock: true, .. }) {
+                        link.selection.clear();
                     }
                     let result = if separate && privileged(&request) {
-                        let mut guard = slot.lock().ok();
-                        match guard.as_mut().and_then(|g| g.as_mut()) {
-                            None => Err("Grant administrator access first.".into()),
-                            Some(helper) => {
-                                let synced = if helper_duo == Some(allow_duo) {
-                                    Ok(())
-                                } else {
-                                    helper
-                                        .handle(&Request::AllowExperimentalDuo(allow_duo), |_| {})
-                                        .map(|_| helper_duo = Some(allow_duo))
-                                };
-                                let result = synced
-                                    .and_then(|()| helper.handle(&request, &report))
-                                    .map_err(|e| e.0);
-                                if result.is_err() && !helper.alive() {
-                                    if let Some(guard) = guard.as_mut() {
-                                        guard.take();
-                                    }
-                                    if let Ok(mut c) = canceller.lock() {
-                                        c.take();
-                                    }
-                                    helper_duo = None;
-                                    let _ = lost.send(Err(
-                                        "Administrator access ended. Grant it again to continue."
-                                            .into(),
-                                    ));
-                                }
-                                result
-                            }
-                        }
+                        link.run(Some(&request), &report).map(|reply| {
+                            reply.expect("the helper answers the request it was given")
+                        })
                     } else {
-                        engine.handle(request.clone()).map_err(|e| e.0)
+                        let result = engine.handle(request.clone()).map_err(|e| e.0);
+                        if selection(&request) {
+                            link.selection.engine_answered(&request, result.is_ok());
+                        }
+                        // The helper fetches and verifies its own copy now, in
+                        // the same cancellable step, before the mixer is touched.
+                        if separate && selection(&request) && result.is_ok() {
+                            if stop.load(Ordering::Relaxed) {
+                                Err(rc2fx_installer::CANCELLED.to_owned())
+                            } else {
+                                link.run(None, &report).and(result)
+                            }
+                        } else {
+                            result
+                        }
                     };
                     if finished.send((request, result)).is_err() {
                         break;
@@ -236,8 +349,8 @@ impl Runner {
 }
 
 impl Runner {
-    fn send(&mut self, request: Request) -> std::result::Result<(), Request> {
-        self.jobs.send(request).map_err(|error| error.0)
+    fn send(&mut self, request: Request) -> std::result::Result<(), Box<Request>> {
+        self.jobs.send(request).map_err(|error| Box::new(error.0))
     }
     fn take_access(&mut self) -> Option<std::result::Result<(), String>> {
         self.access.try_recv().ok()
@@ -287,6 +400,15 @@ impl Installer {
     }
 }
 
+/// The installer's folder for downloads and backups.
+pub(super) fn work_directory() -> Option<PathBuf> {
+    match std::env::var_os("RC2FX_INSTALLER_WORK").map(PathBuf::from) {
+        Some(path) if path.is_absolute() => Some(path),
+        Some(path) => std::env::current_dir().ok().map(|cwd| cwd.join(path)),
+        None => rc2fx_installer::default_work(),
+    }
+}
+
 fn paragraph(text: impl Into<SharedString>, color: u32) -> Div {
     div().text_sm().text_color(rgb(color)).child(text.into())
 }
@@ -294,6 +416,7 @@ fn paragraph(text: impl Into<SharedString>, color: u32) -> Div {
 fn step_title(step: Step) -> &'static str {
     match step {
         Step::Backup => "Save settings",
+        Step::Mixer => "Get mixer software",
         Step::Prepare => "Prepare firmware",
         Step::UsbMode => "Switch to USB update mode",
         Step::Flash => "Flash firmware",
@@ -330,15 +453,7 @@ impl Rc2FxApp {
         if self.installer.is_some() {
             return;
         }
-        // Branch before any work-directory/key discovery or live runner startup.
-        // Only working downloads/backups need a directory; installer inputs
-        // are immutable bytes embedded in this executable and its helper.
-        let work = match std::env::var_os("RC2FX_INSTALLER_WORK").map(PathBuf::from) {
-            Some(path) if path.is_absolute() => Some(path),
-            Some(path) => std::env::current_dir().ok().map(|cwd| cwd.join(path)),
-            None => rc2fx_installer::default_work(),
-        };
-        let Some(work) = work else {
+        let Some(work) = work_directory() else {
             self.message = "The installer has no folder for its downloads and backups. Set RC2FX_INSTALLER_WORK to one.".into();
             cx.notify();
             return;
@@ -361,6 +476,7 @@ impl Rc2FxApp {
             access,
         };
         installer.model.privileged = installer.access.allows_flashing();
+        installer.model.bundled = self.bundled_mixer_software.clone();
         let first = installer.model.set_allow_duo(connection::remembered_duo());
         installer.send(first);
         self.installer = Some(installer);
@@ -429,6 +545,16 @@ impl Rc2FxApp {
             .as_ref()
             .map(|(_, v)| format!("RØDE {v}"))
             .unwrap_or_else(|| "the firmware".into());
+        let warnings = installer.model.warnings();
+        let mixer = installer.model.mixer.clone();
+        let downgrade = !installer.model.stock
+            && mixer
+                .as_ref()
+                .is_some_and(|m| installer.model.mixer_change(m) == MixerChange::Downgrade);
+        let with_rc2fx = mixer
+            .as_ref()
+            .map(|m| format!("RC2FX {}", m.version()))
+            .unwrap_or_else(|| "RC2FX".into());
         let (title, detail, action) = if installer.model.stock {
             (
                 format!("Flash stock {version}?"),
@@ -437,9 +563,17 @@ impl Rc2FxApp {
             )
         } else {
             (
-                format!("Flash {version} with RC2FX?"),
+                if downgrade {
+                    format!("Downgrade to {with_rc2fx} on {version}?")
+                } else {
+                    format!("Flash {version} with {with_rc2fx}?")
+                },
                 "The mixer's audio stops while it updates, which takes a few minutes. Keep it powered on and connected until it's done. Your settings are saved first and carried over.",
-                "Flash and install",
+                if downgrade {
+                    "Downgrade and flash"
+                } else {
+                    "Flash and install"
+                },
             )
         };
         let device = installer.model.device;
@@ -454,6 +588,12 @@ impl Rc2FxApp {
         } else {
             detail.to_owned()
         };
+        let detail = warnings
+            .iter()
+            .map(String::as_str)
+            .chain([detail.as_str()])
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let action = if device == rc2fx_installer::DeviceModel::Duo {
             "Flash Duo at my own risk"
         } else {
@@ -482,6 +622,8 @@ impl Rc2FxApp {
                         i.model.device == device
                             && i.model.choice == choice
                             && i.model.stock == stock
+                            && i.model.mixer == mixer
+                            && i.model.warnings() == warnings
                             && i.model.usb() == usb
                             && i.access.allows_flashing()
                             && !i.busy()
@@ -520,10 +662,19 @@ impl Rc2FxApp {
                 serde_json::json!({"engine": s.engine, "config": {"revision": s.config.revision}})
                     .to_string()
             });
+        let reported = self.device_versions.as_ref().filter(|_| same_mixer);
+        let (mixer, firmware) = (
+            reported.and_then(|d| d.runtime.clone()),
+            reported.and_then(|d| d.firmware.clone()),
+        );
         let Some(installer) = self.installer.as_mut() else {
             return false;
         };
         let mut changed = false;
+        if installer.model.installed != mixer || installer.model.installed_firmware != firmware {
+            installer.model.set_installed(mixer, firmware);
+            changed = true;
+        }
         if engine != installer.engine {
             let service = engine
                 .as_deref()
@@ -556,6 +707,13 @@ impl Rc2FxApp {
         }
         while let Some((request, result)) = installer.runner.take_outcome() {
             changed = true;
+            if let Ok(Reply::MixerReleases(offers)) = &result {
+                self.app_update.set_signed(offers.clone());
+            }
+            if changes_catalog(&request) {
+                // Judge readiness again on the next poll.
+                installer.engine = None;
+            }
             let next = installer.model.finish(&request, result);
             installer.send(next);
         }
@@ -838,6 +996,9 @@ impl Rc2FxApp {
                 }),
         );
         if idle {
+            if let Some(note) = m.firmware_note() {
+                card = card.child(paragraph(note, WARN));
+            }
             if !m.releases.is_empty() {
                 card = card.child(
                     div()
@@ -846,6 +1007,31 @@ impl Rc2FxApp {
                         .gap_3()
                         .child(self.mode_card(m, false, cx))
                         .child(self.mode_card(m, true, cx)),
+                );
+                if !m.stock {
+                    card = card.child(self.mixer_card(m, cx));
+                }
+            } else if m.firmware_check == FirmwareCheck::Checking {
+                card = card.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .child(Spinner::new().color(rgb(ACCENT).into()))
+                        .child(paragraph("Checking supported firmware…", MUTED))
+                        .child(
+                            Button::new("installer-firmware-cancel")
+                                .ghost()
+                                .small()
+                                .label("Cancel")
+                                .on_click(cx.listener(|app, _, _, cx| {
+                                    if let Some(installer) = app.installer.as_ref() {
+                                        installer.runner.cancel();
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
                 );
             }
         } else {
@@ -937,6 +1123,100 @@ impl Rc2FxApp {
                     None
                 })
             }))
+    }
+
+    /// The mixer software going into the firmware: what the mixer has, what
+    /// it would get, and why there may be nothing to choose.
+    fn mixer_card(&self, m: &Model, cx: &mut Context<Self>) -> Div {
+        let installed = m.installed.as_deref().unwrap_or("unknown");
+        let detail = match &m.mixer {
+            Some(mixer) => format!("Installed: {installed} · Installing: {}", mixer.version()),
+            None => format!("Installed: {installed}"),
+        };
+        let options = m.mixer_menu();
+        let label = m
+            .mixer
+            .as_ref()
+            .map(|mixer| format!("Mixer software {}", mixer.version()))
+            .unwrap_or_else(|| "Choose mixer software".into());
+        let app = cx.entity().downgrade();
+        let menu = Button::new("installer-mixer")
+            .small()
+            .label(label)
+            .dropdown_caret(true)
+            .disabled(m.busy.is_some() || options.is_empty())
+            .dropdown_menu(move |mut menu, _, _| {
+                for (source, name, chosen) in &options {
+                    let app = app.clone();
+                    let source = source.clone();
+                    menu = menu.item(PopupMenuItem::new(name.clone()).checked(*chosen).on_click(
+                        move |_, _, cx| {
+                            let source = source.clone();
+                            let _ = app.update(cx, |app, cx| {
+                                app.installer_event(cx, |m| {
+                                    m.choose_mixer(source);
+                                    None
+                                })
+                            });
+                        },
+                    ));
+                }
+                menu
+            });
+        let mut controls = div().h_flex().items_center().gap_2().pt_2().child(menu);
+        match m.offers {
+            Offers::Unchecked | Offers::Checking => {
+                controls = controls
+                    .child(Spinner::new().color(rgb(ACCENT).into()))
+                    .child(paragraph("Checking signed releases…", MUTED))
+                    .child(
+                        Button::new("installer-mixer-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel")
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                if let Some(installer) = app.installer.as_ref() {
+                                    installer.runner.cancel();
+                                }
+                                cx.notify();
+                            })),
+                    );
+            }
+            Offers::Failed(_) => {
+                controls = controls.child(
+                    Button::new("installer-mixer-check")
+                        .ghost()
+                        .small()
+                        .label("Check again")
+                        .disabled(m.busy.is_some())
+                        .on_click(
+                            cx.listener(|app, _, _, cx| {
+                                app.installer_event(cx, Model::recheck_mixers)
+                            }),
+                        ),
+                );
+            }
+            Offers::Ready(_) => {}
+        }
+        let note_color = if matches!(m.offers, Offers::Failed(_)) {
+            DANGER
+        } else {
+            WARN
+        };
+        div()
+            .v_flex()
+            .gap_1()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(surface().line))
+            .bg(rgb(surface().raised))
+            .child(div().font_semibold().child("RC2FX mixer software"))
+            .child(paragraph(detail, MUTED))
+            .child(controls)
+            .when_some(m.mixer_note(), |card, note| {
+                card.child(paragraph(note, note_color))
+            })
     }
 
     /// The run's steps: finished ones as one line, the current one in full,
@@ -1045,6 +1325,13 @@ impl Rc2FxApp {
 
     fn done_text(&self, m: &Model, step: Step) -> String {
         match step {
+            Step::Mixer => m
+                .run
+                .as_ref()
+                .or(m.last.as_ref())
+                .and_then(|r| r.mixer.as_ref())
+                .map(|mixer| format!("Mixer software {} verified", mixer.version()))
+                .unwrap_or_else(|| "No mixer software needed".into()),
             Step::Prepare => m
                 .prepared()
                 .map(|p| {
@@ -1311,6 +1598,61 @@ impl Rc2FxApp {
                     })),
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::{Request, Selection, changes_catalog};
+
+    #[test]
+    fn readiness_is_judged_again_after_anything_that_can_change_the_catalog() {
+        for request in [
+            Request::Releases,
+            Request::MixerReleases,
+            Request::SelectBundledMixer,
+        ] {
+            assert!(changes_catalog(&request));
+        }
+        assert!(!changes_catalog(&Request::Probe));
+    }
+
+    #[test]
+    fn the_helper_gets_exactly_what_the_engine_selected_and_again_after_a_restart() {
+        let mut s = Selection::default();
+        assert_eq!(s.pending(), None, "nothing selected: stock needs nothing");
+        s.engine_answered(&Request::SelectBundledMixer, true);
+        assert_eq!(s.pending(), Some(&Request::SelectBundledMixer));
+        s.helper_answered();
+        assert_eq!(s.pending(), None, "sent once");
+        s.helper_cleared();
+        assert_eq!(
+            s.pending(),
+            Some(&Request::SelectBundledMixer),
+            "a restarted helper holds nothing"
+        );
+    }
+
+    #[test]
+    fn a_selection_the_helper_refused_is_sent_again_even_if_it_held_it_before() {
+        let mut s = Selection::default();
+        s.engine_answered(&Request::SelectBundledMixer, true);
+        s.helper_answered();
+        // Something else was sent and failed, which cleared the helper.
+        s.helper_cleared();
+        s.engine_answered(&Request::SelectBundledMixer, true);
+        assert_eq!(s.pending(), Some(&Request::SelectBundledMixer));
+    }
+
+    #[test]
+    fn a_failed_selection_is_never_sent_and_stock_needs_none() {
+        let mut s = Selection::default();
+        s.engine_answered(&Request::SelectBundledMixer, true);
+        s.engine_answered(&Request::SelectBundledMixer, false);
+        assert_eq!(s.pending(), None);
+        s.engine_answered(&Request::SelectBundledMixer, true);
+        s.clear();
+        assert_eq!(s.pending(), None);
     }
 }
 

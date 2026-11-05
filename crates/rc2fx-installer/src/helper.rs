@@ -57,6 +57,7 @@ pub const USB_RULE_FLAG: &str = "--install-usb-rule";
 /// The root argument that means "the payload embedded in this executable",
 /// which is what the desktop app passes: it has no folder to name.
 pub const EMBEDDED: &str = "-";
+pub const DOWNLOAD: &str = "--download-payload";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +153,9 @@ fn write_line(stdin: &mut ChildStdin, message: &Inbound) -> Result<()> {
 /// The engine a helper serves: the payload embedded in this executable when
 /// `root` is [`EMBEDDED`], otherwise the folder named.
 fn engine_for(root: PathBuf, work: PathBuf) -> Engine {
+    if root == Path::new(DOWNLOAD) {
+        return Engine::download_only(work);
+    }
     #[cfg(feature = "embedded")]
     if root == Path::new(EMBEDDED) {
         return Engine::embedded(work);
@@ -160,6 +164,10 @@ fn engine_for(root: PathBuf, work: PathBuf) -> Engine {
 }
 
 impl Helper {
+    pub fn start_download_only(work: &Path) -> Result<Self> {
+        Self::spawn(Path::new(DOWNLOAD), work)
+    }
+
     /// Start the helper for the payload embedded in this executable through
     /// `pkexec`, which asks for administrator permission once.
     #[cfg(feature = "embedded")]

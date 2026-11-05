@@ -238,14 +238,14 @@ struct Changes {
     /// Said above the notes instead of the changelog's own status.
     note: Option<String>,
     /// Entries newer than this need an app update first.
-    bundled: Option<String>,
+    available: Option<String>,
     links: Vec<(&'static str, String)>,
 }
 
 /// One version's heading, marking notes this app cannot install.
-fn entry_heading(prefix: &str, entry: &ReleaseNotes, bundled: Option<&str>) -> String {
-    let later = bundled.is_some_and(|bundled| {
-        crate::versions::compare(&entry.version, bundled) == Some(std::cmp::Ordering::Greater)
+fn entry_heading(prefix: &str, entry: &ReleaseNotes, available: Option<&str>) -> String {
+    let later = available.is_some_and(|available| {
+        crate::versions::compare(&entry.version, available) == Some(std::cmp::Ordering::Greater)
     });
     if later {
         format!("{prefix} {} · needs an app update", entry.version)
@@ -343,7 +343,7 @@ fn open_dialog(spec: Changes, window: &mut Window, cx: &mut App) {
         .flat_map(|c| c.entries.iter())
         .map(|entry| {
             (
-                entry_heading(spec.entry_prefix, entry, spec.bundled.as_deref()),
+                entry_heading(spec.entry_prefix, entry, spec.available.as_deref()),
                 SharedString::from(safe_markdown(&entry.notes)),
                 entry.notes.trim().is_empty(),
                 entry.truncated,
@@ -442,16 +442,31 @@ impl Rc2FxApp {
         )
     }
 
+    /// The newest mixer software this app could install right now.
+    fn available_mixer_software(&self) -> Option<String> {
+        crate::versions::newest_available(
+            self.app_update.signed().unwrap_or_default(),
+            self.bundled_mixer_software.as_deref(),
+        )
+    }
+
     /// The versions as Settings and the Versions dialog show them.
     pub(super) fn versions_overview(&self) -> Overview {
         let (runtime, firmware, newest_firmware) = self.version_inputs();
-        let bundled = self.bundled_mixer_software.as_deref();
-        let mixer = self.app_update.mixer_update(runtime.as_deref(), bundled);
+        let available = self.available_mixer_software();
+        let available = available.as_deref();
+        let mixer = self.app_update.mixer_update(runtime.as_deref(), available);
+        let needs_app = crate::versions::needs_newer_app(
+            self.app_update.signed().unwrap_or_default(),
+            available,
+        );
         crate::versions::overview(
             &crate::versions::Inputs {
                 app: crate::versions::APP_VERSION,
                 installed_runtime: runtime.as_deref(),
-                bundled_runtime: bundled,
+                available_runtime: available,
+                signed_known: self.app_update.signed().is_some(),
+                needs_app: needs_app.as_ref().map(|(v, m)| (v.as_str(), m.as_str())),
                 installed_firmware: firmware.as_deref(),
                 newest_supported_firmware: newest_firmware.as_deref(),
                 device_protocol: self.device_versions.as_ref().and_then(|d| d.protocol),
@@ -495,21 +510,21 @@ impl Rc2FxApp {
                     entry_prefix: "RC2FX",
                     changelog: Some(changelog.clone()),
                     note: None,
-                    bundled: None,
+                    available: None,
                     links,
                 }
             }
             Part::Mixer => {
-                let bundled = self.bundled_mixer_software.clone();
+                let available = self.available_mixer_software();
                 let update = self
                     .app_update
-                    .mixer_update(runtime.as_deref(), bundled.as_deref());
+                    .mixer_update(runtime.as_deref(), available.as_deref());
                 let newest = update
                     .changelog
                     .as_ref()
                     .and_then(|c| c.entries.first())
                     .map(|e| e.version.clone())
-                    .or_else(|| bundled.clone())
+                    .or_else(|| available.clone())
                     .unwrap_or_else(|| unknown.clone());
                 Changes {
                     eyebrow: format!(
@@ -520,7 +535,7 @@ impl Rc2FxApp {
                     entry_prefix: "Mixer software",
                     changelog: update.changelog,
                     note: None,
-                    bundled,
+                    available,
                     links: vec![(
                         "All mixer updates",
                         format!("{MIXER_HISTORY_URL}#v{newest}"),
@@ -539,7 +554,7 @@ impl Rc2FxApp {
                 entry_prefix: "Version",
                 changelog: None,
                 note: Some("RØDE publishes the notes for this firmware on its website.".into()),
-                bundled: None,
+                available: None,
                 links: vec![("RØDE's release notes", RODE_NOTES_URL.to_owned())],
             },
         };

@@ -1,7 +1,7 @@
 //! Offline qualification tooling. Never extracts files, prepares an image,
 //! opens USB, or grants runtime support to an experimental board.
 use crate::{Result, bail, files, firmware};
-use rc2fx_firmware::{Catalog, DEFAULT_CATALOG, Model};
+use rc2fx_firmware::{Catalog, Model};
 use serde::Serialize;
 use std::{collections::HashMap, io::Read, path::Path};
 
@@ -20,7 +20,13 @@ pub struct Inspection {
 /// and the already-qualified executable ABI. A successful result for Duo is
 /// only offline evidence: `runtime_qualified` stays false.
 pub fn inspect_archive(model: Model, archive: &Path) -> Result<Inspection> {
-    let catalog = Catalog::parse(DEFAULT_CATALOG)?;
+    let bytes = crate::embed::catalog_bytes()?;
+    let catalog = Catalog::parse(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?)?;
+    inspect_archive_with_catalog(model, archive, &catalog)
+}
+
+/// Offline tooling can explicitly provide a catalog instead of downloading it.
+pub fn inspect_archive_with_catalog(model: Model, archive: &Path, catalog: &Catalog) -> Result<Inspection> {
     if std::fs::metadata(archive)?.len() > crate::MAX_DOWNLOAD {
         bail!("firmware exceeds size limit");
     }
@@ -114,9 +120,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("unknown.tar.gz");
         std::fs::write(&file, b"not firmware").unwrap();
+        let catalog = Catalog::parse(include_str!("../../../config/firmware-profiles.json")).unwrap();
         for model in Model::ALL {
             assert!(
-                inspect_archive(model, &file)
+                inspect_archive_with_catalog(model, &file, &catalog)
                     .unwrap_err()
                     .0
                     .contains("not pinned")

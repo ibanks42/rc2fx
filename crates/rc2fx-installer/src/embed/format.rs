@@ -368,6 +368,20 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    /// Parse a standalone payload, with no executable prefix or trailing bytes.
+    /// This validates structure and checksums, not publisher authenticity.
+    pub fn standalone(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_BODY + 256 || !bytes.starts_with(MAGIC.as_bytes()) {
+            return Err("invalid standalone mixer payload header or size".into());
+        }
+        let envelope = parse_at(bytes, 0)?;
+        if envelope.as_bytes() != bytes {
+            return Err("standalone mixer payload has trailing bytes".into());
+        }
+        envelope.bundle()?;
+        Ok(envelope)
+    }
+
     /// The payload these sources must embed.
     pub fn expected(root: &Path, release: bool) -> Result<Self, String> {
         let files = read(root, release)?;
@@ -634,6 +648,26 @@ mod tests {
         let files = payload(marker);
         validate(&view(&files)).unwrap();
         wrap(&body(&view(&files)))
+    }
+
+    #[test]
+    fn standalone_payload_requires_exact_framing_and_valid_contents() {
+        let bytes = wrapped(1);
+        assert!(Envelope::standalone(&bytes).is_ok());
+        let mut prefixed = b"executable".to_vec();
+        prefixed.extend_from_slice(&bytes);
+        assert!(Envelope::standalone(&prefixed).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(Envelope::standalone(&trailing).is_err());
+        assert!(Envelope::standalone(&bytes[..bytes.len() - 1]).is_err());
+        let mut damaged = bytes;
+        *damaged.last_mut().unwrap() ^= 1;
+        assert!(Envelope::standalone(&damaged).is_err());
+        let mut files = payload(1);
+        set(&mut files, "rc2fxd", b"not an ARM64 executable".to_vec());
+        // Correct envelope and file checksums must not bypass ELF validation.
+        assert!(Envelope::standalone(&wrap(&body(&view(&files)))).is_err());
     }
 
     #[test]

@@ -9,9 +9,10 @@ description = "Guided RØDECaster Pro II firmware preparation, USB update and RC
 [dependencies]
 flate2 = "1"
 getrandom = "0.3"
+jiff = "0.2"
 rc2fx-core = { path = "../rc2fx-core" }
 rc2fx-usb = { path = "../rc2fx-usb" }
-rc2fx-firmware = { path = "../rc2fx-firmware" }
+rc2fx-firmware = { path = "../rc2fx-firmware", default-features = false }
 md-5 = "0.10"
 plist = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
@@ -21,6 +22,8 @@ serde_json = "1"
 sha2 = "0.10"
 tar = { version = "0.4", default-features = false }
 tempfile = "3"
+tough = { version = "0.24", features = ["http"] }
+tokio = { version = "1", features = ["rt", "time", "net", "macros"] }
 url = "2"
 
 [target.'cfg(unix)'.dependencies]
@@ -35,6 +38,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Devices
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+
+[dev-dependencies]
+aws-lc-rs = "1"
 
 [features]
 # Embed the mixer runtime, catalog and scripts in this binary so the desktop

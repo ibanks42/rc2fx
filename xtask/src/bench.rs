@@ -142,7 +142,7 @@ pub fn run(input: &str, flags: &[&str]) -> Result {
     outcome?;
 
     let stem = input.file_stem().unwrap_or_default().to_string_lossy();
-    let out = root().join("target/bench").join(stem.as_ref());
+    let out = root().join("target/bench").join(&*stem);
     let _ = fs::remove_dir_all(&out);
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     unpack_results(&results?, &out)?;

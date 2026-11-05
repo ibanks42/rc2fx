@@ -6,6 +6,7 @@ use std::{collections::HashSet, path::Path};
 mod model;
 pub use model::Model;
 
+#[cfg(any(feature = "embedded-catalog", test))]
 pub const DEFAULT_CATALOG: &str = include_str!("../../../config/firmware-profiles.json");
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -25,6 +26,8 @@ pub struct Catalog {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Profile {
+    #[serde(default)]
+    pub minimum_app_version: String,
     pub id: String,
     pub model: String,
     pub version: String,

@@ -59,6 +59,11 @@ pub(crate) fn supported(p: &Profile) -> bool {
         && r.block_frames == 112
 }
 
+pub(crate) fn app_supports(p: &Profile, app_version: &str) -> bool {
+    p.minimum_app_version.is_empty() || matches!(crate::compare_versions(app_version, &p.minimum_app_version),
+        Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater))
+}
+
 fn valid_version(v: &str) -> bool {
     let parts: Vec<_> = v.split('.').collect();
     parts.len() == 3
@@ -421,13 +426,15 @@ pub(crate) fn releases_from_catalog(model: Model, c: &Catalog) -> Result<Vec<Rel
             p.version
         );
         all.push(Release {
+            minimum_app_version: p.minimum_app_version.clone(),
+            profile: p.id.clone(),
             model: model.id().into(),
             url: location_for_model(model, &format!("{base}/os.tar.gz"), "os.tar.gz", &p.version)?,
             digest_url: location_for_model(model, &format!("{base}/os.md5"), "os.md5", &p.version)?,
             version: p.version.clone(),
             // Every currently qualified catalog release is stable.
             channel: "stable".into(),
-            supported: true,
+            supported: app_supports(p, env!("CARGO_PKG_VERSION")),
         });
     }
     // Newest qualified stable release is the default, not catalog file order.
@@ -535,7 +542,7 @@ impl Engine {
         self.catalog()?
             .profiles
             .into_iter()
-            .find(|p| p.id == id && supported(p))
+            .find(|p| p.id == id && supported(p) && app_supports(p, env!("CARGO_PKG_VERSION")))
             .ok_or_else(|| crate::Error(format!("firmware profile {id} is not supported")))
     }
 

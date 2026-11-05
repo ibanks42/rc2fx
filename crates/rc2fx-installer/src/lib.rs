@@ -14,6 +14,7 @@
 pub mod app_update;
 pub mod control;
 pub mod embed;
+pub mod mixer_update;
 mod files;
 mod firmware;
 pub mod helper;
@@ -28,6 +29,16 @@ pub use platform::{Hid, Platform, Reports, Volume};
 pub use rc2fx_firmware::Model as DeviceModel;
 
 pub const DUO_WARNING: &str = "RØDECaster Duo support is experimental and has NOT been tested on hardware. Flashing, recovery and audio routing may fail, cause loud or incorrect audio, or leave the mixer unusable. Back up your RØDE show, disconnect speakers and headphones before testing, and proceed entirely at your own risk. Only Duo firmware is allowed; never flash Pro II firmware onto a Duo.";
+
+/// Retained build identity used by host package checks without launching a GUI.
+/// Call once from the application entrypoint so the linker retains the marker.
+pub fn payload_mode() -> &'static str {
+    #[cfg(feature = "embedded")]
+    let mode = "RC2FX-PAYLOAD-MODE:embedded:1";
+    #[cfg(not(feature = "embedded"))]
+    let mode = "RC2FX-PAYLOAD-MODE:download:1";
+    std::hint::black_box(mode)
+}
 pub use embed::{
     Catalog, Envelope, Identity, JobLifetime, Profile, RuntimeProfile, bundled_release,
     newest_supported_firmware,
@@ -90,6 +101,9 @@ pub(crate) use bail;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Release {
+    pub minimum_app_version: String,
+    /// Qualified firmware catalog ID used for signed mixer compatibility.
+    pub profile: String,
     pub model: String,
     pub channel: String,
     pub version: String,
@@ -204,6 +218,15 @@ pub enum Request {
     AllowExperimentalDuo(bool),
     Probe,
     Releases,
+    /// Discover authenticated mixer releases. Does not select or install one.
+    MixerReleases,
+    /// Independently authenticate the exact offer reviewed by the user.
+    SelectMixer {
+        offer: mixer_update::MixerOffer,
+        firmware_profile: String,
+    },
+    /// Explicitly select the optional compiled-in payload. No network fallback.
+    SelectBundledMixer,
     /// Keep `settings` (RC2FX's settings file, read over USB by the app) for
     /// the mixer `serial`.
     SaveSettings {
@@ -235,6 +258,8 @@ pub enum Request {
 pub enum Reply {
     Status(Box<Status>),
     Releases(Vec<Release>),
+    MixerReleases(Vec<mixer_update::MixerOffer>),
+    MixerSelected(Identity),
     Prepared(Prepared),
     Backup(BackupRecord),
     Done,
@@ -270,6 +295,17 @@ pub struct Engine {
 pub const CANCELLED: &str = "Cancelled.";
 
 impl Engine {
+    /// Download-only desktop installer; no checkout or bundled runtime fallback.
+    pub fn download_only(work: impl Into<PathBuf>) -> Self {
+        Self::with_source(embed::Source::Download, work)
+    }
+
+    /// Prepare firmware from authenticated, owned download bytes. The flashing
+    /// mechanism is identical to the embedded payload path.
+    pub fn verified(payload: mixer_update::VerifiedMixerPayload, work: impl Into<PathBuf>) -> Self {
+        Self::with_source(embed::Source::Verified(payload), work)
+    }
+
     /// An engine that installs from the payload embedded in this executable,
     /// caching in `work`. This is what the desktop app uses: nothing has to sit
     /// beside it.
@@ -359,6 +395,15 @@ impl Engine {
         let _guard = files::lock_action(&lock).map_err(|_| {
             Error("another RC2FX installer is working with this mixer folder".into())
         })?;
+        if matches!(self.source, embed::Source::Download)
+            && matches!(request, Request::Releases | Request::Prepare { .. } | Request::Verify | Request::EnterUsbMode { .. } | Request::Flash { .. }) {
+            let work = self.work.clone();
+            self.step("firmware-check", "Checking signed firmware profiles");
+            self.mixer_operation(async {
+                let repository = mixer_update::official(&work).await?;
+                mixer_update::refresh_catalog(&repository).await
+            })?;
+        }
         match request {
             Request::AllowExperimentalDuo(allow) => {
                 self.allow_experimental_duo = allow;
@@ -366,6 +411,37 @@ impl Engine {
             }
             Request::Probe => Ok(Reply::Status(Box::new(self.probe()?))),
             Request::Releases => Ok(Reply::Releases(self.releases()?)),
+            Request::MixerReleases => {
+                self.step("mixer-check", "Checking signed mixer releases");
+                let work = self.work.clone();
+                let offers = self.mixer_operation(async {
+                    let repository = mixer_update::official(&work).await?;
+                    mixer_update::refresh_catalog(&repository).await?;
+                    repository.offers()
+                })?;
+                Ok(Reply::MixerReleases(offers))
+            }
+            Request::SelectMixer { offer, firmware_profile } => {
+                self.step("mixer-download", "Downloading and verifying mixer software");
+                // An unsuccessful selection cannot leave an old payload silently selected.
+                self.source = embed::Source::Download;
+                let work = self.work.clone();
+                let payload = self.mixer_operation(async {
+                    mixer_update::official(&work).await?.accept_cached(&offer,
+                        env!("CARGO_PKG_VERSION"), rc2fx_core::MIXER_PROTOCOL_VERSION,
+                        &firmware_profile, &mixer_update::metadata_directory(&work)?.join("payloads")).await
+                })?;
+                let identity = embed::identity_of("download", &payload.bundle).map_err(Error)?;
+                self.source = embed::Source::Verified(payload);
+                Ok(Reply::MixerSelected(identity))
+            }
+            Request::SelectBundledMixer => {
+                // Match downloaded selection: failure must discard the old choice.
+                self.source = embed::Source::Download;
+                let identity = embed::identity()?;
+                self.source = embed::Source::Embedded;
+                Ok(Reply::MixerSelected(identity))
+            }
             Request::SaveSettings { serial, settings } => {
                 Ok(Reply::Backup(self.save_settings(&serial, &settings)?))
             }

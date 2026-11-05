@@ -28,6 +28,8 @@ pub struct RuntimeProfile {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
+    #[serde(rename = "minimumAppVersion")]
+    pub minimum_app_version: String,
     pub id: String,
     pub model: String,
     pub version: String,

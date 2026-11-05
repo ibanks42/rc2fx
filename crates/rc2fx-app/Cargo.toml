@@ -11,9 +11,8 @@ name = "rc2fx"
 path = "src/main.rs"
 
 [features]
-default = ["embedded"]
-# Embed the installer payload (the mixer runtime). Every real build does;
-# `cargo check --no-default-features` checks the code without building it.
+default = []
+# Optional offline payload. Normal builds download authenticated mixer releases.
 embedded = ["rc2fx-installer/embedded"]
 
 [dependencies]

@@ -8,6 +8,7 @@ use rc2fx_installer::app_update::{
     self, APP_HISTORY_URL, APP_RELEASES_URL, Changelog, ChangelogStatus, MIXER_HISTORY_URL,
     MixerUpdate, UpdateCheck, UpdateSnapshot,
 };
+use rc2fx_installer::{Engine, Reply, Request, mixer_update, mixer_update::MixerOffer};
 
 #[derive(Default)]
 pub(super) struct AppUpdate {
@@ -15,6 +16,10 @@ pub(super) struct AppUpdate {
     /// The last result, and whether the user asked for it. A failed check
     /// at startup stays quiet; one the user asked for says what went wrong.
     last: Option<(UpdateSnapshot, bool)>,
+    /// The latest authenticated mixer releases. The feed in `last` can't say
+    /// what this app may install; only these can. `None` until a check
+    /// answers.
+    signed: Option<Vec<MixerOffer>>,
 }
 
 impl AppUpdate {
@@ -38,17 +43,26 @@ impl AppUpdate {
         }
     }
 
-    /// Compare a mixer with what is bundled and, once a check has answered,
-    /// published. It needs no network, so it works before the first check.
+    /// Compare a mixer with what this app can install and, once a check has
+    /// answered, published. It needs no network, so it works before the first
+    /// check.
     pub(super) fn mixer_update(
         &self,
         installed: Option<&str>,
-        bundled: Option<&str>,
+        available: Option<&str>,
     ) -> MixerUpdate {
         match &self.last {
-            Some((snapshot, _)) => snapshot.mixer_update(installed, bundled),
-            None => UpdateSnapshot::unchecked().mixer_update(installed, bundled),
+            Some((snapshot, _)) => snapshot.mixer_update(installed, available),
+            None => UpdateSnapshot::unchecked().mixer_update(installed, available),
         }
+    }
+
+    pub(super) fn signed(&self) -> Option<&[MixerOffer]> {
+        self.signed.as_deref()
+    }
+
+    pub(super) fn set_signed(&mut self, offers: Vec<MixerOffer>) {
+        self.signed = Some(offers);
     }
 
     /// The status line under "Check for updates"; `None` shows nothing.
@@ -87,6 +101,21 @@ impl AppUpdate {
 
     pub(super) fn checking(&self) -> bool {
         self.checking
+    }
+}
+
+/// Ask the signed repository what this app could install. `None` when it
+/// can't say; the last answer stands, and the installer can always ask again.
+fn signed_mixers() -> Option<Vec<MixerOffer>> {
+    if !mixer_update::configured() {
+        return None;
+    }
+    // Its own folder: the engine holds its folder's lock for a whole request,
+    // network included, and the installer page must not wait for this check.
+    let work = installer::work_directory()?.join("update-check");
+    match Engine::download_only(work).handle(Request::MixerReleases) {
+        Ok(Reply::MixerReleases(offers)) => Some(offers),
+        _ => None,
     }
 }
 
@@ -160,6 +189,20 @@ impl Rc2FxApp {
             });
         })
         .detach();
+        // Separate, so a slow download host never holds up the app's answer.
+        cx.spawn(async move |this, cx| {
+            let signed = cx
+                .background_executor()
+                .spawn(async { signed_mixers() })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if let Some(signed) = signed {
+                    app.app_update.set_signed(signed);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 }
 
@@ -228,6 +271,7 @@ mod tests {
     fn after(result: UpdateCheck, manual: bool) -> AppUpdate {
         AppUpdate {
             checking: false,
+            signed: None,
             last: Some((result.into(), manual)),
         }
     }
@@ -287,7 +331,7 @@ mod tests {
     fn checking_is_shown_while_running() {
         let a = AppUpdate {
             checking: true,
-            last: None,
+            ..Default::default()
         };
         assert_eq!(a.status().as_deref(), Some("Checking…"));
         assert_eq!(AppUpdate::default().status(), None);

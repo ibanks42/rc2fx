@@ -92,7 +92,7 @@ fn load() -> std::result::Result<Payload, String> {
     Ok(Payload { bundle, identity })
 }
 
-fn identity_of(kind: &str, bundle: &Bundle) -> std::result::Result<Identity, String> {
+pub(crate) fn identity_of(kind: &str, bundle: &Bundle) -> std::result::Result<Identity, String> {
     let catalog = bundle
         .get("firmware-profiles.json")
         .ok_or("the payload has no firmware catalog")?;
@@ -139,9 +139,26 @@ pub(crate) fn embedded_bundle() -> Result<Cow<'static, Bundle>> {
     Ok(Cow::Borrowed(&payload()?.bundle))
 }
 
+pub(crate) fn catalog_bytes() -> Result<Vec<u8>> {
+    if PRESENT {
+        return Ok(payload()?.bundle["firmware-profiles.json"].clone());
+    }
+    crate::mixer_update::cached_catalog_bytes()
+}
+
 /// Whether RC2FX's state (as the app's USB connection reads it) says this
 /// payload's runtime is ready, the way the app asks about a folder's payload.
 pub fn service(state: &[u8]) -> Service {
+    if !PRESENT {
+        return match Source::Download.catalog().ok().and_then(|c|
+            c.profiles.into_iter().find(crate::firmware::supported).and_then(|p| p.runtime)) {
+            Some(profile) => match runtime::readiness_error(state, &profile) {
+                why if why.is_empty() => Service::Ready,
+                detail => Service::Starting { detail },
+            },
+            None => Service::Starting { detail: "No qualified runtime profile".into() },
+        };
+    }
     match PAYLOAD.get_or_init(load) {
         Ok(payload) => runtime::service(&payload.bundle, state),
         // Fail closed: a payload that cannot be read says why the runtime is
@@ -177,7 +194,8 @@ pub fn bundled_release() -> Result<rc2fx_core::MixerRelease> {
 /// the profile is not in the bundled catalog, or nothing is supported for
 /// that model.
 pub fn newest_supported_firmware(firmware_profile: &str) -> Option<String> {
-    let catalog = Source::Embedded.catalog().ok()?;
+    let source = if PRESENT { Source::Embedded } else { Source::Download };
+    let catalog = source.catalog().ok()?;
     newest_supported(&catalog, firmware_profile)
 }
 
@@ -190,7 +208,8 @@ fn newest_supported(catalog: &Catalog, firmware_profile: &str) -> Option<String>
     catalog
         .profiles
         .iter()
-        .filter(|p| &p.model == model && crate::firmware::supported(p))
+        .filter(|p| &p.model == model && crate::firmware::supported(p)
+            && crate::firmware::app_supports(p, env!("CARGO_PKG_VERSION")))
         .map(|p| p.version.as_str())
         .filter(|v| rc2fx_core::compare_versions(v, v).is_some())
         .max_by(|a, b| rc2fx_core::compare_versions(a, b).expect("both versions are comparable"))
@@ -200,12 +219,16 @@ fn newest_supported(catalog: &Catalog, firmware_profile: &str) -> Option<String>
 /// Where an installer's payload and catalog come from.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Source {
+    /// Download-only desktop before a signed payload has been selected.
+    Download,
     /// A release folder or a source checkout: `runtime/` (or `target/mixer`),
     /// `xtask/mixer` and `config/`. Developer tools and tests only.
     Folder(PathBuf),
     /// The payload compiled into this executable.
     #[cfg_attr(not(feature = "embedded"), allow(dead_code))]
     Embedded,
+    /// Authenticated remote payload, held in memory throughout preparation.
+    Verified(crate::mixer_update::VerifiedMixerPayload),
 }
 
 impl Source {
@@ -215,15 +238,18 @@ impl Source {
 
     pub(crate) fn bundle(&self) -> Result<Cow<'static, Bundle>> {
         match self {
+            Source::Download => Err(Error("Select and verify a mixer software download before preparing firmware".into())),
             Source::Folder(root) => Ok(Cow::Owned(runtime::bundle_from_disk(root)?)),
             Source::Embedded => embedded_bundle(),
+            Source::Verified(payload) => Ok(Cow::Owned((*payload.bundle).clone())),
         }
     }
 
     pub(crate) fn catalog(&self) -> Result<Catalog> {
         match self {
+            Source::Download => crate::mixer_update::cached_catalog(),
             Source::Folder(root) => catalog_from_disk(root),
-            Source::Embedded => {
+            Source::Embedded | Source::Verified(_) => {
                 let bundle = self.bundle()?;
                 let data = bundle
                     .get("firmware-profiles.json")
@@ -242,14 +268,14 @@ impl Source {
     pub(crate) fn config(&self) -> HashMap<String, String> {
         match self {
             Source::Folder(root) => crate::mixer_config(root),
-            Source::Embedded => HashMap::new(),
+            Source::Download | Source::Embedded | Source::Verified(_) => HashMap::new(),
         }
     }
 
     pub(crate) fn ssh_key(&self) -> PathBuf {
         match self {
             Source::Folder(root) => crate::ssh_key(root),
-            Source::Embedded => crate::default_key(),
+            Source::Download | Source::Embedded | Source::Verified(_) => crate::default_key(),
         }
     }
 

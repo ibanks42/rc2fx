@@ -14,31 +14,48 @@ Open installer**.
 - Audio stops while the mixer updates, and the update takes a few minutes.
 - Keep the mixer switched on and connected to USB 1 until the installer
   reports that RC2FX is installed.
-- The computer needs an internet connection to download the firmware from
-  RØDE.
+- The computer needs an internet connection to check signed mixer releases,
+  download RC2FX from GitHub, and download the firmware from RØDE.
 - On Linux, the installer asks for administrator access first. Press
   **Grant access** and enter your password when the system prompts for it.
 
 ## Install steps
 
-Choose **RC2FX firmware** and a version, press **Install…** (or **Update…**)
-and confirm. The version you choose is RØDE's firmware; the RC2FX mixer
-software installed with it is always the one bundled with this app (see
-[Versions and updates](getting-started.md#versions-and-updates)). The installer
-then runs these steps. If a step fails, the
+Choose **RC2FX firmware**, the RØDE firmware version, and the RC2FX mixer
+software to install. The mixer software menu lists signed releases compatible
+with this app and the chosen firmware. Check the installed and offered versions,
+press **Install…** (or **Update…**), and confirm. Selecting an older version
+requires an explicit downgrade confirmation.
+
+Firmware profiles are downloaded as signed metadata from GitHub. If a mixer
+release or firmware profile needs a newer app, the installer shows the minimum
+version and asks you to update the app first. Without a verified catalog, a
+download-only build offers no firmware choices.
+
+Normal app builds download mixer software separately. A build made with the
+optional embedded payload also offers its bundled version as an explicit choice.
+A failed download never silently substitutes that version. See
+[Versions and updates](getting-started.md#versions-and-updates).
+
+The installer then runs these steps. If a step fails, the
 installer stops, and **Retry** continues from that step.
 
 1. **Save settings.** If RC2FX is already running, its settings and presets
    are copied to the computer so the new install keeps them.
-2. **Prepare firmware.** The installer downloads the chosen version from
+2. **Mixer software.** The installer downloads and verifies the selected
+   release, including its signature, checksum, and compatibility. On Linux,
+   the administrator helper independently verifies the same release. Previously
+   downloaded files are checked again before reuse. The optional bundled choice
+   is checked locally instead. No mixer changes happen during this step.
+3. **Prepare firmware.** The installer downloads the chosen version from
    RØDE, verifies it, and builds a copy with RC2FX and your settings added.
    The mixer is unchanged at this point.
-3. **Switch to USB update mode.** The mixer stops audio and shows "Updating
+4. **Switch to USB update mode.** The mixer stops audio and shows "Updating
    via USB". Nothing has been written yet.
-4. **Flash firmware.** The installer copies the firmware to the mixer and
+5. **Flash firmware.** The installer copies the firmware to the mixer and
    starts the install. Up to this step, switching the mixer off for 30
    seconds brings it back on its previous firmware.
-5. **Wait for RC2FX.** The mixer installs the update and usually restarts
+6. **Wait for RC2FX.** The mixer installs the update and usually restarts
    three times: to install, to update its internal controllers, and to start
    normally. Don't touch it during this time. The installer finishes when
    RC2FX reports that it is running with your settings.

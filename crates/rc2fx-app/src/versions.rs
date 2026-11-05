@@ -2,21 +2,67 @@
 //! firmware are versioned separately. A version the mixer did not report is
 //! unknown: it is never treated as older or newer than anything.
 use rc2fx_installer::app_update::MixerUpdateState;
+use rc2fx_installer::mixer_update::MixerOffer;
 use std::cmp::Ordering;
 
 pub use rc2fx_core::compare_versions as compare;
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The RC2FX mixer software this app installs; `None` without a payload.
+/// The RC2FX mixer software built into this app; `None` without a payload.
 pub fn bundled_mixer_software() -> Option<String> {
     rc2fx_installer::bundled_release().ok().map(|r| r.version)
+}
+
+/// Whether this app can install a signed offer on firmware `profile`.
+pub fn offer_fits(offer: &MixerOffer, profile: &str) -> bool {
+    offer
+        .metadata
+        .require_compatible(APP_VERSION, rc2fx_core::MIXER_PROTOCOL_VERSION, profile)
+        .is_ok()
+}
+
+/// The newest version this app could install, signed or built in. The
+/// firmware may change in the same flash, so any firmware the offer supports
+/// counts.
+pub fn newest_available(offers: &[MixerOffer], bundled: Option<&str>) -> Option<String> {
+    offers
+        .iter()
+        .filter(|offer| {
+            offer
+                .metadata
+                .firmware_profiles
+                .iter()
+                .any(|profile| offer_fits(offer, profile))
+        })
+        .map(|offer| offer.metadata.version.as_str())
+        .chain(bundled)
+        .filter(|version| compare(version, version).is_some())
+        .max_by(|a, b| compare(a, b).expect("both versions are comparable"))
+        .map(str::to_owned)
 }
 
 /// The newest supported RØDE firmware for the same model as the mixer's
 /// reported firmware profile; `None` when that is unknown.
 pub fn newest_supported_firmware(firmware_profile: Option<&str>) -> Option<String> {
     firmware_profile.and_then(rc2fx_installer::newest_supported_firmware)
+}
+
+/// Whether `minimum` rules out this app.
+pub fn app_too_old(minimum: &str) -> bool {
+    compare(APP_VERSION, minimum) == Some(Ordering::Less)
+}
+
+/// A signed release newer than `available` that only a newer app can install,
+/// as its version and the app version it needs.
+pub fn needs_newer_app(offers: &[MixerOffer], available: Option<&str>) -> Option<(String, String)> {
+    offers
+        .iter()
+        .map(|offer| &offer.metadata)
+        .filter(|m| app_too_old(&m.minimum_app_version))
+        .filter(|m| available.is_none_or(|a| compare(&m.version, a) == Some(Ordering::Greater)))
+        .max_by(|a, b| compare(&a.version, &b.version).unwrap_or(Ordering::Equal))
+        .map(|m| (m.version.clone(), m.minimum_app_version.clone()))
 }
 
 /// How an installed version relates to the one available here.
@@ -53,8 +99,8 @@ pub enum Compatibility {
     /// Not reported (older mixer software, or not connected).
     Unknown,
     Compatible,
-    /// The mixer software is older than this app supports; installing the
-    /// bundled mixer software fixes it.
+    /// The mixer software is older than this app supports; installing
+    /// compatible mixer software fixes it.
     MixerOlder,
     /// The mixer software is newer than this app; only an app update helps.
     MixerNewer,
@@ -87,7 +133,7 @@ impl Summary {
     pub fn update_available(&self) -> bool {
         use Standing::{Current, UpdateAvailable};
         if self.compatibility == Compatibility::MixerOlder {
-            // The bundled mixer software is the fix, as long as the combined
+            // Compatible mixer software is the fix, as long as the combined
             // image would not take the firmware backwards.
             return self.runtime != Standing::Newer
                 && matches!(self.firmware, Current | UpdateAvailable);
@@ -105,7 +151,7 @@ impl Summary {
             return Some(Notice {
                 text: if offer_installer {
                     "The RC2FX mixer software on this mixer is older than this app supports. \
-                     Installing the bundled mixer software flashes the mixer, which then \
+                     Installing compatible mixer software flashes the mixer, which then \
                      restarts; audio stops until it is back. Your drafts are kept."
                 } else {
                     "The RC2FX mixer software on this mixer is older than this app supports, \
@@ -136,9 +182,9 @@ impl Summary {
         if let Some(newer) = newer {
             return Some(Notice {
                 text: format!(
-                    "This mixer has {newer} than this app installs. The installer flashes \
-                     RC2FX mixer software and RØDE firmware together, so installing from \
-                     this app would replace it with older versions. Update the app first."
+                    "This mixer has {newer} than this app can install. The installer \
+                     flashes RC2FX mixer software and RØDE firmware together, so installing \
+                     from this app would replace it with older versions. Update the app first."
                 ),
                 offer_installer: false,
             });
@@ -166,7 +212,14 @@ impl Summary {
 pub struct Inputs<'a> {
     pub app: &'a str,
     pub installed_runtime: Option<&'a str>,
-    pub bundled_runtime: Option<&'a str>,
+    /// The newest mixer software this app could install, signed or built in.
+    pub available_runtime: Option<&'a str>,
+    /// A signed release check has answered, so what isn't in
+    /// [`Inputs::available_runtime`] really isn't available to this app.
+    pub signed_known: bool,
+    /// Newer signed mixer software that needs a newer app, and the app
+    /// version it needs.
+    pub needs_app: Option<(&'a str, &'a str)>,
     pub installed_firmware: Option<&'a str>,
     pub newest_supported_firmware: Option<&'a str>,
     pub device_protocol: Option<u32>,
@@ -174,7 +227,7 @@ pub struct Inputs<'a> {
 
 pub fn summarize(i: &Inputs) -> Summary {
     Summary {
-        runtime: standing(i.installed_runtime, i.bundled_runtime),
+        runtime: standing(i.installed_runtime, i.available_runtime),
         firmware: standing(i.installed_firmware, i.newest_supported_firmware),
         compatibility: compatibility(i.device_protocol),
     }
@@ -235,8 +288,9 @@ pub struct Overview {
     pub flag_tone: Tone,
     /// Why nothing can be installed, and what a newer app would bring.
     pub details: Vec<String>,
-    /// Whether to offer the installer. This comes only from what this app
-    /// bundles: published versions can never change it.
+    /// Whether to offer the installer: this app can install something newer,
+    /// or only its signed release check can tell. The update feed is never
+    /// enough. Opening the installer changes nothing on the mixer.
     pub offer_installer: bool,
 }
 
@@ -246,13 +300,21 @@ const BLOCKED: (&str, Tone) = ("Blocked", Tone::Warn);
 const NEWER: (&str, Tone) = ("Newer", Tone::Warn);
 const UNKNOWN: (&str, Tone) = ("Unknown", Tone::Unknown);
 
-fn mixer_status(s: &Summary, mixer: &MixerUpdateState) -> ((&'static str, Tone), bool) {
+fn mixer_status(
+    s: &Summary,
+    mixer: &MixerUpdateState,
+    signed_known: bool,
+) -> ((&'static str, Tone), bool) {
     if s.compatibility == Compatibility::MixerNewer {
         return (("Update the app", Tone::Warn), false);
     }
     let too_old = s.compatibility == Compatibility::MixerOlder;
     match mixer {
-        MixerUpdateState::AppUpdateRequired { .. } => (("Needs app update", Tone::Warn), true),
+        MixerUpdateState::AppUpdateRequired { .. } if signed_known => {
+            (("Needs app update", Tone::Warn), true)
+        }
+        // A signed release may carry it: only that check can say.
+        MixerUpdateState::AppUpdateRequired { .. } => (UNKNOWN, true),
         MixerUpdateState::Newer => (NEWER, false),
         MixerUpdateState::Bundled { .. } | MixerUpdateState::BundledThenApp { .. } => {
             let status = match (s.update_available(), too_old) {
@@ -299,7 +361,11 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
         AppStanding::Current { latest } => (latest.clone(), UP_TO_DATE, false),
         AppStanding::Update { version } => (version.clone(), UPDATE, true),
     };
-    let ((mixer_text, mixer_tone), mixer_read) = mixer_status(&s, mixer);
+    let ((mixer_text, mixer_tone), mixer_read) = match i.needs_app {
+        // What can be installed now comes first; the note below says the rest.
+        Some(_) if !s.update_available() => (("Needs app update", Tone::Warn), false),
+        _ => mixer_status(&s, mixer, i.signed_known),
+    };
     let ((firmware_text, firmware_tone), firmware_read) = firmware_status(&s);
     let lines = vec![
         Line {
@@ -315,9 +381,10 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
             part: Part::Mixer,
             name: "Mixer software",
             installed: show(i.installed_runtime),
-            available: match mixer {
-                MixerUpdateState::AppUpdateRequired { latest, .. } => latest.clone(),
-                _ => show(i.bundled_runtime),
+            available: match (i.needs_app, mixer) {
+                (Some((version, _)), _) => version.to_owned(),
+                (_, MixerUpdateState::AppUpdateRequired { latest, .. }) => latest.clone(),
+                _ => show(i.available_runtime),
             },
             status: mixer_text,
             tone: mixer_tone,
@@ -348,14 +415,29 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
         latest,
         app_version,
     } = mixer
+        && i.signed_known
+        && i.needs_app.is_none()
     {
         details.push(format!(
-            "Mixer software {latest} comes with RC2FX {app_version}. Update the app to get it."
+            "Mixer software {latest} isn't available for this app. Update to RC2FX {app_version} to get it."
+        ));
+    }
+    if let Some((version, minimum)) = i.needs_app {
+        details.push(format!(
+            "Mixer software {version} needs RC2FX {minimum} or newer. Update the app first."
         ));
     }
     let connected = i.installed_runtime.is_some() || i.installed_firmware.is_some();
     if connected && *mixer == MixerUpdateState::Unknown {
         details.push("The latest published mixer software is unknown.".into());
+    }
+    let check_in_installer = connected
+        && !i.signed_known
+        && s.compatibility != Compatibility::MixerNewer
+        && s.runtime != Standing::Newer
+        && s.firmware != Standing::Newer;
+    if check_in_installer {
+        details.push("Open the installer to check for signed mixer software.".into());
     }
     let updates = lines.iter().filter(|l| l.tone == Tone::Update).count();
     let worst = lines.iter().map(|l| l.tone).max().unwrap_or(Tone::Unknown);
@@ -377,7 +459,7 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
         flag,
         flag_tone,
         details,
-        offer_installer: notice.is_some_and(|n| n.offer_installer),
+        offer_installer: check_in_installer || notice.is_some_and(|n| n.offer_installer),
     }
 }
 
@@ -389,7 +471,9 @@ mod tests {
         Inputs {
             app: "0.3.0",
             installed_runtime: rt,
-            bundled_runtime: Some("0.3.0"),
+            available_runtime: Some("0.3.0"),
+            signed_known: true,
+            needs_app: None,
             installed_firmware: fw,
             newest_supported_firmware: Some("1.8.0"),
             device_protocol: Some(rc2fx_core::MIXER_PROTOCOL_VERSION),
@@ -407,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn older_protocol_offers_the_bundled_mixer_software() {
+    fn older_protocol_offers_compatible_mixer_software() {
         let mut i = inputs(Some("0.2.0"), Some("1.8.0"));
         i.device_protocol = Some(rc2fx_core::MIXER_PROTOCOL_VERSION - 1);
         let s = summarize(&i);
@@ -512,6 +596,111 @@ mod tests {
 
     fn line(o: &Overview, part: Part) -> &Line {
         o.lines.iter().find(|l| l.part == part).unwrap()
+    }
+
+    fn offer(version: &str, minimum_app: &str, protocol: u32) -> MixerOffer {
+        MixerOffer {
+            target: format!("mixer-{version}.payload"),
+            sha256: "00".repeat(32),
+            length: 1,
+            metadata: rc2fx_installer::mixer_update::MixerTarget {
+                version: version.into(),
+                payload_format: 1,
+                protocol_version: protocol,
+                minimum_app_version: minimum_app.into(),
+                firmware_profiles: vec!["rodecaster-pro-ii-1.7.7".into()],
+            },
+        }
+    }
+
+    #[test]
+    fn only_compatible_offers_count_as_available() {
+        let protocol = rc2fx_core::MIXER_PROTOCOL_VERSION;
+        let offers = [
+            offer("9.0.0", "99.0.0", protocol),
+            offer("8.0.0", "0.0.1", protocol + 1),
+            offer("2.0.0", "0.0.1", protocol),
+        ];
+        assert_eq!(newest_available(&offers, None).as_deref(), Some("2.0.0"));
+        assert_eq!(
+            newest_available(&offers, Some("3.0.0")).as_deref(),
+            Some("3.0.0"),
+            "a newer built-in copy is available too"
+        );
+        assert_eq!(newest_available(&[], None), None);
+    }
+
+    #[test]
+    fn newer_software_that_needs_a_newer_app_is_named_with_the_version_it_needs() {
+        let protocol = rc2fx_core::MIXER_PROTOCOL_VERSION;
+        let offers = [
+            offer("9.0.0", "99.0.0", protocol),
+            offer("2.0.0", "0.0.1", protocol),
+        ];
+        let needed = Some(("9.0.0".to_owned(), "99.0.0".to_owned()));
+        assert_eq!(needs_newer_app(&offers, Some("2.0.0")), needed);
+        assert_eq!(needs_newer_app(&offers, None), needed);
+        assert_eq!(needs_newer_app(&offers, Some("9.0.0")), None);
+        assert_eq!(needs_newer_app(&offers[1..], Some("1.0.0")), None);
+
+        let mut i = inputs(Some("0.3.0"), Some("1.8.0"));
+        i.needs_app = Some(("9.0.0", "99.0.0"));
+        let o = overview(&i, &current(), &MixerUpdateState::Current);
+        let mixer = line(&o, Part::Mixer);
+        assert_eq!(
+            (mixer.status, mixer.available.as_str()),
+            ("Needs app update", "9.0.0")
+        );
+        assert!(!o.offer_installer, "nothing here can install it");
+        assert!(o.details.iter().any(|d| d.contains("RC2FX 99.0.0")));
+    }
+
+    #[test]
+    fn what_can_be_installed_now_still_comes_first() {
+        let mut i = inputs(Some("0.2.0"), Some("1.8.0"));
+        i.needs_app = Some(("9.0.0", "99.0.0"));
+        let state = MixerUpdateState::Bundled {
+            version: "0.3.0".into(),
+        };
+        let o = overview(&i, &current(), &state);
+        assert_eq!(line(&o, Part::Mixer).status, "Update available");
+        assert!(o.offer_installer);
+        assert!(o.details.iter().any(|d| d.contains("RC2FX 99.0.0")));
+    }
+
+    #[test]
+    fn a_signed_update_needs_no_payload_in_the_app() {
+        let mut i = inputs(Some("0.2.0"), Some("1.8.0"));
+        i.available_runtime = Some("0.3.0");
+        let state = MixerUpdateState::Bundled {
+            version: "0.3.0".into(),
+        };
+        let o = overview(&i, &current(), &state);
+        assert!(o.offer_installer);
+        assert_eq!(line(&o, Part::Mixer).status, "Update available");
+    }
+
+    #[test]
+    fn without_a_signed_answer_the_app_is_not_blamed_and_the_installer_can_check() {
+        let mut i = inputs(Some("0.3.0"), Some("1.8.0"));
+        i.available_runtime = None;
+        i.signed_known = false;
+        let state = MixerUpdateState::AppUpdateRequired {
+            latest: "0.4.0".into(),
+            app_version: "0.4.0".into(),
+        };
+        let o = overview(&i, &current(), &state);
+        assert_eq!(line(&o, Part::Mixer).status, "Unknown");
+        assert!(o.offer_installer);
+        assert!(o.details.iter().all(|d| !d.contains("RC2FX 0.4.0")));
+        assert!(
+            o.details
+                .iter()
+                .any(|d| d.contains("signed mixer software"))
+        );
+        // Newer than anything known: nothing to look for.
+        i.installed_firmware = Some("1.9.0");
+        assert!(!overview(&i, &current(), &MixerUpdateState::Unknown).offer_installer);
     }
 
     #[test]

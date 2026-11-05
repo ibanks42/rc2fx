@@ -14,6 +14,20 @@ use std::{
 
 const VOLUME_TOTAL: u64 = 283_189_248;
 
+#[test]
+fn failed_bundled_selection_discards_previous_source() {
+    // The installer test executable has no appended payload. Start with a
+    // local source and ensure a missing bundled choice cannot retain it.
+    let work = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::with_platform(
+        root.path(), work.path(), Box::new(FakePlatform(Default::default())),
+    );
+    assert!(!matches!(engine.source, embed::Source::Download));
+    assert!(engine.handle(Request::SelectBundledMixer).is_err());
+    assert!(matches!(engine.source, embed::Source::Download));
+}
+
 fn put(path: &Path, data: &[u8]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, data).unwrap();
@@ -765,7 +779,7 @@ fn duo_is_recognized_but_never_opened_or_flashed_without_opt_in() {
 #[test]
 fn release_discovery_keeps_same_version_models_separate() {
     use rc2fx_firmware::Model;
-    let catalog: Catalog = serde_json::from_str(rc2fx_firmware::DEFAULT_CATALOG).unwrap();
+    let catalog: Catalog = serde_json::from_str(include_str!("../../../config/firmware-profiles.json")).unwrap();
     for model in Model::ALL {
         let releases = firmware::releases_from_catalog(model, &catalog).unwrap();
         assert_eq!(releases.len(), 2);
@@ -944,7 +958,7 @@ fn action_lock_is_exclusive_and_released() {
 
 #[test]
 fn releases_are_offline_and_only_offer_qualified_catalog_entries() {
-    let mut catalog: Catalog = serde_json::from_str(rc2fx_firmware::DEFAULT_CATALOG).unwrap();
+    let mut catalog: Catalog = serde_json::from_str(include_str!("../../../config/firmware-profiles.json")).unwrap();
     catalog
         .profiles
         .iter_mut()
