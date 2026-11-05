@@ -314,8 +314,15 @@ class Prepare(InTemp):
             for path in Path(".release-input").iterdir():
                 path.unlink()
 
+    def test_already_versioned_release_can_tag_the_exact_source(self):
+        gh = FakeGh()
+        gh.commit.update(sha=SOURCE, commit={"message": "fix(release): initial notes"},
+                         parents=[{"sha": "c" * 40}])
+        self.assertEqual(self.outputs(gh)["ready"], "true")
+
     def test_a_tag_that_is_not_the_release_commit_on_the_source_is_refused(self):
         for change in [
+            lambda gh: gh.commit.update(sha="c" * 40, commit={"message": "fix: unrelated"}),
             lambda gh: gh.commit.update(parents=[{"sha": "c" * 40}]),
             lambda gh: gh.commit.update(parents=[{"sha": SOURCE}, {"sha": "d" * 40}]),
             lambda gh: gh.commit.update(commit={"message": "feat: something"}),

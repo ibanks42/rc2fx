@@ -11,7 +11,7 @@ published release is never changed afterwards by this script.
   prepare --run-id N [--automatic]
       Check that run N is a successful Release run on main, download its
       release-input artifact to .release-input, and check that its tag is the
-      release commit on top of its source and has a draft release. Writes
+      source itself or the release commit on top of it and has a draft release. Writes
       source, tag and ready to GITHUB_OUTPUT. With --automatic, a run that
       created no release (a dry run) gives ready=false. A release that is
       already published and complete also gives ready=false. One published by
@@ -194,9 +194,13 @@ def refuse_if_behind(gh, tag):
 
 
 def check_tag(gh, tag, source):
-    """TAG must point at the release commit on top of SOURCE."""
+    """TAG must point at SOURCE or its version-bump release commit."""
     commit = gh.api(f"commits/{tag}")
     require(commit is not None, f"tag {tag} has no commit")
+    # An already-versioned initial release needs no additional commit. The
+    # successful parent run and its immutable input artifact pin this source.
+    if commit.get("sha") == source:
+        return
     message = (commit.get("commit") or {}).get("message", "")
     require(message.split("\n", 1)[0] == f"chore(release): {tag}",
             f"tag {tag} is not on the release commit")
