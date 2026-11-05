@@ -1703,6 +1703,26 @@ xrun_trace() {
       echo 0 > "$instance/tracing_on"
       echo calibration > "$dir/stopped-manually"
       ;;
+    avoid-driver)
+      test -d "$dir" && test $# -gt 0 || return 1
+      pid=$(sed -n '1s/mixer=\([0-9]*\).*/\1/p' "$dir/identity")
+      for tid in "$@"; do
+        [[ $tid =~ ^[1-9][0-9]*$ ]] && test -d "/proc/$pid/task/$tid" || return 2
+        test "$(cat "/proc/$tid/comm")" = USBOutJckThread || return 2
+        filter=$(awk '/^Cpus_allowed:/ {gsub(",", "", $2); print $2}' "/proc/$tid/status")
+        gui=$(printf '%x' "$((16#$filter & ~4))")
+        test "$gui" != 0 || return 2
+        printf '%s %s %s %s\n' "$tid" "$filter" "$(awk '{print $22}' "/proc/$tid/stat")" "$pid" >> "$dir/saved-affinity"
+        taskset -p "$gui" "$tid" >&2
+      done
+      jack=$(sed -n '1s/.*jack=\([0-9]*\) callback.*/\1/p' "$dir/identity")
+      tid=$(awk -v pid="$jack" '$1==pid && $3=="FF" && $4==51 {print $2}' "$dir/arm-threads")
+      [[ $tid =~ ^[1-9][0-9]*$ ]] && test -d "/proc/$jack/task/$tid" || return 2
+      filter=$(awk '/^Cpus_allowed:/ {gsub(",", "", $2); print $2}' "/proc/$tid/status")
+      test "$((16#$filter & 4))" != 0 || return 2
+      printf '%s %s %s %s\n' "$tid" "$filter" "$(awk '{print $22}' "/proc/$tid/stat")" "$jack" >> "$dir/saved-affinity"
+      taskset -p 4 "$tid" >&2
+      ;;
     self-test)
       test $# -eq 1 && [[ $1 =~ ^[0-9]+$ ]] || return 2
       test -d "$dir" && test "$(cat "$instance/tracing_on")" = 1 || return 1
@@ -1755,6 +1775,10 @@ xrun_trace() {
       echo "p:rc2fx_xrun/fault $lib:$offset kind=%x0:u64 client=+0(%x1):string mono_ns=%x2:u64" >> "$base/uprobe_events"
       echo 'traceoff:1 if kind >= 1 && kind <= 10' > "$instance/events/rc2fx_xrun/fault/trigger"
       echo 1 > "$instance/events/rc2fx_xrun/fault/enable"
+      cat "$instance/events/sched/sched_switch/filter" > "$dir/original-switch-filter"
+      cat "$instance/events/sched/sched_waking/filter" > "$dir/original-waking-filter"
+      echo 'prev_prio < 80 || next_prio < 80' > "$instance/events/sched/sched_switch/filter"
+      echo 'prio < 80' > "$instance/events/sched/sched_waking/filter"
       for f in sched/sched_switch sched/sched_waking sched/sched_wakeup_new; do
         echo 1 > "$instance/events/$f/enable"
       done
@@ -1818,11 +1842,25 @@ xrun_trace() {
     clear)
       rm -f /run/rc2fx-flight-arm
       if test -d "$dir"; then
+        pid=0
+        if test -f "$dir/identity"; then pid=$(sed -n '1s/mixer=\([0-9]*\).*/\1/p' "$dir/identity"); fi
+        if test -f "$dir/saved-affinity"; then
+          while read -r tid filter token gui; do
+            gui=${gui:-$pid}
+            if test -d "/proc/$gui/task/$tid" && test "$(awk '{print $22}' "/proc/$tid/stat")" = "$token"; then taskset -p "$filter" "$tid" >&2; fi
+          done < "$dir/saved-affinity"
+        fi
         echo 0 > "$instance/tracing_on"
         echo 0 > "$instance/events/enable"
         if test -f "$instance/events/rc2fx_xrun/fault/trigger" && grep -q '^traceoff' "$instance/events/rc2fx_xrun/fault/trigger"; then
           echo '!traceoff' > "$instance/events/rc2fx_xrun/fault/trigger"
         fi
+        for f in switch waking; do
+          if test -f "$dir/original-$f-filter"; then
+            filter=$(cat "$dir/original-$f-filter"); test "$filter" != none || filter=0
+            echo "$filter" > "$base/events/sched/sched_$f/filter"
+          fi
+        done
         for f in sys_enter sys_exit; do
           if test -f "$dir/original-filter-$f"; then
             filter=$(cat "$dir/original-filter-$f")

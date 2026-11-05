@@ -51,6 +51,7 @@ def check(base, previous, current):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--avoid-driver',action='store_true')
     parser.add_argument('--bundle',type=Path,required=True)
     parser.add_argument('--seconds', type=int, default=7200)
     args=parser.parse_args()
@@ -83,6 +84,11 @@ def main():
         save(root/'playback.json',dict(startedUtc=utc(),streams=records,sampleRate=48000))
         time.sleep(15)
         subprocess.run([sys.executable,str(Path(__file__).with_name('run.py')),'arm','--bundle',str(args.bundle)],check=True)
+        if args.avoid_driver:
+            audit=json.loads(run.ssh('cat /run/rc2fx/audit.json'))
+            tids=[r['tid'] for r in audit['clientTiming']['registrations'] if r['name'] in ('usb1out','usb1-chat-out') and r['tid']]
+            if len(tids)!=2:raise RuntimeError('USB output identity is ambiguous')
+            run.remote('avoid-driver',*tids)
         baseline=snapshot();previous=baseline;start=time.monotonic()
         save(root/'snapshot-0000.json',baseline)
         if not baseline['tracing'] or baseline['audit']['clientTiming']['flightFrozenAtNs']:

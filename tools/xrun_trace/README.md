@@ -100,3 +100,13 @@ Wake attribution uses `sched_waking`, before the target becomes runnable.
 `sched_wakeup` can be logged after the target has already run on another CPU;
 a late wake notification must never turn an executing callback into a runnable
 delay. Dispatch lookup also rejects wakes from an earlier completed callback.
+
+`bench.py --avoid-driver` is a reversible scheduling experiment. After reading
+live thread identities and affinity masks, it restricts the JACK FIFO-51 driver
+to CPU 2 and excludes CPU 2 from the two USB output threads' existing masks.
+The original masks, process IDs and thread start times are saved with the
+capture. `clear` restores them only if the same process/thread still exists.
+This is an experimental bench policy, not a production fix. The ordinary bench
+leaves affinity unchanged. The qualification trace filters scheduler events to
+RT priorities below kernel priority 80, retaining the critical audio clients,
+helpers and IRQ threads while reducing background event volume.
