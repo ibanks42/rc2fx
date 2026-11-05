@@ -66,6 +66,20 @@ def check(base, previous, current, expect_trace=True):
     return errors
 
 
+def measurement(base, current):
+    """Always-on load figures for the window between two audits, from counters only."""
+    a,b=current['audit'],base['audit']
+    seconds=(a['monotonicNs']-b['monotonicNs'])/1e9
+    # endPos bins 4 onward: main ended past 0.75 of the period.
+    slow=sum(a['cycle']['endPos']['histogram'][4:])-sum(b['cycle']['endPos']['histogram'][4:])
+    result=dict(windowSeconds=seconds,slowCallbacks=slow,slowCallbacksPerHour=slow*3600/seconds if seconds>0 else None)
+    for key,name in [('callbackWall','meanCallbackWallUs'),('nativeWall','meanNativeWallUs'),('ownedWall','meanOwnedWallUs')]:
+        now,then=a['callbackTiming'][0][key],b['callbackTiming'][0][key]
+        calls=now['calls']-then['calls']
+        result[name]=(now['totalNs']-then['totalNs'])/calls/1e3 if calls>0 else None
+    return result
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
@@ -138,7 +152,7 @@ def main():
         if not args.no_trace and (not baseline['tracing'] or baseline['audit']['clientTiming']['flightFrozenAtNs']):
             raise RuntimeError('Recorder froze during playback startup; collect this event before rerunning')
         if args.no_trace and baseline['audit']['clientTiming']['enabled']:raise RuntimeError('Control run requires optional timing probe disabled at audio start')
-        state=dict(state,state='RUNNING',baselineXruns=baseline['audit']['xruns'],processPid=baseline['audit']['processPid'],checkIntervalSeconds=args.interval)
+        state=dict(state,state='RUNNING',measurementLevel='trace' if not args.no_trace else 'counters',baselineXruns=baseline['audit']['xruns'],processPid=baseline['audit']['processPid'],checkIntervalSeconds=args.interval)
         save(root/'status.json',state);print(json.dumps(state),flush=True)
         index=0
         while True:
@@ -155,7 +169,7 @@ def main():
             done=elapsed>=duration and device_elapsed>=duration
             preserve_fault(root,baseline,current,errors)
             verdict=policy.observe(errors,done)
-            state.update(trialSeconds=args.seconds,requestedTrials=args.trials,completedTrials=min(args.trials,int(min(elapsed,device_elapsed)//args.seconds)),state=verdict['state'],qualificationFailed=verdict['qualificationFailed'],observedErrors=verdict['observedErrors'],stopOnXrun=not args.keep_going,updatedUtc=utc(),elapsedSeconds=elapsed,deviceElapsedSeconds=device_elapsed,xrunDelta=current['audit']['xruns']-baseline['audit']['xruns'],errors=errors,samples=index+1)
+            state.update(trialSeconds=args.seconds,requestedTrials=args.trials,completedTrials=min(args.trials,int(min(elapsed,device_elapsed)//args.seconds)),state=verdict['state'],qualificationFailed=verdict['qualificationFailed'],observedErrors=verdict['observedErrors'],stopOnXrun=not args.keep_going,updatedUtc=utc(),elapsedSeconds=elapsed,deviceElapsedSeconds=device_elapsed,xrunDelta=current['audit']['xruns']-baseline['audit']['xruns'],measurement=measurement(baseline,current),errors=errors,samples=index+1)
             save(root/'status.json',state);print(json.dumps(state),flush=True)
             if verdict['stop']: break
             previous=current

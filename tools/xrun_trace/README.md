@@ -7,6 +7,36 @@ examined separately. Task selection uses `set_event_pid` rather than event-field
 filters to avoid the kernel event-discard path. Nearby callbacks alone do not
 prove which JACK cycle owned a fault.
 
+## Measurement levels
+
+Each level slows audio. Measured on main with six streams playing:
+
+| Level | How to run it | Main mean | Slow callbacks per hour |
+| --- | --- | --- | --- |
+| 1. Always-on counters | `bench.py --no-trace`, client timing off | 884 us | about 50 |
+| 2. Plus client timing | `run.py prepare`, then restart audio | 907 us | about 180 |
+| 3. Plus kernel tracing | `run.py prepare`, restart audio, then `bench.py` | 940 us | about 1,860 |
+
+A slow callback means main ended past 0.75 of the period.
+
+Pass/fail uses level 1, through the settled control below. Level 3 works as a
+magnifier: it stays available for investigation, and its extra load produces
+faults that a plain run would not. The one two-hour xrun happened with tracing
+on, and none occurred in the 63 traced-off minutes after the trace froze.
+
+The trade-off is that a fault in a level 1 run has no kernel detail. Reproduce
+it with tracing on to investigate it.
+
+`status.json` records `measurementLevel` and a `measurement` block for the whole
+window since the baseline, all from level 1 counters: `slowCallbacks` (the
+growth of `audit.cycle.endPos.histogram[4:]`), `slowCallbacksPerHour`, and
+`meanCallbackWallUs`, `meanNativeWallUs` and `meanOwnedWallUs` from
+`callbackTiming[0]`. Means are precise within five minutes. Rates are not: level
+1 gives only about 4 slow callbacks per five minutes, so judge a rate over 30
+minutes or more.
+
+## How it works
+
 This is opt-in diagnostic tooling for the RØDECaster Pro II. It does not make
 xruns harmless or treat a clean run as proof that every cause has been removed.
 It preserves evidence at the first fault, independently of host polling.
@@ -105,6 +135,9 @@ python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p test_jacker
 
 While armed, callback recording uses wall-clock boundaries only. Per-client
 legacy CPU timing counters pause to avoid synchronized CPU-clock syscalls.
+`clientTiming.registrations[].timing` therefore stops at arm and stays frozen,
+so in a traced run its values predate playback. Use flight medians for loaded
+figures.
 Main callback history, including native-work boundaries, freezes separately.
 IRQ and broad syscall tracing are intentionally omitted from the qualification
 profile because they materially perturb this mixer. A capture may establish

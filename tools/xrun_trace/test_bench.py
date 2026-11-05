@@ -3,7 +3,7 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
-from bench import check, preserve_fault
+from bench import check, measurement, preserve_fault
 from analyze import captured_flight_audit
 
 class Qualification(unittest.TestCase):
@@ -39,6 +39,26 @@ class Qualification(unittest.TestCase):
         errors=check(self.base,self.base,self.current)
         self.assertIn('Stale telemetry',errors)
         self.assertIn('Callbacks stopped',errors)
+
+    def timed(self,seconds,histogram,calls,wall,native,owned):
+        timing=lambda total:{'calls':calls,'totalNs':total}
+        return {'audit':{'monotonicNs':seconds*1_000_000_000,'cycle':{'endPos':{'histogram':histogram}},
+                         'callbackTiming':[{'callbackWall':timing(wall),'nativeWall':timing(native),'ownedWall':timing(owned)}]}}
+    def test_measurement_counts_only_the_window_and_only_late_bins(self):
+        base=self.timed(100,[9,9,9,9,1,1,0,0],1000,10_000_000,8_000_000,2_000_000)
+        current=self.timed(1000,[9,99,999,9999,4,2,1,1],3000,1_778_000_000,1_414_000_000,364_000_000)
+        result=measurement(base,current)
+        self.assertEqual(result['windowSeconds'],900)
+        self.assertEqual(result['slowCallbacks'],6)
+        self.assertEqual(result['slowCallbacksPerHour'],24)
+        self.assertEqual(result['meanCallbackWallUs'],884)
+        self.assertEqual(result['meanNativeWallUs'],703)
+        self.assertEqual(result['meanOwnedWallUs'],181)
+    def test_measurement_without_progress_reports_no_mean(self):
+        base=self.timed(100,[0]*8,1000,1,1,1)
+        result=measurement(base,base)
+        self.assertIsNone(result['slowCallbacksPerHour'])
+        self.assertIsNone(result['meanCallbackWallUs'])
 
     def test_first_fault_history_survives_later_checkpoints_and_restart(self):
         with tempfile.TemporaryDirectory() as directory:

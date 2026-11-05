@@ -201,6 +201,7 @@ pub fn snapshot() -> serde_json::Value {
             "recent": MAIN_RECENT.snapshot(),
             "activeStartNs": if MAIN_TOKEN.load(Ordering::Acquire) == token { MAIN_START.load(Ordering::Acquire) } else { 0 },
         })),
+        "timingScope": "registrations[].timing stops counting at arm and stays frozen, so an armed capture's values predate its load; use flight medians for loaded figures",
         "scope": "registration lifetime; includes replaced, failed and closed registrations; slots never reused; not a list of live clients",
         "registrations": SLOTS.iter().enumerate().filter_map(|(index, slot)| {
             let callback = slot.callback.load(Ordering::Acquire);
