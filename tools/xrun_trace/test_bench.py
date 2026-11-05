@@ -1,6 +1,10 @@
 import copy
 import unittest
-from bench import check
+import json
+import tempfile
+from pathlib import Path
+from bench import check, preserve_fault
+from analyze import captured_flight_audit
 
 class Qualification(unittest.TestCase):
     def setUp(self):
@@ -25,9 +29,36 @@ class Qualification(unittest.TestCase):
     def test_restarted_process_cannot_qualify_on_reset_counters(self):
         self.current['audit']['processPid']=43
         self.assertIn('Mixer restarted',check(self.base,self.base,self.current))
+    def test_report_updated_during_snapshot_is_not_stale(self):
+        self.current['audit']['monotonicNs']=100_032_550_997
+        self.current['uptimeAfter']=100.05
+        self.assertNotIn('Stale telemetry',check(self.base,self.base,self.current))
     def test_stalled_or_stale_telemetry_cannot_pass(self):
         self.current['audit']['callbacks']=100
         self.current['uptime']=106
         errors=check(self.base,self.base,self.current)
         self.assertIn('Stale telemetry',errors)
         self.assertIn('Callbacks stopped',errors)
+
+    def test_first_fault_history_survives_later_checkpoints_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);capture=root/'capture';capture.mkdir()
+            self.current['audit']['clientTiming']['flightFrozenAtNs']=100
+            preserve_fault(root,self.base,self.current,['xruns changed'])
+            first=copy.deepcopy(self.current['audit'])
+            self.current['audit']['clientTiming']['flightFrozenAtNs']=0
+            self.current['audit']['processPid']=43
+            preserve_fault(root,self.base,self.current,['Mixer restarted'])
+            (capture/'flight-token').write_text('123\n')
+            (capture/'collected-audit.json').write_text(json.dumps(self.current['audit']))
+            self.assertEqual(captured_flight_audit(capture),first)
+            self.assertEqual(json.loads((root/'first-observed-fault.json').read_text())['audit'],first)
+
+    def test_saved_history_from_another_capture_is_not_used(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);capture=root/'capture';capture.mkdir()
+            self.current['audit']['clientTiming']['flightFrozenAtNs']=100
+            preserve_fault(root,self.base,self.current,['xruns changed'])
+            (capture/'flight-token').write_text('456\n')
+            (capture/'collected-audit.json').write_text(json.dumps(self.base['audit']))
+            self.assertEqual(captured_flight_audit(capture),self.base['audit'])

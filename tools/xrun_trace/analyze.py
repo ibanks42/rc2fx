@@ -339,6 +339,19 @@ def _attribute(text, audit, stats='', fault_records=None, flight_audit=None, cli
         limitations.append('Observed callback execution was within one period; upstream cycle/wakeup dependency needs examination')
     return result
 
+def captured_flight_audit(root):
+    """Prefer the matching frozen checkpoint if observation outlived the mixer."""
+    saved=root.parent/'first-fault-audit.json'
+    token_path=root/'flight-token'
+    if saved.exists() and token_path.exists():
+        audit=json.loads(saved.read_text())
+        flight=audit.get('clientTiming',{})
+        if (str(flight.get('flightToken'))==token_path.read_text().strip() and
+                flight.get('flightFrozenAtNs')):
+            return audit
+    return json.loads((root/'collected-audit.json').read_text())
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('capture', type=Path)
@@ -351,7 +364,7 @@ if __name__ == '__main__':
     decoder=importlib.util.module_from_spec(spec);spec.loader.exec_module(decoder)
     records=decoder.read((root/'jack.snapshot').read_bytes())['records'] if (root/'jack.snapshot').exists() else None
     result = analyze(text, json.loads((root/'arm-audit.json').read_text()), (root/'buffer-stats').read_text(), records,
-                     json.loads((root/'collected-audit.json').read_text()),
+                     captured_flight_audit(root),
                      {p.name:p.read_text() for p in root.glob('jack-client-maps.*')})
     if (root/'profile').exists() and (root/'profile').read_text().strip()=='minimal':
         result['schedulerScope']='Critical thread transitions only; intermediate competitors may be missing. Competitor interval is not proof of continuous CPU occupancy.'

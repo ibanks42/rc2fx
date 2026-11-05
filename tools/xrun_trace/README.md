@@ -38,7 +38,7 @@ Use an exact build bundle whose recorder hash matches the running mixer:
 ```sh
 python3 tools/xrun_trace/run.py prepare
 # Explicitly restart/install audio with the normal mixer workflow once.
-python3 tools/xrun_trace/bench.py --bundle /path/to/verified/mixer-bundle --out /path/to/new-receipt-directory
+python3 tools/xrun_trace/bench.py --keep-going --bundle /path/to/verified/mixer-bundle --out /path/to/new-receipt-directory
 ```
 
 The bench plays six quiet, distinct modulated stereo signals through System,
@@ -46,7 +46,15 @@ Game, Music, Virtual A, Virtual B and Chat. It reads the mixer every 30 seconds 
 checks process/boot identity, telemetry freshness, callback progress, xruns and
 other error counters, and stops its own playback on completion. Run it in a
 persistent foreground session or service. It does not publish releases or touch
-the desktop window. On failure it collects the frozen trace automatically.
+the desktop window. With `--keep-going`, faults are recorded immediately and
+playback continues for the requested duration. Any observed fault still makes
+the final qualification fail, even if later checkpoints look clean. The first
+kernel trace stays frozen; subsequent counters and event reports continue.
+The first frozen native audit is saved from the existing checkpoint without an
+extra device read, and matched to the capture token during final analysis.
+The frozen trace is collected when the run ends. Without `--keep-going`, the
+bench retains its earlier stop-on-fault behavior. Playback or transport failure
+can still prevent a complete observation run.
 
 For manual collection:
 
@@ -144,3 +152,9 @@ The control refuses a baseline with the optional timing probe still enabled.
 It uses the same audio, compressed checkpoint transport and error-counter
 checks, but does not arm or collect a kernel trace. Restarting is explicit;
 `unprepare` itself only removes the diagnostic marker for the next audio start.
+
+Settled controls use `--no-trace --settle-seconds 60 --seconds 300 --trials 3
+--interval 30`. They require at least three minutes of audio callback progress
+and a flat event counter for 60 seconds, retain continuous six-channel playback
+between the five-minute trials, and stop at the first failed checkpoint.
+A startup burst cannot be counted as a steady-state control.
