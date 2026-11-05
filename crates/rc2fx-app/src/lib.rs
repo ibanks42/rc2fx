@@ -140,6 +140,8 @@ struct Rc2FxApp {
     awaiting_refresh: bool,
     /// Settings shows its Diagnostics page (telemetry, events, files).
     diagnostics_open: bool,
+    /// The main column's scroll position, shared by the pages shown in it.
+    content_scroll: ScrollHandle,
     /// The Linux USB permission screen's request (connection::usb_access).
     usb_rule: connection::UsbRule,
     /// Its "Show the exact file" disclosure.
@@ -247,6 +249,7 @@ impl Rc2FxApp {
             resave: false,
             awaiting_refresh: false,
             diagnostics_open: false,
+            content_scroll: ScrollHandle::new(),
             usb_rule: connection::UsbRule::Idle,
             usb_rule_open: false,
             copied: None,
@@ -1705,6 +1708,7 @@ impl Rc2FxApp {
         let target = self.target().clone();
         let mut content = div()
             .id("content-scroll")
+            .track_scroll(&self.content_scroll)
             .v_flex()
             .gap_4()
             .flex_1()

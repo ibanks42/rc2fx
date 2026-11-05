@@ -122,6 +122,13 @@ impl Rc2FxApp {
         section("Mixer", div(), rows)
     }
 
+    /// Switch between Settings and its Diagnostics page. They share one
+    /// scroll position, so each starts at its top.
+    fn show_diagnostics(&mut self, open: bool) {
+        self.diagnostics_open = open;
+        self.content_scroll.set_offset(Point::default());
+    }
+
     fn about_section(&self, cx: &mut Context<Self>) -> Div {
         let overview = self.versions_overview();
         let rows =
@@ -270,7 +277,7 @@ impl Rc2FxApp {
             div().child(row(
                 labelled("Diagnostics", ""),
                 ghost("open-diagnostics", "Open").on_click(cx.listener(|app, _, _, cx| {
-                    app.diagnostics_open = true;
+                    app.show_diagnostics(true);
                     cx.notify();
                 })),
             )),
@@ -300,7 +307,7 @@ impl Rc2FxApp {
                             .hover(|s| s.text_color(rgb(TEXT)))
                             .child("‹ Settings")
                             .on_click(cx.listener(|app, _, _, cx| {
-                                app.diagnostics_open = false;
+                                app.show_diagnostics(false);
                                 cx.notify();
                             })),
                     )
