@@ -27,6 +27,10 @@ on, and none occurred in the 63 traced-off minutes after the trace froze.
 The trade-off is that a fault in a level 1 run has no kernel detail. Reproduce
 it with tracing on to investigate it.
 
+The audit report refreshes every second for its first three minutes and whenever
+client timing or the gauges are on, and every three seconds otherwise. Keep
+`--interval` above three seconds on a level 1 run.
+
 `status.json` records `measurementLevel` and a `measurement` block for the whole
 window since the baseline, all from level 1 counters: `slowCallbacks` (the
 growth of `audit.cycle.endPos.histogram[4:]`), `slowCallbacksPerHour`, and

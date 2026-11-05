@@ -514,7 +514,8 @@ impl<'owner> Coordinator<'owner> {
     fn poll_audio(&mut self) {
         #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
         if let Some(native) = &mut self.native {
-            if let Some(observation) = native.poll() {
+            let controller = &self.controller;
+            if let Some(observation) = native.poll(|| controller.has_clients()) {
                 self.controller.native_progress(observation);
             }
             return;

@@ -192,6 +192,11 @@ impl Controller {
             self.front.native_meter(shown, meter, observation.native);
         }
     }
+    /// Whether anyone is subscribed to live events.
+    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    pub(crate) fn has_clients(&self) -> bool {
+        self.front.has_clients()
+    }
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     fn native_saved(&mut self, result: Result<(), Error>) -> Result<DeviceState, Error> {
         if let Some(fault) = self.durability_fault().map(str::to_owned) {

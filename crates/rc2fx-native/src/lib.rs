@@ -1433,8 +1433,20 @@ fn publish_report<W: Write>(
     }
     result
 }
-/// Refresh the report every second while the mixer runs, so it can be read
-/// without stopping audio.
+/// Seconds after start in which the report stays at one per second: the
+/// install commit check and the GUI's readiness wait watch `callbacks` advance.
+const REPORT_STARTUP_SECONDS: u64 = 180;
+/// Afterwards, without a diagnostic marker. Must stay well inside the bench's
+/// five-second telemetry limit, which a run without a marker also applies.
+const REPORT_EVERY_SECONDS: u64 = 3;
+fn report_due(elapsed_seconds: u64, diagnostic: bool) -> bool {
+    diagnostic
+        || elapsed_seconds < REPORT_STARTUP_SECONDS
+        || elapsed_seconds.is_multiple_of(REPORT_EVERY_SECONDS)
+}
+
+/// Refresh the report while the mixer runs, so it can be read without stopping
+/// audio. Events still reach their log every second.
 fn start_report_refresh() {
     static STARTED: AtomicBool = AtomicBool::new(false);
     if REPORT.get().is_none() || STARTED.swap(true, Ordering::Relaxed) {
@@ -1443,9 +1455,12 @@ fn start_report_refresh() {
     let _ = std::thread::Builder::new()
         .name("rc2fx-report".into())
         .spawn(|| {
-            loop {
+            let diagnostic = client_timing::enabled() || gauges::enabled();
+            for elapsed_seconds in 1u64.. {
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                write_report();
+                if report_due(elapsed_seconds, diagnostic) {
+                    write_report();
+                }
                 probe::flush_log();
             }
         });
@@ -1455,6 +1470,19 @@ fn start_report_refresh() {
 mod report_tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn the_report_slows_only_after_startup_and_without_a_marker() {
+        let writes = |range: std::ops::Range<u64>, diagnostic| {
+            range.filter(|tick| report_due(*tick, diagnostic)).count()
+        };
+        assert_eq!(writes(1..REPORT_STARTUP_SECONDS, false), 179);
+        assert_eq!(writes(180..300, true), 120);
+        assert_eq!(writes(180..300, false), 40);
+        // No gap comes near the bench's five-second telemetry limit.
+        let due: Vec<_> = (170..300).filter(|tick| report_due(*tick, false)).collect();
+        assert!(due.windows(2).all(|pair| pair[1] - pair[0] <= 3));
+    }
 
     /// Counts the writes and bytes that reach it; with `fail_after`, writes
     /// at most that many bytes in total (a short write at the limit) and then

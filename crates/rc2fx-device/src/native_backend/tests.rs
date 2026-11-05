@@ -644,6 +644,38 @@ fn worker_failure_is_not_hidden_by_an_old_meter_window() {
     );
 }
 
+/// Whether the read just made scheduled the next one at the slow cadence.
+fn polls_slowly(runtime: &mut Runtime, watched: bool) -> bool {
+    runtime.next_poll = Instant::now();
+    let before = Instant::now();
+    assert!(runtime.poll(|| watched).is_some());
+    runtime.next_poll.saturating_duration_since(before) > POLL_INTERVAL * 2
+}
+
+#[test]
+fn only_a_settled_unwatched_engine_polls_slowly() {
+    let (_directory, peer, _controller, mut runtime) = fixture();
+    assert!(polls_slowly(&mut runtime, false));
+    assert!(!polls_slowly(&mut runtime, true));
+    // A processed path that stops advancing returns to fast polling at once,
+    // so its stall deadline is not stretched by the slower cadence.
+    peer.hold_window.store(true, Ordering::Release);
+    assert!(!polls_slowly(&mut runtime, false));
+    peer.hold_window.store(false, Ordering::Release);
+    assert!(polls_slowly(&mut runtime, false));
+}
+
+#[test]
+fn an_unpublished_change_keeps_fast_polling_without_a_client() {
+    let (_directory, peer, mut controller, mut runtime) = fixture();
+    let settled = runtime.observe(Instant::now()).unwrap();
+    assert_eq!(runtime.interval_after(&settled, false), IDLE_POLL_INTERVAL);
+    peer.drop_commit.store(true, Ordering::Release);
+    toggle(&mut controller, &mut runtime, false);
+    assert!(!runtime.pending.is_empty());
+    assert_eq!(runtime.interval_after(&settled, false), POLL_INTERVAL);
+}
+
 /// Every native path reports performance: the worker's own timings when it has
 /// one, and always the engine's shared numbers. A path without a worker still
 /// reports the callback timing, xruns and the helper counters, with zero worker

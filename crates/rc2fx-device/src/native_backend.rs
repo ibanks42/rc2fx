@@ -12,6 +12,10 @@ use std::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+// With nobody watching the meters and every path behaving. Any path that stops
+// advancing returns polling to POLL_INTERVAL, so a stall is still reported on
+// the same schedule as with a client attached.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const BUSY_RETRY: Duration = Duration::from_secs(2);
 const REGISTRY_WAIT: Duration = Duration::from_secs(60);
 // Native USB ports exist before their hardware streams have finished startup.
@@ -49,6 +53,8 @@ pub struct Runtime {
     generation: u64,
     progress_timeout: Duration,
     next_poll: Instant,
+    /// The latest read saw every processed path advance, and at least one path.
+    all_advancing: bool,
     writable: bool,
     started: Instant,
     pub(crate) process: crate::diagnostic_history::NativeProcess,
@@ -263,6 +269,7 @@ impl Runtime {
             generation: 0,
             progress_timeout,
             next_poll: now,
+            all_advancing: false,
             writable: false,
             started: now,
             process,
@@ -487,14 +494,29 @@ impl Runtime {
             .any(|path| path.mode == PathMode::Processed && timed_out(path))
             || self.paths.iter().all(timed_out)
     }
-    pub(crate) fn poll(&mut self) -> Option<Observation> {
+    /// How long until the next read, after a successful `observation`.
+    fn interval_after(&self, observation: &Observation, watched: bool) -> Duration {
+        let settled = observation.applied
+            && observation.advancing
+            && self.pending.is_empty()
+            && self.all_advancing;
+        if settled && !watched {
+            IDLE_POLL_INTERVAL
+        } else {
+            POLL_INTERVAL
+        }
+    }
+    pub(crate) fn poll(&mut self, watched: impl FnOnce() -> bool) -> Option<Observation> {
         let now = Instant::now();
         if now < self.next_poll {
             return None;
         }
         self.next_poll = now + POLL_INTERVAL;
         match self.observe(now) {
-            Ok(observation) => Some(observation),
+            Ok(observation) => {
+                self.next_poll = now + self.interval_after(&observation, watched());
+                Some(observation)
+            }
             Err(Error::NativeBusy) if !self.stalled(now) => None,
             Err(error) => {
                 self.writable = false;
@@ -534,6 +556,8 @@ impl Runtime {
         let mut applied = self.pending.is_empty();
         let mut advancing = true;
         let mut any_live = false;
+        let mut processed_advanced = true;
+        let mut any_advanced = false;
         let mut meters = Vec::with_capacity(self.paths.len());
         for path in &mut self.paths {
             let status = locate(&contexts, path)?;
@@ -543,6 +567,7 @@ impl Runtime {
             // Liveness is independent of desired effect publication. A fresh
             // native block must not become a fake stalled-audio report merely
             // because an external controller temporarily changed this slot.
+            let mut advanced = false;
             if let Some(meter) = status.meter {
                 if meter.processed_frames < path.frames {
                     return Err(failure("native progress moved backwards"));
@@ -551,8 +576,11 @@ impl Runtime {
                     path.frames = meter.processed_frames;
                     path.last_progress = now;
                     path.progressed = true;
+                    advanced = true;
                 }
             }
+            any_advanced |= advanced;
+            processed_advanced &= advanced || path.mode != PathMode::Processed;
             // A verified newer native token for exactly the saved desired
             // bytes/mode can be observed without changing settings or audio.
             if self.pending.is_empty()
@@ -654,6 +682,7 @@ impl Runtime {
             return Err(failure("native audio callback stopped advancing"));
         }
         advancing &= any_live;
+        self.all_advancing = processed_advanced && any_advanced;
         self.writable = advancing && applied;
         let message = if advancing && applied {
             "Native audio paths applied and advancing"

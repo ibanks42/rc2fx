@@ -60,6 +60,14 @@ impl Facade {
             .presets
             .clone()
     }
+    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    pub(crate) fn has_clients(&self) -> bool {
+        self.0
+            .lock()
+            .expect("control facade poisoned")
+            .hub
+            .has_clients()
+    }
     pub(crate) fn subscribe(&self) -> Result<Subscription, EventError> {
         let mut front = self.0.lock().expect("control facade poisoned");
         let state = front.state.as_ref().expect("initialized facade").clone();
