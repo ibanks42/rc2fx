@@ -7,6 +7,13 @@ class Qualification(unittest.TestCase):
         self.base={'home':'/opt/rc2fx','bootId':'boot','uptime':100,'tracing':1,'audit':{'processPid':42,'monotonicNs':100_000_000_000,'callbacks':100,'xruns':3,'dspFaults':0,'capacityFailures':0,'planErrors':0,'controlServerErrors':0,'helper':{'late':0,'stalls':0},'clientTiming':{'flightToken':123,'flightFrozenAtNs':0}}}
         self.current=copy.deepcopy(self.base)
         self.current['audit']['callbacks']+=1
+    def test_control_run_does_not_require_a_kernel_capture(self):
+        self.current['tracing']=0
+        self.assertEqual(check(self.base,self.base,self.current,expect_trace=False),[])
+    def test_suppression_deadline_failure_cannot_be_hidden_by_zero_xruns(self):
+        self.base['audit']['workers']=[{'id':'mic-1','worker':{'missedDeadlines':0}}]
+        self.current['audit']['workers']=[{'id':'mic-1','worker':{'missedDeadlines':1}}]
+        self.assertIn('Suppression missedDeadlines changed',check(self.base,self.base,self.current))
     def test_progress_without_faults_is_valid(self):
         self.assertEqual(check(self.base,self.base,self.current),[])
     def test_counter_fault_is_a_failure_even_if_capture_failed(self):

@@ -130,3 +130,11 @@ and aligned using the fault hook's monotonic timestamp.
 `--interval 7200 --seconds 7200` requests baseline/end-only reads for a two-hour
 run. The final read includes five seconds of allowance for report cadence; the
 receipt must still cover the requested duration in both host and device time.
+
+For an observation-overhead control, disable the optional client-timing marker
+with the launcher's `xrun-trace unprepare`, explicitly restart audio using the
+installed launcher, then run `bench.py --no-trace --seconds 300 --interval 30`.
+The control refuses a baseline with the optional timing probe still enabled.
+It uses the same audio, compressed checkpoint transport and error-counter
+checks, but does not arm or collect a kernel trace. Restarting is explicit;
+`unprepare` itself only removes the diagnostic marker for the next audio start.

@@ -31,7 +31,7 @@ def snapshot():
     return dict(hostUtc=utc(),bootId=fields['boot'],uptime=float(fields['uptime'].split()[0]),home=fields['home'],tracing=int(fields['tracing']),audit=json.loads(fields['audit']))
 
 
-def check(base, previous, current):
+def check(base, previous, current, expect_trace=True):
     a, b = current['audit'], base['audit']
     errors=[]
     if current['home']!='/opt/rc2fx': errors.append('Runtime is not installed')
@@ -49,14 +49,15 @@ def check(base, previous, current):
     for key in ['late','stalls']:
         if a['helper'][key]!=b['helper'][key]: errors.append('helper '+key+' changed')
     flight=a['clientTiming']
-    if flight['flightToken']!=b['clientTiming']['flightToken']: errors.append('Flight recorder token changed')
-    if flight['flightFrozenAtNs'] or not current['tracing']: errors.append('Fault recorder froze')
+    if expect_trace and flight['flightToken']!=b['clientTiming']['flightToken']: errors.append('Flight recorder token changed')
+    if expect_trace and (flight['flightFrozenAtNs'] or not current['tracing']): errors.append('Fault recorder froze')
     return errors
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--no-trace',action='store_true')
     parser.add_argument('--deep',action='store_true')
     parser.add_argument('--avoid-driver',action='store_true')
     parser.add_argument('--bundle',type=Path,required=True)
@@ -93,7 +94,8 @@ def main():
             records.append(dict(pid=child.pid,sink=sink['name'],description=sink['description'],frequencyHz=freq,peakBoundDbfs=-40))
         save(root/'playback.json',dict(startedUtc=utc(),streams=records,sampleRate=48000))
         time.sleep(15)
-        subprocess.run([sys.executable,str(Path(__file__).with_name('run.py')),'arm','--bundle',str(args.bundle)]+(['--deep'] if args.deep else []),check=True)
+        if not args.no_trace:
+            subprocess.run([sys.executable,str(Path(__file__).with_name('run.py')),'arm','--bundle',str(args.bundle)]+(['--deep'] if args.deep else []),check=True)
         if args.avoid_driver:
             audit=json.loads(run.ssh('cat /run/rc2fx/audit.json'))
             tids=[r['tid'] for r in audit['clientTiming']['registrations'] if r['name'] in ('usb1out','usb1-chat-out') and r['tid']]
@@ -101,8 +103,9 @@ def main():
             run.remote('avoid-driver',*tids)
         baseline=snapshot();previous=baseline;start=time.monotonic()
         save(root/'snapshot-0000.json',baseline)
-        if not baseline['tracing'] or baseline['audit']['clientTiming']['flightFrozenAtNs']:
+        if not args.no_trace and (not baseline['tracing'] or baseline['audit']['clientTiming']['flightFrozenAtNs']):
             raise RuntimeError('Recorder froze during playback startup; collect this event before rerunning')
+        if args.no_trace and baseline['audit']['clientTiming']['enabled']:raise RuntimeError('Control run requires optional timing probe disabled at audio start')
         state=dict(state,state='RUNNING',baselineXruns=baseline['audit']['xruns'],processPid=baseline['audit']['processPid'],checkIntervalSeconds=args.interval)
         save(root/'status.json',state);print(json.dumps(state),flush=True)
         index=0
@@ -112,7 +115,7 @@ def main():
             time.sleep(min(args.interval,max(0,remaining)) + (5 if remaining<=args.interval else 0))
             current=snapshot();index+=1
             save(root/f'snapshot-{index:04}.json',current)
-            errors=check(baseline,previous,current)
+            errors=check(baseline,previous,current,not args.no_trace)
             if any(p.poll() is not None for p in children): errors.append('Playback exited early')
             elapsed=time.monotonic()-start
             device_elapsed=(current['audit']['monotonicNs']-baseline['audit']['monotonicNs'])/1e9
@@ -136,15 +139,16 @@ def main():
             try: child.wait(timeout=5)
             except subprocess.TimeoutExpired: child.kill();child.wait()
         for log in logs: log.close()
-        try:
-            if snapshot()['tracing']: run.remote('stop')
-            data=run.remote('collect')
-            capture=root/'capture';capture.mkdir()
-            (capture/'capture.tar.gz').write_bytes(data)
-            with tarfile.open(fileobj=io.BytesIO(data),mode='r:gz') as archive: archive.extractall(capture,filter='data')
-            subprocess.run([sys.executable,str(Path(__file__).with_name('analyze.py')),str(capture)],stdout=(root/'analysis.log').open('w'),check=True)
-        except Exception as error:
-            state['captureError']=str(error);save(root/'status.json',state)
+        if not args.no_trace:
+            try:
+                if snapshot()['tracing']: run.remote('stop')
+                data=run.remote('collect')
+                capture=root/'capture';capture.mkdir()
+                (capture/'capture.tar.gz').write_bytes(data)
+                with tarfile.open(fileobj=io.BytesIO(data),mode='r:gz') as archive: archive.extractall(capture,filter='data')
+                subprocess.run([sys.executable,str(Path(__file__).with_name('analyze.py')),str(capture)],stdout=(root/'analysis.log').open('w'),check=True)
+            except Exception as error:
+                state['captureError']=str(error);save(root/'status.json',state)
     return 0 if state['state']=='PASS' else 1
 
 if __name__=='__main__': sys.exit(main())

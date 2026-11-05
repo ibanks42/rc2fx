@@ -1692,6 +1692,9 @@ xrun_trace() {
       touch /run/rc2fx-client-timing
       echo 'Client identity probe enabled for next audio start; restart explicitly'
       ;;
+    unprepare)
+      rm -f /run/rc2fx-client-timing
+      ;;
     status)
       test -d "$dir" || { echo absent; return; }
       printf 'tracing_on='; cat "$instance/tracing_on"
