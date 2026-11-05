@@ -29,4 +29,5 @@ rc2fx-installer = { path = "../rc2fx-installer" }
 serde_json = "1"
 
 [dev-dependencies]
+gpui-test = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
 tempfile = "3"

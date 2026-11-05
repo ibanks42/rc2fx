@@ -43,6 +43,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+// GPUI's test-support feature also exports an attribute named `test`.
+#[cfg(test)]
+use core::prelude::v1::test;
 use rc2fx_core::*;
 use rc2fx_transport::{Command, EventKind, Transport};
 use std::{
