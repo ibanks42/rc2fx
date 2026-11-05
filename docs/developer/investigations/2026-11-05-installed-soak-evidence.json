@@ -1,0 +1,201 @@
+{
+  "candidate": {
+    "sourceCommit": "538019e69cb9910b31dc5f90d4c48bbee15685d6",
+    "payloads": {
+      "target/mixer/rc2fx-firmware": "52e7a17fa52b4624140a32397e46789148b4fd7a196f2a1ba501aae838dd3cc4",
+      "target/mixer/librc2fx_gui.so": "d733570a5059809ab980b1e9162225c0968366607d585bfcc25cd93d0e954758",
+      "target/mixer/firmware-profiles.json": "9db0b8faabf74bf53912f2c38c74b2743ccd2b4b6a0543168728eecd09c01381",
+      "target/mixer/rc2fx_jackerr_snapshot": "4c33946d169fb6f09b358e00432ac3a9878342e862fdd20efec9fff424e3186d",
+      "target/mixer/rc2fxd": "e436d82654b11d1b14adcaf465c87b2a0b4ba87016d6fa44c04bffc8c29d020b",
+      "target/mixer/librc2fx_native.so": "011ec88cfd93e6e127992dfbcd79f72782b1d3391e13b6be9b780f99e074edfb",
+      "target/mixer/mixer-release.json": "00440d2640db4e68358a56d3bcf05ead98e35c4772dbcf251a395a9d7f8a349c",
+      "target/mixer/librc2fx_jackerr.so": "061edcc31f958c8ce5b1337a16144f9994930ae87f736b8601bab11d62661103",
+      "target/mixer/SHA256SUMS": "cea413aafbbd236b3e4156d77932b70dfc5e0d03a206d7d049810d8100317f2f",
+      "xtask/mixer/rc2fx-gui-shim.sh": "371a1ffb39e7517a5c56d0854a6faf7656b0d43e9fbbb921f929cffda218385a",
+      "xtask/mixer/install.sh": "8e90abfcad05346eceb6407bd6a25ca00b6da40538029184cfd9f76b084ca0c2",
+      "xtask/mixer/rc2fx-shim.sh": "e3ed8c0127022d53b61e972bad474f9d9e57c38df47af168725e66efe6091d7f",
+      "xtask/mixer/rc2fx.sh": "1134c40893c6698108eeb3d4b8f3e0508fd2cfeec16ccfac7e468db21acb74fa"
+    },
+    "policy": "Development launcher; verbose GUI diagnostics; installed via just mixer-install; startup tracked separately."
+  },
+  "verdict": {
+    "state": "FAIL",
+    "startedUtc": "2026-11-05T11:36:32.123531+00:00",
+    "updatedUtc": "2026-11-05T13:07:18.763459+00:00",
+    "elapsedSeconds": 5446.524639249,
+    "hostElapsedSeconds": 5446.640149524006,
+    "processPid": 1411,
+    "xrunBaseline": 83,
+    "xrunDelta": 1,
+    "callbackDelta": 2334289,
+    "samples": 150,
+    "errors": [
+      "xrun counter changed"
+    ]
+  },
+  "baseline": {
+    "hostUtc": "2026-11-05T11:36:32.123531+00:00",
+    "deviceMonotonicNs": 147594016568,
+    "bootId": "a1805c22-cf01-4cc5-ab5f-8ab9429df1e6",
+    "xruns": 83
+  },
+  "final": {
+    "hostUtc": "2026-11-05T13:07:18.763459+00:00",
+    "deviceMonotonicNs": 5594118655817,
+    "bootId": "a1805c22-cf01-4cc5-ab5f-8ab9429df1e6",
+    "xruns": 84
+  },
+  "newEvents": [
+    {
+      "atNs": 4926669595415,
+      "kind": "xrun",
+      "notificationCyclePositionNs": 687500,
+      "seq": 108,
+      "sinceUsbNs": 4630535301568,
+      "valueMeaning": "notificationCyclePositionNotXrunDuration",
+      "valueNs": 687500,
+      "xrunDelayedMeaning": "lastBackendXrunDelayNotThisNotificationDuration",
+      "xrunDelayedUs": 0
+    }
+  ],
+  "helperDeltas": {
+    "frames": 2334289,
+    "late": 0,
+    "stalls": 0
+  },
+  "workers": [
+    {
+      "id": "mic-1",
+      "worker": {
+        "allowanceOverruns": 0,
+        "completedFrames": 1110445,
+        "cpu": {
+          "calls": 1110445,
+          "clockErrors": 0,
+          "histogram": [
+            0,
+            0,
+            0,
+            1110412,
+            33,
+            0,
+            0,
+            0
+          ],
+          "maxNs": 2893083,
+          "overruns": 0,
+          "totalNs": 1999868438767
+        },
+        "failed": false,
+        "frameBudgetNs": 5000000,
+        "inputDrops": 0,
+        "missedDeadlines": 0,
+        "outputDrops": 0,
+        "queueWait": {
+          "calls": 1110445,
+          "clockErrors": 0,
+          "histogram": [
+            1110441,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "maxNs": 512209,
+          "overruns": 0,
+          "totalNs": 34768655356
+        },
+        "staleResults": 0,
+        "turnaround": {
+          "calls": 1110445,
+          "clockErrors": 0,
+          "histogram": [
+            0,
+            0,
+            3486,
+            1106326,
+            628,
+            5,
+            0,
+            0
+          ],
+          "maxNs": 5162834,
+          "overruns": 0,
+          "totalNs": 2847327293020
+        },
+        "wall": {
+          "calls": 1110445,
+          "clockErrors": 0,
+          "histogram": [
+            0,
+            0,
+            0,
+            427847,
+            682503,
+            94,
+            1,
+            0
+          ],
+          "maxNs": 5007875,
+          "overruns": 1,
+          "totalNs": 2804134737808
+        },
+        "workerAllowanceNs": 6666666
+      }
+    }
+  ],
+  "playback": {
+    "startedUtc": "2026-11-05T12:07:38.168861+00:00",
+    "streams": [
+      {
+        "pid": 1781374,
+        "sink": "alsa_output.usb-R__DE_RODECaster_Pro_II_GV0044100-00.HiFi__Speaker__sink",
+        "description": "RODECaster Pro II System",
+        "frequencyHz": 196,
+        "peakBoundDbfs": -40
+      },
+      {
+        "pid": 1781377,
+        "sink": "alsa_output.usb-R__DE_RODECaster_Pro_II_GV0044100-00.HiFi__Line13__sink",
+        "description": "RODECaster Pro II Game",
+        "frequencyHz": 247,
+        "peakBoundDbfs": -40
+      },
+      {
+        "pid": 1781411,
+        "sink": "alsa_output.usb-R__DE_RODECaster_Pro_II_GV0044100-00.HiFi__Line11__sink",
+        "description": "RODECaster Pro II Music",
+        "frequencyHz": 294,
+        "peakBoundDbfs": -40
+      },
+      {
+        "pid": 1781415,
+        "sink": "alsa_output.usb-R__DE_RODECaster_Pro_II_GV0044100-00.HiFi__Line9__sink",
+        "description": "RODECaster Pro II Virtual A",
+        "frequencyHz": 330,
+        "peakBoundDbfs": -40
+      },
+      {
+        "pid": 1781418,
+        "sink": "alsa_output.usb-R__DE_RODECaster_Pro_II_GV0044100-00.HiFi__Line7__sink",
+        "description": "RODECaster Pro II Virtual B",
+        "frequencyHz": 392,
+        "peakBoundDbfs": -40
+      },
+      {
+        "pid": 1781421,
+        "sink": "alsa_output.usb-R__DE_RODECaster_Pro_II_GV0044100-00.HiFi__Line14__sink",
+        "description": "RODECaster Pro II Chat",
+        "frequencyHz": 440,
+        "peakBoundDbfs": -40
+      }
+    ],
+    "sampleRate": 48000,
+    "stopCondition": "qualification monitor finishes or 2 hours elapse"
+  },
+  "jackRecorderEvent": "4926.669 s clientFinishedLate client=usb1out",
+  "rawEvidenceDirectory": "/home/ibanks/.local/state/rc2fx-qualification/2026-11-05-1.0.1"
+}
