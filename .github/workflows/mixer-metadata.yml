@@ -1,0 +1,57 @@
+name: Renew mixer metadata
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * 1,4'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mixer-release
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    # Enable only after the trust root and the first signed release are published.
+    if: vars.MIXER_UPDATES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment: mixer-renewal
+    permissions:
+      contents: write
+    steps:
+      - name: Require main
+        env:
+          CURRENT_REF: ${{ github.ref }}
+        run: test "$CURRENT_REF" = refs/heads/main
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+      - name: Build renewal tool without signing credentials
+        run: cargo build --locked -p xtask
+      - name: Download existing signed metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release download mixer-metadata --pattern '*.json' --dir target/current-mixer-metadata
+      - name: Renew discovery signatures without target or root keys
+        env:
+          MIXER_SNAPSHOT_KEY: ${{ secrets.MIXER_SNAPSHOT_KEY }}
+          MIXER_TIMESTAMP_KEY: ${{ secrets.MIXER_TIMESTAMP_KEY }}
+        run: |
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s' "$MIXER_SNAPSHOT_KEY" > "$keydir/snapshot.pem"
+          printf '%s' "$MIXER_TIMESTAMP_KEY" > "$keydir/timestamp.pem"
+          unset MIXER_SNAPSHOT_KEY MIXER_TIMESTAMP_KEY
+          sequence=$(date -u +%s)
+          expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
+          target/debug/xtask mixer-refresh config/mixer-update-root.json target/current-mixer-metadata target/renewed-mixer-metadata "$sequence" "$expires" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
+      - name: Publish snapshot, then timestamp
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 .github/scripts/publish_mixer.py --refresh target/renewed-mixer-metadata

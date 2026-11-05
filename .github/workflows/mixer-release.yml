@@ -1,0 +1,86 @@
+name: Mixer release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mixer-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require protected main
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: test "$RELEASE_REF" = refs/heads/main
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+      - name: Set up verified Zig
+        run: bash .github/scripts/setup-release-tools.sh zig
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2
+        with:
+          tool: cargo-zigbuild@0.24.0,cargo-about@0.8.4
+          fallback: none
+      - name: Test and build the mixer payload
+        run: |
+          rustup component add rust-docs
+          python3 .github/scripts/test_publish_mixer.py
+          cargo test --locked -p xtask mixer_
+          cargo test --locked -p rc2fx-installer --lib
+          cargo xtask mixer-build
+          cargo xtask mixer-package target/mixer-release
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: unsigned-mixer
+          path: target/mixer-release/
+          if-no-files-found: error
+          retention-days: 30
+
+  sign-and-publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    # Configure required reviewers and main-only deployment before use. Only
+    # release-role keys belong here; root keys must remain offline.
+    environment: mixer-signing
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: unsigned-mixer
+          path: target/mixer-release
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+      - name: Build signing tool without signing credentials
+        run: cargo build --locked -p xtask
+      - name: Sign verified release payload
+        env:
+          MIXER_TARGETS_KEY: ${{ secrets.MIXER_TARGETS_KEY }}
+          MIXER_SNAPSHOT_KEY: ${{ secrets.MIXER_SNAPSHOT_KEY }}
+          MIXER_TIMESTAMP_KEY: ${{ secrets.MIXER_TIMESTAMP_KEY }}
+        run: |
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s' "$MIXER_TARGETS_KEY" > "$keydir/targets.pem"
+          printf '%s' "$MIXER_SNAPSHOT_KEY" > "$keydir/snapshot.pem"
+          printf '%s' "$MIXER_TIMESTAMP_KEY" > "$keydir/timestamp.pem"
+          unset MIXER_TARGETS_KEY MIXER_SNAPSHOT_KEY MIXER_TIMESTAMP_KEY
+          sequence=$(date -u +%s)
+          expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
+          target/debug/xtask mixer-sign config/mixer-update-root.json target/mixer-release target/mixer-metadata "$sequence" "$expires" "$keydir/targets.pem" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
+      - name: Verify uploads and publish payload before discovery metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: python3 .github/scripts/publish_mixer.py target/mixer-release target/mixer-metadata
