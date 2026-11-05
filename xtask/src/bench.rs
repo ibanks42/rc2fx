@@ -1,7 +1,7 @@
 //! Times DeepFilterNet on the mixer over a recording (crates/rc2fx-bench)
 //! and fetches the denoised audio; optionally compares a candidate weights file.
 use crate::{Result, mixer::Mixer, root, setup};
-use std::{fs, path::Path, process::Command};
+use std::{fs, io::Read, path::Path, process::Command};
 
 /// The fixed suppression engine and an optional candidate weights comparison.
 const MODELS: &[&str] = &["deepfilternet3-h128"];
@@ -133,8 +133,11 @@ pub fn run(input: &str, flags: &[&str]) -> Result {
             .unwrap_or_default();
         overruns.push(overruns_during(&window));
     }
+    // Bulk uncompressed SSH downloads disturb the live audio graph. Device
+    // comparisons found compressed downloads clean, at the cost of transfer
+    // time. Uploads did not benefit, so keep their existing path unchanged.
     let results =
-        mixer.capture("cd /run/rc2fx-bench && tar -cf - *.wav *.json *.log 2>/dev/null; true");
+        mixer.capture("cd /run/rc2fx-bench && tar -czf - *.wav *.json *.log 2>/dev/null; true");
     let _ = mixer.ssh("rm -rf /run/rc2fx-bench", b"");
     outcome?;
 
@@ -142,11 +145,74 @@ pub fn run(input: &str, flags: &[&str]) -> Result {
     let out = root().join("target/bench").join(stem.as_ref());
     let _ = fs::remove_dir_all(&out);
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    tar::Archive::new(results?.as_slice())
-        .unpack(&out)
-        .map_err(|e| e.to_string())?;
+    unpack_results(&results?, &out)?;
     fs::rename(out.join("input.wav"), out.join("00-input.wav")).map_err(|e| e.to_string())?;
     report(&out, &models, &overruns)
+}
+
+fn unpack_results(bytes: &[u8], out: &Path) -> Result {
+    // Read through the gzip footer before touching the output directory. A tar
+    // reader can stop at its end marker without checking a truncated gzip tail.
+    let mut archive = Vec::new();
+    flate2::read::GzDecoder::new(bytes)
+        .read_to_end(&mut archive)
+        .map_err(|e| format!("decoding benchmark results: {e}"))?;
+    tar::Archive::new(archive.as_slice())
+        .unpack(out)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+
+    fn compressed_results() -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (name, bytes) in [
+            ("input.wav", &b"RIFF\0\xff\x80binary audio"[..]),
+            ("model.json", &b"{\"frames\":200}"[..]),
+            ("model.log", &b"completed\n"[..]),
+        ] {
+            let mut header = tar::Header::new_ustar();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o600);
+            header.set_cksum();
+            archive.append_data(&mut header, name, bytes).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn compressed_results_preserve_audio_and_reports() {
+        let out = tempfile::tempdir().unwrap();
+        unpack_results(&compressed_results(), out.path()).unwrap();
+        assert_eq!(
+            fs::read(out.path().join("input.wav")).unwrap(),
+            b"RIFF\0\xff\x80binary audio"
+        );
+        assert_eq!(
+            fs::read(out.path().join("model.json")).unwrap(),
+            b"{\"frames\":200}"
+        );
+        assert_eq!(
+            fs::read(out.path().join("model.log")).unwrap(),
+            b"completed\n"
+        );
+    }
+
+    #[test]
+    fn incomplete_or_corrupt_gzip_is_rejected_before_unpacking() {
+        let good = compressed_results();
+        let mut bad_crc = good.clone();
+        let crc = bad_crc.len() - 8;
+        bad_crc[crc] ^= 1;
+        for bytes in [&good[..good.len() - 8], bad_crc.as_slice()] {
+            let out = tempfile::tempdir().unwrap();
+            assert!(unpack_results(bytes, out.path()).is_err());
+            assert_eq!(fs::read_dir(out.path()).unwrap().count(), 0);
+        }
+    }
 }
 
 /// RC2FX audio-callback overruns while the benchmark's timed loop ran, and the
