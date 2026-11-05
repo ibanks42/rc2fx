@@ -63,7 +63,10 @@ The current version is `[workspace.package] version` in `Cargo.toml`.
 
 - First release (no stable `vX.Y.Z` tag yet): the
   version in `Cargo.toml` is released unchanged, so `1.0.0` becomes `v1.0.0`.
-  The bump choice is ignored.
+  The bump choice is ignored. The workflow preserves the reviewed initial
+  changelog, which must contain exactly one section matching that version.
+  If the prepared files already match the source, it tags that source commit
+  without creating an empty release commit.
 - Later releases: each one increases the version. The bump is applied to the tag matching the version in
   `Cargo.toml`. That tag must exist, be in `main`'s history, and have commits
   after it.

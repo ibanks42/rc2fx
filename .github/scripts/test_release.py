@@ -77,6 +77,33 @@ class ReleaseTests(unittest.TestCase):
         self.prepare("minor")
         self.assertIn('version = "0.1.0"', (self.root / "Cargo.toml").read_text())
 
+    def test_reviewed_initial_notes_are_preserved_and_existing_source_can_be_tagged(self):
+        changelog = "# Changelog\n\n## [0.1.0] - 2026-11-05\n\n### Initial release\n\n- Mixer performance improvements.\n"
+        self.put("CHANGELOG.md", changelog)
+        self.git("add", ".")
+        self.git("commit", "-m", "docs: consolidate initial release notes")
+        source = self.git("rev-parse", "HEAD")
+        subprocess.run(["python3", str(SCRIPT), "prepare", "--preserve-initial-notes"],
+                       cwd=self.root, env=self.env, check=True, capture_output=True)
+        self.assertEqual((self.root / "CHANGELOG.md").read_text(), changelog)
+        notes = (self.root / "target/release-input/release-notes.md").read_text()
+        self.assertIn("Mixer performance improvements", notes)
+        self.assertNotIn("Initial project", notes)
+        subprocess.run(["python3", str(SCRIPT), "commit"], cwd=self.root,
+                       env=self.env, check=True, capture_output=True)
+        self.assertEqual(self.git("rev-parse", "v0.1.0"), source)
+        self.assertEqual(self.git("rev-parse", "HEAD"), source)
+
+    def test_reviewed_initial_notes_reject_old_version_sections(self):
+        self.put("CHANGELOG.md", "# Changelog\n\n## [0.1.0] - 2026-11-05\n\n- Initial.\n\n## [1.0.0] - 2026-11-04\n\n- Old.\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "docs: invalid initial history")
+        result = subprocess.run(["python3", str(SCRIPT), "prepare", "--preserve-initial-notes"],
+                                cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exactly one", result.stderr)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
     def test_download_only_app_release_is_independent_of_pending_mixer_notes(self):
         self.put("crates/rc2fx-app/Cargo.toml", '[features]\ndefault = []\nembedded = []\n')
         self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":1}')

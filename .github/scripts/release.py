@@ -128,7 +128,7 @@ def validate_pending_mixer_notes(previous):
         raise ValueError(f"New mixer version {version} needs curated mixer release notes")
 
 
-def prepare(bump):
+def prepare(bump, preserve_initial_notes=False):
     if not os.environ.get("ACT") and git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("Release checkout must be clean")
     current = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
@@ -156,6 +156,12 @@ def prepare(bump):
         raise ValueError("Version must increase")
     if git("tag", "--list", tag):
         raise ValueError(f"Tag {tag} already exists")
+    initial_notes = None
+    if not tags and preserve_initial_notes:
+        sections = parse_changelog(Path("CHANGELOG.md"))
+        if set(sections) != {version} or not sections[version].body.strip():
+            raise ValueError("Initial release needs exactly one nonempty changelog section for its version")
+        initial_notes = sections[version].body
     if bundles_mixer():
         warn_mixer_version(previous)
         validate_pending_mixer_notes(previous)
@@ -164,7 +170,10 @@ def prepare(bump):
         shutil.rmtree(OUTPUT)
     OUTPUT.mkdir(parents=True)
     notes = OUTPUT / "release-notes.md"
-    subprocess.run(cliff + history + ["--tag", tag, "--strip", "all", "--output", str(notes)], check=True)
+    if initial_notes is not None:
+        notes.write_text(initial_notes.rstrip() + "\n")
+    else:
+        subprocess.run(cliff + history + ["--tag", tag, "--strip", "all", "--output", str(notes)], check=True)
     if not notes.read_text().strip():
         raise ValueError("Release notes are empty")
     mixer_manifest = Path("config/mixer-release.json")
@@ -177,8 +186,9 @@ def prepare(bump):
         with notes.open("a") as output:
             output.write("\nMixer software is downloaded separately by the firmware installer.\n")
     changelog = Path("CHANGELOG.md")
-    destination = "--prepend" if previous and changelog.exists() else "--output"
-    subprocess.run(cliff + history + ["--unreleased", "--tag", tag, destination, str(changelog)], check=True)
+    if initial_notes is None:
+        destination = "--prepend" if previous and changelog.exists() else "--output"
+        subprocess.run(cliff + history + ["--unreleased", "--tag", tag, destination, str(changelog)], check=True)
     if version not in parse_changelog(changelog):
         raise ValueError(f"Release {tag} has no valid changelog section")
     files.append(str(changelog))
@@ -208,7 +218,11 @@ def commit():
     git("config", "user.name", "github-actions[bot]")
     git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
     git("add", "--", *plan["files"])
-    print(git("commit", "--only", "-m", f"chore(release): {tag}", "--", *plan["files"]))
+    changed = subprocess.run(["git", "diff", "--cached", "--quiet", "--", *plan["files"]]).returncode
+    if changed == 1:
+        print(git("commit", "--only", "-m", f"chore(release): {tag}", "--", *plan["files"]))
+    elif changed != 0:
+        raise ValueError("Could not check prepared release changes")
     git("tag", tag)
     print(f"Created local tag {tag}")
 
@@ -217,8 +231,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["prepare", "commit"])
     parser.add_argument("--bump", choices=["patch", "minor", "major"], default="patch")
+    parser.add_argument("--preserve-initial-notes", action="store_true",
+                        help="Use the reviewed single changelog section when publishing the first release")
     args = parser.parse_args()
     if args.command == "prepare":
-        prepare(args.bump)
+        prepare(args.bump, args.preserve_initial_notes)
     else:
         commit()

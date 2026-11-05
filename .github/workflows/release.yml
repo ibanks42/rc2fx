@@ -67,7 +67,7 @@ jobs:
         id: version
         env:
           BUMP: ${{ inputs.bump }}
-        run: python3 .github/scripts/release.py prepare --bump "$BUMP"
+        run: python3 .github/scripts/release.py prepare --bump "$BUMP" --preserve-initial-notes
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
