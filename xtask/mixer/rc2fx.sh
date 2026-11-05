@@ -1727,6 +1727,10 @@ xrun_trace() {
       test $# -eq 1 && [[ $1 =~ ^[0-9]+$ ]] || return 2
       test -d "$dir" && test "$(cat "$instance/tracing_on")" = 1 || return 1
       test -x /run/rc2fx-trace-hog || return 1
+      # The minimal profile normally omits unrelated task transitions. Include
+      # the known injector so a controlled test can name it before USB wakes.
+      filter=$(cat "$instance/events/sched/sched_switch/filter")
+      echo "($filter) || prev_comm == \"rc2fx-test-hog\" || next_comm == \"rc2fx-test-hog\" || next_comm == \"rc2fx-trace-hog\"" > "$instance/events/sched/sched_switch/filter"
       # Pin just the measured thread for the bounded test, restoring the exact
       # original mask even if the injector fails. Otherwise it can migrate away.
       tid=$(sed -n '1s/.*callback_tid=//p' "$dir/identity")
