@@ -1,5 +1,12 @@
 # Xrun flight recorder
 
+Kernel scheduler timestamps must pass a cadence check before the analyzer
+attributes durations, CPU occupancy or cross-CPU ordering. Invalid or incomplete
+kernel timing is reported explicitly; native monotonic histories can still be
+examined separately. Task selection uses `set_event_pid` rather than event-field
+filters to avoid the kernel event-discard path. Nearby callbacks alone do not
+prove which JACK cycle owned a fault.
+
 This is opt-in diagnostic tooling for the RØDECaster Pro II. It does not make
 xruns harmless or treat a clean run as proof that every cause has been removed.
 It preserves evidence at the first fault, independently of host polling.
@@ -108,14 +115,13 @@ their existing masks. The main callback remains on CPU 2.
 The original masks, process IDs and thread start times are saved with the
 capture. `clear` restores them only if the same process/thread still exists.
 This is an experimental bench policy, not a production fix. The ordinary bench
-leaves affinity unchanged. The qualification trace filters scheduler events to
-RT priorities below kernel priority 80, retaining the critical audio clients,
-helpers and IRQ threads while reducing background event volume.
+leaves affinity unchanged. Diagnostic tracing uses `set_event_pid` for mixer,
+JACK and SIP tasks. Event field filters are disabled to avoid the known discard path.
+See the [kernel PID-selection documentation](https://docs.kernel.org/trace/ftrace.html#set-event-pid).
 
-The default profile records only transitions involving the measured USB thread,
-main callback or JACK threads. It omits syscall events. `--deep` on `arm` or
-`bench.py` restores the broader RT scheduling/syscall capture, including
-external SIP-client semaphore identity. The minimal profile cannot establish
+The default profile records transitions involving selected mixer, JACK and SIP
+tasks through PID selection, and omits syscall events. `--deep` adds syscall
+capture for those tasks, including external SIP semaphore identity. The minimal profile cannot establish
 continuous occupancy by an intermediate competitor; analysis marks that scope
 and reports intervals since observed switches. Use the deep profile when the
 minimal evidence does not distinguish the mechanism.

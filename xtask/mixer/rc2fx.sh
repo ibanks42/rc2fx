@@ -1743,10 +1743,8 @@ xrun_trace() {
       test $# -eq 1 && [[ $1 =~ ^[0-9]+$ ]] || return 2
       test -d "$dir" && test "$(cat "$instance/tracing_on")" = 1 || return 1
       test -x /run/rc2fx-trace-hog || return 1
-      # The minimal profile normally omits unrelated task transitions. Include
-      # the known injector so a controlled test can name it before USB wakes.
-      filter=$(cat "$instance/events/sched/sched_switch/filter")
-      echo "($filter) || prev_comm == \"rc2fx-test-hog\" || next_comm == \"rc2fx-test-hog\" || next_comm == \"rc2fx-trace-hog\"" > "$instance/events/sched/sched_switch/filter"
+      # The injector enrolls its own PID before running. Keep the same PID
+      # selection path as the actual bench; never use event field filters.
       # Pin just the measured thread for the bounded test, restoring the exact
       # original mask even if the injector fails. Otherwise it can migrate away.
       tid=$(sed -n '1s/.*callback_tid=//p' "$dir/identity")
@@ -1756,7 +1754,7 @@ xrun_trace() {
         trap 'taskset -pc "$allowed" "$tid" >/dev/null || true' EXIT
         printf 'RC2FX_SELFTEST tid=%s cpu=%s bounded_hog_ms=10\n' "$tid" "$1" > "$instance/trace_marker"
         taskset -pc "$1" "$tid" >/dev/null
-        /run/rc2fx-trace-hog "$1"
+        /run/rc2fx-trace-hog "$1" --trace-pid
       )
       ;;
     arm)
@@ -1798,19 +1796,18 @@ xrun_trace() {
       echo 1 > "$instance/events/rc2fx_xrun/fault/enable"
       cat "$instance/events/sched/sched_switch/filter" > "$dir/original-switch-filter"
       cat "$instance/events/sched/sched_waking/filter" > "$dir/original-waking-filter"
-      filter="prev_pid == $tid || next_pid == $tid || prev_pid == $main_tid || next_pid == $main_tid"
-      for f in /proc/"$jack"/task/*; do
-        gui=${f##*/}; filter="$filter || prev_pid == $gui || next_pid == $gui"
+      test -z "$(cat "$instance/set_event_pid")" || { echo 'Existing event PID filter is in use' >&2; return 1; }
+      cat "$instance/set_event_pid" > "$dir/original-event-pids"
+      echo 0 > "$instance/events/sched/sched_switch/filter"
+      echo 0 > "$instance/events/sched/sched_waking/filter"
+      filter=
+      for gui in "$pid" "$jack" $(pgrep -x callme-t); do
+        for f in /proc/"$gui"/task/*; do filter="$filter ${f##*/}"; done
       done
-      if test "$profile" = deep; then
-        echo 'prev_prio < 80 || next_prio < 80' > "$instance/events/sched/sched_switch/filter"
-        echo 'prio < 80' > "$instance/events/sched/sched_waking/filter"
-      else
-        echo "$filter" > "$instance/events/sched/sched_switch/filter"
-        echo "pid == $tid || pid == $main_tid" > "$instance/events/sched/sched_waking/filter"
-      fi
+      echo "$filter" > "$instance/set_event_pid"
+      echo "$filter" > "$dir/event-pids"
       echo "$profile" > "$dir/profile"
-      for f in sched/sched_switch sched/sched_waking sched/sched_wakeup_new; do
+      for f in sched/sched_switch sched/sched_waking sched/sched_wakeup sched/sched_wakeup_new; do
         echo 1 > "$instance/events/$f/enable"
       done
       # Keep syscall probes on the deadline path. GUI and vendor pool threads
@@ -1824,7 +1821,7 @@ xrun_trace() {
       done
       for f in sys_enter sys_exit; do
         cat "$instance/events/raw_syscalls/$f/filter" > "$dir/original-filter-$f"
-        echo "$filter" > "$instance/events/raw_syscalls/$f/filter"
+        echo 0 > "$instance/events/raw_syscalls/$f/filter"
         if test "$profile" = deep; then echo 1 > "$instance/events/raw_syscalls/$f/enable"; fi
       done
       printf 'mixer=%s jack=%s callback_tid=%s\n' "$pid" "$jack" "$tid" > "$dir/identity"
@@ -1883,6 +1880,7 @@ xrun_trace() {
         fi
         echo 0 > "$instance/tracing_on"
         echo 0 > "$instance/events/enable"
+        if test -f "$dir/original-event-pids"; then echo > "$instance/set_event_pid"; fi
         if test -f "$instance/events/rc2fx_xrun/fault/trigger" && grep -q '^traceoff' "$instance/events/rc2fx_xrun/fault/trigger"; then
           echo '!traceoff' > "$instance/events/rc2fx_xrun/fault/trigger"
         fi

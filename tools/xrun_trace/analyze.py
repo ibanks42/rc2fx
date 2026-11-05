@@ -106,10 +106,62 @@ def callback_detail(rows, tid, start, end, initial_state='running'):
             'competitors': [{'tid': other, 'comm': names[other], 'observedCpuUs': seconds*1e6} for other, seconds in competitors.most_common()],
             'syscalls': syscalls, 'wakeups': wakes, 'interrupts': irqs}
 
+def kernel_timing_sanity(rows, audit):
+    """A clock probe without discarded events cannot validate filtered tracing."""
+    usb_tids={r['tid'] for r in audit.get('clientTiming',{}).get('registrations',[]) if r.get('name')=='usb1out' and r.get('tid')}
+    jack=[];usb=[]
+    wake_event='sched_waking' if any(r['event']=='sched_waking' for r in rows) else 'sched_wakeup'
+    for row in rows:
+        if row['event']=='sched_switch' and re.search(r'next_comm=jackd next_pid=\d+ next_prio=48(?:\s|$)',row['data']):jack.append(row['time'])
+        if row['event']==wake_event:
+            m=WAKE.search(row['data'])
+            if m and int(m[2]) in usb_tids:usb.append(row['time'])
+    def cadence(values):
+        gaps=[b-a for a,b in zip(values,values[1:])]
+        good=sum(.0015<=gap<=.003 for gap in gaps)
+        return {'intervals':len(gaps),'inBandFraction':good/len(gaps) if gaps else 0,
+                'belowBand':sum(g<.0015 for g in gaps),'aboveBand':sum(g>.003 for g in gaps),
+                'passed':len(gaps)>=32 and good/len(gaps)>=.95}
+    result={'jackDriver':cadence(jack),'usb1out':cadence(usb),
+            'requiredFraction':.95,'intervalBandSeconds':[.0015,.003],'minimumIntervals':32}
+    result['passed']=all(result[k]['passed'] for k in ('jackDriver','usb1out'))
+    return result
+
+
 def analyze(text, audit, stats='', fault_records=None, flight_audit=None, client_maps=None):
+    rows=parse(text);sanity=kernel_timing_sanity(rows,audit)
+    if sanity['passed']:
+        result=_attribute(text,audit,stats,fault_records,flight_audit,client_maps)
+        result.update(kernelAttributionValid=True,kernelTimingSanity=sanity)
+        return result
+    result={'classification':'invalid-kernel-timestamps','kernelAttributionValid':False,
+            'kernelTimingSanity':sanity,'limitations':[
+                'Kernel cadence failed or lacks enough samples; no kernel durations, competitor occupancy or cross-CPU ordering may be attributed'],
+            'meaning':'Kernel timing is not valid for attribution; native monotonic records remain usable.'}
+    fault=next((r for r in rows if r['event']=='fault'),None)
+    if fault:
+        client=re.search(r'client="([^"]+)"',fault['data']);anchor=re.search(r'mono_ns=(\d+)',fault['data'])
+        result['faultIdentity']={'client':client[1] if client else None,'data':fault['data'],
+                                 'monotonicNs':int(anchor[1]) if anchor else None}
+        flight=(flight_audit or {}).get('clientTiming',{})
+        if client and anchor:
+            t=int(anchor[1]);native=[]
+            for reg in flight.get('registrations',[]):
+                if reg.get('name')!=client[1] or not reg.get('flight'):continue
+                for start,end,cycle,budget in reg['flight']['recent']['rows']:
+                    if start<=t and t-end<10_000_000:
+                        native.append({'startNs':start,'endNs':end,'cycleStartEstimateNs':cycle,
+                                       'budgetNs':budget,'wallNs':end-start,
+                                       'remainingAtEntryEstimateNs':cycle+budget-start if cycle else None})
+            result['nativeClientCallbacks']=native
+            result['nativeMainHistory']=flight.get('mainFlight')
+    return result
+
+def _attribute(text, audit, stats='', fault_records=None, flight_audit=None, client_maps=None):
     rows = parse(text)
     limitations = []
     result = {'classification': 'insufficient-capture', 'limitations': limitations,
+              'cycleCorrelation': 'Nearby callback intervals are not proven to be the fault-owning JACK cycle; async catch-up and notification multiplicity require separate correlation',
               'meaning': 'Observed scheduling/blocking mechanism; driver or application defect still requires source correlation.'}
     if re.search(r'(?:commit overrun|dropped events):\s*[1-9]', stats) or 'LOST EVENTS' in text:
         limitations.append('Trace reports lost events beyond normal overwrite of old history')

@@ -1,5 +1,6 @@
 import unittest
-from analyze import analyze
+from analyze import _attribute as analyze
+# Synthetic mechanism fixtures bypass cadence validation; test_sanity covers the public gate.
 
 AUDIT={'clientTiming':{'registrations':[{'name':'usb1out','tid':42}]}}
 def line(t,event,data,tid=42,cpu=1,comm='USBOutJckThread'):
