@@ -2,6 +2,20 @@
 
 All notable changes to RC2FX are documented here.
 
+## [1.0.1] - 2026-11-05
+
+### Features
+
+- *(updates)* Show separate app and mixer update histories
+- *(packaging)* Check the Linux packages locally before a release
+
+### Bug fixes
+
+- *(ci)* Let the macOS release job see draft releases
+- *(ci)* Keep the tag when updating a draft release
+- *(packaging)* Make the Linux packages install on their target distributions
+- *(packaging)* Cover libbsd and libmd in the AppImage notices
+
 ## [1.0.0] - 2026-11-04
 
 ### Features

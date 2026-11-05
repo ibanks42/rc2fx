@@ -5376,7 +5376,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-app"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -5390,7 +5390,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5399,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-device"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -5417,14 +5417,14 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-dfn"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "realfft",
 ]
 
 [[package]]
 name = "rc2fx-dsp"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -5433,7 +5433,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-firmware"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5442,7 +5442,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-installer"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "flate2",
  "getrandom 0.3.4",
@@ -5465,7 +5465,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-native-control"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -5476,7 +5476,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-suppression"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -5487,7 +5487,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-transport"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rc2fx-core",
  "rc2fx-installer",
@@ -5498,7 +5498,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-usb"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "flate2",
  "serde",
@@ -8661,7 +8661,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "object",
  "rc2fx-firmware",
