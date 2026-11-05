@@ -96,6 +96,18 @@ class Tests(unittest.TestCase):
         self.assertIn('rc_audio_mixer;HIDThread;JUCE Timer - 0;weird ) name', log)
         self.assertIn('STAMP', log)
 
+    def test_an_unchanged_scan_forks_no_text_processing_commands(self):
+        self.tree.thread(101,'HIDThread','1,3',0)
+        self.tree.thread(102,'Pool','0',2)
+        calls=self.root/'external-calls'
+        for command in ['cat','awk','sed']:
+            path=self.root/'bin'/command
+            path.write_text(f'#!/bin/sh\necho {command} >> {calls}\nexit 97\n')
+            path.chmod(0o755)
+        self.run_move()
+        self.assertFalse(calls.exists(),calls.read_text() if calls.exists() else '')
+        self.assertFalse(self.moved.exists())
+
     def test_nothing_to_move_logs_nothing(self):
         self.tree.thread(101, 'rc2fx-worker', '0', 0)
         self.tree.thread(102, 'audio', '0', 1)

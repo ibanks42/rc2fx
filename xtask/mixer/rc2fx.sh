@@ -67,8 +67,8 @@ mixer_settle=60
 
 stamp() { date -u +%FT%TZ; }
 say() { printf '%s %s\n' "$(stamp)" "$*"; }
-start_time() { local record rest; record=$(cat "/proc/$1/stat"); rest=${record##*) }; set -- $rest; printf '%s\n' "${20}"; }
-alive() { test -e "/proc/$1/stat" && ! grep -q ') Z ' "/proc/$1/stat"; }
+start_time() { local record rest; local -a fields=(); IFS= read -r record 2>/dev/null < "/proc/$1/stat" || return 1; rest=${record##*) }; read -r -a fields <<< "$rest"; test "${#fields[@]}" -gt 19 || return 1; printf '%s\n' "${fields[19]}"; }
+alive() { local record rest; IFS= read -r record 2>/dev/null < "/proc/$1/stat" || return 1; rest=${record##*) }; test "${rest%% *}" != Z; }
 uptime_s() { cut -d. -f1 /proc/uptime; }
 supervisor() { local pid; pid=$(cat "$run/supervisor.pid" 2>/dev/null) && alive "$pid" && printf '%s\n' "$pid"; }
 # The bundle the shim starts next: a build in RAM wins over the installed one.
@@ -922,19 +922,25 @@ logs() {
 # those whose affinity is exactly CPU 0; RT threads and any other affinity are
 # left alone. Races with a thread exiting are ignored.
 relocate_housekeeping() {
-  local pid=$1 proc=${RC2FX_PROC:-/proc} task tid comm moved= names= policy affinity
-  local -a batch=()
+  local pid=$1 proc=${RC2FX_PROC:-/proc} task tid comm moved='' names='' policy affinity key value rest record
+  local -a batch=() stat_fields=()
   for task in "$proc/$pid"/task/*/; do
     task=${task%/}
     tid=${task##*/}
     [[ "$tid" =~ ^[0-9]+$ ]] || continue
-    comm=$(cat "$task/comm" 2>/dev/null) || continue
+    IFS= read -r comm 2>/dev/null < "$task/comm" || continue
     case "$comm" in rc2fx*) continue;; esac
-    affinity=$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null) || continue
+    affinity=
+    while read -r key value rest; do
+      if test "$key" = Cpus_allowed_list:; then affinity=$value; break; fi
+    done 2>/dev/null < "$task/status" || continue
     test "$affinity" = 0 || continue
     # Field 39 is the policy; strip up to the LAST ") " so a comm with spaces
     # or a ')' does not shift the fields.
-    policy=$(sed 's/.*) //' "$task/stat" 2>/dev/null | awk '{print $39}')
+    IFS= read -r record 2>/dev/null < "$task/stat" || continue
+    rest=${record##*) }
+    read -r -a stat_fields <<< "$rest"
+    policy=${stat_fields[38]:-}
     test "$policy" = 0 || continue
     taskset -p 0xa "$tid" >/dev/null 2>&1 || continue
     batch+=("$comm")
@@ -954,7 +960,7 @@ relocate_housekeeping() {
 # controller exits, the mixer never becomes ready, or a stop is requested.
 supervise() {
   # Globals, not locals: the EXIT trap runs cleanup after this function returns.
-  controller_pid= tick=0
+  controller_pid='' tick=0
   read -r native_pid native_start <<< "$RC2FX_MIXER"
   cleanup() {
     trap - EXIT INT TERM HUP
@@ -972,7 +978,13 @@ supervise() {
     test "$(cat "$run/supervisor.pid" 2>/dev/null)" != "$$" || rm -f "$run/supervisor.pid"
     sync
   }
-  mixer_alive() { alive "$native_pid" && test "$(start_time "$native_pid" 2>/dev/null)" = "$native_start"; }
+  mixer_alive() {
+    local record rest
+    local -a fields=()
+    IFS= read -r record 2>/dev/null < "/proc/$native_pid/stat" || return 1
+    rest=${record##*) }; read -r -a fields <<< "$rest"
+    test "${fields[0]:-}" != Z && test "${fields[19]:-}" = "$native_start"
+  }
   # Ends the mixer for the launcher to restart; $1 is the reason, recorded
   # for stock when $2 is `stock`.
   end_mixer() {
