@@ -175,7 +175,10 @@ pub fn release_script(script: &[u8]) -> Result<Vec<u8>, String> {
 /// mixer build's `target/mixer` in a source checkout.
 pub fn source_dir(root: &Path) -> PathBuf {
     let runtime = root.join("runtime");
-    if runtime.is_dir() {
+    // A checkout (including an unpacked source archive) builds into target.
+    // A leftover runtime directory must not shadow that build, even if it
+    // contains a valid older payload. Never fall back after validation fails.
+    if !root.join("Cargo.toml").is_file() && runtime.is_dir() {
         runtime
     } else {
         root.join("target").join("mixer")
@@ -196,8 +199,8 @@ pub fn read(root: &Path, release: bool) -> Result<Files, String> {
         } else {
             source.join(name)
         };
-        let mut data =
-            std::fs::read(&path).map_err(|e| format!("runtime bundle missing {name}: {e}"))?;
+        let mut data = std::fs::read(&path)
+            .map_err(|e| format!("runtime bundle missing {}: {e}", path.display()))?;
         if script {
             data = crlf_to_lf(&data);
             if name == "rc2fx.sh" {
@@ -988,6 +991,43 @@ mod tests {
         // for development does not turn it back.
         let expected = Envelope::expected(release.path(), false).unwrap();
         assert_eq!(build_kind(&script_of(&expected)).unwrap(), RELEASE);
+    }
+
+    #[test]
+    fn a_source_checkout_uses_the_staged_mixer_even_with_a_runtime_directory() {
+        let dir = folder(1, false);
+        let root = dir.path();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::rename(root.join("runtime"), root.join("target/mixer")).unwrap();
+        // An empty leftover directory must not hide a successful mixer-build.
+        std::fs::create_dir(root.join("runtime")).unwrap();
+        assert_eq!(read(root, false).unwrap(), payload(1));
+        // Nor may an older, otherwise valid bundle override the staged one.
+        for (name, data) in payload(2) {
+            if !SCRIPTS.contains(&name.as_str()) {
+                std::fs::write(root.join("runtime").join(name), data).unwrap();
+            }
+        }
+        assert_eq!(read(root, false).unwrap(), payload(1));
+        // A missing staged file must fail instead of silently using old files.
+        std::fs::remove_file(root.join("target/mixer/rc2fxd")).unwrap();
+        assert!(read(root, false).unwrap_err().contains("rc2fxd"));
+    }
+
+    #[test]
+    fn a_release_folder_uses_runtime_even_with_a_staged_mixer_directory() {
+        let dir = folder(1, false);
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("target/mixer")).unwrap();
+        for (name, data) in payload(2) {
+            if !SCRIPTS.contains(&name.as_str()) {
+                std::fs::write(root.join("target/mixer").join(name), data).unwrap();
+            }
+        }
+        assert_eq!(read(root, false).unwrap(), payload(1));
+        std::fs::remove_file(root.join("runtime/rc2fxd")).unwrap();
+        assert!(read(root, false).unwrap_err().contains("rc2fxd"));
     }
 
     #[test]
