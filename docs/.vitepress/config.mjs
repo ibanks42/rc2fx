@@ -29,9 +29,11 @@ function siteLink(href, page) {
 }
 
 // Heading anchors as GitHub makes them, so links like `building.md#3-package-it`
-// work here, on GitHub and in the release package alike.
+// work here, on GitHub and in the release package alike. Unlike GitHub, dots
+// are kept so the generated update-history headings (`## v1.0.0`) get stable
+// `#v1.0.0` anchors.
 function slugify(text) {
-  return text.trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, '').replace(/\s/g, '-')
+  return text.trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s_.-]/gu, '').replace(/\s/g, '-')
 }
 
 export default defineConfig({
@@ -43,6 +45,8 @@ export default defineConfig({
   outDir: '../target/docs',
   cacheDir: '../target/docs-cache',
   rewrites: { 'introduction.md': 'index.md' },
+  // Source notes for the generated update histories, not pages themselves.
+  srcExclude: ['updates/source/**'],
   markdown: {
     anchor: { slugify },
     config(md) {
@@ -76,6 +80,14 @@ export default defineConfig({
         ],
       },
       {
+        text: 'Updates',
+        items: [
+          { text: 'Release history', link: '/updates/' },
+          { text: 'App history', link: '/updates/app' },
+          { text: 'Mixer history', link: '/updates/mixer' },
+        ],
+      },
+      {
         text: 'Developing RC2FX',
         collapsed: true,
         items: [
@@ -89,6 +101,7 @@ export default defineConfig({
           { text: 'Commands', link: '/developer/commands' },
           { text: 'Architecture', link: '/developer/architecture' },
           { text: 'Releases', link: '/developer/releases' },
+          { text: 'Update history', link: '/developer/update-history' },
         ],
       },
       {

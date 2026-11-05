@@ -10,6 +10,8 @@ import subprocess
 import tarfile
 import tomllib
 
+from update_history import parse_changelog, parse_mixer_notes
+
 
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 OUTPUT = Path("target/release-input")
@@ -103,6 +105,21 @@ def warn_mixer_version(previous):
               "also trigger it.", flush=True)
 
 
+def validate_pending_mixer_notes(previous):
+    manifest = Path("config/mixer-release.json")
+    if not manifest.exists():
+        return
+    version = json.loads(manifest.read_text())["version"]
+    version_tuple(version)
+    if previous and git("ls-tree", previous, "--", str(manifest)):
+        before = json.loads(git("show", f"{previous}:{manifest}"))["version"]
+        if before == version:
+            return
+    notes = parse_mixer_notes(Path("docs/updates/source/mixer-notes.md"))
+    if version not in notes:
+        raise ValueError(f"New mixer version {version} needs curated mixer release notes")
+
+
 def prepare(bump):
     if not os.environ.get("ACT") and git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("Release checkout must be clean")
@@ -132,6 +149,7 @@ def prepare(bump):
     if git("tag", "--list", tag):
         raise ValueError(f"Tag {tag} already exists")
     warn_mixer_version(previous)
+    validate_pending_mixer_notes(previous)
     files = update_versions(version)
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)
@@ -149,6 +167,8 @@ def prepare(bump):
     changelog = Path("CHANGELOG.md")
     destination = "--prepend" if previous and changelog.exists() else "--output"
     subprocess.run(cliff + history + ["--unreleased", "--tag", tag, destination, str(changelog)], check=True)
+    if version not in parse_changelog(changelog):
+        raise ValueError(f"Release {tag} has no valid changelog section")
     files.append(str(changelog))
     plan = {"tag": tag, "previous": previous, "source": git("rev-parse", "HEAD"), "files": files}
     (OUTPUT / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")

@@ -1,9 +1,12 @@
 //! Checking GitHub for a newer desktop app. Notification only: the app never
 //! downloads or installs anything, it links to the release page.
 use super::*;
-use gpui_kit::component::{WindowExt, dialog::DialogFooter};
+use crate::versions::AppStanding;
+use crate::versions_dialog::RODE_NOTES_URL;
+use gpui_kit::component::WindowExt;
 use rc2fx_installer::app_update::{
-    self, APP_RELEASES_URL, Changelog, ChangelogStatus, UpdateCheck,
+    self, APP_HISTORY_URL, APP_RELEASES_URL, Changelog, ChangelogStatus, MIXER_HISTORY_URL,
+    MixerUpdate, UpdateCheck, UpdateSnapshot,
 };
 
 #[derive(Default)]
@@ -11,17 +14,50 @@ pub(super) struct AppUpdate {
     checking: bool,
     /// The last result, and whether the user asked for it. A failed check
     /// at startup stays quiet; one the user asked for says what went wrong.
-    last: Option<(UpdateCheck, bool)>,
+    last: Option<(UpdateSnapshot, bool)>,
 }
 
 impl AppUpdate {
+    fn result(&self) -> Option<&UpdateCheck> {
+        self.last.as_ref()?.0.app.as_ref()
+    }
+
+    /// Where this app stands, for the Versions dialog.
+    pub(super) fn standing(&self) -> AppStanding {
+        if self.checking {
+            return AppStanding::Checking;
+        }
+        match self.result() {
+            Some(UpdateCheck::UpToDate { latest }) => AppStanding::Current {
+                latest: latest.clone(),
+            },
+            Some(UpdateCheck::Available { version, .. }) => AppStanding::Update {
+                version: version.clone(),
+            },
+            _ => AppStanding::Unknown,
+        }
+    }
+
+    /// Compare a mixer with what is bundled and, once a check has answered,
+    /// published. It needs no network, so it works before the first check.
+    pub(super) fn mixer_update(
+        &self,
+        installed: Option<&str>,
+        bundled: Option<&str>,
+    ) -> MixerUpdate {
+        match &self.last {
+            Some((snapshot, _)) => snapshot.mixer_update(installed, bundled),
+            None => UpdateSnapshot::unchecked().mixer_update(installed, bundled),
+        }
+    }
+
     /// The status line under "Check for updates"; `None` shows nothing.
     pub(super) fn status(&self) -> Option<String> {
         if self.checking {
             return Some("Checking…".into());
         }
-        let (result, manual) = self.last.as_ref()?;
-        match result {
+        let (snapshot, manual) = self.last.as_ref()?;
+        match snapshot.app.as_ref()? {
             UpdateCheck::UpToDate { latest } => {
                 Some(format!("Up to date (latest release {latest})"))
             }
@@ -33,21 +69,18 @@ impl AppUpdate {
 
     /// The release page to offer, only for a GitHub page of this project.
     pub(super) fn release_url(&self) -> Option<&str> {
-        match &self.last {
-            Some((UpdateCheck::Available { url, .. }, _)) if safe_url(url).is_some() => Some(url),
+        match self.result() {
+            Some(UpdateCheck::Available { url, .. }) if safe_url(url).is_some() => Some(url),
             _ => None,
         }
     }
 
     /// The offered version and its changes, when an update is available.
     pub(super) fn offered(&self) -> Option<(&str, &Changelog)> {
-        match &self.last {
-            Some((
-                UpdateCheck::Available {
-                    version, changelog, ..
-                },
-                _,
-            )) => Some((version, changelog)),
+        match self.result() {
+            Some(UpdateCheck::Available {
+                version, changelog, ..
+            }) => Some((version, changelog)),
             _ => None,
         }
     }
@@ -62,137 +95,37 @@ pub(super) fn history_note(status: &ChangelogStatus) -> Option<String> {
     match status {
         ChangelogStatus::Complete => None,
         ChangelogStatus::Partial => Some(
-            "Some release notes could not be loaded. All releases are listed on GitHub.".into(),
+            "Some release notes could not be loaded. The full update history is online.".into(),
         ),
         ChangelogStatus::Unavailable(error) => Some(format!(
-            "Release notes could not be loaded ({error}). All releases are listed on GitHub."
+            "Release notes could not be loaded ({error}). The full update history is online."
         )),
     }
 }
 
-/// Only GitHub pages of this project are opened.
-fn safe_url(url: &str) -> Option<&str> {
-    (url == APP_RELEASES_URL || url.starts_with(&format!("{APP_RELEASES_URL}/"))).then_some(url)
+/// Only this project's release pages and update history, and RØDE's notes,
+/// are opened. A history link may name a version: `#v1.2.3`.
+pub(super) fn safe_url(url: &str) -> Option<&str> {
+    let release = url == APP_RELEASES_URL || url.starts_with(&format!("{APP_RELEASES_URL}/"));
+    let history = [APP_HISTORY_URL, MIXER_HISTORY_URL].iter().any(|page| {
+        url.strip_prefix(page).is_some_and(|rest| {
+            rest.is_empty()
+                || rest
+                    .strip_prefix("#v")
+                    .is_some_and(|v| crate::versions::compare(v, v).is_some())
+        })
+    });
+    (release || history || url == RODE_NOTES_URL).then_some(url)
 }
 
-fn link(id: impl Into<ElementId>, label: &'static str, url: &str) -> Option<Button> {
+pub(super) fn link(id: impl Into<ElementId>, label: &'static str, url: &str) -> Option<Button> {
     let url = safe_url(url)?.to_owned();
     Some(
         Button::new(id)
             .ghost()
-            .small()
             .label(label)
             .on_click(move |_, _, cx| cx.open_url(&url)),
     )
-}
-
-/// The changes between this app and the offered release, newest first.
-/// Notes are shown as plain text, line by line; nothing is rendered as HTML.
-pub(super) fn open_changes(
-    version: String,
-    url: String,
-    changelog: Changelog,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    window.open_dialog(cx, move |dialog, _, _| {
-        let mut list = div()
-            .id("app-changes")
-            .v_flex()
-            .gap_4()
-            .max_h(px(460.))
-            .overflow_y_scroll();
-        if let Some(note) = history_note(&changelog.status) {
-            list = list.child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .text_sm()
-                    .text_color(rgb(FAINT))
-                    .child(note)
-                    .children(link("all-releases", "All releases", APP_RELEASES_URL)),
-            );
-        }
-        for (i, entry) in changelog.entries.iter().enumerate() {
-            list = list.child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .font_semibold()
-                                    .child(format!("RC2FX {}", entry.version)),
-                            )
-                            .children(link(("release", i), "View release", &entry.url)),
-                    )
-                    .child(
-                        div()
-                            .v_flex()
-                            .text_sm()
-                            .text_color(rgb(MUTED))
-                            .children(entry.notes.lines().map(|line| {
-                                div()
-                                    .min_h(px(16.))
-                                    .whitespace_normal()
-                                    .child(line.to_owned())
-                            }))
-                            .when(entry.notes.trim().is_empty(), |d| {
-                                d.child("No notes for this release.")
-                            })
-                            .when(entry.truncated, |d| {
-                                d.child(
-                                    div()
-                                        .text_color(rgb(FAINT))
-                                        .child("Notes shortened; the release page has the rest."),
-                                )
-                            }),
-                    ),
-            );
-        }
-        let mut footer = DialogFooter::new().pt_5().child(
-            gpui_kit::component::dialog::DialogClose::new().trigger(|b| {
-                b.ghost()
-                    .large()
-                    .h(px(44.))
-                    .px_5()
-                    .rounded(px(22.))
-                    .label("Close")
-            }),
-        );
-        if let Some(view) = link("offered-release", "View release", &url) {
-            footer = footer.child(view.large().h(px(44.)).px_5());
-        }
-        dialog
-            .w(px(720.))
-            .rounded(px(20.))
-            .p_6()
-            .bg(rgb(surface().panel))
-            .border_1()
-            .border_color(rgb(surface().line_strong))
-            .text_color(rgb(TEXT))
-            .font_family("Inter")
-            .title(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(div().text_xs().text_color(rgb(FAINT)).child(format!(
-                        "You have {}. Nothing is downloaded or installed.",
-                        crate::versions::APP_VERSION
-                    )))
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_semibold()
-                            .child(format!("RC2FX {version} is available")),
-                    ),
-            )
-            .child(list)
-            .footer(footer)
-    });
 }
 
 impl Rc2FxApp {
@@ -211,16 +144,14 @@ impl Rc2FxApp {
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async { app_update::check_for_app_update(crate::versions::APP_VERSION) })
+                .spawn(async { app_update::check_for_updates(crate::versions::APP_VERSION) })
                 .await;
             let _ = this.update_in(cx, |app, window, cx| {
                 app.app_update.checking = false;
-                if let UpdateCheck::Available { version, .. } = &result {
-                    // Settings shows the link; this makes sure it is seen.
+                if let Some(UpdateCheck::Available { version, .. }) = &result.app {
+                    // The Versions dialog has the link; this makes sure it is seen.
                     window.push_notification(
-                        format!(
-                            "RC2FX {version} is available. Settings > Versions > Read changes."
-                        ),
+                        format!("RC2FX {version} is available. Settings > About > View versions."),
                         cx,
                     );
                 }
@@ -235,8 +166,8 @@ impl Rc2FxApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        APP_RELEASES_URL, AppUpdate, Changelog, ChangelogStatus, UpdateCheck, history_note,
-        safe_url,
+        APP_HISTORY_URL, APP_RELEASES_URL, AppUpdate, Changelog, ChangelogStatus,
+        MIXER_HISTORY_URL, RODE_NOTES_URL, UpdateCheck, history_note, safe_url,
     };
     use rc2fx_installer::app_update::{ReleaseNotes, UpdateError};
 
@@ -270,6 +201,12 @@ mod tests {
         assert!(safe_url(&format!("{APP_RELEASES_URL}/tag/v0.2.0")).is_some());
         assert!(safe_url("https://github.com/ibanks42/rc2fx/releasesX").is_none());
         assert!(safe_url("https://evil.example/").is_none());
+        assert!(safe_url(APP_HISTORY_URL).is_some());
+        assert!(safe_url(&format!("{MIXER_HISTORY_URL}#v1.2.3")).is_some());
+        assert!(safe_url(&format!("{MIXER_HISTORY_URL}#v1.2.3x")).is_none());
+        assert!(safe_url(&format!("{APP_HISTORY_URL}.evil.example")).is_none());
+        assert!(safe_url(RODE_NOTES_URL).is_some());
+        assert!(safe_url("https://update.rode.com/other").is_none());
         assert!(safe_url("javascript:alert(1)").is_none());
     }
 
@@ -291,7 +228,7 @@ mod tests {
     fn after(result: UpdateCheck, manual: bool) -> AppUpdate {
         AppUpdate {
             checking: false,
-            last: Some((result, manual)),
+            last: Some((result.into(), manual)),
         }
     }
 

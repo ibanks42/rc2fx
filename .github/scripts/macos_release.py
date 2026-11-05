@@ -16,7 +16,8 @@ published release is never changed afterwards by this script.
       created no release (a dry run) gives ready=false. A release that is
       already published and complete also gives ready=false. One published by
       hand before it was complete is finished like a draft, unless it is
-      immutable, which is refused.
+      immutable, which is refused. A draft older than the newest published
+      release is refused.
   stage --source SHA --tag TAG
       In the checkout of SHA, apply the version files from
       .release-input/versioned.tar, extracting only version files.
@@ -24,7 +25,10 @@ published release is never changed afterwards by this script.
       Finish the draft and publish it as latest, last. A release someone
       published by hand before it was complete is finished but not published
       again, so which release is latest is left as they chose. On a complete
-      published release, only check that it holds this exact macOS zip.
+      published release, only check that it holds this exact macOS zip. A
+      draft older than the newest published release is refused before any
+      change and again just before publishing: publishing it as latest would
+      move latest backwards.
 
 Needs `gh` with GH_TOKEN, and GH_REPO (or GITHUB_REPOSITORY). Every refusal
 exits 1.
@@ -169,6 +173,26 @@ def find_release(gh, tag):
     return found[0] if found else None
 
 
+def app_version(tag):
+    """The numbers of a stable app tag; None for anything else."""
+    match = re.fullmatch("v" + STABLE, tag) if isinstance(tag, str) else None
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def refuse_if_behind(gh, tag):
+    """Refuse a draft of TAG when a newer stable app release is published.
+    Other drafts, prereleases and non-app tags are not releases it could fall
+    behind. The list is read fresh on every call."""
+    published = [r.get("tag_name") for r in gh.releases()
+                 if not r.get("draft") and not r.get("prerelease")]
+    versions = [(app_version(t), t) for t in published if app_version(t) is not None]
+    if versions:
+        newest, newest_tag = max(versions)
+        require(app_version(tag) >= newest,
+                f"draft {tag} is older than published release {newest_tag}; publishing it as "
+                "latest would move latest backwards, so it is not changed or published")
+
+
 def check_tag(gh, tag, source):
     """TAG must point at the release commit on top of SOURCE."""
     commit = gh.api(f"commits/{tag}")
@@ -226,6 +250,7 @@ def prepare(gh, run_id, automatic, output=print):
         require(automatic, f"run {run_id} created no release for {plan['tag']} (a dry run?)")
         ready, why = "false", f"Skipped: Release run {run_id} created no release (a dry run)."
     elif state == "draft":
+        refuse_if_behind(gh, plan["tag"])
         ready, why = "true", (f"Finishing draft release {plan['tag']} from Release run {run_id} "
                               f"(source `{plan['source'][:12]}`).")
     elif state == "complete":
@@ -401,6 +426,8 @@ def publish(gh, tag, source, package_dir):
     check_tag(gh, tag, source)
     if not release.get("draft") and complete(gh, release, version, mac_sha=ours):
         return "already complete\n"  # read only: nothing to change
+    if release.get("draft"):
+        refuse_if_behind(gh, tag)
     # The release is re-read before every change: someone may publish the
     # draft by hand meanwhile, which is fine while it stays changeable.
     release_id = release["id"]
@@ -437,6 +464,8 @@ def publish(gh, tag, source, package_dir):
     release = changeable(gh, tag, release_id)
     require(complete(gh, release, version, mac_sha=ours), f"release {tag} is not complete")
     if release.get("draft"):
+        # A newer release may have been published during this run.
+        refuse_if_behind(gh, tag)
         gh.publish(release_id, tag)
     return sums
 

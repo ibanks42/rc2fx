@@ -17,7 +17,7 @@ is started manually.
 
 Each desktop build embeds one mixer runtime, built from the same checkout.
 `config/mixer-release.json` names the bundled runtime and records the protocol
-version the app speaks. **Settings › Versions**
+version the app speaks. **Settings › About › View versions**
 shows the app version, the installed and bundled RC2FX mixer software versions,
 and the installed and newest supported RØDE firmware versions; see [Versions
 and updates](../user/getting-started.md#versions-and-updates). Mixer software
@@ -210,7 +210,7 @@ hardware or none).
 
 Every app release's notes end with a `Bundled RC2FX mixer software: VERSION.`
 line naming the mixer version the packages carry, even when it didn't change. The same version is visible in the app's
-**Settings › Versions**.
+**Settings › About › View versions**.
 
 ## Workflow jobs
 
@@ -225,7 +225,10 @@ public until the release is complete.
 
 1. **prepare** (Ubuntu) runs the versioning tests, computes the app version
    and rewrites the version files and changelog (`.github/scripts/release.py
-   prepare`). It then cross-builds the mixer runtime from the checkout with
+   prepare`). It validates the pending app notes and requires curated notes
+   for a newly versioned mixer, then builds the documentation without
+   deploying it. The site build still includes only published history.
+   It then cross-builds the mixer runtime from the checkout with
    `cargo xtask mixer-build` and shares `target/mixer` with the later jobs,
    with the version files, so every platform packages the same version files
    and runtime.
@@ -277,6 +280,9 @@ version files, release plan and mixer runtime) is kept for 90 days, because
    never replaces a different macOS zip already on the draft. Run again on a
    published release, it only checks that the release is complete and holds
    the same macOS zip, and changes nothing.
+   Publication jobs are serialized, and an older draft cannot become latest
+   after a newer stable release has been published. After publication, a
+   separate step dispatches **Docs** with `source=latest-release`.
 
 If you publish the draft by hand before **Release macOS** finishes, the
 release is public but incomplete until it does. **Release macOS** then adds
@@ -291,8 +297,42 @@ macOS › Run workflow** and enter the ID of the original **Release** run (the
 number in its URL). A retry is refused once that run's artifact has expired;
 make a new release then.
 
-Every push and pull request also runs the **Desktop** workflow, a Linux build
-of the app used as a compile check. It doesn't package, test or lint.
+The **Check** workflow also checks Rust code on pushes to `main`, excluding
+documentation-only changes. Release preparation checks the docs before
+publication, so removing automatic docs deployment does not remove that check.
+
+## Publishing documentation
+
+Documentation deploys only after release publication or when you manually run
+**Docs**. Pushing changes to `docs/` stages them for a later deployment; it
+does not publish the site.
+
+Run **Docs** from `main`, choosing:
+
+- **main** (the default) to publish the current documentation and note
+  corrections without releasing an app.
+- **latest-release** to publish the tagged source of the current latest
+  published app release. **Release macOS** selects this automatically after
+  publication. The workflow runs on `main` for the Pages environment, then
+  checks out the selected tag to build the site.
+
+Each run resolves its source when it starts, even when retrying an old run.
+Build and deployment run in one job, so retrying a failed deployment also
+resolves the source and rebuilds the site. The job uses one Pages concurrency
+group. The regular
+docs, [update histories](update-history.md), and `updates.json` deploy together.
+Only published stable releases enter the history; tags on drafts do not count.
+
+A release snapshot can replace documentation that you manually deployed from
+newer `main` during the draft window. Run **Docs** with **main** again to restore
+those changes. An older release such as `v1.0.0` that predates the history
+generator is refused by **latest-release**; use **main** for the initial deploy.
+
+A failed docs deployment does not undo a published app release. Retry **Docs**
+independently; there is no need to rebuild packages. If publication succeeds
+but its docs dispatch fails, manually dispatch **Docs**. Publishing or deleting
+a release by hand also requires a manual docs deployment. During the gap,
+the app can discover the release while hosted notes remain unavailable.
 
 ## Running the workflows locally
 

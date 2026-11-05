@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "python3 ../.github/scripts/update_history.py",
     "build": "vitepress build",
+    "predev": "python3 ../.github/scripts/update_history.py",
     "dev": "vitepress dev"
   },
   "devDependencies": {

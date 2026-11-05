@@ -121,68 +121,33 @@ impl Rc2FxApp {
         section("Mixer", div(), rows)
     }
 
-    fn versions_section(&self, cx: &mut Context<Self>) -> Div {
-        let device = self.device_versions.as_ref();
-        let newest_firmware = crate::versions::newest_supported_firmware(
-            device.and_then(|d| d.firmware_profile.as_deref()),
-        );
-        let summary = crate::versions::summarize(&crate::versions::Inputs {
-            app: crate::versions::APP_VERSION,
-            installed_runtime: device.and_then(|d| d.runtime.as_deref()),
-            bundled_runtime: self.bundled_mixer_software.as_deref(),
-            installed_firmware: device.and_then(|d| d.firmware.as_deref()),
-            newest_supported_firmware: newest_firmware.as_deref(),
-            device_protocol: device.and_then(|d| d.protocol),
-        });
-        let mut rows = div();
-        for r in &summary.rows {
-            rows = rows.child(row(labelled(r.label, r.value.clone()), div()));
-        }
-        if let Some(notice) = summary.notice() {
-            let title = if notice.offer_installer {
-                "Update available"
-            } else {
-                "Newer than this app"
-            };
-            // Only opens the installer; flashing still needs its confirmation.
-            let action = notice.offer_installer.then(|| {
-                ghost("open-installer-update", "Review in installer")
-                    .on_click(cx.listener(|app, _, _, cx| app.toggle_installer_page(cx)))
-            });
-            rows = rows.child(row(labelled(title, notice.text), div().children(action)));
-        }
-        let update = &self.app_update;
-        let status = update.status().unwrap_or_else(|| "Not checked yet".into());
-        let mut controls = div().h_flex().gap_2();
-        if let (Some(url), Some((version, changelog))) = (update.release_url(), update.offered()) {
-            let (url, version, changelog) = (url.to_owned(), version.to_owned(), changelog.clone());
-            controls = controls.child(ghost("read-app-changes", "Read changes").on_click(
-                move |_, window, cx| {
-                    crate::app_update::open_changes(
-                        version.clone(),
-                        url.clone(),
-                        changelog.clone(),
-                        window,
-                        cx,
-                    )
-                },
-            ));
-        }
-        controls = controls.child(
-            ghost("check-app-update", "Check for updates")
-                .disabled(update.checking())
-                .on_click(cx.listener(|app, _, window, cx| app.check_app_update(true, window, cx))),
-        );
-        rows = rows.child(row(labelled("App updates", status), controls));
-        rows = rows.child(row(
-            labelled(
-                "Licenses",
-                "RC2FX is MIT licensed. Third-party notices and credits are included.",
-            ),
-            ghost("open-licenses", "View licenses")
-                .on_click(|_, window, cx| crate::licenses::open(window, cx)),
-        ));
-        section("Versions", div(), rows)
+    fn about_section(&self, cx: &mut Context<Self>) -> Div {
+        let overview = self.versions_overview();
+        let rows =
+            div()
+                .child(row(
+                    labelled("Versions", overview.summary),
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap(px(16.))
+                        .child(crate::versions_dialog::flag(
+                            overview.flag,
+                            overview.flag_tone,
+                        ))
+                        .child(ghost("view-versions", "View versions").on_click(
+                            cx.listener(|app, _, window, cx| app.open_versions(window, cx)),
+                        )),
+                ))
+                .child(row(
+                    labelled(
+                        "Licenses",
+                        "RC2FX is MIT licensed. Third-party notices and credits are included.",
+                    ),
+                    ghost("open-licenses", "View licenses")
+                        .on_click(|_, window, cx| crate::licenses::open(window, cx)),
+                ));
+        section("About", div(), rows)
     }
 
     fn files_section(&self, cx: &mut Context<Self>) -> Div {
@@ -377,7 +342,7 @@ impl Rc2FxApp {
                     .child("Settings"),
             )
             .child(self.mixer_section(cx))
-            .child(self.versions_section(cx))
+            .child(self.about_section(cx))
             .child(self.preset_panel(cx))
             .child(self.files_section(cx))
             .child(self.appearance_section(cx))

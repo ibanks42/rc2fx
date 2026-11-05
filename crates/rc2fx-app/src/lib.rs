@@ -31,6 +31,7 @@ mod telemetry_view;
 mod ui;
 mod usb;
 mod versions;
+mod versions_dialog;
 
 use desk::surface;
 use gpui_kit::component::{

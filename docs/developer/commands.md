@@ -17,6 +17,21 @@ recipes and `cargo xtask help` lists the underlying commands.
 | `just docs` / `just docs-serve` | Build / serve this documentation site |
 | `cargo xtask check-elf FILE [--shared]` | Check a mixer binary against the mixer's ABI (glibc 2.35, GCC 11) |
 
+The docs build and development server generate update history first. They need
+network access to GitHub's releases API and a checkout containing the release
+tags; `GH_TOKEN` can authenticate the requests. These commands do not deploy
+the site.
+
+For offline editing, with npm dependencies already installed, generate history
+from a saved releases API list and start VitePress directly, bypassing the
+networked `predev` hook:
+
+```sh
+python3 .github/scripts/update_history.py --published-json /path/to/releases.json
+cd docs
+npm exec -- vitepress dev
+```
+
 ## On the mixer over SSH
 
 These need the [SSH setup](mixer-workflow.md). Starting or stopping RC2FX

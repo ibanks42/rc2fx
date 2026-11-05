@@ -2,10 +2,13 @@ name: Docs
 
 # Builds only the documentation site; never the app, the mixer runtime or a release.
 on:
-  push:
-    branches: [main]
-    paths: ["docs/**"]
   workflow_dispatch:
+    inputs:
+      source:
+        description: Publish current main docs or the latest published release snapshot
+        type: choice
+        options: [main, latest-release]
+        default: main
 
 permissions:
   contents: read
@@ -17,11 +20,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    # Keep the build and deployment in one job: retrying a failed deployment
+    # must resolve the source and rebuild, not reuse a stale Pages artifact.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Require a main-branch dispatch
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: test "$DISPATCH_REF" = refs/heads/main
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the current documentation source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DOCS_SOURCE: ${{ inputs.source }}
+        run: python3 .github/scripts/docs_source.py
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ steps.source.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require update-history support in the selected source
+        run: |
+          test -f .github/scripts/update_history.py || {
+            echo 'This release predates hosted update history. Dispatch Docs with source=main instead.'
+            exit 1
+          }
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
@@ -29,21 +63,18 @@ jobs:
           cache-dependency-path: docs/package-lock.json
       - name: Build
         working-directory: docs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           npm ci --no-audit --no-fund
           npm run build
       - uses: actions/configure-pages@v6.0.0
       - uses: actions/upload-pages-artifact@v5.0.0
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: target/docs
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - id: deployment
         uses: actions/deploy-pages@v5.0.1
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}

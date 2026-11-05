@@ -81,6 +81,11 @@ def mac_zip(tamper=False, unlisted=False):
 MAC = f"rc2fx-{VERSION}-macos-arm64.zip"
 
 
+def other(tag, draft=False, prerelease=False):
+    """Another release in the repository."""
+    return {"id": 1, "tag_name": tag, "draft": draft, "prerelease": prerelease, "assets": []}
+
+
 class FakeGh:
     """An in-memory repository. `ops` records every mutating call in order."""
 
@@ -109,6 +114,8 @@ class FakeGh:
         self.tag_name = TAG
         self.fail_upload = False
         self.publish_by_hand_after = None  # publish the draft after N writes
+        self.others = []  # other releases in the list
+        self.release_after = None  # (N, release): it appears after N writes
         self.ops = []
 
     # Reads
@@ -129,7 +136,7 @@ class FakeGh:
     def releases(self):
         if not self.exists:
             return [{"tag_name": "v0.9.0", "draft": False, "assets": []}]
-        return [self._release()]
+        return [*self.others, self._release()]
 
     def api(self, path):
         if path == "actions/runs/7":
@@ -156,6 +163,8 @@ class FakeGh:
         self.ops.append(op)
         if self.publish_by_hand_after == len(self.ops):
             self.draft = False
+        if self.release_after and self.release_after[0] == len(self.ops):
+            self.others.append(self.release_after[1])
 
     def upload_asset(self, release_id, path):
         path = Path(path)
@@ -235,6 +244,17 @@ class Prepare(InTemp):
         with self.assertRaises(mr.Refused):
             self.outputs(locked, automatic=True)
         self.assertEqual(locked.ops, [])
+
+    def test_a_draft_behind_a_published_release_is_refused_before_building(self):
+        gh = FakeGh()
+        gh.others = [other("v0.10.0")]
+        with self.assertRaisesRegex(mr.Refused, "older than published release v0.10.0"):
+            self.outputs(gh)
+
+    def test_a_complete_release_behind_a_newer_one_is_still_nothing_to_do(self):
+        gh = published_complete(mac_zip())
+        gh.others = [other("v0.10.0")]
+        self.assertEqual(self.outputs(gh)["ready"], "false")
 
     def test_a_pushed_tag_without_a_visible_release_is_a_loud_error(self):
         # The draft exists, but this token cannot list drafts.
@@ -398,6 +418,58 @@ class Publish(InTemp):
         self.assertEqual(sums, complete_sums(gh))
         self.assertEqual(gh.assets["SHA256SUMS"].decode(), complete_sums(gh))
         self.assertFalse(gh.draft)
+
+    def test_a_draft_behind_a_published_release_is_refused_before_any_change(self):
+        # Compared as numbers: v0.10.0 is newer than v0.2.0, v0.1.9 is not.
+        for tag in ("v0.2.1", "v0.3.0", "v0.10.0", "v1.0.0"):
+            gh = FakeGh()
+            gh.others = [other("v0.1.0"), other(tag)]
+            with self.assertRaisesRegex(mr.Refused, f"older than published release {tag}"):
+                mr.publish(gh, TAG, SOURCE, self.package())
+            self.assertEqual(gh.ops, [], tag)
+            self.assertTrue(gh.draft, tag)
+
+    def test_a_draft_at_or_above_every_published_release_is_published(self):
+        gh = FakeGh()
+        gh.others = [other("v0.1.9"), other("v0.1.0")]
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertEqual(gh.ops[-1], ("publish", 99))
+
+    def test_only_published_stable_app_releases_count_as_newer(self):
+        gh = FakeGh()
+        gh.others = [
+            other("v9.0.0", draft=True),
+            other("v9.0.1", prerelease=True),
+            other("mixer-v9.0.0"),
+            other("v9.0.0-rc1"),
+            other("v9.0"),
+            other("v09.0.0"),
+            other(None),
+        ]
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertEqual(gh.ops[-1], ("publish", 99))
+
+    def test_a_release_published_during_the_run_stops_the_final_publish(self):
+        gh = FakeGh()
+        gh.release_after = (1, other("v0.3.0"))  # right after the macOS upload
+        with self.assertRaisesRegex(mr.Refused, "older than published release v0.3.0"):
+            mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertNotIn("publish", [op for op, _ in gh.ops])
+        self.assertTrue(gh.draft)
+
+    def test_an_older_complete_release_stays_a_read_only_success(self):
+        gh = published_complete(mac_zip())
+        gh.others = [other("v0.3.0")]
+        self.assertEqual(mr.publish(gh, TAG, SOURCE, self.package()), "already complete\n")
+        self.assertEqual(gh.ops, [])
+
+    def test_an_older_release_published_early_by_hand_is_still_finished(self):
+        gh = FakeGh()
+        gh.draft = False
+        gh.others = [other("v0.3.0")]
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertNotIn("publish", [op for op, _ in gh.ops], "latest is left as chosen")
+        self.assertTrue(mr.complete(gh, gh._release(), VERSION))
 
     def test_a_published_retry_is_read_only(self):
         gh = published_complete(mac_zip())

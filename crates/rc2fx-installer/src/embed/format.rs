@@ -1050,10 +1050,7 @@ mod tests {
         }
         assert_eq!(release_version(RELEASE_JSON).unwrap(), "0.1.0");
         // The real manifest passes the payload rules too.
-        assert_eq!(
-            release_version(include_bytes!("../../../../config/mixer-release.json")).unwrap(),
-            "0.1.0"
-        );
+        release_version(include_bytes!("../../../../config/mixer-release.json")).unwrap();
     }
 
     #[test]

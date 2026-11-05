@@ -52,9 +52,18 @@ jobs:
       - name: Check the native library
         if: runner.os == 'Linux'
         run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets
-      - name: Test deferred macOS releases
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         if: runner.os == 'Linux'
-        run: python3 .github/scripts/test_macos_release.py
+        with:
+          tool: git-cliff@2.14.1
+          fallback: none
+      - name: Test release and documentation tooling
+        if: runner.os == 'Linux'
+        run: |
+          python3 .github/scripts/test_release.py
+          python3 .github/scripts/test_macos_release.py
+          python3 .github/scripts/test_docs_source.py
+          python3 .github/scripts/test_update_history.py
       - name: Test developer SSH controls
         if: runner.os == 'Linux'
         run: |

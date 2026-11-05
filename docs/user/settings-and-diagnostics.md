@@ -4,8 +4,8 @@ The **Settings** page, at the bottom of the sidebar, has these sections:
 
 - **Mixer**: the connection, the installer, and the **Processing** switch,
   which turns all RC2FX processing off or on.
-- **Versions**: the app, RC2FX mixer software and RØDE firmware versions, and
-  whether an update is available. See
+- **About**: the app, RC2FX mixer software and RØDE firmware versions, whether
+  an update is available, and licenses. See
   [Versions and updates](getting-started.md#versions-and-updates).
 - **Presets** and **Files**: see
   [Presets and settings files](using-the-app.md#presets-and-settings-files).

@@ -26,6 +26,10 @@ class ReleaseTests(unittest.TestCase):
         for filename in ("Cargo.lock", "crates/rc2fx-native/Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
             self.put(filename, lock)
         self.put("cliff.toml", (ROOT / "cliff.toml").read_text())
+        self.put("docs/updates/source/mixer-notes.md", "# Mixer notes\n\n"
+                 "## [0.1.0]\n\n- Initial fixture.\n\n"
+                 "## [0.1.1]\n\n- Updated fixture.\n\n"
+                 "## [0.4.2]\n\n- Separate mixer fixture.\n")
         self.git("init", "-b", "main")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.invalid")
@@ -114,6 +118,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_mixer_warning(self):
         self.put("config/mixer-release.json", '{"version":"0.1.0"}')
+        self.put("CHANGELOG.md", "# Changelog\n\n## [0.1.0] - 2026-01-01\n\n- Initial mixer.\n")
         self.git("add", ".")
         self.git("commit", "-m", "feat: add mixer manifest")
         self.git("tag", "v0.1.0")
@@ -136,6 +141,29 @@ class ReleaseTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-m", "fix: change desktop settings")
         self.assertNotIn("::warning", self.prepare().stdout)
+
+    def test_new_mixer_version_requires_notes_before_bumping_app(self):
+        self.put("config/mixer-release.json", '{"version":"0.1.0"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: initial mixer")
+        self.git("tag", "v0.1.0")
+        self.put("config/mixer-release.json", '{"version":"0.2.0"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: new mixer without notes")
+        result = self.prepare(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("needs curated mixer release notes", result.stderr)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_app_only_release_allows_unknown_legacy_mixer_notes(self):
+        self.put("config/mixer-release.json", '{"version":"0.9.0"}')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: historical mixer without notes")
+        self.git("tag", "v0.1.0")
+        self.put("desktop", "changed")
+        self.git("add", ".")
+        self.git("commit", "-m", "fix: desktop only")
+        self.prepare()
 
     def test_act_commit_uses_isolated_index(self):
         self.prepare()

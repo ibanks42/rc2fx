@@ -89,11 +89,26 @@ jobs:
         run: |
           python3 .github/scripts/test_release.py
           python3 .github/scripts/test_macos_release.py
+          python3 .github/scripts/test_docs_source.py
+          python3 .github/scripts/test_update_history.py
       - name: Bump version and prepare notes
         id: version
         env:
           BUMP: ${{ inputs.bump }}
         run: python3 .github/scripts/release.py prepare --bump "$BUMP"
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Validate candidate release notes and build documentation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm ci --prefix docs --no-audit --no-fund
+          # prepare validates pending notes. The site build always exposes
+          # published history only, even while validating a future release.
+          npm run build --prefix docs
       - name: Build bundled mixer software
         run: cargo xtask mixer-build
       - name: Stage mixer payload for the desktop builds

@@ -62,6 +62,8 @@ only for Linux and are cross-compiled for the mixer.
 - [Architecture](architecture.md): start-up, fallback to stock, and how
   settings are applied.
 - [Releases](releases.md): cutting a release.
+- [Update histories and the feed](update-history.md): the generated app and
+  mixer histories and `updates.json`.
 
 The [technical reference](../reference/index.md) covers protocols, file
 formats, firmware support and per-crate notes.
@@ -93,7 +95,9 @@ Both need [Node.js](https://nodejs.org/). The site is built with
 [VitePress](https://vitepress.dev/), configured in `docs/.vitepress/config.mjs`,
 which also holds the sidebar. It reads `docs/` in place, and each crate page
 includes that crate's `README.md`. Links to files outside `docs/` open on
-GitHub. Pushing a change under `docs/` to `main` publishes the site to GitHub
-Pages. User pages are in
-`docs/user/`, developer pages in `docs/developer/` and the technical
+GitHub. The **Docs** workflow builds the site after a release is published,
+from that release's tag, or when it is run manually from `main`; a push does
+not deploy it. Update histories and `updates.json` are generated during that
+build (see [Update histories and the feed](update-history.md)). User pages are
+in `docs/user/`, developer pages in `docs/developer/` and the technical
 reference in `docs/reference/`.
