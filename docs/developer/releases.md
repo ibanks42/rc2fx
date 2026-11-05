@@ -229,14 +229,17 @@ public until the release is complete.
    `cargo xtask mixer-build` and shares `target/mixer` with the later jobs,
    with the version files, so every platform packages the same version files
    and runtime.
-2. **build** runs on Ubuntu and Windows in parallel. Each job applies
+2. **build** runs on Ubuntu 24.04 and Windows in parallel. The Linux runner
+   is pinned to keep the glibc baseline stable. Each job applies
    the prepare output, stages the shared runtime into `target/mixer`, takes
    the scripts and catalog from its own checkout of the same commit, and runs
    `cargo xtask package` with `RC2FX_RELEASE_BUILD=1`, which selects the
    launcher's quieter diagnostics. Packaging compares the runtime, catalog,
    `mixer-release.json` and scripts embedded in the executable with the build
    inputs, including with `--skip-build`, and rejects a stale or development
-   executable.
+   executable. Before uploading, the Linux job installs, reinstalls and removes
+   the DEB in clean Ubuntu 24.04 and Debian 13 containers, checking that its
+   dependencies resolve and its shared libraries load.
 3. **release** (Ubuntu) checks each archive, writes checksums for them,
    creates and pushes the release commit and tag (`release.py commit`), and
    creates a draft release with these packages and a pending notice for

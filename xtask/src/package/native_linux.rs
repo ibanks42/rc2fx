@@ -65,7 +65,7 @@ fn config(
         "scripts":{"postinstall":stage.join("udev-refresh"),"postremove":stage.join("udev-refresh")},
         "overrides":{
             "deb":{"depends":[format!("libc6 (>= {glibc})"),"libgcc-s1","libxcb1","libxkbcommon0","libxkbcommon-x11-0","libvulkan1","libfontconfig1","libwayland-client0","pkexec","udev"]},
-            "rpm":{"depends":[format!("glibc >= {glibc}"),"libgcc","libxcb","libxkbcommon","libxkbcommon-x11","vulkan-loader","fontconfig","wayland-libs","polkit","systemd-udev"]}
+            "rpm":{"depends":[format!("glibc >= {glibc}"),"libgcc","libxcb","libxkbcommon","libxkbcommon-x11","vulkan-loader","fontconfig","libwayland-client.so.0()(64bit)","polkit","systemd-udev"]}
         }
     })
 }
@@ -180,5 +180,8 @@ mod tests {
             && !x.contains("/experiments/")));
         assert_eq!(value["overrides"]["deb"]["depends"][0], "libc6 (>= 2.39)");
         assert_eq!(value["overrides"]["rpm"]["depends"][0], "glibc >= 2.39");
+        let rpm_dependencies = value["overrides"]["rpm"]["depends"].as_array().unwrap();
+        assert!(rpm_dependencies.contains(&json!("libwayland-client.so.0()(64bit)")));
+        assert!(!rpm_dependencies.contains(&json!("wayland-libs")));
     }
 }

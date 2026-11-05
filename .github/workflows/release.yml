@@ -129,7 +129,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Build against a fixed glibc baseline, not a moving runner image.
+        os: [ubuntu-24.04, windows-latest]
     defaults:
       run:
         shell: bash
@@ -197,6 +198,15 @@ jobs:
         env:
           RC2FX_RELEASE_BUILD: "1"
         run: cargo xtask package
+      - name: Test DEB installation on Ubuntu and Debian
+        if: runner.os == 'Linux'
+        run: |
+          for image in ubuntu:24.04 debian:13-slim; do
+            # Stream inputs so this also works under act's nested Docker daemon.
+            tar -cf - .github/scripts/test-deb-install.sh target/package/*.deb | \
+              docker run --rm -i "$image" sh -ec \
+                'tar -xf - -C /tmp; exec sh /tmp/.github/scripts/test-deb-install.sh /tmp/target/package/*.deb'
+          done
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: rc2fx-package-${{ matrix.os }}
