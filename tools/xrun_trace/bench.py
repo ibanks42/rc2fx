@@ -80,12 +80,42 @@ def measurement(base, current):
     return result
 
 
+def gauge_measurement(base, current, ring_frames):
+    """Bench gauges for the window: extremes restart at the epoch, totals are deltas."""
+    a,b=current['audit']['gauges'],base['audit']['gauges']
+    handles=[]
+    for index,now in enumerate(a['handles']):
+        then=b['handles'][index] if index<len(b['handles']) else {}
+        cycles=now['cycles']-then.get('cycles',0)
+        direction=now['direction']
+        if direction=='playback':lowest=None if now['highestPosition'] is None else ring_frames-now['highestPosition']
+        elif direction=='capture':lowest=now['lowestPosition']
+        else:lowest=None
+        handles.append(dict(client=now['client'],direction=direction,cycles=cycles,
+            availErrors=now['availErrors']-then.get('availErrors',0),lowestFillFrames=lowest,
+            extremesFromEpoch=now['epoch']==a['epoch'],
+            srcCallsPerCycle=(now['srcCalls']-then.get('srcCalls',0))/cycles if cycles>0 else None,
+            srcMeanUsPerCycle=(now['srcTotalNs']-then.get('srcTotalNs',0))/cycles/1e3 if cycles>0 else None,
+            srcMaxCycleUs=now['srcMaxCycleNs']/1e3))
+    job,prior=a['vendorJob'],b['vendorJob']
+    return dict(ringFrames=ring_frames,handles=handles,handleOverflow=a['handleOverflow'],
+        unattributedSrcCalls=a['unattributedSrcCalls']-b['unattributedSrcCalls'],
+        vendorJob=dict(pastJackdRead=job['pastJackdRead']-prior['pastJackdRead'],
+            endPositionHistogram=[x-y for x,y in zip(job['endPosition']['histogram'],prior['endPosition']['histogram'])]))
+
+
+def level(trace, gauges):
+    return ('trace' if trace else 'counters')+('+gauges' if gauges else '')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--no-trace',action='store_true')
     parser.add_argument('--deep',action='store_true')
     parser.add_argument('--avoid-driver',action='store_true')
+    parser.add_argument('--gauges',action='store_true',help='Report the bench gauges; needs run.py gauges-on and an audio restart first')
+    parser.add_argument('--ring-frames',type=int,default=784,help='USB ring size for playback fill: 4 periods of 196 frames with the S32 gadget')
     parser.add_argument('--bundle',type=Path,required=True)
     parser.add_argument('--settle-seconds',type=int,default=0)
     parser.add_argument('--trials',type=int,default=1)
@@ -145,6 +175,12 @@ def main():
             tids=[r['tid'] for r in audit['clientTiming']['registrations'] if r['name'] in ('usb1out','usb1-chat-out') and r['tid']]
             if len(tids)!=2:raise RuntimeError('USB output identity is ambiguous')
             run.remote('avoid-driver',*tids)
+        if args.gauges:
+            if 'gauges' not in baseline['audit']:raise RuntimeError('Gauge run requires bench gauges enabled at audio start')
+            run.remote('gauges','epoch',time.time_ns())
+            time.sleep(5)  # the report thread picks the epoch up at its next refresh
+            baseline=snapshot()
+        elif 'gauges' in baseline['audit']:raise RuntimeError('Bench gauges are enabled; use --gauges or disable them and restart audio')
         if not args.no_trace:baseline=snapshot()
         previous=baseline;start=time.monotonic()
         duration=args.seconds*args.trials
@@ -152,7 +188,7 @@ def main():
         if not args.no_trace and (not baseline['tracing'] or baseline['audit']['clientTiming']['flightFrozenAtNs']):
             raise RuntimeError('Recorder froze during playback startup; collect this event before rerunning')
         if args.no_trace and baseline['audit']['clientTiming']['enabled']:raise RuntimeError('Control run requires optional timing probe disabled at audio start')
-        state=dict(state,state='RUNNING',measurementLevel='trace' if not args.no_trace else 'counters',baselineXruns=baseline['audit']['xruns'],processPid=baseline['audit']['processPid'],checkIntervalSeconds=args.interval)
+        state=dict(state,state='RUNNING',measurementLevel=level(not args.no_trace,args.gauges),baselineXruns=baseline['audit']['xruns'],processPid=baseline['audit']['processPid'],checkIntervalSeconds=args.interval)
         save(root/'status.json',state);print(json.dumps(state),flush=True)
         index=0
         while True:
@@ -169,7 +205,9 @@ def main():
             done=elapsed>=duration and device_elapsed>=duration
             preserve_fault(root,baseline,current,errors)
             verdict=policy.observe(errors,done)
-            state.update(trialSeconds=args.seconds,requestedTrials=args.trials,completedTrials=min(args.trials,int(min(elapsed,device_elapsed)//args.seconds)),state=verdict['state'],qualificationFailed=verdict['qualificationFailed'],observedErrors=verdict['observedErrors'],stopOnXrun=not args.keep_going,updatedUtc=utc(),elapsedSeconds=elapsed,deviceElapsedSeconds=device_elapsed,xrunDelta=current['audit']['xruns']-baseline['audit']['xruns'],measurement=measurement(baseline,current),errors=errors,samples=index+1)
+            load=measurement(baseline,current)
+            if args.gauges:load['gauges']=gauge_measurement(baseline,current,args.ring_frames)
+            state.update(trialSeconds=args.seconds,requestedTrials=args.trials,completedTrials=min(args.trials,int(min(elapsed,device_elapsed)//args.seconds)),state=verdict['state'],qualificationFailed=verdict['qualificationFailed'],observedErrors=verdict['observedErrors'],stopOnXrun=not args.keep_going,updatedUtc=utc(),elapsedSeconds=elapsed,deviceElapsedSeconds=device_elapsed,xrunDelta=current['audit']['xruns']-baseline['audit']['xruns'],measurement=load,errors=errors,samples=index+1)
             save(root/'status.json',state);print(json.dumps(state),flush=True)
             if verdict['stop']: break
             previous=current

@@ -40,6 +40,9 @@ struct ValueCapture {
     output_table: usize,
     frame_count: u32,
     flag_value: u8,
+    /// Bench gauges only, in the padding before `queued_in`: microseconds from
+    /// the cycle start to the queuing callback's start. 0 means unknown.
+    start_position_us: u16,
     /// CLOCK_MONOTONIC start of the callback that queued this job.
     queued_in: u64,
 }
@@ -118,18 +121,58 @@ impl JobTiming {
     }
 }
 
+/// Bench gauge: where the job ended in the cycle that queued it, and how many
+/// ended after jackd's read of that cycle's output.
+static END_POSITION: crate::probe::Positions = crate::probe::Positions::new();
+static PAST_READ: AtomicU64 = AtomicU64::new(0);
+/// jackd wakes about this long before the next estimated cycle start.
+const JACKD_READ_LEAD_NS: u64 = 110_000;
+
+fn start_position_us(started: u64, cycle_start: u64) -> u16 {
+    if cycle_start == 0 || started < cycle_start {
+        return 0;
+    }
+    ((started - cycle_start) / 1_000).clamp(1, u64::from(u16::MAX)) as u16
+}
+/// Where the job ended relative to its own cycle's start, when that is known.
+fn end_position(queued_in: u64, start_position_us: u16, ended: u64) -> Option<u64> {
+    let cycle_start = queued_in.checked_sub(u64::from(start_position_us) * 1_000)?;
+    (start_position_us != 0 && queued_in != 0).then(|| ended.saturating_sub(cycle_start))
+}
+fn record_end_position(position: u64, positions: &crate::probe::Positions, past_read: &AtomicU64) {
+    positions.record(position);
+    if position > PERIOD_NS - JACKD_READ_LEAD_NS {
+        past_read.fetch_add(1, Ordering::Relaxed);
+    }
+}
+pub fn gauge_status() -> serde_json::Value {
+    serde_json::json!({
+        "endPosition": END_POSITION.snapshot(),
+        "pastJackdRead": PAST_READ.load(Ordering::Relaxed),
+        "jackdReadLeadNs": JACKD_READ_LEAD_NS,
+    })
+}
+
 impl ValueCapture {
     /// The original references are live here, before Mixer::Process returns.
     unsafe fn copy(original: Capture) -> Self {
+        let (queued_in, start_position_us) =
+            super::callback_started().map_or((0, 0), |(owner, started)| {
+                OWNER.store(owner, Ordering::Relaxed);
+                let position = if crate::gauges::enabled() {
+                    start_position_us(started, super::context_cycle_start(owner))
+                } else {
+                    0
+                };
+                (started, position)
+            });
         Self {
             mixer: original.mixer,
             output_table: unsafe { *(original.outputs as *const usize) },
             frame_count: unsafe { *(original.frames as *const u32) },
             flag_value: unsafe { *(original.flag as *const u8) },
-            queued_in: super::callback_started().map_or(0, |(owner, started)| {
-                OWNER.store(owner, Ordering::Relaxed);
-                started
-            }),
+            start_position_us,
+            queued_in,
         }
     }
     fn borrowed(&self) -> Capture {
@@ -186,6 +229,9 @@ unsafe fn invoke_body(data: *const AnyData, body: Body) {
         super::context_started(owner)
     };
     TIMING.record(values.queued_in, started, ended, next);
+    if let Some(position) = end_position(values.queued_in, values.start_position_us, ended) {
+        record_end_position(position, &END_POSITION, &PAST_READ);
+    }
 }
 unsafe extern "C-unwind" fn invoke(data: *const AnyData) {
     let body: Body = unsafe { std::mem::transmute(BODY.load(Ordering::Acquire)) };
@@ -503,6 +549,28 @@ mod tests {
         assert_eq!(observed.frames, 112);
         assert_eq!(observed.flag, 1);
         assert_eq!(LIVE.load(Ordering::Relaxed), 0);
+    }
+    #[test]
+    fn the_gauge_position_fits_the_padding_and_finds_the_jobs_own_cycle() {
+        assert_eq!(std::mem::offset_of!(ValueCapture, start_position_us), 22);
+        assert_eq!(std::mem::offset_of!(ValueCapture, queued_in), 24);
+        assert_eq!(start_position_us(1_500_000, 1_000_000), 500);
+        assert_eq!(start_position_us(1_000_000, 1_000_000), 1);
+        assert_eq!(start_position_us(1_000_000, 0), 0);
+        assert_eq!(start_position_us(1_000_000, 2_000_000), 0);
+        assert_eq!(start_position_us(u64::MAX, 1), u16::MAX);
+        assert_eq!(end_position(1_500_000, 500, 3_000_000), Some(2_000_000));
+        assert_eq!(end_position(1_500_000, 0, 3_000_000), None);
+        assert_eq!(end_position(0, 500, 3_000_000), None);
+    }
+    #[test]
+    fn only_a_job_past_jackds_read_counts_as_past_it() {
+        let positions = crate::probe::Positions::new();
+        let past = AtomicU64::new(0);
+        record_end_position(PERIOD_NS - JACKD_READ_LEAD_NS, &positions, &past);
+        assert_eq!(past.load(Ordering::Relaxed), 0);
+        record_end_position(PERIOD_NS - JACKD_READ_LEAD_NS + 1, &positions, &past);
+        assert_eq!(past.load(Ordering::Relaxed), 1);
     }
     #[test]
     fn absolute_branch_and_pristine_prologue_are_exact() {

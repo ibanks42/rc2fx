@@ -35,6 +35,30 @@ growth of `audit.cycle.endPos.histogram[4:]`), `slowCallbacksPerHour`, and
 1 gives only about 4 slow callbacks per five minutes, so judge a rate over 30
 minutes or more.
 
+## Bench gauges
+
+`run.py gauges-on` sets the RAM marker `/run/rc2fx-gauges`. It takes effect at
+the next audio start, is independent of client timing, and reboot clears it.
+`gauges-off` removes it. Without the marker, libasound and libsamplerate stay
+unaudited and the launcher passes `RC2FX_GAUGES=0`, so no wrapper exists to be
+bound and the audit has no `gauges` block. The gauges add load, so they never
+judge pass/fail, and a run refuses them unless `--gauges` asks for them.
+
+`bench.py --gauges` restarts the extremes after settling, then adds a `gauges`
+block to `measurement`:
+
+- `handles[]`, one per USB ALSA handle: `lowestFillFrames`, computed as the
+  vendor does (`ring - avail - frames` for playback, `avail - frames` for
+  capture). Silence is written only when fill drops below 0, and target fill is
+  146 frames. `--ring-frames` defaults to 784, which is 4 periods of 196 frames
+  on the S32 gadget. Check it if the USB mode differs.
+- `srcMeanUsPerCycle`, `srcMaxCycleUs` and `srcCallsPerCycle`: resampler time
+  for that client, measured around each `src_process` call.
+- `vendorJob`: where RØDE's monitor job ended in its own cycle, as a histogram
+  in the `endPos` bins, and `pastJackdRead`, the jobs that ended after jackd's
+  read, about 110 us before the next estimated cycle start. The cycle start is
+  an estimate at one-frame resolution (21 us).
+
 ## How it works
 
 This is opt-in diagnostic tooling for the RØDECaster Pro II. It does not make

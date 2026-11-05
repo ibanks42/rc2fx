@@ -4,6 +4,7 @@
 mod chat_mix;
 mod client_timing;
 mod client_timing_events;
+mod gauges;
 mod ipc;
 mod parameters;
 mod pipeline;
@@ -169,6 +170,14 @@ pub(crate) fn context_started(owner: usize) -> u64 {
         .load(Ordering::Relaxed)
 }
 
+/// The estimated cycle start of a context's latest callback.
+pub(crate) fn context_cycle_start(owner: usize) -> u64 {
+    // SAFETY: owners are addresses of entries in the static CONTEXTS array.
+    unsafe { &*(owner as *const Context) }
+        .cycle_start
+        .load(Ordering::Relaxed)
+}
+
 /// The engine-wide numbers every control reply carries: JACK xrun
 /// notifications and the helper's late finishes and busy callbacks. All are
 /// atomics the audio path already writes; none is sampled here.
@@ -241,6 +250,7 @@ static ALLOCATOR: Counting = Counting;
 /// Called only by the GNU ELF64 loader with its documented audit ABI.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn la_version(version: c_uint) -> c_uint {
+    gauges::initialize();
     if version >= 2 { 2 } else { 0 }
 }
 
@@ -267,18 +277,22 @@ pub unsafe extern "C" fn la_objopen(
     if jack {
         probe::JACK_MAP.store(map as usize, Ordering::Release);
     }
+    let gauged = gauges::object(gauges::enabled(), basename);
+    if gauged == Some(gauges::ASOUND) {
+        gauges::remember_asound(map as usize);
+    }
     unsafe {
         *cookie = if jack {
             JACK
         } else if name.is_empty() {
             MAIN
         } else {
-            2
+            gauged.unwrap_or(2)
         };
     }
     if jack {
         1
-    } else if basename == b"libc.so.6" {
+    } else if basename == b"libc.so.6" || gauged.is_some() {
         3
     } else {
         2
@@ -468,6 +482,26 @@ pub unsafe extern "C" fn la_symbind64(
         }
         return usb_control::open as *const () as usize;
     }
+    if let Some(wrapper) = gauges::replacement(
+        unsafe { *reference },
+        unsafe { *definition },
+        symbol_name,
+        address,
+    ) {
+        if symbol_name == b"jack_frames_since_cycle_start" {
+            // RC2FX's own cycle clock stays the real function.
+            let _ = probe::CYCLE_CLOCK.compare_exchange(
+                0,
+                address,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+        unsafe {
+            *flags |= 1 | 2;
+        }
+        return wrapper;
+    }
     if unsafe { *definition } != JACK || unsafe { *reference } == JACK {
         return address;
     }
@@ -578,6 +612,9 @@ unsafe extern "C" fn set_process(
     if offset == 0
         || MAIN_BASE.load(Ordering::Acquire).checked_add(offset) != Some(callback as usize)
     {
+        if gauges::enabled() {
+            gauges::register_client(client as usize);
+        }
         let (callback, argument) = if client_timing::enabled() {
             client_timing::wrap(client as usize, callback, argument)
         } else {
@@ -746,7 +783,10 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     client_timing::main_end(
         [started, ended, cycle_start, probe::PERIOD_NS, flight_token],
         before_native.zip(after_native).and_then(|(before, after)| {
-            before.wall_ns().zip(after.wall_ns()).map(|(before, after)| [before, after])
+            before
+                .wall_ns()
+                .zip(after.wall_ns())
+                .map(|(before, after)| [before, after])
         }),
     );
     if client_timing::active() {
@@ -1233,6 +1273,9 @@ fn write_report() {
     report["controlRequired"] = CONTROL_ADMISSION.required().into();
     report["processPid"] = std::process::id().into();
     report["clientTiming"] = client_timing::snapshot();
+    if gauges::enabled() {
+        report["gauges"] = gauges::snapshot();
+    }
     report["mainCallbackTail"] = MAIN_TAIL.snapshot();
     report["retiredCallbackTiming"] =
         serde_json::to_value(RETIRED_TIMING.snapshot()).unwrap_or(serde_json::Value::Null);

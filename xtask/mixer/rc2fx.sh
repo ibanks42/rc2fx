@@ -786,9 +786,10 @@ launch() {
   jack_recorder || true
   # Explicit RAM-only measurement switch. Never inherit a caller's probe flag;
   # removal takes effect at the next mixer start, reboot clears the marker.
-  local client_timing=0
+  local client_timing=0 gauges=0
   test -f /run/rc2fx-client-timing && client_timing=1
-  env RC2FX_CLIENT_TIMING="$client_timing" LD_AUDIT="$home/librc2fx_native.so" \
+  test -f /run/rc2fx-gauges && gauges=1
+  env RC2FX_CLIENT_TIMING="$client_timing" RC2FX_GAUGES="$gauges" LD_AUDIT="$home/librc2fx_native.so" \
     RC2FX_NATIVE_PROBE_REPORT_SELECTED_ONLY=1 \
     RC2FX_FIRMWARE_PROFILE="$profile_id" RC2FX_FIRMWARE_PROFILES="$home/firmware-profiles.json" \
     RC2FX_NATIVE_PROBE_PLAN="$run/plan.json" RC2FX_USB_SOCKET="$run/usb.sock" \
@@ -1720,6 +1721,24 @@ xrun_trace() {
     unprepare)
       rm -f /run/rc2fx-client-timing
       ;;
+    gauges)
+      # Bench-only wrappers, independent of client timing. Like prepare, the
+      # marker takes effect at the next mixer start and reboot clears it.
+      case "${1:-}" in
+        on)
+          test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot || return 4
+          touch /run/rc2fx-gauges
+          echo 'Bench gauges enabled for next audio start; restart explicitly'
+          ;;
+        off) rm -f /run/rc2fx-gauges /run/rc2fx-gauge-epoch ;;
+        epoch)
+          [[ ${2:-} =~ ^[0-9]+$ ]] || return 2
+          (umask 077; printf '%s\n' "$2" > /run/rc2fx-gauge-epoch.tmp)
+          mv /run/rc2fx-gauge-epoch.tmp /run/rc2fx-gauge-epoch
+          ;;
+        *) echo 'xrun-trace gauges on|off|epoch N' >&2; return 2 ;;
+      esac
+      ;;
     status)
       test -d "$dir" || { echo absent; return; }
       printf 'tracing_on='; cat "$instance/tracing_on"
@@ -1920,7 +1939,7 @@ xrun_trace() {
       done
       if test -d "$dir"; then mv "$dir" "$dir.saved.$(date +%s).$$"; fi
       ;;
-    *) echo 'xrun-trace prepare|arm|status|stop|collect|clear' >&2; return 2 ;;
+    *) echo 'xrun-trace prepare|gauges|arm|status|stop|collect|clear' >&2; return 2 ;;
   esac
 }
 

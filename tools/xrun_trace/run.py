@@ -71,7 +71,7 @@ def validate_clock(bounds_text, trace):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=['prepare','arm','status','stop','collect','clear','self-test'])
+    p.add_argument('action',choices=['prepare','gauges-on','gauges-off','arm','status','stop','collect','clear','self-test'])
     p.add_argument('--bundle',type=Path,default=ROOT/'target/mixer')
     p.add_argument('--out',type=Path)
     p.add_argument('--deep',action='store_true')
@@ -135,6 +135,7 @@ def main():
             if result['classification']!='runnable-delay' or not any('hog' in r['comm'] and r['comm'].startswith('rc2fx-') for r in competitors):
                 raise RuntimeError('Capture did not attribute the fault to the injected hog; inspect analysis.json')
             print('PASS: xrun attributed to the injected CPU competitor')
+    elif args.action.startswith('gauges-'):print(remote('gauges',args.action.split('-')[1]).decode(),end='')
     else:print(remote(args.action).decode(),end='')
 
 if __name__=='__main__':main()

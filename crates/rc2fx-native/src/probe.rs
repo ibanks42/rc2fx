@@ -36,7 +36,7 @@ pub struct Positions {
     samples: AtomicU64,
 }
 impl Positions {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             bins: [const { AtomicU64::new(0) }; 8],
             max: AtomicU64::new(0),
@@ -61,7 +61,7 @@ impl Positions {
         self.max.fetch_max(position, Ordering::Relaxed);
         self.samples.fetch_add(1, Ordering::Relaxed);
     }
-    fn snapshot(&self) -> serde_json::Value {
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
         let read = |value: &AtomicU64| value.load(Ordering::Relaxed);
         serde_json::json!({
             "histogram": self.bins.iter().map(read).collect::<Vec<_>>(),
@@ -494,7 +494,7 @@ fn cycle_clock() -> usize {
 /// or SysV hash table. 0 when absent. Pointer-valued dynamic entries are
 /// used as the loader left them: relocated once the object is relocated,
 /// otherwise still relative to its load address.
-unsafe fn dynamic_symbol(map: *const LinkMap, name: &CStr) -> usize {
+pub(crate) unsafe fn dynamic_symbol(map: *const LinkMap, name: &CStr) -> usize {
     #[repr(C)]
     struct Dyn {
         tag: i64,

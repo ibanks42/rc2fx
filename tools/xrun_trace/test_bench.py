@@ -3,7 +3,7 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
-from bench import check, measurement, preserve_fault
+from bench import check, gauge_measurement, level, measurement, preserve_fault
 from analyze import captured_flight_audit
 
 class Qualification(unittest.TestCase):
@@ -59,6 +59,33 @@ class Qualification(unittest.TestCase):
         result=measurement(base,base)
         self.assertIsNone(result['slowCallbacksPerHour'])
         self.assertIsNone(result['meanCallbackWallUs'])
+
+    def gauged(self,handles,past=0,bins=(0,)*8):
+        return {'audit':{'gauges':{'epoch':5,'handleOverflow':0,'unattributedSrcCalls':0,'handles':handles,
+                                   'vendorJob':{'pastJackdRead':past,'endPosition':{'histogram':list(bins)}}}}}
+    def handle(self,direction,cycles,low,high,src=0,calls=0,epoch=5):
+        return dict(client='usb1out',direction=direction,epoch=epoch,cycles=cycles,availErrors=0,lowestPosition=low,
+                    highestPosition=high,srcCalls=calls,srcTotalNs=src,srcMaxCycleNs=200_000)
+    def test_playback_fill_uses_the_ring_and_capture_fill_is_direct(self):
+        base=self.gauged([self.handle('playback',100,500,640),self.handle('capture',100,40,90)],2,[1]*8)
+        current=self.gauged([self.handle('playback',300,500,650,34_000_000,4000),self.handle('capture',300,30,90)],3,[2]*8)
+        result=gauge_measurement(base,current,784)
+        playback,capture=result['handles']
+        self.assertEqual(playback['lowestFillFrames'],134)
+        self.assertEqual(capture['lowestFillFrames'],30)
+        self.assertEqual(playback['srcCallsPerCycle'],20)
+        self.assertEqual(playback['srcMeanUsPerCycle'],170)
+        self.assertEqual(result['vendorJob']['pastJackdRead'],1)
+        self.assertEqual(result['vendorJob']['endPositionHistogram'],[1]*8)
+    def test_a_handle_not_yet_at_the_epoch_is_marked_and_an_empty_one_has_no_fill(self):
+        current=self.gauged([self.handle('playback',0,None,None,epoch=4)])
+        row=gauge_measurement(self.gauged([]),current,784)['handles'][0]
+        self.assertFalse(row['extremesFromEpoch'])
+        self.assertIsNone(row['lowestFillFrames'])
+        self.assertIsNone(row['srcMeanUsPerCycle'])
+    def test_the_level_names_every_load_on_the_run(self):
+        self.assertEqual(level(False,False),'counters')
+        self.assertEqual(level(True,True),'trace+gauges')
 
     def test_first_fault_history_survives_later_checkpoints_and_restart(self):
         with tempfile.TemporaryDirectory() as directory:
