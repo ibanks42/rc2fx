@@ -270,7 +270,7 @@ class HistoryTests(unittest.TestCase):
         bundle = self.build(release("1.0.0"))
         self.assertEqual([r["version"] for r in bundle.feed["mixer"]["releases"]], ["1.0.0"])
         self.assertNotIn("Never shipped", bundle.mixer_page)
-        self.assertTrue(any("no published app release bundles it" in w for w in bundle.warnings))
+        self.assertTrue(any("no published mixer release or app bundle" in w for w in bundle.warnings))
 
     def test_pages_have_version_headings_and_cumulative_notes(self):
         bundle = self.build(
@@ -292,7 +292,7 @@ class HistoryTests(unittest.TestCase):
         bundle = self.build(release("1.0.0"))
         self.assertIn("This history lists the published app release: v1.0.0.", bundle.app_page)
         self.assertIn(
-            "This history records the mixer version bundled by published app releases: v1.0.0.",
+            "This history records the mixer version in published releases: v1.0.0.",
             bundle.mixer_page,
         )
 
@@ -354,6 +354,42 @@ class HistoryTests(unittest.TestCase):
         bundle = self.build(release("1.0.0"), use_git=True)
         self.assertEqual(bundle.feed["app"]["releases"][0]["mixerVersion"], "1.0.0")
         self.assertEqual(bundle.feed["app"]["releases"][0]["protocolVersion"], 2)
+
+    def test_standalone_mixer_history_needs_no_app_release(self):
+        bundle = self.build(
+            release("1.0.0", tag="mixer-v1.0.0"),
+            release("1.1.0", tag="mixer-v1.1.0", draft=True),
+            release("1.2.0", tag="mixer-v1.2.0", prerelease=True),
+        )
+        self.assertEqual(bundle.feed["app"]["releases"], [])
+        mixer = bundle.feed["mixer"]
+        self.assertEqual(mixer["latest"], "1.0.0")
+        self.assertTrue(mixer["historyComplete"])
+        self.assertIsNone(mixer["releases"][0]["firstAppVersion"])
+        self.assertIn("First published mixer software", bundle.mixer_page)
+        self.assertIn("releases/tag/mixer-v1.0.0", bundle.mixer_page)
+
+    def test_download_only_tag_does_not_claim_a_bundled_mixer(self):
+        self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":2}')
+        self.put("crates/rc2fx-app/Cargo.toml", '[features]\ndefault = []\nembedded = []\n')
+        self.init_git()
+        self.tag("1.0.0")
+        bundle = self.build(release("1.0.0"), release("1.0.0", tag="mixer-v1.0.0"), use_git=True)
+        app = bundle.feed["app"]["releases"][0]
+        self.assertIsNone(app["mixerVersion"])
+        self.assertTrue(app["downloadsMixer"])
+        self.assertTrue(bundle.feed["mixer"]["historyComplete"])
+        self.assertNotIn("unknown", bundle.app_page)
+        self.assertNotIn("9.9.9", bundle.mixer_page)
+        self.assertIn("downloaded separately", bundle.app_page)
+
+    def test_standalone_and_legacy_bundle_share_one_mixer_history_entry(self):
+        bundle = self.build(release("1.0.0", date="2026-11-04"),
+                            release("1.0.0", tag="mixer-v1.0.0", date="2026-11-05"))
+        entries = bundle.feed["mixer"]["releases"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["firstAppVersion"], "1.0.0")
+        self.assertEqual(entries[0]["date"], "2026-11-04")
 
     def test_a_tag_without_the_manifest_is_unknown_not_missing(self):
         self.init_git()

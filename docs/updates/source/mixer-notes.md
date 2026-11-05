@@ -1,19 +1,21 @@
 # RC2FX mixer software notes
 
-Curated notes for the RC2FX mixer software versions published inside desktop
-app releases. This file is the source for the mixer history page and the
+Curated notes for independent RC2FX mixer releases and historical desktop
+app bundles. This file is the source for the mixer history page and the
 `mixer.releases` array in `updates.json`; the app history comes from
 `CHANGELOG.md`.
 
-- Add a section only when a version is bundled by a desktop release.
+- Add a section when preparing a mixer release; it appears in the history only
+  after the `mixer-vVERSION` release is published.
 - Start the heading with the exact `MAJOR.MINOR.PATCH` version from
   `config/mixer-release.json`, without a `v`.
 - Leave a version out when you don't know what changed: the site and the feed
   say the history is unknown instead of guessing.
-- The first app version that bundled a mixer version and its publication date
-  are derived from the app release history, so don't repeat them here.
-- The mixer is not released on its own; there is one section per published
-  mixer version, not per app release.
+- Publication dates and historical app bundles are derived from the release
+  history, so don't repeat them here.
+- There is one section per mixer version, independent of app releases.
+- This feed provides release notes only. Installation compatibility and payload
+  hashes come from the separately signed update repository.
 
 ## [1.0.1]
 

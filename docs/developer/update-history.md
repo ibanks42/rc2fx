@@ -4,9 +4,10 @@ The documentation site publishes the release history of both versioned parts
 of RC2FX and a JSON feed the app reads:
 
 - `/updates/app` lists every published desktop app release and its notes.
-- `/updates/mixer` lists every mixer software version bundled by a published
-  app release and the first app that shipped it.
-- `/updates.json` carries the same data for update checks.
+- `/updates/mixer` lists published standalone mixer releases and historical
+  app bundles.
+- `/updates.json` carries the same release-note history. Signed TUF metadata,
+  described in [Mixer releases](mixer-releases.md), authorizes installation.
 
 All three are generated at documentation build time by
 `.github/scripts/update_history.py`. They are not committed, so they cannot
@@ -19,7 +20,7 @@ go stale between a source change and a build.
 | `CHANGELOG.md` | App notes, one section per stable app version. git-cliff writes it during release preparation. |
 | `docs/updates/source/mixer-notes.md` | Curated mixer notes, one section per published mixer version. |
 | `config/mixer-release.json` at each release tag | Which mixer software an app release bundled, and its control protocol version. |
-| GitHub's releases API | Which app releases are actually published. Drafts and pre-releases are excluded even when their tag and changelog section already exist. |
+| GitHub's releases API | Which app and standalone mixer releases are actually published. Drafts and pre-releases are excluded even when their tag and changelog section already exist. |
 
 Nothing is written twice. The app notes are the changelog sections, not a
 copy; the mixer notes are authored once and used by both the page and the
@@ -27,8 +28,8 @@ feed.
 
 ## Adding mixer notes
 
-When a release bundles a new `config/mixer-release.json` version, bump the
-mixer version as described in [Releases](releases.md#mixer-runtime-version),
+When preparing a new `config/mixer-release.json` version, follow
+[Mixer releases](mixer-releases.md),
 then add a section to `docs/updates/source/mixer-notes.md`:
 
 ```markdown
@@ -37,12 +38,11 @@ then add a section to `docs/updates/source/mixer-notes.md`:
 - What changed for the person using the mixer.
 ```
 
-Use the exact version, without a `v`. The first app release that shipped the
-version and its publication date are derived from the app history, so don't
-repeat them. If you don't know what changed, leave the section out: the page
+Use the exact version, without a `v`. Publication dates and historical app
+bundles are derived from the release history, so don't repeat them. If you don't know what changed, leave the section out: the page
 says the notes are unavailable and the feed uses `notesMarkdown: null` rather
-than inventing history. A new mixer version needs a section before release
-preflight passes; legacy versions without notes stay explicitly unknown.
+than inventing history. Review the notes when publishing a mixer release; missing notes stay
+explicitly unknown.
 
 The desktop app's notes come from commit messages through git-cliff. See
 [Release notes](releases.md#release-notes) for the commit prefixes and
@@ -50,7 +50,12 @@ wording.
 
 ## The app to mixer mapping
 
-There is no separate mapping file. Each app release's bundled mixer software
+Download-only app tags are identified by the optional `embedded` feature
+being absent from their default features in `crates/rc2fx-app/Cargo.toml`.
+They set `downloadsMixer: true`, have no bundled version, and do not make
+mixer history incomplete. Standalone releases come from `mixer-vVERSION` tags.
+
+There is no separate mapping file. An older app release's bundled mixer software
 comes from `config/mixer-release.json` at that release's tag, read with:
 
 ```sh
@@ -88,7 +93,8 @@ version stays out.
 ## Published releases only
 
 The generator asks the GitHub releases API for every page of releases and
-keeps only non-draft, non-prerelease `vMAJOR.MINOR.PATCH` tags. Tags and
+keeps only non-draft, non-prerelease `vMAJOR.MINOR.PATCH` app tags and
+`mixer-vMAJOR.MINOR.PATCH` mixer tags. Tags and
 changelog sections are not proof of publication: the release workflow creates
 the tag and the draft before macOS finishes. A manual documentation build
 from `main` therefore cannot publish notes for an unfinished draft.
@@ -103,8 +109,8 @@ the request is unauthenticated and subject to GitHub's rate limit.
 
 Release preparation validates the pending release directly:
 `release.py prepare` parses the new app section with `parse_changelog` and
-requires curated mixer notes with `parse_mixer_notes` when the mixer version
-changes. The release workflow then runs the ordinary published-only
+does not require mixer changes or notes for download-only app releases.
+Legacy embedded release preparation also validates changed mixer notes. The release workflow then runs the ordinary published-only
 documentation build (`npm run build`), so a prepared but unpublished release
 never enters the site or `updates.json`. There is no synthetic candidate and
 no candidate output to keep or clean up.
@@ -150,7 +156,7 @@ no candidate output to keep or clean up.
   version the published history covers; it is not inferred from the gaps
   between entries. Both are `null` when nothing is published.
 - `historyComplete` is `false` when any part of the history is unknown: an
-  older app release without notes, an app release without a recorded mixer
+  older app release without notes, an older bundled app release without a recorded mixer
   version, or a mixer version without notes. A known first and last entry
   alone never proves the history between them is complete.
 - `notesMarkdown` is Markdown, rendered as formatted text. `null` means the
@@ -160,7 +166,9 @@ no candidate output to keep or clean up.
 - `mixerVersion`, `protocolVersion`, `date` and `firstAppVersion` may be
   `null` when unknown.
 - `firstAppVersion` is the oldest published app release that bundled the
-  mixer version. Its release page is where a mixer note's release link goes.
+  mixer version, or `null` for a standalone version never bundled by an app.
+- `downloadsMixer` is true for download-only app releases. Older feed entries
+  without this field retain their historical bundled-version semantics.
 - New fields may be added without changing `schemaVersion`; the app ignores
   fields it doesn't know. Removing or reinterpreting a field needs a new feed
   URL so older apps keep working.
