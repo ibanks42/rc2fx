@@ -1611,10 +1611,18 @@ mod tests {
         });
         let plan = Plan::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
         assert_eq!(plan.paths.len(), MAX_PATHS);
-        assert!(plan.paths.len() >= 25, "the expanded Pro II catalog must fit");
+        assert!(
+            plan.paths.len() >= 25,
+            "the expanded Pro II catalog must fit"
+        );
         let extra = value["paths"][0].clone();
         value["paths"].as_array_mut().unwrap().push(extra);
-        assert!(Plan::parse(&serde_json::to_vec(&value).unwrap()).err().unwrap().contains("geometry/count"));
+        assert!(
+            Plan::parse(&serde_json::to_vec(&value).unwrap())
+                .err()
+                .unwrap()
+                .contains("geometry/count")
+        );
     }
 
     struct Buffers {
@@ -2604,10 +2612,9 @@ mod tests {
         for _ in 0..40 {
             source_block(&pipeline, &buffers, &[0], true);
         }
-        let worker = rc2fx_suppression::Geometry::for_lookahead(0,
-        )
-        .unwrap()
-        .latency_samples() as u32;
+        let worker = rc2fx_suppression::Geometry::for_lookahead(0)
+            .unwrap()
+            .latency_samples() as u32;
         let latency = controls[0].status().unwrap().meter.unwrap().latency_samples;
         assert_eq!(latency, worker + FRAMES as u32);
         let counters = pipeline.counters();
@@ -2866,10 +2873,9 @@ mod tests {
     fn a_suppressed_mic_switched_live_reports_the_helper_frame() {
         let mut plan = source_plan(1, false, PathMode::Passthrough);
         plan.paths[0].target.suppression.enabled = true;
-        let worker = rc2fx_suppression::Geometry::for_lookahead(0,
-        )
-        .unwrap()
-        .latency_samples() as u32;
+        let worker = rc2fx_suppression::Geometry::for_lookahead(0)
+            .unwrap()
+            .latency_samples() as u32;
         let buffers = Buffers::new();
         let (pipeline, mut controls) = pipeline_owned(&plan, &buffers);
         for _ in 0..5 {

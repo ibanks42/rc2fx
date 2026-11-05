@@ -76,11 +76,8 @@ impl Runtime {
             None
         };
         let (mut providers, worker) = if target.suppression.enabled {
-            let (provider, record) = worker(
-                target.suppression.lookahead,
-                options,
-            )
-            .map_err(|_| super::parameters::Error::Runtime)?;
+            let (provider, record) = worker(target.suppression.lookahead, options)
+                .map_err(|_| super::parameters::Error::Runtime)?;
             ([Some(provider), None], Some(record))
         } else {
             ([None, None], None)
