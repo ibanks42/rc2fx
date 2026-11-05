@@ -10,6 +10,13 @@
 expect_embedded_envelope() {
     executable=$1
     test -f "$executable" || { echo "missing executable: $executable" >&2; exit 1; }
+    if grep -aq 'RC2FX-PAYLOAD-MODE:download:1' "$executable"; then
+        if grep -aq 'RC2FX-PAYLOAD-MODE:embedded:1' "$executable"; then
+            echo 'executable contains conflicting mixer payload modes' >&2
+            exit 1
+        fi
+        return 0
+    fi
     magic='RC2FX-EMBEDDED-PAYLOAD 1'
     occurrences=$(grep -aob "$magic" "$executable" | wc -l | tr -d ' ')
     if [ "$occurrences" -ne 1 ]; then

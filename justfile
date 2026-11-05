@@ -10,17 +10,24 @@ default:
 setup:
     cargo xtask setup
 
-# Run the desktop app (builds the mixer runtime it installs first)
-app: mixer-build
+# Run the desktop app with authenticated mixer downloads
+app:
     cargo run --locked --release -p rc2fx-app
 
 # Build the desktop app into target/release
-desktop: mixer-build
+desktop:
     cargo build --locked --release -p rc2fx-app
 
 # Build the desktop app and bundle it with its documentation into target/package
-package: mixer-build
+package:
     cargo xtask package
+
+# Optional desktop with a bundled mixer payload
+app-embedded: mixer-build
+    cargo run --locked --release -p rc2fx-app --features embedded
+
+desktop-embedded: mixer-build
+    cargo build --locked --release -p rc2fx-app --features embedded
 
 # Build the Linux packages from the working tree in a container, then test installing them (Linux, needs podman or docker)
 package-check:

@@ -92,11 +92,6 @@ jobs:
           cache-bin: false
           cache-workspace-crates: true
           cache-on-failure: true
-      - name: Stage the original bundled runtime
-        run: |
-          rm -rf target/mixer
-          mkdir -p target/mixer
-          cp -R .release-input/runtime/. target/mixer/
       - name: Build macOS release package
         env:
           RC2FX_RELEASE_BUILD: "1"

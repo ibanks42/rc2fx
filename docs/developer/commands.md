@@ -9,7 +9,8 @@ recipes and `cargo xtask help` lists the underlying commands.
 | Command | Description |
 | --- | --- |
 | `just setup` | One-time setup: the mixer's Rust target, cargo-zigbuild, a zig check |
-| `just app` / `just desktop` | Run / build the desktop app. Cross-builds the mixer runtime it embeds first. |
+| `just app` / `just desktop` | Run / build the desktop app with signed mixer downloads. No mixer cross-build is needed. |
+| `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run / build an app with the optional embedded payload. |
 | `just mixer-build` | Cross-build the mixer runtime into `target/mixer` |
 | `just test` | Workspace tests, then Clippy with warnings as errors |
 | `just test-mixer` | Native library tests, plus the launcher, recorder and screen-module tests (Linux or macOS) |

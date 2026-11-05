@@ -34,8 +34,8 @@ const HELP: &str = "cargo xtask <command>
                         recording and fetch the denoised audio
   check-elf FILE [--shared]  Check a mixer binary against the mixer ABI baseline
   licenses FILE         Write consolidated licence notices to FILE
-  package [--target TRIPLE] [--skip-build]
-                        Build the desktop app with its embedded mixer runtime and bundle
+  package [--target TRIPLE] [--skip-build] [--embedded]
+                        Build the download-only desktop app (or embed the mixer with --embedded) and bundle
                         documentation, licences and SHA256SUMS in target/package
 
 Mixer connection: .rc2fx-mixer.conf (see .rc2fx-mixer.conf.example) or the

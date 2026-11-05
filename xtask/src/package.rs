@@ -81,6 +81,13 @@ fn release_build() -> bool {
 }
 
 fn validate_executable(root: &Path, executable: &[u8], release: bool) -> Result {
+    let download = b"RC2FX-PAYLOAD-MODE:download:1";
+    if executable.windows(download.len()).any(|w| w == download) {
+        if rc2fx_installer::Envelope::find(executable).is_ok() {
+            return Err("download-only executable unexpectedly contains a mixer payload".into());
+        }
+        return Ok(());
+    }
     let embedded = rc2fx_installer::Envelope::find(executable)?;
     let expected = rc2fx_installer::Envelope::expected(root, release)?;
     embedded.require_matches(&expected)
@@ -166,7 +173,7 @@ pub fn write_licenses(destination: &Path) -> Result {
 }
 
 fn usage() -> String {
-    "usage: cargo xtask package [--target TRIPLE] [--skip-build]\n\
+    "usage: cargo xtask package [--target TRIPLE] [--skip-build] [--embedded]\n\
      Linux requires RC2FX_LINUXDEPLOY, RC2FX_APPIMAGETOOL, RC2FX_APPIMAGE_RUNTIME, RC2FX_PATCHELF and RC2FX_NFPM to name the pinned tools."
         .into()
 }
@@ -174,11 +181,13 @@ fn usage() -> String {
 pub fn run_package(args: &[&str]) -> Result {
     let mut target = None;
     let mut build = true;
+    let mut embedded = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match *arg {
             "--target" => target = Some(rest.next().ok_or_else(usage)?.to_string()),
             "--skip-build" => build = false,
+            "--embedded" => embedded = true,
             _ => return Err(usage()),
         }
     }
@@ -196,7 +205,7 @@ pub fn run_package(args: &[&str]) -> Result {
     fs::create_dir_all(root.join("target")).map_err(|e| e.to_string())?;
     fs::write(&document_path, &document.json).map_err(|e| e.to_string())?;
     if build {
-        licenses::build_app(&root, target.as_deref(), &document_path)?;
+        licenses::build_app(&root, target.as_deref(), &document_path, embedded)?;
     }
     let mut release = root.join("target");
     if let Some(t) = &target {
@@ -209,6 +218,10 @@ pub fn run_package(args: &[&str]) -> Result {
         "rc2fx"
     });
     let executable = read(&exe).map_err(|e| format!("{e}\nBuild the app or drop --skip-build."))?;
+    let mode = if embedded { b"RC2FX-PAYLOAD-MODE:embedded:1" } else { b"RC2FX-PAYLOAD-MODE:download:1" };
+    if !executable.windows(mode.len()).any(|w| w == mode) {
+        return Err("executable payload mode differs from packaging options; rebuild with the requested mode".into());
+    }
 
     licenses::verify_embedded(&executable, &document.json)?;
     let release = release_build();
@@ -331,6 +344,17 @@ mod tests {
         exe.extend_from_slice(envelope.as_bytes());
         exe.extend_from_slice(b"\0executable suffix");
         exe
+    }
+
+    #[test]
+    fn download_only_package_needs_no_runtime_and_rejects_a_bundled_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = b"executable\0RC2FX-PAYLOAD-MODE:download:1\0".to_vec();
+        let files = collect_with(dir.path(), "windows", exe.clone(), vec![], true).unwrap();
+        assert_eq!(files["rc2fx.exe"].data, exe);
+        let (root, mut embedded) = fixture();
+        embedded.extend_from_slice(&exe);
+        assert!(validate_executable(&root, &embedded, true).unwrap_err().contains("unexpectedly"));
     }
 
     #[test]

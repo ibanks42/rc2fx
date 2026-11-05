@@ -40,23 +40,15 @@ jobs:
           cache: false
           rustflags: ""
       - uses: actions/cache@v6.1.0
-        id: zig-tool
-        with:
-          path: ~/.cache/rc2fx-release-tools/zig-0.16.0
-          key: release-zig-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/setup-release-tools.sh') }}
-      - name: Set up verified Zig
-        run: bash .github/scripts/setup-release-tools.sh zig
-      - uses: actions/cache@v6.1.0
         id: runtime-tools
         with:
           path: |
             ~/.cargo/bin/git-cliff*
-            ~/.cargo/bin/cargo-zigbuild*
-          key: release-tools-${{ runner.os }}-${{ runner.arch }}-cliff2.14.1-zigbuild0.24.0
+          key: release-tools-${{ runner.os }}-${{ runner.arch }}-cliff2.14.1
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         if: steps.runtime-tools.outputs.cache-hit != 'true'
         with:
-          tool: git-cliff@2.14.1,cargo-zigbuild@0.24.0
+          tool: git-cliff@2.14.1
           fallback: none
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -65,26 +57,6 @@ jobs:
           cache-workspace-crates: true
           cache-on-failure: true
           workspaces: . -> target
-      # The native crate has its own workspace but shares this target with
-      # rc2fxd. Save it separately before rust-cache's root-workspace cleanup.
-      - uses: actions/cache/restore@v6.1.0
-        id: native-cache
-        with:
-          path: |
-            ${{ runner.temp }}/rc2fx-native-cache
-            ~/.cache/zig
-            ~/.cache/cargo-zigbuild
-          key: native-v1-${{ runner.os }}-${{ runner.arch }}-zig0.16-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', 'crates/rc2fx-native/Cargo.lock', '**/Cargo.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            native-v1-${{ runner.os }}-${{ runner.arch }}-zig0.16-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', 'crates/rc2fx-native/Cargo.lock', '**/Cargo.toml') }}-
-            native-v1-${{ runner.os }}-${{ runner.arch }}-zig0.16-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml') }}-
-      - name: Restore shared native build directory
-        run: |
-          if test -d "$RUNNER_TEMP/rc2fx-native-cache"; then
-            rm -rf target/mixer-build
-            mkdir -p target
-            mv "$RUNNER_TEMP/rc2fx-native-cache" target/mixer-build
-          fi
       - name: Test release versioning
         run: |
           python3 .github/scripts/test_release.py
@@ -109,33 +81,12 @@ jobs:
           # prepare validates pending notes. The site build always exposes
           # published history only, even while validating a future release.
           npm run build --prefix docs
-      - name: Build bundled mixer software
-        run: cargo xtask mixer-build
-      - name: Stage mixer payload for the desktop builds
-        run: |
-          mkdir -p target/release-input/runtime
-          cp -R target/mixer/. target/release-input/runtime/
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-input
           retention-days: 90
           path: target/release-input/
           if-no-files-found: error
-      - name: Preserve native build progress
-        if: ${{ !cancelled() }}
-        run: |
-          if test -d target/mixer-build; then
-            rm -rf "$RUNNER_TEMP/rc2fx-native-cache"
-            mv target/mixer-build "$RUNNER_TEMP/rc2fx-native-cache"
-          fi
-      - uses: actions/cache/save@v6.1.0
-        if: ${{ !cancelled() && steps.native-cache.outputs.cache-primary-key != '' && steps.native-cache.outputs.cache-hit != 'true' }}
-        with:
-          path: |
-            ${{ runner.temp }}/rc2fx-native-cache
-            ~/.cache/zig
-            ~/.cache/cargo-zigbuild
-          key: ${{ steps.native-cache.outputs.cache-primary-key }}
 
   build:
     needs: prepare
@@ -191,13 +142,6 @@ jobs:
           cache-bin: false
           cache-workspace-crates: true
           cache-on-failure: true
-      # The downloaded artifact lives outside target, so cached files cannot
-      # overwrite it. Stage this run's verified runtime last.
-      - name: Stage bundled runtime
-        run: |
-          rm -rf target/mixer
-          mkdir -p target/mixer
-          cp -R .release-input/runtime/. target/mixer/
       - name: Prepare AppImage runtime licenses and corresponding sources
         if: runner.os == 'Linux'
         run: |
