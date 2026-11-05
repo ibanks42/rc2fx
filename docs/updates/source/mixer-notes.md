@@ -15,6 +15,12 @@ app releases. This file is the source for the mixer history page and the
 - The mixer is not released on its own; there is one section per published
   mixer version, not per app release.
 
+## [1.0.1]
+
+- Reduce audio deadline interference from medium-sized mixer screen redraws.
+- Correct suppression timing totals after changing lookahead settings.
+- Preserve native performance samples and recent audio faults in diagnostics.
+
 ## [1.0.0]
 
 - First published RC2FX mixer software, bundled with RC2FX 1.0.0.
