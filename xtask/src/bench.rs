@@ -162,59 +162,6 @@ fn unpack_results(bytes: &[u8], out: &Path) -> Result {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
-mod transfer_tests {
-    use super::*;
-
-    fn compressed_results() -> Vec<u8> {
-        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        let mut archive = tar::Builder::new(encoder);
-        for (name, bytes) in [
-            ("input.wav", &b"RIFF\0\xff\x80binary audio"[..]),
-            ("model.json", &b"{\"frames\":200}"[..]),
-            ("model.log", &b"completed\n"[..]),
-        ] {
-            let mut header = tar::Header::new_ustar();
-            header.set_size(bytes.len() as u64);
-            header.set_mode(0o600);
-            header.set_cksum();
-            archive.append_data(&mut header, name, bytes).unwrap();
-        }
-        archive.into_inner().unwrap().finish().unwrap()
-    }
-
-    #[test]
-    fn compressed_results_preserve_audio_and_reports() {
-        let out = tempfile::tempdir().unwrap();
-        unpack_results(&compressed_results(), out.path()).unwrap();
-        assert_eq!(
-            fs::read(out.path().join("input.wav")).unwrap(),
-            b"RIFF\0\xff\x80binary audio"
-        );
-        assert_eq!(
-            fs::read(out.path().join("model.json")).unwrap(),
-            b"{\"frames\":200}"
-        );
-        assert_eq!(
-            fs::read(out.path().join("model.log")).unwrap(),
-            b"completed\n"
-        );
-    }
-
-    #[test]
-    fn incomplete_or_corrupt_gzip_is_rejected_before_unpacking() {
-        let good = compressed_results();
-        let mut bad_crc = good.clone();
-        let crc = bad_crc.len() - 8;
-        bad_crc[crc] ^= 1;
-        for bytes in [&good[..good.len() - 8], bad_crc.as_slice()] {
-            let out = tempfile::tempdir().unwrap();
-            assert!(unpack_results(bytes, out.path()).is_err());
-            assert_eq!(fs::read_dir(out.path()).unwrap().count(), 0);
-        }
-    }
-}
-
 /// RC2FX audio-callback overruns while the benchmark's timed loop ran, and the
 /// seconds observed, from the controller's per-second history (mixer clock),
 /// read over USB 1. None when RC2FX is not running or not reachable.
@@ -329,4 +276,57 @@ fn report(out: &Path, models: &[&str], overruns: &[Option<(u64, f64)>]) -> Resul
         out.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+
+    fn compressed_results() -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (name, bytes) in [
+            ("input.wav", &b"RIFF\0\xff\x80binary audio"[..]),
+            ("model.json", &b"{\"frames\":200}"[..]),
+            ("model.log", &b"completed\n"[..]),
+        ] {
+            let mut header = tar::Header::new_ustar();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o600);
+            header.set_cksum();
+            archive.append_data(&mut header, name, bytes).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn compressed_results_preserve_audio_and_reports() {
+        let out = tempfile::tempdir().unwrap();
+        unpack_results(&compressed_results(), out.path()).unwrap();
+        assert_eq!(
+            fs::read(out.path().join("input.wav")).unwrap(),
+            b"RIFF\0\xff\x80binary audio"
+        );
+        assert_eq!(
+            fs::read(out.path().join("model.json")).unwrap(),
+            b"{\"frames\":200}"
+        );
+        assert_eq!(
+            fs::read(out.path().join("model.log")).unwrap(),
+            b"completed\n"
+        );
+    }
+
+    #[test]
+    fn incomplete_or_corrupt_gzip_is_rejected_before_unpacking() {
+        let good = compressed_results();
+        let mut bad_crc = good.clone();
+        let crc = bad_crc.len() - 8;
+        bad_crc[crc] ^= 1;
+        for bytes in [&good[..good.len() - 8], bad_crc.as_slice()] {
+            let out = tempfile::tempdir().unwrap();
+            assert!(unpack_results(bytes, out.path()).is_err());
+            assert_eq!(fs::read_dir(out.path()).unwrap().count(), 0);
+        }
+    }
 }
