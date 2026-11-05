@@ -922,7 +922,8 @@ logs() {
 # those whose affinity is exactly CPU 0; RT threads and any other affinity are
 # left alone. Races with a thread exiting are ignored.
 relocate_housekeeping() {
-  local pid=$1 proc=${RC2FX_PROC:-/proc} task tid comm moved='' names='' policy affinity key value rest record
+  local pid=$1 proc=${RC2FX_PROC:-/proc} task tid comm moved='' names='' policy rest record text
+  local affinity_line=$'(^|\n)[ \t]*Cpus_allowed_list:[ \t]+([^ \t\n]*)'
   local -a batch=() stat_fields=()
   for task in "$proc/$pid"/task/*/; do
     task=${task%/}
@@ -930,11 +931,13 @@ relocate_housekeeping() {
     [[ "$tid" =~ ^[0-9]+$ ]] || continue
     IFS= read -r comm 2>/dev/null < "$task/comm" || continue
     case "$comm" in rc2fx*) continue;; esac
-    affinity=
-    while read -r key value rest; do
-      if test "$key" = Cpus_allowed_list:; then affinity=$value; break; fi
-    done 2>/dev/null < "$task/status" || continue
-    test "$affinity" = 0 || continue
+    # One read of the whole file: procfs regenerates it on every read, and a
+    # per-line loop costs about 165 syscalls per thread against 3. The read
+    # returns nonzero at EOF as well, so an open that failed shows as no text.
+    text=
+    IFS= read -r -d '' text 2>/dev/null < "$task/status" || true
+    [[ "$text" =~ $affinity_line ]] || continue
+    test "${BASH_REMATCH[2]}" = 0 || continue
     # Field 39 is the policy; strip up to the LAST ") " so a comm with spaces
     # or a ')' does not shift the fields.
     IFS= read -r record 2>/dev/null < "$task/stat" || continue

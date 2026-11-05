@@ -124,6 +124,48 @@ class Tests(unittest.TestCase):
         self.run_move()
         self.assertEqual((self.moved.read_text().splitlines()), ['-p 0xa 101'])
 
+    def moved_tids(self):
+        return self.moved.read_text().splitlines() if self.moved.exists() else []
+
+    def test_affinity_is_read_past_tab_or_space_separators(self):
+        for tid, separator in ((101, '\t'), (102, ' '), (103, ' \t ')):
+            task = self.tree.thread(tid, f'T{tid}')
+            (task / 'status').write_text(f'Name:\tT{tid}\nCpus_allowed_list:{separator}0\nMems_allowed_list:\t0\n')
+        self.run_move()
+        self.assertEqual(self.moved_tids(), ['-p 0xa 101', '-p 0xa 102', '-p 0xa 103'])
+
+    def test_only_the_exact_key_at_a_line_start_counts(self):
+        self.tree.thread(101, 'Cpus_allowed_list: 0', '1,3')  # the key inside a comm
+        other = self.tree.thread(102, 'Mems')
+        (other / 'status').write_text('Name:\tMems\nMems_allowed_list:\t0\nCpus_allowed:\t1\n')
+        wide = self.tree.thread(103, 'Wide')
+        (wide / 'status').write_text('Name:\tWide\nCpus_allowed_list:\t0-3\n')
+        self.run_move()
+        self.assertEqual(self.moved_tids(), [])
+
+    def test_a_final_line_without_a_newline_still_counts(self):
+        task = self.tree.thread(101, 'Tail')
+        (task / 'status').write_text('Name:\tTail\nCpus_allowed_list:\t0')
+        self.run_move()
+        self.assertEqual(self.moved_tids(), ['-p 0xa 101'])
+
+    def test_a_thread_gone_before_status_never_reuses_the_previous_affinity(self):
+        self.tree.thread(101, 'HIDThread')
+        (self.tree.thread(102, 'Timer') / 'status').unlink()
+        emptied = self.tree.thread(103, 'Emptied')
+        (emptied / 'status').write_text('')
+        unreadable = self.tree.thread(104, 'Unreadable')
+        (unreadable / 'status').unlink()
+        (unreadable / 'status').mkdir()  # opens, then read fails
+        self.tree.thread(105, 'Last')
+        r = self.run_move()
+        self.assertEqual(self.moved_tids(), ['-p 0xa 101', '-p 0xa 105'])
+        self.assertEqual(r.stderr, '')
+
+    def test_each_status_file_is_read_once_not_per_line(self):
+        self.assertIn("IFS= read -r -d ''", BLOCK)
+        self.assertNotIn('while read', BLOCK)
+
     def test_the_supervisor_runs_it_from_tick_10_every_5_ticks(self):
         # Drive the extracted hook with stubs: ticks 10 and 15 run, 9 and
         # 11-14 do not.
