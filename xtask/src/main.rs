@@ -3,6 +3,9 @@
 mod bench;
 mod elf;
 mod mixer;
+mod mixer_release;
+mod mixer_refresh;
+mod mixer_keys;
 mod package;
 mod setup;
 mod xruns;
@@ -17,6 +20,12 @@ const HELP: &str = "cargo xtask <command>
   setup                 Install the Rust target and cargo-zigbuild, and check
                         for zig
   mixer-build           Cross-build the mixer binaries and profile checker into target/mixer
+  mixer-package DIR     Package a standalone release payload and notices in a new directory
+  mixer-keys DIR        Create signing keys and a public trust root outside the checkout
+  mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY TIMESTAMP_KEY
+                        Sign mixer update metadata with existing release keys (never root keys)
+  mixer-refresh ROOT METADATA OUT SEQUENCE EXPIRES SNAPSHOT_KEY TIMESTAMP_KEY
+                        Renew discovery metadata without changing approved targets
   mixer <action>        Manage RC2FX on the mixer over SSH:
       run               run this build from RAM (a reboot returns to the installed build or stock)
       install           install to /opt/rc2fx and start at every boot
@@ -50,6 +59,10 @@ fn main() -> ExitCode {
     let outcome = match args.as_slice() {
         ["setup"] => setup::run(),
         ["mixer-build"] => setup::build_mixer(),
+        ["mixer-package", destination] => mixer_release::package(Path::new(destination)),
+        ["mixer-keys", destination] => mixer_keys::run(Path::new(destination)),
+        ["mixer-sign", rest @ ..] => mixer_release::sign(rest),
+        ["mixer-refresh", rest @ ..] => mixer_refresh::run(rest),
         ["mixer", action, rest @ ..] => mixer::run(action, rest),
         ["bench-build"] => bench::build(),
         ["bench", input, flags @ ..] => bench::run(input, flags),

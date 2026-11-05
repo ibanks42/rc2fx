@@ -9198,7 +9198,10 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "1.0.1"
 dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
  "flate2",
+ "jiff",
  "object",
  "rc2fx-firmware",
  "rc2fx-installer",
@@ -9207,6 +9210,8 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "tokio",
+ "tough",
  "zip",
 ]
 
