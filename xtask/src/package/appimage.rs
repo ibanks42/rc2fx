@@ -190,6 +190,20 @@ pub fn license_sections(root: &Path) -> Result<Vec<(String, String)>> {
                 "/usr/share/licenses/libxcb/COPYING",
             ],
         ),
+        (
+            "libbsd",
+            [
+                "/usr/share/doc/libbsd0/copyright",
+                "/usr/share/licenses/libbsd/COPYING",
+            ],
+        ),
+        (
+            "libmd",
+            [
+                "/usr/share/doc/libmd0/copyright",
+                "/usr/share/licenses/libmd/COPYING",
+            ],
+        ),
     ] {
         let path = locations
             .iter()
@@ -249,6 +263,8 @@ fn covered_library(name: &str) -> bool {
         "libXau.so",
         "libXdmcp.so",
         "libxcb-xkb.so",
+        "libbsd.so",
+        "libmd.so",
     ]
     .iter()
     .any(|prefix| name == *prefix || name.starts_with(&format!("{prefix}.")))
@@ -455,8 +471,11 @@ mod tests {
         assert!(super::covered_library("libxkbcommon-x11.so.0"));
         assert!(super::covered_library("libxcb-xkb.so.1.0.0"));
         assert!(super::covered_library("libXdmcp.so.6"));
+        assert!(super::covered_library("libbsd.so.0"));
+        assert!(super::covered_library("libmd.so.0"));
         assert!(!super::covered_library("libnew.so.1"));
         assert!(!super::covered_library("libXau.something"));
+        assert!(!super::covered_library("libbsd-ctor.so.0"));
     }
 
     #[test]
