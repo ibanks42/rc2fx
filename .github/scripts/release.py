@@ -27,6 +27,14 @@ def version_tuple(version):
     return tuple(map(int, version.split(".")))
 
 
+def bundles_mixer():
+    manifest = Path("crates/rc2fx-app/Cargo.toml")
+    if not manifest.exists():
+        return True  # Legacy release layouts.
+    features = tomllib.loads(manifest.read_text()).get("features", {})
+    return "embedded" not in features or "embedded" in features.get("default", [])
+
+
 def replace_version(text, section, version):
     pattern = rf'(^\[{re.escape(section)}\]\s*\n(?:(?!\[)[\s\S])*?^version\s*=\s*)"[^"\n]+"'
     result, count = re.subn(pattern, lambda m: m[1] + json.dumps(version), text, flags=re.M)
@@ -148,8 +156,9 @@ def prepare(bump):
         raise ValueError("Version must increase")
     if git("tag", "--list", tag):
         raise ValueError(f"Tag {tag} already exists")
-    warn_mixer_version(previous)
-    validate_pending_mixer_notes(previous)
+    if bundles_mixer():
+        warn_mixer_version(previous)
+        validate_pending_mixer_notes(previous)
     files = update_versions(version)
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)
@@ -159,11 +168,14 @@ def prepare(bump):
     if not notes.read_text().strip():
         raise ValueError("Release notes are empty")
     mixer_manifest = Path("config/mixer-release.json")
-    if mixer_manifest.exists():
+    if bundles_mixer() and mixer_manifest.exists():
         mixer_version = json.loads(mixer_manifest.read_text())["version"]
         version_tuple(mixer_version)
         with notes.open("a") as output:
             output.write(f"\nBundled RC2FX mixer software: {mixer_version}.\n")
+    elif not bundles_mixer():
+        with notes.open("a") as output:
+            output.write("\nMixer software is downloaded separately by the firmware installer.\n")
     changelog = Path("CHANGELOG.md")
     destination = "--prepend" if previous and changelog.exists() else "--output"
     subprocess.run(cliff + history + ["--unreleased", "--tag", tag, destination, str(changelog)], check=True)

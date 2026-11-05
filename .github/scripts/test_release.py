@@ -77,6 +77,17 @@ class ReleaseTests(unittest.TestCase):
         self.prepare("minor")
         self.assertIn('version = "0.1.0"', (self.root / "Cargo.toml").read_text())
 
+    def test_download_only_app_release_is_independent_of_pending_mixer_notes(self):
+        self.put("crates/rc2fx-app/Cargo.toml", '[features]\ndefault = []\nembedded = []\n')
+        self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":1}')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: download mixer independently")
+        self.prepare()
+        notes = (self.root / "target/release-input/release-notes.md").read_text()
+        self.assertIn("Mixer software is downloaded separately", notes)
+        self.assertNotIn("Bundled RC2FX", notes)
+        self.assertEqual(json.loads((self.root / "config/mixer-release.json").read_text())["version"], "9.9.9")
+
     def test_bootstrap_major(self):
         self.prepare("major")
         self.assertIn('version = "0.1.0"', (self.root / "Cargo.toml").read_text())

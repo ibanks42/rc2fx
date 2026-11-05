@@ -12,16 +12,17 @@ is started manually.
 | Version | Where it lives | Released as |
 | --- | --- | --- |
 | Desktop app | `[workspace.package] version` in `Cargo.toml` | `vX.Y.Z`, with the app packages |
-| RC2FX mixer runtime | `config/mixer-release.json` | Inside each app package only; never released on its own |
+| RC2FX mixer runtime | `config/mixer-release.json` | `mixer-vX.Y.Z`, with a signed standalone payload |
 | RØDE firmware | the versions pinned in `config/firmware-profiles.json` | RØDE's own releases; RC2FX publishes nothing |
 
-Each desktop build embeds one mixer runtime, built from the same checkout.
-`config/mixer-release.json` names the bundled runtime and records the protocol
-version the app speaks. **Settings › About › View versions**
-shows the app version, the installed and bundled RC2FX mixer software versions,
-and the installed and newest supported RØDE firmware versions; see [Versions
-and updates](../user/getting-started.md#versions-and-updates). Mixer software
-and firmware are compared only with what the app bundles. For the app itself,
+Desktop builds download signed mixer payloads and firmware profiles by default.
+`--features embedded` provides an optional bundled payload for offline use.
+`config/mixer-release.json` names the mixer runtime and records its control
+protocol. **Settings › About › View versions** shows installed versions and
+compatible signed offers, including when a newer app is required. See
+[Mixer releases](mixer-releases.md) for signing, publication and renewal, and
+[Versions and updates](../user/getting-started.md#versions-and-updates).
+For the app itself,
 `rc2fx_installer::app_update` asks GitHub's `releases/latest` API for this
 repository and, when a newer app is out, pages through the release list for
 the notes since the installed version. It accepts only published, stable
@@ -88,13 +89,10 @@ else as unknown. Bump it by hand when anything that ends up on the mixer
 changes, and leave it alone otherwise: the crates built into the runtime,
 `xtask/mixer/`, `config/firmware-profiles.json`, the runtime's dependencies,
 and the toolchain and build settings that compile it. When reviewing such a
-change, check that it bumps the version. The release run only warns: if
-mixer-side paths changed since the previous app release while the version
-stayed the same, its prepare step shows a **Mixer version unchanged**
-warning and carries on. The check compares paths (the runtime crates,
-`xtask/mixer/`, the mixer build code, `config/`, the root Cargo files,
-toolchain and `.cargo/`), so shared dependencies and build settings can
-trigger it too. It never blocks a release; whether to bump is your call. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
+change, check that it bumps the version. Mixer versions are reviewed and published independently of desktop releases;
+a desktop-only release does not require a mixer bump or mixer notes. Legacy
+embedded release preparation warns when mixer-side paths change without a
+version bump. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
 bump it only when an older desktop app can no longer drive the mixer.
 
 `cargo xtask mixer-build` copies the file into `target/mixer` and adds it to
@@ -229,26 +227,21 @@ public until the release is complete.
 
 1. **prepare** (Ubuntu) runs the versioning tests, computes the app version
    and rewrites the version files and changelog (`.github/scripts/release.py
-   prepare`). It validates the pending app notes and requires curated notes
-   for a newly versioned mixer, then builds the documentation without
-   deploying it. The site build still includes only published history.
-   It then cross-builds the mixer runtime from the checkout with
-   `cargo xtask mixer-build` and shares `target/mixer` with the later jobs,
-   with the version files, so every platform packages the same version files
-   and runtime.
+   prepare`). It validates the pending app notes and builds the documentation
+   without deploying it. The site build still includes only published history.
+   It shares the prepared version files with later jobs; mixer payloads are
+   built by the separate **Mixer release** workflow.
 2. **build** runs on Ubuntu 24.04 and Windows in parallel. The Linux runner
-   is pinned to keep the glibc baseline stable. Each job applies
-   the prepare output, stages the shared runtime into `target/mixer`, takes
-   the scripts and catalog from its own checkout of the same commit, and runs
-   `cargo xtask package` with `RC2FX_RELEASE_BUILD=1`, which selects the
-   launcher's quieter diagnostics. Packaging compares the runtime, catalog,
-   `mixer-release.json` and scripts embedded in the executable with the build
-   inputs, including with `--skip-build`, and rejects a stale or development
+   is pinned to keep the glibc baseline stable. Each job applies the prepare
+   output and runs `cargo xtask package` in download-only mode. Packaging
+   verifies the executable's payload mode, including with `--skip-build`, and
+   rejects a mismatched executable. Explicit `--embedded` packaging also
+   compares the embedded payload with the build inputs and rejects a stale
    executable. Before uploading, the Linux job uses the same artifact checks
    as `just package-check`: install, reinstall and remove the DEB on Ubuntu
    24.04 and Debian 13 and the RPM on Fedora 44; extract and check the AppImage
    on all three. The checks cover dependencies, metadata, permissions,
-   embedded payload integrity and a headless executable smoke test. They do
+   payload-mode checks and a headless executable smoke test. They do
    not exercise a desktop session, FUSE mounting or mixer USB access.
 3. **release** (Ubuntu) checks each archive, writes checksums for them,
    creates and pushes the release commit and tag (`release.py commit`), and
