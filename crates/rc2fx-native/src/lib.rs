@@ -1456,8 +1456,10 @@ fn start_report_refresh() {
         .name("rc2fx-report".into())
         .spawn(|| {
             let diagnostic = client_timing::enabled() || gauges::enabled();
-            for elapsed_seconds in 1u64.. {
+            let mut elapsed_seconds = 0u64;
+            loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
+                elapsed_seconds += 1;
                 if report_due(elapsed_seconds, diagnostic) {
                     write_report();
                 }

@@ -16,7 +16,7 @@ fn sample(index: usize, channel: usize) -> f32 {
 }
 /// One mono source (in_1) and one output of `channels` channels, its
 /// high-pass (stateful) and EQ input gain `gain` lin (0.5: -6.02 dB).
-fn hardware_plan(channels: u8, mode: PathMode, gain: f64) -> Plan {
+pub(super) fn hardware_plan(channels: u8, mode: PathMode, gain: f64) -> Plan {
     let mut source = Target::new("source", "source", TargetKind::Mic, 1);
     source.limiter.enabled = false;
     source.gain.enabled = false;
@@ -56,7 +56,7 @@ fn hardware_plan(channels: u8, mode: PathMode, gain: f64) -> Plan {
         ],
     }
 }
-fn build(
+pub(super) fn build(
     plan: &Plan,
     buffers: &Buffers,
     direct_output: bool,
@@ -86,11 +86,11 @@ fn contents(buffers: &Buffers) -> [[f32; FRAMES]; 2] {
 /// One callback: the source request, the mixer's own processing writing its
 /// output mix, then the DSP. Returns the output buffers as the mixer left them
 /// (before `end`) and as the callback returns them (after `end`).
-struct Frame {
-    raw: [[f32; FRAMES]; 2],
-    out: [[f32; FRAMES]; 2],
+pub(super) struct Frame {
+    pub(super) raw: [[f32; FRAMES]; 2],
+    pub(super) out: [[f32; FRAMES]; 2],
 }
-fn run(
+pub(super) fn run(
     pipeline: &Pipeline,
     buffers: &Buffers,
     index: usize,
@@ -328,8 +328,10 @@ fn meter_only_hardware_outputs_keep_their_meter_and_leave_the_helper_free() {
     let buffers = Buffers::new();
     let (helper, mut helper_controls) = build(&plan, &buffers, false);
     let (direct, mut direct_controls) = build(&plan, &buffers, true);
-    // Enough frames to cover the meter stride (8) and one timing sample (17).
-    for index in 0..68 {
+    // Enough frames to cover the meter stride (8) and one timing sample (17),
+    // ending just after a visit: a callback-owned path left alone publishes a
+    // finished window at its next visit, at most METER_STRIDE - 1 cycles late.
+    for index in 0..72 {
         let helper_frame = run(&helper, &buffers, index, [true, true], true);
         let direct_frame = run(&direct, &buffers, index, [true, true], true);
         // Meter-only: the mixer's own audio, in place, for both.

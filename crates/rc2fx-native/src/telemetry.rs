@@ -62,15 +62,44 @@ pub fn channel() -> (Producer, Consumer) {
 }
 impl Producer {
     pub fn record(&mut self, revision: u64, frames: usize, meter: Meter, latency: u32) {
+        self.record_cycles(revision, 1, frames as u64, meter, latency);
+    }
+    /// `cycles` callbacks of unmetered frames, left alone and counted together.
+    /// Stops at each window boundary, so the windows are exactly those of
+    /// recording the cycles one at a time.
+    pub fn record_skipped(&mut self, revision: u64, cycles: u64, frames: usize, latency: u32) {
+        self.adopt(revision);
+        let frames = frames.max(1) as u64;
+        let mut left = cycles;
+        while left > 0 {
+            let to_boundary = WINDOW_FRAMES
+                .saturating_sub(self.window_frames)
+                .div_ceil(frames);
+            let step = left.min(to_boundary.max(1));
+            self.record_cycles(revision, step, step * frames, Meter::default(), latency);
+            left -= step;
+        }
+    }
+    fn adopt(&mut self, revision: u64) {
         if self.revision != revision {
             self.revision = revision;
             self.window_frames = 0;
             self.meter = Meter::default();
         }
-        self.callbacks = self.callbacks.saturating_add(1);
-        self.frames = self.frames.saturating_add(frames as u64);
+    }
+    fn record_cycles(
+        &mut self,
+        revision: u64,
+        cycles: u64,
+        frames: u64,
+        meter: Meter,
+        latency: u32,
+    ) {
+        self.adopt(revision);
+        self.callbacks = self.callbacks.saturating_add(cycles);
+        self.frames = self.frames.saturating_add(frames);
         self.clipped = self.clipped.saturating_add(meter.clipped);
-        self.window_frames += frames as u64;
+        self.window_frames += frames;
         self.meter.input_peak = self.meter.input_peak.max(meter.input_peak);
         self.meter.output_peak = self.meter.output_peak.max(meter.output_peak);
         self.meter.gain_reduction = self.meter.gain_reduction.max(meter.gain_reduction);
@@ -139,6 +168,38 @@ impl Consumer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn skipped_cycles_make_exactly_the_windows_of_single_records() {
+        let loud = Meter {
+            input_peak: 0.5,
+            output_peak: 0.5,
+            sum_squares: 28.0,
+            samples: 112,
+            ..Meter::default()
+        };
+        let (mut batched, mut batched_out) = channel();
+        let (mut single, mut single_out) = channel();
+        // Every eighth cycle metered, the rest left alone, across many windows.
+        for _ in 0..40 {
+            batched.record_skipped(1, 7, 112, 9);
+            batched.record(1, 112, loud, 9);
+            for _ in 0..7 {
+                single.record(1, 112, Meter::default(), 9);
+            }
+            single.record(1, 112, loud, 9);
+            let (a, b) = (batched_out.latest(), single_out.latest());
+            assert_eq!(
+                a.map(|v| (v.callbacks, v.processed_frames)),
+                b.map(|v| (v.callbacks, v.processed_frames))
+            );
+            assert_eq!(a.map(|v| v.rms.to_bits()), b.map(|v| v.rms.to_bits()));
+            assert_eq!(
+                a.map(|v| v.input_peak.to_bits()),
+                b.map(|v| v.input_peak.to_bits())
+            );
+        }
+        assert!(batched_out.latest().is_some());
+    }
     #[test]
     fn windows_are_coherent_bounded_and_never_mix_revisions() {
         let (mut producer, mut consumer) = channel();

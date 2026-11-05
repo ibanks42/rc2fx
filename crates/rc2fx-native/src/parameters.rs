@@ -99,6 +99,7 @@ pub struct Control {
     telemetry: super::telemetry::Consumer,
     options: rc2fx_suppression::WorkerOptions,
     admission: Admission,
+    publications: Arc<AtomicU64>,
 }
 pub struct Staged {
     shared: Arc<Shared>,
@@ -341,6 +342,7 @@ impl Drop for Staged {
 pub struct Reservation<'a> {
     versions: MutexGuard<'a, Versions>,
     published: &'a AtomicPtr<Snapshot>,
+    publications: &'a AtomicU64,
     ticket: u64,
     next: Option<OwnedSnapshot>,
 }
@@ -356,6 +358,8 @@ impl Reservation<'_> {
         self.versions.pending = None;
         self.published
             .store(self.versions.current.pointer(), Ordering::Release);
+        // After the store: a callback that sees the count sees this snapshot.
+        self.publications.fetch_add(1, Ordering::Release);
     }
 }
 impl Drop for Reservation<'_> {
@@ -423,6 +427,7 @@ pub fn channel_with_options(
             telemetry: consumer,
             options,
             admission,
+            publications: Arc::default(),
         },
         Reader {
             shared,
@@ -457,6 +462,11 @@ fn validate_shape(target: &Target) -> Result<(), Error> {
     Ok(())
 }
 impl Control {
+    /// Counts this path's publications in `publications`, so that a callback
+    /// can leave paths alone until any of them changes.
+    pub fn count_publications(&mut self, publications: Arc<AtomicU64>) {
+        self.publications = publications;
+    }
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -552,6 +562,7 @@ impl Control {
         Ok(Reservation {
             versions,
             published: &self.shared.published,
+            publications: &self.publications,
             ticket: staged.ticket,
             next: staged.snapshot.take(),
         })
@@ -738,6 +749,13 @@ impl Reader {
         if let Some(snapshot) = unsafe { self.current.as_ref() } {
             self.telemetry
                 .record(snapshot.revision, frames, meter, latency);
+        }
+    }
+    /// As `record` once per cycle, for `cycles` unmetered frames left alone.
+    pub fn record_skipped(&mut self, cycles: u64, frames: usize, latency: u32) {
+        if let Some(snapshot) = unsafe { self.current.as_ref() } {
+            self.telemetry
+                .record_skipped(snapshot.revision, cycles, frames, latency);
         }
     }
     pub fn begin(&mut self) -> bool {

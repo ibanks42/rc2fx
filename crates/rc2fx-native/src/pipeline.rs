@@ -28,7 +28,8 @@ pub const FRAMES: usize = 112;
 /// history. Sources stay with the helper.
 pub const DIRECT_OUTPUT: bool = true;
 /// Unprocessed paths only feed level meters; fetch and meter their buffers on
-/// one callback in this many. Every callback still counts their frames.
+/// one callback in this many. Every callback still counts their frames: the
+/// helper's paths each frame, callback-owned ones at their next visit.
 const METER_STRIDE: u32 = 8;
 /// Whether path `path` (plan order) meters on callback `cycle`: each path once
 /// in METER_STRIDE callbacks, the paths staggered so that they do not all
@@ -225,6 +226,9 @@ enum Owner {
 /// What the helper does with the frame the callback copied for a path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Job {
+    /// The callback left this path alone: `Count` if the mixer's callback
+    /// succeeded, else `None`. The helper resolves it and restores it.
+    Skipped,
     /// Nothing to apply: the path was inactive, incomplete or failed.
     None,
     /// Count the frames of an unprocessed path left alone (METER_STRIDE).
@@ -256,6 +260,8 @@ struct Port {
     /// An unprocessed path left alone this frame, its buffers not resolved.
     counted: bool,
     failed: bool,
+    /// `Front::skipped_frames` when this path was last visited.
+    credited: u64,
 }
 impl Port {
     fn fail(&mut self, counters: &mut Counters) {
@@ -291,6 +297,14 @@ impl Port {
             };
             tally(&mut counters.sources, outcome);
         }
+    }
+    /// A path a cycle leaves alone must look like one that was never touched:
+    /// the mixer can still ask for its buffer.
+    fn reset(&mut self) {
+        self.active = false;
+        self.counted = false;
+        self.observed = 0;
+        self.outcome = None;
     }
     fn complete(&self) -> bool {
         self.observed == (1 << self.pins.len()) - 1
@@ -345,9 +359,98 @@ struct Handoff {
     /// The frame the helper finished last.
     done_seq: u64,
 }
+#[derive(Clone, Copy)]
+struct PinEntry {
+    /// 0: an empty entry.
+    pointer: usize,
+    path: u32,
+    channel: u32,
+}
+/// Which path and channel a native port belongs to: an open-addressed table,
+/// built at construction and at most half full, so a search always ends. The
+/// mixer asks this for every buffer it fetches, most of them unbound.
+struct PinLookup {
+    entries: Box<[PinEntry]>,
+}
+impl PinLookup {
+    fn new(ports: &[Port]) -> Self {
+        let pins: usize = ports.iter().map(|port| port.pins.len()).sum();
+        let empty = PinEntry {
+            pointer: 0,
+            path: 0,
+            channel: 0,
+        };
+        let size = (pins * 2 + 1).next_power_of_two();
+        let mut table = Self {
+            entries: vec![empty; size].into_boxed_slice(),
+        };
+        for (path, port) in ports.iter().enumerate() {
+            for (channel, pin) in port.pins.iter().enumerate() {
+                table.insert(pin.pointer, path as u32, channel as u32);
+            }
+        }
+        table
+    }
+    fn start(&self, pointer: usize) -> usize {
+        // Ports are aligned allocations: multiply so that the low bits vary.
+        (pointer >> 4).wrapping_mul(0x9e37_79b9_7f4a_7c15_u64 as usize) >> 20 & self.mask()
+    }
+    fn mask(&self) -> usize {
+        self.entries.len() - 1
+    }
+    /// The first path to name a port keeps it.
+    fn insert(&mut self, pointer: usize, path: u32, channel: u32) {
+        let mut index = self.start(pointer);
+        while self.entries[index].pointer != 0 {
+            if self.entries[index].pointer == pointer {
+                return;
+            }
+            index = (index + 1) & self.mask();
+        }
+        self.entries[index] = PinEntry {
+            pointer,
+            path,
+            channel,
+        };
+    }
+    fn find(&self, pointer: usize) -> Option<(usize, usize)> {
+        let mut index = self.start(pointer);
+        loop {
+            let entry = self.entries[index];
+            if entry.pointer == pointer && pointer != 0 {
+                return Some((entry.path as usize, entry.channel as usize));
+            }
+            if entry.pointer == 0 {
+                return None;
+            }
+            index = (index + 1) & self.mask();
+        }
+    }
+}
 /// Callback-only state.
 struct Front {
     ports: Vec<Port>,
+    lookup: PinLookup,
+    /// By `cycle % METER_STRIDE`: in plan order, the paths a sparse cycle
+    /// visits. That is every path that is processed or failed, and each other
+    /// path once in the stride. A failed path must be visited, as it must not
+    /// count frames. The lists keep their capacity, so rebuilding them does
+    /// not allocate.
+    visits: [Vec<usize>; METER_STRIDE as usize],
+    /// Successful full-stride cycles still needed before going sparse. Set by
+    /// anything that could change what a path needs. A whole stride, so that
+    /// every path gets the cycles it would have had to acknowledge a setting.
+    full_left: u32,
+    /// This cycle visits every path.
+    full: bool,
+    /// The index into `visits` of this cycle.
+    phase: usize,
+    /// The publication count last acted on.
+    publications: u64,
+    /// `counters.faults` last acted on.
+    faults: u64,
+    /// Sparse cycles the mixer completed: what a path left alone is owed.
+    skipped_frames: u64,
     counters: Counters,
     cycle: u32,
     /// This frame's sequence number; `seq - 1` is the frame the helper
@@ -474,6 +577,8 @@ pub struct Pipeline {
     front: UnsafeCell<Front>,
     handoff: UnsafeCell<Handoff>,
     helper: Helper,
+    /// Every path's settings publications, counted by its Control.
+    publications: Arc<AtomicU64>,
 }
 // `front` belongs to the callback; the callback and the helper alternate
 // ownership of `handoff` (see Handoff).
@@ -940,6 +1045,14 @@ fn helper_loop(shared: &Shared) {
         // touch it again until it observes IDLE.
         let handoff = unsafe { &mut *shared.handoff.load(Ordering::Relaxed) };
         let slot = (handoff.seq & 1) as usize;
+        let left_alone = if handoff.native_success {
+            Job::Count
+        } else {
+            Job::None
+        };
+        for job in handoff.jobs.iter_mut().filter(|job| **job == Job::Skipped) {
+            *job = left_alone;
+        }
         // Sources first: the next callback reads them before it writes the
         // hardware outputs at its end.
         for wanted in [Job::Input, Job::Output, Job::Meter, Job::Count, Job::None] {
@@ -957,6 +1070,7 @@ fn helper_loop(shared: &Shared) {
                 }
             }
         }
+        handoff.jobs.fill(Job::Skipped);
         handoff.done_seq = handoff.seq;
         let finished = super::timing::monotonic();
         let spent = finished.saturating_sub(started);
@@ -1074,7 +1188,7 @@ impl Work {
         let mut applied = native_success && job != Job::None;
         self.done[slot] = false;
         match job {
-            Job::None => {}
+            Job::None | Job::Skipped => {}
             Job::Count => reader.record(frames, rc2fx_dsp::Meter::default(), latency),
             Job::Meter => {
                 let meter = native_meter(view(&self.raw[slot], frames, stereo));
@@ -1128,6 +1242,234 @@ impl Work {
         reader.finish(applied);
     }
 }
+/// Prepares one path for this callback.
+///
+/// # Safety
+/// As `Pipeline::begin`.
+unsafe fn begin_port(
+    index: usize,
+    port: &mut Port,
+    counters: &mut Counters,
+    handoff: Option<&Handoff>,
+    cycle: u32,
+    frames: usize,
+    get: super::GetBuffer,
+) {
+    port.active = false;
+    port.counted = false;
+    port.observed = 0;
+    port.outcome = None;
+    if let Some(reader) = &mut port.reader
+        && !reader.begin()
+    {
+        port.fail(counters);
+        return;
+    }
+    if port.failed {
+        return;
+    }
+    let unprocessed = match port.owner {
+        Owner::Callback => port
+            .reader
+            .as_ref()
+            .is_some_and(|reader| reader.mode() != Some(PathMode::Processed)),
+        Owner::Helper => handoff
+            .and_then(|handoff| handoff.work[index].as_ref())
+            .is_some_and(|work| !work.processed_mode),
+    };
+    // A busy helper's mode is unknown; keep the last one seen.
+    if port.owner == Owner::Callback || handoff.is_some() {
+        port.processed_intent = !unprocessed;
+    }
+    if unprocessed && !meters(cycle, index) {
+        port.counted = true;
+        return;
+    }
+    if frames != FRAMES || !port.alive() {
+        port.fail(counters);
+        return;
+    }
+    let mut valid = true;
+    for (channel, pin) in port.pins.iter().enumerate() {
+        let pointer = unsafe { get(pin.pointer as *mut c_void, frames as u32) } as usize;
+        if pointer == 0
+            || !pointer.is_multiple_of(std::mem::align_of::<f32>())
+            || pointer.checked_add(frames * 4).is_none()
+        {
+            valid = false;
+            break;
+        }
+        port.native[channel] = pointer;
+    }
+    if !valid {
+        port.fail(counters);
+        return;
+    }
+    if port.direction == Direction::Output && port.pins.len() == 2 {
+        let [a, b] = port.native;
+        if a < b + frames * 4 && b < a + frames * 4 {
+            port.fail(counters);
+            return;
+        }
+    }
+    port.active = true;
+    if port
+        .reader
+        .as_ref()
+        .is_some_and(parameters::Reader::needs_chat_stem)
+        && let Some(capture) = &mut port.chat
+    {
+        // Capture is boxed in this Port and remains live until end().
+        unsafe {
+            capture.arm(port.native);
+        }
+    }
+}
+/// What every path's end of the callback shares.
+struct Ended {
+    frames: usize,
+    native_success: bool,
+    slot: usize,
+    previous: usize,
+    seq: u64,
+    previous_ready: bool,
+    /// `Front::skipped_frames` before this cycle, and after it.
+    owed: u64,
+    credited: u64,
+}
+/// Finishes one path's callback.
+///
+/// # Safety
+/// As `Pipeline::end`.
+unsafe fn end_port(
+    index: usize,
+    port: &mut Port,
+    counters: &mut Counters,
+    handoff: &mut Option<&mut Handoff>,
+    cycle: &Ended,
+) {
+    let owed = cycle.owed - port.credited;
+    port.credited = cycle.credited;
+    if owed > 0
+        && let Some(reader) = &mut port.reader
+    {
+        let latency = reader.latency_samples() as u32;
+        reader.record_skipped(owed, FRAMES, latency);
+    }
+    let started = super::timing::monotonic();
+    let complete = port.complete();
+    let usable = cycle.native_success && port.active && complete;
+    if port.direction == Direction::Output && port.active && !complete {
+        counters.skipped_outputs += 1;
+        LIVE_SKIPPED_OUTPUTS.fetch_add(1, Ordering::Relaxed);
+    }
+    if usable && !port.alive() {
+        port.fail(counters);
+    }
+    let usable = usable && !port.failed;
+    // An unprocessed path left alone applies trivially.
+    let counted = cycle.native_success && port.counted;
+    port.tally_source(usable, counters);
+    match port.owner {
+        Owner::Callback => {
+            let mut applied = counted;
+            if usable {
+                let buffers = unsafe { port.slices(cycle.frames) };
+                let reader = port.reader.as_mut().expect("callback-owned output");
+                let latency = reader.latency_samples() as u32;
+                if reader.mode() == Some(PathMode::Processed) {
+                    let result = if reader.needs_chat_stem() {
+                        match port.chat.as_ref().and_then(|capture| capture.voice()) {
+                            Some(voice) => reader.chat_output(voice, buffers),
+                            None => Err(rc2fx_dsp::DspError::MissingChatStem),
+                        }
+                    } else {
+                        reader.output(buffers)
+                    };
+                    match result {
+                        Ok(meter) => {
+                            reader.record(cycle.frames, meter, latency);
+                            counters.output_blocks += 1;
+                            LIVE_OUTPUT_BLOCKS.fetch_add(1, Ordering::Relaxed);
+                            applied = true;
+                        }
+                        Err(_) => port.fail(counters),
+                    }
+                } else {
+                    let [left, right] = buffers;
+                    reader.record(cycle.frames, native_meter([left, right]), latency);
+                    applied = true;
+                }
+            } else if counted {
+                let reader = port.reader.as_mut().expect("callback-owned output");
+                let latency = reader.latency_samples() as u32;
+                reader.record(cycle.frames, rc2fx_dsp::Meter::default(), latency);
+            }
+            if let Some(reader) = &mut port.reader {
+                reader.finish(applied);
+            }
+        }
+        Owner::Helper => {
+            let Some(handoff) = handoff.as_mut() else {
+                return;
+            };
+            let Some(work) = &mut handoff.work[index] else {
+                return;
+            };
+            let mut job = if counted { Job::Count } else { Job::None };
+            if usable {
+                let [left, right] = unsafe { port.slices(cycle.frames) };
+                if work.processed_mode {
+                    copy([&*left, &*right], &mut work.raw[cycle.slot], cycle.frames);
+                    work.captured[cycle.slot] = cycle.seq;
+                    if port.direction == Direction::Input {
+                        job = Job::Input;
+                    } else {
+                        job = Job::Output;
+                        // Write the previous frame: processed if the
+                        // helper finished it, else as the mixer made it.
+                        let source = if cycle.previous_ready && work.done[cycle.previous] {
+                            // SAFETY: the helper is idle.
+                            Some(unsafe { &*work.processed[cycle.previous].get() })
+                        } else if work.captured[cycle.previous] == cycle.seq - 1 {
+                            // An unprocessed slot taken from the copy:
+                            // counted as a fallback, not as a DSP error
+                            // (see LIVE_OUTPUT_RAW_FRAME).
+                            LIVE_OUTPUT_RAW_FRAME.fetch_add(1, Ordering::Relaxed);
+                            Some(&work.raw[cycle.previous])
+                        } else {
+                            LIVE_OUTPUT_NO_FRAME.fetch_add(1, Ordering::Relaxed);
+                            None
+                        };
+                        if let Some(source) = source {
+                            left.copy_from_slice(&source[0][..cycle.frames]);
+                            if !right.is_empty() {
+                                right.copy_from_slice(&source[1][..cycle.frames]);
+                            }
+                        }
+                    }
+                } else {
+                    copy([&*left, &*right], &mut work.raw[cycle.slot], cycle.frames);
+                    job = Job::Meter;
+                }
+            }
+            handoff.jobs[index] = job;
+        }
+    }
+    charge(&PATH_COST_NS[index], started);
+}
+impl Front {
+    /// Decides what each sparse cycle visits, from what the full cycles found.
+    fn plan_visits(&mut self) {
+        for (phase, visits) in self.visits.iter_mut().enumerate() {
+            visits.clear();
+            let due = self.ports.iter().enumerate().filter(|(index, port)| {
+                port.processed_intent || port.failed || meters(phase as u32, *index)
+            });
+            visits.extend(due.map(|(index, _)| index));
+        }
+    }
+}
 impl Pipeline {
     /// Control-only readiness: native hosts may install their callback before
     /// registering USB/other ports. Do not construct any worker until the whole
@@ -1169,6 +1511,7 @@ impl Pipeline {
         let mut work = Vec::with_capacity(plan.paths.len());
         let mut controls = Vec::with_capacity(plan.paths.len());
         let admission = super::suppression::Admission::default();
+        let publications = Arc::<AtomicU64>::default();
         for target in &plan.paths {
             let pins = target
                 .ports
@@ -1202,7 +1545,7 @@ impl Pipeline {
                 .collect::<Result<Vec<_>, _>>()?;
             let prepared =
                 Prepared::new(&target.target, 48_000).map_err(|error| error.to_string())?;
-            let (control, reader) = parameters::channel_with_options(
+            let (mut control, reader) = parameters::channel_with_options(
                 &target.target,
                 prepared,
                 plan.worker_options(),
@@ -1210,6 +1553,7 @@ impl Pipeline {
                 target.mode,
             )
             .map_err(|error| format!("native path construction: {error:?}"))?;
+            control.count_publications(Arc::clone(&publications));
             controls.push(control);
             let owner = match target.direction {
                 Direction::Input => Owner::Helper,
@@ -1243,13 +1587,24 @@ impl Pipeline {
                 active: false,
                 counted: false,
                 failed: false,
+                credited: 0,
             });
         }
-        let jobs = vec![Job::None; ports.len()];
+        let jobs = vec![Job::Skipped; ports.len()];
+        let lookup = PinLookup::new(&ports);
+        let visits = std::array::from_fn(|_| Vec::with_capacity(ports.len()));
         Ok((
             Self {
                 front: UnsafeCell::new(Front {
                     ports,
+                    lookup,
+                    visits,
+                    full_left: METER_STRIDE,
+                    full: true,
+                    phase: 0,
+                    publications: 0,
+                    faults: 0,
+                    skipped_frames: 0,
                     counters: Counters::default(),
                     cycle: 0,
                     seq: 0,
@@ -1268,6 +1623,7 @@ impl Pipeline {
                     done_seq: 0,
                 }),
                 helper: Helper::start()?,
+                publications,
             },
             controls,
         ))
@@ -1319,76 +1675,27 @@ impl Pipeline {
         front.cycle = front.cycle.wrapping_add(1);
         // Resolve all buffers before touching any signal or DSP history.
         // Unprocessed paths are left alone between meter readings, their
-        // buffers not even resolved.
-        for (index, port) in front.ports.iter_mut().enumerate() {
-            port.active = false;
-            port.counted = false;
-            port.observed = 0;
-            port.outcome = None;
-            if let Some(reader) = &mut port.reader
-                && !reader.begin()
-            {
-                port.fail(&mut front.counters);
-                continue;
-            }
-            if port.failed {
-                continue;
-            }
-            let unprocessed = match port.owner {
-                Owner::Callback => port
-                    .reader
-                    .as_ref()
-                    .is_some_and(|reader| reader.mode() != Some(PathMode::Processed)),
-                Owner::Helper => handoff
-                    .as_ref()
-                    .and_then(|handoff| handoff.work[index].as_ref())
-                    .is_some_and(|work| !work.processed_mode),
-            };
-            // A busy helper's mode is unknown; keep the last one seen.
-            if port.owner == Owner::Callback || handoff.is_some() {
-                port.processed_intent = !unprocessed;
-            }
-            if unprocessed && !meters(cycle, index) {
-                port.counted = true;
-                continue;
-            }
-            if frames != FRAMES || !port.alive() {
-                port.fail(&mut front.counters);
-                continue;
-            }
-            let mut valid = true;
-            for (channel, pin) in port.pins.iter().enumerate() {
-                let pointer = unsafe { get(pin.pointer as *mut c_void, frames as u32) } as usize;
-                if pointer == 0
-                    || !pointer.is_multiple_of(std::mem::align_of::<f32>())
-                    || pointer.checked_add(frames * 4).is_none()
-                {
-                    valid = false;
-                    break;
-                }
-                port.native[channel] = pointer;
-            }
-            if !valid {
-                port.fail(&mut front.counters);
-                continue;
-            }
-            if port.direction == Direction::Output && port.pins.len() == 2 {
-                let [a, b] = port.native;
-                if a < b + frames * 4 && b < a + frames * 4 {
-                    port.fail(&mut front.counters);
-                    continue;
-                }
-            }
-            port.active = true;
-            if port
-                .reader
-                .as_ref()
-                .is_some_and(parameters::Reader::needs_chat_stem)
-                && let Some(capture) = &mut port.chat
-            {
-                // Capture is boxed in this Port and remains live until end().
+        // buffers not even resolved, and usually not even visited.
+        let publications = self.publications.load(Ordering::Acquire);
+        if publications != front.publications {
+            front.publications = publications;
+            front.full_left = METER_STRIDE;
+        }
+        // A busy helper's paths and an odd frame size take the full route.
+        front.full = !front.idle || frames != FRAMES || front.full_left > 0;
+        front.phase = cycle as usize % METER_STRIDE as usize;
+        let seen = handoff.as_deref();
+        if front.full {
+            for (index, port) in front.ports.iter_mut().enumerate() {
                 unsafe {
-                    capture.arm(port.native);
+                    begin_port(index, port, &mut front.counters, seen, cycle, frames, get);
+                }
+            }
+        } else {
+            for &index in &front.visits[front.phase] {
+                let port = &mut front.ports[index];
+                unsafe {
+                    begin_port(index, port, &mut front.counters, seen, cycle, frames, get);
                 }
             }
         }
@@ -1403,56 +1710,54 @@ impl Pipeline {
         // SAFETY: called by the mixer inside the callback, between `begin`
         // and `end`.
         let front = unsafe { &mut *self.front.get() };
-        for (index, item) in front.ports.iter_mut().enumerate() {
-            let Some(channel) = item.pins.iter().position(|pin| pin.pointer == port) else {
-                continue;
-            };
-            if !item.active {
-                item.note(Outcome::Invalid, &mut front.counters);
-                return native;
-            }
-            if frames != FRAMES
-                || !item.pins[channel].alive.load(Ordering::Acquire)
-                || item.native[channel] != native as usize
-            {
-                item.fail(&mut front.counters);
-                item.note(Outcome::Invalid, &mut front.counters);
-                return native;
-            }
-            item.observed |= 1 << channel;
-            if item.direction != Direction::Input {
-                return native;
-            }
-            if !front.idle || !front.previous_ready {
-                item.note(Outcome::HelperUnready, &mut front.counters);
-                return native;
-            }
-            // The mixer reads the source processed over the last frame.
-            // SAFETY: the helper is idle (see `begin`).
-            let handoff = unsafe { &mut *self.handoff.get() };
-            let Some(work) = &mut handoff.work[index] else {
-                return native;
-            };
-            let previous = ((front.seq - 1) & 1) as usize;
-            return if work.done[previous] {
-                item.note(Outcome::Processed, &mut front.counters);
-                let cell = &work.processed[previous];
-                // In bounds, and without a mutable borrow of the slot.
-                unsafe { cell.get().cast::<[f32; FRAMES]>().add(channel).cast() }
-            } else {
-                // No frame was handed off last time (the first frame, or
-                // the path inactive), or the helper produced no result.
-                // (`captured` starts at zero, as if frame 0 had been.)
-                let outcome = if front.seq > 1 && work.captured[previous] == front.seq - 1 {
-                    Outcome::NotDone
-                } else {
-                    Outcome::NoHandoff
-                };
-                item.note(outcome, &mut front.counters);
-                native
-            };
+        let Some((index, channel)) = front.lookup.find(port) else {
+            return native;
+        };
+        let item = &mut front.ports[index];
+        if !item.active {
+            item.note(Outcome::Invalid, &mut front.counters);
+            return native;
         }
-        native
+        if frames != FRAMES
+            || !item.pins[channel].alive.load(Ordering::Acquire)
+            || item.native[channel] != native as usize
+        {
+            item.fail(&mut front.counters);
+            item.note(Outcome::Invalid, &mut front.counters);
+            return native;
+        }
+        item.observed |= 1 << channel;
+        if item.direction != Direction::Input {
+            return native;
+        }
+        if !front.idle || !front.previous_ready {
+            item.note(Outcome::HelperUnready, &mut front.counters);
+            return native;
+        }
+        // The mixer reads the source processed over the last frame.
+        // SAFETY: the helper is idle (see `begin`).
+        let handoff = unsafe { &mut *self.handoff.get() };
+        let Some(work) = &mut handoff.work[index] else {
+            return native;
+        };
+        let previous = ((front.seq - 1) & 1) as usize;
+        if work.done[previous] {
+            item.note(Outcome::Processed, &mut front.counters);
+            let cell = &work.processed[previous];
+            // In bounds, and without a mutable borrow of the slot.
+            unsafe { cell.get().cast::<[f32; FRAMES]>().add(channel).cast() }
+        } else {
+            // No frame was handed off last time (the first frame, or
+            // the path inactive), or the helper produced no result.
+            // (`captured` starts at zero, as if frame 0 had been.)
+            let outcome = if front.seq > 1 && work.captured[previous] == front.seq - 1 {
+                Outcome::NotDone
+            } else {
+                Outcome::NoHandoff
+            };
+            item.note(outcome, &mut front.counters);
+            native
+        }
     }
     /// # Safety
     /// Native output buffers remain live and uniquely writable until this
@@ -1467,108 +1772,42 @@ impl Pipeline {
         // SAFETY: the helper is idle (see `begin`), so the callback owns the
         // handoff until it is queued below.
         let mut handoff = front.idle.then(|| unsafe { &mut *self.handoff.get() });
-        for (index, port) in front.ports.iter_mut().enumerate() {
-            let started = super::timing::monotonic();
-            let complete = port.complete();
-            let usable = native_success && port.active && complete;
-            if port.direction == Direction::Output && port.active && !complete {
-                front.counters.skipped_outputs += 1;
-                LIVE_SKIPPED_OUTPUTS.fetch_add(1, Ordering::Relaxed);
+        let owed = front.skipped_frames;
+        // This cycle's success is owed to the paths it left alone, not to the
+        // ones it visits, which count it themselves.
+        let credited = owed + u64::from(!front.full && native_success);
+        let cycle = Ended {
+            frames,
+            native_success,
+            slot,
+            previous,
+            seq: front.seq,
+            previous_ready: front.previous_ready,
+            owed,
+            credited,
+        };
+        if front.full {
+            for (index, port) in front.ports.iter_mut().enumerate() {
+                unsafe { end_port(index, port, &mut front.counters, &mut handoff, &cycle) };
+                port.reset();
             }
-            if usable && !port.alive() {
-                port.fail(&mut front.counters);
+        } else {
+            for &index in &front.visits[front.phase] {
+                let port = &mut front.ports[index];
+                unsafe { end_port(index, port, &mut front.counters, &mut handoff, &cycle) };
+                port.reset();
             }
-            let usable = usable && !port.failed;
-            // An unprocessed path left alone applies trivially.
-            let counted = native_success && port.counted;
-            port.tally_source(usable, &mut front.counters);
-            match port.owner {
-                Owner::Callback => {
-                    let mut applied = counted;
-                    if usable {
-                        let buffers = unsafe { port.slices(frames) };
-                        let reader = port.reader.as_mut().expect("callback-owned output");
-                        let latency = reader.latency_samples() as u32;
-                        if reader.mode() == Some(PathMode::Processed) {
-                            let result = if reader.needs_chat_stem() {
-                                match port.chat.as_ref().and_then(|capture| capture.voice()) {
-                                    Some(voice) => reader.chat_output(voice, buffers),
-                                    None => Err(rc2fx_dsp::DspError::MissingChatStem),
-                                }
-                            } else {
-                                reader.output(buffers)
-                            };
-                            match result {
-                                Ok(meter) => {
-                                    reader.record(frames, meter, latency);
-                                    front.counters.output_blocks += 1;
-                                    LIVE_OUTPUT_BLOCKS.fetch_add(1, Ordering::Relaxed);
-                                    applied = true;
-                                }
-                                Err(_) => port.fail(&mut front.counters),
-                            }
-                        } else {
-                            let [left, right] = buffers;
-                            reader.record(frames, native_meter([left, right]), latency);
-                            applied = true;
-                        }
-                    } else if counted {
-                        let reader = port.reader.as_mut().expect("callback-owned output");
-                        let latency = reader.latency_samples() as u32;
-                        reader.record(frames, rc2fx_dsp::Meter::default(), latency);
-                    }
-                    if let Some(reader) = &mut port.reader {
-                        reader.finish(applied);
-                    }
-                }
-                Owner::Helper => {
-                    let Some(handoff) = &mut handoff else {
-                        continue;
-                    };
-                    let Some(work) = &mut handoff.work[index] else {
-                        continue;
-                    };
-                    let mut job = if counted { Job::Count } else { Job::None };
-                    if usable {
-                        let [left, right] = unsafe { port.slices(frames) };
-                        if work.processed_mode {
-                            copy([&*left, &*right], &mut work.raw[slot], frames);
-                            work.captured[slot] = front.seq;
-                            if port.direction == Direction::Input {
-                                job = Job::Input;
-                            } else {
-                                job = Job::Output;
-                                // Write the previous frame: processed if the
-                                // helper finished it, else as the mixer made it.
-                                let source = if front.previous_ready && work.done[previous] {
-                                    // SAFETY: the helper is idle.
-                                    Some(unsafe { &*work.processed[previous].get() })
-                                } else if work.captured[previous] == front.seq - 1 {
-                                    // An unprocessed slot taken from the copy:
-                                    // counted as a fallback, not as a DSP error
-                                    // (see LIVE_OUTPUT_RAW_FRAME).
-                                    LIVE_OUTPUT_RAW_FRAME.fetch_add(1, Ordering::Relaxed);
-                                    Some(&work.raw[previous])
-                                } else {
-                                    LIVE_OUTPUT_NO_FRAME.fetch_add(1, Ordering::Relaxed);
-                                    None
-                                };
-                                if let Some(source) = source {
-                                    left.copy_from_slice(&source[0][..frames]);
-                                    if !right.is_empty() {
-                                        right.copy_from_slice(&source[1][..frames]);
-                                    }
-                                }
-                            }
-                        } else {
-                            copy([&*left, &*right], &mut work.raw[slot], frames);
-                            job = Job::Meter;
-                        }
-                    }
-                    handoff.jobs[index] = job;
-                }
+        }
+        front.skipped_frames = credited;
+        if front.counters.faults != front.faults {
+            front.faults = front.counters.faults;
+            front.full_left = METER_STRIDE;
+        }
+        if front.full && front.idle && native_success && front.full_left > 0 {
+            front.full_left -= 1;
+            if front.full_left == 0 {
+                front.plan_visits();
             }
-            charge(&PATH_COST_NS[index], started);
         }
         front.sampler.mark(front.cycle);
         if let Some(handoff) = handoff {
@@ -1596,6 +1835,8 @@ mod tests {
     mod passthrough_invariance;
     #[path = "processing_counters.rs"]
     mod processing_counters;
+    #[path = "skipped_paths.rs"]
+    mod skipped_paths;
 
     #[test]
     fn expanded_route_plan_uses_the_shared_bounded_path_capacity() {
