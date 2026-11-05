@@ -1710,7 +1710,7 @@ xrun_trace() {
         [[ $tid =~ ^[1-9][0-9]*$ ]] && test -d "/proc/$pid/task/$tid" || return 2
         test "$(cat "/proc/$tid/comm")" = USBOutJckThread || return 2
         filter=$(awk '/^Cpus_allowed:/ {gsub(",", "", $2); print $2}' "/proc/$tid/status")
-        gui=$(printf '%x' "$((16#$filter & ~4))")
+        gui=$(printf '%x' "$((16#$filter & 8))")
         test "$gui" != 0 || return 2
         printf '%s %s %s %s\n' "$tid" "$filter" "$(awk '{print $22}' "/proc/$tid/stat")" "$pid" >> "$dir/saved-affinity"
         taskset -p "$gui" "$tid" >&2
@@ -1719,9 +1719,10 @@ xrun_trace() {
       tid=$(awk -v pid="$jack" '$1==pid && $3=="FF" && $4==51 {print $2}' "$dir/arm-threads")
       [[ $tid =~ ^[1-9][0-9]*$ ]] && test -d "/proc/$jack/task/$tid" || return 2
       filter=$(awk '/^Cpus_allowed:/ {gsub(",", "", $2); print $2}' "/proc/$tid/status")
-      test "$((16#$filter & 4))" != 0 || return 2
+      test "$((16#$filter & 2))" != 0 || return 2
       printf '%s %s %s %s\n' "$tid" "$filter" "$(awk '{print $22}' "/proc/$tid/stat")" "$jack" >> "$dir/saved-affinity"
-      taskset -p 4 "$tid" >&2
+      taskset -p 2 "$tid" >&2
+      echo 'driver_cpu=1 usb_output_cpu=3 main_callback_cpu=2' > "$dir/candidate-policy"
       ;;
     self-test)
       test $# -eq 1 && [[ $1 =~ ^[0-9]+$ ]] || return 2

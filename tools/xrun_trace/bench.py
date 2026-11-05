@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two-hour six-channel qualification; device reads only every 15 minutes."""
+"""Two-hour six-channel qualification; device reads only at the requested checkpoints."""
 import argparse
 import array
 import datetime
@@ -40,6 +40,12 @@ def check(base, previous, current):
     if a['callbacks']<=previous['audit']['callbacks']: errors.append('Callbacks stopped')
     for key in ['xruns','dspFaults','capacityFailures','planErrors','controlServerErrors']:
         if a[key]!=b[key]: errors.append(key+' changed')
+    before_workers={w['id']:w['worker'] for w in b.get('workers',[])}
+    for worker in a.get('workers',[]):
+        prior=before_workers.get(worker['id'])
+        if prior is None:errors.append('Suppression worker identity changed');continue
+        for key in ['inputDrops','outputDrops','missedDeadlines','staleResults']:
+            if worker['worker'].get(key)!=prior.get(key):errors.append('Suppression '+key+' changed')
     for key in ['late','stalls']:
         if a['helper'][key]!=b['helper'][key]: errors.append('helper '+key+' changed')
     flight=a['clientTiming']
@@ -55,7 +61,10 @@ def main():
     parser.add_argument('--avoid-driver',action='store_true')
     parser.add_argument('--bundle',type=Path,required=True)
     parser.add_argument('--seconds', type=int, default=7200)
+    parser.add_argument('--interval',type=int,default=30)
+    # Interval may equal duration for a baseline/end-only qualification.
     args=parser.parse_args()
+    if args.seconds<=0 or args.interval<=0:parser.error('Duration and interval must be positive')
     root=args.out
     root.mkdir(parents=True,exist_ok=False)
     children=[];logs=[];stop=threading.Event()
@@ -94,24 +103,28 @@ def main():
         save(root/'snapshot-0000.json',baseline)
         if not baseline['tracing'] or baseline['audit']['clientTiming']['flightFrozenAtNs']:
             raise RuntimeError('Recorder froze during playback startup; collect this event before rerunning')
-        state=dict(state,state='RUNNING',baselineXruns=baseline['audit']['xruns'],processPid=baseline['audit']['processPid'],checkIntervalSeconds=900)
+        state=dict(state,state='RUNNING',baselineXruns=baseline['audit']['xruns'],processPid=baseline['audit']['processPid'],checkIntervalSeconds=args.interval)
         save(root/'status.json',state);print(json.dumps(state),flush=True)
         index=0
         while True:
             remaining=args.seconds-(time.monotonic()-start)
             # Local waiting only: no device polls between the requested intervals.
-            time.sleep(min(900,max(0,remaining)))
+            time.sleep(min(args.interval,max(0,remaining)) + (5 if remaining<=args.interval else 0))
             current=snapshot();index+=1
             save(root/f'snapshot-{index:04}.json',current)
             errors=check(baseline,previous,current)
             if any(p.poll() is not None for p in children): errors.append('Playback exited early')
             elapsed=time.monotonic()-start
             device_elapsed=(current['audit']['monotonicNs']-baseline['audit']['monotonicNs'])/1e9
+            if elapsed>=args.seconds and device_elapsed<args.seconds:errors.append('Device telemetry did not cover the requested duration')
             done=elapsed>=args.seconds and device_elapsed>=args.seconds
             state.update(state='FAIL' if errors else ('PASS' if done else 'RUNNING'),updatedUtc=utc(),elapsedSeconds=elapsed,deviceElapsedSeconds=device_elapsed,xrunDelta=current['audit']['xruns']-baseline['audit']['xruns'],errors=errors,samples=index+1)
             save(root/'status.json',state);print(json.dumps(state),flush=True)
             if errors or done: break
             previous=current
+    except KeyboardInterrupt:
+        state.update(state='CANCELLED',error='Run interrupted',updatedUtc=utc())
+        save(root/'status.json',state)
     except Exception as error:
         state.update(state='INVALID',error=str(error),updatedUtc=utc())
         save(root/'status.json',state);print(json.dumps(state),flush=True)

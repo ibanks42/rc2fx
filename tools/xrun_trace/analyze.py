@@ -130,7 +130,7 @@ def analyze(text, audit, stats='', fault_records=None, flight_audit=None, client
     fault = faults[0]
     anchor = re.search(r'mono_ns=(\d+)', fault['data'])
     if anchor and int(anchor[1]):
-        # global is cross-CPU ordered on this kernel, but has another epoch.
+        # The calibrated trace clock has a different epoch from userspace.
         # The hook's monotonic argument aligns the frozen window at the fault.
         offset = int(anchor[1])/1e9 - fault['time']
         for row in rows:
@@ -274,13 +274,15 @@ def analyze(text, audit, stats='', fault_records=None, flight_audit=None, client
         return result
     if detail['blockedUs'] > max(100, detail['runnableDelayUs']) and detail['wallUs'] > 2333.333:
         result['classification'] = 'blocking-syscall' if detail['syscalls'] else 'blocked-without-syscall-evidence'
-    elif detail['runnableDelayUs'] + detail.get('dispatch', {}).get('runnableDelayUs', 0) > 100:
+    elif detail['runnableDelayUs'] > 100:
         result['classification'] = 'runnable-delay'
     elif detail['wallUs'] > 2333.333:
         result['classification'] = 'on-cpu-or-irq'
     elif detail.get('entryPositionUs',0) > detail.get('cycleBudgetUs',1)*.75:
         result['classification']='upstream-cycle-budget-exhausted'
         result['meaning']='USB callback began after upstream work consumed most of its cycle; inspect upstream main callback and wake chain for the source of that delay.'
+    elif detail.get('dispatch', {}).get('runnableDelayUs', 0) > 100:
+        result['classification']='runnable-delay'
     else:
         limitations.append('Observed callback execution was within one period; upstream cycle/wakeup dependency needs examination')
     return result

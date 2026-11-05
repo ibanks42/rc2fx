@@ -12,7 +12,7 @@ The report thread reads the arm token. Changing that token explicitly starts a
 new capture; reading reports cannot accidentally unfreeze an existing capture.
 
 The mixer kernel's `mono` trace clock failed cross-CPU timestamp calibration.
-The tool uses `global`, validates 32 bracketed clock samples across four CPUs
+The tool uses `mono_raw`, validates 32 bracketed clock samples across four CPUs
 on every arm, and aligns the frozen trace to a monotonic timestamp carried by
 the fault hook. Alignment retains user-to-probe latency uncertainty.
 
@@ -35,7 +35,7 @@ python3 tools/xrun_trace/bench.py --bundle /path/to/verified/mixer-bundle --out 
 ```
 
 The bench plays six quiet, distinct modulated stereo signals through System,
-Game, Music, Virtual A, Virtual B and Chat. It reads the mixer every 900 seconds,
+Game, Music, Virtual A, Virtual B and Chat. It reads the mixer every 30 seconds by default (configurable with `--interval`),
 checks process/boot identity, telemetry freshness, callback progress, xruns and
 other error counters, and stops its own playback on completion. Run it in a
 persistent foreground session or service. It does not publish releases or touch
@@ -103,7 +103,8 @@ delay. Dispatch lookup also rejects wakes from an earlier completed callback.
 
 `bench.py --avoid-driver` is a reversible scheduling experiment. After reading
 live thread identities and affinity masks, it restricts the JACK FIFO-51 driver
-to CPU 2 and excludes CPU 2 from the two USB output threads' existing masks.
+to CPU 1 and restricts the two USB output threads to CPU 3, intersecting
+their existing masks. The main callback remains on CPU 2.
 The original masks, process IDs and thread start times are saved with the
 capture. `clear` restores them only if the same process/thread still exists.
 This is an experimental bench policy, not a production fix. The ordinary bench
@@ -125,3 +126,7 @@ checkpoint reads as well as arm verification: plain SSH report transfers were
 already shown to interfere with audio. Capture archives are already compressed.
 The default trace clock is `mono_raw`, validated across four CPUs on each arm
 and aligned using the fault hook's monotonic timestamp.
+
+`--interval 7200 --seconds 7200` requests baseline/end-only reads for a two-hour
+run. The final read includes five seconds of allowance for report cadence; the
+receipt must still cover the requested duration in both host and device time.
