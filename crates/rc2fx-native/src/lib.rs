@@ -681,6 +681,7 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     }
     let original: Process = unsafe { std::mem::transmute(pointer) };
     let started = timing::monotonic();
+    let flight_token = client_timing::main_begin(started);
     let previous_start = context.started.swap(started, Ordering::Relaxed);
     if previous_start != 0 && started > previous_start {
         record_gap(started - previous_start);
@@ -742,6 +743,12 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     INSIDE.with(|value| value.set(previous));
     let ended = timing::monotonic();
     context.ended.store(ended, Ordering::Relaxed);
+    client_timing::main_end(
+        [started, ended, cycle_start, probe::PERIOD_NS, flight_token],
+        before_native.zip(after_native).and_then(|(before, after)| {
+            before.wall_ns().zip(after.wall_ns()).map(|(before, after)| [before, after])
+        }),
+    );
     if client_timing::active() {
         // Keep evidence before USB's deadline: the main callback must leave
         // time for downstream work. This threshold is NOT a JACK deadline.

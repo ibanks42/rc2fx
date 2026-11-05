@@ -43,6 +43,17 @@ static _Atomic uint64_t *slot_seq(uint64_t index) {
 
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "formats";
+    if (strcmp(mode, "fault-hook") == 0) {
+        uint64_t (*calls)(void) = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "rc2fx_jackerr_test_fault_calls");
+        uint64_t (*published)(void) = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "rc2fx_jackerr_test_fault_published");
+        if (!calls || !published) return 3;
+        jack_error("unknown message");
+        jack_error("ALSA: poll interrupt");
+        if (calls() != 0) return 4;
+        jack_error(NOT_FINISHED, "usb1out", "Running");
+        jack_error("internal xrun detected: frame_offset = %ld", 10L);
+        return calls() == 2 && published() == 2 ? 0 : 5;
+    }
     if (strcmp(mode, "threads") == 0) {
         int n = argc > 2 ? atoi(argv[2]) : 4;
         pthread_t threads[16];

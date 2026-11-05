@@ -19,6 +19,9 @@ struct Slot {
     name: OnceLock<String>,
     timing: timing::Shared,
     events: super::client_timing_events::Events,
+    recent: super::client_timing_events::Events,
+    active_start: AtomicU64,
+    active_token: AtomicU64,
 }
 impl Slot {
     const fn new() -> Self {
@@ -30,12 +33,65 @@ impl Slot {
             name: OnceLock::new(),
             timing: timing::Shared::new(),
             events: super::client_timing_events::Events::new(),
+            recent: super::client_timing_events::Events::new(),
+            active_start: AtomicU64::new(0),
+            active_token: AtomicU64::new(0),
         }
     }
 }
 static SLOTS: [Slot; CAPACITY] = [const { Slot::new() }; CAPACITY];
 static EXHAUSTED: AtomicU64 = AtomicU64::new(0);
 static ENABLED: OnceLock<bool> = OnceLock::new();
+struct FlightGate {
+    token: AtomicU64,
+    frozen: AtomicU64,
+}
+impl FlightGate {
+    const fn new() -> Self {
+        Self {
+            token: AtomicU64::new(0),
+            frozen: AtomicU64::new(0),
+        }
+    }
+    fn arm(&self, token: u64) {
+        if self.token.swap(token, Ordering::AcqRel) != token {
+            self.frozen.store(0, Ordering::Release);
+        }
+    }
+    fn recording(&self) -> bool {
+        self.token.load(Ordering::Acquire) != 0 && self.frozen.load(Ordering::Acquire) == 0
+    }
+    fn freeze(&self, now: u64) {
+        if self.token.load(Ordering::Acquire) != 0 {
+            let _ = self
+                .frozen
+                .compare_exchange(0, now, Ordering::AcqRel, Ordering::Relaxed);
+        }
+    }
+}
+static FLIGHT: FlightGate = FlightGate::new();
+static MAIN_RECENT: super::client_timing_events::Events =
+    super::client_timing_events::Events::new();
+static MAIN_START: AtomicU64 = AtomicU64::new(0);
+static MAIN_TOKEN: AtomicU64 = AtomicU64::new(0);
+pub fn main_begin(start: u64) -> u64 {
+    if !FLIGHT.recording() {
+        return 0;
+    }
+    let token = FLIGHT.token.load(Ordering::Acquire);
+    MAIN_TOKEN.store(token, Ordering::Relaxed);
+    MAIN_START.store(start, Ordering::Release);
+    token
+}
+pub fn main_end(timing: [u64; 5], native: Option<[u64; 2]>) {
+    if timing[4] != 0 && FLIGHT.recording() {
+        MAIN_RECENT.record_all_partitioned(timing, native);
+        MAIN_START.store(0, Ordering::Release);
+    }
+}
+pub fn freeze(now: u64) {
+    FLIGHT.freeze(now);
+}
 pub fn active() -> bool {
     ENABLED.get().copied().unwrap_or(false)
 }
@@ -84,32 +140,77 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
             Ordering::Relaxed,
         );
     }
+    let token = FLIGHT.token.load(Ordering::Acquire);
+    if token != 0 && !FLIGHT.recording() {
+        return unsafe { callback(frames, slot.argument.load(Ordering::Relaxed) as *mut c_void) };
+    }
     let started = timing::monotonic();
+    if FLIGHT.recording() {
+        slot.active_token.store(token, Ordering::Relaxed);
+        slot.active_start.store(started, Ordering::Release);
+    }
     let cycle = super::probe::cycle_start(slot.client.load(Ordering::Relaxed));
-    let frame = slot.timing.begin(frames);
-    let before = timing::Frame::before_native(&frame);
+    // A flight capture needs wall-clock boundaries, not per-thread CPU clocks.
+    // Sampling CPU clocks on every client's aligned cycle perturbs the deadline.
+    let frame = (token == 0).then(|| slot.timing.begin(frames));
+    let before = frame.as_ref().map(timing::Frame::before_native);
     let result = unsafe { callback(frames, slot.argument.load(Ordering::Relaxed) as *mut c_void) };
-    let after = timing::Frame::after_native(&frame);
+    let after = frame.as_ref().map(timing::Frame::after_native);
     let ended = timing::monotonic();
-    slot.timing.finish(frame, before, after);
-    slot.events.record(
-        started,
-        ended,
-        cycle,
-        u64::from(frames) * 1_000_000_000 / 48_000,
-    );
+    if FLIGHT.recording() {
+        slot.recent.record_all([
+            started,
+            ended,
+            cycle,
+            u64::from(frames) * 1_000_000_000 / 48_000,
+            token,
+        ]);
+        slot.active_start.store(0, Ordering::Release);
+    }
+    if let (Some(frame), Some(before), Some(after)) = (frame, before, after) {
+        slot.timing.finish(frame, before, after);
+    }
+    if token == 0 {
+        slot.events.record(
+            started,
+            ended,
+            cycle,
+            u64::from(frames) * 1_000_000_000 / 48_000,
+        );
+    }
     result
 }
 pub fn snapshot() -> serde_json::Value {
+    // File access stays on the report thread; audio only reads atomics.
+    let token = if active() {
+        std::fs::read_to_string("/run/rc2fx-flight-arm")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    FLIGHT.arm(token);
+    let frozen = FLIGHT.frozen.load(Ordering::Acquire);
     serde_json::json!({
         "enabled": ENABLED.get().copied().unwrap_or(false),
         "capacity": CAPACITY, "exhausted": EXHAUSTED.load(Ordering::Relaxed),
+        "flightToken": token, "flightFrozenAtNs": frozen,
+        "flightMode": "armed capture records wall boundaries only; legacy timing counters pause until disarmed",
+        "mainFlight": (frozen != 0).then(|| serde_json::json!({
+            "recent": MAIN_RECENT.snapshot(),
+            "activeStartNs": if MAIN_TOKEN.load(Ordering::Acquire) == token { MAIN_START.load(Ordering::Acquire) } else { 0 },
+        })),
         "scope": "registration lifetime; includes replaced, failed and closed registrations; slots never reused; not a list of live clients",
         "registrations": SLOTS.iter().enumerate().filter_map(|(index, slot)| {
             let callback = slot.callback.load(Ordering::Acquire);
             (callback != 0).then(|| serde_json::json!({
                 "registration": index, "name": slot.name.get(), "client": slot.client.load(Ordering::Relaxed),
                 "callback": callback, "tid": slot.tid.load(Ordering::Relaxed),
+                "flight": (frozen != 0).then(|| serde_json::json!({
+                    "recent": slot.recent.compact(token),
+                    "activeStartNs": if slot.active_token.load(Ordering::Acquire) == token { slot.active_start.load(Ordering::Acquire) } else { 0 },
+                })),
                 "timing": slot.timing.snapshot(), "lateCallbacks": slot.events.snapshot()
             }))
         }).collect::<Vec<_>>()
@@ -118,6 +219,23 @@ pub fn snapshot() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn flight_freezes_once_and_only_an_explicit_new_token_rearms_it() {
+        let gate = FlightGate::new();
+        gate.freeze(10);
+        assert_eq!(gate.frozen.load(Ordering::Acquire), 0);
+        gate.arm(1);
+        assert!(gate.recording());
+        gate.freeze(20);
+        gate.freeze(30);
+        gate.arm(1);
+        assert!(!gate.recording());
+        assert_eq!(gate.frozen.load(Ordering::Acquire), 20);
+        gate.arm(2);
+        assert!(gate.recording());
+        gate.arm(0);
+        assert!(!gate.recording());
+    }
     unsafe extern "C" fn vendor(frames: u32, argument: *mut c_void) -> c_int {
         assert_eq!(frames, 112);
         assert_eq!(argument as usize, 123);
@@ -176,8 +294,11 @@ mod tests {
         };
         let direct = measure(vendor, 123usize as *mut c_void);
         let measured = measure(wrapped, argument);
+        FLIGHT.arm(123);
+        let flight = measure(wrapped, argument);
+        FLIGHT.arm(0);
         eprintln!(
-            "host ns/callback: direct={direct:.1}, instrumented={measured:.1}, added={:.1}; cycle getter unavailable in this fixture",
+            "host ns/callback: direct={direct:.1}, instrumented={measured:.1}, added={:.1}, flight={flight:.1}; cycle getter unavailable in this fixture",
             measured - direct
         );
         assert_eq!(slots[0].timing.snapshot().attempts, 100_000);

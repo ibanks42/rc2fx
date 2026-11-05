@@ -83,6 +83,9 @@ class Run:
 
 
 class RecorderTests(unittest.TestCase):
+    def test_fault_hook_follows_publication_and_ignores_nonfaults(self):
+        self.assertEqual(Run("fault-hook").code, 0)
+
     def test_every_known_format_is_recorded_with_its_arguments(self):
         run = Run()
         self.assertEqual(run.code, 0)

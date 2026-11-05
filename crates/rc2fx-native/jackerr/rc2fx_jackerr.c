@@ -54,6 +54,25 @@ enum flags {
 
 static struct rc2fx_jackerr_header *ring_header;
 static struct rc2fx_jackerr_slot *ring_slots;
+#ifdef RC2FX_JACKERR_TESTING
+static _Atomic uint64_t fault_calls;
+static _Atomic uint64_t fault_published;
+EXPORT uint64_t rc2fx_jackerr_test_fault_calls(void) { return atomic_load(&fault_calls); }
+EXPORT uint64_t rc2fx_jackerr_test_fault_published(void) { return atomic_load(&fault_published); }
+#endif
+
+/* Optional kernel flight-recorder trigger, reached only AFTER the fault
+ * record is published. Normally a no-op; unlike callback uprobes this cannot
+ * perturb the audio work that caused the first fault. Keep its ELF symbol. */
+EXPORT __attribute__((noinline)) void rc2fx_jackerr_fault(uint64_t kind, const char *client, uint64_t mono_ns) {
+#ifdef RC2FX_JACKERR_TESTING
+    uint64_t count = atomic_load(&ring_header->claimed);
+    atomic_fetch_add(&fault_calls, 1);
+    if (count && atomic_load(&ring_slots[(count - 1) % SLOTS].seq) == 2 * count)
+        atomic_fetch_add(&fault_published, 1);
+#endif
+    __asm__ volatile("" : : "r"(kind), "r"(client), "r"(mono_ns) : "memory");
+}
 
 #ifdef RC2FX_JACKERR_TESTING
 static _Atomic int test_fail_clock;
@@ -125,6 +144,11 @@ static void record(enum kind kind, int64_t value1, int64_t value2, const char *s
     atomic_store_explicit(&slot->value2, value2, memory_order_relaxed);
     /* Only this writer holds the odd value, so only it publishes the slot. */
     atomic_store_explicit(&slot->seq, 2 * index + 2, memory_order_release);
+    if (kind >= NOT_FINISHED && kind <= POLL_RECOVERY_FAILED) {
+        uint64_t mono_ns = 0;
+        now_ns(&mono_ns);
+        rc2fx_jackerr_fault((uint64_t)kind, string1, mono_ns);
+    }
 }
 
 #define FORMAT_NOT_FINISHED "JackEngine::XRun: client = %s was not finished, state = %s"

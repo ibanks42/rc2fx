@@ -32,6 +32,15 @@ impl<const CAPACITY: usize> History<CAPACITY> {
         self.record_partitioned([start, end, cycle, budget, tag], None);
     }
     pub fn record_partitioned(&self, timing: [u64; 5], native: Option<[u64; 2]>) {
+        self.record_inner(timing, native, true);
+    }
+    pub fn record_all(&self, timing: [u64; 5]) {
+        self.record_all_partitioned(timing, None);
+    }
+    pub fn record_all_partitioned(&self, timing: [u64; 5], native: Option<[u64; 2]>) {
+        self.record_inner(timing, native, false);
+    }
+    fn record_inner(&self, timing: [u64; 5], native: Option<[u64; 2]>, only_late: bool) {
         let [start, end, cycle, budget, tag] = timing;
         let [before, after] = native
             .filter(|[before, after]| start <= *before && before <= after && *after <= end)
@@ -39,7 +48,8 @@ impl<const CAPACITY: usize> History<CAPACITY> {
         if start == 0 || end < start || end == 0 {
             return;
         }
-        if end - start <= budget && (cycle == 0 || end.saturating_sub(cycle) <= budget) {
+        if only_late && end - start <= budget && (cycle == 0 || end.saturating_sub(cycle) <= budget)
+        {
             return;
         }
         let index = self.next.fetch_add(1, SeqCst);
@@ -93,10 +103,38 @@ impl<const CAPACITY: usize> History<CAPACITY> {
             "dropped":self.dropped.load(SeqCst),"unavailableInWindow":total-first-rows.len() as u64,
             "meaning":"exceeds local cycle-position or wall threshold; not a JACK failure assertion", "events":rows})
     }
+    pub fn compact(&self, token: u64) -> serde_json::Value {
+        let snapshot = self.snapshot();
+        let rows: Vec<_> = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["registrationTag"] == token)
+            .map(|row| {
+                serde_json::json!([
+                    row["startNs"],
+                    row["endNs"],
+                    row["estimatedCycleStartNs"],
+                    row["thresholdNs"]
+                ])
+            })
+            .collect();
+        serde_json::json!({"rows": rows, "dropped": snapshot["dropped"],
+            "unavailableInWindow": snapshot["unavailableInWindow"], "columns": ["startNs", "endNs", "estimatedCycleStartNs", "budgetNs"]})
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn flight_history_keeps_fast_callbacks_and_filters_old_arm_tokens() {
+        let events = Events::new();
+        events.record_all([100, 101, 90, 100, 1]);
+        events.record_all([200, 201, 190, 100, 2]);
+        let value = events.compact(2);
+        assert_eq!(value["rows"], serde_json::json!([[200, 201, 190, 100]]));
+        assert_eq!(value["unavailableInWindow"], 0);
+    }
     #[test]
     fn partitions_are_optional_and_must_belong_to_the_callback() {
         let events = Events::new();

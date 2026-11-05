@@ -699,6 +699,7 @@ pub fn register_vendor_xrun(client: usize, callback: usize, argument: usize) -> 
 }
 /// jackd's xrun notification, on the client's notification thread.
 pub unsafe extern "C" fn xrun(client: *mut c_void) -> c_int {
+    super::client_timing::freeze(timing::monotonic());
     XRUNS.fetch_add(1, Ordering::Relaxed);
     // jackd's own view, when it exports one: the delay of its last backend
     // xrun in microseconds. A client-lateness notification does not update
