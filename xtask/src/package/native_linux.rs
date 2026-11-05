@@ -96,7 +96,7 @@ pub fn package(
         ("rc2fx.desktop", include_bytes!("../../assets/rc2fx.desktop").as_slice()),
         ("rc2fx.svg", include_bytes!("../../assets/rc2fx.svg").as_slice()),
         ("70-rc2fx.rules", include_bytes!("../../../config/udev/70-rc2fx.rules").as_slice()),
-        ("udev-refresh", b"#!/bin/sh\nif command -v udevadm >/dev/null 2>&1; then\n  udevadm control --reload-rules || true\n  udevadm trigger --action=add --subsystem-match=hidraw || true\nfi\n".as_slice()),
+        ("udev-refresh", b"#!/bin/sh\n# Without a running udev (a container or chroot) a trigger reaches only the host's devices.\nif [ -S /run/udev/control ] && command -v udevadm >/dev/null 2>&1; then\n  udevadm control --reload-rules || true\n  udevadm trigger --action=add --subsystem-match=hidraw || true\nfi\n".as_slice()),
     ] { fs::write(stage.join(name), bytes).map_err(|e| e.to_string())?; }
     for (name, bytes) in licenses {
         fs::write(stage.join(name), bytes).map_err(|e| e.to_string())?;
@@ -135,10 +135,19 @@ pub fn package(
         outputs.push(output);
     }
     let mut sums = String::new();
-    for extension in ["AppImage", "deb", "rpm"] {
-        let path = out.join(format!("{name}.{extension}"));
+    let artifacts = [
+        format!("{name}.AppImage"),
+        format!("{name}.deb"),
+        format!("{name}.rpm"),
+        format!(
+            "rc2fx-{}-appimage-runtime-sources.tar.gz",
+            env!("CARGO_PKG_VERSION")
+        ),
+    ];
+    for artifact in artifacts {
+        let path = out.join(&artifact);
         let data = fs::read(&path).map_err(|e| e.to_string())?;
-        sums.push_str(&format!("{}  {name}.{extension}\n", sha256(&data)));
+        sums.push_str(&format!("{}  {artifact}\n", sha256(&data)));
     }
     fs::write(out.join("SHA256SUMS"), sums).map_err(|e| e.to_string())?;
     Ok(outputs)

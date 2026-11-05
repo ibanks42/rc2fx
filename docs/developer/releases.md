@@ -35,12 +35,16 @@ check the official releases.
 1. If the mixer runtime changed, bump its version in
    `config/mixer-release.json` and commit the change (see [Mixer runtime
    version](#mixer-runtime-version)).
-2. Commit and push everything to `main`.
-3. On GitHub, open **Actions › Release › Run workflow** and choose branch
+2. On x86-64 Linux, run `just package-check` before spending a GitHub release
+   run. It builds the current working tree in Ubuntu 24.04 and checks the
+   AppImage, RPM and DEB in disposable containers. See
+   [local package checks](building.md#check-the-linux-packages-before-a-release).
+3. Commit and push everything to `main`.
+4. On GitHub, open **Actions › Release › Run workflow** and choose branch
    `main`.
-4. Pick **patch**, **minor** or **major** for the app. The first release
+5. Pick **patch**, **minor** or **major** for the app. The first release
    ignores this choice (see [Desktop app](#desktop-app)).
-5. Run it. Enable **dry-run** to build without publishing.
+6. Run it. Enable **dry-run** to build without publishing.
 
 A successful run builds the mixer runtime once from that commit, packages it
 into the app for Linux and Windows, pushes a `chore(release): vX.Y.Z` commit
@@ -240,9 +244,12 @@ public until the release is complete.
    launcher's quieter diagnostics. Packaging compares the runtime, catalog,
    `mixer-release.json` and scripts embedded in the executable with the build
    inputs, including with `--skip-build`, and rejects a stale or development
-   executable. Before uploading, the Linux job installs, reinstalls and removes
-   the DEB in clean Ubuntu 24.04 and Debian 13 containers, checking that its
-   dependencies resolve and its shared libraries load.
+   executable. Before uploading, the Linux job uses the same artifact checks
+   as `just package-check`: install, reinstall and remove the DEB on Ubuntu
+   24.04 and Debian 13 and the RPM on Fedora 44; extract and check the AppImage
+   on all three. The checks cover dependencies, metadata, permissions,
+   embedded payload integrity and a headless executable smoke test. They do
+   not exercise a desktop session, FUSE mounting or mixer USB access.
 3. **release** (Ubuntu) checks each archive, writes checksums for them,
    creates and pushes the release commit and tag (`release.py commit`), and
    creates a draft release with these packages and a pending notice for

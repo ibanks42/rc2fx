@@ -22,6 +22,10 @@ desktop: mixer-build
 package: mixer-build
     cargo xtask package
 
+# Build the Linux packages from the working tree in a container, then test installing them (Linux, needs podman or docker)
+package-check:
+    bash .github/scripts/package-check.sh
+
 # Cross-build the mixer side into target/mixer (unchanged files are left as they are)
 mixer-build:
     cargo xtask mixer-build

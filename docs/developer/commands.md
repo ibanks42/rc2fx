@@ -14,6 +14,7 @@ recipes and `cargo xtask help` lists the underlying commands.
 | `just test` | Workspace tests, then Clippy with warnings as errors |
 | `just test-mixer` | Native library tests, plus the launcher, recorder and screen-module tests (Linux or macOS) |
 | `just package` | Build a release package for this computer into `target/package` |
+| `just package-check` | Build the Linux packages in a container from the working tree, then test installing them (x86-64 Linux with Podman or Docker) |
 | `just docs` / `just docs-serve` | Build / serve this documentation site |
 | `cargo xtask check-elf FILE [--shared]` | Check a mixer binary against the mixer's ABI (glibc 2.35, GCC 11) |
 
