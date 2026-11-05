@@ -3,7 +3,7 @@
   "profiles": [
     {
       "id": "rodecaster-pro-ii-1.7.6",
-      "minimumAppVersion": "1.0.1",
+      "minimumAppVersion": "0.1.1",
       "model": "rodecaster-pro-ii",
       "version": "1.7.6",
       "mixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
@@ -30,7 +30,7 @@
     },
     {
       "id": "rodecaster-pro-ii-1.7.7",
-      "minimumAppVersion": "1.0.1",
+      "minimumAppVersion": "0.1.1",
       "model": "rodecaster-pro-ii",
       "version": "1.7.7",
       "mixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",
@@ -57,7 +57,7 @@
     },
     {
       "id": "rodecaster-duo-1.7.6",
-      "minimumAppVersion": "1.0.1",
+      "minimumAppVersion": "0.1.1",
       "model": "rodecaster-duo",
       "version": "1.7.6",
       "mixerSha256": "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c",
@@ -99,7 +99,7 @@
     },
     {
       "id": "rodecaster-duo-1.7.7",
-      "minimumAppVersion": "1.0.1",
+      "minimumAppVersion": "0.1.1",
       "model": "rodecaster-duo",
       "version": "1.7.7",
       "mixerSha256": "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd",

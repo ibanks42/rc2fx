@@ -17,14 +17,11 @@ app bundles. This file is the source for the mixer history page and the
 - This feed provides release notes only. Installation compatibility and payload
   hashes come from the separately signed update repository.
 
-## [1.0.1]
+## [0.1.1]
 
+- Initial independent RC2FX mixer build for the RØDECaster Pro II, controlled by the desktop app.
+- Apply saved audio settings and report the mixer version, control protocol and firmware profile.
+- Install through the existing USB firmware process with signed payloads and explicit minimum app requirements.
 - Reduce audio deadline interference from medium-sized mixer screen redraws.
 - Correct suppression timing totals after changing lookahead settings.
 - Preserve native performance samples and recent audio faults in diagnostics.
-
-## [1.0.0]
-
-- First published RC2FX mixer software, bundled with RC2FX 1.0.0.
-- Processes audio for the RØDECaster Pro II and applies the app's settings.
-- Reports its software version and control protocol to the app.
