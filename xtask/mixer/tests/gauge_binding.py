@@ -66,9 +66,9 @@ class Binding(unittest.TestCase):
         subprocess.run(['gcc', '-w', 'main.c', '-o', 'main', '-L.', '-l:libasound.so.2', '-l:libsamplerate.so.0',
                         '-l:libjack.so.0', f'-Wl,-rpath,{root}', '-Wl,-z,lazy'], cwd=root, check=True)
 
-    def run_with(self, gauges):
+    def run_with(self, gauges, src_mode=''):
         result = subprocess.run(['./main'], cwd=self.root, capture_output=True, text=True, timeout=20,
-                                env=dict(os.environ, LD_AUDIT=str(LIBRARY), RC2FX_GAUGES=gauges))
+                                env=dict(os.environ, LD_AUDIT=str(LIBRARY), RC2FX_GAUGES=gauges, RC2FX_SRC_MODE=src_mode))
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = [line.split() for line in result.stdout.splitlines()]
         callers = {line[0]: line[1] for line in lines if line[0] != 'results'}
@@ -85,12 +85,22 @@ class Binding(unittest.TestCase):
         self.assertEqual({name for name, caller in callers.items() if caller != './main'}, WRAPPED)
         self.assertEqual(results, ['500', '100', '7', '1'])
 
+    def test_a_library_other_than_the_verified_one_stays_unbound(self):
+        for mode in ('fast', 'verify'):
+            callers, results = self.run_with('0', mode)
+            self.assertEqual(set(callers.values()), {'./main'})
+            self.assertEqual(results, ['500', '100', '7', '1'])
+
 
 class Launcher(unittest.TestCase):
     def test_the_flag_comes_only_from_the_ram_marker(self):
         self.assertIn('local client_timing=0 gauges=0\n', SCRIPT)
         self.assertIn('test -f /run/rc2fx-gauges && gauges=1\n', SCRIPT)
         self.assertIn('RC2FX_GAUGES="$gauges"', SCRIPT)
+
+    def test_the_resampler_mode_defaults_to_fast(self):
+        self.assertIn('local src_mode=fast\n', SCRIPT)
+        self.assertIn('RC2FX_SRC_MODE="$src_mode"', SCRIPT)
 
 
 if __name__ == '__main__':

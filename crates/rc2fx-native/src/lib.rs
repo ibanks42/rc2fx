@@ -9,6 +9,7 @@ mod ipc;
 mod parameters;
 mod pipeline;
 mod probe;
+mod src_fast;
 mod suppression;
 mod telemetry;
 mod timing;
@@ -251,6 +252,7 @@ static ALLOCATOR: Counting = Counting;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn la_version(version: c_uint) -> c_uint {
     gauges::initialize();
+    src_fast::initialize();
     if version >= 2 { 2 } else { 0 }
 }
 
@@ -281,6 +283,13 @@ pub unsafe extern "C" fn la_objopen(
     if gauged == Some(gauges::ASOUND) {
         gauges::remember_asound(map as usize);
     }
+    let resampled = src_fast::object(basename);
+    if resampled {
+        src_fast::opened(unsafe { (*map).address }, unsafe {
+            CStr::from_ptr((*map).name)
+        });
+    }
+    let gauged = gauged.or(resampled.then_some(gauges::SAMPLERATE));
     unsafe {
         *cookie = if jack {
             JACK
@@ -482,6 +491,13 @@ pub unsafe extern "C" fn la_symbind64(
         }
         return usb_control::open as *const () as usize;
     }
+    // The gauges, when on, time whatever the mixer's call reaches.
+    let resampler = (unsafe { *reference } == MAIN
+        && unsafe { *definition } == gauges::SAMPLERATE
+        && symbol_name == b"src_process")
+        .then(|| src_fast::replacement(address))
+        .flatten();
+    let address = resampler.unwrap_or(address);
     if let Some(wrapper) = gauges::replacement(
         unsafe { *reference },
         unsafe { *definition },
@@ -501,6 +517,12 @@ pub unsafe extern "C" fn la_symbind64(
             *flags |= 1 | 2;
         }
         return wrapper;
+    }
+    if resampler.is_some() {
+        unsafe {
+            *flags |= 1 | 2;
+        }
+        return address;
     }
     if unsafe { *definition } != JACK || unsafe { *reference } == JACK {
         return address;
@@ -1273,6 +1295,7 @@ fn write_report() {
     report["controlRequired"] = CONTROL_ADMISSION.required().into();
     report["processPid"] = std::process::id().into();
     report["clientTiming"] = client_timing::snapshot();
+    report["srcFast"] = src_fast::snapshot();
     if gauges::enabled() {
         report["gauges"] = gauges::snapshot();
     }

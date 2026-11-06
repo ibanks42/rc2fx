@@ -834,7 +834,10 @@ launch() {
   controller_arguments
   test -f /run/rc2fx-client-timing && client_timing=1
   test -f /run/rc2fx-gauges && gauges=1
-  env RC2FX_CLIENT_TIMING="$client_timing" RC2FX_GAUGES="$gauges" LD_AUDIT="$home/librc2fx_native.so" \
+  # fast unless a bench chose verify or stock; see crates/rc2fx-native/src/src_fast.rs.
+  local src_mode=fast
+  test -f /run/rc2fx-src-mode && src_mode=$(cat /run/rc2fx-src-mode)
+  env RC2FX_CLIENT_TIMING="$client_timing" RC2FX_GAUGES="$gauges" RC2FX_SRC_MODE="$src_mode" LD_AUDIT="$home/librc2fx_native.so" \
     RC2FX_NATIVE_PROBE_REPORT_SELECTED_ONLY=1 \
     RC2FX_FIRMWARE_PROFILE="$profile_id" RC2FX_FIRMWARE_PROFILES="$home/firmware-profiles.json" \
     RC2FX_NATIVE_PROBE_PLAN="$run/plan.json" RC2FX_USB_SOCKET="$run/usb.sock" \
@@ -1881,7 +1884,15 @@ xrun_trace() {
       done
       if test -d "$dir"; then mv "$dir" "$dir.saved.$(date +%s).$$"; fi
       ;;
-    *) echo 'xrun-trace prepare|gauges|arm|status|stop|collect|clear' >&2; return 2 ;;
+    src-mode)
+      case "${1:-}" in
+        fast) rm -f /run/rc2fx-src-mode ;;
+        verify|stock) echo "$1" > /run/rc2fx-src-mode ;;
+        *) echo 'xrun-trace src-mode fast|verify|stock' >&2; return 2 ;;
+      esac
+      echo "Resampler mode $1 for next audio start; restart explicitly"
+      ;;
+    *) echo 'xrun-trace prepare|gauges|src-mode|arm|status|stop|collect|clear' >&2; return 2 ;;
   esac
 }
 
