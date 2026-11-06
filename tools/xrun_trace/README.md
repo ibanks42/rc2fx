@@ -63,6 +63,28 @@ block to `measurement`:
   read, about 110 us before the next estimated cycle start. The cycle start is
   an estimate at one-frame resolution (21 us).
 
+## Resampler modes
+
+`src_process` reaches a bit-exact mono `SRC_LINEAR` path by default. It runs only
+on the verified `libsamplerate` 0.2.2 build; a different library stays unbound.
+`run.py src-verify` makes the next audio start keep the real library's audio and
+compare the fast path with it on every call. `run.py src-stock` leaves
+`src_process` unbound, and `run.py src-fast` returns to the default. Each takes
+effect at the next audio start, and reboot clears it.
+
+The audit's `srcFast` block reports the mode and `calls`, `planBuilds`,
+`declined`, `compared` and `mismatches`. Any mismatch means the fast path must not
+ship. `tools/src_fast_check` runs the same code against the real library:
+
+```sh
+cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.35 \
+  --manifest-path tools/src_fast_check/Cargo.toml
+qemu-aarch64-static -cpu cortex-a53 -L SYSROOT -E LD_LIBRARY_PATH=/lib src_fast_check 150000
+```
+
+`SYSROOT/lib` holds the mixer's `ld-linux-aarch64.so.1`, `libc.so.6`, `libm.so.6`
+and `libsamplerate.so.0`.
+
 ## How it works
 
 This is opt-in diagnostic tooling for the RØDECaster Pro II. It does not make

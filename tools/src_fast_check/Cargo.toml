@@ -1,0 +1,12 @@
+# Runs `src_fast_core.rs` against the real libsamplerate, on AArch64 or under
+# qemu. Outside the workspace: it is built only for that target.
+[package]
+name = "src_fast_check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[profile.release]
+opt-level = 3
