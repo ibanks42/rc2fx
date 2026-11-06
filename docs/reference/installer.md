@@ -85,12 +85,16 @@ the first error and offers **Retry** from that step.
    stops and the screen shows "Updating via USB". Nothing has been written
    yet.
 4. **Flash.** When the mixer's update drive appears, the installer
-   identifies it by the mixer's USB serial and its capacity, copies
-   `archive.tar.gz` and `archive.md5` to it, reads them back, flushes, and
+   identifies it by the mixer's USB serial, checks that the firmware fits,
+   copies `archive.tar.gz` and `archive.md5` to it, reads them back, flushes, and
    ejects it. It then checks that the drive is gone and that the same mixer
    is still in update mode, and sends HID `U`. Any failure stops the plan
    before `U` is sent. Up to that point, removing power for 30 seconds
    returns the mixer to its current firmware.
+
+   The drive's size varies between mixers. RØDE's engine creates it with
+   `dd count=560000` on its staging partition, so 286,720,000 bytes is a
+   ceiling. A 224 MB drive has been seen on one Pro II.
 5. **Wait for RC2FX.** The mixer installs the update and restarts. On its
    first boot after the update it reflashes its controllers and restarts
    again, and the shim runs stock during that boot. On the following boot the

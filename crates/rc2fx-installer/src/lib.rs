@@ -503,19 +503,26 @@ impl Engine {
             }
             Err(e) => (Vec::new(), Some(e.0)),
         };
-        let update_drive = usb.iter().any(|m| m.update_mode)
-            && self.platform.volumes().is_ok_and(|volumes| {
-                volumes.iter().any(|v| {
-                    usb::update_size(v.total)
-                        && usb.iter().any(|m| m.update_mode && m.serial == v.serial)
-                })
-            });
+        let (update_drive, drive_error) = if usb.iter().any(|m| m.update_mode) {
+            match self.platform.volumes() {
+                Ok(volumes) => (
+                    volumes.iter().any(|v| {
+                        usb::update_size(v.total)
+                            && usb.iter().any(|m| m.update_mode && m.serial == v.serial)
+                    }),
+                    None,
+                ),
+                Err(e) => (false, Some(e.0)),
+            }
+        } else {
+            (false, None)
+        };
         let prepared_present = saved.prepared.is_some()
             && files::exists(&self.work.join("archive.tar.gz"))
             && files::exists(&self.work.join("archive.md5"));
         Ok(Status {
             usb,
-            usb_error,
+            usb_error: usb_error.or(drive_error),
             saved,
             prepared_present,
             update_drive,

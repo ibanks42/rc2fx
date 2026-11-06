@@ -462,6 +462,7 @@ impl Platform for Host {
             bail!("drive inventory too large");
         }
         let mut result = Vec::new();
+        let mut failure = None;
         for root in roots[..n].split(|&c| c == 0).map(String::from_utf16_lossy) {
             if root.is_empty() {
                 continue;
@@ -473,12 +474,21 @@ impl Platform for Host {
             let (fs, total, free) = match volume_info(&root) {
                 Ok(info) => info,
                 Err(e) if no_media(&e) => continue,
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    failure.get_or_insert(Error(format!("cannot read drive {root}: {e}")));
+                    continue;
+                }
             };
             if !update_size(total) {
                 continue;
             }
-            let (serial, usb) = storage_identity(&root)?;
+            let (serial, usb) = match storage_identity(&root) {
+                Ok(identity) => identity,
+                Err(e) => {
+                    failure.get_or_insert(Error(format!("cannot identify drive {root}: {e}")));
+                    continue;
+                }
+            };
             if usb {
                 result.push(Volume {
                     path: root.clone(),
@@ -490,7 +500,11 @@ impl Platform for Host {
                 });
             }
         }
-        Ok(result)
+        // A locked or unformatted drive elsewhere must not hide the mixer's.
+        match failure {
+            Some(e) if result.is_empty() => Err(e),
+            _ => Ok(result),
+        }
     }
 
     fn mount(&self, mut v: Volume) -> Result<Volume> {

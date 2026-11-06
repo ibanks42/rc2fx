@@ -83,6 +83,7 @@ fn sample_profile() -> Profile {
 struct Fake {
     items: Vec<Hid>,
     volumes: Vec<Volume>,
+    volume_error: Option<String>,
     present: bool,
     opens: usize,
     writes: usize,
@@ -134,7 +135,11 @@ impl Platform for FakePlatform {
         Ok(Box::new(FakeReports(self.0.clone())))
     }
     fn volumes(&self) -> Result<Vec<Volume>> {
-        Ok(self.0.lock().unwrap().volumes.clone())
+        let fake = self.0.lock().unwrap();
+        match &fake.volume_error {
+            Some(e) => Err(e.as_str().into()),
+            None => Ok(fake.volumes.clone()),
+        }
     }
     fn mount(&self, v: Volume) -> Result<Volume> {
         Ok(v)
@@ -493,6 +498,47 @@ fn flash_copies_verifies_ejects_then_sends_u() {
     assert_eq!(&f.fake().reports[0][..2], &[1, b'U']);
     let c = f.saved().commands.pop().unwrap();
     assert!(c.command == "flash" && c.acknowledged);
+}
+
+#[test]
+fn update_drive_size_is_a_ceiling_not_a_constant() {
+    use crate::usb::{fits, update_size};
+    // 270 MB and 224 MB drives, as Windows showed them on two Pro IIs.
+    assert!(update_size(VOLUME_TOTAL) && update_size(224 << 20));
+    assert!(update_size(crate::DISK_BYTES));
+    assert!(
+        !update_size(crate::DISK_BYTES + 1),
+        "larger than RØDE makes"
+    );
+    assert!(!update_size(0), "the mixer's empty normal-mode drive");
+
+    assert!(fits(175 << 20, 224 << 20).is_ok());
+    assert!(fits(224 << 20, 224 << 20).is_ok());
+    let e = fits((224 << 20) + 1, 224 << 20).unwrap_err();
+    assert!(e.0.contains("225 MB") && e.0.contains("224 MB"), "{e}");
+}
+
+#[test]
+fn a_smaller_update_drive_is_found_and_flashed() {
+    let mut f = fixture();
+    f.update_mode();
+    let usb = f.drive(SERIAL);
+    f.fake().volumes[0].total = 224 << 20;
+    assert!(f.engine.probe().unwrap().update_drive);
+    f.engine.flash("").unwrap();
+    crate::usb::verify_archive(&usb, &f.prepared).unwrap();
+    assert_eq!(f.counts(), (1, 1, 1));
+}
+
+#[test]
+fn a_failed_drive_scan_is_reported_instead_of_waited_on() {
+    let mut f = fixture();
+    f.update_mode();
+    f.drive(SERIAL);
+    f.fake().volume_error = Some(r"cannot read drive F:\: access denied".into());
+    let status = f.engine.probe().unwrap();
+    assert!(!status.update_drive);
+    assert!(status.usb_error.unwrap().contains("F:"));
 }
 
 #[test]

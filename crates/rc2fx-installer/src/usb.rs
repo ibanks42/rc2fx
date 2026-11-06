@@ -36,6 +36,8 @@ pub(crate) fn reject_experimental(items: &[Hid], serial: &str, allow: bool) -> R
 }
 
 const FILES: [&str; 2] = ["archive.tar.gz", "archive.md5"];
+/// Below this the mass-storage function has no real update drive behind it.
+const MIN_DISK_BYTES: u64 = 64 << 20;
 
 fn control(h: &Hid) -> bool {
     h.usage == 0xff00
@@ -124,8 +126,13 @@ pub(crate) fn verify_archive(dir: &Path, p: &Prepared) -> Result<()> {
     archive_matches(dir, p, |_, _| {})
 }
 
+/// Whether `size` could be an update drive. RØDE's engine builds the drive
+/// with `dd count=560000` on its staging partition, so `DISK_BYTES` is a
+/// ceiling and some mixers have a smaller drive (224 MB has been seen). The
+/// USB serial identifies the drive; a drive too small for the firmware is
+/// refused by `flash`, with a reason, rather than waited on here.
 pub(crate) fn update_size(size: u64) -> bool {
-    (DISK_BYTES - (8 << 20)..=DISK_BYTES).contains(&size)
+    (MIN_DISK_BYTES..=DISK_BYTES).contains(&size)
 }
 
 fn valid_volume(v: &Volume) -> Result<()> {
@@ -134,6 +141,18 @@ fn valid_volume(v: &Volume) -> Result<()> {
         || !update_size(v.total)
     {
         bail!("the drive is not the mixer's FAT update drive");
+    }
+    Ok(())
+}
+
+/// Refuse firmware larger than the update drive before writing any of it.
+pub(crate) fn fits(needed: u64, total: u64) -> Result<()> {
+    if needed > total {
+        bail!(
+            "the firmware needs {} MB but the mixer's update drive holds {} MB. Disconnect the mixer's power for 30 seconds, turn it on and start again; nothing was flashed",
+            needed.div_ceil(1 << 20),
+            total >> 20
+        );
     }
     Ok(())
 }
@@ -277,6 +296,11 @@ impl Engine {
         };
         let v = self.platform.mount(volume.clone())?;
         valid_volume(&v)?;
+        let mut needed = 0;
+        for name in FILES {
+            needed += std::fs::metadata(self.work.join(name))?.len();
+        }
+        fits(needed, v.total)?;
         let drive = Path::new(&v.path);
         for name in FILES {
             let src = self.work.join(name);
