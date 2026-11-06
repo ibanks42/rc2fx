@@ -2,6 +2,13 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.1.2] - 2026-11-06
+
+### Bug fixes
+
+- *(release)* Resume macOS builds for already-versioned tags
+- *(installer)* Recognize update drives smaller than the usual size
+
 ## [0.1.1] - 2026-11-05
 
 ### Initial release
