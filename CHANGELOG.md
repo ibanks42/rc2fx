@@ -2,6 +2,24 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.1.4] - 2026-11-07
+
+### Features
+
+- *(release)* Serve mixer metadata from a branch and keep targets valid until the root expires
+- *(supervisor)* Watch the mixer and controller from a Rust binary
+- *(app)* Compact layout, telemetry redesign, installer card, versions on Settings
+
+### Bug fixes
+
+- *(installer)* Harden the desktop side after the security review
+- *(mixer)* Bound logs and clean up sockets after the security review
+- *(device)* Report the true callback peak until diagnostics are reset
+
+### Maintenance
+
+- *(mixer-release)* Clear release outputs restored from the Rust cache
+
 ## [0.1.3] - 2026-11-07
 
 ### Features

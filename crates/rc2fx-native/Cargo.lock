@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -180,21 +180,21 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-dfn"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "realfft",
 ]
 
 [[package]]
 name = "rc2fx-dsp"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "rc2fx-core",
 ]
 
 [[package]]
 name = "rc2fx-firmware"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-native-control"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-suppression"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-usb"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "flate2",
  "serde",
