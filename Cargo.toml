@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rc2fx-usb", "crates/rc2fx-core", "crates/rc2fx-dfn", "crates/rc2fx-transport", "crates/rc2fx-app", "crates/rc2fx-device", "crates/rc2fx-dsp", "crates/rc2fx-suppression", "crates/rc2fx-native-control", "crates/rc2fx-firmware", "crates/rc2fx-installer", "xtask"]
+members = ["crates/rc2fx-usb", "crates/rc2fx-core", "crates/rc2fx-dfn", "crates/rc2fx-transport", "crates/rc2fx-app", "crates/rc2fx-device", "crates/rc2fx-dsp", "crates/rc2fx-suppression", "crates/rc2fx-native-control", "crates/rc2fx-firmware", "crates/rc2fx-supervisor", "crates/rc2fx-installer", "xtask"]
 resolver = "3"
 
 [workspace.package]
@@ -12,6 +12,13 @@ license = "MIT"
 # sluggish. Optimize dependencies only; workspace crates keep fast rebuilds.
 [profile.dev.package."*"]
 opt-level = 2
+
+# A mock-mixer build small enough to copy to another computer. It stays a
+# development build, which is what the feature requires.
+[profile.mock]
+inherits = "dev"
+debug = false
+strip = true
 
 [profile.release]
 lto = "thin"

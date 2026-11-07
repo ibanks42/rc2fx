@@ -19,9 +19,10 @@ use std::{
 /// The runtime, catalog and scripts the installer adds to official firmware,
 /// in the order their bytes appear in an embedded envelope. The order is
 /// pinned: the checksummed files first, then the manifest itself.
-pub const PAYLOAD_NAMES: [&str; 13] = [
+pub const PAYLOAD_NAMES: [&str; 14] = [
     "librc2fx_native.so",
     "rc2fxd",
+    "rc2fx-supervisor",
     "rc2fx-firmware",
     "firmware-profiles.json",
     "librc2fx_gui.so",
@@ -35,9 +36,10 @@ pub const PAYLOAD_NAMES: [&str; 13] = [
     "install.sh",
 ];
 /// The order of the bundle's SHA256SUMS lines.
-pub const PINNED: [&str; 8] = [
+pub const PINNED: [&str; 9] = [
     "librc2fx_native.so",
     "rc2fxd",
+    "rc2fx-supervisor",
     "rc2fx-firmware",
     "firmware-profiles.json",
     "librc2fx_gui.so",
@@ -50,9 +52,10 @@ pub const RELEASE_MANIFEST: &str = "mixer-release.json";
 /// The only `mixer-release.json` schema a payload may carry.
 pub const RELEASE_SCHEMA: u64 = 1;
 /// Payload files that are ARM64 ELF executables or libraries.
-pub const BINARIES: [&str; 6] = [
+pub const BINARIES: [&str; 7] = [
     "librc2fx_native.so",
     "rc2fxd",
+    "rc2fx-supervisor",
     "rc2fx-firmware",
     "librc2fx_gui.so",
     "librc2fx_jackerr.so",
@@ -988,7 +991,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("config")).unwrap();
         std::fs::write(
             dir.path().join("config").join("firmware-profiles.json"),
-            &files[3].1,
+            CATALOG,
         )
         .unwrap();
         std::fs::write(

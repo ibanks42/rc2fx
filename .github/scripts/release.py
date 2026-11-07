@@ -100,7 +100,7 @@ def warn_mixer_version(previous):
         "crates/rc2fx-core", "crates/rc2fx-device", "crates/rc2fx-dfn",
         "crates/rc2fx-dsp", "crates/rc2fx-firmware", "crates/rc2fx-native",
         "crates/rc2fx-native-control", "crates/rc2fx-suppression",
-        "crates/rc2fx-usb", "crates/rc2fx-gui", "xtask/mixer",
+        "crates/rc2fx-supervisor", "crates/rc2fx-usb", "crates/rc2fx-gui", "xtask/mixer",
         "xtask/src/setup.rs", "xtask/src/elf.rs", "config",
         "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo",
     ]

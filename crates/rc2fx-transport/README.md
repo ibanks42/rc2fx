@@ -33,5 +33,6 @@ the mixer has already received stays applied.
 
 ```sh
 cargo test -p rc2fx-transport
+cargo test -p rc2fx-transport --features mock-mixer
 cargo run -p rc2fx-transport --example usb_probe   # needs a connected mixer
 ```

@@ -25,6 +25,7 @@ from pathlib import Path
 PAYLOAD_NAMES = [
     "librc2fx_native.so",
     "rc2fxd",
+    "rc2fx-supervisor",
     "rc2fx-firmware",
     "firmware-profiles.json",
     "librc2fx_gui.so",
@@ -37,7 +38,7 @@ PAYLOAD_NAMES = [
     "rc2fx-gui-shim.sh",
     "install.sh",
 ]
-PINNED = PAYLOAD_NAMES[:8]
+PINNED = PAYLOAD_NAMES[:9]
 SCRIPTS = {"rc2fx.sh", "rc2fx-shim.sh", "rc2fx-gui-shim.sh", "install.sh"}
 PRO_II = "rodecaster-pro-ii"
 

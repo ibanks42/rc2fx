@@ -11,15 +11,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// How long a reading can still raise the displayed level: a full-scale
-/// reading falls to the bottom of the 60 dB scale in 3 s (see `display`).
-const KEEP: Duration = Duration::from_secs(3);
+/// How long a reading can still affect the displayed level: by then a reading
+/// has been replaced, whichever way the level was moving.
+const KEEP: Duration = Duration::from_secs(1);
 /// A bound on readings per path, whatever the event rate.
 const CAPACITY: usize = 300;
-/// How fast the displayed level falls after a reading, in fractions of the
-/// display's 60 dB meter scale (`desk::level`) per second: linear in dB, so
-/// 1/3 is 20 dB/s.
-const FALL_PER_SECOND: f32 = 1. / 3.;
+/// How quickly the displayed level closes on the latest reading, as the time
+/// to cover about two thirds of the distance. Readings arrive a few times a
+/// second, so the level eases between them instead of stepping. A peak still
+/// shows almost at once; a level that stops is gone in about half a second.
+const RISE: Duration = Duration::from_millis(40);
+const FALL: Duration = Duration::from_millis(120);
 /// Readings further apart than this belong to different segments: the
 /// displayed level uses only the latest segment, so a reading from before a
 /// gap (telemetry stale, then back) never shows after it. The same 1 s after
@@ -54,28 +56,43 @@ impl LevelHistory {
     }
 
     /// The displayed level at `now`, 0 to 1 on the display's meter scale
-    /// (`scale`, `desk::level`): it rises at once to each reading and then
-    /// falls `FALL_PER_SECOND` (linear in dB). Display smoothing, computed
-    /// from the readings' times so it doesn't depend on how often it's drawn.
+    /// (`scale`, `desk::level`): it closes on each reading in turn (`RISE`,
+    /// `FALL`), starting from nothing. Display smoothing, computed from the
+    /// readings' times so it doesn't depend on how often it's drawn.
     /// Only the latest segment counts: walking back from the newest reading,
     /// it stops at the first gap longer than `GAP`, and nothing counts if the
     /// newest reading is itself older than `GAP`.
     pub(super) fn display(&self, now: Instant, scale: impl Fn(f64) -> f32) -> f32 {
-        let mut level = 0f32;
+        let mut first = self.points.len();
         let mut later = now;
-        for (at, peak) in self.points.iter().rev() {
+        for (index, (at, _)) in self.points.iter().enumerate().rev() {
             if *at > now {
                 continue;
             }
             if later.saturating_duration_since(*at) > GAP {
                 break;
             }
-            let age = now.saturating_duration_since(*at).as_secs_f32();
-            level = level.max(scale(f64::from(*peak)) - age * FALL_PER_SECOND);
+            first = index;
             later = *at;
         }
-        level.max(0.)
+        let mut level = 0f32;
+        let mut latest = None;
+        for (at, peak) in self.points.range(first..).filter(|(at, _)| *at <= now) {
+            if let Some((since, target)) = latest {
+                level = approach(level, target, at.saturating_duration_since(since));
+            }
+            latest = Some((*at, scale(f64::from(*peak))));
+        }
+        latest.map_or(0., |(since, target)| {
+            approach(level, target, now.saturating_duration_since(since))
+        })
     }
+}
+
+/// Where `level` is after closing on `target` for `elapsed`.
+fn approach(level: f32, target: f32, elapsed: Duration) -> f32 {
+    let time = if target > level { RISE } else { FALL };
+    target + (level - target) * (-elapsed.as_secs_f32() / time.as_secs_f32()).exp()
 }
 
 /// Every reported path's readings, keyed by target id.
@@ -116,32 +133,108 @@ mod tests {
 
     use crate::desk::level;
 
+    /// `count` readings of `peak`, `step` apart. Returns the last one's time.
+    fn steady(
+        h: &mut LevelHistory,
+        from: Instant,
+        step: Duration,
+        count: u32,
+        peak: f64,
+    ) -> Instant {
+        for i in 0..count {
+            h.push(from + step * i, peak);
+        }
+        from + step * count.saturating_sub(1)
+    }
+
     #[test]
-    fn rises_at_once_and_falls_20_db_a_second() {
+    fn a_rise_reaches_the_reading_quickly_without_jumping() {
         let start = Instant::now();
         let mut h = LevelHistory::default();
         h.push(start, 0.5); // about -6 dBFS
-        assert_eq!(h.display(start, level), level(0.5));
-        let later = start + Duration::from_millis(300);
-        // 300 ms at 20 dB/s is 6 dB: 6/60 of the meter scale.
-        assert!((h.display(later, level) - (level(0.5) - 0.1)).abs() < 1e-5);
-        // The same instant gives the same level however often it's asked.
-        assert_eq!(h.display(later, level), h.display(later, level));
-        // A louder reading takes over at once.
-        h.push(later, 1.0);
-        assert_eq!(h.display(later, level), level(1.0));
-        assert_eq!(h.display(start + Duration::from_secs(10), level), 0.);
+        assert_eq!(h.display(start, level), 0., "starts from nothing");
+        let soon = h.display(start + Duration::from_millis(16), level);
+        assert!(soon > 0. && soon < level(0.5) * 0.5, "{soon}");
+        let settled = h.display(start + Duration::from_millis(200), level);
+        assert!((settled - level(0.5)).abs() < 0.01, "{settled}");
+    }
+
+    #[test]
+    fn the_level_drops_soon_after_sound_stops() {
+        let start = Instant::now();
+        let step = Duration::from_millis(150);
+        let mut h = LevelHistory::default();
+        let last = steady(&mut h, start, step, 8, 0.5);
+        let stop = last + step;
+        h.push(stop, 0.);
+        // Still on its way down a frame later, not snapped to the bottom.
+        let frame = h.display(stop + Duration::from_millis(16), level);
+        assert!(frame > level(0.5) * 0.7, "{frame}");
+        // Nearly gone within half a second.
+        let later = stop + Duration::from_millis(500);
+        h.push(stop + step, 0.);
+        h.push(stop + step * 2, 0.);
+        h.push(stop + step * 3, 0.);
+        let gone = h.display(later, level);
+        assert!(gone < 0.02, "{gone}");
+    }
+
+    #[test]
+    fn a_new_reading_changes_direction_without_moving_the_level() {
+        let start = Instant::now();
+        let step = Duration::from_millis(150);
+        let mut h = LevelHistory::default();
+        let last = steady(&mut h, start, step, 8, 0.5);
+        for (peak, at) in [(1.0, last + step), (0.01, last + step * 2)] {
+            let before = h.display(at, level);
+            h.push(at, peak);
+            assert!((h.display(at, level) - before).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn sparse_readings_move_in_small_steps_each_frame() {
+        let start = Instant::now();
+        let step = Duration::from_millis(150);
+        let frame = Duration::from_micros(16_667);
+        let mut h = LevelHistory::default();
+        let (mut last, mut next) = (0., 0u32);
+        for i in 0..180 {
+            let now = start + frame * i;
+            while start + step * next <= now {
+                let peak = if next % 2 == 0 { 0.5 } else { 0.05 };
+                h.push(start + step * next, peak);
+                next += 1;
+            }
+            let shown = h.display(now, level);
+            // After the first rise from nothing.
+            if i > 30 {
+                assert!((shown - last).abs() < 0.1, "frame {i}: {last} to {shown}");
+            }
+            last = shown;
+        }
+    }
+
+    #[test]
+    fn the_level_does_not_depend_on_how_often_it_is_drawn() {
+        let start = Instant::now();
+        let mut h = LevelHistory::default();
+        h.push(start, 0.5);
+        let at = start + Duration::from_millis(70);
+        assert_eq!(h.display(at, level), h.display(at, level));
     }
 
     #[test]
     fn a_reading_from_before_a_gap_never_shows_after_it() {
         let start = Instant::now();
         let mut h = LevelHistory::default();
-        h.push(start, 1.0);
+        steady(&mut h, start, Duration::from_millis(100), 5, 1.0);
         // Telemetry stops for 1.5 s, then returns quietly.
-        let back = start + Duration::from_millis(1500);
+        let back = start + Duration::from_millis(1900);
         h.push(back, 0.01);
-        assert_eq!(h.display(back, level), level(0.01));
+        assert_eq!(h.display(back, level), 0.);
+        let settled = h.display(back + Duration::from_millis(300), level);
+        assert!((settled - level(0.01)).abs() < 0.01, "{settled}");
         // And with no reading for longer than the gap, nothing is shown.
         assert_eq!(h.display(back + Duration::from_millis(1100), level), 0.);
     }

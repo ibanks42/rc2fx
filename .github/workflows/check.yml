@@ -66,6 +66,11 @@ jobs:
           python3 .github/scripts/test_macos_release.py
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
+      - name: Test the mixer supervisor
+        if: runner.os == 'Linux'
+        run: |
+          python3 xtask/mixer/tests/supervisor.py
+          cargo test --locked -p rc2fx-supervisor
       - name: Test developer SSH controls
         if: runner.os == 'Linux'
         run: |

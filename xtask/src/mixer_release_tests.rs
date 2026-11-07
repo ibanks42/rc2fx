@@ -22,6 +22,7 @@ fn fixture_package(base: &Path) -> Vec<u8> {
     for name in [
         "librc2fx_native.so",
         "rc2fxd",
+        "rc2fx-supervisor",
         "rc2fx-firmware",
         "librc2fx_gui.so",
         "librc2fx_jackerr.so",
@@ -45,6 +46,7 @@ fn fixture_package(base: &Path) -> Vec<u8> {
     let checksums: String = [
         "librc2fx_native.so",
         "rc2fxd",
+        "rc2fx-supervisor",
         "rc2fx-firmware",
         "firmware-profiles.json",
         "librc2fx_gui.so",

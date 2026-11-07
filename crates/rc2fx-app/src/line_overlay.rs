@@ -1,4 +1,4 @@
-//! Home's animated level indicators.
+//! Home's animated level indicators: the glowing lines and the overview's bars.
 //! On by default; `RC2FX_ANIMATED_LINE=0` opens the window exactly as before,
 //! with Home's indicators drawn still.
 //!
@@ -9,8 +9,11 @@
 //! is in front (every other page renders as before), and this overlay, the
 //! only view notified on each animation tick. That the cached app is then
 //! reused, and the frame rate, are unverified: check with
-//! `RC2FX_RENDER_STATS=1`. The tick aims at 60 Hz; it doesn't guarantee 60
-//! frames a second. It stops while the window is not focused.
+//! `RC2FX_RENDER_STATS=1`. The tick aims at 60 Hz, or 30 Hz while the window is
+//! not focused; it doesn't guarantee either. Presenting a frame costs a weak
+//! GPU far more than anything drawn in it, so a tick that would show nothing
+//! new draws no frame (`Slots::unchanged`): a silent mixer costs almost nothing.
+//! The indicators stay live beside whatever is in front, and stop while hidden.
 //!
 //! Who draws an indicator (never both, never neither): in each render, Home
 //! claims a slot for the overlay only for an indicator that can animate
@@ -24,11 +27,19 @@
 //! of window size or scale releases the latch.
 
 use super::*;
+use level_bar::Bar;
 use live_line::{LineState, LineStyle};
 use std::sync::{
     OnceLock,
     atomic::{AtomicU64, Ordering},
 };
+
+const FRAME: Duration = Duration::from_micros(16_667);
+const UNFOCUSED_FRAME: Duration = Duration::from_micros(33_333);
+/// A line lower than this, in pixels either side of its middle, looks flat.
+const FLAT: f32 = 0.5;
+/// A bar's level changing by less than this moves it less than a pixel.
+const BAR_STEP: f32 = 0.004;
 
 /// Whether the window uses the shell and overlay. Read once.
 pub(super) fn enabled() -> bool {
@@ -83,9 +94,16 @@ pub(super) enum Source {
     Path(String),
 }
 
+/// How an indicator is drawn.
+#[derive(Clone, Copy)]
+pub(super) enum Shape {
+    Line(LineStyle),
+    Bar(Bar),
+}
+
 struct Claim {
     source: Source,
-    style: LineStyle,
+    shape: Shape,
     geometry: Option<(Bounds<Pixels>, ContentMask<Pixels>, f32)>,
 }
 
@@ -108,6 +126,37 @@ pub(super) struct Slots {
     /// How many claims the last paint found on screen, and in which render's
     /// claims: none on screen parks the ticker.
     painted: (u64, usize),
+    /// Each claim's level in the last paint, for `unchanged`.
+    drawn: Vec<Option<f32>>,
+}
+
+impl Slots {
+    /// Whether painting `levels` (one per claim) would look like the last
+    /// paint: every line was and stays flat, whatever its phase, and no bar
+    /// has moved.
+    fn unchanged(&self, levels: &[Option<f32>]) -> bool {
+        let same = |claim: &Claim, drawn: Option<f32>, level: Option<f32>| match claim.shape {
+            Shape::Line(style) => {
+                let height = claim
+                    .geometry
+                    .map_or(f32::INFINITY, |(bounds, ..)| f32::from(bounds.size.height));
+                [drawn, level]
+                    .iter()
+                    .all(|l| l.unwrap_or(1.) * style.amplitude * height < FLAT)
+            }
+            Shape::Bar(_) => match (drawn, level) {
+                (Some(drawn), Some(level)) => (drawn - level).abs() < BAR_STEP,
+                (drawn, level) => drawn == level,
+            },
+        };
+        self.drawn.len() == self.claims.len()
+            && levels.len() == self.claims.len()
+            && self
+                .claims
+                .iter()
+                .zip(self.drawn.iter().zip(levels))
+                .all(|(claim, (drawn, level))| same(claim, *drawn, *level))
+    }
 }
 
 pub(super) type SharedSlots = Rc<RefCell<Slots>>;
@@ -129,14 +178,19 @@ pub(super) fn latched(slots: &SharedSlots, source: &Source) -> bool {
     slots.borrow().latched.iter().any(|(s, _)| s == source)
 }
 
+/// Whether any indicator is drawn still because its geometry was refused.
+pub(super) fn any_latched(slots: &SharedSlots) -> bool {
+    !slots.borrow().latched.is_empty()
+}
+
 /// Claims a slot for the overlay and returns the element that records its
 /// geometry during prepaint. It paints nothing itself.
-pub(super) fn claim(slots: &SharedSlots, source: Source, style: LineStyle) -> impl IntoElement {
+pub(super) fn claim(slots: &SharedSlots, source: Source, shape: Shape) -> impl IntoElement {
     let index = {
         let mut s = slots.borrow_mut();
         s.claims.push(Claim {
             source,
-            style,
+            shape,
             geometry: None,
         });
         s.claims.len() - 1
@@ -164,12 +218,9 @@ pub(super) struct LineOverlay {
     epoch: Instant,
     /// The one shared ticker; runs only while some claim can animate.
     ticker: Option<Task<()>>,
-    /// When the window lost focus. While set, every paint draws the picture
-    /// from that moment, so other redraws don't move the lines.
-    frozen: Option<Instant>,
-    /// Each indicator's level as last drawn while focused, held while frozen.
-    held: Rc<RefCell<Vec<(Source, f32)>>>,
-    _subscriptions: Vec<Subscription>,
+    /// The time between ticks, kept up to date by each render.
+    frame: Rc<Cell<Duration>>,
+    _visibility: Subscription,
 }
 
 impl LineOverlay {
@@ -181,20 +232,41 @@ impl LineOverlay {
     ) -> Self {
         // A parked overlay is woken by the window becoming visible as well as
         // by any frame (it renders in every frame the window draws).
-        let subscriptions = vec![
-            cx.observe_window_visibility(window, |_, _, _, cx| cx.notify()),
-            // Pause and resume with focus: render decides from the new state.
-            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
-        ];
         Self {
             app,
             slots,
             epoch: Instant::now(),
             ticker: None,
-            frozen: None,
-            held: Default::default(),
-            _subscriptions: subscriptions,
+            frame: Rc::new(Cell::new(FRAME)),
+            _visibility: cx.observe_window_visibility(window, |_, _, _, cx| cx.notify()),
         }
+    }
+}
+
+impl LineOverlay {
+    /// Whether this tick would change nothing on screen.
+    fn unchanged(&self, cx: &App) -> bool {
+        let Some(app) = self.app.upgrade() else {
+            return false;
+        };
+        let app = app.read(cx);
+        let slots = self.slots.borrow();
+        let now = Instant::now();
+        let levels: Vec<_> = slots
+            .claims
+            .iter()
+            .map(|claim| claim_level(app, claim, now))
+            .collect();
+        slots.unchanged(&levels)
+    }
+}
+
+/// What this claim shows now: a line's level, or a bar's reading if it has one.
+fn claim_level(app: &Rc2FxApp, claim: &Claim, now: Instant) -> Option<f32> {
+    let Source::Path(id) = &claim.source;
+    match claim.shape {
+        Shape::Line(_) => Some(live_line::level_of(app.levels.get(id), now)),
+        Shape::Bar(_) => app.overview_level(id),
     }
 }
 
@@ -230,34 +302,30 @@ impl Render for LineOverlay {
             let s = self.slots.borrow();
             s.painted.0 != generation || s.painted.1 > 0
         };
-        // Freeze on losing focus; on regaining it, move the clock on by the
-        // pause so the lines continue from where they stopped.
-        let focused = window.is_window_active();
-        match (focused, self.frozen) {
-            (false, None) => self.frozen = Some(Instant::now()),
-            (true, Some(at)) => {
-                self.epoch += Instant::now().saturating_duration_since(at);
-                self.frozen = None;
-            }
-            _ => {}
-        }
-        let animate =
-            // Paused while the window is not focused, to save GPU (the user's
-            // choice). Visibility is GPUI-reported; what counts as hidden is
-            // platform-dependent.
-            any && on_screen && !reduced && window.is_visible() && window.is_window_active();
+        // Visibility is GPUI-reported; what counts as hidden is
+        // platform-dependent.
+        let animate = any && on_screen && !reduced && window.is_visible();
+        self.frame.set(if window.is_window_active() {
+            FRAME
+        } else {
+            UNFOCUSED_FRAME
+        });
         if !animate {
             self.ticker = None;
         } else if self.ticker.is_none() {
+            let frame = self.frame.clone();
             self.ticker = Some(cx.spawn(async move |this, cx| {
                 loop {
-                    // One frame per tick, at most 60 a second (a target, not
-                    // a measured frame rate); a late tick is not made up.
-                    cx.background_executor()
-                        .timer(Duration::from_micros(16_667))
-                        .await;
+                    // One frame per tick (a target, not a measured frame
+                    // rate); a late tick is not made up.
+                    cx.background_executor().timer(frame.get()).await;
                     count(&TICKS);
-                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    let tick = this.update(cx, |overlay, cx| {
+                        if !overlay.unchanged(cx) {
+                            cx.notify();
+                        }
+                    });
+                    if tick.is_err() {
                         break;
                     }
                 }
@@ -266,8 +334,6 @@ impl Render for LineOverlay {
         let ticking = self.ticker.is_some();
         let slots = self.slots.clone();
         let epoch = self.epoch;
-        let frozen = self.frozen;
-        let held = self.held.clone();
         let app = app.downgrade();
         // Noninteractive: a bare canvas has no hitbox, focus or key context.
         div()
@@ -285,15 +351,17 @@ impl Render for LineOverlay {
                         }
                         count(&OVERLAY_PAINTS);
                         let now = Instant::now();
-                        let phase = frozen
-                            .unwrap_or(now)
-                            .saturating_duration_since(epoch)
-                            .as_secs_f32();
-                        let mut held = held.borrow_mut();
+                        let phase = now.saturating_duration_since(epoch).as_secs_f32();
                         let scale = window.scale_factor();
                         let layout = (window.viewport_size(), scale);
                         let mut refused = Vec::new();
                         let mut on_screen = 0;
+                        let drawn = s
+                            .claims
+                            .iter()
+                            .map(|claim| claim_level(app, claim, now))
+                            .collect();
+                        s.drawn = drawn;
                         for claim in &s.claims {
                             let trusted = claim.geometry.filter(|(_, _, at)| *at == scale);
                             let Some((bounds, mask, _)) = trusted else {
@@ -305,19 +373,19 @@ impl Render for LineOverlay {
                             }
                             on_screen += 1;
                             let Source::Path(id) = &claim.source;
-                            let kept = held
-                                .iter()
-                                .find(|(source, _)| *source == claim.source)
-                                .map(|(_, level)| *level);
-                            let level = match (frozen, kept) {
-                                (Some(_), Some(level)) => level,
-                                _ => {
-                                    let level = live_line::level_of(app.levels.get(id), now);
-                                    held.retain(|(source, _)| *source != claim.source);
-                                    held.push((claim.source.clone(), level));
-                                    level
+                            let style = match claim.shape {
+                                Shape::Line(style) => style,
+                                // Shows a reading going stale before Home
+                                // next renders.
+                                Shape::Bar(bar) => {
+                                    let level = app.overview_level(id);
+                                    window.with_content_mask(Some(mask), |window| {
+                                        level_bar::paint(window, bounds, bar, level)
+                                    });
+                                    continue;
                                 }
                             };
+                            let level = live_line::level_of(app.levels.get(id), now);
                             window.with_content_mask(Some(mask), |window| {
                                 live_line::paint_line(
                                     window,
@@ -325,7 +393,7 @@ impl Render for LineOverlay {
                                     phase,
                                     level,
                                     LineState::Live,
-                                    claim.style,
+                                    style,
                                 )
                             });
                         }
@@ -340,12 +408,7 @@ impl Render for LineOverlay {
                         s.painted = (app.render_generation, on_screen);
                         // Claims made after this view rendered: one more frame
                         // lets render start the ticker.
-                        if !ticking
-                            && on_screen > 0
-                            && !app.reduced_motion
-                            && window.is_visible()
-                            && window.is_window_active()
-                        {
+                        if !ticking && on_screen > 0 && !app.reduced_motion && window.is_visible() {
                             window.request_animation_frame();
                         }
                     },
@@ -397,5 +460,52 @@ impl Render for Shell {
             .size_full()
             .child(app)
             .child(self.overlay.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slots(shape: Shape, drawn: Option<f32>) -> Slots {
+        Slots {
+            claims: vec![Claim {
+                source: Source::Path("mic-1".into()),
+                shape,
+                geometry: Some((
+                    Bounds::new(point(px(0.), px(0.)), size(px(100.), px(40.))),
+                    ContentMask {
+                        bounds: Bounds::default(),
+                    },
+                    1.,
+                )),
+            }],
+            drawn: vec![drawn],
+            ..Slots::default()
+        }
+    }
+
+    fn line() -> Shape {
+        Shape::Line(live_line::MINI)
+    }
+
+    #[test]
+    fn a_flat_line_needs_no_frame_but_a_moving_one_does() {
+        assert!(slots(line(), Some(0.)).unchanged(&[Some(0.)]));
+        // Same level, but the shape moves with time unless it is flat.
+        assert!(!slots(line(), Some(0.5)).unchanged(&[Some(0.5)]));
+    }
+
+    #[test]
+    fn a_line_going_flat_or_rising_draws_that_change() {
+        assert!(!slots(line(), Some(0.5)).unchanged(&[Some(0.)]));
+        assert!(!slots(line(), Some(0.)).unchanged(&[Some(0.5)]));
+    }
+
+    #[test]
+    fn a_new_set_of_claims_always_draws() {
+        let mut slots = slots(line(), Some(0.));
+        slots.drawn.clear();
+        assert!(!slots.unchanged(&[Some(0.)]));
     }
 }

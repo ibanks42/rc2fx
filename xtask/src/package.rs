@@ -303,7 +303,12 @@ mod tests {
         elf[..6].copy_from_slice(&[127, b'E', b'L', b'F', 2, 1]);
         elf[18] = 0xb7;
         let mut sums = String::new();
-        for name in ["librc2fx_native.so", "rc2fxd", "rc2fx-firmware"] {
+        for name in [
+            "librc2fx_native.so",
+            "rc2fxd",
+            "rc2fx-supervisor",
+            "rc2fx-firmware",
+        ] {
             put(&format!("target/mixer/{name}"), &elf);
             sums += &format!("{}  {name}\n", sha256(&elf));
         }

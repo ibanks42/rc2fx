@@ -14,6 +14,7 @@ mod home;
 mod inputs;
 mod installer;
 mod interchange;
+mod level_bar;
 mod level_history;
 mod licenses;
 mod line_overlay;
@@ -169,6 +170,8 @@ struct Rc2FxApp {
     /// The installer is the page in front (it may keep running behind
     /// another page).
     installer_page: bool,
+    /// The last flash this run of the app saw finish (`Model::settled_flash`).
+    settled_flash: Option<u64>,
     telemetry_open: bool,
     /// The Telemetry section's reset is waiting for confirmation.
     confirm_reset: bool,
@@ -271,6 +274,7 @@ impl Rc2FxApp {
             settings_open: false,
             home_open: true,
             installer_page: false,
+            settled_flash: None,
             telemetry_open: connection::remembered_telemetry(),
             confirm_reset: false,
             event_log: cx.new(|_| events::EventLog::new()),
@@ -628,7 +632,8 @@ impl Rc2FxApp {
             if event.generation != self.generation {
                 continue;
             }
-            changed = true;
+            // A reading alone redraws only what shows it (see below).
+            changed |= !matches!(event.kind, EventKind::Meter(_));
             match event.kind {
                 EventKind::Selection(result) => self.selection_reply(result),
                 EventKind::RestartEngine(result) => self.restart_reply(result),
@@ -818,12 +823,14 @@ impl Rc2FxApp {
         // Home. Compared on this existing 50 ms tick; no extra frames are
         // scheduled, and a redraw happens only when what Home shows changes.
         let home_key = (self.session.connected && self.home_open).then(|| self.home_key());
-        // The overview's strips show every reading as it arrives.
+        // A reading redraws the app unless the overview is in front and the
+        // overlay is already drawing its bars every frame. Each such redraw is
+        // a whole extra frame, on top of the overlay's.
         let overview = home_key.is_some() && !self.settings_open && !self.installer_page;
         if changed
             || fresh != self.was_fresh
             || home_key != self.home_key
-            || (overview && meter_arrived)
+            || (meter_arrived && !(overview && self.bars_animate(window)))
         {
             cx.notify();
         }
@@ -1872,7 +1879,14 @@ pub fn run() {
                 ))),
                 window_min_size: Some(size(px(960.), px(620.))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("RC2FX".into()),
+                    title: Some(
+                        if cfg!(feature = "mock-mixer") {
+                            "RC2FX (mock mixer)"
+                        } else {
+                            "RC2FX"
+                        }
+                        .into(),
+                    ),
                     ..Default::default()
                 }),
                 ..ui::window_options()

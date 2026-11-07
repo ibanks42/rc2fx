@@ -13,8 +13,8 @@ The mixer side is three programs:
   and that runs the effects.
 - `rc2fxd`, a controller that stores the settings and answers the desktop
   app.
-- `xtask/mixer/rc2fx.sh`, a shell script that starts, supervises and stops
-  the other two.
+- `xtask/mixer/rc2fx.sh`, a shell script that starts and stops the other two.
+  `rc2fx-supervisor` watches them while they run.
 
 The library and controller are Rust, cross-compiled for the mixer's ARM
 processor with zig.

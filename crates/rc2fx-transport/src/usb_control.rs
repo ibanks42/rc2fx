@@ -6,6 +6,9 @@ use super::{REQUEST_LIMIT, RequestError};
 use rc2fx_installer::control::{Client, Failure, Reply, Request};
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(feature = "mock-mixer")]
+mod mock;
+
 struct Job {
     request: Request,
     answer: oneshot::Sender<Result<Reply, String>>,
@@ -39,11 +42,17 @@ impl Usb {
     /// Open the session; also returns the mixer's USB serial.
     pub(super) async fn connect() -> Result<(Self, String), String> {
         let (jobs, receiver) = mpsc::channel::<Job>(8);
-        let (ready, opened) = oneshot::channel();
+        let (ready, opened) = oneshot::channel::<Result<String, String>>();
         std::thread::Builder::new()
             .name("rc2fx-usb".into())
             .spawn(move || {
+                #[cfg(feature = "mock-mixer")]
+                {
+                    let _ = ready.send(Ok(mock::SERIAL.to_owned()));
+                    serve(receiver, mock::Connection::open());
+                }
                 // HID handles stay on the thread that opened them.
+                #[cfg(not(feature = "mock-mixer"))]
                 match Client::open() {
                     Ok(client) => {
                         let _ = ready.send(Ok(client.serial().to_owned()));

@@ -10,6 +10,7 @@ recipes and `cargo xtask help` lists the underlying commands.
 | --- | --- |
 | `just setup` | One-time setup: the mixer's Rust target, cargo-zigbuild, a zig check |
 | `just app` / `just desktop` | Run / build the desktop app with signed mixer downloads. No mixer cross-build is needed. |
+| `just app-mock` | Run the desktop app against a simulated mixer, with no hardware. See [below](#without-a-mixer). |
 | `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run / build an app with the optional embedded payload. |
 | `just mixer-build` | Cross-build the mixer runtime into `target/mixer` |
 | `just test` | Workspace tests, then Clippy with warnings as errors |
@@ -33,6 +34,29 @@ python3 .github/scripts/update_history.py --published-json /path/to/releases.jso
 cd docs
 npm exec -- vitepress dev
 ```
+
+## Without a mixer
+
+`just app-mock` runs a development build of the app with the `mock-mixer`
+feature, which swaps USB 1 for a simulated mixer inside the app process. The
+app, its validation and its `api/v1` requests are the real ones.
+
+- It starts from the same demo setup every time. Settings and presets last until
+  the app quits, and Disconnect keeps them.
+- Meters are generated, and move with the controls, but no audio exists. The
+  channel editor labels its live readings "Simulated", and a simulated xrun
+  appears in the diagnostics events about every 47 seconds.
+- `RC2FX_MOCK_SILENT=1` silences every channel, to see what the app costs with
+  nothing to show.
+- It never opens USB, so a real mixer plugged in is left alone. The installer is
+  off, because it finds mixers on USB by itself, and SSH shows as unsupported.
+
+`just desktop-mock` builds the same thing without debug information, as
+`target/mock/rc2fx`, for copying to another computer with the same operating
+system.
+
+A release build with this feature does not compile. `RC2FX_DEV_PAGE` works with
+it, for example `RC2FX_DEV_PAGE=channel:mic\ 4:eq just app-mock`.
 
 ## On the mixer over SSH
 

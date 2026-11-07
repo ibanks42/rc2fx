@@ -189,6 +189,10 @@ pub(crate) struct Model {
     pub finished: bool,
     /// The finished run, for showing what it did.
     pub last: Option<Run>,
+    /// When the flash of the last finished run was sent. The app carries it to
+    /// the next installer, so a run that finished is not picked up as an
+    /// update in progress.
+    pub settled_flash: Option<u64>,
     last_poll: Option<Instant>,
 }
 
@@ -225,6 +229,7 @@ impl Model {
             error: String::new(),
             finished: false,
             last: None,
+            settled_flash: None,
             last_poll: None,
         }
     }
@@ -387,7 +392,9 @@ impl Model {
             .as_ref()
             .and_then(|s| s.saved.last_command())
             .is_some_and(|c| {
-                c.command == "flash" && now_unix().saturating_sub(c.at_unix) < UPDATE_WINDOW
+                c.command == "flash"
+                    && now_unix().saturating_sub(c.at_unix) < UPDATE_WINDOW
+                    && self.settled_flash.is_none_or(|settled| c.at_unix > settled)
             })
     }
 
@@ -872,6 +879,13 @@ impl Model {
             let Some(&step) = STEPS.get(run.index) else {
                 self.finished = true;
                 self.last = self.run.take();
+                self.settled_flash = self
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.saved.last_command())
+                    .filter(|c| c.command == "flash")
+                    .map(|c| c.at_unix)
+                    .or(self.settled_flash);
                 return None;
             };
             if self.satisfied(step) {
@@ -1064,11 +1078,13 @@ impl Model {
                     self.choice = Some((p.channel.clone(), p.version.clone()));
                 }
                 // Opened during an update: wait for what was flashed. Only
-                // on opening, so a finished update never comes back.
+                // on opening, so a finished update never comes back. Stock
+                // firmware back in normal mode has nothing left to wait for.
                 if first
                     && self.run.is_none()
                     && self.recently_flashed()
                     && let Some(p) = self.prepared()
+                    && !(p.stock && self.usb_one(false).is_some())
                 {
                     self.stock = p.stock;
                     self.run = Some(Run {
@@ -1853,6 +1869,72 @@ mod tests {
         assert!(m.needs_confirmation());
         assert_eq!(m.state(Step::Backup), StepState::Pending);
         assert_eq!(m.state(Step::Flash), StepState::Pending);
+    }
+
+    /// A status as it is just after flashing stock firmware.
+    fn after_stock_flash(usb: &[(&str, bool)]) -> Seen {
+        let mut s = status(usb, absent(), true, false);
+        s.status.saved.prepared.as_mut().unwrap().stock = true;
+        s.status.saved.commands.push(CommandRecord {
+            command: "flash".into(),
+            at_unix: now_unix() - 60,
+            ..Default::default()
+        });
+        s
+    }
+
+    /// Opens a new installer on `s`, as `open_installer` does, with the
+    /// firmware check already answered.
+    fn reopen(settled_flash: Option<u64>, s: Seen) -> Model {
+        let mut m = model(status(&[], absent(), false, false));
+        m.status = None;
+        m.settled_flash = settled_flash;
+        let poll = m.probe();
+        report(&mut m, poll, s);
+        m
+    }
+
+    #[test]
+    fn reopening_after_a_finished_stock_run_starts_clean() {
+        // Opened while the mixer restarts: the run is picked up and finishes.
+        let mut m = reopen(None, after_stock_flash(&[]));
+        assert!(m.stock && m.run.is_some(), "an update in progress resumes");
+        let poll = m.probe();
+        report(&mut m, poll, after_stock_flash(&[("GV1", false)]));
+        assert!(m.finished && m.run.is_none());
+        // Left, then opened again, even with the mixer restarting once more.
+        for usb in [&[][..], &[("GV1", false)][..]] {
+            let m = reopen(m.settled_flash, after_stock_flash(usb));
+            assert!(!m.stock, "RC2FX firmware is selected again");
+            assert!(m.run.is_none() && !m.finished && m.last.is_none());
+            assert_eq!(m.state(Step::Flash), StepState::Pending);
+        }
+    }
+
+    #[test]
+    fn a_restarted_app_does_not_bring_back_a_finished_stock_run() {
+        let m = reopen(None, after_stock_flash(&[("GV1", false)]));
+        assert!(!m.stock);
+        assert!(m.run.is_none() && !m.finished && m.last.is_none());
+    }
+
+    #[test]
+    fn a_finished_run_stays_finished_after_install_again() {
+        let mut m = reopen(None, after_stock_flash(&[]));
+        let poll = m.probe();
+        report(&mut m, poll, after_stock_flash(&[("GV1", false)]));
+        m.start_over();
+        assert!(m.stock, "Install again keeps the chosen mode");
+        let m = reopen(m.settled_flash, after_stock_flash(&[]));
+        assert!(!m.stock && m.run.is_none());
+    }
+
+    #[test]
+    fn a_newer_flash_still_resumes_after_an_older_one_finished() {
+        let s = after_stock_flash(&[]);
+        let older = s.status.saved.last_command().unwrap().at_unix - 1;
+        let m = reopen(Some(older), s);
+        assert!(m.stock && m.run.is_some());
     }
 
     #[test]

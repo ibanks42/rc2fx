@@ -1,0 +1,15 @@
+[package]
+name = "rc2fx-supervisor"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Watches the RC2FX mixer and controller, and hands audio back to stock when either fails"
+
+# Keep this list short. Everything else on the mixer can fail because this
+# process is there to recover from it, so it shares no code with the controller.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3"

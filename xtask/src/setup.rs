@@ -89,6 +89,8 @@ pub fn build_mixer() -> Result {
         "--bin",
         "rc2fxd",
     ]))?;
+    println!("Building rc2fx-supervisor");
+    crate::run(zigbuild().args(["-p", "rc2fx-supervisor", "--bin", "rc2fx-supervisor"]))?;
     println!("Building firmware profile checker");
     crate::run(zigbuild().args(["-p", "rc2fx-firmware", "--bin", "rc2fx-firmware"]))?;
     let gui = build_gui_module(&root, &target_dir)?;
@@ -105,6 +107,7 @@ pub fn build_mixer() -> Result {
     for (name, shared) in [
         ("librc2fx_native.so", true),
         ("rc2fxd", false),
+        ("rc2fx-supervisor", false),
         ("rc2fx-firmware", false),
     ] {
         let file = out.join(name);

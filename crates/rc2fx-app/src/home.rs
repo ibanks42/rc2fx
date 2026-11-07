@@ -2,6 +2,7 @@
 //! click from each channel's editor.
 
 use super::*;
+use level_bar::Bar;
 use live_line::{LineState, LineStyle};
 
 impl Rc2FxApp {
@@ -83,15 +84,22 @@ impl Rc2FxApp {
         )
     }
 
-    /// What Home shows that can change with time alone: the headline and each
-    /// processed path's freshness. The poll compares it every tick, so Home
-    /// goes stale on its own when meters stop arriving (see `poll`).
+    /// What Home shows that can change with time alone: the headline, each
+    /// processed path's freshness and each reported path's, for the overview's
+    /// bars. The poll compares it every tick, so Home goes stale on its own
+    /// when meters stop arriving (see `poll`).
     pub(super) fn home_key(&self) -> (String, String, Vec<bool>) {
         let processed = self.processed_indexes();
         let (headline, detail) = self.home_headline(&processed);
         let fresh = processed
             .iter()
-            .map(|&i| self.fresh_meter_for(&self.session.draft[i].id).is_some())
+            .map(|&i| self.session.draft[i].id.as_str())
+            .chain(
+                self.meter
+                    .iter()
+                    .flat_map(|m| m.targets.iter().map(|t| t.id.as_str())),
+            )
+            .map(|id| self.fresh_meter_for(id).is_some())
             .collect();
         (headline, detail, fresh)
     }
@@ -104,6 +112,35 @@ impl Rc2FxApp {
         self.session.connected && !self.settings_open && !self.installer_page
     }
 
+    /// Whether the overlay can draw this indicator.
+    fn can_animate(&self, source: &line_overlay::Source) -> bool {
+        line_overlay::enabled()
+            && self.animated_page()
+            && !self.reduced_motion
+            && !line_overlay::latched(&self.line_slots, source)
+    }
+
+    /// Whether the overlay is drawing every overview bar each frame, so a
+    /// reading needs no redraw of the app. A hidden window pauses it.
+    pub(super) fn bars_animate(&self, window: &Window) -> bool {
+        line_overlay::enabled()
+            && !self.reduced_motion
+            && window.is_visible()
+            && !line_overlay::any_latched(&self.line_slots)
+    }
+
+    /// One overview bar: claimed for the overlay like `indicator`, otherwise
+    /// drawn still here.
+    fn level_bar(&self, target_id: &str, bar: Bar) -> AnyElement {
+        let level = self.overview_level(target_id);
+        let source = line_overlay::Source::Path(target_id.to_owned());
+        if level.is_some() && self.can_animate(&source) {
+            return line_overlay::claim(&self.line_slots, source, line_overlay::Shape::Bar(bar))
+                .into_any_element();
+        }
+        level_bar::still(bar, level).into_any_element()
+    }
+
     /// One level indicator: claimed for the animated overlay when it can
     /// animate, otherwise drawn still here (never both; line_overlay.rs).
     pub(super) fn indicator(
@@ -112,13 +149,9 @@ impl Rc2FxApp {
         fresh: bool,
         style: LineStyle,
     ) -> AnyElement {
-        if line_overlay::enabled()
-            && self.animated_page()
-            && !self.reduced_motion
-            && fresh
-            && !line_overlay::latched(&self.line_slots, &source)
-        {
-            return line_overlay::claim(&self.line_slots, source, style).into_any_element();
+        if fresh && self.can_animate(&source) {
+            return line_overlay::claim(&self.line_slots, source, line_overlay::Shape::Line(style))
+                .into_any_element();
         }
         let line_overlay::Source::Path(id) = &source;
         let history = self.levels.get(id);
@@ -154,7 +187,7 @@ impl Rc2FxApp {
 
     /// A channel's level for the overview, 0..1, or None without a fresh
     /// reading.
-    fn overview_level(&self, target_id: &str) -> Option<f32> {
+    pub(super) fn overview_level(&self, target_id: &str) -> Option<f32> {
         self.fresh_meter_for(target_id)?;
         Some(live_line::level_of(
             self.levels.get(target_id),
@@ -231,7 +264,9 @@ impl Rc2FxApp {
                     .pt(px(14.))
                     .pb(px(12.))
                     .px(px(8.))
-                    .child(vertical_meter(self.overview_level(&source.target_id)))
+                    .child(vertical_meter(
+                        self.level_bar(&source.target_id, Bar::Vertical),
+                    ))
                     .child(card_name(target_layout::display_name(&source.name), on).mt(px(4.)))
                     .child(
                         div()
@@ -272,7 +307,9 @@ impl Rc2FxApp {
                         .items_center()
                         .gap(px(12.))
                         .child(card_name(self.target_name(target), on))
-                        .child(horizontal_meter(self.overview_level(&target.id))),
+                        .child(horizontal_meter(
+                            self.level_bar(&target.id, Bar::Horizontal),
+                        )),
                 )
                 .child(div().h_flex().child(chip_label(chip, on)))
                 .on_click(
@@ -392,22 +429,8 @@ fn chip_label(text: String, processed: bool) -> Div {
         .child(text)
 }
 
-/// A fader's level: a tall track filled from the bottom.
-fn vertical_meter(level: Option<f32>) -> Div {
-    let fill = div()
-        .absolute()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .rounded(px(6.));
-    let fill = match level {
-        Some(level) => fill.h(relative(level.max(0.02))).bg(linear_gradient(
-            0.,
-            linear_color_stop(rgb(ACCENT), 0.),
-            linear_color_stop(rgb(VIOLET), 1.),
-        )),
-        None => fill.h(px(6.)).bg(rgb(ui::DIM)),
-    };
+/// A fader's level: a tall track around its bar.
+fn vertical_meter(bar: AnyElement) -> Div {
     div()
         .relative()
         .w(px(10.))
@@ -415,16 +438,11 @@ fn vertical_meter(level: Option<f32>) -> Div {
         .rounded(px(6.))
         .overflow_hidden()
         .bg(rgb(surface().sunken))
-        .child(fill)
+        .child(bar)
 }
 
-/// An output's level: a short bar filled from the left.
-fn horizontal_meter(level: Option<f32>) -> Div {
-    let fill = div().h_full().rounded(px(4.));
-    let fill = match level {
-        Some(level) => fill.w(relative(level.max(0.02))).bg(ui::gradient()),
-        None => fill.w(px(6.)).bg(rgb(ui::DIM)),
-    };
+/// An output's level: a short track around its bar.
+fn horizontal_meter(bar: AnyElement) -> Div {
     div()
         .flex_1()
         .min_w(px(40.))
@@ -432,7 +450,7 @@ fn horizontal_meter(level: Option<f32>) -> Div {
         .rounded(px(4.))
         .overflow_hidden()
         .bg(rgb(surface().sunken))
-        .child(fill)
+        .child(bar)
 }
 
 #[cfg(test)]

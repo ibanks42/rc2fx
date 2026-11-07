@@ -14,6 +14,8 @@ path = "src/main.rs"
 default = []
 # Optional offline payload. Normal builds download authenticated mixer releases.
 embedded = ["rc2fx-installer/embedded"]
+# Run against a simulated mixer (`just app-mock`). Development builds only.
+mock-mixer = ["rc2fx-transport/mock-mixer"]
 
 [dependencies]
 gpui-kit = "=0.8.0"

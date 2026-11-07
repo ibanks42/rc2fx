@@ -247,6 +247,7 @@ impl Mixer {
         };
         let library = read("librc2fx_native.so")?;
         let controller = read("rc2fxd")?;
+        let supervisor = read("rc2fx-supervisor")?;
         let profile_checker = read("rc2fx-firmware")?;
         let gui_module = read(crate::setup::GUI_MODULE)?;
         let recorder = read(crate::setup::JACKERR_MODULE)?;
@@ -267,10 +268,12 @@ impl Mixer {
         }
         let sums = read("SHA256SUMS")?;
         let expected = format!(
-            "{}  librc2fx_native.so\n{}  rc2fxd\n{}  rc2fx-firmware\n{}  firmware-profiles.json\n\
+            "{}  librc2fx_native.so\n{}  rc2fxd\n{}  rc2fx-supervisor\n{}  rc2fx-firmware\n\
+             {}  firmware-profiles.json\n\
              {}  {}\n{}  {}\n{}  {}\n{}  mixer-release.json\n",
             sha256(&library),
             sha256(&controller),
+            sha256(&supervisor),
             sha256(&profile_checker),
             sha256(&profiles),
             sha256(&gui_module),
@@ -289,6 +292,7 @@ impl Mixer {
         for (name, bytes, mode) in [
             ("librc2fx_native.so", library, 0o600),
             ("rc2fxd", controller, 0o700),
+            ("rc2fx-supervisor", supervisor, 0o700),
             ("rc2fx-firmware", profile_checker, 0o700),
             ("firmware-profiles.json", profiles, 0o600),
             (crate::setup::GUI_MODULE, gui_module, 0o600),

@@ -9,7 +9,7 @@ shim=$root/usr/sbin/rc_audio_mixer
 gui_shim=$root/usr/sbin/rc_gui_juce
 previous=$opt/.rc2fx-previous
 pending=$opt/.rc2fx-install-pending
-files="librc2fx_native.so rc2fxd rc2fx-firmware firmware-profiles.json librc2fx_gui.so
+files="librc2fx_native.so rc2fxd rc2fx-supervisor rc2fx-firmware firmware-profiles.json librc2fx_gui.so
  librc2fx_jackerr.so rc2fx_jackerr_snapshot mixer-release.json
  SHA256SUMS rc2fx.sh rc2fx-shim.sh rc2fx-gui-shim.sh install.sh"
 # One rollback is kept, .rc2fx-previous. Earlier installs moved every older
@@ -90,7 +90,7 @@ for name in $files; do
  cp "$up/$name" "$stage/$name"
 done
 if test -f "$up/bundle.sha256"; then cp "$up/bundle.sha256" "$stage/bundle.sha256"; fi
-chmod 700 "$stage/rc2fxd" "$stage/rc2fx-firmware" "$stage/rc2fx_jackerr_snapshot" "$stage/rc2fx.sh" \
+chmod 700 "$stage/rc2fxd" "$stage/rc2fx-supervisor" "$stage/rc2fx-firmware" "$stage/rc2fx_jackerr_snapshot" "$stage/rc2fx.sh" \
  "$stage/rc2fx-shim.sh" "$stage/rc2fx-gui-shim.sh" "$stage/install.sh"
 (cd "$stage" && sha256sum -c SHA256SUMS >/dev/null)
 "$stage/rc2fx-firmware" check-device "$stage/firmware-profiles.json" "$root/usr/bin/rc_audio_mixer" "$root/usr/bin/audio-start.sh" >/dev/null

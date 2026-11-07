@@ -454,6 +454,13 @@ impl Rc2FxApp {
         if self.installer.is_some() {
             return;
         }
+        // The installer finds mixers on USB by itself, so it would act on a
+        // real one while the rest of this build shows the simulated one.
+        if cfg!(feature = "mock-mixer") {
+            self.message = "The installer is off while using the mock mixer.".into();
+            cx.notify();
+            return;
+        }
         let Some(work) = work_directory() else {
             self.message = "The installer has no folder for its downloads and backups. Set RC2FX_INSTALLER_WORK to one.".into();
             cx.notify();
@@ -478,6 +485,7 @@ impl Rc2FxApp {
         };
         installer.model.privileged = installer.access.allows_flashing();
         installer.model.bundled = self.bundled_mixer_software.clone();
+        installer.model.settled_flash = self.settled_flash;
         let first = installer.model.set_allow_duo(connection::remembered_duo());
         installer.send(first);
         self.installer = Some(installer);
@@ -501,9 +509,16 @@ impl Rc2FxApp {
         if self.installer.as_ref().is_some_and(Installer::busy) {
             return;
         }
-        self.installer = None;
+        self.discard_installer();
         self.installer_page = false;
         cx.notify();
+    }
+
+    /// Drop the installer, keeping only which flash has finished.
+    fn discard_installer(&mut self) {
+        if let Some(installer) = self.installer.take() {
+            self.settled_flash = installer.model.settled_flash;
+        }
     }
 
     /// Run a model event, then send any request it makes.
@@ -758,7 +773,7 @@ impl Rc2FxApp {
                 .as_ref()
                 .is_some_and(|i| !i.busy() && i.model.run.is_none())
             {
-                self.installer = None;
+                self.discard_installer();
             }
         } else {
             self.set_settings_open(false);
@@ -1009,9 +1024,6 @@ impl Rc2FxApp {
                         .child(self.mode_card(m, false, cx))
                         .child(self.mode_card(m, true, cx)),
                 );
-                if !m.stock {
-                    card = card.child(self.mixer_card(m, cx));
-                }
             } else if m.firmware_check == FirmwareCheck::Checking {
                 card = card.child(
                     div()
@@ -1042,7 +1054,9 @@ impl Rc2FxApp {
     }
 
     /// One way to flash the mixer, with its own release menu. Choosing a
-    /// release in either card also chooses that card.
+    /// release in either card also chooses that card. RC2FX's card holds the
+    /// mixer software too while it is chosen, so nothing inside that section
+    /// can change the choice.
     fn mode_card(&self, m: &Model, stock: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = m.stock == stock;
         let (title, detail) = match (stock, m.answering()) {
@@ -1063,6 +1077,7 @@ impl Rc2FxApp {
         let label = choice
             .map(|(channel, version)| format!("RØDE {version} {channel}"))
             .unwrap_or_else(|| "No release".into());
+        let mixer = (!stock && selected).then(|| self.mixer_software(m, cx));
         let app = cx.entity().downgrade();
         let menu = Button::new(if stock {
             "installer-release-stock"
@@ -1116,6 +1131,7 @@ impl Rc2FxApp {
             .child(div().font_semibold().child(title))
             .child(paragraph(detail, MUTED))
             .child(div().h_flex().pt_2().child(menu))
+            .children(mixer)
             .on_click(cx.listener(move |app, _, _, cx| {
                 app.installer_event(cx, |m| {
                     if m.stock != stock {
@@ -1128,7 +1144,7 @@ impl Rc2FxApp {
 
     /// The mixer software going into the firmware: what the mixer has, what
     /// it would get, and why there may be nothing to choose.
-    fn mixer_card(&self, m: &Model, cx: &mut Context<Self>) -> Div {
+    fn mixer_software(&self, m: &Model, cx: &mut Context<Self>) -> Div {
         let installed = m.installed.as_deref().unwrap_or("unknown");
         let detail = match &m.mixer {
             Some(mixer) => format!("Installed: {installed} · Installing: {}", mixer.version()),
@@ -1164,7 +1180,13 @@ impl Rc2FxApp {
                 }
                 menu
             });
-        let mut controls = div().h_flex().items_center().gap_2().pt_2().child(menu);
+        let mut controls = div()
+            .h_flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .pt_2()
+            .child(menu);
         match m.offers {
             Offers::Unchecked | Offers::Checking => {
                 controls = controls
@@ -1207,12 +1229,11 @@ impl Rc2FxApp {
         div()
             .v_flex()
             .gap_1()
-            .p_4()
-            .rounded_lg()
-            .border_1()
+            .mt_3()
+            .pt_3()
+            .border_t_1()
             .border_color(rgb(surface().line))
-            .bg(rgb(surface().raised))
-            .child(div().font_semibold().child("RC2FX mixer software"))
+            .child(div().font_semibold().child("Mixer software"))
             .child(paragraph(detail, MUTED))
             .child(controls)
             .when_some(m.mixer_note(), |card, note| {

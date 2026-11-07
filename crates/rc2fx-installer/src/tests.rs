@@ -244,6 +244,7 @@ fn write_runtime(root: &Path, catalog: &[u8]) {
     for n in [
         "librc2fx_native.so",
         "rc2fxd",
+        "rc2fx-supervisor",
         "rc2fx-firmware",
         "librc2fx_gui.so",
         "librc2fx_jackerr.so",
@@ -258,6 +259,7 @@ fn write_runtime(root: &Path, catalog: &[u8]) {
     for n in [
         "librc2fx_native.so",
         "rc2fxd",
+        "rc2fx-supervisor",
         "rc2fx-firmware",
         "firmware-profiles.json",
         "librc2fx_gui.so",
@@ -1460,6 +1462,7 @@ fn image_gets_rc2fx_autostart_and_settings_and_nothing_is_replaced() {
     .unwrap();
     assert_eq!(found["opt"].1, 0o755, "the stock image has no /opt");
     assert_eq!(found["opt/rc2fx/rc2fxd"].1, 0o700);
+    assert_eq!(found["opt/rc2fx/rc2fx-supervisor"].1, 0o700);
     assert_eq!(found["opt/rc2fx/firmware-profiles.json"].1, 0o600);
     // The installed release identity the device reports as its version.
     assert_eq!(found["opt/rc2fx/mixer-release.json"].1, 0o600);

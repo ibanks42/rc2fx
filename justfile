@@ -14,9 +14,17 @@ setup:
 app:
     cargo run --locked --release -p rc2fx-app
 
+# Run the desktop app against a simulated mixer: no hardware, development build only
+app-mock:
+    cargo run --locked -p rc2fx-app --features mock-mixer
+
 # Build the desktop app into target/release
 desktop:
     cargo build --locked --release -p rc2fx-app
+
+# Build the desktop app against a simulated mixer
+desktop-mock:
+    cargo build --locked --profile mock -p rc2fx-app --features mock-mixer
 
 # Build the desktop app and bundle it with its documentation into target/package
 package:
@@ -76,7 +84,9 @@ mixer-disable:
 # Tests and lints for the desktop and shared crates
 test: mixer-build
     cargo test --locked --workspace
+    cargo test --locked -p rc2fx-transport --features mock-mixer
     cargo clippy --locked --workspace --all-targets -- -D warnings
+    cargo clippy --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings
 
 # Tests of the mixer side: the native library, launcher scripts and C modules (Linux or macOS, with python3 and cc)
 test-mixer:

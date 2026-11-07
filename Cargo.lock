@@ -5795,6 +5795,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc2fx-supervisor"
+version = "0.1.3"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "rc2fx-suppression"
 version = "0.1.3"
 dependencies = [

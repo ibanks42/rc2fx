@@ -210,15 +210,20 @@ launched_mixer() {
 
 mixer_age() { echo $(( $(uptime_s) - $(start_time "$1") / $(getconf CLK_TCK) )); }
 
+# $2, when known, is the process's start time. A caller that is not its parent
+# needs it: the PID can have gone to another process since it last looked.
+alive_as() { alive "$1" && { test -z "${2:-}" || test "$(start_time "$1" 2>/dev/null)" = "$2"; }; }
+
 # No wait after the kill: a blocked reap once left stock audio paused. Zombies
 # are reaped by their parent.
 stop_owned() {
-  local target=$1
-  alive "$target" || return 0
+  local target=$1 started=${2:-}
+  alive_as "$target" "$started" || return 0
   kill -TERM "$target" 2>/dev/null || true
-  for ((n=0; n<50; n++)); do alive "$target" || return 0; sleep 0.1; done
+  for ((n=0; n<50; n++)); do alive_as "$target" "$started" || return 0; sleep 0.1; done
+  alive_as "$target" "$started" || return 0
   kill -KILL "$target" 2>/dev/null || true
-  for ((n=0; n<30; n++)); do alive "$target" || return 0; sleep 0.1; done
+  for ((n=0; n<30; n++)); do alive_as "$target" "$started" || return 0; sleep 0.1; done
   say "Process $target would not exit; power-cycle the mixer if audio does not return"
   return 1
 }
@@ -235,14 +240,16 @@ gadget_kept() {
 }
 
 # Ends the mixer so that the launcher restarts it. Unless $keep_usb is 1, the
-# HID node is retired first; a foreign owner refuses the restart.
+# HID node is retired first; a foreign owner refuses the restart. $mixer_start
+# is the mixer's start time, for a caller that is not its parent.
 keep_usb=0
+mixer_start=
 restart_mixer() {
   local mixer=$1; shift
   test "$keep_usb" = 1 || retire_usb_node "$mixer" "$@" || return 1
   local pid
   for pid in "$@"; do stop_owned "$pid" || true; done
-  stop_owned "$mixer"
+  stop_owned "$mixer" "$mixer_start"
 }
 
 # Waits up to $1 s for the launcher to start a mixer other than $2 and for
@@ -737,6 +744,37 @@ recorder_status_line() {
 }
 # ---- end of the JACK error recorder -----------------------------------------
 
+# What the supervisor starts rc2fxd with, into the caller's `controller` array.
+# GET api/v1/version reports the installed release manifest and the profile
+# launch() selected after check-device verified the stock mixer; a bundle
+# without the manifest reports its version as unknown. Developer SSH over USB 1
+# is handled by this script's developer-ssh.
+controller_arguments() {
+  controller=(--data "$data" --native-socket "$run/control.sock" --usb-socket "$run/usb.sock"
+    --ui-socket "$run/ui.sock" --developer-ssh "$home/rc2fx.sh")
+  if test -r "$show"; then controller+=(--stock-config "$show"); fi
+  if test -f "$home/mixer-release.json"; then controller+=(--release "$home/mixer-release.json"); fi
+  if test -n "$profile_id"; then
+    controller+=(--firmware-catalog "$home/firmware-profiles.json" --firmware-profile "$profile_id")
+  fi
+}
+
+# The supervisor catches its own panics and failures and exits 0 once it has
+# dealt with the mixer, even when it had to leave it running. Any other end is a
+# crash or a kill, with the mixer still injected and nothing watching it: go
+# back to stock from here, as the supervisor would have. $2 is its exit status.
+supervisor_lost() {
+  local mixer=$1 reason="Supervisor died with status $2; restoring stock audio" controllers
+  say "$reason" >> "$logs/rc2fx.log"
+  printf '%s\n' "$reason" > "$boot/stock"
+  # It left its controller behind, on the HID node.
+  controllers=$(pgrep -x rc2fxd || true)
+  # shellcheck disable=SC2086
+  restart_mixer "$mixer" $controllers >> "$logs/rc2fx.log" 2>&1 \
+    || say 'Leaving the mixer running without RC2FX control; rc2fx.sh start recovers it' >> "$logs/rc2fx.log"
+  (supervise_exit) >> "$logs/rc2fx.log" 2>&1
+}
+
 # Runs as the launcher's child in place of the stock executable, so it must
 # end in an exec of it: on any failure the stock mixer runs unchanged.
 launch() {
@@ -752,6 +790,8 @@ launch() {
   elif test -e "$boot/stock"; then why="$(cat "$boot/stock")"
   elif ! (cd "$home" && sha256sum -c SHA256SUMS > /dev/null 2>&1); then why="binaries in $home fail their checksums"
   elif ! selected=$("$home/rc2fx-firmware" check-device "$home/firmware-profiles.json" "$stock_mixer" /usr/bin/audio-start.sh 2>> "$logs/rc2fx.log"); then why='this firmware is not a supported profile'
+  # Nothing would watch the mixer without it, so prove it runs before injecting.
+  elif ! "$home/rc2fx-supervisor" --version > /dev/null 2>> "$logs/rc2fx.log"; then why='the supervisor cannot run'
   fi
   if test -n "$why"; then
     # Stock rebuilds the gadget, and a mixer that finds a live HID node before
@@ -778,6 +818,9 @@ launch() {
   fi
   printf '%s\n' "$home" > "$run/home"
   cp "$home/SHA256SUMS" "$run/bundle.sums"
+  # The supervisor's own copy: an install removes a RAM bundle, or replaces this
+  # one, while the supervisor it must then stop is still running.
+  cp "$home/rc2fx.sh" "$run/rc2fx.sh"
   # The mixer runs as this shell's child so that its exit status or signal
   # gets logged: the launcher records neither. No taskset: stock starts
   # unpinned and pins its own threads. RC2FX's diagnostics go to stderr.
@@ -787,6 +830,8 @@ launch() {
   # Explicit RAM-only measurement switch. Never inherit a caller's probe flag;
   # removal takes effect at the next mixer start, reboot clears the marker.
   local client_timing=0 gauges=0
+  local -a controller=()
+  controller_arguments
   test -f /run/rc2fx-client-timing && client_timing=1
   test -f /run/rc2fx-gauges && gauges=1
   env RC2FX_CLIENT_TIMING="$client_timing" RC2FX_GAUGES="$gauges" LD_AUDIT="$home/librc2fx_native.so" \
@@ -798,17 +843,30 @@ launch() {
     "$stock_mixer" "$@" 2>> "$run/mixer.log" &
   local mixer=$!
   printf '%s\n' "$mixer" > "$run/native.pid"
+  # The supervisor keeps this PID through setsid and env, so supervisor.pid is
+  # its own.
   setsid env RC2FX_DATA="$data" RC2FX_LOGS="$logs" \
-    RC2FX_FIRMWARE_PROFILE="$profile_id" RC2FX_STOCK_SHOW="$show" \
-    RC2FX_MIXER="$mixer $(start_time "$mixer")" \
-    /bin/bash "$home/rc2fx.sh" supervise < /dev/null >> "$logs/rc2fx.log" 2>&1 &
-  printf '%s\n' "$!" > "$run/supervisor.pid"
+    "$home/rc2fx-supervisor" --mixer "$mixer" --mixer-start "$(start_time "$mixer")" \
+    --script "$run/rc2fx.sh" --controller "$home/rc2fxd" --run "$run" --boot "$boot" \
+    -- "${controller[@]}" < /dev/null >> "$logs/rc2fx.log" 2>&1 &
+  local watcher=$!
+  printf '%s\n' "$watcher" > "$run/supervisor.pid"
   say "RC2FX mixer started (PID $mixer) from $home under the launcher" >> "$logs/rc2fx.log"
   # Whoever ends this shell ends the mixer.
   trap 'kill -TERM "$mixer" 2>/dev/null' TERM INT HUP
-  local status=0
-  wait "$mixer" || status=$?
-  while alive "$mixer"; do wait "$mixer" || status=$?; done
+  # Waits for whichever ends first. A trapped signal ends the wait with neither
+  # and leaves $ended unset.
+  local status=0 ended=
+  until test -n "${ended:-}"; do
+    status=0
+    wait -n -p ended "$mixer" "$watcher" || status=$?
+  done
+  if test "$ended" = "$watcher"; then
+    if test "$status" != 0 && alive "$mixer"; then supervisor_lost "$mixer" "$status"; fi
+    status=0
+    wait "$mixer" || status=$?
+    while alive "$mixer"; do wait "$mixer" || status=$?; done
+  fi
   say "Mixer exited with status $status$(test "$status" -le 128 || echo " (signal $((status - 128)))"); jackd now $(pgrep -x jackd | tr '\n' ' ')" >> "$logs/rc2fx.log"
   restore_rt_throttle
   exit "$status"
@@ -914,159 +972,32 @@ logs() {
   done
 }
 
-# RØDE pins about fifteen SCHED_OTHER threads of the mixer process to CPU 0
-# only (its main thread, HIDThread, UartRunThread, JUCE Timer, SysMonThread
-# and others). CPU 0 is where the RR5 suppression worker runs, and the audio
-# path waits on non-PI locks those threads hold: moving them to CPUs 1 and 3
-# removed the fader-triggered callback stalls (device test, 2026-11-01).
-# Only threads the mixer owns are touched, only SCHED_OTHER ones, and only
-# those whose affinity is exactly CPU 0; RT threads and any other affinity are
-# left alone. Races with a thread exiting are ignored.
-relocate_housekeeping() {
-  local pid=$1 proc=${RC2FX_PROC:-/proc} task tid comm moved='' names='' policy rest record text
-  local affinity_line=$'(^|\n)[ \t]*Cpus_allowed_list:[ \t]+([^ \t\n]*)'
-  local -a batch=() stat_fields=()
-  for task in "$proc/$pid"/task/*/; do
-    task=${task%/}
-    tid=${task##*/}
-    [[ "$tid" =~ ^[0-9]+$ ]] || continue
-    IFS= read -r comm 2>/dev/null < "$task/comm" || continue
-    case "$comm" in rc2fx*) continue;; esac
-    # One read of the whole file: procfs regenerates it on every read, and a
-    # per-line loop costs about 165 syscalls per thread against 3. The read
-    # returns nonzero at EOF as well, so an open that failed shows as no text.
-    text=
-    IFS= read -r -d '' text 2>/dev/null < "$task/status" || true
-    [[ "$text" =~ $affinity_line ]] || continue
-    test "${BASH_REMATCH[2]}" = 0 || continue
-    # Field 39 is the policy; strip up to the LAST ") " so a comm with spaces
-    # or a ')' does not shift the fields.
-    IFS= read -r record 2>/dev/null < "$task/stat" || continue
-    rest=${record##*) }
-    read -r -a stat_fields <<< "$rest"
-    policy=${stat_fields[38]:-}
-    test "$policy" = 0 || continue
-    taskset -p 0xa "$tid" >/dev/null 2>&1 || continue
-    batch+=("$comm")
-  done
-  moved=${#batch[@]}
-  if test "$moved" -gt 0; then
-    names=$(printf '%s;' "${batch[@]}")
-    say "Moved $moved RØDE housekeeping threads off CPU 0 (CPU 0 is the suppression worker's): ${names%;}" \
-      >> "$logs/rc2fx.log"
-  fi
-  return 0
-}
-
-# Started by launch beside the mixer it watches. Starts the controller once
+# rc2fx-supervisor (crates/rc2fx-supervisor) runs beside the
+# mixer and calls back here for the rare steps. It starts the controller once
 # the mixer opens its control socket, and ends the mixer so that the launcher
 # restarts it (stock, when it records a reason in $boot/stock) when the
 # controller exits, the mixer never becomes ready, or a stop is requested.
-supervise() {
-  # Globals, not locals: the EXIT trap runs cleanup after this function returns.
-  controller_pid='' tick=0
-  read -r native_pid native_start <<< "$RC2FX_MIXER"
-  cleanup() {
-    trap - EXIT INT TERM HUP
-    set +e
-    say 'Supervisor stopping'
-    test -z "$controller_pid" || stop_owned "$controller_pid"
-    {
-      tail -n 30 "$logs/rc2fx.log"
-      echo '--- controller'; tail -n 40 "$run/controller.log"
-      echo '--- mixer'; tail -n 40 "$run/mixer.log" | redact
-      echo '--- vendor'; tail -n 40 "$vendor_log" | redact
-      echo '--- kernel'; dmesg | tail -n 40
-    } > "$logs/last-exit.log" 2>&1
-    # Only this supervisor's own record: the next launch may have written its.
-    test "$(cat "$run/supervisor.pid" 2>/dev/null)" != "$$" || rm -f "$run/supervisor.pid"
-    sync
-  }
-  mixer_alive() {
-    local record rest
-    local -a fields=()
-    IFS= read -r record 2>/dev/null < "/proc/$native_pid/stat" || return 1
-    rest=${record##*) }; read -r -a fields <<< "$rest"
-    test "${fields[0]:-}" != Z && test "${fields[19]:-}" = "$native_start"
-  }
-  # Ends the mixer for the launcher to restart; $1 is the reason, recorded
-  # for stock when $2 is `stock`.
-  end_mixer() {
-    say "$1"
-    if test "${2:-}" = stock; then echo "$1" > "$boot/stock"; fi
-    if ! mixer_alive; then return 0; fi
-    # Only a restart into RC2FX asks to keep the gadget; stock rebuilds it.
-    keep_usb=0
-    if test "${2:-}" != stock && test -e "$run/keep-usb"; then keep_usb=1; fi
-    if ! restart_mixer "$native_pid" ${controller_pid:+"$controller_pid"}; then
-      say 'Leaving the mixer running without RC2FX control; stop it with rc2fx.sh stop'
-      return 1
-    fi
-    controller_pid=
-  }
-  trap cleanup EXIT INT TERM HUP
-  umask 077
-  mkdir -p -m 700 "$boot"
-  say "Supervising RC2FX mixer $native_pid from $home"
-  local stock=() ui=() versions=() help age count
-  test -r "$show" && stock=(--stock-config "$show")
-  # Older bundles remain valid USB-only controllers. Never turn an optional
-  # UI endpoint into an unknown-argument exit/audio fallback on upgrade.
-  help=$("$home/rc2fxd" --help) || help=
-  if grep -F -- '--ui-socket' >/dev/null <<< "$help"; then
-    ui=(--ui-socket "$run/ui.sock")
-  fi
-  # What GET api/v1/version reports: the installed release manifest and the
-  # profile launch() selected after check-device verified the stock mixer.
-  # A bundle without the manifest reports its version as unknown.
-  if grep -F -- '--release' >/dev/null <<< "$help"; then
-    test -f "$home/mixer-release.json" && versions+=(--release "$home/mixer-release.json")
-    test -n "$profile_id" && versions+=(--firmware-catalog "$home/firmware-profiles.json" --firmware-profile "$profile_id")
-  fi
-  # Developer SSH over USB 1, handled by this script's developer-ssh.
-  if grep -F -- '--developer-ssh' >/dev/null <<< "$help"; then
-    versions+=(--developer-ssh "$home/rc2fx.sh")
-  fi
-  while true; do
-    if ! mixer_alive; then
-      age=$(( $(uptime_s) - native_start / $(getconf CLK_TCK) ))
-      say "Mixer exited after $age s (its launch shell logs the status)"
-      # Two early exits in one boot: the launcher's next restart is stock.
-      if test "$age" -lt 120; then
-        echo "$(uptime_s)" >> "$boot/exits"
-        count=$(( $(wc -l < "$boot/exits") ))
-        if test "$count" -ge 2; then
-          echo "mixer exited early $count times this boot" > "$boot/stock"
-          say 'Falling back to stock audio for the rest of this boot'
-        fi
-      fi
-      break
-    fi
-    if test -e "$run/stop"; then end_mixer 'Stop requested' || true; break; fi
-    # A mixer that never opens its control socket would leave a blank screen.
-    if test -z "$controller_pid" && test "$tick" -ge 60 && ! test -S "$run/control.sock"; then
-      end_mixer 'Mixer not ready after 60 s; restoring stock audio' stock || true; break
-    fi
-    if test -z "$controller_pid" && test -S "$run/control.sock"; then
-      "$home/rc2fxd" --data "$data" --native-socket "$run/control.sock" --usb-socket "$run/usb.sock" "${ui[@]}" "${stock[@]}" "${versions[@]}" \
-        < /dev/null > "$run/controller.log" 2>&1 &
-      controller_pid=$!
-      say "Controller started (PID $controller_pid)"
-    fi
-    if test -n "$controller_pid" && ! alive "$controller_pid"; then
-      status=0; wait "$controller_pid" || status=$?
-      controller_pid=
-      end_mixer "Controller exited with status $status; restoring stock audio" stock || true; break
-    fi
-    # RØDE's CPU0-pinned housekeeping threads hold locks the audio path waits
-    # on; move them once the mixer has started its threads, then keep it so
-    # (a restart brings fresh, pinned ones back).
-    if mixer_alive && test "$tick" -ge 10 && test $(( (tick - 10) % 5 )) -eq 0; then
-      relocate_housekeeping "$native_pid" || true
-    fi
-    tick=$((tick + 1))
-    sleep 1
-  done
+
+# Ends a mixer for the supervisor: $1 is 1 to keep the USB gadget, then the
+# mixer, its start time and any controller.
+supervise_restart() {
+  keep_usb=$1 mixer_start=$3
+  restart_mixer "$2" "${@:4}"
+}
+
+# The supervisor's last step: $1 is a controller still running, if any.
+supervise_exit() {
+  set +e
+  say 'Supervisor stopping'
+  test -z "${1:-}" || stop_owned "$1"
+  {
+    tail -n 30 "$logs/rc2fx.log"
+    echo '--- controller'; tail -n 40 "$run/controller.log"
+    echo '--- mixer'; tail -n 40 "$run/mixer.log" | redact
+    echo '--- vendor'; tail -n 40 "$vendor_log" | redact
+    echo '--- kernel'; dmesg | tail -n 40
+  } > "$logs/last-exit.log" 2>&1
+  return 0
 }
 
 # Isolated GUI preview. This is deliberately NOT part of audio start/install,
@@ -1969,7 +1900,8 @@ case "${1:-}" in
   logs) logs ;;
   launch) shift; launch "$@" ;;
   usb-quiesce) usb_quiesce ;;
-  supervise) supervise ;;
+  supervise-restart) shift; supervise_restart "$@" ;;
+  supervise-exit) shift; supervise_exit "$@" ;;
   developer-ssh) shift; developer_ssh "$@" ;;
   *) sed -n '2,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

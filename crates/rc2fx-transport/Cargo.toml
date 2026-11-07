@@ -5,6 +5,12 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[features]
+default = []
+# A simulated mixer in place of USB 1, for working on the app without hardware.
+# Development builds only: a release build with it refuses to compile.
+mock-mixer = []
+
 [dependencies]
 rc2fx-installer = { path = "../rc2fx-installer" }
 rc2fx-core = { path = "../rc2fx-core" }

@@ -24,7 +24,7 @@ which the launcher finds first. The shim runs `rc2fx.sh launch`, which:
    checks that stock audio hasn't been requested during this boot;
 2. execs RØDE's `/usr/bin/rc_audio_mixer` with `librc2fx_native.so` loaded
    through `LD_AUDIT`;
-3. starts a supervisor, which starts the `rc2fxd` controller.
+3. starts `rc2fx-supervisor`, which starts the `rc2fxd` controller.
 
 While the engine runs, the launcher lifts the kernel's real-time CPU cap. When
 a core reaches that cap, the kernel suspends every real-time thread on it,
@@ -89,9 +89,16 @@ restarts it, and the shim starts it stock. An engine that exits early twice in
 one boot is handled the same way. A RAM run (`just mixer-run`) is gone after
 the next reboot.
 
+The supervisor is watched too. A panic inside it takes the same route to stock,
+and if it crashes or is killed, the shell that launched the engine records the
+stock request and ends the engine itself.
+
 This logic is in `xtask/mixer/rc2fx.sh`, under subcommands such as `launch`,
-`start`, `restart`, `stop`, `status`, `logs` and `supervise`. Change
-mixer-side behaviour in that script.
+`start`, `restart`, `stop`, `status` and `logs`. Change mixer-side behaviour in
+that script. The supervisor runs beside live audio for as long as the engine
+does and recovers from everything else failing, so it is its own small binary:
+it's in `crates/rc2fx-supervisor`, shares no code with the controller, and calls
+the script back for the rare steps, such as ending the engine.
 
 ## Settings flow
 

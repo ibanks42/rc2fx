@@ -1,5 +1,8 @@
 //! RC2FX control over USB 1, owned by the desktop process. It never starts a
 //! local service, uses the network or requires credentials.
+#[cfg(all(feature = "mock-mixer", not(debug_assertions)))]
+compile_error!("mock-mixer is for development builds; a release must talk to a real mixer");
+
 mod usb_control;
 use serde_json::{Value, json};
 use std::time::Duration;
