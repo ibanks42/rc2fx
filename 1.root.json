@@ -1,0 +1,71 @@
+{
+  "signed": {
+    "_type": "root",
+    "spec_version": "1.0.0",
+    "consistent_snapshot": false,
+    "version": 1,
+    "expires": "2029-11-04T15:48:28.583715004Z",
+    "keys": {
+      "dc6c7524015516bd6f5c9454c96a2ee7561ec4d24b7dcc6b435440074edccd4d": {
+        "keytype": "rsa",
+        "keyval": {
+          "public": "-----BEGIN PUBLIC KEY-----\nMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAtARKC5PQgsaocdsAwss7\nQOUHJk3xpPpIpLE86cFaHvHBoaSRgwSXGYHyELelNolPTgm1Op7V2Rcz3Dt9xe9a\ntdO/T0pLwOug5+lDnJv0v0KU3zx/op84e8rwakDDo4269QxZw7IVlHcwydz9eoGF\nEtAAvmAk4fc8GWolkrQ54sWRif1w9iKfVGpRjTYB2G9fiMt0ZHRvzOxw/AS8mI9m\nzfP23shox5H7u3dnyNWJTcy+wcB5dL8sTb6qs+9qvrWjkujn/65dq7to5HG3yIjy\npU1yESmSstSwqhUOo/G9rTTFCiYuCDf6E9ghKYlnIOqe1VGDWJ/YLG799bk85aVk\nsXXBHekttrVbKVlv3zZ+/HHUmD6xok31orGptR2ZiiwOKZ3Mu2GJ3Zm7ySPo5bbF\njJFLxtPyV+0H6kQ6xf8javBmqT6cmnsWxhkXKR9a0O5jdKzyK4L469cMlvmpQfFD\nmp6zaPOYAIkytLdgNlydz8UUFS0IvRUmctNCWAHygcC9AgMBAAE=\n-----END PUBLIC KEY-----"
+        },
+        "scheme": "rsassa-pss-sha256"
+      },
+      "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4": {
+        "keytype": "rsa",
+        "keyval": {
+          "public": "-----BEGIN PUBLIC KEY-----\nMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAw+t6ebMOXWU/xDN/Ej3Q\navYS1qAh77odY3PAfKJBG6Wix2GOABm13jJS1JkbrXe+O3w1/nrDwhEhw7NI/xT/\nqYjA/0xWVfEQdQMlub75WL7TCF9QvVxPi6rovG605UlYCAjONjSz+Cw9WJYprty4\nBZ0PhqagcwLt1eZhytUiOyRg++T/pysZrkhmjHsPnM6xzZIbuOzgGA+Px4g1REO2\nnU8QhuxrGg5NFJmhlyddI/y6f8BDEC5bQRjmT2WFBBrASqn51W1/C0bVj7jlqXBc\n0ZwX/crVOultUaDO92jZVHNuT1ofoU7k0Uzs61GOcjSdFgkxZ3BXcItjL7XGQM6r\n3ZX7ZMn7iA8kXoiK3ArfFykqAP8/JysYhrk54nyBpsKvswIrGpHu8G7SYhu9rwco\nOotikOo30gyXRNofDSSqOUPOZwy6N+R7exkzuiJpHmTyPHq9YaFt6d6BHdLI6RSE\nn+SwXO9pP8+k/ZHJS/rcj/zqBENw0LmkmY+dA8qQnkLfAgMBAAE=\n-----END PUBLIC KEY-----"
+        },
+        "scheme": "rsassa-pss-sha256"
+      },
+      "93a67b46b69f6e97ff9d7bc63c398f8a1f47adfeb1e2b0adc230e1bede7324af": {
+        "keytype": "rsa",
+        "keyval": {
+          "public": "-----BEGIN PUBLIC KEY-----\nMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAmhWckyiHh9MZEs8bSNIm\nc5AFH55z/m/xtksfIIbI5PwvkPw/sLL2HC2RYacjoO/kRwnF22sANTsc07h/duV4\nH6ZO7OY9R0U/3l/7wgSUuUycuLrYQYXYILPdC5N2UBl/D4BQOhLCQEb86z+A+8KA\nOBXgYat9Qvaamhvjecd8sx9m8ZCxTJ8U30Cl58DdqESAVZwDTA2RqgZ5R/GbHypQ\ntVJ6n8l/0OdciQxAqTraLw+Gclk+F2YxHA9q6lYKCSNZxeyxqUoZNclu6Bkj4KMv\nflpFpjZS6nhkmTw12PQRuqPCO6Z7sTV5U1aeYPxjoxfFPco/oTkeIE1+KTSlDLbS\n2hsAyeyIgCq4J2YV+iP6FvWfWmSd8fmv2BGI+lal31G+Z3Tg6zyT00YD0VS2gdQy\nNNHxPNiCuqupXuXE11F/VUF7E5hmImt7EeimaeCm7hHliixA2tJ+4wGPg7Z5leDK\nzgC7n5zjGsEjEiKhp5KFqLDTUDjNM7VFeeIzVJjdwSWNAgMBAAE=\n-----END PUBLIC KEY-----"
+        },
+        "scheme": "rsassa-pss-sha256"
+      },
+      "ca7756336605d676b743409be0c7750bc54a72a5562f033427c8fe9adb4387a7": {
+        "keytype": "rsa",
+        "keyval": {
+          "public": "-----BEGIN PUBLIC KEY-----\nMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAs5DhKK58fTlH2LZCML71\nUuVsm4d+HK8N/j0uSVkPGnlTK14kp24FYzybOFp95qoVXZOLKDbmDypCH7kL+Gy1\nTQU6TSqol9B7IybDFuawbccH+RMGYX/s8QUZP7tniRwpEeymdqxZ5nkaisKjNyAx\nn4zB0T0F28W6dVuk18i7dRK7ABbgmhMNtVwYlV2N2v74xftedX2d86rLvhEvXFH/\ni3q7zpB3stP7P2CFYThOz+80g0LYgzwDkyjOKHJs3iDKtAQ15IVVXM/nx7otn3qj\naAHDIUT0S4VvCrFHNHshDPIPQWzKQYI47e9gGk/uqrTDDHqnuXZePwM7thY68RFK\nwYgTzwCVg1mupwVMyvXlDNjm1gfXnXX8Xu2VFE/5lHlhzvAx9M9DSZS0MG+zsRRc\n5dCNTE9DsPFc0G83lqljaL6hW3BYzStujO4hz6iml3fZwJxJWV1Dta2D+gUoyfbl\nLBs4j61jLKQgwSOyrBVoE1pMOBRyBIaX11TmYEyZDih1AgMBAAE=\n-----END PUBLIC KEY-----"
+        },
+        "scheme": "rsassa-pss-sha256"
+      }
+    },
+    "roles": {
+      "targets": {
+        "keyids": [
+          "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4"
+        ],
+        "threshold": 1
+      },
+      "timestamp": {
+        "keyids": [
+          "ca7756336605d676b743409be0c7750bc54a72a5562f033427c8fe9adb4387a7"
+        ],
+        "threshold": 1
+      },
+      "snapshot": {
+        "keyids": [
+          "93a67b46b69f6e97ff9d7bc63c398f8a1f47adfeb1e2b0adc230e1bede7324af"
+        ],
+        "threshold": 1
+      },
+      "root": {
+        "keyids": [
+          "dc6c7524015516bd6f5c9454c96a2ee7561ec4d24b7dcc6b435440074edccd4d"
+        ],
+        "threshold": 1
+      }
+    }
+  },
+  "signatures": [
+    {
+      "keyid": "dc6c7524015516bd6f5c9454c96a2ee7561ec4d24b7dcc6b435440074edccd4d",
+      "sig": "9f1e6ac0a65a0811edf948ebb5c25d12ff6c87c7d6482c32d9fdc3ec643eeca4115aa6703e48a083a6af9162a8da827ffe0719d630436eef9ec5dd66e704db75fb7fa3fd87187f0b608a81b11a466e9457197e9ec92fb71990c2f3f373faa307eb4c947ed16935fdd4ed2efc16da991edd4ae5f58300c821a904f467e66f68f5d8c83c374ae6f660e051be6a9b8ebdf03f0d8f2baf79a9cd23a247dc46dcf069a2007d093add9141a6fd7daa2ed5249c1fd0ef3824c8283cbb94b492bd0f57806c5e3707017498a882dc74f898c4aa5f6af4776ce91a5b8509cf573f39f92d4961184561338120d90402e9ea88deb845f2007ad393bbda86559735abadb85a786898a76c7fe4a91aa07cb2d3edc8d02b42906ace3bdbf088792420dd5d7e1500fd6e80455c60af097a89cf0d043440948eecbfae6cb891278597664546f58605caa0df793d1c064421025e5ed894184165bdc01ac8066467ee1a4a10e263d0ffa9913061e6875da5097cead3d68a649995ff2f2a74aae7c6007d9cbef1a1e53c"
+    }
+  ]
+}

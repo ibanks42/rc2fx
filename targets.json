@@ -1,0 +1,55 @@
+{
+  "signed": {
+    "_type": "targets",
+    "spec_version": "1.0.0",
+    "version": 1794082929,
+    "expires": "2029-11-04T15:48:28.583715004Z",
+    "targets": {
+      "mixer-v0.1.2/firmware-profiles.json": {
+        "length": 6698,
+        "hashes": {
+          "sha256": "a2e9c1c1b5234bfba8e312e4bf67577ea9f2972a213839dc5afc8dd942343082"
+        },
+        "custom": {
+          "rc2fxCatalog": "0.1.2"
+        }
+      },
+      "mixer-v0.1.2/rc2fx-mixer-0.1.2.payload": {
+        "length": 11140290,
+        "hashes": {
+          "sha256": "5c7fc088c4f5c9f1b26a176cca80268a6cf5fbe19cffd1b21e085e5891b0a73b"
+        },
+        "custom": {
+          "rc2fxMixer": {
+            "firmwareProfiles": [
+              "rodecaster-pro-ii-1.7.6",
+              "rodecaster-pro-ii-1.7.7",
+              "rodecaster-duo-1.7.6",
+              "rodecaster-duo-1.7.7"
+            ],
+            "minimumAppVersion": "0.1.1",
+            "payloadFormat": 1,
+            "protocolVersion": 1,
+            "version": "0.1.2"
+          }
+        }
+      },
+      "mixer-v0.1.2/THIRD-PARTY-NOTICES.html": {
+        "length": 710519,
+        "hashes": {
+          "sha256": "963298ffbbdc0038fc484193e04c1378ac1e9afa464759057ca4dd6eb1a4d8b1"
+        }
+      }
+    },
+    "delegations": {
+      "keys": {},
+      "roles": []
+    }
+  },
+  "signatures": [
+    {
+      "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
+      "sig": "a23f06f8fa7308551bbac993cb30269197577c2d781e4b5e3c5ccbff28fab40c0fa45ac6278b4f06a950b30f1de287d833b5885580338ea543091176dfbd718b5d4f605f1cde1c857b4fe3371fa6691e718c3324da053e4a5288f441fce92fa8189405ed3100126907b16be9f2a6b3266a5fe7f77fd0b09ba7fd24c10ff038b3cc5cd4001c00e972b80c0def48a155a2c571ff19c756decaaad8d52fab704bbeb06373f363baf70916e2fae96f9a6658898ce9a10626dade20cb849de163f1b7cccf47760720bea91138bdb3389d2df84e9634817fd53e3be2ebc9ecdfe456e87d704104bdefafdc6182415d9c417efb2db6811a061aa09dce5c1d14231b306565640a6f3e32be5328ee2d33cf606e1792d676e30ffe48326a2881d2bcd6c211c7c2363c7957d782ab53cd358c292a2abfe9da7cd3cc662e7e32421f3b2cb4250ee3243f0a02fed19ed8399cdeabd136e56a6e0eb384f0e326a1e8815553223fc8c36fd012db17ae7269a2c9d221348d0eaca6cdd7ae7636444ad7afffdd0b86"
+    }
+  ]
+}
