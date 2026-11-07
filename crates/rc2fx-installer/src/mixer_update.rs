@@ -69,7 +69,9 @@ pub(crate) async fn refresh_catalog(repository: &MixerRepository) -> Result<()> 
     Ok(())
 }
 const TRUSTED_ROOT: &[u8] = include_bytes!("../../../config/mixer-update-root.json");
-const METADATA_URL: &str = "https://github.com/ibanks42/rc2fx/releases/download/mixer-metadata/";
+const METADATA_HOST: &str = "raw.githubusercontent.com";
+const TARGETS_HOST: &str = "github.com";
+const METADATA_URL: &str = "https://raw.githubusercontent.com/ibanks42/rc2fx/mixer-metadata/";
 const TARGETS_URL: &str = "https://github.com/ibanks42/rc2fx/releases/download/";
 
 /// An exact signed offer, safe to pass between the app and helper. The helper
@@ -81,6 +83,21 @@ pub struct MixerOffer {
     pub sha256: String,
     pub length: u64,
     pub metadata: MixerTarget,
+}
+
+/// The two addresses updates may come from, over plain HTTPS.
+fn check_repository_url(url: &Url, host: &str) -> Result<()> {
+    if url.scheme() != "https"
+        || url.host_str() != Some(host)
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(error(
+            "update repository URLs must use the official HTTPS hosts",
+        ));
+    }
+    Ok(())
 }
 
 pub fn configured() -> bool {
@@ -480,9 +497,8 @@ impl MixerRepository {
         targets_url: Url,
         datastore: &Path,
     ) -> Result<Self> {
-        if metadata_url.scheme() != "https" || targets_url.scheme() != "https" {
-            return Err(error("update repository URLs must use HTTPS"));
-        }
+        check_repository_url(&metadata_url, METADATA_HOST)?;
+        check_repository_url(&targets_url, TARGETS_HOST)?;
         std::fs::create_dir_all(datastore)?;
         let repository = RepositoryLoader::new(&trusted_root, metadata_url, targets_url)
             .datastore(datastore)

@@ -171,6 +171,10 @@ fn signing_output_verifies_and_preserves_the_installer_payload_contract() {
             .contains("root private keys")
     );
     assert!(!base.join("rejected").exists());
+    let mut late = arguments("rejected", "targets.pk8");
+    late[4] = "2099-01-01T00:00:00Z".into();
+    assert!(invoke(late).unwrap_err().contains("expire before"));
+    assert!(!base.join("rejected").exists());
     invoke(arguments("metadata", "targets.pk8")).unwrap();
     runtime.block_on(async {
         let root = fs::read(base.join("root.json")).unwrap();
@@ -186,6 +190,13 @@ fn signing_output_verifies_and_preserves_the_installer_payload_contract() {
         .load()
         .await
         .unwrap();
+        assert_eq!(
+            repository.targets().signed.expires,
+            repository.root().signed.expires,
+            "targets last as long as the root"
+        );
+        assert!(repository.timestamp().signed.expires < repository.targets().signed.expires);
+        assert!(repository.snapshot().signed.expires < repository.targets().signed.expires);
         let name = tough::TargetName::new("mixer-v1.2.3/rc2fx-mixer-1.2.3.payload").unwrap();
         let verified = repository
             .read_target(&name)

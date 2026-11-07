@@ -295,8 +295,14 @@ version files, release plan and mixer runtime) is kept for 90 days, because
 If you publish the draft by hand before **Release macOS** finishes, the
 release is public but incomplete until it does. **Release macOS** then adds
 what's missing without publishing it again or changing which release is
-latest. That needs immutable releases to stay off in the repository settings:
+latest. Don't do this once immutable releases are on in the repository settings:
 a published release that is immutable and incomplete can't be finished.
+
+Immutable releases can be turned on once mixer metadata has moved to its branch
+(see [Where metadata lives](mixer-releases.md#where-metadata-lives)). Nothing else
+writes to a published release: the app release stays an editable draft until
+**Release macOS** has attached its zip, and mixer payload releases are published
+once. Correcting either one takes a new version.
 
 **Release macOS** starts once the whole **Release** run ends, so a macOS runner
 shortage delays publication. The draft exists by then and nothing is lost. If

@@ -96,9 +96,11 @@ pub fn sign(args: &[&str]) -> Result {
         let root_bytes = fs::read(root_file).map_err(|e| e.to_string())?;
         let root: Signed<Root> = serde_json::from_slice(&root_bytes).map_err(|e| e.to_string())?;
         root.signed.verify_role(&root).map_err(|e| e.to_string())?;
-        let targets_expires = jiff::Timestamp::now() + std::time::Duration::from_secs(90 * 86400);
-        if root.signed.expires <= targets_expires || expires >= targets_expires {
-            return Err("root must outlive the 90-day targets authorization; discovery metadata must expire sooner".into());
+        // A release stays authorized for as long as the root trusts its key, so
+        // nothing needs signing with the targets key between releases.
+        let targets_expires = root.signed.expires;
+        if expires >= targets_expires {
+            return Err("discovery metadata must expire before the targets and root".into());
         }
         if root.signed.consistent_snapshot {
             return Err("GitHub release target paths require consistent_snapshot=false".into());

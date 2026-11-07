@@ -3,13 +3,38 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
+
+# Discovery metadata changes, so it lives on a branch; releases are immutable.
+BRANCH = "mixer-metadata"
+REMOTE = "https://github.com/ibanks42/rc2fx.git"
+RAW_URL = f"https://raw.githubusercontent.com/ibanks42/rc2fx/{BRANCH}/"
+SIGNED_ROLES = ["targets.json", "snapshot.json", "timestamp.json"]
+COMMITTER = "RC2FX release tooling"
+COMMITTER_EMAIL = "rc2fx-release@users.noreply.github.com"
+README = """# RC2FX mixer update metadata
+
+Signed TUF metadata for RC2FX mixer updates, read by the desktop app. This branch
+is written only by the release tooling; see docs/developer/mixer-releases.md on main.
+"""
+# Longer than raw.githubusercontent.com's five-minute cache.
+SERVED_WAIT = 420
+SERVED_POLL = 15
 
 
 def gh(*args):
     return subprocess.check_output(["gh", *map(str, args)], text=True)
+
+
+def git(*args, cwd=None):
+    # gh supplies the credential, so a token never appears in a URL or argument.
+    helper = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
+    return subprocess.check_output(["git", *helper, *map(str, args)], text=True, cwd=cwd)
 
 
 def state(tag):
@@ -47,21 +72,99 @@ def package_targets(package, metadata):
     return tag, version, files
 
 
+class Branch:
+    """A checkout of the discovery metadata branch in `path`; `tip` is None until it exists."""
+
+    def __init__(self, path, tip):
+        self.path, self.tip = path, tip
+
+    def version(self, name):
+        return json.loads((self.path / name).read_text())["signed"]["version"]
+
+
+def fetch_branch(path):
+    git("init", "-q", path)
+    git("remote", "add", "origin", REMOTE, cwd=path)
+    listed = git("ls-remote", "origin", f"refs/heads/{BRANCH}", cwd=path).split()
+    if not listed:
+        git("symbolic-ref", "HEAD", f"refs/heads/{BRANCH}", cwd=path)
+        return Branch(path, None)
+    tip = listed[0]
+    git("fetch", "-q", "--depth=1", "origin", tip, cwd=path)
+    git("checkout", "-q", "-B", BRANCH, tip, cwd=path)
+    return Branch(path, tip)
+
+
+def require_newer(branch, metadata, names):
+    """Refuse a stale signing artifact: it must not roll discovery back."""
+    if branch.tip is None:
+        return
+    for name in names:
+        new = json.loads((metadata / name).read_text())["signed"]["version"]
+        if new <= branch.version(name):
+            raise ValueError("Publication metadata version must increase")
+
+
+def read_raw(name):
+    request = urllib.request.Request(RAW_URL + name, headers={"Cache-Control": "no-cache"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+def verify_served(files):
+    """raw.githubusercontent.com caches each file for minutes; wait for the push to appear."""
+    deadline = time.monotonic() + SERVED_WAIT
+    waiting = list(files)
+    while True:
+        remaining = []
+        for file in waiting:
+            try:
+                served = read_raw(file.name)
+            except OSError:
+                served = None
+            if served != file.read_bytes():
+                remaining.append(file)
+        waiting = remaining
+        if not waiting:
+            return
+        if time.monotonic() >= deadline:
+            names = ", ".join(file.name for file in waiting)
+            raise ValueError(f"Pushed to {BRANCH}, but {RAW_URL} still does not serve the new {names}")
+        time.sleep(SERVED_POLL)
+
+
+def update_branch(branch, files, message):
+    """One commit, so the branch never holds a partial set; a concurrent writer fails the push."""
+    for file in files:
+        shutil.copyfile(file, branch.path / file.name)
+    readme = branch.path / "README.md"
+    if not readme.exists():
+        readme.write_text(README)
+    git("add", "--all", cwd=branch.path)
+    git("-c", f"user.name={COMMITTER}", "-c", f"user.email={COMMITTER_EMAIL}", "commit", "-q", "-m", message, cwd=branch.path)
+    lease = f"--force-with-lease=refs/heads/{BRANCH}:{branch.tip or ''}"
+    git("push", "-q", lease, "origin", f"HEAD:refs/heads/{BRANCH}", cwd=branch.path)
+    verify_served(files)
+
+
+def signed_json(metadata):
+    return sorted(metadata.glob("*.json"))
+
+
+def publish_discovery(metadata, version):
+    # Fetch again: payload publication takes minutes, and only a fresh tip can
+    # tell a renewal that ran meanwhile from a stale artifact.
+    with tempfile.TemporaryDirectory() as temporary:
+        branch = fetch_branch(Path(temporary))
+        require_newer(branch, metadata, SIGNED_ROLES)
+        update_branch(branch, signed_json(metadata), f"Publish mixer {version}")
+
+
 def publish(package, metadata):
     tag, version, files = package_targets(package, metadata)
-    metadata_tag = "mixer-metadata"
-    releases = json.loads(gh("api", "repos/{owner}/{repo}/releases", "--paginate", "--slurp"))
-    exists = any(r["tag_name"] == metadata_tag for page in releases for r in page)
-    if exists:
-        # Check before creating a payload release: a stale signing artifact
-        # must not roll the discovery service back after a renewal or release.
-        with tempfile.TemporaryDirectory() as temporary:
-            for name in ["targets.json", "snapshot.json", "timestamp.json"]:
-                gh("release", "download", metadata_tag, "--pattern", name, "--dir", temporary)
-                old = json.loads(Path(temporary, name).read_text())["signed"]["version"]
-                new = json.loads((metadata / name).read_text())["signed"]["version"]
-                if new <= old:
-                    raise ValueError("Publication metadata version must increase")
+    # Check before creating a payload release: it can't be replaced afterward.
+    with tempfile.TemporaryDirectory() as temporary:
+        require_newer(fetch_branch(Path(temporary)), metadata, SIGNED_ROLES)
     # A new version is required for any correction. Existing releases are not
     # silently overwritten, even when they are still drafts.
     gh("release", "create", tag, "--draft", "--latest=false", "--target", os.environ["RELEASE_COMMIT"],
@@ -72,64 +175,51 @@ def publish(package, metadata):
     if not release["isDraft"] or release["tagName"] != tag:
         raise ValueError("Release state changed before publication")
     gh("release", "edit", tag, "--draft=false", "--latest=false")
-    # Discovery metadata may be refreshed, but its authenticity comes from TUF.
-    # A transient mixture during upload fails verification; timestamp goes last.
-    if not exists:
-        gh("release", "create", metadata_tag, "--draft", "--latest=false", "--target", os.environ["RELEASE_COMMIT"],
-           "--title", "Signed mixer update metadata", "--notes", "Machine-readable TUF metadata for the RC2FX installer.")
-    ordered = sorted(p for p in metadata.glob("*.json") if p.name != "timestamp.json")
-    ordered.append(metadata / "timestamp.json")
-    for file in ordered:
-        gh("release", "upload", metadata_tag, file, "--clobber")
-        verify_upload(metadata_tag, [file])
-    gh("release", "edit", metadata_tag, "--draft=false", "--latest=false")
+    publish_discovery(metadata, version)
+
+
+def resume(package, metadata):
+    """Finish a publication that stopped after its payload release was published."""
+    tag, version, files = package_targets(package, metadata)
+    release = state(tag)
+    if release["isDraft"] or release["tagName"] != tag:
+        raise ValueError("Resuming requires a published payload release")
+    verify_upload(tag, files)
+    publish_discovery(metadata, version)
 
 
 def reauthorize(package, metadata):
     """Extend target authorization without changing any published target bytes."""
-    tag, _, files = package_targets(package, metadata)
+    tag, version, files = package_targets(package, metadata)
     release = state(tag)
-    discovery = state("mixer-metadata")
-    if release["isDraft"] or release["tagName"] != tag or discovery["isDraft"] or discovery["tagName"] != "mixer-metadata":
-        raise ValueError("Reauthorization requires published payload and metadata releases")
+    if release["isDraft"] or release["tagName"] != tag:
+        raise ValueError("Reauthorization requires a published payload release")
     with tempfile.TemporaryDirectory() as temporary:
-        for name in ["targets.json", "snapshot.json", "timestamp.json"]:
-            gh("release", "download", "mixer-metadata", "--pattern", name, "--dir", temporary)
-            old = json.loads(Path(temporary, name).read_text())["signed"]
-            new = json.loads((metadata / name).read_text())["signed"]
-            if new["version"] <= old["version"]:
-                raise ValueError("Reauthorization version must increase")
-            if name == "targets.json" and new["targets"] != old["targets"]:
-                raise ValueError("Reauthorization cannot change target identities, pins or compatibility")
-    verify_upload(tag, files)
-    # Only authorization changes. In particular, never overwrite a payload,
-    # catalog, notice or root during this operation.
-    for name in ["targets.json", "snapshot.json", "timestamp.json"]:
-        file = metadata / name
-        gh("release", "upload", "mixer-metadata", file, "--clobber")
-        verify_upload("mixer-metadata", [file])
+        branch = fetch_branch(Path(temporary))
+        if branch.tip is None:
+            raise ValueError("Reauthorization requires published metadata")
+        require_newer(branch, metadata, SIGNED_ROLES)
+        old = json.loads((branch.path / "targets.json").read_text())["signed"]
+        new = json.loads((metadata / "targets.json").read_text())["signed"]
+        if new["targets"] != old["targets"]:
+            raise ValueError("Reauthorization cannot change target identities, pins or compatibility")
+        verify_upload(tag, files)
+        # Only authorization changes. In particular, never overwrite a payload,
+        # catalog, notice or root during this operation.
+        update_branch(branch, [metadata / name for name in SIGNED_ROLES], f"Reauthorize mixer {version}")
 
 
 def refresh(metadata):
     """Publish renewed snapshot/timestamp only; never change targets or assets."""
-    tag = "mixer-metadata"
-    current = state(tag)
-    if current["isDraft"] or current["tagName"] != tag:
-        raise ValueError("Only published mixer metadata can be renewed")
     with tempfile.TemporaryDirectory() as temporary:
-        for name in ["targets.json", "snapshot.json", "timestamp.json"]:
-            gh("release", "download", tag, "--pattern", name, "--dir", temporary)
-        if Path(temporary, "targets.json").read_bytes() != (metadata / "targets.json").read_bytes():
+        branch = fetch_branch(Path(temporary))
+        if branch.tip is None:
+            raise ValueError("Only published mixer metadata can be renewed")
+        if (branch.path / "targets.json").read_bytes() != (metadata / "targets.json").read_bytes():
             raise ValueError("Targets changed since renewal; refresh from current metadata")
-        for name in ["snapshot.json", "timestamp.json"]:
-            old = json.loads(Path(temporary, name).read_text())["signed"]["version"]
-            new = json.loads((metadata / name).read_text())["signed"]["version"]
-            if new <= old:
-                raise ValueError("Renewal version must increase")
-    for name in ["snapshot.json", "timestamp.json"]:
-        file = metadata / name
-        gh("release", "upload", tag, file, "--clobber")
-        verify_upload(tag, [file])
+        names = ["snapshot.json", "timestamp.json"]
+        require_newer(branch, metadata, names)
+        update_branch(branch, [metadata / name for name in names], "Renew discovery metadata")
 
 
 if __name__ == "__main__":
@@ -137,5 +227,7 @@ if __name__ == "__main__":
         refresh(Path(sys.argv[2]))
     elif sys.argv[1] == "--reauthorize":
         reauthorize(Path(sys.argv[2]), Path(sys.argv[3]))
+    elif sys.argv[1] == "--resume":
+        resume(Path(sys.argv[2]), Path(sys.argv[3]))
     else:
         publish(Path(sys.argv[1]), Path(sys.argv[2]))

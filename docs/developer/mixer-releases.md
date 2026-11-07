@@ -112,9 +112,23 @@ signed release and its metadata are public.
    and timestamp metadata.
 4. Publication creates a draft `mixer-vVERSION` release, uploads its assets,
    downloads them again to verify their bytes, and publishes the payload first.
-   Only then does it publish discovery metadata under `mixer-metadata`.
-   Timestamp is uploaded last. Interrupted publication can fail closed;
-   clients never accept a partially matching metadata set.
+   Only then does it add one commit with all the metadata to the `mixer-metadata`
+   branch, then waits for the new files to be served (see
+   [Where metadata lives](#where-metadata-lives)). Interrupted publication fails
+   closed; clients never accept a partially matching metadata set.
+
+If publication stops after the payload release is published, that release can't be
+published again, so don't rerun the job. Finish it with the same signed files, which
+the job keeps as its `signed-mixer-metadata` artifact for seven days:
+
+```sh
+gh run download RUN_ID --name unsigned-mixer --dir PACKAGE
+gh run download RUN_ID --name signed-mixer-metadata --dir SIGNED_METADATA
+python3 .github/scripts/publish_mixer.py --resume PACKAGE SIGNED_METADATA
+```
+
+If it stops before then, delete the draft `mixer-vVERSION` release and dispatch
+**Mixer release** again.
 
 The local equivalents are `cargo xtask mixer-package NEW_DIRECTORY` and
 `cargo xtask mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY
@@ -122,10 +136,47 @@ TIMESTAMP_KEY`. Sequence numbers must increase; workflow sequences use UTC Unix
 seconds. `EXPIRES` is an RFC 3339 timestamp. Paths name files, never secret values.
 
 Payload corrections require a new mixer version. The publisher refuses to
-overwrite an existing mixer release. Discovery metadata is mutable because TUF
-signatures, expiry, and stored version numbers provide its trust boundary.
+overwrite an existing mixer release, and with immutable releases GitHub refuses
+too. Discovery metadata is mutable because TUF signatures, expiry, and stored
+version numbers provide its trust boundary.
 Retain every numbered root file so old clients can verify the complete rotation
 chain. Do not replace an old numbered root with different bytes.
+
+## Where metadata lives
+
+Payloads are GitHub release assets, published once and never changed. Metadata
+changes at every renewal, so it can't be a release once immutable releases are on.
+It lives on the orphan branch `mixer-metadata`, which holds only `N.root.json`,
+`targets.json`, `snapshot.json`, `timestamp.json` and a short README, and the app
+reads it from `https://raw.githubusercontent.com/ibanks42/rc2fx/mixer-metadata/`.
+That address and the payload address are compiled into the app, which refuses
+any other host.
+
+Apps older than 0.1.4 read the legacy `mixer-metadata` release instead. Nothing
+renews it any more, so its metadata expires within seven days of the last renewal.
+Those apps then show the mixer feed as unavailable, failing closed, until they are
+updated through the app-update notice, which doesn't depend on this metadata.
+
+Every update is one commit, so the branch never holds a partial set. A push names
+the tip it was built on (`--force-with-lease`), so a concurrent writer fails the
+push rather than being overwritten; nothing retries it. Run the command again.
+
+raw.githubusercontent.com caches each file for about five minutes. The publisher
+reads the files back and waits up to seven minutes for them to appear. If it gives
+up, the push has still happened, and its error names the files. Because the cache
+is per file, a client can briefly see a mix of old and new files. That fails TUF
+verification, so it reports no update rather than a wrong one, and clears within
+minutes.
+
+**Moving to the branch:** nothing needs creating by hand. The first **Mixer release**
+creates the branch when it doesn't exist. Run it right after merging this change and
+before releasing an app that reads the branch: until the branch exists, **Renew mixer
+metadata** fails at its fetch step and such an app finds no feed. Afterward, in the
+repository's branch rules,
+protect `mixer-metadata` against deletion while letting GitHub Actions and the
+maintainer push to it. Force pushes can stay blocked, since every update builds on
+the tip. Don't require pull requests or status checks on it: renewal pushes
+directly.
 
 ## If the targets key leaks
 
@@ -153,17 +204,25 @@ or with a new payload format version.
 
 ## Renewal and recovery
 
-Targets authorization lasts 90 days. Snapshot and timestamp metadata normally
-last seven days. **Renew mixer metadata** runs twice weekly after enablement. It
-verifies the old signed chain, preserves the exact targets bytes, and signs only
-new snapshot and timestamp metadata. It cannot authorize another binary or
-extend the targets/root expiry. It refuses a stale sequence, changed targets,
-or an expiry beyond either authorization.
+Targets are signed again at every mixer release, and otherwise last until the
+trust root expires (currently 2029-11-04), so nothing needs reauthorizing between
+releases. Snapshot and timestamp metadata normally last seven days. **Renew mixer
+metadata** runs twice weekly after enablement. It verifies the old signed chain,
+preserves the exact targets bytes, and signs only new snapshot and timestamp
+metadata. It cannot authorize another binary or extend the targets/root expiry. It
+refuses a stale sequence, changed targets, or an expiry beyond either authorization.
 
-Before the 90-day targets authorization ends, review and reauthorize the release
-using the targets key, or publish a new mixer release. A renewal failure must be
-investigated before metadata expires; clients otherwise stop offering downloads.
-Do not bypass expiry enforcement to recover service.
+A renewal failure must be investigated before metadata expires; clients otherwise
+stop offering downloads. Do not bypass expiry enforcement to recover service.
+
+Renewing the root is the one manual event. Well before it expires, sign a new root
+with the offline root key, as described under key rotation below, and ship an app
+build with it as the initial trust. Targets still end at the old root's expiry, so
+publish a new mixer release after that, or reauthorize the current one. Renewal
+stops a week before the expiry, because discovery metadata can't outlive either.
+
+`--reauthorize` is a repair tool, for replacing the targets signature on a published
+release without a new version, such as after a key rotation.
 
 To reauthorize, retain the original package directory, including its compatibility
 file. Run `cargo xtask mixer-sign` with that package, the current trusted root,
@@ -175,10 +234,10 @@ then run:
 python3 .github/scripts/publish_mixer.py --reauthorize PACKAGE SIGNED_METADATA
 ```
 
-This requires an already published mixer release and metadata release. It checks
+This requires an already published mixer release and metadata branch. It checks
 that the target paths, hashes and compatibility requirements are unchanged and
 downloads the existing assets to compare their bytes before writing anything.
-Only targets, snapshot and timestamp metadata are uploaded, in that order.
+Only targets, snapshot and timestamp change, in one commit.
 Changing a payload or compatibility requirement requires a new mixer release.
 Run this under the same exclusive publication lock as the release and renewal
 workflows; do not run concurrent metadata publishers.

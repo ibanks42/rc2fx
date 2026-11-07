@@ -461,3 +461,29 @@ fn trusted_root_rotates_only_with_a_valid_old_and_new_signature_chain() {
             assert!(fixture.load().await.is_err());
         });
 }
+
+#[test]
+fn updates_come_only_from_the_two_official_hosts() {
+    let metadata = Url::parse(METADATA_URL).unwrap();
+    let targets = Url::parse(TARGETS_URL).unwrap();
+    check_repository_url(&metadata, METADATA_HOST).unwrap();
+    check_repository_url(&targets, TARGETS_HOST).unwrap();
+    assert!(metadata.path().ends_with('/') && targets.path().ends_with('/'));
+    // tough joins file names onto the base, so the branch path must survive.
+    assert_eq!(
+        metadata.join("1.root.json").unwrap().as_str(),
+        "https://raw.githubusercontent.com/ibanks42/rc2fx/mixer-metadata/1.root.json"
+    );
+    assert!(check_repository_url(&metadata, TARGETS_HOST).is_err());
+    assert!(check_repository_url(&targets, METADATA_HOST).is_err());
+    for bad in [
+        "http://raw.githubusercontent.com/ibanks42/rc2fx/mixer-metadata/",
+        "https://raw.githubusercontent.com.example.com/x/",
+        "https://evil.raw.githubusercontent.com/x/",
+        "https://raw.githubusercontent.com:8443/x/",
+        "https://user@raw.githubusercontent.com/x/",
+    ] {
+        let url = Url::parse(bad).unwrap();
+        assert!(check_repository_url(&url, METADATA_HOST).is_err(), "{bad}");
+    }
+}

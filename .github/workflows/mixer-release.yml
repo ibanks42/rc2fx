@@ -78,6 +78,14 @@ jobs:
           sequence=$(date -u +%s)
           expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
           target/debug/xtask mixer-sign config/mixer-update-root.json target/mixer-release target/mixer-metadata "$sequence" "$expires" "$keydir/targets.pem" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
+      # Public signed files: if publication stops after the payload, --resume
+      # needs these, because a published release can't be published again.
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: signed-mixer-metadata
+          path: target/mixer-metadata/
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify uploads and publish payload before discovery metadata
         env:
           GH_TOKEN: ${{ github.token }}
