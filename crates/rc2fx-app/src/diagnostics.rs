@@ -89,13 +89,6 @@ impl Rc2FxApp {
         }
     }
 
-    /// Closes the events window with the main one, so the app can quit.
-    pub(super) fn close_events(&mut self, cx: &mut Context<Self>) {
-        if let Some(handle) = self.events_window.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
-        }
-    }
-
     /// The Telemetry section's header controls: when its counters start,
     /// the events window and the reset.
     pub(super) fn telemetry_aside(&self, cx: &mut Context<Self>) -> Div {

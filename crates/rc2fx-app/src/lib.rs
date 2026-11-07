@@ -324,14 +324,18 @@ impl Rc2FxApp {
         app.open_dev_page(window, cx);
         let view = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            view.update(cx, |app, cx| {
-                let close = app.confirm_close(window, cx);
-                if close {
-                    app.close_events(cx);
-                }
-                close
-            })
-            .unwrap_or(true)
+            request_quit(&view, window, cx);
+            false
+        });
+        // The menu bar's Quit (Cmd+Q) asks the same as the close button.
+        // Deferred: a menu or key action arrives while GPUI has the key
+        // window checked out, so updating it from inside the handler fails
+        // and the quit would be dropped.
+        let view = cx.weak_entity();
+        let main = window.window_handle();
+        App::on_action(cx, move |_: &Quit, cx| {
+            let view = view.clone();
+            cx.defer(move |cx| quit_from(main, &view, cx));
         });
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -392,12 +396,10 @@ impl Rc2FxApp {
                 cancel: Some("Keep editing"),
                 action: "Discard and close".into(),
             },
-            move |window, cx| {
-                let _ = discard.update(cx, |app, cx| {
-                    app.closing_prompt = false;
-                    app.close_events(cx);
-                });
-                window.remove_window();
+            move |_, cx| {
+                let _ = discard.update(cx, |app, _| app.closing_prompt = false);
+                // Quit with the window still open: see request_quit.
+                cx.quit();
             },
             move |_, cx| {
                 let _ = close.update(cx, |app, cx| {
@@ -1890,6 +1892,12 @@ pub fn run() {
             gpui_kit::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
             desk::set_appearance(connection::remembered_appearance(), cx);
+            // macOS shows this under the app's name in the menu bar.
+            #[cfg(target_os = "macos")]
+            {
+                cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+                cx.set_menus([Menu::new("RC2FX").items([MenuItem::action("Quit", Quit)])]);
+            }
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
@@ -1927,6 +1935,35 @@ pub fn run() {
             .expect("Open native RC2FX window");
             cx.activate(true);
         });
+}
+
+actions!(rc2fx, [Quit]);
+
+/// `request_quit` on the main window; quits outright if it is already gone.
+fn quit_from(main: AnyWindowHandle, view: &WeakEntity<Rc2FxApp>, cx: &mut App) {
+    if main
+        .update(cx, |_, window, cx| request_quit(view, window, cx))
+        .is_err()
+    {
+        cx.quit();
+    }
+}
+
+/// Quits once the main window's close checks pass (busy file dialog, unsaved
+/// edits); when they ask first, their prompt quits on its own.
+///
+/// It quits through `cx.quit()` and leaves the window to the shutdown instead
+/// of closing it here. Removing it first released the NSWindow a run-loop turn
+/// before `terminate:` ran, and AppKit's Touch Bar bookkeeping then threw on
+/// the released window during the display flush in between ("RC2FX quit
+/// unexpectedly").
+fn request_quit(view: &WeakEntity<Rc2FxApp>, window: &mut Window, cx: &mut App) {
+    let quit = view
+        .update(cx, |app, cx| app.confirm_close(window, cx))
+        .unwrap_or(true);
+    if quit {
+        cx.quit();
+    }
 }
 
 #[cfg(test)]
