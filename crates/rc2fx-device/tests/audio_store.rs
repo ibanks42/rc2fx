@@ -15,7 +15,6 @@ fn initial() -> Config {
             Target::new("send-chat", "USB chat output", TargetKind::Output, 2),
             Target::new("mic-1", "Mic", TargetKind::Mic, 1),
         ],
-
     }
 }
 
@@ -39,7 +38,6 @@ fn durable_effects_and_presets_publish_one_epoch_then_wait_for_all_audio_paths()
         .prepare_apply(ConfigUpdate {
             expected_revision: 1,
             targets: targets.clone(),
-
         })
         .unwrap();
     let saved = audio::save_and_publish(candidate, &mut control).unwrap();
@@ -106,7 +104,6 @@ fn active_structural_change_is_refused_before_disk_or_audio_mutation() {
         .prepare_apply(ConfigUpdate {
             expected_revision: 1,
             targets,
-
         })
         .unwrap();
     assert!(matches!(

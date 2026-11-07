@@ -200,13 +200,27 @@ pub fn render(sections: &[(String, String)]) -> Result<Document> {
     })
 }
 
-pub fn build_app(root: &Path, target: Option<&str>, document_path: &Path, embedded: bool) -> Result {
+pub fn build_app(
+    root: &Path,
+    target: Option<&str>,
+    document_path: &Path,
+    embedded: bool,
+) -> Result {
     let mut cargo = Command::new("cargo");
     cargo
         .current_dir(root)
         .env("RC2FX_LICENSES_JSON", document_path)
-        .args(["build", "--locked", "--release", "-p", "rc2fx-app", "--no-default-features"]);
-    if embedded { cargo.args(["--features", "embedded"]); }
+        .args([
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "rc2fx-app",
+            "--no-default-features",
+        ]);
+    if embedded {
+        cargo.args(["--features", "embedded"]);
+    }
     if let Some(target) = target {
         cargo.args(["--target", target]);
     }

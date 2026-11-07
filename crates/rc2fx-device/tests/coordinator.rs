@@ -16,7 +16,6 @@ fn config() -> Config {
         revision: 1,
         selected_targets: vec!["usb-main".into()],
         targets: vec![Target::new("usb-main", "USB", TargetKind::Playback, 2)],
-
     }
 }
 fn descriptor() -> RuntimeDescriptor {
@@ -48,7 +47,6 @@ async fn bounded_admission_cancelled_replies_and_shutdown_drain() {
             .apply(ConfigUpdate {
                 expected_revision: revision,
                 targets,
-
             })
             .unwrap();
         drop(abandoned);

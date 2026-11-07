@@ -3,9 +3,9 @@
 mod bench;
 mod elf;
 mod mixer;
-mod mixer_release;
-mod mixer_refresh;
 mod mixer_keys;
+mod mixer_refresh;
+mod mixer_release;
 mod package;
 mod setup;
 mod xruns;

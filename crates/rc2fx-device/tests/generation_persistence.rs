@@ -125,7 +125,6 @@ fn effects_presets_and_selection_preserve_generation_and_aborted_candidate() {
         .apply(ConfigUpdate {
             expected_revision: original.revision,
             targets,
-
         })
         .unwrap();
     assert_eq!(store.generation(), token);

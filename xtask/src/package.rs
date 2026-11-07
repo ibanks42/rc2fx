@@ -212,7 +212,11 @@ pub fn run_package(args: &[&str]) -> Result {
         "rc2fx"
     });
     let executable = read(&exe).map_err(|e| format!("{e}\nBuild the app or drop --skip-build."))?;
-    let mode = if embedded { b"RC2FX-PAYLOAD-MODE:embedded:1" } else { b"RC2FX-PAYLOAD-MODE:download:1" };
+    let mode = if embedded {
+        b"RC2FX-PAYLOAD-MODE:embedded:1"
+    } else {
+        b"RC2FX-PAYLOAD-MODE:download:1"
+    };
     if !executable.windows(mode.len()).any(|w| w == mode) {
         return Err("executable payload mode differs from packaging options; rebuild with the requested mode".into());
     }
@@ -356,7 +360,11 @@ mod tests {
         assert_eq!(files["rc2fx.exe"].data, exe);
         let (root, mut embedded) = fixture();
         embedded.extend_from_slice(&exe);
-        assert!(validate_executable(&root, &embedded, true).unwrap_err().contains("unexpectedly"));
+        assert!(
+            validate_executable(&root, &embedded, true)
+                .unwrap_err()
+                .contains("unexpectedly")
+        );
     }
 
     #[test]

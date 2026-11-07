@@ -31,17 +31,18 @@ This adds the mixer's Rust target (`aarch64-unknown-linux-gnu`), installs
 ## 2. Build and test
 
 ```sh
-just app           # build the mixer runtime, then run the desktop app
+just app           # run the desktop app (debug build; `just app-release` for release)
 just test          # workspace tests, then Clippy with warnings as errors
 just test-mixer    # mixer-side tests (Linux or macOS, with python3 and a C compiler)
 ```
 
-`just app`, `just test` and the other desktop recipes run `just mixer-build`
+`just app` needs no mixer cross-build: the app downloads signed mixer
+releases. `just test` and the `*-embedded` recipes run `just mixer-build`
 first. It cross-builds the mixer runtime into `target/mixer` on your computer
 and does not contact the mixer. Files that haven't changed are left in place,
 so repeat runs are quick.
 
-The desktop build embeds that runtime, the firmware catalog, the mixer release
+An embedded build embeds that runtime, the firmware catalog, the mixer release
 manifest and the installer scripts in the executable, and fails if any of them
 is missing or corrupt. `target/mixer` carries a copy of
 `config/mixer-release.json`, and the build fails if the two differ, so run

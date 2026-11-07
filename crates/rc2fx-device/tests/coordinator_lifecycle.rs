@@ -109,7 +109,6 @@ fn typed_lifecycle_rejects_stale_facts_and_blocks_all_mutations_while_starting()
             .apply(ConfigUpdate {
                 expected_revision: 7,
                 targets: config.targets.clone(),
-
             })
             .unwrap();
         let early_selection = handle

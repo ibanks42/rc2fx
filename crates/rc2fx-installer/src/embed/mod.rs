@@ -149,13 +149,19 @@ pub(crate) fn catalog_bytes() -> Result<Vec<u8>> {
 /// payload's runtime is ready, the way the app asks about a folder's payload.
 pub fn service(state: &[u8]) -> Service {
     if !PRESENT {
-        return match Source::Download.catalog().ok().and_then(|c|
-            c.profiles.into_iter().find(crate::firmware::supported).and_then(|p| p.runtime)) {
+        return match Source::Download.catalog().ok().and_then(|c| {
+            c.profiles
+                .into_iter()
+                .find(crate::firmware::supported)
+                .and_then(|p| p.runtime)
+        }) {
             Some(profile) => match runtime::readiness_error(state, &profile) {
                 why if why.is_empty() => Service::Ready,
                 detail => Service::Starting { detail },
             },
-            None => Service::Starting { detail: "No qualified runtime profile".into() },
+            None => Service::Starting {
+                detail: "No qualified runtime profile".into(),
+            },
         };
     }
     match PAYLOAD.get_or_init(load) {
@@ -193,7 +199,11 @@ pub fn bundled_release() -> Result<rc2fx_core::MixerRelease> {
 /// the profile is not in the bundled catalog, or nothing is supported for
 /// that model.
 pub fn newest_supported_firmware(firmware_profile: &str) -> Option<String> {
-    let source = if PRESENT { Source::Embedded } else { Source::Download };
+    let source = if PRESENT {
+        Source::Embedded
+    } else {
+        Source::Download
+    };
     let catalog = source.catalog().ok()?;
     newest_supported(&catalog, firmware_profile)
 }
@@ -207,8 +217,11 @@ fn newest_supported(catalog: &Catalog, firmware_profile: &str) -> Option<String>
     catalog
         .profiles
         .iter()
-        .filter(|p| &p.model == model && crate::firmware::supported(p)
-            && crate::firmware::app_supports(p, env!("CARGO_PKG_VERSION")))
+        .filter(|p| {
+            &p.model == model
+                && crate::firmware::supported(p)
+                && crate::firmware::app_supports(p, env!("CARGO_PKG_VERSION"))
+        })
         .map(|p| p.version.as_str())
         .filter(|v| rc2fx_core::compare_versions(v, v).is_some())
         .max_by(|a, b| rc2fx_core::compare_versions(a, b).expect("both versions are comparable"))
@@ -237,7 +250,9 @@ impl Source {
 
     pub(crate) fn bundle(&self) -> Result<Cow<'static, Bundle>> {
         match self {
-            Source::Download => Err(Error("Select and verify a mixer software download before preparing firmware".into())),
+            Source::Download => Err(Error(
+                "Select and verify a mixer software download before preparing firmware".into(),
+            )),
             Source::Folder(root) => Ok(Cow::Owned(runtime::bundle_from_disk(root)?)),
             Source::Embedded => embedded_bundle(),
             Source::Verified(payload) => Ok(Cow::Owned((*payload.bundle).clone())),

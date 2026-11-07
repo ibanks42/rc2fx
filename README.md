@@ -54,7 +54,7 @@ tools ([details](docs/developer/building.md)).
 git clone https://github.com/ibanks42/rc2fx
 cd rc2fx
 just setup            # once: the mixer's Rust target and cargo-zigbuild
-just app              # build the mixer runtime and run the desktop app
+just app              # run the desktop app (debug build)
 just test             # tests and Clippy
 ```
 

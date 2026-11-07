@@ -8,7 +8,6 @@ fn update(store: &Store) -> ConfigUpdate {
     ConfigUpdate {
         expected_revision: store.config().revision,
         targets,
-
     }
 }
 fn assert_no_temporary(path: &Path) {
@@ -183,7 +182,6 @@ fn failed_save_cancels_reserved_audio_before_any_publication() {
             revision: 1,
             selected_targets: vec!["send-chat".into()],
             targets: vec![Target::new("send-chat", "Output", TargetKind::Output, 2)],
-
         };
         let mut store = Store::open(temporary.path(), initial.clone()).unwrap();
         let mut group = Group::new(
@@ -199,7 +197,6 @@ fn failed_save_cancels_reserved_audio_before_any_publication() {
             .prepare_apply(ConfigUpdate {
                 expected_revision: 1,
                 targets,
-
             })
             .unwrap();
         let error = save_and_publish(candidate, &mut control).unwrap_err();

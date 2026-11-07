@@ -40,11 +40,7 @@ fn main() {
         }
         let mut providers: [Option<Box<dyn Suppression>>; 2] = [None, None];
         if target.kind == TargetKind::Mic && target.suppression.enabled {
-            let worker = Endpoint::new(
-                target.suppression.lookahead,
-                options,
-            )
-            .unwrap();
+            let worker = Endpoint::new(target.suppression.lookahead, options).unwrap();
             workers.push((id.clone(), worker.telemetry()));
             providers[0] = Some(Box::new(worker));
         }

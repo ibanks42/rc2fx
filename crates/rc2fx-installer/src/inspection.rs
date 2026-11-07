@@ -26,7 +26,11 @@ pub fn inspect_archive(model: Model, archive: &Path) -> Result<Inspection> {
 }
 
 /// Offline tooling can explicitly provide a catalog instead of downloading it.
-pub fn inspect_archive_with_catalog(model: Model, archive: &Path, catalog: &Catalog) -> Result<Inspection> {
+pub fn inspect_archive_with_catalog(
+    model: Model,
+    archive: &Path,
+    catalog: &Catalog,
+) -> Result<Inspection> {
     if std::fs::metadata(archive)?.len() > crate::MAX_DOWNLOAD {
         bail!("firmware exceeds size limit");
     }
@@ -120,7 +124,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("unknown.tar.gz");
         std::fs::write(&file, b"not firmware").unwrap();
-        let catalog = Catalog::parse(include_str!("../../../config/firmware-profiles.json")).unwrap();
+        let catalog =
+            Catalog::parse(include_str!("../../../config/firmware-profiles.json")).unwrap();
         for model in Model::ALL {
             assert!(
                 inspect_archive_with_catalog(model, &file, &catalog)

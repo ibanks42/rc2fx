@@ -1212,11 +1212,9 @@ impl Rc2FxApp {
                         .small()
                         .label("Check again")
                         .disabled(m.busy.is_some())
-                        .on_click(
-                            cx.listener(|app, _, _, cx| {
-                                app.installer_event(cx, Model::recheck_mixers)
-                            }),
-                        ),
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.installer_event(cx, Model::recheck_mixers)
+                        })),
                 );
             }
             Offers::Ready(_) => {}

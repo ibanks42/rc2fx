@@ -13,7 +13,6 @@ fn update(store: &Store) -> ConfigUpdate {
     ConfigUpdate {
         expected_revision: store.config().revision,
         targets: store.config().targets.clone(),
-
     }
 }
 fn disk(path: &std::path::Path) -> Vec<u8> {

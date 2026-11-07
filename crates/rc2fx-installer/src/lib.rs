@@ -11,15 +11,15 @@
 //! log of USB commands sent. Device commands are only sent when explicitly
 //! requested, and an unacknowledged command is never repeated automatically.
 
+mod anchor;
 pub mod app_update;
 pub mod control;
 pub mod embed;
-pub mod mixer_update;
-mod anchor;
 mod files;
 mod firmware;
 pub mod helper;
 pub mod inspection;
+pub mod mixer_update;
 pub mod platform;
 mod runtime;
 pub use runtime::service_from_state;
@@ -45,8 +45,8 @@ pub use embed::{
     newest_supported_firmware,
 };
 pub use rc2fx_core::{DeviceVersions, MixerRelease, compare_versions};
-pub use ssh::{PinnedHost, mixer_host_alias, pin_mixer_host_keys, ssh_key_path, ssh_public_key};
 pub use runtime::{Bundle, PAYLOAD_NAMES, bundle_files};
+pub use ssh::{PinnedHost, mixer_host_alias, pin_mixer_host_keys, ssh_key_path, ssh_public_key};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -398,7 +398,15 @@ impl Engine {
             Error("another RC2FX installer is working with this mixer folder".into())
         })?;
         if matches!(self.source, embed::Source::Download)
-            && matches!(request, Request::Releases | Request::Prepare { .. } | Request::Verify | Request::EnterUsbMode { .. } | Request::Flash { .. }) {
+            && matches!(
+                request,
+                Request::Releases
+                    | Request::Prepare { .. }
+                    | Request::Verify
+                    | Request::EnterUsbMode { .. }
+                    | Request::Flash { .. }
+            )
+        {
             let work = self.work.clone();
             self.step("firmware-check", "Checking signed firmware profiles");
             self.mixer_operation(async {
@@ -423,15 +431,25 @@ impl Engine {
                 })?;
                 Ok(Reply::MixerReleases(offers))
             }
-            Request::SelectMixer { offer, firmware_profile } => {
+            Request::SelectMixer {
+                offer,
+                firmware_profile,
+            } => {
                 self.step("mixer-download", "Downloading and verifying mixer software");
                 // An unsuccessful selection cannot leave an old payload silently selected.
                 self.source = embed::Source::Download;
                 let work = self.work.clone();
                 let payload = self.mixer_operation(async {
-                    mixer_update::official(&work).await?.accept_cached(&offer,
-                        env!("CARGO_PKG_VERSION"), rc2fx_core::MIXER_PROTOCOL_VERSION,
-                        &firmware_profile, &mixer_update::metadata_directory(&work)?.join("payloads")).await
+                    mixer_update::official(&work)
+                        .await?
+                        .accept_cached(
+                            &offer,
+                            env!("CARGO_PKG_VERSION"),
+                            rc2fx_core::MIXER_PROTOCOL_VERSION,
+                            &firmware_profile,
+                            &mixer_update::metadata_directory(&work)?.join("payloads"),
+                        )
+                        .await
                 })?;
                 let identity = embed::identity_of("download", &payload.bundle).map_err(Error)?;
                 self.source = embed::Source::Verified(payload);

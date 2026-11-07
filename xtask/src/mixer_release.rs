@@ -157,8 +157,13 @@ pub fn sign(args: &[&str]) -> Result {
         let bundle = Envelope::standalone(&bytes)?.bundle()?;
         let release = rc2fx_installer::MixerRelease::parse(&bundle["mixer-release.json"])
             .map_err(|e| e.to_string())?;
-        let compatibility: serde_json::Value = serde_json::from_slice(&fs::read(package.join("mixer-compatibility.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        let minimum_app = compatibility["minimumAppVersion"].as_str().ok_or("minimumAppVersion is required in mixer-compatibility.json")?;
+        let compatibility: serde_json::Value = serde_json::from_slice(
+            &fs::read(package.join("mixer-compatibility.json")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let minimum_app = compatibility["minimumAppVersion"]
+            .as_str()
+            .ok_or("minimumAppVersion is required in mixer-compatibility.json")?;
         let metadata = rc2fx_installer::mixer_update::MixerTarget::for_payload(
             &Envelope::standalone(&bytes)?,
             minimum_app,
@@ -176,7 +181,9 @@ pub fn sign(args: &[&str]) -> Result {
             .snapshot_expires(expires)
             .timestamp_version(sequence)
             .timestamp_expires(expires);
-        if fs::read(package.join("firmware-profiles.json")).map_err(|e| e.to_string())? != bundle["firmware-profiles.json"] {
+        if fs::read(package.join("firmware-profiles.json")).map_err(|e| e.to_string())?
+            != bundle["firmware-profiles.json"]
+        {
             return Err("standalone catalog differs from the mixer payload".into());
         }
         for (path, mixer) in [
@@ -193,8 +200,13 @@ pub fn sign(args: &[&str]) -> Result {
                     serde_json::to_value(&metadata).map_err(|e| e.to_string())?,
                 );
             }
-            if path.file_name().is_some_and(|n| n == "firmware-profiles.json") {
-                target.custom.insert("rc2fxCatalog".into(), release.version.clone().into());
+            if path
+                .file_name()
+                .is_some_and(|n| n == "firmware-profiles.json")
+            {
+                target
+                    .custom
+                    .insert("rc2fxCatalog".into(), release.version.clone().into());
             }
             let name = format!("mixer-v{}/{}", release.version, name.raw());
             editor.add_target(name, target).map_err(|e| e.to_string())?;
