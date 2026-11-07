@@ -35,6 +35,9 @@ jobs:
           cargo test --locked -p xtask mixer_
           cargo test --locked -p rc2fx-installer --lib
           cargo xtask mixer-build
+          # The Rust cache restores target/ from the previous run, and the
+          # packager refuses to write into an existing directory.
+          rm -rf target/mixer-release
           cargo xtask mixer-package target/mixer-release
       - uses: actions/upload-artifact@v7.0.2
         with:
@@ -55,11 +58,15 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+      - name: Remove release outputs restored from the Rust cache
+        # The signer refuses an existing metadata directory, and a cached
+        # payload directory must not be merged with the downloaded one.
+        run: rm -rf target/mixer-release target/mixer-metadata
       - uses: actions/download-artifact@v8.0.2
         with:
           name: unsigned-mixer
           path: target/mixer-release
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
       - name: Build signing tool without signing credentials
         run: cargo build --locked -p xtask
       - name: Sign verified release payload
