@@ -1652,6 +1652,16 @@ ssh_status() {
   else echo 'server stopped'; fi
 }
 
+# Leaves a record of which key gained root access. Best effort: the key is
+# already in place, so nothing here may fail the request.
+ssh_log_added() {
+  local print=
+  if command -v ssh-keygen > /dev/null; then
+    print=$(printf '%s\n' "$1" | ssh-keygen -lf - 2> /dev/null | cut -d' ' -f2) || print=
+  fi
+  { mkdir -p "$logs" && say "Developer SSH key added: ${print:-fingerprint unavailable}" >> "$logs/rc2fx.log"; } 2> /dev/null || true
+}
+
 developer_ssh() {
   local raw= key
   case "${1:-}" in
@@ -1667,6 +1677,7 @@ developer_ssh() {
         if test "${#raw}" -gt 512 || ! [[ $key =~ $ssh_key_pattern ]]; then echo 'invalid public key' >&2; return 2; fi
         ssh_paths_safe create || return
         ssh_write_keys "$key $ssh_marker" || { echo 'could not write authorized_keys' >&2; return 1; }
+        ssh_log_added "$key"
       else
         ssh_paths_safe || return
         ssh_filter > /dev/null || { echo 'cannot read authorized_keys' >&2; return 1; }

@@ -141,6 +141,38 @@ impl Session {
     }
 }
 
+/// Removes the socket this daemon bound, and nothing a successor put there.
+#[cfg(target_os = "linux")]
+struct SocketFile {
+    path: PathBuf,
+    identity: (u64, u64),
+}
+
+#[cfg(target_os = "linux")]
+impl SocketFile {
+    fn identity(path: &Path) -> io::Result<(u64, u64)> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path)?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+
+    fn bound(path: &Path) -> io::Result<Self> {
+        Ok(Self {
+            path: path.to_owned(),
+            identity: Self::identity(path)?,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for SocketFile {
+    fn drop(&mut self) {
+        if Self::identity(&self.path).is_ok_and(|identity| identity == self.identity) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub async fn serve(path: &Path, controller: Handle, options: Options) -> io::Result<()> {
     use std::os::{
@@ -151,15 +183,9 @@ pub async fn serve(path: &Path, controller: Handle, options: Options) -> io::Res
         },
     };
     use tokio::io::unix::AsyncFd;
-    struct SocketFile(PathBuf);
-    impl Drop for SocketFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
     // Do not unlink an existing listener (another daemon may own it).
     let socket = UnixDatagram::bind(path)?;
-    let _cleanup = SocketFile(path.to_owned());
+    let _cleanup = SocketFile::bound(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     socket.set_nonblocking(true)?;
     let socket = tokio::net::UnixDatagram::from_std(socket)?;
@@ -300,5 +326,29 @@ mod tests {
             s.accept(&f, now + Duration::from_secs(6)),
             Action::Reset(_)
         ));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod socket_file_tests {
+    use super::SocketFile;
+    use std::os::unix::net::UnixDatagram;
+
+    #[test]
+    fn only_the_socket_this_daemon_bound_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usb.sock");
+
+        let socket = UnixDatagram::bind(&path).unwrap();
+        drop(SocketFile::bound(&path).unwrap());
+        assert!(!path.exists(), "its own socket is removed");
+        drop(socket);
+
+        let _old = UnixDatagram::bind(&path).unwrap();
+        let cleanup = SocketFile::bound(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let _successor = UnixDatagram::bind(&path).unwrap();
+        drop(cleanup);
+        assert!(path.exists(), "a successor's socket stays");
     }
 }

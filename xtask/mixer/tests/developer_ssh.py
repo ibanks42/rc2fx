@@ -4,6 +4,7 @@ RC2FX_SSH_HOST_DIR and RC2FX_FIRST_BOOT point into a temporary directory.
 Nothing outside it is read or written."""
 
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -63,6 +64,21 @@ class DeveloperSsh(unittest.TestCase):
         self.assertIn(f"host {HOST}", out.stdout)
         self.assertNotIn("PRIVATE", out.stdout)
         self.assertRegex(out.stdout, r"server (running|stopped|unknown)")
+
+    def test_enable_logs_the_keys_fingerprint_and_never_the_key(self):
+        out = self.run_ssh("enable", stdin=KEY + "\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        log = (Path(self.env["RC2FX_LOGS"]) / "rc2fx.log").read_text()
+        print_ = "SHA256:QbAgxtEX0z3ZCUzJ86NO6a0PYcnvrkRmVh0+cMm05TY"
+        expected = print_ if shutil.which("ssh-keygen") else "fingerprint unavailable"
+        self.assertIn(f"Developer SSH key added: {expected}", log)
+        self.assertNotIn(KEY.split()[1], log)
+
+    def test_a_log_failure_does_not_fail_an_accepted_key(self):
+        Path(self.env["RC2FX_LOGS"]).write_text("a file where the folder should be")
+        out = self.run_ssh("enable", stdin=KEY + "\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.lines(), [f"{KEY} {MARK}"])
 
     def test_enable_adds_one_marked_line_and_keeps_every_other_line(self):
         original = f"{OTHER}\n# keep me\n"

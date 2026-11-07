@@ -351,6 +351,10 @@ static LOG: OnceLock<std::path::PathBuf> = OnceLock::new();
 static LOGGED: AtomicU64 = AtomicU64::new(0);
 /// At most this many lines per flush, so a storm cannot wear the flash.
 const LOG_BURST: usize = 200;
+/// The log lives on the mixer's flash and rotates only at a mixer start, so a
+/// fault that lasts for weeks must not fill it. Past this size events stay in
+/// the ring and in `snapshot`, but are no longer written.
+const LOG_CAP: u64 = 4 << 20;
 pub fn set_log(path: std::path::PathBuf) {
     let _ = LOG.set(path);
 }
@@ -365,6 +369,12 @@ pub fn flush_log() {
         return;
     };
     let last_seq = last.seq;
+    append_log(path, &events);
+    LOGGED.store(last_seq, Ordering::Relaxed);
+}
+/// Append `events`, unless the file has already reached [`LOG_CAP`]. The last
+/// flush to reach it says so, and a flush writes at most [`LOG_BURST`] lines.
+fn append_log(path: &std::path::Path, events: &[Snapshot]) {
     let Ok(file) = std::fs::OpenOptions::new()
         .append(true)
         .create(true)
@@ -372,6 +382,9 @@ pub fn flush_log() {
     else {
         return;
     };
+    if file.metadata().map_or(true, |info| info.len() >= LOG_CAP) {
+        return;
+    }
     let mut file = std::io::BufWriter::new(file);
     let now_mono = timing::monotonic();
     let now_wall = std::time::SystemTime::now();
@@ -414,7 +427,14 @@ pub fn flush_log() {
         );
     }
     let _ = file.flush();
-    LOGGED.store(last_seq, Ordering::Relaxed);
+    if file
+        .get_ref()
+        .metadata()
+        .is_ok_and(|info| info.len() >= LOG_CAP)
+    {
+        let _ = writeln!(file, "{} log full, later events not written", stamp(now_wall));
+        let _ = file.flush();
+    }
 }
 fn stamp(time: std::time::SystemTime) -> String {
     let since = time
@@ -792,6 +812,29 @@ mod tests {
         assert!(events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
         let last = events.last().unwrap().seq;
         assert!(events_after(last).is_empty());
+    }
+
+    #[test]
+    fn the_event_log_stops_at_its_cap_and_says_so() {
+        let path = std::env::temp_dir().join(format!("rc2fx-probe-{}.log", std::process::id()));
+        let events: Vec<_> = (0..LOG_BURST as u64)
+            .map(|seq| Snapshot {
+                seq,
+                at: 0,
+                value: 0,
+                since_usb: u64::MAX,
+                extra: 0,
+                kind: Kind::Gap as u8,
+            })
+            .collect();
+        std::fs::write(&path, vec![b'x'; LOG_CAP as usize - 1]).unwrap();
+        append_log(&path, &events);
+        let full = std::fs::read(&path).unwrap();
+        assert!(full.len() as u64 > LOG_CAP, "the last flush is written");
+        assert!(String::from_utf8_lossy(&full).ends_with("log full, later events not written\n"));
+        append_log(&path, &events);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), full.len() as u64);
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// The lookup goes to the main program's namespace, not the audit one:
