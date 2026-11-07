@@ -10,8 +10,12 @@ default:
 setup:
     cargo xtask setup
 
-# Run the desktop app with authenticated mixer downloads
+# Run the desktop app (debug)
 app:
+    cargo run --locked -p rc2fx-app
+
+# Run the desktop app (release)
+app-release:
     cargo run --locked --release -p rc2fx-app
 
 # Run the desktop app against a simulated mixer: no hardware, development build only
@@ -30,10 +34,15 @@ desktop-mock:
 package:
     cargo xtask package
 
-# Optional desktop with a bundled mixer payload
+# Run desktop app with bundled mixer payload (debug)
 app-embedded: mixer-build
+    cargo run --locked -p rc2fx-app --features embedded
+
+# Run desktop with bundled mixer payload (release)
+app-embedded-release: mixer-build
     cargo run --locked --release -p rc2fx-app --features embedded
 
+# Build desktop app with bundled mixer payload (release)
 desktop-embedded: mixer-build
     cargo build --locked --release -p rc2fx-app --features embedded
 

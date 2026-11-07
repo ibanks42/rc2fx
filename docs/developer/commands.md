@@ -9,9 +9,11 @@ recipes and `cargo xtask help` lists the underlying commands.
 | Command | Description |
 | --- | --- |
 | `just setup` | One-time setup: the mixer's Rust target, cargo-zigbuild, a zig check |
-| `just app` / `just desktop` | Run / build the desktop app with signed mixer downloads. No mixer cross-build is needed. |
+| `just app` / `just desktop` | Run a development build / build a release build of the desktop app with signed mixer downloads. No mixer cross-build is needed. |
+| `just app-release` | Run the optimized release build, as shipped. Slower to build; use it to check a change before a release. |
 | `just app-mock` | Run the desktop app against a simulated mixer, with no hardware. See [below](#without-a-mixer). |
-| `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run / build an app with the optional embedded payload. |
+| `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run a development build / build a release build of the app with the optional embedded payload. |
+| `just app-embedded-release` | Cross-build the mixer runtime, then run the release build with the optional embedded payload. |
 | `just mixer-build` | Cross-build the mixer runtime into `target/mixer` |
 | `just test` | Workspace tests, then Clippy with warnings as errors |
 | `just test-mixer` | Native library tests, plus the launcher, recorder and screen-module tests (Linux or macOS) |
