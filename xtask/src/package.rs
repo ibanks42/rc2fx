@@ -1,5 +1,5 @@
-//! `cargo xtask package`: the self-contained desktop executable, legal notices
-//! and a SHA256SUMS manifest. Installer inputs are embedded in the executable;
+//! `cargo xtask package`: the self-contained desktop executable and legal
+//! notices. Installer inputs are embedded in the executable;
 //! packaging verifies those bytes, including for --skip-build. Linux releases
 //! are AppImage, DEB and RPM packages; Windows uses a minimal zip and macOS a
 //! zip holding an app bundle.
@@ -122,14 +122,6 @@ fn collect_with(
     Ok(files)
 }
 
-pub fn manifest(files: &Files) -> String {
-    files
-        .iter()
-        .filter(|(name, _)| *name != "SHA256SUMS")
-        .map(|(name, m)| format!("{}  {name}\n", sha256(&m.data)))
-        .collect()
-}
-
 /// Write the executable and legal notices as an unpacked package.
 fn write_folder(dir: &Path, files: &Files) -> Result {
     let _ = fs::remove_dir_all(dir);
@@ -242,14 +234,12 @@ pub fn run_package(args: &[&str]) -> Result {
     let mut files = collect_with(&root, os, executable, vec![], release)?;
     let folder = out.join(&name).join(TOP);
     if os == "macos" {
-        // Signing happens on disk, and the manifest must list what it produces.
+        // Signing happens on disk, so the zip must hold what it produces.
         write_folder(&folder, &macos::bundle(files, version)?)?;
         files = macos::seal(&folder)?;
+    } else {
+        write_folder(&folder, &files)?;
     }
-    let sums = manifest(&files);
-    files.insert("SHA256SUMS".into(), file(sums.into_bytes()));
-
-    write_folder(&folder, &files)?;
     // collect_with() checked the actual executable's embedded payload against
     // the staged build inputs; the package deliberately has no payload sidecars.
 
@@ -411,7 +401,7 @@ mod tests {
 
     fn package(os: &str) -> (PathBuf, Files) {
         let (root, exe) = fixture();
-        let mut files = collect_with(
+        let files = collect_with(
             &root,
             os,
             exe,
@@ -422,8 +412,6 @@ mod tests {
             false,
         )
         .unwrap();
-        let sums = manifest(&files);
-        files.insert("SHA256SUMS".into(), file(sums.into_bytes()));
         (root, files)
     }
 
@@ -446,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn package_has_self_contained_executable_licences_and_complete_manifest() {
+    fn package_has_self_contained_executable_and_licences() {
         let (root, files) = package("windows");
         assert_eq!(files["rc2fx.exe"].mode, 0o755);
         assert!(files.contains_key("licenses/rust-crates.html"));
@@ -470,16 +458,6 @@ mod tests {
         let bundle = envelope.bundle().unwrap();
         for name in rc2fx_installer::PAYLOAD_NAMES {
             assert!(bundle.contains_key(name), "{name}");
-        }
-        let sums = String::from_utf8(files["SHA256SUMS"].data.clone()).unwrap();
-        assert_eq!(sums.lines().count(), files.len() - 1);
-        for (name, m) in &files {
-            if name != "SHA256SUMS" {
-                assert!(
-                    sums.contains(&format!("{}  {name}\n", sha256(&m.data))),
-                    "{name}"
-                );
-            }
         }
         let folder = root.join("out").join(TOP);
         write_folder(&folder, &files).unwrap();

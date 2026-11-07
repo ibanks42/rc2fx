@@ -63,19 +63,14 @@ def raw_zip(entries):
     return raw.getvalue()
 
 
-def mac_zip(tamper=False, unlisted=False):
-    files = {"RC2FX.app/Contents/MacOS/rc2fx": b"binary", "RC2FX.app/Contents/Info.plist": b"plist",
-             "LICENSES.html": b"notices"}
-    sums = "".join(f"{sha(d)}  {n}\n" for n, d in files.items())
-    if tamper:
-        files["LICENSES.html"] = b"changed"
+def mac_zip(app=True):
+    files = {"RC2FX.app/Contents/MacOS/rc2fx": b"binary", "RC2FX.app/Contents/Info.plist": b"plist"}
+    if not app:
+        files = {"rc2fx": b"binary"}
     raw = io.BytesIO()
     with zipfile.ZipFile(raw, "w") as package:
         for name, data in files.items():
             package.writestr("rc2fx/" + name, data)
-        if unlisted:
-            package.writestr("rc2fx/extra", b"x")
-        package.writestr("rc2fx/SHA256SUMS", sums)
     return raw.getvalue()
 
 
@@ -98,6 +93,7 @@ class FakeGh:
             "conclusion": "success", "head_sha": SOURCE,
         }
         self.artifact = {"name": "release-input", "expired": False}
+        self.package_artifact = None
         self.exists = True
         self.tag_pushed = None  # defaults to whether the release exists
         self.draft = True
@@ -144,6 +140,8 @@ class FakeGh:
             return self.run
         if path == "actions/runs/7/artifacts?name=release-input":
             return {"artifacts": [self.artifact] if self.artifact else []}
+        if path == "actions/runs/7/artifacts?name=macos-package":
+            return {"artifacts": [self.package_artifact] if self.package_artifact else []}
         if path == f"commits/{TAG}":
             pushed = self.exists if self.tag_pushed is None else self.tag_pushed
             return self.commit if pushed else None
@@ -228,7 +226,18 @@ class Prepare(InTemp):
         return mr.prepare(gh, 7, automatic, lines.append)
 
     def test_a_draft_release_is_ready(self):
-        self.assertEqual(self.outputs(FakeGh()), {"source": SOURCE, "tag": TAG, "ready": "true"})
+        self.assertEqual(self.outputs(FakeGh()),
+                         {"source": SOURCE, "tag": TAG, "ready": "true", "prebuilt": "false"})
+
+    def test_the_release_runs_macos_package_is_reused(self):
+        gh = FakeGh()
+        gh.package_artifact = {"name": "macos-package", "expired": False}
+        self.assertEqual(self.outputs(gh)["prebuilt"], "true")
+
+    def test_an_expired_macos_package_is_rebuilt(self):
+        gh = FakeGh()
+        gh.package_artifact = {"name": "macos-package", "expired": True}
+        self.assertEqual(self.outputs(gh)["prebuilt"], "false")
 
     def test_published_complete_is_nothing_to_do_and_incomplete_is_refused(self):
         self.assertEqual(self.outputs(published_complete(mac_zip()))["ready"], "false")
@@ -569,7 +578,7 @@ class Publish(InTemp):
         self.assertEqual(gh.ops[-1], ("publish", 99))
 
     def test_bad_packages_and_package_directories_are_refused(self):
-        for data in [mac_zip(tamper=True), mac_zip(unlisted=True), b"not a zip"]:
+        for data in [mac_zip(app=False), b"not a zip"]:
             gh = FakeGh()
             with self.assertRaises(mr.Refused):
                 mr.publish(gh, TAG, SOURCE, self.package(data))
@@ -582,13 +591,12 @@ class Publish(InTemp):
     def test_duplicate_or_unsafe_zip_entries_are_refused_even_with_good_sums(self):
         import warnings
         body = b"binary"
-        exe, info = "RC2FX.app/Contents/MacOS/rc2fx", "RC2FX.app/Contents/Info.plist"
-        app = [("rc2fx/" + exe, body), ("rc2fx/" + info, body)]
-        sums = f"{sha(body)}  {exe}\n{sha(body)}  {info}\n".encode()
+        exe = "rc2fx/RC2FX.app/Contents/MacOS/rc2fx"
+        app = [(exe, body), ("rc2fx/RC2FX.app/Contents/Info.plist", body)]
         for entries in [
-            app + [("rc2fx/" + exe, body), ("rc2fx/SHA256SUMS", sums)],
-            app + [("other/x", b"x"), ("rc2fx/SHA256SUMS", sums)],
-            app + [("rc2fx/../x", b"x"), ("rc2fx/SHA256SUMS", sums)],
+            app + [(exe, body)],
+            app + [("other/x", b"x")],
+            app + [("rc2fx/../x", b"x")],
         ]:
             gh = FakeGh()
             with warnings.catch_warnings():
@@ -597,15 +605,12 @@ class Publish(InTemp):
             with self.assertRaises(mr.Refused):
                 mr.publish(gh, TAG, SOURCE, self.package(data))
             self.assertEqual(gh.ops, [])
-        good = raw_zip(app + [("rc2fx/SHA256SUMS", sums)])
-        mr.publish(FakeGh(), TAG, SOURCE, self.package(good))
+        mr.publish(FakeGh(), TAG, SOURCE, self.package(raw_zip(app)))
 
     def test_a_bare_executable_without_the_app_is_refused(self):
-        body = b"binary"
-        bare = raw_zip([("rc2fx/rc2fx", body), ("rc2fx/SHA256SUMS", f"{sha(body)}  rc2fx\n".encode())])
         gh = FakeGh()
         with self.assertRaisesRegex(mr.Refused, "RC2FX.app"):
-            mr.publish(gh, TAG, SOURCE, self.package(bare))
+            mr.publish(gh, TAG, SOURCE, self.package(mac_zip(app=False)))
         self.assertEqual(gh.ops, [])
 
     def test_missing_release_or_bad_arguments_are_refused(self):

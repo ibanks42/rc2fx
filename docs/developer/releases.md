@@ -129,8 +129,8 @@ On GitHub, the published app release is marked latest and contains:
   for Windows x64, a zip for macOS arm64 (GitHub's macOS runners are Apple
   silicon), and for Linux x64 an AppImage, a `.deb` and an `.rpm`. A
   release is only published once all of them are there.
-  The zips hold the app, with its licence notices built in, and their own
-  `SHA256SUMS`. The AppImage is the app and its licence notices in one file.
+  The zips hold the app, with its licence notices built in. The AppImage is
+  the app and its licence notices in one file.
 - `rc2fx-VERSION-appimage-runtime-sources.tar.gz`: the source of the AppImage type 2
   runtime at the start of the AppImage, and of the libraries it links
   statically, including its modified LGPL-2.1 libfuse. See [AppImage runtime
@@ -226,7 +226,7 @@ draft once every package is verified. A shortage of macOS runners never fails
 **Release**: the draft waits until **Release macOS** succeeds. Nothing is
 public until the release is complete.
 
-**Release** runs three jobs in order:
+**Release** runs these jobs:
 
 1. **prepare** (Ubuntu) runs the versioning tests, computes the app version
    and rewrites the version files and changelog (`.github/scripts/release.py
@@ -234,7 +234,10 @@ public until the release is complete.
    without deploying it. The site build still includes only published history.
    It shares the prepared version files with later jobs; mixer payloads are
    built by the separate **Mixer release** workflow.
-2. **build** runs on Ubuntu 24.04 and Windows in parallel. The Linux runner
+2. **build** runs on Ubuntu 24.04 and Windows in parallel, and **macos** runs
+   beside them, building, signing and notarizing the macOS zip so that it
+   doesn't wait for the other platforms. Nothing waits for **macos** and its
+   failure doesn't fail the run. The Linux runner
    is pinned to keep the glibc baseline stable. Each job applies the prepare
    output and runs `cargo xtask package` in download-only mode. Packaging
    verifies the executable's payload mode, including with `--skip-build`, and
@@ -269,12 +272,14 @@ version files, release plan and mixer runtime) is kept for 90 days, because
    rather than skipping.
    A release that is already published and complete needs nothing; one that
    is published but incomplete is refused and never changed.
-2. **build** (macOS) checks out the release's source commit, applies the
+2. **build** (macOS) runs only when the **Release** run left no macOS zip.
+   It checks out the release's source commit, applies the
    version files from the artifact (only the manifests, lockfiles and
    changelog a version bump writes), stages the run's mixer runtime and runs
    `cargo xtask package`. It builds the same version and runtime as the other
    platforms, without a version bump or rebuilding them.
-3. **publish** (Ubuntu) checks the zip, uploads it to the draft, rebuilds
+3. **publish** (Ubuntu) takes the zip from the **Release** run or from
+   **build**, checks it, uploads it to the draft, rebuilds
    `SHA256SUMS` from the draft's actual assets, removes the pending notice,
    checks the whole draft again, and only then publishes it as the latest
    release, as its very last step. It re-reads the release before every
@@ -293,7 +298,9 @@ what's missing without publishing it again or changing which release is
 latest. That needs immutable releases to stay off in the repository settings:
 a published release that is immutable and incomplete can't be finished.
 
-If no macOS runner is available, only **Release macOS** is cancelled or
+**Release macOS** starts once the whole **Release** run ends, so a macOS runner
+shortage delays publication. The draft exists by then and nothing is lost. If
+no macOS runner is available, only **Release macOS** is cancelled or
 fails, and the release stays a draft that can be finished later. A real build
 error shows as a failed **Release macOS** run. To retry, open **Actions › Release
 macOS › Run workflow** and enter the ID of the original **Release** run (the

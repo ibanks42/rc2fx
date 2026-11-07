@@ -50,6 +50,7 @@ from pathlib import Path
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 WORKFLOW = ".github/workflows/release.yml"
 ARTIFACT = "release-input"
+PACKAGE_ARTIFACT = "macos-package"
 INPUT = Path(".release-input")
 PLAN_KEYS = {"tag", "previous", "source", "files"}
 PENDING = re.compile(
@@ -265,7 +266,11 @@ def prepare(gh, run_id, automatic, output=print):
     else:
         raise Refused(f"release {plan['tag']} is published, incomplete and immutable; "
                       "it can't be finished")
-    lines = [f"source={plan['source']}", f"tag={plan['tag']}", f"ready={ready}"]
+    packages = gh.api(f"actions/runs/{run_id}/artifacts?name={PACKAGE_ARTIFACT}") or {}
+    prebuilt = any(a.get("name") == PACKAGE_ARTIFACT and not a.get("expired")
+                   for a in packages.get("artifacts", []))
+    lines = [f"source={plan['source']}", f"tag={plan['tag']}", f"ready={ready}",
+             f"prebuilt={str(prebuilt).lower()}"]
     for line in lines:
         output(line)
     summary(f"### Release macOS for {plan['tag']}\n\n{why}\n")
@@ -338,8 +343,7 @@ def expected_assets(version):
 
 
 def check_package(path):
-    """A macOS zip with an app bundle, whose rc2fx/SHA256SUMS lists every other
-    member exactly."""
+    """A sound macOS zip holding the app bundle under rc2fx/."""
     require(zipfile.is_zipfile(path), f"{path.name} is not a zip")
     with zipfile.ZipFile(path) as package:
         require(package.testzip() is None, f"{path.name} is damaged")
@@ -348,20 +352,8 @@ def check_package(path):
         for entry in entries:
             require(entry.startswith("rc2fx/"), f"{path.name} has {entry!r} outside rc2fx/")
             safe_relative(entry.rstrip("/"))
-        names = [i.filename for i in package.infolist() if not i.is_dir()]
-        require("rc2fx/SHA256SUMS" in names, f"{path.name} has no rc2fx/SHA256SUMS")
         for member in APP_MEMBERS:
-            require(member in names, f"{path.name} has no {member}")
-        listed = {}
-        for line in package.read("rc2fx/SHA256SUMS").decode().splitlines():
-            digest, sep, name = line.partition("  ")
-            require(sep and re.fullmatch("[0-9a-f]{64}", digest) and name not in listed,
-                    f"malformed SHA256SUMS line {line!r}")
-            listed[name] = digest
-        members = {n.removeprefix("rc2fx/") for n in names if n != "rc2fx/SHA256SUMS"}
-        require(set(listed) == members, f"{path.name}'s SHA256SUMS does not list exactly its files")
-        for name, digest in listed.items():
-            require(sha256(package.read("rc2fx/" + name)) == digest, f"{name} does not match its checksum")
+            require(member in entries, f"{path.name} has no {member}")
 
 
 def asset_map(release):
