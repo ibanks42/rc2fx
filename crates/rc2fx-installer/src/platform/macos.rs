@@ -1,5 +1,5 @@
 //! macOS: IOKit HID for the control interface; `ioreg`/`diskutil` for the
-//! update disk. Not yet exercised on hardware.
+//! update disk.
 
 use super::{
     Hid, Platform, Reports, Volume,

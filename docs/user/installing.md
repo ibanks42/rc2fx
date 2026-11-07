@@ -119,6 +119,6 @@ folder:
 
 ## Testing status
 
-The installer has flashed a real Pro II from Windows, and RC2FX started
-afterwards with its settings. Flashing from Linux and macOS has not been
-tested on hardware, and no Duo has been flashed.
+The installer has flashed a real Pro II from Windows and macOS, and RC2FX
+started afterwards with its settings on Windows. Flashing from Linux has not
+been tested on hardware, and no Duo has been flashed.
