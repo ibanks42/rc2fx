@@ -6,9 +6,12 @@
 //! * **Baselines.** Every cumulative figure the app shows is reported relative
 //!   to the last diagnostics reset, never by writing to a counter the callback,
 //!   helper or worker owns: this module keeps the reading taken at the reset
-//!   and subtracts it. A lifetime maximum cannot be decomposed, so a maximum is
-//!   reported only while it exceeds the pre-reset one; 0 therefore means "no
-//!   sample since the reset has beaten the old maximum", not "instant". Each
+//!   and subtracts it. With no reset yet, the baseline is the engine's first
+//!   reading. A lifetime maximum cannot be decomposed, so after a reset a
+//!   maximum is reported only while it exceeds the pre-reset one; 0 then means
+//!   "no sample since the reset has beaten the old maximum", not "instant".
+//!   Until a reset the lifetime maximum is shown as it is, because nothing was
+//!   cleared and the worst sample often comes before the first reading. Each
 //!   reset bumps `Meter::diagnostics_epoch`, so the app rebaselines its own
 //!   fault tracking on the epoch instead of seeing a decrease.
 //!
@@ -54,6 +57,9 @@ pub struct DiagnosticsLog {
     /// The last raw reading; a reset also stores it as the new baseline.
     last: Option<Reading>,
     baselines: Option<Reading>,
+    /// The baseline came from a user's reset, not an engine's first reading. A
+    /// new engine clears this while the epoch stays: it has had no reset.
+    baseline_is_reset: bool,
     events: VecDeque<DiagnosticsEvent>,
     next_seq: u64,
     /// The engine ring's last sequence number seen.
@@ -139,10 +145,10 @@ fn since(now: u64, before: u64) -> u64 {
     now.saturating_sub(before)
 }
 
-/// A cumulative timing since its baseline. The maximum is reported only while
-/// it is larger than the baseline's, because a lifetime maximum cannot be
-/// decomposed into "since the reset".
-fn timing_since(now: &Timing, before: &Timing) -> Timing {
+/// A cumulative timing since its baseline. After a reset the maximum is
+/// reported only while it is larger than the baseline's, because a lifetime
+/// maximum cannot be decomposed into "since the reset".
+fn timing_since(now: &Timing, before: &Timing, after_reset: bool) -> Timing {
     let mut histogram = [0; 8];
     for (index, slot) in histogram.iter_mut().enumerate() {
         *slot = since(now.histogram[index], before.histogram[index]);
@@ -150,7 +156,7 @@ fn timing_since(now: &Timing, before: &Timing) -> Timing {
     Timing {
         calls: since(now.calls, before.calls),
         total_ns: since(now.total_ns, before.total_ns),
-        max_ns: if now.max_ns > before.max_ns {
+        max_ns: if !after_reset || now.max_ns > before.max_ns {
             now.max_ns
         } else {
             0
@@ -168,6 +174,7 @@ impl Default for DiagnosticsLog {
             generation: None,
             last: None,
             baselines: None,
+            baseline_is_reset: false,
             events: VecDeque::new(),
             // Sequence numbers are 1-based: `after = 0` asks for everything.
             next_seq: 1,
@@ -192,6 +199,7 @@ impl DiagnosticsLog {
         if generation.is_some() && self.generation != generation {
             self.generation = generation;
             self.baselines = None;
+            self.baseline_is_reset = false;
             self.worker_seqs.clear();
         }
         let reading = Reading::of(meter, native);
@@ -207,6 +215,7 @@ impl DiagnosticsLog {
         self.epoch = self.epoch.wrapping_add(1);
         if let Some(last) = &self.last {
             self.baselines = Some(last.clone());
+            self.baseline_is_reset = true;
         }
         // The window starts over: the ring is cleared, and the reset entry
         // says where (sequence numbers keep increasing, so a client that was
@@ -313,9 +322,12 @@ impl DiagnosticsLog {
                 continue;
             };
             performance.xruns = since(risk, baseline.xruns);
-            performance.callback = timing_since(&reading.callback, &baseline.callback);
-            performance.worker_wall = timing_since(&current.worker_wall, &base.worker_wall);
-            performance.worker_cpu = timing_since(&current.worker_cpu, &base.worker_cpu);
+            let after_reset = self.baseline_is_reset;
+            performance.callback = timing_since(&reading.callback, &baseline.callback, after_reset);
+            performance.worker_wall =
+                timing_since(&current.worker_wall, &base.worker_wall, after_reset);
+            performance.worker_cpu =
+                timing_since(&current.worker_cpu, &base.worker_cpu, after_reset);
             performance.helper_late = performance
                 .helper_late
                 .map(|_| since(rlate, baseline.helper_late));
@@ -634,6 +646,7 @@ mod tests {
         assert_eq!(first.targets[0].callbacks, 0);
         assert_eq!(first.targets[0].clipped, 0);
         assert_eq!(first.diagnostics_epoch, 0);
+        log.reset(1_500);
         // Growth shows only the growth.
         let mut second = meter(
             timing(14, 900, [2, 1, 1, 1, 1, 1, 1, 1]),
@@ -664,6 +677,52 @@ mod tests {
             callback.max_ns, 0,
             "no sample beat the 500 ns pre-reset max"
         );
+    }
+
+    #[test]
+    fn before_any_reset_the_lifetime_maximum_stands() {
+        // The worst callback came at startup, before the first reading.
+        let (peak, bins) = (5_000_000, [0; 8]);
+        let mut log = DiagnosticsLog::default();
+        let mut first = meter(timing(10, peak, bins), timing(4, peak, bins));
+        observe(&mut log, &mut first, 1_000);
+        let mut second = meter(timing(50_000, peak, bins), timing(40, peak, bins));
+        observe(&mut log, &mut second, 2_000);
+        assert_eq!(second.diagnostics_epoch, 0);
+        let performance = second.targets[0].performance.as_ref().unwrap();
+        let callback = &performance.callback;
+        assert_eq!(callback.max_ns, peak);
+        assert_eq!(performance.worker_wall.max_ns, peak);
+        assert_eq!(performance.worker_cpu.max_ns, peak);
+        // Counters still run from the first reading, and the peak of that
+        // window is never below its mean.
+        assert_eq!(callback.calls, 49_990);
+        assert!(callback.max_ns >= callback.total_ns / callback.calls);
+    }
+
+    #[test]
+    fn a_new_engine_has_had_no_reset_even_after_an_old_one_did() {
+        let (peak, bins) = (5_000_000, [0; 8]);
+        let mut log = DiagnosticsLog::default();
+        let mut old = meter(timing(10, 500, bins), timing(4, 300, bins));
+        observe(&mut log, &mut old, 1_000);
+        log.reset(1_500);
+        let mut first = meter(timing(10, peak, bins), timing(4, 300, bins));
+        first.generation = 2;
+        observe(&mut log, &mut first, 2_000);
+        let mut second = meter(timing(20, peak, bins), timing(8, 300, bins));
+        second.generation = 2;
+        observe(&mut log, &mut second, 3_000);
+        assert_eq!(second.diagnostics_epoch, 1);
+        let performance = second.targets[0].performance.as_ref().unwrap();
+        assert_eq!(performance.callback.max_ns, peak);
+        // A reset on the new engine clears that maximum like any other.
+        log.reset(3_500);
+        let mut third = meter(timing(30, peak, bins), timing(12, 300, bins));
+        third.generation = 2;
+        observe(&mut log, &mut third, 4_000);
+        let performance = third.targets[0].performance.as_ref().unwrap();
+        assert_eq!(performance.callback.max_ns, 0);
     }
 
     #[test]
