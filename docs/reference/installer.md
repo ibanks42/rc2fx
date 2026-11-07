@@ -39,10 +39,11 @@ log. Only one installer can use a given folder at a time.
 - Windows uses its built-in HID and volume APIs.
 - macOS uses IOKit, `ioreg` and `diskutil`.
 - Linux needs root for raw USB, mounting and ejecting. The app itself runs as
-  the user, and so do checking the mixer, listing releases, saving settings
-  and preparing firmware. Switching to update mode and flashing are done by a
-  helper started through `pkexec`, which is the same executable in
-  installer-helper mode. The helper starts when the user presses
+  the user, and so do checking the mixer, listing releases and saving
+  settings. Preparing firmware, switching to update mode and flashing are done
+  by a helper started through `pkexec`, which is the same executable in
+  installer-helper mode. The cache folder belongs to the user, so the helper
+  flashes only an RC2FX image it built itself. The helper starts when the user presses
   **Grant access** on the installer page, which opens the password prompt.
   Access lasts until the installer closes. Files the helper creates are owned
   by the invoking user.
@@ -74,12 +75,12 @@ the first error and offers **Retry** from that step.
 
    `authorized_keys` stays empty, as RØDE ships it. SSH access is managed
    after installing, over USB 1 (see [Developer SSH](api.md#developer-ssh)). A cached image built by an older installer
-   with its SSH option is never reused for a new install.
+   with its SSH option is never reused or flashed.
 
    Files in RØDE's image are left as they are. The installer refuses an image
    that already contains any of these paths, requires the audio binaries to
    match a supported profile, and requires the runtime to support that
-   profile. A prepared image is reused when the release, runtime, key and
+   profile. A prepared image is reused when the release, runtime and
    settings all match.
 3. **USB update mode.** HID command `M` puts the mixer in update mode. Audio
    stops and the screen shows "Updating via USB". Nothing has been written

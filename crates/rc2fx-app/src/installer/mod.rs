@@ -54,11 +54,12 @@ fn needs_access(model: &Model, access: &Access) -> bool {
     idle_or_failed && !access.allows_flashing()
 }
 
-/// Requests that need administrator access where [`Access`] applies.
+/// Requests that need administrator access where [`Access`] applies. The
+/// helper flashes only what it prepared, so it does the preparing too.
 fn privileged(request: &Request) -> bool {
     matches!(
         request,
-        Request::EnterUsbMode { .. } | Request::Flash { .. }
+        Request::Prepare { .. } | Request::EnterUsbMode { .. } | Request::Flash { .. }
     )
 }
 
@@ -1603,7 +1604,22 @@ impl Rc2FxApp {
 
 #[cfg(test)]
 mod selection_tests {
-    use super::{Request, Selection, changes_catalog};
+    use super::{Request, Selection, changes_catalog, privileged};
+
+    /// The helper refuses RC2FX images it did not record, and this process
+    /// cannot write that record.
+    #[test]
+    fn the_helper_prepares_what_it_flashes() {
+        for stock in [false, true] {
+            assert!(privileged(&Request::Prepare {
+                channel: "stable".into(),
+                version: "1.7.7".into(),
+                serial: "GV1".into(),
+                stock,
+            }));
+        }
+        assert!(!privileged(&Request::Probe));
+    }
 
     #[test]
     fn readiness_is_judged_again_after_anything_that_can_change_the_catalog() {

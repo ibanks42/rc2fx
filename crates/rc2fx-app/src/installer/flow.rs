@@ -917,9 +917,6 @@ impl Model {
                         version,
                         serial,
                         stock: self.stock,
-                        // SSH is managed over USB 1 from Settings, never
-                        // built into firmware.
-                        ssh: false,
                     }),
                     None => self.fail("Choose a firmware version.".into()),
                 },
@@ -1455,9 +1452,8 @@ mod tests {
                 version: "1.7.6".into(),
                 serial: "GV1".into(),
                 stock: false,
-                ssh: false,
             }),
-            "no SSH key unless the developer option is on"
+            "the request names the chosen release"
         );
         let refresh = answer(&mut m, prepare, Reply::Prepared(Prepared::default()));
         let usb = report(
@@ -1617,13 +1613,7 @@ mod tests {
     }
 
     #[test]
-    fn firmware_is_never_prepared_with_ssh_and_keyed_images_are_not_reused() {
-        let mut m = model(status(&[("GV1", false)], absent(), false, false));
-        let select = m.start();
-        assert!(matches!(
-            selected(&mut m, select),
-            Some(Request::Prepare { ssh: false, .. })
-        ));
+    fn keyed_images_from_older_installers_are_not_reused() {
         assert!(
             model(status(&[("GV1", false)], absent(), true, false))
                 .prepared()

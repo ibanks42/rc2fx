@@ -46,6 +46,9 @@ impl SelectionStatus {
         if self.channel_capacity.is_some_and(|limit| limit > 128) {
             return Err(CoreError("Invalid processing channel capacity".into()));
         }
+        if !crate::valid_display_text(&self.message, crate::MAX_STATUS_TEXT) {
+            return Err(CoreError("Invalid selection status message".into()));
+        }
         for ids in [
             &self.qualified_target_ids,
             &self.active_target_ids,

@@ -156,9 +156,12 @@ fn version_reply(
     result: Result<Value, RequestError>,
 ) -> Result<Option<rc2fx_core::DeviceVersions>, RequestError> {
     match result {
-        Ok(value) if value.is_object() => serde_json::from_value(value)
-            .map(Some)
-            .map_err(|_| RequestError::Protocol),
+        Ok(value) if value.is_object() => {
+            let versions: rc2fx_core::DeviceVersions =
+                serde_json::from_value(value).map_err(|_| RequestError::Protocol)?;
+            versions.validate().map_err(|_| RequestError::Protocol)?;
+            Ok(Some(versions))
+        }
         Ok(_) => Err(RequestError::Protocol),
         Err(RequestError::Status(404, _)) => Ok(None),
         Err(error) => Err(error),
@@ -170,9 +173,12 @@ fn ssh_reply(
     result: Result<Value, RequestError>,
 ) -> Result<Option<rc2fx_core::SshStatus>, RequestError> {
     match result {
-        Ok(value) if value.is_object() => serde_json::from_value(value)
-            .map(Some)
-            .map_err(|_| RequestError::Protocol),
+        Ok(value) if value.is_object() => {
+            let status: rc2fx_core::SshStatus =
+                serde_json::from_value(value).map_err(|_| RequestError::Protocol)?;
+            status.validate().map_err(|_| RequestError::Protocol)?;
+            Ok(Some(status))
+        }
         Ok(_) => Err(RequestError::Protocol),
         Err(RequestError::Status(404, _)) => Ok(None),
         Err(error) => Err(error),
@@ -784,6 +790,20 @@ fn apply_body(update: &rc2fx_core::ConfigUpdate) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_and_ssh_replies_with_unfit_text_are_protocol_errors() {
+        let bad = "1.0\u{202e}";
+        let reply = version_reply(Ok(serde_json::json!({"firmware": bad})));
+        assert!(matches!(reply, Err(RequestError::Protocol)));
+        let good = version_reply(Ok(serde_json::json!({"firmware": "1.7.7"})));
+        assert_eq!(good.unwrap().unwrap().firmware.as_deref(), Some("1.7.7"));
+
+        let status = |host: &str| serde_json::json!({"managed": false, "unmanagedKeys": 0, "hostKeys": [host]});
+        let reply = ssh_reply(Ok(status("ssh-ed25519 AAAA\nssh-ed25519 BBBB")));
+        assert!(matches!(reply, Err(RequestError::Protocol)));
+        assert!(ssh_reply(Ok(status("ssh-ed25519 AAAA"))).unwrap().is_some());
+    }
 
     #[test]
     fn ssh_replies_treat_old_mixer_software_as_unsupported() {

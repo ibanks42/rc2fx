@@ -45,21 +45,46 @@ fn home_for_identity(
 
 #[cfg(target_os = "linux")]
 fn account(uid: u32) -> Option<(u32, PathBuf)> {
+    let (_, gid, home) = passwd(|entry, buffer, size, found| {
+        // SAFETY: the pointers are valid for the lookup's duration.
+        unsafe { libc::getpwuid_r(uid, entry, buffer, size, found) }
+    })?;
+    Some((gid, home))
+}
+
+/// The uid the account `name` has, by the password database.
+#[cfg(target_os = "linux")]
+fn account_uid(name: &str) -> Option<u32> {
+    let name = std::ffi::CString::new(name).ok()?;
+    let (uid, ..) = passwd(|entry, buffer, size, found| {
+        // SAFETY: the pointers are valid for the lookup's duration.
+        unsafe { libc::getpwnam_r(name.as_ptr(), entry, buffer, size, found) }
+    })?;
+    Some(uid)
+}
+
+/// One password-database entry as (uid, gid, home).
+#[cfg(target_os = "linux")]
+fn passwd(
+    mut lookup: impl FnMut(
+        *mut libc::passwd,
+        *mut libc::c_char,
+        usize,
+        *mut *mut libc::passwd,
+    ) -> libc::c_int,
+) -> Option<(u32, u32, PathBuf)> {
     use std::{ffi::CStr, os::unix::ffi::OsStrExt};
     let mut buffer = vec![0u8; 4096];
     loop {
         let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();
         let mut found = std::ptr::null_mut();
         // Reentrant lookup: all returned strings remain within our buffer.
-        let error = unsafe {
-            libc::getpwuid_r(
-                uid,
-                entry.as_mut_ptr(),
-                buffer.as_mut_ptr().cast(),
-                buffer.len(),
-                &mut found,
-            )
-        };
+        let error = lookup(
+            entry.as_mut_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut found,
+        );
         if error == libc::ERANGE && buffer.len() < 65536 {
             buffer.resize(buffer.len() * 2, 0);
             continue;
@@ -73,13 +98,82 @@ fn account(uid: u32) -> Option<(u32, PathBuf)> {
         }
         let bytes = unsafe { CStr::from_ptr(entry.pw_dir) }.to_bytes();
         let home = PathBuf::from(std::ffi::OsStr::from_bytes(bytes));
-        return home.is_absolute().then_some((entry.pw_gid, home));
+        return home
+            .is_absolute()
+            .then_some((entry.pw_uid, entry.pw_gid, home));
     }
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod helper_home_tests {
     use super::*;
+
+    #[test]
+    fn links_and_special_files_in_the_cache_are_not_opened() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let (real, link) = (dir.path().join("real"), dir.path().join("link"));
+        fs::write(&real, b"data").unwrap();
+        symlink(&real, &link).unwrap();
+        open_work_file(&real).unwrap();
+        assert!(open_regular(&link).is_err());
+        assert!(open_work_file(&link).is_err());
+        assert!(open_local_file(&link, false).is_err());
+        assert!(hash_both(&link, |_, _| {}).is_err());
+        assert!(file_hash(&link, Algorithm::Sha256).is_err());
+        let copy = dir.path().join("copy");
+        assert!(copy_with_progress(&link, &copy, |_, _| {}).is_err());
+
+        // A FIFO neither blocks the open nor passes as a file.
+        let fifo = dir.path().join("fifo");
+        let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: `name` is NUL-terminated.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(open_regular(&fifo).is_err());
+        assert!(open_regular(dir.path()).is_err(), "a directory");
+    }
+
+    #[test]
+    fn a_privileged_helper_reads_only_its_invokers_files() {
+        assert!(invoker_owns(1000, Some(1000)));
+        assert!(
+            !invoker_owns(0, Some(1000)),
+            "a root file placed in the folder"
+        );
+        assert!(!invoker_owns(1001, Some(1000)));
+        assert!(invoker_owns(0, None));
+        assert!(!invoker_owns(1000, None));
+    }
+
+    #[test]
+    fn the_invoker_comes_from_pkexec_or_a_sudo_user_the_system_knows() {
+        let found = |vars: &[(&str, &str)]| {
+            let vars: Vec<(String, String)> = vars
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            invoker(
+                move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()),
+                |uid| (uid == 1000).then_some(100),
+                |name| (name == "me").then_some(1000),
+            )
+        };
+        assert_eq!(found(&[]).unwrap(), None);
+        // pkexec wins over anything claimed through sudo's variables.
+        let both = [
+            ("PKEXEC_UID", "1000"),
+            ("SUDO_UID", "1"),
+            ("SUDO_GID", "1"),
+            ("SUDO_USER", "someone"),
+        ];
+        assert_eq!(found(&both).unwrap(), Some((1000, 100)));
+        let sudo = |uid, user| [("SUDO_UID", uid), ("SUDO_GID", "100"), ("SUDO_USER", user)];
+        assert_eq!(found(&sudo("1000", "me")).unwrap(), Some((1000, 100)));
+        assert!(found(&sudo("1", "me")).is_err(), "uid is not that user's");
+        assert!(found(&sudo("1000", "nobody")).is_err(), "unknown user");
+        assert!(found(&[("SUDO_UID", "1000"), ("SUDO_GID", "100")]).is_err());
+        assert!(found(&[("PKEXEC_UID", "2000")]).is_err(), "unknown uid");
+    }
 
     #[test]
     fn privileged_helpers_use_the_invokers_home_not_roots_environment() {
@@ -160,7 +254,7 @@ pub(crate) fn hash_reader(
 }
 
 pub(crate) fn file_hash(path: &Path, algorithm: Algorithm) -> Result<String> {
-    Ok(hash_reader(File::open(path)?, algorithm, |_| {})?)
+    Ok(hash_reader(open_regular(path)?, algorithm, |_| {})?)
 }
 
 pub(crate) fn matches(path: &Path, algorithm: Algorithm, want: &str) -> Result<()> {
@@ -198,21 +292,40 @@ pub(crate) fn local_owner(file: &File) -> Result<()> {
 /// The user who started a privileged helper with sudo or pkexec.
 #[cfg(target_os = "linux")]
 fn invoking_user() -> Result<Option<(u32, u32)>> {
+    invoker(
+        |name| std::env::var(name).ok(),
+        |uid| account(uid).map(|(gid, _)| gid),
+        account_uid,
+    )
+}
+
+/// pkexec sets `PKEXEC_UID` itself, so it wins. The `SUDO_*` variables can be
+/// inherited by anything, so they count only when the password database agrees
+/// that `SUDO_USER` has `SUDO_UID`.
+#[cfg(target_os = "linux")]
+fn invoker(
+    variable: impl Fn(&str) -> Option<String>,
+    gid_of: impl Fn(u32) -> Option<u32>,
+    uid_of: impl Fn(&str) -> Option<u32>,
+) -> Result<Option<(u32, u32)>> {
     let parse = |name: &str| -> Result<Option<u32>> {
-        match std::env::var(name) {
-            Ok(v) => v
-                .parse::<u32>()
-                .map(Some)
-                .map_err(|_| crate::Error(format!("invalid {name}"))),
-            Err(_) => Ok(None),
-        }
+        variable(name)
+            .map(|v| {
+                v.parse::<u32>()
+                    .map_err(|_| crate::Error(format!("invalid {name}")))
+            })
+            .transpose()
     };
-    if let Some(uid) = parse("SUDO_UID")? {
-        let gid = parse("SUDO_GID")?.ok_or("invalid SUDO_GID")?;
+    if let Some(uid) = parse("PKEXEC_UID")? {
+        let gid = gid_of(uid).ok_or("unknown PKEXEC_UID")?;
         return Ok(Some((uid, gid)));
     }
-    if let Some(uid) = parse("PKEXEC_UID")? {
-        let (gid, _) = account(uid).ok_or("unknown PKEXEC_UID")?;
+    if let Some(uid) = parse("SUDO_UID")? {
+        let user = variable("SUDO_USER").ok_or("missing SUDO_USER")?;
+        if uid_of(&user) != Some(uid) {
+            bail!("SUDO_USER does not match SUDO_UID");
+        }
+        let gid = parse("SUDO_GID")?.ok_or("invalid SUDO_GID")?;
         return Ok(Some((uid, gid)));
     }
     Ok(None)
@@ -332,6 +445,67 @@ impl Write for Temp {
     }
 }
 
+/// Do not follow a final symlink, and do not wait for a writer on a FIFO.
+fn no_follow(options: &mut OpenOptions) {
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(options, libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(not(unix))]
+    let _ = options;
+}
+
+fn regular_only(file: File) -> io::Result<File> {
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Open a regular file for reading. The cache folder is the desktop user's,
+/// so the root helper must not be led elsewhere by a link placed in it.
+pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    no_follow(&mut options);
+    regular_only(options.open(path)?)
+}
+
+/// [`open_regular`] for a file in the cache folder, which must also belong to
+/// the user who started a privileged helper. The drive's files do not.
+pub(crate) fn open_work_file(path: &Path) -> io::Result<File> {
+    owned_by_invoker(open_regular(path)?)
+}
+
+#[cfg(target_os = "linux")]
+fn owned_by_invoker(file: File) -> io::Result<File> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } != 0 {
+        return Ok(file);
+    }
+    let invoker = invoking_user().map_err(|e| io::Error::other(e.0))?;
+    if !invoker_owns(file.metadata()?.uid(), invoker.map(|(uid, _)| uid)) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "a file in the cache folder belongs to another user",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn owned_by_invoker(file: File) -> io::Result<File> {
+    Ok(file)
+}
+
+/// Running as root with no invoker, the folder is root's own.
+#[cfg(target_os = "linux")]
+fn invoker_owns(owner: u32, invoker: Option<u32>) -> bool {
+    owner == invoker.unwrap_or(0)
+}
+
 /// Create the file privately if missing, otherwise open the existing one.
 pub(crate) fn open_local_file(path: &Path, append: bool) -> Result<File> {
     let mut create = options(true);
@@ -344,7 +518,8 @@ pub(crate) fn open_local_file(path: &Path, append: bool) -> Result<File> {
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
             let mut existing = options(true);
             existing.append(append);
-            Ok(existing.open(path)?)
+            no_follow(&mut existing);
+            Ok(owned_by_invoker(regular_only(existing.open(path)?)?)?)
         }
         Err(e) => Err(e.into()),
     }
@@ -367,12 +542,61 @@ pub(crate) fn exclusive_file(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// SHA-256 and MD5 of the bytes that pass through a reader or writer, so a
+/// digest describes what this process read or wrote, not what a path holds
+/// afterwards.
+pub(crate) struct Hashing<T> {
+    inner: T,
+    sha: Sha256,
+    md: Md5,
+}
+
+impl<T> Hashing<T> {
+    pub fn new(inner: T) -> Self {
+        Self {
+            inner,
+            sha: Sha256::new(),
+            md: Md5::new(),
+        }
+    }
+
+    /// The inner value and the SHA-256 and MD5 of everything passed through.
+    pub fn finish(self) -> (T, String, String) {
+        (
+            self.inner,
+            hex(&self.sha.finalize()),
+            hex(&self.md.finalize()),
+        )
+    }
+}
+
+impl<T: Read> Read for Hashing<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.sha.update(&buf[..n]);
+        self.md.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
+impl<T: Write> Write for Hashing<T> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.sha.update(&buf[..n]);
+        self.md.update(&buf[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// SHA-256 and MD5 of a file in one read. `progress` gets (read, total).
 pub(crate) fn hash_both(
     path: &Path,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<(String, String)> {
-    let mut file = File::open(path)?;
+    let mut file = open_regular(path)?;
     let total = file.metadata()?.len();
     let (mut sha, mut md) = (Sha256::new(), Md5::new());
     let mut buf = vec![0; 1 << 20];
@@ -398,7 +622,7 @@ pub(crate) fn copy_with_progress(
     dst: &Path,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<()> {
-    let mut input = File::open(src)?;
+    let mut input = open_work_file(src)?;
     let total = input.metadata()?.len();
     let mut out = options(true).create_new(true).open(dst)?;
     let mut buf = vec![0; 1 << 20];
@@ -462,21 +686,4 @@ impl Drop for LockGuard<'_> {
     fn drop(&mut self) {
         let _ = self.0.unlock();
     }
-}
-
-/// Whether two paths name the same file, ignoring separators and, on
-/// Windows, case. Neither path needs to exist.
-pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| {
-        let text = std::path::absolute(p)
-            .unwrap_or_else(|_| p.to_path_buf())
-            .to_string_lossy()
-            .replace('\\', "/");
-        if cfg!(windows) {
-            text.to_lowercase()
-        } else {
-            text
-        }
-    };
-    norm(a) == norm(b)
 }

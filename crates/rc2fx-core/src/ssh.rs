@@ -36,6 +36,35 @@ pub struct SshStatus {
     pub detail: Option<String>,
 }
 
+/// The most host keys a reply may list; a server has one per key type.
+const MAX_HOST_KEYS: usize = 16;
+/// The longest host key line, above a 4096-bit RSA key's.
+const MAX_HOST_KEY: usize = 2048;
+/// `SHA256:` and 43 characters of base64, with room for a longer hash.
+const MAX_FINGERPRINT: usize = 128;
+
+impl SshStatus {
+    /// Refuse text the mixer's SSH server could not have produced: these
+    /// fields are shown as they arrive, and host keys are pinned.
+    pub fn validate(&self) -> crate::Result<()> {
+        let text = crate::valid_display_text;
+        if self.host_keys.len() > MAX_HOST_KEYS
+            || self.host_keys.iter().any(|key| !text(key, MAX_HOST_KEY))
+            || self
+                .managed_fingerprint
+                .as_ref()
+                .is_some_and(|print| !text(print, MAX_FINGERPRINT))
+            || self
+                .detail
+                .as_ref()
+                .is_some_and(|detail| !text(detail, crate::MAX_STATUS_TEXT))
+        {
+            return Err(crate::CoreError("Invalid SSH status".into()));
+        }
+        Ok(())
+    }
+}
+
 /// `PUT api/v1/ssh`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -201,6 +230,42 @@ mod tests {
             format!("{KEY} {}", "x".repeat(MAX_SSH_PUBLIC_KEY)),
         ] {
             assert!(Ed25519PublicKey::parse(&bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn status_text_is_checked_before_it_is_shown_or_pinned() {
+        let good = SshStatus {
+            managed: true,
+            managed_fingerprint: Some("SHA256:abc".into()),
+            host_keys: vec![KEY.into()],
+            detail: Some("Running".into()),
+            ..Default::default()
+        };
+        good.validate().unwrap();
+        for bad in [
+            SshStatus {
+                host_keys: vec![format!("{KEY}\nssh-ed25519 other")],
+                ..good.clone()
+            },
+            SshStatus {
+                host_keys: vec![KEY.into(); MAX_HOST_KEYS + 1],
+                ..good.clone()
+            },
+            SshStatus {
+                host_keys: vec!["x".repeat(MAX_HOST_KEY + 1)],
+                ..good.clone()
+            },
+            SshStatus {
+                managed_fingerprint: Some("SHA256:\u{202e}cba".into()),
+                ..good.clone()
+            },
+            SshStatus {
+                detail: Some("x".repeat(crate::MAX_STATUS_TEXT + 1)),
+                ..good.clone()
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
         }
     }
 

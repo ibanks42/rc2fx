@@ -90,9 +90,9 @@ fn read_members(archive: &Path, model: Model) -> Result<HashMap<String, Vec<u8>>
         let name = firmware::normalized(&path);
         if required.contains(&name) {
             let limit = if name == "usr/bin/rc_audio_mixer" {
-                64 << 20
+                firmware::MAX_MIXER_MEMBER
             } else {
-                1 << 20
+                firmware::MAX_SMALL_MEMBER
             };
             if members.contains_key(name)
                 || !entry.header().entry_type().is_file()

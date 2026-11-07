@@ -1,0 +1,14 @@
+# Settings for `cargo audit`, run by .github/workflows/check.yml on every
+# lockfile. Ignore an advisory only with a reason, and re-check the reason when
+# the lockfile changes (`cargo tree -i CRATE --all-features`).
+
+[advisories]
+ignore = [
+    # rsa 0.9 "Marvin" timing side channel. `rsa` is an optional dependency of
+    # ssh-key that no RC2FX feature enables; it is in Cargo.lock but never
+    # built, and no fixed release exists. RC2FX only parses Ed25519 public keys.
+    "RUSTSEC-2023-0071",
+    # crypto-bigint 0.5 timing variability. Reached only through the same
+    # unused `rsa` feature of ssh-key.
+    "RUSTSEC-2026-0387",
+]

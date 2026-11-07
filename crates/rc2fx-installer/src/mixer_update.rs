@@ -104,29 +104,44 @@ pub(crate) async fn official(work: &Path) -> Result<MixerRepository> {
 pub(crate) fn metadata_directory(work: &Path) -> Result<std::path::PathBuf> {
     // The Linux helper must not let a desktop-controlled symlink redirect TUF's
     // writes as root. Its rollback state is independent and root-owned.
-    #[cfg(target_os = "linux")]
-    if unsafe { libc::geteuid() } == 0 {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-        let mut path = std::path::PathBuf::from("/");
-        for part in ["var", "lib", "rc2fx", "mixer-updates"] {
-            path.push(part);
-            match std::fs::symlink_metadata(&path) {
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    std::fs::DirBuilder::new().mode(0o700).create(&path)?;
-                }
-                Err(e) => return Err(e.into()),
-            }
-            let metadata = std::fs::symlink_metadata(&path)?;
-            if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
-                return Err(error(
-                    "helper metadata directory must be a root-owned directory, not writable by other users",
-                ));
-            }
-        }
+    if let Some(path) = helper_directory("mixer-updates")? {
         return Ok(path);
     }
     Ok(work.join("mixer-metadata"))
+}
+
+/// `name` under `/var/lib/rc2fx` when running as the privileged Linux helper:
+/// state the desktop user cannot change. `None` everywhere else.
+#[cfg(target_os = "linux")]
+pub(crate) fn helper_directory(name: &str) -> Result<Option<std::path::PathBuf>> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } != 0 {
+        return Ok(None);
+    }
+    let mut path = std::path::PathBuf::from("/");
+    for part in ["var", "lib", "rc2fx", name] {
+        path.push(part);
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+            return Err(error(
+                "helper metadata directory must be a root-owned directory, not writable by other users",
+            ));
+        }
+    }
+    Ok(Some(path))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn helper_directory(_: &str) -> Result<Option<std::path::PathBuf>> {
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -150,8 +165,7 @@ impl MixerTarget {
         let bundle = payload.bundle().map_err(error)?;
         let release =
             rc2fx_core::MixerRelease::parse(&bundle["mixer-release.json"]).map_err(error)?;
-        let catalog: crate::embed::Catalog =
-            serde_json::from_slice(&bundle["firmware-profiles.json"])?;
+        let catalog = crate::embed::parse_catalog(&bundle["firmware-profiles.json"])?;
         let metadata = Self {
             version: release.version,
             payload_format: 1,
@@ -305,8 +319,7 @@ impl MixerRepository {
         if bytes.len() as u64 != target.length {
             return Err(error("firmware catalog length mismatch"));
         }
-        let catalog: crate::Catalog = serde_json::from_slice(&bytes)?;
-        validate_catalog(&catalog)?;
+        let catalog = crate::embed::parse_catalog(&bytes)?;
         let mut supported: Vec<_> = catalog
             .profiles
             .iter()
@@ -558,9 +571,7 @@ impl MixerRepository {
         {
             return Err(error("signed metadata disagrees with the payload release"));
         }
-        let catalog: crate::embed::Catalog =
-            serde_json::from_slice(&bundle["firmware-profiles.json"])?;
-        validate_catalog(&catalog)?;
+        let catalog = crate::embed::parse_catalog(&bundle["firmware-profiles.json"])?;
         if let Some(app) = app_version
             && let Some(profile) = catalog.profiles.iter().find(|p| p.id == firmware_profile)
             && !crate::firmware::app_supports(profile, app)
@@ -599,28 +610,4 @@ impl MixerRepository {
             metadata,
         })
     }
-}
-
-fn validate_catalog(catalog: &crate::Catalog) -> Result<()> {
-    let hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
-    let mut ids = std::collections::HashSet::new();
-    if catalog.schema != 1 || catalog.profiles.is_empty() || catalog.profiles.len() > 128 {
-        return Err(error("invalid firmware catalog schema or profile count"));
-    }
-    for p in &catalog.profiles {
-        if p.id.is_empty()
-            || !ids.insert(&p.id)
-            || crate::DeviceModel::parse(&p.model).is_err()
-            || rc2fx_core::compare_versions(&p.version, &p.version).is_none()
-            || rc2fx_core::compare_versions(&p.minimum_app_version, &p.minimum_app_version)
-                .is_none()
-            || !hex(&p.mixer_sha, 64)
-            || !hex(&p.launcher_sha, 64)
-            || !hex(&p.archive_sha, 64)
-            || !hex(&p.archive_md5, 32)
-        {
-            return Err(error("invalid or duplicate firmware catalog profile"));
-        }
-    }
-    Ok(())
 }

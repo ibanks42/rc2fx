@@ -1,10 +1,10 @@
-//! The SSH key built into prepared firmware. The installer itself never
-//! connects over SSH; the key lets `cargo xtask mixer` reach the mixer.
+//! The developer SSH key and pinned host keys. Neither goes into firmware: the
+//! app adds the public key over USB 1. The installer itself never connects over
+//! SSH; the key lets `cargo xtask mixer` reach the mixer.
 
 use crate::{
     Error, Result, bail,
     files::{self, exists},
-    runtime::Entry,
 };
 use ssh_key::{
     LineEnding, PrivateKey, PublicKey,
@@ -72,48 +72,6 @@ pub(crate) fn ensure_key(value: &str) -> Result<(PathBuf, Vec<u8>)> {
         bail!("SSH public and private keys do not match");
     }
     Ok((private, authorized_line(&parsed)?))
-}
-
-/// The mixer's SSH host key, kept in the cache folder so every flash with SSH
-/// access gives the mixer the same identity (stock firmware has no host keys
-/// and generates new ones on its first boot). Returns the image entries and
-/// the public line.
-pub(crate) fn host_key(work: &Path) -> Result<(Vec<Entry>, Vec<u8>)> {
-    let (private, public) = ensure_key(&work.join("ssh_host_ed25519_key").to_string_lossy())?;
-    let entries = vec![
-        Entry::File {
-            path: "etc/ssh/ssh_host_ed25519_key".into(),
-            mode: 0o600,
-            data: std::fs::read(&private)?,
-        },
-        Entry::File {
-            path: "etc/ssh/ssh_host_ed25519_key.pub".into(),
-            mode: 0o644,
-            data: public.clone(),
-        },
-    ];
-    Ok((entries, public))
-}
-
-/// Trust `public` as `host` in the cache folder's `known_hosts`, which the
-/// mixer tooling reads, replacing any earlier key for that host.
-pub(crate) fn remember_host(work: &Path, host: &str, public: &[u8]) -> Result<()> {
-    let host = host.trim();
-    if host.is_empty() || host.contains(char::is_whitespace) {
-        return Ok(());
-    }
-    let path = work.join("known_hosts");
-    let old = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut text: String = old
-        .lines()
-        .filter(|l| l.split_whitespace().next() != Some(host))
-        .map(|l| format!("{l}\n"))
-        .collect();
-    text.push_str(host);
-    text.push(' ');
-    text.push_str(String::from_utf8_lossy(public).trim());
-    text.push('\n');
-    files::atomic_file(&path, text.as_bytes())
 }
 
 /// Where the desktop app's developer SSH key lives.

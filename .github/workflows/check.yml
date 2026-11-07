@@ -49,8 +49,16 @@ jobs:
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         if: runner.os == 'Linux'
         with:
-          tool: git-cliff@2.14.1
+          tool: git-cliff@2.14.1,cargo-audit@0.22.2
           fallback: none
+      - name: Audit dependencies for security advisories
+        if: runner.os == 'Linux'
+        # Fails on vulnerabilities; unmaintained-crate warnings are printed only.
+        # Ignored advisories and their reasons live in .cargo/audit.toml.
+        run: |
+          cargo audit --file Cargo.lock
+          cargo audit --file crates/rc2fx-native/Cargo.lock
+          cargo audit --file crates/rc2fx-bench/Cargo.lock
       - name: Test release and documentation tooling
         if: runner.os == 'Linux'
         run: |

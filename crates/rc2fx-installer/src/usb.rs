@@ -6,6 +6,7 @@ use crate::{
     files, now_unix, utc,
 };
 use std::{
+    io::Read,
     path::Path,
     time::{Duration, Instant},
 };
@@ -114,7 +115,10 @@ pub(crate) fn archive_matches(
     if sha != p.archive_sha || md5 != p.archive_md5 {
         bail!("{} does not match the prepared firmware", archive.display());
     }
-    let md = std::fs::read(dir.join("archive.md5"))?;
+    let mut md = Vec::new();
+    files::open_regular(&dir.join("archive.md5"))?
+        .take(128)
+        .read_to_end(&mut md)?;
     if md.trim_ascii() != p.archive_md5.as_bytes() {
         bail!("archive.md5 does not match the prepared firmware");
     }
@@ -298,7 +302,9 @@ impl Engine {
         valid_volume(&v)?;
         let mut needed = 0;
         for name in FILES {
-            needed += std::fs::metadata(self.work.join(name))?.len();
+            needed += files::open_work_file(&self.work.join(name))?
+                .metadata()?
+                .len();
         }
         fits(needed, v.total)?;
         let drive = Path::new(&v.path);

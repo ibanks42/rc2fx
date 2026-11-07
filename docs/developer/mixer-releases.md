@@ -127,6 +127,30 @@ signatures, expiry, and stored version numbers provide its trust boundary.
 Retain every numbered root file so old clients can verify the complete rotation
 chain. Do not replace an old numbered root with different bytes.
 
+## If the targets key leaks
+
+The targets key decides which mixer software clients accept, so a leaked key
+lets its holder authorize a payload until the key is revoked.
+
+1. Set `MIXER_UPDATES_ENABLED=false` to stop publication, and replace the
+   `MIXER_TARGETS_KEY` secret only once the rotation below is ready.
+2. Offline, create the next sequential root version that authorizes a new
+   targets key, cross-signed as described under
+   [Renewal and recovery](#renewal-and-recovery). Existing clients follow the
+   signed root chain, so this needs no new app build while the root key is safe.
+3. Reauthorize the current release with the new key, with versions greater than
+   anything the old key could have signed.
+4. Ship a desktop build with the new root as its initial trust, so a fresh
+   install doesn't start from the root that still trusts the old key.
+
+If the root key leaked too, the chain can't be trusted: follow the last step of
+[Renewal and recovery](#renewal-and-recovery).
+
+`MixerTarget` and `MixerOffer` deny unknown fields, which freezes the schema of
+the signed metadata: a field added by a newer publisher makes older clients
+refuse that metadata. Add a field only when every supported app understands it,
+or with a new payload format version.
+
 ## Renewal and recovery
 
 Targets authorization lasts 90 days. Snapshot and timestamp metadata normally

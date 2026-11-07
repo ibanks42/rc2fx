@@ -41,6 +41,12 @@ pub struct EngineStatus {
     pub audio_advancing: bool,
 }
 impl EngineStatus {
+    pub fn validate(&self) -> Result<()> {
+        if !crate::valid_display_text(&self.message, crate::MAX_STATUS_TEXT) {
+            return Err(CoreError("Invalid engine status message".into()));
+        }
+        Ok(())
+    }
     pub fn restart_eligible(&self) -> bool {
         self.restart_allowed && self.mode == EngineMode::Jack && self.status == EnginePhase::Error
     }
@@ -155,6 +161,14 @@ pub struct RoutingStatus {
     pub channels: u32,
     pub recovered: u32,
     pub message: String,
+}
+impl RoutingStatus {
+    pub fn validate(&self) -> Result<()> {
+        if !crate::valid_display_text(&self.message, crate::MAX_STATUS_TEXT) {
+            return Err(CoreError("Invalid routing status message".into()));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -318,6 +332,8 @@ impl DeviceState {
     }
     pub fn validate(&self) -> Result<()> {
         self.config.validate()?;
+        self.engine.validate()?;
+        self.routing.validate()?;
         self.selection.validate(&self.config)
     }
     pub fn stock_selected(&self) -> bool {

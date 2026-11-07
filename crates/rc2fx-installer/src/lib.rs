@@ -15,6 +15,7 @@ pub mod app_update;
 pub mod control;
 pub mod embed;
 pub mod mixer_update;
+mod anchor;
 mod files;
 mod firmware;
 pub mod helper;
@@ -124,11 +125,12 @@ pub struct Prepared {
     pub profile: String,
     pub archive_sha: String,
     pub archive_md5: String,
-    /// RC2FX's SSH key built in (a developer option); empty if none.
+    /// An SSH key an older installer built in; empty in anything built now. A
+    /// cached image with one is never reused or flashed.
     pub key: String,
-    /// SHA-256 of the authorized_keys line; empty without a key.
+    /// SHA-256 of that key's authorized_keys line.
     pub key_sha: String,
-    /// SHA-256 of the SSH host key line built in with the key; empty without.
+    /// SHA-256 of the SSH host key line built in with that key.
     pub host_key: String,
     /// SHA-256 of the RC2FX runtime built in; empty if none.
     pub runtime: String,
@@ -234,14 +236,12 @@ pub enum Request {
         settings: String,
     },
     /// Build firmware with RC2FX and the newest settings saved for `serial`,
-    /// or with `stock`, stage the release unchanged. `ssh` also builds in
-    /// RC2FX's SSH key for developer tools.
+    /// or with `stock`, stage the release unchanged.
     Prepare {
         channel: String,
         version: String,
         serial: String,
         stock: bool,
-        ssh: bool,
     },
     EnterUsbMode {
         serial: String,
@@ -280,7 +280,6 @@ pub struct Engine {
     /// embedded copy, or a folder for developer tools and tests.
     pub(crate) source: embed::Source,
     pub work: PathBuf,
-    pub key: PathBuf,
     pub platform: Box<dyn Platform>,
     pub progress: Option<Box<dyn FnMut(Progress) + Send>>,
     /// Set from another thread to stop a download; the request then fails
@@ -289,6 +288,9 @@ pub struct Engine {
     http: Option<reqwest::blocking::Client>,
     model: DeviceModel,
     allow_experimental_duo: bool,
+    /// Stands in for the helper's root-owned folder.
+    #[cfg(test)]
+    pub(crate) anchor_dir: Option<PathBuf>,
 }
 
 /// The error of a request stopped through [`Engine::cancel`].
@@ -336,17 +338,17 @@ impl Engine {
         work: impl Into<PathBuf>,
         platform: Box<dyn Platform>,
     ) -> Self {
-        let key = source.ssh_key();
         Self {
             source,
             work: work.into(),
-            key,
             platform,
             progress: None,
             cancel: Default::default(),
             http: None,
             model: DeviceModel::ProIi,
             allow_experimental_duo: false,
+            #[cfg(test)]
+            anchor_dir: None,
         }
     }
 
@@ -450,10 +452,14 @@ impl Engine {
                 version,
                 serial,
                 stock,
-                ssh,
-            } => Ok(Reply::Prepared(
-                self.prepare(&channel, &version, &serial, stock, ssh)?,
-            )),
+            } => {
+                // The helper is otherwise probed only when it starts, and the
+                // image is built for the mixer connected now.
+                self.probe()?;
+                Ok(Reply::Prepared(
+                    self.prepare(&channel, &version, &serial, stock)?,
+                ))
+            }
             Request::Verify => {
                 let prepared = self
                     .load()?
@@ -532,8 +538,8 @@ impl Engine {
 
 /// Read the cache; empty if there is none yet.
 pub fn load_saved(work: &Path) -> Result<Saved> {
-    match std::fs::read(work.join(SAVED_NAME)) {
-        Ok(data) => Ok(serde_json::from_slice(&data)?),
+    match files::open_work_file(&work.join(SAVED_NAME)) {
+        Ok(file) => Ok(serde_json::from_reader(std::io::BufReader::new(file))?),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Saved::default()),
         Err(e) => Err(e.into()),
     }
@@ -567,39 +573,6 @@ pub(crate) fn utc() -> String {
     )
 }
 
-/// Values from `.rc2fx-mixer.conf`, the developer tools' mixer settings.
-pub fn mixer_config(root: &Path) -> std::collections::HashMap<String, String> {
-    let data = std::fs::read_to_string(root.join(".rc2fx-mixer.conf")).unwrap_or_default();
-    data.lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(k, v)| {
-            (
-                k.trim().to_owned(),
-                v.trim().trim_matches(['"', '\'']).to_owned(),
-            )
-        })
-        .collect()
-}
-
-/// The SSH key the installer builds into firmware: `key` from
-/// `.rc2fx-mixer.conf` when it is an absolute path on this computer (a
-/// leading `~/` is the home folder), otherwise [`default_key`]. A path written
-/// for another operating system, such as `C:/Users/…` on Linux, is not
-/// absolute here, so it falls back rather than naming a file relative to the
-/// current folder.
-pub fn ssh_key(root: &Path) -> PathBuf {
-    configured_key(mixer_config(root).remove("key"), files::home_dir()).unwrap_or_else(default_key)
-}
-
-fn configured_key(value: Option<String>, home: Option<PathBuf>) -> Option<PathBuf> {
-    let value = value.filter(|v| !v.is_empty())?;
-    let path = match value.strip_prefix("~/") {
-        Some(rest) => home?.join(rest),
-        None => PathBuf::from(value),
-    };
-    path.is_absolute().then_some(path)
-}
-
 pub fn default_key() -> PathBuf {
     files::home_dir()
         .unwrap_or_default()
@@ -626,42 +599,3 @@ pub fn default_work() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod key_tests {
-    use super::configured_key;
-    use std::path::PathBuf;
-
-    #[test]
-    fn a_configured_key_must_be_absolute_here() {
-        let home = Some(PathBuf::from(if cfg!(windows) {
-            r"C:\Users\me"
-        } else {
-            "/home/me"
-        }));
-        let own = if cfg!(windows) {
-            r"D:\keys\k"
-        } else {
-            "/srv/keys/k"
-        };
-        assert_eq!(
-            configured_key(Some(own.into()), home.clone()),
-            Some(PathBuf::from(own))
-        );
-        assert_eq!(
-            configured_key(Some("~/.ssh/k".into()), home.clone()),
-            Some(home.clone().unwrap().join(".ssh/k"))
-        );
-        // Another system's path, a relative path, or nothing: use the default.
-        let foreign = if cfg!(windows) {
-            "/home/me/.ssh/k"
-        } else {
-            "C:/Users/me/.ssh/k"
-        };
-        assert_eq!(configured_key(Some(foreign.into()), home.clone()), None);
-        assert_eq!(configured_key(Some("keys/k".into()), home.clone()), None);
-        assert_eq!(configured_key(Some(String::new()), home.clone()), None);
-        assert_eq!(configured_key(None, home), None);
-        assert_eq!(configured_key(Some("~/.ssh/k".into()), None), None);
-    }
-}

@@ -681,8 +681,11 @@ impl Rc2FxApp {
                     self.receive(state, false, true, window, cx);
                     self.awaiting_refresh = false;
                 }
-                EventKind::Engine(value) => match serde_json::from_value::<EngineStatus>(value) {
-                    Ok(engine) => {
+                EventKind::Engine(value) => match serde_json::from_value::<EngineStatus>(value)
+                    .ok()
+                    .filter(|engine| engine.validate().is_ok())
+                {
+                    Some(engine) => {
                         let reset = self
                             .session
                             .saved
@@ -698,7 +701,7 @@ impl Rc2FxApp {
                             self.engine_seen = Some(Instant::now());
                         }
                     }
-                    Err(_) => {
+                    None => {
                         self.message = "Invalid engine status received".into();
                         self.engine_seen = None;
                         self.meter = None;

@@ -21,7 +21,9 @@ fn failed_bundled_selection_discards_previous_source() {
     let work = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::with_platform(
-        root.path(), work.path(), Box::new(FakePlatform(Default::default())),
+        root.path(),
+        work.path(),
+        Box::new(FakePlatform(Default::default())),
     );
     assert!(!matches!(engine.source, embed::Source::Download));
     assert!(engine.handle(Request::SelectBundledMixer).is_err());
@@ -58,13 +60,49 @@ fn header(name: &str, kind: tar::EntryType, size: usize) -> tar::Header {
     h
 }
 
+/// `profiles` as a catalog file, in the full form the strict parser needs: the
+/// fields `Profile` leaves out come from the real catalog.
+fn catalog_json(profiles: &[Profile]) -> Vec<u8> {
+    let real: serde_json::Value =
+        serde_json::from_str(include_str!("../../../config/firmware-profiles.json")).unwrap();
+    let full: Vec<_> = profiles
+        .iter()
+        .map(|p| {
+            let mut full = real["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|real| real["model"] == p.model.as_str())
+                .unwrap()
+                .clone();
+            let runtime = full["runtime"].take();
+            let lean = serde_json::to_value(p).unwrap();
+            for (key, value) in lean.as_object().unwrap() {
+                if key != "runtime" {
+                    full[key] = value.clone();
+                }
+            }
+            full["runtime"] = if p.runtime.is_some() {
+                runtime
+            } else {
+                serde_json::Value::Null
+            };
+            full
+        })
+        .collect();
+    serde_json::to_vec(&serde_json::json!({"schemaVersion": 1, "profiles": full})).unwrap()
+}
+
 fn sample_profile() -> Profile {
     Profile {
+        minimum_app_version: "0.1.1".into(),
         id: "fixture".into(),
         model: "rodecaster-pro-ii".into(),
         version: "1.7.7".into(),
         mixer_sha: "a".repeat(64),
         launcher_sha: "b".repeat(64),
+        archive_sha: "c".repeat(64),
+        archive_md5: "d".repeat(32),
         runtime: Some(RuntimeProfile {
             callback_abi: "jack-process-v1".into(),
             route_layout: "pro-ii-25-v1".into(),
@@ -75,7 +113,6 @@ fn sample_profile() -> Profile {
                 abi: "capture-values-v1".into(),
             },
         }),
-        ..Default::default()
     }
 }
 
@@ -251,25 +288,19 @@ fn write_runtime(root: &Path, catalog: &[u8]) {
     }
 }
 
-/// An installer folder with a runtime bundle, a key and prepared firmware,
+/// An installer folder with a runtime bundle and prepared firmware,
 /// and one normal-mode mixer on USB.
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = std::path::absolute(dir.path()).unwrap();
     let work = root.join("work");
     fs::create_dir_all(&work).unwrap();
-    let catalog = serde_json::to_vec(&Catalog {
-        schema: 1,
-        profiles: vec![sample_profile()],
-    })
-    .unwrap();
+    let catalog = catalog_json(&[sample_profile()]);
     put(
         &root.join("config").join("firmware-profiles.json"),
         &catalog,
     );
     write_runtime(&root, &catalog);
-    let key_path = root.join("keys").join("id");
-    let (key, public) = ssh::ensure_key(&key_path.to_string_lossy()).unwrap();
     let data = b"fixture firmware";
     put(&work.join("archive.tar.gz"), data);
     let md = file_hash(&work.join("archive.tar.gz"), Algorithm::Md5).unwrap();
@@ -281,9 +312,6 @@ fn fixture() -> Fixture {
         profile: "fixture".into(),
         archive_sha: sum(data),
         archive_md5: md,
-        key: key.to_string_lossy().into(),
-        key_sha: sum(&public),
-        host_key: String::new(),
         runtime: image_entries(
             &runtime::bundle_files(&root).unwrap(),
             &sample_profile(),
@@ -291,8 +319,7 @@ fn fixture() -> Fixture {
         )
         .unwrap()
         .1,
-        settings: String::new(),
-        stock: false,
+        ..Default::default()
     };
     let fake = Arc::new(Mutex::new(Fake {
         items: vec![Hid {
@@ -308,8 +335,7 @@ fn fixture() -> Fixture {
         work: work.clone(),
         ..Default::default()
     }));
-    let mut engine = Engine::with_platform(&root, &work, Box::new(FakePlatform(fake.clone())));
-    engine.key = key;
+    let engine = Engine::with_platform(&root, &work, Box::new(FakePlatform(fake.clone())));
     engine
         .save(&Saved {
             prepared: Some(prepared.clone()),
@@ -374,24 +400,14 @@ fn padded_windows_write_is_accepted_but_short_write_and_missing_ack_are_not() {
 
 #[test]
 fn damaged_preparation_blocks_usb_before_opening_the_device() {
-    for damage in [
-        "firmware",
-        "md5",
-        "runtime",
-        "profile",
-        "missing-key",
-        "changed-key",
-    ] {
+    for damage in ["firmware", "md5", "runtime", "profile", "key", "host-key"] {
         let mut f = fixture();
         let mut saved = f.saved();
         let p = saved.prepared.as_mut().unwrap();
         match damage {
-            "missing-key" => fs::remove_file(&p.key).unwrap(),
-            "changed-key" => {
-                let (key, _) =
-                    ssh::ensure_key(&f.root.join("other-key").to_string_lossy()).unwrap();
-                p.key = key.to_string_lossy().into();
-            }
+            // What an older installer's SSH option left in the cache.
+            "key" => p.key = "/old/key".into(),
+            "host-key" => p.host_key = "abc".into(),
             "firmware" => put(&f.engine.work.join("archive.tar.gz"), b"changed"),
             "md5" => put(&f.engine.work.join("archive.md5"), b"changed"),
             "runtime" => put(&f.root.join("runtime").join("rc2fxd"), b"changed"),
@@ -408,21 +424,167 @@ fn damaged_preparation_blocks_usb_before_opening_the_device() {
 }
 
 #[test]
+fn the_helper_refuses_an_image_rewritten_together_with_its_cache_record() {
+    let anchors = tempfile::tempdir().unwrap();
+    let mut f = fixture();
+    f.engine.anchor_dir = Some(anchors.path().into());
+    f.update_mode();
+    let usb = f.drive(SERIAL);
+
+    // Nothing recorded: a cache the helper did not build is not trusted.
+    assert!(f.engine.flash("").is_err(), "unrecorded image accepted");
+    assert_eq!(f.counts(), (0, 0, 0));
+
+    // A same-user process rewrites the archive and everything that describes
+    // it, so every hash in the user's folder agrees.
+    f.engine.anchor_prepared(&f.prepared).unwrap();
+    let forged = b"forged firmware";
+    let work = f.engine.work.clone();
+    put(&work.join("archive.tar.gz"), forged);
+    let md = file_hash(&work.join("archive.tar.gz"), Algorithm::Md5).unwrap();
+    put(&work.join("archive.md5"), md.as_bytes());
+    let mut saved = f.saved();
+    let p = saved.prepared.as_mut().unwrap();
+    p.archive_sha = sum(forged);
+    p.archive_md5 = md;
+    f.engine.save(&saved).unwrap();
+    assert!(f.engine.flash("").is_err(), "consistent rewrite accepted");
+    assert_eq!(f.counts(), (0, 0, 0));
+    assert!(!usb.join("archive.tar.gz").exists(), "forged image staged");
+
+    // The same check still lets through what the helper recorded.
+    let p = saved.prepared.clone().unwrap();
+    f.engine.anchor_prepared(&p).unwrap();
+    f.engine.flash("").unwrap();
+    assert_eq!(f.counts(), (1, 1, 1));
+}
+
+#[test]
+fn only_the_helper_that_records_an_image_can_flash_it() {
+    let anchors = tempfile::tempdir().unwrap();
+    let f = fixture();
+
+    // The desktop process has no root-owned folder: recording does nothing,
+    // and its own check passes, so only the helper can notice.
+    let desktop =
+        || Engine::with_platform(&f.root, &f.engine.work, Box::new(FakePlatform(f.p.clone())));
+    desktop().anchor_prepared(&f.prepared).unwrap();
+    desktop().verify_prepared(&f.prepared).unwrap();
+
+    let helper = || {
+        let mut engine = desktop();
+        engine.anchor_dir = Some(anchors.path().into());
+        engine
+    };
+    let refused = helper().verify_prepared(&f.prepared).unwrap_err();
+    assert!(refused.0.contains("not prepared by the installer helper"));
+
+    // A helper's record outlives it, so a later one flashes the same image.
+    helper().anchor_prepared(&f.prepared).unwrap();
+    helper().verify_prepared(&f.prepared).unwrap();
+}
+
+#[test]
+fn a_helper_started_before_the_mixer_appeared_prepares_for_that_mixer() {
+    let mut f = fixture();
+    f.fake().items[0].pid = DeviceModel::Duo.normal_pids()[0];
+    for stock in [false, true] {
+        let error = f
+            .engine
+            .handle(Request::Prepare {
+                channel: "beta".into(),
+                version: "1.7.7".into(),
+                serial: String::new(),
+                stock,
+            })
+            .unwrap_err();
+        assert!(error.0.contains("experimental"), "{}", error.0);
+    }
+    assert_eq!(f.counts(), (0, 0, 0));
+}
+
+#[test]
+fn a_catalog_without_the_full_pins_is_refused_from_every_source() {
+    let mut f = fixture();
+    let catalog = catalog_json(&[sample_profile()]);
+    embed::parse_catalog(&catalog).unwrap();
+    let mut catalog: serde_json::Value = serde_json::from_slice(&catalog).unwrap();
+    catalog["profiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("archiveSha256");
+    let catalog = serde_json::to_vec(&catalog).unwrap();
+    assert!(embed::parse_catalog(&catalog).is_err());
+
+    // The same file through a folder, as an embedded payload is read.
+    put(&f.root.join("config/firmware-profiles.json"), &catalog);
+    assert!(f.engine.catalog().is_err());
+    assert!(f.engine.enter_usb_mode("").is_err());
+    assert_eq!(f.counts(), (0, 0, 0));
+
+    let empty = sample_profile();
+    let lean = serde_json::to_vec(&Catalog {
+        schema: 1,
+        profiles: vec![empty],
+    })
+    .unwrap();
+    assert!(embed::parse_catalog(&lean).is_err(), "lean form accepted");
+}
+
+#[test]
+fn a_download_needs_the_catalogs_sha_256_as_well_as_rodes_md5() {
+    let mut f = fixture();
+    let dest = f.engine.work.join("cached.tar.gz");
+    put(&dest, b"cached firmware");
+    let md = file_hash(&dest, Algorithm::Md5).unwrap();
+    let url = "https://update.rode.com/rodecaster-pro-ii/1.7.7/os.tar.gz";
+    let error = f.engine.download(url, &dest, "", &md).unwrap_err();
+    assert!(error.0.contains("both firmware checksums"), "{}", error.0);
+    let sha = file_hash(&dest, Algorithm::Sha256).unwrap();
+    f.engine.download(url, &dest, &sha, &md).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_backup_record_cannot_point_the_helper_outside_the_cache_folder() {
+    let mut f = fixture();
+    let work = f.engine.work.clone();
+    let settings = "{}";
+    let record = f.engine.save_settings(SERIAL, settings).unwrap();
+    backup_settings(&work, &record).unwrap();
+
+    let outside = f.root.join("secret.json");
+    put(&outside, settings.as_bytes());
+    let elsewhere = |file: &Path| BackupRecord {
+        file: file.to_string_lossy().into_owned(),
+        ..record.clone()
+    };
+    for path in [
+        outside.clone(),
+        work.join("../secret.json"),
+        work.join("sub/settings.json"),
+    ] {
+        assert!(
+            backup_settings(&work, &elsewhere(&path)).is_err(),
+            "{path:?}"
+        );
+    }
+    let link = work.join("settings-link.json");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    assert!(backup_settings(&work, &elsewhere(&link)).is_err());
+}
+
+#[test]
 fn stock_firmware_requires_catalog_pins_but_no_runtime_or_key() {
     let mut f = fixture();
     let mut saved = f.saved();
     let p = saved.prepared.as_mut().unwrap();
     p.stock = true;
     p.runtime.clear();
-    p.key.clear();
     let mut profile = sample_profile();
     profile.archive_sha = p.archive_sha.clone();
     profile.archive_md5 = p.archive_md5.clone();
-    let catalog = serde_json::to_vec(&Catalog {
-        schema: 1,
-        profiles: vec![profile],
-    })
-    .unwrap();
+    let catalog = catalog_json(&[profile]);
     put(&f.root.join("config/firmware-profiles.json"), &catalog);
     write_runtime(&f.root, &catalog);
     f.engine.save(&saved).unwrap();
@@ -618,11 +780,7 @@ fn duo_fixture() -> Fixture {
     test_tar(&archive, &entries);
     profile.archive_sha = file_hash(&archive, Algorithm::Sha256).unwrap();
     profile.archive_md5 = file_hash(&archive, Algorithm::Md5).unwrap();
-    let catalog = serde_json::to_vec(&Catalog {
-        schema: 1,
-        profiles: vec![profile.clone()],
-    })
-    .unwrap();
+    let catalog = catalog_json(&[profile.clone()]);
     put(&f.root.join("config/firmware-profiles.json"), &catalog);
     write_runtime(&f.root, &catalog);
     let bundle = runtime::bundle_files(&f.root).unwrap();
@@ -825,7 +983,8 @@ fn duo_is_recognized_but_never_opened_or_flashed_without_opt_in() {
 #[test]
 fn release_discovery_keeps_same_version_models_separate() {
     use rc2fx_firmware::Model;
-    let catalog: Catalog = serde_json::from_str(include_str!("../../../config/firmware-profiles.json")).unwrap();
+    let catalog: Catalog =
+        serde_json::from_str(include_str!("../../../config/firmware-profiles.json")).unwrap();
     for model in Model::ALL {
         let releases = firmware::releases_from_catalog(model, &catalog).unwrap();
         assert_eq!(releases.len(), 2);
@@ -939,21 +1098,15 @@ fn patch_changes_only_authorized_key_and_keeps_long_names() {
         }
         b.into_inner().unwrap().finish().unwrap();
     }
-    let key = b"ssh-ed25519 fixture\n";
-    let (mix, launcher) = patch_archive(&src, &dst, key, &[]).unwrap();
+    let (mix, launcher) = patch_archive(&src, &dst, &[]).unwrap();
     assert_eq!((mix, launcher), (sum(b"mixer"), sum(b"launcher")));
     let mut i = 0;
     walk_archive(&dst, 1 << 20, false, |entry| {
         let mut b = Vec::new();
         entry.read_to_end(&mut b).unwrap();
         let h = entry.header();
-        let (expected, mode) = if i == 0 {
-            (key.to_vec(), 0o600)
-        } else {
-            (data[i].clone(), 0o755)
-        };
-        assert_eq!(b, expected, "member {i}");
-        assert_eq!(h.mode().unwrap(), mode);
+        assert_eq!(b, data[i], "member {i}");
+        assert_eq!(h.mode().unwrap(), 0o755);
         assert_eq!(
             (h.uid().unwrap(), h.gid().unwrap(), h.mtime().unwrap()),
             (4, 5, 123)
@@ -976,7 +1129,7 @@ fn patch_changes_only_authorized_key_and_keeps_long_names() {
         .collect();
     entries.push(entries[0].clone());
     test_tar(&src, &entries);
-    assert!(patch_archive(&src, &dir.path().join("bad.gz"), key, &[]).is_err());
+    assert!(patch_archive(&src, &dir.path().join("bad.gz"), &[]).is_err());
     // A non-empty authorized_keys is refused.
     entries.pop();
     entries[0] = (
@@ -984,7 +1137,7 @@ fn patch_changes_only_authorized_key_and_keeps_long_names() {
         b"key".to_vec(),
     );
     test_tar(&src, &entries);
-    assert!(patch_archive(&src, &dir.path().join("bad.gz"), key, &[]).is_err());
+    assert!(patch_archive(&src, &dir.path().join("bad.gz"), &[]).is_err());
 }
 
 #[test]
@@ -1004,7 +1157,8 @@ fn action_lock_is_exclusive_and_released() {
 
 #[test]
 fn releases_are_offline_and_only_offer_qualified_catalog_entries() {
-    let mut catalog: Catalog = serde_json::from_str(include_str!("../../../config/firmware-profiles.json")).unwrap();
+    let mut catalog: Catalog =
+        serde_json::from_str(include_str!("../../../config/firmware-profiles.json")).unwrap();
     catalog
         .profiles
         .iter_mut()
@@ -1027,14 +1181,14 @@ fn releases_are_offline_and_only_offer_qualified_catalog_entries() {
     for stock in [false, true] {
         assert!(
             f.engine
-                .prepare("stable", "1.7.8", "", stock, false)
+                .prepare("stable", "1.7.8", "", stock)
                 .unwrap_err()
                 .0
                 .contains("qualified catalog")
         );
         assert!(
             f.engine
-                .prepare("beta", "1.7.7", "", stock, false)
+                .prepare("beta", "1.7.7", "", stock)
                 .unwrap_err()
                 .0
                 .contains("qualified catalog")
@@ -1132,10 +1286,10 @@ fn real_duo_image_preserves_board_files_and_carries_explicit_runtime_opt_in() {
     let (entries, _) = image_entries(&bundle, profile, None).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let destination = dir.path().join("duo.tar.gz");
-    let (mixer, launcher) =
-        firmware::patch_archive_for_model(model, &source, &destination, b"", &entries).unwrap();
-    assert_eq!(mixer, profile.mixer_sha);
-    assert_eq!(launcher, profile.launcher_sha);
+    let patched =
+        firmware::patch_archive_for_model(model, &source, &destination, &entries, None).unwrap();
+    assert_eq!(patched.mixer, profile.mixer_sha);
+    assert_eq!(patched.launcher, profile.launcher_sha);
     inspection::verify_archive_model(model, &destination).unwrap();
     assert!(inspection::verify_archive_model(DeviceModel::ProIi, &destination).is_err());
     assert!(fs::metadata(&destination).unwrap().len() <= 275 << 20);
@@ -1205,19 +1359,14 @@ fn real_image_builds_within_the_update_drive() {
     let saved = load_saved(&work).unwrap();
     let settings = saved
         .backup_for(&serial)
-        .map(|b| backup_settings(b).unwrap());
+        .map(|b| backup_settings(&work, b).unwrap());
     println!("settings: {} bytes", settings.as_ref().map_or(0, Vec::len));
     let bundle = runtime::bundle_files(&root).unwrap();
     let (entries, digest) = image_entries(&bundle, &profile, settings.as_deref()).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("archive.tar.gz");
-    let (mix, launcher) = patch_archive(
-        &work.join("rode-original.tar.gz"),
-        &out,
-        b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA6rWI3G2sz07DnfFlrouTcysQlj2P+jpNSOEWD9OJ3X\n",
-        &entries,
-    )
-    .unwrap();
+    let (mix, launcher) =
+        patch_archive(&work.join("rode-original.tar.gz"), &out, &entries).unwrap();
     assert_eq!((mix, launcher), (profile.mixer_sha, profile.launcher_sha));
     println!(
         "image {} bytes, runtime {digest}, {} entries added",
@@ -1285,7 +1434,7 @@ fn image_gets_rc2fx_autostart_and_settings_and_nothing_is_replaced() {
     let dir = tempfile::tempdir().unwrap();
     let (src, dst) = (dir.path().join("stock.gz"), dir.path().join("rc2fx.gz"));
     stock_image(&src);
-    patch_archive(&src, &dst, b"ssh-ed25519 fixture\n", &entries).unwrap();
+    patch_archive(&src, &dst, &entries).unwrap();
     let mut found: HashMap<String, (u8, u32, Vec<u8>, String)> = HashMap::new();
     walk_archive(&dst, 1 << 24, false, |entry| {
         let name = firmware::normalized(&firmware::entry_name(entry)).to_owned();
@@ -1341,7 +1490,10 @@ fn image_gets_rc2fx_autostart_and_settings_and_nothing_is_replaced() {
         bundle["rc2fx_jackerr_snapshot"]
     );
     assert_eq!(found["opt/rc2fx/rc2fx-gui-shim.sh"].1, 0o700);
-    assert_eq!(found[KEY_MEMBER].2, b"ssh-ed25519 fixture\n");
+    assert!(
+        found[KEY_MEMBER].2.is_empty(),
+        "authorized_keys stays as shipped"
+    );
     assert_eq!(found["usr/bin/rc_audio_mixer"].2, b"mixer");
 
     // Without settings, no settings file is added.
@@ -1351,20 +1503,6 @@ fn image_gets_rc2fx_autostart_and_settings_and_nothing_is_replaced() {
         "the runtime digest does not depend on settings"
     );
     assert!(!bare.iter().any(|e| e.path() == "opt/rc2fx/data/state.json"));
-
-    // Without the SSH developer option, authorized_keys stays as shipped.
-    let plain = dir.path().join("plain.gz");
-    patch_archive(&src, &plain, b"", &entries).unwrap();
-    walk_archive(&plain, 1 << 24, false, |entry| {
-        if firmware::normalized(&firmware::entry_name(entry)) == KEY_MEMBER {
-            let mut data = Vec::new();
-            entry.read_to_end(&mut data).unwrap();
-            assert!(data.is_empty(), "no key without the developer option");
-            assert_eq!(entry.header().mode().unwrap(), 0o755, "mode unchanged");
-        }
-        Ok(())
-    })
-    .unwrap();
 
     // An image that already has RC2FX paths is refused rather than merged.
     let mut taken = vec![(
@@ -1380,7 +1518,7 @@ fn image_gets_rc2fx_autostart_and_settings_and_nothing_is_replaced() {
     })
     .unwrap();
     test_tar(&src, &taken);
-    assert!(patch_archive(&src, &dir.path().join("bad.gz"), b"k\n", &entries).is_err());
+    assert!(patch_archive(&src, &dir.path().join("bad.gz"), &entries).is_err());
 }
 
 #[test]
@@ -1446,7 +1584,7 @@ fn settings_read_over_usb_are_kept_per_mixer_and_used_for_the_image() {
     let saved = f.engine.save_settings(SERIAL, body).unwrap();
     assert_eq!(saved.sha, sum(body.as_bytes()));
     assert_eq!(
-        backup_settings(f.saved().backup_for(SERIAL).unwrap()).unwrap(),
+        backup_settings(&f.engine.work, f.saved().backup_for(SERIAL).unwrap()).unwrap(),
         body.as_bytes()
     );
     assert!(f.saved().backup_for("another-mixer").is_none());
@@ -1456,7 +1594,7 @@ fn settings_read_over_usb_are_kept_per_mixer_and_used_for_the_image() {
     );
     // A changed file is refused.
     fs::write(&saved.file, b"{}").unwrap();
-    assert!(backup_settings(&saved).is_err());
+    assert!(backup_settings(&f.engine.work, &saved).is_err());
     // Without a mixer serial, or with something that is not settings, nothing is kept.
     assert!(f.engine.save_settings("", body).is_err());
     assert!(f.engine.save_settings(SERIAL, "[]").is_err());
@@ -1478,36 +1616,85 @@ fn service_follows_the_state_the_app_reads_over_usb() {
     ));
 }
 
+/// A minimal image that `patch_archive` accepts.
+fn patchable_members() -> Vec<(tar::Header, Vec<u8>)> {
+    let data: [(&str, &[u8]); 5] = [
+        (KEY_MEMBER, b""),
+        ("etc/hostname", b"rodecaster-pro-ii\n"),
+        (
+            "etc/ssh/sshd_config",
+            b"PermitRootLogin yes\nAuthorizedKeysFile .ssh/authorized_keys\n",
+        ),
+        ("usr/bin/rc_audio_mixer", b"mixer"),
+        ("usr/bin/audio-start.sh", b"launcher"),
+    ];
+    data.iter()
+        .map(|(name, d)| (header(name, tar::EntryType::Regular, d.len()), d.to_vec()))
+        .collect()
+}
+
 #[test]
-fn ssh_access_keeps_one_host_key_and_trusts_it_under_the_mixer_address() {
+fn patching_refuses_oversized_members_before_reading_them() {
     let dir = tempfile::tempdir().unwrap();
-    let work = dir.path();
-    let (entries, public) = ssh::host_key(work).unwrap();
-    let (again, same) = ssh::host_key(work).unwrap();
-    assert_eq!(public, same, "the same identity every flash");
-    let paths: Vec<_> = entries.iter().map(|e| e.path().to_owned()).collect();
-    assert_eq!(
-        paths,
-        [
-            "etc/ssh/ssh_host_ed25519_key",
-            "etc/ssh/ssh_host_ed25519_key.pub"
-        ]
+    let (src, dst) = (dir.path().join("src.tar.gz"), dir.path().join("dst.tar.gz"));
+    test_tar(&src, &patchable_members());
+    patch_archive(&src, &dst, &[]).unwrap();
+    let small = firmware::MAX_SMALL_MEMBER as usize + 1;
+
+    let launcher = |size| {
+        let mut members = patchable_members();
+        members[4] = (
+            header("usr/bin/audio-start.sh", tar::EntryType::Regular, size),
+            vec![b'x'; size],
+        );
+        members
+    };
+    test_tar(&src, &launcher(small - 1));
+    patch_archive(&src, &dst, &[]).unwrap();
+    test_tar(&src, &launcher(small));
+    let error = patch_archive(&src, &dst, &[]).unwrap_err();
+    assert!(error.0.contains("oversized"), "{}", error.0);
+
+    let mut members = patchable_members();
+    let size = firmware::MAX_MIXER_MEMBER as usize + 1;
+    members[3] = (
+        header("usr/bin/rc_audio_mixer", tar::EntryType::Regular, size),
+        vec![0; size],
     );
-    assert!(matches!(
-        &again[0],
-        runtime::Entry::File { mode: 0o600, .. }
-    ));
-    std::fs::write(
-        work.join("known_hosts"),
-        "192.168.0.172 ssh-ed25519 OLD\nother ssh-ed25519 KEEP\n",
-    )
-    .unwrap();
-    ssh::remember_host(work, "192.168.0.172", &public).unwrap();
-    let text = std::fs::read_to_string(work.join("known_hosts")).unwrap();
-    assert!(!text.contains("OLD"), "the stale key is replaced");
-    assert!(text.contains("other ssh-ed25519 KEEP"));
-    assert!(text.contains(&format!(
-        "192.168.0.172 {}",
-        String::from_utf8_lossy(&public).trim()
-    )));
+    test_tar(&src, &members);
+    let error = patch_archive(&src, &dst, &[]).unwrap_err();
+    assert!(error.0.contains("oversized"), "{}", error.0);
+
+    for kind in [tar::EntryType::GNULongName, tar::EntryType::XHeader] {
+        let mut members = patchable_members();
+        members.insert(0, (header("meta", kind, small), vec![b'x'; small]));
+        test_tar(&src, &members);
+        let error = patch_archive(&src, &dst, &[]).unwrap_err();
+        assert!(error.0.contains("oversized"), "{kind:?}: {}", error.0);
+    }
+}
+
+#[test]
+fn patching_hashes_what_it_read_and_wrote_not_what_the_paths_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let (src, dst) = (dir.path().join("src.tar.gz"), dir.path().join("dst.tar.gz"));
+    test_tar(&src, &patchable_members());
+    let sha = file_hash(&src, Algorithm::Sha256).unwrap();
+    let model = DeviceModel::ProIi;
+    let patch = |want: &str| firmware::patch_archive_for_model(model, &src, &dst, &[], Some(want));
+
+    let patched = patch(&sha).unwrap();
+    assert_eq!(
+        patched.archive_sha,
+        file_hash(&dst, Algorithm::Sha256).unwrap()
+    );
+    assert_eq!(
+        patched.archive_md5,
+        file_hash(&dst, Algorithm::Md5).unwrap()
+    );
+
+    // The source was checked by path earlier; the bytes read differ now.
+    fs::remove_file(&dst).unwrap();
+    assert!(patch(&"0".repeat(64)).is_err());
+    assert!(!dst.exists(), "a swapped source must not produce an image");
 }

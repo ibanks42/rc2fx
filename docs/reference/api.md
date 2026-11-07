@@ -41,6 +41,18 @@ generation is stale, the write is refused with 409. Errors are
 | 409 | Revision or generation conflict |
 | 503 | Engine busy or stopped |
 
+## Trust boundary
+
+The computer on USB 1 is trusted to act on the mixer. Anything that can talk
+to RC2FX's control reports can change settings and restart audio, and
+`PUT /api/v1/ssh` gives its key root SSH access. There is no separate login:
+physical access to USB 1 is the authorization.
+
+The mixer isn't trusted by the desktop for anything beyond what it shows. The
+app and installer treat every reply as untrusted data: JSON is parsed with
+duplicate-key, depth and size limits, text is checked before it is displayed,
+and a reply can't change what the installer flashes.
+
 ## Versions
 
 `GET /api/v1/version` returns what the mixer has installed:

@@ -258,6 +258,7 @@ impl EventLog {
         let rows = page
             .events
             .into_iter()
+            .filter_map(rc2fx_core::DiagnosticsEvent::for_display)
             .map(|event| {
                 let path = event.path.as_deref().map(|id| (id, name(id)));
                 // The mixer names paths by id ("3 output drops on mic-1").
@@ -841,6 +842,40 @@ mod tests {
         assert_eq!(Group::of(OutputDrops), Group::Drops);
         assert_eq!(Group::of(StaleResults), Group::Stale);
         assert_eq!(Group::of(Reset), Group::Other);
+    }
+
+    #[test]
+    fn a_hostile_event_cannot_multiply_its_message_or_reach_the_window_raw() {
+        let mut log = EventLog::new();
+        let long = "x".repeat(1 << 20);
+        log.receive_page(
+            page(
+                0,
+                serde_json::json!([
+                    {"seq": 1, "kind": "gap", "path": "", "atNs": 1, "message": long},
+                    {"seq": 2, "kind": "gap", "path": "Not An Id", "atNs": 1, "message": "x"},
+                    {"seq": 3, "kind": "gap", "atNs": 1, "message": "a\nb\u{202e}c"},
+                    {"seq": 4, "kind": "gap", "path": "mic-1", "atNs": 1, "message": long},
+                ]),
+            ),
+            SystemTime::now(),
+            |_| "Very long display name".into(),
+        );
+        let rows: Vec<_> = log
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Event { seq, message, .. } => Some((*seq, message.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows.len(), 2, "events with invalid paths are dropped");
+        for (seq, message) in rows {
+            match seq {
+                3 => assert!(!message.contains(['\n', '\u{202e}']), "{message}"),
+                _ => assert!(message.len() <= 512 + 64, "{}", message.len()),
+            }
+        }
     }
 
     #[test]

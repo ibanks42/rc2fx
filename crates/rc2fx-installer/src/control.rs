@@ -7,7 +7,8 @@ use crate::{
     platform::{self, Hid},
 };
 use rc2fx_usb::{
-    Assembly, Frame, INPUT_ID, Kind, MAX_REPLY, MAX_REQUEST, OUTPUT_ID, PAYLOAD, REPORT_SIZE,
+    Assembly, Frame, INPUT_ID, Kind, MAX_EVENT_REPLY, MAX_REPLY, MAX_REQUEST, OUTPUT_ID, PAYLOAD,
+    REPORT_SIZE,
 };
 pub use rc2fx_usb::{Reply, Request};
 use std::time::{Duration, Instant};
@@ -19,6 +20,11 @@ const REPORT_WAIT: Duration = Duration::from_secs(3);
 /// A request executes before its final acknowledgement, for up to 15 s.
 const EXECUTE_WAIT: Duration = Duration::from_secs(17);
 const HELLO: &[u8] = b"RC2FX USB 3";
+/// The mixer's own bound on a saved file's density, applied to a reply's size:
+/// real replies stay far below it, and a parsed value costs many times its text.
+const BYTES_PER_NODE: usize = 4;
+/// The event poll runs twenty times a second and is never a whole settings file.
+const EVENTS_PATH: &str = "api/v1/events";
 
 /// Why a request failed.
 #[derive(Debug)]
@@ -148,7 +154,12 @@ impl Client {
             .sequence
             .checked_add(1)
             .ok_or_else(|| Failure::NotSent("USB session exhausted; reconnect".into()))?;
-        let result = self.send(&bytes).and_then(|()| self.fetch());
+        let limit = if request.path == EVENTS_PATH {
+            MAX_EVENT_REPLY
+        } else {
+            MAX_REPLY
+        };
+        let result = self.send(&bytes).and_then(|()| self.fetch(limit));
         if result.is_err() {
             self.reports = None;
         }
@@ -197,7 +208,7 @@ impl Client {
 
     /// Fetch the reply. Fetching is idempotent, so a lost report is asked for
     /// again rather than ending the request.
-    fn fetch(&mut self) -> Result<Reply, String> {
+    fn fetch(&mut self, limit: usize) -> Result<Reply, String> {
         let deadline = Instant::now() + DEADLINE;
         let mut assembly = Assembly::default();
         let mut offset = 0;
@@ -231,9 +242,8 @@ impl Client {
                 return Err("Invalid USB reply sequence".into());
             }
             offset += reply.data.len();
-            if let Some(bytes) = assembly.push(&reply, MAX_REPLY)? {
-                let bytes = rc2fx_usb::unpack(&bytes, MAX_REPLY)?;
-                return serde_json::from_slice(&bytes).map_err(|e| e.to_string());
+            if let Some(bytes) = assembly.push(&reply, limit)? {
+                return parse_reply(&rc2fx_usb::unpack(&bytes, limit)?, limit);
             }
         }
     }
@@ -291,6 +301,13 @@ impl Client {
             return Ok(bytes);
         }
     }
+}
+
+/// A reply is the mixer's data, so it gets the same duplicate-key, depth and
+/// size checks as any other JSON RC2FX reads.
+fn parse_reply(bytes: &[u8], limit: usize) -> Result<Reply, String> {
+    let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+    rc2fx_core::from_json_limited(text, limit, limit / BYTES_PER_NODE).map_err(|e| e.to_string())
 }
 
 const TIMED_OUT: &str = "timed out";
@@ -458,6 +475,55 @@ mod tests {
         assert_eq!(reply.status, 200);
         assert_eq!(reply.body["large"].as_str().unwrap().len(), 4000);
         assert!(c.is_open());
+    }
+
+    fn with_reply(json: &[u8]) -> Client {
+        let (mut c, _) = client(Mixer::default());
+        let mixer = Mixer {
+            reply: rc2fx_usb::pack(json, MAX_REPLY).unwrap(),
+            ..Mixer::default()
+        };
+        c.reports = Some(Box::new(mixer));
+        c
+    }
+
+    #[test]
+    fn replies_with_duplicate_keys_or_excessive_depth_are_refused() {
+        let duplicate = br#"{"status":200,"body":{"a":1,"a":2}}"#.to_vec();
+        let deep = format!(
+            r#"{{"status":200,"body":{}1{}}}"#,
+            "[".repeat(65),
+            "]".repeat(65)
+        );
+        for json in [duplicate, deep.into_bytes()] {
+            let mut c = with_reply(&json);
+            assert!(matches!(c.request(&apply()), Err(Failure::Broken(_))));
+        }
+        let mut c = with_reply(br#"{"status":200,"body":{"a":[1]}}"#);
+        assert_eq!(c.request(&apply()).unwrap().body["a"][0], 1);
+    }
+
+    #[test]
+    fn an_event_reply_is_held_to_the_event_limit() {
+        let events = Request {
+            method: "GET".into(),
+            path: EVENTS_PATH.into(),
+            body: None,
+        };
+        let json = |size: usize| {
+            serde_json::to_vec(&Reply {
+                status: 200,
+                body: serde_json::json!({"event": "meter", "data": "y".repeat(size)}),
+            })
+            .unwrap()
+        };
+        let mut c = with_reply(&json(rc2fx_usb::MAX_EVENT_BYTES));
+        assert_eq!(c.request(&events).unwrap().status, 200);
+        let mut c = with_reply(&json(MAX_EVENT_REPLY));
+        assert!(matches!(c.request(&events), Err(Failure::Broken(_))));
+        // Other requests keep the full reply limit.
+        let mut c = with_reply(&json(MAX_EVENT_REPLY));
+        assert_eq!(c.request(&apply()).unwrap().status, 200);
     }
 
     #[test]

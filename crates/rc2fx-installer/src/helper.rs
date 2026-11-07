@@ -281,7 +281,7 @@ pub fn install_usb_rule() -> Result<()> {
         &["control", "--reload-rules"][..],
         &["trigger", "--action=add", "--subsystem-match=hidraw"][..],
     ] {
-        let status = Command::new("udevadm").args(args).status()?;
+        let status = clean_command(udevadm()?).args(args).status()?;
         if !status.success() {
             return Err(Error(format!(
                 "udevadm {} failed ({status})",
@@ -290,6 +290,27 @@ pub fn install_usb_rule() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Where distributions install udevadm. A root process never finds a tool
+/// through `PATH`, which pkexec's caller may have influenced.
+#[cfg(target_os = "linux")]
+const UDEVADM: [&str; 3] = ["/usr/bin/udevadm", "/sbin/udevadm", "/bin/udevadm"];
+
+#[cfg(target_os = "linux")]
+fn udevadm() -> Result<&'static str> {
+    UDEVADM
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .ok_or_else(|| Error("udevadm was not found".into()))
+}
+
+/// A command that inherits nothing from the environment.
+#[cfg(target_os = "linux")]
+fn clean_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env_clear();
+    command
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -332,6 +353,15 @@ pub fn needed() -> bool {
 #[cfg(test)]
 mod tests {
     use super::Inbound;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn udevadm_is_named_absolutely_and_inherits_no_environment() {
+        assert!(super::UDEVADM.iter().all(|path| path.starts_with('/')));
+        let output = super::clean_command("/usr/bin/env").output().unwrap();
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty(), "the child saw an environment");
+    }
 
     #[test]
     fn requests_and_cancel_share_one_wire_format() {

@@ -391,6 +391,22 @@ pub(crate) fn range(value: f64, min: f64, max: f64, name: &str) -> Result<()> {
         Ok(())
     }
 }
+/// The longest status sentence a mixer may send. It leaves room for 512 of the
+/// widest characters and the context around them.
+pub const MAX_STATUS_TEXT: usize = 4096;
+
+/// Whether `text` from the mixer is fit to show: at most `maximum` bytes, one
+/// line, and no bidirectional controls that would make it read as something
+/// else.
+pub fn valid_display_text(text: &str, maximum: usize) -> bool {
+    text.len() <= maximum && !text.chars().any(|c| c.is_control() || is_bidi_control(c))
+}
+
+/// Unicode's embedding, override and isolate controls.
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 48

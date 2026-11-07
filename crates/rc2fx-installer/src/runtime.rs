@@ -10,7 +10,7 @@ use crate::{
     firmware::supported,
     utc,
 };
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, io::Read, path::Path};
 
 /// The payload's files, in the order an embedded envelope carries them.
 pub use crate::embed::format::PAYLOAD_NAMES;
@@ -217,9 +217,17 @@ pub(crate) fn image_entries(
     Ok((entries, digest))
 }
 
-/// The settings file a backup saved, unchanged since.
-pub(crate) fn backup_settings(b: &BackupRecord) -> Result<Vec<u8>> {
-    let data = std::fs::read(&b.file)?;
+/// The settings file a backup saved, unchanged since. The record is the
+/// desktop user's to edit, so its path must name a file directly in `work`.
+pub(crate) fn backup_settings(work: &Path, b: &BackupRecord) -> Result<Vec<u8>> {
+    let path = Path::new(&b.file);
+    if path.parent() != Some(work) || path.file_name().is_none() {
+        bail!("the settings backup is not in the installer's folder");
+    }
+    let mut data = Vec::new();
+    files::open_work_file(path)?
+        .take(MAX_SETTINGS + 1)
+        .read_to_end(&mut data)?;
     if files::sum(&data) != b.sha {
         bail!("the settings backup changed since it was saved");
     }

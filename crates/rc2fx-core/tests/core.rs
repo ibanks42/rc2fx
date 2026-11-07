@@ -548,6 +548,97 @@ fn meters_without_a_diagnostics_epoch_load_as_zero_and_event_pages_round_trip() 
 }
 
 #[test]
+fn device_status_text_must_be_fit_to_show() {
+    use rc2fx_core::{DeviceVersions, MAX_STATUS_TEXT};
+    let good = DeviceState {
+        config: Config::default(),
+        engine: EngineStatus {
+            generation: 1,
+            restart_allowed: false,
+            mode: EngineMode::Jack,
+            status: EnginePhase::Running,
+            applied_revision: 1,
+            sample_rate: 48_000,
+            block_size: 112,
+            message: "Running".into(),
+            audio_advancing: true,
+        },
+        routing: RoutingStatus {
+            status: RoutingPhase::Active,
+            channels: 1,
+            recovered: 0,
+            message: "Active".into(),
+        },
+        selection: SelectionStatus {
+            channel_capacity: None,
+            status: SelectionPhase::Idle,
+            allowed: true,
+            qualified_target_ids: Vec::new(),
+            active_target_ids: Vec::new(),
+            pending_target_ids: Vec::new(),
+            message: "Ready".into(),
+        },
+    };
+    good.validate().unwrap();
+    for bad in [
+        "line\nbreak".to_owned(),
+        "escape\u{1b}[2J".to_owned(),
+        "reversed\u{202e}txt".to_owned(),
+        "isolate\u{2066}txt".to_owned(),
+        "x".repeat(MAX_STATUS_TEXT + 1),
+    ] {
+        let mut state = good.clone();
+        state.engine.message = bad.clone();
+        assert!(state.engine.validate().is_err(), "engine {bad:?}");
+        assert!(state.validate().is_err(), "engine {bad:?}");
+        let mut state = good.clone();
+        state.routing.message = bad.clone();
+        assert!(state.validate().is_err(), "routing {bad:?}");
+        let mut state = good.clone();
+        state.selection.message = bad.clone();
+        assert!(state.validate().is_err(), "selection {bad:?}");
+        let versions = DeviceVersions {
+            firmware: Some(bad.clone()),
+            ..Default::default()
+        };
+        assert!(versions.validate().is_err(), "version {bad:?}");
+    }
+    let versions = DeviceVersions {
+        runtime: Some("0.1.2".into()),
+        protocol: Some(1),
+        firmware: Some("1.7.7".into()),
+        firmware_profile: Some("rodecaster-pro-ii-1.7.7".into()),
+    };
+    versions.validate().unwrap();
+}
+
+#[test]
+fn diagnostics_events_are_made_safe_to_show() {
+    use rc2fx_core::{DiagnosticsEvent, DiagnosticsKind, EventDetails, MAX_EVENT_MESSAGE};
+    let event = |path: Option<&str>, message: String| DiagnosticsEvent {
+        seq: 1,
+        kind: DiagnosticsKind::Reset,
+        path: path.map(str::to_owned),
+        at_ns: 1,
+        message,
+        details: EventDetails::default(),
+    };
+    for path in ["", "Not An Id", "../x", &"a".repeat(49)] {
+        assert!(
+            event(Some(path), "x".into()).for_display().is_none(),
+            "{path:?}"
+        );
+    }
+    let shown = event(Some("mic-1"), "a\nb\u{1b}c\u{202e}d\u{2066}e".into());
+    assert_eq!(shown.for_display().unwrap().message, "abcde");
+    // Cut on a character boundary, never past the cap.
+    let long = event(None, "é".repeat(MAX_EVENT_MESSAGE));
+    let message = long.for_display().unwrap().message;
+    assert_eq!(message.len(), MAX_EVENT_MESSAGE);
+    assert!(message.chars().all(|c| c == 'é'));
+}
+
+#[test]
 fn strict_config_rejects_ambiguous_or_invalid_data() {
     let base = serde_json::to_value(Config::default()).unwrap();
     let mut changes = Vec::new();

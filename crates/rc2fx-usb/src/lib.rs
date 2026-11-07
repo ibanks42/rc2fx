@@ -15,6 +15,10 @@ pub const INPUT_REPORT_SIZE: usize = REPORT_SIZE;
 pub const INPUT_PAYLOAD: usize = INPUT_REPORT_SIZE - HEADER;
 pub const MAX_REQUEST: usize = 512 * 1024 + 1024;
 pub const MAX_REPLY: usize = 8 * 1024 * 1024 + 1024;
+/// The largest event a mixer publishes.
+pub const MAX_EVENT_BYTES: usize = 512 * 1024;
+/// The largest reply to an event poll: one event and its envelope.
+pub const MAX_EVENT_REPLY: usize = MAX_EVENT_BYTES + 1024;
 pub const MAGIC: &[u8; 7] = b"\xffRC2FX\0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

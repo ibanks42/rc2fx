@@ -19,7 +19,6 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
-    collections::HashMap,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -254,28 +253,8 @@ impl Source {
                 let data = bundle
                     .get("firmware-profiles.json")
                     .ok_or("the runtime has no firmware catalog")?;
-                let c: Catalog = serde_json::from_slice(data)?;
-                if c.schema != 1 {
-                    return Err(Error("unsupported firmware catalog".into()));
-                }
-                Ok(c)
+                parse_catalog(data)
             }
-        }
-    }
-
-    /// `.rc2fx-mixer.conf` is developer tooling: an embedded build has no
-    /// folder to read it from and uses its portable defaults.
-    pub(crate) fn config(&self) -> HashMap<String, String> {
-        match self {
-            Source::Folder(root) => crate::mixer_config(root),
-            Source::Download | Source::Embedded | Source::Verified(_) => HashMap::new(),
-        }
-    }
-
-    pub(crate) fn ssh_key(&self) -> PathBuf {
-        match self {
-            Source::Folder(root) => crate::ssh_key(root),
-            Source::Download | Source::Embedded | Source::Verified(_) => crate::default_key(),
         }
     }
 
@@ -289,12 +268,27 @@ impl Source {
 }
 
 fn catalog_from_disk(root: &Path) -> Result<Catalog> {
-    let data = std::fs::read(root.join("config").join("firmware-profiles.json"))?;
-    let c: Catalog = serde_json::from_slice(&data)?;
-    if c.schema != 1 {
-        return Err(Error("unsupported firmware catalog".into()));
+    parse_catalog(&std::fs::read(
+        root.join("config").join("firmware-profiles.json"),
+    )?)
+}
+
+/// What a valid catalog is, for every source: the strict rules the mixer's own
+/// firmware tool applies, and versions the installer can compare. Nothing may
+/// reach the installer through a looser reading of the same file.
+pub(crate) fn parse_catalog(data: &[u8]) -> Result<Catalog> {
+    let text = std::str::from_utf8(data).map_err(|e| Error(e.to_string()))?;
+    rc2fx_firmware::Catalog::parse(text).map_err(Error)?;
+    let catalog: Catalog = serde_json::from_str(text)?;
+    let comparable = |v: &str| rc2fx_core::compare_versions(v, v).is_some();
+    if catalog
+        .profiles
+        .iter()
+        .any(|p| !comparable(&p.version) || !comparable(&p.minimum_app_version))
+    {
+        return Err(Error("invalid firmware catalog profile version".into()));
     }
-    Ok(c)
+    Ok(catalog)
 }
 
 #[cfg(test)]

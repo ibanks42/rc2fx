@@ -9,7 +9,6 @@ use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
 use rc2fx_firmware::Model;
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
     io::{self, Read, Write},
     path::Path,
     time::Duration,
@@ -60,8 +59,11 @@ pub(crate) fn supported(p: &Profile) -> bool {
 }
 
 pub(crate) fn app_supports(p: &Profile, app_version: &str) -> bool {
-    p.minimum_app_version.is_empty() || matches!(crate::compare_versions(app_version, &p.minimum_app_version),
-        Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater))
+    p.minimum_app_version.is_empty()
+        || matches!(
+            crate::compare_versions(app_version, &p.minimum_app_version),
+            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+        )
 }
 
 fn valid_version(v: &str) -> bool {
@@ -109,9 +111,18 @@ pub(crate) fn walk_archive(
     path: &Path,
     limit: u64,
     raw: bool,
+    visit: impl FnMut(&mut tar::Entry<'_, &mut dyn Read>) -> Result<()>,
+) -> Result<()> {
+    walk_reader(files::open_regular(path)?, limit, raw, visit)
+}
+
+fn walk_reader(
+    source: impl Read,
+    limit: u64,
+    raw: bool,
     mut visit: impl FnMut(&mut tar::Entry<'_, &mut dyn Read>) -> Result<()>,
 ) -> Result<()> {
-    let gz = MultiGzDecoder::new(io::BufReader::new(File::open(path)?));
+    let gz = MultiGzDecoder::new(io::BufReader::new(source));
     let mut limited = gz.take(limit + 1);
     {
         let reader: &mut dyn Read = &mut limited;
@@ -141,6 +152,11 @@ pub(crate) fn normalized(name: &str) -> &str {
     let name = name.strip_prefix("./").unwrap_or(name);
     name.strip_suffix('/').unwrap_or(name)
 }
+
+/// The largest mixer executable read into memory.
+pub(crate) const MAX_MIXER_MEMBER: u64 = 64 << 20;
+/// The largest launcher, configuration file or tar metadata record.
+pub(crate) const MAX_SMALL_MEMBER: u64 = 1 << 20;
 
 fn regular(header: &tar::Header) -> bool {
     header.entry_type() == tar::EntryType::Regular
@@ -176,28 +192,35 @@ fn pax_records(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
     Ok(records)
 }
 
-/// Write a copy of `src` to `dst` with `extra` added and the empty root
-/// authorized_keys file set to `key` with mode 0600 (left as it is when `key`
-/// is empty). Every other record,
-/// including long-name and PAX records, is copied verbatim. Returns the
-/// SHA-256 of the mixer executable and its launcher.
-#[cfg(test)]
-pub(crate) fn patch_archive(
-    src: &Path,
-    dst: &Path,
-    key: &[u8],
-    extra: &[Entry],
-) -> Result<(String, String)> {
-    patch_archive_for_model(Model::ProIi, src, dst, key, extra)
+/// What [`patch_archive_for_model`] built.
+pub(crate) struct Patched {
+    /// SHA-256 of the mixer executable and its launcher.
+    pub mixer: String,
+    pub launcher: String,
+    /// SHA-256 and MD5 of the bytes written. They come from the write itself,
+    /// so another process changing the cache folder cannot alter them.
+    pub archive_sha: String,
+    pub archive_md5: String,
 }
 
+#[cfg(test)]
+pub(crate) fn patch_archive(src: &Path, dst: &Path, extra: &[Entry]) -> Result<(String, String)> {
+    let patched = patch_archive_for_model(Model::ProIi, src, dst, extra, None)?;
+    Ok((patched.mixer, patched.launcher))
+}
+
+/// Write a copy of `src` to `dst` with `extra` added. Every record, including
+/// long-name and PAX records, is copied verbatim; root's authorized_keys must
+/// be as empty as RØDE ships it. With `source_sha`, the bytes actually read from `src` must
+/// have that SHA-256: a check of the path before this call says nothing about
+/// what is read here.
 pub(crate) fn patch_archive_for_model(
     model: Model,
     src: &Path,
     dst: &Path,
-    key: &[u8],
     extra: &[Entry],
-) -> Result<(String, String)> {
+    source_sha: Option<&str>,
+) -> Result<Patched> {
     const IMPORTANT: [&str; 5] = [
         KEY_MEMBER,
         "etc/hostname",
@@ -207,7 +230,11 @@ pub(crate) fn patch_archive_for_model(
     ];
     let dir = dst.parent().unwrap_or(Path::new("."));
     let temp = Temp::new(dir, ".firmware-")?;
-    let mut builder = tar::Builder::new(GzEncoder::new(temp, Compression::default()));
+    let mut builder = tar::Builder::new(GzEncoder::new(
+        files::Hashing::new(temp),
+        Compression::default(),
+    ));
+    let mut source = files::Hashing::new(files::open_work_file(src)?);
     let mut seen = HashSet::new();
     let mut hashes = HashMap::new();
     let (mut host_ok, mut ssh_ok) = (false, false);
@@ -216,10 +243,13 @@ pub(crate) fn patch_archive_for_model(
     let mut pax_name: Option<String> = None;
     let mut pax_size = false;
     let mut has_opt = false;
-    walk_archive(src, 4 << 30, true, |entry| {
+    walk_reader(&mut source, 4 << 30, true, |entry| {
         let header = entry.header().clone();
         let kind = header.entry_type();
         if kind.is_gnu_longname() || kind.is_pax_local_extensions() {
+            if header.size()? > MAX_SMALL_MEMBER {
+                bail!("oversized firmware metadata");
+            }
             let mut data = Vec::new();
             entry.read_to_end(&mut data)?;
             if kind.is_gnu_longname() {
@@ -253,23 +283,15 @@ pub(crate) fn patch_archive_for_model(
             bail!("duplicate or nonregular required member {n}");
         }
         if n == KEY_MEMBER || n == "etc/hostname" || n == "etc/ssh/sshd_config" {
-            if header.size()? > 1 << 20 {
+            if header.size()? > MAX_SMALL_MEMBER {
                 bail!("oversized firmware metadata");
             }
             let mut data = Vec::new();
             entry.read_to_end(&mut data)?;
-            let mut header = header;
             match n {
                 KEY_MEMBER => {
                     if !data.trim_ascii().is_empty() {
                         bail!("authorized_keys is not empty");
-                    }
-                    // Without a key the file stays as RØDE ships it.
-                    if !key.is_empty() {
-                        data = key.to_vec();
-                        header.set_size(data.len() as u64);
-                        header.set_mode(0o600);
-                        header.set_cksum();
                     }
                 }
                 "etc/hostname" => host_ok = data.trim_ascii() == model.hostname().as_bytes(),
@@ -283,6 +305,14 @@ pub(crate) fn patch_archive_for_model(
             return Ok(());
         }
         if n == "usr/bin/rc_audio_mixer" || n == "usr/bin/audio-start.sh" {
+            let limit = if n == "usr/bin/rc_audio_mixer" {
+                MAX_MIXER_MEMBER
+            } else {
+                MAX_SMALL_MEMBER
+            };
+            if header.size()? > limit {
+                bail!("oversized firmware member {n}");
+            }
             let mut data = Vec::new();
             entry.read_to_end(&mut data)?;
             hashes.insert(n.to_owned(), files::sum(&data));
@@ -304,7 +334,11 @@ pub(crate) fn patch_archive_for_model(
     for entry in extra {
         append_entry(&mut builder, entry)?;
     }
-    let mut temp = builder.into_inner()?.finish()?;
+    io::copy(&mut source, &mut io::sink())?;
+    if source_sha.is_some_and(|want| want != source.finish().1) {
+        bail!("the downloaded firmware changed while it was being patched");
+    }
+    let (mut temp, archive_sha, archive_md5) = builder.into_inner()?.finish()?.finish();
     temp.finish()?;
     if !seen.contains(KEY_MEMBER) || !host_ok || !ssh_ok || hashes.len() != 2 {
         bail!("firmware is not the expected {} rootfs", model.label());
@@ -313,10 +347,12 @@ pub(crate) fn patch_archive_for_model(
         bail!("patched image exceeds update volume limit");
     }
     temp.persist(dst)?;
-    Ok((
-        hashes.remove("usr/bin/rc_audio_mixer").unwrap_or_default(),
-        hashes.remove("usr/bin/audio-start.sh").unwrap_or_default(),
-    ))
+    Ok(Patched {
+        mixer: hashes.remove("usr/bin/rc_audio_mixer").unwrap_or_default(),
+        launcher: hashes.remove("usr/bin/audio-start.sh").unwrap_or_default(),
+        archive_sha,
+        archive_md5,
+    })
 }
 
 /// Append one root-owned entry in the image's `./path` style.
@@ -455,7 +491,7 @@ impl Engine {
         algorithm: Algorithm,
         want: &str,
     ) -> Result<()> {
-        let file = File::open(path)?;
+        let file = files::open_regular(path)?;
         let total = file.metadata()?.len();
         let detail = match algorithm {
             Algorithm::Sha256 => "sha256",
@@ -481,13 +517,13 @@ impl Engine {
         Ok(())
     }
 
-    /// Download an official release to `dest`, checking RØDE's MD5 and, when
-    /// the catalog pins one, its SHA-256. A matching file is kept.
+    /// Download an official release to `dest`, checking the catalog's SHA-256
+    /// and RØDE's MD5. A matching file is kept. MD5 alone never accepts a file.
     pub(crate) fn download(&mut self, value: &str, dest: &Path, sha: &str, md: &str) -> Result<()> {
-        if !valid_url(value) || md.is_empty() {
-            bail!("download requires an official URL and RØDE's checksum");
+        if !valid_url(value) || md.is_empty() || sha.is_empty() {
+            bail!("download requires an official URL and both firmware checksums");
         }
-        if (sha.is_empty() || files::matches(dest, Algorithm::Sha256, sha).is_ok())
+        if files::matches(dest, Algorithm::Sha256, sha).is_ok()
             && files::matches(dest, Algorithm::Md5, md).is_ok()
         {
             return Ok(());
@@ -529,9 +565,7 @@ impl Engine {
         }
         self.emit(event(n));
         temp.finish()?;
-        if !sha.is_empty() {
-            self.verify_checksum(&temp.path, Algorithm::Sha256, sha)?;
-        }
+        self.verify_checksum(&temp.path, Algorithm::Sha256, sha)?;
         self.verify_checksum(&temp.path, Algorithm::Md5, md)?;
         std::fs::rename(&temp.path, dest)?;
         temp.path.clear();
@@ -552,7 +586,7 @@ impl Engine {
     fn image_for(&self, profile: &Profile, serial: &str) -> Result<(Vec<Entry>, String, String)> {
         let bundle = self.source.bundle()?;
         let settings = match self.load()?.backup_for(serial) {
-            Some(b) => Some(crate::runtime::backup_settings(b)?),
+            Some(b) => Some(crate::runtime::backup_settings(&self.work, b)?),
             None => None,
         };
         let digest = settings.as_deref().map(files::sum).unwrap_or_default();
@@ -561,16 +595,14 @@ impl Engine {
     }
 
     /// Download and verify the selected release, then build firmware with
-    /// RC2FX's runtime, autostart and the newest settings saved for `serial`,
-    /// plus RC2FX's SSH key when `ssh` (a developer option). A matching
-    /// earlier preparation is reused after verification.
+    /// RC2FX's runtime, autostart and the newest settings saved for `serial`.
+    /// A matching earlier preparation is reused after verification.
     pub(crate) fn prepare(
         &mut self,
         channel: &str,
         version: &str,
         serial: &str,
         stock: bool,
-        ssh: bool,
     ) -> Result<Prepared> {
         self.model
             .require_runtime_with(self.allow_experimental_duo)?;
@@ -586,11 +618,6 @@ impl Engine {
             return self.prepare_stock(channel, version);
         }
         let mut saved = self.load()?;
-        let key_path = if ssh {
-            self.key.to_string_lossy().into_owned()
-        } else {
-            String::new()
-        };
         let p = self
             .catalog()?
             .profiles
@@ -598,19 +625,7 @@ impl Engine {
             .rfind(|p| p.model == self.model.id() && p.version == version)
             .filter(supported)
             .ok_or("this firmware is not supported by RC2FX")?;
-        let (mut entries, runtime, settings) = self.image_for(&p, serial)?;
-        // With SSH access the mixer also keeps one host key across flashes,
-        // trusted under its address for the mixer tooling.
-        let host_key = if ssh {
-            let (extra, public) = crate::ssh::host_key(&self.work)?;
-            entries.extend(extra);
-            // Trusted under the address the developer tools use, if set.
-            let host = self.source.config().remove("ip").unwrap_or_default();
-            crate::ssh::remember_host(&self.work, &host, &public)?;
-            files::sum(&public)
-        } else {
-            String::new()
-        };
+        let (entries, runtime, settings) = self.image_for(&p, serial)?;
         if let Some(old) = saved.prepared.clone()
             && !old.stock
             && old.model.unwrap_or(Model::ProIi) == self.model
@@ -618,9 +633,6 @@ impl Engine {
             && old.channel == channel
             && old.runtime == runtime
             && old.settings == settings
-            && old.key.is_empty() != ssh
-            && (!ssh || files::same_path(Path::new(&old.key), &self.key))
-            && old.host_key == host_key
             && self.verify_prepared(&old).is_ok()
         {
             return Ok(old);
@@ -636,11 +648,6 @@ impl Engine {
         }
         let src = self.work.join("rode-original.tar.gz");
         self.download(&selected.url, &src, &p.archive_sha, &p.archive_md5)?;
-        let key = if ssh {
-            crate::ssh::ensure_key(&key_path)?.1
-        } else {
-            Vec::new()
-        };
         let dst = self.work.join("archive.tar.gz");
         self.step("patch", "Building the firmware with RC2FX");
         if self.model == Model::Duo {
@@ -648,14 +655,19 @@ impl Engine {
             // Duo archive, hostname and DTB before adding anything.
             crate::inspection::inspect_archive(self.model, &src)?;
         }
-        let (mix, launcher) = patch_archive_for_model(self.model, &src, &dst, &key, &entries)?;
-        if mix != p.mixer_sha || launcher != p.launcher_sha {
+        let patched =
+            patch_archive_for_model(self.model, &src, &dst, &entries, Some(&p.archive_sha))?;
+        if patched.mixer != p.mixer_sha || patched.launcher != p.launcher_sha {
             bail!("firmware binaries do not match the supported profile");
         }
-        let (archive_sha, archive_md5) = {
+        let (archive_sha, archive_md5) = (patched.archive_sha, patched.archive_md5);
+        let written = {
             let check = self.reporter("verify", "Checking the built firmware");
             files::hash_both(&dst, check)?
         };
+        if written != (archive_sha.clone(), archive_md5.clone()) {
+            bail!("the built firmware changed on disk; prepare it again");
+        }
         let prepared = Prepared {
             model: Some(Model::parse(&p.model)?),
             version: p.version.clone(),
@@ -663,13 +675,11 @@ impl Engine {
             profile: p.id.clone(),
             archive_sha,
             archive_md5,
-            key_sha: if ssh { files::sum(&key) } else { String::new() },
-            key: key_path,
-            host_key,
             runtime,
             settings,
-            stock: false,
+            ..Default::default()
         };
+        self.anchor_prepared(&prepared)?;
         files::atomic_file(
             &self.work.join("archive.md5"),
             prepared.archive_md5.as_bytes(),
@@ -729,6 +739,8 @@ impl Engine {
             let copy = self.reporter("verify", "Staging the stock firmware");
             files::copy_with_progress(&src, &part, copy)?;
         }
+        // The copy is the helper's until now, and the cache must stay the user's.
+        files::local_owner(&files::open_regular(&part)?)?;
         files::replace_local_file(&part, &dst)?;
         let (archive_sha, archive_md5) = {
             let check = self.reporter("verify", "Checking the stock firmware");
@@ -754,8 +766,7 @@ impl Engine {
     }
 
     /// Check the prepared archive and its checksum file, and for RC2FX
-    /// firmware the key it trusts and that its runtime is this installer's,
-    /// before any USB command.
+    /// firmware that its runtime is this installer's, before any USB command.
     pub(crate) fn verify_prepared(&mut self, p: &Prepared) -> Result<()> {
         // Missing is the legacy Pro II cache format, never automatic detection.
         let model = p.model.unwrap_or(Model::ProIi);
@@ -775,19 +786,16 @@ impl Engine {
             let check = self.reporter("verify", "Checking the prepared firmware");
             return crate::usb::archive_matches(&work, p, check);
         }
+        // An older installer could build SSH access into the image.
+        if !p.key.is_empty() || !p.key_sha.is_empty() || !p.host_key.is_empty() {
+            bail!("the prepared firmware has SSH access built in; prepare it again");
+        }
+        self.check_anchor(p)?;
         let profile = pinned;
         let bundle = self.source.bundle()?;
         let (_, runtime) = image_entries(&bundle, &profile, None)?;
         if p.runtime.is_empty() || p.runtime != runtime {
             bail!("the prepared firmware has a different RC2FX build; prepare it again");
-        }
-        if !p.key.is_empty() {
-            let (_, public) = crate::ssh::ensure_key(&p.key)?;
-            if files::sum(&public) != p.key_sha {
-                bail!(
-                    "the SSH key differs from the one in the prepared firmware; prepare it again"
-                );
-            }
         }
         let work = self.work.clone();
         let check = self.reporter("verify", "Checking the prepared firmware");

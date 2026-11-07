@@ -18,6 +18,8 @@ pub const MIXER_RELEASE_SCHEMA: u32 = 1;
 
 /// The largest manifest accepted, far above any real one.
 const MAX_RELEASE_BYTES: usize = 4 * 1024;
+/// A firmware profile id may be up to 96 bytes; versions are far shorter.
+const MAX_VERSION_TEXT: usize = 128;
 
 /// `mixer-release.json`: the RC2FX mixer runtime's release identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,21 @@ pub struct DeviceVersions {
     /// The validated firmware profile's id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware_profile: Option<String>,
+}
+
+impl DeviceVersions {
+    /// Refuse text no real version has: these fields are shown as they arrive.
+    pub fn validate(&self) -> crate::Result<()> {
+        let fields = [&self.runtime, &self.firmware, &self.firmware_profile];
+        if fields
+            .into_iter()
+            .flatten()
+            .any(|text| !crate::valid_display_text(text, MAX_VERSION_TEXT))
+        {
+            return Err(crate::CoreError("Invalid mixer version text".into()));
+        }
+        Ok(())
+    }
 }
 
 fn parse_version(text: &str) -> Option<Vec<u64>> {

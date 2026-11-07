@@ -32,6 +32,33 @@ pub struct DiagnosticsEvent {
     pub details: EventDetails,
 }
 
+/// The longest event sentence a client keeps.
+pub const MAX_EVENT_MESSAGE: usize = 512;
+
+impl DiagnosticsEvent {
+    /// This event as it is safe to show: the sentence cut to
+    /// [`MAX_EVENT_MESSAGE`] bytes with control characters removed. `None` if
+    /// `path` is not an id, which no mixer sends.
+    pub fn for_display(mut self) -> Option<Self> {
+        if self.path.as_deref().is_some_and(|id| !crate::valid_id(id)) {
+            return None;
+        }
+        let mut message = String::with_capacity(self.message.len().min(MAX_EVENT_MESSAGE));
+        for c in self
+            .message
+            .chars()
+            .filter(|&c| !c.is_control() && !crate::is_bidi_control(c))
+        {
+            if message.len() + c.len_utf8() > MAX_EVENT_MESSAGE {
+                break;
+            }
+            message.push(c);
+        }
+        self.message = message;
+        Some(self)
+    }
+}
+
 /// What happened, in a closed set: the window can label each kind without
 /// guessing, and a newer mixer's addition arrives as `other`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

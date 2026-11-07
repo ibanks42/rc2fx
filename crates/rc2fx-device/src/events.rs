@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, watch};
 
 pub const MAX_CLIENTS: usize = 4;
 pub const QUEUED_EVENTS: usize = 8;
-pub const MAX_EVENT_BYTES: usize = 512 * 1024;
+pub use rc2fx_usb::MAX_EVENT_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventKind {
