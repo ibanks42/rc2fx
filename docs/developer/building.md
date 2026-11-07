@@ -63,9 +63,9 @@ just package
 ```
 
 This builds the self-contained desktop app for the current computer into
-`target/package`. On Windows and macOS that's a zip holding the app, with its
-licence notices built in, and a `SHA256SUMS`. On Linux it's an AppImage, a DEB
-and an RPM.
+`target/package`. On Windows that's a zip holding the app, with its licence
+notices built in, and a `SHA256SUMS`; on macOS the zip holds `RC2FX.app` instead
+of a bare executable. On Linux it's an AppImage, a DEB and an RPM.
 Releases publish them as `rc2fx-VERSION-OS-ARCH.EXT` (see
 [Releases](releases.md#release-contents)). The documentation isn't packaged.
 

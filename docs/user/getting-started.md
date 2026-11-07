@@ -17,9 +17,9 @@ never flashes the mixer by itself.
 To start the app:
 
 - Windows: extract the zip and run `rc2fx.exe`.
-- macOS: extract the zip and run `rc2fx`. The build isn't signed or
-  notarized by Apple, so macOS may ask you to allow it under **System Settings › Privacy & Security**. The
-  macOS build has not been tested on a real Mac yet.
+- macOS: extract the zip, move `RC2FX.app` to **Applications** and open it. The
+  build isn't signed or notarized by Apple yet, so macOS may ask you to allow it
+  under **System Settings › Privacy & Security**.
 - Linux: either make the downloaded AppImage executable (for example
   `chmod +x rc2fx-*-linux-x64.AppImage`) and run it, or install the `.deb` or
   `.rpm` package with your distribution's package manager and start RC2FX

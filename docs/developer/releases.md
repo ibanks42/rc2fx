@@ -304,6 +304,27 @@ The **Check** workflow also checks Rust code on pushes to `main`, excluding
 documentation-only changes. Release preparation checks the docs before
 publication, so removing automatic docs deployment does not remove that check.
 
+## macOS signing
+
+`cargo xtask package` builds `RC2FX.app`. **Release macOS** signs it with a
+Developer ID certificate and notarizes it when these repository secrets exist,
+so users can open it without visiting Privacy & Security:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE` | The Developer ID Application certificate and key, as a base64 `.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | The `.p12` password |
+| `MACOS_NOTARY_KEY` | The App Store Connect API key (`.p8` contents) |
+| `MACOS_NOTARY_KEY_ID` | That key's ID |
+| `MACOS_NOTARY_ISSUER` | The App Store Connect issuer ID |
+
+Set all five or none. With none, the release still builds, the app is sealed
+ad hoc and the run shows a warning, so users have to allow it in Privacy &
+Security. A rejected notarization fails **Release macOS** and leaves the draft
+unpublished. Local builds use the same steps through `RC2FX_MACOS_IDENTITY`,
+`RC2FX_NOTARY_KEY` (a path to the `.p8`), `RC2FX_NOTARY_KEY_ID` and
+`RC2FX_NOTARY_ISSUER`.
+
 ## Publishing documentation
 
 Documentation deploys only after release publication or when you manually run
@@ -362,9 +383,7 @@ passing local run doesn't guarantee the real run will pass.
 ## Before the first release
 
 - Add the GitHub repository as the `origin` remote.
-- Apple signing and notarization remain deferred. The macOS app is unsigned,
-  so users have to allow it in Privacy & Security. The macOS download is
-  built only for the runner's architecture (`arm64`).
+- The macOS download is built only for the runner's architecture (`arm64`).
 - The Linux build links against the runner's system libraries and may not run
   on very old distributions.
 

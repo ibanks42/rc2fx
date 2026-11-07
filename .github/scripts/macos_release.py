@@ -325,6 +325,9 @@ def stage(source, tag, head, root=Path(".")):
     return sorted(names)
 
 
+APP_MEMBERS = ("rc2fx/RC2FX.app/Contents/MacOS/rc2fx", "rc2fx/RC2FX.app/Contents/Info.plist")
+
+
 def expected_assets(version):
     prefix = f"rc2fx-{version}"
     return {
@@ -335,7 +338,8 @@ def expected_assets(version):
 
 
 def check_package(path):
-    """A macOS zip whose rc2fx/SHA256SUMS lists every other member exactly."""
+    """A macOS zip with an app bundle, whose rc2fx/SHA256SUMS lists every other
+    member exactly."""
     require(zipfile.is_zipfile(path), f"{path.name} is not a zip")
     with zipfile.ZipFile(path) as package:
         require(package.testzip() is None, f"{path.name} is damaged")
@@ -346,6 +350,8 @@ def check_package(path):
             safe_relative(entry.rstrip("/"))
         names = [i.filename for i in package.infolist() if not i.is_dir()]
         require("rc2fx/SHA256SUMS" in names, f"{path.name} has no rc2fx/SHA256SUMS")
+        for member in APP_MEMBERS:
+            require(member in names, f"{path.name} has no {member}")
         listed = {}
         for line in package.read("rc2fx/SHA256SUMS").decode().splitlines():
             digest, sep, name = line.partition("  ")

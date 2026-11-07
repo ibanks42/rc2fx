@@ -1,12 +1,14 @@
 //! `cargo xtask package`: the self-contained desktop executable, legal notices
 //! and a SHA256SUMS manifest. Installer inputs are embedded in the executable;
 //! packaging verifies those bytes, including for --skip-build. Linux releases
-//! are AppImage, DEB and RPM packages; Windows and macOS use a minimal zip.
+//! are AppImage, DEB and RPM packages; Windows uses a minimal zip and macOS a
+//! zip holding an app bundle.
 
 use crate::{Result, root, sha256};
 
 mod appimage;
 mod licenses;
+mod macos;
 mod native_linux;
 use std::{
     collections::BTreeMap,
@@ -238,10 +240,15 @@ pub fn run_package(args: &[&str]) -> Result {
     }
     // ZIP apps carry the notices in their Settings dialog.
     let mut files = collect_with(&root, os, executable, vec![], release)?;
+    let folder = out.join(&name).join(TOP);
+    if os == "macos" {
+        // Signing happens on disk, and the manifest must list what it produces.
+        write_folder(&folder, &macos::bundle(files, version)?)?;
+        files = macos::seal(&folder)?;
+    }
     let sums = manifest(&files);
     files.insert("SHA256SUMS".into(), file(sums.into_bytes()));
 
-    let folder = out.join(&name).join(TOP);
     write_folder(&folder, &files)?;
     // collect_with() checked the actual executable's embedded payload against
     // the staged build inputs; the package deliberately has no payload sidecars.

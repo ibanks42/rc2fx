@@ -64,7 +64,8 @@ def raw_zip(entries):
 
 
 def mac_zip(tamper=False, unlisted=False):
-    files = {"rc2fx.app/Contents/MacOS/rc2fx": b"binary", "LICENSES.html": b"notices"}
+    files = {"RC2FX.app/Contents/MacOS/rc2fx": b"binary", "RC2FX.app/Contents/Info.plist": b"plist",
+             "LICENSES.html": b"notices"}
     sums = "".join(f"{sha(d)}  {n}\n" for n, d in files.items())
     if tamper:
         files["LICENSES.html"] = b"changed"
@@ -581,11 +582,13 @@ class Publish(InTemp):
     def test_duplicate_or_unsafe_zip_entries_are_refused_even_with_good_sums(self):
         import warnings
         body = b"binary"
-        sums = f"{sha(body)}  rc2fx\n".encode()
+        exe, info = "RC2FX.app/Contents/MacOS/rc2fx", "RC2FX.app/Contents/Info.plist"
+        app = [("rc2fx/" + exe, body), ("rc2fx/" + info, body)]
+        sums = f"{sha(body)}  {exe}\n{sha(body)}  {info}\n".encode()
         for entries in [
-            [("rc2fx/rc2fx", body), ("rc2fx/rc2fx", body), ("rc2fx/SHA256SUMS", sums)],
-            [("rc2fx/rc2fx", body), ("other/x", b"x"), ("rc2fx/SHA256SUMS", sums)],
-            [("rc2fx/rc2fx", body), ("rc2fx/../x", b"x"), ("rc2fx/SHA256SUMS", sums)],
+            app + [("rc2fx/" + exe, body), ("rc2fx/SHA256SUMS", sums)],
+            app + [("other/x", b"x"), ("rc2fx/SHA256SUMS", sums)],
+            app + [("rc2fx/../x", b"x"), ("rc2fx/SHA256SUMS", sums)],
         ]:
             gh = FakeGh()
             with warnings.catch_warnings():
@@ -594,8 +597,16 @@ class Publish(InTemp):
             with self.assertRaises(mr.Refused):
                 mr.publish(gh, TAG, SOURCE, self.package(data))
             self.assertEqual(gh.ops, [])
-        good = raw_zip([("rc2fx/rc2fx", body), ("rc2fx/SHA256SUMS", sums)])
+        good = raw_zip(app + [("rc2fx/SHA256SUMS", sums)])
         mr.publish(FakeGh(), TAG, SOURCE, self.package(good))
+
+    def test_a_bare_executable_without_the_app_is_refused(self):
+        body = b"binary"
+        bare = raw_zip([("rc2fx/rc2fx", body), ("rc2fx/SHA256SUMS", f"{sha(body)}  rc2fx\n".encode())])
+        gh = FakeGh()
+        with self.assertRaisesRegex(mr.Refused, "RC2FX.app"):
+            mr.publish(gh, TAG, SOURCE, self.package(bare))
+        self.assertEqual(gh.ops, [])
 
     def test_missing_release_or_bad_arguments_are_refused(self):
         gh = FakeGh()

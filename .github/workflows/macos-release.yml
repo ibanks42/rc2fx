@@ -92,6 +92,14 @@ jobs:
           cache-bin: false
           cache-workspace-crates: true
           cache-on-failure: true
+      - name: Load the Apple signing credentials
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+        run: bash .github/scripts/macos-signing.sh
       - name: Build macOS release package
         env:
           RC2FX_RELEASE_BUILD: "1"
