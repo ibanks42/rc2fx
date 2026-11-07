@@ -14,7 +14,7 @@ fn integer(v: Option<&Value>) -> Option<i64> {
 }
 
 /// Map `/dev/diskN[sM]` to the serial of the Pro II in update mode above it,
-/// from `ioreg -a -r -c IOUSBHostDevice`.
+/// from `ioreg -a -l -r -c IOUSBHostDevice`.
 pub(crate) fn usb_disks(tree: &Value) -> BTreeMap<String, String> {
     fn walk(node: &Value, serial: &str, out: &mut BTreeMap<String, String>) {
         match node {
@@ -22,17 +22,17 @@ pub(crate) fn usb_disks(tree: &Value) -> BTreeMap<String, String> {
             Value::Dictionary(d) => {
                 let mut serial = serial.to_owned();
                 if d.contains_key("idVendor") {
-                    serial.clear();
-                    if integer(d.get("idVendor")) == Some(VENDOR_ID.into())
+                    let update = integer(d.get("idVendor")) == Some(VENDOR_ID.into())
                         && integer(d.get("idProduct"))
                             .and_then(|p| u16::try_from(p).ok())
-                            .is_some_and(is_update_pid)
-                    {
-                        serial = d
-                            .get("USB Serial Number")
-                            .and_then(Value::as_string)
-                            .unwrap_or_default()
-                            .to_owned();
+                            .is_some_and(is_update_pid);
+                    let own = d.get("USB Serial Number").and_then(Value::as_string);
+                    // Nodes below the device can repeat its IDs without the
+                    // serial, so they keep the one from above.
+                    match own {
+                        _ if !update => serial.clear(),
+                        Some(own) => own.clone_into(&mut serial),
+                        None => {}
                     }
                 }
                 if !serial.is_empty()
@@ -78,6 +78,46 @@ pub(crate) fn disk_info(info: &Value) -> Option<DiskInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shaped like a real Pro II: the interface repeats the device's IDs and
+    /// serial, and the mass-storage nub below it repeats the IDs alone.
+    #[test]
+    fn finds_disks_below_a_mass_storage_nub() {
+        let tree = |pid: u16| {
+            Value::from_reader_xml(
+                format!(
+                    r#"<?xml version="1.0"?><plist><array><dict>
+                    <key>idVendor</key><integer>1452</integer><key>idProduct</key><integer>4</integer>
+                    <key>USB Serial Number</key><string>HUB</string>
+                    <key>IORegistryEntryChildren</key><array><dict>
+                      <key>idVendor</key><integer>6647</integer><key>idProduct</key><integer>{pid}</integer>
+                      <key>USB Serial Number</key><string>GV0044100</string>
+                      <key>IORegistryEntryChildren</key><array><dict>
+                        <key>idVendor</key><integer>6647</integer><key>idProduct</key><integer>{pid}</integer>
+                        <key>USB Serial Number</key><string>GV0044100</string>
+                        <key>IORegistryEntryChildren</key><array><dict>
+                          <key>idVendor</key><integer>6647</integer><key>idProduct</key><integer>{pid}</integer>
+                          <key>IORegistryEntryChildren</key><array><dict>
+                            <key>BSD Name</key><string>disk4</string>
+                            <key>IORegistryEntryChildren</key><array>
+                              <dict><key>BSD Name</key><string>disk4s1</string></dict>
+                            </array>
+                          </dict></array>
+                        </dict></array>
+                      </dict></array>
+                    </dict></array>
+                    </dict></array></plist>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+        let disks = usb_disks(&tree(48));
+        assert_eq!(disks.len(), 2);
+        assert_eq!(disks["/dev/disk4"], "GV0044100");
+        assert_eq!(disks["/dev/disk4s1"], "GV0044100");
+        assert!(usb_disks(&tree(148)).is_empty(), "not in update mode");
+    }
 
     #[test]
     fn identifies_update_disks_and_disk_info() {

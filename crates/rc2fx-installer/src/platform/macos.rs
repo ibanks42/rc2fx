@@ -388,11 +388,12 @@ fn plist_of(program: &str, args: &[&str]) -> Result<plist::Value> {
         .map_err(|e| Error(format!("{program}: {e}")))
 }
 
+/// `-l` is required: alone, `-c` prints properties only on the matched USB
+/// device, leaving the disks below it without their `BSD Name`.
+const IOREG_ARGS: &[&str] = &["-a", "-l", "-r", "-c", "IOUSBHostDevice"];
+
 fn disk_map() -> Result<BTreeMap<String, String>> {
-    Ok(usb_disks(&plist_of(
-        "/usr/sbin/ioreg",
-        &["-a", "-r", "-c", "IOUSBHostDevice"],
-    )?))
+    Ok(usb_disks(&plist_of("/usr/sbin/ioreg", IOREG_ARGS)?))
 }
 
 fn statfs(path: &str) -> Result<(bool, u64, u64)> {
