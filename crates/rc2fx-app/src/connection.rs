@@ -57,6 +57,17 @@ pub(super) fn remember_telemetry(on: bool) {
     remember_view("showTelemetry", on.into());
 }
 
+pub(super) fn remembered_telemetry_details() -> bool {
+    remembered_view()
+        .get("telemetryDetails")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub(super) fn remember_telemetry_details(on: bool) {
+    remember_view("telemetryDetails", on.into());
+}
+
 /// The appearance last chosen; Dusk when none was.
 pub(super) fn remembered_appearance() -> desk::Appearance {
     remembered_view()
@@ -191,7 +202,7 @@ impl Rc2FxApp {
                     .mt(px(22.))
                     .max_w(px(540.))
                     .text_center()
-                    .text_size(px(17.))
+                    .text_size(px(ui::LEAD_TEXT))
                     .line_height(relative(1.55))
                     .text_color(rgb(MUTED))
                     .child(if found {
@@ -215,7 +226,7 @@ impl Rc2FxApp {
                             Button::new("open-installer")
                                 .primary()
                                 .large()
-                                .h(px(52.))
+                                .h(px(ui::LARGE_BUTTON_HEIGHT))
                                 .px(px(28.))
                                 .rounded(px(26.))
                                 .font_semibold()
@@ -451,7 +462,7 @@ impl Rc2FxApp {
                         Button::new("allow-usb")
                             .primary()
                             .large()
-                            .h(px(52.))
+                            .h(px(ui::LARGE_BUTTON_HEIGHT))
                             .px(px(28.))
                             .rounded(px(26.))
                             .font_semibold()
@@ -478,7 +489,8 @@ impl Rc2FxApp {
                     .pt(px(24.))
                     .pb(px(48.))
                     .child(
-                        onboarding::headline("Let RC2FX talk", "to your mixer.").text_size(px(56.)),
+                        onboarding::headline("Let RC2FX talk", "to your mixer.")
+                            .text_size(px(ui::DISPLAY_TEXT_SMALL)),
                     )
                     .child(card),
             )

@@ -278,9 +278,19 @@ pub struct Line {
     pub read_changes: bool,
 }
 
-/// Everything the Settings row and the Versions dialog show.
+/// The answer Settings leads with: what matters, and what to read about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Lead {
+    pub title: String,
+    pub detail: Option<String>,
+    /// The part whose changes What's new opens.
+    pub changes: Option<Part>,
+}
+
+/// Everything Settings shows about versions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Overview {
+    pub lead: Lead,
     pub lines: Vec<Line>,
     /// `App 1.0.0 · Mixer 0.1.0 · Firmware 1.7.7`.
     pub summary: String,
@@ -298,6 +308,7 @@ const UP_TO_DATE: (&str, Tone) = ("Up to date", Tone::Quiet);
 const UPDATE: (&str, Tone) = ("Update available", Tone::Update);
 const BLOCKED: (&str, Tone) = ("Blocked", Tone::Warn);
 const NEWER: (&str, Tone) = ("Newer", Tone::Warn);
+const UPDATE_APP_FIRST: (&str, Tone) = ("Update the app first", Tone::Warn);
 const UNKNOWN: (&str, Tone) = ("Unknown", Tone::Unknown);
 
 fn mixer_status(
@@ -364,7 +375,11 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
     let ((mixer_text, mixer_tone), mixer_read) = match i.needs_app {
         // What can be installed now comes first; the note below says the rest.
         Some(_) if !s.update_available() => (("Needs app update", Tone::Warn), false),
-        _ => mixer_status(&s, mixer, i.signed_known),
+        _ => match (mixer_status(&s, mixer, i.signed_known), app) {
+            // A newer app is available, and it's what this mixer is waiting for.
+            ((NEWER, read), AppStanding::Update { .. }) => (UPDATE_APP_FIRST, read),
+            (status, _) => status,
+        },
     };
     let ((firmware_text, firmware_tone), firmware_read) = firmware_status(&s);
     let lines = vec![
@@ -428,7 +443,7 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
         ));
     }
     let connected = i.installed_runtime.is_some() || i.installed_firmware.is_some();
-    if connected && *mixer == MixerUpdateState::Unknown {
+    if connected && *mixer == MixerUpdateState::Unknown && details.is_empty() {
         details.push("The latest published mixer software is unknown.".into());
     }
     let check_in_installer = connected
@@ -450,7 +465,41 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
         _ if lines.iter().all(|l| l.tone == Tone::Quiet) => ("Up to date".to_owned(), Tone::Quiet),
         _ => ("Unknown".to_owned(), Tone::Unknown),
     };
+    let waiting = lines
+        .iter()
+        .find(|l| l.tone == Tone::Update && l.part != Part::App);
+    let lead = match (app, waiting) {
+        (AppStanding::Update { version }, _) => Lead {
+            title: format!("RC2FX {version} is available"),
+            detail: Some(format!("You have {}.", i.app)),
+            changes: Some(Part::App),
+        },
+        (AppStanding::Checking, _) => Lead {
+            title: "Checking for updates…".into(),
+            detail: None,
+            changes: None,
+        },
+        (_, Some(_)) => Lead {
+            title: "A mixer update is ready".into(),
+            detail: Some("Mixer software and RØDE firmware install together.".into()),
+            changes: lines
+                .iter()
+                .find(|l| l.tone == Tone::Update && l.read_changes)
+                .map(|l| l.part),
+        },
+        _ if flag_tone == Tone::Quiet => Lead {
+            title: "Everything is up to date".into(),
+            detail: None,
+            changes: None,
+        },
+        _ => Lead {
+            title: flag.clone(),
+            detail: None,
+            changes: None,
+        },
+    };
     Overview {
+        lead,
         summary: format!(
             "App {} · Mixer {} · Firmware {}",
             lines[0].installed, lines[1].installed, lines[2].installed
@@ -596,6 +645,64 @@ mod tests {
 
     fn line(o: &Overview, part: Part) -> &Line {
         o.lines.iter().find(|l| l.part == part).unwrap()
+    }
+
+    fn update() -> AppStanding {
+        AppStanding::Update {
+            version: "0.4.0".into(),
+        }
+    }
+
+    #[test]
+    fn an_app_update_leads_and_offers_its_changes() {
+        let i = inputs(Some("0.3.0"), Some("1.8.0"));
+        let o = overview(&i, &update(), &MixerUpdateState::Current);
+        assert_eq!(o.lead.title, "RC2FX 0.4.0 is available");
+        assert_eq!(o.lead.detail.as_deref(), Some("You have 0.3.0."));
+        assert_eq!(o.lead.changes, Some(Part::App));
+    }
+
+    #[test]
+    fn a_mixer_update_leads_when_the_app_is_current() {
+        let i = inputs(Some("0.2.0"), Some("1.7.0"));
+        let state = MixerUpdateState::Bundled {
+            version: "0.3.0".into(),
+        };
+        let o = overview(&i, &current(), &state);
+        assert_eq!(o.lead.title, "A mixer update is ready");
+        assert!(o.offer_installer);
+    }
+
+    #[test]
+    fn nothing_to_do_says_so_and_offers_nothing() {
+        let i = inputs(Some("0.3.0"), Some("1.8.0"));
+        let o = overview(&i, &current(), &MixerUpdateState::Current);
+        assert_eq!(o.lead.title, "Everything is up to date");
+        assert_eq!(o.lead.changes, None);
+    }
+
+    #[test]
+    fn a_mixer_newer_than_the_app_points_at_the_app_update() {
+        let mut i = inputs(Some("0.4.0"), Some("1.8.0"));
+        i.available_runtime = Some("0.3.0");
+        let waiting = overview(&i, &update(), &MixerUpdateState::Current);
+        assert_eq!(line(&waiting, Part::Mixer).status, "Update the app first");
+        let no_update = overview(&i, &current(), &MixerUpdateState::Current);
+        assert_eq!(line(&no_update, Part::Mixer).status, "Newer");
+    }
+
+    #[test]
+    fn an_unknown_latest_version_is_only_said_when_nothing_better_is() {
+        let i = inputs(Some("0.3.0"), Some("1.8.0"));
+        let o = overview(&i, &current(), &MixerUpdateState::Unknown);
+        assert_eq!(
+            o.details,
+            ["The latest published mixer software is unknown."]
+        );
+        let mut i = inputs(Some("0.3.0"), Some("1.8.0"));
+        i.needs_app = Some(("9.0.0", "99.0.0"));
+        let o = overview(&i, &current(), &MixerUpdateState::Unknown);
+        assert!(o.details.iter().all(|d| !d.contains("unknown")));
     }
 
     fn offer(version: &str, minimum_app: &str, protocol: u32) -> MixerOffer {

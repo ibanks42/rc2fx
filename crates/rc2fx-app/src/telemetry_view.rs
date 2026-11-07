@@ -1,6 +1,7 @@
-//! The Settings page's TELEMETRY section, shown when Show telemetry is on:
-//! the engine's state and timing, then one block per processed path with
-//! fresh meters.
+//! The Settings page's TELEMETRY section, shown when Show telemetry is on.
+//! It answers whether the mixer is healthy and, if not, where: a verdict, four
+//! figures, any problems, then one line per processed path with fresh meters.
+//! Details opens every figure the mixer reports.
 //! Built from a plain snapshot so it renders the same with preview data.
 
 use super::*;
@@ -17,8 +18,12 @@ pub(super) struct Snapshot {
     /// The meters' diagnostics epoch: above 0 after a reset.
     pub(super) epoch: u64,
     pub(super) paths: Vec<PathView>,
+    /// Faults from the mixer starting, which the figures here leave out.
+    pub(super) startup: Option<String>,
     /// Processed paths whose source sends no audio right now.
     pub(super) idle: Vec<String>,
+    /// Details is open: every figure, instead of the compact paths.
+    pub(super) details: bool,
 }
 
 pub(super) struct PathView {
@@ -134,7 +139,7 @@ fn counter(label: &'static str, count: u64, color: u32) -> Div {
 
 /// A level bar from −60 to 0 dBFS, red at or over full scale, with its label
 /// and value.
-fn level(label: &'static str, peak: f64, mono: &SharedString) -> Div {
+fn level(label: &'static str, widths: (f32, f32), peak: f64, mono: &SharedString) -> Div {
     let db = dbfs(peak);
     let width = ((db + 60.) / 60.).clamp(0., 1.) as f32;
     div()
@@ -145,7 +150,7 @@ fn level(label: &'static str, peak: f64, mono: &SharedString) -> Div {
         .min_w_0()
         .child(
             div()
-                .w(px(48.))
+                .w(px(widths.0))
                 .flex_shrink_0()
                 .text_xs()
                 .text_color(rgb(MUTED))
@@ -168,7 +173,7 @@ fn level(label: &'static str, peak: f64, mono: &SharedString) -> Div {
         )
         .child(
             div()
-                .w(px(72.))
+                .w(px(widths.1))
                 .flex_shrink_0()
                 .text_right()
                 .text_xs()
@@ -249,6 +254,364 @@ fn not_reported() -> Div {
     value("Not reported by the mixer", FAINT)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Verdict {
+    Healthy,
+    Attention,
+    Fault,
+}
+
+impl Verdict {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Healthy => "Healthy",
+            Self::Attention => "Needs attention",
+            Self::Fault => "Not processing",
+        }
+    }
+
+    fn color(self) -> u32 {
+        match self {
+            Self::Healthy => ACCENT,
+            Self::Attention => WARN,
+            Self::Fault => DANGER,
+        }
+    }
+}
+
+/// The audio callback and xruns are shared by every path: one report.
+fn shared(paths: &[PathView]) -> Option<&Performance> {
+    paths
+        .iter()
+        .find_map(|path| path.meter.performance.as_ref())
+}
+
+/// The suppression workers that ran, one per path that has one.
+fn workers(paths: &[PathView]) -> Vec<&Performance> {
+    paths
+        .iter()
+        .filter_map(|path| path.meter.performance.as_ref())
+        .filter(|p| p.worker_wall.calls > 0)
+        .collect()
+}
+
+/// `name` for each non-zero count: "3 overruns".
+fn counted(counts: &[(u64, &str)]) -> Vec<String> {
+    counts
+        .iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, name)| format!("{} {name}", grouped(*count)))
+        .collect()
+}
+
+/// What needs looking at and where, beyond the figures above it. Empty when
+/// there is nothing.
+fn problems(paths: &[PathView]) -> Vec<String> {
+    let mut list = Vec::new();
+    if let Some(p) = shared(paths) {
+        let found = counted(&[
+            (p.callback.overruns, "overruns"),
+            (p.callback.clock_errors, "clock errors"),
+        ]);
+        if !found.is_empty() {
+            list.push(format!("Audio callback: {}", found.join(", ")));
+        }
+    }
+    for path in paths {
+        let meter = &path.meter;
+        let worker = meter.performance.as_ref();
+        let mut found = Vec::new();
+        if meter.worker_failed {
+            found.push("noise worker failed".to_owned());
+        }
+        if let Some(warning) = path.warning {
+            found.push(warning.label().to_owned());
+        }
+        found.extend(counted(&[
+            (meter.clipped, "clipped"),
+            (meter.missed_deadlines, "fallbacks"),
+            (meter.stale_results, "stale results"),
+            (meter.input_drops, "input drops"),
+            (meter.output_drops, "output drops"),
+            (
+                worker.map_or(0, |p| p.worker_wall.overruns),
+                "worker overruns",
+            ),
+            (
+                worker.map_or(0, |p| {
+                    p.worker_wall.clock_errors + p.worker_cpu.clock_errors
+                }),
+                "worker clock errors",
+            ),
+        ]));
+        if !found.is_empty() {
+            list.push(format!("{}: {}", path.name, found.join(", ")));
+        }
+    }
+    list
+}
+
+/// Fault when audio isn't being processed; Attention for any count above zero,
+/// so nothing is passed over.
+fn verdict(engine: &EngineStatus, routing: &RoutingStatus, paths: &[PathView]) -> Verdict {
+    let running = engine.status == EnginePhase::Running && engine.audio_advancing;
+    if !running
+        || routing.status == RoutingPhase::Error
+        || paths.iter().any(|path| path.meter.worker_failed)
+    {
+        return Verdict::Fault;
+    }
+    let shared_faults = shared(paths).is_some_and(|p| {
+        p.xruns > 0 || p.helper_late.unwrap_or(0) > 0 || p.helper_stalls.unwrap_or(0) > 0
+    });
+    if shared_faults || !problems(paths).is_empty() {
+        Verdict::Attention
+    } else {
+        Verdict::Healthy
+    }
+}
+
+/// Each figure's name and what it means.
+const CALLBACK: (&str, &str) = (
+    "Callback load",
+    "How much of each audio block's deadline the mixer's audio work uses on average. Near 100 % it risks missing the deadline. The peak is the slowest block.",
+);
+const XRUNS: (&str, &str) = (
+    "Xruns",
+    "Audio blocks the system missed, across all paths. This should stay at 0. Any from the mixer starting are listed separately.",
+);
+const SUPPRESSION: (&str, &str) = (
+    "Suppression load",
+    "How much of each frame's time budget noise suppression uses on average, for the channel with the slowest peak. Near 100 % it risks running late, and a late frame uses the original audio. This is not how much noise is removed.",
+);
+const HELPER: (&str, &str) = (
+    "Helper",
+    "Helper work that finished after its audio cycle, then callbacks that found the helper still busy. Both should stay at 0.",
+);
+
+/// One of the four figures.
+#[derive(Debug, PartialEq)]
+struct Tile {
+    label: &'static str,
+    help: &'static str,
+    value: String,
+    caption: String,
+    color: u32,
+}
+
+/// Share of a budget used on average, and the peak against it.
+fn load(timing: &Timing, budget_ns: u64, epoch: u64) -> (String, String) {
+    let mean_ns = timing.total_ns.checked_div(timing.calls).unwrap_or(0);
+    (
+        format!("{:.0} %", mean_ns as f64 * 100. / budget_ns.max(1) as f64),
+        format!("peak {} of {}", peak(timing, epoch), ms(budget_ns)),
+    )
+}
+
+fn tiles(paths: &[PathView], epoch: u64, startup: Option<&str>) -> [Tile; 4] {
+    let missing = |(label, help)| Tile {
+        label,
+        help,
+        value: "–".into(),
+        caption: "Not reported".into(),
+        color: FAINT,
+    };
+    let tone = |count: u64, color| if count > 0 { color } else { TEXT };
+    let Some(p) = shared(paths) else {
+        return [CALLBACK, XRUNS, SUPPRESSION, HELPER].map(missing);
+    };
+    let (value, caption) = load(&p.callback, p.callback_budget_ns, epoch);
+    let callback = Tile {
+        label: CALLBACK.0,
+        help: CALLBACK.1,
+        value,
+        caption,
+        color: tone(p.callback.overruns, WARN),
+    };
+    let xruns = Tile {
+        label: XRUNS.0,
+        help: XRUNS.1,
+        value: grouped(p.xruns),
+        caption: startup.unwrap_or("Audio blocks missed").to_owned(),
+        color: tone(p.xruns, DANGER),
+    };
+    let workers = workers(paths);
+    let suppression = match workers.iter().max_by_key(|p| p.worker_wall.max_ns) {
+        Some(worst) => {
+            let (value, caption) = load(&worst.worker_wall, worst.worker_budget_ns, epoch);
+            Tile {
+                label: SUPPRESSION.0,
+                help: SUPPRESSION.1,
+                value,
+                caption,
+                color: tone(workers.iter().map(|p| p.worker_wall.overruns).sum(), WARN),
+            }
+        }
+        None => Tile {
+            caption: "Not running".into(),
+            ..missing(SUPPRESSION)
+        },
+    };
+    let helper = match (p.helper_late, p.helper_stalls) {
+        (None, None) => missing(HELPER),
+        (late, stalls) => {
+            let (late, stalls) = (late.unwrap_or(0), stalls.unwrap_or(0));
+            Tile {
+                label: HELPER.0,
+                help: HELPER.1,
+                value: format!("{} · {}", grouped(late), grouped(stalls)),
+                caption: "Late · stalls".into(),
+                color: tone(late + stalls, WARN),
+            }
+        }
+    };
+    [callback, xruns, suppression, helper]
+}
+
+fn tile(tile: Tile) -> Div {
+    div()
+        .v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_1()
+        .p_3()
+        .rounded_lg()
+        .bg(rgb(surface().raised))
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(tile.label),
+                )
+                .child(ui::info_badge(
+                    SharedString::from(format!("telemetry-{}", tile.label)),
+                    tile.help,
+                )),
+        )
+        .child(
+            div()
+                .text_size(px(ui::SUBHEADING_TEXT))
+                .font_semibold()
+                .text_color(rgb(tile.color))
+                .child(tile.value),
+        )
+        .child(
+            div()
+                .truncate()
+                .text_xs()
+                .text_color(rgb(FAINT))
+                .child(tile.caption),
+        )
+}
+
+/// The verdict and what it rests on.
+fn status_line(engine: &EngineStatus, routing: &RoutingStatus, snapshot: &Snapshot) -> Div {
+    let verdict = verdict(engine, routing, &snapshot.paths);
+    let mut parts = vec![
+        mode_label(engine.mode).to_owned(),
+        phase_label(engine.status).to_owned(),
+        routing_label(routing.status).to_owned(),
+    ];
+    if routing.channels > 0 {
+        parts.push(format!("{} channels", routing.channels));
+    }
+    if snapshot.synthetic {
+        parts.push("simulated".to_owned());
+    }
+    div()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .size(px(8.))
+                .flex_shrink_0()
+                .rounded_full()
+                .bg(rgb(verdict.color())),
+        )
+        .child(div().font_semibold().child(verdict.label()))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(parts.join(" · ")),
+        )
+}
+
+/// One path on one line: its levels and added delay.
+fn path_line(path: &PathView, sample_rate: u32, mono: &SharedString) -> Div {
+    let meter = &path.meter;
+    let delay = if meter.latency_samples > 0 {
+        format!(
+            "+{:.1} ms",
+            f64::from(meter.latency_samples) * 1000. / f64::from(sample_rate.max(1))
+        )
+    } else {
+        "No delay".into()
+    };
+    div()
+        .h_flex()
+        .items_center()
+        .gap_4()
+        .child(
+            div()
+                .w(px(110.))
+                .flex_shrink_0()
+                .truncate()
+                .text_sm()
+                .font_medium()
+                .child(path.name.clone()),
+        )
+        .child(level("In", (20., 60.), meter.input_peak, mono))
+        .child(level("Out", (24., 60.), meter.output_peak, mono))
+        .child(
+            div()
+                .w(px(60.))
+                .flex_shrink_0()
+                .text_right()
+                .text_xs()
+                .text_color(rgb(if meter.latency_samples > 0 {
+                    TEXT
+                } else {
+                    FAINT
+                }))
+                .child(delay),
+        )
+}
+
+/// "Since the engine started: 35 s of audio · 15,292 blocks · 48 kHz, ...".
+fn footer(engine: &EngineStatus, paths: &[PathView], epoch: u64) -> String {
+    let block_ms = f64::from(engine.block_size) * 1000. / f64::from(engine.sample_rate.max(1));
+    let format = format!(
+        "{:.0} kHz, {}-sample blocks ({block_ms:.2} ms)",
+        f64::from(engine.sample_rate) / 1000.,
+        engine.block_size
+    );
+    let since = if epoch > 0 {
+        "Since the reset"
+    } else {
+        "Since the engine started"
+    };
+    match paths.iter().max_by_key(|path| path.meter.processed_frames) {
+        Some(path) => format!(
+            "{since}: {} of audio · {} blocks · {format}",
+            duration(path.meter.processed_frames, engine.sample_rate),
+            grouped(path.meter.callbacks)
+        ),
+        None => format,
+    }
+}
+
 /// The engine's state, then the timing the mixer reports for it.
 fn engine_rows(
     engine: &EngineStatus,
@@ -256,6 +619,7 @@ fn engine_rows(
     synthetic: bool,
     epoch: u64,
     paths: &[PathView],
+    startup: Option<&str>,
 ) -> Vec<Div> {
     let healthy = engine.status == EnginePhase::Running && engine.audio_advancing;
     let block_ms = f64::from(engine.block_size) * 1000. / f64::from(engine.sample_rate.max(1));
@@ -316,10 +680,7 @@ fn engine_rows(
         ),
     ));
 
-    // The audio callback and xruns are shared by every path: one report.
-    let performance = paths
-        .iter()
-        .find_map(|path| path.meter.performance.as_ref());
+    let performance = shared(paths);
     rows.push(row(
         labelled(
             "Audio callback",
@@ -346,7 +707,17 @@ fn engine_rows(
         },
     ));
     rows.push(row(
-        labelled("Xruns", "Audio blocks the system missed, for all paths."),
+        labelled("Xruns", "Audio blocks the system missed, for all paths.").when_some(
+            startup,
+            |label, line| {
+                label.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(FAINT))
+                        .child(SharedString::from(line.to_owned())),
+                )
+            },
+        ),
         match performance {
             Some(p) => counter("xruns", p.xruns, DANGER),
             None => not_reported(),
@@ -372,11 +743,7 @@ fn engine_rows(
         },
     ));
     // The suppression workers run per path; show the worst of them.
-    let workers: Vec<_> = paths
-        .iter()
-        .filter_map(|path| path.meter.performance.as_ref())
-        .filter(|p| p.worker_wall.calls > 0)
-        .collect();
+    let workers = workers(paths);
     let worker = match workers.iter().max_by_key(|p| p.worker_wall.max_ns) {
         Some(worst) => timing_value(
             format!("{} peak", peak(&worst.worker_wall, epoch)),
@@ -469,8 +836,8 @@ fn path_block(path: &PathView, sample_rate: u32, epoch: u64, mono: &SharedString
         div()
             .h_flex()
             .gap_6()
-            .child(level("Input", meter.input_peak, mono))
-            .child(level("Output", meter.output_peak, mono)),
+            .child(level("Input", (48., 72.), meter.input_peak, mono))
+            .child(level("Output", (48., 72.), meter.output_peak, mono)),
     );
 
     let suppression = meter.suppression_frames > 0
@@ -551,39 +918,103 @@ fn path_block(path: &PathView, sample_rate: u32, epoch: u64, mono: &SharedString
     )))
 }
 
-/// The TELEMETRY section; `aside` holds its header controls.
-pub(super) fn telemetry_section(snapshot: &Snapshot, mono: &SharedString, aside: Div) -> Div {
-    let mut rows = Vec::new();
+/// The TELEMETRY section; `aside` holds its header controls and `toggle` opens
+/// or closes Details.
+pub(super) fn telemetry_section(
+    snapshot: &Snapshot,
+    mono: &SharedString,
+    aside: Div,
+    toggle: impl IntoElement,
+) -> Div {
     let sample_rate = snapshot
         .engine
         .as_ref()
         .map_or(48_000, |(engine, _)| engine.sample_rate);
+    let mut summary = div().v_flex().gap_3().py_3();
     if let Some((engine, routing)) = &snapshot.engine {
-        rows.extend(engine_rows(
-            engine,
-            routing,
-            snapshot.synthetic,
-            snapshot.epoch,
-            &snapshot.paths,
-        ));
+        summary = summary.child(status_line(engine, routing, snapshot));
     }
     if let Some(notice) = snapshot.notice {
-        rows.push(row(value(notice, MUTED), div()));
+        summary = summary.child(value(notice, MUTED));
     }
-    for path in &snapshot.paths {
-        rows.push(path_block(path, sample_rate, snapshot.epoch, mono));
-    }
-    if !snapshot.idle.is_empty() {
-        rows.push(row(
-            labelled("Idle paths", "No audio from the source right now."),
-            value(snapshot.idle.join(", "), MUTED),
+    if !snapshot.paths.is_empty() {
+        summary = summary.child(div().h_flex().gap_2().children(
+            tiles(&snapshot.paths, snapshot.epoch, snapshot.startup.as_deref()).map(tile),
         ));
     }
-    // The panel's border closes the last row.
-    if let Some(last) = rows.pop() {
-        rows.push(last.border_b_0());
+    let problems = problems(&snapshot.paths);
+    if !problems.is_empty() {
+        summary = summary.child(
+            div()
+                .v_flex()
+                .gap_1()
+                .text_xs()
+                .text_color(rgb(WARN))
+                .children(problems.into_iter().map(|line| div().child(line))),
+        );
     }
-    section("TELEMETRY", aside, div().children(rows))
+    let mut body = div().child(summary);
+    if snapshot.details {
+        let mut rows = Vec::new();
+        if let Some((engine, routing)) = &snapshot.engine {
+            rows.extend(engine_rows(
+                engine,
+                routing,
+                snapshot.synthetic,
+                snapshot.epoch,
+                &snapshot.paths,
+                snapshot.startup.as_deref(),
+            ));
+        }
+        for path in &snapshot.paths {
+            rows.push(path_block(path, sample_rate, snapshot.epoch, mono));
+        }
+        body = body.child(
+            div()
+                .border_t_1()
+                .border_color(rgb(surface().line))
+                .children(rows),
+        );
+    } else if !snapshot.paths.is_empty() {
+        body = body.child(
+            div()
+                .v_flex()
+                .gap_2()
+                .py_3()
+                .border_t_1()
+                .border_color(rgb(surface().line))
+                .children(
+                    snapshot
+                        .paths
+                        .iter()
+                        .map(|path| path_line(path, sample_rate, mono)),
+                ),
+        );
+    }
+    let mut notes = Vec::new();
+    if let Some((engine, _)) = &snapshot.engine {
+        notes.push(footer(engine, &snapshot.paths, snapshot.epoch));
+    }
+    if !snapshot.idle.is_empty() {
+        notes.push(format!("Idle: {}", snapshot.idle.join(", ")));
+    }
+    let closing = div()
+        .h_flex()
+        .items_center()
+        .gap_3()
+        .py_2()
+        .border_t_1()
+        .border_color(rgb(surface().line))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(rgb(FAINT))
+                .child(notes.join(" · ")),
+        )
+        .child(toggle);
+    section("TELEMETRY", aside, body.child(closing))
 }
 
 impl Rc2FxApp {
@@ -594,7 +1025,9 @@ impl Rc2FxApp {
             synthetic: false,
             epoch: 0,
             paths: Vec::new(),
+            startup: None,
             idle: Vec::new(),
+            details: self.telemetry_details,
         };
         if !self.session.connected {
             snapshot.notice = Some("Connect to the mixer to see its telemetry.");
@@ -630,15 +1063,18 @@ impl Rc2FxApp {
             match self.fresh_meter_for(&target.id) {
                 Some((meter, synthetic)) => {
                     snapshot.synthetic |= synthetic;
+                    let mut shown = meter.clone();
+                    self.startup.settle(&mut shown);
                     snapshot.paths.push(PathView {
                         name: name(&meter.id),
-                        meter: meter.clone(),
+                        meter: shown,
                         warning: self.audio_warning_for(&meter.id),
                     });
                 }
                 None => snapshot.idle.push(name(&target.id)),
             }
         }
+        snapshot.startup = self.startup.line();
         if snapshot.paths.is_empty() {
             snapshot.idle.clear();
             snapshot.notice = Some(if state.engine.status != EnginePhase::Running {
@@ -654,8 +1090,151 @@ impl Rc2FxApp {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: gpui's `test` attribute would shadow the standard one.
-    use super::{db_label, duration, grouped, timing_summary};
-    use rc2fx_core::Timing;
+    use super::{
+        ACCENT, DANGER, EnginePhase, EngineStatus, FAINT, PathView, RoutingPhase, RoutingStatus,
+        TEXT, Verdict, WARN, db_label, duration, footer, grouped, problems, tiles, timing_summary,
+        verdict,
+    };
+    use rc2fx_core::{EngineMode, TargetMeter, Timing};
+
+    fn engine() -> EngineStatus {
+        EngineStatus {
+            generation: 1,
+            restart_allowed: false,
+            mode: EngineMode::Native,
+            status: EnginePhase::Running,
+            applied_revision: 1,
+            sample_rate: 48_000,
+            block_size: 112,
+            message: String::new(),
+            audio_advancing: true,
+        }
+    }
+
+    fn routing() -> RoutingStatus {
+        serde_json::from_value(serde_json::json!({
+            "status": "active", "channels": 4, "recovered": 0, "message": ""
+        }))
+        .unwrap()
+    }
+
+    /// A clean path; `change` makes it less so.
+    fn path(change: impl FnOnce(&mut TargetMeter)) -> Vec<PathView> {
+        let timing = |calls: u64, mean: u64, peak: u64| {
+            serde_json::json!({"calls": calls, "totalNs": calls * mean, "maxNs": peak,
+                "overruns": 0, "clockErrors": 0, "histogram": [0, 0, 0, 0, 0, 0, 0, 0]})
+        };
+        let mut meter: TargetMeter = serde_json::from_value(serde_json::json!({
+            "id": "mic-1", "inputPeak": 0.5, "outputPeak": 0.5, "rms": 0.1,
+            "gainReduction": 0.0, "voice": 0.0, "gateOpen": 1.0, "clipped": 0,
+            "spectrum": [], "callbacks": 15_292, "processedFrames": 1_680_000,
+            "suppressionFrames": 0, "missedDeadlines": 0, "staleResults": 0,
+            "inputDrops": 0, "outputDrops": 0, "latencySamples": 0, "workerFailed": false,
+            "performance": {
+                "callbackBudgetNs": 2_000_000, "workerBudgetNs": 10_000_000, "xruns": 0,
+                "helperLate": 0, "helperStalls": 0,
+                "callback": timing(100, 500_000, 900_000),
+                "workerWall": timing(10, 2_000_000, 4_000_000),
+                "workerCpu": timing(10, 1_000_000, 2_000_000),
+            }
+        }))
+        .unwrap();
+        change(&mut meter);
+        vec![PathView {
+            name: "Host".into(),
+            meter,
+            warning: None,
+        }]
+    }
+
+    #[test]
+    fn a_clean_mixer_is_healthy_and_lists_no_problems() {
+        let paths = path(|_| {});
+        assert_eq!(verdict(&engine(), &routing(), &paths), Verdict::Healthy);
+        assert!(problems(&paths).is_empty());
+        assert_eq!(Verdict::Healthy.color(), ACCENT);
+    }
+
+    #[test]
+    fn any_count_above_zero_needs_attention_and_says_where() {
+        let paths = path(|m| m.missed_deadlines = 24);
+        assert_eq!(verdict(&engine(), &routing(), &paths), Verdict::Attention);
+        assert_eq!(problems(&paths), ["Host: 24 fallbacks"]);
+        let paths = path(|m| m.performance.as_mut().unwrap().xruns = 1);
+        assert_eq!(verdict(&engine(), &routing(), &paths), Verdict::Attention);
+        let paths = path(|m| m.performance.as_mut().unwrap().helper_stalls = Some(2));
+        assert_eq!(verdict(&engine(), &routing(), &paths), Verdict::Attention);
+        let paths = path(|m| m.performance.as_mut().unwrap().callback.overruns = 3);
+        assert_eq!(problems(&paths), ["Audio callback: 3 overruns"]);
+    }
+
+    #[test]
+    fn audio_not_being_processed_is_a_fault() {
+        let mut stalled = engine();
+        stalled.audio_advancing = false;
+        assert_eq!(verdict(&stalled, &routing(), &path(|_| {})), Verdict::Fault);
+        let mut stopped = engine();
+        stopped.status = EnginePhase::Error;
+        assert_eq!(verdict(&stopped, &routing(), &path(|_| {})), Verdict::Fault);
+        let mut broken = routing();
+        broken.status = RoutingPhase::Error;
+        assert_eq!(verdict(&engine(), &broken, &path(|_| {})), Verdict::Fault);
+        let paths = path(|m| m.worker_failed = true);
+        assert_eq!(verdict(&engine(), &routing(), &paths), Verdict::Fault);
+    }
+
+    #[test]
+    fn tiles_show_load_against_budget_and_colour_only_real_faults() {
+        let [callback, xruns, suppression, helper] = tiles(&path(|_| {}), 0, None);
+        assert_eq!(callback.value, "25 %");
+        assert_eq!(callback.caption, "peak 0.90 ms of 2.00 ms");
+        assert_eq!(callback.color, TEXT);
+        assert_eq!((xruns.value.as_str(), xruns.color), ("0", TEXT));
+        assert_eq!(suppression.label, "Suppression load");
+        assert_eq!(suppression.value, "20 %");
+        assert_eq!(suppression.caption, "peak 4.00 ms of 10.00 ms");
+        assert_eq!((helper.value.as_str(), helper.color), ("0 · 0", TEXT));
+        let paths = path(|m| {
+            let p = m.performance.as_mut().unwrap();
+            p.xruns = 1234;
+            p.helper_late = Some(25);
+        });
+        let [_, xruns, _, helper] = tiles(&paths, 0, Some("12 xruns during startup"));
+        assert_eq!((xruns.value.as_str(), xruns.color), ("1,234", DANGER));
+        assert_eq!(xruns.caption, "12 xruns during startup");
+        assert_eq!((helper.value.as_str(), helper.color), ("25 · 0", WARN));
+    }
+
+    #[test]
+    fn every_tile_explains_itself_even_with_nothing_reported() {
+        let reported = path(|_| {});
+        let silent = path(|m| m.performance = None);
+        for paths in [&reported, &silent] {
+            assert!(tiles(paths, 0, None).iter().all(|t| !t.help.is_empty()));
+        }
+    }
+
+    #[test]
+    fn tiles_say_when_the_mixer_reports_nothing() {
+        let paths = path(|m| m.performance = None);
+        let all = tiles(&paths, 0, None);
+        assert!(all.iter().all(|t| t.value == "–" && t.color == FAINT));
+        let paths = path(|m| {
+            let p = m.performance.as_mut().unwrap();
+            p.worker_wall.calls = 0;
+        });
+        assert_eq!(tiles(&paths, 0, None)[2].caption, "Not running");
+    }
+
+    #[test]
+    fn the_footer_carries_the_totals_once() {
+        assert_eq!(
+            footer(&engine(), &path(|_| {}), 0),
+            "Since the engine started: 35 s of audio · 15,292 blocks · 48 kHz, 112-sample blocks (2.33 ms)"
+        );
+        assert!(footer(&engine(), &path(|_| {}), 1).starts_with("Since the reset:"));
+        assert!(footer(&engine(), &[], 0).starts_with("48 kHz"));
+    }
 
     #[test]
     fn numbers_read_plainly() {
@@ -805,7 +1384,9 @@ pub(super) mod preview {
             synthetic: false,
             epoch: u64::from(reported),
             paths,
+            startup: Some("12 xruns during startup".into()),
             idle: vec!["Bluetooth".into()],
+            details: !reported,
         }
     }
 
@@ -859,6 +1440,10 @@ pub(super) mod preview {
                                     |_| {},
                                     |_| {},
                                 )),
+                            Button::new("telemetry-details")
+                                .ghost()
+                                .small()
+                                .label("Details"),
                         )),
                 )
         }

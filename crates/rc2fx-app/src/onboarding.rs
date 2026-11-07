@@ -130,7 +130,7 @@ pub(super) fn headline(first: &'static str, second: &'static str) -> Div {
         .v_flex()
         .items_center()
         .text_center()
-        .text_size(px(64.))
+        .text_size(px(ui::DISPLAY_TEXT))
         .line_height(relative(0.98))
         .font_weight(FontWeight::EXTRA_BOLD)
         .child(first)

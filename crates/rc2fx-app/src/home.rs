@@ -330,7 +330,7 @@ impl Rc2FxApp {
             .pb_6()
             .child(
                 div()
-                    .text_size(px(32.))
+                    .text_size(px(ui::HEADING_TEXT))
                     .font_bold()
                     .line_height(relative(1.1))
                     .child("Your mixer"),
@@ -338,7 +338,7 @@ impl Rc2FxApp {
             .child(
                 div()
                     .mt(px(6.))
-                    .mb(px(26.))
+                    .mb(px(ui::SECTION_GAP))
                     .text_size(px(15.))
                     .text_color(rgb(MUTED))
                     .child(sub),
@@ -363,7 +363,7 @@ fn processed_off_faders(target_id: &str, processed: bool, on_faders: &[&str]) ->
 /// A small heading between the overview's groups.
 fn section_label(text: &'static str) -> Div {
     div()
-        .mt(px(30.))
+        .mt(px(ui::SECTION_GAP))
         .mb(px(10.))
         .text_size(px(11.))
         .font_semibold()
@@ -434,7 +434,7 @@ fn vertical_meter(bar: AnyElement) -> Div {
     div()
         .relative()
         .w(px(10.))
-        .h(px(190.))
+        .h(px(ui::METER_HEIGHT))
         .rounded(px(6.))
         .overflow_hidden()
         .bg(rgb(surface().sunken))

@@ -129,32 +129,15 @@ impl Rc2FxApp {
         self.content_scroll.set_offset(Point::default());
     }
 
-    fn about_section(&self, cx: &mut Context<Self>) -> Div {
-        let overview = self.versions_overview();
-        let rows =
-            div()
-                .child(row(
-                    labelled("Versions", overview.summary),
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap(px(16.))
-                        .child(crate::versions_dialog::flag(
-                            overview.flag,
-                            overview.flag_tone,
-                        ))
-                        .child(ghost("view-versions", "View versions").on_click(
-                            cx.listener(|app, _, window, cx| app.open_versions(window, cx)),
-                        )),
-                ))
-                .child(row(
-                    labelled(
-                        "Licenses",
-                        "RC2FX is MIT licensed. Third-party notices and credits are included.",
-                    ),
-                    ghost("open-licenses", "View licenses")
-                        .on_click(|_, window, cx| crate::licenses::open(window, cx)),
-                ));
+    fn about_section(&self) -> Div {
+        let rows = div().child(row(
+            labelled(
+                "Licenses",
+                "RC2FX is MIT licensed. Third-party notices and credits are included.",
+            ),
+            ghost("open-licenses", "View licenses")
+                .on_click(|_, window, cx| crate::licenses::open(window, cx)),
+        ));
         section("About", div(), rows)
     }
 
@@ -313,7 +296,7 @@ impl Rc2FxApp {
                     )
                     .child(
                         div()
-                            .text_size(px(38.))
+                            .text_size(px(ui::TITLE_TEXT))
                             .line_height(relative(1.))
                             .font_bold()
                             .child("Diagnostics"),
@@ -326,6 +309,19 @@ impl Rc2FxApp {
                     &self.telemetry_snapshot(),
                     &mono,
                     self.telemetry_aside(cx),
+                    Button::new("telemetry-details")
+                        .ghost()
+                        .small()
+                        .label(if self.telemetry_details {
+                            "Hide details"
+                        } else {
+                            "Details"
+                        })
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.telemetry_details = !app.telemetry_details;
+                            connection::remember_telemetry_details(app.telemetry_details);
+                            cx.notify();
+                        })),
                 ))
             })
     }
@@ -344,13 +340,14 @@ impl Rc2FxApp {
             .pb_6()
             .child(
                 div()
-                    .text_size(px(38.))
+                    .text_size(px(ui::TITLE_TEXT))
                     .line_height(relative(1.))
                     .font_bold()
                     .child("Settings"),
             )
             .child(self.mixer_section(cx))
-            .child(self.about_section(cx))
+            .child(self.versions_section(cx))
+            .child(self.about_section())
             .child(self.preset_panel(cx))
             .child(self.files_section(cx))
             .child(self.appearance_section(cx))

@@ -153,6 +153,7 @@ pub(super) fn link(id: impl Into<ElementId>, label: &'static str, url: &str) -> 
         Button::new(id)
             .ghost()
             .label(label)
+            .icon(gpui_kit::assets::IconName::ExternalLink)
             .on_click(move |_, _, cx| cx.open_url(&url)),
     )
 }
@@ -178,9 +179,9 @@ impl Rc2FxApp {
             let _ = this.update_in(cx, |app, window, cx| {
                 app.app_update.checking = false;
                 if let Some(UpdateCheck::Available { version, .. }) = &result.app {
-                    // The Versions dialog has the link; this makes sure it is seen.
+                    // Settings has the link; this makes sure it is seen.
                     window.push_notification(
-                        format!("RC2FX {version} is available. Settings > About > View versions."),
+                        format!("RC2FX {version} is available. See Settings > Versions."),
                         cx,
                     );
                 }

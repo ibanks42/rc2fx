@@ -125,6 +125,7 @@ pub(super) fn set_appearance(appearance: Appearance, cx: &mut App) {
 
 pub(super) fn apply_theme(cx: &mut App) {
     Theme::update(cx, |theme| {
+        theme.font_size = px(ui::ROOT_TEXT);
         let c = |hex: u32| -> Hsla { rgb(hex).into() };
         theme.colors.background = c(surface().bg);
         theme.colors.foreground = c(TEXT);

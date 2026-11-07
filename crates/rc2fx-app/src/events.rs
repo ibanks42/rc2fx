@@ -280,6 +280,17 @@ impl EventLog {
         self.next_seq = Some(page.next_seq);
     }
 
+    /// The xruns read from the mixer that happened from `from` until `until`.
+    pub(super) fn xruns_between(&self, from: SystemTime, until: SystemTime) -> u64 {
+        self.rows
+            .iter()
+            .filter(|row| {
+                matches!(row, Row::Event { kind: DiagnosticsKind::Xrun, at, .. }
+                    if *at >= from && *at < until)
+            })
+            .count() as u64
+    }
+
     fn count(&self, group: Group) -> usize {
         self.rows
             .iter()
@@ -818,6 +829,34 @@ mod tests {
 
     fn event(seq: u64, kind: &str) -> serde_json::Value {
         serde_json::json!({"seq": seq, "kind": kind, "atNs": seq, "message": ""})
+    }
+
+    #[test]
+    fn xruns_are_counted_only_inside_the_range() {
+        let start = SystemTime::now();
+        let at = |seconds, kind| Row::Event {
+            seq: seconds,
+            kind,
+            path: None,
+            at: start + Duration::from_secs(seconds),
+            message: String::new(),
+            details: Vec::new(),
+        };
+        let mut log = EventLog::new();
+        log.receive(
+            0,
+            vec![
+                at(1, DiagnosticsKind::Xrun),
+                at(5, DiagnosticsKind::Xrun),
+                at(6, DiagnosticsKind::Overrun),
+                at(10, DiagnosticsKind::Xrun),
+            ],
+        );
+        let (from, until) = (
+            start + Duration::from_secs(2),
+            start + Duration::from_secs(10),
+        );
+        assert_eq!(log.xruns_between(from, until), 1);
     }
 
     fn order(log: &EventLog) -> Vec<i64> {

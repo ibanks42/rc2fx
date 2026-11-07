@@ -9,6 +9,62 @@ use gpui_kit::component::{
 };
 use std::rc::Rc;
 
+/// The sizes pages share, so the app stays compact in one place. The default
+/// window has to fit a 1440×900 screen with its menu bar and dock.
+pub(super) const WINDOW: (f32, f32) = (1180., 740.);
+pub(super) const WINDOW_MIN: (f32, f32) = (900., 580.);
+/// One rem: what every `p_4`, `gap_3` and `text_sm` is measured in.
+pub(super) const ROOT_TEXT: f32 = 15.;
+/// The opening screens' headline, and its smaller form beside a card.
+pub(super) const DISPLAY_TEXT: f32 = 50.;
+pub(super) const DISPLAY_TEXT_SMALL: f32 = 44.;
+/// A page's or channel's name.
+pub(super) const TITLE_TEXT: f32 = 30.;
+/// Home's heading, and a section's own title.
+pub(super) const HEADING_TEXT: f32 = 26.;
+pub(super) const SUBHEADING_TEXT: f32 = 20.;
+/// The opening screens' sentence under the headline.
+pub(super) const LEAD_TEXT: f32 = 15.;
+/// Around a page's content. The bottom clears the floating Save button.
+pub(super) const PAGE_X: f32 = 32.;
+pub(super) const PAGE_TOP: f32 = 20.;
+pub(super) const PAGE_BOTTOM: f32 = 96.;
+/// Between a page's groups.
+pub(super) const SECTION_GAP: f32 = 20.;
+pub(super) const SIDEBAR_WIDTH: f32 = 224.;
+/// The overview's fader meters.
+pub(super) const METER_HEIGHT: f32 = 150.;
+/// The opening screens' main button.
+pub(super) const LARGE_BUTTON_HEIGHT: f32 = 46.;
+
+/// A long explanation's width in a tooltip, so it wraps inside a tidy box.
+const INFO_WIDTH: f32 = 260.;
+
+/// A small circled "i" that explains `text` on hover.
+pub(super) fn info_badge(id: impl Into<ElementId>, text: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(px(14.))
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(surface().line_strong))
+        .text_size(px(10.))
+        .font_semibold()
+        .text_color(rgb(MUTED))
+        .hover(|s| s.text_color(rgb(TEXT)).border_color(rgb(MUTED)))
+        .child("i")
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::element(move |_, _| {
+                div().w(px(INFO_WIDTH)).py_1().child(text)
+            })
+            .build(window, cx)
+        })
+}
+
 /// The desktop entry and all windows share one identity and waveform icon.
 pub(super) fn window_options() -> WindowOptions {
     static ICON: std::sync::OnceLock<std::sync::Arc<image::RgbaImage>> = std::sync::OnceLock::new();

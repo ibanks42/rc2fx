@@ -173,6 +173,8 @@ struct Rc2FxApp {
     /// The last flash this run of the app saw finish (`Model::settled_flash`).
     settled_flash: Option<u64>,
     telemetry_open: bool,
+    /// Telemetry shows every figure, not just the summary.
+    telemetry_details: bool,
     /// The Telemetry section's reset is waiting for confirmation.
     confirm_reset: bool,
     /// The mixer's recent events, shown by the events window.
@@ -198,6 +200,8 @@ struct Rc2FxApp {
     meter_progress: HashMap<String, telemetry::Progress>,
     /// Recent output peaks per processed path, for the live line.
     levels: level_history::LevelHistories,
+    /// What the mixer counted while starting, kept out of the headline.
+    startup: telemetry::StartupWindow,
     /// Counts this view's renders; Home's line slot is claimed per render
     /// (line_overlay.rs).
     render_generation: u64,
@@ -276,6 +280,7 @@ impl Rc2FxApp {
             installer_page: false,
             settled_flash: None,
             telemetry_open: connection::remembered_telemetry(),
+            telemetry_details: connection::remembered_telemetry_details(),
             confirm_reset: false,
             event_log: cx.new(|_| events::EventLog::new()),
             events_window: None,
@@ -295,6 +300,7 @@ impl Rc2FxApp {
             meter: None,
             meter_progress: HashMap::new(),
             levels: Default::default(),
+            startup: Default::default(),
             render_generation: 0,
             line_slots: Default::default(),
             onboarding_signature,
@@ -451,6 +457,7 @@ impl Rc2FxApp {
         self.meter = None;
         self.meter_progress.clear();
         self.levels.clear();
+        self.startup = Default::default();
         self.engine_seen = None;
         self.stream_connected = false;
         self.stream_error = None;
@@ -490,6 +497,7 @@ impl Rc2FxApp {
         self.meter = None;
         self.meter_progress.clear();
         self.levels.clear();
+        self.startup = Default::default();
         self.engine_seen = None;
         self.message = "Disconnected • mixer processing is independent of this app".into();
         cx.notify();
@@ -728,6 +736,17 @@ impl Rc2FxApp {
                             Instant::now(),
                             meter.targets.iter().map(|t| (t.id.as_str(), t.output_peak)),
                         );
+                        let rate = self.session.saved.as_ref().map(|s| s.engine.sample_rate);
+                        self.startup.observe(
+                            &meter,
+                            rate.unwrap_or_default(),
+                            std::time::SystemTime::now(),
+                        );
+                        if self.startup.open() {
+                            self.meter_progress
+                                .values_mut()
+                                .for_each(telemetry::Progress::forget_startup_deadline);
+                        }
                         meter_arrived = true;
                         self.meter = Some(meter);
                     }
@@ -1241,7 +1260,7 @@ impl Rc2FxApp {
         let settings = self.settings_open || self.installer_page;
         div()
             .v_flex()
-            .w(px(248.))
+            .w(px(ui::SIDEBAR_WIDTH))
             .flex_shrink_0()
             .h_full()
             .border_r_1()
@@ -1480,7 +1499,7 @@ impl Rc2FxApp {
                 .gap(px(16.))
                 .child(
                     div()
-                        .text_size(px(38.))
+                        .text_size(px(ui::TITLE_TEXT))
                         .line_height(relative(1.))
                         .font_bold()
                         .child(self.target_name(target)),
@@ -1728,9 +1747,9 @@ impl Rc2FxApp {
             .min_w_0()
             .h_full()
             .overflow_y_scroll()
-            .px(px(48.))
-            .pt(px(30.))
-            .pb(px(120.));
+            .px(px(ui::PAGE_X))
+            .pt(px(ui::PAGE_TOP))
+            .pb(px(ui::PAGE_BOTTOM));
         // Anything that needs a decision comes before editing.
         if let Some(card) = self.engine_error_card(cx) {
             content = content.child(card);
@@ -1874,10 +1893,10 @@ pub fn run() {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(1320.), px(860.)),
+                    size(px(ui::WINDOW.0), px(ui::WINDOW.1)),
                     cx,
                 ))),
-                window_min_size: Some(size(px(960.), px(620.))),
+                window_min_size: Some(size(px(ui::WINDOW_MIN.0), px(ui::WINDOW_MIN.1))),
                 titlebar: Some(TitlebarOptions {
                     title: Some(
                         if cfg!(feature = "mock-mixer") {

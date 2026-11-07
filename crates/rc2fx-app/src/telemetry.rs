@@ -1,8 +1,160 @@
 use rc2fx_core::{DeviceState, EngineMode, EnginePhase, Meter, RoutingPhase, TargetMeter};
 use std::{
     collections::HashMap,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
+
+/// How much audio counts as the mixer starting, from its first reading: JACK
+/// coming up, the controller starting and threads moving. Measured faults fell
+/// inside this on real hardware; a fault after it counts normally.
+const STARTUP_AUDIO: Duration = Duration::from_secs(30);
+
+/// Faults counted while the mixer started. They are kept out of the telemetry
+/// headline and shown on one quiet line instead; the mixer's logs and counters
+/// are untouched.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct StartupFaults {
+    pub(super) xruns: u64,
+    overruns: u64,
+    helper_late: u64,
+    helper_stalls: u64,
+}
+
+impl StartupFaults {
+    fn of(meter: &Meter) -> Self {
+        meter
+            .targets
+            .iter()
+            .find_map(|target| target.performance.as_ref())
+            .map_or_else(Self::default, |p| Self {
+                xruns: p.xruns,
+                overruns: p.callback.overruns,
+                helper_late: p.helper_late.unwrap_or(0),
+                helper_stalls: p.helper_stalls.unwrap_or(0),
+            })
+    }
+
+    /// "3 xruns, 1 overrun during startup", or None with nothing to report.
+    fn line(self) -> Option<String> {
+        let parts: Vec<_> = [
+            (self.xruns, "xrun", "xruns"),
+            (self.overruns, "overrun", "overruns"),
+            (
+                self.helper_late,
+                "late helper finish",
+                "late helper finishes",
+            ),
+            (self.helper_stalls, "helper stall", "helper stalls"),
+        ]
+        .into_iter()
+        .filter(|(count, ..)| *count > 0)
+        .map(|(count, one, many)| format!("{count} {}", if count == 1 { one } else { many }))
+        .collect();
+        (!parts.is_empty()).then(|| format!("{} during startup", parts.join(", ")))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum StartupPhase {
+    /// Audio is younger than the window: everything counted is startup.
+    Open,
+    /// First seen after the window: only the event log can say what fell
+    /// inside it. Faults stay in the headline until it has.
+    Unread { started: SystemTime },
+    /// The startup faults are known, or none can be told apart.
+    #[default]
+    Closed,
+}
+
+/// Separates what the mixer counted while starting from what came after. The
+/// shown counters start at the first reading of an engine generation, so audio
+/// processed since then is a measured age, and a new generation is a restart.
+#[derive(Default)]
+pub(super) struct StartupWindow {
+    /// The generation and diagnostics epoch the counters belong to.
+    seen: Option<(u64, u64)>,
+    phase: StartupPhase,
+    faults: StartupFaults,
+}
+
+impl StartupWindow {
+    pub(super) fn observe(&mut self, meter: &Meter, sample_rate: u32, now: SystemTime) {
+        let frames = meter.targets.iter().map(|t| t.processed_frames).max();
+        let (Some(frames), true) = (frames, sample_rate > 0) else {
+            return;
+        };
+        let age = Duration::from_secs_f64(frames as f64 / f64::from(sample_rate));
+        let key = (meter.generation, meter.diagnostics_epoch);
+        if self.seen != Some(key) {
+            let reset = self.seen.is_some_and(|(generation, _)| generation == key.0);
+            *self = Self {
+                seen: Some(key),
+                ..Self::default()
+            };
+            // A diagnostics reset restarts the counters, not the mixer, and
+            // one from before this app connected hides the true start.
+            if !reset && meter.diagnostics_epoch == 0 {
+                self.phase = if age < STARTUP_AUDIO {
+                    StartupPhase::Open
+                } else {
+                    StartupPhase::Unread {
+                        started: now.checked_sub(age).unwrap_or(now),
+                    }
+                };
+            }
+        }
+        if self.phase == StartupPhase::Open {
+            if age < STARTUP_AUDIO {
+                self.faults = StartupFaults::of(meter);
+            } else {
+                self.phase = StartupPhase::Closed;
+            }
+        }
+    }
+
+    /// Whether the mixer is still inside the window.
+    pub(super) fn open(&self) -> bool {
+        self.phase == StartupPhase::Open
+    }
+
+    /// Whether the event log is needed to place the startup faults.
+    pub(super) fn wants_events(&self) -> bool {
+        matches!(self.phase, StartupPhase::Unread { .. })
+    }
+
+    /// The event log is read: `xruns` counts those in the range it is given.
+    pub(super) fn read_events(&mut self, xruns: impl Fn(SystemTime, SystemTime) -> u64) {
+        if let StartupPhase::Unread { started } = self.phase {
+            self.faults.xruns = xruns(started, started + STARTUP_AUDIO);
+            self.phase = StartupPhase::Closed;
+        }
+    }
+
+    /// The event log can't be read: every fault stays in the headline.
+    pub(super) fn give_up(&mut self) {
+        if self.wants_events() {
+            self.phase = StartupPhase::Closed;
+        }
+    }
+
+    /// Takes the startup faults out of what the headline counts.
+    pub(super) fn settle(&self, meter: &mut TargetMeter) {
+        let Some(p) = meter.performance.as_mut() else {
+            return;
+        };
+        let faults = &self.faults;
+        p.xruns = p.xruns.saturating_sub(faults.xruns);
+        p.callback.overruns = p.callback.overruns.saturating_sub(faults.overruns);
+        p.helper_late = p.helper_late.map(|n| n.saturating_sub(faults.helper_late));
+        p.helper_stalls = p
+            .helper_stalls
+            .map(|n| n.saturating_sub(faults.helper_stalls));
+    }
+
+    pub(super) fn line(&self) -> Option<String> {
+        self.faults.line()
+    }
+}
 
 pub(super) fn meter_matches_engine(state: &DeviceState, meter: &Meter) -> bool {
     let expected = if state.engine.mode == EngineMode::Native {
@@ -329,6 +481,13 @@ impl Progress {
         self.counters = Some(counters);
         self.worker_failed = meter.worker_failed;
         advanced
+    }
+    /// An audio deadline missed while the mixer starts is expected, so it does
+    /// not warn. Other faults still do.
+    pub(super) fn forget_startup_deadline(&mut self) {
+        if matches!(self.recent_warning, Some((_, Warning::AudioDeadline))) {
+            self.recent_warning = None;
+        }
     }
     pub(super) fn warning_for(&self, now: Instant, suppression_active: bool) -> Option<Warning> {
         if suppression_active && self.worker_failed {
@@ -1037,6 +1196,147 @@ mod tests {
         p.observe_meter((2, 0), &m, now);
         assert_eq!(p.warning(now), Some(Warning::SuppressionFallback));
     }
+    /// A reading `seconds` of audio into `generation`, with `xruns` counted.
+    fn reading(generation: u64, epoch: u64, seconds: u64, xruns: u64) -> Meter {
+        let mut target = meter();
+        target.processed_frames = seconds * 48_000;
+        target.performance = Some(serde_json::from_value(serde_json::json!({
+            "callbackBudgetNs":2333333, "workerBudgetNs":10000000, "xruns":xruns,
+            "callback":{"calls":100,"totalNs":100000,"maxNs":1000,"overruns":0,"clockErrors":0,"histogram":[0,0,0,0,0,0,0,0]},
+            "workerWall":{"calls":20,"totalNs":100000,"maxNs":1000,"overruns":0,"clockErrors":0,"histogram":[0,0,0,0,0,0,0,0]},
+            "workerCpu":{"calls":20,"totalNs":100000,"maxNs":1000,"overruns":0,"clockErrors":0,"histogram":[0,0,0,0,0,0,0,0]}
+        })).unwrap());
+        Meter {
+            message_type: rc2fx_core::MeterType::Meter,
+            revision: 1,
+            generation,
+            synthetic: false,
+            diagnostics_epoch: epoch,
+            targets: vec![target],
+        }
+    }
+
+    /// The xruns the headline shows for `m`.
+    fn headline(window: &StartupWindow, m: &Meter) -> u64 {
+        let mut target = m.targets[0].clone();
+        window.settle(&mut target);
+        target.performance.unwrap().xruns
+    }
+
+    #[test]
+    fn a_startup_burst_leaves_the_headline_for_the_startup_line() {
+        let (now, mut w) = (SystemTime::now(), StartupWindow::default());
+        let burst = reading(1, 0, 5, 12);
+        w.observe(&burst, 48_000, now);
+        assert!(w.open());
+        assert_eq!(headline(&w, &burst), 0);
+        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
+        let later = reading(1, 0, 40, 12);
+        w.observe(&later, 48_000, now);
+        assert!(!w.open());
+        assert_eq!(headline(&w, &later), 0);
+        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
+    }
+
+    #[test]
+    fn an_xrun_after_the_window_counts_normally() {
+        let (now, mut w) = (SystemTime::now(), StartupWindow::default());
+        w.observe(&reading(1, 0, 29, 12), 48_000, now);
+        let later = reading(1, 0, 60, 13);
+        w.observe(&later, 48_000, now);
+        assert_eq!(headline(&w, &later), 1);
+        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
+    }
+
+    #[test]
+    fn a_mixer_restart_opens_the_window_again() {
+        let (now, mut w) = (SystemTime::now(), StartupWindow::default());
+        w.observe(&reading(1, 0, 5, 12), 48_000, now);
+        w.observe(&reading(1, 0, 60, 13), 48_000, now);
+        let restarted = reading(2, 0, 2, 3);
+        w.observe(&restarted, 48_000, now);
+        assert!(w.open());
+        assert_eq!(headline(&w, &restarted), 0);
+        assert_eq!(w.line().as_deref(), Some("3 xruns during startup"));
+    }
+
+    #[test]
+    fn a_diagnostics_reset_is_not_a_restart() {
+        let (now, mut w) = (SystemTime::now(), StartupWindow::default());
+        w.observe(&reading(1, 0, 5, 12), 48_000, now);
+        // The frames restart with the counters, but the mixer did not.
+        let reset = reading(1, 1, 1, 1);
+        w.observe(&reset, 48_000, now);
+        assert!(!w.open());
+        assert_eq!(headline(&w, &reset), 1);
+        assert_eq!(w.line(), None);
+        // Reset before this app connected: its age says nothing about startup.
+        let mut w = StartupWindow::default();
+        w.observe(&reset, 48_000, now);
+        assert!(!w.open() && !w.wants_events());
+        assert_eq!(headline(&w, &reset), 1);
+    }
+
+    #[test]
+    fn connecting_after_the_window_places_xruns_from_the_event_log() {
+        let (now, mut w) = (SystemTime::now(), StartupWindow::default());
+        let m = reading(1, 0, 100, 15);
+        w.observe(&m, 48_000, now);
+        assert!(w.wants_events());
+        assert_eq!(headline(&w, &m), 15, "counted until the log says otherwise");
+        w.read_events(|from, until| {
+            assert_eq!(from, now - Duration::from_secs(100));
+            assert_eq!(until, now - Duration::from_secs(70));
+            12
+        });
+        assert!(!w.wants_events());
+        assert_eq!(headline(&w, &m), 3);
+        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
+    }
+
+    #[test]
+    fn an_unreadable_event_log_leaves_every_fault_in_the_headline() {
+        let (now, mut w) = (SystemTime::now(), StartupWindow::default());
+        let m = reading(1, 0, 100, 15);
+        w.observe(&m, 48_000, now);
+        w.give_up();
+        assert!(!w.wants_events());
+        assert_eq!(headline(&w, &m), 15);
+        assert_eq!(w.line(), None);
+    }
+
+    #[test]
+    fn startup_lines_read_plainly() {
+        let faults = StartupFaults {
+            xruns: 1,
+            overruns: 2,
+            helper_late: 0,
+            helper_stalls: 1,
+        };
+        assert_eq!(
+            faults.line().as_deref(),
+            Some("1 xrun, 2 overruns, 1 helper stall during startup")
+        );
+        assert_eq!(StartupFaults::default().line(), None);
+    }
+
+    #[test]
+    fn a_startup_xrun_does_not_warn_but_other_faults_do() {
+        let now = Instant::now();
+        let mut m = reading(1, 0, 1, 0).targets.remove(0);
+        let mut p = Progress::new(m.processed_frames);
+        p.observe_meter((1, 0), &m, now);
+        m.performance.as_mut().unwrap().xruns += 1;
+        p.observe_meter((1, 0), &m, now);
+        assert_eq!(p.warning(now), Some(Warning::AudioDeadline));
+        p.forget_startup_deadline();
+        assert_eq!(p.warning(now), None);
+        m.performance.as_mut().unwrap().worker_cpu.clock_errors += 1;
+        p.observe_meter((1, 0), &m, now);
+        p.forget_startup_deadline();
+        assert_eq!(p.warning(now), Some(Warning::ClockFailure));
+    }
+
     #[test]
     fn optional_performance_is_baselined_and_new_events_are_visible() {
         let now = Instant::now();

@@ -1001,13 +1001,13 @@ impl Rc2FxApp {
                     div().text_size(px(if idle { 32. } else { 40. })).font_bold().child(title).into_any_element()
                 })
                 .when(found, |d| {
-                    d.child(div().max_w(px(540.)).text_size(px(17.))
+                    d.child(div().max_w(px(540.)).text_size(px(ui::LEAD_TEXT))
                         .line_height(relative(1.55)).text_color(rgb(MUTED)).child(format!(
                             "Noise suppression, EQ and compression, running on your {}. Choose your firmware below.", m.device.label()
                         )))
                 })
                 .when(!found && !detail.is_empty(), |d| {
-                    d.child(div().max_w(px(540.)).text_size(px(17.))
+                    d.child(div().max_w(px(540.)).text_size(px(ui::LEAD_TEXT))
                         .line_height(relative(1.55)).text_color(rgb(MUTED)).child(detail))
                 }),
         );
@@ -1433,7 +1433,7 @@ impl Rc2FxApp {
                     Button::new("installer-grant-access")
                         .primary()
                         .large()
-                        .h(px(52.))
+                        .h(px(ui::LARGE_BUTTON_HEIGHT))
                         .px(px(28.))
                         .rounded(px(26.))
                         .label(match &installer.access {
@@ -1606,7 +1606,7 @@ impl Rc2FxApp {
                 Button::new("installer-primary")
                     .primary()
                     .large()
-                    .h(px(52.))
+                    .h(px(ui::LARGE_BUTTON_HEIGHT))
                     .px(px(28.))
                     .font_semibold()
                     .rounded(px(26.))

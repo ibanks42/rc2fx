@@ -121,7 +121,7 @@ impl Rc2FxApp {
             .pt(px(22.))
             .child(
                 div()
-                    .text_size(px(38.))
+                    .text_size(px(ui::TITLE_TEXT))
                     .line_height(relative(1.))
                     .font_bold()
                     .child(target_layout::display_name(&source.name)),
@@ -136,7 +136,7 @@ impl Rc2FxApp {
                     .v_flex()
                     .items_center()
                     .text_center()
-                    .child(div().text_size(px(24.)).font_bold().child("No RC2FX path for this input yet."))
+                    .child(div().text_size(px(ui::SUBHEADING_TEXT)).font_bold().child("No RC2FX path for this input yet."))
                     .child(
                         div()
                             .mt(px(10.))

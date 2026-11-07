@@ -193,6 +193,7 @@ impl Rc2FxApp {
     ) {
         self.events_pending = false;
         let received = SystemTime::now();
+        let caught_up = result.as_ref().ok().map(|page| !page.more);
         let names: HashMap<String, String> = self
             .session
             .draft
@@ -215,6 +216,15 @@ impl Rc2FxApp {
             }
             cx.notify();
         });
+        match caught_up {
+            Some(true) => {
+                let log = self.event_log.read(cx);
+                self.startup
+                    .read_events(|from, until| log.xruns_between(from, until));
+            }
+            Some(false) => {}
+            None => self.startup.give_up(),
+        }
     }
 
     /// Called from the main poll: keeps the events window's view of the
@@ -260,7 +270,10 @@ impl Rc2FxApp {
                 cx.notify();
             });
         }
-        if self.events_window.is_none()
+        // Telemetry reads the log once, to place faults from before this app
+        // connected.
+        let startup = self.telemetry_open && self.startup.wants_events();
+        if (self.events_window.is_none() && !startup)
             || !connected
             || self.events_pending
             || self

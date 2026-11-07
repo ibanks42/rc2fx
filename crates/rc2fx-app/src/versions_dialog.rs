@@ -1,13 +1,12 @@
-//! The Versions dialog opened from Settings, and the changes dialog that each
-//! line's Read changes button opens over it.
+//! The Versions section of Settings, and the changelog that What's new opens.
 //!
 //! Notes come from the network, so they are treated as untrusted: raw HTML and
 //! image syntax are escaped, images never load, and links open only when
 //! `app_update::safe_url` allows them.
 use super::*;
 use crate::app_update::{history_note, link, safe_url};
-use crate::settings::ghost;
-use crate::versions::{Line, Overview, Part, Tone};
+use crate::settings::section;
+use crate::versions::{AppStanding, Line, Overview, Part, Tone};
 use gpui_kit::base::text::{TextView, TextViewStyle};
 use gpui_kit::component::{
     WindowExt,
@@ -58,173 +57,13 @@ fn styled(dialog: Dialog, width: f32) -> Dialog {
         .font_family("Inter")
 }
 
+/// A button in the Versions section.
+fn pill(button: Button) -> Button {
+    button.h(px(34.)).px(px(16.)).rounded(px(17.))
+}
+
 fn large(button: Button) -> Button {
     button.large().h(px(44.)).px_5().rounded(px(22.))
-}
-
-/// Keeps the Versions dialog current while it is open: it redraws whenever
-/// the app does, so a finished check or a reconnect shows at once.
-struct VersionsView {
-    app: WeakEntity<Rc2FxApp>,
-    _app_changed: Subscription,
-}
-
-impl Render for VersionsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(app) = self.app.upgrade() else {
-            return div();
-        };
-        let (overview, status, checking) = {
-            let app = app.read(cx);
-            (
-                app.versions_overview(),
-                app.app_update.status(),
-                app.app_update.checking(),
-            )
-        };
-        render_versions(&self.app, overview, status, checking)
-    }
-}
-
-/// The cell widths shared by the heading and the lines.
-const NAME: f32 = 132.;
-const VERSION: f32 = 72.;
-
-fn table_heading() -> Div {
-    let label = |text: &'static str| {
-        div()
-            .w(px(VERSION))
-            .flex_shrink_0()
-            .text_size(px(12.))
-            .font_medium()
-            .text_color(rgb(FAINT))
-            .child(text)
-    };
-    div()
-        .h_flex()
-        .pb(px(6.))
-        .child(div().w(px(NAME)).flex_shrink_0())
-        .child(label("Installed"))
-        .child(label("Available"))
-}
-
-fn table_line(app: &WeakEntity<Rc2FxApp>, line: Line) -> Div {
-    let highlighted = !matches!(line.tone, Tone::Quiet | Tone::Unknown);
-    let mut status = div()
-        .h_flex()
-        .flex_1()
-        .min_w_0()
-        .flex_wrap()
-        .items_center()
-        .justify_end()
-        .gap(px(10.))
-        .child(flag(line.status, line.tone));
-    if line.read_changes {
-        let (app, part) = (app.clone(), line.part);
-        status = status.child(
-            ghost(("read-changes", line.part as usize), "Read changes")
-                .h(px(30.))
-                .px(px(12.))
-                .rounded(px(15.))
-                .text_size(px(12.5))
-                .on_click(move |_, window, cx| {
-                    let _ = app.update(cx, |app, cx| app.open_changes(part, window, cx));
-                }),
-        );
-    }
-    div()
-        .h_flex()
-        .items_center()
-        .min_h(px(54.))
-        .py(px(8.))
-        .border_t_1()
-        .border_color(rgb(surface().line))
-        .text_size(px(14.))
-        .child(
-            div()
-                .w(px(NAME))
-                .flex_shrink_0()
-                .font_medium()
-                .child(line.name),
-        )
-        .child(
-            div()
-                .w(px(VERSION))
-                .flex_shrink_0()
-                .text_color(rgb(if highlighted { TEXT } else { MUTED }))
-                .child(line.installed),
-        )
-        .child(
-            div()
-                .w(px(VERSION))
-                .flex_shrink_0()
-                .text_color(rgb(MUTED))
-                .child(line.available),
-        )
-        .child(status)
-}
-
-fn render_versions(
-    app: &WeakEntity<Rc2FxApp>,
-    overview: Overview,
-    status: Option<String>,
-    checking: bool,
-) -> Div {
-    let notes = div()
-        .v_flex()
-        .gap(px(6.))
-        .pt(px(10.))
-        .border_t_1()
-        .border_color(rgb(surface().line))
-        .text_size(px(13.))
-        .line_height(relative(1.45))
-        .text_color(rgb(FAINT))
-        .child(format!(
-            "App updates: {}",
-            status.unwrap_or_else(|| "Not checked yet".into())
-        ))
-        .children(overview.details.iter().cloned().map(|d| div().child(d)));
-
-    let check = {
-        let app = app.clone();
-        large(Button::new("versions-check").ghost().border_1())
-            .border_color(rgb(surface().line_strong))
-            .label("Check for updates")
-            .disabled(checking)
-            .on_click(move |_, window, cx| {
-                let _ = app.update(cx, |app, cx| app.check_app_update(true, window, cx));
-            })
-    };
-    let close = |button: Button| {
-        large(button)
-            .label("Close")
-            .on_click(|_, window, cx| window.close_dialog(cx))
-    };
-    let mut footer = div().h_flex().items_center().gap_2().pt_5().child(check);
-    footer = footer.child(div().flex_1());
-    if overview.offer_installer {
-        let app = app.clone();
-        footer = footer
-            .child(close(Button::new("versions-close").ghost()))
-            // Only opens the installer; flashing still needs its confirmation.
-            .child(
-                large(Button::new("versions-installer").primary())
-                    .font_semibold()
-                    .label("Open installer")
-                    .on_click(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        let _ = app.update(cx, |app, cx| app.toggle_installer_page(cx));
-                    }),
-            );
-    } else {
-        footer = footer.child(close(Button::new("versions-close").primary()).font_semibold());
-    }
-
-    let mut table = div().v_flex().child(table_heading());
-    for line in overview.lines {
-        table = table.child(table_line(app, line));
-    }
-    div().v_flex().child(table).child(notes).child(footer)
 }
 
 /// What the changes dialog shows for one part.
@@ -476,17 +315,130 @@ impl Rc2FxApp {
         )
     }
 
-    pub(super) fn open_versions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let app = cx.entity();
-        let view = cx.new(|cx| VersionsView {
-            app: app.downgrade(),
-            _app_changed: cx.observe(&app, |_, _, cx| cx.notify()),
+    /// The Versions section: what matters first, then each part.
+    pub(super) fn versions_section(&self, cx: &mut Context<Self>) -> Div {
+        let overview = self.versions_overview();
+        let lead = overview.lead.clone();
+        let release = self.app_update.release_url().map(str::to_owned);
+        let mut actions = div().h_flex().flex_wrap().items_center().gap_2();
+        let has_release = release.is_some();
+        if let Some(url) = release {
+            actions = actions.child(
+                pill(Button::new("versions-download").primary())
+                    .font_semibold()
+                    .label("Download")
+                    .icon(gpui_kit::assets::IconName::ExternalLink)
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+            );
+        }
+        if overview.offer_installer {
+            // Only opens the installer; flashing still needs its confirmation.
+            let button = if has_release {
+                pill(Button::new("versions-installer").ghost().border_1())
+                    .border_color(rgb(surface().line_strong))
+            } else {
+                pill(Button::new("versions-installer").primary()).font_semibold()
+            };
+            actions = actions.child(
+                button
+                    .label("Open installer")
+                    .on_click(cx.listener(|app, _, _, cx| app.toggle_installer_page(cx))),
+            );
+        }
+        if let Some(part) = lead.changes {
+            actions = actions.child(self.whats_new(("versions-changes", 0usize), part, cx));
+        }
+        let acting = has_release || overview.offer_installer || lead.changes.is_some();
+        let tiles = overview.lines.iter().map(|line| {
+            let elsewhere = line.read_changes && lead.changes != Some(line.part);
+            self.version_tile(line, elsewhere, cx)
         });
-        window.open_dialog(cx, move |dialog, _, _| {
-            styled(dialog, 600.)
-                .title(div().text_xl().font_semibold().child("Versions"))
-                .child(view.clone())
-        });
+        let tiles = div().h_flex().items_stretch().gap_2().children(tiles);
+        let failure = self
+            .app_update
+            .status()
+            .filter(|_| self.app_update.standing() == AppStanding::Unknown);
+        let body = div()
+            .v_flex()
+            .gap_3()
+            .pt_3()
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(ui::SUBHEADING_TEXT))
+                            .font_semibold()
+                            .child(lead.title),
+                    )
+                    .when_some(lead.detail, |d, detail| {
+                        d.child(div().text_sm().text_color(rgb(MUTED)).child(detail))
+                    }),
+            )
+            .when(acting, |d| d.child(actions))
+            .child(tiles)
+            .children(overview.details.iter().map(|note| {
+                div()
+                    .text_xs()
+                    .line_height(relative(1.45))
+                    .text_color(rgb(MUTED))
+                    .child(note.clone())
+            }))
+            .when_some(failure, |d, failure| {
+                d.child(div().text_xs().text_color(rgb(FAINT)).child(failure))
+            });
+        let check = Button::new("versions-check")
+            .ghost()
+            .small()
+            .label("Check for updates")
+            .disabled(self.app_update.checking())
+            .on_click(cx.listener(|app, _, window, cx| app.check_app_update(true, window, cx)));
+        section("Versions", check, body)
+    }
+
+    fn whats_new(
+        &self,
+        id: impl Into<ElementId>,
+        part: Part,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        pill(Button::new(id).ghost().border_1())
+            .border_color(rgb(surface().line_strong))
+            .label("What's new")
+            .on_click(cx.listener(move |app, _, window, cx| app.open_changes(part, window, cx)))
+    }
+
+    /// One part: its name, version and standing.
+    fn version_tile(&self, line: &Line, whats_new: bool, cx: &mut Context<Self>) -> Div {
+        let version = if line.tone == Tone::Update {
+            format!("{} → {}", line.installed, line.available)
+        } else {
+            line.installed.clone()
+        };
+        div()
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_1()
+            .p_3()
+            .rounded_lg()
+            .bg(rgb(surface().raised))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(line.name))
+            .child(
+                div()
+                    .text_size(px(ui::SUBHEADING_TEXT))
+                    .font_semibold()
+                    .child(version),
+            )
+            .child(flag(line.status, line.tone))
+            .when(whats_new, |tile| {
+                tile.child(div().h_flex().pt_1().child(self.whats_new(
+                    ("versions-changes", line.part as usize + 1),
+                    line.part,
+                    cx,
+                )))
+            })
     }
 
     fn open_changes(&mut self, part: Part, window: &mut Window, cx: &mut Context<Self>) {
@@ -499,14 +451,11 @@ impl Rc2FxApp {
                 };
                 let mut links = vec![("All app updates", format!("{APP_HISTORY_URL}#v{version}"))];
                 if let Some(url) = self.app_update.release_url() {
-                    links.push(("View release", url.to_owned()));
+                    links.push(("Download", url.to_owned()));
                 }
                 Changes {
-                    eyebrow: format!(
-                        "You have {}. Nothing is downloaded or installed.",
-                        crate::versions::APP_VERSION
-                    ),
-                    title: format!("RC2FX {version} is available"),
+                    eyebrow: format!("RC2FX {version} is available"),
+                    title: format!("What's new since {}", crate::versions::APP_VERSION),
                     entry_prefix: "RC2FX",
                     changelog: Some(changelog.clone()),
                     note: None,
@@ -527,11 +476,8 @@ impl Rc2FxApp {
                     .or_else(|| available.clone())
                     .unwrap_or_else(|| unknown.clone());
                 Changes {
-                    eyebrow: format!(
-                        "You have {}. Nothing changes until you install it.",
-                        runtime.as_ref().unwrap_or(&unknown)
-                    ),
-                    title: format!("RC2FX mixer software {newest}"),
+                    eyebrow: format!("Mixer software {newest}"),
+                    title: format!("What's new since {}", runtime.as_ref().unwrap_or(&unknown)),
                     entry_prefix: "Mixer software",
                     changelog: update.changelog,
                     note: None,
