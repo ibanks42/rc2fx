@@ -2,6 +2,33 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.1.3] - 2026-11-07
+
+### Features
+
+- *(bench)* Report slow callbacks and callback means at the lightest level
+- *(diagnostics)* Add bench-only USB ring, monitor job and resampler gauges
+- *(macos)* Ship the app as RC2FX.app so it no longer opens in Terminal
+
+### Bug fixes
+
+- *(native)* Keep frames contiguous when a mode is seen before it is counted
+- *(installer)* Find the update drive on macOS
+
+### Documentation
+
+- *(macos)* Drop the Privacy & Security step now that the app is notarized
+
+### Performance
+
+- *(supervisor)* Read each thread status file once
+- *(control)* Skip background work when nothing changed or nobody watches
+- *(native)* Visit only the paths with work this cycle
+
+### Maintenance
+
+- *(release)* Build macOS beside the other platforms and drop zip checksums
+
 ## [0.1.2] - 2026-11-06
 
 ### Bug fixes
