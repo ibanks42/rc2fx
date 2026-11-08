@@ -99,9 +99,12 @@ class GuiLaunch(unittest.TestCase):
         self.boot_dir = self.root / 'boot'
         self.run_dir.mkdir()
         self.boot_dir.mkdir()
-        # A copy of a real program, so /proc/<pid>/exe names this path.
+        # A copy of a real program, so /proc/<pid>/exe names this path. Bash,
+        # because it runs under any name: a multi-call coreutils (Ubuntu
+        # 26.04's sleep) picks its tool from the executable's name and refuses
+        # to run as rc_audio_mixer.
         self.fake_mixer = self.root / 'rc_audio_mixer'
-        shutil.copy(shutil.which('sleep'), self.fake_mixer)
+        shutil.copy(shutil.which('bash'), self.fake_mixer)
         self.env = {
             'RC2FX_GUI_HOME': str(self.gui_home),
             'RC2FX_DATA': str(self.data),
@@ -216,7 +219,12 @@ class GuiLaunch(unittest.TestCase):
         import subprocess
         if not Path('/proc/self/exe').exists():
             self.skipTest('/proc/<pid>/exe is not on this host')
-        process = subprocess.Popen([str(self.fake_mixer), '30'])
+        # A builtin read on an open pipe waits without starting a child, so
+        # the process stays the copy.
+        process = subprocess.Popen([str(self.fake_mixer), '-c', 'read -r -t 30 _ || :'],
+                                   stdin=subprocess.PIPE)
+        self.addCleanup(process.wait)
+        self.addCleanup(process.stdin.close)
         self.addCleanup(process.kill)
         (self.run_dir / 'native.pid').write_text(f'{process.pid}\n')
         return process
