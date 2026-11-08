@@ -41,11 +41,11 @@ and missing signatures are rejected.
 
 ### Where the catalog is checked
 
-1. The installer offers only the catalog's releases for the connected model,
-   newest first, for both RC2FX and stock firmware. It does not read RØDE's
-   release manifest. Download URLs are built from the model's firmware folder
-   and the pinned version, and each download is checked against the pinned
-   SHA-256 and MD5.
+1. The installer builds RC2FX into the catalog's releases for the connected
+   model only, newest first. Download URLs are built from the model's
+   firmware folder and the pinned version, and each download is checked
+   against the pinned SHA-256 and MD5. Stock firmware comes from RØDE's
+   release manifest instead; see [Stock firmware](installer.md#stock-firmware).
 2. The launcher checks the engine and launcher hashes before it pauses stock
    audio (`rc2fx-firmware check-device`).
 3. The native library checks the executable and the instruction bytes again

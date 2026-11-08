@@ -26,7 +26,9 @@ pub(crate) fn valid_url(value: &str) -> bool {
         && u.username().is_empty()
         && u.password().is_none()
         && has_path
-        && (host == "rode.com" || host.ends_with(".rode.com"))
+        // RØDE's update server only, redirects included: stock firmware RØDE
+        // lists without a catalog pin is trusted for coming from here.
+        && host == "update.rode.com"
         && u.port().is_none_or(|p| p == 443)
 }
 
@@ -35,7 +37,7 @@ pub(crate) fn http_client() -> Result<reqwest::blocking::Client> {
         .timeout(Duration::from_secs(20 * 60))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 8 || !valid_url(attempt.url().as_str()) {
-                attempt.error("redirect outside RØDE HTTPS")
+                attempt.error("redirect away from RØDE's update server")
             } else {
                 attempt.follow()
             }
@@ -412,23 +414,7 @@ impl Engine {
     }
 
     pub(crate) fn get(&mut self, value: &str, limit: u64) -> Result<Vec<u8>> {
-        if !valid_url(value) {
-            bail!("expected official RØDE HTTPS URL");
-        }
-        let response = self
-            .client()?
-            .get(value)
-            .timeout(Duration::from_secs(30))
-            .send()?;
-        if response.status() != reqwest::StatusCode::OK {
-            bail!("RØDE returned HTTP {}", response.status().as_u16());
-        }
-        let mut data = Vec::new();
-        response.take(limit + 1).read_to_end(&mut data)?;
-        if data.len() as u64 > limit {
-            bail!("metadata exceeds size limit");
-        }
-        Ok(data)
+        get(&self.client()?, value, limit)
     }
 
     pub(crate) fn catalog(&self) -> Result<Catalog> {
@@ -441,6 +427,15 @@ impl Engine {
         self.inspect_releases(self.model)
     }
 
+    /// The stock firmware RØDE publishes for this model, from RØDE's
+    /// manifest for it.
+    pub(crate) fn stock_releases(&mut self) -> Result<Vec<Release>> {
+        self.model
+            .require_runtime_with(self.allow_experimental_duo)?;
+        let data = self.get(rode_manifest(self.model), MANIFEST_BYTES)?;
+        releases_from_manifest(self.model, &data)
+    }
+
     /// Read-only discovery, including experimental models. A supported
     /// experimental profile still requires the separate session opt-in.
     pub fn inspect_releases(&mut self, model: Model) -> Result<Vec<Release>> {
@@ -448,8 +443,108 @@ impl Engine {
     }
 }
 
-/// The bundled, qualified catalog is the only release authority. RØDE's
-/// moving manifest must never add choices or retire a version we support.
+/// RØDE's update manifest for `model`, the list the RØDECaster App reads
+/// (`FirmwareData.cpp` in version 2.0.115). Each names its model's archives.
+pub(crate) const fn rode_manifest(model: Model) -> &'static str {
+    match model {
+        Model::ProIi => "https://update.rode.com/manifest.json",
+        Model::Duo => "https://update.rode.com/rcp2-mini-manifest.json",
+    }
+}
+
+const MANIFEST_BYTES: u64 = 256 * 1024;
+
+/// Fetch a small file from RØDE's update server, at most `limit` bytes.
+fn get(client: &reqwest::blocking::Client, value: &str, limit: u64) -> Result<Vec<u8>> {
+    if !valid_url(value) {
+        bail!("expected official RØDE HTTPS URL");
+    }
+    let response = client.get(value).timeout(Duration::from_secs(30)).send()?;
+    if response.status() != reqwest::StatusCode::OK {
+        bail!("RØDE returned HTTP {}", response.status().as_u16());
+    }
+    let mut data = Vec::new();
+    response.take(limit + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > limit {
+        bail!("metadata exceeds size limit");
+    }
+    Ok(data)
+}
+
+/// The firmware RØDE publishes for `model`, from its manifest, newest first.
+/// It needs no engine or installer folder, so the app can ask while it checks
+/// for its own updates.
+pub fn rode_releases(model: Model) -> Result<Vec<Release>> {
+    let data = get(&http_client()?, rode_manifest(model), MANIFEST_BYTES)?;
+    releases_from_manifest(model, &data)
+}
+
+/// The channels RØDE offers to everyone. Its manifest lists others (master,
+/// private and closed betas, testing) that are not public downloads, so they
+/// are never offered. A version on both takes the stable name.
+const RODE_CHANNELS: [(&str, &str); 2] = [("main-version", "stable"), ("beta-version", "beta")];
+
+/// The stock releases in RØDE's manifest for `model`, newest first. Only
+/// entries on RØDE's own update server are kept; RØDE's MD5 is what checks
+/// them when they are downloaded.
+pub(crate) fn releases_from_manifest(model: Model, data: &[u8]) -> Result<Vec<Release>> {
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        #[serde(rename = "os-version")]
+        version: String,
+        #[serde(rename = "os-URL")]
+        url: String,
+        #[serde(rename = "os-md5")]
+        md5: String,
+    }
+    let manifest: HashMap<String, serde_json::Value> = serde_json::from_slice(data)
+        .map_err(|e| crate::Error(format!("RØDE's firmware list is not readable: {e}")))?;
+    let mut all: Vec<Release> = Vec::new();
+    for (key, channel) in RODE_CHANNELS {
+        let Some(entry) = manifest
+            .get(key)
+            .and_then(|v| serde_json::from_value::<Entry>(v.clone()).ok())
+        else {
+            continue;
+        };
+        if all.iter().any(|r| r.version == entry.version) {
+            continue;
+        }
+        // Only an entry for this model's folder on RØDE's update server
+        // counts; S3 builds, other models' files and anything else are left
+        // out.
+        let (Ok(url), Ok(digest_url)) = (
+            location_for_model(model, &entry.url, "os.tar.gz", &entry.version),
+            location_for_model(model, &entry.md5, "os.md5", &entry.version),
+        ) else {
+            continue;
+        };
+        all.push(Release {
+            model: model.id().into(),
+            channel: channel.into(),
+            version: entry.version,
+            url,
+            digest_url,
+            supported: true,
+            ..Default::default()
+        });
+    }
+    sort_newest_first(&mut all);
+    Ok(all)
+}
+
+fn sort_newest_first(releases: &mut [Release]) {
+    let version_key = |r: &Release| {
+        r.version
+            .split('.')
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    releases.sort_by_key(|r| std::cmp::Reverse(version_key(r)));
+}
+
+/// The signed, qualified catalog decides which firmware RC2FX is built into.
+/// Stock firmware comes from RØDE's manifest instead.
 pub(crate) fn releases_from_catalog(model: Model, c: &Catalog) -> Result<Vec<Release>> {
     let mut all = Vec::new();
     for p in &c.profiles {
@@ -474,13 +569,7 @@ pub(crate) fn releases_from_catalog(model: Model, c: &Catalog) -> Result<Vec<Rel
         });
     }
     // Newest qualified stable release is the default, not catalog file order.
-    let version_key = |r: &Release| {
-        r.version
-            .split('.')
-            .map(|p| p.parse::<u64>().unwrap_or(0))
-            .collect::<Vec<_>>()
-    };
-    all.sort_by_key(|r| std::cmp::Reverse(version_key(r)));
+    sort_newest_first(&mut all);
     Ok(all)
 }
 
@@ -517,13 +606,20 @@ impl Engine {
         Ok(())
     }
 
-    /// Download an official release to `dest`, checking the catalog's SHA-256
-    /// and RØDE's MD5. A matching file is kept. MD5 alone never accepts a file.
-    pub(crate) fn download(&mut self, value: &str, dest: &Path, sha: &str, md: &str) -> Result<()> {
-        if !valid_url(value) || md.is_empty() || sha.is_empty() {
-            bail!("download requires an official URL and both firmware checksums");
+    /// Download an official release to `dest`, checking RØDE's MD5 and, when
+    /// the catalog pins one, its SHA-256. A matching file is kept. Only stock
+    /// firmware RØDE lists but the catalog doesn't goes without a SHA-256.
+    pub(crate) fn download(
+        &mut self,
+        value: &str,
+        dest: &Path,
+        sha: Option<&str>,
+        md: &str,
+    ) -> Result<()> {
+        if !valid_url(value) || md.is_empty() || sha.is_some_and(str::is_empty) {
+            bail!("download requires an official URL and its firmware checksums");
         }
-        if files::matches(dest, Algorithm::Sha256, sha).is_ok()
+        if sha.is_none_or(|sha| files::matches(dest, Algorithm::Sha256, sha).is_ok())
             && files::matches(dest, Algorithm::Md5, md).is_ok()
         {
             return Ok(());
@@ -565,7 +661,9 @@ impl Engine {
         }
         self.emit(event(n));
         temp.finish()?;
-        self.verify_checksum(&temp.path, Algorithm::Sha256, sha)?;
+        if let Some(sha) = sha {
+            self.verify_checksum(&temp.path, Algorithm::Sha256, sha)?;
+        }
         self.verify_checksum(&temp.path, Algorithm::Md5, md)?;
         std::fs::rename(&temp.path, dest)?;
         temp.path.clear();
@@ -606,6 +704,9 @@ impl Engine {
     ) -> Result<Prepared> {
         self.model
             .require_runtime_with(self.allow_experimental_duo)?;
+        if stock {
+            return self.prepare_stock(channel, version);
+        }
         // Validate before cache reuse or any preparation side effects.
         if !self
             .releases()?
@@ -613,9 +714,6 @@ impl Engine {
             .any(|r| r.channel == channel && r.version == version)
         {
             bail!("this firmware is not in this RC2FX build's qualified catalog");
-        }
-        if stock {
-            return self.prepare_stock(channel, version);
         }
         let mut saved = self.load()?;
         let p = self
@@ -647,7 +745,7 @@ impl Engine {
             bail!("RØDE's checksum differs from the inspected release");
         }
         let src = self.work.join("rode-original.tar.gz");
-        self.download(&selected.url, &src, &p.archive_sha, &p.archive_md5)?;
+        self.download(&selected.url, &src, Some(&p.archive_sha), &p.archive_md5)?;
         let dst = self.work.join("archive.tar.gz");
         self.step("patch", "Building the firmware with RC2FX");
         if self.model == Model::Duo {
@@ -690,10 +788,17 @@ impl Engine {
     }
 
     /// Download and verify a release and stage it unchanged: stock RØDE
-    /// firmware, without RC2FX, its key or settings. Only qualified catalog
-    /// releases are offered, with pinned SHA-256 and RØDE MD5 verification.
+    /// firmware, without RC2FX, its key or settings. Only releases RØDE lists
+    /// are offered. RØDE's MD5 checks each one, and the catalog's SHA-256
+    /// too when it pins that version. The helper records what it staged.
     fn prepare_stock(&mut self, channel: &str, version: &str) -> Result<Prepared> {
         let mut saved = self.load()?;
+        // Validate before cache reuse or any preparation side effects.
+        let selected = self
+            .stock_releases()?
+            .into_iter()
+            .find(|r| r.channel == channel && r.version == version)
+            .ok_or("RØDE doesn't list this firmware")?;
         if let Some(old) = saved.prepared.clone()
             && old.stock
             && old.model.unwrap_or(Model::ProIi) == self.model
@@ -703,11 +808,6 @@ impl Engine {
         {
             return Ok(old);
         }
-        let selected = self
-            .releases()?
-            .into_iter()
-            .find(|r| r.channel == channel && r.version == version)
-            .ok_or("firmware is not in the qualified catalog")?;
         let md = String::from_utf8_lossy(&self.get(&selected.digest_url, 128)?)
             .trim()
             .to_ascii_lowercase();
@@ -718,14 +818,13 @@ impl Engine {
             .catalog()?
             .profiles
             .into_iter()
-            .find(|p| p.model == self.model.id() && p.version == version && supported(p))
-            .ok_or("stock firmware is not in the qualified catalog")?;
-        if pinned.archive_md5 != md {
+            .find(|p| p.model == self.model.id() && p.version == version && supported(p));
+        if pinned.as_ref().is_some_and(|p| p.archive_md5 != md) {
             bail!("RØDE's checksum differs from the inspected release");
         }
-        let sha = &pinned.archive_sha;
+        let sha = pinned.as_ref().map(|p| p.archive_sha.clone());
         let src = self.work.join("rode-original.tar.gz");
-        self.download(&selected.url, &src, sha, &md)?;
+        self.download(&selected.url, &src, sha.as_deref(), &md)?;
         if self.model == Model::Duo {
             crate::inspection::inspect_archive(self.model, &src)?;
         }
@@ -746,19 +845,20 @@ impl Engine {
             let check = self.reporter("verify", "Checking the stock firmware");
             files::hash_both(&dst, check)?
         };
-        if archive_md5 != md || archive_sha != *sha {
+        if archive_md5 != md || sha.as_ref().is_some_and(|sha| archive_sha != *sha) {
             bail!("the staged stock firmware does not match RØDE's checksum");
         }
         let prepared = Prepared {
             model: Some(self.model),
             version: version.into(),
             channel: channel.into(),
-            profile: pinned.id,
+            profile: pinned.map(|p| p.id).unwrap_or_default(),
             archive_sha,
             archive_md5,
             stock: true,
             ..Default::default()
         };
+        self.anchor_prepared(&prepared)?;
         files::atomic_file(&self.work.join("archive.md5"), md.as_bytes())?;
         saved.prepared = Some(prepared.clone());
         self.save(&saved)?;
@@ -771,11 +871,23 @@ impl Engine {
         // Missing is the legacy Pro II cache format, never automatic detection.
         let model = p.model.unwrap_or(Model::ProIi);
         model.require_runtime_with(self.allow_experimental_duo)?;
-        let pinned = self.profile(&p.profile)?;
-        if pinned.model != model.id() || pinned.version != p.version {
-            bail!("prepared firmware does not match its qualified catalog profile");
-        }
-        if p.stock && (p.archive_sha != pinned.archive_sha || p.archive_md5 != pinned.archive_md5) {
+        // Stock firmware RØDE lists without a catalog pin is checked against
+        // what the helper recorded when it staged it.
+        let pinned = if p.stock && p.profile.is_empty() {
+            self.check_anchor(p)?;
+            None
+        } else {
+            let pinned = self.profile(&p.profile)?;
+            if pinned.model != model.id() || pinned.version != p.version {
+                bail!("prepared firmware does not match its qualified catalog profile");
+            }
+            Some(pinned)
+        };
+        if p.stock
+            && pinned.as_ref().is_some_and(|pinned| {
+                p.archive_sha != pinned.archive_sha || p.archive_md5 != pinned.archive_md5
+            })
+        {
             bail!("prepared stock firmware differs from its archive pins");
         }
         if model == Model::Duo {
@@ -791,7 +903,7 @@ impl Engine {
             bail!("the prepared firmware has SSH access built in; prepare it again");
         }
         self.check_anchor(p)?;
-        let profile = pinned;
+        let profile = pinned.ok_or("prepared firmware has no catalog profile")?;
         let bundle = self.source.bundle()?;
         let (_, runtime) = image_entries(&bundle, &profile, None)?;
         if p.runtime.is_empty() || p.runtime != runtime {

@@ -106,19 +106,29 @@ the first error and offers **Retry** from that step.
 
 ### Offered releases
 
-The installer offers the [catalog's](firmware.md) releases for the connected
-model, newest first. It does not read RØDE's release manifest, so new or
-withdrawn RØDE releases have no effect. The download URL is built from the
-model's firmware folder and the pinned version, for example
+RC2FX is built only into the [catalog's](firmware.md) releases for the
+connected model, newest first. The download URL is built from the model's
+firmware folder and the pinned version, for example
 `https://update.rode.com/rcp2/1.7.7/os.tar.gz` with `os.md5` beside it. The
 archive must match the catalog's SHA-256 and MD5.
 
 ### Stock firmware
 
-The **Stock firmware** card flashes one of the same pinned releases exactly
-as RØDE publishes it. This removes RC2FX and any SSH key RC2FX added. A cached stock
-image that is not pinned is refused. Settings are saved first. The plan
-finishes when the mixer is back in normal USB mode.
+The **Stock firmware** tab flashes a release exactly as RØDE publishes it.
+This removes RC2FX and any SSH key RC2FX added. The releases come from RØDE's
+manifest for the model, the same lists the RØDECaster App reads:
+`https://update.rode.com/manifest.json` for the Pro II and
+`https://update.rode.com/rcp2-mini-manifest.json` for the Duo. Only the
+stable (`main-version`) and beta (`beta-version`) entries are used, and only
+when both URLs are in the model's own folder on `update.rode.com` (`rcp2/` or
+`rcp2-duo/`). RØDE's other channels are not public downloads and are never
+offered. Downloads and redirects are accepted only from `update.rode.com`.
+
+Each archive must match RØDE's `os.md5`, and the catalog's SHA-256 and MD5
+as well when the catalog pins that version. The helper records a stock image
+the catalog doesn't pin when it stages it, and flashes it only if it still
+matches that record. Settings are saved first. The plan finishes when the
+mixer is back in normal USB mode.
 
 ### USB commands
 

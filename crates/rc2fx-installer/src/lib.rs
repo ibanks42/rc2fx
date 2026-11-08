@@ -44,6 +44,7 @@ pub use embed::{
     Catalog, Envelope, Identity, JobLifetime, Profile, RuntimeProfile, bundled_release,
     newest_supported_firmware,
 };
+pub use firmware::rode_releases;
 pub use rc2fx_core::{DeviceVersions, MixerRelease, compare_versions};
 pub use runtime::{Bundle, PAYLOAD_NAMES, bundle_files};
 pub use ssh::{PinnedHost, mixer_host_alias, pin_mixer_host_keys, ssh_key_path, ssh_public_key};
@@ -220,6 +221,8 @@ pub enum Request {
     AllowExperimentalDuo(bool),
     Probe,
     Releases,
+    /// The stock firmware RØDE publishes for the connected model.
+    StockReleases,
     /// Discover authenticated mixer releases. Does not select or install one.
     MixerReleases,
     /// Independently authenticate the exact offer reviewed by the user.
@@ -258,6 +261,7 @@ pub enum Request {
 pub enum Reply {
     Status(Box<Status>),
     Releases(Vec<Release>),
+    StockReleases(Vec<Release>),
     MixerReleases(Vec<mixer_update::MixerOffer>),
     MixerSelected(Identity),
     Prepared(Prepared),
@@ -421,6 +425,10 @@ impl Engine {
             }
             Request::Probe => Ok(Reply::Status(Box::new(self.probe()?))),
             Request::Releases => Ok(Reply::Releases(self.releases()?)),
+            Request::StockReleases => {
+                self.step("stock-check", "Checking RØDE's firmware list");
+                Ok(Reply::StockReleases(self.stock_releases()?))
+            }
             Request::MixerReleases => {
                 self.step("mixer-check", "Checking signed mixer releases");
                 let work = self.work.clone();

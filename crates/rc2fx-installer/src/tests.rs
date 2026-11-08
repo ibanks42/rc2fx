@@ -534,16 +534,151 @@ fn a_catalog_without_the_full_pins_is_refused_from_every_source() {
 }
 
 #[test]
-fn a_download_needs_the_catalogs_sha_256_as_well_as_rodes_md5() {
+fn a_download_checks_rodes_md5_and_any_sha_256_the_catalog_pins() {
     let mut f = fixture();
     let dest = f.engine.work.join("cached.tar.gz");
     put(&dest, b"cached firmware");
     let md = file_hash(&dest, Algorithm::Md5).unwrap();
     let url = "https://update.rode.com/rodecaster-pro-ii/1.7.7/os.tar.gz";
-    let error = f.engine.download(url, &dest, "", &md).unwrap_err();
-    assert!(error.0.contains("both firmware checksums"), "{}", error.0);
+    let error = f.engine.download(url, &dest, Some(""), &md).unwrap_err();
+    assert!(error.0.contains("firmware checksums"), "{}", error.0);
+    let error = f.engine.download(url, &dest, None, "").unwrap_err();
+    assert!(error.0.contains("firmware checksums"), "{}", error.0);
     let sha = file_hash(&dest, Algorithm::Sha256).unwrap();
-    f.engine.download(url, &dest, &sha, &md).unwrap();
+    f.engine.download(url, &dest, Some(&sha), &md).unwrap();
+    // Stock firmware RØDE lists without a catalog pin: RØDE's MD5 alone.
+    f.engine.download(url, &dest, None, &md).unwrap();
+    assert!(f.engine.http.is_none(), "a matching file is kept");
+}
+
+/// RØDE's manifest as published, with an S3 testing build, a private beta
+/// and a version listed on several channels.
+const RODE_MANIFEST: &str = r#"{
+  "name" : "rcp2-update-manifest",
+  "master-version": {"app-version": "1.7.7", "os-version": "1.7.7", "os-required": "1.7.7",
+    "app-URL": "update.rode.com/rcp2/1.7.7/app.zip", "os-URL": "update.rode.com/rcp2/1.7.7/os.tar.gz",
+    "app-md5": "update.rode.com/rcp2/1.7.7/app.md5", "os-md5": "update.rode.com/rcp2/1.7.7/os.md5"},
+  "main-version": {"app-version": "1.7.7", "os-version": "1.7.7", "os-required": "1.7.7",
+    "app-URL": "update.rode.com/rcp2/1.7.7/app.zip", "os-URL": "update.rode.com/rcp2/1.7.7/os.tar.gz",
+    "app-md5": "update.rode.com/rcp2/1.7.7/app.md5", "os-md5": "update.rode.com/rcp2/1.7.7/os.md5"},
+  "beta-version": {"app-version": "1.7.8", "os-version": "1.7.8", "os-required": "1.7.8",
+    "app-URL": "update.rode.com/rcp2/1.7.8/app.zip", "os-URL": "update.rode.com/rcp2/1.7.8/os.tar.gz",
+    "app-md5": "update.rode.com/rcp2/1.7.8/app.md5", "os-md5": "update.rode.com/rcp2/1.7.8/os.md5"},
+  "testing-version": {"app-version": "2.0.0", "os-version": "2.0.0", "os-required": "2.0.0",
+    "app-URL": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2/testing/app.zip",
+    "os-URL": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2/testing/os.tar.gz",
+    "app-md5": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2/testing/app.md5",
+    "os-md5": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2/testing/os.md5"},
+  "privatebeta-version": {"app-version": "1.7.6", "os-version": "1.7.6", "os-required": "1.7.6",
+    "app-URL": "update.rode.com/rcp2/1.7.6/app.zip", "os-URL": "update.rode.com/rcp2/1.7.6/os.tar.gz",
+    "app-md5": "update.rode.com/rcp2/1.7.6/app.md5", "os-md5": "update.rode.com/rcp2/1.7.6/os.md5"},
+  "futurechannel-version": {"os-version": "9.9.9"}
+}"#;
+
+#[test]
+fn stock_releases_are_what_rodes_manifest_lists_on_its_own_server() {
+    let releases =
+        firmware::releases_from_manifest(DeviceModel::ProIi, RODE_MANIFEST.as_bytes()).unwrap();
+    let listed: Vec<_> = releases
+        .iter()
+        .map(|r| (r.version.as_str(), r.channel.as_str()))
+        .collect();
+    // Newest first, stable and beta only: master, private beta, the S3
+    // testing build and an unknown channel are left out.
+    assert_eq!(listed, [("1.7.8", "beta"), ("1.7.7", "stable")]);
+    let r = &releases[1];
+    assert_eq!(r.url, "https://update.rode.com/rcp2/1.7.7/os.tar.gz");
+    assert_eq!(r.digest_url, "https://update.rode.com/rcp2/1.7.7/os.md5");
+    assert!(r.supported && r.profile.is_empty());
+    // Another model's files never count: the Pro II's list offers a Duo
+    // nothing.
+    assert!(
+        firmware::releases_from_manifest(DeviceModel::Duo, RODE_MANIFEST.as_bytes())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(firmware::releases_from_manifest(DeviceModel::ProIi, b"<html>").is_err());
+}
+
+/// RØDE's Duo manifest as published: the same layout, naming `rcp2-duo/`.
+const RODE_DUO_MANIFEST: &str = r#"{
+  "name": "rcp2-update-manifest",
+  "main-version": {"app-version": "1.7.7", "os-version": "1.7.7", "os-required": "1.7.7",
+    "app-URL": "", "os-URL": "update.rode.com/rcp2-duo/1.7.7/os.tar.gz",
+    "app-md5": "", "os-md5": "update.rode.com/rcp2-duo/1.7.7/os.md5"},
+  "beta-version": {"app-version": "1.7.7", "os-version": "1.7.7", "os-required": "1.7.7",
+    "app-URL": "", "os-URL": "update.rode.com/rcp2-duo/1.7.7/os.tar.gz",
+    "app-md5": "", "os-md5": "update.rode.com/rcp2-duo/1.7.7/os.md5"},
+  "privatebeta-version": {"app-version": "1.7.6", "os-version": "1.7.6", "os-required": "1.7.6",
+    "app-URL": "update.rode.com/rcp2-duo/1.7.6/app.zip", "os-URL": "update.rode.com/rcp2-duo/1.7.6/os.tar.gz",
+    "app-md5": "update.rode.com/rcp2-duo/1.7.6/app.md5", "os-md5": "update.rode.com/rcp2-duo/1.7.6/os.md5"},
+  "sp-version": {"app-version": "2.0.0", "os-version": "2.0.0", "os-required": "2.0.0",
+    "app-URL": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2-duo/sp/app.zip",
+    "os-URL": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2-duo/sp/os.tar.gz",
+    "app-md5": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2-duo/sp/app.md5",
+    "os-md5": "update-rode-com.s3.ap-southeast-2.amazonaws.com/rcp2-duo/sp/os.md5"}
+}"#;
+
+#[test]
+fn duo_stock_releases_are_what_rodes_duo_manifest_lists() {
+    assert_eq!(
+        firmware::rode_manifest(DeviceModel::Duo),
+        "https://update.rode.com/rcp2-mini-manifest.json"
+    );
+    assert_eq!(
+        firmware::rode_manifest(DeviceModel::ProIi),
+        "https://update.rode.com/manifest.json"
+    );
+    let duo =
+        firmware::releases_from_manifest(DeviceModel::Duo, RODE_DUO_MANIFEST.as_bytes()).unwrap();
+    let listed: Vec<_> = duo
+        .iter()
+        .map(|r| (r.version.as_str(), r.channel.as_str()))
+        .collect();
+    // One version on both public channels is listed once, as stable.
+    assert_eq!(listed, [("1.7.7", "stable")]);
+    assert_eq!(
+        duo[0].url,
+        "https://update.rode.com/rcp2-duo/1.7.7/os.tar.gz"
+    );
+    assert_eq!(
+        duo[0].digest_url,
+        "https://update.rode.com/rcp2-duo/1.7.7/os.md5"
+    );
+    assert_eq!(duo[0].model, DeviceModel::Duo.id());
+    // A Pro II is never offered the Duo's files.
+    assert!(
+        firmware::releases_from_manifest(DeviceModel::ProIi, RODE_DUO_MANIFEST.as_bytes())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn unpinned_stock_firmware_is_flashed_only_as_the_helper_recorded_it() {
+    let anchors = tempfile::tempdir().unwrap();
+    let mut f = fixture();
+    f.engine.anchor_dir = Some(anchors.path().into());
+    let mut saved = f.saved();
+    let p = saved.prepared.as_mut().unwrap();
+    p.stock = true;
+    p.profile.clear();
+    p.runtime.clear();
+    let p = p.clone();
+    f.engine.save(&saved).unwrap();
+    assert!(
+        f.engine.enter_usb_mode("").is_err(),
+        "unrecorded stock image"
+    );
+    assert_eq!(f.counts(), (0, 0, 0));
+
+    f.engine.anchor_prepared(&p).unwrap();
+    f.engine.enter_usb_mode("").unwrap();
+    assert_eq!(f.fake().writes, 1);
+
+    put(&f.engine.work.join("archive.tar.gz"), b"changed");
+    assert!(f.engine.enter_usb_mode("").is_err(), "damaged stock image");
+    assert_eq!(f.fake().writes, 1);
 }
 
 #[cfg(unix)]
@@ -606,7 +741,10 @@ fn unpinned_or_misidentified_cached_firmware_never_opens_usb() {
             if !stock && change == "stock-hash" {
                 continue;
             }
+            let anchors = tempfile::tempdir().unwrap();
             let mut f = fixture();
+            // A stock image without a pin is the helper's to vouch for.
+            f.engine.anchor_dir = Some(anchors.path().into());
             let mut saved = f.saved();
             let p = saved.prepared.as_mut().unwrap();
             p.stock = stock;
@@ -1180,17 +1318,11 @@ fn releases_are_offline_and_only_offer_qualified_catalog_entries() {
         f.engine.http.is_none(),
         "listing must not initialize a network client"
     );
-    for stock in [false, true] {
+    // Stock firmware is checked against RØDE's manifest instead.
+    for (channel, version) in [("stable", "1.7.8"), ("beta", "1.7.7")] {
         assert!(
             f.engine
-                .prepare("stable", "1.7.8", "", stock)
-                .unwrap_err()
-                .0
-                .contains("qualified catalog")
-        );
-        assert!(
-            f.engine
-                .prepare("beta", "1.7.7", "", stock)
+                .prepare(channel, version, "", false)
                 .unwrap_err()
                 .0
                 .contains("qualified catalog")
@@ -1211,6 +1343,11 @@ fn catalog_url_and_readiness_guards() {
         "https://user@rode.com/x",
         "https://rode.com:123/x",
         "https://rode.com",
+        // Other RØDE hosts are not its update server.
+        "https://rode.com/x",
+        "https://cdn.rode.com/rcp2/1.7.7/os.tar.gz",
+        "https://update.rode.com.attacker.test/x",
+        "https://update.rode.com:8443/x",
     ] {
         assert!(!valid_url(u), "{u}");
     }

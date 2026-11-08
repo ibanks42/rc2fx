@@ -27,9 +27,9 @@ With the switch on and a Duo connected:
   (`crates/rc2fx-installer/src/lib.rs`) and asks for **Flash Duo at my own
   risk**. The confirmation is cancelled if the model, serial or release
   changes while the question is open.
-- The installer offers only the two pinned official Duo archives, 1.7.7 and
-  1.7.6, both for RC2FX and for stock firmware. It does not offer Pro II
-  images for a Duo.
+- For RC2FX, the installer offers only the two pinned official Duo archives,
+  1.7.7 and 1.7.6. Stock firmware comes from RØDE's Duo manifest,
+  `rcp2-mini-manifest.json`. It never offers Pro II images for a Duo.
 - All other checks still apply: archive pins and model, board identity,
   instruction signatures and serial continuity.
 - The prepared image gets a file `/opt/rc2fx/experimental-duo` containing
@@ -115,6 +115,35 @@ On the mixer, RC2FX reads the model from `/etc/hostname` and from the device
 tree named in `/boot/extlinux/extlinux.conf`. The two must agree, and there is
 no override. The USB IDs come from RØDE's gadget script, which both firmwares
 share. They have not been observed on a real Duo.
+
+## How RØDE's app updates a Duo
+
+This comes from static analysis of the RØDECaster App 2.0.115 for macOS,
+whose binary keeps its symbols. The Windows build names the same manifests
+and files.
+
+- One class, `Rodecaster2FirmwareUpdater`, updates the Pro II, the Duo, the
+  Streamer X and an unreleased "RØDECaster Pro II-A". It has no
+  model-specific branch.
+- It sends HID `M` (report 1, 63 bytes) and expects an `A` reply. It waits up
+  to 30 seconds for update mode, copies `archive.md5` and then
+  `archive.tar.gz` to the update drive, runs `sync`, waits 1 second, ejects
+  the drive and sends HID `U`. A factory reset sends `R` before `M`. A mixer
+  that is already in update mode is asked for its drive's volume ID with HID
+  `V`. On macOS the drive is the mounted `NO NAME` volume on the same USB
+  device.
+- Each model has its own manifest: `manifest.json` for the Pro II (`0030`),
+  `rcp2-mini-manifest.json` for the Duo (`004f`), and `rcp2-a-manifest.json`
+  for the Pro II-A (`009f`), which is not published yet.
+- RØDE's device table lists the Duo as `004f` `0050` `0073` `0079` `0093`
+  `0095`, the Pro II as `0030` `0037` `0072` `0078` `0092` `0094`, and the
+  Pro II-A as `009b` to `009f`. RC2FX does not list `0072` or `0073`, and
+  RØDE does not list `008d` or `008e`. RC2FX ignores a device it does not
+  list.
+
+RC2FX's flash takes the same steps. It also reads both files back before
+ejecting and waits for the drive to go. None of this tests the RC2FX image or
+runtime on Duo hardware.
 
 ## Untested
 

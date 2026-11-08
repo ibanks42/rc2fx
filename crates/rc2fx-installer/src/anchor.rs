@@ -3,8 +3,9 @@
 //! The cache folder belongs to the desktop user, so `installer.json` and
 //! `archive.tar.gz` can be rewritten together while the root helper runs. The
 //! privileged helper therefore builds the image itself, keeps its own copy of
-//! what it prepared in a root-owned folder and refuses anything else. Stock images need no record:
-//! they are checked against the catalog's pins. Without a privileged helper
+//! what it prepared in a root-owned folder and refuses anything else. Stock images
+//! the catalog pins are checked against those pins; other stock images RØDE
+//! lists are recorded like RC2FX images. Without a privileged helper
 //! there is no boundary to defend and nothing is recorded.
 
 use crate::{Engine, Prepared, Result, bail, files};
