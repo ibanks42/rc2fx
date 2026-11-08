@@ -21,9 +21,9 @@ Open installer**.
 
 ## Install steps
 
-Choose **RC2FX firmware**, the RØDE firmware version, and the RC2FX mixer
-software to install. The mixer software menu lists signed releases compatible
-with this app and the chosen firmware. Check the installed and offered versions,
+Choose the RØDE firmware version and the RC2FX mixer software to install. The
+mixer software menu lists signed releases compatible with this app and the
+chosen firmware. Check the installed and offered versions,
 press **Install…** (or **Update…**), and confirm. Selecting an older version
 requires an explicit downgrade confirmation.
 
@@ -68,8 +68,10 @@ RØDE release appears only after it has been checked.
 
 ## Going back to stock
 
-Choose **Stock firmware** and press **Flash stock firmware…**. This flashes
-an unmodified RØDE release and removes RC2FX. Your RC2FX settings are saved
+Switch to the **Stock firmware** tab, choose a version, press **Flash stock
+firmware…** and confirm. The menu lists the stable and beta firmware RØDE publishes, even
+versions RC2FX doesn't support yet. This flashes an unmodified RØDE release
+and removes RC2FX. Your RC2FX settings are saved
 to the computer first and are restored if you install RC2FX again. The mixer
 may restart once more afterwards to finish updating its controllers.
 
@@ -92,8 +94,8 @@ computer. Every Duo flash still shows a warning and asks you to confirm with
 - Back up your RØDE show and unplug headphones and speakers before flashing.
 - Leave the mixer alone after the flash while it updates and restarts.
 - Turning the setting off blocks future Duo flashes but leaves RC2FX on a Duo
-  that already has it. To remove it, flash **Stock firmware** with the
-  setting still on.
+  that already has it. To remove it, use **Flash stock firmware…** with
+  the setting still on.
 
 The [Duo reference](../reference/duo.md) lists the channels RC2FX supports on
 a Duo.

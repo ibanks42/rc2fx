@@ -9,8 +9,15 @@ mod flow;
 pub(super) mod signature;
 
 use super::*;
-use flow::{FirmwareCheck, Goal, MixerChange, Model, Offers, STEPS, Step, StepState};
-use gpui_kit::component::{progress::Progress as ProgressBar, spinner::Spinner};
+use flow::{
+    FirmwareCheck, Goal, MixerChange, MixerSource, Model, Offers, STEPS, Step, StepState,
+    StockCheck,
+};
+use gpui_kit::component::{
+    progress::Progress as ProgressBar,
+    select::{Select, SelectEvent, SelectItem, SelectState},
+    spinner::Spinner,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use rc2fx_installer::{Engine, Progress, Reply, Request, helper::Helper};
 use std::{
@@ -377,6 +384,11 @@ pub(super) struct Installer {
     confirming: bool,
     controls_scroll: ScrollHandle,
     access: Access,
+    /// The firmware card's menus, made on first render and kept in step
+    /// with the model there.
+    firmware_select: Option<Picker<(String, String)>>,
+    mixer_select: Option<Picker<MixerSource>>,
+    stock_select: Option<Picker<(String, String)>>,
 }
 
 impl Installer {
@@ -482,6 +494,9 @@ impl Rc2FxApp {
             confirming: false,
             controls_scroll,
             access,
+            firmware_select: None,
+            mixer_select: None,
+            stock_select: None,
         };
         installer.model.privileged = installer.access.allows_flashing();
         installer.model.bundled = self.bundled_mixer_software.clone();
@@ -551,19 +566,34 @@ impl Rc2FxApp {
             self.installer_event(cx, |m| if retry { m.retry() } else { m.start() });
             return;
         }
+        let stock = installer.model.stock;
+        self.confirm_installer(retry, stock, window, cx);
+    }
+
+    fn confirm_installer(
+        &mut self,
+        retry: bool,
+        stock: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(installer) = self.installer.as_mut() else {
+            return;
+        };
         if installer.confirming {
             return;
         }
         installer.confirming = true;
-        let version = installer
-            .model
-            .choice
-            .as_ref()
-            .map(|(_, v)| format!("RØDE {v}"))
-            .unwrap_or_else(|| "the firmware".into());
-        let warnings = installer.model.warnings();
+        let version = if stock {
+            installer.model.stock_choice.as_ref()
+        } else {
+            installer.model.choice.as_ref()
+        }
+        .map(|(_, v)| format!("RØDE {v}"))
+        .unwrap_or_else(|| "the firmware".into());
+        let warnings = installer.model.warnings_for(stock);
         let mixer = installer.model.mixer.clone();
-        let downgrade = !installer.model.stock
+        let downgrade = !stock
             && mixer
                 .as_ref()
                 .is_some_and(|m| installer.model.mixer_change(m) == MixerChange::Downgrade);
@@ -571,7 +601,7 @@ impl Rc2FxApp {
             .as_ref()
             .map(|m| format!("RC2FX {}", m.version()))
             .unwrap_or_else(|| "RC2FX".into());
-        let (title, detail, action) = if installer.model.stock {
+        let (title, detail, action) = if stock {
             (
                 format!("Flash stock {version}?"),
                 "This removes RC2FX. The mixer's audio stops while it updates, which takes a few minutes. Keep it powered on and connected until it's done. Your RC2FX settings are saved on this computer first.",
@@ -594,7 +624,8 @@ impl Rc2FxApp {
         };
         let device = installer.model.device;
         let choice = installer.model.choice.clone();
-        let stock = installer.model.stock;
+        let stock_choice = installer.model.stock_choice.clone();
+        let mode = installer.model.stock;
         let usb = installer.model.usb().to_vec();
         // The device sits above the question, so the title stays short and
         // clear of the dialog's close button.
@@ -637,9 +668,10 @@ impl Rc2FxApp {
                     if app.installer.as_ref().is_some_and(|i| {
                         i.model.device == device
                             && i.model.choice == choice
-                            && i.model.stock == stock
+                            && i.model.stock_choice == stock_choice
+                            && i.model.stock == mode
                             && i.model.mixer == mixer
-                            && i.model.warnings() == warnings
+                            && i.model.warnings_for(stock) == warnings
                             && i.model.usb() == usb
                             && i.access.allows_flashing()
                             && !i.busy()
@@ -972,7 +1004,7 @@ impl Rc2FxApp {
                 ),
                 Goal::Stock => (
                     "Restore stock firmware",
-                    "Official RØDE firmware, unchanged. Your RC2FX settings stay on this computer.",
+                    "Removes RC2FX. Your settings stay on this computer.",
                 ),
             }
         };
@@ -1015,15 +1047,13 @@ impl Rc2FxApp {
             if let Some(note) = m.firmware_note() {
                 card = card.child(paragraph(note, WARN));
             }
-            if !m.releases.is_empty() {
-                card = card.child(
-                    div()
-                        .h_flex()
-                        .items_start()
-                        .gap_3()
-                        .child(self.mode_card(m, false, cx))
-                        .child(self.mode_card(m, true, cx)),
-                );
+            // Stock firmware comes from RØDE, so it stays on offer when
+            // RC2FX's own catalog has nothing.
+            if !m.releases.is_empty()
+                || !m.stock_releases.is_empty()
+                || matches!(m.stock_check, StockCheck::Failed(_))
+            {
+                card = card.child(self.firmware_card(installer, cx));
             } else if m.firmware_check == FirmwareCheck::Checking {
                 card = card.child(
                     div()
@@ -1053,86 +1083,15 @@ impl Rc2FxApp {
         card
     }
 
-    /// One way to flash the mixer, with its own release menu. Choosing a
-    /// release in either card also chooses that card. RC2FX's card holds the
-    /// mixer software too while it is chosen, so nothing inside that section
-    /// can change the choice.
-    fn mode_card(&self, m: &Model, stock: bool, cx: &mut Context<Self>) -> Stateful<Div> {
-        let selected = m.stock == stock;
-        let (title, detail) = match (stock, m.answering()) {
-            (true, _) => ("Stock firmware", "Removes RC2FX"),
-            (false, true) => ("RC2FX firmware", "Settings carried over"),
-            (false, false) => ("RC2FX firmware", "Starts with the mixer"),
-        };
-        let choice = m.choice_for(stock);
-        let releases: Vec<_> = m
-            .releases_for(stock)
-            .map(|(index, r)| {
-                let chosen = choice
-                    .as_ref()
-                    .is_some_and(|(c, v)| c == &r.channel && v == &r.version);
-                (index, format!("{} {}", r.version, r.channel), chosen)
-            })
-            .collect();
-        let label = choice
-            .map(|(channel, version)| format!("RØDE {version} {channel}"))
-            .unwrap_or_else(|| "No release".into());
-        let mixer = (!stock && selected).then(|| self.mixer_software(m, cx));
-        let app = cx.entity().downgrade();
-        let menu = Button::new(if stock {
-            "installer-release-stock"
-        } else {
-            "installer-release-rc2fx"
-        })
-        .small()
-        .label(label)
-        .dropdown_caret(true)
-        .disabled(m.busy.is_some() || releases.is_empty())
-        .dropdown_menu(move |mut menu, _, _| {
-            for (index, name, chosen) in &releases {
-                let app = app.clone();
-                let index = *index;
-                menu = menu.item(PopupMenuItem::new(name.clone()).checked(*chosen).on_click(
-                    move |_, _, cx| {
-                        let _ = app.update(cx, |app, cx| {
-                            app.installer_event(cx, |m| {
-                                m.select(stock, index);
-                                None
-                            })
-                        });
-                    },
-                ));
-            }
-            menu
-        });
-        div()
-            .id(if stock {
-                "installer-mode-stock"
-            } else {
-                "installer-mode-rc2fx"
-            })
-            .v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_1()
-            .p_4()
-            .rounded_lg()
-            .border_2()
-            .cursor_pointer()
-            .border_color(rgb(if selected { ACCENT } else { surface().line }))
-            .bg(rgb(if selected {
-                surface().selected
-            } else {
-                surface().raised
-            }))
-            .when(!selected, |c| {
-                c.hover(|s| s.border_color(rgb(surface().line_strong)))
-            })
-            .child(div().font_semibold().child(title))
-            .child(paragraph(detail, MUTED))
-            .child(div().h_flex().pt_2().child(menu))
-            .children(mixer)
-            .on_click(cx.listener(move |app, _, _, cx| {
+    /// What to put on the mixer: RC2FX, its RØDE firmware and mixer
+    /// software, or stock RØDE firmware, which removes RC2FX. Both tabs share
+    /// one layout; the page's main button flashes the one shown.
+    fn firmware_card(&self, installer: &Installer, cx: &mut Context<Self>) -> Div {
+        let m = &installer.model;
+        let on_mixer = |v: Option<&str>| format!("On the mixer: {}", v.unwrap_or("unknown"));
+        let busy = m.busy.is_some();
+        let tab = |id: &'static str, label: &'static str, stock: bool| {
+            ui::pill(id, label, m.stock == stock).on_click(cx.listener(move |app, _, _, cx| {
                 app.installer_event(cx, |m| {
                     if m.stock != stock {
                         m.set_stock(stock);
@@ -1140,53 +1099,188 @@ impl Rc2FxApp {
                     None
                 })
             }))
+        };
+        let tabs = ui::pills()
+            .child(tab("installer-mode-rc2fx", "RC2FX", false))
+            .child(tab("installer-mode-stock", "Stock firmware", true));
+        let mut panel = div()
+            .v_flex()
+            .w_full()
+            .max_w(px(440.))
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(surface().line))
+            .bg(rgb(surface().raised));
+        // Stock has one row and RC2FX two. The panel sits at the top of room
+        // kept for two, so switching tabs doesn't move the page.
+        if m.stock {
+            panel = panel.child(
+                card_row(
+                    true,
+                    "RØDE firmware",
+                    on_mixer(m.installed_firmware.as_deref()),
+                    MUTED,
+                    select(
+                        &installer.stock_select,
+                        "installer-stock-release",
+                        busy || m.stock_releases.is_empty(),
+                    ),
+                )
+                .children(self.stock_status(m, cx)),
+            );
+        } else {
+            panel = panel
+                .child(card_row(
+                    true,
+                    "RØDE firmware",
+                    on_mixer(m.installed_firmware.as_deref()),
+                    MUTED,
+                    select(
+                        &installer.firmware_select,
+                        "installer-release",
+                        busy || m.releases_for(false).next().is_none(),
+                    ),
+                ))
+                .child(
+                    card_row(
+                        false,
+                        "Mixer software",
+                        on_mixer(m.installed.as_deref()),
+                        MUTED,
+                        select(
+                            &installer.mixer_select,
+                            "installer-mixer",
+                            busy || m.mixer_menu().is_empty(),
+                        ),
+                    )
+                    .children(self.mixer_status(m, cx)),
+                );
+        }
+        div()
+            .v_flex()
+            .items_center()
+            .gap_4()
+            .w_full()
+            .child(tabs)
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(440.))
+                    .min_h(px(2. * ROW_HEIGHT + 3.))
+                    .child(panel),
+            )
     }
 
-    /// The mixer software going into the firmware: what the mixer has, what
-    /// it would get, and why there may be nothing to choose.
-    fn mixer_software(&self, m: &Model, cx: &mut Context<Self>) -> Div {
-        let installed = m.installed.as_deref().unwrap_or("unknown");
-        let detail = match &m.mixer {
-            Some(mixer) => format!("Installed: {installed} · Installing: {}", mixer.version()),
-            None => format!("Installed: {installed}"),
+    /// Bring the firmware card's menus in step with the model: their items,
+    /// what is chosen, and the menus themselves on first use.
+    pub(super) fn sync_installer_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(installer) = self.installer.as_mut() else {
+            return;
         };
-        let options = m.mixer_menu();
-        let label = m
-            .mixer
-            .as_ref()
-            .map(|mixer| format!("Mixer software {}", mixer.version()))
-            .unwrap_or_else(|| "Choose mixer software".into());
-        let app = cx.entity().downgrade();
-        let menu = Button::new("installer-mixer")
-            .small()
-            .label(label)
-            .dropdown_caret(true)
-            .disabled(m.busy.is_some() || options.is_empty())
-            .dropdown_menu(move |mut menu, _, _| {
-                for (source, name, chosen) in &options {
-                    let app = app.clone();
-                    let source = source.clone();
-                    menu = menu.item(PopupMenuItem::new(name.clone()).checked(*chosen).on_click(
-                        move |_, _, cx| {
-                            let source = source.clone();
-                            let _ = app.update(cx, |app, cx| {
-                                app.installer_event(cx, |m| {
-                                    m.choose_mixer(source);
-                                    None
-                                })
-                            });
-                        },
-                    ));
-                }
-                menu
-            });
-        let mut controls = div()
+        let Installer {
+            model: m,
+            firmware_select,
+            mixer_select,
+            stock_select,
+            ..
+        } = installer;
+        let release = |r: &rc2fx_installer::Release| {
+            let name = format!("{} {}", r.version, r.channel);
+            Choice::new(name.clone(), name, (r.channel.clone(), r.version.clone()))
+        };
+        let releases: Vec<_> = m.releases_for(false).map(|(_, r)| release(r)).collect();
+        let stock: Vec<_> = m.stock_releases.iter().map(release).collect();
+        let mixers: Vec<_> = m
+            .mixer_menu()
+            .into_iter()
+            .map(|(source, name, _)| Choice::new(name, source.version().to_owned(), source))
+            .collect();
+        firmware_select
+            .get_or_insert_with(|| {
+                Picker::new(window, cx, |m, (channel, version)| {
+                    if let Some(index) = m
+                        .releases
+                        .iter()
+                        .position(|r| &r.channel == channel && &r.version == version)
+                    {
+                        m.select(false, index);
+                    }
+                })
+            })
+            .sync(releases, m.choice_for(false), window, cx);
+        mixer_select
+            .get_or_insert_with(|| {
+                Picker::new(window, cx, |m, source| m.choose_mixer(source.clone()))
+            })
+            .sync(mixers, m.mixer.clone(), window, cx);
+        stock_select
+            .get_or_insert_with(|| {
+                Picker::new(window, cx, |m, (channel, version)| {
+                    if let Some(index) = m
+                        .stock_releases
+                        .iter()
+                        .position(|r| &r.channel == channel && &r.version == version)
+                    {
+                        m.choose_stock(index);
+                    }
+                })
+            })
+            .sync(stock, m.stock_choice.clone(), window, cx);
+    }
+
+    /// The check of RØDE's firmware list while it runs, or why it has
+    /// nothing to offer. Nothing once it has answered with releases.
+    fn stock_status(&self, m: &Model, cx: &mut Context<Self>) -> Option<Div> {
+        let status = div()
             .h_flex()
             .flex_wrap()
             .items_center()
             .gap_2()
-            .pt_2()
-            .child(menu);
+            .px_4()
+            .pb_3();
+        match &m.stock_check {
+            StockCheck::Unchecked | StockCheck::Checking => Some(
+                status
+                    .child(Spinner::new().color(rgb(ACCENT).into()))
+                    .child(paragraph("Checking RØDE's firmware list…", MUTED)),
+            ),
+            StockCheck::Failed(e) => {
+                let (text, color) = if e == rc2fx_installer::CANCELLED {
+                    (
+                        "The check of RØDE's firmware list was cancelled.".to_owned(),
+                        WARN,
+                    )
+                } else {
+                    (format!("Couldn't read RØDE's firmware list. {e}"), DANGER)
+                };
+                Some(
+                    status.child(paragraph(text, color)).child(
+                        Button::new("installer-stock-check")
+                            .ghost()
+                            .small()
+                            .label("Check again")
+                            .disabled(m.busy.is_some())
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                app.installer_event(cx, Model::recheck_stock)
+                            })),
+                    ),
+                )
+            }
+            StockCheck::Done if m.stock_releases.is_empty() => {
+                Some(status.child(paragraph("RØDE lists no firmware for this mixer.", MUTED)))
+            }
+            StockCheck::Done => None,
+        }
+    }
+
+    /// Why there may be no mixer software to choose, and the check that
+    /// finds it while it runs. Nothing once the check has answered cleanly.
+    fn mixer_status(&self, m: &Model, cx: &mut Context<Self>) -> Option<Div> {
+        let note = m.mixer_note();
+        if matches!(m.offers, Offers::Ready(_)) && note.is_none() {
+            return None;
+        }
+        let mut controls = div().h_flex().flex_wrap().items_center().gap_2();
         match m.offers {
             Offers::Unchecked | Offers::Checking => {
                 controls = controls
@@ -1224,19 +1318,15 @@ impl Rc2FxApp {
         } else {
             WARN
         };
-        div()
-            .v_flex()
-            .gap_1()
-            .mt_3()
-            .pt_3()
-            .border_t_1()
-            .border_color(rgb(surface().line))
-            .child(div().font_semibold().child("Mixer software"))
-            .child(paragraph(detail, MUTED))
-            .child(controls)
-            .when_some(m.mixer_note(), |card, note| {
-                card.child(paragraph(note, note_color))
-            })
+        Some(
+            div()
+                .v_flex()
+                .gap_1()
+                .px_4()
+                .pb_3()
+                .child(controls)
+                .when_some(note, |card, note| card.child(paragraph(note, note_color))),
+        )
     }
 
     /// The run's steps: finished ones as one line, the current one in full,
@@ -1620,6 +1710,168 @@ impl Rc2FxApp {
         )
     }
 }
+
+/// One row of the firmware card: what it is, a line about it, and its
+/// controls on the right.
+fn card_row(
+    first: bool,
+    title: &'static str,
+    detail: String,
+    color: u32,
+    controls: AnyElement,
+) -> Div {
+    div()
+        .v_flex()
+        .when(!first, |row| {
+            row.border_t_1().border_color(rgb(surface().line_strong))
+        })
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .min_h(px(ROW_HEIGHT))
+                .gap_4()
+                .px_4()
+                .child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
+                        .child(div().text_sm().font_semibold().child(title))
+                        .child(div().text_xs().text_color(rgb(color)).child(detail)),
+                )
+                .child(div().flex_none().child(controls)),
+        )
+}
+
+/// One entry of a firmware card menu: its line in the menu, the shorter
+/// text the closed menu shows, and what choosing it picks.
+#[derive(Clone)]
+pub(super) struct Choice<V> {
+    title: SharedString,
+    short: SharedString,
+    value: V,
+}
+
+impl<V> Choice<V> {
+    fn new(title: impl Into<SharedString>, short: impl Into<SharedString>, value: V) -> Self {
+        Choice {
+            title: title.into(),
+            short: short.into(),
+            value,
+        }
+    }
+}
+
+impl<V: Clone + PartialEq + 'static> SelectItem for Choice<V> {
+    type Value = V;
+
+    fn title(&self) -> SharedString {
+        self.title.clone()
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        (self.short != self.title).then(|| self.short.clone().into_any_element())
+    }
+
+    /// A menu line with room above and below, so entries don't crowd.
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div().py(px(4.)).child(self.title.clone())
+    }
+
+    fn value(&self) -> &V {
+        &self.value
+    }
+}
+
+/// A select menu whose items and choice come from the installer's model.
+/// The model stays the source of truth: choosing sends the pick to it, and
+/// each render brings the menu back in step with it.
+pub(super) struct Picker<V: Clone + PartialEq + 'static> {
+    state: Entity<SelectState<Vec<Choice<V>>>>,
+    items: Vec<(SharedString, V)>,
+    selected: Option<V>,
+}
+
+impl<V: Clone + PartialEq + 'static> Picker<V> {
+    fn new(window: &mut Window, cx: &mut Context<Rc2FxApp>, pick: fn(&mut Model, &V)) -> Self {
+        let state = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
+        cx.subscribe_in(
+            &state,
+            window,
+            move |app, _, event: &SelectEvent<Vec<Choice<V>>>, _, cx| {
+                let SelectEvent::Confirm(Some(value)) = event else {
+                    return;
+                };
+                let value = value.clone();
+                app.installer_event(cx, move |m| {
+                    pick(m, &value);
+                    None
+                });
+            },
+        )
+        .detach();
+        Picker {
+            state,
+            items: Vec::new(),
+            selected: None,
+        }
+    }
+
+    fn sync(
+        &mut self,
+        items: Vec<Choice<V>>,
+        selected: Option<V>,
+        window: &mut Window,
+        cx: &mut Context<Rc2FxApp>,
+    ) {
+        let key: Vec<_> = items
+            .iter()
+            .map(|c| (c.title.clone(), c.value.clone()))
+            .collect();
+        let changed = key != self.items;
+        if changed {
+            self.items = key;
+            self.state
+                .update(cx, |state, cx| state.set_items(items, window, cx));
+        }
+        if changed || selected != self.selected {
+            self.state.update(cx, |state, cx| match &selected {
+                Some(value) => state.set_selected_value(value, window, cx),
+                None => state.set_selected_index(None, window, cx),
+            });
+            self.selected = selected;
+        }
+    }
+}
+
+/// A firmware card menu, or nothing before its first sync. A select fills
+/// its parent, so it sits in a box of its own width; its menu matches it.
+fn select<V: Clone + PartialEq + 'static>(
+    picker: &Option<Picker<V>>,
+    id: &'static str,
+    disabled: bool,
+) -> AnyElement {
+    div()
+        .w(px(SELECT_WIDTH))
+        .flex_none()
+        .when_some(picker.as_ref(), |slot, picker| {
+            slot.child(
+                Select::new(&picker.state)
+                    .id(id)
+                    .placeholder("None available")
+                    .disabled(disabled),
+            )
+        })
+        .into_any_element()
+}
+
+/// Every firmware card row, so the tabs line up row for row.
+const ROW_HEIGHT: f32 = 64.;
+
+/// Wide enough for a release such as "1.7.7 stable".
+const SELECT_WIDTH: f32 = 160.;
 
 #[cfg(test)]
 mod selection_tests {

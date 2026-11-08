@@ -73,6 +73,16 @@ pub(crate) enum FirmwareCheck {
     Done,
 }
 
+/// The check of RØDE's firmware list, for stock firmware. It needs the
+/// network, so it runs once and is repeated only when asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StockCheck {
+    Unchecked,
+    Checking,
+    Done,
+    Failed(String),
+}
+
 /// What the signed release check has found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Offers {
@@ -167,6 +177,11 @@ pub(crate) struct Model {
     pub needs_app: Vec<Release>,
     pub firmware_check: FirmwareCheck,
     pub choice: Option<(String, String)>,
+    /// Stock firmware RØDE lists for this mixer, newest first.
+    pub stock_releases: Vec<Release>,
+    pub stock_check: StockCheck,
+    /// The stock release to flash, chosen apart from RC2FX's.
+    pub stock_choice: Option<(String, String)>,
     pub offers: Offers,
     /// The mixer software built into this app, if any. Chosen only by hand:
     /// it never stands in for a signed release that could not be reached.
@@ -216,6 +231,9 @@ impl Model {
             needs_app: Vec::new(),
             firmware_check: FirmwareCheck::Unchecked,
             choice: None,
+            stock_releases: Vec::new(),
+            stock_check: StockCheck::Unchecked,
+            stock_choice: None,
             offers: Offers::Unchecked,
             bundled: None,
             mixer: None,
@@ -248,6 +266,7 @@ impl Model {
         }
         self.allow_duo = allow;
         self.choice = None;
+        self.forget_stock();
         self.releases.clear();
         self.needs_app.clear();
         self.firmware_check = FirmwareCheck::Unchecked;
@@ -467,19 +486,40 @@ impl Model {
     }
 
     pub fn can_start(&self) -> bool {
-        self.privileged
-            && self.busy.is_none()
-            && !self.running()
+        if self.stock {
+            return self.can_start_stock();
+        }
+        self.can_flash()
             && self.choice.as_ref().is_some_and(|(channel, version)| {
                 self.releases
                     .iter()
                     .any(|r| r.supported && &r.channel == channel && &r.version == version)
             })
-            && (self.stock
-                || self
-                    .mixer
-                    .as_ref()
-                    .is_some_and(|m| self.mixer_options().contains(m)))
+            && self
+                .mixer
+                .as_ref()
+                .is_some_and(|m| self.mixer_options().contains(m))
+    }
+
+    /// Stock firmware needs no mixer software or RC2FX support, so it stays
+    /// available when neither can be offered.
+    pub fn can_start_stock(&self) -> bool {
+        self.can_flash()
+            && self
+                .stock_choice
+                .as_ref()
+                .is_some_and(|(channel, version)| {
+                    self.stock_releases
+                        .iter()
+                        .any(|r| &r.channel == channel && &r.version == version)
+                })
+    }
+
+    /// What any flash needs: access, an idle page and exactly one mixer.
+    fn can_flash(&self) -> bool {
+        self.privileged
+            && self.busy.is_none()
+            && !self.running()
             && self
                 .status
                 .as_ref()
@@ -498,6 +538,50 @@ impl Model {
             self.choice = Some((r.channel.clone(), r.version.clone()));
         }
         self.settle_mixer();
+    }
+
+    pub fn choose_stock(&mut self, index: usize) {
+        if self.running() || self.busy.is_some() {
+            return;
+        }
+        if let Some(r) = self.stock_releases.get(index) {
+            self.stock_choice = Some((r.channel.clone(), r.version.clone()));
+        }
+    }
+
+    /// The release a run flashes: RC2FX's choice, or the stock one.
+    pub fn chosen(&self) -> Option<&(String, String)> {
+        if self.stock {
+            self.stock_choice.as_ref()
+        } else {
+            self.choice.as_ref()
+        }
+    }
+
+    // ---- Stock firmware -----------------------------------------------------
+
+    fn check_stock(&mut self) -> Option<Request> {
+        if self.stock_check != StockCheck::Unchecked {
+            return None;
+        }
+        self.stock_check = StockCheck::Checking;
+        self.quiet(Request::StockReleases)
+    }
+
+    /// Check RØDE's list again after a failed or cancelled check.
+    pub fn recheck_stock(&mut self) -> Option<Request> {
+        if !matches!(self.stock_check, StockCheck::Failed(_)) || self.busy.is_some() {
+            return None;
+        }
+        self.stock_check = StockCheck::Unchecked;
+        self.check_stock()
+    }
+
+    /// The mixer changed: its stock firmware is another list.
+    fn forget_stock(&mut self) {
+        self.stock_releases.clear();
+        self.stock_choice = None;
+        self.stock_check = StockCheck::Unchecked;
     }
 
     // ---- Mixer software -----------------------------------------------------
@@ -535,7 +619,7 @@ impl Model {
             .into_iter()
             .map(|source| {
                 let mut name = match &source {
-                    MixerSource::Signed(_) => format!("{} · signed download", source.version()),
+                    MixerSource::Signed(_) => source.version().to_owned(),
                     MixerSource::Bundled(_) => {
                         format!("{} · included with this app", source.version())
                     }
@@ -661,9 +745,9 @@ impl Model {
 
     /// What the confirmation must say before this replaces something newer,
     /// or something the mixer didn't report.
-    pub fn warnings(&self) -> Vec<String> {
+    pub fn warnings_for(&self, stock: bool) -> Vec<String> {
         let mut warnings = Vec::new();
-        if let Some(source) = self.mixer.as_ref().filter(|_| !self.stock) {
+        if let Some(source) = self.mixer.as_ref().filter(|_| !stock) {
             let version = source.version();
             match (self.mixer_change(source), &self.installed) {
                 (MixerChange::Downgrade, Some(installed)) => warnings.push(format!(
@@ -675,8 +759,12 @@ impl Model {
                 _ => {}
             }
         }
-        if let Some(((_, version), installed)) =
-            self.choice.as_ref().zip(self.installed_firmware.as_ref())
+        let choice = if stock {
+            self.stock_choice.as_ref()
+        } else {
+            self.choice.as_ref()
+        };
+        if let Some(((_, version), installed)) = choice.zip(self.installed_firmware.as_ref())
             && change(Some(installed), version) == MixerChange::Downgrade
         {
             warnings.push(format!(
@@ -925,7 +1013,7 @@ impl Model {
                         _ => self.fail("Choose the mixer software to install.".into()),
                     }
                 }
-                Step::Prepare => match self.choice.clone() {
+                Step::Prepare => match self.chosen().cloned() {
                     Some((channel, version)) => self.send(Request::Prepare {
                         channel,
                         version,
@@ -1032,6 +1120,10 @@ impl Model {
                     Request::MixerReleases => {
                         self.offers = Offers::Failed(e);
                         self.settle_mixer();
+                        self.check_stock()
+                    }
+                    Request::StockReleases => {
+                        self.stock_check = StockCheck::Failed(e);
                         None
                     }
                     // A failed poll while waiting is not the end of the run.
@@ -1047,7 +1139,8 @@ impl Model {
                         } else {
                             format!("Couldn't check for supported firmware. {e}")
                         };
-                        None
+                        // Stock firmware doesn't depend on RC2FX's catalog.
+                        self.check_stock()
                     }
                     _ => {
                         self.fail(e);
@@ -1066,16 +1159,25 @@ impl Model {
                 {
                     self.device = one.model;
                     self.choice = None;
+                    self.forget_stock();
                     self.releases.clear();
                     self.needs_app.clear();
                     self.firmware_check = FirmwareCheck::Unchecked;
                     self.error.clear();
                 }
                 self.status = Some(*status);
-                if self.choice.is_none()
-                    && let Some(p) = self.prepared()
+                if let Some((stock, chosen)) = self
+                    .prepared()
+                    .map(|p| (p.stock, (p.channel.clone(), p.version.clone())))
                 {
-                    self.choice = Some((p.channel.clone(), p.version.clone()));
+                    let slot = if stock {
+                        &mut self.stock_choice
+                    } else {
+                        &mut self.choice
+                    };
+                    if slot.is_none() {
+                        *slot = Some(chosen);
+                    }
                 }
                 // Opened during an update: wait for what was flashed. Only
                 // on opening, so a finished update never comes back. Stock
@@ -1140,6 +1242,31 @@ impl Model {
             Reply::MixerReleases(offers) => {
                 self.offers = Offers::Ready(offers);
                 self.settle_mixer();
+                return self.check_stock();
+            }
+            Reply::StockReleases(items) => {
+                let device = self.device.id();
+                let items: Vec<_> = items
+                    .into_iter()
+                    .filter(|r| r.model.is_empty() || r.model == device)
+                    .collect();
+                if !self
+                    .stock_choice
+                    .as_ref()
+                    .is_some_and(|(channel, version)| {
+                        items
+                            .iter()
+                            .any(|r| &r.channel == channel && &r.version == version)
+                    })
+                {
+                    self.stock_choice = items
+                        .iter()
+                        .find(|r| r.channel == "stable")
+                        .or_else(|| items.first())
+                        .map(|r| (r.channel.clone(), r.version.clone()));
+                }
+                self.stock_releases = items;
+                self.stock_check = StockCheck::Done;
                 return None;
             }
             Reply::MixerSelected(identity) => {
@@ -1394,6 +1521,9 @@ mod tests {
         }];
         m.choice = Some(("stable".into(), "1.7.6".into()));
         m.firmware_check = FirmwareCheck::Done;
+        m.stock_releases = m.releases.clone();
+        m.stock_choice = m.choice.clone();
+        m.stock_check = StockCheck::Done;
         m.offers = Offers::Ready(vec![offer("1.0.0")]);
         m.settle_mixer();
         m
@@ -1796,7 +1926,9 @@ mod tests {
         let mut m = Model::new();
         let poll = m.probe();
         let check = report(&mut m, poll, s).unwrap();
-        m.finish(&check, Err("offline".into()));
+        let stock = m.finish(&check, Err("offline".into()));
+        assert_eq!(stock, Some(Request::StockReleases));
+        answer(&mut m, stock, Reply::StockReleases(vec![]));
         assert!(m.error.contains("offline") && m.running());
         m.run.as_mut().unwrap().failed = Some("did not get there in time".into());
         let poll = m.retry();
@@ -1822,9 +1954,22 @@ mod tests {
         let check = report(&mut m, poll, s).unwrap();
         assert_eq!(check, Request::Releases);
         assert_eq!(m.firmware_check, FirmwareCheck::Checking);
-        m.finish(&check, Err("the signed catalog expired".into()));
+        let stock = m.finish(&check, Err("the signed catalog expired".into()));
         assert!(m.error.contains("the signed catalog expired"));
         assert!(m.releases.is_empty() && !m.can_start());
+        // Stock firmware is RØDE's, so it is still looked for.
+        assert_eq!(stock, Some(Request::StockReleases));
+        answer(
+            &mut m,
+            stock,
+            Reply::StockReleases(vec![Release {
+                channel: "stable".into(),
+                version: "1.7.7".into(),
+                supported: true,
+                ..Default::default()
+            }]),
+        );
+        assert_eq!(m.stock_choice, Some(("stable".into(), "1.7.7".into())));
 
         let poll = m.tick(Instant::now() + Duration::from_secs(60));
         let s = seen(&m);
@@ -1836,6 +1981,41 @@ mod tests {
         assert_eq!(check, Request::Releases, "Check again does");
         m.finish(&check, Ok(Reply::Releases(vec![])));
         assert!(m.error.is_empty(), "the old failure is gone");
+    }
+
+    #[test]
+    fn stock_has_its_own_release_and_a_failed_check_can_be_repeated() {
+        let mut m = model(status(&[("GV1", false)], absent(), false, false));
+        m.stock_releases = vec![
+            Release {
+                channel: "beta".into(),
+                version: "1.7.8".into(),
+                ..Default::default()
+            },
+            Release {
+                channel: "stable".into(),
+                version: "1.7.6".into(),
+                ..Default::default()
+            },
+        ];
+        m.choose_stock(0);
+        assert_eq!(m.stock_choice, Some(("beta".into(), "1.7.8".into())));
+        assert_eq!(m.choice, Some(("stable".into(), "1.7.6".into())));
+        assert!(m.can_start_stock());
+        m.set_stock(true);
+        assert_eq!(m.chosen(), Some(&("beta".into(), "1.7.8".into())));
+        m.set_stock(false);
+        assert_eq!(m.chosen(), Some(&("stable".into(), "1.7.6".into())));
+
+        m.stock_check = StockCheck::Checking;
+        m.queue.push_back(true);
+        assert!(
+            m.finish(&Request::StockReleases, Err("offline".into()))
+                .is_none()
+        );
+        assert_eq!(m.stock_check, StockCheck::Failed("offline".into()));
+        assert_eq!(m.recheck_stock(), Some(Request::StockReleases));
+        assert_eq!(m.stock_check, StockCheck::Checking);
     }
 
     #[test]
@@ -1927,6 +2107,22 @@ mod tests {
         assert!(m.stock, "Install again keeps the chosen mode");
         let m = reopen(m.settled_flash, after_stock_flash(&[]));
         assert!(!m.stock && m.run.is_none());
+    }
+
+    #[test]
+    fn stock_needs_no_mixer_software() {
+        let mut m = model(status(&[("GV1", false)], absent(), false, false));
+        m.privileged = true;
+        m.releases = vec![Release {
+            channel: "stable".into(),
+            version: "1.7.6".into(),
+            supported: true,
+            ..Default::default()
+        }];
+        m.choice = Some(("stable".into(), "1.7.6".into()));
+        m.mixer = None;
+        assert!(!m.can_start());
+        assert!(m.can_start_stock());
     }
 
     #[test]
@@ -2124,7 +2320,7 @@ mod tests {
         assert_eq!(
             menu,
             [
-                ("1.0.0 · signed download".to_owned(), true),
+                ("1.0.0".to_owned(), true),
                 (
                     "0.9.0 · included with this app · older than installed".to_owned(),
                     false
@@ -2170,22 +2366,28 @@ mod tests {
         assert_eq!(m.mixer_change(&older), MixerChange::Downgrade);
         m.choose_mixer(older.clone());
         assert!(m.can_start(), "the user may choose it by hand");
-        let warnings = m.warnings();
+        let warnings = m.warnings_for(m.stock);
         assert!(warnings[0].contains("1.1.0") && warnings[0].contains("older 1.0.0"));
         m.set_stock(true);
-        assert!(m.warnings().is_empty(), "stock replaces RC2FX on purpose");
+        assert!(
+            m.warnings_for(m.stock).is_empty(),
+            "stock replaces RC2FX on purpose"
+        );
     }
 
     #[test]
     fn an_unknown_installed_version_is_said_and_a_known_upgrade_is_quiet() {
         let mut m = idle();
-        assert!(m.warnings()[0].contains("can't read"));
+        assert!(m.warnings_for(m.stock)[0].contains("can't read"));
         m.set_installed(Some("not a version".into()), None);
-        assert!(m.warnings()[0].contains("can't read"));
+        assert!(m.warnings_for(m.stock)[0].contains("can't read"));
         m.set_installed(Some("0.9.0".into()), None);
-        assert!(m.warnings().is_empty());
+        assert!(m.warnings_for(m.stock).is_empty());
         m.set_installed(Some("1.0.0".into()), None);
-        assert!(m.warnings().is_empty(), "reinstalling the same version");
+        assert!(
+            m.warnings_for(m.stock).is_empty(),
+            "reinstalling the same version"
+        );
         assert!(m.mixer.is_some());
     }
 
@@ -2193,11 +2395,11 @@ mod tests {
     fn going_back_on_firmware_is_said_too() {
         let mut m = idle();
         m.set_installed(Some("0.9.0".into()), Some("1.7.7".into()));
-        let warnings = m.warnings();
+        let warnings = m.warnings_for(m.stock);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("RØDE firmware 1.7.7"));
         m.set_stock(true);
-        assert_eq!(m.warnings(), warnings);
+        assert_eq!(m.warnings_for(m.stock), warnings);
     }
 
     #[test]

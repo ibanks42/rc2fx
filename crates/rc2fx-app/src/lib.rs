@@ -1732,6 +1732,7 @@ impl Rc2FxApp {
         line_overlay::count(&line_overlay::APP_RENDERS);
         // This render's claims replace the last render's (line_overlay.rs).
         line_overlay::begin(&self.line_slots, self.render_generation, self.layout);
+        self.sync_installer_selects(window, cx);
         // With a connection the installer lives in Settings instead.
         if self.installer.is_some() && !self.session.connected {
             return self.installer_screen(cx);
