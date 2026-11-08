@@ -76,6 +76,13 @@ fn hex(text: &str, length: usize) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 impl Site {
     pub fn offset(&self) -> Result<usize> {
         let value = self
@@ -216,7 +223,7 @@ impl Catalog {
     }
 
     pub fn select<'a>(&'a self, image: &[u8]) -> Result<&'a Profile> {
-        let hash = format!("{:x}", Sha256::digest(image));
+        let hash = sha256(image);
         let mut matches = self.profiles.iter().filter(|p| p.mixer_sha256 == hash);
         let profile = matches
             .next()
@@ -230,7 +237,7 @@ impl Catalog {
     }
 
     fn identify(&self, model: Model, image: &[u8]) -> Result<&Profile> {
-        let hash = format!("{:x}", Sha256::digest(image));
+        let hash = sha256(image);
         self.profiles
             .iter()
             .find(|p| p.model == model.id() && p.mixer_sha256 == hash)
@@ -287,7 +294,7 @@ impl Catalog {
 
 impl Profile {
     pub fn verify_image(&self, image: &[u8]) -> Result<()> {
-        if format!("{:x}", Sha256::digest(image)) != self.mixer_sha256 {
+        if sha256(image) != self.mixer_sha256 {
             return Err("mixer executable differs from its profile hash".into());
         }
         let runtime = self
@@ -313,7 +320,7 @@ impl Profile {
     }
 
     pub fn verify_launcher(&self, bytes: &[u8]) -> Result<()> {
-        if format!("{:x}", Sha256::digest(bytes)) != self.launcher_sha256 {
+        if sha256(bytes) != self.launcher_sha256 {
             return Err(format!(
                 "{}: audio launcher differs from its profile hash",
                 self.id
@@ -424,7 +431,7 @@ mod tests {
             site.offset = format!("0x{:x}", 0x1000 + 16 * index);
             image[0x200 + index * 16..0x210 + index * 16].copy_from_slice(&site.bytes().unwrap());
         }
-        catalog.profiles[0].mixer_sha256 = format!("{:x}", Sha256::digest(&image));
+        catalog.profiles[0].mixer_sha256 = sha256(&image);
         (catalog, image)
     }
 
@@ -432,7 +439,7 @@ mod tests {
     fn shared_executable_is_not_a_device_identity_or_runtime_qualification() {
         let (mut catalog, image) = fixture();
         let launcher = b"test launcher";
-        catalog.profiles[0].launcher_sha256 = format!("{:x}", Sha256::digest(launcher));
+        catalog.profiles[0].launcher_sha256 = sha256(launcher);
         let mut duo = catalog.profiles[0].clone();
         duo.id = "rodecaster-duo-1.7.6".into();
         duo.model = Model::Duo.id().into();
@@ -513,7 +520,7 @@ mod tests {
         catalog.select(&image).unwrap();
         image[0x200] ^= 1;
         assert!(catalog.select(&image).unwrap_err().contains("unrecognized"));
-        catalog.profiles[0].mixer_sha256 = format!("{:x}", Sha256::digest(&image));
+        catalog.profiles[0].mixer_sha256 = sha256(&image);
         assert!(
             catalog
                 .select(&image)
@@ -534,7 +541,7 @@ mod tests {
         );
         let (mut catalog, _) = fixture();
         image[68..72].copy_from_slice(&4u32.to_le_bytes()); // data, no PF_X
-        catalog.profiles[0].mixer_sha256 = format!("{:x}", Sha256::digest(&image));
+        catalog.profiles[0].mixer_sha256 = sha256(&image);
         assert!(
             catalog
                 .select(&image)

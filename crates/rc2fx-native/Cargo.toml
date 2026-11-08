@@ -18,7 +18,7 @@ crate-type = ["cdylib"]
 rc2fx-usb = { path = "../rc2fx-usb" }
 libc = "0.2"
 serde_json = "1"
-sha2 = "0.10.9"
+sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
 rc2fx-core = { path = "../rc2fx-core" }
 rc2fx-dsp = { path = "../rc2fx-dsp" }

@@ -63,7 +63,7 @@ fn check_bytes(data: &[u8], shared: bool) -> Result {
         dynamic_found = true;
         let strings = sections.strings(endian, data, link).map_err(text)?;
         for entry in entries {
-            let tag = entry.tag32(endian).unwrap_or(0);
+            let tag = entry.tag(endian);
             let value = entry.d_val(endian);
             match tag {
                 elf::DT_NEEDED => {
@@ -77,10 +77,10 @@ fn check_bytes(data: &[u8], shared: bool) -> Result {
                     return Err("carries a library search path".into());
                 }
                 elf::DT_TEXTREL => return Err("has text relocations".into()),
-                elf::DT_FLAGS if value & u64::from(elf::DF_TEXTREL) != 0 => {
+                elf::DT_FLAGS if value & elf::DF_TEXTREL.0 != 0 => {
                     return Err("has text relocations".into());
                 }
-                elf::DT_FLAGS_1 if shared && value & u64::from(elf::DF_1_PIE) != 0 => {
+                elf::DT_FLAGS_1 if shared && value & elf::DF_1_PIE.0 != 0 => {
                     return Err("is a PIE executable, not a library".into());
                 }
                 _ => {}

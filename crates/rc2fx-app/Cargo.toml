@@ -18,7 +18,7 @@ embedded = ["rc2fx-installer/embedded"]
 mock-mixer = ["rc2fx-transport/mock-mixer"]
 
 [dependencies]
-gpui-kit = "=0.8.0"
+gpui-kit = "=0.9.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rc2fx-core = { path = "../rc2fx-core" }
 rc2fx-transport = { path = "../rc2fx-transport" }
@@ -30,5 +30,5 @@ rc2fx-installer = { path = "../rc2fx-installer" }
 serde_json = "1"
 
 [dev-dependencies]
-gpui-test = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+gpui-test = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
 tempfile = "3"

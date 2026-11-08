@@ -263,27 +263,24 @@ impl Rc2FxApp {
                             cx.notify();
                         }),
                     )
-                    .on_scroll_wheel(cx.listener(
-                        move |app, event: &ScrollWheelEvent, window, cx| {
-                            let delta = event.delta.pixel_delta(px(16.)).y;
-                            if delta == px(0.) {
-                                return;
-                            }
-                            cx.stop_propagation();
-                            if app.band != index {
-                                app.band = index;
-                                app.rebuild_editors(window, cx);
-                            }
-                            let channel = app.channel;
-                            if let Some(b) = app.target_mut().eq.channel_mut(channel).get_mut(index)
-                            {
-                                let factor = if delta < px(0.) { 1.08 } else { 1. / 1.08 };
-                                b.q = ((b.q * factor).clamp(0.1, 100.) * 100.).round() / 100.;
-                            }
-                            app.sync_editor_values(window, cx);
-                            cx.notify();
-                        },
-                    )),
+                    .on_scroll(cx.listener(move |app, event: &ScrollEvent, window, cx| {
+                        let delta = event.delta.pixel_delta(px(16.)).y;
+                        if delta == px(0.) {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        if app.band != index {
+                            app.band = index;
+                            app.rebuild_editors(window, cx);
+                        }
+                        let channel = app.channel;
+                        if let Some(b) = app.target_mut().eq.channel_mut(channel).get_mut(index) {
+                            let factor = if delta < px(0.) { 1.08 } else { 1. / 1.08 };
+                            b.q = ((b.q * factor).clamp(0.1, 100.) * 100.).round() / 100.;
+                        }
+                        app.sync_editor_values(window, cx);
+                        cx.notify();
+                    })),
             );
             if selected && self.dragging_band {
                 let mut text = Parameter::Frequency.display(band.frequency);

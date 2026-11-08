@@ -398,7 +398,10 @@ pub fn decode_for_model(data: &[u8], model: rc2fx_firmware::Model) -> io::Result
     let mut result = StockInventory {
         available: true,
         show_name: reader.show.unwrap_or_default().into(),
-        revision: format!("{:x}", Sha256::digest(data)),
+        revision: Sha256::digest(data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
         message: "RODE sources and saved fader assignments; connection availability is separate"
             .into(),
         inputs: vec![],

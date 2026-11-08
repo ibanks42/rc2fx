@@ -24,7 +24,7 @@ rc2fx-suppression = { path = "../rc2fx-suppression" }
 rc2fx-native-control = { path = "../rc2fx-native-control" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-sha2 = "0.10.9"
+sha2 = "0.11"
 libc = "0.2"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
 
