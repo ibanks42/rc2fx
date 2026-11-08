@@ -1,6 +1,0 @@
-# act runs Linux only; GitHub builds all three platforms.
--P ubuntu-latest=catthehacker/ubuntu:act-latest
--P ubuntu-24.04=catthehacker/ubuntu:act-24.04
---matrix os:ubuntu-latest
---matrix os:ubuntu-24.04
---artifact-server-path .local/act-artifacts

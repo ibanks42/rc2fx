@@ -47,11 +47,10 @@ check the official releases.
    ignores this choice (see [Desktop app](#desktop-app)).
 6. Run it. Enable **dry-run** to build without publishing.
 
-A successful run builds the mixer runtime once from that commit, packages it
-into the app for Linux and Windows, pushes a `chore(release): vX.Y.Z` commit
-on `main` with a `vX.Y.Z` tag, and creates the GitHub release as a draft.
-**Release macOS** then adds the macOS package and publishes the release (see
-[Workflow jobs](#workflow-jobs)).
+A successful run packages the app for Linux, Windows and macOS, pushes a
+`chore(release): vX.Y.Z` commit on `main` with a `vX.Y.Z` tag, creates the
+GitHub release as a draft and, once every package is verified, publishes it
+(see [Workflow jobs](#workflow-jobs)).
 
 A dry run doesn't push or publish anything.
 
@@ -219,107 +218,74 @@ line naming the mixer version the packages carry, even when it didn't change. Th
 
 ## Workflow jobs
 
-Two workflows make a release. **Release** (`.github/workflows/release.yml`)
-builds Linux and Windows and leaves a draft release; **Release macOS**
-(`.github/workflows/macos-release.yml`) adds the macOS zip and publishes the
-draft once every package is verified. A shortage of macOS runners never fails
-**Release**: the draft waits until **Release macOS** succeeds. Nothing is
+**Release** (`.github/workflows/release.yml`) runs these jobs. Nothing is
 public until the release is complete.
 
-**Release** runs these jobs:
-
-1. **prepare** (Ubuntu) runs the versioning tests, computes the app version
-   and rewrites the version files and changelog (`.github/scripts/release.py
-   prepare`). It validates the pending app notes and builds the documentation
-   without deploying it. The site build still includes only published history.
-   It shares the prepared version files with later jobs; mixer payloads are
-   built by the separate **Mixer release** workflow.
+1. **prepare** (Ubuntu) computes the app version and rewrites the version
+   files and changelog (`.github/scripts/release.py prepare`). It validates the
+   pending app notes and builds the documentation without deploying it. The
+   site build still includes only published history. It shares the prepared
+   version files with later jobs; mixer payloads are built by the separate
+   **Mixer release** workflow.
 2. **build** runs on Ubuntu 24.04 and Windows in parallel, and **macos** runs
-   beside them, building, signing and notarizing the macOS zip so that it
-   doesn't wait for the other platforms. Nothing waits for **macos** and its
-   failure doesn't fail the run. The Linux runner
-   is pinned to keep the glibc baseline stable. Each job applies the prepare
-   output and runs `cargo xtask package` in download-only mode. Packaging
-   verifies the executable's payload mode, including with `--skip-build`, and
-   rejects a mismatched executable. Explicit `--embedded` packaging also
-   compares the embedded payload with the build inputs and rejects a stale
-   executable. Before uploading, the Linux job uses the same artifact checks
-   as `just package-check`: install, reinstall and remove the DEB on Ubuntu
-   24.04 and Debian 13 and the RPM on Fedora 44; extract and check the AppImage
-   on all three. The checks cover dependencies, metadata, permissions,
-   payload-mode checks and a headless executable smoke test. They do
-   not exercise a desktop session, FUSE mounting or mixer USB access.
-3. **release** (Ubuntu) checks each archive, writes checksums for them,
-   creates and pushes the release commit and tag (`release.py commit`), and
-   creates a draft release with these packages and a pending notice for
-   macOS in its notes. It never publishes. If `main` has moved since the run
+   beside them, building, signing and notarizing the macOS zip. The Linux
+   runner is pinned to keep the glibc baseline stable. Each job applies the
+   prepare output and runs `cargo xtask package` in download-only mode.
+   Packaging verifies the executable's payload mode, including with
+   `--skip-build`, and rejects a mismatched executable. Explicit `--embedded`
+   packaging also compares the embedded payload with the build inputs and
+   rejects a stale executable. Before uploading, the Linux job uses the same
+   artifact checks as `just package-check`: install, reinstall and remove the
+   DEB on Ubuntu 24.04 and Debian 13 and the RPM on Fedora 44; extract and
+   check the AppImage on all three. The checks cover dependencies, metadata,
+   permissions, payload-mode checks and a headless executable smoke test. They
+   do not exercise a desktop session, FUSE mounting or mixer USB access.
+3. **release** (Ubuntu) checks the Linux and Windows archives, writes
+   checksums for them, creates and pushes the release commit and tag
+   (`release.py commit`), and creates a draft release with these packages and
+   a pending notice for macOS in its notes. If `main` has moved since the run
    started, it stops without pushing. Start a new run in that case.
-
-A dry run does everything except push and create the draft. Only one release runs at a
-time. Starting another one queues it. The run's `release-input` artifact (the
-version files, release plan and mixer runtime) is kept for 90 days, because
-**Release macOS** builds from it.
-
-**Release macOS** starts by itself when a **Release** run succeeds. It uses
-`.github/scripts/macos_release.py`:
-
-1. **prepare** (Ubuntu) checks that the run was a successful **Release** run
-   on `main`, that its artifact hasn't expired, and that its tag is the
-   release commit on top of the run's source commit, with a draft release.
-   After a dry run there is no release or tag, so the automatic run skips the
-   build. GitHub only lists drafts to a token with `contents: write`, so this
-   job needs it; if the tag is pushed but no release is visible, it fails
-   rather than skipping.
-   A release that is already published and complete needs nothing; one that
-   is published but incomplete is refused and never changed.
-2. **build** (macOS) runs only when the **Release** run left no macOS zip.
-   It checks out the release's source commit, applies the
-   version files from the artifact (only the manifests, lockfiles and
-   changelog a version bump writes), stages the run's mixer runtime and runs
-   `cargo xtask package`. It builds the same version and runtime as the other
-   platforms, without a version bump or rebuilding them.
-3. **publish** (Ubuntu) takes the zip from the **Release** run or from
-   **build**, checks it, uploads it to the draft, rebuilds
-   `SHA256SUMS` from the draft's actual assets, removes the pending notice,
-   checks the whole draft again, and only then publishes it as the latest
-   release, as its very last step. It re-reads the release before every
-   change. A failed upload, a digest that doesn't match, or a missing or
-   unexpected package leaves the draft unpublished. It
-   never replaces a different macOS zip already on the draft. Run again on a
+4. **publish** (Ubuntu) waits for **release** and **macos**, then finishes the
+   draft with `.github/scripts/macos_release.py publish`: it checks the macOS
+   zip, uploads it, rebuilds `SHA256SUMS` from the draft's actual assets,
+   removes the pending notice, checks the whole draft again, and only then
+   publishes it as the latest release, as its very last step. It re-reads the
+   release before every change. A failed upload, a digest that doesn't match,
+   or a missing or unexpected package leaves the draft unpublished. It never
+   replaces a different macOS zip already on the draft. Run again on a
    published release, it only checks that the release is complete and holds
-   the same macOS zip, and changes nothing.
-   Publication jobs are serialized, and an older draft cannot become latest
-   after a newer stable release has been published. After publication, a
-   separate step dispatches **Docs** with `source=latest-release`.
+   the same macOS zip, and changes nothing. Publication jobs are serialized,
+   and an older draft cannot become latest after a newer stable release has
+   been published. After publication, a separate step dispatches **Docs**
+   with `source=latest-release`.
 
-If you publish the draft by hand before **Release macOS** finishes, the
-release is public but incomplete until it does. **Release macOS** then adds
-what's missing without publishing it again or changing which release is
-latest. Don't do this once immutable releases are on in the repository settings:
-a published release that is immutable and incomplete can't be finished.
+A dry run builds every package but doesn't push, create the draft or publish.
+Only one release runs at a time. Starting another one queues it.
+
+If **macos** fails, or no macOS runner is available, the draft stays
+unpublished and nothing is lost. Use **Re-run failed jobs** on the **Release**
+run: it reruns **macos** and then **publish**.
+
+If you publish the draft by hand before **publish** finishes, the release is
+public but incomplete until it does. **publish** then adds what's missing
+without publishing it again or changing which release is latest. Don't do this
+once immutable releases are on in the repository settings: a published release
+that is immutable and incomplete can't be finished.
 
 Immutable releases can be turned on once mixer metadata has moved to its branch
 (see [Where metadata lives](mixer-releases.md#where-metadata-lives)). Nothing else
 writes to a published release: the app release stays an editable draft until
-**Release macOS** has attached its zip, and mixer payload releases are published
+**publish** has attached the macOS zip, and mixer payload releases are published
 once. Correcting either one takes a new version.
 
-**Release macOS** starts once the whole **Release** run ends, so a macOS runner
-shortage delays publication. The draft exists by then and nothing is lost. If
-no macOS runner is available, only **Release macOS** is cancelled or
-fails, and the release stays a draft that can be finished later. A real build
-error shows as a failed **Release macOS** run. To retry, open **Actions › Release
-macOS › Run workflow** and enter the ID of the original **Release** run (the
-number in its URL). A retry is refused once that run's artifact has expired;
-make a new release then.
-
-The **Check** workflow also checks Rust code on pushes to `main`, excluding
-documentation-only changes. Release preparation checks the docs before
-publication, so removing automatic docs deployment does not remove that check.
+The **Check** workflow lints, tests and audits the code on pushes to `main`,
+excluding documentation-only changes, and runs the release tooling's tests.
+Release preparation checks the docs before publication, so removing automatic
+docs deployment does not remove that check.
 
 ## macOS signing
 
-`cargo xtask package` builds `RC2FX.app`. **Release macOS** signs it with a
+`cargo xtask package` builds `RC2FX.app`. The **macos** job signs it with a
 Developer ID certificate and notarizes it when these repository secrets exist,
 so users can open it without visiting Privacy & Security:
 
@@ -333,7 +299,7 @@ so users can open it without visiting Privacy & Security:
 
 Set all five or none. With none, the release still builds, the app is sealed
 ad hoc and the run shows a warning, so users have to allow it in Privacy &
-Security. A rejected notarization fails **Release macOS** and leaves the draft
+Security. A rejected notarization fails the **macos** job and leaves the draft
 unpublished. Local builds use the same steps through `RC2FX_MACOS_IDENTITY`,
 `RC2FX_NOTARY_KEY` (a path to the `.p8`), `RC2FX_NOTARY_KEY_ID` and
 `RC2FX_NOTARY_ISSUER`.
@@ -349,7 +315,7 @@ Run **Docs** from `main`, choosing:
 - **main** (the default) to publish the current documentation and note
   corrections without releasing an app.
 - **latest-release** to publish the tagged source of the current latest
-  published app release. **Release macOS** selects this automatically after
+  published app release. **Release** selects this automatically after
   publication. The workflow runs on `main` for the Pages environment, then
   checks out the selected tag to build the site.
 
@@ -362,8 +328,7 @@ Only published stable releases enter the history; tags on drafts do not count.
 
 A release snapshot can replace documentation that you manually deployed from
 newer `main` during the draft window. Run **Docs** with **main** again to restore
-those changes. An older release such as `v1.0.0` that predates the history
-generator is refused by **latest-release**; use **main** for the initial deploy.
+those changes.
 
 A failed docs deployment does not undo a published app release. Retry **Docs**
 independently; there is no need to rebuild packages. If publication succeeds
@@ -371,27 +336,19 @@ but its docs dispatch fails, manually dispatch **Docs**. Publishing or deleting
 a release by hand also requires a manual docs deployment. During the gap,
 the app can discover the release while hosted notes remain unavailable.
 
-## Running the workflows locally
+## Testing the release tooling locally
 
-With Docker and [`gh act`](https://github.com/nektos/gh-act):
+The release scripts have offline tests, which **Check** also runs:
 
 ```bash
-gh act push                                    # Desktop workflow
-gh act workflow_dispatch -W .github/workflows/release.yml \
-  --input bump=patch --input dry-run=true      # Release dry run, Linux only
-python3 .github/scripts/test_release.py        # versioning tests; needs git-cliff 2.14.1
+python3 .github/scripts/test_release.py          # versioning; needs git-cliff 2.14.1
+python3 .github/scripts/test_macos_release.py    # finishing and publishing the draft
+python3 .github/scripts/test_docs_source.py
+python3 .github/scripts/test_update_history.py
 ```
 
-Under act, the release commit and tag are created inside the container and
-nothing is pushed or published. Don't pass `--bind`, which would create the
-commit in your own checkout. The Linux archive and checksums are written to
-`.local/act-artifacts`.
-
-act can't run the Windows or macOS builds, **Release macOS**, or publish the
-release. `python3 .github/scripts/test_macos_release.py` tests the macOS
-helper offline. act builds
-your working tree instead of a clean checkout, so a
-passing local run doesn't guarantee the real run will pass.
+The workflows themselves only run on GitHub. A **Release** dry run builds every
+package without pushing or publishing anything.
 
 ## Before the first release
 

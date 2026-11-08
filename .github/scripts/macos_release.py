@@ -2,25 +2,11 @@
 """Finish an app release by adding the macOS package, then publish it.
 
 The Release workflow creates the release as a DRAFT with the Linux and Windows
-packages and never publishes it. The Release macOS workflow builds the macOS
-package from exactly the same source and version files and calls this script,
-which adds it, rewrites SHA256SUMS, removes the pending notice and, as the
-very last step after every check, publishes the release as latest. A
-published release is never changed afterwards by this script.
+packages; its last job calls this script with the macOS package built in the
+same run. It adds the package, rewrites SHA256SUMS, removes the pending notice
+and, as the very last step after every check, publishes the release as latest.
+A published release is never changed afterwards by this script.
 
-  prepare --run-id N [--automatic]
-      Check that run N is a successful Release run on main, download its
-      release-input artifact to .release-input, and check that its tag is the
-      source itself or the release commit on top of it and has a draft release. Writes
-      source, tag and ready to GITHUB_OUTPUT. With --automatic, a run that
-      created no release (a dry run) gives ready=false. A release that is
-      already published and complete also gives ready=false. One published by
-      hand before it was complete is finished like a draft, unless it is
-      immutable, which is refused. A draft older than the newest published
-      release is refused.
-  stage --source SHA --tag TAG
-      In the checkout of SHA, apply the version files from
-      .release-input/versioned.tar, extracting only version files.
   publish --tag TAG --source SHA --package-dir DIR
       Finish the draft and publish it as latest, last. A release someone
       published by hand before it was complete is finished but not published
@@ -41,18 +27,11 @@ import os
 import re
 import subprocess
 import sys
-import tarfile
 import tempfile
-import tomllib
 import zipfile
 from pathlib import Path
 
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
-WORKFLOW = ".github/workflows/release.yml"
-ARTIFACT = "release-input"
-PACKAGE_ARTIFACT = "macos-package"
-INPUT = Path(".release-input")
-PLAN_KEYS = {"tag", "previous", "source", "files"}
 PENDING = re.compile(
     r"\n*<!-- rc2fx:macos-pending -->\n.*?\n<!-- /rc2fx:macos-pending -->\n*", re.S
 )
@@ -104,9 +83,6 @@ class Gh:
         require(all(isinstance(r, dict) for r in releases), "unexpected release list from GitHub")
         return releases
 
-    def download_artifact(self, run_id, name, directory):
-        self._gh("run", "download", str(run_id), "-R", self.repo, "-n", name, "-D", str(directory))
-
     def asset_bytes(self, asset_id):
         return self._gh("api", "-H", "Accept: application/octet-stream",
                         f"repos/{self.repo}/releases/assets/{asset_id}", binary=True)
@@ -149,24 +125,6 @@ def safe_relative(name):
     return name
 
 
-def read_plan(directory=INPUT):
-    path = directory / "plan.json"
-    require(path.is_file() and not path.is_symlink(), "release-input has no plan.json")
-    plan = json.loads(path.read_text())
-    require(isinstance(plan, dict) and set(plan) == PLAN_KEYS, "plan.json has unexpected keys")
-    require(isinstance(plan["tag"], str) and re.fullmatch("v" + STABLE, plan["tag"]),
-            f"plan tag {plan['tag']!r} is not a stable app tag")
-    require(isinstance(plan["source"], str) and re.fullmatch("[0-9a-f]{40}", plan["source"]),
-            "plan source is not a commit id")
-    files = plan["files"]
-    require(isinstance(files, list) and files and all(isinstance(f, str) for f in files),
-            "plan files are missing")
-    require(len(set(files)) == len(files), "plan files repeat")
-    for name in files:
-        safe_relative(name)
-    return plan
-
-
 def find_release(gh, tag):
     """The one release (draft or published) for TAG, or None."""
     found = [r for r in gh.releases() if r.get("tag_name") == tag]
@@ -207,127 +165,6 @@ def check_tag(gh, tag, source):
             f"tag {tag} is not on the release commit")
     parents = [p.get("sha") for p in commit.get("parents", [])]
     require(parents == [source], f"release commit for {tag} is not on top of {source}")
-
-
-def release_state(gh, tag, source):
-    """(release, state) with state "missing", "draft", "complete", "open"
-    (published early, still changeable) or "locked" (published, incomplete
-    and immutable). The tag is checked whenever a release exists."""
-    release = find_release(gh, tag)
-    if release is None:
-        return None, "missing"
-    check_tag(gh, tag, source)
-    if release.get("draft"):
-        return release, "draft"
-    if complete(gh, release, tag[1:]):
-        return release, "complete"
-    return release, ("locked" if release.get("immutable") else "open")
-
-
-def prepare(gh, run_id, automatic, output=print):
-    run = gh.api(f"actions/runs/{run_id}")
-    require(run is not None, f"workflow run {run_id} not found")
-    require((run.get("repository") or {}).get("full_name") == gh.repo, "run is from another repository")
-    require(run.get("path") == WORKFLOW, f"run {run_id} is not the Release workflow")
-    require(run.get("event") == "workflow_dispatch", f"run {run_id} was not started by hand")
-    require(run.get("head_branch") == "main", f"run {run_id} is not on main")
-    require(run.get("status") == "completed" and run.get("conclusion") == "success",
-            f"run {run_id} did not succeed")
-    artifacts = gh.api(f"actions/runs/{run_id}/artifacts?name={ARTIFACT}") or {}
-    found = [a for a in artifacts.get("artifacts", []) if a.get("name") == ARTIFACT]
-    require(len(found) == 1, f"run {run_id} has no {ARTIFACT} artifact")
-    require(not found[0].get("expired"),
-            f"run {run_id}'s {ARTIFACT} artifact has expired; start a new release instead")
-    require(not INPUT.exists() or not any(INPUT.iterdir()), f"{INPUT} is not empty")
-    gh.download_artifact(run_id, ARTIFACT, INPUT)
-    plan = read_plan()
-    require(plan["source"] == run.get("head_sha"), "plan source is not the run's commit")
-    release, state = release_state(gh, plan["tag"], plan["source"])
-    if state == "missing":
-        # A dry run pushes no tag. If the tag is there, the release exists
-        # but is a draft this token cannot see.
-        if gh.api(f"commits/{plan['tag']}") is not None:
-            check_tag(gh, plan["tag"], plan["source"])
-            raise Refused(
-                f"tag {plan['tag']} is pushed but its release is not visible: it is probably a "
-                "draft, and listing drafts needs a token with contents: write"
-            )
-        require(automatic, f"run {run_id} created no release for {plan['tag']} (a dry run?)")
-        ready, why = "false", f"Skipped: Release run {run_id} created no release (a dry run)."
-    elif state == "draft":
-        refuse_if_behind(gh, plan["tag"])
-        ready, why = "true", (f"Finishing draft release {plan['tag']} from Release run {run_id} "
-                              f"(source `{plan['source'][:12]}`).")
-    elif state == "complete":
-        ready, why = "false", f"Release {plan['tag']} is already published and complete."
-    elif state == "open":
-        ready, why = "true", (f"Finishing release {plan['tag']}, which was published before it "
-                              "was complete. It stays published as it is.")
-    else:
-        raise Refused(f"release {plan['tag']} is published, incomplete and immutable; "
-                      "it can't be finished")
-    packages = gh.api(f"actions/runs/{run_id}/artifacts?name={PACKAGE_ARTIFACT}") or {}
-    prebuilt = any(a.get("name") == PACKAGE_ARTIFACT and not a.get("expired")
-                   for a in packages.get("artifacts", []))
-    lines = [f"source={plan['source']}", f"tag={plan['tag']}", f"ready={ready}",
-             f"prebuilt={str(prebuilt).lower()}"]
-    for line in lines:
-        output(line)
-    summary(f"### Release macOS for {plan['tag']}\n\n{why}\n")
-    return dict(line.split("=", 1) for line in lines)
-
-
-def summary(text):
-    """Append to the job summary when running in GitHub Actions."""
-    path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if path:
-        with open(path, "a") as handle:
-            handle.write(text)
-
-
-# Files the Release workflow's version bump may change (release.py
-# update_versions and the changelog); workspace member manifests are added
-# from the checkout's own Cargo.toml.
-FIXED_VERSION_FILES = {
-    "Cargo.toml", "Cargo.lock", "CHANGELOG.md",
-    "crates/rc2fx-native/Cargo.lock", "crates/rc2fx-bench/Cargo.lock",
-}
-
-
-def version_files(root):
-    """Every file a version bump may write, from the checkout at ROOT."""
-    cargo = tomllib.loads((root / "Cargo.toml").read_text())
-    members = cargo["workspace"]["members"]
-    require(all(isinstance(m, str) and "*" not in m for m in members), "unexpected workspace members")
-    return FIXED_VERSION_FILES | {f"{safe_relative(m)}/Cargo.toml" for m in members}
-
-
-def stage(source, tag, head, root=Path(".")):
-    """Apply the plan's version files to the checkout at ROOT. Only files a
-    version bump may write are accepted, whatever the plan lists."""
-    plan = read_plan(root / INPUT)
-    allowed = version_files(root)
-    outside = sorted(set(plan["files"]) - allowed)
-    require(not outside, f"plan lists files a version bump never writes: {outside}")
-    require(plan["source"] == source and plan["tag"] == tag, "plan does not match --source/--tag")
-    require(head == source, f"checkout is at {head}, not {source}")
-    archive = root / INPUT / "versioned.tar"
-    require(archive.is_file() and not archive.is_symlink(), "release-input has no versioned.tar")
-    with tarfile.open(archive) as tar:
-        members = tar.getmembers()
-        names = [m.name for m in members]
-        require(len(set(names)) == len(names), "versioned.tar repeats a file")
-        require(set(names) == set(plan["files"]), "versioned.tar does not hold exactly the plan's files")
-        for member in members:
-            safe_relative(member.name)
-            require(member.isreg(), f"{member.name} in versioned.tar is not a regular file")
-        for member in members:
-            data = tar.extractfile(member).read()
-            target = root / member.name
-            require(not target.is_symlink(), f"{member.name} is a link in the checkout")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-    return sorted(names)
 
 
 APP_MEMBERS = ("rc2fx/RC2FX.app/Contents/MacOS/rc2fx", "rc2fx/RC2FX.app/Contents/Info.plist")
@@ -475,39 +312,18 @@ def publish(gh, tag, source, package_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    p = commands.add_parser("prepare")
-    p.add_argument("--run-id", required=True, type=int)
-    p.add_argument("--automatic", action="store_true")
-    s = commands.add_parser("stage")
-    s.add_argument("--source", required=True)
-    s.add_argument("--tag", required=True)
     u = commands.add_parser("publish")
     u.add_argument("--source", required=True)
     u.add_argument("--tag", required=True)
     u.add_argument("--package-dir", required=True, type=Path)
     args = parser.parse_args()
     try:
-        if args.command == "stage":
-            head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                                  check=True).stdout.strip()
-            for name in stage(args.source, args.tag, head):
-                print(f"staged {name}")
-            return 0
         repo = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
         require(re.fullmatch(r"[\w.-]+/[\w.-]+", repo), "GH_REPO or GITHUB_REPOSITORY is not set")
         gh = Gh(repo)
-        if args.command == "prepare":
-            outputs = []
-            prepare(gh, args.run_id, args.automatic, outputs.append)
-            if os.environ.get("GITHUB_OUTPUT"):
-                with open(os.environ["GITHUB_OUTPUT"], "a") as handle:
-                    handle.write("".join(f"{line}\n" for line in outputs))
-            print("\n".join(outputs))
-        else:
-            print(publish(gh, args.tag, args.source, args.package_dir), end="")
+        print(publish(gh, args.tag, args.source, args.package_dir), end="")
         return 0
-    except (Refused, json.JSONDecodeError, tomllib.TOMLDecodeError, KeyError, tarfile.TarError,
-            zipfile.BadZipFile, OSError) as error:
+    except (Refused, json.JSONDecodeError, KeyError, zipfile.BadZipFile, OSError) as error:
         print(f"macos_release: {error}", file=sys.stderr)
         return 1
 

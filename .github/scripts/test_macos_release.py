@@ -6,7 +6,6 @@ import importlib.util
 import io
 import json
 import os
-import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -27,32 +26,10 @@ PENDING = (
     "macOS download is pending. It will be added to this release when a macOS runner is available.\n"
     "<!-- /rc2fx:macos-pending -->\n"
 )
-FILES = ["Cargo.toml", "Cargo.lock", "CHANGELOG.md"]
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
-
-
-def plan(**changes):
-    value = {"tag": TAG, "previous": "v0.1.0", "source": SOURCE, "files": FILES}
-    value.update(changes)
-    return value
-
-
-def versioned(members):
-    raw = io.BytesIO()
-    with tarfile.open(fileobj=raw, mode="w") as tar:
-        for name, data, kind in members:
-            info = tarfile.TarInfo(name)
-            info.type = kind
-            if kind == tarfile.SYMTYPE:
-                info.linkname = "/etc/passwd"
-                tar.addfile(info)
-            else:
-                info.size = len(data)
-                tar.addfile(info, io.BytesIO(data))
-    return raw.getvalue()
 
 
 def raw_zip(entries):
@@ -85,23 +62,13 @@ def other(tag, draft=False, prerelease=False):
 class FakeGh:
     """An in-memory repository. `ops` records every mutating call in order."""
 
-    def __init__(self, input_files=None):
+    def __init__(self):
         self.repo = REPO
-        self.run = {
-            "repository": {"full_name": REPO}, "path": ".github/workflows/release.yml",
-            "event": "workflow_dispatch", "head_branch": "main", "status": "completed",
-            "conclusion": "success", "head_sha": SOURCE,
-        }
-        self.artifact = {"name": "release-input", "expired": False}
-        self.package_artifact = None
         self.exists = True
-        self.tag_pushed = None  # defaults to whether the release exists
         self.draft = True
         self.body = "Notes.\n\n" + PENDING
         self.commit = {"sha": RELEASE_COMMIT, "commit": {"message": f"chore(release): {TAG}\n"},
                        "parents": [{"sha": SOURCE}]}
-        self.input_files = input_files if input_files is not None else {
-            "plan.json": json.dumps(plan()).encode()}
         self.assets = {}
         for name in mr.expected_assets(VERSION) - {MAC}:
             self.assets[name] = name.encode()
@@ -136,22 +103,9 @@ class FakeGh:
         return [*self.others, self._release()]
 
     def api(self, path):
-        if path == "actions/runs/7":
-            return self.run
-        if path == "actions/runs/7/artifacts?name=release-input":
-            return {"artifacts": [self.artifact] if self.artifact else []}
-        if path == "actions/runs/7/artifacts?name=macos-package":
-            return {"artifacts": [self.package_artifact] if self.package_artifact else []}
         if path == f"commits/{TAG}":
-            pushed = self.exists if self.tag_pushed is None else self.tag_pushed
-            return self.commit if pushed else None
+            return self.commit if self.exists else None
         return None
-
-    def download_artifact(self, run_id, name, directory):
-        directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        for file, data in self.input_files.items():
-            (directory / file).write_bytes(data)
 
     def asset_bytes(self, asset_id):
         return self.assets[asset_id]
@@ -218,202 +172,6 @@ class InTemp(unittest.TestCase):
     def tearDown(self):
         os.chdir(self.old)
         self.tmp.cleanup()
-
-
-class Prepare(InTemp):
-    def outputs(self, gh, automatic=False):
-        lines = []
-        return mr.prepare(gh, 7, automatic, lines.append)
-
-    def test_a_draft_release_is_ready(self):
-        self.assertEqual(self.outputs(FakeGh()),
-                         {"source": SOURCE, "tag": TAG, "ready": "true", "prebuilt": "false"})
-
-    def test_the_release_runs_macos_package_is_reused(self):
-        gh = FakeGh()
-        gh.package_artifact = {"name": "macos-package", "expired": False}
-        self.assertEqual(self.outputs(gh)["prebuilt"], "true")
-
-    def test_an_expired_macos_package_is_rebuilt(self):
-        gh = FakeGh()
-        gh.package_artifact = {"name": "macos-package", "expired": True}
-        self.assertEqual(self.outputs(gh)["prebuilt"], "false")
-
-    def test_published_complete_is_nothing_to_do_and_incomplete_is_refused(self):
-        self.assertEqual(self.outputs(published_complete(mac_zip()))["ready"], "false")
-        for path in Path(".release-input").iterdir():
-            path.unlink()
-        early = FakeGh()
-        early.draft = False  # published by hand before macOS: finished
-        self.assertEqual(self.outputs(early, automatic=True)["ready"], "true")
-        for path in Path(".release-input").iterdir():
-            path.unlink()
-        locked = FakeGh()
-        locked.draft = False
-        locked.immutable = True  # incomplete and immutable: can't be finished
-        with self.assertRaises(mr.Refused):
-            self.outputs(locked, automatic=True)
-        self.assertEqual(locked.ops, [])
-
-    def test_a_draft_behind_a_published_release_is_refused_before_building(self):
-        gh = FakeGh()
-        gh.others = [other("v0.10.0")]
-        with self.assertRaisesRegex(mr.Refused, "older than published release v0.10.0"):
-            self.outputs(gh)
-
-    def test_a_complete_release_behind_a_newer_one_is_still_nothing_to_do(self):
-        gh = published_complete(mac_zip())
-        gh.others = [other("v0.10.0")]
-        self.assertEqual(self.outputs(gh)["ready"], "false")
-
-    def test_a_pushed_tag_without_a_visible_release_is_a_loud_error(self):
-        # The draft exists, but this token cannot list drafts.
-        gh = FakeGh()
-        gh.exists = False
-        gh.tag_pushed = True
-        with self.assertRaises(mr.Refused) as caught:
-            self.outputs(gh, automatic=True)
-        self.assertIn("contents: write", str(caught.exception))
-        for path in Path(".release-input").iterdir():
-            path.unlink()
-        # A pushed tag that is not the release commit on this source.
-        gh.commit["parents"] = [{"sha": "c" * 40}]
-        with self.assertRaises(mr.Refused) as caught:
-            self.outputs(gh, automatic=True)
-        self.assertIn("not on top of", str(caught.exception))
-
-    def test_a_dry_run_is_skipped_automatically_and_refused_by_hand(self):
-        gh = FakeGh()
-        gh.exists = False
-        self.assertEqual(self.outputs(gh, automatic=True)["ready"], "false")
-        for path in Path(".release-input").iterdir():
-            path.unlink()
-        with self.assertRaises(mr.Refused):
-            self.outputs(gh)
-
-    def test_runs_that_are_not_successful_main_release_dispatches_are_refused(self):
-        for key, value in [
-            ("path", ".github/workflows/check.yml"), ("event", "push"), ("head_branch", "dev"),
-            ("conclusion", "failure"), ("status", "in_progress"),
-            ("repository", {"full_name": "someone/fork"}),
-        ]:
-            gh = FakeGh()
-            gh.run[key] = value
-            with self.assertRaises(mr.Refused, msg=key):
-                self.outputs(gh, automatic=True)
-
-    def test_expired_or_missing_artifacts_are_refused(self):
-        gh = FakeGh()
-        gh.artifact["expired"] = True
-        with self.assertRaises(mr.Refused) as caught:
-            self.outputs(gh)
-        self.assertIn("expired", str(caught.exception))
-        gh = FakeGh()
-        gh.artifact = None
-        with self.assertRaises(mr.Refused):
-            self.outputs(gh)
-
-    def test_a_plan_that_does_not_match_the_run_is_refused(self):
-        for bad in [
-            plan(source="c" * 40), plan(tag="v0.2"), plan(tag="mixer-v0.2.0"), plan(tag="v01.2.0"),
-            plan(files=["../escape"]), plan(files=[]), {**plan(), "extra": 1},
-        ]:
-            gh = FakeGh({"plan.json": json.dumps(bad).encode()})
-            with self.assertRaises(mr.Refused, msg=bad):
-                self.outputs(gh, automatic=True)
-            for path in Path(".release-input").iterdir():
-                path.unlink()
-
-    def test_already_versioned_release_can_tag_the_exact_source(self):
-        gh = FakeGh()
-        gh.commit.update(sha=SOURCE, commit={"message": "fix(release): initial notes"},
-                         parents=[{"sha": "c" * 40}])
-        self.assertEqual(self.outputs(gh)["ready"], "true")
-
-    def test_a_tag_that_is_not_the_release_commit_on_the_source_is_refused(self):
-        for change in [
-            lambda gh: gh.commit.update(sha="c" * 40, commit={"message": "fix: unrelated"}),
-            lambda gh: gh.commit.update(parents=[{"sha": "c" * 40}]),
-            lambda gh: gh.commit.update(parents=[{"sha": SOURCE}, {"sha": "d" * 40}]),
-            lambda gh: gh.commit.update(commit={"message": "feat: something"}),
-        ]:
-            gh = FakeGh()
-            change(gh)
-            with self.assertRaises(mr.Refused):
-                self.outputs(gh, automatic=True)
-            for path in Path(".release-input").iterdir():
-                path.unlink()
-
-    def test_a_non_empty_input_directory_is_refused(self):
-        Path(".release-input").mkdir()
-        Path(".release-input/leftover").write_text("x")
-        with self.assertRaises(mr.Refused):
-            self.outputs(FakeGh())
-
-
-class Stage(InTemp):
-    def setUp(self):
-        super().setUp()
-        self.setUp_manifest()
-
-    def setUp_manifest(self):
-        Path("Cargo.toml").write_text(
-            '[workspace]\nmembers = ["crates/rc2fx-app", "xtask"]\n')
-
-    def write_input(self, members, the_plan=None):
-        directory = Path(".release-input")
-        directory.mkdir()
-        (directory / "plan.json").write_text(json.dumps(the_plan or plan()))
-        (directory / "versioned.tar").write_bytes(versioned(members))
-
-    def test_only_the_planned_files_are_extracted(self):
-        self.write_input([(name, f"new {name}".encode(), tarfile.REGTYPE) for name in FILES])
-        self.assertEqual(mr.stage(SOURCE, TAG, SOURCE, Path(".")), sorted(FILES))
-        self.assertEqual(Path("Cargo.toml").read_text(), "new Cargo.toml")
-
-    def test_workspace_manifests_are_allowed_but_nothing_else(self):
-        allowed = FILES + ["crates/rc2fx-app/Cargo.toml", "crates/rc2fx-native/Cargo.lock"]
-        self.write_input([(n, b"x", tarfile.REGTYPE) for n in allowed], plan(files=allowed))
-        self.assertEqual(mr.stage(SOURCE, TAG, SOURCE, Path(".")), sorted(allowed))
-        self.setUp_manifest()
-        for outside in [".github/workflows/release.yml", "xtask/mixer/rc2fx.sh", "crates/rc2fx-app/src/lib.rs"]:
-            for path in Path(".release-input").iterdir():
-                path.unlink()
-            Path(".release-input").rmdir()
-            files = FILES + [outside]
-            self.write_input([(n, b"x", tarfile.REGTYPE) for n in files], plan(files=files))
-            with self.assertRaises(mr.Refused, msg=outside):
-                mr.stage(SOURCE, TAG, SOURCE, Path("."))
-            self.assertFalse(Path(outside).exists(), outside)
-
-    def test_extra_missing_linked_or_escaping_members_are_refused(self):
-        good = [(name, b"x", tarfile.REGTYPE) for name in FILES]
-        for members in [
-            good + [("extra", b"x", tarfile.REGTYPE)],
-            good[:-1],
-            good[:-1] + [(FILES[-1], b"", tarfile.SYMTYPE)],
-            good + [(FILES[0], b"y", tarfile.REGTYPE)],
-        ]:
-            self.write_input(members)
-            with self.assertRaises(mr.Refused):
-                mr.stage(SOURCE, TAG, SOURCE, Path("."))
-            for path in Path(".release-input").iterdir():
-                path.unlink()
-            Path(".release-input").rmdir()
-        self.assertFalse(Path("extra").exists())
-        escaping = [("../evil", b"x", tarfile.REGTYPE)]
-        with self.assertRaises(mr.Refused):
-            self.write_input(escaping, plan(files=["../evil"]))
-            mr.stage(SOURCE, TAG, SOURCE, Path("."))
-        self.assertFalse(Path("../evil").exists())
-
-    def test_the_checkout_and_arguments_must_match_the_plan(self):
-        self.write_input([(name, b"x", tarfile.REGTYPE) for name in FILES])
-        with self.assertRaises(mr.Refused):
-            mr.stage(SOURCE, TAG, "c" * 40, Path("."))
-        with self.assertRaises(mr.Refused):
-            mr.stage(SOURCE, "v9.9.9", SOURCE, Path("."))
-        self.assertEqual(Path("Cargo.toml").read_text()[:11], "[workspace]")
 
 
 class Publish(InTemp):

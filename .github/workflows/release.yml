@@ -35,34 +35,10 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
-        with:
-          cache: false
-          rustflags: ""
-      - uses: actions/cache@v6.1.0
-        id: runtime-tools
-        with:
-          path: |
-            ~/.cargo/bin/git-cliff*
-          key: release-tools-${{ runner.os }}-${{ runner.arch }}-cliff2.14.1
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
-        if: steps.runtime-tools.outputs.cache-hit != 'true'
         with:
           tool: git-cliff@2.14.1
           fallback: none
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: release-runtime
-          cache-bin: false
-          cache-workspace-crates: true
-          cache-on-failure: true
-          workspaces: . -> target
-      - name: Test release versioning
-        run: |
-          python3 .github/scripts/test_release.py
-          python3 .github/scripts/test_macos_release.py
-          python3 .github/scripts/test_docs_source.py
-          python3 .github/scripts/test_update_history.py
       - name: Bump version and prepare notes
         id: version
         env:
@@ -111,13 +87,7 @@ jobs:
           rustflags: ""
       - name: Install standard-library license notices
         run: rustup component add rust-docs
-      - uses: actions/cache@v6.1.0
-        id: desktop-tools
-        with:
-          path: ~/.cargo/bin/cargo-about*
-          key: release-tools-${{ runner.os }}-${{ runner.arch }}-about0.8.4
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
-        if: steps.desktop-tools.outputs.cache-hit != 'true'
         with:
           tool: cargo-about@0.8.4
           fallback: none
@@ -167,12 +137,10 @@ jobs:
             target/package/rc2fx-*-appimage-runtime-sources.tar.gz
           if-no-files-found: error
 
-  # Beside the other platforms, not after them. Nothing waits for this job and
-  # its failure doesn't fail the run: Release macOS builds the package itself
-  # when this one is missing.
+  # Beside the other platforms; only publish waits for it. If it fails, the
+  # draft stays unpublished: re-run the failed jobs.
   macos:
     needs: prepare
-    continue-on-error: true
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -185,13 +153,39 @@ jobs:
           path: .release-input
       - name: Apply release version
         run: tar -xf .release-input/versioned.tar
-      - uses: ./.github/actions/macos-package
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
-          certificate: ${{ secrets.MACOS_CERTIFICATE }}
-          certificate-password: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          notary-key: ${{ secrets.MACOS_NOTARY_KEY }}
-          notary-key-id: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          notary-issuer: ${{ secrets.MACOS_NOTARY_ISSUER }}
+          cache: false
+          rustflags: ""
+      - name: Install standard-library license notices
+        run: rustup component add rust-docs
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-about@0.8.4
+          fallback: none
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-desktop
+          cache-bin: false
+          cache-workspace-crates: true
+          cache-on-failure: true
+      - name: Load the Apple signing credentials
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+        run: bash .github/scripts/macos-signing.sh
+      - name: Build macOS release package
+        env:
+          RC2FX_RELEASE_BUILD: "1"
+        run: cargo xtask package
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: macos-package
+          path: target/package/rc2fx-*-macos-arm64.zip
+          if-no-files-found: error
 
   release:
     needs: [prepare, build]
@@ -216,7 +210,6 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib
-          import os
           from pathlib import Path
           import zipfile
           import tarfile
@@ -227,9 +220,8 @@ jobs:
           version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
           prefix = f'rc2fx-{version}'
           sources_name = f'{prefix}-appimage-runtime-sources.tar.gz'
-          expected = {f'{prefix}-linux-x64.AppImage', f'{prefix}-linux-x64.deb', f'{prefix}-linux-x64.rpm', sources_name}
-          if not os.environ.get('ACT'):
-              expected.add(f'{prefix}-windows-x64.zip')
+          expected = {f'{prefix}-linux-x64.AppImage', f'{prefix}-linux-x64.deb', f'{prefix}-linux-x64.rpm',
+                      f'{prefix}-windows-x64.zip', sources_name}
           assert {p.name for p in archives} == expected, 'Missing or unexpected release package'
           for archive in archives:
               assert archive.name.startswith('rc2fx-'), archive
@@ -260,7 +252,7 @@ jobs:
           path: target/release-assets/
           if-no-files-found: error
       - name: Push version and tag
-        if: ${{ !inputs.dry-run && !env.ACT }}
+        if: ${{ !inputs.dry-run }}
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
@@ -272,7 +264,7 @@ jobs:
           }
           git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
       - name: Create draft release and upload Linux and Windows packages
-        if: ${{ !inputs.dry-run && !env.ACT }}
+        if: ${{ !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -286,13 +278,37 @@ jobs:
           EOF
           gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file target/release-input/release-notes.md
           gh release upload "$TAG" target/release-assets/*
-      - name: Show macOS retry instructions
-        if: ${{ !inputs.dry-run && !env.ACT }}
+
+  # Adds the macOS package to the draft, verifies every package and checksum,
+  # and publishes the release as latest, last of all.
+  publish:
+    needs: [prepare, macos, release]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: release-publication
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: macos-package
+          path: target/macos-assets
+      - name: Complete, verify and publish the release
         env:
-          RELEASE_RUN: ${{ github.run_id }}
-          RETRY_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/macos-release.yml
-        run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ### macOS
-          This release remains a draft until **Release macOS** adds the macOS zip, verifies every package and checksum, and publishes it. That workflow starts automatically after this run. If no runner is available or it fails, retry [Release macOS]($RETRY_URL) with run ID $RELEASE_RUN (within 90 days); the completed builds stay in the draft.
-          EOF
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SOURCE: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: python3 .github/scripts/macos_release.py publish --tag "$RELEASE_TAG" --source "$RELEASE_SOURCE" --package-dir target/macos-assets
+      - name: Dispatch the release documentation deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run docs.yml --ref main -f source=latest-release

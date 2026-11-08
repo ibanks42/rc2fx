@@ -50,12 +50,6 @@ jobs:
           ref: ${{ steps.source.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Require update-history support in the selected source
-        run: |
-          test -f .github/scripts/update_history.py || {
-            echo 'This release predates hosted update history. Dispatch Docs with source=main instead.'
-            exit 1
-          }
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
