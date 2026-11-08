@@ -1574,7 +1574,7 @@ ssh_status() {
   for pub in "$ssh_host_dir"/ssh_host_*_key.pub; do
     test -f "$pub" && ! test -L "$pub" || continue
     line=$(head -c 1024 "$pub" | head -n 1 | cut -d' ' -f1-2)
-    if [[ $line =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa)\ [A-Za-z0-9+/=]{16,1024}$ ]]; then
+    if [[ $line =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa)\ [A-Za-z0-9+/=]{16,}$ ]]; then
       echo "host $line"
     fi
   done

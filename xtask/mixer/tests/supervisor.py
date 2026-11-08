@@ -23,6 +23,7 @@ def function(name):
     return SCRIPT[start:SCRIPT.index('\n}\n', start) + 3]
 
 
+@unittest.skipUnless(Path('/proc/self/stat').exists(), '/proc/<pid>/stat is not on this host')
 class Tests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()

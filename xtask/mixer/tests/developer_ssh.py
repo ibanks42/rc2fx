@@ -21,7 +21,7 @@ HOST = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBhostkeyhostkeyhostkeyhostkeyhostke
 class DeveloperSsh(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
+        root = Path(self.tmp.name).resolve()
         self.ssh = root / "home" / "root" / ".ssh"
         self.ssh.mkdir(parents=True, mode=0o700)
         self.keys = self.ssh / "authorized_keys"

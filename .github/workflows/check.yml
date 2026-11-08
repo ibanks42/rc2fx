@@ -77,9 +77,6 @@ jobs:
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
       # Their Rust tests run with the workspace above.
-      - name: Test the mixer supervisor script
+      - name: Test the mixer scripts
         if: runner.os == 'Linux'
-        run: python3 xtask/mixer/tests/supervisor.py
-      - name: Test developer SSH controls
-        if: runner.os == 'Linux'
-        run: python3 xtask/mixer/tests/developer_ssh.py
+        run: for t in xtask/mixer/tests/*.py; do python3 "$t" || exit 1; done

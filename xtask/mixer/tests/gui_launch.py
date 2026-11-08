@@ -214,6 +214,8 @@ class GuiLaunch(unittest.TestCase):
     def start_mixer(self):
         """A live process whose /proc/<pid>/exe is the fake stock mixer."""
         import subprocess
+        if not Path('/proc/self/exe').exists():
+            self.skipTest('/proc/<pid>/exe is not on this host')
         process = subprocess.Popen([str(self.fake_mixer), '30'])
         self.addCleanup(process.kill)
         (self.run_dir / 'native.pid').write_text(f'{process.pid}\n')
