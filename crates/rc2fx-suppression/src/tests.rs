@@ -315,7 +315,7 @@ fn recovery_invalidates_model_history_and_then_recovers() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn worker_loop_capture_preserves_queue_depth_predecessors_and_counters() {
     let (mut input, consumer) = queue::channel();
@@ -394,7 +394,7 @@ fn actual_endpoint_miss_triggers_the_acknowledged_capture_epoch() {
     assert_eq!(worker.telemetry().snapshot().missed_deadlines, 1);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn queued_time_is_included_in_turnaround_and_missing_stamps_are_errors() {
     let (mut input, consumer) = queue::channel();
@@ -531,7 +531,7 @@ fn held_terminal_job_timeout_late_failure_and_queued_drain() {
             assert_eq!(terminal.drained, !fail);
             assert_eq!(terminal.snapshot.completed_frames, if fail { 0 } else { 3 });
             assert_eq!(terminal.pending_input_frames, if fail { 2 } else { 0 });
-            if !fail && cfg!(target_os = "linux") {
+            if !fail && cfg!(unix) {
                 assert!(terminal.snapshot.wall.overruns >= 1);
                 assert!(terminal.snapshot.allowance_overruns >= 1);
             }

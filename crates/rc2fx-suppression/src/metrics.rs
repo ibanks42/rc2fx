@@ -55,13 +55,14 @@ impl Counters {
         }
     }
 }
-#[cfg(target_os = "linux")]
+// Linux on the mixer; other Unix hosts (macOS, for the tests) have both clocks.
+#[cfg(unix)]
 pub(crate) fn now(cpu: bool) -> Option<u64> {
     let mut ts = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // SAFETY: valid writable timespec, supported Linux clock IDs.
+    // SAFETY: valid writable timespec, clock IDs supported on Linux and macOS.
     let rc = unsafe {
         libc::clock_gettime(
             if cpu {
@@ -78,7 +79,7 @@ pub(crate) fn now(cpu: bool) -> Option<u64> {
         Some(ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64)
     }
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub(crate) fn now(_cpu: bool) -> Option<u64> {
     None
 }
