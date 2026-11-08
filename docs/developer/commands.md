@@ -8,7 +8,7 @@ recipes and `cargo xtask help` lists the underlying commands.
 
 | Command | Description |
 | --- | --- |
-| `just setup` | One-time setup: the mixer's Rust target, cargo-zigbuild, a zig check |
+| `just setup` | One-time setup: the mixer's Rust target, cargo-zigbuild, a zig check, and a pre-commit hook that refuses unformatted Rust code |
 | `just app` / `just desktop` | Run a development build / build a release build of the desktop app with signed mixer downloads. No mixer cross-build is needed. |
 | `just app-release` | Run the optimized release build, as shipped. Slower to build; use it to check a change before a release. |
 | `just app-mock` | Run the desktop app against a simulated mixer, with no hardware. See [below](#without-a-mixer). |

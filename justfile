@@ -6,9 +6,10 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 default:
     @just --list --unsorted
 
-# One-time setup for the mixer build: Rust target, cargo-zigbuild, zig check
+# One-time setup: the mixer build (Rust target, cargo-zigbuild, zig check) and the pre-commit formatting hook
 setup:
     cargo xtask setup
+    git config core.hooksPath .githooks
 
 # Run the desktop app (debug)
 app:
@@ -64,7 +65,7 @@ mixer-install: mixer-build
 
 # Remove RC2FX from the mixer (--purge also deletes its settings)
 mixer-uninstall *flags:
-    cargo xtask mixer uninstall {{flags}}
+    cargo xtask mixer uninstall {{ flags }}
 
 # Stop RC2FX and hand audio back to stock
 mixer-stop:
@@ -80,7 +81,7 @@ mixer-logs:
 
 # What the JACK error recorder records over SECONDS (0: everything since jackd started)
 mixer-xruns seconds="60":
-    cargo xtask mixer xruns {{seconds}}
+    cargo xtask mixer xruns {{ seconds }}
 
 # Let an installed RC2FX start at boot
 mixer-enable:
@@ -111,7 +112,7 @@ bench-build:
 
 # Time every suppression model on the mixer over a 48 kHz recording and fetch the denoised audio
 bench recording *flags: bench-build
-    cargo xtask bench {{recording}} {{flags}}
+    cargo xtask bench {{ recording }} {{ flags }}
 
 # Build the documentation site into target/docs (needs Node.js)
 docs:

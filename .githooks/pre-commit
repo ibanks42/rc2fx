@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuses a commit whose Rust code is not rustfmt-formatted, as CI would.
+# Clippy and the tests take minutes: run `just test` before pushing instead.
+# Enabled by `just setup`; skip once with `git commit --no-verify`.
+if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+    echo "pre-commit: Rust code is not formatted. Run \`cargo fmt --all\`, stage the changes and commit again." >&2
+    exit 1
+fi

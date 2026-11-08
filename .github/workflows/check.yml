@@ -1,9 +1,10 @@
 name: Check
 
-# `cargo check` on every platform the app ships for, with warnings as errors
-# (setup-rust-toolchain's default `build-warnings: deny`). It builds nothing to
-# download and skips the mixer runtime: `--no-default-features` turns off the
-# app's embedded installer payload, which only real builds need.
+# Clippy on every platform the app ships for, with warnings as errors, so code
+# that only compiles on one OS is linted there too. Linux, which the mixer runs,
+# also checks formatting and runs the whole test suite. Nothing here builds the
+# mixer runtime: `--no-default-features` turns off the app's embedded installer
+# payload, which only real builds need.
 on:
   push:
     branches: [main]
@@ -41,8 +42,17 @@ jobs:
           cache-workspaces: |
             . -> target
             crates/rc2fx-native -> target
-      - name: Check the workspace
-        run: cargo check --locked --workspace --all-targets --no-default-features
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+      - name: Lint the workspace
+        run: |
+          cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
+          cargo clippy --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings
+      - name: Test the workspace
+        # Linux is what the mixer runs, so the whole suite runs here.
+        if: runner.os == 'Linux'
+        run: cargo test --locked --workspace
       - name: Check the native library
         if: runner.os == 'Linux'
         run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets
@@ -66,17 +76,10 @@ jobs:
           python3 .github/scripts/test_macos_release.py
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
-      - name: Test the mixer supervisor
+      # Their Rust tests run with the workspace above.
+      - name: Test the mixer supervisor script
         if: runner.os == 'Linux'
-        run: |
-          python3 xtask/mixer/tests/supervisor.py
-          cargo test --locked -p rc2fx-supervisor
+        run: python3 xtask/mixer/tests/supervisor.py
       - name: Test developer SSH controls
         if: runner.os == 'Linux'
-        run: |
-          python3 xtask/mixer/tests/developer_ssh.py
-          cargo test --locked -p rc2fx-core ssh
-          cargo test --locked -p rc2fx-device developer_ssh
-          cargo test --locked -p rc2fx-installer developer_ssh
-          cargo test --locked -p rc2fx-transport ssh
-          cargo test --locked -p rc2fx-app --no-default-features developer
+        run: python3 xtask/mixer/tests/developer_ssh.py
