@@ -2,6 +2,37 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.1.5] - 2026-11-08
+
+### Features
+
+- *(installer)* Offer stock firmware from RØDE's manifest for each model
+- *(app)* Put RC2FX and stock firmware on tabs on the Firmware page
+- *(app)* Show when RØDE has firmware newer than RC2FX supports
+
+### Bug fixes
+
+- *(app)* Quit cleanly on macOS and add a Quit menu with Cmd+Q
+- *(mixer)* Read the monotonic clocks on any Unix so host tests time frames
+
+### Testing
+
+- *(mixer)* Run the mixer script tests on macOS hosts and in Linux CI
+- *(mixer)* Start the fake mixer from a copy of bash
+
+### Maintenance
+
+- *(just)* Run debug builds by default, with release variants
+- Format the workspace and fix stale `just app` docs
+- *(rust)* Move to Rust 1.99.1
+- Lint on every platform, test the workspace on Linux, check formatting
+- Publish releases from the Release workflow and drop dead CI code
+- *(deps)* Move to gpui 0.9, RustCrypto 0.11 and reqwest 0.13
+
+### Other
+
+- *(app)* Use gpui-kit's gpui-fast backend and test against it
+
 ## [0.1.4] - 2026-11-07
 
 ### Features
