@@ -233,8 +233,10 @@ impl Snapshot {
             return Err("snapshot accounting does not add up".into());
         }
         let records = data[HEADER..HEADER + records_len]
-            .chunks_exact(RECORD)
-            .map(record)
+            .as_chunks::<RECORD>()
+            .0
+            .iter()
+            .map(|bytes| record(bytes))
             .collect();
         Ok(Self {
             pid,

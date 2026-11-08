@@ -58,8 +58,8 @@ fn parse(args: &[String]) -> Result<Option<Args>, String> {
     };
     let mut signal_seen = false;
     let mut policy_seen = false;
-    let mut flags = args[2..].chunks_exact(2);
-    for pair in &mut flags {
+    let (pairs, unpaired) = args[2..].as_chunks::<2>();
+    for pair in pairs {
         match pair[0].as_str() {
             "--signal" if !signal_seen => {
                 result.signal = match pair[1].as_str() {
@@ -81,7 +81,7 @@ fn parse(args: &[String]) -> Result<Option<Args>, String> {
             _ => return Err(format!("unknown or duplicate option: {}", pair[0])),
         }
     }
-    if !flags.remainder().is_empty() {
+    if !unpaired.is_empty() {
         return Err("option needs a value".into());
     }
     Ok(Some(result))

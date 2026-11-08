@@ -1,5 +1,5 @@
 [toolchain]
-channel = "1.97.1"
+channel = "1.99.1"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
 # The mixer (a Cortex-A53 running glibc 2.35).

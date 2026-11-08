@@ -228,7 +228,13 @@ mod tests {
         let pixels = halo_pixels(width, height);
         assert_eq!(pixels.len(), width * height * 4);
         let alpha = |x: usize, y: usize| pixels[(y * width + x) * 4 + 3];
-        let peak = pixels.chunks_exact(4).map(|p| p[3]).max().unwrap();
+        let peak = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[3])
+            .max()
+            .unwrap();
         // Two glows at most, each no stronger than its opacity.
         assert!(f32::from(peak) <= 2. * HALO_OPACITY * 255.);
         let centre = alpha(width / 2, height * 28 / 100);

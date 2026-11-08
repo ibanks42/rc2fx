@@ -74,7 +74,9 @@ fn wav_samples(bytes: &[u8]) -> Vec<f32> {
     assert_eq!(&bytes[..4], b"RIFF");
     assert_eq!(&bytes[36..40], b"data");
     bytes[44..]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.)
         .collect()
 }

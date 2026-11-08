@@ -70,7 +70,9 @@ impl Tensors {
                 .ok_or(Error::Weights)?;
             let data = r.take(count.checked_mul(4).ok_or(Error::Weights)?)?;
             let data = data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             map.insert(name, (dims, data));

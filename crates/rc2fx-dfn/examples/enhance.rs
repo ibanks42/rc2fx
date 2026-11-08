@@ -17,7 +17,9 @@ fn main() {
         "need 48 kHz 16-bit mono, got {rate} Hz {channels} ch {bits} bit"
     );
     let samples: Vec<f32> = data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.)
         .collect();
     let mut filter = DeepFilter::new().expect("embedded model");

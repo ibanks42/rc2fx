@@ -153,7 +153,7 @@ impl Capture {
             return false;
         }
         self.requested
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |old| {
                 (epoch > old).then_some(epoch)
             })
             .is_ok()

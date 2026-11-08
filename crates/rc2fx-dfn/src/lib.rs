@@ -232,7 +232,7 @@ impl DeepFilter {
                 *out = self
                     .noisy
                     .range(end - self.order..end)
-                    .zip(taps.chunks_exact(2))
+                    .zip(taps.as_chunks::<2>().0)
                     .map(|(spec, c)| spec[f] * Complex32::new(c[0], c[1]))
                     .sum();
             }

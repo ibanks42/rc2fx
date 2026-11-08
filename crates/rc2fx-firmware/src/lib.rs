@@ -146,8 +146,8 @@ impl Runtime {
         // The 16-byte trampoline replays these instructions at a new address.
         // PC-relative branches/addressing/literal loads need a relocator that
         // capture-values-v1 deliberately does not implement.
-        for bytes in self.job_lifetime.enqueue.bytes()?.chunks_exact(4) {
-            let instruction = u32::from_le_bytes(bytes.try_into().unwrap());
+        for bytes in self.job_lifetime.enqueue.bytes()?.as_chunks::<4>().0 {
+            let instruction = u32::from_le_bytes(*bytes);
             if instruction & 0x7c00_0000 == 0x1400_0000
                 || instruction & 0x1f00_0000 == 0x1000_0000
                 || instruction & 0xff00_0010 == 0x5400_0000
