@@ -222,7 +222,18 @@ pub struct Inputs<'a> {
     pub needs_app: Option<(&'a str, &'a str)>,
     pub installed_firmware: Option<&'a str>,
     pub newest_supported_firmware: Option<&'a str>,
+    /// RØDE's newest stable firmware for this mixer, from its manifest;
+    /// `None` until a check answers, or for a mixer RØDE's manifest omits.
+    pub rode_firmware: Option<&'a str>,
     pub device_protocol: Option<u32>,
+}
+
+/// RØDE's newest firmware, when it is newer than the mixer's and than
+/// anything this app can install with RC2FX.
+fn rode_ahead<'a>(i: &Inputs<'a>) -> Option<&'a str> {
+    let rode = i.rode_firmware?;
+    let newer = |than: &str| compare(rode, than) == Some(Ordering::Greater);
+    (newer(i.installed_firmware?) && i.newest_supported_firmware.is_none_or(newer)).then_some(rode)
 }
 
 pub fn summarize(i: &Inputs) -> Summary {
@@ -310,6 +321,8 @@ const BLOCKED: (&str, Tone) = ("Blocked", Tone::Warn);
 const NEWER: (&str, Tone) = ("Newer", Tone::Warn);
 const UPDATE_APP_FIRST: (&str, Tone) = ("Update the app first", Tone::Warn);
 const UNKNOWN: (&str, Tone) = ("Unknown", Tone::Unknown);
+/// RØDE has released newer firmware than RC2FX supports. Nothing to do yet.
+const RODE_NEWER: (&str, Tone) = ("Newer from RØDE", Tone::Quiet);
 
 fn mixer_status(
     s: &Summary,
@@ -381,7 +394,12 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
             (status, _) => status,
         },
     };
-    let ((firmware_text, firmware_tone), firmware_read) = firmware_status(&s);
+    let rode = rode_ahead(i);
+    let ((firmware_text, firmware_tone), firmware_read) = match rode {
+        // "Up to date" would be wrong: RØDE has newer, RC2FX can't install it.
+        Some(_) if s.firmware == Standing::Current => (RODE_NEWER, false),
+        _ => firmware_status(&s),
+    };
     let lines = vec![
         Line {
             part: Part::App,
@@ -409,7 +427,7 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
             part: Part::Firmware,
             name: "RØDE firmware",
             installed: show(i.installed_firmware),
-            available: show(i.newest_supported_firmware),
+            available: show(rode.or(i.newest_supported_firmware)),
             status: firmware_text,
             tone: firmware_tone,
             read_changes: firmware_read,
@@ -462,7 +480,15 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
         Tone::Update if updates == 1 => ("Update available".to_owned(), Tone::Update),
         Tone::Update => (format!("{updates} updates available"), Tone::Update),
         _ if !connected => ("Not connected".to_owned(), Tone::Unknown),
-        _ if lines.iter().all(|l| l.tone == Tone::Quiet) => ("Up to date".to_owned(), Tone::Quiet),
+        _ if lines.iter().all(|l| l.tone == Tone::Quiet) => (
+            if rode.is_some() {
+                "RC2FX up to date"
+            } else {
+                "Up to date"
+            }
+            .to_owned(),
+            Tone::Quiet,
+        ),
         _ => ("Unknown".to_owned(), Tone::Unknown),
     };
     let waiting = lines
@@ -487,10 +513,19 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
                 .find(|l| l.tone == Tone::Update && l.read_changes)
                 .map(|l| l.part),
         },
-        _ if flag_tone == Tone::Quiet => Lead {
-            title: "Everything is up to date".into(),
-            detail: None,
-            changes: None,
+        _ if flag_tone == Tone::Quiet => match rode {
+            Some(rode) => Lead {
+                title: "RC2FX is up to date".into(),
+                detail: Some(format!(
+                    "RØDE firmware {rode} is out, but RC2FX doesn't support it yet."
+                )),
+                changes: None,
+            },
+            None => Lead {
+                title: "Everything is up to date".into(),
+                detail: None,
+                changes: None,
+            },
         },
         _ => Lead {
             title: flag.clone(),
@@ -498,6 +533,14 @@ pub fn overview(i: &Inputs, app: &AppStanding, mixer: &MixerUpdateState) -> Over
             changes: None,
         },
     };
+    // Said in the lead when nothing else is going on; otherwise here.
+    if let Some(rode) = rode
+        && flag_tone != Tone::Quiet
+    {
+        details.push(format!(
+            "RØDE firmware {rode} is out, but RC2FX doesn't support it yet, so this app can't install it."
+        ));
+    }
     Overview {
         lead,
         summary: format!(
@@ -525,8 +568,42 @@ mod tests {
             needs_app: None,
             installed_firmware: fw,
             newest_supported_firmware: Some("1.8.0"),
+            rode_firmware: None,
             device_protocol: Some(rc2fx_core::MIXER_PROTOCOL_VERSION),
         }
+    }
+
+    #[test]
+    fn newer_rode_firmware_rc2fx_cant_install_is_not_called_up_to_date() {
+        let mut i = inputs(Some("0.3.0"), Some("1.8.0"));
+        let current = AppStanding::Current {
+            latest: "0.3.0".into(),
+        };
+        let o = overview(&i, &current, &MixerUpdateState::Current);
+        assert_eq!(o.lead.title, "Everything is up to date");
+
+        i.rode_firmware = Some("1.9.0");
+        let o = overview(&i, &current, &MixerUpdateState::Current);
+        assert_eq!(o.lead.title, "RC2FX is up to date");
+        assert!(o.lead.detail.unwrap().contains("1.9.0"));
+        let firmware = &o.lines[2];
+        assert_eq!((firmware.status, firmware.tone), RODE_NEWER);
+        assert_eq!(firmware.available, "1.9.0");
+        assert!(!o.offer_installer, "nothing this app can install");
+
+        // RØDE's newest is what RC2FX supports, or what the mixer has.
+        for rode in ["1.8.0", "1.7.0"] {
+            i.rode_firmware = Some(rode);
+            let o = overview(&i, &current, &MixerUpdateState::Current);
+            assert_eq!(o.lead.title, "Everything is up to date", "{rode}");
+        }
+
+        // An update RC2FX can install still leads; RØDE's news is a note.
+        i.installed_firmware = Some("1.7.0");
+        i.rode_firmware = Some("1.9.0");
+        let o = overview(&i, &current, &MixerUpdateState::Current);
+        assert_eq!(o.lines[2].tone, Tone::Update);
+        assert!(o.details.iter().any(|d| d.contains("1.9.0")));
     }
 
     #[test]

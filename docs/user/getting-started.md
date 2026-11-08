@@ -36,12 +36,14 @@ versions** to see each part:
 | --- | --- | --- |
 | **App** | The desktop app's version. | The newest published app. |
 | **Mixer software** | The RC2FX mixer software on the mixer now. | The newest compatible signed mixer release, or an optional bundled version. |
-| **RØDE firmware** | The RØDE firmware on the mixer now. | The newest firmware this app installs for your mixer model. |
+| **RØDE firmware** | The RØDE firmware on the mixer now. | The newest firmware this app installs for your mixer model, or RØDE's newest stable release when RC2FX doesn't support it yet. |
 
 Each line ends with a status. **Too old** means the mixer software doesn't speak
 this app's control protocol and needs updating. **Blocked** means an update
 exists but this app can't install it safely, and the reason appears below the
-table.
+table. **Newer from RØDE** means RØDE has released firmware that RC2FX doesn't
+support yet, so the app can't install it with RC2FX. The app reads RØDE's
+stable releases from RØDE's update server when it checks for updates.
 
 Lines with an update have a **Read changes** button. It shows the notes for every
 version between yours and the one available, newest first. Release notes for the

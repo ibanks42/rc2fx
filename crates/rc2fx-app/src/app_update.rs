@@ -20,6 +20,10 @@ pub(super) struct AppUpdate {
     /// what this app may install; only these can. `None` until a check
     /// answers.
     signed: Option<Vec<MixerOffer>>,
+    /// The firmware RØDE publishes, from each model's manifest. A model has
+    /// none until a check answers for it; a failed check keeps the last
+    /// answer.
+    rode: Vec<rc2fx_installer::Release>,
 }
 
 impl AppUpdate {
@@ -63,6 +67,30 @@ impl AppUpdate {
 
     pub(super) fn set_signed(&mut self, offers: Vec<MixerOffer>) {
         self.signed = Some(offers);
+    }
+
+    /// RØDE's newest stable firmware for the mixer's model, once its
+    /// firmware is known.
+    pub(super) fn rode_firmware(&self, firmware_profile: Option<&str>) -> Option<&str> {
+        let profile = firmware_profile?;
+        let model = rc2fx_installer::DeviceModel::ALL.into_iter().find(|m| {
+            profile
+                .strip_prefix(m.id())
+                .is_some_and(|rest| rest.starts_with('-'))
+        })?;
+        self.rode
+            .iter()
+            .find(|r| r.model == model.id() && r.channel == "stable")
+            .map(|r| r.version.as_str())
+    }
+
+    fn set_rode(
+        &mut self,
+        model: rc2fx_installer::DeviceModel,
+        releases: Vec<rc2fx_installer::Release>,
+    ) {
+        self.rode.retain(|r| r.model != model.id());
+        self.rode.extend(releases);
     }
 
     /// The status line under "Check for updates"; `None` shows nothing.
@@ -190,6 +218,25 @@ impl Rc2FxApp {
             });
         })
         .detach();
+        // RØDE's own lists, so Versions can say when RØDE is ahead of RC2FX.
+        cx.spawn(async move |this, cx| {
+            let rode = cx
+                .background_executor()
+                .spawn(async {
+                    rc2fx_installer::DeviceModel::ALL
+                        .map(|m| (m, rc2fx_installer::rode_releases(m).ok()))
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                for (model, releases) in rode {
+                    if let Some(releases) = releases {
+                        app.app_update.set_rode(model, releases);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
         // Separate, so a slow download host never holds up the app's answer.
         cx.spawn(async move |this, cx| {
             let signed = cx
@@ -273,8 +320,53 @@ mod tests {
         AppUpdate {
             checking: false,
             signed: None,
+            rode: Vec::new(),
             last: Some((result.into(), manual)),
         }
+    }
+
+    #[test]
+    fn rode_firmware_is_rodes_newest_stable_for_the_mixers_model() {
+        use rc2fx_installer::DeviceModel;
+        let release = |model: DeviceModel, channel: &str, version: &str| rc2fx_installer::Release {
+            model: model.id().into(),
+            channel: channel.into(),
+            version: version.into(),
+            ..Default::default()
+        };
+        let mut u = after(UpdateCheck::NoRelease, false);
+        assert_eq!(u.rode_firmware(Some("rodecaster-pro-ii-1.7.7")), None);
+        u.set_rode(
+            DeviceModel::ProIi,
+            vec![
+                release(DeviceModel::ProIi, "beta", "1.8.1"),
+                release(DeviceModel::ProIi, "stable", "1.8.0"),
+                release(DeviceModel::ProIi, "stable", "1.7.7"),
+            ],
+        );
+        assert_eq!(
+            u.rode_firmware(Some("rodecaster-pro-ii-1.7.7")),
+            Some("1.8.0")
+        );
+        // The Duo is answered only from its own manifest.
+        assert_eq!(u.rode_firmware(Some("rodecaster-duo-1.7.7")), None);
+        u.set_rode(
+            DeviceModel::Duo,
+            vec![release(DeviceModel::Duo, "stable", "1.7.9")],
+        );
+        assert_eq!(u.rode_firmware(Some("rodecaster-duo-1.7.7")), Some("1.7.9"));
+        // A later answer for one model replaces only that model's list.
+        u.set_rode(
+            DeviceModel::ProIi,
+            vec![release(DeviceModel::ProIi, "stable", "1.8.2")],
+        );
+        assert_eq!(
+            u.rode_firmware(Some("rodecaster-pro-ii-1.7.7")),
+            Some("1.8.2")
+        );
+        assert_eq!(u.rode_firmware(Some("rodecaster-duo-1.7.7")), Some("1.7.9"));
+        assert_eq!(u.rode_firmware(Some("unknown-1.7.7")), None);
+        assert_eq!(u.rode_firmware(None), None);
     }
 
     #[test]

@@ -308,6 +308,11 @@ impl Rc2FxApp {
                 needs_app: needs_app.as_ref().map(|(v, m)| (v.as_str(), m.as_str())),
                 installed_firmware: firmware.as_deref(),
                 newest_supported_firmware: newest_firmware.as_deref(),
+                rode_firmware: self.app_update.rode_firmware(
+                    self.device_versions
+                        .as_ref()
+                        .and_then(|d| d.firmware_profile.as_deref()),
+                ),
                 device_protocol: self.device_versions.as_ref().and_then(|d| d.protocol),
             },
             &self.app_update.standing(),
