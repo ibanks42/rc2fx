@@ -1,0 +1,4 @@
+/* The front page's prose under the hero reads at doc width, not 1280px. */
+.VPHome .vp-doc.container {
+  max-width: 816px;
+}

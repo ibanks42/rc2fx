@@ -147,24 +147,29 @@ and `0030` in update mode.
 
 ## Release package
 
-`just package`, or `cargo xtask package` after `just mixer-build`, writes a
-zip on Windows and macOS, or an AppImage on Linux, to `target/package` (see
-[packaging](../developer/building.md#3-package-it)). It holds:
+`just package`, or `cargo xtask package`, writes the release packages for the
+current system to `target/package` (see
+[packaging](../developer/building.md#3-package-it)): on Windows and macOS an
+installer, a portable zip and the update package and feed, made by Velopack's
+`vpk`; on Linux an AppImage with its update package and feed, also made by
+`vpk`. Each holds:
 
 - the self-contained app,
 - the project licence, third-party notices, training-data credits and every
-  crate's licence text, built into the app under **Settings › Versions › Licenses › View licenses** (the
-  AppImage also carries them as `LICENSES.html`),
-- on Windows and macOS, a `SHA256SUMS` covering every file.
+  crate's licence text, built into the app under **Settings › About › View
+  licenses** (the AppImage also carries them as `LICENSES.html`).
 
-The runtime, catalog, `mixer-release.json` and scripts are embedded in the app and are not shipped
-as separate files. Packaging inspects the executable's embedded payload and
-fails if it is missing, corrupt, stale or from the wrong build kind. This
-check also runs with `--skip-build`.
+Release builds download the mixer payload. With `--embedded`, the runtime,
+catalog, `mixer-release.json` and scripts are embedded in the app instead and
+are not shipped as separate files. Packaging inspects the executable's payload
+mode, and for an embedded build its payload, and fails if it is missing,
+corrupt, stale or from the wrong build kind. This check also runs with
+`--skip-build`.
 
 `--target TRIPLE` builds another architecture for the same OS when that
-toolchain is installed. `--skip-build` reuses an existing release build.
-Builds are unsigned.
+toolchain is installed. `--skip-build` reuses an existing release build, and
+`--build-only` stops after building. Windows and macOS packages are signed
+only when signing is configured; see [Signing](../developer/releases.md#signing).
 
 ## Test status
 

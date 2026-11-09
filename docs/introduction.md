@@ -1,4 +1,8 @@
-# RC2FX
+---
+layout: home
+---
+
+<HomeHero />
 
 RC2FX adds audio processing to the RØDECaster Pro II: a parametric EQ, a
 compressor, a limiter, a high-pass filter, a gain stage and noise
@@ -86,7 +90,7 @@ The [developer guide](developer/index.md) covers building RC2FX, and the
 RC2FX's own code and its trained noise suppression weights are licensed under
 MIT. Third-party components keep their own licences, and the datasets the
 weights were trained on keep their own terms. The app lists them all under
-**Settings › Versions › Licenses**.
+**Settings › About › Licenses**.
 
 RC2FX is an unofficial project and is not affiliated with or endorsed by
 RØDE. It is provided as is, without warranty. Installing custom firmware may
