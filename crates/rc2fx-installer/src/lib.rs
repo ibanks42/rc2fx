@@ -12,6 +12,7 @@
 //! requested, and an unacknowledged command is never repeated automatically.
 
 mod anchor;
+pub mod app_release;
 pub mod app_update;
 pub mod control;
 pub mod embed;
