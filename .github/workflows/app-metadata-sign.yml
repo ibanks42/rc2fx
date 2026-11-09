@@ -1,0 +1,116 @@
+name: Sign app release metadata
+
+# Called by Release after it publishes an app release. Signs every asset of
+# that release into the app update metadata on the `app-metadata` branch, which
+# the app checks a downloaded update against before applying it. Re-run it
+# for the same tag to finish a run that stopped, or run it by hand for a
+# published release: a release already signed with the same assets is left as
+# it is, and an older release than the one signed is refused
+# (docs/developer/releases.md).
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The published app release tag, such as v1.2.3
+        required: true
+        type: string
+      # Release passes true: it signs only what that run built. A called
+      # workflow shares the caller's run, so its artifacts are readable here.
+      expect-artifacts:
+        description: Require the release to hold exactly this run's built packages
+        required: false
+        type: boolean
+        default: false
+  # By hand, the release is checked against GitHub's digests and its
+  # SHA256SUMS only: no build of this run vouches for it.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The published app release tag, such as v1.2.3
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    # The emergency stop: set the variable to false if a signing key leaks.
+    if: vars.APP_UPDATES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The same release keys as mixer releases, with the same reviewers. Only
+    # release-role keys belong here; root keys must remain offline.
+    environment: mixer-signing
+    permissions:
+      contents: write
+    # One writer at a time for the metadata branch, with renewal.
+    concurrency:
+      group: app-metadata
+      cancel-in-progress: false
+    steps:
+      - name: Require main
+        env:
+          CURRENT_REF: ${{ github.ref }}
+        run: test "$CURRENT_REF" = refs/heads/main
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: ""
+      - name: Test the publication tooling
+        run: python3 .github/scripts/test_app_release.py
+      - uses: actions/download-artifact@v8.0.2
+        if: inputs.expect-artifacts
+        with:
+          name: release-assets
+          path: target/built/release-assets
+      - uses: actions/download-artifact@v8.0.2
+        if: inputs.expect-artifacts
+        with:
+          name: macos-package
+          path: target/built/macos-package
+      - name: Download and check the published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          EXPECT_ARTIFACTS: ${{ inputs.expect-artifacts }}
+        run: |
+          rm -rf target/app-release target/app-metadata
+          built=()
+          if [ "$EXPECT_ARTIFACTS" = true ]; then
+            built=(--built target/built/release-assets --built target/built/macos-package)
+          fi
+          python3 .github/scripts/publish_app.py prepare --tag "$TAG" --dir target/app-release "${built[@]}"
+      - name: Build signing tool without signing credentials
+        if: steps.release.outputs.sign == 'true'
+        run: cargo build --locked -p xtask
+      - name: Sign the release assets
+        if: steps.release.outputs.sign == 'true'
+        env:
+          MIXER_TARGETS_KEY: ${{ secrets.MIXER_TARGETS_KEY }}
+          MIXER_SNAPSHOT_KEY: ${{ secrets.MIXER_SNAPSHOT_KEY }}
+          MIXER_TIMESTAMP_KEY: ${{ secrets.MIXER_TIMESTAMP_KEY }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s' "$MIXER_TARGETS_KEY" > "$keydir/targets.pem"
+          printf '%s' "$MIXER_SNAPSHOT_KEY" > "$keydir/snapshot.pem"
+          printf '%s' "$MIXER_TIMESTAMP_KEY" > "$keydir/timestamp.pem"
+          unset MIXER_TARGETS_KEY MIXER_SNAPSHOT_KEY MIXER_TIMESTAMP_KEY
+          # Below every mixer metadata version (Unix times), so this
+          # metadata served in place of the mixer's reads as a rollback.
+          sequence=$(( $(date -u +%s) - 1000000000 ))
+          expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
+          target/debug/xtask app-sign config/mixer-update-root.json target/app-release "$VERSION" target/app-metadata "$sequence" "$expires" "$keydir/targets.pem" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
+      - name: Commit the signed metadata to the metadata branch
+        if: steps.release.outputs.sign == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: python3 .github/scripts/publish_app.py publish --tag "$TAG" target/app-release target/app-metadata

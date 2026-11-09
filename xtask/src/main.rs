@@ -1,5 +1,6 @@
 //! Project tasks that work the same on Windows, Linux and macOS. Run through
 //! `just`, or directly as `cargo xtask <command>`.
+mod app_release;
 mod bench;
 mod elf;
 mod mixer;
@@ -26,6 +27,10 @@ const HELP: &str = "cargo xtask <command>
                         Sign mixer update metadata with existing release keys (never root keys)
   mixer-refresh ROOT METADATA OUT SEQUENCE EXPIRES SNAPSHOT_KEY TIMESTAMP_KEY
                         Renew discovery metadata without changing approved targets
+  app-sign ROOT ASSETS VERSION OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY TIMESTAMP_KEY
+                        Sign app update metadata for a downloaded, published app release
+  app-refresh ROOT METADATA OUT SEQUENCE EXPIRES SNAPSHOT_KEY TIMESTAMP_KEY
+                        Renew app discovery metadata without changing approved targets
   mixer <action>        Manage RC2FX on the mixer over SSH:
       run               run this build from RAM (a reboot returns to the installed build or stock)
       install           install to /opt/rc2fx and start at every boot
@@ -63,6 +68,8 @@ fn main() -> ExitCode {
         ["mixer-keys", destination] => mixer_keys::run(Path::new(destination)),
         ["mixer-sign", rest @ ..] => mixer_release::sign(rest),
         ["mixer-refresh", rest @ ..] => mixer_refresh::run(rest),
+        ["app-sign", rest @ ..] => app_release::sign(rest),
+        ["app-refresh", rest @ ..] => app_release::refresh(rest),
         ["mixer", action, rest @ ..] => mixer::run(action, rest),
         ["bench-build"] => bench::build(),
         ["bench", input, flags @ ..] => bench::run(input, flags),
