@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# `just package-check`: build the Linux release packages from the working tree
-# in a container, then install and test them in clean containers. Everything
-# stays under target/package-check. Needs no device, display or GitHub run.
+# `just package-check`, and the release's Linux build: build the AppImage from
+# the working tree in the AlmaLinux 8 container (glibc 2.28), then check it in
+# clean containers of several distributions. Everything stays under
+# target/package-check. Needs no device, display or GitHub run.
 set -euo pipefail
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || {
     echo 'package-check needs x86-64 Linux' >&2
@@ -35,10 +36,10 @@ esac
 
 scripts=.github/scripts
 rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
-tag=$(cat "$scripts/package-check.Containerfile" "$scripts/linux-build-deps.sh" rust-toolchain.toml |
+tag=$(cat "$scripts/package-check.Containerfile" rust-toolchain.toml |
     sha256sum | cut -c1-12)
 image=localhost/rc2fx-package-check:$tag
-"$engine" build --build-arg "RUST_VERSION=$rust" --build-arg "APT_REFRESH=$(date +%s)" -t "$image" \
+"$engine" build --build-arg "RUST_VERSION=$rust" --build-arg "PACKAGE_REFRESH=$(date +%s)" -t "$image" \
     -f "$scripts/package-check.Containerfile" "$scripts"
 
 check=$root/target/package-check

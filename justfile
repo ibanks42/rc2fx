@@ -31,7 +31,7 @@ desktop:
 desktop-mock:
     cargo build --locked --profile mock -p rc2fx-app --features mock-mixer
 
-# Build the desktop app and bundle it with its documentation into target/package
+# Build the desktop app and its packages into target/package (Windows and macOS need vpk)
 package:
     cargo xtask package
 
@@ -47,7 +47,7 @@ app-embedded-release: mixer-build
 desktop-embedded: mixer-build
     cargo build --locked --release -p rc2fx-app --features embedded
 
-# Build the Linux packages from the working tree in a container, then test installing them (Linux, needs podman or docker)
+# Build the AppImage from the working tree in the release container (glibc 2.28), then check it on several distributions (Linux, needs podman or docker)
 package-check:
     bash .github/scripts/package-check.sh
 
