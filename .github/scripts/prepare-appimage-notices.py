@@ -1,31 +1,41 @@
 #!/usr/bin/env python3
 """Notices and corresponding source for the AppImage type 2 runtime.
 
-The Linux AppImage starts with the AppImage type 2 runtime, a static
-executable that links a modified libfuse (LGPL-2.1) with squashfuse, zstd,
-zlib, musl and mimalloc. This script:
+The Linux AppImage is made by Velopack's vpk, which starts it with the
+AppImage type 2 runtime it vendors (vendor/appimagekit-runtime-x86_64 in the
+vpk NuGet package). The runtime is a static executable that links a modified
+libfuse (LGPL-2.1) with squashfuse, zstd, zlib, musl and mimalloc. This
+script:
 
-- fetches the runtime source at the pinned commit (checked by git),
+- takes that runtime from the vpk package, checked against the package's
+  pinned SHA-256 (the one setup-vpk.sh installs) and the runtime's own, and
+  reads the runtime commit the binary reports,
+- fetches the runtime source at that commit (checked by git),
 - fetches libfuse and squashfuse at the versions and SHA-256 checksums that
   the runtime's own build recipe pins,
 - fetches the Alpine aports build recipes and sources of zstd, zlib, musl and
   mimalloc at the aports 3.21-stable commit current when the runtime was
   built, checked against Alpine's SHA-512 sums,
-- writes target/appimage-legal/notices.json with the full licence texts, and
+- writes target/appimage-legal/notices.json with the full licence texts and
+  the runtime's digest and size, which packaging checks the finished AppImage
+  against, and
 - writes the AppImage runtime source archive to target/package with all of the
   above, the build scripts and patches, and a README on rebuilding and
   relinking.
 
-The runtime's recipe installs those four from `alpine:3.21` without pinning
-package revisions or the image digest, and its build log has expired. The
-aports commit used here is the last 3.21-stable commit before the runtime
-release was built (2025-12-08). The revisions are therefore inferred, and are
-recorded as such; zlib 1.3.1 matches the version string in the runtime binary.
+The vendored runtime is a continuous build of type2-runtime commit 3d17002
+(2026-03-07); no tagged release holds that binary. That commit differs from
+the 20251108 release only in CI workflow files. The runtime's recipe installs
+the four Alpine libraries from `alpine:3.21` without pinning package
+revisions or the image digest, and its build log has expired. The aports
+commit used here is the last 3.21-stable commit before that build. The
+revisions are therefore inferred, and are recorded as such; zlib 1.3.1 and
+zstd 1.5.6 match the version strings in the runtime binary.
 
 The script fails if any source or licence text is unavailable or
 does not match its checksum.
 
-Usage: prepare-appimage-notices.py [--root DIR] [--cache DIR]
+Usage: prepare-appimage-notices.py [--root DIR] [--cache DIR] [--vpk-package FILE]
 """
 
 from __future__ import annotations
@@ -43,23 +53,26 @@ import sys
 import tarfile
 import tempfile
 import time
+import zipfile
 import urllib.request
 from pathlib import Path
 
 RUNTIME_REPO = "https://github.com/AppImage/type2-runtime"
-RUNTIME_COMMIT = "dd6cebedcbddde9c82f89b011e8e1d40b6e43868"
-# The released runtime binary built from RUNTIME_COMMIT, as pinned in
-# setup-release-tools.sh. The script checks the release targets the commit
-# and the binary matches, and records the hash in notices.json so packaging
-# can refuse any other runtime.
-RUNTIME_RELEASE = "20251108"
-RUNTIME_SHA256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
-RUNTIME_RELEASE_API = "https://api.github.com/repos/AppImage/type2-runtime/releases/tags/{tag}"
-RUNTIME_BINARY = "https://github.com/AppImage/type2-runtime/releases/download/{tag}/runtime-x86_64"
+# The commit the vendored runtime reports (`--appimage-version` prints
+# https://github.com/AppImage/type2-runtime/commit/3d17002).
+RUNTIME_COMMIT = "3d17002ee2a519a288e28aeb7bc41af5f5adaf4e"
+RUNTIME_SHA256 = "a2419dce47568395ae79c01ffa9a5a341dd339581352ff104d073527543177e5"
+# The vpk that vendors it: keep in step with setup-vpk.sh and VPK_VERSION in
+# xtask/src/package/velopack.rs.
+VPK_VERSION = "1.3.39-g8d2844f"
+VPK_SHA256 = "1a7e031f285768b6418cae43baf98d3bc295510c140a7dc5757bf99af9b78ecf"
+VPK_PACKAGE = "https://api.nuget.org/v3-flatcontainer/vpk/{version}/vpk.{version}.nupkg"
+VPK_RUNTIME = "vendor/appimagekit-runtime-x86_64"
 ALPINE_BRANCH = "v3.21"
-# The last aports 3.21-stable commit before the runtime release at
-# RUNTIME_COMMIT was built (2025-12-08 11:23 +01:00). Inferred, not proven.
-APORTS_COMMIT = "590fd1489813473277cf110fd88b1c3888d19367"
+# The last aports 3.21-stable commit before the runtime at RUNTIME_COMMIT was
+# built (2026-03-07 19:32 UTC). Inferred, not proven. The four recipes below
+# are unchanged since February 2025, so earlier builds got the same ones.
+APORTS_COMMIT = "a1652b510b484befbf2e3f613dca969ba2abbdb7"
 ALPINE_DISTFILES = "https://distfiles.alpinelinux.org/distfiles/{branch}/{name}"
 APORTS_REPO = "https://github.com/alpinelinux/aports"
 
@@ -222,20 +235,39 @@ def git_source(repo: str, commit: str, prefix: str, paths: tuple[str, ...] = ())
     return data
 
 
-def collect(cache: Path | None) -> tuple[dict[str, bytes], list[dict], list[dict]]:
-    """Bundle files by path, the source manifest, and notice sections."""
+def vendored_runtime(vpk_package: Path | None, cache: Path | None) -> bytes:
+    """The runtime vpk puts in front of every AppImage, from the pinned vpk
+    package, checked to be the expected binary built from RUNTIME_COMMIT."""
+    url = VPK_PACKAGE.format(version=VPK_VERSION)
+    package = vpk_package.read_bytes() if vpk_package else fetch(url, cache)
+    require("sha256", package, VPK_SHA256, str(vpk_package or url))
+    try:
+        with zipfile.ZipFile(io.BytesIO(package)) as nupkg:
+            binary = nupkg.read(VPK_RUNTIME)
+    except (zipfile.BadZipFile, KeyError) as error:
+        raise Failure(f"vpk {VPK_VERSION} has no {VPK_RUNTIME}: {error}") from None
+    require("sha256", binary, RUNTIME_SHA256, f"vpk {VPK_VERSION} {VPK_RUNTIME}")
+    check_runtime_commit(binary)
+    return binary
+
+
+def check_runtime_commit(binary: bytes) -> None:
+    """The runtime names its source commit in its version string."""
+    found = set(re.findall(rb"github\.com/AppImage/type2-runtime/commit/([0-9a-f]{7,40})", binary))
+    if len(found) != 1 or not RUNTIME_COMMIT.startswith(found.pop().decode()):
+        raise Failure(f"the vendored runtime does not report commit {RUNTIME_COMMIT}")
+
+
+def collect(
+    cache: Path | None, vpk_package: Path | None = None
+) -> tuple[dict[str, bytes], list[dict], list[dict], int]:
+    """Bundle files by path, the source manifest, notice sections, and the
+    runtime's size."""
     files: dict[str, bytes] = {}
     manifest: list[dict] = []
     sections: list[dict] = []
 
-    release = json.loads(fetch(RUNTIME_RELEASE_API.format(tag=RUNTIME_RELEASE), None))
-    if release.get("target_commitish") != RUNTIME_COMMIT:
-        raise Failure(
-            f"runtime release {RUNTIME_RELEASE} targets {release.get('target_commitish')}, "
-            f"expected {RUNTIME_COMMIT}"
-        )
-    binary_url = RUNTIME_BINARY.format(tag=RUNTIME_RELEASE)
-    require("sha256", fetch(binary_url, cache), RUNTIME_SHA256, binary_url)
+    binary = vendored_runtime(vpk_package, cache)
     runtime = git_source(RUNTIME_REPO, RUNTIME_COMMIT, f"type2-runtime-{RUNTIME_COMMIT}")
     files[f"type2-runtime-{RUNTIME_COMMIT}.tar"] = runtime
     script = member(runtime, "scripts/common/install-dependencies.sh").decode()
@@ -248,8 +280,9 @@ def collect(cache: Path | None) -> tuple[dict[str, bytes], list[dict], list[dict
         "file": f"type2-runtime-{RUNTIME_COMMIT}.tar",
         "sha256": digest("sha256", runtime),
         "verification": (
-            f"git commit id; release {RUNTIME_RELEASE} targets it, and its runtime-x86_64 "
-            f"has sha256 {RUNTIME_SHA256}"
+            f"git commit id, the one the runtime binary reports; vpk {VPK_VERSION} vendors that "
+            f"binary as {VPK_RUNTIME}, sha256 {RUNTIME_SHA256}, in its package with sha256 "
+            f"{VPK_SHA256}"
         ),
     })
     sections.append({
@@ -334,18 +367,18 @@ def collect(cache: Path | None) -> tuple[dict[str, bytes], list[dict], list[dict
             "title": f"{component} {version.rsplit('-r', 1)[0]} (AppImage runtime)",
             "text": f"Licence: {licence}\n\n{licence_text}",
         })
-    return files, manifest, sections
+    return files, manifest, sections, len(binary)
 
 
 README = """# AppImage runtime sources
 
-The RC2FX Linux AppImage starts with the AppImage type 2 runtime
-({repo}, commit {commit}). The runtime is a static executable. It links a
-modified libfuse 3.15.0, which is licensed under the GNU Lesser General Public
-License 2.1, together with squashfuse, zstd, zlib, musl and mimalloc. This
-archive holds their source so that you can rebuild the runtime, with a
-modified libfuse if you wish, and put it in front of RC2FX's application
-image.
+The RC2FX Linux AppImage is made by Velopack's vpk {vpk}, which starts it
+with the AppImage type 2 runtime it vendors ({repo}, commit {commit}). The
+runtime is a static executable. It links a modified libfuse 3.15.0, which is
+licensed under the GNU Lesser General Public License 2.1, together with
+squashfuse, zstd, zlib, musl and mimalloc. This archive holds their source so
+that you can rebuild the runtime, with a modified libfuse if you wish, and put
+it in front of RC2FX's application image.
 
 ## Contents
 
@@ -364,18 +397,21 @@ image.
 ## What is and isn't verified
 
 The runtime, libfuse and squashfuse are pinned: the runtime by its git commit,
-and libfuse and squashfuse by the checksums in the runtime's own recipe.
+which the runtime binary reports and which is checked against the binary in
+vpk's package (SHA-256 {runtime_sha}), and libfuse and squashfuse by the
+checksums in the runtime's own recipe. The binary is a continuous build of
+that commit; that commit changes only CI files since the 20251108 release.
 
 The runtime's Dockerfile installs zstd, zlib, musl and mimalloc from the
 `alpine:{alpine}` image without pinning the image digest or the package
-revisions, and the log of the build that produced the released runtime has
+revisions, and the log of the build that produced the vendored runtime has
 expired. The `alpine/` recipes are from aports commit {aports}, the last
 {alpine}-stable commit before that build, and the sources are checked against
 their SHA-512 sums. These revisions are inferred: they are not verified to be
 the exact ones linked into the runtime in the AppImage, although zlib 1.3.1
-matches the version string in the runtime binary. `SOURCES.json` says so for
-each file. Whether the runtime links mimalloc's secure or insecure build is
-not verified either.
+and zstd 1.5.6 match the version strings in the runtime binary.
+`SOURCES.json` says so for each file. Whether the runtime links mimalloc's
+secure or insecure build is not verified either.
 
 Rebuilding is best effort: this archive is not claimed to reproduce a
 byte-identical runtime. Rebuilding the runtime with a modified libfuse needs
@@ -401,12 +437,16 @@ An AppImage is the runtime followed by a SquashFS image of the application.
 To combine your runtime with RC2FX's application image:
 
 ```sh
-appimage=./rc2fx-0.1.0-linux-x64.AppImage   # the RC2FX AppImage you downloaded
+appimage=./rc2fx-linux-x64.AppImage   # the RC2FX AppImage you downloaded
 offset=$("$appimage" --appimage-offset)
 tail -c +$((offset + 1)) "$appimage" > rc2fx.squashfs
 cat out/runtime-x86_64 rc2fx.squashfs > rc2fx-relinked.AppImage
 chmod +x rc2fx-relinked.AppImage
 ```
+
+RC2FX's in-app updates replace the whole AppImage with the next official one,
+runtime included. Turn updates off, or relink each new version, to keep your
+runtime.
 """
 
 
@@ -432,15 +472,28 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--cache", type=Path, help="reuse downloads across runs")
+    parser.add_argument(
+        "--vpk-package", type=Path, help="the vpk NuGet package already downloaded by setup-vpk.sh"
+    )
     args = parser.parse_args()
     try:
-        files, manifest, sections = collect(args.cache)
-    except (Failure, subprocess.CalledProcessError, tarfile.TarError, UnicodeDecodeError) as error:
+        files, manifest, sections, size = collect(args.cache, args.vpk_package)
+    except (
+        Failure, OSError, subprocess.CalledProcessError, tarfile.TarError, UnicodeDecodeError
+    ) as error:
         print(f"prepare-appimage-notices: {error}", file=sys.stderr)
         return 1
-    notices = {"schemaVersion": 1, "runtimeSha256": RUNTIME_SHA256, "sections": sections}
+    # Packaging checks that the AppImage starts with exactly this runtime.
+    notices = {
+        "schemaVersion": 2,
+        "runtimeSha256": RUNTIME_SHA256,
+        "runtimeSize": size,
+        "runtimeCommit": RUNTIME_COMMIT,
+        "sections": sections,
+    }
     files["README.md"] = README.format(
-        repo=RUNTIME_REPO, commit=RUNTIME_COMMIT, alpine=ALPINE_BRANCH[1:], aports=APORTS_COMMIT
+        repo=RUNTIME_REPO, commit=RUNTIME_COMMIT, alpine=ALPINE_BRANCH[1:], aports=APORTS_COMMIT,
+        vpk=VPK_VERSION, runtime_sha=RUNTIME_SHA256,
     ).encode()
     files["SOURCES.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
     files["LICENSES.json"] = (json.dumps(notices, indent=2, ensure_ascii=False) + "\n").encode()

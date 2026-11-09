@@ -68,19 +68,19 @@ jobs:
     needs: prepare
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # Azure Artifact Signing signs in through GitHub's OIDC token.
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
-        # Build against a fixed glibc baseline, not a moving runner image.
-        os: [ubuntu-24.04, windows-latest]
+        os: [windows-latest]
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: sh .github/scripts/linux-build-deps.sh
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache: false
@@ -91,14 +91,6 @@ jobs:
         with:
           tool: cargo-about@0.8.4
           fallback: none
-      - uses: actions/cache@v6.1.0
-        if: runner.os == 'Linux'
-        with:
-          path: ~/.cache/rc2fx-release-tools/appimage
-          key: release-appimage-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/setup-release-tools.sh') }}
-      - name: Set up verified AppImage tools
-        if: runner.os == 'Linux'
-        run: bash .github/scripts/setup-release-tools.sh appimage
       - uses: actions/download-artifact@v8.0.2
         with:
           name: release-input
@@ -112,29 +104,102 @@ jobs:
           cache-bin: false
           cache-workspace-crates: true
           cache-on-failure: true
-      - name: Prepare AppImage runtime licenses and corresponding sources
-        if: runner.os == 'Linux'
-        run: |
-          python3 .github/scripts/test_prepare_appimage_notices.py
-          python3 .github/scripts/prepare-appimage-notices.py
-      - name: Build release package
+      # Velopack's vpk makes the packages and signs them, with Azure Artifact
+      # Signing when the signing variables are set.
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Set up verified vpk
+        run: bash .github/scripts/setup-vpk.sh
+      - name: Check the Windows signing settings
+        id: windows-signing
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: .github/scripts/windows-signing.ps1
+      # Sign in to Azure only after the long build, so the session is fresh
+      # when signing starts.
+      - name: Build the Windows release executable
         env:
           RC2FX_RELEASE_BUILD: "1"
-        run: cargo xtask package
-      - name: Test Linux package installation and AppImage contents
-        if: runner.os == 'Linux'
+        run: cargo xtask package --build-only
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        if: steps.windows-signing.outputs.enabled == 'true'
+        with:
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          # The signing app holds a role on the certificate profile only.
+          allow-no-subscriptions: true
+      - name: Sign and package the Windows release
         env:
-          CONTAINER_ENGINE: docker
-        run: bash .github/scripts/test-linux-packages.sh target/package
+          RC2FX_RELEASE_BUILD: "1"
+        run: cargo xtask package --skip-build
+      - name: Verify the Windows signatures
+        if: steps.windows-signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $zip = @(Get-ChildItem target/package/rc2fx-windows-x64.zip)
+          $setup = @(Get-ChildItem target/package/rc2fx-windows-x64-setup.exe)
+          if ($zip.Count -ne 1 -or $setup.Count -ne 1) { throw "Expected one Windows zip and one setup, found $($zip.Count) and $($setup.Count)" }
+          $dir = Join-Path $env:RUNNER_TEMP rc2fx-signature-check
+          Remove-Item -Recurse -Force $dir -ErrorAction Ignore
+          Expand-Archive $zip[0].FullName -DestinationPath $dir
+          # The launcher, the updater, the app itself, and Setup.
+          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "$($file.Name) signature is $($signature.Status): $($signature.StatusMessage)" }
+            if (-not $signature.TimeStamperCertificate) { throw "$($file.Name) signature has no timestamp" }
+            Write-Host "$($file.Name) signed by $($signature.SignerCertificate.Subject)"
+          }
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: rc2fx-package-${{ matrix.os }}
           path: |
-            target/package/*.AppImage
-            target/package/*.deb
-            target/package/*.rpm
-            target/package/*.zip
-            target/package/rc2fx-*-appimage-runtime-sources.tar.gz
+            target/package/rc2fx-windows-x64.zip
+            target/package/rc2fx-windows-x64-setup.exe
+            target/package/io.github.ibanks42.rc2fx-*-full.nupkg
+            target/package/releases.win.json
+          if-no-files-found: error
+
+  # The AppImage is built in the AlmaLinux 8 container of `just package-check`
+  # (glibc 2.28), so it runs on older distributions than the runner's, and is
+  # then tested in clean containers of several distributions.
+  linux:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # Outside the work tree: package-check builds from a snapshot of it.
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: release-input
+          path: ${{ runner.temp }}/release-input
+      - name: Apply release version
+        env:
+          RELEASE_INPUT: ${{ runner.temp }}/release-input
+        run: tar -xf "$RELEASE_INPUT/versioned.tar"
+      - name: Build and test the AppImage
+        env:
+          CONTAINER_ENGINE: docker
+        run: bash .github/scripts/package-check.sh
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: rc2fx-package-linux
+          path: |
+            target/package-check/target/package/rc2fx-linux-x64.AppImage
+            target/package-check/target/package/io.github.ibanks42.rc2fx-*-linux-full.nupkg
+            target/package-check/target/package/releases.linux.json
+            target/package-check/target/package/rc2fx-*-appimage-runtime-sources.tar.gz
           if-no-files-found: error
 
   # Beside the other platforms; only publish waits for it. If it fails, the
@@ -169,10 +234,17 @@ jobs:
           cache-bin: false
           cache-workspace-crates: true
           cache-on-failure: true
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Set up verified vpk
+        run: bash .github/scripts/setup-vpk.sh
       - name: Load the Apple signing credentials
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
@@ -184,11 +256,15 @@ jobs:
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: macos-package
-          path: target/package/rc2fx-*-macos-arm64.zip
+          path: |
+            target/package/rc2fx-macos-arm64.zip
+            target/package/rc2fx-macos-arm64.pkg
+            target/package/io.github.ibanks42.rc2fx-*-osx-full.nupkg
+            target/package/releases.osx.json
           if-no-files-found: error
 
   release:
-    needs: [prepare, build]
+    needs: [prepare, build, linux]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -210,6 +286,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib
+          import json
           from pathlib import Path
           import zipfile
           import tarfile
@@ -220,11 +297,18 @@ jobs:
           version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
           prefix = f'rc2fx-{version}'
           sources_name = f'{prefix}-appimage-runtime-sources.tar.gz'
-          expected = {f'{prefix}-linux-x64.AppImage', f'{prefix}-linux-x64.deb', f'{prefix}-linux-x64.rpm',
-                      f'{prefix}-windows-x64.zip', sources_name}
-          assert {p.name for p in archives} == expected, 'Missing or unexpected release package'
+          pack = 'io.github.ibanks42.rc2fx'
+          # Velopack's update packages and feeds keep its names: each feed names its package.
+          feeds = {'releases.win.json': f'{pack}-{version}-full.nupkg',
+                   'releases.linux.json': f'{pack}-{version}-linux-full.nupkg'}
+          # Published names have no version, so releases/latest/download/NAME
+          # always links the newest release.
+          appimage = 'rc2fx-linux-x64.AppImage'
+          expected = {appimage, 'rc2fx-windows-x64.zip', 'rc2fx-windows-x64-setup.exe', sources_name,
+                      *feeds, *feeds.values()}
+          names = {p.name for p in archives}
+          assert names == expected, f'Missing or unexpected release packages: {sorted(names ^ expected)}'
           for archive in archives:
-              assert archive.name.startswith('rc2fx-'), archive
               if archive.name == sources_name:
                   with tarfile.open(archive, 'r:gz') as sources:
                       assert sources.getmembers(), 'Empty runtime source archive'
@@ -232,14 +316,29 @@ jobs:
                   with archive.open('rb') as stream:
                       header = stream.read(11)
                   assert header[:4] == b'\x7fELF' and header[8:11] == b'AI\x02', 'Invalid AppImage'
-              elif archive.suffix in {'.deb', '.rpm'}:
+              elif archive.suffix == '.exe':
                   with archive.open('rb') as stream:
-                      header = stream.read(8)
-                  assert header.startswith(b'!<arch>\n' if archive.suffix == '.deb' else bytes.fromhex('edabeedb')), 'Invalid native package'
+                      assert stream.read(2) == b'MZ', 'Invalid Windows installer'
+              elif archive.suffix == '.json':
+                  # The app downloads the package this feed names and checks it against this digest.
+                  package_name = feeds[archive.name]
+                  assets = json.loads(archive.read_text())['Assets']
+                  package = (directory / package_name).read_bytes()
+                  assert [(a['PackageId'], a['Version'], a['Type'], a['FileName'], a['SHA256'].lower()) for a in assets] == [
+                      (pack, version, 'Full', package_name, hashlib.sha256(package).hexdigest())
+                  ], f'{archive.name} does not describe its update package'
               else:
-                  assert archive.suffix == '.zip', archive
+                  assert archive.suffix in {'.zip', '.nupkg'}, archive
                   with zipfile.ZipFile(archive) as package:
                       assert package.testzip() is None
+                      members = set(package.namelist())
+                      if archive.name == feeds['releases.linux.json']:
+                          # An AppImage update puts this file in place of the running AppImage.
+                          inside = package.read(f'lib/app/{pack}.AppImage')
+                          assert inside == (directory / appimage).read_bytes(), f'{archive.name} holds another AppImage'
+                          continue
+                  needed = {'lib/app/rc2fx.exe'} if archive.suffix == '.nupkg' else {'RC2FX.exe', 'Update.exe', 'current/rc2fx.exe'}
+                  assert needed <= members, f'{archive.name} lacks {sorted(needed - members)}'
           sums = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in archives)
           (directory / 'SHA256SUMS').write_text(sums)
           print(sums)
@@ -291,7 +390,6 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write
-      actions: write
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -307,8 +405,32 @@ jobs:
           RELEASE_SOURCE: ${{ github.sha }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: python3 .github/scripts/macos_release.py publish --tag "$RELEASE_TAG" --source "$RELEASE_SOURCE" --package-dir target/macos-assets
+
+  # Its own job, so a failed dispatch never holds up signing the release.
+  docs:
+    needs: [publish]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
       - name: Dispatch the release documentation deployment
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh workflow run docs.yml --ref main -f source=latest-release
+
+  # Signs the published release into the app update metadata, which the app
+  # checks every update package against.
+  app-metadata:
+    needs: [prepare, publish]
+    if: ${{ !inputs.dry-run }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/app-metadata-sign.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      # Sign only the packages this run built and published.
+      expect-artifacts: true
+    secrets: inherit

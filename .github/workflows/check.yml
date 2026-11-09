@@ -74,6 +74,7 @@ jobs:
         run: |
           python3 .github/scripts/test_release.py
           python3 .github/scripts/test_macos_release.py
+          python3 .github/scripts/test_app_release.py
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
       # Their Rust tests run with the workspace above.

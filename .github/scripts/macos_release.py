@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Finish an app release by adding the macOS package, then publish it.
+"""Finish an app release by adding the macOS packages, then publish it.
 
 The Release workflow creates the release as a DRAFT with the Linux and Windows
-packages; its last job calls this script with the macOS package built in the
-same run. It adds the package, rewrites SHA256SUMS, removes the pending notice
-and, as the very last step after every check, publishes the release as latest.
+packages; its last job calls this script with the macOS packages Velopack
+built in the same run: the portable zip, the installer, and the update package
+and feed. It adds them, rewrites SHA256SUMS, removes the pending notice and, as
+the very last step after every check, publishes the release as latest.
 A published release is never changed afterwards by this script.
 
   publish --tag TAG --source SHA --package-dir DIR
       Finish the draft and publish it as latest, last. A release someone
       published by hand before it was complete is finished but not published
       again, so which release is latest is left as they chose. On a complete
-      published release, only check that it holds this exact macOS zip. A
+      published release, only check that it holds these exact macOS packages. A
       draft older than the newest published release is refused before any
       change and again just before publishing: publishing it as latest would
       move latest backwards.
@@ -167,30 +168,93 @@ def check_tag(gh, tag, source):
     require(parents == [source], f"release commit for {tag} is not on top of {source}")
 
 
-APP_MEMBERS = ("rc2fx/RC2FX.app/Contents/MacOS/rc2fx", "rc2fx/RC2FX.app/Contents/Info.plist")
+PACK_ID = "io.github.ibanks42.rc2fx"
+APP = "RC2FX.app/"
+SEQUESTERED = "__MACOSX/"
+APP_MEMBERS = (
+    "RC2FX.app/Contents/MacOS/rc2fx",
+    "RC2FX.app/Contents/MacOS/UpdateMac",
+    "RC2FX.app/Contents/Info.plist",
+)
+
+
+def mac_names(version):
+    """The macOS packages, which this script adds: the portable zip, the
+    installer, and the update package and its feed (which keep vpk's names,
+    since the feed names the package). The feed comes last."""
+    return ("rc2fx-macos-arm64.zip", "rc2fx-macos-arm64.pkg",
+            f"{PACK_ID}-{version}-osx-full.nupkg", "releases.osx.json")
 
 
 def expected_assets(version):
-    prefix = f"rc2fx-{version}"
+    """The twelve packages, without SHA256SUMS. Published names have no
+    version, so releases/latest/download/NAME always links the newest one;
+    the update packages and feeds keep vpk's names, which do."""
     return {
-        f"{prefix}-linux-x64.AppImage", f"{prefix}-linux-x64.deb", f"{prefix}-linux-x64.rpm",
-        f"{prefix}-appimage-runtime-sources.tar.gz", f"{prefix}-windows-x64.zip",
-        f"{prefix}-macos-arm64.zip",
+        "rc2fx-linux-x64.AppImage", f"{PACK_ID}-{version}-linux-full.nupkg",
+        "releases.linux.json", f"rc2fx-{version}-appimage-runtime-sources.tar.gz",
+        "rc2fx-windows-x64.zip", "rc2fx-windows-x64-setup.exe",
+        f"{PACK_ID}-{version}-full.nupkg", "releases.win.json", *mac_names(version),
     }
 
 
-def check_package(path):
-    """A sound macOS zip holding the app bundle under rc2fx/."""
+def sound_zip(path):
+    """The entry names of a sound zip; a repeated name is refused."""
     require(zipfile.is_zipfile(path), f"{path.name} is not a zip")
     with zipfile.ZipFile(path) as package:
         require(package.testzip() is None, f"{path.name} is damaged")
         entries = [i.filename for i in package.infolist()]
-        require(len(set(entries)) == len(entries), f"{path.name} repeats an entry name")
-        for entry in entries:
-            require(entry.startswith("rc2fx/"), f"{path.name} has {entry!r} outside rc2fx/")
-            safe_relative(entry.rstrip("/"))
-        for member in APP_MEMBERS:
-            require(member in entries, f"{path.name} has no {member}")
+    require(len(set(entries)) == len(entries), f"{path.name} repeats an entry name")
+    return entries
+
+
+def check_portable(path):
+    """Velopack's portable zip: the app bundle (`ditto --keepParent`), with
+    its updater, and nothing outside it but the bundle's sequestered
+    AppleDouble entries (`--sequesterRsrc`): __MACOSX/._RC2FX.app for the
+    bundle folder itself, and those under __MACOSX/RC2FX.app/."""
+    entries = sound_zip(path)
+    for entry in entries:
+        require(entry.startswith((APP, SEQUESTERED + APP))
+                or entry in (SEQUESTERED, SEQUESTERED + "._" + APP.rstrip("/")),
+                f"{path.name} has {entry!r} outside {APP} and {SEQUESTERED + APP}")
+        safe_relative(entry.rstrip("/"))
+    for member in APP_MEMBERS:
+        require(member in entries, f"{path.name} has no {member}")
+
+
+def check_installer(path):
+    """A macOS installer package: a non-empty xar archive."""
+    with path.open("rb") as package:
+        magic = package.read(4)
+    require(magic, f"{path.name} is empty")
+    require(magic == b"xar!", f"{path.name} is not a xar archive; it is not an installer package")
+
+
+def check_update_package(path):
+    """A NuGet package: a sound zip with its .nuspec at the root."""
+    entries = sound_zip(path)
+    require(any("/" not in e and e.endswith(".nuspec") for e in entries),
+            f"{path.name} has no .nuspec at its root")
+
+
+def check_feed(path, version, package, digest):
+    """The feed must offer exactly this release's package, with its digest:
+    that digest is what the app checks the download against."""
+    try:
+        feed = json.loads(path.read_bytes())
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise Refused(f"{path.name} is not JSON: {error}") from None
+    assets = feed.get("Assets") if isinstance(feed, dict) else None
+    require(isinstance(assets, list) and len(assets) == 1,
+            f"{path.name} does not list exactly one package")
+    asset = assets[0]
+    require(isinstance(asset, dict), f"{path.name} lists a package that is not an object")
+    field = lambda name: asset.get(name) if isinstance(asset.get(name), str) else ""
+    require(field("PackageId") == PACK_ID and field("Version") == version
+            and field("Type") == "Full" and field("FileName") == package
+            and field("SHA256").lower() == digest,
+            f"{path.name} does not describe {package} {version} with SHA-256 {digest}")
 
 
 def asset_map(release):
@@ -214,22 +278,24 @@ def verified_bytes(gh, asset):
 
 
 def sums_for(gh, assets, version):
-    """SHA256SUMS text for the six packages, from their actual bytes."""
+    """SHA256SUMS text for the packages, from their actual bytes."""
     names = set(assets) - {"SHA256SUMS"}
     require(names == expected_assets(version),
             f"release assets are not exactly the expected packages: {sorted(names)}")
     return "".join(f"{sha256(verified_bytes(gh, assets[n]))}  {n}\n" for n in sorted(names))
 
 
-def complete(gh, release, version, mac_sha=None):
-    """Whether a release holds exactly the six packages and a SHA256SUMS that
-    matches them, has no pending notice, and (if given) this macOS zip."""
+def complete(gh, release, version, mac_shas=None):
+    """Whether a release holds exactly the packages and a SHA256SUMS that
+    matches them, has no pending notice, and (if given, as {name: sha256})
+    these macOS packages."""
     assets = asset_map(release)
-    if set(assets) != expected_assets(version) | {"SHA256SUMS"}:
+    names = set(assets) - {"SHA256SUMS"}
+    if "SHA256SUMS" not in assets or names != expected_assets(version):
         return False
-    mac = assets[f"rc2fx-{version}-macos-arm64.zip"]
-    if mac_sha is not None and sha256(verified_bytes(gh, mac)) != mac_sha:
-        return False
+    for name, digest in sorted((mac_shas or {}).items()):
+        if name not in assets or sha256(verified_bytes(gh, assets[name])) != digest:
+            return False
     if PENDING.search(release.get("body") or ""):
         return False
     return verified_bytes(gh, assets["SHA256SUMS"]).decode() == sums_for(gh, assets, version)
@@ -253,17 +319,23 @@ def publish(gh, tag, source, package_dir):
     require(re.fullmatch("v" + STABLE, tag), f"{tag!r} is not a stable app tag")
     require(re.fullmatch("[0-9a-f]{40}", source), f"{source!r} is not a commit id")
     version = tag[1:]
-    name = f"rc2fx-{version}-macos-arm64.zip"
+    zip_name, pkg_name, nupkg_name, feed_name = names = mac_names(version)
     files = sorted(p.name for p in Path(package_dir).iterdir())
-    require(files == [name], f"{package_dir} must hold exactly {name}, not {files}")
-    package = Path(package_dir) / name
-    require(package.is_file() and not package.is_symlink(), f"{name} is not a regular file")
-    check_package(package)
-    ours = sha256(package.read_bytes())
+    require(files == sorted(names),
+            f"{package_dir} must hold exactly {', '.join(sorted(names))}, not {files}")
+    packages = {name: Path(package_dir) / name for name in names}
+    for name, package in packages.items():
+        require(package.is_file() and not package.is_symlink(), f"{name} is not a regular file")
+    check_portable(packages[zip_name])
+    check_installer(packages[pkg_name])
+    check_update_package(packages[nupkg_name])
+    check_feed(packages[feed_name], version, nupkg_name,
+               sha256(packages[nupkg_name].read_bytes()))
+    ours = {name: sha256(package.read_bytes()) for name, package in packages.items()}
     release = find_release(gh, tag)
     require(release is not None, f"release {tag} does not exist")
     check_tag(gh, tag, source)
-    if not release.get("draft") and complete(gh, release, version, mac_sha=ours):
+    if not release.get("draft") and complete(gh, release, version, mac_shas=ours):
         return "already complete\n"  # read only: nothing to change
     if release.get("draft"):
         refuse_if_behind(gh, tag)
@@ -272,18 +344,24 @@ def publish(gh, tag, source, package_dir):
     release_id = release["id"]
     release = changeable(gh, tag, release_id)
     assets = asset_map(release)
-    present = set(assets) - {"SHA256SUMS", name}
-    require(present == expected_assets(version) - {name},
+    present = set(assets) - {"SHA256SUMS", *names}
+    require(present == expected_assets(version) - set(names),
             f"release {tag} does not hold exactly the other packages: {sorted(present)}")
-    if name in assets:
-        require(sha256(verified_bytes(gh, assets[name])) == ours,
-                f"release {tag} already has a different {name}; not replacing it")
-    else:
-        gh.upload_asset(release_id, package)
+    # Every existing copy is checked before any upload. The feed is uploaded
+    # last, after the package it names.
+    for name in names:
+        if name in assets:
+            require(sha256(verified_bytes(gh, assets[name])) == ours[name],
+                    f"release {tag} already has a different {name}; not replacing it")
+    for name in names:
+        release = changeable(gh, tag, release_id)
+        if name not in asset_map(release):
+            gh.upload_asset(release_id, packages[name])
     release = changeable(gh, tag, release_id)
     assets = asset_map(release)
-    require(name in assets and sha256(verified_bytes(gh, assets[name])) == ours,
-            f"uploaded {name} does not match")
+    for name in names:
+        require(name in assets and sha256(verified_bytes(gh, assets[name])) == ours[name],
+                f"uploaded {name} does not match")
     sums = sums_for(gh, assets, version)
     if "SHA256SUMS" not in assets or verified_bytes(gh, assets["SHA256SUMS"]).decode() != sums:
         with tempfile.TemporaryDirectory() as work:
@@ -301,7 +379,7 @@ def publish(gh, tag, source, package_dir):
     # Last: everything checked again on the release as it now is. A draft is
     # published as latest; a release already published by hand is left so.
     release = changeable(gh, tag, release_id)
-    require(complete(gh, release, version, mac_sha=ours), f"release {tag} is not complete")
+    require(complete(gh, release, version, mac_shas=ours), f"release {tag} is not complete")
     if release.get("draft"):
         # A newer release may have been published during this run.
         refuse_if_behind(gh, tag)

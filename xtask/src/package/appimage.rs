@@ -1,8 +1,10 @@
 //! Linux release payload: a minimal AppDir assembled here, shared libraries
-//! deployed by the externally supplied `linuxdeploy`, and the image packaged
-//! directly by the separately pinned `appimagetool`. No repository
-//! documentation, source, configuration or mixer sidecars enter the image.
+//! deployed by the externally supplied `linuxdeploy`, and the AppImage, its
+//! update package and feed made from that AppDir by Velopack's vpk (see
+//! `velopack`). No repository documentation, source, configuration or mixer
+//! sidecars enter the image.
 use crate::{Result, run, sha256};
+use serde_json::Value;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -12,11 +14,12 @@ use std::{
 const APPRUN: &str = include_str!("../../assets/rc2fx.AppRun");
 const DESKTOP: &str = include_str!("../../assets/rc2fx.desktop");
 const ICON: &[u8] = include_bytes!("../../assets/rc2fx.svg");
+/// Notices for the AppImage runtime, written by prepare-appimage-notices.py.
+const NOTICES: &str = "target/appimage-legal/notices.json";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tools {
     pub linuxdeploy: PathBuf,
-    pub appimagetool: PathBuf,
-    pub runtime: PathBuf,
     pub patchelf: PathBuf,
 }
 
@@ -27,8 +30,6 @@ impl Tools {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             linuxdeploy: tool("RC2FX_LINUXDEPLOY")?,
-            appimagetool: tool("RC2FX_APPIMAGETOOL")?,
-            runtime: tool("RC2FX_APPIMAGE_RUNTIME")?,
             patchelf: tool("RC2FX_PATCHELF")?,
         })
     }
@@ -115,8 +116,8 @@ pub fn stage(appdir: &Path, executable: &[u8], licenses: &[(String, Vec<u8>)]) -
     Ok(())
 }
 
-/// AppDir root entries required by appimagetool. linuxdeploy normally makes
-/// these, but keep the fallback deterministic when it does not.
+/// AppDir root entries the AppImage format requires. linuxdeploy normally
+/// makes these, but keep the fallback deterministic when it does not.
 fn ensure_root_entries(appdir: &Path) -> Result {
     for (source, target) in [
         ("usr/share/applications/rc2fx.desktop", "rc2fx.desktop"),
@@ -159,52 +160,68 @@ fn ensure_regular_apprun(appdir: &Path) -> Result {
 
 /// Notices for the libraries linuxdeploy is allowed to copy. Take the exact
 /// build host's copyright files; never substitute generic license templates.
+/// Paths are Debian's and then RHEL's (the release container is AlmaLinux 8).
+/// RHEL's libxcb ships no license file, so that container extracts libxcb's
+/// COPYING from the matching source package into /usr/share/licenses/libxcb.
+/// libXdmcp, libbsd and libmd come in only where libxcb links them (Debian),
+/// so they need notices only when the build host has them.
 pub fn license_sections(root: &Path) -> Result<Vec<(String, String)>> {
     let mut sections = Vec::new();
-    for (name, locations) in [
+    for (name, locations, only_with) in [
         (
             "libxkbcommon / libxkbcommon-x11",
-            [
+            &[
                 "/usr/share/doc/libxkbcommon0/copyright",
                 "/usr/share/licenses/libxkbcommon/LICENSE",
-            ],
+            ][..],
+            None,
         ),
         (
             "libXau",
-            [
+            &[
                 "/usr/share/doc/libxau6/copyright",
                 "/usr/share/doc/libXau/COPYING",
-            ],
+                "/usr/share/licenses/libXau/COPYING",
+            ][..],
+            None,
         ),
         (
             "libXdmcp",
-            [
+            &[
                 "/usr/share/doc/libxdmcp6/copyright",
                 "/usr/share/doc/libXdmcp/COPYING",
-            ],
+                "/usr/share/licenses/libXdmcp/COPYING",
+            ][..],
+            Some("libXdmcp.so.6"),
         ),
         (
             "libxcb-xkb",
-            [
+            &[
                 "/usr/share/doc/libxcb-xkb1/copyright",
                 "/usr/share/licenses/libxcb/COPYING",
-            ],
+            ][..],
+            None,
         ),
         (
             "libbsd",
-            [
+            &[
                 "/usr/share/doc/libbsd0/copyright",
                 "/usr/share/licenses/libbsd/COPYING",
-            ],
+            ][..],
+            Some("libbsd.so.0"),
         ),
         (
             "libmd",
-            [
+            &[
                 "/usr/share/doc/libmd0/copyright",
                 "/usr/share/licenses/libmd/COPYING",
-            ],
+            ][..],
+            Some("libmd.so.0"),
         ),
     ] {
+        if only_with.is_some_and(|library| !host_has_library(library)) {
+            continue;
+        }
         let path = locations
             .iter()
             .map(Path::new)
@@ -216,28 +233,7 @@ pub fn license_sections(root: &Path) -> Result<Vec<(String, String)>> {
         }
         sections.push((format!("AppImage library — {name}"), text));
     }
-    let path = root.join("target/appimage-legal/notices.json");
-    let data = fs::read(&path).map_err(|e| {
-        format!(
-            "{}: {e}; run python3 .github/scripts/prepare-appimage-notices.py",
-            path.display()
-        )
-    })?;
-    let document: serde_json::Value = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
-    let runtime_path = tool("RC2FX_APPIMAGE_RUNTIME")?;
-    let runtime_bytes = fs::read(&runtime_path).map_err(|e| e.to_string())?;
-    let expected = document["runtimeSha256"]
-        .as_str()
-        .ok_or("AppImage notices do not identify the runtime")?;
-    if sha256(&runtime_bytes) != expected {
-        return Err(
-            "AppImage runtime differs from the version covered by its notices and source bundle"
-                .into(),
-        );
-    }
-    if document["schemaVersion"] != 1 {
-        return Err("unsupported AppImage notices schema".into());
-    }
+    let document = notices(root)?;
     let runtime = document["sections"]
         .as_array()
         .filter(|v| !v.is_empty())
@@ -254,6 +250,60 @@ pub fn license_sections(root: &Path) -> Result<Vec<(String, String)>> {
         sections.push((title.to_owned(), text.to_owned()));
     }
     Ok(sections)
+}
+
+/// The runtime notices, which name the exact runtime they cover.
+fn notices(root: &Path) -> Result<Value> {
+    let path = root.join(NOTICES);
+    let data = fs::read(&path).map_err(|e| {
+        format!(
+            "{}: {e}; run python3 .github/scripts/prepare-appimage-notices.py",
+            path.display()
+        )
+    })?;
+    let document: Value = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
+    if document["schemaVersion"] != 2 {
+        return Err(format!(
+            "unsupported AppImage notices schema in {}; rerun prepare-appimage-notices.py",
+            path.display()
+        ));
+    }
+    Ok(document)
+}
+
+/// vpk puts its own runtime in front of the image. It must be the one the
+/// notices and the published runtime sources cover.
+fn check_runtime(appimage: &[u8], notices: &Value) -> Result {
+    let size = notices["runtimeSize"]
+        .as_u64()
+        .and_then(|size| usize::try_from(size).ok())
+        .ok_or("AppImage notices do not give the runtime's size")?;
+    let expected = notices["runtimeSha256"]
+        .as_str()
+        .ok_or("AppImage notices do not identify the runtime")?;
+    match appimage.get(..size) {
+        Some(runtime) if sha256(runtime) == expected => Ok(()),
+        _ => Err(
+            "the AppImage runtime differs from the one covered by its notices and source bundle"
+                .into(),
+        ),
+    }
+}
+
+/// Whether the build host has LIBRARY in a system library directory, where
+/// linuxdeploy would find it.
+fn host_has_library(library: &str) -> bool {
+    [
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/lib/aarch64-linux-gnu",
+        "/usr/lib64",
+        "/lib64",
+        "/usr/lib",
+    ]
+    .iter()
+    .any(|directory| Path::new(directory).join(library).exists())
 }
 
 fn covered_library(name: &str) -> bool {
@@ -290,22 +340,13 @@ fn verify_library_notices(directory: &Path) -> Result {
     Ok(())
 }
 
-/// Deploy shared libraries with linuxdeploy, then package the AppDir with the
-/// separately pinned appimagetool. linuxdeploy is never asked to produce the
-/// image itself, so its bundled/older appimagetool cannot be selected.
-pub fn build(appdir: &Path, out: &Path, name: &str, arch: &str, tools: &Tools) -> Result<PathBuf> {
+/// Deploy shared libraries with linuxdeploy and check the AppDir it leaves.
+/// linuxdeploy is never asked to produce the image itself: vpk does.
+pub fn deploy(appdir: &Path, arch: &str, tools: &Tools) -> Result {
     let arch = appimage_arch(arch)?;
-    fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let appimage = out.join(format!("{name}.AppImage"));
-    let _ = fs::remove_file(&appimage);
-    let tool_dir = tools
-        .appimagetool
-        .parent()
-        .ok_or_else(|| "appimagetool has no parent directory".to_string())?;
-
     let mut deploy = Command::new(&tools.linuxdeploy);
     deploy
-        .current_dir(out)
+        .current_dir(appdir.parent().unwrap_or(appdir))
         .arg("--appdir")
         .arg(appdir)
         .arg("--executable")
@@ -317,83 +358,48 @@ pub fn build(appdir: &Path, out: &Path, name: &str, arch: &str, tools: &Tools) -
         .env("ARCH", arch)
         .env("APPIMAGE_EXTRACT_AND_RUN", "1")
         .env("NO_STRIP", "1")
-        .env("PATCHELF", &tools.patchelf)
-        .env("PATH", tool_path(tool_dir)?);
+        .env("PATCHELF", &tools.patchelf);
     run(&mut deploy)?;
     verify_library_notices(&appdir.join("usr/lib"))?;
     ensure_regular_apprun(appdir)?;
-    ensure_root_entries(appdir)?;
-
-    let mut package = Command::new(&tools.appimagetool);
-    package
-        .current_dir(out)
-        .arg("--no-appstream")
-        .arg("--runtime-file")
-        .arg(&tools.runtime)
-        .arg(appdir)
-        .arg(&appimage)
-        .env("ARCH", arch)
-        .env("APPIMAGE_EXTRACT_AND_RUN", "1")
-        .env("PATH", tool_path(tool_dir)?);
-    run(&mut package)?;
-    if !appimage.is_file() || appimage.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
-        return Err(format!(
-            "appimagetool did not create a non-empty {}",
-            appimage.display()
-        ));
-    }
-    Ok(appimage)
+    ensure_root_entries(appdir)
 }
 
-fn tool_path(tool_dir: &Path) -> Result<std::ffi::OsString> {
-    let path = env::var_os("PATH").unwrap_or_default();
-    let mut entries = vec![tool_dir.to_path_buf()];
-    entries.extend(env::split_paths(&path));
-    env::join_paths(entries).map_err(|e| format!("building tool PATH: {e}"))
-}
-
-/// Write the checksum of the single Linux artifact beside it.
-pub fn write_checksums(out: &Path, appimage: &Path) -> Result<PathBuf> {
-    let name = appimage
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("invalid AppImage path {}", appimage.display()))?;
-    let data = fs::read(appimage).map_err(|e| format!("{}: {e}", appimage.display()))?;
-    let sums = out.join("SHA256SUMS");
-    fs::write(&sums, format!("{}  {name}\n", sha256(&data)))
-        .map_err(|e| format!("{}: {e}", sums.display()))?;
-    Ok(sums)
-}
-
-/// Stage, deploy, package and checksum one Linux AppImage. The temporary
-/// AppDir is removed after success so `target/package` contains only the
-/// AppImage and SHA256SUMS for this target.
+/// Stage and deploy the AppDir, then have vpk package it: the AppImage, its
+/// update package and feed, returned as published. The AppDir is removed
+/// afterwards; `out` keeps only published files.
+#[allow(clippy::too_many_arguments)]
 pub fn package(
+    root: &Path,
     out: &Path,
     name: &str,
+    version: &str,
     executable: &[u8],
     licenses: Vec<(String, Vec<u8>)>,
     arch: &str,
     tools: &Tools,
-) -> Result {
+) -> Result<Vec<PathBuf>> {
+    let notices = notices(root)?;
     fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    // Old tar.gz/folder outputs must not survive a move to single-file Linux
-    // releases.
+    // Older layouts (a tar.gz, a folder, a versioned AppImage) must not
+    // survive into this release's output.
     let _ = fs::remove_file(out.join(format!("{name}.tar.gz")));
+    let _ = fs::remove_file(out.join(format!("{name}.AppImage")));
     let _ = fs::remove_dir_all(out.join(name));
     let _ = fs::remove_dir_all(out.join(format!(".{name}.AppDir")));
     let _ = fs::remove_file(out.join("SHA256SUMS"));
-    // Keep the working AppDir outside target/package: only the finished
-    // AppImage and its checksum live in the published output directory.
+    // Keep the working AppDir outside target/package. vpk packages a folder
+    // as a finished AppDir only when its name ends in .AppDir.
     let work = out
         .parent()
         .unwrap_or(out)
-        .join(format!("{}-appimage-work", name));
+        .join(format!("{name}-appimage-work"));
+    let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
-    let appdir = work.join("AppDir");
+    let appdir = work.join("rc2fx.AppDir");
     let result = (|| {
         stage(&appdir, executable, &licenses)?;
-        let appimage = build(&appdir, out, name, arch, tools)?;
+        deploy(&appdir, arch, tools)?;
         if let Ok(expected) = rc2fx_installer::Envelope::find(executable) {
             // linuxdeploy may adjust ELF search paths. The embedded installer
             // payload must still be the one validated before staging.
@@ -401,14 +407,20 @@ pub fn package(
                 .map_err(|e| format!("deployed executable: {e}"))?;
             rc2fx_installer::Envelope::find(&deployed)?.require_matches(&expected)?;
         }
-        let sums = write_checksums(out, &appimage)?;
-        println!(
-            "Package ready:\n  {}\n  sha256 {}\n  checksums {}",
-            appimage.display(),
-            sha256(&fs::read(&appimage).map_err(|e| e.to_string())?),
-            sums.display()
-        );
-        Ok(())
+        let published = super::velopack::pack(root, "linux", arch, version, name, &appdir, out)?;
+        let appimage = published
+            .iter()
+            .find(|path| path.extension().is_some_and(|e| e == "AppImage"))
+            .ok_or("vpk published no AppImage")?;
+        check_runtime(&fs::read(appimage).map_err(|e| e.to_string())?, &notices)?;
+        for path in &published {
+            println!(
+                "Package ready:\n  {}\n  sha256 {}",
+                path.display(),
+                sha256(&fs::read(path).map_err(|e| e.to_string())?)
+            );
+        }
+        Ok(published)
     })();
     let _ = fs::remove_dir_all(&work);
     result
@@ -417,9 +429,9 @@ pub fn package(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(target_os = "linux")]
-    use std::{collections::BTreeMap, io::Read};
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -436,32 +448,19 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn fake_tools(dir: &Path) -> Tools {
         let linuxdeploy = dir.join("linuxdeploy");
-        let appimagetool = dir.join("appimagetool");
         fs::write(
             &linuxdeploy,
             "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" > \"$0.args\"\nprintf '%s\\n' \"${NO_STRIP:-}\" > \"$0.env\"\nappdir=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --appdir ]; then appdir=$2; fi\n  shift\ndone\nmkdir -p \"$appdir/usr/lib\"\nprintf host > \"$appdir/usr/lib/libXau.so.6\"\n",
         )
         .unwrap();
-        fs::write(
-            &appimagetool,
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" > \"$0.args\"\nappdir=\nout=\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --runtime-file) shift ;;\n    --no-appstream) ;;\n    *) if [ -z \"$appdir\" ]; then appdir=$1; else out=$1; fi ;;\n  esac\n  shift\ndone\ntar -cf \"$out\" -C \"$appdir\" .\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            for tool in [&linuxdeploy, &appimagetool] {
-                fs::set_permissions(tool, fs::Permissions::from_mode(0o755)).unwrap();
-            }
+            fs::set_permissions(&linuxdeploy, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let runtime = dir.join("runtime-x86_64");
-        fs::write(&runtime, b"pinned type2 runtime").unwrap();
         let patchelf = dir.join("patchelf");
         fs::write(&patchelf, b"pinned ELF patcher").unwrap();
         Tools {
             linuxdeploy,
-            appimagetool,
-            runtime,
             patchelf,
         }
     }
@@ -583,41 +582,47 @@ printf '%s\n' "$APPDIR" "$APPIMAGE" "$LD_LIBRARY_PATH" "$1" "$2"
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn build_preserves_payload_and_writes_single_artifact_checksum() {
-        let root = temp_dir("build");
-        let out = root.join("out");
+    fn deploy_keeps_the_payload_and_the_appdir_the_helper_needs() {
+        let root = temp_dir("deploy");
+        let appdir = root.join("work/rc2fx.AppDir");
         let exe = b"registry-pinned executable bytes";
         let tools = fake_tools(&root);
-        let name = "rc2fx-0.1.0-linux-x64";
-        fs::create_dir_all(&out).unwrap();
-        fs::write(out.join(format!("{name}.tar.gz")), b"old").unwrap();
-        fs::create_dir_all(out.join(name)).unwrap();
-        package(
-            &out,
-            name,
+        stage(
+            &appdir,
             exe,
-            vec![("rust-crates.html".into(), b"licence".to_vec())],
-            "x64",
-            &tools,
+            &[("rust-crates.html".into(), b"licence".to_vec())],
         )
         .unwrap();
-        let appimage = out.join(format!("{name}.AppImage"));
-        assert!(appimage.is_file());
-        let file = fs::File::open(&appimage).unwrap();
-        let mut archive = tar::Archive::new(file);
+        deploy(&appdir, "x64", &tools).unwrap();
         let mut seen = BTreeMap::new();
-        for entry in archive.entries().unwrap() {
-            let mut entry = entry.unwrap();
-            let path = entry.path().unwrap().to_string_lossy().into_owned();
-            let mut data = Vec::new();
-            entry.read_to_end(&mut data).unwrap();
-            seen.insert(path, data);
+        fn walk(base: &Path, dir: &Path, seen: &mut BTreeMap<String, Vec<u8>>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(base, &path, seen);
+                } else {
+                    let name = path
+                        .strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    seen.insert(name, fs::read(&path).unwrap());
+                }
+            }
         }
-        assert_eq!(seen["./usr/bin/rc2fx"], exe);
-        assert_eq!(seen["./usr/lib/libXau.so.6"], b"host");
-        assert_eq!(seen["./AppRun"], APPRUN.as_bytes());
-        assert!(seen.contains_key("./rc2fx.desktop"));
-        assert!(seen.contains_key("./rc2fx.svg"));
+        walk(&appdir, &appdir, &mut seen);
+        assert_eq!(seen["usr/bin/rc2fx"], exe);
+        assert_eq!(seen["usr/lib/libXau.so.6"], b"host");
+        // The helper copies the AppDir and runs its regular AppRun.
+        assert_eq!(seen["AppRun"], APPRUN.as_bytes());
+        assert!(
+            !fs::symlink_metadata(appdir.join("AppRun"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(seen.contains_key("rc2fx.desktop"));
+        assert!(seen.contains_key("rc2fx.svg"));
         for forbidden in [
             "docs/",
             "crates/",
@@ -632,7 +637,7 @@ printf '%s\n' "$APPDIR" "$APPIMAGE" "$LD_LIBRARY_PATH" "$1" "$2"
         ] {
             assert!(
                 seen.keys().all(|path| !path.contains(forbidden)),
-                "{forbidden} leaked into AppImage payload"
+                "{forbidden} leaked into the AppDir"
             );
         }
         let deploy_args = fs::read_to_string(root.join("linuxdeploy.args")).unwrap();
@@ -654,38 +659,43 @@ printf '%s\n' "$APPDIR" "$APPIMAGE" "$LD_LIBRARY_PATH" "$1" "$2"
             fs::read_to_string(root.join("linuxdeploy.env")).unwrap(),
             "1\n"
         );
-        let package_args = fs::read_to_string(root.join("appimagetool.args")).unwrap();
-        assert!(package_args.contains("--no-appstream"), "{package_args:?}");
-        assert!(package_args.contains("--runtime-file"), "{package_args:?}");
-        assert!(package_args.contains("runtime-x86_64"), "{package_args:?}");
-        assert!(
-            package_args.contains(&format!("{name}.AppImage")),
-            "{package_args:?}"
-        );
-        let sums = out.join("SHA256SUMS");
-        assert!(sums.is_file());
-        let appimage_name = format!("{name}.AppImage");
-        let mut artifacts: Vec<_> = fs::read_dir(&out)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        artifacts.sort();
-        assert_eq!(artifacts, ["SHA256SUMS", appimage_name.as_str()]);
-        assert!(
-            !out.parent()
-                .unwrap()
-                .join(format!("{name}-appimage-work"))
-                .exists()
-        );
-        assert!(!out.join(format!("{name}.tar.gz")).exists());
-        assert_eq!(
-            fs::read_to_string(sums).unwrap(),
-            format!(
-                "{}  {}\n",
-                sha256(&fs::read(&appimage).unwrap()),
-                appimage.file_name().unwrap().to_string_lossy()
-            )
-        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_appimage_must_start_with_the_runtime_its_notices_cover() {
+        let runtime = b"\x7fELF vendored runtime";
+        let notices = serde_json::json!({
+            "schemaVersion": 2,
+            "runtimeSha256": sha256(runtime),
+            "runtimeSize": runtime.len(),
+        });
+        let mut appimage = runtime.to_vec();
+        appimage.extend_from_slice(b"hsqs squashfs image");
+        check_runtime(&appimage, &notices).unwrap();
+        appimage[1] ^= 1;
+        assert!(check_runtime(&appimage, &notices).is_err());
+        assert!(check_runtime(&runtime[..4], &notices).is_err());
+        assert!(check_runtime(runtime, &serde_json::json!({"runtimeSha256": "x"})).is_err());
+    }
+
+    #[test]
+    fn notices_from_before_vpk_are_refused() {
+        let root = temp_dir("notices");
+        let path = root.join(NOTICES);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            br#"{"schemaVersion":1,"runtimeSha256":"x","sections":[]}"#,
+        )
+        .unwrap();
+        assert!(notices(&root).unwrap_err().contains("schema"));
+        fs::write(
+            &path,
+            br#"{"schemaVersion":2,"runtimeSha256":"x","sections":[]}"#,
+        )
+        .unwrap();
+        assert!(notices(&root).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 }

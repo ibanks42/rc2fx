@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Verified Linux build tools; the workflow caches only this tool directory.
+# The AppImage itself is made by vpk (setup-vpk.sh), which brings its own
+# AppImage runtime and needs mksquashfs (squashfs-tools) on the PATH.
 set -euo pipefail
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]]
 base=${RC2FX_TOOLS_DIR:-$HOME/.cache/rc2fx-release-tools}
@@ -43,9 +45,6 @@ case ${1:-} in
         extract_tool linuxdeploy \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage \
             c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
-        extract_tool appimagetool \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
-            ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
         patcher=$destination/patchelf-0.19.3
         if [[ ! -x $patcher/bin/patchelf ]]; then
             fetch https://github.com/NixOS/patchelf/releases/download/0.19.3/patchelf-0.19.3-x86_64.tar.gz \
@@ -53,24 +52,9 @@ case ${1:-} in
             mkdir -p "$patcher"
             tar -xzf "$temporary/patchelf.tar.gz" -C "$patcher"
         fi
-        nfpm=$destination/nfpm-2.48.0
-        if [[ ! -x $nfpm/nfpm ]]; then
-            fetch https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm_2.48.0_Linux_x86_64.tar.gz \
-                6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750 "$temporary/nfpm.tar.gz"
-            mkdir -p "$nfpm"
-            tar -xzf "$temporary/nfpm.tar.gz" -C "$nfpm"
-        fi
-        runtime=$destination/runtime-x86_64
-        runtime_sha=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
-        if ! printf '%s  %s\n' "$runtime_sha" "$runtime" | sha256sum -c - >/dev/null 2>&1; then
-            fetch https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64 \
-                "$runtime_sha" "$temporary/runtime"
-            mv "$temporary/runtime" "$runtime"
-        fi
         if [[ -n ${GITHUB_ENV:-} ]]; then
-            printf 'RC2FX_LINUXDEPLOY=%s/linuxdeploy/AppRun\nRC2FX_APPIMAGETOOL=%s/appimagetool/AppRun\nRC2FX_APPIMAGE_RUNTIME=%s\n' \
-                "$destination" "$destination" "$runtime" >> "$GITHUB_ENV"
-            printf 'RC2FX_PATCHELF=%s/bin/patchelf\nRC2FX_NFPM=%s/nfpm\n' "$patcher" "$nfpm" >> "$GITHUB_ENV"
+            printf 'RC2FX_LINUXDEPLOY=%s/linuxdeploy/AppRun\n' "$destination" >> "$GITHUB_ENV"
+            printf 'RC2FX_PATCHELF=%s/bin/patchelf\n' "$patcher" >> "$GITHUB_ENV"
         fi
         printf 'AppImage tools ready: %s\n' "$destination"
         ;;

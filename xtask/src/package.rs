@@ -1,22 +1,17 @@
 //! `cargo xtask package`: the self-contained desktop executable and legal
-//! notices. Installer inputs are embedded in the executable;
-//! packaging verifies those bytes, including for --skip-build. Linux releases
-//! are AppImage, DEB and RPM packages; Windows uses a minimal zip and macOS a
-//! zip holding an app bundle.
+//! notices. Release executables download the mixer payload; packaging checks
+//! the executable's payload mode, including for --skip-build. Every platform
+//! is packaged by Velopack (see `velopack`): an AppImage on Linux, an
+//! installer and a portable zip on Windows and macOS, and the update package
+//! and feed the app updates itself from.
 
 use crate::{Result, root, sha256};
 
 mod appimage;
 mod licenses;
 mod macos;
-mod native_linux;
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-    process::Command,
-};
+mod velopack;
+use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
 #[cfg(test)]
 const SCRIPTS: [&str; 4] = [
@@ -42,6 +37,30 @@ fn file(data: Vec<u8>) -> Member {
 
 fn read(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Run a packaging tool; on failure, report what it printed.
+fn run<S: AsRef<std::ffi::OsStr>>(program: &str, args: &[S]) -> Result {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| format!("could not run {program}: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{program} {} failed:\n{}{}",
+            args.first()
+                .map(|arg| arg.as_ref().to_string_lossy())
+                .unwrap_or_default(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    Ok(())
+}
+
+/// A packaging setting from the environment; empty counts as unset.
+fn setting(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 /// Operating system and architecture names for a target triple.
@@ -140,21 +159,18 @@ fn write_folder(dir: &Path, files: &Files) -> Result {
     Ok(())
 }
 
-pub fn write_zip(out: impl Write + std::io::Seek, files: &Files) -> Result<()> {
-    let mut zip = zip::ZipWriter::new(out);
-    for (name, m) in files {
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            // Record a Unix host on every OS so unzip and macOS keep the
-            // app's executable bit.
-            .system(zip::System::Unix)
-            .unix_permissions(m.mode);
-        zip.start_file(format!("{TOP}/{name}"), options)
-            .map_err(|e| e.to_string())?;
-        zip.write_all(&m.data).map_err(|e| e.to_string())?;
+/// SHA256SUMS for every published Linux file, beside them.
+fn write_checksums(out: &Path, published: &[std::path::PathBuf]) -> Result {
+    let mut sums = String::new();
+    for path in published {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("invalid package path {}", path.display()))?;
+        sums.push_str(&format!("{}  {name}\n", sha256(&read(path)?)));
     }
-    zip.finish().map_err(|e| e.to_string())?;
-    Ok(())
+    let path = out.join("SHA256SUMS");
+    fs::write(&path, sums).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Generate consolidated notices for a standalone mixer release.
@@ -167,20 +183,24 @@ pub fn write_licenses(destination: &Path) -> Result {
 }
 
 fn usage() -> String {
-    "usage: cargo xtask package [--target TRIPLE] [--skip-build] [--embedded]\n\
-     Linux requires RC2FX_LINUXDEPLOY, RC2FX_APPIMAGETOOL, RC2FX_APPIMAGE_RUNTIME, RC2FX_PATCHELF and RC2FX_NFPM to name the pinned tools."
+    "usage: cargo xtask package [--target TRIPLE] [--build-only | --skip-build] [--embedded]\n\
+     --build-only stops after the build; --skip-build then packages that build.\n\
+     Linux requires RC2FX_LINUXDEPLOY and RC2FX_PATCHELF to name the pinned tools,\n\
+     vpk (RC2FX_VPK) and mksquashfs."
         .into()
 }
 
 pub fn run_package(args: &[&str]) -> Result {
     let mut target = None;
     let mut build = true;
+    let mut package = true;
     let mut embedded = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match *arg {
             "--target" => target = Some(rest.next().ok_or_else(usage)?.to_string()),
             "--skip-build" => build = false,
+            "--build-only" => package = false,
             "--embedded" => embedded = true,
             _ => return Err(usage()),
         }
@@ -198,8 +218,14 @@ pub fn run_package(args: &[&str]) -> Result {
     let document_path = root.join("target/package-licenses.json");
     fs::create_dir_all(root.join("target")).map_err(|e| e.to_string())?;
     fs::write(&document_path, &document.json).map_err(|e| e.to_string())?;
+    if !build && !package {
+        return Err(usage());
+    }
     if build {
         licenses::build_app(&root, target.as_deref(), &document_path, embedded)?;
+    }
+    if !package {
+        return Ok(());
     }
     let mut release = root.join("target");
     if let Some(t) = &target {
@@ -226,47 +252,49 @@ pub fn run_package(args: &[&str]) -> Result {
     validate_executable(&root, &executable, release)?;
     let out = root.join("target").join("package");
     let version = env!("CARGO_PKG_VERSION");
-    let name = format!("rc2fx-{version}-{os}-{arch}");
+    // No version in published names: releases/latest/download/NAME then
+    // always links the newest release.
+    let name = format!("rc2fx-{os}-{arch}");
     if os == "linux" {
         let tools = appimage::Tools::from_env()?;
         let licenses = vec![("LICENSES.html".into(), document.html)];
-        appimage::package(&out, &name, &executable, licenses.clone(), arch, &tools)?;
-        native_linux::package(&out, &name, &exe, &licenses, arch)?;
+        let mut published = appimage::package(
+            &root,
+            &out,
+            &name,
+            version,
+            &executable,
+            licenses,
+            arch,
+            &tools,
+        )?;
+        // prepare-appimage-notices.py wrote the runtime's corresponding source.
+        published.push(out.join(format!("rc2fx-{version}-appimage-runtime-sources.tar.gz")));
+        write_checksums(&out, &published)?;
         return Ok(());
     }
-    // ZIP apps carry the notices in their Settings dialog.
-    let mut files = collect_with(&root, os, executable, vec![], release)?;
+    // These apps carry the notices in their Settings dialog.
+    let files = collect_with(&root, os, executable, vec![], release)?;
     let folder = out.join(&name).join(TOP);
-    if os == "macos" {
-        // Signing happens on disk, so the zip must hold what it produces.
+    let pack_dir = if os == "macos" {
         write_folder(&folder, &macos::bundle(files, version)?)?;
-        files = macos::seal(&folder)?;
+        folder.join(macos::APP)
     } else {
         write_folder(&folder, &files)?;
+        folder.clone()
+    };
+    // collect_with() checked the executable's payload mode; the package
+    // deliberately has no payload sidecars.
+    let packages = velopack::pack(&root, os, arch, version, &name, &pack_dir, &out)?;
+    println!("Packages ready:");
+    for package in &packages {
+        println!(
+            "  {}\n  sha256 {}",
+            package.display(),
+            sha256(&read(package)?)
+        );
     }
-    // collect_with() checked the actual executable's embedded payload against
-    // the staged build inputs; the package deliberately has no payload sidecars.
-
-    let archive = out.join(format!("{name}.zip"));
-    let part = PathBuf::from(format!("{}.part", archive.display()));
-    let result = (|| {
-        let f = fs::File::create(&part).map_err(|e| e.to_string())?;
-        write_zip(std::io::BufWriter::new(&f), &files)?;
-        f.sync_all().map_err(|e| e.to_string())?;
-        fs::rename(&part, &archive).map_err(|e| e.to_string())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&part);
-    }
-    result?;
-    let bytes = read(&archive)?;
-    println!(
-        "Package ready:\n  {}\n  sha256 {}\n  {} files; unpacked copy in {}",
-        archive.display(),
-        sha256(&bytes),
-        files.len(),
-        folder.display()
-    );
+    println!("  unpacked app in {}", pack_dir.display());
     Ok(())
 }
 
@@ -274,7 +302,7 @@ pub fn run_package(args: &[&str]) -> Result {
 mod tests {
     use super::*;
     use std::{
-        io::Read,
+        path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
     };
 
@@ -486,23 +514,6 @@ mod tests {
         // A missing source payload is refused, not silently packaged stale.
         fs::remove_file(root.join("target/mixer/rc2fxd")).unwrap();
         assert!(collect_with(&root, "windows", copied_executable, vec![], false).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn zip_round_trips_under_one_folder() {
-        let (root, files) = package("windows");
-        let mut zip_bytes = std::io::Cursor::new(Vec::new());
-        write_zip(&mut zip_bytes, &files).unwrap();
-        let mut zip = zip::ZipArchive::new(zip_bytes).unwrap();
-        assert_eq!(zip.len(), files.len());
-        for (name, m) in &files {
-            let mut entry = zip.by_name(&format!("rc2fx/{name}")).unwrap();
-            assert_eq!(entry.unix_mode().map(|mode| mode & 0o777), Some(m.mode));
-            let mut data = Vec::new();
-            entry.read_to_end(&mut data).unwrap();
-            assert_eq!(data, m.data, "{name}");
-        }
         fs::remove_dir_all(root).unwrap();
     }
 
