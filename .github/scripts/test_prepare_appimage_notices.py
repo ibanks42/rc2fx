@@ -9,6 +9,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("prepare-appimage-notices.py")
@@ -135,6 +136,64 @@ class Checksums(unittest.TestCase):
         )
         with self.assertRaises(notices.Failure):
             notices.apkbuild_field(apkbuild, "pkgdesc")
+
+
+class Runtime(unittest.TestCase):
+    """The runtime comes from the pinned vpk package, and must name its commit."""
+
+    def nupkg(self, runtime):
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, "w") as package:
+            package.writestr(notices.VPK_RUNTIME, runtime)
+        return raw.getvalue()
+
+    def pinned(self, package, runtime):
+        """Pin the fixture in place of the real vpk and runtime digests."""
+        saved = notices.VPK_SHA256, notices.RUNTIME_SHA256
+        notices.VPK_SHA256 = notices.digest("sha256", package)
+        notices.RUNTIME_SHA256 = notices.digest("sha256", runtime)
+        self.addCleanup(lambda: setattr(notices, "VPK_SHA256", saved[0]))
+        self.addCleanup(lambda: setattr(notices, "RUNTIME_SHA256", saved[1]))
+
+    def test_the_vendored_runtime_is_read_from_the_checked_package(self):
+        runtime = (b"\x7fELF runtime https://github.com/AppImage/type2-runtime/commit/"
+                   + notices.RUNTIME_COMMIT[:7].encode() + b"\0")
+        package = self.nupkg(runtime)
+        self.pinned(package, runtime)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "vpk.nupkg")
+            path.write_bytes(package)
+            self.assertEqual(notices.vendored_runtime(path, None), runtime)
+            path.write_bytes(package + b"tampered")
+            with self.assertRaises(notices.Failure):
+                notices.vendored_runtime(path, None)
+
+    def test_a_runtime_from_another_commit_is_refused(self):
+        for runtime in [
+            b"https://github.com/AppImage/type2-runtime/commit/0000000",
+            b"no version string",
+            b"https://github.com/AppImage/type2-runtime/commit/3d17002 "
+            b"https://github.com/AppImage/type2-runtime/commit/dd6cebe",
+        ]:
+            with self.assertRaises(notices.Failure, msg=runtime):
+                notices.check_runtime_commit(runtime)
+
+    def test_a_package_without_the_runtime_is_refused(self):
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, "w") as package:
+            package.writestr("vendor/other", b"x")
+        package = raw.getvalue()
+        self.pinned(package, b"")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "vpk.nupkg")
+            path.write_bytes(package)
+            with self.assertRaises(notices.Failure):
+                notices.vendored_runtime(path, None)
+
+    def test_the_pins_agree_with_setup_vpk(self):
+        setup = SCRIPT.with_name("setup-vpk.sh").read_text()
+        self.assertIn(f"version={notices.VPK_VERSION}\n", setup)
+        self.assertIn(f"sha={notices.VPK_SHA256}\n", setup)
 
 
 class Licences(unittest.TestCase):

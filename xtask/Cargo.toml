@@ -20,7 +20,6 @@ tempfile = "3"
 tar = { version = "0.4", default-features = false }
 rc2fx-firmware = { path = "../crates/rc2fx-firmware" }
 rc2fx-installer = { path = "../crates/rc2fx-installer" }
-zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 rc2fx-usb = { path = "../crates/rc2fx-usb" }

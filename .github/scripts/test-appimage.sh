@@ -13,8 +13,8 @@ EXPECTED=$2
 test -f "$APPIMAGE"
 test -n "$EXPECTED"
 case "$APPIMAGE" in
-    */rc2fx-"$EXPECTED"-linux-x64.AppImage) ;;
-    *) echo "AppImage path does not name version $EXPECTED: $APPIMAGE" >&2; exit 1 ;;
+    */rc2fx-linux-x64.AppImage) ;;
+    *) echo "unexpected AppImage name: $APPIMAGE" >&2; exit 1 ;;
 esac
 # shellcheck source=.github/scripts/test-embedded-envelope.sh
 . "$(dirname -- "$0")/test-embedded-envelope.sh"
@@ -61,6 +61,15 @@ file "$root/usr/bin/rc2fx" | grep -q 'ELF 64-bit'
 test -f "$root/usr/share/applications/rc2fx.desktop"
 test -f "$root/usr/share/icons/hicolor/scalable/apps/rc2fx.svg"
 desktop-file-validate "$root/usr/share/applications/rc2fx.desktop"
+
+say "Velopack updater and version"
+# The name carries no version, so the image must: vpk's manifest beside the
+# executable is what the app's updates read.
+grep -q "<id>io.github.ibanks42.rc2fx</id>" "$root/usr/bin/sq.version"
+grep -q "<version>$EXPECTED</version>" "$root/usr/bin/sq.version"
+grep -q '<channel>linux</channel>' "$root/usr/bin/sq.version"
+test -x "$root/usr/bin/UpdateNix"
+file "$root/usr/bin/UpdateNix" | grep -q 'ELF 64-bit'
 
 say "licences and bundled libraries"
 test -s "$root/usr/share/licenses/rc2fx/LICENSES.html"

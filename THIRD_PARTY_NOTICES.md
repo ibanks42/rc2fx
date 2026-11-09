@@ -5,7 +5,7 @@ MIT (see [LICENSE-MIT](LICENSE-MIT)). It also includes or builds the
 third-party components listed below, each under its own licence. Distribute this
 file, and the licence texts it refers to, with any binaries. The desktop app
 shows these notices, the training-data credits and every licence text under
-**Settings › Versions › Licenses › View licenses**.
+**Settings › About › Licenses › View licenses**.
 
 ## Mixer build
 
@@ -31,7 +31,8 @@ The desktop app, `rc2fxd` and `librc2fx_native.so` link several hundred crates
 from crates.io. Nearly all are MIT and/or Apache-2.0, including GPUI and
 gpui-component. A few use other permissive licences (BSD-2/3, ISC, Zlib,
 Unicode-3.0, CC0, 0BSD). `option-ext` is MPL-2.0; its unmodified source is
-available on crates.io.
+available on crates.io. The desktop app's updater, Velopack, uses
+`webpki-roots`, Mozilla's root certificates, under CDLA-Permissive-2.0.
 
 ## Rust standard library
 
@@ -52,13 +53,46 @@ Contributors. The icons Lucide derives from Feather are also under the MIT
 License, Copyright (c) 2013-present Cole Bemis. Full text:
 [licenses/LICENSE-LUCIDE](licenses/LICENSE-LUCIDE).
 
+## Velopack
+
+The Windows and macOS packages and the Linux AppImage are built with
+[Velopack](https://github.com/velopack/velopack) 1.3.39 and include its
+updater (`Update.exe` on Windows, `UpdateMac` on macOS, `UpdateNix` in the
+AppImage); the Windows and macOS packages also include its launcher and
+installer. On Windows and macOS, Velopack's packager gives them RC2FX's
+icon and version details, appends the app to Setup and signs them; their code
+is unchanged. The app also links the `velopack` crate. MIT License, Copyright
+© 2021 Caelan Sayler, Copyright © 2024 Velopack Ltd. Full text:
+[licenses/LICENSE-VELOPACK](licenses/LICENSE-VELOPACK). The notices of the
+crates those programs are built from are in
+[licenses/velopack-1.3.39-g8d2844f.json](licenses/velopack-1.3.39-g8d2844f.json),
+generated from Velopack's source for its Windows, macOS and Linux builds,
+and in the app's licence notices. `UpdateNix` is Velopack's static musl
+build, so it also includes musl (MIT License), whose text the AppImage's
+licence notices carry.
+
+## AppImage runtime
+
+The Linux AppImage starts with the
+[AppImage type 2 runtime](https://github.com/AppImage/type2-runtime), the
+build that Velopack's packager supplies (type2-runtime commit `3d17002`). It
+is a static executable that links a modified libfuse 3.15.0, licensed under
+the GNU Lesser General Public License 2.1, with squashfuse 0.5.2, zstd, zlib,
+musl and mimalloc, each under its own licence. The AppImage's licence
+notices include all of their licence texts. Each release publishes the source
+of the runtime and of these libraries, the libfuse patch and the build
+scripts as
+`rc2fx-VERSION-appimage-runtime-sources.tar.gz`, beside the AppImage, so you
+can rebuild the runtime with a modified libfuse.
+
 ## Full licence texts
 
 `cargo xtask package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
 for the desktop workspace and the mixer library and combines its reports with
 these notices, the training-data credits and the project licence texts. The
-result is built into the app, under **Settings › Versions › Licenses › View licenses**. The Linux AppImage
-also carries it as `LICENSES.html` in its system licence directory. To write
+result is built into the app, under **Settings › About › Licenses › View
+licenses**. The AppImage also carries it as `LICENSES.html` in its system
+licence directory. To write
 the same document as HTML without packaging, install cargo-about
 (`cargo install --locked cargo-about`) and run:
 

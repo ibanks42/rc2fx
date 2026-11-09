@@ -25,6 +25,7 @@ pub fn generate(root: &Path, extra: Vec<(String, String)>) -> Result<Document> {
             "Lucide and Feather icons — ISC / MIT",
             "licenses/LICENSE-LUCIDE",
         ),
+        ("Velopack — MIT", "licenses/LICENSE-VELOPACK"),
         ("Third-party notices", "THIRD_PARTY_NOTICES.md"),
         ("Trained on", "licenses/TRAINING-CREDITS.txt"),
     ] {
@@ -62,6 +63,25 @@ pub fn generate(root: &Path, extra: Vec<(String, String)>) -> Result<Document> {
             &serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?,
         )?;
     }
+    // Velopack's launcher, updater and installer ship in the Windows and
+    // macOS packages, and its updater (UpdateNix, a static musl build) in the
+    // AppImage; their notices come from a report generated from Velopack's
+    // source for those three targets by .github/scripts/velopack-licenses.py.
+    let velopack = format!("licenses/velopack-{}.json", super::velopack::VPK_VERSION);
+    let report: Value =
+        serde_json::from_str(&fs::read_to_string(root.join(&velopack)).map_err(|e| {
+            format!(
+                "{velopack}: {e}\nRun .github/scripts/velopack-licenses.py for this vpk version."
+            )
+        })?)
+        .map_err(|e| format!("{velopack}: {e}"))?;
+    if report["velopack"].as_str() != Some(super::velopack::VPK_VERSION) {
+        return Err(format!(
+            "{velopack} is not for vpk {}",
+            super::velopack::VPK_VERSION
+        ));
+    }
+    merge_report(&mut groups, &report)?;
     for (name, texts) in groups {
         let mut text = String::new();
         for (notice, users) in texts {
@@ -273,5 +293,21 @@ mod tests {
         assert_eq!(groups["MIT"].len(), 2);
         assert_eq!(groups["MIT"]["Copyright A"].len(), 2);
         assert!(merge_report(&mut groups, &json!({"licenses":[]})).is_err());
+    }
+    #[test]
+    fn the_velopack_report_matches_the_pinned_vpk_and_merges() {
+        let version = super::super::velopack::VPK_VERSION;
+        let path = crate::root().join(format!("licenses/velopack-{version}.json"));
+        let report: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(report["velopack"], version);
+        let mut groups = BTreeMap::new();
+        merge_report(&mut groups, &report).unwrap();
+        let users: Vec<&String> = groups.values().flat_map(|t| t.values().flatten()).collect();
+        for name in ["velopack_bins ", "zstd-sys ", "webpki-roots "] {
+            assert!(
+                users.iter().any(|u| u.starts_with(name)),
+                "{name} has no notice"
+            );
+        }
     }
 }
