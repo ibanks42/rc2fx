@@ -5,6 +5,7 @@
 //! `app_update::safe_url` allows them.
 use super::*;
 use crate::app_update::{history_note, link, safe_url};
+use crate::self_update::State as UpdateState;
 use crate::settings::section;
 use crate::versions::{AppStanding, Line, Overview, Part, Tone};
 use gpui_kit::base::text::{TextView, TextViewStyle};
@@ -326,19 +327,45 @@ impl Rc2FxApp {
         let lead = overview.lead.clone();
         let release = self.app_update.release_url().map(str::to_owned);
         let mut actions = div().h_flex().flex_wrap().items_center().gap_2();
-        let has_release = release.is_some();
-        if let Some(url) = release {
-            actions = actions.child(
+        let mut acting = false;
+        let update_state = self.self_update.state().clone();
+        let offered = release.is_some() || self.self_update.previewing();
+        // A started or finished download, or a failed check, stays even if
+        // today's check found nothing.
+        let in_place = self.self_update.supported() && (offered || self.self_update.stays_shown());
+        let mut update_note = None;
+        if in_place {
+            let (button, note) = self.update_button(&update_state, cx);
+            actions = actions.child(button);
+            update_note = note;
+        }
+        // A copy that cannot update itself downloads from the release page.
+        let download = !in_place;
+        let mut has_primary = in_place;
+        if let Some(url) =
+            release.filter(|_| !in_place || matches!(update_state, UpdateState::Failed(_)))
+        {
+            let button = if download {
+                has_primary = true;
                 pill(Button::new("versions-download").primary())
                     .font_semibold()
                     .label("Download")
+            } else {
+                pill(Button::new("versions-download").ghost().border_1())
+                    .border_color(rgb(surface().line_strong))
+                    .label("Release page")
+            };
+            actions = actions.child(
+                button
                     .icon(gpui_kit::assets::IconName::ExternalLink)
                     .on_click(move |_, _, cx| cx.open_url(&url)),
             );
+            acting = true;
         }
+        acting |= in_place;
         if overview.offer_installer {
             // Only opens the installer; flashing still needs its confirmation.
-            let button = if has_release {
+            let button = if has_primary {
                 pill(Button::new("versions-installer").ghost().border_1())
                     .border_color(rgb(surface().line_strong))
             } else {
@@ -349,11 +376,12 @@ impl Rc2FxApp {
                     .label("Open installer")
                     .on_click(cx.listener(|app, _, _, cx| app.toggle_installer_page(cx))),
             );
+            acting = true;
         }
         if let Some(part) = lead.changes {
             actions = actions.child(self.whats_new(("versions-changes", 0usize), part, cx));
+            acting = true;
         }
-        let acting = has_release || overview.offer_installer || lead.changes.is_some();
         let tiles = overview.lines.iter().map(|line| {
             let elsewhere = line.read_changes && lead.changes != Some(line.part);
             self.version_tile(line, elsewhere, cx)
@@ -382,6 +410,9 @@ impl Rc2FxApp {
                     }),
             )
             .when(acting, |d| d.child(actions))
+            .when_some(update_note, |d, note| {
+                d.child(div().text_xs().text_color(rgb(MUTED)).child(note))
+            })
             .child(tiles)
             .children(overview.details.iter().map(|note| {
                 div()
@@ -400,6 +431,68 @@ impl Rc2FxApp {
             .disabled(self.app_update.checking())
             .on_click(cx.listener(|app, _, window, cx| app.check_app_update(true, window, cx)));
         section("Versions", check, body)
+    }
+
+    /// The in-place update action, which keeps one width through its states,
+    /// and what to say beside it.
+    fn update_button(
+        &self,
+        state: &UpdateState,
+        cx: &mut Context<Self>,
+    ) -> (Button, Option<String>) {
+        use gpui_kit::assets::IconName;
+        let button = pill(Button::new("versions-update").primary())
+            .font_semibold()
+            .min_w(px(184.));
+        match state {
+            UpdateState::Idle | UpdateState::Failed(_) => {
+                let note = match state {
+                    UpdateState::Failed(message) => message.clone(),
+                    _ => "It downloads in the background. RC2FX restarts only when you choose."
+                        .into(),
+                };
+                // A kept package that could not be checked is only checked
+                // again.
+                let (label, icon) = if self.self_update.retrying() {
+                    ("Check again", IconName::RefreshCw)
+                } else {
+                    ("Download update", IconName::ArrowDown)
+                };
+                let button = button.label(label).icon(icon).on_click(
+                    cx.listener(|app, _, window, cx| app.download_app_update(window, cx)),
+                );
+                (button, Some(note))
+            }
+            UpdateState::Downloading(percent) => (
+                button
+                    .label(format!("Downloading {percent}%"))
+                    .icon(IconName::LoaderCircle)
+                    .disabled(true),
+                Some("You can keep working while it downloads.".into()),
+            ),
+            UpdateState::Verifying(version) => (
+                button
+                    .label("Checking update")
+                    .icon(IconName::LoaderCircle)
+                    .disabled(true),
+                Some(format!(
+                    "Checking RC2FX {version} against its signed release."
+                )),
+            ),
+            UpdateState::Ready(version) => {
+                let blocker = self.update_restart_blocker();
+                let note = match blocker {
+                    Some(reason) => format!("RC2FX {version} is downloaded. {reason}"),
+                    None => format!("RC2FX {version} is downloaded. RC2FX restarts to install it."),
+                };
+                let button = button
+                    .label("Restart to update")
+                    .icon(IconName::RefreshCw)
+                    .disabled(blocker.is_some())
+                    .on_click(cx.listener(|app, _, window, cx| app.restart_to_update(window, cx)));
+                (button, Some(note))
+            }
+        }
     }
 
     fn whats_new(

@@ -1,5 +1,6 @@
-//! Checking GitHub for a newer desktop app. Notification only: the app never
-//! downloads or installs anything, it links to the release page.
+//! Checking GitHub for a newer desktop app. The check only notifies. Copies
+//! Velopack installed download and install an update when the user asks
+//! (see `self_update`); other copies link to the release page.
 use super::*;
 use crate::versions::AppStanding;
 use crate::versions_dialog::RODE_NOTES_URL;

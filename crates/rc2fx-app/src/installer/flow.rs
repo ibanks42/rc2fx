@@ -406,7 +406,7 @@ impl Model {
 
     /// The last USB command was a flash in the last few minutes, so the mixer
     /// may still be updating.
-    fn recently_flashed(&self) -> bool {
+    pub(crate) fn recently_flashed(&self) -> bool {
         self.status
             .as_ref()
             .and_then(|s| s.saved.last_command())

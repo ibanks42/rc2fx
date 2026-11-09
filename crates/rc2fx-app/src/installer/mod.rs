@@ -824,6 +824,20 @@ impl Rc2FxApp {
             .is_some_and(|r| r.committed && !r.flashed)
     }
 
+    /// Why RC2FX should not restart to apply an app update: the installer has
+    /// a run going, even between steps, or the mixer may still be updating
+    /// after a flash.
+    pub(super) fn installer_restart_blocker(&self) -> Option<&'static str> {
+        let installer = self.installer.as_ref()?;
+        if installer.busy() || installer.model.run.is_some() {
+            return Some("Finish or cancel the installer's run first.");
+        }
+        if installer.model.recently_flashed() {
+            return Some("Wait for the mixer to finish updating.");
+        }
+        None
+    }
+
     /// The installer's part of the window-close decision. Closing is only
     /// held back while a step is running.
     pub(super) fn confirm_close_installer(

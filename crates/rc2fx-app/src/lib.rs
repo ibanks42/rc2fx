@@ -24,15 +24,20 @@ mod presets;
 mod restart;
 mod routing;
 mod selection;
+mod self_update;
 mod settings;
 mod state_updates;
 mod target_layout;
 mod telemetry;
 mod telemetry_view;
 mod ui;
+#[cfg(any(target_os = "windows", test))]
+pub mod uninstall;
 mod usb;
 mod versions;
 mod versions_dialog;
+
+pub use self_update::velopack_locator;
 
 use desk::surface;
 use gpui_kit::component::{
@@ -114,6 +119,7 @@ struct Rc2FxApp {
     /// What the connected mixer reported; `None` is unknown.
     device_versions: Option<rc2fx_core::DeviceVersions>,
     app_update: app_update::AppUpdate,
+    self_update: self_update::SelfUpdate,
     /// Shows developer controls in Settings; grants nothing by itself.
     developer_mode: bool,
     /// The page `RC2FX_DEV_PAGE` asked for, until it has been opened.
@@ -239,6 +245,7 @@ impl Rc2FxApp {
             connected_mixer: None,
             device_versions: None,
             app_update: Default::default(),
+            self_update: self_update::SelfUpdate::new(),
             developer_mode: connection::remembered_developer(),
             dev_page: dev_page::DevPage::from_env(),
             ssh: Default::default(),
@@ -321,6 +328,14 @@ impl Rc2FxApp {
         app.connect(cx);
         // Notification only, in the background; a failure here stays quiet.
         app.check_app_update(false, window, cx);
+        app.start_self_update(cx);
+        // A confirmed "Restart to update" hands over to the updater as RC2FX
+        // quits, whichever prompt ends up quitting.
+        cx.on_app_quit(|app: &mut Self, _| {
+            app.self_update.launch_on_quit();
+            async {}
+        })
+        .detach();
         app.open_dev_page(window, cx);
         let view = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
@@ -403,7 +418,13 @@ impl Rc2FxApp {
             },
             move |_, cx| {
                 let _ = close.update(cx, |app, cx| {
-                    app.closing_prompt = false;
+                    // Still set only when cancelled: "Discard and close"
+                    // clears it before this runs, and its quit must still
+                    // apply a requested update.
+                    if app.closing_prompt {
+                        app.closing_prompt = false;
+                        app.self_update.cancel_restart();
+                    }
                     cx.notify();
                 });
             },
