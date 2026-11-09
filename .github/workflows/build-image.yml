@@ -1,0 +1,70 @@
+name: Build image
+
+# The AlmaLinux 8 build image (package-check.Containerfile) that Check lints
+# and tests in and Release builds the AppImage in, published to GitHub's
+# container registry. Its tag is a digest of the Containerfile and the pinned
+# Rust (build-image-tag.sh), so callers build it only when that changes. The
+# weekly run rebuilds the current tag so the image, and the libraries the
+# AppImage bundles from it, pick up security updates.
+on:
+  workflow_call:
+    inputs:
+      refresh:
+        description: Rebuild even if the image exists
+        type: boolean
+        default: false
+    outputs:
+      image:
+        description: The build image for this commit
+        value: ${{ jobs.image.outputs.image }}
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: Rebuild even if the image exists
+        type: boolean
+        default: true
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Name the image
+        id: tag
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          tag=$(sh .github/scripts/build-image-tag.sh)
+          echo "image=ghcr.io/${OWNER,,}/rc2fx-build:$tag" >> "$GITHUB_OUTPUT"
+      - name: Sign in to the container registry
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+      # Calls from Check and Release reuse the image when it exists; a manual
+      # or weekly run rebuilds it with current packages.
+      - name: Build and push the image
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+          REFRESH: ${{ inputs.refresh || github.event_name == 'schedule' }}
+        run: |
+          if [ "$REFRESH" != true ] && docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "Reusing $IMAGE"
+            exit 0
+          fi
+          rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          docker build --build-arg "RUST_VERSION=$rust" --build-arg "PACKAGE_REFRESH=$(date +%s)" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "$IMAGE" -f .github/scripts/package-check.Containerfile .github/scripts
+          docker push "$IMAGE"

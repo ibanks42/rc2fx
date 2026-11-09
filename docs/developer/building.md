@@ -140,10 +140,12 @@ with FUSE or talk to a mixer, so try those by hand.
 The build runs on a copy of your working tree, including uncommitted and new
 files but not ignored ones, in an AlmaLinux 8 container defined in
 `.github/scripts/package-check.Containerfile`. Releases build in the same
-container. AlmaLinux 8 has glibc 2.28, so the AppImage runs on Debian 10,
-Ubuntu 20.04, RHEL 8, Fedora 29 and newer. The build makes the mixer runtime
-from that copy, so it never reuses `target/mixer`. Each run upgrades the
-container's packages first, to match what a release installs.
+container, and the **Check** workflow lints and tests in it. AlmaLinux 8 has
+glibc 2.28, so the AppImage runs on Debian 10, Ubuntu 20.04, RHEL 8, Fedora
+29 and newer. The build makes the mixer runtime from that copy, so it never
+reuses `target/mixer`. A local run builds the container itself, upgrading its
+packages first; GitHub uses the copy the **Build image** workflow publishes
+to `ghcr.io/ibanks42/rc2fx-build`.
 
 The last lines report the commit and a digest of the source that was checked.
 If the source changes during the run, the check fails, because the result no

@@ -302,11 +302,11 @@ public until the release is complete.
    rejects a stale executable.
 
    **linux** applies the prepare output and runs
-   `bash .github/scripts/package-check.sh` with Docker, exactly as
+   `bash .github/scripts/package-check.sh` with Docker, as
    `just package-check` does (see
-   [local package checks](building.md#check-the-linux-packages-before-a-release)).
-   It builds the AppImage in the AlmaLinux 8 container from
-   `.github/scripts/package-check.Containerfile`, so the AppImage needs only
+   [local package checks](building.md#check-the-linux-packages-before-a-release)),
+   in the published build image (below) instead of building one.
+   It builds the AppImage in that AlmaLinux 8 image, so the AppImage needs only
    glibc 2.28, whatever the runner has. The container installs the same vpk,
    prepares the AppImage runtime's notices and sources from that vpk package,
    and packages. The AppImage is then extracted and checked in clean
@@ -367,8 +367,20 @@ writes to a published release: the app release stays an editable draft until
 **publish** has attached the macOS files, and mixer payload releases are published
 once. Correcting either one takes a new version.
 
-The **Check** workflow lints, tests and audits the code on pushes to `main`,
-excluding documentation-only changes, and runs the release tooling's tests.
+The **Check** workflow lints, tests and audits the code on pushes to `main`
+and on pull requests to it, excluding documentation-only changes, and runs
+the release tooling's tests. On Linux it formats, lints and tests in the same
+AlmaLinux 8 image releases build the AppImage in; Windows and macOS run
+clippy.
+
+The **Build image** workflow publishes that image,
+`.github/scripts/package-check.Containerfile`, as
+`ghcr.io/ibanks42/rc2fx-build`. Its tag is a digest of the Containerfile and
+`rust-toolchain.toml` (`.github/scripts/build-image-tag.sh`), so **Check**
+and **Release** build and push it only when one of those changed, and reuse
+it otherwise. A weekly run, or running the workflow by hand, rebuilds the
+current tag so its packages, including the libraries the AppImage bundles,
+pick up updates.
 Release preparation checks the docs before publication, so removing automatic
 docs deployment does not remove that check.
 
