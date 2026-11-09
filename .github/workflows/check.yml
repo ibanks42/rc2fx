@@ -41,6 +41,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ github.token }}
+      # An init process reaps orphans, as on a real system: the tests check
+      # that killed child processes are gone, not left as zombies.
+      options: --init
     defaults:
       run:
         shell: bash
