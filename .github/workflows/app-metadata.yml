@@ -1,0 +1,62 @@
+name: Renew app metadata
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '47 8 * * 1,4'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-metadata
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    # The emergency stop: set the variable to false if a signing key leaks
+    # (docs/developer/releases.md).
+    if: vars.APP_UPDATES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment: mixer-renewal
+    permissions:
+      contents: write
+    steps:
+      - name: Require main
+        env:
+          CURRENT_REF: ${{ github.ref }}
+        run: test "$CURRENT_REF" = refs/heads/main
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: ""
+      - name: Build renewal tool without signing credentials
+        run: cargo build --locked -p xtask
+      - name: Fetch existing signed metadata
+        env:
+          REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          rm -rf target/current-app-metadata target/renewed-app-metadata
+          git clone --quiet --depth=1 --branch app-metadata "$REPOSITORY" target/current-app-metadata
+      - name: Renew discovery signatures without target or root keys
+        env:
+          MIXER_SNAPSHOT_KEY: ${{ secrets.MIXER_SNAPSHOT_KEY }}
+          MIXER_TIMESTAMP_KEY: ${{ secrets.MIXER_TIMESTAMP_KEY }}
+        run: |
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s' "$MIXER_SNAPSHOT_KEY" > "$keydir/snapshot.pem"
+          printf '%s' "$MIXER_TIMESTAMP_KEY" > "$keydir/timestamp.pem"
+          unset MIXER_SNAPSHOT_KEY MIXER_TIMESTAMP_KEY
+          # Below every mixer metadata version (Unix times), as when signed
+          # (app-metadata-sign.yml).
+          sequence=$(( $(date -u +%s) - 1000000000 ))
+          expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
+          target/debug/xtask app-refresh config/mixer-update-root.json target/current-app-metadata target/renewed-app-metadata "$sequence" "$expires" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
+      - name: Commit snapshot and timestamp to the metadata branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/publish_app.py refresh target/renewed-app-metadata
