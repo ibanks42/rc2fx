@@ -35,12 +35,22 @@ case $engine in
 esac
 
 scripts=.github/scripts
-rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
-tag=$(cat "$scripts/package-check.Containerfile" rust-toolchain.toml |
-    sha256sum | cut -c1-12)
-image=localhost/rc2fx-package-check:$tag
-"$engine" build --build-arg "RUST_VERSION=$rust" --build-arg "PACKAGE_REFRESH=$(date +%s)" -t "$image" \
-    -f "$scripts/package-check.Containerfile" "$scripts"
+# CI passes the published build image (build-image.yml) for this tag; a local
+# run builds it, refreshing its packages.
+tag=$(sh "$scripts/build-image-tag.sh")
+if [[ -n ${RC2FX_BUILD_IMAGE:-} ]]; then
+    [[ $RC2FX_BUILD_IMAGE == *:"$tag" ]] || {
+        echo "RC2FX_BUILD_IMAGE $RC2FX_BUILD_IMAGE is not the build image for tag $tag" >&2
+        exit 1
+    }
+    image=$RC2FX_BUILD_IMAGE
+    "$engine" pull "$image"
+else
+    rust=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+    image=localhost/rc2fx-package-check:$tag
+    "$engine" build --build-arg "RUST_VERSION=$rust" --build-arg "PACKAGE_REFRESH=$(date +%s)" -t "$image" \
+        -f "$scripts/package-check.Containerfile" "$scripts"
+fi
 
 check=$root/target/package-check
 mkdir -p "$check/target" "$check/cache"

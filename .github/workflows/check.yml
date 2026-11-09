@@ -2,11 +2,15 @@ name: Check
 
 # Clippy on every platform the app ships for, with warnings as errors, so code
 # that only compiles on one OS is linted there too. Linux, which the mixer runs,
-# also checks formatting and runs the whole test suite. Nothing here builds the
-# mixer runtime: `--no-default-features` turns off the app's embedded installer
+# also checks formatting and runs the whole test suite, in the AlmaLinux 8
+# build image releases build the AppImage in. Nothing here builds the mixer
+# runtime: `--no-default-features` turns off the app's embedded installer
 # payload, which only real builds need.
 on:
   push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+  pull_request:
     branches: [main]
     paths-ignore: ["docs/**", "**/*.md"]
   workflow_dispatch:
@@ -19,31 +23,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-image.yml
+
+  linux:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.1
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: sh .github/scripts/linux-build-deps.sh
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
-          rustflags: ""
-          cache-key: check
+          persist-credentials: false
+      # The image has the pinned Rust; cache only the build.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: check-alma
           # The native library is its own workspace with its own target folder.
-          cache-workspaces: |
+          workspaces: |
             . -> target
             crates/rc2fx-native -> target
       - name: Check formatting
-        if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
       - name: Lint the workspace
         run: |
@@ -51,33 +64,61 @@ jobs:
           cargo clippy --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings
       - name: Test the workspace
         # Linux is what the mixer runs, so the whole suite runs here.
-        if: runner.os == 'Linux'
         run: cargo test --locked --workspace
       - name: Check the native library
-        if: runner.os == 'Linux'
         run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets
+
+  # The release scripts, documentation tooling and mixer scripts, on the
+  # runner: they test scripts, not the build environment.
+  tooling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
-        if: runner.os == 'Linux'
         with:
           tool: git-cliff@2.14.1,cargo-audit@0.22.2
           fallback: none
       - name: Audit dependencies for security advisories
-        if: runner.os == 'Linux'
         # Fails on vulnerabilities; unmaintained-crate warnings are printed only.
         # Ignored advisories and their reasons live in .cargo/audit.toml.
         run: |
-          cargo audit --file Cargo.lock
-          cargo audit --file crates/rc2fx-native/Cargo.lock
-          cargo audit --file crates/rc2fx-bench/Cargo.lock
+          cargo-audit audit --file Cargo.lock
+          cargo-audit audit --file crates/rc2fx-native/Cargo.lock
+          cargo-audit audit --file crates/rc2fx-bench/Cargo.lock
       - name: Test release and documentation tooling
-        if: runner.os == 'Linux'
         run: |
           python3 .github/scripts/test_release.py
           python3 .github/scripts/test_macos_release.py
           python3 .github/scripts/test_app_release.py
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
-      # Their Rust tests run with the workspace above.
+      # Their Rust tests run with the workspace in the linux job.
       - name: Test the mixer scripts
-        if: runner.os == 'Linux'
         run: for t in xtask/mixer/tests/*.py; do python3 "$t" || exit 1; done
+
+  platforms:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: ""
+          cache-key: check
+      - name: Lint the workspace
+        run: |
+          cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
+          cargo clippy --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings

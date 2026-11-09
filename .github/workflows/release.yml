@@ -166,15 +166,23 @@ jobs:
             target/package/releases.win.json
           if-no-files-found: error
 
-  # The AppImage is built in the AlmaLinux 8 container of `just package-check`
-  # (glibc 2.28), so it runs on older distributions than the runner's, and is
-  # then tested in clean containers of several distributions.
+  # The AlmaLinux 8 build image (glibc 2.28), published by build-image.yml.
+  image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-image.yml
+
+  # The AppImage is built in that image, as `just package-check` builds it, so
+  # it runs on older distributions than the runner's, and is then tested in
+  # clean containers of several distributions.
   linux:
-    needs: prepare
+    needs: [prepare, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
       contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -188,9 +196,15 @@ jobs:
         env:
           RELEASE_INPUT: ${{ runner.temp }}/release-input
         run: tar -xf "$RELEASE_INPUT/versioned.tar"
+      - name: Sign in to the container registry
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
       - name: Build and test the AppImage
         env:
           CONTAINER_ENGINE: docker
+          RC2FX_BUILD_IMAGE: ${{ needs.image.outputs.image }}
         run: bash .github/scripts/package-check.sh
       - uses: actions/upload-artifact@v7.0.2
         with:
