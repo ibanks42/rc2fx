@@ -779,7 +779,7 @@ pub fn placement() -> [i64; 4] {
             param.sched_priority = -1;
         }
         [
-            i64::from(libc::gettid()),
+            libc::syscall(libc::SYS_gettid),
             i64::from(libc::sched_getcpu()),
             i64::from(policy),
             i64::from(param.sched_priority),
