@@ -9,6 +9,18 @@ are stored on the mixer and stay in effect after the app is closed.
 
 ![The RC2FX app with noise suppression on a microphone channel](docs/public/screenshots/mic-noise-suppression.png)
 
+## Download
+
+| System | Installer | Portable |
+| --- | --- | --- |
+| Windows (x64) | [Setup (.exe)](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64-setup.exe) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64.zip) |
+| macOS (Apple silicon) | [.pkg](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.pkg) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.zip) |
+| Linux (x64) | — | [AppImage](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage) |
+
+Release notes, checksums and every file are on the
+[latest release](https://github.com/ibanks42/rc2fx/releases/latest). Then
+follow [Getting started](https://ibanks42.github.io/rc2fx/user/getting-started).
+
 ## Features
 
 - Parametric EQ with up to 32 bands per channel. It can import Equalizer APO
@@ -27,10 +39,10 @@ stock RØDE firmware removes RC2FX.
 
 ## Quick start
 
-1. Download the app for your computer from the
-   [latest release](https://github.com/ibanks42/rc2fx/releases/latest) and run it. On
-   Windows and macOS, extract the zip first. On Linux, make the AppImage
-   executable, or install the `.deb` or `.rpm` package.
+1. [Download](#download) the app for your computer and install it. On
+   Windows, run the `-setup.exe`. On macOS, open the `.pkg`. On Linux, make
+   `rc2fx-linux-x64.AppImage` executable and run it. Windows and macOS also
+   have a portable zip.
 2. Connect the computer to the mixer's **USB 1** port.
 3. Choose **Install RC2FX**. The app downloads official RØDE firmware, adds
    RC2FX to it and flashes it through the mixer's USB update mode. The

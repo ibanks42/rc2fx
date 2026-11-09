@@ -63,6 +63,10 @@ export default defineConfig({
   themeConfig: {
     search: { provider: 'local' },
     outline: [2, 3],
+    nav: [
+      { text: 'Guide', link: '/user/getting-started' },
+      { text: 'Releases', link: '/updates/' },
+    ],
     socialLinks: [{ icon: 'github', link: repo }],
     sidebar: [
       { text: 'Introduction', link: '/' },

@@ -3,34 +3,77 @@
 ## Download the app
 
 Download the app from the [latest release](https://github.com/ibanks42/rc2fx/releases/latest).
-Downloads include the app version, system and processor in their names:
+Downloads have the system and processor in their names:
 
-- Windows (x64): a zip.
-- macOS (Apple silicon): a zip.
-- Linux (x64): an AppImage, a `.deb` package (Debian, Ubuntu) or an `.rpm`
-  package (Fedora, openSUSE).
+| System | Installer | Portable |
+| --- | --- | --- |
+| Windows (x64) | `rc2fx-windows-x64-setup.exe` | `rc2fx-windows-x64.zip` |
+| macOS (Apple silicon) | `rc2fx-macos-arm64.pkg` | `rc2fx-macos-arm64.zip` |
+| Linux (x64) | — | `rc2fx-linux-x64.AppImage` |
+
+The names have no version, so a link such as
+`https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage`
+always downloads the newest one.
+
+The release also has other files: `.nupkg` and `releases.*.json` files, which
+the app updates itself from, the AppImage runtime's sources and
+`SHA256SUMS`. You don't need to download them.
 
 The installer is built into the app, and it downloads official RØDE firmware
 when needed. Updating the app is separate from updating the mixer: the app
 never flashes the mixer by itself.
 
-To start the app:
+To install and start the app:
 
-- Windows: extract the zip and run `rc2fx.exe`.
-- macOS: extract the zip, move `RC2FX.app` to **Applications** and open it.
-- Linux: either make the downloaded AppImage executable (for example
-  `chmod +x rc2fx-*-linux-x64.AppImage`) and run it, or install the `.deb` or
-  `.rpm` package with your distribution's package manager and start RC2FX
-  from your applications. Linux needs some one-time setup, described [below](#linux).
+- Windows: run the `-setup.exe`. It installs RC2FX for your user only, without
+  an administrator prompt, into `%LOCALAPPDATA%\io.github.ibanks42.rc2fx`. It
+  adds RC2FX to the Start menu and to **Settings › Apps › Installed apps**.
+  For the portable copy, extract the zip to a folder you can write to and run
+  `RC2FX.exe`.
+- macOS: open the `.pkg` and follow its steps. It installs `RC2FX.app` into
+  **Applications**, or into the **Applications** folder in your home folder
+  (`~/Applications`) if you choose **Install for me only**. For the portable
+  copy, extract the zip, move `RC2FX.app` to **Applications** and open it.
+- Linux: make the downloaded AppImage executable
+  (`chmod +x rc2fx-linux-x64.AppImage`) and run it. Keep it in a folder you
+  can write to, such as your home folder, so that it can update itself. Linux
+  needs some one-time setup, described [below](#linux).
 
 If there is no download for your platform, you can
 [build it from source](../developer/building.md).
 
+### Removing the app
+
+Removing the app doesn't change the mixer. To remove RC2FX from the mixer,
+flash stock RØDE firmware with the installer first; see
+[Installing RC2FX](installing.md).
+
+- Windows: uninstall RC2FX from **Settings › Apps › Installed apps**. It asks
+  whether to also delete RC2FX's data on this computer: downloaded firmware,
+  the backups of your mixer's RC2FX settings and your preferences, in
+  `%LOCALAPPDATA%\RC2FX`, and the SSH key pair
+  `~/.ssh/rc2fx_rodecaster_pro_ii` and `~/.ssh/rc2fx_rodecaster_pro_ii.pub`.
+  **No** is the default and keeps them, in case you install RC2FX again. An
+  uninstall that nobody answers keeps them after a minute. For the portable
+  copy, delete its folder.
+- macOS: drag `RC2FX.app` from **Applications** (or `~/Applications`) to the
+  Trash. RC2FX's data in `~/Library/Application Support/RC2FX` and the SSH
+  key pair `~/.ssh/rc2fx_rodecaster_pro_ii` and
+  `~/.ssh/rc2fx_rodecaster_pro_ii.pub` stay; delete them too if you don't
+  want them.
+- Linux: delete the AppImage. Its update downloads are in
+  `~/.cache/rc2fx/velopack-packages`
+  (`$XDG_CACHE_HOME/rc2fx/velopack-packages` if that is set); delete the
+  folder too. RC2FX's data stays: downloads and backups in
+  `~/.local/share/RC2FX` (`$XDG_DATA_HOME/RC2FX` if that is set), preferences
+  in `~/.config/RC2FX` (`$XDG_CONFIG_HOME/RC2FX` if that is set), and the SSH
+  key pair `~/.ssh/rc2fx_rodecaster_pro_ii` and
+  `~/.ssh/rc2fx_rodecaster_pro_ii.pub`.
+
 ## Versions and updates
 
 The app, the RC2FX mixer software and RØDE's firmware have separate versions.
-**Settings › About** shows them on one line with a status. Select **View
-versions** to see each part:
+The **Versions** section of **Settings** shows each part:
 
 | Line | Installed | Available |
 | --- | --- | --- |
@@ -77,15 +120,15 @@ The installer flashes RC2FX and RØDE firmware together as one image. Review bot
 versions in its confirmation dialog. Older versions require an explicit downgrade
 confirmation; an unknown installed version is identified before proceeding.
 
-Nothing is flashed automatically. Open the installer from the Versions dialog
-or **Settings › Mixer › Open installer**, choose the versions, and confirm.
+Nothing is flashed automatically. Open the installer from **Settings ›
+Versions** or **Settings › Mixer › Open installer**, choose the versions, and confirm.
 Downloading a new desktop app does not change the mixer. See
 [Installing RC2FX](installing.md).
 
 ### App updates
 
 The app checks GitHub for a newer RC2FX app once when it starts, and again
-when you press **Check for updates** in the Versions dialog. It asks
+when you press **Check for updates** in **Settings › Versions**. It asks
 GitHub's public releases API for the official repository
 (`github.com/ibanks42/rc2fx`), without signing in, and considers only
 published app releases: drafts, pre-releases and mixer software releases are
@@ -98,19 +141,63 @@ version since yours, newest first. The full histories are at
 [App release history](https://ibanks42.github.io/rc2fx/updates/app) and
 [Mixer software history](https://ibanks42.github.io/rc2fx/updates/mixer). If
 the feed can't be loaded, the app falls back to GitHub's release notes and
-says that some notes may be missing. The desktop app does not update itself: download a new desktop version from
-the release page. Mixer payloads are downloaded through the installer.
-Updating the app doesn't change the mixer; see above for updating the mixer
-software.
+says that some notes may be missing.
+
+The check only tells you about a new version. Nothing downloads or installs
+until you ask. How you update depends on how you installed the app:
+
+- Windows and macOS, installed with the `-setup.exe` or the `.pkg` or run from
+  the portable zip, and the Linux AppImage: **Settings › Versions** shows
+  **Download update**. It downloads the new version from the latest GitHub
+  release and shows its progress. The button then reads **Checking update**
+  while the download is checked twice: against the SHA-256 that the release
+  lists for it, and against RC2FX's signed release information, which only
+  the project's release keys can produce. The signed check runs before the
+  download is put in place, so a download that fails it, or that can't be
+  checked, for example because the connection dropped, is never used; press
+  **Download update** to try again. If RC2FX says the update hasn't been
+  signed yet, try again later: each release is signed shortly after it's
+  published. Once the check passes, press **Restart to update**:
+  RC2FX closes, installs the new version and starts again. The AppImage
+  update replaces the AppImage file you started, under the same name.
+
+  An update you downloaded but haven't restarted for is checked again the
+  next time RC2FX starts, before **Restart to update** appears. If that
+  check can't be made, for example because you're offline, RC2FX keeps the
+  download, says what went wrong, and the button reads **Check again**,
+  which checks it again without downloading it.
+- Builds from source: **Download** opens the release page. Download and
+  install the new version yourself.
+
+**Restart to update** works like closing the window: if you have unsaved
+edits, RC2FX asks about them first. It is unavailable while the installer
+has a run going, including while it waits for the mixer to finish updating
+after a flash, so an update never interrupts a flash. A downloaded update stays ready
+until you restart for it. If it has been removed from your computer since,
+RC2FX stays open and asks you to download it again. If a download fails,
+**Release page** opens the release instead. On macOS, if the `.pkg`
+installed RC2FX for all users (into
+`/Applications`), macOS asks for an administrator's name and password to
+replace the app; without them the update isn't installed and the current
+version starts again.
+
+Mixer payloads are downloaded through the installer. Updating the app doesn't
+change the mixer; see above for updating the mixer software.
 
 ## Linux
+
+RC2FX for Linux is the AppImage. It runs on x86-64 distributions with glibc
+2.28 or newer, such as Debian 10, Ubuntu 20.04, RHEL, AlmaLinux and Rocky
+Linux 8, Fedora 29 and later releases of each.
+
+RC2FX 0.1.5 also came as a `.deb` and an `.rpm`. If you installed one of
+them, remove it with `sudo apt remove rc2fx` or `sudo dnf remove rc2fx` and
+download the AppImage instead.
 
 ### Device access
 
 Linux only lets a program open the mixer's control interface if a udev rule
-allows it. The `.deb` and `.rpm` packages install this rule
-(`/usr/lib/udev/rules.d/70-rc2fx.rules`) and reload udev, so with them there is
-nothing to set up. With the AppImage, the first time access is refused, the app explains what it needs:
+allows it. The first time access is refused, the app explains what it needs:
 the file `/etc/udev/rules.d/70-rc2fx.rules`, which it can show in full, and
 how to remove it later. **Allow access** installs the rule through your
 system's password prompt. The password goes to the system prompt, and the app
