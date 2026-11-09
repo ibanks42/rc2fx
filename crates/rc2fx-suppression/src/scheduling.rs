@@ -94,7 +94,9 @@ fn apply_scope(options: WorkerOptions, kernel_allowed: bool) -> Result<(), Error
             if libc::pthread_setschedparam(thread, libc::SCHED_OTHER, &param) != 0 {
                 return Err(Error::Scheduling);
             }
-            let tid = libc::gettid() as libc::id_t;
+            // The raw call: glibc only has gettid() from 2.30, and the checks
+            // build on 2.28.
+            let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
             if libc::setpriority(libc::PRIO_PROCESS, tid, nice as libc::c_int) != 0 {
                 return Err(Error::Scheduling);
             }
@@ -248,7 +250,10 @@ mod tests {
             );
             assert_eq!(policy, libc::SCHED_OTHER);
             assert_eq!(
-                libc::getpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t),
+                libc::getpriority(
+                    libc::PRIO_PROCESS,
+                    libc::syscall(libc::SYS_gettid) as libc::id_t
+                ),
                 5
             );
         })

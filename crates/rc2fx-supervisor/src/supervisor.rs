@@ -859,7 +859,9 @@ mod tests {
     #[test]
     fn the_real_thread_queries_see_this_process() {
         let this = MixerThreads(std::process::id() as i32);
-        let tid = unsafe { libc::gettid() };
+        // The raw call: glibc only has gettid() from 2.30, and the checks build
+        // on 2.28.
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) } as libc::pid_t;
         // Listing can skip a live thread while another exits, and the other
         // tests' threads are exiting. On the mixer the next pass finds it.
         assert!((0..1000).any(|_| this.list().contains(&tid)));
