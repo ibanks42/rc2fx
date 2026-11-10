@@ -15,13 +15,25 @@ use rc2fx_core::{
     PresetSummary, RoutingRequest, SelectionRequest, TargetMeter, Timing,
 };
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::{oneshot, watch};
 
 pub const QUEUED_COMMANDS: usize = 8;
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// The loop's fixed tick where nothing gives it a deadline: with a JACK runtime
+/// in this process, and while a resource sample cannot be taken yet.
+const TICK: Duration = Duration::from_millis(20);
+/// How often process resources and the USB status are sampled.
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+/// The shortest wait for a command, so a deadline that is already due costs
+/// one pass of the loop and never a spin.
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+const MIN_WAIT: Duration = Duration::from_millis(1);
 
 #[derive(Debug)]
 pub enum Error {
@@ -95,6 +107,8 @@ enum Command {
     Settings(Answer<Vec<u8>>),
     Lifecycle(GenerationUpdate, Answer<DeviceState>),
     Transition(Request, Answer<DeviceState>),
+    /// Nothing to do: ends the loop's wait so it looks at its deadlines again.
+    Wake,
 }
 
 #[derive(Debug)]
@@ -134,9 +148,16 @@ pub struct GenerationUpdate {
 struct Admission {
     // This lock guards only command admission/closure, never disk or audio.
     sender: Mutex<Option<mpsc::SyncSender<Command>>>,
+    /// Commands admitted and not yet taken by the loop, at most
+    /// QUEUED_COMMANDS. The channel has one more slot, which only a wake
+    /// uses, so a wake never takes a command's place. Changed by senders
+    /// under the `sender` lock.
+    queued: AtomicUsize,
+    /// A wake is in the channel; a second one would add nothing.
+    waking: AtomicBool,
     completed: watch::Receiver<bool>,
     completion: watch::Sender<bool>,
-    closed: std::sync::atomic::AtomicBool,
+    closed: AtomicBool,
     front: Facade,
 }
 #[derive(Clone)]
@@ -145,10 +166,17 @@ impl Handle {
     fn enqueue<T>(&self, make: impl FnOnce(Answer<T>) -> Command) -> Result<Reply<T>, Error> {
         let sender = self.0.sender.lock().map_err(|_| Error::Stopped)?;
         let sender = sender.as_ref().ok_or(Error::Stopped)?;
+        if self.0.queued.load(Ordering::Acquire) >= QUEUED_COMMANDS {
+            return Err(Error::Busy);
+        }
         let (answer, reply) = oneshot::channel();
-        sender.try_send(make(answer)).map_err(|error| match error {
-            mpsc::TrySendError::Full(_) => Error::Busy,
-            mpsc::TrySendError::Disconnected(_) => Error::Stopped,
+        self.0.queued.fetch_add(1, Ordering::AcqRel);
+        sender.try_send(make(answer)).map_err(|error| {
+            self.0.queued.fetch_sub(1, Ordering::AcqRel);
+            match error {
+                mpsc::TrySendError::Full(_) => Error::Busy,
+                mpsc::TrySendError::Disconnected(_) => Error::Stopped,
+            }
         })?;
         Ok(reply)
     }
@@ -156,7 +184,28 @@ impl Handle {
         self.read(Ok(self.0.front.state()))
     }
     pub fn subscribe(&self) -> Result<Reply<Subscription>, Error> {
-        self.read(self.0.front.subscribe().map_err(Error::Events))
+        let subscription = self.0.front.subscribe().map_err(Error::Events);
+        if subscription.is_ok() {
+            self.wake();
+        }
+        self.read(subscription)
+    }
+    /// Ends the loop's wait. A new subscriber must not wait out an idle
+    /// interval for its first meter. The wake has its own slot in the channel,
+    /// so it neither fails behind queued commands nor takes a command's place.
+    fn wake(&self) {
+        if let Ok(sender) = self.0.sender.lock()
+            && let Some(sender) = sender.as_ref()
+            && !self.0.waking.swap(true, Ordering::AcqRel)
+            && sender.try_send(Command::Wake).is_err()
+        {
+            self.0.waking.store(false, Ordering::Release);
+        }
+    }
+    /// Whether anyone is subscribed to live events.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn has_clients(&self) -> bool {
+        self.0.front.has_clients()
     }
     /// Restart the diagnostics baselines and the event log (no audio effect).
     pub fn reset_diagnostics(&self) -> Result<Reply<DeviceState>, Error> {
@@ -230,9 +279,11 @@ impl Handle {
         let (completion, completed) = watch::channel(true);
         Self(Arc::new(Admission {
             sender: Mutex::new(None),
+            queued: AtomicUsize::new(0),
+            waking: AtomicBool::new(false),
             completed,
             completion,
-            closed: std::sync::atomic::AtomicBool::new(false),
+            closed: AtomicBool::new(false),
             front: controller.front.clone(),
         }))
     }
@@ -242,7 +293,7 @@ impl Handle {
         }
     }
     pub(crate) fn is_closed(&self) -> bool {
-        self.0.closed.load(std::sync::atomic::Ordering::Acquire)
+        self.0.closed.load(Ordering::Acquire)
     }
     fn install(&self, sender: mpsc::SyncSender<Command>) -> Result<(), Error> {
         let mut slot = self.0.sender.lock().map_err(|_| Error::Stopped)?;
@@ -253,6 +304,9 @@ impl Handle {
             return Err(Error::Busy);
         }
         self.0.completion.send_replace(false);
+        // A new channel starts empty, whatever the last one still held.
+        self.0.queued.store(0, Ordering::Release);
+        self.0.waking.store(false, Ordering::Release);
         *slot = Some(sender);
         Ok(())
     }
@@ -260,9 +314,7 @@ impl Handle {
     /// Close admission atomically with enqueue. Accepted commands still execute,
     /// even if the control API drops their replies. No command can be admitted after this.
     pub fn close(&self) {
-        self.0
-            .closed
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.0.closed.store(true, Ordering::Release);
         if let Ok(mut sender) = self.0.sender.lock() {
             sender.take();
         }
@@ -336,6 +388,8 @@ pub struct Coordinator<'owner> {
     completed: watch::Sender<bool>,
     handle: Handle,
     action: Option<Action>,
+    /// When the next resource sample is due.
+    next_sample: Instant,
 }
 impl<'owner> Coordinator<'owner> {
     /// Reuses the same bounded commands, control Handle and event stream without
@@ -473,7 +527,8 @@ impl<'owner> Coordinator<'owner> {
                 live.runtime.control.selected_ids().to_vec(),
             );
         }
-        let (sender, commands) = mpsc::sync_channel(QUEUED_COMMANDS);
+        // One slot more than the commands admitted: see `Admission::queued`.
+        let (sender, commands) = mpsc::sync_channel(QUEUED_COMMANDS + 1);
         if let Err(error) = handle.install(sender) {
             return Err((error, controller));
         }
@@ -486,6 +541,7 @@ impl<'owner> Coordinator<'owner> {
             completed: handle.0.completion.clone(),
             handle: handle.clone(),
             action: None,
+            next_sample: Instant::now(),
         })
     }
 
@@ -497,18 +553,69 @@ impl<'owner> Coordinator<'owner> {
         self.controller
     }
     fn run_loop(&mut self) {
-        loop {
-            if self.action.is_none() {
-                self.poll_audio();
-            }
-            self.controller.front.sample_resources();
-            match self.commands.recv_timeout(POLL_INTERVAL) {
-                Ok(command) => self.execute(command),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
+        while self.pass() {}
         self.completed.send_replace(true);
+    }
+
+    /// One pass of the loop: the timed work, then a wait for a command or the
+    /// next deadline. Returns false once admission is closed and every
+    /// accepted command has run.
+    pub(crate) fn pass(&mut self) -> bool {
+        let wait = self.turn();
+        match self.commands.recv_timeout(wait) {
+            // Nothing to run: the next pass looks at the deadlines again.
+            Ok(Command::Wake) => self.handle.0.waking.store(false, Ordering::Release),
+            Ok(command) => {
+                // Its place in the queue is free once the loop has taken it.
+                let queued = &self.handle.0.queued;
+                let _ = queued.try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    count.checked_sub(1)
+                });
+                self.execute(command);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+        true
+    }
+
+    /// The loop's timed work: read the audio side and sample resources when
+    /// each is due. Returns how long the loop may then wait for a command.
+    ///
+    /// With the native engine the wait ends at the earlier of the next engine
+    /// read and the next resource sample, so the thread sleeps between them. A
+    /// command ends the wait at once, and the deadline is worked out again
+    /// after every command, because a save makes the next read due now. A JACK
+    /// runtime in this process keeps the fixed tick: its reclaim and stall
+    /// checks have no deadline of their own.
+    pub(crate) fn turn(&mut self) -> Duration {
+        if self.action.is_none() {
+            self.poll_audio();
+        }
+        let now = Instant::now();
+        if now >= self.next_sample {
+            // The history decides whether a sample is taken. It takes none
+            // before the first state is published; ask again on the next tick.
+            let taken = self.controller.front.sample_resources(now);
+            self.next_sample = now + if taken { SAMPLE_INTERVAL } else { TICK };
+        }
+        #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+        if let Some(native) = &self.native
+            && self.action.is_none()
+        {
+            return native
+                .next_poll()
+                .min(self.next_sample)
+                .saturating_duration_since(Instant::now())
+                .max(MIN_WAIT);
+        }
+        TICK
+    }
+
+    /// The native runtime, for tests that set its timing.
+    #[cfg(all(test, feature = "native-pipeline", target_os = "linux"))]
+    pub(crate) fn native_mut(&mut self) -> &mut crate::native_backend::Runtime {
+        self.native.as_mut().expect("native coordinator")
     }
 
     fn poll_audio(&mut self) {
@@ -691,6 +798,7 @@ impl<'owner> Coordinator<'owner> {
     fn execute(&mut self, command: Command) {
         // Reply cancellation never cancels an admitted operation or file commit.
         match command {
+            Command::Wake => {}
             Command::ResetDiagnostics(reply) => {
                 let state = self.controller.reset_diagnostics();
                 let _ = reply.send(Ok(state));
@@ -907,6 +1015,198 @@ fn target_meter_snapshot(
         latency_samples: observation.latency_samples,
         worker_failed: worker.failed,
         performance,
+    }
+}
+
+// The store needs Unix directory durability and file locking.
+#[cfg(all(test, unix))]
+mod loop_tests {
+    use super::*;
+    use crate::{
+        audio::{Chain, Group},
+        store::Store,
+    };
+    use rc2fx_core::{Config, Target, TargetKind};
+
+    fn samples(handle: &Handle) -> usize {
+        let report: serde_json::Value =
+            serde_json::from_slice(&handle.diagnostic_report().unwrap()).unwrap();
+        report["samples"].as_array().unwrap().len()
+    }
+
+    /// The deadline-driven wait belongs to the native engine. A JACK runtime
+    /// in this process, or none, keeps the fixed tick that its reclaim and
+    /// stall checks run on.
+    #[test]
+    fn without_the_native_engine_the_loop_keeps_its_fixed_tick() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path(), Config::default()).unwrap();
+        let (_handle, mut owner) = Coordinator::new(Controller::new(store), None).unwrap();
+        for _ in 0..3 {
+            assert_eq!(owner.turn(), TICK);
+        }
+        drop(owner);
+
+        let config = Config {
+            revision: 7,
+            targets: vec![Target::new("usb-main", "USB", TargetKind::Playback, 2)],
+            selected_targets: vec!["usb-main".into()],
+            ..Config::default()
+        };
+        let mut group = Group::new(
+            vec![Chain::new(&config.targets[0], [None, None]).unwrap()],
+            7,
+        )
+        .unwrap();
+        let (control, _callbacks) = group.split().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path(), config).unwrap();
+        let runtime = Runtime {
+            control,
+            observations: None,
+            descriptor: RuntimeDescriptor {
+                generation: 9,
+                mode: EngineMode::Jack,
+                sample_rate: 48_000,
+                block_size: 112,
+                progress_timeout: Duration::from_millis(60),
+            },
+        };
+        let (handle, mut owner) = Coordinator::new(Controller::new(store), Some(runtime)).unwrap();
+        assert_eq!(owner.turn(), TICK);
+        assert!(!owner.live.as_ref().unwrap().faulted);
+        // Each pass still runs the stall check: no callback advances this
+        // path, so a pass after the deadline reports it.
+        std::thread::sleep(Duration::from_millis(80));
+        assert_eq!(owner.turn(), TICK);
+        assert!(owner.live.as_ref().unwrap().faulted);
+        assert!(
+            handle.0.front.state().engine.message.contains("stopped"),
+            "{}",
+            handle.0.front.state().engine.message
+        );
+    }
+
+    /// A subscriber wakes the loop through the command channel. The wake has
+    /// a slot of its own: it is never refused behind queued commands, and it
+    /// never makes the queue admit fewer of them.
+    #[test]
+    fn a_wake_neither_takes_nor_needs_a_command_slot() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path(), Config::default()).unwrap();
+        let (handle, mut owner) = Coordinator::new(Controller::new(store), None).unwrap();
+        let queue = |handle: &Handle| -> Vec<_> {
+            (0..QUEUED_COMMANDS)
+                .map(|_| handle.settings().expect("a free command slot"))
+                .collect()
+        };
+        // Several subscribers before the loop runs leave one wake queued.
+        let _subscriptions: Vec<_> = (0..3).map(|_| handle.subscribe().unwrap()).collect();
+        let replies = queue(&handle);
+        assert!(matches!(handle.settings(), Err(Error::Busy)));
+        // The wake, then every command in order.
+        for _ in 0..=QUEUED_COMMANDS {
+            assert!(owner.pass());
+        }
+        for mut reply in replies {
+            assert!(reply.try_recv().unwrap().is_ok());
+        }
+        // A full queue does not refuse a wake, and the wake is delivered.
+        let replies = queue(&handle);
+        let _late = handle.subscribe().unwrap();
+        assert!(handle.0.waking.load(Ordering::Acquire));
+        for _ in 0..=QUEUED_COMMANDS {
+            assert!(owner.pass());
+        }
+        assert!(!handle.0.waking.load(Ordering::Acquire));
+        assert_eq!(handle.0.queued.load(Ordering::Acquire), 0);
+        drop(replies);
+        // Every slot is free again.
+        drop(queue(&handle));
+        assert!(matches!(handle.settings(), Err(Error::Busy)));
+    }
+
+    /// Several threads send bursts of commands and subscribe while the loop
+    /// runs. The senders count a command in and the loop counts it out, so the
+    /// count must never pass the limit, must come back to zero, and must leave
+    /// no wake behind. Every admitted command is answered, and a full queue
+    /// is the only refusal.
+    #[test]
+    fn concurrent_commands_and_wakes_keep_the_queue_count_exact() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path(), Config::default()).unwrap();
+        let (handle, owner) = Coordinator::new(Controller::new(store), None).unwrap();
+        let task = std::thread::spawn(move || owner.run());
+        let senders: Vec<_> = (0..6)
+            .map(|_| {
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let (mut answered, mut refused) = (0u32, 0u32);
+                    for round in 0..300 {
+                        if round % 2 == 0 {
+                            // More subscribers than the hub takes is refused
+                            // there; only an accepted one wakes the loop.
+                            drop(handle.subscribe());
+                        }
+                        // A burst, so that six threads overfill eight slots.
+                        let burst: Vec<_> = (0..4).map(|_| handle.settings()).collect();
+                        assert!(handle.0.queued.load(Ordering::Acquire) <= QUEUED_COMMANDS);
+                        for reply in burst {
+                            match reply {
+                                Ok(reply) => {
+                                    reply.blocking_recv().unwrap().unwrap();
+                                    answered += 1;
+                                }
+                                Err(Error::Busy) => refused += 1,
+                                Err(error) => panic!("{error:?}"),
+                            }
+                        }
+                    }
+                    (answered, refused)
+                })
+            })
+            .collect();
+        let (mut answered, mut refused) = (0, 0);
+        for sender in senders {
+            let (a, r) = sender.join().unwrap();
+            answered += a;
+            refused += r;
+        }
+        assert_eq!(answered + refused, 6 * 300 * 4);
+        assert!(answered >= 300 * 4, "{answered} answered");
+        // A command behind any wake still queued: once it is answered, the
+        // loop has taken everything before it.
+        handle.settings().unwrap().blocking_recv().unwrap().unwrap();
+        assert_eq!(handle.0.queued.load(Ordering::Acquire), 0);
+        assert!(!handle.0.waking.load(Ordering::Acquire));
+        handle.close();
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn resources_are_sampled_once_a_second_and_the_history_has_the_last_word() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path(), Config::default()).unwrap();
+        let (handle, mut owner) = Coordinator::new(Controller::new(store), None).unwrap();
+        // The first pass samples, and the next sample is a second away.
+        let before = Instant::now();
+        owner.turn();
+        assert_eq!(samples(&handle), 1);
+        assert!(owner.next_sample >= before + SAMPLE_INTERVAL);
+        assert!(owner.next_sample <= Instant::now() + SAMPLE_INTERVAL);
+        // Passes before that deadline do not ask the history at all.
+        let due = owner.next_sample;
+        for _ in 0..5 {
+            owner.turn();
+        }
+        assert_eq!((samples(&handle), owner.next_sample), (1, due));
+        // A deadline that comes early does not make a sample: the history
+        // takes one a second. The loop asks again on its next tick.
+        owner.next_sample = Instant::now();
+        owner.turn();
+        assert_eq!(samples(&handle), 1);
+        assert!(owner.next_sample <= Instant::now() + TICK);
+        assert!(owner.next_sample < due);
     }
 }
 

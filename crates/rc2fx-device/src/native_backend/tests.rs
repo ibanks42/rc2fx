@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
 };
@@ -53,6 +53,11 @@ struct Peer {
     drop_commit: Arc<AtomicBool>,
     hold_window: Arc<AtomicBool>,
     failed_worker: Arc<AtomicBool>,
+    /// Answer every inventory with Busy, as the library does while RØDE's
+    /// mixer registers or closes ports.
+    busy: Arc<AtomicBool>,
+    /// Inventory requests received, answered or refused.
+    inventories: Arc<AtomicU64>,
     events: Arc<Mutex<Vec<Event>>>,
     task: Option<thread::JoinHandle<()>>,
 }
@@ -106,6 +111,9 @@ impl Peer {
         let hold_window = Arc::new(AtomicBool::new(false));
         let failed_worker = Arc::new(AtomicBool::new(false));
         let (holding, failing) = (hold_window.clone(), failed_worker.clone());
+        let busy = Arc::new(AtomicBool::new(false));
+        let inventories = Arc::new(AtomicU64::new(0));
+        let (refusing, counted) = (busy.clone(), inventories.clone());
         let (stopping, dropping, trace) = (stop.clone(), drop_commit.clone(), events.clone());
         let task = thread::spawn(move || {
             let mut buffer = vec![0; rc2fx_native_control::MAX_REQUEST + 1];
@@ -129,7 +137,14 @@ impl Peer {
                 assert_eq!(request.version, VERSION);
                 let reply = match request.operation {
                     Operation::Hello => Reply::Hello,
+                    Operation::Inventory if refusing.load(Ordering::Acquire) => {
+                        counted.fetch_add(1, Ordering::AcqRel);
+                        Reply::Error {
+                            code: rc2fx_native_control::ErrorCode::Busy,
+                        }
+                    }
                     Operation::Inventory => {
+                        counted.fetch_add(1, Ordering::AcqRel);
                         for path in &mut paths {
                             let meter = path.status.meter.as_mut().unwrap();
                             if !holding.load(Ordering::Acquire) {
@@ -239,9 +254,14 @@ impl Peer {
             drop_commit,
             hold_window,
             failed_worker,
+            busy,
+            inventories,
             events,
             task: Some(task),
         }
+    }
+    fn inventories(&self) -> u64 {
+        self.inventories.load(Ordering::Acquire)
     }
     fn path(&self) -> PathBuf {
         self.directory.path().join("control.sock")
@@ -264,6 +284,9 @@ impl Drop for Peer {
 }
 
 fn fixture() -> (tempfile::TempDir, Peer, Controller, Runtime) {
+    fixture_with(Duration::from_secs(2))
+}
+fn fixture_with(progress_timeout: Duration) -> (tempfile::TempDir, Peer, Controller, Runtime) {
     let config = Config {
         selected_targets: vec!["mic-1".into(), "headphones-2".into()],
         ..Config::default()
@@ -272,7 +295,7 @@ fn fixture() -> (tempfile::TempDir, Peer, Controller, Runtime) {
     let directory = tempfile::tempdir().unwrap();
     let mut controller = Controller::new(Store::open(directory.path(), config).unwrap());
     let mut runtime =
-        Runtime::connect(&peer.path(), controller.config(), Duration::from_secs(2)).unwrap();
+        Runtime::connect(&peer.path(), controller.config(), progress_timeout).unwrap();
     controller.attach_native(&mut runtime).unwrap();
     advance(&mut controller, &mut runtime);
     (directory, peer, controller, runtime)
@@ -674,6 +697,389 @@ fn an_unpublished_change_keeps_fast_polling_without_a_client() {
     toggle(&mut controller, &mut runtime, false);
     assert!(!runtime.pending.is_empty());
     assert_eq!(runtime.interval_after(&settled, false), POLL_INTERVAL);
+}
+
+/// The idle interval comes from the depth of the native meter ring, which is
+/// a constant in another crate. It always leaves the ring its slack, and it
+/// stays under the history's one-second sample.
+#[test]
+fn the_idle_interval_follows_the_meter_ring_and_leaves_it_room() {
+    let ms = Duration::from_millis;
+    let span = |windows: usize| ms(windows as u64 * METER_WINDOW_FRAMES * 1000 / 48_000);
+    assert_eq!(span(8), ms(400));
+    assert_eq!(idle_poll_interval(8), ms(250));
+    assert_eq!(idle_poll_interval(16), ms(650));
+    assert_eq!(idle_poll_interval(32), IDLE_POLL_LIMIT);
+    assert_eq!(idle_poll_interval(1024), IDLE_POLL_LIMIT);
+    for windows in 0..=64 {
+        let idle = idle_poll_interval(windows);
+        assert!(
+            (POLL_INTERVAL..=IDLE_POLL_LIMIT).contains(&idle),
+            "{windows}"
+        );
+        // Slower than the watched rate only where the ring has the room.
+        assert!(
+            idle == POLL_INTERVAL || idle + RING_SLACK <= span(windows),
+            "{windows}"
+        );
+    }
+    assert_eq!(IDLE_POLL_INTERVAL, idle_poll_interval(METER_RING_WINDOWS));
+    assert!(IDLE_POLL_INTERVAL + RING_SLACK <= span(METER_RING_WINDOWS));
+    // One read at least between two history samples, a second apart.
+    assert!(IDLE_POLL_LIMIT < Duration::from_secs(1));
+    // The watched rate is nine reads a second, not ten.
+    assert_eq!(
+        Duration::from_secs(1).as_millis() / POLL_INTERVAL.as_millis(),
+        9
+    );
+}
+
+#[test]
+fn the_idle_interval_is_at_most_half_the_stall_deadline() {
+    let ms = Duration::from_millis;
+    for (timeout, expected) in [
+        (Duration::from_secs(2), IDLE_POLL_INTERVAL),
+        (ms(400), ms(200).min(IDLE_POLL_INTERVAL)),
+        (ms(300), ms(150).min(IDLE_POLL_INTERVAL)),
+        // Never faster than the watched rate.
+        (ms(200), POLL_INTERVAL),
+    ] {
+        let (_directory, _peer, _controller, mut runtime) = fixture_with(timeout);
+        assert_eq!(runtime.idle_interval, expected, "{timeout:?}");
+        assert!(runtime.idle_interval <= (timeout / 2).max(POLL_INTERVAL));
+        // The read schedules what the runtime holds, not the constant.
+        runtime.next_poll = Instant::now();
+        let before = Instant::now();
+        assert!(runtime.poll(|| false).is_some());
+        let scheduled = runtime.next_poll.saturating_duration_since(before);
+        assert!(scheduled <= expected + ms(50), "{timeout:?}: {scheduled:?}");
+        assert_eq!(runtime.idle, expected > POLL_INTERVAL);
+    }
+}
+
+#[test]
+fn a_client_attaching_during_an_idle_wait_is_read_at_once() {
+    let (_directory, peer, _controller, mut runtime) = fixture();
+    runtime.next_poll = Instant::now();
+    assert!(runtime.poll(|| false).is_some());
+    assert!(runtime.idle, "a settled unwatched engine waits idle");
+    let idle_until = runtime.next_poll;
+    let read = peer.inventories();
+    // Not due, and still nobody watching: nothing is read.
+    assert!(runtime.poll(|| false).is_none());
+    assert_eq!(peer.inventories(), read);
+    assert_eq!(runtime.next_poll, idle_until);
+    // A client subscribes: the engine is read now and the fast rate resumes.
+    let before = Instant::now();
+    assert!(runtime.poll(|| true).is_some());
+    assert_eq!(peer.inventories(), read + 1);
+    assert!(!runtime.idle);
+    assert!(runtime.next_poll < idle_until);
+    assert!(runtime.next_poll >= before + POLL_INTERVAL);
+    assert!(runtime.next_poll <= Instant::now() + POLL_INTERVAL);
+    // Being watched does not make every pass a read.
+    assert!(runtime.poll(|| true).is_none());
+    assert_eq!(peer.inventories(), read + 1);
+}
+
+#[test]
+fn a_busy_engine_after_an_idle_wait_is_not_a_stall() {
+    let (_directory, peer, _controller, mut runtime) = fixture();
+    let timeout = runtime.progress_timeout;
+    runtime.next_poll = Instant::now();
+    assert!(runtime.poll(|| false).is_some());
+    assert!(runtime.idle);
+    // The idle wait has passed, so the last progress seen is that old. The
+    // library then answers Busy, as it does while ports are registered.
+    let aged = |runtime: &mut Runtime, age: Duration| {
+        let now = Instant::now();
+        for path in &mut runtime.paths {
+            path.last_progress = now - age;
+        }
+        runtime.next_poll = now;
+    };
+    peer.busy.store(true, Ordering::Release);
+    let idle = runtime.idle_interval;
+    aged(&mut runtime, idle);
+    let read = peer.inventories();
+    assert!(runtime.poll(|| false).is_none(), "Busy is not a fault");
+    assert_eq!(peer.inventories(), read + 1);
+    // It is asked again at the fast rate, not after another idle wait.
+    assert!(!runtime.idle);
+    assert!(runtime.next_poll <= Instant::now() + POLL_INTERVAL);
+    // Busy is tolerated up to the stall deadline, which the idle wait used
+    // at most half of.
+    assert!(idle <= timeout / 2);
+    aged(&mut runtime, timeout - Duration::from_millis(200));
+    assert!(runtime.poll(|| false).is_none());
+    aged(&mut runtime, timeout);
+    let stalled = runtime.poll(|| false).expect("a real stall is reported");
+    assert!(stalled.failure);
+    // The engine answers again: one read clears it.
+    peer.busy.store(false, Ordering::Release);
+    runtime.next_poll = Instant::now();
+    let recovered = runtime.poll(|| false).unwrap();
+    assert!(!recovered.failure && recovered.advancing);
+}
+
+/// The controller's loop with the real event hub, USB session and API. The
+/// tests above pass a literal for "someone is watching"; these let the
+/// subscription decide.
+#[cfg(feature = "native-pipeline")]
+mod coordinator_loop {
+    use super::*;
+    use crate::{
+        api::Options,
+        coordinator::{Coordinator, Handle},
+        usb_control::{Server, testing::*},
+    };
+    use rc2fx_usb::{Kind, REPORT_SIZE};
+
+    const SESSION: u64 = 0xfeed;
+
+    fn start() -> (tempfile::TempDir, Peer, Handle, Coordinator<'static>) {
+        let (directory, peer, controller, runtime) = fixture();
+        let (handle, owner) = Coordinator::new_native(controller, runtime).unwrap();
+        (directory, peer, handle, owner)
+    }
+    async fn event(server: &mut Server, id: u32) -> serde_json::Value {
+        call(server, SESSION, id, "GET", "api/v1/events").await.body
+    }
+    fn samples(handle: &Handle) -> Vec<serde_json::Value> {
+        let report: serde_json::Value =
+            serde_json::from_slice(&handle.diagnostic_report().unwrap()).unwrap();
+        report["samples"].as_array().unwrap().clone()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_usb_client_that_goes_silent_returns_the_engine_to_idle_polling() {
+        let (_directory, peer, handle, mut owner) = start();
+        let (socket, _peer_socket) = tokio::net::UnixDatagram::pair().unwrap();
+        let mut server = Server::new(handle.clone(), Options::default());
+        let mut bytes = [0; REPORT_SIZE + 1];
+        // Nobody attached: the first pass reads the engine and waits idle.
+        let wait = owner.turn();
+        assert!(
+            wait > POLL_INTERVAL && wait <= IDLE_POLL_INTERVAL,
+            "{wait:?}"
+        );
+        assert!(owner.native_mut().idle);
+
+        // The app attaches. Its subscription ends the idle wait: the next
+        // pass reads the engine without waiting for the idle deadline, and
+        // the fast rate is back.
+        assert_eq!(answer(&mut server, &hello(SESSION)).await.0, Kind::Ack);
+        assert_eq!(event(&mut server, 1).await["event"], "state");
+        assert!(handle.has_clients());
+        let read = peer.inventories();
+        assert!(owner.pass(), "the subscription woke the loop");
+        assert_eq!(peer.inventories(), read + 1);
+        assert!(!owner.native_mut().idle);
+        let wait = owner.turn();
+        assert!(wait <= POLL_INTERVAL, "{wait:?}");
+        // That read's meter is already waiting for the client.
+        assert_eq!(event(&mut server, 2).await["event"], "meter");
+
+        // The app goes away without a word. Five seconds later its
+        // subscription is gone, and the next read schedules the idle interval.
+        let silent =
+            tokio::time::timeout(Duration::from_secs(6), server.receive(&socket, &mut bytes));
+        assert!(silent.await.is_err());
+        assert!(!handle.has_clients());
+        owner.native_mut().next_poll = Instant::now();
+        let before = Instant::now();
+        let wait = owner.turn();
+        assert!(
+            wait > POLL_INTERVAL && wait <= IDLE_POLL_INTERVAL,
+            "{wait:?}"
+        );
+        let native = owner.native_mut();
+        assert!(native.idle);
+        assert!(native.next_poll >= before + IDLE_POLL_INTERVAL);
+        assert!(native.next_poll <= Instant::now() + IDLE_POLL_INTERVAL);
+
+        // The app comes back on the same session: it starts with the state,
+        // and the engine is read again at once and at the fast rate.
+        assert_eq!(event(&mut server, 3).await["event"], "state");
+        let read = peer.inventories();
+        assert!(owner.pass());
+        assert_eq!(peer.inventories(), read + 1);
+        assert!(owner.turn() <= POLL_INTERVAL);
+        assert_eq!(event(&mut server, 4).await["event"], "meter");
+    }
+
+    #[test]
+    fn the_loop_sleeps_until_the_next_read_or_sample_not_on_a_tick() {
+        let (_directory, peer, handle, mut owner) = start();
+        let read = peer.inventories();
+        // The first pass reads and samples; the next read is the idle one.
+        let wait = owner.turn();
+        assert_eq!(peer.inventories(), read + 1);
+        assert_eq!(samples(&handle).len(), 1);
+        assert!(
+            wait > IDLE_POLL_INTERVAL - Duration::from_millis(50),
+            "{wait:?}"
+        );
+        assert!(wait <= IDLE_POLL_INTERVAL, "{wait:?}");
+        // A pass before the deadline does no work.
+        let again = owner.turn();
+        assert!(again <= wait && again > POLL_INTERVAL, "{again:?}");
+        assert_eq!(peer.inventories(), read + 1);
+        assert_eq!(samples(&handle).len(), 1);
+        // With the read far away the loop wakes for the one-second sample.
+        let native = owner.native_mut();
+        native.next_poll = Instant::now() + Duration::from_secs(30);
+        native.idle = false;
+        let wait = owner.turn();
+        assert!(wait > Duration::from_millis(800), "{wait:?}");
+        assert!(wait <= Duration::from_secs(1), "{wait:?}");
+        // A read that is due is done on the pass itself.
+        owner.native_mut().next_poll = Instant::now();
+        owner.turn();
+        assert_eq!(peer.inventories(), read + 2);
+    }
+
+    #[test]
+    fn a_command_ends_the_wait_and_the_read_after_a_save_is_immediate() {
+        let (_directory, peer, handle, mut owner) = start();
+        owner.turn();
+        owner.native_mut().idle_interval = Duration::from_secs(30);
+        owner.native_mut().next_poll = Instant::now();
+        owner.turn();
+        // The loop now has nothing to do before the one-second sample. A
+        // command sent while it waits is run at once.
+        assert!(owner.native_mut().enabled());
+        let sender = handle.clone();
+        let command = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            let state = sender.state().unwrap().blocking_recv().unwrap().unwrap();
+            sender
+                .routing(RoutingRequest {
+                    enabled: false,
+                    expected_revision: state.config.revision,
+                    expected_generation: state.engine.generation,
+                })
+                .unwrap()
+        });
+        let started = Instant::now();
+        assert!(owner.pass());
+        let waited = started.elapsed();
+        // That one pass ran the command: it did not end on a tick before the
+        // command came, and it did not sleep on to its deadline after it.
+        let mut reply = command.join().unwrap();
+        assert!(
+            matches!(reply.try_recv(), Ok(Ok(_))),
+            "the pass ended without running the command"
+        );
+        assert!(
+            waited < Duration::from_millis(700),
+            "the command waited for a deadline: {waited:?}"
+        );
+        assert!(!owner.native_mut().enabled());
+        // The save made the next read due now, long before the idle deadline:
+        // the following pass reads the engine.
+        let read = peer.inventories();
+        owner.turn();
+        assert_eq!(peer.inventories(), read + 1);
+    }
+
+    #[test]
+    fn a_subscription_ends_an_idle_wait_in_progress() {
+        let (_directory, peer, handle, mut owner) = start();
+        owner.native_mut().idle_interval = Duration::from_secs(30);
+        let task = thread::spawn(move || owner.run());
+        // The loop has read the engine and sampled, and now sleeps until the
+        // sample a second later.
+        thread::sleep(Duration::from_millis(150));
+        let read = peer.inventories();
+        let started = Instant::now();
+        let _subscription = handle.subscribe().unwrap();
+        while peer.inventories() == read && started.elapsed() < Duration::from_millis(600) {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let waited = started.elapsed();
+        handle.close();
+        task.join().unwrap();
+        assert!(
+            waited < Duration::from_millis(600),
+            "the new subscriber waited for the loop's next deadline"
+        );
+    }
+
+    #[test]
+    fn closing_admission_ends_the_loop_without_waiting_for_a_deadline() {
+        let (_directory, _peer, handle, mut owner) = start();
+        owner.native_mut().idle_interval = Duration::from_secs(30);
+        let task = thread::spawn(move || owner.run());
+        thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        handle.close();
+        let _controller = task.join().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(700),
+            "the loop waited for a deadline: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The real loop on its own thread and on the real clock. A subscriber is
+    /// read nine times a second, as it was when a 100 ms interval was rounded
+    /// up to a 20 ms tick: not ten, and not the idle rate. When its
+    /// subscription is dropped, which sends the loop nothing, the next read
+    /// falls back to the idle rate by itself. The lower bounds are loose
+    /// because a loaded machine reads late; the upper bounds are exact.
+    #[test]
+    fn the_running_loop_reads_nine_times_a_second_watched_and_at_the_idle_rate_alone() {
+        let (_directory, peer, handle, owner) = start();
+        let task = thread::spawn(move || owner.run());
+        let subscription = handle.subscribe().unwrap();
+        thread::sleep(Duration::from_millis(200));
+        let window = Duration::from_millis(2200);
+        let read = peer.inventories();
+        thread::sleep(window);
+        let watched = peer.inventories() - read;
+        drop(subscription);
+        // At most one more fast read finds the subscriber gone.
+        thread::sleep(Duration::from_millis(400));
+        let read = peer.inventories();
+        thread::sleep(window);
+        let idle = peer.inventories() - read;
+        handle.close();
+        task.join().unwrap();
+        let most = |interval: Duration| (window.as_millis() / interval.as_millis()) as u64 + 1;
+        assert!(
+            // Nine a second and no more, whatever the constant says.
+            (14..=21).contains(&watched),
+            "{watched} watched reads in {window:?}"
+        );
+        assert!(
+            (5..=most(IDLE_POLL_INTERVAL)).contains(&idle),
+            "{idle} idle reads in {window:?}"
+        );
+    }
+
+    /// The history samples once a second and keeps the newest meter window
+    /// read since its last sample. With the idle read under a second apart,
+    /// every sample has one, at the longest idle interval a deep ring allows.
+    #[test]
+    fn every_idle_history_sample_has_a_fresh_meter_window() {
+        let (_directory, peer, handle, mut owner) = start();
+        owner.native_mut().idle_interval = IDLE_POLL_LIMIT;
+        let read = peer.inventories();
+        let task = thread::spawn(move || owner.run());
+        thread::sleep(Duration::from_millis(3300));
+        let samples = samples(&handle);
+        let reads = peer.inventories() - read;
+        handle.close();
+        task.join().unwrap();
+        assert!(samples.len() >= 3, "{} samples", samples.len());
+        for (index, sample) in samples.iter().enumerate() {
+            assert_eq!(sample["telemetryStatus"], "fresh", "sample {index}");
+            assert!(!sample["telemetry"].is_null(), "sample {index}");
+        }
+        // Idle the whole time: about one read per 900 ms, never the fast rate.
+        assert!((3..=6).contains(&reads), "{reads} reads in 3.3 s");
+    }
 }
 
 /// Every native path reports performance: the worker's own timings when it has

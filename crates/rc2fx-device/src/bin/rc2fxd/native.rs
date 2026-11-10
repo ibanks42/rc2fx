@@ -9,7 +9,7 @@ use std::{
     ffi::OsString,
     io::{self, Read},
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicI32, Ordering},
     time::Duration,
 };
 
@@ -206,8 +206,22 @@ fn device_model() -> Result<rc2fx_firmware::Model, String> {
 }
 
 static STOP: AtomicBool = AtomicBool::new(false);
+/// The eventfd the signal handler writes to, or -1 before it exists. It stays
+/// open until the process exits, because the handler can run at any time.
+static STOP_FD: AtomicI32 = AtomicI32::new(-1);
 extern "C" fn stop_signal(_: libc::c_int) {
     STOP.store(true, Ordering::Relaxed);
+    let fd = STOP_FD.load(Ordering::Relaxed);
+    if fd >= 0 {
+        let one = 1u64.to_ne_bytes();
+        // SAFETY: write(2) is async-signal-safe and the descriptor is never
+        // closed. errno belongs to the code the signal interrupted.
+        unsafe {
+            let errno = *libc::__errno_location();
+            libc::write(fd, one.as_ptr().cast(), one.len());
+            *libc::__errno_location() = errno;
+        }
+    }
 }
 fn signals() -> io::Result<()> {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -222,6 +236,48 @@ fn signals() -> io::Result<()> {
         }
     }
     Ok(())
+}
+/// SIGINT and SIGTERM, as something the executor can wait for. The handler
+/// writes to an eventfd, so the executor sleeps until a signal arrives and has
+/// no timer that polls a flag.
+struct Stop(std::os::fd::RawFd);
+impl Stop {
+    /// Creates the eventfd and then installs the handlers, in that order, so
+    /// no signal finds a handler without it.
+    fn install() -> io::Result<Self> {
+        let mut fd = STOP_FD.load(Ordering::Relaxed);
+        if fd < 0 {
+            // SAFETY: plain descriptor creation.
+            fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            STOP_FD.store(fd, Ordering::Relaxed);
+        }
+        signals()?;
+        Ok(Self(fd))
+    }
+    /// Returns once a stop signal has arrived. The eventfd stays readable
+    /// after a signal, so one that arrived before this is first polled, or
+    /// before the executor existed, is still seen.
+    async fn wait(&self) {
+        use tokio::io::{Interest, unix::AsyncFd};
+        if STOP.load(Ordering::Relaxed) {
+            return;
+        }
+        // SAFETY: the descriptor is valid and stays open, as the same eventfd,
+        // for the life of the process.
+        let registered = unsafe { AsyncFd::register_with_interest(self.0, Interest::READABLE) };
+        if let Ok(fd) = registered
+            && fd.readable().await.is_ok()
+        {
+            return;
+        }
+        // The reactor refused the descriptor: poll the flag as before.
+        while !STOP.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 struct Close(rc2fx_device::coordinator::Handle);
 impl Drop for Close {
@@ -280,7 +336,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
     rc2fx_device::native_plan::plan_for_model(store.config(), model)?;
     let native = Runtime::connect(&args.socket, store.config(), Duration::from_secs(2))?;
     let (handle, owner) = Coordinator::new_native(Controller::new(store), native)?;
-    signals()?;
+    let stop = Stop::install()?;
     std::thread::scope(|scope| -> io::Result<()> {
         let _close = Close(handle.clone());
         let controller = std::thread::Builder::new()
@@ -320,17 +376,11 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
                 std::future::pending::<()>().await
             };
             tokio::pin!(usb, ui, show_watch);
-            let mut outcome = loop {
-                tokio::select! {
-                    result = &mut usb => break result,
-                    () = &mut ui => unreachable!("optional UI endpoint never ends the controller"),
-                    () = &mut show_watch => unreachable!("show watcher never ends the controller"),
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                        if STOP.load(Ordering::Relaxed) {
-                            break Ok(());
-                        }
-                    }
-                }
+            let mut outcome = tokio::select! {
+                result = &mut usb => result,
+                () = &mut ui => unreachable!("optional UI endpoint never ends the controller"),
+                () = &mut show_watch => unreachable!("show watcher never ends the controller"),
+                () = stop.wait() => Ok(()),
             };
             // Close admission, then drain: commands already accepted still
             // complete even though their replies can no longer be sent.
@@ -353,6 +403,65 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The handlers and the eventfd are process-wide: one signal test at a time.
+    static SIGNALS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A `Stop` with no signal pending.
+    fn fresh_stop() -> Stop {
+        let stop = Stop::install().unwrap();
+        STOP.store(false, Ordering::Relaxed);
+        let mut count = [0u8; 8];
+        // Drain the eventfd; it is non-blocking, so an empty one just fails.
+        unsafe { libc::read(stop.0, count.as_mut_ptr().cast(), count.len()) };
+        stop
+    }
+    fn executor() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+    /// Whether the wait ended within `limit`.
+    fn stopped_within(stop: &Stop, limit: Duration) -> bool {
+        executor().block_on(async { tokio::time::timeout(limit, stop.wait()).await.is_ok() })
+    }
+    const PROMPT: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn a_signal_from_before_the_executor_started_still_stops_it() {
+        let _one = SIGNALS.lock().unwrap_or_else(|e| e.into_inner());
+        let stop = fresh_stop();
+        // raise() returns after the handler has run on this thread.
+        assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
+        assert!(STOP.load(Ordering::Relaxed));
+        assert!(stopped_within(&stop, PROMPT), "an early SIGTERM was lost");
+        // A signal between the flag check and the first poll leaves only the
+        // eventfd to tell: with the flag cleared the wait still ends.
+        STOP.store(false, Ordering::Relaxed);
+        assert!(stopped_within(&stop, PROMPT), "the eventfd alone ends it");
+    }
+
+    #[test]
+    fn sigint_and_sigterm_end_a_running_wait_without_a_polling_delay() {
+        let _one = SIGNALS.lock().unwrap_or_else(|e| e.into_inner());
+        for signal in [libc::SIGINT, libc::SIGTERM] {
+            let stop = fresh_stop();
+            // Nothing is pending: the wait does not end by itself.
+            assert!(!stopped_within(&stop, Duration::from_millis(150)));
+            let sender = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                assert_eq!(unsafe { libc::kill(libc::getpid(), signal) }, 0);
+            });
+            let started = std::time::Instant::now();
+            assert!(stopped_within(&stop, PROMPT), "signal {signal} was lost");
+            // The signal itself ends the wait. The old flag was polled every
+            // 100 ms; a generous bound still tells the two apart from a miss.
+            assert!(started.elapsed() < PROMPT / 2, "{:?}", started.elapsed());
+            sender.join().unwrap();
+            assert!(STOP.load(Ordering::Relaxed));
+        }
+    }
     #[test]
     fn start_needs_absolute_data_and_sockets_and_nothing_else() {
         let command = |values: &[&str]| parse(values.iter().map(OsString::from));

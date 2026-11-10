@@ -30,4 +30,7 @@ tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-
 
 [dev-dependencies]
 tempfile = "3"
+# Paused time for the tests of timeouts. A feature of the tokio already used;
+# it adds no package.
+tokio = { version = "1", features = ["test-util"] }
 

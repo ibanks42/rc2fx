@@ -113,6 +113,7 @@ impl Client {
             session: self.session.clone(),
             operation,
         };
+        let inventory = matches!(request.operation, Operation::Inventory);
         let bytes = serde_json::to_vec(&request).map_err(io::Error::other)?;
         if bytes.len() > MAX_REQUEST {
             return Err(invalid("native request too large"));
@@ -133,8 +134,12 @@ impl Client {
             if length > MAX_RESPONSE {
                 return Err(invalid("native response too large"));
             }
-            let response: Response =
-                serde_json::from_slice(&buffer[..length]).map_err(io::Error::other)?;
+            let response = if inventory {
+                Response::decode_inventory(&buffer[..length])
+            } else {
+                serde_json::from_slice(&buffer[..length])
+            }
+            .map_err(io::Error::other)?;
             if response.request_id != request_id {
                 continue;
             } // Discard a delayed older reply.

@@ -60,7 +60,7 @@ impl Facade {
             .presets
             .clone()
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    #[cfg(all(target_os = "linux", any(test, feature = "native-pipeline")))]
     pub(crate) fn has_clients(&self) -> bool {
         self.0
             .lock()
@@ -128,13 +128,16 @@ impl Facade {
                 reason,
             );
     }
-    pub(crate) fn sample_resources(&self) {
+    /// Samples process resources and the USB status when the history is due
+    /// one, at most once a second. Returns whether a sample was taken.
+    pub(crate) fn sample_resources(&self, now: std::time::Instant) -> bool {
         let ticket = self
             .0
             .lock()
             .expect("control facade poisoned")
             .history
-            .begin_sample(std::time::Instant::now());
+            .begin_sample(now);
+        let taken = ticket.is_some();
         if let Some(ticket) = ticket {
             // Bounded /proc I/O is outside the facade lock and every callback.
             let resources = process_resources();
@@ -159,6 +162,7 @@ impl Facade {
             let event = front.event(EventKind::Usb, &usb);
             front.publish_event(event);
         }
+        taken
     }
     pub(crate) fn diagnostic_report(&self) -> Result<Vec<u8>, ExportError> {
         // Copy only bounded Arc metadata while holding the read facade lock.
@@ -218,6 +222,35 @@ mod tests {
         )
         .state()
     }
+    /// The controller's loop asks for a sample when its own deadline says so;
+    /// the history decides. It takes none before the first state exists, and
+    /// then one a second, measured on the caller's clock.
+    #[test]
+    fn a_resource_sample_waits_for_the_first_state_and_then_comes_once_a_second() {
+        use std::time::{Duration, Instant};
+        let samples = |facade: &Facade| {
+            let report: serde_json::Value =
+                serde_json::from_slice(&facade.diagnostic_report().unwrap()).unwrap();
+            report["samples"].as_array().unwrap().len()
+        };
+        let facade = Facade::default();
+        let start = Instant::now();
+        // No state published yet: asked on every tick, nothing is taken.
+        for tick in 0..5 {
+            assert!(!facade.sample_resources(start + Duration::from_millis(20 * tick)));
+        }
+        assert_eq!(samples(&facade), 0);
+        facade.publish(state(), vec![]);
+        let first = start + Duration::from_millis(100);
+        assert!(facade.sample_resources(first));
+        assert_eq!(samples(&facade), 1);
+        assert!(!facade.sample_resources(first + Duration::from_millis(999)));
+        assert!(facade.sample_resources(first + Duration::from_secs(1)));
+        assert!(!facade.sample_resources(first + Duration::from_millis(1999)));
+        assert!(facade.sample_resources(first + Duration::from_secs(2)));
+        assert_eq!(samples(&facade), 3);
+    }
+
     #[tokio::test]
     async fn no_subscriber_skips_serialization_and_reconnect_receives_only_new_observations() {
         let facade = Facade::default();

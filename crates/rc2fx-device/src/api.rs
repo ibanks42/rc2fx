@@ -177,6 +177,13 @@ impl Api {
         self.subscription = None;
     }
 
+    /// Whether this client holds an event subscription. While it does, the
+    /// controller counts it as someone watching the meters.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn subscribed(&self) -> bool {
+        self.subscription.is_some()
+    }
+
     pub(crate) async fn request(&mut self, input: Request) -> Reply {
         let Request { method, path, body } = input;
         if method == "GET" && path == "api/v1/events" && body.is_none() {

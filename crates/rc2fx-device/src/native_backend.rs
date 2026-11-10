@@ -3,20 +3,46 @@
 use crate::{coordinator::Error, store::PreparedSave};
 use rc2fx_core::{Config, Meter, MeterType, TargetKind, TargetMeter};
 use rc2fx_native_control::{
-    Client, ContextStatus, MAX_PATHS, Operation, PathMode, Publication, Reply, TargetStatus,
-    Transaction, fingerprint,
+    Client, ContextStatus, MAX_PATHS, METER_RING_WINDOWS, METER_WINDOW_FRAMES, Operation, PathMode,
+    Publication, Reply, TargetStatus, Transaction, fingerprint,
 };
 use std::{
     path::Path,
     time::{Duration, Instant},
 };
 
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
-// With nobody watching the meters and every path behaving. Any path that stops
-// advancing returns polling to POLL_INTERVAL, so a stall is reported at most
-// about one idle interval later than with a client attached. Must stay below
-// the 400 ms a path's telemetry ring holds, or meter windows are dropped.
-const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How often the engine is read while a client is subscribed or the engine is
+/// unsettled. The controller's loop wakes exactly at this deadline, so this is
+/// also the meter rate: nine a second. It was the same when a 100 ms interval
+/// was rounded up to the loop's former 20 ms tick.
+const POLL_INTERVAL: Duration = Duration::from_millis(110);
+/// The pause between tries while the library answers Busy.
+const BUSY_PAUSE: Duration = Duration::from_millis(100);
+/// The longest the engine goes unread: just under the diagnostics history's
+/// one-second cadence, so every history sample has a fresh meter window.
+const IDLE_POLL_LIMIT: Duration = Duration::from_millis(900);
+/// Room kept in a path's meter ring at the idle interval, so that a late read
+/// (a settings save runs on the same thread) drops no window.
+const RING_SLACK: Duration = Duration::from_millis(150);
+/// The interval with nobody watching the meters and every path behaving. Any
+/// path that stops advancing returns polling to POLL_INTERVAL, so a stall is
+/// reported at most about one idle interval later than with a client attached.
+/// It follows the depth of the native meter ring: 250 ms for the 400 ms that
+/// eight windows hold, and IDLE_POLL_LIMIT once the ring is deep enough.
+const IDLE_POLL_INTERVAL: Duration = idle_poll_interval(METER_RING_WINDOWS);
+const fn idle_poll_interval(ring_windows: usize) -> Duration {
+    // A window is never shorter than its frame count at 48 kHz.
+    let span_ms = ring_windows as u64 * METER_WINDOW_FRAMES * 1000 / 48_000;
+    let room_ms = span_ms.saturating_sub(RING_SLACK.as_millis() as u64);
+    let limit_ms = IDLE_POLL_LIMIT.as_millis() as u64;
+    let fast_ms = POLL_INTERVAL.as_millis() as u64;
+    let idle_ms = if room_ms < limit_ms {
+        room_ms
+    } else {
+        limit_ms
+    };
+    Duration::from_millis(if idle_ms < fast_ms { fast_ms } else { idle_ms })
+}
 const BUSY_RETRY: Duration = Duration::from_secs(2);
 const REGISTRY_WAIT: Duration = Duration::from_secs(60);
 // Native USB ports exist before their hardware streams have finished startup.
@@ -53,7 +79,11 @@ pub struct Runtime {
     enabled: bool,
     generation: u64,
     progress_timeout: Duration,
+    /// The idle interval for this stall deadline.
+    idle_interval: Duration,
     next_poll: Instant,
+    /// The wait for `next_poll` is an idle one, which a new subscriber ends.
+    idle: bool,
     /// The latest read saw every processed path advance, and at least one path.
     all_advancing: bool,
     writable: bool,
@@ -195,7 +225,7 @@ impl Runtime {
         let contexts = loop {
             match inventory(&mut client) {
                 Err(Error::NativeBusy) if Instant::now() < deadline => {
-                    std::thread::sleep(POLL_INTERVAL);
+                    std::thread::sleep(BUSY_PAUSE);
                 }
                 result => break result?,
             }
@@ -269,7 +299,12 @@ impl Runtime {
             enabled,
             generation: 0,
             progress_timeout,
+            // A Busy reply after an idle wait is retried at the fast rate
+            // until the stall deadline, so the idle interval may use at most
+            // half of that deadline.
+            idle_interval: IDLE_POLL_INTERVAL.min((progress_timeout / 2).max(POLL_INTERVAL)),
             next_poll: now,
+            idle: false,
             all_advancing: false,
             writable: false,
             started: now,
@@ -356,7 +391,7 @@ impl Runtime {
         loop {
             match self.prepare_change(config, enabled) {
                 Err(Error::NativeBusy) if Instant::now() < deadline => {
-                    std::thread::sleep(POLL_INTERVAL);
+                    std::thread::sleep(BUSY_PAUSE);
                 }
                 result => return result,
             }
@@ -502,20 +537,31 @@ impl Runtime {
             && self.pending.is_empty()
             && self.all_advancing;
         if settled && !watched {
-            IDLE_POLL_INTERVAL
+            self.idle_interval
         } else {
             POLL_INTERVAL
         }
     }
-    pub(crate) fn poll(&mut self, watched: impl FnOnce() -> bool) -> Option<Observation> {
+    /// When the next read is due. The controller's loop sleeps until then.
+    pub(crate) fn next_poll(&self) -> Instant {
+        self.next_poll
+    }
+    /// Reads the engine when a read is due. `watched` says whether a client is
+    /// subscribed to live events.
+    pub(crate) fn poll(&mut self, watched: impl Fn() -> bool) -> Option<Observation> {
         let now = Instant::now();
-        if now < self.next_poll {
+        // A client that subscribes during an idle wait gets its first meter
+        // and the fast rate now, not up to an idle interval later.
+        if now < self.next_poll && !(self.idle && watched()) {
             return None;
         }
+        self.idle = false;
         self.next_poll = now + POLL_INTERVAL;
         match self.observe(now) {
             Ok(observation) => {
-                self.next_poll = now + self.interval_after(&observation, watched());
+                let interval = self.interval_after(&observation, watched());
+                self.idle = interval > POLL_INTERVAL;
+                self.next_poll = now + interval;
                 Some(observation)
             }
             Err(Error::NativeBusy) if !self.stalled(now) => None,

@@ -1,7 +1,8 @@
 //! Diagnostics baselines and the event log, held by rc2fxd.
 //!
 //! Two jobs, both off the audio path (they run where the control side already
-//! reads the engine, about every 20 ms):
+//! reads the engine: nine times a second while a client is subscribed, and at
+//! the idle interval otherwise):
 //!
 //! * **Baselines.** Every cumulative figure the app shows is reported relative
 //!   to the last diagnostics reset, never by writing to a counter the callback,
