@@ -371,7 +371,10 @@ The **Check** workflow lints, tests and audits the code on pushes to `main`
 and on pull requests to it, excluding documentation-only changes, and runs
 the release tooling's tests. On Linux it formats, lints and tests in the same
 AlmaLinux 8 image releases build the AppImage in; Windows and macOS run
-clippy.
+clippy. The Linux job builds without debug info and, through
+`.github/cargo-ci.toml`, with unoptimised dependencies, which more than
+halves a cold build. Only runs on `main` save build caches; pull requests
+read them, and a twice-weekly scheduled run keeps them from expiring.
 
 The **Build image** workflow publishes that image,
 `.github/scripts/package-check.Containerfile`, as

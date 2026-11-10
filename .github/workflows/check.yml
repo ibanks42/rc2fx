@@ -14,6 +14,9 @@ on:
     branches: [main]
     paths-ignore: ["docs/**", "**/*.md"]
   workflow_dispatch:
+  # Caches unused for a week are deleted; this keeps main's alive.
+  schedule:
+    - cron: "23 6 * * 1,4"
 
 permissions:
   contents: read
@@ -47,27 +50,38 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # No debug info: smaller, faster builds and a smaller cache. Set for the
+      # whole job, since it is part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      # The image has the pinned Rust; cache only the build.
+      # The image has the pinned Rust; cache only the build. Only main saves:
+      # a pull request reads main's cache, and one it saved would be readable
+      # by that pull request alone while counting against the repository's
+      # cache limit.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: check-alma
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
           # The native library is its own workspace with its own target folder.
           workspaces: |
             . -> target
             crates/rc2fx-native -> target
       - name: Check formatting
         run: cargo fmt --all -- --check
+      # Every cargo command here takes the same settings (cargo-ci.toml), so
+      # they share their build scripts and proc-macros.
       - name: Lint the workspace
         run: |
-          cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
-          cargo clippy --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings
+          cargo clippy --config .github/cargo-ci.toml --locked --workspace --all-targets --no-default-features -- -D warnings
+          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings
       - name: Test the workspace
         # Linux is what the mixer runs, so the whole suite runs here.
-        run: cargo test --locked --workspace
+        run: cargo test --config .github/cargo-ci.toml --locked --workspace
       - name: Check the native library
         run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets
 
@@ -121,6 +135,7 @@ jobs:
         with:
           rustflags: ""
           cache-key: check
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Lint the workspace
         run: |
           cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings

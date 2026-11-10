@@ -15,7 +15,7 @@ RUN dnf install -y dnf-plugins-core \
         fontconfig-devel wayland-devel libxkbcommon-devel libxkbcommon-x11-devel \
         libX11-devel libxcb-devel vulkan-loader alsa-lib-devel \
         openssl-devel systemd-devel dbus-devel \
-        ca-certificates curl diffutils file findutils git python3.12 which xz \
+        ca-certificates curl diffutils file findutils git python3.12 which xz zstd \
         dotnet-sdk-8.0 zlib-devel xz-devel lz4-devel libzstd-devel \
     && alternatives --set python3 /usr/bin/python3.12 \
     && dnf clean all
