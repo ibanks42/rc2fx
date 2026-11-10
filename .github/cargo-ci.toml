@@ -1,0 +1,10 @@
+# Cargo settings for the Check workflow's Linux job, passed with --config.
+# The workspace optimises dependencies for development builds, so the app is
+# usable; CI only compiles and tests, where that more than doubles a cold
+# build. rc2fx-dfn stays optimised: its tests run the model and take minutes
+# otherwise.
+[profile.dev.package."*"]
+opt-level = 0
+
+[profile.dev.package.rc2fx-dfn]
+opt-level = 2
