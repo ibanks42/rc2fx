@@ -19,9 +19,18 @@ use std::{
 const STOCK: u8 = 0;
 const FAST: u8 = 1;
 const VERIFY: u8 = 2;
-/// A thread holds a slot for life; a USB mode change starts new client threads.
-const SLOTS: usize = 32;
+/// A thread holds a slot for life, and a slot is never handed to a second
+/// thread: two threads writing one plan would produce wrong samples. A USB
+/// mode change starts new client threads, so the table is sized for many of
+/// them, as `client_timing`'s is. A slot's pages are touched only once a
+/// thread claims it. A thread that finds the table full runs the real library
+/// from then on, which is stock behaviour, and is counted once in `noSlot`.
+const SLOTS: usize = 128;
+/// This thread has not asked for a slot yet.
 const UNCLAIMED: usize = usize::MAX;
+/// The table was full when this thread asked. It does not ask again, so it
+/// touches no shared counter on any later call.
+const REFUSED: usize = usize::MAX - 1;
 
 type SrcProcess = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
 
@@ -31,11 +40,15 @@ static OPENED: AtomicBool = AtomicBool::new(false);
 static REAL: AtomicUsize = AtomicUsize::new(0);
 static LINEAR_VT: AtomicUsize = AtomicUsize::new(0);
 static LINEAR_VARI: AtomicUsize = AtomicUsize::new(0);
+/// Slots claimed, at most `SLOTS`, and the threads that found none left. Both
+/// are written only when a thread makes its first call.
 static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 static NO_SLOT: AtomicU64 = AtomicU64::new(0);
 
 /// One thread's plan and counters. Only that thread writes them; reports read
-/// the counters.
+/// the counters. Aligned to a cache line, so that the counters one thread
+/// writes on every call share no line with the next thread's plan.
+#[repr(align(64))]
 struct Slot {
     plan: UnsafeCell<Plan>,
     scratch: UnsafeCell<[f32; MAX_FRAMES]>,
@@ -139,18 +152,40 @@ pub fn replacement(address: usize) -> Option<usize> {
     Some(src_process as *const () as usize)
 }
 
-/// This thread's slot, claiming one on first use.
+/// Claims the next of `slots` slots, or counts a refusal: called once per
+/// thread. `next` never passes `slots`, so it is also the number claimed.
+fn claim(next: &AtomicUsize, refused: &AtomicU64, slots: usize) -> usize {
+    let mut index = next.load(Ordering::Relaxed);
+    loop {
+        if index >= slots {
+            refused.fetch_add(1, Ordering::Relaxed);
+            return REFUSED;
+        }
+        match next.compare_exchange_weak(index, index + 1, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return index,
+            Err(actual) => index = actual,
+        }
+    }
+}
+
+/// What `current` (a thread's own cell) holds after its first use: its slot
+/// index, or `REFUSED`. Only the first use touches `next` or `refused`.
+fn slot_index(
+    current: &Cell<usize>,
+    next: &AtomicUsize,
+    refused: &AtomicU64,
+    slots: usize,
+) -> usize {
+    if current.get() == UNCLAIMED {
+        current.set(claim(next, refused, slots));
+    }
+    current.get()
+}
+
+/// This thread's slot, claiming one on first use. None once refused.
 fn slot() -> Option<&'static Slot> {
     let index = CURRENT
-        .try_with(|current| {
-            if current.get() == UNCLAIMED {
-                let next = NEXT_SLOT.fetch_add(1, Ordering::Relaxed);
-                if next < SLOTS {
-                    current.set(next);
-                }
-            }
-            current.get()
-        })
+        .try_with(|current| slot_index(current, &NEXT_SLOT, &NO_SLOT, SLOTS))
         .ok()?;
     SLOT_TABLE.get(index)
 }
@@ -158,7 +193,6 @@ fn slot() -> Option<&'static Slot> {
 unsafe extern "C" fn src_process(state: *mut c_void, data: *mut c_void) -> c_int {
     let real: SrcProcess = unsafe { std::mem::transmute(REAL.load(Ordering::Acquire)) };
     let Some(slot) = slot() else {
-        NO_SLOT.fetch_add(1, Ordering::Relaxed);
         return unsafe { real(state, data) };
     };
     let plan = unsafe { &mut *slot.plan.get() };
@@ -228,8 +262,10 @@ unsafe fn verify(
 }
 
 pub fn snapshot() -> serde_json::Value {
+    // Claimed slots only: an unclaimed slot's pages stay untouched.
+    let threads = NEXT_SLOT.load(Ordering::Relaxed).min(SLOTS);
     let sum = |field: fn(&Slot) -> &AtomicU64| -> u64 {
-        SLOT_TABLE
+        SLOT_TABLE[..threads]
             .iter()
             .map(|slot| field(slot).load(Ordering::Relaxed))
             .sum()
@@ -244,8 +280,10 @@ pub fn snapshot() -> serde_json::Value {
         "libraryOpened": OPENED.load(Ordering::Relaxed),
         "libraryVerified": VERIFIED.load(Ordering::Relaxed),
         "bound": REAL.load(Ordering::Relaxed) != 0,
-        "threads": NEXT_SLOT.load(Ordering::Relaxed).min(SLOTS),
+        "slots": SLOTS,
+        "threads": threads,
         "noSlot": NO_SLOT.load(Ordering::Relaxed),
+        "noSlotMeaning": "threads that found the table full and run the real library; counted once per thread, not per call",
         "calls": sum(|slot| &slot.calls),
         "planBuilds": sum(|slot| &slot.builds),
         "declined": sum(|slot| &slot.declined),
@@ -265,6 +303,101 @@ mod tests {
         for value in [&b""[..], b"stock", b"FAST", b"fast ", b"1"] {
             assert_eq!(parse_mode(value), STOCK);
         }
+    }
+
+    /// More threads than slots: every slot goes to exactly one thread, the
+    /// rest are refused once each, and a refused thread writes no shared
+    /// counter on its later calls.
+    #[test]
+    fn a_full_table_refuses_each_extra_thread_once_and_is_then_left_alone() {
+        const TABLE: usize = 32;
+        const THREADS: usize = 45;
+        let next = AtomicUsize::new(0);
+        let refused = AtomicU64::new(0);
+        let claimed: Vec<usize> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let current = Cell::new(UNCLAIMED);
+                        let first = slot_index(&current, &next, &refused, TABLE);
+                        for _ in 0..1000 {
+                            assert_eq!(slot_index(&current, &next, &refused, TABLE), first);
+                        }
+                        first
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect()
+        });
+        let mut slots: Vec<usize> = claimed
+            .iter()
+            .copied()
+            .filter(|index| *index != REFUSED)
+            .collect();
+        slots.sort_unstable();
+        assert_eq!(
+            slots,
+            (0..TABLE).collect::<Vec<_>>(),
+            "each slot has one owner"
+        );
+        assert_eq!(next.load(Ordering::Relaxed), TABLE, "never past the table");
+        assert_eq!(refused.load(Ordering::Relaxed), (THREADS - TABLE) as u64);
+        // A refused thread's later calls touch neither counter: with both set
+        // to values a write would disturb, they stay as set.
+        let current = Cell::new(REFUSED);
+        next.store(7, Ordering::Relaxed);
+        refused.store(11, Ordering::Relaxed);
+        for _ in 0..1000 {
+            assert_eq!(slot_index(&current, &next, &refused, TABLE), REFUSED);
+        }
+        assert_eq!(next.load(Ordering::Relaxed), 7);
+        assert_eq!(refused.load(Ordering::Relaxed), 11);
+        // Neither sentinel is a table index.
+        assert!(SLOT_TABLE.get(REFUSED).is_none() && SLOT_TABLE.get(UNCLAIMED).is_none());
+    }
+
+    unsafe extern "C" fn stub_library(_: *mut c_void, _: *mut c_void) -> c_int {
+        7
+    }
+
+    /// Through the wrapper itself, with more short-lived threads than slots:
+    /// every call reaches the library when the fast path declines, threads
+    /// beyond the table are counted once each, and their calls are not
+    /// counted against any slot.
+    #[test]
+    fn more_threads_than_slots_all_reach_the_library() {
+        const EXTRA: usize = 5;
+        const CALLS: u64 = 3;
+        REAL.store(stub_library as *const () as usize, Ordering::Release);
+        let before = snapshot();
+        assert_eq!(before["threads"], 0, "the only test that claims slots");
+        for _ in 0..SLOTS + EXTRA {
+            std::thread::spawn(|| {
+                for _ in 0..CALLS {
+                    // Null arguments: declined, so the stub library answers.
+                    let status = unsafe { src_process(std::ptr::null_mut(), std::ptr::null_mut()) };
+                    assert_eq!(status, 7);
+                }
+            })
+            .join()
+            .unwrap();
+        }
+        let after = snapshot();
+        assert_eq!(after["slots"], SLOTS);
+        assert_eq!(after["threads"], SLOTS);
+        assert_eq!(after["noSlot"], EXTRA);
+        assert_eq!(after["calls"], SLOTS as u64 * CALLS);
+        assert_eq!(after["declined"], SLOTS as u64 * CALLS);
+        assert_eq!(after["mismatches"], 0);
+    }
+
+    #[test]
+    fn slots_start_on_their_own_cache_lines() {
+        assert_eq!(std::mem::align_of::<Slot>(), 64);
+        assert_eq!(std::mem::size_of::<Slot>() % 64, 0);
     }
 
     #[test]

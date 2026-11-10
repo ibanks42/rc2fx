@@ -10,8 +10,11 @@ use std::{
     },
 };
 
-const CAPACITY: usize = 8;
-const WINDOW_FRAMES: u64 = 2400;
+// Shared with the controller, which derives its slowest read interval from
+// the ring depth.
+const CAPACITY: usize = rc2fx_native_control::METER_RING_WINDOWS;
+const WINDOW_FRAMES: u64 = rc2fx_native_control::METER_WINDOW_FRAMES;
+const _: () = assert!(CAPACITY.is_power_of_two());
 #[derive(Clone, Copy)]
 struct Window {
     value: AudioMeter,

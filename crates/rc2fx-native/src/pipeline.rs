@@ -1,5 +1,5 @@
 //! Callback-owned signal state; construction and destruction are control work.
-use super::parameters;
+use super::{Line, parameters};
 use rc2fx_core::{Target, TargetKind};
 #[cfg(test)]
 use rc2fx_dsp::Dsp;
@@ -38,8 +38,11 @@ fn meters(cycle: u32, path: usize) -> bool {
     cycle.wrapping_add(path as u32).is_multiple_of(METER_STRIDE)
 }
 /// Callback time spent per bound path (plan order) and resolving buffers.
-pub static PATH_COST_NS: [AtomicU64; MAX_PATHS] = [const { AtomicU64::new(0) }; MAX_PATHS];
-pub static RESOLVE_NS: AtomicU64 = AtomicU64::new(0);
+/// Bench gauges only (`Front::gauged`): each charge costs two clock reads, on
+/// every visited path of every callback.
+pub static PATH_COST_NS: Line<[AtomicU64; MAX_PATHS]> =
+    Line([const { AtomicU64::new(0) }; MAX_PATHS]);
+pub static RESOLVE_NS: Line<AtomicU64> = Line(AtomicU64::new(0));
 fn charge(counter: &AtomicU64, since: u64) {
     counter.fetch_add(
         super::timing::monotonic().saturating_sub(since),
@@ -280,7 +283,7 @@ impl Port {
         }
         if outcome != Outcome::Processed {
             counters.sources.raw_returns += 1;
-            SOURCE_RAW_RETURNS.fetch_add(1, Ordering::Relaxed);
+            SOURCES.raw_returns.fetch_add(1, Ordering::Relaxed);
         }
         if matches!(self.outcome, None | Some(Outcome::Processed)) {
             self.outcome = Some(outcome);
@@ -366,34 +369,99 @@ struct PinEntry {
     path: u32,
     channel: u32,
 }
+/// How a table turns a port handle into its first entry: drop `drop` low
+/// bits, multiply, and take the index from bit `shift` of the product up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct PinHash {
+    drop: u32,
+    shift: u32,
+}
+impl PinHash {
+    /// What construction tries, keeping the first of those that cost least.
+    ///
+    /// JACK2 port handles are small consecutive port indices, not addresses.
+    /// The first two hash the whole word, which spreads consecutive indices;
+    /// they differ in which product bits they use, and so in which strides of
+    /// aligned addresses they spread well. The last drops the low four bits
+    /// first: the hash this table always had. It suits aligned allocations,
+    /// and starts sixteen consecutive indices on one entry.
+    const CANDIDATES: [Self; 3] = [
+        Self { drop: 0, shift: 32 },
+        Self { drop: 0, shift: 48 },
+        Self { drop: 4, shift: 20 },
+    ];
+}
 /// Which path and channel a native port belongs to: an open-addressed table,
 /// built at construction and at most half full, so a search always ends. The
 /// mixer asks this for every buffer it fetches, most of them unbound.
 struct PinLookup {
     entries: Box<[PinEntry]>,
+    /// Chosen at construction for the handles this client really has. Any
+    /// choice finds the same pins; they differ only in entries read.
+    hash: PinHash,
 }
 impl PinLookup {
     fn new(ports: &[Port]) -> Self {
-        let pins: usize = ports.iter().map(|port| port.pins.len()).sum();
+        let pins: Vec<PinEntry> = ports
+            .iter()
+            .enumerate()
+            .flat_map(|(path, port)| {
+                port.pins
+                    .iter()
+                    .enumerate()
+                    .map(move |(channel, pin)| PinEntry {
+                        pointer: pin.pointer,
+                        path: path as u32,
+                        channel: channel as u32,
+                    })
+            })
+            .collect();
+        Self::with_pins(&pins)
+    }
+    /// Control work: builds the table once per candidate hash and keeps the
+    /// cheapest to search.
+    fn with_pins(pins: &[PinEntry]) -> Self {
+        PinHash::CANDIDATES
+            .into_iter()
+            .map(|hash| Self::with_hash(pins, hash))
+            .min_by_key(Self::cost)
+            .expect("there are candidates")
+    }
+    fn with_hash(pins: &[PinEntry], hash: PinHash) -> Self {
         let empty = PinEntry {
             pointer: 0,
             path: 0,
             channel: 0,
         };
-        let size = (pins * 2 + 1).next_power_of_two();
+        let size = (pins.len() * 2 + 1).next_power_of_two();
         let mut table = Self {
             entries: vec![empty; size].into_boxed_slice(),
+            hash,
         };
-        for (path, port) in ports.iter().enumerate() {
-            for (channel, pin) in port.pins.iter().enumerate() {
-                table.insert(pin.pointer, path as u32, channel as u32);
-            }
+        for pin in pins {
+            table.insert(pin.pointer, pin.path, pin.channel);
         }
         table
     }
+    /// The entries a search reads before it reaches an empty one, summed over
+    /// every entry it could start at: what the table costs to search, for
+    /// bound and unbound handles alike.
+    fn cost(&self) -> usize {
+        (0..self.entries.len())
+            .map(|start| {
+                let mut index = start;
+                let mut read = 1;
+                while self.entries[index].pointer != 0 {
+                    index = (index + 1) & self.mask();
+                    read += 1;
+                }
+                read
+            })
+            .sum()
+    }
     fn start(&self, pointer: usize) -> usize {
-        // Ports are aligned allocations: multiply so that the low bits vary.
-        (pointer >> 4).wrapping_mul(0x9e37_79b9_7f4a_7c15_u64 as usize) >> 20 & self.mask()
+        let product = ((pointer as u64) >> self.hash.drop).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        (product >> self.hash.shift) as usize & self.mask()
     }
     fn mask(&self) -> usize {
         self.entries.len() - 1
@@ -462,6 +530,10 @@ struct Front {
     /// The helper finished the previous frame in time.
     previous_ready: bool,
     sampler: Sampler,
+    /// The bench gauges are on (fixed at load): time each path, the buffer
+    /// resolve and the helper wake. Kept here so that the callback tests a
+    /// field of its own state rather than loading a shared flag per path.
+    gauged: bool,
 }
 #[derive(Clone, Copy, Default)]
 pub struct Counters {
@@ -525,15 +597,30 @@ impl SourceCounts {
         }
     }
 }
-/// Live totals of `SourceCounts` across pipelines, for the native report.
-pub static SOURCE_PROCESSED: AtomicU64 = AtomicU64::new(0);
-pub static SOURCE_PROCESSED_UNACKNOWLEDGED: AtomicU64 = AtomicU64::new(0);
-pub static SOURCE_RAW_HELPER_UNREADY: AtomicU64 = AtomicU64::new(0);
-pub static SOURCE_RAW_NO_HANDOFF: AtomicU64 = AtomicU64::new(0);
-pub static SOURCE_RAW_NOT_DONE: AtomicU64 = AtomicU64::new(0);
-pub static SOURCE_RAW_INVALID: AtomicU64 = AtomicU64::new(0);
-pub static SOURCE_UNOBSERVED: AtomicU64 = AtomicU64::new(0);
-pub static SOURCE_RAW_RETURNS: AtomicU64 = AtomicU64::new(0);
+/// Live totals of `SourceCounts` across pipelines, for the native report. The
+/// callback thread writes them, one per processed source each cycle, so they
+/// share a line of their own.
+struct SourceTotals {
+    processed: AtomicU64,
+    processed_unacknowledged: AtomicU64,
+    raw_helper_unready: AtomicU64,
+    raw_no_handoff: AtomicU64,
+    raw_not_done: AtomicU64,
+    raw_invalid: AtomicU64,
+    unobserved: AtomicU64,
+    raw_returns: AtomicU64,
+}
+static SOURCES: Line<SourceTotals> = Line(SourceTotals {
+    processed: AtomicU64::new(0),
+    processed_unacknowledged: AtomicU64::new(0),
+    raw_helper_unready: AtomicU64::new(0),
+    raw_no_handoff: AtomicU64::new(0),
+    raw_not_done: AtomicU64::new(0),
+    raw_invalid: AtomicU64::new(0),
+    unobserved: AtomicU64::new(0),
+    raw_returns: AtomicU64::new(0),
+});
+const _: () = assert!(std::mem::size_of::<Line<SourceTotals>>() == 64);
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
     Processed,
@@ -546,16 +633,16 @@ enum Outcome {
 }
 fn tally(counts: &mut SourceCounts, outcome: Outcome) {
     let (count, total) = match outcome {
-        Outcome::Processed => (&mut counts.processed, &SOURCE_PROCESSED),
+        Outcome::Processed => (&mut counts.processed, &SOURCES.processed),
         Outcome::ProcessedUnacknowledged => (
             &mut counts.processed_unacknowledged,
-            &SOURCE_PROCESSED_UNACKNOWLEDGED,
+            &SOURCES.processed_unacknowledged,
         ),
-        Outcome::HelperUnready => (&mut counts.raw_helper_unready, &SOURCE_RAW_HELPER_UNREADY),
-        Outcome::NoHandoff => (&mut counts.raw_no_handoff, &SOURCE_RAW_NO_HANDOFF),
-        Outcome::NotDone => (&mut counts.raw_not_done, &SOURCE_RAW_NOT_DONE),
-        Outcome::Invalid => (&mut counts.raw_invalid, &SOURCE_RAW_INVALID),
-        Outcome::Unobserved => (&mut counts.unobserved, &SOURCE_UNOBSERVED),
+        Outcome::HelperUnready => (&mut counts.raw_helper_unready, &SOURCES.raw_helper_unready),
+        Outcome::NoHandoff => (&mut counts.raw_no_handoff, &SOURCES.raw_no_handoff),
+        Outcome::NotDone => (&mut counts.raw_not_done, &SOURCES.raw_not_done),
+        Outcome::Invalid => (&mut counts.raw_invalid, &SOURCES.raw_invalid),
+        Outcome::Unobserved => (&mut counts.unobserved, &SOURCES.unobserved),
     };
     *count += 1;
     total.fetch_add(1, Ordering::Relaxed);
@@ -563,14 +650,14 @@ fn tally(counts: &mut SourceCounts, outcome: Outcome) {
 pub fn sources() -> serde_json::Value {
     let read = |value: &AtomicU64| value.load(Ordering::Relaxed);
     serde_json::json!({
-        "processed": read(&SOURCE_PROCESSED),
-        "processedUnacknowledged": read(&SOURCE_PROCESSED_UNACKNOWLEDGED),
-        "rawHelperUnready": read(&SOURCE_RAW_HELPER_UNREADY),
-        "rawNoHandoff": read(&SOURCE_RAW_NO_HANDOFF),
-        "rawNotDone": read(&SOURCE_RAW_NOT_DONE),
-        "rawInvalid": read(&SOURCE_RAW_INVALID),
-        "unobserved": read(&SOURCE_UNOBSERVED),
-        "rawReturns": read(&SOURCE_RAW_RETURNS),
+        "processed": read(&SOURCES.processed),
+        "processedUnacknowledged": read(&SOURCES.processed_unacknowledged),
+        "rawHelperUnready": read(&SOURCES.raw_helper_unready),
+        "rawNoHandoff": read(&SOURCES.raw_no_handoff),
+        "rawNotDone": read(&SOURCES.raw_not_done),
+        "rawInvalid": read(&SOURCES.raw_invalid),
+        "unobserved": read(&SOURCES.unobserved),
+        "rawReturns": read(&SOURCES.raw_returns),
     })
 }
 pub struct Pipeline {
@@ -584,16 +671,22 @@ pub struct Pipeline {
 // ownership of `handoff` (see Handoff).
 unsafe impl Sync for Pipeline {}
 unsafe impl Send for Pipeline {}
+/// The meter of an unprocessed path: left channel then right, sample by
+/// sample. Two plain loops rather than one flattened iterator, whose state
+/// machine the compiler keeps in the loop; the order of every operation, and
+/// so every bit of the result, is unchanged.
 fn native_meter(buffers: [&[f32]; 2]) -> rc2fx_dsp::Meter {
     let mut meter = rc2fx_dsp::Meter::default();
-    for sample in buffers.into_iter().flatten().copied() {
-        let value = f64::from(sample);
-        if value.is_finite() {
-            meter.input_peak = meter.input_peak.max(value.abs());
-            meter.sum_squares += value * value;
-            meter.clipped += u64::from(value.abs() >= 1.0);
+    for buffer in buffers {
+        for &sample in buffer {
+            let value = f64::from(sample);
+            if value.is_finite() {
+                meter.input_peak = meter.input_peak.max(value.abs());
+                meter.sum_squares += value * value;
+                meter.clipped += u64::from(value.abs() >= 1.0);
+            }
+            meter.samples += 1;
         }
-        meter.samples += 1;
     }
     meter.output_peak = meter.input_peak;
     meter
@@ -625,10 +718,83 @@ fn view(buffers: &[[f32; FRAMES]; 2], frames: usize, stereo: bool) -> [&[f32]; 2
 const IDLE: u8 = 0;
 const QUEUED: u8 = 1;
 
-/// Helper timing, for the native report.
-pub static HELPER_FRAMES: AtomicU64 = AtomicU64::new(0);
-pub static HELPER_NS: AtomicU64 = AtomicU64::new(0);
-pub static HELPER_MAX_NS: AtomicU64 = AtomicU64::new(0);
+/// Helper timing, for the native report. The helper thread writes all three
+/// every frame, so they share a line of their own.
+pub struct HelperTime {
+    pub frames: AtomicU64,
+    pub total_ns: AtomicU64,
+    pub max_ns: AtomicU64,
+}
+pub static HELPER_TIME: Line<HelperTime> = Line(HelperTime {
+    frames: AtomicU64::new(0),
+    total_ns: AtomicU64::new(0),
+    max_ns: AtomicU64::new(0),
+});
+
+/// Bench gauge: a histogram of short times, in microseconds
+/// [<=1, <=2, <=4, <=8, <=16, <=32, <=64, >64], with the count, total and
+/// longest. Each instance has one writer thread and its own lines.
+pub struct Fine {
+    calls: AtomicU64,
+    total_ns: AtomicU64,
+    max_ns: AtomicU64,
+    bins: [AtomicU64; 8],
+}
+impl Fine {
+    const BOUNDS_US: [u64; 7] = [1, 2, 4, 8, 16, 32, 64];
+    const fn new() -> Self {
+        Self {
+            calls: AtomicU64::new(0),
+            total_ns: AtomicU64::new(0),
+            max_ns: AtomicU64::new(0),
+            bins: [const { AtomicU64::new(0) }; 8],
+        }
+    }
+    fn record(&self, elapsed_ns: u64) {
+        let bin = Self::BOUNDS_US
+            .iter()
+            .position(|bound| elapsed_ns <= bound * 1_000)
+            .unwrap_or(7);
+        self.bins[bin].fetch_add(1, Ordering::Relaxed);
+        self.total_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+        self.max_ns.fetch_max(elapsed_ns, Ordering::Relaxed);
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+    fn snapshot(&self) -> serde_json::Value {
+        let read = |value: &AtomicU64| value.load(Ordering::Relaxed);
+        serde_json::json!({
+            "calls": read(&self.calls),
+            "totalNs": read(&self.total_ns),
+            "maxNs": read(&self.max_ns),
+            "histogram": self.bins.iter().map(read).collect::<Vec<_>>(),
+        })
+    }
+}
+/// Bench gauges around the helper wake, which is a futex system call at the
+/// end of every callback. Recorded only while the gauges are on; without them
+/// no clock is read for these and they stay zero.
+///
+/// `WAKE_CALL`: the time `Helper::queue` takes on the callback thread, which
+/// delays the callback's return by that much. `END`: `Pipeline::end` from its
+/// entry to just before that call, so that the rest of the callback's tail is
+/// not mistaken for the wake; `PLACE` is the part of it spent sampling the
+/// thread's placement. `WAKE_LATENCY` (written by the helper): from just
+/// before the wake call to the helper starting its frame.
+static WAKE_CALL: Line<Fine> = Line(Fine::new());
+static END: Line<Fine> = Line(Fine::new());
+static PLACE: Line<Fine> = Line(Fine::new());
+static WAKE_LATENCY: Line<Fine> = Line(Fine::new());
+/// The helper wake gauges, for the report's `gauges` section.
+pub fn wake_gauges() -> serde_json::Value {
+    serde_json::json!({
+        "boundsUs": Fine::BOUNDS_US,
+        "meaning": "wakeCall: time inside the helper wake on the callback thread; wakeLatency: from just before the wake to the helper starting its frame; end: Pipeline::end from entry to just before the wake, including place and the end part of pathCostNs; place: placement sampling within end",
+        "wakeCall": WAKE_CALL.snapshot(),
+        "wakeLatency": WAKE_LATENCY.snapshot(),
+        "end": END.snapshot(),
+        "place": PLACE.snapshot(),
+    })
+}
 /// The longest a callback waits for a busy helper before passing its frame
 /// through.
 const HELPER_WAIT_NS: u64 = 200_000;
@@ -638,8 +804,10 @@ pub static HELPER_STALLS: AtomicU64 = AtomicU64::new(0);
 /// Callbacks that found the helper still busy at all.
 pub static HELPER_LATE: AtomicU64 = AtomicU64::new(0);
 /// The least time between the helper finishing a frame and the next callback
-/// starting, which consumes it.
-pub static HELPER_MIN_MARGIN_NS: AtomicU64 = AtomicU64::new(u64::MAX);
+/// starting, which consumes it. 0: the helper finished after that callback
+/// had started. The callback reads it every cycle and writes it only for a new
+/// minimum.
+pub static HELPER_MIN_MARGIN_NS: Line<AtomicU64> = Line(AtomicU64::new(u64::MAX));
 
 /// Live cumulative processing counters, since process load, across contexts.
 ///
@@ -652,8 +820,11 @@ pub static HELPER_MIN_MARGIN_NS: AtomicU64 = AtomicU64::new(u64::MAX);
 /// event; no clock, allocation, lock or I/O on the audio thread. They are never
 /// summed at retirement and never reset, so they already include retired
 /// pipelines: do not add the retirement-only fields to them.
-pub static LIVE_INPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
-pub static LIVE_OUTPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
+///
+/// The helper writes `LIVE_INPUT_BLOCKS` and the callback writes
+/// `LIVE_OUTPUT_BLOCKS`, once per processed block: each has its own line.
+pub static LIVE_INPUT_BLOCKS: Line<AtomicU64> = Line(AtomicU64::new(0));
+pub static LIVE_OUTPUT_BLOCKS: Line<AtomicU64> = Line(AtomicU64::new(0));
 pub static LIVE_FAULTS: AtomicU64 = AtomicU64::new(0);
 pub static LIVE_SKIPPED_OUTPUTS: AtomicU64 = AtomicU64::new(0);
 /// Hardware outputs that got no result from their own DSP for this frame, so an
@@ -808,6 +979,9 @@ struct Shared {
     /// CLOCK_MONOTONIC when the helper began and finished its latest frame.
     started: AtomicU64,
     finished: AtomicU64,
+    /// Bench gauges only: CLOCK_MONOTONIC just before the callback woke the
+    /// helper for the frame now queued. 0 while the gauges are off.
+    queued_at: AtomicU64,
     /// The callback thread's CPUs, policy and priority; `generation` counts
     /// changes, and the helper derives its placement from each one.
     generation: AtomicU64,
@@ -879,6 +1053,7 @@ impl Helper {
             stop: AtomicBool::new(false),
             started: AtomicU64::new(0),
             finished: AtomicU64::new(0),
+            queued_at: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             applied: AtomicU64::new(0),
             record: AtomicUsize::new(usize::MAX),
@@ -982,8 +1157,15 @@ impl Helper {
             }
         }
     }
-    fn queue(&self, handoff: *mut Handoff) {
+    /// Hands the frame to the helper and wakes it. `queued_at`: with the bench
+    /// gauges on, the time of this call, for the helper's wake latency; 0
+    /// otherwise, and then nothing is stored.
+    fn queue(&self, handoff: *mut Handoff, queued_at: u64) {
         self.shared.handoff.store(handoff, Ordering::Relaxed);
+        if queued_at != 0 {
+            // Before QUEUED, so that the helper never reads an older stamp.
+            self.shared.queued_at.store(queued_at, Ordering::Relaxed);
+        }
         self.shared.state.store(QUEUED, Ordering::Release);
         if let Some(thread) = &self.thread {
             thread.thread().unpark();
@@ -1041,6 +1223,10 @@ fn helper_loop(shared: &Shared) {
         }
         let started = super::timing::monotonic();
         shared.started.store(started, Ordering::Relaxed);
+        let queued_at = shared.queued_at.load(Ordering::Relaxed);
+        if queued_at != 0 {
+            WAKE_LATENCY.record(started.saturating_sub(queued_at));
+        }
         // SAFETY: the callback handed the frame over with QUEUED and does not
         // touch it again until it observes IDLE.
         let handoff = unsafe { &mut *shared.handoff.load(Ordering::Relaxed) };
@@ -1075,9 +1261,9 @@ fn helper_loop(shared: &Shared) {
         let finished = super::timing::monotonic();
         let spent = finished.saturating_sub(started);
         shared.finished.store(finished, Ordering::Relaxed);
-        HELPER_FRAMES.fetch_add(1, Ordering::Relaxed);
-        HELPER_NS.fetch_add(spent, Ordering::Relaxed);
-        HELPER_MAX_NS.fetch_max(spent, Ordering::Relaxed);
+        HELPER_TIME.frames.fetch_add(1, Ordering::Relaxed);
+        HELPER_TIME.total_ns.fetch_add(spent, Ordering::Relaxed);
+        HELPER_TIME.max_ns.fetch_max(spent, Ordering::Relaxed);
         if handoff.cycle_start != 0 {
             let position = finished.saturating_sub(handoff.cycle_start);
             super::probe::HELPER_POS.record(position);
@@ -1336,6 +1522,8 @@ struct Ended {
     /// `Front::skipped_frames` before this cycle, and after it.
     owed: u64,
     credited: u64,
+    /// `Front::gauged`.
+    gauged: bool,
 }
 /// Finishes one path's callback.
 ///
@@ -1356,7 +1544,11 @@ unsafe fn end_port(
         let latency = reader.latency_samples() as u32;
         reader.record_skipped(owed, FRAMES, latency);
     }
-    let started = super::timing::monotonic();
+    let started = if cycle.gauged {
+        super::timing::monotonic()
+    } else {
+        0
+    };
     let complete = port.complete();
     let usable = cycle.native_success && port.active && complete;
     if port.direction == Direction::Output && port.active && !complete {
@@ -1456,7 +1648,9 @@ unsafe fn end_port(
             handoff.jobs[index] = job;
         }
     }
-    charge(&PATH_COST_NS[index], started);
+    if cycle.gauged {
+        charge(&PATH_COST_NS[index], started);
+    }
 }
 impl Front {
     /// Decides what each sparse cycle visits, from what the full cycles found.
@@ -1611,6 +1805,7 @@ impl Pipeline {
                     idle: true,
                     previous_ready: false,
                     sampler: Sampler::default(),
+                    gauged: super::gauges::enabled(),
                 }),
                 handoff: UnsafeCell::new(Handoff {
                     seq: 0,
@@ -1637,10 +1832,33 @@ impl Pipeline {
         let handoff = unsafe { &*self.handoff.get() };
         front.counters.add(handoff.counters)
     }
+    /// As `begin_at`, for a callback that starts now.
+    ///
+    /// # Safety
+    /// As `begin_at`.
+    #[cfg(test)]
+    pub unsafe fn begin(&self, frames: usize, get: super::GetBuffer, cycle_start: u64) {
+        let started = super::timing::monotonic();
+        unsafe { self.begin_at(frames, get, cycle_start, started) }
+    }
+    /// Turns this pipeline's bench gauges on or off, as the marker would at
+    /// load. Between callbacks only.
+    #[cfg(test)]
+    fn set_gauged(&self, gauged: bool) {
+        unsafe { &mut *self.front.get() }.gauged = gauged;
+    }
+    /// `started`: CLOCK_MONOTONIC when the wrapped callback started.
+    ///
     /// # Safety
     /// The original JACK getter is valid for these live ports during this
     /// callback. Native client/port mutation must obey JACK's lifetime rules.
-    pub unsafe fn begin(&self, frames: usize, get: super::GetBuffer, cycle_start: u64) {
+    pub unsafe fn begin_at(
+        &self,
+        frames: usize,
+        get: super::GetBuffer,
+        cycle_start: u64,
+        started: u64,
+    ) {
         super::chat_mix::disarm();
         // SAFETY: the callback owns `front`.
         let front = unsafe { &mut *self.front.get() };
@@ -1663,14 +1881,21 @@ impl Pipeline {
             front.previous_ready = handoff.done_seq == front.seq - 1;
             let finished = self.helper.shared.finished.load(Ordering::Relaxed);
             if finished != 0 && front.previous_ready {
-                let margin = super::timing::monotonic().saturating_sub(finished);
-                HELPER_MIN_MARGIN_NS.fetch_min(margin, Ordering::Relaxed);
+                // From the callback's own start stamp: no clock read here.
+                let margin = started.saturating_sub(finished);
+                if margin < HELPER_MIN_MARGIN_NS.load(Ordering::Relaxed) {
+                    HELPER_MIN_MARGIN_NS.fetch_min(margin, Ordering::Relaxed);
+                }
             }
         } else {
             HELPER_STALLS.fetch_add(1, Ordering::Relaxed);
             super::probe::record(super::probe::Kind::HelperStall, HELPER_WAIT_NS);
         }
-        let resolving = super::timing::monotonic();
+        let resolving = if front.gauged {
+            super::timing::monotonic()
+        } else {
+            0
+        };
         let cycle = front.cycle;
         front.cycle = front.cycle.wrapping_add(1);
         // Resolve all buffers before touching any signal or DSP history.
@@ -1706,7 +1931,9 @@ impl Pipeline {
                 }
             }
         }
-        charge(&RESOLVE_NS, resolving);
+        if front.gauged {
+            charge(&RESOLVE_NS, resolving);
+        }
         if let Some(handoff) = handoff {
             handoff.frames = frames;
             handoff.cycle_start = cycle_start;
@@ -1774,6 +2001,11 @@ impl Pipeline {
         super::chat_mix::disarm();
         // SAFETY: the callback owns `front`.
         let front = unsafe { &mut *self.front.get() };
+        let entered = if front.gauged {
+            super::timing::monotonic()
+        } else {
+            0
+        };
         let slot = (front.seq & 1) as usize;
         let previous = slot ^ 1;
         // SAFETY: the helper is idle (see `begin`), so the callback owns the
@@ -1792,6 +2024,7 @@ impl Pipeline {
             previous_ready: front.previous_ready,
             owed,
             credited,
+            gauged: front.gauged,
         };
         if front.full {
             for (index, port) in front.ports.iter_mut().enumerate() {
@@ -1819,8 +2052,19 @@ impl Pipeline {
         front.sampler.mark(front.cycle);
         if let Some(handoff) = handoff {
             handoff.native_success = native_success;
-            self.helper.place(front.cycle, &mut front.sampler);
-            self.helper.queue(handoff);
+            if front.gauged {
+                let placing = super::timing::monotonic();
+                self.helper.place(front.cycle, &mut front.sampler);
+                let waking = super::timing::monotonic();
+                self.helper.queue(handoff, waking);
+                let woken = super::timing::monotonic();
+                PLACE.record(waking.saturating_sub(placing));
+                END.record(waking.saturating_sub(entered));
+                WAKE_CALL.record(woken.saturating_sub(waking));
+            } else {
+                self.helper.place(front.cycle, &mut front.sampler);
+                self.helper.queue(handoff, 0);
+            }
         }
     }
     /// Wait for the helper to finish the frame just handed off, as the next
@@ -1844,6 +2088,180 @@ mod tests {
     mod processing_counters;
     #[path = "skipped_paths.rs"]
     mod skipped_paths;
+
+    /// The unprocessed-path meter as it was: one flattened iterator.
+    fn flattened_meter(buffers: [&[f32]; 2]) -> rc2fx_dsp::Meter {
+        let mut meter = rc2fx_dsp::Meter::default();
+        for sample in buffers.into_iter().flatten().copied() {
+            let value = f64::from(sample);
+            if value.is_finite() {
+                meter.input_peak = meter.input_peak.max(value.abs());
+                meter.sum_squares += value * value;
+                meter.clipped += u64::from(value.abs() >= 1.0);
+            }
+            meter.samples += 1;
+        }
+        meter.output_peak = meter.input_peak;
+        meter
+    }
+    fn meter_bits(meter: rc2fx_dsp::Meter) -> [u64; 8] {
+        [
+            meter.input_peak.to_bits(),
+            meter.output_peak.to_bits(),
+            meter.sum_squares.to_bits(),
+            meter.gain_reduction.to_bits(),
+            meter.voice.to_bits(),
+            meter.gate_open.to_bits(),
+            meter.samples,
+            meter.clipped,
+        ]
+    }
+    /// The meter shown for unprocessed paths is the same value bit for bit:
+    /// over random samples of every scale, NaNs, infinities, denormals,
+    /// signed zeros, full scale and just beside it, huge values and silence,
+    /// mono and stereo, and every length up to a block.
+    #[test]
+    fn the_unprocessed_meter_is_bit_identical_to_the_flattened_loop() {
+        let special = [
+            0.0f32,
+            -0.0,
+            f32::NAN,
+            -f32::NAN,
+            f32::from_bits(0x7fa0_0001),
+            f32::from_bits(0xffc0_1234),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+            f32::from_bits(1),
+            f32::from_bits(0x8000_0001),
+            f32::from_bits(0x007f_ffff),
+            1.0,
+            -1.0,
+            f32::from_bits(1.0f32.to_bits() - 1),
+            f32::from_bits(1.0f32.to_bits() + 1),
+            -f32::from_bits(1.0f32.to_bits() - 1),
+            f32::MAX,
+            f32::MIN,
+            1.0e30,
+            -3.0e38,
+            0.5,
+            -0.25,
+        ];
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut random = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut compared = 0;
+        for round in 0..6000 {
+            let frames = match round % 5 {
+                0 => FRAMES,
+                1 => (random() % (FRAMES as u64 + 1)) as usize,
+                2 => round % 4,
+                _ => FRAMES,
+            };
+            let mut block = [[0.0f32; FRAMES]; 2];
+            for channel in &mut block {
+                for sample in channel.iter_mut() {
+                    let bits = random();
+                    *sample = match (round / 5) % 6 {
+                        // Every bit pattern: NaNs, infinities and denormals.
+                        0 => f32::from_bits(bits as u32),
+                        // Programme-level audio.
+                        1 => (bits >> 40) as f32 / (1u64 << 23) as f32 - 1.0,
+                        // Mostly special values.
+                        2 => special[(bits % special.len() as u64) as usize],
+                        // Audio with the odd special value in it.
+                        3 if bits % 9 == 0 => special[(bits >> 8) as usize % special.len()],
+                        3 => (bits >> 40) as f32 / (1u64 << 24) as f32 - 0.5,
+                        // Silence, and denormal noise.
+                        4 => 0.0,
+                        _ => f32::from_bits((bits as u32) & 0x807f_ffff),
+                    };
+                }
+            }
+            for stereo in [false, true] {
+                let buffers = view(&block, frames, stereo);
+                assert_eq!(
+                    meter_bits(native_meter(buffers)),
+                    meter_bits(flattened_meter(buffers)),
+                    "round {round}, {frames} frames, stereo {stereo}"
+                );
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, 12_000);
+        // Every special value alone, in each channel position.
+        for value in special {
+            let block = [[value; FRAMES], [-value; FRAMES]];
+            for stereo in [false, true] {
+                let buffers = view(&block, FRAMES, stereo);
+                assert_eq!(
+                    meter_bits(native_meter(buffers)),
+                    meter_bits(flattened_meter(buffers)),
+                    "{value:e} ({:#x}), stereo {stereo}",
+                    value.to_bits()
+                );
+            }
+        }
+        // The fixture is not vacuous: the meters see clips, sums and peaks.
+        let loud = native_meter(view(&[[1.5; FRAMES], [-0.5; FRAMES]], FRAMES, true));
+        assert_eq!(loud.samples, 2 * FRAMES as u64);
+        assert_eq!(loud.clipped, FRAMES as u64);
+        assert_eq!(loud.input_peak, 1.5);
+        assert!(loud.sum_squares > 0.0);
+    }
+
+    /// The fine histogram's bins are microsecond powers of two, inclusive at
+    /// the top of each, with the count, total and longest alongside.
+    #[test]
+    fn the_fine_gauge_bins_by_microseconds() {
+        let gauge = Fine::new();
+        for (elapsed, bin) in [
+            (0, 0),
+            (1_000, 0),
+            (1_001, 1),
+            (2_000, 1),
+            (4_000, 2),
+            (4_001, 3),
+            (8_000, 3),
+            (16_000, 4),
+            (32_000, 5),
+            (64_000, 6),
+            (64_001, 7),
+            (5_000_000, 7),
+        ] {
+            let before = gauge.bins[bin].load(Ordering::Relaxed);
+            gauge.record(elapsed);
+            assert_eq!(
+                gauge.bins[bin].load(Ordering::Relaxed),
+                before + 1,
+                "{elapsed} ns"
+            );
+        }
+        let report = gauge.snapshot();
+        assert_eq!(report["calls"], 12);
+        assert_eq!(report["maxNs"], 5_000_000);
+        assert_eq!(
+            report["totalNs"],
+            5_000_000u64
+                + 64_001
+                + 64_000
+                + 32_000
+                + 16_000
+                + 8_000
+                + 4_001
+                + 4_000
+                + 2_000
+                + 1_001
+                + 1_000
+        );
+        assert_eq!(report["histogram"].as_array().unwrap().len(), 8);
+        assert_eq!(std::mem::align_of_val(&WAKE_CALL), 64);
+    }
 
     #[test]
     fn expanded_route_plan_uses_the_shared_bounded_path_capacity() {

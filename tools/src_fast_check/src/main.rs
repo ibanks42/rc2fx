@@ -1,6 +1,9 @@
 //! Compares every byte of `src_fast_core` output and converter state with the
 //! real libsamplerate over randomised and vendor-shaped calls. Exits non-zero
 //! at the first difference.
+//!
+//! Both interpolations are compared with the library on every call: the one
+//! the mixer runs, which is NEON on AArch64, and the scalar reference.
 #[allow(dead_code)]
 #[path = "../../../crates/rc2fx-native/src/src_fast_core.rs"]
 mod core;
@@ -52,9 +55,9 @@ fn open() -> Library {
         });
         assert_eq!(fnv, core::TEXT_FNV, "not the verified library");
         Library {
-            new: std::mem::transmute(symbol(c"src_new")),
-            reset: std::mem::transmute(symbol(c"src_reset")),
-            process: std::mem::transmute(process),
+            new: std::mem::transmute::<*mut c_void, New>(symbol(c"src_new")),
+            reset: std::mem::transmute::<*mut c_void, Reset>(symbol(c"src_reset")),
+            process: std::mem::transmute::<*mut c_void, Process>(process),
             vt: base + core::LINEAR_VT_OFFSET,
             vari: base + core::LINEAR_VARI_OFFSET,
         }
@@ -84,7 +87,36 @@ enum Samples {
     Audio,
     AnyBits,
     Tiny,
+    Special,
 }
+
+/// Signed zeros, infinities, quiet and signalling NaNs with several payloads,
+/// and the largest and smallest normal and subnormal values. Random bits
+/// almost never give a zero or an infinity, and seldom two NaNs side by side.
+const SPECIAL: [u32; 22] = [
+    0x0000_0000,
+    0x8000_0000,
+    0x7f80_0000,
+    0xff80_0000,
+    0x7fc0_0000,
+    0xffc0_0000,
+    0x7fc0_0001,
+    0xffd5_5555,
+    0x7fff_ffff,
+    0x7f80_0001,
+    0xff80_0001,
+    0x7fa5_5555,
+    0xffbf_ffff,
+    0x7f7f_ffff,
+    0xff7f_ffff,
+    0x0080_0000,
+    0x8080_0000,
+    0x0000_0001,
+    0x8000_0001,
+    0x007f_ffff,
+    0x3f80_0000,
+    0xbf80_0000,
+];
 
 fn fill(random: &mut Random, kind: Samples, input: &mut [f32]) {
     for sample in input {
@@ -92,6 +124,12 @@ fn fill(random: &mut Random, kind: Samples, input: &mut [f32]) {
             Samples::Audio => (random.unit() * 2.0 - 1.0) as f32,
             Samples::AnyBits => f32::from_bits(random.next() as u32),
             Samples::Tiny => f32::from_bits((random.next() as u32) & 0x807f_ffff),
+            // Half audio, half from the table, so that a special value meets
+            // both ordinary samples and other special values.
+            Samples::Special => match random.next() {
+                bits if bits & 1 == 0 => (random.unit() * 2.0 - 1.0) as f32,
+                bits => f32::from_bits(SPECIAL[(bits >> 1) as usize % SPECIAL.len()]),
+            },
         };
     }
 }
@@ -155,7 +193,7 @@ fn call(
     input: &[f32],
     output_frames: c_long,
     ratio: f64,
-    buffers: &mut (Vec<f32>, Vec<f32>),
+    buffers: &mut Buffers,
     counts: &mut Counts,
     what: &str,
 ) {
@@ -169,15 +207,21 @@ fn call(
         end_of_input: 0,
         src_ratio: ratio,
     };
-    let mut want = template(buffers.0.as_mut_ptr());
-    let mut got = template(buffers.1.as_mut_ptr());
+    let mut want = template(buffers.real.as_mut_ptr());
+    let mut got = template(buffers.fast.as_mut_ptr());
     let status = unsafe { (library.process)(pair.real, &mut want) };
     assert_eq!(status, 0, "library error in {what}");
     let before = unsafe { (*pair.fast).last_position.to_bits() };
     unsafe {
         if core::prepare(plan, pair.fast, &got, library.vt, library.vari) {
+            let frames = plan.count();
+            for output in [&mut buffers.fast, &mut buffers.scalar] {
+                output[frames..frames + GUARD].fill(f32::from_bits(CANARY));
+            }
             core::interpolate(plan, pair.fast, got.data_in, got.data_out);
+            core::interpolate_scalar(plan, pair.fast, got.data_in, buffers.scalar.as_mut_ptr());
             core::commit(plan, pair.fast, &mut got);
+            reference(buffers, frames, what);
         } else {
             counts.declined += 1;
             assert_eq!((library.process)(pair.fast, &mut got), 0);
@@ -186,7 +230,24 @@ fn call(
     let _ = before;
     counts.calls += 1;
     counts.frames += want.output_frames_gen as u64;
-    compare(pair, &want, &got, &buffers.0, &buffers.1, what);
+    compare(pair, &want, &got, &buffers.real, &buffers.fast, what);
+}
+
+/// The scalar reference must write what the library wrote, and neither
+/// interpolation may write past the plan's frames.
+fn reference(buffers: &Buffers, frames: usize, what: &str) {
+    let bits = |samples: &[f32], frame: usize| samples[frame].to_bits();
+    let difference = (0..frames).find(|i| bits(&buffers.real, *i) != bits(&buffers.scalar, *i));
+    if difference.is_some() {
+        println!("MISMATCH in {what}: frame {difference:?} of the scalar reference");
+        std::process::exit(1);
+    }
+    for (name, output) in [("fast", &buffers.fast), ("scalar", &buffers.scalar)] {
+        if (frames..frames + GUARD).any(|i| bits(output, i) != CANARY) {
+            println!("OVERRUN in {what}: {name} wrote past frame {frames}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn pairs(library: &Library, count: usize) -> Vec<Pair> {
@@ -208,11 +269,25 @@ fn reset(library: &Library, pair: &Pair) {
     }
 }
 
-fn buffers() -> (Vec<f32>, Vec<f32>) {
-    (
-        vec![0.0; core::MAX_FRAMES * 2],
-        vec![0.0; core::MAX_FRAMES * 2],
-    )
+/// Output of the library, of `core::interpolate` and of
+/// `core::interpolate_scalar` for one call.
+struct Buffers {
+    real: Vec<f32>,
+    fast: Vec<f32>,
+    scalar: Vec<f32>,
+}
+
+/// Samples after the plan's frames that must stay as they were.
+const GUARD: usize = 8;
+const CANARY: u32 = 0x5a5a_a5a5;
+
+fn buffers() -> Buffers {
+    let buffer = || vec![0.0; core::MAX_FRAMES * 2];
+    Buffers {
+        real: buffer(),
+        fast: buffer(),
+        scalar: buffer(),
+    }
 }
 
 /// The vendor's shape: channels in step, one ratio per cycle on a fine grid.
@@ -273,8 +348,8 @@ fn wide(library: &Library, seed: u64, cycles: usize, kind: Samples, counts: &mut
         let pair = &converters[cycle % 3];
         match random.range(0, 7) {
             0 => ratio = (random.unit() * 16.0 - 8.0).exp2(),
-            1 => ratio = ratio * (1.0 + (random.unit() - 0.5) * 1e-15),
-            2 => ratio = ratio * (1.0 + (random.unit() - 0.5) * 1e-3),
+            1 => ratio *= 1.0 + (random.unit() - 0.5) * 1e-15,
+            2 => ratio *= 1.0 + (random.unit() - 0.5) * 1e-3,
             3 => ratio = 1.0,
             _ => {}
         }
@@ -337,6 +412,7 @@ fn main() {
             (0x1234_5672, Samples::Audio),
             (0x1234_5673, Samples::AnyBits),
             (0x1234_5674, Samples::Tiny),
+            (0x1234_5675, Samples::Special),
         ] {
             vendor(&library, seed, 20, cycles / 20, kind, &mut counts);
             vendor(&library, seed ^ 0xff, 2, cycles, kind, &mut counts);
@@ -346,6 +422,11 @@ fn main() {
     println!(
         "OK {} calls, {} frames bit-identical, {} declined to the library",
         counts.calls, counts.frames, counts.declined
+    );
+    let vector = cfg!(target_arch = "aarch64");
+    println!(
+        "compared with the library: interpolate ({}) and interpolate_scalar",
+        if vector { "NEON" } else { "scalar" }
     );
     let _ = counts.reused;
 }

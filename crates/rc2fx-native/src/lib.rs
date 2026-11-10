@@ -60,6 +60,65 @@ pub struct Symbol {
     size: u64,
 }
 
+/// A value on cache lines of its own (64 bytes on the Cortex-A53). Used for
+/// what one thread writes every cycle and for what several threads only read,
+/// so that one thread's writes never invalidate a line another thread uses.
+#[repr(align(64))]
+pub(crate) struct Line<T>(pub(crate) T);
+impl<T> std::ops::Deref for Line<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+const _: () = assert!(std::mem::align_of::<Line<AtomicU64>>() == 64);
+const _: () = assert!(std::mem::size_of::<Line<CycleCounters>>() == 128);
+const _: () = assert!(std::mem::size_of::<Line<ReadMostly>>() == 64);
+
+/// What every hooked `jack_port_get_buffer` call and every callback reads.
+/// Written only at load and while symbols bind, and kept apart from every
+/// counter, so that reading it never waits for another core's write.
+struct ReadMostly {
+    /// The real `jack_port_get_buffer`.
+    get_buffer: AtomicUsize,
+    /// The bench gauges are on (see gauges.rs).
+    gauges: AtomicBool,
+}
+static READ_MOSTLY: Line<ReadMostly> = Line(ReadMostly {
+    get_buffer: AtomicUsize::new(0),
+    gauges: AtomicBool::new(false),
+});
+
+/// What the wrapped callback counts every cycle. Only the callback thread
+/// writes these, so they sit together and away from other threads' counters.
+struct CycleCounters {
+    callbacks: AtomicU64,
+    /// `jack_port_get_buffer` calls made inside the wrapped callback, added
+    /// once per callback from the thread's own count.
+    buffer_calls_inside: AtomicU64,
+    max_gap: AtomicU64,
+    /// Gaps outside 0.9 to 1.1 periods, counted separately: a callback that
+    /// woke early or late. All are counted here; the event ring keeps only
+    /// those of 1.5 periods and more, so a persistent offset cannot flood it.
+    gaps_short: AtomicU64,
+    gaps_long: AtomicU64,
+    /// Time between consecutive callback starts, against the 112-frame
+    /// period: [<0.5, <0.9, <1.1, <1.5, <2, <3, >=3 periods].
+    gaps: [AtomicU64; 7],
+}
+static CYCLE: Line<CycleCounters> = Line(CycleCounters {
+    callbacks: AtomicU64::new(0),
+    buffer_calls_inside: AtomicU64::new(0),
+    max_gap: AtomicU64::new(0),
+    gaps_short: AtomicU64::new(0),
+    gaps_long: AtomicU64::new(0),
+    gaps: [const { AtomicU64::new(0) }; 7],
+});
+
+/// One wrapped callback registration. Its callback thread reads the head and
+/// writes the timing and the stamps every cycle, so each context starts on a
+/// cache line and shares none with anything else.
+#[repr(align(64))]
 struct Context {
     claimed: AtomicBool,
     installed: AtomicBool,
@@ -98,21 +157,23 @@ impl Context {
     }
 }
 static CONTEXTS: [Context; MAX_CONTEXTS] = [const { Context::new() }; MAX_CONTEXTS];
+const _: () = assert!(std::mem::align_of::<Context>() == 64);
 // Only callback/port registration, retirement and close acquire this mutex.
 // The audio callback never does.
 static CONTROL: Mutex<pipeline::Registry> = Mutex::new(pipeline::Registry { ports: Vec::new() });
 static REPORT: OnceLock<PathBuf> = OnceLock::new();
 static REPORT_SELECTED_ONLY: AtomicBool = AtomicBool::new(false);
 static SELECTOR_SEEN: AtomicBool = AtomicBool::new(false);
-// Callback timing is always collected: the app's telemetry reads it, and the
-// cost is the two clock reads per callback this library has always taken when
-// asked (CPU clocks only every 16th callback). Nothing else in the callback
-// changed when the old RC2FX_NATIVE_PROBE_TIMING switch was removed.
+// Callback wall timing is always collected: the app's telemetry and the bench
+// read it. It costs four CLOCK_MONOTONIC reads per callback (entry, around the
+// original callback, exit). Thread CPU clocks are system calls on the mixer,
+// so they are read only while the bench gauges are on (see timing.rs).
 static RETIRED_TIMING: timing::Shared = timing::Shared::new();
 static MAIN_TAIL: client_timing_events::MainEvents = client_timing_events::MainEvents::new();
 static PLAN: OnceLock<pipeline::Plan> = OnceLock::new();
 static CONTROL_SOCKET: OnceLock<PathBuf> = OnceLock::new();
-static CONTROL_ADMISSION: ipc::Admission = ipc::Admission::new();
+// The callback reads this every cycle; no counter shares its line.
+static CONTROL_ADMISSION: Line<ipc::Admission> = Line(ipc::Admission::new());
 static SERVER: OnceLock<Mutex<Option<ipc::Server>>> = OnceLock::new();
 static SERVER_ERRORS: AtomicU64 = AtomicU64::new(0);
 static MAIN_BASE: AtomicUsize = AtomicUsize::new(0);
@@ -120,7 +181,6 @@ static CALLBACK_OFFSET: AtomicUsize = AtomicUsize::new(0);
 static FIRMWARE_PROFILE: OnceLock<String> = OnceLock::new();
 static SET_PROCESS: AtomicUsize = AtomicUsize::new(0);
 static SET_XRUN: AtomicUsize = AtomicUsize::new(0);
-static GET_BUFFER: AtomicUsize = AtomicUsize::new(0);
 static CLOSE: AtomicUsize = AtomicUsize::new(0);
 static REGISTER: AtomicUsize = AtomicUsize::new(0);
 static UNREGISTER: AtomicUsize = AtomicUsize::new(0);
@@ -132,9 +192,9 @@ static OUTPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
 static DSP_FAULTS: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_OUTPUTS: AtomicU64 = AtomicU64::new(0);
 static REGISTRATIONS: AtomicU64 = AtomicU64::new(0);
-static CALLBACKS: AtomicU64 = AtomicU64::new(0);
-static BUFFER_CALLS_INSIDE: AtomicU64 = AtomicU64::new(0);
-static BUFFER_CALLS_OUTSIDE: AtomicU64 = AtomicU64::new(0);
+/// `jack_port_get_buffer` calls from outside the wrapped callback (the USB
+/// clients, on their own threads). Counted only while the bench gauges are on.
+static BUFFER_CALLS_OUTSIDE: Line<AtomicU64> = Line(AtomicU64::new(0));
 static DIRECT_BINDINGS: AtomicU64 = AtomicU64::new(0);
 static DLSYM_BINDINGS: AtomicU64 = AtomicU64::new(0);
 static CALLBACK_BINDINGS: AtomicU64 = AtomicU64::new(0);
@@ -153,12 +213,54 @@ struct CallbackFrame {
     pipeline: usize,
     started: u64,
 }
-thread_local! { static INSIDE: Cell<CallbackFrame> = const { Cell::new(CallbackFrame { owner: 0, processing: false, pipeline: 0, started: 0 }) }; }
+/// This thread's callback frame, and the `jack_port_get_buffer` calls made
+/// inside it. The count is a plain thread-owned number, published once when
+/// the frame ends, so the buffer hook writes no shared counter.
+struct Inside {
+    frame: Cell<CallbackFrame>,
+    buffer_calls: Cell<u64>,
+}
+impl std::ops::Deref for Inside {
+    type Target = Cell<CallbackFrame>;
+    fn deref(&self) -> &Self::Target {
+        &self.frame
+    }
+}
+// No destructor, so the first use on a thread registers nothing. The library's
+// whole thread-local block (about 200 bytes) must stay within glibc's optional
+// static TLS (512 bytes by default): beyond that the loader gives an audit
+// library dynamic TLS, which allocates on a thread's first access.
+thread_local! {
+    static INSIDE: Inside = const {
+        Inside {
+            frame: Cell::new(CallbackFrame { owner: 0, processing: false, pipeline: 0, started: 0 }),
+            buffer_calls: Cell::new(0),
+        }
+    };
+}
+/// Enters a callback frame on this thread. Returns what `leave_frame` restores:
+/// the frame that was current, and its buffer-call count so far.
+fn enter_frame(frame: CallbackFrame) -> (CallbackFrame, u64) {
+    INSIDE.with(|inside| (inside.replace(frame), inside.buffer_calls.replace(0)))
+}
+/// Leaves the frame entered with `enter_frame` and publishes its buffer calls.
+/// An enclosing frame keeps its own count.
+fn leave_frame(outer: (CallbackFrame, u64)) {
+    let calls = INSIDE.with(|inside| {
+        inside.set(outer.0);
+        inside.buffer_calls.replace(outer.1)
+    });
+    if calls != 0 {
+        CYCLE
+            .buffer_calls_inside
+            .fetch_add(calls, Ordering::Relaxed);
+    }
+}
 
 /// Inside a JACK callback: its context and CLOCK_MONOTONIC start time.
 pub(crate) fn callback_started() -> Option<(usize, u64)> {
     INSIDE
-        .try_with(Cell::get)
+        .try_with(|inside| inside.get())
         .ok()
         .filter(|frame| frame.owner != 0)
         .map(|frame| (frame.owner, frame.started))
@@ -537,7 +639,7 @@ pub unsafe extern "C" fn la_symbind64(
     let (storage, replacement) = match name {
         b"jack_set_process_callback" => (&SET_PROCESS, set_process as *const () as usize),
         b"jack_set_xrun_callback" => (&SET_XRUN, set_xrun as *const () as usize),
-        b"jack_port_get_buffer" => (&GET_BUFFER, get_buffer as *const () as usize),
+        b"jack_port_get_buffer" => (&READ_MOSTLY.get_buffer, get_buffer as *const () as usize),
         b"jack_client_close" => (&CLOSE, close as *const () as usize),
         b"jack_port_register" => (&REGISTER, register as *const () as usize),
         b"jack_port_unregister" => (&UNREGISTER, unregister as *const () as usize),
@@ -760,56 +862,54 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
             probe::record(probe::Kind::CycleSkip, cycle_start - previous_cycle);
         }
     }
-    let frame = context.timing.begin(frames);
+    // One read of a line no thread writes after load.
+    let gauged = gauges::enabled();
+    let frame = context.timing.begin(frames, gauged);
     let processing = CONTROL_ADMISSION.admit();
     let engine = if processing {
         context.pipeline.load(Ordering::Acquire)
     } else {
         std::ptr::null_mut()
     };
-    let previous = INSIDE.with(|value| {
-        value.replace(CallbackFrame {
-            owner: opaque as usize,
-            processing,
-            pipeline: engine as usize,
-            started,
-        })
+    let outer = enter_frame(CallbackFrame {
+        owner: opaque as usize,
+        processing,
+        pipeline: engine as usize,
+        started,
     });
-    CALLBACKS.fetch_add(1, Ordering::Relaxed);
+    CYCLE.callbacks.fetch_add(1, Ordering::Relaxed);
     if !engine.is_null() {
-        let getter = GET_BUFFER.load(Ordering::Acquire);
+        let getter = READ_MOSTLY.get_buffer.load(Ordering::Acquire);
         if getter != 0 {
             let get: GetBuffer = unsafe { std::mem::transmute(getter) };
             // This short exclusive borrow ends before the original callback.
             // Reentrant buffer hooks access the same owner only after it ends.
-            unsafe { (*engine).begin(frames as usize, get, cycle_start) };
+            unsafe { (*engine).begin_at(frames as usize, get, cycle_start, started) };
         }
     }
-    let before_native = Some(timing::Frame::before_native(&frame));
+    let before_native = timing::Frame::before_native(&frame);
     let result = unsafe {
         original(
             frames,
             context.argument.load(Ordering::Relaxed) as *mut c_void,
         )
     };
-    let after_native = Some(timing::Frame::after_native(&frame));
+    let after_native = timing::Frame::after_native(&frame);
     if !engine.is_null() {
         unsafe { (*engine).end(frames as usize, result == 0) };
     }
-    if let (Some(before), Some(after)) = (before_native, after_native) {
-        context.timing.finish(frame, before, after);
-    }
-    INSIDE.with(|value| value.set(previous));
-    let ended = timing::monotonic();
+    leave_frame(outer);
+    // The exit stamp of the callback timing is also the callback's end: one
+    // clock read serves both.
+    let ended = context.timing.finish(frame, before_native, after_native);
     context.ended.store(ended, Ordering::Relaxed);
+    let native_span = before_native
+        .wall_ns()
+        .zip(after_native.wall_ns())
+        .map(|(before, after)| [before, after]);
     client_timing::main_end(
         [started, ended, cycle_start, probe::PERIOD_NS, flight_token],
-        before_native.zip(after_native).and_then(|(before, after)| {
-            before
-                .wall_ns()
-                .zip(after.wall_ns())
-                .map(|(before, after)| [before, after])
-        }),
+        native_span,
     );
     if client_timing::active() {
         // Keep evidence before USB's deadline: the main callback must leave
@@ -822,12 +922,7 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
                 probe::PERIOD_NS * 3 / 4,
                 context.token.load(Ordering::Relaxed),
             ],
-            before_native.zip(after_native).and_then(|(before, after)| {
-                before
-                    .wall_ns()
-                    .zip(after.wall_ns())
-                    .map(|(before, after)| [before, after])
-            }),
+            native_span,
         );
     }
     let wall = ended.saturating_sub(started);
@@ -845,7 +940,9 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
         }
         // Still in the same cycle: both estimates should agree to the clock
         // resolution of jack_frames_since_cycle_start (one frame, 21 us).
-        if position < probe::PERIOD_NS / 2 {
+        // A second libjack call and clock read, after the callback's end
+        // stamp: a consistency check for bench runs only.
+        if gauged && position < probe::PERIOD_NS / 2 {
             let again = probe::cycle_start(context.client.load(Ordering::Relaxed));
             let drift = again.abs_diff(cycle_start);
             if drift < probe::PERIOD_NS / 2 {
@@ -856,15 +953,7 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     result
 }
 
-/// Time between consecutive callback starts, against the 112-frame period:
-/// [<0.5, <0.9, <1.1, <1.5, <2, <3, >=3 periods], and the longest gap.
-static GAPS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
-/// Gaps outside 0.9 to 1.1 periods, counted separately: a callback that woke
-/// early or late. All are counted here; the event ring keeps only those of
-/// 1.5 periods and more, so a persistent offset cannot flood it.
-static GAPS_SHORT: AtomicU64 = AtomicU64::new(0);
-static GAPS_LONG: AtomicU64 = AtomicU64::new(0);
-static MAX_GAP: AtomicU64 = AtomicU64::new(0);
+/// Counts the time between two callback starts (see `CycleCounters`).
 fn record_gap(gap: u64) {
     let period = timing::BUDGET_NS;
     let bounds = [
@@ -876,27 +965,37 @@ fn record_gap(gap: u64) {
         period * 3,
     ];
     let bin = bounds.iter().position(|bound| gap < *bound).unwrap_or(6);
-    GAPS[bin].fetch_add(1, Ordering::Relaxed);
+    CYCLE.gaps[bin].fetch_add(1, Ordering::Relaxed);
     if gap < period * 9 / 10 {
-        GAPS_SHORT.fetch_add(1, Ordering::Relaxed);
+        CYCLE.gaps_short.fetch_add(1, Ordering::Relaxed);
     } else if gap > period * 11 / 10 {
-        GAPS_LONG.fetch_add(1, Ordering::Relaxed);
+        CYCLE.gaps_long.fetch_add(1, Ordering::Relaxed);
     }
-    MAX_GAP.fetch_max(gap, Ordering::Relaxed);
+    CYCLE.max_gap.fetch_max(gap, Ordering::Relaxed);
     // A gap of 1.5 periods or more, with its size. Smaller out-of-band gaps
     // are in the counters above; they would otherwise fill the ring.
     if gap >= period * 3 / 2 {
         probe::record(probe::Kind::Gap, gap);
     }
 }
+/// The mixer's `jack_port_get_buffer`, on every thread that fetches a buffer:
+/// about 68 times a cycle in the wrapped callback and 40 on the USB client
+/// threads. It writes nothing shared. Inside a callback frame it adds to the
+/// thread's own count; outside one it counts only while the bench gauges are
+/// on.
 unsafe extern "C" fn get_buffer(port: *mut c_void, frames: u32) -> *mut c_void {
-    let pointer = GET_BUFFER.load(Ordering::Acquire);
+    let pointer = READ_MOSTLY.get_buffer.load(Ordering::Acquire);
     if pointer == 0 {
         return std::ptr::null_mut();
     }
-    if inside() {
-        BUFFER_CALLS_INSIDE.fetch_add(1, Ordering::Relaxed);
-    } else {
+    let in_frame = INSIDE.with(|inside| {
+        let in_frame = inside.get().owner != 0;
+        if in_frame {
+            inside.buffer_calls.set(inside.buffer_calls.get() + 1);
+        }
+        in_frame
+    });
+    if !in_frame && READ_MOSTLY.gauges.load(Ordering::Relaxed) {
         BUFFER_CALLS_OUTSIDE.fetch_add(1, Ordering::Relaxed);
     }
     let original: GetBuffer = unsafe { std::mem::transmute(pointer) };
@@ -1274,14 +1373,24 @@ fn write_report() {
     let Some(path) = REPORT.get() else {
         return;
     };
+    let report = build_report();
+    let _ = publish_report(&held, path, &report, |partial| {
+        std::fs::File::create(partial)
+    });
+}
+/// The audit report. Report thread and finalization only.
+fn build_report() -> serde_json::Value {
     let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+    // Bench-only measurements are null without the gauges, never a zero that
+    // could be read as a measured value.
+    let gauged = gauges::enabled();
     let retained = CONTEXTS
         .iter()
         .filter(|context| context.claimed.load(Ordering::Acquire))
         .count();
     let mut report = serde_json::json!({"probeOnly":true,"dspEnabled":read(&INPUT_BLOCKS)+read(&OUTPUT_BLOCKS)>0,
-        "registrations":read(&REGISTRATIONS),"callbacks":read(&CALLBACKS),"buffersInside":read(&BUFFER_CALLS_INSIDE),
-        "buffersOutside":read(&BUFFER_CALLS_OUTSIDE),"directBindings":read(&DIRECT_BINDINGS),"dlsymBindings":read(&DLSYM_BINDINGS),
+        "registrations":read(&REGISTRATIONS),"callbacks":read(&CYCLE.callbacks),"buffersInside":read(&CYCLE.buffer_calls_inside),
+        "buffersOutside":gauged.then(|| read(&BUFFER_CALLS_OUTSIDE)),"directBindings":read(&DIRECT_BINDINGS),"dlsymBindings":read(&DLSYM_BINDINGS),
         "bindingsDuringCallback":read(&CALLBACK_BINDINGS),"conflicts":read(&CONFLICTS),"capacityFailures":read(&CAPACITY_FAILURES),
         "teardownForwards":read(&TEARDOWN_FORWARDS),
         "reclaimedContexts":read(&RECLAIMED),"retainedContexts":retained,"callbackAllocations":read(&CALLBACK_ALLOCATIONS),
@@ -1296,7 +1405,7 @@ fn write_report() {
     report["processPid"] = std::process::id().into();
     report["clientTiming"] = client_timing::snapshot();
     report["srcFast"] = src_fast::snapshot();
-    if gauges::enabled() {
+    if gauged {
         report["gauges"] = gauges::snapshot();
     }
     report["mainCallbackTail"] = MAIN_TAIL.snapshot();
@@ -1308,9 +1417,9 @@ fn write_report() {
         .map(|context| serde_json::to_value(context.timing.snapshot()).unwrap_or_default())
         .collect();
     report["helper"] = serde_json::json!({
-        "frames": read(&pipeline::HELPER_FRAMES),
-        "totalNs": read(&pipeline::HELPER_NS),
-        "maxNs": read(&pipeline::HELPER_MAX_NS),
+        "frames": read(&pipeline::HELPER_TIME.frames),
+        "totalNs": read(&pipeline::HELPER_TIME.total_ns),
+        "maxNs": read(&pipeline::HELPER_TIME.max_ns),
         "stalls": read(&pipeline::HELPER_STALLS),
         "late": read(&pipeline::HELPER_LATE),
         "minMarginNs": read(&pipeline::HELPER_MIN_MARGIN_NS),
@@ -1319,16 +1428,18 @@ fn write_report() {
     // Live processing counters (mirrors; the fields above stay
     // retirement-only). Read without touching a pipeline.
     report["processingCounters"] = pipeline::processing_counters();
-    report["pathCostNs"] = pipeline::PATH_COST_NS.iter().map(read).collect();
-    report["resolveNs"] = read(&pipeline::RESOLVE_NS).into();
-    report["callbackGaps"] = GAPS.iter().map(read).collect();
+    report["pathCostNs"] = gauged
+        .then(|| pipeline::PATH_COST_NS.iter().map(read).collect::<Vec<_>>())
+        .into();
+    report["resolveNs"] = gauged.then(|| read(&pipeline::RESOLVE_NS)).into();
+    report["callbackGaps"] = CYCLE.gaps.iter().map(read).collect();
     report["callbackGapsOutsideBand"] = serde_json::json!({
-        "short": read(&GAPS_SHORT),
-        "long": read(&GAPS_LONG),
+        "short": read(&CYCLE.gaps_short),
+        "long": read(&CYCLE.gaps_long),
         "band": "0.9-1.1 periods",
         "ring": "gap events >= 1.5 periods",
     });
-    report["maxCallbackGapNs"] = read(&MAX_GAP).into();
+    report["maxCallbackGapNs"] = read(&CYCLE.max_gap).into();
     report["monotonicNs"] = timing::monotonic().into();
     let mut preparation_workers = Vec::new();
     let mut unavailable = 0usize;
@@ -1405,9 +1516,7 @@ fn write_report() {
     {
         report["controlServer"] = status;
     }
-    let _ = publish_report(&held, path, &report, |partial| {
-        std::fs::File::create(partial)
-    });
+    report
 }
 /// Report publication, by the refresh thread and at finalization (never a
 /// real-time thread). Held from before a report is built until it is
@@ -1489,6 +1598,439 @@ fn start_report_refresh() {
                 probe::flush_log();
             }
         });
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+
+    /// The tests here drive the process wrapper and the buffer hook, which
+    /// count into process-wide statics: one at a time.
+    static HOOKS: Mutex<()> = Mutex::new(());
+    /// What the stand-in vendor callback saw of the published count while it
+    /// was still inside its frame.
+    static SEEN_INSIDE: AtomicU64 = AtomicU64::new(0);
+
+    fn serial() -> (MutexGuard<'static, ()>, MutexGuard<'static, ()>) {
+        let hooks = HOOKS.lock().unwrap_or_else(|poison| poison.into_inner());
+        // Callbacks a few microseconds apart count as short gaps, which the
+        // gap test reads.
+        let events = probe::EVENT_TESTS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        READ_MOSTLY
+            .get_buffer
+            .store(real_get_buffer as *const () as usize, Ordering::Release);
+        (hooks, events)
+    }
+    /// The real getter: a pointer that names its port and frame count.
+    unsafe extern "C" fn real_get_buffer(port: *mut c_void, frames: u32) -> *mut c_void {
+        (port as usize * 1024 + frames as usize) as *mut c_void
+    }
+    /// The vendor callback: fetches `argument` buffers through the hook.
+    unsafe extern "C" fn vendor(frames: u32, argument: *mut c_void) -> c_int {
+        for port in 1..=argument as usize {
+            let got = unsafe { get_buffer(port as *mut c_void, frames) };
+            assert_eq!(got as usize, port * 1024 + frames as usize);
+        }
+        SEEN_INSIDE.store(
+            CYCLE.buffer_calls_inside.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        0
+    }
+    fn context(calls: usize) -> &'static Context {
+        let context = Box::leak(Box::new(Context::new()));
+        context
+            .callback
+            .store(vendor as *const () as usize, Ordering::Release);
+        context.argument.store(calls, Ordering::Relaxed);
+        context
+    }
+    fn run(context: &'static Context) -> c_int {
+        unsafe { process(112, (context as *const Context).cast_mut().cast()) }
+    }
+    fn clock_reads() -> [u64; 2] {
+        timing::CLOCK_READS.with(Cell::get)
+    }
+
+    /// N callbacks of K hooked buffer calls each publish N x K, once per
+    /// callback at its end, with no pipeline attached.
+    #[test]
+    fn buffer_calls_inside_a_callback_are_published_once_when_it_ends() {
+        let _serial = serial();
+        const CALLS: usize = 68;
+        const CALLBACKS: u64 = 25;
+        let context = context(CALLS);
+        assert!(context.pipeline.load(Ordering::Relaxed).is_null());
+        let inside = || CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
+        let (before, callbacks) = (inside(), CYCLE.callbacks.load(Ordering::Relaxed));
+        let outside = BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed);
+        for done in 0..CALLBACKS {
+            assert_eq!(run(context), 0);
+            // Nothing was published while the callback was inside its frame.
+            assert_eq!(
+                SEEN_INSIDE.load(Ordering::Relaxed),
+                before + done * CALLS as u64
+            );
+            assert_eq!(inside(), before + (done + 1) * CALLS as u64);
+        }
+        assert_eq!(
+            CYCLE.callbacks.load(Ordering::Relaxed),
+            callbacks + CALLBACKS
+        );
+        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside);
+        // The thread is outside any frame again, with nothing left to publish.
+        assert!(!super::inside());
+        assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
+        assert_eq!(
+            context.timing.snapshot().callback_wall.calls,
+            CALLBACKS,
+            "every callback was timed"
+        );
+    }
+
+    /// A call from a thread that is in no callback frame (a USB client's
+    /// thread) returns exactly what the real getter returns and writes no
+    /// counter, unless the bench gauges are on.
+    #[test]
+    fn a_buffer_call_outside_a_callback_is_forwarded_and_counted_only_with_the_gauges() {
+        let _serial = serial();
+        let inside = CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
+        let outside = BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed);
+        std::thread::spawn(move || {
+            for port in 1..=40usize {
+                let got = unsafe { get_buffer(port as *mut c_void, 112) };
+                assert_eq!(got as usize, port * 1024 + 112);
+            }
+            assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside);
+        assert_eq!(CYCLE.buffer_calls_inside.load(Ordering::Relaxed), inside);
+        READ_MOSTLY.gauges.store(true, Ordering::Relaxed);
+        for port in 1..=40usize {
+            let got = unsafe { get_buffer(port as *mut c_void, 112) };
+            assert_eq!(got as usize, port * 1024 + 112);
+        }
+        READ_MOSTLY.gauges.store(false, Ordering::Relaxed);
+        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside + 40);
+        assert_eq!(CYCLE.buffer_calls_inside.load(Ordering::Relaxed), inside);
+    }
+
+    /// A frame inside another publishes its own calls when it ends; the
+    /// enclosing frame keeps its own count and publishes it at its own end.
+    #[test]
+    fn a_nested_frame_publishes_only_its_own_buffer_calls() {
+        let _serial = serial();
+        let published = || CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
+        let call = |times: usize| {
+            for port in 1..=times {
+                unsafe { get_buffer(port as *mut c_void, 112) };
+            }
+        };
+        let frame = |owner| CallbackFrame {
+            owner,
+            processing: false,
+            pipeline: 0,
+            started: 0,
+        };
+        let before = published();
+        let outer = enter_frame(frame(0x10));
+        call(3);
+        let inner = enter_frame(frame(0x20));
+        call(2);
+        assert_eq!(published(), before);
+        leave_frame(inner);
+        assert_eq!(published(), before + 2, "the inner frame's two");
+        assert_eq!(INSIDE.with(|inside| inside.get().owner), 0x10);
+        call(1);
+        leave_frame(outer);
+        assert_eq!(published(), before + 2 + 4, "the outer frame's four");
+        assert!(!super::inside());
+        // A frame with no buffer call publishes nothing.
+        leave_frame(enter_frame(frame(0x30)));
+        assert_eq!(published(), before + 6);
+    }
+
+    /// Several threads in callback frames at once, each with its own number
+    /// of buffer calls, while other threads fetch buffers outside any frame
+    /// (as the USB clients do). Each callback publishes exactly its own
+    /// calls, no thread's count reaches another, and a call from outside a
+    /// frame is counted nowhere while the gauges are off.
+    #[test]
+    fn concurrent_callbacks_and_outside_callers_keep_their_own_counts() {
+        let _serial = serial();
+        const THREADS: usize = 6;
+        const CALLBACKS: u64 = 300;
+        let inside = CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
+        let callbacks = CYCLE.callbacks.load(Ordering::Relaxed);
+        let outside = BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed);
+        let stop = AtomicBool::new(false);
+        let outside_calls = AtomicU64::new(0);
+        let expected: u64 = std::thread::scope(|scope| {
+            for _ in 0..3 {
+                scope.spawn(|| {
+                    let mut port = 1usize;
+                    let mut calls = 0;
+                    while !stop.load(Ordering::Relaxed) {
+                        let got = unsafe { get_buffer(port as *mut c_void, 112) };
+                        assert_eq!(got as usize, port * 1024 + 112);
+                        port = port % 40 + 1;
+                        calls += 1;
+                    }
+                    assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
+                    outside_calls.fetch_add(calls, Ordering::Relaxed);
+                });
+            }
+            let workers: Vec<_> = (0..THREADS)
+                .map(|thread| {
+                    scope.spawn(move || {
+                        let calls = 3 + 13 * thread;
+                        let context = context(calls);
+                        for _ in 0..CALLBACKS {
+                            assert_eq!(run(context), 0);
+                            assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
+                            assert!(!super::inside());
+                        }
+                        assert_eq!(context.timing.snapshot().callback_wall.calls, CALLBACKS);
+                        calls as u64 * CALLBACKS
+                    })
+                })
+                .collect();
+            let expected = workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .sum();
+            stop.store(true, Ordering::Relaxed);
+            expected
+        });
+        assert!(outside_calls.load(Ordering::Relaxed) > 0);
+        assert_eq!(
+            CYCLE.buffer_calls_inside.load(Ordering::Relaxed),
+            inside + expected
+        );
+        assert_eq!(
+            CYCLE.callbacks.load(Ordering::Relaxed),
+            callbacks + THREADS as u64 * CALLBACKS
+        );
+        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside);
+    }
+
+    unsafe extern "C" fn ten_frames_in(_: *const c_void) -> u32 {
+        10
+    }
+
+    /// The wrapper's own clock reads: five per callback without a cycle clock
+    /// and six with one, and never the thread CPU clock or the second
+    /// cycle-start estimate unless the bench gauges are on.
+    #[test]
+    fn the_wrapper_reads_no_diagnostic_clock_without_the_gauges() {
+        let _serial = serial();
+        const CALLBACKS: u64 = 40;
+        let context = context(4);
+        // A callback the host deschedules for milliseconds records a gap or
+        // an overrun event, which stamps itself: those reads are not the
+        // wrapper's, and no other test records events while this one runs.
+        let reads = |context: &'static Context| {
+            let (before, events) = (clock_reads(), probe::events_recorded());
+            for _ in 0..CALLBACKS {
+                assert_eq!(run(context), 0);
+            }
+            let after = clock_reads();
+            let events = probe::events_recorded() - events;
+            [after[0] - before[0] - events, after[1] - before[1]]
+        };
+        // No client, so no cycle clock: start, timing entry, before and after
+        // the original callback, exit.
+        assert_eq!(reads(context), [5 * CALLBACKS, 0]);
+        // With a cycle clock: one more read, for the cycle start.
+        let clock = probe::CYCLE_CLOCK.swap(ten_frames_in as *const () as usize, Ordering::AcqRel);
+        context.client.store(0x1234, Ordering::Relaxed);
+        let drift = probe::ESTIMATE_DRIFT_MAX_NS.load(Ordering::Relaxed);
+        assert_eq!(reads(context), [6 * CALLBACKS, 0]);
+        assert_eq!(probe::ESTIMATE_DRIFT_MAX_NS.load(Ordering::Relaxed), drift);
+        assert_eq!(context.timing.snapshot().callback_cpu.calls, 0);
+        // Gauges on: the second estimate (one read per callback that ends in
+        // the first half of its cycle, as all of these do), and four CPU
+        // clock reads on the one sampled callback.
+        let fresh = self::context(4);
+        fresh.client.store(0x1234, Ordering::Relaxed);
+        READ_MOSTLY.gauges.store(true, Ordering::Relaxed);
+        let gauged = reads(fresh);
+        READ_MOSTLY.gauges.store(false, Ordering::Relaxed);
+        probe::CYCLE_CLOCK.store(clock, Ordering::Release);
+        // A callback descheduled past half a period skips the second
+        // estimate, so on a loaded host the count can fall short of seven.
+        assert!(
+            gauged[0] > 6 * CALLBACKS && gauged[0] <= 7 * CALLBACKS,
+            "{gauged:?}"
+        );
+        assert_eq!(gauged[1], 4);
+        assert_eq!(fresh.timing.snapshot().callback_cpu.calls, 1);
+        assert_eq!(fresh.timing.snapshot().owned_cpu.calls, 1);
+    }
+
+    /// Every counter this change moved still reaches the report under its own
+    /// key, and what only a bench run measures is null without the gauges.
+    #[test]
+    fn the_report_keeps_every_key_and_nulls_bench_only_fields_without_the_gauges() {
+        let _serial = serial();
+        let number = |value: &serde_json::Value| value.as_u64().expect("a number");
+        // Marks: each counter gets its own amount, far above anything other
+        // tests add meanwhile, so a swapped key shows as the wrong multiple.
+        const MARK: u64 = 1 << 40;
+        let marked = |after: &serde_json::Value, before: &serde_json::Value| {
+            (number(after) - number(before)) / MARK
+        };
+        let before = build_report();
+        CYCLE.callbacks.fetch_add(MARK, Ordering::Relaxed);
+        CYCLE
+            .buffer_calls_inside
+            .fetch_add(2 * MARK, Ordering::Relaxed);
+        CYCLE.gaps_short.fetch_add(3 * MARK, Ordering::Relaxed);
+        CYCLE.gaps_long.fetch_add(4 * MARK, Ordering::Relaxed);
+        for (bin, gap) in CYCLE.gaps.iter().enumerate() {
+            gap.fetch_add((5 + bin as u64) * MARK, Ordering::Relaxed);
+        }
+        pipeline::HELPER_TIME
+            .frames
+            .fetch_add(12 * MARK, Ordering::Relaxed);
+        pipeline::HELPER_TIME
+            .total_ns
+            .fetch_add(13 * MARK, Ordering::Relaxed);
+        BUFFER_CALLS_OUTSIDE.fetch_add(14 * MARK, Ordering::Relaxed);
+        pipeline::RESOLVE_NS.fetch_add(15 * MARK, Ordering::Relaxed);
+        pipeline::PATH_COST_NS[3].fetch_add(16 * MARK, Ordering::Relaxed);
+        let after = build_report();
+        assert_eq!(marked(&after["callbacks"], &before["callbacks"]), 1);
+        assert_eq!(marked(&after["buffersInside"], &before["buffersInside"]), 2);
+        let (band, band_before) = (
+            &after["callbackGapsOutsideBand"],
+            &before["callbackGapsOutsideBand"],
+        );
+        assert_eq!(marked(&band["short"], &band_before["short"]), 3);
+        assert_eq!(marked(&band["long"], &band_before["long"]), 4);
+        let gaps = after["callbackGaps"].as_array().unwrap();
+        assert_eq!(gaps.len(), 7);
+        for (bin, gap) in gaps.iter().enumerate() {
+            assert_eq!(marked(gap, &before["callbackGaps"][bin]), 5 + bin as u64);
+        }
+        assert_eq!(
+            marked(&after["helper"]["frames"], &before["helper"]["frames"]),
+            12
+        );
+        assert_eq!(
+            marked(&after["helper"]["totalNs"], &before["helper"]["totalNs"]),
+            13
+        );
+        for key in ["maxNs", "stalls", "late", "minMarginNs"] {
+            assert!(after["helper"][key].is_u64(), "helper.{key}");
+        }
+        assert!(after["maxCallbackGapNs"].is_u64());
+        for key in [
+            "processed",
+            "processedUnacknowledged",
+            "rawHelperUnready",
+            "rawNoHandoff",
+            "rawNotDone",
+            "rawInvalid",
+            "unobserved",
+            "rawReturns",
+        ] {
+            assert!(after["sources"][key].is_u64(), "sources.{key}");
+        }
+        for key in ["startPos", "endPos", "helperPos"] {
+            assert_eq!(
+                after["cycle"][key]["histogram"].as_array().unwrap().len(),
+                8
+            );
+        }
+        // Bench-only: present as keys, null without the gauges, and no gauges
+        // section.
+        let object = after.as_object().unwrap();
+        for key in ["buffersOutside", "pathCostNs", "resolveNs"] {
+            assert!(object.contains_key(key), "{key}");
+            assert!(after[key].is_null(), "{key} without the gauges");
+        }
+        let cycle = after["cycle"].as_object().unwrap();
+        assert!(cycle.contains_key("estimateDriftMaxNs"));
+        assert!(cycle["estimateDriftMaxNs"].is_null());
+        assert!(!object.contains_key("gauges"));
+        assert_eq!(after["retiredCallbackTiming"]["cpuSampleEvery"], 0);
+        assert_eq!(
+            after["retiredCallbackTiming"]["callbackCpu"]["calls"], 0,
+            "the wire format keeps its CPU fields"
+        );
+        // The launcher greps the first `"callbacks":` of the file for the
+        // callback count: it must still be the top-level one.
+        let text = serde_json::to_string(&after).unwrap();
+        let first = text.find("\"callbacks\":").unwrap();
+        let count: String = text[first + 12..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        assert_eq!(count.parse::<u64>().unwrap(), number(&after["callbacks"]));
+        // With the gauges, the same keys carry the measurements.
+        READ_MOSTLY.gauges.store(true, Ordering::Relaxed);
+        let gauged = build_report();
+        READ_MOSTLY.gauges.store(false, Ordering::Relaxed);
+        assert_eq!(number(&gauged["buffersOutside"]) / MARK, 14);
+        assert_eq!(number(&gauged["resolveNs"]) / MARK, 15);
+        let costs = gauged["pathCostNs"].as_array().unwrap();
+        assert_eq!(costs.len(), rc2fx_native_control::MAX_PATHS);
+        assert_eq!(number(&costs[3]) / MARK, 16);
+        assert_eq!(number(&costs[2]) / MARK, 0);
+        assert!(gauged["cycle"]["estimateDriftMaxNs"].is_u64());
+        assert_eq!(
+            gauged["retiredCallbackTiming"]["cpuSampleEvery"],
+            timing::CPU_SAMPLE_EVERY
+        );
+        let wake = &gauged["gauges"]["helperWake"];
+        assert_eq!(wake["boundsUs"].as_array().unwrap().len(), 7);
+        for key in ["wakeCall", "wakeLatency", "end", "place"] {
+            assert_eq!(wake[key]["histogram"].as_array().unwrap().len(), 8, "{key}");
+            for field in ["calls", "totalNs", "maxNs"] {
+                assert!(wake[key][field].is_u64(), "{key}.{field}");
+            }
+        }
+    }
+
+    /// The statics the callback, the helper and every hooked call use are on
+    /// lines of their own.
+    #[test]
+    fn hot_statics_do_not_share_cache_lines() {
+        let line = |address: usize| address / 64;
+        let read_mostly = &raw const READ_MOSTLY as usize;
+        let cycle = &raw const CYCLE as usize;
+        let outside = &raw const BUFFER_CALLS_OUTSIDE as usize;
+        let admission = &raw const CONTROL_ADMISSION as usize;
+        let helper = &raw const pipeline::HELPER_TIME as usize;
+        let positions = [
+            &raw const probe::START_POS as usize,
+            &raw const probe::END_POS as usize,
+            &raw const probe::HELPER_POS as usize,
+        ];
+        let mut lines = vec![
+            line(read_mostly),
+            line(cycle),
+            line(cycle + 64),
+            line(outside),
+            line(admission),
+            line(helper),
+        ];
+        for start in positions {
+            assert_eq!(start % 64, 0);
+            assert_eq!(std::mem::size_of::<probe::Positions>(), 128);
+            lines.extend([line(start), line(start + 64)]);
+        }
+        for address in [read_mostly, cycle, outside, admission, helper] {
+            assert_eq!(address % 64, 0);
+        }
+        let distinct: std::collections::HashSet<_> = lines.iter().collect();
+        assert_eq!(distinct.len(), lines.len());
+    }
 }
 
 #[cfg(test)]
@@ -1607,33 +2149,33 @@ mod report_tests {
             |report: &serde_json::Value| report["events"]["total"].as_u64().unwrap_or_default();
         let total = || events(&probe::snapshot());
         let before = (
-            counts(&GAPS_SHORT),
-            counts(&GAPS_LONG),
-            counts(&GAPS[2]),
+            counts(&CYCLE.gaps_short),
+            counts(&CYCLE.gaps_long),
+            counts(&CYCLE.gaps[2]),
             total(),
         );
         // Inside the band: neither direction, and no event (the size bins
         // count every gap, so this one lands in the 0.9-1.1 bin).
         record_gap(period * 19 / 20);
         assert_eq!(
-            (counts(&GAPS_SHORT), counts(&GAPS_LONG), total()),
+            (counts(&CYCLE.gaps_short), counts(&CYCLE.gaps_long), total()),
             (before.0, before.1, before.3)
         );
-        assert_eq!(counts(&GAPS[2]) - before.2, 1);
+        assert_eq!(counts(&CYCLE.gaps[2]) - before.2, 1);
         // Early (0.5 period) and late (1.3 periods): counted, no event.
         record_gap(period / 2);
         record_gap(period * 13 / 10);
         assert_eq!(
             (
-                counts(&GAPS_SHORT) - before.0,
-                counts(&GAPS_LONG) - before.1,
+                counts(&CYCLE.gaps_short) - before.0,
+                counts(&CYCLE.gaps_long) - before.1,
                 total() - before.3
             ),
             (1, 1, 0)
         );
         // Two periods: counted and kept, with its size.
         record_gap(period * 2);
-        assert_eq!(counts(&GAPS_LONG) - before.1, 2);
+        assert_eq!(counts(&CYCLE.gaps_long) - before.1, 2);
         assert_eq!(total() - before.3, 1);
         let report = probe::snapshot();
         let recent = report["events"]["recent"].as_array().unwrap();

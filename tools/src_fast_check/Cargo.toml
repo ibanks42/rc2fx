@@ -1,5 +1,9 @@
 # Runs `src_fast_core.rs` against the real libsamplerate, on AArch64 or under
 # qemu. Outside the workspace: it is built only for that target.
+#
+# The test binary holds that file's own tests, which compare its NEON
+# interpolation with the scalar one. Build it with `cargo zigbuild --tests` and
+# the same target, and run it under qemu as the checker is run.
 [package]
 name = "src_fast_check"
 version = "0.0.0"

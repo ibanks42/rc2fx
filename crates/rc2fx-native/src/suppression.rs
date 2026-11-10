@@ -190,6 +190,9 @@ impl Suppression for Provider {
     fn process_sample(&mut self, input: f32, wet: f32) -> f32 {
         self.0.process_sample(input, wet)
     }
+    fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
+        self.0.process_block(samples, wet, voice)
+    }
     fn voice(&self) -> Option<f32> {
         self.0.voice()
     }

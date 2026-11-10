@@ -517,3 +517,150 @@ fn a_hardware_chat_voice_output_faults_in_both_ownerships_instead_of_processing_
         "helper route hands back the copied frame, unprocessed",
     );
 }
+
+fn clock_reads() -> u64 {
+    crate::timing::CLOCK_READS.with(|reads| reads.get()[0])
+}
+/// One callback through `begin_at`, so that the test itself reads no clock.
+fn run_at(pipeline: &Pipeline, buffers: &Buffers, index: usize) -> [[f32; FRAMES]; 2] {
+    unsafe {
+        (*buffers.input[0].get()).fill(sample(index, 0));
+        pipeline.begin_at(FRAMES, test_buffer, 0, 1);
+    }
+    let raw = buffers.input(0);
+    let source = pipeline
+        .buffer(raw as usize, FRAMES, raw.cast())
+        .cast::<f32>();
+    let voice = unsafe { *source };
+    for (channel, gain) in [2.0, -1.5].into_iter().enumerate() {
+        let raw = buffers.output(channel);
+        let written = pipeline
+            .buffer(raw as usize, FRAMES, raw.cast())
+            .cast::<f32>();
+        unsafe { std::slice::from_raw_parts_mut(written, FRAMES) }.fill(voice * gain);
+    }
+    unsafe { pipeline.end(FRAMES, true) };
+    pipeline.settle();
+    contents(buffers)
+}
+
+/// The bench gauges only measure. With them on, every output sample, counter
+/// and meter is the same bit for bit, in both ownerships, through settings and
+/// mode changes, failed callbacks and unrequested channels.
+#[test]
+fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
+    for direct_output in [true, false] {
+        let plan = hardware_plan(2, PathMode::Processed, 0.5);
+        let buffers = Buffers::new();
+        let (plain, mut plain_controls) = build(&plan, &buffers, direct_output);
+        let (gauged, mut gauged_controls) = build(&plan, &buffers, direct_output);
+        plain.set_gauged(false);
+        gauged.set_gauged(true);
+        let costs = || {
+            PATH_COST_NS
+                .iter()
+                .map(|cost| cost.load(Ordering::Relaxed))
+                .sum::<u64>()
+        };
+        let wakes = || {
+            [&WAKE_CALL, &WAKE_LATENCY, &END, &PLACE]
+                .map(|gauge| gauge.calls.load(Ordering::Relaxed))
+        };
+        let (costs_before, wakes_before) = (costs(), wakes());
+        let frames = 240;
+        for index in 0..frames {
+            let mut revised = plan.paths[1].target.clone();
+            match index {
+                60 => {
+                    revised.eq.input_gain_db = 6.0;
+                    plain_controls[1].publish(&revised, 2).unwrap();
+                    gauged_controls[1].publish(&revised, 2).unwrap();
+                }
+                120 | 170 => {
+                    let (revision, mode) = if index == 120 {
+                        (3, PathMode::Passthrough)
+                    } else {
+                        (4, PathMode::Processed)
+                    };
+                    for controls in [&mut plain_controls, &mut gauged_controls] {
+                        let staged = controls[1].prepare_mode(&revised, revision, mode).unwrap();
+                        controls[1].reserve(staged).unwrap().commit();
+                    }
+                }
+                _ => {}
+            }
+            let ask = [index % 11 != 3, index % 17 != 5];
+            let success = index % 13 != 7;
+            let a = run(&plain, &buffers, index, ask, success);
+            let b = run(&gauged, &buffers, index, ask, success);
+            assert_bits_same(&a.raw, &b.raw, &format!("frame {index}: the mixer's audio"));
+            assert_bits_same(&a.out, &b.out, &format!("frame {index}: output"));
+        }
+        let (a, b) = (plain.counters(), gauged.counters());
+        assert_eq!(
+            (a.input_blocks, a.output_blocks, a.faults, a.skipped_outputs),
+            (b.input_blocks, b.output_blocks, b.faults, b.skipped_outputs)
+        );
+        assert_eq!(a.sources, b.sources);
+        assert!(a.output_blocks > 100 && a.skipped_outputs > 0);
+        for path in 0..2 {
+            let meter = |controls: &mut Vec<parameters::Control>| {
+                let value = controls[path].status().unwrap().meter.unwrap();
+                (
+                    value.callbacks,
+                    value.processed_frames,
+                    value.input_peak.to_bits(),
+                    value.output_peak.to_bits(),
+                    value.rms.to_bits(),
+                    value.clipped,
+                    value.latency_samples,
+                )
+            };
+            assert_eq!(
+                meter(&mut plain_controls),
+                meter(&mut gauged_controls),
+                "path {path}"
+            );
+        }
+        // The gauged pipeline recorded; the plain one never stamped a wake.
+        assert!(costs() > costs_before);
+        for (after, before) in wakes().into_iter().zip(wakes_before) {
+            assert!(after >= before + frames as u64, "{after} vs {before}");
+        }
+        assert_eq!(plain.helper.shared.queued_at.load(Ordering::Relaxed), 0);
+        assert_ne!(gauged.helper.shared.queued_at.load(Ordering::Relaxed), 0);
+    }
+}
+
+/// Without the gauges a callback's begin and end read no clock at all: not
+/// for the path costs, the buffer resolve, the helper margin or the wake. With
+/// them, each of those is stamped.
+#[test]
+fn without_the_gauges_the_pipeline_reads_no_clock_in_the_callback() {
+    let plan = hardware_plan(2, PathMode::Processed, 0.5);
+    let buffers = Buffers::new();
+    let (plain, _plain_controls) = build(&plan, &buffers, true);
+    let (gauged, _gauged_controls) = build(&plan, &buffers, true);
+    plain.set_gauged(false);
+    gauged.set_gauged(true);
+    // Fewer callbacks than the first placement sample (64), which stamps its
+    // record when the placement is new.
+    let frames = 48;
+    let before = clock_reads();
+    let mut plain_out = Vec::new();
+    for index in 0..frames {
+        plain_out.push(run_at(&plain, &buffers, index));
+    }
+    assert_eq!(clock_reads(), before, "no clock read with the gauges off");
+    let before = clock_reads();
+    for (index, expected) in plain_out.iter().enumerate() {
+        let out = run_at(&gauged, &buffers, index);
+        assert_bits_same(&out, expected, &format!("frame {index}"));
+    }
+    // Per callback: the resolve (2), each visited path (2 each, the source
+    // and the output every cycle), the end, the placement and the wake (4).
+    assert_eq!(clock_reads() - before, frames as u64 * (2 + 2 * 2 + 4));
+    // The margin is taken from the callback's start stamp, which was 1 here:
+    // the helper finished long after it, so the margin reads zero.
+    assert_eq!(HELPER_MIN_MARGIN_NS.load(Ordering::Relaxed), 0);
+}

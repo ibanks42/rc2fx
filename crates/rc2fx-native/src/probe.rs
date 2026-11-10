@@ -30,6 +30,11 @@ pub static JACK_MAP: AtomicUsize = AtomicUsize::new(0);
 
 /// Counts positions in the cycle, as fractions of the period:
 /// [<=1/8, <=1/4, <=1/2, <=3/4, <=9/10, <=1, <=11/10, >11/10].
+///
+/// Each instance has one writer thread (the callback, the helper, a vendor
+/// job thread) and is written every cycle, so each starts on a cache line of
+/// its own and shares none with another thread's counters.
+#[repr(align(64))]
 pub struct Positions {
     bins: [AtomicU64; 8],
     max: AtomicU64,
@@ -86,6 +91,8 @@ pub static CYCLE_SKIPS: AtomicU64 = AtomicU64::new(0);
 /// The largest disagreement between the cycle start estimated at callback
 /// entry and at exit, among callbacks that stayed within their cycle. Checks
 /// consistency of these projected timestamps, not equality of clock epochs.
+/// The second estimate is a libjack call and a clock read after the callback's
+/// end stamp, so it is taken only while the bench gauges are on.
 pub static ESTIMATE_DRIFT_MAX_NS: AtomicU64 = AtomicU64::new(0);
 /// Notifications delivered to instrumented clients, NOT unique failed periods
 /// or proven audible dropouts. JACK can broadcast once for each late client.
@@ -215,6 +222,11 @@ pub fn record_extra(kind: Kind, value: u64, extra: u64) {
     slot.kind.store(kind as u8, Ordering::Relaxed);
     slot.seq.store(index + 1, Ordering::Release);
 }
+/// Events recorded so far. Each one read the clock once on its thread.
+#[cfg(test)]
+pub(crate) fn events_recorded() -> u64 {
+    NEXT.load(Ordering::Relaxed)
+}
 pub fn usb_report() {
     USB_REPORTS.fetch_add(1, Ordering::Relaxed);
     LAST_USB_NS.store(timing::monotonic(), Ordering::Relaxed);
@@ -326,7 +338,8 @@ pub fn snapshot() -> serde_json::Value {
             "lateEnds": read(&LATE_ENDS),
             "helperLateFinishes": read(&HELPER_LATE_FINISHES),
             "cycleSkips": read(&CYCLE_SKIPS),
-            "estimateDriftMaxNs": read(&ESTIMATE_DRIFT_MAX_NS),
+            // Checked only while the bench gauges are on; null otherwise.
+            "estimateDriftMaxNs": super::gauges::enabled().then(|| read(&ESTIMATE_DRIFT_MAX_NS)),
         },
         "xruns": read(&XRUNS),
         "xrunCountMeaning": "clientNotificationsNotUniqueDropouts",
@@ -432,7 +445,11 @@ fn append_log(path: &std::path::Path, events: &[Snapshot]) {
         .metadata()
         .is_ok_and(|info| info.len() >= LOG_CAP)
     {
-        let _ = writeln!(file, "{} log full, later events not written", stamp(now_wall));
+        let _ = writeln!(
+            file,
+            "{} log full, later events not written",
+            stamp(now_wall)
+        );
         let _ = file.flush();
     }
 }

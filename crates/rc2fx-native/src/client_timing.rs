@@ -152,7 +152,9 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     let cycle = super::probe::cycle_start(slot.client.load(Ordering::Relaxed));
     // A flight capture needs wall-clock boundaries, not per-thread CPU clocks.
     // Sampling CPU clocks on every client's aligned cycle perturbs the deadline.
-    let frame = (token == 0).then(|| slot.timing.begin(frames));
+    // Unarmed, CPU clocks are read only with the bench gauges, as in the main
+    // callback.
+    let frame = (token == 0).then(|| slot.timing.begin(frames, super::gauges::enabled()));
     let before = frame.as_ref().map(timing::Frame::before_native);
     let result = unsafe { callback(frames, slot.argument.load(Ordering::Relaxed) as *mut c_void) };
     let after = frame.as_ref().map(timing::Frame::after_native);

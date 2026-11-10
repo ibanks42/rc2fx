@@ -174,10 +174,13 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
         _ => Stress::None,
     };
     let mut arms = Vec::new();
-    for suppressed in [false, true] {
+    // Each with the bench gauges off and on: they only measure, so they are
+    // one more thing that must not move a sample of the unrelated path.
+    for (suppressed, gauged) in [(false, false), (true, false), (false, true), (true, true)] {
         let plan = plan(suppressed);
         let buffers = Buffers::new();
         let (pipeline, mut controls) = build(&plan, &buffers);
+        pipeline.set_gauged(gauged);
         let mic = buffers.input(0);
         let passthrough = [buffers.input(1), buffers.output(0)];
         let mut seen = Vec::new();
@@ -214,12 +217,12 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
         if !suppressed {
             assert_eq!(counters.faults, 0);
         }
-        arms.push((suppressed, seen));
+        arms.push(((suppressed, gauged), seen));
     }
     // Bit for bit, the unrelated path saw the same thing in every arm: the same
     // block, through the same pointer, before and after the callback.
     let (_, baseline) = &arms[0];
-    for (suppressed, seen) in &arms[1..] {
+    for ((suppressed, gauged), seen) in &arms[1..] {
         for (index, (frame, baseline)) in seen.iter().zip(baseline).enumerate() {
             for channel in 0..2 {
                 for (when, samples, expected) in [
@@ -235,7 +238,7 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
                             .iter()
                             .map(|v| v.to_bits())
                             .collect::<Vec<_>>(),
-                        "suppressed {suppressed}: frame {index}, channel {channel}, {when}"
+                        "suppressed {suppressed}, gauged {gauged}: frame {index}, channel {channel}, {when}"
                     );
                 }
             }

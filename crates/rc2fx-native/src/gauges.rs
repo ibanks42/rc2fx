@@ -1,7 +1,13 @@
 //! Bench-only gauges, enabled by the RAM marker `/run/rc2fx-gauges` at mixer
-//! start. Without it libasound and libsamplerate stay unaudited, so the loader
-//! never asks about their symbols, nothing here is bound and they resolve
-//! exactly as stock.
+//! start. Without it libasound stays unaudited, and libsamplerate too unless
+//! `src_fast` audits it, so the loader never asks about their symbols, nothing
+//! here is bound and they resolve exactly as stock.
+//!
+//! The same switch turns on the measurements that cost the callback time and
+//! that nothing but a bench run reads: thread CPU clocks (timing.rs), per-path
+//! and buffer-resolve costs and the helper wake gauge (pipeline.rs), the
+//! cycle-start drift check and the count of buffer lookups made outside the
+//! callback (lib.rs).
 //!
 //! On the 1.7.7 image the USB bridges at 0x6b8900 (out) and 0x6b90d0 (in) are
 //! the only callers of `snd_pcm_avail`, `jack_frames_since_cycle_start` and
@@ -17,7 +23,7 @@ use std::{
     ffi::{c_int, c_long, c_void},
     sync::{
         OnceLock,
-        atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -36,7 +42,6 @@ type FramesSince = unsafe extern "C" fn(*const c_void) -> u32;
 type SrcProcess = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
 type Stream = unsafe extern "C" fn(*mut c_void) -> c_int;
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
 static AVAIL: AtomicUsize = AtomicUsize::new(0);
 static FRAMES_SINCE: AtomicUsize = AtomicUsize::new(0);
 static SRC_PROCESS: AtomicUsize = AtomicUsize::new(0);
@@ -137,15 +142,17 @@ thread_local! {
     static CURRENT: Cell<Current> = const { Cell::new(Current { handle: None, pending: None }) };
 }
 
+/// The flag lives with what every hooked call reads (`READ_MOSTLY`), on a
+/// line no thread writes after load.
 pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
+    super::READ_MOSTLY.gauges.load(Ordering::Relaxed)
 }
 
 /// Read once, before the first object is opened.
 pub fn initialize() {
     let value = unsafe { libc::getenv(c"RC2FX_GAUGES".as_ptr()) };
     let on = !value.is_null() && unsafe { std::ffi::CStr::from_ptr(value) }.to_bytes() == b"1";
-    ENABLED.store(on, Ordering::Relaxed);
+    super::READ_MOSTLY.gauges.store(on, Ordering::Relaxed);
 }
 
 /// The cookie for an object audited only while gauges are on.
@@ -376,6 +383,7 @@ pub fn snapshot() -> serde_json::Value {
             .map(handle_report)
             .collect::<Vec<_>>(),
         "vendorJob": super::vendor_job::gauge_status(),
+        "helperWake": super::pipeline::wake_gauges(),
     })
 }
 
