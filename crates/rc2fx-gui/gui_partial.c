@@ -43,6 +43,13 @@
  * reason other than "forced" or "area" while partial conversion is still on;
  * at most PARTIAL_FALLBACK_LINES), one "disable" line when partial conversion
  * ends for good, and the periodic "counters" line.
+ *
+ * The counters line ends with plan-shape and size fields (README.md lists
+ * them): each conversion counted in one path (path_*, which sum to
+ * conversions), GE2D plans by job count and by total pixels, pixels through
+ * GE2D and through the CPU, and the CPU rotations' time by kind and by stage.
+ * They are cumulative integers added on the pump thread; the stage times read
+ * CLOCK_MONOTONIC three times per 16-row strip.
  */
 #include <linux/videodev2.h>
 #include <poll.h>
@@ -95,6 +102,13 @@
 #define PARTIAL_LINES 20000
 #endif
 #define PARTIAL_FALLBACK_LINES 1000
+/* The counters line counts the GE2D plans of two or more jobs up to this many
+ * pixels (plan_multi_le8192). A rule that rotated those plans on the CPU was
+ * tried and dropped; the count records how many plans it would have covered. */
+#define PLAN_SMALL_PX 8192
+/* The counters line's buffer. A line that does not fit is not written, so
+ * this is about twice the line's length with every counter at its largest. */
+#define COUNTERS_LINE_MAX 4096
 #define SRC_W 1280
 #define SRC_H 720
 #define DST_PITCH (SRC_H * 4)
@@ -166,6 +180,25 @@ static uint64_t partial_count, full_count, full_by[FULL_REASONS], extra_jobs, ge
  * because the extra jobs ran past PARTIAL_BUDGET_NS. */
 static uint64_t budget_merged, soft_budget_exceeded;
 static uint64_t fallback_lines;
+/* Plan shapes and sizes for the counters line (pump thread only, cumulative).
+ * Every conversion is counted in exactly one path, where its convert line is
+ * opened. */
+enum { PATH_GE2D_PLAN, PATH_CPU_MEDIUM, PATH_CPU_FULL, PATH_GE2D_FULL, PATHS };
+static uint64_t path_count[PATHS];
+/* GE2D plans: by job count, by total pixels (up to each edge, then above the
+ * last), those of two or more jobs up to PLAN_SMALL_PX, and those that are
+ * the token job of a conversion with nothing pending. */
+#define PLAN_PX_BUCKETS 7
+static const long long plan_px_edges[PLAN_PX_BUCKETS - 1] = {1024, 2048, 4096, 8192, 16384, 32768};
+static uint64_t plan_jobs[PARTIAL_MAX_JOBS], plan_px_hist[PLAN_PX_BUCKETS], plan_multi_small, plan_empty;
+/* Pixels in the GE2D jobs the driver accepted, pixels the CPU rotated, and
+ * pixels the planner's merges added to converted plans. */
+static uint64_t ge2d_px_total, cpu_px_total, merge_added_px;
+static long long merge_added; /* by the latest merge(); counted when its plan is converted */
+/* Completed CPU rotations by kind, and all of them by stage. */
+enum { CPU_FULL, CPU_MEDIUM, CPU_KINDS };
+static uint64_t cpu_kind_frames[CPU_KINDS], cpu_kind_ns[CPU_KINDS];
+static uint64_t cpu_last_ns, cpu_stage_ns, cpu_rotate_ns, cpu_yield_ns;
 
 static bool parse_partial_mode(const char *mode) {
     static const struct {
@@ -193,6 +226,25 @@ static void partial_setup(const char *log) {
         }
     }
 }
+
+#ifdef RC2FX_PACING_TEST
+/* Host test of the counters line's length: every counter starts within 2^32
+ * of the largest 64-bit value. */
+static void test_huge_counters(void) {
+    const uint64_t huge = UINT64_MAX - (1ull << 32);
+    conversions = partial_count = full_count = extra_jobs = ge2d_ns = budget_merged = soft_budget_exceeded = huge;
+    cpu_frames = cpu_ns = cpu_max_ns = cpu_fail = huge;
+    plan_multi_small = plan_empty = ge2d_px_total = cpu_px_total = merge_added_px = huge;
+    cpu_stage_ns = cpu_rotate_ns = cpu_yield_ns = huge;
+    for (size_t i = 0; i < FULL_REASONS; i++) full_by[i] = huge;
+    for (int i = 0; i < PATHS; i++) path_count[i] = huge;
+    for (int i = 0; i < PARTIAL_MAX_JOBS; i++) plan_jobs[i] = huge;
+    for (int i = 0; i < PLAN_PX_BUCKETS; i++) plan_px_hist[i] = huge;
+    for (int i = 0; i < CPU_KINDS; i++) cpu_kind_frames[i] = cpu_kind_ns[i] = huge;
+    atomic_store(&passes, huge), atomic_store(&paints, huge), atomic_store(&paint_rejects, huge);
+    atomic_store(&log_rotations, huge), atomic_store(&log_dropped, huge), atomic_store(&log_reopen_failed, huge);
+}
+#endif
 
 /* Once, after the log is open: the merge override and the test knobs. */
 static void partial_config(void) {
@@ -226,6 +278,7 @@ static void partial_config(void) {
         memcpy(force_path, v, strlen(v) + 1);
     if ((v = getenv("RC2FX_TEST_PARTIAL_BUDGET_US"))) budget_ns = strtoull(v, NULL, 10) * 1000ull;
     if ((v = getenv("RC2FX_TEST_PARTIAL_VERIFY_EVERY"))) verify_every = (unsigned)strtoul(v, NULL, 10);
+    if (getenv("RC2FX_TEST_COUNTERS_HUGE")) test_huge_counters();
 #endif
 }
 
@@ -266,8 +319,11 @@ static void partial_paint_rejected(void) {
     for (int s = 0; s < 2; s++) slots[s].force = true;
 }
 
-/* Greedy minimum-extra-area merge in place; returns at most the policy cap. */
+/* Greedy minimum-extra-area merge in place; returns at most the policy cap.
+ * merge_added is left as the pixels the merges added: each bounding box less
+ * its two rectangles, where that is positive. */
 static int merge(struct rot_rect *r, int n) {
+    merge_added = 0;
     while (n > 1) {
         /* Overlapping pairs add negative pixels: no sentinel value. */
         long long best = 0;
@@ -279,6 +335,7 @@ static int merge(struct rot_rect *r, int n) {
                 if (!found || extra < best) best = extra, bi = i, bj = j, found = true;
             }
         if (best >= merge_px && n <= PARTIAL_PLAN_JOBS) break;
+        if (best > 0) merge_added += best;
         r[bi] = bbox2(r[bi], r[bj]);
         r[bj] = r[--n];
     }
@@ -367,7 +424,32 @@ static void count_full(const char *reason) {
     if (quiet && !disabled && i > 1 && fallback_lines++ < PARTIAL_FALLBACK_LINES) event_line("fallback", reason);
 }
 
-/* Quiet mode's periodic line. */
+/* A GE2D plan, as it is converted: its path, job count and size. */
+static void count_plan(int jobs, long long px, bool nothing_pending) {
+    path_count[PATH_GE2D_PLAN]++;
+    plan_jobs[(jobs < 1 ? 1 : jobs > PARTIAL_MAX_JOBS ? PARTIAL_MAX_JOBS : jobs) - 1]++;
+    int bucket = 0;
+    while (bucket < PLAN_PX_BUCKETS - 1 && px > plan_px_edges[bucket]) bucket++;
+    plan_px_hist[bucket]++;
+    if (jobs >= 2 && px <= PLAN_SMALL_PX) plan_multi_small++;
+    if (nothing_pending) plan_empty++;
+    merge_added_px += (uint64_t)merge_added;
+}
+
+/* "a,b,c" for a counters field; `out` holds 21 bytes per value and one more. */
+static void counter_list(char *out, size_t size, const uint64_t *values, int count) {
+    size_t used = 0;
+    out[0] = 0;
+    for (int i = 0; i < count; i++) {
+        int n = snprintf(out + used, size - used, "%s%llu", i ? "," : "", (unsigned long long)values[i]);
+        if (n > 0 && (size_t)n < size - used) used += (size_t)n;
+    }
+}
+
+/* Quiet mode's periodic line. New fields go at the end, after
+ * log_reopen_failed, so a reader of the earlier fields is not disturbed. The
+ * line is built in a static buffer, off the pump thread's stack: the pump is
+ * the only thread that writes it. */
 static void write_counters(void) {
     if (log_fd < 0) return;
     char reasons[FULL_REASONS * 40 + 2];
@@ -379,14 +461,22 @@ static void write_counters(void) {
                          (unsigned long long)full_by[i]);
         if (n > 0 && (size_t)n < sizeof reasons - used) used += (size_t)n;
     }
-    char line[FULL_REASONS * 40 + 480
-    ];
+    char by_jobs[PARTIAL_MAX_JOBS * 21 + 1], by_px[PLAN_PX_BUCKETS * 21 + 1];
+    counter_list(by_jobs, sizeof by_jobs, plan_jobs, PARTIAL_PLAN_JOBS);
+    counter_list(by_px, sizeof by_px, plan_px_hist, PLAN_PX_BUCKETS);
+    static char line[COUNTERS_LINE_MAX];
     int n = snprintf(line, sizeof line, "counters pid=%d t=%llu passes=%llu conversions=%llu partial=%llu full=%llu "
                      "full_by_reason=%s budget_merged=%llu planner_policy=%s merge_px=%lld budget_ns=%llu "
                      "soft_budget_exceeded=%llu "
                      "extra_jobs=%llu ge2d_us=%llu disabled=%s "
                      "cpu_frames=%llu cpu_us=%llu cpu_max_us=%llu cpu_fail=%llu "
-                     "log_rotations=%llu log_dropped=%llu log_reopen_failed=%llu\n", (int)gui_pid,
+                     "log_rotations=%llu log_dropped=%llu log_reopen_failed=%llu "
+                     "path_ge2d_plan=%llu path_cpu_medium=%llu path_cpu_full=%llu path_ge2d_full=%llu "
+                     "plan_jobs=%s plan_px_hist=%s plan_multi_le8192=%llu "
+                     "plan_empty=%llu ge2d_px=%llu cpu_px=%llu merge_added_px=%llu "
+                     "cpu_full_frames=%llu cpu_full_us=%llu cpu_medium_frames=%llu cpu_medium_us=%llu "
+                     "cpu_stage_us=%llu cpu_rotate_us=%llu cpu_yield_us=%llu "
+                     "paints=%llu paint_rejects=%llu\n", (int)gui_pid,
                      (unsigned long long)now_ns(), (unsigned long long)passes, (unsigned long long)conversions,
                      (unsigned long long)partial_count, (unsigned long long)full_count, used ? reasons : "-",
                      (unsigned long long)budget_merged, PARTIAL_POLICY, merge_px, (unsigned long long)budget_ns,
@@ -397,7 +487,18 @@ static void write_counters(void) {
                      (unsigned long long)(cpu_ns / 1000),
                      (unsigned long long)(cpu_max_ns / 1000), (unsigned long long)cpu_fail,
                      (unsigned long long)atomic_load(&log_rotations), (unsigned long long)atomic_load(&log_dropped),
-                     (unsigned long long)atomic_load(&log_reopen_failed));
+                     (unsigned long long)atomic_load(&log_reopen_failed),
+                     (unsigned long long)path_count[PATH_GE2D_PLAN], (unsigned long long)path_count[PATH_CPU_MEDIUM],
+                     (unsigned long long)path_count[PATH_CPU_FULL], (unsigned long long)path_count[PATH_GE2D_FULL],
+                     by_jobs, by_px, (unsigned long long)plan_multi_small, (unsigned long long)plan_empty,
+                     (unsigned long long)ge2d_px_total, (unsigned long long)cpu_px_total,
+                     (unsigned long long)merge_added_px,
+                     (unsigned long long)cpu_kind_frames[CPU_FULL], (unsigned long long)(cpu_kind_ns[CPU_FULL] / 1000),
+                     (unsigned long long)cpu_kind_frames[CPU_MEDIUM],
+                     (unsigned long long)(cpu_kind_ns[CPU_MEDIUM] / 1000),
+                     (unsigned long long)(cpu_stage_ns / 1000), (unsigned long long)(cpu_rotate_ns / 1000),
+                     (unsigned long long)(cpu_yield_ns / 1000),
+                     (unsigned long long)atomic_load(&paints), (unsigned long long)atomic_load(&paint_rejects));
     if (n > 0 && (size_t)n < sizeof line) log_line(line, (size_t)n);
 }
 
@@ -445,7 +546,9 @@ static int ensure_source(int fd) {
  * into cacheable staging with contiguous reads. The copy turns small
  * non-cacheable reads into 64-byte ones. This runs on the pump thread while
  * the vendor's token job completes its normal handshake. */
-static uint32_t cpu_stage[CPU_STRIP * SRC_W];
+static _Alignas(64) uint32_t cpu_stage[CPU_STRIP * SRC_W];
+/* A later clock reading less an earlier one; 0 if the clock failed. */
+static uint64_t ns_between(uint64_t from, uint64_t to) { return to > from ? to - from : 0; }
 static int cpu_rotate_regions(int fd, const struct rot_rect *regions, int count) {
     if (count <= 0) return -1;
     for (int i = 0; i < count; i++) {
@@ -462,7 +565,7 @@ static int cpu_rotate_regions(int fd, const struct rot_rect *regions, int count)
     memcpy(&dst, descriptor + 0x18, sizeof dst);
     if (!dst || dfd != cap_dest) return -1;
     if (ensure_source(fd) != 0) return -1;
-    uint64_t t0 = now_ns();
+    uint64_t t0 = now_ns(), mark = t0;
     for (int i = 0; i < count; i++) {
         struct rot_rect r = regions[i];
         for (int y = r.y; y < r.y + r.h; y += CPU_STRIP) {
@@ -475,6 +578,7 @@ static int cpu_rotate_regions(int fd, const struct rot_rect *regions, int count)
                            (const void *)(verify_source + (size_t)(y + row) * SRC_W + r.x),
                            (size_t)r.w * 4);
             }
+            uint64_t staged = now_ns();
             /* The staged strip is rows 0..strip-1 of the buffer, but it belongs at
              * source row y, and rotate_rect derives the destination column from the
              * rect's row: CW writes column sh-1-y, so shrinking sh by y keeps the
@@ -487,12 +591,20 @@ static int cpu_rotate_regions(int fd, const struct rot_rect *regions, int count)
                 rotate_rect(cpu_stage, SRC_W * 4, SRC_W, SRC_H, dst + y, DST_PITCH,
                             (struct rot_rect){r.x, 0, r.w, strip}, ROT_CCW);
             record.cpu_px += (long long)r.w * strip;
+            cpu_px_total += (uint64_t)r.w * (uint64_t)strip;
+            uint64_t rotated = now_ns();
             /* Raw syscall: no libc call and no cancellation point on the pump. */
             (void)syscall(SYS_sched_yield);
+            /* For the counters line: this strip's copy into the stage, its
+             * rotation, and the time inside the yield. */
+            uint64_t yielded = now_ns();
+            cpu_stage_ns += ns_between(mark, staged), cpu_rotate_ns += ns_between(staged, rotated);
+            cpu_yield_ns += ns_between(rotated, yielded);
+            mark = yielded;
         }
     }
     uint64_t spent = now_ns() - t0;
-    cpu_frames++, cpu_ns += spent;
+    cpu_frames++, cpu_ns += spent, cpu_last_ns = spent;
     if (spent > cpu_max_ns) cpu_max_ns = spent;
     return 0;
 }
@@ -546,12 +658,16 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
     struct rot_rect jobs[PARTIAL_LIST];
     int k = 0;
     long long px = 0;
+    bool nothing_pending = false;
     if (!reason) {
         for (int i = 0; i < p->n; i++) jobs[i] = p->r[i];
         k = merge(jobs, p->n);
         for (int i = 0; i < k; i++) px += area_of(jobs[i]);
         if (px * 100 > (long long)SRC_W * SRC_H * PARTIAL_FULL_PERCENT) reason = "area";
-        if (k == 0) jobs[0] = (struct rot_rect){0, 0, 8, 8}, k = 1, px = 64; /* nothing changed: a token job */
+        if (k == 0) { /* nothing changed: a token job */
+            jobs[0] = (struct rot_rect){0, 0, 8, 8}, k = 1, px = 64;
+            nothing_pending = true;
+        }
 #ifdef RC2FX_PACING_TEST
         if (getenv("RC2FX_TEST_PLAN_LOG")) {
             char line[PARTIAL_MAX_JOBS * 80 + 100];
@@ -588,6 +704,7 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
             int r = extra_job(fd, output, jobs[i]);
             job_ns[i] = now_ns() - t0, spent += job_ns[i];
             extra_jobs++;
+            if (r != -1) ge2d_px_total += (uint64_t)area_of(jobs[i]); /* the driver took the job */
 #ifdef RC2FX_GUI_RECT_PLAN3
             if (spent > budget_ns && !soft_exceeded) soft_exceeded = true, soft_budget_exceeded++;
 #endif
@@ -629,8 +746,11 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
             verify_due = partial_verify && (p->partials <= PARTIAL_VERIFY_FIRST ||
                                             (verify_every && p->partials % verify_every == 0));
             for (int i = 0; i < k && i < PARTIAL_MAX_JOBS; i++) job_px[i] = area_of(jobs[i]);
+            count_plan(k, px, nothing_pending);
             convert_open("partial", merged ? "budget-merged" : "-", k, px, job_ns, job_px, spent);
-            return vendor_ioctl(fd, request, output);
+            int result = vendor_ioctl(fd, request, output);
+            if (result == 0) ge2d_px_total += (uint64_t)area_of(jobs[k - 1]);
+            return result;
         }
     }
     /* Either the full fallback or all planned CPU regions cover the pending damage. */
@@ -659,14 +779,20 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
             }
         } else {
             job_px[0] = area_of(ge2d_crop);
+            const int kind = medium ? CPU_MEDIUM : CPU_FULL;
+            path_count[medium ? PATH_CPU_MEDIUM : PATH_CPU_FULL]++;
+            if (medium) merge_added_px += (uint64_t)merge_added;
             convert_open("cpu", reason, 1, job_px[0], job_ns, job_px, 0);
             int result = vendor_ioctl(fd, request, output);
+            if (result == 0) ge2d_px_total += (uint64_t)job_px[0];
             if (result != 0 || cpu_rotate_regions(fd, medium ? jobs : &full, medium ? k : 1) != 0) {
                 cpu_fail++;
                 /* A failed token submission must not consume pending damage.
                  * After caller/driver queue recovery, refresh both destinations.
                  * Do not touch destination pixels when submission failed. */
                 for (int s = 0; s < 2; s++) slots[s].force = true;
+            } else {
+                cpu_kind_frames[kind]++, cpu_kind_ns[kind] += cpu_last_ns;
             }
             return result;
         }
@@ -675,8 +801,11 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
         disable("full-selection");
     }
     job_px[0] = (long long)SRC_W * SRC_H;
+    path_count[PATH_GE2D_FULL]++;
     convert_open("full", reason, 1, job_px[0], job_ns, job_px, 0);
-    return vendor_ioctl(fd, request, output);
+    int result = vendor_ioctl(fd, request, output);
+    if (result == 0) ge2d_px_total += (uint64_t)job_px[0];
+    return result;
 }
 
 /* Debug mode: after the vendor's capture DQBUF, the destination (its CPU

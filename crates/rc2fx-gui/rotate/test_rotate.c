@@ -1,5 +1,7 @@
 /* Tests and benchmark for rotate.c.
- *   test_rotate            bit-exact checks against the scalar reference
+ *   test_rotate            bit-exact checks against the scalar reference,
+ *                          for whole rectangles and for the 16-row strips
+ *                          gui_partial.c rotates them in
  *   test_rotate bench      full 1280×720 frame and a few dirty rectangles
  * Host: cc -O2; aarch64: zig cc -target aarch64-linux-musl, run under
  * qemu-aarch64 (timing there is functional only).
@@ -49,6 +51,35 @@ static int check(const uint32_t *src, size_t sstride, uint32_t *a, uint32_t *b, 
                 return 1;
             }
         }
+    return 0;
+}
+
+/* gui_partial.c rotates a region in strips of 16 source rows. Each strip is
+ * first copied into a staging buffer whose row 0 is the strip's first row;
+ * rotate_rect then gets rows 0..strip-1 of that buffer, with the source
+ * height reduced by the strip's row (CW) or the destination advanced by it
+ * (CCW). This repeats that calling convention and compares the whole
+ * destination with one scalar rotation of the region from the source. */
+static uint32_t stage[16 * SW];
+static int check_strips(const uint32_t *src, size_t sstride, uint32_t *a, uint32_t *b, struct rot_rect r,
+                        enum rot_dir dir) {
+    const size_t dstride = SH * 4, words = (size_t)SH * SW;
+    for (size_t i = 0; i < words; i++) a[i] = b[i] = 0xdeadbeef ^ (uint32_t)i;
+    for (int y = r.y; y < r.y + r.h; y += 16) {
+        int strip = 16 < r.y + r.h - y ? 16 : r.y + r.h - y;
+        for (int row = 0; row < strip; row++)
+            memcpy(stage + (size_t)row * SW + r.x,
+                   (const uint8_t *)src + (size_t)(y + row) * sstride + (size_t)r.x * 4, (size_t)r.w * 4);
+        if (dir == ROT_CW)
+            rotate_rect(stage, SW * 4, SW, SH - y, a, dstride, (struct rot_rect){r.x, 0, r.w, strip}, ROT_CW);
+        else
+            rotate_rect(stage, SW * 4, SW, SH, a + y, dstride, (struct rot_rect){r.x, 0, r.w, strip}, ROT_CCW);
+    }
+    rotate_rect_scalar(src, sstride, SW, SH, b, dstride, r, dir);
+    if (memcmp(a, b, words * 4) != 0) {
+        fprintf(stderr, "strip mismatch dir %d rect %d,%d %dx%d\n", dir, r.x, r.y, r.w, r.h);
+        return 1;
+    }
     return 0;
 }
 
@@ -109,6 +140,32 @@ int main(int argc, char **argv) {
         }
         failures += check(src, sstride, a, b, dstride, r, (enum rot_dir)(i & 1));
         cases++;
+    }
+    /* Strips: the meter and notification rectangles captured from the device,
+     * the source's edges and corners, shapes thinner than the NEON block (4
+     * columns, 16 rows), and random small rectangles, in both directions. */
+    struct rot_rect strips[] = {
+        {167, 341, 28, 27}, {411, 444, 28, 28}, {1010, 45, 16, 30}, {131, 0, 274, 120}, {411, 444, 28, 42},
+        {968, 45, 21, 30}, {193, 370, 28, 9}, {193, 384, 10, 8}, {985, 45, 3, 30}, {1003, 67, 7, 8},
+        {0, 0, 19, 23}, {SW - 1, SH - 1, 1, 1}, {0, 701, 3, 19}, {1263, 0, 17, 1}, {0, 0, 1, 1},
+        {0, SH - 1, 1, 1}, {SW - 1, 0, 1, 1}, {0, 0, SW, 1}, {0, SH - 1, SW, 1}, {0, 0, 1, SH},
+        {SW - 1, 0, 1, SH}, {0, 704, 16, 16}, {1264, 0, 16, 16}, {100, 100, 64, 64}, {500, 711, 640, 9},
+        {0, 0, SW, SH}, {4, 16, 4, 16}, {5, 17, 4, 16}, {4, 15, 5, 18}, {1276, 703, 4, 17},
+    };
+    for (size_t i = 0; i < sizeof strips / sizeof strips[0]; i++)
+        for (int dir = 0; dir < 2; dir++, cases++)
+            failures += check_strips(src, sstride, a, b, strips[i], (enum rot_dir)dir);
+    for (int i = 0; i < 400; i++) {
+        struct rot_rect r;
+        r.x = next() % SW, r.y = next() % SH;
+        r.w = 1 + next() % 64, r.h = 1 + next() % 64;
+        if (i % 4 == 0) r.x = i % 8 ? SW - 1 - (int)(next() % 40) : (int)(next() % 4); /* at the left or right edge */
+        if (i % 4 == 1) r.y = i % 8 == 1 ? SH - 1 - (int)(next() % 40) : (int)(next() % 4); /* top or bottom */
+        if (r.w > SW - r.x) r.w = SW - r.x;
+        if (r.h > SH - r.y) r.h = SH - r.y;
+        failures += check_strips(src, sstride, a, b, r, (enum rot_dir)(i & 1));
+        failures += check_strips(src, sstride, a, b, r, (enum rot_dir)(~i & 1));
+        cases += 2;
     }
     printf("%d cases, %d failures\n", cases, failures);
     return failures != 0;

@@ -655,7 +655,7 @@ class RotationTests(unittest.TestCase):
 
     @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
     def test_a_full_log_rotates_and_every_line_survives(self):
-        cap = 600
+        cap = 2000  # two counters lines (about 700 bytes each) fit; the third rotates the log
         out, _ = run('partial-cw', 'partial', '40', module='partial.so',
                      extra=dict(RC2FX_GUI_PACING_QUIET='1', FAKE_GE2D_DELAY_US='2000',
                                 RC2FX_TEST_COUNTERS_EVERY_MS='1', RC2FX_GUI_PACING_TEST_LOG_CAP=str(cap)))
@@ -735,8 +735,25 @@ class RotationTests(unittest.TestCase):
         self.assertIn('SYS_openat', body)
 
 
+class RotateTests(unittest.TestCase):
+    """rotate/rotate.c against its scalar reference. On an aarch64 host this
+    runs the NEON path; elsewhere both sides are the scalar code, and
+    ProductionPlanTests runs the NEON path under qemu-aarch64 when zig and
+    qemu are installed."""
+
+    def test_rotation_matches_the_scalar_reference_whole_and_in_strips(self):
+        program = Path(BUILD.name) / 'test_rotate'
+        subprocess.run([CC, '-O2', '-Wall', '-Wextra', '-Werror', str(HERE / 'rotate' / 'test_rotate.c'),
+                        str(HERE / 'rotate' / 'rotate.c'), '-o', str(program)], check=True)
+        r = subprocess.run([str(program)], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r'^\d{4,} cases, 0 failures$')
+
+
 class CpuPathTests(unittest.TestCase):
-    """Fixed CPU rotation of large redraws; small damage still uses GE2D."""
+    """Fixed CPU rotation of large redraws; small damage still uses GE2D. The
+    host build takes the CPU path only with RC2FX_TEST_CPU_ROTATE, so the same
+    module run without it is the GE2D reference the CPU path is compared with."""
     @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
     def test_failed_medium_token_refreshes_damage_on_reuse(self):
         for direction in ('cw', 'ccw'):
@@ -843,6 +860,147 @@ class CpuPathTests(unittest.TestCase):
         self.assertFalse(Path(str(path) + '.active').exists())
         self.assertEqual(path.read_text(), 'hardware\\n')
 
+    def both(self, mode, frames, module, **env):
+        """The same paints through GE2D jobs only (the reference) and with the
+        CPU path: each run's output and log lines."""
+        env = dict(env, PARTIAL_DEST_HASH='1')
+        reference = run(mode, 'partial', str(frames), module=module, extra=env)
+        cpu = run(mode, 'partial', str(frames), module=module, extra=dict(env, RC2FX_TEST_CPU_ROTATE='1'))
+        return reference, cpu
+
+    @staticmethod
+    def images(out):
+        """Per conversion: its result and mismatch count, and the destination's hash."""
+        return [line for line in out.splitlines() if line.startswith(('frame ', 'dest_hash '))]
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_the_cpu_path_leaves_the_same_image_as_ge2d_alone(self):
+        # Every destination after every conversion, GE2D alone against the CPU
+        # path, over meter paints, the captured events, random and clustered
+        # paints, and large rectangles on the source's edges, over the token
+        # job and at the 32,768-pixel threshold.
+        patterns = [
+            (40, {}),
+            (6, {'PARTIAL_EVENT_CASE': 'A'}),
+            (6, {'PARTIAL_EVENT_CASE': 'B'}),
+            (12, {'PARTIAL_CAPACITY': '1'}),
+            (12, {'PARTIAL_CPU_REGIONS': '1'}),
+            (30, {'PARTIAL_RANDOM': '1'}),
+            (30, {'PARTIAL_RANDOM': '1', 'PARTIAL_RANDOM_W': '400', 'PARTIAL_RANDOM_H': '300', 'PARTIAL_SEED': '1'}),
+            (6, {'PARTIAL_EVENT_CASE': '0:0:1280:26;0:694:1280:26'}),
+            (6, {'PARTIAL_EVENT_CASE': '0:0:46:720;1234:0:46:720'}),
+            (6, {'PARTIAL_EVENT_CASE': '0:0:200:200;1003:67:7:8'}),
+            (6, {'PARTIAL_EVENT_CASE': '100:100:256:128;900:500:10:10'}),
+        ] + [(40, {'PARTIAL_CLUSTERS': '1', 'PARTIAL_SEED': str(seed)}) for seed in range(4)]
+        # The two-job planner is not the mixer's build: a shorter list for it.
+        fewer = [patterns[0], patterns[2], patterns[4], patterns[-1]]
+        kinds = set()
+        for direction in ('cw', 'ccw'):
+            for module in ('partial.so', 'partial-plan3.so'):
+                for frames, pattern in (patterns if module == 'partial-plan3.so' else fewer):
+                    with self.subTest(direction=direction, module=module, pattern=pattern):
+                        (ref_out, ref_lines), (cpu_out, cpu_lines) = self.both(
+                            'partial-verify-' + direction, frames, module, FAKE_GE2D_DIR=direction,
+                            RC2FX_TEST_PARTIAL_VERIFY_EVERY='1', **pattern)
+                        self.assertIn('bad_frames 0', ref_out)
+                        self.assertIn('bad_frames 0', cpu_out)
+                        self.assertEqual(len(self.images(ref_out)), 2 * frames)
+                        self.assertEqual(self.images(cpu_out), self.images(ref_out))
+                        self.assertFalse([f for k, f in ref_lines if k == 'convert' and f['kind'] == 'cpu'],
+                                         'the reference never uses the CPU path')
+                        for lines in (ref_lines, cpu_lines):
+                            self.assertTrue(all(f['mismatches'] == '0' for k, f in lines if k == 'verify'))
+                        converts = [f for k, f in cpu_lines if k == 'convert']
+                        # On the CPU: one token GE2D job, and a full frame or a
+                        # plan with a large job.
+                        on_cpu = [c for c in converts if c['kind'] == 'cpu']
+                        self.assertGreaterEqual(len(on_cpu), 2, 'the first frame into each destination')
+                        self.assertTrue(all(c['jobs'] == '1' and c['job_px'] == '256' and int(c['cpu_px']) >= 32768
+                                            for c in on_cpu), on_cpu)
+                        # Left to GE2D: plans with no large job.
+                        plans = [c for c in converts if c['kind'] == 'partial']
+                        self.assertTrue(all(c['cpu_px'] == '0' and max(map(int, c['job_px'].split(','))) < 32768
+                                            for c in plans), plans)
+                        kinds |= {(c['kind'], c['reason']) for c in converts}
+        self.assertLessEqual({('cpu', 'forced'), ('cpu', 'area'), ('cpu', 'medium'), ('partial', '-')}, kinds)
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_only_plans_with_a_job_of_32768_pixels_or_more_move_to_the_cpu(self):
+        cases = [
+            ('100:100:256:128', ('cpu', 'medium', '1', '32768')),               # exactly the threshold
+            ('100:100:256:127', ('partial', '-', '1', '0')),                    # one row under it
+            ('100:100:64:64;900:500:64:64', ('partial', '-', '2', '0')),        # small jobs stay on GE2D
+            ('100:100:256:127;900:500:64:64', ('partial', '-', '2', '0')),      # 36,608 in all, no large job
+            ('0:0:200:200;900:500:10:10', ('cpu', 'medium', '1', '40100')),     # the whole plan goes with its large job
+        ]
+        for module in ('partial.so', 'partial-plan3.so'):
+            for rects, want in cases:
+                with self.subTest(module=module, rects=rects):
+                    out, lines = run('partial-cw', 'partial', '6', module=module,
+                                     extra={'RC2FX_TEST_CPU_ROTATE': '1', 'PARTIAL_EVENT_CASE': rects})
+                    self.assertIn('bad_frames 0', out)
+                    updates = [f for k, f in lines if k == 'convert'][2:4]
+                    self.assertEqual([(c['kind'], c['reason'], c['jobs'], c['cpu_px']) for c in updates], [want] * 2)
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_a_failed_selection_on_any_path_is_a_full_frame_with_consistent_counts(self):
+        # Clustered paints mix GE2D plans, large redraws on the CPU and full
+        # frames, so the selection changes often. Whichever S_SELECTION fails,
+        # that conversion becomes a full GE2D frame and no destination is stale.
+        reasons = set()
+        for nth in range(3, 20):
+            with self.subTest(nth=nth):
+                out, lines = run('partial-cw', 'partial', '40', module='partial-plan3.so', extra={
+                    'RC2FX_TEST_CPU_ROTATE': '1', 'PARTIAL_CLUSTERS': '1', 'PARTIAL_SEED': '2',
+                    'FAKE_GE2D_FAIL_SELECTION': str(nth), 'RC2FX_TEST_VERBOSE_EVERY_MS': '1'})
+                self.assertIn('bad_frames 0', out)
+                counters = [f for k, f in lines if k == 'counters'][-1]
+                self.assertEqual(int(counters['partial']) + int(counters['full']), int(counters['conversions']))
+                failed = [f for k, f in lines if k == 'convert' and 'selection' in f['reason']]
+                self.assertEqual([c['kind'] for c in failed], ['full'])
+                reasons.add(failed[0]['reason'])
+        # A plan's last job or the CPU path's token job; an extra job.
+        self.assertEqual(reasons, {'selection', 'selection-or-qbuf'})
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_the_kill_file_ends_cpu_rotation(self):
+        kill = Path(BUILD.name) / 'partial-off'
+        kill.unlink(missing_ok=True)
+        try:
+            out, lines = run('partial-cw', 'partial', '20', module='partial-plan3.so', extra={
+                'RC2FX_TEST_CPU_ROTATE': '1', 'PARTIAL_CPU_REGIONS': '1', 'PARTIAL_KILL_AT': '10',
+                'PARTIAL_KILL_FILE': str(kill)})
+        finally:
+            kill.unlink(missing_ok=True)
+        self.assertIn('bad_frames 0', out)
+        converts = [(f['kind'], f['reason']) for k, f in lines if k == 'convert']
+        self.assertEqual(converts[:10], [('cpu', 'forced')] * 2 + [('cpu', 'medium')] * 8)
+        self.assertEqual(set(converts[10:]), {('full', 'kill')}, 'GE2D full frames, as RØDE converts them')
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    def test_the_quiet_cpu_path_leaves_the_ge2d_image(self):
+        # Quiet mode is how the mixer runs: no convert lines, only counters.
+        quiet = {'RC2FX_GUI_PACING_QUIET': '1', 'RC2FX_TEST_COUNTERS_EVERY_MS': '1'}
+        for direction in ('cw', 'ccw'):
+            for seed in ('5', '6'):
+                with self.subTest(direction=direction, seed=seed):
+                    (ref_out, ref_lines), (cpu_out, cpu_lines) = self.both(
+                        'partial-' + direction, 30, 'partial-plan3.so', FAKE_GE2D_DIR=direction,
+                        PARTIAL_CLUSTERS='1', PARTIAL_SEED=seed, **quiet)
+                    self.assertIn('bad_frames 0', cpu_out)
+                    self.assertEqual(self.images(cpu_out), self.images(ref_out))
+                    self.assertEqual(len(self.images(cpu_out)), 60)
+                    for lines in (ref_lines, cpu_lines):
+                        self.assertFalse([k for k, _ in lines
+                                          if k in ('convert', 'paint', 'verify') or k.startswith('dirty-')])
+                    ref = [f for k, f in ref_lines if k == 'counters'][-1]
+                    cpu = [f for k, f in cpu_lines if k == 'counters'][-1]
+                    self.assertEqual(ref['cpu_frames'], '0')
+                    # More than the two first frames: large redraws too.
+                    self.assertGreater(int(cpu['cpu_frames']), 2)
+                    self.assertEqual((cpu['cpu_fail'], cpu['disabled']), ('0', '-'))
+                    self.assertEqual((cpu['partial'], cpu['full_by_reason']), (ref['partial'], ref['full_by_reason']))
+
     def test_production_has_no_mode_or_benchmark_controls(self):
         data = (Path(BUILD.name) / 'partial-plan3-production.so').read_bytes()
         for knob in (b'RC2FX_GUI_MODE_FILE', b'RC2FX_GUI_CPU_SHARE_PERCENT',
@@ -850,6 +1008,108 @@ class CpuPathTests(unittest.TestCase):
                      b'RC2FX_TEST_FORCE_FULL_FILE', b'RC2FX_TEST_CPU_ROTATE',
                      b'screen-conversion.active', b'gui-force-full'):
             self.assertNotIn(knob, data)
+
+
+def tool(*names):
+    """The first of these programs that is on PATH, or None."""
+    for name in names:
+        if shutil.which(name):
+            return shutil.which(name)
+    return None
+
+
+ZIG = tool('zig')
+QEMU = tool('qemu-aarch64', 'qemu-aarch64-static')
+A64 = ['-target', 'aarch64-linux-musl', '-mcpu=cortex_a53', '-O2', '-static']
+
+
+class ProductionPlanTests(unittest.TestCase):
+    """gui_partial.c as the mixer builds it, driven by partial_plan_test.c: no
+    RC2FX_PACING_TEST, so the CPU rule is always on. The program checks every
+    destination against the rotated source after every conversion and exits
+    non-zero on a difference. It needs no paint stand-ins, so it runs on any
+    Linux host, and under qemu-aarch64 with the NEON rotation."""
+
+    WARN = ['-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function']
+    BUILDS = {'plan3': ['-DRC2FX_GUI_RECT_PLAN3'], 'baseline': []}
+
+    @classmethod
+    def setUpClass(cls):
+        for name, flags in cls.BUILDS.items():
+            subprocess.run([CC, *cls.WARN, *flags, str(HERE / 'partial_plan_test.c'),
+                            '-o', str(Path(BUILD.name) / f'plan-{name}')], check=True)
+
+    def plan(self, build, *args, runner=()):
+        """One run: exit status, the per-conversion lines, and the totals."""
+        r = subprocess.run([*runner, str(Path(BUILD.name) / f'plan-{build}'), *args], capture_output=True, text=True,
+                           timeout=300)
+        lines = r.stdout.splitlines()
+        frames = [line for line in lines if line.startswith('frame ')]
+        totals = {name: int(value) for line in lines if not line.startswith(('frame ', 'counters '))
+                  for name, value in re.findall(r'(\w+) (\d+)', line)}
+        return r.returncode, frames, totals, r.stdout + r.stderr
+
+    def test_every_conversion_leaves_the_rotated_source(self):
+        for planner in ('plan3', 'baseline'):
+            for direction, seed in (('cw', '1'), ('ccw', '2'), ('cw', '3'), ('ccw', '4')):
+                with self.subTest(planner=planner, direction=direction, seed=seed):
+                    status, frames, totals, out = self.plan(planner, direction, seed, '250')
+                    self.assertEqual(status, 0, out)
+                    self.assertEqual(len(frames), 250)
+                    self.assertEqual((totals['bad'], totals['unchecked'], totals['cpu_fail']), (0, 0, 0))
+                    # Large redraws on the CPU, meter updates as GE2D jobs, and full frames.
+                    self.assertGreater(totals['medium'], 5)
+                    self.assertGreater(totals['ge2d_plan'], 50)
+                    self.assertGreater(totals['full'], 5)
+                    self.assertGreater(totals['extra_jobs'], 20)
+                    # The three-job planner has no full frame that GE2D
+                    # converts unless something failed.
+                    if planner == 'plan3':
+                        self.assertEqual(totals['cpu_frames'], totals['medium'] + totals['full'])
+
+    def test_a_failed_token_job_or_selection_leaves_no_stale_destination(self):
+        # The program fails one output QBUF or one S_SELECTION. A CPU
+        # conversion whose token QBUF failed must write nothing, and every
+        # destination must be right at its next conversion.
+        failed_tokens = 0
+        for direction in ('cw', 'ccw'):
+            for what, nths in (('fail-qbuf', (1, 2, 3, 10, 13, 25, 44)), ('fail-selection', (1, 2, 5, 13, 34))):
+                for nth in nths:
+                    with self.subTest(direction=direction, what=what, nth=nth):
+                        status, frames, totals, out = self.plan('plan3', direction, '7', '80', what, str(nth))
+                        self.assertEqual(status, 0, out)
+                        self.assertEqual(totals['bad'], 0)
+                        failed_tokens += sum('result -1 kind cpu' in line for line in frames)
+        self.assertGreaterEqual(failed_tokens, 4, 'CPU conversions met a failed token QBUF')
+
+    @unittest.skipIf(platform.machine() == 'aarch64', 'this host runs the NEON path in the tests above')
+    @unittest.skipUnless(ZIG and QEMU, 'the NEON path needs zig and qemu-aarch64 (or an aarch64 host)')
+    def test_the_neon_rotation_under_qemu_gives_the_same_images(self):
+        # The mixer's CPU (Cortex-A53). The planner and the strip loop are the
+        # real ones; rotate_rect is the NEON kernel with its scalar edges.
+        qemu = (QEMU, '-cpu', 'cortex-a53')
+        program = Path(BUILD.name) / 'plan-plan3-aarch64'
+        subprocess.run([ZIG, 'cc', *A64, *self.WARN[1:], '-DRC2FX_GUI_RECT_PLAN3', str(HERE / 'partial_plan_test.c'),
+                        '-o', str(program)], check=True)
+        for direction, seed in (('cw', '1'), ('ccw', '2')):
+            with self.subTest(direction=direction, seed=seed):
+                status, frames, totals, out = self.plan('plan3-aarch64', direction, seed, '250', runner=qemu)
+                self.assertEqual(status, 0, out)
+                self.assertGreater(totals['medium'], 5)
+                host_status, host_frames, _, _ = self.plan('plan3', direction, seed, '250')
+                self.assertEqual(host_status, 0)
+                self.assertEqual(frames, host_frames, 'the same paths and the same images as the scalar host run')
+        for direction, what, nth in (('cw', 'fail-qbuf', '10'), ('ccw', 'fail-qbuf', '25')):
+            with self.subTest(direction=direction, what=what, nth=nth):
+                status, frames, totals, out = self.plan('plan3-aarch64', direction, '7', '80', what, nth, runner=qemu)
+                self.assertEqual(status, 0, out)
+        # rotate_rect against its scalar reference, whole and in strips.
+        rotate = Path(BUILD.name) / 'test_rotate-aarch64'
+        subprocess.run([ZIG, 'cc', *A64, '-Wall', '-Wextra', '-Werror', str(HERE / 'rotate' / 'test_rotate.c'),
+                        str(HERE / 'rotate' / 'rotate.c'), '-o', str(rotate)], check=True)
+        r = subprocess.run([*qemu, str(rotate)], capture_output=True, text=True, timeout=600)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r'^\d{4,} cases, 0 failures$')
 
 
 class QuietAndMergeTests(unittest.TestCase):
@@ -901,6 +1161,27 @@ class QuietAndMergeTests(unittest.TestCase):
     def test_quiet_counters_default_to_one_per_minute(self):
         run('partial-cw', 'partial', '40', module='partial.so', extra=self.QUIET)
         self.assertEqual([k for k, _ in log_lines() if k != 'sha-ok'], ['start', 'first-pass'])
+
+    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    def test_quiet_paints_format_nothing_and_still_feed_the_conversion(self):
+        # Paints with rectangles outside the source, a long list and rejected
+        # lists: quiet mode writes no paint or dirty- line for any of them.
+        out, _ = run('observe', 'dirty', module='dirty.so', extra=self.QUIET)
+        self.assertIn('dirty done', out)
+        self.assertIn('errno_after_paint 55', out, 'the GUI errno is unchanged')
+        self.assertEqual([k for k, _ in log_lines() if k != 'sha-ok'], ['start', 'first-pass'])
+        # The paint's rectangles still reach the conversion: every destination
+        # matches the source, and a rejected paint still forces full frames.
+        for module in ('partial.so', 'partial-plan3.so'):
+            with self.subTest(module=module):
+                out, _ = run('partial-cw', 'partial', '8', module=module,
+                             extra=dict(self.QUIET, PARTIAL_INVALID='1', RC2FX_TEST_COUNTERS_EVERY_MS='1'))
+                self.assertIn('bad_frames 0', out)
+                lines = log_lines()
+                self.assertFalse([k for k, _ in lines if k == 'paint' or k.startswith('dirty-')])
+                last = [f for k, f in lines if k == 'counters'][-1]
+                self.assertEqual(last['full_by_reason'], 'forced:4', 'two at the start, two after the rejected paint')
+                self.assertGreater(int(last['partial']), 0)
 
     @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
     def test_quiet_logs_the_disable_once_with_its_reason(self):
@@ -1021,6 +1302,525 @@ class QuietAndMergeTests(unittest.TestCase):
                 self.assertEqual((invalid[0]['value'], invalid[0]['using']), (shown, '80000'))
                 start = [f for k, f in lines if k == 'start'][0]
                 self.assertEqual(start['merge_px'], '80000')
+
+
+# ---- the counters line's plan-shape and size fields -------------------------
+
+PATHS = ('path_ge2d_plan', 'path_cpu_medium', 'path_cpu_full', 'path_ge2d_full')
+PX_EDGES = (1024, 2048, 4096, 8192, 16384, 32768)
+PLAN_SMALL_PX = 8192  # plan_multi_le8192 counts the GE2D plans of two or more jobs up to this many pixels
+FULL_PX = 1280 * 720
+NEW_FIELDS = PATHS + (
+    'plan_jobs', 'plan_px_hist', 'plan_multi_le8192', 'plan_empty', 'ge2d_px', 'cpu_px', 'merge_added_px',
+    'cpu_full_frames', 'cpu_full_us', 'cpu_medium_frames', 'cpu_medium_us',
+    'cpu_stage_us', 'cpu_rotate_us', 'cpu_yield_us', 'paints', 'paint_rejects')
+OLD_FIELDS = ('pid', 't', 'passes', 'conversions', 'partial', 'full', 'full_by_reason', 'budget_merged',
+              'planner_policy', 'merge_px', 'budget_ns', 'soft_budget_exceeded', 'extra_jobs', 'ge2d_us', 'disabled',
+              'cpu_frames', 'cpu_us', 'cpu_max_us', 'cpu_fail', 'log_rotations', 'log_dropped', 'log_reopen_failed')
+
+
+def px_bucket(px):
+    """The plan_px_hist bucket of a plan of `px` pixels: up to each edge, then above."""
+    return sum(px > edge for edge in PX_EDGES)
+
+
+def numbers(counters, key):
+    return [int(x) for x in counters[key].split(',')]
+
+
+def check_counters(test, c):
+    """What must hold in every counters line of a conversion build."""
+    def n(key):
+        return int(c[key])
+    plan_jobs, hist = numbers(c, 'plan_jobs'), numbers(c, 'plan_px_hist')
+    # Every conversion took exactly one path.
+    test.assertEqual(sum(n(path) for path in PATHS), n('conversions'), c)
+    test.assertEqual(n('path_ge2d_plan') + n('path_cpu_medium'), n('partial'), c)
+    test.assertEqual(n('path_cpu_full') + n('path_ge2d_full'), n('full'), c)
+    # Every GE2D plan has one job count and one size.
+    test.assertEqual(len(plan_jobs), 3 if c['planner_policy'] == 'plan3' else 4, c)
+    test.assertEqual(sum(plan_jobs), n('path_ge2d_plan'), c)
+    test.assertEqual(len(hist), len(PX_EDGES) + 1, c)
+    test.assertEqual(sum(hist), n('path_ge2d_plan'), c)
+    test.assertLessEqual(n('plan_multi_le8192'), min(sum(plan_jobs[1:]), sum(hist[:4])), c)
+    test.assertLessEqual(n('plan_empty'), min(plan_jobs[0], hist[0]), c)
+    # Completed CPU rotations by kind, and their time.
+    kinds = ('full', 'medium')
+    test.assertEqual(sum(n(f'cpu_{kind}_frames') for kind in kinds), n('cpu_frames'), c)
+    for kind in kinds:
+        test.assertLessEqual(n(f'cpu_{kind}_frames'), n(f'path_cpu_{kind}'), c)
+        if not n(f'cpu_{kind}_frames'):
+            test.assertEqual(n(f'cpu_{kind}_us'), 0, c)
+    by_kind = sum(n(f'cpu_{kind}_us') for kind in kinds)
+    test.assertTrue(n('cpu_us') - 1 <= by_kind <= n('cpu_us'), c)  # each is rounded down to a microsecond
+    # The three stages are all of a rotation but its loop overhead.
+    stages = n('cpu_stage_us') + n('cpu_rotate_us') + n('cpu_yield_us')
+    test.assertLessEqual(stages, n('cpu_us'), c)
+    test.assertGreaterEqual(stages, n('cpu_us') - n('cpu_us') // 50 - 10, c)
+    if not n('cpu_frames'):
+        test.assertEqual(n('cpu_px'), 0, c)
+    test.assertLessEqual(n('paint_rejects'), n('paints'), c)
+
+
+def check_against_converts(test, c, converts, clean):
+    """A counters line against the convert lines of the conversions it covers."""
+    def n(key):
+        return int(c[key])
+    plans = [f for f in converts if f['kind'] == 'partial']
+    cpu = [f for f in converts if f['kind'] == 'cpu']
+    test.assertEqual(n('conversions'), len(converts))
+    test.assertEqual(n('path_ge2d_plan'), len(plans))
+    test.assertEqual(n('path_cpu_medium'), sum(f['reason'] == 'medium' for f in cpu))
+    test.assertEqual(n('path_cpu_full'), sum(f['reason'] != 'medium' for f in cpu))
+    test.assertEqual(n('path_ge2d_full'), sum(f['kind'] == 'full' for f in converts))
+    jobs = [0] * len(numbers(c, 'plan_jobs'))
+    hist = [0] * (len(PX_EDGES) + 1)
+    for f in plans:
+        jobs[int(f['jobs']) - 1] += 1
+        hist[px_bucket(int(f['px']))] += 1
+    test.assertEqual(numbers(c, 'plan_jobs'), jobs)
+    test.assertEqual(numbers(c, 'plan_px_hist'), hist)
+    test.assertEqual(n('plan_multi_le8192'),
+                     sum(int(f['jobs']) >= 2 and int(f['px']) <= PLAN_SMALL_PX for f in plans))
+    test.assertLessEqual(n('plan_empty'), sum(f['job_px'] == '64' for f in plans))
+    test.assertEqual(n('cpu_px'), sum(int(f['cpu_px']) for f in converts))
+    if clean:  # every job was accepted
+        test.assertEqual(n('ge2d_px'), sum(int(f['px']) for f in converts))
+        test.assertEqual(n('extra_jobs'), sum(int(f['jobs']) - 1 for f in plans))
+        test.assertEqual(n('cpu_frames'), len(cpu))
+
+
+def model_merge(rects, merge_px, cap):
+    """The planner's greedy merge, written again here: the jobs it leaves and
+    the pixels its merges add (bounding box less the two rectangles, where
+    that is positive)."""
+    def box(a, b):
+        x0, y0 = min(a[0], b[0]), min(a[1], b[1])
+        x1, y1 = max(a[0] + a[2], b[0] + b[2]), max(a[1] + a[3], b[1] + b[3])
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def area(r):
+        return r[2] * r[3]
+    r, added = [tuple(x) for x in rects], 0
+    while len(r) > 1:
+        best = None
+        for i in range(len(r)):
+            for j in range(i + 1, len(r)):
+                extra = area(box(r[i], r[j])) - area(r[i]) - area(r[j])
+                if best is None or extra < best[0]:
+                    best = (extra, i, j)
+        if best[0] >= merge_px and len(r) <= cap:
+            break
+        added += max(best[0], 0)
+        r[best[1]] = box(r[best[1]], r[best[2]])
+        r[best[2]] = r[-1]
+        r.pop()
+    return r, added
+
+
+EVENT_A = [(167, 362, 28, 3), (167, 341, 10, 7), (185, 341, 10, 7), (411, 455, 28, 9), (411, 444, 10, 8),
+           (429, 444, 10, 8), (1010, 45, 3, 30), (1018, 45, 7, 8), (1019, 67, 7, 8), (167, 365, 28, 3),
+           (167, 342, 10, 8), (185, 342, 10, 8), (411, 463, 28, 9), (411, 446, 10, 8), (429, 446, 10, 7),
+           (1010, 45, 2, 30)]
+EVENT_B = [(131, 0, 274, 120), (411, 466, 28, 20), (411, 453, 10, 8), (429, 453, 10, 7), (968, 45, 7, 30),
+           (979, 45, 7, 8), (979, 67, 8, 8), (411, 449, 28, 26), (411, 444, 10, 5), (429, 444, 10, 5),
+           (972, 45, 9, 30), (981, 45, 8, 8), (981, 67, 8, 8)]
+
+
+def event_rects(event):
+    if event in ('A', 'B'):
+        return EVENT_A if event == 'A' else EVENT_B
+    return [tuple(int(v) for v in rect.split(':')) for rect in event.split(';')]
+
+
+def fake_totals(out):
+    """The fake GE2D's own count of the jobs it ran and the pixels it wrote."""
+    summary = [line.split() for line in out.splitlines() if line.startswith('partial frames')][0]
+    return int(summary[summary.index('jobs') + 1]), int(summary[summary.index('pixels') + 1])
+
+
+def ge2d_jobs(c):
+    """The GE2D jobs a counters line accounts for when none failed: each
+    plan's jobs, and one for every other conversion."""
+    return (sum((i + 1) * count for i, count in enumerate(numbers(c, 'plan_jobs'))) +
+            sum(int(c[path]) for path in PATHS[1:]))
+
+
+AT_EXIT = {'RC2FX_TEST_COUNTERS_AT_EXIT': '1'}
+QUIET_EXIT = dict(AT_EXIT, RC2FX_GUI_PACING_QUIET='1')
+
+
+@unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+class CounterTests(unittest.TestCase):
+    """The plan-shape and size fields at the end of the counters line, in
+    quiet mode as the mixer runs. RC2FX_TEST_COUNTERS_AT_EXIT adds one more
+    counters line when the program exits, so the totals cover every
+    conversion and can be compared with the fake GE2D's own totals."""
+
+    def last(self, lines):
+        counters = [f for k, f in lines if k == 'counters']
+        self.assertTrue(counters, 'a counters line was written')
+        return counters[-1]
+
+    def test_the_new_fields_follow_the_earlier_ones_in_a_fixed_order(self):
+        for module in ('partial.so', 'partial-plan3.so'):
+            with self.subTest(module=module):
+                run('partial-cw', 'partial', '8', module=module,
+                    extra=dict(QUIET_EXIT, RC2FX_TEST_COUNTERS_EVERY_MS='1'))
+                lines = [line for line in log_file().read_text().splitlines() if line.startswith('counters ')]
+                self.assertGreaterEqual(len(lines), 8, 'before each pass after the first, and at exit')
+                for line in lines:
+                    self.assertEqual(tuple(f.split('=', 1)[0] for f in line.split()[1:]), OLD_FIELDS + NEW_FIELDS)
+                    for field in line.split()[1:]:
+                        key, value = field.split('=', 1)
+                        if key not in ('full_by_reason', 'planner_policy', 'disabled'):
+                            self.assertRegex(value, r'^\d+(,\d+)*$', field)
+                # No other line kind appeared in quiet mode.
+                self.assertEqual({k for k, _ in log_lines()}, {'sha-ok', 'start', 'first-pass', 'counters'})
+
+    def test_every_counters_line_keeps_the_sums_in_quiet_mode(self):
+        # Meter paints, the captured events, clustered and random paints,
+        # large redraws and rejected paints; GE2D alone and with the CPU rule.
+        patterns = [(40, {}), (6, {'PARTIAL_EVENT_CASE': 'A'}), (6, {'PARTIAL_EVENT_CASE': 'B'}),
+                    (12, {'PARTIAL_CAPACITY': '1'}), (12, {'PARTIAL_CPU_REGIONS': '1'}), (30, {'PARTIAL_RANDOM': '1'}),
+                    (10, {'PARTIAL_INVALID': '1'})]
+        patterns += [(40, {'PARTIAL_CLUSTERS': '1', 'PARTIAL_SEED': str(seed)}) for seed in range(3)]
+        paths = {path: 0 for path in PATHS}
+        for module in ('partial.so', 'partial-plan3.so'):
+            for cpu in ({}, {'RC2FX_TEST_CPU_ROTATE': '1'}):
+                for frames, pattern in patterns:
+                    with self.subTest(module=module, cpu=cpu, pattern=pattern):
+                        out, lines = run('partial-ccw', 'partial', str(frames), module=module, extra=dict(
+                            QUIET_EXIT, RC2FX_TEST_COUNTERS_EVERY_MS='1', FAKE_GE2D_DIR='ccw', **cpu, **pattern))
+                        self.assertIn('bad_frames 0', out)
+                        counters = [f for k, f in lines if k == 'counters']
+                        # One before each pass after the first and one at exit; one before
+                        # the first pass too when the program took a millisecond to reach it.
+                        self.assertIn(len(counters), (frames, frames + 1))
+                        for c in counters:
+                            check_counters(self, c)
+                        last = counters[-1]
+                        self.assertEqual(int(last['conversions']), frames)
+                        # The fake GE2D ran the jobs and wrote the pixels the line reports.
+                        self.assertEqual((ge2d_jobs(last), int(last['ge2d_px'])), fake_totals(out))
+                        self.assertEqual(int(last['extra_jobs']),
+                                         sum(i * count for i, count in enumerate(numbers(last, 'plan_jobs'))))
+                        self.assertEqual((last['cpu_fail'], last['disabled']), ('0', '-'))
+                        if not cpu:
+                            self.assertEqual((last['cpu_px'], last['cpu_frames']), ('0', '0'))
+                        for path in PATHS:
+                            paths[path] += int(last[path])
+        for path in PATHS:
+            self.assertGreater(paths[path], 20, path)
+
+    def test_known_plans_give_the_expected_counts_and_pixels(self):
+        # One paint of the listed rectangles at frame 2, six frames: two full
+        # frames first, the plan into each destination, then two conversions
+        # with nothing pending (an 8x8 token job each).
+        cases = [  # rectangles, the plan's jobs, the plan's pixels
+            ('100:100:32:32', 1, 1024), ('100:100:41:25', 1, 1025),
+            ('100:100:64:32', 1, 2048), ('100:10:3:683', 1, 2049),
+            ('100:100:64:64', 1, 4096), ('100:100:17:241', 1, 4097),
+            ('100:100:128:64', 1, 8192), ('100:100:64:64;900:500:64:64', 2, 8192),
+            ('100:100:64:64;900:500:64:65', 2, 8256),
+            ('100:100:128:128', 1, 16384), ('100:100:145:113', 1, 16385),
+            ('100:100:256:127', 1, 32512), ('100:100:256:128', 1, 32768), ('100:100:99:331', 1, 32769),
+            ('100:100:10:10;120:100:10:10', 1, 300),    # merged: the box adds 100 pixels
+            ('8:8:30:30;8:8:30:30', 1, 900),             # the same rectangle twice: nothing added
+            ('100:100:20:20;110:110:20:20', 1, 900),     # overlapping: the box is 100 over the two
+            ('A', 3, 2020), ('B', 3, 34686),
+        ]
+        for event, jobs, px in cases:
+            rects = event_rects(event)
+            model, added = model_merge(rects, 20000, 3)
+            self.assertEqual((len(model), sum(r[2] * r[3] for r in model)), (jobs, px), 'the model agrees')
+            large = any(r[2] * r[3] >= 32768 for r in model)
+            for cpu in (False, True):
+                with self.subTest(event=event, cpu=cpu):
+                    out, lines = run('partial-cw', 'partial', '6', module='partial-plan3.so', extra=dict(
+                        QUIET_EXIT, PARTIAL_EVENT_CASE=event, RC2FX_TEST_PLAN_LOG='1',
+                        **({'RC2FX_TEST_CPU_ROTATE': '1'} if cpu else {})))
+                    self.assertIn('bad_frames 0', out)
+                    plans = [f for k, f in lines if k == 'test-plan']
+                    self.assertEqual({(int(r.split(':')[0]), int(r.split(':')[1]), int(r.split(':')[2]),
+                                       int(r.split(':')[3])) for r in plans[0]['rects'].split(';')}, set(model))
+                    c = self.last(lines)
+                    check_counters(self, c)
+                    on_cpu = cpu and large       # the plan itself
+                    want = {
+                        'conversions': 6, 'partial': 4, 'full': 2,
+                        'path_ge2d_plan': 2 if on_cpu else 4,
+                        'path_cpu_medium': 2 if on_cpu else 0,
+                        'path_cpu_full': 2 if cpu else 0,
+                        'path_ge2d_full': 0 if cpu else 2,
+                        'plan_multi_le8192': 2 if jobs >= 2 and px <= PLAN_SMALL_PX and not on_cpu else 0,
+                        'plan_empty': 2,
+                        'ge2d_px': (2 * 256 if cpu else 2 * FULL_PX) + (2 * 256 if on_cpu else 2 * px) + 2 * 64,
+                        'cpu_px': (2 * FULL_PX if cpu else 0) + (2 * px if on_cpu else 0),
+                        'merge_added_px': 2 * added,
+                        'extra_jobs': 0 if on_cpu else 2 * (jobs - 1),
+                        'cpu_frames': (2 if cpu else 0) + (2 if on_cpu else 0),
+                        'cpu_full_frames': 2 if cpu else 0,
+                        'cpu_medium_frames': 2 if on_cpu else 0,
+                        'paints': 1, 'paint_rejects': 0, 'cpu_fail': 0,
+                    }
+                    self.assertEqual({key: int(c[key]) for key in want}, want)
+                    plan_jobs, hist = [2, 0, 0], [2, 0, 0, 0, 0, 0, 0]
+                    if not on_cpu:
+                        plan_jobs[jobs - 1] += 2
+                        hist[px_bucket(px)] += 2
+                    self.assertEqual((numbers(c, 'plan_jobs'), numbers(c, 'plan_px_hist')), (plan_jobs, hist))
+                    self.assertEqual((ge2d_jobs(c), int(c['ge2d_px'])), fake_totals(out))
+                    if cpu:
+                        self.assertGreater(int(c['cpu_full_us']), 0)
+                        self.assertGreater(int(c['cpu_stage_us']) + int(c['cpu_rotate_us']), 0)
+        # The cases reach every size bucket, and merged pixels both ways.
+        self.assertEqual({px_bucket(px) for _, _, px in cases}, set(range(7)))
+        self.assertEqual(px_bucket(64), 0)
+
+    def test_paints_and_rejected_paints_are_counted_in_quiet_mode(self):
+        # Eight frames with a paint each, and one rejected paint at frame 4.
+        out, lines = run('partial-cw', 'partial', '8', module='partial-plan3.so',
+                         extra=dict(QUIET_EXIT, PARTIAL_INVALID='1'))
+        self.assertIn('bad_frames 0', out)
+        c = self.last(lines)
+        check_counters(self, c)
+        self.assertEqual((c['paints'], c['paint_rejects'], c['full_by_reason']), ('9', '1', 'forced:4'))
+        # No paint at all after the first frames: the counts stay.
+        out, lines = run('partial-cw', 'partial', '6', module='partial-plan3.so',
+                         extra=dict(QUIET_EXIT, PARTIAL_EVENT_CASE='A'))
+        self.assertEqual((self.last(lines)['paints'], self.last(lines)['paint_rejects']), ('1', '0'))
+
+    def test_the_counters_agree_with_the_convert_lines(self):
+        # Verbose mode logs each conversion: the totals at exit must be the
+        # sums over those lines, with failures injected and without.
+        clean = [(40, {}), (12, {'PARTIAL_CPU_REGIONS': '1'}), (30, {'PARTIAL_RANDOM': '1'}),
+                 (20, {'FAKE_GE2D_DELAY_US': '2000', 'RC2FX_TEST_PARTIAL_BUDGET_US': '1000',
+                       'RC2FX_GUI_PARTIAL_MERGE_PX': '1'})]
+        clean += [(40, {'PARTIAL_CLUSTERS': '1', 'PARTIAL_SEED': str(seed)}) for seed in (3, 4)]
+        # Not clean: extra jobs ran and then the conversion became a full frame.
+        failing = [(10, {'FAKE_GE2D_FAIL_QBUF': '3'}), (10, {'FAKE_GE2D_FAIL_DQBUF': '3'}),
+                   (20, {'FAKE_GE2D_DELAY_US': '2000', 'RC2FX_TEST_PARTIAL_BUDGET_US': '1000',
+                         'RC2FX_GUI_PARTIAL_MERGE_PX': '1', 'PARTIAL_WIDE': '1'})]
+        failing += [(40, {'PARTIAL_CLUSTERS': '1', 'PARTIAL_SEED': '2', 'FAKE_GE2D_FAIL_SELECTION': str(nth)})
+                    for nth in (3, 8, 12, 15)]
+        for module in ('partial.so', 'partial-plan3.so'):
+            for cpu in ({}, {'RC2FX_TEST_CPU_ROTATE': '1'}):
+                for frames, pattern in clean + failing:
+                    with self.subTest(module=module, cpu=cpu, pattern=pattern):
+                        out, lines = run('partial-cw', 'partial', str(frames), module=module,
+                                         extra=dict(AT_EXIT, **cpu, **pattern))
+                        self.assertIn('bad_frames 0', out)
+                        c = self.last(lines)
+                        check_counters(self, c)
+                        converts = [f for k, f in lines if k == 'convert']
+                        check_against_converts(self, c, converts, (frames, pattern) in clean)
+                        # Whatever failed, the pixels are those the fake GE2D wrote.
+                        self.assertEqual(int(c['ge2d_px']), fake_totals(out)[1])
+
+    def test_a_failed_cpu_conversion_is_counted_in_its_path_but_not_as_a_rotation(self):
+        # The token QBUF of the first large redraw fails: the conversion took
+        # the CPU path, no rotation completed, and no pixels were counted.
+        out, lines = run('partial-cw', 'partial', '8', module='partial-plan3.so', extra=dict(
+            QUIET_EXIT, RC2FX_TEST_CPU_ROTATE='1', PARTIAL_EVENT_CASE='B', FAKE_GE2D_FAIL_QBUF='3',
+            PARTIAL_RECOVER_QUEUES='1', PARTIAL_REAL_DEST_FDS='1'))
+        self.assertIn('failed_qbuf_cpu_writes 0', out)
+        c = self.last(lines)
+        check_counters(self, c)
+        # Frames 0, 1: full. 2: the plan, failed. 3, 4: full again (both refreshed). 5-7: nothing pending.
+        self.assertEqual({key: int(c[key]) for key in PATHS + ('cpu_fail', 'cpu_medium_frames', 'cpu_full_frames')},
+                         {'path_ge2d_plan': 3, 'path_cpu_medium': 1, 'path_cpu_full': 4, 'path_ge2d_full': 0,
+                          'cpu_fail': 1, 'cpu_medium_frames': 0, 'cpu_full_frames': 4})
+        self.assertEqual(int(c['cpu_px']), 4 * FULL_PX)
+        self.assertEqual(int(c['ge2d_px']), fake_totals(out)[1])
+        self.assertEqual(int(c['ge2d_px']), 4 * 256 + 3 * 64)
+
+    def test_the_line_fits_its_buffer_with_every_counter_at_its_largest(self):
+        source = (HERE / 'gui_partial.c').read_text()
+        size = int(re.search(r'^#define COUNTERS_LINE_MAX (\d+)$', source, re.M).group(1))
+        self.assertIn('static char line[COUNTERS_LINE_MAX];', source)
+        kill = Path(BUILD.name) / 'partial-off'
+        lengths = set()
+        for module, values in (('partial.so', 4), ('partial-plan3.so', 3)):
+            with self.subTest(module=module):
+                kill.touch()
+                try:
+                    out, _ = run('partial-cw', 'partial', '6', module=module, extra=dict(
+                        QUIET_EXIT, RC2FX_TEST_COUNTERS_HUGE='1', RC2FX_TEST_COUNTERS_EVERY_MS='1',
+                        RC2FX_GUI_PARTIAL_MERGE_PX='1000000', RC2FX_TEST_PARTIAL_BUDGET_US='18446744073709551'))
+                finally:
+                    kill.unlink()
+                self.assertIn('bad_frames 0', out)
+                text = log_file().read_text()
+                self.assertTrue(text.endswith('\n'), 'the last line is whole')
+                lines = [line for line in text.splitlines() if line.startswith('counters ')]
+                self.assertIn(len(lines), (6, 7), 'every counters line was written: none was too long to write')
+                for line in lines:
+                    fields = dict(f.split('=', 1) for f in line.split()[1:])
+                    self.assertEqual(tuple(fields), OLD_FIELDS + NEW_FIELDS)
+                    # Counters print as 20 digits, times (ns / 1000) as 17, and every reason is listed.
+                    huge = [key for key, value in fields.items() if re.fullmatch(r'1844674\d{13}', value)]
+                    times = [key for key, value in fields.items() if re.fullmatch(r'1844674\d{10}', value)]
+                    # 12 earlier counters, the test's budget_ns, and 13 of the new fields.
+                    self.assertEqual(len(huge), 26, huge)
+                    self.assertEqual(sorted(times), sorted(
+                        ['ge2d_us', 'cpu_us', 'cpu_max_us', 'cpu_full_us', 'cpu_medium_us',
+                         'cpu_stage_us', 'cpu_rotate_us', 'cpu_yield_us']))
+                    self.assertEqual(len(fields['budget_ns']), 20)
+                    self.assertEqual(len(fields['full_by_reason'].split(',')), 13)
+                    self.assertTrue(all(re.fullmatch(r'[a-z-]+:1844674\d{13}', r)
+                                        for r in fields['full_by_reason'].split(',')))
+                    self.assertTrue(all(re.fullmatch(r'1844674\d{13}', v) for v in
+                                        fields['plan_jobs'].split(',') + fields['plan_px_hist'].split(',')))
+                    self.assertEqual(len(fields['plan_jobs'].split(',')), values)
+                    # The longest values this run does not have: a 10-digit pid, a 20-digit
+                    # time and the longest disable reason (17 letters).
+                    longest = (len(line) + 1 + (10 - len(fields['pid'])) + (20 - len(fields['t'])) +
+                               (17 - len(fields['disabled'])))
+                    self.assertLess(longest, size * 3 // 4, 'well inside the buffer')
+                    self.assertGreater(longest, 1000, 'longer than the buffer this line had before')
+                    lengths.add((longest, module))
+                self.assertEqual(fields['disabled'], 'kill', 'the last line, after the kill file was seen')
+        # The two-job planner's line is the longest (a fourth plan_jobs value).
+        self.assertLess(max(lengths)[0], size // 2 + 256, f'about half the buffer at most: {sorted(lengths)}')
+        CounterTests.longest = sorted(lengths)
+
+
+def plan_run(build, *args, runner=()):
+    """One run of a partial_plan_test build: exit status, the per-conversion
+    lines, the totals, the module's counters line, and all output."""
+    r = subprocess.run([*runner, str(Path(BUILD.name) / f'plan-{build}'), *args], capture_output=True, text=True,
+                       timeout=300)
+    lines = r.stdout.splitlines()
+    frames = [line for line in lines if line.startswith('frame ')]
+    totals = {name: int(value) for line in lines if not line.startswith(('frame ', 'counters '))
+              for name, value in re.findall(r'(\w+) (\d+)', line)}
+    counters = [dict(f.split('=', 1) for f in line.split()[1:]) for line in lines if line.startswith('counters ')]
+    return r.returncode, frames, totals, counters[-1] if counters else None, r.stdout + r.stderr
+
+
+class ProductionCounterTests(unittest.TestCase):
+    """The counters line of gui_partial.c as the mixer builds it (the CPU rule
+    always on), from partial_plan_test.c, which prints the line after its last
+    conversion and keeps its own tallies of the paths and of the stand-in
+    GE2D's jobs and pixels."""
+
+    # The fields that hold a clock reading, a duration or the process id.
+    TIMED = {'pid', 't', 'ge2d_us', 'cpu_us', 'cpu_max_us', 'cpu_full_us', 'cpu_medium_us', 'cpu_stage_us',
+             'cpu_rotate_us', 'cpu_yield_us', 'soft_budget_exceeded'}
+
+    @classmethod
+    def setUpClass(cls):
+        for name, flags in ProductionPlanTests.BUILDS.items():
+            subprocess.run([CC, *ProductionPlanTests.WARN, *flags, str(HERE / 'partial_plan_test.c'),
+                            '-o', str(Path(BUILD.name) / f'plan-{name}')], check=True)
+
+    def check(self, totals, c, frames, clean=True):
+        check_counters(self, c)
+        self.assertEqual(int(c['conversions']), frames)
+        self.assertEqual(int(c['path_ge2d_plan']), totals['ge2d_plan'])
+        self.assertEqual(int(c['path_cpu_medium']), totals['medium'])
+        self.assertEqual(int(c['path_cpu_full']) + int(c['path_ge2d_full']), totals['full'])
+        # The stand-in GE2D wrote exactly the pixels the line reports, failures or not.
+        self.assertEqual(int(c['ge2d_px']), totals['pixels'])
+        self.assertEqual((int(c['cpu_frames']), int(c['cpu_fail'])), (totals['cpu_frames'], totals['cpu_fail']))
+        if clean:
+            self.assertEqual(ge2d_jobs(c), totals['jobs'])
+            self.assertEqual(int(c['extra_jobs']),
+                             sum(i * count for i, count in enumerate(numbers(c, 'plan_jobs'))))
+            for kind in ('full', 'medium'):
+                self.assertEqual(c[f'cpu_{kind}_frames'], c[f'path_cpu_{kind}'])
+            if c['planner_policy'] == 'plan3':  # no full frame that GE2D converts unless something failed
+                self.assertEqual(c['path_ge2d_full'], '0')
+
+    def test_the_sums_hold_with_the_cpu_rule_always_on(self):
+        for planner in ('plan3', 'baseline'):
+            for direction, seed in (('cw', '1'), ('ccw', '2'), ('cw', '3'), ('ccw', '4')):
+                with self.subTest(planner=planner, direction=direction, seed=seed):
+                    status, frames, totals, c, out = plan_run(planner, direction, seed, '250')
+                    self.assertEqual(status, 0, out)
+                    self.check(totals, c, 250)
+                    # All the paths, job counts and most sizes occur.
+                    self.assertGreater(int(c['path_cpu_medium']), 5)
+                    self.assertGreater(int(c['path_cpu_full']), 5)
+                    self.assertTrue(all(count > 0 for count in numbers(c, 'plan_jobs')[:3]), c)
+                    self.assertGreaterEqual(sum(count > 0 for count in numbers(c, 'plan_px_hist')), 5)
+                    self.assertGreater(int(c['plan_multi_le8192']), 5)
+                    self.assertGreater(int(c['cpu_px']), int(c['path_cpu_full']) * FULL_PX)
+                    self.assertGreater(int(c['merge_added_px']), 0)
+                    self.assertGreater(int(c['paints']), 200)
+                    self.assertGreater(int(c['paint_rejects']), 0)
+                    for key in ('cpu_full_us', 'cpu_medium_us', 'cpu_stage_us', 'cpu_rotate_us'):
+                        self.assertGreater(int(c[key]), 0, key)
+
+    def test_the_sums_hold_when_a_job_or_selection_fails(self):
+        for direction in ('cw', 'ccw'):
+            for what, nths in (('fail-qbuf', (1, 2, 3, 10, 13, 25, 44)), ('fail-selection', (1, 2, 5, 13, 34))):
+                for nth in nths:
+                    with self.subTest(direction=direction, what=what, nth=nth):
+                        status, frames, totals, c, out = plan_run('plan3', direction, '7', '80', what, str(nth))
+                        self.assertEqual(status, 0, out)
+                        self.check(totals, c, 80, clean=False)
+
+    def test_the_stage_and_kind_times_are_exact_under_a_known_clock(self):
+        # Under the program's own clock each strip of a CPU rotation is 1 ms of
+        # staging, 10 ms of rotation and 100 ms inside the yield, and a
+        # rotation lasts 1 ms more than its strips. A full frame is 45 strips.
+        for direction, seed in (('cw', '1'), ('ccw', '2')):
+            with self.subTest(direction=direction, seed=seed):
+                status, frames, totals, c, out = plan_run('plan3', direction, seed, '120', 'stage-clock', '1')
+                self.assertEqual(status, 0, out)
+                _, real_frames, _, real, _ = plan_run('plan3', direction, seed, '120')
+                self.assertEqual(frames, real_frames, 'the clock changes no conversion')
+                check_counters(self, c)
+                strips, odd = divmod(int(c['cpu_stage_us']), 1000)
+                self.assertEqual(odd, 0)
+                self.assertGreater(strips, 45 * int(c['cpu_full_frames']))
+                self.assertEqual(int(c['cpu_rotate_us']), 10000 * strips)
+                self.assertEqual(int(c['cpu_yield_us']), 100000 * strips)
+                self.assertEqual(int(c['cpu_us']), 111000 * strips + 1000 * int(c['cpu_frames']))
+                full = 45 * 111000 + 1000
+                self.assertGreater(int(c['cpu_full_frames']), 2)
+                self.assertEqual(int(c['cpu_full_us']), full * int(c['cpu_full_frames']))
+                # The longest is a full frame or a plan of tall jobs, which has more strips.
+                self.assertGreaterEqual(int(c['cpu_max_us']), full)
+                self.assertEqual((int(c['cpu_max_us']) - 1000) % 111000, 0)
+                # The rest is the large plans': whole strips, at least one for each rotation.
+                count, us = int(c['cpu_medium_frames']), int(c['cpu_medium_us'])
+                self.assertGreater(count, 2)
+                self.assertEqual((us - 1000 * count) % 111000, 0)
+                self.assertGreaterEqual(us, 112000 * count)
+                self.assertEqual(int(c['cpu_full_us']) + int(c['cpu_medium_us']), int(c['cpu_us']))
+                # Everything that is not a time is as in the run on the real clock.
+                self.assertEqual({k: v for k, v in c.items() if k not in self.TIMED},
+                                 {k: v for k, v in real.items() if k not in self.TIMED})
+
+    def test_the_production_module_has_the_new_fields_and_no_counters_test_controls(self):
+        data = (Path(BUILD.name) / 'partial-plan3-production.so').read_bytes()
+        self.assertIn(b'path_ge2d_plan=', data)
+        self.assertIn(b'plan_multi_le8192=', data)
+        for knob in (b'RC2FX_TEST_COUNTERS_HUGE', b'RC2FX_TEST_COUNTERS_AT_EXIT'):
+            self.assertNotIn(knob, data)
+
+    @unittest.skipIf(platform.machine() == 'aarch64', 'this host runs the aarch64 build in the tests above')
+    @unittest.skipUnless(ZIG and QEMU, 'the aarch64 build needs zig and qemu-aarch64 (or an aarch64 host)')
+    def test_the_counts_under_qemu_are_those_of_the_host_run(self):
+        # The mixer's CPU (Cortex-A53), with the NEON rotation.
+        qemu = (QEMU, '-cpu', 'cortex-a53')
+        program = Path(BUILD.name) / 'plan-plan3-aarch64'
+        subprocess.run([ZIG, 'cc', *A64, *ProductionPlanTests.WARN[1:], '-DRC2FX_GUI_RECT_PLAN3',
+                        str(HERE / 'partial_plan_test.c'), '-o', str(program)], check=True)
+        for direction, seed in (('cw', '1'), ('ccw', '2')):
+            with self.subTest(direction=direction, seed=seed):
+                status, frames, totals, c, out = plan_run('plan3-aarch64', direction, seed, '250', runner=qemu)
+                self.assertEqual(status, 0, out)
+                self.check(totals, c, 250)
+                host_status, host_frames, _, host_c, _ = plan_run('plan3', direction, seed, '250')
+                self.assertEqual(host_status, 0)
+                self.assertEqual(frames, host_frames, 'the same paths and the same images as the scalar host run')
+                # Every count that does not measure time is the host's.
+                self.assertEqual({k: v for k, v in c.items() if k not in self.TIMED},
+                                 {k: v for k, v in host_c.items() if k not in self.TIMED})
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@
  * FAKE_GE2D_DIR=cw|ccw picks the rotation, FAKE_GE2D_DELAY_US adds time per
  * job, FAKE_GE2D_FAIL_QBUF=n fails the n-th output QBUF (counting all, from
  * 1), FAKE_GE2D_FAIL_DQBUF=n fails the n-th capture DQBUF,
+ * FAKE_GE2D_FAIL_SELECTION=n fails the n-th S_SELECTION (counting all),
  * FAKE_GE2D_FAIL_QUERYBUF=1 fails QUERYBUF with EIO, and
  * FAKE_GE2D_BAD_OFFSET=1 reports an unmappable offset. vb2's rule that an
  * OUTPUT buffer needs VM_WRITE to be mapped cannot be enforced from here (the
@@ -46,7 +47,7 @@ static struct {
 static int ndests;
 static struct v4l2_rect crop = {0, 0, SW, SH}, compose = {0, 0, SH, SW};
 static int capture_queued = -1, output_queued, job_done;
-static unsigned output_qbufs, capture_dqbufs;
+static unsigned output_qbufs, capture_dqbufs, selections;
 static int token_was_clamped;
 /* Counters the test program prints. */
 unsigned long long fake_jobs, fake_pixels;
@@ -121,6 +122,8 @@ int ioctl(int fd, unsigned long request, ...) {
     }
     case VIDIOC_S_SELECTION: {
         struct v4l2_selection *s = arg;
+        int nth_selection = env_int("FAKE_GE2D_FAIL_SELECTION");
+        if (nth_selection && ++selections == (unsigned)nth_selection) return errno = EIO, -1;
         if (s->r.left < 0 || s->r.top < 0) return errno = EINVAL, -1;
         if (token_was_clamped && env_int("FAKE_GE2D_FAIL_RESTORE")) return errno = EIO, -1;
         if (s->type == V4L2_BUF_TYPE_VIDEO_OUTPUT && s->target == V4L2_SEL_TGT_CROP) {

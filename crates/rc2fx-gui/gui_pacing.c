@@ -155,12 +155,16 @@ static _Atomic uint64_t repaint_entered, repaint_completed, repaint_wait_ns, rep
 static _Atomic uint64_t other_entered, unclassified_entered;
 #ifdef RC2FX_PACING_DIRTY
 /* Paints seen, logged, rejected (caller frame or list out of bounds), and
- * with a rectangle outside 1280×720. */
+ * with a rectangle outside 1280×720. The last is counted only when paint
+ * lines can be written (a log is open and quiet mode is off), which is also
+ * the only time it is printed. The partial build's counters line carries
+ * paints and paint_rejects, so quiet mode has them too. */
 static _Atomic uint64_t paints, paints_logged, paint_rejects, paint_outside;
 #endif
 
 #ifdef RC2FX_PACING_TEST
 static bool test_fail_clock;
+static bool test_counters_at_exit; /* RC2FX_TEST_COUNTERS_AT_EXIT: the totals after the last pass */
 #endif
 static uint64_t now_ns(void) {
 #ifdef RC2FX_PACING_TEST
@@ -359,6 +363,11 @@ static void log_paint(int path, const uint8_t *fp) {
         return;
     }
     partial_paint(list, count);
+    /* Everything below only builds the "paint" line and the paint_outside
+     * count, which the "dirty-" stats line prints. Quiet mode and a run
+     * without a log write neither, so the paint stops here, before any
+     * formatting. This runs on the message thread under the repaint mutex. */
+    if (log_fd < 0 || quiet) return;
     int64_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
     uint64_t area = 0;
     int outside = 0;
@@ -698,6 +707,9 @@ static bool admitted(void) {
 
 static void stop(void) {
     if (getpid() == gui_pid && !quiet) write_stats("exit");
+#ifdef RC2FX_PACING_TEST
+    if (getpid() == gui_pid && test_counters_at_exit) write_counters();
+#endif
 }
 
 EXPORT unsigned int la_version(unsigned int version) { return version >= LAV_CURRENT ? LAV_CURRENT : 0; }
@@ -787,6 +799,7 @@ EXPORT void la_preinit(uintptr_t *cookie) {
     atomic_store(&last_log_ns, now_ns());
 #ifdef RC2FX_PACING_TEST
     test_fail_clock = getenv("RC2FX_GUI_PACING_TEST_FAIL_CLOCK") != NULL;
+    test_counters_at_exit = getenv("RC2FX_TEST_COUNTERS_AT_EXIT") != NULL;
     {   /* Known answer for the admission hash: SHA-256("abc"). */
         static const uint8_t abc[32] = {0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40,
                                         0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,

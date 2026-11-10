@@ -342,9 +342,21 @@ int main(int argc, char **argv) {
         // destination must equal the rotated source everywhere.
         // PARTIAL_ROGUE_AT=f writes one source pixel outside any paint at
         // frame f; PARTIAL_KILL_AT=f creates PARTIAL_KILL_FILE at frame f.
+        // PARTIAL_EVENT_CASE=A|B, or a list "x:y:w:h;x:y:w:h" (at most 48),
+        // paints exactly those rectangles at frame 2 and nothing in any other
+        // frame. PARTIAL_RANDOM=1 paints random rectangles, at most
+        // PARTIAL_RANDOM_W x PARTIAL_RANDOM_H (61 x 35 unless set), from a
+        // sequence that PARTIAL_SEED varies. PARTIAL_CLUSTERS=1 paints
+        // meter-like groups of small rectangles at fixed anchors (the four
+        // corners among them), sometimes with a large redraw and sometimes
+        // nothing, also varied by PARTIAL_SEED: successive conversions then
+        // differ in job count and size. PARTIAL_DEST_HASH prints a hash
+        // of the whole destination after each conversion, so two runs of the
+        // same paints can be compared image for image.
         const int frames = atoi(argv[2]), SW = 1280, SH = 720;
         const int rogue = getenv("PARTIAL_ROGUE_AT") ? atoi(getenv("PARTIAL_ROGUE_AT")) : -1;
         const int kill_at = getenv("PARTIAL_KILL_AT") ? atoi(getenv("PARTIAL_KILL_AT")) : -1;
+        const unsigned seed = getenv("PARTIAL_SEED") ? (unsigned)atoi(getenv("PARTIAL_SEED")) : 0;
         const bool ccw = getenv("FAKE_GE2D_DIR") && !strcmp(getenv("FAKE_GE2D_DIR"), "ccw");
         // PARTIAL_SKIP makes the module's verify take one of its skip paths.
         const char *skip = getenv("PARTIAL_SKIP") ? getenv("PARTIAL_SKIP") : "";
@@ -395,7 +407,21 @@ int main(int argc, char **argv) {
                 if (f == 2) {
                     if (!strcmp(event, "A")) n = (int)(sizeof a / sizeof a[0]), memcpy(rects, a, sizeof a);
                     else if (!strcmp(event, "B")) n = (int)(sizeof b / sizeof b[0]), memcpy(rects, b, sizeof b);
-                    else return 5;
+                    else {
+                        // A list of rectangles, each inside the source.
+                        const char *at = event;
+                        while (*at && n < 48) {
+                            int32_t *r = rects[n];
+                            int used = 0;
+                            if (sscanf(at, "%d:%d:%d:%d%n", &r[0], &r[1], &r[2], &r[3], &used) != 4) return 5;
+                            if (r[0] < 0 || r[1] < 0 || r[2] < 1 || r[3] < 1 || r[0] + r[2] > SW || r[1] + r[3] > SH)
+                                return 5;
+                            n++, at += used;
+                            if (*at == ';') at++;
+                            else if (*at) return 5;
+                        }
+                        if (!n || *at) return 5;
+                    }
                     std::vector<uint8_t> covered(SW * SH, 0);
                     for (int r = 0; r < n; ++r)
                         for (int y = rects[r][1]; y < rects[r][1] + rects[r][3]; ++y)
@@ -412,19 +438,46 @@ int main(int argc, char **argv) {
                 }
             }
             if (!event && getenv("PARTIAL_RANDOM") && !strcmp(getenv("PARTIAL_RANDOM"), "1")) {
-                uint32_t rng = 0x9e3779b9u * (unsigned)(f + 1);
+                const int max_w = getenv("PARTIAL_RANDOM_W") ? atoi(getenv("PARTIAL_RANDOM_W")) : 61;
+                const int max_h = getenv("PARTIAL_RANDOM_H") ? atoi(getenv("PARTIAL_RANDOM_H")) : 35;
+                uint32_t rng = 0x9e3779b9u * (unsigned)(f + 1) + 0x85ebca6bu * seed;
+                if (!rng) rng = 1;
                 auto next = [&]() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; };
                 n = 6;
                 for (int i = 0; i < n; i++) {
                     int x = (int)(next() % SW), y = (int)(next() % SH);
                     rects[i][0] = x, rects[i][1] = y;
-                    rects[i][2] = 1 + (int)(next() % (unsigned)std::min(61, SW - x));
-                    rects[i][3] = 1 + (int)(next() % (unsigned)std::min(35, SH - y));
+                    rects[i][2] = 1 + (int)(next() % (unsigned)std::min(max_w, SW - x));
+                    rects[i][3] = 1 + (int)(next() % (unsigned)std::min(max_h, SH - y));
                 }
                 // Token intersection, non-aligned tails, and all four edges.
                 int32_t edge[4][4] = {{0, 0, 19, 23}, {1279, 719, 1, 1},
                                      {0, 701, 3, 19}, {1263, 0, 17, 1}};
                 memcpy(rects[f % n], edge[f % 4], sizeof edge[0]);
+            }
+            if (!event && getenv("PARTIAL_CLUSTERS")) {
+                static const int anchors[8][2] = {{0, 0}, {1250, 0}, {0, 690}, {1250, 690},
+                                                  {193, 370}, {985, 45}, {411, 444}, {640, 360}};
+                uint32_t rng = 0x9e3779b9u * (unsigned)(f + 1) + 0x85ebca6bu * seed;
+                if (!rng) rng = 1;
+                auto next = [&]() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; };
+                n = 0;
+                for (int c = 1 + (int)(next() % 3); c > 0; c--) {
+                    const int *anchor = anchors[next() % 8];
+                    for (int count = 1 + (int)(next() % 3); count > 0; count--) {
+                        int x = anchor[0] + (int)(next() % 30), y = anchor[1] + (int)(next() % 30);
+                        rects[n][0] = x, rects[n][1] = y;
+                        rects[n][2] = std::min(1 + (int)(next() % 30), SW - x);
+                        rects[n][3] = std::min(1 + (int)(next() % 30), SH - y);
+                        n++;
+                    }
+                }
+                if (next() % 8 == 0) {
+                    rects[n][0] = (int)(next() % (SW - 274)), rects[n][1] = (int)(next() % (SH - 120));
+                    rects[n][2] = 274, rects[n][3] = 120;
+                    n++;
+                }
+                if (next() % 16 == 0) n = 0;
             }
             if (getenv("PARTIAL_CPU_REGIONS")) {
                 n = 3;
@@ -476,6 +529,11 @@ int main(int argc, char **argv) {
                 }
             bad_frames += mismatches != 0;
             printf("frame %d dest %d convert %d mismatches %ld\n", f, 9 + d, r, mismatches);
+            if (getenv("PARTIAL_DEST_HASH")) {
+                uint64_t hash = 0xcbf29ce484222325ull;  // FNV-1a over the destination's pixels
+                for (int i = 0; i < SW * SH; ++i) hash = (hash ^ dest_ptrs[d][i]) * 0x100000001b3ull;
+                printf("dest_hash %d %d %016llx\n", f, d, (unsigned long long)hash);
+            }
         }
         printf("partial frames %d bad_frames %d jobs %llu pixels %llu\n", frames, bad_frames, fake_jobs,
                fake_pixels);
