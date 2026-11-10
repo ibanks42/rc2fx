@@ -16,6 +16,8 @@ fn target(channels: u8, bypass: bool) -> Target {
 }
 
 fn scalar_block(dsp: &mut Dsp, p: &Prepared, input: &[[f32; 112]; 2]) -> ([[f32; 112]; 2], Meter) {
+    // The reference prepares every block in full.
+    dsp.seen = 0;
     dsp.begin_block(p, 112);
     let mut output = [[0.0; 112]; 2];
     let mut meter = Meter::default();
@@ -317,6 +319,7 @@ fn every_stage_matches_the_scalar_frame_across_block_lengths() {
                     })
                     .collect()
             });
+            reference.seen = 0;
             reference.begin_block(&prepared, frames);
             let mut expected = [vec![0.0; frames], vec![0.0; frames]];
             let mut expected_meter = Meter::default();

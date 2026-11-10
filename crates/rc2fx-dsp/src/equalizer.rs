@@ -1,7 +1,6 @@
-use crate::{
-    BLOCK, EQ_INTERNAL_LIMIT, GAIN_SMOOTH, Meter, Prepared,
-    filter::{Filter, safe},
-};
+#[cfg(test)]
+use crate::filter::safe;
+use crate::{BLOCK, EQ_INTERNAL_LIMIT, GAIN_SMOOTH, Meter, Prepared, Ramp, clamp, filter::Filter};
 use rc2fx_core::{BandMode, BandType, Channel, MAX_BANDS, Target, eq::Coefficients};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +64,17 @@ impl EqShape {
         }
         s
     }
+}
+/// `safe(sample * gain, limit)` for every sample, bit for bit. A gain of
+/// exactly 1 leaves a finite sample unchanged, and `clamp` turns every
+/// infinity and NaN into what `safe` returns for it either way, so that
+/// multiply is skipped.
+#[inline(always)]
+fn scale(samples: &mut [f64], gain: &Ramp, limit: f64, m: &mut Meter) {
+    if !gain.is_one() {
+        gain.each(samples.len(), |t, gain| samples[t] *= gain);
+    }
+    clamp(samples, limit, m);
 }
 #[derive(Clone, Copy)]
 pub(crate) struct EqBank {
@@ -146,6 +156,13 @@ impl EqBank {
             self.target[ch][..count].copy_from_slice(&p.eq[ch][..count]);
         }
     }
+    /// Whether any filter this bank runs on `ch` is smoothing its
+    /// coefficients. A disabled bank runs none.
+    pub fn is_smoothing(&self, ch: usize) -> bool {
+        self.shape.on
+            && (0..self.shape.count[ch])
+                .any(|i| self.active[ch][i] && self.filters[ch][i].is_smoothing())
+    }
     pub fn begin(&mut self, ch: usize) {
         if self.shape.on {
             for i in 0..self.shape.count[ch] {
@@ -163,21 +180,13 @@ impl EqBank {
         channels: usize,
         m: &mut Meter,
     ) {
-        let mut input_gain = [0.0; BLOCK];
-        let mut output_gain = [0.0; BLOCK];
-        for t in 0..n {
-            self.input_gain += GAIN_SMOOTH * (self.input_target - self.input_gain);
-            self.output_gain += GAIN_SMOOTH * (self.output_target - self.output_gain);
-            input_gain[t] = self.input_gain;
-            output_gain[t] = self.output_gain;
-        }
+        let input_gain = Ramp::advance(&mut self.input_gain, self.input_target, n);
+        let output_gain = Ramp::advance(&mut self.output_gain, self.output_target, n);
         if !self.shape.on {
             return;
         }
         for samples in x.iter_mut().take(channels) {
-            for (sample, gain) in samples[..n].iter_mut().zip(&input_gain) {
-                *sample = safe(*sample * gain, EQ_INTERNAL_LIMIT, m);
-            }
+            scale(&mut samples[..n], &input_gain, EQ_INTERNAL_LIMIT, m);
         }
         let stereo_done = channels == 2
             && Filter::try_stereo_cascade(
@@ -202,10 +211,54 @@ impl EqBank {
             }
         }
         for samples in x.iter_mut().take(channels) {
-            for (sample, gain) in samples[..n].iter_mut().zip(&output_gain) {
-                *sample = safe(*sample * gain, 16.0, m);
-            }
+            scale(&mut samples[..n], &output_gain, 16.0, m);
         }
+    }
+    pub fn is_on(&self) -> bool {
+        self.shape.on
+    }
+    /// The gains, every filter, every coefficient target, the active bands
+    /// and the size of the shape as bits, for comparing two processing paths.
+    /// It covers everything `Dsp::begin_block` can write to a bank except the
+    /// band identities in the shape, which `EqShape::same_as` compares.
+    #[cfg(test)]
+    pub fn bits(&self) -> Vec<u64> {
+        [
+            self.input_gain,
+            self.output_gain,
+            self.input_target,
+            self.output_target,
+        ]
+        .iter()
+        .map(|gain| gain.to_bits())
+        .chain(self.filters.iter().flatten().flat_map(Filter::bits))
+        .chain(
+            self.target
+                .iter()
+                .flatten()
+                .flat_map(|target| target.as_array())
+                .map(f64::to_bits),
+        )
+        .chain(self.active.iter().flatten().map(|on| u64::from(*on)))
+        .chain([
+            u64::from(self.shape.on),
+            u64::from(self.shape.right_present),
+            self.shape.count[0] as u64,
+            self.shape.count[1] as u64,
+        ])
+        .collect()
+    }
+    /// How many of the filters this bank runs on `ch` have stopped short of
+    /// their target: `begin` found them not smoothing, yet their coefficients
+    /// are not the target's.
+    #[cfg(test)]
+    pub fn stalled(&self, ch: usize) -> usize {
+        if !self.shape.on {
+            return 0;
+        }
+        (0..self.shape.count[ch])
+            .filter(|&i| self.active[ch][i] && self.filters[ch][i].stalled(self.target[ch][i]))
+            .count()
     }
     #[cfg(test)]
     pub fn process(&mut self, x: &mut [f64; 2], channels: usize, m: &mut Meter) {

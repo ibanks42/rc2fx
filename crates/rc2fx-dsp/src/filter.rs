@@ -53,6 +53,27 @@ impl Filter {
             ..Self::default()
         }
     }
+    /// The whole filter as bits, for comparing two processing paths.
+    #[cfg(test)]
+    pub fn bits(&self) -> Vec<u64> {
+        [self.c, self.checkpoint, self.last_target]
+            .iter()
+            .flat_map(|c| c.as_array())
+            .chain([self.z1, self.z2])
+            .map(f64::to_bits)
+            .chain([u64::from(self.smoothing)])
+            .collect()
+    }
+    /// Whether `begin` found coefficients still on their way to the target.
+    pub fn is_smoothing(&self) -> bool {
+        self.smoothing
+    }
+    /// Whether the coefficients stopped moving short of `target`: the
+    /// smoothing step became too small to change them.
+    #[cfg(test)]
+    pub fn stalled(&self, target: Coefficients) -> bool {
+        !self.smoothing && !same_bits(self.c, target)
+    }
     pub fn begin(&mut self, target: Coefficients) {
         self.smoothing = !same_bits(self.c, target)
             && (!same_bits(self.last_target, target) || !same_bits(self.checkpoint, self.c));

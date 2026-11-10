@@ -27,6 +27,8 @@ fn main() {
     for bands in [0, 7, 20, 32] {
         let mut target = Target::new("usb-main", "USB", TargetKind::Playback, 2);
         target.limiter.enabled = false;
+        // A new target has its EQ off; without this no band is processed.
+        target.eq.enabled = true;
         for i in 0..bands {
             let mut band = Band::new(format!("b{i}"));
             band.frequency = 30.0 * 500.0_f64.powf(i as f64 / bands.max(1) as f64);

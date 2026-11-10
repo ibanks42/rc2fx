@@ -3,9 +3,10 @@
 //! The eligibility and rollback here are architecture-independent; only the
 //! steady chain differs: on AArch64 both channels ride in the two lanes of an
 //! `f64x2` (shared coefficients duplicated per lane, explicit NEON ops, no FMA
-//! and no reassociation), elsewhere the scalar four-recurrence loop runs. Both
-//! reproduce `steady_two`'s per-sample arithmetic exactly, so a refusal falls
-//! back to the per-channel path with no change in audio.
+//! and no reassociation), elsewhere the scalar four-recurrence loop runs. The
+//! scalar loop is the reference. Both reproduce `steady_two`'s per-sample
+//! arithmetic exactly, so a refusal falls back to the per-channel path with no
+//! change in audio.
 use super::*;
 
 #[cfg(target_arch = "aarch64")]
@@ -47,22 +48,49 @@ pub(super) fn process(
     if n == 0 {
         return true;
     }
-    let saved = *x;
-    let original: [[[f64; 2]; MAX_BANDS]; 2] =
-        std::array::from_fn(|ch| std::array::from_fn(|i| [filters[ch][i].z1, filters[ch][i].z2]));
+    let order = &order[..count];
+    let mut original = [[[0.0; 2]; MAX_BANDS]; 2];
+    for ch in 0..2 {
+        for (saved, &i) in original[ch].iter_mut().zip(order) {
+            *saved = [filters[ch][i].z1, filters[ch][i].z2];
+        }
+    }
     #[cfg(not(target_arch = "aarch64"))]
-    let valid = scalar_chain(filters, &order[..count], x, n, limit);
-    // SAFETY: NEON is part of the AArch64 baseline; every lane and index used
-    // by `neon::chain` stays inside `filters` and `x`, bounded by the
-    // eligibility checks above, and no pointer outlives the call.
+    let valid = {
+        let saved = *x;
+        let valid = scalar_chain(filters, order, x, n, limit);
+        if !valid {
+            *x = saved;
+        }
+        valid
+    };
+    // The NEON chain works on a copy with the two channels side by side and
+    // `x` takes the result only when every band was clean, so a refusal has
+    // no samples to restore.
     #[cfg(target_arch = "aarch64")]
-    let valid = unsafe { neon::chain(filters, &order[..count], x, n, limit) };
+    let valid = {
+        let [left, right] = x;
+        let mut frames = [[0.0; 2]; BLOCK];
+        let frames = &mut frames[..n];
+        for (frame, (left, right)) in frames.iter_mut().zip(left.iter().zip(right.iter())) {
+            *frame = [*left, *right];
+        }
+        // SAFETY: NEON is part of the AArch64 baseline; every lane and index
+        // used by `neon::chain` stays inside `filters` and `frames`, bounded
+        // by the eligibility checks above, and no pointer outlives the call.
+        let valid = unsafe { neon::chain(filters, order, frames, limit) };
+        if valid {
+            for (frame, (left, right)) in frames.iter().zip(left.iter_mut().zip(right)) {
+                (*left, *right) = (frame[0], frame[1]);
+            }
+        }
+        valid
+    };
     if !valid {
-        *x = saved;
         for ch in 0..2 {
-            for &i in &order[..count] {
-                filters[ch][i].z1 = original[ch][i][0];
-                filters[ch][i].z2 = original[ch][i][1];
+            for (saved, &i) in original[ch].iter().zip(order) {
+                filters[ch][i].z1 = saved[0];
+                filters[ch][i].z2 = saved[1];
             }
         }
     }
@@ -468,6 +496,135 @@ mod tests {
             assert_eq!(bits(&x), before_samples, "count={count}: samples");
             assert_eq!(state(&filters), before_state, "count={count}: state");
         }
+    }
+
+    /// Random chains, lengths, states and input, different in each channel,
+    /// through this scheduling and through the per-channel cascade: samples,
+    /// state and clip counts must match, block after block. States start on
+    /// either side of the flush threshold in one channel and not the other,
+    /// and now and then one channel alone carries a value that refuses the
+    /// whole block.
+    #[test]
+    fn random_chains_match_the_per_channel_cascade_in_each_channel() {
+        let mut seed = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let unit = |value: u64| (value >> 11) as f64 / (1u64 << 53) as f64;
+        let tiny = 1e-25_f64;
+        let (mut scheduled, mut refused, mut flushed) = (0, 0, 0);
+        for round in 0..2500 {
+            let count = 2 + (next() % (MAX_BANDS as u64 - 1)) as usize;
+            let targets: [Coefficients; MAX_BANDS] = std::array::from_fn(|_| {
+                let a2 = -0.3 + 0.8 * unit(next());
+                Coefficients {
+                    b0: 0.5 + 0.6 * unit(next()),
+                    b1: -0.4 + 0.8 * unit(next()),
+                    b2: -0.2 + 0.4 * unit(next()),
+                    a1: (1.0 + a2) * 0.9 * (2.0 * unit(next()) - 1.0),
+                    a2,
+                }
+            });
+            // The same bands on both channels, at least two of them.
+            let mut on = [false; MAX_BANDS];
+            for (i, on) in on.iter_mut().enumerate().take(count) {
+                *on = i < 2 || !next().is_multiple_of(4);
+            }
+            let active = [on; 2];
+            let mut a = [std::array::from_fn(|i| Filter::with_coefficients(targets[i])); 2];
+            for filter in a.iter_mut().flatten().take(2 * MAX_BANDS) {
+                let mut pick = || match next() % 9 {
+                    0 => tiny,
+                    1 => f64::from_bits(tiny.to_bits() - 1),
+                    2 => -f64::from_bits(tiny.to_bits() + 1),
+                    3 => -1e-26,
+                    4 => f64::from_bits(1 + next() % 1000),
+                    5 => -0.0,
+                    6 => 0.0,
+                    _ => unit(next()) - 0.5,
+                };
+                filter.z1 = pick();
+                filter.z2 = pick();
+            }
+            let mut b = a;
+            let limit = if next().is_multiple_of(4) {
+                16.0
+            } else {
+                crate::EQ_INTERNAL_LIMIT
+            };
+            let quiet = next().is_multiple_of(3);
+            for block in 0..3 {
+                let n = match next() % 4 {
+                    0 => 112,
+                    1 => BLOCK,
+                    _ => 1 + (next() % BLOCK as u64) as usize,
+                };
+                let mut x = [[7.5; BLOCK]; 2];
+                for samples in &mut x {
+                    for sample in samples.iter_mut().take(n) {
+                        *sample = match next() % 60 {
+                            0 => -0.0,
+                            1 => 1e-30,
+                            2 => f64::from_bits(next() % 5000),
+                            _ if quiet => 0.0,
+                            _ => unit(next()) - 0.5,
+                        };
+                    }
+                }
+                if next().is_multiple_of(7) {
+                    let channel = (next() % 2) as usize;
+                    x[channel][(next() % n as u64) as usize] = match next() % 4 {
+                        0 => f64::INFINITY,
+                        1 => f64::from_bits(0x7ff8_0000_0000_0042),
+                        2 => 1e300,
+                        _ => -1e160,
+                    };
+                }
+                let mut y = x;
+                let (mut ma, mut mb) = (Meter::default(), Meter::default());
+                for ch in 0..2 {
+                    Filter::cascade(
+                        &mut a[ch][..count],
+                        &active[ch][..count],
+                        &targets[..count],
+                        &mut x[ch][..n],
+                        limit,
+                        &mut ma,
+                    );
+                }
+                if process(&mut b, &active, [count; 2], &mut y, n, limit) {
+                    scheduled += 1;
+                } else {
+                    refused += 1;
+                    for ch in 0..2 {
+                        Filter::cascade(
+                            &mut b[ch][..count],
+                            &active[ch][..count],
+                            &targets[..count],
+                            &mut y[ch][..n],
+                            limit,
+                            &mut mb,
+                        );
+                    }
+                }
+                let context = format!("round {round} block {block} count {count} n {n}");
+                assert_eq!(bits(&y), bits(&x), "samples, {context}");
+                assert_eq!(state(&b), state(&a), "state, {context}");
+                assert_eq!(mb.clipped, ma.clipped, "clipped, {context}");
+                flushed += a
+                    .iter()
+                    .flatten()
+                    .filter(|f| f.z1.to_bits() == 0 && f.z2.to_bits() == 0)
+                    .count();
+            }
+        }
+        assert!(
+            scheduled > 2000 && refused > 500 && flushed > 1000,
+            "scheduled {scheduled} refused {refused} flushed {flushed}"
+        );
     }
 
     /// A failure only on the right channel must restore the right channel, not

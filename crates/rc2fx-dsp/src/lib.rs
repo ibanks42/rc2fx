@@ -13,6 +13,7 @@ use rc2fx_core::{
     Target, TargetKind,
     eq::{Coefficients, coefficients},
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const EQ_FADE_SAMPLES: usize = 240;
 pub const MAX_SUPPRESSION_DELAY: usize = 2368;
@@ -23,9 +24,10 @@ pub(crate) const GAIN_SMOOTH: f64 = 0.0020811647007;
 pub(crate) const EQ_INTERNAL_LIMIT: f64 = 1.3407807929942597e154; // 2^512
 
 /// Callback-facing owned worker endpoint. Its implementation must not allocate,
-/// lock, wait, or call the control service in `process_sample`. Inference
-/// there is allowed only for an inline endpoint whose model's worst frame
-/// fits the calling thread's period budget (the mixer's DSP helper).
+/// lock, wait, or call the control service in `process_sample` or
+/// `process_block`. Inference there is allowed only for an inline endpoint
+/// whose model's worst frame fits the calling thread's period budget (the
+/// mixer's DSP helper).
 /// Dry and wet streams must have the same immutable delay, including on failure.
 /// Construction, worker startup, joining and destruction belong outside callbacks.
 pub trait Suppression: Send {
@@ -38,6 +40,21 @@ pub trait Suppression: Send {
     /// `process_sample` output came from; None when that output was the
     /// delayed original (no result yet, late or failed).
     fn voice(&self) -> Option<f32>;
+    /// `process_sample` for a block, in place: `samples[i]` with `wet[i]`
+    /// becomes the output sample and `voice[i]` is what `voice()` returns
+    /// after it. The three slices have the same length, which `Dsp` keeps
+    /// between 1 and 128 and which need not match the model's frame.
+    ///
+    /// `Dsp` processes blocks through this method only. An implementation
+    /// that overrides it must leave the same output, voice scores and state,
+    /// bit for bit, as these per-sample calls.
+    fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
+        assert!(wet.len() == samples.len() && voice.len() == samples.len());
+        for ((sample, wet), voice) in samples.iter_mut().zip(wet).zip(voice) {
+            *sample = self.process_sample(*sample, *wet);
+            *voice = self.voice();
+        }
+    }
     /// Control only, after every callback loan has returned. Implementations
     /// retain their exact terminal receipt outside this vendor-neutral trait.
     fn drain(&mut self, timeout: std::time::Duration) -> Result<(), RetirementError>;
@@ -101,8 +118,15 @@ struct Signature {
 
 /// Immutable control-thread preparation. Contains no borrowed editor data.
 /// A callback does not clone this value or retain references to it afterwards.
+///
+/// Nothing may change a `Prepared` once `new` has returned it: a `Dsp` that
+/// has prepared a block from one skips that work while it keeps being handed
+/// the same one, and tells them apart by `serial` alone.
 #[derive(Clone)]
 pub struct Prepared {
+    /// Different for every `new`, never 0. A clone keeps it, and is equal in
+    /// every other field too.
+    serial: u64,
     signature: Signature,
     chat: Option<Box<chat::PreparedChat>>,
     active_order: [Effect; 6],
@@ -175,7 +199,11 @@ impl Prepared {
         hp.frequency = target.highpass.frequency;
         hp.q = std::f64::consts::FRAC_1_SQRT_2;
         let gate = target.suppression.gate.shape();
+        // Control thread only. An address would not do as the identity: a
+        // freed snapshot's address can be handed to the next one.
+        static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
         let mut p = Self {
+            serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
             chat: None,
             signature: Signature {
                 channels: target.channels as usize,
@@ -307,12 +335,25 @@ pub struct Dsp {
     gate_gain: f64,
     gate_hold: u32,
     gate_voiced: bool,
+    /// The gate position the meter shows, and the level and floor (as bits)
+    /// it was worked out from.
+    gate_open: f64,
+    gate_open_for: [u64; 2],
     envelope: f64,
     limiter_gain: f64,
+    /// The limiter's reduction in dB for the meter, and the gain it was
+    /// worked out from.
+    limiter_reduction: f64,
+    limiter_reduction_for: f64,
     processing_blend: f64,
     eq: [EqBank; 2],
     eq_current: usize,
     eq_remaining: usize,
+    /// The serial of the `Prepared` whose `begin_block` would change nothing
+    /// if it ran again, or 0. Only `begin_block` and `block` change the EQ
+    /// banks, the fade and the filters; anything else that does must set
+    /// this back to 0.
+    seen: u64,
 }
 impl Dsp {
     /// This constructor is deliberately outside the audio callback. Only enabled
@@ -364,12 +405,19 @@ impl Dsp {
             gate_gain: 1.0,
             gate_hold: 0,
             gate_voiced: true,
+            // An open gate with no floor reads fully open.
+            gate_open: 1.0,
+            gate_open_for: [0.0_f64.to_bits(); 2],
             envelope: 0.0,
             limiter_gain: 1.0,
+            // A gain of 1 has no reduction and is never looked up.
+            limiter_reduction: 0.0,
+            limiter_reduction_for: 1.0,
             processing_blend: if p.bypass { 0.0 } else { 1.0 },
             eq: [EqBank::new(p, None), EqBank::default()],
             eq_current: 0,
             eq_remaining: 0,
+            seen: 0,
         })
     }
     pub fn without_suppression(p: &Prepared) -> Result<Self, DspError> {
@@ -413,12 +461,23 @@ impl Dsp {
         }
         Ok(lengths[0])
     }
+    /// Takes up `p`'s EQ shape and targets and decides which filters smooth
+    /// their coefficients over this block.
+    ///
+    /// The same `Prepared` usually arrives for thousands of blocks. Once a
+    /// full pass finds the shape unchanged, no fade running and no filter
+    /// smoothing, another pass with the same `Prepared` would write back
+    /// exactly what is there: the targets are the same, no coefficient moves
+    /// while its filter is not smoothing, and `Filter::begin` then finds the
+    /// same answer. `seen` records that, and the pass is skipped until a
+    /// different `Prepared` arrives.
     fn begin_block(&mut self, p: &Prepared, frames: usize) {
-        if frames == 0 {
+        if frames == 0 || self.seen == p.serial {
             return;
         }
         let current = self.eq_current;
-        if !self.eq[current].shape.same_as(&p.eq_shape) {
+        let same_shape = self.eq[current].shape.same_as(&p.eq_shape);
+        if !same_shape {
             if self.eq_remaining == 0 {
                 self.eq[1 - current] = EqBank::new(p, Some(&self.eq[current]));
                 self.eq_current = 1 - current;
@@ -427,16 +486,20 @@ impl Dsp {
         } else {
             self.eq[current].update_targets(p);
         }
+        let mut steady = same_shape && self.eq_remaining == 0;
         for ch in 0..p.channels() {
             if p.hp_on {
                 self.channels[ch].hp.begin(p.hp);
+                steady &= !self.channels[ch].hp.is_smoothing();
             }
             for bank in 0..2 {
                 if bank == self.eq_current || self.eq_remaining != 0 {
                     self.eq[bank].begin(ch);
                 }
             }
+            steady &= !self.eq[self.eq_current].is_smoothing(ch);
         }
+        self.seen = if steady { p.serial } else { 0 };
     }
     /// Planar output, no allocation or frame-count limit. All lengths and reset
     /// compatibility are checked before any state or output is changed.
@@ -587,6 +650,111 @@ impl Dsp {
                 db_gain(self.gate_db)
             };
         }
+        // The position is a function of the level and the floor alone, so the
+        // division is done only when one of them has changed.
+        let key = [self.gate_db.to_bits(), floor.to_bits()];
+        if key != self.gate_open_for {
+            self.gate_open_for = key;
+            self.gate_open = if floor < 0.0 {
+                (1.0 - self.gate_db / floor).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+        }
+        m.gate_open = m.gate_open.max(self.gate_open);
+        self.gate_gain
+    }
+    /// `gate_step` for the first of `scores` and for every score after it
+    /// that leaves the gate where the first put it: returns the gain they
+    /// share and how many samples that is, at least one. `scores` is not
+    /// empty.
+    #[inline]
+    fn gate_run(&mut self, p: &Prepared, scores: &[Option<f32>], m: &mut Meter) -> (f64, usize) {
+        let gain = self.gate_step(p, scores[0], m);
+        (gain, 1 + self.gate_rest(p, &scores[1..], m))
+    }
+    /// How many of `scores`, from the first, `gate_step` would take without
+    /// changing the gate or its gain; their scores go to the meter here.
+    /// Call it straight after a `gate_step` with the same `p`.
+    ///
+    /// That step left the hold and the kept position as `p` makes them. A
+    /// further step changes nothing when the gate is open and at rest (voiced,
+    /// the hold full, the level at 0 dB) and the next score counts as voice
+    /// again, or shut and at rest (not voiced, the hold run out, the level on
+    /// the floor) and the next score does not: the same verdict keeps the
+    /// hold, the target is the level the gate is at, and the position
+    /// `gate_step` gave the meter is the one it would give again. The first
+    /// score with the other verdict ends the count and is left to
+    /// `gate_step`.
+    #[inline]
+    fn gate_rest(&self, p: &Prepared, scores: &[Option<f32>], m: &mut Meter) -> usize {
+        let at_rest = if self.gate_voiced {
+            self.gate_hold == p.gate_hold && self.gate_db == 0.0
+        } else {
+            // Not voiced, so the gate is on and its floor is the reduction.
+            p.gate_on && self.gate_hold == 0 && self.gate_db == -p.gate_reduction_db
+        };
+        if !at_rest {
+            return 0;
+        }
+        let threshold = if self.gate_voiced {
+            p.gate_close
+        } else {
+            p.gate_threshold
+        };
+        let mut count = 0;
+        for score in scores {
+            let voiced = !p.gate_on || score.is_none_or(|v| v >= threshold);
+            if voiced != self.gate_voiced {
+                break;
+            }
+            if let Some(v) = *score {
+                m.voice = m.voice.max(f64::from(v));
+            }
+            count += 1;
+        }
+        count
+    }
+    /// `gate_step` as it was before the gate position was kept between
+    /// samples: the reference for it in the tests, and what `frame` calls.
+    #[cfg(test)]
+    fn gate_step_reference(&mut self, p: &Prepared, voice: Option<f32>, m: &mut Meter) -> f64 {
+        if let Some(v) = voice {
+            m.voice = m.voice.max(f64::from(v));
+        }
+        let threshold = if self.gate_voiced {
+            p.gate_close
+        } else {
+            p.gate_threshold
+        };
+        self.gate_voiced = !p.gate_on || voice.is_none_or(|v| v >= threshold);
+        if self.gate_voiced {
+            self.gate_hold = p.gate_hold;
+        } else {
+            self.gate_hold = self.gate_hold.saturating_sub(1);
+        }
+        let floor = if p.gate_on { -p.gate_reduction_db } else { 0.0 };
+        let target = if self.gate_voiced || self.gate_hold > 0 {
+            0.0
+        } else {
+            floor
+        };
+        if self.gate_db != target {
+            let coeff = if target > self.gate_db {
+                p.gate_attack
+            } else {
+                p.gate_release
+            };
+            self.gate_db = target + (self.gate_db - target) * coeff;
+            if (self.gate_db - target).abs() < 1e-4 {
+                self.gate_db = target;
+            }
+            self.gate_gain = if self.gate_db == 0.0 {
+                1.0
+            } else {
+                db_gain(self.gate_db)
+            };
+        }
         m.gate_open = m.gate_open.max(if floor < 0.0 {
             (1.0 - self.gate_db / floor).clamp(0.0, 1.0)
         } else {
@@ -616,40 +784,64 @@ impl Dsp {
     /// `frame` for `n` samples per channel, one stage at a time. Every sample
     /// sees the same operations in the same order as `frame`, so the output,
     /// meter and state match it bit for bit. Mono leaves `x[1]` at zero.
+    ///
+    /// Each pass that `frame` guards with `safe` runs here without it and is
+    /// followed by one check of the block's largest magnitude. A block that
+    /// passes is exactly what `safe` would have returned, with nothing
+    /// counted; any other block takes the per-sample `safe` loop. Between
+    /// stages every sample is therefore finite and within 16, as in `frame`.
     fn block(&mut self, p: &Prepared, x: &mut [[f64; BLOCK]; 2], n: usize, m: &mut Meter) {
         let channels = p.channels();
         let mut bypass = [[0.0; BLOCK]; 2];
         for ch in 0..channels {
-            let c = &mut self.channels[ch];
-            for t in 0..n {
-                let raw = x[ch][t];
-                if raw.is_finite() {
-                    m.input_peak = m.input_peak.max(raw.abs());
-                }
-                x[ch][t] = safe(raw, 16.0, m);
-                bypass[ch][t] = x[ch][t];
-                if self.latency != 0 {
-                    bypass[ch][t] = c.bypass_dry[c.bypass_position] as f64;
-                    c.bypass_dry[c.bypass_position] = x[ch][t] as f32;
-                    c.bypass_position += 1;
-                    if c.bypass_position == self.latency {
-                        c.bypass_position = 0;
+            let samples = &mut x[ch][..n];
+            let peak = max_abs_bits(samples);
+            if peak <= 16.0_f64.to_bits() {
+                // All finite and within the limit: the peak is their largest
+                // magnitude and `safe` would change none of them.
+                m.input_peak = m.input_peak.max(f64::from_bits(peak));
+            } else {
+                for sample in samples.iter_mut() {
+                    let raw = *sample;
+                    if raw.is_finite() {
+                        m.input_peak = m.input_peak.max(raw.abs());
                     }
+                    *sample = safe(raw, 16.0, m);
+                }
+            }
+            if self.latency == 0 {
+                bypass[ch][..n].copy_from_slice(samples);
+                continue;
+            }
+            // The delayed original: read each ring slot, then replace it,
+            // one straight run of the ring at a time.
+            let c = &mut self.channels[ch];
+            let mut t = 0;
+            while t < n {
+                let run = (n - t).min(self.latency - c.bypass_position);
+                let ring = &mut c.bypass_dry[c.bypass_position..c.bypass_position + run];
+                for ((dry, held), sample) in bypass[ch][t..t + run]
+                    .iter_mut()
+                    .zip(ring)
+                    .zip(&samples[t..t + run])
+                {
+                    *dry = *held as f64;
+                    *held = *sample as f32;
+                }
+                t += run;
+                c.bypass_position += run;
+                if c.bypass_position == self.latency {
+                    c.bypass_position = 0;
                 }
             }
         }
-        let mut gain = [0.0; BLOCK];
-        let mut wet = [0.0; BLOCK];
-        let mut blend = [0.0; BLOCK];
-        for t in 0..n {
-            self.gain += GAIN_SMOOTH * ((if p.gain_on { p.gain } else { 1.0 }) - self.gain);
-            self.wet += GAIN_SMOOTH * ((if p.noise_on { p.wet } else { 0.0 }) - self.wet);
-            self.processing_blend +=
-                GAIN_SMOOTH * ((if p.bypass { 0.0 } else { 1.0 }) - self.processing_blend);
-            gain[t] = self.gain;
-            wet[t] = self.wet;
-            blend[t] = self.processing_blend;
-        }
+        let gain = Ramp::advance(&mut self.gain, if p.gain_on { p.gain } else { 1.0 }, n);
+        let wet = Ramp::advance(&mut self.wet, if p.noise_on { p.wet } else { 0.0 }, n);
+        let blend = Ramp::advance(
+            &mut self.processing_blend,
+            if p.bypass { 0.0 } else { 1.0 },
+            n,
+        );
         let mut reduction = [0.0; BLOCK];
         for stage in p.active_order[..p.active_count].iter().copied() {
             match stage {
@@ -664,44 +856,58 @@ impl Dsp {
                 }
                 Effect::Suppression => {
                     let mut voice = [None; BLOCK];
+                    let mut wet32 = [0.0; BLOCK];
+                    wet.each(n, |t, wet| wet32[t] = wet as f32);
                     let mut first = true;
                     for (state, samples) in
                         self.channels.iter_mut().zip(x.iter_mut()).take(channels)
                     {
                         if let Some(provider) = state.suppression.as_mut() {
-                            for ((sample, wet), score) in
-                                samples[..n].iter_mut().zip(&wet).zip(&mut voice)
-                            {
-                                *sample = provider
-                                    .process_sample(safe(*sample, 16.0, m) as f32, *wet as f32)
-                                    as f64;
-                                *score = merge_voice(first, *score, provider.voice());
-                            }
+                            suppress(
+                                provider.as_mut(),
+                                &mut samples[..n],
+                                &wet32[..n],
+                                first,
+                                &mut voice[..n],
+                                m,
+                            );
                             first = false;
                         }
                     }
-                    for (t, score) in voice[..n].iter().enumerate() {
-                        let gain = self.gate_step(p, *score, m);
+                    let mut t = 0;
+                    while t < n {
+                        let (gain, run) = self.gate_run(p, &voice[t..n], m);
                         for samples in x.iter_mut().take(channels) {
-                            samples[t] *= gain;
+                            for sample in &mut samples[t..t + run] {
+                                *sample *= gain;
+                            }
                         }
+                        t += run;
                     }
                 }
                 Effect::Eq => {
-                    // The previous bank fades out over the first samples.
                     let fading = self.eq_remaining.min(n);
-                    let mut prior = *x;
-                    if fading != 0 {
-                        self.eq[1 - self.eq_current].process_block(&mut prior, fading, channels, m);
-                    }
-                    self.eq[self.eq_current].process_block(x, n, channels, m);
-                    for t in 0..fading {
-                        let mix = (EQ_FADE_SAMPLES - self.eq_remaining + 1) as f64
-                            / EQ_FADE_SAMPLES as f64;
-                        for ch in 0..channels {
-                            x[ch][t] = prior[ch][t] + mix * (x[ch][t] - prior[ch][t]);
+                    if fading == 0 {
+                        let bank = &mut self.eq[self.eq_current];
+                        bank.process_block(x, n, channels, m);
+                        if bank.is_on() {
+                            // An enabled bank ends by limiting its own
+                            // output to 16.
+                            continue;
                         }
-                        self.eq_remaining -= 1;
+                    } else {
+                        // The previous bank fades out over the first samples.
+                        let mut prior = *x;
+                        self.eq[1 - self.eq_current].process_block(&mut prior, fading, channels, m);
+                        self.eq[self.eq_current].process_block(x, n, channels, m);
+                        for t in 0..fading {
+                            let mix = (EQ_FADE_SAMPLES - self.eq_remaining + 1) as f64
+                                / EQ_FADE_SAMPLES as f64;
+                            for ch in 0..channels {
+                                x[ch][t] = prior[ch][t] + mix * (x[ch][t] - prior[ch][t]);
+                            }
+                            self.eq_remaining -= 1;
+                        }
                     }
                 }
                 Effect::Compressor => {
@@ -729,10 +935,14 @@ impl Dsp {
                     }
                 }
                 Effect::Gain => {
+                    if gain.is_one() {
+                        // Finite samples times exactly 1 are unchanged, and
+                        // the stage before left them within the limit.
+                        continue;
+                    }
                     for samples in x.iter_mut().take(channels) {
-                        for (sample, gain) in samples[..n].iter_mut().zip(&gain) {
-                            *sample *= gain;
-                        }
+                        let samples = &mut samples[..n];
+                        gain.each(n, |t, gain| samples[t] *= gain);
                     }
                 }
                 Effect::Limiter => {
@@ -747,7 +957,19 @@ impl Dsp {
                             self.limiter_gain =
                                 needed.min(1.0 - (1.0 - self.limiter_gain) * p.limiter_release);
                             if self.limiter_gain < 1.0 {
-                                reduction[t] += -20.0 * self.limiter_gain.max(1e-20).log10();
+                                // After its first reduction the gain never
+                                // gets back to exactly 1: it stops just
+                                // below and holds that value. The logarithm,
+                                // which only the meter reads, is taken when
+                                // the gain changes, not for every sample.
+                                if self.limiter_gain.to_bits()
+                                    != self.limiter_reduction_for.to_bits()
+                                {
+                                    self.limiter_reduction_for = self.limiter_gain;
+                                    self.limiter_reduction =
+                                        -20.0 * self.limiter_gain.max(1e-20).log10();
+                                }
+                                reduction[t] += self.limiter_reduction;
                             }
                             for samples in x.iter_mut().take(channels) {
                                 samples[t] *= self.limiter_gain;
@@ -757,20 +979,41 @@ impl Dsp {
                 }
             }
             for samples in x.iter_mut().take(channels) {
-                for sample in &mut samples[..n] {
-                    *sample = safe(*sample, 16.0, m);
-                }
+                clamp(&mut samples[..n], 16.0, m);
             }
         }
+        if p.comp_on || p.limit_on {
+            for value in &reduction[..n] {
+                m.gain_reduction = m.gain_reduction.max(*value);
+            }
+        }
+        let mut peak = 0;
+        for ch in 0..channels {
+            let (mixed, dry) = (&mut x[ch][..n], &bypass[ch][..n]);
+            blend.each(n, |t, blend| {
+                mixed[t] = dry[t] + (mixed[t] - dry[t]) * blend
+            });
+            peak = peak.max(max_abs_bits(mixed));
+        }
+        if peak <= 1.0_f64.to_bits() {
+            // No sample needs `safe`. The peak is order-independent; the sum
+            // of squares keeps `frame`'s order, time outside and channel
+            // inside, because floating-point addition is not associative.
+            m.output_peak = m.output_peak.max(f64::from_bits(peak));
+            let mut sum = m.sum_squares;
+            for t in 0..n {
+                for samples in x.iter().take(channels) {
+                    sum += samples[t] * samples[t];
+                }
+            }
+            m.sum_squares = sum;
+            m.samples += (n * channels) as u64;
+            return;
+        }
         for t in 0..n {
-            m.gain_reduction = m.gain_reduction.max(reduction[t]);
-            for ch in 0..channels {
-                let y = safe(
-                    bypass[ch][t] + (x[ch][t] - bypass[ch][t]) * blend[t],
-                    1.0,
-                    m,
-                );
-                x[ch][t] = y;
+            for samples in x.iter_mut().take(channels) {
+                let y = safe(samples[t], 1.0, m);
+                samples[t] = y;
                 m.output_peak = m.output_peak.max(y.abs());
                 m.sum_squares += y * y;
                 m.samples += 1;
@@ -824,7 +1067,7 @@ impl Dsp {
                             first = false;
                         }
                     }
-                    let gain = self.gate_step(p, voice, m);
+                    let gain = self.gate_step_reference(p, voice, m);
                     for sample in x.iter_mut().take(p.channels()) {
                         *sample *= gain;
                     }
@@ -911,6 +1154,124 @@ impl Dsp {
     }
 }
 
+/// The largest magnitude in `x`, as bits. For finite values the bit order of
+/// `abs` is the numeric order, and every infinity and NaN sorts above them. So
+/// `max_abs_bits(x) <= limit.to_bits()`, for a finite positive `limit`, says
+/// every sample is finite and within `limit`: `safe` would return each one
+/// unchanged and count nothing. The comparison has to stay on the integers;
+/// as floats it would let a NaN through.
+#[inline(always)]
+pub(crate) fn max_abs_bits(x: &[f64]) -> u64 {
+    x.iter().fold(0, |most, sample| {
+        most.max(sample.to_bits() & (u64::MAX >> 1))
+    })
+}
+
+/// `safe` on every sample, bit for bit: one check clears a clean block, and
+/// any other block takes the per-sample loop.
+#[inline(always)]
+pub(crate) fn clamp(samples: &mut [f64], limit: f64, m: &mut Meter) {
+    if max_abs_bits(samples) > limit.to_bits() {
+        for sample in samples {
+            *sample = safe(*sample, limit, m);
+        }
+    }
+}
+
+/// One smoothed gain over a block: a single value once the smoother has
+/// stopped moving, otherwise its value after each sample's step.
+///
+/// The steps stay inline: this lives on the callback's stack for one block,
+/// where nothing may allocate, and a flat ramp never writes them.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum Ramp {
+    Flat(f64),
+    Moving([f64; BLOCK]),
+}
+impl Ramp {
+    /// Steps `value` towards `target` once per sample, `n` times. A value that
+    /// one step leaves bit-identical is a fixed point of the step, so every
+    /// later step returns it too and the state does not change. The test is
+    /// on the bits of the step, not `value == target`: the smoother can stall
+    /// an ulp short of its target, and a negative zero has one more step to
+    /// take.
+    #[inline(always)]
+    pub(crate) fn advance(value: &mut f64, target: f64, n: usize) -> Self {
+        if (*value + GAIN_SMOOTH * (target - *value)).to_bits() == value.to_bits() {
+            return Self::Flat(*value);
+        }
+        let mut steps = [0.0; BLOCK];
+        for step in &mut steps[..n] {
+            *value += GAIN_SMOOTH * (target - *value);
+            *step = *value;
+        }
+        Self::Moving(steps)
+    }
+    /// True when every sample's gain is exactly 1.
+    #[inline(always)]
+    pub(crate) fn is_one(&self) -> bool {
+        matches!(self, Self::Flat(value) if *value == 1.0)
+    }
+    #[cfg(test)]
+    fn at(&self, t: usize) -> f64 {
+        match self {
+            Self::Flat(value) => *value,
+            Self::Moving(steps) => steps[t],
+        }
+    }
+    /// Calls `apply(t, gain)` for each of the first `n` samples, in order.
+    #[inline(always)]
+    pub(crate) fn each(&self, n: usize, mut apply: impl FnMut(usize, f64)) {
+        match self {
+            Self::Flat(value) => (0..n).for_each(|t| apply(t, *value)),
+            Self::Moving(steps) => steps[..n]
+                .iter()
+                .enumerate()
+                .for_each(|(t, value)| apply(t, *value)),
+        }
+    }
+}
+
+/// One channel's block through its suppression provider, in place. Each
+/// sample sees what `frame` does to it: `safe` at 16, the conversion to the
+/// provider's f32, the provider with that sample's `wet`, the conversion
+/// back, and its voice score merged into `voice`, which holds the scores of
+/// the channels before this one (`first` when there are none).
+///
+/// `safe` changes no provider state and the provider reads no meter, so the
+/// whole block is limited first and the provider then takes it in one call.
+#[inline]
+fn suppress(
+    provider: &mut dyn Suppression,
+    samples: &mut [f64],
+    wet: &[f32],
+    first: bool,
+    voice: &mut [Option<f32>],
+    m: &mut Meter,
+) {
+    let n = samples.len();
+    clamp(samples, 16.0, m);
+    let mut narrow = [0.0_f32; BLOCK];
+    let narrow = &mut narrow[..n];
+    for (narrow, sample) in narrow.iter_mut().zip(samples.iter()) {
+        *narrow = *sample as f32;
+    }
+    if first {
+        // Nothing to merge with: the scores are this channel's own.
+        provider.process_block(narrow, wet, voice);
+    } else {
+        let mut scores = [None; BLOCK];
+        let scores = &mut scores[..n];
+        provider.process_block(narrow, wet, scores);
+        for (so_far, score) in voice.iter_mut().zip(scores.iter()) {
+            *so_far = merge_voice(false, *so_far, *score);
+        }
+    }
+    for (sample, narrow) in samples.iter_mut().zip(narrow.iter()) {
+        *sample = f64::from(*narrow);
+    }
+}
+
 /// Combines channel voice scores for one sample: the lower one (a stereo
 /// pair opens only on voice in both), and none if any channel has no score.
 fn merge_voice(first: bool, so_far: Option<f32>, next: Option<f32>) -> Option<f32> {
@@ -922,4 +1283,8 @@ fn merge_voice(first: bool, so_far: Option<f32>, next: Option<f32>) -> Option<f3
 }
 
 #[cfg(test)]
+mod block_tests;
+#[cfg(test)]
 mod identity_tests;
+#[cfg(test)]
+mod provider_block_tests;

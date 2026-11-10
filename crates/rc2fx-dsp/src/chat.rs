@@ -81,6 +81,102 @@ impl Chat {
         let mut voice_meter = Meter::default();
         let mut input_peak = 0.0f64;
         let vp = &cp.voice;
+        // The voice model takes a block at a time. What each sample needs
+        // from before the model (its mono input and the smoothed wet and
+        // blend) is worked out first, in sample order, then the provider
+        // runs once, then the rest of each sample follows as before.
+        let mut mono = [0.0_f32; BLOCK];
+        let mut wet = [0.0_f64; BLOCK];
+        let mut wet32 = [0.0_f32; BLOCK];
+        let mut blends = [0.0_f64; BLOCK];
+        let mut scores = [None; BLOCK];
+        for start in (0..n).step_by(BLOCK) {
+            let count = BLOCK.min(n - start);
+            for t in 0..count {
+                let i = start + t;
+                let sum = (0.5 * f64::from(microphones[0][i]) + 0.5 * f64::from(microphones[1][i]))
+                    as f32;
+                mono[t] = safe(f64::from(sum), 16., &mut voice_meter) as f32;
+                self.voice.wet += GAIN_SMOOTH * (vp.wet - self.voice.wet);
+                wet[t] = self.voice.wet;
+                wet32[t] = self.voice.wet as f32;
+                self.voice.processing_blend +=
+                    GAIN_SMOOTH * ((if vp.bypass { 0. } else { 1. }) - self.voice.processing_blend);
+                blends[t] = self.voice.processing_blend;
+            }
+            self.voice.channels[0]
+                .suppression
+                .as_mut()
+                .ok_or(DspError::MissingSuppression)?
+                .process_block(&mut mono[..count], &wet32[..count], &mut scores[..count]);
+            for t in 0..count {
+                let i = start + t;
+                let enhanced = mono[t];
+                let score = scores[t].filter(|v| v.is_finite());
+                let at = self.position;
+                let dry_voice = [self.voice_delay[0][at], self.voice_delay[1][at]];
+                let dry_mono = 0.5 * f64::from(dry_voice[0]) + 0.5 * f64::from(dry_voice[1]);
+                // A bad provider must not poison the recombined pad/playback signal.
+                let (enhanced, score) = if enhanced.is_finite() {
+                    (f64::from(enhanced), score)
+                } else {
+                    (dry_mono, None)
+                };
+                let gate = self.voice.gate_step(vp, score, &mut voice_meter);
+                let blend = blends[t];
+                let processed_mono = enhanced * gate * blend + dry_mono * (1. - blend);
+                // Preserve the original stereo voice at dry blend/bypass. At fully
+                // wet, microphones are mono; pads/playback retain their stereo image.
+                let side_gain = (1. - wet[t]) * gate * blend + (1. - blend);
+                for ch in 0..2 {
+                    let delayed = self.mixed_delay[ch][at];
+                    let raw = f64::from(mixed[ch][i]);
+                    if raw.is_finite() {
+                        input_peak = input_peak.max(raw.abs());
+                    }
+                    self.mixed_delay[ch][at] = mixed[ch][i];
+                    self.voice_delay[ch][at] = microphones[ch][i];
+                    let voice = processed_mono + (f64::from(dry_voice[ch]) - dry_mono) * side_gain;
+                    mixed[ch][i] = (f64::from(delayed) - f64::from(dry_voice[ch]) + voice) as f32;
+                }
+                self.position = (at + 1) % self.latency_samples();
+            }
+        }
+        let mut meter = self.output.process_in_place(&cp.output, mixed)?;
+        meter.input_peak = input_peak;
+        meter.voice = voice_meter.voice;
+        meter.gate_open = voice_meter.gate_open;
+        Ok(meter)
+    }
+    /// `process` as it was before the voice model took a block at a time:
+    /// the provider's `process_sample` and `voice` once per sample, between
+    /// that sample's other steps. The reference for it in the tests.
+    #[cfg(test)]
+    pub(crate) fn process_reference(
+        &mut self,
+        p: &Prepared,
+        microphones: [&[f32]; 2],
+        mixed: [&mut [f32]; 2],
+    ) -> Result<Meter, DspError> {
+        let cp = p.chat.as_ref().ok_or(DspError::MissingChatStem)?;
+        if self.voice.retired {
+            return Err(DspError::Retired);
+        }
+        if self.voice.signature != cp.voice.signature
+            || self.output.signature != cp.output.signature
+        {
+            return Err(DspError::IncompatibleSnapshot);
+        }
+        let n = mixed[0].len();
+        if mixed[1].len() != n || microphones.iter().any(|v| v.len() != n) {
+            return Err(DspError::BufferShape);
+        }
+        if microphones.into_iter().flatten().any(|v| !v.is_finite()) {
+            return Err(DspError::MissingChatStem);
+        }
+        let mut voice_meter = Meter::default();
+        let mut input_peak = 0.0f64;
+        let vp = &cp.voice;
         for i in 0..n {
             let mono =
                 (0.5 * f64::from(microphones[0][i]) + 0.5 * f64::from(microphones[1][i])) as f32;
@@ -97,7 +193,6 @@ impl Chat {
             let at = self.position;
             let dry_voice = [self.voice_delay[0][at], self.voice_delay[1][at]];
             let dry_mono = 0.5 * f64::from(dry_voice[0]) + 0.5 * f64::from(dry_voice[1]);
-            // A bad provider must not poison the recombined pad/playback signal.
             let (enhanced, score) = if enhanced.is_finite() {
                 (f64::from(enhanced), score)
             } else {
@@ -106,8 +201,6 @@ impl Chat {
             let gate = self.voice.gate_step(vp, score, &mut voice_meter);
             let blend = self.voice.processing_blend;
             let processed_mono = enhanced * gate * blend + dry_mono * (1. - blend);
-            // Preserve the original stereo voice at dry blend/bypass. At fully
-            // wet, microphones are mono; pads/playback retain their stereo image.
             let side_gain = (1. - self.voice.wet) * gate * blend + (1. - blend);
             for ch in 0..2 {
                 let delayed = self.mixed_delay[ch][at];
@@ -127,6 +220,19 @@ impl Chat {
         meter.voice = voice_meter.voice;
         meter.gate_open = voice_meter.gate_open;
         Ok(meter)
+    }
+    /// Everything `process` leaves behind, as bits.
+    #[cfg(test)]
+    pub(crate) fn state_bits(&self) -> Vec<u64> {
+        let mut bits = crate::block_tests::state(&self.voice);
+        bits.extend(crate::block_tests::state(&self.output));
+        bits.push(self.voice.gate_open.to_bits());
+        bits.extend(self.voice.gate_open_for);
+        bits.push(self.position as u64);
+        for line in self.mixed_delay.iter().chain(&self.voice_delay) {
+            bits.extend(line.iter().map(|v| u64::from(v.to_bits())));
+        }
+        bits
     }
 }
 

@@ -5,12 +5,17 @@
 //! state and peak live in its own lane. The arithmetic is the same operation
 //! sequence as the scalar `step` — `vmul`/`vadd`/`vsub` only, never `vfma`, and
 //! no reassociation — so results are bit-identical to the per-channel path.
-//! `vabs`/`vclt`/`vbsl` flush a state below `1e-25` to `+0`; `vmaxnm` matches
-//! `f64::max` (maxNum) for the peak.
+//! `vcalt`/`vbsl` flush a state below `1e-25` to `+0`: `vcalt` compares the
+//! magnitudes in one instruction (FACGT), which is `abs(next) < 1e-25` exactly,
+//! false for a NaN included. `vmaxnm` matches `f64::max` (maxNum) for the peak.
+//!
+//! The samples arrive interleaved, both channels of a sample side by side, so
+//! each sample is one vector load and one vector store.
 //!
 //! NEON is part of the AArch64 baseline, so this module needs no
 //! `target_feature` and no runtime detection. Every index used here is bounded
-//! by the caller's eligibility checks (`n <= BLOCK`, `order.len() <= MAX_BANDS`).
+//! by the caller's eligibility checks (`order.len() <= MAX_BANDS`) and by the
+//! length of the frame slice.
 use super::*;
 use core::arch::aarch64::*;
 
@@ -62,17 +67,21 @@ fn lane1(v: float64x2_t) -> f64 {
     unsafe { vgetq_lane_f64::<1>(v) }
 }
 
+/// Both channels of one sample, left first.
+pub(super) type Frame = [f64; 2];
+
 /// The two channels' samples at `t`.
 #[inline(always)]
-fn input(x: &[[f64; BLOCK]; 2], t: usize) -> float64x2_t {
-    pack(x[0][t], x[1][t])
+fn input(x: &[Frame], t: usize) -> float64x2_t {
+    // SAFETY: `x[t]` is two adjacent `f64`, and the index is checked.
+    unsafe { vld1q_f64(x[t].as_ptr()) }
 }
 
-/// Writes both lanes back to `x[0][t]` and `x[1][t]`.
+/// Writes both lanes back to sample `t`.
 #[inline(always)]
-fn store(x: &mut [[f64; BLOCK]; 2], t: usize, v: float64x2_t) {
-    x[0][t] = lane0(v);
-    x[1][t] = lane1(v);
+fn store(x: &mut [Frame], t: usize, v: float64x2_t) {
+    // SAFETY: `x[t]` is two adjacent `f64`, and the index is checked.
+    unsafe { vst1q_f64(x[t].as_mut_ptr(), v) }
 }
 
 /// The scalar `step` on both lanes at once.
@@ -92,26 +101,21 @@ fn step(
         let next2 = vsubq_f64(vmulq_f64(c.b2, input), vmulq_f64(c.a2, raw));
         let zero = vdupq_n_f64(0.0);
         let tiny = vdupq_n_f64(TINY);
-        *z1 = vbslq_f64(vcltq_f64(vabsq_f64(next1), tiny), zero, next1);
-        *z2 = vbslq_f64(vcltq_f64(vabsq_f64(next2), tiny), zero, next2);
+        // `vcaltq(a, b)` is `abs(a) < abs(b)`; `TINY` is positive.
+        *z1 = vbslq_f64(vcaltq_f64(next1, tiny), zero, next1);
+        *z2 = vbslq_f64(vcaltq_f64(next2, tiny), zero, next2);
         *peak = vmaxnmq_f64(*peak, vabsq_f64(raw));
         raw
     }
 }
 
 /// One band on both channels, samples written back in place (the odd tail).
-fn tail(
-    filters: &mut [[Filter; MAX_BANDS]; 2],
-    index: usize,
-    x: &mut [[f64; BLOCK]; 2],
-    n: usize,
-    limit: f64,
-) -> bool {
+fn tail(filters: &mut [[Filter; MAX_BANDS]; 2], index: usize, x: &mut [Frame], limit: f64) -> bool {
     let c = Shared::new(filters[0][index].c);
     let mut z1 = pack(filters[0][index].z1, filters[1][index].z1);
     let mut z2 = pack(filters[0][index].z2, filters[1][index].z2);
     let mut peak = pack(0.0, 0.0);
-    for t in 0..n {
+    for t in 0..x.len() {
         let out = step(&c, &mut z1, &mut z2, input(x, t), &mut peak);
         store(x, t, out);
     }
@@ -132,10 +136,10 @@ fn pair(
     filters: &mut [[Filter; MAX_BANDS]; 2],
     first: usize,
     second: usize,
-    x: &mut [[f64; BLOCK]; 2],
-    n: usize,
+    x: &mut [Frame],
     limit: f64,
 ) -> bool {
+    let n = x.len();
     let c0 = Shared::new(filters[0][first].c);
     let c1 = Shared::new(filters[0][second].c);
     let mut z0 = pack(filters[0][first].z1, filters[1][first].z1);
@@ -165,30 +169,179 @@ fn pair(
         && clean(lane1(z1), lane1(w1), lane1(p1), limit)
 }
 
-/// The chain over `order`, stopping at the first unclean band like the scalar
-/// path; the caller restores samples and state when this returns false.
+/// The chain over `order` on the interleaved samples `x`, stopping at the first
+/// unclean band like the scalar path; the caller restores the state when this
+/// returns false.
 ///
 /// # Safety
 /// NEON intrinsics with baseline availability; `order` must be a subset of band
-/// indices below `MAX_BANDS`, and `n <= BLOCK`. Both are guaranteed by
+/// indices below `MAX_BANDS`, and `x` must not be empty. Both are guaranteed by
 /// `process`'s eligibility checks.
 pub(super) unsafe fn chain(
     filters: &mut [[Filter; MAX_BANDS]; 2],
     order: &[usize],
-    x: &mut [[f64; BLOCK]; 2],
-    n: usize,
+    x: &mut [Frame],
     limit: f64,
 ) -> bool {
     let mut valid = true;
     for k in (0..order.len()).step_by(2) {
         valid = if k + 1 == order.len() {
-            tail(filters, order[k], x, n, limit)
+            tail(filters, order[k], x, limit)
         } else {
-            pair(filters, order[k], order[k + 1], x, n, limit)
+            pair(filters, order[k], order[k + 1], x, limit)
         };
         if !valid {
             break;
         }
     }
     valid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Coefficients that hand the old second state to the first state and the
+    /// input to the second state, so a test chooses both values the flush sees.
+    const ROUTE: Coefficients = Coefficients {
+        b0: 0.0,
+        b1: 0.0,
+        b2: 1.0,
+        a1: 0.0,
+        a2: 0.0,
+    };
+
+    fn values() -> Vec<f64> {
+        let below = f64::from_bits(TINY.to_bits() - 1);
+        let above = f64::from_bits(TINY.to_bits() + 1);
+        vec![
+            TINY,
+            below,
+            above,
+            -TINY,
+            -below,
+            -above,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            0.0,
+            -0.0,
+            1e-26,
+            -1e-30,
+            0.5,
+            -3.0,
+            1e300,
+            f64::NAN,
+            -f64::NAN,
+            f64::from_bits(0x7ff0_0000_0000_0001),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ]
+    }
+
+    /// Equal bits, or both NaN. When two different NaNs meet in one operation
+    /// the result carries the payload of whichever operand the instruction
+    /// was given first, and a compiler may order the operands of an addition
+    /// or a multiplication either way. No caller reads a NaN's payload: any
+    /// NaN leaves the state NaN, and `clean` then refuses the whole block.
+    fn same(actual: f64, expected: f64) -> bool {
+        actual.to_bits() == expected.to_bits() || (actual.is_nan() && expected.is_nan())
+    }
+
+    /// One NEON step with a different value in each lane, against the scalar
+    /// `step` run once per lane.
+    fn compare(c: Coefficients, first: [f64; 2], second: [f64; 2], sample: [f64; 2]) {
+        let mut z1 = pack(first[0], first[1]);
+        let mut z2 = pack(second[0], second[1]);
+        let mut peak = pack(0.25, 0.25);
+        let raw = step(
+            &Shared::new(c),
+            &mut z1,
+            &mut z2,
+            pack(sample[0], sample[1]),
+            &mut peak,
+        );
+        for (lane, get) in [lane0 as fn(float64x2_t) -> f64, lane1].iter().enumerate() {
+            let mut z = [first[lane], second[lane]];
+            let mut expected_peak = 0.25;
+            let expected = crate::filter::step(&c, &mut z, sample[lane], &mut expected_peak);
+            let context = format!(
+                "lane {lane}: z {:e}/{:e} input {:e}",
+                first[lane], second[lane], sample[lane]
+            );
+            assert!(same(get(raw), expected), "raw, {context}");
+            assert!(same(get(z1), z[0]), "z1, {context}");
+            assert!(same(get(z2), z[1]), "z2, {context}");
+            assert!(same(get(peak), expected_peak), "peak, {context}");
+            // What the caller decides from them is the same too.
+            assert_eq!(
+                clean(get(z1), get(z2), get(peak), 16.0),
+                clean(z[0], z[1], expected_peak, 16.0),
+                "clean, {context}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_flush_threshold_is_the_scalar_one_in_each_lane() {
+        let values = values();
+        // Every pair, so each special value also sits beside an ordinary one
+        // in the other lane, in either lane.
+        for &left in &values {
+            for &right in &values {
+                // The value reaches the first state through the second...
+                compare(ROUTE, [0.0, 0.0], [left, right], [0.0, 0.0]);
+                // ...and the second state as the input.
+                compare(ROUTE, [0.0, 0.0], [0.0, 0.0], [left, right]);
+                compare(ROUTE, [0.0, 0.0], [left, right], [right, left]);
+            }
+        }
+        // The comparison is strict: exactly 1e-25 is kept, the next value
+        // below it is flushed to positive zero, whatever its sign.
+        let below = f64::from_bits(TINY.to_bits() - 1);
+        let mut z1 = pack(0.0, 0.0);
+        let mut z2 = pack(TINY, -below);
+        let mut peak = pack(0.0, 0.0);
+        step(
+            &Shared::new(ROUTE),
+            &mut z1,
+            &mut z2,
+            pack(-TINY, below),
+            &mut peak,
+        );
+        assert_eq!(lane0(z1).to_bits(), TINY.to_bits());
+        assert_eq!(lane1(z1).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(lane0(z2).to_bits(), (-TINY).to_bits());
+        assert_eq!(lane1(z2).to_bits(), 0.0_f64.to_bits());
+    }
+
+    #[test]
+    fn a_step_matches_the_scalar_one_for_ordinary_and_exceptional_values() {
+        let c = Coefficients {
+            b0: 0.7,
+            b1: -0.2,
+            b2: 0.1,
+            a1: -0.3,
+            a2: 0.15,
+        };
+        let values = values();
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut pick = |values: &[f64]| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            match seed % 3 {
+                0 => values[(seed >> 8) as usize % values.len()],
+                1 => ((seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 4e-25,
+                _ => ((seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 4.0,
+            }
+        };
+        for _ in 0..20_000 {
+            let first = [pick(&values), pick(&values)];
+            let second = [pick(&values), pick(&values)];
+            let sample = [pick(&values), pick(&values)];
+            compare(c, first, second, sample);
+        }
+    }
 }
