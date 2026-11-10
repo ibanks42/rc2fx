@@ -8,6 +8,8 @@
 //! variants (narrower GRUs, fewer layers, fewer
 //! deep-filter bins, a shorter hop) load unchanged.
 use crate::Error;
+use crate::convp::Convp;
+use crate::glue::{add_transposed, conv3x3, depthwise_t3, depthwise3, shift3_add, transpose};
 use crate::kernels::{QWeights, matvec_q8, matvec_q8_pair};
 use crate::kernels::{
     Weights, grouped, grouped_pair, pack_pointwise, pointwise, pointwise_pair, sigmoid_slice,
@@ -462,80 +464,6 @@ fn relu(x: &mut [f32]) {
     x.iter_mut().for_each(|v| *v = v.max(0.));
 }
 
-/// Depthwise convolution along frequency with a 3-tap kernel, padding 1.
-/// x [c][f] -> y [c][f / stride].
-fn depthwise3(w: &[f32], x: &[f32], c: usize, f: usize, stride: usize, y: &mut [f32]) {
-    let fo = f / stride;
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Param, w.as_ptr(), c * 3 * 4);
-        touch(Class::Act, x.as_ptr(), c * f * 4);
-        crate::traffic::store(Class::Act, y.as_ptr(), c * fo * 4);
-    }
-    for ch in 0..c {
-        let (k0, k1, k2) = (w[ch * 3], w[ch * 3 + 1], w[ch * 3 + 2]);
-        let xr = &x[ch * f..(ch + 1) * f];
-        let yr = &mut y[ch * fo..(ch + 1) * fo];
-        if stride == 1 {
-            shift3(k0, k1, k2, xr, yr);
-        } else {
-            // y[o] = k0 x[2o-1] + k1 x[2o] + k2 x[2o+1]
-            yr[0] = k1 * xr[0] + k2 * xr[1];
-            for o in 1..fo {
-                yr[o] = k0 * xr[2 * o - 1] + k1 * xr[2 * o] + k2 * xr[2 * o + 1];
-            }
-        }
-    }
-}
-
-/// y[b] = k0 x[b-1] + k1 x[b] + k2 x[b+1] with zero padding (y overwritten).
-fn shift3(k0: f32, k1: f32, k2: f32, x: &[f32], y: &mut [f32]) {
-    y[..x.len()].fill(0.);
-    shift3_add(k0, k1, k2, x, y);
-}
-
-/// y[b] += k0 x[b-1] + k1 x[b] + k2 x[b+1] with zero padding (x at least
-/// two bins).
-fn shift3_add(k0: f32, k1: f32, k2: f32, x: &[f32], y: &mut [f32]) {
-    let n = x.len();
-    let y = &mut y[..n];
-    y[0] += k1 * x[0] + k2 * x[1];
-    // One fused pass over the interior, three unit-stride reads per bin.
-    for (((o, &a), &b), &c) in y[1..n - 1]
-        .iter_mut()
-        .zip(&x[..n - 2])
-        .zip(&x[1..n - 1])
-        .zip(&x[2..])
-    {
-        *o += k0 * a + k1 * b + k2 * c;
-    }
-    y[n - 1] += k0 * x[n - 2] + k1 * x[n - 1];
-}
-
-/// Depthwise transposed convolution along frequency: kernel 3, stride 2,
-/// padding 1, output padding 1. x [c][f] -> y [c][2f]:
-/// y[2i] = k1 x[i], y[2i+1] = k2 x[i] + k0 x[i+1].
-fn depthwise_t3(w: &[f32], x: &[f32], c: usize, f: usize, y: &mut [f32]) {
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Param, w.as_ptr(), c * 3 * 4);
-        touch(Class::Act, x.as_ptr(), c * f * 4);
-        crate::traffic::store(Class::Act, y.as_ptr(), c * 2 * f * 4);
-    }
-    for ch in 0..c {
-        let (k0, k1, k2) = (w[ch * 3], w[ch * 3 + 1], w[ch * 3 + 2]);
-        let xr = &x[ch * f..(ch + 1) * f];
-        let yr = &mut y[ch * 2 * f..(ch + 1) * 2 * f];
-        for i in 0..f {
-            let next = if i + 1 < f { xr[i + 1] } else { 0. };
-            yr[2 * i] = k1 * xr[i];
-            yr[2 * i + 1] = k2 * xr[i] + k0 * next;
-        }
-    }
-}
-
 /// Separable conv block: depthwise 1x3 (stride along frequency), pointwise,
 /// batch norm, ReLU. `transposed` swaps the depthwise step for a stride-2
 /// transposed one.
@@ -667,21 +595,11 @@ pub(crate) struct Dfn {
     df_gru: SqueezedGru,
     df_skip: Linear,
     df_out: Linear,
-    // df_convp's temporal conv as one pointwise conv per group over the
-    // group's last kt frames of c0: `convp_w[g]` is [convp_op][kt * ch/2]
-    // packed for `pointwise`, the outputs padded from out/2 to a multiple
-    // of four with zero rows.
-    convp_w: Vec<Weights>,
+    /// df_convp's temporal conv over the last frames of c0.
+    convp: Convp,
     convp_pw: Vec<f32>,
     convp_norm: Norm,
     convp_out: usize,
-    convp_op: usize,
-    convp_kt: usize,
-    // Per group, 2 kt slots of [ch/2][nb_df]; frame n goes to slots n % kt
-    // and n % kt + kt, so the last kt frames are always contiguous, oldest
-    // first, from slot n % kt + 1.
-    convp_hist: Vec<Vec<f32>>,
-    convp_pos: usize,
     // Activations, [STEPS][..]: what one layer hands the next.
     e0: Vec<f32>,
     e1: Vec<f32>,
@@ -793,31 +711,10 @@ impl Dfn {
             df_gru,
             df_skip,
             df_out,
-            convp_w: {
-                let (gin, half) = (ch / 2, convp_out / 2);
-                let op = half.next_multiple_of(4);
-                (0..2)
-                    .map(|g| {
-                        let mut w = vec![0f32; op * convp_kt * gin];
-                        for o in 0..half {
-                            for i in 0..gin {
-                                for t in 0..convp_kt {
-                                    w[o * convp_kt * gin + t * gin + i] =
-                                        convp_w[((g * half + o) * gin + i) * convp_kt + t];
-                                }
-                            }
-                        }
-                        Weights::rows(&pack_pointwise(&w, op, convp_kt * gin), 4)
-                    })
-                    .collect()
-            },
+            convp: Convp::new(convp_w, convp_out / 2, ch / 2, convp_kt, nb_df),
             convp_pw: t.vector("df_dec.df_convp.2.weight", convp_out * convp_out)?,
             convp_norm: Norm::load(t, "df_dec.df_convp.3", convp_out)?,
             convp_out,
-            convp_op: (convp_out / 2).next_multiple_of(4),
-            convp_kt,
-            convp_hist: vec![vec![0.; 2 * convp_kt * (ch / 2) * nb_df]; 2],
-            convp_pos: 0,
             pause: None,
             e0: vec![0.; STEPS * ch * nb_erb],
             e1: vec![0.; STEPS * ch * nb_erb / 2],
@@ -836,6 +733,15 @@ impl Dfn {
             tmp2: vec![0.; STEPS * big],
             xbuf: vec![0.; emb_len],
         })
+    }
+
+    /// Raises df_convp's batch-norm shift so its ReLU passes every value.
+    /// With the embedded weights the pathway's output is almost always
+    /// clipped to zero; opened, whatever its convolution computes reaches
+    /// the coefficients and the output samples.
+    #[cfg(test)]
+    pub(crate) fn open_convp(&mut self) {
+        self.convp_norm.shift.iter_mut().for_each(|s| *s += 4.);
     }
 
     pub(crate) fn set_pause(&mut self, pause: Option<crate::LayerPause>) {
@@ -881,8 +787,7 @@ impl Dfn {
         self.df_gru.reset();
         self.erb_hist.fill(0.);
         self.spec_hist.fill(0.);
-        self.convp_hist.iter_mut().for_each(|h| h.fill(0.));
-        self.convp_pos = 0;
+        self.convp.reset();
     }
 
     /// Encoder for one to `STEPS` frames of features, each `[steps][..]`,
@@ -1121,83 +1026,37 @@ impl Dfn {
         profile::mark(10);
         pause_for(self.pause);
         // df_out: grouped linear + tanh -> [nb_df][out]
-        let (out, kt, gin, op) = (self.convp_out, self.convp_kt, ch / 2, self.convp_op);
+        let out = self.convp_out;
         self.df_out.steps(
             &self.df_g[..steps * hidden],
             &mut self.coefs[..steps * nb_df * out],
         );
         tanh_slice(&mut self.coefs[..steps * nb_df * out]);
         profile::mark(11);
-        // df_convp over the c0 history: ch -> out in two groups, kt x 1,
-        // then pointwise, BN, ReLU, added channels-last. Each group's conv
-        // is a pointwise conv over its kt * ch/2 history rows, read once.
-        // Each step's c0 joins the history just before its own conv.
-        let (half, slot) = (out / 2, gin * nb_df);
+        // df_convp over the c0 history: ch -> out in two groups, kt x 1
+        // (`Convp`), then pointwise, BN, ReLU, added channels-last. Each
+        // step's c0 joins the history just before its own conv.
         for (c0, coefs) in self
             .c0
             .chunks_exact(ch * nb_df)
             .zip(self.coefs.chunks_exact_mut(nb_df * out))
             .take(steps)
         {
-            let pos = self.convp_pos;
-            // The history is the convs' input (counted there as activations
-            // too); the 1x1 mix reads each of its weights over every bin.
+            self.convp.step(c0);
+            // The 1x1 mix reads each of its weights over every bin.
             #[cfg(test)]
             {
                 use crate::traffic::*;
-                // Each step writes its c0 slot twice (the duplicate keeps
-                // the last kt slots contiguous).
-                for hist in &self.convp_hist {
-                    crate::traffic::store(Class::State, hist[pos * slot..].as_ptr(), slot * 4);
-                    crate::traffic::store(
-                        Class::State,
-                        hist[(pos + kt) * slot..].as_ptr(),
-                        slot * 4,
-                    );
-                }
                 slice(Class::Param, &self.convp_pw);
                 touch_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, out);
                 crate::traffic::store_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, 1 + out);
-                touch_n(Class::Act, self.tmp.as_ptr(), 2 * op * nb_df * 4, out);
                 touch(Class::Act, coefs.as_ptr(), nb_df * out * 4);
                 crate::traffic::store(Class::Act, coefs.as_ptr(), nb_df * out * 4);
             }
-            for (g, hist) in self.convp_hist.iter_mut().enumerate() {
-                let src = &c0[g * slot..(g + 1) * slot];
-                hist[pos * slot..(pos + 1) * slot].copy_from_slice(src);
-                hist[(pos + kt) * slot..(pos + kt + 1) * slot].copy_from_slice(src);
-            }
-            self.convp_pos = (pos + 1) % kt;
-            let y = &mut self.tmp[..2 * op * nb_df];
-            let start = (self.convp_pos + 1) * slot;
-            for (g, w) in self.convp_w.iter().enumerate() {
-                let x = &self.convp_hist[g][start..start + kt * slot];
-                pointwise(
-                    w,
-                    op,
-                    kt * gin,
-                    x,
-                    nb_df,
-                    &mut y[g * op * nb_df..(g + 1) * op * nb_df],
-                );
-            }
             let z = &mut self.tmp2[..out * nb_df];
-            z.fill(0.);
-            for o in 0..out {
-                for i in 0..out {
-                    let w = self.convp_pw[o * out + i];
-                    let row = (i / half) * op + i % half;
-                    for f in 0..nb_df {
-                        z[o * nb_df + f] += w * y[row * nb_df + f];
-                    }
-                }
-            }
+            self.convp.mix(&self.convp_pw, z);
             self.convp_norm.apply(z, nb_df, Act::Relu);
-            for f in 0..nb_df {
-                for o in 0..out {
-                    coefs[f * out + o] += z[o * nb_df + f];
-                }
-            }
+            add_transposed(z, out, nb_df, coefs);
         }
         profile::mark(12);
     }
@@ -1220,49 +1079,6 @@ fn pause_for(pause: Option<crate::LayerPause>) {
             while std::time::Instant::now() < end {
                 std::hint::spin_loop();
             }
-        }
-    }
-}
-
-/// 3x3 conv from `groups` input channels (each feeding ch/groups outputs) over
-/// 3 frames of history: `x` is [3 frames][groups][f], oldest frame first.
-/// y is [ch][f].
-fn conv3x3(w: &[f32], ch: usize, x: &[f32], groups: usize, f: usize, y: &mut [f32]) {
-    let per = ch / groups;
-    // Each output reads its group's three frames and writes itself three times.
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Param, w.as_ptr(), ch * 9 * 4);
-        touch_n(Class::Act, x.as_ptr(), 3 * groups * f * 4, per);
-        touch_n(Class::Act, y.as_ptr(), ch * f * 4, 2);
-        crate::traffic::store_n(Class::Act, y.as_ptr(), ch * f * 4, 3);
-    }
-    for (o, yr) in y[..ch * f].chunks_exact_mut(f).enumerate() {
-        let g = o / per;
-        let k = &w[o * 9..o * 9 + 9];
-        // Oldest frame first, straight into the output: the first frame
-        // overwrites, the other two accumulate.
-        let xr = &x[g * f..(g + 1) * f];
-        shift3(k[0], k[1], k[2], xr, yr);
-        for kt in 1..3 {
-            let xr = &x[(kt * groups + g) * f..(kt * groups + g + 1) * f];
-            shift3_add(k[kt * 3], k[kt * 3 + 1], k[kt * 3 + 2], xr, yr);
-        }
-    }
-}
-
-/// [rows][cols] -> [cols][rows]
-fn transpose(x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Act, x.as_ptr(), rows * cols * 4);
-        crate::traffic::store(Class::Act, y.as_ptr(), rows * cols * 4);
-    }
-    for r in 0..rows {
-        for c in 0..cols {
-            y[c * rows + r] = x[r * cols + c];
         }
     }
 }

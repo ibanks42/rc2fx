@@ -230,15 +230,19 @@ mod tests {
         .unwrap();
     }
     /// Raising nice needs no privilege, so this runs anywhere; it leaves the
-    /// thread as SCHED_OTHER at the requested value.
+    /// thread as SCHED_OTHER at the requested value. The value asked for is
+    /// 5, or the test's own nice value when that is already higher (a test
+    /// run under `nice -n 10` may not lower it).
     #[test]
     fn nice_requests_ordinary_scheduling_at_that_value() {
         std::thread::spawn(|| unsafe {
+            let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+            let nice = libc::getpriority(libc::PRIO_PROCESS, tid).clamp(5, 19);
             assert_eq!(
                 apply(WorkerOptions {
                     cpu_mask: None,
                     realtime_priority: None,
-                    nice: Some(5),
+                    nice: Some(nice as i8),
                 }),
                 Ok(())
             );
@@ -249,13 +253,7 @@ mod tests {
                 0
             );
             assert_eq!(policy, libc::SCHED_OTHER);
-            assert_eq!(
-                libc::getpriority(
-                    libc::PRIO_PROCESS,
-                    libc::syscall(libc::SYS_gettid) as libc::id_t
-                ),
-                5
-            );
+            assert_eq!(libc::getpriority(libc::PRIO_PROCESS, tid), nice);
         })
         .join()
         .unwrap();

@@ -89,6 +89,16 @@ fn matches_deepfilternet_reference() {
     assert_matches_reference(&run(&mut DeepFilter::new().unwrap(), &signal()), &reference);
 }
 
+/// FNV-1a over the samples' bits.
+fn digest(out: &[f32]) -> u64 {
+    out.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, v| {
+        v.to_bits()
+            .to_le_bytes()
+            .iter()
+            .fold(h, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+    })
+}
+
 /// Prints a digest of the embedded model's output bits on `signal()`, so two
 /// builds can be compared exactly:
 /// `cargo test output_digest -- --ignored --nocapture`.
@@ -96,13 +106,306 @@ fn matches_deepfilternet_reference() {
 #[ignore]
 fn output_digest() {
     let out = run(&mut DeepFilter::new().unwrap(), &signal());
-    let digest = out.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, v| {
-        v.to_bits()
-            .to_le_bytes()
-            .iter()
-            .fold(h, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+    println!("output digest {:016x} samples {}", digest(&out), out.len());
+}
+
+/// Two seconds of loud speech-like bursts under strong broadband noise, with
+/// the stretches a kernel could mishandle: digital silence, full-scale
+/// clipping, values far below one LSB, and noise alone. Finite throughout.
+fn noisy_signal() -> Vec<f32> {
+    let mut seed = 0x1234_5678u32;
+    let mut noise = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1 << 23) as f32 - 1.
+    };
+    let rate = dsp::SAMPLE_RATE;
+    (0..2 * rate)
+        .map(|i| {
+            let t = i as f32 / rate as f32;
+            let envelope = (t * 2.3 * std::f32::consts::TAU).sin().max(0.).powi(2);
+            let pitch = 110. + 60. * (t * 1.7).sin();
+            let voice: f32 = (1..16)
+                .map(|h| (h as f32 * pitch * t * std::f32::consts::TAU).sin() / h as f32)
+                .sum::<f32>()
+                * envelope
+                * 0.3;
+            let n = noise();
+            match i * 20 / rate {
+                // Digital silence, then values far below one LSB.
+                7 => 0.,
+                8 => 1e-30 * n,
+                // Hard clipping at full scale.
+                13 | 14 => (4. * (voice + 0.2 * n)).clamp(-1., 1.),
+                // Noise alone.
+                21..=23 => 0.25 * n,
+                _ => voice + 0.12 * n,
+            }
+        })
+        .collect()
+}
+
+/// `input` through a model in the irregular one- and two-hop call pattern of
+/// `stream`, with a reset part way. `open` opens df_convp's pathway
+/// (`Dfn::open_convp`).
+fn mixed_stream(weights: &[u8], input: &[f32], open: bool) -> Vec<f32> {
+    let mut filter = DeepFilter::from_weights(weights).unwrap();
+    if open {
+        filter.net.open_convp();
+    }
+    let (out, _) = stream(&mut filter, input, |f, i| {
+        if i == 97 {
+            f.reset();
+        }
     });
-    println!("output digest {digest:016x} samples {}", out.len());
+    out
+}
+
+/// Every embedded model on both fixed inputs, in one-hop calls and in
+/// `mixed_stream`'s calls.
+fn golden_runs(open: bool) -> Vec<(String, Vec<f32>)> {
+    let mut runs = Vec::new();
+    for (m, weights) in MODELS.iter().enumerate() {
+        for (name, input) in [("signal", signal()), ("noisy", noisy_signal())] {
+            let mut filter = DeepFilter::from_weights(weights).unwrap();
+            if open {
+                filter.net.open_convp();
+            }
+            runs.push((format!("la{m} {name} one hop"), run(&mut filter, &input)));
+            let out = mixed_stream(weights, &input, open);
+            runs.push((format!("la{m} {name} mixed calls"), out));
+        }
+    }
+    runs
+}
+
+/// `golden_runs(false)` digests of the build before the glue loops were
+/// vectorised and df_convp kept running sums (2026-11-09), in `golden_runs`
+/// order: on x86-64 (Fedora 44's libm), and on AArch64 under
+/// `qemu-aarch64 -cpu cortex-a53` with the mixer's glibc 2.35. The model
+/// calls libm's `expf`, `log10f` and `sin`, so another libm can legitimately
+/// give other digests; `kernels_match_their_references_through_the_whole_model`
+/// is the check that does not depend on it.
+const GOLDEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
+    [
+        0x949f_87b8_fdec_13f0,
+        0x9f37_d36b_7dc4_65b0,
+        0x2595_b222_fda6_1db0,
+        0xa71a_2985_32e4_8c31,
+        0x529b_2ff7_bf7c_b518,
+        0x1c38_5810_2f2a_fcd1,
+        0x6e77_cc8a_1745_c22e,
+        0x675e_f75b_f6c4_27db,
+    ]
+} else {
+    [
+        0xe541_106c_f22b_bb37,
+        0xf0e7_68ae_b925_24ca,
+        0xc2e7_96ff_b3c6_4783,
+        0x7c4e_9c0c_e716_6580,
+        0x1041_8347_4445_ca21,
+        0x8ab3_a4b3_7b32_b342,
+        0xb954_8cbc_6c7b_4e33,
+        0x15c6_1bfa_ed13_f1ce,
+    ]
+};
+
+/// `golden_runs(true)` digests of the same build (commit 938bdae with
+/// `Dfn::open_convp` added and nothing else changed), on the same two
+/// platforms. With the pathway closed df_convp's convolution reaches a
+/// handful of samples; opened, it reaches all of them, so these digests hold
+/// its arithmetic the way `GOLDEN` holds the rest of the model's.
+const GOLDEN_OPEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
+    [
+        0x4e74_3374_1cb6_94ac,
+        0x424b_393b_0bb3_bac4,
+        0x1091_86b1_89b6_e852,
+        0x21ec_b2d8_d73b_3855,
+        0x8f68_aec4_63b1_cde5,
+        0x54fa_84d3_aa36_b6c5,
+        0x6459_66d6_2f63_020d,
+        0x1b6d_1108_f252_8756,
+    ]
+} else {
+    [
+        0xf6b8_c871_3a9d_ec33,
+        0x6f03_65c4_8aca_4d67,
+        0xba0a_d249_eb51_af5e,
+        0xe1b3_539c_43f3_5f4e,
+        0x6877_1cd6_2d39_8fc2,
+        0x6e85_80cd_ba92_b652,
+        0xed91_c049_a726_98d1,
+        0xda4a_391d_ed5d_40f3,
+    ]
+};
+
+/// Prints one digest per `golden_runs` stream, pathway closed and open, and
+/// compares it with the digest recorded before the kernels changed (`GOLDEN`,
+/// `GOLDEN_OPEN`): the whole model's output, every sample, bit for bit
+/// across builds. Run it on the host and under qemu-aarch64:
+/// `cargo test -p rc2fx-dfn --release golden_digests -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn golden_digests() {
+    let mut same = true;
+    let closed = golden_runs(false).into_iter().zip(GOLDEN);
+    let open = golden_runs(true).into_iter().zip(GOLDEN_OPEN);
+    for (pathway, ((name, out), want)) in closed
+        .map(|run| ("closed", run))
+        .chain(open.map(|run| ("open", run)))
+    {
+        assert!(out.iter().all(|x| x.is_finite()), "{name}");
+        let got = digest(&out);
+        println!(
+            "golden {pathway} {name}: {got:016x} samples {} {}",
+            out.len(),
+            if got == want { "ok" } else { "CHANGED" }
+        );
+        same &= got == want;
+    }
+    assert!(
+        same,
+        "output differs from the recorded build (or libm does)"
+    );
+}
+
+/// Runs `f` with `reference` on: every kernel that has a faster form runs
+/// its reference form instead.
+fn with_reference<T>(f: impl FnOnce() -> T) -> T {
+    struct Off;
+    impl Drop for Off {
+        fn drop(&mut self) {
+            reference::set(false);
+        }
+    }
+    let _off = Off;
+    reference::set(true);
+    f()
+}
+
+/// The whole model with the current kernels against the same model with
+/// the reference kernels (the scalar glue loops, df_convp over its full
+/// history), every output sample bit for bit: both embedded models on the
+/// noisy input's first 1.25 s (speech in noise, silence, values below one
+/// LSB, clipping, noise alone), in one- and two-hop calls with a reset part
+/// way. On AArch64 this compares the NEON glue loops with the scalar ones;
+/// everywhere it compares df_convp's running sums with the full convolution.
+#[test]
+fn kernels_match_their_references_through_the_whole_model() {
+    let input = &noisy_signal()[..dsp::SAMPLE_RATE * 5 / 4];
+    for weights in MODELS {
+        let new = mixed_stream(weights, input, false);
+        let old = with_reference(|| mixed_stream(weights, input, false));
+        assert!(new.iter().any(|&x| x != 0.));
+        assert_eq!(bits(&new), bits(&old));
+    }
+}
+
+/// The same with df_convp's pathway opened, so that its convolution, which
+/// the embedded weights almost always clip to zero, reaches every output
+/// sample.
+#[test]
+fn df_convp_matches_its_reference_through_the_whole_model() {
+    let input = &noisy_signal()[..dsp::SAMPLE_RATE * 3 / 4];
+    for weights in MODELS {
+        let closed = mixed_stream(weights, input, false);
+        let new = mixed_stream(weights, input, true);
+        let old = with_reference(|| mixed_stream(weights, input, true));
+        assert!(new.iter().all(|x| x.is_finite()));
+        assert_ne!(bits(&new), bits(&closed), "the pathway is open");
+        assert_eq!(bits(&new), bits(&old));
+    }
+}
+
+/// The same comparisons under each AArch64 float mode, flush-to-zero and
+/// default-NaN (`each_float_mode`): the worker thread inherits its mode from
+/// the thread that starts it. The input's first half second holds speech in
+/// noise, digital silence and values far below one LSB, which flush-to-zero
+/// treats differently; the kernels and their references must still agree in
+/// every bit, pathway closed and open.
+#[test]
+fn kernels_match_their_references_in_every_float_mode() {
+    let input = &noisy_signal()[..dsp::SAMPLE_RATE / 2];
+    crate::glue::tests::each_float_mode(|mode| {
+        for weights in MODELS {
+            for open in [false, true] {
+                let new = mixed_stream(weights, input, open);
+                let old = with_reference(|| mixed_stream(weights, input, open));
+                assert!(new.iter().any(|&x| x != 0.), "{mode}");
+                assert_eq!(bits(&new), bits(&old), "{mode} open {open}");
+            }
+        }
+    });
+}
+
+/// The two tests above over every `golden_runs` stream, pathway closed and
+/// open: the full comparison to run after a kernel change, on the host and
+/// under qemu-aarch64 (about a minute there).
+/// `cargo test -p rc2fx-dfn --release every_golden_run -- --ignored`.
+#[test]
+#[ignore]
+fn kernels_match_their_references_on_every_golden_run() {
+    let closed = golden_runs(false);
+    for open in [false, true] {
+        let new = golden_runs(open);
+        let old = with_reference(|| golden_runs(open));
+        assert_eq!(new.len(), old.len());
+        for (((name, new), (_, old)), (_, closed)) in new.iter().zip(&old).zip(&closed) {
+            assert!(new.iter().all(|x| x.is_finite()), "{name}");
+            assert!(new.iter().any(|&x| x != 0.), "{name}");
+            assert_eq!(open, bits(new) != bits(closed), "{name}: pathway open");
+            assert_eq!(bits(new), bits(old), "{name} open {open}");
+        }
+    }
+}
+
+/// Non-finite and extreme input: frames of huge values, infinities and NaNs
+/// poison the model's state until a reset. The current and the reference
+/// kernels must agree throughout: bit for bit wherever the output is a
+/// number, and NaN for NaN (payloads aside, see `glue`) where it is not.
+#[test]
+fn kernels_match_their_references_on_extreme_input() {
+    let base = signal();
+    let runs = |open: bool| {
+        let mut all = Vec::new();
+        for weights in MODELS {
+            let mut filter = DeepFilter::from_weights(weights).unwrap();
+            if open {
+                filter.net.open_convp();
+            }
+            let hop = filter.framing.hop;
+            let mut out = base[..60 * hop].to_vec();
+            for (i, frame) in out.chunks_exact_mut(hop).enumerate() {
+                match i {
+                    // Far below one LSB, then far above full scale.
+                    5 => frame.iter_mut().for_each(|v| *v *= 1e-38),
+                    9 => frame.iter_mut().for_each(|v| *v *= 1e30),
+                    12 => frame.iter_mut().for_each(|v| *v = -0.),
+                    // The largest finite values: sums overflow inside.
+                    20 => frame.iter_mut().for_each(|v| *v = f32::MAX.copysign(*v)),
+                    33 => frame[7] = f32::INFINITY,
+                    44 => frame[100] = f32::NAN,
+                    _ => {}
+                }
+                if matches!(i, 28 | 40 | 50) {
+                    filter.reset();
+                }
+                filter.process_hops(frame);
+            }
+            all.extend(out);
+        }
+        all
+    };
+    for open in [false, true] {
+        let new = runs(open);
+        let old = with_reference(|| runs(open));
+        assert!(new.iter().any(|x| x.is_nan()) && new.iter().any(|x| x.is_finite()));
+        for (i, (a, b)) in new.iter().zip(&old).enumerate() {
+            assert!(
+                a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
+                "open {open} sample {i}: {a:e} vs {b:e}"
+            );
+        }
+    }
 }
 
 #[test]

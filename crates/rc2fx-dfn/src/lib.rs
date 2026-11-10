@@ -9,7 +9,9 @@
 //! DeepFilterNet3-shaped model. Each `process` call takes one STFT hop. The
 //! weights are embedded from `model/weights.bin` (LA0) and
 //! `model/la1/weights.bin` (LA1); see `model/README.md`.
+mod convp;
 mod dsp;
+mod glue;
 mod kernels;
 mod net;
 #[cfg(test)]
@@ -315,6 +317,31 @@ impl DeepFilter {
         for spec in self.masked.iter_mut().chain(self.noisy.iter_mut()) {
             spec.fill(Complex32::default());
         }
+    }
+}
+
+/// A switch for the tests: while it is on for the calling thread, the model
+/// runs the reference forms of the kernels that also have a faster one (the
+/// scalar loops of `glue`, the full-history `convp::reference`), so one
+/// binary can compare the two bit for bit. Production builds have no switch;
+/// `on` is the constant false there.
+pub(crate) mod reference {
+    #[cfg(test)]
+    thread_local! {
+        static ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[inline(always)]
+    pub(crate) fn on() -> bool {
+        #[cfg(test)]
+        return ON.get();
+        #[cfg(not(test))]
+        false
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set(on: bool) {
+        ON.set(on);
     }
 }
 

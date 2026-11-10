@@ -166,6 +166,101 @@ mod neon {
             }
         }
     }
+
+    /// acc + x * w[lane]: the fused multiply-add of `pointwise_block_q8`,
+    /// with the lane chosen by a loop index that is constant once unrolled.
+    #[inline(always)]
+    unsafe fn fma_lane(
+        acc: float32x4_t,
+        x: float32x4_t,
+        w: float32x4_t,
+        lane: usize,
+    ) -> float32x4_t {
+        // SAFETY: register-only NEON arithmetic.
+        unsafe {
+            match lane {
+                0 => vfmaq_laneq_f32::<0>(acc, x, w),
+                1 => vfmaq_laneq_f32::<1>(acc, x, w),
+                2 => vfmaq_laneq_f32::<2>(acc, x, w),
+                _ => vfmaq_laneq_f32::<3>(acc, x, w),
+            }
+        }
+    }
+
+    /// `pointwise_block_q8` for the first `R` (1 to 4) outputs of one block
+    /// over `NV` vectors of bins, with the sums starting from what `yp`
+    /// holds (`fresh` false) or from zero. Per output and bin the
+    /// multiply-adds are those of `pointwise_block_q8`, in the same order;
+    /// outputs past `R` are not computed.
+    ///
+    /// # Safety
+    /// `wp` and `sp` cover `inp` inputs of the block; `xp` rows are `f`
+    /// apart with `NV * 4` readable bins each; `yp` rows are `f` apart with
+    /// `NV * 4` readable and writable bins each, `R` rows.
+    #[inline(always)]
+    pub(super) unsafe fn pointwise_onto_block<const NV: usize, const R: usize>(
+        wp: *const i8,
+        sp: *const f32,
+        inp: usize,
+        xp: *const f32,
+        f: usize,
+        yp: *mut f32,
+        fresh: bool,
+    ) {
+        // SAFETY: as documented above.
+        unsafe {
+            let mut acc = [[vdupq_n_f32(0.); NV]; R];
+            if !fresh {
+                for (r, row) in acc.iter_mut().enumerate() {
+                    for (k, v) in row.iter_mut().enumerate() {
+                        *v = vld1q_f32(yp.add(r * f + k * 4));
+                    }
+                }
+            }
+            for i in 0..inp {
+                let wv = w4_q8(wp.add(i * 4), *sp.add(i));
+                let xr = xp.add(i * f);
+                for k in 0..NV {
+                    let xv = vld1q_f32(xr.add(k * 4));
+                    for (r, row) in acc.iter_mut().enumerate() {
+                        row[k] = fma_lane(row[k], xv, wv, r);
+                    }
+                }
+            }
+            for (r, row) in acc.iter().enumerate() {
+                for (k, &v) in row.iter().enumerate() {
+                    vst1q_f32(yp.add(r * f + k * 4), v);
+                }
+            }
+        }
+    }
+
+    /// `pointwise_onto_block` for a block with `rows` (1 to 4) outputs.
+    ///
+    /// # Safety
+    /// As `pointwise_onto_block::<NV, rows>`.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn pointwise_onto_rows<const NV: usize>(
+        rows: usize,
+        wp: *const i8,
+        sp: *const f32,
+        inp: usize,
+        xp: *const f32,
+        f: usize,
+        yp: *mut f32,
+        fresh: bool,
+    ) {
+        // SAFETY: the caller's guarantees for `rows` outputs.
+        unsafe {
+            match rows {
+                1 => pointwise_onto_block::<NV, 1>(wp, sp, inp, xp, f, yp, fresh),
+                2 => pointwise_onto_block::<NV, 2>(wp, sp, inp, xp, f, yp, fresh),
+                3 => pointwise_onto_block::<NV, 3>(wp, sp, inp, xp, f, yp, fresh),
+                _ => pointwise_onto_block::<NV, 4>(wp, sp, inp, xp, f, yp, fresh),
+            }
+        }
+    }
 }
 
 /// Pointwise (1x1) convolution over `f` bins: y[o][f] = sum_i W[o][i] x[i][f].
@@ -224,6 +319,96 @@ pub(crate) fn pointwise(w: &Weights, out: usize, inp: usize, x: &[f32], f: usize
             for i in 0..inp {
                 for r in 0..4 {
                     let wv = w.vals[(ob * inp + i) * 4 + r];
+                    let o = ob * 4 + r;
+                    for k in 0..f {
+                        y[o * f + k] += wv * x[i * f + k];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One run of a pointwise convolution's inputs, added to running sums:
+/// y[o][f] += sum_i W[o][at + i] x[i][f] for `rows` outputs and inputs
+/// `at .. at + inp` of the `total` that `w` was packed for (`pack_pointwise`
+/// with the outputs padded to a multiple of four, `Weights::rows(.., 4)`).
+/// `fresh` starts the sums from zero instead of from `y`. `f` is a multiple
+/// of 8; x is [inp][f], y is [rows][f].
+///
+/// Per output and bin this performs the multiply-adds `pointwise` performs
+/// for the same inputs, in the same order. Running `pointwise`'s inputs
+/// through it in order, in any number of runs, the first of them fresh,
+/// gives `pointwise`'s result bit for bit: the sums only pass through `y`
+/// between runs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pointwise_onto(
+    w: &Weights,
+    rows: usize,
+    total: usize,
+    at: usize,
+    inp: usize,
+    x: &[f32],
+    f: usize,
+    y: &mut [f32],
+    fresh: bool,
+) {
+    let blocks = rows.div_ceil(4);
+    assert!(f.is_multiple_of(8) && at + inp <= total);
+    assert!(x.len() >= inp * f && y.len() >= rows * f);
+    // Every 16-bin block (and the 8-bin tail) re-reads the run's weights;
+    // every block of four outputs re-reads the run's input and updates its
+    // sums in place.
+    #[cfg(test)]
+    {
+        use crate::traffic::*;
+        let times = f.div_ceil(16);
+        // Each run reads its own part of the weights and scales.
+        let part = (w as *const Weights as *const u8).wrapping_add(at);
+        touch_n(Class::Q8, part, blocks * inp * 4, times);
+        touch_n(Class::Scale, part, blocks * inp * 4, times);
+        touch_n(Class::Act, x.as_ptr(), inp * f * 4, blocks);
+        if !fresh {
+            touch(Class::State, y.as_ptr(), rows * f * 4);
+        }
+        store(Class::State, y.as_ptr(), rows * f * 4);
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        debug_assert_eq!(w.row, 4);
+        assert!(w.q.len() >= blocks * total * 4 && w.scale.len() >= blocks * total);
+        // SAFETY: the asserts cover the weights and scales of every block's
+        // inputs `at .. at + inp`, `inp` rows of `f` bins in x and `rows`
+        // rows of `f` bins in y; bins advance in groups of 16, then 8.
+        unsafe {
+            for ob in 0..blocks {
+                let wp = w.q.as_ptr().add((ob * total + at) * 4);
+                let sp = w.scale.as_ptr().add(ob * total + at);
+                let yp = y.as_mut_ptr().add(ob * 4 * f);
+                let r = (rows - ob * 4).min(4);
+                let mut f0 = 0;
+                while f0 + 16 <= f {
+                    let (xp, yp) = (x.as_ptr().add(f0), yp.add(f0));
+                    neon::pointwise_onto_rows::<4>(r, wp, sp, inp, xp, f, yp, fresh);
+                    f0 += 16;
+                }
+                if f0 < f {
+                    let (xp, yp) = (x.as_ptr().add(f0), yp.add(f0));
+                    neon::pointwise_onto_rows::<2>(r, wp, sp, inp, xp, f, yp, fresh);
+                }
+            }
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        assert!(w.vals.len() >= blocks * total * 4);
+        if fresh {
+            y[..rows * f].fill(0.);
+        }
+        for ob in 0..blocks {
+            for i in 0..inp {
+                for r in 0..(rows - ob * 4).min(4) {
+                    let wv = w.vals[(ob * total + at + i) * 4 + r];
                     let o = ob * 4 + r;
                     for k in 0..f {
                         y[o * f + k] += wv * x[i * f + k];
@@ -1065,6 +1250,106 @@ mod tests {
             pointwise(&w, out, inp, &x[inp * f..], f, &mut expected[ys..]);
             pointwise_pair(&w, out, inp, &x, f, &mut actual, ys);
             same_bits(&actual, &expected);
+        }
+    }
+
+    /// `pointwise_onto` over a pointwise conv's inputs, split into runs at
+    /// arbitrary places, against `pointwise` over all of them at once: every
+    /// row count from one to twelve (whole blocks of four and blocks left
+    /// short), 16-bin blocks with and without the 8-bin tail, every input
+    /// class and float mode, with the sums resting in memory between runs.
+    /// Rows past `rows` and the bins around the output stay untouched.
+    #[test]
+    fn pointwise_onto_in_any_runs_matches_pointwise_bit_for_bit() {
+        use crate::glue::tests::{CLASSES, Rng, assert_same, each_float_mode};
+        const GUARD: usize = 11;
+        each_float_mode(|mode| {
+            let mut rng = Rng(0x7e57_0f0e_70c0_de01);
+            for rows in 1..=12usize {
+                let out = rows.next_multiple_of(4);
+                for (inp, f) in [(1, 8), (3, 16), (7, 24), (32, 64), (160, 40)] {
+                    let mut dense = rng.values(0, out * inp);
+                    // The outputs past `rows` are zero rows, as `Convp` packs.
+                    dense[rows * inp..].fill(0.);
+                    let w = Weights::rows(&pack_pointwise(&dense, out, inp), 4);
+                    for class in 0..CLASSES {
+                        let what = format!("{mode}: rows {rows} inp {inp} f {f} class {class}");
+                        let x = rng.values(class, inp * f);
+                        let mut want = vec![7.; out * f];
+                        pointwise(&w, out, inp, &x, f, &mut want);
+                        let junk = rng.values(class, rows * f + 2 * GUARD);
+                        let mut got = junk.clone();
+                        let mut at = 0;
+                        while at < inp {
+                            let run = 1 + rng.next() as usize % (inp - at);
+                            pointwise_onto(
+                                &w,
+                                rows,
+                                inp,
+                                at,
+                                run,
+                                &x[at * f..(at + run) * f],
+                                f,
+                                &mut got[GUARD..GUARD + rows * f],
+                                at == 0,
+                            );
+                            at += run;
+                        }
+                        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                        assert_eq!(bits(&got[..GUARD]), bits(&junk[..GUARD]), "{what}");
+                        assert_eq!(
+                            bits(&got[GUARD + rows * f..]),
+                            bits(&junk[GUARD + rows * f..]),
+                            "{what}"
+                        );
+                        let got = &got[GUARD..GUARD + rows * f];
+                        // Without infinities or NaNs every bit agrees; with
+                        // them a NaN's payload is left open (see `glue`).
+                        if class < CLASSES - 1 {
+                            assert_eq!(bits(got), bits(&want[..rows * f]), "{what}");
+                        } else {
+                            assert_same(got, &want[..rows * f], &what);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// `pointwise_onto` with its input and its sums each ending at an
+    /// inaccessible page, and again each beginning at one (`Fenced`): no
+    /// load or store leaves them, for whole and short blocks of rows and
+    /// with and without the 8-bin tail.
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[test]
+    fn pointwise_onto_stays_inside_its_slices() {
+        use crate::glue::tests::{Fenced, Rng};
+        let mut rng = Rng(0xfe1c_ed00_70c0_de02);
+        for at_end in [true, false] {
+            for rows in 1..=9usize {
+                let out = rows.next_multiple_of(4);
+                for (inp, f) in [(1, 8), (3, 16), (7, 24), (32, 64)] {
+                    let mut dense = rng.values(0, out * inp);
+                    dense[rows * inp..].fill(0.);
+                    let w = Weights::rows(&pack_pointwise(&dense, out, inp), 4);
+                    let x = rng.values(1, inp * f);
+                    let mut want = vec![0.; out * f];
+                    pointwise(&w, out, inp, &x, f, &mut want);
+                    let mut got = Fenced::new(&rng.values(1, rows * f), at_end);
+                    // In two runs when there are two inputs to split.
+                    let first = inp.div_ceil(2);
+                    for (at, run) in [(0, first), (first, inp - first)] {
+                        let x = Fenced::new(&x[at * f..(at + run) * f], at_end);
+                        pointwise_onto(&w, rows, inp, at, run, &x, f, &mut got, at == 0);
+                    }
+                    let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                    assert_eq!(
+                        bits(&got),
+                        bits(&want[..rows * f]),
+                        "rows {rows} inp {inp} f {f}"
+                    );
+                }
+            }
         }
     }
 

@@ -121,6 +121,23 @@ pub struct WorkerOptions {
     pub realtime_priority: Option<u8>,
     pub nice: Option<i8>,
 }
+/// Whether workers started from now on time each preparation step; see
+/// `set_preparation_step_timing`.
+static STEP_TIMING: AtomicBool = AtomicBool::new(true);
+
+/// Turns the per-step preparation timing (`Preparation::step_wall`) on or
+/// off for workers started afterwards. It costs the worker one clock read
+/// and one histogram update per step, five of each per frame for
+/// DeepFilterNet3, and only a bench run reads the result, so a host that can
+/// tell a bench run from a production run should turn it off for production.
+/// It is on until the host says otherwise, so that no report loses
+/// `step_wall` without the host having decided it. The per-pass timings and
+/// the step counts are recorded either way. Control thread only; a running
+/// worker keeps the setting it started with.
+pub fn set_preparation_step_timing(on: bool) {
+    STEP_TIMING.store(on, Ordering::Relaxed);
+}
+
 /// The mixer's suppression worker: SCHED_RR 5, pinned to CPU 0.
 ///
 /// RR 5 sits below RØDE's audio threads (RR 50, JACK's driver FIFO 51), so
@@ -193,11 +210,18 @@ pub struct Snapshot {
 pub struct Preparation {
     pub enabled: bool,
     /// Wall and thread CPU time per preparation pass (one per publication
-    /// that started preparing), against the frame period.
+    /// that started preparing), against the frame period. The CPU time runs
+    /// from the end of the frame's `process`, so it also holds the
+    /// publication and bookkeeping between the two (a few microseconds).
     pub pass_wall: Timing,
     pub pass_cpu: Timing,
+    /// Whether this worker times each step (`set_preparation_step_timing`).
+    /// When false, `step_wall` stays empty: that is "not measured", not "no
+    /// slow steps". `pass_wall.max_ns` still bounds the longest step.
+    pub step_timing: bool,
     /// Wall time of each step against a sixteenth of the frame period;
     /// `max_ns` is the longest step, which arriving input may wait out.
+    /// Recorded only while `step_timing` is on.
     pub step_wall: Timing,
     pub steps: u64,
     /// Publications with preparation pending but input queued (or a stop or
@@ -214,6 +238,8 @@ struct Preparing {
     pass_wall: metrics::Counters,
     pass_cpu: metrics::Counters,
     step_wall: metrics::Counters,
+    /// Set before the worker starts; see `set_preparation_step_timing`.
+    step_timing: AtomicBool,
     steps: AtomicU64,
     skipped: AtomicU64,
     abandoned: AtomicU64,
@@ -294,6 +320,7 @@ impl Telemetry {
             enabled: true,
             pass_wall: p.pass_wall.snapshot(),
             pass_cpu,
+            step_timing: p.step_timing.load(Ordering::Relaxed),
             step_wall: p.step_wall.snapshot(),
             steps: p.steps.load(Ordering::Relaxed),
             skipped: p.skipped.load(Ordering::Relaxed),
@@ -353,6 +380,14 @@ pub struct Worker {
     phase: usize,
     frame: u64,
     sample: u64,
+    /// The next sample's place in the output: its offset in the frame that
+    /// plays (`out_phase`) and that frame's sequence (`due`). Output starts
+    /// one frame and the worker lead after input, at sample `start`; from
+    /// there these are `(sample - start) % frame_samples` and
+    /// `(sample - start) / frame_samples`, kept as counters so that no
+    /// sample needs a division. Both are zero until then.
+    out_phase: usize,
+    due: u64,
     dry: [f32; MAX_SUPPRESSION_DELAY],
     dry_position: usize,
     /// Voice score of the frame the last output sample came from; None while
@@ -426,6 +461,10 @@ impl Worker {
         scope: AffinityScope,
     ) -> Result<Self, Error> {
         let shared = Arc::new(Shared::default());
+        shared
+            .prep
+            .step_timing
+            .store(STEP_TIMING.load(Ordering::Relaxed), Ordering::Relaxed);
         let (input, worker_input) = queue::channel();
         let (worker_output, output) = queue::channel();
         let worker_shared = shared.clone();
@@ -500,6 +539,8 @@ impl Worker {
             phase: 0,
             frame: 0,
             sample: 0,
+            out_phase: 0,
+            due: 0,
             dry: [0.; MAX_SUPPRESSION_DELAY],
             dry_position: 0,
             voice: None,
@@ -652,6 +693,9 @@ impl Suppression for Worker {
     fn process_sample(&mut self, input: f32, wet: f32) -> f32 {
         Worker::process_sample(self, input, wet)
     }
+    fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
+        Worker::process_block(self, samples, wet, voice)
+    }
     fn voice(&self) -> Option<f32> {
         self.voice
     }
@@ -687,14 +731,21 @@ impl Worker {
             self.voice = None;
             return dry;
         }
-        let start = (self.geometry.frame_samples + self.geometry.worker_lead_samples) as u64;
-        let phase = if self.sample >= start {
-            ((self.sample - start) % self.geometry.frame_samples as u64) as usize
-        } else {
-            0
-        };
-        if self.sample >= start {
-            let due = (self.sample - start) / self.geometry.frame_samples as u64;
+        let frame = self.geometry.frame_samples;
+        let start = (frame + self.geometry.worker_lead_samples) as u64;
+        let started = self.sample >= start;
+        let (phase, due) = (self.out_phase, self.due);
+        // The counters are the division they replace, at every sample.
+        debug_assert_eq!(
+            (phase as u64, due),
+            if started {
+                let since = self.sample - start;
+                (since % frame as u64, since / frame as u64)
+            } else {
+                (0, 0)
+            }
+        );
+        if started {
             if phase == 0 {
                 self.pending = None;
                 if !self.choose(due) {
@@ -721,7 +772,7 @@ impl Worker {
             }
         }
         self.assembling.samples[self.phase] = input;
-        let available = self.sample >= start
+        let available = started
             && self.playing.valid
             && self.playing.samples[phase].is_finite()
             && !self.shared.failed.load(Ordering::Acquire);
@@ -733,8 +784,15 @@ impl Worker {
             dry
         };
         self.sample += 1;
+        if started {
+            self.out_phase += 1;
+            if self.out_phase == frame {
+                self.out_phase = 0;
+                self.due += 1;
+            }
+        }
         self.phase += 1;
-        if self.phase == self.geometry.frame_samples {
+        if self.phase == frame {
             self.assembling.sequence = self.frame;
             self.assembling.valid = true;
             self.assembling.submitted_ns = metrics::now(false);
@@ -747,6 +805,116 @@ impl Worker {
             self.frame += 1;
         }
         dry + (output - dry) * wet
+    }
+
+    /// `process_sample` for a block, in place: `samples[i]` with `wet[i]`
+    /// becomes the output sample, and `voice[i]` is what `voice()` returns
+    /// after it. Output, voices, counters and the endpoint's state are bit
+    /// for bit those of the per-sample calls.
+    ///
+    /// A sample that holds an event goes through `process_sample` itself:
+    /// the first sample of an output frame (where a result is chosen), the
+    /// sample that completes an input frame (queue push and wake), and
+    /// every sample while a late result is still awaited or after `finish`.
+    /// The samples between events run a plain loop with none of those
+    /// checks; a run also ends on the dry ring's last slot, where the loop
+    /// wraps the ring itself. The worker-failure flag is still read at
+    /// every sample that would play a result, so a failure takes effect at
+    /// the same sample as in `process_sample`.
+    pub fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
+        assert!(wet.len() >= samples.len() && voice.len() >= samples.len());
+        let frame = self.geometry.frame_samples;
+        let start = (frame + self.geometry.worker_lead_samples) as u64;
+        let latency = self.latency_samples();
+        let mut t = 0;
+        while t < samples.len() {
+            let started = self.sample >= start;
+            // Samples before the next event, which itself is left to
+            // `process_sample`: the next output frame's first sample (or the
+            // first output sample of all), ...
+            let to_output = if !started {
+                (start - self.sample) as usize
+            } else if self.out_phase == 0 {
+                0
+            } else {
+                frame - self.out_phase
+            };
+            // ... the sample completing the input frame, and the dry ring's
+            // wrap (taken with the run that ends on it).
+            let run = to_output
+                .min((frame - 1).saturating_sub(self.phase))
+                .min(latency - self.dry_position)
+                .min(samples.len() - t);
+            if self.finished || self.pending.is_some() || run == 0 {
+                samples[t] = self.process_sample(samples[t], wet[t]);
+                voice[t] = self.voice;
+                t += 1;
+                continue;
+            }
+            let end = t + run;
+            self.interior(
+                &mut samples[t..end],
+                &wet[t..end],
+                &mut voice[t..end],
+                started,
+            );
+            t = end;
+        }
+    }
+
+    /// `process_sample` for a run of samples without events: not finished,
+    /// no late result awaited, no output frame starting, the input frame not
+    /// completing, and the dry ring wrapping at the run's end at most.
+    #[inline(always)]
+    fn interior(
+        &mut self,
+        samples: &mut [f32],
+        wet: &[f32],
+        voice: &mut [Option<f32>],
+        started: bool,
+    ) {
+        let n = samples.len();
+        let failed = &self.shared.failed;
+        let dry_ring = &mut self.dry[self.dry_position..self.dry_position + n];
+        let assembling = &mut self.assembling.samples[self.phase..self.phase + n];
+        let playing = &self.playing.samples[self.out_phase..self.out_phase + n];
+        let (valid, score) = (self.playing.valid, self.playing.voice);
+        let mut last = self.voice;
+        for i in 0..n {
+            let x = if samples[i].is_finite() {
+                samples[i]
+            } else {
+                0.
+            };
+            let dry = dry_ring[i];
+            dry_ring[i] = x;
+            assembling[i] = x;
+            let available =
+                started && valid && playing[i].is_finite() && !failed.load(Ordering::Acquire);
+            let output = if available {
+                last = Some(score);
+                playing[i]
+            } else {
+                last = None;
+                dry
+            };
+            voice[i] = last;
+            samples[i] = dry + (output - dry) * wet[i];
+        }
+        self.voice = last;
+        self.dry_position += n;
+        if self.dry_position == self.geometry.latency_samples() {
+            self.dry_position = 0;
+        }
+        self.phase += n;
+        self.sample += n as u64;
+        if started {
+            self.out_phase += n;
+            if self.out_phase == self.geometry.frame_samples {
+                self.out_phase = 0;
+                self.due += 1;
+            }
+        }
     }
 }
 /// The callback endpoint: a threaded `Worker` when its
@@ -819,6 +987,21 @@ impl Endpoint {
             Self::Inline(i) => i.process_sample(input, wet),
         }
     }
+    /// `process_sample` for a block, in place, with each sample's `voice()`;
+    /// see `Worker::process_block`. The inline endpoint takes the samples one
+    /// at a time.
+    pub fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
+        match self {
+            Self::Worker(w) => w.process_block(samples, wet, voice),
+            Self::Inline(i) => {
+                assert!(wet.len() >= samples.len() && voice.len() >= samples.len());
+                for ((sample, &wet), voice) in samples.iter_mut().zip(wet).zip(voice) {
+                    *sample = i.process_sample(*sample, wet);
+                    *voice = i.voice();
+                }
+            }
+        }
+    }
 }
 impl Suppression for Endpoint {
     fn latency_samples(&self) -> usize {
@@ -842,6 +1025,9 @@ impl Suppression for Endpoint {
     fn process_sample(&mut self, input: f32, wet: f32) -> f32 {
         Endpoint::process_sample(self, input, wet)
     }
+    fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
+        Endpoint::process_block(self, samples, wet, voice)
+    }
     fn voice(&self) -> Option<f32> {
         Endpoint::voice(self)
     }
@@ -864,6 +1050,7 @@ fn run(
     let mut expected = 0;
     let mut recovery = 0;
     let mut capture = capture::Recorder::new(&s.capture);
+    let time_steps = s.prep.step_timing.load(Ordering::Relaxed);
     loop {
         // Observe before checking stop/queue: any subsequent producer or
         // retirement notification prevents sleeping through that transition.
@@ -956,7 +1143,7 @@ fn run(
         }
         capture.record(capture_frame);
         s.completed.fetch_add(1, Ordering::Release);
-        prepare(model.as_mut(), &input, s, g);
+        prepare(model.as_mut(), &input, s, g, cpu_end, time_steps);
     }
 }
 
@@ -965,7 +1152,20 @@ fn run(
 /// is requested and the worker has not failed. Checked before each step
 /// only, so input arriving during a step waits for it to finish (the next
 /// frame then uses what it prepared). Never spins or sleeps.
-fn prepare(model: &mut dyn Model, input: &Consumer, s: &Shared, g: Geometry) {
+///
+/// `process_cpu_end` is the thread CPU reading taken when the frame's
+/// `process` returned; the pass's CPU time is counted from it, which saves a
+/// clock system call per frame and adds the publication in between to
+/// `pass_cpu`. With `time_steps` off the pass reads the wall clock twice,
+/// whatever the number of steps.
+fn prepare(
+    model: &mut dyn Model,
+    input: &Consumer,
+    s: &Shared,
+    g: Geometry,
+    process_cpu_end: Option<u64>,
+    time_steps: bool,
+) {
     let p = &s.prep;
     let blocked = || {
         input.pending() != 0
@@ -979,16 +1179,19 @@ fn prepare(model: &mut dyn Model, input: &Consumer, s: &Shared, g: Geometry) {
         p.skipped.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    let (wall, cpu) = (metrics::now(false), metrics::now(true));
+    let wall = metrics::now(false);
     let mut at = wall;
+    let mut steps = 0;
     loop {
         if !model.prepare_step() {
             break;
         }
-        let now = metrics::now(false);
-        p.step_wall.record(at, now, g.frame_budget_ns() / 16);
-        p.steps.fetch_add(1, Ordering::Relaxed);
-        at = now;
+        steps += 1;
+        if time_steps {
+            let now = metrics::now(false);
+            p.step_wall.record(at, now, g.frame_budget_ns() / 16);
+            at = now;
+        }
         if model.prep_pending() == 0 {
             break;
         }
@@ -997,8 +1200,12 @@ fn prepare(model: &mut dyn Model, input: &Consumer, s: &Shared, g: Geometry) {
             break;
         }
     }
+    if !time_steps && steps > 0 {
+        at = metrics::now(false);
+    }
+    p.steps.fetch_add(steps, Ordering::Relaxed);
     p.pass_cpu
-        .record(cpu, metrics::now(true), g.frame_budget_ns());
+        .record(process_cpu_end, metrics::now(true), g.frame_budget_ns());
     p.pass_wall.record(wall, at, g.frame_budget_ns());
 }
 

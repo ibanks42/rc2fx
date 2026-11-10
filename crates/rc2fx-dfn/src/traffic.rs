@@ -90,6 +90,11 @@ pub(crate) fn enable() {
     });
 }
 
+/// Turns counting off for this thread and drops what was counted.
+pub(crate) fn disable() {
+    COUNTS.with(|c| *c.borrow_mut() = Counts::default());
+}
+
 /// A new `process` call: uniqueness restarts.
 pub(crate) fn start() {
     COUNTS.with(|c| {

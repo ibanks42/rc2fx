@@ -64,15 +64,30 @@ fn geometry() -> Geometry {
 }
 
 /// Runs the worker loop on its own thread until it returns (or fails the test
-/// after five seconds), with `model` built from the rig.
+/// after five seconds), with `model` built from the rig. Every preparation
+/// step is timed, as on a bench run.
 fn drive(initial: &[u64], model: impl FnOnce(Arc<Rig>) -> Box<dyn Model>) -> Arc<Rig> {
+    drive_timed(initial, true, model)
+}
+
+/// `drive` with per-step preparation timing on or off.
+fn drive_timed(
+    initial: &[u64],
+    step_timing: bool,
+    model: impl FnOnce(Arc<Rig>) -> Box<dyn Model>,
+) -> Arc<Rig> {
     let (mut input, consumer) = queue::channel();
     let (producer, output) = queue::channel();
     for &sequence in initial {
         assert!(input.push(&frame(sequence, &[])));
     }
+    let shared = Arc::new(Shared::default());
+    shared
+        .prep
+        .step_timing
+        .store(step_timing, Ordering::Relaxed);
     let rig = Arc::new(Rig {
-        shared: Arc::new(Shared::default()),
+        shared,
         input: Mutex::new(input),
         output: Mutex::new(output),
         published: Mutex::new(Vec::new()),
@@ -143,8 +158,18 @@ fn scripted(
     on_process: &[(u64, Action)],
     on_step: &[(usize, Action)],
 ) -> (Vec<Event>, Preparation) {
+    let (events, prep, _) = scripted_timed(initial, true, on_process, on_step);
+    (events, prep)
+}
+
+fn scripted_timed(
+    initial: &[u64],
+    step_timing: bool,
+    on_process: &[(u64, Action)],
+    on_step: &[(usize, Action)],
+) -> (Vec<Event>, Preparation, Snapshot) {
     let log = Arc::new(Mutex::new(Vec::new()));
-    let rig = drive(initial, |rig| {
+    let rig = drive_timed(initial, step_timing, |rig| {
         Box::new(Scripted {
             rig,
             log: log.clone(),
@@ -155,7 +180,8 @@ fn scripted(
         })
     });
     let events = log.lock().unwrap().clone();
-    (events, Telemetry(rig.shared.clone()).preparation())
+    let telemetry = Telemetry(rig.shared.clone());
+    (events, telemetry.preparation(), telemetry.snapshot())
 }
 
 fn steps(n: usize) -> impl Iterator<Item = Event> {
@@ -176,10 +202,132 @@ fn an_idle_worker_prepares_every_step_after_publishing() {
         (LAYERS as u64, 0, 0)
     );
     assert_eq!(prep.pass_wall.calls + prep.pass_wall.clock_errors, 1);
+    assert!(prep.step_timing);
     assert_eq!(
         prep.step_wall.calls + prep.step_wall.clock_errors,
         LAYERS as u64
     );
+}
+
+/// A worker without per-step timing: the steps, the pass timings and the CPU
+/// total are recorded exactly as with it; only `step_wall` stays empty, and
+/// the report says it was not measured.
+#[test]
+fn without_step_timing_the_pass_is_still_measured() {
+    for step_timing in [false, true] {
+        let (events, prep, snapshot) = scripted_timed(
+            &[0],
+            step_timing,
+            &[],
+            &[(2, Action::Push(1)), (2 + LAYERS, Action::Stop(2))],
+        );
+        let expected: Vec<_> = [Event::Process(0)]
+            .into_iter()
+            .chain(steps(2))
+            .chain([Event::Process(1)])
+            .chain(steps(LAYERS))
+            .collect();
+        assert_eq!(events, expected);
+        assert_eq!(prep.step_timing, step_timing);
+        assert_eq!(
+            (prep.steps, prep.skipped, prep.abandoned),
+            (2 + LAYERS as u64, 0, 1)
+        );
+        assert_eq!(prep.pass_wall.calls + prep.pass_wall.clock_errors, 2);
+        assert_eq!(prep.pass_cpu.calls + prep.pass_cpu.clock_errors, 2);
+        assert_eq!(
+            prep.step_wall.calls + prep.step_wall.clock_errors,
+            if step_timing { 2 + LAYERS as u64 } else { 0 }
+        );
+        assert_eq!(
+            prep.total_cpu_ns,
+            snapshot.cpu.total_ns + prep.pass_cpu.total_ns
+        );
+        // The pass spans its steps: the scripted model's steps take time
+        // only through the log's lock, so compare with the step total.
+        if step_timing && prep.pass_wall.clock_errors == 0 {
+            assert!(prep.pass_wall.total_ns >= prep.step_wall.total_ns);
+        }
+    }
+}
+
+/// A worker takes the process-wide setting when it starts.
+#[test]
+fn workers_start_with_the_process_wide_step_timing_setting() {
+    // It is on until a host turns it off.
+    let worker = |expected: bool| {
+        let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
+        assert_eq!(worker.telemetry().preparation().step_timing, expected);
+        worker
+            .finish(StopMode::Cancel, Duration::from_secs(5))
+            .unwrap();
+    };
+    worker(true);
+    // Other tests start workers concurrently; they do not read `step_wall`,
+    // so a setting that is briefly off does not disturb them. The loop ends
+    // with the default restored.
+    for on in [false, true] {
+        crate::set_preparation_step_timing(on);
+        let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
+        assert_eq!(worker.telemetry().preparation().step_timing, on);
+        worker
+            .finish(StopMode::Cancel, Duration::from_secs(5))
+            .unwrap();
+    }
+}
+
+/// Three preparation steps of at least two milliseconds each after every
+/// frame; the last one asks the worker to drain and stop.
+struct Slow {
+    rig: Arc<Rig>,
+    pending: usize,
+}
+impl Model for Slow {
+    fn process(&mut self, _: &mut [f32]) -> Result<f32, Error> {
+        self.pending = 3;
+        Ok(0.5)
+    }
+    fn reset(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+    fn prepare_step(&mut self) -> bool {
+        if self.pending == 0 {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(2));
+        self.pending -= 1;
+        if self.pending == 0 {
+            self.rig.act(Action::Stop(2));
+        }
+        true
+    }
+    fn prep_pending(&self) -> usize {
+        self.pending
+    }
+}
+
+/// The pass's wall time covers all of its steps with step timing off too.
+/// `pass_wall` is then the only bound on how long a step made arriving input
+/// wait.
+#[test]
+fn the_pass_wall_time_spans_its_steps_with_or_without_step_timing() {
+    for step_timing in [false, true] {
+        let rig = drive_timed(&[0], step_timing, |rig| Box::new(Slow { rig, pending: 0 }));
+        let prep = Telemetry(rig.shared.clone()).preparation();
+        assert_eq!((prep.steps, prep.skipped, prep.abandoned), (3, 0, 0));
+        assert_eq!(prep.pass_wall.calls + prep.pass_wall.clock_errors, 1);
+        if prep.pass_wall.clock_errors == 0 {
+            assert!(prep.pass_wall.total_ns >= 6_000_000, "{prep:?}");
+            assert_eq!(prep.pass_wall.max_ns, prep.pass_wall.total_ns);
+        }
+        assert_eq!(
+            prep.step_wall.calls + prep.step_wall.clock_errors,
+            if step_timing { 3 } else { 0 }
+        );
+        if step_timing && prep.step_wall.clock_errors == 0 {
+            assert!(prep.step_wall.total_ns >= 6_000_000, "{prep:?}");
+        }
+    }
 }
 
 #[test]

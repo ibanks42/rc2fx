@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::{Condvar, Mutex};
 
+mod dsp_block;
 mod endpoint_bench;
 mod lead_phase;
 struct Identity;
@@ -38,6 +39,8 @@ fn endpoint() -> (Worker, Consumer, Producer) {
             phase: 0,
             frame: 0,
             sample: 0,
+            out_phase: 0,
+            due: 0,
             dry: [0.; MAX_SUPPRESSION_DELAY],
             dry_position: 0,
             voice: None,
