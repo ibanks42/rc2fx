@@ -643,7 +643,10 @@ fn the_worker_records_its_slowest_frame_consistently_with_its_timings() {
         Worker::spawn(geometry(), Box::new(Identity), WorkerOptions::default()).unwrap();
     let telemetry = worker.telemetry();
     assert_eq!(telemetry.outliers().worst, Recorded::Empty);
-    for _ in 0..480 * 6 {
+    // Exactly six frames, which the queues hold without a drop however slow
+    // the worker is. Once all six are complete the worker is idle, so the
+    // worst frame and the turnaround maximum below can no longer change.
+    for _ in 0..geometry().frame_samples * 6 {
         worker.process_sample(0.1, 1.0);
     }
     let deadline = Instant::now() + Duration::from_secs(5);
