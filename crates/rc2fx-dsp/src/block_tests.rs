@@ -236,6 +236,61 @@ fn eq_output(channels: u8, count: usize) -> Target {
     t
 }
 
+/// A preset's bands, APO mode: type, frequency, gain in dB, Q.
+type Preset = &'static [(BandType, f64, f64, f64)];
+/// The owner's two stereo presets.
+const PRESETS: [(&str, Preset); 2] = [
+    (
+        "headphones-1",
+        &[
+            (BandType::LowShelf, 46.0, 15.33, 0.705),
+            (BandType::Bell, 79.0, 1.41, 2.185),
+            (BandType::Bell, 107.0, 1.68, 1.456),
+            (BandType::Bell, 583.0, 2.2, 3.123),
+            (BandType::Bell, 590.0, -4.36, 0.497),
+            (BandType::Bell, 965.0, -2.7, 2.686),
+            (BandType::Bell, 1442.0, -2.31, 2.413),
+            (BandType::Bell, 1482.0, 5.33, 0.609),
+            (BandType::Bell, 2440.0, 0.67, 3.994),
+            (BandType::Bell, 3916.0, 0.47, 3.759),
+            (BandType::Bell, 4484.0, -1.42, 3.086),
+            (BandType::Bell, 5860.0, 3.95, 2.231),
+            (BandType::HighShelf, 7588.0, 2.49, 1.437),
+            (BandType::Bell, 7724.0, 1.4, 2.11),
+            (BandType::Bell, 10468.0, 2.56, 1.427),
+        ],
+    ),
+    (
+        "usb-music",
+        &[
+            (BandType::LowShelf, 105.0, 6.5, 0.7),
+            (BandType::Bell, 70.5, -1.5, 1.12),
+            (BandType::Bell, 213.9, -1.0, 1.33),
+            (BandType::Bell, 717.8, -1.9, 3.33),
+            (BandType::Bell, 2006.3, 5.7, 3.11),
+            (BandType::Bell, 3180.5, -2.4, 3.02),
+            (BandType::Bell, 4682.0, -4.1, 3.56),
+            (BandType::Bell, 6052.6, 2.7, 5.74),
+            (BandType::Bell, 10000.0, 2.0, 1.92),
+            (BandType::HighShelf, 10000.0, -0.8, 0.7),
+        ],
+    ),
+];
+fn preset(bands: Preset) -> Target {
+    let mut t = Target::new("out", "Out", TargetKind::Output, 2);
+    t.eq.enabled = true;
+    t.eq.bands = (bands.iter().enumerate())
+        .map(|(i, &(band_type, frequency, gain, q))| Band {
+            band_type,
+            frequency,
+            gain,
+            q,
+            ..Band::new(format!("band-{i}"))
+        })
+        .collect();
+    t
+}
+
 fn mic(wet: f64, strength: f64) -> Target {
     let mut t = Target::new("mic", "Mic", TargetKind::Mic, 1);
     t.suppression.enabled = true;
@@ -572,6 +627,115 @@ fn eq_gain_pushing_samples_past_the_stage_limit_matches_the_reference() {
         let total = run(target, None, 40, 0.9, nothing, clean, unprimed);
         if input_db + output_db > 30.0 {
             assert!(total.clipped > 1000, "clipped {}", total.clipped);
+        }
+    }
+}
+
+#[test]
+fn the_presets_match_the_reference() {
+    for (name, bands) in PRESETS {
+        // Quiet enough that every block stays on the steady path.
+        let total = run(preset(bands), None, 60, 0.05, nothing, clean, unprimed);
+        assert!(total.clipped == 0 && total.output_peak > 0.05, "{name}");
+    }
+}
+
+/// What `eq-fma` changes: each preset over 60 s of a full-scale sine sweep,
+/// pink-ish noise and a 1 kHz sine at -60 dBFS, against the default build's
+/// arithmetic written out here: the EQ's f64 output, and the f32 samples the
+/// whole chain returns. Without the feature both must be the same bits,
+/// which is what makes the stand-in the default build.
+#[test]
+#[ignore = "a measurement; run it with --release --features eq-fma --nocapture"]
+fn the_difference_fused_arithmetic_makes() {
+    // 60 s in whole mixer blocks.
+    const FRAMES: usize = 60 * 48_000 / 112 * 112;
+    let turn = |n: usize, hz: f64| std::f64::consts::TAU * hz * n as f64 / 48_000.0;
+    let mut r = Rng(0x2545_F491_4F6C_DD1D);
+    let mut pink = [[0.0; 3]; 2];
+    let mut noise = |ch: usize| {
+        // Paul Kellet's economy pinking filter over uniform white noise.
+        let (white, b) = (r.between(-1.0, 1.0), &mut pink[ch]);
+        b[0] = 0.99765 * b[0] + white * 0.0990460;
+        b[1] = 0.96300 * b[1] + white * 0.2965164;
+        b[2] = 0.57000 * b[2] + white * 1.0526913;
+        (0.15 * (b[0] + b[1] + b[2] + white * 0.1848)).clamp(-1.0, 1.0)
+    };
+    // The right channel is a quarter turn ahead, or its own noise.
+    type Signal<'a> = &'a mut dyn FnMut(usize, usize) -> f64;
+    let signals: [(&str, Signal); 3] = [
+        ("sweep 20 Hz-20 kHz, 0 dBFS", &mut |n, ch| {
+            let octaves = 1000.0_f64.ln() * n as f64 / FRAMES as f64;
+            let phase = turn(FRAMES, 20.0) / 1000.0_f64.ln() * octaves.exp_m1();
+            (phase + ch as f64 * std::f64::consts::FRAC_PI_2).sin()
+        }),
+        ("pink-ish noise", &mut |_, ch| noise(ch)),
+        ("1 kHz sine, -60 dBFS", &mut |n, ch| {
+            0.001 * (turn(n, 1000.0) + ch as f64 * std::f64::consts::FRAC_PI_2).sin()
+        }),
+    ];
+    // Where a float sits among the floats, so a difference counts ulps.
+    let place = |x: f32| {
+        let magnitude = i64::from(x.to_bits() & 0x7fff_ffff);
+        if x.is_sign_negative() {
+            -magnitude
+        } else {
+            magnitude
+        }
+    };
+    for (signal, sample) in signals {
+        let input: [Vec<f32>; 2] =
+            std::array::from_fn(|ch| (0..FRAMES).map(|n| sample(n, ch) as f32).collect());
+        for (name, bands) in PRESETS {
+            let p = Prepared::new(&preset(bands), 48_000).unwrap();
+            let (mut dsp, mut bank) = (pair(&p, None).0, EqBank::new(&p, None));
+            let mut z = [[[0.0_f64; 2]; MAX_BANDS]; 2];
+            let (mut worst, mut squares, mut changed, mut one, mut most) = (0.0_f64, 0.0, 0, 0, 0);
+            let (mut meter, mut unused) = (Meter::default(), Meter::default());
+            for start in (0..FRAMES).step_by(112) {
+                let mut x = [[0.0; BLOCK]; 2];
+                for ch in 0..2 {
+                    for (sample, value) in x[ch].iter_mut().zip(&input[ch][start..start + 112]) {
+                        *sample = f64::from(*value);
+                    }
+                }
+                let (dry, mut eq) = (x, x);
+                bank.process_block(&mut eq, 112, 2, &mut unused);
+                dsp.begin_block(&p, 112);
+                dsp.block(&p, &mut x, 112, &mut meter);
+                for ch in 0..2 {
+                    for t in 0..112 {
+                        let mut y = dry[ch][t];
+                        for (c, z) in p.eq[ch].iter().zip(&mut z[ch]).take(bands.len()) {
+                            let raw = c.b0 * y + z[0];
+                            *z = [c.b1 * y - c.a1 * raw + z[1], c.b2 * y - c.a2 * raw]
+                                .map(|next| if next.abs() < 1e-25 { 0.0 } else { next });
+                            y = raw;
+                        }
+                        let difference = (eq[ch][t] - y).abs();
+                        worst = worst.max(difference);
+                        squares += difference * difference;
+                        // The rest of the chain: the settled blend with the
+                        // dry signal, the output limit and the f32.
+                        let out = safe(dry[ch][t] + (y - dry[ch][t]), 1.0, &mut unused) as f32;
+                        let ulps = (place(x[ch][t] as f32) - place(out)).abs();
+                        changed += u64::from(ulps > 0);
+                        one += u64::from(ulps == 1);
+                        most = most.max(ulps);
+                    }
+                }
+            }
+            let rms = (squares / (2 * FRAMES) as f64).sqrt();
+            println!(
+                "{name:12} | {signal:26} | f64 max {worst:.3e} ({:6.1} dBFS) rms {rms:.3e} \
+                 ({:6.1} dBFS) | f32 changed {changed} of {} ({one} by 1 ulp, most {most}), \
+                 {} at the output limit",
+                20.0 * worst.log10(),
+                20.0 * rms.log10(),
+                2 * FRAMES,
+                meter.clipped
+            );
+            assert!(cfg!(feature = "eq-fma") || worst == 0.0 && changed == 0);
         }
     }
 }

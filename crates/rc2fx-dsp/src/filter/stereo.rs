@@ -2,8 +2,9 @@
 //!
 //! The eligibility and rollback here are architecture-independent; only the
 //! steady chain differs: on AArch64 both channels ride in the two lanes of an
-//! `f64x2` (shared coefficients duplicated per lane, explicit NEON ops, no FMA
-//! and no reassociation), elsewhere the scalar four-recurrence loop runs. The
+//! `f64x2` (the same coefficients in both lanes, explicit NEON ops, no
+//! reassociation, and no FMA unless the `eq-fma` feature fuses the scalar
+//! path too), elsewhere the scalar four-recurrence loop runs. The
 //! scalar loop is the reference. Both reproduce `steady_two`'s per-sample
 //! arithmetic exactly, so a refusal falls back to the per-channel path with no
 //! change in audio.
@@ -15,7 +16,7 @@ mod neon;
 /// Try the steady, shared-coefficient stereo case. On failure, samples and
 /// filter state are restored so the existing per-channel path can run.
 pub(super) fn process(
-    filters: &mut [[Filter; MAX_BANDS]; 2],
+    filters: &mut Filters,
     active: &[[bool; MAX_BANDS]; 2],
     counts: [usize; 2],
     x: &mut [[f64; BLOCK]; 2],
@@ -27,14 +28,15 @@ pub(super) fn process(
     }
     let mut order = [0; MAX_BANDS];
     let mut count = 0;
+    let (hot, smoothing) = (&filters.hot, &filters.smoothing);
     for i in 0..counts[0] {
         if active[0][i] != active[1][i] {
             return false;
         }
         if active[0][i] {
-            if filters[0][i].smoothing
-                || filters[1][i].smoothing
-                || !same_bits(filters[0][i].c, filters[1][i].c)
+            if smoothing[0][i]
+                || smoothing[1][i]
+                || !same_bits(hot[i].coefficients(0), hot[i].coefficients(1))
             {
                 return false;
             }
@@ -49,11 +51,9 @@ pub(super) fn process(
         return true;
     }
     let order = &order[..count];
-    let mut original = [[[0.0; 2]; MAX_BANDS]; 2];
-    for ch in 0..2 {
-        for (saved, &i) in original[ch].iter_mut().zip(order) {
-            *saved = [filters[ch][i].z1, filters[ch][i].z2];
-        }
+    let mut original = [[[0.0; 2]; 2]; MAX_BANDS];
+    for (saved, &i) in original.iter_mut().zip(order) {
+        *saved = filters.hot[i].z;
     }
     #[cfg(not(target_arch = "aarch64"))]
     let valid = {
@@ -76,9 +76,9 @@ pub(super) fn process(
             *frame = [*left, *right];
         }
         // SAFETY: NEON is part of the AArch64 baseline; every lane and index
-        // used by `neon::chain` stays inside `filters` and `frames`, bounded
+        // used by `neon::chain` stays inside the bands and `frames`, bounded
         // by the eligibility checks above, and no pointer outlives the call.
-        let valid = unsafe { neon::chain(filters, order, frames, limit) };
+        let valid = unsafe { neon::chain(&mut filters.hot, order, frames, limit) };
         if valid {
             for (frame, (left, right)) in frames.iter().zip(left.iter_mut().zip(right)) {
                 (*left, *right) = (frame[0], frame[1]);
@@ -87,11 +87,8 @@ pub(super) fn process(
         valid
     };
     if !valid {
-        for ch in 0..2 {
-            for (saved, &i) in original[ch].iter().zip(order) {
-                filters[ch][i].z1 = saved[0];
-                filters[ch][i].z2 = saved[1];
-            }
+        for (saved, &i) in original.iter().zip(order) {
+            filters.hot[i].z = *saved;
         }
     }
     valid
@@ -101,7 +98,7 @@ pub(super) fn process(
 /// channels in turn. The reference implementation of `process`'s contract.
 #[cfg(not(target_arch = "aarch64"))]
 fn scalar_chain(
-    filters: &mut [[Filter; MAX_BANDS]; 2],
+    filters: &mut Filters,
     order: &[usize],
     x: &mut [[f64; BLOCK]; 2],
     n: usize,
@@ -110,22 +107,21 @@ fn scalar_chain(
     let mut valid = true;
     for k in (0..order.len()).step_by(2) {
         let i = order[k];
-        let c0 = filters[0][i].c;
+        let c0 = filters.hot[i].coefficients(0);
         if k + 1 == order.len() {
-            for ch in 0..2 {
-                let (z1, z2, peak) =
-                    steady(c0, filters[ch][i].z1, filters[ch][i].z2, &mut x[ch][..n]);
+            for (ch, x) in x.iter_mut().enumerate() {
+                let [z1, z2] = filters.hot[i].state(ch);
+                let (z1, z2, peak) = steady(c0, z1, z2, &mut x[..n]);
                 valid &= clean(z1, z2, peak, limit);
-                filters[ch][i].z1 = z1;
-                filters[ch][i].z2 = z2;
+                filters.hot[i].set_state(ch, [z1, z2]);
             }
         } else {
             let j = order[k + 1];
-            let c1 = filters[0][j].c;
-            let mut l0 = [filters[0][i].z1, filters[0][i].z2];
-            let mut l1 = [filters[0][j].z1, filters[0][j].z2];
-            let mut r0 = [filters[1][i].z1, filters[1][i].z2];
-            let mut r1 = [filters[1][j].z1, filters[1][j].z2];
+            let c1 = filters.hot[j].coefficients(0);
+            let mut l0 = filters.hot[i].state(0);
+            let mut l1 = filters.hot[j].state(0);
+            let mut r0 = filters.hot[i].state(1);
+            let mut r1 = filters.hot[j].state(1);
             let (mut p0, mut p1, mut p2, mut p3) = (0., 0., 0., 0.);
             let mut left = step(&c0, &mut l0, x[0][0], &mut p0);
             let mut right = step(&c0, &mut r0, x[1][0], &mut p2);
@@ -144,10 +140,8 @@ fn scalar_chain(
                 && clean(r0[0], r0[1], p2, limit)
                 && clean(r1[0], r1[1], p3, limit);
             for (ch, a, b) in [(0, l0, l1), (1, r0, r1)] {
-                filters[ch][i].z1 = a[0];
-                filters[ch][i].z2 = a[1];
-                filters[ch][j].z1 = b[0];
-                filters[ch][j].z2 = b[1];
+                filters.hot[i].set_state(ch, a);
+                filters.hot[j].set_state(ch, b);
             }
         }
         if !valid {
@@ -160,6 +154,52 @@ fn scalar_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // These tests keep their filters as plain `Filter`s, a channel at a time,
+    // as the bank stored them before its steady data moved into `Hot`. Each
+    // call below moves them into a bank and back out, whatever the outcome.
+    type Plain = [[Filter; MAX_BANDS]; 2];
+    fn bank(filters: &Plain) -> Filters {
+        let mut bank = Filters::default();
+        for (ch, filters) in filters.iter().enumerate() {
+            for (i, filter) in filters.iter().enumerate() {
+                bank.set(ch, i, *filter);
+            }
+        }
+        bank
+    }
+    fn process(
+        filters: &mut Plain,
+        active: &[[bool; MAX_BANDS]; 2],
+        counts: [usize; 2],
+        x: &mut [[f64; BLOCK]; 2],
+        n: usize,
+        limit: f64,
+    ) -> bool {
+        let mut bank = bank(filters);
+        let done = super::process(&mut bank, active, counts, x, n, limit);
+        *filters = std::array::from_fn(|ch| std::array::from_fn(|i| bank.get(ch, i)));
+        done
+    }
+    /// One channel's `Filters::cascade`, run as the right channel so that a
+    /// mix-up of the two lanes shows.
+    fn cascade(
+        filters: &mut [Filter],
+        active: &[bool],
+        targets: &[Coefficients],
+        x: &mut [f64],
+        limit: f64,
+        m: &mut Meter,
+    ) {
+        let mut bank = Filters::default();
+        for (i, filter) in filters.iter().enumerate() {
+            bank.set(1, i, *filter);
+        }
+        bank.cascade(1, active, targets, x, limit, m);
+        for (i, filter) in filters.iter_mut().enumerate() {
+            *filter = bank.get(1, i);
+        }
+    }
     #[test]
     fn ineligible_stereo_cases_leave_samples_and_state_untouched() {
         let c = Coefficients {
@@ -225,7 +265,8 @@ mod tests {
             active[0][i] = band.enabled;
             active[1][i] = band.enabled;
         }
-        let initial = [std::array::from_fn(|i| Filter::with_coefficients(coefficients[i])); 2];
+        let initial =
+            bank(&[std::array::from_fn(|i| Filter::with_coefficients(coefficients[i])); 2]);
         let input: [[f64; BLOCK]; 2] = std::array::from_fn(|ch| {
             std::array::from_fn(|t| ((t + ch * 13) as f64 * 0.13).sin() * 0.1)
         });
@@ -241,7 +282,7 @@ mod tests {
                 for _ in 0..20_000 {
                     let mut samples = black_box(input);
                     if interleaved {
-                        assert!(process(
+                        assert!(super::process(
                             &mut filters,
                             &active,
                             [count; 2],
@@ -251,8 +292,8 @@ mod tests {
                         ));
                     } else {
                         for ch in 0..2 {
-                            Filter::cascade(
-                                &mut filters[ch][..count],
+                            filters.cascade(
+                                ch,
                                 &active[ch][..count],
                                 &coefficients[..count],
                                 &mut samples[ch][..112],
@@ -314,7 +355,7 @@ mod tests {
                         let mut ma = Meter::default();
                         let mut mb = Meter::default();
                         for ch in 0..2 {
-                            Filter::cascade(
+                            cascade(
                                 &mut a[ch][..count],
                                 &active[ch][..count],
                                 &target[..count],
@@ -325,7 +366,7 @@ mod tests {
                         }
                         if !process(&mut b, &active, [count; 2], &mut y, n, 16.) {
                             for ch in 0..2 {
-                                Filter::cascade(
+                                cascade(
                                     &mut b[ch][..count],
                                     &active[ch][..count],
                                     &target[..count],
@@ -453,7 +494,7 @@ mod tests {
         let mut reference_filters = pristine;
         let mut reference_meter = Meter::default();
         for ch in 0..2 {
-            Filter::cascade(
+            cascade(
                 &mut reference_filters[ch][..count],
                 &active[ch][..count],
                 &targets[..count],
@@ -464,7 +505,7 @@ mod tests {
         }
         let mut refused_meter = Meter::default();
         for ch in 0..2 {
-            Filter::cascade(
+            cascade(
                 &mut filters[ch][..count],
                 &active[ch][..count],
                 &targets[..count],
@@ -586,7 +627,7 @@ mod tests {
                 let mut y = x;
                 let (mut ma, mut mb) = (Meter::default(), Meter::default());
                 for ch in 0..2 {
-                    Filter::cascade(
+                    cascade(
                         &mut a[ch][..count],
                         &active[ch][..count],
                         &targets[..count],
@@ -600,7 +641,7 @@ mod tests {
                 } else {
                     refused += 1;
                     for ch in 0..2 {
-                        Filter::cascade(
+                        cascade(
                             &mut b[ch][..count],
                             &active[ch][..count],
                             &targets[..count],

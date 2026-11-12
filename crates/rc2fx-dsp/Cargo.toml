@@ -6,6 +6,11 @@ publish.workspace = true
 license.workspace = true
 description = "Owned Rust audio effects and callback-local processing state"
 
+[features]
+# Fused multiply-add in every biquad (the EQ and the high-pass). Fewer
+# operations on the mixer's Cortex-A53; output differs from the default build
+# in the last bits, so the frozen-oracle test is not built with it.
+eq-fma = []
 
 [dependencies]
 rc2fx-core = { path = "../rc2fx-core" }

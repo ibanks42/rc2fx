@@ -1,6 +1,9 @@
 #[cfg(test)]
 use crate::filter::safe;
-use crate::{BLOCK, EQ_INTERNAL_LIMIT, GAIN_SMOOTH, Meter, Prepared, Ramp, clamp, filter::Filter};
+use crate::{
+    BLOCK, EQ_INTERNAL_LIMIT, GAIN_SMOOTH, Meter, Prepared, Ramp, clamp,
+    filter::{Filter, Filters},
+};
 use rc2fx_core::{BandMode, BandType, Channel, MAX_BANDS, Target, eq::Coefficients};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -80,7 +83,7 @@ fn scale(samples: &mut [f64], gain: &Ramp, limit: f64, m: &mut Meter) {
 pub(crate) struct EqBank {
     pub shape: EqShape,
     active: [[bool; MAX_BANDS]; 2],
-    filters: [[Filter; MAX_BANDS]; 2],
+    filters: Filters,
     target: [[Coefficients; MAX_BANDS]; 2],
     input_gain: f64,
     output_gain: f64,
@@ -92,7 +95,7 @@ impl Default for EqBank {
         Self {
             shape: EqShape::default(),
             active: [[false; MAX_BANDS]; 2],
-            filters: [[Filter::default(); MAX_BANDS]; 2],
+            filters: Filters::default(),
             target: [[Coefficients::IDENTITY; MAX_BANDS]; 2],
             input_gain: 0.0,
             output_gain: 0.0,
@@ -122,7 +125,7 @@ impl EqBank {
         };
         for ch in 0..p.channels() {
             for i in 0..s.shape.count[ch] {
-                s.filters[ch][i] = Filter::with_coefficients(p.eq[ch][i]);
+                s.filters.set(ch, i, Filter::with_coefficients(p.eq[ch][i]));
                 if let Some(old) = old.filter(|old| old.shape.on && s.shape.on && s.active[ch][i]) {
                     let b = s.shape.bands[ch][i];
                     for j in 0..old.shape.count[ch] {
@@ -133,7 +136,7 @@ impl EqBank {
                             && a.kind == b.kind
                             && a.mode == b.mode
                         {
-                            s.filters[ch][i] = old.filters[ch][j];
+                            s.filters.set(ch, i, old.filters.get(ch, j));
                             break;
                         }
                     }
@@ -161,13 +164,15 @@ impl EqBank {
     pub fn is_smoothing(&self, ch: usize) -> bool {
         self.shape.on
             && (0..self.shape.count[ch])
-                .any(|i| self.active[ch][i] && self.filters[ch][i].is_smoothing())
+                .any(|i| self.active[ch][i] && self.filters.is_smoothing(ch, i))
     }
     pub fn begin(&mut self, ch: usize) {
         if self.shape.on {
             for i in 0..self.shape.count[ch] {
                 if self.active[ch][i] {
-                    self.filters[ch][i].begin(self.target[ch][i]);
+                    let mut filter = self.filters.get(ch, i);
+                    filter.begin(self.target[ch][i]);
+                    self.filters.set(ch, i, filter);
                 }
             }
         }
@@ -185,12 +190,13 @@ impl EqBank {
         if !self.shape.on {
             return;
         }
+        let [left, right] = self.shape.count;
+        self.filters.prefetch(&self.active, left.max(right), x);
         for samples in x.iter_mut().take(channels) {
             scale(&mut samples[..n], &input_gain, EQ_INTERNAL_LIMIT, m);
         }
         let stereo_done = channels == 2
-            && Filter::try_stereo_cascade(
-                &mut self.filters,
+            && self.filters.try_stereo_cascade(
                 &self.active,
                 self.shape.count,
                 x,
@@ -200,8 +206,8 @@ impl EqBank {
         if !stereo_done {
             for (ch, samples) in x.iter_mut().enumerate().take(channels) {
                 let count = self.shape.count[ch];
-                Filter::cascade(
-                    &mut self.filters[ch][..count],
+                self.filters.cascade(
+                    ch,
                     &self.active[ch][..count],
                     &self.target[ch][..count],
                     &mut samples[..n],
@@ -231,7 +237,9 @@ impl EqBank {
         ]
         .iter()
         .map(|gain| gain.to_bits())
-        .chain(self.filters.iter().flatten().flat_map(Filter::bits))
+        .chain(
+            (0..2 * MAX_BANDS).flat_map(|k| self.filters.get(k / MAX_BANDS, k % MAX_BANDS).bits()),
+        )
         .chain(
             self.target
                 .iter()
@@ -257,7 +265,7 @@ impl EqBank {
             return 0;
         }
         (0..self.shape.count[ch])
-            .filter(|&i| self.active[ch][i] && self.filters[ch][i].stalled(self.target[ch][i]))
+            .filter(|&i| self.active[ch][i] && self.filters.get(ch, i).stalled(self.target[ch][i]))
             .count()
     }
     #[cfg(test)]
@@ -271,12 +279,9 @@ impl EqBank {
             *sample = safe(*sample * self.input_gain, EQ_INTERNAL_LIMIT, m);
             for i in 0..self.shape.count[ch] {
                 if self.active[ch][i] {
-                    *sample = self.filters[ch][i].process(
-                        &self.target[ch][i],
-                        *sample,
-                        EQ_INTERNAL_LIMIT,
-                        m,
-                    );
+                    let mut filter = self.filters.get(ch, i);
+                    *sample = filter.process(&self.target[ch][i], *sample, EQ_INTERNAL_LIMIT, m);
+                    self.filters.set(ch, i, filter);
                 }
             }
             *sample = safe(*sample * self.output_gain, 16.0, m);

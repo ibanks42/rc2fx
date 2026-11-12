@@ -1,10 +1,13 @@
 //! AArch64 NEON chain: the two channels in the two lanes of one `f64x2`.
 //!
-//! The coefficients are shared between channels (checked bit-for-bit by the
-//! caller), so one duplicated vector holds them for both lanes; each channel's
-//! state and peak live in its own lane. The arithmetic is the same operation
-//! sequence as the scalar `step` — `vmul`/`vadd`/`vsub` only, never `vfma`, and
-//! no reassociation — so results are bit-identical to the per-channel path.
+//! A band's coefficients and state are stored as `[left, right]` pairs
+//! (`Hot`), so each is one vector load, and the state one vector store. The
+//! coefficients are the same bits in both lanes (checked by the caller); each
+//! channel's state and peak live in its own lane. The arithmetic is the same
+//! operation sequence as the scalar `step` — `vmul`/`vadd`/`vsub` only, never
+//! `vfma`, and no reassociation — so results are bit-identical to the
+//! per-channel path. With the `eq-fma` feature both fuse the same products
+//! (`vfma`/`vfms` here, `f64::mul_add` there) and still agree bit for bit.
 //! `vcalt`/`vbsl` flush a state below `1e-25` to `+0`: `vcalt` compares the
 //! magnitudes in one instruction (FACGT), which is `abs(next) < 1e-25` exactly,
 //! false for a NaN included. `vmaxnm` matches `f64::max` (maxNum) for the peak.
@@ -22,7 +25,7 @@ use core::arch::aarch64::*;
 /// `step`'s zero-flush threshold, the same literal the scalar path uses.
 const TINY: f64 = 1e-25;
 
-/// One band's coefficients, each duplicated into both lanes.
+/// One band's coefficients, the same in both lanes.
 #[derive(Clone, Copy)]
 struct Shared {
     b0: float64x2_t,
@@ -34,18 +37,24 @@ struct Shared {
 
 impl Shared {
     #[inline(always)]
-    fn new(c: Coefficients) -> Self {
-        // SAFETY: baseline NEON; no memory is touched.
-        unsafe {
-            Self {
-                b0: vdupq_n_f64(c.b0),
-                b1: vdupq_n_f64(c.b1),
-                b2: vdupq_n_f64(c.b2),
-                a1: vdupq_n_f64(c.a1),
-                a2: vdupq_n_f64(c.a2),
-            }
-        }
+    fn new(c: &[[f64; 2]; 5]) -> Self {
+        let [b0, b1, b2, a1, a2] = c.each_ref().map(load);
+        Self { b0, b1, b2, a1, a2 }
     }
+}
+
+/// A stored `[left, right]` pair as a vector, lane 0 left.
+#[inline(always)]
+fn load(pair: &[f64; 2]) -> float64x2_t {
+    // SAFETY: `pair` is two adjacent `f64`.
+    unsafe { vld1q_f64(pair.as_ptr()) }
+}
+
+/// Writes both lanes back to a stored pair.
+#[inline(always)]
+fn save(pair: &mut [f64; 2], v: float64x2_t) {
+    // SAFETY: `pair` is two adjacent `f64`.
+    unsafe { vst1q_f64(pair.as_mut_ptr(), v) }
 }
 
 /// `[left, right]` from the two channels' scalars, lane 0 left.
@@ -94,11 +103,19 @@ fn step(
     peak: &mut float64x2_t,
 ) -> float64x2_t {
     // SAFETY: baseline NEON; register operations only. The expression order
-    // matches the scalar `step` exactly, and no operation is fused.
+    // matches the scalar `step` exactly, and it fuses what `step` fuses:
+    // nothing, or with `eq-fma` the same products.
     unsafe {
-        let raw = vaddq_f64(vmulq_f64(c.b0, input), *z1);
-        let next1 = vaddq_f64(vsubq_f64(vmulq_f64(c.b1, input), vmulq_f64(c.a1, raw)), *z2);
-        let next2 = vsubq_f64(vmulq_f64(c.b2, input), vmulq_f64(c.a2, raw));
+        let (raw, next1, next2);
+        if cfg!(feature = "eq-fma") {
+            raw = vfmaq_f64(*z1, c.b0, input);
+            next1 = vfmsq_f64(vfmaq_f64(*z2, c.b1, input), c.a1, raw);
+            next2 = vfmsq_f64(vmulq_f64(c.b2, input), c.a2, raw);
+        } else {
+            raw = vaddq_f64(vmulq_f64(c.b0, input), *z1);
+            next1 = vaddq_f64(vsubq_f64(vmulq_f64(c.b1, input), vmulq_f64(c.a1, raw)), *z2);
+            next2 = vsubq_f64(vmulq_f64(c.b2, input), vmulq_f64(c.a2, raw));
+        }
         let zero = vdupq_n_f64(0.0);
         let tiny = vdupq_n_f64(TINY);
         // `vcaltq(a, b)` is `abs(a) < abs(b)`; `TINY` is positive.
@@ -110,19 +127,16 @@ fn step(
 }
 
 /// One band on both channels, samples written back in place (the odd tail).
-fn tail(filters: &mut [[Filter; MAX_BANDS]; 2], index: usize, x: &mut [Frame], limit: f64) -> bool {
-    let c = Shared::new(filters[0][index].c);
-    let mut z1 = pack(filters[0][index].z1, filters[1][index].z1);
-    let mut z2 = pack(filters[0][index].z2, filters[1][index].z2);
+fn tail(band: &mut Hot, x: &mut [Frame], limit: f64) -> bool {
+    let c = Shared::new(&band.c);
+    let [mut z1, mut z2] = band.z.each_ref().map(load);
     let mut peak = pack(0.0, 0.0);
     for t in 0..x.len() {
         let out = step(&c, &mut z1, &mut z2, input(x, t), &mut peak);
         store(x, t, out);
     }
-    filters[0][index].z1 = lane0(z1);
-    filters[0][index].z2 = lane0(z2);
-    filters[1][index].z1 = lane1(z1);
-    filters[1][index].z2 = lane1(z2);
+    save(&mut band.z[0], z1);
+    save(&mut band.z[1], z2);
     let (left, right) = (
         clean(lane0(z1), lane0(z2), lane0(peak), limit),
         clean(lane1(z1), lane1(z2), lane1(peak), limit),
@@ -133,19 +147,17 @@ fn tail(filters: &mut [[Filter; MAX_BANDS]; 2], index: usize, x: &mut [Frame], l
 /// Two bands on both channels: `steady_two`'s carry across the pair, with the
 /// channels in lanes.
 fn pair(
-    filters: &mut [[Filter; MAX_BANDS]; 2],
+    bands: &mut [Hot; MAX_BANDS],
     first: usize,
     second: usize,
     x: &mut [Frame],
     limit: f64,
 ) -> bool {
     let n = x.len();
-    let c0 = Shared::new(filters[0][first].c);
-    let c1 = Shared::new(filters[0][second].c);
-    let mut z0 = pack(filters[0][first].z1, filters[1][first].z1);
-    let mut w0 = pack(filters[0][first].z2, filters[1][first].z2);
-    let mut z1 = pack(filters[0][second].z1, filters[1][second].z1);
-    let mut w1 = pack(filters[0][second].z2, filters[1][second].z2);
+    let c0 = Shared::new(&bands[first].c);
+    let c1 = Shared::new(&bands[second].c);
+    let [mut z0, mut w0] = bands[first].z.each_ref().map(load);
+    let [mut z1, mut w1] = bands[second].z.each_ref().map(load);
     let mut p0 = pack(0.0, 0.0);
     let mut p1 = pack(0.0, 0.0);
     let mut carry = step(&c0, &mut z0, &mut w0, input(x, 0), &mut p0);
@@ -155,14 +167,10 @@ fn pair(
         store(x, t - 1, out);
     }
     store(x, n - 1, step(&c1, &mut z1, &mut w1, carry, &mut p1));
-    filters[0][first].z1 = lane0(z0);
-    filters[0][first].z2 = lane0(w0);
-    filters[1][first].z1 = lane1(z0);
-    filters[1][first].z2 = lane1(w0);
-    filters[0][second].z1 = lane0(z1);
-    filters[0][second].z2 = lane0(w1);
-    filters[1][second].z1 = lane1(z1);
-    filters[1][second].z2 = lane1(w1);
+    save(&mut bands[first].z[0], z0);
+    save(&mut bands[first].z[1], w0);
+    save(&mut bands[second].z[0], z1);
+    save(&mut bands[second].z[1], w1);
     clean(lane0(z0), lane0(w0), lane0(p0), limit)
         && clean(lane1(z0), lane1(w0), lane1(p0), limit)
         && clean(lane0(z1), lane0(w1), lane0(p1), limit)
@@ -178,7 +186,7 @@ fn pair(
 /// indices below `MAX_BANDS`, and `x` must not be empty. Both are guaranteed by
 /// `process`'s eligibility checks.
 pub(super) unsafe fn chain(
-    filters: &mut [[Filter; MAX_BANDS]; 2],
+    bands: &mut [Hot; MAX_BANDS],
     order: &[usize],
     x: &mut [Frame],
     limit: f64,
@@ -186,9 +194,9 @@ pub(super) unsafe fn chain(
     let mut valid = true;
     for k in (0..order.len()).step_by(2) {
         valid = if k + 1 == order.len() {
-            tail(filters, order[k], x, limit)
+            tail(&mut bands[order[k]], x, limit)
         } else {
-            pair(filters, order[k], order[k + 1], x, limit)
+            pair(bands, order[k], order[k + 1], x, limit)
         };
         if !valid {
             break;
@@ -256,7 +264,7 @@ mod tests {
         let mut z2 = pack(second[0], second[1]);
         let mut peak = pack(0.25, 0.25);
         let raw = step(
-            &Shared::new(c),
+            &Shared::new(&c.as_array().map(|c| [c; 2])),
             &mut z1,
             &mut z2,
             pack(sample[0], sample[1]),
@@ -304,7 +312,7 @@ mod tests {
         let mut z2 = pack(TINY, -below);
         let mut peak = pack(0.0, 0.0);
         step(
-            &Shared::new(ROUTE),
+            &Shared::new(&ROUTE.as_array().map(|c| [c; 2])),
             &mut z1,
             &mut z2,
             pack(-TINY, below),

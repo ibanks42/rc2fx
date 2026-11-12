@@ -1,6 +1,7 @@
 //! Linux-only frozen scalar-oracle regression. No compiler, child process or C
 //! runtime dependency; fixture provenance is in fixtures/scalar-linux-v1/README.md.
-#![cfg(target_os = "linux")]
+//! Not built with `eq-fma`, which changes the last bits the oracle pins.
+#![cfg(all(target_os = "linux", not(feature = "eq-fma")))]
 use rc2fx_core::{Band, BandMode, BandType, Target, TargetKind};
 use rc2fx_dsp::{Dsp, Prepared};
 
