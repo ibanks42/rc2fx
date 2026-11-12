@@ -24,6 +24,9 @@ pub use model::VendorModel;
 pub use outlier::{EventHistory, EventRecord, FrameRecord, HISTORY, Outliers, Recorded};
 use queue::{Consumer, Frame, Producer};
 pub use rc2fx_dfn::LayerPause;
+/// `rc2fx-bench`'s choice of int8 matrix kernel; see `rc2fx_dfn::bench_kernels`.
+#[cfg(feature = "bench-kernels")]
+pub use rc2fx_dfn::bench_kernels;
 use rc2fx_dsp::{MAX_SUPPRESSION_DELAY, RetirementError, Suppression};
 use std::{
     sync::{

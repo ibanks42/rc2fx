@@ -345,6 +345,37 @@ pub(crate) mod reference {
     }
 }
 
+/// The bench's choice of int8 matrix kernel, in builds with the
+/// `bench-kernels` feature (`rc2fx-bench`). Other builds have only the tiled
+/// kernel and no switch.
+#[cfg(feature = "bench-kernels")]
+pub mod bench_kernels {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static ROW_MAJOR: AtomicBool = AtomicBool::new(false);
+
+    /// Runs every model's GRU products with the row-major kernel (true), the
+    /// production kernel until 2026-11-10, or with the tiled kernel that
+    /// replaced it (false, the default). The two give the same bits. Set it
+    /// between `process` calls.
+    pub fn set_row_major_q8(on: bool) {
+        ROW_MAJOR.store(on, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    pub(crate) fn row_major_q8() -> bool {
+        ROW_MAJOR.load(Ordering::Relaxed)
+    }
+
+    /// Mean nanoseconds per 384 x 128 product (the GRU's shape) over
+    /// `iterations` products of one cache-resident matrix: the row-major
+    /// kernel, then the tiled one. Also checks that the two agree in every
+    /// bit. This is the arithmetic alone; a live frame also waits on memory.
+    pub fn resident_product_ns(iterations: usize) -> [f64; 2] {
+        crate::kernels::bench_resident_products(iterations)
+    }
+}
+
 /// Drops the oldest spectrum and appends `spec`, reusing the dropped buffer.
 fn push(ring: &mut VecDeque<Vec<Complex32>>, spec: &[Complex32]) {
     if let Some(mut oldest) = ring.pop_front() {

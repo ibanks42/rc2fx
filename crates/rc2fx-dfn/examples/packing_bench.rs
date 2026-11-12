@@ -1,7 +1,11 @@
-//! Feasibility probe for 4-row x 16-column packed int8 weights in the
-//! single-step int8 matvec (`kernels::matvec_q8_steps::<1>`). Standalone: it
-//! carries its own copies of the row-major kernel, the `dfn_q8_rows4`
-//! kernel and a packed-tile kernel, so the library is unchanged.
+//! The feasibility probe that preceded the library's tiled int8 kernel
+//! (`kernels::matvec_q8`, 4-row x 16-column tiles). Standalone: it carries
+//! its own copies of the row-major kernel, of a four-rows-at-a-time kernel
+//! over row-major weights (the removed `dfn_q8_rows4` kernel, whose reason
+//! for removal is not recorded) and of a first packed-tile kernel. The
+//! library's kernel is a later form of `packed`, and `rc2fx-bench --kernel
+//! compare` times it against the row-major one through the whole model;
+//! this probe remains for timing the three layouts on one resident matrix.
 //!
 //!     cargo run --release -p rc2fx-dfn --example packing_bench -- [ITERATIONS]
 //!

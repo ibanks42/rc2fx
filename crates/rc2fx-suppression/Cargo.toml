@@ -12,6 +12,11 @@ rc2fx-dsp = { path = "../rc2fx-dsp" }
 rc2fx-dfn = { path = "../rc2fx-dfn" }
 libc = "0.2"
 
+[features]
+# For `rc2fx-bench` only: `rc2fx-dfn`'s run-time choice between its int8
+# matrix kernels (`bench_kernels`). Production builds leave it off.
+bench-kernels = ["rc2fx-dfn/bench-kernels"]
+
 [dev-dependencies]
 serde_json = "1"
 

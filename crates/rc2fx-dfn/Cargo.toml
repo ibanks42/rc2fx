@@ -9,6 +9,13 @@ description = "DeepFilterNet3 speech enhancement in plain Rust, for the suppress
 [dependencies]
 realfft = "3.3"
 
+[features]
+# For `rc2fx-bench` only: keeps the row-major int8 weights and kernel beside
+# the tiled ones and lets the bench choose between them at run time
+# (`bench_kernels`). Nothing else may turn it on: it doubles the GRU weights
+# in memory and adds a check to every matrix product.
+bench-kernels = []
+
 # `--cfg dfn_profile` (RUSTFLAGS) prints per-stage timings to stderr.
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dfn_profile)'] }
