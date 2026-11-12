@@ -398,6 +398,8 @@ struct Handoff {
     seq: u64,
     frames: usize,
     cycle_start: u64,
+    /// CLOCK_MONOTONIC when this frame's callback started (its `started`).
+    started: u64,
     native_success: bool,
     jobs: Vec<Job>,
     /// By path; callback-owned paths have none.
@@ -405,6 +407,21 @@ struct Handoff {
     counters: Counters,
     /// The frame the helper finished last.
     done_seq: u64,
+    /// Tests: the helper this frame is handed to, which must have stopped
+    /// before the frame is freed (see `Drop for Pipeline`).
+    #[cfg(test)]
+    helper: Option<Arc<Shared>>,
+}
+#[cfg(test)]
+impl Drop for Handoff {
+    fn drop(&mut self) {
+        if let Some(helper) = &self.helper {
+            assert!(
+                helper.gone.load(Ordering::SeqCst),
+                "the frame was freed while its helper thread was still alive"
+            );
+        }
+    }
 }
 #[derive(Clone, Copy)]
 struct PinEntry {
@@ -715,6 +732,15 @@ pub struct Pipeline {
 // ownership of `handoff` (see Handoff).
 unsafe impl Sync for Pipeline {}
 unsafe impl Send for Pipeline {}
+impl Drop for Pipeline {
+    /// The helper first. The fields drop in the order they are declared,
+    /// `handoff` before `helper`: without this a helper that still had a
+    /// frame (queued and left to its timer, or in the middle of one) would
+    /// work on buffers already freed. Once it has stopped it touches nothing.
+    fn drop(&mut self) {
+        self.helper.stop();
+    }
+}
 /// The meter of an unprocessed path: left channel then right, sample by
 /// sample. Two plain loops rather than one flattened iterator, whose state
 /// machine the compiler keeps in the loop; the order of every operation, and
@@ -777,8 +803,11 @@ pub static HELPER_TIME: Line<HelperTime> = Line(HelperTime {
 
 /// Bench gauge: a histogram of short times, in microseconds
 /// [<=1, <=2, <=4, <=8, <=16, <=32, <=64, >64], with the count, total and
-/// longest. Each instance has one writer thread and its own lines.
+/// longest. Each instance has one writer thread and its own lines. A `wide`
+/// one has bounds sixteen times larger, for times of the order of the
+/// helper's margins.
 pub struct Fine {
+    bounds_us: [u64; 7],
     calls: AtomicU64,
     total_ns: AtomicU64,
     max_ns: AtomicU64,
@@ -786,8 +815,16 @@ pub struct Fine {
 }
 impl Fine {
     const BOUNDS_US: [u64; 7] = [1, 2, 4, 8, 16, 32, 64];
+    const WIDE_BOUNDS_US: [u64; 7] = [16, 32, 64, 128, 256, 512, 1024];
     const fn new() -> Self {
+        Self::with(Self::BOUNDS_US)
+    }
+    const fn wide() -> Self {
+        Self::with(Self::WIDE_BOUNDS_US)
+    }
+    const fn with(bounds_us: [u64; 7]) -> Self {
         Self {
+            bounds_us,
             calls: AtomicU64::new(0),
             total_ns: AtomicU64::new(0),
             max_ns: AtomicU64::new(0),
@@ -795,7 +832,8 @@ impl Fine {
         }
     }
     fn record(&self, elapsed_ns: u64) {
-        let bin = Self::BOUNDS_US
+        let bin = self
+            .bounds_us
             .iter()
             .position(|bound| elapsed_ns <= bound * 1_000)
             .unwrap_or(7);
@@ -814,27 +852,80 @@ impl Fine {
         })
     }
 }
-/// Bench gauges around the helper wake, which is a futex system call at the
-/// end of every callback. Recorded only while the gauges are on; without them
-/// no clock is read for these and they stay zero.
+/// Bench gauges around the helper's start. Recorded only while the gauges
+/// are on; without them no clock is read for these and they stay zero.
 ///
-/// `WAKE_CALL`: the time `Helper::queue` takes on the callback thread, which
-/// delays the callback's return by that much. `END`: `Pipeline::end` from its
-/// entry to just before that call, so that the rest of the callback's tail is
-/// not mistaken for the wake; `PLACE` is the part of it spent sampling the
-/// thread's placement. `WAKE_LATENCY` (written by the helper): from just
-/// before the wake call to the helper starting its frame.
+/// Written by the callback. `WAKE_CALL`: the time every `Helper::queue` takes
+/// on the callback thread, which delays the callback's return by that much;
+/// `WAKE_SENT`: the same for the calls that woke the helper, a futex system
+/// call, with `WAKES` counting them by reason: [the helper was parked, it
+/// slept towards a wake-up later than LATEST_SELF_START_NS]. Every other call
+/// left the helper to start by itself. `END`: `Pipeline::end` from its entry to
+/// just before that call, so that the rest of the callback's tail is not
+/// mistaken for the wake; `PLACE` is the part of it spent sampling the
+/// thread's placement. `HELPER_SLACK`: the time from the helper finishing a
+/// frame to the start of the callback that consumes it.
+///
+/// Written by the helper. `WAKE_LATENCY`: from just before `Helper::queue` to
+/// the helper starting its frame, for every frame; `WOKEN_LATENCY` for the
+/// frames the callback woke it for and `SELF_LATENCY` for those it started by
+/// itself. `STARTS` counts frames by how the helper came by them (`Start`,
+/// `STARTS_*`). `TIMER_LATE`: for the frames its timer started, from the
+/// timer's time to the helper starting the frame: what the kernel's timer and
+/// the helper's way back to a core take, which no host test can tell.
+/// `HANDOFF_LATE` and `HANDOFF_EARLY`: by how much a callback ended after or
+/// before the forecast, which the margin has to cover.
 static WAKE_CALL: Line<Fine> = Line(Fine::new());
+static WAKE_SENT: Line<Fine> = Line(Fine::new());
+static WAKES: Line<[AtomicU64; 2]> = Line([const { AtomicU64::new(0) }; 2]);
 static END: Line<Fine> = Line(Fine::new());
 static PLACE: Line<Fine> = Line(Fine::new());
+static HELPER_SLACK: Line<Fine> = Line(Fine::wide());
 static WAKE_LATENCY: Line<Fine> = Line(Fine::new());
+static WOKEN_LATENCY: Line<Fine> = Line(Fine::new());
+static SELF_LATENCY: Line<Fine> = Line(Fine::wide());
+static TIMER_LATE: Line<Fine> = Line(Fine::new());
+static HANDOFF_LATE: Line<Fine> = Line(Fine::wide());
+static HANDOFF_EARLY: Line<Fine> = Line(Fine::wide());
+static STARTS: Line<[AtomicU64; 5]> = Line([const { AtomicU64::new(0) }; 5]);
+/// `STARTS` indices. Started by itself: the frame was already queued when the
+/// helper first looked, or its timer ended the sleep. Started by the
+/// callback's wake: out of the timed sleep, out of the park that followed a
+/// timer with nothing queued, or out of a park without a forecast.
+const STARTS_QUEUED: usize = 0;
+const STARTS_TIMER: usize = 1;
+const STARTS_WOKEN_EARLY: usize = 2;
+const STARTS_PARKED_AFTER_TIMER: usize = 3;
+const STARTS_PARKED_NO_FORECAST: usize = 4;
 /// The helper wake gauges, for the report's `gauges` section.
 pub fn wake_gauges() -> serde_json::Value {
+    let read = |value: &AtomicU64| value.load(Ordering::Relaxed);
     serde_json::json!({
         "boundsUs": Fine::BOUNDS_US,
-        "meaning": "wakeCall: time inside the helper wake on the callback thread; wakeLatency: from just before the wake to the helper starting its frame; end: Pipeline::end from entry to just before the wake, including place and the end part of pathCostNs; place: placement sampling within end",
+        "wideBoundsUs": Fine::WIDE_BOUNDS_US,
+        "meaning": "wakeCall: time inside every helper handoff (Helper::queue) on the callback thread; wakeSent: the same for the handoffs that woke the helper with a futex call, counted by reason in wakes, every other handoff made no system call; wakeLatency: from just before the handoff to the helper starting its frame, wokenLatency for the frames the callback woke it for, selfLatency (wide) for those it started by itself; timerLate: from the helper's timer to its start of the frame, for the frames the timer started; starts: frames by how the helper came by them; handoffLate, handoffEarly (wide): the callback's end after or before the helper's forecast; helperSlack (wide): from the helper finishing a frame to the start of the callback that consumes it; end: Pipeline::end from entry to just before the handoff, including place and the end part of pathCostNs; place: placement sampling within end",
+        "marginNs": WAKE_MARGIN_NS,
+        "latestSelfStartNs": LATEST_SELF_START_NS,
         "wakeCall": WAKE_CALL.snapshot(),
+        "wakeSent": WAKE_SENT.snapshot(),
+        "wakes": {
+            "parked": read(&WAKES[0]),
+            "pastLatestSelfStart": read(&WAKES[1]),
+        },
         "wakeLatency": WAKE_LATENCY.snapshot(),
+        "wokenLatency": WOKEN_LATENCY.snapshot(),
+        "selfLatency": SELF_LATENCY.snapshot(),
+        "timerLate": TIMER_LATE.snapshot(),
+        "starts": {
+            "alreadyQueued": read(&STARTS[STARTS_QUEUED]),
+            "timer": read(&STARTS[STARTS_TIMER]),
+            "wokenEarly": read(&STARTS[STARTS_WOKEN_EARLY]),
+            "parkedAfterTimer": read(&STARTS[STARTS_PARKED_AFTER_TIMER]),
+            "parkedNoForecast": read(&STARTS[STARTS_PARKED_NO_FORECAST]),
+        },
+        "handoffLate": HANDOFF_LATE.snapshot(),
+        "handoffEarly": HANDOFF_EARLY.snapshot(),
+        "helperSlack": HELPER_SLACK.snapshot(),
         "end": END.snapshot(),
         "place": PLACE.snapshot(),
     })
@@ -842,6 +933,214 @@ pub fn wake_gauges() -> serde_json::Value {
 /// The longest a callback waits for a busy helper before passing its frame
 /// through.
 const HELPER_WAIT_NS: u64 = 200_000;
+/// One callback period.
+const PERIOD_NS: u64 = super::timing::BUDGET_NS;
+/// `Shared::wake_at` while the helper runs, or is about to look at `state`.
+const AWAKE: u64 = 0;
+/// `Shared::wake_at` while the helper is parked with no timer: only the
+/// callback's wake starts it.
+const PARKED: u64 = u64::MAX;
+/// How long after the forecast end of the next callback the helper's timer
+/// wakes it, so that the frame is normally queued by then and the callback
+/// made no system call for it (on the mixer the wake cost the callback 12 us
+/// at its very end, every cycle).
+///
+/// It has to cover how far a callback's end strays after the forecast. That
+/// was not measured (`handoffLate` now does); from the spread of the end
+/// positions and of the callback's start it is of the order of 100 us, and
+/// 200 us is twice that. It stays under IRREGULAR_NS, past which a callback
+/// counts as irregular anyway. Its price is the helper's start: about 200 us
+/// after the handoff instead of the 27 us a wake took, out of the 2100 us the
+/// helper has to spare in a period (see LATEST_SELF_START_NS for the bound).
+const WAKE_MARGIN_NS: u64 = 200_000;
+/// The latest the helper may start a frame by itself, from the start of the
+/// callback that hands the frame off. The callback wakes a helper whose timer
+/// is set later than this, as it wakes a parked one.
+///
+/// Callbacks start a period apart, and never less than half a period apart
+/// in the 67 million of one 43-hour run (13,366 between 0.5 and 0.9 of a
+/// period, against 14,174 between 1.1 and 1.5: mostly a late callback and
+/// the short gap after it, and a late callback starts the forecast over).
+/// A helper that starts by this bound and takes its usual 240 us (213 us for
+/// the frame, 27 us to get its core) is done 990 us before a callback one
+/// period later, and 173 us after the start of one half a period later: less
+/// than that callback waits (HELPER_WAIT_NS), so its frame is not passed
+/// through unprocessed. It is also no later than the wake from a callback
+/// that ends 1100 us after its start, which is an ordinary callback today.
+///
+/// That holds for the usual frame only. A frame longer than 240 us, met by a
+/// callback half a period early, is passed through where a woken helper would
+/// have had it done (it started some 200 us sooner): the price of the timer,
+/// to be judged on the mixer by `helper.stalls` and `helperSlack`.
+const LATEST_SELF_START_NS: u64 = PERIOD_NS / 2 + HELPER_WAIT_NS - 266_666;
+/// A callback that ends further than this from one period after the last
+/// counts as irregular (a late start, a skipped or doubled cycle, a restart):
+/// the forecast starts over from it. A tenth of a period, the band the
+/// callback gap counters use.
+const IRREGULAR_NS: u64 = PERIOD_NS / 10;
+/// Regular callbacks in a row before the helper sleeps on a forecast (37 ms).
+/// Until then it parks, and every callback wakes it.
+const FORECAST_WARMUP: u32 = 16;
+
+/// Where the next callback will end, from where the last ones did.
+///
+/// The callbacks' ends lie one period apart, give or take the jitter of the
+/// cycle's start and of the callback's length; the anchor follows them with
+/// a weight of an eighth for each new one. Anything irregular starts it over,
+/// and the helper then parks as it always did.
+#[derive(Default, Debug)]
+struct Forecast {
+    /// The smoothed end of the latest callback, 0 with no history.
+    anchor: u64,
+    /// Regular callbacks in a row.
+    streak: u32,
+    /// When the callback of the frame before started.
+    previous: u64,
+    /// The latest callback's end after (positive) or before the forecast, for
+    /// the bench gauges; None for a frame that had no forecast to compare.
+    deviation: Option<i64>,
+}
+impl Forecast {
+    /// After a frame: `begun` is when its callback started, `ended` the
+    /// latest end stamp published (`Shared::ended`). Returns when the helper
+    /// should wake by itself for the next frame, or None to park.
+    fn observe(&mut self, begun: u64, ended: u64) -> Option<u64> {
+        // A callback publishes its end after it has handed its frame off, so
+        // a short frame can be over first, and the stamp still that of the
+        // callback before: this one is then taken to be as long as that one.
+        // A stamp is a callback's own between its start and one period on;
+        // anything else (no stamp, a callback that found the helper busy in
+        // between) is no sample.
+        let own = |start: u64| start != 0 && ended > start && ended - start < PERIOD_NS;
+        let length = if own(begun) {
+            Some(ended - begun)
+        } else if begun != 0 && own(self.previous) {
+            Some(ended - self.previous)
+        } else {
+            None
+        };
+        self.previous = begun;
+        self.deviation = None;
+        let expected = self.anchor.saturating_add(PERIOD_NS);
+        match length.map(|length| begun + length) {
+            Some(end) if self.anchor != 0 && end.abs_diff(expected) <= IRREGULAR_NS => {
+                self.deviation = Some(if end >= expected {
+                    (end - expected) as i64
+                } else {
+                    -((expected - end) as i64)
+                });
+                self.anchor = if end >= expected {
+                    expected + (end - expected) / 8
+                } else {
+                    expected - (expected - end) / 8
+                };
+                self.streak = self.streak.saturating_add(1);
+            }
+            // The first callback, or an irregular one.
+            Some(end) => {
+                self.anchor = end;
+                self.streak = 0;
+            }
+            None => {
+                self.anchor = 0;
+                self.streak = 0;
+            }
+        }
+        if self.streak < FORECAST_WARMUP {
+            return None;
+        }
+        let wake_at = self.anchor + PERIOD_NS + WAKE_MARGIN_NS;
+        // Not when the next callback would have to wake the helper anyway.
+        (wake_at <= begun + PERIOD_NS + LATEST_SELF_START_NS).then_some(wake_at)
+    }
+}
+
+/// Whether a callback that started at `begun` must wake a helper that
+/// published `wake_at`: when it is parked, or sleeps towards a wake-up later
+/// than it may start by itself. A helper that is awake finds the frame.
+fn must_wake(wake_at: u64, begun: u64) -> bool {
+    wake_at == PARKED || (wake_at != AWAKE && wake_at > begun.saturating_add(LATEST_SELF_START_NS))
+}
+/// What `Helper::queue` did about the helper's sleep.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Woke {
+    /// Nothing: no system call.
+    No,
+    /// Woke it out of its park.
+    Parked,
+    /// Woke it out of a timed sleep that would have ended too late.
+    Late,
+}
+/// How the helper came by a frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Start {
+    /// It was queued when the helper looked, before any sleep.
+    Queued,
+    /// During the timed sleep towards this wake-up: at its end, or earlier if
+    /// the callback woke the helper.
+    Slept(u64),
+    /// While parked; `expired`: after a timed sleep that ended with nothing
+    /// queued.
+    Parked { expired: bool },
+}
+/// The helper's clock and sleeps, which the tests replace.
+trait Pace {
+    /// Once, on the helper thread, before its first sleep.
+    fn prepare(&self) {}
+    /// CLOCK_MONOTONIC in nanoseconds.
+    fn now(&self) -> u64;
+    /// Sleeps until `wake_at` at the latest. `Thread::unpark` ends it, and it
+    /// may end early for no reason.
+    fn sleep_until(&self, wake_at: u64);
+    /// Sleeps until `Thread::unpark`; it may end for no reason.
+    fn park(&self);
+    /// After each frame, once it is handed back and before the helper turns
+    /// to its sleep. Nothing here; a test takes its time, so that the next
+    /// handoff meets every step of the way to sleep.
+    fn rest(&self) {}
+    /// Whether the timed sleep is on time only for a real-time thread: the
+    /// helper then parks, as it always did, until it has been made one.
+    fn needs_realtime(&self) -> bool {
+        false
+    }
+    /// Whether a thread that has `policy` after taking its placement is a
+    /// real-time one. The kernel's rule; a test, which cannot make its
+    /// threads real-time, says which of its placements count.
+    fn realtime(&self, policy: i32) -> bool {
+        matches!(policy, libc::SCHED_FIFO | libc::SCHED_RR)
+    }
+}
+/// The mixer's: a futex wait, with the kernel's timer for the timed one. For
+/// a real-time thread on PREEMPT_RT that timer is a hard interrupt on the
+/// core the helper went to sleep on.
+struct Kernel;
+impl Pace for Kernel {
+    fn prepare(&self) {
+        // A futex wait's timeout is rounded by the thread's timer slack,
+        // 50 us by default on this kernel even for a real-time thread.
+        unsafe { libc::prctl(libc::PR_SET_TIMERSLACK, 1 as libc::c_ulong) };
+    }
+    fn now(&self) -> u64 {
+        super::timing::monotonic()
+    }
+    fn sleep_until(&self, wake_at: u64) {
+        let left = wake_at.saturating_sub(super::timing::monotonic());
+        if left != 0 {
+            thread::park_timeout(std::time::Duration::from_nanos(left));
+        }
+    }
+    fn park(&self) {
+        thread::park();
+    }
+    fn needs_realtime(&self) -> bool {
+        // An ordinary thread's timer waits for the kernel's timer thread,
+        // which every real-time thread on that core holds up: so not before
+        // the helper has taken its placement (the first 64 callbacks or
+        // more). The hosts the tests run on have no such kernel, and give
+        // the helper no real-time placement.
+        !cfg!(test)
+    }
+}
 /// Callbacks that found the helper still busy after the wait: their frame
 /// was not handed off, and the previous frame's processed audio not ready.
 pub static HELPER_STALLS: AtomicU64 = AtomicU64::new(0);
@@ -1023,9 +1322,22 @@ struct Shared {
     /// CLOCK_MONOTONIC when the helper began and finished its latest frame.
     started: AtomicU64,
     finished: AtomicU64,
-    /// Bench gauges only: CLOCK_MONOTONIC just before the callback woke the
-    /// helper for the frame now queued. 0 while the gauges are off.
+    /// Bench gauges only: CLOCK_MONOTONIC just before the callback handed
+    /// off the frame now queued. 0 while the gauges are off.
     queued_at: AtomicU64,
+    /// What the helper is doing about its next frame: AWAKE, PARKED, or the
+    /// CLOCK_MONOTONIC time its timer ends its sleep (see `await_frame`).
+    wake_at: AtomicU64,
+    /// CLOCK_MONOTONIC at the end of the latest callback (`Pipeline::ended`),
+    /// 0 before the first: what the helper forecasts the next handoff from.
+    ended: AtomicU64,
+    /// Every frame the helper ran, in order: its sequence number, how it
+    /// came by it and when it started.
+    #[cfg(test)]
+    ran: std::sync::Mutex<Vec<(u64, Start, u64)>>,
+    /// Set when the helper's thread has returned from its loop.
+    #[cfg(test)]
+    gone: AtomicBool,
     /// The callback thread's CPUs, policy and priority; `generation` counts
     /// changes, and the helper derives its placement from each one.
     generation: AtomicU64,
@@ -1085,19 +1397,21 @@ fn store_placement(target: &[AtomicI64; 4]) {
         slot.store(value, Ordering::Relaxed);
     }
 }
-struct Helper {
-    shared: Arc<Shared>,
-    thread: Option<thread::JoinHandle<()>>,
-}
-impl Helper {
-    fn start() -> Result<Self, String> {
-        let shared = Arc::new(Shared {
+impl Shared {
+    fn new() -> Self {
+        Self {
             state: AtomicU8::new(IDLE),
             handoff: AtomicPtr::new(std::ptr::null_mut()),
             stop: AtomicBool::new(false),
             started: AtomicU64::new(0),
             finished: AtomicU64::new(0),
             queued_at: AtomicU64::new(0),
+            wake_at: AtomicU64::new(AWAKE),
+            ended: AtomicU64::new(0),
+            #[cfg(test)]
+            ran: std::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            gone: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             applied: AtomicU64::new(0),
             record: AtomicUsize::new(usize::MAX),
@@ -1105,11 +1419,28 @@ impl Helper {
             cpus: AtomicU64::new(0),
             policy: AtomicI32::new(0),
             priority: AtomicI32::new(0),
-        });
+        }
+    }
+}
+struct Helper {
+    shared: Arc<Shared>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+impl Helper {
+    fn start() -> Result<Self, String> {
+        Self::start_with(Kernel)
+    }
+    fn start_with<P: Pace + Send + 'static>(pace: P) -> Result<Self, String> {
+        let shared = Arc::new(Shared::new());
         let worker = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name("rc2fx-dsp".into())
-            .spawn(move || helper_loop(&worker))
+            .spawn(move || {
+                pace.prepare();
+                helper_loop(&worker, &pace);
+                #[cfg(test)]
+                worker.gone.store(true, Ordering::SeqCst);
+            })
             .map_err(|error| format!("native helper thread: {error}"))?;
         Ok(Self {
             shared,
@@ -1201,23 +1532,41 @@ impl Helper {
             }
         }
     }
-    /// Hands the frame to the helper and wakes it. `queued_at`: with the bench
-    /// gauges on, the time of this call, for the helper's wake latency; 0
-    /// otherwise, and then nothing is stored.
-    fn queue(&self, handoff: *mut Handoff, queued_at: u64) {
-        self.shared.handoff.store(handoff, Ordering::Relaxed);
+    /// Hands the frame to the helper, and wakes it only if it would not start
+    /// in time by itself (`must_wake`): normally it sleeps towards a timer set
+    /// just after this call, and the callback makes no system call. `begun`:
+    /// when this callback started. `queued_at`: with the bench gauges on, the
+    /// time of this call, for the helper's wake latency; 0 otherwise, and then
+    /// nothing is stored.
+    ///
+    /// QUEUED is stored before `wake_at` is read, both SeqCst: `await_frame`
+    /// has the other half and the reason.
+    fn queue(&self, handoff: *mut Handoff, begun: u64, queued_at: u64) -> Woke {
+        let shared = &*self.shared;
+        shared.handoff.store(handoff, Ordering::Relaxed);
         if queued_at != 0 {
             // Before QUEUED, so that the helper never reads an older stamp.
-            self.shared.queued_at.store(queued_at, Ordering::Relaxed);
+            shared.queued_at.store(queued_at, Ordering::Relaxed);
         }
-        self.shared.state.store(QUEUED, Ordering::Release);
+        shared.state.store(QUEUED, Ordering::SeqCst);
+        let wake_at = shared.wake_at.load(Ordering::SeqCst);
+        if !must_wake(wake_at, begun) {
+            return Woke::No;
+        }
         if let Some(thread) = &self.thread {
             thread.thread().unpark();
         }
+        if wake_at == PARKED {
+            Woke::Parked
+        } else {
+            Woke::Late
+        }
     }
 }
-impl Drop for Helper {
-    fn drop(&mut self) {
+impl Helper {
+    /// Tells the helper to stop and waits until its thread has returned: from
+    /// then on it touches no frame. Control only, after callbacks have stopped.
+    fn stop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             thread.thread().unpark();
@@ -1225,18 +1574,93 @@ impl Drop for Helper {
         }
     }
 }
-fn helper_loop(shared: &Shared) {
-    let mut placed = 0;
-    loop {
-        while shared.state.load(Ordering::Acquire) != QUEUED {
+impl Drop for Helper {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+/// Waits for the next frame: asleep until `wake_at` if there is a forecast,
+/// then parked. None when the helper is to stop: it then starts no frame,
+/// queued or not, since the pipeline that owns the frames is going.
+///
+/// No wake is lost. Before every sleep the helper stores what it is about to
+/// do in `wake_at` and then reads `state`; the callback stores QUEUED in
+/// `state` and then reads `wake_at` (`Helper::queue`). All four are SeqCst,
+/// so they have one order, and in it either the helper's read comes after the
+/// callback's store, and the helper sees QUEUED and does not sleep; or it
+/// comes before, and then the helper's store, which is earlier still, comes
+/// before the callback's read. The callback then sees exactly the sleep the
+/// helper is entering: PARKED, and it unparks; or a timer, and it unparks
+/// unless that timer is soon enough (`must_wake`), in which case the timer
+/// itself ends the sleep. An unpark that comes before the sleep begins is
+/// kept by the thread's token and ends it at once. With a weaker ordering
+/// both sides could read the other's old value: the helper parks, the
+/// callback does not wake it, and the frame waits for a wake that never comes.
+///
+/// No frame runs twice: the helper runs one only on reading QUEUED, stores
+/// IDLE when it is done, and only the callback stores QUEUED, after reading
+/// IDLE. A wake with nothing queued sends the helper back to sleep.
+fn await_frame<P: Pace>(shared: &Shared, pace: &P, wake_at: Option<u64>) -> Option<Start> {
+    let mut slept = false;
+    if let Some(wake_at) = wake_at {
+        loop {
+            shared.wake_at.store(wake_at, Ordering::SeqCst);
             if shared.stop.load(Ordering::Acquire) {
-                return;
+                return None;
             }
-            thread::park();
+            if shared.state.load(Ordering::SeqCst) == QUEUED {
+                return Some(if slept {
+                    Start::Slept(wake_at)
+                } else {
+                    Start::Queued
+                });
+            }
+            // The timer has ended the sleep with nothing queued (the callback
+            // is late, or there is none): park. Also if the clock makes no
+            // sense: a forecast is never two periods ahead.
+            let now = pace.now();
+            if now >= wake_at || wake_at - now > 2 * PERIOD_NS {
+                break;
+            }
+            // Also ended by the callback's wake, by an older wake's token, or
+            // for no reason: each time round looks again.
+            pace.sleep_until(wake_at);
+            slept = true;
         }
+    }
+    let expired = slept;
+    let mut parked = false;
+    loop {
+        shared.wake_at.store(PARKED, Ordering::SeqCst);
+        if shared.stop.load(Ordering::Acquire) {
+            return None;
+        }
+        if shared.state.load(Ordering::SeqCst) == QUEUED {
+            return Some(if parked || expired {
+                Start::Parked { expired }
+            } else {
+                Start::Queued
+            });
+        }
+        pace.park();
+        parked = true;
+    }
+}
+fn helper_loop<P: Pace>(shared: &Shared, pace: &P) {
+    let mut placed = 0;
+    // Whether the placement the helper last took left it real-time.
+    let mut realtime = false;
+    let mut forecast = Forecast::default();
+    let mut wake_at = None;
+    loop {
+        let Some(start) = await_frame(shared, pace, wake_at) else {
+            return;
+        };
+        shared.wake_at.store(AWAKE, Ordering::SeqCst);
         let generation = shared.generation.load(Ordering::Acquire);
         if generation != placed {
             let taken = take_placement(shared);
+            realtime = pace.realtime(taken.policy);
             if let Some(record) = PLACEMENTS.get(shared.record.load(Ordering::Acquire))
                 && record.generation.load(Ordering::Acquire) == generation
                 && record.pipeline.load(Ordering::Relaxed) == shared.id
@@ -1265,15 +1689,38 @@ fn helper_loop(shared: &Shared) {
             store_placement(&HELPER_PLACEMENT);
             placed = generation;
         }
-        let started = super::timing::monotonic();
+        let started = pace.now();
         shared.started.store(started, Ordering::Relaxed);
         let queued_at = shared.queued_at.load(Ordering::Relaxed);
         if queued_at != 0 {
-            WAKE_LATENCY.record(started.saturating_sub(queued_at));
+            let latency = started.saturating_sub(queued_at);
+            WAKE_LATENCY.record(latency);
+            let (kind, woken) = match start {
+                Start::Queued => (STARTS_QUEUED, false),
+                Start::Slept(wake_at) if started >= wake_at => {
+                    TIMER_LATE.record(started - wake_at);
+                    (STARTS_TIMER, false)
+                }
+                Start::Slept(_) => (STARTS_WOKEN_EARLY, true),
+                Start::Parked { expired: true } => (STARTS_PARKED_AFTER_TIMER, true),
+                Start::Parked { expired: false } => (STARTS_PARKED_NO_FORECAST, true),
+            };
+            STARTS[kind].fetch_add(1, Ordering::Relaxed);
+            if woken {
+                WOKEN_LATENCY.record(latency);
+            } else {
+                SELF_LATENCY.record(latency);
+            }
         }
         // SAFETY: the callback handed the frame over with QUEUED and does not
         // touch it again until it observes IDLE.
         let handoff = unsafe { &mut *shared.handoff.load(Ordering::Relaxed) };
+        #[cfg(test)]
+        shared
+            .ran
+            .lock()
+            .unwrap()
+            .push((handoff.seq, start, started));
         let slot = (handoff.seq & 1) as usize;
         let left_alone = if handoff.native_success {
             Job::Count
@@ -1302,7 +1749,7 @@ fn helper_loop(shared: &Shared) {
         }
         handoff.jobs.fill(Job::Skipped);
         handoff.done_seq = handoff.seq;
-        let finished = super::timing::monotonic();
+        let finished = pace.now();
         let spent = finished.saturating_sub(started);
         shared.finished.store(finished, Ordering::Relaxed);
         HELPER_TIME.frames.fetch_add(1, Ordering::Relaxed);
@@ -1316,7 +1763,23 @@ fn helper_loop(shared: &Shared) {
                 super::probe::record(super::probe::Kind::HelperLateFinish, position);
             }
         }
+        // While the frame is still the helper's: when to wake for the next.
+        wake_at = forecast.observe(handoff.started, shared.ended.load(Ordering::Relaxed));
+        if !realtime && pace.needs_realtime() {
+            wake_at = None;
+        }
+        if queued_at != 0
+            && let Some(deviation) = forecast.deviation
+        {
+            let gauge = if deviation >= 0 {
+                &HANDOFF_LATE
+            } else {
+                &HANDOFF_EARLY
+            };
+            gauge.record(deviation.unsigned_abs());
+        }
         shared.state.store(IDLE, Ordering::Release);
+        pace.rest();
     }
 }
 /// Best effort: unprivileged hosts (tests) keep ordinary scheduling.
@@ -1855,6 +2318,7 @@ impl Pipeline {
         let jobs = vec![Job::Skipped; ports.len()];
         let lookup = PinLookup::new(&ports);
         let visits = std::array::from_fn(|_| Vec::with_capacity(ports.len()));
+        let helper = Helper::start()?;
         Ok((
             Self {
                 front: UnsafeCell::new(Front {
@@ -1879,13 +2343,16 @@ impl Pipeline {
                     seq: 0,
                     frames: FRAMES,
                     cycle_start: 0,
+                    started: 0,
                     native_success: false,
                     jobs,
                     work,
                     counters: Counters::default(),
                     done_seq: 0,
+                    #[cfg(test)]
+                    helper: Some(Arc::clone(&helper.shared)),
                 }),
-                helper: Helper::start()?,
+                helper,
                 publications,
             },
             controls,
@@ -1954,6 +2421,9 @@ impl Pipeline {
                 if margin < HELPER_MIN_MARGIN_NS.load(Ordering::Relaxed) {
                     HELPER_MIN_MARGIN_NS.fetch_min(margin, Ordering::Relaxed);
                 }
+                if front.gauged {
+                    HELPER_SLACK.record(margin);
+                }
             }
         } else {
             HELPER_STALLS.fetch_add(1, Ordering::Relaxed);
@@ -2009,6 +2479,7 @@ impl Pipeline {
         if let Some(handoff) = handoff {
             handoff.frames = frames;
             handoff.cycle_start = cycle_start;
+            handoff.started = started;
             handoff.seq = front.seq;
         }
     }
@@ -2129,20 +2600,31 @@ impl Pipeline {
         front.sampler.mark(front.cycle);
         if let Some(handoff) = handoff {
             handoff.native_success = native_success;
+            let begun = handoff.started;
             if front.gauged {
                 let placing = super::timing::monotonic();
                 self.helper.place(front.cycle, &mut front.sampler);
                 let waking = super::timing::monotonic();
-                self.helper.queue(handoff, waking);
+                let woke = self.helper.queue(handoff, begun, waking);
                 let woken = super::timing::monotonic();
                 PLACE.record(waking.saturating_sub(placing));
                 END.record(waking.saturating_sub(entered));
                 WAKE_CALL.record(woken.saturating_sub(waking));
+                if woke != Woke::No {
+                    WAKE_SENT.record(woken.saturating_sub(waking));
+                    WAKES[usize::from(woke == Woke::Late)].fetch_add(1, Ordering::Relaxed);
+                }
             } else {
                 self.helper.place(front.cycle, &mut front.sampler);
-                self.helper.queue(handoff, 0);
+                self.helper.queue(handoff, begun, 0);
             }
         }
+    }
+    /// The callback's end stamp, once it is taken: the helper forecasts the
+    /// next handoff from these. One store; without it the helper parks after
+    /// every frame and each handoff wakes it.
+    pub fn ended(&self, at: u64) {
+        self.helper.shared.ended.store(at, Ordering::Relaxed);
     }
     /// Wait for the helper to finish the frame just handed off, as the next
     /// callback would find it.
@@ -2159,6 +2641,8 @@ mod tests {
     use std::cell::UnsafeCell;
     #[path = "direct_output.rs"]
     mod direct_output;
+    #[path = "helper_wake.rs"]
+    mod helper_wake;
     #[path = "passthrough_invariance.rs"]
     mod passthrough_invariance;
     #[path = "processing_counters.rs"]

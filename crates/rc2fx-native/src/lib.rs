@@ -904,6 +904,10 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     // clock read serves both.
     let ended = context.timing.finish(frame, before_native, after_native);
     context.ended.store(ended, Ordering::Relaxed);
+    if !engine.is_null() {
+        // For the helper's own wake-up (pipeline::Forecast).
+        unsafe { (*engine).ended(ended) };
+    }
     let native_span = before_native
         .wall_ns()
         .zip(after_native.wall_ns())
