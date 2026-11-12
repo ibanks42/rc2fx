@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Explicit opt-in xrun flight recording; connection uses the mixer env vars."""
+"""Explicit opt-in xrun flight recording; connection uses the mixer env vars.
+
+Every action except status first arms the mixer's one-shot power recovery and
+refuses to run if it cannot. The action `arm` arms the trace, a different thing.
+"""
 import argparse
 import hashlib
 import gzip
@@ -12,10 +16,14 @@ from pathlib import Path
 import shlex
 import struct
 import subprocess
+import sys
 import tarfile
 import time
 
 ROOT=Path(__file__).resolve().parents[2]
+ACTIONS=['prepare','gauges-on','gauges-off','src-fast','src-verify','src-stock','arm','status','stop','collect','clear','self-test']
+
+class PowerRecoveryNotArmed(RuntimeError):pass
 
 def ssh(command, data=None, timeout=60):
     host=os.environ['RC2FX_MIXER_IP']
@@ -33,6 +41,17 @@ def ssh(command, data=None, timeout=60):
 
 def remote(action,*args):
     return ssh(shlex.join(['bash','-s','--','xrun-trace',action,*map(str,args)]),(ROOT/'xtask/mixer/rc2fx.sh').read_bytes(),timeout=240 if action=='collect' else 60)
+
+def arm_power_recovery(action):
+    """Arm, check, then run: set the bootloader's one-shot power-on flag with this checkout's rc2fx.sh, read it back, and raise unless it is 1."""
+    try:
+        ssh(shlex.join(['bash','-s','--','arm-power-recovery']),(ROOT/'xtask/mixer/rc2fx.sh').read_bytes())
+        value=ssh('fw_printenv -n reboot_pwr_button_bypass').decode(errors='replace').strip()
+        if value!='1':raise RuntimeError(f'reboot_pwr_button_bypass reads back as {value!r}, not 1')
+    except Exception as error:
+        reason=' '.join(str(error).split()) or type(error).__name__
+        raise PowerRecoveryNotArmed(f'`{action}` was not started: power recovery could not be armed ({reason}).\nAfter a power cycle the mixer would stay off until its button is pressed.') from error
+    print('Power recovery armed: after an outlet power cycle the mixer turns itself on (one boot only)',flush=True)
 
 def symbol_offset(data,name):
     if data[:6]!=b'\x7fELF\x02\x01':raise ValueError('Expected little endian ELF64')
@@ -71,12 +90,13 @@ def validate_clock(bounds_text, trace):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=['prepare','gauges-on','gauges-off','src-fast','src-verify','src-stock','arm','status','stop','collect','clear','self-test'])
+    p.add_argument('action',choices=ACTIONS)
     p.add_argument('--bundle',type=Path,default=ROOT/'target/mixer')
     p.add_argument('--out',type=Path)
     p.add_argument('--deep',action='store_true')
     p.add_argument('--cpu',type=int,default=3)
     args=p.parse_args()
+    if args.action!='status':arm_power_recovery('run.py '+args.action)
     if args.action=='arm':
         with tempfile.TemporaryDirectory() as build:
             binary=Path(build)/'clock-probe'
@@ -139,4 +159,6 @@ def main():
     elif args.action.startswith('src-'):print(remote('src-mode',args.action.split('-')[1]).decode(),end='')
     else:print(remote(args.action).decode(),end='')
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    try:main()
+    except PowerRecoveryNotArmed as error:sys.exit(str(error))

@@ -5,7 +5,8 @@ use crate::{Result, root, sha256};
 use std::{
     fs,
     io::{BufRead, Read, Write},
-    process::{Command, Stdio},
+    path::Path,
+    process::{Command, Output, Stdio},
 };
 
 /// Runs on the mixer: the supervisor, and the launcher shim that starts it.
@@ -106,24 +107,35 @@ pub fn run(action: &str, rest: &[&str]) -> Result {
         return api_session();
     }
     let mixer = Mixer::load()?;
+    act(&mixer, &root().join("target/mixer"), action, rest)
+}
+
+/// One action, with `build` as target/mixer. An action that changes or runs
+/// something on the mixer arms power recovery first. `status` and `logs` only
+/// read. `api` goes to the controller over USB 1 and never uses SSH.
+fn act(mixer: &Mixer, build: &Path, action: &str, rest: &[&str]) -> Result {
+    let armed = || mixer.arm_power_recovery(&format!("mixer {action}"));
     match (action, rest) {
         ("run", []) => {
-            mixer.upload()?;
+            let mixer = armed()?;
+            mixer.upload(build)?;
             mixer.script(RUN)
         }
         ("install", []) => {
-            mixer.upload()?;
+            let mixer = armed()?;
+            mixer.upload(build)?;
             mixer.script(INSTALL)?;
             mixer.script(COMMIT)
         }
-        ("uninstall", []) => mixer.script(UNINSTALL),
-        ("uninstall", ["--purge"]) => mixer.script(&format!("PURGE=1\n{UNINSTALL}")),
-        ("stop" | "status" | "logs", []) => mixer.script(&on_mixer(action)),
+        ("uninstall", []) => armed()?.script(UNINSTALL),
+        ("uninstall", ["--purge"]) => armed()?.script(&format!("PURGE=1\n{UNINSTALL}")),
+        ("stop", []) => armed()?.script(&on_mixer(action)),
+        ("status" | "logs", []) => mixer.send("/bin/sh -s", on_mixer(action).as_bytes()),
         ("api", [method, path]) => api(method, path, None),
         ("api", [method, path, body]) => api(method, path, Some(body)),
-        ("enable", []) => mixer.script(ENABLE),
-        ("xruns", args) => crate::xruns::run(&mixer, args),
-        ("disable", []) => mixer.script(DISABLE),
+        ("enable", []) => armed()?.script(ENABLE),
+        ("xruns", args) => crate::xruns::run(mixer, args),
+        ("disable", []) => armed()?.script(DISABLE),
         _ => Err(format!(
             "unknown mixer action `{action}`; see `cargo xtask help`"
         )),
@@ -133,6 +145,20 @@ pub fn run(action: &str, rest: &[&str]) -> Result {
 pub struct Mixer {
     host: String,
     options: Vec<String>,
+    /// `ssh`; only this crate's tests put a stand-in here.
+    program: &'static str,
+}
+
+/// A mixer whose power recovery this command has armed and verified. Only
+/// `Mixer::arm_power_recovery` makes one, and only it can upload or run a
+/// script.
+pub struct Armed<'a>(&'a Mixer);
+
+impl std::ops::Deref for Armed<'_> {
+    type Target = Mixer;
+    fn deref(&self) -> &Mixer {
+        self.0
+    }
 }
 
 impl Mixer {
@@ -177,15 +203,75 @@ impl Mixer {
         Ok(Self {
             host: format!("{user}@{ip}"),
             options,
+            program: "ssh",
         })
     }
 
+    fn command(&self, remote: &str) -> Command {
+        let mut command = Command::new(self.program);
+        command.args(&self.options).arg(&self.host).arg(remote);
+        command
+    }
+
+    /// Arm, check, then run: a mixer that hangs is reset by cutting its
+    /// power, and then stays off unless the bootloader's one-shot flag is
+    /// set. This runs the checkout's `rc2fx.sh arm-power-recovery` on the
+    /// mixer, reads the flag back and requires `1`. On any failure `action`
+    /// must not run. Nothing skips this.
+    pub fn arm_power_recovery(&self, action: &str) -> Result<Armed<'_>> {
+        self.arm().map_err(|reason| {
+            format!(
+                "`{action}` was not started: power recovery could not be armed ({reason}).\n\
+                 After a power cycle the mixer would stay off until its button is pressed."
+            )
+        })?;
+        println!(
+            "Power recovery armed: after an outlet power cycle the mixer turns itself on (one boot only)"
+        );
+        Ok(Armed(self))
+    }
+
+    fn arm(&self) -> Result {
+        let failed = |what: &str, output: &Output| {
+            let said = String::from_utf8_lossy(&output.stderr);
+            let text = format!("{what} failed ({}) {}", output.status, said.trim());
+            text.trim_end().to_string()
+        };
+        let mut child = self
+            .command("/bin/bash -s -- arm-power-recovery")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("could not start ssh: {e}"))?;
+        let script = RC2FX_SH.replace("\r\n", "\n");
+        let written = child.stdin.take().unwrap().write_all(script.as_bytes());
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(failed("rc2fx.sh arm-power-recovery", &output));
+        }
+        // A script cut short would end without an error and without arming.
+        written.map_err(|e| format!("sending rc2fx.sh: {e}"))?;
+        let output = self
+            .command("fw_printenv -n reboot_pwr_button_bypass")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("could not start ssh: {e}"))?;
+        if !output.status.success() {
+            return Err(failed("reading the flag back", &output));
+        }
+        match String::from_utf8_lossy(&output.stdout).trim() {
+            "1" => Ok(()),
+            value => Err(format!(
+                "reboot_pwr_button_bypass reads back as {value:?}, not 1"
+            )),
+        }
+    }
+
     /// Run `remote` on the mixer with `input` on its stdin.
-    pub fn ssh(&self, remote: &str, input: &[u8]) -> Result {
-        let mut child = Command::new("ssh")
-            .args(&self.options)
-            .arg(&self.host)
-            .arg(remote)
+    fn send(&self, remote: &str, input: &[u8]) -> Result {
+        let mut child = self
+            .command(remote)
             .stdin(Stdio::piped())
             .spawn()
             .map_err(|e| format!("could not start ssh: {e}"))?;
@@ -197,12 +283,10 @@ impl Mixer {
         written.map_err(|e| format!("sending to the mixer: {e}"))
     }
 
-    /// Run `remote` on the mixer and return what it writes to stdout.
+    /// Run `remote`, which only reads, and return what it writes to stdout.
     pub fn capture(&self, remote: &str) -> Result<Vec<u8>> {
-        let output = Command::new("ssh")
-            .args(&self.options)
-            .arg(&self.host)
-            .arg(remote)
+        let output = self
+            .command(remote)
             .stdin(Stdio::null())
             .stderr(Stdio::inherit())
             .output()
@@ -212,14 +296,19 @@ impl Mixer {
         }
         Ok(output.stdout)
     }
+}
+
+impl Armed<'_> {
+    /// Run `remote` on the mixer with `input` on its stdin.
+    pub fn ssh(&self, remote: &str, input: &[u8]) -> Result {
+        self.send(remote, input)
+    }
 
     /// Run `script` with the mixer's shell and return what it writes to
     /// stdout; its stderr is passed through.
     pub fn capture_script(&self, script: &str) -> Result<Vec<u8>> {
-        let mut child = Command::new("ssh")
-            .args(&self.options)
-            .arg(&self.host)
-            .arg("/bin/sh -s")
+        let mut child = self
+            .command("/bin/sh -s")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -239,8 +328,7 @@ impl Mixer {
     }
 
     /// Stage the build in RAM at /run/rc2fx-upload, verified on arrival.
-    fn upload(&self) -> Result {
-        let build = root().join("target/mixer");
+    fn upload(&self, build: &Path) -> Result {
         let read = |name: &str| {
             fs::read(build.join(name))
                 .map_err(|_| format!("target/mixer/{name} is missing; run `just mixer-build`"))
@@ -405,6 +493,10 @@ fn api_stream(
         output.flush().map_err(|e| e.to_string())?;
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "mixer_arming_tests.rs"]
+mod arming_tests;
 
 #[cfg(test)]
 mod tests {

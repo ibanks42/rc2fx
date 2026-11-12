@@ -40,6 +40,16 @@ pub fn build() -> Result {
 }
 
 pub fn run(input: &str, flags: &[&str]) -> Result {
+    run_in(&root().join("target/bench"), Mixer::load, input, flags)
+}
+
+/// `bench` is target/bench; a test passes its own, and a stand-in mixer.
+pub fn run_in(
+    bench: &Path,
+    mixer: impl FnOnce() -> Result<Mixer>,
+    input: &str,
+    flags: &[&str],
+) -> Result {
     // Flags pass through to rc2fx-bench except --weights, whose file is
     // uploaded and run alongside the embedded weights.
     let mut passed = Vec::new();
@@ -77,7 +87,7 @@ pub fn run(input: &str, flags: &[&str]) -> Result {
             "the recording is {seconds} s; keep it under {MAX_SECONDS} s"
         ));
     }
-    let binary = fs::read(root().join("target/bench/rc2fx-bench"))
+    let binary = fs::read(bench.join("rc2fx-bench"))
         .map_err(|_| "target/bench/rc2fx-bench is missing; run `just bench-build`")?;
     let mut archive = tar::Builder::new(Vec::new());
     let mut files = vec![
@@ -98,7 +108,8 @@ pub fn run(input: &str, flags: &[&str]) -> Result {
     }
     let archive = archive.into_inner().map_err(|e| e.to_string())?;
 
-    let mixer = Mixer::load()?;
+    let mixer = mixer()?;
+    let mixer = mixer.arm_power_recovery("bench")?;
     println!("Uploading to the mixer");
     mixer.ssh(
         "set -e; rm -rf /run/rc2fx-bench; mkdir -m 700 /run/rc2fx-bench; tar -xf - -C /run/rc2fx-bench",
@@ -142,7 +153,7 @@ pub fn run(input: &str, flags: &[&str]) -> Result {
     outcome?;
 
     let stem = input.file_stem().unwrap_or_default().to_string_lossy();
-    let out = root().join("target/bench").join(&*stem);
+    let out = bench.join(&*stem);
     let _ = fs::remove_dir_all(&out);
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     unpack_results(&results?, &out)?;

@@ -7,7 +7,7 @@
 //! another, and prints the records that arrived in between. `0` prints
 //! everything the ring still holds for this jackd instead. Nothing on the
 //! mixer is changed; the snapshots live in a private /run directory that is
-//! removed afterwards.
+//! removed afterwards. It runs a program there, so it arms power recovery.
 use crate::{Result, mixer::Mixer};
 use std::{collections::BTreeMap, io::Read};
 
@@ -24,6 +24,7 @@ pub fn run(mixer: &Mixer, args: &[&str]) -> Result {
     if seconds > MAX_SECONDS {
         return Err(format!("SECONDS must be 0–{MAX_SECONDS}"));
     }
+    let mixer = mixer.arm_power_recovery("mixer xruns")?;
     if seconds > 0 {
         eprintln!("Watching the JACK recorder for {seconds} s…");
     }

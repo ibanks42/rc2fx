@@ -24,6 +24,9 @@
 #
 # developer-ssh adds or removes one marked line in root's authorized_keys.
 # arm-power-recovery explicitly sets the bootloader's one-shot power flag.
+# Start-up never sets it. The developer commands do, before they change or run
+# anything here: cargo xtask and tools/xrun_trace from the host, ui-preview
+# and ui-run themselves. Each refuses to go on if it cannot.
 # Other commands do not change firmware or stock files.
 # The launcher (audio-start.sh) runs `rc_audio_mixer` by name with /usr/sbin ahead of /usr/bin, so the shim
 # installed as /usr/sbin/rc_audio_mixer runs `launch` as the launcher's own
@@ -1122,6 +1125,9 @@ ui_preview() {
     || { echo 'Preview duration must be 5–30 seconds' >&2; return 2; }
   test $# -le 2 && test -f "$library" && ! test -L "$library" || return 2
   test "$(id -u)" = 0 || { echo 'Preview requires root, as does the stock GUI' >&2; return 1; }
+  # Developer-only, and it can hang the mixer: arm, check, then run.
+  arm_power_recovery \
+    || { echo 'GUI experiment not started: power recovery could not be armed. After a power cycle the mixer would stay off until its button is pressed.' >&2; return 1; }
   test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot \
     || { echo 'Refusing GUI experiment during first/production boot' >&2; return 1; }
   test "$(tr -d '\0' < /proc/device-tree/model)" = 'RODECaster Pro II' \
@@ -1817,7 +1823,7 @@ xrun_trace() {
       mv /run/rc2fx-flight-arm.tmp /run/rc2fx-flight-arm
       sleep 2
       echo 1 > "$instance/tracing_on"
-      echo 'Armed: exclusive rolling trace freezes on first JACK fault'
+      echo 'Trace armed: exclusive rolling trace freezes on first JACK fault'
       ;;
     stop)
       test -d "$dir" || return 1

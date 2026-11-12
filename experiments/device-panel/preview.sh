@@ -38,6 +38,15 @@ if [[ -n "$known" ]]; then
   options+=(-o "UserKnownHostsFile=$known")
 fi
 host="$user@$ip"
+# Arm, check, then run: without the one-shot flag a hung mixer stays off after
+# an outlet power cycle.
+ssh "${options[@]}" "$host" '/bin/bash -s -- arm-power-recovery' < "$root/xtask/mixer/rc2fx.sh" > /dev/null \
+  && [[ "$(ssh "${options[@]}" "$host" 'fw_printenv -n reboot_pwr_button_bypass')" == 1 ]] || {
+  echo 'preview.sh was not started: power recovery could not be armed.' >&2
+  echo 'After a power cycle the mixer would stay off until its button is pressed.' >&2
+  exit 1
+}
+echo 'Power recovery armed: after an outlet power cycle the mixer turns itself on (one boot only)'
 bash "$root/experiments/device-panel/build.sh"
 # Verify current state BEFORE creating even a RAM staging directory.
 stage=$(ssh "${options[@]}" "$host" 'set -e

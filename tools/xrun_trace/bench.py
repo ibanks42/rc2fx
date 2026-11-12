@@ -125,6 +125,10 @@ def main():
     # Interval may equal duration for a baseline/end-only qualification.
     args=parser.parse_args()
     if args.seconds<=0 or args.interval<=0 or args.trials<=0:parser.error('Duration and interval must be positive')
+    # A bench on the live mixer: arm power recovery before anything plays or is read.
+    try:run.arm_power_recovery('bench.py')
+    except run.PowerRecoveryNotArmed as error:
+        print(error,file=sys.stderr);return 1
     root=args.out
     root.mkdir(parents=True,exist_ok=False)
     children=[];logs=[];stop=threading.Event()
