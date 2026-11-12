@@ -11,8 +11,8 @@ control it from a desktop app over USB.
 
 ## Background
 
-The RØDECaster's built-in processing offers a few fixed EQ presets, a basic
-compressor and a noise reduction setting that can make voices sound muffled.
+The RØDECaster's built-in processing offers a three-band EQ, a basic
+compressor and a noise gate, but no noise suppression.
 Processing on the computer instead, with a plugin host, a virtual audio cable,
 EasyEffects or Equalizer APO, only affects audio from that one computer. It
 stops helping once a second computer or a console is connected, or when an
