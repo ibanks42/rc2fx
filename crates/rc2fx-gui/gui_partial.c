@@ -549,6 +549,31 @@ static int ensure_source(int fd) {
 static _Alignas(64) uint32_t cpu_stage[CPU_STRIP * SRC_W];
 /* A later clock reading less an earlier one; 0 if the clock failed. */
 static uint64_t ns_between(uint64_t from, uint64_t to) { return to > from ? to - from : 0; }
+/* Copy out of the non-cacheable source. On the mixer's Cortex-A53, 32-byte
+ * `ldp q, q` pairs read that memory about 2.8 times as fast as libc memcpy
+ * (tools/ncread_probe, 2026-11-10). Unaligned 16-byte loads were slower there,
+ * so a misaligned head and the tail under 32 bytes go through memcpy. */
+static void nc_copy(void *dst, const void *src, size_t n) {
+#if defined(__aarch64__)
+    size_t head = (16 - ((uintptr_t)src & 15)) & 15;
+    if (head > n) head = n;
+    if (head) memcpy(dst, src, head);
+    uint8_t *d = (uint8_t *)dst + head;
+    const uint8_t *s = (const uint8_t *)src + head;
+    size_t left = (n - head) & ~(size_t)31, tail = (n - head) & 31;
+    if (left)
+        __asm__ volatile("1: ldp q0, q1, [%1], #32\n"
+                         "   stp q0, q1, [%0], #32\n"
+                         "   subs %2, %2, #32\n"
+                         "   b.ne 1b\n"
+                         : "+r"(d), "+r"(s), "+r"(left)
+                         :
+                         : "v0", "v1", "memory", "cc");
+    if (tail) memcpy(d, s, tail);
+#else
+    memcpy(dst, src, n);
+#endif
+}
 static int cpu_rotate_regions(int fd, const struct rot_rect *regions, int count) {
     if (count <= 0) return -1;
     for (int i = 0; i < count; i++) {
@@ -571,10 +596,10 @@ static int cpu_rotate_regions(int fd, const struct rot_rect *regions, int count)
         for (int y = r.y; y < r.y + r.h; y += CPU_STRIP) {
             int strip = CPU_STRIP < r.y + r.h - y ? CPU_STRIP : r.y + r.h - y;
             if (r.x == 0 && r.w == SRC_W) {
-                memcpy(cpu_stage, (const void *)(verify_source + (size_t)y * SRC_W), (size_t)strip * SRC_W * 4);
+                nc_copy(cpu_stage, (const void *)(verify_source + (size_t)y * SRC_W), (size_t)strip * SRC_W * 4);
             } else {
                 for (int row = 0; row < strip; row++)
-                    memcpy(cpu_stage + (size_t)row * SRC_W + r.x,
+                    nc_copy(cpu_stage + (size_t)row * SRC_W + r.x,
                            (const void *)(verify_source + (size_t)(y + row) * SRC_W + r.x),
                            (size_t)r.w * 4);
             }
