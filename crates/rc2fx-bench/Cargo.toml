@@ -14,7 +14,9 @@ license = "MIT"
 hound = "3.5"
 libc = "0.2"
 rc2fx-core = { path = "../rc2fx-core" }
-rc2fx-suppression = { path = "../rc2fx-suppression" }
+# `bench-kernels` keeps the row-major int8 kernel beside the tiled one, for
+# `--kernel`. Only this binary turns it on.
+rc2fx-suppression = { path = "../rc2fx-suppression", features = ["bench-kernels"] }
 serde_json = "1"
 
 [profile.release]
