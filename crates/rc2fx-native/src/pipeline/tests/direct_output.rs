@@ -633,8 +633,9 @@ fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
 }
 
 /// Without the gauges a callback's begin and end read no clock at all: not
-/// for the path costs, the buffer resolve, the helper margin or the wake. With
-/// them, each of those is stamped.
+/// for the path costs, the buffer resolve, the helper margin or the wake, nor
+/// for the prefetching of its sparse cycles. With them, each of the first
+/// four is stamped.
 #[test]
 fn without_the_gauges_the_pipeline_reads_no_clock_in_the_callback() {
     let plan = hardware_plan(2, PathMode::Processed, 0.5);

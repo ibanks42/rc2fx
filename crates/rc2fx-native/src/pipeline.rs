@@ -1,5 +1,5 @@
 //! Callback-owned signal state; construction and destruction are control work.
-use super::{Line, parameters};
+use super::{Line, parameters, prefetch};
 use rc2fx_core::{Target, TargetKind};
 #[cfg(test)]
 use rc2fx_dsp::Dsp;
@@ -316,6 +316,50 @@ impl Port {
         self.pins
             .iter()
             .all(|pin| pin.alive.load(Ordering::Acquire))
+    }
+    /// Asks for what `begin_port` reads beyond the `Port` (see prefetch.rs):
+    /// the publication a callback-owned path loads or the helper's mode of
+    /// another, then the pins it resolves. `work`: this path's `Handoff::work`.
+    fn warm_begin(&self, work: *const Option<Work>) {
+        match &self.reader {
+            Some(reader) => reader.warm_begin(),
+            None => prefetch::read(work, 1),
+        }
+        // The list of pins is loaded here, so asking for it would gain nothing.
+        for pin in &self.pins {
+            prefetch::read(Arc::as_ptr(pin), 1);
+        }
+    }
+    /// Asks for what `end_port` uses beyond the `Port` (see prefetch.rs): the
+    /// buffers `begin` resolved for this cycle, then a callback-owned path's
+    /// settings and processor, or the copy a helper-owned one makes into
+    /// `raw[slot]` of its `work`.
+    ///
+    /// # Safety
+    /// As `Pipeline::end`, with the helper idle: the callback owns `work`.
+    unsafe fn warm_end(&self, work: *const Option<Work>, slot: usize) {
+        // Only this cycle's addresses: an inactive path resolved none.
+        let channels = if self.active { self.pins.len() } else { 0 };
+        // An output is processed in place.
+        let written = self.direction == Direction::Output && self.processed_intent;
+        for &buffer in self.native.iter().take(channels) {
+            if written {
+                prefetch::write(buffer as *const f32, FRAMES);
+            } else {
+                prefetch::read(buffer as *const f32, FRAMES);
+            }
+        }
+        match &self.reader {
+            Some(reader) => reader.warm_end(self.active && self.processed_intent),
+            None => {
+                prefetch::write(work, 1);
+                if let Some(work) = unsafe { &*work } {
+                    for copy in work.raw[slot].iter().take(channels) {
+                        prefetch::write(copy.as_ptr(), FRAMES);
+                    }
+                }
+            }
+        }
     }
     /// # Safety
     /// The resolved native buffers stay valid for this callback.
@@ -1653,6 +1697,30 @@ unsafe fn end_port(
     }
 }
 impl Front {
+    /// Asks for what `begin` (`slot`: None) or `end` is about to touch for the
+    /// paths this sparse cycle visits, before either touches any of it (see
+    /// prefetch.rs): first the paths themselves, whose addresses need nothing
+    /// else, then what each points to. It changes nothing, and reads nothing
+    /// that the phase does not read itself.
+    ///
+    /// Out of line, so that a profile shows its cost under its own name.
+    ///
+    /// # Safety
+    /// As `Pipeline::begin` and `end`, with the helper idle.
+    #[inline(never)]
+    unsafe fn warm(&self, handoff: &Handoff, slot: Option<usize>) {
+        let visits = &self.visits[self.phase];
+        for &index in visits {
+            prefetch::write(&raw const self.ports[index], 1);
+        }
+        for &index in visits {
+            let (port, work) = (&self.ports[index], &raw const handoff.work[index]);
+            match slot {
+                None => port.warm_begin(work),
+                Some(slot) => unsafe { port.warm_end(work, slot) },
+            }
+        }
+    }
     /// Decides what each sparse cycle visits, from what the full cycles found.
     fn plan_visits(&mut self) {
         for (phase, visits) in self.visits.iter_mut().enumerate() {
@@ -1917,6 +1985,10 @@ impl Pipeline {
                 }
             }
         } else {
+            // A sparse cycle has the handoff: the helper is idle.
+            if let Some(handoff) = seen {
+                unsafe { front.warm(handoff, None) };
+            }
             for &index in &front.visits[front.phase] {
                 let port = &mut front.ports[index];
                 let planned = port.processed_intent;
@@ -2011,6 +2083,11 @@ impl Pipeline {
         // SAFETY: the helper is idle (see `begin`), so the callback owns the
         // handoff until it is queued below.
         let mut handoff = front.idle.then(|| unsafe { &mut *self.handoff.get() });
+        if !front.full
+            && let Some(handoff) = handoff.as_deref()
+        {
+            unsafe { front.warm(handoff, Some(slot)) };
+        }
         let owed = front.skipped_frames;
         // This cycle's success is owed to the paths it left alone, not to the
         // ones it visits, which count it themselves.

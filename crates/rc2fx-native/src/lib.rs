@@ -8,6 +8,7 @@ mod gauges;
 mod ipc;
 mod parameters;
 mod pipeline;
+mod prefetch;
 mod probe;
 mod src_fast;
 mod suppression;

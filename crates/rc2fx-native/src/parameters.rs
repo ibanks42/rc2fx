@@ -762,6 +762,33 @@ impl Reader {
         self.current = self.shared.published.load(Ordering::Acquire);
         true
     }
+    /// Asks for the publication `begin` loads (see prefetch.rs).
+    pub fn warm_begin(&self) {
+        super::prefetch::read(&raw const self.shared.published, 1);
+    }
+    /// Asks for what the end of this frame uses, between `begin` and `finish`
+    /// (see prefetch.rs): the acknowledgement `finish` writes and the
+    /// descriptor's own fields; with `processed`, also both ends of the
+    /// settings the DSP runs on and of its processor.
+    pub fn warm_end(&self, processed: bool) {
+        use super::prefetch;
+        prefetch::write(&raw const self.shared.seen, 1);
+        prefetch::write(&raw const self.shared.applied, 1);
+        let Some(snapshot) = self.descriptor() else {
+            return;
+        };
+        prefetch::read(&raw const snapshot.revision, 1);
+        prefetch::read(&raw const snapshot.mode, 1);
+        prefetch::read(&raw const snapshot.runtime, 1);
+        if processed {
+            prefetch::ends(&raw const snapshot.prepared, false);
+            // The processor is two loads from here, through lines asked for
+            // just above: these loads wait for them.
+            if let Some(runtime) = &snapshot.runtime {
+                unsafe { runtime.warm() };
+            }
+        }
+    }
     #[cfg(test)]
     pub fn prepared(&self) -> Option<&Prepared> {
         self.descriptor().map(|s| &s.prepared)

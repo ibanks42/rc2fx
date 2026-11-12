@@ -165,6 +165,17 @@ impl Runtime {
             Processor::Ordinary(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
         }
     }
+    /// Asks for both ends of the processor (see prefetch.rs). Reads only
+    /// which processor this is, which construction fixed.
+    ///
+    /// # Safety
+    /// As `latency`: the caller holds this runtime's descriptor for a frame.
+    pub unsafe fn warm(&self) {
+        match unsafe { &*self.state.get() } {
+            Processor::Ordinary(dsp) => super::prefetch::ends(&raw const **dsp, true),
+            Processor::Chat(dsp) => super::prefetch::ends(&raw const **dsp, true),
+        }
+    }
     pub unsafe fn latency(&self) -> usize {
         match unsafe { &*self.state.get() } {
             Processor::Ordinary(dsp) => dsp.latency_samples(),
