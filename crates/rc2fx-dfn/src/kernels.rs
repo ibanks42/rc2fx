@@ -824,6 +824,7 @@ fn matvec_q8_steps<const N: usize>(
     xq: &mut [i16],
     y: &mut [f32],
 ) {
+    crate::hold::gate();
     #[cfg(any(test, feature = "bench-kernels"))]
     if row_major_selected() {
         return matvec_q8_rows::<N>(w, rows, x, xq, y);
@@ -866,10 +867,7 @@ fn matvec_q8_steps<const N: usize>(
             let mut acc = [[[vdupq_n_s32(0); 2]; 4]; N];
             let mut i = 0;
             while i < cols {
-                let w0 = vld1q_s8(tile);
-                let w1 = vld1q_s8(tile.add(16));
-                let w2 = vld1q_s8(tile.add(32));
-                let w3 = vld1q_s8(tile.add(48));
+                let [w0, w1, w2, w3] = [0, 16, 32, 48].map(|o| vld1q_s8(tile.add(o)));
                 tile = tile.add(64);
                 // Columns 0 to 7 of the four rows, then columns 8 to 15, so
                 // that the two additions to one accumulator are eight

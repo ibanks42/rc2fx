@@ -27,6 +27,8 @@ pub use rc2fx_dfn::LayerPause;
 /// `rc2fx-bench`'s choice of int8 matrix kernel; see `rc2fx_dfn::bench_kernels`.
 #[cfg(feature = "bench-kernels")]
 pub use rc2fx_dfn::bench_kernels;
+/// The callback mark the worker's model waits on (rc2fx-dfn `hold`).
+pub use rc2fx_dfn::hold;
 use rc2fx_dsp::{MAX_SUPPRESSION_DELAY, RetirementError, Suppression};
 use std::{
     sync::{
@@ -1043,6 +1045,9 @@ impl Drop for Worker {
         let _ = self.finish(StopMode::Cancel, Duration::from_secs(2));
     }
 }
+/// The longest a worker frame waits for the audio callback, in total.
+const HOLD_BUDGET_NS: u64 = 1_000_000;
+
 fn run(
     mut model: Box<dyn Model>,
     mut input: Consumer,
@@ -1092,7 +1097,17 @@ fn run(
         }
         frame.valid = recovery == 0;
         recovery = recovery.saturating_sub(1);
-        match model.process(&mut frame.samples[..g.frame_samples]) {
+        // The model may wait out the audio callback, up to this much in
+        // total and only early in the frame's turnaround (rc2fx-dfn `hold`),
+        // so a frame that starts late does not wait at all.
+        hold::grant(
+            HOLD_BUDGET_NS,
+            wall.zip(frame.submitted_ns)
+                .map(|(now, submitted)| now.saturating_sub(submitted)),
+        );
+        let processed = model.process(&mut frame.samples[..g.frame_samples]);
+        hold::grant(0, None);
+        match processed {
             Ok(voice) => frame.voice = voice,
             Err(_) => {
                 s.failed.store(true, Ordering::Release);

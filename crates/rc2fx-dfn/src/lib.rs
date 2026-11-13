@@ -12,6 +12,7 @@
 mod convp;
 mod dsp;
 mod glue;
+pub mod hold;
 mod kernels;
 mod net;
 #[cfg(test)]
