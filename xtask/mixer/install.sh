@@ -110,6 +110,10 @@ fi
 if test -d "$home"; then mv "$home" "$previous"; fi
 mv "$stage" "$home"
 touch "$pending"
+# The verified copy is in place and the rollback is $previous, so the upload
+# is no longer needed. /run is RAM: it would otherwise hold the whole bundle
+# until the next install or boot.
+rm -rf "$up"
 trap 'code=$?; if test "$code" -ne 0; then rollback || echo "Rollback needs attention" >&2; fi; exit "$code"' EXIT
 for name in data logs; do test ! -d "$previous/$name" || mv "$previous/$name" "$home/$name"; done
 mkdir -p -m 700 "$home/logs"

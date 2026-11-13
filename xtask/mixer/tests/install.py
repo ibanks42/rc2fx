@@ -49,6 +49,7 @@ class Install(unittest.TestCase):
         self.tmp.cleanup()
 
     def upload(self, payload: bytes, marker='new'):
+        self.up.mkdir(parents=True, exist_ok=True)
         sums = ''
         for name in BINARIES:
             data = b'#!/bin/sh\nexit 0\n' if name == 'rc2fx-firmware' else payload + name.encode()
@@ -100,6 +101,14 @@ class Install(unittest.TestCase):
         self.assertTrue(os.access(self.opt / 'rc2fx' / 'rc2fx_jackerr_snapshot', os.X_OK),
                         'snapshot must be executable')
         self.assertFalse(list(self.opt.glob('.rc2fx-stage.*')))
+
+    def test_the_upload_is_removed_after_an_install_and_kept_after_a_failure(self):
+        (self.up / 'rc2fxd').write_bytes(b'corrupt')  # SHA256SUMS no longer matches
+        self.assertNotEqual(self.install().returncode, 0)
+        self.assertTrue(self.up.is_dir(), 'a failed install keeps the upload')
+        self.upload(b'x' * 4096)
+        self.assert_installed(self.install())
+        self.assertFalse(self.up.exists(), 'the upload stays in RAM after a good install')
 
     def test_a_first_install_keeps_no_rollback(self):
         self.assert_installed(self.install())
@@ -177,6 +186,7 @@ class Install(unittest.TestCase):
         self.runtime(self.opt / '.rc2fx-previous-next', script=OLD_RC2FX_SH)
         os.replace(self.opt / '.rc2fx-previous', self.opt / '.rc2fx-previous-gone')
         os.replace(self.opt / '.rc2fx-previous-next', self.opt / '.rc2fx-previous')
+        self.upload(b'x' * 4096)  # every install uploads afresh; a good one removes the upload
         self.assert_installed(self.install())
         self.assertEqual(self.retained_dirs(), names)
 
