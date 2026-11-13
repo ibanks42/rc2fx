@@ -29,7 +29,8 @@ pub static CYCLE_CLOCK: AtomicUsize = AtomicUsize::new(0);
 pub static JACK_MAP: AtomicUsize = AtomicUsize::new(0);
 
 /// Counts positions in the cycle, as fractions of the period:
-/// [<=1/8, <=1/4, <=1/2, <=3/4, <=9/10, <=1, <=11/10, >11/10].
+/// [<=1/8, <=1/4, <=3/5, <=3/4, <=9/10, <=1, <=11/10, >11/10]. The 3/5 edge is
+/// `LATE_START_NS`, so bins 3 onward count exactly the late starts.
 ///
 /// Each instance has one writer thread (the callback, the helper, a vendor
 /// job thread) and is written every cycle, so each starts on a cache line of
@@ -52,7 +53,7 @@ impl Positions {
         let bounds = [
             PERIOD_NS / 8,
             PERIOD_NS / 4,
-            PERIOD_NS / 2,
+            LATE_START_NS,
             PERIOD_NS * 3 / 4,
             PERIOD_NS * 9 / 10,
             PERIOD_NS,
@@ -102,8 +103,9 @@ static LAST_USB_NS: AtomicU64 = AtomicU64::new(0);
 
 /// Risk thresholds that make an event, not proof of a missed deadline. The mixer's
 /// callback normally starts 300-600 us into the cycle, behind the clients
-/// jackd runs before it.
-pub const LATE_START_NS: u64 = PERIOD_NS / 2;
+/// jackd runs before it. A start past 3/5 of the period (1,400 us at 112
+/// frames) still leaves an ordinary callback ending before `LATE_END_NS`.
+pub const LATE_START_NS: u64 = PERIOD_NS * 3 / 5;
 pub const LATE_END_NS: u64 = PERIOD_NS * 9 / 10;
 /// The helper's results are consumed by the next callback, which starts a
 /// little after the next cycle begins; this far into the frame's own cycle
@@ -917,6 +919,18 @@ mod tests {
         assert_eq!(value["histogram"][5], 1);
         assert_eq!(value["histogram"][7], 1);
         assert_eq!(value["maxNs"], PERIOD_NS * 2);
+    }
+
+    #[test]
+    fn the_late_start_line_is_a_bin_edge() {
+        let positions = Positions::new();
+        positions.record(LATE_START_NS);
+        positions.record(LATE_START_NS + 1);
+        let value = positions.snapshot();
+        assert_eq!(value["histogram"][2], 1);
+        assert_eq!(value["histogram"][3], 1);
+        // 112 frames at 48 kHz: just under 1,400 us.
+        assert_eq!(LATE_START_NS / 1_000, 1_399);
     }
 
     #[test]
