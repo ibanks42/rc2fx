@@ -505,6 +505,10 @@ mod tests {
 
     /// The interpolation as it was before the vector block and the slices,
     /// kept word for word. Every test compares against it.
+    // The index loops are the preserved original shape; rewriting them to
+    // iterators (clippy 1.100's needless_range_loop) would change the thing
+    // the tests check the fast path against.
+    #[allow(clippy::needless_range_loop)]
     unsafe fn original(plan: &Plan, state: *const State, input: *const f32, output: *mut f32) {
         unsafe {
             let last = f64::from(*(*(*state).private_data).last_value);
