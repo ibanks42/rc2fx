@@ -7,6 +7,7 @@ mod client_timing_events;
 mod denoiser_hold;
 mod gauges;
 mod ipc;
+mod jack_cache;
 mod parameters;
 mod pipeline;
 mod prefetch;
@@ -216,6 +217,9 @@ struct CallbackFrame {
     processing: bool,
     pipeline: usize,
     started: u64,
+    /// The graph generation this callback's buffer lookups run under, taken
+    /// once at frame start (see jack_cache::begin).
+    jack: jack_cache::Snapshot,
 }
 /// This thread's callback frame, and the `jack_port_get_buffer` calls made
 /// inside it. The count is a plain thread-owned number, published once when
@@ -237,7 +241,13 @@ impl std::ops::Deref for Inside {
 thread_local! {
     static INSIDE: Inside = const {
         Inside {
-            frame: Cell::new(CallbackFrame { owner: 0, processing: false, pipeline: 0, started: 0 }),
+            frame: Cell::new(CallbackFrame {
+                owner: 0,
+                processing: false,
+                pipeline: 0,
+                started: 0,
+                jack: jack_cache::Snapshot::INACTIVE,
+            }),
             buffer_calls: Cell::new(0),
         }
     };
@@ -259,6 +269,9 @@ fn leave_frame(outer: (CallbackFrame, u64)) {
             .buffer_calls_inside
             .fetch_add(calls, Ordering::Relaxed);
     }
+    // Counters kept in plain thread-owned numbers are published once per
+    // callback.
+    jack_cache::publish();
     vendor_wake::publish();
 }
 
@@ -545,6 +558,7 @@ fn select_firmware() -> Result<usize, String> {
     chat_mix::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     vendor_wait::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     vendor_wake::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
+    jack_cache::install(profile)?;
     let _ = FIRMWARE_PROFILE.set(profile.id.clone());
     Ok(offset)
 }
@@ -879,21 +893,22 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     } else {
         std::ptr::null_mut()
     };
+    let getter = READ_MOSTLY.get_buffer.load(Ordering::Acquire);
     let outer = enter_frame(CallbackFrame {
         owner: opaque as usize,
         processing,
         pipeline: engine as usize,
         started,
+        // One accessor call and one generation read per callback; every buffer
+        // lookup in this frame reuses them.
+        jack: jack_cache::begin(getter),
     });
     CYCLE.callbacks.fetch_add(1, Ordering::Relaxed);
-    if !engine.is_null() {
-        let getter = READ_MOSTLY.get_buffer.load(Ordering::Acquire);
-        if getter != 0 {
-            let get: GetBuffer = unsafe { std::mem::transmute(getter) };
-            // This short exclusive borrow ends before the original callback.
-            // Reentrant buffer hooks access the same owner only after it ends.
-            unsafe { (*engine).begin_at(frames as usize, get, cycle_start, started) };
-        }
+    if !engine.is_null() && getter != 0 {
+        let get: GetBuffer = unsafe { std::mem::transmute(getter) };
+        // This short exclusive borrow ends before the original callback.
+        // Reentrant buffer hooks access the same owner only after it ends.
+        unsafe { (*engine).begin_at(frames as usize, get, cycle_start, started) };
     }
     let before_native = timing::Frame::before_native(&frame);
     let result = unsafe {
@@ -996,24 +1011,64 @@ fn record_gap(gap: u64) {
 /// threads. It writes nothing shared. Inside a callback frame it adds to the
 /// thread's own count; outside one it counts only while the bench gauges are
 /// on.
+/// One buffer lookup inside a callback frame: the cache may answer without
+/// calling libjack, and a miss records what the real function returned.
+///
+/// # Safety
+/// `port` and `frames` are the caller's `jack_port_get_buffer` arguments and
+/// `get` is that function.
+pub(crate) unsafe fn port_buffer(
+    jack: jack_cache::Snapshot,
+    get: GetBuffer,
+    port: *mut c_void,
+    frames: u32,
+) -> *mut c_void {
+    match unsafe { jack_cache::hit(jack, port) } {
+        Some(cached) => cached,
+        None => {
+            let value = unsafe { get(port, frames) };
+            unsafe { jack_cache::record(jack, port, value) };
+            value
+        }
+    }
+}
+
+/// The same lookup for a caller that is inside a callback frame but did not
+/// receive its snapshot, such as the pipeline's own port resolution.
+///
+/// # Safety
+/// As [`port_buffer`].
+pub(crate) unsafe fn port_buffer_in_frame(
+    get: GetBuffer,
+    port: *mut c_void,
+    frames: u32,
+) -> *mut c_void {
+    let jack = INSIDE.with(|inside| inside.get().jack);
+    unsafe { port_buffer(jack, get, port, frames) }
+}
+
 unsafe extern "C" fn get_buffer(port: *mut c_void, frames: u32) -> *mut c_void {
     let pointer = READ_MOSTLY.get_buffer.load(Ordering::Acquire);
     if pointer == 0 {
         return std::ptr::null_mut();
     }
-    let in_frame = INSIDE.with(|inside| {
-        let in_frame = inside.get().owner != 0;
+    let (frame, in_frame) = INSIDE.with(|inside| {
+        let frame = inside.get();
+        let in_frame = frame.owner != 0;
         if in_frame {
             inside.buffer_calls.set(inside.buffer_calls.get() + 1);
         }
-        in_frame
+        (frame, in_frame)
     });
     if !in_frame && READ_MOSTLY.gauges.load(Ordering::Relaxed) {
         BUFFER_CALLS_OUTSIDE.fetch_add(1, Ordering::Relaxed);
     }
     let original: GetBuffer = unsafe { std::mem::transmute(pointer) };
-    let native = unsafe { original(port, frames) };
-    let frame = INSIDE.with(|value| value.get());
+    let native = if in_frame {
+        unsafe { port_buffer(frame.jack, original, port, frames) }
+    } else {
+        unsafe { original(port, frames) }
+    };
     if frame.owner != 0 && frame.processing {
         let engine = frame.pipeline as *mut pipeline::Pipeline;
         if !engine.is_null() {
@@ -1413,6 +1468,7 @@ fn build_report() -> serde_json::Value {
         "skippedOutputs":read(&SKIPPED_OUTPUTS),"retainedPorts":CONTROL.lock().map(|registry|registry.ports.len()).unwrap_or(usize::MAX)});
     report["vendorJobRepair"] = vendor_job::status();
     report["vendorWaitProfile"] = vendor_wait::status();
+    report["jackBufferCache"] = jack_cache::status();
     report["vendorWakeOne"] = vendor_wake::status();
     report["firmwareProfile"] = FIRMWARE_PROFILE.get().cloned().into();
     report["controlServerErrors"] = read(&SERVER_ERRORS).into();
@@ -1751,6 +1807,7 @@ mod hook_tests {
             processing: false,
             pipeline: 0,
             started: 0,
+            jack: jack_cache::Snapshot::INACTIVE,
         };
         let before = published();
         let outer = enter_frame(frame(0x10));

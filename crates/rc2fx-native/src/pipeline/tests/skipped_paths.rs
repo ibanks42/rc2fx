@@ -298,6 +298,7 @@ fn sparse_cycles_and_replanning_allocate_nothing_in_the_callback() {
         processing: true,
         pipeline: 0,
         started: 0,
+        jack: crate::jack_cache::Snapshot::INACTIVE,
     };
     let before = counts();
     for index in 0..80 {

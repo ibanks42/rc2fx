@@ -635,6 +635,7 @@ mod tests {
                 processing: true,
                 pipeline: 0,
                 started: 0,
+                jack: crate::jack_cache::Snapshot::INACTIVE,
             })
         });
         for _ in 0..1024 {

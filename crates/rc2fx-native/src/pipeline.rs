@@ -1985,7 +1985,11 @@ unsafe fn begin_port(
     }
     let mut valid = true;
     for (channel, pin) in port.pins.iter().enumerate() {
-        let pointer = unsafe { get(pin.pointer as *mut c_void, frames as u32) } as usize;
+        // Same lookup rules as the vendor's own calls: the cache answers only
+        // where the pointer cannot change within this graph generation.
+        let pointer =
+            unsafe { super::port_buffer_in_frame(get, pin.pointer as *mut c_void, frames as u32) }
+                as usize;
         if pointer == 0
             || !pointer.is_multiple_of(std::mem::align_of::<f32>())
             || pointer.checked_add(frames * 4).is_none()
@@ -3074,6 +3078,7 @@ mod tests {
                 processing: true,
                 pipeline: 0,
                 started: 0,
+                jack: crate::jack_cache::Snapshot::INACTIVE,
             })
         });
         for _ in 0..100 {
@@ -3116,6 +3121,7 @@ mod tests {
                 processing: true,
                 pipeline: 0,
                 started: 0,
+                jack: crate::jack_cache::Snapshot::INACTIVE,
             })
         });
         for _ in 0..100 {
@@ -3786,6 +3792,7 @@ mod tests {
                     processing: true,
                     pipeline: 0,
                     started: 0,
+                    jack: crate::jack_cache::Snapshot::INACTIVE,
                 })
             });
             for _ in 0..40 {
