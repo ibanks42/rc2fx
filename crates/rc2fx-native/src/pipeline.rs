@@ -945,14 +945,15 @@ const PARKED: u64 = u64::MAX;
 /// made no system call for it (on the mixer the wake cost the callback 12 us
 /// at its very end, every cycle).
 ///
-/// It has to cover how far a callback's end strays after the forecast. That
-/// was not measured (`handoffLate` now does); from the spread of the end
-/// positions and of the callback's start it is of the order of 100 us, and
-/// 200 us is twice that. It stays under IRREGULAR_NS, past which a callback
-/// counts as irregular anyway. Its price is the helper's start: about 200 us
-/// after the handoff instead of the 27 us a wake took, out of the 2100 us the
-/// helper has to spare in a period (see LATEST_SELF_START_NS for the bound).
-const WAKE_MARGIN_NS: u64 = 200_000;
+/// Measured on the mixer (2026-11-12, 10-minute blocks with the denoiser
+/// hold at 2.5 ms): 50, 100 and 200 us all saved the callback the same 10 to
+/// 11 us against the callback's wake, and 50 us had the fewest callbacks that
+/// started late; at 400 us the timer is set past LATEST_SELF_START_NS, so
+/// the callback wakes the helper every time and nothing is saved. A timer
+/// that fires before the handoff finds nothing and leaves the helper parked
+/// for the callback to wake, as before. The helper starts about 50 us after
+/// the handoff instead of the 27 us a wake took.
+pub(crate) const WAKE_MARGIN_NS: u64 = 50_000;
 /// The latest the helper may start a frame by itself, from the start of the
 /// callback that hands the frame off. The callback wakes a helper whose timer
 /// is set later than this, as it wakes a parked one.

@@ -1025,11 +1025,13 @@ fn jitter(k: u64, span: i64) -> i64 {
 #[test]
 fn regular_handoffs_need_no_wake_after_the_warm_up() {
     let mut rig = Rig::new(T0);
-    let span = 70_000;
+    // Together under half the margin, as the ends' spread is on the mixer.
+    let span = (WAKE_MARGIN_NS * 7 / 20) as i64;
+    let start_span = (WAKE_MARGIN_NS / 10) as i64;
     let frames = 400;
     let mut wakes_after_warm_up = 0;
     for k in 0..frames {
-        let begun = (T0 + k * PERIOD_NS).wrapping_add_signed(jitter(k + 1_000, 20_000));
+        let begun = (T0 + k * PERIOD_NS).wrapping_add_signed(jitter(k + 1_000, start_span));
         let at = (begun + LENGTH).wrapping_add_signed(jitter(k, span));
         let (woke, start, started) = rig.callback(begun, at);
         if k <= u64::from(FORECAST_WARMUP) {
@@ -1045,7 +1047,7 @@ fn regular_handoffs_need_no_wake_after_the_warm_up() {
             );
             let latency = started - at;
             assert!(
-                latency <= WAKE_MARGIN_NS + 2 * (span as u64 + 20_000),
+                latency <= WAKE_MARGIN_NS + 2 * (span + start_span) as u64,
                 "frame {k}: started {latency} ns after its handoff"
             );
             assert!(started <= begun + LATEST_SELF_START_NS, "frame {k}");
@@ -1087,8 +1089,10 @@ fn early_late_burst_and_skipped_handoffs_each_run_once_and_start_in_time() {
     };
     warm_up(&mut rig, &mut first);
 
-    // A little early, a little late: the timer covers both, no wake.
-    for stray in [-150_000, 150_000, -200_000, 170_000] {
+    // A little early, a little late (inside the margin): the timer covers
+    // both, no wake.
+    let margin = WAKE_MARGIN_NS as i64;
+    for stray in [-margin * 3 / 4, margin * 3 / 4, -margin, margin * 17 / 20] {
         let begun = first;
         let at = (begun + LENGTH).wrapping_add_signed(stray);
         let (woke, start, started) = rig.callback(begun, at);
@@ -1538,9 +1542,14 @@ fn the_wake_gauges_tell_self_starts_from_wakes() {
     let mut rig = Rig::new(T0);
     rig.gauged = true;
     // 17 woken out of a park with no forecast, then 23 on the timer, each
-    // 200 us after its handoff: a self-start in the wide histogram.
+    // the margin after its handoff: a self-start in the wide histogram, in
+    // the bin that holds the margin.
+    let margin_bin = Fine::WIDE_BOUNDS_US
+        .iter()
+        .position(|&bound| WAKE_MARGIN_NS / 1_000 < bound)
+        .unwrap();
     let self_bin = |bin: usize| SELF_LATENCY.bins[bin].load(Ordering::Relaxed);
-    let bin_before = self_bin(4);
+    let bin_before = self_bin(margin_bin);
     let timer_late_before = TIMER_LATE.bins[0].load(Ordering::Relaxed);
     rig.regular(T0, 40, |k| jitter(k, 1_000));
     // One woken out of a park after its timer, and one out of the timed sleep.
@@ -1582,8 +1591,8 @@ fn the_wake_gauges_tell_self_starts_from_wakes() {
         calls_before[3] + calls_before[4],
         40
     ));
-    // Self-starts land about the margin after the handoff: 128 to 256 us.
-    assert!(self_bin(4) >= bin_before + 23);
+    // Self-starts land about the margin after the handoff.
+    assert!(self_bin(margin_bin) >= bin_before + 23);
     // And on this clock at the timer's very time: within the first bin.
     assert!(TIMER_LATE.bins[0].load(Ordering::Relaxed) >= timer_late_before + 27);
     let report = wake_gauges();

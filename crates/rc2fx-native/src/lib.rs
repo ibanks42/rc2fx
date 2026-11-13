@@ -4,6 +4,7 @@
 mod chat_mix;
 mod client_timing;
 mod client_timing_events;
+mod denoiser_hold;
 mod gauges;
 mod ipc;
 mod parameters;
@@ -842,6 +843,7 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
         return 1;
     }
     let original: Process = unsafe { std::mem::transmute(pointer) };
+    denoiser_hold::enter();
     let started = timing::monotonic();
     let flight_token = client_timing::main_begin(started);
     let previous_start = context.started.swap(started, Ordering::Relaxed);
@@ -899,6 +901,7 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     if !engine.is_null() {
         unsafe { (*engine).end(frames as usize, result == 0) };
     }
+    denoiser_hold::leave();
     leave_frame(outer);
     // The exit stamp of the callback timing is also the callback's end: one
     // clock read serves both.
@@ -1410,6 +1413,7 @@ fn build_report() -> serde_json::Value {
     report["processPid"] = std::process::id().into();
     report["clientTiming"] = client_timing::snapshot();
     report["srcFast"] = src_fast::snapshot();
+    report["denoiserHold"] = denoiser_hold::report();
     if gauged {
         report["gauges"] = gauges::snapshot();
     }
