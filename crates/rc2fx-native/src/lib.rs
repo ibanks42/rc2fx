@@ -18,6 +18,7 @@ mod timing;
 mod transactions;
 mod usb_control;
 mod vendor_job;
+mod vendor_wait;
 mod vendor_wake;
 
 use std::{
@@ -542,6 +543,7 @@ fn select_firmware() -> Result<usize, String> {
     }
     vendor_job::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     chat_mix::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
+    vendor_wait::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     vendor_wake::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     let _ = FIRMWARE_PROFILE.set(profile.id.clone());
     Ok(offset)
@@ -1410,6 +1412,7 @@ fn build_report() -> serde_json::Value {
         "inputBlocks":read(&INPUT_BLOCKS),"outputBlocks":read(&OUTPUT_BLOCKS),"dspFaults":read(&DSP_FAULTS),
         "skippedOutputs":read(&SKIPPED_OUTPUTS),"retainedPorts":CONTROL.lock().map(|registry|registry.ports.len()).unwrap_or(usize::MAX)});
     report["vendorJobRepair"] = vendor_job::status();
+    report["vendorWaitProfile"] = vendor_wait::status();
     report["vendorWakeOne"] = vendor_wake::status();
     report["firmwareProfile"] = FIRMWARE_PROFILE.get().cloned().into();
     report["controlServerErrors"] = read(&SERVER_ERRORS).into();
