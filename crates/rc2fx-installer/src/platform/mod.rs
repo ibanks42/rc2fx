@@ -25,6 +25,9 @@ pub struct Hid {
     /// The descriptor declares RC2FX's control reports: RC2FX's USB layout
     /// is live on the mixer.
     pub control: bool,
+    /// The USB device release number (`bcdDevice`). RØDE sets it from the
+    /// installed firmware version: 1.7.7 is `0x0177`.
+    pub release: u16,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]

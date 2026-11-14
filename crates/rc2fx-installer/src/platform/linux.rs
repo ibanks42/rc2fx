@@ -44,6 +44,22 @@ fn usb_ancestor(start: &Path) -> Result<(String, u16)> {
     }
 }
 
+/// The release number (`bcdDevice`) of the RØDE USB device above a sysfs
+/// node; 0 when it can't be read.
+fn usb_release(start: &Path) -> u16 {
+    let Ok(mut current) = fs::canonicalize(start) else {
+        return 0;
+    };
+    loop {
+        if read_trim(&current.join("idVendor")) == "19f7" {
+            return u16::from_str_radix(&read_trim(&current.join("bcdDevice")), 16).unwrap_or(0);
+        }
+        if !current.pop() || current.as_os_str() == "/" {
+            return 0;
+        }
+    }
+}
+
 fn cstring(path: &Path) -> Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|e| Error(e.to_string()))
 }
@@ -319,6 +335,7 @@ impl Platform for Host {
                     input: 4096,
                     output: 64,
                     control: rc2fx_usb::declares_control(&descriptor),
+                    release: usb_release(&p.join("device")),
                 });
             }
         }

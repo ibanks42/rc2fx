@@ -332,6 +332,7 @@ fn fixture() -> Fixture {
             input: 256,
             output: 256,
             control: false,
+            release: 0x0177,
         }],
         ack: vec![2, b'A'],
         work: work.clone(),
@@ -887,7 +888,8 @@ fn probe_reports_usb_and_cached_state_without_touching_the_device() {
         [UsbMixer {
             model: rc2fx_firmware::Model::ProIi,
             serial: SERIAL.into(),
-            update_mode: false
+            update_mode: false,
+            firmware: Some("1.7.7".into()),
         }]
     );
     assert!(status.prepared_present);

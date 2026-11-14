@@ -338,6 +338,12 @@ impl Model {
             .is_some_and(|m| !m.serial.is_empty() && Some(m.serial.as_str()) == session_serial)
     }
 
+    /// The RØDE firmware the one connected mixer reports in its USB device
+    /// information: known even when RC2FX isn't running on it.
+    pub fn usb_firmware(&self) -> Option<String> {
+        self.usb_one(false).and_then(|m| m.firmware.clone())
+    }
+
     fn usb_one(&self, update_mode: bool) -> Option<&UsbMixer> {
         match self.usb() {
             [one] if one.update_mode == update_mode => Some(one),
@@ -1382,6 +1388,7 @@ mod tests {
                     model: DeviceModel::ProIi,
                     serial: (*serial).into(),
                     update_mode: *update_mode,
+                    firmware: None,
                 })
                 .collect(),
             usb_error: None,

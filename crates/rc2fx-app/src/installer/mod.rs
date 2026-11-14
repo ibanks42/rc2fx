@@ -718,6 +718,10 @@ impl Rc2FxApp {
         let Some(installer) = self.installer.as_mut() else {
             return false;
         };
+        // RC2FX names the exact firmware profile it runs on; without RC2FX,
+        // the mixer's USB device information still says which RØDE firmware
+        // it has, so replacing newer firmware is never silent.
+        let firmware = firmware.or_else(|| installer.model.usb_firmware());
         let mut changed = false;
         if installer.model.installed != mixer || installer.model.installed_firmware != firmware {
             installer.model.set_installed(mixer, firmware);

@@ -143,6 +143,7 @@ fn inspect_hid(device: HANDLE, name: &str) -> Result<Option<Hid>> {
         path: name.to_owned(),
         serial: from_wide(&serial),
         pid: a.ProductID,
+        release: a.VersionNumber,
         usage: caps.UsagePage,
         input: caps.InputReportByteLength as usize,
         output: caps.OutputReportByteLength as usize,

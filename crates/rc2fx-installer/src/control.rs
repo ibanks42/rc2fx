@@ -567,6 +567,7 @@ mod tests {
             input: REPORT_SIZE,
             output: REPORT_SIZE,
             control: true,
+            release: 0x0177,
         };
         assert_eq!(control_interface(&[hid(0x0037, "A")]).unwrap().serial, "A");
         assert!(

@@ -194,6 +194,11 @@ pub struct UsbMixer {
     pub model: DeviceModel,
     pub serial: String,
     pub update_mode: bool,
+    /// The RØDE firmware this mixer runs, from its USB release number. Read
+    /// without RC2FX, so it is known on stock firmware too. None in update
+    /// mode, where the number may not be the installed firmware's.
+    #[serde(default)]
+    pub firmware: Option<String>,
 }
 
 /// What RC2FX reports over USB 1, as the desktop app's connection sees it.

@@ -222,6 +222,7 @@ fn enumerate() -> Result<Devices> {
                     input: 4096,
                     output: 64,
                     control: rc2fx_usb::declares_control(&bytes(d, "ReportDescriptor")),
+                    release: integer(d, "VersionNumber") as u16,
                 },
             ));
         }

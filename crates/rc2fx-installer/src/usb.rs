@@ -56,8 +56,23 @@ pub(crate) fn mixers(items: &[Hid]) -> Vec<crate::UsbMixer> {
                 .unwrap(),
             serial: h.serial.clone(),
             update_mode: is_update_pid(h.pid),
+            firmware: (!is_update_pid(h.pid))
+                .then(|| firmware_version(h.release))
+                .flatten(),
         })
         .collect()
+}
+
+/// A RØDE firmware version from a USB release number. RØDE's gadget script
+/// writes the version with its dots removed as hex (`1.7.7` → `0x0177`), so
+/// only versions with single-digit parts can be read back; anything else is
+/// unknown rather than guessed.
+pub fn firmware_version(release: u16) -> Option<String> {
+    let digits = format!("{release:x}");
+    (digits.len() == 3 && digits.bytes().all(|b| b.is_ascii_digit())).then(|| {
+        let parts: Vec<String> = digits.chars().map(String::from).collect();
+        parts.join(".")
+    })
 }
 
 /// The single control interface in one of `pids`, optionally for `serial`.
@@ -388,4 +403,20 @@ pub fn vendor_usage(descriptor: &[u8]) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::firmware_version;
+
+    #[test]
+    fn the_usb_release_number_reads_back_as_rodes_version() {
+        assert_eq!(firmware_version(0x0177).as_deref(), Some("1.7.7"));
+        assert_eq!(firmware_version(0x0176).as_deref(), Some("1.7.6"));
+        assert_eq!(firmware_version(0x0200).as_deref(), Some("2.0.0"));
+        // Not a dotless version: unknown, never guessed.
+        for release in [0, 0x0017, 0x1234, 0x01a7] {
+            assert_eq!(firmware_version(release), None, "{release:#x}");
+        }
+    }
 }
