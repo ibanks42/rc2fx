@@ -3,7 +3,10 @@
 Desktop and mixer versions are independent. Normal desktop builds download a
 signed mixer payload and firmware catalog from GitHub. The installer still adds
 that payload to official RØDE firmware and flashes the resulting image over USB.
-Nothing in this release system updates files in place on the device.
+A first install and any RØDE firmware change always need that flash. When the
+firmware stays the same, the app can send the same signed payload over USB 1
+instead, and the mixer installs it in place (see
+[In-place updates](#in-place-updates)).
 
 ## Build modes
 
@@ -141,6 +144,72 @@ too. Discovery metadata is mutable because TUF signatures, expiry, and stored
 version numbers provide its trust boundary.
 Retain every numbered root file so old clients can verify the complete rotation
 chain. Do not replace an old numbered root with different bytes.
+
+## In-place updates
+
+An update that changes only RC2FX can be installed on a running mixer without
+flashing RØDE's firmware. The app uploads the signed payload over USB 1, the
+mixer verifies it with the same trust root and metadata the desktop trusts, and
+then swaps `/opt/rc2fx` in place. RØDE's files, its audio engine binary and the
+firmware are never touched; only the audio engine is restarted. The endpoints
+are in [the controller API](../reference/api.md#in-place-updates).
+
+The mixer does the verification itself, from the root compiled into `rc2fxd`
+(and into the app), so the computer is not trusted to authorize a release:
+
+1. The four role documents are verified as a TUF repository: root signatures
+   and thresholds, key rotation when the app sends the intermediate roots,
+   timestamp, snapshot and targets, and the hashes and versions that tie them
+   together. Delegated targets are refused.
+2. Exactly one target may carry the `rc2fxMixer` compatibility claims. Its
+   version, length and SHA-256 must match the request and the uploaded file.
+3. Its `firmwareProfiles` must include the profile the launcher validated for
+   the running mixer, and its `minimumAppVersion` and release identity must be
+   well formed.
+4. The payload's own envelope, `SHA256SUMS`, ARM64 binaries, firmware catalog
+   and `mixer-release.json` must agree with those claims. A development build
+   is refused: there is no unsigned or developer path through this API.
+5. Nothing is executed and nothing under `/opt` changes before all of that
+   passes.
+
+The mixer has no trusted clock, so expiry cannot be enforced there: an unset or
+wrong clock would either block every update or accept a stale one silently.
+Instead the mixer records the highest verified root, targets, snapshot and
+timestamp versions (plus a digest of the verified targets) beside its settings
+in `/opt/rc2fx/data/update-state.json`, and refuses an older set or different
+content under the same version. The installed RC2FX version is recorded there
+too, and a downgrade is refused unless the request asks for one. A full flash
+replaces that file, so a flash starts recording again.
+
+After verification the bundle is staged on `/opt`'s filesystem, checked again
+from disk, and its own `rc2fx-firmware check-device` must accept the running
+mixer. The live files are hard-linked into `/opt/.rc2fx-previous`, then
+`/opt/.rc2fx-install-pending` is written and flushed, and only then is each
+file renamed into place, followed by the two `/usr/sbin` shims. Saved settings
+in `/opt/rc2fx/data` are never moved.
+
+`rc2fxd` then copies `rc2fx.sh` into RAM and starts it detached as
+`update-commit`; that step restarts the mixer (the same restart
+`rc2fx.sh restart` makes), waits for the new controller to record its start and
+for audio callbacks to advance, and commits by removing the pending marker. If
+that does not happen it restarts into `/opt/.rc2fx-previous` instead, and the
+previous controller restores the files and records the rollback. The outcome is
+reported by `GET api/v1/update/last` after the app reconnects.
+
+A power cut at any point leaves something launchable:
+
+| Cut during | Next boot |
+| --- | --- |
+| upload or verification | The installed release; `/run` and the staged copy are gone |
+| before the pending marker | The installed release; a leftover stage directory is removed |
+| after the pending marker, before the restart | `.rc2fx-previous` is started, and its controller restores the files |
+| during the restart or readiness wait | `.rc2fx-previous` is started and restores the files |
+| after the commit | The new release |
+
+While a pending marker exists, both `/usr/sbin` shims start
+`.rc2fx-previous` unless the update driver is still alive, which is how the
+committed restart reaches the new release. The GUI shim only takes effect at
+the next boot, and the outcome says when it changed.
 
 ## Where metadata lives
 

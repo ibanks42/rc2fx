@@ -79,6 +79,10 @@ pub struct DeviceVersions {
     /// The validated firmware profile's id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware_profile: Option<String>,
+    /// 1 when this controller installs signed RC2FX releases in place over
+    /// USB 1 (see `docs/developer/mixer-releases.md`); absent when it cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_place_updates: Option<u32>,
 }
 
 impl DeviceVersions {

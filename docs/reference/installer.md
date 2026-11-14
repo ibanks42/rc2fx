@@ -3,8 +3,12 @@
 The installer flashes official RØDE firmware with RC2FX added to it. It
 builds a modified root filesystem image on the computer containing the
 runtime, the start-up shims and the saved settings, and the mixer's USB
-update mode installs it. Installing, updating and repairing all use the same
-flash. Firmware images are not stored in git.
+update mode installs it. A first install, a repair after a failed state, and
+any update that changes RØDE's firmware use this flash. When only RC2FX
+changes, the app installs the signed mixer payload in place over USB 1
+instead (see
+[signed mixer releases](../developer/mixer-releases.md#in-place-updates)); the
+flash remains the recovery path. Firmware images are not stored in git.
 
 The installer engine is `crates/rc2fx-installer`, written in Rust with no
 external tools. The installer page is `crates/rc2fx-app/src/installer`.

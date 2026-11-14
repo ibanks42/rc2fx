@@ -692,6 +692,7 @@ fn versions() -> DeviceVersions {
         native_protocol: None,
         firmware: Some(FIRMWARE.into()),
         firmware_profile: Some(FIRMWARE_PROFILE.into()),
+        in_place_updates: None,
     }
 }
 

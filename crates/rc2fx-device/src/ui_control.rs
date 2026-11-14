@@ -245,10 +245,11 @@ async fn connection(
     if stream.peer_cred()?.uid() != unsafe { libc::geteuid() } {
         return Err(io::Error::from(io::ErrorKind::PermissionDenied));
     }
-    // Developer SSH is a USB 1 feature only: the touchscreen never gets it,
-    // whatever it is handed.
+    // Developer SSH and signed in-place updates are USB 1 features only: the
+    // touchscreen never gets them, whatever it is handed.
     let options = Options {
         developer_ssh: None,
+        mixer_update: None,
         ..options
     };
     let mut api = Api::new(controller, options);

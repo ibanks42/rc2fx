@@ -624,6 +624,7 @@ fn device_status_text_must_be_fit_to_show() {
         native_protocol: None,
         firmware: Some("1.7.7".into()),
         firmware_profile: Some("rodecaster-pro-ii-1.7.7".into()),
+        in_place_updates: None,
     };
     versions.validate().unwrap();
 }

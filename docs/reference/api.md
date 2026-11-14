@@ -17,6 +17,12 @@ sends a single request.
 | `GET /api/v1/version` | | The installed RC2FX mixer software and RØDE firmware versions; see [Versions](#versions) |
 | `GET /api/v1/ssh` | | Developer SSH access status; USB 1 only, see [Developer SSH](#developer-ssh) |
 | `PUT /api/v1/ssh` | `{"enabled", "publicKey"}` | Add or remove RC2FX's developer SSH key; USB 1 only |
+| `POST /api/v1/update` | `{"version", "size", "sha256", "metadata": {"root", "timestamp", "snapshot", "targets"}}` | Start a signed in-place update; USB 1 only, see [In-place updates](#in-place-updates) |
+| `PUT /api/v1/update/{id}` | `{"offset", "data"}` | Append a base64 chunk to the upload; 409 carries `expectedOffset` |
+| `POST /api/v1/update/{id}/install` | | Verify and install the upload, then restart and commit or roll back |
+| `GET /api/v1/update/{id}` | | The session's state, progress and error, if any |
+| `DELETE /api/v1/update/{id}` | | Abort the session and delete its upload |
+| `GET /api/v1/update/last` | | The last in-place update's outcome, or `{}` |
 | `GET /api/v1/diagnostics` | | State plus bounded telemetry history (callback timing, worker counters) |
 | `GET /api/v1/diagnostics/events?after=SEQ` | | The diagnostic event log after sequence number `SEQ`, up to 256 events per page |
 | `POST /api/v1/diagnostics/reset` | | Reset the telemetry baselines and clear the event log |
@@ -40,6 +46,10 @@ generation is stale, the write is refused with 409. Errors are
 | 404 | Unknown preset |
 | 409 | Revision or generation conflict |
 | 503 | Engine busy or stopped |
+
+The in-place update endpoints add 507 when RAM or disk is too full, and use
+409 for an upload that conflicts with the session (see
+[In-place updates](#in-place-updates)).
 
 ## Trust boundary
 
@@ -65,6 +75,7 @@ and a reply can't change what the installer flashes.
 | --- | --- |
 | `runtime`, `protocol` | `version` and `protocolVersion` of the installed `/opt/rc2fx/mixer-release.json` |
 | `firmware`, `firmwareProfile` | The firmware profile the launcher selected after `rc2fx-firmware check-device` verified the stock mixer, looked up in the installed catalog for the mixer's own model |
+| `inPlaceUpdates` | `1` when this controller installs signed releases in place over USB 1; absent otherwise |
 
 `rc2fxd` reads these once at startup, from `--release`, `--firmware-catalog`
 and `--firmware-profile`, which `rc2fx.sh` passes. A field it can't read or
@@ -77,8 +88,95 @@ strict schema is unchanged. They can't change without a restart, so the app
 reads them again after each reconnect. Clients should ignore fields they
 don't know.
 
-## Developer SSH
+## In-place updates
 
+A signed RC2FX release can be installed without flashing RØDE's firmware when
+that firmware stays the same. The app sends the release's signed metadata and
+its payload over USB 1; the mixer verifies them itself, swaps `/opt/rc2fx` in
+place with a rollback copy, and restarts only RØDE's audio engine and
+`rc2fxd`. A first install and any RØDE firmware change still need a full
+flash. The design is in
+[signed mixer releases](../developer/mixer-releases.md#in-place-updates).
+
+These endpoints exist only on USB 1, and only when the controller runs from
+the installed `/opt/rc2fx`; the touchscreen socket and a RAM run answer 404.
+`GET /api/v1/version` reports `inPlaceUpdates` when they are available.
+
+`POST /api/v1/update` takes:
+
+```json
+{"version": "0.2.0", "size": 11534336, "sha256": "…64 hex…",
+ "allowDowngrade": false,
+ "metadata": {"root": ["…1.root.json…"], "timestamp": "…", "snapshot": "…", "targets": "…"}}
+```
+
+`version`, `size` and `sha256` name the RC2FX release; the metadata are the
+TUF role documents the app downloaded, each sent as a string holding the
+file's exact text: the snapshot and timestamp sign the bytes of the files
+they list, so reformatted JSON would not verify. `root` is an array of root
+documents, oldest first: one, or the chain that follows a key rotation.
+`allowDowngrade` is optional and defaults to false: a release older than the
+installed one is refused unless the app asks for it explicitly and the target
+is signed. The reply is `201` with the session:
+
+```json
+{"id": "0123456789abcdef", "state": "accepting", "version": "0.2.0",
+ "size": 11534336, "received": 0}
+```
+
+`PUT /api/v1/update/{id}` carries `{"offset": N, "data": "<base64>"}` with at
+most 256 KiB of raw bytes per request. It appends at `offset`, which must be
+where the upload has reached. A chunk the mixer already holds is accepted
+again, so a lost reply is recovered by resending it. Any other offset is
+`409` with the position to resume at:
+
+```json
+{"error": "The upload does not continue at offset 131072", "expectedOffset": 131072}
+```
+
+`POST /api/v1/update/{id}/install` verifies the upload (signature chain,
+release identity, size, hash, firmware profile and version) and answers
+`200` with the current state, normally `"state": "installing"`, once it is
+accepted. The install, the swap and the restart then run on their own; a
+repeated request returns the current state instead of starting a second one.
+`GET /api/v1/update/{id}` reports it:
+
+```json
+{"id": "0123456789abcdef", "state": "restarting", "version": "0.2.0",
+ "size": 11534336, "received": 11534336}
+```
+
+| State | Meaning |
+| --- | --- |
+| `accepting` | The session is open and the upload is incomplete |
+| `complete` | Every byte is uploaded; install can start |
+| `installing` | Verified; files are being staged and swapped in |
+| `restarting` | The mixer is being restarted into the new release |
+| `failed` | Refused or failed; `error` says why, and the upload is kept for another `install` or a `DELETE` |
+
+The session lives in RAM, so the restart that installs the release ends it.
+The app reconnects and reads `GET /api/v1/update/last` for the outcome:
+
+```json
+{"outcome": "committed", "from": "0.1.5", "to": "0.2.0",
+ "guiShimNeedsReboot": false}
+```
+
+`outcome` is `committed` or `rolledBack`; `reason` explains a rollback. The
+GUI shim only takes effect at the next boot, which
+`guiShimNeedsReboot` records. A mixer that has never run an in-place update
+answers `{}`. `DELETE /api/v1/update/{id}` aborts a session that is not
+installing and deletes its upload; `409` refuses one that is.
+
+| Status | Meaning |
+| --- | --- |
+| 400 | Malformed request, version or hash |
+| 404 | Unknown session, or the endpoint is not available here |
+| 409 | Another update or a pending install, an incomplete upload, an install already running, or a refused release |
+| 507 | Not enough RAM in `/run` or space on `/opt` |
+| 500 | The mixer could not stage, read or restart |
+
+## Developer SSH
 `GET /api/v1/ssh` and `PUT /api/v1/ssh` exist only on USB 1. The touchscreen
 socket answers them with 404, as does `rc2fxd` from before them. `rc2fxd` runs
 `rc2fx.sh developer-ssh`, which owns the behaviour, off its async executor,

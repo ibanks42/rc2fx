@@ -21,6 +21,9 @@
 #   rc2fx.sh developer-ssh status|enable|disable
 #                                    RC2FX's own developer SSH key; called by
 #                                    rc2fxd for the desktop app over USB 1
+#   rc2fx.sh update-commit ID         restart, verify and commit (or roll back)
+#                                    a signed in-place update; started
+#                                    detached by rc2fxd, which it outlives
 #
 # developer-ssh adds or removes one marked line in root's authorized_keys.
 # arm-power-recovery explicitly sets the bootloader's one-shot power flag.
@@ -39,7 +42,9 @@ set -euo pipefail
 # RC2FX_RELEASE_BUILD=1); development builds default to verbose GUI
 # diagnostics, releases to quiet ones.
 rc2fx_build=development
-home=$(cd "$(dirname "$0")" && pwd)
+# A detached copy of this script (rc2fx.sh update-commit) names the bundle it
+# acts on; every other caller runs the bundle it is stored in.
+home=${RC2FX_HOME:-$(cd "$(dirname "$0")" && pwd)}
 data=${RC2FX_DATA:-/opt/rc2fx/data}
 logs=${RC2FX_LOGS:-/opt/rc2fx/logs}
 run=/run/rc2fx
@@ -1902,9 +1907,106 @@ xrun_trace() {
   esac
 }
 
+# ---- signed in-place updates ------------------------------------------------
+# rc2fxd verifies and swaps a signed release (docs/developer/mixer-releases.md)
+# and then starts a copy of this script as `update-commit ID`, detached, so the
+# restart it causes does not end the transaction. This script only restarts,
+# checks readiness and commits or rolls back; every byte it runs was verified
+# first. The request file is key=value lines written by rc2fxd:
+#   mode=commit|rollback  target=VERSION  from=VERSION  deadline=SECONDS
+#   gui=0|1  (the GUI shim changed and only applies after the next boot)
+update_dir=/run/rc2fx-update
+
+# One record for `GET api/v1/update/last`, in the same key=value form rc2fxd
+# writes when it restores a bundle itself.
+update_record() {
+  local outcome=$1 from=${2:-} to=${3:-} reason=${4:-} gui=${5:-0} dir=/opt/rc2fx/data tmp
+  mkdir -p -m 700 "$dir" || return 0
+  tmp=$dir/.update-last.$$
+  if printf 'schema=1\noutcome=%s\nfrom=%s\nto=%s\nreason=%s\ngui=%s\n' \
+      "$outcome" "$from" "$to" "$reason" "$gui" > "$tmp"; then
+    chmod 600 "$tmp" && mv -f "$tmp" "$dir/update-last"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+# Whether the restarted controller is the target release and its audio is
+# advancing. audit.json is the native library's own report.
+update_ready() {
+  local target=$1 first second
+  test -f "$update_dir/started" || return 1
+  grep -qx "version=$target" "$update_dir/started" || return 1
+  pgrep -x rc2fxd > /dev/null || return 1
+  first=$(audit_callbacks); sleep 2; second=$(audit_callbacks)
+  test -n "$first" && test -n "$second" && test "$second" -gt "$first"
+}
+
+update_commit() {
+  local id=${1:?update session id}
+  local req=$update_dir/commit-$id.request
+  local mode= target= from= deadline= gui=0 status=0 ok=0 stop_at
+  test -f "$req" || { echo "no update request $req" >&2; return 2; }
+  while IFS='=' read -r key value; do
+    case "$key" in
+      mode) mode=$value;;
+      target) target=$value;;
+      from) from=$value;;
+      deadline) deadline=$value;;
+      gui) gui=$value;;
+    esac
+  done < "$req"
+  case "$mode" in commit|rollback) ;; *) echo "unknown update mode ${mode:-}" >&2; return 2;; esac
+  [[ $target =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo 'invalid update target' >&2; return 2; }
+  [[ $deadline =~ ^[0-9]+$ ]] || deadline=300
+  [[ $gui =~ ^[01]$ ]] || gui=0
+  mkdir -p -m 700 "$update_dir" "$logs"
+  # One driver at a time: the lock is held across the restart.
+  exec 9>"$update_dir/driver.lock" || return 1
+  flock -n 9 || { echo 'another update driver is running' >&2; return 1; }
+  say "Update $id: $mode to $target (from ${from:-unknown})" >> "$logs/update.log"
+  if test "$mode" = commit; then
+    # The launchers start the new bundle while this runs; without this record
+    # they would take the pending marker for a power cut and use the old one.
+    printf '%s %s\n' "$$" "$(start_time "$$")" > "$update_dir/driver"
+  else
+    rm -f "$update_dir/driver"
+  fi
+  rm -f "$update_dir/started"
+  stop_at=$(( $(uptime_s) + deadline ))
+  start --force --wait "$deadline" || status=$?
+  say "Update $id: restart finished with status $status" >> "$logs/update.log"
+  if test "$mode" = commit && test "$status" -eq 0; then
+    while test "$(uptime_s)" -lt "$stop_at"; do
+      if update_ready "$target"; then ok=1; break; fi
+      sleep 2
+    done
+  fi
+  if test "$ok" = 1; then
+    update_record committed "$from" "$target" '' "$gui"
+    rm -f /opt/.rc2fx-install-pending
+    rm -f "$update_dir/driver"
+    say "Update $id: committed $target" >> "$logs/update.log"
+    return 0
+  fi
+  say "Update $id: $target did not become ready; restoring the previous version" >> "$logs/update.log"
+  if test "$mode" = commit; then
+    # With the driver record gone, the launchers prefer .rc2fx-previous; its
+    # controller restores the files and records the outcome.
+    rm -f "$update_dir/driver"
+    status=0
+    start --force --wait "$deadline" || status=$?
+    say "Update $id: rollback restart finished with status $status" >> "$logs/update.log"
+  fi
+  # An interrupted rollback is finished by the next boot's controller.
+  return 0
+}
+# ---- end of signed in-place updates ----------------------------------------
+
 case "${1:-}" in
   xrun-trace) shift; xrun_trace "$@" ;;
   arm-power-recovery) arm_power_recovery ;;
+  update-commit) shift; update_commit "$@" ;;
   gui-launch) shift; gui_launch "$@" ;;
   ui-stop) shift; ui_stop "$@" ;;
   ui-run) shift; test $# -eq 2 || exit 2; ui_preview "$@" keep ;;
@@ -1920,5 +2022,5 @@ case "${1:-}" in
   supervise-restart) shift; supervise_restart "$@" ;;
   supervise-exit) shift; supervise_exit "$@" ;;
   developer-ssh) shift; developer_ssh "$@" ;;
-  *) sed -n '2,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
+  *) sed -n '2,26s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

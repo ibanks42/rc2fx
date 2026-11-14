@@ -319,6 +319,29 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
     for problem in problems {
         eprintln!("{problem}");
     }
+    // In-place updates install into /opt/rc2fx and are offered only when this
+    // controller runs from the installed bundle, not from a RAM build.
+    let installed = args
+        .release
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .is_some_and(|bundle| bundle == std::path::Path::new("/opt/rc2fx"));
+    let mixer_update = installed.then(|| {
+        std::sync::Arc::new(rc2fx_device::mixer_update::MixerUpdate::new(
+            rc2fx_device::mixer_update::install::Paths::mixer(),
+            args.firmware_profile.clone(),
+            versions.runtime.clone(),
+        ))
+    });
+    if mixer_update.is_some() {
+        versions.in_place_updates = Some(rc2fx_device::mixer_update::IN_PLACE_UPDATES);
+    }
+    if let Some(update) = &mixer_update {
+        // Before serving: an update interrupted by a power cut is undone (or
+        // its absence recorded) while nothing else is changing /opt.
+        update.recover();
+        update.note_started();
+    }
     let initial = if let Some(path) = args.initial {
         let mut text = String::new();
         std::fs::File::open(path)?
@@ -351,12 +374,15 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
                 catalog: rc2fx_device::catalog::physical_catalog_for(model).to_vec(),
                 versions,
                 developer_ssh: None,
+                mixer_update: None,
             };
-            // Only the USB 1 server can manage developer SSH.
+            // Only the USB 1 server can manage developer SSH or install a
+            // signed release in place.
             let usb_options = api::Options {
                 developer_ssh: args.developer_ssh.clone().map(|script| {
                     std::sync::Arc::new(rc2fx_device::developer_ssh::DeveloperSsh::new(script))
                 }),
+                mixer_update: mixer_update.clone(),
                 ..options.clone()
             };
             let show_watch = async {

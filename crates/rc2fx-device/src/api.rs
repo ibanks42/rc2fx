@@ -27,6 +27,9 @@ pub struct Options {
     /// Developer SSH access. Set only for the USB 1 server; the touchscreen
     /// socket never has it, so `api/v1/ssh` answers 404 there.
     pub developer_ssh: Option<Arc<crate::developer_ssh::DeveloperSsh>>,
+    /// Signed in-place updates. Set only for the USB 1 server, for the same
+    /// reason: `api/v1/update` answers 404 everywhere else.
+    pub mixer_update: Option<Arc<crate::mixer_update::MixerUpdate>>,
 }
 
 /// A response body, carried as validated JSON text rather than a `Value`
@@ -107,6 +110,42 @@ fn ssh_reply(result: Result<rc2fx_core::SshStatus, crate::developer_ssh::SshErro
         Ok(status) => reply(200, &status),
         Err(e) => error(e.status(), e.to_string()),
     }
+}
+
+fn update_error(error_value: crate::mixer_update::UpdateError) -> Reply {
+    let status = error_value.status();
+    let expected = match &error_value {
+        crate::mixer_update::UpdateError::Offset { expected } => Some(*expected),
+        _ => None,
+    };
+    match expected {
+        Some(expected) => reply(
+            status,
+            &json!({"error": error_value.to_string(), "expectedOffset": expected}),
+        ),
+        None => error(status, error_value.to_string()),
+    }
+}
+
+fn last_update(update: &crate::mixer_update::MixerUpdate) -> Reply {
+    match update.last() {
+        Some(last) => reply(200, &last),
+        None => reply(200, &json!({})),
+    }
+}
+
+/// `api/v1/update/{id}` and `api/v1/update/{id}/install`.
+fn update_path(path: &str) -> Option<(&str, Option<&str>)> {
+    let rest = path.strip_prefix("api/v1/update/")?;
+    let (id, action) = match rest.split_once('/') {
+        Some((id, action)) => (id, Some(action)),
+        None => (rest, None),
+    };
+    let valid = id.len() == 16
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    valid.then_some((id, action))
 }
 
 fn operation_error(error_value: Error) -> Reply {
@@ -213,6 +252,78 @@ impl Api {
             // Installed RC2FX release and validated RØDE firmware. Separate
             // from the state so DeviceState's strict schema is unchanged.
             ("GET", "api/v1/version") => reply(200, &self.options.versions),
+            // Signed in-place updates, USB 1 only (see mixer_update.rs).
+            ("GET", "api/v1/update/last") => match &self.options.mixer_update {
+                Some(update) => last_update(update),
+                None => error(404, "In-place updates are not available here"),
+            },
+            ("POST", "api/v1/update") => match &self.options.mixer_update {
+                Some(update) => match parse::<crate::mixer_update::StartRequest>(body) {
+                    Ok(request) => match update.start(request) {
+                        Ok(progress) => reply(201, &progress),
+                        Err(e) => update_error(e),
+                    },
+                    Err(reply) => reply,
+                },
+                None => error(404, "In-place updates are not available here"),
+            },
+            ("PUT", path) if update_path(path).is_some() => {
+                let (id, action) = update_path(path).expect("checked above");
+                if action.is_some() {
+                    return error(404, "Unknown endpoint");
+                }
+                match &self.options.mixer_update {
+                    Some(update) => match parse::<crate::mixer_update::Chunk>(body) {
+                        Ok(chunk) => match update.append(id, chunk) {
+                            Ok(progress) => reply(200, &progress),
+                            Err(e) => update_error(e),
+                        },
+                        Err(reply) => reply,
+                    },
+                    None => error(404, "In-place updates are not available here"),
+                }
+            }
+            ("POST", path) if update_path(path).is_some_and(|(_, a)| a == Some("install")) => {
+                let (id, _) = update_path(path).expect("checked above");
+                match &self.options.mixer_update {
+                    Some(update) => {
+                        let update = update.clone();
+                        let id = id.to_owned();
+                        match tokio::task::spawn_blocking(move || update.install(&id)).await {
+                            Ok(Ok(progress)) => reply(200, &progress),
+                            Ok(Err(e)) => update_error(e),
+                            Err(_) => error(500, "The update did not run"),
+                        }
+                    }
+                    None => error(404, "In-place updates are not available here"),
+                }
+            }
+            ("GET", path) if update_path(path).is_some() => {
+                let (id, action) = update_path(path).expect("checked above");
+                if action.is_some() {
+                    return error(404, "Unknown endpoint");
+                }
+                match &self.options.mixer_update {
+                    Some(update) => match update.progress(id) {
+                        Ok(progress) => reply(200, &progress),
+                        Err(e) => update_error(e),
+                    },
+                    None => error(404, "In-place updates are not available here"),
+                }
+            }
+            ("DELETE", path) if update_path(path).is_some() => {
+                let (id, action) = update_path(path).expect("checked above");
+                if action.is_some() {
+                    return error(404, "Unknown endpoint");
+                }
+                match &self.options.mixer_update {
+                    Some(update) => match update.abort(id) {
+                        Ok(()) => reply(200, &json!({"id": id, "state": "deleted"})),
+                        Err(e) => update_error(e),
+                    },
+                    None => error(404, "In-place updates are not available here"),
+                }
+            }
             ("GET", "api/v1/ssh") => match &self.options.developer_ssh {
                 Some(ssh) => ssh_reply(ssh.status().await),
                 None => error(404, "Developer SSH is not available here"),
@@ -813,6 +924,7 @@ mod tests {
             native_protocol: Some(6),
             firmware: Some("1.7.7".into()),
             firmware_profile: Some("rodecaster-pro-ii-1.7.7".into()),
+            in_place_updates: Some(1),
         };
         let mut known = Api::new(
             handle.clone(),

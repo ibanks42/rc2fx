@@ -6275,6 +6275,8 @@ dependencies = [
 name = "rc2fx-device"
 version = "0.1.5"
 dependencies = [
+ "aws-lc-rs",
+ "jiff",
  "libc",
  "rc2fx-core",
  "rc2fx-dsp",
@@ -6287,6 +6289,8 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "tokio",
+ "tough",
+ "url",
 ]
 
 [[package]]

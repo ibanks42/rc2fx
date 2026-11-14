@@ -14,6 +14,8 @@ pub mod diagnostics_log;
 pub mod events;
 mod facade;
 pub mod metrics;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub mod mixer_update;
 #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 pub mod native_backend;
 pub mod native_plan;
