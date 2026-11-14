@@ -12,6 +12,10 @@
 //! firmware change; this path never touches the stock files and never runs
 //! anything from the payload before the signature, size, hash, firmware
 //! profile and version checks have passed.
+//!
+//! The upload may also be a `delta-1` encoding (see `rc2fx-delta`): the mixer
+//! rebuilds the signed envelope from the files it already has, then verifies
+//! and installs that exactly as it does a whole one.
 
 pub mod install;
 pub mod payload;
@@ -20,18 +24,23 @@ pub mod verify;
 use install::{LastOutcome, Paths, Pending, StoredState};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{Read, Write},
     os::unix::{
         fs::{DirBuilderExt, OpenOptionsExt},
         process::CommandExt,
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
-/// What `GET api/v1/version` reports as `inPlaceUpdates`.
-pub const IN_PLACE_UPDATES: u32 = 1;
+/// What `GET api/v1/version` reports as `inPlaceUpdates`. 2 adds the installed
+/// file listing and delta uploads; the app treats any value above zero as
+/// in-place capable.
+pub const IN_PLACE_UPDATES: u32 = 2;
+/// The delta encoding this mixer accepts, sent as `"encoding": "delta-1"`.
+pub const DELTA_ENCODING: &str = "delta-1";
 /// The largest payload this API accepts; the real one is about 11 MiB.
 pub const MAX_PAYLOAD: u64 = 64 << 20;
 /// The most raw bytes one `PUT` may carry. Base64 of this stays well inside
@@ -54,6 +63,12 @@ pub struct StartRequest {
     /// Refused by default: releases only move forward.
     #[serde(default)]
     pub allow_downgrade: bool,
+    /// `"delta-1"` when the upload is a delta rather than the signed envelope.
+    #[serde(default)]
+    pub encoding: Option<String>,
+    /// The delta's length. Required with `encoding`, refused without it.
+    #[serde(default)]
+    pub upload_size: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -88,9 +103,16 @@ struct Session {
     /// The id `start` handed out; every other call must name it.
     id: String,
     request: StartRequest,
+    /// The number of upload bytes this session accepts and reports progress on.
+    upload_size: u64,
     received: u64,
     state: SessionState,
     error: Option<String>,
+    /// `"delta-1"` when the upload is a delta; the envelope size is `request.size`.
+    encoding: Option<&'static str>,
+    /// The delta has been decoded over the upload once, so a retried install
+    /// verifies the rebuilt envelope instead of decoding it again.
+    decoded: bool,
 }
 
 /// The reply the upload endpoints return.
@@ -100,18 +122,34 @@ pub struct Progress {
     pub id: String,
     pub state: &'static str,
     pub version: String,
+    /// The signed envelope's size, even for a delta upload.
     pub size: u64,
+    /// Upload bytes received; the envelope's size for a plain upload.
     pub received: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// `GET api/v1/update/installed`: the running release and the digest of each
+/// payload file the mixer holds, which is what the app diffs against.
+#[derive(Clone, Debug, Serialize)]
+pub struct Installed {
+    pub version: String,
+    pub files: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UpdateError {
     /// A malformed request (400).
     Invalid(String),
-    /// No such session (404).
+    /// No such session, or the installed files cannot be described here (404).
     NotFound,
+    /// The running release is unknown, so there is nothing to diff (404).
+    Unavailable(String),
     /// Another update or a full-flash install is running (409).
     Busy(String),
     /// The request conflicts with this mixer's state or trust (409).
@@ -129,7 +167,7 @@ impl UpdateError {
     pub fn status(&self) -> u16 {
         match self {
             Self::Invalid(_) => 400,
-            Self::NotFound => 404,
+            Self::NotFound | Self::Unavailable(_) => 404,
             Self::Busy(_) | Self::Conflict(_) | Self::Offset { .. } => 409,
             Self::Storage(_) => 507,
             Self::Failed(_) => 500,
@@ -144,7 +182,8 @@ impl std::fmt::Display for UpdateError {
             | Self::Busy(why)
             | Self::Conflict(why)
             | Self::Storage(why)
-            | Self::Failed(why) => f.write_str(why),
+            | Self::Failed(why)
+            | Self::Unavailable(why) => f.write_str(why),
             Self::NotFound => f.write_str("No such update session"),
             Self::Offset { expected } => {
                 write!(f, "The upload does not continue at offset {expected}")
@@ -204,6 +243,34 @@ impl MixerUpdate {
                 "sha256 must be 64 lowercase hexadecimal characters".into(),
             ));
         }
+        let encoding = match request.encoding.as_deref() {
+            None => None,
+            Some(value) if value == DELTA_ENCODING => Some(DELTA_ENCODING),
+            Some(_) => {
+                return Err(UpdateError::Invalid(
+                    "encoding must be \"delta-1\" when it is present".into(),
+                ));
+            }
+        };
+        let upload_size = match (encoding, request.upload_size) {
+            (Some(_), Some(upload)) if (1..=MAX_PAYLOAD).contains(&upload) => upload,
+            (Some(_), Some(_)) => {
+                return Err(UpdateError::Invalid(format!(
+                    "uploadSize must be between 1 and {MAX_PAYLOAD} bytes"
+                )));
+            }
+            (Some(_), None) => {
+                return Err(UpdateError::Invalid(
+                    "uploadSize is required with encoding delta-1".into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(UpdateError::Invalid(
+                    "uploadSize is only accepted with encoding delta-1".into(),
+                ));
+            }
+            (None, None) => request.size,
+        };
         if self.paths.pending().exists() || self.paths.install_pending().exists() {
             return Err(UpdateError::Busy(
                 "another install is pending; finish it or recover before updating".into(),
@@ -226,22 +293,27 @@ impl MixerUpdate {
             let _ = fs::remove_dir_all(self.paths.run.join(&session.id));
             *slot = None;
         }
+        // A delta needs room for its upload and then for the envelope built
+        // from it; a plain upload is the envelope already.
+        let run_needed = request
+            .size
+            .saturating_add(if encoding.is_some() { upload_size } else { 0 })
+            .saturating_add(RUN_HEADROOM);
         if let Some(free) = install::free_bytes(&self.paths.run)
-            && free < request.size + RUN_HEADROOM
+            && free < run_needed
         {
             return Err(UpdateError::Storage(format!(
-                "not enough RAM for the upload: {free} bytes free in {}, {} needed",
+                "not enough RAM for the upload: {free} bytes free in {}, {run_needed} needed",
                 self.paths.run.display(),
-                request.size + RUN_HEADROOM
             )));
         }
+        let opt_needed = request.size.saturating_add(OPT_HEADROOM);
         if let Some(free) = install::free_bytes(&self.paths.opt)
-            && free < request.size + OPT_HEADROOM
+            && free < opt_needed
         {
             return Err(UpdateError::Storage(format!(
-                "not enough space to install: {free} bytes free on {}, {} needed",
+                "not enough space to install: {free} bytes free on {}, {opt_needed} needed",
                 self.paths.opt.display(),
-                request.size + OPT_HEADROOM
             )));
         }
         let id = new_id();
@@ -261,9 +333,12 @@ impl MixerUpdate {
         *slot = Some(Session {
             id: id.clone(),
             request: request.clone(),
+            upload_size,
             received: 0,
             state: SessionState::Accepting,
             error: None,
+            encoding,
+            decoded: false,
         });
         Ok(Progress {
             id,
@@ -271,6 +346,8 @@ impl MixerUpdate {
             version: request.version,
             size: request.size,
             received: 0,
+            encoding,
+            upload_size: encoding.map(|_| upload_size),
             error: None,
         })
     }
@@ -326,7 +403,7 @@ impl MixerUpdate {
         if offset != expected {
             return Err(UpdateError::Offset { expected });
         }
-        if expected + data.len() as u64 > session.request.size {
+        if expected + data.len() as u64 > session.upload_size {
             return Err(UpdateError::Invalid(
                 "the chunk goes past the size the session declared".into(),
             ));
@@ -341,7 +418,7 @@ impl MixerUpdate {
             )));
         }
         session.received += data.len() as u64;
-        if session.received == session.request.size {
+        if session.received == session.upload_size {
             session.state = SessionState::Complete;
         }
         Ok(progress_of(id, session))
@@ -378,7 +455,7 @@ impl MixerUpdate {
     /// (so its refusal is the reply); the install and swap continue on a
     /// thread of their own and are reported by [`Self::progress`].
     pub fn install(self: Arc<Self>, id: &str) -> Result<Progress, UpdateError> {
-        let request = {
+        let (request, encoding, decoded) = {
             let mut slot = self.session();
             let session = slot
                 .as_mut()
@@ -395,8 +472,33 @@ impl MixerUpdate {
             }
             session.state = SessionState::Installing;
             session.error = None;
-            session.request.clone()
+            (session.request.clone(), session.encoding, session.decoded)
         };
+        // A delta is rebuilt into the signed envelope before verification, so
+        // everything after this is exactly the plain-upload path. The envelope
+        // is checked against the signed target there; nothing decoded here is
+        // trusted until then.
+        if encoding.is_some() && !decoded {
+            let envelope_needed = request.size.saturating_add(RUN_HEADROOM);
+            if let Some(free) = install::free_bytes(&self.paths.run)
+                && free < envelope_needed
+            {
+                let why = format!(
+                    "not enough RAM to rebuild the release: {free} bytes free in {}, {envelope_needed} needed",
+                    self.paths.run.display(),
+                );
+                self.fail(id, &why);
+                return Err(UpdateError::Storage(why));
+            }
+            if let Err(why) = decode_delta(&self.paths, &self.payload_path(id), request.size) {
+                self.fail(id, &why);
+                return Err(UpdateError::Conflict(why));
+            }
+            let mut slot = self.session();
+            if let Some(session) = slot.as_mut().filter(|s| s.id == id) {
+                session.decoded = true;
+            }
+        }
         let payload = self.payload_path(id);
         let prior = StoredState::load(&self.paths.state());
         let facts = verify::ReleaseRequest {
@@ -470,6 +572,8 @@ impl MixerUpdate {
             version: String::new(),
             size: 0,
             received: 0,
+            encoding: None,
+            upload_size: None,
             error: None,
         }
     }
@@ -692,6 +796,29 @@ impl MixerUpdate {
         LastOutcome::load(&self.paths.last())
     }
 
+    /// The running release and the digest of each payload file it installed.
+    /// Missing or non-regular files are simply absent: the app then sends them
+    /// whole. A running version the launcher could not read has nothing to
+    /// diff, so the endpoint is unavailable rather than guessed.
+    pub fn installed(&self) -> Result<Installed, UpdateError> {
+        let version = self.running.clone().ok_or_else(|| {
+            UpdateError::Unavailable("the running RC2FX version is unknown".into())
+        })?;
+        let bundle = self.paths.bundle();
+        let mut files = BTreeMap::new();
+        for name in install::PAYLOAD_NAMES {
+            let path = bundle.join(name);
+            if !fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file()) {
+                continue;
+            }
+            let digest = install::sum_file(&path).map_err(|e| {
+                UpdateError::Failed(format!("cannot read the installed {name}: {e}"))
+            })?;
+            files.insert(name.to_owned(), digest);
+        }
+        Ok(Installed { version, files })
+    }
+
     /// Finish or undo an update that did not commit, before serving. Runs at
     /// startup, when nothing can restart audio for us.
     pub fn recover(&self) {
@@ -804,8 +931,70 @@ fn progress_of(id: &str, session: &Session) -> Progress {
         version: session.request.version.clone(),
         size: session.request.size,
         received: session.received,
+        encoding: session.encoding,
+        upload_size: session.encoding.map(|_| session.upload_size),
         error: session.error.clone(),
     }
+}
+
+/// Replace a delta upload with the envelope it encodes. The delta and the
+/// rebuilt envelope share the session directory, so the peak use is what
+/// `start` checked for.
+fn decode_delta(paths: &Paths, payload: &Path, size: u64) -> Result<(), String> {
+    let envelope = payload.with_file_name("envelope");
+    let _ = fs::remove_file(&envelope);
+    let bundle = paths.bundle();
+    let mut installed = |name: &str| -> std::io::Result<Vec<u8>> {
+        // The delta crate checks names too; this is the second guard on the
+        // only path that joins a manifest name onto the installed bundle.
+        if name.is_empty()
+            || name.contains('/')
+            || name.contains('\\')
+            || name == "."
+            || name == ".."
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid payload file name",
+            ));
+        }
+        fs::read(bundle.join(name))
+    };
+    let mut delta =
+        File::open(payload).map_err(|e| format!("cannot read the delta upload: {e}"))?;
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&envelope)
+        .map_err(|e| format!("cannot create the rebuilt envelope: {e}"))?;
+    // The declared envelope size is also the decode bound, so a delta cannot
+    // expand past the space `start` and `install` checked for. The size and
+    // hash are checked against the signed target right after.
+    let decoded = match rc2fx_delta::decode(&mut delta, &mut installed, &mut out, size) {
+        Ok(decoded) => decoded,
+        Err(why) => {
+            let _ = fs::remove_file(&envelope);
+            return Err(format!("the delta upload was refused: {why}"));
+        }
+    };
+    if let Err(e) = out.sync_all() {
+        let _ = fs::remove_file(&envelope);
+        return Err(format!("cannot flush the rebuilt envelope: {e}"));
+    }
+    drop(out);
+    if decoded != size {
+        let _ = fs::remove_file(&envelope);
+        return Err(format!(
+            "the delta decoded to {decoded} bytes; the signed release is {size}"
+        ));
+    }
+    // The upload now holds the envelope: verification and install read the
+    // same file they do for a plain upload.
+    fs::rename(&envelope, payload).map_err(|e| {
+        let _ = fs::remove_file(&envelope);
+        format!("cannot replace the delta upload with the envelope: {e}")
+    })
 }
 
 fn new_id() -> String {

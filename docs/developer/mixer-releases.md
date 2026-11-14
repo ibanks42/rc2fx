@@ -211,6 +211,28 @@ While a pending marker exists, both `/usr/sbin` shims start
 committed restart reaches the new release. The GUI shim only takes effect at
 the next boot, and the outcome says when it changed.
 
+### Delta uploads
+
+The full envelope is about 11 MiB, and a point release usually changes well
+under one. A mixer that reports `inPlaceUpdates: 2` also serves
+`GET api/v1/update/installed`, a digest for each payload file in `/opt/rc2fx`;
+the app diffs the signed envelope against that and uploads a delta with
+`"encoding": "delta-1"` and its byte length as `uploadSize`. Older mixers
+answer that start with `400`, and the app falls back to the plain envelope.
+
+The delta (crate `rc2fx-delta`) is ASCII lines followed by their bytes: a
+`head` carrying the envelope's header and manifest, then one operation per
+file. `copy` reuses the installed file unchanged, `zstd <n>` sends the file
+whole, and `patch <base-sha256> <n>` sends a zstd frame decoded with the
+installed file as its reference prefix (`zstd --patch-from`). The app only
+patches against bytes whose digest matches what the mixer reported.
+
+The mixer decodes into `/run` before verification, checking every file's
+SHA-256 and exact size and the patch's base digest. It then treats the rebuilt
+envelope exactly like a plain upload: the signed target's size and digest, TUF,
+the payload manifest and the version checks all run unchanged. Nothing decoded
+is executed or installed before they pass.
+
 ## Where metadata lives
 
 Payloads are GitHub release assets, published once and never changed. Metadata

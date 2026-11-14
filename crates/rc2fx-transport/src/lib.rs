@@ -14,6 +14,25 @@ const REQUEST_LIMIT: usize = 512 * 1024;
 /// Bytes per update chunk: base64 and the JSON around it stay well inside
 /// [`REQUEST_LIMIT`], and the mixer accepts up to 256 KiB.
 const UPDATE_CHUNK: usize = 192 * 1024;
+/// zstd's level for update deltas: about 3 s for a whole release here, and
+/// every byte saved is worth far more over USB.
+const DELTA_LEVEL: i32 = 19;
+
+/// A signed payload's files by name.
+fn base_files(envelope: &[u8]) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
+    let (mut at, entries) = rc2fx_delta::envelope_entries(envelope)?;
+    let mut files = std::collections::BTreeMap::new();
+    for entry in entries {
+        let end = usize::try_from(entry.size)
+            .ok()
+            .and_then(|size| at.checked_add(size))
+            .filter(|end| *end <= envelope.len())
+            .ok_or("the base payload is truncated")?;
+        files.insert(entry.name, envelope[at..end].to_vec());
+        at = end;
+    }
+    Ok(files)
+}
 
 /// Standard base64 with padding, as the mixer's update API reads it.
 fn base64(bytes: &[u8]) -> String {
@@ -103,11 +122,14 @@ pub enum Command {
     },
     /// Send a signed release to the mixer and start installing it in place.
     /// `start` is the body of `POST api/v1/update`; `payload` the release
-    /// file it describes. Progress arrives as [`EventKind::MixerUpdate`].
+    /// file it describes, and `base` the signed release the mixer runs, if
+    /// any, to send only what changed. Progress arrives as
+    /// [`EventKind::MixerUpdate`].
     MixerUpdate {
         generation: u64,
         start: Value,
         payload: std::path::PathBuf,
+        base: Option<std::path::PathBuf>,
     },
     /// Read how the last in-place update ended.
     MixerUpdateLast {
@@ -406,21 +428,66 @@ impl Device {
         }
     }
 
+    /// What changed between the mixer's installed files and `envelope`, when
+    /// the mixer accepts it that way (`inPlaceUpdates` 2): unchanged files are
+    /// copied on the mixer, changed ones patched against `base` (the signed
+    /// release it runs) where that holds the installed file, and the rest
+    /// sent compressed. The mixer rebuilds the release and checks it against
+    /// the signature as if it had been sent whole.
+    async fn delta(
+        &self,
+        envelope: &[u8],
+        base: Option<&std::path::Path>,
+    ) -> Result<Option<Vec<u8>>, RequestError> {
+        let installed = match self.request("GET", "api/v1/update/installed", None).await {
+            Ok(value) => value,
+            // A mixer that takes only whole releases.
+            Err(RequestError::Status(404, _)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let installed: std::collections::BTreeMap<String, String> = installed
+            .get("files")
+            .cloned()
+            .and_then(|files| serde_json::from_value(files).ok())
+            .ok_or(RequestError::Protocol)?;
+        let envelope = envelope.to_vec();
+        let base = base.and_then(|path| std::fs::read(path).ok());
+        tokio::task::spawn_blocking(move || {
+            let bases = base
+                .and_then(|base| base_files(&base).ok())
+                .unwrap_or_default();
+            rc2fx_delta::encode(&envelope, &installed, &bases, DELTA_LEVEL)
+        })
+        .await
+        .map_err(|e| RequestError::Usb(e.to_string()))?
+        .map(Some)
+        .map_err(|e| RequestError::Usb(format!("Cannot prepare the mixer software: {e}")))
+    }
+
     /// Upload `payload` for the in-place update `start` describes, resuming
     /// where the mixer says it is, then ask it to verify and install. Returns
     /// once the mixer has accepted the release; it then restarts by itself.
     async fn mixer_update<F, Fut>(
         &self,
-        start: Value,
+        mut start: Value,
         payload: &std::path::Path,
+        base: Option<&std::path::Path>,
         progress: F,
     ) -> Result<(), RequestError>
     where
         F: Fn(u64, u64) -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
-        let bytes = std::fs::read(payload)
+        let envelope = std::fs::read(payload)
             .map_err(|e| RequestError::Usb(format!("Cannot read the mixer software: {e}")))?;
+        let bytes = match self.delta(&envelope, base).await? {
+            Some(delta) => {
+                start["encoding"] = json!("delta-1");
+                start["uploadSize"] = json!(delta.len());
+                delta
+            }
+            None => envelope,
+        };
         let total = bytes.len() as u64;
         let session = self
             .request_with_status("POST", "api/v1/update", Some(start), Some(201))
@@ -751,6 +818,7 @@ async fn run(mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>)
                 generation: requested,
                 start,
                 payload,
+                base,
             } if requested == generation => match &current {
                 // The upload runs beside other requests; the mixer restarts
                 // once it installs, which ends this connection anyway.
@@ -771,7 +839,10 @@ async fn run(mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>)
                                 .await;
                             }
                         };
-                        let kind = match device.mixer_update(start, &payload, progress).await {
+                        let kind = match device
+                            .mixer_update(start, &payload, base.as_deref(), progress)
+                            .await
+                        {
                             Ok(()) => MixerUpdateEvent::Installing,
                             Err(error) => MixerUpdateEvent::Failed(error.message()),
                         };

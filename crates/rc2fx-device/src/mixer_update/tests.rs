@@ -444,6 +444,8 @@ fn start_request(size: u64) -> StartRequest {
             targets: "{}".into(),
         },
         allow_downgrade: false,
+        encoding: None,
+        upload_size: None,
     }
 }
 
@@ -930,6 +932,218 @@ fn a_release_envelope_round_trips_and_damage_is_refused() {
         .collect();
     wrong.iter_mut().find(|(n, _)| n == "SHA256SUMS").unwrap().1 = sums.into_bytes();
     assert!(payload::read(&mut wrap(&wrong).as_slice()).is_err());
+}
+
+#[test]
+fn a_delta_session_counts_the_upload_and_refuses_bad_encodings() {
+    let (_dir, paths) = test_paths();
+    let update = new_update(paths);
+    let mut request = start_request(100);
+    request.encoding = Some(DELTA_ENCODING.into());
+    request.upload_size = Some(9);
+    let started = update.start(request).unwrap();
+    assert_eq!(started.encoding, Some(DELTA_ENCODING));
+    assert_eq!(started.upload_size, Some(9));
+    assert_eq!(started.size, 100, "size still names the signed envelope");
+    let base64 = |bytes: &[u8]| crate::mixer_update::encode_base64_for_test(bytes);
+    let first = update
+        .append(
+            &started.id,
+            Chunk {
+                offset: 0,
+                data: base64(b"abcd"),
+            },
+        )
+        .unwrap();
+    assert_eq!(first.received, 4);
+    assert_eq!(first.state, "accepting");
+    let last = update
+        .append(
+            &started.id,
+            Chunk {
+                offset: 4,
+                data: base64(b"efghi"),
+            },
+        )
+        .unwrap();
+    assert_eq!(last.received, 9);
+    assert_eq!(last.state, "complete");
+    // A chunk past the upload size is refused, even though it is below the
+    // envelope size the request also declared.
+    let error = update
+        .append(
+            &started.id,
+            Chunk {
+                offset: 9,
+                data: base64(b"x"),
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(error, UpdateError::Conflict(_)), "{error}");
+
+    let delta = |upload: Option<u64>| {
+        let mut request = start_request(100);
+        request.encoding = Some(DELTA_ENCODING.into());
+        request.upload_size = upload;
+        request
+    };
+    for (bad, why) in [
+        (delta(Some(0)), "uploadSize must be between"),
+        (delta(Some(MAX_PAYLOAD + 1)), "uploadSize must be between"),
+        (delta(None), "uploadSize is required"),
+    ] {
+        let error = update.start(bad).unwrap_err();
+        assert!(matches!(&error, UpdateError::Invalid(_)), "{error}");
+        assert!(error.to_string().contains(why), "{error}");
+    }
+    let mut unknown = delta(Some(1));
+    unknown.encoding = Some("delta-2".into());
+    let error = update.start(unknown).unwrap_err();
+    assert!(error.to_string().contains("delta-1"), "{error}");
+    let mut plain_with_upload = start_request(100);
+    plain_with_upload.upload_size = Some(1);
+    let error = update.start(plain_with_upload).unwrap_err();
+    assert!(error.to_string().contains("only accepted"), "{error}");
+}
+
+#[test]
+fn the_installed_listing_names_the_release_and_every_regular_payload_file() {
+    let (_dir, paths) = test_paths();
+    write_bundle(&paths, &bundle_files("old"));
+    let update = new_update(paths.clone());
+    let installed = update.installed().unwrap();
+    assert_eq!(installed.version, "0.1.5");
+    assert_eq!(installed.files.len(), install::PAYLOAD_NAMES.len());
+    let expected = install::sum(b"old rc2fxd\n");
+    assert_eq!(installed.files.get("rc2fxd"), Some(&expected));
+    // A missing file is absent, not an error: the app sends it whole.
+    fs::remove_file(paths.bundle().join("rc2fxd")).unwrap();
+    assert!(!update.installed().unwrap().files.contains_key("rc2fxd"));
+    // Without the running release there is nothing to diff.
+    let unknown = MixerUpdate::new(paths, Some(pro_ii_profile()), None);
+    assert_eq!(unknown.installed().unwrap_err().status(), 404);
+}
+
+/// The envelope and a delta for it, plus the two installed files the delta
+/// copies and patches. The other files are sent whole.
+fn envelope_and_delta(paths: &install::Paths) -> (Vec<u8>, Vec<u8>) {
+    let files = envelope_files();
+    let envelope = wrap(&files);
+    let find = |name: &str| {
+        files
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, data)| data.clone())
+            .unwrap()
+    };
+    let native = find("librc2fx_native.so");
+    let old_rc2fxd = b"the previous rc2fxd build\n".repeat(40);
+    fs::create_dir_all(paths.bundle()).unwrap();
+    fs::write(paths.bundle().join("librc2fx_native.so"), &native).unwrap();
+    fs::write(paths.bundle().join("rc2fxd"), &old_rc2fxd).unwrap();
+    let installed = std::collections::BTreeMap::from([
+        ("librc2fx_native.so".to_owned(), install::sum(&native)),
+        ("rc2fxd".to_owned(), install::sum(&old_rc2fxd)),
+    ]);
+    let bases = std::collections::BTreeMap::from([("rc2fxd".to_owned(), old_rc2fxd)]);
+    let delta = rc2fx_delta::encode(&envelope, &installed, &bases, 19).unwrap();
+    assert!(delta.len() < envelope.len(), "the delta must be smaller");
+    (envelope, delta)
+}
+
+fn append_upload(update: &MixerUpdate, id: &str, bytes: &[u8]) {
+    update
+        .append(
+            id,
+            Chunk {
+                offset: 0,
+                data: crate::mixer_update::encode_base64_for_test(bytes),
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_delta_upload_is_rebuilt_into_the_signed_envelope_and_verified() {
+    let mut repository = block(Repository::new());
+    let (_dir, paths) = test_paths();
+    let (envelope, delta) = envelope_and_delta(&paths);
+    repository.bytes = envelope.clone();
+    block(repository.publish(1));
+    let profile = pro_ii_profile();
+
+    let update = new_update(paths.clone());
+    let mut request = start_request(envelope.len() as u64);
+    request.encoding = Some(DELTA_ENCODING.into());
+    request.upload_size = Some(delta.len() as u64);
+    let started = update.start(request).unwrap();
+    append_upload(&update, &started.id, &delta);
+    assert_eq!(update.progress(&started.id).unwrap().state, "complete");
+
+    let payload = update.payload_path(&started.id);
+    decode_delta(&paths, &payload, envelope.len() as u64).unwrap();
+    assert_eq!(fs::read(&payload).unwrap(), envelope);
+    let work = paths.run.join(&started.id);
+    let verified = verify::verify(
+        &repository.root,
+        &repository.input(),
+        &repository.request(),
+        &payload,
+        Some(&profile),
+        Some("0.1.5"),
+        &Default::default(),
+        &work,
+    )
+    .unwrap();
+    assert_eq!(verified.version, "0.2.0");
+}
+
+#[test]
+fn a_corrupt_delta_is_refused_before_verification() {
+    let (_dir, paths) = test_paths();
+    let (envelope, mut delta) = envelope_and_delta(&paths);
+    delta.truncate(delta.len() - 1);
+    let update = new_update(paths.clone());
+    let mut request = start_request(envelope.len() as u64);
+    request.encoding = Some(DELTA_ENCODING.into());
+    request.upload_size = Some(delta.len() as u64);
+    let started = update.start(request).unwrap();
+    append_upload(&update, &started.id, &delta);
+    let error = decode_delta(
+        &paths,
+        &update.payload_path(&started.id),
+        envelope.len() as u64,
+    )
+    .unwrap_err();
+    assert!(error.contains("delta"), "{error}");
+    assert!(
+        !update
+            .payload_path(&started.id)
+            .with_file_name("envelope")
+            .exists()
+    );
+}
+
+#[test]
+fn a_patch_against_a_changed_file_is_refused() {
+    let (_dir, paths) = test_paths();
+    let (envelope, delta) = envelope_and_delta(&paths);
+    // The patch was made against the file the mixer listed, which is no
+    // longer what is installed.
+    fs::write(paths.bundle().join("rc2fxd"), b"someone replaced rc2fxd\n").unwrap();
+    let update = new_update(paths.clone());
+    let mut request = start_request(envelope.len() as u64);
+    request.encoding = Some(DELTA_ENCODING.into());
+    request.upload_size = Some(delta.len() as u64);
+    let started = update.start(request).unwrap();
+    append_upload(&update, &started.id, &delta);
+    let error = decode_delta(
+        &paths,
+        &update.payload_path(&started.id),
+        envelope.len() as u64,
+    )
+    .unwrap_err();
+    assert!(error.contains("base"), "{error}");
 }
 
 #[test]

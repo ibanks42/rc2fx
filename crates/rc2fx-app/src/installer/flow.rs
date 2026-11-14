@@ -752,6 +752,7 @@ impl Model {
         self.send(Request::InPlaceBundle {
             offer,
             firmware_profile: profile.to_owned(),
+            installed: self.installed.clone(),
         })
     }
 
@@ -2639,6 +2640,7 @@ mod tests {
                 snapshot: "{}".into(),
                 targets: "{}".into(),
             },
+            base: None,
         };
         m.finish(&prepare, Ok(Reply::InPlaceBundle(bundle.clone())));
         assert_eq!(m.take_in_place_bundle(), Some(bundle));

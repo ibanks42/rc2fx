@@ -257,6 +257,14 @@ impl Api {
                 Some(update) => last_update(update),
                 None => error(404, "In-place updates are not available here"),
             },
+            // What the app diffs a signed release against for a delta upload.
+            ("GET", "api/v1/update/installed") => match &self.options.mixer_update {
+                Some(update) => match update.installed() {
+                    Ok(installed) => reply(200, &installed),
+                    Err(e) => update_error(e),
+                },
+                None => error(404, "In-place updates are not available here"),
+            },
             ("POST", "api/v1/update") => match &self.options.mixer_update {
                 Some(update) => match parse::<crate::mixer_update::StartRequest>(body) {
                     Ok(request) => match update.start(request) {

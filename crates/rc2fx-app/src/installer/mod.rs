@@ -840,7 +840,7 @@ impl Rc2FxApp {
                     if self
                         .device_versions
                         .as_ref()
-                        .is_some_and(|v| v.in_place_updates == Some(1))
+                        .is_some_and(|v| v.in_place_updates.is_some_and(|n| n > 0))
                     {
                         "Part of the RC2FX software on this mixer is older than the rest, so some \
                          telemetry is missing. Installing the current version needs no flash: \
@@ -874,7 +874,7 @@ impl Rc2FxApp {
             .is_some_and(|i| i.model.is_session_mixer(session_mixer));
         let versions = self.device_versions.as_ref().filter(|_| same_mixer);
         flow::InPlaceSupport {
-            supported: versions.is_some_and(|v| v.in_place_updates == Some(1)),
+            supported: versions.is_some_and(|v| v.in_place_updates.is_some_and(|n| n > 0)),
             profile: versions.and_then(|v| v.firmware_profile.as_deref()),
         }
     }
@@ -920,6 +920,7 @@ impl Rc2FxApp {
                 generation,
                 start,
                 payload: bundle.path,
+                base: bundle.base,
             }) {
                 let why = std::mem::take(&mut self.message);
                 if let Some(installer) = self.installer.as_mut() {

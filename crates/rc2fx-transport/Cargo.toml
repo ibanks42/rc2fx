@@ -14,6 +14,7 @@ mock-mixer = []
 [dependencies]
 rc2fx-installer = { path = "../rc2fx-installer" }
 rc2fx-core = { path = "../rc2fx-core" }
+rc2fx-delta = { path = "../rc2fx-delta" }
 serde = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

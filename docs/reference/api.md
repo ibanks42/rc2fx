@@ -17,12 +17,13 @@ sends a single request.
 | `GET /api/v1/version` | | The installed RC2FX mixer software and RØDE firmware versions; see [Versions](#versions) |
 | `GET /api/v1/ssh` | | Developer SSH access status; USB 1 only, see [Developer SSH](#developer-ssh) |
 | `PUT /api/v1/ssh` | `{"enabled", "publicKey"}` | Add or remove RC2FX's developer SSH key; USB 1 only |
-| `POST /api/v1/update` | `{"version", "size", "sha256", "metadata": {"root", "timestamp", "snapshot", "targets"}}` | Start a signed in-place update; USB 1 only, see [In-place updates](#in-place-updates) |
+| `POST /api/v1/update` | `{"version", "size", "sha256", "metadata": {"root", "timestamp", "snapshot", "targets"}, "encoding", "uploadSize"}` | Start a signed in-place update, or a delta upload; USB 1 only, see [In-place updates](#in-place-updates) |
 | `PUT /api/v1/update/{id}` | `{"offset", "data"}` | Append a base64 chunk to the upload; 409 carries `expectedOffset` |
 | `POST /api/v1/update/{id}/install` | | Verify and install the upload, then restart and commit or roll back |
 | `GET /api/v1/update/{id}` | | The session's state, progress and error, if any |
 | `DELETE /api/v1/update/{id}` | | Abort the session and delete its upload |
 | `GET /api/v1/update/last` | | The last in-place update's outcome, or `{}` |
+| `GET /api/v1/update/installed` | | The running release and the SHA-256 of each installed payload file |
 | `GET /api/v1/diagnostics` | | State plus bounded telemetry history (callback timing, worker counters) |
 | `GET /api/v1/diagnostics/events?after=SEQ` | | The diagnostic event log after sequence number `SEQ`, up to 256 events per page |
 | `POST /api/v1/diagnostics/reset` | | Reset the telemetry baselines and clear the event log |
@@ -75,7 +76,7 @@ and a reply can't change what the installer flashes.
 | --- | --- |
 | `runtime`, `protocol` | `version` and `protocolVersion` of the installed `/opt/rc2fx/mixer-release.json` |
 | `firmware`, `firmwareProfile` | The firmware profile the launcher selected after `rc2fx-firmware check-device` verified the stock mixer, looked up in the installed catalog for the mixer's own model |
-| `inPlaceUpdates` | `1` when this controller installs signed releases in place over USB 1; absent otherwise |
+| `inPlaceUpdates` | `2` when this controller installs signed releases in place over USB 1 and accepts delta uploads; `1` for the earlier in-place-only release. Absent when neither is available. Clients treat any value above zero as in-place capable. |
 
 `rc2fxd` reads these once at startup, from `--release`, `--firmware-catalog`
 and `--firmware-profile`, which `rc2fx.sh` passes. A field it can't read or
@@ -126,6 +127,37 @@ a new start is `409`. The reply is `201` with the session:
  "size": 11534336, "received": 0}
 ```
 
+`GET /api/v1/update/installed` reports what the mixer has, which is what the
+app diffs a release against:
+
+```json
+{"version": "0.1.5",
+ "files": {"librc2fx_native.so": "…64 hex…", "rc2fxd": "…64 hex…", "…": "…"}}
+```
+
+`files` lists each payload file that is a regular file in `/opt/rc2fx`; a
+missing or non-regular file is absent. The app sends those files whole. The
+endpoint is `404` when the running release is unknown.
+
+The upload can instead be a delta (`encoding: "delta-1"`), with `uploadSize`
+naming its length:
+
+```json
+{"version": "0.2.0", "size": 11534336, "sha256": "…64 hex…",
+ "encoding": "delta-1", "uploadSize": 524288,
+ "metadata": {"root": ["…"], "timestamp": "…", "snapshot": "…", "targets": "…"}}
+```
+
+`size`, `sha256` and the metadata still name the signed envelope; `size` is
+what the delta rebuilds to. `uploadSize` is required with `encoding` and
+refused without it, and must be 1..67108864 bytes. `received`, completeness and
+every chunk are then measured in delta bytes, and session replies also carry
+`"encoding"` and `"uploadSize"`. Unknown encodings are `400`. On install the
+mixer rebuilds the envelope from the live files, then runs exactly the same
+verification and install as for a plain upload; a delta that does not rebuild
+into the signed envelope is refused and the session is `failed`. See
+[delta uploads](../developer/mixer-releases.md#delta-uploads).
+
 `PUT /api/v1/update/{id}` carries `{"offset": N, "data": "<base64>"}` with at
 most 256 KiB of raw bytes per request. It appends at `offset`, which must be
 where the upload has reached. A chunk the mixer already holds is accepted
@@ -174,7 +206,7 @@ installing and deletes its upload; `409` refuses one that is.
 | --- | --- |
 | 400 | Malformed request, version or hash |
 | 404 | Unknown session, or the endpoint is not available here |
-| 409 | Another update or a pending install, an incomplete upload, an install already running, or a refused release |
+| 409 | Another update or a pending install, an incomplete upload, an install already running, a refused delta, or a refused release |
 | 507 | Not enough RAM in `/run` or space on `/opt` |
 | 500 | The mixer could not stage, read or restart |
 

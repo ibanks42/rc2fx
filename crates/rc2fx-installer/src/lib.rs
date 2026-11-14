@@ -199,6 +199,10 @@ pub struct InPlaceBundle {
     /// The payload file, in this app's own cache.
     pub path: std::path::PathBuf,
     pub metadata: mixer_update::RawMetadata,
+    /// The signed payload of the release the mixer runs, when one exists:
+    /// the upload then carries only what changed.
+    #[serde(default)]
+    pub base: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -256,6 +260,10 @@ pub enum Request {
     InPlaceBundle {
         offer: mixer_update::MixerOffer,
         firmware_profile: String,
+        /// The RC2FX version the mixer runs, whose signed payload the update
+        /// is diffed against.
+        #[serde(default)]
+        installed: Option<String>,
     },
     /// Keep `settings` (RC2FX's settings file, read over USB by the app) for
     /// the mixer `serial`.
@@ -492,6 +500,7 @@ impl Engine {
             Request::InPlaceBundle {
                 offer,
                 firmware_profile,
+                installed,
             } => {
                 self.step("mixer-download", "Downloading and verifying mixer software");
                 let work = self.work.clone();
@@ -510,12 +519,30 @@ impl Engine {
                 })?;
                 self.step("mixer-metadata", "Reading the release's signed metadata");
                 let metadata = mixer_update::raw_metadata()?;
+                // Only an optimisation: without it the whole release is sent.
+                let base = match installed {
+                    Some(version) => {
+                        self.step("mixer-base", "Downloading the mixer's current release");
+                        match self.mixer_operation(async {
+                            mixer_update::official(&work)
+                                .await?
+                                .base_payload(&version, &cache)
+                                .await
+                        }) {
+                            Ok(base) => base,
+                            Err(e) if e.0 == CANCELLED => return Err(e),
+                            Err(_) => None,
+                        }
+                    }
+                    None => None,
+                };
                 Ok(Reply::InPlaceBundle(InPlaceBundle {
                     version: offer.metadata.version.clone(),
                     size: offer.length,
                     sha256: offer.sha256.clone(),
                     path: cache.join(format!("{}.payload", offer.sha256)),
                     metadata,
+                    base,
                 }))
             }
             Request::SelectBundledMixer => {

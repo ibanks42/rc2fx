@@ -1,7 +1,10 @@
 //! Authenticate complete mixer payloads before exposing their contents to the installer.
 use crate::{Error, Result, embed::Envelope, runtime::Bundle};
 use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tough::{IntoVec, Repository, RepositoryLoader, TargetName};
 use url::Url;
 
@@ -542,6 +545,62 @@ impl MixerRepository {
         file.persist(&path).map_err(error)?;
         Ok(payload)
     }
+    /// The signed payload of the release a mixer runs, cached in `cache`, for
+    /// the in-place update to send only what changed since. Nothing from it
+    /// is installed: the mixer rebuilds the new release from its own files
+    /// and checks the result against the new release's signature. `None`
+    /// when no signed release has that version (a development build).
+    pub async fn base_payload(&self, version: &str, cache: &Path) -> Result<Option<PathBuf>> {
+        self.require_current()?;
+        let Some((name, _)) = self
+            .releases()?
+            .into_iter()
+            .find(|(_, metadata)| metadata.version == version)
+        else {
+            return Ok(None);
+        };
+        let target = TargetName::new(&name).map_err(error)?;
+        let signed = self
+            .repository
+            .targets()
+            .signed
+            .find_target(&target, false)
+            .map_err(error)?;
+        let sha256: String = signed
+            .hashes
+            .sha256
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let length = signed.length;
+        std::fs::create_dir_all(cache)?;
+        let path = cache.join(format!("{sha256}.payload"));
+        if std::fs::read(&path)
+            .is_ok_and(|bytes| bytes.len() as u64 == length && crate::files::sum(&bytes) == sha256)
+        {
+            return Ok(Some(path));
+        }
+        // read_target checks the signed hash before it hands over the bytes.
+        let bytes = self
+            .repository
+            .read_target(&target)
+            .await
+            .map_err(error)?
+            .ok_or_else(|| error("target disappeared"))?
+            .into_vec()
+            .await
+            .map_err(error)?;
+        if bytes.len() as u64 != length {
+            return Err(error("payload length differs from signed metadata"));
+        }
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new_in(cache)?;
+        file.write_all(&bytes)?;
+        file.as_file().sync_all()?;
+        file.persist(&path).map_err(error)?;
+        Ok(Some(path))
+    }
+
     pub fn offers(&self) -> Result<Vec<MixerOffer>> {
         self.require_current()?;
         let mut offers = self

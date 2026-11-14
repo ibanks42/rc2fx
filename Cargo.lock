@@ -6272,6 +6272,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc2fx-delta"
+version = "0.1.5"
+dependencies = [
+ "sha2 0.11.1",
+ "zstd",
+]
+
+[[package]]
 name = "rc2fx-device"
 version = "0.1.5"
 dependencies = [
@@ -6279,6 +6287,7 @@ dependencies = [
  "jiff",
  "libc",
  "rc2fx-core",
+ "rc2fx-delta",
  "rc2fx-dsp",
  "rc2fx-firmware",
  "rc2fx-native-control",
@@ -6380,6 +6389,7 @@ name = "rc2fx-transport"
 version = "0.1.5"
 dependencies = [
  "rc2fx-core",
+ "rc2fx-delta",
  "rc2fx-installer",
  "serde",
  "serde_json",
@@ -10294,6 +10304,34 @@ dependencies = [
  "rustix",
  "socket2",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50adf04cf3ec914b0b9905c9dde90c80fe74bfd701e331fc80a39c512c525278"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "498d94ad68720c89b4fbe41b9090850651e68cb2dd9210ce7ffbff3a94653819"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.3+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f729a06d0257428fd9d997ac8db7e1407bd0262ab016b085b36bc52957c0052d"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]

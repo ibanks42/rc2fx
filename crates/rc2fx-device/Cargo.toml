@@ -17,6 +17,7 @@ native-pipeline = []
 
 [dependencies]
 rc2fx-usb = { path = "../rc2fx-usb" }
+rc2fx-delta = { path = "../rc2fx-delta" }
 rc2fx-firmware = { path = "../rc2fx-firmware" }
 rc2fx-core = { path = "../rc2fx-core" }
 rc2fx-dsp = { path = "../rc2fx-dsp" }
