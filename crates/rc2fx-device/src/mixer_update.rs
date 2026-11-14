@@ -210,12 +210,21 @@ impl MixerUpdate {
             ));
         }
         let mut slot = self.session();
-        if let Some(session) = slot.as_ref()
-            && session.state != SessionState::Failed
-        {
-            return Err(UpdateError::Busy(
-                "another update session is already open".into(),
-            ));
+        // Only USB 1's one client uploads, so a session it started and then
+        // abandoned (the app closed mid-upload) must not block the next: a new
+        // start replaces any session that isn't installing yet, and frees its
+        // upload in RAM before the space check below.
+        if let Some(session) = slot.as_ref() {
+            if matches!(
+                session.state,
+                SessionState::Installing | SessionState::Restarting
+            ) {
+                return Err(UpdateError::Busy(
+                    "an update is being installed; wait for it to finish".into(),
+                ));
+            }
+            let _ = fs::remove_dir_all(self.paths.run.join(&session.id));
+            *slot = None;
         }
         if let Some(free) = install::free_bytes(&self.paths.run)
             && free < request.size + RUN_HEADROOM

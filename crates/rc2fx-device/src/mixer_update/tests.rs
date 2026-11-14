@@ -560,6 +560,32 @@ fn an_update_waits_for_a_developer_install_and_keeps_its_own_marker() {
 }
 
 #[test]
+fn a_new_upload_replaces_one_that_was_abandoned() {
+    let (_dir, paths) = test_paths();
+    let update = new_update(paths.clone());
+    let abandoned = update.start(start_request(9)).unwrap();
+    update
+        .append(
+            &abandoned.id,
+            Chunk {
+                offset: 0,
+                data: crate::mixer_update::encode_base64_for_test(b"abcd"),
+            },
+        )
+        .unwrap();
+    // The app closed mid-upload and starts over: the old session and its
+    // bytes in RAM go, and the new one starts from zero.
+    let next = update.start(start_request(9)).unwrap();
+    assert_ne!(next.id, abandoned.id);
+    assert_eq!(next.received, 0);
+    assert!(!paths.run.join(&abandoned.id).exists());
+    assert!(matches!(
+        update.progress(&abandoned.id),
+        Err(UpdateError::NotFound)
+    ));
+}
+
+#[test]
 fn the_size_cap_and_chunk_limit_are_enforced() {
     let (_dir, paths) = test_paths();
     let update = new_update(paths);

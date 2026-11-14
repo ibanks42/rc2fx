@@ -117,7 +117,9 @@ they list, so reformatted JSON would not verify. `root` is an array of root
 documents, oldest first: one, or the chain that follows a key rotation.
 `allowDowngrade` is optional and defaults to false: a release older than the
 installed one is refused unless the app asks for it explicitly and the target
-is signed. The reply is `201` with the session:
+is signed. Starting a session replaces one that isn't installing yet (an
+upload the app abandoned), freeing its upload; while an update is installing,
+a new start is `409`. The reply is `201` with the session:
 
 ```json
 {"id": "0123456789abcdef", "state": "accepting", "version": "0.2.0",
