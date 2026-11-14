@@ -230,8 +230,10 @@ pub fn verify(
     let targets = repository.targets().signed.version.get();
     let snapshot = repository.snapshot().signed.version.get();
     let timestamp = repository.timestamp().signed.version.get();
-    let targets_digest = sum(&serde_json::to_vec(&repository.targets().signed)
-        .map_err(|e| format!("cannot record the signed targets: {e}"))?);
+    // The exact signed file, as verified: re-serializing the parsed role is
+    // not stable (its maps have no fixed order), so the same release would
+    // look changed on its second check.
+    let targets_digest = sum(metadata.targets.as_bytes());
     if root < prior.root_version
         || targets < prior.targets_version
         || snapshot < prior.snapshot_version

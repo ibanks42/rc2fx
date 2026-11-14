@@ -217,6 +217,16 @@ fn a_signed_release_is_accepted_on_the_mixer() {
     assert_eq!(verified.metadata_versions.timestamp_version, 1);
     assert_eq!(verified.metadata_versions.root_version, 1);
     assert_eq!(verified.metadata_versions.targets_digest.len(), 64);
+    // The same release checked again, as after a refused or retried install:
+    // the same signed bytes are the same targets, never "changed".
+    for _ in 0..3 {
+        let again =
+            verify_release(&repository, Some(&profile), &verified.metadata_versions).unwrap();
+        assert_eq!(
+            again.metadata_versions.targets_digest,
+            verified.metadata_versions.targets_digest
+        );
+    }
 }
 
 #[test]
