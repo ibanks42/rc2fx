@@ -184,7 +184,7 @@ replaces that file, so a flash starts recording again.
 After verification the bundle is staged on `/opt`'s filesystem, checked again
 from disk, and its own `rc2fx-firmware check-device` must accept the running
 mixer. The live files are hard-linked into `/opt/.rc2fx-previous`, then
-`/opt/.rc2fx-install-pending` is written and flushed, and only then is each
+`/opt/.rc2fx-update-pending` is written and flushed, and only then is each
 file renamed into place, followed by the two `/usr/sbin` shims. Saved settings
 in `/opt/rc2fx/data` are never moved.
 

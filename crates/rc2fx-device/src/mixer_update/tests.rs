@@ -544,6 +544,22 @@ fn only_the_session_start_handed_out_is_accepted() {
 }
 
 #[test]
+fn an_update_waits_for_a_developer_install_and_keeps_its_own_marker() {
+    let (_dir, paths) = test_paths();
+    // install.sh's transaction marker is not this updater's: a launcher must
+    // never read a developer install as an interrupted in-place update.
+    assert_ne!(paths.pending(), paths.install_pending());
+    fs::write(paths.install_pending(), b"").unwrap();
+    let update = new_update(paths.clone());
+    assert!(matches!(
+        update.start(start_request(9)),
+        Err(UpdateError::Busy(_))
+    ));
+    fs::remove_file(paths.install_pending()).unwrap();
+    assert!(update.start(start_request(9)).is_ok());
+}
+
+#[test]
 fn the_size_cap_and_chunk_limit_are_enforced() {
     let (_dir, paths) = test_paths();
     let update = new_update(paths);

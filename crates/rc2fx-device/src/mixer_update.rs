@@ -204,7 +204,7 @@ impl MixerUpdate {
                 "sha256 must be 64 lowercase hexadecimal characters".into(),
             ));
         }
-        if self.paths.pending().exists() {
+        if self.paths.pending().exists() || self.paths.install_pending().exists() {
             return Err(UpdateError::Busy(
                 "another install is pending; finish it or recover before updating".into(),
             ));

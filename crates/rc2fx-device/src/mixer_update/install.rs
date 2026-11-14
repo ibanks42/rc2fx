@@ -3,8 +3,10 @@
 //!
 //! The layout is `/opt/rc2fx` (the live bundle, with `data/` and `logs/`
 //! inside it), `/opt/.rc2fx-previous` (the last known-good bundle's files,
-//! hard-linked so it costs no space) and `/opt/.rc2fx-install-pending` (an
-//! update that has not been committed yet). Saved settings are never moved or
+//! hard-linked so it costs no space) and `/opt/.rc2fx-update-pending` (an
+//! update that has not been committed yet). The marker is this updater's own:
+//! the developer install (`install.sh`) keeps `/opt/.rc2fx-install-pending`
+//! for its transaction, and a launcher must never mistake one for the other. Saved settings are never moved or
 //! replaced: only the files in [`PAYLOAD_NAMES`] change.
 //!
 //! The order is chosen so that a power cut at any point leaves something
@@ -153,6 +155,10 @@ impl Paths {
         self.opt.join(".rc2fx-previous")
     }
     pub fn pending(&self) -> PathBuf {
+        self.opt.join(".rc2fx-update-pending")
+    }
+    /// The developer install's own transaction marker (`install.sh`).
+    pub fn install_pending(&self) -> PathBuf {
         self.opt.join(".rc2fx-install-pending")
     }
     pub fn data(&self) -> PathBuf {

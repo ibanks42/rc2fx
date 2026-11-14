@@ -7,7 +7,7 @@
 # the installed one until the next boot.
 #
 # A signed in-place update that has not committed leaves
-# /opt/.rc2fx-install-pending (docs/developer/mixer-releases.md). Unless its
+# /opt/.rc2fx-update-pending (docs/developer/mixer-releases.md). Unless its
 # detached driver is still working, the last known-good bundle in
 # /opt/.rc2fx-previous is what this boot starts.
 previous=/opt/.rc2fx-previous
@@ -17,7 +17,7 @@ driver_alive() {
   [[ $p =~ ^[0-9]+$ ]] || return 1
   grep -qa 'update-commit' "/proc/$p/cmdline" 2>/dev/null
 }
-if test -f /opt/.rc2fx-install-pending && test -f "$previous/rc2fx.sh" \
+if test -f /opt/.rc2fx-update-pending && test -f "$previous/rc2fx.sh" \
    && grep -q '^  launch) ' "$previous/rc2fx.sh" && ! driver_alive; then
   exec /bin/bash "$previous/rc2fx.sh" launch "$@"
 fi

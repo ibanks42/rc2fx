@@ -1984,7 +1984,7 @@ update_commit() {
   fi
   if test "$ok" = 1; then
     update_record committed "$from" "$target" '' "$gui"
-    rm -f /opt/.rc2fx-install-pending
+    rm -f /opt/.rc2fx-update-pending
     rm -f "$update_dir/driver"
     say "Update $id: committed $target" >> "$logs/update.log"
     return 0
