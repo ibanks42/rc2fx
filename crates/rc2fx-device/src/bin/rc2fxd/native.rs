@@ -310,7 +310,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
     let model = device_model()?;
     // Reported versions never stop the controller: what cannot be read stays
     // unknown, and the log says why.
-    let (versions, problems) = rc2fx_device::versions::read(
+    let (mut versions, problems) = rc2fx_device::versions::read(
         args.release.as_deref(),
         args.firmware_catalog.as_deref(),
         args.firmware_profile.as_deref(),
@@ -335,6 +335,9 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
     let store = Store::open(&args.data, initial)?;
     rc2fx_device::native_plan::plan_for_model(store.config(), model)?;
     let native = Runtime::connect(&args.socket, store.config(), Duration::from_secs(2))?;
+    // The library can predate this daemon (RØDE's process keeps an old one
+    // loaded until it restarts). Report the protocol it actually speaks.
+    rc2fx_device::versions::note_native_protocol(&mut versions, native.protocol());
     let (handle, owner) = Coordinator::new_native(Controller::new(store), native)?;
     let stop = Stop::install()?;
     std::thread::scope(|scope| -> io::Result<()> {

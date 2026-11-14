@@ -1,6 +1,6 @@
 //! The controller's front door for a device-local native callback owner.
 //! This module neither loads the audit library nor launches/restarts vendor audio.
-use crate::{coordinator::Error, store::PreparedSave};
+use crate::{coordinator::Error, recent::PathRecent, store::PreparedSave};
 use rc2fx_core::{Config, Meter, MeterType, TargetKind, TargetMeter};
 use rc2fx_native_control::{
     Client, ContextStatus, MAX_PATHS, METER_RING_WINDOWS, METER_WINDOW_FRAMES, Operation, PathMode,
@@ -60,6 +60,8 @@ struct Bound {
     frames: u64,
     last_progress: Instant,
     progressed: bool,
+    /// The callback and worker peaks since the last read.
+    recent: PathRecent,
 }
 impl Bound {
     fn timed_out(&self, now: Instant, started: Instant, timeout: Duration) -> bool {
@@ -68,6 +70,14 @@ impl Bound {
         } else {
             now.duration_since(started) >= INITIAL_PROGRESS_TIMEOUT.max(timeout)
         }
+    }
+    /// Files one inventory read: the context's callback peak and this path's
+    /// worker peak. A read that timed nothing ages the older peaks out.
+    fn observe_recent(&mut self, callback: Option<u64>, worker: Option<u64>, now: Instant) {
+        self.recent.observe(callback, worker, now);
+    }
+    fn clear_recent(&mut self) {
+        self.recent.clear();
     }
 }
 pub struct Runtime {
@@ -163,11 +173,14 @@ fn performance_timing(value: rc2fx_native_control::Timing) -> rc2fx_core::Timing
 /// What the engine reports for one path: the context's callback timing (when
 /// sampled), the engine-wide counters, and the worker's own timings when the
 /// path has one. A path without a worker still reports the shared numbers;
-/// its worker timings are zero and its calls count says "no worker".
+/// its worker timings are zero and its calls count says "no worker". The two
+/// recent maxima come from the reader's window, not from this reply.
 fn engine_performance(
     contexts: &[ContextStatus],
     id: &str,
     worker: Option<rc2fx_native_control::WorkerMeter>,
+    callback_recent_max_ns: Option<u64>,
+    worker_recent_max_ns: Option<u64>,
 ) -> rc2fx_core::Performance {
     let context = contexts
         .iter()
@@ -183,6 +196,8 @@ fn engine_performance(
         worker_cpu: worker.map_or_else(no_timing, |value| performance_timing(value.cpu)),
         helper_late: Some(counters.helper_late),
         helper_stalls: Some(counters.helper_stalls),
+        callback_recent_max_ns,
+        worker_recent_max_ns,
     }
 }
 
@@ -280,6 +295,7 @@ impl Runtime {
                 frames: status.meter.map_or(0, |meter| meter.processed_frames),
                 last_progress: now,
                 progressed: false,
+                recent: PathRecent::default(),
             });
         }
         if paths.len() != count
@@ -324,7 +340,18 @@ impl Runtime {
             return Err(failure("native attachment does not match the controller"));
         }
         self.generation = generation;
+        // A new engine generation has its own maxima, which must not inherit
+        // the previous one's spikes.
+        for path in &mut self.paths {
+            path.clear_recent();
+        }
         Ok(())
+    }
+    /// A diagnostics reset starts the recent maxima over as well.
+    pub(crate) fn clear_recent(&mut self) {
+        for path in &mut self.paths {
+            path.clear_recent();
+        }
     }
     pub(crate) fn selected_ids(&self) -> Vec<String> {
         if self.enabled {
@@ -335,6 +362,11 @@ impl Runtime {
     }
     pub(crate) fn bound_ids(&self) -> Vec<String> {
         self.paths.iter().map(|path| path.id.clone()).collect()
+    }
+    /// The protocol the library agreed to for this session; below
+    /// `rc2fx_native_control::VERSION` means it predates this daemon.
+    pub fn protocol(&self) -> u32 {
+        self.client.protocol()
     }
     pub(crate) fn enabled(&self) -> bool {
         self.enabled
@@ -611,6 +643,14 @@ impl Runtime {
             if status.worker.is_some_and(|value| value.failed) {
                 return Err(failure("native suppression worker failed"));
             }
+            // One peak per read from each producer; the path's window keeps
+            // them for its ten seconds.
+            let callback_recent = contexts
+                .iter()
+                .find(|context| context.context == path.context)
+                .and_then(|context| context.recent_callback_wall_ns);
+            path.observe_recent(callback_recent, status.worker_recent_max_ns, now);
+            let (callback_recent_max_ns, worker_recent_max_ns) = path.recent.value(now);
             // Liveness is independent of desired effect publication. A fresh
             // native block must not become a fake stalled-audio report merely
             // because an external controller temporarily changed this slot.
@@ -678,12 +718,24 @@ impl Runtime {
                     // An idle stock source has no worker of its own, but the
                     // engine's own numbers (callback, xruns, helper) are just
                     // as true for it.
-                    performance: Some(engine_performance(&contexts, &path.id, None)),
+                    performance: Some(engine_performance(
+                        &contexts,
+                        &path.id,
+                        None,
+                        callback_recent_max_ns,
+                        worker_recent_max_ns,
+                    )),
                 });
             }
             if let Some(meter) = meter {
                 let worker = status.worker;
-                let performance = engine_performance(&contexts, &path.id, worker);
+                let performance = engine_performance(
+                    &contexts,
+                    &path.id,
+                    worker,
+                    callback_recent_max_ns,
+                    worker_recent_max_ns,
+                );
                 meters.push(TargetMeter {
                     id: path.id.clone(),
                     input_peak: meter.input_peak,
@@ -747,6 +799,10 @@ impl Runtime {
             // Filled by the controller's diagnostics log, which owns the
             // baseline epoch; the backend reports raw engine figures.
             diagnostics_epoch: 0,
+            // The controller also stamps how long this generation has been
+            // running, from the audio process's start or its first Running
+            // report; this backend reports raw progress only.
+            running_for_ns: None,
             targets: meters,
         });
         Ok(Observation {

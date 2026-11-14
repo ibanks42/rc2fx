@@ -1242,6 +1242,7 @@ fn target_status(
 ) -> Result<rc2fx_native_control::TargetStatus, rc2fx_native_control::ErrorCode> {
     let status = control.status().map_err(parameter_error)?;
     let worker = control.worker_status();
+    let worker_recent_max_ns = control.worker_recent_turnaround_ns();
     let (misses, lates) = match control.worker_histories() {
         Some((misses, lates)) => (Some(misses), Some(lates)),
         None => (None, None),
@@ -1256,6 +1257,7 @@ fn target_status(
         runtime_epoch: status.runtime_epoch,
         meter: status.meter,
         worker,
+        worker_recent_max_ns,
         misses,
         lates,
         retired_workers: control.retired_workers(),
@@ -1329,6 +1331,9 @@ impl ipc::Backend for NativeBackend {
         self.transactions.reap(std::time::Instant::now());
         let _registry = CONTROL.try_lock().map_err(lock_error)?;
         let mut inventory = Vec::new();
+        // A retired context's last callback peak is reported once, with the
+        // inventory that follows its retirement.
+        let retired_recent = RETIRED_TIMING.take_callback_recent();
         for context in &CONTEXTS {
             if !context.claimed.load(Ordering::Acquire)
                 || !context.installed.load(Ordering::Acquire)
@@ -1340,6 +1345,7 @@ impl ipc::Backend for NativeBackend {
                 .iter_mut()
                 .map(target_status)
                 .collect::<Result<Vec<_>, _>>()?;
+            let recent = context.timing.take_callback_recent().max(retired_recent);
             inventory.push(rc2fx_native_control::ContextStatus {
                 context: context.token.load(Ordering::Relaxed),
                 targets,
@@ -1347,6 +1353,7 @@ impl ipc::Backend for NativeBackend {
                 // monotonic across rebuilds, which is what its fault counters
                 // need to see.
                 timing: Some(context.timing.merged_with(RETIRED_TIMING.snapshot())),
+                recent_callback_wall_ns: (recent != 0).then_some(recent),
                 counters: engine_counters(),
                 events: engine_events(),
             });

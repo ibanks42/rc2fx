@@ -27,6 +27,9 @@ struct Counters {
     calls: AtomicU64,
     total: AtomicU64,
     max: AtomicU64,
+    /// Worst measurement since the last control read; only the inventory takes
+    /// it. The cumulative `max` stays for the audit report.
+    recent: AtomicU64,
     overruns: AtomicU64,
     errors: AtomicU64,
     bins: [AtomicU64; 8],
@@ -37,6 +40,7 @@ impl Counters {
             calls: AtomicU64::new(0),
             total: AtomicU64::new(0),
             max: AtomicU64::new(0),
+            recent: AtomicU64::new(0),
             overruns: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             bins: [const { AtomicU64::new(0) }; 8],
@@ -66,6 +70,9 @@ impl Counters {
         if elapsed > self.max.load(Relaxed) {
             self.max.store(elapsed, Relaxed);
         }
+        if elapsed > self.recent.load(Relaxed) {
+            self.recent.store(elapsed, Relaxed);
+        }
         if elapsed > BUDGET_NS {
             add(&self.overruns, 1);
         }
@@ -93,11 +100,22 @@ impl Counters {
             counter.fetch_add(value, Relaxed);
         }
     }
+    /// Carries a recent peak across a retirement, like `merge` does the maxima.
+    fn merge_recent(&self, recent: u64) {
+        if recent > self.recent.load(Relaxed) {
+            self.recent.store(recent, Relaxed);
+        }
+    }
+    /// The worst measurement since the last call, and zero from then on.
+    fn take_recent(&self) -> u64 {
+        self.recent.swap(0, Relaxed)
+    }
     fn reset(&self) {
         for counter in [
             &self.calls,
             &self.total,
             &self.max,
+            &self.recent,
             &self.overruns,
             &self.errors,
         ] {
@@ -226,6 +244,9 @@ impl Shared {
         retired.owned_wall.merge(value.owned_wall);
         retired.owned_cpu.merge(value.owned_cpu);
         retired.native_wall.merge(value.native_wall);
+        retired
+            .callback_wall
+            .merge_recent(self.callback_wall.take_recent());
         self.attempts.store(0, Relaxed);
         self.wrong_frames.store(0, Relaxed);
         self.callback_wall.reset();
@@ -233,6 +254,11 @@ impl Shared {
         self.owned_wall.reset();
         self.owned_cpu.reset();
         self.native_wall.reset();
+    }
+    /// The worst callback wall time since the last read; only the inventory
+    /// reports it, so the audit report cannot consume the peak.
+    pub fn take_callback_recent(&self) -> u64 {
+        self.callback_wall.take_recent()
     }
 }
 #[derive(Clone, Copy)]
@@ -380,6 +406,41 @@ mod tests {
     }
     fn clock_reads() -> [u64; 2] {
         CLOCK_READS.with(std::cell::Cell::get)
+    }
+    /// The recent peak is taken once, and a smaller measurement never wins.
+    /// `snapshot` reads it without consuming it; the cumulative `max` stays.
+    #[test]
+    fn the_recent_peak_is_taken_once_and_keeps_the_largest() {
+        let counters = Counters::new();
+        counters.record(Some(500));
+        counters.record(Some(300));
+        assert_eq!(counters.snapshot().max_ns, 500);
+        assert_eq!(counters.take_recent(), 500);
+        assert_eq!(counters.take_recent(), 0);
+        counters.record(Some(700));
+        counters.record(Some(400));
+        // A snapshot is not a reader of the peak.
+        assert_eq!(counters.snapshot().max_ns, 700);
+        assert_eq!(counters.take_recent(), 700);
+        assert_eq!(counters.snapshot().max_ns, 700);
+    }
+    /// A callback peak survives the context's retirement.
+    #[test]
+    fn retirement_carries_the_recent_callback_peak() {
+        let counters = Shared::new();
+        let retired = Shared::new();
+        counters.record(
+            Frame {
+                start: stamp(10, 5),
+                cpu: false,
+            },
+            stamp(30, 15),
+            stamp(90, 35),
+            stamp(120, 55),
+        );
+        counters.retire_into(&retired);
+        assert_eq!(retired.take_callback_recent(), 110);
+        assert_eq!(counters.take_callback_recent(), 0);
     }
     #[test]
     fn real_clocks_have_bounded_sample_population() {

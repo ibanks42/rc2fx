@@ -1,8 +1,8 @@
 //! Opt-in audit-namespace receiver. No audio buffer or Rust pointer crosses IPC.
 use rc2fx_core::Target;
 use rc2fx_native_control::{
-    ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, Operation, PathMode, Reply, Request,
-    Response, Session, TargetStatus, Transaction, VERSION,
+    ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode, Reply,
+    Request, Response, Session, TargetStatus, Transaction, VERSION,
 };
 use serde::Serialize;
 use std::{
@@ -89,8 +89,37 @@ pub trait Backend: Send + 'static {
     fn cancel(&mut self, transaction: &Transaction) -> Result<(), ErrorCode>;
 }
 
+/// The first protocol version whose replies carry the two recent maxima
+/// (`ContextStatus::recent_callback_wall_ns` and
+/// `TargetStatus::worker_recent_max_ns`). Both are skipped when none, so a
+/// reply to an older peer leaves them out by clearing them.
+const RECENT_MAXIMA_VERSION: u32 = 7;
+
+/// Clears the reply fields a peer at `version` cannot decode.
+fn omit_fields_unknown_to(version: u32, reply: &mut Reply) {
+    if version >= RECENT_MAXIMA_VERSION {
+        return;
+    }
+    match reply {
+        Reply::Inventory { contexts } => {
+            for context in contexts {
+                context.recent_callback_wall_ns = None;
+                for target in &mut context.targets {
+                    target.worker_recent_max_ns = None;
+                }
+            }
+        }
+        Reply::Status { target, .. } => target.worker_recent_max_ns = None,
+        _ => {}
+    }
+}
+
 fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> Response {
-    let result = if request.version != VERSION {
+    // Answer in the peer's own version, so an older peer reads a reply shaped
+    // for what it knows. Only the supported range is spoken; anything else is
+    // refused at this build's version.
+    let supported = (MIN_VERSION..=VERSION).contains(&request.version);
+    let result = if !supported {
         Err(ErrorCode::UnsupportedVersion)
     } else if request.request_id == 0 {
         Err(ErrorCode::InvalidParameters)
@@ -149,11 +178,15 @@ fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> 
             }
         }
     };
+    let mut reply = result.unwrap_or_else(|code| Reply::Error { code });
+    if supported {
+        omit_fields_unknown_to(request.version, &mut reply);
+    }
     Response {
-        version: VERSION,
+        version: if supported { request.version } else { VERSION },
         request_id: request.request_id,
         session: session.clone(),
-        reply: result.unwrap_or_else(|code| Reply::Error { code }),
+        reply,
     }
 }
 
@@ -412,6 +445,8 @@ mod tests {
                 timing: None,
                 counters: Default::default(),
                 events: Vec::new(),
+                // The v7-only fields, which a reply to a v6 peer must omit.
+                recent_callback_wall_ns: Some(900),
             }])
         }
         fn status(&mut self, context: u64, id: &str) -> Result<TargetStatus, ErrorCode> {
@@ -436,6 +471,8 @@ mod tests {
                 worker: None,
                 misses: None,
                 lates: None,
+                // The v7-only field, which a reply to a v6 peer must omit.
+                worker_recent_max_ns: Some(7_000),
             })
         }
         fn prepare(
@@ -669,6 +706,7 @@ mod tests {
         let path = folder.0.join("control.sock");
         let mut server = Server::start(&path, Fake::default(), None).unwrap();
         let mut client = Client::connect(&path).unwrap();
+        assert_eq!(client.protocol(), VERSION);
         let response = client.request(Operation::Inventory).unwrap();
         assert!(matches!(response.reply, Reply::Inventory { .. }));
         let target = Target::new("headphones", "Headphones", TargetKind::Output, 2);
@@ -757,5 +795,211 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert!(server.shutdown());
         assert_eq!(server.status().received, 1); // Hello only.
+    }
+    /// A reply to a version 6 peer is a version 6 reply: the two fields 7 added
+    /// are absent from its JSON. The same reply at 7 carries them.
+    #[test]
+    fn older_peers_are_answered_at_their_version_without_the_fields_they_lack() {
+        let current = session(&"a".repeat(32));
+        let mut backend = Fake::default();
+        for version in [MIN_VERSION, VERSION] {
+            let request = |operation| Request {
+                version,
+                request_id: 1,
+                session: Some(current.clone()),
+                operation,
+            };
+            let newer = version >= RECENT_MAXIMA_VERSION;
+            let response = dispatch(&current, request(Operation::Inventory), &mut backend);
+            assert_eq!(response.version, version);
+            assert_eq!(response.request_id, 1);
+            let json = serde_json::to_string(&response).unwrap();
+            for field in ["recentCallbackWallNs", "workerRecentMaxNs"] {
+                assert_eq!(
+                    json.contains(field),
+                    newer,
+                    "{field} at version {version}: {json}"
+                );
+            }
+            assert_eq!(json.contains("900"), newer, "{json}");
+            assert_eq!(json.contains("7000"), newer, "{json}");
+            let response = dispatch(
+                &current,
+                request(Operation::Status {
+                    context: 7,
+                    id: "headphones".into(),
+                }),
+                &mut backend,
+            );
+            assert_eq!(response.version, version);
+            let json = serde_json::to_string(&response).unwrap();
+            assert_eq!(
+                json.contains("workerRecentMaxNs"),
+                newer,
+                "version {version}: {json}"
+            );
+            assert_eq!(json.contains("7000"), newer, "{json}");
+        }
+    }
+    /// Only the supported range is spoken: 5 (below `MIN_VERSION`) and 8
+    /// (above `VERSION`) are refused at this build's version.
+    #[test]
+    fn only_the_supported_protocol_range_is_answered() {
+        let current = session(&"a".repeat(32));
+        let mut backend = Fake::default();
+        for version in [MIN_VERSION - 1, VERSION + 1] {
+            let response = dispatch(
+                &current,
+                Request {
+                    version,
+                    request_id: 1,
+                    session: None,
+                    operation: Operation::Hello,
+                },
+                &mut backend,
+            );
+            assert!(matches!(
+                response.reply,
+                Reply::Error {
+                    code: ErrorCode::UnsupportedVersion
+                }
+            ));
+            assert_eq!(response.version, VERSION);
+        }
+        for version in [MIN_VERSION, VERSION] {
+            let response = dispatch(
+                &current,
+                Request {
+                    version,
+                    request_id: 1,
+                    session: None,
+                    operation: Operation::Hello,
+                },
+                &mut backend,
+            );
+            assert!(matches!(response.reply, Reply::Hello));
+            assert_eq!(response.version, version);
+        }
+    }
+    /// A library that speaks only version 6, as the released mixer has. It
+    /// refuses this build's newer version and answers at its own; the client
+    /// re-hellos there and keeps it, and the v6 replies decode without the
+    /// fields 7 added.
+    #[test]
+    fn client_negotiates_down_to_a_library_that_speaks_only_v6() {
+        let folder = Folder::new();
+        let path = folder.0.join("control.sock");
+        let socket = UnixDatagram::bind(&path).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let session = Session::local().unwrap();
+        let peer_session = session.clone();
+        let inventory = serde_json::json!({
+            "result": "inventory",
+            "contexts": [{
+                "context": 42,
+                "timing": null,
+                "targets": [{
+                    "id": "headphones",
+                    "mode": "processed",
+                    "runtimeEpoch": 1,
+                    "retiredWorkers": [],
+                    "retiredWorkerCount": 0,
+                    "published": 1,
+                    "seen": 1,
+                    "applied": 1,
+                    "fingerprint": vec![0_u8; 32],
+                    "meter": null,
+                    "worker": null,
+                }],
+            }],
+        });
+        let server = thread::spawn(move || {
+            let mut buffer = vec![0; MAX_REQUEST + 1];
+            let mut seen = Vec::new();
+            for (request_version, reply) in [
+                (
+                    VERSION,
+                    serde_json::json!({"result": "error", "code": "unsupportedVersion"}),
+                ),
+                (MIN_VERSION, serde_json::json!({"result": "hello"})),
+                (MIN_VERSION, inventory),
+            ] {
+                let (length, peer) = socket.recv_from(&mut buffer).unwrap();
+                let request: Request = serde_json::from_slice(&buffer[..length]).unwrap();
+                assert_eq!(request.version, request_version);
+                seen.push(request.version);
+                // A version 6 library answers at its own version whatever the
+                // request said.
+                let response = serde_json::json!({
+                    "version": MIN_VERSION,
+                    "requestId": request.request_id,
+                    "session": {
+                        "pid": peer_session.pid,
+                        "nonce": peer_session.nonce.as_str(),
+                    },
+                    "reply": reply,
+                });
+                socket
+                    .send_to_addr(&serde_json::to_vec(&response).unwrap(), &peer)
+                    .unwrap();
+            }
+            seen
+        });
+        let mut client = Client::connect(&path).unwrap();
+        assert_eq!(client.protocol(), MIN_VERSION);
+        let response = client.request(Operation::Inventory).unwrap();
+        assert_eq!(response.version, MIN_VERSION);
+        match response.reply {
+            Reply::Inventory { contexts } => {
+                assert_eq!(contexts[0].context, 42);
+                // A version 6 library never sends the fields 7 added; they
+                // arrive as `None`, which the app shows as unknown.
+                assert_eq!(contexts[0].recent_callback_wall_ns, None);
+                assert_eq!(contexts[0].targets[0].worker_recent_max_ns, None);
+            }
+            reply => panic!("inventory expected, got {reply:?}"),
+        }
+        assert_eq!(
+            server.join().unwrap(),
+            vec![VERSION, MIN_VERSION, MIN_VERSION]
+        );
+        fs::remove_file(path).unwrap();
+    }
+    /// Today's behaviour for a library that answers above this build's
+    /// version: the connection fails instead of speaking it.
+    #[test]
+    fn a_library_newer_than_this_daemon_fails_the_connection() {
+        let folder = Folder::new();
+        let path = folder.0.join("control.sock");
+        let socket = UnixDatagram::bind(&path).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let session = Session::local().unwrap();
+        let server = thread::spawn(move || {
+            let mut buffer = vec![0; MAX_REQUEST + 1];
+            let (length, peer) = socket.recv_from(&mut buffer).unwrap();
+            let request: Request = serde_json::from_slice(&buffer[..length]).unwrap();
+            // A library built to demand exact equality refuses 7 and answers
+            // at its own, newer version.
+            let response = serde_json::json!({
+                "version": VERSION + 1,
+                "requestId": request.request_id,
+                "session": {"pid": session.pid, "nonce": session.nonce.as_str()},
+                "reply": {"result": "error", "code": "unsupportedVersion"},
+            });
+            socket
+                .send_to_addr(&serde_json::to_vec(&response).unwrap(), &peer)
+                .unwrap();
+        });
+        let error = match Client::connect(&path) {
+            Ok(_) => panic!("a newer library must not be accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        server.join().unwrap();
+        fs::remove_file(path).unwrap();
     }
 }

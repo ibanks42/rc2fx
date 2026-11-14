@@ -585,6 +585,21 @@ impl Control {
             .worker()
             .map(worker_meter)
     }
+    /// The worst live-worker turnaround since the previous status read. Read
+    /// only by `target_status`: the audit report's `worker_status` must not
+    /// consume the peak.
+    pub fn worker_recent_turnaround_ns(&self) -> Option<u64> {
+        self.shared
+            .versions
+            .lock()
+            .ok()?
+            .current
+            .get()
+            .runtime
+            .as_ref()?
+            .worker()
+            .and_then(|worker| worker.telemetry().take_turnaround_recent())
+    }
     /// Clone the current worker handle while holding the version lock briefly;
     /// capture snapshots and all file I/O happen after the lock is released.
     pub fn worker_telemetry(&self) -> Result<Option<(u64, rc2fx_suppression::Telemetry)>, Error> {

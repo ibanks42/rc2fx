@@ -1,6 +1,7 @@
 //! Blocking device-local control client. No audio/runtime or allocator hooks.
 use crate::{
-    MAX_REQUEST, MAX_RESPONSE, Operation, Reply, Request, Response, Session, Transaction, VERSION,
+    ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, Reply, Request, Response,
+    Session, Transaction, VERSION,
 };
 use std::{
     io,
@@ -55,8 +56,15 @@ pub struct Client {
     next: u64,
     session: Option<Session>,
     buffer: Box<[u8]>,
+    /// The protocol this session speaks: `VERSION`, or the one an older
+    /// library offered while connecting.
+    protocol: u32,
 }
 impl Client {
+    /// The protocol the library agreed to for this session.
+    pub fn protocol(&self) -> u32 {
+        self.protocol
+    }
     pub fn session(&self) -> Option<&Session> {
         self.session.as_ref()
     }
@@ -93,8 +101,23 @@ impl Client {
             next: 1,
             session: None,
             buffer: vec![0; MAX_RESPONSE + 1].into_boxed_slice(),
+            protocol: VERSION,
         };
-        let response = client.request(Operation::Hello)?;
+        let mut response = client.request(Operation::Hello)?;
+        // A library older than this daemon refuses a version it does not know,
+        // and answers at the one it speaks. Re-hello there and keep it for the
+        // session: version 6 lacks only the fields this build added, which
+        // arrive as `None`.
+        if matches!(
+            response.reply,
+            Reply::Error {
+                code: ErrorCode::UnsupportedVersion
+            }
+        ) && (MIN_VERSION..client.protocol).contains(&response.version)
+        {
+            client.protocol = response.version;
+            response = client.request(Operation::Hello)?;
+        }
         if !matches!(response.reply, Reply::Hello) {
             return Err(io::Error::other("native hello refused"));
         }
@@ -108,7 +131,7 @@ impl Client {
             .checked_add(1)
             .ok_or_else(|| invalid("request counter exhausted"))?;
         let request = Request {
-            version: VERSION,
+            version: self.protocol,
             request_id,
             session: self.session.clone(),
             operation,
@@ -143,11 +166,25 @@ impl Client {
             if response.request_id != request_id {
                 continue;
             } // Discard a delayed older reply.
-            if response.version != VERSION
-                || self
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| *session != response.session)
+            // A reply speaks the session's version. Before a session exists,
+            // one refusal at an older supported version is how an older
+            // library offers the version it speaks; `connect` takes it.
+            let version_changed = response.version != self.protocol;
+            let offered = version_changed
+                && self.session.is_none()
+                && (MIN_VERSION..self.protocol).contains(&response.version)
+                && matches!(
+                    response.reply,
+                    Reply::Error {
+                        code: ErrorCode::UnsupportedVersion
+                    }
+                );
+            if !offered
+                && (version_changed
+                    || self
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| *session != response.session))
             {
                 return Err(io::Error::other("native process session changed"));
             }

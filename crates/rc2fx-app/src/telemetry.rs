@@ -570,6 +570,7 @@ mod tests {
         state.engine.generation = 2;
         let mut queued = Meter {
             diagnostics_epoch: 0,
+            running_for_ns: None,
             message_type: rc2fx_core::MeterType::Meter,
             revision: state.engine.applied_revision,
             generation: 1,
@@ -717,6 +718,8 @@ mod tests {
             worker_cpu: timing(worker_calls, 0),
             helper_late: Some(0),
             helper_stalls: Some(0),
+            callback_recent_max_ns: None,
+            worker_recent_max_ns: None,
         };
         let now = Instant::now();
         let mut progress = Progress::new(11200);
@@ -755,6 +758,7 @@ mod tests {
     fn complete_meter() -> Meter {
         Meter {
             diagnostics_epoch: 0,
+            running_for_ns: None,
             message_type: rc2fx_core::MeterType::Meter,
             revision: 235,
             generation: 5,
@@ -1212,6 +1216,7 @@ mod tests {
             generation,
             synthetic: false,
             diagnostics_epoch: epoch,
+            running_for_ns: None,
             targets: vec![target],
         }
     }

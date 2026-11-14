@@ -59,6 +59,7 @@ fn native_payload(callbacks: u64) -> (Meter, Vec<rc2fx_native_control::ContextSt
             }),
             lates: None,
             misses: None,
+            worker_recent_max_ns: None,
         })
         .collect();
     (
@@ -73,6 +74,7 @@ fn native_payload(callbacks: u64) -> (Meter, Vec<rc2fx_native_control::ContextSt
                 cpu_sample_every: 16,
                 ..Default::default()
             }),
+            recent_callback_wall_ns: None,
         }],
     )
 }
@@ -386,6 +388,7 @@ fn native_exports_preserve_worker_and_callback_clocks_without_main_callback_fabr
             }),
             lates: None,
             misses: None,
+            worker_recent_max_ns: None,
         }],
         timing: Some(CallbackTiming {
             cpu_sample_every: 16,
@@ -402,6 +405,7 @@ fn native_exports_preserve_worker_and_callback_clocks_without_main_callback_fabr
             ..Default::default()
         }),
         events: Vec::new(),
+        recent_callback_wall_ns: None,
     }];
     history.native_meter(value.clone(), native.clone());
     sample(&mut history, start);
@@ -497,6 +501,13 @@ fn controller_and_native_process_resources_are_separate_and_pid_reuse_is_rejecte
             process.resources(),
             ProcessResources::Measured { .. }
         ));
+        let start = process.start().expect("a measured process start");
+        assert_eq!(start.pid, std::process::id());
+        assert!(start.start_ticks > 0 && start.at_ns > 0);
+        assert!(
+            start.running_for_ns(crate::diagnostics_log::monotonic_ns()) > 0,
+            "this test process started before now"
+        );
         let wrong = NativeProcess {
             start_ticks: process.start_ticks.map(|ticks| ticks + 1),
             ..process
@@ -681,9 +692,12 @@ fn meter(generation: u64, revision: u64, callbacks: u64) -> Meter {
                 worker_cpu: timing(),
                 helper_late: Some(2),
                 helper_stalls: Some(1),
+                callback_recent_max_ns: None,
+                worker_recent_max_ns: None,
             }),
         }],
         diagnostics_epoch: 0,
+        running_for_ns: None,
     }
 }
 fn callbacks(meter: &Meter) -> Vec<CallbackDiagnostic> {
@@ -1320,4 +1334,60 @@ fn cadence_exports_live_and_terminal_without_promoting_gaps_to_faults() {
     assert_eq!(live["abovePeriod"], 4);
     assert_eq!(live["histogram"], serde_json::json!([0, 5, 3, 0, 1]));
     assert!(!kinds(&value).contains(&"audio-fault"));
+}
+
+#[test]
+fn process_start_ticks_land_on_the_event_clock_and_running_for_saturates() {
+    // `_SC_CLK_TCK` is 100 here, so field 22 counts 10 ms ticks since boot.
+    let start = ProcessStart::from_ticks(123, 987, 100).expect("a usable tick rate");
+    assert_eq!(
+        start,
+        ProcessStart {
+            pid: 123,
+            start_ticks: 987,
+            at_ns: 9_870_000_000,
+        }
+    );
+    assert_eq!(start.running_for_ns(10_000_000_000), 130_000_000);
+    assert_eq!(
+        start.running_for_ns(9_000_000_000),
+        0,
+        "a clock read before the start never wraps"
+    );
+    assert_eq!(ProcessStart::from_ticks(123, 987, 0), None);
+    // The product stays in 128 bits on a very long boot.
+    assert!(ProcessStart::from_ticks(123, u64::MAX, 1).is_some());
+}
+
+#[test]
+fn the_stat_start_time_converts_onto_the_event_clock() {
+    let mut fields = vec!["0".to_owned(); 22];
+    fields[0] = "S".into();
+    fields[17] = "4".into();
+    fields[19] = "987".into();
+    fields[20] = "65536".into();
+    fields[21] = "3".into();
+    let line = format!("123 (rc_audio_mixer) {}", fields.join(" "));
+    let ProcessResources::Measured {
+        start_ticks,
+        ticks_per_second,
+        ..
+    } = parse_process(line.as_bytes(), 123, 100, 4096).unwrap()
+    else {
+        panic!("a valid stat line is measured");
+    };
+    let start = ProcessStart::from_ticks(123, start_ticks, ticks_per_second).unwrap();
+    assert_eq!(start.start_ticks, 987);
+    assert_eq!(start.at_ns, 9_870_000_000);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unreadable_process_stat_leaves_no_process_start() {
+    let process = NativeProcess::capture(u32::MAX);
+    assert!(process.start().is_none());
+    assert!(matches!(
+        process.resources(),
+        ProcessResources::Unavailable { .. }
+    ));
 }

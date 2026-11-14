@@ -8,6 +8,7 @@ use crate::{
     events::{EventError, Subscription},
     facade::Facade,
     metrics::{Consumer, Reading},
+    recent::PathRecent,
     store::StoreError,
 };
 use rc2fx_core::{
@@ -376,6 +377,8 @@ struct Live<'owner> {
     faulted: bool,
     writes_ready: bool,
     latest: Vec<Option<Reading>>,
+    /// The callback and worker peaks of the last ten seconds, per path.
+    recent: Vec<PathRecent>,
     overload: crate::overload::Overload,
 }
 
@@ -510,6 +513,7 @@ impl<'owner> Coordinator<'owner> {
                     faulted: false,
                     writes_ready,
                     latest: vec![None; count],
+                    recent: vec![PathRecent::default(); count],
                     overload: crate::overload::Overload::default(),
                 })
             } else {
@@ -756,30 +760,37 @@ impl<'owner> Coordinator<'owner> {
             return;
         }
         let mut callback = Vec::with_capacity(observations.len());
-        let targets = observations
-            .iter()
-            .zip(&mut live.latest)
-            .map(|(observation, latest)| {
-                let reading = latest
-                    .take()
-                    .expect("every path has a fresh current window");
-                let mut details = CallbackDiagnostic::new(&observation.target_id, reading.totals)
-                    .with_window_revision(Some(reading.window.revision));
-                let (worker, worker_budget_ns) = match &observation.worker {
-                    WorkerSource::Absent => (rc2fx_suppression::Snapshot::default(), 0),
-                    WorkerSource::Live {
-                        telemetry,
-                        geometry,
-                    } => {
-                        let snapshot = telemetry.snapshot();
-                        details = details.with_worker(*geometry, snapshot, telemetry.termination());
-                        (snapshot, geometry.frame_budget_ns())
-                    }
-                };
-                callback.push(details);
-                target_meter_snapshot(observation, reading, worker, worker_budget_ns)
-            })
-            .collect();
+        let now = Instant::now();
+        let mut targets = Vec::with_capacity(observations.len());
+        for (index, (observation, latest)) in
+            observations.iter_mut().zip(&mut live.latest).enumerate()
+        {
+            let reading = latest
+                .take()
+                .expect("every path has a fresh current window");
+            let mut details = CallbackDiagnostic::new(&observation.target_id, reading.totals)
+                .with_window_revision(Some(reading.window.revision));
+            let (worker, worker_budget_ns) = match &observation.worker {
+                WorkerSource::Absent => (rc2fx_suppression::Snapshot::default(), 0),
+                WorkerSource::Live {
+                    telemetry,
+                    geometry,
+                } => {
+                    let snapshot = telemetry.snapshot();
+                    details = details.with_worker(*geometry, snapshot, telemetry.termination());
+                    (snapshot, geometry.frame_budget_ns())
+                }
+            };
+            callback.push(details);
+            targets.push(target_meter_snapshot(
+                observation,
+                reading,
+                worker,
+                worker_budget_ns,
+                &mut live.recent[index],
+                now,
+            ));
+        }
         self.controller.publish_meter(
             Meter {
                 message_type: MeterType::Meter,
@@ -789,6 +800,10 @@ impl<'owner> Coordinator<'owner> {
                 // The JACK path does not keep diagnostics baselines; the epoch
                 // still tells the app whether a reset happened.
                 diagnostics_epoch: self.controller.diagnostics_epoch(),
+                // Stamped by the controller, which owns each generation's
+                // anchor (the audio process's start, else its first Running
+                // report) for both the JACK and native paths.
+                running_for_ns: None,
                 targets,
             },
             &callback,
@@ -800,6 +815,15 @@ impl<'owner> Coordinator<'owner> {
         match command {
             Command::Wake => {}
             Command::ResetDiagnostics(reply) => {
+                if let Some(live) = &mut self.live {
+                    for recent in &mut live.recent {
+                        recent.clear();
+                    }
+                }
+                #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+                if let Some(native) = &mut self.native {
+                    native.clear_recent();
+                }
                 let state = self.controller.reset_diagnostics();
                 let _ = reply.send(Ok(state));
             }
@@ -979,7 +1003,17 @@ fn target_meter_snapshot(
     reading: Reading,
     worker: rc2fx_suppression::Snapshot,
     worker_budget_ns: u64,
+    recent: &mut PathRecent,
+    now: Instant,
 ) -> TargetMeter {
+    // The worker peak is taken here, once per published window, and not among
+    // the fault checks in `poll_audio`, whose snapshots are read more often.
+    let worker_peak = match &observation.worker {
+        WorkerSource::Absent => None,
+        WorkerSource::Live { telemetry, .. } => telemetry.take_wall_recent(),
+    };
+    recent.observe(reading.totals.recent_wall_ns, worker_peak, now);
+    let (callback_recent_max_ns, worker_recent_max_ns) = recent.value(now);
     let performance = observation.diagnostics.as_ref().and_then(|reader| {
         // A missing timing source is not zero-cost processing. Real timing
         // errors remain visible when instrumentation was requested.
@@ -993,6 +1027,8 @@ fn target_meter_snapshot(
             // The JACK path carries no helper counters.
             helper_late: None,
             helper_stalls: None,
+            callback_recent_max_ns,
+            worker_recent_max_ns,
         })
     });
     TargetMeter {
@@ -1259,9 +1295,16 @@ mod telemetry_tests {
             diagnostics: Some(reader),
         };
         assert!(
-            target_meter_snapshot(&observation, reading, Default::default(), 0)
-                .performance
-                .is_none()
+            target_meter_snapshot(
+                &observation,
+                reading,
+                Default::default(),
+                0,
+                &mut PathRecent::default(),
+                Instant::now(),
+            )
+            .performance
+            .is_none()
         );
     }
     #[test]
@@ -1312,7 +1355,14 @@ mod telemetry_tests {
             },
             ..Default::default()
         };
-        let result = target_meter_snapshot(&observation, reading, source, 10_000_000);
+        let result = target_meter_snapshot(
+            &observation,
+            reading,
+            source,
+            10_000_000,
+            &mut PathRecent::default(),
+            Instant::now(),
+        );
         assert_eq!(
             (
                 result.suppression_frames,
@@ -1335,5 +1385,72 @@ mod telemetry_tests {
         // The existing wire has no allowance-overrun field: it must not be
         // silently relabelled as frame-budget overruns.
         assert_eq!(performance.worker_wall.overruns, 0);
+    }
+
+    /// The path's own window: a startup spike ages out, a diagnostics reset
+    /// starts over, and the worker peak comes from the same window.
+    #[test]
+    fn the_jack_recent_maxima_age_out_and_clear() {
+        let mut slot = crate::metrics::Slot::new(2_333_333, false).unwrap();
+        let (_producer, consumer) = slot.split();
+        let (_writer, reader) = diagnostics::channel();
+        let observation = TargetObservation {
+            target_id: "one".into(),
+            consumer,
+            latency_samples: 0,
+            worker: WorkerSource::Absent,
+            diagnostics: Some(reader),
+        };
+        let reading = |recent| Reading {
+            window: crate::metrics::Window {
+                revision: 1,
+                frames: 2400,
+                meter: Default::default(),
+            },
+            totals: crate::metrics::Totals {
+                recent_wall_ns: recent,
+                ..Default::default()
+            },
+        };
+        let mut recent = PathRecent::default();
+        let start = Instant::now();
+        recent.observe(None, Some(6_000), start);
+        let first = target_meter_snapshot(
+            &observation,
+            reading(Some(900)),
+            Default::default(),
+            0,
+            &mut recent,
+            start,
+        );
+        let performance = first.performance.unwrap();
+        assert_eq!(performance.callback_recent_max_ns, Some(900));
+        assert_eq!(performance.worker_recent_max_ns, Some(6_000));
+        // Ten seconds later the startup spike is outside the window.
+        let later = target_meter_snapshot(
+            &observation,
+            reading(None),
+            Default::default(),
+            0,
+            &mut recent,
+            start + crate::recent::WINDOW,
+        );
+        let performance = later.performance.unwrap();
+        assert_eq!(performance.callback_recent_max_ns, None);
+        assert_eq!(performance.worker_recent_max_ns, None);
+        // A diagnostics reset starts over at once.
+        recent.observe(Some(400), Some(1_000), start + crate::recent::WINDOW);
+        recent.clear();
+        let reset = target_meter_snapshot(
+            &observation,
+            reading(None),
+            Default::default(),
+            0,
+            &mut recent,
+            start + crate::recent::WINDOW,
+        );
+        let performance = reset.performance.unwrap();
+        assert_eq!(performance.callback_recent_max_ns, None);
+        assert_eq!(performance.worker_recent_max_ns, None);
     }
 }

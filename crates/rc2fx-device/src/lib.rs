@@ -19,6 +19,7 @@ pub mod native_backend;
 pub mod native_plan;
 mod overload;
 mod persistence;
+pub mod recent;
 pub mod show_watch;
 pub mod stock_inputs;
 pub mod store;

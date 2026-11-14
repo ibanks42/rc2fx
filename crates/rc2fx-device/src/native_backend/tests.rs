@@ -27,6 +27,7 @@ fn initial_stream_readiness_is_distinct_from_a_running_path_stall() {
         frames: 0,
         last_progress: start,
         progressed: false,
+        recent: PathRecent::default(),
     };
     let deadline = Duration::from_secs(2);
     assert!(!path.timed_out(start + Duration::from_secs(7), start, deadline));
@@ -35,6 +36,44 @@ fn initial_stream_readiness_is_distinct_from_a_running_path_stall() {
     path.last_progress = start + Duration::from_secs(7);
     assert!(!path.timed_out(start + Duration::from_secs(8), start, deadline));
     assert!(path.timed_out(start + Duration::from_secs(9), start, deadline));
+}
+
+/// The reader's own window: a startup spike ages out, and the clear shared by
+/// `attach` (a new generation) and the diagnostics reset starts it over.
+#[test]
+fn a_native_paths_recent_peaks_age_out_and_clear() {
+    let start = Instant::now();
+    let mut path = Bound {
+        id: "usb-main".into(),
+        context: 1,
+        expected: [0; 32],
+        mode: PathMode::Processed,
+        kind: TargetKind::Playback,
+        channels: 2,
+        publication: 1,
+        frames: 0,
+        last_progress: start,
+        progressed: false,
+        recent: PathRecent::default(),
+    };
+    path.observe_recent(Some(900), Some(7_000), start);
+    assert_eq!(path.recent.value(start), (Some(900), Some(7_000)));
+    path.observe_recent(None, None, start + Duration::from_secs(10));
+    assert_eq!(
+        path.recent.value(start + Duration::from_secs(10)),
+        (None, None),
+        "the startup spike ages out"
+    );
+    path.observe_recent(Some(400), Some(1_000), start + Duration::from_secs(10));
+    assert_eq!(
+        path.recent.value(start + Duration::from_secs(10)),
+        (Some(400), Some(1_000))
+    );
+    path.clear_recent();
+    assert_eq!(
+        path.recent.value(start + Duration::from_secs(10)),
+        (None, None)
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +141,7 @@ impl Peer {
                     }),
                     lates: None,
                     misses: None,
+                    worker_recent_max_ns: None,
                 },
             })
             .collect();
@@ -168,6 +208,7 @@ impl Peer {
                                 timing: None,
                                 counters: Default::default(),
                                 events: Vec::new(),
+                                recent_callback_wall_ns: None,
                             }],
                         }
                     }
@@ -1135,6 +1176,7 @@ fn every_native_path_reports_performance() {
         worker,
         lates: None,
         misses: None,
+        worker_recent_max_ns: None,
     };
     let contexts = vec![ContextStatus {
         context: 1,
@@ -1146,9 +1188,18 @@ fn every_native_path_reports_performance() {
             helper_stalls: 1,
         },
         events: Vec::new(),
+        recent_callback_wall_ns: None,
     }];
 
-    let with = engine_performance(&contexts, "mic-1", Some(worker));
+    let with = engine_performance(
+        &contexts,
+        "mic-1",
+        Some(worker),
+        Some(910_000),
+        Some(6_100_000),
+    );
+    assert_eq!(with.callback_recent_max_ns, Some(910_000));
+    assert_eq!(with.worker_recent_max_ns, Some(6_100_000));
     assert_eq!(with.callback_budget_ns, 2_333_333);
     assert_eq!(with.worker_budget_ns, 9_333_333);
     assert_eq!(with.xruns, 5);
@@ -1161,7 +1212,7 @@ fn every_native_path_reports_performance() {
     );
 
     // No worker: the shared numbers are still there, the worker's are zero.
-    let without = engine_performance(&contexts, "bluetooth", None);
+    let without = engine_performance(&contexts, "bluetooth", None, None, None);
     assert_eq!(
         (without.xruns, without.helper_late, without.helper_stalls),
         (5, Some(2), Some(1))
@@ -1175,7 +1226,7 @@ fn every_native_path_reports_performance() {
 
     // A path whose context is gone (a race between inventory and path list)
     // reports what it can rather than nothing.
-    let unknown = engine_performance(&[], "mic-1", None);
+    let unknown = engine_performance(&[], "mic-1", None, None, None);
     assert_eq!((unknown.xruns, unknown.callback.calls), (0, 0));
     assert!(unknown.helper_late.is_some());
 }

@@ -350,6 +350,23 @@ impl Telemetry {
             turnaround: s.turnaround.snapshot(),
         }
     }
+    /// The worst turnaround since the last control-status read. Only that
+    /// reader takes it, so `snapshot` (read several times a tick) never
+    /// consumes the peak.
+    pub fn take_turnaround_recent(&self) -> Option<u64> {
+        match self.0.turnaround.take_recent() {
+            0 => None,
+            value => Some(value),
+        }
+    }
+    /// The worst model wall time since the last control-status read, on the
+    /// same terms as `take_turnaround_recent`.
+    pub fn take_wall_recent(&self) -> Option<u64> {
+        match self.0.wall.take_recent() {
+            0 => None,
+            value => Some(value),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopMode {

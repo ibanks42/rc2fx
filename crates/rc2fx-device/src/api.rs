@@ -510,6 +510,7 @@ mod tests {
             generation: 1,
             synthetic: false,
             diagnostics_epoch: 0,
+            running_for_ns: None,
             targets: vec![TargetMeter {
                 id: "mic-1".into(),
                 callbacks: 10,
@@ -524,6 +525,8 @@ mod tests {
                     worker_cpu: timing.clone(),
                     helper_late: Some(1),
                     helper_stalls: Some(0),
+                    callback_recent_max_ns: None,
+                    worker_recent_max_ns: None,
                 }),
                 ..TargetMeter {
                     id: "mic-1".into(),
@@ -807,6 +810,7 @@ mod tests {
         let versions = rc2fx_core::DeviceVersions {
             runtime: Some("0.1.0".into()),
             protocol: Some(1),
+            native_protocol: Some(6),
             firmware: Some("1.7.7".into()),
             firmware_profile: Some("rodecaster-pro-ii-1.7.7".into()),
         };

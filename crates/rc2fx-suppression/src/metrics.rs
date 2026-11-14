@@ -13,6 +13,9 @@ pub(crate) struct Counters {
     calls: AtomicU64,
     total: AtomicU64,
     max: AtomicU64,
+    /// Worst measurement since the last control read; only the control status
+    /// takes it. The cumulative `max` stays in `snapshot`.
+    recent: AtomicU64,
     overruns: AtomicU64,
     errors: AtomicU64,
     bins: [AtomicU64; 8],
@@ -39,10 +42,17 @@ impl Counters {
         if elapsed > self.max.load(Relaxed) {
             self.max.store(elapsed, Relaxed);
         }
+        if elapsed > self.recent.load(Relaxed) {
+            self.recent.store(elapsed, Relaxed);
+        }
         if elapsed > budget {
             self.overruns.fetch_add(1, Relaxed);
         }
         self.calls.fetch_add(1, Relaxed);
+    }
+    /// The worst measurement since the last call, and zero from then on.
+    pub fn take_recent(&self) -> u64 {
+        self.recent.swap(0, Relaxed)
     }
     pub fn snapshot(&self) -> Timing {
         Timing {
@@ -82,4 +92,28 @@ pub(crate) fn now(cpu: bool) -> Option<u64> {
 #[cfg(not(unix))]
 pub(crate) fn now(_cpu: bool) -> Option<u64> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The recent peak is taken once, and a smaller measurement never wins.
+    /// `snapshot` reads the cumulative maximum without consuming the peak.
+    #[test]
+    fn the_recent_peak_is_taken_once_and_keeps_the_largest() {
+        let counters = Counters::default();
+        counters.record(Some(0), Some(500), 1_000);
+        counters.record(Some(0), Some(300), 1_000);
+        assert_eq!(counters.snapshot().max_ns, 500);
+        assert_eq!(counters.take_recent(), 500);
+        assert_eq!(counters.take_recent(), 0);
+        counters.record(Some(0), Some(700), 1_000);
+        counters.record(Some(0), Some(400), 1_000);
+        assert_eq!(counters.snapshot().max_ns, 700);
+        assert_eq!(counters.take_recent(), 700);
+        // A failed clock read is not a peak.
+        counters.record(None, Some(900), 1_000);
+        assert_eq!(counters.take_recent(), 0);
+    }
 }

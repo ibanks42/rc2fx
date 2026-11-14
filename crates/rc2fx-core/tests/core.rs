@@ -429,6 +429,8 @@ fn performance_reports_helper_counters_and_accepts_payloads_without_them() {
         worker_cpu: timing,
         helper_late: Some(2),
         helper_stalls: Some(1),
+        callback_recent_max_ns: Some(180),
+        worker_recent_max_ns: Some(900),
     };
     let target = TargetMeter {
         id: "mic-1".into(),
@@ -457,22 +459,35 @@ fn performance_reports_helper_counters_and_accepts_payloads_without_them() {
         generation: 1,
         synthetic: false,
         diagnostics_epoch: 0,
+        running_for_ns: None,
         targets: vec![target],
     };
     let text = serde_json::to_string(&meter).unwrap();
     assert!(text.contains("\"helperLate\":2") && text.contains("\"helperStalls\":1"));
+    assert!(
+        text.contains("\"callbackRecentMaxNs\":180") && text.contains("\"workerRecentMaxNs\":900")
+    );
     let back: Meter = serde_json::from_str(&text).unwrap();
     assert_eq!(back, meter);
-    // A mixer that predates the field sends no helper counts: they are absent
-    // rather than zero, so "not reported" stays distinguishable from "none".
+    // A mixer that predates the fields sends none: they are absent rather than
+    // zero, so "not reported" stays distinguishable from "none".
     let mut old: serde_json::Value = serde_json::to_value(&meter).unwrap();
     let object = old["targets"][0]["performance"].as_object_mut().unwrap();
     object.remove("helperLate");
     object.remove("helperStalls");
+    object.remove("callbackRecentMaxNs");
+    object.remove("workerRecentMaxNs");
     let old: Meter = serde_json::from_value(old).unwrap();
     let performance = old.targets[0].performance.as_ref().unwrap();
     assert_eq!(
         (performance.helper_late, performance.helper_stalls),
+        (None, None)
+    );
+    assert_eq!(
+        (
+            performance.callback_recent_max_ns,
+            performance.worker_recent_max_ns
+        ),
         (None, None)
     );
     assert_eq!(performance.xruns, 3);
@@ -606,6 +621,7 @@ fn device_status_text_must_be_fit_to_show() {
     let versions = DeviceVersions {
         runtime: Some("0.1.2".into()),
         protocol: Some(1),
+        native_protocol: None,
         firmware: Some("1.7.7".into()),
         firmware_profile: Some("rodecaster-pro-ii-1.7.7".into()),
     };

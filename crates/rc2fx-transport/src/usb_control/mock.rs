@@ -602,6 +602,9 @@ impl Mixer {
             generation: self.engine.generation,
             synthetic: true,
             diagnostics_epoch: self.diagnostics_epoch,
+            // The mock has no engine-generation clock of its own; a reader
+            // falls back to counting frames.
+            running_for_ns: None,
             targets: self
                 .config
                 .targets
@@ -664,15 +667,20 @@ impl Mixer {
             clock_errors: 0,
             histogram: [calls, 0, 0, 0, 0, 0, 0, 0],
         };
+        // This mixer's peak is constant, so its recent window carries the same
+        // value; nothing timed is absent, never a zero cost.
+        let callbacks = self.frames / u64::from(BLOCK_SIZE);
         Performance {
             callback_budget_ns: 2_333_333,
             worker_budget_ns: 9_333_333,
             xruns: self.xruns,
-            callback: timing(self.frames / u64::from(BLOCK_SIZE), 420_000, 910_000),
+            callback: timing(callbacks, 420_000, 910_000),
             worker_wall: timing(worker_frames, 2_100_000, 3_800_000),
             worker_cpu: timing(worker_frames, 1_900_000, 3_400_000),
             helper_late: Some(0),
             helper_stalls: Some(0),
+            callback_recent_max_ns: (callbacks > 0).then_some(910_000),
+            worker_recent_max_ns: (worker_frames > 0).then_some(3_800_000),
         }
     }
 }
@@ -681,6 +689,7 @@ fn versions() -> DeviceVersions {
     DeviceVersions {
         runtime: Some(env!("CARGO_PKG_VERSION").into()),
         protocol: Some(MIXER_PROTOCOL_VERSION),
+        native_protocol: None,
         firmware: Some(FIRMWARE.into()),
         firmware_profile: Some(FIRMWARE_PROFILE.into()),
     }

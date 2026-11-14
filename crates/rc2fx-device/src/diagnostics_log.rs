@@ -589,6 +589,7 @@ mod tests {
                 helper_stalls: performance.helper_stalls.unwrap_or(0),
             },
             events,
+            recent_callback_wall_ns: None,
         }
     }
 
@@ -605,6 +606,7 @@ mod tests {
             generation: 1,
             synthetic: false,
             diagnostics_epoch: 0,
+            running_for_ns: None,
             targets: vec![TargetMeter {
                 id: "mic-1".into(),
                 input_peak: 0.,
@@ -633,6 +635,10 @@ mod tests {
                     worker_cpu: worker,
                     helper_late: Some(1),
                     helper_stalls: Some(0),
+                    // Already a window, not a cumulative maximum: the
+                    // baseline below must leave these alone.
+                    callback_recent_max_ns: Some(750),
+                    worker_recent_max_ns: Some(2_600),
                 }),
             }],
         }
@@ -666,6 +672,15 @@ mod tests {
         );
         assert_eq!(performance.callback.histogram, [1, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(performance.worker_wall.max_ns, 400);
+        // Recent maxima are already windows, not cumulative figures, so a
+        // reset must not rebaseline them.
+        assert_eq!(
+            (
+                performance.callback_recent_max_ns,
+                performance.worker_recent_max_ns
+            ),
+            (Some(750), Some(2_600))
+        );
         // A sample that does not beat the pre-reset maximum reports no
         // maximum: 0 means "nothing since the reset has beaten it".
         let mut fourth = meter(
@@ -895,6 +910,7 @@ mod tests {
             timing: None,
             counters: Default::default(),
             events: vec![native_event(1, NativeEventKind::Overrun)],
+            recent_callback_wall_ns: None,
         };
         log.observe(Some(&meter), std::slice::from_ref(&context), 1_000);
         // The same tail again (as every context reports it) adds nothing.
@@ -946,6 +962,7 @@ mod tests {
             worker: None,
             misses: Some(history(vec![(1, 100)])),
             lates: Some(history(vec![(1, 200)])),
+            worker_recent_max_ns: None,
         };
         let context = |status: &TargetStatus| ContextStatus {
             context: 1,
@@ -953,6 +970,7 @@ mod tests {
             timing: None,
             counters: Default::default(),
             events: vec![],
+            recent_callback_wall_ns: None,
         };
         let meter = meter(timing(1, 100, [0; 8]), timing(1, 100, [0; 8]));
         log.observe(Some(&meter), &[context(&status)], 1_000);

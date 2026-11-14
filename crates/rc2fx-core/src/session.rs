@@ -248,6 +248,13 @@ pub struct Performance {
     pub helper_late: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_stalls: Option<u64>,
+    /// Slowest audio callback, and slowest suppression worker turnaround
+    /// (wall time), within roughly the last 10 s of audio. Absent from a
+    /// mixer that predates them, or before any timing in the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_recent_max_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_recent_max_ns: Option<u64>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Meter {
@@ -261,6 +268,17 @@ pub struct Meter {
     /// changes. 0 means "never reset" (and is what an older mixer sends).
     #[serde(default, rename = "diagnosticsEpoch")]
     pub diagnostics_epoch: u64,
+    /// How long this engine generation has been running when the reading
+    /// was made, on the daemon's monotonic clock: from the start of the audio
+    /// process that runs the engine (the mixer's own process), or from the
+    /// moment it was first reported Running when that start cannot be read.
+    /// Lets a reader place the startup window. Absent from older mixers.
+    #[serde(
+        default,
+        rename = "runningForNs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub running_for_ns: Option<u64>,
     pub targets: Vec<TargetMeter>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

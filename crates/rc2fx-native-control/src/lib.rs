@@ -10,7 +10,16 @@ pub use linux::Client;
 mod save;
 #[cfg(target_os = "linux")]
 pub use save::{ControlFailure, Publication, SaveFailure, Saved};
-pub const VERSION: u32 = 6;
+/// The control protocol this build speaks.
+///
+/// Version 7 added two optional reply fields that a version 6 peer cannot
+/// decode (`ContextStatus::recent_callback_wall_ns` and
+/// `TargetStatus::worker_recent_max_ns`); a reply to a version 6 peer leaves
+/// them out, and is otherwise identical to version 6.
+pub const VERSION: u32 = 7;
+/// The oldest control protocol this build still speaks. A request or response
+/// outside `MIN_VERSION..=VERSION` is refused as `UnsupportedVersion`.
+pub const MIN_VERSION: u32 = 6;
 /// Shared bound for the native launch plan and controller's path registry.
 /// Includes the physical channels and the virtual USB playback/send paths.
 pub const MAX_PATHS: usize = 32;
@@ -186,6 +195,10 @@ pub struct TargetStatus {
     pub misses: Option<NativeHistory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lates: Option<NativeHistory>,
+    /// The worst worker turnaround since the previous status read. Only this
+    /// reader takes it, so the cumulative `worker.turnaround` stays intact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_recent_max_ns: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -193,6 +206,10 @@ pub struct ContextStatus {
     pub context: u64,
     pub targets: Vec<TargetStatus>,
     pub timing: Option<CallbackTiming>,
+    /// The worst callback wall time since the previous inventory read. Only
+    /// the inventory takes it; the audit report's snapshot never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_callback_wall_ns: Option<u64>,
     /// Engine-wide counters, always sent: cheap atomics the audio path already
     /// writes, independent of whether callback timing is sampled.
     #[serde(default)]
@@ -516,6 +533,7 @@ mod decode_tests {
                 worker: (self.below(3) == 0).then(|| self.worker()),
                 misses: (self.below(3) == 0).then(|| self.history()),
                 lates: (self.below(3) == 0).then(|| self.history()),
+                worker_recent_max_ns: (self.below(3) == 0).then(|| self.count()),
             }
         }
         fn context(&mut self) -> ContextStatus {
@@ -561,6 +579,7 @@ mod decode_tests {
                         delayed_us: (self.below(2) == 0).then(|| self.count()),
                     })
                     .collect(),
+                recent_callback_wall_ns: (self.below(3) == 0).then(|| self.count()),
             }
         }
         fn response(&mut self, reply: Reply) -> Response {

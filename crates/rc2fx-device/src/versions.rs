@@ -78,6 +78,13 @@ pub fn read(
     (versions, problems)
 }
 
+/// Records the native library's control protocol next to the mixer's own
+/// versions, when it is older than this daemon's. A current library leaves the
+/// field absent: there is nothing to report.
+pub fn note_native_protocol(versions: &mut DeviceVersions, protocol: u32) {
+    versions.native_protocol = (protocol < rc2fx_native_control::VERSION).then_some(protocol);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +153,28 @@ mod tests {
         let (v, problems) = read(None, None, None, Model::ProIi);
         assert_eq!(v, DeviceVersions::default());
         assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn an_older_native_library_is_reported_and_a_current_one_is_not() {
+        let mut versions = DeviceVersions::default();
+        note_native_protocol(&mut versions, rc2fx_native_control::VERSION);
+        assert_eq!(versions.native_protocol, None);
+        note_native_protocol(&mut versions, rc2fx_native_control::MIN_VERSION);
+        assert_eq!(
+            versions.native_protocol,
+            Some(rc2fx_native_control::MIN_VERSION)
+        );
+        assert_eq!(
+            serde_json::to_string(&versions).unwrap(),
+            format!(
+                r#"{{"nativeProtocol":{}}}"#,
+                rc2fx_native_control::MIN_VERSION
+            )
+        );
+        note_native_protocol(&mut versions, rc2fx_native_control::VERSION + 1);
+        assert_eq!(versions.native_protocol, None);
+        assert_eq!(serde_json::to_string(&versions).unwrap(), "{}");
     }
 
     #[test]

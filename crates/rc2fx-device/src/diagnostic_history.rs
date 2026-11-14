@@ -177,6 +177,51 @@ fn process_resources_for(pid: u32) -> ProcessResources {
         }
     }
 }
+/// When the process that runs the engine started, on the same clock the
+/// diagnostics events are stamped with.
+///
+/// `/proc/<pid>/stat` field 22 (`starttime`) counts `_SC_CLK_TCK` ticks since
+/// boot, which the kernel measures against boot time and therefore includes
+/// suspend. This device never suspends, so `CLOCK_MONOTONIC` tracks boot time
+/// and the ticks convert directly onto the `CLOCK_MONOTONIC` the engine's own
+/// event times use (see `crate::diagnostics_log::monotonic_ns`). If the event
+/// clock ever became `CLOCK_BOOTTIME`, this arithmetic is still the matching
+/// one; only the daemon's "now" would need the matching `clock_gettime`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProcessStart {
+    pub pid: u32,
+    /// Field 22 of `/proc/<pid>/stat`: the process identity, and what changes
+    /// when the audio process restarts.
+    pub start_ticks: u64,
+    /// `start_ticks` on the event clock, in nanoseconds.
+    pub at_ns: u64,
+}
+impl ProcessStart {
+    /// The boot-relative tick count converted onto the event clock. `None`
+    /// when the tick rate is unusable, which leaves the caller its own
+    /// fallback anchor.
+    pub fn from_ticks(pid: u32, start_ticks: u64, ticks_per_second: u64) -> Option<Self> {
+        if ticks_per_second == 0 {
+            return None;
+        }
+        // A 128-bit product keeps a long boot from overflowing before the
+        // division; the result of a real boot always fits in 64 bits.
+        let at_ns = (u128::from(start_ticks) * 1_000_000_000 / u128::from(ticks_per_second))
+            .min(u128::from(u64::MAX)) as u64;
+        Some(Self {
+            pid,
+            start_ticks,
+            at_ns,
+        })
+    }
+    /// How long the process had been running at `now_ns` on the same clock.
+    /// Saturates, so a read that lands before the start reports zero instead
+    /// of wrapping.
+    pub fn running_for_ns(&self, now_ns: u64) -> u64 {
+        now_ns.saturating_sub(self.at_ns)
+    }
+}
+
 /// Bind accounting once to the native process's start identity. A reused PID
 /// must never relabel some other process's CPU/RSS as mixer performance.
 #[cfg(all(target_os = "linux", any(test, feature = "native-pipeline")))]
@@ -184,15 +229,37 @@ fn process_resources_for(pid: u32) -> ProcessResources {
 pub(crate) struct NativeProcess {
     pid: u32,
     start_ticks: Option<u64>,
+    /// The start identity is read from `/proc` once, when the session is
+    /// bound, and converted with it: no later meter or event path reads
+    /// `/proc` again, and nothing here runs on an audio thread.
+    started: Option<ProcessStart>,
 }
 #[cfg(all(target_os = "linux", any(test, feature = "native-pipeline")))]
 impl NativeProcess {
     pub(crate) fn capture(pid: u32) -> Self {
-        let start_ticks = match process_resources_for(pid) {
-            ProcessResources::Measured { start_ticks, .. } => Some(start_ticks),
-            ProcessResources::Unavailable { .. } => None,
-        };
-        Self { pid, start_ticks }
+        match process_resources_for(pid) {
+            ProcessResources::Measured {
+                start_ticks,
+                ticks_per_second,
+                ..
+            } => Self {
+                pid,
+                start_ticks: Some(start_ticks),
+                started: ProcessStart::from_ticks(pid, start_ticks, ticks_per_second),
+            },
+            // An unreadable stat leaves the caller its first-observation
+            // anchor rather than inventing a start time.
+            ProcessResources::Unavailable { .. } => Self {
+                pid,
+                start_ticks: None,
+                started: None,
+            },
+        }
+    }
+    /// When this process started, on the diagnostics clock. `None` when
+    /// `/proc/<pid>/stat` could not be read at capture.
+    pub(crate) fn start(&self) -> Option<ProcessStart> {
+        self.started
     }
     pub(crate) fn resources(&self) -> ProcessResources {
         let Some(expected) = self.start_ticks else {

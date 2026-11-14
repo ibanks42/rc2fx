@@ -175,6 +175,29 @@ fn accumulation_matches_window_and_stereo_rms_without_losing_boundary_frames() {
 }
 
 #[test]
+fn a_published_window_carries_its_worst_callback_and_the_next_starts_over() {
+    let mut slot = Slot::new(2_333_333, false).unwrap();
+    let (mut producer, mut consumer) = slot.split();
+    for _ in 0..21 {
+        producer.record(Some(meter(112, 0.4, 1)), 1, 112, elapsed(100));
+    }
+    assert_eq!(
+        producer.record(Some(meter(112, 0.4, 1)), 1, 112, elapsed(900)),
+        RecordResult::Published
+    );
+    let reading = consumer.pop().unwrap();
+    assert_eq!(reading.totals.wall.max_ns, 900);
+    assert_eq!(reading.totals.recent_wall_ns, Some(900));
+    for _ in 0..22 {
+        producer.record(Some(meter(112, 0.4, 1)), 1, 112, elapsed(50));
+    }
+    let reading = consumer.pop().unwrap();
+    // The cumulative maximum is untouched; the recent peak is this window's.
+    assert_eq!(reading.totals.wall.max_ns, 900);
+    assert_eq!(reading.totals.recent_wall_ns, Some(50));
+}
+
+#[test]
 fn changed_revision_discards_partial_amplitudes_but_keeps_cumulative_counters() {
     let mut slot = Slot::new(1000, false).unwrap();
     let (mut producer, mut consumer) = slot.split();

@@ -70,6 +70,9 @@ pub struct DeviceVersions {
     /// The installed runtime's control protocol version.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<u32>,
+    /// The native library's control protocol, when older than this daemon's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_protocol: Option<u32>,
     /// RØDE's firmware version, from the profile the launcher validated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware: Option<String>,
@@ -177,10 +180,11 @@ mod tests {
             "{}"
         );
         let newer: DeviceVersions = serde_json::from_str(
-            r#"{"runtime":"0.2.0","protocol":2,"firmware":"1.7.7","firmwareProfile":"rodecaster-pro-ii-1.7.7","future":true}"#,
+            r#"{"runtime":"0.2.0","protocol":2,"nativeProtocol":6,"firmware":"1.7.7","firmwareProfile":"rodecaster-pro-ii-1.7.7","future":true}"#,
         )
         .unwrap();
         assert_eq!(newer.runtime.as_deref(), Some("0.2.0"));
+        assert_eq!(newer.native_protocol, Some(6));
         assert_eq!(
             newer.firmware_profile.as_deref(),
             Some("rodecaster-pro-ii-1.7.7")

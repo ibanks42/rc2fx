@@ -191,6 +191,10 @@ pub struct Totals {
     pub unmeasured_callbacks: u64,
     pub dropped_windows: u64,
     pub wall: Timing,
+    /// The worst callback wall time recorded for the window that just
+    /// finished; reset when that window is published. Cumulative maxima in
+    /// `wall` stay intact.
+    pub recent_wall_ns: Option<u64>,
     pub thread_cpu: Option<Timing>,
     pub cadence: Cadence,
     pub saturated: bool,
@@ -346,6 +350,7 @@ impl Producer<'_> {
         );
         if let Some(elapsed) = elapsed {
             totals.wall.add(elapsed.wall_ns, state.budget_ns);
+            totals.recent_wall_ns = totals.recent_wall_ns.max(elapsed.wall_ns());
             if let Some(cpu) = &mut totals.thread_cpu {
                 cpu.add(elapsed.thread_cpu_ns, state.budget_ns);
             }
@@ -420,6 +425,9 @@ impl Producer<'_> {
             self.queue
                 .written
                 .store(written.wrapping_add(1), Ordering::Release);
+            // The published copy carries this window's peak; the next window
+            // starts over.
+            totals.recent_wall_ns = None;
             RecordResult::Published
         } else {
             add(&mut totals.dropped_windows, 1, &mut totals.saturated);

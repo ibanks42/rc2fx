@@ -2,7 +2,7 @@
 use crate::{
     audio::{Control, PrepareError},
     coordinator::{Action, Error, GenerationPhase, GenerationUpdate, Request, RuntimeDescriptor},
-    diagnostic_history::CallbackDiagnostic,
+    diagnostic_history::{CallbackDiagnostic, ProcessStart},
     events::{EventError, Subscription},
     facade::Facade,
     store::{PreparedSave, Store, StoreError},
@@ -21,10 +21,29 @@ pub struct Controller {
     /// Diagnostics baselines and the event log: off the audio path, fed from
     /// the control side's readings.
     diagnostics: crate::diagnostics_log::DiagnosticsLog,
+    /// The generation reported Running, and the anchor its age is measured
+    /// from. Only the first report for a generation counts, so the engine's age
+    /// never restarts at a poll, a stall, or a diagnostics reset.
+    running_since: Option<(u64, RunningAnchor)>,
+    /// The audio process that runs this generation, when its start is known:
+    /// the native mixer process. Adopted once on the control thread from the
+    /// identity read at attach; no audio-path code reads `/proc`.
+    process_start: Option<ProcessStart>,
 }
 pub(crate) enum EffectApply {
     Saved(Box<DeviceState>),
     Replacement(rc2fx_core::Config),
+}
+/// Where `running_for_ns` measures a generation from.
+#[derive(Clone, Copy, Debug)]
+enum RunningAnchor {
+    /// The start of the process that runs the engine, on the same
+    /// `CLOCK_MONOTONIC` the diagnostics events are stamped with.
+    Process(ProcessStart),
+    /// Fallback: the first Running report this daemon saw, on `Instant` (also
+    /// `CLOCK_MONOTONIC` on Linux). Used when the process start cannot be
+    /// read, and for JACK, whose server pid is not known to this daemon.
+    FirstReport(std::time::Instant),
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -118,6 +137,10 @@ impl Controller {
         self.selection.qualified_target_ids = runtime.bound_ids();
         self.selection.allowed = false;
         self.engine.message = "Waiting for the native callback owner".into();
+        // The mixer process that runs the engine is already up when this
+        // daemon connects: anchoring at its start makes startup cover the
+        // xruns and stalls before the first observation, not just after it.
+        self.note_process_start(runtime.process.start());
         self.saved();
         Ok(())
     }
@@ -138,6 +161,9 @@ impl Controller {
         } else {
             0
         };
+        if observation.advancing && !observation.failure {
+            self.note_running(self.engine.generation);
+        }
         self.engine.status = if observation.failure {
             EnginePhase::Error
         } else if observation.advancing {
@@ -451,6 +477,7 @@ impl Controller {
     ) -> Result<DeviceState, Error> {
         let next = self.store.reserve_generation()?;
         self.engine.generation = next;
+        self.running_since = None;
         self.engine.status = EnginePhase::Restarting;
         self.engine.restart_allowed = false;
         self.engine.audio_advancing = false;
@@ -515,6 +542,8 @@ impl Controller {
                 message: "Audio engine has not been started".into(),
             },
             diagnostics: crate::diagnostics_log::DiagnosticsLog::default(),
+            running_since: None,
+            process_start: None,
         };
         controller.saved();
         controller
@@ -523,6 +552,58 @@ impl Controller {
     /// The diagnostics epoch: bumped by each reset, carried by every meter.
     pub fn diagnostics_epoch(&self) -> u64 {
         self.diagnostics.epoch()
+    }
+    /// Records the first Running report for `generation`, from the native or
+    /// the JACK progress poll (both on the manager thread). A later report for
+    /// the same generation keeps the original anchor, so an engine that
+    /// stalls and recovers does not appear to restart. When the daemon knows
+    /// when the audio process started, that is the anchor and the age covers
+    /// everything since; otherwise the earliest trustworthy point is this
+    /// first Running report.
+    fn note_running(&mut self, generation: u64) {
+        if self
+            .running_since
+            .is_none_or(|(running, _)| running != generation)
+        {
+            let anchor = self.process_start.map_or_else(
+                || RunningAnchor::FirstReport(std::time::Instant::now()),
+                RunningAnchor::Process,
+            );
+            self.running_since = Some((generation, anchor));
+        }
+    }
+    /// Adopts the start of the audio process that runs the engine. Called on
+    /// the control thread with the identity captured there; `None` (an
+    /// unreadable `/proc/<pid>/stat`) leaves the first-Running fallback. A
+    /// restarted process replaces the anchor for the current generation, so
+    /// its age starts from its own start, not the old process's.
+    fn note_process_start(&mut self, start: Option<ProcessStart>) {
+        self.process_start = start;
+        if let (Some((generation, RunningAnchor::Process(current))), Some(start)) =
+            (self.running_since, start)
+            && (current.pid, current.start_ticks) != (start.pid, start.start_ticks)
+        {
+            self.running_since = Some((generation, RunningAnchor::Process(start)));
+        }
+    }
+    /// How long `generation` has been running on the diagnostics clock, from
+    /// the audio process's start when known, or its first Running report
+    /// otherwise. `None` until it runs, and for any generation other than the
+    /// one recorded. A diagnostics reset never touches it: this is the
+    /// engine's age, not the counters'.
+    pub(crate) fn running_for_ns(&self, generation: u64) -> Option<u64> {
+        let (running, anchor) = self.running_since?;
+        if running != generation {
+            return None;
+        }
+        Some(match anchor {
+            RunningAnchor::Process(start) => {
+                start.running_for_ns(crate::diagnostics_log::monotonic_ns())
+            }
+            RunningAnchor::FirstReport(at) => {
+                at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+            }
+        })
     }
     /// Resets the diagnostics baselines and starts the event log over with a
     /// `reset` entry; sequence numbers continue. No audio-path effect.
@@ -620,6 +701,10 @@ impl Controller {
 
     pub(crate) fn attach_runtime(&mut self, descriptor: &RuntimeDescriptor, selected: Vec<String>) {
         self.engine.generation = descriptor.generation;
+        self.running_since = None;
+        // A new generation gets the process identity its caller supplies, if
+        // any; JACK has none, and keeps the first-Running fallback.
+        self.note_process_start(None);
         self.engine.mode = descriptor.mode;
         self.engine.status = EnginePhase::Starting;
         self.engine.restart_allowed = false;
@@ -652,6 +737,7 @@ impl Controller {
         } else if advancing && revision != 0 {
             self.engine.status = EnginePhase::Running;
             self.engine.message = "Allocated audio callbacks are advancing".into();
+            self.note_running(self.engine.generation);
         }
         if self.engine != prior {
             self.saved();
@@ -763,6 +849,11 @@ impl Controller {
         {
             return false;
         }
+        // Engine age, not counter age: stamped here so the native and the JACK
+        // paths both report the controller's anchor (the audio process's start
+        // when known, else the first Running report), and a diagnostics reset
+        // (which rewrites only the counters) leaves it.
+        meter.running_for_ns = self.running_for_ns(meter.generation);
         meter.targets.sort_by_key(|target| {
             self.store
                 .config()
@@ -787,5 +878,164 @@ impl Controller {
 
     pub fn disconnect_clients(&mut self) {
         self.front.disconnect();
+    }
+}
+
+#[cfg(test)]
+mod running_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn descriptor(generation: u64) -> RuntimeDescriptor {
+        RuntimeDescriptor {
+            generation,
+            mode: EngineMode::Jack,
+            sample_rate: 48_000,
+            block_size: 112,
+            progress_timeout: Duration::from_secs(2),
+        }
+    }
+
+    /// A meter the controller accepts as current: this generation, this
+    /// revision, and no allocated paths.
+    fn meter(control: &Controller) -> Meter {
+        Meter {
+            message_type: rc2fx_core::MeterType::Meter,
+            revision: control.config().revision,
+            generation: control.engine.generation,
+            synthetic: false,
+            diagnostics_epoch: 0,
+            running_for_ns: None,
+            targets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn engine_age_starts_at_running_and_survives_a_diagnostics_reset() {
+        // JACK (no process start known here) keeps the first-Running anchor.
+        let directory = tempfile::tempdir().unwrap();
+        let config = rc2fx_core::Config::default();
+        let mut control = Controller::new(Store::open(directory.path(), config).unwrap());
+        control.attach_runtime(&descriptor(1), Vec::new());
+        assert_eq!(control.running_for_ns(1), None, "not running yet");
+
+        let attach = Instant::now();
+        control.audio_progress(1, true, None);
+        std::thread::sleep(Duration::from_millis(30));
+        let mut first = meter(&control);
+        assert!(control.prepare_meter(&mut first));
+        let age = Duration::from_nanos(first.running_for_ns.expect("the generation runs"));
+        assert!(
+            age >= Duration::from_millis(25) && age <= attach.elapsed(),
+            "about the time since Running: {age:?}"
+        );
+        // The same generation reported again keeps its original start.
+        control.audio_progress(1, true, None);
+        assert!(control.running_for_ns(1).unwrap() >= age.as_nanos() as u64);
+
+        // A new generation starts over, and the old one is not reported.
+        control.attach_runtime(&descriptor(2), Vec::new());
+        assert_eq!(control.running_for_ns(1), None);
+        control.audio_progress(1, true, None);
+        let mut second = meter(&control);
+        assert!(control.prepare_meter(&mut second));
+        let second_age =
+            Duration::from_nanos(second.running_for_ns.expect("the new generation runs"));
+        assert!(second_age < age, "a new generation's age starts over");
+
+        // A diagnostics reset rebaselines the counters, never the engine age.
+        let before_reset = control.running_for_ns(2).unwrap();
+        control.reset_diagnostics();
+        let after_reset = control.running_for_ns(2).unwrap();
+        assert!(
+            after_reset >= before_reset,
+            "a reset does not restart the engine clock"
+        );
+        let mut third = meter(&control);
+        assert!(control.prepare_meter(&mut third));
+        let shown = control.diagnostics.shown(&third);
+        assert_eq!(shown.running_for_ns, third.running_for_ns);
+        assert_eq!(
+            shown.diagnostics_epoch, 1,
+            "the reset still bumps the epoch"
+        );
+    }
+
+    fn process(pid: u32, start_ticks: u64, at_ns: u64) -> ProcessStart {
+        ProcessStart {
+            pid,
+            start_ticks,
+            at_ns,
+        }
+    }
+
+    /// The age includes the time before this daemon first saw the engine:
+    /// that is the startup window the app has to hide.
+    #[test]
+    fn a_known_process_start_anchors_before_the_first_running_report() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut control =
+            Controller::new(Store::open(directory.path(), rc2fx_core::Config::default()).unwrap());
+        control.attach_runtime(&descriptor(1), Vec::new());
+        let observed = crate::diagnostics_log::monotonic_ns();
+        let started = observed.saturating_sub(10_000_000_000);
+        control.note_process_start(Some(process(4242, 987, started)));
+        control.audio_progress(1, true, None);
+        let age = control.running_for_ns(1).expect("the generation runs");
+        assert!(
+            age >= observed.saturating_sub(started),
+            "the age covers everything since the audio process started: {age}"
+        );
+        let mut meter = meter(&control);
+        assert!(control.prepare_meter(&mut meter));
+        assert!(meter.running_for_ns.expect("stamped") >= age);
+        // A diagnostics reset rebaselines the counters, never the anchor.
+        control.reset_diagnostics();
+        assert!(control.running_for_ns(1).expect("still running") >= age);
+    }
+
+    /// Without a readable process start the first Running report anchors, as
+    /// it did before the process start was known.
+    #[test]
+    fn an_unknown_process_start_falls_back_to_the_first_running_report() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut control =
+            Controller::new(Store::open(directory.path(), rc2fx_core::Config::default()).unwrap());
+        control.attach_runtime(&descriptor(1), Vec::new());
+        control.note_process_start(None);
+        let attached = Instant::now();
+        control.audio_progress(1, true, None);
+        std::thread::sleep(Duration::from_millis(10));
+        let age = Duration::from_nanos(control.running_for_ns(1).expect("the generation runs"));
+        assert!(
+            age >= Duration::from_millis(5) && age <= attached.elapsed(),
+            "about the time since Running: {age:?}"
+        );
+    }
+
+    /// A restarted audio process re-anchors the same generation at its own
+    /// start instead of inheriting the old process's age.
+    #[test]
+    fn a_new_process_identity_re_anchors_the_generation() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut control =
+            Controller::new(Store::open(directory.path(), rc2fx_core::Config::default()).unwrap());
+        control.attach_runtime(&descriptor(1), Vec::new());
+        // A process that started at boot: its age is the whole uptime.
+        let before = crate::diagnostics_log::monotonic_ns();
+        control.note_process_start(Some(process(11, 100, 0)));
+        control.audio_progress(1, true, None);
+        let old = control.running_for_ns(1).expect("the generation runs");
+        assert!(old >= before);
+
+        // The new process started just now: the generation's age restarts
+        // from that start, not from the old process's.
+        let started = crate::diagnostics_log::monotonic_ns();
+        control.note_process_start(Some(process(12, 200, started)));
+        let new = control
+            .running_for_ns(1)
+            .expect("the generation still runs");
+        assert!(new < old, "the new process's start replaces the old");
+        assert!(new < 1_000_000_000, "the new process has only just started");
     }
 }
