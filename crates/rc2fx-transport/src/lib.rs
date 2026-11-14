@@ -483,6 +483,26 @@ impl Device {
         }
         self.request("POST", &format!("{path}/install"), None)
             .await?;
+        // The mixer checks the metadata before answering, then the payload on
+        // its own thread: wait until it installs (and restarts) or refuses.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+        while tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            match self.request("GET", &path, None).await {
+                Ok(session) => match session.get("state").and_then(Value::as_str) {
+                    Some("failed") => {
+                        let why = session.get("error").and_then(Value::as_str);
+                        return Err(RequestError::Status(409, why.map(str::to_owned)));
+                    }
+                    Some("restarting") => return Ok(()),
+                    Some(_) => {}
+                    None => return Err(RequestError::Protocol),
+                },
+                // The controller is being replaced: the install went ahead.
+                Err(RequestError::Usb(_) | RequestError::Status(404, _)) => return Ok(()),
+                Err(error) => return Err(error),
+            }
+        }
         Ok(())
     }
 

@@ -757,9 +757,11 @@ impl Model {
 
     /// The verified release, once, for the app to send to the mixer.
     pub fn take_in_place_bundle(&mut self) -> Option<InPlaceBundle> {
-        let InPlace::Ready(bundle) = std::mem::take(&mut self.in_place) else {
+        // Asked on every poll: anything but Ready stays exactly as it is.
+        let InPlace::Ready(bundle) = &self.in_place else {
             return None;
         };
+        let bundle = bundle.clone();
         self.in_place = InPlace::Uploading {
             version: bundle.version.clone(),
             sent: 0,
@@ -2649,6 +2651,20 @@ mod tests {
             }
         ));
         assert_eq!(m.take_in_place_bundle(), None, "handed over once");
+        assert!(
+            matches!(
+                m.in_place,
+                InPlace::Uploading {
+                    sent: 0,
+                    total: 7,
+                    ..
+                }
+            ),
+            "asking again leaves the update in progress"
+        );
+        m.in_place = InPlace::Failed("refused".into());
+        assert_eq!(m.take_in_place_bundle(), None);
+        assert_eq!(m.in_place, InPlace::Failed("refused".into()));
 
         let mut m = running_rc2fx("1.0.0");
         let prepare = m.start_in_place(offer("2.0.0"), PROFILE).unwrap();
