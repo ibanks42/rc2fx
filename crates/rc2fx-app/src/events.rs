@@ -200,6 +200,10 @@ pub(super) struct EventLog {
     pub(super) period_ns: Option<u64>,
     pub(super) confirm_reset: bool,
     pub(super) error: Option<String>,
+    /// The engine's first seconds of audio, on this computer's clock, when
+    /// known. Bursts there are expected, so they are hidden unless asked.
+    pub(super) startup: Option<(SystemTime, SystemTime)>,
+    pub(super) show_startup: bool,
 }
 
 impl EventLog {
@@ -215,6 +219,8 @@ impl EventLog {
             period_ns: None,
             confirm_reset: false,
             error: None,
+            startup: None,
+            show_startup: false,
         }
     }
 
@@ -291,18 +297,39 @@ impl EventLog {
             .count() as u64
     }
 
+    /// Whether `row` happened while the engine was starting.
+    fn during_startup(&self, row: &Row) -> bool {
+        matches!((row, self.startup), (Row::Event { at, .. }, Some((from, until)))
+            if *at >= from && *at < until)
+    }
+
+    /// Startup rows are left out of everything unless shown.
+    fn counted(&self, row: &Row) -> bool {
+        self.show_startup || !self.during_startup(row)
+    }
+
     fn count(&self, group: Group) -> usize {
         self.rows
             .iter()
+            .filter(|row| self.counted(row))
             .filter(|row| matches!(row, Row::Event { kind, .. } if Group::of(*kind) == group))
             .count()
     }
 
+    /// How many events fell in the startup window.
+    fn startup_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| self.during_startup(row))
+            .count()
+    }
+
     fn visible(&self, row: &Row) -> bool {
-        match row {
-            Row::Event { kind, .. } => !self.hidden.contains(&Group::of(*kind)),
-            Row::Lost { .. } => true,
-        }
+        self.counted(row)
+            && match row {
+                Row::Event { kind, .. } => !self.hidden.contains(&Group::of(*kind)),
+                Row::Lost { .. } => true,
+            }
     }
 }
 
@@ -321,7 +348,7 @@ fn clock(at: SystemTime) -> String {
 }
 
 /// "just now", "12 s ago", "4 min ago", "2 h ago".
-fn ago(at: SystemTime, now: SystemTime) -> String {
+pub(super) fn ago(at: SystemTime, now: SystemTime) -> String {
     let seconds = now.duration_since(at).unwrap_or_default().as_secs();
     match seconds {
         0 => "just now".into(),
@@ -365,6 +392,7 @@ fn kind_chip(kind: DiagnosticsKind) -> Div {
 /// The reset control: a button, then a confirmation in its place.
 pub(super) fn reset_control(
     id: &'static str,
+    label: &'static str,
     confirming: bool,
     connected: bool,
     ask: impl Fn(&mut App) + 'static,
@@ -384,7 +412,7 @@ pub(super) fn reset_control(
             )
             .child(
                 Button::new((id, 0usize))
-                    .ghost()
+                    .outline()
                     .small()
                     .label("Cancel")
                     .on_click(move |_, _, cx| cancel(cx)),
@@ -400,9 +428,11 @@ pub(super) fn reset_control(
     } else {
         div().child(
             Button::new((id, 2usize))
-                .ghost()
+                .danger()
+                .outline()
                 .small()
-                .label("Reset diagnostics…")
+                .icon(gpui_kit::assets::IconName::Undo2)
+                .label(label)
                 .disabled(!connected)
                 .on_click(move |_, _, cx| ask(cx)),
         )
@@ -472,6 +502,7 @@ impl EventsView {
             )
             .child(reset_control(
                 "events-reset",
+                "Reset diagnostics…",
                 log.confirm_reset,
                 log.connected && self.app.is_some(),
                 set_confirm(self.log.clone(), true),
@@ -519,7 +550,21 @@ impl EventsView {
                     }),
             );
         }
-        chips
+        let entity = self.log.clone();
+        let startup = log.startup_count();
+        chips.child(div().flex_1()).child(
+            Switch::new("event-startup")
+                .small()
+                .checked(log.show_startup)
+                .label(format!("Startup events ({startup})"))
+                .tooltip("Events from the engine's first 30 seconds of audio. Bursts while it starts are expected.")
+                .on_click(move |on: &bool, _, cx| {
+                    entity.update(cx, |log, cx| {
+                        log.show_startup = *on;
+                        cx.notify();
+                    })
+                }),
+        )
     }
 
     fn table(&self, log: &EventLog, mono: &SharedString) -> Div {

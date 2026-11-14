@@ -100,6 +100,22 @@ impl Rc2FxApp {
         });
     }
 
+    /// The telemetry status's next step when processing has stopped: a
+    /// restart, when the mixer allows one. None when there is nothing to do.
+    pub(super) fn telemetry_next_step(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        (!self.restart_busy() && self.session.saved.as_ref().is_some_and(restart_candidate)).then(
+            || {
+                Button::new("telemetry-restart")
+                    .small()
+                    .outline()
+                    .label("Restart processing")
+                    .disabled(!self.restart_ready())
+                    .on_click(cx.listener(|app, _, _, cx| app.restart_engine(cx)))
+                    .into_any_element()
+            },
+        )
+    }
+
     pub(super) fn restart_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut panel = div().v_flex().gap_2();
         if self.selection_busy() {

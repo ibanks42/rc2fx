@@ -57,17 +57,6 @@ pub(super) fn remember_telemetry(on: bool) {
     remember_view("showTelemetry", on.into());
 }
 
-pub(super) fn remembered_telemetry_details() -> bool {
-    remembered_view()
-        .get("telemetryDetails")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-pub(super) fn remember_telemetry_details(on: bool) {
-    remember_view("telemetryDetails", on.into());
-}
-
 /// The appearance last chosen; Dusk when none was.
 pub(super) fn remembered_appearance() -> desk::Appearance {
     remembered_view()

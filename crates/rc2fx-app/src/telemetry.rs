@@ -1,56 +1,75 @@
 use rc2fx_core::{DeviceState, EngineMode, EnginePhase, Meter, RoutingPhase, TargetMeter};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     time::{Duration, Instant, SystemTime},
 };
 
-/// How much audio counts as the mixer starting, from its first reading: JACK
-/// coming up, the controller starting and threads moving. Measured faults fell
-/// inside this on real hardware; a fault after it counts normally.
-const STARTUP_AUDIO: Duration = Duration::from_secs(30);
+/// How long after an engine generation starts running counts as startup:
+/// JACK coming up, RØDE's mixer registering, paths binding, threads settling.
+/// Bursts inside it are expected and left out of telemetry and the events
+/// window; a fault after it counts normally.
+const STARTUP_AUDIO: Duration = Duration::from_secs(60);
 
-/// Faults counted while the mixer started. They are kept out of the telemetry
-/// headline and shown on one quiet line instead; the mixer's logs and counters
-/// are untouched.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Faults counted while the mixer started. Telemetry leaves them out
+/// entirely: they say nothing about how RC2FX runs. The mixer's logs and
+/// counters are untouched.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct StartupFaults {
     pub(super) xruns: u64,
     overruns: u64,
+    clock_errors: u64,
     helper_late: u64,
     helper_stalls: u64,
+    /// Each path's own counters, by path id.
+    paths: HashMap<String, PathFaults>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PathFaults {
+    clipped: u64,
+    missed_deadlines: u64,
+    stale_results: u64,
+    input_drops: u64,
+    output_drops: u64,
+    worker_overruns: u64,
+    worker_clock_errors: u64,
+}
+
+impl PathFaults {
+    fn of(t: &TargetMeter) -> Self {
+        let worker = t.performance.as_ref();
+        Self {
+            clipped: t.clipped,
+            missed_deadlines: t.missed_deadlines,
+            stale_results: t.stale_results,
+            input_drops: t.input_drops,
+            output_drops: t.output_drops,
+            worker_overruns: worker.map_or(0, |p| p.worker_wall.overruns),
+            worker_clock_errors: worker.map_or(0, |p| {
+                p.worker_wall.clock_errors + p.worker_cpu.clock_errors
+            }),
+        }
+    }
 }
 
 impl StartupFaults {
     fn of(meter: &Meter) -> Self {
-        meter
+        let shared = meter
             .targets
             .iter()
-            .find_map(|target| target.performance.as_ref())
-            .map_or_else(Self::default, |p| Self {
-                xruns: p.xruns,
-                overruns: p.callback.overruns,
-                helper_late: p.helper_late.unwrap_or(0),
-                helper_stalls: p.helper_stalls.unwrap_or(0),
-            })
-    }
-
-    /// "3 xruns, 1 overrun during startup", or None with nothing to report.
-    fn line(self) -> Option<String> {
-        let parts: Vec<_> = [
-            (self.xruns, "xrun", "xruns"),
-            (self.overruns, "overrun", "overruns"),
-            (
-                self.helper_late,
-                "late helper finish",
-                "late helper finishes",
-            ),
-            (self.helper_stalls, "helper stall", "helper stalls"),
-        ]
-        .into_iter()
-        .filter(|(count, ..)| *count > 0)
-        .map(|(count, one, many)| format!("{count} {}", if count == 1 { one } else { many }))
-        .collect();
-        (!parts.is_empty()).then(|| format!("{} during startup", parts.join(", ")))
+            .find_map(|target| target.performance.as_ref());
+        Self {
+            xruns: shared.map_or(0, |p| p.xruns),
+            overruns: shared.map_or(0, |p| p.callback.overruns),
+            clock_errors: shared.map_or(0, |p| p.callback.clock_errors),
+            helper_late: shared.and_then(|p| p.helper_late).unwrap_or(0),
+            helper_stalls: shared.and_then(|p| p.helper_stalls).unwrap_or(0),
+            paths: meter
+                .targets
+                .iter()
+                .map(|t| (t.id.clone(), PathFaults::of(t)))
+                .collect(),
+        }
     }
 }
 
@@ -73,17 +92,28 @@ enum StartupPhase {
 pub(super) struct StartupWindow {
     /// The generation and diagnostics epoch the counters belong to.
     seen: Option<(u64, u64)>,
+    /// When this generation's audio started, on this computer's clock; None
+    /// after a diagnostics reset, which hides the true start.
+    started: Option<SystemTime>,
     phase: StartupPhase,
     faults: StartupFaults,
 }
 
 impl StartupWindow {
     pub(super) fn observe(&mut self, meter: &Meter, sample_rate: u32, now: SystemTime) {
-        let frames = meter.targets.iter().map(|t| t.processed_frames).max();
-        let (Some(frames), true) = (frames, sample_rate > 0) else {
-            return;
+        // The engine's own running time when the mixer reports it; otherwise
+        // audio processed, which starts counting only once paths are bound,
+        // so it runs a few seconds behind.
+        let age = match meter.running_for_ns {
+            Some(ns) => Duration::from_nanos(ns),
+            None => {
+                let frames = meter.targets.iter().map(|t| t.processed_frames).max();
+                let (Some(frames), true) = (frames, sample_rate > 0) else {
+                    return;
+                };
+                Duration::from_secs_f64(frames as f64 / f64::from(sample_rate))
+            }
         };
-        let age = Duration::from_secs_f64(frames as f64 / f64::from(sample_rate));
         let key = (meter.generation, meter.diagnostics_epoch);
         if self.seen != Some(key) {
             let reset = self.seen.is_some_and(|(generation, _)| generation == key.0);
@@ -94,6 +124,7 @@ impl StartupWindow {
             // A diagnostics reset restarts the counters, not the mixer, and
             // one from before this app connected hides the true start.
             if !reset && meter.diagnostics_epoch == 0 {
+                self.started = Some(now.checked_sub(age).unwrap_or(now));
                 self.phase = if age < STARTUP_AUDIO {
                     StartupPhase::Open
                 } else {
@@ -110,6 +141,12 @@ impl StartupWindow {
                 self.phase = StartupPhase::Closed;
             }
         }
+    }
+
+    /// The startup window on this computer's clock, once the start is known.
+    pub(super) fn range(&self) -> Option<(SystemTime, SystemTime)> {
+        self.started
+            .map(|started| (started, started + STARTUP_AUDIO))
     }
 
     /// Whether the mixer is still inside the window.
@@ -137,22 +174,174 @@ impl StartupWindow {
         }
     }
 
-    /// Takes the startup faults out of what the headline counts.
+    /// Takes the startup faults out of everything telemetry counts.
     pub(super) fn settle(&self, meter: &mut TargetMeter) {
+        let faults = &self.faults;
+        if let Some(path) = faults.paths.get(&meter.id) {
+            meter.clipped = meter.clipped.saturating_sub(path.clipped);
+            meter.missed_deadlines = meter.missed_deadlines.saturating_sub(path.missed_deadlines);
+            meter.stale_results = meter.stale_results.saturating_sub(path.stale_results);
+            meter.input_drops = meter.input_drops.saturating_sub(path.input_drops);
+            meter.output_drops = meter.output_drops.saturating_sub(path.output_drops);
+            if let Some(p) = meter.performance.as_mut() {
+                p.worker_wall.overruns =
+                    p.worker_wall.overruns.saturating_sub(path.worker_overruns);
+                // Wall clock errors go first; the rest come off the CPU clock.
+                let wall = p.worker_wall.clock_errors.min(path.worker_clock_errors);
+                p.worker_wall.clock_errors -= wall;
+                p.worker_cpu.clock_errors = p
+                    .worker_cpu
+                    .clock_errors
+                    .saturating_sub(path.worker_clock_errors - wall);
+            }
+        }
         let Some(p) = meter.performance.as_mut() else {
             return;
         };
-        let faults = &self.faults;
         p.xruns = p.xruns.saturating_sub(faults.xruns);
         p.callback.overruns = p.callback.overruns.saturating_sub(faults.overruns);
+        p.callback.clock_errors = p.callback.clock_errors.saturating_sub(faults.clock_errors);
         p.helper_late = p.helper_late.map(|n| n.saturating_sub(faults.helper_late));
         p.helper_stalls = p
             .helper_stalls
             .map(|n| n.saturating_sub(faults.helper_stalls));
     }
 
-    pub(super) fn line(&self) -> Option<String> {
-        self.faults.line()
+    /// Xruns counted since startup, from a reading of the whole meter.
+    pub(super) fn settled_xruns(&self, meter: &Meter) -> Option<u64> {
+        meter
+            .targets
+            .iter()
+            .find_map(|target| target.performance.as_ref())
+            .map(|p| p.xruns.saturating_sub(self.faults.xruns))
+    }
+}
+
+/// How long [`RecentCount`] looks back.
+pub(super) const RECENT: Duration = Duration::from_secs(60);
+
+/// A counter as telemetry shows it: how much it rose in the last
+/// [`RECENT`], and when this app last saw it rise.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Recent {
+    pub(super) count: u64,
+    pub(super) last: Option<SystemTime>,
+}
+
+/// How much a cumulative counter rose within the last [`RECENT`], from the
+/// readings this app received, and when it last rose. A new generation or
+/// diagnostics reset starts over, since the counter does too. The first
+/// reading is only a baseline: what happened before this app was watching
+/// is not news.
+#[derive(Default)]
+pub(super) struct RecentCount {
+    key: Option<(u64, u64)>,
+    /// Readings in arrival order; the oldest may predate the window, as the
+    /// baseline for the rise inside it.
+    readings: VecDeque<(Instant, u64)>,
+    last_rise: Option<SystemTime>,
+}
+
+impl RecentCount {
+    pub(super) fn observe(&mut self, key: (u64, u64), count: u64, now: Instant, wall: SystemTime) {
+        if self.key != Some(key) {
+            *self = Self {
+                key: Some(key),
+                ..Self::default()
+            };
+        }
+        if self.readings.back().is_some_and(|(_, last)| count > *last) {
+            self.last_rise = Some(wall);
+        }
+        self.readings.push_back((now, count));
+        // Keep one reading at or before the window's start as the baseline.
+        while self
+            .readings
+            .get(1)
+            .is_some_and(|(at, _)| now.duration_since(*at) >= RECENT)
+        {
+            self.readings.pop_front();
+        }
+    }
+
+    /// The rise within the window, or None before any reading.
+    pub(super) fn within(&self) -> Option<u64> {
+        let (_, first) = self.readings.front()?;
+        let (_, last) = self.readings.back()?;
+        Some(last.saturating_sub(*first))
+    }
+
+    pub(super) fn recent(&self) -> Recent {
+        Recent {
+            count: self.within().unwrap_or(0),
+            last: self.last_rise,
+        }
+    }
+}
+
+/// The counters that mean something was audible, each tracked as a
+/// [`RecentCount`]: dropouts for the engine, and per path late frames
+/// (original audio played), dropped frames and clipping. Startup faults are
+/// already taken out.
+#[derive(Default)]
+pub(super) struct RecentFaults {
+    counts: HashMap<String, RecentCount>,
+}
+
+/// One path's audible counters.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct PathRecent {
+    pub(super) late: Recent,
+    pub(super) dropped: Recent,
+    pub(super) clipped: Recent,
+}
+
+impl RecentFaults {
+    pub(super) fn observe(
+        &mut self,
+        meter: &Meter,
+        startup: &StartupWindow,
+        now: Instant,
+        wall: SystemTime,
+    ) {
+        let key = (meter.generation, meter.diagnostics_epoch);
+        let mut feed = |name: String, count: u64| {
+            self.counts
+                .entry(name)
+                .or_default()
+                .observe(key, count, now, wall);
+        };
+        if let Some(xruns) = startup.settled_xruns(meter) {
+            feed("xruns".into(), xruns);
+        }
+        for target in &meter.targets {
+            let mut shown = target.clone();
+            startup.settle(&mut shown);
+            feed(format!("late/{}", shown.id), shown.missed_deadlines);
+            feed(
+                format!("dropped/{}", shown.id),
+                shown.input_drops + shown.output_drops,
+            );
+            feed(format!("clipped/{}", shown.id), shown.clipped);
+        }
+    }
+
+    fn get(&self, name: &str) -> Recent {
+        self.counts
+            .get(name)
+            .map_or_else(Recent::default, RecentCount::recent)
+    }
+
+    pub(super) fn xruns(&self) -> Recent {
+        self.get("xruns")
+    }
+
+    pub(super) fn path(&self, id: &str) -> PathRecent {
+        PathRecent {
+            late: self.get(&format!("late/{id}")),
+            dropped: self.get(&format!("dropped/{id}")),
+            clipped: self.get(&format!("clipped/{id}")),
+        }
     }
 }
 
@@ -314,22 +503,6 @@ impl Warning {
             Self::AudioDeadline => "Recent audio deadline missed",
             Self::SuppressionFallback => "Recent suppression fallback",
             Self::ClockFailure => "Audio timing measurement failed",
-        }
-    }
-    pub(super) fn detail(self) -> &'static str {
-        match self {
-            Self::WorkerFailed => {
-                "Noise suppression has failed. The device is stopping RC2FX processing; original audio route recovery is reported separately. Export diagnostics before restarting processing."
-            }
-            Self::AudioDeadline => {
-                "A new callback overrun or shared JACK xrun was reported. Audio is advancing, but this interval was not clean. The JACK counter does not identify the responsible channel. Export diagnostics to retain the device history."
-            }
-            Self::SuppressionFallback => {
-                "A new late or dropped suppression frame was reported. The worker uses the delayed original signal when a result is unavailable. Export diagnostics if this keeps happening."
-            }
-            Self::ClockFailure => {
-                "A timing clock failed. These measurements cannot establish whether processing met its deadline."
-            }
         }
     }
 }
@@ -1229,40 +1402,40 @@ mod tests {
     }
 
     #[test]
-    fn a_startup_burst_leaves_the_headline_for_the_startup_line() {
+    fn a_startup_burst_is_left_out_of_the_headline() {
         let (now, mut w) = (SystemTime::now(), StartupWindow::default());
         let burst = reading(1, 0, 5, 12);
         w.observe(&burst, 48_000, now);
         assert!(w.open());
         assert_eq!(headline(&w, &burst), 0);
-        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
-        let later = reading(1, 0, 40, 12);
+        assert_eq!(w.faults.xruns, 12);
+        let later = reading(1, 0, 70, 12);
         w.observe(&later, 48_000, now);
         assert!(!w.open());
         assert_eq!(headline(&w, &later), 0);
-        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
+        assert_eq!(w.faults.xruns, 12);
     }
 
     #[test]
     fn an_xrun_after_the_window_counts_normally() {
         let (now, mut w) = (SystemTime::now(), StartupWindow::default());
-        w.observe(&reading(1, 0, 29, 12), 48_000, now);
-        let later = reading(1, 0, 60, 13);
+        w.observe(&reading(1, 0, 59, 12), 48_000, now);
+        let later = reading(1, 0, 90, 13);
         w.observe(&later, 48_000, now);
         assert_eq!(headline(&w, &later), 1);
-        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
+        assert_eq!(w.faults.xruns, 12);
     }
 
     #[test]
     fn a_mixer_restart_opens_the_window_again() {
         let (now, mut w) = (SystemTime::now(), StartupWindow::default());
         w.observe(&reading(1, 0, 5, 12), 48_000, now);
-        w.observe(&reading(1, 0, 60, 13), 48_000, now);
+        w.observe(&reading(1, 0, 90, 13), 48_000, now);
         let restarted = reading(2, 0, 2, 3);
         w.observe(&restarted, 48_000, now);
         assert!(w.open());
         assert_eq!(headline(&w, &restarted), 0);
-        assert_eq!(w.line().as_deref(), Some("3 xruns during startup"));
+        assert_eq!(w.faults.xruns, 3);
     }
 
     #[test]
@@ -1274,7 +1447,7 @@ mod tests {
         w.observe(&reset, 48_000, now);
         assert!(!w.open());
         assert_eq!(headline(&w, &reset), 1);
-        assert_eq!(w.line(), None);
+        assert_eq!(w.faults.xruns, 0);
         // Reset before this app connected: its age says nothing about startup.
         let mut w = StartupWindow::default();
         w.observe(&reset, 48_000, now);
@@ -1285,44 +1458,29 @@ mod tests {
     #[test]
     fn connecting_after_the_window_places_xruns_from_the_event_log() {
         let (now, mut w) = (SystemTime::now(), StartupWindow::default());
-        let m = reading(1, 0, 100, 15);
+        let m = reading(1, 0, 130, 15);
         w.observe(&m, 48_000, now);
         assert!(w.wants_events());
         assert_eq!(headline(&w, &m), 15, "counted until the log says otherwise");
         w.read_events(|from, until| {
-            assert_eq!(from, now - Duration::from_secs(100));
+            assert_eq!(from, now - Duration::from_secs(130));
             assert_eq!(until, now - Duration::from_secs(70));
             12
         });
         assert!(!w.wants_events());
         assert_eq!(headline(&w, &m), 3);
-        assert_eq!(w.line().as_deref(), Some("12 xruns during startup"));
+        assert_eq!(w.faults.xruns, 12);
     }
 
     #[test]
     fn an_unreadable_event_log_leaves_every_fault_in_the_headline() {
         let (now, mut w) = (SystemTime::now(), StartupWindow::default());
-        let m = reading(1, 0, 100, 15);
+        let m = reading(1, 0, 130, 15);
         w.observe(&m, 48_000, now);
         w.give_up();
         assert!(!w.wants_events());
         assert_eq!(headline(&w, &m), 15);
-        assert_eq!(w.line(), None);
-    }
-
-    #[test]
-    fn startup_lines_read_plainly() {
-        let faults = StartupFaults {
-            xruns: 1,
-            overruns: 2,
-            helper_late: 0,
-            helper_stalls: 1,
-        };
-        assert_eq!(
-            faults.line().as_deref(),
-            Some("1 xrun, 2 overruns, 1 helper stall during startup")
-        );
-        assert_eq!(StartupFaults::default().line(), None);
+        assert_eq!(w.faults.xruns, 0);
     }
 
     #[test]
@@ -1472,5 +1630,72 @@ mod tests {
         p.observe_meter((1, 0), &m, now + Duration::from_millis(150));
         assert_eq!(p.warning_for(now, false), Some(Warning::AudioDeadline));
         assert_eq!(p.warning_for(now + Duration::from_secs(6), false), None);
+    }
+
+    #[test]
+    fn startup_faults_leave_every_path_counter() {
+        let (now, mut w) = (SystemTime::now(), StartupWindow::default());
+        let mut burst = reading(1, 0, 5, 2);
+        burst.targets[0].missed_deadlines = 7;
+        burst.targets[0].input_drops = 1;
+        burst.targets[0]
+            .performance
+            .as_mut()
+            .unwrap()
+            .callback
+            .clock_errors = 3;
+        w.observe(&burst, 48_000, now);
+        let mut later = burst.clone();
+        later.targets[0].processed_frames = 90 * 48_000;
+        later.targets[0].missed_deadlines = 9;
+        w.observe(&later, 48_000, now);
+        let mut shown = later.targets[0].clone();
+        w.settle(&mut shown);
+        assert_eq!((shown.missed_deadlines, shown.input_drops), (2, 0));
+        assert_eq!(shown.performance.unwrap().callback.clock_errors, 0);
+        assert_eq!(w.settled_xruns(&later), Some(0));
+    }
+
+    #[test]
+    fn the_engines_running_time_places_the_window_not_the_frames() {
+        // Paths began counting frames 12 s after the engine started.
+        let now = SystemTime::now();
+        let mut m = reading(1, 0, 50, 4);
+        m.running_for_ns = Some(Duration::from_secs(62).as_nanos() as u64);
+        let mut w = StartupWindow::default();
+        w.observe(&m, 48_000, now);
+        assert!(!w.open() && w.wants_events());
+        let (from, until) = w.range().unwrap();
+        assert_eq!(from, now - Duration::from_secs(62));
+        assert_eq!(until, now - Duration::from_secs(2));
+        m.running_for_ns = Some(Duration::from_secs(55).as_nanos() as u64);
+        let mut w = StartupWindow::default();
+        w.observe(&m, 48_000, now);
+        assert!(w.open());
+    }
+
+    #[test]
+    fn a_recent_count_is_the_rise_within_the_last_minute() {
+        let now = Instant::now();
+        let wall = SystemTime::now();
+        let mut r = RecentCount::default();
+        assert_eq!(r.within(), None);
+        r.observe((1, 0), 4, now, wall);
+        // The first reading is a baseline, not a rise.
+        assert_eq!(r.recent().last, None);
+        r.observe((1, 0), 4, now + Duration::from_secs(30), wall);
+        assert_eq!(r.within(), Some(0));
+        r.observe((1, 0), 6, now + Duration::from_secs(50), wall);
+        assert_eq!(r.within(), Some(2));
+        assert_eq!(r.recent().last, Some(wall));
+        // The reading at 30 s is the baseline once the first ages out.
+        r.observe((1, 0), 7, now + Duration::from_secs(95), wall);
+        assert_eq!(r.within(), Some(3));
+        r.observe((1, 0), 7, now + Duration::from_secs(200), wall);
+        assert_eq!(r.within(), Some(0));
+        // A restart or reset starts the counter, and the window, over.
+        r.observe((2, 0), 1, now + Duration::from_secs(201), wall);
+        assert_eq!(r.within(), Some(0));
+        assert_eq!(r.recent().last, None);
     }
 }

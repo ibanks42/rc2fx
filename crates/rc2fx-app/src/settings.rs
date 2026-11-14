@@ -309,19 +309,15 @@ impl Rc2FxApp {
                     &self.telemetry_snapshot(),
                     &mono,
                     self.telemetry_aside(cx),
-                    Button::new("telemetry-details")
-                        .ghost()
+                    Switch::new("telemetry-details")
                         .small()
-                        .label(if self.telemetry_details {
-                            "Hide details"
-                        } else {
-                            "Details"
-                        })
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.telemetry_details = !app.telemetry_details;
-                            connection::remember_telemetry_details(app.telemetry_details);
+                        .checked(self.telemetry_details)
+                        .label("Technical details")
+                        .on_click(cx.listener(|app, on: &bool, _, cx| {
+                            app.telemetry_details = *on;
                             cx.notify();
                         })),
+                    self.telemetry_next_step(cx),
                 ))
             })
     }

@@ -206,8 +206,10 @@ struct Rc2FxApp {
     meter_progress: HashMap<String, telemetry::Progress>,
     /// Recent output peaks per processed path, for the live line.
     levels: level_history::LevelHistories,
-    /// What the mixer counted while starting, kept out of the headline.
+    /// What the mixer counted while starting, kept out of telemetry.
     startup: telemetry::StartupWindow,
+    /// Audible faults in the last minute, and when each last happened.
+    recent_faults: telemetry::RecentFaults,
     /// Counts this view's renders; Home's line slot is claimed per render
     /// (line_overlay.rs).
     render_generation: u64,
@@ -287,7 +289,7 @@ impl Rc2FxApp {
             installer_page: false,
             settled_flash: None,
             telemetry_open: connection::remembered_telemetry(),
-            telemetry_details: connection::remembered_telemetry_details(),
+            telemetry_details: false,
             confirm_reset: false,
             event_log: cx.new(|_| events::EventLog::new()),
             events_window: None,
@@ -308,6 +310,7 @@ impl Rc2FxApp {
             meter_progress: HashMap::new(),
             levels: Default::default(),
             startup: Default::default(),
+            recent_faults: Default::default(),
             render_generation: 0,
             line_slots: Default::default(),
             onboarding_signature,
@@ -481,6 +484,7 @@ impl Rc2FxApp {
         self.meter_progress.clear();
         self.levels.clear();
         self.startup = Default::default();
+        self.recent_faults = Default::default();
         self.engine_seen = None;
         self.stream_connected = false;
         self.stream_error = None;
@@ -521,6 +525,7 @@ impl Rc2FxApp {
         self.meter_progress.clear();
         self.levels.clear();
         self.startup = Default::default();
+        self.recent_faults = Default::default();
         self.engine_seen = None;
         self.message = "Disconnected • mixer processing is independent of this app".into();
         cx.notify();
@@ -765,6 +770,20 @@ impl Rc2FxApp {
                             rate.unwrap_or_default(),
                             std::time::SystemTime::now(),
                         );
+                        self.recent_faults.observe(
+                            &meter,
+                            &self.startup,
+                            Instant::now(),
+                            std::time::SystemTime::now(),
+                        );
+                        // The events window leaves startup out unless asked.
+                        let startup = self.startup.range();
+                        self.event_log.update(cx, |log, cx| {
+                            if log.startup != startup {
+                                log.startup = startup;
+                                cx.notify();
+                            }
+                        });
                         if self.startup.open() {
                             self.meter_progress
                                 .values_mut()

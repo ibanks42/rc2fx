@@ -119,14 +119,17 @@ impl Rc2FxApp {
             .when(!self.confirm_reset, |aside| {
                 aside.child(
                     Button::new("show-events")
-                        .ghost()
+                        .outline()
                         .small()
-                        .label("Show events…")
+                        .icon(gpui_kit::assets::IconName::ExternalLink)
+                        .label("Events")
+                        .tooltip("Open the events window")
                         .on_click(cx.listener(|app, _, _, cx| app.open_events(cx))),
                 )
             })
             .child(events::reset_control(
                 "telemetry-reset",
+                "Reset…",
                 self.confirm_reset,
                 connected && !self.reset_pending,
                 set_confirm(true),

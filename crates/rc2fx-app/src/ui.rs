@@ -38,32 +38,7 @@ pub(super) const METER_HEIGHT: f32 = 150.;
 pub(super) const LARGE_BUTTON_HEIGHT: f32 = 46.;
 
 /// A long explanation's width in a tooltip, so it wraps inside a tidy box.
-const INFO_WIDTH: f32 = 260.;
-
-/// A small circled "i" that explains `text` on hover.
-pub(super) fn info_badge(id: impl Into<ElementId>, text: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(14.))
-        .rounded_full()
-        .border_1()
-        .border_color(rgb(surface().line_strong))
-        .text_size(px(10.))
-        .font_semibold()
-        .text_color(rgb(MUTED))
-        .hover(|s| s.text_color(rgb(TEXT)).border_color(rgb(MUTED)))
-        .child("i")
-        .tooltip(move |window, cx| {
-            gpui_kit::component::tooltip::Tooltip::element(move |_, _| {
-                div().w(px(INFO_WIDTH)).py_1().child(text)
-            })
-            .build(window, cx)
-        })
-}
+pub(super) const INFO_WIDTH: f32 = 260.;
 
 /// The desktop entry and all windows share one identity and waveform icon.
 pub(super) fn window_options() -> WindowOptions {
