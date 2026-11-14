@@ -176,6 +176,11 @@ struct Rc2FxApp {
     /// The installer is the page in front (it may keep running behind
     /// another page).
     installer_page: bool,
+    /// Set by a notice's Install update: start the installer as soon as it
+    /// can, until this deadline.
+    installer_autostart: Option<Instant>,
+    /// When the app last asked the mixer how an in-place update ended.
+    in_place_asked: Option<Instant>,
     /// The last flash this run of the app saw finish (`Model::settled_flash`).
     settled_flash: Option<u64>,
     telemetry_open: bool,
@@ -287,6 +292,8 @@ impl Rc2FxApp {
             settings_open: false,
             home_open: true,
             installer_page: false,
+            installer_autostart: None,
+            in_place_asked: None,
             settled_flash: None,
             telemetry_open: connection::remembered_telemetry(),
             telemetry_details: false,
@@ -683,6 +690,13 @@ impl Rc2FxApp {
                 // worth interrupting the user for.
                 EventKind::Version(result) => self.device_versions = result.ok().flatten(),
                 EventKind::Ssh { id, result } => self.receive_ssh(id, result, cx),
+                EventKind::MixerUpdate(update) => self.in_place_event(update),
+                // A failed read is asked again on the next poll.
+                EventKind::MixerUpdateLast(result) => {
+                    if let Ok(record) = result {
+                        self.in_place_outcome(record);
+                    }
+                }
                 EventKind::Connected { mixer, state } => {
                     self.connecting = false;
                     self.message.clear();
@@ -853,6 +867,7 @@ impl Rc2FxApp {
         let fresh = self.fresh_meter().is_some();
         changed |= self.usb.expire(Instant::now());
         changed |= self.poll_installer(cx);
+        self.autostart_installer(window, cx);
         if self
             .session
             .saved
@@ -1802,6 +1817,9 @@ impl Rc2FxApp {
             content = content.child(self.conflict_card(cx));
         }
         if let Some(card) = self.selection_notice(cx) {
+            content = content.child(card);
+        }
+        if let Some(card) = self.mixer_update_notice(cx) {
             content = content.child(card);
         }
         if self.installer_page

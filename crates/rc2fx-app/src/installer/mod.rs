@@ -389,6 +389,8 @@ pub(super) struct Installer {
     firmware_select: Option<Picker<(String, String)>>,
     mixer_select: Option<Picker<MixerSource>>,
     stock_select: Option<Picker<(String, String)>>,
+    /// The user chose the full flash over an available in-place update.
+    prefer_flash: bool,
 }
 
 impl Installer {
@@ -461,6 +463,10 @@ fn progress_text(p: &Progress) -> String {
     }
 }
 
+/// How long Install update waits for the installer to find the mixer and
+/// be ready, before leaving the page for the user.
+const AUTOSTART_WAIT: Duration = Duration::from_secs(60);
+
 impl Rc2FxApp {
     pub(super) fn open_installer(&mut self, cx: &mut Context<Self>) {
         if self.installer.is_some() {
@@ -497,6 +503,7 @@ impl Rc2FxApp {
             firmware_select: None,
             mixer_select: None,
             stock_select: None,
+            prefer_flash: false,
         };
         installer.model.privileged = installer.access.allows_flashing();
         installer.model.bundled = self.bundled_mixer_software.clone();
@@ -781,7 +788,7 @@ impl Rc2FxApp {
                 changed = true;
             }
         }
-        changed
+        changed | self.drive_in_place_update()
     }
 
     /// Close the installer and connect the mixer controls to the mixer.
@@ -795,6 +802,249 @@ impl Rc2FxApp {
         self.close_installer(cx);
         if !self.session.connected {
             self.connect(cx);
+        }
+    }
+
+    /// A notice's Install update: open the installer on RC2FX (not stock)
+    /// firmware and start it as soon as it can: in place when the mixer can
+    /// install the update itself, otherwise the flash, which still asks first.
+    pub(super) fn install_mixer_update(&mut self, cx: &mut Context<Self>) {
+        if !self.installer_page {
+            self.toggle_installer_page(cx);
+        }
+        if let Some(installer) = self.installer.as_mut() {
+            installer.model.set_stock(false);
+            self.installer_autostart = Some(Instant::now() + AUTOSTART_WAIT);
+        }
+        cx.notify();
+    }
+
+    /// Shown on Home when the mixer reports that part of its RC2FX software
+    /// is older than the rest. The fix is installing the current mixer
+    /// software, so the notice starts that.
+    pub(super) fn mixer_update_notice(&self, cx: &mut Context<Self>) -> Option<Div> {
+        self.device_versions.as_ref()?.native_protocol?;
+        if self.installer_page {
+            return None;
+        }
+        Some(
+            desk::card()
+                .border_color(rgb(WARN))
+                .child(
+                    div()
+                        .font_semibold()
+                        .text_color(rgb(WARN))
+                        .child("Update the RC2FX mixer software"),
+                )
+                .child(div().text_sm().text_color(rgb(MUTED)).child(
+                    if self
+                        .device_versions
+                        .as_ref()
+                        .is_some_and(|v| v.in_place_updates == Some(1))
+                    {
+                        "Part of the RC2FX software on this mixer is older than the rest, so some \
+                         telemetry is missing. Installing the current version needs no flash: \
+                         the mixer's audio stops for a few seconds while RC2FX restarts. Your \
+                         drafts are kept."
+                    } else {
+                        "Part of the RC2FX software on this mixer is older than the rest, so some \
+                         telemetry is missing. Installing the current version flashes the mixer, \
+                         which then restarts; audio stops until it is back. Your drafts are kept."
+                    },
+                ))
+                .child(
+                    div().h_flex().gap_2().child(
+                        Button::new("mixer-update-install")
+                            .primary()
+                            .label("Install update")
+                            .disabled(self.installer_flashing())
+                            .on_click(cx.listener(|app, _, _, cx| app.install_mixer_update(cx))),
+                    ),
+                ),
+        )
+    }
+
+    /// What the connected mixer says about in-place updates, when the
+    /// installer and the app's connection see the same mixer.
+    fn in_place_support(&self) -> flow::InPlaceSupport<'_> {
+        let session_mixer = self.connected_mixer.as_deref();
+        let same_mixer = self
+            .installer
+            .as_ref()
+            .is_some_and(|i| i.model.is_session_mixer(session_mixer));
+        let versions = self.device_versions.as_ref().filter(|_| same_mixer);
+        flow::InPlaceSupport {
+            supported: versions.is_some_and(|v| v.in_place_updates == Some(1)),
+            profile: versions.and_then(|v| v.firmware_profile.as_deref()),
+        }
+    }
+
+    /// The signed release an in-place update would install now, if any.
+    pub(super) fn in_place_offer(&self) -> Option<rc2fx_installer::mixer_update::MixerOffer> {
+        let installer = self.installer.as_ref()?;
+        installer
+            .model
+            .in_place_offer(self.in_place_support())
+            .cloned()
+    }
+
+    /// Install the newer signed RC2FX release without a flash: download and
+    /// verify it here, then send it to the mixer, which verifies it again.
+    pub(super) fn start_in_place_update(&mut self, cx: &mut Context<Self>) {
+        let Some(offer) = self.in_place_offer() else {
+            return;
+        };
+        let Some(profile) = self.in_place_support().profile.map(str::to_owned) else {
+            return;
+        };
+        self.installer_event(cx, |m| m.start_in_place(offer, &profile));
+    }
+
+    /// Moves an in-place update along: sends a verified release to the mixer,
+    /// and after the mixer restarts asks how it ended. True when it changed.
+    fn drive_in_place_update(&mut self) -> bool {
+        const ASK_EVERY: Duration = Duration::from_secs(3);
+        const GIVE_UP: Duration = Duration::from_secs(6 * 60);
+        let generation = self.generation;
+        let Some(installer) = self.installer.as_mut() else {
+            return false;
+        };
+        if let Some(bundle) = installer.model.take_in_place_bundle() {
+            let start = serde_json::json!({
+                "version": bundle.version,
+                "size": bundle.size,
+                "sha256": bundle.sha256,
+                "metadata": bundle.metadata,
+            });
+            if !self.command(Command::MixerUpdate {
+                generation,
+                start,
+                payload: bundle.path,
+            }) {
+                let why = std::mem::take(&mut self.message);
+                if let Some(installer) = self.installer.as_mut() {
+                    installer.model.in_place = flow::InPlace::Failed(format!(
+                        "Couldn't reach the mixer. Nothing changed on it. {why}"
+                    ));
+                }
+            }
+            return true;
+        }
+        let flow::InPlace::Installing { since, .. } = &installer.model.in_place else {
+            return false;
+        };
+        let since = *since;
+        if since.elapsed() >= GIVE_UP {
+            installer.model.in_place = flow::InPlace::Failed(
+                "The mixer didn't say how the update ended. Check the RC2FX version it reports; \
+                 if it didn't change, the previous version is still running."
+                    .into(),
+            );
+            return true;
+        }
+        if self.session.connected
+            && self
+                .in_place_asked
+                .is_none_or(|asked| asked.elapsed() >= ASK_EVERY)
+        {
+            self.in_place_asked = Some(Instant::now());
+            self.command(Command::MixerUpdateLast { generation });
+        }
+        false
+    }
+
+    /// The transport's report on an in-place update.
+    pub(super) fn in_place_event(&mut self, event: rc2fx_transport::MixerUpdateEvent) {
+        use rc2fx_transport::MixerUpdateEvent;
+        let Some(installer) = self.installer.as_mut() else {
+            return;
+        };
+        let version = match &installer.model.in_place {
+            flow::InPlace::Uploading { version, .. } => version.clone(),
+            _ => return,
+        };
+        installer.model.in_place = match event {
+            MixerUpdateEvent::Uploading { sent, total } => flow::InPlace::Uploading {
+                version,
+                sent,
+                total,
+            },
+            MixerUpdateEvent::Installing => {
+                self.in_place_asked = Some(Instant::now());
+                flow::InPlace::Installing {
+                    version,
+                    since: Instant::now(),
+                }
+            }
+            MixerUpdateEvent::Failed(why) => flow::InPlace::Failed(format!(
+                "The mixer didn't accept the update. Nothing changed on it. {why}"
+            )),
+        };
+    }
+
+    /// The mixer's record of its last in-place update. Only the outcome of the
+    /// update in progress counts; anything else is an older record.
+    pub(super) fn in_place_outcome(&mut self, record: Option<serde_json::Value>) {
+        let Some(installer) = self.installer.as_mut() else {
+            return;
+        };
+        let flow::InPlace::Installing { version, .. } = &installer.model.in_place else {
+            return;
+        };
+        let Some(record) = record.filter(|r| r.get("to").and_then(|v| v.as_str()) == Some(version))
+        else {
+            return;
+        };
+        let committed = record.get("outcome").and_then(|v| v.as_str()) == Some("committed");
+        let reason = record
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .filter(|r| !r.is_empty());
+        let reboot = record
+            .get("guiShimNeedsReboot")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let detail = match (committed, reason) {
+            (true, _) if reboot => {
+                "Part of the update applies the next time the mixer restarts.".to_owned()
+            }
+            (true, _) => String::new(),
+            (false, Some(reason)) => format!("The previous version was put back: {reason}"),
+            (false, None) => "The previous version was put back.".to_owned(),
+        };
+        installer.model.in_place = flow::InPlace::Done {
+            version: version.clone(),
+            committed,
+            detail,
+        };
+        let generation = self.generation;
+        self.command(Command::Version { generation });
+    }
+
+    /// Starts the installer for Install update once it has found the mixer
+    /// and a release; gives up quietly at the deadline, leaving the page to
+    /// say what is missing.
+    pub(super) fn autostart_installer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(deadline) = self.installer_autostart else {
+            return;
+        };
+        let Some(installer) = self.installer.as_ref().filter(|_| self.installer_page) else {
+            self.installer_autostart = None;
+            return;
+        };
+        let in_place = self.in_place_offer();
+        if installer.model.run.is_some()
+            || installer.model.in_place.active()
+            || installer.confirming
+            || Instant::now() >= deadline
+        {
+            self.installer_autostart = None;
+        } else if !installer.busy() && in_place.is_some() {
+            self.installer_autostart = None;
+            self.start_in_place_update(cx);
+        } else if !installer.busy() && installer.model.can_start() {
+            self.installer_autostart = None;
+            self.start_installer(window, cx);
         }
     }
 
@@ -879,7 +1129,26 @@ impl Rc2FxApp {
             .child(self.installer_actions(installer, cx))
     }
 
+    /// Whether the page is about an in-place update rather than a flash.
+    fn in_place_shown(&self, installer: &Installer) -> bool {
+        installer.model.in_place != flow::InPlace::Idle
+            || (!installer.prefer_flash && self.in_place_offer().is_some())
+    }
+
     fn installer_content(&self, installer: &Installer, cx: &mut Context<Self>) -> Div {
+        // An in-place update needs no flash plan and no administrator access:
+        // its footer says everything, and the flash stays one click away.
+        if self.in_place_shown(installer) {
+            let m = &installer.model;
+            return div()
+                .v_flex()
+                .gap_3()
+                .pt_8()
+                .w_full()
+                .when(!m.error.is_empty(), |c| {
+                    c.child(paragraph(m.error.clone(), DANGER))
+                });
+        }
         // Permission is its own step, not a competing card below unusable
         // firmware choices. Once granted this step disappears completely.
         if installer.needs_access() {
@@ -1570,8 +1839,194 @@ impl Rc2FxApp {
             .child(paragraph("Saved on this computer. Every Duo flash still requires risk confirmation. Switching this off does not uninstall an existing Duo runtime.", MUTED))
     }
 
+    /// The footer while an in-place update is offered or under way, in place
+    /// of the flash plan's. None when the flash plan applies.
+    fn in_place_actions(&self, installer: &Installer, cx: &mut Context<Self>) -> Option<Div> {
+        use flow::InPlace;
+        let m = &installer.model;
+        let offer = self.in_place_offer().filter(|_| !installer.prefer_flash);
+        if m.in_place == InPlace::Idle && offer.is_none() {
+            return None;
+        }
+        let large = |button: Button| {
+            button
+                .large()
+                .h(px(ui::LARGE_BUTTON_HEIGHT))
+                .px(px(28.))
+                .font_semibold()
+                .rounded(px(26.))
+        };
+        let close = || {
+            Button::new("in-place-close")
+                .ghost()
+                .label("Close")
+                .on_click(cx.listener(|app, _, _, cx| {
+                    if let Some(installer) = app.installer.as_mut() {
+                        installer.model.in_place = InPlace::Idle;
+                    }
+                    app.close_installer(cx);
+                }))
+        };
+        let working = |text: String| {
+            div()
+                .h_flex()
+                .items_center()
+                .gap_3()
+                .child(Spinner::new().color(rgb(ACCENT).into()))
+                .child(paragraph(text, MUTED))
+        };
+        let (status, buttons): (Div, Div) = match &m.in_place {
+            InPlace::Idle => {
+                let offer = offer?;
+                let version = offer.metadata.version.clone();
+                let firmware = m.installed_firmware.clone().unwrap_or_default();
+                (
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .child(paragraph(
+                            format!("RC2FX {version} can be installed without a flash."),
+                            TEXT,
+                        ))
+                        .child(paragraph(
+                            format!(
+                                "RØDE firmware {firmware} stays as it is. The mixer's audio \
+                                 stops for a few seconds while RC2FX restarts; your settings \
+                                 are kept. To change the RØDE firmware, use the full flash."
+                            ),
+                            FAINT,
+                        )),
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("in-place-flash")
+                                .ghost()
+                                .label("Full flash instead…")
+                                .disabled(installer.busy())
+                                .on_click(cx.listener(|app, _, _, cx| {
+                                    if let Some(installer) = app.installer.as_mut() {
+                                        installer.prefer_flash = true;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            large(Button::new("in-place-start").primary())
+                                .label("Update RC2FX")
+                                .disabled(installer.busy())
+                                .on_click(
+                                    cx.listener(|app, _, _, cx| app.start_in_place_update(cx)),
+                                ),
+                        ),
+                )
+            }
+            InPlace::Preparing { version } => (
+                working(format!("Downloading and checking RC2FX {version}…")),
+                div(),
+            ),
+            InPlace::Ready(bundle) => (
+                working(format!("Sending RC2FX {} to the mixer…", bundle.version)),
+                div(),
+            ),
+            InPlace::Uploading {
+                version,
+                sent,
+                total,
+            } => {
+                let share = if *total == 0 {
+                    0.
+                } else {
+                    (*sent as f32 / *total as f32 * 100.).clamp(0., 100.)
+                };
+                (
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .child(paragraph(
+                            format!("Sending RC2FX {version} to the mixer… {share:.0} %"),
+                            MUTED,
+                        ))
+                        .child(ProgressBar::new("in-place-progress").value(share))
+                        .child(paragraph("Keep the mixer on and connected.", FAINT)),
+                    div(),
+                )
+            }
+            InPlace::Installing { version, .. } => (
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(working(format!(
+                        "The mixer is checking and installing RC2FX {version}…"
+                    )))
+                    .child(paragraph(
+                        "Its audio stops for a few seconds while RC2FX restarts. Keep it on \
+                         and connected.",
+                        FAINT,
+                    )),
+                div(),
+            ),
+            InPlace::Done {
+                version,
+                committed,
+                detail,
+            } => (
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(paragraph(
+                        if *committed {
+                            format!("RC2FX {version} is installed.")
+                        } else {
+                            format!("RC2FX {version} didn't start, so the mixer went back to the previous version.")
+                        },
+                        if *committed { TEXT } else { WARN },
+                    ))
+                    .when(!detail.is_empty(), |d| d.child(paragraph(detail.clone(), FAINT))),
+                div().h_flex().justify_end().child(close()),
+            ),
+            InPlace::Failed(why) => (
+                paragraph(why.clone(), WARN),
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap_2()
+                    .child(close())
+                    .when(offer.is_some(), |bar| {
+                        bar.child(
+                            large(Button::new("in-place-retry").primary())
+                                .label("Try again")
+                                .disabled(installer.busy())
+                                .on_click(cx.listener(|app, _, _, cx| {
+                                    if let Some(installer) = app.installer.as_mut() {
+                                        installer.model.in_place = InPlace::Idle;
+                                    }
+                                    app.start_in_place_update(cx);
+                                })),
+                        )
+                    }),
+            ),
+        };
+        Some(
+            div()
+                .v_flex()
+                .gap_3()
+                .pt_4()
+                .border_t_1()
+                .border_color(rgb(surface().line))
+                .child(status)
+                .child(buttons),
+        )
+    }
+
     /// The action card's footer: leaving or cancelling, and the next step.
     fn installer_actions(&self, installer: &Installer, cx: &mut Context<Self>) -> Div {
+        if let Some(footer) = self.in_place_actions(installer, cx) {
+            return footer;
+        }
         if installer.needs_access() {
             return div()
                 .h_flex()

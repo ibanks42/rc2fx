@@ -487,3 +487,28 @@ fn updates_come_only_from_the_two_official_hosts() {
         assert!(check_repository_url(&url, METADATA_HOST).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn published_metadata_belongs_together_only_when_listed_exactly() {
+    let snapshot = r#"{"signed":{"version":4}}"#;
+    let hash = crate::files::sum(snapshot.as_bytes());
+    let timestamp = format!(
+        r#"{{"signed":{{"meta":{{"snapshot.json":{{"length":{},"hashes":{{"sha256":"{hash}"}}}}}}}}}}"#,
+        snapshot.len()
+    );
+    assert!(lists(&timestamp, "snapshot.json", snapshot));
+    // A snapshot published after this timestamp no longer matches it.
+    assert!(!lists(
+        &timestamp,
+        "snapshot.json",
+        r#"{"signed":{"version":5}}"#
+    ));
+    assert!(!lists(&timestamp, "targets.json", snapshot));
+    assert!(!lists("not json", "snapshot.json", snapshot));
+    // A listing without hashes or length still names the file.
+    assert!(lists(
+        r#"{"signed":{"meta":{"targets.json":{"version":3}}}}"#,
+        "targets.json",
+        "anything"
+    ));
+}

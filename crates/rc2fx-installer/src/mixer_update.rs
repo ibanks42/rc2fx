@@ -85,6 +85,106 @@ pub struct MixerOffer {
     pub metadata: MixerTarget,
 }
 
+/// A release's signed metadata exactly as published, for a mixer that checks
+/// it itself (an in-place update). Each role is its file's text: the snapshot
+/// and timestamp sign the bytes of the files they list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RawMetadata {
+    /// Every root, oldest first: the mixer follows a key rotation from the
+    /// root it was built with.
+    pub root: Vec<String>,
+    pub timestamp: String,
+    pub snapshot: String,
+    pub targets: String,
+}
+
+const RAW_METADATA_LIMIT: u64 = 1 << 20;
+const MAX_ROOTS: u64 = 8;
+
+/// Fetch the published role files byte for byte. The mixer verifies them
+/// against its own trusted root; this only makes sure they belong together,
+/// retrying when a release was published between two reads.
+pub fn raw_metadata() -> Result<RawMetadata> {
+    let base = Url::parse(METADATA_URL).map_err(error)?;
+    check_repository_url(&base, METADATA_HOST)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let fetch = |name: &str| -> Result<Option<String>> {
+        use std::io::Read;
+        let response = client.get(base.join(name).map_err(error)?).send()?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let mut bytes = Vec::new();
+        response
+            .error_for_status()?
+            .take(RAW_METADATA_LIMIT + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > RAW_METADATA_LIMIT {
+            return Err(error(format!("signed metadata {name} is too large")));
+        }
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| error(format!("signed metadata {name} is not text")))
+    };
+    let required =
+        |name: &str| fetch(name)?.ok_or_else(|| error(format!("signed metadata has no {name}")));
+    let mut root = Vec::new();
+    for version in 1..=MAX_ROOTS {
+        match fetch(&format!("{version}.root.json"))? {
+            Some(text) => root.push(text),
+            None => break,
+        }
+    }
+    if root.is_empty() {
+        return Err(error("signed metadata has no root"));
+    }
+    for _ in 0..3 {
+        let timestamp = required("timestamp.json")?;
+        let snapshot = required("snapshot.json")?;
+        let targets = required("targets.json")?;
+        if lists(&timestamp, "snapshot.json", &snapshot)
+            && lists(&snapshot, "targets.json", &targets)
+        {
+            return Ok(RawMetadata {
+                root,
+                timestamp,
+                snapshot,
+                targets,
+            });
+        }
+    }
+    Err(error(
+        "signed metadata kept changing while it was read; try again",
+    ))
+}
+
+/// Whether `listing` names `file` with the length and SHA-256 (where given)
+/// of `content`, as TUF's timestamp and snapshot do.
+fn lists(listing: &str, name: &str, content: &str) -> bool {
+    let Ok(listing) = serde_json::from_str::<serde_json::Value>(listing) else {
+        return false;
+    };
+    let Some(meta) = listing.pointer(&format!(
+        "/signed/meta/{}",
+        name.replace('~', "~0").replace('/', "~1")
+    )) else {
+        return false;
+    };
+    let length_ok = meta
+        .get("length")
+        .and_then(serde_json::Value::as_u64)
+        .is_none_or(|length| length == content.len() as u64);
+    let hash_ok = meta
+        .pointer("/hashes/sha256")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|hash| hash.eq_ignore_ascii_case(&crate::files::sum(content.as_bytes())));
+    length_ok && hash_ok
+}
+
 /// The two addresses updates may come from, over plain HTTPS.
 fn check_repository_url(url: &Url, host: &str) -> Result<()> {
     if url.scheme() != "https"

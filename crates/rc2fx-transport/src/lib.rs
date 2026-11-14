@@ -11,6 +11,29 @@ use usb_control::Usb;
 
 /// The largest request body the app sends.
 const REQUEST_LIMIT: usize = 512 * 1024;
+/// Bytes per update chunk: base64 and the JSON around it stay well inside
+/// [`REQUEST_LIMIT`], and the mixer accepts up to 256 KiB.
+const UPDATE_CHUNK: usize = 192 * 1024;
+
+/// Standard base64 with padding, as the mixer's update API reads it.
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
 
 pub enum Command {
     Selection {
@@ -78,6 +101,31 @@ pub enum Command {
         id: u64,
         request: rc2fx_core::SshRequest,
     },
+    /// Send a signed release to the mixer and start installing it in place.
+    /// `start` is the body of `POST api/v1/update`; `payload` the release
+    /// file it describes. Progress arrives as [`EventKind::MixerUpdate`].
+    MixerUpdate {
+        generation: u64,
+        start: Value,
+        payload: std::path::PathBuf,
+    },
+    /// Read how the last in-place update ended.
+    MixerUpdateLast {
+        generation: u64,
+    },
+}
+
+/// How an in-place update is going, as far as this side can see. Once the
+/// mixer restarts, `MixerUpdateLast` tells how it ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MixerUpdateEvent {
+    Uploading {
+        sent: u64,
+        total: u64,
+    },
+    /// Verified and accepted: the mixer is installing and will restart.
+    Installing,
+    Failed(String),
 }
 
 #[derive(Debug)]
@@ -103,6 +151,10 @@ pub enum EventKind {
         result: Result<Option<rc2fx_core::SshStatus>, String>,
     },
     Inputs(Result<rc2fx_core::StockInventory, String>),
+    MixerUpdate(MixerUpdateEvent),
+    /// `Ok(None)`: no in-place update has finished on this mixer, or its
+    /// software predates them.
+    MixerUpdateLast(Result<Option<Value>, String>),
     Routing(Result<rc2fx_core::DeviceState, String>),
     Preset(Result<PresetReply, PresetError>),
     /// Connected to the mixer with this USB serial; its state.
@@ -354,6 +406,86 @@ impl Device {
         }
     }
 
+    /// Upload `payload` for the in-place update `start` describes, resuming
+    /// where the mixer says it is, then ask it to verify and install. Returns
+    /// once the mixer has accepted the release; it then restarts by itself.
+    async fn mixer_update<F, Fut>(
+        &self,
+        start: Value,
+        payload: &std::path::Path,
+        progress: F,
+    ) -> Result<(), RequestError>
+    where
+        F: Fn(u64, u64) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let bytes = std::fs::read(payload)
+            .map_err(|e| RequestError::Usb(format!("Cannot read the mixer software: {e}")))?;
+        let total = bytes.len() as u64;
+        let session = self
+            .request_with_status("POST", "api/v1/update", Some(start), Some(201))
+            .await?;
+        let id = session
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or(RequestError::Protocol)?
+            .to_owned();
+        let path = format!("api/v1/update/{id}");
+        let mut offset = 0u64;
+        let mut retries = 0;
+        progress(0, total).await;
+        while offset < total {
+            let end = (offset + UPDATE_CHUNK as u64).min(total);
+            let body = serde_json::json!({
+                "offset": offset,
+                "data": base64(&bytes[offset as usize..end as usize]),
+            });
+            match self.usb.request("PUT", &path, Some(body)).await {
+                Ok(reply) if reply.status == 200 => {
+                    offset = reply
+                        .body
+                        .get("received")
+                        .and_then(Value::as_u64)
+                        .filter(|received| *received > offset && *received <= total)
+                        .ok_or(RequestError::Protocol)?;
+                    retries = 0;
+                    progress(offset, total).await;
+                }
+                // The mixer is elsewhere (a reply was lost): continue from there.
+                Ok(reply) if reply.status == 409 => {
+                    offset = reply
+                        .body
+                        .get("expectedOffset")
+                        .and_then(Value::as_u64)
+                        .filter(|expected| *expected <= total)
+                        .ok_or_else(|| {
+                            RequestError::Status(
+                                409,
+                                reply
+                                    .body
+                                    .get("error")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                            )
+                        })?;
+                }
+                Ok(reply) => {
+                    let detail = reply.body.get("error").and_then(Value::as_str);
+                    return Err(RequestError::Status(
+                        reply.status,
+                        detail.map(str::to_owned),
+                    ));
+                }
+                Err(RequestError::Usb(_)) if retries < 3 => retries += 1,
+                Err(error) => return Err(error),
+            }
+        }
+        self.request("POST", &format!("{path}/install"), None)
+            .await?;
+        Ok(())
+    }
+
     /// A lifecycle change the mixer accepts with 202, returning its state.
     async fn transition(
         &self,
@@ -592,6 +724,62 @@ async fn run(mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>)
                         id,
                         result: result.map_err(|e| e.message()),
                     },
+                )
+                .await;
+            }
+            Command::MixerUpdate {
+                generation: requested,
+                start,
+                payload,
+            } if requested == generation => match &current {
+                // The upload runs beside other requests; the mixer restarts
+                // once it installs, which ends this connection anyway.
+                Some(device) => {
+                    let (device, events) = (device.clone(), events.clone());
+                    tokio::spawn(async move {
+                        let progress = |sent, total| {
+                            let events = events.clone();
+                            async move {
+                                emit(
+                                    &events,
+                                    generation,
+                                    EventKind::MixerUpdate(MixerUpdateEvent::Uploading {
+                                        sent,
+                                        total,
+                                    }),
+                                )
+                                .await;
+                            }
+                        };
+                        let kind = match device.mixer_update(start, &payload, progress).await {
+                            Ok(()) => MixerUpdateEvent::Installing,
+                            Err(error) => MixerUpdateEvent::Failed(error.message()),
+                        };
+                        emit(&events, generation, EventKind::MixerUpdate(kind)).await;
+                    });
+                }
+                None => {
+                    let failed = MixerUpdateEvent::Failed(no_mixer().message());
+                    emit(&events, generation, EventKind::MixerUpdate(failed)).await;
+                }
+            },
+            Command::MixerUpdateLast {
+                generation: requested,
+            } if requested == generation => {
+                let result = match &current {
+                    Some(device) => match device.request("GET", "api/v1/update/last", None).await {
+                        Ok(value) if value.as_object().is_some_and(|o| o.is_empty()) => Ok(None),
+                        Ok(value) if value.is_object() => Ok(Some(value)),
+                        Ok(_) => Err(RequestError::Protocol),
+                        Err(RequestError::Status(404, _)) => Ok(None),
+                        Err(error) => Err(error),
+                    },
+                    None => Err(no_mixer()),
+                };
+                emit(
+                    &events,
+                    generation,
+                    EventKind::MixerUpdateLast(result.map_err(|e| e.message())),
                 )
                 .await;
             }
@@ -915,5 +1103,18 @@ mod tests {
             "device worker did not stop after its owner dropped"
         );
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn update_chunks_are_standard_base64() {
+        assert_eq!(super::base64(b""), "");
+        assert_eq!(super::base64(b"f"), "Zg==");
+        assert_eq!(super::base64(b"fo"), "Zm8=");
+        assert_eq!(super::base64(b"foo"), "Zm9v");
+        assert_eq!(super::base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(super::base64(&[0xff, 0xfe, 0x00]), "//4A");
+        // The largest chunk plus its JSON stays within one request.
+        let chunk = super::base64(&vec![0u8; super::UPDATE_CHUNK]);
+        assert!(chunk.len() + 64 < super::REQUEST_LIMIT);
     }
 }

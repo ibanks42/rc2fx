@@ -7,15 +7,71 @@
 //! Steps the mixer already satisfies are done. One start runs the rest in
 //! order, waiting for the mixer where it has to and stopping at the first
 //! error, which can be retried from that step.
+//!
+//! A mixer whose RC2FX installs signed releases in place needs no flash for
+//! an RC2FX update that keeps its RØDE firmware: [`InPlace`] tracks that
+//! shorter path, which the app finishes over its USB connection.
 
 use rc2fx_installer::{
-    CANCELLED, DeviceModel, Prepared, Release, Reply, Request, Service, Status, UsbMixer,
-    compare_versions, mixer_update::MixerOffer,
+    CANCELLED, DeviceModel, InPlaceBundle, Prepared, Release, Reply, Request, Service, Status,
+    UsbMixer, compare_versions, mixer_update::MixerOffer,
 };
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
+
+/// An RC2FX update installed in place, without a flash.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InPlace {
+    #[default]
+    Idle,
+    /// Downloading and verifying the signed release.
+    Preparing {
+        version: String,
+    },
+    /// Verified here; the app sends it to the mixer next.
+    Ready(InPlaceBundle),
+    Uploading {
+        version: String,
+        sent: u64,
+        total: u64,
+    },
+    /// The mixer accepted it, is installing and restarts its audio.
+    Installing {
+        version: String,
+        since: Instant,
+    },
+    /// The mixer reported how it ended.
+    Done {
+        version: String,
+        committed: bool,
+        detail: String,
+    },
+    Failed(String),
+}
+
+impl InPlace {
+    /// Something is in flight: nothing else may start meanwhile.
+    pub fn active(&self) -> bool {
+        matches!(
+            self,
+            Self::Preparing { .. }
+                | Self::Ready(_)
+                | Self::Uploading { .. }
+                | Self::Installing { .. }
+        )
+    }
+}
+
+/// What the mixer says it can do and runs, for [`Model::in_place_offer`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct InPlaceSupport<'a> {
+    /// The mixer's RC2FX installs signed releases in place.
+    pub supported: bool,
+    /// The RØDE firmware profile RC2FX runs on.
+    pub profile: Option<&'a str>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Step {
@@ -209,6 +265,7 @@ pub(crate) struct Model {
     /// update in progress.
     pub settled_flash: Option<u64>,
     last_poll: Option<Instant>,
+    pub in_place: InPlace,
 }
 
 fn now_unix() -> u64 {
@@ -248,6 +305,7 @@ impl Model {
             finished: false,
             last: None,
             settled_flash: None,
+            in_place: InPlace::Idle,
             last_poll: None,
         }
     }
@@ -659,6 +717,55 @@ impl Model {
             matches!(source, MixerSource::Signed(_))
                 && self.mixer_change(source) != MixerChange::Downgrade
         });
+    }
+
+    /// The signed release an in-place update would install, when one can:
+    /// the mixer runs RC2FX that installs in place, the release is newer than
+    /// what it runs and supports the RØDE firmware it already has. Firmware
+    /// changes always need a flash, so this never changes firmware.
+    pub fn in_place_offer(&self, support: InPlaceSupport) -> Option<&MixerOffer> {
+        let profile = support.profile?;
+        if !support.supported || self.stock || self.run.is_some() || !self.answering() {
+            return None;
+        }
+        let Some(MixerSource::Signed(offer)) = self.mixer.as_ref() else {
+            return None;
+        };
+        (self.mixer_change(&MixerSource::Signed(offer.clone())) == MixerChange::Upgrade
+            && offer
+                .metadata
+                .firmware_profiles
+                .iter()
+                .any(|p| p == profile))
+        .then_some(offer)
+    }
+
+    /// Start an in-place update with `offer`: download and verify it here,
+    /// then [`InPlace::Ready`] hands it to the app to send.
+    pub fn start_in_place(&mut self, offer: MixerOffer, profile: &str) -> Option<Request> {
+        if self.busy.is_some() || self.in_place.active() || self.run.is_some() {
+            return None;
+        }
+        self.in_place = InPlace::Preparing {
+            version: offer.metadata.version.clone(),
+        };
+        self.send(Request::InPlaceBundle {
+            offer,
+            firmware_profile: profile.to_owned(),
+        })
+    }
+
+    /// The verified release, once, for the app to send to the mixer.
+    pub fn take_in_place_bundle(&mut self) -> Option<InPlaceBundle> {
+        let InPlace::Ready(bundle) = std::mem::take(&mut self.in_place) else {
+            return None;
+        };
+        self.in_place = InPlace::Uploading {
+            version: bundle.version.clone(),
+            sent: 0,
+            total: bundle.size,
+        };
+        Some(bundle)
     }
 
     pub fn choose_mixer(&mut self, source: MixerSource) {
@@ -1138,6 +1245,16 @@ impl Model {
                         self.error = e;
                         None
                     }
+                    Request::InPlaceBundle { .. } => {
+                        self.in_place = InPlace::Failed(if e == CANCELLED {
+                            "The update was cancelled. Nothing changed on the mixer.".into()
+                        } else {
+                            format!(
+                                "Couldn't get the update ready. Nothing changed on the mixer. {e}"
+                            )
+                        });
+                        None
+                    }
                     Request::Releases => {
                         self.firmware_check = FirmwareCheck::Done;
                         self.error = if e == CANCELLED {
@@ -1274,6 +1391,9 @@ impl Model {
                 self.stock_releases = items;
                 self.stock_check = StockCheck::Done;
                 return None;
+            }
+            Reply::InPlaceBundle(bundle) => {
+                self.in_place = InPlace::Ready(bundle);
             }
             Reply::MixerSelected(identity) => {
                 if let Some(run) = self.run.as_mut() {
@@ -2443,6 +2563,98 @@ mod tests {
             status(&[("GV1", false)], absent(), false, false),
         );
         assert_eq!(again, Some(select));
+    }
+
+    fn running_rc2fx(installed: &str) -> Model {
+        let mut m = model(status(
+            &[("GV1", false)],
+            Some(Service::Ready),
+            false,
+            false,
+        ));
+        m.offers = Offers::Ready(vec![offer("2.0.0")]);
+        m.set_installed(Some(installed.into()), Some("1.7.6".into()));
+        m
+    }
+
+    const IN_PLACE: InPlaceSupport = InPlaceSupport {
+        supported: true,
+        profile: Some(PROFILE),
+    };
+
+    #[test]
+    fn a_newer_rc2fx_on_the_same_firmware_installs_in_place() {
+        let m = running_rc2fx("1.0.0");
+        assert_eq!(m.in_place_offer(IN_PLACE), Some(&offer("2.0.0")));
+        let unsupported = InPlaceSupport {
+            supported: false,
+            ..IN_PLACE
+        };
+        assert!(
+            m.in_place_offer(unsupported).is_none(),
+            "older mixer software"
+        );
+        let other_firmware = InPlaceSupport {
+            profile: Some("rodecaster-pro-ii-1.7.7"),
+            ..IN_PLACE
+        };
+        assert!(
+            m.in_place_offer(other_firmware).is_none(),
+            "a release for other firmware needs a flash"
+        );
+        let unknown = InPlaceSupport {
+            profile: None,
+            ..IN_PLACE
+        };
+        assert!(m.in_place_offer(unknown).is_none());
+        assert!(
+            running_rc2fx("2.0.0").in_place_offer(IN_PLACE).is_none(),
+            "nothing newer to install"
+        );
+        let mut stock = running_rc2fx("1.0.0");
+        stock.set_stock(true);
+        assert!(stock.in_place_offer(IN_PLACE).is_none());
+    }
+
+    #[test]
+    fn an_in_place_update_is_prepared_once_and_failures_change_nothing() {
+        let mut m = running_rc2fx("1.0.0");
+        let prepare = m.start_in_place(offer("2.0.0"), PROFILE).unwrap();
+        assert!(matches!(prepare, Request::InPlaceBundle { .. }));
+        assert!(m.in_place.active());
+        assert!(
+            m.start_in_place(offer("2.0.0"), PROFILE).is_none(),
+            "one at a time"
+        );
+        let bundle = InPlaceBundle {
+            version: "2.0.0".into(),
+            size: 7,
+            sha256: "00".repeat(32),
+            path: "payload".into(),
+            metadata: rc2fx_installer::mixer_update::RawMetadata {
+                root: vec!["{}".into()],
+                timestamp: "{}".into(),
+                snapshot: "{}".into(),
+                targets: "{}".into(),
+            },
+        };
+        m.finish(&prepare, Ok(Reply::InPlaceBundle(bundle.clone())));
+        assert_eq!(m.take_in_place_bundle(), Some(bundle));
+        assert!(matches!(
+            m.in_place,
+            InPlace::Uploading {
+                sent: 0,
+                total: 7,
+                ..
+            }
+        ));
+        assert_eq!(m.take_in_place_bundle(), None, "handed over once");
+
+        let mut m = running_rc2fx("1.0.0");
+        let prepare = m.start_in_place(offer("2.0.0"), PROFILE).unwrap();
+        m.finish(&prepare, Err("offline".into()));
+        assert!(matches!(&m.in_place, InPlace::Failed(e) if e.contains("Nothing changed")));
+        assert!(!m.in_place.active());
     }
 
     #[test]

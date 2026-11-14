@@ -189,6 +189,18 @@ impl Saved {
     }
 }
 
+/// A downloaded, verified signed release, ready to send to a mixer that
+/// installs it in place. The mixer verifies all of it again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InPlaceBundle {
+    pub version: String,
+    pub size: u64,
+    pub sha256: String,
+    /// The payload file, in this app's own cache.
+    pub path: std::path::PathBuf,
+    pub metadata: mixer_update::RawMetadata,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsbMixer {
     pub model: DeviceModel,
@@ -238,6 +250,13 @@ pub enum Request {
     },
     /// Explicitly select the optional compiled-in payload. No network fallback.
     SelectBundledMixer,
+    /// Download and verify the signed `offer` for an in-place update of a
+    /// mixer running `firmware_profile`, and read the release's metadata as
+    /// published. Needs no administrator access and touches no mixer.
+    InPlaceBundle {
+        offer: mixer_update::MixerOffer,
+        firmware_profile: String,
+    },
     /// Keep `settings` (RC2FX's settings file, read over USB by the app) for
     /// the mixer `serial`.
     SaveSettings {
@@ -270,6 +289,7 @@ pub enum Reply {
     StockReleases(Vec<Release>),
     MixerReleases(Vec<mixer_update::MixerOffer>),
     MixerSelected(Identity),
+    InPlaceBundle(InPlaceBundle),
     Prepared(Prepared),
     Backup(BackupRecord),
     Done,
@@ -468,6 +488,35 @@ impl Engine {
                 let identity = embed::identity_of("download", &payload.bundle).map_err(Error)?;
                 self.source = embed::Source::Verified(payload);
                 Ok(Reply::MixerSelected(identity))
+            }
+            Request::InPlaceBundle {
+                offer,
+                firmware_profile,
+            } => {
+                self.step("mixer-download", "Downloading and verifying mixer software");
+                let work = self.work.clone();
+                let cache = mixer_update::metadata_directory(&work)?.join("payloads");
+                self.mixer_operation(async {
+                    mixer_update::official(&work)
+                        .await?
+                        .accept_cached(
+                            &offer,
+                            env!("CARGO_PKG_VERSION"),
+                            rc2fx_core::MIXER_PROTOCOL_VERSION,
+                            &firmware_profile,
+                            &cache,
+                        )
+                        .await
+                })?;
+                self.step("mixer-metadata", "Reading the release's signed metadata");
+                let metadata = mixer_update::raw_metadata()?;
+                Ok(Reply::InPlaceBundle(InPlaceBundle {
+                    version: offer.metadata.version.clone(),
+                    size: offer.length,
+                    sha256: offer.sha256.clone(),
+                    path: cache.join(format!("{}.payload", offer.sha256)),
+                    metadata,
+                }))
             }
             Request::SelectBundledMixer => {
                 // Match downloaded selection: failure must discard the old choice.
