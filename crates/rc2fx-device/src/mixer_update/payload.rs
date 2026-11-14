@@ -244,6 +244,16 @@ fn release_script(script: &[u8]) -> Result<(), String> {
             return Err("the payload's rc2fx.sh has an unsupported build line".into());
         }
     }
+    // The detached commit step is the new release's own script: a release
+    // without it would be installed and then never committed or rolled back.
+    if !text
+        .lines()
+        .any(|line| line.trim_start().starts_with("update-commit)"))
+    {
+        return Err(
+            "this release can't finish an in-place install; use the installer's full flash".into(),
+        );
+    }
     match found {
         Some(RELEASE) => Ok(()),
         Some(_) => Err("the payload is a development build; only release builds install".into()),

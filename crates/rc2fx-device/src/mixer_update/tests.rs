@@ -587,9 +587,8 @@ fn bundle_files(tag: &str) -> Vec<(String, Vec<u8>)> {
                     pro_ii_profile()
                 )
                 .into_bytes(),
-                "rc2fx.sh" => {
-                    b"#!/bin/sh\nrc2fx_build=release\n  launch) : ;;\n  gui-launch) : ;;\n".to_vec()
-                }
+                "rc2fx.sh" => b"#!/bin/sh\nrc2fx_build=release\n  launch) : ;;\n  gui-launch) : ;;\n  update-commit) : ;;\n"
+                    .to_vec(),
                 _ => format!("{tag} {name}\n").into_bytes(),
             };
             ((*name).to_owned(), data)
@@ -773,7 +772,7 @@ fn envelope_files() -> Vec<(String, Vec<u8>)> {
                     br#"{"schemaVersion":1,"version":"0.2.0","protocolVersion":1}"#.to_vec()
                 }
                 "SHA256SUMS" => Vec::new(),
-                "rc2fx.sh" => b"#!/bin/sh\nrc2fx_build=release\n".to_vec(),
+                "rc2fx.sh" => b"#!/bin/sh\nrc2fx_build=release\n  update-commit) : ;;\n".to_vec(),
                 n if install::SCRIPTS.contains(&n) => b"#!/bin/sh\n".to_vec(),
                 _ => elf.clone(),
             };
@@ -833,7 +832,7 @@ fn a_release_envelope_round_trips_and_damage_is_refused() {
         .iter_mut()
         .find(|(n, _)| n == "rc2fx.sh")
         .unwrap()
-        .1 = b"#!/bin/sh\nrc2fx_build=development\n".to_vec();
+        .1 = b"#!/bin/sh\nrc2fx_build=development\n  update-commit) : ;;\n".to_vec();
     let sums: String = install::PINNED
         .iter()
         .map(|name| {
@@ -852,6 +851,21 @@ fn a_release_envelope_round_trips_and_damage_is_refused() {
         .1 = sums.into_bytes();
     let error = payload::read(&mut wrap(&development).as_slice()).unwrap_err();
     assert!(error.contains("development"), "{error}");
+    // A release that predates in-place updates (mixer 0.1.2 is one) would be
+    // installed and then never committed: refused before anything changes.
+    let mut older = files.clone();
+    older.iter_mut().find(|(n, _)| n == "rc2fx.sh").unwrap().1 =
+        b"#!/bin/sh\nrc2fx_build=release\n  launch) : ;;\n".to_vec();
+    let sums: String = install::PINNED
+        .iter()
+        .map(|name| {
+            let data = &older.iter().find(|(n, _)| n.as_str() == *name).unwrap().1;
+            format!("{}  {name}\n", install::sum(data))
+        })
+        .collect();
+    older.iter_mut().find(|(n, _)| n == "SHA256SUMS").unwrap().1 = sums.into_bytes();
+    let error = payload::read(&mut wrap(&older).as_slice()).unwrap_err();
+    assert!(error.contains("full flash"), "{error}");
     // A binary that is not ARM64 ELF.
     let mut wrong = files.clone();
     wrong.iter_mut().find(|(n, _)| n == "rc2fxd").unwrap().1 = b"not an ELF".to_vec();
