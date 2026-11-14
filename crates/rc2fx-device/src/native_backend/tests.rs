@@ -896,7 +896,7 @@ mod coordinator_loop {
     async fn a_usb_client_that_goes_silent_returns_the_engine_to_idle_polling() {
         let (_directory, peer, handle, mut owner) = start();
         let (socket, _peer_socket) = tokio::net::UnixDatagram::pair().unwrap();
-        let mut server = Server::new(handle.clone(), Options::default());
+        let mut server = Server::new(handle.clone(), Options::default(), 8);
         let mut bytes = [0; REPORT_SIZE + 1];
         // Nobody attached: the first pass reads the engine and waits idle.
         let wait = owner.turn();

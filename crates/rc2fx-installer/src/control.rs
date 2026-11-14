@@ -19,7 +19,9 @@ const DEADLINE: Duration = Duration::from_secs(60);
 const REPORT_WAIT: Duration = Duration::from_secs(3);
 /// A request executes before its final acknowledgement, for up to 15 s.
 const EXECUTE_WAIT: Duration = Duration::from_secs(17);
-const HELLO: &[u8] = b"RC2FX USB 3";
+/// Reply reports asked for per fetch at most: macOS queues about 30 input
+/// reports and Linux's hidraw 64, shared with RØDE's own.
+const FETCH_WINDOW: usize = 16;
 /// The mixer's own bound on a saved file's density, applied to a reply's size:
 /// real replies stay far below it, and a parsed value costs many times its text.
 const BYTES_PER_NODE: usize = 4;
@@ -53,6 +55,9 @@ pub struct Client {
     model: Option<rc2fx_firmware::Model>,
     nonce: u64,
     sequence: u32,
+    /// Request fragments sent per acknowledgement, and reply reports per
+    /// fetch: 1 with a protocol 3 mixer, which acknowledges every report.
+    window: usize,
     report_wait: Duration,
     execute_wait: Duration,
 }
@@ -68,6 +73,7 @@ impl Client {
             model: None,
             nonce: u64::from_le_bytes(nonce).max(1),
             sequence: 0,
+            window: 1,
             report_wait: REPORT_WAIT,
             execute_wait: EXECUTE_WAIT,
         };
@@ -117,30 +123,53 @@ impl Client {
         self.reports = Some(platform.open_control(hid).map_err(|e| e.to_string())?);
         self.serial = hid.serial.clone();
         self.model = model;
+        self.negotiate()
+    }
+
+    /// Protocol 4 first; a mixer that only speaks 3 refuses the marked hello
+    /// without touching its session, and gets the plain one.
+    fn negotiate(&mut self) -> Result<(), String> {
+        let window = match self.hello(rc2fx_usb::HELLO_4) {
+            Ok(data) => rc2fx_usb::hello_4_window(&data).map(|w| w.min(rc2fx_usb::MAX_WINDOW)),
+            Err(e) if e == "Invalid USB hello" => match self.hello(&[]) {
+                Ok(data) => (data == rc2fx_usb::HELLO_3).then_some(1),
+                Err(e) => return Err(self.refused(e)),
+            },
+            Err(e) => return Err(self.refused(e)),
+        };
+        let Some(window) = window else {
+            self.reports = None;
+            return Err("RC2FX's USB protocol version does not match this app".into());
+        };
+        self.window = window;
+        Ok(())
+    }
+
+    /// Say hello with `data`; returns the mixer's acknowledgement text.
+    fn hello(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
         let hello = Frame {
             kind: Kind::Hello,
             session: self.nonce,
             request: 0,
             offset: 0,
             total: 0,
-            data: &[],
+            data,
         };
-        let reply = self
-            .exchange(&hello, Instant::now() + self.report_wait, self.report_wait)
-            .map_err(|e| {
-                self.reports = None;
-                if e.starts_with("USB is in use") {
-                    format!("{e}; try again in a few seconds")
-                } else {
-                    format!("RC2FX did not answer over USB: {e}")
-                }
-            })?;
+        let reply = self.exchange(&hello, Instant::now() + self.report_wait, self.report_wait)?;
         let reply = Frame::decode(&reply, INPUT_ID).ok_or("Invalid USB hello reply")?;
-        if reply.kind != Kind::Ack || reply.data != HELLO {
-            self.reports = None;
-            return Err("RC2FX's USB protocol version does not match this app".into());
+        if reply.kind != Kind::Ack {
+            return Err("Invalid USB hello reply".into());
         }
-        Ok(())
+        Ok(reply.data.to_vec())
+    }
+
+    fn refused(&mut self, e: String) -> String {
+        self.reports = None;
+        if e.starts_with("USB is in use") {
+            format!("{e}; try again in a few seconds")
+        } else {
+            format!("RC2FX did not answer over USB: {e}")
+        }
     }
 
     /// Send one request and wait for its reply.
@@ -180,6 +209,13 @@ impl Client {
                 total: bytes.len(),
                 data: chunk,
             };
+            // Protocol 4 acknowledges only the fragment that ends a window
+            // (USB holds the next while the mixer is busy); the rest are
+            // only written.
+            if !last && !(index + 1).is_multiple_of(self.window) {
+                self.write(&frame, deadline.min(Instant::now() + self.report_wait))?;
+                continue;
+            }
             let wait = if last {
                 self.execute_wait
             } else {
@@ -207,43 +243,65 @@ impl Client {
     }
 
     /// Fetch the reply. Fetching is idempotent, so a lost report is asked for
-    /// again rather than ending the request.
+    /// again rather than ending the request. A protocol 4 mixer answers one
+    /// fetch with several consecutive reports.
     fn fetch(&mut self, limit: usize) -> Result<Reply, String> {
         let deadline = Instant::now() + DEADLINE;
         let mut assembly = Assembly::default();
         let mut offset = 0;
+        let count = if self.window > 1 {
+            self.window.min(FETCH_WINDOW)
+        } else {
+            0
+        };
         loop {
             let frame = Frame {
                 kind: Kind::Fetch,
                 session: self.nonce,
                 request: self.sequence,
                 offset,
-                total: 0,
+                total: count,
                 data: &[],
             };
-            let bytes = match self.exchange(&frame, deadline, self.report_wait) {
-                Ok(bytes) => bytes,
-                Err(e) if e == TIMED_OUT && Instant::now() < deadline => continue,
-                // Before the mixer has a reply (still executing, or its final
-                // acknowledgement was lost) a fetch is refused; ask again.
-                Err(e) if e == NOT_READY && Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(100));
+            let until = deadline.min(Instant::now() + self.report_wait);
+            let mut first = Some(self.exchange(&frame, deadline, self.report_wait));
+            for _ in 0..count.max(1) {
+                let bytes = match first.take().unwrap_or_else(|| self.read(&frame, until)) {
+                    Ok(bytes) => bytes,
+                    Err(e) if e == TIMED_OUT && Instant::now() < deadline => break,
+                    // Before the mixer has a reply (still executing, or its
+                    // final acknowledgement was lost) a fetch is refused.
+                    Err(e) if e == NOT_READY && Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(100));
+                        break;
+                    }
+                    Err(e) if e == TIMED_OUT || e == NOT_READY => {
+                        return Err(
+                            "USB request timed out; its outcome is unknown; not replayed".into(),
+                        );
+                    }
+                    Err(e) => return Err(e),
+                };
+                let reply = Frame::decode(&bytes, INPUT_ID).ok_or("Invalid USB reply")?;
+                if reply.kind != Kind::Reply {
+                    return Err("Invalid USB reply sequence".into());
+                }
+                // A report from an earlier fetch of this request: the reply
+                // is cached, so an offset always carries the same bytes.
+                if reply.offset < offset {
                     continue;
                 }
-                Err(e) if e == TIMED_OUT || e == NOT_READY => {
-                    return Err(
-                        "USB request timed out; its outcome is unknown; not replayed".into(),
-                    );
+                // One went missing; ask again from where the reply stopped.
+                if reply.offset > offset {
+                    break;
                 }
-                Err(e) => return Err(e),
-            };
-            let reply = Frame::decode(&bytes, INPUT_ID).ok_or("Invalid USB reply")?;
-            if reply.kind != Kind::Reply || reply.offset != offset {
-                return Err("Invalid USB reply sequence".into());
+                offset += reply.data.len();
+                if let Some(bytes) = assembly.push(&reply, limit)? {
+                    return parse_reply(&rc2fx_usb::unpack(&bytes, limit)?, limit);
+                }
             }
-            offset += reply.data.len();
-            if let Some(bytes) = assembly.push(&reply, limit)? {
-                return parse_reply(&rc2fx_usb::unpack(&bytes, limit)?, limit);
+            if Instant::now() >= deadline {
+                return Err("USB request timed out; its outcome is unknown; not replayed".into());
             }
         }
     }
@@ -257,19 +315,33 @@ impl Client {
         wait: Duration,
     ) -> Result<[u8; REPORT_SIZE], String> {
         let until = deadline.min(Instant::now() + wait);
+        self.write(frame, until)?;
+        self.read(frame, until)
+    }
+
+    fn write(&mut self, frame: &Frame<'_>, until: Instant) -> Result<(), String> {
+        let remaining = until
+            .checked_duration_since(Instant::now())
+            .ok_or(TIMED_OUT)?;
+        let reports = self.reports.as_mut().ok_or("USB is not connected")?;
+        let bytes = frame.encode(OUTPUT_ID);
+        let n = reports
+            .write(&bytes, remaining)
+            .map_err(|e| e.to_string())?;
+        if n < bytes.len() {
+            return Err("Short USB write; not replayed".into());
+        }
+        Ok(())
+    }
+
+    /// Read this session's next report for `frame`'s request, until `until`.
+    fn read(&mut self, frame: &Frame<'_>, until: Instant) -> Result<[u8; REPORT_SIZE], String> {
         let remaining = || {
             until
                 .checked_duration_since(Instant::now())
                 .ok_or(TIMED_OUT)
         };
         let reports = self.reports.as_mut().ok_or("USB is not connected")?;
-        let bytes = frame.encode(OUTPUT_ID);
-        let n = reports
-            .write(&bytes, remaining()?)
-            .map_err(|e| e.to_string())?;
-        if n < bytes.len() {
-            return Err("Short USB write; not replayed".into());
-        }
         loop {
             let mut bytes = [0; REPORT_SIZE];
             // A read that fails at the deadline is a timeout, whatever the
@@ -357,10 +429,18 @@ mod tests {
         short: bool,
         lose_final_ack: bool,
         lose_fetches: usize,
+        /// Protocol 4's window; 0 for a mixer that speaks only protocol 3.
+        window: usize,
+        /// Drop this fetch reply report (by index), once.
+        lose_report: Option<usize>,
+        acks: Arc<AtomicUsize>,
     }
 
     impl Mixer {
         fn answer(&mut self, f: &Frame<'_>, kind: Kind, offset: usize, total: usize, data: &[u8]) {
+            if kind == Kind::Ack {
+                self.acks.fetch_add(1, Ordering::SeqCst);
+            }
             // Real handles also see RØDE's reports and other sessions'.
             self.inbox.push_back(vec![2, b'A']);
             for session in [f.session + 1, f.session] {
@@ -385,13 +465,22 @@ mod tests {
             }
             let f = Frame::decode(bytes, OUTPUT_ID).unwrap();
             match f.kind {
-                Kind::Hello => self.answer(&f, Kind::Ack, 0, 0, HELLO),
+                Kind::Hello if f.data.is_empty() => {
+                    self.answer(&f, Kind::Ack, 0, 0, rc2fx_usb::HELLO_3)
+                }
+                Kind::Hello if f.data == rc2fx_usb::HELLO_4 && self.window > 0 => {
+                    let text = format!("RC2FX USB 4 {}", self.window);
+                    self.answer(&f, Kind::Ack, 0, 0, text.as_bytes())
+                }
+                Kind::Hello => self.answer(&f, Kind::Error, 0, 0, b"Invalid USB hello"),
                 Kind::Request => {
                     let done = self.assembly.push(&f, MAX_REQUEST).unwrap().is_some();
                     if done {
                         self.executed += 1;
                     }
-                    if !(done && self.lose_final_ack) {
+                    let end = (f.offset + f.data.len()) / PAYLOAD;
+                    let windowed = self.window > 0 && !done && !end.is_multiple_of(self.window);
+                    if !windowed && !(done && self.lose_final_ack) {
                         self.answer(&f, Kind::Ack, f.offset + f.data.len(), f.total, &[]);
                     }
                 }
@@ -400,15 +489,21 @@ mod tests {
                 }
                 Kind::Fetch if self.lose_fetches > 0 => self.lose_fetches -= 1,
                 Kind::Fetch => {
-                    let end = (f.offset + rc2fx_usb::INPUT_PAYLOAD).min(self.reply.len());
                     let reply = self.reply.clone();
-                    self.answer(
-                        &f,
-                        Kind::Reply,
-                        f.offset,
-                        reply.len(),
-                        &reply[f.offset..end],
-                    );
+                    let mut offset = f.offset;
+                    for _ in 0..f.total.max(1) {
+                        if offset >= reply.len() {
+                            break;
+                        }
+                        let end = (offset + rc2fx_usb::INPUT_PAYLOAD).min(reply.len());
+                        let index = offset / rc2fx_usb::INPUT_PAYLOAD;
+                        if self.lose_report == Some(index) {
+                            self.lose_report = None;
+                        } else {
+                            self.answer(&f, Kind::Reply, offset, reply.len(), &reply[offset..end]);
+                        }
+                        offset = end;
+                    }
                 }
                 _ => panic!("unexpected host operation"),
             }
@@ -437,7 +532,11 @@ mod tests {
         })
         .unwrap();
         let mixer = Mixer {
-            reply: rc2fx_usb::pack(&json, MAX_REPLY).unwrap(),
+            reply: if mixer.reply.is_empty() {
+                rc2fx_usb::pack(&json, MAX_REPLY).unwrap()
+            } else {
+                mixer.reply
+            },
             ..mixer
         };
         let client = Client {
@@ -446,6 +545,7 @@ mod tests {
             model: Some(rc2fx_firmware::Model::ProIi),
             nonce: 5,
             sequence: 0,
+            window: 1,
             report_wait: Duration::from_millis(20),
             execute_wait: Duration::from_millis(20),
         };
@@ -602,5 +702,66 @@ mod tests {
             ..hid(0x0094, "A")
         };
         assert!(control_interface(&[other_page]).is_err());
+    }
+
+    /// A protocol 4 client: negotiated with a mixer whose window is `window`.
+    fn windowed(window: usize, mixer: Mixer) -> (Client, Arc<AtomicUsize>) {
+        let (mut client, writes) = client(Mixer { window, ..mixer });
+        client.negotiate().unwrap();
+        (client, writes)
+    }
+
+    #[test]
+    fn protocol_4_is_negotiated_and_3_is_the_fallback() {
+        let (v4, _) = windowed(8, Mixer::default());
+        assert_eq!(v4.window, 8);
+        let (mut v3, _) = client(Mixer::default());
+        v3.negotiate().unwrap();
+        assert_eq!(v3.window, 1);
+    }
+
+    #[test]
+    fn protocol_4_acknowledges_once_per_window() {
+        let request = apply();
+        let acks = Arc::new(AtomicUsize::new(0));
+        let (mut v3, _) = client(Mixer {
+            acks: acks.clone(),
+            ..Mixer::default()
+        });
+        assert_eq!(v3.request(&request).unwrap().status, 200);
+        let v3 = acks.swap(0, Ordering::SeqCst);
+        let (mut v4, _) = windowed(
+            4,
+            Mixer {
+                acks: acks.clone(),
+                ..Mixer::default()
+            },
+        );
+        let hello = acks.swap(0, Ordering::SeqCst);
+        assert_eq!(hello, 1);
+        assert_eq!(v4.request(&request).unwrap().status, 200);
+        let v4 = acks.load(Ordering::SeqCst);
+        assert!(v3 > 4 && v4 == v3.div_ceil(4), "acks: v3 {v3}, v4 {v4}");
+    }
+
+    #[test]
+    fn a_lost_reply_report_is_fetched_again_from_where_it_stopped() {
+        let body = apply().body.unwrap();
+        let json = serde_json::to_vec(&Reply {
+            status: 200,
+            body: body.clone(),
+        })
+        .unwrap();
+        let reply = rc2fx_usb::pack(&json, MAX_REPLY).unwrap();
+        assert!(reply.len() > 6 * rc2fx_usb::INPUT_PAYLOAD);
+        let (mut client, _) = windowed(
+            4,
+            Mixer {
+                reply,
+                lose_report: Some(5),
+                ..Mixer::default()
+            },
+        );
+        assert_eq!(client.request(&apply()).unwrap().body, body);
     }
 }

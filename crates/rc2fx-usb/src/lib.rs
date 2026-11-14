@@ -20,6 +20,28 @@ pub const MAX_EVENT_BYTES: usize = 512 * 1024;
 /// The largest reply to an event poll: one event and its envelope.
 pub const MAX_EVENT_REPLY: usize = MAX_EVENT_BYTES + 1024;
 pub const MAGIC: &[u8; 7] = b"\xffRC2FX\0";
+/// The hello data protocol 3 clients send, and the hello acknowledgement they
+/// expect.
+pub const HELLO_3: &[u8] = b"RC2FX USB 3";
+/// The hello data a protocol 4 client sends; the mixer's acknowledgement names
+/// the window it sized for this link.
+pub const HELLO_4: &[u8] = b"RC2FX USB 4";
+/// The server's own bound on how many reports a client may keep in flight. The
+/// native hook forwards reports with a non-blocking datagram send, so a queue
+/// longer than the kernel's `max_dgram_qlen` would silently drop one.
+pub const MAX_WINDOW: usize = 32;
+
+/// The window in a protocol 4 hello acknowledgement (`RC2FX USB 4 <window>`).
+/// Anything else is not one, including a bare `RC2FX USB 4`.
+pub fn hello_4_window(data: &[u8]) -> Option<usize> {
+    let digits = data.strip_prefix(b"RC2FX USB 4 ")?;
+    let digits = std::str::from_utf8(digits).ok()?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let window: usize = digits.parse().ok()?;
+    (1..=64).contains(&window).then_some(window)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -290,6 +312,32 @@ mod tests {
         assert!(unpack(b"J{}", 2).is_err());
         assert!(unpack(b"X{}", 64).is_err());
     }
+    #[test]
+    fn only_a_protocol_four_acknowledgement_carries_a_window() {
+        assert_eq!(hello_4_window(b"RC2FX USB 4 1"), Some(1));
+        assert_eq!(hello_4_window(b"RC2FX USB 4 32"), Some(32));
+        assert_eq!(hello_4_window(b"RC2FX USB 4 64"), Some(64));
+        for bad in [
+            &b"RC2FX USB 4 0"[..],
+            b"RC2FX USB 4 65",
+            b"RC2FX USB 4 ",
+            b"RC2FX USB 4  8",
+            b"RC2FX USB 4 8x",
+            b"RC2FX USB 4 -1",
+            b"RC2FX USB 4",
+            b"RC2FX USB 3",
+            b"RC2FX USB 4 999999999999999999999999",
+            b"",
+        ] {
+            assert_eq!(
+                hello_4_window(bad),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
     #[test]
     fn isolated_input_report_rejects_vendor_ids_and_excess_payload() {
         let f = Frame {

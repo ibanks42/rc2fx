@@ -71,12 +71,24 @@ them to `rc2fxd` over a local datagram socket. Nothing else reads the
 gadget. If `rc2fxd` is not running, RC2FX's packets are dropped and are
 not passed to RØDE's parser.
 
+RØDE's HID loop (1.7.7) runs a zero-timeout `pselect` on the node, reads
+while a report is ready, and otherwise sleeps 10 ms. Handed an empty read
+after each RC2FX report, it slept between the reports of a transfer, which
+held USB control to one report per tick (about 20 KB/s). After forwarding an
+RC2FX report, the hook now waits up to 3 ms for the next one and takes it
+itself, for at most 50 ms per read. A report of RØDE's that arrives in that
+time ends the wait and is returned to RØDE's loop as the result of its read,
+unchanged. When `rc2fxd`'s socket queue is full, the hook waits up to 10 ms
+for room before it drops the report, so the window below is not limited by
+the kernel's datagram queue length.
+
 ## Framing
 
-Protocol version 3. Each 256-byte report carries a seven-byte marker, a
+Protocol version 3 or 4. Each 256-byte report carries a seven-byte marker, a
 random session nonce, a request ID, an offset, a total size and a payload
 length, leaving 224 bytes of payload. Windows delivers OUT reports to this
-firmware as 257 bytes, and the one extra byte is ignored.
+firmware as 257 bytes, and the one extra byte is ignored. The frame layout is
+the same in both versions; only the acknowledgement and fetch rules change.
 
 Messages are JSON, zlib-compressed when that makes them smaller. Both sides
 enforce size limits. Truncated streams, trailing data and incorrect lengths
@@ -85,9 +97,40 @@ are rejected.
 `rc2fxd` passes each request to its [control API](api.md) in process. Events
 (state, engine, meter, USB) are polled, one per request.
 
+### Negotiation
+
+A client's Hello carries empty data in protocol 3 and `RC2FX USB 4` in
+protocol 4. The mixer acknowledges with `RC2FX USB 3` or `RC2FX USB 4 <window>`;
+the window is the number of reports the client may keep in flight. Any other
+hello is refused with `Invalid USB hello`. An older mixer therefore answers a
+protocol 4 hello with that error, and the app retries with an empty hello and
+continues in protocol 3. A protocol 3 session behaves exactly as before.
+
+The mixer offers a window of 32. The app asks for at most 16 reply reports
+per fetch: macOS queues about 30 input reports and Linux's hidraw 64, shared
+with RØDE's own. Measured on a Pro II (1.7.7) from Linux, an upload runs at
+about 285 KB/s in protocol 4, against about 21 KB/s in protocol 3, and a
+small request's round trip takes about 6 ms instead of 21 ms. No xruns were
+added during uploads.
+
+### Protocol 4 pipelining
+
+- A non-final request fragment is acknowledged only when it ends a window:
+  `((offset + length) / 224) % window == 0`. Other fragments get no reply, and
+  one acknowledgement covers the whole window. The final fragment still
+  executes the request and is acknowledged as before.
+- A Fetch's `total` field is a count `n`, not zero (protocol 3 requires zero).
+  Zero means one and `n` above the window is refused. The mixer answers with
+  up to `n` Reply reports at consecutive offsets, stopping at the end of the
+  cached reply.
+- Errors are sent as soon as they happen, and the client reads them on its
+  next wait. The existing size limits, request IDs and reply cache still
+  apply.
+
 ### Reliability
 
-- Stop-and-wait: each fragment is acknowledged before the next is sent.
+- Stop-and-wait in protocol 3; pipelined windows in protocol 4. Each window is
+  acknowledged before the next is sent.
 - No automatic replay: a request whose outcome is unknown is not resent.
   Each request ID executes at most once per session. Replies are cached, so a
   lost reply or a lost final acknowledgement is recovered by fetching the
@@ -145,8 +188,9 @@ cargo run --release -p rc2fx-transport --example usb_probe -- --extended # also 
 checking, which increments the revision. It does not retry on a conflict.
 
 Unit tests cover fragmentation, malformed sizes, reordering, bounded
-decompression, stale sessions, unrelated vendor reports, ambiguous writes and
-reconnection. `xtask` tests rebuild the staged descriptor and check that
+decompression, stale sessions, unrelated vendor reports, ambiguous writes,
+reconnection, protocol 4 negotiation, windowed acknowledgements and multi-report
+fetches. `xtask` tests rebuild the staged descriptor and check that
 RØDE's items are unchanged.
 
 ## Known quirks

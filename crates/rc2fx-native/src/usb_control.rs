@@ -1,5 +1,6 @@
 //! A narrow read hook on the vendor-owned HID descriptor. No second reader,
-//! blocking IPC, allocation, or control parsing on ordinary/vendor reads.
+//! blocking IPC, allocation, or control parsing on ordinary/vendor reads; only
+//! a stream of RC2FX's own reports holds the vendor's HID thread, briefly.
 use libc::{c_int, c_void, size_t, ssize_t};
 use std::{
     ffi::CStr,
@@ -355,6 +356,28 @@ pub fn initialize() {
     }
 }
 
+/// The vendor's HID loop drains what a zero-timeout select finds ready, then
+/// sleeps 10 ms. Handed an empty read after each RC2FX report, it slept
+/// between the reports of a stream, so every window of a transfer waited a
+/// tick. While RC2FX's reports keep arriving, the hook takes the next one
+/// itself, waiting at most `STREAM_IDLE_MS` for it. A report of RØDE's ends
+/// the wait and goes to the vendor as the result of its read, as it would
+/// have; the whole stream is bounded by `STREAM_BUDGET`.
+const STREAM_IDLE_MS: c_int = 3;
+const STREAM_BUDGET: Duration = Duration::from_millis(50);
+/// How long a full local queue may hold this thread before a report is
+/// dropped: `rc2fxd` falling briefly behind no longer costs a transfer.
+const DELIVERY_WAIT: Duration = Duration::from_millis(10);
+
+/// What a read on the vendor's descriptor turned out to be.
+enum Taken {
+    /// Not RC2FX's: the vendor gets the read's result unchanged.
+    Vendor,
+    /// An RC2FX report, delivered to `rc2fxd` (or dropped while the node is
+    /// being retired).
+    Ours,
+}
+
 pub unsafe extern "C" fn read(fd: c_int, buffer: *mut c_void, count: size_t) -> ssize_t {
     let original: unsafe extern "C" fn(c_int, *mut c_void, size_t) -> ssize_t =
         unsafe { std::mem::transmute(READ.load(Ordering::Acquire)) };
@@ -362,12 +385,48 @@ pub unsafe extern "C" fn read(fd: c_int, buffer: *mut c_void, count: size_t) -> 
     let Some((socket, path)) = BRIDGE.get() else {
         return n;
     };
-    if n < 8 {
+    let (Taken::Ours, live) = (unsafe { take(fd, buffer, n, socket, path) }) else {
         return n;
+    };
+    let started = Instant::now();
+    while live && started.elapsed() < STREAM_BUDGET {
+        let mut ready = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut ready, 1, STREAM_IDLE_MS) } != 1
+            || ready.revents & libc::POLLIN == 0
+        {
+            break;
+        }
+        let n = unsafe { original(fd, buffer, count) };
+        match unsafe { take(fd, buffer, n, socket, path) } {
+            (Taken::Vendor, _) => return n,
+            (Taken::Ours, true) => {}
+            (Taken::Ours, false) => break,
+        }
+    }
+    // The inspected vendor loop returns to select() for read <= 0. Returning
+    // zero consumes this stream without fabricating errno in its libc.
+    0
+}
+
+/// Classify the read result `n` in `buffer`, delivering an RC2FX report.
+/// The flag is false when the node is being retired, which ends a stream.
+unsafe fn take(
+    fd: c_int,
+    buffer: *mut c_void,
+    n: ssize_t,
+    socket: &UnixDatagram,
+    path: &Path,
+) -> (Taken, bool) {
+    if n < 8 {
+        return (Taken::Vendor, true);
     }
     let bytes = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), n as usize) };
     if !rc2fx_usb::marked(bytes, rc2fx_usb::OUTPUT_ID) {
-        return n;
+        return (Taken::Vendor, true);
     }
     let first = MARKED.fetch_add(1, Ordering::Relaxed) < 3;
     // Resolve the actual descriptor each time a marked packet arrives. No stale
@@ -389,21 +448,22 @@ pub unsafe extern "C" fn read(fd: c_int, buffer: *mut c_void, count: size_t) -> 
                 "RC2FX USB marker on another descriptor: fd={fd}, bytes={n}, path length={length}"
             );
         }
-        return n;
+        return (Taken::Vendor, true);
     }
     // The launcher retires the old devtmpfs name before a mixer restart. Keep
     // consuming our marked traffic during that handoff, but do not deliver a
     // request whose reply would need a different/new gadget descriptor.
     if retired {
-        return 0;
+        return (Taken::Ours, false);
     }
     super::probe::usb_report();
     if first {
         eprintln!("RC2FX USB received report: bytes={n}");
     }
     if let Some(bytes) = rc2fx_usb::canonical_output(bytes) {
-        // Full queue or absent daemon means host timeout, never stock parsing.
-        let result = socket.send_to(bytes, path);
+        // An absent daemon, or one still behind after `DELIVERY_WAIT`, means a
+        // host timeout, never stock parsing.
+        let result = deliver(socket, path, bytes);
         if first {
             eprintln!(
                 "RC2FX USB local delivery: {result:?}; valid frame={}",
@@ -416,9 +476,20 @@ pub unsafe extern "C" fn read(fd: c_int, buffer: *mut c_void, count: size_t) -> 
             bytes[bytes.len() - 1]
         );
     }
-    // The inspected vendor loop returns to select() for read <= 0. Returning
-    // zero consumes exactly this report without fabricating errno in its libc.
-    0
+    (Taken::Ours, true)
+}
+
+/// Send one report to `rc2fxd`, waiting out a full queue for a little while.
+fn deliver(socket: &UnixDatagram, path: &Path, bytes: &[u8]) -> std::io::Result<usize> {
+    let deadline = Instant::now() + DELIVERY_WAIT;
+    loop {
+        match socket.send_to(bytes, path) {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_micros(250));
+            }
+            result => return result,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -30,11 +30,18 @@ struct Session {
     receiving: bool,
     assembly: Assembly,
     reply: Vec<u8>,
+    /// Protocol 4, which acknowledges a non-final request fragment only at a
+    /// window boundary and fetches several reply reports at once. Empty data
+    /// in a hello keeps protocol 3, exactly as before.
+    v4: bool,
+    /// The window the server sized for this link when it started.
+    window: usize,
 }
 enum Action {
-    Send([u8; REPORT_SIZE]),
+    /// Zero reports means the fragment needs no acknowledgement.
+    Send(Vec<[u8; REPORT_SIZE]>),
     Execute(Vec<u8>),
-    Reset([u8; REPORT_SIZE]),
+    Reset(Box<[u8; REPORT_SIZE]>),
 }
 
 fn response(
@@ -57,19 +64,26 @@ fn response(
 impl Session {
     fn accept(&mut self, f: &Frame<'_>, now: Instant) -> Action {
         let error = |text: &'static str| {
-            Action::Send(response(
+            Action::Send(vec![response(
                 f,
                 Kind::Error,
                 0,
                 0,
                 &text.as_bytes()[..text.len().min(INPUT_PAYLOAD)],
-            ))
+            )])
         };
         if f.session == 0 {
             return error("Invalid USB session");
         }
         if f.kind == Kind::Hello {
-            if f.request != 0 || f.offset != 0 || f.total != 0 || !f.data.is_empty() {
+            let v4 = if f.data.is_empty() {
+                false
+            } else if f.data == rc2fx_usb::HELLO_4 {
+                true
+            } else {
+                return error("Invalid USB hello");
+            };
+            if f.request != 0 || f.offset != 0 || f.total != 0 {
                 return error("Invalid USB hello");
             }
             if self.nonce != f.session
@@ -79,16 +93,26 @@ impl Session {
             {
                 return error("USB is in use by another RC2FX client");
             }
+            let ack = if v4 {
+                format!("RC2FX USB 4 {}", self.window)
+            } else {
+                // No window: protocol 3's acknowledgement is exactly HELLO_3.
+                "RC2FX USB 3".to_owned()
+            };
             if self.nonce != f.session {
+                let window = self.window;
                 *self = Self {
                     nonce: f.session,
                     seen: Some(now),
+                    v4,
+                    window,
                     ..Self::default()
                 };
-                return Action::Reset(response(f, Kind::Ack, 0, 0, b"RC2FX USB 3"));
+                return Action::Reset(Box::new(response(f, Kind::Ack, 0, 0, ack.as_bytes())));
             }
+            self.v4 = v4;
             self.seen = Some(now);
-            return Action::Send(response(f, Kind::Ack, 0, 0, b"RC2FX USB 3"));
+            return Action::Send(vec![response(f, Kind::Ack, 0, 0, ack.as_bytes())]);
         }
         if f.session != self.nonce {
             return error("USB session expired; reconnect");
@@ -113,13 +137,19 @@ impl Session {
                         self.receiving = false;
                         Action::Execute(request)
                     }
-                    Ok(None) => Action::Send(response(
-                        f,
-                        Kind::Ack,
-                        f.offset + f.data.len(),
-                        f.total,
-                        &[],
-                    )),
+                    Ok(None) => {
+                        // Protocol 4 lets the host keep one window of fragments
+                        // in flight. Only the fragment that ends a window is
+                        // acknowledged; one acknowledgement then covers all of
+                        // them, and errors are still sent as they happen.
+                        let end = f.offset + f.data.len();
+                        if self.v4 && !(end / rc2fx_usb::PAYLOAD).is_multiple_of(self.window.max(1))
+                        {
+                            Action::Send(Vec::new())
+                        } else {
+                            Action::Send(vec![response(f, Kind::Ack, end, f.total, &[])])
+                        }
+                    }
                     Err(message) => {
                         self.receiving = false;
                         error(message)
@@ -131,17 +161,37 @@ impl Session {
                     && !self.reply.is_empty()
                     && f.data.is_empty()
                     && f.offset < self.reply.len()
-                    && f.offset.is_multiple_of(INPUT_PAYLOAD)
-                    && f.total == 0 =>
+                    && f.offset.is_multiple_of(INPUT_PAYLOAD) =>
             {
-                let end = (f.offset + INPUT_PAYLOAD).min(self.reply.len());
-                Action::Send(response(
-                    f,
-                    Kind::Reply,
-                    f.offset,
-                    self.reply.len(),
-                    &self.reply[f.offset..end],
-                ))
+                // Protocol 3 asks for one report and requires `total` to be
+                // zero; protocol 4 names how many reports it can take, and
+                // fetches them in order until the reply ends.
+                let count = if self.v4 {
+                    if f.total > self.window.max(1) {
+                        return error("Invalid USB fetch window");
+                    }
+                    f.total.max(1)
+                } else if f.total == 0 {
+                    1
+                } else {
+                    return error("Invalid USB control packet");
+                };
+                let mut replies = Vec::with_capacity(count);
+                for index in 0..count {
+                    let start = f.offset + index * INPUT_PAYLOAD;
+                    if start >= self.reply.len() {
+                        break;
+                    }
+                    let end = (start + INPUT_PAYLOAD).min(self.reply.len());
+                    replies.push(response(
+                        f,
+                        Kind::Reply,
+                        start,
+                        self.reply.len(),
+                        &self.reply[start..end],
+                    ));
+                }
+                Action::Send(replies)
             }
             _ => error("Invalid USB control packet"),
         }
@@ -191,9 +241,15 @@ pub(crate) struct Server {
 
 #[cfg(target_os = "linux")]
 impl Server {
-    pub(crate) fn new(controller: Handle, options: Options) -> Self {
+    /// `window` is the protocol 4 receive window, sized once when the server
+    /// starts. Tests pass it in; the daemon reads it from the kernel queue that
+    /// the native hook's non-blocking forward uses.
+    pub(crate) fn new(controller: Handle, options: Options, window: usize) -> Self {
         Self {
-            session: Session::default(),
+            session: Session {
+                window,
+                ..Session::default()
+            },
             api: Api::new(controller, options),
             active: tokio::time::Instant::now(),
         }
@@ -236,17 +292,18 @@ impl Server {
         }
     }
 
-    /// Handles one report and returns the report to answer with, or `None`
-    /// for bytes that are not an RC2FX frame.
-    pub(crate) async fn handle(&mut self, bytes: &[u8]) -> io::Result<Option<[u8; REPORT_SIZE]>> {
+    /// Handles one report and returns the reports to answer with, in order.
+    /// Not an RC2FX frame and a protocol 4 fragment inside a window answer
+    /// with nothing.
+    pub(crate) async fn handle(&mut self, bytes: &[u8]) -> io::Result<Vec<[u8; REPORT_SIZE]>> {
         let Some(frame) = Frame::decode(bytes, OUTPUT_ID) else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
-        let reply = match self.session.accept(&frame, Instant::now()) {
-            Action::Send(reply) => reply,
+        let replies = match self.session.accept(&frame, Instant::now()) {
+            Action::Send(replies) => replies,
             Action::Reset(reply) => {
                 self.api.reset();
-                reply
+                vec![*reply]
             }
             Action::Execute(bytes) => {
                 // The same error page the API builds, as validated raw JSON.
@@ -282,7 +339,7 @@ impl Server {
                     )
                     .map_err(io::Error::other)?,
                 };
-                response(&frame, Kind::Ack, frame.total, frame.total, &[])
+                vec![response(&frame, Kind::Ack, frame.total, frame.total, &[])]
             }
         };
         // Only the session's owner keeps its subscription alive, and the time
@@ -290,23 +347,55 @@ impl Server {
         if frame.session == self.session.nonce {
             self.active = tokio::time::Instant::now();
         }
-        Ok(Some(reply))
+        Ok(replies)
     }
 }
 
-/// Writes one input report to the HID gadget.
+/// How many request fragments a protocol 4 client sends per acknowledgement.
+/// The native hook waits for room in this daemon's datagram queue (up to
+/// 10 ms) instead of dropping a report, so the window is not bounded by
+/// `net.unix.max_dgram_qlen`; USB itself holds the host back while the hook
+/// is waiting.
 #[cfg(target_os = "linux")]
-async fn write_report(reply: &[u8; REPORT_SIZE]) -> io::Result<()> {
-    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+fn transport_window() -> usize {
+    rc2fx_usb::MAX_WINDOW
+}
+
+/// Writes one batch of input reports to the HID gadget, opening it once. The
+/// launcher retires the node and stops this daemon before rebuilding the
+/// gadget, so a handle is kept only for the batch.
+#[cfg(target_os = "linux")]
+async fn write_reports(replies: &[[u8; REPORT_SIZE]]) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
     use tokio::io::unix::AsyncFd;
-    // Keep the handle scoped to one response. The launcher retires the
-    // node and stops this daemon before rebuilding the gadget.
     let output = std::fs::OpenOptions::new()
         .write(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open("/dev/hidg0")?;
     // SAFETY: AsyncFd owns the File and its descriptor until it is dropped.
     let output = unsafe { AsyncFd::register(output) }.map_err(io::Error::from)?;
+    for reply in replies {
+        // Shared gadget writes are serialized by the kernel. Wait asynchronously
+        // when another writer owns the pending report; no audio thread waits here.
+        match tokio::time::timeout(Duration::from_secs(2), write_report(&output, reply)).await {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "HID write timed out",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn write_report(
+    output: &tokio::io::unix::AsyncFd<std::fs::File>,
+    reply: &[u8; REPORT_SIZE],
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
     loop {
         let mut ready = output.writable().await?;
         match ready.try_io(|inner| {
@@ -340,20 +429,18 @@ pub async fn serve(path: &Path, controller: Handle, options: Options) -> io::Res
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     socket.set_nonblocking(true)?;
     let socket = tokio::net::UnixDatagram::from_std(socket)?;
-    let mut server = Server::new(controller, options);
+    let mut server = Server::new(controller, options, transport_window());
     let mut write_errors = 0;
     let mut bytes = [0; REPORT_SIZE + 1];
     loop {
         let n = server.receive(&socket, &mut bytes).await?;
-        let Some(reply) = server.handle(&bytes[..n]).await? else {
+        let replies = server.handle(&bytes[..n]).await?;
+        if replies.is_empty() {
             continue;
-        };
-        // Shared gadget writes are serialized by the kernel. Wait asynchronously
-        // when another writer owns the pending report; no audio thread waits here.
-        let sent = tokio::time::timeout(Duration::from_secs(2), write_report(&reply)).await;
-        if !matches!(sent, Ok(Ok(()))) {
+        }
+        if let Err(error) = write_reports(&replies).await {
             if write_errors < 3 {
-                eprintln!("USB response write failed: {sent:?}");
+                eprintln!("USB response write failed: {error}");
             }
             write_errors += 1;
             // Leave the admitted ID and cached reply intact. A timed-out write
@@ -366,6 +453,9 @@ pub async fn serve(path: &Path, controller: Handle, options: Options) -> io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static FILL: [u8; rc2fx_usb::PAYLOAD] = [0x5a; rc2fx_usb::PAYLOAD];
+
     #[test]
     fn admitted_mutations_cannot_execute_twice_and_clients_cannot_steal_active_session() {
         let now = Instant::now();
@@ -379,7 +469,7 @@ mod tests {
             data: &[],
         };
         assert!(
-            matches!(s.accept(&f, now), Action::Reset(b) if Frame::decode(&b,INPUT_ID).unwrap().kind==Kind::Ack)
+            matches!(s.accept(&f, now), Action::Reset(b) if Frame::decode(&b[..],INPUT_ID).unwrap().kind==Kind::Ack)
         );
         f.kind = Kind::Request;
         f.request = 1;
@@ -387,7 +477,7 @@ mod tests {
         f.data = b"x";
         assert!(matches!(s.accept(&f, now), Action::Execute(b) if b == b"x"));
         assert!(
-            matches!(s.accept(&f,now), Action::Send(b) if Frame::decode(&b,INPUT_ID).unwrap().kind==Kind::Error)
+            matches!(s.accept(&f,now), Action::Send(b) if b.len()==1 && Frame::decode(&b[0],INPUT_ID).unwrap().kind==Kind::Error)
         );
         f.kind = Kind::Hello;
         f.request = 0;
@@ -395,12 +485,203 @@ mod tests {
         f.data = &[];
         f.session = 5;
         assert!(
-            matches!(s.accept(&f,now), Action::Send(b) if Frame::decode(&b,INPUT_ID).unwrap().kind==Kind::Error)
+            matches!(s.accept(&f,now), Action::Send(b) if b.len()==1 && Frame::decode(&b[0],INPUT_ID).unwrap().kind==Kind::Error)
         );
         assert!(matches!(
             s.accept(&f, now + Duration::from_secs(6)),
             Action::Reset(_)
         ));
+    }
+
+    fn hello(session: u64, data: &'static [u8]) -> Frame<'static> {
+        Frame {
+            kind: Kind::Hello,
+            session,
+            request: 0,
+            offset: 0,
+            total: 0,
+            data,
+        }
+    }
+
+    #[test]
+    fn a_protocol_four_hello_negotiates_the_window_and_empty_data_stays_three() {
+        let now = Instant::now();
+        let mut session = Session {
+            window: 12,
+            ..Session::default()
+        };
+        // Empty data is protocol 3, byte for byte as before.
+        let Action::Reset(reply) = session.accept(&hello(1, b""), now) else {
+            panic!("a new hello resets")
+        };
+        assert_eq!(
+            Frame::decode(&reply[..], INPUT_ID).unwrap().data,
+            rc2fx_usb::HELLO_3
+        );
+        assert!(!session.v4);
+        // A protocol 4 client names the version and the mixer answers with the
+        // window it sized for this link.
+        let Action::Send(replies) = session.accept(&hello(1, rc2fx_usb::HELLO_4), now) else {
+            panic!("a hello on the same session is acknowledged")
+        };
+        assert_eq!(replies.len(), 1);
+        assert_eq!(
+            Frame::decode(&replies[0], INPUT_ID).unwrap().data,
+            b"RC2FX USB 4 12"
+        );
+        assert!(session.v4);
+        // Anything else is not a hello, including a version with a window.
+        for junk in [&b"RC2FX USB 5"[..], b"RC2FX USB 4 12", b"junk"] {
+            let Action::Send(replies) = session.accept(&hello(1, junk), now) else {
+                panic!("hello errors are immediate")
+            };
+            let frame = Frame::decode(&replies[0], INPUT_ID).unwrap();
+            assert_eq!(frame.kind, Kind::Error);
+            assert_eq!(frame.data, b"Invalid USB hello");
+        }
+    }
+
+    #[test]
+    fn protocol_four_acknowledges_only_window_boundaries_and_three_still_acks_every_fragment() {
+        let now = Instant::now();
+        let mut session = Session {
+            window: 2,
+            ..Session::default()
+        };
+        assert!(matches!(
+            session.accept(&hello(1, rc2fx_usb::HELLO_4), now),
+            Action::Reset(_)
+        ));
+        let total = 3 * rc2fx_usb::PAYLOAD;
+        let fragment = |index: usize| {
+            let offset = index * rc2fx_usb::PAYLOAD;
+            let len = rc2fx_usb::PAYLOAD.min(total - offset);
+            Frame {
+                kind: Kind::Request,
+                session: 1,
+                request: 7,
+                offset,
+                total,
+                data: &FILL[..len],
+            }
+        };
+        // The first fragment ends inside a window: no reply.
+        assert!(matches!(session.accept(&fragment(0), now), Action::Send(r) if r.is_empty()));
+        // The second ends the window: one acknowledgement.
+        let Action::Send(replies) = session.accept(&fragment(1), now) else {
+            panic!("a boundary is acknowledged")
+        };
+        assert_eq!(replies.len(), 1);
+        assert_eq!(
+            Frame::decode(&replies[0], INPUT_ID).unwrap().offset,
+            2 * rc2fx_usb::PAYLOAD
+        );
+        // The final fragment executes whether or not it ends a window.
+        assert!(matches!(
+            session.accept(&fragment(2), now),
+            Action::Execute(bytes) if bytes.len() == total
+        ));
+        // Protocol 3 acknowledges every non-final fragment.
+        let mut session = Session {
+            window: 2,
+            ..Session::default()
+        };
+        assert!(matches!(
+            session.accept(&hello(1, b""), now),
+            Action::Reset(_)
+        ));
+        for index in 0..2 {
+            let Action::Send(replies) = session.accept(&fragment_with(index, total), now) else {
+                panic!("protocol 3 acknowledges")
+            };
+            assert_eq!(replies.len(), 1);
+        }
+    }
+
+    fn fragment_with(index: usize, total: usize) -> Frame<'static> {
+        let offset = index * rc2fx_usb::PAYLOAD;
+        let len = rc2fx_usb::PAYLOAD.min(total - offset);
+        Frame {
+            kind: Kind::Request,
+            session: 1,
+            request: 9,
+            offset,
+            total,
+            data: &FILL[..len],
+        }
+    }
+
+    #[test]
+    fn protocol_four_fetches_several_reply_reports_but_never_more_than_its_window() {
+        let now = Instant::now();
+        let mut session = Session {
+            window: 3,
+            ..Session::default()
+        };
+        assert!(matches!(
+            session.accept(&hello(1, rc2fx_usb::HELLO_4), now),
+            Action::Reset(_)
+        ));
+        session.last = 4;
+        session.reply = vec![0x33; 2 * INPUT_PAYLOAD + 5];
+        let fetch = |total: usize, offset: usize| Frame {
+            kind: Kind::Fetch,
+            session: 1,
+            request: 4,
+            offset,
+            total,
+            data: &[],
+        };
+        let Action::Send(replies) = session.accept(&fetch(2, 0), now) else {
+            panic!("a fetch answers")
+        };
+        assert_eq!(replies.len(), 2);
+        let frames: Vec<_> = replies
+            .iter()
+            .map(|r| Frame::decode(r, INPUT_ID).unwrap())
+            .collect();
+        assert_eq!(frames[0].offset, 0);
+        assert_eq!(frames[1].offset, INPUT_PAYLOAD);
+        assert_eq!(frames[0].total, session.reply.len());
+        assert_eq!(frames[1].data.len(), INPUT_PAYLOAD);
+        // The last report stops at the end of the reply.
+        let Action::Send(replies) = session.accept(&fetch(3, 2 * INPUT_PAYLOAD), now) else {
+            panic!("a fetch answers")
+        };
+        assert_eq!(replies.len(), 1);
+        assert_eq!(Frame::decode(&replies[0], INPUT_ID).unwrap().data.len(), 5);
+        // Zero means one in protocol 4, and more than the window is refused.
+        let Action::Send(replies) = session.accept(&fetch(0, 0), now) else {
+            panic!("a fetch answers")
+        };
+        assert_eq!(replies.len(), 1);
+        let Action::Send(replies) = session.accept(&fetch(4, 0), now) else {
+            panic!("an over-window fetch is an immediate error")
+        };
+        assert_eq!(
+            Frame::decode(&replies[0], INPUT_ID).unwrap().kind,
+            Kind::Error
+        );
+        // Protocol 3 still takes exactly one report and requires total 0.
+        let mut session = Session::default();
+        assert!(matches!(
+            session.accept(&hello(1, b""), now),
+            Action::Reset(_)
+        ));
+        session.last = 4;
+        session.reply = vec![0x33; 2 * INPUT_PAYLOAD + 5];
+        let Action::Send(replies) = session.accept(&fetch(0, 0), now) else {
+            panic!("a protocol 3 fetch answers")
+        };
+        assert_eq!(replies.len(), 1);
+        let Action::Send(replies) = session.accept(&fetch(1, 0), now) else {
+            panic!("a protocol 3 fetch refusal is immediate")
+        };
+        assert_eq!(
+            Frame::decode(&replies[0], INPUT_ID).unwrap().kind,
+            Kind::Error
+        );
     }
 }
 
@@ -430,6 +711,9 @@ pub(crate) mod testing {
     pub(crate) fn hello(session: u64) -> [u8; REPORT_SIZE] {
         report(Kind::Hello, session, 0, 0, &[])
     }
+    pub(crate) fn hello_v4(session: u64) -> [u8; REPORT_SIZE] {
+        report(Kind::Hello, session, 0, 0, rc2fx_usb::HELLO_4)
+    }
     /// A whole API request in one report.
     pub(crate) fn request(session: u64, id: u32, method: &str, path: &str) -> [u8; REPORT_SIZE] {
         let json = serde_json::to_vec(&rc2fx_usb::Request {
@@ -456,15 +740,41 @@ pub(crate) mod testing {
         }
         .encode(OUTPUT_ID)
     }
-    /// The kind and payload of the report the server answered with.
-    pub(crate) async fn answer(server: &mut Server, report: &[u8]) -> (Kind, Vec<u8>) {
-        let reply = server
+    /// A protocol 4 fetch for `count` reports at once.
+    pub(crate) fn fetch_count(
+        session: u64,
+        id: u32,
+        offset: usize,
+        count: usize,
+    ) -> [u8; REPORT_SIZE] {
+        Frame {
+            kind: Kind::Fetch,
+            session,
+            request: id,
+            offset,
+            total: count,
+            data: &[],
+        }
+        .encode(OUTPUT_ID)
+    }
+    /// Every report the server answered with, decoded.
+    pub(crate) async fn answers(server: &mut Server, report: &[u8]) -> Vec<(Kind, Vec<u8>)> {
+        server
             .handle(report)
             .await
             .unwrap()
-            .expect("an RC2FX frame is answered");
-        let frame = Frame::decode(&reply, INPUT_ID).unwrap();
-        (frame.kind, frame.data.to_vec())
+            .into_iter()
+            .map(|reply| {
+                let frame = Frame::decode(&reply, INPUT_ID).unwrap();
+                (frame.kind, frame.data.to_vec())
+            })
+            .collect()
+    }
+    /// The kind and payload of the one report the server answered with.
+    pub(crate) async fn answer(server: &mut Server, report: &[u8]) -> (Kind, Vec<u8>) {
+        let mut replies = answers(server, report).await;
+        assert_eq!(replies.len(), 1, "expected exactly one report");
+        replies.remove(0)
     }
     /// Sends one request and fetches its whole reply.
     pub(crate) async fn call(
@@ -479,8 +789,9 @@ pub(crate) mod testing {
         let mut packed = Vec::new();
         loop {
             let report = fetch_from(session, id, packed.len());
-            let reply = server.handle(&report).await.unwrap().unwrap();
-            let frame = Frame::decode(&reply, INPUT_ID).unwrap();
+            let replies = server.handle(&report).await.unwrap();
+            assert_eq!(replies.len(), 1);
+            let frame = Frame::decode(&replies[0], INPUT_ID).unwrap();
             assert_eq!(frame.kind, Kind::Reply);
             packed.extend_from_slice(frame.data);
             if packed.len() == frame.total {
@@ -519,7 +830,8 @@ mod subscription_tests {
             let (socket, peer) = tokio::net::UnixDatagram::pair().unwrap();
             Self {
                 _directory: directory,
-                server: Server::new(handle.clone(), Options::default()),
+                // The tests speak protocol 3, so the window never applies.
+                server: Server::new(handle.clone(), Options::default(), 8),
                 handle,
                 _owner: owner,
                 socket,
@@ -547,7 +859,7 @@ mod subscription_tests {
             received.ok().map(|n| bytes[..n.unwrap()].to_vec())
         }
         /// Delivers one report through the socket and handles it.
-        async fn deliver(&mut self, report: &[u8]) -> Option<[u8; REPORT_SIZE]> {
+        async fn deliver(&mut self, report: &[u8]) -> Vec<[u8; REPORT_SIZE]> {
             self.peer.send(report).await.unwrap();
             let received = self.receive(Duration::from_secs(1)).await.unwrap();
             assert_eq!(received, report);
@@ -585,9 +897,13 @@ mod subscription_tests {
         // The app's cadence: one poll, then 50 ms, for over a minute.
         for id in 2..1300 {
             let report = request(SESSION, id, "GET", "api/v1/events");
-            assert!(rig.deliver(&report).await.is_some());
-            let reply = rig.deliver(&fetch(SESSION, id)).await.unwrap();
-            assert_eq!(Frame::decode(&reply, INPUT_ID).unwrap().kind, Kind::Reply);
+            assert_eq!(rig.deliver(&report).await.len(), 1);
+            let replies = rig.deliver(&fetch(SESSION, id)).await;
+            assert_eq!(replies.len(), 1);
+            assert_eq!(
+                Frame::decode(&replies[0], INPUT_ID).unwrap().kind,
+                Kind::Reply
+            );
             assert!(rig.handle.has_clients());
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -605,7 +921,7 @@ mod subscription_tests {
                 _ => hello(SESSION),
             };
             tokio::time::sleep(CLIENT_IDLE - Duration::from_secs(1)).await;
-            assert!(rig.deliver(&report).await.is_some());
+            assert_eq!(rig.deliver(&report).await.len(), 1);
             assert!(rig.handle.has_clients(), "round {round}");
         }
         // The window still counts from the last report.
@@ -638,10 +954,11 @@ mod subscription_tests {
         assert!(rig.handle.has_clients());
         // The next poll arrives 50 ms later, as the app sends it.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(
+        assert_eq!(
             rig.deliver(&request(SESSION, 3, "GET", "api/v1/events"))
                 .await
-                .is_some()
+                .len(),
+            1
         );
         assert!(rig.handle.has_clients());
         // The window starts when the request ends, not when it was sent.
@@ -724,13 +1041,40 @@ mod subscription_tests {
         // The owner is gone. A second app instance keeps saying hello and is
         // refused, and something else writes bytes that are not a frame.
         for second in 0..CLIENT_IDLE.as_secs() + 1 {
-            let refused = rig.deliver(&hello(SESSION + 1)).await.unwrap();
-            assert_eq!(Frame::decode(&refused, INPUT_ID).unwrap().kind, Kind::Error);
-            assert!(rig.deliver(&[0xa5; REPORT_SIZE]).await.is_none());
+            let refused = rig.deliver(&hello(SESSION + 1)).await;
+            assert_eq!(refused.len(), 1);
+            assert_eq!(
+                Frame::decode(&refused[0], INPUT_ID).unwrap().kind,
+                Kind::Error
+            );
+            assert!(rig.deliver(&[0xa5; REPORT_SIZE]).await.is_empty());
             assert_eq!(rig.handle.has_clients(), second < CLIENT_IDLE.as_secs());
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         assert!(!rig.handle.has_clients());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn protocol_four_and_its_fetch_window_are_answered_through_the_server() {
+        let mut rig = Rig::new();
+        assert_eq!(
+            answer(&mut rig.server, &hello_v4(SESSION)).await,
+            (Kind::Ack, b"RC2FX USB 4 8".to_vec())
+        );
+        // A request is admitted as before, then the windowed fetch answers.
+        assert_eq!(
+            answer(&mut rig.server, &request(SESSION, 1, "GET", "api/v1/state"))
+                .await
+                .0,
+            Kind::Ack
+        );
+        let replies = answers(&mut rig.server, &fetch_count(SESSION, 1, 0, 2)).await;
+        assert!(!replies.is_empty());
+        assert!(replies.iter().all(|(kind, _)| *kind == Kind::Reply));
+        // One report more than the server's window is refused before fetching.
+        let (kind, text) = answer(&mut rig.server, &fetch_count(SESSION, 1, 0, 9)).await;
+        assert_eq!(kind, Kind::Error);
+        assert_eq!(text, b"Invalid USB fetch window");
     }
 
     #[tokio::test(start_paused = true)]
