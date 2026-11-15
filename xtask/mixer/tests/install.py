@@ -196,18 +196,40 @@ class Install(unittest.TestCase):
         self.retained('leftover')
         bundle = sum((self.up / n).stat().st_size for n in BINARIES + ['SHA256SUMS'] + SCRIPTS)
         kib = (bundle + 1023) // 1024
-        self.fake_df(3 * kib - 1)
+        need = kib + 16384
+        self.fake_df(need - 1)
         result = self.install()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(f'Not enough free space to install: {3 * kib - 1} KiB free', result.stderr)
-        self.assertIn(f'{3 * kib} KiB needed (3 x the {kib} KiB bundle)', result.stderr)
+        self.assertIn(f'Not enough free space to install: {need - 1} KiB free', result.stderr)
+        self.assertIn(f'{need} KiB needed (the {kib} KiB bundle and 16384 KiB to spare)', result.stderr)
         self.assertFalse(list(self.opt.glob('.rc2fx-stage.*')))
         self.assertTrue(old.exists(), 'the rollback is untouched')
         self.assertEqual((self.opt / 'rc2fx' / 'librc2fx_native.so').read_bytes(), b'old')
         # Leftover copies are pruned first, so a disk they filled recovers.
         self.assertEqual(self.retained_dirs(), [])
-        self.fake_df(3 * kib)
+        self.fake_df(need)
         self.assert_installed(self.install())
+
+    def test_a_commit_removes_the_rollback_and_keeps_settings_or_the_original(self):
+        self.runtime(self.opt / 'rc2fx')
+        self.assert_installed(self.install())
+        (self.opt / '.rc2fx-install-pending').touch()
+        self.assertEqual(self.install('commit').returncode, 0)
+        self.assertFalse((self.opt / '.rc2fx-install-pending').exists())
+        self.assertFalse((self.opt / '.rc2fx-previous').exists(), 'nothing starts it after a commit')
+        self.assertEqual(self.retained_dirs(), [])
+        # A commit without a pending install changes nothing.
+        kept = self.runtime(self.opt / '.rc2fx-previous')
+        self.assertEqual(self.install('commit').returncode, 0)
+        self.assertTrue(kept.exists())
+        # Saved settings are retained, never deleted.
+        (kept / 'data').mkdir()
+        (self.opt / '.rc2fx-install-pending').touch()
+        self.assertEqual(self.install('commit').returncode, 0)
+        self.assertFalse(kept.exists())
+        names = self.retained_dirs()
+        self.assertEqual(len(names), 1, names)
+        self.assertTrue((self.opt / names[0] / 'data').is_dir())
 
     def test_a_pending_transaction_refuses_without_pruning(self):
         self.runtime(self.opt / 'rc2fx')

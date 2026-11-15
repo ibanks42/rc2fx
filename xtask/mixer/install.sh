@@ -36,6 +36,18 @@ prune_retained() {
   rm -rf "$dir"
  done
 }
+# The rollback is needed only until the install commits; nothing starts it
+# once the pending marker is gone. It goes then, unless it is the original
+# install (from before the GUI shim, none older retained) or holds settings.
+retire_previous() {
+ test -d "$previous" && ! test -L "$previous" || return 0
+ if test -e "$previous/data" || { pre_gui "$previous" && test -z "$(original)"; }; then
+  test ! -e "$previous/data" || echo "Kept, it holds saved settings: $previous" >&2
+  retained=$(mktemp -d "$opt/.rc2fx-retained.XXXXXX"); rmdir "$retained"; mv "$previous" "$retained"
+ else
+  rm -rf "$previous"
+ fi
+}
 rollback() {
  test -f "$pending" || return 0
  /bin/bash "$home/rc2fx.sh" stop || return 1
@@ -62,7 +74,7 @@ rollback() {
 }
 case "${1:-install}" in
  rollback) rollback; exit ;;
- commit) rm -f "$pending"; exit ;;
+ commit) test -f "$pending" || exit 0; rm -f "$pending"; retire_previous; exit ;;
  install) ;;
  *) exit 1 ;;
 esac
@@ -77,11 +89,13 @@ for name in $files; do
  test -f "$up/$name" && ! test -L "$up/$name"
  bytes=$((bytes + $(wc -c < "$up/$name")))
 done
-# The stage, the runtime it replaces (kept as the rollback) and headroom.
+# The stage and headroom. The runtime it replaces is moved, not copied, to
+# become the rollback, so it needs no more room.
 bundle=$(( (bytes + 1023) / 1024 ))
+headroom=16384
 free=$(df -Pk "$opt" | awk 'NR == 2 {print $4}')
-if test "$free" -lt $((3 * bundle)); then
- echo "Not enough free space to install: $free KiB free on the filesystem of $opt, $((3 * bundle)) KiB needed (3 x the $bundle KiB bundle)" >&2
+if test "$free" -lt $((bundle + headroom)); then
+ echo "Not enough free space to install: $free KiB free on the filesystem of $opt, $((bundle + headroom)) KiB needed (the $bundle KiB bundle and $headroom KiB to spare)" >&2
  exit 1
 fi
 stage=$(mktemp -d "$opt/.rc2fx-stage.XXXXXX")
@@ -97,16 +111,9 @@ chmod 700 "$stage/rc2fxd" "$stage/rc2fx-supervisor" "$stage/rc2fx-firmware" "$st
 # Retain the known-good runtime and whether it started at boot. A running
 # RC2FX keeps running from the moved directory until the one restart below.
 if test -d "$home" && test -x "$shim"; then touch "$home/.installer-autostart"; fi
-# The stage is verified: the older rollback goes, unless it is the original
-# install (from before the GUI shim, none older retained) or holds settings.
-if test -d "$previous"; then
- if test -e "$previous/data" || { pre_gui "$previous" && test -z "$(original)"; }; then
-  test ! -e "$previous/data" || echo "Kept, it holds saved settings: $previous" >&2
-  retained=$(mktemp -d "$opt/.rc2fx-retained.XXXXXX"); rmdir "$retained"; mv "$previous" "$retained"
- else
-  rm -rf "$previous"
- fi
-fi
+# The stage is verified: an older rollback goes (one an earlier install left
+# uncommitted, or one from before commits retired it).
+retire_previous
 if test -d "$home"; then mv "$home" "$previous"; fi
 mv "$stage" "$home"
 touch "$pending"

@@ -2024,3 +2024,10 @@ case "${1:-}" in
   developer-ssh) shift; developer_ssh "$@" ;;
   *) sed -n '2,26s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac
+    # Nothing starts the rollback copy once the marker is gone. Its files are
+    # the old release's, kept alive by their hard links, so it would hold that
+    # space until the next update. One holding settings or logs is kept.
+    if test -d /opt/.rc2fx-previous && ! test -L /opt/.rc2fx-previous \
+        && ! test -e /opt/.rc2fx-previous/data && ! test -e /opt/.rc2fx-previous/logs; then
+      rm -rf /opt/.rc2fx-previous
+    fi

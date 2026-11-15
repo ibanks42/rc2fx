@@ -3,7 +3,8 @@
 //!
 //! The layout is `/opt/rc2fx` (the live bundle, with `data/` and `logs/`
 //! inside it), `/opt/.rc2fx-previous` (the last known-good bundle's files,
-//! hard-linked so it costs no space) and `/opt/.rc2fx-update-pending` (an
+//! hard-linked, so making it costs no space; once the live files are replaced
+//! it holds the old release's, until the commit removes it) and `/opt/.rc2fx-update-pending` (an
 //! update that has not been committed yet). The marker is this updater's own:
 //! the developer install (`install.sh`) keeps `/opt/.rc2fx-install-pending`
 //! for its transaction, and a launcher must never mistake one for the other. Saved settings are never moved or

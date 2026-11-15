@@ -204,9 +204,11 @@ in `/opt/rc2fx/data` are never moved.
 `rc2fxd` then copies `rc2fx.sh` into RAM and starts it detached as
 `update-commit`; that step restarts the mixer (the same restart
 `rc2fx.sh restart` makes), waits for the new controller to record its start and
-for audio callbacks to advance, and commits by removing the pending marker. If
-that does not happen it restarts into `/opt/.rc2fx-previous` instead, and the
-previous controller restores the files and records the rollback. The outcome is
+for audio callbacks to advance, and commits by removing the pending marker and
+then `/opt/.rc2fx-previous`, which nothing starts after the commit and which
+would otherwise keep the old release's space. If that does not happen it
+restarts into `/opt/.rc2fx-previous` instead, and the previous controller
+restores the files and records the rollback. The outcome is
 reported by `GET api/v1/update/last` after the app reconnects.
 
 A power cut at any point leaves something launchable:
