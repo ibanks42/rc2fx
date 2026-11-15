@@ -17,7 +17,6 @@ native-pipeline = []
 
 [dependencies]
 rc2fx-usb = { path = "../rc2fx-usb" }
-rc2fx-delta = { path = "../rc2fx-delta" }
 rc2fx-firmware = { path = "../rc2fx-firmware" }
 rc2fx-core = { path = "../rc2fx-core" }
 rc2fx-dsp = { path = "../rc2fx-dsp" }
@@ -28,10 +27,18 @@ serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.11"
 libc = "0.2"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
-# In-place mixer updates verify the same signed TUF metadata as the desktop,
-# with the same library, in memory: no transport, no clock.
+
+# In-place mixer updates (`mixer_update`) exist on the mixer, and in tests on
+# any Unix. They verify the same signed TUF metadata as the desktop, with the
+# same library, in memory: no transport, no clock.
+[target.'cfg(target_os = "linux")'.dependencies]
+rc2fx-delta = { path = "../rc2fx-delta" }
 sigstore-tuf = { version = "0.16", default-features = false, features = ["aws-lc-rs"] }
 jiff = "0.2"
+
+[target.'cfg(unix)'.dev-dependencies]
+rc2fx-delta = { path = "../rc2fx-delta" }
+sigstore-tuf = { version = "0.16", default-features = false, features = ["aws-lc-rs"] }
 
 [dev-dependencies]
 # Signing keys and a signed test repository are generated per test, signed
