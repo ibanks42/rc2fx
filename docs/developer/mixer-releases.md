@@ -138,6 +138,15 @@ The local equivalents are `cargo xtask mixer-package NEW_DIRECTORY` and
 TIMESTAMP_KEY`. Sequence numbers must increase; workflow sequences use UTC Unix
 seconds. `EXPIRES` is an RFC 3339 timestamp. Paths name files, never secret values.
 
+To try a release without publishing it, a debug build of the app reads mixer
+releases from a local folder laid out like the published ones
+(`FOLDER/metadata/` with the role files, `FOLDER/mixer-vVERSION/` with the
+targets) when `RC2FX_DEV_MIXER_REPOSITORY=FOLDER` is set. Build the app and
+the mixer with a throwaway root from `cargo xtask mixer-keys` in
+`config/mixer-update-root.json`, and sign with its release keys; never with
+the production keys. Release builds ignore the variable. Flashing runs in the
+pkexec helper, which never sees it, so only in-place updates can be tried.
+
 Payload corrections require a new mixer version. The publisher refuses to
 overwrite an existing mixer release, and with immutable releases GitHub refuses
 too. Discovery metadata is mutable because TUF signatures, expiry, and stored
@@ -160,7 +169,11 @@ The mixer does the verification itself, from the root compiled into `rc2fxd`
 1. The four role documents are verified as a TUF repository: root signatures
    and thresholds, key rotation when the app sends the intermediate roots,
    timestamp, snapshot and targets, and the hashes and versions that tie them
-   together. Delegated targets are refused.
+   together. Delegated targets are refused. The mixer and the desktop app
+   verify with the same library,
+   [sigstore-tuf](https://github.com/sigstore/sigstore-rust); signing (`xtask`
+   and `tuftool`) uses tough. A root that lists one key under two IDs for a
+   role is refused, because the library counts signatures by key ID.
 2. Exactly one target may carry the `rc2fxMixer` compatibility claims. Its
    version, length and SHA-256 must match the request and the uploaded file.
 3. Its `firmwareProfiles` must include the profile the launcher validated for

@@ -507,7 +507,6 @@ impl MixerUpdate {
             sha256: request.sha256.clone(),
             allow_downgrade: request.allow_downgrade,
         };
-        let work = self.paths.run.join(id);
         let verified = match verify::verify(
             &self.trusted_root,
             &request.metadata,
@@ -516,7 +515,6 @@ impl MixerUpdate {
             self.profile.as_deref(),
             self.running.as_deref(),
             &prior,
-            &work,
         ) {
             Ok(verified) => verified,
             Err(why) => {

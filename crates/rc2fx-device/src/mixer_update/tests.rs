@@ -189,8 +189,6 @@ fn verify_release(
     profile: Option<&str>,
     prior: &install::StoredState,
 ) -> Result<verify::VerifiedRelease, String> {
-    let work = repository.dir.path().join("work");
-    fs::create_dir_all(&work).unwrap();
     verify::verify(
         &repository.root,
         &repository.input(),
@@ -199,7 +197,6 @@ fn verify_release(
         profile,
         Some("0.1.5"),
         prior,
-        &work,
     )
 }
 
@@ -239,8 +236,6 @@ fn tampered_or_replaced_signed_metadata_is_refused() {
     let mut targets: serde_json::Value = serde_json::from_str(&input.targets).unwrap();
     targets["signed"]["targets"]["payload"]["length"] = json!(1);
     input.targets = targets.to_string();
-    let work = repository.dir.path().join("tampered");
-    fs::create_dir_all(&work).unwrap();
     let error = verify::verify(
         &repository.root,
         &input,
@@ -249,7 +244,6 @@ fn tampered_or_replaced_signed_metadata_is_refused() {
         Some(&profile),
         Some("0.1.5"),
         &Default::default(),
-        &work,
     )
     .unwrap_err();
     assert!(error.contains("refused"), "{error}");
@@ -269,7 +263,6 @@ fn tampered_or_replaced_signed_metadata_is_refused() {
         Some(&profile),
         Some("0.1.5"),
         &Default::default(),
-        &work,
     )
     .unwrap_err();
     assert!(error.contains("refused"), "{error}");
@@ -280,8 +273,6 @@ fn a_payload_that_differs_from_its_signature_is_refused() {
     let repository = block(Repository::new());
     block(repository.publish(1));
     let profile = pro_ii_profile();
-    let work = repository.dir.path().join("wrong");
-    fs::create_dir_all(&work).unwrap();
     // Same length, different bytes.
     let path = repository.dir.path().join("swapped");
     let mut bytes = repository.bytes.clone();
@@ -296,7 +287,6 @@ fn a_payload_that_differs_from_its_signature_is_refused() {
         Some(&profile),
         Some("0.1.5"),
         &Default::default(),
-        &work,
     )
     .unwrap_err();
     assert!(error.contains("does not match"), "{error}");
@@ -313,7 +303,6 @@ fn a_payload_that_differs_from_its_signature_is_refused() {
         Some(&profile),
         Some("0.1.5"),
         &Default::default(),
-        &work,
     )
     .unwrap_err();
     assert!(error.contains("bytes"), "{error}");
@@ -365,8 +354,6 @@ fn an_older_release_needs_an_explicit_downgrade() {
     };
     let error = verify_release(&repository, Some(&profile), &prior).unwrap_err();
     assert!(error.contains("older than the installed one"), "{error}");
-    let work = repository.dir.path().join("downgrade");
-    fs::create_dir_all(&work).unwrap();
     let mut request = repository.request();
     request.allow_downgrade = true;
     let verified = verify::verify(
@@ -377,7 +364,6 @@ fn an_older_release_needs_an_explicit_downgrade() {
         Some(&profile),
         Some("0.1.5"),
         &prior,
-        &work,
     )
     .unwrap();
     assert_eq!(verified.version, "0.2.0");
@@ -1083,7 +1069,6 @@ fn a_delta_upload_is_rebuilt_into_the_signed_envelope_and_verified() {
     let payload = update.payload_path(&started.id);
     decode_delta(&paths, &payload, envelope.len() as u64).unwrap();
     assert_eq!(fs::read(&payload).unwrap(), envelope);
-    let work = paths.run.join(&started.id);
     let verified = verify::verify(
         &repository.root,
         &repository.input(),
@@ -1092,7 +1077,6 @@ fn a_delta_upload_is_rebuilt_into_the_signed_envelope_and_verified() {
         Some(&profile),
         Some("0.1.5"),
         &Default::default(),
-        &work,
     )
     .unwrap();
     assert_eq!(verified.version, "0.2.0");

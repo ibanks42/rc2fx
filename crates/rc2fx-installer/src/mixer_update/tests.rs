@@ -13,6 +13,10 @@ fn configured_production_root_is_valid_and_separates_root_from_release_keys() {
     if !configured() {
         return;
     }
+    // The verifier the app and the mixer ship accepts it...
+    let trusted = sigstore_tuf::TrustedMetadataSet::from_root(TRUSTED_ROOT).unwrap();
+    crate::tuf::distinct_keys(trusted.root()).unwrap();
+    // ...and so does the signer's own check.
     let root: tough::schema::Signed<Root> = serde_json::from_slice(TRUSTED_ROOT).unwrap();
     root.signed.verify_role(&root).unwrap();
     assert!(root.signed.expires > jiff::Timestamp::now());
@@ -241,16 +245,15 @@ impl Fixture {
     async fn load(&self) -> Result<MixerRepository> {
         let state = self.dir.path().join("state");
         fs::create_dir_all(&state).unwrap();
-        let repository = RepositoryLoader::new(
+        MixerRepository::open(
+            crate::tuf::Folders {
+                metadata: self.dir.path().join("metadata"),
+                targets: self.dir.path().to_owned(),
+            },
             &self.root,
-            Url::from_directory_path(self.dir.path().join("metadata")).unwrap(),
-            Url::from_directory_path(self.dir.path()).unwrap(),
+            &state,
         )
-        .datastore(state)
-        .load()
         .await
-        .map_err(error)?;
-        Ok(MixerRepository { repository })
     }
 }
 
@@ -458,6 +461,13 @@ fn trusted_root_rotates_only_with_a_valid_old_and_new_signature_chain() {
                 &impostor.root,
             )
             .unwrap();
+            // The verified chain is kept, so the mirror's copy is never read
+            // again...
+            let kept = fixture.load().await.unwrap();
+            assert_eq!(kept.updater.trusted().root().version, 2);
+            // ...and without it, the chain from the shipped root runs
+            // through the impostor and fails.
+            fs::remove_dir_all(fixture.dir.path().join("state")).unwrap();
             assert!(fixture.load().await.is_err());
         });
 }
@@ -469,7 +479,7 @@ fn updates_come_only_from_the_two_official_hosts() {
     check_repository_url(&metadata, METADATA_HOST).unwrap();
     check_repository_url(&targets, TARGETS_HOST).unwrap();
     assert!(metadata.path().ends_with('/') && targets.path().ends_with('/'));
-    // tough joins file names onto the base, so the branch path must survive.
+    // File names are joined onto the base, so the branch path must survive.
     assert_eq!(
         metadata.join("1.root.json").unwrap().as_str(),
         "https://raw.githubusercontent.com/ibanks42/rc2fx/mixer-metadata/1.root.json"

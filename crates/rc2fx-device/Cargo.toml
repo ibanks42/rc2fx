@@ -29,15 +29,18 @@ sha2 = "0.11"
 libc = "0.2"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
 # In-place mixer updates verify the same signed TUF metadata as the desktop,
-# on the mixer, without a network transport (file:// only).
-tough = "0.24"
-url = "2"
+# with the same library, in memory: no transport, no clock.
+sigstore-tuf = { version = "0.16", default-features = false, features = ["aws-lc-rs"] }
+jiff = "0.2"
 
 [dev-dependencies]
-# Signing keys and a signed test repository are generated per test.
+# Signing keys and a signed test repository are generated per test, signed
+# with tough, the release tooling's signer, so the tests also check that the
+# verifier accepts what the publisher writes.
 aws-lc-rs = "1"
 jiff = "0.2"
 tempfile = "3"
+tough = "0.24"
 # Paused time for the tests of timeouts. A feature of the tokio already used;
 # it adds no package.
 tokio = { version = "1", features = ["test-util"] }

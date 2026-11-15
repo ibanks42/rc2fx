@@ -22,7 +22,8 @@ serde_json = "1"
 sha2 = "0.11"
 tar = { version = "0.4", default-features = false }
 tempfile = "3"
-tough = { version = "0.24", features = ["http"] }
+# The same verifier the mixer uses, with its HTTPS client.
+sigstore-tuf = { version = "0.16", default-features = false, features = ["client", "aws-lc-rs"] }
 tokio = { version = "1", features = ["rt", "time", "net", "macros"] }
 url = "2"
 
@@ -41,6 +42,8 @@ sha2 = "0.11"
 
 [dev-dependencies]
 aws-lc-rs = "1"
+# Test repositories are signed with tough, the release tooling's signer.
+tough = "0.24"
 
 [features]
 # Embed the mixer runtime, catalog and scripts in this binary so the desktop

@@ -10,7 +10,7 @@ use tough::{
 const PACKAGE: &str = "io.github.ibanks42.rc2fx-1.2.3-full.nupkg";
 
 /// A test-only root and key, with metadata written under `dir/metadata`
-/// and the client's temporary state under `dir/work`.
+/// and the signed asset under `dir`.
 struct Fixture {
     dir: tempfile::TempDir,
     root: Vec<u8>,
@@ -136,13 +136,11 @@ impl Fixture {
 
     fn verify(&self, version: &str, asset: &str, file: &Path) -> Result<(), VerifyError> {
         verify(
-            Repository {
-                root: &self.root,
-                metadata: Url::from_directory_path(self.dir.path().join("metadata")).unwrap(),
-                targets: Url::from_directory_path(self.dir.path()).unwrap(),
-                state_parent: &self.dir.path().join("work"),
+            &self.root,
+            crate::tuf::Folders {
+                metadata: self.dir.path().join("metadata"),
+                targets: self.dir.path().to_owned(),
             },
-            tough::FilesystemTransport,
             version,
             asset,
             file,
@@ -173,6 +171,7 @@ fn configured_production_root_is_valid_and_shared_with_mixer_updates() {
     if !configured() {
         return;
     }
+    sigstore_tuf::TrustedMetadataSet::from_root(TRUSTED_ROOT).unwrap();
     let root: tough::schema::Signed<Root> = serde_json::from_slice(TRUSTED_ROOT).unwrap();
     root.signed.verify_role(&root).unwrap();
     // Release assets keep fixed names under their tags.
@@ -318,8 +317,6 @@ fn every_check_starts_fresh_and_leaves_no_state() {
     // address cannot freeze app updates (see the module comment).
     block(fixture.sign([4, 4, 4]));
     check().unwrap();
-    let work = fixture.dir.path().join("work");
-    assert_eq!(fs::read_dir(&work).unwrap().count(), 0, "state was kept");
 }
 
 #[test]
@@ -336,13 +333,11 @@ fn invalid_versions_and_asset_names_are_refused_before_any_fetch() {
         ("one", PACKAGE),
     ] {
         let error = verify(
-            Repository {
-                root: b"null",
-                metadata: Url::parse("file:///nonexistent/").unwrap(),
-                targets: Url::parse("file:///nonexistent/").unwrap(),
-                state_parent: &dir.path().join("state"),
+            b"null",
+            crate::tuf::Folders {
+                metadata: dir.path().join("nonexistent"),
+                targets: dir.path().join("nonexistent"),
             },
-            tough::FilesystemTransport,
             version,
             asset,
             &file,
@@ -354,7 +349,7 @@ fn invalid_versions_and_asset_names_are_refused_before_any_fetch() {
             "{error}"
         );
     }
-    assert!(!dir.path().join("state").exists());
+    assert!(!dir.path().join("nonexistent").exists());
 }
 
 #[test]
@@ -363,7 +358,7 @@ fn app_metadata_comes_only_from_its_own_branch_on_the_official_hosts() {
     let targets = Url::parse(TARGETS_URL).unwrap();
     check_repository_url(&metadata, METADATA_HOST).unwrap();
     check_repository_url(&targets, TARGETS_HOST).unwrap();
-    // tough joins file names onto the base, so the branch path must survive.
+    // File names are joined onto the base, so the branch path must survive.
     assert_eq!(
         metadata.join("timestamp.json").unwrap().as_str(),
         "https://raw.githubusercontent.com/ibanks42/rc2fx/app-metadata/timestamp.json"

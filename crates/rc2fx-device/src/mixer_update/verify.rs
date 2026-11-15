@@ -1,25 +1,33 @@
 //! TUF verification of an in-place update, on the mixer, with the same signed
-//! metadata and the same trust root the desktop app uses.
+//! metadata, the same trust root and the same library (sigstore-tuf) the
+//! desktop app uses.
 //!
 //! The desktop sends the role documents it downloaded (`root`, `timestamp`,
 //! `snapshot`, `targets`); the mixer has its own embedded trusted root and
 //! verifies the chain from that, so a compromised app or a hostile computer
 //! on USB 1 cannot authorize a release. Key rotation works when the app sends
 //! the intermediate roots as well (see `docs/developer/mixer-releases.md`).
+//! Everything is checked in memory; nothing is written.
 //!
-//! The mixer has no trusted clock, so metadata expiry is not enforced here
-//! (tough's `ExpirationEnforcement::Unsafe`): the mixer cannot tell a stale
-//! timestamp from a fresh one, and refusing everything on an unset clock
-//! would make the feature unusable. Instead, the highest verified versions
-//! are persisted beside the settings and an older metadata set or release is
-//! refused: replays are blocked by the recorder, not the calendar. The
-//! desktop still enforces expiry before it offers anything.
+//! The mixer has no trusted clock, so metadata expiry is not enforced here:
+//! every role is checked as of [`NO_CLOCK`], before any metadata expires. The
+//! mixer cannot tell a stale timestamp from a fresh one, and refusing
+//! everything on an unset clock would make the feature unusable. Instead, the
+//! highest verified versions are persisted beside the settings and an older
+//! metadata set or release is refused: replays are blocked by the recorder,
+//! not the calendar. The desktop still enforces expiry before it offers
+//! anything.
 
 use super::install::{StoredState, sum};
 use serde::{Deserialize, Serialize};
+use sigstore_tuf::{Root, TrustedMetadataSet};
 use std::{collections::HashSet, fs, path::Path};
-use tough::{ExpirationEnforcement, FilesystemTransport, RepositoryLoader};
-use url::Url;
+
+/// The time every expiry is checked against: the Unix epoch, which no signed
+/// expiry precedes. See the module comment.
+const NO_CLOCK: jiff::Timestamp = jiff::Timestamp::UNIX_EPOCH;
+/// The most root documents one request may carry.
+const MAX_ROOTS: usize = 8;
 
 /// The trust anchor compiled into this controller. The same file the desktop
 /// embeds; a release's metadata must chain to it.
@@ -88,9 +96,7 @@ pub struct VerifiedRelease {
     pub from: Option<String>,
 }
 
-/// Verify the metadata and the uploaded file. Nothing outside `work` is read
-/// or written.
-#[allow(clippy::too_many_arguments)] // Each input is a distinct fact under test.
+/// Verify the metadata and the uploaded file. Nothing is written.
 pub fn verify(
     trusted_root: &[u8],
     metadata: &MetadataInput,
@@ -99,34 +105,19 @@ pub fn verify(
     profile: Option<&str>,
     running: Option<&str>,
     prior: &StoredState,
-    work: &Path,
 ) -> Result<VerifiedRelease, String> {
-    let dir = work.join("metadata");
-    fs::create_dir_all(&dir).map_err(|e| format!("cannot stage metadata: {e}"))?;
-    write_metadata(&dir, metadata)?;
-    let datastore = work.join("tuf-state");
-    fs::create_dir_all(&datastore).map_err(|e| format!("cannot create the TUF state: {e}"))?;
-    let base = Url::from_directory_path(&dir)
-        .map_err(|_| "the metadata directory is not a usable path".to_owned())?;
-    let repository = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("cannot verify signed metadata: {e}"))?
-        .block_on(async {
-            RepositoryLoader::new(&trusted_root, base.clone(), base)
-                .transport(FilesystemTransport)
-                .datastore(datastore.clone())
-                .expiration_enforcement(ExpirationEnforcement::Unsafe)
-                .load()
-                .await
-        })
-        .map_err(|e| format!("the signed mixer metadata was refused: {e}"))?;
+    let trusted = trusted_metadata(trusted_root, metadata)?;
+    let (Some(timestamp), Some(snapshot), Some(signed_targets)) = (
+        trusted.timestamp(),
+        trusted.snapshot(),
+        trusted.targets_role("targets"),
+    ) else {
+        return Err("the signed mixer metadata is incomplete".into());
+    };
 
     // RC2FX publishes top-level targets only. Delegated roles would extend
     // trust beyond the root this build carries.
-    if repository
-        .targets()
-        .signed
+    if signed_targets
         .delegations
         .as_ref()
         .is_some_and(|d| !d.roles.is_empty())
@@ -134,10 +125,10 @@ pub fn verify(
         return Err("signed metadata uses delegated targets, which are not supported".into());
     }
 
-    let candidates = repository.all_targets().filter_map(|(name, target)| {
-        let custom = target.custom.get("rc2fxMixer")?;
+    let candidates = signed_targets.targets.iter().filter_map(|(name, target)| {
+        let custom = target.custom.as_ref()?.get("rc2fxMixer")?;
         Some((
-            name.raw().to_owned(),
+            name.clone(),
             target,
             serde_json::from_value::<MixerTarget>(custom.clone()),
         ))
@@ -163,14 +154,9 @@ pub fn verify(
     }
     let requested = decode_hex(&request.sha256)
         .ok_or_else(|| "the request's sha256 is not 64 hexadecimal characters".to_owned())?;
-    // The signed target carries one SHA-256 digest; compare all 32 bytes.
-    if !target
-        .hashes
-        .sha256
-        .iter()
-        .copied()
-        .eq(requested.iter().copied())
-    {
+    // Compare all 32 bytes of the signed SHA-256 digest.
+    let signed = target.hashes.get("sha256").and_then(|hex| decode_hex(hex));
+    if signed.as_deref() != Some(requested.as_slice()) {
         return Err("the request's sha256 is not the signed release's".into());
     }
 
@@ -226,10 +212,10 @@ pub fn verify(
         }
     }
 
-    let root = repository.root().signed.version.get();
-    let targets = repository.targets().signed.version.get();
-    let snapshot = repository.snapshot().signed.version.get();
-    let timestamp = repository.timestamp().signed.version.get();
+    let root = trusted.root().version;
+    let targets = signed_targets.version;
+    let snapshot = snapshot.version;
+    let timestamp = timestamp.version;
     // The exact signed file, as verified: re-serializing the parsed role is
     // not stable (its maps have no fixed order), so the same release would
     // look changed on its second check.
@@ -287,45 +273,81 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Write the role documents into a directory tough can read. The roots are
-/// named `<version>.root.json`, which is how TUF fetches a rotation chain.
-fn write_metadata(dir: &Path, metadata: &MetadataInput) -> Result<(), String> {
-    if metadata.root.is_empty() || metadata.root.len() > 8 {
+/// The metadata, verified from `trusted_root`: the root chain (each root
+/// signed by the one before it and by itself), then timestamp, snapshot and
+/// targets, each signed by its role and pinned by the one above it.
+fn trusted_metadata(
+    trusted_root: &[u8],
+    metadata: &MetadataInput,
+) -> Result<TrustedMetadataSet, String> {
+    let roots = root_chain(metadata)?;
+    let refused = |e: sigstore_tuf::Error| format!("the signed mixer metadata was refused: {e}");
+    let mut trusted = TrustedMetadataSet::from_root(trusted_root).map_err(refused)?;
+    distinct_keys(trusted.root())?;
+    // Roots at or below the trusted version are already known; the chain
+    // ends at the first version the request does not carry.
+    while let Some((_, next)) = roots
+        .iter()
+        .find(|(version, _)| *version == trusted.root().version + 1)
+    {
+        trusted.update_root(next.as_bytes()).map_err(refused)?;
+        distinct_keys(trusted.root())?;
+    }
+    trusted
+        .update_timestamp(metadata.timestamp.as_bytes(), NO_CLOCK)
+        .map_err(refused)?;
+    trusted
+        .update_snapshot(metadata.snapshot.as_bytes(), NO_CLOCK)
+        .map_err(refused)?;
+    trusted
+        .update_targets(metadata.targets.as_bytes(), NO_CLOCK)
+        .map_err(refused)?;
+    Ok(trusted)
+}
+
+/// The request's roots by version. Each role is its file's exact text,
+/// because signatures cover the documents as signed.
+fn root_chain(metadata: &MetadataInput) -> Result<Vec<(u64, &str)>, String> {
+    if metadata.root.is_empty() || metadata.root.len() > MAX_ROOTS {
         return Err("the request must carry one to eight root documents".into());
     }
-    let mut seen: Vec<(u64, Vec<u8>)> = Vec::new();
+    let mut seen: Vec<(u64, &str)> = Vec::new();
     for root in &metadata.root {
-        // Parsed only to name the file; the original bytes are what's written.
+        // Parsed only to order the chain; the library verifies the text.
         let version = serde_json::from_str::<serde_json::Value>(root)
             .ok()
             .and_then(|root| root.get("signed")?.get("version")?.as_u64())
             .filter(|version| *version >= 1)
             .ok_or_else(|| "a root document has no version".to_owned())?;
-        let bytes = root.as_bytes().to_vec();
-        if let Some((_, previous)) = seen.iter().find(|(v, _)| *v == version) {
-            if previous != &bytes {
+        match seen.iter().find(|(v, _)| *v == version) {
+            Some((_, previous)) if *previous != root.as_str() => {
                 return Err("two different roots share one version".into());
             }
-            continue;
+            Some(_) => {}
+            None => seen.push((version, root)),
         }
-        write(&dir.join(format!("{version}.root.json")), &bytes)?;
-        seen.push((version, bytes));
     }
-    for (name, document) in [
-        ("timestamp.json", &metadata.timestamp),
-        ("snapshot.json", &metadata.snapshot),
-        ("targets.json", &metadata.targets),
-    ] {
-        if !serde_json::from_str::<serde_json::Value>(document).is_ok_and(|d| d.is_object()) {
-            return Err(format!("{name} must be a signed role document"));
-        }
-        write(&dir.join(name), document.as_bytes())?;
-    }
-    Ok(())
+    Ok(seen)
 }
 
-fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    fs::write(path, bytes).map_err(|e| format!("cannot stage {}: {e}", path.display()))
+/// Refuse a root that lists one key under two IDs for a role. The library
+/// counts signatures by key ID, so such a root could meet a threshold of two
+/// with a single key. RC2FX's roles need one signature each today; this keeps
+/// a future threshold honest.
+fn distinct_keys(root: &Root) -> Result<(), String> {
+    for (role, keys) in &root.roles {
+        let mut material = HashSet::new();
+        for id in &keys.keyids {
+            if let Some(key) = root.keys.get(id)
+                && !material.insert((&key.keytype, key.keyval.public.trim()))
+            {
+                return Err(format!(
+                    "the signed root lists one {role} key under two IDs"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The profile ids a desktop installer considers qualified, mirrored so the

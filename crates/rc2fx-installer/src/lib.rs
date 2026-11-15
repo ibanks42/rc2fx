@@ -25,6 +25,7 @@ pub mod platform;
 mod runtime;
 pub use runtime::service_from_state;
 mod ssh;
+mod tuf;
 mod usb;
 
 pub use platform::{Hid, Platform, Reports, Volume};

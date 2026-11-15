@@ -13,10 +13,12 @@
 //! rollback floor and freeze its updates. Without it a replay can only offer
 //! older metadata, which is acceptable here: the app only checks versions
 //! newer than itself, which metadata from before their release cannot name,
-//! and expiry (`ExpirationEnforcement::Safe`; app metadata lasts 7 days)
+//! and expiry (every role must be unexpired; app metadata lasts 7 days)
 //! bounds how long stale metadata can hide a newer release.
+//!
+//! Verification is sigstore-tuf's, the library the mixer releases use too.
+use sigstore_tuf::{TargetFile, Updater};
 use std::{io::Read, path::Path, time::Duration};
-use tough::{RepositoryLoader, TargetName};
 use url::Url;
 
 const TRUSTED_ROOT: &[u8] = include_bytes!("../../../config/mixer-update-root.json");
@@ -69,10 +71,10 @@ pub fn configured() -> bool {
 /// Check that `file` is exactly the signed asset `asset` of app `version`.
 /// Blocking: it fetches the app metadata on its own runtime, so call it from
 /// a background thread. A file whose bytes do not match is removed, so
-/// nothing can apply it afterwards. The metadata is kept only for this check,
-/// in a temporary folder under `work`.
+/// nothing can apply it afterwards. The metadata is kept only in memory, for
+/// this check; `work`, the app's working folder, is not written.
 pub fn verify_update_package(
-    work: &Path,
+    _work: &Path,
     version: &str,
     asset: &str,
     file: &Path,
@@ -87,33 +89,14 @@ pub fn verify_update_package(
     let targets = Url::parse(TARGETS_URL).map_err(|e| unavailable(e.to_string()))?;
     check_repository_url(&metadata, METADATA_HOST).map_err(unavailable)?;
     check_repository_url(&targets, TARGETS_HOST).map_err(unavailable)?;
-    let transport = tough::HttpTransportBuilder::new().timeout(TIMEOUT).build();
-    verify(
-        Repository {
-            root: TRUSTED_ROOT,
-            metadata,
-            targets,
-            state_parent: work,
-        },
-        transport,
-        version,
-        asset,
-        file,
-    )
+    let repository = crate::tuf::http(&metadata, &targets, TIMEOUT).map_err(unavailable)?;
+    verify(TRUSTED_ROOT, repository, version, asset, file)
 }
 
-/// Where to check against. Tests point it at local files.
-struct Repository<'a> {
-    root: &'a [u8],
-    metadata: Url,
-    targets: Url,
-    /// Where the check's temporary metadata folder is made.
-    state_parent: &'a Path,
-}
-
+/// `repository` is the official one, or local files in tests.
 fn verify(
-    repository: Repository<'_>,
-    transport: impl tough::Transport + 'static,
+    root: &[u8],
+    repository: impl sigstore_tuf::Repository + 'static,
     version: &str,
     asset: &str,
     file: &Path,
@@ -130,7 +113,7 @@ fn verify(
     }
     let name = format!("v{version}/{asset}");
     let (target, newest) =
-        signed_target(repository, transport, &name).map_err(VerifyError::Unavailable)?;
+        signed_target(root, repository, &name).map_err(VerifyError::Unavailable)?;
     let Some(target) = target else {
         let superseded = newest.is_some_and(|newest| {
             rc2fx_core::compare_versions(&newest, version) == Some(std::cmp::Ordering::Greater)
@@ -139,14 +122,14 @@ fn verify(
             if superseded { SUPERSEDED } else { UNSIGNED }.into(),
         ));
     };
-    if target.custom.get("version").and_then(|v| v.as_str()) != Some(version) {
+    if version_of(&target) != Some(version) {
         return Err(rejected(
             "The signed release information does not describe this update.".into(),
         ));
     }
-    let matches = digest(file)
-        .map_err(|e| rejected(format!("Could not read the downloaded update: {e}")))?
-        == (target.length, target.hashes.sha256.to_vec());
+    let matches = Some(
+        digest(file).map_err(|e| rejected(format!("Could not read the downloaded update: {e}")))?,
+    ) == crate::tuf::sha256(&target).map(|sha256| (target.length, sha256));
     if !matches {
         // Best effort: the caller discards the update either way.
         let _ = std::fs::remove_file(file);
@@ -158,37 +141,32 @@ fn verify(
 /// The target `name` from freshly verified metadata, or `None` when no
 /// release with that name has been signed, and the newest version signed.
 fn signed_target(
-    repository: Repository<'_>,
-    transport: impl tough::Transport + 'static,
+    root: &[u8],
+    repository: impl sigstore_tuf::Repository + 'static,
     name: &str,
-) -> Result<(Option<tough::schema::Target>, Option<String>), String> {
+) -> Result<(Option<TargetFile>, Option<String>), String> {
     let unavailable = |e: &dyn std::fmt::Display| {
         format!("Could not check this update against its signed release: {e}. Try again later.")
     };
-    // Fresh for every check, and removed when it ends (see the module
+    // No store: every check starts from the trusted root (see the module
     // comment).
-    std::fs::create_dir_all(repository.state_parent).map_err(|e| unavailable(&e))?;
-    let datastore = tempfile::Builder::new()
-        .prefix(".app-metadata-")
-        .tempdir_in(repository.state_parent)
-        .map_err(|e| unavailable(&e))?;
+    let mut updater = Updater::new(repository, root).map_err(|e| unavailable(&e))?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| unavailable(&e))?;
-    let loaded = runtime.block_on(async {
-        let load = RepositoryLoader::new(&repository.root, repository.metadata, repository.targets)
-            .datastore(datastore.path())
-            .transport(transport)
-            // Expired metadata could be a replay that hides a newer release.
-            .expiration_enforcement(tough::ExpirationEnforcement::Safe)
-            .load();
-        tokio::time::timeout(TIMEOUT, load).await
+    // Expired metadata could be a replay that hides a newer release.
+    let refreshed = runtime.block_on(async {
+        tokio::time::timeout(TIMEOUT, updater.refresh(jiff::Timestamp::now())).await
     });
-    let loaded = loaded
+    refreshed
         .map_err(|_| unavailable(&"timed out"))?
         .map_err(|e| unavailable(&e))?;
-    let targets = &loaded.targets().signed;
+    crate::tuf::distinct_keys(updater.trusted().root()).map_err(|e| unavailable(&e))?;
+    let targets = updater
+        .trusted()
+        .targets_role("targets")
+        .ok_or_else(|| unavailable(&"the signed metadata is incomplete"))?;
     // Only top-level targets are published. A delegation would extend trust
     // to roles whose lifetimes nothing here checks.
     if targets
@@ -198,11 +176,10 @@ fn signed_target(
     {
         return Err(unavailable(&"delegated app targets are not supported"));
     }
-    let name = TargetName::new(name).map_err(|e| unavailable(&e))?;
     let newest = targets
         .targets
         .values()
-        .filter_map(|t| t.custom.get("version")?.as_str())
+        .filter_map(version_of)
         .fold(None::<&str>, |newest, v| match newest {
             Some(n) if rc2fx_core::compare_versions(v, n) != Some(std::cmp::Ordering::Greater) => {
                 Some(n)
@@ -210,11 +187,16 @@ fn signed_target(
             _ => Some(v),
         })
         .map(str::to_owned);
-    Ok((targets.targets.get(&name).cloned(), newest))
+    Ok((targets.target(name).cloned(), newest))
+}
+
+/// The version a signed asset says it belongs to.
+fn version_of(target: &TargetFile) -> Option<&str> {
+    target.custom.as_ref()?.get("version")?.as_str()
 }
 
 /// Length and SHA-256 of a file, read once in pieces.
-fn digest(file: &Path) -> std::io::Result<(u64, Vec<u8>)> {
+fn digest(file: &Path) -> std::io::Result<(u64, String)> {
     use sha2::Digest;
     let mut file = std::fs::File::open(file)?;
     let mut hash = sha2::Sha256::new();
@@ -223,7 +205,8 @@ fn digest(file: &Path) -> std::io::Result<(u64, Vec<u8>)> {
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
-            return Ok((length, hash.finalize().to_vec()));
+            let sum = hash.finalize();
+            return Ok((length, sum.iter().map(|b| format!("{b:02x}")).collect()));
         }
         length += read as u64;
         hash.update(&buffer[..read]);
