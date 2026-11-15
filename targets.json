@@ -1,0 +1,128 @@
+{
+  "signed": {
+    "_type": "targets",
+    "spec_version": "1.0.0",
+    "version": 794724757,
+    "expires": "2029-11-04T15:48:28.583715004Z",
+    "targets": {
+      "v0.1.6/releases.osx.json": {
+        "length": 286,
+        "hashes": {
+          "sha256": "482399125579c7b688c049432c28a92c77f0752e6bd15c9ec5de6cd08a153016"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/io.github.ibanks42.rc2fx-0.1.6-full.nupkg": {
+        "length": 18285153,
+        "hashes": {
+          "sha256": "dbb54a209ad50a6d7d3f3b861f6f56d10a4117f91e146c335e5ea7408cdf819f"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/rc2fx-linux-x64.AppImage": {
+        "length": 29194744,
+        "hashes": {
+          "sha256": "27b0e2bc1aaabd18359f9c0945592e3a4fd72e764d9039a67722ed3f2fffff73"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/rc2fx-macos-arm64.zip": {
+        "length": 17566815,
+        "hashes": {
+          "sha256": "d017404f95205b674bf6a9765fc33feeaab446a6fa6dc7106fc8627e5e6845b9"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/rc2fx-macos-arm64.pkg": {
+        "length": 17589446,
+        "hashes": {
+          "sha256": "8f0d92241c68cb8cb77070e563668a85026fa385478eb741be8ace0de55f65f0"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/io.github.ibanks42.rc2fx-0.1.6-osx-full.nupkg": {
+        "length": 18304178,
+        "hashes": {
+          "sha256": "c77c2ac6e72cbe61ae1058ac4c7be124827834dd7c0dfd335e81a8eac63f690c"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/releases.linux.json": {
+        "length": 288,
+        "hashes": {
+          "sha256": "be086b49d6a16809cd6d0325e4a8e4cda80f6daab64de3a4298186124b9b8a17"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/releases.win.json": {
+        "length": 282,
+        "hashes": {
+          "sha256": "bbb2a9296b24d69e63b166f66f15e5ec08305d1a635d61c69423c4e8d612a33f"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/rc2fx-0.1.6-appimage-runtime-sources.tar.gz": {
+        "length": 10922294,
+        "hashes": {
+          "sha256": "1be7eece1013a9378f09a0729a44c231c29ddb74263de03de0c28bd3b30f0f58"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/rc2fx-windows-x64.zip": {
+        "length": 18273600,
+        "hashes": {
+          "sha256": "650bc1b22f3aa1beef97c3d43ced39b54c4506db303916b508ecac0b3d9d4f4a"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/rc2fx-windows-x64-setup.exe": {
+        "length": 26767457,
+        "hashes": {
+          "sha256": "7cfbddc2f98b878c7639edab473da909b98566ae02462bbb171f673ab6eb0cee"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      },
+      "v0.1.6/io.github.ibanks42.rc2fx-0.1.6-linux-full.nupkg": {
+        "length": 28576811,
+        "hashes": {
+          "sha256": "ec62ea7bf6be79c3d25e440efad9f438219e3d9540870beb6d09dfb910595356"
+        },
+        "custom": {
+          "version": "0.1.6"
+        }
+      }
+    },
+    "delegations": {
+      "keys": {},
+      "roles": []
+    }
+  },
+  "signatures": [
+    {
+      "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
+      "sig": "102b3547a7825ee38110bf4403ba90692ab496ba91b999eb337658cee2f3d296e75445bf843cabbe58272d55c79bf48328695fa52b073edb9b26530809dea7dfa6099f80081f05b866e096da5b5785c0b8cce11ab5a625c3b03f266d292da3abfd0d0d2afbda4ad956ba949fab6235a0984af63efaf15dd36dd00b789429a308b4441ddb7c4f71566558c16350ac65f1d62514d44698487f0499434cc605f0e884c3fdd5b13447cc992eab0c0b8722dde202e26ea18d054cb4c15f08074e811ef51a10284e325c00207f9e4e3dee1b6a9accdb17fe8d6cbd8af9beea836a7930de740adc09c55942347afc7d11dda8cca260f8eae1fd842d8ac024d2a6fb2052a168d8a8b1105fb9b8734cbc4b69129fc5620de9685afe80a1c17765582eef2f8d52f58c6b8c9e14dbd56a2f118ec5882d0f14577bb3c4666814679e895348d5b67cae52b624d425ba15409b3cb33784387789b98577124ec640e75d9358bcb915f25189c7db430f10f7be90b4378fe6585b330be01d9b90b7a56e38e178c5d6"
+    }
+  ]
+}
