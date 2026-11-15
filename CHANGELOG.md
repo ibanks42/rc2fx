@@ -2,6 +2,85 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.1.6] - 2026-11-15
+
+### Features
+
+- *(app)* Update in place through Velopack, checked against signed release metadata
+- *(gui)* Count conversion plans by shape and size, and skip unused paint text
+- *(bench)* Compare the tiled and row-major GRU kernels on the mixer
+- *(native)* Bench-only timing of RØDE's worker-join waits
+- *(mixer)* Report recent timing peaks and engine running time; native protocol 7
+- *(installer)* Read the RØDE firmware version from the mixer's USB release number
+- *(app)* Rework the telemetry panel around what a person can act on
+- *(mixer)* Install signed RC2FX releases in place, without a flash
+- *(app)* Offer RC2FX updates in place, and a notice to update older mixer software
+- *(usb)* Control protocol 4, and a hook that keeps a transfer flowing
+- *(update)* Send only what changed in an in-place update
+- *(update)* Verify releases with sigstore-tuf on the mixer and in the app
+- *(update)* Apply controller-only updates without restarting the mixer
+
+### Bug fixes
+
+- *(device)* Stop polling fast once the app has gone away
+- *(xtask)* Arm power recovery before developer mixer commands
+- *(xtask)* Remove the RAM upload once an install is in place
+- *(native)* Count a callback start as late only past 3/5 of the period
+- *(mixer)* Refuse in-place installs of releases that can't commit them
+- *(mixer)* Give in-place updates their own pending marker
+- *(mixer)* Let a new in-place upload replace an abandoned one
+- *(mixer)* Fingerprint signed targets by their bytes, not a re-serialization
+- *(app)* Keep in-place update progress, and show the mixer's refusals
+- *(mixer)* Free the rollback copy's space once an update commits
+
+### Refactoring
+
+- Get thread IDs with the gettid syscall
+
+### Documentation
+
+- Put downloads first on the front page and document the new packaging
+- Describe the RØDECaster's built-in processing accurately
+
+### Performance
+
+- *(native)* Resample USB channels through a shared bit-exact plan
+- *(dsp)* Check and meter blocks at a time, and skip unchanged preparation
+- *(suppression)* Vectorise the denoiser's remaining loops and process blocks
+- *(native)* Trim the callback's bookkeeping and speed up the resampler
+- *(dfn)* Store the GRU weights in tiles and multiply four rows at a time
+- *(dsp)* Lay out each EQ bank's hot state together and prefetch it
+- *(native)* Prefetch the callback's own state before each phase
+- *(native)* Let the helper wake itself instead of the callback waking it
+- *(gui)* Copy screen strips out of the framebuffer with 32-byte loads
+- *(dfn)* Let the denoiser wait out the audio callback
+- *(native)* Mark the callback for the denoiser hold; wake the helper 50 us after its handoff
+- *(native)* Wake one idle vendor worker per job instead of all three
+- *(native)* Reuse JACK port buffer pointers within a graph generation
+
+### Testing
+
+- *(suppression)* Keep the slowest-frame test from racing under load
+- *(mixer)* Keep the stand-in update driver a shell on bash systems
+
+### Maintenance
+
+- Check Linux in the AlmaLinux 8 build image, and on pull requests
+- Run the Linux check container with an init process
+- Make the Linux check faster and keep pull requests on main's cache
+- *(mixer)* Prepare the 0.2.0 mixer release
+- Name the build user in the package container so vpk's .NET runs
+
+### Other
+
+- *(release)* Sign app releases into the app-metadata branch
+- *(package)* Package every platform with Velopack, with unversioned file names
+- *(linux)* Build the AppImage on AlmaLinux 8 (glibc 2.28)
+- *(rust)* Move the toolchain to 1.100.0
+- *(app)* Move to gpui-kit 0.9.1 and gpui-fast 0.1.15
+- Declare platform-only dependencies for the platforms that use them
+- *(device)* Depend on libc only on Unix
+
 ## [0.1.5] - 2026-11-08
 
 ### Features
