@@ -54,6 +54,24 @@ fi
 
 check=$root/target/package-check
 mkdir -p "$check/target" "$check/cache"
+
+# docker --user runs as an ID the image doesn't name, and .NET (vpk) then
+# refuses to create its named mutexes: "The system cannot open the device or
+# file specified. : 'NuGet-Migrations'". Podman's keep-id adds the entries;
+# for docker, mount the image's own user and group files with them added.
+if [[ $engine == docker && ${#user[@]} -gt 0 ]]; then
+    uid=$(id -u) gid=$(id -g)
+    identity=$check/identity
+    mkdir -p "$identity"
+    "$engine" run --rm "$image" cat /etc/passwd > "$identity/passwd"
+    "$engine" run --rm "$image" cat /etc/group > "$identity/group"
+    awk -F: -v id="$uid" '$3 == id { found = 1 } END { exit !found }' "$identity/passwd" ||
+        printf 'rc2fx:x:%s:%s::/work/cache/home:/bin/sh\n' "$uid" "$gid" >> "$identity/passwd"
+    awk -F: -v id="$gid" '$3 == id { found = 1 } END { exit !found }' "$identity/group" ||
+        printf 'rc2fx:x:%s:\n' "$gid" >> "$identity/group"
+    chmod 644 "$identity/passwd" "$identity/group"
+    user+=(-v "$identity/passwd:/etc/passwd:ro" -v "$identity/group:/etc/group:ro")
+fi
 # Tracked and new files as they are now, minus deleted and ignored ones.
 # Modification times are kept so the cached build only redoes what changed.
 snapshot() {
