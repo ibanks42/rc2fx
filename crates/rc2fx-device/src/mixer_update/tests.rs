@@ -815,9 +815,12 @@ fn a_live_driver_keeps_the_new_bundle_and_its_marker() {
     }
     .save(&paths.pending())
     .unwrap();
+    // A loop, not a single command: bash (/bin/sh on Fedora and AlmaLinux)
+    // execs a lone command in place of itself, and its command line would no
+    // longer carry `update-commit`.
     let mut child = std::process::Command::new("/bin/sh")
         .arg("-c")
-        .arg("sleep 30")
+        .arg("while :; do sleep 1; done")
         .arg("update-commit")
         .spawn()
         .unwrap();
