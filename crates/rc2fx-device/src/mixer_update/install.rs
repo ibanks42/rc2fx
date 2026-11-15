@@ -89,6 +89,21 @@ pub const SCRIPTS: [&str; 4] = [
     "install.sh",
 ];
 
+/// Payload files the running mixer process does not hold. The controller runs
+/// `rc2fxd`; the rest are read only by it, by an install or at the mixer's
+/// next launch (the GUI shim at the next boot, as for any update). An update
+/// that changes nothing else is applied by restarting the controller alone,
+/// and audio keeps running.
+pub const CONTROLLER_SIDE: [&str; 7] = [
+    "rc2fxd",
+    "rc2fx-firmware",
+    "firmware-profiles.json",
+    "mixer-release.json",
+    "SHA256SUMS",
+    "install.sh",
+    "rc2fx-gui-shim.sh",
+];
+
 /// Longest accepted reason in the last-outcome record.
 const MAX_REASON: usize = 512;
 
@@ -322,6 +337,9 @@ pub struct Staged {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Swapped {
     pub gui_shim_changed: bool,
+    /// Every file outside [`CONTROLLER_SIDE`] is byte for byte the one that
+    /// was installed before.
+    pub controller_only: bool,
 }
 
 /// A failure after the swap began: `swapped_in_doubt` is true once the pending
@@ -592,6 +610,10 @@ pub fn swap(
     to: &str,
 ) -> Result<Swapped, InstallFailure> {
     let live = paths.bundle();
+    let controller_only = PAYLOAD_NAMES
+        .iter()
+        .filter(|name| !CONTROLLER_SIDE.contains(name))
+        .all(|name| same_bytes(&staged.dir.join(name), &live.join(name)));
     snapshot_previous(paths)?;
     Pending {
         schema: 1,
@@ -613,11 +635,17 @@ pub fn swap(
         0o600,
     )
     .map_err(|e| io_failure("record the bundle digest", e, true))?;
-    let swapped =
+    let mut swapped =
         write_shims(paths, &live).map_err(|e| io_failure("install the launcher shims", e, true))?;
+    swapped.controller_only = controller_only;
     fsync_dir(&paths.shims).map_err(|e| io_failure("flush /usr/sbin", e, true))?;
     let _ = fs::remove_dir(&staged.dir);
     Ok(swapped)
+}
+
+/// Whether two files can both be read and hold the same bytes.
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    matches!((fs::read(a), fs::read(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 fn bundle_digest_from_disk(dir: &Path) -> Result<String, InstallFailure> {
@@ -640,6 +668,7 @@ fn write_shims(paths: &Paths, live: &Path) -> io::Result<Swapped> {
     write_atomic(&paths.shims.join("rc_gui_juce"), &gui, 0o755)?;
     Ok(Swapped {
         gui_shim_changed: gui_before.as_deref() != Some(gui.as_slice()),
+        controller_only: false,
     })
 }
 

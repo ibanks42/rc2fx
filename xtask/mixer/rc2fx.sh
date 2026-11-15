@@ -1915,6 +1915,8 @@ xrun_trace() {
 # first. The request file is key=value lines written by rc2fxd:
 #   mode=commit|rollback  target=VERSION  from=VERSION  deadline=SECONDS
 #   gui=0|1  (the GUI shim changed and only applies after the next boot)
+#   restart=controller|mixer  (controller: only files the mixer process does
+#     not hold changed, so restarting the controller alone applies the update)
 update_dir=/run/rc2fx-update
 
 # One record for `GET api/v1/update/last`, in the same key=value form rc2fxd
@@ -1942,10 +1944,42 @@ update_ready() {
   test -n "$first" && test -n "$second" && test "$second" -gt "$first"
 }
 
+# Applies an update that changed only the controller's side (restart=controller)
+# by having the supervisor restart the controller alone: audio keeps running.
+# Only when the running mixer was launched from this bundle with the same
+# mixer-side files and script and its supervisor can reload. The new
+# controller starts only if the library's paths and settings match the saved
+# ones (Runtime::connect); if it is not ready within a minute, the caller
+# restarts the mixer as for any other update.
+update_reload() {
+  local target=$1 stop_at=$2 name until
+  supervisor > /dev/null || return 1
+  grep -qx reload "$run/supervisor.features" 2>/dev/null || return 1
+  test "$(cat "$run/home" 2>/dev/null)" = "$home" || return 1
+  cmp -s "$run/rc2fx.sh" "$home/rc2fx.sh" || return 1
+  for name in librc2fx_native.so rc2fx-supervisor librc2fx_gui.so librc2fx_jackerr.so rc2fx_jackerr_snapshot; do
+    test "$(awk -v n="$name" '$2 == n' "$run/bundle.sums" 2>/dev/null)" \
+      = "$(awk -v n="$name" '$2 == n' "$home/SHA256SUMS")" || return 1
+  done
+  say "Restarting the controller alone; audio keeps running" >> "$logs/update.log"
+  touch "$run/reload"
+  until=$(( $(uptime_s) + 60 ))
+  test "$until" -le "$stop_at" || until=$stop_at
+  while test "$(uptime_s)" -lt "$until"; do
+    if update_ready "$target"; then
+      # What the running mixer was launched with, as far as `start` compares.
+      cp "$home/SHA256SUMS" "$run/bundle.sums"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 update_commit() {
   local id=${1:?update session id}
   local req=$update_dir/commit-$id.request
-  local mode= target= from= deadline= gui=0 status=0 ok=0 stop_at
+  local mode= target= from= deadline= gui=0 restart=mixer status=0 ok=0 stop_at
   test -f "$req" || { echo "no update request $req" >&2; return 2; }
   while IFS='=' read -r key value; do
     case "$key" in
@@ -1954,6 +1988,7 @@ update_commit() {
       from) from=$value;;
       deadline) deadline=$value;;
       gui) gui=$value;;
+      restart) restart=$value;;
     esac
   done < "$req"
   case "$mode" in commit|rollback) ;; *) echo "unknown update mode ${mode:-}" >&2; return 2;; esac
@@ -1974,18 +2009,34 @@ update_commit() {
   fi
   rm -f "$update_dir/started"
   stop_at=$(( $(uptime_s) + deadline ))
-  start --force --wait "$deadline" || status=$?
-  say "Update $id: restart finished with status $status" >> "$logs/update.log"
-  if test "$mode" = commit && test "$status" -eq 0; then
-    while test "$(uptime_s)" -lt "$stop_at"; do
-      if update_ready "$target"; then ok=1; break; fi
-      sleep 2
-    done
+  if test "$mode" = commit && test "$restart" = controller; then
+    if update_reload "$target" "$stop_at"; then
+      ok=1
+    else
+      say "Update $id: the controller alone could not apply it; restarting the mixer" >> "$logs/update.log"
+    fi
+  fi
+  if test "$ok" = 0; then
+    start --force --wait "$deadline" || status=$?
+    say "Update $id: restart finished with status $status" >> "$logs/update.log"
+    if test "$mode" = commit && test "$status" -eq 0; then
+      while test "$(uptime_s)" -lt "$stop_at"; do
+        if update_ready "$target"; then ok=1; break; fi
+        sleep 2
+      done
+    fi
   fi
   if test "$ok" = 1; then
     update_record committed "$from" "$target" '' "$gui"
     rm -f /opt/.rc2fx-update-pending
     rm -f "$update_dir/driver"
+    # Nothing starts the rollback copy once the marker is gone. Its files are
+    # the old release's, kept alive by their hard links, so it would hold that
+    # space until the next update. One holding settings or logs is kept.
+    if test -d /opt/.rc2fx-previous && ! test -L /opt/.rc2fx-previous \
+        && ! test -e /opt/.rc2fx-previous/data && ! test -e /opt/.rc2fx-previous/logs; then
+      rm -rf /opt/.rc2fx-previous
+    fi
     say "Update $id: committed $target" >> "$logs/update.log"
     return 0
   fi
@@ -2024,10 +2075,3 @@ case "${1:-}" in
   developer-ssh) shift; developer_ssh "$@" ;;
   *) sed -n '2,26s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac
-    # Nothing starts the rollback copy once the marker is gone. Its files are
-    # the old release's, kept alive by their hard links, so it would hold that
-    # space until the next update. One holding settings or logs is kept.
-    if test -d /opt/.rc2fx-previous && ! test -L /opt/.rc2fx-previous \
-        && ! test -e /opt/.rc2fx-previous/data && ! test -e /opt/.rc2fx-previous/logs; then
-      rm -rf /opt/.rc2fx-previous
-    fi

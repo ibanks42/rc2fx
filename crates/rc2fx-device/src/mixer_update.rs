@@ -604,7 +604,7 @@ impl MixerUpdate {
                 if failure.swapped_in_doubt {
                     // Files may already be mixed. Start the previous bundle
                     // through the shim; its controller restores and records.
-                    let _ = self.spawn_driver(id, &verified, true, false);
+                    let _ = self.spawn_driver(id, &verified, true, &install::Swapped::default());
                     self.set_state(
                         id,
                         SessionState::Restarting,
@@ -715,7 +715,7 @@ impl MixerUpdate {
         }
         let from = verified.from.clone().unwrap_or_default();
         let swapped = install::swap(&self.paths, &staged, &from, &verified.version)?;
-        self.spawn_driver(id, verified, false, swapped.gui_shim_changed)
+        self.spawn_driver(id, verified, false, &swapped)
             .map_err(|e| install::InstallFailure {
                 message: e,
                 swapped_in_doubt: true,
@@ -729,18 +729,23 @@ impl MixerUpdate {
         id: &str,
         verified: &verify::VerifiedRelease,
         rollback: bool,
-        gui_shim_changed: bool,
+        swapped: &install::Swapped,
     ) -> Result<(), String> {
         let script = self.paths.driver_script(id);
         fs::copy(self.paths.bundle().join("rc2fx.sh"), &script)
             .map_err(|e| format!("cannot stage the update driver: {e}"))?;
         let request = format!(
-            "mode={}\ntarget={}\nfrom={}\ndeadline={}\ngui={}\n",
+            "mode={}\ntarget={}\nfrom={}\ndeadline={}\ngui={}\nrestart={}\n",
             if rollback { "rollback" } else { "commit" },
             verified.version,
             verified.from.as_deref().unwrap_or(""),
             RESTART_SECONDS,
-            if gui_shim_changed { "1" } else { "0" },
+            if swapped.gui_shim_changed { "1" } else { "0" },
+            if swapped.controller_only && !rollback {
+                "controller"
+            } else {
+                "mixer"
+            },
         );
         install::write_atomic(&self.paths.request(id), request.as_bytes(), 0o600)
             .map_err(|e| format!("cannot record the update request: {e}"))?;

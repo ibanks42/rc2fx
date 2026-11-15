@@ -204,6 +204,59 @@ fn starts_the_controller_and_stops_on_request_without_asking_for_stock() {
 }
 
 #[test]
+fn a_reload_replaces_the_controller_and_leaves_the_mixer_running() {
+    let mut rig = Rig::new();
+    rig.start(60, None);
+    let _socket = rig.open_socket();
+    let first = rig.wait_for_controller();
+    assert_eq!(
+        fs::read_to_string(rig.path("run/supervisor.features")).unwrap(),
+        "reload\n"
+    );
+    // A socket a killed controller left behind must not block the new one.
+    let stale = UnixDatagram::bind(rig.path("run/usb.sock")).unwrap();
+    fs::remove_file(rig.path("controller-started")).unwrap();
+    fs::write(rig.path("run/reload"), "").unwrap();
+    let second = rig.wait_for_controller();
+    assert_ne!(first, second);
+    // Stopped and reaped before the new one started.
+    assert!(!Path::new(&format!("/proc/{first}")).exists());
+    assert!(!rig.path("run/reload").exists());
+    assert!(!rig.path("run/usb.sock").exists());
+    drop(stale);
+    assert!(
+        rig.mixer.try_wait().unwrap().is_none(),
+        "the mixer keeps running"
+    );
+    assert!(rig.calls().is_empty(), "nothing restarted the mixer");
+    assert_eq!(rig.stock(), None);
+    assert!(rig.log().contains("Reloading the controller"));
+    fs::write(rig.path("run/stop"), "").unwrap();
+    rig.finish();
+    assert_eq!(
+        rig.calls(),
+        [
+            format!("{} {second}", rig.restart_call(0)),
+            "supervise-exit".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn a_reload_before_the_controller_starts_is_dropped() {
+    let mut rig = Rig::new();
+    fs::write(rig.path("run/reload"), "").unwrap();
+    rig.start(60, None);
+    rig.wait_until_supervising();
+    wait_for("the request to be dropped", || {
+        !rig.path("run/reload").exists()
+    });
+    let _socket = rig.open_socket();
+    rig.wait_for_controller();
+    assert!(!rig.log().contains("Reloading the controller"));
+}
+
+#[test]
 fn a_kept_gadget_is_passed_on_for_a_restart_into_rc2fx() {
     let mut rig = Rig::new();
     fs::write(rig.path("run/keep-usb"), "").unwrap();

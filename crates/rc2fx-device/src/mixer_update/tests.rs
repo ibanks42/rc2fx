@@ -655,6 +655,59 @@ fn write_bundle(paths: &install::Paths, files: &[(String, Vec<u8>)]) {
     }
 }
 
+/// `files` with `names` given new contents and `SHA256SUMS` to match.
+fn changed(files: &[(String, Vec<u8>)], names: &[&str]) -> Vec<(String, Vec<u8>)> {
+    let mut files = files.to_vec();
+    for (name, data) in &mut files {
+        if names.contains(&name.as_str()) {
+            data.extend_from_slice(b"changed\n");
+        }
+    }
+    let sums: String = install::PINNED
+        .iter()
+        .map(|name| {
+            let data = &files.iter().find(|(n, _)| n.as_str() == *name).unwrap().1;
+            format!("{}  {name}\n", install::sum(data))
+        })
+        .collect();
+    files.iter_mut().find(|(n, _)| n == "SHA256SUMS").unwrap().1 = sums.into_bytes();
+    files
+}
+
+#[test]
+fn a_swap_of_the_controller_side_alone_needs_no_mixer_restart() {
+    let (_dir, paths) = test_paths();
+    let old = bundle_files("old");
+    write_bundle(&paths, &old);
+    let new = changed(
+        &old,
+        &["rc2fxd", "mixer-release.json", "firmware-profiles.json"],
+    );
+    let staged = install::stage(&paths, "aaaaaaaaaaaaaaaa", &new).unwrap();
+    let swapped = install::swap(&paths, &staged, "0.1.5", "0.1.6").unwrap();
+    assert!(swapped.controller_only);
+    assert_eq!(
+        fs::read(paths.bundle().join("rc2fxd")).unwrap(),
+        b"old rc2fxd\nchanged\n"
+    );
+}
+
+#[test]
+fn a_swap_that_changes_any_mixer_side_file_restarts_the_mixer() {
+    for name in install::PAYLOAD_NAMES
+        .iter()
+        .filter(|name| !install::CONTROLLER_SIDE.contains(name))
+    {
+        let (_dir, paths) = test_paths();
+        let old = bundle_files("old");
+        write_bundle(&paths, &old);
+        let new = changed(&old, &["rc2fxd", name]);
+        let staged = install::stage(&paths, "aaaaaaaaaaaaaaaa", &new).unwrap();
+        let swapped = install::swap(&paths, &staged, "0.1.5", "0.1.6").unwrap();
+        assert!(!swapped.controller_only, "{name} changed");
+    }
+}
+
 #[test]
 fn a_swap_keeps_settings_and_a_rollback_copy() {
     let (_dir, paths) = test_paths();
@@ -674,6 +727,8 @@ fn a_swap_keeps_settings_and_a_rollback_copy() {
     let staged = install::stage(&paths, "aaaaaaaaaaaaaaaa", &new).unwrap();
     let swapped = install::swap(&paths, &staged, "0.1.5", "0.2.0").unwrap();
     assert!(!swapped.gui_shim_changed);
+    // The mixer's own files changed too: the mixer has to restart.
+    assert!(!swapped.controller_only);
     // The new files are live, the settings are untouched, the marker exists.
     assert_eq!(
         fs::read(paths.bundle().join("librc2fx_native.so")).unwrap(),

@@ -12,6 +12,12 @@
 //! The rare, delicate steps stay in `rc2fx.sh` and are called on the way out:
 //! `supervise-restart` retires the USB node and stops the processes, and
 //! `supervise-exit` stops a remaining controller and writes the last-exit log.
+//!
+//! An in-place update that leaves the mixer's side unchanged asks for the
+//! controller alone to be replaced, by creating `reload` in the run directory:
+//! the controller is stopped and its executable started again, and audio keeps
+//! running. `supervisor.features` lists `reload` so that the update can tell a
+//! supervisor that does this from an older one.
 use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
@@ -41,6 +47,10 @@ const HOUSEKEEPING_FIRST: u32 = 10;
 /// Later passes catch a thread that pins itself to CPU 0 after starting.
 const HOUSEKEEPING_EVERY: u32 = 5;
 const OOM_SCORE: &str = "/proc/self/oom_score_adj";
+/// How long a controller being reloaded has to finish before it is killed.
+const RELOAD_STOP: std::time::Duration = std::time::Duration::from_secs(10);
+/// What `supervisor.features` lists, one per line.
+const FEATURES: &str = "reload\n";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Options {
@@ -125,6 +135,12 @@ impl Supervisor {
         say(&format!("Supervising RC2FX mixer {}", self.options.mixer));
         let socket = self.options.run.join("control.sock");
         let stop = self.options.run.join("stop");
+        let reload = self.options.run.join("reload");
+        if let Err(error) = fs::write(self.options.run.join("supervisor.features"), FEATURES) {
+            say(&format!(
+                "Could not record the supervisor's features: {error}"
+            ));
+        }
         let mut tick = 0;
         loop {
             if !self.mixer_alive() {
@@ -152,6 +168,13 @@ impl Supervisor {
                         self.options.ready_seconds
                     );
                     self.end_mixer(&reason, true);
+                    return;
+                }
+            }
+            if reload.exists() {
+                let _ = fs::remove_file(&reload);
+                // Without a controller, the next start already runs the new one.
+                if self.controller.is_some() && !self.reload_controller() {
                     return;
                 }
             }
@@ -263,6 +286,48 @@ impl Supervisor {
                 false
             }
         }
+    }
+
+    /// Replaces the controller with a new start of its executable and leaves
+    /// the mixer running. The old one gets `RELOAD_STOP` to finish, then is
+    /// killed; the sockets only a controller binds are cleared after it, so a
+    /// killed one's cannot block the new one. False when the new controller
+    /// could not start and the mixer has been ended.
+    fn reload_controller(&mut self) -> bool {
+        say("Reloading the controller for an update; the mixer keeps running");
+        if let Some(mut controller) = self.controller.take() {
+            self.controller_fd = None;
+            // Not yet reaped, so the PID is still this child's.
+            unsafe { libc::kill(controller.id() as i32, libc::SIGTERM) };
+            let deadline = std::time::Instant::now() + RELOAD_STOP;
+            loop {
+                match controller.try_wait() {
+                    Ok(Some(status)) => {
+                        say(&format!(
+                            "Controller stopped for the reload with status {}",
+                            shell_status(status)
+                        ));
+                        break;
+                    }
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    _ => {
+                        say("Controller did not stop for the reload; killing it");
+                        let _ = controller.kill();
+                        let _ = controller.wait();
+                        break;
+                    }
+                }
+            }
+        }
+        for name in ["usb.sock", "ui.sock"] {
+            let path = self.options.run.join(name);
+            if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_socket()) {
+                let _ = fs::remove_file(path);
+            }
+        }
+        self.start_controller()
     }
 
     /// Reaps a controller that has exited and returns its shell-style status.

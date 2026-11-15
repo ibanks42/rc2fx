@@ -211,6 +211,18 @@ restarts into `/opt/.rc2fx-previous` instead, and the previous controller
 restores the files and records the rollback. The outcome is
 reported by `GET api/v1/update/last` after the app reconnects.
 
+When the update changes none of the files RØDE's running mixer process holds
+(the native and GUI libraries, the supervisor, the JACK recorder, `rc2fx.sh`
+and the audio shim), only the controller is restarted and audio keeps running:
+`rc2fxd` passes `restart=controller` to the driver, which asks the supervisor
+to reload by creating `/run/rc2fx/reload`. The supervisor stops the
+controller and starts the new `rc2fxd`, which refuses to run unless the native
+library's paths and settings match the saved ones. The driver uses this only
+when the running mixer was launched from `/opt/rc2fx` with the same files and
+its supervisor lists `reload` in `/run/rc2fx/supervisor.features`. Readiness,
+the commit and rollback are the same as above; if the new controller is not
+ready within a minute, the driver restarts the mixer instead.
+
 A power cut at any point leaves something launchable:
 
 | Cut during | Next boot |
