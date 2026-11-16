@@ -136,6 +136,16 @@ func velopackDir(root, goos, goarch, fetch string) (string, error) {
 	return dir, nil
 }
 
+// velopackLinkFlags links velopack_libc from dir. They go in CGO_LDFLAGS,
+// not in vpkc's #cgo LDFLAGS: Velopack's static libraries carry LLVM bitcode
+// (.llvmbc, __LLVM,__bitcode), and since Go 1.27.4 cgo refuses a library
+// with an LTO section named by a #cgo directive; flags from the environment
+// are the builder's own and are not checked. vpkc's directives keep the
+// system libraries velopack_libc needs, which follow it on the link line.
+func velopackLinkFlags(dir string) string {
+	return "-L" + dir + " -lvelopack_libc"
+}
+
 // buildEnv is the environment `go build` of the app runs with for one
 // goos/goarch, from environ (os.Environ()): cgo on and CGO_LDFLAGS as
 // appLinkFlags gave them. On macOS the C compiler (CC, clang unless set),
@@ -262,8 +272,12 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 			out = exe + "-" + arch
 			defer func() { _ = os.Remove(out) }()
 		}
+		vpk, err := velopackDir(root, goos, arch, fetchTarget(goos, goarch))
+		if err != nil {
+			return err
+		}
 		build := host("build", "-trimpath", "-tags", tags, "-ldflags", ldflags, "-o", out, "./cmd/rc2fx")
-		build.Env = buildEnv(os.Environ(), goos, arch, cgoLDFlags)
+		build.Env = buildEnv(os.Environ(), goos, arch, cgoLDFlags+" "+velopackLinkFlags(vpk))
 		if err := task.Run(build); err != nil {
 			return err
 		}

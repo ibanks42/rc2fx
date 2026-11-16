@@ -54,7 +54,10 @@ stages from `target/mixer` first (`./xtask app --embedded` does both).
 
 Self-update links Velopack's C library only with the `velopack` build tag.
 Fetch it once with `scripts/fetch-velopack.sh` (pinned and checked; it lands
-in the gitignored `third_party/velopack`), then add `-tags velopack`. Release
+in the gitignored `third_party/velopack`), then add `-tags velopack` and
+`-L$PWD/third_party/velopack/GOOS-GOARCH -lvelopack_libc` to `CGO_LDFLAGS`
+(not a `#cgo` directive: its static libraries carry LLVM bitcode, which Go
+refuses there; `./xtask` adds it). Release
 packaging must build with the tag; a build without it cannot update itself
 and ignores Velopack's install and uninstall hooks.
 

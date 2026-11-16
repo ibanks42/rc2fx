@@ -358,10 +358,17 @@ jobs:
           : > installer/embed/payload/rc2fx-payload.bin
           go vet -tags rc2fxdebug,rc2fxdev,embedded ./app/... ./cmd/rc2fx ./installer/...
           rm installer/embed/payload/rc2fx-payload.bin
-          go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/" ./cmd/rc2fx
+          # velopack_libc is named in CGO_LDFLAGS, as ./xtask package does: its
+          # static builds carry LLVM bitcode, which cgo refuses in a #cgo
+          # directive (app/selfupdate/vpkc).
+          vpk=$PWD/third_party/velopack
+          [ "$RUNNER_OS" != Windows ] || vpk=$(cygpath -m "$vpk")
+          CGO_LDFLAGS="$CGO_LDFLAGS -L$vpk/$(go env GOOS)-$(go env GOARCH) -lvelopack_libc" \
+            go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/" ./cmd/rc2fx
           if [ "$RUNNER_OS" = macOS ]; then
             # The release app is universal: the Intel slice links too.
-            GOARCH=amd64 CGO_CFLAGS="-O2 -g -arch x86_64" CGO_LDFLAGS="$CGO_LDFLAGS -arch x86_64" \
+            GOARCH=amd64 CGO_CFLAGS="-O2 -g -arch x86_64" \
+              CGO_LDFLAGS="$CGO_LDFLAGS -arch x86_64 -L$vpk/darwin-amd64 -lvelopack_libc" \
               go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/rc2fx-amd64" ./cmd/rc2fx
           fi
           if [ "$RUNNER_OS" = Windows ]; then
@@ -453,7 +460,8 @@ jobs:
         run: |
           lib=$PWD/third_party/gpuikit/lib
           export CGO_ENABLED=1 CGO_LDFLAGS="-L$lib -Wl,-rpath,$lib"
-          go build -tags velopack -o "$RUNNER_TEMP/rc2fx-alma-check/" ./cmd/rc2fx
+          CGO_LDFLAGS="$CGO_LDFLAGS -L$PWD/third_party/velopack/linux-amd64 -lvelopack_libc" \
+            go build -tags velopack -o "$RUNNER_TEMP/rc2fx-alma-check/" ./cmd/rc2fx
       - name: Test the installer
         run: CGO_ENABLED=1 go test ./installer/... ./ext2fs/...
       - uses: actions/cache/save@v4.2.3

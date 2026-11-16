@@ -14,15 +14,21 @@
 // shipped as velopack_libc.dll beside rc2fx.exe, through a MinGW import
 // library (or GNU ld linking the DLL itself). Only plain C crosses the
 // boundary, so the different C runtimes do not meet.
+//
+// The library itself is named by the builder in CGO_LDFLAGS
+// (-L<desktop/third_party/velopack/GOOS-GOARCH> -lvelopack_libc;
+// ./xtask app and ./xtask package add it), not by a #cgo directive here:
+// its static builds carry LLVM bitcode, and Go refuses a library with an LTO
+// section that a #cgo directive names. The directives below keep the system
+// libraries it needs.
 package vpkc
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../../third_party/velopack/include
-#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../../third_party/velopack/linux-amd64 -lvelopack_libc -lgcc_s -lutil -lrt -lpthread -lm -ldl
-#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../../third_party/velopack/linux-arm64 -lvelopack_libc -lgcc_s -lutil -lrt -lpthread -lm -ldl
-#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../../third_party/velopack/darwin-arm64 -lvelopack_libc -framework CoreFoundation -framework Security -framework SystemConfiguration -liconv
-#cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../../third_party/velopack/darwin-amd64 -lvelopack_libc -framework CoreFoundation -framework Security -framework SystemConfiguration -liconv
-#cgo windows,amd64 LDFLAGS: -L${SRCDIR}/../../../third_party/velopack/windows-amd64 -lvelopack_libc
+#cgo linux,amd64 LDFLAGS: -lgcc_s -lutil -lrt -lpthread -lm -ldl
+#cgo linux,arm64 LDFLAGS: -lgcc_s -lutil -lrt -lpthread -lm -ldl
+#cgo darwin,arm64 LDFLAGS: -framework CoreFoundation -framework Security -framework SystemConfiguration -liconv
+#cgo darwin,amd64 LDFLAGS: -framework CoreFoundation -framework Security -framework SystemConfiguration -liconv
 #include <stdlib.h>
 #include "Velopack.h"
 
