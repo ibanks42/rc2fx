@@ -2,6 +2,27 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.1.7] - 2026-11-16
+
+### Features
+
+- *(installer)* List RØDE's files in the image, check root space and the mixer's serial before flashing
+- *(mixer)* Check the flashed image at boot and restore damaged RØDE files from the other root
+- *(app)* Repair mixer, for a mixer a flash left unable to keep its setup
+
+### Documentation
+
+- Recovering a mixer that forgets its setup
+
+### Maintenance
+
+- *(mixer)* Prepare the 0.2.1 mixer release
+
+### Other
+
+- Vendor libext2fs from e2fsprogs 1.47.4
+- *(installer)* Build entry_name only where the repair uses it
+
 ## [0.1.6] - 2026-11-15
 
 ### Features

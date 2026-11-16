@@ -117,6 +117,7 @@ jobs:
           python3 .github/scripts/test_app_release.py
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
+          python3 .github/scripts/test_mixer_version.py
           # Includes the check that vpk, fetch-velopack.sh and the packager
           # agree on the Velopack version.
           python3 .github/scripts/test_prepare_appimage_notices.py

@@ -17,7 +17,7 @@ import (
 // AppVersion is this app's version (CARGO_PKG_VERSION in the Rust app).
 // Release builds set it with
 // -ldflags "-X github.com/ibanks42/rc2fx/desktop/app/model.AppVersion=<version>".
-var AppVersion = "0.1.6"
+var AppVersion = "0.1.7"
 
 // Compare compares two versions numerically; false when either is not a
 // version. The int is negative, zero or positive as a is older, the same or

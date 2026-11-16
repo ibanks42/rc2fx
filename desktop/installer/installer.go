@@ -33,7 +33,7 @@ import (
 
 // AppVersion is the desktop app's version (Rust's CARGO_PKG_VERSION). Set it
 // with -ldflags "-X github.com/ibanks42/rc2fx/desktop/installer.AppVersion=…".
-var AppVersion = "0.1.6"
+var AppVersion = "0.1.7"
 
 // DeviceModel is the mixer model.
 type DeviceModel = firmware.Model

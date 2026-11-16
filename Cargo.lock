@@ -856,7 +856,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rc2fx-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-delta"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "sha2",
  "zstd",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-device"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "aws-lc-rs",
  "jiff",
@@ -896,14 +896,14 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-dfn"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "realfft",
 ]
 
 [[package]]
 name = "rc2fx-dsp"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-firmware"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-native-control"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-supervisor"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "tempfile",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-suppression"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-usb"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "flate2",
  "serde",

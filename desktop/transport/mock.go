@@ -53,7 +53,7 @@ const mockFirmwareProfile = "rodecaster-pro-ii-1.7.7"
 
 // mockRuntime stands for the Rust crate's CARGO_PKG_VERSION, which the mock
 // reports as the runtime's version.
-const mockRuntime = "0.1.6"
+const mockRuntime = "0.1.7"
 
 type showFader struct {
 	sourceID uint16
