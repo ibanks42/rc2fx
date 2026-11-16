@@ -18,6 +18,7 @@ pub mod control;
 pub mod embed;
 mod files;
 mod firmware;
+pub(crate) mod image_check;
 pub mod helper;
 pub mod inspection;
 pub mod mixer_update;

@@ -245,6 +245,10 @@ pub(crate) fn patch_archive_for_model(
     let mut pax_name: Option<String> = None;
     let mut pax_size = false;
     let mut has_opt = false;
+    // What the mixer checks on its first boots, and the space the image
+    // takes once unpacked (image_check.rs).
+    let mut manifest = String::new();
+    let mut usage = crate::image_check::RootUsage::default();
     walk_reader(&mut source, 4 << 30, true, |entry| {
         let header = entry.header().clone();
         let kind = header.entry_type();
@@ -279,6 +283,19 @@ pub(crate) fn patch_archive_for_model(
         if n == "opt" {
             has_opt = true;
         }
+        match kind {
+            tar::EntryType::Directory => usage.block(),
+            tar::EntryType::Symlink => {
+                usage.symlink(header.link_name_bytes().map_or(0, |l| l.len()))
+            }
+            _ if regular(&header) => usage.file(entry.size()),
+            _ => {}
+        }
+        let mut record = |data_sha: &str| {
+            if regular(&header) && crate::image_check::listed(n) {
+                manifest.push_str(&crate::image_check::line(data_sha, n));
+            }
+        };
         if IMPORTANT.contains(&n)
             && (!seen.insert(n.to_owned()) || !regular(&header) || sized_by_pax)
         {
@@ -303,6 +320,7 @@ pub(crate) fn patch_archive_for_model(
                         text.contains("PermitRootLogin yes") && text.contains("AuthorizedKeysFile");
                 }
             }
+            record(&files::sum(&data));
             builder.append(&header, data.as_slice())?;
             return Ok(());
         }
@@ -317,11 +335,15 @@ pub(crate) fn patch_archive_for_model(
             }
             let mut data = Vec::new();
             entry.read_to_end(&mut data)?;
-            hashes.insert(n.to_owned(), files::sum(&data));
+            let sum = files::sum(&data);
+            record(&sum);
+            hashes.insert(n.to_owned(), sum);
             builder.append(&header, data.as_slice())?;
             return Ok(());
         }
-        builder.append(&header, entry)?;
+        let mut hashed = files::Hashing::new(entry);
+        builder.append(&header, &mut hashed)?;
+        record(&hashed.finish().1);
         Ok(())
     })?;
     if !extra.is_empty() && !has_opt {
@@ -334,7 +356,24 @@ pub(crate) fn patch_archive_for_model(
         )?;
     }
     for entry in extra {
+        match entry {
+            Entry::Dir { .. } => usage.block(),
+            Entry::File { data, .. } => usage.file(data.len() as u64),
+        }
         append_entry(&mut builder, entry)?;
+    }
+    if !extra.is_empty() {
+        // Only an image with RC2FX has the launcher that reads the manifest.
+        let manifest = Entry::File {
+            path: crate::image_check::MANIFEST_MEMBER.into(),
+            mode: 0o600,
+            data: manifest.into_bytes(),
+        };
+        if let Entry::File { data, .. } = &manifest {
+            usage.file(data.len() as u64);
+        }
+        append_entry(&mut builder, &manifest)?;
+        usage.check()?;
     }
     io::copy(&mut source, &mut io::sink())?;
     if source_sha.is_some_and(|want| want != source.finish().1) {
