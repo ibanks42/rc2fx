@@ -46,12 +46,12 @@ RUN curl --fail --location --proto '=https' -o /tmp/rustup-init \
 # command checks against the Go checksum database, and that copy becomes
 # /usr/local/go. GOTOOLCHAIN=local keeps builds on it.
 RUN dnf install -y golang \
-    && GOTOOLCHAIN=go1.27.3 GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOPATH=/tmp/gopath \
+    && GOTOOLCHAIN=go1.27.4 GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOPATH=/tmp/gopath \
         go env GOROOT > /tmp/goroot \
     && cp -a "$(cat /tmp/goroot)" /usr/local/go \
     && chmod -R u+w /tmp/gopath && rm -rf /tmp/gopath /tmp/goroot \
     && dnf remove -y golang && dnf clean all \
-    && /usr/local/go/bin/go version | grep -q ' go1\.27\.3 '
+    && /usr/local/go/bin/go version | grep -q ' go1\.27\.4 '
 ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local
 RUN cargo install --locked cargo-about --version 0.8.4 \
     && cargo install --locked cargo-zigbuild --version 0.24.0 \

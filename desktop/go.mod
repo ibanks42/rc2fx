@@ -5,7 +5,7 @@ go 1.27
 // The Go every release builds with: setup-go installs it on Windows and
 // macOS, and the AppImage build image pins the same one
 // (.github/scripts/package-check.Containerfile).
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/klauspost/compress v1.20.4

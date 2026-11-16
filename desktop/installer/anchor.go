@@ -20,6 +20,12 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
 )
 
+// anchorDirectory finds the helper's root-owned folder for the records. The
+// package's tests replace it (the Rust used the folder only outside
+// #[cfg(test)]): run as root, as CI's containers do, they would otherwise
+// read, and create, the real /var/lib/rc2fx/prepared.
+var anchorDirectory = helperDirectory
+
 // anchorFile is where the record for this cache folder lives; empty when
 // unprivileged.
 func (e *Engine) anchorFile() (string, error) {
@@ -27,7 +33,7 @@ func (e *Engine) anchorFile() (string, error) {
 	if e.anchorDir != nil {
 		dir = *e.anchorDir
 	} else {
-		found, err := helperDirectory("prepared")
+		found, err := anchorDirectory("prepared")
 		if err != nil {
 			return "", err
 		}

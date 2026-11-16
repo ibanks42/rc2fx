@@ -364,7 +364,13 @@ jobs:
             GOARCH=amd64 CGO_CFLAGS="-O2 -g -arch x86_64" CGO_LDFLAGS="$CGO_LDFLAGS -arch x86_64" \
               go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/rc2fx-amd64" ./cmd/rc2fx
           fi
-          go test ./app/... ./cmd/rc2fx
+          if [ "$RUNNER_OS" = Windows ]; then
+            # Test binaries carry no manifest: the wrapper puts gpuikit's
+            # beside each, or Windows will not start them.
+            go test -exec "bash $PWD/scripts/windows-test-exec.sh" ./app/... ./cmd/rc2fx
+          else
+            go test ./app/... ./cmd/rc2fx
+          fi
       # The shipped app's Go dependencies, UI included, against the Go
       # vulnerability database (the desktop job checks the rest).
       - name: Check the app's dependencies for vulnerabilities
