@@ -36,6 +36,12 @@ During the first boot after a firmware update, `/usr/bin/first-boot` exists
 and the mixer reflashes its controllers. The shim then starts the stock engine
 without RC2FX.
 
+On every later boot, until it has passed once, the launcher also checks
+RØDE's files against the list the installer put in the image, in the
+background, and restores a damaged one from the other root partition when
+that copy is identical. See
+[Installer internals](../reference/installer.md#image-check).
+
 The screen uses the same mechanism. A shim at `/usr/sbin/rc_gui_juce` starts
 RØDE's screen program with RC2FX's screen module if a bundle is present and
 passes its checks, and starts it unchanged otherwise. The module only changes

@@ -52,6 +52,28 @@ The first start after a firmware update, including an RC2FX install, takes
 longer. The mixer updates its internal controllers and restarts once more.
 Wait for it to finish before using it.
 
+## The mixer forgets its setup at every restart
+
+RØDE keeps the mixer's setup, Wi-Fi, shows and serial number on a settings
+partition that it mounts at every start. If that doesn't happen, the mixer
+asks for its initial setup every time, Wi-Fi doesn't stay connected, and the
+RØDECaster App shows a serial number of zeros. **Don't redo the setup while
+this is happening.** It is lost again at the next restart, and the setup you
+had is usually still on the mixer, unused.
+
+- **After installing RC2FX**, the installer waits while RC2FX checks the
+  files the flash put on the mixer. If it says it restored some, turn the
+  mixer off and on again; the setup comes back. If it says some are damaged,
+  install again.
+- **If the installer refuses with "the mixer reports the placeholder serial
+  number"**, the settings partition isn't mounting and flashing can't fix
+  it, because the update drive lives on that partition too. A developer can
+  repair it; see
+  [Repairing a mixer that forgets its setup](../developer/mixer-workflow.md#repairing-a-mixer-that-forgets-its-setup).
+
+The RØDECaster App's **Reset Device** erases the mixer's data partition,
+including SMART pad sounds. Keep copies of your pad sounds before using it.
+
 ## RØDE's software
 
 RØDE's RØDECaster app and Windows virtual device driver both work while
