@@ -6377,6 +6377,7 @@ dependencies = [
  "md-5 0.11.0",
  "plist",
  "rc2fx-core",
+ "rc2fx-ext2fs",
  "rc2fx-firmware",
  "rc2fx-usb",
  "reqwest",

@@ -221,7 +221,8 @@ impl Rc2FxApp {
                                 .font_semibold()
                                 .label("Install RC2FX")
                                 .on_click(cx.listener(|app, _, _, cx| app.open_installer(cx))),
-                        ),
+                        )
+                        .child(repair_link(cx)),
                 )
             })
             .when(!found, |copy| {
@@ -235,6 +236,7 @@ impl Rc2FxApp {
                                 .on_click(cx.listener(|app, _, _, cx| app.open_installer(cx))),
                         )
                     })
+                    .child(div().mt_2().child(repair_link(cx)))
             });
         div()
             .size_full()
@@ -549,6 +551,16 @@ fn connection_status(auto_connect: bool, last_result: &str) -> (u32, String) {
     } else {
         (WARN, format!("Last check: {last_result}"))
     }
+}
+
+/// The way into Repair mixer, on the first screen whenever RC2FX isn't
+/// running: a mixer a flash left unable to keep its setup still shows up
+/// here, and one stuck in storage mode doesn't show up at all.
+fn repair_link(cx: &mut Context<Rc2FxApp>) -> impl IntoElement {
+    Button::new("open-repair")
+        .ghost()
+        .label("Mixer forgetting its setup or not starting? Repair mixer")
+        .on_click(cx.listener(|app, _, _, cx| app.open_repair(cx)))
 }
 
 #[cfg(test)]
