@@ -62,9 +62,9 @@ builds, offer **Download**, which opens the release page.
 
 ## Cutting a release
 
-1. If the mixer runtime changed, bump its version in
-   `config/mixer-release.json` and commit the change (see [Mixer runtime
-   version](#mixer-runtime-version)).
+1. If the mixer runtime changed, release it with **Mixer release**, choosing
+   the bump; the workflow writes `config/mixer-release.json` and commits it
+   (see [Mixer runtime version](#mixer-runtime-version)).
 2. On x86-64 Linux, run `just package-check` before spending a GitHub release
    run. It builds the AppImage from the current working tree in the same
    AlmaLinux 8 container as a release and checks it in disposable containers.
@@ -117,11 +117,13 @@ The file is strict JSON with three fields:
 
 `version` is dotted numbers such as `MAJOR.MINOR.PATCH`, without a
 pre-release suffix; the app compares versions numerically and treats anything
-else as unknown. Bump it by hand when anything that ends up on the mixer
-changes, and leave it alone otherwise: the crates built into the runtime,
-`xtask/mixer/`, `config/firmware-profiles.json`, the runtime's dependencies,
-and the toolchain and build settings that compile it. When reviewing such a
-change, check that it bumps the version. Mixer versions are reviewed and published independently of desktop releases;
+else as unknown. **Mixer release** sets it: its bump choice (patch, minor or
+major) applies to the latest published mixer release, and the workflow
+commits the result. Release the mixer when anything that ends up on it
+changes: the crates built into the runtime, `xtask/mixer/`,
+`config/firmware-profiles.json`, the runtime's dependencies, and the
+toolchain and build settings that compile it. A version bumped by hand is
+kept when it equals the workflow's result, and stops the run otherwise. Mixer versions are reviewed and published independently of desktop releases;
 a desktop-only release does not require a mixer bump or mixer notes. Legacy
 embedded release preparation warns when mixer-side paths change without a
 version bump. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;

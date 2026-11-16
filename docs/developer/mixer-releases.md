@@ -105,15 +105,24 @@ signed release and its metadata are public.
 
 ## Release lifecycle
 
-1. Bump the mixer version, review both app minimums, and write curated mixer
-   notes. Commit the complete release inputs on protected main.
-2. Dispatch **Mixer release**. Its first job builds and tests the mixer, packages
+1. Review both app minimums and, if you can, write curated mixer notes for the
+   next version. Commit them on protected main.
+2. Dispatch **Mixer release** and choose the bump: patch, minor or major, from
+   the latest published `mixer-v` release. `.github/scripts/mixer_version.py`
+   writes the new version to `config/mixer-release.json` before the build. A
+   checked-in version that already equals the result is kept; any other one
+   stops the run, because the choice and the checkout disagree. Its first job
+   builds and tests the mixer, packages
    the fixed-file envelope, firmware catalog, and license notices, and uploads
    an unsigned build artifact. It receives no signing keys.
 3. Review the artifact and approve the `mixer-signing` job. That job validates
    the complete payload and catalog again, then signs TUF targets, snapshot,
    and timestamp metadata.
-4. Publication creates a draft `mixer-vVERSION` release, uploads its assets,
+4. When the version changed, the job commits `config/mixer-release.json` to
+   main as `chore(mixer-release): VERSION`, only if main is still the commit
+   the run built (otherwise start a new run), and the release is tagged at
+   that commit.
+5. Publication creates a draft `mixer-vVERSION` release, uploads its assets,
    downloads them again to verify their bytes, and publishes the payload first.
    Only then does it add one commit with all the metadata to the `mixer-metadata`
    branch, then waits for the new files to be served (see

@@ -115,6 +115,7 @@ jobs:
           python3 .github/scripts/test_app_release.py
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
+          python3 .github/scripts/test_mixer_version.py
       # Their Rust tests run with the workspace in the linux job.
       - name: Test the mixer scripts
         run: for t in xtask/mixer/tests/*.py; do python3 "$t" || exit 1; done
