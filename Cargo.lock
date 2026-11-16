@@ -6276,7 +6276,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-app"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "chrono",
  "embed-resource",
@@ -6294,7 +6294,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -6303,7 +6303,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-delta"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "sha2 0.11.1",
  "zstd",
@@ -6311,7 +6311,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-device"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "aws-lc-rs",
  "jiff",
@@ -6334,14 +6334,14 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-dfn"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "realfft",
 ]
 
 [[package]]
 name = "rc2fx-dsp"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -6350,7 +6350,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-ext2fs"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "cc",
  "tempfile",
@@ -6358,7 +6358,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-firmware"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -6367,7 +6367,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-installer"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "aws-lc-rs",
  "flate2",
@@ -6396,7 +6396,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-native-control"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -6407,7 +6407,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-supervisor"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "tempfile",
@@ -6415,7 +6415,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-suppression"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
  "rc2fx-core",
@@ -6426,7 +6426,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-transport"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "rc2fx-core",
  "rc2fx-delta",
@@ -6438,7 +6438,7 @@ dependencies = [
 
 [[package]]
 name = "rc2fx-usb"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "flate2",
  "serde",
@@ -9976,7 +9976,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
