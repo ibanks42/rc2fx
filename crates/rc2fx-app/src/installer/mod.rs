@@ -6,6 +6,7 @@
 //! it. It starts only when the user grants access on the page.
 
 mod flow;
+mod repair;
 pub(super) mod signature;
 
 use super::*;
@@ -66,7 +67,11 @@ fn needs_access(model: &Model, access: &Access) -> bool {
 fn privileged(request: &Request) -> bool {
     matches!(
         request,
-        Request::Prepare { .. } | Request::EnterUsbMode { .. } | Request::Flash { .. }
+        Request::Prepare { .. }
+            | Request::EnterUsbMode { .. }
+            | Request::Flash { .. }
+            | Request::RepairInspect
+            | Request::Repair { .. }
     )
 }
 
@@ -393,6 +398,8 @@ pub(super) struct Installer {
     prefer_flash: bool,
     /// When the mixer's image check was last asked for.
     image_check_asked: Option<Instant>,
+    /// The Repair mixer page, when it is the one open.
+    repair: Option<repair::Repair>,
 }
 
 impl Installer {
@@ -401,7 +408,7 @@ impl Installer {
     }
 
     pub fn busy(&self) -> bool {
-        self.model.busy.is_some()
+        self.model.busy.is_some() || self.repair.as_ref().is_some_and(repair::Repair::busy)
     }
 
     fn send(&mut self, request: Option<Request>) {
@@ -461,6 +468,10 @@ fn progress_text(p: &Progress) -> String {
         "verification" => format!("Checking the {} checksum", p.detail),
         "stage" => megabytes(&format!("Copying {} to the mixer", p.detail)),
         "verify" => megabytes(&p.detail),
+        "repair-backup" => megabytes(&p.detail),
+        "repair-check" if p.total > 0 => {
+            format!("{} · {} of {} files", p.detail, p.completed, p.total)
+        }
         _ => p.detail.clone(),
     }
 }
@@ -509,6 +520,7 @@ impl Rc2FxApp {
             stock_select: None,
             prefer_flash: false,
             image_check_asked: None,
+            repair: None,
         };
         installer.model.privileged = installer.access.allows_flashing();
         installer.model.bundled = self.bundled_mixer_software.clone();
@@ -786,6 +798,10 @@ impl Rc2FxApp {
         }
         while let Some((request, result)) = installer.runner.take_outcome() {
             changed = true;
+            if repair::is_repair(&request) {
+                Self::repair_outcome(installer, &request, result);
+                continue;
+            }
             if let Ok(Reply::MixerReleases(offers)) = &result {
                 self.app_update.set_signed(offers.clone());
             }
@@ -1177,7 +1193,11 @@ impl Rc2FxApp {
                 .v_flex()
                 .gap_6()
                 .pt_8()
-                .child(self.access_card(installer, cx))
+                .child(self.access_card(
+                    installer,
+                    "Administrator access lets RC2FX switch the mixer into update mode and install firmware.",
+                    cx,
+                ))
                 .when(installer.model.run.is_some(), |page| {
                     page.child(self.timeline(installer))
                 });
@@ -1235,6 +1255,9 @@ impl Rc2FxApp {
         let Some(installer) = self.installer.as_ref() else {
             return div().into_any_element();
         };
+        if installer.repair.is_some() {
+            return self.repair_screen(installer, cx);
+        }
         div()
             .v_flex()
             .size_full()
@@ -1792,13 +1815,16 @@ impl Rc2FxApp {
 
     /// Administrator access on systems that need it for flashing: what it is
     /// for, and the one button that opens the system's password prompt.
-    fn access_card(&self, installer: &Installer, cx: &mut Context<Self>) -> Div {
+    fn access_card(&self, installer: &Installer, purpose: &str, cx: &mut Context<Self>) -> Div {
         let asking = installer.access == Access::Asking;
         let (detail, color) = match &installer.access {
-            Access::Asking => ("Answer your system's password prompt to continue.".to_owned(), MUTED),
+            Access::Asking => (
+                "Answer your system's password prompt to continue.".to_owned(),
+                MUTED,
+            ),
             Access::Refused(why) => (format!("Access wasn't granted. {why}"), WARN),
             _ => (
-                "Administrator access lets RC2FX switch the mixer into update mode and install firmware. Your password is handled by the system, not stored by RC2FX.".to_owned(),
+                format!("{purpose} Your password is handled by the system, not stored by RC2FX."),
                 MUTED,
             ),
         };
@@ -2143,6 +2169,17 @@ impl Rc2FxApp {
                     })),
             );
         } else {
+            // The way into Repair mixer while the mixer is connected; the
+            // first screen has it while RC2FX isn't running.
+            if idle {
+                bar = bar.child(
+                    Button::new("installer-repair")
+                        .ghost()
+                        .label("Repair mixer")
+                        .disabled(busy)
+                        .on_click(cx.listener(|app, _, _, cx| app.show_repair(cx))),
+                );
+            }
             bar = bar.child(
                 Button::new("close-installer")
                     .ghost()

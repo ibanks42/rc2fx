@@ -44,6 +44,44 @@ fn usb_ancestor(start: &Path) -> Result<(String, u16)> {
     }
 }
 
+/// The whole-disk block devices of a mixer whose bootloader shows its eMMC
+/// over USB (`ums mmc 0`: Amlogic's gadget, `1b8e:fada`), with their size.
+fn recovery_disks() -> Result<Vec<(String, u64)>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir("/sys/class/block")? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let sys = entry.path();
+        if exists(&sys.join("partition")) || !name.starts_with("sd") {
+            continue;
+        }
+        let Ok(mut current) = fs::canonicalize(&sys) else {
+            continue;
+        };
+        let usb = loop {
+            if exists(&current.join("idVendor")) {
+                break Some(current);
+            }
+            if !current.pop() || current.as_os_str() == "/" {
+                break None;
+            }
+        };
+        let Some(usb) = usb else { continue };
+        if (
+            read_trim(&usb.join("idVendor")),
+            read_trim(&usb.join("idProduct")),
+        ) != (
+            crate::repair::RECOVERY_VENDOR.into(),
+            crate::repair::RECOVERY_PRODUCT.into(),
+        ) {
+            continue;
+        }
+        let sectors: u64 = read_trim(&sys.join("size")).parse().unwrap_or(0);
+        found.push((format!("/dev/{name}"), sectors * 512));
+    }
+    Ok(found)
+}
+
 /// The release number (`bcdDevice`) of the RØDE USB device above a sysfs
 /// node; 0 when it can't be read.
 fn usb_release(start: &Path) -> u16 {
@@ -528,6 +566,54 @@ impl Platform for Host {
             }
         }
         Ok(())
+    }
+
+    fn recovery_disk(&self) -> Result<Option<u64>> {
+        match recovery_disks()?.as_slice() {
+            [] => Ok(None),
+            [(_, size)] => Ok(Some(*size)),
+            _ => bail!("more than one mixer is in USB storage mode; connect only one"),
+        }
+    }
+
+    fn recovery_device(&self) -> Result<super::RecoveryDevice> {
+        let (device, len) = match recovery_disks()?.as_slice() {
+            [(device, len)] => (device.clone(), *len),
+            [] => bail!(
+                "the mixer's storage is not visible; hold its power button for 15 seconds with USB 1 connected"
+            ),
+            _ => bail!("more than one mixer is in USB storage mode; connect only one"),
+        };
+        // A desktop may have mounted the FAT partitions on its own. Unmount
+        // them; never anything else.
+        for m in mounts()?.into_iter().filter(|m| {
+            m.device
+                .strip_prefix(&device)
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        }) {
+            let path = cstring(Path::new(&m.path))?;
+            // SAFETY: NUL-terminated path.
+            if unsafe { libc::umount(path.as_ptr()) } != 0 {
+                bail!(
+                    "{} from the mixer is in use; close it and retry: {}",
+                    m.path,
+                    io::Error::last_os_error()
+                );
+            }
+        }
+        // The kernel refuses O_EXCL while a partition is mounted, and holding
+        // it keeps anything from mounting one during the repair.
+        use std::os::unix::fs::OpenOptionsExt;
+        let claim = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_EXCL | libc::O_CLOEXEC)
+            .open(&device)
+            .map_err(|e| Error(format!("cannot open the mixer's storage exclusively: {e}")))?;
+        Ok(super::RecoveryDevice {
+            path: device.into(),
+            len,
+            _claim: Some(claim),
+        })
     }
 }
 

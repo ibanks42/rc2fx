@@ -870,6 +870,7 @@ impl Rc2FxApp {
         let fresh = self.fresh_meter().is_some();
         changed |= self.usb.expire(Instant::now());
         changed |= self.poll_installer(cx);
+        changed |= self.poll_repair();
         self.autostart_installer(window, cx);
         if self
             .session

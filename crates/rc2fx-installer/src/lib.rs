@@ -18,11 +18,13 @@ pub mod control;
 pub mod embed;
 mod files;
 mod firmware;
-pub(crate) mod image_check;
 pub mod helper;
+pub(crate) mod image_check;
 pub mod inspection;
 pub mod mixer_update;
 pub mod platform;
+#[cfg(target_os = "linux")]
+mod repair;
 mod runtime;
 pub use runtime::service_from_state;
 mod ssh;
@@ -237,6 +239,10 @@ pub struct Status {
     pub prepared_present: bool,
     /// Whether the update drive of a mixer in USB update mode is visible.
     pub update_drive: bool,
+    /// The size of a mixer's whole eMMC while its bootloader shows it as a
+    /// USB disk, for [`Request::RepairInspect`].
+    #[serde(default)]
+    pub recovery_disk: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -290,6 +296,86 @@ pub enum Request {
     Flash {
         serial: String,
     },
+    /// Look over a mixer whose bootloader shows its whole eMMC as a USB disk
+    /// (see [`repair`]). Reads only.
+    RepairInspect,
+    /// Back up the settings partition to the work folder, then restore these
+    /// files, which a [`Request::RepairInspect`] found damaged and
+    /// repairable. The helper checks each again before writing it.
+    Repair {
+        files: Vec<RepairTarget>,
+    },
+}
+
+/// A file to restore: system partition 1 or 2, and its path there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairTarget {
+    pub root: u8,
+    pub path: String,
+}
+
+/// What [`Request::RepairInspect`] found.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RepairFindings {
+    /// Why nothing can be repaired from here, if so; the rest is then empty.
+    pub refused: Option<String>,
+    pub hostname: String,
+    /// The settings partition's FAT looks sound.
+    pub settings_ok: bool,
+    pub roots: Vec<RootFindings>,
+}
+
+impl RepairFindings {
+    /// Files a repair would restore.
+    pub fn repairable(&self) -> usize {
+        self.targets().len()
+    }
+
+    /// What to ask [`Request::Repair`] to restore.
+    pub fn targets(&self) -> Vec<RepairTarget> {
+        self.roots
+            .iter()
+            .flat_map(|r| {
+                r.damaged
+                    .iter()
+                    .filter(|f| f.why.is_none())
+                    .map(|f| RepairTarget {
+                        root: r.index,
+                        path: f.path.clone(),
+                    })
+            })
+            .collect()
+    }
+}
+
+/// One of the mixer's two system partitions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RootFindings {
+    /// 1 or 2.
+    pub index: u8,
+    /// What its files were compared with: the image's own list, the image
+    /// saved on this computer, or nothing.
+    pub reference: String,
+    /// The partition was not shut down cleanly: nothing is written to it.
+    pub unclean: bool,
+    pub damaged: Vec<DamagedFile>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DamagedFile {
+    pub path: String,
+    /// Why it can't be restored from here; `None` when it can.
+    pub why: Option<String>,
+}
+
+/// What [`Request::Repair`] did.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RepairResult {
+    /// The settings partition backup on this computer.
+    pub backup: String,
+    pub repaired: Vec<String>,
+    /// Files left as they were, with the reason.
+    pub not_repaired: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -302,6 +388,8 @@ pub enum Reply {
     InPlaceBundle(InPlaceBundle),
     Prepared(Prepared),
     Backup(BackupRecord),
+    RepairFindings(RepairFindings),
+    Repaired(RepairResult),
     Done,
 }
 
@@ -587,6 +675,14 @@ impl Engine {
                 self.flash(&serial)?;
                 Ok(Reply::Done)
             }
+            #[cfg(target_os = "linux")]
+            Request::RepairInspect => Ok(Reply::RepairFindings(self.repair_inspect()?)),
+            #[cfg(target_os = "linux")]
+            Request::Repair { files } => Ok(Reply::Repaired(self.repair(&files)?)),
+            #[cfg(not(target_os = "linux"))]
+            Request::RepairInspect | Request::Repair { .. } => {
+                bail!("Repairing the mixer from this computer isn't available on this system yet")
+            }
         }
     }
 
@@ -642,6 +738,9 @@ impl Engine {
             saved,
             prepared_present,
             update_drive,
+            // A failed look leaves the repair page waiting; it is not an
+            // installer error.
+            recovery_disk: self.platform.recovery_disk().ok().flatten(),
         })
     }
 }

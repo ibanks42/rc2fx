@@ -55,3 +55,8 @@ embedded = []
 # A host check of the embedded payload: no window, no USB, no network.
 name = "embedded-probe"
 required-features = ["embedded"]
+
+# libext2fs, for repairing the mixer's ext4 system partitions (repair.rs).
+# Linux only until it is built and tested on macOS and Windows.
+[target.'cfg(target_os = "linux")'.dependencies]
+rc2fx-ext2fs = { path = "../rc2fx-ext2fs" }

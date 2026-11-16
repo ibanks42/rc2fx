@@ -57,6 +57,26 @@ pub trait Platform: Send {
     fn mount(&self, volume: Volume) -> Result<Volume>;
     fn media_present(&self, volume: &Volume) -> Result<bool>;
     fn eject(&self, volume: &Volume) -> Result<()>;
+    /// The size in bytes of the mixer's whole eMMC while its bootloader
+    /// shows it as a USB disk (see [`crate::repair`]), or `None`.
+    fn recovery_disk(&self) -> Result<Option<u64>> {
+        Ok(None)
+    }
+    /// That disk, ready for [`crate::repair`]: anything this computer
+    /// mounted from it is unmounted, and it stays claimed until the returned
+    /// value is dropped so nothing mounts it meanwhile.
+    fn recovery_device(&self) -> Result<RecoveryDevice> {
+        Err("Repairing the mixer from this computer isn't available on this system yet".into())
+    }
+}
+
+/// The mixer's whole eMMC, held for a repair.
+pub struct RecoveryDevice {
+    /// What libext2fs and the partition reads open (`/dev/sdX`).
+    pub path: std::path::PathBuf,
+    pub len: u64,
+    /// Keeps the disk claimed (on Linux, an `O_EXCL` descriptor).
+    pub _claim: Option<std::fs::File>,
 }
 
 pub fn host() -> Box<dyn Platform> {

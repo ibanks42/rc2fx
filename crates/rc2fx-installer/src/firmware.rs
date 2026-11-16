@@ -145,7 +145,8 @@ fn walk_reader(
     Ok(())
 }
 
-#[cfg(test)]
+/// A member's name as the archive records it (PAX and GNU long names
+/// included).
 pub(crate) fn entry_name(entry: &tar::Entry<'_, &mut dyn Read>) -> String {
     String::from_utf8_lossy(&entry.path_bytes()).into_owned()
 }

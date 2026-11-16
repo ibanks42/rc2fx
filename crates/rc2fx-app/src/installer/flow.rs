@@ -1612,6 +1612,7 @@ mod tests {
             },
             prepared_present: prepared,
             update_drive: drive,
+            recovery_disk: None,
         };
         Seen { status, service }
     }

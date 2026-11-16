@@ -1,7 +1,7 @@
 //! `RC2FX_DEV_PAGE`: open the app on a chosen page, for development and
 //! screenshots. Unset, the app opens as usual.
 //!
-//! Values: `home`, `settings`, `diagnostics`, `installer`, or
+//! Values: `home`, `settings`, `diagnostics`, `installer`, `repair`, or
 //! `channel:<name or id>[:<effect>]`, where the effect is one of `highpass`,
 //! `suppression`, `eq`, `compressor`, `gain` or `limiter`. Names match
 //! case-insensitively, e.g. `channel:mic 1:suppression`.
@@ -16,6 +16,7 @@ pub(super) enum DevPage {
     Settings,
     Diagnostics,
     Installer,
+    Repair,
     Channel {
         name: String,
         effect: Option<Effect>,
@@ -49,6 +50,7 @@ pub(super) fn parse(value: &str) -> std::result::Result<DevPage, String> {
         "settings" => DevPage::Settings,
         "diagnostics" => DevPage::Diagnostics,
         "installer" => DevPage::Installer,
+        "repair" => DevPage::Repair,
         "channel" => {
             let name = parts.next().map(str::trim).unwrap_or_default();
             if name.is_empty() {
@@ -108,6 +110,7 @@ impl Rc2FxApp {
                 self.diagnostics_open = true;
             }
             DevPage::Installer => self.toggle_installer_page(cx),
+            DevPage::Repair => self.open_repair(cx),
             DevPage::Channel { name, effect } => {
                 let found = find_channel(
                     self.session
@@ -140,6 +143,7 @@ mod tests {
         assert_eq!(parse("home"), Ok(DevPage::Home));
         assert_eq!(parse(" Settings "), Ok(DevPage::Settings));
         assert_eq!(parse("installer"), Ok(DevPage::Installer));
+        assert_eq!(parse("repair"), Ok(DevPage::Repair));
         assert_eq!(
             parse("channel:Mic 1:suppression"),
             Ok(DevPage::Channel {
