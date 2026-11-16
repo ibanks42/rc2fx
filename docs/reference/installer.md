@@ -76,6 +76,14 @@ the first error and offers **Retry** from that step.
    - `/usr/sbin/rc_audio_mixer`: the audio engine shim (see
      [Architecture](../developer/architecture.md#starting-with-the-mixer)).
    - `/usr/sbin/rc_gui_juce`: the matching shim for the screen program.
+   - `/opt/rc2fx/image.sha256`: the SHA-256 of each of RØDE's regular files
+     in the image, for the mixer's [image check](#image-check). It leaves out
+     the files RØDE rewrites or removes itself (`authorized_keys`,
+     `/boot/extlinux/extlinux.conf`, which RØDE's updater points at the
+     second root when it installs there, `/etc/asound.conf`,
+     `/etc/timestamp`, `/usr/bin/first-boot` and
+     `/var/lib/alsa/asound.state`) and RC2FX's own files, which the bundle's
+     `SHA256SUMS` covers.
 
    `authorized_keys` stays empty, as RØDE ships it. SSH access is managed
    after installing, over USB 1 (see [Developer SSH](api.md#developer-ssh)). A cached image built by an older installer
@@ -86,9 +94,22 @@ the first error and offers **Retry** from that step.
    match a supported profile, and requires the runtime to support that
    profile. A prepared image is reused when the release, runtime and
    settings all match.
+
+   RØDE's updater unpacks the image into whichever of its two root
+   partitions is not running: 476,546 blocks of 1 KiB (465 MiB) and 142,585
+   blocks of 4 KiB (557 MiB) on a Pro II with 1.7.7. The installer estimates
+   the unpacked size for each, rounding every file to whole blocks and
+   counting a block per directory, and refuses an image that would leave
+   either with less than 48 MiB free. On 1.7.7 the estimate came within
+   0.3 MiB of the space used on both partitions; the 0.2.0 image leaves
+   about 90 MiB free on the smaller one.
 3. **USB update mode.** HID command `M` puts the mixer in update mode. Audio
    stops and the screen shows "Updating via USB". Nothing has been written
-   yet.
+   yet. A mixer whose USB serial is a placeholder (two letters and zeros,
+   such as `RD0000000`) is refused here and in the next step: RØDE's USB
+   setup reports that when `unit-serial.txt` is missing because its
+   settings partition did not mount, and the update drive lives on that
+   partition too.
 4. **Flash.** When the mixer's update drive appears, the installer
    identifies it by the mixer's USB serial, checks that the firmware fits,
    copies `archive.tar.gz` and `archive.md5` to it, reads them back, flushes, and
@@ -105,8 +126,38 @@ the first error and offers **Retry** from that step.
    again, and the shim runs stock during that boot. On the following boot the
    first engine start loads RC2FX. The app keeps reconnecting over USB 1. The
    plan finishes when RC2FX reports the engine running, audio advancing and
-   the saved settings applied. The computer sends nothing to the mixer during
+   the saved settings applied, and then waits for the
+   [image check](#image-check). The computer sends nothing to the mixer during
    these boots.
+
+### Image check
+
+On each boot the launcher (`rc2fx.sh launch`) starts `rc2fx.sh image-check`
+in the background, unless it is RØDE's first boot after an update or the
+check has already passed for this image. The check runs `sha256sum -c`
+against `image.sha256` from `/`, at the lowest CPU and I/O priority. For each
+file that does not match, it mounts the other root partition read-only and,
+if that copy has exactly the listed hash, writes it back: over the file's own
+blocks when the size is the same, so it works on a full root, otherwise
+through a copy beside it. Nothing else is ever written. The outcome goes to
+`/opt/rc2fx/data/image-check` as `key=value` lines, with the manifest's
+SHA-256 so a record for an older image is never reported, and rc2fxd serves
+it as [`GET /api/v1/image-check`](api.md#image-check).
+
+The installer asks for it every 3 seconds once RC2FX is running:
+
+- `ok`, or `none` (no manifest, or mixer software from before the check):
+  the plan finishes.
+- `repaired`: RØDE's boot already ran with the damaged files, so the
+  installer asks for a restart and waits; the next boot's check passes.
+- `damaged`: the plan stops and asks to install again.
+
+This exists because a flash once left `/usr/bin/rode-init-update-env.sh`
+zero-filled on the new root: the right size and none of its contents. That
+script mounts the settings partition, so the mixer ran without it and lost
+its setup at every start, and RØDE's engine then filled the root with its
+update-drive image. Flashing the same image again worked, so the cause was
+in the unpack, not the image.
 
 ### Offered releases
 

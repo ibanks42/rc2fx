@@ -24,6 +24,7 @@ sends a single request.
 | `DELETE /api/v1/update/{id}` | | Abort the session and delete its upload |
 | `GET /api/v1/update/last` | | The last in-place update's outcome, or `{}` |
 | `GET /api/v1/update/installed` | | The running release and the SHA-256 of each installed payload file |
+| `GET /api/v1/image-check` | | The mixer's check of the files the last flash unpacked; USB 1 only, see [Image check](#image-check) |
 | `GET /api/v1/diagnostics` | | State plus bounded telemetry history (callback timing, worker counters) |
 | `GET /api/v1/diagnostics/events?after=SEQ` | | The diagnostic event log after sequence number `SEQ`, up to 256 events per page |
 | `POST /api/v1/diagnostics/reset` | | Reset the telemetry baselines and clear the event log |
@@ -209,6 +210,20 @@ installing and deletes its upload; `409` refuses one that is.
 | 409 | Another update or a pending install, an incomplete upload, an install already running, a refused delta, or a refused release |
 | 507 | Not enough RAM in `/run` or space on `/opt` |
 | 500 | The mixer could not stage, read or restart |
+
+## Image check
+
+`GET /api/v1/image-check` reports the launcher's check of RØDE's files
+against the list the installer put in the image (see
+[Installer internals](installer.md#image-check)):
+
+```json
+{"status": "repaired", "checked": "2026-11-15T22:10:00Z", "repaired": ["usr/bin/rode-init-update-env.sh"]}
+```
+
+`status` is `none` (nothing to check), `pending`, `ok`, `repaired` (restart
+the mixer) or `damaged`. `repaired` and `damaged` list up to 32 paths each;
+`unlisted` counts the rest. Mixer software from before the check answers 404.
 
 ## Developer SSH
 `GET /api/v1/ssh` and `PUT /api/v1/ssh` exist only on USB 1. The touchscreen

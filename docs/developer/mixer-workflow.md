@@ -131,6 +131,49 @@ deadline. Records are kept in RAM and cleared on reboot. See the
 - Leave the mixer alone during its first boot after a firmware update. It
   flashes its controllers and restarts by itself.
 
+### Repairing a mixer that forgets its setup
+
+A mixer that asks for its initial setup at every start has a settings
+partition that didn't mount. RØDE's start-up script
+(`/usr/bin/rode-init-update-env.sh`) mounts it, and reformats it if the mount
+fails. Without it, the setup is written to an empty folder on the root that
+the next start clears, the USB serial falls back to `RD0000000` or the
+model's letters and zeros, and RØDE's engine fills the root with its 286 MB
+update-drive image. The installer's [image check](../reference/installer.md#image-check)
+repairs the known cause on its own. Without RC2FX running, use the
+bootloader:
+
+1. Connect USB 1 to a Linux computer. With the mixer off, press and hold the
+   power button for about 15 seconds. The screen shows only the splash
+   image, and U-Boot exposes the whole eMMC as a USB disk (`1b8e:fada`,
+   "UMS disk 0", 7.3 GB). Removing power ends this mode.
+2. Make every partition read-only before looking:
+   `sudo blockdev --setro /dev/sdX /dev/sdX[1-4]`. The DOS partition table
+   is p1 (ext4, 507 MB) and p2 (ext4, 583 MB) for the two roots, p3 (FAT,
+   835 MB) for `/Application/update-staging` (the settings, `unit-serial.txt`
+   and the update-drive image) and p4 (FAT, 4.9 GB) for
+   `/Application/emmc-data`. The running root is the one
+   `/boot/extlinux/extlinux.conf` names in `root=`.
+3. Check p3 with `fsck.vfat -n` and mount it read-only to confirm the setup
+   is there; back it up. Mount the roots with `-o ro,noload`, compare the
+   running root against the flashed image
+   (`~/.local/share/RC2FX/installer/archive.tar.gz` on Linux) and check
+   free space with `df`.
+4. To repair, make only the one partition writable (`blockdev --setrw`),
+   restore the damaged file from the image or from the other root, remove
+   `usb-update.img` and the empty settings files from the root's
+   `/Application/update-staging` if the root is full, and add a developer
+   key to `/home/root/.ssh/authorized_keys` (mode 600) if SSH will be
+   needed. Unmount, set it read-only again and run `fsck -n`.
+5. Unmount everything, **disconnect USB 1** and the power, wait 30 seconds
+   and power on normally. In the one recovery so far, the mixer didn't boot
+   until USB 1 was disconnected.
+
+The RØDECaster App's **Reset Device** zeroes the first 25 MB of p4 and
+reformats it, which erases SMART pad sounds. Their audio is usually still
+on the partition past that point, and can be recovered from a read-only
+copy of p4.
+
 ## Linking `target/mixer` to another bundle
 
 `target/mixer` is normally a build directory. If it is a symlink to another
