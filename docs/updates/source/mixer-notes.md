@@ -17,6 +17,11 @@ app bundles. This file is the source for the mixer history page and the
 - This feed provides release notes only. Installation compatibility and payload
   hashes come from the separately signed update repository.
 
+## [0.2.1]
+
+- After a flash, check RØDE's files against the installed image in the background, and restore a damaged one from the mixer's other system partition when an identical copy is there.
+- Report that check to the desktop app's installer, which asks for a restart when files were restored.
+
 ## [0.1.1]
 
 - Initial independent RC2FX mixer build for the RØDECaster Pro II, controlled by the desktop app.
