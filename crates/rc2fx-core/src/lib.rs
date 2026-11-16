@@ -3,6 +3,7 @@ pub mod apo;
 pub mod diagnostics;
 pub mod easyeffects;
 pub mod eq;
+pub mod image_check;
 pub mod inputs;
 pub mod model;
 pub mod selection;
@@ -13,6 +14,7 @@ pub mod usb;
 pub mod versions;
 
 pub use diagnostics::*;
+pub use image_check::{ImageCheck, ImageStatus};
 pub use inputs::*;
 pub use model::*;
 pub use selection::*;

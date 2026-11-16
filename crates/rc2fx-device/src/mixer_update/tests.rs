@@ -1213,3 +1213,25 @@ fn the_base64_decoder_is_strict() {
         );
     }
 }
+
+#[test]
+fn the_image_check_follows_the_launchers_record_for_this_image() {
+    use rc2fx_core::ImageStatus;
+    let (_dir, paths) = test_paths();
+    let bundle = paths.bundle();
+    fs::create_dir_all(bundle.join("data")).unwrap();
+    let update = new_update(paths);
+    // An image without a file list has nothing to check.
+    assert_eq!(update.image_check().status, ImageStatus::None);
+    let manifest = b"abc  etc/hostname\n";
+    fs::write(bundle.join("image.sha256"), manifest).unwrap();
+    assert_eq!(update.image_check().status, ImageStatus::Pending);
+    let record = format!(
+        "schema=1\nstatus=damaged\nmanifest={}\ndamaged=etc/hostname\n",
+        install::sum(manifest)
+    );
+    fs::write(bundle.join("data/image-check"), record).unwrap();
+    let check = update.image_check();
+    assert_eq!(check.status, ImageStatus::Damaged);
+    assert_eq!(check.damaged, ["etc/hostname"]);
+}

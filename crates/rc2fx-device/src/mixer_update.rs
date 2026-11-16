@@ -803,6 +803,24 @@ impl MixerUpdate {
     /// Missing or non-regular files are simply absent: the app then sends them
     /// whole. A running version the launcher could not read has nothing to
     /// diff, so the endpoint is unavailable rather than guessed.
+    /// The launcher's check of the flashed image (`rc2fx.sh image-check`).
+    pub fn image_check(&self) -> rc2fx_core::ImageCheck {
+        let bundle = self.paths.bundle();
+        let read = |path: PathBuf, limit: u64| -> Option<Vec<u8>> {
+            let mut data = Vec::new();
+            fs::File::open(path)
+                .ok()?
+                .take(limit)
+                .read_to_end(&mut data)
+                .ok()?;
+            Some(data)
+        };
+        let digest = read(bundle.join("image.sha256"), 16 << 20).map(|data| install::sum(&data));
+        let record = read(bundle.join("data/image-check"), 64 * 1024)
+            .map(|data| String::from_utf8_lossy(&data).into_owned());
+        rc2fx_core::ImageCheck::from_record(record.as_deref(), digest.as_deref())
+    }
+
     pub fn installed(&self) -> Result<Installed, UpdateError> {
         let version = self.running.clone().ok_or_else(|| {
             UpdateError::Unavailable("the running RC2FX version is unknown".into())
