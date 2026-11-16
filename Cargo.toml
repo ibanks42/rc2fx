@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rc2fx-usb", "crates/rc2fx-delta", "crates/rc2fx-core", "crates/rc2fx-dfn", "crates/rc2fx-transport", "crates/rc2fx-app", "crates/rc2fx-device", "crates/rc2fx-dsp", "crates/rc2fx-suppression", "crates/rc2fx-native-control", "crates/rc2fx-firmware", "crates/rc2fx-supervisor", "crates/rc2fx-installer", "xtask"]
+members = ["crates/rc2fx-usb", "crates/rc2fx-delta", "crates/rc2fx-core", "crates/rc2fx-dfn", "crates/rc2fx-transport", "crates/rc2fx-app", "crates/rc2fx-device", "crates/rc2fx-dsp", "crates/rc2fx-suppression", "crates/rc2fx-native-control", "crates/rc2fx-firmware", "crates/rc2fx-supervisor", "crates/rc2fx-installer", "crates/rc2fx-ext2fs", "xtask"]
 resolver = "3"
 
 # The delta codec and the desktop's encoder share one zstd, with the C library

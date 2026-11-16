@@ -6349,6 +6349,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc2fx-ext2fs"
+version = "0.1.6"
+dependencies = [
+ "cc",
+ "tempfile",
+]
+
+[[package]]
 name = "rc2fx-firmware"
 version = "0.1.6"
 dependencies = [
