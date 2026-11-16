@@ -146,7 +146,8 @@ fn walk_reader(
 }
 
 /// A member's name as the archive records it (PAX and GNU long names
-/// included).
+/// included). Used by the repair, which is Linux-only for now.
+#[cfg(any(test, target_os = "linux"))]
 pub(crate) fn entry_name(entry: &tar::Entry<'_, &mut dyn Read>) -> String {
     String::from_utf8_lossy(&entry.path_bytes()).into_owned()
 }
