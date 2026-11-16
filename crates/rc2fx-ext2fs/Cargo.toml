@@ -1,0 +1,19 @@
+[package]
+name = "rc2fx-ext2fs"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "libext2fs from e2fsprogs, built from vendored sources, with the few calls RC2FX's mixer repair needs"
+# libext2fs is LGPL-2.0 and libcom_err MIT-style (e2fsprogs/NOTICE); the
+# bindings are RC2FX's own.
+license = "MIT AND LGPL-2.0-only"
+links = "ext2fs"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"
+
+# The crate is empty off Linux (see src/lib.rs), and so are its tests.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3"
