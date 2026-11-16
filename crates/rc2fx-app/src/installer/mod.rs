@@ -391,6 +391,8 @@ pub(super) struct Installer {
     stock_select: Option<Picker<(String, String)>>,
     /// The user chose the full flash over an available in-place update.
     prefer_flash: bool,
+    /// When the mixer's image check was last asked for.
+    image_check_asked: Option<Instant>,
 }
 
 impl Installer {
@@ -466,6 +468,8 @@ fn progress_text(p: &Progress) -> String {
 /// How long Install update waits for the installer to find the mixer and
 /// be ready, before leaving the page for the user.
 const AUTOSTART_WAIT: Duration = Duration::from_secs(60);
+/// How often to ask for the mixer's image check while it runs.
+const IMAGE_CHECK_EVERY: Duration = Duration::from_secs(3);
 
 impl Rc2FxApp {
     pub(super) fn open_installer(&mut self, cx: &mut Context<Self>) {
@@ -504,6 +508,7 @@ impl Rc2FxApp {
             mixer_select: None,
             stock_select: None,
             prefer_flash: false,
+            image_check_asked: None,
         };
         installer.model.privileged = installer.access.allows_flashing();
         installer.model.bundled = self.bundled_mixer_software.clone();
@@ -742,6 +747,21 @@ impl Rc2FxApp {
             installer.engine = engine;
             changed = true;
         }
+        // After a flash, RC2FX checks RØDE's files in the background; ask
+        // how it went until it has an answer worth acting on.
+        if installer.model.wants_image_check()
+            && installer
+                .image_check_asked
+                .is_none_or(|asked| asked.elapsed() >= IMAGE_CHECK_EVERY)
+        {
+            installer.image_check_asked = Some(Instant::now());
+            let generation = self.generation;
+            self.command(Command::ImageCheck { generation });
+            return changed;
+        }
+        let Some(installer) = self.installer.as_mut() else {
+            return changed;
+        };
         if installer.model.take_settings_request() {
             let generation = self.generation;
             if !self.command(Command::Settings { generation }) {

@@ -24,13 +24,17 @@
 #   rc2fx.sh update-commit ID         restart, verify and commit (or roll back)
 #                                    a signed in-place update; started
 #                                    detached by rc2fxd, which it outlives
+#   rc2fx.sh image-check              check RØDE's files against the image the
+#                                    installer flashed; started by launch
 #
 # developer-ssh adds or removes one marked line in root's authorized_keys.
 # arm-power-recovery explicitly sets the bootloader's one-shot power flag.
 # Start-up never sets it. The developer commands do, before they change or run
 # anything here: cargo xtask and tools/xrun_trace from the host, ui-preview
 # and ui-run themselves. Each refuses to go on if it cannot.
-# Other commands do not change firmware or stock files.
+# image-check restores a damaged RØDE file only with a byte-identical copy
+# from the other root partition. Other commands do not change firmware or
+# stock files.
 # The launcher (audio-start.sh) runs `rc_audio_mixer` by name with /usr/sbin ahead of /usr/bin, so the shim
 # installed as /usr/sbin/rc_audio_mixer runs `launch` as the launcher's own
 # child and execs the stock executable, injected unless this boot has fallen
@@ -792,6 +796,8 @@ launch() {
   mkdir -p -m 700 "$boot" "$data" "$logs"
   # Records that the shim ran for this start, whatever it decides.
   uptime_s > "$boot/seen"
+  # Checks the flashed image's RØDE files in the background (image check).
+  image_check_start || true
   local why= selected old n
   if test -e /opt/rc2fx/disabled; then why='autostart is disabled'
   elif test -e /usr/bin/first-boot; then why='first boot after a firmware update'
@@ -1907,6 +1913,110 @@ xrun_trace() {
   esac
 }
 
+# ---- image check -------------------------------------------------------------
+# The installer lists RØDE's files in the image with their SHA-256
+# (image.sha256, next to this script). A flash once left one of RØDE's boot
+# scripts zero-filled on the new root: the mixer then ran without its
+# settings partition and lost its setup at every start. `launch` starts this
+# check once per boot, in the background, until it has passed for the image.
+# A damaged file is restored from the other root partition only when that
+# copy has exactly the hash the image lists; nothing else is ever written.
+# The outcome is `$data/image-check`, which rc2fxd serves as
+# `GET api/v1/image-check`.
+image_manifest=${RC2FX_IMAGE_MANIFEST:-$home/image.sha256}
+image_root=${RC2FX_IMAGE_ROOT:-/}
+image_result=$data/image-check
+image_other_mount=/run/rc2fx-other-root
+# Starts the check unless it has passed for this manifest or one is running.
+image_check_start() {
+  test -f "$image_manifest" || return 0
+  test ! -e /usr/bin/first-boot || return 0
+  mkdir "$boot/image-check" 2> /dev/null || return 0
+  local digest
+  digest=$(sha256sum < "$image_manifest" | cut -d' ' -f1)
+  grep -qx "manifest=$digest" "$image_result" 2> /dev/null \
+    && grep -qx 'status=ok' "$image_result" && return 0
+  # The log stays in RAM: a damaged image can leave the root full, and the
+  # check must not stop at its first message.
+  setsid nohup /bin/bash "$home/rc2fx.sh" image-check < /dev/null >> "$boot/image-check.log" 2>&1 &
+}
+# The root partition this boot did not mount, read-only, or nothing.
+image_other_root() {
+  if test -n "${RC2FX_OTHER_ROOT:-}"; then echo "$RC2FX_OTHER_ROOT"; return; fi
+  local root other
+  root=$(tr ' ' '\n' < /proc/cmdline | sed -n 's#^root=/dev/mmcblk1p\([12]\)$#\1#p')
+  case "$root" in 1) other=2 ;; 2) other=1 ;; *) return 1 ;; esac
+  mkdir -p "$image_other_mount"
+  mountpoint -q "$image_other_mount" \
+    || mount -o ro,noload "/dev/mmcblk1p$other" "$image_other_mount" || return 1
+  echo "$image_other_mount"
+}
+image_check() {
+  test -f "$image_manifest" || { echo "no image manifest at $image_manifest"; return 0; }
+  # On a full root the lock file may not be creatable; one check per boot is
+  # still all `launch` starts.
+  { exec 8> "$data/image-check.lock"; } 2> /dev/null || exec 8> /dev/null
+  flock -n 8 || { echo 'another image check is running'; return 0; }
+  local digest started failed=() repaired=() damaged=() line name want other source tmp status
+  digest=$(sha256sum < "$image_manifest" | cut -d' ' -f1)
+  started=$(stamp)
+  say "Checking $(wc -l < "$image_manifest") files listed in $image_manifest"
+  # Only the listed files that do not match, as "path: FAILED ...".
+  while IFS= read -r line; do
+    name=${line%: FAILED*}
+    test "$name" != "$line" && failed+=("$name")
+  done < <(cd "$image_root" && nice -n 19 ionice -c3 sha256sum -c --quiet "$image_manifest" 2> /dev/null || true)
+  for name in "${failed[@]}"; do
+    # The manifest's own paths, never one that leaves the root.
+    if [[ $name == /* || $name == *..* ]]; then damaged+=("$name"); continue; fi
+    want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$image_manifest")
+    source=
+    if test -n "$want" && other=$(image_other_root) && test -f "$other/$name" \
+       && test "$(sha256sum < "$other/$name" | cut -d' ' -f1)" = "$want"; then
+      source=$other/$name
+    fi
+    if test -z "$source"; then
+      say "Damaged and not repairable: $name"
+      damaged+=("$name")
+      continue
+    fi
+    # The same size rewrites the file's own blocks, which works on a full
+    # root; another size goes through a copy beside it.
+    if test -f "$image_root/$name" \
+       && test "$(stat -c %s "$image_root/$name")" = "$(stat -c %s "$source")"; then
+      dd if="$source" of="$image_root/$name" conv=notrunc,fsync status=none || true
+    else
+      tmp="$image_root/$name.rc2fx-repair"
+      { cp -p "$source" "$tmp" && sync && mv -f "$tmp" "$image_root/$name"; } || rm -f "$tmp"
+    fi
+    sync
+    if test "$(sha256sum < "$image_root/$name" | cut -d' ' -f1)" = "$want"; then
+      say "Repaired from the other root partition: $name"
+      repaired+=("$name")
+    else
+      say "Repair did not take: $name"
+      damaged+=("$name")
+    fi
+  done
+  if mountpoint -q "$image_other_mount" 2> /dev/null; then umount "$image_other_mount" || true; fi
+  if test ${#damaged[@]} -gt 0; then status=damaged
+  elif test ${#repaired[@]} -gt 0; then status=repaired
+  else status=ok
+  fi
+  tmp=$data/.image-check.$$
+  {
+    echo schema=1
+    echo "status=$status"
+    echo "manifest=$digest"
+    echo "checked=$started"
+    for name in "${repaired[@]}"; do echo "repaired=$name"; done
+    for name in "${damaged[@]}"; do echo "damaged=$name"; done
+  } > "$tmp" 2> /dev/null && chmod 600 "$tmp" && mv -f "$tmp" "$image_result" \
+    || { rm -f "$tmp"; say "Could not record the result in $image_result; is the root full?"; }
+  say "Image check: $status (${#repaired[@]} repaired, ${#damaged[@]} damaged)"
+}
+# ---- end of the image check --------------------------------------------------
+
 # ---- signed in-place updates ------------------------------------------------
 # rc2fxd verifies and swaps a signed release (docs/developer/mixer-releases.md)
 # and then starts a copy of this script as `update-commit ID`, detached, so the
@@ -2073,5 +2183,6 @@ case "${1:-}" in
   supervise-restart) shift; supervise_restart "$@" ;;
   supervise-exit) shift; supervise_exit "$@" ;;
   developer-ssh) shift; developer_ssh "$@" ;;
-  *) sed -n '2,26s/^# \{0,1\}//p' "$0"; exit 2 ;;
+  image-check) image_check ;;
+  *) sed -n '2,28s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

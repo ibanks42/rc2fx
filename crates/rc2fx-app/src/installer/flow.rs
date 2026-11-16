@@ -201,6 +201,32 @@ pub(crate) struct Run {
     pub cancelling: bool,
 }
 
+fn file_list(check: &rc2fx_core::ImageCheck, names: &[String]) -> String {
+    let mut list = names.join(", ");
+    if check.unlisted > 0 {
+        list.push_str(&format!(" and {} more", check.unlisted));
+    }
+    list
+}
+
+/// RØDE's boot already ran with the damaged copies, so only a restart
+/// brings the mixer up as RØDE intends.
+fn repaired_message(check: &rc2fx_core::ImageCheck) -> String {
+    format!(
+        "The flash left some of RØDE's files damaged on the mixer, and RC2FX restored them from the mixer's previous system: {}. \
+         Turn the mixer off and on again to finish. Your settings are not affected; if the mixer asks for its initial setup, don't redo it, the restart brings it back.",
+        file_list(check, &check.repaired)
+    )
+}
+
+fn damaged_message(check: &rc2fx_core::ImageCheck) -> String {
+    format!(
+        "The flash left some of RØDE's files damaged on the mixer, and there was no identical copy to restore them from: {}. \
+         Stop, then install again to flash the mixer again. Until then the mixer may forget its setup at every restart, so don't redo it.",
+        file_list(check, &check.damaged)
+    )
+}
+
 /// How long after a flash the mixer counts as still updating.
 const UPDATE_WINDOW: u64 = 20 * 60;
 /// How long to wait for the mixer before reporting it.
@@ -227,6 +253,10 @@ pub(crate) struct Model {
     /// What RC2FX reports over the app's USB connection; None while the app
     /// is not connected to it.
     pub service: Option<Service>,
+    /// The mixer's check of the files the flash unpacked: `None` until it
+    /// answers, `Some(None)` from mixer software that predates the check.
+    /// Cleared whenever RC2FX is not running, so a restart reads it afresh.
+    pub image_check: Option<Option<rc2fx_core::ImageCheck>>,
     settings_read: SettingsRead,
     pub releases: Vec<Release>,
     /// Qualified firmware only a newer app may install, newest first.
@@ -283,6 +313,7 @@ impl Model {
             privileged: true,
             status: None,
             service: None,
+            image_check: None,
             settings_read: SettingsRead::Idle,
             releases: Vec::new(),
             needs_app: Vec::new(),
@@ -420,7 +451,34 @@ impl Model {
     /// What the app's USB connection says about RC2FX; None while it is not
     /// connected.
     pub fn set_service(&mut self, service: Option<Service>) {
+        if !matches!(service, Some(Service::Ready)) {
+            self.image_check = None;
+        }
         self.service = service;
+    }
+
+    /// Whether the run is waiting on the mixer's image check, so the app
+    /// should ask for it.
+    pub fn wants_image_check(&self) -> bool {
+        let at_start = self
+            .run
+            .as_ref()
+            .is_some_and(|r| r.failed.is_none() && STEPS.get(r.index) == Some(&Step::Start));
+        at_start
+            && !self.stock
+            && self.flashed()
+            && matches!(self.service(), Some(Service::Ready))
+            && !self.image_checked()
+    }
+
+    /// The check passed, or there is nothing to check.
+    fn image_checked(&self) -> bool {
+        use rc2fx_core::ImageStatus;
+        match &self.image_check {
+            Some(None) => true,
+            Some(Some(check)) => matches!(check.status, ImageStatus::Ok | ImageStatus::None),
+            None => false,
+        }
     }
 
     /// The app should read RC2FX's settings now; true once per request.
@@ -433,6 +491,20 @@ impl Model {
     }
 
     /// RC2FX's settings as the app read them: keep them, or stop the run.
+    /// The mixer's answer to `GET api/v1/image-check`. A failed read is
+    /// asked again on the next poll.
+    pub fn image_check_read(
+        &mut self,
+        result: Result<Option<rc2fx_core::ImageCheck>, String>,
+    ) -> Option<Request> {
+        let check = result.ok()?;
+        if !self.wants_image_check() {
+            return None;
+        }
+        self.image_check = Some(check);
+        self.advance()
+    }
+
     pub fn settings_read(&mut self, result: Result<String, String>) -> Option<Request> {
         if self.settings_read != SettingsRead::Asked {
             return None;
@@ -508,7 +580,10 @@ impl Model {
             // Stock firmware is done once the mixer is back in normal mode.
             Step::Start if self.stock => flashed && self.usb_one(false).is_some(),
             Step::Start => {
-                flashed && !self.in_update_mode() && matches!(self.service(), Some(Service::Ready))
+                flashed
+                    && !self.in_update_mode()
+                    && matches!(self.service(), Some(Service::Ready))
+                    && self.image_checked()
             }
         }
     }
@@ -1179,6 +1254,17 @@ impl Model {
                         let why = format!("RC2FX is starting: {detail}");
                         self.wait(&why)
                     }
+                    Some(Service::Ready) => match self.image_check.clone().flatten() {
+                        Some(check) if check.status == rc2fx_core::ImageStatus::Damaged => {
+                            self.fail(damaged_message(&check))
+                        }
+                        Some(check) if check.status == rc2fx_core::ImageStatus::Repaired => {
+                            self.wait(&repaired_message(&check))
+                        }
+                        _ => self.wait(
+                            "RC2FX is running and is checking the files the flash installed. This takes a minute or two.",
+                        ),
+                    },
                     _ => self.wait(
                         "The mixer is updating and will restart a couple of times. Leave it on; this takes a few minutes.",
                     ),
@@ -1453,6 +1539,7 @@ fn default_choice(releases: &[Release]) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rc2fx_core::ImageStatus;
     use rc2fx_installer::mixer_update::MixerTarget;
     use rc2fx_installer::{CommandRecord, Identity, Saved};
 
@@ -1796,6 +1883,62 @@ mod tests {
             poll,
             status(&[("GV1", false)], Some(Service::Ready), true, false),
         );
+        // RC2FX runs; the step waits for its check of RØDE's files.
+        assert!(m.wants_image_check());
+        assert!(
+            matches!(m.state(Step::Start), StepState::Waiting(w) if w.contains("checking the files"))
+        );
+        let check = |status| rc2fx_core::ImageCheck {
+            status,
+            repaired: vec!["usr/bin/rode-init-update-env.sh".into()],
+            ..Default::default()
+        };
+        m.image_check_read(Ok(Some(check(ImageStatus::Pending))));
+        assert!(m.run.is_some() && !m.finished);
+        // Restored files need a restart, which clears the answer until RC2FX
+        // is back and checks again.
+        m.image_check_read(Ok(Some(check(ImageStatus::Repaired))));
+        assert!(
+            matches!(m.state(Step::Start), StepState::Waiting(w) if w.contains("Turn the mixer off and on again") && w.contains("rode-init-update-env.sh"))
+        );
+        m.set_service(None);
+        assert_eq!(m.image_check, None);
+        m.set_service(Some(Service::Ready));
+        m.image_check_read(Err("timed out".into()));
+        assert!(m.wants_image_check(), "a failed read is asked again");
+        m.image_check_read(Ok(Some(check(ImageStatus::Ok))));
+        assert!(m.run.is_none() && m.finished);
+    }
+
+    #[test]
+    fn files_the_mixer_could_not_restore_fail_the_install() {
+        let mut m = model(status(&[("GV1", false)], None, true, false));
+        m.run = Some(Run {
+            index: STEPS.iter().position(|s| *s == Step::Start).unwrap(),
+            serial: "GV1".into(),
+            flashed: true,
+            ..Default::default()
+        });
+        m.set_service(Some(Service::Ready));
+        m.image_check_read(Ok(Some(rc2fx_core::ImageCheck {
+            status: ImageStatus::Damaged,
+            damaged: vec!["usr/lib/libthing.so".into()],
+            unlisted: 2,
+            ..Default::default()
+        })));
+        assert!(
+            matches!(m.state(Step::Start), StepState::Failed(e) if e.contains("usr/lib/libthing.so and 2 more") && e.contains("install again"))
+        );
+        // Mixer software from before the check has nothing to wait for.
+        let mut m = model(status(&[("GV1", false)], None, true, false));
+        m.run = Some(Run {
+            index: STEPS.iter().position(|s| *s == Step::Start).unwrap(),
+            serial: "GV1".into(),
+            flashed: true,
+            ..Default::default()
+        });
+        m.set_service(Some(Service::Ready));
+        m.image_check_read(Ok(None));
         assert!(m.run.is_none() && m.finished);
     }
 
@@ -2169,7 +2312,11 @@ mod tests {
         };
         let mut m = Model::new();
         let poll = m.probe();
-        report(&mut m, poll, recent(Some(Service::Ready)));
+        // RC2FX is running; the step waits for its file check while the
+        // next status poll is out.
+        let pending = report(&mut m, poll, recent(Some(Service::Ready)));
+        assert_eq!(m.image_check_read(Ok(None)), None);
+        report(&mut m, pending, recent(Some(Service::Ready)));
         assert!(m.finished && m.run.is_none(), "already running RC2FX");
         m.set_stock(true);
         let poll = m.tick(Instant::now() + Duration::from_secs(60));

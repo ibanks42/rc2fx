@@ -692,6 +692,9 @@ impl Rc2FxApp {
                 EventKind::Ssh { id, result } => self.receive_ssh(id, result, cx),
                 EventKind::MixerUpdate(update) => self.in_place_event(update),
                 // A failed read is asked again on the next poll.
+                EventKind::ImageCheck(result) => {
+                    self.installer_event(cx, |m| m.image_check_read(result))
+                }
                 EventKind::MixerUpdateLast(result) => {
                     if let Ok(record) = result {
                         self.in_place_outcome(record);

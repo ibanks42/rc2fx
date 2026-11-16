@@ -257,6 +257,11 @@ impl Api {
                 Some(update) => last_update(update),
                 None => error(404, "In-place updates are not available here"),
             },
+            // The launcher's check of the files the last flash unpacked.
+            ("GET", "api/v1/image-check") => match &self.options.mixer_update {
+                Some(update) => reply(200, &update.image_check()),
+                None => error(404, "The image check is not available here"),
+            },
             // What the app diffs a signed release against for a delta upload.
             ("GET", "api/v1/update/installed") => match &self.options.mixer_update {
                 Some(update) => match update.installed() {

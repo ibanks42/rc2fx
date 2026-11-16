@@ -135,6 +135,10 @@ pub enum Command {
     MixerUpdateLast {
         generation: u64,
     },
+    /// Read the mixer's check of the files the last flash unpacked.
+    ImageCheck {
+        generation: u64,
+    },
 }
 
 /// How an in-place update is going, as far as this side can see. Once the
@@ -177,6 +181,8 @@ pub enum EventKind {
     /// `Ok(None)`: no in-place update has finished on this mixer, or its
     /// software predates them.
     MixerUpdateLast(Result<Option<Value>, String>),
+    /// `Ok(None)`: the mixer software predates the image check.
+    ImageCheck(Result<Option<rc2fx_core::ImageCheck>, String>),
     Routing(Result<rc2fx_core::DeviceState, String>),
     Preset(Result<PresetReply, PresetError>),
     /// Connected to the mixer with this USB serial; its state.
@@ -871,6 +877,26 @@ async fn run(mut commands: mpsc::Receiver<Command>, events: mpsc::Sender<Event>)
                     &events,
                     generation,
                     EventKind::MixerUpdateLast(result.map_err(|e| e.message())),
+                )
+                .await;
+            }
+            Command::ImageCheck {
+                generation: requested,
+            } if requested == generation => {
+                let result = match &current {
+                    Some(device) => match device.request("GET", "api/v1/image-check", None).await {
+                        Ok(value) => serde_json::from_value(value)
+                            .map(Some)
+                            .map_err(|_| RequestError::Protocol),
+                        Err(RequestError::Status(404, _)) => Ok(None),
+                        Err(error) => Err(error),
+                    },
+                    None => Err(no_mixer()),
+                };
+                emit(
+                    &events,
+                    generation,
+                    EventKind::ImageCheck(result.map_err(|e| e.message())),
                 )
                 .await;
             }
