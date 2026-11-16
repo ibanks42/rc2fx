@@ -95,11 +95,21 @@ changes=$(git status --short)
 echo "Packaging $head, source digest $source, with these local changes:"
 echo "${changes:-(none)}"
 
+# Go's caches sit on the mount too; -modcacherw keeps the module cache
+# removable by the calling user. The token that reads the gpuikit bindings
+# goes through as GPUIKIT_TOKEN for desktop/scripts/fetch-gpuikit.sh, taken
+# from GH_TOKEN or GITHUB_TOKEN when only those are set (as for gh).
+if [ -z "${GPUIKIT_TOKEN:-}" ] && [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+    GPUIKIT_TOKEN=${GH_TOKEN:-$GITHUB_TOKEN}
+fi
+export GPUIKIT_TOKEN=${GPUIKIT_TOKEN:-}
 # shellcheck disable=SC2016 # $HOME belongs to the container.
 snapshot |
     "$engine" run --rm -i "${user[@]}" --security-opt label=disable \
         -v "$check/target:/work/src/target" -v "$check/cache:/work/cache" \
         -e CARGO_HOME=/work/cache/cargo -e HOME=/work/cache/home \
+        -e GOCACHE=/work/cache/go-build -e GOMODCACHE=/work/cache/gomod \
+        -e GOFLAGS=-modcacherw -e GOTOOLCHAIN=local -e GPUIKIT_TOKEN \
         -e "RC2FX_TOOLS_DIR=$tools" -w /work/src \
         "$image" sh -ec 'mkdir -p "$HOME"
             tar --extract --no-same-owner --directory=/work/src

@@ -107,7 +107,7 @@ class Publication(unittest.TestCase):
         return directory, message
 
     def sign(self, tag, directory, version=None, roots=None):
-        """What `cargo xtask app-sign` writes, without real signatures:
+        """What `./xtask app-sign` writes, without real signatures:
         publish_app trusts the signer for those, and the app checks them."""
         self.sequence += 1
         version = version or tag[1:]
@@ -274,7 +274,7 @@ class Publication(unittest.TestCase):
         return [assets, macos]
 
     def test_a_release_run_signs_only_the_packages_it_built(self):
-        files = {**assets("1.2.3"), "rc2fx-macos-arm64.zip": b"mac"}
+        files = {**assets("1.2.3"), "rc2fx-macos-universal.zip": b"mac", "rc2fx-macos-arm64.zip": b"mac"}
         self.gh.add("v1.2.3", files)
         built = self.built(files)
         directory = self.temp / "bound"

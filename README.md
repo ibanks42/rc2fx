@@ -14,7 +14,7 @@ are stored on the mixer and stay in effect after the app is closed.
 | System | Installer | Portable |
 | --- | --- | --- |
 | Windows (x64) | [Setup (.exe)](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64-setup.exe) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64.zip) |
-| macOS (Apple silicon) | [.pkg](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.pkg) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.zip) |
+| macOS 13 or later (Apple silicon and Intel) | [.pkg](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.pkg) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.zip) |
 | Linux (x64) | — | [AppImage](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage) |
 
 Release notes, checksums and every file are on the
@@ -58,16 +58,22 @@ unless you enable it.
 
 ## Building from source
 
-You need Rust ([rustup](https://rustup.rs)), [just](https://just.systems),
-[zig](https://ziglang.org/download/) 0.13 or newer and your platform's C build
-tools ([details](docs/developer/building.md)).
+The desktop app is Go and the mixer side is Rust. You need
+[Go](https://go.dev/dl/) (the version in `desktop/go.mod`) and a C compiler
+for cgo (MinGW-w64 gcc on Windows) for the app, Rust
+([rustup](https://rustup.rs)) and [zig](https://ziglang.org/download/) 0.13
+or newer for the mixer build, and [just](https://just.systems)
+([details](docs/developer/building.md)). The app's UI links gpuikit, a
+prebuilt library that `desktop/scripts/fetch-gpuikit.sh` downloads.
 
 ```sh
 git clone https://github.com/ibanks42/rc2fx
 cd rc2fx
-just setup            # once: the mixer's Rust target and cargo-zigbuild
-just app              # run the desktop app (debug build)
-just test             # tests and Clippy
+just setup                          # once: the mixer's Rust target and cargo-zigbuild
+desktop/scripts/fetch-gpuikit.sh    # once: the UI library the app links
+just app                            # run the desktop app (development build)
+just test                           # Go and Rust tests, go vet and Clippy
+just mixer-build                    # cross-build the mixer runtime into target/mixer
 ```
 
 The build works on Windows, Linux and macOS. The

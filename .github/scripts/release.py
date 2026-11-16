@@ -27,12 +27,25 @@ def version_tuple(version):
     return tuple(map(int, version.split(".")))
 
 
+# The Go desktop app's copies of the app version, which the Rust app took
+# from the workspace version (CARGO_PKG_VERSION): the version packages are
+# named and stamped with, the version the app reports, and the mock mixer's
+# runtime version.
+GO_VERSIONS = {
+    Path("desktop/installer/installer.go"): "var AppVersion",
+    Path("desktop/app/model/versions.go"): "var AppVersion",
+    Path("desktop/transport/mock.go"): "const mockRuntime",
+}
+
+
+def go_desktop():
+    return Path("desktop/go.mod").exists()
+
+
 def bundles_mixer():
-    manifest = Path("crates/rc2fx-app/Cargo.toml")
-    if not manifest.exists():
-        return True  # Legacy release layouts.
-    features = tomllib.loads(manifest.read_text()).get("features", {})
-    return "embedded" not in features or "embedded" in features.get("default", [])
+    # The Go app's release packages download the mixer software; only
+    # `./xtask package --embedded` bundles it, and releases never pass it.
+    return not go_desktop()
 
 
 def replace_version(text, section, version):
@@ -81,6 +94,16 @@ def update_versions(version):
             raise ValueError("Workspace lockfile is missing local packages")
         if found:
             updates[path] = updated
+    if go_desktop():
+        for path, declaration in GO_VERSIONS.items():
+            text = path.read_text()
+            pattern = rf'^({re.escape(declaration)} = )"([^"\n]*)"$'
+            found = re.findall(pattern, text, flags=re.M)
+            if len(found) != 1:
+                raise ValueError(f"Expected one {declaration} in {path}, got {len(found)}")
+            if found[0][1] != current:
+                raise ValueError(f"{path}: {declaration} differs from workspace version")
+            updates[path] = re.sub(pattern, lambda m: m[1] + json.dumps(version), text, flags=re.M)
     for path, text in updates.items():
         path.write_text(text)
     return [str(path) for path in updates]
@@ -100,8 +123,9 @@ def warn_mixer_version(previous):
         "crates/rc2fx-core", "crates/rc2fx-device", "crates/rc2fx-dfn",
         "crates/rc2fx-dsp", "crates/rc2fx-firmware", "crates/rc2fx-native",
         "crates/rc2fx-native-control", "crates/rc2fx-suppression",
-        "crates/rc2fx-supervisor", "crates/rc2fx-usb", "crates/rc2fx-gui", "xtask/mixer",
-        "xtask/src/setup.rs", "xtask/src/elf.rs", "config",
+        "crates/rc2fx-supervisor", "crates/rc2fx-usb", "crates/rc2fx-gui", "mixer/scripts",
+        "desktop/internal/xtask/setup", "desktop/internal/xtask/elfcheck",
+        "desktop/internal/xtask/release/mixer.go", "desktop/installer/embed", "config",
         "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo",
     ]
     if git("diff", "--name-only", previous, "HEAD", "--", *paths):

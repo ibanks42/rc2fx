@@ -62,8 +62,9 @@ RUNTIME_REPO = "https://github.com/AppImage/type2-runtime"
 # https://github.com/AppImage/type2-runtime/commit/3d17002).
 RUNTIME_COMMIT = "3d17002ee2a519a288e28aeb7bc41af5f5adaf4e"
 RUNTIME_SHA256 = "a2419dce47568395ae79c01ffa9a5a341dd339581352ff104d073527543177e5"
-# The vpk that vendors it: keep in step with setup-vpk.sh and VPK_VERSION in
-# xtask/src/package/velopack.rs.
+# The vpk that vendors it: keep in step with setup-vpk.sh,
+# desktop/scripts/fetch-velopack.sh and VPKVersion in
+# desktop/internal/xtask/licenses/licenses.go.
 VPK_VERSION = "1.3.39-g8d2844f"
 VPK_SHA256 = "1a7e031f285768b6418cae43baf98d3bc295510c140a7dc5757bf99af9b78ecf"
 VPK_PACKAGE = "https://api.nuget.org/v3-flatcontainer/vpk/{version}/vpk.{version}.nupkg"

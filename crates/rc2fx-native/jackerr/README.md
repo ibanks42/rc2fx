@@ -9,7 +9,7 @@ turn on jackd's callback or ALSA tracing.
 The normal mixer build produces this library and `rc2fx_jackerr_snapshot`.
 Both are required, checksummed files in the SSH installer, the release package
 and the firmware-image installer. RØDE's executables are left unchanged. The
-launcher integration is in `xtask/mixer/rc2fx.sh`.
+launcher integration is in `mixer/scripts/rc2fx.sh`.
 
 ## Startup
 
@@ -65,7 +65,7 @@ with a new output file name:
 It reads published slots with sequence checks and writes a snapshot that isn't
 modified afterwards. Copying the live ring directory doesn't give the same
 result. Decode the snapshot on the computer with the decoder used by
-`cargo xtask mixer xruns`, or with `tests/jackerr_ring.py`.
+`./xtask mixer xruns`, or with `tests/jackerr_ring.py`.
 
 When reading records, keep track of the PID, the creation clock, the window
 indices, unknown formats, and the loss and error counts. A late client's name
@@ -83,8 +83,8 @@ time. Its pages are prefaulted but not locked by this code.
 
 ```sh
 python3 -I -m unittest discover -s crates/rc2fx-native/jackerr/tests -p test_jackerr.py
-python3 xtask/mixer/tests/recorder_launcher.py
-python3 xtask/mixer/tests/install.py
-cargo test -p rc2fx-installer
-cargo test -p xtask
+python3 mixer/scripts/tests/recorder_launcher.py
+python3 mixer/scripts/tests/install.py
+(cd desktop && go test ./installer/...)
+(cd desktop && go test ./internal/xtask/...)
 ```

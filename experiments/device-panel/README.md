@@ -3,7 +3,7 @@
 This is an experiment. It is not part of the build or of the firmware the
 RC2FX installer produces, and it is kept here to be finished later. `rc2fxd`
 already serves its socket, and the launcher script can run it from RAM with
-`xtask/mixer/rc2fx.sh ui-preview`.
+`mixer/scripts/rc2fx.sh ui-preview`.
 
 The experiment adds a launcher and settings panel to the RØDECaster Pro II's
 own screen.

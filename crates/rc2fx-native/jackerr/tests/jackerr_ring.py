@@ -5,7 +5,7 @@
 
 SNAPSHOT is written ON THE DEVICE by rc2fx_jackerr_snapshot (in the parent
 directory), which reads each live slot with its sequence lock. The tests'
-reference decoder; `cargo xtask mixer xruns` decodes the same format.
+reference decoder; `./xtask mixer xruns` decodes the same format.
 This decoder never reads a live ring file: a raw copy cannot show whether a
 slot changed while it was copied. Prints JSON: the ring's counters as read
 and every stable record, oldest first.

@@ -104,6 +104,7 @@ export default defineConfig({
           { text: 'Working on a mixer', link: '/developer/mixer-workflow' },
           { text: 'Commands', link: '/developer/commands' },
           { text: 'Architecture', link: '/developer/architecture' },
+          { text: 'The desktop app in Go', link: '/developer/desktop-go' },
           { text: 'Releases', link: '/developer/releases' },
           { text: 'Update history', link: '/developer/update-history' },
         ],
@@ -128,9 +129,10 @@ export default defineConfig({
           },
           { text: 'Hardware', link: '/reference/hardware' },
           {
-            text: 'Crates',
+            text: 'Crates and packages',
             items: [
-              { text: 'rc2fx-app', link: '/crates/rc2fx-app' },
+              { text: 'Desktop app (Go)', link: '/crates/desktop-app' },
+              { text: 'transport (Go)', link: '/crates/desktop-transport' },
               { text: 'rc2fx-core', link: '/crates/rc2fx-core' },
               { text: 'rc2fx-dsp', link: '/crates/rc2fx-dsp' },
               { text: 'rc2fx-suppression', link: '/crates/rc2fx-suppression' },
@@ -138,7 +140,6 @@ export default defineConfig({
               { text: 'rc2fx-native', link: '/crates/rc2fx-native' },
               { text: 'rc2fx-gui', link: '/crates/rc2fx-gui' },
               { text: 'rc2fx-native-control', link: '/crates/rc2fx-native-control' },
-              { text: 'rc2fx-transport', link: '/crates/rc2fx-transport' },
             ],
           },
         ],

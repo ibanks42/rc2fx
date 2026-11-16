@@ -12,8 +12,9 @@ instead, and the mixer installs it in place (see
 
 `just app` and `just desktop` need no staged mixer runtime. To include an optional
 offline payload, use `just app-embedded`, `just desktop-embedded`, or build the
-app with `--features embedded` after `cargo xtask mixer-build`. Package that mode
-with `cargo xtask package --embedded`. The ordinary packaging command builds
+app with the `embedded` build tag (`./xtask app --embedded`) after
+`./xtask mixer-build`. Package that mode
+with `./xtask package --embedded`. The ordinary packaging command builds
 download-only. `--skip-build` still verifies that the executable has the requested
 mode. An embedded payload is an explicit installer choice, never a network-error
 fallback.
@@ -58,7 +59,7 @@ Prepare the production root on the machine that will hold the offline root
 private key. For a single custodian on Linux or macOS, run:
 
 ```sh
-cargo xtask mixer-keys "$HOME/rc2fx-signing"
+./xtask mixer-keys "$HOME/rc2fx-signing"
 ```
 
 The destination must be new, outside every Git checkout, with an existing
@@ -133,18 +134,19 @@ python3 .github/scripts/publish_mixer.py --resume PACKAGE SIGNED_METADATA
 If it stops before then, delete the draft `mixer-vVERSION` release and dispatch
 **Mixer release** again.
 
-The local equivalents are `cargo xtask mixer-package NEW_DIRECTORY` and
-`cargo xtask mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY
+The local equivalents are `./xtask mixer-package NEW_DIRECTORY` and
+`./xtask mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY
 TIMESTAMP_KEY`. Sequence numbers must increase; workflow sequences use UTC Unix
 seconds. `EXPIRES` is an RFC 3339 timestamp. Paths name files, never secret values.
 
-To try a release without publishing it, a debug build of the app reads mixer
+To try a release without publishing it, a development build of the app
+(`-tags rc2fxdev`, which `just app` builds) reads mixer
 releases from a local folder laid out like the published ones
 (`FOLDER/metadata/` with the role files, `FOLDER/mixer-vVERSION/` with the
 targets) when `RC2FX_DEV_MIXER_REPOSITORY=FOLDER` is set. Build the app and
-the mixer with a throwaway root from `cargo xtask mixer-keys` in
+the mixer with a throwaway root from `./xtask mixer-keys` in
 `config/mixer-update-root.json`, and sign with its release keys; never with
-the production keys. Release builds ignore the variable. Flashing runs in the
+the production keys. Builds without the tag ignore the variable. Flashing runs in the
 pkexec helper, which never sees it, so only in-place updates can be tried.
 
 Payload corrections require a new mixer version. The publisher refuses to
@@ -169,11 +171,16 @@ The mixer does the verification itself, from the root compiled into `rc2fxd`
 1. The four role documents are verified as a TUF repository: root signatures
    and thresholds, key rotation when the app sends the intermediate roots,
    timestamp, snapshot and targets, and the hashes and versions that tie them
-   together. Delegated targets are refused. The mixer and the desktop app
-   verify with the same library,
-   [sigstore-tuf](https://github.com/sigstore/sigstore-rust); signing (`xtask`
-   and `tuftool`) uses tough. A root that lists one key under two IDs for a
-   role is refused, because the library counts signatures by key ID.
+   together. Delegated targets are refused. The mixer verifies with
+   [sigstore-tuf](https://github.com/sigstore/sigstore-rust). The desktop app
+   parses metadata with [go-tuf](https://github.com/theupdateframework/go-tuf)
+   and follows sigstore-tuf's refresh, rollback and expiry rules
+   (`desktop/installer/internal/tuf`), so both accept exactly the same
+   repositories. Signing uses `./xtask` (`desktop/internal/xtask/tufsign`,
+   which writes what tough writes) and `tuftool`. The Go and Rust tests read
+   the same signed fixtures in `fixtures/xtask`. A root that lists one key
+   under two IDs for a role is refused, because the library counts signatures
+   by key ID.
 2. Exactly one target may carry the `rc2fxMixer` compatibility claims. Its
    version, length and SHA-256 must match the request and the uploaded file.
 3. Its `firmwareProfiles` must include the profile the launcher validated for
@@ -343,7 +350,7 @@ stops a week before the expiry, because discovery metadata can't outlive either.
 release without a new version, such as after a key rotation.
 
 To reauthorize, retain the original package directory, including its compatibility
-file. Run `cargo xtask mixer-sign` with that package, the current trusted root,
+file. Run `./xtask mixer-sign` with that package, the current trusted root,
 a fresh output directory, and a sequence greater than the currently published
 targets, snapshot and timestamp versions. Review the resulting signed metadata,
 then run:

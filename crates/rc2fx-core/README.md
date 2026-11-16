@@ -1,7 +1,7 @@
 # rc2fx-core
 
-Shared models and editor logic used by the desktop app and the transport. The
-crate is plain Rust with no audio processing, network access, file I/O or GUI
+The mixer's copy of RC2FX's models and editor logic; the desktop's Go copy is
+`desktop/core`, and `fixtures/core` keeps the two in step. The crate is plain Rust with no audio processing, network access, file I/O or GUI
 code.
 
 ## Configuration and session state

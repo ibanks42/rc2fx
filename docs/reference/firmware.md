@@ -109,6 +109,7 @@ hardware test.
 
    ```sh
    cargo test -p rc2fx-firmware
+   go -C desktop test ./firmware/...
    cargo run -p rc2fx-firmware -- check config/firmware-profiles.json MIXER LAUNCHER rodecaster-pro-ii
    ```
 

@@ -216,7 +216,7 @@ These offline checks were run when the layout was added, with no device:
 - The native library tests pass. They include a stereo output with only one
   channel observed, where both channels are left untouched, and a missing
   `out_6`, which is not replaced by `out_7`.
-- `cargo xtask mixer-build` passes its AArch64, glibc 2.35 and GCC 11 checks.
+- `./xtask mixer-build` passes its AArch64, glibc 2.35 and GCC 11 checks.
 - A temporary image built from the official Duo 1.7.7 archive keeps the boot
   and controller content and headers, the exact mixer and launcher hashes and
   the Duo device tree. It carries the runtime opt-in marker and fits the

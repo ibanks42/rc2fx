@@ -180,8 +180,8 @@ and rebuilding it during that window is unsafe.
 ## Testing
 
 ```sh
-cargo run --release -p rc2fx-transport --example usb_probe              # read-only
-cargo run --release -p rc2fx-transport --example usb_probe -- --extended # also inputs, presets, diagnostics
+go -C desktop run ./cmd/usb-probe            # read-only
+go -C desktop run ./cmd/usb-probe --extended # also inputs, presets, diagnostics
 ```
 
 `--write-roundtrip` reapplies the current settings unchanged with revision
@@ -190,8 +190,8 @@ checking, which increments the revision. It does not retry on a conflict.
 Unit tests cover fragmentation, malformed sizes, reordering, bounded
 decompression, stale sessions, unrelated vendor reports, ambiguous writes,
 reconnection, protocol 4 negotiation, windowed acknowledgements and multi-report
-fetches. `xtask` tests rebuild the staged descriptor and check that
-RØDE's items are unchanged.
+fetches. The xtask tests (`desktop/internal/xtask/mixer`) rebuild the staged
+descriptor and check that RØDE's items are unchanged.
 
 ## Known quirks
 

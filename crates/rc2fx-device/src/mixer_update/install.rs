@@ -17,14 +17,14 @@
 //! 2. `.rc2fx-previous` is built from the live files. Nothing has changed yet.
 //! 3. The pending marker is written and flushed. From here the launchers
 //!    prefer `.rc2fx-previous` unless an update driver is alive (see
-//!    `xtask/mixer/rc2fx-shim.sh`).
+//!    `mixer/scripts/rc2fx-shim.sh`).
 //! 4. Each payload file is renamed over the live one, then the directory is
 //!    flushed, then the shims are rewritten.
 //! 5. Only after the new controller reports itself and audio advances does the
 //!    driver remove the pending marker (the commit). A boot that finds the
 //!    marker instead restores the previous files before serving.
 //!
-//! The steps are the ones `xtask/mixer/install.sh` performs for a full flash,
+//! The steps are the ones `mixer/scripts/install.sh` performs for a full flash,
 //! ported into Rust rather than running the payload's own `install.sh`: that
 //! script expects the flash upload layout and restarts audio from inside the
 //! installing process, while this path must keep `/opt/rc2fx/data` in place and
@@ -41,8 +41,7 @@ use std::{
 };
 
 /// The files a mixer payload carries, in its order. Mirrors
-/// `rc2fx-installer`'s `embed::format`; this crate must not depend on the
-/// desktop installer.
+/// `PayloadNames` in the desktop's `desktop/installer/embed/format.go`.
 pub const PAYLOAD_NAMES: [&str; 14] = [
     "librc2fx_native.so",
     "rc2fxd",

@@ -1,9 +1,7 @@
 # Licences accepted for RC2FX's release license reports (see THIRD_PARTY_NOTICES.md).
-# Release targets: Linux, Windows and macOS desktops plus the mixer's ARM Linux.
+# Release targets: the mixer's ARM Linux. cargo-about covers only the mixer's
+# Rust; the desktop app is Go.
 targets = [
-    "x86_64-unknown-linux-gnu",
-    "x86_64-pc-windows-msvc",
-    "aarch64-apple-darwin",
     "aarch64-unknown-linux-gnu",
 ]
 # Build and dev tools are not shipped in a release.
@@ -11,13 +9,6 @@ ignore-build-dependencies = true
 ignore-dev-dependencies = true
 accepted = [
     "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
-    "Unicode-3.0", "CC0-1.0", "0BSD", "MPL-2.0",
-    # webpki-roots: Mozilla's root certificates, which Velopack's updater
-    # trusts for its downloads. A permissive data licence.
-    "CDLA-Permissive-2.0",
-    # rc2fx-ext2fs: libext2fs from e2fsprogs, statically linked into the
-    # desktop app for Repair mixer. RC2FX's source is public, so it can be
-    # relinked against a modified libext2fs (LGPL-2.0, section 6).
-    "LGPL-2.0-only",
+    "Unicode-3.0", "CC0-1.0", "0BSD",
 ]
 workarounds = ["ring"]

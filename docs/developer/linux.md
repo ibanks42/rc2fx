@@ -1,8 +1,10 @@
 # Linux setup
 
 These are the packages needed to build and run the desktop app on
-Debian/Ubuntu, Fedora or Arch. Audio processing happens on the mixer, so no
-audio setup is needed on the computer.
+Debian/Ubuntu, Fedora or Arch. The app is Go with a C compiler for cgo; its UI
+library, gpuikit, comes prebuilt ([Building from source](building.md)) and
+needs only the libraries below at run time. Audio processing happens on the
+mixer, so no audio setup is needed on the computer.
 
 The project is developed on Fedora. The Debian/Ubuntu and Arch lists haven't
 been tested end to end, and package names change between releases.
@@ -13,10 +15,9 @@ been tested end to end, and package names change between releases.
 
 ```bash
 sudo apt update
-sudo apt install git curl build-essential pkg-config cmake clang \
-  libfontconfig1-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
-  libx11-dev libxcb1-dev libvulkan1 mesa-vulkan-drivers libasound2-dev \
-  libssl-dev libudev-dev libdbus-1-dev policykit-1
+sudo apt install git curl build-essential golang-go \
+  libxkbcommon0 libxkbcommon-x11-0 libxcb1 libwayland-client0 \
+  libvulkan1 mesa-vulkan-drivers policykit-1
 ```
 
 On some releases the polkit package is called `pkexec` instead of
@@ -26,26 +27,29 @@ them, or from upstream.
 ### Fedora
 
 ```bash
-sudo dnf install git curl gcc gcc-c++ pkgconf-pkg-config cmake clang \
-  fontconfig-devel wayland-devel libxkbcommon-devel libxkbcommon-x11-devel \
-  libX11-devel libxcb-devel vulkan-loader mesa-vulkan-drivers alsa-lib-devel \
-  openssl-devel systemd-devel dbus-devel polkit just zig
+sudo dnf install git curl gcc golang \
+  libxkbcommon libxkbcommon-x11 libxcb libwayland-client \
+  vulkan-loader mesa-vulkan-drivers polkit just zig
 ```
 
 ### Arch
 
 ```bash
-sudo pacman -S --needed git curl base-devel pkgconf cmake clang \
-  fontconfig wayland libxkbcommon libxkbcommon-x11 libx11 libxcb \
-  vulkan-icd-loader alsa-lib openssl systemd dbus polkit just zig
+sudo pacman -S --needed git curl base-devel go \
+  libxkbcommon libxkbcommon-x11 libxcb wayland \
+  vulkan-icd-loader polkit just zig
 ```
+
+The Go build needs the version `desktop/go.mod` names. If your distribution's
+Go is older, install it from [go.dev](https://go.dev/dl/) instead.
 
 Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`,
 or NVIDIA's packages).
 
 ## Notes
 
-- GPUI needs a graphical session and a working Vulkan driver.
+- The app's UI (gpuikit, with GPUI underneath) needs a graphical session and
+  a working Vulkan driver.
 - The installer gets root through `pkexec`. On minimal desktops, make sure a
   polkit authentication agent is running.
 - Fedora's zig 0.16 with cargo-zigbuild 0.24 is known to work for the mixer

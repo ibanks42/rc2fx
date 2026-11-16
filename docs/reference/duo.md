@@ -19,12 +19,12 @@ When the installer is idle, it shows an **Allow experimental Duo flashing**
 switch above Developer options. The setting is stored as
 `experimentalDuoFlash` in the app's `view.json`. It defaults to off, and a
 missing or malformed value is treated as off
-(`crates/rc2fx-app/src/connection.rs`).
+(`desktop/app/prefs.go`).
 
 With the switch on and a Duo connected:
 
-- Each run, and each retry before the flash step, shows `DUO_WARNING`
-  (`crates/rc2fx-installer/src/lib.rs`) and asks for **Flash Duo at my own
+- Each run, and each retry before the flash step, shows `DuoWarning`
+  (`desktop/installer/installer.go`) and asks for **Flash Duo at my own
   risk**. The confirmation is cancelled if the model, serial or release
   changes while the question is open.
 - For RC2FX, the installer offers only the two pinned official Duo archives,
@@ -33,7 +33,7 @@ With the switch on and a Duo connected:
 - All other checks still apply: archive pins and model, board identity,
   instruction signatures and serial continuity.
 - The prepared image gets a file `/opt/rc2fx/experimental-duo` containing
-  `1`. The launcher (`xtask/mixer/rc2fx.sh`) turns it into
+  `1`. The launcher (`mixer/scripts/rc2fx.sh`) turns it into
   `RC2FX_EXPERIMENTAL_DUO=1`, which lets the runtime accept this Duo board
   with the Duo profile. The Duo is still identified as a Duo.
 
@@ -171,8 +171,8 @@ To check an official archive without extracting it:
 
 ```sh
 for v in 1.7.6 1.7.7; do
-  cargo run -p rc2fx-installer --example inspect-firmware -- \
-    rodecaster-duo ".deps/duo-investigation/duo-$v-os.tar.gz"
+  go -C desktop run ./installer/cmd/inspect-firmware \
+    rodecaster-duo "$PWD/.deps/duo-investigation/duo-$v-os.tar.gz"
 done
 ```
 
@@ -192,15 +192,15 @@ cargo run -p rc2fx-firmware -- inspect config/firmware-profiles.json \
 Tests that cover Duo handling:
 
 ```sh
-cargo test -p rc2fx-firmware -p rc2fx-installer -p rc2fx-device
+cargo test -p rc2fx-firmware -p rc2fx-device
 cargo test --manifest-path crates/rc2fx-native/Cargo.toml --lib
-cargo test -p rc2fx-app installer::
-python3 xtask/mixer/tests/usb_restart.py
+go -C desktop test ./firmware/... ./installer/... ./app/installflow/...
+python3 mixer/scripts/tests/usb_restart.py
 
 # These need the official archives:
 for v in 1.7.6 1.7.7; do
   RC2FX_DUO_ARCHIVE="$PWD/.deps/duo-investigation/duo-$v-os.tar.gz" \
-    cargo test -p rc2fx-installer pinned_duo_archive -- --ignored
+    go -C desktop test ./installer -run TestPinnedDuoArchivePassesOfflineOnlyAndFailsAsProIi
 done
 ```
 
@@ -209,10 +209,10 @@ keeps the Duo's boot and controller files and has the opt-in marker, first
 cross-build the mixer runtime locally:
 
 ```sh
-cargo xtask mixer-build
+./xtask mixer-build
 RC2FX_DUO_ARCHIVE="$PWD/.deps/duo-investigation/duo-1.7.7-os.tar.gz" \
   RC2FX_REAL_ROOT="$PWD" \
-  cargo test -p rc2fx-installer real_duo_image -- --ignored
+  go -C desktop test ./installer -run TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn
 ```
 
 The routing note has the audit commands and the offline results so far,

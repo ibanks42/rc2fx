@@ -1,0 +1,231 @@
+{
+  "comment": "Shared fixtures for the mixer's image check (rc2fx-core image_check). desktop/core/image_check_fixtures_test.go and crates/rc2fx-core/tests/image_check_fixtures.rs read them: `records` are /opt/rc2fx/data/image-check records (record null: no record) with the SHA-256 of the image's file list (digest null: no list), and `expect` the report from_record makes, written compactly; `reports` are GET api/v1/image-check answers the app must accept (and write back as `canonical`) or reject.",
+  "records": [
+    {
+      "name": "repaired",
+      "record": "records/repaired.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"repaired\",\"checked\":\"2026-11-15T22:10:00Z\",\"repaired\":[\"usr/bin/rode-init-update-env.sh\"]}"
+    },
+    {
+      "name": "no-file-list",
+      "record": "records/no-file-list.txt",
+      "digest": null,
+      "expect": "{\"status\":\"none\"}"
+    },
+    {
+      "name": "no-record",
+      "record": null,
+      "digest": "abc",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "stale-record",
+      "record": "records/stale-record.txt",
+      "digest": "other",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "unknown-status",
+      "record": "records/unknown-status.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "digest-prefix",
+      "record": "records/digest-prefix.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "no-manifest-line",
+      "record": "records/no-manifest-line.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "no-status-line",
+      "record": "records/no-status-line.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "empty-record",
+      "record": "records/empty-record.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "long-list",
+      "record": "records/long-list.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"damaged\",\"damaged\":[\"file0\",\"file1\",\"file2\",\"file3\",\"file4\",\"file5\",\"file6\",\"file7\",\"file8\",\"file9\",\"file10\",\"file11\",\"file12\",\"file13\",\"file14\",\"file15\",\"file16\",\"file17\",\"file18\",\"file19\",\"file20\",\"file21\",\"file22\",\"file23\",\"file24\",\"file25\",\"file26\",\"file27\",\"file28\",\"file29\",\"file30\",\"file31\"],\"unlisted\":3}"
+    },
+    {
+      "name": "both-lists-capped",
+      "record": "records/both-lists-capped.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"damaged\",\"repaired\":[\"r0\",\"r1\",\"r2\",\"r3\",\"r4\",\"r5\",\"r6\",\"r7\",\"r8\",\"r9\",\"r10\",\"r11\",\"r12\",\"r13\",\"r14\",\"r15\",\"r16\",\"r17\",\"r18\",\"r19\",\"r20\",\"r21\",\"r22\",\"r23\",\"r24\",\"r25\",\"r26\",\"r27\",\"r28\",\"r29\",\"r30\",\"r31\"],\"damaged\":[\"d0\",\"d1\",\"d2\",\"d3\",\"d4\",\"d5\",\"d6\",\"d7\",\"d8\",\"d9\",\"d10\",\"d11\",\"d12\",\"d13\",\"d14\",\"d15\",\"d16\",\"d17\",\"d18\",\"d19\",\"d20\",\"d21\",\"d22\",\"d23\",\"d24\",\"d25\",\"d26\",\"d27\",\"d28\",\"d29\",\"d30\",\"d31\"],\"unlisted\":2}"
+    },
+    {
+      "name": "crlf",
+      "record": "records/crlf.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"ok\",\"checked\":\"x\"}"
+    },
+    {
+      "name": "final-carriage-return",
+      "record": "records/final-carriage-return.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"ok\",\"checked\":\"x\\r\"}"
+    },
+    {
+      "name": "no-final-newline",
+      "record": "records/no-final-newline.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "other-lines",
+      "record": "records/other-lines.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"ok\",\"repaired\":[\"a=b\"]}"
+    },
+    {
+      "name": "last-status-wins",
+      "record": "records/last-status-wins.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"damaged\"}"
+    },
+    {
+      "name": "unknown-status-clears",
+      "record": "records/unknown-status-clears.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"pending\"}"
+    },
+    {
+      "name": "last-manifest-wins",
+      "record": "records/last-manifest-wins.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "last-checked-wins",
+      "record": "records/last-checked-wins.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"ok\",\"checked\":\"two\"}"
+    },
+    {
+      "name": "long-values",
+      "record": "records/long-values.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"repaired\",\"checked\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\",\"repaired\":[\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]}"
+    },
+    {
+      "name": "empty-values",
+      "record": "records/empty-values.txt",
+      "digest": "abc",
+      "expect": "{\"status\":\"ok\",\"checked\":\"\",\"repaired\":[\"\"]}"
+    }
+  ],
+  "reports": [
+    {
+      "name": "api-example",
+      "file": "reports/api-example.json",
+      "accept": true,
+      "canonical": "{\"status\":\"repaired\",\"checked\":\"2026-11-15T22:10:00Z\",\"repaired\":[\"usr/bin/rode-init-update-env.sh\"]}",
+      "why": "docs/reference/api.md's example"
+    },
+    {
+      "name": "newer-fields",
+      "file": "reports/newer-fields.json",
+      "accept": true,
+      "canonical": "{\"status\":\"ok\"}",
+      "why": "an older app reading a newer field set still parses"
+    },
+    {
+      "name": "everything",
+      "file": "reports/everything.json",
+      "accept": true,
+      "canonical": "{\"status\":\"damaged\",\"checked\":\"2026-11-15T22:10:00Z\",\"damaged\":[\"etc/hostname\"],\"unlisted\":3}",
+      "why": "empty lists and zero counts are left out when written"
+    },
+    {
+      "name": "empty",
+      "file": "reports/empty.json",
+      "accept": true,
+      "canonical": "{\"status\":\"none\"}",
+      "why": "every field has a default"
+    },
+    {
+      "name": "null-checked",
+      "file": "reports/null-checked.json",
+      "accept": true,
+      "canonical": "{\"status\":\"pending\"}",
+      "why": "checked is optional"
+    },
+    {
+      "name": "each-status",
+      "file": "reports/each-status.json",
+      "accept": true,
+      "canonical": "{\"status\":\"ok\"}",
+      "why": "unlisted 0 is left out"
+    },
+    {
+      "name": "unknown-status",
+      "file": "reports/unknown-status.json",
+      "accept": false,
+      "canonical": null,
+      "why": "unknown variant"
+    },
+    {
+      "name": "status-case",
+      "file": "reports/status-case.json",
+      "accept": false,
+      "canonical": null,
+      "why": "variants are camelCase"
+    },
+    {
+      "name": "null-status",
+      "file": "reports/null-status.json",
+      "accept": false,
+      "canonical": null,
+      "why": "status may be missing but not null"
+    },
+    {
+      "name": "negative-unlisted",
+      "file": "reports/negative-unlisted.json",
+      "accept": false,
+      "canonical": null,
+      "why": "unlisted is a usize"
+    },
+    {
+      "name": "fractional-unlisted",
+      "file": "reports/fractional-unlisted.json",
+      "accept": false,
+      "canonical": null,
+      "why": "unlisted is an integer"
+    },
+    {
+      "name": "null-list",
+      "file": "reports/null-list.json",
+      "accept": false,
+      "canonical": null,
+      "why": "a list may be missing but not null"
+    },
+    {
+      "name": "number-in-list",
+      "file": "reports/number-in-list.json",
+      "accept": false,
+      "canonical": null,
+      "why": "file names are strings"
+    },
+    {
+      "name": "not-an-object",
+      "file": "reports/not-an-object.json",
+      "accept": false,
+      "canonical": null,
+      "why": "a report is an object"
+    }
+  ]
+}

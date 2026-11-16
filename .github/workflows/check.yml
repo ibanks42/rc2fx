@@ -1,11 +1,11 @@
 name: Check
 
-# Clippy on every platform the app ships for, with warnings as errors, so code
-# that only compiles on one OS is linted there too. Linux, which the mixer runs,
-# also checks formatting and runs the whole test suite, in the AlmaLinux 8
-# build image releases build the AppImage in. Nothing here builds the mixer
-# runtime: `--no-default-features` turns off the app's embedded installer
-# payload, which only real builds need.
+# The mixer's Rust workspace is formatted, linted with warnings as errors and
+# tested on Linux, in the AlmaLinux 8 build image releases build the AppImage
+# in. The Go desktop app and the Go xtask are vetted and tested on every
+# platform the app ships for, and the UI is built there against the gpuikit
+# download; the desktop's cgo code is also built in that AlmaLinux image.
+# Nothing here builds the mixer runtime.
 on:
   push:
     branches: [main]
@@ -75,10 +75,12 @@ jobs:
         run: cargo fmt --all -- --check
       # Every cargo command here takes the same settings (cargo-ci.toml), so
       # they share their build scripts and proc-macros.
+      # `--no-default-features` lints rc2fx-firmware without its
+      # embedded-catalog feature (the catalog compiled into its command-line
+      # tool), as before the desktop app left the workspace.
       - name: Lint the workspace
         run: |
           cargo clippy --config .github/cargo-ci.toml --locked --workspace --all-targets --no-default-features -- -D warnings
-          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings
       - name: Test the workspace
         # Linux is what the mixer runs, so the whole suite runs here.
         run: cargo test --config .github/cargo-ci.toml --locked --workspace
@@ -115,28 +117,342 @@ jobs:
           python3 .github/scripts/test_app_release.py
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
-      # Their Rust tests run with the workspace in the linux job.
+          # Includes the check that vpk, fetch-velopack.sh and the packager
+          # agree on the Velopack version.
+          python3 .github/scripts/test_prepare_appimage_notices.py
+      # The Go tests of the xtask that ships them run in the desktop job.
       - name: Test the mixer scripts
-        run: for t in xtask/mixer/tests/*.py; do python3 "$t" || exit 1; done
+        run: for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done
 
-  platforms:
+  # The Go desktop app. Every package but the UI (the ones that import
+  # gpuikit: app, app/uitest, cmd/rc2fx) builds without the gpuikit library,
+  # so it is vetted and tested on every platform the app ships for. The
+  # xtask, which ./xtask always builds without cgo, is also tested that way.
+  desktop:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     defaults:
       run:
         shell: bash
+        working-directory: desktop
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
-          rustflags: ""
-          cache-key: check
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Lint the workspace
+          persist-credentials: false
+      # setup-go installs the toolchain go.mod names. Its own cache would be
+      # saved by pull requests too, so the module and build caches are
+      # handled below: every run restores, only main saves.
+      - uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: desktop/go.mod
+          cache: false
+      - name: Find the Go caches
+        id: go-cache
         run: |
-          cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
-          cargo clippy --locked -p rc2fx-app --all-targets --features mock-mixer -- -D warnings
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4.2.3
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.mod }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
+          restore-keys: go-desktop-${{ runner.os }}-
+      # Without the gpuikit download, go list reports the UI packages as
+      # broken; -e lists them anyway, and gofmt needs none of their imports.
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(go list -e -f '{{.Dir}}' ./... | xargs gofmt -l)
+          test -z "$unformatted" || { printf 'gofmt would change:\n%s\n' "$unformatted" >&2; exit 1; }
+      - name: List everything but the UI
+        run: |
+          # The packages that do not depend on gpuikit, one per line.
+          # shellcheck disable=SC2016 # a Go template
+          go list -e -f '{{$ui := false}}{{range .Deps}}{{if eq . "gpuikit.dev/gk"}}{{$ui = true}}{{end}}{{end}}{{if not $ui}}{{.ImportPath}}{{end}}' ./... > "$RUNNER_TEMP/non-ui-packages"
+      - name: Vet and test everything but the UI
+        run: |
+          pkgs=$(cat "$RUNNER_TEMP/non-ui-packages")
+          # shellcheck disable=SC2086
+          CGO_ENABLED=0 go vet $pkgs
+          # shellcheck disable=SC2086
+          go test $pkgs
+          go test -tags mockmixer ./transport/...
+      # The development (./xtask app) and embedded (--embedded) builds
+      # compile other files. An empty stand-in for the payload, which only
+      # a real build stages, lets go:embed find a file; vet never runs it.
+      - name: Vet the development and embedded builds
+        run: |
+          : > installer/embed/payload/rc2fx-payload.bin
+          pkgs=$(cat "$RUNNER_TEMP/non-ui-packages")
+          # shellcheck disable=SC2086
+          CGO_ENABLED=0 go vet -tags rc2fxdev,embedded $pkgs
+          rm installer/embed/payload/rc2fx-payload.bin
+      # Release packages build with the velopack tag, whose cgo bindings
+      # (app/selfupdate/vpkc) need Velopack's header but not gpuikit, so
+      # they are vetted here on every platform even when desktop-ui skips.
+      - name: Vet the Velopack bindings
+        run: |
+          bash scripts/fetch-velopack.sh
+          CGO_ENABLED=1 go vet -tags velopack ./app/selfupdate/...
+      # The Go dependencies of every package but the UI against the Go
+      # vulnerability database, as cargo-audit checks the mixer's crates.
+      # desktop-ui checks the UI's (cmd/rc2fx) where gpuikit is fetched.
+      - name: Check the dependencies for vulnerabilities
+        if: runner.os == 'Linux'
+        run: |
+          # shellcheck disable=SC2046
+          go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 $(cat "$RUNNER_TEMP/non-ui-packages")
+      - name: Test the xtask as ./xtask builds it
+        run: CGO_ENABLED=0 go test ./internal/xtask/... ./cmd/xtask
+      # ./xtask runs with CGO_ENABLED=0 on every machine, so nothing it links
+      # may need cgo: a cgo-only package is left without Go files (an error
+      # here), and the UI's gpuikit must never be among its dependencies.
+      - name: Check that the xtask needs no cgo
+        run: |
+          bad=$(CGO_ENABLED=0 go list -e -deps -f '{{if or .Error .DepsErrors .CgoFiles}}{{.ImportPath}}: {{.Error}}{{end}}' ./cmd/xtask)
+          gk=$(CGO_ENABLED=0 go list -e -deps -f '{{.ImportPath}}' ./cmd/xtask | grep '^gpuikit\.dev' || true)
+          if [ -n "$bad$gk" ]; then
+            printf 'cmd/xtask must build without cgo or gpuikit:\n%s\n%s\n' "$bad" "$gk" >&2
+            exit 1
+          fi
+      - name: Run the ./xtask launcher
+        working-directory: .
+        run: |
+          sh -n ./xtask
+          ./xtask help
+      - uses: actions/cache/save@v4.2.3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.mod }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
+
+  # The UI, built and tested against the gpuikit download for each platform
+  # (desktop/scripts/fetch-gpuikit.sh), with and without the mock mixer, and
+  # once with Velopack as release packages build it. On Linux it also runs
+  # the offscreen UI tests (app/uitest) against the diag library, on Mesa's
+  # lavapipe, and checks the shipped app's dependencies for vulnerabilities.
+  # A platform whose download fetch-gpuikit.sh has no SHA-256 for yet is
+  # skipped with a warning; Release stops on it in its first job. So is a
+  # pull request from a fork that cannot read the bindings release.
+  desktop-ui:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+            platform: linux_x86_64
+          - os: windows-latest
+            target: windows-amd64
+            platform: windows_x86_64
+          - os: macos-latest
+            target: darwin-universal
+            platform: macos_universal
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check for a gpuikit pin
+        id: pin
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          if grep -Eq "^sha_${PLATFORM}=[0-9a-f]{64}\$" scripts/fetch-gpuikit.sh; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::fetch-gpuikit.sh has no SHA-256 for $PLATFORM yet; the UI is not built here"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v6.0.0
+        if: steps.pin.outputs.ready == 'true'
+        with:
+          go-version-file: desktop/go.mod
+          cache: false
+      - name: Find the Go caches
+        if: steps.pin.outputs.ready == 'true'
+        id: go-cache
+        run: |
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4.2.3
+        if: steps.pin.outputs.ready == 'true'
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.mod }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-desktop-ui-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
+          restore-keys: go-desktop-ui-${{ runner.os }}-
+      # The libraries libgpuikit.so links, which the linker resolves.
+      - name: Install the gpuikit runtime libraries
+        if: steps.pin.outputs.ready == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          # Mesa's lavapipe: the Vulkan device the offscreen UI tests draw on.
+          sudo apt-get install -y --no-install-recommends libxkbcommon0 libxkbcommon-x11-0 libxcb1 libvulkan1 mesa-vulkan-drivers
+      - name: Check the C toolchain
+        if: steps.pin.outputs.ready == 'true' && runner.os == 'Windows'
+        run: gcc --version
+      # A pull request from a fork gets no secrets, and a private bindings
+      # repository cannot be read with its github.token: the UI is then
+      # skipped with a warning. Anywhere else a failed fetch fails.
+      - name: Fetch gpuikit
+        id: gpuikit
+        if: steps.pin.outputs.ready == 'true'
+        env:
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
+          FORK: ${{ github.event.pull_request.head.repo.fork == true }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          # On Linux, also the diag library the offscreen UI tests run with.
+          diag=
+          if [ "$RUNNER_OS" = Linux ]; then diag=--diag; fi
+          # shellcheck disable=SC2086 # $diag is empty or one word
+          if bash scripts/fetch-gpuikit.sh $diag "$TARGET"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$FORK" != true ]; then
+            exit 1
+          else
+            echo "::warning::gpuikit could not be fetched in a pull request from a fork; the UI is not built here"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Fetch the Velopack C library
+        if: steps.gpuikit.outputs.ready == 'true'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/fetch-velopack.sh "$TARGET"
+      - name: Vet, build and test the UI
+        if: steps.gpuikit.outputs.ready == 'true'
+        run: |
+          lib=$PWD/third_party/gpuikit/lib
+          if [ "$RUNNER_OS" = Windows ]; then
+            # Windows finds gpuikit.dll on PATH; the import library links it.
+            CGO_LDFLAGS="-L$(cygpath -m "$lib")"
+            export CGO_LDFLAGS
+            export PATH="$lib:$PATH"
+          else
+            export CGO_LDFLAGS="-L$lib -Wl,-rpath,$lib"
+          fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            # app/uitest runs its offscreen tests with this; skipped without.
+            export RC2FX_GPUIKIT_DIAG=$PWD/third_party/gpuikit-diag/lib
+          fi
+          export CGO_ENABLED=1
+          go vet ./app/... ./cmd/rc2fx
+          go vet -tags mockmixer ./app/... ./cmd/rc2fx
+          # The development and embedded builds (./xtask app, --embedded),
+          # with an empty stand-in for the payload only a real build stages.
+          : > installer/embed/payload/rc2fx-payload.bin
+          go vet -tags rc2fxdebug,rc2fxdev,embedded ./app/... ./cmd/rc2fx ./installer/...
+          rm installer/embed/payload/rc2fx-payload.bin
+          go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/" ./cmd/rc2fx
+          if [ "$RUNNER_OS" = macOS ]; then
+            # The release app is universal: the Intel slice links too.
+            GOARCH=amd64 CGO_CFLAGS="-O2 -g -arch x86_64" CGO_LDFLAGS="$CGO_LDFLAGS -arch x86_64" \
+              go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/rc2fx-amd64" ./cmd/rc2fx
+          fi
+          go test ./app/... ./cmd/rc2fx
+      # The shipped app's Go dependencies, UI included, against the Go
+      # vulnerability database (the desktop job checks the rest).
+      - name: Check the app's dependencies for vulnerabilities
+        if: steps.gpuikit.outputs.ready == 'true' && runner.os == 'Linux'
+        run: |
+          lib=$PWD/third_party/gpuikit/lib
+          export CGO_ENABLED=1 CGO_LDFLAGS="-L$lib -Wl,-rpath,$lib"
+          go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./cmd/rc2fx
+      - uses: actions/cache/save@v4.2.3
+        if: steps.gpuikit.outputs.ready == 'true' && github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.mod }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-desktop-ui-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
+
+  # The desktop's cgo code (the UI against gpuikit and Velopack, the vendored
+  # libext2fs) built in the AlmaLinux 8 image the AppImage is built in, so a
+  # break against its glibc 2.28, or in the fetch scripts' tools there, shows
+  # up here and not first in a release.
+  desktop-alma:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+      options: --init
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    env:
+      # The checkout belongs to another user inside the container; nothing
+      # here needs the build stamped with its commit.
+      GOFLAGS: -buildvcs=false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Find the Go caches
+        id: go-cache
+        run: |
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4.2.3
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.mod }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-desktop-alma-${{ hashFiles('desktop/go.sum', '.github/scripts/package-check.Containerfile') }}
+          restore-keys: go-desktop-alma-
+      # As in desktop-ui: in a pull request from a fork a fetch that fails
+      # skips the app build with a warning; anywhere else it fails. The
+      # installer is tested either way.
+      - name: Fetch gpuikit
+        id: gpuikit
+        env:
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
+          FORK: ${{ github.event.pull_request.head.repo.fork == true }}
+        run: |
+          if bash scripts/fetch-gpuikit.sh linux-amd64; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$FORK" != true ]; then
+            exit 1
+          else
+            echo "::warning::gpuikit could not be fetched in a pull request from a fork; the app is not built here"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Fetch the Velopack C library
+        if: steps.gpuikit.outputs.ready == 'true'
+        run: bash scripts/fetch-velopack.sh linux-amd64
+      - name: Build the app
+        if: steps.gpuikit.outputs.ready == 'true'
+        run: |
+          lib=$PWD/third_party/gpuikit/lib
+          export CGO_ENABLED=1 CGO_LDFLAGS="-L$lib -Wl,-rpath,$lib"
+          go build -tags velopack -o "$RUNNER_TEMP/rc2fx-alma-check/" ./cmd/rc2fx
+      - name: Test the installer
+        run: CGO_ENABLED=1 go test ./installer/... ./ext2fs/...
+      - uses: actions/cache/save@v4.2.3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.mod }}
+            ${{ steps.go-cache.outputs.build }}
+          key: go-desktop-alma-${{ hashFiles('desktop/go.sum', '.github/scripts/package-check.Containerfile') }}

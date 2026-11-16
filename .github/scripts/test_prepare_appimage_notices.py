@@ -5,6 +5,7 @@ pins the commit and archives only the requested recipe directories."""
 
 import importlib.util
 import io
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -194,6 +195,27 @@ class Runtime(unittest.TestCase):
         setup = SCRIPT.with_name("setup-vpk.sh").read_text()
         self.assertIn(f"version={notices.VPK_VERSION}\n", setup)
         self.assertIn(f"sha={notices.VPK_SHA256}\n", setup)
+
+    def test_the_app_links_the_velopack_that_vpk_packs_with(self):
+        # Packaging refuses a velopack_libc of another version than
+        # VPKVersion, and vpk must be that version too.
+        root = SCRIPT.parent.parent.parent
+        fetch = (root / "desktop/scripts/fetch-velopack.sh").read_text()
+        self.assertIn(f"version={notices.VPK_VERSION}\n", fetch)
+        licenses = (root / "desktop/internal/xtask/licenses/licenses.go").read_text()
+        self.assertIn(f'const VPKVersion = "{notices.VPK_VERSION}"\n', licenses)
+
+    def test_the_build_image_has_the_go_go_mod_pins(self):
+        # The AppImage is built with the image's Go and the Windows and macOS
+        # packages with the toolchain go.mod names: they must be the same.
+        root = SCRIPT.parent.parent.parent
+        gomod = (root / "desktop/go.mod").read_text()
+        match = re.search(r"^toolchain go(\d+\.\d+\.\d+)$", gomod, re.M)
+        self.assertIsNotNone(match, "desktop/go.mod has no toolchain line")
+        version = match[1]
+        image = SCRIPT.with_name("package-check.Containerfile").read_text()
+        self.assertIn(f"GOTOOLCHAIN=go{version} ", image)
+        self.assertIn(f"grep -q ' go{re.escape(version)} '", image)
 
 
 class Licences(unittest.TestCase):

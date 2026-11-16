@@ -40,12 +40,12 @@ def ssh(command, data=None, timeout=60):
     return gzip.decompress(p.stdout) if compressed else p.stdout
 
 def remote(action,*args):
-    return ssh(shlex.join(['bash','-s','--','xrun-trace',action,*map(str,args)]),(ROOT/'xtask/mixer/rc2fx.sh').read_bytes(),timeout=240 if action=='collect' else 60)
+    return ssh(shlex.join(['bash','-s','--','xrun-trace',action,*map(str,args)]),(ROOT/'mixer/scripts/rc2fx.sh').read_bytes(),timeout=240 if action=='collect' else 60)
 
 def arm_power_recovery(action):
     """Arm, check, then run: set the bootloader's one-shot power-on flag with this checkout's rc2fx.sh, read it back, and raise unless it is 1."""
     try:
-        ssh(shlex.join(['bash','-s','--','arm-power-recovery']),(ROOT/'xtask/mixer/rc2fx.sh').read_bytes())
+        ssh(shlex.join(['bash','-s','--','arm-power-recovery']),(ROOT/'mixer/scripts/rc2fx.sh').read_bytes())
         value=ssh('fw_printenv -n reboot_pwr_button_bypass').decode(errors='replace').strip()
         if value!='1':raise RuntimeError(f'reboot_pwr_button_bypass reads back as {value!r}, not 1')
     except Exception as error:

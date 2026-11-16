@@ -383,6 +383,18 @@ class HistoryTests(unittest.TestCase):
         self.assertNotIn("9.9.9", bundle.mixer_page)
         self.assertIn("downloaded separately", bundle.app_page)
 
+    def test_go_desktop_tag_does_not_claim_a_bundled_mixer(self):
+        self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":2}')
+        self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
+        self.init_git()
+        self.tag("1.0.0")
+        bundle = self.build(release("1.0.0"), release("1.0.0", tag="mixer-v1.0.0"), use_git=True)
+        app = bundle.feed["app"]["releases"][0]
+        self.assertIsNone(app["mixerVersion"])
+        self.assertTrue(app["downloadsMixer"])
+        self.assertNotIn("9.9.9", bundle.mixer_page)
+        self.assertIn("downloaded separately", bundle.app_page)
+
     def test_standalone_and_legacy_bundle_share_one_mixer_history_entry(self):
         bundle = self.build(release("1.0.0", date="2026-11-04"),
                             release("1.0.0", tag="mixer-v1.0.0", date="2026-11-05"))

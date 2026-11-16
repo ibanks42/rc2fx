@@ -330,7 +330,7 @@ mod tests {
         )
         .unwrap();
         let first_boot = dir.path().join("first-boot");
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../xtask/mixer/rc2fx.sh");
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../mixer/scripts/rc2fx.sh");
         let handle = DeveloperSsh::new(script).with_env(&[
             ("RC2FX_SSH_DIR", ssh.to_str().unwrap()),
             ("RC2FX_SSH_HOST_DIR", hosts.to_str().unwrap()),

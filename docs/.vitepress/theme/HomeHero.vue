@@ -18,10 +18,10 @@ const platforms = [
   {
     id: 'macos',
     name: 'macOS',
-    arch: 'Apple silicon',
+    arch: 'Apple silicon & Intel',
     links: [
-      { label: 'Installer (.pkg)', short: 'Download for macOS', href: file('rc2fx-macos-arm64.pkg') },
-      { label: 'Portable (.zip)', short: 'Portable .zip', href: file('rc2fx-macos-arm64.zip') },
+      { label: 'Installer (.pkg)', short: 'Download for macOS', href: file('rc2fx-macos-universal.pkg') },
+      { label: 'Portable (.zip)', short: 'Portable .zip', href: file('rc2fx-macos-universal.zip') },
     ],
   },
   {

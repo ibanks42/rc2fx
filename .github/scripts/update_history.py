@@ -222,6 +222,16 @@ def tag_mapping(root, version):
             f"v{version} is published but {ref} is missing; fetch release tags "
             "(for example fetch-depth: 0)"
         )
+    # The Go desktop app (desktop/): its release packages always download
+    # the mixer software (`./xtask package` without --embedded).
+    go_desktop = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"{ref}:desktop/go.mod"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if go_desktop.returncode == 0:
+        return Mapping(None, None, downloads_mixer=True)
+    # Older tags carry the Rust app, whose manifest says whether it bundled
+    # the mixer software.
     try:
         app_manifest = subprocess.check_output(
             ["git", "-C", str(root), "show", f"{ref}:crates/rc2fx-app/Cargo.toml"],

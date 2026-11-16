@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import tomllib
 import unittest
@@ -105,7 +106,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.git("status", "--porcelain"), "")
 
     def test_download_only_app_release_is_independent_of_pending_mixer_notes(self):
-        self.put("crates/rc2fx-app/Cargo.toml", '[features]\ndefault = []\nembedded = []\n')
+        self.put_go_desktop()
         self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":1}')
         self.git("add", ".")
         self.git("commit", "-m", "feat: download mixer independently")
@@ -114,6 +115,42 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("Mixer software is downloaded separately", notes)
         self.assertNotIn("Bundled RC2FX", notes)
         self.assertEqual(json.loads((self.root / "config/mixer-release.json").read_text())["version"], "9.9.9")
+
+    def put_go_desktop(self, version="0.1.0"):
+        self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
+        self.put("desktop/installer/installer.go", f'package installer\n\nvar AppVersion = "{version}"\n')
+        self.put("desktop/app/model/versions.go", f'package model\n\nvar AppVersion = "{version}"\n')
+        self.put("desktop/transport/mock.go", f'package transport\n\nconst mockRuntime = "{version}"\n')
+
+    def test_go_desktop_release_downloads_mixer_and_bumps_the_go_versions(self):
+        self.put_go_desktop()
+        self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":1}')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: go desktop")
+        self.git("tag", "v0.1.0")
+        self.put("desktop/app/settings.go", "changed")
+        self.git("add", ".")
+        self.git("commit", "-m", "fix: change desktop settings")
+        self.prepare()
+        notes = (self.root / "target/release-input/release-notes.md").read_text()
+        self.assertIn("Mixer software is downloaded separately", notes)
+        self.assertNotIn("Bundled RC2FX", notes)
+        go_files = ["desktop/installer/installer.go", "desktop/app/model/versions.go", "desktop/transport/mock.go"]
+        for name in go_files:
+            self.assertIn('= "0.1.1"\n', (self.root / name).read_text(), name)
+        plan = json.loads((self.root / "target/release-input/plan.json").read_text())
+        self.assertLessEqual(set(go_files), set(plan["files"]))
+        with tarfile.open(self.root / "target/release-input/versioned.tar") as archive:
+            self.assertLessEqual(set(go_files), set(archive.getnames()))
+
+    def test_go_version_that_differs_from_the_workspace_is_refused(self):
+        self.put_go_desktop()
+        self.put("desktop/transport/mock.go", 'package transport\n\nconst mockRuntime = "0.0.9"\n')
+        self.git("add", ".")
+        self.git("commit", "-m", "feat: go desktop")
+        result = self.prepare(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("mockRuntime differs from workspace version", result.stderr)
 
     def test_bootstrap_major(self):
         self.prepare("major")
@@ -160,7 +197,7 @@ class ReleaseTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-m", "feat: add mixer manifest")
         self.git("tag", "v0.1.0")
-        self.put("xtask/mixer/rc2fx.sh", "changed")
+        self.put("mixer/scripts/rc2fx.sh", "changed")
         self.git("add", ".")
         self.git("commit", "-m", "fix: change mixer startup")
         self.assertIn("::warning title=Mixer version unchanged::", self.prepare().stdout)
@@ -175,7 +212,7 @@ class ReleaseTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-m", "feat: add mixer manifest")
         self.git("tag", "v0.1.0")
-        self.put("crates/rc2fx-app/src/settings.rs", "changed")
+        self.put("desktop/app/settings.go", "changed")
         self.git("add", ".")
         self.git("commit", "-m", "fix: change desktop settings")
         self.assertNotIn("::warning", self.prepare().stdout)

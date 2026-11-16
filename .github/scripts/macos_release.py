@@ -3,8 +3,9 @@
 
 The Release workflow creates the release as a DRAFT with the Linux and Windows
 packages; its last job calls this script with the macOS packages Velopack
-built in the same run: the portable zip, the installer, and the update package
-and feed. It adds them, rewrites SHA256SUMS, removes the pending notice and, as
+built in the same run: the portable zip and the installer of the universal
+app (also under the arm64 names releases up to 0.1.7 used), and the update
+package and feed. It adds them, rewrites SHA256SUMS, removes the pending notice and, as
 the very last step after every check, publishes the release as latest.
 A published release is never changed afterwards by this script.
 
@@ -171,23 +172,38 @@ def check_tag(gh, tag, source):
 PACK_ID = "io.github.ibanks42.rc2fx"
 APP = "RC2FX.app/"
 SEQUESTERED = "__MACOSX/"
+# The app, the gpuikit library it loads from beside itself, Velopack's
+# updater and the bundle's Info.plist.
 APP_MEMBERS = (
     "RC2FX.app/Contents/MacOS/rc2fx",
+    "RC2FX.app/Contents/MacOS/libgpuikit.dylib",
     "RC2FX.app/Contents/MacOS/UpdateMac",
     "RC2FX.app/Contents/Info.plist",
 )
 
 
+# Releases up to 0.1.7 shipped an arm64-only app as rc2fx-macos-arm64.zip and
+# .pkg, and links to releases/latest/download/ under those names are out
+# there. The universal packages are published under them too, byte for byte,
+# so those links keep working (and now work on Intel Macs too).
+LEGACY_ALIASES = {
+    "rc2fx-macos-arm64.zip": "rc2fx-macos-universal.zip",
+    "rc2fx-macos-arm64.pkg": "rc2fx-macos-universal.pkg",
+}
+
+
 def mac_names(version):
-    """The macOS packages, which this script adds: the portable zip, the
-    installer, and the update package and its feed (which keep vpk's names,
-    since the feed names the package). The feed comes last."""
-    return ("rc2fx-macos-arm64.zip", "rc2fx-macos-arm64.pkg",
+    """The macOS packages, which this script adds: the universal app's
+    portable zip and installer, the same two under their earlier names, and
+    the update package and its feed (which keep vpk's names, since the feed
+    names the package; the "osx" channel every installed copy updates from).
+    The feed comes last."""
+    return ("rc2fx-macos-universal.zip", "rc2fx-macos-universal.pkg", *LEGACY_ALIASES,
             f"{PACK_ID}-{version}-osx-full.nupkg", "releases.osx.json")
 
 
 def expected_assets(version):
-    """The twelve packages, without SHA256SUMS. Published names have no
+    """The fourteen packages, without SHA256SUMS. Published names have no
     version, so releases/latest/download/NAME always links the newest one;
     the update packages and feeds keep vpk's names, which do."""
     return {
@@ -319,7 +335,8 @@ def publish(gh, tag, source, package_dir):
     require(re.fullmatch("v" + STABLE, tag), f"{tag!r} is not a stable app tag")
     require(re.fullmatch("[0-9a-f]{40}", source), f"{source!r} is not a commit id")
     version = tag[1:]
-    zip_name, pkg_name, nupkg_name, feed_name = names = mac_names(version)
+    names = mac_names(version)
+    zip_name, pkg_name, nupkg_name, feed_name = names[0], names[1], names[-2], names[-1]
     files = sorted(p.name for p in Path(package_dir).iterdir())
     require(files == sorted(names),
             f"{package_dir} must hold exactly {', '.join(sorted(names))}, not {files}")
@@ -328,6 +345,9 @@ def publish(gh, tag, source, package_dir):
         require(package.is_file() and not package.is_symlink(), f"{name} is not a regular file")
     check_portable(packages[zip_name])
     check_installer(packages[pkg_name])
+    for alias, original in LEGACY_ALIASES.items():
+        require(packages[alias].read_bytes() == packages[original].read_bytes(),
+                f"{alias} is not the same file as {original}")
     check_update_package(packages[nupkg_name])
     check_feed(packages[feed_name], version, nupkg_name,
                sha256(packages[nupkg_name].read_bytes()))

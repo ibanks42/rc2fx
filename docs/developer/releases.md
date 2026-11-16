@@ -11,29 +11,31 @@ is started manually.
 
 | Version | Where it lives | Released as |
 | --- | --- | --- |
-| Desktop app | `[workspace.package] version` in `Cargo.toml` | `vX.Y.Z`, with the app packages |
+| Desktop app | `[workspace.package] version` in `Cargo.toml`, with its Go copies `AppVersion` in `desktop/installer/installer.go` and `desktop/app/model/versions.go` | `vX.Y.Z`, with the app packages |
 | RC2FX mixer runtime | `config/mixer-release.json` | `mixer-vX.Y.Z`, with a signed standalone payload |
 | RØDE firmware | the versions pinned in `config/firmware-profiles.json` | RØDE's own releases; RC2FX publishes nothing |
 
 Desktop builds download signed mixer payloads and firmware profiles by default.
-`--features embedded` provides an optional bundled payload for offline use.
+The `embedded` build tag (`./xtask package --embedded`) provides an optional
+bundled payload for offline use.
 `config/mixer-release.json` names the mixer runtime and records its control
 protocol. **Settings › Versions** shows installed versions and
 compatible signed offers, including when a newer app is required. See
 [Mixer releases](mixer-releases.md) for signing, publication and renewal, and
 [Versions and updates](../user/getting-started.md#versions-and-updates).
 For the app itself,
-`rc2fx_installer::app_update` asks GitHub's `releases/latest` API for this
+`installer.CheckForUpdates` (`desktop/installer/app_update.go`) asks GitHub's `releases/latest` API for this
 repository and, when a newer app is out, pages through the release list for
 the notes since the installed version. It accepts only published, stable
 `vMAJOR.MINOR.PATCH` tags, and it links
 to release pages built from the validated tag. It never downloads anything.
-The repository is a fixed constant in that module, so builds from forks also
+The repository is a fixed constant (`AppRepository`) in that file, so builds from forks also
 check the official releases.
 
 Copies installed by Velopack (the Windows and macOS installers and portable
 zips, and the AppImage) can also update in place:
-`crates/rc2fx-app/src/self_update.rs` reads `releases.win.json`,
+`desktop/app/selfupdate`, through Velopack's C library
+(`desktop/app/selfupdate/vpkc`), reads `releases.win.json`,
 `releases.osx.json` or `releases.linux.json` from `releases/latest/download`,
 downloads the package the feed names when the user presses **Download
 update**, and Velopack checks it against the feed's SHA-256. The feed isn't
@@ -119,7 +121,7 @@ The file is strict JSON with three fields:
 pre-release suffix; the app compares versions numerically and treats anything
 else as unknown. Bump it by hand when anything that ends up on the mixer
 changes, and leave it alone otherwise: the crates built into the runtime,
-`xtask/mixer/`, `config/firmware-profiles.json`, the runtime's dependencies,
+`mixer/scripts/`, `config/firmware-profiles.json`, the runtime's dependencies,
 and the toolchain and build settings that compile it. When reviewing such a
 change, check that it bumps the version. Mixer versions are reviewed and published independently of desktop releases;
 a desktop-only release does not require a mixer bump or mixer notes. Legacy
@@ -127,9 +129,9 @@ embedded release preparation warns when mixer-side paths change without a
 version bump. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
 bump it only when an older desktop app can no longer drive the mixer.
 
-`cargo xtask mixer-build` copies the file into `target/mixer` and adds it to
+`./xtask mixer-build` copies the file into `target/mixer` and adds it to
 `SHA256SUMS`. Building the app with the embedded payload, packaging and
-`cargo xtask mixer install` all refuse a runtime whose `mixer-release.json`
+`./xtask mixer install` all refuse a runtime whose `mixer-release.json`
 differs from `config/mixer-release.json`; rebuild the runtime after a bump. The
 installer writes the file to `/opt/rc2fx/mixer-release.json` and covers it with
 the bundle's `SHA256SUMS`. The mixer reports the runtime, protocol, firmware
@@ -153,14 +155,14 @@ and adds the release's section to `CHANGELOG.md`.
 
 On GitHub, the published app release is marked latest and contains:
 
-- the app packages, each built by `cargo xtask package` (see
+- the app packages, each built by `./xtask package` (see
   [packaging](building.md#3-package-it)). Every package carries the licence
   notices in the app.
 
   | Platform | Files |
   | --- | --- |
   | Windows x64 | `rc2fx-windows-x64-setup.exe`, `rc2fx-windows-x64.zip` |
-  | macOS arm64 | `rc2fx-macos-arm64.pkg`, `rc2fx-macos-arm64.zip` |
+  | macOS (universal) | `rc2fx-macos-universal.pkg`, `rc2fx-macos-universal.zip`, and the same files as `rc2fx-macos-arm64.pkg` and `rc2fx-macos-arm64.zip` |
   | Linux x64 | `rc2fx-linux-x64.AppImage` |
 
   All of them are made by Velopack's `vpk`. Their names have no version, so
@@ -170,7 +172,14 @@ On GitHub, the published app release is marked latest and contains:
   `%LOCALAPPDATA%\io.github.ibanks42.rc2fx`, with a Start menu shortcut and an
   **Installed apps** entry. The `.pkg` installs `RC2FX.app` into
   `/Applications`, or `~/Applications` with **Install for me only**. The zips are portable copies that can update themselves
-  too. GitHub's macOS runners are Apple silicon, so there is no Intel build.
+  too. The macOS app is universal (Apple silicon and Intel, macOS 13 or
+  later), built on an Apple silicon runner. Releases up to 0.1.7 shipped an
+  Apple silicon-only app as `rc2fx-macos-arm64.*`, and links to
+  `releases/latest/download/` under those names are published, so the Release
+  workflow also uploads the universal files under those names;
+  `macos_release.py` refuses them unless they are byte-identical. Drop the
+  copies (`LEGACY_ALIASES` in `macos_release.py` and the copy step in
+  `release.yml`) once those links no longer matter.
 - the update packages and feeds the app updates itself from:
   `io.github.ibanks42.rc2fx-VERSION-full.nupkg` and `releases.win.json` for
   Windows, `io.github.ibanks42.rc2fx-VERSION-osx-full.nupkg` and
@@ -287,9 +296,15 @@ public until the release is complete.
    version files with later jobs; mixer payloads are built by the separate
    **Mixer release** workflow.
 2. **build** (Windows), **linux** and **macos** run in parallel. **build**
-   and **macos** apply the prepare output, install .NET and a checked vpk
+   and **macos** apply the prepare output, set up the Go version
+   `desktop/go.mod` names, fetch the gpuikit library
+   (`desktop/scripts/fetch-gpuikit.sh`, reading the bindings repository's
+   releases with the `GPUIKIT_TOKEN` secret, or the workflow's own token
+   without one) and Velopack's C library (`desktop/scripts/fetch-velopack.sh`),
+   both checked against pinned SHA-256s, install .NET and a checked vpk
    (`.github/scripts/setup-vpk.sh` verifies the NuGet package's SHA-256), and
-   run `cargo xtask package` in download-only mode; **macos** also signs and
+   run `./xtask package` in download-only mode; **build** also uses MinGW-w64
+   gcc for cgo and its `windres` for the icon; **macos** also signs and
    notarizes the macOS packages. **build** builds with `--build-only`, signs
    in to Azure only then, so the session is fresh when signing starts, and
    packages with `--skip-build`.
@@ -369,12 +384,35 @@ once. Correcting either one takes a new version.
 
 The **Check** workflow lints, tests and audits the code on pushes to `main`
 and on pull requests to it, excluding documentation-only changes, and runs
-the release tooling's tests. On Linux it formats, lints and tests in the same
-AlmaLinux 8 image releases build the AppImage in; Windows and macOS run
-clippy. The Linux job builds without debug info and, through
+the release tooling's tests. Its **desktop** job checks the Go app on Ubuntu,
+Windows and macOS: `gofmt` on Linux, then `go vet` and `go test` for every
+package but the UI (the packages that depend on gpuikit: `app`, `app/uitest`
+and `cmd/rc2fx`), the transport's tests with the `mockmixer` tag, a vet with
+the `rc2fxdev` and `embedded` tags (against an empty stand-in payload), and,
+on Linux, `govulncheck` over those packages' Go dependencies. Its
+**desktop-ui** job fetches the gpuikit download and Velopack's C library on
+all three systems, vets the UI with and without `mockmixer` and with the
+development and embedded tags, builds it with `-tags velopack` as releases
+do, and runs `go test ./app/... ./cmd/rc2fx`; on Linux it also fetches the
+diag library, so `app/uitest` runs the offscreen UI tests (on Mesa's
+lavapipe), and runs `govulncheck` over `cmd/rc2fx`, the shipped app with its
+UI. A system whose gpuikit SHA-256 is not yet pinned in
+`desktop/scripts/fetch-gpuikit.sh` is skipped with a warning (Release's
+**prepare** refuses to start until all three are pinned). The desktop job
+also fetches Velopack's C library and vets its bindings
+(`app/selfupdate/...` with `-tags velopack` and cgo), so they are checked on
+every system without gpuikit. The
+**desktop-alma** job builds the app and tests the installer (with the
+vendored libext2fs) in the AlmaLinux 8 image releases build the AppImage
+in. Both jobs read the gpuikit bindings release with the `GPUIKIT_TOKEN`
+secret, falling back to the workflow's own token; a pull request from a
+fork (which gets no secrets) that cannot fetch it skips the UI build with a
+warning, and any other run that cannot fetch it fails. For the Rust crates, on Linux it formats, lints and tests in that same
+image. The Linux job builds without debug info and, through
 `.github/cargo-ci.toml`, with unoptimised dependencies, which more than
-halves a cold build. Only runs on `main` save build caches; pull requests
-read them, and a twice-weekly scheduled run keeps them from expiring.
+halves a cold build. Only runs on `main` save build caches, Rust and Go
+alike; pull requests read them, and a twice-weekly scheduled run keeps them
+from expiring.
 
 The **Build image** workflow publishes that image,
 `.github/scripts/package-check.Containerfile`, as
@@ -420,7 +458,7 @@ file like it, sign in with `az login`, and set
 
 ### macOS
 
-`cargo xtask package` builds `RC2FX.app`. vpk signs it with the Developer ID
+`./xtask package` builds `RC2FX.app`. vpk signs it with the Developer ID
 Application certificate, signs the `.pkg` with the Developer ID Installer
 certificate, and notarizes and staples both, so users can open them without
 visiting Privacy & Security. The **macos** job needs these repository secrets:
@@ -443,12 +481,12 @@ the draft unpublished. Local builds use the same steps through
 certificates' full names; set both or neither), and `RC2FX_NOTARY_PROFILE` and
 `RC2FX_MACOS_KEYCHAIN` (a notarytool profile and the keychain that holds it;
 set both or neither, to notarize). The app is signed with
-`xtask/assets/rc2fx.entitlements`, which grants no hardened-runtime exceptions.
+`desktop/packaging/rc2fx.entitlements`, which grants no hardened-runtime exceptions.
 
 ## Signed app updates
 
 Before applying a downloaded update package, the app checks it against signed
-TUF metadata (`rc2fx_installer::app_release`). This is a separate TUF
+TUF metadata (`desktop/installer/app_release.go`). This is a separate TUF
 repository from the mixer's, with the same trust root
 (`config/mixer-update-root.json`, compiled into the app) and the same release
 keys, so nothing about mixer releases or older apps changes. The package must
@@ -494,7 +532,7 @@ release's `SHA256SUMS`, which must list exactly the other assets. Called by
 the release, apart from `SHA256SUMS`, must hold exactly those files, with the
 same size and SHA-256, or nothing is signed. So it signs only what that run
 built, not files changed on the release in between. It then signs
-targets, snapshot and timestamp with `cargo xtask app-sign`, and adds them to
+targets, snapshot and timestamp with `./xtask app-sign`, and adds them to
 the branch in one commit (`publish_app.py publish`). Targets expire with the
 root, as for mixer releases, and snapshot and timestamp after seven days.
 Until a release is signed, apps that check updates refuse its packages with
@@ -530,7 +568,7 @@ first release that follows an app version that checks updates.
 
 **Renew app metadata** (`app-metadata.yml`) runs twice a week in the
 `mixer-renewal` environment, and can be run by hand. It re-signs only snapshot
-and timestamp (seven days) with `cargo xtask app-refresh`, keeping the exact
+and timestamp (seven days) with `./xtask app-refresh`, keeping the exact
 `targets.json`. It can't authorise other assets or outlive the root. Targets
 last until the root expires. If renewal fails, investigate before the
 metadata expires. Both workflows run only from `main` and share one
@@ -614,15 +652,17 @@ package without pushing, publishing or signing anything.
   releasing the version after the first app that checks updates (see
   [Kill switch](#kill-switch)), then protect the `app-metadata` branch once
   the first signing has created it.
-- The macOS download is built only for the runner's architecture (`arm64`).
+- Fill in `sha_macos_universal` (and `sha_macos_universal_diag`) in
+  `desktop/scripts/fetch-gpuikit.sh` from the bindings' universal macOS
+  download before the next release; the Release workflow stops without it.
 - The AppImage needs glibc 2.28 or newer, the version in its AlmaLinux 8
   build container.
 
 ## Per-platform build runners
 
-The desktop app can't be cross-compiled from Linux. GPUI, its UI library,
-compiles shaders during the build only when the build machine runs macOS or
-Windows. macOS and Windows builds made on Linux lack their shaders and fail to
-compile. Both were attempted with cargo-zigbuild and failed this way. Fixing
-it would require patching GPUI, so each platform builds on its own GitHub
-runner.
+The desktop app links the gpuikit library for its platform through cgo, and
+that library is built on each platform: GPUI, underneath it, compiles its
+shaders only when the build machine runs macOS or Windows. Packaging is
+per-platform too: vpk, Authenticode signing with Azure, and Developer ID
+signing and notarization each run on their own system. So each platform
+builds on its own GitHub runner.

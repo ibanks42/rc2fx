@@ -8,7 +8,7 @@
  * complete record for its index is counted (unpublished or dropped,
  * overwritten by a later lap, or changed while read), never copied. OUT is
  * written whole (OUT.partial, then rename). Read-only on the ring; never
- * writes to it. Decode OUT with `cargo xtask mixer xruns` (or tests/jackerr_ring.py).
+ * writes to it. Decode OUT with `./xtask mixer xruns` (or tests/jackerr_ring.py).
  *
  * OUT: "RC2FXJS1", u32 version 1, u32 record size 96, the ring header's
  * fields as read (pid, created, claimed, dropped, unknown, calls), the

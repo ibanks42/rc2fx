@@ -1,0 +1,24 @@
+#!/bin/sh
+# ./xtask <command>: the project's tasks (desktop/cmd/xtask).
+# `./xtask help` lists the commands.
+#
+# Runs from any directory. Go builds the tool from desktop/ (go run caches
+# the build), and the tool runs in the directory it was called from, so
+# paths in the arguments are relative to that directory. Needs Go
+# (desktop/go.mod names the version).
+set -eu
+# This file sits at the repository root.
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ ! -f "$root/desktop/go.mod" ]; then
+    echo "xtask: cannot find desktop/go.mod beside $0" >&2
+    exit 1
+fi
+# Git Bash on Windows: hand Go Windows paths (C:/...), not MSYS ones (/c/...).
+here() { pwd -W 2> /dev/null || pwd; }
+RC2FX_XTASK_CWD=$(here)
+RC2FX_XTASK_ROOT=$(cd -- "$root" && here)
+export RC2FX_XTASK_ROOT RC2FX_XTASK_CWD
+# The tool itself never needs C: without cgo it builds from Go alone (no
+# e2fsprogs or gpuikit compile), so a cold start stays fast. Commands that
+# build the app turn cgo back on for that build only.
+CGO_ENABLED=0 exec go -C "$RC2FX_XTASK_ROOT/desktop" run ./cmd/xtask "$@"

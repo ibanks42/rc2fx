@@ -7,13 +7,14 @@ from its own Rust workspace. Their dependencies' notices must ship with RC2FX
 like the app's own, so this runs cargo-about on that workspace at the pinned
 tag, for the targets Velopack builds them for (Windows, macOS, and the static
 musl Linux build UpdateNix comes from), under the licences RC2FX's about.toml
-accepts, and keeps only what the licence document uses: each licence's name,
-text and the crates using it.
+accepts plus VELOPACK_ACCEPTED, and keeps only what the licence document
+uses: each licence's name, text and the crates using it.
 
   velopack-licenses.py VERSION
       Writes licenses/velopack-VERSION.json. Needs git, cargo and
-      cargo-about. Run it whenever VPK_VERSION in
-      xtask/src/package/velopack.rs changes.
+      cargo-about. Run it whenever VPKVersion in
+      desktop/internal/xtask/licenses/licenses.go (with setup-vpk.sh and
+      desktop/scripts/fetch-velopack.sh) changes.
 """
 
 import json
@@ -25,12 +26,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Licences accepted for Velopack's report only, beyond about.toml's (which
+# covers the mixer's Rust): the list about.toml held while the desktop app
+# was Rust and shared it.
+VELOPACK_ACCEPTED = [
+    "MPL-2.0",
+    # webpki-roots: Mozilla's root certificates, which Velopack's updater
+    # trusts for its downloads. A permissive data licence.
+    "CDLA-Permissive-2.0",
+]
+
 
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     version = sys.argv[1]
     accepted = tomllib.loads((ROOT / "about.toml").read_text())["accepted"]
+    accepted += [l for l in VELOPACK_ACCEPTED if l not in accepted]
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "velopack"
         subprocess.run(
@@ -40,8 +52,11 @@ def main():
         )
         config = Path(work) / "about.toml"
         config.write_text(
-            # Velopack's CI builds UpdateNix for musl, not glibc.
-            'targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-unknown-linux-musl"]\n'
+            # Velopack's CI builds UpdateNix for musl, not glibc. The macOS
+            # app is universal: UpdateMac and velopack_libc ship for both
+            # architectures.
+            'targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin", '
+            '"x86_64-unknown-linux-musl"]\n'
             "ignore-build-dependencies = true\n"
             "ignore-dev-dependencies = true\n"
             f"accepted = {json.dumps(accepted)}\n"

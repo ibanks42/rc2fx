@@ -1,5 +1,5 @@
 /* Partial GE2D conversion (G3), included by gui_pacing.c when built with
- * -DRC2FX_PACING_DIRTY -DRC2FX_PACING_PARTIAL (`cargo xtask mixer-build`
+ * -DRC2FX_PACING_DIRTY -DRC2FX_PACING_PARTIAL (`./xtask mixer-build`
  * adds -DRC2FX_GUI_RECT_PLAN3, the three-job planner).
  *
  * Modes: "partial-cw" / "partial-ccw" (the rotation GE2D applies) and

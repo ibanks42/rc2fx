@@ -3,8 +3,10 @@
 # the glibc it was built against, and bundles libraries from here too, so this
 # is AlmaLinux 8 (glibc 2.28, as RHEL 8, Debian 10 and Ubuntu 18.10): the
 # oldest maintained base, and the oldest glibc GitHub's JavaScript actions
-# run on. It has the release's Rust tools at their pinned versions, and .NET
-# and mksquashfs for vpk, which makes the AppImage.
+# run on. It has the release's Rust tools at their pinned versions (the
+# mixer, and cargo-about for the notices), Go for ./xtask and the desktop app
+# (cgo against libgpuikit.so, whose libraries the AppImage bundles from here),
+# and .NET and mksquashfs for vpk, which makes the AppImage.
 FROM docker.io/library/almalinux:8
 ARG RUST_VERSION
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
@@ -15,7 +17,7 @@ RUN dnf install -y dnf-plugins-core \
         fontconfig-devel wayland-devel libxkbcommon-devel libxkbcommon-x11-devel \
         libX11-devel libxcb-devel vulkan-loader alsa-lib-devel \
         openssl-devel systemd-devel dbus-devel \
-        ca-certificates curl diffutils file findutils git python3.12 which xz zstd \
+        ca-certificates curl diffutils file findutils git python3.12 unzip which xz zstd \
         dotnet-sdk-8.0 zlib-devel xz-devel lz4-devel libzstd-devel \
     && alternatives --set python3 /usr/bin/python3.12 \
     && dnf clean all
@@ -39,6 +41,18 @@ RUN curl --fail --location --proto '=https' -o /tmp/rustup-init \
         --component rustfmt --component clippy --component rust-docs \
         --target aarch64-unknown-linux-gnu \
     && rm /tmp/rustup-init
+# Go, at least the version desktop/go.mod names. AlmaLinux's own Go is older,
+# so it only fetches the pinned release as Go's toolchain module, which the go
+# command checks against the Go checksum database, and that copy becomes
+# /usr/local/go. GOTOOLCHAIN=local keeps builds on it.
+RUN dnf install -y golang \
+    && GOTOOLCHAIN=go1.27.3 GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOPATH=/tmp/gopath \
+        go env GOROOT > /tmp/goroot \
+    && cp -a "$(cat /tmp/goroot)" /usr/local/go \
+    && chmod -R u+w /tmp/gopath && rm -rf /tmp/gopath /tmp/goroot \
+    && dnf remove -y golang && dnf clean all \
+    && /usr/local/go/bin/go version | grep -q ' go1\.27\.3 '
+ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local
 RUN cargo install --locked cargo-about --version 0.8.4 \
     && cargo install --locked cargo-zigbuild --version 0.24.0 \
     && rm -rf /opt/cargo/registry /opt/cargo/git

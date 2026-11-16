@@ -27,17 +27,28 @@ still apply to them.
 
 ## Rust crates
 
-The desktop app, `rc2fxd` and `librc2fx_native.so` link several hundred crates
-from crates.io. Nearly all are MIT and/or Apache-2.0, including GPUI and
-gpui-component. A few use other permissive licences (BSD-2/3, ISC, Zlib,
-Unicode-3.0, CC0, 0BSD). `option-ext` is MPL-2.0; its unmodified source is
-available on crates.io. The desktop app's updater, Velopack, uses
-`webpki-roots`, Mozilla's root certificates, under CDLA-Permissive-2.0.
+The mixer's programs (`rc2fxd`, `rc2fx-supervisor`, `rc2fx-firmware` and
+`librc2fx_native.so`) link crates from crates.io. Nearly all are MIT and/or
+Apache-2.0; a few use other permissive licences (BSD-2/3, ISC, Zlib,
+Unicode-3.0, CC0, 0BSD).
+
+The desktop app is written in Go. Its interface library, libgpuikit, is built
+from Rust crates, including GPUI and gpui-component; the gpuikit download
+lists them with their licences, and the app's licence notices include that
+list and its licence texts.
+
+## Go
+
+The desktop app includes the Go standard library (BSD-3-Clause) and the Go
+modules it links, each under its own permissive licence. The app's licence
+notices include each module's licence text.
 
 ## Rust standard library
 
-Every binary includes the Rust standard library from Rust 1.97.1 (the
-toolchain pinned in `rust-toolchain.toml`). It is dual-licensed under MIT or
+The mixer's programs include the Rust standard library from Rust 1.100.0 (the
+toolchain pinned in `rust-toolchain.toml`); libgpuikit and Velopack's C
+library in the desktop app include it from the toolchains they were built
+with. It is dual-licensed under MIT or
 Apache-2.0; copyrights are retained by its contributors
 (https://thanks.rust-lang.org). Some of its components and dependencies carry
 other notices, including Apache-2.0 WITH LLVM-exception, Unicode-3.0 and
@@ -48,7 +59,7 @@ with their licence texts; the app's licence notices include its full text.
 ## Lucide icons
 
 The desktop app embeds icons from [Lucide](https://lucide.dev) through
-`gpui-kit-assets`. ISC License, Copyright (c) 2026 Lucide Icons and
+the gpuikit library. ISC License, Copyright (c) 2026 Lucide Icons and
 Contributors. The icons Lucide derives from Feather are also under the MIT
 License, Copyright (c) 2013-present Cole Bemis. Full text:
 [licenses/LICENSE-LUCIDE](licenses/LICENSE-LUCIDE).
@@ -61,7 +72,9 @@ updater (`Update.exe` on Windows, `UpdateMac` on macOS, `UpdateNix` in the
 AppImage); the Windows and macOS packages also include its launcher and
 installer. On Windows and macOS, Velopack's packager gives them RC2FX's
 icon and version details, appends the app to Setup and signs them; their code
-is unchanged. The app also links the `velopack` crate. MIT License, Copyright
+is unchanged. The app also links Velopack's C library (`velopack_libc`,
+statically on Linux and macOS; `velopack_libc.dll` beside `rc2fx.exe` on
+Windows). MIT License, Copyright
 © 2021 Caelan Sayler, Copyright © 2024 Velopack Ltd. Full text:
 [licenses/LICENSE-VELOPACK](licenses/LICENSE-VELOPACK). The notices of the
 crates those programs are built from are in
@@ -75,10 +88,10 @@ licence notices carry.
 
 Repair mixer, in the desktop app on Linux, uses libext2fs and libcom_err from
 [e2fsprogs](https://e2fsprogs.sourceforge.net/) 1.47.4, built from the sources
-vendored in `crates/rc2fx-ext2fs/e2fsprogs` and linked statically into the
-app. libext2fs is licensed under the GNU Library General Public License,
+vendored in `desktop/ext2fs/e2fsprogs` and linked statically into the
+app through cgo. libext2fs is licensed under the GNU Library General Public License,
 version 2; libcom_err under an MIT-style licence (its source file headers).
-The full texts and the notice are in `crates/rc2fx-ext2fs/e2fsprogs/NOTICE`.
+The full texts and the notice are in `desktop/ext2fs/e2fsprogs/NOTICE`.
 The rest of RC2FX's source is public, so the app can be rebuilt with a
 modified libext2fs, as the LGPL requires.
 
@@ -98,17 +111,19 @@ can rebuild the runtime with a modified libfuse.
 
 ## Full licence texts
 
-`cargo xtask package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
-for the desktop workspace and the mixer library and combines its reports with
-these notices, the training-data credits and the project licence texts. The
+`./xtask package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+for the mixer workspace and the mixer library and combines its reports with
+these notices, the training-data credits, the project licence texts, the Go
+standard library's and Go modules' licences, and libgpuikit's notices. The
 result is built into the app, under **Settings › About › Licenses › View
 licenses**. The AppImage also carries it as `LICENSES.html` in its system
 licence directory. To write
-the same document as HTML without packaging, install cargo-about
+the same document as HTML without packaging, less the Go and libgpuikit
+notices, which only packaging adds, install cargo-about
 (`cargo install --locked cargo-about`) and run:
 
 ```sh
-cargo xtask licenses LICENSES.html
+./xtask licenses LICENSES.html
 ```
 
 ## RØDE

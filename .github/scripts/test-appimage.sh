@@ -97,8 +97,10 @@ fi
 say "dynamic libraries and the embedded mixer envelope"
 # The image intentionally leaves the desktop runtime's system libraries to the
 # host. Install that explicit baseline, but not the xkb libraries the image
-# must bundle, so a missing bundled library is still caught.
-baseline='libc.so.6 libm.so.6 libgcc_s.so.1 libxcb.so.1 libfontconfig.so.1 libwayland-client.so.0 libvulkan.so.1 libdl.so.2 libpthread.so.0 librt.so.1 ld-linux-x86-64.so.2'
+# must bundle, so a missing bundled library is still caught. libresolv and
+# libutil are glibc's own: Go's net package links the first under cgo, and
+# Velopack's C library the second.
+baseline='libc.so.6 libm.so.6 libgcc_s.so.1 libxcb.so.1 libfontconfig.so.1 libwayland-client.so.0 libvulkan.so.1 libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2 libutil.so.1 ld-linux-x86-64.so.2'
 needed=$(readelf -d "$root/usr/bin/rc2fx" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
 for library in $needed; do
     if [ -e "$root/usr/lib/$library" ] || [ -L "$root/usr/lib/$library" ]; then

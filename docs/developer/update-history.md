@@ -50,9 +50,10 @@ wording.
 
 ## The app to mixer mapping
 
-Download-only app tags are identified by the optional `embedded` feature
-being absent from their default features in `crates/rc2fx-app/Cargo.toml`.
-They set `downloadsMixer: true`, have no bundled version, and do not make
+Download-only app tags are those that carry the Go desktop app
+(`desktop/go.mod`), whose release packages always download the mixer
+software, and older Rust-app tags whose `crates/rc2fx-app/Cargo.toml` has the
+optional `embedded` feature absent from its default features. They set `downloadsMixer: true`, have no bundled version, and do not make
 mixer history incomplete. Standalone releases come from `mixer-vVERSION` tags.
 
 There is no separate mapping file. An older app release's bundled mixer software

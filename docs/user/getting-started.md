@@ -8,12 +8,15 @@ Downloads have the system and processor in their names:
 | System | Installer | Portable |
 | --- | --- | --- |
 | Windows (x64) | `rc2fx-windows-x64-setup.exe` | `rc2fx-windows-x64.zip` |
-| macOS (Apple silicon) | `rc2fx-macos-arm64.pkg` | `rc2fx-macos-arm64.zip` |
+| macOS 13 or later (Apple silicon and Intel) | `rc2fx-macos-universal.pkg` | `rc2fx-macos-universal.zip` |
 | Linux (x64) | — | `rc2fx-linux-x64.AppImage` |
 
 The names have no version, so a link such as
 `https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage`
-always downloads the newest one.
+always downloads the newest one. The macOS app is universal: one download runs
+natively on Apple silicon and on Intel Macs. Releases also publish it as
+`rc2fx-macos-arm64.pkg` and `rc2fx-macos-arm64.zip`, the names of the earlier
+Apple silicon-only downloads, so older links still work.
 
 The release also has other files: `.nupkg` and `releases.*.json` files, which
 the app updates itself from, the AppImage runtime's sources and
@@ -104,7 +107,8 @@ be installed without updating the desktop app. Releases that require a newer app
 cannot be selected by an older one.
 
 Normal builds download the selected mixer payload from GitHub. Builds made with
-`--features embedded` also include a bundled payload; the installer offers it as
+the `embedded` build tag (`./xtask package --embedded`) also include a bundled
+payload; the installer offers it as
 an explicit choice. It is never substituted automatically after a network or
 verification failure. If no authenticated release information is available, the
 available version stays **Unknown** rather than claiming that you are current.

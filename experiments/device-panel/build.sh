@@ -18,7 +18,7 @@ zig cc -target aarch64-linux-gnu.2.35 -mcpu=cortex_a53 -mno-outline-atomics \
   -std=c11 -O2 -fPIE -pie -Wall -Wextra -Werror -isystem "$sysroot/usr/include" \
   "$root/experiments/device-panel/status.c" -o "$out/rc2fx-ui-status"
 # A separate, explicit RAM-only preview command lives with mixer-side behavior.
-cp "$root/xtask/mixer/rc2fx.sh" "$out/rc2fx.sh"
+cp "$root/mixer/scripts/rc2fx.sh" "$out/rc2fx.sh"
 (cd "$out" && sha256sum librc2fx_ui.so rc2fx-ui-status rc2fx.sh > SHA256SUMS)
 printf 'Actual AArch64 GUI module built: %s\n' "$out/librc2fx_ui.so"
 printf 'Not loaded. No mixer/audio/desktop process was changed.\n'

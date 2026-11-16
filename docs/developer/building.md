@@ -1,21 +1,28 @@
 # Building from source
 
 These steps build the desktop app and the mixer runtime on Windows, Linux or
-macOS. Every task is a cargo command under `xtask/`, and `just` wraps them, so
-the steps are the same on each platform.
+macOS. Every task is an `./xtask` command (the Go tool in `desktop/cmd/xtask`),
+and `just` wraps them, so the steps are the same on each platform. The desktop
+app is written in Go; the mixer side is Rust.
 
 ## 1. Install the tools
 
-- Rust, through [rustup](https://rustup.rs). The toolchain is pinned in
-  `rust-toolchain.toml`, and rustup installs it on first use.
+- [Go](https://go.dev/dl/), the version `desktop/go.mod` names. `./xtask`
+  builds and runs the tool with `go run`, so every task needs it.
+- Rust, through [rustup](https://rustup.rs), for the mixer side, and for the
+  licence notices `just package` collects from the mixer crates. The toolchain
+  is pinned in `rust-toolchain.toml`, and rustup installs it on first use.
 - [just](https://just.systems): `cargo install --locked just`,
   `winget install Casey.Just`, `brew install just`, or your package manager.
 - [zig](https://ziglang.org/download/) 0.13 or newer: `winget install zig.zig`,
   `brew install zig`, `pip install ziglang`, or your package manager. zig is
   the C compiler and linker for the mixer build. It targets the mixer's glibc
   (2.35) directly, so no sysroot is needed.
-- The desktop app's build tools:
-  - Windows: Visual Studio's C++ build tools and the Windows SDK.
+- The desktop app's build tools. The app's UI and its storage repair code are
+  C libraries that Go links through cgo, so it needs a C compiler:
+  - Windows: MinGW-w64 gcc on the `PATH` (for example from
+    [MSYS2](https://www.msys2.org/) or `winget install BrechtSanders.WinLibs.POSIX.UCRT`),
+    whose `windres` also gives `rc2fx.exe` its icon.
   - Linux: see [Linux setup](linux.md).
   - macOS: the Xcode command-line tools.
 
@@ -23,27 +30,43 @@ Then run, from the repository:
 
 ```sh
 just setup
+desktop/scripts/fetch-gpuikit.sh
 ```
 
-This adds the mixer's Rust target (`aarch64-unknown-linux-gnu`), installs
-`cargo-zigbuild`, and checks that zig is on your `PATH`.
+`just setup` adds the mixer's Rust target (`aarch64-unknown-linux-gnu`),
+installs `cargo-zigbuild`, checks that zig is on your `PATH`, and enables the
+pre-commit hook in `.githooks`.
+
+`fetch-gpuikit.sh` downloads gpuikit, the UI library the app links (GPUI-kit
+through its Go bindings), at the pinned version for your platform, checks its
+SHA-256 and unpacks it into `desktop/third_party/gpuikit`, which git ignores.
+Set `GPUIKIT_TOKEN` to a GitHub token if the bindings repository is private to
+you. With a local build of the bindings, link the folder instead:
+`ln -sfn /path/to/gpuikit-VERSION-OS-ARCH desktop/third_party/gpuikit`. Only
+the app's UI packages need it; the tests of everything else run without it.
 
 ## 2. Build and test
 
 ```sh
-just app           # run the desktop app (debug build; `just app-release` for release)
-just test          # workspace tests, then Clippy with warnings as errors
+just app           # run the desktop app (development build; `just app-release` for release)
+just test          # Go vet and tests for the desktop app, then the Rust workspace tests and Clippy
 just test-mixer    # mixer-side tests (Linux or macOS, with python3 and a C compiler)
 ```
 
 `just app` needs no mixer cross-build: the app downloads signed mixer
-releases. `just test` and the `*-embedded` recipes run `just mixer-build`
-first. It cross-builds the mixer runtime into `target/mixer` on your computer
+releases. It runs `./xtask app`, which builds a development build (the Go
+build tags `rc2fxdebug` and `rc2fxdev`, the counterpart of a Rust debug build)
+into `target/debug` with the gpuikit library beside it, then starts it.
+
+`just test` and the `*-embedded` recipes run `just mixer-build` first. It
+cross-builds the mixer runtime into `target/mixer` on your computer
 and does not contact the mixer. Files that haven't changed are left in place,
 so repeat runs are quick.
 
-An embedded build embeds that runtime, the firmware catalog, the mixer release
-manifest and the installer scripts in the executable, and fails if any of them
+An embedded build (the Go build tag `embedded`) embeds that runtime, the
+firmware catalog, the mixer release manifest and the installer scripts in the
+executable. Before the build, `desktop/installer/embed/cmd/stage-payload`
+collects them into `desktop/installer/embed/payload`, and fails if any of them
 is missing or corrupt. `target/mixer` carries a copy of
 `config/mixer-release.json`, and the build fails if the two differ, so run
 `just mixer-build` after bumping the mixer version.
@@ -54,8 +77,9 @@ There is one mixer build configuration, the one the Pro II was measured with,
 compiled for its Cortex-A53. Installing and using a source build works as
 described in the [user guide](../user/installing.md).
 
-Any Clippy warning fails `just test`, even if every test passes. The native
-library is a separate workspace, and its tests run under `just test-mixer`.
+Any Clippy warning, `go vet` finding or unformatted Go file fails `just test`,
+even if every test passes. The native library is a separate workspace, and its
+tests run under `just test-mixer`.
 
 ## 3. Package it
 
@@ -70,7 +94,7 @@ the system:
 | System | Files |
 | --- | --- |
 | Windows | `rc2fx-windows-x64-setup.exe` (installer), `rc2fx-windows-x64.zip` (portable), `io.github.ibanks42.rc2fx-VERSION-full.nupkg` and `releases.win.json` (update package and feed) |
-| macOS | `rc2fx-macos-arm64.pkg` (installer), `rc2fx-macos-arm64.zip` (portable), `io.github.ibanks42.rc2fx-VERSION-osx-full.nupkg` and `releases.osx.json` (update package and feed) |
+| macOS | `rc2fx-macos-universal.pkg` (installer), `rc2fx-macos-universal.zip` (portable), `io.github.ibanks42.rc2fx-VERSION-osx-full.nupkg` and `releases.osx.json` (update package and feed), all universal (Apple silicon and Intel) |
 | Linux | `rc2fx-linux-x64.AppImage`, `io.github.ibanks42.rc2fx-VERSION-linux-full.nupkg` and `releases.linux.json` (update package and feed) |
 
 Velopack's `vpk` makes all of them. The installers, portable zips and the
@@ -78,24 +102,51 @@ AppImage have no version in their names, so the newest release always has the
 same download links, and an AppImage update replaces the file in place. The
 update package and feed keep vpk's names, because the feed names the package;
 packaging checks that the feed lists exactly that package with its SHA-256.
-The unpacked app stays in `target/package/rc2fx-OS-ARCH/rc2fx`. Releases publish these
-files (see [Releases](releases.md#release-contents)). The documentation isn't
-packaged.
+The unpacked app stays in `target/package/rc2fx-OS-ARCH/rc2fx`. Releases
+publish these files (see [Releases](releases.md#release-contents)). The
+documentation isn't packaged.
 
-Packaging needs `cargo-about` (`cargo install --locked cargo-about`).
+On macOS the app is universal, for macOS 13 (the oldest Go 1.27 supports) and
+later. `./xtask package` builds `cmd/rc2fx` twice with cgo, for `arm64` and
+`amd64` (`CC`, `CGO_CFLAGS` and `CGO_LDFLAGS` with `-arch` and
+`-mmacosx-version-min=13.0`), against the universal gpuikit library and each
+architecture's static `velopack_libc`, and joins them with `lipo -create`
+(`RC2FX_LIPO` names another `lipo`). It then checks, in Go, that the
+executable, `libgpuikit.dylib` and, after vpk, its `UpdateMac` each hold
+exactly an `arm64` and an `x86_64` slice built for no newer macOS than the
+bundle's `LSMinimumSystemVersion`, that every library they load is the
+system's or one beside the executable, and that the installer's
+`hostArchitectures` name both. Each slice of the executable gets the payload,
+notice and build-tag checks on its own. `vpk` packs it with `--runtime osx`,
+without an architecture: on macOS the RID is only recorded in the package, and
+the channel, and so the feed and update package names, stays `osx`, which
+copies installed from the earlier Apple silicon-only releases update from.
+
+Packaging needs the gpuikit download, Velopack's C library and `cargo-about`
+(`cargo install --locked cargo-about`):
+
+- `desktop/scripts/fetch-velopack.sh` fetches Velopack's C library at the
+  version vpk packs with, checks it and unpacks it into
+  `desktop/third_party/velopack`. Packages are built with the `velopack` build
+  tag, which links it so the app can update itself; with `--embedded`, also
+  with the `embedded` tag.
+- `cargo-about` collects the licences of the mixer's Rust crates, which the
+  app installs. The Go modules' and gpuikit's notices are added to them.
 
 - Every platform also needs .NET and vpk 1.3.39-g8d2844f:
   `dotnet tool install -g vpk --version 1.3.39-g8d2844f`. Set `RC2FX_VPK` to
   its path, or put `vpk` on your `PATH`. Release builds get a checked copy
   from `.github/scripts/setup-vpk.sh`. On Windows, a release build
-  (`RC2FX_RELEASE_BUILD=1`) also needs a resource compiler, from the Windows
-  SDK, to give `rc2fx.exe` its icon and version details; other builds skip
-  them when there is none.
+  (`RC2FX_RELEASE_BUILD=1`) also needs a resource compiler, MinGW-w64's
+  `windres` (`RC2FX_WINDRES`, or `x86_64-w64-mingw32-windres` or `windres` on
+  the `PATH`), to give `rc2fx.exe` its icon and version details; other builds
+  skip them when there is none.
 - The packages include Velopack's own launcher, updater and installer, so the
   app's licence notices include their dependencies, from
   `licenses/velopack-VERSION.json`. When you change the vpk version
-  (`VPK_VERSION` in `xtask/src/package/velopack.rs`, and
-  `.github/scripts/setup-vpk.sh`), regenerate it with
+  (`VPKVersion` in `desktop/internal/xtask/licenses/licenses.go`,
+  `.github/scripts/setup-vpk.sh`, and `version` and `sha` in
+  `desktop/scripts/fetch-velopack.sh`, which must all match), regenerate it with
   `.github/scripts/velopack-licenses.py VERSION`; packaging refuses a report
   for another version.
 - Linux also needs `mksquashfs` (from `squashfs-tools`) on the `PATH`, which
@@ -118,7 +169,7 @@ Each platform is packaged on its own machine;
 [Releases](releases.md#per-platform-build-runners) explains why.
 
 Local Windows and macOS packages are unsigned unless you set the signing
-variables in [Signing](releases.md#signing); vpk signs nothing on Linux. `cargo xtask package --build-only`
+variables in [Signing](releases.md#signing); vpk signs nothing on Linux. `./xtask package --build-only`
 stops after the build, and `--skip-build` packages an existing release build;
 the Windows release job uses the two to sign in to Azure between them.
 

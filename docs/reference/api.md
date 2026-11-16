@@ -5,8 +5,8 @@
 the RC2FX HID reports described in [USB control](usb-control.md). A reply is
 a status code and a JSON body. `rc2fxd` has no network listener.
 
-`cargo run -p rc2fx-transport --example usb_probe` exercises the API from a
-computer connected to USB 1. `cargo xtask mixer api METHOD PATH [BODY|@file]`
+`go -C desktop run ./cmd/usb-probe` exercises the API from a
+computer connected to USB 1. `./xtask mixer api METHOD PATH [BODY|@file]`
 sends a single request.
 
 | Method and path | Body | Result |

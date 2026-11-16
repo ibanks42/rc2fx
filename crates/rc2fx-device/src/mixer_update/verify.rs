@@ -1,6 +1,6 @@
 //! TUF verification of an in-place update, on the mixer, with the same signed
-//! metadata, the same trust root and the same library (sigstore-tuf) the
-//! desktop app uses.
+//! metadata and the same trust root the desktop app uses (the desktop
+//! verifies with go-tuf).
 //!
 //! The desktop sends the role documents it downloaded (`root`, `timestamp`,
 //! `snapshot`, `targets`); the mixer has its own embedded trusted root and
@@ -34,7 +34,7 @@ const MAX_ROOTS: usize = 8;
 pub const TRUSTED_ROOT: &[u8] = include_bytes!("../../../../config/mixer-update-root.json");
 
 /// The compatibility claims the publisher signs for one mixer release. Kept
-/// in step with `rc2fx-installer`'s `MixerTarget`.
+/// in step with `MixerTarget` in `desktop/installer/mixer_update.go`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MixerTarget {

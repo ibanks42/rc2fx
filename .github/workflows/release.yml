@@ -35,6 +35,18 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
+      # The build, linux and macos jobs fetch gpuikit for the platforms a
+      # release ships; stop here, before they start, if one has no pin.
+      - name: Require a gpuikit pin for every shipped platform
+        run: |
+          missing=
+          for pin in sha_windows_x86_64 sha_linux_x86_64 sha_macos_universal; do
+            grep -Eq "^$pin=[0-9a-f]{64}\$" desktop/scripts/fetch-gpuikit.sh || missing="$missing $pin"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::desktop/scripts/fetch-gpuikit.sh has no SHA-256 for:$missing"
+            exit 1
+          fi
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: git-cliff@2.14.1
@@ -97,13 +109,26 @@ jobs:
           path: .release-input
       - name: Apply release version
         run: tar -xf .release-input/versioned.tar
-      # Key the cache against the manifests actually being compiled.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The app is Go, cgo against the gpuikit download, with Velopack's C
+      # library for the `velopack` tag release packages build with. Rust stays
+      # for the notices: cargo-about and the standard library's licences.
+      # The app is universal: ./xtask package builds an arm64 and an x86_64
+      # slice and joins them with lipo, against the universal gpuikit library
+      # and both architectures' velopack_libc.
+      - uses: actions/setup-go@v6.0.0
         with:
-          key: release-desktop
-          cache-bin: false
-          cache-workspace-crates: true
-          cache-on-failure: true
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - name: Fetch gpuikit
+        env:
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
+        run: bash desktop/scripts/fetch-gpuikit.sh windows-amd64
+      - name: Fetch the Velopack C library
+        run: bash desktop/scripts/fetch-velopack.sh windows-amd64
+      # cgo links with MinGW's gcc, and a release build refuses to go without
+      # windres for the icon and version resource.
+      - name: Check the C toolchain
+        run: gcc --version && windres --version
       # Velopack's vpk makes the packages and signs them, with Azure Artifact
       # Signing when the signing variables are set.
       - uses: actions/setup-dotnet@v6.1.0
@@ -126,7 +151,7 @@ jobs:
       - name: Build the Windows release executable
         env:
           RC2FX_RELEASE_BUILD: "1"
-        run: cargo xtask package --build-only
+        run: ./xtask package --build-only
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         if: steps.windows-signing.outputs.enabled == 'true'
         with:
@@ -137,7 +162,7 @@ jobs:
       - name: Sign and package the Windows release
         env:
           RC2FX_RELEASE_BUILD: "1"
-        run: cargo xtask package --skip-build
+        run: ./xtask package --skip-build
       - name: Verify the Windows signatures
         if: steps.windows-signing.outputs.enabled == 'true'
         shell: pwsh
@@ -148,8 +173,9 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP rc2fx-signature-check
           Remove-Item -Recurse -Force $dir -ErrorAction Ignore
           Expand-Archive $zip[0].FullName -DestinationPath $dir
-          # The launcher, the updater, the app itself, and Setup.
-          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
+          # The launcher, the updater, the app itself, the libraries it loads,
+          # and Setup.
+          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe', 'current/gpuikit.dll', 'current/velopack_libc.dll' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature $file.FullName
             if ($signature.Status -ne 'Valid') { throw "$($file.Name) signature is $($signature.Status): $($signature.StatusMessage)" }
@@ -205,6 +231,8 @@ jobs:
         env:
           CONTAINER_ENGINE: docker
           RC2FX_BUILD_IMAGE: ${{ needs.image.outputs.image }}
+          # Read by desktop/scripts/fetch-gpuikit.sh in the build container.
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
         run: bash .github/scripts/package-check.sh
       - uses: actions/upload-artifact@v7.0.2
         with:
@@ -242,12 +270,19 @@ jobs:
         with:
           tool: cargo-about@0.8.4
           fallback: none
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The app is Go, cgo against the gpuikit download, with Velopack's C
+      # library for the `velopack` tag release packages build with. Rust stays
+      # for the notices: cargo-about and the standard library's licences.
+      - uses: actions/setup-go@v6.0.0
         with:
-          key: release-desktop
-          cache-bin: false
-          cache-workspace-crates: true
-          cache-on-failure: true
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - name: Fetch gpuikit
+        env:
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
+        run: bash desktop/scripts/fetch-gpuikit.sh darwin-universal
+      - name: Fetch the Velopack C library
+        run: bash desktop/scripts/fetch-velopack.sh darwin-universal
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: 10.0.x
@@ -266,11 +301,21 @@ jobs:
       - name: Build macOS release package
         env:
           RC2FX_RELEASE_BUILD: "1"
-        run: cargo xtask package
+        run: ./xtask package
+      # Releases up to 0.1.7 named the (then arm64-only) packages
+      # rc2fx-macos-arm64.*, and links to releases/latest/download/ under
+      # those names are out there: the same universal files are published
+      # under them too (macos_release.py checks they are byte-identical).
+      - name: Keep the earlier macOS download names
+        run: |
+          cp target/package/rc2fx-macos-universal.zip target/package/rc2fx-macos-arm64.zip
+          cp target/package/rc2fx-macos-universal.pkg target/package/rc2fx-macos-arm64.pkg
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: macos-package
           path: |
+            target/package/rc2fx-macos-universal.zip
+            target/package/rc2fx-macos-universal.pkg
             target/package/rc2fx-macos-arm64.zip
             target/package/rc2fx-macos-arm64.pkg
             target/package/io.github.ibanks42.rc2fx-*-osx-full.nupkg
@@ -351,7 +396,10 @@ jobs:
                           inside = package.read(f'lib/app/{pack}.AppImage')
                           assert inside == (directory / appimage).read_bytes(), f'{archive.name} holds another AppImage'
                           continue
-                  needed = {'lib/app/rc2fx.exe'} if archive.suffix == '.nupkg' else {'RC2FX.exe', 'Update.exe', 'current/rc2fx.exe'}
+                  # The app and the libraries it loads from beside itself.
+                  app = ('rc2fx.exe', 'gpuikit.dll', 'velopack_libc.dll')
+                  needed = ({f'lib/app/{name}' for name in app} if archive.suffix == '.nupkg'
+                            else {'RC2FX.exe', 'Update.exe', *(f'current/{name}' for name in app)})
                   assert needed <= members, f'{archive.name} lacks {sorted(needed - members)}'
           sums = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in archives)
           (directory / 'SHA256SUMS').write_text(sums)

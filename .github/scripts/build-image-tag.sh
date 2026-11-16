@@ -1,6 +1,7 @@
 #!/bin/sh
 # The build image's tag: a digest of what it is built from, so the image is
-# rebuilt exactly when its Containerfile or the pinned Rust changes. Shared by
+# rebuilt exactly when its Containerfile (which pins Go) or the pinned Rust
+# changes. Shared by
 # package-check.sh and the build-image workflow.
 set -eu
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)

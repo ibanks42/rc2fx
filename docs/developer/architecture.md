@@ -3,7 +3,7 @@
 ```text
  computer                               RØDECaster Pro II
 ┌──────────────┐  USB 1 (vendor HID)   ┌────────────────────────────────────────┐
-│ rc2fx-app    │◄─────────────────────►│ rc_audio_mixer (RØDE, unmodified)      │
+│ desktop app  │◄─────────────────────►│ rc_audio_mixer (RØDE, unmodified)      │
 │  transport   │  reports 5 and 6      │  └─ librc2fx_native.so (LD_AUDIT)      │
 │  installer   │                       │      ├─ JACK callback: 25 paths, DSP   │
 └──────────────┘                       │      ├─ helper thread                  │
@@ -99,7 +99,7 @@ The supervisor is watched too. A panic inside it takes the same route to stock,
 and if it crashes or is killed, the shell that launched the engine records the
 stock request and ends the engine itself.
 
-This logic is in `xtask/mixer/rc2fx.sh`, under subcommands such as `launch`,
+This logic is in `mixer/scripts/rc2fx.sh`, under subcommands such as `launch`,
 `start`, `restart`, `stop`, `status` and `logs`. Change mixer-side behaviour in
 that script. The supervisor runs beside live audio for as long as the engine
 does and recovers from everything else failing, so it is its own small binary:

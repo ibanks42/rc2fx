@@ -2,8 +2,8 @@ name: Build image
 
 # The AlmaLinux 8 build image (package-check.Containerfile) that Check lints
 # and tests in and Release builds the AppImage in, published to GitHub's
-# container registry. Its tag is a digest of the Containerfile and the pinned
-# Rust (build-image-tag.sh), so callers build it only when that changes. The
+# container registry. Its tag is a digest of the Containerfile, which pins
+# Go, and the pinned Rust (build-image-tag.sh), so callers build it only when that changes. The
 # weekly run rebuilds the current tag so the image, and the libraries the
 # AppImage bundles from it, pick up security updates.
 on:

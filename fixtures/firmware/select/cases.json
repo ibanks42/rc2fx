@@ -1,0 +1,217 @@
+{
+  "comment": [
+    "Executable selection over small AArch64 ELF images. Files are in this directory. selectForModel is select_for_model_with; verifyLauncher checks the catalog's first profile. profile is the selected profile's id; error is the exact message."
+  ],
+  "cases": [
+    {
+      "op": "select",
+      "catalog": "image.json",
+      "image": "image.elf",
+      "profile": "rodecaster-pro-ii-1.7.6"
+    },
+    {
+      "op": "select",
+      "catalog": "flipped.json",
+      "image": "flipped.elf",
+      "error": "rodecaster-pro-ii-1.7.6: original instructions differ at 0x1000"
+    },
+    {
+      "op": "select",
+      "catalog": "noexec.json",
+      "image": "noexec.elf",
+      "error": "hook site is outside executable file-backed ELF code"
+    },
+    {
+      "op": "select",
+      "catalog": "not-load.json",
+      "image": "not-load.elf",
+      "error": "hook site is outside executable file-backed ELF code"
+    },
+    {
+      "op": "select",
+      "catalog": "elf32.json",
+      "image": "elf32.elf",
+      "error": "profile needs an AArch64 little-endian ELF64 PIE"
+    },
+    {
+      "op": "select",
+      "catalog": "not-pie.json",
+      "image": "not-pie.elf",
+      "error": "profile needs an AArch64 little-endian ELF64 PIE"
+    },
+    {
+      "op": "select",
+      "catalog": "x86-64.json",
+      "image": "x86-64.elf",
+      "error": "profile needs an AArch64 little-endian ELF64 PIE"
+    },
+    {
+      "op": "select",
+      "catalog": "truncated.json",
+      "image": "truncated.elf",
+      "error": "truncated ELF image"
+    },
+    {
+      "op": "select",
+      "catalog": "short-segment.json",
+      "image": "short-segment.elf",
+      "error": "hook site is outside executable file-backed ELF code"
+    },
+    {
+      "op": "select",
+      "catalog": "small-stride.json",
+      "image": "small-stride.elf",
+      "error": "invalid ELF program header table"
+    },
+    {
+      "op": "select",
+      "catalog": "many-headers.json",
+      "image": "many-headers.elf",
+      "error": "invalid ELF program header table"
+    },
+    {
+      "op": "select",
+      "catalog": "two-segments.json",
+      "image": "two-segments.elf",
+      "profile": "rodecaster-pro-ii-1.7.6"
+    },
+    {
+      "op": "select",
+      "catalog": "image.json",
+      "image": "flipped.elf",
+      "error": "unrecognized mixer executable SHA-256 849258646e7824681bca5ea6f66ebf0a5ec1b2abe75329c4f63827cf0704b854"
+    },
+    {
+      "op": "select",
+      "catalog": "shared.json",
+      "image": "image.elf",
+      "error": "ambiguous mixer executable: select using verified device model"
+    },
+    {
+      "op": "selectForModel",
+      "catalog": "shared.json",
+      "image": "image.elf",
+      "model": "rodecaster-pro-ii",
+      "profile": "rodecaster-pro-ii-1.7.6"
+    },
+    {
+      "op": "selectForModel",
+      "catalog": "shared.json",
+      "image": "image.elf",
+      "model": "rodecaster-duo",
+      "error": "RØDECaster Duo support is experimental and untested on hardware. Enable experimental Duo flashing at your own risk."
+    },
+    {
+      "op": "selectForModel",
+      "catalog": "shared.json",
+      "image": "image.elf",
+      "model": "rodecaster-duo",
+      "experimentalDuo": true,
+      "error": "rodecaster-duo-1.7.6 is not runtime-qualified: Offline evidence only."
+    },
+    {
+      "op": "selectForModel",
+      "catalog": "shared.json",
+      "image": "flipped.elf",
+      "model": "rodecaster-pro-ii",
+      "error": "unrecognized rodecaster-pro-ii mixer executable SHA-256 849258646e7824681bca5ea6f66ebf0a5ec1b2abe75329c4f63827cf0704b854"
+    },
+    {
+      "op": "inspectForModel",
+      "catalog": "shared.json",
+      "image": "image.elf",
+      "model": "rodecaster-duo",
+      "launcher": "launcher.bin",
+      "profile": "rodecaster-duo-1.7.6"
+    },
+    {
+      "op": "inspectForModel",
+      "catalog": "shared.json",
+      "image": "image.elf",
+      "model": "rodecaster-pro-ii",
+      "launcher": "launcher.bin",
+      "profile": "rodecaster-pro-ii-1.7.6"
+    },
+    {
+      "op": "inspectForModel",
+      "catalog": "shared.json",
+      "image": "image.elf",
+      "model": "rodecaster-duo",
+      "launcher": "wrong-launcher.bin",
+      "error": "rodecaster-duo-1.7.6: audio launcher differs from its profile hash"
+    },
+    {
+      "op": "inspectForModel",
+      "catalog": "shared.json",
+      "image": "flipped.elf",
+      "model": "rodecaster-duo",
+      "launcher": "launcher.bin",
+      "error": "unrecognized rodecaster-duo mixer executable SHA-256 849258646e7824681bca5ea6f66ebf0a5ec1b2abe75329c4f63827cf0704b854"
+    },
+    {
+      "op": "inspectForModel",
+      "catalog": "other-launcher.json",
+      "image": "image.elf",
+      "model": "rodecaster-duo",
+      "launcher": "launcher.bin",
+      "error": "no qualified executable ABI matches this release"
+    },
+    {
+      "op": "inspectForModel",
+      "catalog": "unqualified.json",
+      "image": "image.elf",
+      "model": "rodecaster-pro-ii",
+      "launcher": "launcher.bin",
+      "error": "no qualified executable ABI matches this release"
+    },
+    {
+      "op": "selectForModel",
+      "catalog": "duo.json",
+      "image": "image.elf",
+      "model": "rodecaster-duo",
+      "error": "RØDECaster Duo support is experimental and untested on hardware. Enable experimental Duo flashing at your own risk."
+    },
+    {
+      "op": "selectForModel",
+      "catalog": "duo.json",
+      "image": "image.elf",
+      "model": "rodecaster-duo",
+      "experimentalDuo": true,
+      "profile": "duo-fixture"
+    },
+    {
+      "op": "selectForModel",
+      "catalog": "duo.json",
+      "image": "image.elf",
+      "model": "rodecaster-pro-ii",
+      "experimentalDuo": true,
+      "profile": "rodecaster-pro-ii-1.7.6"
+    },
+    {
+      "op": "select",
+      "catalog": "duo.json",
+      "image": "image.elf",
+      "error": "ambiguous mixer executable: select using verified device model"
+    },
+    {
+      "op": "select",
+      "catalog": "unqualified.json",
+      "image": "image.elf",
+      "error": "rodecaster-pro-ii-1.7.6 is not runtime-qualified: Qualified Pro II callback, routes and capture-values-v1 job repair."
+    },
+    {
+      "op": "verifyLauncher",
+      "catalog": "image.json",
+      "image": "image.elf",
+      "launcher": "launcher.bin",
+      "profile": "rodecaster-pro-ii-1.7.6"
+    },
+    {
+      "op": "verifyLauncher",
+      "catalog": "image.json",
+      "image": "image.elf",
+      "launcher": "wrong-launcher.bin",
+      "error": "rodecaster-pro-ii-1.7.6: audio launcher differs from its profile hash"
+    }
+  ]
+}

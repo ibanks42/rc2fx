@@ -56,9 +56,12 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      # No build cache where release keys are in reach: the tool is built
+      # from this checkout and go.sum alone.
+      - uses: actions/setup-go@v6.0.0
         with:
-          rustflags: ""
+          go-version-file: desktop/go.mod
+          cache: false
       - name: Test the publication tooling
         run: python3 .github/scripts/test_app_release.py
       - uses: actions/download-artifact@v8.0.2
@@ -87,7 +90,7 @@ jobs:
           python3 .github/scripts/publish_app.py prepare --tag "$TAG" --dir target/app-release "${built[@]}"
       - name: Build signing tool without signing credentials
         if: steps.release.outputs.sign == 'true'
-        run: cargo build --locked -p xtask
+        run: CGO_ENABLED=0 go -C desktop build -o "$RUNNER_TEMP/rc2fx-xtask" ./cmd/xtask
       - name: Sign the release assets
         if: steps.release.outputs.sign == 'true'
         env:
@@ -107,7 +110,7 @@ jobs:
           # metadata served in place of the mixer's reads as a rollback.
           sequence=$(( $(date -u +%s) - 1000000000 ))
           expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
-          target/debug/xtask app-sign config/mixer-update-root.json target/app-release "$VERSION" target/app-metadata "$sequence" "$expires" "$keydir/targets.pem" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
+          RC2FX_XTASK_ROOT="$GITHUB_WORKSPACE" "$RUNNER_TEMP/rc2fx-xtask" app-sign config/mixer-update-root.json target/app-release "$VERSION" target/app-metadata "$sequence" "$expires" "$keydir/targets.pem" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
       - name: Commit the signed metadata to the metadata branch
         if: steps.release.outputs.sign == 'true'
         env:

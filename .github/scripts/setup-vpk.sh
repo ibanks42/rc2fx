@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Verified vpk, Velopack's packager, for `cargo xtask package` on Windows and
-# macOS. The NuGet package is checked against a pinned SHA-256 and installed
-# from a local copy only. Sets RC2FX_VPK for later steps.
+# Verified vpk, Velopack's packager, for `./xtask package` on Windows, macOS
+# and in the Linux build container. The NuGet package is checked against a
+# pinned SHA-256 and installed from a local copy only. Sets RC2FX_VPK for
+# later steps. The version must match desktop/scripts/fetch-velopack.sh and
+# VPKVersion in desktop/internal/xtask/licenses/licenses.go
+# (test_prepare_appimage_notices.py checks all of them).
 set -euo pipefail
 
 version=1.3.39-g8d2844f

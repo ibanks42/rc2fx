@@ -130,4 +130,4 @@ just bench recording.wav
 This runs every model on the mixer over a 48 kHz recording, using the
 production scheduling policy, and copies the cleaned audio back for
 listening. Flags select an unpaced run, a different policy, CPUs, priority or
-weights file. See `cargo xtask help`.
+weights file. See `./xtask help`.

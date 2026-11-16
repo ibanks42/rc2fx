@@ -10,8 +10,10 @@ instead (see
 [signed mixer releases](../developer/mixer-releases.md#in-place-updates)); the
 flash remains the recovery path. Firmware images are not stored in git.
 
-The installer engine is `crates/rc2fx-installer`, written in Rust with no
-external tools. The installer page is `crates/rc2fx-app/src/installer`.
+The installer engine is `desktop/installer`, written in Go with no external
+tools; Repair mixer reads and writes ext4 through libext2fs, vendored in
+`desktop/ext2fs` and linked through cgo. The installer page is
+`desktop/app/installer.go`, with its flow in `desktop/app/installflow`.
 
 ## Inputs
 
@@ -21,8 +23,10 @@ privileged helper use only those embedded bytes. They ignore files beside the
 executable or in the working directory. Developer tools and tests can pass a
 folder explicitly.
 
-Before embedding, the build checks the payload checksums, checks that the
-binaries are ARM64, and checks that the runtime matches the catalog. Missing
+Before an embedded build (the `embedded` build tag),
+`desktop/installer/embed/cmd/stage-payload` checks the payload checksums,
+checks that the binaries are ARM64, and checks that the runtime matches the
+catalog. Missing
 or corrupt inputs fail the build. Official RØDE firmware is downloaded and
 checked at install time.
 
@@ -202,7 +206,7 @@ and `0030` in update mode.
 
 ## Release package
 
-`just package`, or `cargo xtask package`, writes the release packages for the
+`just package`, or `./xtask package`, writes the release packages for the
 current system to `target/package` (see
 [packaging](../developer/building.md#3-package-it)): on Windows and macOS an
 installer, a portable zip and the update package and feed, made by Velopack's
@@ -210,8 +214,9 @@ installer, a portable zip and the update package and feed, made by Velopack's
 `vpk`. Each holds:
 
 - the self-contained app,
-- the project licence, third-party notices, training-data credits and every
-  crate's licence text, built into the app under **Settings › About › View
+- the project licence, third-party notices, training-data credits and the
+  licence text of every Rust crate, Go module and component of the gpuikit
+  library, built into the app under **Settings › About › View
   licenses** (the AppImage also carries them as `LICENSES.html`).
 
 Release builds download the mixer payload. With `--embedded`, the runtime,
@@ -221,8 +226,11 @@ mode, and for an embedded build its payload, and fails if it is missing,
 corrupt, stale or from the wrong build kind. This check also runs with
 `--skip-build`.
 
-`--target TRIPLE` builds another architecture for the same OS when that
-toolchain is installed. `--skip-build` reuses an existing release build, and
+`--target TRIPLE` (a Rust-style target triple, such as
+`x86_64-unknown-linux-gnu`) builds another architecture for the same OS when
+cgo can build for it and the gpuikit and Velopack libraries for it have been
+fetched. macOS packages are always universal (arm64 and x86_64), whichever
+Apple triple is given. `--skip-build` reuses an existing release build, and
 `--build-only` stops after building. Windows and macOS packages are signed
 only when signing is configured; see [Signing](../developer/releases.md#signing).
 

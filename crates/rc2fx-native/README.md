@@ -2,7 +2,7 @@
 
 `librc2fx_native.so` runs RC2FX's processing inside RØDE's stock
 `rc_audio_mixer` on a qualified firmware profile. RØDE's launcher runs the
-RC2FX shim in place of the mixer. The shim calls `xtask/mixer/rc2fx.sh launch`,
+RC2FX shim in place of the mixer. The shim calls `mixer/scripts/rc2fx.sh launch`,
 which execs the stock mixer with this library loaded as an `LD_AUDIT` module.
 
 The crate is a Linux-only cdylib and has its own Cargo workspace. `just

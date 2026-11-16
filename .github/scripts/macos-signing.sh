@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Load the Apple signing credentials for `cargo xtask package`, which hands
+# Load the Apple signing credentials for `./xtask package`, which hands
 # them to vpk: the Developer ID Application certificate signs the app, the
 # Developer ID Installer certificate signs Setup.pkg, and the App Store
 # Connect API key, stored as a notarytool profile in the same keychain,

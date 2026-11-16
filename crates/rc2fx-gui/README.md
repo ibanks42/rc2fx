@@ -15,7 +15,7 @@ patches no instructions and draws nothing itself.
 
 ## Building
 
-The module is C and is built outside Cargo. `cargo xtask mixer-build` compiles
+The module is C and is built outside Cargo. `./xtask mixer-build` compiles
 it with zig for the mixer:
 
 ```text

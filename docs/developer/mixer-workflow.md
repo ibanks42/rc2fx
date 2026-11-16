@@ -178,5 +178,5 @@ copy of p4.
 
 `target/mixer` is normally a build directory. If it is a symlink to another
 bundle, the build won't overwrite it, and recipes that rebuild first stop at
-that check. Use `cargo xtask mixer install` to deploy the linked bundle as it
+that check. Use `./xtask mixer install` to deploy the linked bundle as it
 is, or remove the link to return to normal builds.
