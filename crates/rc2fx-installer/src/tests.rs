@@ -804,6 +804,29 @@ fn flash_copies_verifies_ejects_then_sends_u() {
 }
 
 #[test]
+fn a_mixer_with_a_placeholder_serial_is_never_switched_or_flashed() {
+    use crate::usb::placeholder_serial;
+    for serial in ["RD0000000", "GV0000000"] {
+        assert!(placeholder_serial(serial), "{serial}");
+    }
+    for serial in ["GV0044100", SERIAL, "", "RD", "rd0000000", "RD0000001"] {
+        assert!(!placeholder_serial(serial), "{serial}");
+    }
+
+    let mut f = fixture();
+    f.fake().items[0].serial = "RD0000000".into();
+    let e = f.engine.enter_usb_mode("").unwrap_err();
+    assert!(e.0.contains("placeholder serial number RD0000000"), "{e}");
+    f.update_mode();
+    let usb = f.drive("RD0000000");
+    let e = f.engine.flash("").unwrap_err();
+    assert!(e.0.contains("settings partition"), "{e}");
+    assert!(f.fake().reports.is_empty(), "no HID command was sent");
+    assert_eq!(f.counts(), (0, 0, 0));
+    assert!(!usb.join("archive.tar.gz").exists());
+}
+
+#[test]
 fn update_drive_size_is_a_ceiling_not_a_constant() {
     use crate::usb::{fits, update_size};
     // 270 MB and 224 MB drives, as Windows showed them on two Pro IIs.
@@ -1564,6 +1587,52 @@ fn stock_image(path: &Path) {
         .map(|(n, d)| (header(n, tar::EntryType::Regular, d.len()), d.to_vec()))
         .collect();
     test_tar(path, &entries);
+}
+
+#[test]
+fn an_rc2fx_image_lists_rodes_files_for_the_mixer_to_check() {
+    let f = fixture();
+    let bundle = runtime::bundle_files(&f.root).unwrap();
+    let (entries, _) = image_entries(&bundle, &sample_profile(), None).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (src, dst) = (dir.path().join("stock.gz"), dir.path().join("rc2fx.gz"));
+    stock_image(&src);
+    let manifest = |archive: &Path| {
+        let mut found = None;
+        walk_archive(archive, 1 << 24, false, |entry| {
+            let name = firmware::normalized(&firmware::entry_name(entry)).to_owned();
+            if name == crate::image_check::MANIFEST_MEMBER {
+                assert_eq!(entry.header().mode().unwrap(), 0o600);
+                let mut data = String::new();
+                entry.read_to_string(&mut data)?;
+                found = Some(data);
+            }
+            Ok(())
+        })
+        .unwrap();
+        found
+    };
+
+    patch_archive(&src, &dst, &entries).unwrap();
+    let want: String = [
+        ("etc/hostname", &b"rodecaster-pro-ii\n"[..]),
+        (
+            "etc/ssh/sshd_config",
+            b"PermitRootLogin yes\nAuthorizedKeysFile .ssh/authorized_keys\n",
+        ),
+        ("usr/bin/rc_audio_mixer", b"mixer"),
+        ("usr/bin/audio-start.sh", b"launcher"),
+    ]
+    .iter()
+    .map(|(name, data)| format!("{}  {name}\n", sum(data)))
+    .collect();
+    // RØDE's files in image order; authorized_keys, which the mixer may
+    // change, and RC2FX's own files are left out.
+    assert_eq!(manifest(&dst).unwrap(), want);
+
+    // A stock image has no launcher to read it.
+    patch_archive(&src, &dst, &[]).unwrap();
+    assert_eq!(manifest(&dst), None);
 }
 
 #[test]

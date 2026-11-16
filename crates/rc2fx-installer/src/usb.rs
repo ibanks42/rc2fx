@@ -164,11 +164,31 @@ fn valid_volume(v: &Volume) -> Result<()> {
     Ok(())
 }
 
+/// RØDE's USB setup reports its serial from a file on the settings
+/// partition and falls back to a placeholder (`RD0000000`, or the model
+/// letters and zeros) when the file is missing: the partition did not mount.
+/// That partition also holds the update drive, so a flash cannot help.
+pub(crate) fn placeholder_serial(serial: &str) -> bool {
+    let bytes = serial.as_bytes();
+    bytes.len() >= 3
+        && bytes[..2].iter().all(u8::is_ascii_uppercase)
+        && bytes[2..].iter().all(|&b| b == b'0')
+}
+
+fn require_real_serial(serial: &str) -> Result<()> {
+    if placeholder_serial(serial) {
+        bail!(
+            "the mixer reports the placeholder serial number {serial} instead of its own. That happens when its settings partition does not mount, and the update drive lives on that partition too, so flashing cannot fix it; nothing was changed. See \"The mixer forgets its setup at every restart\" in Tips and troubleshooting"
+        );
+    }
+    Ok(())
+}
+
 /// Refuse firmware larger than the update drive before writing any of it.
 pub(crate) fn fits(needed: u64, total: u64) -> Result<()> {
     if needed > total {
         bail!(
-            "the firmware needs {} MB but the mixer's update drive holds {} MB. Disconnect the mixer's power for 30 seconds, turn it on and start again; nothing was flashed",
+            "the firmware needs {} MB but the mixer's update drive holds {} MB. Disconnect the mixer's power for 30 seconds, turn it on and start again; nothing was flashed. If it stays this small, the mixer's settings partition is probably not mounting: see \"The mixer forgets its setup at every restart\" in Tips and troubleshooting",
             needed.div_ceil(1 << 20),
             total >> 20
         );
@@ -280,6 +300,7 @@ impl Engine {
             serial,
             self.allow_experimental_duo,
         )?;
+        require_real_serial(&h.serial)?;
         self.step("usb-mode", "Switching the mixer to USB update mode");
         self.command(&h, b'M', "usb-mode")
     }
@@ -300,6 +321,7 @@ impl Engine {
             serial,
             self.allow_experimental_duo,
         )?;
+        require_real_serial(&h.serial)?;
         let owned: Vec<Volume> = self
             .platform
             .volumes()?
