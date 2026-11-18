@@ -47,6 +47,19 @@ impl Chat {
     pub fn latency_samples(&self) -> usize {
         self.voice.latency_samples()
     }
+    /// `Dsp::start_silent` for the whole mix, held for the voice delay.
+    pub fn start_silent(&mut self) {
+        let hold = self.latency_samples();
+        self.output.start_silent(hold);
+    }
+    /// `Dsp::hand_off` for the whole mix.
+    pub fn hand_off(&mut self, to: Option<HandOff>) {
+        self.output.hand_off(to);
+    }
+    /// `Dsp::handed_off` for the whole mix.
+    pub fn handed_off(&self) -> bool {
+        self.output.handed_off()
+    }
     pub fn drain_suppression(
         &mut self,
         timeout: std::time::Duration,

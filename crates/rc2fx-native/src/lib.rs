@@ -1295,10 +1295,11 @@ impl transactions::Endpoints for LiveEndpoints {
         transaction: &rc2fx_native_control::Transaction,
         target: &rc2fx_core::Target,
         mode: rc2fx_native_control::PathMode,
+        reset: rc2fx_native_control::ResetPolicy,
     ) -> Result<parameters::Staged, rc2fx_native_control::ErrorCode> {
         with_parameter_control(transaction.context, &transaction.target_id, |control| {
             control
-                .prepare_mode(target, transaction.revision, mode)
+                .prepare_with(target, transaction.revision, mode, reset)
                 .map_err(parameter_error)
         })
     }
@@ -1307,11 +1308,29 @@ impl transactions::Endpoints for LiveEndpoints {
         transaction: &rc2fx_native_control::Transaction,
         staged: &mut Option<parameters::Staged>,
     ) -> Result<(), rc2fx_native_control::ErrorCode> {
+        // A publication that replaces processing first fades the running
+        // audio out (`Control::hand_off`), about 10 ms of callbacks. That
+        // wait holds no lock: the registry and parameter locks are taken to
+        // start it and again to publish, so port registration, close, the
+        // report and status reads are never held up by it. A path closed
+        // meanwhile is simply gone at the second step; the hand-off's own
+        // references then release the old runtime here, on control.
+        let handing =
+            with_parameter_control(transaction.context, &transaction.target_id, |control| {
+                let staged = staged
+                    .as_ref()
+                    .ok_or(rc2fx_native_control::ErrorCode::Unavailable)?;
+                control.hand_off(staged).map_err(parameter_error)
+            })?;
+        handing.wait();
         with_parameter_control(transaction.context, &transaction.target_id, |control| {
             let staged = staged
                 .take()
                 .ok_or(rc2fx_native_control::ErrorCode::Unavailable)?;
-            control.reserve(staged).map_err(parameter_error)?.commit();
+            control
+                .reserve_after(staged, handing)
+                .map_err(parameter_error)?
+                .commit();
             Ok(())
         })
     }
@@ -1373,11 +1392,13 @@ impl ipc::Backend for NativeBackend {
         transaction: &rc2fx_native_control::Transaction,
         target: &rc2fx_core::Target,
         mode: rc2fx_native_control::PathMode,
+        reset: rc2fx_native_control::ResetPolicy,
     ) -> Result<(), rc2fx_native_control::ErrorCode> {
-        self.transactions.prepare(
+        self.transactions.prepare_with(
             transaction,
             target,
             mode,
+            reset,
             std::time::Instant::now(),
             &mut LiveEndpoints,
         )

@@ -1,8 +1,9 @@
 //! Opt-in audit-namespace receiver. No audio buffer or Rust pointer crosses IPC.
 use rc2fx_core::Target;
 use rc2fx_native_control::{
-    ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode, Reply,
-    Request, Response, Session, TargetStatus, Transaction, VERSION,
+    ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode,
+    RESET_POLICY_VERSION, Reply, Request, ResetPolicy, Response, Session, TargetStatus,
+    Transaction, VERSION,
 };
 use serde::Serialize;
 use std::{
@@ -84,6 +85,7 @@ pub trait Backend: Send + 'static {
         transaction: &Transaction,
         target: &Target,
         mode: PathMode,
+        reset: ResetPolicy,
     ) -> Result<(), ErrorCode>;
     fn commit(&mut self, transaction: &Transaction) -> Result<(), ErrorCode>;
     fn cancel(&mut self, transaction: &Transaction) -> Result<(), ErrorCode>;
@@ -147,17 +149,21 @@ fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> 
                 transaction,
                 target,
                 mode,
+                reset,
             } => {
                 if transaction.session != *session {
                     Err(ErrorCode::WrongSession)
                 } else if !transaction.valid()
                     || transaction.target_id != target.id
                     || target.validate().is_err()
+                    // A peer that negotiated an older version cannot mean it.
+                    || (reset != ResetPolicy::Allow
+                        && request.version < RESET_POLICY_VERSION)
                 {
                     Err(ErrorCode::InvalidParameters)
                 } else {
                     backend
-                        .prepare(&transaction, &target, mode)
+                        .prepare(&transaction, &target, mode, reset)
                         .map(|()| Reply::Prepared { transaction })
                 }
             }
@@ -436,6 +442,8 @@ mod tests {
         pending: Option<Transaction>,
         pending_mode: Option<PathMode>,
         mode: Option<PathMode>,
+        /// The reset policy of the last prepare that reached the backend.
+        reset: Option<ResetPolicy>,
     }
     impl Backend for Fake {
         fn inventory(&mut self) -> Result<Vec<ContextStatus>, ErrorCode> {
@@ -480,8 +488,10 @@ mod tests {
             transaction: &Transaction,
             target: &Target,
             mode: PathMode,
+            reset: ResetPolicy,
         ) -> Result<(), ErrorCode> {
             self.status(transaction.context, &target.id)?;
+            self.reset = Some(reset);
             if transaction.revision <= self.revision.max(1) {
                 return Err(ErrorCode::StaleRevision);
             }
@@ -528,6 +538,7 @@ mod tests {
             operation: Operation::Prepare {
                 transaction,
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(Target::new(
                     "headphones",
                     "Headphones",
@@ -536,6 +547,43 @@ mod tests {
                 )),
             },
         }
+    }
+    /// The reset policy reaches the backend, and only from a peer that
+    /// negotiated a version that knows it.
+    #[test]
+    fn a_refusing_prepare_needs_the_version_that_defines_it() {
+        let current = session(&"a".repeat(32));
+        let refusing = |version| {
+            let mut request = prepare(current.clone());
+            request.version = version;
+            let Operation::Prepare { reset, .. } = &mut request.operation else {
+                unreachable!();
+            };
+            *reset = ResetPolicy::Refuse;
+            request
+        };
+        let mut backend = Fake::default();
+        assert!(matches!(
+            dispatch(&current, refusing(VERSION), &mut backend).reply,
+            Reply::Prepared { .. }
+        ));
+        assert_eq!(backend.reset, Some(ResetPolicy::Refuse));
+        let mut older = Fake::default();
+        assert!(matches!(
+            dispatch(&current, refusing(RESET_POLICY_VERSION - 1), &mut older).reply,
+            Reply::Error {
+                code: ErrorCode::InvalidParameters
+            }
+        ));
+        assert_eq!(older.reset, None, "never reached the backend");
+        // An Allow prepare from an older peer is what it always was.
+        let mut request = prepare(current.clone());
+        request.version = RESET_POLICY_VERSION - 1;
+        assert!(matches!(
+            dispatch(&current, request, &mut older).reply,
+            Reply::Prepared { .. }
+        ));
+        assert_eq!(older.reset, Some(ResetPolicy::Allow));
     }
     #[test]
     fn requested_path_mode_changes_only_after_commit() {
@@ -621,6 +669,7 @@ mod tests {
             Operation::Prepare {
                 transaction: transaction.clone(),
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(Target::new(
                     "headphones",
                     "Headphones",
@@ -715,6 +764,7 @@ mod tests {
             .request(Operation::Prepare {
                 transaction: transaction.clone(),
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(target),
             })
             .unwrap();
@@ -789,6 +839,7 @@ mod tests {
             .request(Operation::Prepare {
                 transaction,
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(target),
             })
             .unwrap_err();

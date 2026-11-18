@@ -30,6 +30,7 @@ sends a single request.
 | `POST /api/v1/diagnostics/reset` | | Reset the telemetry baselines and clear the event log |
 | `GET /api/v1/settings` | | The saved settings file (`state.json`: effects and presets), exactly as stored |
 | `PUT /api/v1/config` | `{"expectedRevision", "targets": [...]}` | Save and apply effect settings |
+| `PUT /api/v1/live` | `{"expectedRevision", "targets": [...]}` | Play effect settings at once and save them later; see [Live editing](#live-editing) |
 | `PUT /api/v1/selection` | `{"expectedRevision", "expectedGeneration", "targetIds": [...]}` | Choose which paths are processed |
 | `PUT /api/v1/routing` | `{"enabled", "expectedRevision", "expectedGeneration"}` | Turn all RC2FX processing off or back on |
 | `POST /api/v1/engine/restart` | `{"expectedRevision", "expectedGeneration"}` | Restart a failed engine |
@@ -47,11 +48,45 @@ generation is stale, the write is refused with 409. Errors are
 | 400 | Invalid settings |
 | 404 | Unknown preset |
 | 409 | Revision or generation conflict |
+| 422 | A change the running audio can't make in place (see [Live editing](#live-editing)) |
 | 503 | Engine busy or stopped |
 
 The in-place update endpoints add 507 when RAM or disk is too full, and use
 409 for an upload that conflicts with the session (see
 [In-place updates](#in-place-updates)).
+
+## Live editing
+
+`PUT /api/v1/live` takes the same body as `PUT /api/v1/config` and puts the
+settings on the running audio at once. What plays is what the user keeps: the
+app sends a control's value while it moves and saves with `PUT /api/v1/config`
+once edits stop. Undo, redo and revert are live edits too, of earlier
+settings; nothing is ever rolled back on its own. A live edit stores nothing,
+keeps the revision and sends no state event. It answers
+`{"accepted": true, "baseRevision": N}`, where `N` is the saved revision,
+unchanged.
+
+| Status | Meaning |
+| --- | --- |
+| 400 | Invalid settings, as for a save |
+| 404 | This engine can't edit live (JACK or simulation); save instead |
+| 409 | `expectedRevision` is not the saved revision |
+| 422 | `liveRequiresSave: ...`: the change would rebuild processing (a target's kind or channel count, noise suppression switched on or off, its lookahead, or the effect order while it runs); save instead |
+| 503 | The engine isn't running, or is still applying the last change; try again shortly |
+
+A 422 compares with what plays now: the last live edit, or else the saved
+settings. Saving exactly what live edits play changes no audio: the engine
+stays Running, routing stays as it is, and the engine's applied revision is
+the new one at once. Any save, routing or selection change replaces live
+edits with what it saves.
+
+`rc2fxd` saves live edits itself when the app leaves them unsaved: once
+nobody has been subscribed to `GET /api/v1/events` for two seconds, and when
+`rc2fxd` stops. That save is like the app's own (the revision goes up by one
+and a state event is sent) and changes no audio. If the settings can't be
+stored, the saved ones go back on the audio instead. If `rc2fxd` dies before
+it can save, its next start puts the saved settings back on the audio; it
+refuses to start if that would mean rebuilding processing.
 
 ## Trust boundary
 

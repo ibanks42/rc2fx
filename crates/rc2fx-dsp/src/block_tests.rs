@@ -99,21 +99,51 @@ pub(super) fn state(dsp: &Dsp) -> Vec<u64> {
         dsp.gain.to_bits(),
         dsp.wet.to_bits(),
         dsp.processing_blend.to_bits(),
-        dsp.envelope.to_bits(),
-        dsp.limiter_gain.to_bits(),
         dsp.gate_db.to_bits(),
         dsp.gate_gain.to_bits(),
         u64::from(dsp.gate_hold),
         u64::from(dsp.gate_voiced),
-        dsp.eq_current as u64,
-        dsp.eq_remaining as u64,
+        dsp.order_count as u64,
+        dsp.prior_count as u64,
+        dsp.order_remaining as u64,
+        u64::from(dsp.handoff_fade),
+        u64::from(dsp.handoff_on),
+        u64::from(dsp.handoff_dry),
+        dsp.handoff_hold as u64,
     ];
+    bits.extend(dsp.order.iter().chain(&dsp.prior_order).map(|e| *e as u64));
     for channel in &dsp.channels {
         bits.push(channel.bypass_position as u64);
         bits.extend(channel.bypass_dry.iter().map(|v| u64::from(v.to_bits())));
-        bits.extend(channel.hp.bits());
     }
-    for bank in &dsp.eq {
+    bits.extend(stages_bits(&dsp.stages));
+    bits.extend(stages_bits(&dsp.prior));
+    bits
+}
+
+/// Everything a `Stages` holds, as bits.
+fn stages_bits(stages: &Stages) -> Vec<u64> {
+    let mut bits = vec![
+        stages.envelope.to_bits(),
+        stages.limiter_gain.to_bits(),
+        stages.eq_current as u64,
+        stages.eq_remaining as u64,
+        u64::from(stages.hp_fade),
+        u64::from(stages.comp_fade),
+        u64::from(stages.limiter_fade),
+        stages.comp_threshold_db.to_bits(),
+        stages.comp_slope.to_bits(),
+        stages.comp_makeup.to_bits(),
+        stages.limiter_ceiling.to_bits(),
+        stages.limiter_release.to_bits(),
+    ];
+    for kept in [stages.comp_scratch, stages.limiter_scratch] {
+        bits.extend([u64::from(kept.is_some()), kept.unwrap_or(0.0).to_bits()]);
+    }
+    for filter in &stages.hp {
+        bits.extend(filter.bits());
+    }
+    for bank in &stages.eq {
         bits.extend(bank.bits());
     }
     bits
@@ -851,6 +881,113 @@ fn bypass_toggles_and_eq_fades_match_the_reference() {
     }
 }
 
+/// Switching the highpass, compressor and limiter, again before their fades
+/// end and again after, jumping their settings and changing the effect order,
+/// in every block length, with a provider and without one.
+#[test]
+fn stage_fades_and_setting_ramps_match_the_reference() {
+    let switch = |block: usize, t: &mut Target| match block % 23 {
+        2 => t.highpass.enabled = !t.highpass.enabled,
+        3 | 4 => t.compressor.enabled = !t.compressor.enabled,
+        5 => t.limiter.enabled = !t.limiter.enabled,
+        // Back on (or off) while the previous fade is still going.
+        6 => t.highpass.enabled = !t.highpass.enabled,
+        9 => {
+            t.compressor.threshold = if t.compressor.threshold < -20.0 {
+                -6.0
+            } else {
+                -40.0
+            };
+            t.compressor.ratio = if t.compressor.ratio < 5.0 { 20.0 } else { 2.0 };
+            t.compressor.makeup = if t.compressor.makeup > 0.0 { 0.0 } else { 9.0 };
+        }
+        10 => {
+            t.limiter.ceiling = if t.limiter.ceiling < -6.0 {
+                -1.0
+            } else {
+                -18.0
+            }
+        }
+        12 => {
+            t.limiter.release = if t.limiter.release < 500.0 {
+                2000.0
+            } else {
+                10.0
+            }
+        }
+        14 => {
+            t.highpass.frequency = if t.highpass.frequency < 100.0 {
+                300.0
+            } else {
+                40.0
+            }
+        }
+        // A new order, and another one block later, while the first one is
+        // still fading in (without a provider: with one, the order is fixed).
+        16 | 17 if !t.suppression.enabled => t.order.rotate_left(block % 5 + 1),
+        _ => {}
+    };
+    for (target, voice) in [
+        (Target::new("out", "Out", TargetKind::Output, 2), None),
+        (Target::new("out", "Out", TargetKind::Output, 1), None),
+        (mic(0.5, 0.4), Some((40, false))),
+    ] {
+        let mut target = target;
+        target.highpass.enabled = true;
+        target.compressor.enabled = true;
+        target.compressor.threshold = -40.0;
+        target.limiter.enabled = true;
+        target.limiter.ceiling = -18.0;
+        let total = run(target, voice, 230, 0.9, switch, clean, unprimed);
+        assert!(total.gain_reduction > 0.0);
+    }
+}
+
+/// Starting silent or dry and handing off to silence or to the dry signal,
+/// in every block length, with a provider and without one.
+#[test]
+fn output_hand_offs_match_the_reference() {
+    let mut output = Target::new("out", "Out", TargetKind::Output, 2);
+    output.compressor.enabled = true;
+    output.gain.enabled = true;
+    output.gain.db = -6.0;
+    for (target, voice) in [(output, None), (mic(0.5, 0.4), Some((40, false)))] {
+        for start in 0..3 {
+            let p = Prepared::new(&target, 48_000).unwrap();
+            let (mut actual, mut reference) = pair(&p, voice);
+            for dsp in [&mut actual, &mut reference] {
+                match start {
+                    0 => dsp.start_silent(dsp.latency_samples() + 37),
+                    1 => dsp.start_dry(),
+                    _ => {}
+                }
+            }
+            for block in 0..60 {
+                let request = match block % 20 {
+                    0..=7 => None,
+                    8..=12 => Some(HandOff::Silence),
+                    // Back in mid-fade, then out to the dry signal.
+                    13 => None,
+                    _ => Some(HandOff::Dry),
+                };
+                actual.hand_off(request);
+                reference.hand_off(request);
+                assert_eq!(actual.handed_off(), reference.handed_off());
+                let frames = LENGTHS[block % LENGTHS.len()];
+                let input = tone(block, frames, target.channels, 0.9);
+                check(
+                    &mut actual,
+                    &mut reference,
+                    &p,
+                    &input,
+                    block % 2 == 0,
+                    &|| format!("start {start} block {block}"),
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn a_disabled_eq_mono_and_every_other_stage_match_the_reference() {
     for channels in [1, 2] {
@@ -1369,12 +1506,12 @@ fn a_limiter_parked_below_one_reports_the_reference_reduction() {
                     reduced = reduced.max(meter.gain_reduction);
                 }
                 assert!(reduced > 0.0);
-                assert!(actual.limiter_gain < 1.0);
+                assert!(actual.stages.limiter_gain < 1.0);
                 if release > 100.0 {
                     // The slowest release takes a minute of audio to stop
                     // moving. Start both paths just short of where it stops.
                     for dsp in [&mut actual, &mut reference] {
-                        dsp.limiter_gain = 1.0 - 6.0e-17 / (1.0 - p.limiter_release);
+                        dsp.stages.limiter_gain = 1.0 - 6.0e-17 / (1.0 - p.limiter_release);
                     }
                 }
                 // Silent until the gain stops moving. It stops below 1 and
@@ -1382,12 +1519,12 @@ fn a_limiter_parked_below_one_reports_the_reference_reduction() {
                 let mut still = 0;
                 let mut block = 20;
                 while still < 30 {
-                    let before = actual.limiter_gain;
+                    let before = actual.stages.limiter_gain;
                     let input = tone(block, 112, 2, 0.0);
                     let meter = check(&mut actual, &mut reference, &p, &input, true, &|| {
                         context(block)
                     });
-                    still = if actual.limiter_gain.to_bits() == before.to_bits() {
+                    still = if actual.stages.limiter_gain.to_bits() == before.to_bits() {
                         still + 1
                     } else {
                         0
@@ -1396,10 +1533,10 @@ fn a_limiter_parked_below_one_reports_the_reference_reduction() {
                     block += 1;
                     assert!(block < 2500, "{}", context(block));
                 }
-                assert!(actual.limiter_gain < 1.0, "{}", context(block));
+                assert!(actual.stages.limiter_gain < 1.0, "{}", context(block));
                 assert_eq!(
-                    actual.limiter_reduction_for.to_bits(),
-                    actual.limiter_gain.to_bits()
+                    actual.stages.limiter_reduction_for.to_bits(),
+                    actual.stages.limiter_gain.to_bits()
                 );
                 // Loud again from the parked gain, then quiet.
                 for block in block..block + 30 {
@@ -1717,7 +1854,7 @@ fn a_held_snapshot_is_prepared_once_and_again_after_every_change() {
     held = Prepared::new(&target, 48_000).unwrap();
     run(&mut actual, &held, 1, &mut skipped);
     assert_eq!(actual.seen, 0, "coefficients are smoothing");
-    assert!(actual.eq[actual.eq_current].is_smoothing(0));
+    assert!(actual.stages.eq[actual.stages.eq_current].is_smoothing(0));
     let before = skipped;
     run(&mut actual, &held, 400, &mut skipped);
     assert_eq!(actual.seen, held.serial, "smoothing has finished");
@@ -1726,10 +1863,10 @@ fn a_held_snapshot_is_prepared_once_and_again_after_every_change() {
     target.eq.bands[5].enabled = false;
     held = Prepared::new(&target, 48_000).unwrap();
     run(&mut actual, &held, 1, &mut skipped);
-    assert_ne!(actual.eq_remaining, 0);
+    assert_ne!(actual.stages.eq_remaining, 0);
     assert_eq!(actual.seen, 0, "a fade is running");
     run(&mut actual, &held, 6, &mut skipped);
-    assert_eq!(actual.eq_remaining, 0);
+    assert_eq!(actual.stages.eq_remaining, 0);
     assert_eq!(actual.seen, held.serial);
     // An edit that arrives during a fade waits for it, and is not lost.
     target.eq.bands[6].enabled = false;
@@ -1741,7 +1878,11 @@ fn a_held_snapshot_is_prepared_once_and_again_after_every_change() {
     assert_eq!(actual.seen, 0);
     run(&mut actual, &held, 12, &mut skipped);
     assert_eq!(actual.seen, held.serial);
-    assert!(actual.eq[actual.eq_current].shape.same_as(&held.eq_shape));
+    assert!(
+        actual.stages.eq[actual.stages.eq_current]
+            .shape
+            .same_as(&held.eq_shape)
+    );
     // Going back to an earlier snapshot is a change like any other.
     let earlier = held.clone();
     target.eq.input_gain_db = 3.0;
@@ -1770,12 +1911,12 @@ fn prepare_where_skipped(dsp: &mut Dsp, p: &Prepared, frames: usize) -> Option<b
         "a skipped preparation changes the state"
     );
     assert_eq!(dsp.seen, p.serial);
-    assert_eq!(dsp.eq_remaining, 0);
-    let bank = &dsp.eq[dsp.eq_current];
+    assert_eq!(dsp.stages.eq_remaining, 0);
+    let bank = &dsp.stages.eq[dsp.stages.eq_current];
     assert!(bank.shape.same_as(&p.eq_shape));
     Some(
         (0..p.channels())
-            .any(|ch| bank.stalled(ch) != 0 || (p.hp_on && dsp.channels[ch].hp.stalled(p.hp))),
+            .any(|ch| bank.stalled(ch) != 0 || (p.hp_on && dsp.stages.hp[ch].stalled(p.hp))),
     )
 }
 
@@ -1831,8 +1972,8 @@ fn filters_stopped_short_of_their_target_are_skipped_and_match_the_reference() {
             "skipped {skipped} stalled {stalled}"
         );
         // Stopped short, not arrived: the high-pass and at least one band.
-        assert!(actual.channels[0].hp.stalled(p.hp));
-        assert_ne!(actual.eq[actual.eq_current].stalled(0), 0);
+        assert!(actual.stages.hp[0].stalled(p.hp));
+        assert_ne!(actual.stages.eq[actual.stages.eq_current].stalled(0), 0);
     }
 }
 
@@ -1872,7 +2013,7 @@ fn a_preparation_that_would_be_skipped_changes_nothing_when_it_runs() {
                     skipped += 1;
                     stalled += u64::from(short);
                     highpass += u64::from(p.hp_on);
-                    disabled += u64::from(!actual.eq[actual.eq_current].is_on());
+                    disabled += u64::from(!actual.stages.eq[actual.stages.eq_current].is_on());
                 }
                 None => full += u64::from(frames != 0),
             }

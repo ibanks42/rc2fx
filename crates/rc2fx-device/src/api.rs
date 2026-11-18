@@ -152,12 +152,13 @@ fn operation_error(error_value: Error) -> Reply {
     let status = match &error_value {
         Error::Store(StoreError::Invalid(_)) => 400,
         Error::Store(StoreError::Conflict) | Error::Audio(_) | Error::RuntimeFault => 409,
-        Error::NativeUnsupported(_) | Error::SuppressionInUse => 422,
-        Error::Store(StoreError::NotFound) => 404,
+        Error::NativeUnsupported(_) | Error::SuppressionInUse | Error::LiveRequiresSave(_) => 422,
+        Error::Store(StoreError::NotFound) | Error::LiveUnsupported => 404,
         Error::Busy
         | Error::Stopped
         | Error::Native(_)
         | Error::NativeBusy
+        | Error::LiveUnavailable
         | Error::Events(EventError::TooManyClients) => 503,
         _ => 500,
     };
@@ -364,6 +365,20 @@ impl Api {
                 },
                 Err(reply) => reply,
             },
+            // Live editing: effect settings on the running audio at once,
+            // saved later. The app sends a control's value while it moves and
+            // saves once it stops; undo and revert send earlier settings the
+            // same way. Nothing is stored here, the revision stays, and no
+            // state event is sent. Native audio only; elsewhere this is 404.
+            ("PUT", "api/v1/live") => match parse::<rc2fx_core::ConfigUpdate>(body) {
+                Ok(update) => match receive(controller.live(update)).await {
+                    Ok(revision) => {
+                        reply(200, &json!({"accepted": true, "baseRevision": revision}))
+                    }
+                    Err(error) => operation_error(error),
+                },
+                Err(reply) => reply,
+            },
             ("PUT", "api/v1/routing") => match parse::<rc2fx_core::RoutingRequest>(body) {
                 Ok(request) => match receive(controller.routing(request)).await {
                     Ok(state) => reply(202, &state),
@@ -544,6 +559,81 @@ mod tests {
             operation_error(Error::Native("native unavailable".into())).status,
             503
         );
+    }
+
+    /// What the app reads from a live edit refusal: 422 with the
+    /// `liveRequiresSave` prefix, 404 "Unknown endpoint" for "cannot
+    /// edit live here", 503 for "try again shortly".
+    #[test]
+    fn live_refusals_have_the_statuses_the_app_expects() {
+        let needs_save = operation_error(Error::LiveRequiresSave("mic-1 changes".into()));
+        assert_eq!(needs_save.status, 422);
+        assert!(
+            body(&needs_save)["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("liveRequiresSave"),
+            "{}",
+            needs_save.body.get()
+        );
+        let unsupported = operation_error(Error::LiveUnsupported);
+        assert_eq!(unsupported.status, 404);
+        assert_eq!(body(&unsupported)["error"], "Unknown endpoint");
+        assert_eq!(operation_error(Error::LiveUnavailable).status, 503);
+        assert_eq!(operation_error(Error::NativeBusy).status, 503);
+        assert_eq!(
+            operation_error(Error::Store(StoreError::Conflict)).status,
+            409
+        );
+        assert_eq!(
+            operation_error(Error::Store(StoreError::Invalid("bad".into()))).status,
+            400
+        );
+    }
+
+    /// Without the native engine (JACK, simulation, or none) a live edit is
+    /// "unknown", so the app saves instead, and nothing changes.
+    #[tokio::test]
+    async fn live_editing_is_unknown_without_the_native_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, owner) = Coordinator::new(
+            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
+            None,
+        )
+        .unwrap();
+        let thread = std::thread::spawn(move || owner.run());
+        let mut api = Api::new(handle.clone(), Options::default());
+        let request = |method: &str, path: &str, body| Request {
+            method: method.into(),
+            path: path.into(),
+            body,
+        };
+        let original: DeviceState =
+            decode(&api.request(request("GET", "api/v1/state", None)).await);
+        let mut targets = original.config.targets.clone();
+        targets[0].gain.db = -7.0;
+        let update = serde_json::to_value(ConfigUpdate {
+            expected_revision: original.config.revision,
+            targets,
+        })
+        .unwrap();
+        let reply = api
+            .request(request("PUT", "api/v1/live", Some(update)))
+            .await;
+        assert_eq!(reply.status, 404);
+        assert_eq!(body(&reply)["error"], "Unknown endpoint");
+        // A missing or malformed body is refused before the engine is asked.
+        assert_eq!(
+            api.request(request("PUT", "api/v1/live", None))
+                .await
+                .status,
+            400
+        );
+        let after: DeviceState = decode(&api.request(request("GET", "api/v1/state", None)).await);
+        assert_eq!(after, original);
+        handle.close();
+        handle.shutdown().await.unwrap();
+        thread.join().unwrap();
     }
 
     /// The diagnostics endpoints: a reset answers with the state, and the event

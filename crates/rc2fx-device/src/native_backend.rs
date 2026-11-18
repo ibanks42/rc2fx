@@ -4,7 +4,7 @@ use crate::{coordinator::Error, recent::PathRecent, store::PreparedSave};
 use rc2fx_core::{Config, Meter, MeterType, TargetKind, TargetMeter};
 use rc2fx_native_control::{
     Client, ContextStatus, MAX_PATHS, METER_RING_WINDOWS, METER_WINDOW_FRAMES, Operation, PathMode,
-    Publication, Reply, TargetStatus, Transaction, fingerprint,
+    Publication, RESET_POLICY_VERSION, Reply, ResetPolicy, TargetStatus, Transaction, fingerprint,
 };
 use std::{
     path::Path,
@@ -44,6 +44,10 @@ const fn idle_poll_interval(ring_windows: usize) -> Duration {
     Duration::from_millis(if idle_ms < fast_ms { fast_ms } else { idle_ms })
 }
 const BUSY_RETRY: Duration = Duration::from_secs(2);
+/// How long live edits play with nobody subscribed before the daemon saves
+/// them itself. A reconnecting app (a new USB session, or a subscription
+/// renewed after an overflow) subscribes again well within this.
+const LIVE_ORPHAN_GRACE: Duration = Duration::from_secs(2);
 const REGISTRY_WAIT: Duration = Duration::from_secs(60);
 // Native USB ports exist before their hardware streams have finished startup.
 // Only first progress gets this grace; a previously advancing path retains the
@@ -62,6 +66,11 @@ struct Bound {
     progressed: bool,
     /// The callback and worker peaks since the last read.
     recent: PathRecent,
+    /// `publication` is a live edit the callback has not yet confirmed. Until
+    /// it does, the path counts as applied when the library has published
+    /// exactly that edit: a live edit never waits for an acknowledgement,
+    /// so it must not make the engine look unsettled in between.
+    unconfirmed: bool,
 }
 impl Bound {
     fn timed_out(&self, now: Instant, started: Instant, timeout: Duration) -> bool {
@@ -99,6 +108,12 @@ pub struct Runtime {
     writable: bool,
     started: Instant,
     pub(crate) process: crate::diagnostic_history::NativeProcess,
+    /// The targets live edits play, when they differ from the saved ones.
+    /// Any publication of saved settings (a save, a routing or selection
+    /// change) replaces them; a new connection starts without any.
+    live: Option<Vec<rc2fx_core::Target>>,
+    /// Since when live edits have played with nobody subscribed.
+    orphaned_since: Option<Instant>,
 }
 pub(crate) struct Observation {
     pub failure: bool,
@@ -256,6 +271,10 @@ impl Runtime {
                 .any(|target| target.mode == PathMode::Processed);
         let now = Instant::now();
         let mut paths = Vec::with_capacity(count);
+        // Paths that play other settings than the saved ones: an unsaved
+        // live edit left by a daemon that crashed or was killed before it could
+        // put the saved settings back.
+        let mut stale = Vec::new();
         for target in config.targets.iter().filter(|target| {
             contexts
                 .iter()
@@ -276,7 +295,6 @@ impl Runtime {
             if matches.len() != 1
                 || matches[0].0 == 0
                 || matches[0].1.published == 0
-                || matches[0].1.fingerprint != expected
                 || matches[0].1.mode != desired_mode(config, enabled, &target.id)
             {
                 return Err(failure(
@@ -284,10 +302,15 @@ impl Runtime {
                 ));
             }
             let (context, status) = matches[0];
+            if status.fingerprint != expected {
+                stale.push(target.id.clone());
+            }
             paths.push(Bound {
                 id: target.id.clone(),
                 context,
-                expected,
+                // What the path plays now. For a stale path that differs from
+                // the saved settings, so `prepare_change` below republishes it.
+                expected: status.fingerprint,
                 mode: status.mode,
                 kind: target.kind,
                 channels: target.channels,
@@ -296,6 +319,7 @@ impl Runtime {
                 last_progress: now,
                 progressed: false,
                 recent: PathRecent::default(),
+                unconfirmed: false,
             });
         }
         if paths.len() != count
@@ -306,7 +330,7 @@ impl Runtime {
         {
             return Err(failure("saved selection includes an unbound native path"));
         }
-        Ok(Self {
+        let mut runtime = Self {
             client,
             paths,
             pending: Vec::new(),
@@ -325,7 +349,39 @@ impl Runtime {
             writable: false,
             started: now,
             process,
-        })
+            live: None,
+            orphaned_since: None,
+        };
+        if !stale.is_empty() {
+            runtime.restore_saved(config, &stale)?;
+        }
+        Ok(runtime)
+    }
+    /// Puts the saved settings back on paths that play unsaved live edits
+    /// (see `connect`), through the same Prepare and Commit as a save: a
+    /// parameter swap at the callback boundary, with the native revision a
+    /// save would use. A live edit never rebuilds processing, so a path that
+    /// would need one (the library answers RequiresReset) fails the connection
+    /// as any other mismatch does. A busy library is waited out as a save
+    /// waits (`prepare_retrying`). Unacknowledged commits stay pending, and
+    /// the first reads keep the engine Starting until the callback has them.
+    fn restore_saved(&mut self, config: &Config, stale: &[String]) -> Result<(), Error> {
+        eprintln!(
+            "Native paths {} play settings that were never saved (live edits left by an \
+             earlier daemon); restoring the saved settings",
+            stale.join(", ")
+        );
+        let change = self
+            .prepare_retrying(config, self.enabled, ResetPolicy::Refuse)
+            .map_err(|error| {
+                failure(format!(
+                    "native path/settings do not match saved configuration, and restoring \
+                     them failed: {error}"
+                ))
+            })?;
+        debug_assert!(change.expected.iter().all(|path| stale.contains(&path.id)));
+        self.publish_change(change, config, self.enabled);
+        Ok(())
     }
     pub(crate) fn attach(&mut self, config: &Config, generation: u64) -> Result<(), Error> {
         if self.revision != config.revision
@@ -382,13 +438,19 @@ impl Runtime {
     /// then advance independently at each path's callback boundary. A partial
     /// or lost commit acknowledgement is retained as pending, never rolled back
     /// or misreported as an atomic preset-wide audio transition.
-    pub(crate) fn save(&mut self, save: PreparedSave<'_>) -> Result<(), Error> {
-        if !self.writable || !self.pending.is_empty() {
+    ///
+    /// Returns whether anything was published. Nothing is when the audio
+    /// already plays the saved settings, as after live edits of exactly them;
+    /// such a save needs nothing from the library, so it is taken even while
+    /// an earlier publication waits for its acknowledgement.
+    pub(crate) fn save(&mut self, save: PreparedSave<'_>) -> Result<bool, Error> {
+        if (!self.writable || !self.pending.is_empty()) && !self.plays(save.candidate_config()) {
             return Err(failure(
                 "Native audio is not ready for another settings change; no settings were saved",
             ));
         }
-        let prepared = self.prepare_retrying(save.candidate_config(), self.enabled)?;
+        let prepared =
+            self.prepare_retrying(save.candidate_config(), self.enabled, ResetPolicy::Allow)?;
         let saved = match save.commit() {
             Ok(saved) => saved,
             Err(error) => {
@@ -397,8 +459,115 @@ impl Runtime {
                 return Err(Error::Store(error));
             }
         };
-        self.publish_change(prepared, &saved, self.enabled);
+        Ok(self.publish_change(prepared, &saved, self.enabled))
+    }
+    /// Every bound path already plays `config`'s settings in its mode.
+    fn plays(&self, config: &Config) -> bool {
+        self.paths.iter().all(|path| {
+            path.mode == desired_mode(config, self.enabled, &path.id)
+                && config.targets.iter().any(|target| {
+                    target.id == path.id && fingerprint(target).ok() == Some(path.expected)
+                })
+        })
+    }
+    /// The targets live edits play, when they differ from the saved ones.
+    pub(crate) fn live_targets(&self) -> Option<&[rc2fx_core::Target]> {
+        self.live.as_deref()
+    }
+    /// The audio plays live edits that are not saved yet.
+    pub(crate) fn live_editing(&self) -> bool {
+        self.live.is_some()
+    }
+    /// Plays `candidate` (the saved settings with other effect values, same
+    /// revision and selection) at once, without saving it yet. Each changed
+    /// path gets the same Prepare and Commit a save gives it, so the callback
+    /// swaps the parameters exactly as it does for a save; the caller has
+    /// already refused anything that would rebuild processing, and the library
+    /// refuses it too. Nothing waits here: a library still busy with the last
+    /// change answers Busy at once, and the app sends its newest settings again
+    /// shortly. Unlike a save this does not make the engine unwritable or
+    /// hurry the next read, so a live edit never shows as an unsettled engine.
+    pub(crate) fn live(&mut self, candidate: &Config, saved: &Config) -> Result<(), Error> {
+        if !self.writable || !self.pending.is_empty() {
+            return Err(Error::NativeBusy);
+        }
+        if candidate.revision != self.revision
+            || saved.revision != self.revision
+            || candidate.selected_targets != self.selected
+            || saved.selected_targets != self.selected
+        {
+            return Err(Error::InvalidRuntime);
+        }
+        let change = self
+            .prepare_change(candidate, self.enabled, self.parameters_only())
+            .map_err(|error| match error {
+                // The library's own refusal to rebuild a path in place.
+                Error::NativeUnsupported(message) => Error::LiveRequiresSave(message),
+                error => error,
+            })?;
+        self.publish_unsaved(change);
+        self.live = (candidate.targets != saved.targets).then(|| candidate.targets.clone());
         Ok(())
+    }
+    /// Puts the saved settings back on the audio in place of live edits,
+    /// only when keeping the edits failed (see `Controller::keep_live`).
+    /// `retry` waits out a busy library as a save does (for shutdown); without
+    /// it a busy library is left for the next try.
+    pub(crate) fn restore_live(&mut self, saved: &Config, retry: bool) -> Result<(), Error> {
+        if self.live.is_none() {
+            return Ok(());
+        }
+        if !self.pending.is_empty() {
+            return Err(Error::NativeBusy);
+        }
+        if saved.revision != self.revision || saved.selected_targets != self.selected {
+            return Err(Error::InvalidRuntime);
+        }
+        let change = if retry {
+            self.prepare_retrying(saved, self.enabled, self.parameters_only())?
+        } else {
+            self.prepare_change(saved, self.enabled, self.parameters_only())?
+        };
+        self.publish_unsaved(change);
+        self.live = None;
+        self.orphaned_since = None;
+        Ok(())
+    }
+    /// Whether live edits have played with nobody subscribed for
+    /// `LIVE_ORPHAN_GRACE`: the app that made them went away without saving,
+    /// so the daemon should keep them for it.
+    pub(crate) fn live_orphaned(&mut self, watched: bool, now: Instant) -> bool {
+        if watched || self.live.is_none() {
+            self.orphaned_since = None;
+            return false;
+        }
+        let since = *self.orphaned_since.get_or_insert(now);
+        now.duration_since(since) >= LIVE_ORPHAN_GRACE
+    }
+    /// Commits a prepared change that nothing saved: a live edit, or the saved
+    /// settings put back in its place. The revision and selection stay. A lost
+    /// commit reply is kept as pending and retried with the same receipt, as
+    /// for a save, since the library may already have published it.
+    fn publish_unsaved(&mut self, change: PreparedChange) {
+        for next in change.expected {
+            let path = self
+                .paths
+                .iter_mut()
+                .find(|path| path.id == next.id)
+                .expect("bound native path");
+            path.expected = next.fingerprint;
+            path.publication = next.revision;
+            path.mode = next.mode;
+            path.unconfirmed = true;
+        }
+        for transaction in change.transactions {
+            if matches!(
+                self.client.commit_saved(&transaction),
+                Publication::Pending { .. }
+            ) {
+                self.pending.push(transaction);
+            }
+        }
     }
     pub(crate) fn set_enabled(&mut self, config: &Config, enabled: bool) -> Result<(), Error> {
         // Explicit disable can still remove a failed DSP path. It must not
@@ -406,9 +575,20 @@ impl Runtime {
         if !self.pending.is_empty() || (enabled && !self.writable) {
             return Err(Error::NativeBusy);
         }
-        let prepared = self.prepare_retrying(config, enabled)?;
+        let prepared = self.prepare_retrying(config, enabled, ResetPolicy::Allow)?;
         self.publish_change(prepared, config, enabled);
         Ok(())
+    }
+    /// The policy for a change that must not rebuild processing (a live
+    /// edit, or putting saved settings back in its place): Refuse, where the library
+    /// knows it. An older library gets Allow; the daemon has already refused
+    /// any such change it would be asked for.
+    fn parameters_only(&self) -> ResetPolicy {
+        if self.client.protocol() >= RESET_POLICY_VERSION {
+            ResetPolicy::Refuse
+        } else {
+            ResetPolicy::Allow
+        }
     }
     /// The native library refuses with Busy while RØDE's mixer registers or
     /// closes audio ports (USB streams starting or stopping) or a replaced
@@ -418,10 +598,11 @@ impl Runtime {
         &mut self,
         config: &Config,
         enabled: bool,
+        reset: ResetPolicy,
     ) -> Result<PreparedChange, Error> {
         let deadline = Instant::now() + BUSY_RETRY;
         loop {
-            match self.prepare_change(config, enabled) {
+            match self.prepare_change(config, enabled, reset) {
                 Err(Error::NativeBusy) if Instant::now() < deadline => {
                     std::thread::sleep(BUSY_PAUSE);
                 }
@@ -429,7 +610,21 @@ impl Runtime {
             }
         }
     }
-    fn prepare_change(&mut self, config: &Config, enabled: bool) -> Result<PreparedChange, Error> {
+    /// `reset` is sent with every Prepare; `Refuse` needs a library that
+    /// speaks `RESET_POLICY_VERSION`, and fails here without one.
+    fn prepare_change(
+        &mut self,
+        config: &Config,
+        enabled: bool,
+        reset: ResetPolicy,
+    ) -> Result<PreparedChange, Error> {
+        if reset == ResetPolicy::Refuse && self.client.protocol() < RESET_POLICY_VERSION {
+            return Err(Error::NativeUnsupported(
+                "the loaded native library cannot refuse a processing rebuild; restart the \
+                 mixer's audio to load the current one"
+                    .into(),
+            ));
+        }
         if config
             .selected_targets
             .iter()
@@ -474,6 +669,7 @@ impl Runtime {
                 transaction: transaction.clone(),
                 target: Box::new(target.clone()),
                 mode,
+                reset,
             });
             prepared.push(transaction.clone());
             let preparation = match result {
@@ -529,11 +725,19 @@ impl Runtime {
             expected,
         })
     }
-    fn publish_change(&mut self, change: PreparedChange, config: &Config, enabled: bool) {
+    /// Returns whether anything was published.
+    fn publish_change(&mut self, change: PreparedChange, config: &Config, enabled: bool) -> bool {
         self.revision = config.revision;
         self.selected = config.selected_targets.clone();
         self.enabled = enabled;
-        self.writable = false;
+        // Every path now plays these saved settings, live edits or not.
+        self.live = None;
+        self.orphaned_since = None;
+        let published = !change.transactions.is_empty();
+        // Nothing published: nothing for the callback to acknowledge.
+        if published {
+            self.writable = false;
+        }
         for next in change.expected {
             let path = self
                 .paths
@@ -543,6 +747,7 @@ impl Runtime {
             path.expected = next.fingerprint;
             path.publication = next.revision;
             path.mode = next.mode;
+            path.unconfirmed = false;
         }
         for transaction in change.transactions {
             if matches!(
@@ -553,6 +758,7 @@ impl Runtime {
             }
         }
         self.next_poll = Instant::now();
+        published
     }
     /// A processed path stopped advancing, or no path advances at all.
     fn stalled(&self, now: Instant) -> bool {
@@ -685,8 +891,14 @@ impl Runtime {
             // heard there: the next block reads the newest published descriptor.
             // A live path still confirms application before further writes.
             let idle_passthrough = path.mode == PathMode::Passthrough && !live;
+            let confirmed = status.applied == path.publication || idle_passthrough;
+            if confirmed {
+                path.unconfirmed = false;
+            }
+            // A published live edit counts before the callback confirms it:
+            // the next block plays it, and nothing waits on it.
             applied &= status.published == path.publication
-                && (status.applied == path.publication || idle_passthrough)
+                && (confirmed || path.unconfirmed)
                 && status.mode == path.mode
                 && status.fingerprint == path.expected;
             let meter = status

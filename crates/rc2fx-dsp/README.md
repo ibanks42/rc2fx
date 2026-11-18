@@ -24,14 +24,27 @@ control side once the callback has released them.
   and mode.
 - Structural EQ changes crossfade between two banks over 240 samples. Edits
   that arrive during a fade are coalesced.
+- No live edit is a step in the output. Switching the high-pass, compressor
+  or limiter on or off fades the stage in or out over 480 samples (10 ms); a
+  switched-off stage costs nothing once faded out. The compressor's and
+  limiter's settings are smoothed like the gain. A re-enabled high-pass
+  starts from rest; a re-enabled compressor or limiter resumes the detector
+  history it had when switched off. An effect order change crossfades over
+  240 samples from the old order, running on a copy of the stage state, to
+  the new one.
+- A processor that is being replaced hands off without a step: `hand_off`
+  fades its output to silence, or to its dry signal, over 480 samples. Its
+  replacement starts silent and fades in once its own delay has passed
+  (`start_silent`), or fades in from the dry signal (`start_dry`).
 - Linked stereo detection for the compressor and limiter, with bounded finite
   output and meters.
 - Dry and wet paths share the worker's reported latency, so bypass doesn't
   shift timing. Bypass changes are smoothed.
 - Any frame count, including zero-length blocks, and an in-place entry point.
 
-Changing a target's channel count, kind, effect order, algorithm or resolved
-worker geometry requires a new state. Incompatible snapshots and wrong buffer
+Changing a target's channel count, kind, algorithm or resolved worker
+geometry, or the effect order while a suppression provider is allocated,
+requires a new state. Incompatible snapshots and wrong buffer
 lengths are rejected before any state or output changes. Other edits are
 applied by passing a new `Prepared`.
 

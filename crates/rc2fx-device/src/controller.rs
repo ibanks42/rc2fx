@@ -112,6 +112,50 @@ fn save_effects(
     Ok(None)
 }
 
+/// Why moving the running audio from `running` to `candidate` needs a save
+/// rather than a live edit, or None when a live edit can play it. A live edit
+/// may only hand a path new parameters; it never rebuilds processing. The rule is
+/// the native library's own (`rc2fx_dsp::Prepared::requires_reset`, which
+/// covers noise suppression switched on or off, its lookahead, and the effect
+/// order around it), plus a changed kind, channel count or target set. The
+/// app predicts the same thing before it asks.
+#[cfg_attr(
+    not(all(feature = "native-pipeline", target_os = "linux")),
+    allow(dead_code)
+)]
+pub(crate) fn live_needs_save(
+    running: &[rc2fx_core::Target],
+    candidate: &[rc2fx_core::Target],
+) -> Option<String> {
+    if running.len() != candidate.len() {
+        return Some("the target list changed".into());
+    }
+    for next in candidate {
+        let Some(now) = running.iter().find(|target| target.id == next.id) else {
+            return Some(format!("{} is not playing", next.id));
+        };
+        if now == next {
+            continue;
+        }
+        if now.kind != next.kind || now.channels != next.channels {
+            return Some(format!("{} changes its kind or channel count", next.id));
+        }
+        let (Ok(before), Ok(after)) = (
+            rc2fx_dsp::Prepared::new(now, 48_000),
+            rc2fx_dsp::Prepared::new(next, 48_000),
+        ) else {
+            return Some(format!("{} cannot be prepared for live editing", next.id));
+        };
+        if before.requires_reset(&after) {
+            return Some(format!(
+                "{} changes noise suppression or its effect order",
+                next.id
+            ));
+        }
+    }
+    None
+}
+
 impl Controller {
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn attach_native(
@@ -223,18 +267,116 @@ impl Controller {
     pub(crate) fn has_clients(&self) -> bool {
         self.front.has_clients()
     }
+    /// `result` says whether the save published anything to the audio.
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
-    fn native_saved(&mut self, result: Result<(), Error>) -> Result<DeviceState, Error> {
+    fn native_saved(&mut self, result: Result<bool, Error>) -> Result<DeviceState, Error> {
         if let Some(fault) = self.durability_fault().map(str::to_owned) {
             self.unavailable(&format!("Durable save uncertain: {fault}"));
         }
-        result?;
+        let published = result?;
+        if !published && self.settled() {
+            // The audio already plays exactly these settings (live edits of
+            // them, or a save that changes nothing audible): nothing waits for
+            // an acknowledgement, so the engine stays Running, routing stays
+            // as it is, and the new revision is the applied one at once.
+            self.engine.applied_revision = self.config().revision;
+            return Ok(self.saved());
+        }
         self.engine.status = EnginePhase::Starting;
         self.engine.audio_advancing = false;
         self.engine.applied_revision = 0;
         self.selection.allowed = false;
         self.engine.message = "Settings saved; waiting for native audio acknowledgement".into();
         Ok(self.saved())
+    }
+    /// The engine runs, advancing, with everything it was given applied.
+    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    fn settled(&self) -> bool {
+        self.engine.status == EnginePhase::Running
+            && self.engine.audio_advancing
+            && self.engine.applied_revision != 0
+            && self.durability_fault().is_none()
+    }
+    /// `PUT api/v1/live` on the native engine: the settings go on the
+    /// running audio at once and stay there; they are what the user has.
+    /// Nothing is stored yet, the revision stays, no state is published, and
+    /// the engine stays Running. The app saves them once edits stop, or the
+    /// daemon does (`keep_live`). Answers with the saved revision the edit was
+    /// based on.
+    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    pub(crate) fn live_native(
+        &mut self,
+        update: ConfigUpdate,
+        runtime: &mut crate::native_backend::Runtime,
+    ) -> Result<u64, Error> {
+        let saved = self.config();
+        // The same checks, in the same order, as a save.
+        if update.expected_revision != saved.revision {
+            return Err(StoreError::Conflict.into());
+        }
+        saved
+            .validate_update(&update.targets)
+            .map_err(|error| StoreError::Invalid(error.to_string()))?;
+        if !self.settled() {
+            return Err(Error::LiveUnavailable);
+        }
+        // Compared with what plays now: the last live edit, or the saved settings.
+        let running = runtime.live_targets().unwrap_or(saved.targets.as_slice());
+        if let Some(reason) = live_needs_save(running, &update.targets) {
+            return Err(Error::LiveRequiresSave(reason));
+        }
+        let revision = saved.revision;
+        let candidate = rc2fx_core::Config {
+            targets: update.targets,
+            ..saved.clone()
+        };
+        runtime.live(&candidate, saved)?;
+        Ok(revision)
+    }
+    /// Saves what live edits play, for an app that went away without saving
+    /// them or a daemon that stops (`last`): the user keeps what they hear.
+    /// Nothing reaches the audio, which already plays it, so the engine stays
+    /// Running and routed and the new revision is applied at once; the new
+    /// state is published as for any save. When the save itself fails (a
+    /// store or durability fault), and on the `last` try whatever failed, the
+    /// saved settings go back on the audio instead, so the audio and the
+    /// store agree. A library that is not ready otherwise leaves the edits
+    /// playing for the next try. Ok(None) when there was nothing to keep.
+    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+    pub(crate) fn keep_live(
+        &mut self,
+        runtime: &mut crate::native_backend::Runtime,
+        last: bool,
+    ) -> Result<Option<DeviceState>, Error> {
+        let Some(targets) = runtime.live_targets().map(<[_]>::to_vec) else {
+            return Ok(None);
+        };
+        let update = ConfigUpdate {
+            expected_revision: self.config().revision,
+            targets,
+        };
+        let result = self
+            .store
+            .prepare_apply(update)
+            .map_err(Error::Store)
+            .and_then(|save| runtime.save(save));
+        match result {
+            Ok(published) => self.native_saved(Ok(published)).map(Some),
+            Err(error) if last || matches!(error, Error::Store(_)) => {
+                eprintln!("Could not save the live settings ({error}); restoring the saved ones");
+                if let Err(restore) = runtime.restore_live(self.config(), last) {
+                    eprintln!("Could not restore the saved settings either: {restore}");
+                }
+                // A durability fault makes the controller unavailable.
+                self.native_saved(Err(error)).map(Some)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    /// Makes the store's next commit fail at `phase`, for tests.
+    #[cfg(all(test, feature = "native-pipeline", target_os = "linux"))]
+    pub(crate) fn fail_next_commit(&mut self, phase: crate::persistence::CommitPhase) {
+        self.store.fail_next_commit(phase);
     }
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn native_transition(
@@ -276,7 +418,7 @@ impl Controller {
             match &request {
                 Request::Routing(value) => {
                     let result = runtime.set_enabled(self.config(), value.enabled);
-                    self.native_saved(result)?;
+                    self.native_saved(result.map(|_| true))?;
                     self.routing.status = if value.enabled {
                         RoutingPhase::Starting
                     } else {
@@ -303,7 +445,10 @@ impl Controller {
                         .store
                         .prepare_selection(value.expected_revision, &ids)
                         .map_err(Error::Store)
-                        .and_then(|save| runtime.save(save));
+                        .and_then(|save| runtime.save(save))
+                        // A selection always changes a path's mode; keep the
+                        // acknowledgement wait it has always had.
+                        .map(|_| true);
                     self.native_saved(result)?;
                     self.selection.status = SelectionPhase::Changing;
                     self.selection.pending_target_ids = ids;
@@ -878,6 +1023,80 @@ impl Controller {
 
     pub fn disconnect_clients(&mut self) {
         self.front.disconnect();
+    }
+}
+
+/// What a live edit may play: new parameters on the same processing.
+#[cfg(test)]
+mod live_rule_tests {
+    use super::live_needs_save;
+    use rc2fx_core::{Config, Target};
+
+    fn edited(edit: impl FnOnce(&mut Target)) -> (Vec<Target>, Vec<Target>) {
+        let running = Config::default().targets;
+        let mut candidate = running.clone();
+        edit(candidate.iter_mut().find(|t| t.id == "mic-1").unwrap());
+        (running, candidate)
+    }
+
+    #[test]
+    fn parameters_go_live_and_structure_needs_a_save() {
+        let (running, same) = edited(|_| {});
+        assert_eq!(live_needs_save(&running, &same), None);
+        let (running, gain) = edited(|t| t.gain.db = -6.0);
+        assert_eq!(live_needs_save(&running, &gain), None);
+        // Effect order without suppression is only parameters.
+        let (running, order) = edited(|t| t.order.reverse());
+        assert_eq!(live_needs_save(&running, &order), None);
+
+        let (running, on) = edited(|t| t.suppression.enabled = true);
+        assert!(live_needs_save(&running, &on).is_some(), "suppression on");
+        // Suppression on is the starting point for the rest of these.
+        let (_, suppressed) = edited(|t| t.suppression.enabled = true);
+        let mut back = suppressed.clone();
+        back.iter_mut()
+            .find(|t| t.id == "mic-1")
+            .unwrap()
+            .suppression
+            .enabled = false;
+        assert!(
+            live_needs_save(&suppressed, &back).is_some(),
+            "suppression off"
+        );
+        // With suppression on: its strength goes live, its lookahead and the
+        // order around it do not.
+        let mut wet = suppressed.clone();
+        wet.iter_mut()
+            .find(|t| t.id == "mic-1")
+            .unwrap()
+            .suppression
+            .wet = 0.5;
+        assert_eq!(live_needs_save(&suppressed, &wet), None);
+        let mut lookahead = suppressed.clone();
+        lookahead
+            .iter_mut()
+            .find(|t| t.id == "mic-1")
+            .unwrap()
+            .suppression
+            .lookahead = 1;
+        assert!(
+            live_needs_save(&suppressed, &lookahead).is_some(),
+            "lookahead"
+        );
+        let mut reordered = suppressed.clone();
+        reordered
+            .iter_mut()
+            .find(|t| t.id == "mic-1")
+            .unwrap()
+            .order
+            .reverse();
+        assert!(live_needs_save(&suppressed, &reordered).is_some(), "order");
+
+        // A different target set or shape is never a live edit.
+        let (running, _) = edited(|_| {});
+        assert!(live_needs_save(&running, &running[1..]).is_some());
+        let (running, channels) = edited(|t| t.channels = 2);
+        assert!(live_needs_save(&running, &channels).is_some());
     }
 }
 

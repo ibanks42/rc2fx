@@ -1,7 +1,7 @@
 //! Bounded control-side staging. No Store, audio work, timers or callback locks.
 use crate::parameters;
 use rc2fx_core::Target;
-use rc2fx_native_control::{ErrorCode, PathMode, TargetStatus, Transaction};
+use rc2fx_native_control::{ErrorCode, PathMode, ResetPolicy, TargetStatus, Transaction};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,7 @@ pub trait Endpoints {
         transaction: &Transaction,
         target: &Target,
         mode: PathMode,
+        reset: ResetPolicy,
     ) -> Result<parameters::Staged, ErrorCode>;
     /// Leave the slot intact on lifecycle contention before taking ownership.
     fn commit(
@@ -42,6 +43,7 @@ impl Manager {
     pub fn reap(&mut self, now: Instant) {
         self.pending.retain(|pending| pending.expires > now);
     }
+    #[cfg(test)]
     pub fn prepare(
         &mut self,
         transaction: &Transaction,
@@ -50,12 +52,30 @@ impl Manager {
         now: Instant,
         endpoints: &mut impl Endpoints,
     ) -> Result<(), ErrorCode> {
+        self.prepare_with(
+            transaction,
+            target,
+            mode,
+            ResetPolicy::Allow,
+            now,
+            endpoints,
+        )
+    }
+    pub fn prepare_with(
+        &mut self,
+        transaction: &Transaction,
+        target: &Target,
+        mode: PathMode,
+        reset: ResetPolicy,
+        now: Instant,
+        endpoints: &mut impl Endpoints,
+    ) -> Result<(), ErrorCode> {
         self.reap(now);
         if !transaction.valid() || transaction.target_id != target.id {
             return Err(ErrorCode::InvalidParameters);
         }
         let fingerprint: [u8; 32] = Sha256::digest(
-            serde_json::to_vec(&(target, mode)).map_err(|_| ErrorCode::InvalidParameters)?,
+            serde_json::to_vec(&(target, mode, reset)).map_err(|_| ErrorCode::InvalidParameters)?,
         )
         .into();
         if let Some(pending) = self
@@ -83,7 +103,7 @@ impl Manager {
         if self.pending.len() == LIMIT {
             return Err(ErrorCode::Busy);
         }
-        let staged = endpoints.prepare(transaction, target, mode)?;
+        let staged = endpoints.prepare(transaction, target, mode, reset)?;
         self.pending.push(Pending {
             transaction: transaction.clone(),
             fingerprint,
@@ -214,10 +234,11 @@ mod tests {
             transaction: &Transaction,
             target: &Target,
             mode: PathMode,
+            reset: ResetPolicy,
         ) -> Result<parameters::Staged, ErrorCode> {
             self.status(transaction)?;
             self.control
-                .prepare_mode(target, transaction.revision, mode)
+                .prepare_with(target, transaction.revision, mode, reset)
                 .map_err(crate::parameter_error)
         }
         fn commit(

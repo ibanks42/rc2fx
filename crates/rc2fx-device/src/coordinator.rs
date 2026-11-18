@@ -51,6 +51,14 @@ pub enum Error {
     NativeBusy,
     SuppressionInUse,
     NativeUnsupported(String),
+    /// A live edit would rebuild a path's processing (a new kind or channel
+    /// count, noise suppression switched or re-shaped): only a save may do
+    /// that. The message says what changed.
+    LiveRequiresSave(String),
+    /// Live editing needs the native engine; JACK and simulation have none.
+    LiveUnsupported,
+    /// The engine is not running, so there is nothing to edit live.
+    LiveUnavailable,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -74,6 +82,11 @@ impl std::fmt::Display for Error {
             Self::NativeUnsupported(message) => {
                 write!(f, "Unsupported native audio change: {message}")
             }
+            // The app matches this prefix (and the 422 status).
+            Self::LiveRequiresSave(message) => write!(f, "liveRequiresSave: {message}"),
+            // The app reads 404 as "this mixer cannot edit live" and saves instead.
+            Self::LiveUnsupported => f.write_str("Unknown endpoint"),
+            Self::LiveUnavailable => f.write_str("The audio engine is not running"),
         }
     }
 }
@@ -96,6 +109,9 @@ type Answer<T> = oneshot::Sender<Result<T, Error>>;
 pub type Reply<T> = oneshot::Receiver<Result<T, Error>>;
 enum Command {
     Apply(ConfigUpdate, Answer<DeviceState>),
+    /// Effect settings on the running audio at once, saved later: answers
+    /// with the revision they were based on.
+    Live(ConfigUpdate, Answer<u64>),
     ResetDiagnostics(Answer<DeviceState>),
     DiagnosticsEvents {
         after: u64,
@@ -226,6 +242,12 @@ impl Handle {
     }
     pub fn apply(&self, update: ConfigUpdate) -> Result<Reply<DeviceState>, Error> {
         self.enqueue(|reply| Command::Apply(update, reply))
+    }
+    /// Puts effect settings on the running native audio at once, without
+    /// saving them yet (`PUT api/v1/live`). Answers with the saved revision,
+    /// unchanged.
+    pub fn live(&self, update: ConfigUpdate) -> Result<Reply<u64>, Error> {
+        self.enqueue(|reply| Command::Live(update, reply))
     }
     pub fn presets(&self) -> Result<Reply<Vec<PresetSummary>>, Error> {
         self.read(Ok(self.0.front.presets()))
@@ -553,6 +575,16 @@ impl<'owner> Coordinator<'owner> {
     /// Returning releases borrowed Control only after all admitted saves finish.
     pub fn run(mut self) -> Controller {
         self.run_loop();
+        // Live edits still playing are what the user has: they are saved
+        // before the daemon stops. The native library outlives this daemon,
+        // and the next start checks that it plays the saved settings.
+        #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+        if let Some(native) = &mut self.native
+            && native.live_editing()
+            && let Err(error) = self.controller.keep_live(native, true)
+        {
+            eprintln!("Could not keep the live settings at shutdown: {error}");
+        }
         self.controller.disconnect_clients();
         self.controller
     }
@@ -628,6 +660,13 @@ impl<'owner> Coordinator<'owner> {
             let controller = &self.controller;
             if let Some(observation) = native.poll(|| controller.has_clients()) {
                 self.controller.native_progress(observation);
+            }
+            // Live edits nobody is watching any more (the app went away
+            // without saving) are kept: the daemon saves what plays. A library
+            // that is not ready is tried again on the next pass.
+            let watched = native.live_editing() && self.controller.has_clients();
+            if native.live_orphaned(watched, Instant::now()) {
+                let _ = self.controller.keep_live(native, false);
             }
             return;
         }
@@ -856,6 +895,17 @@ impl<'owner> Coordinator<'owner> {
                     )
                 };
                 self.finish_effects(result, reply);
+            }
+            Command::Live(update, reply) => {
+                #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+                if let Some(native) = &mut self.native {
+                    let result = self.controller.live_native(update, native);
+                    let _ = reply.send(result);
+                    return;
+                }
+                // JACK and simulation hot-swap only saved settings.
+                drop(update);
+                let _ = reply.send(Err(Error::LiveUnsupported));
             }
             Command::CreatePreset(name, revision, reply) => {
                 let result = if self.action.is_some()

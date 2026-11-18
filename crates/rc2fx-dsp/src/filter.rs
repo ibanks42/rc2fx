@@ -42,6 +42,16 @@ impl Filter {
             ..Self::default()
         }
     }
+    /// A filter on `c` with no history, settled there: `begin(c)` changes
+    /// nothing in it.
+    pub fn at_rest(c: Coefficients) -> Self {
+        Self {
+            c,
+            checkpoint: c,
+            last_target: c,
+            ..Self::default()
+        }
+    }
     /// The whole filter as bits, for comparing two processing paths.
     #[cfg(test)]
     pub fn bits(&self) -> Vec<u64> {

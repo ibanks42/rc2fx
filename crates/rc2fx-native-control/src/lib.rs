@@ -16,7 +16,15 @@ pub use save::{ControlFailure, Publication, SaveFailure, Saved};
 /// decode (`ContextStatus::recent_callback_wall_ns` and
 /// `TargetStatus::worker_recent_max_ns`); a reply to a version 6 peer leaves
 /// them out, and is otherwise identical to version 6.
-pub const VERSION: u32 = 7;
+///
+/// Version 8 added `Operation::Prepare::reset` ([`ResetPolicy`]). It is sent
+/// only when it is `Refuse`, so an `Allow` prepare is the same at every
+/// version; a library refuses `Refuse` from a peer that negotiated below 8,
+/// and a daemon must not send it to such a library (see
+/// [`RESET_POLICY_VERSION`]).
+pub const VERSION: u32 = 8;
+/// The first protocol version that knows [`ResetPolicy::Refuse`].
+pub const RESET_POLICY_VERSION: u32 = 8;
 /// The oldest control protocol this build still speaks. A request or response
 /// outside `MIN_VERSION..=VERSION` is refused as `UnsupportedVersion`.
 pub const MIN_VERSION: u32 = 6;
@@ -278,6 +286,26 @@ pub struct EngineCounters {
     /// Callbacks that found the helper still busy with the previous frame.
     pub helper_stalls: u64,
 }
+/// Whether a Prepare may replace a path's processing (a new DSP runtime:
+/// noise suppression switched on or off or re-shaped, the effect order
+/// around it, or a change of path mode) or may only hand the running
+/// processing new parameters. A refused Prepare answers `RequiresReset` and
+/// stages nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResetPolicy {
+    /// A save: whatever the settings need.
+    #[default]
+    Allow,
+    /// Parameters only: a live edit, or the daemon restoring saved settings
+    /// over live edits left behind by a daemon that died.
+    Refuse,
+}
+impl ResetPolicy {
+    fn is_allow(&self) -> bool {
+        *self == Self::Allow
+    }
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, tag = "op", rename_all = "camelCase")]
 pub enum Operation {
@@ -291,6 +319,9 @@ pub enum Operation {
         transaction: Transaction,
         target: Box<Target>,
         mode: PathMode,
+        /// Absent means `Allow`, as every version before 8 sent it.
+        #[serde(default, skip_serializing_if = "ResetPolicy::is_allow")]
+        reset: ResetPolicy,
     },
     Commit {
         transaction: Transaction,
@@ -1080,9 +1111,12 @@ mod tests {
             transaction,
             target: Box::new(target),
             mode: PathMode::Passthrough,
+            reset: ResetPolicy::Allow,
         };
         let mut json = serde_json::to_value(operation).unwrap();
         assert_eq!(json["mode"], "passthrough");
+        // Allow is what every older peer sent: it stays off the wire.
+        assert!(json.get("reset").is_none());
         assert!(matches!(
             serde_json::from_value::<Operation>(json.clone()).unwrap(),
             Operation::Prepare {
@@ -1091,6 +1125,45 @@ mod tests {
             }
         ));
         json.as_object_mut().unwrap().remove("mode");
+        assert!(serde_json::from_value::<Operation>(json).is_err());
+    }
+    #[test]
+    fn a_refusing_prepare_carries_its_policy_and_an_older_one_means_allow() {
+        let target = Target::new("source", "Source", rc2fx_core::TargetKind::Mic, 1);
+        let transaction = Transaction {
+            session: Session {
+                pid: 42,
+                nonce: "a".repeat(32),
+            },
+            id: "b".repeat(32),
+            context: 7,
+            target_id: target.id.clone(),
+            revision: 2,
+        };
+        let operation = Operation::Prepare {
+            transaction,
+            target: Box::new(target),
+            mode: PathMode::Processed,
+            reset: ResetPolicy::Refuse,
+        };
+        let mut json = serde_json::to_value(operation).unwrap();
+        assert_eq!(json["reset"], "refuse");
+        assert!(matches!(
+            serde_json::from_value::<Operation>(json.clone()).unwrap(),
+            Operation::Prepare {
+                reset: ResetPolicy::Refuse,
+                ..
+            }
+        ));
+        json.as_object_mut().unwrap().remove("reset");
+        assert!(matches!(
+            serde_json::from_value::<Operation>(json.clone()).unwrap(),
+            Operation::Prepare {
+                reset: ResetPolicy::Allow,
+                ..
+            }
+        ));
+        json["reset"] = "sometimes".into();
         assert!(serde_json::from_value::<Operation>(json).is_err());
     }
 }

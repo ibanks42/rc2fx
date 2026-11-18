@@ -535,14 +535,29 @@ fn ordered_gain_and_limiter_change_audio_as_configured() {
 
     assert!(!limiter_first.requires_reset(&gain_first));
     // Reuse the running limiter-first processor. A live reordering must change
-    // the actual signal, not merely accept and acknowledge new settings.
+    // the actual signal, not merely accept and acknowledge new settings. It
+    // fades from the old order's output to the new one's, without a step.
+    let fading = [0.1; rc2fx_dsp::EQ_FADE_SAMPLES];
+    let mut faded = [0.0; rc2fx_dsp::EQ_FADE_SAMPLES];
+    b.process(&gain_first, [&fading, &[]], [&mut faded, &mut []])
+        .unwrap();
+    assert!((faded[0] - raised).abs() < 1e-2);
+    assert!(faded.windows(2).all(|w| w[1] <= w[0] && w[0] - w[1] < 1e-3));
     b.process(&gain_first, [&input, &[]], [&mut y, &mut []])
         .unwrap();
     assert!(y.iter().all(|v| (*v - ceiling).abs() < 1e-7));
 }
 
+/// A switched-off compressor or limiter fades out over
+/// `STAGE_FADE_SAMPLES`, then passes audio through bit for bit and keeps the
+/// detector history it had when it was switched off. Switched back on, it
+/// fades in from that history, and once the fade is over it is exactly the
+/// stage that was never switched off. A highpass switched back on starts at
+/// rest instead (its old history would ring out), and settles on the
+/// uninterrupted filter's output.
 #[test]
-fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
+fn disabled_stages_fade_out_keep_history_and_fade_back_in() {
+    let fade = rc2fx_dsp::STAGE_FADE_SAMPLES as usize;
     for stage in [Effect::Highpass, Effect::Compressor, Effect::Limiter] {
         let mut t = target(1);
         t.eq.enabled = false;
@@ -550,7 +565,8 @@ fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
         t.compressor.threshold = -30.0;
         t.compressor.ratio = 10.0;
         t.compressor.attack = 0.1;
-        t.limiter.ceiling = -12.0;
+        // Below the wave's peaks, so the limiter has work to do.
+        t.limiter.ceiling = -18.0;
         let enabled = prepared(&t);
         let mut with_disabled_interval = Dsp::without_suppression(&enabled).unwrap();
         let mut without_interval = Dsp::without_suppression(&enabled).unwrap();
@@ -560,25 +576,66 @@ fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
             dsp.process(&enabled, [&warm, &[]], [&mut scratch, &mut []])
                 .unwrap();
         }
+        // Settings changed while the stage is off take effect when it is
+        // back on. The limiter's ceiling and release are left alone: they
+        // smooth toward a change while the stage runs, and the uninterrupted
+        // limiter would be part way there.
         t.set_effect_enabled(stage, false);
         t.highpass.frequency = 230.0;
         t.compressor.release = 230.0;
-        t.limiter.release = 230.0;
         let disabled = prepared(&t);
         assert!(!enabled.requires_reset(&disabled));
-        let middle = wave(397, 256);
+        let middle = wave(fade + 397, 256);
         let mut dry = vec![0.0; middle.len()];
         with_disabled_interval
             .process(&disabled, [&middle, &[]], [&mut dry, &mut []])
             .unwrap();
+        assert_ne!(
+            dry[0].to_bits(),
+            middle[0].to_bits(),
+            "{stage:?} cut at once"
+        );
         assert_eq!(
-            dry.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-            middle.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            dry[fade..].iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            middle[fade..]
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>(),
+            "{stage:?}"
         );
         t.set_effect_enabled(stage, true);
         let resumed = prepared(&t);
         assert!(!disabled.requires_reset(&resumed));
-        let probe = wave(512, 653);
+        if stage == Effect::Highpass {
+            let probe = wave(48_000, 256 + middle.len());
+            let mut a = vec![0.0; probe.len()];
+            let mut b = vec![0.0; probe.len()];
+            with_disabled_interval
+                .process(&resumed, [&probe, &[]], [&mut a, &mut []])
+                .unwrap();
+            without_interval
+                .process(&resumed, [&probe, &[]], [&mut b, &mut []])
+                .unwrap();
+            let settled = a[probe.len() - 4800..]
+                .iter()
+                .zip(&b[probe.len() - 4800..])
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(settled < 1e-6, "highpass still {settled} away");
+            continue;
+        }
+        // The fade in, then the same stage as the one never switched off.
+        let fading = wave(fade, 653);
+        let probe = wave(512, 653 + fade);
+        let mut a = vec![0.0; fade];
+        let mut b = vec![0.0; fade];
+        with_disabled_interval
+            .process(&resumed, [&fading, &[]], [&mut a, &mut []])
+            .unwrap();
+        without_interval
+            .process(&resumed, [&fading, &[]], [&mut b, &mut []])
+            .unwrap();
+        assert_ne!(a[0].to_bits(), b[0].to_bits(), "{stage:?} on at once");
         let mut a = [0.0; 512];
         let mut b = [0.0; 512];
         let ma = with_disabled_interval
@@ -587,7 +644,7 @@ fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
         let mb = without_interval
             .process(&resumed, [&probe, &[]], [&mut b, &mut []])
             .unwrap();
-        assert_eq!(a.map(f32::to_bits), b.map(f32::to_bits));
+        assert_eq!(a.map(f32::to_bits), b.map(f32::to_bits), "{stage:?}");
         assert_eq!(
             [
                 ma.input_peak,

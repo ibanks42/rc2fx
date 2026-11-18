@@ -71,6 +71,7 @@ impl Client {
             transaction: transaction.clone(),
             target: Box::new(target.clone()),
             mode,
+            reset: crate::ResetPolicy::Allow,
         }) {
             Ok(response) => match response.reply {
                 Reply::Prepared {
@@ -209,6 +210,7 @@ mod tests {
                                 transaction,
                                 target,
                                 mode,
+                                ..
                             },
                         ) => {
                             assert_eq!(mode, PathMode::Processed);

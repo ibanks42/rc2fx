@@ -3,7 +3,7 @@
 use rc2fx_dsp::Suppression;
 use rc2fx_suppression::{Endpoint, Telemetry, Termination, WorkerOptions};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::{
     cell::UnsafeCell,
     sync::{Arc, Mutex},
@@ -48,6 +48,14 @@ impl Drop for Claim {
 /// or from the pipeline's helper while the callback has handed that frame off.
 pub struct Runtime {
     state: UnsafeCell<Processor>,
+    /// The hand-off control asks of the callback (`HANDOFF_*`), and the
+    /// callback's answer that the output has faded out. The callback reads
+    /// and writes these around each block; control polls `handed_off`.
+    handoff: AtomicU8,
+    handed_off: AtomicBool,
+    /// The processor's delay, fixed at construction: control reads it here,
+    /// never through the processor the callback owns.
+    latency: usize,
     worker: Option<Record>,
     epoch: u64,
     _claim: Option<Claim>,
@@ -62,6 +70,22 @@ enum Processor {
     Ordinary(Box<rc2fx_dsp::Dsp>),
     Chat(Box<rc2fx_dsp::Chat>),
 }
+const HANDOFF_NONE: u8 = 0;
+const HANDOFF_SILENCE: u8 = 1;
+const HANDOFF_DRY: u8 = 2;
+/// How a new runtime's output begins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// At once: the path's first runtime.
+    Playing,
+    /// Silent until its delay has passed, then fading in: it replaces a
+    /// runtime that has faded out.
+    Silent,
+    /// Taking over from the unprocessed path where both play the same
+    /// sample at the same time (a callback-owned path): from the dry signal
+    /// when it has no delay, otherwise as `Silent`.
+    AfterPassthrough,
+}
 impl Runtime {
     pub fn new(
         target: &rc2fx_core::Target,
@@ -69,6 +93,7 @@ impl Runtime {
         options: WorkerOptions,
         epoch: u64,
         admission: &Admission,
+        start: Start,
     ) -> Result<Arc<Self>, super::parameters::Error> {
         let claim = if target.suppression.enabled {
             Some(admission.claim(&target.id)?)
@@ -82,7 +107,7 @@ impl Runtime {
         } else {
             ([None, None], None)
         };
-        let dsp = if prepared.is_chat_voice() {
+        let mut dsp = if prepared.is_chat_voice() {
             Processor::Chat(Box::new(
                 rc2fx_dsp::Chat::new(
                     prepared,
@@ -98,8 +123,27 @@ impl Runtime {
                     .map_err(|_| super::parameters::Error::Runtime)?,
             ))
         };
+        let latency = match &dsp {
+            Processor::Ordinary(dsp) => dsp.latency_samples(),
+            Processor::Chat(dsp) => dsp.latency_samples(),
+        };
+        // Not yet published: control still owns the processor outright.
+        match (&mut dsp, start) {
+            (_, Start::Playing) => {}
+            (Processor::Ordinary(dsp), Start::AfterPassthrough) if dsp.latency_samples() == 0 => {
+                dsp.start_dry()
+            }
+            (Processor::Ordinary(dsp), _) => {
+                let hold = dsp.latency_samples();
+                dsp.start_silent(hold);
+            }
+            (Processor::Chat(chat), _) => chat.start_silent(),
+        }
         Ok(Arc::new(Self {
             state: UnsafeCell::new(dsp),
+            handoff: AtomicU8::new(HANDOFF_NONE),
+            handed_off: AtomicBool::new(false),
+            latency,
             worker,
             epoch,
             _claim: claim,
@@ -109,6 +153,53 @@ impl Runtime {
     }
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+    /// Control: asks the callback to fade this runtime's output out (`Some`)
+    /// or back in (`None`). Never waits.
+    pub fn request_hand_off(&self, to: Option<rc2fx_dsp::HandOff>) {
+        if to.is_some() {
+            // Answered afresh by the next block that sees the request.
+            self.handed_off.store(false, Ordering::Release);
+        }
+        let value = match to {
+            None => HANDOFF_NONE,
+            Some(rc2fx_dsp::HandOff::Silence) => HANDOFF_SILENCE,
+            Some(rc2fx_dsp::HandOff::Dry) => HANDOFF_DRY,
+        };
+        self.handoff.store(value, Ordering::Release);
+    }
+    /// The processor's delay in samples (its `latency_samples`).
+    pub fn latency_samples(&self) -> usize {
+        self.latency
+    }
+    /// Control: whether a block has finished the requested fade-out.
+    pub fn handed_off(&self) -> bool {
+        self.handed_off.load(Ordering::Acquire)
+    }
+    /// Callback, around one block: passes the requested hand-off to the
+    /// processor, runs `block`, and answers whether the fade-out is done.
+    /// Two atomic loads, and a store only when the answer changes.
+    #[inline]
+    fn handing_off<T>(&self, dsp: &mut Processor, block: impl FnOnce(&mut Processor) -> T) -> T {
+        let to = match self.handoff.load(Ordering::Acquire) {
+            HANDOFF_NONE => None,
+            HANDOFF_SILENCE => Some(rc2fx_dsp::HandOff::Silence),
+            _ => Some(rc2fx_dsp::HandOff::Dry),
+        };
+        match dsp {
+            Processor::Ordinary(dsp) => dsp.hand_off(to),
+            Processor::Chat(dsp) => dsp.hand_off(to),
+        }
+        let result = block(dsp);
+        let done = to.is_some()
+            && match dsp {
+                Processor::Ordinary(dsp) => dsp.handed_off(),
+                Processor::Chat(dsp) => dsp.handed_off(),
+            };
+        if done != self.handed_off.load(Ordering::Relaxed) {
+            self.handed_off.store(done, Ordering::Release);
+        }
+        result
     }
     pub fn worker(&self) -> Option<&Record> {
         self.worker.as_ref()
@@ -139,20 +230,20 @@ impl Runtime {
         input: [&[f32]; 2],
         output: [&mut [f32]; 2],
     ) -> Result<rc2fx_dsp::Meter, rc2fx_dsp::DspError> {
-        match unsafe { &mut *self.state.get() } {
+        self.handing_off(unsafe { &mut *self.state.get() }, |dsp| match dsp {
             Processor::Ordinary(dsp) => dsp.process(prepared, input, output),
             Processor::Chat(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
-        }
+        })
     }
     pub unsafe fn output(
         &self,
         prepared: &rc2fx_dsp::Prepared,
         buffers: [&mut [f32]; 2],
     ) -> Result<rc2fx_dsp::Meter, rc2fx_dsp::DspError> {
-        match unsafe { &mut *self.state.get() } {
+        self.handing_off(unsafe { &mut *self.state.get() }, |dsp| match dsp {
             Processor::Ordinary(dsp) => dsp.process_in_place(prepared, buffers),
             Processor::Chat(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
-        }
+        })
     }
     pub unsafe fn chat_output(
         &self,
@@ -160,10 +251,10 @@ impl Runtime {
         voice: [&[f32]; 2],
         buffers: [&mut [f32]; 2],
     ) -> Result<rc2fx_dsp::Meter, rc2fx_dsp::DspError> {
-        match unsafe { &mut *self.state.get() } {
+        self.handing_off(unsafe { &mut *self.state.get() }, |dsp| match dsp {
             Processor::Chat(dsp) => dsp.process(prepared, voice, buffers),
             Processor::Ordinary(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
-        }
+        })
     }
     /// Asks for both ends of the processor (see prefetch.rs). Reads only
     /// which processor this is, which construction fixed.

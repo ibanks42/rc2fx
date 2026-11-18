@@ -81,22 +81,22 @@ fn compare(
             actual.gain,
             actual.wet,
             actual.processing_blend,
-            actual.envelope,
-            actual.limiter_gain
+            actual.stages.envelope,
+            actual.stages.limiter_gain
         ]
         .map(f64::to_bits),
         [
             reference.gain,
             reference.wet,
             reference.processing_blend,
-            reference.envelope,
-            reference.limiter_gain
+            reference.stages.envelope,
+            reference.stages.limiter_gain
         ]
         .map(f64::to_bits)
     );
     assert_eq!(
-        (actual.eq_current, actual.eq_remaining),
-        (reference.eq_current, reference.eq_remaining)
+        (actual.stages.eq_current, actual.stages.eq_remaining),
+        (reference.stages.eq_current, reference.stages.eq_remaining)
     );
 }
 
@@ -222,7 +222,7 @@ fn identity_rejects_nonidentity_stages_and_unfinished_smoothing() {
         |d: &mut Dsp| d.gain = 0.5,
         |d: &mut Dsp| d.wet = 0.5,
         |d: &mut Dsp| d.processing_blend = 0.5,
-        |d: &mut Dsp| d.eq_remaining = 1,
+        |d: &mut Dsp| d.stages.eq_remaining = 1,
         |d: &mut Dsp| d.latency = 1,
     ] {
         let mut actual = Dsp::without_suppression(&prepared).unwrap();
@@ -351,15 +351,18 @@ fn every_stage_matches_the_scalar_frame_across_block_lengths() {
                 expected_meter.sum_squares.to_bits()
             );
             assert_eq!(
-                (actual.envelope.to_bits(), actual.limiter_gain.to_bits()),
                 (
-                    reference.envelope.to_bits(),
-                    reference.limiter_gain.to_bits()
+                    actual.stages.envelope.to_bits(),
+                    actual.stages.limiter_gain.to_bits()
+                ),
+                (
+                    reference.stages.envelope.to_bits(),
+                    reference.stages.limiter_gain.to_bits()
                 )
             );
             assert_eq!(
-                (actual.eq_current, actual.eq_remaining),
-                (reference.eq_current, reference.eq_remaining)
+                (actual.stages.eq_current, actual.stages.eq_remaining),
+                (reference.stages.eq_current, reference.stages.eq_remaining)
             );
         }
     }

@@ -307,6 +307,11 @@ impl Store {
         Ok(())
     }
 
+    /// Makes the next commit fail at `phase`, for tests.
+    #[cfg(all(test, feature = "native-pipeline", target_os = "linux"))]
+    pub(crate) fn fail_next_commit(&mut self, phase: crate::persistence::CommitPhase) {
+        self.directory.fail_next(phase);
+    }
     fn ensure_writable(&self) -> Result<()> {
         if let Some(fault) = &self.durability_fault {
             Err(StoreError::DurabilityUncertain(fault.clone()))

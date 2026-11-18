@@ -265,8 +265,97 @@ struct Port {
     failed: bool,
     /// `Front::skipped_frames` when this path was last visited.
     credited: u64,
+    /// The path's unprocessed-audio fade (`parameters::RAW_*`), and where it
+    /// stands: 0 (silent) to `STAGE_FADE_SAMPLES` (as the mixer made it).
+    pass: Arc<parameters::PassFade>,
+    raw_position: u32,
+    /// This frame's unprocessed-audio gain: from `raw_from`, a step of
+    /// `raw_step` (-1, 0 or 1) a sample; `raw_scale` when it is not 1.
+    raw_from: u32,
+    raw_step: i32,
+    raw_scale: bool,
+    /// The last `faded` answered.
+    raw_answered: bool,
+    /// A processor's frame has reached the mixer since the path last played
+    /// unprocessed audio.
+    processed_flowing: bool,
+    /// A helper-owned source's faded unprocessed audio, handed to the mixer
+    /// in place of the jackd buffer.
+    raw_scratch: Box<[[f32; FRAMES]; 2]>,
+}
+/// `Port::raw` for a callback-owned output, in place: the frame's gain,
+/// fading from `from` by `step` a sample.
+fn scale_raw(from: u32, step: i32, buffers: [&mut [f32]; 2]) {
+    for buffer in buffers {
+        for (t, sample) in buffer.iter_mut().enumerate() {
+            *sample *= raw_gain(from, step, t);
+        }
+    }
+}
+/// Sample `t`'s gain of a frame of unprocessed audio fading from `from` by
+/// `step` a sample.
+#[inline(always)]
+fn raw_gain(from: u32, step: i32, t: usize) -> f32 {
+    let at = (from as i64 + i64::from(step) * (t as i64 + 1))
+        .clamp(0, i64::from(rc2fx_dsp::STAGE_FADE_SAMPLES));
+    at as f32 / rc2fx_dsp::STAGE_FADE_SAMPLES as f32
 }
 impl Port {
+    /// Decides this frame's unprocessed-audio gain (see `parameters::RAW_*`)
+    /// from the mode the path is in (`processed_intent`) and the requested
+    /// fade, and answers control. Returns whether the path's unprocessed
+    /// audio needs the gain every frame, so the path must be resolved and
+    /// visited every cycle until it does not. One atomic load.
+    fn step_raw(&mut self) -> bool {
+        use parameters::{RAW_MUTE, RAW_PLAY, RAW_RISE};
+        let full = rc2fx_dsp::STAGE_FADE_SAMPLES;
+        let target = self.pass.target();
+        let processed = self.processed_intent;
+        self.raw_from = self.raw_position;
+        if processed {
+            // Only a fallback frame plays unprocessed audio now: as the mixer
+            // made it, unless a fade to or from the processor is under way.
+            self.raw_position = match target {
+                RAW_PLAY => full,
+                RAW_RISE => 0,
+                // Silent until the processor's first frame arrives.
+                _ if self.processed_flowing => full,
+                _ => 0,
+            };
+            self.raw_from = self.raw_position;
+            self.raw_step = 0;
+        } else {
+            self.processed_flowing = false;
+            self.raw_step = if target == RAW_MUTE { -1 } else { 1 };
+            self.raw_position = (self.raw_position as i64
+                + i64::from(self.raw_step) * FRAMES as i64)
+                .clamp(0, i64::from(full)) as u32;
+        }
+        self.raw_scale = !(self.raw_from == full && self.raw_step >= 0);
+        let faded = !processed && target == RAW_MUTE && self.raw_position == 0;
+        if faded != self.raw_answered {
+            self.raw_answered = faded;
+            self.pass.answer(faded);
+        }
+        !processed && self.raw_scale
+    }
+    /// The unprocessed audio of a source's `channel` for the mixer: the jackd
+    /// buffer itself, or this frame's faded copy of it.
+    ///
+    /// # Safety
+    /// `native` is this channel's live jackd buffer of `FRAMES` samples.
+    unsafe fn raw(&mut self, channel: usize, native: *mut c_void) -> *mut c_void {
+        if !self.raw_scale {
+            return native;
+        }
+        let input = unsafe { std::slice::from_raw_parts(native as *const f32, FRAMES) };
+        let output = &mut self.raw_scratch[channel];
+        for (t, (out, sample)) in output.iter_mut().zip(input).enumerate() {
+            *out = sample * raw_gain(self.raw_from, self.raw_step, t);
+        }
+        output.as_mut_ptr().cast()
+    }
+
     fn fail(&mut self, counters: &mut Counters) {
         self.active = false;
         if !self.failed {
@@ -1948,7 +2037,7 @@ unsafe fn begin_port(
     cycle: u32,
     frames: usize,
     get: super::GetBuffer,
-) {
+) -> bool {
     port.active = false;
     port.counted = false;
     port.observed = 0;
@@ -1957,10 +2046,10 @@ unsafe fn begin_port(
         && !reader.begin()
     {
         port.fail(counters);
-        return;
+        return false;
     }
     if port.failed {
-        return;
+        return false;
     }
     let unprocessed = match port.owner {
         Owner::Callback => port
@@ -1975,13 +2064,15 @@ unsafe fn begin_port(
     if port.owner == Owner::Callback || handoff.is_some() {
         port.processed_intent = !unprocessed;
     }
-    if unprocessed && !meters(cycle, index) {
+    // Unprocessed audio being faded is handled every frame, like processed.
+    let fading = port.step_raw();
+    if unprocessed && !fading && !meters(cycle, index) {
         port.counted = true;
-        return;
+        return false;
     }
     if frames != FRAMES || !port.alive() {
         port.fail(counters);
-        return;
+        return fading;
     }
     let mut valid = true;
     for (channel, pin) in port.pins.iter().enumerate() {
@@ -2001,13 +2092,13 @@ unsafe fn begin_port(
     }
     if !valid {
         port.fail(counters);
-        return;
+        return fading;
     }
     if port.direction == Direction::Output && port.pins.len() == 2 {
         let [a, b] = port.native;
         if a < b + frames * 4 && b < a + frames * 4 {
             port.fail(counters);
-            return;
+            return fading;
         }
     }
     port.active = true;
@@ -2022,6 +2113,7 @@ unsafe fn begin_port(
             capture.arm(port.native);
         }
     }
+    fading
 }
 /// What every path's end of the callback shares.
 struct Ended {
@@ -2101,6 +2193,9 @@ unsafe fn end_port(
                     }
                 } else {
                     let [left, right] = buffers;
+                    if port.raw_scale {
+                        scale_raw(port.raw_from, port.raw_step, [&mut *left, &mut *right]);
+                    }
                     reader.record(cycle.frames, native_meter([left, right]), latency);
                     applied = true;
                 }
@@ -2290,6 +2385,10 @@ impl Pipeline {
                 Direction::Output if target.hardware && !direct_output => Owner::Helper,
                 Direction::Output => Owner::Callback,
             };
+            let pass = reader.pass_fade();
+            // A callback-owned path's processor reads the very samples the
+            // unprocessed path would play, at the same time.
+            pass.set_aligned(owner == Owner::Callback);
             let reader = if owner == Owner::Helper {
                 work.push(Some(Work::new(
                     reader,
@@ -2318,6 +2417,14 @@ impl Pipeline {
                 counted: false,
                 failed: false,
                 credited: 0,
+                pass,
+                raw_position: rc2fx_dsp::STAGE_FADE_SAMPLES,
+                raw_from: rc2fx_dsp::STAGE_FADE_SAMPLES,
+                raw_step: 0,
+                raw_scale: false,
+                raw_answered: false,
+                processed_flowing: false,
+                raw_scratch: Box::new([[0.0; FRAMES]; 2]),
             });
         }
         let jobs = vec![Job::Skipped; ports.len()];
@@ -2454,10 +2561,15 @@ impl Pipeline {
         front.phase = cycle as usize % METER_STRIDE as usize;
         let seen = handoff.as_deref();
         if front.full {
+            let mut fading = false;
             for (index, port) in front.ports.iter_mut().enumerate() {
-                unsafe {
-                    begin_port(index, port, &mut front.counters, seen, cycle, frames, get);
-                }
+                fading |= unsafe {
+                    begin_port(index, port, &mut front.counters, seen, cycle, frames, get)
+                };
+            }
+            // Every path is visited until no unprocessed audio is fading.
+            if fading {
+                front.full_left = METER_STRIDE;
             }
         } else {
             // A sparse cycle has the handoff: the helper is idle.
@@ -2467,13 +2579,13 @@ impl Pipeline {
             for &index in &front.visits[front.phase] {
                 let port = &mut front.ports[index];
                 let planned = port.processed_intent;
-                unsafe {
-                    begin_port(index, port, &mut front.counters, seen, cycle, frames, get);
-                }
+                let fading = unsafe {
+                    begin_port(index, port, &mut front.counters, seen, cycle, frames, get)
+                };
                 // A new mode can be seen before its publication is counted.
                 // Every following frame must then be visited, or a processed
                 // frame would sit alone between unprocessed ones.
-                if port.processed_intent != planned {
+                if port.processed_intent != planned || fading {
                     front.full_left = METER_STRIDE;
                 }
             }
@@ -2514,7 +2626,8 @@ impl Pipeline {
         }
         if !front.idle || !front.previous_ready {
             item.note(Outcome::HelperUnready, &mut front.counters);
-            return native;
+            // SAFETY: checked above to be this channel's jackd buffer.
+            return unsafe { item.raw(channel, native) };
         }
         // The mixer reads the source processed over the last frame.
         // SAFETY: the helper is idle (see `begin`).
@@ -2525,6 +2638,7 @@ impl Pipeline {
         let previous = ((front.seq - 1) & 1) as usize;
         if work.done[previous] {
             item.note(Outcome::Processed, &mut front.counters);
+            item.processed_flowing = true;
             let cell = &work.processed[previous];
             // In bounds, and without a mutable borrow of the slot.
             unsafe { cell.get().cast::<[f32; FRAMES]>().add(channel).cast() }
@@ -2538,7 +2652,8 @@ impl Pipeline {
                 Outcome::NoHandoff
             };
             item.note(outcome, &mut front.counters);
-            native
+            // SAFETY: as above.
+            unsafe { item.raw(channel, native) }
         }
     }
     /// # Safety
@@ -4046,12 +4161,6 @@ mod tests {
 
     /// Fills the mono source with `x`; one settled callback; what the mixer
     /// read (every sample equal).
-    fn source_value(pipeline: &Pipeline, buffers: &Buffers, x: f32) -> f32 {
-        unsafe { (*buffers.input[0].get()).fill(x) };
-        let seen = source_block(pipeline, buffers, &[0], true);
-        assert!(seen[0].iter().all(|v| v.to_bits() == seen[0][0].to_bits()));
-        seen[0][0]
-    }
     fn source_owner(pipeline: &Pipeline) -> Owner {
         unsafe { &*pipeline.front.get() }.ports[0].owner
     }
@@ -4085,21 +4194,130 @@ mod tests {
                 commit_mode(&mut controls[0], &plan, 3, PathMode::Passthrough);
             }
             let x = 0.1 + 0.001 * k as f32;
-            out.push((x, source_value(&pipeline, &buffers, x)));
+            unsafe { (*buffers.input[0].get()).fill(x) };
+            out.push((x, source_block(&pipeline, &buffers, &[0], true)[0]));
             assert!(source_owner(&pipeline) == Owner::Helper);
             let port = &unsafe { &*pipeline.front.get() }.ports[0];
             assert!(port.reader.is_none());
         }
-        // Adopted under frame 5; frame 6 is raw (nothing handed off yet),
-        // then each frame gets the previous one processed.
+        // Adopted under frame 5; frame 6 has no processed frame yet, then
+        // each frame gets the previous one processed. With no callbacks
+        // during the commit (this test commits between them), the
+        // unprocessed audio starts fading only at frame 5, and frame 6 stays
+        // silent; the new runtime fades in from silence over the next frames.
+        // (`a_helper_source_switch_dips_without_a_step` runs the fade
+        // between callbacks, as the mixer does.)
+        assert!(out[6].1.iter().all(|value| *value == 0.0));
+        let fading = (rc2fx_dsp::STAGE_FADE_SAMPLES as usize).div_ceil(FRAMES);
         for k in 7..20 {
-            assert!(
-                close(out[k].1, processed(out[k - 1].0)),
-                "frame {k}: {:?}",
-                out[k]
-            );
+            let wet = processed(out[k - 1].0);
+            for value in out[k].1 {
+                if k >= 7 + fading {
+                    assert!(close(value, wet), "frame {k}: {value} != {wet}");
+                } else {
+                    assert!(
+                        (-1e-6..=wet + 1e-6).contains(&value),
+                        "frame {k}: {value} outside 0..{wet}"
+                    );
+                }
+            }
         }
         assert_eq!(pipeline.counters().faults, 0);
+    }
+
+    /// Switches a helper-owned source's mode the way the mixer sees it: the
+    /// hand-off starts, callbacks run until it is done (or for at most
+    /// `limit` frames), then the publication commits. Returns the frames.
+    fn switch_between_callbacks(
+        control: &mut parameters::Control,
+        plan: &Plan,
+        revision: u64,
+        mode: PathMode,
+        mut frame: impl FnMut(),
+    ) -> usize {
+        let staged = control
+            .prepare_mode(&plan.paths[0].target, revision, mode)
+            .unwrap();
+        let handing = control.hand_off(&staged).unwrap();
+        let mut frames = 0;
+        while !handing.done() {
+            assert!(frames < 100, "the hand-off never finished");
+            frame();
+            frames += 1;
+        }
+        control.reserve_after(staged, handing).unwrap().commit();
+        frames
+    }
+    /// A constant through a helper-owned source switched to Processed and
+    /// back, with fades between callbacks: returns every sample the mixer
+    /// read.
+    fn source_switches(plan: &Plan, level: f32) -> Vec<f32> {
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline_owned(plan, &buffers);
+        let mut seen = Vec::new();
+        let mut frame = || {
+            unsafe { (*buffers.input[0].get()).fill(level) };
+            seen.extend_from_slice(&source_block(&pipeline, &buffers, &[0], true)[0]);
+        };
+        for _ in 0..20 {
+            frame();
+        }
+        let first = controls[0].status().unwrap().applied + 1;
+        for (revision, mode) in [
+            (first, PathMode::Processed),
+            (first + 1, PathMode::Passthrough),
+        ] {
+            let frames =
+                switch_between_callbacks(&mut controls[0], plan, revision, mode, &mut frame);
+            assert!(frames >= 4, "{mode:?} published after {frames} frames");
+            for _ in 0..40 {
+                frame();
+            }
+        }
+        assert_eq!(pipeline.counters().faults, 0);
+        seen
+    }
+    fn largest_step(samples: &[f32]) -> f32 {
+        samples
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max)
+    }
+
+    /// A helper-owned source plays its processor's output one frame later than
+    /// its unprocessed audio, so neither can take over from the other sample
+    /// for sample. Switching its processing on fades the unprocessed audio
+    /// out first, and the processor in after; switching it off fades the
+    /// processor out first, and the unprocessed audio in after: a short dip,
+    /// never a step, and never a repeated frame.
+    #[test]
+    fn a_helper_source_switch_dips_without_a_step() {
+        let plan = source_plan(1, false, PathMode::Passthrough);
+        let seen = source_switches(&plan, 0.2);
+        let step = largest_step(&seen);
+        assert!(step < 2e-3, "a step of {step}; a cut is at least 0.1");
+        // Unprocessed, processed (the EQ halves it), unprocessed again, each
+        // reached exactly, with silence between.
+        assert_eq!(seen[0], 0.2);
+        assert!(seen.contains(&0.0));
+        assert!(seen.iter().any(|v| close(*v, processed(0.2))));
+        assert_eq!(*seen.last().unwrap(), 0.2);
+    }
+
+    /// With suppression on, the processor's output is also delayed by its
+    /// model: switching processing on or off dips the same way, the
+    /// processor fading in once its delay holds real audio.
+    #[test]
+    fn a_suppressed_source_switch_dips_without_a_step() {
+        let mut plan = source_plan(1, false, PathMode::Passthrough);
+        plan.paths[0].target.suppression.enabled = true;
+        // The model's dry signal, so the processed level is known.
+        plan.paths[0].target.suppression.wet = 0.0;
+        let seen = source_switches(&plan, 0.2);
+        let step = largest_step(&seen);
+        assert!(step < 2e-3, "a step of {step}; a cut is at least 0.1");
+        assert!(seen.iter().any(|v| close(*v, processed(0.2))));
+        assert_eq!(*seen.last().unwrap(), 0.2);
     }
 
     /// A suppressed mic switched live to Processed reports its DSP delay plus

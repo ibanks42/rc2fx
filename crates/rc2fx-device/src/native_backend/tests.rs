@@ -28,6 +28,7 @@ fn initial_stream_readiness_is_distinct_from_a_running_path_stall() {
         last_progress: start,
         progressed: false,
         recent: PathRecent::default(),
+        unconfirmed: false,
     };
     let deadline = Duration::from_secs(2);
     assert!(!path.timed_out(start + Duration::from_secs(7), start, deadline));
@@ -55,6 +56,7 @@ fn a_native_paths_recent_peaks_age_out_and_clear() {
         last_progress: start,
         progressed: false,
         recent: PathRecent::default(),
+        unconfirmed: false,
     };
     path.observe_recent(Some(900), Some(7_000), start);
     assert_eq!(path.recent.value(start), (Some(900), Some(7_000)));
@@ -81,6 +83,8 @@ struct Event {
     prepare: bool,
     transaction: Transaction,
     mode: PathMode,
+    /// The settings prepared, or the path's settings once committed.
+    fingerprint: [u8; 32],
 }
 struct FakePath {
     target: rc2fx_core::Target,
@@ -92,6 +96,14 @@ struct Peer {
     drop_commit: Arc<AtomicBool>,
     hold_window: Arc<AtomicBool>,
     failed_worker: Arc<AtomicBool>,
+    /// The callback has not run since the last publication: inventories
+    /// report it published but not yet applied.
+    hold_apply: Arc<AtomicBool>,
+    /// Answer every Prepare with Busy, as the library does while the
+    /// callback has not yet taken the previous publication.
+    busy_prepare: Arc<AtomicBool>,
+    /// Prepares refused because they would replace a path's processing.
+    refused_resets: Arc<AtomicU64>,
     /// Answer every inventory with Busy, as the library does while RØDE's
     /// mixer registers or closes ports.
     busy: Arc<AtomicBool>,
@@ -152,7 +164,12 @@ impl Peer {
         let failed_worker = Arc::new(AtomicBool::new(false));
         let (holding, failing) = (hold_window.clone(), failed_worker.clone());
         let busy = Arc::new(AtomicBool::new(false));
+        let hold_apply = Arc::new(AtomicBool::new(false));
+        let busy_prepare = Arc::new(AtomicBool::new(false));
+        let (unapplied, refusing_prepare) = (hold_apply.clone(), busy_prepare.clone());
         let inventories = Arc::new(AtomicU64::new(0));
+        let refused_resets = Arc::new(AtomicU64::new(0));
+        let refusals = refused_resets.clone();
         let (refusing, counted) = (busy.clone(), inventories.clone());
         let (stopping, dropping, trace) = (stop.clone(), drop_commit.clone(), events.clone());
         let task = thread::spawn(move || {
@@ -198,8 +215,10 @@ impl Peer {
                                     ..Default::default()
                                 });
                             }
-                            path.status.seen = path.status.published;
-                            path.status.applied = path.status.published;
+                            if !unapplied.load(Ordering::Acquire) {
+                                path.status.seen = path.status.published;
+                                path.status.applied = path.status.published;
+                            }
                         }
                         Reply::Inventory {
                             contexts: vec![ContextStatus {
@@ -212,16 +231,50 @@ impl Peer {
                             }],
                         }
                     }
+                    Operation::Prepare { transaction, .. }
+                        if refusing_prepare.load(Ordering::Acquire) =>
+                    {
+                        assert!(transaction.valid());
+                        Reply::Error {
+                            code: rc2fx_native_control::ErrorCode::Busy,
+                        }
+                    }
+                    // As the library does: a refusing prepare never replaces a
+                    // path's processing.
                     Operation::Prepare {
                         transaction,
                         target,
                         mode,
+                        reset: rc2fx_native_control::ResetPolicy::Refuse,
+                    } if paths.iter().any(|path| {
+                        path.status.id == target.id
+                            && (path.status.mode != mode
+                                || (mode == PathMode::Processed
+                                    && rc2fx_dsp::Prepared::new(&path.target, 48_000)
+                                        .unwrap()
+                                        .requires_reset(
+                                            &rc2fx_dsp::Prepared::new(&target, 48_000).unwrap(),
+                                        )))
+                    }) =>
+                    {
+                        assert!(transaction.valid());
+                        refusals.fetch_add(1, Ordering::AcqRel);
+                        Reply::Error {
+                            code: rc2fx_native_control::ErrorCode::RequiresReset,
+                        }
+                    }
+                    Operation::Prepare {
+                        transaction,
+                        target,
+                        mode,
+                        ..
                     } => {
                         assert!(transaction.valid());
                         trace.lock().unwrap().push(Event {
                             prepare: true,
                             transaction: transaction.clone(),
                             mode,
+                            fingerprint: fingerprint(&target).unwrap(),
                         });
                         let path = paths
                             .iter()
@@ -256,16 +309,16 @@ impl Peer {
                         } else {
                             assert_eq!(completed.get(&transaction.id), Some(&transaction));
                         }
-                        let mode = paths
+                        let status = &paths
                             .iter()
                             .find(|path| path.status.id == transaction.target_id)
                             .unwrap()
-                            .status
-                            .mode;
+                            .status;
                         trace.lock().unwrap().push(Event {
                             prepare: false,
                             transaction: transaction.clone(),
-                            mode,
+                            mode: status.mode,
+                            fingerprint: status.fingerprint,
                         });
                         if dropping.swap(false, Ordering::AcqRel) {
                             continue;
@@ -295,6 +348,9 @@ impl Peer {
             drop_commit,
             hold_window,
             failed_worker,
+            hold_apply,
+            busy_prepare,
+            refused_resets,
             busy,
             inventories,
             events,
@@ -661,7 +717,8 @@ fn external_publications_do_not_turn_live_frames_into_stalls_and_exact_restore_r
                 .request(Operation::Prepare {
                     transaction: transaction.clone(),
                     target: Box::new(target.clone()),
-                    mode
+                    mode,
+                    reset: rc2fx_native_control::ResetPolicy::Allow,
                 })
                 .unwrap()
                 .reply,
@@ -861,6 +918,512 @@ fn a_busy_engine_after_an_idle_wait_is_not_a_stall() {
     runtime.next_poll = Instant::now();
     let recovered = runtime.poll(|| false).unwrap();
     assert!(!recovered.failure && recovered.advancing);
+}
+
+/// The saved settings with mic-1's gain at `db`, based on the saved revision.
+fn gain_update(controller: &Controller, db: f64) -> ConfigUpdate {
+    let mut targets = controller.config().targets.clone();
+    targets
+        .iter_mut()
+        .find(|target| target.id == "mic-1")
+        .unwrap()
+        .gain
+        .db = db;
+    ConfigUpdate {
+        expected_revision: controller.config().revision,
+        targets,
+    }
+}
+fn mic_fingerprint(targets: &[rc2fx_core::Target]) -> [u8; 32] {
+    fingerprint(targets.iter().find(|target| target.id == "mic-1").unwrap()).unwrap()
+}
+/// The settings the library last prepared for mic-1.
+fn last_mic_preparation(peer: &Peer) -> Event {
+    peer.preparations()
+        .into_iter()
+        .rev()
+        .find(|event| event.transaction.target_id == "mic-1")
+        .expect("mic-1 was prepared")
+}
+
+#[tokio::test]
+async fn a_live_edit_plays_at_once_without_saving_or_publishing_state() {
+    use rc2fx_core::{EnginePhase, RoutingPhase};
+    let (directory, peer, mut controller, mut runtime) = fixture();
+    let before = controller.state();
+    assert_eq!(before.engine.status, EnginePhase::Running);
+    let file = directory.path().join("state.json");
+    let bytes = std::fs::read(&file).unwrap();
+    let mut subscription = controller.subscribe().unwrap();
+    assert_eq!(
+        subscription.next().await.unwrap().kind,
+        crate::events::EventKind::State
+    );
+
+    let update = gain_update(&controller, -6.0);
+    let live = update.targets.clone();
+    let revision = controller.live_native(update, &mut runtime).unwrap();
+    assert_eq!(
+        revision, before.config.revision,
+        "the revision it was based on"
+    );
+    assert_eq!(controller.state(), before, "nothing saved or reported");
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), subscription.next())
+            .await
+            .is_err(),
+        "a live edit sends no event"
+    );
+    // The library got what a save gives it, for the changed path only.
+    let events = peer.events.lock().unwrap().clone();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(events[0].prepare && !events[1].prepare);
+    assert_eq!(events[0].transaction.target_id, "mic-1");
+    assert_eq!(events[1].transaction, events[0].transaction);
+    assert_eq!(events[1].fingerprint, mic_fingerprint(&live));
+    assert_eq!(runtime.live_targets(), Some(live.as_slice()));
+    assert!(runtime.writable && runtime.pending.is_empty());
+
+    // Read before the callback has played it: the engine is still settled,
+    // routed and applied. A live edit never shows as "Not routed".
+    peer.hold_apply.store(true, Ordering::Release);
+    let observation = runtime.observe(Instant::now()).unwrap();
+    assert!(observation.applied && observation.advancing);
+    controller.native_progress(observation);
+    let held = controller.state();
+    assert_eq!(held.engine.status, EnginePhase::Running);
+    assert_eq!(held.engine.applied_revision, before.config.revision);
+    assert_eq!(held.routing.status, RoutingPhase::Active);
+    assert_eq!(held.routing.channels, before.routing.channels);
+    assert!(held.selection.allowed);
+    peer.hold_apply.store(false, Ordering::Release);
+    advance(&mut controller, &mut runtime);
+    assert!(runtime.paths.iter().all(|path| !path.unconfirmed));
+    assert_eq!(controller.config(), &before.config);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+}
+
+#[test]
+fn live_refusals_leave_the_audio_and_the_settings_alone() {
+    use crate::store::StoreError;
+    let (directory, peer, mut controller, mut runtime) = fixture();
+    let before = controller.state();
+    let file = directory.path().join("state.json");
+    let bytes = std::fs::read(&file).unwrap();
+
+    let mut stale = gain_update(&controller, -6.0);
+    stale.expected_revision += 1;
+    assert!(matches!(
+        controller.live_native(stale, &mut runtime),
+        Err(Error::Store(StoreError::Conflict))
+    ));
+    let mut short = gain_update(&controller, -6.0);
+    short.targets.pop();
+    assert!(matches!(
+        controller.live_native(short, &mut runtime),
+        Err(Error::Store(StoreError::Invalid(_)))
+    ));
+    let mut suppressed = gain_update(&controller, 0.0);
+    suppressed
+        .targets
+        .iter_mut()
+        .find(|target| target.id == "mic-1")
+        .unwrap()
+        .suppression
+        .enabled = true;
+    assert!(matches!(
+        controller.live_native(suppressed, &mut runtime),
+        Err(Error::LiveRequiresSave(message)) if message.contains("mic-1")
+    ));
+    // A library still taking the last change answers Busy at once: no wait.
+    peer.busy_prepare.store(true, Ordering::Release);
+    let started = Instant::now();
+    let busy = gain_update(&controller, -6.0);
+    assert!(matches!(
+        controller.live_native(busy, &mut runtime),
+        Err(Error::NativeBusy)
+    ));
+    assert!(
+        started.elapsed() < BUSY_PAUSE,
+        "a busy live edit is not retried"
+    );
+    peer.busy_prepare.store(false, Ordering::Release);
+
+    assert!(peer.preparations().is_empty());
+    assert!(!runtime.live_editing());
+    assert_eq!(controller.state(), before);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+
+    // While a routing change waits for its acknowledgement the engine is not
+    // settled: try again shortly.
+    toggle(&mut controller, &mut runtime, false);
+    let unsettled = gain_update(&controller, -6.0);
+    assert!(matches!(
+        controller.live_native(unsettled, &mut runtime),
+        Err(Error::LiveUnavailable)
+    ));
+    advance(&mut controller, &mut runtime);
+    let settled = gain_update(&controller, -6.0);
+    controller.live_native(settled, &mut runtime).unwrap();
+    assert!(runtime.live_editing());
+}
+
+#[test]
+fn saving_what_live_edits_play_changes_no_audio_and_keeps_the_engine_running() {
+    use rc2fx_core::{EnginePhase, RoutingPhase};
+    let (_directory, peer, mut controller, mut runtime) = fixture();
+    let update = gain_update(&controller, -6.0);
+    let targets = update.targets.clone();
+    controller.live_native(update, &mut runtime).unwrap();
+    advance(&mut controller, &mut runtime);
+    let before = controller.state();
+    let sent = peer.events.lock().unwrap().len();
+
+    let state = controller
+        .apply_native(
+            ConfigUpdate {
+                expected_revision: before.config.revision,
+                targets: targets.clone(),
+            },
+            &mut runtime,
+        )
+        .unwrap();
+    assert_eq!(state.config.revision, before.config.revision + 1);
+    assert_eq!(state.config.targets, targets);
+    // No Starting, no "waiting for acknowledgement", no unrouted moment.
+    assert_eq!(state.engine.status, EnginePhase::Running);
+    assert!(state.engine.audio_advancing);
+    assert_eq!(state.engine.applied_revision, state.config.revision);
+    assert_eq!(state.routing, before.routing);
+    assert_eq!(state.selection, before.selection);
+    assert_eq!(controller.state(), state);
+    assert_eq!(peer.events.lock().unwrap().len(), sent, "no audio change");
+    assert!(!runtime.live_editing());
+    assert!(runtime.writable);
+
+    advance(&mut controller, &mut runtime);
+    let after = controller.state();
+    assert_eq!(after.engine.applied_revision, after.config.revision);
+    assert_eq!(after.routing.status, RoutingPhase::Active);
+    // The next start finds the saved settings playing.
+    drop(runtime);
+    Runtime::connect(&peer.path(), controller.config(), Duration::from_secs(2)).unwrap();
+}
+
+#[test]
+fn saving_other_settings_after_live_edits_applies_them() {
+    let (_directory, peer, mut controller, mut runtime) = fixture();
+    let edit = gain_update(&controller, -6.0);
+    controller.live_native(edit, &mut runtime).unwrap();
+    advance(&mut controller, &mut runtime);
+    let prepared = peer.preparations().len();
+    let update = gain_update(&controller, -9.0);
+    let targets = update.targets.clone();
+    let state = controller.apply_native(update, &mut runtime).unwrap();
+    // A real audio change still waits for the callback, as before.
+    assert_eq!(state.engine.applied_revision, 0);
+    assert_eq!(peer.preparations().len(), prepared + 1);
+    assert_eq!(
+        last_mic_preparation(&peer).fingerprint,
+        mic_fingerprint(&targets)
+    );
+    assert!(!runtime.live_editing());
+    advance(&mut controller, &mut runtime);
+    assert!(controller.state().is_applied());
+    assert_eq!(controller.config().targets, targets);
+
+    // Saving the settings from before the live edit puts them back.
+    let edit = gain_update(&controller, -3.0);
+    controller.live_native(edit, &mut runtime).unwrap();
+    advance(&mut controller, &mut runtime);
+    let unchanged = ConfigUpdate {
+        expected_revision: controller.config().revision,
+        targets: targets.clone(),
+    };
+    controller.apply_native(unchanged, &mut runtime).unwrap();
+    assert_eq!(
+        last_mic_preparation(&peer).fingerprint,
+        mic_fingerprint(&targets)
+    );
+    assert!(!runtime.live_editing());
+    advance(&mut controller, &mut runtime);
+    assert!(controller.state().is_applied());
+}
+
+#[test]
+fn a_routing_change_replaces_live_edits_with_the_saved_settings() {
+    let (_directory, peer, mut controller, mut runtime) = fixture();
+    let saved = mic_fingerprint(&controller.config().targets);
+    let edit = gain_update(&controller, -6.0);
+    controller.live_native(edit, &mut runtime).unwrap();
+    advance(&mut controller, &mut runtime);
+    toggle(&mut controller, &mut runtime, false);
+    assert!(!runtime.live_editing());
+    let mic = runtime
+        .paths
+        .iter()
+        .find(|path| path.id == "mic-1")
+        .unwrap();
+    assert_eq!(mic.expected, saved);
+    assert_eq!(last_mic_preparation(&peer).fingerprint, saved);
+    advance(&mut controller, &mut runtime);
+    assert!(controller.state().can_enable_processing());
+}
+
+#[tokio::test]
+async fn live_edits_nobody_watches_are_saved_as_they_play() {
+    use rc2fx_core::{EnginePhase, RoutingPhase};
+    let (directory, peer, mut controller, mut runtime) = fixture();
+    let saved = controller.config().clone();
+    let update = gain_update(&controller, -6.0);
+    let live = update.targets.clone();
+    controller.live_native(update, &mut runtime).unwrap();
+    advance(&mut controller, &mut runtime);
+    let before = controller.state();
+    let sent = peer.events.lock().unwrap().len();
+    let mut subscription = controller.subscribe().unwrap();
+    assert_eq!(
+        subscription.next().await.unwrap().kind,
+        crate::events::EventKind::State
+    );
+
+    let start = Instant::now();
+    assert!(
+        !runtime.live_orphaned(false, start),
+        "a moment without a client"
+    );
+    assert!(!runtime.live_orphaned(false, start + LIVE_ORPHAN_GRACE / 2));
+    // The app subscribes again: the grace starts over.
+    assert!(!runtime.live_orphaned(true, start + LIVE_ORPHAN_GRACE));
+    assert!(!runtime.live_orphaned(false, start + LIVE_ORPHAN_GRACE));
+    assert!(runtime.live_orphaned(false, start + LIVE_ORPHAN_GRACE * 2));
+
+    let state = controller
+        .keep_live(&mut runtime, false)
+        .unwrap()
+        .expect("live edits were kept");
+    assert_eq!(state.config.revision, saved.revision + 1);
+    assert_eq!(state.config.targets, live);
+    assert_eq!(state.engine.status, EnginePhase::Running);
+    assert_eq!(state.engine.applied_revision, state.config.revision);
+    assert_eq!(state.routing, before.routing);
+    assert_eq!(state.selection, before.selection);
+    assert_eq!(peer.events.lock().unwrap().len(), sent, "no audio change");
+    assert!(!runtime.live_editing());
+    assert!(!runtime.live_orphaned(false, start + LIVE_ORPHAN_GRACE * 3));
+    let event = tokio::time::timeout(Duration::from_millis(100), subscription.next())
+        .await
+        .expect("the kept settings are published")
+        .unwrap();
+    assert_eq!(event.kind, crate::events::EventKind::State);
+    let published: rc2fx_core::DeviceState = serde_json::from_slice(&event.data).unwrap();
+    assert_eq!(published.config, state.config);
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("state.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        stored["config"],
+        serde_json::to_value(&state.config).unwrap()
+    );
+    // Nothing left to keep.
+    assert!(controller.keep_live(&mut runtime, false).unwrap().is_none());
+    advance(&mut controller, &mut runtime);
+    assert_eq!(controller.state().routing.status, RoutingPhase::Active);
+    drop(runtime);
+    Runtime::connect(&peer.path(), controller.config(), Duration::from_secs(2)).unwrap();
+}
+
+/// When the store cannot take the live settings, the saved ones go back on
+/// the audio, so what plays and what is stored agree.
+#[test]
+fn live_edits_that_cannot_be_saved_give_way_to_the_saved_settings() {
+    use crate::{persistence::CommitPhase, store::StoreError};
+    let (directory, peer, mut controller, mut runtime) = fixture();
+    let saved = controller.config().clone();
+    let file = directory.path().join("state.json");
+    let bytes = std::fs::read(&file).unwrap();
+    let update = gain_update(&controller, -6.0);
+    controller.live_native(update, &mut runtime).unwrap();
+    advance(&mut controller, &mut runtime);
+    let prepared = peer.preparations().len();
+
+    controller.fail_next_commit(CommitPhase::Write);
+    assert!(matches!(
+        controller.keep_live(&mut runtime, false),
+        Err(Error::Store(StoreError::Io(_)))
+    ));
+    assert!(!runtime.live_editing());
+    assert_eq!(peer.preparations().len(), prepared + 1);
+    assert_eq!(
+        last_mic_preparation(&peer).fingerprint,
+        mic_fingerprint(&saved.targets)
+    );
+    assert_eq!(controller.config(), &saved);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    advance(&mut controller, &mut runtime);
+    assert!(controller.state().is_applied());
+    drop(runtime);
+    Runtime::connect(&peer.path(), &saved, Duration::from_secs(2)).unwrap();
+}
+
+/// Publishes `target` on its path from another client, as a daemon that
+/// edited it live and then died would have left it.
+fn publish_elsewhere(peer: &Peer, target: &rc2fx_core::Target, revision: u64, mode: PathMode) {
+    let mut client = Client::connect(&peer.path()).unwrap();
+    let transaction = client.transaction(42, &target.id, revision).unwrap();
+    assert!(matches!(
+        client
+            .request(Operation::Prepare {
+                transaction: transaction.clone(),
+                target: Box::new(target.clone()),
+                mode,
+                reset: rc2fx_native_control::ResetPolicy::Allow,
+            })
+            .unwrap()
+            .reply,
+        Reply::Prepared { .. }
+    ));
+    assert!(matches!(
+        client.commit_saved(&transaction),
+        Publication::Published(_)
+    ));
+}
+fn two_paths() -> Config {
+    Config {
+        selected_targets: vec!["mic-1".into(), "headphones-2".into()],
+        ..Config::default()
+    }
+}
+
+/// A daemon killed mid-edit leaves a path playing unsaved settings. The
+/// next start puts the saved ones back with a normal publication and
+/// connects, instead of refusing to start until RØDE's process restarts.
+#[test]
+fn connecting_over_left_over_live_edits_restores_the_saved_settings() {
+    let config = two_paths();
+    let peer = Peer::new(&config);
+    let saved = mic_fingerprint(&config.targets);
+    let mut edited = config
+        .targets
+        .iter()
+        .find(|target| target.id == "mic-1")
+        .unwrap()
+        .clone();
+    edited.gain.db = -6.0;
+    publish_elsewhere(&peer, &edited, 5, PathMode::Processed);
+    let before = peer.preparations().len();
+
+    let mut runtime = Runtime::connect(&peer.path(), &config, Duration::from_secs(2)).unwrap();
+    let preparations = peer.preparations();
+    assert_eq!(preparations.len(), before + 1, "only the stale path");
+    let restored = preparations.last().unwrap();
+    assert_eq!(restored.transaction.target_id, "mic-1");
+    assert_eq!(restored.fingerprint, saved);
+    assert_eq!(restored.mode, PathMode::Processed);
+    // The native revision a save would use: past the left-over publication.
+    assert_eq!(restored.transaction.revision, 6.max(config.revision));
+    let events = peer.events.lock().unwrap().clone();
+    let committed = events.last().unwrap();
+    assert!(!committed.prepare && committed.transaction == restored.transaction);
+    assert!(runtime.pending.is_empty());
+    let mic = runtime
+        .paths
+        .iter()
+        .find(|path| path.id == "mic-1")
+        .unwrap();
+    assert_eq!(
+        (mic.expected, mic.publication),
+        (saved, restored.transaction.revision)
+    );
+
+    // From here it is an ordinary start.
+    let directory = tempfile::tempdir().unwrap();
+    let mut controller = Controller::new(Store::open(directory.path(), config.clone()).unwrap());
+    controller.attach_native(&mut runtime).unwrap();
+    advance(&mut controller, &mut runtime);
+    assert!(controller.state().is_applied());
+    drop(runtime);
+    Runtime::connect(&peer.path(), &config, Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        peer.preparations().len(),
+        before + 1,
+        "nothing left to restore"
+    );
+}
+
+/// Everything a live edit cannot leave behind still refuses the connection,
+/// and nothing is published on the way.
+#[test]
+fn connecting_still_refuses_a_wrong_mode_or_a_missing_path() {
+    let config = two_paths();
+    let peer = Peer::new(&config);
+    let mic = config
+        .targets
+        .iter()
+        .find(|target| target.id == "mic-1")
+        .unwrap()
+        .clone();
+    // mic-1 passthrough while saved settings process it, and another path
+    // stale as after a live edit: the mode mismatch wins, nothing is restored.
+    let mut headphones = config
+        .targets
+        .iter()
+        .find(|target| target.id == "headphones-2")
+        .unwrap()
+        .clone();
+    headphones.gain.db = -6.0;
+    publish_elsewhere(&peer, &headphones, 5, PathMode::Processed);
+    publish_elsewhere(&peer, &mic, 5, PathMode::Passthrough);
+    let before = peer.preparations().len();
+    let refused = Runtime::connect(&peer.path(), &config, Duration::from_secs(2));
+    assert!(
+        matches!(&refused, Err(Error::Native(message)) if message.contains("do not match saved")),
+        "{:?}",
+        refused.err()
+    );
+    assert_eq!(peer.preparations().len(), before);
+
+    // A saved selection with a path the library does not have.
+    let peer = Peer::new(&Config {
+        selected_targets: vec!["mic-1".into()],
+        ..Config::default()
+    });
+    let refused = Runtime::connect(&peer.path(), &config, Duration::from_secs(2));
+    assert!(refused.is_err());
+    assert!(peer.preparations().is_empty());
+}
+
+/// Settings a live edit could never have left (here suppression switched on)
+/// are not restored by rebuilding processing behind the user's back: the
+/// library refuses the restore, nothing is committed, and connect fails as it
+/// did before restores existed.
+#[test]
+fn connecting_refuses_a_restore_that_would_rebuild_processing() {
+    let config = two_paths();
+    let peer = Peer::new(&config);
+    let mut suppressed = config
+        .targets
+        .iter()
+        .find(|target| target.id == "mic-1")
+        .unwrap()
+        .clone();
+    suppressed.suppression.enabled = true;
+    publish_elsewhere(&peer, &suppressed, 5, PathMode::Processed);
+    let events = peer.events.lock().unwrap().len();
+    let refused = Runtime::connect(&peer.path(), &config, Duration::from_secs(2));
+    assert!(
+        matches!(&refused, Err(Error::Native(message))
+            if message.contains("restoring") && message.contains("mic-1")),
+        "{:?}",
+        refused.err()
+    );
+    assert_eq!(peer.refused_resets.load(Ordering::Acquire), 1);
+    assert_eq!(
+        peer.events.lock().unwrap().len(),
+        events,
+        "nothing prepared or committed"
+    );
 }
 
 /// The controller's loop with the real event hub, USB session and API. The
@@ -1120,6 +1683,216 @@ mod coordinator_loop {
         }
         // Idle the whole time: about one read per 900 ms, never the fast rate.
         assert!((3..=6).contains(&reads), "{reads} reads in 3.3 s");
+    }
+
+    /// The state once the running loop has seen the engine settle.
+    async fn settled(handle: &Handle) -> rc2fx_core::DeviceState {
+        use crate::coordinator::receive;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let state = receive(handle.state()).await.unwrap();
+                if state.engine.status == rc2fx_core::EnginePhase::Running
+                    && state.engine.applied_revision != 0
+                    && state.selection.allowed
+                {
+                    break state;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    async fn put(
+        api: &mut crate::api::Api,
+        path: &str,
+        body: serde_json::Value,
+    ) -> crate::api::Reply {
+        api.request(rc2fx_usb::Request {
+            method: "PUT".into(),
+            path: path.into(),
+            body: Some(body),
+        })
+        .await
+    }
+    fn mic_gain(state: &rc2fx_core::DeviceState, db: f64) -> ConfigUpdate {
+        let mut targets = state.config.targets.clone();
+        targets
+            .iter_mut()
+            .find(|target| target.id == "mic-1")
+            .unwrap()
+            .gain
+            .db = db;
+        ConfigUpdate {
+            expected_revision: state.config.revision,
+            targets,
+        }
+    }
+
+    /// The app's sequence over the API: live edits while a control moves,
+    /// then a save of the last one, which never leaves Running.
+    #[tokio::test]
+    async fn live_edits_then_a_save_over_the_api_never_leave_running() {
+        use crate::coordinator::receive;
+        let (_directory, peer, handle, owner) = start();
+        let task = thread::spawn(move || owner.run());
+        let _subscription = handle.subscribe().unwrap();
+        let state = settled(&handle).await;
+        let mut api = crate::api::Api::new(handle.clone(), Options::default());
+        let mut last = None;
+        for db in [-2.0, -4.0, -6.0] {
+            let update = mic_gain(&state, db);
+            let mut reply = put(
+                &mut api,
+                "api/v1/live",
+                serde_json::to_value(&update).unwrap(),
+            )
+            .await;
+            // A library still taking the last one answers 503: try again.
+            for _ in 0..50 {
+                if reply.status != 503 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                reply = put(
+                    &mut api,
+                    "api/v1/live",
+                    serde_json::to_value(&update).unwrap(),
+                )
+                .await;
+            }
+            assert_eq!(reply.status, 200, "{}", reply.body.get());
+            let answer: serde_json::Value = serde_json::from_str(reply.body.get()).unwrap();
+            assert_eq!(
+                answer,
+                serde_json::json!({"accepted": true, "baseRevision": state.config.revision})
+            );
+            last = Some(update);
+        }
+        let update = last.unwrap();
+        let now = receive(handle.state()).await.unwrap();
+        assert_eq!(now.config, state.config, "live edits save nothing");
+        assert_eq!(
+            last_mic_preparation(&peer).fingerprint,
+            mic_fingerprint(&update.targets)
+        );
+        let mut stale = serde_json::to_value(&update).unwrap();
+        stale["expectedRevision"] = serde_json::json!(state.config.revision + 1);
+        assert_eq!(put(&mut api, "api/v1/live", stale).await.status, 409);
+        let mut suppressed = update.clone();
+        suppressed
+            .targets
+            .iter_mut()
+            .find(|target| target.id == "mic-1")
+            .unwrap()
+            .suppression
+            .enabled = true;
+        let refused = put(
+            &mut api,
+            "api/v1/live",
+            serde_json::to_value(&suppressed).unwrap(),
+        )
+        .await;
+        assert_eq!(refused.status, 422);
+        assert!(refused.body.get().contains("liveRequiresSave"));
+
+        let prepared = peer.preparations().len();
+        let saved = put(
+            &mut api,
+            "api/v1/config",
+            serde_json::to_value(&update).unwrap(),
+        )
+        .await;
+        assert_eq!(saved.status, 200, "{}", saved.body.get());
+        let saved: rc2fx_core::DeviceState = serde_json::from_str(saved.body.get()).unwrap();
+        assert_eq!(saved.config.revision, state.config.revision + 1);
+        assert_eq!(saved.engine.status, rc2fx_core::EnginePhase::Running);
+        assert_eq!(saved.engine.applied_revision, saved.config.revision);
+        assert_eq!(saved.routing.status, rc2fx_core::RoutingPhase::Active);
+        assert!(saved.selection.allowed);
+        assert_eq!(peer.preparations().len(), prepared, "no audio change");
+        handle.close();
+        handle.shutdown().await.unwrap();
+        let stopped = task.join().unwrap();
+        assert_eq!(stopped.config().targets, update.targets);
+    }
+
+    /// Live edits still playing when the daemon stops are what the user has:
+    /// they are saved, with no audio change, and the next start finds them.
+    #[tokio::test]
+    async fn live_edits_playing_at_shutdown_are_saved() {
+        let (_directory, peer, handle, owner) = start();
+        let task = thread::spawn(move || owner.run());
+        let _subscription = handle.subscribe().unwrap();
+        let state = settled(&handle).await;
+        let mut api = crate::api::Api::new(handle.clone(), Options::default());
+        let update = mic_gain(&state, -6.0);
+        let reply = put(
+            &mut api,
+            "api/v1/live",
+            serde_json::to_value(&update).unwrap(),
+        )
+        .await;
+        assert_eq!(reply.status, 200, "{}", reply.body.get());
+        let sent = peer.events.lock().unwrap().len();
+        handle.close();
+        handle.shutdown().await.unwrap();
+        let stopped = task.join().unwrap();
+        assert_eq!(stopped.config().revision, state.config.revision + 1);
+        assert_eq!(stopped.config().targets, update.targets);
+        assert_eq!(peer.events.lock().unwrap().len(), sent, "no audio change");
+        Runtime::connect(&peer.path(), stopped.config(), Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            peer.events.lock().unwrap().len(),
+            sent,
+            "nothing to restore"
+        );
+    }
+
+    /// The app goes away mid-edit: once nobody has been subscribed for the
+    /// grace period the daemon saves what plays. The audio does not change.
+    #[tokio::test]
+    async fn live_edits_left_by_a_departed_app_are_saved() {
+        let (_directory, peer, handle, owner) = start();
+        let task = thread::spawn(move || owner.run());
+        let subscription = handle.subscribe().unwrap();
+        let state = settled(&handle).await;
+        let mut api = crate::api::Api::new(handle.clone(), Options::default());
+        let update = mic_gain(&state, -6.0);
+        let reply = put(
+            &mut api,
+            "api/v1/live",
+            serde_json::to_value(&update).unwrap(),
+        )
+        .await;
+        assert_eq!(reply.status, 200, "{}", reply.body.get());
+        let sent = peer.events.lock().unwrap().len();
+        // Still watched: nothing is saved for the app.
+        tokio::time::sleep(LIVE_ORPHAN_GRACE + Duration::from_millis(500)).await;
+        let watched = crate::coordinator::receive(handle.state()).await.unwrap();
+        assert_eq!(watched.config, state.config);
+        drop(subscription);
+        let kept = tokio::time::timeout(LIVE_ORPHAN_GRACE * 3, async {
+            loop {
+                let now = crate::coordinator::receive(handle.state()).await.unwrap();
+                if now.config.revision != state.config.revision {
+                    break now;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the live settings were not saved");
+        assert_eq!(kept.config.revision, state.config.revision + 1);
+        assert_eq!(kept.config.targets, update.targets);
+        assert_eq!(kept.engine.status, rc2fx_core::EnginePhase::Running);
+        assert_eq!(kept.engine.applied_revision, kept.config.revision);
+        assert_eq!(kept.routing.status, rc2fx_core::RoutingPhase::Active);
+        assert_eq!(peer.events.lock().unwrap().len(), sent, "no audio change");
+        handle.close();
+        handle.shutdown().await.unwrap();
+        let stopped = task.join().unwrap();
+        assert_eq!(stopped.config(), &kept.config);
     }
 }
 

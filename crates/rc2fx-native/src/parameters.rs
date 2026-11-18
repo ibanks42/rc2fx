@@ -1,15 +1,125 @@
 //! Per-path immutable descriptors; all runtime construction/retirement is control work.
-use super::suppression::{Admission, Claim, Runtime};
+use super::suppression::{Admission, Claim, Runtime, Start};
 use rc2fx_core::Target;
 use rc2fx_dsp::Prepared;
-use rc2fx_native_control::{PathMode, RetiredWorker};
+use rc2fx_native_control::{PathMode, ResetPolicy, RetiredWorker};
 use std::{
     ptr::NonNull,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicPtr, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
+
+/// How long publishing waits for a runtime that is being replaced to fade
+/// out. The fade itself is `rc2fx_dsp::STAGE_FADE_SAMPLES` (10 ms) of
+/// callbacks; without callbacks (the engine stopped, the path not running)
+/// the wait ends here and the new snapshot is published anyway.
+pub const HANDOFF_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// What the callback does with a path's unprocessed audio while it plays it
+/// (`PassFade::target`). The pipeline fades that audio over
+/// `rc2fx_dsp::STAGE_FADE_SAMPLES`, so that switching processing on or off
+/// never steps between unprocessed audio and a processor's output.
+pub const RAW_PLAY: u8 = 0;
+/// Fade the unprocessed audio out, before a processor takes over: the
+/// callback answers `faded` once it is silent. While the processor has not
+/// yet delivered a frame, the unprocessed fallback stays silent too.
+pub const RAW_MUTE: u8 = 1;
+/// Before the processor hands back to unprocessed audio: start that audio
+/// from silence and fade it in.
+pub const RAW_RISE: u8 = 2;
+/// A path's unprocessed-audio fade, shared by control and the callback.
+#[derive(Default)]
+pub struct PassFade {
+    target: std::sync::atomic::AtomicU8,
+    faded: std::sync::atomic::AtomicBool,
+    /// Set once by the pipeline: the path is processed in the callback, in
+    /// place, so its processor's dry signal is the unprocessed audio at the
+    /// same moment (no helper frame between them).
+    aligned: std::sync::atomic::AtomicBool,
+}
+impl PassFade {
+    /// Callback: the requested `RAW_*`.
+    pub fn target(&self) -> u8 {
+        self.target.load(Ordering::Acquire)
+    }
+    /// Callback: whether the unprocessed audio is now silent after
+    /// `RAW_MUTE`.
+    pub fn answer(&self, faded: bool) {
+        self.faded.store(faded, Ordering::Release);
+    }
+    /// Pipeline construction: see `aligned`.
+    pub fn set_aligned(&self, aligned: bool) {
+        self.aligned.store(aligned, Ordering::Relaxed);
+    }
+    fn aligned(&self) -> bool {
+        self.aligned.load(Ordering::Relaxed)
+    }
+    fn faded(&self) -> bool {
+        self.faded.load(Ordering::Acquire)
+    }
+    fn request(&self, target: u8) {
+        if target == RAW_MUTE {
+            self.faded.store(false, Ordering::Release);
+        }
+        self.target.store(target, Ordering::Release);
+    }
+}
+/// A hand-off under way for one staged publication (`Control::hand_off`):
+/// what it asked of the callback and what it waits for. It holds no lock,
+/// only shared references, so it can be waited on with every lock released.
+/// Dropped before its publication commits, it asks the callback to undo it.
+pub struct HandingOff {
+    ticket: u64,
+    /// The runtime asked to fade out.
+    runtime: Option<Arc<Runtime>>,
+    /// The path's unprocessed-audio fade, and whether this waits for it.
+    pass: Arc<PassFade>,
+    pass_wait: bool,
+    /// The target to restore when undone.
+    pass_before: u8,
+    publications: Arc<AtomicU64>,
+    timeout: Duration,
+    committed: bool,
+}
+impl HandingOff {
+    /// Whether every fade this waits for has finished.
+    pub fn done(&self) -> bool {
+        self.runtime
+            .as_ref()
+            .is_none_or(|runtime| runtime.handed_off())
+            && (!self.pass_wait || self.pass.faded())
+    }
+    /// Polls `done` for up to the control's hand-off timeout; returns it.
+    /// Holds no lock. Without callbacks (the engine stopped) the timeout
+    /// ends the wait and the publication goes ahead.
+    pub fn wait(&self) -> bool {
+        let end = Instant::now() + self.timeout;
+        while !self.done() {
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+}
+impl Drop for HandingOff {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if let Some(runtime) = &self.runtime {
+            runtime.request_hand_off(None);
+        }
+        if self.pass.target() != self.pass_before {
+            self.pass.request(self.pass_before);
+            self.publications.fetch_add(1, Ordering::Release);
+        }
+    }
+}
 
 struct Snapshot {
     revision: u64,
@@ -65,6 +175,7 @@ struct Versions {
     retired_worker_count: u64,
 }
 struct Shared {
+    pass: Arc<PassFade>,
     versions: Mutex<Versions>,
     published: AtomicPtr<Snapshot>,
     seen: AtomicU64,
@@ -93,6 +204,7 @@ pub struct Status {
 }
 pub struct Control {
     id: String,
+    handoff_timeout: Duration,
     shared: Arc<Shared>,
     next_ticket: u64,
     next_epoch: u64,
@@ -341,6 +453,9 @@ impl Drop for Staged {
 }
 pub struct Reservation<'a> {
     versions: MutexGuard<'a, Versions>,
+    /// The hand-off this publication waited for: undone if the reservation
+    /// is dropped uncommitted.
+    handing: HandingOff,
     published: &'a AtomicPtr<Snapshot>,
     publications: &'a AtomicU64,
     ticket: u64,
@@ -356,6 +471,8 @@ impl Reservation<'_> {
             release_after: Some(revision),
         });
         self.versions.pending = None;
+        // What was handed off stays so for whatever frames it still serves.
+        self.handing.committed = true;
         self.published
             .store(self.versions.current.pointer(), Ordering::Release);
         // After the store: a callback that sees the count sees this snapshot.
@@ -393,7 +510,14 @@ pub fn channel_with_options(
         None
     };
     let runtime = if mode == PathMode::Processed {
-        Some(Runtime::new(target, &prepared, options, 1, &admission)?)
+        Some(Runtime::new(
+            target,
+            &prepared,
+            options,
+            1,
+            &admission,
+            Start::Playing,
+        )?)
     } else {
         None
     };
@@ -407,6 +531,7 @@ pub fn channel_with_options(
     );
     let (producer, consumer) = super::telemetry::channel();
     let shared = Arc::new(Shared {
+        pass: Arc::default(),
         published: AtomicPtr::new(current.pointer()),
         versions: Mutex::new(Versions {
             current,
@@ -421,6 +546,7 @@ pub fn channel_with_options(
     Ok((
         Control {
             id: target.id.clone(),
+            handoff_timeout: HANDOFF_TIMEOUT,
             shared: Arc::clone(&shared),
             next_ticket: 1,
             next_epoch: 2,
@@ -470,11 +596,31 @@ impl Control {
     pub fn id(&self) -> &str {
         &self.id
     }
+    /// How long `reserve` waits for a replaced runtime to fade out.
+    #[cfg(test)]
+    pub fn set_handoff_timeout(&mut self, timeout: Duration) {
+        self.handoff_timeout = timeout;
+    }
+    /// `prepare_with` allowing a reset, for tests that predate the policy.
+    #[cfg(test)]
     pub fn prepare_mode(
         &mut self,
         target: &Target,
         revision: u64,
         mode: PathMode,
+    ) -> Result<Staged, Error> {
+        self.prepare_with(target, revision, mode, ResetPolicy::Allow)
+    }
+    /// `prepare_mode` that, with `ResetPolicy::Refuse`, answers
+    /// `RequiresReset` instead of building a new runtime: when the path mode
+    /// changes, or a processed path's settings need one (`requires_reset`).
+    /// Nothing is staged or claimed then.
+    pub fn prepare_with(
+        &mut self,
+        target: &Target,
+        revision: u64,
+        mode: PathMode,
+        reset: ResetPolicy,
     ) -> Result<Staged, Error> {
         if target.id != self.id {
             return Err(Error::WrongTarget);
@@ -497,6 +643,13 @@ impl Control {
         {
             return Err(Error::RequiresReset);
         }
+        if reset == ResetPolicy::Refuse
+            && (versions.current.get().mode != mode
+                || (mode == PathMode::Processed
+                    && versions.current.get().prepared.requires_reset(&prepared)))
+        {
+            return Err(Error::RequiresReset);
+        }
         let claim = if target.suppression.enabled {
             Some(self.admission.claim(&target.id)?)
         } else {
@@ -509,12 +662,20 @@ impl Control {
         {
             versions.current.get().runtime.clone()
         } else {
+            // Published only after the current runtime, if any, has faded
+            // out (`reserve`), so it starts silent or from the dry signal.
+            let start = if versions.current.get().runtime.is_none() && self.shared.pass.aligned() {
+                Start::AfterPassthrough
+            } else {
+                Start::Silent
+            };
             let runtime = Runtime::new(
                 target,
                 &prepared,
                 self.options,
                 self.next_epoch,
                 &self.admission,
+                start,
             )?;
             self.next_epoch += 1;
             Some(runtime)
@@ -541,31 +702,115 @@ impl Control {
     pub fn prepare(&mut self, target: &Target, revision: u64) -> Result<Staged, Error> {
         self.prepare_mode(target, revision, PathMode::Processed)
     }
-    pub fn reserve(&mut self, mut staged: Staged) -> Result<Reservation<'_>, Error> {
+    /// Starts the hand-off publishing `staged` needs, without waiting for it:
+    ///
+    /// - A new runtime in place of the running one (a reset): the running
+    ///   one fades to silence; the new one starts silent for its delay, then
+    ///   fades in (`Start::Silent`).
+    /// - Processing off, on an aligned path (`PassFade::aligned`) whose
+    ///   processor has no delay: it fades to its dry signal, which is the
+    ///   unprocessed audio. Otherwise it fades to silence and the unprocessed
+    ///   audio then fades in from silence (`RAW_RISE`).
+    /// - Processing on: on an aligned path with a processor without a delay,
+    ///   nothing to wait for (the processor starts from its dry signal).
+    ///   Otherwise the unprocessed audio fades to silence first
+    ///   (`RAW_MUTE`), and the processor starts silent.
+    ///
+    /// The version lock is held only to read the current snapshot. Wait on
+    /// the result with every lock released, then pass it to `reserve_after`.
+    pub fn hand_off(&self, staged: &Staged) -> Result<HandingOff, Error> {
         if !Arc::ptr_eq(&self.shared, &staged.shared) {
             return Err(Error::WrongTarget);
         }
-        let versions = self.shared.versions.lock().map_err(|_| Error::Poisoned)?;
-        let error = if versions.pending != Some(staged.ticket)
-            || versions.current.get().revision != staged.expected_revision
-        {
-            Some(Error::StaleRevision)
-        } else if versions.retired.is_some() {
-            Some(Error::Busy)
-        } else {
-            None
+        let (runtime, to, raw) = {
+            let versions = self.shared.versions.lock().map_err(|_| Error::Poisoned)?;
+            check(&versions, staged)?;
+            let current = versions.current.get();
+            let next = staged.snapshot.as_ref().expect("staged snapshot").get();
+            let aligned = self.shared.pass.aligned();
+            match (&current.runtime, &next.runtime) {
+                _ if same_runtime(current, next) => (None, None, None),
+                // A reset: silence between the two.
+                (Some(old), Some(_)) => (
+                    Some(Arc::clone(old)),
+                    Some(rc2fx_dsp::HandOff::Silence),
+                    None,
+                ),
+                // Processing off.
+                (Some(old), None) if aligned && old.latency_samples() == 0 => (
+                    Some(Arc::clone(old)),
+                    Some(rc2fx_dsp::HandOff::Dry),
+                    Some(RAW_PLAY),
+                ),
+                (Some(old), None) => (
+                    Some(Arc::clone(old)),
+                    Some(rc2fx_dsp::HandOff::Silence),
+                    Some(RAW_RISE),
+                ),
+                // Processing on.
+                (None, Some(new)) if aligned && new.latency_samples() == 0 => {
+                    (None, None, Some(RAW_PLAY))
+                }
+                (None, Some(_)) => (None, None, Some(RAW_MUTE)),
+                (None, None) => (None, None, None),
+            }
         };
-        if let Some(error) = error {
+        let pass_before = self.shared.pass.target();
+        if let Some(raw) = raw
+            && raw != pass_before
+        {
+            self.shared.pass.request(raw);
+            // Every path is visited the next callbacks, this one included.
+            self.publications.fetch_add(1, Ordering::Release);
+        }
+        if let (Some(runtime), Some(to)) = (&runtime, to) {
+            runtime.request_hand_off(Some(to));
+        }
+        Ok(HandingOff {
+            ticket: staged.ticket,
+            runtime,
+            pass: Arc::clone(&self.shared.pass),
+            pass_wait: raw == Some(RAW_MUTE),
+            pass_before,
+            publications: Arc::clone(&self.publications),
+            timeout: self.handoff_timeout,
+            committed: false,
+        })
+    }
+    /// Takes the version lock for publishing `staged` once `handing` (its
+    /// `hand_off`) has been waited for. On an error, `handing` is undone.
+    pub fn reserve_after(
+        &mut self,
+        mut staged: Staged,
+        handing: HandingOff,
+    ) -> Result<Reservation<'_>, Error> {
+        if !Arc::ptr_eq(&self.shared, &staged.shared) || handing.ticket != staged.ticket {
+            return Err(Error::WrongTarget);
+        }
+        // Only this control changes the versions; the reader never locks.
+        let versions = self.shared.versions.lock().map_err(|_| Error::Poisoned)?;
+        if let Err(error) = check(&versions, &staged) {
             drop(versions);
             return Err(error);
         }
         Ok(Reservation {
             versions,
+            handing,
             published: &self.shared.published,
             publications: &self.publications,
             ticket: staged.ticket,
             next: staged.snapshot.take(),
         })
+    }
+    /// `hand_off`, its wait (no lock held, though `self` is) and
+    /// `reserve_after`: for tests, which own the control outright. The IPC
+    /// commit runs the three steps itself so it can drop its locks for the
+    /// wait.
+    #[cfg(test)]
+    pub fn reserve(&mut self, staged: Staged) -> Result<Reservation<'_>, Error> {
+        let handing = self.hand_off(&staged)?;
+        handing.wait();
+        self.reserve_after(staged, handing)
     }
     #[cfg(test)]
     pub fn publish(&mut self, target: &Target, revision: u64) -> Result<(), Error> {
@@ -664,6 +909,18 @@ impl Control {
         })
     }
 }
+/// Whether `staged` may still be published over `versions`.
+fn check(versions: &Versions, staged: &Staged) -> Result<(), Error> {
+    if versions.pending != Some(staged.ticket)
+        || versions.current.get().revision != staged.expected_revision
+    {
+        Err(Error::StaleRevision)
+    } else if versions.retired.is_some() {
+        Err(Error::Busy)
+    } else {
+        Ok(())
+    }
+}
 fn native_histories(
     outliers: rc2fx_suppression::Outliers,
 ) -> (
@@ -706,6 +963,11 @@ impl Reader {
     }
     pub fn mode(&self) -> Option<PathMode> {
         self.descriptor().map(|s| s.mode)
+    }
+    /// The path's unprocessed-audio fade, for the pipeline to keep beside
+    /// the reader (construction only).
+    pub fn pass_fade(&self) -> Arc<PassFade> {
+        Arc::clone(&self.shared.pass)
     }
     pub fn input(
         &self,
@@ -1192,6 +1454,347 @@ mod tests {
             .unwrap();
         control.reserve(staged).unwrap().commit();
         assert_eq!(control.status().unwrap().runtime_epoch, 2);
+    }
+
+    /// A callback stand-in: blocks of a constant `level` through `reader`
+    /// until `stop`, logging each block's revision and first channel. A
+    /// passthrough path's block is left as it came.
+    fn audio(
+        mut reader: Reader,
+        channels: usize,
+        level: f32,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) -> std::thread::JoinHandle<Vec<(u64, Vec<f32>)>> {
+        std::thread::spawn(move || {
+            let mut log = Vec::new();
+            while !stop.load(Ordering::Acquire) {
+                let mut left = [level; 112];
+                let mut right = [level; 112];
+                assert!(reader.begin());
+                let revision = reader.descriptor().unwrap().revision;
+                if reader.mode() == Some(PathMode::Processed) {
+                    let right: &mut [f32] = if channels == 2 { &mut right } else { &mut [] };
+                    reader.output([&mut left, right]).unwrap();
+                }
+                reader.finish(true);
+                log.push((revision, left.to_vec()));
+                std::thread::sleep(Duration::from_micros(200));
+            }
+            log
+        })
+    }
+    /// The largest step from one sample to the next across a log.
+    fn largest_step(log: &[(u64, Vec<f32>)]) -> f32 {
+        let samples: Vec<f32> = log.iter().flat_map(|(_, block)| block.clone()).collect();
+        samples
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max)
+    }
+    /// Prepares and publishes `target` as `revision`, retrying while the
+    /// previous publication is still being released.
+    fn publish_live(control: &mut Control, target: &Target, revision: u64, mode: PathMode) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let staged = loop {
+            match control.prepare_mode(target, revision, mode) {
+                Ok(staged) => break staged,
+                Err(Error::Busy) if Instant::now() < deadline => std::thread::yield_now(),
+                Err(error) => panic!("prepare {revision}: {error:?}"),
+            }
+        };
+        control.reserve(staged).unwrap().commit();
+    }
+    /// Waits until the reader has applied `revision` and played `blocks` of it.
+    fn play(control: &mut Control, revision: u64, millis: u64) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while control.status().unwrap().applied < revision {
+            assert!(Instant::now() < deadline, "revision {revision} not applied");
+            std::thread::yield_now();
+        }
+        std::thread::sleep(Duration::from_millis(millis));
+    }
+
+    /// Switching suppression replaces the runtime. The running one fades to
+    /// silence before the new one is published; the new one stays silent for
+    /// its delay and then fades in. No step anywhere.
+    #[test]
+    fn a_reset_fades_the_old_runtime_out_before_the_new_one_fades_in() {
+        let mut target = Target::new("mic", "Mic", TargetKind::Mic, 1);
+        target.gain.enabled = true;
+        target.gain.db = -6.0;
+        let (mut control, reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread = audio(reader, 1, 0.25, Arc::clone(&stop));
+        play(&mut control, 1, 20);
+        // Dry only, so the new runtime's output is its delayed input.
+        target.suppression.enabled = true;
+        target.suppression.wet = 0.0;
+        publish_live(&mut control, &target, 2, PathMode::Processed);
+        play(&mut control, 2, 200);
+        stop.store(true, Ordering::Release);
+        let log = thread.join().unwrap();
+        let level = 0.25 * 10_f32.powf(-6.0 / 20.0);
+        let last_old = log
+            .iter()
+            .rposition(|(revision, _)| *revision == 1)
+            .unwrap();
+        assert!(
+            log[..last_old]
+                .iter()
+                .any(|(_, block)| (block[0] - level).abs() < 1e-6)
+        );
+        assert_eq!(
+            log[last_old].1[111], 0.0,
+            "the old runtime had not faded out"
+        );
+        assert_eq!(
+            log[last_old + 1].1[0],
+            0.0,
+            "the new runtime did not start silent"
+        );
+        assert!((log.last().unwrap().1[111] - level).abs() < 1e-5);
+        let step = largest_step(&log);
+        assert!(step < 2e-3, "a step of {step}; a cut is {level}");
+    }
+
+    /// On a path processed in place (as a callback-owned output is), switching
+    /// processing off fades to the dry signal, which is what the unprocessed
+    /// path plays; switching it back on fades from it. No dip.
+    #[test]
+    fn an_aligned_mode_change_fades_through_the_dry_signal() {
+        let mut target = target();
+        target.gain.enabled = true;
+        target.gain.db = -6.0;
+        let (mut control, reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
+        reader.pass_fade().set_aligned(true);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread = audio(reader, 2, 0.25, Arc::clone(&stop));
+        play(&mut control, 1, 20);
+        publish_live(&mut control, &target, 2, PathMode::Passthrough);
+        play(&mut control, 2, 20);
+        publish_live(&mut control, &target, 3, PathMode::Processed);
+        play(&mut control, 3, 20);
+        stop.store(true, Ordering::Release);
+        let log = thread.join().unwrap();
+        let last_processed = log
+            .iter()
+            .rposition(|(revision, _)| *revision == 1)
+            .unwrap();
+        assert_eq!(
+            log[last_processed].1[111], 0.25,
+            "had not reached the dry signal"
+        );
+        let first_again = log.iter().position(|(revision, _)| *revision == 3).unwrap();
+        assert!(
+            log[first_again].1[0] > 0.249,
+            "did not start from the dry signal"
+        );
+        let level = 0.25 * 10_f32.powf(-6.0 / 20.0);
+        assert!((log.last().unwrap().1[111] - level).abs() < 1e-6);
+        let step = largest_step(&log);
+        assert!(step < 2e-3, "a step of {step}");
+    }
+
+    /// The hand-off's wait holds no lock: another caller of the control (a
+    /// status read, standing in for the IPC status and the lifecycle calls
+    /// that share the parameter lock) gets it at once throughout, as
+    /// `LiveEndpoints::commit` waits.
+    #[test]
+    fn the_hand_off_wait_holds_no_lock() {
+        let mut target = Target::new("mic", "Mic", TargetKind::Mic, 1);
+        target.gain.enabled = true;
+        target.gain.db = -6.0;
+        let (control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
+        let control = Arc::new(Mutex::new(control));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // A slow callback: about 25 ms for the fade's five blocks.
+        let audio_stop = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            while !audio_stop.load(Ordering::Acquire) {
+                let mut x = [0.25_f32; 112];
+                assert!(reader.begin());
+                reader.output([&mut x, &mut []]).unwrap();
+                reader.finish(true);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let mut suppressed = target.clone();
+        suppressed.suppression.enabled = true;
+        // Building the new runtime is prepare's work, before the commit.
+        let staged = control.lock().unwrap().prepare(&suppressed, 2).unwrap();
+        let committer = {
+            let control = Arc::clone(&control);
+            std::thread::spawn(move || {
+                let handing = control.lock().unwrap().hand_off(&staged).unwrap();
+                let started = Instant::now();
+                assert!(handing.wait(), "the fade did not finish");
+                let waited = started.elapsed();
+                let mut control = control.lock().unwrap();
+                control.reserve_after(staged, handing).unwrap().commit();
+                waited
+            })
+        };
+        let mut slowest = Duration::ZERO;
+        while !committer.is_finished() {
+            let started = Instant::now();
+            let status = control.lock().unwrap().status().unwrap();
+            slowest = slowest.max(started.elapsed());
+            assert!(status.published <= 2);
+            std::thread::sleep(Duration::from_micros(500));
+        }
+        let waited = committer.join().unwrap();
+        stop.store(true, Ordering::Release);
+        thread.join().unwrap();
+        assert!(waited >= Duration::from_millis(10), "waited {waited:?}");
+        assert!(
+            slowest < waited / 2,
+            "a status read waited {slowest:?} of {waited:?}"
+        );
+        assert_eq!(control.lock().unwrap().status().unwrap().published, 2);
+    }
+
+    /// The control (and its reader) can go away while a hand-off waits, as on
+    /// close: nothing deadlocks, and the old runtime is released when the
+    /// hand-off is, on the control side.
+    #[test]
+    fn closing_during_a_hand_off_releases_the_old_runtime() {
+        let target = Target::new("mic", "Mic", TargetKind::Mic, 1);
+        let (mut control, reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
+        let old = Arc::downgrade(
+            control
+                .shared
+                .versions
+                .lock()
+                .unwrap()
+                .current
+                .get()
+                .runtime
+                .as_ref()
+                .unwrap(),
+        );
+        let mut suppressed = target.clone();
+        suppressed.suppression.enabled = true;
+        let staged = control.prepare(&suppressed, 2).unwrap();
+        let handing = control.hand_off(&staged).unwrap();
+        drop(staged);
+        drop(control);
+        drop(reader);
+        assert!(old.upgrade().is_some(), "held by the hand-off");
+        drop(handing);
+        assert!(old.upgrade().is_none());
+    }
+
+    /// With no callbacks to finish the fade (the engine stopped), publishing
+    /// waits out the timeout and goes ahead.
+    #[test]
+    fn a_replacement_without_callbacks_is_published_after_the_timeout() {
+        let target = target();
+        let (mut control, _reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
+        control.set_handoff_timeout(Duration::from_millis(30));
+        let staged = control
+            .prepare_mode(&target, 2, PathMode::Passthrough)
+            .unwrap();
+        let started = Instant::now();
+        control.reserve(staged).unwrap().commit();
+        assert!(started.elapsed() >= Duration::from_millis(30));
+        assert_eq!(control.status().unwrap().published, 2);
+    }
+
+    /// A refused reset never touches the running output, and a reservation
+    /// dropped uncommitted fades it back in.
+    #[test]
+    fn refused_and_abandoned_replacements_leave_the_output_playing() {
+        let mut target = Target::new("mic", "Mic", TargetKind::Mic, 1);
+        target.gain.enabled = true;
+        target.gain.db = -6.0;
+        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
+        control.set_handoff_timeout(Duration::from_millis(5));
+        let mut block = || {
+            let mut x = [0.25_f32; 112];
+            assert!(reader.begin());
+            reader.output([&mut x, &mut []]).unwrap();
+            reader.finish(true);
+            x
+        };
+        let before = block();
+        let mut suppressed = target.clone();
+        suppressed.suppression.enabled = true;
+        assert_eq!(
+            control
+                .prepare_with(&suppressed, 2, PathMode::Processed, ResetPolicy::Refuse)
+                .err(),
+            Some(Error::RequiresReset)
+        );
+        assert_eq!(block(), before);
+        let staged = control
+            .prepare_with(&suppressed, 2, PathMode::Processed, ResetPolicy::Allow)
+            .unwrap();
+        let reservation = control.reserve(staged).unwrap();
+        let fading = block();
+        assert!(fading[111] < before[111] && fading[0] > fading[111]);
+        drop(reservation);
+        let mut previous = fading[111];
+        for _ in 0..8 {
+            let next = block();
+            assert!(next.iter().all(|v| *v >= previous - 1e-7));
+            previous = next[111];
+        }
+        assert_eq!(block(), before);
+        assert_eq!(control.status().unwrap().published, 1);
+    }
+
+    /// A refusing prepare (a live edit, or the daemon restoring saved settings
+    /// at connect) hands the running processing new parameters and never
+    /// replaces it; a save may.
+    #[test]
+    fn a_refusing_prepare_never_builds_a_new_runtime() {
+        let target = Target::new("mic", "Mic", TargetKind::Mic, 1);
+        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
+        // Suppression switched on needs a new runtime: refused, nothing staged.
+        let mut suppressed = target.clone();
+        suppressed.suppression.enabled = true;
+        assert_eq!(
+            control
+                .prepare_with(&suppressed, 2, PathMode::Processed, ResetPolicy::Refuse)
+                .err(),
+            Some(Error::RequiresReset)
+        );
+        // A mode change is refused as well.
+        assert_eq!(
+            control
+                .prepare_with(&target, 2, PathMode::Passthrough, ResetPolicy::Refuse)
+                .err(),
+            Some(Error::RequiresReset)
+        );
+        assert_eq!(control.status().unwrap().runtime_epoch, 1);
+        assert_eq!(control.status().unwrap().published, 1);
+        assert_eq!(control.retired_worker_count(), 0, "no worker was started");
+        // Parameters only: the same runtime carries them.
+        let mut louder = target.clone();
+        louder.gain.db = -6.0;
+        let staged = control
+            .prepare_with(&louder, 2, PathMode::Processed, ResetPolicy::Refuse)
+            .unwrap();
+        control.reserve(staged).unwrap().commit();
+        assert_eq!(control.status().unwrap().published, 2);
+        assert_eq!(control.status().unwrap().runtime_epoch, 1);
+        assert!(reader.begin());
+        reader.finish(true);
+        // A save of the same suppression change builds the new runtime.
+        let staged = control
+            .prepare_with(&suppressed, 3, PathMode::Processed, ResetPolicy::Allow)
+            .unwrap();
+        control.reserve(staged).unwrap().commit();
+        assert_eq!(control.status().unwrap().runtime_epoch, 2);
+        assert!(reader.begin());
+        reader.finish(true);
+        // And going back off from there is a reset again.
+        assert_eq!(
+            control
+                .prepare_with(&louder, 4, PathMode::Processed, ResetPolicy::Refuse)
+                .err(),
+            Some(Error::RequiresReset)
+        );
     }
 
     #[test]
