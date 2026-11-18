@@ -39,7 +39,7 @@ function slugify(text) {
 export default defineConfig({
   title: 'RC2FX',
   description: 'Extra audio processing for the RØDECaster Pro II',
-  base: '/rc2fx/',
+  base: '/',
   cleanUrls: true,
   appearance: 'dark',
   outDir: '../target/docs',
