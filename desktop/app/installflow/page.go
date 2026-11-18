@@ -13,8 +13,9 @@ import (
 
 // AccessKind is administrator access for the steps that need it: on Linux
 // without root, switching the mixer to USB update mode and flashing it run
-// in a helper started through pkexec. The page asks for it only when the
-// user chooses to grant it; everything else runs in this process.
+// in a helper started through pkexec. The page asks for it when the user
+// presses the button that starts (or tries again); everything else runs in
+// this process.
 type AccessKind int
 
 const (
@@ -40,22 +41,13 @@ func (a Access) AllowsFlashing() bool {
 	return a.Kind == AccessNotNeeded || a.Kind == AccessGranted
 }
 
-// NeedsAccess is a presentation gate only: never hide an in-flight
-// operation or completion behind a new permission request. A failed run can
-// request access again.
-func NeedsAccess(model *Model, access Access) bool {
-	idleOrFailed := (model.Run == nil && !model.Finished) ||
-		(model.Run != nil && model.Run.Failed != nil)
-	return idleOrFailed && !access.AllowsFlashing()
-}
-
 // Privileged reports requests that need administrator access where Access
 // applies. The helper flashes only what it prepared, so it does the
 // preparing too.
 func Privileged(request installer.Request) bool {
 	switch request.Kind {
 	case installer.RequestPrepare, installer.RequestEnterUSBMode, installer.RequestFlash,
-		installer.RequestRepairInspect, installer.RequestRepair:
+		installer.RequestRepairInspect, installer.RequestRepair, installer.RequestStorageFix:
 		return true
 	}
 	return false

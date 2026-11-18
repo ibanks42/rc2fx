@@ -285,7 +285,7 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	}
 	acting = acting || inPlace
 	if overview.OfferInstaller {
-		// Only opens the installer; flashing still needs its confirmation.
+		// Only opens Update RC2FX; its Before you start says what happens.
 		var button gk.ButtonEl
 		if hasPrimary {
 			button = versionsPill(gk.Button("versions-installer").Ghost().Style(s.Border1)).
@@ -293,8 +293,8 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 		} else {
 			button = versionsPill(gk.Button("versions-installer").Primary()).FontSemibold()
 		}
-		actions = actions.Child(button.Label("Open installer").
-			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.toggleInstallerPage(cx) }))
+		actions = actions.Child(button.Label("Update RC2FX").
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskUpdate) }))
 		acting = true
 	}
 	if lead.Changes != nil {

@@ -461,11 +461,38 @@ func TestInputsAndVersionsPassTheAppsChecks(t *testing.T) {
 	}
 }
 
-func TestSSHIsReportedAsUnsupported(t *testing.T) {
+func TestSSHTurnsOnAndOffWithoutHostKeys(t *testing.T) {
 	m, _, now := connectedMixer(t)
-	reply := m.handle(mockRequest("GET", "api/v1/ssh", nil), now)
-	if reply.Status != 404 {
-		t.Fatalf("status %d", reply.Status)
+	read := func(reply usbproto.Reply) core.SSHStatus {
+		t.Helper()
+		if reply.Status != 200 {
+			t.Fatalf("status %d", reply.Status)
+		}
+		var status core.SSHStatus
+		if err := decode(reply.Body, &status); err != nil {
+			t.Fatal(err)
+		}
+		if len(status.HostKeys) != 0 {
+			t.Fatalf("host keys %v", status.HostKeys)
+		}
+		return status
+	}
+	if read(m.handle(mockRequest("GET", "api/v1/ssh", nil), now)).Managed {
+		t.Fatal("on at the start")
+	}
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+	on := read(m.handle(mockRequest("PUT", "api/v1/ssh", mustMarshal(t, core.SSHRequest{Enabled: true, PublicKey: &key})), now))
+	if !on.Managed || on.ManagedFingerprint == nil {
+		t.Fatalf("not on: %+v", on)
+	}
+	if !read(m.handle(mockRequest("GET", "api/v1/ssh", nil), now)).Managed {
+		t.Fatal("forgot it was on")
+	}
+	if missing := m.handle(mockRequest("PUT", "api/v1/ssh", mustMarshal(t, core.SSHRequest{Enabled: true})), now); missing.Status != 400 {
+		t.Fatalf("no key: %d", missing.Status)
+	}
+	if read(m.handle(mockRequest("PUT", "api/v1/ssh", mustMarshal(t, core.SSHRequest{Enabled: false})), now)).Managed {
+		t.Fatal("still on")
 	}
 }
 

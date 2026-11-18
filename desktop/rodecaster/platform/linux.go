@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,7 +21,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/ibanks42/rc2fx/desktop/usbproto"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
 type host struct{}
@@ -199,24 +200,48 @@ func mounts() ([]Mount, error) {
 // blockIdentity is the USB serial and whole-disk node of an update block
 // device.
 func blockIdentity(device string) (string, string, error) {
+	serial, update, whole, err := mixerDisk(device)
+	if err != nil || !update {
+		return "", "", platformError("block device is not a RØDECaster update disk")
+	}
+	return serial, whole, nil
+}
+
+// reportIdentity is the USB serial and whole-disk node of a mixer's block
+// device in normal mode.
+func reportIdentity(device string) (string, string, error) {
+	serial, update, whole, err := mixerDisk(device)
+	if err != nil || update {
+		return "", "", platformError("block device is not a RØDECaster disk in normal mode")
+	}
+	return serial, whole, nil
+}
+
+// mixerDisk is the USB serial, mode and whole-disk node of a block device
+// on a RØDECaster model this package knows, in update or normal mode.
+func mixerDisk(device string) (string, bool, string, error) {
 	name := filepath.Base(device)
 	if filepath.Dir(device) != "/dev" || strings.Contains(name, "..") || name == "" || name == "/" || name == "." {
-		return "", "", platformError("invalid block device")
+		return "", false, "", platformError("invalid block device")
 	}
 	sys := filepath.Join("/sys/class/block", name)
 	serial, pid, err := usbAncestor(sys)
-	if err != nil || !IsUpdatePID(pid) || serial == "" {
-		return "", "", platformError("block device is not a RØDECaster update disk")
+	if err != nil || serial == "" {
+		return "", false, "", platformError("block device is not a RØDECaster disk")
+	}
+	update := IsUpdatePID(pid)
+	if _, ok := model.FromUSB(model.VendorID, pid); !ok && !update {
+		return "", false, "", platformError("block device is not a RØDECaster disk")
 	}
 	whole := device
 	if exists(filepath.Join(sys, "partition")) {
 		resolved, err := filepath.EvalSymlinks(sys)
 		if err != nil {
-			return "", "", err
+			return "", false, "", err
 		}
 		whole = "/dev/" + filepath.Base(filepath.Dir(resolved))
 	}
-	return serial, whole, nil
+	return serial, update, whole, nil
 }
 
 func capacity(v Volume) (Volume, error) {
@@ -351,7 +376,7 @@ func (host) Inventory() ([]HID, error) {
 				Usage:   0xff00,
 				Input:   4096,
 				Output:  64,
-				Control: usbproto.DeclaresControl(descriptor),
+				Control: declaresControl(descriptor),
 				Release: usbRelease(filepath.Join(p, "device")),
 			})
 		}
@@ -387,6 +412,18 @@ func (host) OpenControl(hid *HID) (Reports, error) {
 }
 
 func (host) Volumes() ([]Volume, error) {
+	return disks(blockIdentity, UpdateSize)
+}
+
+// ReportDisks: a report disk is far smaller than any update drive, and an
+// empty disk slot has size 0.
+func (host) ReportDisks() ([]Volume, error) {
+	return disks(reportIdentity, func(size uint64) bool { return size > 0 && size < minDiskBytes })
+}
+
+// disks lists the block devices that identity accepts and whose size fits,
+// with where they are mounted.
+func disks(identity func(string) (string, string, error), fits func(uint64) bool) ([]Volume, error) {
 	mounted, err := mounts()
 	if err != nil {
 		return nil, err
@@ -399,7 +436,7 @@ func (host) Volumes() ([]Volume, error) {
 	for _, entry := range entries {
 		name := entry.Name()
 		device := "/dev/" + name
-		serial, _, err := blockIdentity(device)
+		serial, _, err := identity(device)
 		if err != nil {
 			continue
 		}
@@ -408,7 +445,7 @@ func (host) Volumes() ([]Volume, error) {
 		if err != nil {
 			continue
 		}
-		if !UpdateSize(sectors * 512) {
+		if !fits(sectors * 512) {
 			continue
 		}
 		if !exists(filepath.Join(sys, "partition")) {
@@ -480,7 +517,7 @@ func (host) Mount(v Volume) (Volume, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return Volume{}, err
 	}
-	if err := unix.Mount(v.Device, dir, "vfat", unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC, "umask=077"); err != nil {
+	if err := mountSettled(v.Device, dir, unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC); err != nil {
 		os.Remove(dir)
 		return Volume{}, platformError(fmt.Sprintf("mount update volume: %v", err))
 	}
@@ -488,11 +525,32 @@ func (host) Mount(v Volume) (Volume, error) {
 	return capacity(v)
 }
 
+// mountSettleLimit bounds the retries of a mount that finds the disk not
+// ready yet.
+const mountSettleLimit = 5 * time.Second
+
+// mountSettled mounts the vfat disk device at dir. The disk's device node
+// appears before the kernel has finished attaching it (seen on hardware: a
+// mount 25 ms too early failed with ENXIO), so a mount that finds no device
+// or no medium is tried again for a few seconds.
+func mountSettled(device, dir string, flags uintptr) error {
+	deadline := time.Now().Add(mountSettleLimit)
+	for {
+		err := unix.Mount(device, dir, "vfat", flags, "umask=077")
+		if err == nil || !(errors.Is(err, unix.ENXIO) || errors.Is(err, unix.ENOMEDIUM) || errors.Is(err, unix.ENODEV)) ||
+			time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 func (host) MediaPresent(v *Volume) (bool, error) {
 	if v.Device == "" {
 		return false, platformError("Linux progress lacks the update block device")
 	}
-	serial, _, err := blockIdentity(v.Device)
+	// An update drive or a report disk (ReportDisks).
+	serial, _, _, err := mixerDisk(v.Device)
 	if err != nil {
 		return false, err
 	}
@@ -524,7 +582,8 @@ func (host) MediaPresent(v *Volume) (bool, error) {
 }
 
 func (host) Eject(v *Volume) error {
-	serial, whole, err := blockIdentity(v.Device)
+	// An update drive or a report disk (ReportDisks).
+	serial, _, whole, err := mixerDisk(v.Device)
 	if err != nil || serial != v.Serial {
 		return platformError("update volume identity changed before ejection")
 	}
@@ -565,4 +624,142 @@ func (host) Eject(v *Volume) error {
 		}
 	}
 	return nil
+}
+
+// ReadReport reads name from a report disk: where it is already mounted, or
+// through a private read-only mount that is removed again.
+func (host) ReadReport(v Volume, name string, limit int64) ([]byte, error) {
+	var data []byte
+	err := onReportDisk(v, name, false, func(path string) error {
+		var err error
+		data, err = readSmall(path, limit)
+		return err
+	})
+	return data, err
+}
+
+// WriteReport writes name to a report disk: where it is already mounted, or
+// through a private read-write mount that is removed again. The file and
+// its folder are flushed before it returns, and a private mount is
+// unmounted, so the data has reached the mixer.
+func (host) WriteReport(v Volume, name string, data []byte) error {
+	return onReportDisk(v, name, true, func(path string) error {
+		return writeSynced(path, data)
+	})
+}
+
+// onReportDisk checks that v is still the mixer's report disk and calls do
+// with the path of name on it: where the disk is already mounted (once), or
+// on a private mount, read-only unless write, that is removed again.
+func onReportDisk(v Volume, name string, write bool, do func(path string) error) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return platformError("invalid file name")
+	}
+	serial, _, err := reportIdentity(v.Device)
+	if err != nil || serial != v.Serial {
+		return platformError("USB disk identity changed")
+	}
+	all, err := mounts()
+	if err != nil {
+		return err
+	}
+	var paths []string
+	for _, m := range all {
+		if m.Device == v.Device {
+			paths = append(paths, m.Path)
+		}
+	}
+	switch len(paths) {
+	case 0:
+	case 1:
+		v.Path = paths[0]
+		if _, err := capacity(v); err != nil {
+			return err
+		}
+		return do(filepath.Join(v.Path, name))
+	default:
+		return platformError("the mixer's USB disk has multiple mounts")
+	}
+	if !isRoot() {
+		return platformError("mounting requires administrator permission")
+	}
+	nonce := make([]byte, 6)
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	dir := "/run/rc2fx-media-" + hex.EncodeToString(nonce)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return err
+	}
+	defer os.Remove(dir)
+	flags := uintptr(unix.MS_NODEV | unix.MS_NOSUID | unix.MS_NOEXEC)
+	if !write {
+		flags |= unix.MS_RDONLY
+	}
+	if err := mountSettled(v.Device, dir, flags); err != nil {
+		return platformError(fmt.Sprintf("mount the mixer's USB disk: %v", err))
+	}
+	v.Path = dir
+	if _, err := capacity(v); err != nil {
+		unix.Unmount(dir, 0)
+		return err
+	}
+	err = do(filepath.Join(dir, name))
+	// Unmounting writes back whatever the filesystem still holds; a write
+	// counts only once that has worked.
+	if uerr := unix.Unmount(dir, 0); uerr != nil && write && err == nil {
+		err = platformError(fmt.Sprintf("unmount the mixer's USB disk: %v", uerr))
+	}
+	return err
+}
+
+// writeSynced replaces path with data, not following a link, and flushes
+// the file and its folder.
+func writeSynced(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
+	if err != nil {
+		return err
+	}
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		if err == nil {
+			err = platformError("not a regular file")
+		}
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+// readSmall reads at most limit bytes of a regular file, not following a
+// link.
+func readSmall(path string, limit int64) ([]byte, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, platformError("not a regular file")
+	}
+	return io.ReadAll(io.LimitReader(file, limit))
 }

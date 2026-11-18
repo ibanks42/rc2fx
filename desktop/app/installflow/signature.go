@@ -44,30 +44,6 @@ func Fraction(progress *installer.Progress) *float32 {
 	return &v
 }
 
-// SignatureStateOf is signature.rs state: the picture for the installer
-// page's model and the progress it last read.
-func SignatureStateOf(m *Model, progress *installer.Progress) SignatureState {
-	switch {
-	case m.Finished && m.Run == nil:
-		return SignatureState{Kind: SignatureComplete}
-	case m.Run != nil && m.Run.Failed != nil:
-		return SignatureState{Kind: SignatureFailed, Fill: Fraction(progress)}
-	}
-	for _, step := range Steps {
-		if m.State(step).Kind == StepStateRunning {
-			return SignatureState{Kind: SignatureWorking, Fill: Fraction(progress)}
-		}
-	}
-	switch {
-	case m.Running():
-		return SignatureState{Kind: SignatureWorking}
-	case len(m.USB()) == 1:
-		return SignatureState{Kind: SignatureReady}
-	default:
-		return SignatureState{Kind: SignatureLooking}
-	}
-}
-
 // The Rust computes in f32; Go has no float32 sin or pow, so these compute in
 // float64 and round to float32 after each call. The result can differ from
 // Rust's in the last bits, which the picture cannot show.

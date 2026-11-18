@@ -134,7 +134,7 @@ func readMembers(archive string, model firmware.Model) (map[string][]byte, error
 	}
 	members := map[string][]byte{}
 	err := walkArchive(archive, 2<<30, false, func(entry *tarEntry) error {
-		name := normalized(entry.path)
+		name := normalized(entry.Path)
 		if !slices.Contains(required, name) {
 			return nil
 		}
@@ -142,7 +142,7 @@ func readMembers(archive string, model firmware.Model) (map[string][]byte, error
 		if name == "usr/bin/rc_audio_mixer" {
 			limit = maxMixerMember
 		}
-		if _, ok := members[name]; ok || !entry.header.regular() || entry.size > limit {
+		if _, ok := members[name]; ok || !entry.Header.Regular() || entry.Size > limit {
 			return errorf("duplicate, nonregular or oversized identity member %s", name)
 		}
 		data, err := readAll(entry)

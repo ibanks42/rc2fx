@@ -60,8 +60,6 @@ func (a *App) setSettingsOpen(open bool) {
 	a.settingsOpen = open
 	a.presets.open = open
 	a.diagnosticsOpen = false
-	// Settings, a channel or the installer: one page at a time.
-	a.installerPage = false
 }
 
 func (a *App) mixerSection(cx *gk.Cx) gk.DivEl {
@@ -73,10 +71,13 @@ func (a *App) mixerSection(cx *gk.Cx) gk.DivEl {
 		Child(row(labelled("RØDECaster", connected),
 			ghost("disconnect", "Disconnect").Disabled(!a.session.Connected && !a.connecting).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.disconnect(cx) }))).
-		Child(row(labelled("Update, repair or remove RC2FX",
-			"RC2FX is built into official RØDE firmware. The installer saves your settings first and carries them over."),
-			ghost("open-installer-settings", "Open installer").
-				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.toggleInstallerPage(cx) })))
+		Child(row(labelled("RC2FX on this mixer",
+			"Update RC2FX to a newer version, or remove it and put RØDE’s stock firmware back. Your settings are saved first."),
+			gk.HFlex(s.Gap2).
+				Child(ghost("update-rc2fx", "Update RC2FX").
+					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskUpdate) })).
+				Child(ghost("remove-rc2fx", "Remove RC2FX").
+					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskRemove) }))))
 	if processing, ok := a.processingRow(cx); ok {
 		rows = rows.Child(processing)
 	}

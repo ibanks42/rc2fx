@@ -74,24 +74,24 @@ func TestLiveCheckpoint(t *testing.T) {
 	}
 }
 
-func TestLivePreviewAndSave(t *testing.T) {
+func TestLiveEditAndSave(t *testing.T) {
 	var l Live
 	at := time.Unix(1000, 0)
 	saved := liveTargets(0)
 	l.Observe(saved, at)
 	draft := liveTargets(2)
 	l.Observe(draft, at.Add(time.Second))
-	if step := l.NextPreview(draft, saved, at.Add(time.Second)); step != PreviewSend {
+	if step := l.NextLive(draft, saved, at.Add(time.Second)); step != LiveSend {
 		t.Fatalf("step %v, want send", step)
 	}
 	// One at a time.
-	if step := l.NextPreview(liveTargets(3), saved, at.Add(time.Second)); step != PreviewNothing {
+	if step := l.NextLive(liveTargets(3), saved, at.Add(time.Second)); step != LiveNothing {
 		t.Fatalf("step %v while in flight, want nothing", step)
 	}
 	if l.SaveDue(draft, saved, true, at.Add(10*time.Second)) {
-		t.Fatal("no save while a preview is in flight")
+		t.Fatal("no save while a live edit is in flight")
 	}
-	l.PreviewAnswered(true, false, false, false, at.Add(1100*time.Millisecond))
+	l.LiveAnswered(true, false, false, false, at.Add(1100*time.Millisecond))
 	if l.SaveDue(draft, saved, true, at.Add(2*time.Second)) {
 		t.Fatal("save before SaveDelay")
 	}
@@ -102,26 +102,28 @@ func TestLivePreviewAndSave(t *testing.T) {
 	if !TargetsEqual(l.Running(draft), draft) || l.running != nil {
 		t.Fatal("after the save the audio plays the saved settings")
 	}
-	// Suppression switched on needs a restart: not previewed.
+	// Suppression switched on needs a restart: not sent live.
 	restart := liveTargets(2)
 	restart[0].Suppression.Enabled = true
-	if step := l.NextPreview(restart, draft, at.Add(4*time.Second)); step != PreviewRestart {
+	if step := l.NextLive(restart, draft, at.Add(4*time.Second)); step != LiveRestart {
 		t.Fatalf("step %v, want restart", step)
 	}
-	// An older mixer: saves sooner, without previews.
+	// An older mixer: saves sooner, without live editing.
 	l.inFlight = true
 	l.sent = core.CloneTargets(restart)
-	l.PreviewAnswered(false, true, false, false, at.Add(5*time.Second))
-	if l.NextPreview(liveTargets(9), draft, at.Add(6*time.Second)) != PreviewNothing {
-		t.Fatal("no previews to a mixer without them")
+	l.LiveAnswered(false, true, false, false, at.Add(5*time.Second))
+	if l.NextLive(liveTargets(9), draft, at.Add(6*time.Second)) != LiveNothing {
+		t.Fatal("no live edits to a mixer without them")
 	}
 	l.Observe(liveTargets(9), at.Add(6*time.Second))
-	if !l.SaveDue(liveTargets(9), draft, true, at.Add(6*time.Second+SaveDelayWithoutPreview)) {
-		t.Fatal("without preview the save comes after SaveDelayWithoutPreview")
+	if !l.SaveDue(liveTargets(9), draft, true, at.Add(6*time.Second+SaveDelayWithoutLive)) {
+		t.Fatal("without live editing the save comes after SaveDelayWithoutLive")
 	}
 }
 
-func TestLiveCompressorWaitsForPause(t *testing.T) {
+// The mixer smooths compressor settings like any other, so a compressor
+// edit goes live at once, mid-drag.
+func TestLiveCompressorGoesLiveMidDrag(t *testing.T) {
 	var l Live
 	at := time.Unix(1000, 0)
 	saved := liveTargets(0)
@@ -129,10 +131,7 @@ func TestLiveCompressorWaitsForPause(t *testing.T) {
 	draft := liveTargets(0)
 	draft[0].Compressor.Threshold = -30
 	l.Observe(draft, at.Add(time.Second))
-	if step := l.NextPreview(draft, saved, at.Add(time.Second+100*time.Millisecond)); step != PreviewNothing {
-		t.Fatalf("step %v mid-drag, want nothing", step)
-	}
-	if step := l.NextPreview(draft, saved, at.Add(time.Second+UnsmoothedSettle)); step != PreviewSend {
-		t.Fatalf("step %v after the pause, want send", step)
+	if step := l.NextLive(draft, saved, at.Add(time.Second+10*time.Millisecond)); step != LiveSend {
+		t.Fatalf("step %v mid-drag, want send", step)
 	}
 }

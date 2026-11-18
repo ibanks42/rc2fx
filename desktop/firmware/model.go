@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
+
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
 // Model is a mixer model. Board identity is independent of the mixer
@@ -23,48 +24,44 @@ const (
 var ModelAll = [2]Model{ModelProIi, ModelDuo}
 
 // VendorID is RØDE's USB vendor ID.
-const VendorID uint16 = 0x19f7
+const VendorID = model.VendorID
+
+// Hardware is the flashing library's model, where the hardware facts live.
+func (m Model) Hardware() model.Model {
+	if m == ModelDuo {
+		return model.Duo
+	}
+	return model.ProIi
+}
+
+// FromHardware is the model for a flashing-library model; the inverse of
+// Hardware.
+func FromHardware(h model.Model) Model {
+	if h == model.Duo {
+		return ModelDuo
+	}
+	return ModelProIi
+}
 
 // ParseModel finds the model with the given ID.
 func ParseModel(id string) (Model, error) {
-	for _, m := range ModelAll {
-		if m.ID() == id {
-			return m, nil
-		}
+	h, err := model.Parse(id)
+	if err != nil {
+		return 0, err
 	}
-	return 0, fmt.Errorf("unknown mixer model %s", id)
+	return FromHardware(h), nil
 }
 
 // ID is the model's catalog and serialized name.
-func (m Model) ID() string {
-	if m == ModelDuo {
-		return "rodecaster-duo"
-	}
-	return "rodecaster-pro-ii"
-}
+func (m Model) ID() string { return m.Hardware().ID() }
 
 func (m Model) String() string { return m.ID() }
 
-func (m Model) Hostname() string {
-	if m == ModelDuo {
-		return "rodecaster-pro-ii-mini"
-	}
-	return "rodecaster-pro-ii"
-}
+func (m Model) Hostname() string { return m.Hardware().Hostname() }
 
-func (m Model) BoardDTB() string {
-	if m == ModelDuo {
-		return "/boot/meson-axg-rodecaster-pro-ii-mini.dtb"
-	}
-	return "/boot/meson-axg-rodecaster-pro-ii.dtb"
-}
+func (m Model) BoardDTB() string { return m.Hardware().BoardDTB() }
 
-func (m Model) FirmwareDirectory() string {
-	if m == ModelDuo {
-		return "rcp2-duo"
-	}
-	return "rcp2"
-}
+func (m Model) FirmwareDirectory() string { return m.Hardware().FirmwareDirectory() }
 
 // RuntimeEnabled reports whether the model is admitted without an explicit
 // experimental opt-in.
@@ -79,12 +76,7 @@ func (m Model) RequireRuntimeWith(experimentalDuo bool) error {
 	return errors.New("RØDECaster Duo support is experimental and untested on hardware. Enable experimental Duo flashing at your own risk.")
 }
 
-func (m Model) Label() string {
-	if m == ModelDuo {
-		return "RØDECaster Duo"
-	}
-	return "RØDECaster Pro II"
-}
+func (m Model) Label() string { return m.Hardware().Label() }
 
 func (m Model) RouteLayout() string {
 	if m == ModelDuo {
@@ -100,32 +92,17 @@ func (m Model) SourceEnum() string {
 	return "pro-ii-sources-v1"
 }
 
-func (m Model) NormalPIDs() [5]uint16 {
-	if m == ModelDuo {
-		return [5]uint16{0x0050, 0x0079, 0x008e, 0x0093, 0x0095}
-	}
-	return [5]uint16{0x0037, 0x0078, 0x008d, 0x0092, 0x0094}
-}
+func (m Model) NormalPIDs() [5]uint16 { return m.Hardware().NormalPIDs() }
 
-func (m Model) UpdatePID() uint16 {
-	if m == ModelDuo {
-		return 0x004f
-	}
-	return 0x0030
-}
+func (m Model) UpdatePID() uint16 { return m.Hardware().UpdatePID() }
 
 // ModelFromUSB identifies a model by its USB IDs, in normal or update mode.
 func ModelFromUSB(vendor, product uint16) (Model, bool) {
-	if vendor != VendorID {
+	h, ok := model.FromUSB(vendor, product)
+	if !ok {
 		return 0, false
 	}
-	for _, m := range ModelAll {
-		pids := m.NormalPIDs()
-		if slices.Contains(pids[:], product) || m.UpdatePID() == product {
-			return m, true
-		}
-	}
-	return 0, false
+	return FromHardware(h), true
 }
 
 // ModelFromBoard requires consistent rootfs and boot-board evidence. No

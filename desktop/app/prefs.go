@@ -166,6 +166,18 @@ func rememberDuo(allow bool) error {
 
 func saveDuo(path string, allow bool) error { return saveFlag(path, "experimentalDuoFlash", allow) }
 
+// rememberedFirstChannelHint is whether the first channel's hint was
+// dismissed or completed: it then never shows again.
+func rememberedFirstChannelHint() bool { return rememberedView().boolean("firstChannelHintDone") }
+
+// rememberFirstChannelHint records that the hint is done. A failed save
+// only means it may show once more after a restart.
+func rememberFirstChannelHint() {
+	if path, ok := viewPath(); ok {
+		_ = saveFlag(path, "firstChannelHintDone", true)
+	}
+}
+
 // rememberedDeveloper is whether Developer mode was left on. It only shows
 // developer controls in Settings; it grants nothing by itself.
 func rememberedDeveloper() bool { return developerEnabled(rememberedView()) }
@@ -224,18 +236,4 @@ func usbPermission(lastResult string) bool {
 // error.
 func mixerFound(lastResult string) bool {
 	return lastResult == "The mixer is connected, but RC2FX isn't running on it"
-}
-
-// connectionStatus: retry activity must not replace the last completed
-// observation with a transient 'Looking…' result. Starting a new explicit
-// connection clears it.
-func connectionStatus(autoConnect bool, lastResult string) (uint32, string) {
-	switch {
-	case !autoConnect:
-		return Faint, "Disconnected"
-	case lastResult == "":
-		return Accent, "Listening…"
-	default:
-		return Warn, "Last check: " + lastResult
-	}
 }

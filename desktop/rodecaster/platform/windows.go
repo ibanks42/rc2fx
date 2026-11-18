@@ -17,8 +17,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/usbproto"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
 var (
@@ -116,7 +115,7 @@ func inspectHID(device windows.Handle, name string) (*HID, error) {
 	if r, _, err := procHidDGetAttributes.Call(uintptr(device), uintptr(unsafe.Pointer(&a))); r == 0 {
 		return nil, lastError(err)
 	}
-	if a.VendorID != firmware.VendorID {
+	if a.VendorID != model.VendorID {
 		return nil, nil
 	}
 	var preparsed uintptr
@@ -125,10 +124,12 @@ func inspectHID(device windows.Handle, name string) (*HID, error) {
 	}
 	var caps hidpCaps
 	status, _, _ := procHidPGetCaps.Call(preparsed, uintptr(unsafe.Pointer(&caps)))
-	// RC2FX's reports sit in RØDE's collection; their presence is its layout.
-	control := uint32(status) == hidpStatusSuccess &&
-		declares(preparsed, hidpOutput, caps.NumberOutputValueCaps, usbproto.OutputID) &&
-		declares(preparsed, hidpInput, caps.NumberInputValueCaps, usbproto.InputID)
+	// The application's reports sit in RØDE's collection; their presence is
+	// its layout.
+	p, probed := controlProbe()
+	control := probed && uint32(status) == hidpStatusSuccess &&
+		declares(preparsed, hidpOutput, caps.NumberOutputValueCaps, p.OutputID) &&
+		declares(preparsed, hidpInput, caps.NumberInputValueCaps, p.InputID)
 	procHidDFreePreparsedData.Call(preparsed)
 	if uint32(status) != hidpStatusSuccess {
 		return nil, platformError("cannot read HID report capabilities")

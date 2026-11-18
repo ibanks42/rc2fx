@@ -1,4 +1,7 @@
-package installer
+// Package archive reads, writes and patches RØDE firmware archives
+// (gzip-compressed tar), and holds the private-file helpers that go with
+// them.
+package archive
 
 // A tar reader and writer that keep every 512-byte header as it is, as the
 // Rust `tar` crate's raw mode does: GNU long-name and PAX records can be
@@ -17,28 +20,31 @@ import (
 const block = 512
 
 const (
-	typeRegular  = '0'
-	typeOldFile  = 0
-	typeSymlink  = '2'
-	typeDir      = '5'
-	typeLongName = 'L'
-	typeLongLink = 'K'
-	typePaxLocal = 'x'
-	typeSparse   = 'S'
+	TypeRegular  = '0'
+	TypeOldFile  = 0
+	TypeSymlink  = '2'
+	TypeDir      = '5'
+	TypeLongName = 'L'
+	TypeLongLink = 'K'
+	TypePaxLocal = 'x'
+	TypeSparse   = 'S'
 )
 
-type tarHeader [block]byte
+type Header [block]byte
 
-func (h *tarHeader) entryType() byte { return h[156] }
+func (h *Header) EntryType() byte { return h[156] }
 
 // regular is an ordinary file, '0' or the old NUL type.
-func (h *tarHeader) regular() bool {
-	return h.entryType() == typeRegular || h.entryType() == typeOldFile
+func (h *Header) Regular() bool {
+	return h.EntryType() == TypeRegular || h.EntryType() == TypeOldFile
 }
 
-func (h *tarHeader) ustar() bool {
+func (h *Header) ustar() bool {
 	return bytes.Equal(h[257:263], []byte("ustar\x00")) && bytes.Equal(h[263:265], []byte("00"))
 }
+
+// LinkName is a symlink header's target, as stored.
+func (h *Header) LinkName() []byte { return truncateNUL(h[157:257]) }
 
 func truncateNUL(data []byte) []byte {
 	if i := bytes.IndexByte(data, 0); i >= 0 {
@@ -49,7 +55,7 @@ func truncateNUL(data []byte) []byte {
 
 // pathBytes is the header's own name: a ustar prefix joined to the name, or
 // the name alone.
-func (h *tarHeader) pathBytes() []byte {
+func (h *Header) pathBytes() []byte {
 	name := truncateNUL(h[0:100])
 	if h.ustar() {
 		if prefix := truncateNUL(h[345:500]); len(prefix) > 0 {
@@ -59,8 +65,8 @@ func (h *tarHeader) pathBytes() []byte {
 	return append([]byte{}, name...)
 }
 
-// numeric reads an octal field, or a GNU base-256 one.
-func numeric(field []byte) (uint64, error) {
+// Numeric reads an octal field, or a GNU base-256 one.
+func Numeric(field []byte) (uint64, error) {
 	if len(field) > 0 && field[0]&0x80 != 0 {
 		var v uint64
 		for i, b := range field {
@@ -82,9 +88,9 @@ func numeric(field []byte) (uint64, error) {
 	return v, nil
 }
 
-func (h *tarHeader) size() (uint64, error) { return numeric(h[124:136]) }
+func (h *Header) size() (uint64, error) { return Numeric(h[124:136]) }
 
-func (h *tarHeader) checksumOK() error {
+func (h *Header) checksumOK() error {
 	var sum uint64
 	for i, b := range h {
 		if i >= 148 && i < 156 {
@@ -92,7 +98,7 @@ func (h *tarHeader) checksumOK() error {
 		}
 		sum += uint64(b)
 	}
-	want, err := numeric(h[148:156])
+	want, err := Numeric(h[148:156])
 	if err != nil {
 		return err
 	}
@@ -102,32 +108,32 @@ func (h *tarHeader) checksumOK() error {
 	return nil
 }
 
-// tarEntry is one member: its header, its name and a reader of its data.
-type tarEntry struct {
-	header tarHeader
-	// path is the member's name; in raw mode the header's own.
-	path string
-	size uint64
+// Member is one member: its header, its name and a reader of its data.
+type Member struct {
+	Header Header
+	// Path is the member's name; in raw mode the header's own.
+	Path string
+	Size uint64
 	data io.Reader
 }
 
-func (e *tarEntry) Read(buf []byte) (int, error) { return e.data.Read(buf) }
+func (e *Member) Read(buf []byte) (int, error) { return e.data.Read(buf) }
 
-func readAll(e *tarEntry) ([]byte, error) { return io.ReadAll(e.data) }
+func ReadAll(e *Member) ([]byte, error) { return io.ReadAll(e.data) }
 
-// walkArchive reads a gzip-compressed tar archive, enforcing an expansion
+// Walk reads a gzip-compressed tar archive, enforcing an expansion
 // limit and the gzip trailer checks. raw presents GNU long-name and PAX
 // records as their own entries so they can be copied verbatim.
-func walkArchive(path string, limit uint64, raw bool, visit func(*tarEntry) error) error {
-	file, err := openRegular(path)
+func Walk(path string, limit uint64, raw bool, visit func(*Member) error) error {
+	file, err := OpenRegular(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	return walkReader(file, limit, raw, visit)
+	return WalkReader(file, limit, raw, visit)
 }
 
-func walkReader(source io.Reader, limit uint64, raw bool, visit func(*tarEntry) error) error {
+func WalkReader(source io.Reader, limit uint64, raw bool, visit func(*Member) error) error {
 	gz, err := gzip.NewReader(source)
 	if err != nil {
 		return err
@@ -142,13 +148,13 @@ func walkReader(source io.Reader, limit uint64, raw bool, visit func(*tarEntry) 
 		return err
 	}
 	if limited.N == 0 {
-		return Error("archive expansion limit exceeded")
+		return errors.New("archive expansion limit exceeded")
 	}
 	return nil
 }
 
 // readBlock fills one header block; false at a clean end of input.
-func readBlock(r io.Reader, h *tarHeader) (bool, error) {
+func readBlock(r io.Reader, h *Header) (bool, error) {
 	n, err := io.ReadFull(r, h[:])
 	if n == 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
 		return false, nil
@@ -159,17 +165,17 @@ func readBlock(r io.Reader, h *tarHeader) (bool, error) {
 	return true, nil
 }
 
-func walkTar(r io.Reader, raw bool, visit func(*tarEntry) error) error {
+func walkTar(r io.Reader, raw bool, visit func(*Member) error) error {
 	var longName, longLink []byte
 	var pax map[string][]byte
 	for {
-		var h tarHeader
+		var h Header
 		ok, err := readBlock(r, &h)
 		if err != nil {
 			return err
 		}
 		// The end of the archive, or an all-zero block that marks it.
-		if !ok || h == (tarHeader{}) {
+		if !ok || h == (Header{}) {
 			return nil
 		}
 		if err := h.checksumOK(); err != nil {
@@ -179,25 +185,25 @@ func walkTar(r io.Reader, raw bool, visit func(*tarEntry) error) error {
 		if err != nil {
 			return err
 		}
-		if h.entryType() == typeSparse {
-			return Error("sparse archive members are not supported")
+		if h.EntryType() == TypeSparse {
+			return errors.New("sparse archive members are not supported")
 		}
 		padded := (size + block - 1) / block * block
 		if !raw {
-			switch h.entryType() {
-			case typeLongName, typeLongLink, typePaxLocal:
-				if size > maxSmallMember {
-					return Error("oversized firmware metadata")
+			switch h.EntryType() {
+			case TypeLongName, TypeLongLink, TypePaxLocal:
+				if size > MaxSmallMember {
+					return errors.New("oversized firmware metadata")
 				}
 				data := make([]byte, padded)
 				if _, err := io.ReadFull(r, data); err != nil {
 					return err
 				}
 				data = data[:size]
-				switch h.entryType() {
-				case typeLongName:
+				switch h.EntryType() {
+				case TypeLongName:
 					longName = data
-				case typeLongLink:
+				case TypeLongLink:
 					longLink = data
 				default:
 					records, err := paxRecords(data)
@@ -225,10 +231,10 @@ func walkTar(r io.Reader, raw bool, visit func(*tarEntry) error) error {
 			longName, longLink, pax = nil, nil, nil
 			_ = longLink
 		}
-		entry := &tarEntry{
-			header: h,
-			path:   strings.ToValidUTF8(string(path), "�"),
-			size:   size,
+		entry := &Member{
+			Header: h,
+			Path:   strings.ToValidUTF8(string(path), "�"),
+			Size:   size,
 			data:   io.LimitReader(r, int64(size)),
 		}
 		if err := visit(entry); err != nil {
@@ -244,37 +250,37 @@ func walkTar(r io.Reader, raw bool, visit func(*tarEntry) error) error {
 	}
 }
 
-// tarWriter writes headers verbatim and data padded to a block.
-type tarWriter struct {
-	w io.Writer
+// Writer writes headers verbatim and data padded to a block.
+type Writer struct {
+	W io.Writer
 }
 
-// append writes a header as it is, then data padded to a whole block.
-func (t *tarWriter) append(h *tarHeader, data io.Reader) error {
-	if _, err := t.w.Write(h[:]); err != nil {
+// Append writes a header as it is, then data padded to a whole block.
+func (t *Writer) Append(h *Header, data io.Reader) error {
+	if _, err := t.W.Write(h[:]); err != nil {
 		return err
 	}
-	n, err := io.Copy(t.w, data)
+	n, err := io.Copy(t.W, data)
 	if err != nil {
 		return err
 	}
 	if pad := (block - n%block) % block; pad > 0 {
-		if _, err := t.w.Write(make([]byte, pad)); err != nil {
+		if _, err := t.W.Write(make([]byte, pad)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// finish writes the two zero blocks that end an archive.
-func (t *tarWriter) finish() error {
-	_, err := t.w.Write(make([]byte, 2*block))
+// Finish writes the two zero blocks that end an archive.
+func (t *Writer) Finish() error {
+	_, err := t.W.Write(make([]byte, 2*block))
 	return err
 }
 
-// octal writes v right-aligned with leading zeros, leaving the field's last
+// Octal writes v right-aligned with leading zeros, leaving the field's last
 // byte as it is (NUL in a new header).
-func octal(field []byte, v uint64) {
+func Octal(field []byte, v uint64) {
 	text := strconv.FormatUint(v, 8)
 	for i := len(field) - 2; i >= 0; i-- {
 		if len(text) > 0 {
@@ -286,9 +292,9 @@ func octal(field []byte, v uint64) {
 	}
 }
 
-// archivePath is the name Rust's tar builder stores for path: leading `./`
+// ArchivePath is the name Rust's tar builder stores for path: leading `./`
 // and empty or `.` components dropped, a trailing slash kept.
-func archivePath(path string) (string, error) {
+func ArchivePath(path string) (string, error) {
 	var parts []string
 	for _, part := range strings.Split(path, "/") {
 		switch part {
@@ -312,22 +318,27 @@ func archivePath(path string) (string, error) {
 	return out, nil
 }
 
-// gnuHeader is a new root-owned GNU header for one added entry.
-func gnuHeader(path string, kind byte, mode uint32, size uint64, mtime uint64) (*tarHeader, error) {
-	name, err := archivePath(path)
+// gnuHeader is a new root-owned GNU header for one added entry; link is a
+// symlink's target, empty for anything else.
+func gnuHeader(path string, kind byte, mode uint32, size uint64, mtime uint64, link string) (*Header, error) {
+	name, err := ArchivePath(path)
 	if err != nil {
 		return nil, err
 	}
 	if len(name) > 100 {
 		return nil, fmt.Errorf("path too long for an archive header: %s", name)
 	}
-	var h tarHeader
+	if len(link) > 100 || strings.IndexByte(link, 0) >= 0 {
+		return nil, fmt.Errorf("link target does not fit an archive header: %s", name)
+	}
+	var h Header
 	copy(h[0:100], name)
-	octal(h[100:108], uint64(mode))
-	octal(h[108:116], 0)
-	octal(h[116:124], 0)
-	octal(h[124:136], size)
-	octal(h[136:148], mtime)
+	copy(h[157:257], link)
+	Octal(h[100:108], uint64(mode))
+	Octal(h[108:116], 0)
+	Octal(h[116:124], 0)
+	Octal(h[124:136], size)
+	Octal(h[136:148], mtime)
 	h[156] = kind
 	copy(h[257:263], "ustar ")
 	copy(h[263:265], " \x00")
@@ -341,7 +352,7 @@ func gnuHeader(path string, kind byte, mode uint32, size uint64, mtime uint64) (
 	for i := 148; i < 156; i++ {
 		h[i] = 0
 	}
-	octal(h[148:156], total)
+	Octal(h[148:156], total)
 	return &h, nil
 }
 
@@ -352,19 +363,19 @@ func paxRecords(data []byte) (map[string][]byte, error) {
 	for len(rest) > 0 {
 		space := bytes.IndexByte(rest, ' ')
 		if space < 0 {
-			return nil, Error("invalid PAX record")
+			return nil, errors.New("invalid PAX record")
 		}
 		length, err := parseUsizeText(string(rest[:space]))
 		if err != nil {
-			return nil, Error("invalid PAX record")
+			return nil, errors.New("invalid PAX record")
 		}
 		if length <= space+1 || length > len(rest) || rest[length-1] != '\n' {
-			return nil, Error("invalid PAX record")
+			return nil, errors.New("invalid PAX record")
 		}
 		record := rest[space+1 : length-1]
 		eq := bytes.IndexByte(record, '=')
 		if eq < 0 {
-			return nil, Error("invalid PAX record")
+			return nil, errors.New("invalid PAX record")
 		}
 		records[strings.ToValidUTF8(string(record[:eq]), "�")] = append([]byte{}, record[eq+1:]...)
 		rest = rest[length:]

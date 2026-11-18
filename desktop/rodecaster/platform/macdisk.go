@@ -9,7 +9,7 @@ import (
 
 	"howett.net/plist"
 
-	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
 // ParsePlist reads an XML (or binary) property list into nested
@@ -64,7 +64,7 @@ func USBDisks(tree any) map[string]string {
 			if _, ok := n["idVendor"]; ok {
 				vendor, vendorOK := plistInteger(n["idVendor"])
 				product, productOK := plistInteger(n["idProduct"])
-				update := vendorOK && vendor == int64(firmware.VendorID) &&
+				update := vendorOK && vendor == int64(model.VendorID) &&
 					productOK && product >= 0 && product <= 0xffff && IsUpdatePID(uint16(product))
 				own, hasOwn := n["USB Serial Number"].(string)
 				// Nodes below the device can repeat its IDs without the serial,

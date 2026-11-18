@@ -65,6 +65,9 @@ func privilegedLaunch() (*exec.Cmd, *stagedAppDir, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if cmd := devLaunch(executable); cmd != nil {
+		return cmd, guard, nil
+	}
 	return exec.Command("pkexec", executable), guard, nil
 }
 

@@ -25,11 +25,77 @@ See [Building from source](../../docs/developer/building.md) for the rest.
 
 ## Connecting
 
-The app looks for the mixer on USB 1 and retries until it finds one. A stock
-mixer shows **Install RC2FX**. A mixer running RC2FX opens on the Overview,
-which has a strip for each show fader except SMART Pads with its live level,
-then the headphones and outputs, then any processed channel that isn't on a
-fader.
+The app looks for the mixer on USB 1 and retries until it finds one. Until
+then the first screen names what the app sees on USB: no mixer, a mixer
+without RC2FX (**Install RC2FX**, or **Fix the update bug only** for a Pro
+II that stays on RØDE's firmware), a Duo (an "Install anyway" switch first,
+since RC2FX is untested there), a mixer gone while it finishes an update, one with RC2FX
+still starting, a mixer waiting in update mode (**Continue the install**), a
+mixer in storage mode (**Repair mixer**, on systems that can repair it; Linux
+for now), or two mixers. A mixer running RC2FX opens on the Overview, which has a strip for
+each show fader except SMART Pads with its live level, then the headphones
+and outputs, then any processed channel that isn't on a fader.
+
+## Install, Update, Remove, Repair and the storage fix
+
+Installing, updating and removing RC2FX, repairing the mixer and fixing
+RØDE's update bug are guided tasks: a page that stays in front of the window
+from **Before you start** until **Done**, **Stop**, **Close** or **Not now**,
+whether or not the mixer is connected meanwhile. The steps are listed down
+the left; the footer says whether the mixer may be unplugged. After a failure
+the page says what the app sees now, and **Try again** starts from the step
+the mixer's state calls for, not from the step that failed. A wait with no
+answer from the mixer offers a way out after a few minutes.
+**Settings › Mixer** has **Update RC2FX** and **Remove RC2FX**.
+
+RØDE's updater formats the system slot it is about to write, and the first
+slot is small enough to get 1 KB blocks, on which the mixer sometimes loses
+file data. The storage fix (`rodecaster/autofix`) grows that slot for good,
+through RØDE's own USB update: the mixer is updated twice, once with RØDE's
+firmware carrying a one-time script that makes the change, then once more
+with the firmware it is to keep. It runs where flashes run (the helper, on
+Linux). **Install RC2FX** runs it first on a Pro II that isn't running RC2FX,
+and its second update is then the RC2FX firmware; on a mixer running RC2FX
+it is skipped, since RC2FX can't report the partition table yet. A fix that
+fails never blocks the install: it goes on with a normal flash, and the
+result page says the fix wasn't applied. **Fix the update bug only** runs it
+alone and leaves RØDE's firmware as it was.
+
+Between the two updates the app waits for the mixer to confirm the fix. On
+Linux the script offers its result on a small disk in the mixer's normal-mode
+USB slot, once the mixer's USB has been up for 20 seconds; the app reads it as
+soon as it appears, writes an acknowledgement onto it and ejects it (which
+tells the script to finish), and goes straight on to the second update. A
+disk that disappears before the app is done with it is offered again, up to
+three times within two minutes; after that the script writes the result to
+the update drive, and the app, having waited about five minutes from the
+mixer's return (enough for all of that), reads it there. Elsewhere the app
+waits until the mixer has been back for two and a half minutes and reads the
+result from its update drive. Development builds started with
+`RC2FX_DEV_FIX_DEBUG=1` have the script keep a log and a trace of the USB
+slot on the mixer in `/Application/update-staging/rcfix-debug/`.
+
+The first screen and the installer treat a flash sent in the last 20 minutes
+as possibly still installing only while they see no mixer, or one in update
+mode: a mixer back in normal mode, on RØDE's firmware or with RC2FX, is not
+updating, whatever was sent. The
+copy of the original layout the fix saves (`storage-fix-backups/` in the
+installer's folder) belongs to the user who runs the app.
+
+**Update RC2FX** on a mixer whose RC2FX installs signed releases itself is
+the short in-place update: no flash, a brief pause in audio while RC2FX
+restarts, and the mixer goes back to the version it had if the new one
+doesn't start. **Reinstall firmware as well** switches to the full install.
+
+After an install, **Open Mic N** opens that channel's noise suppression with
+one hint line above its switch; once dismissed or done it never shows again.
+
+In builds with the `rc2fxdev` tag, `RC2FX_DEV_PAGE=flow:<state>` opens one
+state of these flows from made-up data, with no mixer, helper or network:
+the states are listed in `flow_fixtures_on.go` (for example `flow:B4`).
+`RC2FX_DEV_AUTOFLASH_FIX=on|off` sets whether the unattended flash
+(`RC2FX_DEV_AUTOFLASH`) runs the storage fix first; unset, it runs only where
+RC2FX isn't running, as Install decides.
 
 ## Layout
 
@@ -94,8 +160,8 @@ deletes presets stored on the mixer.
 
 **Settings** contains:
 
-- Mixer: the connection, the installer, and the **Processing** switch for all
-  of RC2FX.
+- Mixer: the connection, **Update RC2FX** and **Remove RC2FX**, and the
+  **Processing** switch for all of RC2FX.
 - Presets and settings files.
 - Appearance.
 - Screen conversion.

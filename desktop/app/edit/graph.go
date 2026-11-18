@@ -48,9 +48,9 @@ func Height(gain float64) float64 {
 	return 0.5 - math.Min(math.Max(gain, -DB), DB)/(2.*DB)
 }
 
-// GraphPoint is the frequency and gain at a window position over the graph
-// whose bounds are origin (x, y) and size (width, height); ok is false while
-// the graph has no size.
+// GraphPoint is the frequency (whole hertz) and gain (tenths of a dB) at a
+// window position over the graph whose bounds are origin (x, y) and size
+// (width, height); ok is false while the graph has no size.
 func GraphPoint(originX, originY, width, height, x, y float32) (frequency, gain float64, ok bool) {
 	w, h := float64(width), float64(height)
 	if w <= 0 || h <= 0 {
@@ -59,7 +59,7 @@ func GraphPoint(originX, originY, width, height, x, y float32) (frequency, gain 
 	fx := float64(x-originX) / w
 	fy := float64(y-originY) / h
 	g := math.Min(math.Max((0.5-fy)*2.*DB, -36.), 36.)
-	return XFrequency(fx), math.Round(g*10.) / 10., true
+	return math.Round(XFrequency(fx)), math.Round(g*10.) / 10., true
 }
 
 // GridLabel is a frequency grid line's label: "20", "500", "1k", "20k".

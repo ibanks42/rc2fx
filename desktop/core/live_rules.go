@@ -1,12 +1,12 @@
 package core
 
-// PreviewNeedsSave reports whether moving the running audio from running to
-// candidate needs the engine restarted, which a live preview cannot do: a
+// LiveNeedsSave reports whether moving the running audio from running to
+// candidate needs the engine restarted, which a live edit cannot do: a
 // channel's kind or channel count, suppression switched on or off, its
 // lookahead, or the effect order while suppression runs. The mixer decides
-// (PUT api/v1/preview answers 422 previewRequiresSave); this lets the app
-// save such a change straight away, after asking, instead of previewing it.
-func PreviewNeedsSave(running, candidate []Target) bool {
+// (PUT api/v1/live answers 422 liveRequiresSave); this lets the app
+// save such a change straight away, after asking, instead of sending it live.
+func LiveNeedsSave(running, candidate []Target) bool {
 	byID := make(map[string]*Target, len(running))
 	for i := range running {
 		byID[running[i].ID] = &running[i]

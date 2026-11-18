@@ -230,7 +230,7 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 			graph = graph.Child(gk.HFlex(s.Absolute, s.JustifyCenter).Left(x).Top(y).Ml(px(-90)).Mt(px(-46)).W(px(180)).
 				Child(gk.Div(s.Border1, s.WhitespaceNowrap).Px(px(8)).Py(px(4)).Rounded(px(8)).Bg(rgb(0x0b0e16)).
 					BorderColor(rgb(surface().LineStrong)).TextSize(px(12)).
-					Child(txt(fmt.Sprintf("%s · Q %.2f", readout, band.Q)))))
+					Child(txt(fmt.Sprintf("%s · Q %s", readout, edit.ParameterQ.Display(band.Q))))))
 		}
 	}
 	// The popover is beside the graph's area, not in it, so presses in it

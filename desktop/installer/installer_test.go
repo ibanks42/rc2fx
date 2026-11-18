@@ -102,11 +102,11 @@ func testTar(t *testing.T, path string, items []tarItem) {
 	t.Helper()
 	var out bytes.Buffer
 	gz := gzip.NewWriter(&out)
-	w := &tarWriter{w: gz}
+	w := &tarWriter{W: gz}
 	for _, item := range items {
-		must(t, w.append(item.header, bytes.NewReader(item.data)))
+		must(t, w.Append(item.header, bytes.NewReader(item.data)))
 	}
-	must(t, w.finish())
+	must(t, w.Finish())
 	must(t, gz.Close())
 	put(t, path, out.Bytes())
 }
@@ -727,8 +727,8 @@ const rodeDuoManifestText = `{
 }`
 
 func TestDuoStockReleasesAreWhatRodesDuoManifestLists(t *testing.T) {
-	if rodeManifest(firmware.ModelDuo) != "https://update.rode.com/rcp2-mini-manifest.json" ||
-		rodeManifest(firmware.ModelProIi) != "https://update.rode.com/manifest.json" {
+	if firmware.ModelDuo.Hardware().ManifestURL() != "https://update.rode.com/rcp2-mini-manifest.json" ||
+		firmware.ModelProIi.Hardware().ManifestURL() != "https://update.rode.com/manifest.json" {
 		t.Fatal("manifest URLs")
 	}
 	duo, err := releasesFromManifest(firmware.ModelDuo, []byte(rodeDuoManifestText))

@@ -177,7 +177,11 @@ func (a *App) renderEditor(cx *gk.Cx) gk.Element {
 	default:
 		body = a.controls(func(Parameter) bool { return true }, 1, off, cx)
 	}
-	controls := gk.Div(s.Flex1, s.MinW0).Child(a.stageHead(effect, cx)).Child(body)
+	controls := gk.Div(s.Flex1, s.MinW0)
+	if hint, ok := a.firstChannelHint(); ok {
+		controls = controls.Child(hint)
+	}
+	controls = controls.Child(a.stageHead(effect, cx)).Child(body)
 	// The rail has the channel's levels; only what is particular to a stage
 	// stays beside it, or under it in a narrow window.
 	f, ok := a.stageFacts(effect)
@@ -188,6 +192,50 @@ func (a *App) renderEditor(cx *gk.Cx) gk.Element {
 		return gk.VFlex().Gap(px(28)).Child(controls).Child(f)
 	}
 	return gk.HFlex(s.ItemsStart).Gap(px(40)).Child(controls).Child(f)
+}
+
+// firstChannelHint is the one line the channel opened from a finished
+// install shows above its suppression switch: what to do, then, once
+// suppression is on, what to listen for. Dismissed or completed, it never
+// shows again.
+func (a *App) firstChannelHint() (gk.DivEl, bool) {
+	if a.firstHintDone || a.firstHintTarget == "" || a.effect != core.EffectSuppression ||
+		a.target().ID != a.firstHintTarget {
+		return gk.DivEl{}, false
+	}
+	on := a.target().Suppression.Enabled
+	text, label := "Switch on noise suppression below, then talk into the microphone.", "Skip"
+	if on {
+		text, label = "Now talk. You should hear the room noise drop in your headphones.", "Got it"
+	}
+	return gk.HFlex(s.ItemsCenter, s.Gap3, s.RoundedXl, s.Border1).MaxW(px(620)).Mb(px(22)).
+		Px(px(16)).Py(px(10)).Bg(rgb(surface().Panel)).BorderColor(rgb(surface().Line)).
+		Child(gk.Div(s.Flex1, s.MinW0, s.TextSm).TextColor(rgb(Text)).Child(txt(text))).
+		Child(gk.Button("first-channel-hint").Ghost().Small().Label(label).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
+				a.firstHintTarget, a.firstHintDone = "", true
+				if !a.firstHintSaved {
+					a.firstHintSaved = true
+					rememberFirstChannelHint()
+				}
+				a.notify(cx)
+			})), true
+}
+
+// noteFirstChannelHint records the hint as completed once suppression is
+// on for its channel: it shows its second line until dismissed or left,
+// and never again after.
+func (a *App) noteFirstChannelHint() {
+	if a.firstHintDone || a.firstHintSaved || a.firstHintTarget == "" {
+		return
+	}
+	for i := range a.session.Draft {
+		if t := &a.session.Draft[i]; t.ID == a.firstHintTarget && t.Suppression.Enabled {
+			a.firstHintSaved = true
+			rememberFirstChannelHint()
+			return
+		}
+	}
 }
 
 // narrow is whether the page is too narrow for a channel's editor to keep
@@ -319,7 +367,7 @@ func (a *App) control(editor *ParameterEditor, off bool, cx *gk.Cx) gk.DivEl {
 	if a.editingValue != nil && *a.editingValue == parameter {
 		valueView = gk.Div(s.Border1, s.FontSemibold).W(px(112)).Px(px(6)).Mx(px(-6)).Rounded(px(6)).
 			Bg(rgb(0x0b0e16)).BorderColor(rgb(Accent)).TextSize(px(15)).
-			Child(gk.Input(editor.input).Appearance(false))
+			Child(gk.Input(editor.input).Appearance(false).Style(s.Px0))
 	} else {
 		color := Text
 		if off {

@@ -1,6 +1,6 @@
 package app
 
-// eq_controls.rs: the EQ page: its heading (stereo sides, EQ files, the
+// eq_controls.rs: the EQ page: its heading (stereo sides, Import / Export, the
 // switch), the graph, the band table with the overall gains, and the
 // selected band's popover over the graph. The band helpers that do not draw
 // are in edit/eq.go.
@@ -19,8 +19,11 @@ import (
 
 // EQ page sizes: the band table's and the band popover's width.
 const (
-	BandTableWidth float32 = 252
-	PopoverWidth   float32 = 300
+	BandTableWidth float32 = 280
+	// QColumnWidth fits a Q of three decimals, and its text field while it
+	// is typed.
+	QColumnWidth float32 = 56
+	PopoverWidth float32 = 300
 	// NarrowTableHeight is the table's height under the graph.
 	NarrowTableHeight float32 = 230
 )
@@ -55,7 +58,7 @@ func (a *App) eqControls(cx *gk.Cx) gk.Element {
 }
 
 // eqHead is the page's heading: its title (how to edit is its tooltip), the
-// stereo sides, the EQ files menu and the switch.
+// stereo sides, the Import / Export menu and the switch.
 func (a *App) eqHead(cx *gk.Cx) gk.Element {
 	target := a.target()
 	about := "Up to 32 bands. Drag a point, scroll on it for Q, double-click the graph to add a band, click a point to edit it."
@@ -88,7 +91,7 @@ func (a *App) eqHead(cx *gk.Cx) gk.Element {
 	}
 	return head.
 		Child(gk.Div(s.Flex1)).
-		Child(gk.DropdownMenu(gk.Button("eq-files").Ghost().Small().Label("EQ files").DropdownCaret(true).
+		Child(gk.DropdownMenu(gk.Button("eq-import-export").Ghost().Small().Label("Import / Export").DropdownCaret(true).
 			Disabled(a.fileBusy), menu)).
 		Child(gk.Div().Ml(px(6)).TextSize(px(13.5)).TextColor(rgb(Muted)).Child(txt(state))).
 		Child(a.effectSwitch(target, core.EffectEQ))
@@ -152,7 +155,7 @@ func (a *App) bandTable(cx *gk.Cx) gk.DivEl {
 		Child(gk.Div().W(px(18))).
 		Child(heading("FREQ")).
 		Child(heading("GAIN")).
-		Child(gk.Div(s.TextRight).W(px(42)).Child(txt("Q")))
+		Child(gk.Div(s.TextRight).W(px(QColumnWidth)).Child(txt("Q")))
 	list := gk.Div(s.Flex1, s.MinH0).Pt(px(2)).ID("band-rows").OverflowYScroll()
 	for index, band := range bands {
 		list = list.Child(a.bandRow(index, band))
@@ -205,15 +208,17 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 	value := func(parameter Parameter, shown string, color uint32) gk.Element {
 		cell := gk.Div(s.Flex1, s.MinW0).FlexBasis(px(0))
 		if parameter == edit.ParameterQ {
-			cell = gk.Div(s.FlexShrink0).W(px(42))
+			cell = gk.Div(s.FlexShrink0).W(px(QColumnWidth))
 		}
 		if !slices.Contains(used, parameter) {
 			return cell.Style(s.TextRight).TextColor(rgb(Dim)).Child(txt("–"))
 		}
 		if selected && a.editingValue != nil && *a.editingValue == parameter {
+			// The box gives the padding: the kit's input keeps its own
+			// otherwise, and a three-decimal Q would scroll out of sight.
 			if editor := a.editorFor(parameter); editor != nil {
 				return cell.Child(gk.Div(s.Border1).Px(px(4)).Rounded(px(5)).Bg(rgb(0x0b0e16)).
-					BorderColor(rgb(Accent)).Child(gk.Input(editor.input).Appearance(false)))
+					BorderColor(rgb(Accent)).Child(gk.Input(editor.input).Appearance(false).Style(s.Px0)))
 			}
 		}
 		return cell.Child(gk.Div(s.TextRight, s.CursorText, s.WhitespaceNowrap).Px(px(4)).Mx(px(-4)).Rounded(px(5)).
@@ -257,7 +262,7 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 		Child(kind).
 		Child(value(edit.ParameterFrequency, edit.ShortHz(band.Frequency), text)).
 		Child(value(edit.ParameterBandGain, edit.ShortDB(band.Gain), text)).
-		Child(value(edit.ParameterQ, fmt.Sprintf("%.2f", band.Q), quiet))
+		Child(value(edit.ParameterQ, edit.ParameterQ.Display(band.Q), quiet))
 	stateful := row.ID(gk.Key("band", index)).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 		a.selectBand(cx, index)
 		a.notify(cx)
@@ -298,7 +303,7 @@ func (a *App) overallGain(label string, parameter Parameter, off bool) gk.Elemen
 	var view gk.Element
 	if editor != nil && a.editingValue != nil && *a.editingValue == parameter {
 		view = gk.Div(s.Border1).W(px(96)).Px(px(4)).Rounded(px(5)).Bg(rgb(0x0b0e16)).BorderColor(rgb(Accent)).
-			Child(gk.Input(editor.input).Appearance(false))
+			Child(gk.Input(editor.input).Appearance(false).Style(s.Px0))
 	} else {
 		color := Text
 		if off {

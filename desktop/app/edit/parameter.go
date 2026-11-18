@@ -70,7 +70,7 @@ func (p Parameter) Describe() Description {
 	case ParameterGateRelease:
 		return d("Release", "ms", 30., 2000., 1., true)
 	case ParameterGain:
-		return d("Output gain", "dB", -60., 12., 0.1, false)
+		return d("Output gain", "dB", -60., 12., 0.01, false)
 	case ParameterThreshold:
 		return d("Threshold", "dB", -60., 0., 0.5, false)
 	case ParameterRatio:
@@ -80,21 +80,21 @@ func (p Parameter) Describe() Description {
 	case ParameterRelease:
 		return d("Release", "ms", 10., 2000., 1., true)
 	case ParameterMakeup:
-		return d("Makeup", "dB", 0., 24., 0.1, false)
+		return d("Makeup", "dB", 0., 24., 0.01, false)
 	case ParameterCeiling:
 		return d("Ceiling", "dBFS", -24., 0., 0.1, false)
 	case ParameterLimiterRelease:
 		return d("Release", "ms", 10., 2000., 1., true)
 	case ParameterEQInput:
-		return d("Input gain", "dB", -36., 36., 0.1, false)
+		return d("Input gain", "dB", -36., 36., 0.01, false)
 	case ParameterEQOutput:
-		return d("Output gain", "dB", -36., 36., 0.1, false)
+		return d("Output gain", "dB", -36., 36., 0.01, false)
 	case ParameterFrequency:
-		return d("Frequency", "Hz", 10., 24000., 0.1, true)
+		return d("Frequency", "Hz", 10., 24000., 1., true)
 	case ParameterBandGain:
-		return d("Gain", "dB", -36., 36., 0.1, false)
+		return d("Gain", "dB", -36., 36., 0.01, false)
 	default: // ParameterQ
-		return d("Q", "", 0.1, 100., 0.01, true)
+		return d("Q", "", 0.1, 100., 0.001, true)
 	}
 }
 
@@ -105,8 +105,10 @@ func Decimals(step float64) int {
 		return 0
 	case step >= 0.1:
 		return 1
-	default:
+	case step >= 0.01:
 		return 2
+	default:
+		return 3
 	}
 }
 
@@ -157,7 +159,7 @@ func (p Parameter) Display(value float64) string {
 	case ParameterRatio:
 		text = fmt.Sprintf("%.1f:1", value)
 	case ParameterQ:
-		text = fmt.Sprintf("%.2f", value)
+		text = Format(value, Decimals(desc.Step))
 	default:
 		number := Format(value, Decimals(desc.Step))
 		signed := number

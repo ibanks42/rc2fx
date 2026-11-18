@@ -4,14 +4,15 @@ package app
 // its setup, or to start. The user holds the power button for 15 seconds so
 // the bootloader shows the mixer's storage over USB; the administrator
 // helper then checks it and restores damaged files (the installer's
-// repair). Reached from the first screen whenever RC2FX isn't running.
+// repair).
 //
-// The page is a step sidebar on the left and the current step on the right.
-// The installer will move to the same layout; stepSidebar is shared for
-// that. Its state and words are in installflow/repair.go.
+// The page is a guided task (guided.go); its state and words are in
+// installflow/repair.go. Reached from the first screen while the mixer is in
+// storage mode, on systems that can repair it (installer.RepairSupported).
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gpuikit.dev/gk"
@@ -22,69 +23,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 )
 
-// stepSidebar is the steps of a guided task down the left: done, current,
-// failed or to come. Repair uses it now; the installer will too.
-func stepSidebar(steps []installflow.RepairStep) gk.DivEl {
-	list := gk.VFlex(s.Gap1, s.FlexShrink0, s.Pr6).W(px(220))
-	for n, step := range steps {
-		var circle gk.DivEl
-		var text uint32
-		switch step.Mark {
-		case installflow.RepairMarkDone:
-			circle = gk.Div().Bg(rgb(surface().Raised)).BorderColor(rgb(Accent)).
-				Child(gk.Icon(gk.IconCheck).TextColor(rgb(Accent)).Size(px(12)))
-			text = Muted
-		case installflow.RepairMarkNow:
-			circle = gk.Div().BorderColor(rgb(Accent)).TextColor(rgb(Accent)).Child(txt(fmt.Sprint(n + 1)))
-			text = Text
-		case installflow.RepairMarkFailed:
-			circle = gk.Div().BorderColor(rgb(Danger)).
-				Child(gk.Icon(gk.IconCircleX).TextColor(rgb(Danger)).Size(px(12)))
-			text = Text
-		default:
-			circle = gk.Div().BorderColor(rgb(surface().Line)).TextColor(rgb(Faint)).Child(txt(fmt.Sprint(n + 1)))
-			text = Faint
-		}
-		title := gk.Div(s.TextSm).TextColor(rgb(text))
-		if step.Mark == installflow.RepairMarkNow {
-			title = title.Style(s.FontSemibold)
-		}
-		list = list.Child(gk.HFlex(s.ItemsCenter, s.Gap3, s.Py2).
-			Child(circle.Style(s.FlexShrink0, s.RoundedFull, s.Border1, s.Flex, s.ItemsCenter, s.JustifyCenter, s.TextXs).
-				Size(px(22))).
-			Child(title.Child(txt(step.Title))))
-	}
-	return list
-}
-
-func repairPanel() gk.DivEl {
-	return gk.VFlex(s.Gap2, s.Mt4, s.P4, s.RoundedXl, s.Border1).
-		Bg(rgb(surface().Panel)).BorderColor(rgb(surface().Line))
-}
-
-func repairRow(color uint32, text string) gk.DivEl {
-	return gk.HFlex(s.ItemsStart, s.Gap3, s.Py1, s.TextSm).TextColor(rgb(Muted)).
-		Child(gk.Div(s.FlexShrink0, s.RoundedFull).Mt(px(6)).Size(px(8)).Bg(rgb(color))).
-		Child(gk.Div(s.Flex1, s.MinW0).Child(txt(text)))
-}
-
-func repairHeading(text string) gk.DivEl {
-	return gk.Div(s.TextXl, s.FontSemibold).Child(txt(text))
-}
-
 // openRepair opens the installer straight on the repair page.
 func (a *App) openRepair(cx *gk.Cx) {
-	a.openInstaller(cx)
+	a.openTask(cx, taskInstall)
 	if i := a.installer; i != nil {
-		i.repair = installflow.NewRepair()
-	}
-	a.installerPage = true
-	a.notify(cx)
-}
-
-// showRepair switches the open installer to the repair page.
-func (a *App) showRepair(cx *gk.Cx) {
-	if i := a.installer; i != nil && !i.busy() {
 		i.repair = installflow.NewRepair()
 	}
 	a.notify(cx)
@@ -94,7 +36,7 @@ func (a *App) showRepair(cx *gk.Cx) {
 // check once it is there and access is granted. Returns whether to redraw.
 func (a *App) pollRepair() bool {
 	i := a.installer
-	if i == nil || i.repair == nil {
+	if i == nil || i.repair == nil || i.fixture {
 		return false
 	}
 	r := i.repair
@@ -149,145 +91,171 @@ func (a *App) repairAgain(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-func (a *App) repairScreen(i *Installer, cx *gk.Cx) gk.Element {
+// repairTask is Repair mixer in the guided-task layout (mock-up E1–E3).
+func (a *App) repairTask(i *Installer) guidedTask {
 	r := i.repair
-	if r == nil {
-		return gk.Div()
+	t := guidedTask{
+		title:  "Repair mixer",
+		count:  stepCount(r.Step(), installflow.RepairStepCount),
+		steps:  r.Steps(),
+		scroll: i.controlsScroll,
+		unplug: r.Unplug(),
 	}
-	needAccess := !i.access.AllowsFlashing()
-	steps := r.Steps(i.access.Kind != installflow.AccessNotNeeded, needAccess)
-	var body gk.DivEl
-	if needAccess {
-		body = a.accessCard(i, installflow.RepairAccessPurpose, cx)
-	} else {
-		body = a.repairBody(i, r)
+	stop := func(label string) gk.ButtonEl {
+		return taskButton("task-stop", label, false).Disabled(r.Busy()).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })
 	}
-	busy := r.Busy()
-	return gk.VFlex(s.SizeFull, s.Relative).FontFamily("Inter").Bg(background()).
-		Child(backdrop()).
-		TextColor(rgb(Text)).
-		Child(gk.Div(s.Flex1, s.MinH0, s.Px8, s.Py8).ID("repair-scroll").OverflowYScroll().
-			Child(gk.VFlex(s.WFull, s.MxAuto, s.Gap6).MaxW(px(860)).
-				Child(gk.Div(s.Text2xl, s.FontSemibold).Child(txt("Repair mixer"))).
-				Child(gk.HFlex(s.ItemsStart).
-					Child(stepSidebar(steps)).
-					Child(gk.Div(s.Flex1, s.MinW0).Child(body))))).
-		Child(gk.Div(s.FlexShrink0, s.Px8, s.Pb6).
-			Child(gk.HFlex(s.WFull, s.MxAuto, s.JustifyEnd).MaxW(px(860)).
-				Child(gk.Button("repair-close").Ghost().Label("Close").Disabled(busy).
-					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeInstaller(cx) }))))
-}
-
-func (a *App) repairBody(i *Installer, r *installflow.Repair) gk.DivEl {
-	working := func(what string) gk.DivEl {
-		line := what
-		if i.progress != nil {
-			if t := progressText(i.progress); t != "" {
-				line = t
-			}
-		}
-		body := gk.VFlex(s.Gap3).
-			Child(repairHeading(what)).
-			Child(gk.HFlex(s.Gap3, s.ItemsCenter).
-				Child(gk.Spinner().Color(rgb(Accent))).
-				Child(paragraph(line, Muted)))
-		if p := i.progress; p != nil && p.Total > 0 {
-			body = body.Child(gk.Progress("repair-progress").
-				Value(min(max(float32(p.Completed)/float32(p.Total)*100, 0), 100)))
-		}
-		return body
-	}
+	body := gk.VFlex(s.WFull).Gap(px(16))
 	switch r.Stage.Kind {
 	case installflow.RepairWaiting:
-		return gk.VFlex(s.Gap3).
-			Child(repairHeading("Put the mixer in storage mode")).
-			Child(paragraph("RC2FX checks the mixer's system for files a flash damaged, and restores them. Your settings are copied to this computer before anything is written.", Muted)).
-			Child(repairPanel().
-				Child(paragraph("1. Connect the mixer's USB 1 port to this computer.", Muted)).
-				Child(paragraph("2. Switch the mixer off.", Muted)).
-				Child(paragraph("3. Press and hold the power button for about 15 seconds, until the screen shows only the RØDE logo.", Muted)).
-				Child(gk.HFlex(s.Gap3, s.ItemsCenter, s.Mt2, s.Pt3, s.BorderT1).BorderColor(rgb(surface().Line)).
-					Child(gk.Spinner().Color(rgb(Accent))).
-					Child(paragraph("Waiting for the mixer's storage…", Muted))))
-	case installflow.RepairChecking:
-		return working("Checking the mixer")
-	case installflow.RepairRepairing:
-		return working("Repairing the mixer")
+		body = body.Child(taskHeading("Put the mixer in storage mode")).
+			Child(prose("The app checks the mixer’s system for files a firmware update damaged, and restores them. Use this if the mixer forgets its setup or doesn’t start. Your settings are copied to this computer before anything is written.", Muted)).
+			Child(storageModePanels())
+		needAccess := !i.access.AllowsFlashing()
+		switch {
+		case i.access.Kind == installflow.AccessAsking:
+			body = body.Child(spinnerLine("Answer your system’s password prompt to continue."))
+		case r.Disk != nil && needAccess:
+			body = body.Child(seenRow(Accent, "The computer sees the mixer in storage mode.", true))
+		default:
+			body = body.Child(spinnerLine("Waiting for the mixer in storage mode…"))
+		}
+		if i.access.Kind == installflow.AccessRefused {
+			body = body.Child(seenRow(Warn, "Access wasn’t granted. "+strings.TrimSuffix(capitalFirst(i.access.Why), ".")+".", true))
+		}
+		if i.access.Kind != installflow.AccessNotNeeded {
+			body = body.Child(prose("Your system will ask for your password once, when the check starts. The app uses it only to read and repair the mixer.", Faint))
+		}
+		t.body = body
+		t.secondary = []gk.ButtonEl{stop("Stop")}
+		// Where access is missing the button asks for it; the check then
+		// starts on the next look. Otherwise it starts by itself.
+		label := "Check"
+		if needAccess {
+			label = "Check…"
+		}
+		t.primary = taskButton("task-start", label, true).
+			Disabled(!needAccess || r.Disk == nil || i.access.Kind == installflow.AccessAsking).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.grantInstallerAccess(cx) })
+		return t
+	case installflow.RepairChecking, installflow.RepairRepairing:
+		heading, what := "Check", "Checking the mixer…"
+		if r.Stage.Kind == installflow.RepairRepairing {
+			heading, what = "Back up and repair", "Copying your settings, then restoring the damaged files…"
+		}
+		body = body.Child(taskHeading(heading)).Child(spinnerLine(what))
+		if p := i.progress; p != nil && p.Total > 0 {
+			body = body.Child(gk.Progress("task-progress").
+				Value(min(max(float32(p.Completed)/float32(p.Total)*100, 0), 100)))
+		}
+		body = body.Child(prose("Keep the mixer connected until this finishes.", Faint))
+		t.body = body
+		t.secondary = []gk.ButtonEl{stop("Stop")}
+		t.primary = taskButton("task-done", "Done", true).Disabled(true)
+		return t
 	case installflow.RepairFailed:
-		return gk.VFlex(s.Gap3).
-			Child(repairHeading("The check didn't finish")).
-			Child(paragraph(r.Stage.Error, Danger)).
-			Child(gk.HFlex().Child(gk.Button("repair-again").Label("Check again").
-				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.repairAgain(cx) })))
+		heading := "The check didn’t finish"
+		if r.Wrote {
+			heading = "The repair didn’t finish"
+		}
+		seen := taskPanel().Child(eyebrow("What the app sees now"))
+		if r.Disk != nil {
+			seen = seen.Child(seenRow(Accent, "The mixer is still in storage mode.", true))
+		} else {
+			seen = seen.Child(seenRow(Warn, "The computer doesn’t see the mixer in storage mode.", true))
+		}
+		t.body = body.Child(taskHeading(heading)).
+			Child(prose(r.Stage.Error, Muted)).
+			Child(seen).
+			Child(prose("“Check again” looks at the mixer again before anything is written.", Faint))
+		t.secondary = []gk.ButtonEl{stop("Close")}
+		t.primary = taskButton("task-retry", "Check again", true).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.repairAgain(cx) })
+		return t
 	case installflow.RepairFindings:
-		return a.repairFindings(r.Stage.Findings)
-	}
-	return repairDone(r.Stage.Result)
-}
-
-func (a *App) repairFindings(findings *installer.RepairFindings) gk.DivEl {
-	if findings == nil {
-		findings = &installer.RepairFindings{}
-	}
-	repairable := findings.Repairable()
-	settings := Warn
-	if findings.SettingsOK {
-		settings = Accent
-	}
-	list := repairPanel().Child(repairRow(settings, installflow.SettingsLine(findings)))
-	for _, root := range findings.Roots {
-		if len(root.Damaged) == 0 {
-			list = list.Child(repairRow(Accent, installflow.RootLine(root)))
+		findings := r.Stage.Findings
+		if findings == nil {
+			findings = &installer.RepairFindings{}
 		}
-		for _, file := range root.Damaged {
-			color := Danger
-			if file.Why == nil {
-				color = Warn
+		list := taskPanel()
+		for _, line := range installflow.FindingLines(findings) {
+			color := Warn
+			switch {
+			case line.Good:
+				color = Accent
+			case line.Strong:
+				color = Danger
 			}
-			list = list.Child(repairRow(color, installflow.DamagedLine(root, file)))
+			list = list.Child(seenRow(color, line.Text, line.Strong))
 		}
+		body = body.Child(taskHeading(installflow.FindingsTitle(findings))).
+			Child(prose(installflow.FindingsExplanation(findings), Muted)).
+			Child(list)
+		again := taskButton("task-recheck", "Check again", false).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.repairAgain(cx) })
+		if findings.Repairable() == 0 {
+			t.body = body.Child(leaveStorageMode())
+			t.secondary = []gk.ButtonEl{again}
+			t.primary = taskButton("task-done", "Done", true).
+				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })
+			return t
+		}
+		t.body = body.Child(taskPanel().
+			Child(eyebrow("To leave storage mode without repairing")).
+			Child(prose("Unplug USB 1 and plug it back in. The mixer starts normally. Nothing has been written yet.", Muted)))
+		t.secondary = []gk.ButtonEl{stop("Stop"), again}
+		t.primary = taskButton("task-start", "Back up and repair", true).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.startRepair(cx) })
+		return t
 	}
-	body := gk.VFlex(s.Gap3).
-		Child(repairHeading(installflow.FindingsTitle(findings))).
-		Child(paragraph(installflow.FindingsExplanation(findings), Muted)).
-		Child(list)
-	if repairable == 0 {
-		body = body.Child(restartSteps())
-	}
-	buttons := gk.HFlex(s.Gap3, s.Mt2)
-	if repairable > 0 {
-		buttons = buttons.Child(gk.Button("repair-start").Primary().Label("Back up settings and repair").
-			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.startRepair(cx) }))
-	}
-	buttons = buttons.Child(gk.Button("repair-recheck").Label("Check again").
-		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.repairAgain(cx) }))
-	return body.Child(buttons)
-}
-
-func repairDone(result *installer.RepairResult) gk.DivEl {
+	result := r.Stage.Result
 	if result == nil {
 		result = &installer.RepairResult{}
 	}
-	list := repairPanel()
-	for _, path := range result.Repaired {
-		list = list.Child(repairRow(Accent, fmt.Sprintf("Restored %s", path)))
+	if len(result.Repaired) > 0 {
+		body = body.Child(doneHeading(installflow.DoneTitle(result)))
+	} else {
+		body = body.Child(taskHeading(installflow.DoneTitle(result)))
 	}
-	for _, n := range result.NotRepaired {
-		list = list.Child(repairRow(Danger, fmt.Sprintf("%s: %s", n[0], n[1])))
+	body = body.Child(prose("Your settings were copied to this computer before the repair. Now restart the mixer to finish.", Muted))
+	if n := len(result.NotRepaired); n > 0 {
+		left := "1 file couldn’t be restored and was left as it was."
+		if n > 1 {
+			left = fmt.Sprintf("%d files couldn’t be restored and were left as they were.", n)
+		}
+		body = body.Child(seenRow(Warn, left, true))
 	}
-	return gk.VFlex(s.Gap3).
-		Child(repairHeading(installflow.DoneTitle(result))).
-		Child(list).
-		Child(restartSteps()).
-		Child(paragraph(fmt.Sprintf("Settings partition copied to %s", result.Backup), Faint))
+	t.body = body.Child(leaveStorageMode()).
+		Child(prose("Settings backup saved on this computer.", Faint))
+	t.primary = taskButton("task-done", "Done", true).
+		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })
+	return t
 }
 
-// restartSteps is leaving storage mode: the mixer doesn't start while USB 1
-// holds it there.
-func restartSteps() gk.DivEl {
-	return repairPanel().
-		Child(paragraph("To leave storage mode:", Text)).
-		Child(paragraph("1. Unplug USB 1 from this computer.", Muted)).
-		Child(paragraph("2. Disconnect the mixer's power for 30 seconds, then turn it on normally.", Muted)).
-		Child(paragraph("3. Don't redo the setup if it asks: a repaired mixer brings it back on this start.", Muted))
+// storageModePanels is how to enter storage mode and how to leave it, side
+// by side, so nobody is stuck in it.
+func storageModePanels() gk.DivEl {
+	return gk.HFlex(s.WFull, s.ItemsStretch).Gap(px(14)).
+		Child(taskPanel().Style(s.Flex1, s.MinW0).
+			Child(eyebrow("To enter storage mode")).
+			Child(numbered(
+				"Connect the mixer’s USB 1 port to this computer.",
+				"Switch the mixer off.",
+				"Press and hold the power button for about 15 seconds.",
+				"The mixer’s screen stays dark. This page moves on when the computer sees the mixer."))).
+		Child(taskPanel().Style(s.Flex1, s.MinW0).
+			Child(eyebrow("To leave storage mode")).
+			Child(numbered(
+				"Unplug USB 1 from this computer.",
+				"Plug it back in.",
+				"The mixer starts normally.")))
+}
+
+// leaveStorageMode is the last step: the mixer doesn't start while USB 1
+// holds it in storage mode.
+func leaveStorageMode() gk.DivEl {
+	return taskPanel().Child(numbered(
+		"Unplug USB 1 from this computer and plug it back in.",
+		"The mixer starts normally.",
+		"If it asks to set up again, don’t: the repaired mixer brings your setup back on this start."))
 }

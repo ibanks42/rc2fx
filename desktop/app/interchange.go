@@ -208,7 +208,7 @@ func (a *App) importPanel(imp *ImportDraft, cx *gk.Cx) gk.Element {
 		}
 	case core.ImportResultReady:
 		eq := imp.stage.EQ
-		panel = panel.Child(txt(fmt.Sprintf("%s · %d left / %d right bands · input %+.1f dB · output %+.1f dB",
+		panel = panel.Child(txt(fmt.Sprintf("%s · %d left / %d right bands · input %+.2f dB · output %+.2f dB",
 			imp.stage.Source.Key, len(eq.Bands), len(eq.Channel(core.ChannelRight)), eq.InputGainDB, eq.OutputGainDB)))
 		if imp.stage.OtherEffects > 0 {
 			panel = panel.Child(txt("Only the equalizer is imported; the preset’s other effects are excluded."))

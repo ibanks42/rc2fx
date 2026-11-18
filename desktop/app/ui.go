@@ -240,6 +240,9 @@ type Confirm struct {
 	// which offers only Action.
 	Cancel string
 	Action string
+	// Link, when set, is a web page the dialog offers under its detail, as
+	// LinkLabel.
+	Link, LinkLabel string
 }
 
 // confirmState is the open confirm dialog: one at a time, drawn by the one
@@ -280,11 +283,16 @@ func (a *App) confirmView(cx *gk.Cx) gk.DialogEl {
 		title = title.Child(gk.Div(s.TextXs, s.FontMedium).TextColor(rgb(Faint)).Child(txt(spec.Eyebrow)))
 	}
 	title = title.Child(gk.Div(s.TextXl, s.FontSemibold).Child(txt(spec.Title)))
+	detail := gk.VFlex(s.Gap3).
+		Child(gk.Div(s.TextSm).LineHeight(gk.Relative(1.6)).TextColor(rgb(Muted)).Child(txt(spec.Detail)))
+	if spec.Link != "" {
+		detail = detail.Child(gk.Div(s.TextSm).Child(gk.Link("dialog-link").Href(spec.Link).Child(txt(spec.LinkLabel))))
+	}
 	return gk.Dialog(s.P6, s.Border1).W(560).Rounded(px(20)).Bg(rgb(surface().Panel)).
 		BorderColor(rgb(surface().LineStrong)).TextColor(rgb(Text)).FontFamily("Inter").
 		OverlayClosable(false).
 		Title(title).
-		Child(gk.Div(s.TextSm).LineHeight(gk.Relative(1.6)).TextColor(rgb(Muted)).Child(txt(spec.Detail))).
+		Child(detail).
 		Footer(footer).
 		OnOk(func(cx *gk.Cx, _ gk.ClickEvent) bool {
 			if c.onOK != nil {

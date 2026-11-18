@@ -47,3 +47,19 @@ func TestChannelsMatchByNameOrIDIgnoringCase(t *testing.T) {
 		t.Error("Mic 2 found")
 	}
 }
+
+func TestFlowPagesAreForDevelopmentBuildsOnly(t *testing.T) {
+	got, err := parseDevPage("flow:B4")
+	if !devFlows {
+		if err == nil {
+			t.Fatalf("a release build accepted %+v", got)
+		}
+		return
+	}
+	if err != nil || got != (DevPage{Kind: DevPageFlow, Name: "B4"}) {
+		t.Fatalf("parse = %+v, %v", got, err)
+	}
+	if _, err := parseDevPage("flow:"); err == nil {
+		t.Fatal("accepted a flow page without a state")
+	}
+}

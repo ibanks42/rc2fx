@@ -173,13 +173,13 @@ func appendData(t *testing.T, w *tarWriter, base *tarHeader, path string, data [
 		copy(long[257:263], "ustar ")
 		copy(long[263:265], " \x00")
 		setChecksum(&long)
-		must(t, w.append(&long, bytes.NewReader(append([]byte(path), 0))))
+		must(t, w.Append(&long, bytes.NewReader(append([]byte(path), 0))))
 		name = name[:100]
 	}
 	copy(h[0:100], name)
 	octal(h[124:136], uint64(len(data)))
 	setChecksum(&h)
-	must(t, w.append(&h, bytes.NewReader(data)))
+	must(t, w.Append(&h, bytes.NewReader(data)))
 }
 
 func TestPatchChangesOnlyAuthorizedKeyAndKeepsLongNames(t *testing.T) {
@@ -199,11 +199,11 @@ func TestPatchChangesOnlyAuthorizedKeyAndKeepsLongNames(t *testing.T) {
 	// Built with GNU long-name support for the last entry.
 	var out bytes.Buffer
 	gz := newGzip(&out)
-	w := &tarWriter{w: gz}
+	w := &tarWriter{W: gz}
 	for i, name := range names {
 		appendData(t, w, testHeader(t, "placeholder", typeRegular, len(data[i])), name, data[i])
 	}
-	must(t, w.finish())
+	must(t, w.Finish())
 	must(t, gz.Close())
 	put(t, src, out.Bytes())
 	mix, launcher, err := patchArchive(src, dst, nil)
@@ -218,15 +218,15 @@ func TestPatchChangesOnlyAuthorizedKeyAndKeepsLongNames(t *testing.T) {
 		if !bytes.Equal(b, data[i]) {
 			t.Fatalf("member %d: %q", i, b)
 		}
-		mode, _ := numeric(entry.header[100:108])
-		uid, _ := numeric(entry.header[108:116])
-		gid, _ := numeric(entry.header[116:124])
-		mtime, _ := numeric(entry.header[136:148])
+		mode, _ := numeric(entry.Header[100:108])
+		uid, _ := numeric(entry.Header[108:116])
+		gid, _ := numeric(entry.Header[116:124])
+		mtime, _ := numeric(entry.Header[136:148])
 		if mode != 0o755 || uid != 4 || gid != 5 || mtime != 123 {
 			t.Fatalf("member %d: %o %d %d %d", i, mode, uid, gid, mtime)
 		}
-		if normalized(entry.path) != normalized(names[i]) {
-			t.Fatalf("member %d: %s", i, entry.path)
+		if normalized(entry.Path) != normalized(names[i]) {
+			t.Fatalf("member %d: %s", i, entry.Path)
 		}
 		i++
 		return nil
@@ -307,36 +307,6 @@ func TestReleasesAreOfflineAndOnlyOfferQualifiedCatalogEntries(t *testing.T) {
 }
 
 func TestCatalogURLAndReadinessGuards(t *testing.T) {
-	for _, u := range []string{
-		"http://update.rode.com/x",
-		"https://rode.com.attacker.test/x",
-		"https://user@rode.com/x",
-		"https://rode.com:123/x",
-		"https://rode.com",
-		// Other RØDE hosts are not its update server.
-		"https://rode.com/x",
-		"https://cdn.rode.com/rcp2/1.7.7/os.tar.gz",
-		"https://update.rode.com.attacker.test/x",
-		"https://update.rode.com:8443/x",
-	} {
-		if validURL(u) {
-			t.Fatalf("%s accepted", u)
-		}
-	}
-	if !validURL("https://update.rode.com/manifest.json") {
-		t.Fatal("RØDE's manifest refused")
-	}
-	if _, err := location("https://update.rode.com/duo/1.7.7/os.tar.gz", "os.tar.gz", "1.7.7"); err == nil {
-		t.Fatal("another folder accepted")
-	}
-	got, err := location("update.rode.com/rcp2/1.7.7/os.md5", "os.md5", "1.7.7")
-	must(t, err)
-	if got != "https://update.rode.com/rcp2/1.7.7/os.md5" {
-		t.Fatal(got)
-	}
-	if _, err := location("https://update.rode.com/rcp2/1.7/os.md5", "os.md5", "1.7"); err == nil {
-		t.Fatal("two-part version accepted")
-	}
 	r := sampleProfile().Runtime
 	ready := `{"config":{"revision":42},"engine":{"generation":15,"restartAllowed":false,"mode":"native","status":"running","appliedRevision":42,"sampleRate":48000,"blockSize":112,"message":"Native audio paths applied and advancing","audioAdvancing":true}}`
 	if why := readinessError([]byte(ready), r); why != "" {
@@ -396,7 +366,7 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 	destination := filepath.Join(t.TempDir(), "duo.tar.gz")
 	patched, err := patchArchiveForModel(model, source, destination, entries, nil)
 	must(t, err)
-	if patched.mixer != profile.MixerSHA || patched.launcher != profile.LauncherSHA {
+	if patched.Mixer != profile.MixerSHA || patched.Launcher != profile.LauncherSHA {
 		t.Fatal("hashes")
 	}
 	must(t, verifyArchiveModel(model, destination))
@@ -417,13 +387,13 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 	protected := func(archive string) (map[string]string, map[string]string) {
 		hashes, added := map[string]string{}, map[string]string{}
 		must(t, walkArchive(archive, 4<<30, false, func(entry *tarEntry) error {
-			name := normalized(entry.path)
+			name := normalized(entry.Path)
 			if strings.HasPrefix(name, "boot/") || strings.HasPrefix(name, "Application/mcu-images/") || name == "etc/hostname" {
 				contents, err := readAll(entry)
 				if err != nil {
 					return err
 				}
-				hashes[name] = fmt.Sprintf("%x %s", entry.header[:], sum(contents))
+				hashes[name] = fmt.Sprintf("%x %s", entry.Header[:], sum(contents))
 			} else if _, ok := expected[name]; ok {
 				contents, err := readAll(entry)
 				if err != nil {
@@ -565,8 +535,8 @@ func TestAnRC2FXImageListsRodesFilesForTheMixerToCheck(t *testing.T) {
 	manifest := func(archive string) *string {
 		var found *string
 		must(t, walkArchive(archive, 1<<24, false, func(entry *tarEntry) error {
-			if normalized(entry.path) == manifestMember {
-				if mode, _ := numeric(entry.header[100:108]); mode != 0o600 {
+			if normalized(entry.Path) == manifestMember {
+				if mode, _ := numeric(entry.Header[100:108]); mode != 0o600 {
 					t.Fatalf("manifest mode %o", mode)
 				}
 				data, err := readAll(entry)
@@ -624,10 +594,10 @@ func TestImageGetsRC2FXAutostartAndSettingsAndNothingIsReplaced(t *testing.T) {
 	must(t, err)
 	seen := map[string]found{}
 	must(t, walkArchive(dst, 1<<24, false, func(entry *tarEntry) error {
-		name := normalized(entry.path)
-		mode, _ := numeric(entry.header[100:108])
-		uid, _ := numeric(entry.header[108:116])
-		gid, _ := numeric(entry.header[116:124])
+		name := normalized(entry.Path)
+		mode, _ := numeric(entry.Header[100:108])
+		uid, _ := numeric(entry.Header[108:116])
+		gid, _ := numeric(entry.Header[116:124])
 		data, err := readAll(entry)
 		must(t, err)
 		if strings.HasPrefix(name, "opt") || name == "usr/sbin/rc_audio_mixer" || name == "usr/sbin/rc_gui_juce" {
@@ -635,7 +605,7 @@ func TestImageGetsRC2FXAutostartAndSettingsAndNothingIsReplaced(t *testing.T) {
 				t.Fatalf("%s owned by %d:%d", name, uid, gid)
 			}
 		}
-		seen[name] = found{entry.header.entryType(), mode, data}
+		seen[name] = found{entry.Header.EntryType(), mode, data}
 		return nil
 	}))
 	script := []byte("#!/bin/sh\nexit 0\n")
@@ -697,7 +667,7 @@ func TestImageGetsRC2FXAutostartAndSettingsAndNothingIsReplaced(t *testing.T) {
 	must(t, walkArchive(src, 1<<20, false, func(entry *tarEntry) error {
 		data, err := readAll(entry)
 		must(t, err)
-		h := entry.header
+		h := entry.Header
 		taken = append(taken, tarItem{&h, data})
 		return nil
 	}))
@@ -863,7 +833,7 @@ func TestPatchingHashesWhatItReadAndWroteNotWhatThePathsHold(t *testing.T) {
 	must(t, err)
 	gotMd5, err := fileHash(dst, algorithmMd5)
 	must(t, err)
-	if p.archiveSha != gotSha || p.archiveMd5 != gotMd5 {
+	if p.ArchiveSHA != gotSha || p.ArchiveMD5 != gotMd5 {
 		t.Fatal("hashes are not of what was written")
 	}
 	// The source was checked by path earlier; the bytes read differ now.

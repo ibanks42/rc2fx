@@ -17,7 +17,7 @@ import (
 // channelNav is the channel list: processed channels first, each with its
 // live line and effects; then the rest by kind; and the filter at the foot.
 func (a *App) channelNav(cx *gk.Cx) gk.Element {
-	editing := !a.homeOpen && !a.settingsOpen && !a.installerPage
+	editing := !a.homeOpen && !a.settingsOpen
 	sources := a.showSources()
 	sourceOf := func(id string) *core.StockSource {
 		for _, src := range sources {
@@ -106,8 +106,8 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 		list = list.Child(gk.Div(s.Pt2).Px(px(12)).TextSize(px(12)).TextColor(rgb(Faint)).
 			Child(txt("Loading show inputs…")))
 	}
-	overview := !a.settingsOpen && !a.installerPage && a.homeOpen
-	settings := a.settingsOpen || a.installerPage
+	overview := !a.settingsOpen && a.homeOpen
+	settings := a.settingsOpen
 	return gk.VFlex(s.FlexShrink0, s.HFull, s.BorderR1).W(px(SidebarWidth)).
 		BorderColor(rgb(surface().Line)).
 		Child(gk.Div().Px(px(12)).Pt(px(14)).
@@ -311,9 +311,11 @@ func (a *App) view(cx *gk.Cx) gk.Element { return a.renderPage(cx) }
 
 func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	a.renderGeneration++
-	// With a connection the installer lives in Settings instead.
-	if a.installer != nil && !a.session.Connected {
-		return a.installerScreen(cx)
+	// A guided task stays in front, connected or not, until it is
+	// dismissed: the window never jumps away from it as the mixer
+	// restarts.
+	if a.installer != nil {
+		return a.taskScreen(cx)
 	}
 	if !a.session.Connected {
 		return a.connectionScreen(cx)
@@ -321,7 +323,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	target := a.target().Clone()
 	// A channel's editor fills the window to its foot; the other pages keep
 	// room below for the floating Save bar.
-	editorPage := !(a.installerPage && a.installer != nil) && !a.settingsOpen && !a.homeOpen &&
+	editorPage := !a.settingsOpen && !a.homeOpen &&
 		a.unprocessedSource() == nil
 	bottom := PageBottom
 	if editorPage {
@@ -345,10 +347,6 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	}
 	var rail gk.Element
 	switch {
-	case a.installerPage && a.installer != nil:
-		content = content.Child(gk.VFlex(s.Gap6, s.WFull, s.MxAuto, s.Pb6).MaxW(px(900)).
-			Child(gk.Div(s.Text2xl, s.FontSemibold).Child(txt("Firmware"))).
-			Child(a.installerBody(a.installer, cx)))
 	case a.settingsOpen:
 		content = content.Child(a.settingsPage(cx))
 	case a.homeOpen:
@@ -383,7 +381,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	root := gk.VFlex(s.SizeFull).FontFamily("Inter").Bg(rgb(surface().Bg)).TextColor(rgb(Text)).
 		TrackFocus(a.focus).
 		OnKeyDown(func(cx *gk.Cx, e gk.KeyEvent) {
-			away := !a.homeOpen || a.settingsOpen || a.installerPage
+			away := !a.homeOpen || a.settingsOpen
 			// Ctrl+Z / Ctrl+Shift+Z (Cmd on macOS) undo and redo edits,
 			// except while a text field has the keys.
 			if e.Key == "z" && e.Modifiers&(gk.ModControl|gk.ModPlatform) != 0 && a.editingValue == nil {

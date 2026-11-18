@@ -124,10 +124,11 @@ type CommandRefresh struct {
 	Generation uint64
 }
 
-// CommandPreview puts Update on the running audio without saving it
-// (PUT api/v1/preview): live preview while a control moves. The app sends one
-// at a time, the newest edit, and saves with CommandApply once edits stop.
-type CommandPreview struct {
+// CommandLive puts Update on the running audio at once (PUT api/v1/live):
+// live editing while a control moves. The app sends one at a time, the
+// newest edit, and saves with CommandApply once edits stop; if the app goes
+// away first, the mixer keeps and saves what plays.
+type CommandLive struct {
 	Generation uint64
 	Update     core.ConfigUpdate
 }
@@ -190,7 +191,7 @@ func (CommandPreset) command()            {}
 func (CommandConnect) command()           {}
 func (CommandDisconnect) command()        {}
 func (CommandApply) command()             {}
-func (CommandPreview) command()           {}
+func (CommandLive) command()              {}
 func (CommandRefresh) command()           {}
 func (CommandSettings) command()          {}
 func (CommandVersion) command()           {}
@@ -354,29 +355,29 @@ type EventKindFailure struct {
 
 type EventKindConflict struct{}
 
-// PreviewResult is how the mixer took a preview.
-type PreviewResult int
+// LiveResult is how the mixer took a live edit.
+type LiveResult int
 
 const (
-	// PreviewAccepted: the audio has (or will next have) these settings.
-	PreviewAccepted PreviewResult = iota
-	// PreviewUnsupported: the mixer has no preview (404, an older mixer);
+	// LiveAccepted: the audio has (or will next have) these settings.
+	LiveAccepted LiveResult = iota
+	// LiveUnsupported: the mixer has no live editing (404, an older mixer);
 	// the app saves instead.
-	PreviewUnsupported
-	// PreviewNeedsSave: the change needs the engine restarted (422
-	// previewRequiresSave), so only a save can make it.
-	PreviewNeedsSave
-	// PreviewConflict: the saved revision moved on (409).
-	PreviewConflict
-	// PreviewBusy: the engine is not running right now (503); try again.
-	PreviewBusy
-	// PreviewFailed: any other failure; Message says what.
-	PreviewFailed
+	LiveUnsupported
+	// LiveNeedsSave: the change needs the engine restarted (422
+	// liveRequiresSave), so only a save can make it.
+	LiveNeedsSave
+	// LiveConflict: the saved revision moved on (409).
+	LiveConflict
+	// LiveBusy: the engine is not running right now (503); try again.
+	LiveBusy
+	// LiveFailed: any other failure; Message says what.
+	LiveFailed
 )
 
-// EventKindPreviewed is a CommandPreview's answer.
-type EventKindPreviewed struct {
-	Result  PreviewResult
+// EventKindLiveApplied is a CommandLive's answer.
+type EventKindLiveApplied struct {
+	Result  LiveResult
 	Message string
 }
 
@@ -404,7 +405,7 @@ func (EventKindUSB) eventKind()               {}
 func (EventKindStreamStatus) eventKind()      {}
 func (EventKindFailure) eventKind()           {}
 func (EventKindConflict) eventKind()          {}
-func (EventKindPreviewed) eventKind()         {}
+func (EventKindLiveApplied) eventKind()       {}
 
 type PresetAction interface {
 	presetAction()
@@ -1337,23 +1338,23 @@ func run(ctx context.Context, commands <-chan Command, events chan<- Event) {
 				kind = EventKindFailure{failed.message()}
 			}
 			emit(ctx, events, generation, kind)
-		case CommandPreview:
+		case CommandLive:
 			if command.Generation != generation || current == nil {
 				continue
 			}
-			kind := EventKindPreviewed{Result: PreviewAccepted}
-			if _, failed := current.request(ctx, "PUT", "api/v1/preview", applyBody(command.Update)); failed != nil {
+			kind := EventKindLiveApplied{Result: LiveAccepted}
+			if _, failed := current.request(ctx, "PUT", "api/v1/live", applyBody(command.Update)); failed != nil {
 				switch {
 				case failed.isStatus(404):
-					kind.Result = PreviewUnsupported
+					kind.Result = LiveUnsupported
 				case failed.isStatus(422):
-					kind.Result = PreviewNeedsSave
+					kind.Result = LiveNeedsSave
 				case failed.isStatus(409):
-					kind.Result = PreviewConflict
+					kind.Result = LiveConflict
 				case failed.isStatus(503):
-					kind.Result = PreviewBusy
+					kind.Result = LiveBusy
 				default:
-					kind.Result = PreviewFailed
+					kind.Result = LiveFailed
 				}
 				kind.Message = failed.message()
 			}

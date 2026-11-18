@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"iter"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
@@ -76,6 +75,8 @@ type Model struct {
 	// lastPoll is zero before the first poll.
 	lastPoll time.Time
 	InPlace  InPlace
+	// FixPolicy is whether a run fixes the mixer's storage first.
+	FixPolicy FixPolicy
 }
 
 func nowUnix() uint64 {
@@ -358,16 +359,39 @@ func (m *Model) Prepared() *installer.Prepared {
 }
 
 // recentlyFlashed: the last USB command was a flash in the last few
-// minutes, so the mixer may still be updating.
+// minutes and the app sees nothing that says the update is over, so the
+// mixer may still be updating (MayBeUpdating).
 func (m *Model) recentlyFlashed() bool {
-	if m.Status == nil {
+	return m.Status != nil &&
+		MayBeUpdating(FlashedRecently(&m.Status.Saved, m.SettledFlash, nowUnix()), m.USB(), m.Answering())
+}
+
+// MayBeUpdating reports whether a mixer may still be updating, given that a
+// flash was sent recently (FlashedRecently), the mixers on USB, and whether
+// RC2FX answers. What the mixer shows wins over the window: one in normal
+// mode, whether it answers as RØDE's firmware or as RC2FX, is not updating.
+// The window counts only while the app sees no mixer, or one in update
+// mode.
+func MayBeUpdating(flashed bool, usb []installer.USBMixer, answering bool) bool {
+	if !flashed || answering {
 		return false
 	}
-	c := m.Status.Saved.LastCommand()
+	return !slices.ContainsFunc(usb, func(u installer.USBMixer) bool { return !u.UpdateMode })
+}
+
+// FlashedRecently reports that the last USB command in saved was a flash
+// sent in the last few minutes, now being Unix seconds, and newer than the
+// flash this app saw finish (settled, nil for none): the mixer may still be
+// updating.
+func FlashedRecently(saved *installer.Saved, settled *uint64, now uint64) bool {
+	if saved == nil {
+		return false
+	}
+	c := saved.LastCommand()
 	return c != nil &&
 		c.Command == "flash" &&
-		saturatingSub(nowUnix(), c.AtUnix) < updateWindow &&
-		(m.SettledFlash == nil || c.AtUnix > *m.SettledFlash)
+		saturatingSub(now, c.AtUnix) < updateWindow &&
+		(settled == nil || c.AtUnix > *settled)
 }
 
 func (m *Model) flashed() bool {
@@ -443,12 +467,6 @@ func (m *Model) Running() bool {
 	return m.Run != nil && m.Run.Failed == nil
 }
 
-// NeedsConfirmation reports whether starting changes the mixer's firmware,
-// which needs one confirmation first.
-func (m *Model) NeedsConfirmation() bool {
-	return !m.flashed()
-}
-
 func (m *Model) supportedChoice(choice *Choice) bool {
 	return choice != nil && slices.ContainsFunc(m.Releases, func(r installer.Release) bool {
 		return r.Supported && r.Channel == choice.Channel && r.Version == choice.Version
@@ -457,8 +475,15 @@ func (m *Model) supportedChoice(choice *Choice) bool {
 
 // CanStart reports whether a run can start now.
 func (m *Model) CanStart() bool {
+	return m.Privileged && m.CanStartOnceGranted()
+}
+
+// CanStartOnceGranted reports whether a run could start now if it had
+// administrator access: the start button asks for access first where it
+// is missing, then starts.
+func (m *Model) CanStartOnceGranted() bool {
 	if m.Stock {
-		return m.CanStartStock()
+		return m.canStartStock()
 	}
 	return m.canFlash() &&
 		m.supportedChoice(m.Choice) &&
@@ -466,9 +491,12 @@ func (m *Model) CanStart() bool {
 		containsSource(m.MixerOptions(), *m.Mixer)
 }
 
-// CanStartStock: stock firmware needs no mixer software or RC2FX support, so
-// it stays available when neither can be offered.
-func (m *Model) CanStartStock() bool {
+// CanStartStock reports whether stock firmware could be flashed now. It
+// needs no mixer software or RC2FX support, so it stays available when
+// neither can be offered.
+func (m *Model) CanStartStock() bool { return m.Privileged && m.canStartStock() }
+
+func (m *Model) canStartStock() bool {
 	return m.canFlash() &&
 		m.StockChoice != nil &&
 		slices.ContainsFunc(m.StockReleases, func(r installer.Release) bool {
@@ -476,11 +504,10 @@ func (m *Model) CanStartStock() bool {
 		})
 }
 
-// canFlash is what any flash needs: access, an idle page and exactly one
-// mixer.
+// canFlash is what any flash needs besides access: an idle page and at
+// most one mixer.
 func (m *Model) canFlash() bool {
-	return m.Privileged &&
-		m.Busy == nil &&
+	return m.Busy == nil &&
 		!m.Running() &&
 		m.Status != nil && m.Status.USBError == nil && len(m.Status.USB) <= 1 &&
 		(m.Device != firmware.ModelDuo || m.AllowDuo)
@@ -805,8 +832,14 @@ func (m *Model) WarningsFor(stock bool) []string {
 					*m.Installed, version))
 			}
 		case MixerChangeUnknown:
+			// The newest version on offer can't be older than a released
+			// one the mixer might have, so only an older choice is worth a
+			// word.
+			if m.newestMixer(*m.Mixer) {
+				break
+			}
 			warnings = append(warnings, fmt.Sprintf(
-				"RC2FX can't read which mixer software this mixer has. If it already has RC2FX, %s could be older than what it replaces.",
+				"The app can't tell which RC2FX version this mixer has, if any. If it has one, %s could be older than what it replaces.",
 				version))
 		}
 	}
@@ -821,6 +854,16 @@ func (m *Model) WarningsFor(stock bool) []string {
 			*m.InstalledFirmware, choice.Version))
 	}
 	return warnings
+}
+
+// newestMixer reports that no option is newer than source.
+func (m *Model) newestMixer(source MixerSource) bool {
+	for _, other := range m.MixerOptions() {
+		if c, ok := core.CompareVersions(source.Version(), other.Version()); !ok || c < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // SetStock chooses between firmware with RC2FX and unchanged RØDE firmware,
@@ -885,27 +928,76 @@ func (m *Model) Start() *installer.Request {
 		mixer = &source
 	}
 	m.Run = &Run{
-		Device: m.Device,
-		Serial: serial,
-		Mixer:  mixer,
+		Started: time.Now(),
+		Device:  m.Device,
+		Serial:  serial,
+		Mixer:   mixer,
+	}
+	if m.WantsStorageFix() {
+		m.Run.Fix = &RunFix{}
 	}
 	return m.advance()
 }
 
-// Retry continues a failed run from its step.
+// Retry starts a failed run again from the step the mixer's state calls for
+// now, not from the step that failed: following a failure's advice (a power
+// cycle, say) changes what is left to do. Steps already done (settings
+// saved, firmware ready) are not repeated.
 func (m *Model) Retry() *installer.Request {
 	if !m.Privileged {
 		return nil
 	}
 	run := m.Run
-	if run == nil || m.Busy != nil {
+	if run == nil || run.Failed == nil || m.Busy != nil {
 		return nil
 	}
+	m.replan()
+	m.recheckFirmware()
+	// The status this asks for carries the run on from the first step the
+	// mixer's state leaves undone.
+	return m.refresh()
+}
+
+// replan clears a failure and goes back to the first step, which advance
+// skips through to the first one the mixer's state leaves undone.
+func (m *Model) replan() {
+	run := m.Run
 	run.Failed = nil
 	run.Waiting = nil
-	m.recheckFirmware()
-	// Act on what the mixer reports now.
-	return m.refresh()
+	run.Cancelling = false
+	m.settingsRead = SettingsReadIdle
+	// Damaged files have no copy to restore them from on the mixer: only
+	// sending the firmware again fixes them.
+	if m.damaged() {
+		run.Flashed = false
+		m.ImageCheck, m.ImageCheckAnswered = nil, false
+	}
+	// A mixer back in normal mode before the flash is as it was, so the run
+	// can be stopped again.
+	run.Committed = run.Flashed || m.InUpdateMode()
+	run.Index = 0
+}
+
+func (m *Model) damaged() bool {
+	return m.ImageCheck != nil && m.ImageCheck.Status == core.ImageStatusDamaged
+}
+
+// RetryFrom is the step Retry would start from, judged from what the mixer
+// reports now; ok false without a failed run.
+func (m *Model) RetryFrom() (step Step, ok bool) {
+	if m.Run == nil || m.Run.Failed == nil {
+		return 0, false
+	}
+	plan := *m
+	run := *m.Run
+	plan.Run = &run
+	plan.replan()
+	for _, step := range Steps {
+		if !plan.satisfied(step) {
+			return step, true
+		}
+	}
+	return StepStart, true
 }
 
 // Stop ends the run.
@@ -925,20 +1017,6 @@ func (m *Model) Stop() {
 // firmware yet.
 func (m *Model) CanCancel() bool {
 	return m.Run != nil && !m.Run.Committed && !m.Run.Flashed && !m.Run.Cancelling
-}
-
-// StartOver goes back to choosing firmware after a finished run.
-func (m *Model) StartOver() {
-	if m.Busy == nil && m.Run == nil {
-		m.Finished = false
-		m.Last = nil
-	}
-}
-
-// WaitingAfterFlash reports that the firmware is flashed and the run only
-// waits for the mixer to come back.
-func (m *Model) WaitingAfterFlash() bool {
-	return m.Run != nil && m.flashed() && m.Run.Waiting != nil && m.Run.Failed == nil
 }
 
 // Cancelling reports a run cancelled while its request is in flight.
@@ -971,20 +1049,47 @@ func (m *Model) fail(message string) *installer.Request {
 	return nil
 }
 
-func (m *Model) wait(why string) *installer.Request {
+func (m *Model) wait(why string) *installer.Request { return m.waitFor(why, false) }
+
+// waitFor waits for the mixer, failing after waitLimit. A wait for a power
+// cycle is timed from when it was asked, not from the step's start.
+func (m *Model) waitFor(why string, powerCycle bool) *installer.Request {
 	run := m.Run
 	if run == nil {
 		return nil
 	}
 	since := time.Now()
-	if run.Waiting != nil {
+	if run.Waiting != nil && run.Waiting.PowerCycle == powerCycle {
 		since = run.Waiting.Since
 	}
 	if time.Since(since) > waitLimit {
-		return m.fail(fmt.Sprintf("%s The mixer did not get there in time; check it and retry.", why))
+		return m.fail(fmt.Sprintf("%s The mixer didn't get there in time. Check it, then press “Try again”.", why))
 	}
-	run.Waiting = &Waiting{Why: why, Since: since}
+	run.Waiting = &Waiting{Why: why, Since: since, PowerCycle: powerCycle}
 	return nil
+}
+
+// TakingLonger reports a wait the mixer hasn't ended in TakingLongerAfter:
+// the page then says so and lets the run be stopped. Every wait gets this
+// way out, whether or not RC2FX answers meanwhile.
+func (m *Model) TakingLonger(now time.Time) bool {
+	run := m.Run
+	return run != nil && run.Failed == nil && run.Waiting != nil &&
+		now.Sub(run.Waiting.Since) >= TakingLongerAfter
+}
+
+// CanStop reports that the run can be stopped now: before it touches the
+// mixer, after it failed, or once a wait is taking longer than usual.
+func (m *Model) CanStop(now time.Time) bool {
+	switch run := m.Run; {
+	case run == nil:
+		return false
+	case run.Failed != nil:
+		return m.Busy == nil
+	case m.CanCancel():
+		return true
+	}
+	return m.Busy == nil && m.TakingLonger(now)
 }
 
 // advance carries out the next unsatisfied step, or waits for the mixer.
@@ -1066,6 +1171,14 @@ func (m *Model) advance() *installer.Request {
 			})
 		case StepUSBMode:
 			usb := m.USB()
+			// The storage fix flashes the run's firmware itself, last; it
+			// needs the mixer in normal mode, as here.
+			if fix := run.Fix; fix != nil && fix.Reply == nil && fix.Error == "" &&
+				len(usb) == 1 && !usb[0].UpdateMode {
+				run.Committed = true
+				fix.Event = nil
+				return m.send(installer.Request{Kind: installer.RequestStorageFix, Final: true})
+			}
 			switch {
 			case len(usb) == 0:
 				return m.wait("Connect the mixer to this computer.")
@@ -1107,7 +1220,7 @@ func (m *Model) advance() *installer.Request {
 				case check != nil && check.Status == core.ImageStatusDamaged:
 					return m.fail(damagedMessage(check))
 				case check != nil && check.Status == core.ImageStatusRepaired:
-					return m.wait(repairedMessage(check))
+					return m.waitFor(repairedMessage(check), true)
 				}
 				return m.wait("RC2FX is running and is checking the files the flash installed. This takes a minute or two.")
 			}
@@ -1116,26 +1229,28 @@ func (m *Model) advance() *installer.Request {
 	}
 }
 
-func fileList(check *core.ImageCheck, names []string) string {
-	list := strings.Join(names, ", ")
-	if check.Unlisted > 0 {
-		list += fmt.Sprintf(" and %d more", check.Unlisted)
+// fileCount is how many files a check names, with the ones it left out.
+// Pages say how many, never which: file names mean nothing to the reader.
+func fileCount(check *core.ImageCheck, names []string) string {
+	n := len(names) + int(check.Unlisted)
+	if n == 1 {
+		return "1 of RØDE's files"
 	}
-	return list
+	return fmt.Sprintf("%d of RØDE's files", n)
 }
 
 // repairedMessage: RØDE's boot already ran with the damaged copies, so only
 // a restart brings the mixer up as RØDE intends.
 func repairedMessage(check *core.ImageCheck) string {
-	return fmt.Sprintf("The flash left some of RØDE's files damaged on the mixer, and RC2FX restored them from the mixer's previous system: %s. "+
-		"Turn the mixer off and on again to finish. Your settings are not affected; if the mixer asks for its initial setup, don't redo it, the restart brings it back.",
-		fileList(check, check.Repaired))
+	return fmt.Sprintf("The update damaged %s on the mixer, and RC2FX restored them from the mixer's previous system. "+
+		"Turn the mixer off and on again to finish. If the mixer asks for its initial setup, don't redo it: the restart brings it back.",
+		fileCount(check, check.Repaired))
 }
 
 func damagedMessage(check *core.ImageCheck) string {
-	return fmt.Sprintf("The flash left some of RØDE's files damaged on the mixer, and there was no identical copy to restore them from: %s. "+
-		"Stop, then install again to flash the mixer again. Until then the mixer may forget its setup at every restart, so don't redo it.",
-		fileList(check, check.Damaged))
+	return fmt.Sprintf("The update damaged %s on the mixer, and there was no undamaged copy on the mixer to restore them from. "+
+		"Press “Try again” to send the firmware again. Until then the mixer may forget its setup at every restart; don't redo it if it asks.",
+		fileCount(check, check.Damaged))
 }
 
 // usbModeSent reports whether the USB-mode command was sent in the last two
@@ -1148,15 +1263,16 @@ func (m *Model) usbModeSent() bool {
 	return c != nil && c.Command == "usb-mode" && saturatingSub(nowUnix(), c.AtUnix) < 120
 }
 
-// Tick polls: often while a run waits for the mixer, slowly otherwise so the
-// page follows USB and network changes.
+// Tick polls: often while a run waits for the mixer or has failed (a failed
+// page says what the mixer is doing now, and Try again starts from that),
+// slowly otherwise so the page follows USB and network changes.
 func (m *Model) Tick(now time.Time) *installer.Request {
-	if m.Busy != nil || m.polling() || (m.Run != nil && m.Run.Failed != nil) {
+	if m.Busy != nil || m.polling() {
 		return nil
 	}
 	var interval time.Duration
 	switch {
-	case m.Run != nil && m.Run.Waiting != nil:
+	case m.Run != nil && (m.Run.Waiting != nil || m.Run.Failed != nil):
 		interval = 3 * time.Second
 	case m.Run != nil:
 		return nil
@@ -1276,6 +1392,23 @@ func (m *Model) Finish(request installer.Request, reply installer.Reply, err err
 					release, wanted))
 			}
 		}
+	case installer.ReplyStorageFix:
+		if run := m.Run; run != nil && run.Fix != nil && r.StorageFix != nil {
+			fix := *r.StorageFix
+			run.Fix.Reply, run.Fix.Event = &fix, nil
+			switch {
+			case fix.FinalSent:
+				// The run's firmware is going onto the fixed slot.
+				run.Flashed = true
+			case fix.Touched:
+				// Stopped part way: what is left follows the mixer's state,
+				// and trying again installs with a normal flash.
+				m.fail(fmt.Sprintf("The storage fix stopped before it finished. %s", fix.Error))
+			default:
+				// The mixer was not touched: install with a normal flash.
+				run.Committed = run.Flashed || m.InUpdateMode()
+			}
+		}
 	case installer.ReplyBackup:
 		if m.Run != nil {
 			m.Run.BackedUp = true
@@ -1327,6 +1460,12 @@ func (m *Model) failed(request installer.Request, err error) *installer.Request 
 		}
 		m.InPlace = InPlace{Kind: InPlaceFailed, Error: message}
 		return nil
+	case installer.RequestStorageFix:
+		if run := m.Run; run != nil && run.Fix != nil {
+			run.Fix.Error, run.Fix.Event = e, nil
+		}
+		m.fail(e)
+		return m.refresh()
 	case installer.RequestReleases:
 		m.FirmwareCheck = FirmwareCheckDone
 		if cancelled(err) {
@@ -1365,12 +1504,14 @@ func (m *Model) receiveStatus(status installer.Status) *installer.Request {
 		}
 	}
 	// Opened during an update: wait for what was flashed. Only on opening,
-	// so a finished update never comes back. Stock firmware back in normal
-	// mode has nothing left to wait for.
+	// so a finished update never comes back, and only while the app sees no
+	// mixer in normal mode (recentlyFlashed): one there has nothing left to
+	// wait for.
 	if first && m.Run == nil && m.recentlyFlashed() {
-		if p := m.Prepared(); p != nil && !(p.Stock && m.usbOne(false) != nil) {
+		if p := m.Prepared(); p != nil {
 			m.Stock = p.Stock
 			m.Run = &Run{
+				Started:  time.Now(),
 				Device:   m.Device,
 				BackedUp: true,
 				Prepared: true,

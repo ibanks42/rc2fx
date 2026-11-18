@@ -158,17 +158,6 @@ func TestFlashCopiesVerifiesEjectsThenSendsU(t *testing.T) {
 }
 
 func TestAMixerWithAPlaceholderSerialIsNeverSwitchedOrFlashed(t *testing.T) {
-	for _, s := range []string{"RD0000000", "GV0000000"} {
-		if !placeholderSerial(s) {
-			t.Fatalf("%s", s)
-		}
-	}
-	for _, s := range []string{"GV0044100", serial, "", "RD", "rd0000000", "RD0000001"} {
-		if placeholderSerial(s) {
-			t.Fatalf("%s", s)
-		}
-	}
-
 	x := newFixture(t)
 	x.with(func(f *fake) { f.items[0].Serial = "RD0000000" })
 	err := x.engine.enterUSBMode("")
@@ -188,24 +177,6 @@ func TestAMixerWithAPlaceholderSerialIsNeverSwitchedOrFlashed(t *testing.T) {
 	if exists(filepath.Join(usb, "archive.tar.gz")) {
 		t.Fatal("nothing is copied to the drive")
 	}
-}
-
-func TestUpdateDriveSizeIsACeilingNotAConstant(t *testing.T) {
-	// 270 MB and 224 MB drives, as Windows showed them on two Pro IIs.
-	if !updateSize(volumeTotal) || !updateSize(224<<20) || !updateSize(diskBytes) {
-		t.Fatal("real drives refused")
-	}
-	if updateSize(diskBytes + 1) {
-		t.Fatal("larger than RØDE makes")
-	}
-	if updateSize(0) {
-		t.Fatal("the mixer's empty normal-mode drive")
-	}
-	must(t, fits(175<<20, 224<<20))
-	must(t, fits(224<<20, 224<<20))
-	err := fits((224<<20)+1, 224<<20)
-	contains(t, err, "225 MB")
-	contains(t, err, "224 MB")
 }
 
 func TestASmallerUpdateDriveIsFoundAndFlashed(t *testing.T) {

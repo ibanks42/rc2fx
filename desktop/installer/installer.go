@@ -63,9 +63,7 @@ const (
 	savedName   = "installer.json"
 	maxDownload = 600 << 20
 	maxSettings = 16 << 20
-	diskBytes   = 560_000 * 512
 	keyMember   = "home/root/.ssh/authorized_keys"
-	second      = time.Second
 )
 
 // Error is an installer error: its text is what the user sees.
@@ -309,6 +307,11 @@ type Progress struct {
 	Completed uint64   `json:"completed"`
 	Total     uint64   `json:"total"`
 	Detail    string   `json:"detail"`
+	// Flash and Carrier say which of the storage fix's flashes a
+	// StorageFixPhase event belongs to: its number from 1, and whether it
+	// carries the fix's script. Flash is 0 outside a flash.
+	Flash   int  `json:"flash"`
+	Carrier bool `json:"carrier"`
 }
 
 // Cancelled is the error of a request stopped through Engine.Cancel.
@@ -413,7 +416,12 @@ func (e *Engine) Handle(request Request) (Reply, error) {
 	}
 	defer unlock()
 	if e.source.Kind == SourceDownload {
-		switch request.Kind {
+		kind := request.Kind
+		// The fix checks the prepared firmware only when it flashes it.
+		if kind == RequestStorageFix && request.Final {
+			kind = RequestFlash
+		}
+		switch kind {
 		case RequestReleases, RequestPrepare, RequestVerify, RequestEnterUSBMode, RequestFlash:
 			work := e.Work
 			e.step("firmware-check", "Checking signed firmware profiles")
@@ -616,6 +624,12 @@ func (e *Engine) Handle(request Request) (Reply, error) {
 			return Reply{}, err
 		}
 		return Reply{Kind: ReplyRepaired, Repaired: result}, nil
+	case RequestStorageFix:
+		fix, err := e.storageFix(request.Final, request.FixDebug && fixDebugAllowed)
+		if err != nil {
+			return Reply{}, err
+		}
+		return Reply{Kind: ReplyStorageFix, StorageFix: fix}, nil
 	}
 	return Reply{}, errorf("unknown request %d", request.Kind)
 }

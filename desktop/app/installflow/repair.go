@@ -6,7 +6,8 @@ package installflow
 // power button for 15 seconds so the bootloader shows the mixer's storage
 // over USB; the administrator helper then checks it and restores damaged
 // files (the installer's repair). The page (app/repair.go) is reached from
-// the first screen whenever RC2FX isn't running.
+// the first screen while the mixer is in storage mode, on systems that can
+// repair it (installer.RepairSupported).
 
 import (
 	"fmt"
@@ -48,6 +49,8 @@ type Repair struct {
 	LastLook time.Time
 	// Disk is the size of the mixer's storage while it is visible.
 	Disk *uint64
+	// Wrote: a repair was started, so the mixer may have been written to.
+	Wrote bool
 }
 
 // NewRepair is a page waiting for the mixer's storage.
@@ -116,9 +119,10 @@ func (r *Repair) StartRepair() (installer.Request, bool) {
 	if r.Stage.Kind != RepairFindings || r.Stage.Findings == nil {
 		return installer.Request{}, false
 	}
-	files := r.Stage.Findings.Targets()
+	targets := r.Stage.Findings.Targets()
 	r.Stage = RepairStage{Kind: RepairRepairing}
-	return installer.Request{Kind: installer.RequestRepair, Files: files}, true
+	r.Wrote = true
+	return installer.Request{Kind: installer.RequestRepair, Files: targets}, true
 }
 
 // Outcome is a finished repair request.
@@ -137,72 +141,74 @@ func (r *Repair) Outcome(request installer.Request, reply installer.Reply, err e
 	}
 }
 
-// RepairMark is how far one step of the sidebar is.
-type RepairMark int
-
-const (
-	RepairMarkDone RepairMark = iota
-	RepairMarkNow
-	RepairMarkFailed
-	RepairMarkPending
-)
-
-// RepairStep is one step of the sidebar.
-type RepairStep struct {
-	Title string
-	Mark  RepairMark
-}
-
-var repairTitles = [5]string{
-	"Administrator access",
-	"Storage mode",
+var repairTitles = [4]string{
+	"Put the mixer in storage mode",
 	"Check",
 	"Back up and repair",
 	"Restart the mixer",
 }
 
-// Steps is the sidebar: the access step only where access applies
-// (accessStep), and how far the page got.
-func (r *Repair) Steps(accessStep, needAccess bool) []RepairStep {
-	var reached int
-	switch {
-	case needAccess:
-		reached = 0
-	case r.Stage.Kind == RepairWaiting:
-		reached = 1
-	case r.Stage.Kind == RepairChecking || r.Stage.Kind == RepairFailed:
-		reached = 2
-	// Nothing to restore: what is left is leaving storage mode.
-	case r.Stage.Kind == RepairFindings && r.Stage.Findings != nil && r.Stage.Findings.Repairable() == 0:
-		reached = 4
-	case r.Stage.Kind == RepairFindings || r.Stage.Kind == RepairRepairing:
-		reached = 3
-	default: // RepairDone
-		reached = 4
-	}
+// Steps is the sidebar: how far the page got. Administrator access is
+// asked for by the button that starts the check, so it has no step.
+func (r *Repair) Steps() []TaskStep {
+	reached := r.Step()
 	failed := r.Stage.Kind == RepairFailed
-	var steps []RepairStep
+	steps := make([]TaskStep, len(repairTitles))
 	for i, title := range repairTitles {
-		if i == 0 && !accessStep {
-			continue
-		}
-		mark := RepairMarkPending
+		mark := MarkToCome
 		switch {
 		case i < reached:
-			mark = RepairMarkDone
+			mark = MarkDone
 		case i == reached && failed:
-			mark = RepairMarkFailed
+			mark = MarkFailed
 		case i == reached:
-			mark = RepairMarkNow
+			mark = MarkNow
 		}
-		steps = append(steps, RepairStep{Title: title, Mark: mark})
+		steps[i] = TaskStep{Title: title, Mark: mark}
 	}
 	return steps
 }
 
-// RepairAccessPurpose is what the access card says administrator access is
-// for on the repair page.
-const RepairAccessPurpose = "Administrator access lets RC2FX read the mixer's storage while it is in storage mode, and restore damaged files."
+// RepairStepCount is the number of the repair's steps.
+const RepairStepCount = len(repairTitles)
+
+// Step is the step the page is at, from 0: the findings are the check's
+// result, and a failed request is at the step that failed.
+func (r *Repair) Step() int {
+	switch {
+	case r.Stage.Kind == RepairWaiting:
+		return 0
+	// Nothing to restore: what is left is leaving storage mode.
+	case r.Stage.Kind == RepairFindings && r.Stage.Findings != nil && r.Stage.Findings.Repairable() == 0:
+		return 3
+	case r.Stage.Kind == RepairChecking || r.Stage.Kind == RepairFindings || (r.Stage.Kind == RepairFailed && !r.Wrote):
+		return 1
+	case r.Stage.Kind == RepairRepairing || r.Stage.Kind == RepairFailed:
+		return 2
+	}
+	return 3 // RepairDone
+}
+
+// Unplug says whether the mixer may be unplugged: not while the app reads
+// or writes it, nor after a repair that didn't finish.
+func (r *Repair) Unplug() Unplug {
+	switch r.Stage.Kind {
+	case RepairWaiting:
+		return Unplug{Kind: UnplugYes, Reason: "nothing has changed yet"}
+	case RepairChecking:
+		return Unplug{Reason: "the app is reading the mixer"}
+	case RepairRepairing:
+		return Unplug{Reason: "the app is writing to the mixer"}
+	case RepairFindings:
+		return Unplug{Kind: UnplugYes, Reason: "nothing has been written"}
+	case RepairDone:
+		return Unplug{Kind: UnplugYes, Reason: "that is the next step"}
+	}
+	if r.Wrote {
+		return Unplug{Reason: "the repair didn't finish"}
+	}
+	return Unplug{Kind: UnplugYes, Reason: "nothing has been written"}
+}
 
 // FindingsDamaged is the number of damaged files on both roots.
 func FindingsDamaged(f *installer.RepairFindings) int {
@@ -213,6 +219,14 @@ func FindingsDamaged(f *installer.RepairFindings) int {
 	return n
 }
 
+// files is "1 damaged file" or "n damaged files".
+func files(n int, what string) string {
+	if n == 1 {
+		return "1 " + what + " file"
+	}
+	return fmt.Sprintf("%d %s files", n, what)
+}
+
 // FindingsTitle is the findings' heading.
 func FindingsTitle(f *installer.RepairFindings) string {
 	damaged, repairable := FindingsDamaged(f), f.Repairable()
@@ -220,43 +234,72 @@ func FindingsTitle(f *installer.RepairFindings) string {
 	case damaged == 0:
 		return "No damaged files found"
 	case repairable == 0:
-		return "Found damaged files RC2FX can't restore"
-	case repairable == 1:
-		return "Found 1 damaged file"
+		return "Damaged files the app can’t restore"
 	}
-	return fmt.Sprintf("Found %d damaged files", repairable)
+	return files(repairable, "damaged") + " found"
 }
 
 // FindingsExplanation is the sentence under the findings' heading.
 func FindingsExplanation(f *installer.RepairFindings) string {
+	damaged, repairable := FindingsDamaged(f), f.Repairable()
 	switch {
-	case FindingsDamaged(f) == 0:
-		return "Nothing on the mixer's system needs restoring. If it still forgets its setup, its settings partition may be the problem."
-	case f.Repairable() == 0:
-		return "RC2FX only restores a file from an identical copy, so it leaves these alone. Flashing the mixer again replaces the whole system."
+	case damaged == 0:
+		return "Nothing on the mixer’s system needs restoring. If it still forgets its setup, its settings may be the problem."
+	case repairable == 0:
+		return "The app only restores a file from an identical copy, and has none for these, so it leaves them alone. Installing the firmware again replaces the whole system."
+	case repairable == 1:
+		return "It can be restored from an identical copy. Only that file is written, after your settings are copied to this computer."
+	case repairable == 2:
+		return "Both can be restored from identical copies. Only those files are written, after your settings are copied to this computer."
 	}
-	return "Restoring writes only the damaged files, with byte-identical copies, after copying the settings partition to this computer."
+	return "All of them can be restored from identical copies. Only those files are written, after your settings are copied to this computer."
 }
 
-// SettingsLine is the findings' line about the settings partition.
-func SettingsLine(f *installer.RepairFindings) string {
-	if f.SettingsOK {
-		return "Settings partition looks healthy: your setup is still there."
-	}
-	return "Settings partition looks damaged. RC2FX doesn't repair it, but copies it to this computer first."
+// FindingLine is one line of the findings, in plain words; Good when it is
+// as it should be.
+type FindingLine struct {
+	Good   bool
+	Strong bool
+	Text   string
 }
 
-// RootLine is the findings' line for a root with no damaged files.
-func RootLine(root installer.RootFindings) string {
-	return fmt.Sprintf("System partition %d: no damaged files (compared with %s).", root.Index, root.Reference)
-}
-
-// DamagedLine is the findings' line for one damaged file.
-func DamagedLine(root installer.RootFindings, file installer.DamagedFile) string {
-	if file.Why == nil {
-		return fmt.Sprintf("System partition %d: %s is damaged; an identical copy restores it.", root.Index, file.Path)
+// FindingLines is the findings in plain words: the settings, then each of
+// the mixer's two copies of its system. No file names or partition
+// numbers.
+func FindingLines(f *installer.RepairFindings) []FindingLine {
+	lines := []FindingLine{{Good: true, Text: "Mixer settings: readable. They are copied to this computer first."}}
+	if !f.SettingsOK {
+		lines[0] = FindingLine{Text: "Mixer settings: they look damaged. The app doesn’t repair them, but copies them to this computer first."}
 	}
-	return fmt.Sprintf("System partition %d: %s is damaged, and %s.", root.Index, file.Path, *file.Why)
+	for n, root := range f.Roots {
+		name := "First system copy"
+		if n > 0 {
+			name = "Second system copy"
+		}
+		repairable := 0
+		for _, d := range root.Damaged {
+			if d.Why == nil {
+				repairable++
+			}
+		}
+		left := len(root.Damaged) - repairable
+		switch {
+		case len(root.Damaged) == 0:
+			lines = append(lines, FindingLine{Good: true, Text: name + ": no damage."})
+		case left == 0 && repairable == 1:
+			lines = append(lines, FindingLine{Strong: true, Text: name + ": 1 damaged file, which can be restored."})
+		case left == 0:
+			lines = append(lines, FindingLine{Strong: true, Text: fmt.Sprintf("%s: %s, all can be restored.", name, files(repairable, "damaged"))})
+		case repairable == 0:
+			lines = append(lines, FindingLine{Strong: true, Text: fmt.Sprintf("%s: %s the app can’t restore.", name, files(left, "damaged"))})
+		default:
+			lines = append(lines, FindingLine{Strong: true, Text: fmt.Sprintf("%s: %s; %d can be restored, %d can’t.", name, files(len(root.Damaged), "damaged"), repairable, left)})
+		}
+		if root.Unclean {
+			lines = append(lines, FindingLine{Text: name + " wasn’t shut down cleanly, so the app writes nothing to it."})
+		}
+	}
+	return lines
 }
 
 // DoneTitle is the heading after a repair.
@@ -264,5 +307,8 @@ func DoneTitle(result *installer.RepairResult) string {
 	if len(result.Repaired) == 0 {
 		return "Nothing was restored"
 	}
-	return "Repaired. One last step."
+	if len(result.Repaired) == 1 {
+		return "1 file restored"
+	}
+	return fmt.Sprintf("%d files restored", len(result.Repaired))
 }

@@ -94,22 +94,6 @@ func service(files Bundle, state []byte) Service {
 	return Service{Kind: ServiceReady}
 }
 
-// EntryKind is a directory or a file.
-type EntryKind int
-
-const (
-	EntryDir EntryKind = iota
-	EntryFile
-)
-
-// Entry is a file or directory to add to the firmware image.
-type Entry struct {
-	Kind EntryKind
-	Path string
-	Mode uint32
-	Data []byte
-}
-
 // imageEntries is what RC2FX adds to the root filesystem: the same layout
 // `install.sh` creates on a running mixer, with autostart, and optional
 // saved settings. Returns the entries and the runtime digest (recorded as

@@ -45,26 +45,6 @@ func TestFoundCopyRequiresTheSpecificDeviceDiscoveryOutcome(t *testing.T) {
 	}
 }
 
-func TestARetryKeepsTheLastConnectionObservationVisible(t *testing.T) {
-	failure := "The mixer is connected, but RC2FX isn't running on it"
-	if c, _ := connectionStatus(true, ""); c != Accent {
-		t.Fatalf("listening colour %06x", c)
-	}
-	// Before, during and after a background retry with no new result:
-	for range 3 {
-		c, text := connectionStatus(true, failure)
-		if c != Warn || text != "Last check: "+failure {
-			t.Fatalf("(%06x, %q)", c, text)
-		}
-	}
-	if c, _ := connectionStatus(false, failure); c != Faint {
-		t.Fatalf("disconnected colour %06x", c)
-	}
-	if _, text := connectionStatus(true, "USB check failed"); text != "Last check: USB check failed" {
-		t.Fatalf("%q", text)
-	}
-}
-
 func viewString(t *testing.T, view viewPrefs, key string) string {
 	t.Helper()
 	v, ok := view[key]

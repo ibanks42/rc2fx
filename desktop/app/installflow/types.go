@@ -290,10 +290,16 @@ type Choice struct {
 type Waiting struct {
 	Why   string
 	Since time.Time
+	// PowerCycle: the mixer has to be switched off and on by hand. Its wait
+	// is timed on its own, from when that was asked.
+	PowerCycle bool
 }
 
 // Run is a plan being carried out.
 type Run struct {
+	// Started is when the run started (or, for one picked up after the app
+	// restarted, when it was picked up).
+	Started time.Time
 	Index   int
 	Failed  *string
 	Waiting *Waiting
@@ -315,7 +321,38 @@ type Run struct {
 	// Cancelling: cancelled while a request was in flight; stops when it
 	// returns.
 	Cancelling bool
+	// Fix is the storage fix this run does before installing, nil for a
+	// run without it (decided at Start, see WantsStorageFix).
+	Fix *RunFix
 }
+
+// RunFix is the storage fix inside an install: RØDE's archive with the
+// fix's script, then the run's own firmware on the fixed slot, both in one
+// request (installer.RequestStorageFix with Final).
+type RunFix struct {
+	// Reply is what the fix did, once it ran.
+	Reply *installer.StorageFix
+	// Error is why the request failed, when it did: the install then goes
+	// on with a normal flash.
+	Error string
+	// Event is the fix's newest progress while it runs.
+	Event *installer.Progress
+}
+
+// FixPolicy is whether an install fixes the mixer's storage first.
+type FixPolicy int
+
+const (
+	// FixNever: never. The zero value: a model runs the fix only when the
+	// app that runs its requests says so (development: hardware tests that
+	// flash repeatedly keep it off).
+	FixNever FixPolicy = iota
+	// FixAuto: on a Pro II the app can't ask for its partition table, which
+	// is one without RC2FX running.
+	FixAuto
+	// FixAlways: on any Pro II in normal mode (development).
+	FixAlways
+)
 
 const (
 	// updateWindow is how long after a flash the mixer counts as still
@@ -323,6 +360,10 @@ const (
 	updateWindow = 20 * 60
 	// waitLimit is how long to wait for the mixer before reporting it.
 	waitLimit = 20 * time.Minute
+	// TakingLongerAfter is how long a wait with no answer from the mixer
+	// lasts before the page says it is taking longer than usual and offers
+	// a way out.
+	TakingLongerAfter = 6 * time.Minute
 )
 
 // SettingsRead is reading RC2FX's settings over the app's USB connection,

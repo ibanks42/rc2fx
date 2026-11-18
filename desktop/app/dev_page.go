@@ -29,9 +29,11 @@ func (a *App) openDevPage(cx *gk.Cx) {
 		a.setSettingsOpen(true)
 		a.diagnosticsOpen = true
 	case DevPageInstaller:
-		a.toggleInstallerPage(cx)
+		a.openTask(cx, taskInstall)
 	case DevPageRepair:
 		a.openRepair(cx)
+	case DevPageFlow:
+		a.openFlowFixture(cx, page.Name)
 	case DevPageChannel:
 		names := make([][2]string, len(a.session.Draft))
 		for i, t := range a.session.Draft {

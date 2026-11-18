@@ -1,7 +1,7 @@
 package app
 
-// Live editing (model/live.go): every edit is heard at once as a live preview
-// and saved once edits stop; undo, redo and a channel's Revert put earlier
+// Live editing (model/live.go): every edit goes onto the running audio at
+// once and is saved once edits stop; undo, redo and a channel's Revert put earlier
 // settings back the same way. A change that needs the audio engine restarted
 // is asked about first, then saved.
 
@@ -17,8 +17,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// syncLive runs once per poll: it notes edits, sends the newest one as a
-// preview, asks about a change that needs a restart, and saves once edits
+// syncLive runs once per poll: it notes edits, sends the newest one live, asks about a change that needs a restart, and saves once edits
 // stop.
 func (a *App) syncLive(cx *gk.Cx) {
 	if !a.session.Connected || a.session.Saved == nil {
@@ -32,24 +31,28 @@ func (a *App) syncLive(cx *gk.Cx) {
 	a.live.Saved(saved)
 	if !a.streamConnected || a.session.Conflict || a.pending != nil || a.presets.busy() || a.fileBusy ||
 		a.transitionBusy() || a.restartAsked {
+		a.logHeld(fmt.Sprintf("held: stream %v conflict %v pending %v presets %v file %v transition %v restartAsked %v",
+			a.streamConnected, a.session.Conflict, a.pending != nil, a.presets.busy(), a.fileBusy, a.transitionBusy(), a.restartAsked))
 		return
 	}
-	switch a.live.NextPreview(draft, saved, now) {
-	case model.PreviewSend:
+	a.logHeld("")
+	switch a.live.NextLive(draft, saved, now) {
+	case model.LiveSend:
 		pending, err := a.session.BeginApply()
-		if err != nil || !a.command(transport.CommandPreview{Generation: a.generation, Update: pending.Request}) {
+		saveLogf("live edit sent (err %v)", err)
+		if err != nil || !a.command(transport.CommandLive{Generation: a.generation, Update: pending.Request}) {
 			// Not sendable now (a transition, a lost link): try again shortly.
-			a.live.PreviewAnswered(false, false, true, false, now)
+			a.live.LiveAnswered(false, false, true, false, now)
 		}
 		return
-	case model.PreviewRestart:
+	case model.LiveRestart:
 		if a.live.Quiet(now) >= restartAskDelay {
 			a.askRestart(cx)
 		}
 		return
 	}
 	if a.live.SaveDue(draft, saved, a.session.Dirty(), now) {
-		if a.live.Support == model.PreviewNo && core.PreviewNeedsSave(saved, draft) {
+		if a.live.Support == model.LiveNo && core.LiveNeedsSave(saved, draft) {
 			a.askRestart(cx)
 			return
 		}
@@ -80,7 +83,7 @@ func (a *App) askRestart(cx *gk.Cx) {
 		if a.pending == nil && a.session.Saved != nil {
 			// Cancelled: back to what plays.
 			running := a.live.Running(a.session.Saved.Config.Targets)
-			if core.PreviewNeedsSave(running, a.session.Draft) {
+			if core.LiveNeedsSave(running, a.session.Draft) {
 				a.session.Draft = core.CloneTargets(running)
 				a.rebuildEditors(cx)
 			}
@@ -89,17 +92,18 @@ func (a *App) askRestart(cx *gk.Cx) {
 	})
 }
 
-// previewReply takes the mixer's answer to a preview.
-func (a *App) previewReply(cx *gk.Cx, k transport.EventKindPreviewed) {
-	needsSave := a.live.PreviewAnswered(k.Result == transport.PreviewAccepted,
-		k.Result == transport.PreviewUnsupported, k.Result == transport.PreviewBusy,
-		k.Result == transport.PreviewNeedsSave, time.Now())
+// liveReply takes the mixer's answer to a live edit.
+func (a *App) liveReply(cx *gk.Cx, k transport.EventKindLiveApplied) {
+	saveLogf("live edit answered: %v %s", k.Result, k.Message)
+	needsSave := a.live.LiveAnswered(k.Result == transport.LiveAccepted,
+		k.Result == transport.LiveUnsupported, k.Result == transport.LiveBusy,
+		k.Result == transport.LiveNeedsSave, time.Now())
 	switch k.Result {
-	case transport.PreviewConflict:
+	case transport.LiveConflict:
 		// As for a refused save: read the settings, keep the edits.
 		a.session.Conflict = true
 		a.awaitingRefresh = a.command(transport.CommandRefresh{Generation: a.generation})
-	case transport.PreviewFailed:
+	case transport.LiveFailed:
 		a.message = k.Message
 	}
 	if needsSave && !a.restartAsked {

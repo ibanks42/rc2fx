@@ -65,7 +65,7 @@ func stageSummary(target *core.Target, effect core.Effect, channel core.Channel)
 		}
 		return fmt.Sprintf("%.0f%% blend%s", target.Suppression.Wet*100, gate)
 	case core.EffectGain:
-		return fmt.Sprintf("%+.1f dB", target.Gain.DB)
+		return fmt.Sprintf("%+.2f dB", target.Gain.DB)
 	case core.EffectHighpass:
 		return formatHz(target.Highpass.Frequency)
 	case core.EffectEQ:

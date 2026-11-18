@@ -2,7 +2,7 @@ package core
 
 import "testing"
 
-func TestPreviewNeedsSave(t *testing.T) {
+func TestLiveNeedsSave(t *testing.T) {
 	base := func() []Target {
 		return []Target{{ID: "mic-1", Kind: TargetKindMic, Channels: 1,
 			Order: []Effect{EffectHighpass, EffectSuppression, EffectEQ}}}
@@ -23,7 +23,7 @@ func TestPreviewNeedsSave(t *testing.T) {
 	for _, c := range cases {
 		running, candidate := base(), base()
 		c.edit(candidate)
-		if got := PreviewNeedsSave(running, candidate); got != c.want {
+		if got := LiveNeedsSave(running, candidate); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -31,12 +31,12 @@ func TestPreviewNeedsSave(t *testing.T) {
 	running, candidate := base(), base()
 	running[0].Suppression.Enabled, candidate[0].Suppression.Enabled = true, true
 	candidate[0].Order = []Effect{EffectEQ, EffectHighpass, EffectSuppression}
-	if !PreviewNeedsSave(running, candidate) {
+	if !LiveNeedsSave(running, candidate) {
 		t.Error("order with suppression on: want a save")
 	}
 	candidate = base()
 	candidate[0].Suppression.Enabled, candidate[0].Suppression.Lookahead = true, 1
-	if !PreviewNeedsSave(running, candidate) {
+	if !LiveNeedsSave(running, candidate) {
 		t.Error("lookahead with suppression on: want a save")
 	}
 }

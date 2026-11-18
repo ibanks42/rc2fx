@@ -1,7 +1,7 @@
 package app
 
-// installer/signature.rs: the decorative signature line of the onboarding
-// and installer screens. Its maths (which picture, the line's shape) is in
+// installer/signature.rs: the decorative signature line of the first
+// screen. Its maths (which picture, the line's shape) is in
 // installflow/signature.go; this draws it as a gk.Plot
 // at the pixel positions the Rust's canvas paint computed.
 
@@ -20,12 +20,6 @@ import (
 // it. There is one signature view in the app (App.onboardingSignature), so
 // one size. UI thread only.
 var signatureSize gk.GpuiSize
-
-// signatureElement is signature::element: the signature for the installer
-// page's state.
-func signatureElement(i *Installer, phase float32) gk.Element {
-	return signaturePaint(installflow.SignatureStateOf(i.model, i.progress), phase)
-}
 
 // signatureScene is signature::scene: the connection screen's signature,
 // ready once a mixer is found.

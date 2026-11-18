@@ -1,7 +1,8 @@
 package model
 
-// Live editing: every edit is heard at once (a live preview on the mixer)
-// and saved once edits stop, with undo in steps and a checkpoint per channel
+// Live editing: every edit goes onto the mixer's running audio at once
+// and is saved once edits stop (the mixer keeps what plays if the app goes
+// away first), with undo in steps and a checkpoint per channel
 // to go back to. This file does not import gk: the app's poll drives it.
 
 import (
@@ -10,15 +11,15 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// PreviewSupport is whether the mixer takes live previews.
-type PreviewSupport int
+// LiveSupport is whether the mixer takes live edits.
+type LiveSupport int
 
 const (
-	PreviewUnknown PreviewSupport = iota
-	PreviewYes
-	// PreviewNo: an older mixer (no api/v1/preview). Edits are saved shortly
+	LiveUnknown LiveSupport = iota
+	LiveYes
+	// LiveNo: an older mixer (no api/v1/live). Edits are saved shortly
 	// after they stop instead.
-	PreviewNo
+	LiveNo
 )
 
 const (
@@ -27,18 +28,14 @@ const (
 	UndoGroup = 2 * time.Second
 	// SaveDelay is how long after the last edit the settings are saved.
 	SaveDelay = 2 * time.Second
-	// SaveDelayWithoutPreview is SaveDelay for a mixer without preview, where
+	// SaveDelayWithoutLive is SaveDelay for a mixer without live editing, where
 	// nothing is heard until it saves.
-	SaveDelayWithoutPreview = 600 * time.Millisecond
+	SaveDelayWithoutLive = 600 * time.Millisecond
 	// CheckpointQuiet is how long a channel goes without edits before its
 	// next edit starts a new checkpoint.
 	CheckpointQuiet = 10 * time.Minute
-	// UnsmoothedSettle is how long compressor and limiter edits rest before
-	// they are previewed: their settings are not smoothed on the mixer, so
-	// they go out once a drag pauses, not at every step of it.
-	UnsmoothedSettle = 300 * time.Millisecond
-	// PreviewRetry is the wait after the mixer said it was busy.
-	PreviewRetry = 250 * time.Millisecond
+	// LiveRetry is the wait after the mixer said it was busy.
+	LiveRetry = 250 * time.Millisecond
 	// undoLimit is the most undo steps kept.
 	undoLimit = 200
 )
@@ -51,11 +48,11 @@ type Checkpoint struct {
 
 // Live is the live-editing state of one connection.
 type Live struct {
-	Support PreviewSupport
-	// running is what the audio plays when a preview differs from the saved
+	Support LiveSupport
+	// running is what the audio plays when a live edit differs from the saved
 	// settings; nil when it plays the saved settings.
 	running []core.Target
-	// inFlight: a preview was sent and has no answer yet; sent is it.
+	// inFlight: a live edit was sent and has no answer yet; sent is it.
 	inFlight bool
 	sent     []core.Target
 	retryAt  time.Time
@@ -164,7 +161,7 @@ func (l *Live) CheckpointOf(id string) (core.Target, bool) {
 	return cp.Target.Clone(), ok
 }
 
-// Running is what the audio plays: the preview, or else saved.
+// Running is what the audio plays: the live edit, or else saved.
 func (l *Live) Running(saved []core.Target) []core.Target {
 	if l.running != nil {
 		return l.running
@@ -172,57 +169,54 @@ func (l *Live) Running(saved []core.Target) []core.Target {
 	return saved
 }
 
-// PreviewStep is what to do with the draft now.
-type PreviewStep int
+// LiveStep is what to do with the draft now.
+type LiveStep int
 
 const (
-	PreviewNothing PreviewStep = iota
-	// PreviewSend: send the draft as a preview (NextPreview marked it sent).
-	PreviewSend
-	// PreviewRestart: the draft needs the engine restarted, so only a save
+	LiveNothing LiveStep = iota
+	// LiveSend: send the draft as a live edit (NextLive marked it sent).
+	LiveSend
+	// LiveRestart: the draft needs the engine restarted, so only a save
 	// can make it heard.
-	PreviewRestart
+	LiveRestart
 )
 
-// NextPreview is what to do with draft at now, given the saved targets.
-func (l *Live) NextPreview(draft, saved []core.Target, now time.Time) PreviewStep {
-	if l.Support == PreviewNo || l.inFlight || now.Before(l.retryAt) {
-		return PreviewNothing
+// NextLive is what to do with draft at now, given the saved targets.
+func (l *Live) NextLive(draft, saved []core.Target, now time.Time) LiveStep {
+	if l.Support == LiveNo || l.inFlight || now.Before(l.retryAt) {
+		return LiveNothing
 	}
 	running := l.Running(saved)
 	if TargetsEqual(draft, running) {
-		return PreviewNothing
+		return LiveNothing
 	}
-	if core.PreviewNeedsSave(running, draft) {
-		return PreviewRestart
-	}
-	if unsmoothedChange(running, draft) && now.Sub(l.lastChange) < UnsmoothedSettle {
-		return PreviewNothing
+	if core.LiveNeedsSave(running, draft) {
+		return LiveRestart
 	}
 	l.inFlight = true
 	l.sent = core.CloneTargets(draft)
-	return PreviewSend
+	return LiveSend
 }
 
-// PreviewAnswered takes the mixer's answer to the preview in flight. It
+// LiveAnswered takes the mixer's answer to the live edit in flight. It
 // reports whether the change needs a save instead (the mixer refused it as
 // needing a restart).
-func (l *Live) PreviewAnswered(accepted, unsupported, busy, needsSave bool, now time.Time) bool {
+func (l *Live) LiveAnswered(accepted, unsupported, busy, needsSave bool, now time.Time) bool {
 	l.inFlight = false
 	switch {
 	case accepted:
-		l.Support = PreviewYes
+		l.Support = LiveYes
 		l.running = l.sent
 	case unsupported:
-		l.Support = PreviewNo
+		l.Support = LiveNo
 	case busy:
-		l.retryAt = now.Add(PreviewRetry)
+		l.retryAt = now.Add(LiveRetry)
 	}
 	l.sent = nil
 	return needsSave
 }
 
-// Saved takes newly saved settings: a preview that matches them is now just
+// Saved takes newly saved settings: a live edit that matches them is now just
 // the saved settings.
 func (l *Live) Saved(saved []core.Target) {
 	if l.running != nil && TargetsEqual(l.running, saved) {
@@ -231,21 +225,21 @@ func (l *Live) Saved(saved []core.Target) {
 }
 
 // SaveDue is whether to save now: the draft differs from the saved settings
-// (dirty), edits stopped long enough ago, no preview is in flight, and the
+// (dirty), edits stopped long enough ago, no live edit is in flight, and the
 // audio already plays the draft (so the save changes nothing heard) or the
-// mixer has no preview.
+// mixer has no live editing.
 func (l *Live) SaveDue(draft, saved []core.Target, dirty bool, now time.Time) bool {
 	if !dirty || l.inFlight {
 		return false
 	}
 	delay := SaveDelay
-	if l.Support == PreviewNo {
-		delay = SaveDelayWithoutPreview
+	if l.Support == LiveNo {
+		delay = SaveDelayWithoutLive
 	}
 	if now.Sub(l.lastChange) < delay {
 		return false
 	}
-	return l.Support == PreviewNo || TargetsEqual(draft, l.Running(saved))
+	return l.Support == LiveNo || TargetsEqual(draft, l.Running(saved))
 }
 
 // Quiet is how long since the draft last changed.
@@ -262,21 +256,6 @@ func TargetsEqual(a, b []core.Target) bool {
 		}
 	}
 	return true
-}
-
-// unsmoothedChange is whether draft changes a compressor or limiter from
-// running.
-func unsmoothedChange(running, draft []core.Target) bool {
-	for i := range draft {
-		now := targetByID(running, draft[i].ID)
-		if now == nil {
-			continue
-		}
-		if now.Compressor != draft[i].Compressor || now.Limiter != draft[i].Limiter {
-			return true
-		}
-	}
-	return false
 }
 
 func targetByID(targets []core.Target, id string) *core.Target {

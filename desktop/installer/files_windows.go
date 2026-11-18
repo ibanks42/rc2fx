@@ -9,22 +9,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// noFollow has no Windows equivalent here; reparse points are not followed
-// by the checks that matter (the cache folder is the user's own).
-const noFollow = 0
-
-func replaceLocalFile(temp, path string) error {
-	from, err := windows.UTF16PtrFromString(temp)
-	if err != nil {
-		return err
-	}
-	to, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	return windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
-}
-
 // lockAction takes an exclusive, non-blocking lock on file; the returned
 // function releases it.
 func lockAction(file *os.File) (func(), error) {

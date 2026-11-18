@@ -13,7 +13,7 @@ package transport
 // marked synthetic so the channel editor labels its live readings as
 // simulated.
 //
-// It answers 404 to `api/v1/ssh`, as a mixer without SSH management does, so
+// It manages SSH access as a current mixer does, but reports no host keys, so
 // the app never pins a made-up host key among the real ones.
 
 import (
@@ -53,7 +53,7 @@ const mockFirmwareProfile = "rodecaster-pro-ii-1.7.7"
 
 // mockRuntime stands for the Rust crate's CARGO_PKG_VERSION, which the mock
 // reports as the runtime's version.
-const mockRuntime = "0.1.7"
+const mockRuntime = "0.2.1"
 
 type showFader struct {
 	sourceID uint16
@@ -276,11 +276,13 @@ type mockMixer struct {
 	// Global processing, independent of which paths are selected.
 	processing bool
 	settleAt   *time.Time
-	// previewed is what the audio runs when a live preview differs from the
+	// liveTargets is what the audio plays when a live edit differs from the
 	// saved settings, nil otherwise.
-	previewed  []core.Target
-	presets    []savedPreset
-	nextPreset uint64
+	liveTargets []core.Target
+	presets     []savedPreset
+	nextPreset  uint64
+	// sshFingerprint is the managed developer key's, nil while SSH is off.
+	sshFingerprint *string
 	// State changes waiting for the next event poll.
 	events           []json.RawMessage
 	log              []core.DiagnosticsEvent
@@ -492,10 +494,10 @@ func (m *mockMixer) handle(request *usbproto.Request, now time.Time) usbproto.Re
 		if result = parseBody(body, &update); result == nil {
 			reply, result = m.save(update, now)
 		}
-	case method == "PUT" && path == "api/v1/preview":
+	case method == "PUT" && path == "api/v1/live":
 		var update core.ConfigUpdate
 		if result = parseBody(body, &update); result == nil {
-			reply, result = m.preview(update)
+			reply, result = m.applyLive(update)
 		}
 	case method == "PUT" && path == "api/v1/routing":
 		reply, result = m.setRouting(body, now)
@@ -517,6 +519,10 @@ func (m *mockMixer) handle(request *usbproto.Request, now time.Time) usbproto.Re
 		reply, result = m.createPreset(body)
 	case method == "POST" && strings.HasSuffix(path, "/apply"):
 		reply, result = m.applyPreset(path, body, now)
+	case method == "GET" && path == "api/v1/ssh":
+		reply = mockReply(200, m.sshStatus())
+	case method == "PUT" && path == "api/v1/ssh":
+		reply, result = m.setSSH(body)
 	case method == "DELETE":
 		reply, result = m.deletePreset(path)
 	default:
@@ -553,12 +559,12 @@ func (m *mockMixer) save(update core.ConfigUpdate, now time.Time) (usbproto.Repl
 	if err := m.config.ValidateUpdate(update.Targets); err != nil {
 		return usbproto.Reply{}, &refused{mockFailure(400, fmt.Sprintf("invalid request: %s", err))}
 	}
-	// Saving what a preview already plays changes no audio, so the engine
+	// Saving what a live edit already plays changes no audio, so the engine
 	// stays running, as the mixer's does.
 	alreadyRunning := m.engine.Status == core.EnginePhaseRunning && targetsEqual(m.running(), update.Targets)
 	m.config.Revision++
 	m.config.Targets = update.Targets
-	m.previewed = nil
+	m.liveTargets = nil
 	if alreadyRunning {
 		m.engine.AppliedRevision = m.config.Revision
 	} else {
@@ -568,17 +574,50 @@ func (m *mockMixer) save(update core.ConfigUpdate, now time.Time) (usbproto.Repl
 	return mockReply(200, m.state()), nil
 }
 
-// running is what the audio runs: the preview, or else the saved settings.
+// running is what the audio plays: the live edit, or else the saved settings.
 func (m *mockMixer) running() []core.Target {
-	if m.previewed != nil {
-		return m.previewed
+	if m.liveTargets != nil {
+		return m.liveTargets
 	}
 	return m.config.Targets
 }
 
-// preview is PUT api/v1/preview: the targets go on the running audio, not
-// saved, unless they need the engine restarted.
-func (m *mockMixer) preview(update core.ConfigUpdate) (usbproto.Reply, *refused) {
+func (m *mockMixer) sshStatus() core.SSHStatus {
+	return core.SSHStatus{
+		Managed:            m.sshFingerprint != nil,
+		ManagedFingerprint: m.sshFingerprint,
+		HostKeys:           []string{},
+		ServerRunning:      ptr(true),
+	}
+}
+
+// setSSH is PUT api/v1/ssh: it remembers the key's fingerprint and nothing
+// else, since no SSH server exists.
+func (m *mockMixer) setSSH(body json.RawMessage) (usbproto.Reply, *refused) {
+	var request core.SSHRequest
+	if failed := parseBody(body, &request); failed != nil {
+		return usbproto.Reply{}, failed
+	}
+	if !request.Enabled {
+		m.sshFingerprint = nil
+		return mockReply(200, m.sshStatus()), nil
+	}
+	if request.PublicKey == nil {
+		return usbproto.Reply{}, &refused{mockFailure(400, "publicKey is required to enable SSH access")}
+	}
+	key, err := core.ParseEd25519PublicKey(*request.PublicKey)
+	if err != nil {
+		return usbproto.Reply{}, &refused{mockFailure(400, err.Error())}
+	}
+	m.sshFingerprint = ptr(key.Fingerprint())
+	return mockReply(200, m.sshStatus()), nil
+}
+
+// applyLive is PUT api/v1/live: the targets go on the running audio at
+// once, unless they need the engine restarted. The app saves them once edits
+// stop; the mixer keeps what plays if the app goes away first (not modelled
+// here).
+func (m *mockMixer) applyLive(update core.ConfigUpdate) (usbproto.Reply, *refused) {
 	if failed := m.checkRevision(update.ExpectedRevision); failed != nil {
 		return usbproto.Reply{}, failed
 	}
@@ -588,13 +627,13 @@ func (m *mockMixer) preview(update core.ConfigUpdate) (usbproto.Reply, *refused)
 	if m.engine.Status != core.EnginePhaseRunning {
 		return usbproto.Reply{}, &refused{mockFailure(503, "the engine is not running")}
 	}
-	if core.PreviewNeedsSave(m.running(), update.Targets) {
-		return usbproto.Reply{}, &refused{mockFailure(422, "previewRequiresSave: this change needs a save")}
+	if core.LiveNeedsSave(m.running(), update.Targets) {
+		return usbproto.Reply{}, &refused{mockFailure(422, "liveRequiresSave: this change needs a save")}
 	}
 	if targetsEqual(m.config.Targets, update.Targets) {
-		m.previewed = nil
+		m.liveTargets = nil
 	} else {
-		m.previewed = core.CloneTargets(update.Targets)
+		m.liveTargets = core.CloneTargets(update.Targets)
 	}
 	return mockReply(200, object(member{"accepted", json.RawMessage("true")},
 		member{"baseRevision", json.RawMessage(strconv.FormatUint(m.config.Revision, 10))})), nil

@@ -47,12 +47,12 @@ func ShortHz(frequency float64) string {
 	return fmt.Sprintf("%.0f", frequency)
 }
 
-// ShortDB is a band chip's gain: "+3.2", "−2.4".
+// ShortDB is a band chip's gain: "+3.25", "−2.40".
 func ShortDB(gain float64) string {
 	if gain > 0. {
-		return fmt.Sprintf("+%.1f", gain)
+		return fmt.Sprintf("+%.2f", gain)
 	}
-	return strings.ReplaceAll(fmt.Sprintf("%.1f", gain), "-", "\u2212")
+	return strings.ReplaceAll(fmt.Sprintf("%.2f", gain), "-", "\u2212")
 }
 
 // TypeShape is the filter type's icon: its height, 0 to 1, at t across.

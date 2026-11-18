@@ -842,13 +842,17 @@ func (s *Session) AcknowledgeRestart(pending PendingRestart, state DeviceState) 
 }
 
 // Acknowledge: only call with the successful response belonging to this
-// request.
+// request. The response's targets are what the mixer stored for this save,
+// and they are taken as they are: the mixer refuses a save whose expected
+// revision is not current, so no other write can be in this response, but
+// the stored values may differ from the request's (a mixer before 0.2.2
+// parses some numbers one unit in the last place off). Edits made since the
+// request was sent are kept.
 func (s *Session) Acknowledge(pending PendingApply, state DeviceState) error {
 	if err := state.Validate(); err != nil {
 		return err
 	}
 	if state.Config.Revision <= pending.Request.ExpectedRevision ||
-		!TargetsEqual(state.Config.Targets, pending.Request.Targets) ||
 		!slices.Equal(state.Config.SelectedTargets, pending.selectedTargets) {
 		return CoreError("Save response does not match the requested settings")
 	}

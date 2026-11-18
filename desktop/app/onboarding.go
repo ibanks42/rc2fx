@@ -12,6 +12,7 @@ import (
 	"gpuikit.dev/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/home"
+	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 )
 
 // background is the opening screens' wash, top to bottom.
@@ -96,22 +97,19 @@ func newSignature(a *App) gk.View {
 	sig := &signature{epoch: time.Now()}
 	sig.view = gk.NewView(nil, func(cx *gk.Cx) gk.Element {
 		phase := float32(time.Since(sig.epoch).Seconds())
-		if a.installer != nil {
-			return signatureElement(a.installer, phase)
-		}
-		return signatureScene(mixerFound(a.message), phase)
+		first := a.firstState()
+		return signatureScene(first == installflow.FirstFound || first == installflow.FirstDuo, phase)
 	})
 	a.lineSlots.signature = sig
 	return sig.view
 }
 
-// signatureActive is Signature::active: whether the line moves. It keeps
-// moving behind other windows: during an install, a still line would look as
-// if the install had stopped. (The Rust also stopped while the window was
-// hidden; Go cannot read that.)
+// signatureActive is Signature::active: whether the first screen's line
+// moves. It stands still while two mixers wait for one to be unplugged.
+// (The Rust also stopped while the window was hidden; Go cannot read that.)
 func (a *App) signatureActive() bool {
-	return !a.reducedMotion && (!a.session.Connected || a.installerPage) &&
-		(a.installer == nil || !a.installer.needsAccess())
+	return !a.reducedMotion && !a.session.Connected && a.installer == nil &&
+		a.firstState() != installflow.FirstTwo
 }
 
 // pollSignature starts the signature's ticker when it becomes active and

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -222,6 +223,11 @@ func TestHigherRevisionIsNotAnEchoEvenWithMatchingEffects(t *testing.T) {
 	}
 }
 
+// The state at the revision after our save's expected revision is our save,
+// whatever its contents (the mixer refuses a save whose expected revision is
+// not current). Its settings wait for the save's reply; if another write did
+// take that revision, the mixer refuses ours, and the refresh that follows
+// brings that write in as a conflict.
 func TestOldGenerationAndUnrelatedExactRevisionCannotHideChanges(t *testing.T) {
 	session := core.DefaultSession()
 	receiveSaved(t, &session, state())
@@ -241,14 +247,66 @@ func TestOldGenerationAndUnrelatedExactRevisionCannotHideChanges(t *testing.T) {
 	assertRuntime(t, &session, &observed)
 	unrelated := deepCopy(observed)
 	unrelated.Config.Targets[2].Gain.DB = -3
-	if got := mustReceive(t, &session, deepCopy(unrelated), &pending, nil, false, false).Update; got != core.RemoteUpdateConflict {
+	savedBefore := deepCopy(session.Saved.Config)
+	if got := mustReceive(t, &session, deepCopy(unrelated), &pending, nil, false, false).Update; got == core.RemoteUpdateConflict {
 		t.Fatalf("update %v", got)
+	}
+	if !equal(session.Saved.Config, savedBefore) {
+		t.Fatal("settings taken before the save's reply")
+	}
+	// The mixer refused our save: the refresh brings the other write in.
+	if got := mustReceive(t, &session, deepCopy(unrelated), nil, nil, true, false).Update; got != core.RemoteUpdateConflict {
+		t.Fatalf("refresh update %v", got)
 	}
 	if !equal(*session.Saved, unrelated) {
 		t.Fatal("saved is not the unrelated state")
 	}
 	if got := session.Draft[1].Gain.DB; got != -6 {
 		t.Fatalf("draft gain %v", got)
+	}
+}
+
+// A save's echo and reply with a value the mixer stored one unit in the last
+// place off (serde_json's default parser): the echo is ours, the reply is
+// accepted, and the draft takes the stored value, so nothing is left to save.
+func TestSaveStoredOneULPOffIsAcceptedAndLeavesNothingToSave(t *testing.T) {
+	for _, echoFirst := range []bool{false, true} {
+		session := core.DefaultSession()
+		receiveSaved(t, &session, state())
+		sent := 80.190455218073918
+		session.Draft[1].Highpass.Frequency = sent
+		pending, err := session.BeginApply()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored := state()
+		stored.Config.Revision++
+		stored.Config.Targets = deepCopy(pending.Request.Targets)
+		storedFrequency := math.Nextafter(sent, math.Inf(1))
+		stored.Config.Targets[1].Highpass.Frequency = storedFrequency
+		if echoFirst {
+			if got := mustReceive(t, &session, deepCopy(stored), &pending, nil, false, false).Update; got == core.RemoteUpdateConflict {
+				t.Fatalf("echo first: echo taken as a conflict")
+			}
+		}
+		if err := session.Acknowledge(pending, deepCopy(stored)); err != nil {
+			t.Fatalf("echo first %v: %v", echoFirst, err)
+		}
+		if session.Conflict || session.Dirty() {
+			t.Fatalf("echo first %v: conflict %v dirty %v", echoFirst, session.Conflict, session.Dirty())
+		}
+		if got := session.Draft[1].Highpass.Frequency; got != storedFrequency {
+			t.Fatalf("echo first %v: draft frequency %v", echoFirst, got)
+		}
+		if !echoFirst {
+			// The stream's copy after the reply changes nothing.
+			if got := mustReceive(t, &session, deepCopy(stored), nil, nil, false, false).Update; got == core.RemoteUpdateConflict {
+				t.Fatal("echo after reply taken as a conflict")
+			}
+			if session.Dirty() {
+				t.Fatal("dirty after the echo")
+			}
+		}
 	}
 }
 

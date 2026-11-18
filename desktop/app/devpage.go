@@ -12,6 +12,11 @@ package app
 // mixer beyond what opening that page normally does. (openDevPage, in
 // dev_page.go, opens it.)
 //
+// Development builds (`-tags rc2fxdev`) also take `flow:<state>`: one state
+// of the guided flows, drawn from made-up data with no mixer, helper or
+// network, for comparing with the mock-up (flow_fixtures_on.go lists them,
+// e.g. `flow:B4`). Other builds refuse it.
+//
 // This file does not import gk: its functions are tested with plain `go test`.
 
 import (
@@ -32,10 +37,12 @@ const (
 	DevPageInstaller
 	DevPageRepair
 	DevPageChannel
+	// DevPageFlow: Name is a guided-flow state (development builds only).
+	DevPageFlow
 )
 
-// DevPage is dev_page.rs DevPage. Name and Effect are for DevPageChannel; an
-// empty Effect is None.
+// DevPage is dev_page.rs DevPage. Name and Effect are for DevPageChannel
+// (Name also for DevPageFlow); an empty Effect is None.
 type DevPage struct {
 	Kind   DevPageKind
 	Name   string
@@ -80,6 +87,18 @@ func parseDevPage(value string) (DevPage, error) {
 		out = DevPage{Kind: DevPageInstaller}
 	case "repair":
 		out = DevPage{Kind: DevPageRepair}
+	case "flow":
+		name := ""
+		if len(parts) > 1 {
+			name = strings.TrimSpace(strings.Join(parts[1:], ":"))
+		}
+		switch {
+		case !devFlows:
+			return DevPage{}, fmt.Errorf("`flow:` pages are in development builds only")
+		case name == "":
+			return DevPage{}, fmt.Errorf("`flow:` needs a state, such as `flow:B4`")
+		}
+		return DevPage{Kind: DevPageFlow, Name: name}, nil
 	case "channel":
 		name := ""
 		if len(parts) > 1 {

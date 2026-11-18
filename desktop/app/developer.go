@@ -6,6 +6,7 @@ package app
 // flashes. What the row says and the login command are in app/developer.
 
 import (
+	"path/filepath"
 	"strings"
 
 	"gpuikit.dev/gk"
@@ -82,7 +83,12 @@ func (a *App) receiveSSH(cx *gk.Cx, id uint64, status *core.SSHStatus, err error
 		epoch := a.ssh.Epoch
 		gk.Go(cx, func() pinOutcome {
 			var pinned *developer.Pinned
-			if len(keys) > 0 {
+			switch {
+			case mockMixer:
+				// The mock has no host identity. Show the command a real
+				// mixer would get without writing to known_hosts.
+				pinned = mockPinned(serial)
+			case len(keys) > 0:
 				host, err := installer.PinMixerHostKeys(serial, keys)
 				pinned = &developer.Pinned{Serial: serial, Host: host, Err: err}
 			}
@@ -344,4 +350,18 @@ func detailRow(label string, value gk.Element) gk.DivEl {
 	return gk.HFlex(s.ItemsCenter).Gap(px(12)).TextSize(px(13.5)).TextColor(rgb(Muted)).
 		Child(gk.Div(s.FlexShrink0).W(px(112)).Child(txt(label))).
 		Child(gk.Div(s.Flex1, s.MinW0).Child(value))
+}
+
+// mockPinned is the host identity the mock mixer's login command names: the
+// real file and alias, with nothing written.
+func mockPinned(serial string) *developer.Pinned {
+	work, ok := installer.DefaultWork()
+	alias, err := installer.MixerHostAlias(serial)
+	if !ok || err != nil {
+		return nil
+	}
+	return &developer.Pinned{Serial: serial, Host: &installer.PinnedHost{
+		Alias:      alias,
+		KnownHosts: filepath.Join(work, "known_hosts"),
+	}}
 }

@@ -52,6 +52,12 @@ const (
 	// restores Files, which a RequestRepairInspect found damaged and
 	// repairable. The helper checks each again before writing it.
 	RequestRepair
+	// RequestStorageFix grows the mixer's first system slot through RØDE's
+	// own USB update (rodecaster/autofix), so later updates format it with
+	// 4 KB blocks. With Final the last of its flashes is the prepared
+	// firmware instead of RØDE's plain archive. Needs the same access as a
+	// flash; reports its steps as progress (StorageFixPhase).
+	RequestStorageFix
 )
 
 var requestNames = map[RequestKind]string{
@@ -70,6 +76,7 @@ var requestNames = map[RequestKind]string{
 	RequestFlash:                "Flash",
 	RequestRepairInspect:        "RepairInspect",
 	RequestRepair:               "Repair",
+	RequestStorageFix:           "StorageFix",
 }
 
 // Request is what the app asks the engine (or its helper) to do. Only the
@@ -86,6 +93,11 @@ type Request struct {
 	Version         string
 	Stock           bool
 	Files           []RepairTarget
+	Final           bool
+	// FixDebug asks the storage fix's script for its debug log on the
+	// mixer. Only development builds of the app set it, and only
+	// development builds of the engine act on it.
+	FixDebug bool
 }
 
 // RepairTarget is a file to restore: system partition 1 or 2, and its path
@@ -179,6 +191,11 @@ type prepareBody struct {
 	Stock   bool   `json:"stock"`
 }
 
+type storageFixBody struct {
+	Final bool `json:"final"`
+	Debug bool `json:"debug,default"`
+}
+
 type serialBody struct {
 	Serial string `json:"serial"`
 }
@@ -214,6 +231,8 @@ func (r Request) MarshalJSON() ([]byte, error) {
 			files = []RepairTarget{}
 		}
 		return tagged(name, repairBody{files})
+	case RequestStorageFix:
+		return tagged(name, storageFixBody{r.Final, r.FixDebug})
 	}
 	return sjson.String(name), nil
 }
@@ -267,6 +286,10 @@ func (r *Request) UnmarshalJSON(data []byte) error {
 		var body repairBody
 		err = sjson.Unmarshal(payload, &body)
 		out.Files = body.Files
+	case RequestStorageFix:
+		var body storageFixBody
+		err = sjson.Unmarshal(payload, &body)
+		out.Final, out.FixDebug = body.Final, body.Debug
 	}
 	if err != nil {
 		return err
@@ -289,6 +312,7 @@ const (
 	ReplyBackup
 	ReplyRepairFindings
 	ReplyRepaired
+	ReplyStorageFix
 	ReplyDone
 )
 
@@ -303,6 +327,7 @@ var replyNames = map[ReplyKind]string{
 	ReplyBackup:         "Backup",
 	ReplyRepairFindings: "RepairFindings",
 	ReplyRepaired:       "Repaired",
+	ReplyStorageFix:     "StorageFix",
 	ReplyDone:           "Done",
 }
 
@@ -319,6 +344,7 @@ type Reply struct {
 	Backup        *BackupRecord
 	Findings      *RepairFindings
 	Repaired      *RepairResult
+	StorageFix    *StorageFix
 }
 
 // MarshalJSON writes serde's externally tagged form.
@@ -346,6 +372,8 @@ func (r Reply) MarshalJSON() ([]byte, error) {
 		return tagged(name, r.Findings)
 	case ReplyRepaired:
 		return tagged(name, r.Repaired)
+	case ReplyStorageFix:
+		return tagged(name, r.StorageFix)
 	}
 	return sjson.String(name), nil
 }
@@ -395,6 +423,9 @@ func (r *Reply) UnmarshalJSON(data []byte) error {
 	case ReplyRepaired:
 		out.Repaired = new(RepairResult)
 		err = sjson.Unmarshal(payload, out.Repaired)
+	case ReplyStorageFix:
+		out.StorageFix = new(StorageFix)
+		err = sjson.Unmarshal(payload, out.StorageFix)
 	}
 	if err != nil {
 		return err

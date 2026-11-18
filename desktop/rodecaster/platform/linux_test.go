@@ -3,7 +3,9 @@
 package platform
 
 import (
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -41,5 +43,27 @@ func TestMediaAbsenceRequiresExplicitSense(t *testing.T) {
 	}
 	if got := ScsiStatus(&SgHeader{}, nil); got.Kind != ScsiOK {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// The acknowledgement goes only onto the mixer's disk the volume names: a
+// device that is not (or is no longer) a RØDE disk is refused before
+// anything is mounted or written, as are names outside the disk's root.
+func TestWriteReportRefusesAnotherDisk(t *testing.T) {
+	h := host{}
+	for _, v := range []Volume{
+		{Device: "/dev/null", Serial: "RCP2X1234567"},
+		{Device: "/dev/rc2fx-no-such-disk", Serial: "RCP2X1234567"},
+		{Device: filepath.Join(t.TempDir(), "disk"), Serial: "RCP2X1234567"},
+	} {
+		err := h.WriteReport(v, "RCFIX.ACK", []byte("ack=1\n"))
+		if err == nil || !strings.Contains(err.Error(), "identity changed") {
+			t.Errorf("%s: %v", v.Device, err)
+		}
+	}
+	for _, name := range []string{"", ".", "..", "a/RCFIX.ACK", "../RCFIX.ACK"} {
+		if err := h.WriteReport(Volume{Device: "/dev/null"}, name, nil); err == nil {
+			t.Errorf("name %q was accepted", name)
+		}
 	}
 }

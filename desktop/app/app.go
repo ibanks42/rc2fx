@@ -138,18 +138,33 @@ type App struct {
 	settingsOpen   bool
 	// homeOpen: Home is the page in front (below settings and the installer).
 	homeOpen bool
-	// installerPage: the installer is the page in front (it may keep running
-	// behind another page).
-	installerPage bool
-	// installerAutostart is set by a notice's Install update: start the
-	// installer as soon as it can, until this deadline.
+	// installerAutostart is set by a notice's Install update or the first
+	// screen's Continue the install: start the task as soon as it can, until
+	// this deadline.
 	installerAutostart *time.Time
 	// inPlaceAsked is when the app last asked the mixer how an in-place
 	// update ended.
 	inPlaceAsked *time.Time
 	// settledFlash is the last flash this run of the app saw finish
 	// (Model::settled_flash).
-	settledFlash  *uint64
+	settledFlash *uint64
+	// allowDuo is the remembered opt-in to install on an (untested) Duo.
+	allowDuo bool
+	// firstHintTarget is the channel the finished install opened, whose
+	// suppression page shows the first-channel hint; "" for none.
+	// firstHintDone: dismissed or completed, on this computer.
+	firstHintTarget string
+	firstHintDone   bool
+	// firstHintSaved: the hint was recorded as done on this computer.
+	firstHintSaved bool
+	// look is what the first screen last saw on USB (nil before it looked),
+	// looking whether a look is under way, and lookedAt when the last ended.
+	look     *firstLook
+	looking  bool
+	lookedAt time.Time
+	// flowFixture: RC2FX_DEV_PAGE opened a guided-flow page from made-up
+	// state (development builds): nothing connects, looks or downloads.
+	flowFixture   bool
 	telemetryOpen bool
 	// telemetryDetails: Telemetry shows every figure, not just the summary.
 	telemetryDetails bool
@@ -208,8 +223,8 @@ type App struct {
 	// none. It names the channel and band, so it closes by itself when
 	// either changes.
 	bandPopover *popoverBand
-	// live is live editing: previews, saving once edits stop, undo and
-	// checkpoints (live.go).
+	// live is live editing: edits on the running audio, saving once edits
+	// stop, undo and checkpoints (live.go).
 	live model.Live
 	// restartAsked: the restart question is open (askRestart).
 	restartAsked bool
@@ -250,6 +265,8 @@ func newApp() *App {
 		transport:           backend,
 		selfUpdate:          newSelfUpdate(),
 		developerMode:       rememberedDeveloper(),
+		allowDuo:            rememberedDuo(),
+		firstHintDone:       rememberedFirstChannelHint(),
 		devPage:             DevPageFromEnv(),
 		effect:              core.EffectSuppression,
 		channel:             core.ChannelLeft,
@@ -290,11 +307,16 @@ func (a *App) init(cx *gk.Cx) {
 		a.stagePreviews[effect] = a.stagePreview(effect.Label())
 	}
 	gk.Focus(cx, a.focus)
-	a.connect(cx)
-	// Notification only, in the background; a failure here stays quiet.
-	a.checkAppUpdate(cx, false)
-	a.startSelfUpdate(cx)
-	a.openDevPage(cx)
+	if a.devPage != nil && a.devPage.Kind == DevPageFlow {
+		// A made-up page to look at: no mixer, no helper, no network.
+		a.openDevPage(cx)
+	} else {
+		a.connect(cx)
+		// Notification only, in the background; a failure here stays quiet.
+		a.checkAppUpdate(cx, false)
+		a.startSelfUpdate(cx)
+		a.openDevPage(cx)
+	}
 	// The menu bar's Quit (Cmd+Q) asks the same as the close button.
 	// Deferred: a menu or key action arrives while GPUI has the key window
 	// checked out, so updating it from inside the handler fails and the quit
@@ -453,9 +475,12 @@ func (a *App) apply(cx *gk.Cx) {
 	}
 	pending, err := a.session.BeginApply()
 	if err != nil {
+		saveLogf("apply not begun: %s", err)
 		a.message = err.Error()
 	} else if a.command(transport.CommandApply{Generation: a.generation, Update: pending.Request}) {
 		a.pending = &pending
+		saveLogf("apply sent: expected revision %d", pending.Request.ExpectedRevision)
+		saveLogTargets("  apply targets", pending.Request.Targets)
 		a.message = "Saving settings to mixer…"
 	}
 	a.notify(cx)
@@ -474,6 +499,9 @@ func (a *App) receive(cx *gk.Cx, value json.RawMessage, acknowledged, snapshot b
 	previousDraft := core.CloneTargets(a.session.Draft)
 	prevGen, prevOK := savedGeneration(a.session.Saved)
 	state, err := core.DeviceStateFromJSON(string(value))
+	if err == nil {
+		a.logReceive(state, acknowledged, snapshot)
+	}
 	if err != nil {
 		a.message = fmt.Sprintf("Device state rejected: %s. This app requires a matching controller with schema %d and explicit processing-path selection.",
 			err, core.SchemaVersion)
@@ -490,6 +518,7 @@ func (a *App) receive(cx *gk.Cx, value json.RawMessage, acknowledged, snapshot b
 			pending := *a.pending
 			a.pending = nil
 			if err := a.session.Acknowledge(pending, state); err != nil {
+				saveLogf("  acknowledge failed: %s", err)
 				a.message = err.Error()
 				a.session.Conflict = true
 				a.awaitingRefresh = a.command(transport.CommandRefresh{Generation: a.generation}) || a.awaitingRefresh
@@ -506,6 +535,7 @@ func (a *App) receive(cx *gk.Cx, value json.RawMessage, acknowledged, snapshot b
 			a.message = err.Error()
 			return
 		}
+		saveLogf("  receive -> %s (dirty %v, conflict %v)", received.Update, a.session.Dirty(), a.session.Conflict)
 		runtimeObserved = received.RuntimeObserved
 		switch received.Update {
 		case core.RemoteUpdateStale:
@@ -736,9 +766,10 @@ func (a *App) poll(cx *gk.Cx) {
 		// Only this app writes the mixer's settings, so a refused save
 		// means our revision was behind our own last change: read the
 		// current settings, keep the edits, save again.
-		case transport.EventKindPreviewed:
-			a.previewReply(cx, k)
+		case transport.EventKindLiveApplied:
+			a.liveReply(cx, k)
 		case transport.EventKindConflict:
+			saveLogf("save refused as a conflict; refreshing")
 			a.pending = nil
 			a.session.Conflict = true
 			a.resave = true
@@ -758,10 +789,13 @@ func (a *App) poll(cx *gk.Cx) {
 		a.settleConflict(cx)
 	}
 	a.syncLive(cx)
+	a.noteFirstChannelHint()
+	a.autoFlashPoll(cx)
 	fresh, _ := a.freshMeter()
 	changed = a.usb.Expire(time.Now()) || changed
 	changed = a.pollInstaller(cx) || changed
 	changed = a.pollRepair() || changed
+	a.pollFirstLook(cx)
 	a.autostartInstaller(cx)
 	// lib.rs called this at the top of every render; a gk view function may
 	// not write kit state, so it runs here, on the same 50 ms tick.
@@ -801,7 +835,7 @@ func (a *App) poll(cx *gk.Cx) {
 	// A reading redraws the app unless the overview is in front and the
 	// overlay is already drawing its bars every frame. Each such redraw is a
 	// whole extra frame, on top of the overlay's.
-	overview := homeKey != nil && !a.settingsOpen && !a.installerPage
+	overview := homeKey != nil && !a.settingsOpen && a.installer == nil
 	isFresh := fresh != nil
 	if changed || isFresh != a.wasFresh || !homeKeyEqual(homeKey, a.lastHomeKey) ||
 		(meterArrived && !(overview && a.barsAnimate(cx))) {
@@ -973,10 +1007,12 @@ func (a *App) settleConflict(cx *gk.Cx) {
 	if err := a.session.RebaseEdits(); err != nil {
 		// The edits no longer fit the mixer's channels: the notice below
 		// offers the one way on.
+		saveLogf("rebase failed: %s", err)
 		a.resave = false
 		a.message = err.Error()
 		return
 	}
+	saveLogf("rebased edits (resave %v)", a.resave)
 	if a.resave {
 		a.resave = false
 		a.apply(cx)

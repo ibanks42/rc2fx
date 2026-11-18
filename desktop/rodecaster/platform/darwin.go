@@ -286,8 +286,6 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
 type host struct{}
@@ -321,7 +319,7 @@ func enumerate() ([]HID, error) {
 			Usage:   0xff00,
 			Input:   4096,
 			Output:  64,
-			Control: usbproto.DeclaresControl(descriptor),
+			Control: declaresControl(descriptor),
 			Release: uint16(h.release),
 		})
 	}

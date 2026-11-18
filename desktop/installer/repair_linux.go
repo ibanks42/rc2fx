@@ -31,9 +31,15 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
+
 	"github.com/ibanks42/rc2fx/desktop/ext2fs"
 	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 )
+
+// RepairSupported: this system can check and repair a mixer in storage
+// mode. The app offers Repair mixer only where it is.
+const RepairSupported = true
 
 const repairSector = 512
 
@@ -203,10 +209,10 @@ type savedImage struct {
 func readSavedImage(path string) (*savedImage, error) {
 	saved := &savedImage{path: path}
 	err := walkArchive(path, 4<<30, false, func(entry *tarEntry) error {
-		if !entry.header.regular() {
+		if !entry.Header.Regular() {
 			return nil
 		}
-		name := normalized(entry.path)
+		name := normalized(entry.Path)
 		if name == sumsMember {
 			data, err := readAll(entry)
 			if err != nil {
@@ -214,11 +220,11 @@ func readSavedImage(path string) (*savedImage, error) {
 			}
 			saved.sums = data
 		} else if inManifest(name) {
-			hashing := hashingReader(entry)
+			hashing := archive.HashingReader(entry)
 			if _, err := io.Copy(io.Discard, hashing); err != nil {
 				return err
 			}
-			sha, _ := hashing.finish()
+			sha, _ := hashing.Finish()
 			saved.manifest = append(saved.manifest, [2]string{sha, name})
 		}
 		return nil
@@ -236,8 +242,8 @@ func savedMembers(path string, wanted map[string]bool) (map[string][]byte, error
 		return found, nil
 	}
 	err := walkArchive(path, 4<<30, false, func(entry *tarEntry) error {
-		name := normalized(entry.path)
-		if wanted[name] && entry.size <= maxRepairFile {
+		name := normalized(entry.Path)
+		if wanted[name] && entry.Size <= maxRepairFile {
 			data, err := readAll(entry)
 			if err != nil {
 				return err
@@ -652,12 +658,12 @@ func (e *Engine) backupSettings(layout *diskLayout) (string, error) {
 	if _, err := disk.Seek(int64(part.start), io.SeekStart); err != nil {
 		return "", err
 	}
-	t, err := newTemp(dir, ".settings-")
+	t, err := archive.NewTemp(dir, ".settings-")
 	if err != nil {
 		return "", err
 	}
-	defer t.cleanup()
-	out := hashingWriter(t)
+	defer t.Cleanup()
+	out := archive.HashingWriter(t)
 	buf := make([]byte, 1<<20)
 	var done uint64
 	for done < part.len {
@@ -677,19 +683,19 @@ func (e *Engine) backupSettings(layout *diskLayout) (string, error) {
 		done += n
 		e.reporter("repair-backup", "Copying the settings partition to this computer")(done, part.len)
 	}
-	sha, _ := out.finish()
-	if err := t.persist(path); err != nil {
+	sha, _ := out.Finish()
+	if err := t.Persist(path); err != nil {
 		return "", err
 	}
-	sumFile, err := newTemp(dir, ".settings-")
+	sumFile, err := archive.NewTemp(dir, ".settings-")
 	if err != nil {
 		return "", err
 	}
-	defer sumFile.cleanup()
+	defer sumFile.Cleanup()
 	if _, err := sumFile.Write([]byte(sha + "  " + name + "\n")); err != nil {
 		return "", err
 	}
-	if err := sumFile.persist(path + ".sha256"); err != nil {
+	if err := sumFile.Persist(path + ".sha256"); err != nil {
 		return "", err
 	}
 	return path, nil

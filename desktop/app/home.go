@@ -110,7 +110,7 @@ func (a *App) homeKey() HomeKey {
 // channel's editor. Indicators move only then; Settings and the installer
 // draw no animated lines.
 func (a *App) animatedPage() bool {
-	return a.session.Connected && !a.settingsOpen && !a.installerPage
+	return a.session.Connected && !a.settingsOpen && a.installer == nil
 }
 
 // levelBar is one overview bar: its view (line_overlay.go), or drawn still

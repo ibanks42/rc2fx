@@ -243,9 +243,6 @@ func TestDuoPreferenceGatesPreparationAndModelChangesDropCachedChoices(t *testin
 		Profile:   profile,
 		Supported: true,
 	}}}, nil)
-	if !m.NeedsConfirmation() {
-		t.Fatal("no confirmation")
-	}
 	sel := m.Start()
 	request := selected(t, m, sel)
 	if !isRequest(request, installer.RequestPrepare) {
@@ -343,9 +340,6 @@ func TestGoalFollowsWhetherRC2FXAnswers(t *testing.T) {
 
 func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 	m := setUp(status(gv1(false), ready(), false, false))
-	if !m.NeedsConfirmation() {
-		t.Fatal("no confirmation")
-	}
 	if m.Start() != nil {
 		t.Fatal("the app reads the settings first")
 	}
@@ -422,7 +416,7 @@ func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 	// is back and checks again.
 	m.ImageCheckRead(check(core.ImageStatusRepaired), nil)
 	if w := wantState(t, m, StepStart, StepStateWaiting); !strings.Contains(w.Detail, "Turn the mixer off and on again") ||
-		!strings.Contains(w.Detail, "rode-init-update-env.sh") {
+		!strings.Contains(w.Detail, "1 of RØDE's files") || strings.Contains(w.Detail, "rode-init-update-env.sh") {
 		t.Fatalf("waiting %q", w.Detail)
 	}
 	m.SetService(nil)
@@ -453,8 +447,9 @@ func TestFilesTheMixerCouldNotRestoreFailTheInstall(t *testing.T) {
 		Damaged:  []string{"usr/lib/libthing.so"},
 		Unlisted: 2,
 	}, nil)
-	if e := wantState(t, m, StepStart, StepStateFailed); !strings.Contains(e.Detail, "usr/lib/libthing.so and 2 more") ||
-		!strings.Contains(e.Detail, "install again") {
+	// How many files, never which: the names mean nothing to the reader.
+	if e := wantState(t, m, StepStart, StepStateFailed); !strings.Contains(e.Detail, "3 of RØDE's files") ||
+		strings.Contains(e.Detail, "libthing") || !strings.Contains(e.Detail, "Try again") {
 		t.Fatalf("failed %q", e.Detail)
 	}
 	// Mixer software from before the check has nothing to wait for.
@@ -479,9 +474,6 @@ func TestStockFirmwareSavesSettingsFlashesUnchangedAndWaitsForNormalMode(t *test
 	}
 	m.Choose(1)
 	wantChoice(t, m.Choice, "stable", "1.7.6", "stock also requires a qualified catalog release")
-	if !m.NeedsConfirmation() {
-		t.Fatal("no confirmation")
-	}
 	if m.Start() != nil {
 		t.Fatal("started without the settings")
 	}
@@ -648,11 +640,13 @@ func TestSettingsNeedTheMixerOnUSBToBeMatched(t *testing.T) {
 func TestAFailureStopsAtItsStepAndRetryContinuesFromThere(t *testing.T) {
 	m := setUp(status(gv1(true), absent(), true, true))
 	m.Run = &Run{
-		Index:    4,
-		Serial:   "GV1",
-		Device:   firmware.ModelProIi,
-		BackedUp: true,
-		Prepared: true,
+		Index:     4,
+		Serial:    "GV1",
+		Device:    firmware.ModelProIi,
+		BackedUp:  true,
+		Selected:  true,
+		Prepared:  true,
+		Committed: true,
 	}
 	flash := m.advance()
 	if !isRequest(flash, installer.RequestFlash) {
@@ -666,13 +660,133 @@ func TestAFailureStopsAtItsStepAndRetryContinuesFromThere(t *testing.T) {
 	if got := m.State(StepFlash); got != (StepState{Kind: StepStateFailed, Detail: "drive busy"}) {
 		t.Fatalf("state %+v", got)
 	}
-	if m.Tick(time.Now().Add(60*time.Second)) != nil {
-		t.Fatal("no polling while failed")
+	// A failed page keeps following the mixer, so it can say what it sees.
+	poll := m.Tick(time.Now().Add(60 * time.Second))
+	if !isRequest(poll, installer.RequestProbe) {
+		t.Fatalf("polls while failed: %#v", poll)
 	}
-	poll := m.Retry()
+	if report(t, m, poll, status(gv1(true), absent(), true, true)) != nil || m.Run.Failed == nil {
+		t.Fatal("a poll never retries by itself")
+	}
+	if from, ok := m.RetryFrom(); !ok || from != StepFlash {
+		t.Fatalf("retry from %v %v", from, ok)
+	}
+	poll = m.Retry()
 	flash = report(t, m, poll, status(gv1(true), absent(), true, true))
 	if !isRequest(flash, installer.RequestFlash) {
 		t.Fatalf("retried from the failed step: %#v", flash)
+	}
+}
+
+// A flash error's advice is to power-cycle the mixer, which brings it back
+// in normal mode: Try again switches it to update mode again rather than
+// waiting for update mode that never comes, and the run can be stopped
+// again because the mixer is as it was.
+func TestRetryFollowsTheMixerBackInNormalModeAfterAPowerCycle(t *testing.T) {
+	m := setUp(status(gv1(true), absent(), true, true))
+	m.Run = &Run{
+		Index:     4,
+		Serial:    "GV1",
+		Device:    firmware.ModelProIi,
+		BackedUp:  true,
+		Selected:  true,
+		Prepared:  true,
+		Committed: true,
+	}
+	flash := m.advance()
+	refresh := m.Finish(*flash, installer.Reply{}, errors.New("disconnect the mixer's power for 30 seconds"))
+	report(t, m, refresh, status(gv1(false), absent(), true, false))
+	if from, ok := m.RetryFrom(); !ok || from != StepUSBMode {
+		t.Fatalf("retry from %v %v", from, ok)
+	}
+	poll := m.Retry()
+	if !m.CanCancel() {
+		t.Fatal("a mixer back as it was can be stopped again")
+	}
+	usb := report(t, m, poll, status(gv1(false), absent(), true, false))
+	if !isRequest(usb, installer.RequestEnterUSBMode) {
+		t.Fatalf("request %#v", usb)
+	}
+}
+
+// Damaged files have nothing to be restored from on the mixer, so Try again
+// sends the firmware again instead of failing on the same check at once.
+func TestRetryAfterDamagedFilesFlashesAgain(t *testing.T) {
+	m := setUp(status(gv1(false), absent(), true, false))
+	m.Run = &Run{Index: slices.Index(Steps[:], StepStart), Serial: "GV1", Device: firmware.ModelProIi,
+		BackedUp: true, Selected: true, Prepared: true, Flashed: true, Committed: true}
+	m.SetService(ready())
+	m.ImageCheckRead(&core.ImageCheck{Status: core.ImageStatusDamaged, Damaged: []string{"a"}}, nil)
+	failedRun(t, m)
+	if from, _ := m.RetryFrom(); from != StepUSBMode {
+		t.Fatalf("retry from %v", from)
+	}
+	poll := m.Retry()
+	if m.Run.Flashed || m.ImageCheckAnswered {
+		t.Fatal("the damaged flash still counts")
+	}
+	usb := report(t, m, poll, status(gv1(false), ready(), true, false))
+	if !isRequest(usb, installer.RequestEnterUSBMode) {
+		t.Fatalf("request %#v", usb)
+	}
+}
+
+// A failure before the firmware was ready starts again from getting it.
+func TestRetryAfterADownloadFailureStartsAtTheDownload(t *testing.T) {
+	m := setUp(status(gv1(false), absent(), false, false))
+	sel := m.Start()
+	prepare := selected(t, m, sel)
+	refresh := m.Finish(*prepare, installer.Reply{}, errors.New("offline"))
+	report(t, m, refresh, status(gv1(false), absent(), false, false))
+	if from, _ := m.RetryFrom(); from != StepPrepare {
+		t.Fatalf("retry from %v", from)
+	}
+	if m.Run.Committed {
+		t.Fatal("nothing was sent to the mixer")
+	}
+}
+
+// The wait for a power cycle is timed from when it was asked: the flash,
+// the restarts and the file check before it don't use up its time.
+func TestAPowerCycleWaitIsTimedFromItsRequest(t *testing.T) {
+	m := setUp(status(gv1(false), absent(), true, false))
+	m.Run = &Run{Index: slices.Index(Steps[:], StepStart), Serial: "GV1", Device: firmware.ModelProIi,
+		BackedUp: true, Selected: true, Prepared: true, Flashed: true, Committed: true,
+		Waiting: &Waiting{Why: "updating", Since: time.Now().Add(-19 * time.Minute)}}
+	m.SetService(ready())
+	m.ImageCheckRead(&core.ImageCheck{Status: core.ImageStatusRepaired, Repaired: []string{"a"}}, nil)
+	w := m.Run.Waiting
+	if w == nil || !w.PowerCycle || time.Since(w.Since) > time.Minute {
+		t.Fatalf("waiting %+v", w)
+	}
+	if !strings.Contains(w.Why, "1 of RØDE's files") {
+		t.Fatalf("why %q", w.Why)
+	}
+}
+
+// Every wait gets a way out: after TakingLongerAfter with no answer the run
+// can be stopped; before that, past the point of no return, it can't.
+func TestALongWaitCanBeStopped(t *testing.T) {
+	m := setUp(status(nil, absent(), true, false))
+	m.Run = &Run{Index: slices.Index(Steps[:], StepStart), Serial: "GV1", Device: firmware.ModelProIi,
+		BackedUp: true, Selected: true, Prepared: true, Flashed: true, Committed: true,
+		Waiting: &Waiting{Why: "updating", Since: time.Now()}}
+	now := time.Now()
+	if m.TakingLonger(now) || m.CanStop(now) {
+		t.Fatal("stoppable at once")
+	}
+	later := now.Add(TakingLongerAfter)
+	if !m.TakingLonger(later) || !m.CanStop(later) {
+		t.Fatal("no way out of a long wait")
+	}
+	// RC2FX answering but its check not finishing is still a wait.
+	m.SetService(ready())
+	if !m.TakingLonger(later) {
+		t.Fatal("no way out while RC2FX answers")
+	}
+	m.Run.Waiting = nil
+	if m.TakingLonger(later) || m.CanStop(later) {
+		t.Fatal("only a wait takes longer")
 	}
 }
 
@@ -811,15 +925,13 @@ func TestAFinishedUpdateStaysFinishedAndTheNextPlanIsFresh(t *testing.T) {
 	}
 	m := NewModel()
 	poll := m.Probe()
-	// RC2FX is running; the step waits for its file check while the next
-	// status poll is out.
-	pending := report(t, m, poll, recent(ready()))
-	if m.ImageCheckRead(nil, nil) != nil {
-		t.Fatal("no request while the poll is out")
+	// RC2FX answers, so no update is under way whatever was flashed last:
+	// nothing resumes.
+	if pending := report(t, m, poll, recent(ready())); pending != nil {
+		report(t, m, pending, recent(ready()))
 	}
-	report(t, m, pending, recent(ready()))
-	if !m.Finished || m.Run != nil {
-		t.Fatal("already running RC2FX")
+	if m.Finished || m.Run != nil {
+		t.Fatal("a run resumed while RC2FX answers")
 	}
 	m.SetStock(true)
 	poll = m.Tick(time.Now().Add(60 * time.Second))
@@ -829,9 +941,6 @@ func TestAFinishedUpdateStaysFinishedAndTheNextPlanIsFresh(t *testing.T) {
 	}
 	if m.Run != nil {
 		t.Fatal("a run")
-	}
-	if !m.NeedsConfirmation() {
-		t.Fatal("no confirmation")
 	}
 	wantState(t, m, StepBackup, StepStatePending)
 	wantState(t, m, StepFlash, StepStatePending)
@@ -887,20 +996,6 @@ func TestARestartedAppDoesNotBringBackAFinishedStockRun(t *testing.T) {
 	}
 	if m.Run != nil || m.Finished || m.Last != nil {
 		t.Fatal("not clean")
-	}
-}
-
-func TestAFinishedRunStaysFinishedAfterInstallAgain(t *testing.T) {
-	m := reopen(t, nil, afterStockFlash(nil))
-	poll := m.Probe()
-	report(t, m, poll, afterStockFlash(gv1(false)))
-	m.StartOver()
-	if !m.Stock {
-		t.Fatal("Install again keeps the chosen mode")
-	}
-	m = reopen(t, m.SettledFlash, afterStockFlash(nil))
-	if m.Stock || m.Run != nil {
-		t.Fatal("the finished run came back")
 	}
 }
 
@@ -1194,13 +1289,22 @@ func TestADowngradeIsNeverTheDefaultAndIsAlwaysCalledOut(t *testing.T) {
 	}
 }
 
-func TestAnUnknownInstalledVersionIsSaidAndAKnownUpgradeIsQuiet(t *testing.T) {
+func TestAnUnknownInstalledVersionIsSaidOnlyForAnOlderChoice(t *testing.T) {
 	m := idle()
-	if w := m.WarningsFor(m.Stock); len(w) == 0 || !strings.Contains(w[0], "can't read") {
+	if w := m.WarningsFor(m.Stock); len(w) != 0 {
+		t.Fatalf("the newest version can't go backwards: %q", w)
+	}
+	m.Offers = Offers{Kind: OffersReady, List: []installer.MixerOffer{offer("1.1.0"), offer("1.0.0")}}
+	m.settleMixer()
+	if w := m.WarningsFor(m.Stock); len(w) != 0 {
+		t.Fatalf("newest of two: %q", w)
+	}
+	m.ChooseMixer(*signed("1.0.0"))
+	if w := m.WarningsFor(m.Stock); len(w) == 0 || !strings.Contains(w[0], "can't tell") {
 		t.Fatalf("warnings %q", w)
 	}
 	m.SetInstalled(ptr("not a version"), nil)
-	if w := m.WarningsFor(m.Stock); len(w) == 0 || !strings.Contains(w[0], "can't read") {
+	if w := m.WarningsFor(m.Stock); len(w) == 0 || !strings.Contains(w[0], "can't tell") {
 		t.Fatalf("warnings %q", w)
 	}
 	m.SetInstalled(ptr("0.9.0"), nil)
@@ -1491,5 +1595,59 @@ func TestReleasesDefaultToStableAndPreparedFirmwareWins(t *testing.T) {
 	wantChoice(t, m.Choice, "stable", "1.7.7", "promoted")
 	if len(m.Releases) != 1 {
 		t.Fatalf("%d releases", len(m.Releases))
+	}
+}
+
+// flashedAgo is s with a flash sent secs seconds ago as the last command.
+func flashedAgo(s Seen, secs uint64) Seen {
+	s.status.Saved.Commands = append(s.status.Saved.Commands, installer.CommandRecord{
+		Command: "flash",
+		AtUnix:  nowUnix() - secs,
+	})
+	return s
+}
+
+// What the mixer shows wins over the recent-flash window: a mixer seen in
+// normal mode, answering as RØDE's firmware or as RC2FX, is not updating;
+// only a mixer the app can't see, or one in update mode, may still be.
+func TestWhatTheMixerShowsWinsOverARecentFlash(t *testing.T) {
+	for _, c := range []struct {
+		why      string
+		seen     Seen
+		updating bool
+	}{
+		{"stock mixer in normal mode 2 minutes after a flash", flashedAgo(status(gv1(false), absent(), true, false), 120), false},
+		{"RC2FX answering 2 minutes after a flash", flashedAgo(status(gv1(false), ready(), true, false), 120), false},
+		{"mixer absent 2 minutes after a flash", flashedAgo(status(nil, absent(), true, false), 120), true},
+		{"mixer in update mode 2 minutes after a flash", flashedAgo(status(gv1(true), absent(), true, false), 120), true},
+		{"mixer absent, no flash", status(nil, absent(), true, false), false},
+	} {
+		m := setUp(c.seen)
+		if got := m.RecentlyFlashed(); got != c.updating {
+			t.Errorf("%s: updating %v, want %v", c.why, got, c.updating)
+		}
+		if u := m.Unplug(); (u.Kind == UnplugNo) != c.updating {
+			t.Errorf("%s: unplug %+v", c.why, u)
+		}
+		// Opening the installer resumes waiting only for a mixer that may
+		// still be updating.
+		r := reopen(t, nil, Seen{status: deepCopy(c.seen.status), service: c.seen.service})
+		if got := r.Run != nil; got != c.updating {
+			t.Errorf("%s: opening resumed a run: %v, want %v", c.why, got, c.updating)
+		}
+	}
+}
+
+func TestMayBeUpdating(t *testing.T) {
+	normal := []installer.USBMixer{{Serial: "GV1"}}
+	update := []installer.USBMixer{{Serial: "GV1", UpdateMode: true}}
+	if MayBeUpdating(false, nil, false) {
+		t.Error("no flash")
+	}
+	if !MayBeUpdating(true, nil, false) || !MayBeUpdating(true, update, false) {
+		t.Error("a recent flash with no mixer, or one in update mode")
+	}
+	if MayBeUpdating(true, normal, false) || MayBeUpdating(true, nil, true) {
+		t.Error("a mixer in normal mode, or RC2FX answering")
 	}
 }
