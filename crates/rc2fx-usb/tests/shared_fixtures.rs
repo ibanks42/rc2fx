@@ -1,6 +1,7 @@
 //! The USB framing fixtures the desktop's Go port (desktop/usbproto) reads
 //! too, so the mixer and the app cannot drift. The packed messages were
-//! written by the Go side.
+//! written by the Go side. The `hello4` and `descriptors` sections are
+//! client-side checks that only Go has, so only Go reads them.
 use rc2fx_usb::{Frame, Reply, Request};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -30,27 +31,6 @@ fn list<'a>(cases: &'a Value, key: &str) -> &'a Vec<Value> {
 
 fn text<'a>(case: &'a Value, key: &str) -> &'a str {
     case[key].as_str().unwrap()
-}
-
-#[test]
-fn hello_windows_match() {
-    for case in list(&cases(), "hello4") {
-        let data = hex(text(case, "data"));
-        let want = case["window"].as_u64().map(|w| w as usize);
-        assert_eq!(rc2fx_usb::hello_4_window(&data), want, "{data:?}");
-    }
-}
-
-#[test]
-fn descriptors_match() {
-    for case in list(&cases(), "descriptors") {
-        assert_eq!(
-            rc2fx_usb::declares_control(&hex(text(case, "hex"))),
-            case["control"].as_bool().unwrap(),
-            "{}",
-            text(case, "name")
-        );
-    }
 }
 
 #[test]

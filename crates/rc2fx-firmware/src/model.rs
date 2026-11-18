@@ -15,7 +15,6 @@ pub enum Model {
 
 impl Model {
     pub const ALL: [Self; 2] = [Self::ProIi, Self::Duo];
-    pub const VENDOR_ID: u16 = 0x19f7;
 
     pub fn parse(id: &str) -> Result<Self> {
         Self::ALL
@@ -41,30 +40,15 @@ impl Model {
             Self::Duo => "/boot/meson-axg-rodecaster-pro-ii-mini.dtb",
         }
     }
-    pub const fn firmware_directory(self) -> &'static str {
-        match self {
-            Self::ProIi => "rcp2",
-            Self::Duo => "rcp2-duo",
-        }
-    }
     /// Models admitted without an explicit experimental opt-in.
     pub const fn runtime_enabled(self) -> bool {
         matches!(self, Self::ProIi)
-    }
-    pub fn require_runtime(self) -> Result<()> {
-        self.require_runtime_with(false)
     }
     pub fn require_runtime_with(self, experimental_duo: bool) -> Result<()> {
         if self.runtime_enabled() || (self == Self::Duo && experimental_duo) {
             Ok(())
         } else {
             Err("RØDECaster Duo support is experimental and untested on hardware. Enable experimental Duo flashing at your own risk.".into())
-        }
-    }
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::ProIi => "RØDECaster Pro II",
-            Self::Duo => "RØDECaster Duo",
         }
     }
     pub const fn route_layout(self) -> &'static str {
@@ -78,27 +62,6 @@ impl Model {
             Self::ProIi => "pro-ii-sources-v1",
             Self::Duo => "duo-sources-v1",
         }
-    }
-    pub const fn normal_pids(self) -> &'static [u16; 5] {
-        match self {
-            Self::ProIi => &[0x0037, 0x0078, 0x008d, 0x0092, 0x0094],
-            Self::Duo => &[0x0050, 0x0079, 0x008e, 0x0093, 0x0095],
-        }
-    }
-    pub const fn update_pid(self) -> u16 {
-        match self {
-            Self::ProIi => 0x0030,
-            Self::Duo => 0x004f,
-        }
-    }
-    pub fn from_usb(vendor: u16, product: u16) -> Option<Self> {
-        (vendor == Self::VENDOR_ID)
-            .then(|| {
-                Self::ALL
-                    .into_iter()
-                    .find(|m| m.normal_pids().contains(&product) || m.update_pid() == product)
-            })
-            .flatten()
     }
     /// Require consistent rootfs and boot-board evidence. No environment
     /// override or executable hash may impersonate a different device model.
@@ -122,7 +85,7 @@ impl Model {
     pub fn read_device() -> Result<Self> {
         Self::read_root(Path::new("/"))
     }
-    pub fn read_root(root: &Path) -> Result<Self> {
+    fn read_root(root: &Path) -> Result<Self> {
         let read = |path: &str| {
             std::fs::read_to_string(root.join(path)).map_err(|e| format!("{path}: {e}"))
         };
@@ -137,20 +100,11 @@ impl Model {
 mod tests {
     use super::*;
     #[test]
-    fn usb_modes_are_model_specific_and_secondary_usb_is_not_control() {
-        for model in Model::ALL {
-            for pid in model
-                .normal_pids()
-                .iter()
-                .chain(std::iter::once(&model.update_pid()))
-            {
-                assert_eq!(Model::from_usb(Model::VENDOR_ID, *pid), Some(model));
-                assert_eq!(Model::from_usb(0, *pid), None);
-            }
-        }
-        assert_eq!(Model::from_usb(Model::VENDOR_ID, 0x0026), None);
-        assert_eq!(Model::from_usb(Model::VENDOR_ID, 0xffff), None);
-        assert!(Model::Duo.require_runtime().is_err());
+    fn only_the_pro_ii_runs_without_the_experimental_duo_opt_in() {
+        assert!(Model::ProIi.require_runtime_with(false).is_ok());
+        assert!(Model::ProIi.require_runtime_with(true).is_ok());
+        assert!(Model::Duo.require_runtime_with(false).is_err());
+        assert!(Model::Duo.require_runtime_with(true).is_ok());
     }
     #[test]
     fn board_evidence_must_agree_and_be_unambiguous() {

@@ -1,13 +1,12 @@
 //! Explicit native-controller build profile. No JACK registrations, worker
 //! construction, preload environment, vendor process or firmware changes here.
-use rc2fx_core::Config;
 use rc2fx_device::{
     api, controller::Controller, coordinator::Coordinator, native_backend::Runtime, store::Store,
 };
 use std::{
     collections::HashSet,
     ffi::OsString,
-    io::{self, Read},
+    io,
     path::PathBuf,
     sync::atomic::{AtomicBool, AtomicI32, Ordering},
     time::Duration,
@@ -24,7 +23,6 @@ Usage: rc2fxd --data ABSOLUTE_DIRECTORY --native-socket ABSOLUTE_SOCKET
   --usb-socket SOCKET      Datagram socket the native library forwards the
                            desktop app's USB control reports to
   --ui-socket SOCKET       Optional owner-only local touchscreen control socket
-  --initial-config FILE    Seed new storage; existing saved settings win
   --stock-config FILE      Read-only saved RODE show for input discovery
   --release FILE           Installed mixer-release.json, reported as the
                            RC2FX mixer version
@@ -48,7 +46,6 @@ struct Arguments {
     socket: PathBuf,
     usb: PathBuf,
     ui: Option<PathBuf>,
-    initial: Option<PathBuf>,
     stock: Option<PathBuf>,
     release: Option<PathBuf>,
     firmware_catalog: Option<PathBuf>,
@@ -96,7 +93,6 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
     let mut seen = HashSet::new();
     let mut data = None;
     let mut socket = None;
-    let mut initial = None;
     let mut stock = None;
     let mut usb = None;
     let mut ui = None;
@@ -122,7 +118,6 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
                 | "--native-socket"
                 | "--usb-socket"
                 | "--ui-socket"
-                | "--initial-config"
                 | "--stock-config"
                 | "--release"
                 | "--firmware-catalog"
@@ -141,7 +136,6 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
         match key {
             "--data" => data = Some(PathBuf::from(value)),
             "--native-socket" => socket = Some(PathBuf::from(value)),
-            "--initial-config" => initial = Some(PathBuf::from(value)),
             "--stock-config" => stock = Some(PathBuf::from(value)),
             "--usb-socket" => usb = Some(PathBuf::from(value)),
             "--ui-socket" => ui = Some(PathBuf::from(value)),
@@ -163,7 +157,6 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
     let usb = usb.ok_or_else(|| invalid("--usb-socket is required"))?;
     if [&data, &socket, &usb]
         .into_iter()
-        .chain(initial.iter())
         .chain(stock.iter())
         .chain(ui.iter())
         .chain(release.iter())
@@ -195,7 +188,6 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
         socket,
         usb,
         ui,
-        initial,
         stock,
     }))
 }
@@ -370,20 +362,12 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
         update.recover();
         update.note_started();
     }
-    let initial = if let Some(path) = args.initial {
-        let mut text = String::new();
-        std::fs::File::open(path)?
-            .take(512 * 1024 + 1)
-            .read_to_string(&mut text)?;
-        Config::from_json(&text)?
-    } else {
-        rc2fx_device::catalog::default_config(model)
-    };
-    initial.validate()?;
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let store = Store::open(&args.data, initial)?;
+    // New storage starts from the model's defaults, as `plan` does, so the
+    // settings it stores match the plan the launcher already used.
+    let store = Store::open(&args.data, rc2fx_device::catalog::default_config(model))?;
     rc2fx_device::native_plan::plan_for_model(store.config(), model)?;
     let native = Runtime::connect(&args.socket, store.config(), Duration::from_secs(2))?;
     // The library can predate this daemon (RØDE's process keeps an old one

@@ -170,21 +170,6 @@ func DeclaresControl(descriptor []byte) bool {
 	return output && input
 }
 
-// CanonicalOutput returns the report inside an OUT transfer. The Windows/RODE
-// OUT path delivers 257 bytes for a 256-byte report. The extra byte is
-// outside the descriptor's report and has been observed as 1. Ignore exactly
-// that byte, then require normal frame validation. Do not combine reads or
-// accept arbitrary oversize buffers as a report.
-func CanonicalOutput(bytes []byte) ([]byte, bool) {
-	switch len(bytes) {
-	case ReportSize:
-		return bytes, true
-	case ReportSize + 1:
-		return bytes[:ReportSize], true
-	}
-	return nil, false
-}
-
 // DecodeFrame decodes one report with the given ID.
 func DecodeFrame(bytes []byte, report uint8) (Frame, bool) {
 	if len(bytes) != ReportSize || !Marked(bytes, report) || bytes[8] != 3 {

@@ -82,7 +82,7 @@ func TestUSBModesAreModelSpecificAndSecondaryUSBIsNotControl(t *testing.T) {
 			t.Errorf("%#x is a model", pid)
 		}
 	}
-	if ModelDuo.RequireRuntime() == nil {
+	if ModelDuo.RequireRuntimeWith(false) == nil {
 		t.Error("the Duo needs no opt-in")
 	}
 }
@@ -172,12 +172,12 @@ func TestSharedExecutableIsNotADeviceIdentityOrRuntimeQualification(t *testing.T
 	duo.Runtime = nil
 	catalog.Profiles = append(catalog.Profiles, duo)
 	catalog = mustParse(t, toJSON(t, catalog))
-	_, err := catalog.Select(image)
+	_, err := catalog.selectAny(image)
 	errorContains(t, err, "ambiguous")
-	if p, err := catalog.SelectForModel(ModelProIi, image); err != nil || p.Model != ModelProIi.ID() {
+	if p, err := catalog.selectForModel(ModelProIi, image, false); err != nil || p.Model != ModelProIi.ID() {
 		t.Fatalf("Pro II: %v", err)
 	}
-	_, err = catalog.SelectForModel(ModelDuo, image)
+	_, err = catalog.selectForModel(ModelDuo, image, false)
 	errorContains(t, err, "experimental")
 	inspected, err := catalog.InspectForModel(ModelDuo, image, launcher)
 	if err != nil {
@@ -211,17 +211,17 @@ func TestExperimentalOptInNeverGrantsTheProIiLayoutToADuo(t *testing.T) {
 	duo.Runtime.RouteLayout = ModelDuo.RouteLayout()
 	duo.Runtime.SourceEnum = ModelDuo.SourceEnum()
 	catalog.Profiles = append(catalog.Profiles, duo)
-	if _, err := catalog.SelectForModel(ModelDuo, image); err == nil {
+	if _, err := catalog.selectForModel(ModelDuo, image, false); err == nil {
 		t.Error("Duo admitted without the opt-in")
 	}
-	if p, err := catalog.SelectForModelWith(ModelDuo, image, true); err != nil || p.Model != ModelDuo.ID() {
+	if p, err := catalog.selectForModel(ModelDuo, image, true); err != nil || p.Model != ModelDuo.ID() {
 		t.Fatalf("Duo with the opt-in: %v", err)
 	}
-	if _, err := catalog.Select(image); err == nil {
+	if _, err := catalog.selectAny(image); err == nil {
 		t.Error("a shared executable selected without a model")
 	}
 	catalog.Profiles[1].Runtime = cloneRuntime(catalog.Profiles[0].Runtime)
-	if _, err := catalog.SelectForModelWith(ModelDuo, image, true); err == nil {
+	if _, err := catalog.selectForModel(ModelDuo, image, true); err == nil {
 		t.Error("the Pro II layout granted to a Duo")
 	}
 	if _, err := ParseCatalog(toJSON(t, catalog)); err == nil {
@@ -234,26 +234,26 @@ func TestExperimentalOptInNeverGrantsTheProIiLayoutToADuo(t *testing.T) {
 
 func TestResolvesExecutableVirtualOffsetsAndRefusesHashOrInstructionMismatches(t *testing.T) {
 	catalog, image := testImage(t)
-	if _, err := catalog.Select(image); err != nil {
+	if _, err := catalog.selectAny(image); err != nil {
 		t.Fatal(err)
 	}
 	image[0x200] ^= 1
-	_, err := catalog.Select(image)
+	_, err := catalog.selectAny(image)
 	errorContains(t, err, "unrecognized")
 	catalog.Profiles[0].MixerSHA256 = sum(image)
-	_, err = catalog.Select(image)
+	_, err = catalog.selectAny(image)
 	errorContains(t, err, "instructions differ")
 }
 
 func TestKnownButUnqualifiedAndNonExecutableSitesAreRefused(t *testing.T) {
 	catalog, image := testImage(t)
 	catalog.Profiles[0].Runtime = nil
-	_, err := catalog.Select(image)
+	_, err := catalog.selectAny(image)
 	errorContains(t, err, "not runtime-qualified")
 	catalog, _ = testImage(t)
 	binary.LittleEndian.PutUint32(image[68:], 4) // data, no PF_X
 	catalog.Profiles[0].MixerSHA256 = sum(image)
-	_, err = catalog.Select(image)
+	_, err = catalog.selectAny(image)
 	errorContains(t, err, "outside executable")
 }
 
@@ -271,8 +271,13 @@ func TestCatalogJSONIsReadAsStrictlyAsSerde(t *testing.T) {
 		"null default string": func(s string) string {
 			return strings.Replace(s, `"minimumAppVersion": "0.1.1"`, `"minimumAppVersion": null`, 1)
 		},
-		"float rate":  func(s string) string { return strings.Replace(s, `"sampleRate": 48000`, `"sampleRate": 48000.0`, 1) },
-		"string rate": func(s string) string { return strings.Replace(s, `"sampleRate": 48000`, `"sampleRate": "48000"`, 1) },
+		"float rate": func(s string) string { return strings.Replace(s, `"sampleRate": 48000`, `"sampleRate": 48000.0`, 1) },
+		// serde_json reads -0 as a float, which a u32 refuses.
+		"negative zero rate": func(s string) string { return strings.Replace(s, `"sampleRate": 48000`, `"sampleRate": -0`, 1) },
+		"field name case":    func(s string) string { return strings.Replace(s, `"notes":`, `"Notes":`, 1) },
+		"duplicate site key": func(s string) string { return strings.Replace(s, `"offset":`, `"offset": "0x10", "offset":`, 1) },
+		"invalid UTF-8":      func(s string) string { return strings.Replace(s, `"notes": "`, "\"notes\": \"\xff", 1) },
+		"string rate":        func(s string) string { return strings.Replace(s, `"sampleRate": 48000`, `"sampleRate": "48000"`, 1) },
 		"overflowing version": func(s string) string {
 			return strings.Replace(s, `"schemaVersion": 1`, `"schemaVersion": 4294967297`, 1)
 		},

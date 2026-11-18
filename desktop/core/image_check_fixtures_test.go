@@ -1,23 +1,18 @@
 package core
 
 // The shared image-check fixtures in fixtures/image_check. The Rust crate
-// (crates/rc2fx-core/tests/image_check_fixtures.rs) reads the same files:
-// both must make the same report from each record, accept and reject the
-// same answers, and write accepted ones back byte for byte.
+// (crates/rc2fx-core/tests/image_check_fixtures.rs) reads the same files.
+// Only the mixer makes reports from records and writes them, so Go checks
+// only `reports`: it must accept and reject the same answers, and read an
+// accepted answer as the same report as its canonical form.
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
-
-type imageRecordCase struct {
-	Name   string  `json:"name"`
-	Record *string `json:"record"`
-	Digest *string `json:"digest"`
-	Expect string  `json:"expect"`
-}
 
 type imageReportCase struct {
 	Name      string  `json:"name"`
@@ -28,8 +23,6 @@ type imageReportCase struct {
 }
 
 type imageFixtures struct {
-	Comment string            `json:"comment"`
-	Records []imageRecordCase `json:"records"`
 	Reports []imageReportCase `json:"reports"`
 }
 
@@ -48,27 +41,10 @@ func loadImageFixtures(t *testing.T) imageFixtures {
 	if err := json.Unmarshal(imageFixture(t, "cases.json"), &fixtures); err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures.Records) == 0 || len(fixtures.Reports) == 0 {
+	if len(fixtures.Reports) == 0 {
 		t.Fatal("no image-check fixtures")
 	}
 	return fixtures
-}
-
-func TestImageCheckRecordFixtures(t *testing.T) {
-	for _, c := range loadImageFixtures(t).Records {
-		var record *string
-		if c.Record != nil {
-			text := string(imageFixture(t, *c.Record))
-			record = &text
-		}
-		got, err := Encode(ImageCheckFromRecord(record, c.Digest))
-		if err != nil {
-			t.Fatalf("%s: %v", c.Name, err)
-		}
-		if string(got) != c.Expect {
-			t.Errorf("%s:\n got %s\nwant %s", c.Name, got, c.Expect)
-		}
-	}
 }
 
 func TestImageCheckReportFixtures(t *testing.T) {
@@ -83,12 +59,27 @@ func TestImageCheckReportFixtures(t *testing.T) {
 		if !c.Accept {
 			continue
 		}
-		got, err := Encode(check)
-		if err != nil {
-			t.Fatalf("%s: %v", c.Name, err)
+		if c.Canonical == nil {
+			t.Fatalf("%s: an accepted answer needs its canonical form", c.Name)
 		}
-		if c.Canonical == nil || string(got) != *c.Canonical {
-			t.Errorf("%s:\n got %s\nwant %v", c.Name, got, c.Canonical)
+		var canonical ImageCheck
+		if err := DecodeStrict([]byte(*c.Canonical), &canonical); err != nil {
+			t.Fatalf("%s: canonical: %v", c.Name, err)
+		}
+		if !reflect.DeepEqual(normalImageCheck(check), normalImageCheck(canonical)) {
+			t.Errorf("%s:\n got %+v\nwant %+v", c.Name, check, canonical)
 		}
 	}
+}
+
+// normalImageCheck treats an empty list as no list, as serde's
+// skip_serializing_if does when the mixer writes the report.
+func normalImageCheck(c ImageCheck) ImageCheck {
+	if len(c.Repaired) == 0 {
+		c.Repaired = nil
+	}
+	if len(c.Damaged) == 0 {
+		c.Damaged = nil
+	}
+	return c
 }

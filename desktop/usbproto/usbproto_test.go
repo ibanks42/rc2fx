@@ -199,24 +199,6 @@ func TestStagedLayoutIsOneCollectionWithTheControlReports(t *testing.T) {
 	}
 }
 
-func TestAcceptsExactlyOneTransportByteBeyondTheDescriptorReport(t *testing.T) {
-	b := make([]byte, ReportSize+1)
-	if got, ok := CanonicalOutput(b); !ok || len(got) != ReportSize {
-		t.Fatal("257 bytes refused")
-	}
-	b[ReportSize] = 1
-	if got, ok := CanonicalOutput(b); !ok || len(got) != ReportSize {
-		t.Fatal("257 bytes ending in 1 refused")
-	}
-	b = append(b, 0)
-	if _, ok := CanonicalOutput(b); ok {
-		t.Fatal("258 bytes accepted")
-	}
-	if _, ok := CanonicalOutput(b[:ReportSize-1]); ok {
-		t.Fatal("255 bytes accepted")
-	}
-}
-
 // The Rust structs are (de)serialized by serde; these pin the same shape.
 func TestRequestAndReplyJSONMatchSerde(t *testing.T) {
 	request := Request{Method: "PUT", Path: "api/v1/x</> \x01", Body: json.RawMessage(`{ "a" : [1, 2] }`)}

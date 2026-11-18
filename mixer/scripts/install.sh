@@ -9,6 +9,8 @@ shim=$root/usr/sbin/rc_audio_mixer
 gui_shim=$root/usr/sbin/rc_gui_juce
 previous=$opt/.rc2fx-previous
 pending=$opt/.rc2fx-install-pending
+# PayloadNames in desktop/installer/embed/format.go, which owns the list; its
+# lists_test.go fails when this copy (or the chmod 700 list below) differs.
 files="librc2fx_native.so rc2fxd rc2fx-supervisor rc2fx-firmware firmware-profiles.json librc2fx_gui.so
  librc2fx_jackerr.so rc2fx_jackerr_snapshot mixer-release.json
  SHA256SUMS rc2fx.sh rc2fx-shim.sh rc2fx-gui-shim.sh install.sh"

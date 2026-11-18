@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
@@ -67,8 +68,8 @@ func (m Model) FirmwareDirectory() string { return m.Hardware().FirmwareDirector
 // experimental opt-in.
 func (m Model) RuntimeEnabled() bool { return m == ModelProIi }
 
-func (m Model) RequireRuntime() error { return m.RequireRuntimeWith(false) }
-
+// RequireRuntimeWith refuses a model that is not runtime-enabled unless it
+// is the Duo and experimental Duo support was opted into.
 func (m Model) RequireRuntimeWith(experimentalDuo bool) error {
 	if m.RuntimeEnabled() || (m == ModelDuo && experimentalDuo) {
 		return nil
@@ -136,10 +137,11 @@ func (m Model) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m.ID())
 }
 
-// UnmarshalJSON reads a model ID; anything else is refused.
+// UnmarshalJSON reads a model ID; anything else is refused, as strictly as
+// serde reads it.
 func (m *Model) UnmarshalJSON(data []byte) error {
-	id, err := stringValue(data)
-	if err != nil {
+	var id string
+	if err := core.DecodeStrict(data, &id); err != nil {
 		return err
 	}
 	for _, model := range ModelAll {

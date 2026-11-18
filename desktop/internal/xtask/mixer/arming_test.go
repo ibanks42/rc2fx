@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/setup"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -80,10 +81,7 @@ func newFake(t *testing.T, marker, content string) *fake {
 	}
 	root := task.Root()
 	var sums strings.Builder
-	for _, name := range []string{
-		"librc2fx_native.so", "rc2fxd", "rc2fx-supervisor", "rc2fx-firmware", "firmware-profiles.json",
-		setup.GUIModule, setup.JackerrModule, setup.JackerrSnapshot, "mixer-release.json",
-	} {
+	for _, name := range embed.Pinned {
 		data := []byte(name)
 		switch name {
 		case "firmware-profiles.json":

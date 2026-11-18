@@ -48,7 +48,7 @@ from the other:
   a subpackage.
 - Functions and types keep their names in exported Go CamelCase:
   `compare_versions` becomes `CompareVersions`, `MixerRelease::parse`
-  `ParseMixerRelease`, `Model::from_usb` `ModelFromUSB` and `valid_id`
+  `ParseMixerRelease`, `Model::from_board` `ModelFromBoard` and `valid_id`
   `ValidID`. Initialisms follow Go style (`ID`, `USB`, `JSON`, `HTTP`, `SSH`,
   `EQ`, `HPF`, `TUF`, `URL`).
 - Constants: `MIXER_PROTOCOL_VERSION` becomes `MixerProtocolVersion`.

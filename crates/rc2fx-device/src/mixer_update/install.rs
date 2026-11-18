@@ -40,8 +40,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The files a mixer payload carries, in its order. Mirrors
-/// `PayloadNames` in the desktop's `desktop/installer/embed/format.go`.
+/// The files a mixer payload carries, in its order. This and the three lists
+/// below mirror `PayloadNames`, `Pinned`, `Binaries` and `Scripts` in the
+/// desktop's `desktop/installer/embed/format.go`, which owns them; the test
+/// `the_payload_lists_match_the_desktop_installers` fails when they differ.
 pub const PAYLOAD_NAMES: [&str; 14] = [
     "librc2fx_native.so",
     "rc2fxd",

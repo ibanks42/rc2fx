@@ -41,7 +41,7 @@ sigstore-tuf = { version = "0.16", default-features = false, features = ["aws-lc
 jiff = "0.2"
 
 [target.'cfg(unix)'.dev-dependencies]
-rc2fx-delta = { path = "../rc2fx-delta" }
+rc2fx-delta = { path = "../rc2fx-delta", features = ["encode"] }
 sigstore-tuf = { version = "0.16", default-features = false, features = ["aws-lc-rs"] }
 
 [dev-dependencies]

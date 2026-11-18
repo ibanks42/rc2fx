@@ -1458,3 +1458,31 @@ fn the_image_check_follows_the_launchers_record_for_this_image() {
     assert_eq!(check.status, ImageStatus::Damaged);
     assert_eq!(check.damaged, ["etc/hostname"]);
 }
+
+/// The desktop's payload format, which owns the file lists `install` keeps
+/// copies of.
+const FORMAT_GO: &str = include_str!("../../../../desktop/installer/embed/format.go");
+
+/// The names in format.go's `var <name> = [N]string{ ... }`.
+fn go_list(name: &str) -> Vec<&'static str> {
+    let start = format!("\nvar {name} = [");
+    let at = FORMAT_GO
+        .find(&start)
+        .unwrap_or_else(|| panic!("format.go has no {name}"));
+    let body = &FORMAT_GO[at + start.len()..];
+    let open = body.find('{').unwrap();
+    let close = body.find('}').unwrap();
+    body[open + 1..close]
+        .split(',')
+        .map(|entry| entry.trim().trim_matches('"'))
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+#[test]
+fn the_payload_lists_match_the_desktop_installers() {
+    assert_eq!(install::PAYLOAD_NAMES[..], go_list("PayloadNames")[..]);
+    assert_eq!(install::PINNED[..], go_list("Pinned")[..]);
+    assert_eq!(install::BINARIES[..], go_list("Binaries")[..]);
+    assert_eq!(install::SCRIPTS[..], go_list("Scripts")[..]);
+}

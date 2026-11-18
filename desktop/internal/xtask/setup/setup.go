@@ -17,6 +17,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/elfcheck"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -158,66 +159,6 @@ func BuildMixer() error {
 	if err := os.MkdirAll(out, 0o777); err != nil {
 		return task.Error(task.IOError(err))
 	}
-	var sums strings.Builder
-	for _, binary := range []struct {
-		name   string
-		shared bool
-	}{
-		{"librc2fx_native.so", true},
-		{"rc2fxd", false},
-		{"rc2fx-supervisor", false},
-		{"rc2fx-firmware", false},
-	} {
-		file := filepath.Join(out, binary.name)
-		if err := copyFile(filepath.Join(release, binary.name), file); err != nil {
-			return task.Errorf("%s: %s", binary.name, task.IOError(err))
-		}
-		if err := elfcheck.Check(file, binary.shared); err != nil {
-			return err
-		}
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return task.Error(task.IOError(err))
-		}
-		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), binary.name)
-	}
-	profiles := task.CRLFToLF(catalog)
-	if err := os.WriteFile(filepath.Join(out, "firmware-profiles.json"), []byte(profiles), 0o666); err != nil {
-		return task.Error(task.IOError(err))
-	}
-	fmt.Fprintf(&sums, "%s  firmware-profiles.json\n", task.Sha256([]byte(profiles)))
-	file := filepath.Join(out, GUIModule)
-	if err := copyFile(gui, file); err != nil {
-		return task.Errorf("%s: %s", GUIModule, task.IOError(err))
-	}
-	if err := elfcheck.Check(file, true); err != nil {
-		return err
-	}
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return task.Error(task.IOError(err))
-	}
-	fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), GUIModule)
-	for _, part := range []struct {
-		source, name string
-		shared       bool
-	}{
-		{recorder[0], JackerrModule, true},
-		{recorder[1], JackerrSnapshot, false},
-	} {
-		file := filepath.Join(out, part.name)
-		if err := copyFile(part.source, file); err != nil {
-			return task.Errorf("%s: %s", part.name, task.IOError(err))
-		}
-		if err := elfcheck.Check(file, part.shared); err != nil {
-			return err
-		}
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return task.Error(task.IOError(err))
-		}
-		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), part.name)
-	}
 	// The runtime's release identity, pinned last; the installer refuses a
 	// runtime whose manifest differs from config/mixer-release.json.
 	manifest, err := os.ReadFile(filepath.Join(root, "config", "mixer-release.json"))
@@ -228,10 +169,41 @@ func BuildMixer() error {
 	if _, err := core.ParseMixerRelease([]byte(releaseText)); err != nil {
 		return task.Error(err.Error())
 	}
-	if err := os.WriteFile(filepath.Join(out, "mixer-release.json"), []byte(releaseText), 0o666); err != nil {
-		return task.Error(task.IOError(err))
+	sources := payloadSources(release, gui, recorder, []byte(task.CRLFToLF(catalog)), []byte(releaseText))
+	if err := checkSources(sources); err != nil {
+		return err
 	}
-	fmt.Fprintf(&sums, "%s  mixer-release.json\n", task.Sha256([]byte(releaseText)))
+	// Each file is read once: checked, written and hashed from the same
+	// bytes, in the bundle's SHA256SUMS order.
+	var sums strings.Builder
+	for _, name := range embed.Pinned {
+		source := sources[name]
+		file := filepath.Join(out, name)
+		data, mode := source.data, fs.FileMode(0o666)
+		if source.path != "" {
+			info, err := os.Stat(source.path)
+			if err == nil {
+				data, err = os.ReadFile(source.path)
+			}
+			if err != nil {
+				return task.Errorf("%s: %s", name, task.IOError(err))
+			}
+			if err := elfcheck.CheckData(file, data, source.shared); err != nil {
+				return err
+			}
+			mode = info.Mode().Perm()
+		}
+		if err := os.WriteFile(file, data, mode); err != nil {
+			return task.Errorf("%s: %s", name, task.IOError(err))
+		}
+		if source.path != "" {
+			// fs::copy's permissions, whatever the umask.
+			if err := os.Chmod(file, mode); err != nil {
+				return task.Errorf("%s: %s", name, task.IOError(err))
+			}
+		}
+		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), name)
+	}
 	if err := os.WriteFile(filepath.Join(out, "SHA256SUMS"), []byte(sums.String()), 0o666); err != nil {
 		return task.Error(task.IOError(err))
 	}
@@ -250,20 +222,50 @@ func BuildMixer() error {
 	return nil
 }
 
-// copyFile is fs::copy: the bytes and the permissions.
-func copyFile(from, to string) error {
-	data, err := os.ReadFile(from)
-	if err != nil {
-		return err
+// payloadSource is where BuildMixer takes one pinned payload file from: a
+// built ELF at path, checked against the mixer ABI baseline (a shared
+// library when shared), or data it already holds.
+type payloadSource struct {
+	path   string
+	shared bool
+	data   []byte
+}
+
+// payloadSources is where BuildMixer takes each file in embed.Pinned from:
+// release is the cargo release directory, gui the GUI module and recorder
+// the JACK error recorder and its snapshot reader.
+func payloadSources(release, gui string, recorder [2]string, profiles, manifest []byte) map[string]payloadSource {
+	return map[string]payloadSource{
+		"librc2fx_native.so":     {path: filepath.Join(release, "librc2fx_native.so"), shared: true},
+		"rc2fxd":                 {path: filepath.Join(release, "rc2fxd")},
+		"rc2fx-supervisor":       {path: filepath.Join(release, "rc2fx-supervisor")},
+		"rc2fx-firmware":         {path: filepath.Join(release, "rc2fx-firmware")},
+		"firmware-profiles.json": {data: profiles},
+		GUIModule:                {path: gui, shared: true},
+		JackerrModule:            {path: recorder[0], shared: true},
+		JackerrSnapshot:          {path: recorder[1]},
+		embed.ReleaseManifest:    {data: manifest},
 	}
-	info, err := os.Stat(from)
-	if err != nil {
-		return err
+}
+
+// checkSources requires a source for exactly the files in embed.Pinned, and
+// a built ELF for exactly those in embed.Binaries, so a payload file added
+// on one side stops the build instead of producing a bundle the installer
+// refuses.
+func checkSources(sources map[string]payloadSource) error {
+	if len(sources) != len(embed.Pinned) {
+		return task.Errorf("the mixer build makes %d files; the payload pins %d", len(sources), len(embed.Pinned))
 	}
-	if err := os.WriteFile(to, data, info.Mode().Perm()); err != nil {
-		return err
+	for _, name := range embed.Pinned {
+		source, ok := sources[name]
+		if !ok {
+			return task.Errorf("the mixer build has no source for %s", name)
+		}
+		if (source.path != "") != embed.IsBinary(name) {
+			return task.Errorf("the mixer build and the payload disagree on whether %s is a binary", name)
+		}
 	}
-	return os.Chmod(to, info.Mode().Perm())
+	return nil
 }
 
 // SameFiles reports whether directories a and b hold the same files with the
@@ -286,12 +288,8 @@ func SameFiles(a, b string) bool {
 			}
 			files = append(files, entry{e.Name(), data})
 		}
-		sort.Slice(files, func(i, j int) bool {
-			if files[i].name != files[j].name {
-				return files[i].name < files[j].name
-			}
-			return bytes.Compare(files[i].data, files[j].data) < 0
-		})
+		// Names in a directory are unique, so the name alone orders them.
+		sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 		return files, true
 	}
 	left, okLeft := list(a)

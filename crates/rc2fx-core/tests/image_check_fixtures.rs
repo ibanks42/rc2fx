@@ -1,8 +1,8 @@
 //! The shared image-check fixtures in `fixtures/image_check`. The desktop's
 //! Go port (`desktop/core/image_check_fixtures_test.go`) reads the same
-//! files: both must make the same report from each record, accept and reject
-//! the same `GET api/v1/image-check` answers, and write accepted ones back
-//! byte for byte.
+//! `reports`: both must accept and reject the same `GET api/v1/image-check`
+//! answers. Only the mixer makes reports from records and writes them, so
+//! `records` and the byte-for-byte write-back are checked here alone.
 use rc2fx_core::ImageCheck;
 use serde_json::Value;
 use std::path::PathBuf;

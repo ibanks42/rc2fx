@@ -2,6 +2,8 @@ package firmware
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -157,9 +159,9 @@ func TestSharedSelectFixtures(t *testing.T) {
 		var profile *Profile
 		switch c.Op {
 		case "select":
-			profile, err = catalog.Select(image)
+			profile, err = catalog.selectAny(image)
 		case "selectForModel":
-			profile, err = catalog.SelectForModelWith(model, image, c.ExperimentalDuo)
+			profile, err = catalog.selectForModel(model, image, c.ExperimentalDuo)
 		case "inspectForModel":
 			profile, err = catalog.InspectForModel(model, image, read(c.Launcher))
 		case "verifyLauncher":
@@ -178,4 +180,52 @@ func TestSharedSelectFixtures(t *testing.T) {
 			t.Errorf("%s: error %v, want %q", name, err, *c.Error)
 		}
 	}
+}
+
+// selectAny is the mixer's Rust Catalog::select: the one profile for a mixer
+// executable, for a model that needs no opt-in. The desktop never selects a
+// runtime; this stays here so the select fixtures keep checking the Go
+// VerifyImage that InspectForModel uses.
+func (c *Catalog) selectAny(image []byte) (*Profile, error) {
+	hash := sum(image)
+	var found *Profile
+	for i := range c.Profiles {
+		if c.Profiles[i].MixerSHA256 != hash {
+			continue
+		}
+		if found != nil {
+			return nil, errors.New("ambiguous mixer executable: select using verified device model")
+		}
+		found = &c.Profiles[i]
+	}
+	if found == nil {
+		return nil, fmt.Errorf("unrecognized mixer executable SHA-256 %s", hash)
+	}
+	model, err := ParseModel(found.Model)
+	if err != nil {
+		return nil, err
+	}
+	if err := model.RequireRuntimeWith(false); err != nil {
+		return nil, err
+	}
+	if err := found.VerifyImage(image); err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// selectForModel is the mixer's Rust Catalog::select_for_model_with: the
+// opt-in admits only the named model's own profile and route layout.
+func (c *Catalog) selectForModel(model Model, image []byte, experimentalDuo bool) (*Profile, error) {
+	if err := model.RequireRuntimeWith(experimentalDuo); err != nil {
+		return nil, err
+	}
+	profile, err := c.identify(model, image)
+	if err != nil {
+		return nil, err
+	}
+	if err := profile.VerifyImage(image); err != nil {
+		return nil, err
+	}
+	return profile, nil
 }

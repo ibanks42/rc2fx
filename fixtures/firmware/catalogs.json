@@ -355,6 +355,11 @@
       "error": "*"
     },
     {
+      "file": "fixtures/firmware/catalogs/negative-zero-rate.json",
+      "ok": false,
+      "error": "*"
+    },
+    {
       "file": "fixtures/firmware/catalogs/overflowing-schema-version.json",
       "ok": false,
       "error": "*"

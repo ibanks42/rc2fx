@@ -47,6 +47,12 @@ func Check(path string, shared bool) error {
 	if err != nil {
 		return task.Errorf("%s: %s", path, task.IOError(err))
 	}
+	return CheckData(path, data, shared)
+}
+
+// CheckData is Check for bytes already read: path only names them, in the
+// error and in the line that says they pass.
+func CheckData(path string, data []byte, shared bool) error {
 	if err := CheckBytes(data, shared); err != nil {
 		return task.Errorf("%s: %s", path, err)
 	}

@@ -686,7 +686,7 @@ mod tests {
         let bytes = std::fs::read(path).unwrap();
         let catalog = rc2fx_firmware::Catalog::parse(rc2fx_firmware::DEFAULT_CATALOG).unwrap();
         catalog
-            .select_for_model(rc2fx_firmware::Model::ProIi, &bytes)
+            .select_for_model_with(rc2fx_firmware::Model::ProIi, &bytes, false)
             .unwrap();
     }
 }

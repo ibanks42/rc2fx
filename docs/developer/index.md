@@ -38,7 +38,7 @@ that keep it in step with the mixer's Rust.
 | `desktop/packaging` | AppImage launcher, desktop entry, icons and macOS entitlements |
 | `crates/rc2fx-usb` | USB control framing for `rc2fxd`; the app's copy is `desktop/usbproto` |
 | `crates/rc2fx-core` | Settings model, control API messages and EQ coefficients; the app's copy, `desktop/core`, also holds the editor logic and EasyEffects and APO import/export |
-| `crates/rc2fx-delta` | Compressed settings deltas; the app's encoder is `desktop/delta` |
+| `crates/rc2fx-delta` | Delta transport for in-place payload uploads: the mixer's decoder, plus a test-only encoder behind the `encode` feature; the app's encoder is `desktop/delta` |
 | `crates/rc2fx-dsp` | Effect chain |
 | `crates/rc2fx-suppression` | Noise-suppression worker and models |
 | `crates/rc2fx-dfn` | RC2FX's DeepFilterNet3 engine and weights |

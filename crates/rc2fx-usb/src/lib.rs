@@ -17,8 +17,6 @@ pub const MAX_REQUEST: usize = 512 * 1024 + 1024;
 pub const MAX_REPLY: usize = 8 * 1024 * 1024 + 1024;
 /// The largest event a mixer publishes.
 pub const MAX_EVENT_BYTES: usize = 512 * 1024;
-/// The largest reply to an event poll: one event and its envelope.
-pub const MAX_EVENT_REPLY: usize = MAX_EVENT_BYTES + 1024;
 pub const MAGIC: &[u8; 7] = b"\xffRC2FX\0";
 /// The hello data protocol 3 clients send, and the hello acknowledgement they
 /// expect.
@@ -30,18 +28,6 @@ pub const HELLO_4: &[u8] = b"RC2FX USB 4";
 /// native hook forwards reports with a non-blocking datagram send, so a queue
 /// longer than the kernel's `max_dgram_qlen` would silently drop one.
 pub const MAX_WINDOW: usize = 32;
-
-/// The window in a protocol 4 hello acknowledgement (`RC2FX USB 4 <window>`).
-/// Anything else is not one, including a bare `RC2FX USB 4`.
-pub fn hello_4_window(data: &[u8]) -> Option<usize> {
-    let digits = data.strip_prefix(b"RC2FX USB 4 ")?;
-    let digits = std::str::from_utf8(digits).ok()?;
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let window: usize = digits.parse().ok()?;
-    (1..=64).contains(&window).then_some(window)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -68,49 +54,6 @@ pub struct Frame<'a> {
 /// never be forwarded into RODE's command parser.
 pub fn marked(bytes: &[u8], report: u8) -> bool {
     bytes.first() == Some(&report) && bytes.get(1..8) == Some(MAGIC.as_slice())
-}
-
-/// Whether a HID report descriptor declares RC2FX's output and input reports,
-/// that is, whether RC2FX's USB layout is live. Parsing sends nothing.
-pub fn declares_control(descriptor: &[u8]) -> bool {
-    let (mut report, mut stack) = (0u32, Vec::new());
-    let (mut output, mut input) = (false, false);
-    let mut i = 0;
-    while i < descriptor.len() {
-        let prefix = descriptor[i];
-        i += 1;
-        if prefix == 0xfe {
-            let Some(&size) = descriptor.get(i) else {
-                return false;
-            };
-            i += 2 + size as usize;
-            continue;
-        }
-        let n = match prefix & 3 {
-            3 => 4,
-            n => n as usize,
-        };
-        let Some(bytes) = descriptor.get(i..i + n) else {
-            return false;
-        };
-        i += n;
-        let value = bytes
-            .iter()
-            .rev()
-            .fold(0u32, |v, b| (v << 8) | u32::from(*b));
-        match prefix & 0xfc {
-            0x84 => report = value,
-            0xa4 => stack.push(report),
-            0xb4 => match stack.pop() {
-                Some(r) => report = r,
-                None => return false,
-            },
-            0x80 => input |= report == u32::from(INPUT_ID),
-            0x90 => output |= report == u32::from(OUTPUT_ID),
-            _ => {}
-        }
-    }
-    output && input
 }
 
 /// The Windows/RODE OUT path delivers 257 bytes for a 256-byte report. The
@@ -313,32 +256,6 @@ mod tests {
         assert!(unpack(b"X{}", 64).is_err());
     }
     #[test]
-    fn only_a_protocol_four_acknowledgement_carries_a_window() {
-        assert_eq!(hello_4_window(b"RC2FX USB 4 1"), Some(1));
-        assert_eq!(hello_4_window(b"RC2FX USB 4 32"), Some(32));
-        assert_eq!(hello_4_window(b"RC2FX USB 4 64"), Some(64));
-        for bad in [
-            &b"RC2FX USB 4 0"[..],
-            b"RC2FX USB 4 65",
-            b"RC2FX USB 4 ",
-            b"RC2FX USB 4  8",
-            b"RC2FX USB 4 8x",
-            b"RC2FX USB 4 -1",
-            b"RC2FX USB 4",
-            b"RC2FX USB 3",
-            b"RC2FX USB 4 999999999999999999999999",
-            b"",
-        ] {
-            assert_eq!(
-                hello_4_window(bad),
-                None,
-                "{:?}",
-                String::from_utf8_lossy(bad)
-            );
-        }
-    }
-
-    #[test]
     fn isolated_input_report_rejects_vendor_ids_and_excess_payload() {
         let f = Frame {
             kind: Kind::Reply,
@@ -412,32 +329,6 @@ mod tests {
         assert!(Frame::decode(&b, OUTPUT_ID).is_none());
         b[1] = b'M';
         assert!(!marked(&b, OUTPUT_ID));
-    }
-
-    /// RODE's 1.7.6/1.7.7 descriptor and the copy `rc2fx.sh` stages from it.
-    const STOCK: &str = "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff8102c0";
-    const STAGED: &str = "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff8102c0";
-
-    fn hex(text: &str) -> Vec<u8> {
-        (0..text.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-            .collect()
-    }
-
-    #[test]
-    fn staged_layout_is_one_collection_with_the_control_reports() {
-        let (stock, staged) = (hex(STOCK), hex(STAGED));
-        assert_eq!(staged[..stock.len() - 1], stock[..stock.len() - 1]);
-        // One application collection, closed once, at the very end.
-        assert_eq!(staged.iter().filter(|b| **b == 0xa1).count(), 1);
-        assert_eq!(staged.last(), Some(&0xc0));
-        assert!(declares_control(&staged));
-        assert!(!declares_control(&stock));
-        // Each half alone, or the IDs swapped, is not RC2FX's layout.
-        assert!(!declares_control(&hex(&STAGED.replace("850595ff9102", ""))));
-        assert!(!declares_control(&hex(&STAGED.replace("850695ff8102", ""))));
-        assert!(!declares_control(&staged[..staged.len() - 3]));
     }
 
     #[test]

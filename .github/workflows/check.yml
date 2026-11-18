@@ -91,6 +91,9 @@ jobs:
       - name: Lint the workspace
         run: |
           cargo clippy --config .github/cargo-ci.toml --locked --workspace --all-targets --no-default-features -- -D warnings
+          # The workspace run turns on rc2fx-delta's test-only encoder (an
+          # rc2fx-device dev-dependency); the mixer builds it without.
+          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-delta --lib -- -D warnings
       - name: Test the workspace
         # Linux is what the mixer runs, so the whole suite runs here.
         run: cargo test --config .github/cargo-ci.toml --locked --workspace

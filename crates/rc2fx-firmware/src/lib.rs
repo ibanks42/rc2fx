@@ -222,20 +222,6 @@ impl Catalog {
         Self::parse(&text)
     }
 
-    pub fn select<'a>(&'a self, image: &[u8]) -> Result<&'a Profile> {
-        let hash = sha256(image);
-        let mut matches = self.profiles.iter().filter(|p| p.mixer_sha256 == hash);
-        let profile = matches
-            .next()
-            .ok_or_else(|| format!("unrecognized mixer executable SHA-256 {hash}"))?;
-        if matches.next().is_some() {
-            return Err("ambiguous mixer executable: select using verified device model".into());
-        }
-        Model::parse(&profile.model)?.require_runtime()?;
-        profile.verify_image(image)?;
-        Ok(profile)
-    }
-
     fn identify(&self, model: Model, image: &[u8]) -> Result<&Profile> {
         let hash = sha256(image);
         self.profiles
@@ -249,12 +235,9 @@ impl Catalog {
             })
     }
 
-    /// Runtime admission needs a board identity, not just a shared executable.
-    pub fn select_for_model(&self, model: Model, image: &[u8]) -> Result<&Profile> {
-        self.select_for_model_with(model, image, false)
-    }
-
-    /// The opt-in admits only the named model's own profile and route layout.
+    /// Runtime admission needs a board identity, not just an executable: the
+    /// Pro II and Duo ship the same one. The opt-in admits only the named
+    /// model's own profile and route layout.
     pub fn select_for_model_with(
         &self,
         model: Model,
@@ -446,17 +429,16 @@ mod tests {
         duo.runtime = None;
         catalog.profiles.push(duo);
         let catalog = Catalog::parse(&serde_json::to_string(&catalog).unwrap()).unwrap();
-        assert!(catalog.select(&image).unwrap_err().contains("ambiguous"));
         assert_eq!(
             catalog
-                .select_for_model(Model::ProIi, &image)
+                .select_for_model_with(Model::ProIi, &image, false)
                 .unwrap()
                 .model,
             Model::ProIi.id()
         );
         assert!(
             catalog
-                .select_for_model(Model::Duo, &image)
+                .select_for_model_with(Model::Duo, &image, false)
                 .unwrap_err()
                 .contains("experimental")
         );
@@ -489,7 +471,11 @@ mod tests {
         duo.runtime.as_mut().unwrap().route_layout = Model::Duo.route_layout().into();
         duo.runtime.as_mut().unwrap().source_enum = Model::Duo.source_enum().into();
         catalog.profiles.push(duo);
-        assert!(catalog.select_for_model(Model::Duo, &image).is_err());
+        assert!(
+            catalog
+                .select_for_model_with(Model::Duo, &image, false)
+                .is_err()
+        );
         assert_eq!(
             catalog
                 .select_for_model_with(Model::Duo, &image, true)
@@ -497,7 +483,6 @@ mod tests {
                 .model,
             Model::Duo.id()
         );
-        assert!(catalog.select(&image).is_err());
         catalog.profiles[1].runtime = catalog.profiles[0].runtime.clone();
         assert!(
             catalog
@@ -517,13 +502,20 @@ mod tests {
     #[test]
     fn resolves_executable_virtual_offsets_and_refuses_hash_or_instruction_mismatches() {
         let (mut catalog, mut image) = fixture();
-        catalog.select(&image).unwrap();
+        catalog
+            .select_for_model_with(Model::ProIi, &image, false)
+            .unwrap();
         image[0x200] ^= 1;
-        assert!(catalog.select(&image).unwrap_err().contains("unrecognized"));
+        assert!(
+            catalog
+                .select_for_model_with(Model::ProIi, &image, false)
+                .unwrap_err()
+                .contains("unrecognized")
+        );
         catalog.profiles[0].mixer_sha256 = sha256(&image);
         assert!(
             catalog
-                .select(&image)
+                .select_for_model_with(Model::ProIi, &image, false)
                 .unwrap_err()
                 .contains("instructions differ")
         );
@@ -535,7 +527,7 @@ mod tests {
         catalog.profiles[0].runtime = None;
         assert!(
             catalog
-                .select(&image)
+                .select_for_model_with(Model::ProIi, &image, false)
                 .unwrap_err()
                 .contains("not runtime-qualified")
         );
@@ -544,7 +536,7 @@ mod tests {
         catalog.profiles[0].mixer_sha256 = sha256(&image);
         assert!(
             catalog
-                .select(&image)
+                .select_for_model_with(Model::ProIi, &image, false)
                 .unwrap_err()
                 .contains("outside executable")
         );

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,17 +23,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/control"
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/setup"
+	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// The scripts that run on the mixer, in the repository: the supervisor, the
-// launcher shim that starts it, the same for RØDE's display loop
-// (`rc_gui_juce` by name, /usr/sbin first), and the installer.
+// Two of the scripts that run on the mixer (embed.Scripts), in the
+// repository: the supervisor and the installer.
 const (
 	rc2fxShPath   = task.MixerScriptsDir + "/rc2fx.sh"
-	shimPath      = task.MixerScriptsDir + "/rc2fx-shim.sh"
-	guiShimPath   = task.MixerScriptsDir + "/rc2fx-gui-shim.sh"
 	installShPath = task.MixerScriptsDir + "/install.sh"
 	maxReplyBytes = 64 << 20
 	maxReplyNodes = 4_000_000
@@ -494,7 +492,22 @@ func ustar(archive *tar.Writer, name string, data []byte, mode int64) error {
 	return err
 }
 
+// uploadMode is a payload file's mode in the upload: the launcher shims are
+// copied to /usr/sbin and run by RØDE's own scripts, so anyone may run them;
+// the other executables and scripts are root's alone; the rest is data.
+func uploadMode(name string) int64 {
+	switch {
+	case name == "rc2fx-shim.sh" || name == "rc2fx-gui-shim.sh":
+		return 0o755
+	case embed.IsScript(name) || embed.IsBinary(name) && !strings.HasSuffix(name, ".so"):
+		return 0o700
+	}
+	return 0o600
+}
+
 // upload stages the build in RAM at /run/rc2fx-upload, verified on arrival.
+// The files are embed.PayloadNames: the pinned build from target/mixer, its
+// SHA256SUMS and the scripts from the repository.
 func (a *Armed) upload(build string) error {
 	read := func(name string) ([]byte, error) {
 		data, err := os.ReadFile(filepath.Join(build, name))
@@ -503,12 +516,8 @@ func (a *Armed) upload(build string) error {
 		}
 		return data, nil
 	}
-	names := []string{
-		"librc2fx_native.so", "rc2fxd", "rc2fx-supervisor", "rc2fx-firmware",
-		setup.GUIModule, setup.JackerrModule, setup.JackerrSnapshot, "firmware-profiles.json",
-	}
 	files := map[string][]byte{}
-	for _, name := range names {
+	for _, name := range slices.Concat(embed.Pinned[:], []string{"SHA256SUMS"}) {
 		data, err := read(name)
 		if err != nil {
 			return err
@@ -522,10 +531,7 @@ func (a *Armed) upload(build string) error {
 	if _, err := firmware.ParseCatalog(string(profiles)); err != nil {
 		return task.Error(err.Error())
 	}
-	release, err := read("mixer-release.json")
-	if err != nil {
-		return err
-	}
+	release := files[embed.ReleaseManifest]
 	if _, err := core.ParseMixerRelease(release); err != nil {
 		return task.Error(err.Error())
 	}
@@ -536,56 +542,28 @@ func (a *Armed) upload(build string) error {
 	if !bytes.Equal(release, []byte(task.CRLFToLF(string(source)))) {
 		return task.Error("target/mixer/mixer-release.json differs from config/mixer-release.json; run `just mixer-build`")
 	}
-	sums, err := read("SHA256SUMS")
-	if err != nil {
-		return err
+	var expected strings.Builder
+	for _, name := range embed.Pinned {
+		fmt.Fprintf(&expected, "%s  %s\n", task.Sha256(files[name]), name)
 	}
-	expected := fmt.Sprintf("%s  librc2fx_native.so\n%s  rc2fxd\n%s  rc2fx-supervisor\n%s  rc2fx-firmware\n"+
-		"%s  firmware-profiles.json\n"+
-		"%s  %s\n%s  %s\n%s  %s\n%s  mixer-release.json\n",
-		task.Sha256(files["librc2fx_native.so"]),
-		task.Sha256(files["rc2fxd"]),
-		task.Sha256(files["rc2fx-supervisor"]),
-		task.Sha256(files["rc2fx-firmware"]),
-		task.Sha256(profiles),
-		task.Sha256(files[setup.GUIModule]), setup.GUIModule,
-		task.Sha256(files[setup.JackerrModule]), setup.JackerrModule,
-		task.Sha256(files[setup.JackerrSnapshot]), setup.JackerrSnapshot,
-		task.Sha256(release))
-	if string(sums) != expected {
+	if string(files["SHA256SUMS"]) != expected.String() {
 		return task.Error("target/mixer does not match its SHA256SUMS; rebuild it")
 	}
-	scripts := map[string]string{}
-	for _, path := range []string{rc2fxShPath, shimPath, guiShimPath, installShPath} {
-		text, err := script(path)
+	for _, name := range embed.Scripts {
+		text, err := script(task.MixerScriptsDir + "/" + name)
 		if err != nil {
 			return err
 		}
-		scripts[path] = task.CRLFToLF(text)
+		files[name] = []byte(task.CRLFToLF(text))
 	}
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
-	for _, member := range []struct {
-		name string
-		data []byte
-		mode int64
-	}{
-		{"librc2fx_native.so", files["librc2fx_native.so"], 0o600},
-		{"rc2fxd", files["rc2fxd"], 0o700},
-		{"rc2fx-supervisor", files["rc2fx-supervisor"], 0o700},
-		{"rc2fx-firmware", files["rc2fx-firmware"], 0o700},
-		{"firmware-profiles.json", profiles, 0o600},
-		{setup.GUIModule, files[setup.GUIModule], 0o600},
-		{setup.JackerrModule, files[setup.JackerrModule], 0o600},
-		{setup.JackerrSnapshot, files[setup.JackerrSnapshot], 0o700},
-		{"mixer-release.json", release, 0o600},
-		{"SHA256SUMS", sums, 0o600},
-		{"rc2fx.sh", []byte(scripts[rc2fxShPath]), 0o700},
-		{"rc2fx-shim.sh", []byte(scripts[shimPath]), 0o755},
-		{"rc2fx-gui-shim.sh", []byte(scripts[guiShimPath]), 0o755},
-		{"install.sh", []byte(scripts[installShPath]), 0o700},
-	} {
-		if err := ustar(writer, member.name, member.data, member.mode); err != nil {
+	for _, name := range embed.PayloadNames {
+		data, ok := files[name]
+		if !ok {
+			return task.Errorf("the upload has no source for %s", name)
+		}
+		if err := ustar(writer, name, data, uploadMode(name)); err != nil {
 			return task.Error(err.Error())
 		}
 	}

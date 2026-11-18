@@ -1,5 +1,5 @@
 {
-  "comment": "Shared fixtures for the mixer's image check (rc2fx-core image_check). desktop/core/image_check_fixtures_test.go and crates/rc2fx-core/tests/image_check_fixtures.rs read them: `records` are /opt/rc2fx/data/image-check records (record null: no record) with the SHA-256 of the image's file list (digest null: no list), and `expect` the report from_record makes, written compactly; `reports` are GET api/v1/image-check answers the app must accept (and write back as `canonical`) or reject.",
+  "comment": "Shared fixtures for the mixer's image check (rc2fx-core image_check). desktop/core/image_check_fixtures_test.go and crates/rc2fx-core/tests/image_check_fixtures.rs read them: `records` are /opt/rc2fx/data/image-check records (record null: no record) with the SHA-256 of the image's file list (digest null: no list), and `expect` the report from_record makes, written compactly (Rust only: the desktop never makes reports); `reports` are GET api/v1/image-check answers the app must accept (Rust writes them back as `canonical`; Go reads `canonical` as the same report) or reject.",
   "records": [
     {
       "name": "repaired",

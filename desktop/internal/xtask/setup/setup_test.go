@@ -61,3 +61,31 @@ func TestMixerBuildRefusesToReplaceAPromotedBundleLink(t *testing.T) {
 		t.Fatal("the bundle changed")
 	}
 }
+
+// The mixer build makes exactly the pinned payload files, with a built ELF
+// for exactly the payload's binaries; a file added to the payload but not to
+// the build (or the other way round) fails here, without zig.
+func TestTheMixerBuildMakesExactlyThePinnedPayloadFiles(t *testing.T) {
+	sources := func() map[string]payloadSource {
+		return payloadSources("release", "gui", [2]string{"recorder", "snapshot"}, nil, nil)
+	}
+	if err := checkSources(sources()); err != nil {
+		t.Fatal(err)
+	}
+	missing := sources()
+	delete(missing, JackerrSnapshot)
+	if err := checkSources(missing); err == nil {
+		t.Fatal("a missing source was accepted")
+	}
+	swapped := sources()
+	delete(swapped, "rc2fxd")
+	swapped["extra"] = payloadSource{data: []byte("extra")}
+	if err := checkSources(swapped); err == nil {
+		t.Fatal("a source outside the payload was accepted")
+	}
+	unbuilt := sources()
+	unbuilt["rc2fxd"] = payloadSource{data: []byte("not built")}
+	if err := checkSources(unbuilt); err == nil {
+		t.Fatal("a binary without a built ELF was accepted")
+	}
+}

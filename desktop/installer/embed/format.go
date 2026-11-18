@@ -29,6 +29,13 @@ import (
 // official firmware, in the order their bytes appear in an embedded
 // envelope. The order is pinned: the checksummed files first, then the
 // manifest itself.
+//
+// This file owns the payload's lists; the xtask mixer build and upload read
+// them from here. Two copies are kept by hand and checked by tests:
+// mixer/scripts/install.sh (lists_test.go) and the Rust in-place updater's
+// crates/rc2fx-device/src/mixer_update/install.rs (its
+// the_payload_lists_match_the_desktop_installers test parses these
+// declarations, so keep each a plain `var Name = [N]string{...}`).
 var PayloadNames = [14]string{
 	"librc2fx_native.so",
 	"rc2fxd",

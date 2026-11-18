@@ -35,10 +35,6 @@ type fixtureCases struct {
 			Data    string
 		}
 	}
-	Canonical []struct {
-		Hex string
-		OK  bool
-	}
 	Messages []struct {
 		Name    string
 		Limit   int
@@ -112,13 +108,6 @@ func TestSharedFixtures(t *testing.T) {
 		}
 		if again := f.Encode(c.Report); !bytes.Equal(again[:], report) {
 			t.Errorf("frame %s: re-encoding differs", c.Name)
-		}
-	}
-	for _, c := range cases.Canonical {
-		b := mustHex(t, c.Hex)
-		got, ok := CanonicalOutput(b)
-		if ok != c.OK || (ok && !bytes.Equal(got, b[:ReportSize])) {
-			t.Errorf("CanonicalOutput(%d bytes) = %d bytes, %v", len(b), len(got), ok)
 		}
 	}
 	for _, c := range cases.Messages {

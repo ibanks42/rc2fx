@@ -2,8 +2,10 @@
 // checked before audio changes: the mixer models, the firmware profile
 // catalog and the offline compatibility checks the installer needs.
 //
-// Port of crates/rc2fx-firmware (the library; its CLI stays mixer-side).
-// Both read the shared fixtures in fixtures/firmware.
+// Port of the parts of crates/rc2fx-firmware the desktop uses: the catalog
+// and offline inspection. Runtime selection (Rust Catalog::select and
+// select_for_model) and the CLI stay mixer-side. Both read the shared
+// fixtures in fixtures/firmware.
 package firmware
 
 import (
@@ -14,25 +16,28 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
-	"os"
 	"strings"
+
+	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// ExperimentalDuoFromEnv is set by the RC2FX launcher only for an explicitly
-// opted-in installation. This never supplies or overrides board identity.
-func ExperimentalDuoFromEnv() bool {
-	return os.Getenv("RC2FX_EXPERIMENTAL_DUO") == "1"
-}
-
 // Catalog is the firmware profile catalog (config/firmware-profiles.json).
+// The json tags are read by core's strict decoder, which follows serde's
+// derive: every field is required unless it is a pointer (Rust Option:
+// missing or null is nil) or tagged `default` (Rust #[serde(default)]:
+// missing is empty, null is still refused), and unknown fields are refused,
+// as `deny_unknown_fields` does on every Rust catalog struct.
 type Catalog struct {
 	SchemaVersion uint32    `json:"schemaVersion"`
 	Profiles      []Profile `json:"profiles"`
 }
 
+// maxCatalogBytes is the largest catalog read.
+const maxCatalogBytes = 128 * 1024
+
 // Profile is one firmware release of one model.
 type Profile struct {
-	MinimumAppVersion string   `json:"minimumAppVersion"`
+	MinimumAppVersion string   `json:"minimumAppVersion,default"`
 	ID                string   `json:"id"`
 	Model             string   `json:"model"`
 	Version           string   `json:"version"`
@@ -213,13 +218,15 @@ func showPathBytes(path string) bool {
 
 // ParseCatalog reads and validates a catalog. The JSON is read as strictly
 // as serde reads the Rust structs (unknown, duplicate and missing fields,
-// wrong types and out-of-range numbers are refused).
+// wrong types, floats and out-of-range numbers for integers, invalid UTF-8
+// and lone surrogates are refused). JSON-level messages are core's, in
+// serde's wording; the fixtures share only that such a catalog is refused.
 func ParseCatalog(text string) (*Catalog, error) {
-	if len(text) > 128*1024 {
+	if len(text) > maxCatalogBytes {
 		return nil, errors.New("firmware catalog exceeds 128 KiB")
 	}
-	catalog, err := decodeCatalog(text)
-	if err != nil {
+	catalog := new(Catalog)
+	if err := core.DecodeStrictLimited([]byte(text), maxCatalogBytes, core.DefaultMaxJSONNodes, catalog); err != nil {
 		return nil, err
 	}
 	if catalog.SchemaVersion != 1 || len(catalog.Profiles) == 0 || len(catalog.Profiles) > 64 {
@@ -272,45 +279,7 @@ func profileIDBytes(id string) bool {
 	return true
 }
 
-// LoadCatalog reads and validates a catalog file.
-func LoadCatalog(path string) (*Catalog, error) {
-	text, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %v", path, err)
-	}
-	return ParseCatalog(string(text))
-}
-
-// Select finds the one profile for a mixer executable, for a model that
-// needs no opt-in.
-func (c *Catalog) Select(image []byte) (*Profile, error) {
-	hash := sum(image)
-	var found *Profile
-	for i := range c.Profiles {
-		if c.Profiles[i].MixerSHA256 != hash {
-			continue
-		}
-		if found != nil {
-			return nil, errors.New("ambiguous mixer executable: select using verified device model")
-		}
-		found = &c.Profiles[i]
-	}
-	if found == nil {
-		return nil, fmt.Errorf("unrecognized mixer executable SHA-256 %s", hash)
-	}
-	model, err := ParseModel(found.Model)
-	if err != nil {
-		return nil, err
-	}
-	if err := model.RequireRuntime(); err != nil {
-		return nil, err
-	}
-	if err := found.VerifyImage(image); err != nil {
-		return nil, err
-	}
-	return found, nil
-}
-
+// identify finds the named model's profile for a mixer executable.
 func (c *Catalog) identify(model Model, image []byte) (*Profile, error) {
 	hash := sum(image)
 	for i := range c.Profiles {
@@ -319,28 +288,6 @@ func (c *Catalog) identify(model Model, image []byte) (*Profile, error) {
 		}
 	}
 	return nil, fmt.Errorf("unrecognized %s mixer executable SHA-256 %s", model.ID(), hash)
-}
-
-// SelectForModel admits a runtime: that needs a board identity, not just a
-// shared executable.
-func (c *Catalog) SelectForModel(model Model, image []byte) (*Profile, error) {
-	return c.SelectForModelWith(model, image, false)
-}
-
-// SelectForModelWith is SelectForModel with the Duo opt-in. The opt-in
-// admits only the named model's own profile and route layout.
-func (c *Catalog) SelectForModelWith(model Model, image []byte, experimentalDuo bool) (*Profile, error) {
-	if err := model.RequireRuntimeWith(experimentalDuo); err != nil {
-		return nil, err
-	}
-	profile, err := c.identify(model, image)
-	if err != nil {
-		return nil, err
-	}
-	if err := profile.VerifyImage(image); err != nil {
-		return nil, err
-	}
-	return profile, nil
 }
 
 // InspectForModel is offline-only executable inspection. Reuse a qualified

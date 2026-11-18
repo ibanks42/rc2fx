@@ -15,7 +15,13 @@ import (
 )
 
 // Decode rebuilds the envelope from delta into out. It is the Go twin of
-// the mixer's Rust decoder, for tests; the app itself only encodes.
+// the mixer's Rust decoder, for tests; the app itself only encodes, and the
+// linker leaves Decode out of the app. It lives outside a _test file because
+// internal/genfixtures needs it too: the generator decodes every case before
+// writing it, so an accept case that does not round trip, or a reject case
+// whose recorded error is wrong, never reaches fixtures/delta. It shares the
+// line and number parsers with Encode, which is why it is not a separate
+// package.
 //
 // installed(name) returns the bytes of the file currently on the mixer. It is
 // used for copies and as the patch prefix, and must match the manifest (a

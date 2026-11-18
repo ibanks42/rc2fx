@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/installer/control"
+	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
@@ -26,6 +27,40 @@ func TestEveryFlagChangeIsSyncedForAPowerCut(t *testing.T) {
 	for name, s := range map[string]string{"enable": enableScript, "disable": disableScript} {
 		if !strings.Contains(s, "\nsync\n") {
 			t.Errorf("%s must sync its flag change", name)
+		}
+	}
+}
+
+// The upload's modes, as they were when each file had its own line: the
+// shims run by RØDE's scripts are world-executable, the other executables
+// and scripts root's alone, libraries and data not executable.
+func TestEveryUploadedFileKeepsItsMode(t *testing.T) {
+	want := map[string]int64{
+		"librc2fx_native.so":     0o600,
+		"rc2fxd":                 0o700,
+		"rc2fx-supervisor":       0o700,
+		"rc2fx-firmware":         0o700,
+		"firmware-profiles.json": 0o600,
+		"librc2fx_gui.so":        0o600,
+		"librc2fx_jackerr.so":    0o600,
+		"rc2fx_jackerr_snapshot": 0o700,
+		"mixer-release.json":     0o600,
+		"SHA256SUMS":             0o600,
+		"rc2fx.sh":               0o700,
+		"rc2fx-shim.sh":          0o755,
+		"rc2fx-gui-shim.sh":      0o755,
+		"install.sh":             0o700,
+	}
+	if len(want) != len(embed.PayloadNames) {
+		t.Fatalf("the payload has %d files; this test knows %d", len(embed.PayloadNames), len(want))
+	}
+	for _, name := range embed.PayloadNames {
+		mode, ok := want[name]
+		if !ok {
+			t.Fatalf("no expected mode for %s", name)
+		}
+		if got := uploadMode(name); got != mode {
+			t.Errorf("%s: mode %o, want %o", name, got, mode)
 		}
 	}
 }

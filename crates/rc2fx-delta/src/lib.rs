@@ -11,13 +11,19 @@
 //! API, so the encoder and decoder drive `zstd_safe` directly: the encoder
 //! needs a reference prefix (`zstd --patch-from`) plus long-distance matching,
 //! and the decoder needs a fixed window bound.
+//!
+//! The mixer only decodes; the desktop app encodes in Go (`desktop/delta`).
+//! This crate's own encoder exists for tests that need a delta of an envelope
+//! they build at run time (rc2fx-device's upload tests), so it is behind the
+//! non-default `encode` feature and not linked into rc2fxd.
 
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    io::{self, Read, Write},
-};
-use zstd::zstd_safe::{CCtx, CParameter, DCtx, DParameter, InBuffer, OutBuffer};
+#[cfg(any(test, feature = "encode"))]
+use std::collections::BTreeMap;
+use std::io::{self, Read, Write};
+#[cfg(any(test, feature = "encode"))]
+use zstd::zstd_safe::{CCtx, CParameter};
+use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer};
 
 pub const MAGIC: &str = "RC2FX-DELTA 1\n";
 const ENVELOPE_MAGIC: &str = "RC2FX-EMBEDDED-PAYLOAD 1\n";
@@ -123,6 +129,7 @@ pub fn envelope_entries(envelope: &[u8]) -> Result<(usize, Vec<Entry>), String> 
 /// file name to bytes the app holds; they are used as a patch prefix only when
 /// they still hash to what the mixer reports, otherwise the app's copy is
 /// stale and the file is sent whole.
+#[cfg(any(test, feature = "encode"))]
 pub fn encode(
     envelope: &[u8],
     installed: &BTreeMap<String, String>,
@@ -393,6 +400,7 @@ fn decompress(
     Ok(())
 }
 
+#[cfg(any(test, feature = "encode"))]
 fn compress(
     data: &[u8],
     prefix: Option<&[u8]>,
@@ -426,6 +434,7 @@ fn compress(
 
 /// The window a patch needs to reach from the start of the base to the end of
 /// the new file. Plain compression only has to reach its own start.
+#[cfg(any(test, feature = "encode"))]
 fn window_log(bytes: u64) -> u32 {
     let needed = if bytes <= 1 {
         0
@@ -647,89 +656,11 @@ mod tests {
         }
     }
 
+    // The decoder's refusals are pinned by the shared fixtures in
+    // fixtures/delta/reject, which both this decoder and the Go one read
+    // (tests/shared_fixtures.rs); this covers the envelope's own head.
     #[test]
-    fn malformed_envelopes_and_deltas_are_refused() {
-        let (shared, old, new, _) = sample();
-        let envelope = envelope(&[
-            ("librc2fx_native.so", shared.clone()),
-            ("rc2fxd", new.clone()),
-        ]);
-        let valid = encode(&envelope, &installed_for(&shared, &old), &bases(&old), 19).unwrap();
-        let mut live = |name: &str| match name {
-            "librc2fx_native.so" => Ok(shared.clone()),
-            "rc2fxd" => Ok(old.clone()),
-            other => Err(io::Error::other(format!("no installed {other}"))),
-        };
-
-        let mut bad_magic = valid.clone();
-        bad_magic[0] = b'X';
-        assert!(
-            decode(
-                &mut bad_magic.as_slice(),
-                &mut live,
-                &mut Vec::new(),
-                u64::MAX
-            )
-            .is_err()
-        );
-
-        let mut truncated = valid.clone();
-        truncated.truncate(truncated.len() - 1);
-        assert!(
-            decode(
-                &mut truncated.as_slice(),
-                &mut live,
-                &mut Vec::new(),
-                u64::MAX
-            )
-            .is_err()
-        );
-
-        let mut trailing = valid.clone();
-        trailing.push(0);
-        assert!(
-            decode(
-                &mut trailing.as_slice(),
-                &mut live,
-                &mut Vec::new(),
-                u64::MAX
-            )
-            .is_err()
-        );
-
-        let mut unknown = valid.clone();
-        let marker = b"copy\n";
-        let at = unknown
-            .windows(marker.len())
-            .position(|window| window == marker)
-            .unwrap();
-        unknown[at..at + marker.len()].copy_from_slice(b"nope\n");
-        assert!(
-            decode(
-                &mut unknown.as_slice(),
-                &mut live,
-                &mut Vec::new(),
-                u64::MAX
-            )
-            .is_err()
-        );
-
-        // An envelope that has bytes after its last file. Its head alone
-        // parses (decode reads only the head); encoding the whole is refused.
-        let mut padded = envelope.clone();
-        padded.push(0);
-        assert!(encode(&padded, &BTreeMap::new(), &BTreeMap::new(), 3).is_err());
-        // The mixer's own limit, one byte short.
-        let mut restored = Vec::new();
-        let error = decode(
-            &mut valid.as_slice(),
-            &mut |_| unreachable!(),
-            &mut restored,
-            envelope.len() as u64 - 1,
-        )
-        .unwrap_err();
-        assert!(error.contains("over"), "{error}");
-
+    fn malformed_envelope_heads_are_refused() {
         for bad in [
             Vec::new(),
             b"RC2FX-EMBEDDED-PAYLOAD 1\nlength 1\n".to_vec(),
@@ -756,48 +687,6 @@ mod tests {
             bytes.extend_from_slice(line.as_bytes());
             assert!(envelope_entries(&bytes).is_err(), "{line:?}");
         }
-    }
-
-    #[test]
-    fn a_patch_against_the_wrong_base_is_refused() {
-        let (shared, old, new, _) = sample();
-        let envelope = envelope(&[
-            ("librc2fx_native.so", shared.clone()),
-            ("rc2fxd", new.clone()),
-        ]);
-        let delta = encode(&envelope, &installed_for(&shared, &old), &bases(&old), 19).unwrap();
-        let mut restored = Vec::new();
-        let error = decode(
-            &mut delta.as_slice(),
-            &mut |name| {
-                if name == "rc2fxd" {
-                    Ok(b"some other installed rc2fxd\n".to_vec())
-                } else {
-                    Ok(shared.clone())
-                }
-            },
-            &mut restored,
-            envelope.len() as u64,
-        )
-        .unwrap_err();
-        assert!(error.contains("base"), "{error}");
-    }
-
-    #[test]
-    fn a_copy_that_no_longer_matches_the_envelope_is_refused() {
-        let (shared, _, _, _) = sample();
-        let envelope = envelope(&[("librc2fx_native.so", shared.clone())]);
-        let installed = BTreeMap::from([("librc2fx_native.so".to_owned(), sum(&shared))]);
-        let delta = encode(&envelope, &installed, &BTreeMap::new(), 19).unwrap();
-        let mut restored = Vec::new();
-        let error = decode(
-            &mut delta.as_slice(),
-            &mut |_| Ok(vec![b'x'; shared.len()]),
-            &mut restored,
-            envelope.len() as u64,
-        )
-        .unwrap_err();
-        assert!(error.contains("does not match"), "{error}");
     }
 
     #[test]

@@ -11,11 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-// StrictMarshaler lets a type choose its own JSON, as a Value.
-type StrictMarshaler interface {
-	MarshalStrictJSON() (Value, error)
-}
-
 // Encode is serde_json::to_vec / to_string: compact JSON, struct fields in
 // declaration order, maps in key order, floats as serde_json writes them
 // (shortest round-trip digits, `.0` on integral values, exponent outside
@@ -57,10 +52,9 @@ func (in *indenter) newline(dst []byte) []byte {
 }
 
 var (
-	strictMarshalerType = reflect.TypeFor[StrictMarshaler]()
-	rawMessageType      = reflect.TypeFor[json.RawMessage]()
-	textMarshalerType   = reflect.TypeFor[encoding.TextMarshaler]()
-	emptyCheckerType    = reflect.TypeFor[interface{ IsEmpty() bool }]()
+	rawMessageType    = reflect.TypeFor[json.RawMessage]()
+	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+	emptyCheckerType  = reflect.TypeFor[interface{ IsEmpty() bool }]()
 )
 
 func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error) {
@@ -90,13 +84,6 @@ func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error
 			return dst, err
 		}
 		return append(dst, buf.Bytes()...), nil
-	}
-	if t.Implements(strictMarshalerType) && (t.Kind() != reflect.Pointer || !value.IsNil()) {
-		tree, err := value.Interface().(StrictMarshaler).MarshalStrictJSON()
-		if err != nil {
-			return dst, err
-		}
-		return appendValueJSON(dst, tree, pretty), nil
 	}
 	if t.Kind() != reflect.String && t.Kind() != reflect.Pointer && t.Implements(textMarshalerType) {
 		text, err := value.Interface().(encoding.TextMarshaler).MarshalText()
