@@ -4,12 +4,16 @@
 cargo build --locked --manifest-path crates/rc2fx-native/Cargo.toml
 python3 mixer/scripts/tests/gauge_binding.py
 
+Without gcc or that build it skips, unless RC2FX_REQUIRE_NATIVE=1 (CI's
+linux job) makes it fail instead.
+
 Stub libasound, libsamplerate and libjack report who called them. A wrapper
 shows up as a call from the audit library instead of from the program.
 """
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +22,7 @@ ROOT = Path(__file__).parents[3]
 LIBRARY = Path(os.environ.get('RC2FX_NATIVE_LIBRARY',
                               ROOT / 'crates/rc2fx-native/target/debug/librc2fx_native.so'))
 SCRIPT = (Path(__file__).parents[1] / 'rc2fx.sh').read_text()
+REQUIRED = os.environ.get('RC2FX_REQUIRE_NATIVE') == '1'
 
 STUBS = r'''
 #define _GNU_SOURCE
@@ -51,10 +56,13 @@ int main(void) {
 WRAPPED = {'snd_pcm_avail', 'src_process', 'jack_frames_since_cycle_start'}
 
 
-@unittest.skipUnless(shutil.which('gcc') and LIBRARY.exists(), 'needs gcc and a host build of librc2fx_native.so')
+@unittest.skipUnless(REQUIRED or (shutil.which('gcc') and LIBRARY.exists()),
+                     'needs gcc and a host build of librc2fx_native.so')
 class Binding(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if not LIBRARY.exists():
+            raise FileNotFoundError(f'{LIBRARY}: build it with cargo build --manifest-path crates/rc2fx-native/Cargo.toml')
         cls.temp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.temp.cleanup)
         root = cls.root = Path(cls.temp.name)
@@ -101,6 +109,18 @@ class Launcher(unittest.TestCase):
     def test_the_resampler_mode_defaults_to_fast(self):
         self.assertIn('local src_mode=fast\n', SCRIPT)
         self.assertIn('RC2FX_SRC_MODE="$src_mode"', SCRIPT)
+
+
+class Required(unittest.TestCase):
+    # The run below sets the requirement, so it skips this test itself.
+    @unittest.skipIf(REQUIRED, 'only outside a run that requires the library')
+    def test_a_missing_build_fails_instead_of_skipping_when_required(self):
+        missing = Path(__file__).with_name('no-such-librc2fx_native.so')
+        result = subprocess.run([sys.executable, __file__, 'Binding'], capture_output=True, text=True, timeout=60,
+                                env=dict(os.environ, RC2FX_REQUIRE_NATIVE='1', RC2FX_NATIVE_LIBRARY=str(missing)))
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn(missing.name, result.stderr)
+        self.assertNotIn('skipped', result.stderr)
 
 
 if __name__ == '__main__':

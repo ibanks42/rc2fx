@@ -2,10 +2,14 @@ name: Check
 
 # The mixer's Rust workspace is formatted, linted with warnings as errors and
 # tested on Linux, in the AlmaLinux 8 build image releases build the AppImage
-# in. The Go desktop app and the Go xtask are vetted and tested on every
-# platform the app ships for, and the UI is built there against the gpuikit
-# download; the desktop's cgo code is also built in that AlmaLinux image.
-# Nothing here builds the mixer runtime.
+# in, and so are rc2fxd (the native-pipeline feature) and the native library
+# (its own workspace); the benchmark (another) and the eq-fma and
+# bench-kernels features are compiled. The Go desktop app and the Go xtask are vetted and tested on
+# every platform the app ships for, and the UI is built there against the
+# gpuikit download; the desktop's cgo code is also built in that AlmaLinux
+# image. Nothing here cross-builds the mixer runtime. The mixer's AArch64
+# code (the NEON kernels and filters) is linted and tested natively on an Arm
+# runner. The tooling job runs the Python and C test suites on the host.
 on:
   push:
     branches: [main]
@@ -35,7 +39,7 @@ jobs:
   linux:
     needs: image
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 80
     permissions:
       contents: read
       packages: read
@@ -67,12 +71,18 @@ jobs:
           key: check-alma
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-          # The native library is its own workspace with its own target folder.
+          # The native library and the benchmark are workspaces of their own,
+          # each with its own target folder.
           workspaces: |
             . -> target
             crates/rc2fx-native -> target
+            crates/rc2fx-bench -> target
+      # `--all` covers the workspace only; the other two are checked by name.
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --all --manifest-path crates/rc2fx-native/Cargo.toml -- --check
+          cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
       # Every cargo command here takes the same settings (cargo-ci.toml), so
       # they share their build scripts and proc-macros.
       # `--no-default-features` lints rc2fx-firmware without its
@@ -84,8 +94,67 @@ jobs:
       - name: Test the workspace
         # Linux is what the mixer runs, so the whole suite runs here.
         run: cargo test --config .github/cargo-ci.toml --locked --workspace
-      - name: Check the native library
-        run: cargo check --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets
+      # rc2fxd and the native backend exist only with native-pipeline, which
+      # nothing in the workspace turns on (the mixer build passes it). The
+      # default build keeps its own cfg arms, so both are checked.
+      - name: Lint and test rc2fxd
+        run: |
+          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-device --features native-pipeline --all-targets -- -D warnings
+          cargo test --config .github/cargo-ci.toml --locked -p rc2fx-device --features native-pipeline
+      # Features only rc2fx-bench turns on, and the eq-fma arithmetic, which
+      # no build turns on yet.
+      - name: Lint the eq-fma and bench-kernels features
+        run: |
+          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
+          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
+      - name: Lint the native library
+        run: cargo clippy --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets -- -D warnings
+      # gauge_binding.py loads the host build of the library with LD_AUDIT.
+      # The tooling job has none and skips it; here a missing build fails.
+      - name: Test the native library
+        run: |
+          cargo test --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-native/Cargo.toml
+          cargo build --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-native/Cargo.toml
+          RC2FX_REQUIRE_NATIVE=1 python3 mixer/scripts/tests/gauge_binding.py
+      - name: Check the benchmark
+        run: cargo check --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets
+
+  # The mixer's audio crates on AArch64, which the mixer runs: the NEON code
+  # and its aarch64-only tests compile nowhere else in CI. A native runner, so
+  # the tests run at full speed; `.cargo/config.toml` builds for the mixer's
+  # Cortex-A53 as `./xtask mixer-build` does (an empty `rustflags` below
+  # leaves RUSTFLAGS unset so that setting applies). Only these crates: the
+  # rest of the workspace isn't needed on the mixer.
+  # `golden_digests` stays manual (#[ignore]): its digests depend on libm.
+  mixer-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      # As in the linux job: no debug info, and part of the cache key.
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # Installs the toolchain pinned in rust-toolchain.toml. Only main saves
+      # the cache, as in the linux job.
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          rustflags: ""
+          cache-key: check-arm64
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Lint the mixer's audio crates
+        run: cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dsp -p rc2fx-dfn -p rc2fx-suppression --all-targets -- -D warnings
+      - name: Test the mixer's audio crates
+        run: cargo test --config .github/cargo-ci.toml --locked -p rc2fx-dsp -p rc2fx-dfn -p rc2fx-suppression
+      # The eq-fma and bench-kernels arms of the NEON code.
+      - name: Lint the eq-fma and bench-kernels features
+        run: |
+          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
+          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
 
   # The release scripts, documentation tooling and mixer scripts, on the
   # runner: they test scripts, not the build environment.
@@ -118,12 +187,23 @@ jobs:
           python3 .github/scripts/test_docs_source.py
           python3 .github/scripts/test_update_history.py
           python3 .github/scripts/test_mixer_version.py
+          python3 .github/scripts/test_publish_mixer.py
           # Includes the check that vpk, fetch-velopack.sh and the packager
           # agree on the Velopack version.
           python3 .github/scripts/test_prepare_appimage_notices.py
       # The Go tests of the xtask that ships them run in the desktop job.
+      # gauge_binding.py skips here (no host build of the native library);
+      # the linux job runs it.
       - name: Test the mixer scripts
         run: for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done
+      # Built with the runner's cc and c++ and run on the host, as on a
+      # developer's computer (`just test-mixer`).
+      - name: Test the jackd error recorder and the screen module
+        run: |
+          python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p 'test_*.py'
+          python3 crates/rc2fx-gui/test_gui_pacing.py
+      - name: Test the xrun flight recorder tools
+        run: python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
 
   # The Go desktop app. Every package but the UI (the ones that import
   # gpuikit: app, app/uitest, cmd/rc2fx) builds without the gpuikit library,

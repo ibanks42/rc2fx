@@ -88,8 +88,10 @@ compiled for its Cortex-A53. Installing and using a source build works as
 described in the [user guide](../user/installing.md).
 
 Any Clippy warning, `go vet` finding or unformatted Go file fails `just test`,
-even if every test passes. The native library is a separate workspace, and its
-tests run under `just test-mixer`.
+even if every test passes. It also tests and lints rc2fxd (the
+`native-pipeline` feature) and lints the `eq-fma` and `bench-kernels`
+features. The native library and the benchmark are separate workspaces: their
+checks run under `just test-mixer`, with the Python and C suites.
 
 ## 3. Package it
 
@@ -203,8 +205,8 @@ files but not ignored ones, in an AlmaLinux 8 container defined in
 `.github/scripts/package-check.Containerfile`. Releases build in the same
 container, and the **Check** workflow lints and tests in it. AlmaLinux 8 has
 glibc 2.28, so the AppImage runs on Debian 10, Ubuntu 20.04, RHEL 8, Fedora
-29 and newer. The build makes the mixer runtime from that copy, so it never
-reuses `target/mixer`. A local run builds the container itself, upgrading its
+29 and newer. The AppImage doesn't carry the mixer runtime, so the build
+doesn't make one. A local run builds the container itself, upgrading its
 packages first; GitHub uses the copy the **Build image** workflow publishes
 to `ghcr.io/ibanks42/rc2fx-build`.
 

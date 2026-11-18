@@ -10,7 +10,7 @@ import subprocess
 import tarfile
 import tomllib
 
-from update_history import parse_changelog, parse_mixer_notes
+from update_history import parse_changelog
 
 
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
@@ -36,16 +36,6 @@ GO_VERSIONS = {
     Path("desktop/app/model/versions.go"): "var AppVersion",
     Path("desktop/transport/mock.go"): "const mockRuntime",
 }
-
-
-def go_desktop():
-    return Path("desktop/go.mod").exists()
-
-
-def bundles_mixer():
-    # The Go app's release packages download the mixer software; only
-    # `./xtask package --embedded` bundles it, and releases never pass it.
-    return not go_desktop()
 
 
 def replace_version(text, section, version):
@@ -94,125 +84,56 @@ def update_versions(version):
             raise ValueError("Workspace lockfile is missing local packages")
         if found:
             updates[path] = updated
-    if go_desktop():
-        for path, declaration in GO_VERSIONS.items():
-            text = path.read_text()
-            pattern = rf'^({re.escape(declaration)} = )"([^"\n]*)"$'
-            found = re.findall(pattern, text, flags=re.M)
-            if len(found) != 1:
-                raise ValueError(f"Expected one {declaration} in {path}, got {len(found)}")
-            if found[0][1] != current:
-                raise ValueError(f"{path}: {declaration} differs from workspace version")
-            updates[path] = re.sub(pattern, lambda m: m[1] + json.dumps(version), text, flags=re.M)
+    for path, declaration in GO_VERSIONS.items():
+        text = path.read_text()
+        pattern = rf'^({re.escape(declaration)} = )"([^"\n]*)"$'
+        found = re.findall(pattern, text, flags=re.M)
+        if len(found) != 1:
+            raise ValueError(f"Expected one {declaration} in {path}, got {len(found)}")
+        if found[0][1] != current:
+            raise ValueError(f"{path}: {declaration} differs from workspace version")
+        updates[path] = re.sub(pattern, lambda m: m[1] + json.dumps(version), text, flags=re.M)
     for path, text in updates.items():
         path.write_text(text)
     return [str(path) for path in updates]
 
 
-def warn_mixer_version(previous):
-    if not previous:
-        return
-    manifest = "config/mixer-release.json"
-    if not Path(manifest).exists() or not git("ls-tree", previous, "--", manifest):
-        return
-    before = json.loads(git("show", f"{previous}:{manifest}"))["version"]
-    after = json.loads(Path(manifest).read_text())["version"]
-    if before != after:
-        return
-    paths = [
-        "crates/rc2fx-core", "crates/rc2fx-device", "crates/rc2fx-dfn",
-        "crates/rc2fx-dsp", "crates/rc2fx-firmware", "crates/rc2fx-native",
-        "crates/rc2fx-native-control", "crates/rc2fx-suppression",
-        "crates/rc2fx-supervisor", "crates/rc2fx-usb", "crates/rc2fx-gui", "mixer/scripts",
-        "desktop/internal/xtask/setup", "desktop/internal/xtask/elfcheck",
-        "desktop/internal/xtask/release/mixer.go", "desktop/installer/embed", "config",
-        "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo",
-    ]
-    if git("diff", "--name-only", previous, "HEAD", "--", *paths):
-        print("::warning title=Mixer version unchanged::Mixer inputs changed since "
-              f"{previous}, but the mixer version is still {after}. Review whether "
-              "config/mixer-release.json needs a version bump: users with this "
-              "mixer version will not receive a mixer update notice. This is a "
-              "path-based warning; shared dependencies and build settings may "
-              "also trigger it.", flush=True)
-
-
-def validate_pending_mixer_notes(previous):
-    manifest = Path("config/mixer-release.json")
-    if not manifest.exists():
-        return
-    version = json.loads(manifest.read_text())["version"]
-    version_tuple(version)
-    if previous and git("ls-tree", previous, "--", str(manifest)):
-        before = json.loads(git("show", f"{previous}:{manifest}"))["version"]
-        if before == version:
-            return
-    notes = parse_mixer_notes(Path("docs/updates/source/mixer-notes.md"))
-    if version not in notes:
-        raise ValueError(f"New mixer version {version} needs curated mixer release notes")
-
-
-def prepare(bump, preserve_initial_notes=False):
+def prepare(bump):
     if not os.environ.get("ACT") and git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("Release checkout must be clean")
     current = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
     version_tuple(current)
     previous = "v" + current
-    tags = [tag for tag in git("tag", "--list", "v[0-9]*").splitlines()
-            if re.fullmatch("v" + STABLE, tag)]
     cliff = ["git-cliff", "--config", "cliff.toml", "--topo-order", "--use-branch-tags"]
-    if tags:
-        git("rev-parse", "--verify", "refs/tags/" + previous)
-        git("merge-base", "--is-ancestor", previous, "HEAD")
-        if not git("rev-list", f"{previous}..HEAD"):
-            raise ValueError("No new commits to release")
-        history = [f"{previous}..HEAD"]
-        tag = subprocess.check_output(cliff + history + ["--bump", bump, "--bumped-version"], text=True).strip()
-    else:
-        # The first release publishes the checked-in version unchanged.
-        tag = previous
-        history = []
-        previous = ""
+    if not git("tag", "--list", previous):
+        raise ValueError(f"Tag {previous} for the current version is missing")
+    git("merge-base", "--is-ancestor", previous, "HEAD")
+    if not git("rev-list", f"{previous}..HEAD"):
+        raise ValueError("No new commits to release")
+    history = [f"{previous}..HEAD"]
+    tag = subprocess.check_output(cliff + history + ["--bump", bump, "--bumped-version"], text=True).strip()
     if not tag.startswith("v"):
         tag = "v" + tag
     version = tag[1:]
-    if tags and version_tuple(version) <= version_tuple(current):
+    if version_tuple(version) <= version_tuple(current):
         raise ValueError("Version must increase")
     if git("tag", "--list", tag):
         raise ValueError(f"Tag {tag} already exists")
-    initial_notes = None
-    if not tags and preserve_initial_notes:
-        sections = parse_changelog(Path("CHANGELOG.md"))
-        if set(sections) != {version} or not sections[version].body.strip():
-            raise ValueError("Initial release needs exactly one nonempty changelog section for its version")
-        initial_notes = sections[version].body
-    if bundles_mixer():
-        warn_mixer_version(previous)
-        validate_pending_mixer_notes(previous)
     files = update_versions(version)
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)
     OUTPUT.mkdir(parents=True)
     notes = OUTPUT / "release-notes.md"
-    if initial_notes is not None:
-        notes.write_text(initial_notes.rstrip() + "\n")
-    else:
-        subprocess.run(cliff + history + ["--tag", tag, "--strip", "all", "--output", str(notes)], check=True)
+    subprocess.run(cliff + history + ["--tag", tag, "--strip", "all", "--output", str(notes)], check=True)
     if not notes.read_text().strip():
         raise ValueError("Release notes are empty")
-    mixer_manifest = Path("config/mixer-release.json")
-    if bundles_mixer() and mixer_manifest.exists():
-        mixer_version = json.loads(mixer_manifest.read_text())["version"]
-        version_tuple(mixer_version)
-        with notes.open("a") as output:
-            output.write(f"\nBundled RC2FX mixer software: {mixer_version}.\n")
-    elif not bundles_mixer():
-        with notes.open("a") as output:
-            output.write("\nMixer software is downloaded separately by the firmware installer.\n")
+    # Release packages never bundle the mixer software; the firmware installer
+    # downloads it.
+    with notes.open("a") as output:
+        output.write("\nMixer software is downloaded separately by the firmware installer.\n")
     changelog = Path("CHANGELOG.md")
-    if initial_notes is None:
-        destination = "--prepend" if previous and changelog.exists() else "--output"
-        subprocess.run(cliff + history + ["--unreleased", "--tag", tag, destination, str(changelog)], check=True)
+    destination = "--prepend" if changelog.exists() else "--output"
+    subprocess.run(cliff + history + ["--unreleased", "--tag", tag, destination, str(changelog)], check=True)
     if version not in parse_changelog(changelog):
         raise ValueError(f"Release {tag} has no valid changelog section")
     files.append(str(changelog))
@@ -255,10 +176,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["prepare", "commit"])
     parser.add_argument("--bump", choices=["patch", "minor", "major"], default="patch")
-    parser.add_argument("--preserve-initial-notes", action="store_true",
-                        help="Use the reviewed single changelog section when publishing the first release")
     args = parser.parse_args()
     if args.command == "prepare":
-        prepare(args.bump, args.preserve_initial_notes)
+        prepare(args.bump)
     else:
         commit()

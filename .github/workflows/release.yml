@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: App version bump (first release uses the checked-in version)
+        description: App version bump
         type: choice
         default: patch
         options: [patch, minor, major]
@@ -55,7 +55,7 @@ jobs:
         id: version
         env:
           BUMP: ${{ inputs.bump }}
-        run: python3 .github/scripts/release.py prepare --bump "$BUMP" --preserve-initial-notes
+        run: python3 .github/scripts/release.py prepare --bump "$BUMP"
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
@@ -78,16 +78,12 @@ jobs:
 
   build:
     needs: prepare
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 90
     permissions:
       contents: read
       # Azure Artifact Signing signs in through GitHub's OIDC token.
       id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
     defaults:
       run:
         shell: bash
@@ -111,10 +107,7 @@ jobs:
         run: tar -xf .release-input/versioned.tar
       # The app is Go, cgo against the gpuikit download, with Velopack's C
       # library for the `velopack` tag release packages build with. Rust stays
-      # for the notices: cargo-about and the standard library's licences.
-      # The app is universal: ./xtask package builds an arm64 and an x86_64
-      # slice and joins them with lipo, against the universal gpuikit static library
-      # and both architectures' velopack_libc.
+      # for the notices: cargo-about and the standard library's licenses.
       - uses: actions/setup-go@v6.0.0
         with:
           go-version-file: desktop/go.mod
@@ -185,7 +178,7 @@ jobs:
           }
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: rc2fx-package-${{ matrix.os }}
+          name: rc2fx-package-windows
           path: |
             target/package/rc2fx-windows-x64.zip
             target/package/rc2fx-windows-x64-setup.exe
@@ -273,7 +266,10 @@ jobs:
           fallback: none
       # The app is Go, cgo against the gpuikit download, with Velopack's C
       # library for the `velopack` tag release packages build with. Rust stays
-      # for the notices: cargo-about and the standard library's licences.
+      # for the notices: cargo-about and the standard library's licenses.
+      # The app is universal: ./xtask package builds an arm64 and an x86_64
+      # slice and joins them with lipo, against the universal gpuikit static library
+      # and both architectures' velopack_libc.
       - uses: actions/setup-go@v6.0.0
         with:
           go-version-file: desktop/go.mod

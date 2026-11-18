@@ -110,8 +110,8 @@ the request is unauthenticated and subject to GitHub's rate limit.
 
 Release preparation validates the pending release directly:
 `release.py prepare` parses the new app section with `parse_changelog` and
-does not require mixer changes or notes for download-only app releases.
-Legacy embedded release preparation also validates changed mixer notes. The release workflow then runs the ordinary published-only
+does not require mixer changes or notes, since app releases don't carry the
+mixer runtime. The release workflow then runs the ordinary published-only
 documentation build (`npm run build`), so a prepared but unpublished release
 never enters the site or `updates.json`. There is no synthetic candidate and
 no candidate output to keep or clean up.

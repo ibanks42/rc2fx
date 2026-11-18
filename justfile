@@ -105,6 +105,10 @@ test: mixer-build
     go -C desktop test -tags mockmixer ./transport/...
     cargo test --locked --workspace
     cargo clippy --locked --workspace --all-targets -- -D warnings
+    if [ "$(uname -s)" = Linux ]; then cargo test --locked -p rc2fx-device --features native-pipeline; fi
+    if [ "$(uname -s)" = Linux ]; then cargo clippy --locked -p rc2fx-device --features native-pipeline --all-targets -- -D warnings; fi
+    cargo clippy --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
+    cargo clippy --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
 
 # Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and the Rust workspace
 [windows]
@@ -116,11 +120,16 @@ test: mixer-build
 
 # Tests of the mixer side: the native library, launcher scripts and C modules (Linux or macOS, with python3 and cc)
 test-mixer:
+    cargo fmt --all --manifest-path crates/rc2fx-native/Cargo.toml -- --check
+    cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
     cargo test --locked --manifest-path crates/rc2fx-native/Cargo.toml
     cargo clippy --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets -- -D warnings
+    if [ "$(uname -s)" = Linux ]; then cargo check --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets; fi
+    cargo build --locked --manifest-path crates/rc2fx-native/Cargo.toml
     for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done
     python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p 'test_*.py'
     python3 crates/rc2fx-gui/test_gui_pacing.py
+    python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
 
 # Cross-build the suppression benchmark
 bench-build:

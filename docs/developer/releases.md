@@ -1,11 +1,10 @@
 # Releases
 
-The desktop app and the RC2FX mixer runtime are versioned independently, but
-released together: the mixer runtime is only ever published inside the app
-that bundles it. RØDE firmware is a third version, published by RØDE and only
-supported by RC2FX. A desktop release therefore names two versions: its own
-and the mixer runtime it bundles. The **Release** workflow does all of it and
-is started manually.
+The desktop app and the RC2FX mixer runtime are versioned and released
+independently: **Release** publishes the app, and **Mixer release** publishes
+the signed mixer runtime, which the app downloads. RØDE firmware is a third
+version, published by RØDE and only supported by RC2FX. Both workflows are
+started manually.
 
 ## The three versions
 
@@ -75,8 +74,8 @@ builds, offer **Download**, which opens the release page.
 3. Commit and push everything to `main`.
 4. On GitHub, open **Actions › Release › Run workflow** and choose branch
    `main`.
-5. Pick **patch**, **minor** or **major** for the app. The first release
-   ignores this choice (see [Desktop app](#desktop-app)).
+5. Pick **patch**, **minor** or **major** for the app (see
+   [Desktop app](#desktop-app)).
 6. Run it. Enable **dry-run** to build without publishing.
 
 A successful run packages the app for Linux, Windows and macOS, pushes a
@@ -92,22 +91,16 @@ A dry run doesn't push or publish anything.
 
 The current version is `[workspace.package] version` in `Cargo.toml`.
 
-- First release (no stable `vX.Y.Z` tag yet): the
-  version in `Cargo.toml` is released unchanged, so `1.0.0` becomes `v1.0.0`.
-  The bump choice is ignored. The workflow preserves the reviewed initial
-  changelog, which must contain exactly one section matching that version.
-  If the prepared files already match the source, it tags that source commit
-  without creating an empty release commit.
-- Later releases: each one increases the version. The bump is applied to the tag matching the version in
-  `Cargo.toml`. That tag must exist, be in `main`'s history, and have commits
-  after it.
+Each release increases the version. The bump is applied to the tag matching
+the version in `Cargo.toml`. That tag must exist, be in `main`'s history, and
+have commits after it.
 
 The run stops before building if these conditions aren't met, if the new tag
 already exists, or if the checkout has uncommitted changes.
 
-Every mixer runtime change reaches users in a desktop release that bundles it.
-Releasing the app doesn't change `config/mixer-release.json`: an app-only
-release keeps the mixer version, although the runtime is rebuilt for it.
+Releasing the app doesn't change `config/mixer-release.json`: release
+packages don't carry the mixer runtime, and mixer changes reach users through
+**Mixer release**.
 
 ### Mixer runtime version
 
@@ -126,9 +119,8 @@ changes: the crates built into the runtime, `mixer/scripts/`,
 `config/firmware-profiles.json`, the runtime's dependencies, and the
 toolchain and build settings that compile it. A version bumped by hand is
 kept when it equals the workflow's result, and stops the run otherwise. Mixer versions are reviewed and published independently of desktop releases;
-a desktop-only release does not require a mixer bump or mixer notes. Legacy
-embedded release preparation warns when mixer-side paths change without a
-version bump. `protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
+a desktop-only release does not require a mixer bump or mixer notes.
+`protocolVersion` must equal `rc2fx_core::MIXER_PROTOCOL_VERSION`;
 bump it only when an older desktop app can no longer drive the mixer.
 
 `./xtask mixer-build` copies the file into `target/mixer` and adds it to
@@ -282,9 +274,9 @@ hardware or none).
 - Don't use `chore(release)`: it is reserved for the release workflow's own
   commit, which the changelog skips.
 
-Every app release's notes end with a `Bundled RC2FX mixer software: VERSION.`
-line naming the mixer version the packages carry, even when it didn't change. The same version is visible in the app's
-**Settings › Versions**.
+Every app release's notes end with a `Mixer software is downloaded separately
+by the firmware installer.` line. The installed mixer version is visible in
+the app's **Settings › Versions**.
 
 ## Workflow jobs
 
