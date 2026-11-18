@@ -151,7 +151,7 @@ fn update_path(path: &str) -> Option<(&str, Option<&str>)> {
 fn operation_error(error_value: Error) -> Reply {
     let status = match &error_value {
         Error::Store(StoreError::Invalid(_)) => 400,
-        Error::Store(StoreError::Conflict) | Error::Audio(_) | Error::RuntimeFault => 409,
+        Error::Store(StoreError::Conflict) => 409,
         Error::NativeUnsupported(_) | Error::SuppressionInUse | Error::LiveRequiresSave(_) => 422,
         Error::Store(StoreError::NotFound) | Error::LiveUnsupported => 404,
         Error::Busy
@@ -596,15 +596,14 @@ mod tests {
         );
     }
 
-    /// Without the native engine (JACK, simulation, or none) a live edit is
+    /// Without the native engine (the store-only coordinator) a live edit is
     /// "unknown", so the app saves instead, and nothing changes.
     #[tokio::test]
     async fn live_editing_is_unknown_without_the_native_engine() {
         let dir = tempfile::tempdir().unwrap();
-        let (handle, owner) = Coordinator::new(
-            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
-            None,
-        )
+        let (handle, owner) = Coordinator::new(Controller::new(
+            Store::open(dir.path(), Config::default()).unwrap(),
+        ))
         .unwrap();
         let thread = std::thread::spawn(move || owner.run());
         let mut api = Api::new(handle.clone(), Options::default());
@@ -948,10 +947,9 @@ mod tests {
     #[tokio::test]
     async fn developer_ssh_answers_only_where_it_was_given() {
         let dir = tempfile::tempdir().unwrap();
-        let (handle, owner) = Coordinator::new(
-            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
-            None,
-        )
+        let (handle, owner) = Coordinator::new(Controller::new(
+            Store::open(dir.path(), Config::default()).unwrap(),
+        ))
         .unwrap();
         let thread = std::thread::spawn(move || owner.run());
         let call = |method: &str, body: Option<Value>| Request {
@@ -1011,10 +1009,9 @@ mod tests {
     #[tokio::test]
     async fn version_reports_what_was_read_and_omits_what_is_unknown() {
         let dir = tempfile::tempdir().unwrap();
-        let (handle, owner) = Coordinator::new(
-            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
-            None,
-        )
+        let (handle, owner) = Coordinator::new(Controller::new(
+            Store::open(dir.path(), Config::default()).unwrap(),
+        ))
         .unwrap();
         let thread = std::thread::spawn(move || owner.run());
         let get = || Request {
@@ -1053,10 +1050,9 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_reset_and_event_pages_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let (handle, owner) = Coordinator::new(
-            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
-            None,
-        )
+        let (handle, owner) = Coordinator::new(Controller::new(
+            Store::open(dir.path(), Config::default()).unwrap(),
+        ))
         .unwrap();
         let thread = std::thread::spawn(move || owner.run());
         struct Close(crate::coordinator::Handle);
@@ -1111,10 +1107,9 @@ mod tests {
     #[tokio::test]
     async fn settings_presets_conflicts_and_events() {
         let dir = tempfile::tempdir().unwrap();
-        let (handle, owner) = Coordinator::new(
-            Controller::new(Store::open(dir.path(), Config::default()).unwrap()),
-            None,
-        )
+        let (handle, owner) = Coordinator::new(Controller::new(
+            Store::open(dir.path(), Config::default()).unwrap(),
+        ))
         .unwrap();
         let thread = std::thread::spawn(move || owner.run());
         struct Close(crate::coordinator::Handle);

@@ -1,6 +1,12 @@
 //! Bounded main-service history. Only control/manager threads call this module.
-//! Records contain no audio and are never relabelled across generation changes.
-use crate::metrics;
+//! Records contain no audio and are never relabeled across generation changes.
+// Meter telemetry comes only from the native engine. A build without it (the
+// store-only coordinator that tests and non-Linux hosts compile) has no
+// caller for that half of the history.
+#![cfg_attr(
+    not(all(feature = "native-pipeline", target_os = "linux")),
+    allow(dead_code)
+)]
 use rc2fx_core::{
     DeviceState, EngineStatus, Meter, Performance, RoutingStatus, SelectionStatus, TargetMeter,
 };
@@ -24,7 +30,7 @@ const MAX_RECORD_BYTES: usize = 32 * 1024;
 // Keep room for the observation wrapper even when event history is full.
 const MAX_NATIVE_TELEMETRY_BYTES: usize = 128 * 1024;
 const MAX_IDENTITY_BYTES: usize = 16 * 1024;
-const NOTES: &str = "resources describes only the controller process; nativeMixerResources, when present, separately describes the vendor mixer process including RC2FX native processing. Shared memory/RSS must not be summed. Independent recovery watcher resources are not included. Native telemetry retains wire counters and optional timing in nativeDiagnostics; callbackDiagnostics is absent because the main-service callback does not execute there. Native wall/owned/native clocks are distinct; CPU clocks are sampled at cpuSampleEvery, and their calls count identifies the sampled population. Absent timing is unavailable, never zero cost. History clears on daemon restart. Samples are at most once per second with no catch-up. telemetryStatus explains missing telemetry (no fresh window, epoch change or oversized record); null is never zero audio or zero cost. Fresh means previously unconsumed, not contemporaneous: telemetry.at is control receipt time and observation.at is later process-sample start time; neither is callback time. CPU ticks are cumulative process CPU at the reported ticksPerSecond. Callback wall includes buffer acquisition, DSP, shared progress and preemption, but excludes subsequent metrics recording; it is not the entire callback deadline. Thread CPU excludes descheduling. Cadence is observed entry-to-entry monotonic time, including time between entries such as prior metrics recording, not execution duration or causal scheduler lateness. Its rounded expected period and ordinary jitter can produce abovePeriod counts without a fault; bins are <=P/2, <=P, <=2P, <=4P, >4P. Missing/invalid starts reset the baseline; effect revisions do not. Counters are individually sampled; shared JACK xruns must not be summed across clients. Peaks describe the latest consumed window, not the whole second. No recorded audio or saved effect parameters are included.";
+const NOTES: &str = "resources describes only the controller process; nativeMixerResources, when present, separately describes the vendor mixer process including RC2FX native processing. Shared memory/RSS must not be summed. Independent recovery watcher resources are not included. Native telemetry retains wire counters and optional timing in nativeDiagnostics. Native wall/owned/native clocks are distinct; CPU clocks are sampled at cpuSampleEvery, and their calls count identifies the sampled population. Absent timing is unavailable, never zero cost. History clears on daemon restart. Samples are at most once per second with no catch-up. telemetryStatus explains missing telemetry (no fresh window, epoch change or oversized record); null is never zero audio or zero cost. Fresh means previously unconsumed, not contemporaneous: telemetry.at is control receipt time and observation.at is later process-sample start time; neither is callback time. CPU ticks are cumulative process CPU at the reported ticksPerSecond. Counters are individually sampled. Peaks describe the latest consumed window, not the whole second. No recorded audio or saved effect parameters are included.";
 
 #[derive(Debug)]
 pub struct ExportError;
@@ -319,192 +325,6 @@ fn parse_process(bytes: &[u8], pid: u32, hz: u64, page: u64) -> io::Result<Proce
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CallbackDiagnostic {
-    target_id: String,
-    window_revision: Option<u64>,
-    callback_attempts: u64,
-    callbacks: u64,
-    processed_frames: u64,
-    failed_callbacks: u64,
-    invalid_meters: u64,
-    unmeasured_callbacks: u64,
-    dropped_windows: u64,
-    wall: DiagnosticTiming,
-    thread_cpu: Option<DiagnosticTiming>,
-    cadence: DiagnosticCadence,
-    saturated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    worker: Option<WorkerDiagnostic>,
-}
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkerDiagnostic {
-    frame_samples: usize,
-    worker_lead_samples: usize,
-    worker_allowance_ns: u64,
-    #[serde(flatten)]
-    counters: WorkerCounters,
-}
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DiagnosticCadence {
-    expected_period_ns: Option<u64>,
-    attempts: u64,
-    intervals: u64,
-    baselines: u64,
-    unmeasured: u64,
-    unavailable: u64,
-    clock_errors: u64,
-    total_ns: u64,
-    max_observed_gap_ns: u64,
-    above_period: u64,
-    above_two_periods: u64,
-    histogram: [u64; 5],
-    saturated: bool,
-}
-impl From<metrics::Cadence> for DiagnosticCadence {
-    fn from(c: metrics::Cadence) -> Self {
-        Self {
-            expected_period_ns: (c.expected_period_ns != 0).then_some(c.expected_period_ns),
-            attempts: c.attempts,
-            intervals: c.intervals,
-            baselines: c.baselines,
-            unmeasured: c.unmeasured,
-            unavailable: c.unavailable,
-            clock_errors: c.clock_errors,
-            total_ns: c.total_ns,
-            max_observed_gap_ns: c.max_ns,
-            above_period: c.above_period,
-            above_two_periods: c.above_two_periods,
-            histogram: c.histogram,
-            saturated: c.saturated,
-        }
-    }
-}
-#[derive(Clone, Serialize)]
-struct DiagnosticTiming {
-    #[serde(flatten)]
-    timing: rc2fx_core::Timing,
-    saturated: bool,
-}
-impl From<metrics::Timing> for DiagnosticTiming {
-    fn from(t: metrics::Timing) -> Self {
-        Self {
-            timing: t.to_core(),
-            saturated: t.saturated,
-        }
-    }
-}
-impl CallbackDiagnostic {
-    pub(crate) fn new(id: &str, t: metrics::Totals) -> Self {
-        Self {
-            target_id: id.into(),
-            window_revision: None,
-            callback_attempts: t.callback_attempts,
-            callbacks: t.callbacks,
-            processed_frames: t.processed_frames,
-            failed_callbacks: t.failed_callbacks,
-            invalid_meters: t.invalid_meters,
-            unmeasured_callbacks: t.unmeasured_callbacks,
-            dropped_windows: t.dropped_windows,
-            wall: t.wall.into(),
-            thread_cpu: t.thread_cpu.map(Into::into),
-            cadence: t.cadence.into(),
-            saturated: t.saturated,
-            worker: None,
-        }
-    }
-    pub(crate) fn with_window_revision(mut self, revision: Option<u64>) -> Self {
-        self.window_revision = revision;
-        self
-    }
-    pub(crate) fn with_worker(
-        mut self,
-        geometry: rc2fx_suppression::Geometry,
-        snapshot: rc2fx_suppression::Snapshot,
-        termination: rc2fx_suppression::Termination,
-    ) -> Self {
-        self.worker = Some(WorkerDiagnostic {
-            frame_samples: geometry.frame_samples,
-            worker_lead_samples: geometry.worker_lead_samples,
-            worker_allowance_ns: geometry.worker_allowance_ns(),
-            counters: WorkerCounters::new(snapshot, termination),
-        });
-        self
-    }
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct FaultObservation {
-    target_id: String,
-    native_fault: Option<u32>,
-    xruns: Option<u64>,
-    worker: Option<WorkerCounters>,
-}
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkerCounters {
-    termination: &'static str,
-    completed_frames: u64,
-    input_drops: u64,
-    output_drops: u64,
-    missed_deadlines: u64,
-    stale_results: u64,
-    allowance_overruns: u64,
-    failed: bool,
-    wall: rc2fx_core::Timing,
-    cpu: rc2fx_core::Timing,
-    queue_wait: rc2fx_core::Timing,
-    turnaround: rc2fx_core::Timing,
-}
-impl WorkerCounters {
-    fn new(v: rc2fx_suppression::Snapshot, termination: rc2fx_suppression::Termination) -> Self {
-        let timing = |t: rc2fx_suppression::Timing| rc2fx_core::Timing {
-            calls: t.calls,
-            total_ns: t.total_ns,
-            max_ns: t.max_ns,
-            overruns: t.overruns,
-            clock_errors: t.clock_errors,
-            histogram: t.bins,
-        };
-        Self {
-            termination: match termination {
-                rc2fx_suppression::Termination::Running => "running",
-                rc2fx_suppression::Termination::Stopping => "stopping",
-                rc2fx_suppression::Termination::TimedOut => "timedOut",
-                rc2fx_suppression::Termination::Joined => "joined",
-            },
-            completed_frames: v.completed_frames,
-            input_drops: v.input_drops,
-            output_drops: v.output_drops,
-            missed_deadlines: v.missed_deadlines,
-            stale_results: v.stale_results,
-            allowance_overruns: v.allowance_overruns,
-            failed: v.failed,
-            wall: timing(v.wall),
-            cpu: timing(v.cpu),
-            queue_wait: timing(v.queue_wait),
-            turnaround: timing(v.turnaround),
-        }
-    }
-}
-impl FaultObservation {
-    pub(crate) fn new(
-        id: &str,
-        native: Option<crate::diagnostics::Snapshot>,
-        worker: Option<(rc2fx_suppression::Snapshot, rc2fx_suppression::Termination)>,
-    ) -> Self {
-        Self {
-            target_id: id.into(),
-            native_fault: native.map(|v| v.fault),
-            xruns: native.map(|v| v.xruns),
-            worker: worker
-                .map(|(snapshot, termination)| WorkerCounters::new(snapshot, termination)),
-        }
-    }
-}
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct Counters {
     id: String,
     callbacks: u64,
@@ -518,7 +338,6 @@ struct Counters {
     performance: Option<Performance>,
 }
 enum PendingTelemetry {
-    Encoded(Arc<[u8]>),
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     Native {
         at: Stamp,
@@ -532,8 +351,6 @@ struct Telemetry<'a> {
     at: Stamp,
     source: &'static str,
     meter: &'a Meter,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    callback_diagnostics: Option<&'a [CallbackDiagnostic]>,
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     native_diagnostics: Option<&'a [rc2fx_native_control::ContextStatus]>,
@@ -585,7 +402,11 @@ impl Counters {
         }
         v
     }
-    fn faults(&self, include_xruns: bool) -> [u64; 11] {
+    /// Per-target fault counters. Native xruns are engine-wide and are kept
+    /// with their timing by `capture_native_faults`; repeating them for every
+    /// target would crowd that evidence out of the bounded event history
+    /// during a burst.
+    fn faults(&self) -> [u64; 10] {
         let mut v = [
             self.missed_deadlines,
             self.stale_results,
@@ -597,11 +418,9 @@ impl Counters {
             0,
             0,
             0,
-            0,
         ];
         if let Some(p) = &self.performance {
             v[4..].copy_from_slice(&[
-                if include_xruns { p.xruns } else { 0 },
                 p.callback.overruns,
                 p.callback.clock_errors,
                 p.worker_wall.overruns,
@@ -763,24 +582,6 @@ impl History {
             *count = count.saturating_add(1);
         }
     }
-    pub(crate) fn meter(&mut self, meter: &Meter, callback: &[CallbackDiagnostic]) {
-        if self.accept_meter(meter, Some(callback)) {
-            let telemetry = encoded(
-                &Telemetry {
-                    at: self.stamp(Instant::now()),
-                    source: "rust-main-callback",
-                    meter,
-                    callback_diagnostics: Some(callback),
-                    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
-                    native_diagnostics: None,
-                },
-                MAX_RECORD_BYTES,
-            );
-            self.pending = self
-                .encoded_telemetry(telemetry)
-                .map(PendingTelemetry::Encoded);
-        }
-    }
     pub(crate) fn event_serialization(&mut self, observed: bool) {
         let count = if observed {
             &mut self.retention.event_serializations
@@ -861,7 +662,7 @@ impl History {
                 }
             }
         }
-        if self.accept_meter(&meter, None) {
+        if self.accept_meter(&meter) {
             if matches!(self.pending, Some(PendingTelemetry::Native { .. })) {
                 self.retention.replaced_pending_native_windows = self
                     .retention
@@ -936,7 +737,7 @@ impl History {
             .map(|c| (meter.generation, c.context, c.counters))
             .collect();
     }
-    fn accept_meter(&mut self, meter: &Meter, callback: Option<&[CallbackDiagnostic]>) -> bool {
+    fn accept_meter(&mut self, meter: &Meter) -> bool {
         let Some(current) = &self.identity else {
             return false;
         };
@@ -944,7 +745,6 @@ impl History {
             || meter.revision != current.revision
             || meter.targets.is_empty()
             || meter.targets.len() > rc2fx_core::MAX_TARGETS
-            || callback.is_some_and(|callback| callback.len() != meter.targets.len())
         {
             return false;
         }
@@ -979,18 +779,14 @@ impl History {
                     )
                     .any(|(n, o)| *n < o)
             });
-            // Native xruns are engine-wide and retained with timing by
-            // capture_native_faults. Repeating them for every target crowds
-            // that evidence out of the bounded event history during a burst.
-            let include_xruns = callback.is_some();
             let fault = old.map_or_else(
-                || counters.worker_failed || counters.faults(include_xruns).iter().any(|v| *v > 0),
+                || counters.worker_failed || counters.faults().iter().any(|v| *v > 0),
                 |old| {
                     counters.worker_failed != old.worker_failed
                         || counters
-                            .faults(include_xruns)
+                            .faults()
                             .iter()
-                            .zip(old.faults(include_xruns))
+                            .zip(old.faults())
                             .any(|(n, o)| *n > o)
                 },
             );
@@ -1050,41 +846,6 @@ impl History {
             }
         }
     }
-    pub(crate) fn fault(
-        &mut self,
-        generation: u64,
-        published_revision: u64,
-        applied_revision: u64,
-        message: &str,
-        targets: &[FaultObservation],
-    ) {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Fault<'a> {
-            at: Stamp,
-            kind: &'static str,
-            generation: u64,
-            published_revision: u64,
-            applied_revision: u64,
-            message: String,
-            targets: &'a [FaultObservation],
-        }
-        self.push(
-            false,
-            encoded(
-                &Fault {
-                    at: self.stamp(Instant::now()),
-                    kind: "runtime-fault",
-                    generation,
-                    published_revision,
-                    applied_revision,
-                    message: short(message),
-                    targets,
-                },
-                MAX_RECORD_BYTES,
-            ),
-        );
-    }
     #[cfg(any(test, all(feature = "native-pipeline", target_os = "linux")))]
     pub(crate) fn rejection(
         &mut self,
@@ -1124,23 +885,8 @@ impl History {
             ),
         );
     }
-    #[cfg(test)]
-    pub(crate) fn terminal(&mut self, generation: u64, callbacks: &[CallbackDiagnostic]) {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Terminal<'a> {
-            at: Stamp,
-            kind: &'static str,
-            generation: u64,
-            scope: &'static str,
-            revision_note: &'static str,
-            callback_diagnostics: &'a [CallbackDiagnostic],
-        }
-        self.push(false,encoded(&Terminal {at:self.stamp(Instant::now()),kind:"callbacks-quiescent",generation,scope:"generation-cumulative",revision_note:"windowRevision identifies only an available final partial window; null means no partial window. Cumulative totals span revisions and are not attributed to initial or latest saved settings.",callback_diagnostics:callbacks},MAX_RECORD_BYTES));
-    }
     fn materialize_pending(&mut self) -> Option<Arc<[u8]>> {
         match self.pending.take() {
-            Some(PendingTelemetry::Encoded(bytes)) => Some(bytes),
             #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             Some(PendingTelemetry::Native {
                 at,
@@ -1154,7 +900,6 @@ impl History {
                         at,
                         source: "native-mixer",
                         meter: &meter,
-                        callback_diagnostics: None,
                         native_diagnostics: Some(&contexts),
                     },
                     MAX_NATIVE_TELEMETRY_BYTES,
@@ -1291,7 +1036,6 @@ impl Report {
             maximum_response_bytes: usize,
             retention: &'a Retention,
             notes: &'static str,
-            worker_timing_notes: &'static str,
         }
         let mut out = Limited::new(MAX_RESPONSE_BYTES);
         out.raw(b"{\"report\":")?;
@@ -1308,7 +1052,6 @@ impl Report {
             maximum_response_bytes: MAX_RESPONSE_BYTES,
             retention: &self.retention,
             notes: NOTES,
-            worker_timing_notes: "callbackDiagnostics.worker contains cumulative, independently sampled worker counters. queueWait spans submission to dequeue; turnaround spans submission to successful result publication, including execution. Both use workerAllowanceNs, not the model frame duration. An absent worker field is unavailable, not zero cost.",
         })?;
         for (name, records) in [
             (b",\"samples\":".as_slice(), self.samples),

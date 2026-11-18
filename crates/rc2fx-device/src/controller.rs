@@ -1,11 +1,18 @@
-//! State owned exclusively by the scoped coordinator. Audio never borrows it.
+//! State owned exclusively by the coordinator. Audio never borrows it.
+// Engine observations, and the engine age they carry, come only from the
+// native engine. A build without it (the store-only coordinator that tests
+// and non-Linux hosts compile) has no caller for them.
+#![cfg_attr(
+    not(all(feature = "native-pipeline", target_os = "linux")),
+    allow(dead_code)
+)]
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+use crate::coordinator::Request;
 use crate::{
-    audio::{Control, PrepareError},
-    coordinator::{Action, Error, GenerationPhase, GenerationUpdate, Request, RuntimeDescriptor},
-    diagnostic_history::{CallbackDiagnostic, ProcessStart},
-    events::{EventError, Subscription},
+    coordinator::{Error, RuntimeDescriptor},
+    diagnostic_history::ProcessStart,
     facade::Facade,
-    store::{PreparedSave, Store, StoreError},
+    store::{Store, StoreError},
 };
 use rc2fx_core::{
     ConfigUpdate, DeviceState, EngineMode, EnginePhase, EngineStatus, Meter, PresetSummary,
@@ -30,10 +37,6 @@ pub struct Controller {
     /// identity read at attach; no audio-path code reads `/proc`.
     process_start: Option<ProcessStart>,
 }
-pub(crate) enum EffectApply {
-    Saved(Box<DeviceState>),
-    Replacement(rc2fx_core::Config),
-}
 /// Where `running_for_ns` measures a generation from.
 #[derive(Clone, Copy, Debug)]
 enum RunningAnchor {
@@ -42,74 +45,8 @@ enum RunningAnchor {
     Process(ProcessStart),
     /// Fallback: the first Running report this daemon saw, on `Instant` (also
     /// `CLOCK_MONOTONIC` on Linux). Used when the process start cannot be
-    /// read, and for JACK, whose server pid is not known to this daemon.
+    /// read.
     FirstReport(std::time::Instant),
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod capacity_tests {
-    use super::*;
-
-    #[test]
-    fn overfull_selection_does_not_reserve_or_replace_a_running_generation() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = rc2fx_core::Config {
-            selected_targets: vec!["mic-1".into()],
-            ..Default::default()
-        };
-        let mut store = Store::open(directory.path(), config).unwrap();
-        store.reserve_generation().unwrap();
-        let mut control = Controller::new(store);
-        control.engine.mode = EngineMode::Jack;
-        control.engine.status = EnginePhase::Running;
-        control.engine.audio_advancing = true;
-        control.engine.applied_revision = control.config().revision;
-        control.engine.sample_rate = 48_000;
-        control.engine.block_size = 112;
-        control.routing.status = RoutingPhase::Active;
-        control.routing.channels = 1;
-        control.selection.allowed = true;
-        control.selection.channel_capacity = Some(1);
-        control.selection.qualified_target_ids = vec!["mic-1".into(), "usb-main".into()];
-        control.selection.active_target_ids = vec!["mic-1".into()];
-        let before = control.state();
-        before.validate().unwrap();
-        let path = directory.path().join("state.json");
-        let bytes = std::fs::read(&path).unwrap();
-        let result = control.reserve_transition(Request::Selection(rc2fx_core::SelectionRequest {
-            expected_revision: before.config.revision,
-            expected_generation: before.engine.generation,
-            target_ids: vec!["mic-1".into(), "usb-main".into()],
-        }));
-        assert!(matches!(result, Err(Error::Store(StoreError::Invalid(_)))));
-        assert_eq!(control.state(), before);
-        assert_eq!(std::fs::read(path).unwrap(), bytes);
-        assert_eq!(control.store.generation(), before.engine.generation);
-    }
-}
-
-/// Parameter-only saves retain the exact reserve/save/publish ordering. A
-/// structural candidate leaves both Store and live audio untouched here.
-fn save_effects(
-    save: PreparedSave<'_>,
-    control: Option<&mut Control<'_>>,
-) -> Result<Option<rc2fx_core::Config>, Error> {
-    if let Some(control) = control {
-        match control.reserve(
-            &save.candidate_config().targets,
-            save.candidate_config().revision,
-        ) {
-            Ok(reservation) => {
-                save.commit()?;
-                reservation.commit();
-            }
-            Err(PrepareError::RequiresRestart) => return Ok(Some(save.candidate_config().clone())),
-            Err(error) => return Err(Error::Audio(error)),
-        }
-    } else {
-        save.commit()?;
-    }
-    Ok(None)
 }
 
 /// Why moving the running audio from `running` to `candidate` needs a save
@@ -174,7 +111,6 @@ impl Controller {
                 mode: EngineMode::Native,
                 sample_rate: 48_000,
                 block_size: 112,
-                progress_timeout: std::time::Duration::from_secs(2),
             },
             runtime.selected_ids(),
         );
@@ -538,112 +474,6 @@ impl Controller {
         self.store.durability_fault()
     }
 
-    pub(crate) fn reserve_transition(
-        &mut self,
-        request: Request,
-    ) -> Result<(Action, DeviceState), Error> {
-        let (revision, generation, action) = match request {
-            Request::Routing(value) => (
-                value.expected_revision,
-                value.expected_generation,
-                if value.enabled {
-                    Action::Enable
-                } else {
-                    Action::Disable
-                },
-            ),
-            Request::Restart(value) => (
-                value.expected_revision,
-                value.expected_generation,
-                Action::Restart,
-            ),
-            Request::Selection(value) => (
-                value.expected_revision,
-                value.expected_generation,
-                Action::Select(value.target_ids),
-            ),
-        };
-        if revision != self.config().revision
-            || generation != self.engine.generation
-            || generation != self.store.generation()
-        {
-            return Err(StoreError::Conflict.into());
-        }
-        let state = self.state();
-        let action = match action {
-            Action::Enable if state.can_enable_processing() => Action::Enable,
-            Action::Disable if state.can_disable_processing() => Action::Disable,
-            Action::Restart if self.engine.restart_eligible() => Action::Restart,
-            Action::Select(ids) if self.selection.allowed => {
-                let ids = self
-                    .config()
-                    .canonical_selection(&ids)
-                    .map_err(|error| StoreError::Invalid(error.to_string()))?;
-                if ids
-                    .iter()
-                    .any(|id| !self.selection.qualified_target_ids.contains(id))
-                {
-                    return Err(StoreError::Invalid("unqualified processing path".into()).into());
-                }
-                let previous = self
-                    .config()
-                    .canonical_selection(&self.config().selected_targets)
-                    .map_err(|error| StoreError::Invalid(error.to_string()))?;
-                if ids == previous && self.selection.status != SelectionPhase::Error {
-                    return Err(Error::RuntimeFault);
-                }
-                // Validate revision capacity before reserving a generation.
-                self.selection
-                    .check_capacity(self.config(), &ids)
-                    .map_err(|error| StoreError::Invalid(error.to_string()))?;
-                drop(self.store.prepare_selection(revision, &ids)?);
-                Action::Select(ids)
-            }
-            _ => return Err(Error::RuntimeFault),
-        };
-        let selection = if let Action::Select(ids) = &action {
-            Some(ids.as_slice())
-        } else {
-            None
-        };
-        let state = self.reserve_lifecycle(
-            selection,
-            matches!(action, Action::Disable),
-            "Explicit lifecycle request accepted; previous owners must retire",
-        )?;
-        Ok((action, state))
-    }
-
-    fn reserve_lifecycle(
-        &mut self,
-        selection: Option<&[String]>,
-        disabling: bool,
-        message: &str,
-    ) -> Result<DeviceState, Error> {
-        let next = self.store.reserve_generation()?;
-        self.engine.generation = next;
-        self.running_since = None;
-        self.engine.status = EnginePhase::Restarting;
-        self.engine.restart_allowed = false;
-        self.engine.audio_advancing = false;
-        self.engine.applied_revision = 0;
-        self.engine.message = message.into();
-        self.routing.status = if disabling {
-            RoutingPhase::Bypassing
-        } else {
-            RoutingPhase::Starting
-        };
-        self.routing.message = "Lifecycle transition pending native verification".into();
-        self.selection.allowed = false;
-        self.selection.pending_target_ids.clear();
-        self.selection.status = SelectionPhase::Idle;
-        if let Some(ids) = selection {
-            self.selection.status = SelectionPhase::Changing;
-            self.selection.pending_target_ids = ids.to_vec();
-        }
-        Ok(self.saved())
-    }
-
     pub(crate) fn unavailable(&mut self, message: &str) {
         self.engine.status = EnginePhase::Error;
         self.engine.restart_allowed = false;
@@ -694,12 +524,8 @@ impl Controller {
         controller
     }
 
-    /// The diagnostics epoch: bumped by each reset, carried by every meter.
-    pub fn diagnostics_epoch(&self) -> u64 {
-        self.diagnostics.epoch()
-    }
-    /// Records the first Running report for `generation`, from the native or
-    /// the JACK progress poll (both on the manager thread). A later report for
+    /// Records the first Running report for `generation`, from the native
+    /// progress poll on the manager thread. A later report for
     /// the same generation keeps the original anchor, so an engine that
     /// stalls and recovers does not appear to restart. When the daemon knows
     /// when the audio process started, that is the anchor and the age covers
@@ -793,27 +619,23 @@ impl Controller {
         }
     }
 
-    pub fn subscribe(&mut self) -> Result<Subscription, EventError> {
-        self.front.subscribe()
-    }
-
     fn saved(&mut self) -> DeviceState {
         let state = self.state();
         self.front.publish(state.clone(), self.store.presets());
         state
     }
 
-    pub(crate) fn apply(
-        &mut self,
-        update: ConfigUpdate,
-        control: Option<&mut Control<'_>>,
-    ) -> Result<EffectApply, Error> {
-        let save = self.store.prepare_apply(update)?;
-        if let Some(candidate) = save_effects(save, control)? {
-            Ok(EffectApply::Replacement(candidate))
-        } else {
-            Ok(EffectApply::Saved(Box::new(self.saved())))
-        }
+    /// Saves effects with no audio engine attached: the store-only
+    /// coordinator, which only tests run.
+    pub(crate) fn apply(&mut self, update: ConfigUpdate) -> Result<DeviceState, Error> {
+        self.store.prepare_apply(update)?.commit()?;
+        Ok(self.saved())
+    }
+
+    /// Applies a preset with no audio engine attached, as `apply` does.
+    pub(crate) fn apply_preset(&mut self, id: &str, revision: u64) -> Result<DeviceState, Error> {
+        self.store.prepare_preset(id, revision)?.commit()?;
+        Ok(self.saved())
     }
 
     pub fn presets(&self) -> Vec<PresetSummary> {
@@ -830,25 +652,11 @@ impl Controller {
         Ok(preset)
     }
 
-    pub(crate) fn apply_preset(
-        &mut self,
-        id: &str,
-        revision: u64,
-        control: Option<&mut Control<'_>>,
-    ) -> Result<EffectApply, Error> {
-        let save = self.store.prepare_preset(id, revision)?;
-        if let Some(candidate) = save_effects(save, control)? {
-            Ok(EffectApply::Replacement(candidate))
-        } else {
-            Ok(EffectApply::Saved(Box::new(self.saved())))
-        }
-    }
-
     pub(crate) fn attach_runtime(&mut self, descriptor: &RuntimeDescriptor, selected: Vec<String>) {
         self.engine.generation = descriptor.generation;
         self.running_since = None;
         // A new generation gets the process identity its caller supplies, if
-        // any; JACK has none, and keeps the first-Running fallback.
+        // any; without one it keeps the first-Running fallback.
         self.note_process_start(None);
         self.engine.mode = descriptor.mode;
         self.engine.status = EnginePhase::Starting;
@@ -870,116 +678,9 @@ impl Controller {
         self.saved();
     }
 
-    pub(crate) fn audio_progress(&mut self, revision: u64, advancing: bool, failure: Option<&str>) {
-        let prior = self.engine.clone();
-        if revision != 0 {
-            self.engine.applied_revision = revision;
-        }
-        self.engine.audio_advancing = advancing;
-        if let Some(failure) = failure {
-            self.engine.status = EnginePhase::Error;
-            self.engine.message = format!("{failure}; explicit recovery required");
-        } else if advancing && revision != 0 {
-            self.engine.status = EnginePhase::Running;
-            self.engine.message = "Allocated audio callbacks are advancing".into();
-            self.note_running(self.engine.generation);
-        }
-        if self.engine != prior {
-            self.saved();
-        }
-    }
-
-    pub(crate) fn generation_update(
-        &mut self,
-        update: GenerationUpdate,
-    ) -> Result<DeviceState, Error> {
-        if update.generation != self.engine.generation || self.engine.mode != EngineMode::Jack {
-            return Err(Error::InvalidRuntime);
-        }
-        let channels = self.store.config().selected_channels();
-        match update.phase {
-            GenerationPhase::Starting => {
-                if self.routing.status != RoutingPhase::Unmanaged {
-                    return Err(Error::InvalidRuntime);
-                }
-                self.routing = RoutingStatus {
-                    status: RoutingPhase::Starting,
-                    channels,
-                    recovered: 0,
-                    message: "Waiting for watcher readiness and verified route insertion".into(),
-                };
-            }
-            GenerationPhase::Active => {
-                if self.routing.status != RoutingPhase::Starting
-                    || self.engine.status == EnginePhase::Error
-                    || !self.engine.audio_advancing
-                {
-                    return Err(Error::InvalidRuntime);
-                }
-                self.routing = RoutingStatus {
-                    status: RoutingPhase::Active,
-                    channels,
-                    recovered: 0,
-                    message: "Native generation owner verified every selected route".into(),
-                };
-                self.selection.status = SelectionPhase::Idle;
-                self.selection.pending_target_ids.clear();
-                self.selection.allowed = self.store.durability_fault().is_none();
-                self.engine.restart_allowed = false;
-            }
-            GenerationPhase::Recovering(message) => {
-                if message.len() > 1024 {
-                    return Err(Error::InvalidRuntime);
-                }
-                self.routing.status = RoutingPhase::Bypassing;
-                self.routing.message = message;
-            }
-            GenerationPhase::Restored => {
-                if self.routing.status != RoutingPhase::Bypassing {
-                    return Err(Error::InvalidRuntime);
-                }
-                self.routing = RoutingStatus { status: RoutingPhase::Bypassed, channels, recovered: channels,
-                    message: "Watcher joined and complete stock baseline verified; audio clients still allocated".into() };
-            }
-            GenerationPhase::Stopped => {
-                if self.routing.status != RoutingPhase::Bypassed {
-                    return Err(Error::InvalidRuntime);
-                }
-                self.engine.status = EnginePhase::Offline;
-                self.engine.audio_advancing = false;
-                self.engine.message =
-                    "Native clients closed, workers joined and stock-only graph verified".into();
-                self.selection.active_target_ids.clear();
-                self.selection.message = "No audio paths allocated".into();
-                self.routing.channels = 0;
-                self.routing.recovered = 0;
-                self.routing.message = "Stock-only graph verified after audio shutdown".into();
-            }
-            GenerationPhase::Fault(message) => {
-                if message.is_empty() || message.len() > 1024 {
-                    return Err(Error::InvalidRuntime);
-                }
-                self.engine.status = EnginePhase::Error;
-                self.engine.audio_advancing = false;
-                self.engine.message = message.clone();
-                self.routing.status = RoutingPhase::Error;
-                self.routing.message = message;
-            }
-        }
-        Ok(self.saved())
-    }
-
-    pub(crate) fn publish_meter(&mut self, mut meter: Meter, callback: &[CallbackDiagnostic]) {
-        if self.prepare_meter(&mut meter) {
-            self.front.meter(&meter, callback);
-        }
-    }
     fn prepare_meter(&self, meter: &mut Meter) -> bool {
-        let expected_ids = if self.engine.mode == EngineMode::Native {
-            &self.selection.qualified_target_ids
-        } else {
-            &self.selection.active_target_ids
-        };
+        // The native engine meters every bound path, active or not.
+        let expected_ids = &self.selection.qualified_target_ids;
         if meter.generation != self.engine.generation
             || meter.revision != self.store.config().revision
             || meter.revision != self.engine.applied_revision
@@ -994,10 +695,10 @@ impl Controller {
         {
             return false;
         }
-        // Engine age, not counter age: stamped here so the native and the JACK
-        // paths both report the controller's anchor (the audio process's start
-        // when known, else the first Running report), and a diagnostics reset
-        // (which rewrites only the counters) leaves it.
+        // Engine age, not counter age: stamped here so the meter reports the
+        // controller's anchor (the audio process's start when known, else the
+        // first Running report), and a diagnostics reset (which rewrites only
+        // the counters) leaves it.
         meter.running_for_ns = self.running_for_ns(meter.generation);
         meter.targets.sort_by_key(|target| {
             self.store
@@ -1108,11 +809,19 @@ mod running_tests {
     fn descriptor(generation: u64) -> RuntimeDescriptor {
         RuntimeDescriptor {
             generation,
-            mode: EngineMode::Jack,
+            mode: EngineMode::Native,
             sample_rate: 48_000,
             block_size: 112,
-            progress_timeout: Duration::from_secs(2),
         }
+    }
+
+    /// What an observation of the engine advancing on the saved revision
+    /// records (see `native_progress`).
+    fn running(control: &mut Controller) {
+        control.engine.applied_revision = control.config().revision;
+        control.engine.audio_advancing = true;
+        control.engine.status = EnginePhase::Running;
+        control.note_running(control.engine.generation);
     }
 
     /// A meter the controller accepts as current: this generation, this
@@ -1131,7 +840,7 @@ mod running_tests {
 
     #[test]
     fn engine_age_starts_at_running_and_survives_a_diagnostics_reset() {
-        // JACK (no process start known here) keeps the first-Running anchor.
+        // No process start is known here: the first Running report anchors.
         let directory = tempfile::tempdir().unwrap();
         let config = rc2fx_core::Config::default();
         let mut control = Controller::new(Store::open(directory.path(), config).unwrap());
@@ -1139,7 +848,7 @@ mod running_tests {
         assert_eq!(control.running_for_ns(1), None, "not running yet");
 
         let attach = Instant::now();
-        control.audio_progress(1, true, None);
+        running(&mut control);
         std::thread::sleep(Duration::from_millis(30));
         let mut first = meter(&control);
         assert!(control.prepare_meter(&mut first));
@@ -1149,13 +858,13 @@ mod running_tests {
             "about the time since Running: {age:?}"
         );
         // The same generation reported again keeps its original start.
-        control.audio_progress(1, true, None);
+        running(&mut control);
         assert!(control.running_for_ns(1).unwrap() >= age.as_nanos() as u64);
 
         // A new generation starts over, and the old one is not reported.
         control.attach_runtime(&descriptor(2), Vec::new());
         assert_eq!(control.running_for_ns(1), None);
-        control.audio_progress(1, true, None);
+        running(&mut control);
         let mut second = meter(&control);
         assert!(control.prepare_meter(&mut second));
         let second_age =
@@ -1199,7 +908,7 @@ mod running_tests {
         let observed = crate::diagnostics_log::monotonic_ns();
         let started = observed.saturating_sub(10_000_000_000);
         control.note_process_start(Some(process(4242, 987, started)));
-        control.audio_progress(1, true, None);
+        running(&mut control);
         let age = control.running_for_ns(1).expect("the generation runs");
         assert!(
             age >= observed.saturating_sub(started),
@@ -1223,7 +932,7 @@ mod running_tests {
         control.attach_runtime(&descriptor(1), Vec::new());
         control.note_process_start(None);
         let attached = Instant::now();
-        control.audio_progress(1, true, None);
+        running(&mut control);
         std::thread::sleep(Duration::from_millis(10));
         let age = Duration::from_nanos(control.running_for_ns(1).expect("the generation runs"));
         assert!(
@@ -1243,7 +952,7 @@ mod running_tests {
         // A process that started at boot: its age is the whole uptime.
         let before = crate::diagnostics_log::monotonic_ns();
         control.note_process_start(Some(process(11, 100, 0)));
-        control.audio_progress(1, true, None);
+        running(&mut control);
         let old = control.running_for_ns(1).expect("the generation runs");
         assert!(old >= before);
 

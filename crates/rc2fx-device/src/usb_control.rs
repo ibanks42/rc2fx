@@ -817,7 +817,7 @@ mod subscription_tests {
         _directory: tempfile::TempDir,
         handle: Handle,
         /// Never run: a command sent to it is accepted and never answered.
-        _owner: Coordinator<'static>,
+        _owner: Coordinator,
         server: Server,
         socket: tokio::net::UnixDatagram,
         peer: tokio::net::UnixDatagram,
@@ -826,7 +826,7 @@ mod subscription_tests {
         fn new() -> Self {
             let directory = tempfile::tempdir().unwrap();
             let store = Store::open(directory.path(), rc2fx_core::Config::default()).unwrap();
-            let (handle, owner) = Coordinator::new(Controller::new(store), None).unwrap();
+            let (handle, owner) = Coordinator::new(Controller::new(store)).unwrap();
             let (socket, peer) = tokio::net::UnixDatagram::pair().unwrap();
             Self {
                 _directory: directory,

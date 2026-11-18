@@ -1,10 +1,8 @@
 //! Persistent, control-only read front door. It owns no Store, DSP, callback or
 //! native registration. A snapshot and subscription are captured under one lock.
-use crate::diagnostic_history::{
-    CallbackDiagnostic, ExportError, FaultObservation, History, process_resources,
-};
+use crate::diagnostic_history::{ExportError, History, process_resources};
 use crate::events::{Event, EventError, EventKind, Hub, Subscription};
-use rc2fx_core::{DeviceState, Meter, PresetSummary};
+use rc2fx_core::{DeviceState, PresetSummary};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
@@ -84,20 +82,14 @@ impl Facade {
         front.state = Some(state);
         front.publish_event(event);
     }
-    pub(crate) fn meter(&self, meter: &Meter, callback: &[CallbackDiagnostic]) {
-        let mut front = self.0.lock().expect("control facade poisoned");
-        front.history.meter(meter, callback);
-        let event = front.event(EventKind::Meter, meter);
-        front.publish_event(event);
-    }
     #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     /// `shown` goes to subscribers (baselines applied); `raw` is what the
     /// diagnostics export keeps, so an exported report is never relative to a
     /// reset the analysis did not ask for.
     pub(crate) fn native_meter(
         &self,
-        meter: Meter,
-        raw: Meter,
+        meter: rc2fx_core::Meter,
+        raw: rc2fx_core::Meter,
         native: Vec<rc2fx_native_control::ContextStatus>,
     ) {
         let mut front = self.0.lock().expect("control facade poisoned");
@@ -173,26 +165,6 @@ impl Facade {
             .history
             .snapshot();
         report.encode()
-    }
-    pub(crate) fn fault(
-        &self,
-        generation: u64,
-        published_revision: u64,
-        applied_revision: u64,
-        message: &str,
-        targets: &[FaultObservation],
-    ) {
-        self.0
-            .lock()
-            .expect("control facade poisoned")
-            .history
-            .fault(
-                generation,
-                published_revision,
-                applied_revision,
-                message,
-                targets,
-            );
     }
     pub(crate) fn disconnect(&self) {
         self.0

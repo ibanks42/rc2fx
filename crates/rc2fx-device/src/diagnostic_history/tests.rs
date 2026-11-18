@@ -1,7 +1,7 @@
 use super::*;
-use rc2fx_core::{
-    Config, EngineMode, EnginePhase, MeterType, RoutingPhase, SelectionPhase, Timing,
-};
+use rc2fx_core::{Config, EngineMode, EnginePhase, RoutingPhase, SelectionPhase};
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+use rc2fx_core::{MeterType, Timing};
 use serde_json::Value;
 
 #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
@@ -230,6 +230,82 @@ fn full_native_catalog_retains_timing_with_bounded_history() {
     assert!(serde_json::to_vec(&exported).unwrap().len() <= MAX_RESPONSE_BYTES);
 }
 
+/// The largest state the controller admits (a full catalog, five selected
+/// paths and maximum-length messages) with saturated timings on every path
+/// still exports as a fresh sample that a strict client can parse.
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+#[test]
+fn maximum_admitted_paths_and_full_catalog_fit_the_export_and_strict_client_parser() {
+    let start = Instant::now();
+    let mut history = History::new(start);
+    let mut current = state(9, 12);
+    current.config.targets = (0..24)
+        .map(|index| {
+            rc2fx_core::Target::new(
+                format!("path-{index}"),
+                "Saved path",
+                match index {
+                    0 => rc2fx_core::TargetKind::Mic,
+                    1..=3 => rc2fx_core::TargetKind::Playback,
+                    _ => rc2fx_core::TargetKind::Output,
+                },
+                if index == 0 { 1 } else { 2 },
+            )
+        })
+        .collect();
+    current.config.selected_targets = (0..5).map(|i| format!("path-{i}")).collect();
+    current.selection.active_target_ids = current.config.selected_targets.clone();
+    current.engine.message = "界".repeat(300);
+    current.routing.message = "x".repeat(1024);
+    current.selection.message = "y".repeat(1024);
+    current.validate().unwrap();
+    history.state(&current);
+    let (_, mut native) = native_payload(100);
+    let mut value = meter(9, 12, 100);
+    value.targets = (0..5)
+        .map(|index| {
+            let mut t = value.targets[0].clone();
+            t.id = format!("path-{index}");
+            t.spectrum = vec![f64::MAX; 64];
+            if let Some(p) = &mut t.performance {
+                for timing in [&mut p.callback, &mut p.worker_wall, &mut p.worker_cpu] {
+                    timing.calls = u64::MAX;
+                    timing.total_ns = u64::MAX;
+                    timing.max_ns = u64::MAX;
+                    timing.overruns = u64::MAX;
+                    timing.clock_errors = u64::MAX;
+                    timing.histogram = [u64::MAX; 8];
+                }
+            }
+            t.validate().unwrap();
+            t
+        })
+        .collect();
+    let target_template = native[0].targets[0].clone();
+    native[0].targets = value
+        .targets
+        .iter()
+        .map(|meter| {
+            let mut target = target_template.clone();
+            target.id = meter.id.clone();
+            target
+        })
+        .collect();
+    history.native_meter(value, native);
+    sample(&mut history, start);
+    let exported = report(&history);
+    assert_eq!(exported["samples"][0]["telemetryStatus"], "fresh");
+    assert_eq!(
+        exported["samples"][0]["telemetry"]["meter"]["targets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    assert_eq!(exported["report"]["retention"]["rejectedRecords"], 0);
+    assert!(exported["report"]["state"].get("config").is_none());
+}
+
 #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn native_pending_encodes_only_latest_window_and_keeps_fault_detection_at_poll_rate() {
@@ -325,7 +401,8 @@ fn native_serialization_benchmark() {
             let (meter, native) = native_payload(poll * 100);
             history.native_meter(meter, native);
             if eager {
-                history.pending = history.materialize_pending().map(PendingTelemetry::Encoded);
+                // Encode every window as it arrives; the bytes are only counted.
+                let _ = history.materialize_pending();
             }
             if poll % 10 == 0 {
                 sample(&mut history, start + Duration::from_secs(poll / 10));
@@ -460,13 +537,6 @@ fn native_exports_preserve_worker_and_callback_clocks_without_main_callback_fabr
             .iter()
             .any(|event| event["kind"] == "initial-fault-counters")
     );
-    // Main-callback records still require one actual diagnostic per path.
-    history.meter(&meter(9, 12, 200), &[]);
-    sample(&mut history, start + Duration::from_secs(1));
-    assert_eq!(
-        report(&history)["samples"][1]["telemetryStatus"],
-        "noFreshWindow"
-    );
 }
 
 #[test]
@@ -544,74 +614,6 @@ fn rejected_controls_record_bounded_metadata_without_settings() {
     assert!(event.get("config").is_none());
 }
 
-#[test]
-fn exported_worker_timings_distinguish_queue_delay_from_model_execution() {
-    let timing = |total_ns| rc2fx_suppression::Timing {
-        calls: 1,
-        total_ns,
-        max_ns: total_ns,
-        ..Default::default()
-    };
-    let worker = rc2fx_suppression::Snapshot {
-        wall: timing(3_000_000),
-        queue_wait: timing(8_000_000),
-        turnaround: timing(11_000_000),
-        ..Default::default()
-    };
-    let observation = FaultObservation::new(
-        "mic-1",
-        None,
-        Some((worker, rc2fx_suppression::Termination::Running)),
-    );
-    let value = serde_json::to_value(observation).unwrap();
-    assert_eq!(value["worker"]["wall"]["totalNs"], 3_000_000);
-    assert_eq!(value["worker"]["queueWait"]["totalNs"], 8_000_000);
-    assert_eq!(value["worker"]["turnaround"]["totalNs"], 11_000_000);
-}
-
-#[test]
-fn ordinary_export_retains_worker_queue_timing_without_requiring_a_runtime_fault() {
-    let start = Instant::now();
-    let mut history = History::new(start);
-    history.state(&state(9, 12));
-    // The threaded worker's geometry (DeepFilterNet3: a 320-sample lead).
-    let geometry = rc2fx_suppression::Geometry::for_lookahead(0).unwrap();
-    let worker = rc2fx_suppression::Snapshot {
-        completed_frames: 7,
-        queue_wait: rc2fx_suppression::Timing {
-            calls: 7,
-            total_ns: 7_000,
-            max_ns: 2_000,
-            ..Default::default()
-        },
-        turnaround: rc2fx_suppression::Timing {
-            calls: 7,
-            total_ns: 7_000_000,
-            max_ns: 1_500_000,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let details = CallbackDiagnostic::new("mic-1", Default::default()).with_worker(
-        geometry,
-        worker,
-        rc2fx_suppression::Termination::Running,
-    );
-    history.meter(&meter(9, 12, 100), &[details]);
-    sample(&mut history, start);
-    let exported = report(&history);
-    assert_eq!(exported["samples"][0]["telemetryStatus"], "fresh");
-    let w = &exported["samples"][0]["telemetry"]["callbackDiagnostics"][0]["worker"];
-    assert_eq!(w["workerAllowanceNs"], 6_666_666);
-    assert_eq!(w["workerLeadSamples"], 320);
-    assert_eq!(w["queueWait"]["totalNs"], 7_000);
-    assert_eq!(w["turnaround"]["totalNs"], 7_000_000);
-    assert_eq!(w["completedFrames"], 7);
-    let absent =
-        serde_json::to_value(CallbackDiagnostic::new("usb-main", Default::default())).unwrap();
-    assert!(absent.get("worker").is_none());
-}
-
 fn state(generation: u64, revision: u64) -> DeviceState {
     let config = Config {
         revision,
@@ -648,6 +650,7 @@ fn state(generation: u64, revision: u64) -> DeviceState {
         },
     }
 }
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn timing() -> Timing {
     Timing {
         calls: 10,
@@ -658,6 +661,7 @@ fn timing() -> Timing {
         histogram: [0, 0, 10, 0, 0, 0, 0, 0],
     }
 }
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn meter(generation: u64, revision: u64, callbacks: u64) -> Meter {
     Meter {
         message_type: MeterType::Meter,
@@ -700,39 +704,37 @@ fn meter(generation: u64, revision: u64, callbacks: u64) -> Meter {
         running_for_ns: None,
     }
 }
-fn callbacks(meter: &Meter) -> Vec<CallbackDiagnostic> {
-    meter
-        .targets
-        .iter()
-        .map(|t| {
-            CallbackDiagnostic::new(
-                &t.id,
-                metrics::Totals {
-                    callbacks: t.callbacks,
-                    processed_frames: t.processed_frames,
-                    ..Default::default()
-                },
-            )
-            .with_window_revision(Some(meter.revision))
-        })
-        .collect()
-}
-fn maximum_cadence() -> metrics::Cadence {
-    metrics::Cadence {
-        expected_period_ns: u64::MAX,
-        attempts: u64::MAX,
-        intervals: u64::MAX,
-        baselines: u64::MAX,
-        unmeasured: u64::MAX,
-        unavailable: u64::MAX,
-        clock_errors: u64::MAX,
-        total_ns: u64::MAX,
-        max_ns: u64::MAX,
-        above_period: u64::MAX,
-        above_two_periods: u64::MAX,
-        histogram: [u64::MAX; 5],
-        saturated: true,
-    }
+/// One native context holding every target of `meter`, with no events.
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
+fn contexts(meter: &Meter) -> Vec<rc2fx_native_control::ContextStatus> {
+    use rc2fx_native_control::{ContextStatus, PathMode, TargetStatus};
+    vec![ContextStatus {
+        context: 42,
+        targets: meter
+            .targets
+            .iter()
+            .map(|target| TargetStatus {
+                id: target.id.clone(),
+                mode: PathMode::Processed,
+                runtime_epoch: 1,
+                retired_workers: vec![],
+                retired_worker_count: 0,
+                published: meter.revision,
+                seen: meter.revision,
+                applied: meter.revision,
+                fingerprint: [7; 32],
+                meter: None,
+                worker: None,
+                lates: None,
+                misses: None,
+                worker_recent_max_ns: None,
+            })
+            .collect(),
+        counters: Default::default(),
+        events: Vec::new(),
+        timing: None,
+        recent_callback_wall_ns: None,
+    }]
 }
 fn report(history: &History) -> Value {
     let bytes = history.snapshot().encode().unwrap();
@@ -751,6 +753,7 @@ fn sample(history: &mut History, now: Instant) {
         },
     );
 }
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn kinds(value: &Value) -> Vec<&str> {
     value["events"]
         .as_array()
@@ -760,20 +763,21 @@ fn kinds(value: &Value) -> Vec<&str> {
         .collect()
 }
 
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn sample_consumes_only_fresh_meter_and_does_not_catch_up_or_relabel() {
     let start = Instant::now();
     let mut history = History::new(start);
     history.state(&state(7, 11));
     let first = meter(7, 11, 10);
-    history.meter(&first, &callbacks(&first));
+    history.native_meter(first.clone(), contexts(&first));
     sample(&mut history, start);
     assert!(
         history
             .begin_sample(start + Duration::from_millis(999))
             .is_none()
     );
-    history.meter(&first, &callbacks(&first));
+    history.native_meter(first.clone(), contexts(&first));
     sample(&mut history, start + Duration::from_secs(6));
     let value = report(&history);
     let samples = value["samples"].as_array().unwrap();
@@ -785,7 +789,7 @@ fn sample_consumes_only_fresh_meter_and_does_not_catch_up_or_relabel() {
     assert_eq!(samples[1]["observation"]["intervalMs"], 6000);
     assert_eq!(value["report"]["retention"]["duplicateMeters"], 1);
     let next = meter(7, 11, 20);
-    history.meter(&next, &callbacks(&next));
+    history.native_meter(next.clone(), contexts(&next));
     history.state(&state(8, 11));
     sample(&mut history, start + Duration::from_secs(7));
     let report = report(&history);
@@ -794,6 +798,7 @@ fn sample_consumes_only_fresh_meter_and_does_not_catch_up_or_relabel() {
     assert_eq!(report["report"]["state"]["engine"]["generation"], 8);
 }
 
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn idle_bound_path_does_not_make_advancing_windows_duplicates() {
     let start = Instant::now();
@@ -809,14 +814,14 @@ fn idle_bound_path_does_not_make_advancing_windows_duplicates() {
         value
     };
     let first = with_idle(10);
-    history.meter(&first, &callbacks(&first));
+    history.native_meter(first.clone(), contexts(&first));
     sample(&mut history, start);
     // The microphone advances while Bluetooth stays idle: a new window.
     let next = with_idle(20);
-    history.meter(&next, &callbacks(&next));
+    history.native_meter(next.clone(), contexts(&next));
     sample(&mut history, start + Duration::from_secs(1));
     // Nothing advanced: still a duplicate.
-    history.meter(&next, &callbacks(&next));
+    history.native_meter(next.clone(), contexts(&next));
     sample(&mut history, start + Duration::from_secs(2));
     let value = report(&history);
     let samples = value["samples"].as_array().unwrap();
@@ -825,27 +830,28 @@ fn idle_bound_path_does_not_make_advancing_windows_duplicates() {
     assert_eq!(value["report"]["retention"]["duplicateMeters"], 1);
 }
 
+#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn fault_deltas_preserve_baselines_across_effects_revision_and_reset_on_replacement() {
     let mut history = History::default();
     history.state(&state(1, 4));
     let mut value = meter(1, 4, 10);
     value.targets[0].missed_deadlines = 2;
-    history.meter(&value, &callbacks(&value));
+    history.native_meter(value.clone(), contexts(&value));
     assert!(kinds(&report(&history)).contains(&"initial-fault-counters"));
     value.targets[0].callbacks = 20;
     value.targets[0].processed_frames = 2240;
-    history.meter(&value, &callbacks(&value));
+    history.native_meter(value.clone(), contexts(&value));
     history.state(&state(1, 5));
     value.revision = 5;
     value.targets[0].callbacks = 30;
     value.targets[0].processed_frames = 3360;
-    history.meter(&value, &callbacks(&value));
+    history.native_meter(value.clone(), contexts(&value));
     assert!(!kinds(&report(&history)).contains(&"audio-fault"));
     value.targets[0].missed_deadlines = 3;
     value.targets[0].callbacks = 40;
     value.targets[0].processed_frames = 4480;
-    history.meter(&value, &callbacks(&value));
+    history.native_meter(value.clone(), contexts(&value));
     assert_eq!(
         kinds(&report(&history))
             .iter()
@@ -857,12 +863,12 @@ fn fault_deltas_preserve_baselines_across_effects_revision_and_reset_on_replacem
     value.targets[0].suppression_frames = 0;
     value.targets[0].callbacks = 50;
     value.targets[0].processed_frames = 5600;
-    history.meter(&value, &callbacks(&value));
+    history.native_meter(value.clone(), contexts(&value));
     assert!(kinds(&report(&history)).contains(&"counter-reset"));
     history.state(&state(2, 5));
     value.generation = 2;
     value.targets[0].missed_deadlines = 9;
-    history.meter(&value, &callbacks(&value));
+    history.native_meter(value.clone(), contexts(&value));
     assert_eq!(
         kinds(&report(&history))
             .iter()
@@ -1004,9 +1010,6 @@ fn seven_minutes_of_large_native_style_samples_cannot_evict_incident_events() {
         &["mic-1".into()],
         "native busy",
     );
-    let mut incident = meter(9, 12, 100);
-    incident.targets[0].missed_deadlines = 1;
-    history.meter(&incident, &callbacks(&incident));
     let saved_events: Vec<_> = history
         .events
         .iter()
@@ -1017,7 +1020,7 @@ fn seven_minutes_of_large_native_style_samples_cannot_evict_incident_events() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|event| event["kind"] == "initial-fault-counters")
+            .any(|event| event["kind"] == "control-rejected")
     );
     // Reproduce the measured ~6KiB native sample size and seven-minute churn.
     for second in 0..420 {
@@ -1102,238 +1105,6 @@ fn events_have_independent_fifo_byte_capacity_and_samples_borrow_unused_space() 
                 .map(|record| record.bytes.len())
                 .sum::<usize>()
     );
-}
-
-#[test]
-fn oversized_nonadmitted_record_is_explicitly_unavailable_without_stale_pending_meter() {
-    let start = Instant::now();
-    let mut history = History::new(start);
-    history.state(&state(1, 1));
-    let small = meter(1, 1, 1);
-    history.meter(&small, &callbacks(&small));
-    let mut large = meter(1, 1, 2);
-    large.targets = (0..24)
-        .map(|index| {
-            let mut t = large.targets[0].clone();
-            t.id = format!("path-{index}");
-            t.spectrum = vec![0.5; 64];
-            if let Some(p) = &mut t.performance {
-                for timing in [&mut p.callback, &mut p.worker_wall, &mut p.worker_cpu] {
-                    timing.calls = u64::MAX;
-                    timing.total_ns = u64::MAX;
-                    timing.max_ns = u64::MAX;
-                    timing.overruns = u64::MAX;
-                    timing.clock_errors = u64::MAX;
-                    timing.histogram = [u64::MAX; 8];
-                }
-            }
-            t.validate().unwrap();
-            t
-        })
-        .collect();
-    let callbacks: Vec<_> = large
-        .targets
-        .iter()
-        .map(|t| {
-            CallbackDiagnostic::new(
-                &t.id,
-                metrics::Totals {
-                    thread_cpu: Some(metrics::Timing {
-                        calls: u64::MAX,
-                        histogram: [u64::MAX; 8],
-                        ..Default::default()
-                    }),
-                    cadence: maximum_cadence(),
-                    ..Default::default()
-                },
-            )
-        })
-        .collect();
-    history.meter(&large, &callbacks);
-    sample(&mut history, start);
-    let value = report(&history);
-    assert_eq!(value["samples"][0]["telemetryStatus"], "oversizeRejected");
-    assert!(value["samples"][0]["telemetry"].is_null());
-    assert!(
-        value["report"]["retention"]["rejectedRecords"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
-}
-
-#[test]
-fn maximum_admitted_paths_and_full_catalog_fit_the_export_and_strict_client_parser() {
-    let start = Instant::now();
-    let mut history = History::new(start);
-    let mut current = state(9, 12);
-    current.config.targets = (0..24)
-        .map(|index| {
-            rc2fx_core::Target::new(
-                format!("path-{index}"),
-                "Saved path",
-                match index {
-                    0 => rc2fx_core::TargetKind::Mic,
-                    1..=3 => rc2fx_core::TargetKind::Playback,
-                    _ => rc2fx_core::TargetKind::Output,
-                },
-                if index == 0 { 1 } else { 2 },
-            )
-        })
-        .collect();
-    current.config.selected_targets = (0..5).map(|i| format!("path-{i}")).collect();
-    current.selection.active_target_ids = current.config.selected_targets.clone();
-    current.engine.message = "界".repeat(300);
-    current.routing.message = "x".repeat(1024);
-    current.selection.message = "y".repeat(1024);
-    current.validate().unwrap();
-    history.state(&current);
-    let mut value = meter(9, 12, 100);
-    value.targets = (0..5)
-        .map(|index| {
-            let mut t = value.targets[0].clone();
-            t.id = format!("path-{index}");
-            t.spectrum = vec![f64::MAX; 64];
-            if let Some(p) = &mut t.performance {
-                for timing in [&mut p.callback, &mut p.worker_wall, &mut p.worker_cpu] {
-                    timing.calls = u64::MAX;
-                    timing.total_ns = u64::MAX;
-                    timing.max_ns = u64::MAX;
-                    timing.overruns = u64::MAX;
-                    timing.clock_errors = u64::MAX;
-                    timing.histogram = [u64::MAX; 8];
-                }
-            }
-            t.validate().unwrap();
-            t
-        })
-        .collect();
-    let details: Vec<_> = value
-        .targets
-        .iter()
-        .map(|target| {
-            CallbackDiagnostic::new(
-                &target.id,
-                metrics::Totals {
-                    wall: metrics::Timing {
-                        calls: u64::MAX,
-                        total_ns: u64::MAX,
-                        max_ns: u64::MAX,
-                        overruns: u64::MAX,
-                        clock_errors: u64::MAX,
-                        histogram: [u64::MAX; 8],
-                        saturated: true,
-                    },
-                    cadence: maximum_cadence(),
-                    thread_cpu: Some(metrics::Timing {
-                        calls: u64::MAX,
-                        histogram: [u64::MAX; 8],
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            )
-        })
-        .collect();
-    history.meter(&value, &details);
-    sample(&mut history, start);
-    let exported = report(&history);
-    assert_eq!(exported["samples"][0]["telemetryStatus"], "fresh");
-    assert_eq!(
-        exported["samples"][0]["telemetry"]["meter"]["targets"]
-            .as_array()
-            .unwrap()
-            .len(),
-        5
-    );
-    assert_eq!(exported["report"]["retention"]["rejectedRecords"], 0);
-    assert!(exported["report"]["state"].get("config").is_none());
-}
-
-#[test]
-fn terminal_totals_span_revisions_and_faults_survive_without_a_fresh_meter() {
-    let mut history = History::default();
-    history.state(&state(7, 8));
-    let callback = CallbackDiagnostic::new(
-        "mic-1",
-        metrics::Totals {
-            callbacks: 100,
-            ..Default::default()
-        },
-    )
-    .with_window_revision(Some(9));
-    history.terminal(7, &[callback]);
-    history.fault(
-        7,
-        9,
-        9,
-        "native shutdown",
-        &[FaultObservation::new(
-            "mic-1",
-            Some(crate::diagnostics::Snapshot { fault: 3, xruns: 4 }),
-            None,
-        )],
-    );
-    let value = report(&history);
-    let events = value["events"].as_array().unwrap();
-    let terminal = events
-        .iter()
-        .find(|v| v["kind"] == "callbacks-quiescent")
-        .unwrap();
-    assert_eq!(terminal["scope"], "generation-cumulative");
-    assert!(terminal.get("revision").is_none());
-    assert_eq!(terminal["callbackDiagnostics"][0]["windowRevision"], 9);
-    let fault = events
-        .iter()
-        .find(|v| v["kind"] == "runtime-fault")
-        .unwrap();
-    assert_eq!(fault["targets"][0]["nativeFault"], 3);
-    assert_eq!(fault["targets"][0]["xruns"], 4);
-    assert!(fault["targets"][0]["worker"].is_null());
-}
-
-#[test]
-fn cadence_exports_live_and_terminal_without_promoting_gaps_to_faults() {
-    let start = Instant::now();
-    let mut history = History::new(start);
-    history.state(&state(3, 4));
-    let meter = meter(3, 4, 10);
-    let cadence = metrics::Cadence {
-        expected_period_ns: 2_333_333,
-        attempts: 10,
-        intervals: 9,
-        baselines: 1,
-        total_ns: 30_000_000,
-        max_ns: 10_000_000,
-        above_period: 4,
-        above_two_periods: 1,
-        histogram: [0, 5, 3, 0, 1],
-        ..Default::default()
-    };
-    let callback = CallbackDiagnostic::new(
-        "mic-1",
-        metrics::Totals {
-            callbacks: 10,
-            cadence,
-            ..Default::default()
-        },
-    );
-    history.meter(&meter, std::slice::from_ref(&callback));
-    sample(&mut history, start);
-    history.terminal(3, &[callback]);
-    let value = report(&history);
-    let live = &value["samples"][0]["telemetry"]["callbackDiagnostics"][0]["cadence"];
-    let events = value["events"].as_array().unwrap();
-    let terminal = events
-        .iter()
-        .find(|v| v["kind"] == "callbacks-quiescent")
-        .unwrap();
-    assert_eq!(live, &terminal["callbackDiagnostics"][0]["cadence"]);
-    assert_eq!(live["maxObservedGapNs"], 10_000_000);
-    assert_eq!(live["expectedPeriodNs"], 2_333_333);
-    assert_eq!(live["abovePeriod"], 4);
-    assert_eq!(live["histogram"], serde_json::json!([0, 5, 3, 0, 1]));
-    assert!(!kinds(&value).contains(&"audio-fault"));
 }
 
 #[test]

@@ -1,25 +1,22 @@
-//! Device-side orchestration. Only the explicit audio endpoint runs in callbacks;
-//! The control API, storage, state preparation and reclamation belong to control threads.
+//! Device-side control: the control API, storage, state preparation and the
+//! connection to the native engine. Nothing here runs in an audio callback;
+//! the engine runs in the mixer process (rc2fx-native).
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod api;
-pub mod audio;
 pub mod catalog;
 pub mod controller;
 pub mod coordinator;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod developer_ssh;
 pub mod diagnostic_history;
-pub mod diagnostics;
 pub mod diagnostics_log;
 pub mod events;
 mod facade;
-pub mod metrics;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod mixer_update;
 #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 pub mod native_backend;
 pub mod native_plan;
-mod overload;
 mod persistence;
 pub mod recent;
 pub mod show_watch;

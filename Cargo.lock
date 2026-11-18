@@ -883,7 +883,6 @@ dependencies = [
  "rc2fx-dsp",
  "rc2fx-firmware",
  "rc2fx-native-control",
- "rc2fx-suppression",
  "rc2fx-usb",
  "serde",
  "serde_json",

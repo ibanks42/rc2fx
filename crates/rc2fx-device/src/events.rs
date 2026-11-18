@@ -1,5 +1,5 @@
 //! Bounded control-thread notifications for desktop clients.
-//! Serialization and publication must never run on a JACK processing thread.
+//! Serialization and publication run only on control threads, never in audio.
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 

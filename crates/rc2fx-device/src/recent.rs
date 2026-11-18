@@ -12,9 +12,9 @@ use std::{
 
 /// How far back a recent maximum looks.
 pub const WINDOW: Duration = Duration::from_secs(10);
-/// Peaks kept. The controller reads at most about nine windows a second and a
-/// JACK publisher about twenty, so ten seconds is under two hundred; this only
-/// bounds a caller that reads faster than that.
+/// Peaks kept. The controller reads at most about nine windows a second, so
+/// ten seconds is under a hundred; this only bounds a caller that reads
+/// faster than that.
 const MAX_PEAKS: usize = 256;
 
 /// The largest peak still inside the window, with the peaks that could still

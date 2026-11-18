@@ -954,7 +954,7 @@ async fn a_live_edit_plays_at_once_without_saving_or_publishing_state() {
     assert_eq!(before.engine.status, EnginePhase::Running);
     let file = directory.path().join("state.json");
     let bytes = std::fs::read(&file).unwrap();
-    let mut subscription = controller.subscribe().unwrap();
+    let mut subscription = controller.front.subscribe().unwrap();
     assert_eq!(
         subscription.next().await.unwrap().kind,
         crate::events::EventKind::State
@@ -1182,7 +1182,7 @@ async fn live_edits_nobody_watches_are_saved_as_they_play() {
     advance(&mut controller, &mut runtime);
     let before = controller.state();
     let sent = peer.events.lock().unwrap().len();
-    let mut subscription = controller.subscribe().unwrap();
+    let mut subscription = controller.front.subscribe().unwrap();
     assert_eq!(
         subscription.next().await.unwrap().kind,
         crate::events::EventKind::State
@@ -1441,7 +1441,7 @@ mod coordinator_loop {
 
     const SESSION: u64 = 0xfeed;
 
-    fn start() -> (tempfile::TempDir, Peer, Handle, Coordinator<'static>) {
+    fn start() -> (tempfile::TempDir, Peer, Handle, Coordinator) {
         let (directory, peer, controller, runtime) = fixture();
         let (handle, owner) = Coordinator::new_native(controller, runtime).unwrap();
         (directory, peer, handle, owner)

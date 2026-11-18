@@ -382,10 +382,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let data = directory.path().join("data");
         let socket = directory.path().join("ui.sock");
-        let (handle, owner) = Coordinator::new(
-            Controller::new(Store::open(&data, Config::default()).unwrap()),
-            None,
-        )
+        let (handle, owner) = Coordinator::new(Controller::new(
+            Store::open(&data, Config::default()).unwrap(),
+        ))
         .unwrap();
         let thread = std::thread::spawn(move || owner.run());
         let initial = receive(handle.state()).await.unwrap();
@@ -492,10 +491,9 @@ mod tests {
         let data = directory.path().join("data");
         let socket = directory.path().join("ui.sock");
         let proxy_path = directory.path().join("delayed.sock");
-        let (handle, owner) = Coordinator::new(
-            Controller::new(Store::open(&data, Config::default()).unwrap()),
-            None,
-        )
+        let (handle, owner) = Coordinator::new(Controller::new(
+            Store::open(&data, Config::default()).unwrap(),
+        ))
         .unwrap();
         let owner_thread = std::thread::spawn(move || owner.run());
         let initial = receive(handle.state()).await.unwrap();

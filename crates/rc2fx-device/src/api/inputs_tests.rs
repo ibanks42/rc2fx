@@ -90,7 +90,7 @@ async fn inputs_read_the_current_show_without_changing_settings() {
     let show_path = dir.path().join("show.bin");
     std::fs::write(&show_path, show("Before")).unwrap();
     let store = Store::open(dir.path().join("settings"), Config::default()).unwrap();
-    let (handle, owner) = Coordinator::new(Controller::new(store), None).unwrap();
+    let (handle, owner) = Coordinator::new(Controller::new(store)).unwrap();
     let owner = std::thread::spawn(move || owner.run());
     let options = Options {
         stock_config: Some(show_path.clone()),
@@ -134,7 +134,7 @@ async fn show_reads_never_change_selected_mic4_or_its_effects() {
     let config = selected_mic4_config();
     let expected = config.clone();
     let store = Store::open(dir.path().join("settings"), config).unwrap();
-    let (handle, owner) = Coordinator::new(Controller::new(store), None).unwrap();
+    let (handle, owner) = Coordinator::new(Controller::new(store)).unwrap();
     let owner = std::thread::spawn(move || owner.run());
     let options = Options {
         stock_config: Some(show_path.clone()),
