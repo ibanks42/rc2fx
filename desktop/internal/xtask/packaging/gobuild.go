@@ -1,16 +1,18 @@
 package packaging
 
 // Building the Go desktop app for packaging (cargo build -p rc2fx-app
-// before): cgo against the gpuikit library in desktop/third_party/gpuikit,
-// Velopack's C library (`velopack` tag, desktop/third_party/velopack), the
-// generated licence notices compiled in through `go generate ./app/licenses`,
-// and with --embedded the mixer payload staged by
-// installer/embed/cmd/stage-payload (`embedded` tag). The executable and the
-// libraries it loads land together in target/[TRIPLE/]release.
+// before): cgo against the gpuikit static library in
+// desktop/third_party/gpuikit, which links into the executable with only the
+// component families the app uses, Velopack's C library (`velopack` tag,
+// desktop/third_party/velopack), the generated licence notices compiled in
+// through `go generate ./app/licenses`, and with --embedded the mixer payload
+// staged by installer/embed/cmd/stage-payload (`embedded` tag). The
+// executable, and on Windows velopack_libc.dll beside it, land in
+// target/[TRIPLE/]release.
 //
 // The macOS app is universal: built once for arm64 and once for amd64, each
-// compiled and linked for macOSMinimum against the universal gpuikit library
-// and that architecture's static velopack_libc, then joined by `lipo
+// compiled and linked for macOSMinimum against the universal gpuikit static
+// library and that architecture's static velopack_libc, then joined by `lipo
 // -create` (RC2FX_LIPO, or lipo on the PATH) into one executable.
 
 import (
@@ -36,30 +38,23 @@ type library struct {
 	data []byte
 }
 
-// gpuikitLibrary is the gpuikit library's file name on goos.
-func gpuikitLibrary(goos string) string {
-	switch goos {
-	case "windows":
-		return "gpuikit.dll"
-	case "darwin":
-		return "libgpuikit.dylib"
-	}
-	return "libgpuikit.so"
-}
+// gpuikitLibrary is the gpuikit static library's file name, in the
+// download's lib folder on every system (on Windows, MinGW's archive).
+const gpuikitLibrary = "libgpuikit_static.a"
 
 // shippedNames is every library the app loads from beside itself on goos.
+// gpuikit is linked into the executable everywhere.
 func shippedNames(goos string) []string {
-	names := []string{gpuikitLibrary(goos)}
 	if goos == "windows" {
 		// MSVC-built; linked through its plain C exports (vpkc.go).
-		names = append(names, "velopack_libc.dll")
+		return []string{"velopack_libc.dll"}
 	}
 	// Linux and macOS link velopack_libc's static library into the
 	// executable, on macOS each slice its architecture's: Velopack's
 	// universal velopack_libc_osx.dylib has its build machine's path as its
 	// install name, so shipping it would need rewriting and signing another
 	// file.
-	return names
+	return nil
 }
 
 // shippedLibraries reads the libraries the build put beside the executable.
@@ -83,17 +78,14 @@ func gpuikitDir(root string) string {
 	return filepath.Join(root, "desktop", "third_party", "gpuikit")
 }
 
-// findGpuikit is the gpuikit library file for goos in the download.
-func findGpuikit(root, goos string) (string, error) {
-	name := gpuikitLibrary(goos)
-	for _, dir := range []string{"lib", "bin"} {
-		path := filepath.Join(gpuikitDir(root), dir, name)
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			return path, nil
-		}
+// findGpuikit is the download's lib folder, which holds the static library.
+func findGpuikit(root string) (string, error) {
+	dir := filepath.Join(gpuikitDir(root), "lib")
+	if info, err := os.Stat(filepath.Join(dir, gpuikitLibrary)); err == nil && info.Mode().IsRegular() {
+		return dir, nil
 	}
-	return "", task.Errorf("%s is not in %s; link desktop/third_party/gpuikit to the gpuikit download for this platform (desktop/README.md)",
-		name, gpuikitDir(root))
+	return "", task.Errorf("%s is not in %s; fetch the gpuikit download for this platform with desktop/scripts/fetch-gpuikit.sh (desktop/README.md)",
+		gpuikitLibrary, dir)
 }
 
 // goArches is the GOARCH of each build one package for goos/goarch needs:
@@ -191,23 +183,14 @@ func lipo(out string, slices []string) error {
 }
 
 // BuildApp builds the app for goos/goarch into target/[TRIPLE/]release with
-// the notices in documentPath compiled in, and copies the libraries it
-// loads beside it. On macOS goarch is "universal": one build per
+// the notices in documentPath compiled in, and on Windows copies
+// velopack_libc.dll beside it. On macOS goarch is "universal": one build per
 // architecture, joined by lipo.
 func BuildApp(root string, target *string, goos, goarch, documentPath string, embedded bool) error {
 	desktop := filepath.Join(root, "desktop")
-	gpuikit, err := findGpuikit(root, goos)
+	gpuikit, err := findGpuikit(root)
 	if err != nil {
 		return err
-	}
-	if goos == "darwin" {
-		data, err := read(gpuikit)
-		if err != nil {
-			return err
-		}
-		if err := checkLibrary(gpuikit, data); err != nil {
-			return task.Errorf("%s\nFetch the universal download: desktop/scripts/fetch-gpuikit.sh darwin-universal", err)
-		}
 	}
 	arches := goArches(goos, goarch)
 	for _, arch := range arches {
@@ -263,8 +246,9 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 	if embedded {
 		tags += ",embedded"
 	}
-	// strip = "debuginfo" in the Rust release profile.
-	ldflags, cgoLDFlags := appLinkFlags(goos, filepath.Dir(gpuikit), "-w")
+	// No symbol table or debug information: gpuikit's symbol table alone is
+	// over 20 MB, and Go's stack traces work without either.
+	ldflags, cgoLDFlags := appLinkFlags(goos, gpuikit, "-s -w")
 	var built []string
 	for _, arch := range arches {
 		out := exe
@@ -304,9 +288,6 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 			return err
 		}
 	}
-	if err := copyLibrary(gpuikit, filepath.Join(release, gpuikitLibrary(goos))); err != nil {
-		return err
-	}
 	if goos == "windows" {
 		velopack, err := velopackDir(root, goos, goarch, fetchTarget(goos, goarch))
 		if err != nil {
@@ -330,19 +311,20 @@ func copyLibrary(from, to string) error {
 	return os.Chmod(to, 0o755)
 }
 
-// windowsResources gives rc2fx.exe its icon, version details and the
-// application manifest (the Rust app's build.rs; gpui-fast embedded the
-// manifest there, gpuikit leaves it to the program): Explorer, the Start
-// menu, Installed apps and the taskbar read the details, the window loads
-// icon 1, and without the manifest's common controls 6 the program does not
-// start (gpuikit.dll imports TaskDialogIndirect). It compiles them with windres
+// windowsResources gives rc2fx.exe its icon and version details (the Rust
+// app's build.rs): Explorer, the Start menu, Installed apps and the taskbar
+// read the details, and the window loads icon 1. The application manifest
+// (common controls 6, without which the program does not start, and
+// per-monitor DPI awareness) is not among them: package gk links its own
+// (gpuikit_windows_amd64.syso), and the linker keeps that one over MinGW's
+// default (appLinkFlags' -force:multipleres). It compiles them with windres
 // (RC2FX_WINDRES, or x86_64-w64-mingw32-windres or windres on PATH) into
 // desktop/cmd/rc2fx/rsrc_windows_amd64.syso, which the caller removes after
 // the build. Development machines without a resource compiler still build;
 // releases must carry the icon.
 func windowsResources(root string) (string, error) {
 	icon := filepath.Join(root, filepath.FromSlash(task.AssetsDir), "rc2fx.ico")
-	script := resourceScript(icon, windowsManifest(root), installer.AppVersion)
+	script := resourceScript(icon, installer.AppVersion)
 	dir, err := os.MkdirTemp("", "rc2fx-resources")
 	if err != nil {
 		return "", task.Error(task.IOError(err))
@@ -363,9 +345,9 @@ func windowsResources(root string) (string, error) {
 	}
 	missing := func(reason string) (string, error) {
 		if releaseBuild() {
-			return "", task.Errorf("\n\ncannot embed the Windows icon, version and manifest: %s\n\n", reason)
+			return "", task.Errorf("\n\ncannot embed the Windows icon and version: %s\n\n", reason)
 		}
-		fmt.Printf("warning: cannot embed the Windows icon, version and manifest (a copy goes beside rc2fx.exe): %s\n", reason)
+		fmt.Printf("warning: cannot embed the Windows icon and version: %s\n", reason)
 		return "", nil
 	}
 	if !ok {
@@ -386,23 +368,9 @@ func windowsResources(root string) (string, error) {
 	return syso, nil
 }
 
-// windowsManifest is the gpuikit download's application manifest: common
-// controls 6 and per-monitor DPI awareness, which every gpuikit program on
-// Windows needs.
-func windowsManifest(root string) string {
-	return filepath.Join(gpuikitDir(root), "windows", "gpuikit.manifest")
-}
-
-// besideManifest puts the manifest beside exe as exe.manifest, for a build
-// that could not embed it (no resource compiler): Windows reads it when the
-// program has none of its own.
-func besideManifest(root, exe string) error {
-	return copyLibrary(windowsManifest(root), exe+".manifest")
-}
-
-// resourceScript is build.rs's rc2fx.rc for version, with the manifest as
-// resource 1 of type 24 (RT_MANIFEST), which Windows reads at process start.
-func resourceScript(icon, manifest, version string) string {
+// resourceScript is build.rs's rc2fx.rc for version, without its manifest
+// (package gk's).
+func resourceScript(icon, version string) string {
 	parts := strings.FieldsFunc(version, func(r rune) bool { return r == '.' || r == '-' || r == '+' })
 	numbers := make([]string, 4)
 	for i := range numbers {
@@ -418,7 +386,6 @@ func resourceScript(icon, manifest, version string) string {
 		return `"` + strings.ReplaceAll(strings.ReplaceAll(text, `\`, `\\`), `"`, `""`) + `"`
 	}
 	return fmt.Sprintf(`#pragma code_page(65001)
-1 24 %s
 1 ICON %s
 1 VERSIONINFO
 FILEVERSION %s
@@ -445,5 +412,5 @@ BEGIN
     VALUE "Translation", 0x409, 1200
   END
 END
-`, quote(manifest), quote(icon), numeric, numeric, quote(version), quote(version))
+`, quote(icon), numeric, numeric, quote(version), quote(version))
 }

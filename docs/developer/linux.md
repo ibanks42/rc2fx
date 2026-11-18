@@ -2,8 +2,8 @@
 
 These are the packages needed to build and run the desktop app on
 Debian/Ubuntu, Fedora or Arch. The app is Go with a C compiler for cgo; its UI
-library, gpuikit, comes prebuilt ([Building from source](building.md)) and
-needs only the libraries below at run time. Audio processing happens on the
+library, gpuikit, comes prebuilt ([Building from source](building.md)) and is
+linked into the app; it needs the libraries below to link and run. Audio processing happens on the
 mixer, so no audio setup is needed on the computer.
 
 The project is developed on Fedora. The Debian/Ubuntu and Arch lists haven't
@@ -16,7 +16,7 @@ been tested end to end, and package names change between releases.
 ```bash
 sudo apt update
 sudo apt install git curl build-essential golang-go \
-  libxkbcommon0 libxkbcommon-x11-0 libxcb1 libwayland-client0 \
+  libxkbcommon0 libxkbcommon-x11-0 libxcb1 libfreetype6 libwayland-client0 \
   libvulkan1 mesa-vulkan-drivers policykit-1
 ```
 
@@ -28,7 +28,7 @@ them, or from upstream.
 
 ```bash
 sudo dnf install git curl gcc golang \
-  libxkbcommon libxkbcommon-x11 libxcb libwayland-client \
+  libxkbcommon libxkbcommon-x11 libxcb freetype libwayland-client \
   vulkan-loader mesa-vulkan-drivers polkit just zig
 ```
 
@@ -36,7 +36,7 @@ sudo dnf install git curl gcc golang \
 
 ```bash
 sudo pacman -S --needed git curl base-devel go \
-  libxkbcommon libxkbcommon-x11 libxcb wayland \
+  libxkbcommon libxkbcommon-x11 libxcb freetype2 wayland \
   vulkan-icd-loader polkit just zig
 ```
 

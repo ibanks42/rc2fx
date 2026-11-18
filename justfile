@@ -101,7 +101,7 @@ mixer-disable:
 test: mixer-build
     cd desktop && test -z "$(gofmt -l $(go list -e -f '{{ "{{" }}.Dir{{ "}}" }}' ./...))"
     cd desktop && CGO_ENABLED=0 go vet $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')
-    cd desktop && if [ -e third_party/gpuikit ]; then CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib -Wl,-rpath,$PWD/third_party/gpuikit/lib" go test ./...; else go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$'); fi
+    cd desktop && if [ -e third_party/gpuikit ]; then CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go test ./...; else go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$'); fi
     go -C desktop test -tags mockmixer ./transport/...
     cargo test --locked --workspace
     cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -109,7 +109,7 @@ test: mixer-build
 # Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and the Rust workspace
 [windows]
 test: mixer-build
-    $ui = '/app$|/app/uitest$|/cmd/rc2fx$'; $all = go -C desktop list ./...; $nocgo = $all | Where-Object { $_ -notmatch $ui }; $pkgs = if (Test-Path desktop/third_party/gpuikit) { $all } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; $exec = @(); if (Test-Path desktop/third_party/gpuikit) { $lib = (Resolve-Path desktop/third_party/gpuikit/lib).Path; $env:CGO_LDFLAGS = "-L$lib"; $env:PATH = "$lib;$env:PATH"; $exec = @('-exec', "bash $((Resolve-Path desktop/scripts/windows-test-exec.sh).Path -replace '\\','/')") }; go -C desktop test @exec $pkgs; if (-not $?) { exit 1 }
+    $ui = '/app$|/app/uitest$|/cmd/rc2fx$'; $all = go -C desktop list ./...; $nocgo = $all | Where-Object { $_ -notmatch $ui }; $pkgs = if (Test-Path desktop/third_party/gpuikit) { $all } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/gpuikit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/gpuikit/lib).Path)" }; go -C desktop test $pkgs; if (-not $?) { exit 1 }
     go -C desktop test -tags mockmixer ./transport/...
     cargo test --locked --workspace
     cargo clippy --locked --workspace --all-targets -- -D warnings

@@ -6,8 +6,8 @@
 // and feed the app updates itself from.
 //
 // The app is the Go one (desktop/cmd/rc2fx, cgo against the gpuikit
-// library), shipped with libgpuikit beside it and, on Windows, Velopack's
-// velopack_libc.dll. The macOS app is universal (arm64 and x86_64 in one
+// static library, which is linked into it), shipped on Windows with
+// Velopack's velopack_libc.dll beside it. The macOS app is universal (arm64 and x86_64 in one
 // executable), so its packages are named rc2fx-macos-universal.
 package packaging
 

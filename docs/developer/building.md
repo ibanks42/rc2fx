@@ -40,8 +40,10 @@ pre-commit hook in `.githooks`.
 `fetch-gpuikit.sh` downloads gpuikit, the UI library the app links (GPUI-kit
 through its Go bindings), at the pinned version for your platform, checks its
 SHA-256 and unpacks it into `desktop/third_party/gpuikit`, which git ignores.
-Set `GPUIKIT_TOKEN` to a GitHub token if the bindings repository is private to
-you. With a local build of the bindings, link the folder instead:
+It is a static library (`lib/libgpuikit_static.a`): the app carries it inside
+its executable, and nothing ships beside it. Set `GPUIKIT_TOKEN` to a GitHub
+token if the bindings repository is private to you. With a local build of the
+bindings, link the folder instead:
 `ln -sfn /path/to/gpuikit-VERSION-OS-ARCH desktop/third_party/gpuikit`. Only
 the app's UI packages need it; the tests of everything else run without it.
 
@@ -56,7 +58,15 @@ just test-mixer    # mixer-side tests (Linux or macOS, with python3 and a C comp
 `just app` needs no mixer cross-build: the app downloads signed mixer
 releases. It runs `./xtask app`, which builds a development build (the Go
 build tags `rc2fxdebug` and `rc2fxdev`, the counterpart of a Rust debug build)
-into `target/debug` with the gpuikit library beside it, then starts it.
+into `target/debug`, then starts it.
+
+Every build of the app passes the C linker one flag that drops the gpuikit
+component families the app never calls (`-extldflags=-Wl,--gc-sections`, on
+macOS `-Wl,-dead_strip`). On Windows that takes LLVM's linker, so the release
+build links with `-fuse-ld=lld` and needs `ld.lld` on `PATH` beside MinGW's
+gcc, and with `-Xlink=-force:multipleres`, which keeps the application
+manifest package `gk` embeds over MinGW's default one. `./xtask` adds these;
+a plain `go build` without them still works, with every family in it.
 
 `just test` and the `*-embedded` recipes run `just mixer-build` first. It
 cross-builds the mixer runtime into `target/mixer` on your computer
@@ -109,10 +119,10 @@ documentation isn't packaged.
 On macOS the app is universal, for macOS 13 (the oldest Go 1.27 supports) and
 later. `./xtask package` builds `cmd/rc2fx` twice with cgo, for `arm64` and
 `amd64` (`CC`, `CGO_CFLAGS` and `CGO_LDFLAGS` with `-arch` and
-`-mmacosx-version-min=13.0`), against the universal gpuikit library and each
-architecture's static `velopack_libc`, and joins them with `lipo -create`
+`-mmacosx-version-min=13.0`), against the universal gpuikit static library and
+each architecture's static `velopack_libc`, and joins them with `lipo -create`
 (`RC2FX_LIPO` names another `lipo`). It then checks, in Go, that the
-executable, `libgpuikit.dylib` and, after vpk, its `UpdateMac` each hold
+executable and, after vpk, its `UpdateMac` each hold
 exactly an `arm64` and an `x86_64` slice built for no newer macOS than the
 bundle's `LSMinimumSystemVersion`, that every library they load is the
 system's or one beside the executable, and that the installer's

@@ -16,8 +16,8 @@ just desktop    # build target/release/rc2fx (rc2fx.exe on Windows)
   MinGW-w64 gcc on Windows, gcc (or clang) on Linux, the Xcode command-line
   tools on macOS.
 - The gpuikit download for your platform in `desktop/third_party/gpuikit`
-  (`desktop/scripts/fetch-gpuikit.sh`). `./xtask app` copies its library
-  beside the executable, which finds it there.
+  (`desktop/scripts/fetch-gpuikit.sh`), a static library linked into the
+  executable.
 - Linux: a graphical session and a Vulkan driver (see
   [Linux setup](../../docs/developer/linux.md)).
 

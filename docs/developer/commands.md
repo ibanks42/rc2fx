@@ -56,8 +56,7 @@ app, its validation and its `api/v1` requests are the real ones.
 
 `just desktop-mock` builds the same thing without debug information, as
 `target/mock/rc2fx`, for copying to another computer with the same operating
-system. Copy the gpuikit library beside it (`libgpuikit.so`,
-`libgpuikit.dylib` or `gpuikit.dll`) too.
+system. gpuikit is linked into it, so it needs nothing beside it.
 
 `./xtask app` refuses `--mock` with `--release`, and packaging refuses an
 executable built with the `mockmixer`, `rc2fxdev` or `rc2fxdebug` tag. `RC2FX_DEV_PAGE` works with

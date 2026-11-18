@@ -275,6 +275,7 @@ func (a *App) init(cx *gk.Cx) {
 	gk.ThemeChange(cx, gk.ThemeModeDark)
 	loadThemes(cx)
 	setAppearance(cx, rememberedAppearance())
+	makeHalo(cx)
 	a.sshAddress = addressInput(cx)
 	a.usbRuleText = gk.NewTextareaState(cx).DefaultValue(installerUSBRule).Build()
 	a.usbUndoText = gk.NewInputState(cx).DefaultValue(USBUndo).Build()

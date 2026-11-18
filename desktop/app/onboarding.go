@@ -6,7 +6,6 @@ package app
 // policy.
 
 import (
-	"sync"
 	"time"
 
 	"gpuikit.dev/gk"
@@ -29,33 +28,42 @@ func background() gk.LinearGradient {
 	return gk.NewLinearGradient(180, gk.NewLinearColorStop(rgb(top), 0), gk.NewLinearColorStop(rgb(bottom), 1))
 }
 
-// halo is the halo, computed once. As a live blurred shadow it covered the
-// whole window with per-pixel blur maths on every frame: more than half the
-// GPU time of these screens on an integrated GPU, for a picture that never
-// changes. An image costs one texture read a pixel.
-//
-// home.HaloPixels gives the bytes the Rust handed RenderImage, which reads
-// them as BGRA; gk.PixelImage takes RGBA and swaps red and blue on its way to
-// the same RenderImage, so they are swapped here first.
-var halo = sync.OnceValue(func() gk.PixelImage {
+// haloImage is the halo, made once when the app starts (makeHalo) and kept:
+// gpui uploads an image to the GPU once per image, so one made on every
+// render would upload, and keep, a new copy each time. As a live blurred
+// shadow it covered the whole window with per-pixel blur maths on every
+// frame: more than half the GPU time of these screens on an integrated GPU,
+// for a picture that never changes. An image costs one texture read a pixel.
+var haloImage *gk.RenderImage
+
+// makeHalo makes haloImage (in the app's init; images can't be made while a
+// view is described). home.HaloPixels gives the bytes the Rust handed
+// RenderImage, which reads them as BGRA; gk.PixelImage takes RGBA and swaps
+// red and blue on its way to the same RenderImage, so they are swapped here
+// first.
+func makeHalo(cx *gk.Cx) {
+	if haloImage != nil {
+		return
+	}
 	width, height := home.HaloSize()
 	pixels := home.HaloPixels(width, height)
 	for i := 0; i+3 < len(pixels); i += 4 {
 		pixels[i], pixels[i+2] = pixels[i+2], pixels[i]
 	}
-	return gk.PixelImage{Width: uint32(width), Height: uint32(height), RGBA: pixels}
-})
+	image := gk.NewRenderImage(cx, gk.PixelImage{Width: uint32(width), Height: uint32(height), RGBA: pixels})
+	haloImage = &image
+}
 
 // backdrop is the halo behind the opening screens (Dusk only). The halo
 // belongs to the window, never to a clipped line-sized canvas.
 func backdrop() gk.Element {
 	d := gk.Div(s.Absolute, s.Inset0, s.SizeFull)
-	if appearance() == AppearanceDusk {
+	if appearance() == AppearanceDusk && haloImage != nil {
 		// The Rust stretched it (.object_fit(ObjectFit::Fill)); gk's ImgEl
 		// has no ObjectFit yet, so gpui's default (Contain) applies: at a
 		// window shape other than the halo's own (1320 × 860) the glow is
 		// narrower or shorter than the window.
-		d = d.Child(gk.Img(gk.ImageSourceRender{Value: halo()}, s.SizeFull))
+		d = d.Child(gk.Img(gk.ImageSourceRender{Value: *haloImage}, s.SizeFull))
 	}
 	return d
 }

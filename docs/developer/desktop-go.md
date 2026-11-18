@@ -123,9 +123,10 @@ go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')
 go test -tags mockmixer ./transport/...
 ```
 
-With the gpuikit download in `third_party/gpuikit`, `go test ./...` covers the
-UI too. `app/uitest` runs the offscreen UI tests when `RC2FX_GPUIKIT_DIAG`
-names the diagnostic library's folder (`desktop/scripts/fetch-gpuikit.sh
---diag` fetches it into `third_party/gpuikit-diag`), and skips them
-otherwise. `just test`
+With the gpuikit download in `third_party/gpuikit` and
+`CGO_LDFLAGS=-L$PWD/third_party/gpuikit/lib`, `go test ./...` covers the UI
+too. `app/uitest` runs the offscreen UI tests when `RC2FX_GPUIKIT_DIAG` names a
+folder holding gpuikit's diagnostic library, and skips them otherwise. The
+downloads have none: build it from the bindings repository (`make lib` there,
+then its `lib/diag`). `just test`
 runs all of this, then the Rust workspace tests.

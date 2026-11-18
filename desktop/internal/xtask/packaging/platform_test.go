@@ -17,7 +17,7 @@ import (
 // macOS
 
 func TestBundleMovesTheExecutableIntoAnApp(t *testing.T) {
-	files := Files{"rc2fx": {Data: []byte("binary"), Mode: 0o755}, "libgpuikit.dylib": {Data: []byte("library"), Mode: 0o755}}
+	files := Files{"rc2fx": {Data: []byte("binary"), Mode: 0o755}}
 	files, err := bundle(files, "1.2.3")
 	if err != nil {
 		t.Fatal(err)
@@ -28,9 +28,6 @@ func TestBundleMovesTheExecutableIntoAnApp(t *testing.T) {
 	executable := files["RC2FX.app/Contents/MacOS/rc2fx"]
 	if string(executable.Data) != "binary" || executable.Mode != 0o755 {
 		t.Fatalf("%+v", executable)
-	}
-	if string(files["RC2FX.app/Contents/MacOS/libgpuikit.dylib"].Data) != "library" {
-		t.Fatal("libgpuikit.dylib is not beside the executable")
 	}
 	plist := string(files["RC2FX.app/Contents/Info.plist"].Data)
 	if !strings.Contains(plist, "<key>CFBundleShortVersionString</key><string>1.2.3</string>") ||
@@ -154,12 +151,12 @@ func fakeTools(t *testing.T, dir string) tools {
 }
 
 func TestUnexpectedBundledLibrariesNeedReviewedNotices(t *testing.T) {
-	for _, name := range []string{"libxkbcommon-x11.so.0", "libxcb-xkb.so.1.0.0", "libXdmcp.so.6", "libbsd.so.0", "libmd.so.0", "libgpuikit.so"} {
+	for _, name := range []string{"libxkbcommon-x11.so.0", "libxcb-xkb.so.1.0.0", "libXdmcp.so.6", "libbsd.so.0", "libmd.so.0"} {
 		if !coveredLibrary(name) {
 			t.Errorf("%s", name)
 		}
 	}
-	for _, name := range []string{"libnew.so.1", "libXau.something", "libbsd-ctor.so.0"} {
+	for _, name := range []string{"libnew.so.1", "libXau.something", "libbsd-ctor.so.0", "libgpuikit.so"} {
 		if coveredLibrary(name) {
 			t.Errorf("%s", name)
 		}

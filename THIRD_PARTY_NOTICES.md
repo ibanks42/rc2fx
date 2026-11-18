@@ -33,9 +33,9 @@ Apache-2.0; a few use other permissive licences (BSD-2/3, ISC, Zlib,
 Unicode-3.0, CC0, 0BSD).
 
 The desktop app is written in Go. Its interface library, libgpuikit, is built
-from Rust crates, including GPUI and gpui-component; the gpuikit download
-lists them with their licences, and the app's licence notices include that
-list and its licence texts.
+from Rust crates, including GPUI and gpui-component, and is linked into the
+app; the gpuikit download lists those crates with their licences, and the
+app's licence notices include that list and its licence texts.
 
 ## Go
 

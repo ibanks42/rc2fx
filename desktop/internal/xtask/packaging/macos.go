@@ -43,9 +43,8 @@ func infoPlist(version string) string {
 `, bundleID, version, version, macOSMinimum)
 }
 
-// bundle moves the executable, and the gpuikit library beside it, into an
-// app bundle: Contents/MacOS/rc2fx finds libgpuikit.dylib through its
-// @executable_path run path. checkMacBundle checks the result.
+// bundle moves the executable into an app bundle. checkMacBundle checks the
+// result.
 func bundle(files Files, version string) (Files, error) {
 	executable, ok := files["rc2fx"]
 	if !ok {
@@ -58,10 +57,6 @@ func bundle(files Files, version string) (Files, error) {
 	delete(files, "rc2fx")
 	contents := app + "/Contents"
 	files[contents+"/MacOS/rc2fx"] = executable
-	if library, ok := files[gpuikitLibrary("darwin")]; ok {
-		delete(files, gpuikitLibrary("darwin"))
-		files[contents+"/MacOS/"+gpuikitLibrary("darwin")] = library
-	}
 	files[contents+"/Info.plist"] = file([]byte(infoPlist(version)))
 	files[contents+"/Resources/rc2fx.icns"] = file(icon)
 	return files, nil

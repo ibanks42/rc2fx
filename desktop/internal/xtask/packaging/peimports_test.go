@@ -9,7 +9,7 @@ import (
 func TestTheWindowsAppMayImportOnlySystemAndShippedDLLs(t *testing.T) {
 	for _, name := range []string{
 		"KERNEL32.dll", "USER32.dll", "msvcrt.dll", "api-ms-win-crt-runtime-l1-1-0.dll",
-		"ucrtbase.dll", "ADVAPI32.dll", "WS2_32.dll", "gpuikit.dll", "velopack_libc.dll", "Velopack_libc.DLL",
+		"ucrtbase.dll", "ADVAPI32.dll", "WS2_32.dll", "velopack_libc.dll", "Velopack_libc.DLL",
 	} {
 		if !allowedWindowsImport(name) {
 			t.Errorf("%s refused", name)
@@ -38,12 +38,10 @@ func TestTheWindowsAppMustCarryACommonControls6Manifest(t *testing.T) {
 	if err := checkWindowsManifest(exe); err == nil {
 		t.Fatal("a program without a manifest was accepted")
 	}
+	// Only package gk's embedded manifest counts: nothing puts one beside.
 	write(exe+".manifest", manifest)
-	if err := checkWindowsManifest(exe); err != nil {
-		t.Fatalf("beside: %v", err)
-	}
-	if err := os.Remove(exe + ".manifest"); err != nil {
-		t.Fatal(err)
+	if err := checkWindowsManifest(exe); err == nil {
+		t.Fatal("a manifest beside the program was accepted")
 	}
 	write(exe, "MZ ... "+manifest+" ...")
 	if err := checkWindowsManifest(exe); err != nil {

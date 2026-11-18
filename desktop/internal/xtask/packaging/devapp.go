@@ -8,7 +8,7 @@ package packaging
 //
 //	(default)    development build (-tags rc2fxdebug,rc2fxdev, Rust's debug
 //	             build) in target/debug
-//	--release    release build (-trimpath -ldflags=-w) in target/release
+//	--release    release build (-trimpath -ldflags="-s -w") in target/release
 //	--mock       the simulated mixer (-tags mockmixer); a development build
 //	             only, stripped so it can go to another computer, in
 //	             target/mock (the Rust `mock` profile)
@@ -16,8 +16,8 @@ package packaging
 //	             (-tags embedded)
 //	--build-only build, do not run
 //
-// Arguments after `--` go to the app. The gpuikit library is copied beside
-// the executable, which finds it there.
+// Arguments after `--` go to the app. The gpuikit static library is linked
+// into the executable, so it runs on its own.
 
 import (
 	"os"
@@ -57,7 +57,7 @@ func RunApp(args []string) error {
 	root := task.Root()
 	desktop := filepath.Join(root, "desktop")
 	goos := runtime.GOOS
-	gpuikit, err := findGpuikit(root, goos)
+	gpuikit, err := findGpuikit(root)
 	if err != nil {
 		return err
 	}
@@ -71,14 +71,12 @@ func RunApp(args []string) error {
 			return err
 		}
 	}
-	manifestEmbedded := false
 	if goos == "windows" {
 		syso, err := windowsResources(root)
 		if err != nil {
 			return err
 		}
 		if syso != "" {
-			manifestEmbedded = true
 			defer func() { _ = os.Remove(syso) }()
 		}
 	}
@@ -90,7 +88,7 @@ func RunApp(args []string) error {
 	case release:
 		out = filepath.Join(root, "target", "release")
 		flags = append(flags, "-trimpath")
-		ldflags = "-w"
+		ldflags = "-s -w"
 	case mock:
 		out = filepath.Join(root, "target", "mock")
 		tags = append(tags, "mockmixer", "rc2fxdebug", "rc2fxdev")
@@ -102,7 +100,7 @@ func RunApp(args []string) error {
 	if embedded {
 		tags = append(tags, "embedded")
 	}
-	ldflags, cgoLDFlags := appLinkFlags(goos, filepath.Dir(gpuikit), ldflags)
+	ldflags, cgoLDFlags := appLinkFlags(goos, gpuikit, ldflags)
 	if err := os.MkdirAll(out, 0o777); err != nil {
 		return task.Error(task.IOError(err))
 	}
@@ -129,17 +127,11 @@ func RunApp(args []string) error {
 	if err := task.Run(build); err != nil {
 		return err
 	}
-	if err := copyLibrary(gpuikit, filepath.Join(out, gpuikitLibrary(goos))); err != nil {
-		return err
+	// Builds before the static library put it beside the executable.
+	for _, old := range []string{"libgpuikit.so", "libgpuikit.dylib", "gpuikit.dll", "rc2fx.exe.manifest"} {
+		_ = os.Remove(filepath.Join(out, old))
 	}
 	if goos == "windows" {
-		// Without a resource compiler the manifest goes beside the program;
-		// with one it is embedded, and an old copy beside it must not linger.
-		if manifestEmbedded {
-			_ = os.Remove(exe + ".manifest")
-		} else if err := besideManifest(root, exe); err != nil {
-			return err
-		}
 		if err := checkWindowsManifest(exe); err != nil {
 			return err
 		}
@@ -151,24 +143,28 @@ func RunApp(args []string) error {
 }
 
 // appLinkFlags adds to ldflags and CGO_LDFLAGS what every build of the app
-// links with on goos: the gpuikit library in libDir, found again at run
-// time beside the executable.
+// links with on goos: the gpuikit static library from libDir, of which the C
+// linker keeps only the component families the app calls into (package gk
+// names the library and the system libraries it needs; the C linker drops
+// what nothing uses only when told to, and Go lets no package ask for that).
 func appLinkFlags(goos, libDir, ldflags string) (string, string) {
 	cgoLDFlags := "-L" + libDir
+	if ldflags != "" {
+		ldflags += " "
+	}
 	switch goos {
 	case "linux":
-		// usr/bin/rc2fx finds usr/lib/libgpuikit.so in the AppDir.
-		cgoLDFlags += " -Wl,-rpath,$ORIGIN/../lib -Wl,-rpath,$ORIGIN"
+		ldflags += "-extldflags=-Wl,--gc-sections"
 	case "darwin":
-		cgoLDFlags += " -Wl,-rpath,@executable_path"
+		ldflags += "-extldflags=-Wl,-dead_strip"
 	case "windows":
 		// No console window (main.rs's windows_subsystem = "windows"), and
 		// the 8 MiB main stack build.rs reserved: GPUI's layout of the full
-		// EQ editor exceeds Windows' default 1 MiB.
-		if ldflags != "" {
-			ldflags += " "
-		}
-		ldflags += "-H windowsgui -extldflags=-Wl,--stack,8388608"
+		// EQ editor exceeds Windows' default 1 MiB. LLVM's linker, because
+		// MinGW's GNU ld keeps every function that has unwind data, which is
+		// all of them; -force:multipleres lets package gk's manifest replace
+		// the default one MinGW's gcc adds (lld keeps the first, gk's).
+		ldflags += "-H windowsgui '-extldflags=-fuse-ld=lld -Wl,--stack,8388608,--gc-sections,-Xlink=-force:multipleres'"
 		// MinGW's libgcc goes into the executable: a clean Windows has no
 		// libgcc_s DLL (checkWindowsImports refuses one).
 		cgoLDFlags += " -static-libgcc"

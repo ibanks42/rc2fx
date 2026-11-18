@@ -113,7 +113,7 @@ jobs:
       # library for the `velopack` tag release packages build with. Rust stays
       # for the notices: cargo-about and the standard library's licences.
       # The app is universal: ./xtask package builds an arm64 and an x86_64
-      # slice and joins them with lipo, against the universal gpuikit library
+      # slice and joins them with lipo, against the universal gpuikit static library
       # and both architectures' velopack_libc.
       - uses: actions/setup-go@v6.0.0
         with:
@@ -125,10 +125,11 @@ jobs:
         run: bash desktop/scripts/fetch-gpuikit.sh windows-amd64
       - name: Fetch the Velopack C library
         run: bash desktop/scripts/fetch-velopack.sh windows-amd64
-      # cgo links with MinGW's gcc, and a release build refuses to go without
-      # windres for the icon and version resource.
+      # cgo links with MinGW's gcc and LLVM's linker (which drops the gpuikit
+      # component families the app does not use), and a release build
+      # refuses to go without windres for the icon and version resource.
       - name: Check the C toolchain
-        run: gcc --version && windres --version
+        run: gcc --version && ld.lld --version && windres --version
       # Velopack's vpk makes the packages and signs them, with Azure Artifact
       # Signing when the signing variables are set.
       - uses: actions/setup-dotnet@v6.1.0
@@ -173,9 +174,9 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP rc2fx-signature-check
           Remove-Item -Recurse -Force $dir -ErrorAction Ignore
           Expand-Archive $zip[0].FullName -DestinationPath $dir
-          # The launcher, the updater, the app itself, the libraries it loads,
+          # The launcher, the updater, the app itself, the library it loads,
           # and Setup.
-          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe', 'current/gpuikit.dll', 'current/velopack_libc.dll' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
+          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe', 'current/velopack_libc.dll' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature $file.FullName
             if ($signature.Status -ne 'Valid') { throw "$($file.Name) signature is $($signature.Status): $($signature.StatusMessage)" }
@@ -396,8 +397,8 @@ jobs:
                           inside = package.read(f'lib/app/{pack}.AppImage')
                           assert inside == (directory / appimage).read_bytes(), f'{archive.name} holds another AppImage'
                           continue
-                  # The app and the libraries it loads from beside itself.
-                  app = ('rc2fx.exe', 'gpuikit.dll', 'velopack_libc.dll')
+                  # The app and the library it loads from beside itself.
+                  app = ('rc2fx.exe', 'velopack_libc.dll')
                   needed = ({f'lib/app/{name}' for name in app} if archive.suffix == '.nupkg'
                             else {'RC2FX.exe', 'Update.exe', *(f'current/{name}' for name in app)})
                   assert needed <= members, f'{archive.name} lacks {sorted(needed - members)}'

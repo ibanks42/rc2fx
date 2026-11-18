@@ -267,19 +267,20 @@ func TestPackagesRefuseGoBuildsWithoutVelopack(t *testing.T) {
 	}
 }
 
-func TestTheAppShipsGpuikitAndOnWindowsVelopackBesideIt(t *testing.T) {
+func TestTheAppShipsOnlyVelopackOnWindowsBesideIt(t *testing.T) {
 	for goos, want := range map[string]string{
-		"linux":   "libgpuikit.so",
-		"darwin":  "libgpuikit.dylib",
-		"windows": "gpuikit.dll,velopack_libc.dll",
+		"linux":   "",
+		"darwin":  "",
+		"windows": "velopack_libc.dll",
 	} {
 		if got := strings.Join(shippedNames(goos), ","); got != want {
 			t.Errorf("%s: %s", goos, got)
 		}
 	}
-	script := resourceScript(`C:\r\rc2fx.ico`, `C:\g\windows\gpuikit.manifest`, "1.2.3")
+	// The manifest is package gk's, so the script has none (type 24).
+	script := resourceScript(`C:\r\rc2fx.ico`, "1.2.3")
 	if !strings.Contains(script, "FILEVERSION 1,2,3,0") || !strings.Contains(script, `1 ICON "C:\\r\\rc2fx.ico"`) ||
-		!strings.Contains(script, `1 24 "C:\\g\\windows\\gpuikit.manifest"`) ||
+		strings.Contains(script, "1 24 ") ||
 		!strings.Contains(script, `VALUE "ProductVersion", "1.2.3"`) {
 		t.Fatal(script)
 	}

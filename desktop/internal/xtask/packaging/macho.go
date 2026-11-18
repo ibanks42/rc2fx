@@ -253,22 +253,6 @@ func checkUniversal(name string, data []byte, minimum string) ([]machoSlice, err
 	return found, nil
 }
 
-// checkLibrary: a library the app loads from beside itself is universal,
-// fits the app's minimum, and is found through the executable's run path.
-func checkLibrary(name string, data []byte) error {
-	found, err := checkUniversal(name, data, macOSMinimum)
-	if err != nil {
-		return err
-	}
-	want := "@rpath/" + path.Base(name)
-	for _, s := range found {
-		if !s.dylib || s.install != want {
-			return task.Errorf("%s (%s) has install name %q, not %q", name, s.arch, s.install, want)
-		}
-	}
-	return nil
-}
-
 // systemLibrary: a library macOS itself provides.
 func systemLibrary(name string) bool {
 	return strings.HasPrefix(name, "/usr/lib/") || strings.HasPrefix(name, "/System/Library/")
@@ -277,8 +261,8 @@ func systemLibrary(name string) bool {
 // checkMacBundle checks the app bundle's files (paths under RC2FX.app/):
 // LSMinimumSystemVersion is macOSMinimum, every Mach-O file in it is
 // universal and fits that minimum, and every library one loads is the
-// system's or one beside the executable, which finds those through its
-// @executable_path run path.
+// system's or one beside the executable (found through an @executable_path
+// run path).
 func checkMacBundle(files Files) error {
 	contents := app + "/Contents/"
 	info, ok := files[contents+"Info.plist"]
@@ -310,9 +294,6 @@ func checkMacBundle(files Files) error {
 		}
 		checked++
 		for _, s := range found {
-			if name == macOS+executable && !slices.Contains(s.rpaths, "@executable_path") {
-				return task.Errorf("%s (%s) has no @executable_path run path, so it cannot find its libraries", name, s.arch)
-			}
 			if s.dylib && path.Dir(name)+"/" == macOS && s.install != "@rpath/"+path.Base(name) {
 				return task.Errorf("%s (%s) has install name %q, not %q", name, s.arch, s.install, "@rpath/"+path.Base(name))
 			}
@@ -328,6 +309,9 @@ func checkMacBundle(files Files) error {
 				}
 				if _, ok := files[macOS+beside]; beside == "" || !ok {
 					return task.Errorf("%s (%s) loads %s, which is neither the system's nor in %s", name, s.arch, load, macOS)
+				}
+				if strings.HasPrefix(load, "@rpath/") && !slices.Contains(s.rpaths, "@executable_path") {
+					return task.Errorf("%s (%s) loads %s but has no @executable_path run path, so it cannot find it", name, s.arch, load)
 				}
 			}
 		}

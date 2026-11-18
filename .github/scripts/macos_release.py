@@ -172,11 +172,10 @@ def check_tag(gh, tag, source):
 PACK_ID = "io.github.ibanks42.rc2fx"
 APP = "RC2FX.app/"
 SEQUESTERED = "__MACOSX/"
-# The app, the gpuikit library it loads from beside itself, Velopack's
-# updater and the bundle's Info.plist.
+# The app (gpuikit is linked into it), Velopack's updater and the bundle's
+# Info.plist.
 APP_MEMBERS = (
     "RC2FX.app/Contents/MacOS/rc2fx",
-    "RC2FX.app/Contents/MacOS/libgpuikit.dylib",
     "RC2FX.app/Contents/MacOS/UpdateMac",
     "RC2FX.app/Contents/Info.plist",
 )

@@ -5,7 +5,8 @@
 # oldest maintained base, and the oldest glibc GitHub's JavaScript actions
 # run on. It has the release's Rust tools at their pinned versions (the
 # mixer, and cargo-about for the notices), Go for ./xtask and the desktop app
-# (cgo against libgpuikit.so, whose libraries the AppImage bundles from here),
+# (cgo against gpuikit's static library, whose system libraries the AppImage
+# bundles from here),
 # and .NET and mksquashfs for vpk, which makes the AppImage.
 FROM docker.io/library/almalinux:8
 ARG RUST_VERSION

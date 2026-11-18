@@ -11,7 +11,7 @@ import (
 )
 
 // shippedDLLs are the libraries the Windows package carries beside rc2fx.exe.
-var shippedDLLs = []string{"gpuikit.dll", "velopack_libc.dll"}
+var shippedDLLs = []string{"velopack_libc.dll"}
 
 // checkWindowsImports refuses an rc2fx.exe that needs a DLL a clean Windows
 // does not have and the package does not ship. The Rust app was built by
@@ -61,11 +61,11 @@ func allowedWindowsImport(name string) bool {
 // commonControls6 is what a manifest that asks for common controls 6 names.
 var commonControls6 = []byte("Microsoft.Windows.Common-Controls")
 
-// checkWindowsManifest refuses an rc2fx.exe that would not start: gpuikit.dll
+// checkWindowsManifest refuses an rc2fx.exe that would not start: gpuikit
 // imports comctl32 6's TaskDialogIndirect, which Windows provides only to a
-// program whose manifest asks for common controls 6, embedded (resource 1 of
-// type 24, from windowsResources) or beside it as rc2fx.exe.manifest. gpui
-// embedded one in the Rust app; gpuikit leaves it to the program.
+// program whose manifest asks for common controls 6. Package gk embeds that
+// manifest (resource 1 of type 24); a link that kept MinGW's default one
+// instead (no -force:multipleres with lld) has none.
 func checkWindowsManifest(exe string) error {
 	data, err := os.ReadFile(exe)
 	if err != nil {
@@ -74,8 +74,5 @@ func checkWindowsManifest(exe string) error {
 	if bytes.Contains(data, commonControls6) {
 		return nil
 	}
-	if beside, err := os.ReadFile(exe + ".manifest"); err == nil && bytes.Contains(beside, commonControls6) {
-		return nil
-	}
-	return task.Errorf("%s has no application manifest asking for common controls 6 (embedded or as %s.manifest), so Windows would not start it", exe, exe)
+	return task.Errorf("%s has no application manifest asking for common controls 6 (package gk's), so Windows would not start it", exe)
 }

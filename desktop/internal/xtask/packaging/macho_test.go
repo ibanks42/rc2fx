@@ -98,17 +98,27 @@ func fatMachO(thin ...[]byte) []byte {
 	return append(out, body...)
 }
 
-// executableSlice is a slice of the app: run path, gpuikit and the system.
+// executableSlice is a slice of the app, which links gpuikit statically and
+// so loads only the system's libraries.
 func executableSlice(cpu macho.Cpu, minos string) []byte {
 	return thinMachO(cpu, macho.TypeExec, buildVersion(platformMacOS, minos),
-		dylibCommand(lcLoadDylib, "@rpath/libgpuikit.dylib"),
 		dylibCommand(lcLoadDylib, "/usr/lib/libSystem.B.dylib"),
-		dylibCommand(lcLoadDylib, "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit"),
-		rpathCommand("@executable_path"))
+		dylibCommand(lcLoadDylib, "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit"))
 }
 
 func universalExecutable() []byte {
 	return fatMachO(executableSlice(macho.CpuArm64, "13.0"), executableSlice(macho.CpuAmd64, "13.0"))
+}
+
+// besideSlice is a slice of an executable that loads libextra.dylib from
+// beside itself through its run path.
+func besideSlice(cpu macho.Cpu, rpath bool) []byte {
+	commands := []loadCommand{buildVersion(platformMacOS, "13.0"),
+		dylibCommand(lcLoadDylib, "@rpath/libextra.dylib"), dylibCommand(lcLoadDylib, "/usr/lib/libSystem.B.dylib")}
+	if rpath {
+		commands = append(commands, rpathCommand("@executable_path"))
+	}
+	return thinMachO(cpu, macho.TypeExec, commands...)
 }
 
 func librarySlice(cpu macho.Cpu, id, minos string) []byte {
@@ -116,9 +126,9 @@ func librarySlice(cpu macho.Cpu, id, minos string) []byte {
 		dylibCommand(lcLoadDylib, "/usr/lib/libc++.1.dylib"))
 }
 
-func universalGpuikit() []byte {
-	return fatMachO(librarySlice(macho.CpuAmd64, "@rpath/libgpuikit.dylib", "11.0"),
-		librarySlice(macho.CpuArm64, "@rpath/libgpuikit.dylib", "11.0"))
+func universalLibrary() []byte {
+	return fatMachO(librarySlice(macho.CpuAmd64, "@rpath/libextra.dylib", "11.0"),
+		librarySlice(macho.CpuArm64, "@rpath/libextra.dylib", "11.0"))
 }
 
 func TestOSVersions(t *testing.T) {
@@ -143,7 +153,7 @@ func TestUniversalMachOHoldsBothSlicesForTheMinimum(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(found) != 2 || found[0].arch != "arm64" || found[1].arch != "x86_64" ||
-		!slices.Equal(found[0].rpaths, []string{"@executable_path"}) || found[0].loads[0] != "@rpath/libgpuikit.dylib" {
+		len(found[0].rpaths) != 0 || found[0].loads[0] != "/usr/lib/libSystem.B.dylib" {
 		t.Fatalf("%+v", found)
 	}
 	// The slices are the thin files, for the per-slice payload checks.
@@ -152,7 +162,7 @@ func TestUniversalMachOHoldsBothSlicesForTheMinimum(t *testing.T) {
 	}
 	// A library older than the app's minimum is fine; LC_VERSION_MIN_MACOSX
 	// counts too.
-	if _, err := checkUniversal("libgpuikit.dylib", universalGpuikit(), "13.0"); err != nil {
+	if _, err := checkUniversal("libextra.dylib", universalLibrary(), "13.0"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,26 +190,9 @@ func TestUniversalMachOHoldsBothSlicesForTheMinimum(t *testing.T) {
 	}
 }
 
-func TestBundledLibrariesAreFoundThroughTheRunPath(t *testing.T) {
-	if err := checkLibrary("lib/libgpuikit.dylib", universalGpuikit()); err != nil {
-		t.Fatal(err)
-	}
-	// Velopack's universal dylib names its build machine's path.
-	absolute := fatMachO(librarySlice(macho.CpuAmd64, "/Users/runner/target/libgpuikit.dylib", "10.12"),
-		librarySlice(macho.CpuArm64, "/Users/runner/target/libgpuikit.dylib", "11.0"))
-	if err := checkLibrary("lib/libgpuikit.dylib", absolute); err == nil || !strings.Contains(err.Error(), "install name") {
-		t.Fatalf("%v", err)
-	}
-	thin := librarySlice(macho.CpuArm64, "@rpath/libgpuikit.dylib", "11.0")
-	if err := checkLibrary("lib/libgpuikit.dylib", thin); err == nil {
-		t.Fatal("the arm64-only download was accepted")
-	}
-}
-
 func testBundle(t *testing.T) Files {
 	t.Helper()
-	files, err := bundle(Files{"rc2fx": {Data: universalExecutable(), Mode: 0o755},
-		"libgpuikit.dylib": {Data: universalGpuikit(), Mode: 0o755}}, "1.2.3")
+	files, err := bundle(Files{"rc2fx": {Data: universalExecutable(), Mode: 0o755}}, "1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,27 +208,37 @@ func TestTheBundleIsUniversalForItsMinimumMacOS(t *testing.T) {
 	if err := checkMacBundle(files); err != nil {
 		t.Fatal(err)
 	}
-	exe, lib := "RC2FX.app/Contents/MacOS/rc2fx", "RC2FX.app/Contents/MacOS/libgpuikit.dylib"
+	exe, lib := "RC2FX.app/Contents/MacOS/rc2fx", "RC2FX.app/Contents/MacOS/libextra.dylib"
+	// A library beside the executable, found through its run path, passes.
+	withLibrary := func(f Files) {
+		f[exe] = Member{Data: fatMachO(besideSlice(macho.CpuArm64, true), besideSlice(macho.CpuAmd64, true))}
+		f[lib] = Member{Data: universalLibrary()}
+	}
+	files = testBundle(t)
+	withLibrary(files)
+	if err := checkMacBundle(files); err != nil {
+		t.Fatal(err)
+	}
 	for name, change := range map[string]func(Files){
 		"an arm64-only executable": func(f Files) { f[exe] = Member{Data: executableSlice(macho.CpuArm64, "13.0")} },
 		"an arm64-only library": func(f Files) {
-			f[lib] = Member{Data: librarySlice(macho.CpuArm64, "@rpath/libgpuikit.dylib", "11.0")}
+			withLibrary(f)
+			f[lib] = Member{Data: librarySlice(macho.CpuArm64, "@rpath/libextra.dylib", "11.0")}
 		},
 		"a library needing macOS 14": func(f Files) {
-			f[lib] = Member{Data: fatMachO(librarySlice(macho.CpuAmd64, "@rpath/libgpuikit.dylib", "14.0"),
-				librarySlice(macho.CpuArm64, "@rpath/libgpuikit.dylib", "11.0"))}
+			withLibrary(f)
+			f[lib] = Member{Data: fatMachO(librarySlice(macho.CpuAmd64, "@rpath/libextra.dylib", "14.0"),
+				librarySlice(macho.CpuArm64, "@rpath/libextra.dylib", "11.0"))}
 		},
-		"no gpuikit beside the executable": func(f Files) { delete(f, lib) },
+		"a library not beside the executable": func(f Files) { withLibrary(f); delete(f, lib) },
 		"a library with a build machine's install name": func(f Files) {
-			f[lib] = Member{Data: fatMachO(librarySlice(macho.CpuAmd64, "/opt/lib/libgpuikit.dylib", "11.0"),
-				librarySlice(macho.CpuArm64, "/opt/lib/libgpuikit.dylib", "11.0"))}
+			withLibrary(f)
+			f[lib] = Member{Data: fatMachO(librarySlice(macho.CpuAmd64, "/opt/lib/libextra.dylib", "11.0"),
+				librarySlice(macho.CpuArm64, "/opt/lib/libextra.dylib", "11.0"))}
 		},
 		"no run path": func(f Files) {
-			s := func(cpu macho.Cpu) []byte {
-				return thinMachO(cpu, macho.TypeExec, buildVersion(platformMacOS, "13.0"),
-					dylibCommand(lcLoadDylib, "@rpath/libgpuikit.dylib"))
-			}
-			f[exe] = Member{Data: fatMachO(s(macho.CpuArm64), s(macho.CpuAmd64))}
+			withLibrary(f)
+			f[exe] = Member{Data: fatMachO(besideSlice(macho.CpuArm64, false), besideSlice(macho.CpuAmd64, false))}
 		},
 		"a library from Homebrew": func(f Files) {
 			s := func(cpu macho.Cpu) []byte {
@@ -386,14 +389,14 @@ func envValue(env []string, name string) string {
 func TestEachMacSliceIsBuiltForItsArchitectureAndTheMinimum(t *testing.T) {
 	base := []string{"PATH=/usr/bin", "CGO_CFLAGS=", "CGO_LDFLAGS=-L/old"}
 	for goarch, arch := range map[string]string{"arm64": "arm64", "amd64": "x86_64"} {
-		env := buildEnv(base, "darwin", goarch, "-L/g/lib -Wl,-rpath,@executable_path")
+		env := buildEnv(base, "darwin", goarch, "-L/g/lib")
 		want := map[string]string{
 			"GOOS":                     "darwin",
 			"GOARCH":                   goarch,
 			"CGO_ENABLED":              "1",
 			"CC":                       "clang",
 			"CGO_CFLAGS":               "-O2 -g -arch " + arch + " -mmacosx-version-min=13.0",
-			"CGO_LDFLAGS":              "-L/g/lib -Wl,-rpath,@executable_path -arch " + arch + " -mmacosx-version-min=13.0",
+			"CGO_LDFLAGS":              "-L/g/lib -arch " + arch + " -mmacosx-version-min=13.0",
 			"MACOSX_DEPLOYMENT_TARGET": "13.0",
 			"PATH":                     "/usr/bin",
 		}
@@ -414,9 +417,18 @@ func TestEachMacSliceIsBuiltForItsArchitectureAndTheMinimum(t *testing.T) {
 		envValue(env, "CGO_CFLAGS") != "" || envValue(env, "MACOSX_DEPLOYMENT_TARGET") != "" {
 		t.Fatalf("%v", env)
 	}
-	// The run path the bundle relies on.
-	if _, cgo := appLinkFlags("darwin", "/g/lib", "-w"); !strings.HasSuffix(cgo, "-L/g/lib -Wl,-rpath,@executable_path") {
-		t.Fatal(cgo)
+	// gpuikit's static library, of which the linker keeps only what the app
+	// uses; no run path, since nothing loads from beside the executable.
+	if ld, cgo := appLinkFlags("darwin", "/g/lib", "-s -w"); !strings.HasSuffix(cgo, "-L/g/lib") || ld != "-s -w -extldflags=-Wl,-dead_strip" {
+		t.Fatal(ld, cgo)
+	}
+	if ld, _ := appLinkFlags("linux", "/g/lib", ""); ld != "-extldflags=-Wl,--gc-sections" {
+		t.Fatal(ld)
+	}
+	ld, cgo := appLinkFlags("windows", "/g/lib", "-s -w")
+	if !strings.Contains(ld, "-H windowsgui '-extldflags=-fuse-ld=lld ") || !strings.Contains(ld, "-Xlink=-force:multipleres'") ||
+		!strings.Contains(ld, "--stack,8388608") || !strings.HasSuffix(cgo, "-L/g/lib -static-libgcc") {
+		t.Fatal(ld, cgo)
 	}
 }
 

@@ -18,7 +18,8 @@ desktop/scripts/fetch-gpuikit.sh
 
 It downloads the pinned version for this platform from the
 ibanks42/gpui-kit-bindings releases, checks its SHA-256 and unpacks it into
-the gitignored `third_party/gpuikit`. On macOS that is the universal download
+the gitignored `third_party/gpuikit`. It is a static library, linked into the
+app, so nothing ships beside it. On macOS that is the universal download
 (`darwin-universal`, arm64 and x86_64 in one library): the macOS app ships
 universal, built once per architecture and joined with `lipo` by `./xtask
 package`. Set `GPUIKIT_TOKEN` if that repository
@@ -43,8 +44,17 @@ Or, from `desktop/`, the raw Go commands:
 ```sh
 go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')   # no cgo or gpuikit needed
 go test -tags mockmixer ./transport/...
-CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib -Wl,-rpath,$PWD/third_party/gpuikit/lib" \
-  go build -tags rc2fxdebug,rc2fxdev -o bin/rc2fx ./cmd/rc2fx
+CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" \
+  go build -tags rc2fxdebug,rc2fxdev -ldflags=-extldflags=-Wl,--gc-sections -o bin/rc2fx ./cmd/rc2fx
+```
+
+The `-ldflags` part drops the gpuikit component families the app does not
+use; on macOS it is `-Wl,-dead_strip`, and on Windows it needs LLVM's linker
+(`'-extldflags=-fuse-ld=lld -Wl,--gc-sections,-Xlink=-force:multipleres'`, as
+`./xtask` passes). Without it the build works but carries every family:
+
+```sh
+CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go build -o bin/rc2fx ./cmd/rc2fx
 ```
 
 Build tags: `rc2fxdebug` and `rc2fxdev` make a development build,

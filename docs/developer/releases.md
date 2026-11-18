@@ -395,10 +395,10 @@ on Linux, `govulncheck` over those packages' Go dependencies. Its
 **desktop-ui** job fetches the gpuikit download and Velopack's C library on
 all three systems, vets the UI with and without `mockmixer` and with the
 development and embedded tags, builds it with `-tags velopack` as releases
-do, and runs `go test ./app/... ./cmd/rc2fx`; on Linux it also fetches the
-diag library, so `app/uitest` runs the offscreen UI tests (on Mesa's
-lavapipe), and runs `govulncheck` over `cmd/rc2fx`, the shipped app with its
-UI. A system whose gpuikit SHA-256 is not yet pinned in
+do (with the release link flags), and runs `go test ./app/... ./cmd/rc2fx`;
+on Linux it also runs `govulncheck` over `cmd/rc2fx`, the shipped app with its
+UI. The offscreen UI tests in `app/uitest` need gpuikit's diagnostic library,
+which the downloads do not have, so they skip there. A system whose gpuikit SHA-256 is not yet pinned in
 `desktop/scripts/fetch-gpuikit.sh` is skipped with a warning (Release's
 **prepare** refuses to start until all three are pinned). The desktop job
 also fetches Velopack's C library and vets its bindings
@@ -654,9 +654,6 @@ package without pushing, publishing or signing anything.
   releasing the version after the first app that checks updates (see
   [Kill switch](#kill-switch)), then protect the `app-metadata` branch once
   the first signing has created it.
-- Fill in `sha_macos_universal` (and `sha_macos_universal_diag`) in
-  `desktop/scripts/fetch-gpuikit.sh` from the bindings' universal macOS
-  download before the next release; the Release workflow stops without it.
 - The AppImage needs glibc 2.28 or newer, the version in its AlmaLinux 8
   build container.
 

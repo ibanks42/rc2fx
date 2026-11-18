@@ -43,7 +43,6 @@ def raw_zip(entries):
 
 APP_FILES = {
     "RC2FX.app/Contents/MacOS/rc2fx": b"binary",
-    "RC2FX.app/Contents/MacOS/libgpuikit.dylib": b"library",
     "RC2FX.app/Contents/MacOS/UpdateMac": b"updater",
     "RC2FX.app/Contents/Info.plist": b"plist",
 }
@@ -62,7 +61,7 @@ def mac_pkg(data=b"installer", magic=b"xar!"):
 
 def mac_nupkg(data=b"", nuspec="io.github.ibanks42.rc2fx.nuspec"):
     entries = [("lib/app/RC2FX.app/Contents/MacOS/rc2fx", b"binary" + data),
-               ("lib/app/RC2FX.app/Contents/MacOS/libgpuikit.dylib", b"library")]
+               ("lib/app/RC2FX.app/Contents/MacOS/UpdateMac", b"updater")]
     if nuspec:
         entries.append((nuspec, b"<package/>"))
     return raw_zip(entries)

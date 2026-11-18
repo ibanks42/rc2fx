@@ -236,9 +236,10 @@ jobs:
 
   # The UI, built and tested against the gpuikit download for each platform
   # (desktop/scripts/fetch-gpuikit.sh), with and without the mock mixer, and
-  # once with Velopack as release packages build it. On Linux it also runs
-  # the offscreen UI tests (app/uitest) against the diag library, on Mesa's
-  # lavapipe, and checks the shipped app's dependencies for vulnerabilities.
+  # once with Velopack and the link flags release packages build it with. On
+  # Linux it also checks the shipped app's dependencies for vulnerabilities.
+  # The offscreen UI tests (app/uitest) need gpuikit's diagnostic library,
+  # which only a build of the bindings has, so they are skipped here.
   # A platform whose download fetch-gpuikit.sh has no SHA-256 for yet is
   # skipped with a warning; Release stops on it in its first job. So is a
   # pull request from a fork that cannot read the bindings release.
@@ -296,16 +297,17 @@ jobs:
             ${{ steps.go-cache.outputs.build }}
           key: go-desktop-ui-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
           restore-keys: go-desktop-ui-${{ runner.os }}-
-      # The libraries libgpuikit.so links, which the linker resolves.
-      - name: Install the gpuikit runtime libraries
+      # The system libraries gpuikit's static library links (its
+      # libgpuikit_sys.so names them), which the linker resolves.
+      - name: Install the gpuikit system libraries
         if: steps.pin.outputs.ready == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          # Mesa's lavapipe: the Vulkan device the offscreen UI tests draw on.
-          sudo apt-get install -y --no-install-recommends libxkbcommon0 libxkbcommon-x11-0 libxcb1 libvulkan1 mesa-vulkan-drivers
+          sudo apt-get install -y --no-install-recommends libxkbcommon0 libxkbcommon-x11-0 libxcb1 libfreetype6
+      # The release link uses LLVM's linker through MinGW's gcc.
       - name: Check the C toolchain
         if: steps.pin.outputs.ready == 'true' && runner.os == 'Windows'
-        run: gcc --version
+        run: gcc --version && ld.lld --version
       # A pull request from a fork gets no secrets, and a private bindings
       # repository cannot be read with its github.token: the UI is then
       # skipped with a warning. Anywhere else a failed fetch fails.
@@ -317,11 +319,7 @@ jobs:
           FORK: ${{ github.event.pull_request.head.repo.fork == true }}
           TARGET: ${{ matrix.target }}
         run: |
-          # On Linux, also the diag library the offscreen UI tests run with.
-          diag=
-          if [ "$RUNNER_OS" = Linux ]; then diag=--diag; fi
-          # shellcheck disable=SC2086 # $diag is empty or one word
-          if bash scripts/fetch-gpuikit.sh $diag "$TARGET"; then
+          if bash scripts/fetch-gpuikit.sh "$TARGET"; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           elif [ "$FORK" != true ]; then
             exit 1
@@ -337,19 +335,11 @@ jobs:
       - name: Vet, build and test the UI
         if: steps.gpuikit.outputs.ready == 'true'
         run: |
+          # gpuikit's static library, which package gk names; it is linked
+          # into each program, test binaries too.
           lib=$PWD/third_party/gpuikit/lib
-          if [ "$RUNNER_OS" = Windows ]; then
-            # Windows finds gpuikit.dll on PATH; the import library links it.
-            CGO_LDFLAGS="-L$(cygpath -m "$lib")"
-            export CGO_LDFLAGS
-            export PATH="$lib:$PATH"
-          else
-            export CGO_LDFLAGS="-L$lib -Wl,-rpath,$lib"
-          fi
-          if [ "$RUNNER_OS" = Linux ]; then
-            # app/uitest runs its offscreen tests with this; skipped without.
-            export RC2FX_GPUIKIT_DIAG=$PWD/third_party/gpuikit-diag/lib
-          fi
+          [ "$RUNNER_OS" != Windows ] || lib=$(cygpath -m "$lib")
+          export CGO_LDFLAGS="-L$lib"
           export CGO_ENABLED=1
           go vet ./app/... ./cmd/rc2fx
           go vet -tags mockmixer ./app/... ./cmd/rc2fx
@@ -363,28 +353,30 @@ jobs:
           # directive (app/selfupdate/vpkc).
           vpk=$PWD/third_party/velopack
           [ "$RUNNER_OS" != Windows ] || vpk=$(cygpath -m "$vpk")
+          # The link flags ./xtask package's appLinkFlags gives: only the
+          # component families the app uses, with LLVM's linker on Windows.
+          case $RUNNER_OS in
+            Linux) ldflags="-s -w -extldflags=-Wl,--gc-sections" ;;
+            macOS) ldflags="-s -w -extldflags=-Wl,-dead_strip" ;;
+            Windows) ldflags="-s -w -H windowsgui '-extldflags=-fuse-ld=lld -Wl,--stack,8388608,--gc-sections,-Xlink=-force:multipleres'" ;;
+          esac
           CGO_LDFLAGS="$CGO_LDFLAGS -L$vpk/$(go env GOOS)-$(go env GOARCH) -lvelopack_libc" \
-            go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/" ./cmd/rc2fx
+            go build -tags velopack -ldflags "$ldflags" -o "$RUNNER_TEMP/rc2fx-ui-check/" ./cmd/rc2fx
           if [ "$RUNNER_OS" = macOS ]; then
             # The release app is universal: the Intel slice links too.
             GOARCH=amd64 CGO_CFLAGS="-O2 -g -arch x86_64" \
               CGO_LDFLAGS="$CGO_LDFLAGS -arch x86_64 -L$vpk/darwin-amd64 -lvelopack_libc" \
-              go build -tags velopack -o "$RUNNER_TEMP/rc2fx-ui-check/rc2fx-amd64" ./cmd/rc2fx
+              go build -tags velopack -ldflags "$ldflags" -o "$RUNNER_TEMP/rc2fx-ui-check/rc2fx-amd64" ./cmd/rc2fx
           fi
-          if [ "$RUNNER_OS" = Windows ]; then
-            # Test binaries carry no manifest: the wrapper puts gpuikit's
-            # beside each, or Windows will not start them.
-            go test -exec "bash $PWD/scripts/windows-test-exec.sh" ./app/... ./cmd/rc2fx
-          else
-            go test ./app/... ./cmd/rc2fx
-          fi
+          # Package gk embeds the manifest Windows needs to start a program,
+          # in test binaries too.
+          go test ./app/... ./cmd/rc2fx
       # The shipped app's Go dependencies, UI included, against the Go
       # vulnerability database (the desktop job checks the rest).
       - name: Check the app's dependencies for vulnerabilities
         if: steps.gpuikit.outputs.ready == 'true' && runner.os == 'Linux'
         run: |
-          lib=$PWD/third_party/gpuikit/lib
-          export CGO_ENABLED=1 CGO_LDFLAGS="-L$lib -Wl,-rpath,$lib"
+          export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib"
           go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./cmd/rc2fx
       - uses: actions/cache/save@v4.2.3
         if: steps.gpuikit.outputs.ready == 'true' && github.ref == 'refs/heads/main'
@@ -458,10 +450,9 @@ jobs:
       - name: Build the app
         if: steps.gpuikit.outputs.ready == 'true'
         run: |
-          lib=$PWD/third_party/gpuikit/lib
-          export CGO_ENABLED=1 CGO_LDFLAGS="-L$lib -Wl,-rpath,$lib"
+          export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib"
           CGO_LDFLAGS="$CGO_LDFLAGS -L$PWD/third_party/velopack/linux-amd64 -lvelopack_libc" \
-            go build -tags velopack -o "$RUNNER_TEMP/rc2fx-alma-check/" ./cmd/rc2fx
+            go build -tags velopack -ldflags "-s -w -extldflags=-Wl,--gc-sections" -o "$RUNNER_TEMP/rc2fx-alma-check/" ./cmd/rc2fx
       - name: Test the installer
         run: CGO_ENABLED=1 go test ./installer/... ./ext2fs/...
       - uses: actions/cache/save@v4.2.3

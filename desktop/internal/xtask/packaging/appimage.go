@@ -149,10 +149,10 @@ func stage(appdir string, executable []byte, licenceFiles []licenseFile) error {
 	return writeMember(filepath.Join(appdir, "AppRun"), appRun, 0o755)
 }
 
-// stageLibraries puts the libraries the app loads in the AppDir's usr/lib,
-// beside where linuxdeploy deploys the system libraries: usr/bin/rc2fx
-// finds them through its $ORIGIN/../lib run path, and AppRun puts usr/lib
-// on LD_LIBRARY_PATH.
+// stageLibraries puts the libraries the app loads (none on Linux: gpuikit and
+// velopack_libc are linked in) in the AppDir's usr/lib, beside where
+// linuxdeploy deploys the system libraries, which AppRun puts on
+// LD_LIBRARY_PATH.
 func stageLibraries(appdir string, libraries []library) error {
 	for _, l := range libraries {
 		if err := writeMember(filepath.Join(appdir, "usr/lib", l.name), l.data, 0o755); err != nil {
@@ -361,8 +361,7 @@ func hostHasLibrary(library string) bool {
 }
 
 // coveredLibrary: a library the AppImage may carry because its notice is in
-// the licence document. libgpuikit's notices are its own THIRD_PARTY.md and
-// licence texts (licenses.Gpuikit).
+// the licence document.
 func coveredLibrary(name string) bool {
 	for _, prefix := range []string{
 		"libxkbcommon.so",
@@ -372,7 +371,6 @@ func coveredLibrary(name string) bool {
 		"libxcb-xkb.so",
 		"libbsd.so",
 		"libmd.so",
-		"libgpuikit.so",
 	} {
 		if name == prefix || strings.HasPrefix(name, prefix+".") {
 			return true

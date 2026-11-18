@@ -2,8 +2,10 @@ package main
 
 // Builds the uitest program and runs each mode offscreen with the diag
 // library: `go test ./app/uitest` from desktop/, with RC2FX_GPUIKIT_DIAG set
-// to the unpacked diag download's lib folder (libgpuikit.so). Skipped
-// without it. RC2FX_UITEST_SHOTS keeps the screenshots (default: a test
+// to a folder holding the diagnostic build of libgpuikit_static.a (and
+// libgpuikit_sys.so on Linux), which the app links instead of the download's.
+// The downloads ship no diagnostic library: build it from the bindings
+// repository (`make lib`, its lib/diag). Skipped without it. RC2FX_UITEST_SHOTS keeps the screenshots (default: a test
 // temp folder); they are checked by eye once and kept per library hash.
 
 import (
@@ -21,7 +23,7 @@ func TestOffscreenModes(t *testing.T) {
 	}
 	bin := filepath.Join(t.TempDir(), "uitest")
 	build := exec.Command("go", "build", "-tags", "mockmixer", "-o", bin, ".")
-	build.Env = append(os.Environ(), "CGO_LDFLAGS=-L"+diag+" -Wl,-rpath,"+diag)
+	build.Env = append(os.Environ(), "CGO_LDFLAGS=-L"+diag)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
