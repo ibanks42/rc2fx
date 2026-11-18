@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -161,6 +162,11 @@ type rig struct {
 
 func newRig(t *testing.T, sector0 []byte) *rig {
 	t.Helper()
+	// The script runs on the mixer's Linux and uses its tools' options
+	// (stat -c, for one), which macOS's tools do not take.
+	if runtime.GOOS != "linux" {
+		t.Skip("the script needs Linux's tools")
+	}
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash is not installed")

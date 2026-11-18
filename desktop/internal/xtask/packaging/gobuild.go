@@ -134,8 +134,17 @@ func velopackDir(root, goos, goarch, fetch string) (string, error) {
 // with an LTO section named by a #cgo directive; flags from the environment
 // are the builder's own and are not checked. vpkc's directives keep the
 // system libraries velopack_libc needs, which follow it on the link line.
-func velopackLinkFlags(dir string) string {
-	return "-L" + dir + " -lvelopack_libc"
+//
+// On Linux velopack_libc and gpuikit are both Rust static libraries, and
+// each carries Rust's unwinding routine under the one unmangled name
+// rust_eh_personality. GNU ld refuses the second copy unless told to keep
+// the first; either copy serves both libraries.
+func velopackLinkFlags(goos, dir string) string {
+	flags := "-L" + dir + " -lvelopack_libc"
+	if goos == "linux" {
+		flags += " -Wl,--allow-multiple-definition"
+	}
+	return flags
 }
 
 // buildEnv is the environment `go build` of the app runs with for one
@@ -261,7 +270,7 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 			return err
 		}
 		build := host("build", "-trimpath", "-tags", tags, "-ldflags", ldflags, "-o", out, "./cmd/rc2fx")
-		build.Env = buildEnv(os.Environ(), goos, arch, cgoLDFlags+" "+velopackLinkFlags(vpk))
+		build.Env = buildEnv(os.Environ(), goos, arch, cgoLDFlags+" "+velopackLinkFlags(goos, vpk))
 		if err := task.Run(build); err != nil {
 			return err
 		}

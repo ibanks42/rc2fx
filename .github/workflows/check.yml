@@ -360,7 +360,11 @@ jobs:
             macOS) ldflags="-s -w -extldflags=-Wl,-dead_strip" ;;
             Windows) ldflags="-s -w -H windowsgui '-extldflags=-fuse-ld=lld -Wl,--stack,8388608,--gc-sections,-Xlink=-force:multipleres'" ;;
           esac
-          CGO_LDFLAGS="$CGO_LDFLAGS -L$vpk/$(go env GOOS)-$(go env GOARCH) -lvelopack_libc" \
+          # On Linux both static libraries carry Rust's rust_eh_personality;
+          # GNU ld keeps the first copy only when told to (velopackLinkFlags).
+          dup=
+          [ "$RUNNER_OS" != Linux ] || dup=" -Wl,--allow-multiple-definition"
+          CGO_LDFLAGS="$CGO_LDFLAGS -L$vpk/$(go env GOOS)-$(go env GOARCH) -lvelopack_libc$dup" \
             go build -tags velopack -ldflags "$ldflags" -o "$RUNNER_TEMP/rc2fx-ui-check/" ./cmd/rc2fx
           if [ "$RUNNER_OS" = macOS ]; then
             # The release app is universal: the Intel slice links too.
@@ -451,7 +455,7 @@ jobs:
         if: steps.gpuikit.outputs.ready == 'true'
         run: |
           export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib"
-          CGO_LDFLAGS="$CGO_LDFLAGS -L$PWD/third_party/velopack/linux-amd64 -lvelopack_libc" \
+          CGO_LDFLAGS="$CGO_LDFLAGS -L$PWD/third_party/velopack/linux-amd64 -lvelopack_libc -Wl,--allow-multiple-definition" \
             go build -tags velopack -ldflags "-s -w -extldflags=-Wl,--gc-sections" -o "$RUNNER_TEMP/rc2fx-alma-check/" ./cmd/rc2fx
       - name: Test the installer
         run: CGO_ENABLED=1 go test ./installer/... ./ext2fs/...
