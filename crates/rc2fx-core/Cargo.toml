@@ -4,7 +4,7 @@ version = "0.1.7"
 edition = "2024"
 publish = false
 license.workspace = true
-description = "Typed RC2FX configuration, EQ response and preset interchange"
+description = "Typed RC2FX configuration, control API messages and EQ coefficients"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

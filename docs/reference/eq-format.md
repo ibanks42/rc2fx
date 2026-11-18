@@ -1,9 +1,10 @@
 # EQ format and EasyEffects interchange
 
 This page covers how a channel's EQ is stored, how its filters are
-calculated, and how it converts to and from EasyEffects presets. The filter
-maths is in `rc2fx-core`, and both the app's curve display and the mixer's
-processing use it, so they produce the same coefficients.
+calculated, and how it converts to and from EasyEffects presets. The mixer's
+filter math is in `rc2fx-core` and the app's in `desktop/core`, which is a
+port of it, so the curve display and the processing produce the same
+coefficients.
 
 ## Stored form
 
@@ -84,8 +85,8 @@ noise suppression. Bands that remain after an edit keep their filter state.
 
 ## EasyEffects presets
 
-Import and export are a separate pure module in `rc2fx-core`. An import
-changes only the selected channel's EQ.
+Import and export are a separate pure module in the app's `desktop/core`.
+An import changes only the selected channel's EQ.
 
 ### Export
 

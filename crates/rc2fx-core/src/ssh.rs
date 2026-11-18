@@ -129,11 +129,6 @@ impl Ed25519PublicKey {
         let blob = decode_base64(&self.0["ssh-ed25519 ".len()..]).expect("checked by parse");
         format!("SHA256:{}", encode_base64_unpadded(&Sha256::digest(blob)))
     }
-
-    /// The line RC2FX writes: the key and its marker comment.
-    pub fn managed_line(&self) -> String {
-        format!("{} {SSH_MANAGED_MARKER}", self.0)
-    }
 }
 
 fn encode_base64_unpadded(bytes: &[u8]) -> String {
@@ -197,10 +192,6 @@ mod tests {
     fn a_plain_ed25519_key_is_accepted_and_its_comment_dropped() {
         let key = Ed25519PublicKey::parse(&format!("{KEY} me@laptop\n")).unwrap();
         assert_eq!(key.as_str(), KEY);
-        assert_eq!(
-            key.managed_line(),
-            format!("{KEY} rc2fx-managed-developer-key")
-        );
     }
 
     #[test]

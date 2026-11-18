@@ -276,14 +276,11 @@ impl Suppression {
 /// this much latency (5.0 ms at 48 kHz), in both the one- and two-hop builds.
 pub const DFN_HOP_SAMPLES: u32 = 240;
 
-/// The lookahead values DeepFilterNet3 admits, lowest latency first.
-pub const LOOKAHEADS: [u8; 2] = [0, 1];
-
 /// Model-defined buffering, independent of any worker scheduling allowance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ModelGeometry {
-    pub frame_samples: u32,
-    pub intrinsic_delay_samples: u32,
+struct ModelGeometry {
+    frame_samples: u32,
+    intrinsic_delay_samples: u32,
 }
 
 /// A resolved processing geometry: the model's buffering plus the worker's
@@ -299,17 +296,9 @@ impl SuppressionGeometry {
     pub fn latency_samples(self) -> u32 {
         self.frame_samples + self.intrinsic_delay_samples + self.worker_lead_samples
     }
-    /// The same geometry with a different worker scheduling allowance, for
-    /// tests and benchmarks: the model's own buffering is unchanged.
-    pub fn with_worker_lead(self, worker_lead_samples: u32) -> Self {
-        Self {
-            worker_lead_samples,
-            ..self
-        }
-    }
 }
 impl Suppression {
-    pub fn model_geometry_with_lookahead(lookahead: u8) -> ModelGeometry {
+    fn model_geometry_with_lookahead(lookahead: u8) -> ModelGeometry {
         ModelGeometry {
             frame_samples: DFN_HOP_SAMPLES,
             intrinsic_delay_samples: 120 + DFN_HOP_SAMPLES * u32::from(lookahead),
@@ -486,38 +475,6 @@ impl EqSettings {
             Channel::Left => &self.bands,
         }
     }
-    pub fn channel_mut(&mut self, side: Channel) -> &mut Vec<Band> {
-        match side {
-            Channel::Right if self.right_bands.is_some() => self.right_bands.as_mut().unwrap(),
-            _ => &mut self.bands,
-        }
-    }
-    pub fn add_band(&mut self, side: Channel) -> Result<&mut Band> {
-        let bands = self.channel_mut(side);
-        if bands.len() >= MAX_BANDS {
-            return Err(CoreError(
-                "At most 32 bands are supported per channel".into(),
-            ));
-        }
-        let next = bands
-            .iter()
-            .filter_map(|b| b.id.strip_prefix("band-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| CoreError("Band ID space exhausted".into()))?;
-        bands.push(Band::new(format!("band-{next}")));
-        Ok(bands.last_mut().unwrap())
-    }
-    pub fn remove_band(&mut self, side: Channel, id: &str) -> bool {
-        let b = self.channel_mut(side);
-        if let Some(i) = b.iter().position(|b| b.id == id) {
-            b.remove(i);
-            true
-        } else {
-            false
-        }
-    }
 }
 impl Target {
     pub fn new(
@@ -631,16 +588,6 @@ impl Target {
     }
     pub fn supports_suppression(&self) -> bool {
         (self.kind == TargetKind::Mic && self.channels == 1) || self.is_chat_output()
-    }
-    pub fn effect_enabled(&self, effect: Effect) -> bool {
-        match effect {
-            Effect::Highpass => self.highpass.enabled,
-            Effect::Suppression => self.suppression.enabled,
-            Effect::Eq => self.eq.enabled,
-            Effect::Compressor => self.compressor.enabled,
-            Effect::Gain => self.gain.enabled,
-            Effect::Limiter => self.limiter.enabled,
-        }
     }
     pub fn set_effect_enabled(&mut self, effect: Effect, enabled: bool) {
         match effect {

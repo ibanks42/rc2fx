@@ -37,7 +37,7 @@ that keep it in step with the mixer's Rust.
 | `desktop/installer` | Installer engine: firmware download and patching, USB update mode, the USB control client. `desktop/ext2fs` is the vendored libext2fs that Repair mixer uses. |
 | `desktop/packaging` | AppImage launcher, desktop entry, icons and macOS entitlements |
 | `crates/rc2fx-usb` | USB control framing for `rc2fxd`; the app's copy is `desktop/usbproto` |
-| `crates/rc2fx-core` | Settings model, schema upgrades, EQ maths, EasyEffects and APO import/export; the app's copy is `desktop/core` |
+| `crates/rc2fx-core` | Settings model, control API messages and EQ coefficients; the app's copy, `desktop/core`, also holds the editor logic and EasyEffects and APO import/export |
 | `crates/rc2fx-delta` | Compressed settings deltas; the app's encoder is `desktop/delta` |
 | `crates/rc2fx-dsp` | Effect chain |
 | `crates/rc2fx-suppression` | Noise-suppression worker and models |

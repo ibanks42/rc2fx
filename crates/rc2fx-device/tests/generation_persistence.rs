@@ -1,7 +1,9 @@
 #![cfg(unix)]
-//! Durable lifecycle tokens and desktop ordering across a daemon replacement.
-//! These tests do not open JACK or claim that a reserved token proves recovery.
-use rc2fx_core::{Config, ConfigUpdate, RemoteUpdate, Session};
+//! Durable lifecycle tokens across a daemon replacement. A client orders the
+//! states it receives by generation, then by settings revision, so a restarted
+//! daemon must publish a newer generation with the saved settings unchanged.
+//! These tests do not claim that a reserved token proves audio recovery.
+use rc2fx_core::{Config, ConfigUpdate};
 use rc2fx_device::{
     controller::Controller,
     store::{Store, StoreError},
@@ -28,7 +30,7 @@ fn disk_generation(path: &Path) -> u64 {
 }
 
 #[test]
-fn reopened_controller_advances_session_without_losing_effect_drafts() {
+fn a_reopened_controller_publishes_a_newer_generation_with_the_same_settings() {
     let temporary = tempfile::tempdir().unwrap();
     let mut store = Store::open(temporary.path(), initial()).unwrap();
     assert_eq!(store.generation(), 0);
@@ -42,46 +44,20 @@ fn reopened_controller_advances_session_without_losing_effect_drafts() {
         old.engine.generation, 1,
         "first wire state must use the durable boot token"
     );
-
-    let mut session = Session::default();
-    assert_eq!(session.receive(old.clone()).unwrap(), RemoteUpdate::Loaded);
-    session.draft[0].gain.db = -7.;
-    let draft = session.draft.clone();
     drop(controller);
 
-    // A transient event-stream reconnect keeps this same Session and its high-water
-    // mark. Session::disconnect is reserved for an intentional endpoint change.
     let mut reopened = Store::open(temporary.path(), Config::default()).unwrap();
     assert_eq!(reopened.generation(), 1);
     assert_eq!(reopened.reserve_generation().unwrap(), 2);
     assert_eq!(reopened.config(), &saved);
-    let controller = Controller::new(reopened);
-    let current = controller.state();
+    let current = Controller::new(reopened).state();
+    // Newer than anything the old daemon published, so a client never takes
+    // an old state, even one with a higher settings revision, for current.
     assert_eq!(current.engine.generation, 2);
-    assert_eq!(
-        session.receive(current.clone()).unwrap(),
-        RemoteUpdate::Unchanged
-    );
-    assert_eq!(session.draft, draft);
-    assert!(session.dirty());
-    assert!(!session.conflict);
-
-    assert_eq!(session.receive(old.clone()).unwrap(), RemoteUpdate::Stale);
-    assert_eq!(
-        session.receive_snapshot(old.clone()).unwrap(),
-        RemoteUpdate::Stale
-    );
-    assert_eq!(
-        session.receive_runtime(old.clone()).unwrap(),
-        RemoteUpdate::Stale
-    );
-    assert!(!session.receive_engine(old.engine.clone()));
-    // A retired generation cannot win by carrying a higher settings revision.
-    let mut delayed = old;
-    delayed.config.revision += 1;
-    assert_eq!(session.receive(delayed).unwrap(), RemoteUpdate::Stale);
-    assert_eq!(session.saved.as_ref().unwrap(), &current);
-    assert_eq!(session.draft, draft);
+    // The settings and their revision are unchanged, so a client keeps its
+    // unsaved edits: there is nothing new to reconcile them with.
+    assert_eq!(current.config, old.config);
+    assert_eq!(current.config, saved);
 }
 
 #[test]
@@ -89,26 +65,20 @@ fn unpublished_reservation_is_never_reused_after_reopen() {
     let temporary = tempfile::tempdir().unwrap();
     let mut store = Store::open(temporary.path(), initial()).unwrap();
     assert_eq!(store.reserve_generation().unwrap(), 1);
-    let mut session = Session::default();
-    let mut visible = Controller::new(store).state();
+    let visible = Controller::new(store).state();
     // The temporary controller above drops its Store after producing an owned
     // snapshot; a killed process need not have published every durable token.
     assert_eq!(visible.engine.generation, 1);
-    session.receive(visible.clone()).unwrap();
     let mut store = Store::open(temporary.path(), initial()).unwrap();
     assert_eq!(store.reserve_generation().unwrap(), 2);
     drop(store); // No reply or event for token 2.
     let mut store = Store::open(temporary.path(), initial()).unwrap();
     assert_eq!(store.reserve_generation().unwrap(), 3);
     let current = Controller::new(store).state();
+    // Past the unpublished token too: a state a killed daemon may have sent
+    // under it is older than the current one.
     assert_eq!(current.engine.generation, 3);
-    assert_eq!(
-        session.receive(current.clone()).unwrap(),
-        RemoteUpdate::Unchanged
-    );
-    visible.engine.generation = 2;
-    assert_eq!(session.receive(visible).unwrap(), RemoteUpdate::Stale);
-    assert_eq!(session.saved.as_ref().unwrap(), &current);
+    assert_eq!(current.config, visible.config);
     assert_eq!(disk_generation(temporary.path()), 3);
 }
 

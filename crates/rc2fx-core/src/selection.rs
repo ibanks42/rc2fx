@@ -1,5 +1,5 @@
 //! Explicit topology requests; effects saves never carry this request.
-use crate::{Config, CoreError, DeviceState, EngineMode, EnginePhase, Result};
+use crate::{Config, CoreError, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,23 +25,6 @@ pub struct SelectionStatus {
     pub message: String,
 }
 impl SelectionStatus {
-    pub fn check_capacity(&self, config: &Config, ids: &[String]) -> Result<u32> {
-        config.validate_selection(ids)?;
-        let channels = config
-            .targets
-            .iter()
-            .filter(|t| ids.contains(&t.id))
-            .map(|t| u32::from(t.channels))
-            .sum();
-        if let Some(limit) = self.channel_capacity
-            && channels > limit
-        {
-            return Err(CoreError(format!(
-                "These paths need {channels} audio channels; the mixer has room for {limit}. Turn off another processing path first."
-            )));
-        }
-        Ok(channels)
-    }
     pub fn validate(&self, config: &Config) -> Result<()> {
         if self.channel_capacity.is_some_and(|limit| limit > 128) {
             return Err(CoreError("Invalid processing channel capacity".into()));
@@ -91,50 +74,4 @@ pub struct SelectionRequest {
     pub expected_revision: u64,
     pub expected_generation: u64,
     pub target_ids: Vec<String>,
-}
-#[derive(Clone, Debug)]
-pub struct PendingSelection {
-    pub request: SelectionRequest,
-    pub(crate) config: Config,
-    pub(crate) mode: EngineMode,
-}
-impl PendingSelection {
-    pub fn validate_acknowledgement(&self, state: &DeviceState) -> Result<()> {
-        state.validate()?;
-        let native = self.mode == EngineMode::Native;
-        let mut expected_config = self.config.clone();
-        if native {
-            expected_config.revision = expected_config
-                .revision
-                .checked_add(1)
-                .ok_or_else(|| CoreError("Settings revision exhausted".into()))?;
-            expected_config.selected_targets = self.request.target_ids.clone();
-        }
-        let expected_generation = if native {
-            Some(self.request.expected_generation)
-        } else {
-            self.request.expected_generation.checked_add(1)
-        };
-        if state.config != expected_config
-            || expected_generation != Some(state.engine.generation)
-            || state.engine.mode != self.mode
-            || state.engine.status
-                != if native {
-                    EnginePhase::Starting
-                } else {
-                    EnginePhase::Restarting
-                }
-            || state.engine.restart_allowed
-            || state.engine.audio_advancing
-            || (native && state.engine.applied_revision != 0)
-            || state.selection.status != SelectionPhase::Changing
-            || state.selection.pending_target_ids != self.request.target_ids
-        {
-            return Err(CoreError(
-                "Path-change response does not match the requested selection and saved settings"
-                    .into(),
-            ));
-        }
-        Ok(())
-    }
 }

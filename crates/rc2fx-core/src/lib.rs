@@ -1,7 +1,6 @@
-//! Pure device configuration and editor logic. No audio, network or GUI runtime.
-pub mod apo;
+//! Pure device configuration and control API types. No audio, network or GUI
+//! runtime.
 pub mod diagnostics;
-pub mod easyeffects;
 pub mod eq;
 pub mod image_check;
 pub mod inputs;
@@ -44,15 +43,6 @@ pub fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
         text,
         512 * 1024,
     )?)?)
-}
-
-/// `from_json_limited`'s checks, returning the untyped tree.
-pub fn parse_json_limited(
-    text: &str,
-    maximum_bytes: usize,
-    maximum_nodes: usize,
-) -> Result<serde_json::Value> {
-    strict_json::parse_with_limits(text, maximum_bytes, maximum_nodes)
 }
 
 /// Strict parsing with explicit storage bounds. A bounded validation pass keeps
