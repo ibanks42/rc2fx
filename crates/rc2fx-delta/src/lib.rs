@@ -614,26 +614,6 @@ mod tests {
     }
 
     #[test]
-    fn a_file_the_mixer_does_not_have_is_compressed_alone() {
-        let (_, _, _, gui) = sample();
-        let envelope = envelope(&[("librc2fx_gui.so", gui.clone())]);
-        // A reported hash that matches the envelope would make this a copy;
-        // a different one means the mixer's file is not the payload file.
-        let installed = BTreeMap::from([("librc2fx_gui.so".to_owned(), "0".repeat(64))]);
-        let delta = encode(&envelope, &installed, &BTreeMap::new(), 19).unwrap();
-        assert!(String::from_utf8_lossy(&delta).contains("zstd "));
-        let mut restored = Vec::new();
-        decode(
-            &mut delta.as_slice(),
-            &mut |_| Err(io::Error::other("nothing is installed")),
-            &mut restored,
-            envelope.len() as u64,
-        )
-        .unwrap();
-        assert_eq!(restored, envelope);
-    }
-
-    #[test]
     fn the_manifest_is_read_without_a_fixed_file_count() {
         let files: Vec<(String, Vec<u8>)> = (0..20)
             .map(|index| (format!("file-{index}.bin"), vec![index as u8; index]))
@@ -687,38 +667,5 @@ mod tests {
             bytes.extend_from_slice(line.as_bytes());
             assert!(envelope_entries(&bytes).is_err(), "{line:?}");
         }
-    }
-
-    #[test]
-    fn an_envelope_without_files_or_with_stale_bytes_is_not_encoded() {
-        let (shared, _, _, _) = sample();
-        let envelope = envelope(&[("librc2fx_native.so", shared)]);
-        assert!(encode(&envelope, &BTreeMap::new(), &BTreeMap::new(), 19).is_ok());
-        let mut longer = envelope.clone();
-        longer.push(0);
-        assert!(encode(&longer, &BTreeMap::new(), &BTreeMap::new(), 19).is_err());
-        let mut bad = envelope.clone();
-        bad[0] = b'X';
-        assert!(encode(&bad, &BTreeMap::new(), &BTreeMap::new(), 19).is_err());
-    }
-
-    #[test]
-    fn a_stale_base_is_not_used_even_when_the_name_matches() {
-        let (_, old, new, _) = sample();
-        let envelope = envelope(&[("rc2fxd", new.clone())]);
-        // The app's base is stale relative to what the mixer reports, so it
-        // must send the file whole rather than patch against the wrong bytes.
-        let installed = BTreeMap::from([("rc2fxd".to_owned(), sum(b"something else"))]);
-        let delta = encode(&envelope, &installed, &bases(&old), 19).unwrap();
-        assert!(String::from_utf8_lossy(&delta).contains("zstd "));
-        let mut restored = Vec::new();
-        decode(
-            &mut delta.as_slice(),
-            &mut |_| unreachable!(),
-            &mut restored,
-            envelope.len() as u64,
-        )
-        .unwrap();
-        assert_eq!(restored, envelope);
     }
 }

@@ -1,7 +1,7 @@
 # Controller API and settings
 
 `rc2fxd` serves the desktop app over USB 1. A request is a method, an
-`api/v1/...` path and an optional JSON body of at most 512 KiB, framed into
+`api/v1/...` path, and an optional JSON body of at most 512 KiB, framed into
 the RC2FX HID reports described in [USB control](usb-control.md). A reply is
 a status code and a JSON body. `rc2fxd` has no network listener.
 
@@ -12,7 +12,7 @@ sends a single request.
 | Method and path | Body | Result |
 | --- | --- | --- |
 | `GET /api/v1/state` | | Saved settings, revision, engine and selection status |
-| `GET /api/v1/events` | | The next `state`, `engine`, `meter` or `usb` event as `{"event", "data"}`, or `null` after 50 ms |
+| `GET /api/v1/events` | | The next `state`, `meter`, or `usb` event as `{"event", "data"}`, or `null` after 50 ms |
 | `GET /api/v1/inputs` | | The show's input names and order, read from the stock show file |
 | `GET /api/v1/version` | | The installed RC2FX mixer software and RØDE firmware versions; see [Versions](#versions) |
 | `GET /api/v1/ssh` | | Developer SSH access status; USB 1 only, see [Developer SSH](#developer-ssh) |
@@ -20,7 +20,7 @@ sends a single request.
 | `POST /api/v1/update` | `{"version", "size", "sha256", "metadata": {"root", "timestamp", "snapshot", "targets"}, "encoding", "uploadSize"}` | Start a signed in-place update, or a delta upload; USB 1 only, see [In-place updates](#in-place-updates) |
 | `PUT /api/v1/update/{id}` | `{"offset", "data"}` | Append a base64 chunk to the upload; 409 carries `expectedOffset` |
 | `POST /api/v1/update/{id}/install` | | Verify and install the upload, then restart and commit or roll back |
-| `GET /api/v1/update/{id}` | | The session's state, progress and error, if any |
+| `GET /api/v1/update/{id}` | | The session's state, progress, and error, if any |
 | `DELETE /api/v1/update/{id}` | | Abort the session and delete its upload |
 | `GET /api/v1/update/last` | | The last in-place update's outcome, or `{}` |
 | `GET /api/v1/update/installed` | | The running release and the SHA-256 of each installed payload file |
@@ -60,9 +60,9 @@ The in-place update endpoints add 507 when RAM or disk is too full, and use
 `PUT /api/v1/live` takes the same body as `PUT /api/v1/config` and puts the
 settings on the running audio at once. What plays is what the user keeps: the
 app sends a control's value while it moves and saves with `PUT /api/v1/config`
-once edits stop. Undo, redo and revert are live edits too, of earlier
+once edits stop. Undo, redo, and revert are live edits too, of earlier
 settings; nothing is ever rolled back on its own. A live edit stores nothing,
-keeps the revision and sends no state event. It answers
+keeps the revision, and sends no state event. It answers
 `{"accepted": true, "baseRevision": N}`, where `N` is the saved revision,
 unchanged.
 
@@ -77,7 +77,7 @@ unchanged.
 A 422 compares with what plays now: the last live edit, or else the saved
 settings. Saving exactly what live edits play changes no audio: the engine
 stays Running, routing stays as it is, and the engine's applied revision is
-the new one at once. Any save, routing or selection change replaces live
+the new one at once. Any save, routing, or selection change replaces live
 edits with what it saves.
 
 `rc2fxd` saves live edits itself when the app leaves them unsaved: once
@@ -97,7 +97,7 @@ physical access to USB 1 is the authorization.
 
 The mixer isn't trusted by the desktop for anything beyond what it shows. The
 app and installer treat every reply as untrusted data: JSON is parsed with
-duplicate-key, depth and size limits, text is checked before it is displayed,
+duplicate-key, depth, and size limits, text is checked before it is displayed,
 and a reply can't change what the installer flashes.
 
 ## Versions
@@ -114,7 +114,7 @@ and a reply can't change what the installer flashes.
 | `firmware`, `firmwareProfile` | The firmware profile the launcher selected after `rc2fx-firmware check-device` verified the stock mixer, looked up in the installed catalog for the mixer's own model |
 | `inPlaceUpdates` | `2` when this controller installs signed releases in place over USB 1 and accepts delta uploads; `1` for the earlier in-place-only release. Absent when neither is available. Clients treat any value above zero as in-place capable. |
 
-`rc2fxd` reads these once at startup, from `--release`, `--firmware-catalog`
+`rc2fxd` reads these once at startup, from `--release`, `--firmware-catalog`,
 and `--firmware-profile`, which `rc2fx.sh` passes. A field it can't read or
 check is omitted, never guessed, and `rc2fx.sh`'s controller log says why. A
 mixer with nothing known returns `{}`. RC2FX mixer software from before this
@@ -147,7 +147,7 @@ the installed `/opt/rc2fx`; the touchscreen socket and a RAM run answer 404.
  "metadata": {"root": ["…1.root.json…"], "timestamp": "…", "snapshot": "…", "targets": "…"}}
 ```
 
-`version`, `size` and `sha256` name the RC2FX release; the metadata are the
+`version`, `size`, and `sha256` name the RC2FX release; the metadata are the
 TUF role documents the app downloaded, each sent as a string holding the
 file's exact text: the snapshot and timestamp sign the bytes of the files
 they list, so reformatted JSON would not verify. `root` is an array of root
@@ -184,9 +184,9 @@ naming its length:
  "metadata": {"root": ["…"], "timestamp": "…", "snapshot": "…", "targets": "…"}}
 ```
 
-`size`, `sha256` and the metadata still name the signed envelope; `size` is
+`size`, `sha256`, and the metadata still name the signed envelope; `size` is
 what the delta rebuilds to. `uploadSize` is required with `encoding` and
-refused without it, and must be 1..67108864 bytes. `received`, completeness and
+refused without it, and must be 1..67108864 bytes. `received`, completeness, and
 every chunk are then measured in delta bytes, and session replies also carry
 `"encoding"` and `"uploadSize"`. Unknown encodings are `400`. On install the
 mixer rebuilds the envelope from the live files, then runs exactly the same
@@ -206,9 +206,9 @@ reply is recovered by resending it. Any other offset is
 ```
 
 `POST /api/v1/update/{id}/install` verifies the upload (signature chain,
-release identity, size, hash, firmware profile and version) and answers
+release identity, size, hash, firmware profile, and version) and answers
 `200` with the current state, normally `"state": "installing"`, once it is
-accepted. The install, the swap and the restart then run on their own; a
+accepted. The install, the swap, and the restart then run on their own; a
 repeated request returns the current state instead of starting a second one.
 `GET /api/v1/update/{id}` reports it:
 
@@ -244,11 +244,11 @@ installing and deletes its upload; `409` refuses one that is.
 
 | Status | Meaning |
 | --- | --- |
-| 400 | Malformed request, version or hash |
+| 400 | Malformed request, version, or hash |
 | 404 | Unknown session, or the endpoint is not available here |
 | 409 | Another update or a pending install, an incomplete upload, an install already running, a refused delta, or a refused release |
 | 507 | Not enough RAM in `/run` or space on `/opt` |
-| 500 | The mixer could not stage, read or restart |
+| 500 | The mixer could not stage, read, or restart |
 
 ## Image check
 
@@ -261,7 +261,7 @@ against the list the installer put in the image (see
 ```
 
 `status` is `none` (nothing to check), `pending`, `ok`, `repaired` (restart
-the mixer) or `damaged`. `repaired` and `damaged` list up to 32 paths each;
+the mixer), or `damaged`. `repaired` and `damaged` list up to 32 paths each;
 `unlisted` counts the rest. Mixer software from before the check answers 404.
 
 ## Developer SSH
@@ -283,7 +283,7 @@ starts, and with bounded input and output.
 | `hostKeys` | The SSH server's public host keys, for pinning |
 | `serverRunning` | Whether `sshd` was seen running; omitted if unknown |
 
-`managed`, `unmanagedKeys` and `hostKeys` are always present; a reply without
+`managed`, `unmanagedKeys`, and `hostKeys` are always present; a reply without
 them is malformed, not "off". Unknown fields should be ignored.
 
 `PUT` takes `{"enabled": true, "publicKey": "ssh-ed25519 …"}` or
@@ -299,7 +299,7 @@ file is replaced atomically, and `sshd` is never restarted.
 | 400 | Invalid request or key |
 | 404 | Not available here (touchscreen socket or older `rc2fxd`) |
 | 409 | First boot after an update, another SSH change in progress, or `~/.ssh` unsafe to change |
-| 500 | The script failed, timed out or reported something unreadable |
+| 500 | The script failed, timed out, or reported something unreadable |
 
 ## On-device touchscreen control (in development)
 
@@ -364,8 +364,8 @@ the same schema, so update them together.
 
 ### Targets
 
-- `kind` is `mic`, `playback` or `output`. `channels` is 1 or 2.
-- IDs use lowercase letters, digits and hyphens, up to 48 characters.
+- `kind` is `mic`, `playback`, or `output`. `channels` is 1 or 2.
+- IDs use lowercase letters, digits, and hyphens, up to 48 characters.
 - `order` is a permutation of all six stages. A disabled stage keeps its
   position.
 - Each channel has 0–32 EQ bands. On a stereo target, `rightBands` gives the
@@ -396,12 +396,12 @@ the same schema, so update them together.
 ### Voice gate
 
 `gate` turns the microphone down while the suppression model hears no voice.
-It works only while suppression is on. The voice score and the open, hold
+It works only while suppression is on. The voice score and the open, hold,
 and close behavior are described in
 [Voice gate](suppression.md#voice-gate). A gate with zero reduction is off.
 
 When `advanced` is false, `strength` (0 off to 1 strict) sets threshold,
-reduction, attack, hold and release, and the stored advanced values are kept
+reduction, attack, hold, and release, and the stored advanced values are kept
 but unused. When the user switches advanced on, the app fills the advanced
 values from the current strength.
 
@@ -434,7 +434,7 @@ app, and runs without the desktop app. Rules:
 The retired `screenConversion` setting and suppression `algorithm` field are
 unknown fields in schema 9.
 
-Unknown, duplicate, missing or out-of-range fields fail validation.
+Unknown, duplicate, missing, or out-of-range fields fail validation.
 
 ### Ranges
 

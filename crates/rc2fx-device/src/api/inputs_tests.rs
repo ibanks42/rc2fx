@@ -94,7 +94,7 @@ async fn inputs_read_the_current_show_without_changing_settings() {
     let owner = std::thread::spawn(move || owner.run());
     let options = Options {
         stock_config: Some(show_path.clone()),
-        catalog: crate::catalog::physical_catalog().to_vec(),
+        catalog: crate::catalog::physical_catalog_for(rc2fx_firmware::Model::ProIi).to_vec(),
         ..Options::default()
     };
     let mut api = Api::new(handle.clone(), options);
@@ -138,7 +138,7 @@ async fn show_reads_never_change_selected_mic4_or_its_effects() {
     let owner = std::thread::spawn(move || owner.run());
     let options = Options {
         stock_config: Some(show_path.clone()),
-        catalog: crate::catalog::physical_catalog().to_vec(),
+        catalog: crate::catalog::physical_catalog_for(rc2fx_firmware::Model::ProIi).to_vec(),
         ..Options::default()
     };
     let mut api = Api::new(handle.clone(), options);

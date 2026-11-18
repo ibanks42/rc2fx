@@ -6,15 +6,12 @@ use rc2fx_core::Config;
 use rc2fx_firmware::Model;
 use serde_json::{Value, json};
 
-/// The plan for `config`. Binding is fixed for the life of the mixer process,
-/// so every catalog path is bound: selected paths are processed and the rest
-/// pass audio through untouched until enabled. The worker block is omitted, so
-/// the library applies its production suppression policy (`PRODUCTION_WORKER`:
-/// SCHED_RR 5, pinned to CPU 0).
-pub fn plan(config: &Config) -> Result<Value, String> {
-    plan_for_model(config, Model::ProIi)
-}
-
+/// The plan for `config` on `model`. Binding is fixed for the life of the
+/// mixer process, so every catalog path is bound: selected paths are processed
+/// and the rest pass audio through untouched until enabled. The plan has no
+/// worker block (the library refuses one): the library always applies its
+/// production suppression policy (`PRODUCTION_WORKER`: SCHED_RR 5, pinned to
+/// CPU 0).
 pub fn plan_for_model(config: &Config, model: Model) -> Result<Value, String> {
     let catalog = physical_paths_for(model);
     if (model == Model::Duo
@@ -77,7 +74,7 @@ mod tests {
             selected_targets: vec!["mic-1".into(), "headphones-2".into()],
             ..Config::default()
         };
-        let plan = plan(&config).unwrap();
+        let plan = plan_for_model(&config, Model::ProIi).unwrap();
         let paths = plan["paths"].as_array().unwrap();
         assert_eq!(paths.len(), 25);
         assert!(plan.get("worker").is_none());
@@ -125,9 +122,9 @@ mod tests {
         // The worker is built from this field, so it must survive the plan.
         let mut config = Config::default();
         config.targets[0].suppression.enabled = true;
-        config.targets[0].suppression.select_lookahead(1);
+        config.targets[0].suppression.lookahead = 1;
         config.validate().unwrap();
-        let value = plan(&config).unwrap();
+        let value = plan_for_model(&config, Model::ProIi).unwrap();
         let target = &value["paths"][0]["target"];
         assert_eq!(target["id"], "mic-1");
         assert_eq!(target["suppression"]["lookahead"], 1);
@@ -136,7 +133,7 @@ mod tests {
         assert_eq!(traveled, config.targets[0]);
         // A path that does not set it keeps LA0.
         config.targets[1].suppression.lookahead = 0;
-        let value = plan(&config).unwrap();
+        let value = plan_for_model(&config, Model::ProIi).unwrap();
         assert_eq!(value["paths"][1]["target"]["suppression"]["lookahead"], 0);
     }
 
@@ -271,6 +268,10 @@ mod tests {
     fn refuses_settings_missing_a_bound_path() {
         let mut config = Config::default();
         config.targets.retain(|target| target.id != "bluetooth");
-        assert!(plan(&config).unwrap_err().contains("bluetooth"));
+        assert!(
+            plan_for_model(&config, Model::ProIi)
+                .unwrap_err()
+                .contains("bluetooth")
+        );
     }
 }

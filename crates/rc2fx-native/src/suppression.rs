@@ -406,7 +406,6 @@ pub fn stats() -> Stats {
 pub fn preparation_report(value: rc2fx_suppression::Preparation) -> serde_json::Value {
     use crate::parameters::worker_timing;
     serde_json::json!({
-        "buildEnabled": value.enabled,
         "passWall": worker_timing(value.pass_wall),
         "passCpu": worker_timing(value.pass_cpu),
         "stepWall": worker_timing(value.step_wall),
@@ -423,7 +422,6 @@ mod tests {
     #[test]
     fn preparation_report_distinguishes_shifted_work_from_process_cpu() {
         let mut value = rc2fx_suppression::Preparation {
-            enabled: true,
             steps: 5,
             total_cpu_ns: 226,
             ..Default::default()
@@ -431,7 +429,6 @@ mod tests {
         value.pass_cpu.total_ns = 21;
         value.step_wall.max_ns = 9;
         let report = super::preparation_report(value);
-        assert_eq!(report["buildEnabled"], true);
         assert_eq!(report["steps"], 5);
         assert_eq!(report["passCpu"]["totalNs"], 21);
         assert_eq!(report["stepWall"]["maxNs"], 9);

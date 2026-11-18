@@ -50,8 +50,6 @@
 //! The layout is tied to the exact libjack build: the module refuses to enable
 //! unless the file hash matches and the pinned instruction bytes are present at
 //! the three offsets it reads.
-#![cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
-use rc2fx_firmware::Profile;
 use std::{
     cell::Cell,
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
@@ -224,14 +222,15 @@ fn load(port: usize) -> (u32, u8, usize) {
 /// every call goes to libjack as before; it never refuses RC2FX itself.
 static SKIPPED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-pub fn install(profile: &Profile) -> Result<(), String> {
-    // The vendor gates on its own hash; the graph layout below is libjack's.
-    let _ = profile;
+/// Enables the cache when libjack is the qualified build, else records why
+/// not. The graph layout is libjack's, so this checks libjack's own hash, not
+/// the mixer profile.
+pub fn install() {
     let bytes = match std::fs::read(LIBJACK_PATH) {
         Ok(bytes) => bytes,
         Err(error) => {
             let _ = SKIPPED.set(format!("cannot read {LIBJACK_PATH}: {error}"));
-            return Ok(());
+            return;
         }
     };
     use sha2::{Digest, Sha256};
@@ -242,25 +241,24 @@ pub fn install(profile: &Profile) -> Result<(), String> {
         .collect::<String>();
     if digest != QUALIFIED_SHA {
         let _ = SKIPPED.set(format!("libjack {digest} is not the qualified build"));
-        return Ok(());
+        return;
     }
     // libjack is a load-time dependency of the mixer, so it is mapped by
     // now. Find it here, once, so the audio thread never calls into the
     // dynamic loader.
     let Some(base) = mapped_base() else {
         let _ = SKIPPED.set(format!("{LIBJACK_PATH} is not mapped"));
-        return Ok(());
+        return;
     };
     for (offset, expected) in PINNED {
         let actual = unsafe { std::slice::from_raw_parts((base + offset) as *const u8, 16) };
         if actual != expected {
             let _ = SKIPPED.set(format!("libjack instructions differ at {offset:#x}"));
-            return Ok(());
+            return;
         }
     }
     BASE.store(base, Ordering::Release);
     ENABLED.store(true, Ordering::Release);
-    Ok(())
 }
 
 /// Load address of libjack: the start of its file-offset-0 mapping.

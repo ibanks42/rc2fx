@@ -78,7 +78,6 @@ pub trait Suppression: Send {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetirementError {
-    Unsupported,
     TimedOut,
     WorkerFailed,
     Incomplete,
@@ -325,9 +324,6 @@ impl Prepared {
     }
     pub fn is_chat_voice(&self) -> bool {
         self.chat.is_some()
-    }
-    pub fn suppression_geometry(&self) -> Option<SuppressionGeometry> {
-        self.signature.geometry
     }
     pub fn requires_reset(&self, next: &Self) -> bool {
         self.signature != next.signature

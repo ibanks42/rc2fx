@@ -1,10 +1,11 @@
 package core
 
 // The shared image-check fixtures in fixtures/image_check. The Rust crate
-// (crates/rc2fx-core/tests/image_check_fixtures.rs) reads the same files.
-// Only the mixer makes reports from records and writes them, so Go checks
-// only `reports`: it must accept and reject the same answers, and read an
-// accepted answer as the same report as its canonical form.
+// (crates/rc2fx-core/tests/image_check_fixtures.rs) reads `records`: only
+// the mixer makes reports from records and writes them. Reading the answers
+// is the desktop's job, so only Go checks `reports`: it must accept and
+// reject them as recorded, and read an accepted answer as the same report as
+// its canonical form.
 
 import (
 	"encoding/json"

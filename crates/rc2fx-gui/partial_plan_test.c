@@ -22,7 +22,10 @@
  * same hashes, which is how an edit to the planner or the CPU path is
  * compared with the code before it:
  *
- *   cc -O2 -DRC2FX_GUI_RECT_PLAN3 -DPARTIAL_SOURCE='"old/gui_partial.c"' ...
+ *   cc -O2 -DPARTIAL_SOURCE='"old/gui_partial.c"' ...
+ *
+ * (Add -DRC2FX_GUI_RECT_PLAN3 when the old source still has the two-job
+ * planner as its default.)
  *
  * Host: cc -O2 -Wall -Wextra -Wno-unused-function. aarch64: zig cc -target
  * aarch64-linux-musl -mcpu=cortex_a53 -static, run under qemu-aarch64.

@@ -10,7 +10,6 @@ pub use rc2fx_usb::MAX_EVENT_BYTES;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventKind {
     State,
-    Engine,
     Meter,
     Usb,
 }
@@ -19,7 +18,6 @@ impl EventKind {
     pub fn name(self) -> &'static str {
         match self {
             Self::State => "state",
-            Self::Engine => "engine",
             Self::Meter => "meter",
             Self::Usb => "usb",
         }
@@ -260,8 +258,8 @@ mod tests {
         let mut fast = hub.subscribe(&state()).unwrap();
         fast.next().await.unwrap();
         for n in 0..QUEUED_EVENTS as u64 {
-            hub.publish(event(EventKind::Engine, n));
-            assert_eq!(fast.next().await.unwrap().kind, EventKind::Engine);
+            hub.publish(event(EventKind::State, n));
+            assert_eq!(fast.next().await.unwrap().kind, EventKind::State);
         }
         assert!(
             slow.next().await.is_none(),

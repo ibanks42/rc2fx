@@ -1,5 +1,10 @@
 use rc2fx_core::Config;
-use rc2fx_device::stock_inputs::{CatalogChannel, decode, read};
+use rc2fx_device::stock_inputs::{CatalogChannel, decode_for_model, read};
+
+/// Decodes a Pro II show, the layout the fixtures here are built for.
+fn decode(data: &[u8]) -> std::io::Result<rc2fx_core::StockInventory> {
+    decode_for_model(data, rc2fx_firmware::Model::ProIi)
+}
 
 fn count(n: usize) -> Vec<u8> {
     let mut b = vec![4];
@@ -280,18 +285,9 @@ fn assigned_targets_follow_physical_coverage_not_faders_or_inventory_target_ids(
 const IDS: [i32; 9] = [3, 7, 9, 8, 10, 11, -1, -1, -1];
 
 const CATALOG: [CatalogChannel<'static>; 3] = [
-    (
-        "mic-1",
-        ["system:capture_4", "JUCEJack:in_4", "unused", "unused"],
-    ),
-    (
-        "usb-main",
-        ["usb1in:capture_1", "JUCEJack:in_7", "unused", "unused"],
-    ),
-    (
-        "usb-main",
-        ["usb1in:capture_2", "JUCEJack:in_8", "unused", "unused"],
-    ),
+    ("mic-1", ["system:capture_4", "JUCEJack:in_4"]),
+    ("usb-main", ["usb1in:capture_1", "JUCEJack:in_7"]),
+    ("usb-main", ["usb1in:capture_2", "JUCEJack:in_8"]),
 ];
 
 #[test]
@@ -612,26 +608,6 @@ fn removing_mic4_source_keeps_selected_effects_and_never_moves_them() {
     assert!(!missing.available);
     assert!(missing.inputs.is_empty());
     assert_eq!(serde_json::to_vec(&config).unwrap(), before);
-}
-
-/// Private firmware capture remains outside source control. No arbitrary stock
-/// properties or bytes are printed even if parsing fails.
-#[test]
-#[ignore = "requires RC2FX_TEST_STOCK_CAPTURE private device capture"]
-fn private_capture_projection() {
-    let path = std::env::var_os("RC2FX_TEST_STOCK_CAPTURE").expect("set private capture path");
-    let bytes = std::fs::read(path).unwrap();
-    let result = decode(&bytes).expect("private capture must decode");
-    assert_eq!(
-        result
-            .inputs
-            .iter()
-            .filter(|input| input.fader.is_some())
-            .map(|input| input.source_id)
-            .collect::<Vec<_>>(),
-        [3, 7, 9, 8, 10, 11]
-    );
-    result.validate().unwrap();
 }
 
 #[cfg(unix)]

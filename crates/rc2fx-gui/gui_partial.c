@@ -1,6 +1,4 @@
-/* Partial GE2D conversion (G3), included by gui_pacing.c when built with
- * -DRC2FX_PACING_DIRTY -DRC2FX_PACING_PARTIAL (`./xtask mixer-build`
- * adds -DRC2FX_GUI_RECT_PLAN3, the three-job planner).
+/* Partial GE2D conversion (G3), included by gui_pacing.c.
  *
  * Modes: "partial-cw" / "partial-ccw" (the rotation GE2D applies) and
  * "partial-verify-cw" / "partial-verify-ccw": the same, plus a whole-frame
@@ -16,23 +14,20 @@
  * since the two alternate. At the vendor's conversion into destination D
  * (holding the same mutex), the pending list is merged greedily (the pair
  * whose bounding box adds the fewest pixels, while that is under
- * PARTIAL_MERGE_PX, then down to PARTIAL_MAX_JOBS) and converted as that many
- * GE2D jobs: all but the last are run here, at the vendor's output QBUF,
- * each as S_SELECTION (OUTPUT CROP, CAPTURE COMPOSE) → QBUF output → poll →
- * DQBUF output and capture → re-QBUF of the vendor's capture buffer; the
- * last one is the vendor's own job, with its selection set. A full frame is
- * converted instead on the first conversion into each destination, after a
- * rejected paint, when merged area exceeds PARTIAL_FULL_PERCENT, and after
+ * PARTIAL_MERGE_PX, then down to PARTIAL_MAX_JOBS, three) and converted as
+ * that many GE2D jobs: all but the last are run here, at the vendor's output
+ * QBUF, each as S_SELECTION (OUTPUT CROP, CAPTURE COMPOSE) → QBUF output →
+ * poll → DQBUF output and capture → re-QBUF of the vendor's capture buffer;
+ * the last one is the vendor's own job, with its selection set. A full frame
+ * is converted instead on the first conversion into each destination, after
+ * a rejected paint, when merged area exceeds PARTIAL_FULL_PERCENT, and after
  * errors. List overflow collapses the pending set into one bounding box.
- * The baseline budget merges remaining jobs and falls back to full when that
- * box exceeds the area cap. With RC2FX_GUI_RECT_PLAN3, the cap is three, the default
- * optional merge threshold is 20000 pixels, and the extra-job budget is soft:
- * all planned jobs still run; a counter records an overrun. This is a job
- * count bound, not a time bound (each job can poll for up to two seconds).
- * There is no periodic refresh: the whole-frame verify
- * (below) is what establishes that pending rectangles cover every source
- * change. A file named "partial-off" next to
- * the log disables partial conversion for good at the next conversion.
+ * The extra-job time budget is soft: all planned jobs still run, and a
+ * counter records an overrun. The job cap is a count bound, not a time bound
+ * (each job can poll for up to two seconds). There is no periodic refresh:
+ * the whole-frame verify (below) is what establishes that pending rectangles
+ * cover every source change. A file named "partial-off" next to the log
+ * disables partial conversion for good at the next conversion.
  * One "convert" line per conversion: destination, kind, reason, jobs,
  * pixels and each job's time.
  *
@@ -58,31 +53,16 @@
 #include "rotate/rotate.c"
 
 
-/* G1 fixes these: per-job overhead / per-pixel time, and the caps. */
 /* Measured on the device 2026-10-31: a GE2D job costs about 4.3 ms fixed
- * plus about 45 ns per pixel, so a merge that adds N pixels pays while
- * N * 45 ns < 4.3 ms, i.e. N < ~96k; 80k keeps a margin. */
+ * plus about 45 ns per pixel. Merging only below 20000 added pixels keeps
+ * separate damage in separate jobs, up to the cap of three. */
 #ifndef PARTIAL_MERGE_PX
-#ifdef RC2FX_GUI_RECT_PLAN3
 #define PARTIAL_MERGE_PX 20000
-#else
-#define PARTIAL_MERGE_PX 80000
-#endif
 #endif
 #define PARTIAL_MERGE_PX_MAX 1000000
-#ifndef PARTIAL_MAX_JOBS
-#define PARTIAL_MAX_JOBS 4
-#endif
-#ifdef RC2FX_GUI_RECT_PLAN3
-#if PARTIAL_MAX_JOBS < 3
-#error "RC2FX_GUI_RECT_PLAN3 requires at least three job slots"
-#endif
-#define PARTIAL_PLAN_JOBS 3
+#define PARTIAL_MAX_JOBS 3
+/* The planner's name on the counters line. */
 #define PARTIAL_POLICY "plan3"
-#else
-#define PARTIAL_PLAN_JOBS PARTIAL_MAX_JOBS
-#define PARTIAL_POLICY "baseline"
-#endif
 #ifndef PARTIAL_BUDGET_NS
 #define PARTIAL_BUDGET_NS 8000000ull
 #endif
@@ -170,15 +150,14 @@ static size_t verify_source_len;
 /* Periodic counters (pump thread only): conversions above, partial and
  * full ones, full ones by reason, extra jobs run, and GE2D time (extra jobs
  * plus the vendor's job, QBUF to its capture DQBUF). */
-static const char *const full_reasons[] = {"forced", "area", "clock", "budget", "selection", "selection-or-qbuf",
+static const char *const full_reasons[] = {"forced", "area", "clock", "selection", "selection-or-qbuf",
                                            "job-failed", "kill", "verify-fail", "third-destination",
                                            "full-selection", "forced-full",
                                            "other"};
 #define FULL_REASONS (sizeof full_reasons / sizeof full_reasons[0])
 static uint64_t partial_count, full_count, full_by[FULL_REASONS], extra_jobs, ge2d_ns;
-/* Partial conversions whose remaining jobs were merged into one bounding box
- * because the extra jobs ran past PARTIAL_BUDGET_NS. */
-static uint64_t budget_merged, soft_budget_exceeded;
+/* Partial conversions whose extra jobs ran past PARTIAL_BUDGET_NS. */
+static uint64_t soft_budget_exceeded;
 static uint64_t fallback_lines;
 /* Plan shapes and sizes for the counters line (pump thread only, cumulative).
  * Every conversion is counted in exactly one path, where its convert line is
@@ -232,7 +211,7 @@ static void partial_setup(const char *log) {
  * of the largest 64-bit value. */
 static void test_huge_counters(void) {
     const uint64_t huge = UINT64_MAX - (1ull << 32);
-    conversions = partial_count = full_count = extra_jobs = ge2d_ns = budget_merged = soft_budget_exceeded = huge;
+    conversions = partial_count = full_count = extra_jobs = ge2d_ns = soft_budget_exceeded = huge;
     cpu_frames = cpu_ns = cpu_max_ns = cpu_fail = huge;
     plan_multi_small = plan_empty = ge2d_px_total = cpu_px_total = merge_added_px = huge;
     cpu_stage_ns = cpu_rotate_ns = cpu_yield_ns = huge;
@@ -334,7 +313,7 @@ static int merge(struct rot_rect *r, int n) {
                 long long extra = area_of(bbox2(r[i], r[j])) - area_of(r[i]) - area_of(r[j]);
                 if (!found || extra < best) best = extra, bi = i, bj = j, found = true;
             }
-        if (best >= merge_px && n <= PARTIAL_PLAN_JOBS) break;
+        if (best >= merge_px && n <= PARTIAL_MAX_JOBS) break;
         if (best > 0) merge_added += best;
         r[bi] = bbox2(r[bi], r[bj]);
         r[bj] = r[--n];
@@ -447,9 +426,10 @@ static void counter_list(char *out, size_t size, const uint64_t *values, int cou
 }
 
 /* Quiet mode's periodic line. New fields go at the end, after
- * log_reopen_failed, so a reader of the earlier fields is not disturbed. The
- * line is built in a static buffer, off the pump thread's stack: the pump is
- * the only thread that writes it. */
+ * log_reopen_failed, so a reader of the earlier fields is not disturbed; for
+ * the same reason budget_merged stays, always 0 since the two-job planner's
+ * budget merge was removed. The line is built in a static buffer, off the
+ * pump thread's stack: the pump is the only thread that writes it. */
 static void write_counters(void) {
     if (log_fd < 0) return;
     char reasons[FULL_REASONS * 40 + 2];
@@ -462,11 +442,11 @@ static void write_counters(void) {
         if (n > 0 && (size_t)n < sizeof reasons - used) used += (size_t)n;
     }
     char by_jobs[PARTIAL_MAX_JOBS * 21 + 1], by_px[PLAN_PX_BUCKETS * 21 + 1];
-    counter_list(by_jobs, sizeof by_jobs, plan_jobs, PARTIAL_PLAN_JOBS);
+    counter_list(by_jobs, sizeof by_jobs, plan_jobs, PARTIAL_MAX_JOBS);
     counter_list(by_px, sizeof by_px, plan_px_hist, PLAN_PX_BUCKETS);
     static char line[COUNTERS_LINE_MAX];
     int n = snprintf(line, sizeof line, "counters pid=%d t=%llu passes=%llu conversions=%llu partial=%llu full=%llu "
-                     "full_by_reason=%s budget_merged=%llu planner_policy=%s merge_px=%lld budget_ns=%llu "
+                     "full_by_reason=%s budget_merged=0 planner_policy=%s merge_px=%lld budget_ns=%llu "
                      "soft_budget_exceeded=%llu "
                      "extra_jobs=%llu ge2d_us=%llu disabled=%s "
                      "cpu_frames=%llu cpu_us=%llu cpu_max_us=%llu cpu_fail=%llu "
@@ -479,7 +459,7 @@ static void write_counters(void) {
                      "paints=%llu paint_rejects=%llu\n", (int)gui_pid,
                      (unsigned long long)now_ns(), (unsigned long long)passes, (unsigned long long)conversions,
                      (unsigned long long)partial_count, (unsigned long long)full_count, used ? reasons : "-",
-                     (unsigned long long)budget_merged, PARTIAL_POLICY, merge_px, (unsigned long long)budget_ns,
+                     PARTIAL_POLICY, merge_px, (unsigned long long)budget_ns,
                      (unsigned long long)soft_budget_exceeded,
                      (unsigned long long)extra_jobs,
                      (unsigned long long)(ge2d_ns / 1000), disabled ? disabled_why : "-",
@@ -646,8 +626,7 @@ static bool cpu_eligible(const char *reason, long long pending_px) {
      * least 32K pixels; smaller meter updates retain the compact GE2D plan. */
     if (strcmp(reason, "medium") == 0) return pending_px >= 32768;
     bool deliberate = strcmp(reason, "forced") == 0 || strcmp(reason, "forced-full") == 0 ||
-                      strcmp(reason, "area") == 0 || strcmp(reason, "budget") == 0 ||
-                      strcmp(reason, "third-destination") == 0;
+                      strcmp(reason, "area") == 0 || strcmp(reason, "third-destination") == 0;
     if (!deliberate) return false;
     long percent = 100;
     if (pending_px > 0) percent = pending_px * 100 / ((long long)SRC_W * SRC_H);
@@ -720,19 +699,14 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
     }
     if (!reason) {
         uint64_t spent = 0;
-        bool merged = false;
-#ifdef RC2FX_GUI_RECT_PLAN3
         bool soft_exceeded = false;
-#endif
         for (int i = 0; i < k - 1; i++) {
             uint64_t t0 = now_ns();
             int r = extra_job(fd, output, jobs[i]);
             job_ns[i] = now_ns() - t0, spent += job_ns[i];
             extra_jobs++;
             if (r != -1) ge2d_px_total += (uint64_t)area_of(jobs[i]); /* the driver took the job */
-#ifdef RC2FX_GUI_RECT_PLAN3
             if (spent > budget_ns && !soft_exceeded) soft_exceeded = true, soft_budget_exceeded++;
-#endif
             if (r == -2) {
                 reason = "job-failed";
                 break;
@@ -741,25 +715,6 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
                 reason = "selection-or-qbuf";
                 break;
             }
-#ifndef RC2FX_GUI_RECT_PLAN3
-            if (spent > budget_ns && i < k - 2) {
-                /* Out of time with jobs i+1..k-1 left: one bounding box over
-                 * all of them becomes the final (vendor's) job. It covers
-                 * every remaining pending rectangle, so the destination still
-                 * ends up equal to the rotated source. A full frame only if
-                 * that box is most of the frame anyway. */
-                struct rot_rect box = jobs[i + 1];
-                for (int j = i + 2; j < k; j++) box = bbox2(box, jobs[j]);
-                if (area_of(box) * 100 > (long long)SRC_W * SRC_H * PARTIAL_FULL_PERCENT) {
-                    reason = "budget";
-                    break;
-                }
-                jobs[i + 1] = box, k = i + 2, merged = true;
-                px = 0;
-                for (int j = 0; j < k; j++) px += area_of(jobs[j]);
-                break;
-            }
-#endif
         }
         ge2d_ns += spent;
         if (!reason && select_rect(fd, jobs[k - 1]) != 0) reason = "selection";
@@ -767,12 +722,11 @@ static int partial_output_qbuf(int fd, unsigned long request, struct v4l2_buffer
             p->n = 0;
             p->partials++;
             partial_count++;
-            if (merged) budget_merged++;
             verify_due = partial_verify && (p->partials <= PARTIAL_VERIFY_FIRST ||
                                             (verify_every && p->partials % verify_every == 0));
             for (int i = 0; i < k && i < PARTIAL_MAX_JOBS; i++) job_px[i] = area_of(jobs[i]);
             count_plan(k, px, nothing_pending);
-            convert_open("partial", merged ? "budget-merged" : "-", k, px, job_ns, job_px, spent);
+            convert_open("partial", "-", k, px, job_ns, job_px, spent);
             int result = vendor_ioctl(fd, request, output);
             if (result == 0) ge2d_px_total += (uint64_t)area_of(jobs[k - 1]);
             return result;

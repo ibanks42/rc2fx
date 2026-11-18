@@ -63,21 +63,27 @@ pub struct Plan {
     version: u32,
     sample_rate: u32,
     frames: usize,
-    /// Omitted: the production worker policy. An explicit object sets each
-    /// field; an absent field inherits (unprivileged fixtures use `{}`).
-    #[serde(default)]
+    /// Tests only: lets an unprivileged fixture run its worker without the
+    /// production policy. A parsed plan never has one (a `worker` key is
+    /// refused as unknown), so production always uses `PRODUCTION_WORKER`.
+    #[cfg(test)]
+    #[serde(skip)]
     worker: Option<WorkerPlan>,
     pub paths: Vec<PathPlan>,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[cfg(test)]
 struct WorkerPlan {
     cpu_mask: Option<u64>,
     realtime_priority: Option<u8>,
-    #[serde(default)]
     nice: Option<i8>,
 }
 impl Plan {
+    #[cfg(not(test))]
+    fn worker_options(&self) -> WorkerOptions {
+        PRODUCTION_WORKER
+    }
+    /// The fixture's worker, when it sets one.
+    #[cfg(test)]
     fn worker_options(&self) -> WorkerOptions {
         self.worker
             .as_ref()
@@ -110,16 +116,6 @@ impl Plan {
         }
         let mut ids = HashSet::new();
         let mut ports = HashSet::new();
-        let worker = plan.worker_options();
-        if worker
-            .realtime_priority
-            .is_some_and(|priority| !(1..=10).contains(&priority))
-        {
-            return Err("native worker priority exceeds the admitted bound".into());
-        }
-        if worker.realtime_priority.is_some() && worker.nice.is_some() {
-            return Err("native worker asks for both a real-time priority and a nice".into());
-        }
         let mut suppressors = 0;
         for path in &plan.paths {
             path.target.validate().map_err(|error| error.to_string())?;
@@ -694,6 +690,7 @@ pub struct Counters {
     pub sources: SourceCounts,
 }
 impl Counters {
+    #[cfg(test)]
     fn add(self, other: Self) -> Self {
         Self {
             input_blocks: self.input_blocks + other.input_blocks,
@@ -733,6 +730,7 @@ pub struct SourceCounts {
     pub raw_returns: u64,
 }
 impl SourceCounts {
+    #[cfg(test)]
     fn add(self, other: Self) -> Self {
         Self {
             processed: self.processed + other.processed,
@@ -1244,15 +1242,11 @@ pub static HELPER_MIN_MARGIN_NS: Line<AtomicU64> = Line(AtomicU64::new(u64::MAX)
 
 /// Live cumulative processing counters, since process load, across contexts.
 ///
-/// The per-pipeline `Counters` are only summed into the audit's
-/// `inputBlocks`/`outputBlocks`/`dspFaults`/`skippedOutputs` when a client
-/// closes (`Pipeline::counters` waits for the helper, so it must never be called
-/// from the callback or while reporting). These atomics mirror the same four
-/// events at their existing increment sites, so an audit can read what the DSP
-/// is doing while callbacks run. One relaxed increment per actual block or
-/// event; no clock, allocation, lock or I/O on the audio thread. They are never
-/// summed at retirement and never reset, so they already include retired
-/// pipelines: do not add the retirement-only fields to them.
+/// These atomics count the same four events as the per-pipeline `Counters`, at
+/// the same increment sites, so an audit can read what the DSP is doing while
+/// callbacks run. One relaxed increment per actual block or event; no clock,
+/// allocation, lock or I/O on the audio thread. They are never reset, so they
+/// include retired pipelines.
 ///
 /// The helper writes `LIVE_INPUT_BLOCKS` and the callback writes
 /// `LIVE_OUTPUT_BLOCKS`, once per processed block: each has its own line.
@@ -1281,7 +1275,7 @@ pub static LIVE_OUTPUT_RAW_FRAME: AtomicU64 = AtomicU64::new(0);
 pub fn processing_counters() -> serde_json::Value {
     let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
     serde_json::json!({
-        "scope": "live cumulative since process load, all contexts, read with relaxed atomics; includes retired pipelines, so do not add the retirement-only inputBlocks/outputBlocks/dspFaults/skippedOutputs to these",
+        "scope": "live cumulative since process load, all contexts, read with relaxed atomics; includes retired pipelines",
         "inputBlocks": read(&LIVE_INPUT_BLOCKS),
         "outputBlocks": read(&LIVE_OUTPUT_BLOCKS),
         "dspFaults": read(&LIVE_FAULTS),
@@ -2470,7 +2464,9 @@ impl Pipeline {
             controls,
         ))
     }
-    /// Control only, after callbacks have stopped.
+    /// After callbacks have stopped. Waits for the helper, so never from the
+    /// callback or while reporting.
+    #[cfg(test)]
     pub fn counters(&self) -> Counters {
         while !self.helper.idle() {
             thread::yield_now();

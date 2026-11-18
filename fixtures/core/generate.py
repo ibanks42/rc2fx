@@ -696,9 +696,11 @@ for name, text, accept, canonical, why in [
 case("json not UTF-8", "json", "json/reject-not-utf8.json", b'"\xc3\x28"', False, "input must be UTF-8")
 
 manifest = {"comment": "Shared accept/reject fixtures for rc2fx-core. The Go port (desktop/core, shared_fixtures_test.go) "
-            "and the Rust crate (crates/rc2fx-core/tests/shared_fixtures.rs) read the same files and must reach the "
-            "same verdicts; for accepted cases the decoded value, written back, must equal `canonical` (compact) "
-            "and `pretty` (to_string_pretty) byte for byte. A rejected case with `error` must fail with exactly that message on both sides. generate.py writes this directory: change it and run it rather than editing files by hand. .gitattributes keeps every byte as committed (CRLF and odd bytes are part of some cases).",
+            "and the Rust crate (crates/rc2fx-core/tests/shared_fixtures.rs) read the same files; each checks its own direction. "
+            "For accepted cases the decoded value, written back, must equal `canonical` (compact) "
+            "and `pretty` (to_string_pretty) byte for byte. The Go port reaches every verdict; the Rust crate skips the reject cases "
+            "of documents only the desktop reads (deviceState, deviceVersions, sshStatus, meter, diagnosticsEvents, presetSummaries). "
+            "A rejected case with `error` must fail with exactly that message on each side that reads it. generate.py writes this directory: change it and run it rather than editing files by hand. .gitattributes keeps every byte as committed (CRLF and odd bytes are part of some cases).",
             "cases": cases}
 write("cases.json", ser(manifest, True) + "\n")
 print(len(cases), "cases")

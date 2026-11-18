@@ -683,7 +683,6 @@
     {
       "json": "[200,{}]",
       "ok": false,
-      "rustOk": true,
       "note": "serde's derived Deserialize also takes a struct as an array; the mixer only writes objects, so the Go side refuses it"
     }
   ],

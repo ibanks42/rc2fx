@@ -59,8 +59,6 @@ def check(base, previous, current, expect_trace=True):
     if a['callbacks']<=previous['audit']['callbacks']: errors.append('Callbacks stopped')
     for key in ['xruns','capacityFailures','planErrors','controlServerErrors']:
         if a[key]!=b[key]: errors.append(key+' changed')
-    # The top-level dspFaults is summed only when a client closes, so it stays
-    # still while the pipeline runs; the live counter is the one that moves.
     live_a,live_b=live_dsp_faults(a),live_dsp_faults(b)
     if live_a is None or live_b is None: errors.append('Live dspFaults counter missing')
     elif live_a!=live_b: errors.append('dspFaults changed')

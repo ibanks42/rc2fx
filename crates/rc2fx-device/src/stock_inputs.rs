@@ -11,9 +11,9 @@ use std::{
 };
 
 const MAX_BYTES: usize = 2 << 20;
-/// Same borrowed shape as the qualified routing catalog: target and stock
-/// source/sink followed by processor input/output. No registration is performed.
-pub type CatalogChannel<'a> = (&'a str, [&'a str; 4]);
+/// Same borrowed shape as the qualified routing catalog: target, then stock
+/// source and mixer buffer. No registration is performed.
+pub type CatalogChannel<'a> = (&'a str, [&'a str; 2]);
 
 pub fn unavailable(message: &str) -> StockInventory {
     StockInventory {
@@ -370,10 +370,6 @@ impl<'a> Reader<'a> {
 
 /// Decode only public audio/show metadata. Unknown properties are skipped, not
 /// retained. The complete tree must be well-formed before any result is returned.
-pub fn decode(data: &[u8]) -> io::Result<StockInventory> {
-    decode_for_model(data, rc2fx_firmware::Model::ProIi)
-}
-
 pub fn decode_for_model(data: &[u8], model: rc2fx_firmware::Model) -> io::Result<StockInventory> {
     if data.is_empty() || data.len() > MAX_BYTES {
         return Err(invalid());

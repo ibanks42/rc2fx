@@ -143,7 +143,6 @@ struct Pair {
 #[derive(Default)]
 struct Counts {
     calls: u64,
-    reused: u64,
     declined: u64,
     frames: u64,
 }
@@ -211,7 +210,6 @@ fn call(
     let mut got = template(buffers.fast.as_mut_ptr());
     let status = unsafe { (library.process)(pair.real, &mut want) };
     assert_eq!(status, 0, "library error in {what}");
-    let before = unsafe { (*pair.fast).last_position.to_bits() };
     unsafe {
         if core::prepare(plan, pair.fast, &got, library.vt, library.vari) {
             let frames = plan.count();
@@ -227,7 +225,6 @@ fn call(
             assert_eq!((library.process)(pair.fast, &mut got), 0);
         }
     }
-    let _ = before;
     counts.calls += 1;
     counts.frames += want.output_frames_gen as u64;
     compare(pair, &want, &got, &buffers.real, &buffers.fast, what);
@@ -319,7 +316,6 @@ fn vendor(
         }
         for pair in &converters {
             fill(&mut random, kind, &mut input[..frames]);
-            let before = counts.declined;
             call(
                 library,
                 &mut plan,
@@ -331,7 +327,6 @@ fn vendor(
                 counts,
                 "vendor",
             );
-            let _ = before;
         }
     }
 }
@@ -428,5 +423,4 @@ fn main() {
         "compared with the library: interpolate ({}) and interpolate_scalar",
         if vector { "NEON" } else { "scalar" }
     );
-    let _ = counts.reused;
 }

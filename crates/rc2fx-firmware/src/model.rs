@@ -95,30 +95,3 @@ impl Model {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn only_the_pro_ii_runs_without_the_experimental_duo_opt_in() {
-        assert!(Model::ProIi.require_runtime_with(false).is_ok());
-        assert!(Model::ProIi.require_runtime_with(true).is_ok());
-        assert!(Model::Duo.require_runtime_with(false).is_err());
-        assert!(Model::Duo.require_runtime_with(true).is_ok());
-    }
-    #[test]
-    fn board_evidence_must_agree_and_be_unambiguous() {
-        for model in Model::ALL {
-            let boot = format!("LABEL primary\n  FDT {}\n", model.board_dtb());
-            assert_eq!(Model::from_board(model.hostname(), &boot).unwrap(), model);
-            let other = if model == Model::Duo {
-                Model::ProIi
-            } else {
-                Model::Duo
-            };
-            assert!(Model::from_board(other.hostname(), &boot).is_err());
-            assert!(Model::from_board(model.hostname(), &format!("{boot}{boot}")).is_err());
-            assert!(Model::from_board(model.hostname(), "# FDT ignored").is_err());
-        }
-    }
-}

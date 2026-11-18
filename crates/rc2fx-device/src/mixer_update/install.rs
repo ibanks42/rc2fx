@@ -754,17 +754,6 @@ pub fn remove_stages(paths: &Paths) {
     }
 }
 
-/// The previous bundle is what a boot should start when an update did not
-/// commit. `None` when there is nothing usable to fall back to.
-pub fn rollback_bundle(paths: &Paths) -> Option<PathBuf> {
-    let previous = paths.previous();
-    if paths.pending().exists() && !driver_alive(paths) && bundle_verifies(&previous) {
-        Some(previous)
-    } else {
-        None
-    }
-}
-
 /// Restore the previous files over the live bundle. Used at startup after an
 /// interrupted update, when nothing can restart audio for us.
 pub fn restore_previous(paths: &Paths) -> Result<(), String> {

@@ -9,7 +9,7 @@ pub use linux::Client;
 #[cfg(target_os = "linux")]
 mod save;
 #[cfg(target_os = "linux")]
-pub use save::{ControlFailure, Publication, SaveFailure, Saved};
+pub use save::{ControlFailure, Publication};
 /// The control protocol this build speaks.
 ///
 /// Version 7 added two optional reply fields that a version 6 peer cannot
@@ -315,6 +315,9 @@ impl ResetPolicy {
 pub enum Operation {
     Hello,
     Inventory,
+    /// No longer served: the library refuses it with `InvalidParameters`.
+    /// `Inventory` carries every target's status. Kept so the wire format
+    /// stays stable.
     Status {
         context: u64,
         id: String,
@@ -344,17 +347,31 @@ pub struct Request {
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, tag = "result", rename_all = "camelCase")]
-// Control-thread wire messages only; keeping Status inline avoids a separate
-// allocation per status query. No Reply is constructed by the audio callback.
+// Control-thread wire messages only; no Reply is constructed by the audio
+// callback.
 #[allow(clippy::large_enum_variant)]
 pub enum Reply {
     Hello,
-    Inventory { contexts: Vec<ContextStatus> },
-    Status { context: u64, target: TargetStatus },
-    Prepared { transaction: Transaction },
-    Published { transaction: Transaction },
-    Cancelled { transaction: Transaction },
-    Error { code: ErrorCode },
+    Inventory {
+        contexts: Vec<ContextStatus>,
+    },
+    /// Never sent by this library any more (see `Operation::Status`).
+    Status {
+        context: u64,
+        target: TargetStatus,
+    },
+    Prepared {
+        transaction: Transaction,
+    },
+    Published {
+        transaction: Transaction,
+    },
+    Cancelled {
+        transaction: Transaction,
+    },
+    Error {
+        code: ErrorCode,
+    },
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

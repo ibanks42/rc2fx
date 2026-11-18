@@ -89,7 +89,6 @@ pub struct ReleaseRequest {
 /// A signed release that this mixer may install.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedRelease {
-    pub target: String,
     pub version: String,
     pub metadata: MixerTarget,
     pub metadata_versions: StoredState,
@@ -125,25 +124,24 @@ pub fn verify(
         return Err("signed metadata uses delegated targets, which are not supported".into());
     }
 
-    let candidates = signed_targets.targets.iter().filter_map(|(name, target)| {
+    let candidates = signed_targets.targets.values().filter_map(|target| {
         let custom = target.custom.as_ref()?.get("rc2fxMixer")?;
         Some((
-            name.clone(),
             target,
             serde_json::from_value::<MixerTarget>(custom.clone()),
         ))
     });
     let mut found = None;
-    for (name, target, claims) in candidates {
+    for (target, claims) in candidates {
         let claims = claims.map_err(|e| format!("signed mixer compatibility is invalid: {e}"))?;
         if claims.version == request.version {
             if found.is_some() {
                 return Err("signed metadata names two releases with the same version".into());
             }
-            found = Some((name, target, claims));
+            found = Some((target, claims));
         }
     }
-    let (target_name, target, claims) =
+    let (target, claims) =
         found.ok_or_else(|| "signed metadata does not offer this release version".to_owned())?;
     claims.validate()?;
     if target.length != request.size {
@@ -235,7 +233,6 @@ pub fn verify(
     }
 
     Ok(VerifiedRelease {
-        target: target_name,
         version: claims.version.clone(),
         metadata: claims,
         metadata_versions: StoredState {

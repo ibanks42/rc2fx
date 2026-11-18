@@ -1,12 +1,11 @@
 //! The audit's live processing counters (`pipeline::processing_counters`).
 //!
-//! The existing `inputBlocks`/`outputBlocks`/`dspFaults`/`skippedOutputs` fields
-//! are only summed when a client closes, so they cannot show what the DSP is
-//! doing while callbacks run (and `Pipeline::counters` waits for the helper, so
-//! it must not be called then). These tests pin the live mirrors to their
-//! increment sites: one increment per actual block or event, faults kept apart
-//! from successes, incomplete frames apart from both, startup warm-up not
-//! misreported as a failure, and the retirement aggregation adding nothing.
+//! These tests pin the live counters to their increment sites, checked against
+//! the per-pipeline `Counters` (`Pipeline::counters`, test only, waits for the
+//! helper): one increment per actual block or event, faults kept apart from
+//! successes, incomplete frames apart from both, startup warm-up not
+//! misreported as a failure, and reading the per-pipeline counters adding
+//! nothing.
 use super::*;
 use std::sync::{Mutex, atomic::Ordering::Relaxed};
 
@@ -122,7 +121,7 @@ fn build_with(
     Pipeline::with_ownership(plan, &registry, 1, direct_output).unwrap()
 }
 /// One callback with both channels requested, the mixer's own processing in the
-/// output buffers, and `Pipeline::counters` called afterwards as retirement does.
+/// output buffers, and `Pipeline::counters` read afterwards.
 fn block(pipeline: &Pipeline, buffers: &Buffers) -> Counters {
     unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
     let raw = buffers.input(0);
@@ -139,7 +138,7 @@ fn block(pipeline: &Pipeline, buffers: &Buffers) -> Counters {
     }
     unsafe { pipeline.end(FRAMES, true) };
     pipeline.settle();
-    // The retirement aggregation: reading it must not touch the live mirrors.
+    // Reading the per-pipeline counters must not touch the live mirrors.
     pipeline.counters()
 }
 
@@ -175,7 +174,8 @@ where
 }
 
 /// Positive: one increment per processed block, on both sides of the pipe, with
-/// the retirement sum adding nothing (it is called after every frame here).
+/// reading the per-pipeline counters adding nothing (it happens after every
+/// frame here).
 #[test]
 fn live_counters_track_each_processed_block_once() {
     let _exclusive = exclusive();
@@ -327,8 +327,8 @@ fn a_meter_only_output_is_not_a_processed_block() {
     assert_eq!((live.input, counters.input_blocks), (8, 8));
 }
 
-/// The report exposes the live view under its own name, next to the
-/// retirement-only fields it must not be added to.
+/// The report exposes the live view under its own name, including retired
+/// pipelines.
 #[test]
 fn the_audit_report_exposes_live_processing_counters() {
     let _exclusive = exclusive();

@@ -1,8 +1,8 @@
-//! The shared image-check fixtures in `fixtures/image_check`. The desktop's
-//! Go port (`desktop/core/image_check_fixtures_test.go`) reads the same
-//! `reports`: both must accept and reject the same `GET api/v1/image-check`
-//! answers. Only the mixer makes reports from records and writes them, so
-//! `records` and the byte-for-byte write-back are checked here alone.
+//! The shared image-check fixtures in `fixtures/image_check`. Only the mixer
+//! makes reports from records and writes them, so `records` and the
+//! byte-for-byte write-back are checked here alone. Reading
+//! `GET api/v1/image-check` answers is the desktop's job, so only its Go port
+//! (`desktop/core/image_check_fixtures_test.go`) reads `reports`.
 use rc2fx_core::ImageCheck;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -18,7 +18,6 @@ fn read(name: &str) -> Vec<u8> {
 fn cases() -> Value {
     let cases: Value = serde_json::from_slice(&read("cases.json")).unwrap();
     assert!(!cases["records"].as_array().unwrap().is_empty());
-    assert!(!cases["reports"].as_array().unwrap().is_empty());
     cases
 }
 
@@ -36,32 +35,5 @@ fn records_make_the_same_reports() {
             case["expect"].as_str().unwrap(),
             "{name}"
         );
-    }
-}
-
-#[test]
-fn reports_are_accepted_and_rejected_alike() {
-    for case in cases()["reports"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        // What the transport does with the mixer's answer.
-        let result = serde_json::from_slice::<Value>(&read(case["file"].as_str().unwrap()))
-            .map_err(|e| e.to_string())
-            .and_then(|value| {
-                serde_json::from_value::<ImageCheck>(value).map_err(|e| e.to_string())
-            });
-        let accept = case["accept"].as_bool().unwrap();
-        assert_eq!(
-            result.is_ok(),
-            accept,
-            "{name} ({}): {result:?}",
-            case["why"]
-        );
-        if let Ok(check) = result {
-            assert_eq!(
-                serde_json::to_string(&check).unwrap(),
-                case["canonical"].as_str().unwrap(),
-                "{name}"
-            );
-        }
     }
 }

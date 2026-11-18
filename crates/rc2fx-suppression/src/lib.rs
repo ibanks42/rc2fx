@@ -126,23 +126,6 @@ pub struct WorkerOptions {
     pub realtime_priority: Option<u8>,
     pub nice: Option<i8>,
 }
-/// Whether workers started from now on time each preparation step; see
-/// `set_preparation_step_timing`.
-static STEP_TIMING: AtomicBool = AtomicBool::new(true);
-
-/// Turns the per-step preparation timing (`Preparation::step_wall`) on or
-/// off for workers started afterwards. It costs the worker one clock read
-/// and one histogram update per step, five of each per frame for
-/// DeepFilterNet3, and only a bench run reads the result, so a host that can
-/// tell a bench run from a production run should turn it off for production.
-/// It is on until the host says otherwise, so that no report loses
-/// `step_wall` without the host having decided it. The per-pass timings and
-/// the step counts are recorded either way. Control thread only; a running
-/// worker keeps the setting it started with.
-pub fn set_preparation_step_timing(on: bool) {
-    STEP_TIMING.store(on, Ordering::Relaxed);
-}
-
 /// The mixer's suppression worker: SCHED_RR 5, pinned to CPU 0.
 ///
 /// RR 5 sits below RØDE's audio threads (RR 50, JACK's driver FIFO 51), so
@@ -213,16 +196,16 @@ pub struct Snapshot {
 /// is the worker's CPU time in both. Live values are individually atomic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Preparation {
-    pub enabled: bool,
     /// Wall and thread CPU time per preparation pass (one per publication
     /// that started preparing), against the frame period. The CPU time runs
     /// from the end of the frame's `process`, so it also holds the
     /// publication and bookkeeping between the two (a few microseconds).
     pub pass_wall: Timing,
     pub pass_cpu: Timing,
-    /// Whether this worker times each step (`set_preparation_step_timing`).
-    /// When false, `step_wall` stays empty: that is "not measured", not "no
-    /// slow steps". `pass_wall.max_ns` still bounds the longest step.
+    /// Whether this worker times each step. Every worker starts with it on;
+    /// only tests turn it off. When false, `step_wall` stays empty: that is
+    /// "not measured", not "no slow steps". `pass_wall.max_ns` still bounds
+    /// the longest step.
     pub step_timing: bool,
     /// Wall time of each step against a sixteenth of the frame period;
     /// `max_ns` is the longest step, which arriving input may wait out.
@@ -243,7 +226,7 @@ struct Preparing {
     pass_wall: metrics::Counters,
     pass_cpu: metrics::Counters,
     step_wall: metrics::Counters,
-    /// Set before the worker starts; see `set_preparation_step_timing`.
+    /// Set before the worker starts: on for every worker, off only in tests.
     step_timing: AtomicBool,
     steps: AtomicU64,
     skipped: AtomicU64,
@@ -380,7 +363,6 @@ impl Telemetry {
         let (s, p) = (&self.0, &self.0.prep);
         let pass_cpu = p.pass_cpu.snapshot();
         Preparation {
-            enabled: true,
             pass_wall: p.pass_wall.snapshot(),
             pass_cpu,
             step_timing: p.step_timing.load(Ordering::Relaxed),
@@ -413,14 +395,6 @@ impl Telemetry {
     /// consumes the peak.
     pub fn take_turnaround_recent(&self) -> Option<u64> {
         match self.0.turnaround.take_recent() {
-            0 => None,
-            value => Some(value),
-        }
-    }
-    /// The worst model wall time since the last control-status read, on the
-    /// same terms as `take_turnaround_recent`.
-    pub fn take_wall_recent(&self) -> Option<u64> {
-        match self.0.wall.take_recent() {
             0 => None,
             value => Some(value),
         }
@@ -541,10 +515,7 @@ impl Worker {
         scope: AffinityScope,
     ) -> Result<Self, Error> {
         let shared = Arc::new(Shared::default());
-        shared
-            .prep
-            .step_timing
-            .store(STEP_TIMING.load(Ordering::Relaxed), Ordering::Relaxed);
+        shared.prep.step_timing.store(true, Ordering::Relaxed);
         let (input, worker_input) = queue::channel();
         let (worker_output, output) = queue::channel();
         let worker_shared = shared.clone();

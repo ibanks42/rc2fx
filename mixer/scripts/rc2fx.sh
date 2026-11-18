@@ -64,8 +64,6 @@ stock_gui=${RC2FX_STOCK_GUI:-/usr/bin/rc_gui_juce}
 gui_shim=${RC2FX_GUI_SHIM:-/usr/sbin/rc_gui_juce}
 gui_sha=aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca
 vendor_log=/var/volatile/log/rc_audio_mixer
-show=${RC2FX_STOCK_SHOW:-}
-profile_id=${RC2FX_FIRMWARE_PROFILE:-}
 # Only an opted-in Duo image carries this marker. It admits experimental
 # runtime behavior, never a different board or a Pro II firmware image.
 # The installer writes it to the installed bundle, and the rollback copy an
@@ -483,21 +481,6 @@ bb_ready_and_placed() {
   say "Diagnostic JACK placement differs: $(bb_inventory "$pid" | tr '\n' ';') vs $(tr '\n' ';' <<< "$bb_inventory_old")" >> "$logs/rc2fx.log"
   return 1
 }
-# Bytes of evidence in directory $1: ring directories the host has not
-# archived (no `acked` file) and the two server logs (always; they keep
-# growing). Nothing is ever removed; an archived ring only stops counting.
-bb_unacked_bytes() {
-  local dir=$1 d total=0 size log
-  for d in "$dir"/jackerr.*; do
-    test -d "$d" && test ! -e "$d/acked" || continue
-    size=$(du -sb "$d" 2>/dev/null | cut -f1) || size=0
-    total=$((total + ${size:-0}))
-  done
-  for log in "$dir/jackd.log" "$dir/fallback-jackd.log"; do
-    test -f "$log" && total=$((total + $(stat -c %s "$log")))
-  done
-  echo "$total"
-}
 # Whether every thread of inventory $1 is what a stock-style start gives back:
 # the nice value this shell passes on, and SCHED_OTHER 0 or the -P priority
 # (FIFO or RR) of argv. Otherwise neither the logger nor the fallback could
@@ -540,12 +523,12 @@ bb_fallback() {
   "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
 }
 
-# Replaces jackd $6 with one preloading library $2, its rings and logs in
-# directory $1, readiness checked with snapshot tool $3, refused past $4
-# bytes of unarchived evidence; $5 names it in the log. The caller has
-# checked the library and that $6 is the stock jackd without it.
+# Replaces jackd $5 with one preloading library $2, its rings and logs in
+# directory $1, readiness checked with snapshot tool $3; $4 names it in the
+# log. The caller has checked the library, the evidence already kept, and
+# that $5 is the stock jackd without it.
 bb_replace_jack() {
-  local bb_dir=$1 lib=$2 snapshot=$3 limit=$4 bb_label=$5 pid=$6
+  local bb_dir=$1 lib=$2 snapshot=$3 bb_label=$4 pid=$5
   local dir=$1 value replacement ring_dir started foreign
   local -a bb_argv bb_env
   mapfile -d '' -t bb_argv < "$blackbox_proc/$pid/cmdline" || return 1
@@ -560,7 +543,7 @@ bb_replace_jack() {
     return 1
   fi
   started=$(start_time "$pid") && test -n "$started" || return 1
-  local bb_inventory_old bb_task_count bb_pcm_list bb_irq_old ambiguous unacked
+  local bb_inventory_old bb_task_count bb_pcm_list bb_irq_old ambiguous
   # Checked before anything stops: a server this start cannot reproduce, or
   # IRQs that cannot be read, are left alone.
   # Kept before any decision, so a refusal leaves its evidence.
@@ -573,11 +556,6 @@ bb_replace_jack() {
   bb_irq_old=$(bb_irq_placement)
   if grep -q ' ?$' <<< "$bb_irq_old"; then
     say "$bb_label skipped: unreadable audio IRQ placement ($(tr '\n' ';' <<< "$bb_irq_old"))" >> "$logs/rc2fx.log"
-    return 1
-  fi
-  unacked=$(bb_unacked_bytes "$dir")
-  if ((unacked > limit)); then
-    say "$bb_label not started: $unacked bytes of evidence in $dir not yet archived by the host (limit $limit; nothing deleted)" >> "$logs/rc2fx.log"
     return 1
   fi
   # The inventory without callme connected: what the new server is compared
@@ -737,7 +715,7 @@ jack_recorder() {
     recorder_note refused "no attempt directory"
     return 1
   fi
-  if bb_replace_jack "$attempt" "$lib" "$snapshot" "$recorder_evidence_limit" 'JACK recorder' "$pid"; then
+  if bb_replace_jack "$attempt" "$lib" "$snapshot" 'JACK recorder' "$pid"; then
     read -r active_pid active_started < "$attempt/jackd.pid"
     printf '%s %s %s\n' "$attempt" "$active_pid" "$active_started" > "$root/active.new" \
       && mv -f "$root/active.new" "$root/active"
@@ -807,7 +785,8 @@ launch() {
   image_check_start || true
   # Wraps RØDE's update script so a flash is checked before RØDE reboots.
   flash_watch_start || true
-  local why= selected old n
+  # profile_id and show are read by controller_arguments.
+  local why= selected n profile_id show
   if test -e /opt/rc2fx/disabled; then why='autostart is disabled'
   elif test -e /usr/bin/first-boot; then why='first boot after a firmware update'
   elif test -e "$boot/stock"; then why="$(cat "$boot/stock")"
@@ -826,7 +805,7 @@ launch() {
   read -r profile_id show <<< "$selected"
   # The supervisor of the mixer that just exited may still be writing its
   # last-exit log.
-  for ((n=0; n<50; n++)); do old=$(supervisor) || break; sleep 0.1; done
+  for ((n=0; n<50; n++)); do supervisor > /dev/null || break; sleep 0.1; done
   rm -rf "$run"
   mkdir -p -m 700 "$run"
   test -f "$logs/rc2fx.log" && mv -f "$logs/rc2fx.log" "$logs/rc2fx.prev.log"
@@ -1673,7 +1652,7 @@ arm_power_recovery() {
 # when attached to an instance. Use the global buffer and restore its settings.
 # No files or syscalls are added to an audio callback.
 xrun_trace() {
-  local base=/sys/kernel/debug/tracing instance=/sys/kernel/debug/tracing
+  local base=/sys/kernel/debug/tracing
   local dir=/run/rc2fx-xrun-trace action=${1:-} pid jack started lib offset sha token tid main_tid gui f filter profile
   shift || true
   case "$action" in
@@ -1681,16 +1660,6 @@ xrun_trace() {
       test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot || return 4
       touch /run/rc2fx-client-timing
       echo 'Client identity probe enabled for next audio start; restart explicitly'
-      ;;
-    prune-saved)
-      # Only delete generated payloads whose exact bytes are backed up on host.
-      for sha in "$@"; do [[ $sha =~ ^[0-9a-f]{64}$ ]] || return 2; done
-      filter=" $* "
-      for f in /run/rc2fx-xrun-trace.saved.*/trace.txt.gz /run/rc2fx-xrun-trace.saved.*/jack.snapshot; do
-        test -f "$f" && test ! -L "$f" || continue
-        sha=$(sha256sum "$f" | cut -d ' ' -f 1)
-        case "$filter" in *" $sha "*) rm -- "$f";; esac
-      done
       ;;
     unprepare)
       rm -f /run/rc2fx-client-timing
@@ -1715,14 +1684,8 @@ xrun_trace() {
       ;;
     status)
       test -d "$dir" || { echo absent; return; }
-      printf 'tracing_on='; cat "$instance/tracing_on"
+      printf 'tracing_on='; cat "$base/tracing_on"
       cat "$dir/identity"
-      ;;
-    calibrate)
-      test -d "$dir" && test "$(cat "$instance/tracing_on")" = 1 || return 1
-      /run/rc2fx-trace-clock > "$dir/clock-calibration"
-      echo 0 > "$instance/tracing_on"
-      echo calibration > "$dir/stopped-manually"
       ;;
     avoid-driver)
       test -d "$dir" && test $# -gt 0 || return 1
@@ -1747,7 +1710,7 @@ xrun_trace() {
       ;;
     self-test)
       test $# -eq 1 && [[ $1 =~ ^[0-9]+$ ]] || return 2
-      test -d "$dir" && test "$(cat "$instance/tracing_on")" = 1 || return 1
+      test -d "$dir" && test "$(cat "$base/tracing_on")" = 1 || return 1
       test -x /run/rc2fx-trace-hog || return 1
       # The injector enrolls its own PID before running. Keep the same PID
       # selection path as the actual bench; never use event field filters.
@@ -1758,7 +1721,7 @@ xrun_trace() {
         local allowed
         allowed=$(awk '/^Cpus_allowed_list:/ {print $2}' "/proc/$tid/status")
         trap 'taskset -pc "$allowed" "$tid" >/dev/null || true' EXIT
-        printf 'RC2FX_SELFTEST tid=%s cpu=%s bounded_hog_ms=10\n' "$tid" "$1" > "$instance/trace_marker"
+        printf 'RC2FX_SELFTEST tid=%s cpu=%s bounded_hog_ms=10\n' "$tid" "$1" > "$base/trace_marker"
         taskset -pc "$1" "$tid" >/dev/null
         /run/rc2fx-trace-hog "$1" --trace-pid
       )
@@ -1785,36 +1748,36 @@ xrun_trace() {
       done
       sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$base/trace_clock" > "$dir/original-clock"
       # Leave a failed setup stopped and recoverable via explicit clear.
-      echo 0 > "$instance/tracing_on"
-      echo nop > "$instance/current_tracer"
-      echo mono_raw > "$instance/trace_clock"
-      echo 4096 > "$instance/buffer_size_kb"
-      echo 1 > "$instance/options/overwrite"
-      echo > "$instance/trace"
+      echo 0 > "$base/tracing_on"
+      echo nop > "$base/current_tracer"
+      echo mono_raw > "$base/trace_clock"
+      echo 4096 > "$base/buffer_size_kb"
+      echo 1 > "$base/options/overwrite"
+      echo > "$base/trace"
       test -x /run/rc2fx-trace-clock || { echo 'Install diagnostic clock_probe first' >&2; return 1; }
-      echo 1 > "$instance/tracing_on"
+      echo 1 > "$base/tracing_on"
       /run/rc2fx-trace-clock > "$dir/clock-calibration"
-      echo 0 > "$instance/tracing_on"
-      cat "$instance/trace" > "$dir/clock-trace"
-      echo > "$instance/trace"
+      echo 0 > "$base/tracing_on"
+      cat "$base/trace" > "$dir/clock-trace"
+      echo > "$base/trace"
       echo "p:rc2fx_xrun/fault $lib:$offset kind=%x0:u64 client=+0(%x1):string mono_ns=%x2:u64" >> "$base/uprobe_events"
-      echo 'traceoff:1 if kind >= 1 && kind <= 10' > "$instance/events/rc2fx_xrun/fault/trigger"
-      echo 1 > "$instance/events/rc2fx_xrun/fault/enable"
-      cat "$instance/events/sched/sched_switch/filter" > "$dir/original-switch-filter"
-      cat "$instance/events/sched/sched_waking/filter" > "$dir/original-waking-filter"
-      test -z "$(cat "$instance/set_event_pid")" || { echo 'Existing event PID filter is in use' >&2; return 1; }
-      cat "$instance/set_event_pid" > "$dir/original-event-pids"
-      echo 0 > "$instance/events/sched/sched_switch/filter"
-      echo 0 > "$instance/events/sched/sched_waking/filter"
+      echo 'traceoff:1 if kind >= 1 && kind <= 10' > "$base/events/rc2fx_xrun/fault/trigger"
+      echo 1 > "$base/events/rc2fx_xrun/fault/enable"
+      cat "$base/events/sched/sched_switch/filter" > "$dir/original-switch-filter"
+      cat "$base/events/sched/sched_waking/filter" > "$dir/original-waking-filter"
+      test -z "$(cat "$base/set_event_pid")" || { echo 'Existing event PID filter is in use' >&2; return 1; }
+      cat "$base/set_event_pid" > "$dir/original-event-pids"
+      echo 0 > "$base/events/sched/sched_switch/filter"
+      echo 0 > "$base/events/sched/sched_waking/filter"
       filter=
       for gui in "$pid" "$jack" $(pgrep -x callme-t); do
         for f in /proc/"$gui"/task/*; do filter="$filter ${f##*/}"; done
       done
-      echo "$filter" > "$instance/set_event_pid"
+      echo "$filter" > "$base/set_event_pid"
       echo "$filter" > "$dir/event-pids"
       echo "$profile" > "$dir/profile"
       for f in sched/sched_switch sched/sched_waking sched/sched_wakeup sched/sched_wakeup_new; do
-        echo 1 > "$instance/events/$f/enable"
+        echo 1 > "$base/events/$f/enable"
       done
       # Keep syscall probes on the deadline path. GUI and vendor pool threads
       # remain visible as scheduler competitors/wakers, without tracing every
@@ -1826,9 +1789,9 @@ xrun_trace() {
         for f in /proc/"$gui"/task/*; do filter="$filter || common_pid == ${f##*/}"; done
       done
       for f in sys_enter sys_exit; do
-        cat "$instance/events/raw_syscalls/$f/filter" > "$dir/original-filter-$f"
-        echo 0 > "$instance/events/raw_syscalls/$f/filter"
-        if test "$profile" = deep; then echo 1 > "$instance/events/raw_syscalls/$f/enable"; fi
+        cat "$base/events/raw_syscalls/$f/filter" > "$dir/original-filter-$f"
+        echo 0 > "$base/events/raw_syscalls/$f/filter"
+        if test "$profile" = deep; then echo 1 > "$base/events/raw_syscalls/$f/enable"; fi
       done
       printf 'mixer=%s jack=%s callback_tid=%s\n' "$pid" "$jack" "$tid" > "$dir/identity"
       cat /proc/sys/kernel/random/boot_id >> "$dir/identity"
@@ -1837,27 +1800,27 @@ xrun_trace() {
       cp "/proc/$pid/maps" "$dir/mixer-maps"
       cp /proc/interrupts "$dir/arm-interrupts"
       ps -eLo pid,tid,cls,rtprio,psr,comm > "$dir/arm-threads"
-      cat "$instance/trace_clock" > "$dir/trace-clock"
+      cat "$base/trace_clock" > "$dir/trace-clock"
       cat "$base/uprobe_events" > "$dir/probes"
-      cat "$instance/events/rc2fx_xrun/fault/trigger" > "$dir/trigger"
+      cat "$base/events/rc2fx_xrun/fault/trigger" > "$dir/trigger"
       cat /proc/uptime > "$dir/armed-uptime"
       printf '%s\n' "$token" > "$dir/flight-token"
       (umask 077; printf '%s\n' "$token" > /run/rc2fx-flight-arm.tmp)
       mv /run/rc2fx-flight-arm.tmp /run/rc2fx-flight-arm
       sleep 2
-      echo 1 > "$instance/tracing_on"
+      echo 1 > "$base/tracing_on"
       echo 'Trace armed: exclusive rolling trace freezes on first JACK fault'
       ;;
     stop)
       test -d "$dir" || return 1
-      echo 0 > "$instance/tracing_on"
+      echo 0 > "$base/tracing_on"
       echo manual > "$dir/stopped-manually"
       ;;
     collect)
-      test -d "$dir" && test "$(cat "$instance/tracing_on")" = 0 || { echo 'Trace is still recording; stop it explicitly before collection' >&2; return 1; }
+      test -d "$dir" && test "$(cat "$base/tracing_on")" = 0 || { echo 'Trace is still recording; stop it explicitly before collection' >&2; return 1; }
       if test ! -e "$dir/trace.txt.gz"; then
       : > "$dir/buffer-stats"
-      for f in "$instance"/per_cpu/cpu*/stats; do
+      for f in "$base"/per_cpu/cpu*/stats; do
         { echo "${f%/stats}"; cat "$f"; } >> "$dir/buffer-stats"
       done
       cp /run/rc2fx/audit.json "$dir/collected-audit.json"
@@ -1868,7 +1831,7 @@ xrun_trace() {
       read -r f jack started < /run/rc2fx-recorder/active
       lib=$(cat /run/rc2fx/home)
       test -e "$dir/jack.snapshot" || "$lib/rc2fx_jackerr_snapshot" "$(cat "$f/jackerr-dir")" "$dir/jack.snapshot" >&2
-      gzip -c "$instance/trace" > "$dir/trace.txt.gz.tmp"
+      gzip -c "$base/trace" > "$dir/trace.txt.gz.tmp"
       mv "$dir/trace.txt.gz.tmp" "$dir/trace.txt.gz"
       fi
       tar -czf - -C "$dir" .
@@ -1884,11 +1847,11 @@ xrun_trace() {
             if test -d "/proc/$gui/task/$tid" && test "$(awk '{print $22}' "/proc/$tid/stat")" = "$token"; then taskset -p "$filter" "$tid" >&2; fi
           done < "$dir/saved-affinity"
         fi
-        echo 0 > "$instance/tracing_on"
-        echo 0 > "$instance/events/enable"
-        if test -f "$dir/original-event-pids"; then echo > "$instance/set_event_pid"; fi
-        if test -f "$instance/events/rc2fx_xrun/fault/trigger" && grep -q '^traceoff' "$instance/events/rc2fx_xrun/fault/trigger"; then
-          echo '!traceoff' > "$instance/events/rc2fx_xrun/fault/trigger"
+        echo 0 > "$base/tracing_on"
+        echo 0 > "$base/events/enable"
+        if test -f "$dir/original-event-pids"; then echo > "$base/set_event_pid"; fi
+        if test -f "$base/events/rc2fx_xrun/fault/trigger" && grep -q '^traceoff' "$base/events/rc2fx_xrun/fault/trigger"; then
+          echo '!traceoff' > "$base/events/rc2fx_xrun/fault/trigger"
         fi
         for f in switch waking; do
           if test -f "$dir/original-$f-filter"; then
@@ -1921,7 +1884,7 @@ xrun_trace() {
       esac
       echo "Resampler mode $1 for next audio start; restart explicitly"
       ;;
-    *) echo 'xrun-trace prepare|gauges|src-mode|arm|status|stop|collect|clear' >&2; return 2 ;;
+    *) echo 'xrun-trace prepare|unprepare|gauges|src-mode|self-test|arm|status|avoid-driver|stop|collect|clear' >&2; return 2 ;;
   esac
 }
 

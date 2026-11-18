@@ -162,8 +162,6 @@ fn frozen_scalar_oracle_matches_ordered_effects_stereo_and_live_eq_handoffs() {
         let mut dsp = Dsp::without_suppression(&p).unwrap();
         let mut frame = 0;
         let mut offset = 0;
-        let mut audio_differences = 0;
-        let mut maximum = 0_f64;
         let mut faded = 0;
         for block in 0..180 {
             let p = Prepared::new(&config(block, channels), 48000).unwrap();
@@ -189,13 +187,10 @@ fn frozen_scalar_oracle_matches_ordered_effects_stereo_and_live_eq_handoffs() {
                         faded += usize::from(actual.to_bits() != expected.to_bits());
                         continue;
                     }
-                    let error = (actual as f64 - expected as f64).abs();
-                    maximum = maximum.max(error);
-                    audio_differences += usize::from(actual.to_bits() != expected.to_bits());
                     assert_eq!(
                         actual.to_bits(),
                         expected.to_bits(),
-                        "audio mismatch block{block}: {actual} != {expected} ({error})"
+                        "audio mismatch block{block}: {actual} != {expected}"
                     );
                 }
             }
@@ -215,8 +210,5 @@ fn frozen_scalar_oracle_matches_ordered_effects_stereo_and_live_eq_handoffs() {
         assert_eq!(frame, 43280);
         // The switches did fade: most of those samples differ from the cut.
         assert!(faded > 800, "only {faded} faded samples differ");
-        eprintln!(
-            "channels={channels} samples={frame} nonidenticalF32={audio_differences} maxError={maximum}\n"
-        );
     }
 }

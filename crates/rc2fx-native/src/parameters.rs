@@ -1981,9 +1981,7 @@ mod tests {
         let frames = Arc::new(AtomicU64::new(0));
         let audio_stop = Arc::clone(&stop);
         let audio_frames = Arc::clone(&frames);
-        let stack = std::env::var("RC2FX_EQ_CALLBACK_STACK_BYTES")
-            .map_or(524288, |value| value.parse::<usize>().unwrap());
-        assert!((32768..=2097152).contains(&stack));
+        let stack = 524_288;
         // Runtime and prepared storage are constructed on control first. Only
         // callback work runs on the explicitly bounded audio thread stack.
         let audio = std::thread::Builder::new()

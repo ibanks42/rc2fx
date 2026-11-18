@@ -9,99 +9,29 @@ fn fixture(name: &str) -> String {
     )
     .unwrap()
 }
-fn state(revision: u64) -> DeviceState {
-    let selected: Vec<String> = ["mic-1", "usb-main", "send-chat"].map(str::to_owned).into();
-    let channels = 5;
-    DeviceState {
-        selection: SelectionStatus {
-            channel_capacity: None,
-            status: SelectionPhase::Idle,
-            allowed: true,
-            qualified_target_ids: selected.clone(),
-            active_target_ids: selected.clone(),
-            pending_target_ids: vec![],
-            message: String::new(),
-        },
-        routing: RoutingStatus {
-            status: RoutingPhase::Active,
-            channels,
-            recovered: 0,
-            message: String::new(),
-        },
-        config: Config {
-            revision,
-            selected_targets: selected,
-            ..Config::default()
-        },
-        engine: EngineStatus {
-            generation: 1,
-            restart_allowed: false,
-            mode: EngineMode::Jack,
-            status: EnginePhase::Running,
-            applied_revision: revision,
-            sample_rate: 48000,
-            block_size: 112,
-            message: String::new(),
-            audio_advancing: true,
-        },
-    }
-}
 
-fn restartable_state() -> DeviceState {
-    let mut state = state(7);
-    state.engine.status = EnginePhase::Error;
-    state.engine.generation = 8;
-    state.engine.restart_allowed = true;
-    state.engine.audio_advancing = false;
-    state
+/// Strict parsing and validation of saved settings, as the mixer's store
+/// reads them.
+fn config_from_json(text: &str) -> rc2fx_core::Result<Config> {
+    let config: Config = from_json(text)?;
+    config.validate()?;
+    Ok(config)
 }
 
 #[test]
-fn restart_wire_requires_generation_and_explicit_eligibility() {
-    let original = restartable_state();
-    let value = serde_json::to_value(&original).unwrap();
-    assert_eq!(
-        DeviceState::from_json(&value.to_string()).unwrap(),
-        original
-    );
-    for key in ["generation", "restartAllowed"] {
-        let mut value = value.clone();
-        value["engine"].as_object_mut().unwrap().remove(key);
-        assert!(DeviceState::from_json(&value.to_string()).is_err());
-    }
+fn engine_restart_requests_name_the_revision_and_generation() {
     let request = EngineRestartRequest {
         expected_revision: 7,
         expected_generation: 8,
     };
+    let wire = json!({"expectedRevision":7,"expectedGeneration":8});
     assert_eq!(
-        serde_json::to_value(request).unwrap(),
-        json!({"expectedRevision":7,"expectedGeneration":8})
+        from_json::<EngineRestartRequest>(&wire.to_string()).unwrap(),
+        request
     );
-    let meter = json!({"type":"meter","revision":7,"generation":8,"synthetic":false,"targets":[]});
-    assert!(rc2fx_core::from_json::<Meter>(&meter.to_string()).is_ok());
-    let mut old = meter;
-    old.as_object_mut().unwrap().remove("generation");
-    assert!(rc2fx_core::from_json::<Meter>(&old.to_string()).is_err());
-}
-
-#[test]
-fn applied_requires_all_hardware_channels_routed() {
-    let mut value = state(1);
-    assert!(value.is_applied());
-    value.routing.channels -= 1;
-    assert!(!value.is_applied());
-    for phase in [
-        RoutingPhase::Unmanaged,
-        RoutingPhase::Starting,
-        RoutingPhase::Bypassing,
-        RoutingPhase::Bypassed,
-        RoutingPhase::Error,
-    ] {
-        value.routing.status = phase;
-        assert!(!value.is_applied());
-    }
-    value.engine.mode = EngineMode::Simulation;
-    assert!(value.is_applied());
+    let mut old = wire;
+    old.as_object_mut().unwrap().remove("expectedGeneration");
+    assert!(from_json::<EngineRestartRequest>(&old.to_string()).is_err());
 }
 
 #[test]
@@ -111,7 +41,7 @@ fn current_wire_roundtrip_and_defaults() {
     assert_eq!(config.targets.len(), 25);
     assert!(config.selected_targets.is_empty());
     let text = serde_json::to_string(&config).unwrap();
-    assert_eq!(Config::from_json(&text).unwrap(), config);
+    assert_eq!(config_from_json(&text).unwrap(), config);
     assert!(text.contains("\"schemaVersion\":9"));
     assert!(!text.contains("algorithm"));
     assert!(!text.contains("screenConversion"));
@@ -123,21 +53,18 @@ fn removed_suppression_options_are_rejected_at_every_config_entry() {
     for version in [5, 6, 7, 8, 10] {
         let mut invalid = config.clone();
         invalid["schemaVersion"] = json!(version);
-        assert!(Config::from_json(&invalid.to_string()).is_err());
-        let mut snapshot = serde_json::to_value(state(1)).unwrap();
-        snapshot["config"] = invalid;
-        assert!(DeviceState::from_json(&snapshot.to_string()).is_err());
+        assert!(config_from_json(&invalid.to_string()).is_err());
     }
     let mut obsolete = config.clone();
     obsolete["screenConversion"] = json!("retired");
-    assert!(Config::from_json(&obsolete.to_string()).is_err());
+    assert!(config_from_json(&obsolete.to_string()).is_err());
     let update =
         json!({"expectedRevision":1,"targets":config["targets"],"screenConversion":"retired"});
     assert!(from_json::<ConfigUpdate>(&update.to_string()).is_err());
     for field in ["algorithm", "strength"] {
         let mut invalid = config.clone();
         invalid["targets"][0]["suppression"][field] = json!("retired");
-        assert!(Config::from_json(&invalid.to_string()).is_err());
+        assert!(config_from_json(&invalid.to_string()).is_err());
         let update = json!({"expectedRevision":1, "targets": invalid["targets"]});
         assert!(from_json::<ConfigUpdate>(&update.to_string()).is_err());
     }
@@ -148,15 +75,15 @@ fn fixed_suppression_roundtrips_without_model_identity() {
     let mut config = Config::default();
     config.targets[0].suppression.enabled = true;
     let text = serde_json::to_string(&config).unwrap();
-    assert_eq!(Config::from_json(&text).unwrap(), config);
+    assert_eq!(config_from_json(&text).unwrap(), config);
 }
 
 #[test]
 fn suppression_lookahead_roundtrips_and_rejects_unavailable_geometry() {
     let mut config = Config::default();
-    config.targets[0].suppression.select_lookahead(1);
+    config.targets[0].suppression.lookahead = 1;
     let text = serde_json::to_string(&config).unwrap();
-    assert_eq!(Config::from_json(&text).unwrap(), config);
+    assert_eq!(config_from_json(&text).unwrap(), config);
     for lookahead in [2, 240] {
         config.targets[0].suppression.lookahead = lookahead;
         assert!(config.validate().is_err());
@@ -174,7 +101,7 @@ fn voice_gate_roundtrips_and_one_strength_sets_every_parameter() {
         text.contains("\"gate\":{\"strength\":0.7,\"advanced\":false,"),
         "{text}"
     );
-    assert_eq!(Config::from_json(&text).unwrap(), config);
+    assert_eq!(config_from_json(&text).unwrap(), config);
     // The default is off, its advanced parameters what 0 stands for.
     let default = Config::default().targets[0].suppression.gate.clone();
     assert!(!default.active());
@@ -260,7 +187,7 @@ fn advanced_voice_gate_starts_from_strength_and_keeps_its_own_values() {
     ] {
         let mut wire = serde_json::to_value(&config).unwrap();
         wire["targets"][0]["suppression"]["gate"][field] = json!(value);
-        assert!(Config::from_json(&wire.to_string()).is_err(), "{field}");
+        assert!(config_from_json(&wire.to_string()).is_err(), "{field}");
     }
     config.targets[0].suppression.gate = gate;
     config.validate().unwrap();
@@ -440,73 +367,6 @@ fn meters_without_a_diagnostics_epoch_load_as_zero_and_event_pages_round_trip() 
 }
 
 #[test]
-fn device_status_text_must_be_fit_to_show() {
-    use rc2fx_core::{DeviceVersions, MAX_STATUS_TEXT};
-    let good = DeviceState {
-        config: Config::default(),
-        engine: EngineStatus {
-            generation: 1,
-            restart_allowed: false,
-            mode: EngineMode::Jack,
-            status: EnginePhase::Running,
-            applied_revision: 1,
-            sample_rate: 48_000,
-            block_size: 112,
-            message: "Running".into(),
-            audio_advancing: true,
-        },
-        routing: RoutingStatus {
-            status: RoutingPhase::Active,
-            channels: 1,
-            recovered: 0,
-            message: "Active".into(),
-        },
-        selection: SelectionStatus {
-            channel_capacity: None,
-            status: SelectionPhase::Idle,
-            allowed: true,
-            qualified_target_ids: Vec::new(),
-            active_target_ids: Vec::new(),
-            pending_target_ids: Vec::new(),
-            message: "Ready".into(),
-        },
-    };
-    good.validate().unwrap();
-    for bad in [
-        "line\nbreak".to_owned(),
-        "escape\u{1b}[2J".to_owned(),
-        "reversed\u{202e}txt".to_owned(),
-        "isolate\u{2066}txt".to_owned(),
-        "x".repeat(MAX_STATUS_TEXT + 1),
-    ] {
-        let mut state = good.clone();
-        state.engine.message = bad.clone();
-        assert!(state.engine.validate().is_err(), "engine {bad:?}");
-        assert!(state.validate().is_err(), "engine {bad:?}");
-        let mut state = good.clone();
-        state.routing.message = bad.clone();
-        assert!(state.validate().is_err(), "routing {bad:?}");
-        let mut state = good.clone();
-        state.selection.message = bad.clone();
-        assert!(state.validate().is_err(), "selection {bad:?}");
-        let versions = DeviceVersions {
-            firmware: Some(bad.clone()),
-            ..Default::default()
-        };
-        assert!(versions.validate().is_err(), "version {bad:?}");
-    }
-    let versions = DeviceVersions {
-        runtime: Some("0.1.2".into()),
-        protocol: Some(1),
-        native_protocol: None,
-        firmware: Some("1.7.7".into()),
-        firmware_profile: Some("rodecaster-pro-ii-1.7.7".into()),
-        in_place_updates: None,
-    };
-    versions.validate().unwrap();
-}
-
-#[test]
 fn strict_config_rejects_ambiguous_or_invalid_data() {
     let base = serde_json::to_value(Config::default()).unwrap();
     let mut changes = Vec::new();
@@ -545,11 +405,11 @@ fn strict_config_rejects_ambiguous_or_invalid_data() {
     bad_order["targets"][0]["order"][1] = json!("eq");
     changes.push(bad_order);
     for value in changes {
-        assert!(Config::from_json(&value.to_string()).is_err(), "{value}")
+        assert!(config_from_json(&value.to_string()).is_err(), "{value}")
     }
     let text = serde_json::to_string(&Config::default()).unwrap();
     assert!(
-        Config::from_json(&text.replacen(
+        config_from_json(&text.replacen(
             "\"schemaVersion\":9",
             "\"schemaVersion\":9,\"schemaVersion\":9",
             1
@@ -557,14 +417,14 @@ fn strict_config_rejects_ambiguous_or_invalid_data() {
         .is_err()
     );
     assert!(
-        Config::from_json(&text.replacen(
+        config_from_json(&text.replacen(
             "\"frequency\":80.0",
             "\"frequency\":80.0,\"frequency\":90.0",
             1
         ))
         .is_err()
     );
-    assert!(Config::from_json(&(text + " {}")).is_err());
+    assert!(config_from_json(&(text + " {}")).is_err());
     assert!(
         rc2fx_core::from_json::<Value>(&format!("{}0{}", "[".repeat(66), "]".repeat(66))).is_err()
     );
@@ -640,21 +500,4 @@ fn coefficients_clamp_the_frequency_below_nyquist() {
     let high = eq::coefficients(&band).unwrap();
     band.frequency = 23520.0;
     assert_eq!(high, eq::coefficients(&band).unwrap());
-}
-#[test]
-fn meters_require_current_counters_and_finite_values() {
-    let mut target = json!({"id":"mic-1","inputPeak":0.1,"outputPeak":0.05,"rms":0.02,"gainReduction":0,"voice":0.4,"gateOpen":1,"clipped":0,"spectrum":[],"callbacks":1,"processedFrames":112,"suppressionFrames":0,"missedDeadlines":0,"staleResults":0,"inputDrops":0,"outputDrops":0,"latencySamples":1440,"workerFailed":false});
-    let decoded: TargetMeter = rc2fx_core::from_json(&target.to_string()).unwrap();
-    decoded.validate().unwrap();
-    target.as_object_mut().unwrap().remove("workerFailed");
-    assert!(rc2fx_core::from_json::<TargetMeter>(&target.to_string()).is_err());
-    let mut invalid = decoded.clone();
-    invalid.rms = f64::NAN;
-    assert!(invalid.validate().is_err());
-    // Voice score and gate position are fractions.
-    for (voice, gate_open) in [(1.01, 1.), (-0.01, 1.), (0.5, 1.5), (0.5, f64::NAN)] {
-        let mut invalid = decoded.clone();
-        (invalid.voice, invalid.gate_open) = (voice, gate_open);
-        assert!(invalid.validate().is_err(), "{voice} {gate_open}");
-    }
 }

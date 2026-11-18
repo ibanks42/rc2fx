@@ -310,9 +310,9 @@ func SameFiles(a, b string) bool {
 const GUIModule = "librc2fx_gui.so"
 
 // buildGUIModule builds the partial-conversion module from
-// `crates/rc2fx-gui/gui_pacing.c` with the three-job rectangle planner, as
-// the Pro II profile was measured. The source is passed by its absolute
-// path, so the debug info names it.
+// `crates/rc2fx-gui/gui_pacing.c` (the three-job rectangle planner, as the
+// Pro II profile was measured). The source is passed by its absolute path,
+// so the debug info names it.
 func buildGUIModule(root, targetDir string) (string, error) {
 	fmt.Printf("Building %s\n", GUIModule)
 	dir := filepath.Join(targetDir, "gui")
@@ -335,9 +335,6 @@ func buildGUIModule(root, targetDir string) (string, error) {
 		"-Wall",
 		"-Wextra",
 		"-Werror",
-		"-DRC2FX_PACING_DIRTY",
-		"-DRC2FX_PACING_PARTIAL",
-		"-DRC2FX_GUI_RECT_PLAN3",
 		filepath.Join(root, "crates", "rc2fx-gui", "gui_pacing.c"),
 		"-o", out,
 	)

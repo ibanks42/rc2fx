@@ -1,6 +1,9 @@
 use super::*;
 use crate::{controller::Controller, coordinator::Request as ControlRequest, store::Store};
-use rc2fx_core::{ConfigUpdate, RoutingRequest, SelectionRequest};
+use rc2fx_core::{
+    ConfigUpdate, DeviceState, EnginePhase, RoutingPhase, RoutingRequest, SelectionPhase,
+    SelectionRequest,
+};
 use rc2fx_native_control::{AudioMeter, Request, Response, Session, VERSION};
 use std::{
     collections::HashMap,
@@ -419,6 +422,22 @@ fn fixture_with(progress_timeout: Duration) -> (tempfile::TempDir, Peer, Control
     advance(&mut controller, &mut runtime);
     (directory, peer, controller, runtime)
 }
+/// The controller has applied its saved selection: every selected path is
+/// routed and processing, on the saved revision.
+fn applied(state: &DeviceState) -> bool {
+    state.selection.status == SelectionPhase::Idle
+        && state
+            .config
+            .canonical_selection(&state.config.selected_targets)
+            .is_ok_and(|ids| state.selection.active_target_ids == ids)
+        && !state.config.selected_targets.is_empty()
+        && state.engine.status == EnginePhase::Running
+        && state.engine.audio_advancing
+        && state.engine.applied_revision == state.config.revision
+        && state.routing.status == RoutingPhase::Active
+        && state.routing.channels == state.config.selected_channels()
+}
+
 fn advance(controller: &mut Controller, runtime: &mut Runtime) {
     let observation = runtime.observe(Instant::now()).unwrap();
     assert!(observation.progress.running());
@@ -569,7 +588,7 @@ fn global_toggles_use_native_publications_without_consuming_config_revision_or_g
         assert!(controller.state().selection.active_target_ids.is_empty());
         toggle(&mut controller, &mut runtime, true);
         advance(&mut controller, &mut runtime);
-        assert!(controller.state().is_applied());
+        assert!(applied(&controller.state()));
     }
     assert_eq!(controller.config().revision, initial.config.revision);
     assert_eq!(
@@ -793,7 +812,7 @@ fn external_publications_do_not_turn_live_frames_into_stalls_and_exact_restore_r
     ));
     peer.hold_window.store(false, Ordering::Release);
     advance(&mut controller, &mut runtime);
-    assert!(controller.state().is_applied());
+    assert!(applied(&controller.state()));
     assert_eq!(controller.config(), &initial.config);
     assert_eq!(
         controller.state().engine.generation,
@@ -1182,7 +1201,7 @@ fn saving_other_settings_after_live_edits_applies_them() {
     );
     assert!(!runtime.live_editing());
     advance(&mut controller, &mut runtime);
-    assert!(controller.state().is_applied());
+    assert!(applied(&controller.state()));
     assert_eq!(controller.config().targets, targets);
 
     // Saving the settings from before the live edit puts them back.
@@ -1200,7 +1219,7 @@ fn saving_other_settings_after_live_edits_applies_them() {
     );
     assert!(!runtime.live_editing());
     advance(&mut controller, &mut runtime);
-    assert!(controller.state().is_applied());
+    assert!(applied(&controller.state()));
 }
 
 #[test]
@@ -1314,7 +1333,7 @@ fn live_edits_that_cannot_be_saved_give_way_to_the_saved_settings() {
     assert_eq!(controller.config(), &saved);
     assert_eq!(std::fs::read(&file).unwrap(), bytes);
     advance(&mut controller, &mut runtime);
-    assert!(controller.state().is_applied());
+    assert!(applied(&controller.state()));
     drop(runtime);
     Runtime::connect(&peer.path(), &saved, Duration::from_secs(2)).unwrap();
 }
@@ -1394,7 +1413,7 @@ fn connecting_over_left_over_live_edits_restores_the_saved_settings() {
     let mut controller = Controller::new(Store::open(directory.path(), config.clone()).unwrap());
     controller.attach_native(&mut runtime).unwrap();
     advance(&mut controller, &mut runtime);
-    assert!(controller.state().is_applied());
+    assert!(applied(&controller.state()));
     drop(runtime);
     Runtime::connect(&peer.path(), &config, Duration::from_secs(2)).unwrap();
     assert_eq!(

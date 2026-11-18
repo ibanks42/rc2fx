@@ -8,8 +8,9 @@ no audio processing, network access, file I/O, or GUI code.
 
 ## Configuration and device state
 
-`Config::from_json` and `DeviceState::from_json` parse schema 9
-(`SCHEMA_VERSION`) and validate configuration values. Parsing rejects:
+`from_json` (and `from_json_limited`, which the store uses for saved state)
+parses strictly, and `Config::validate` checks a schema 9 (`SCHEMA_VERSION`)
+configuration. Parsing rejects:
 
 - duplicate JSON keys at any depth,
 - unknown model fields,
@@ -46,6 +47,7 @@ cargo test -p rc2fx-core
 cargo clippy -p rc2fx-core --all-targets -- -D warnings
 ```
 
-The integration tests cover the shared accept and reject cases in
-`fixtures/core`, the RLC coefficient vectors in `fixtures/easyeffects`, and
+The integration tests cover the mixer's direction of the shared cases in
+`fixtures/core` (the encoding of every document, and the verdicts on the
+documents the mixer reads), the RLC coefficient vectors in `fixtures/easyeffects`, and
 strict parsing and validation. The tests run offline, without a mixer.

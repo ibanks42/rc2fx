@@ -34,9 +34,11 @@ and reject cases in `fixtures/` at the repository root. A Go test and a Rust
 test read the same files: the Rust side in `crates/*/tests/shared_fixtures.rs`,
 `crates/rc2fx-core/tests/image_check_fixtures.rs`, and
 `crates/rc2fx-device/tests/xtask_tuf_fixtures.rs`, the Go side in the matching
-package's tests. When you change shared behavior, change both copies and add
-the case to `fixtures/`, so the mixer's Rust and the desktop's Go cannot drift
-apart.
+package's tests. Each side checks its own direction: Rust checks what the mixer
+writes and the verdicts on what it reads, and Go does the same for the
+desktop, so a case only the other side reads is left to that side. When you
+change shared behavior, change both copies and add the case to `fixtures/`, so
+the mixer's Rust and the desktop's Go cannot drift apart.
 
 ## Naming
 

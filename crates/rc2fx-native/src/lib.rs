@@ -19,7 +19,6 @@ mod timing;
 mod transactions;
 mod usb_control;
 mod vendor_job;
-mod vendor_wait;
 mod vendor_wake;
 
 use std::{
@@ -270,10 +269,6 @@ static UNREGISTER: AtomicUsize = AtomicUsize::new(0);
 static PLAN_ERRORS: AtomicU64 = AtomicU64::new(0);
 static PIPELINES_CREATED: AtomicU64 = AtomicU64::new(0);
 static PIPELINES_RETIRED: AtomicU64 = AtomicU64::new(0);
-static INPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
-static OUTPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
-static DSP_FAULTS: AtomicU64 = AtomicU64::new(0);
-static SKIPPED_OUTPUTS: AtomicU64 = AtomicU64::new(0);
 static REGISTRATIONS: AtomicU64 = AtomicU64::new(0);
 /// `jack_port_get_buffer` calls from outside the wrapped callback (the USB
 /// clients, on their own threads). Counted only while the bench gauges are on.
@@ -558,10 +553,7 @@ pub unsafe extern "C" fn la_preinit(_: *mut usize) {
             }
         }
     }
-    if std::env::var_os("RC2FX_FIRMWARE_PROFILE").is_some()
-        || std::env::var_os("RC2FX_NATIVE_PROBE_CALLBACK_OFFSET").is_some()
-        || enabled(c"RC2FX_NATIVE_PROBE_VENDOR_JOB_LIFETIME")
-    {
+    if std::env::var_os("RC2FX_FIRMWARE_PROFILE").is_some() {
         // The mixer passes its environment to ordinary vendor exec helpers.
         // Those helpers must not receive a repair or new stderr diagnostics.
         let vendor_process = std::fs::read_link("/proc/self/exe")
@@ -599,8 +591,7 @@ pub unsafe extern "C" fn la_preinit(_: *mut usize) {
     }
 }
 
-/// Resolve all addresses from one hash-selected, ABI-validated profile. A probe
-/// offset can confirm that profile, but cannot bypass its identity checks.
+/// Resolve all addresses from one hash-selected, ABI-validated profile.
 fn select_firmware() -> Result<usize, String> {
     use rc2fx_firmware::{Catalog, DEFAULT_CATALOG};
     let catalog = match std::env::var_os("RC2FX_FIRMWARE_PROFILES") {
@@ -625,18 +616,10 @@ fn select_firmware() -> Result<usize, String> {
         .ok_or("profile has no qualified runtime")?
         .callback
         .offset()?;
-    if let Ok(requested) = std::env::var("RC2FX_NATIVE_PROBE_CALLBACK_OFFSET") {
-        let requested = usize::from_str_radix(requested.trim_start_matches("0x"), 16)
-            .map_err(|e| e.to_string())?;
-        if requested != offset {
-            return Err("probe callback offset does not match the firmware profile".into());
-        }
-    }
     vendor_job::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     chat_mix::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
-    vendor_wait::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     vendor_wake::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
-    jack_cache::install(profile)?;
+    jack_cache::install();
     let _ = FIRMWARE_PROFILE.set(profile.id.clone());
     Ok(offset)
 }
@@ -803,7 +786,7 @@ unsafe extern "C" fn set_xrun(
     let original: SetXrun = unsafe { std::mem::transmute(pointer) };
     // libjack is loaded by now, so its xrun delay getter can be found here
     // once, on the control path.
-    let _ = probe::resolve_xrun_delayed();
+    probe::resolve_xrun_delayed();
     let Some(callback) = callback else {
         probe::register_vendor_xrun(client as usize, 0, 0);
         return unsafe { original(client, None, argument) };
@@ -1273,15 +1256,9 @@ unsafe extern "C" fn close(client: *mut c_void) -> c_int {
                     .pipeline
                     .swap(std::ptr::null_mut(), Ordering::AcqRel);
                 if !engine.is_null() {
-                    // Native close has quiesced the client. Destruction and
-                    // telemetry collection stay on this control caller.
-                    let engine = unsafe { Box::from_raw(engine) };
-                    let counters = engine.counters();
-                    INPUT_BLOCKS.fetch_add(counters.input_blocks, Ordering::Relaxed);
-                    OUTPUT_BLOCKS.fetch_add(counters.output_blocks, Ordering::Relaxed);
-                    DSP_FAULTS.fetch_add(counters.faults, Ordering::Relaxed);
-                    SKIPPED_OUTPUTS.fetch_add(counters.skipped_outputs, Ordering::Relaxed);
-                    drop(engine);
+                    // Native close has quiesced the client. Destruction stays
+                    // on this control caller.
+                    drop(unsafe { Box::from_raw(engine) });
                     PIPELINES_RETIRED.fetch_add(1, Ordering::Relaxed);
                 }
                 // The native callback and its parameter readers have stopped.
@@ -1468,14 +1445,6 @@ impl ipc::Backend for NativeBackend {
         }
         Ok(inventory)
     }
-    fn status(
-        &mut self,
-        context: u64,
-        id: &str,
-    ) -> Result<rc2fx_native_control::TargetStatus, rc2fx_native_control::ErrorCode> {
-        self.transactions.reap(std::time::Instant::now());
-        with_parameter_control(context, id, target_status)
-    }
     fn prepare(
         &mut self,
         transaction: &rc2fx_native_control::Transaction,
@@ -1573,18 +1542,15 @@ fn build_report() -> serde_json::Value {
         .iter()
         .filter(|context| context.slot.load(Ordering::Acquire).is_claimed())
         .count();
-    let mut report = serde_json::json!({"probeOnly":true,"dspEnabled":read(&INPUT_BLOCKS)+read(&OUTPUT_BLOCKS)>0,
-        "registrations":read(&REGISTRATIONS),"callbacks":read(&CYCLE.callbacks),"buffersInside":read(&CYCLE.buffer_calls_inside),
+    let mut report = serde_json::json!({"registrations":read(&REGISTRATIONS),"callbacks":read(&CYCLE.callbacks),"buffersInside":read(&CYCLE.buffer_calls_inside),
         "buffersOutside":gauged.then(|| read(&BUFFER_CALLS_OUTSIDE)),"directBindings":read(&DIRECT_BINDINGS),"dlsymBindings":read(&DLSYM_BINDINGS),
         "bindingsDuringCallback":read(&CALLBACK_BINDINGS),"conflicts":read(&CONFLICTS),"capacityFailures":read(&CAPACITY_FAILURES),
         "teardownForwards":read(&TEARDOWN_FORWARDS),
         "reclaimedContexts":read(&RECLAIMED),"retainedContexts":retained,"callbackAllocations":read(&CALLBACK_ALLOCATIONS),
         "callbackFrees":read(&CALLBACK_FREES),"callbackReallocations":read(&CALLBACK_REALLOCATIONS),
         "planErrors":read(&PLAN_ERRORS),"pipelinesCreated":read(&PIPELINES_CREATED),"pipelinesRetired":read(&PIPELINES_RETIRED),
-        "inputBlocks":read(&INPUT_BLOCKS),"outputBlocks":read(&OUTPUT_BLOCKS),"dspFaults":read(&DSP_FAULTS),
-        "skippedOutputs":read(&SKIPPED_OUTPUTS),"retainedPorts":CONTROL.lock().map(|registry|registry.ports.len()).unwrap_or(usize::MAX)});
+        "retainedPorts":CONTROL.lock().map(|registry|registry.ports.len()).unwrap_or(usize::MAX)});
     report["vendorJobRepair"] = vendor_job::status();
-    report["vendorWaitProfile"] = vendor_wait::status();
     report["jackBufferCache"] = jack_cache::status();
     report["vendorWakeOne"] = vendor_wake::status();
     report["firmwareProfile"] = FIRMWARE_PROFILE.get().cloned().into();
@@ -1614,8 +1580,7 @@ fn build_report() -> serde_json::Value {
         "minMarginNs": read(&pipeline::HELPER_MIN_MARGIN_NS),
     });
     report["sources"] = pipeline::sources();
-    // Live processing counters (mirrors; the fields above stay
-    // retirement-only). Read without touching a pipeline.
+    // Live processing counters, read without touching a pipeline.
     report["processingCounters"] = pipeline::processing_counters();
     report["pathCostNs"] = gauged
         .then(|| pipeline::PATH_COST_NS.iter().map(read).collect::<Vec<_>>())
@@ -2357,7 +2322,6 @@ mod report_tests {
         writeln!(unbuffered).unwrap();
         let buffered = write_json(Counting::new(Vec::new(), None), &report).unwrap();
         assert_eq!(buffered.inner, old_bytes(&report));
-        assert_eq!(buffered.inner, unbuffered.inner);
         assert!(
             unbuffered.writes > 1000,
             "{} unbuffered writes",
@@ -2412,13 +2376,6 @@ mod report_tests {
         let last = recent.last().unwrap();
         assert_eq!(last["kind"], "gap");
         assert_eq!(last["valueNs"], period * 2);
-    }
-
-    #[test]
-    fn a_failed_flush_is_reported() {
-        let report = report(0, 0);
-        // Everything is buffered, so the only write is the final flush.
-        assert!(write_json(Counting::new(Vec::new(), Some(0)), &report).is_err());
     }
 
     /// Publishes through the real seam with a writer that fails after

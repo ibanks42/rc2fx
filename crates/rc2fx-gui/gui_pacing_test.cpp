@@ -49,15 +49,11 @@ extern "C" __attribute__((noinline)) int test_commit_site(void) {
     asm volatile("" ::: "memory");
     return r;
 }
-extern "C" __attribute__((noinline)) void test_other_lock(pthread_mutex_t *m) {
-    pthread_mutex_lock(m);
-    asm volatile("" ::: "memory");
-}
 
-// The dirty-region build (-DRC2FX_PACING_DIRTY): the repaint callbacks'
-// frames as the GUI lays them out. x29 (here rbp) equals sp, and the dirty
-// list and its count sit at +0x60 / +0x6c (path A) or +0x50 / +0x5c (B)
-// when the repaint mutex is locked.
+// The paint seam: the repaint callbacks' frames as the GUI lays them out.
+// x29 (here rbp) equals sp, and the dirty list and its count sit at
+// +0x60 / +0x6c (path A) or +0x50 / +0x5c (B) when the repaint mutex is
+// locked.
 #if defined(__x86_64__)
 extern "C" int test_paint_a(const int32_t *list, int count, pthread_mutex_t *m);
 extern "C" int test_paint_b(const int32_t *list, int count, pthread_mutex_t *m);
@@ -178,13 +174,6 @@ int main(int argc, char **argv) {
             pthread_mutex_unlock(&repaint_mutex);
             if (gap) std::this_thread::sleep_for(std::chrono::milliseconds(gap));
         }
-        // Other lock sites are never paced.
-        unsigned long long t0 = now_ns();
-        for (int i = 0; i < 20; ++i) {
-            test_other_lock(&repaint_mutex);
-            pthread_mutex_unlock(&repaint_mutex);
-        }
-        printf("other_ns %llu\n", now_ns() - t0);
         return 0;
     }
     if (!strcmp(argv[1], "wait")) {
@@ -203,39 +192,6 @@ int main(int argc, char **argv) {
         ready.flag = true;
         test_repaint_a(&ready);
         printf("done\n");
-        return 0;
-    }
-    if (!strcmp(argv[1], "handshake")) {
-        // handshake N: the GUI's 1:1 paint/present loop. The message thread
-        // requests a pass and waits (as a repaint) until the pump has made it;
-        // the pump waits for each request outside any instrumented site.
-        static int n;
-        n = atoi(argv[2]);
-        static Event request, done;
-        std::thread pump([] {
-            for (int i = 0; i < n; ++i) {
-                {
-                    std::unique_lock<std::mutex> lock(request.m);
-                    while (!request.flag) request.cv.wait(lock);
-                    request.flag = false;
-                }
-                test_pump_lock_site(&repaint_mutex);
-                pthread_mutex_unlock(&repaint_mutex);
-                std::lock_guard<std::mutex> g(done.m);
-                done.flag = true;
-                done.cv.notify_all();
-            }
-        });
-        for (int i = 0; i < n; ++i) {
-            {
-                std::lock_guard<std::mutex> g(request.m);
-                request.flag = true;
-                request.cv.notify_all();
-            }
-            test_repaint_a(&done);
-        }
-        pump.join();
-        printf("handshakes %d\n", n);
         return 0;
     }
 #if defined(__x86_64__)
@@ -485,12 +441,6 @@ int main(int argc, char **argv) {
                                           {0, 701, 3, 19}, {1263, 0, 17, 1}};
                 memcpy(rects, regions, sizeof regions);
             }
-            // PARTIAL_WIDE adds a far-corner rect, so a bounding box over the
-            // paint spans most of the frame.
-            if (getenv("PARTIAL_WIDE")) {
-                rects[n][0] = 1260, rects[n][1] = 700, rects[n][2] = 20, rects[n][3] = 20;
-                n++;
-            }
             if (n && f % 25 == 3) test_paint_b(&rects[0][0], n, &repaint_mutex);
             else if (n) test_paint_a(&rects[0][0], n, &repaint_mutex);
             for (int r = 0; r < n; ++r)  // the "renderer" draws inside the clip
@@ -544,7 +494,7 @@ int main(int argc, char **argv) {
         test_pump_lock_site(&repaint_mutex);
         pthread_mutex_unlock(&repaint_mutex);
         errno = 4321;
-        test_pump_lock_site(&repaint_mutex);  // paced (back to back)
+        test_pump_lock_site(&repaint_mutex);  // the module's work runs here
         printf("errno %d\n", errno);
         pthread_mutex_unlock(&repaint_mutex);
         Event e;
@@ -589,7 +539,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(argv[1], "fork")) {
-        // A forked helper inherits the module: it must never pace or log.
+        // A forked helper inherits the module: it must never act or log.
         test_pump_lock_site(&repaint_mutex);
         pthread_mutex_unlock(&repaint_mutex);
         fflush(stdout);
@@ -606,31 +556,6 @@ int main(int argc, char **argv) {
         }
         int status;
         waitpid(child, &status, 0);
-        return 0;
-    }
-    if (!strcmp(argv[1], "cancel")) {
-        // A pass waiting inside the pacing is canceled: the cancel must take
-        // effect only at the program's own next cancellation point, after the
-        // lock was taken (no new cancellation point in the pump).
-        static unsigned long long locked_at = 0;
-        pthread_t thread;
-        pthread_create(&thread, nullptr, [](void *) -> void * {
-            test_pump_lock_site(&repaint_mutex);
-            pthread_mutex_unlock(&repaint_mutex);
-            test_pump_lock_site(&repaint_mutex);  // paced: waits ~66 ms
-            locked_at = now_ns();
-            pthread_mutex_unlock(&repaint_mutex);
-            for (;;) pthread_testcancel();
-            return nullptr;
-        }, nullptr);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        unsigned long long canceled_at = now_ns();
-        pthread_cancel(thread);
-        void *result;
-        pthread_join(thread, &result);
-        printf("canceled %d locked_after_cancel_ms %.1f\n", result == PTHREAD_CANCELED,
-               // Signed: a lock taken before the cancel must show as negative.
-               locked_at ? (double)((long long)locked_at - (long long)canceled_at) / 1e6 : -1.0);
         return 0;
     }
     return 2;

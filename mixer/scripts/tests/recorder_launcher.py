@@ -131,7 +131,7 @@ replace_in_test_dir() {
   local pid
   pid=$(pgrep -x jackd) || return 1
   bb_replace_jack "$test_dir" "$test_dir/librc2fx_jackerr.so" "$test_dir/rc2fx_jackerr_snapshot" \
-    "$test_limit" 'Test recorder' "$pid"
+    'Test recorder' "$pid"
 }
 # Moving a thread rewrites its fake entries, as the kernel would.
 bb_move_task() {
@@ -228,7 +228,7 @@ class Fixture:
             f'export PATH={self.bin}:$PATH',
         ])
         overrides = '\n'.join([
-            f'test_dir={self.diag}', 'test_limit=8388608',
+            f'test_dir={self.diag}',
             f'blackbox_proc={self.proc}', f'blackbox_cpuset={self.cpuset}',
             f'blackbox_jackd={self.jackd}', f'blackbox_callme={self.bin / "callme"}', f'blackbox_owner={os.getuid()}',
             *(f'{name}={value}' for name, value in self.overrides.items()),
@@ -415,50 +415,6 @@ class ReplacementTests(unittest.TestCase):
         self.assertTrue((f.diag / 'failed').exists())
         self.assertIn('PLAIN JACKD DID NOT COME UP CORRECTLY', f.log())
         self.assertIn('irq 24 0-3', (f.diag / 'after-jack.irqs').read_text(), 'what was left is recorded')
-
-    def make_ring(self, f, name, acked, size=0):
-        d = f.diag / name
-        d.mkdir()
-        (d / 'ring-900000-1.ring').write_bytes(b'r' * size)
-        if acked:
-            (d / 'acked').write_text('')
-        return d
-
-    def test_no_evidence_is_removed_even_once_the_host_archived_it(self):
-        f = self.fixture('success')
-        archived = self.make_ring(f, 'jackerr.archived', True, size=64)
-        self.make_ring(f, 'jackerr.kept', False, size=64)
-        (f.diag / 'jackd.log').write_text('archived log\n')
-        (f.diag / 'jackd.log.acked').write_text('')
-        (f.diag / 'fallback-jackd.log').write_text('not archived\n')
-        before = {p.relative_to(f.diag): p.read_bytes() for p in f.diag.rglob('*') if p.is_file()}
-        self.assertEqual(f.run(), 0, f.log())
-        names = sorted(p.name for p in f.diag.glob('jackerr.*'))
-        self.assertIn('jackerr.archived', names)
-        self.assertIn('jackerr.kept', names)
-        self.assertEqual(len(names), 3, 'the two kept and the new ring')
-        for name, content in before.items():
-            current = (f.diag / name).read_bytes()
-            self.assertTrue(current.startswith(content), f'{name} lost data')
-        self.assertTrue((archived / 'acked').exists())
-        self.assertFalse((f.diag / 'prune.log').exists(), 'nothing was pruned')
-
-    def test_archived_rings_do_not_count_toward_the_limit(self):
-        f = self.fixture('success', test_limit=1000)
-        self.make_ring(f, 'jackerr.archived', True, size=2000)
-        self.assertEqual(f.run(), 0, f.log())
-        self.assertTrue((f.diag / 'jackerr.archived' / 'ring-900000-1.ring').exists())
-
-    def test_too_much_unarchived_evidence_refuses_the_replacement(self):
-        f = self.fixture('success', test_limit=1000)
-        self.make_ring(f, 'jackerr.kept', False, size=2000)
-        self.assertNotEqual(f.run(), 0)
-        self.assert_untouched(f)
-        self.assertEqual(f.lines('callme'), [])
-        self.assertIn('not yet archived', f.log())
-        self.assertIn('nothing deleted', f.log())
-        self.assertEqual(sorted(p.name for p in f.diag.glob('jackerr.*')), ['jackerr.kept'])
-        self.assertEqual((f.diag / 'jackerr.kept' / 'ring-900000-1.ring').stat().st_size, 2000)
 
 
 class RecorderTests(unittest.TestCase):
@@ -669,9 +625,12 @@ class RecorderTests(unittest.TestCase):
     def test_status_reports_the_recorder_state(self):
         f = self.fixture()
         self.assertEqual(f.run(command='jack_recorder'), 0, f.log())
-        f.run(command='recorder_status_line')
+        # The real status, with the mixer stopped and the GUI's line stubbed.
+        status = 'status() {' + SCRIPT.split('\nstatus() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        self.assertEqual(f.run(command='boot=$TEST_LOG/boot run=$TEST_LOG/run\n'
+                               'supervisor() { return 1; }\ngui_status() { :; }\n' + status + 'status'), 0)
+        self.assertIn('RC2FX is not running', f.result.stdout)
         self.assertIn('JACK recorder: active pid', f.result.stdout)
-        self.assertIn('recorder_status_line', SCRIPT.split('\nstatus() {', 1)[1].split('\n}\n', 1)[0])
 
 
 class LaunchOrderTests(unittest.TestCase):

@@ -1,55 +1,49 @@
-/* GUI presentation pacing and message-thread wait monitor (LD_AUDIT module).
+/* GUI frame monitor and partial conversion (LD_AUDIT module).
  *
  * For the RØDECaster Pro II GUI 1.7.7 only (rc_gui_juce, SHA-256 aa92a92d…).
  * No instruction is patched and nothing is drawn. Through la_symbind64 it
- * wraps two of the GUI executable's OWN imported calls (libraries' calls are
- * not bound), and acts only at two pinned call sites; every other call passes
- * straight through.
+ * wraps some of the GUI executable's OWN imported calls (libraries' calls are
+ * not bound), and acts only at pinned call sites; every other call passes
+ * straight through. gui_partial.c (included below) does the partial
+ * conversion.
  *
  *  - The frame pump (juce::RodecasterDRMThread::run, 0x7d08a0) locks the
  *    repaint mutex through pthread_mutex_lock at 0x7d09d0 (returns to
  *    0x7d09d4) before each GE2D conversion and DRM commit. At that point the
  *    pump holds no lock: its native event wait has returned and the repaint
- *    mutex is not yet taken. With RC2FX_GUI_PACING=30, 15, 10, 5 or 2, the
- *    module waits there until 1/30, 1/15, 1/10, 1/5 or 1/2 s after the
- *    previous pass, so presentation (GE2D blit + commit) is capped while painting,
- *    input and IPC continue;
- *    frame signals arriving meanwhile coalesce and the next pass presents
- *    the latest painted content. The first pass after an idle period never
- *    waits.
+ *    mutex is not yet taken. Each pass is counted, and the intervals between
+ *    passes go into a histogram; the pump never waits here.
  *  - The message thread waits for the pump inside juce::WaitableEvent::wait
  *    (0x930100), whose imported std::condition_variable::wait is at 0x930158
  *    (returns to 0x93015c), before each paint (callers 0x7cf79c and
  *    0x7dd094, returning to 0x7cf7a0 / 0x7dd098). Those waits are counted
- *    and timed: if pacing is truly non-blocking for the message thread, the
- *    count stays at zero.
+ *    and timed.
  *
- * Per frame (any mode, when logging): the pump's request (before the lock),
- * lock acquired, conversion done (its pthread_mutex_unlock at 0x7d09e0) and
- * the blocking drmModeAtomicCommit at 0x7d0ae4 (start, end), one "frame" line
+ * Per frame (when logging): the pump's request (before the lock), lock
+ * acquired, conversion done (its pthread_mutex_unlock at 0x7d09e0) and the
+ * blocking drmModeAtomicCommit at 0x7d0ae4 (start, end), one "frame" line
  * after the commit returns, so frames can be joined with audio events on
  * CLOCK_MONOTONIC. At most 20000 frame lines.
  *
- * RC2FX_GUI_PACING: "observe" (count and time, never wait), "30", "15", "10",
- * "5", "2", or "off"/unset (bind nothing). A wait never exceeds one interval,
- * but the message thread's paint waits for the pump's pass, so at 2 its waits
- * can approach 500 ms (repaint_wait_max_ns). RC2FX_GUI_PACING_LOG: a new
- * file under /run/ (created O_EXCL) for one stats line at most every 5 s (written by the pump
- * thread outside any lock), at the first pass through the pump seam
- * ("first-pass": the launcher's readiness signal) and at exit; capped at 1 MiB.
+ * RC2FX_GUI_PACING: "observe" (count and time, convert nothing), a partial
+ * conversion mode (see gui_partial.c; the mixer runs "partial-cw"), or
+ * "off"/unset (bind nothing); anything else leaves the module inactive.
+ * RC2FX_GUI_PACING_LOG: a new file under /run/ (created O_EXCL) for one stats
+ * line at most every 5 s (written by the pump thread outside any lock), at the
+ * first pass through the pump seam ("first-pass": the launcher's readiness
+ * signal) and at exit; rotated at 4 MiB.
  *
- * Built with -DRC2FX_PACING_DIRTY (a separate, observe-only module), it also
- * logs every paint's dirty region and each conversion's destination, and
- * accepts only "observe". The repaint callbacks (0x7cf5d0 path A, 0x7dcf20
- * path B) copy their dirty RectangleList into a malloc'd array of {x, y, w, h}
- * int32 entries, then lock the repaint mutex (returning to 0x7cf7b0 /
- * 0x7dd0a8); at that point the array and its count are in the caller's frame
- * at x29 + 0x60 / + 0x6c (A) or + 0x50 / + 0x5c (B). One "paint" line per
- * paint gives the count, bounding box, summed area and up to 16 rectangles.
- * Each "frame" line adds the destination's DMABUF fd and FB ID: global
- * 0x12ec610 points to the current destination descriptor (fd at +0x24,
- * FB ID at +0x20), which the pump reads into x22 before its lock and swaps
- * only after the commit. Nothing is written to the GUI's memory.
+ * It also logs every paint's dirty region and each conversion's destination.
+ * The repaint callbacks (0x7cf5d0 path A, 0x7dcf20 path B) copy their dirty
+ * RectangleList into a malloc'd array of {x, y, w, h} int32 entries, then
+ * lock the repaint mutex (returning to 0x7cf7b0 / 0x7dd0a8); at that point
+ * the array and its count are in the caller's frame at x29 + 0x60 / + 0x6c
+ * (A) or + 0x50 / + 0x5c (B). One "paint" line per paint gives the count,
+ * bounding box, summed area and up to 16 rectangles. Each "frame" line adds
+ * the destination's DMABUF fd and FB ID: global 0x12ec610 points to the
+ * current destination descriptor (fd at +0x24, FB ID at +0x20), which the
+ * pump reads into x22 before its lock and swaps only after the commit.
+ * Nothing is written to the GUI's memory.
  *
  * RC2FX_GUI_PACING_QUIET=1 (production): the log gets only the "start" and
  * "first-pass" lines, every fallback / disable with its reason, and one
@@ -57,12 +51,11 @@
  * no frame, paint, convert, verify or stats lines, and no exit line. Unset or
  * any other value: the full diagnostic log above.
  *
- * The wait is a raw clock_nanosleep syscall (not a cancellation point; EINTR
- * retried), so the pump gains no cancellation point; the GUI's errno is saved
- * and restored around the module's own work. Host tests build this with
- * -DRC2FX_PACING_TEST, which matches the sites by symbol name instead of by
- * the pinned offsets and skips the executable hash; everything else is the
- * production code.
+ * The module adds no cancellation point to the pump (its log writes and
+ * waits are raw syscalls), and the GUI's errno is saved and restored around
+ * the module's own work. Host tests build this with -DRC2FX_PACING_TEST,
+ * which matches the sites by symbol name instead of by the pinned offsets and
+ * skips the executable hash; everything else is the production code.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -93,10 +86,6 @@
 #define WAIT_RETURN 0x93015cu
 #define REPAINT_RETURN_A 0x7cf7a0u
 #define REPAINT_RETURN_B 0x7dd098u
-#if defined(RC2FX_PACING_PARTIAL) && !defined(RC2FX_PACING_DIRTY)
-#error "RC2FX_PACING_PARTIAL builds on RC2FX_PACING_DIRTY"
-#endif
-#ifdef RC2FX_PACING_DIRTY
 #define LOG_CAP (4u << 20)
 #define PAINT_A_RETURN 0x7cf7b0u /* pthread_mutex_lock in repaint path A */
 #define PAINT_B_RETURN 0x7dd0a8u /* the same in path B */
@@ -104,9 +93,6 @@
 #define PAINT_LINES 20000
 #define PAINT_RECTS_LOGGED 16
 #define PAINT_RECTS_MAX 4096
-#else
-#define LOG_CAP (1u << 20)
-#endif
 #define LOG_EVERY_NS 5000000000ull
 #ifdef RC2FX_PACING_TEST
 static uint64_t test_verbose_every_ns = LOG_EVERY_NS;
@@ -121,12 +107,11 @@ typedef int *(*errno_fn)(void);
 static uintptr_t main_base;
 static bool main_seen, enabled;
 static pid_t gui_pid; /* forked children inherit the module but never act */
-static uint64_t interval_ns; /* 0: observe only */
 static mutex_lock_fn vendor_mutex_lock, vendor_mutex_unlock;
 static commit_fn vendor_commit;
 /* The frame being presented (pump thread only): request, lock acquired,
  * conversion done, commit start/end; one line per frame once committed. */
-static uint64_t frame_request, frame_locked, frame_converted, frame_paced;
+static uint64_t frame_request, frame_locked, frame_converted;
 static _Atomic uint64_t frames_logged;
 static condition_wait_fn vendor_condition_wait;
 static errno_fn vendor_errno;
@@ -140,27 +125,23 @@ static _Atomic int log_rotating;
 static _Atomic uint64_t log_rotations, log_dropped, log_reopen_failed;
 static bool quiet; /* RC2FX_GUI_PACING_QUIET=1 */
 static uint64_t counters_every_ns = COUNTERS_EVERY_NS;
-#ifdef RC2FX_PACING_PARTIAL
 static long long merge_px; /* defined in gui_partial.c; on the start line */
-#endif
 
-/* Pump: passes, waits applied, ACTUAL intervals between passes (after any
- * wait), and clock failures (a pass with no valid time is never paced). */
-static _Atomic uint64_t last_pass_ns, passes, paced, paced_ns, paced_max_ns, clock_errors;
+/* Pump: passes, the intervals between them, and clock failures (a pass with
+ * no valid time is not placed in the histogram). */
+static _Atomic uint64_t last_pass_ns, passes, clock_errors;
 static _Atomic uint64_t interval_hist[8]; /* <25 ms, <34, <50, <67, <100, <200, <1000, >= 1 s */
 /* Waits at the WaitableEvent::wait site: entered and completed, by caller
  * class. A wait that blocks for good shows as entered > completed, so zero
  * completed repaint waits alone is not taken as proof of zero waits. */
 static _Atomic uint64_t repaint_entered, repaint_completed, repaint_wait_ns, repaint_wait_max_ns;
 static _Atomic uint64_t other_entered, unclassified_entered;
-#ifdef RC2FX_PACING_DIRTY
 /* Paints seen, logged, rejected (caller frame or list out of bounds), and
  * with a rectangle outside 1280×720. The last is counted only when paint
  * lines can be written (a log is open and quiet mode is off), which is also
- * the only time it is printed. The partial build's counters line carries
- * paints and paint_rejects, so quiet mode has them too. */
+ * the only time it is printed. The counters line carries paints and
+ * paint_rejects, so quiet mode has them too. */
 static _Atomic uint64_t paints, paints_logged, paint_rejects, paint_outside;
-#endif
 
 #ifdef RC2FX_PACING_TEST
 static bool test_fail_clock;
@@ -199,7 +180,6 @@ static bool wait_site(uintptr_t r) { return in_function(r, "test_event_wait"); }
 static bool repaint_parent(uintptr_t r) {
     return in_function(r, "test_repaint_a") || in_function(r, "test_repaint_b");
 }
-#ifdef RC2FX_PACING_DIRTY
 static int paint_site(uintptr_t r) {
     return in_function(r, "test_paint_a") ? 1 : in_function(r, "test_paint_b") ? 2 : 0;
 }
@@ -209,7 +189,6 @@ static const uint8_t *const *destination_global(void) {
     void *program = dlmopen(LM_ID_BASE, NULL, RTLD_LAZY | RTLD_NOLOAD);
     return program ? (const uint8_t *const *)dlsym(program, "test_current_destination") : NULL;
 }
-#endif
 #else
 static bool pump_site(uintptr_t r) { return r - main_base == PUMP_RETURN; }
 static bool converted_site(uintptr_t r) { return r - main_base == CONVERTED_RETURN; }
@@ -218,14 +197,12 @@ static bool wait_site(uintptr_t r) { return r - main_base == WAIT_RETURN; }
 static bool repaint_parent(uintptr_t r) {
     return r - main_base == REPAINT_RETURN_A || r - main_base == REPAINT_RETURN_B;
 }
-#ifdef RC2FX_PACING_DIRTY
 static int paint_site(uintptr_t r) {
     return r - main_base == PAINT_A_RETURN ? 1 : r - main_base == PAINT_B_RETURN ? 2 : 0;
 }
 static const uint8_t *const *destination_global(void) {
     return (const uint8_t *const *)(main_base + DESTINATION_GLOBAL);
 }
-#endif
 #endif
 
 /* Opens the log and remembers where to reopen it (an empty log_path means
@@ -303,18 +280,15 @@ static void log_line(const char *line, size_t n) {
 static void write_stats(const char *why) {
     if (log_fd < 0) return;
     char extra[64] = "";
-#ifdef RC2FX_PACING_PARTIAL
     if (strcmp(why, "start") == 0) snprintf(extra, sizeof extra, " merge_px=%lld quiet=%d", merge_px, (int)quiet);
-#endif
     char line[640];
     int n = snprintf(line, sizeof line,
-                     "%s pid=%d t=%llu interval_ns=%llu passes=%llu paced=%llu paced_ns=%llu paced_max_ns=%llu "
+                     "%s pid=%d t=%llu interval_ns=0 passes=%llu paced=0 paced_ns=0 paced_max_ns=0 "
                      "clock_errors=%llu pass_intervals=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu "
                      "repaint_entered=%llu repaint_completed=%llu repaint_wait_ns=%llu repaint_wait_max_ns=%llu "
                      "other_entered=%llu unclassified_entered=%llu%s\n",
-                     why, (int)getpid(), (unsigned long long)now_ns(), (unsigned long long)interval_ns,
-                     (unsigned long long)passes, (unsigned long long)paced, (unsigned long long)paced_ns,
-                     (unsigned long long)paced_max_ns, (unsigned long long)clock_errors,
+                     why, (int)getpid(), (unsigned long long)now_ns(),
+                     (unsigned long long)passes, (unsigned long long)clock_errors,
                      (unsigned long long)interval_hist[0],
                      (unsigned long long)interval_hist[1], (unsigned long long)interval_hist[2],
                      (unsigned long long)interval_hist[3], (unsigned long long)interval_hist[4],
@@ -325,27 +299,19 @@ static void write_stats(const char *why) {
                      (unsigned long long)unclassified_entered, extra);
     if (n <= 0 || (size_t)n >= sizeof line) return;
     log_line(line, (size_t)n);
-#ifdef RC2FX_PACING_DIRTY
     if (quiet) return;
     n = snprintf(line, sizeof line, "dirty-%s pid=%d paints=%llu paints_logged=%llu paint_rejects=%llu "
                  "paint_outside=%llu\n", why, (int)getpid(), (unsigned long long)paints,
                  (unsigned long long)paints_logged, (unsigned long long)paint_rejects,
                  (unsigned long long)paint_outside);
     if (n > 0 && (size_t)n < sizeof line) log_line(line, (size_t)n);
-#endif
 }
 
 
-#ifdef RC2FX_PACING_DIRTY
 /* The destination of the frame being presented (pump thread only). */
 static int frame_dest_fd = -1, frame_dest_fb = -1;
 
-#ifdef RC2FX_PACING_PARTIAL
 #include "gui_partial.c"
-#else
-static void partial_paint(const int32_t *list, int32_t count) { (void)list, (void)count; }
-static void partial_paint_rejected(void) {}
-#endif
 
 /* One paint's dirty list, read from its caller's frame (`fp`: the repaint
  * function's x29, which equals its sp). Reads only; any bound fails → the
@@ -420,57 +386,20 @@ static const uint8_t *caller_frame(uintptr_t *ours) {
         return (const uint8_t *)theirs;
     return NULL;
 }
-#endif
-
-#ifndef RC2FX_PACING_PARTIAL
-/* Periodic cumulative line (gui_partial.c has the conversion counters). */
-static void write_counters(void) {
-    if (log_fd < 0) return;
-    char line[128];
-    int n = snprintf(line, sizeof line, "counters pid=%d t=%llu passes=%llu log_rotations=%llu log_dropped=%llu "
-                     "log_reopen_failed=%llu\n",
-                     (int)gui_pid, (unsigned long long)now_ns(), (unsigned long long)passes,
-                     (unsigned long long)atomic_load(&log_rotations), (unsigned long long)atomic_load(&log_dropped),
-                     (unsigned long long)atomic_load(&log_reopen_failed));
-    if (n > 0 && (size_t)n < sizeof line) log_line(line, (size_t)n);
-}
-#endif
 
 /* ---- the frame pump's lock of the repaint mutex ------------------------- */
-static void pace(void) {
-    uint64_t start = now_ns();
-    frame_request = start;
-    frame_paced = 0;
-    uint64_t last = atomic_load_explicit(&last_pass_ns, memory_order_relaxed);
-    if (!start) {
-        /* No valid time: never wait, and do not disturb the interval state. */
-        atomic_fetch_add_explicit(&clock_errors, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&passes, 1, memory_order_relaxed);
-        return;
-    }
-    if (interval_ns && last && start > last && start < last + interval_ns) {
-        uint64_t until = last + interval_ns;
-        struct timespec at = {(time_t)(until / 1000000000ull), (long)(until % 1000000000ull)};
-        /* Raw syscall: not a cancellation point; resume after signals. */
-        while (syscall(SYS_clock_nanosleep, CLOCK_MONOTONIC, TIMER_ABSTIME, &at, NULL) != 0 &&
-               errno == EINTR) {
-        }
-        uint64_t woke = now_ns();
-        uint64_t slept = woke > start ? woke - start : 0;
-        frame_paced = slept;
-        if (!woke) atomic_fetch_add_explicit(&clock_errors, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&paced, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&paced_ns, slept, memory_order_relaxed);
-        atomic_max(&paced_max_ns, slept);
-    }
+static void count_pass(void) {
     uint64_t pass = now_ns();
+    frame_request = pass;
+    uint64_t last = atomic_load_explicit(&last_pass_ns, memory_order_relaxed);
     if (!pass) {
+        /* No valid time: do not disturb the interval state. */
         atomic_fetch_add_explicit(&clock_errors, 1, memory_order_relaxed);
         atomic_fetch_add_explicit(&passes, 1, memory_order_relaxed);
         return;
     }
     if (last && pass > last) {
-        /* The actual pass-to-pass interval, after any wait. */
+        /* The pass-to-pass interval. */
         uint64_t gap = pass - last;
         static const uint64_t edges[7] = {25000000, 34000000, 50000000, 67000000,
                                           100000000, 200000000, 1000000000};
@@ -499,17 +428,14 @@ static int pacing_mutex_lock(pthread_mutex_t *mutex) {
     if (enabled && pump_site(from) && getpid() == gui_pid) {
         int *gui_errno = vendor_errno();
         int saved = *gui_errno;
-        pace();
+        count_pass();
         *gui_errno = saved;
         int result = vendor_mutex_lock(mutex);
         frame_locked = now_ns();
-#ifdef RC2FX_PACING_DIRTY
         read_destination();
-#endif
         *gui_errno = saved;
         return result;
     }
-#ifdef RC2FX_PACING_DIRTY
     int path = enabled ? paint_site(from) : 0;
     if (path && getpid() == gui_pid) {
         const uint8_t *frame = caller_frame(__builtin_frame_address(0));
@@ -521,7 +447,6 @@ static int pacing_mutex_lock(pthread_mutex_t *mutex) {
         *gui_errno = saved;
         return result;
     }
-#endif
     return vendor_mutex_lock(mutex);
 }
 /* The pump's unlock right after the GE2D conversion. */
@@ -541,21 +466,12 @@ static int pacing_commit(int fd, void *request, uint32_t flags, void *user) {
     int saved = *gui_errno;
     uint64_t end = now_ns();
     if (log_fd >= 0 && !quiet && atomic_fetch_add_explicit(&frames_logged, 1, memory_order_relaxed) < 20000) {
-#ifdef RC2FX_PACING_DIRTY
         char line[240];
-        int n = snprintf(line, sizeof line, "frame pid=%d request=%llu paced_ns=%llu locked=%llu converted=%llu "
+        int n = snprintf(line, sizeof line, "frame pid=%d request=%llu paced_ns=0 locked=%llu converted=%llu "
                          "commit=%llu committed=%llu result=%d dest_fd=%d dest_fb=%d\n", (int)gui_pid,
-                         (unsigned long long)frame_request, (unsigned long long)frame_paced,
+                         (unsigned long long)frame_request,
                          (unsigned long long)frame_locked, (unsigned long long)frame_converted,
                          (unsigned long long)begin, (unsigned long long)end, result, frame_dest_fd, frame_dest_fb);
-#else
-        char line[200];
-        int n = snprintf(line, sizeof line, "frame pid=%d request=%llu paced_ns=%llu locked=%llu converted=%llu "
-                         "commit=%llu committed=%llu result=%d\n", (int)gui_pid,
-                         (unsigned long long)frame_request, (unsigned long long)frame_paced,
-                         (unsigned long long)frame_locked, (unsigned long long)frame_converted,
-                         (unsigned long long)begin, (unsigned long long)end, result);
-#endif
         if (n > 0 && (size_t)n < sizeof line) log_line(line, (size_t)n);
     }
     frame_request = frame_locked = frame_converted = 0;
@@ -675,7 +591,6 @@ static bool admitted(void) {
     memcpy(&wait_call, (const void *)(main_base + WAIT_RETURN - 4), 4);
     memcpy(&unlock_call, (const void *)(main_base + CONVERTED_RETURN - 4), 4);
     memcpy(&commit_call, (const void *)(main_base + COMMIT_RETURN - 4), 4);
-#ifdef RC2FX_PACING_DIRTY
     /* The two paint lock calls, the loads after them that fix the list and
      * count offsets, both functions' frame setup (x29 = sp), and the pump's
      * destination chain (x19 = 0x12eb7d8, x22 = [x19 + 0xe38], fd at +0x24). */
@@ -686,20 +601,17 @@ static bool admitted(void) {
         {0x7cf5d8, 0x910003fd}, {0x7dd0a4, 0x97e49acf}, {0x7dd0a8, 0xf9402be0}, {0x7dd0ac, 0xb9805ff5},
         {0x7dcf24, 0xa9ba7bfd}, {0x7dcf28, 0x910003fd}, {0x7d08b0, 0xf00058d3}, {0x7d08b4, 0x911f6273},
         {0x7d090c, 0xf9471e76}, {0x7d09d4, 0xb94026c0},
-#ifdef RC2FX_PACING_PARTIAL
         /* bl ioctl at the capture QBUF, output QBUF and capture DQBUF, and
          * the request constants built before them. */
         {0x7d05bc, 0x97e4ced1}, {0x7d0634, 0x97e4ceb3}, {0x7d0808, 0x97e4ce3e}, {0x7d05b0, 0xb900a3e4},
         {0x7d0578, 0xd28ac1e1}, {0x7d057c, 0xf2b80b01}, {0x7d0600, 0xd28ac1e1}, {0x7d0604, 0xf2b80b01},
         {0x7d0800, 0xd28ac221}, {0x7d0804, 0xf2b80b01},
-#endif
     };
     for (size_t i = 0; i < sizeof words / sizeof words[0]; i++) {
         uint32_t word;
         memcpy(&word, (const void *)(main_base + words[i].at), 4);
         if (word != words[i].word) return false;
     }
-#endif
     return pump_call == 0x97e4cc84u && wait_call == 0x97df4f92u && unlock_call == UNLOCK_WORD &&
            commit_call == COMMIT_WORD;
 }
@@ -724,21 +636,8 @@ EXPORT void la_preinit(uintptr_t *cookie) {
     (void)cookie;
     const char *mode = getenv("RC2FX_GUI_PACING");
     if (!mode || strcmp(mode, "off") == 0) return;
-    if (strcmp(mode, "observe") == 0) interval_ns = 0;
-#ifdef RC2FX_PACING_DIRTY
-    /* This build never waits: observe, or (partial build) partial conversion. */
-#ifdef RC2FX_PACING_PARTIAL
-    else if (parse_partial_mode(mode)) interval_ns = 0;
-#endif
-    else return;
-#else
-    else if (strcmp(mode, "30") == 0) interval_ns = 33333334;
-    else if (strcmp(mode, "15") == 0) interval_ns = 66666667;
-    else if (strcmp(mode, "10") == 0) interval_ns = 100000000;
-    else if (strcmp(mode, "5") == 0) interval_ns = 200000000;
-    else if (strcmp(mode, "2") == 0) interval_ns = 500000000;
-    else return;
-#endif
+    /* Observe (count and time only), or partial conversion. */
+    if (strcmp(mode, "observe") != 0 && !parse_partial_mode(mode)) return;
 #ifndef RC2FX_PACING_TEST
     /* Processes the GUI starts (system()/popen() helpers) inherit LD_AUDIT:
      * anything that is not the GUI executable stays silent and inactive. */
@@ -789,13 +688,11 @@ EXPORT void la_preinit(uintptr_t *cookie) {
         if (test_log) log_fd = open_log(test_log);
     }
 #endif
-#ifdef RC2FX_PACING_PARTIAL
     partial_setup(log_fd >= 0 ? getenv("RC2FX_GUI_PACING_LOG") : NULL);
 #ifdef RC2FX_PACING_TEST
     if (log_fd >= 0 && !kill_path[0]) partial_setup(getenv("RC2FX_GUI_PACING_TEST_LOG"));
 #endif
     partial_config();
-#endif
     atomic_store(&last_log_ns, now_ns());
 #ifdef RC2FX_PACING_TEST
     test_fail_clock = getenv("RC2FX_GUI_PACING_TEST_FAIL_CLOCK") != NULL;
@@ -838,13 +735,11 @@ EXPORT uintptr_t la_symbind64(Elf64_Sym *symbol, unsigned int index, uintptr_t *
         *flags |= LA_SYMB_NOPLTENTER | LA_SYMB_NOPLTEXIT;
         return (uintptr_t)&pacing_commit;
     }
-#ifdef RC2FX_PACING_PARTIAL
     if (strcmp(name, "ioctl") == 0 && strncmp(mode, "partial-", 8) == 0) {
         memcpy(&vendor_ioctl, &original, sizeof original);
         *flags |= LA_SYMB_NOPLTENTER | LA_SYMB_NOPLTEXIT;
         return (uintptr_t)&pacing_ioctl;
     }
-#endif
     if (strcmp(name, "_ZNSt18condition_variable4waitERSt11unique_lockISt5mutexE") == 0) {
         memcpy(&vendor_condition_wait, &original, sizeof original);
         *flags |= LA_SYMB_NOPLTENTER | LA_SYMB_NOPLTEXIT;

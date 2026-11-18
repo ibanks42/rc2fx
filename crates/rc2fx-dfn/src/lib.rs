@@ -275,10 +275,6 @@ impl DeepFilter {
         }
     }
 
-    pub fn gru_prep(&self) -> bool {
-        self.gru_prep
-    }
-
     /// GRU layers that `prepare_step` could still prepare for the next call
     /// (0 when staged preparation is off).
     pub fn prep_pending(&self) -> usize {

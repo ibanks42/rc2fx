@@ -258,7 +258,6 @@ fn maximum_admitted_paths_and_full_catalog_fit_the_export_and_strict_client_pars
     current.engine.message = "界".repeat(300);
     current.routing.message = "x".repeat(1024);
     current.selection.message = "y".repeat(1024);
-    current.validate().unwrap();
     history.state(&current);
     let (_, mut native) = native_payload(100);
     let mut value = meter(9, 12, 100);
@@ -277,7 +276,6 @@ fn maximum_admitted_paths_and_full_catalog_fit_the_export_and_strict_client_pars
                     timing.histogram = [u64::MAX; 8];
                 }
             }
-            t.validate().unwrap();
             t
         })
         .collect();
@@ -386,45 +384,6 @@ fn lazy_native_epoch_changes_and_oversize_records_never_export_stale_telemetry()
     );
     assert!(exported["samples"][1]["telemetry"].is_null());
     assert_eq!(history.retention.rejected_records, 1);
-}
-
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
-#[test]
-#[ignore = "explicit local controller serialization benchmark"]
-fn native_serialization_benchmark() {
-    let run = |eager: bool| {
-        let start = Instant::now();
-        let mut history = History::new(start);
-        history.state(&state(9, 12));
-        let work = Instant::now();
-        for poll in 1..=10_000 {
-            let (meter, native) = native_payload(poll * 100);
-            history.native_meter(meter, native);
-            if eager {
-                // Encode every window as it arrives; the bytes are only counted.
-                let _ = history.materialize_pending();
-            }
-            if poll % 10 == 0 {
-                sample(&mut history, start + Duration::from_secs(poll / 10));
-            }
-        }
-        (
-            work.elapsed(),
-            history.retention.native_windows_serialized,
-            history.retention.native_serialized_bytes,
-        )
-    };
-    // Eager reference reproduces previous encode/replace behavior with the
-    // same counter checks, owned payload construction, sampling and bounds.
-    let eager = run(true);
-    let lazy = run(false);
-    eprintln!(
-        "native history 10000polls/1000samples: eager elapsed={:?} serializations={} bytes={}; lazy elapsed={:?} serializations={} bytes={}",
-        eager.0, eager.1, eager.2, lazy.0, lazy.1, lazy.2
-    );
-    assert_eq!(eager.1, 10_000);
-    assert_eq!(lazy.1, 1_000);
-    assert!(lazy.2 * 9 < eager.2);
 }
 
 #[cfg(all(feature = "native-pipeline", target_os = "linux"))]

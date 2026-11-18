@@ -1,5 +1,5 @@
 //! The device state, engine status and meter messages of the control API.
-use crate::{Config, CoreError, Result, SelectionPhase, SelectionStatus, Target};
+use crate::{Config, SelectionPhase, SelectionStatus, Target};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,14 +31,6 @@ pub struct EngineStatus {
     pub block_size: u32,
     pub message: String,
     pub audio_advancing: bool,
-}
-impl EngineStatus {
-    pub fn validate(&self) -> Result<()> {
-        if !crate::valid_display_text(&self.message, crate::MAX_STATUS_TEXT) {
-            return Err(CoreError("Invalid engine status message".into()));
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,14 +76,6 @@ pub struct RoutingStatus {
     pub recovered: u32,
     pub message: String,
 }
-impl RoutingStatus {
-    pub fn validate(&self) -> Result<()> {
-        if !crate::valid_display_text(&self.message, crate::MAX_STATUS_TEXT) {
-            return Err(CoreError("Invalid routing status message".into()));
-        }
-        Ok(())
-    }
-}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigUpdate {
@@ -130,6 +114,28 @@ pub struct TargetMeter {
     pub latency_samples: u32,
     pub worker_failed: bool,
     pub performance: Option<Performance>,
+}
+impl TargetMeter {
+    pub fn validate(&self) -> crate::Result<()> {
+        if !crate::valid_id(&self.id)
+            || [
+                self.input_peak,
+                self.output_peak,
+                self.rms,
+                self.gain_reduction,
+            ]
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0)
+            || [self.voice, self.gate_open]
+                .iter()
+                .any(|v| !(0.0..=1.0).contains(v))
+            || self.spectrum.len() > 64
+            || self.spectrum.iter().any(|v| !v.is_finite())
+        {
+            return Err(crate::CoreError("Invalid meter values".into()));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -214,88 +220,19 @@ impl DeviceState {
     }
     /// Eligibility is a device claim following complete stock-only recovery.
     /// An offline engine produces no meters; stale meters cannot prove readiness.
+    /// Only the native engine takes processing controls.
     pub fn can_enable_processing(&self) -> bool {
-        if self.engine.mode == EngineMode::Native {
-            return self.native_controls_ready()
-                && self.routing.status == RoutingPhase::Bypassed
-                && self.routing.channels == 0
-                && self.selection.active_target_ids.is_empty();
-        }
-        self.engine.mode == EngineMode::Jack
-            && self.engine.status == EnginePhase::Offline
-            && self.engine.restart_allowed
-            && self.engine.generation < 9_007_199_254_740_991
-            && !self.engine.audio_advancing
+        self.native_controls_ready()
             && self.routing.status == RoutingPhase::Bypassed
             && self.routing.channels == 0
-            && self.routing.recovered == 0
-            && !self.config.selected_targets.is_empty()
-            && self.selection.status == SelectionPhase::Idle
             && self.selection.active_target_ids.is_empty()
-            && self.selection.pending_target_ids.is_empty()
     }
     pub fn can_disable_processing(&self) -> bool {
-        if self.engine.mode == EngineMode::Native {
-            return (self.native_controls_ready() && self.routing.status == RoutingPhase::Active)
+        self.engine.mode == EngineMode::Native
+            && ((self.native_controls_ready() && self.routing.status == RoutingPhase::Active)
                 || (self.engine.status == EnginePhase::Error
                     && self.routing.status == RoutingPhase::Error
                     && self.selection.status != SelectionPhase::Changing
-                    && self.selection.pending_target_ids.is_empty());
-        }
-        self.engine.mode == EngineMode::Jack
-            && self.engine.generation < 9_007_199_254_740_991
-            && self.engine.status == EnginePhase::Running
-            && self.routing.status == RoutingPhase::Active
-            && self.selection.status == SelectionPhase::Idle
-            && self.selection.pending_target_ids.is_empty()
-    }
-    /// Strict current-schema parsing.
-    pub fn from_json(text: &str) -> Result<Self> {
-        let value = crate::strict_json::parse(text, 512 * 1024)?;
-        let state: Self = serde_json::from_value(value)?;
-        state.validate()?;
-        Ok(state)
-    }
-    pub fn validate(&self) -> Result<()> {
-        self.config.validate()?;
-        self.engine.validate()?;
-        self.routing.validate()?;
-        self.selection.validate(&self.config)
-    }
-    pub fn is_applied(&self) -> bool {
-        self.selection.status == SelectionPhase::Idle
-            && self
-                .config
-                .canonical_selection(&self.config.selected_targets)
-                .is_ok_and(|ids| self.selection.active_target_ids == ids)
-            && !self.config.selected_targets.is_empty()
-            && self.engine.status == EnginePhase::Running
-            && self.engine.audio_advancing
-            && self.engine.applied_revision == self.config.revision
-            && (self.engine.mode == EngineMode::Simulation
-                || (self.routing.status == RoutingPhase::Active
-                    && self.routing.channels == self.config.selected_channels()))
-    }
-}
-impl TargetMeter {
-    pub fn validate(&self) -> Result<()> {
-        if !crate::valid_id(&self.id)
-            || [
-                self.input_peak,
-                self.output_peak,
-                self.rms,
-                self.gain_reduction,
-            ]
-            .iter()
-            .any(|v| !v.is_finite() || *v < 0.0)
-            || [self.voice, self.gate_open]
-                .iter()
-                .any(|v| !(0.0..=1.0).contains(v))
-            || self.spectrum.len() > 64
-            || self.spectrum.iter().any(|v| !v.is_finite())
-        {
-            return Err(CoreError("Invalid meter values".into()));
-        }
-        Ok(())
+                    && self.selection.pending_target_ids.is_empty()))
     }
 }

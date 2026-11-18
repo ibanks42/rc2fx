@@ -196,7 +196,6 @@ fn an_idle_worker_prepares_every_step_after_publishing() {
         .chain(steps(LAYERS))
         .collect();
     assert_eq!(events, expected);
-    assert!(prep.enabled);
     assert_eq!(
         (prep.steps, prep.skipped, prep.abandoned),
         (LAYERS as u64, 0, 0)
@@ -254,29 +253,14 @@ fn without_step_timing_the_pass_is_still_measured() {
     }
 }
 
-/// A worker takes the process-wide setting when it starts.
+/// Every worker times each preparation step.
 #[test]
-fn workers_start_with_the_process_wide_step_timing_setting() {
-    // It is on until a host turns it off.
-    let worker = |expected: bool| {
-        let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
-        assert_eq!(worker.telemetry().preparation().step_timing, expected);
-        worker
-            .finish(StopMode::Cancel, Duration::from_secs(5))
-            .unwrap();
-    };
-    worker(true);
-    // Other tests start workers concurrently; they do not read `step_wall`,
-    // so a setting that is briefly off does not disturb them. The loop ends
-    // with the default restored.
-    for on in [false, true] {
-        crate::set_preparation_step_timing(on);
-        let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
-        assert_eq!(worker.telemetry().preparation().step_timing, on);
-        worker
-            .finish(StopMode::Cancel, Duration::from_secs(5))
-            .unwrap();
-    }
+fn workers_start_with_step_timing_on() {
+    let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
+    assert!(worker.telemetry().preparation().step_timing);
+    worker
+        .finish(StopMode::Cancel, Duration::from_secs(5))
+        .unwrap();
 }
 
 /// Three preparation steps of at least two milliseconds each after every
@@ -431,7 +415,6 @@ fn preparation_runs_only_with_the_flag() {
     });
     let events = log.lock().unwrap().clone();
     let prep = Telemetry(rig.shared.clone()).preparation();
-    assert!(prep.enabled);
     let expected: Vec<_> = [Event::Process(0)]
         .into_iter()
         .chain(steps(LAYERS))

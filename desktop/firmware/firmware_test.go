@@ -172,12 +172,10 @@ func TestSharedExecutableIsNotADeviceIdentityOrRuntimeQualification(t *testing.T
 	duo.Runtime = nil
 	catalog.Profiles = append(catalog.Profiles, duo)
 	catalog = mustParse(t, toJSON(t, catalog))
-	_, err := catalog.selectAny(image)
-	errorContains(t, err, "ambiguous")
 	if p, err := catalog.selectForModel(ModelProIi, image, false); err != nil || p.Model != ModelProIi.ID() {
 		t.Fatalf("Pro II: %v", err)
 	}
-	_, err = catalog.selectForModel(ModelDuo, image, false)
+	_, err := catalog.selectForModel(ModelDuo, image, false)
 	errorContains(t, err, "experimental")
 	inspected, err := catalog.InspectForModel(ModelDuo, image, launcher)
 	if err != nil {
@@ -217,9 +215,6 @@ func TestExperimentalOptInNeverGrantsTheProIiLayoutToADuo(t *testing.T) {
 	if p, err := catalog.selectForModel(ModelDuo, image, true); err != nil || p.Model != ModelDuo.ID() {
 		t.Fatalf("Duo with the opt-in: %v", err)
 	}
-	if _, err := catalog.selectAny(image); err == nil {
-		t.Error("a shared executable selected without a model")
-	}
 	catalog.Profiles[1].Runtime = cloneRuntime(catalog.Profiles[0].Runtime)
 	if _, err := catalog.selectForModel(ModelDuo, image, true); err == nil {
 		t.Error("the Pro II layout granted to a Duo")
@@ -234,27 +229,24 @@ func TestExperimentalOptInNeverGrantsTheProIiLayoutToADuo(t *testing.T) {
 
 func TestResolvesExecutableVirtualOffsetsAndRefusesHashOrInstructionMismatches(t *testing.T) {
 	catalog, image := testImage(t)
-	if _, err := catalog.selectAny(image); err != nil {
+	profile := &catalog.Profiles[0]
+	if err := profile.VerifyImage(image); err != nil {
 		t.Fatal(err)
 	}
 	image[0x200] ^= 1
-	_, err := catalog.selectAny(image)
-	errorContains(t, err, "unrecognized")
-	catalog.Profiles[0].MixerSHA256 = sum(image)
-	_, err = catalog.selectAny(image)
-	errorContains(t, err, "instructions differ")
+	errorContains(t, profile.VerifyImage(image), "differs from its profile hash")
+	profile.MixerSHA256 = sum(image)
+	errorContains(t, profile.VerifyImage(image), "instructions differ")
 }
 
 func TestKnownButUnqualifiedAndNonExecutableSitesAreRefused(t *testing.T) {
 	catalog, image := testImage(t)
 	catalog.Profiles[0].Runtime = nil
-	_, err := catalog.selectAny(image)
-	errorContains(t, err, "not runtime-qualified")
+	errorContains(t, catalog.Profiles[0].VerifyImage(image), "not runtime-qualified")
 	catalog, _ = testImage(t)
 	binary.LittleEndian.PutUint32(image[68:], 4) // data, no PF_X
 	catalog.Profiles[0].MixerSHA256 = sum(image)
-	_, err = catalog.selectAny(image)
-	errorContains(t, err, "outside executable")
+	errorContains(t, catalog.Profiles[0].VerifyImage(image), "outside executable")
 }
 
 // Go-only: the strict reading serde gives the Rust structs.

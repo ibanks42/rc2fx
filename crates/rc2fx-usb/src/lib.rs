@@ -256,32 +256,6 @@ mod tests {
         assert!(unpack(b"X{}", 64).is_err());
     }
     #[test]
-    fn isolated_input_report_rejects_vendor_ids_and_excess_payload() {
-        let f = Frame {
-            kind: Kind::Reply,
-            session: 1,
-            request: 1,
-            offset: 0,
-            total: PAYLOAD,
-            data: &[42; PAYLOAD],
-        };
-        let mut packet = f.encode(INPUT_ID);
-        assert_eq!(
-            Frame::decode(&packet[..INPUT_REPORT_SIZE], INPUT_ID)
-                .unwrap()
-                .data,
-            &[42; PAYLOAD]
-        );
-        assert_eq!(
-            Frame::decode(&packet, INPUT_ID).unwrap().data,
-            &[42; PAYLOAD]
-        );
-        assert!(!marked(&packet, 2));
-        assert!(!marked(&packet, 4));
-        packet[30] = (PAYLOAD + 1) as u8;
-        assert!(Frame::decode(&packet, INPUT_ID).is_none());
-    }
-    #[test]
     fn boundary_roundtrips_and_rejects_reordered_or_oversized_messages() {
         for size in [1, PAYLOAD, PAYLOAD + 1, 65537] {
             let original = vec![0xa7; size];
@@ -319,26 +293,5 @@ mod tests {
         f.total = 2;
         assert!(a.push(&f, 10).unwrap().is_none());
         assert!(a.push(&f, 10).is_err());
-    }
-    #[test]
-    fn unrelated_reports_pass_but_malformed_marked_reports_are_owned() {
-        let mut b = [0; REPORT_SIZE];
-        b[0] = OUTPUT_ID;
-        b[1..8].copy_from_slice(MAGIC);
-        assert!(marked(&b, OUTPUT_ID));
-        assert!(Frame::decode(&b, OUTPUT_ID).is_none());
-        b[1] = b'M';
-        assert!(!marked(&b, OUTPUT_ID));
-    }
-
-    #[test]
-    fn accepts_exactly_one_transport_byte_beyond_the_descriptor_report() {
-        let mut bytes = vec![0; REPORT_SIZE + 1];
-        assert_eq!(canonical_output(&bytes).unwrap().len(), REPORT_SIZE);
-        bytes[REPORT_SIZE] = 1;
-        assert_eq!(canonical_output(&bytes).unwrap().len(), REPORT_SIZE);
-        bytes.push(0);
-        assert!(canonical_output(&bytes).is_none());
-        assert!(canonical_output(&bytes[..REPORT_SIZE - 1]).is_none());
     }
 }

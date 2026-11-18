@@ -208,7 +208,7 @@ fn encode_state(
         && state.engine.applied_revision == state.config.revision
         && state.selection.status == SelectionPhase::Idle
         && !state.config.selected_targets.is_empty();
-    // Unlike DeviceState::is_applied(), the publication can be fully confirmed
+    // Unlike a processing-applied check, the publication can be fully confirmed
     // while processing is intentionally bypassed. Do not label bypass an error.
     let applied = state.engine.audio_advancing
         && state.engine.applied_revision == state.config.revision

@@ -2,8 +2,6 @@ package firmware
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -159,7 +157,13 @@ func TestSharedSelectFixtures(t *testing.T) {
 		var profile *Profile
 		switch c.Op {
 		case "select":
-			profile, err = catalog.selectAny(image)
+			// The image verification every selection ends with, as Rust
+			// checks it.
+			if len(catalog.Profiles) != 1 {
+				t.Fatalf("%s: a select catalog has one profile", c.Catalog)
+			}
+			profile = &catalog.Profiles[0]
+			err = profile.VerifyImage(image)
 		case "selectForModel":
 			profile, err = catalog.selectForModel(model, image, c.ExperimentalDuo)
 		case "inspectForModel":
@@ -180,38 +184,6 @@ func TestSharedSelectFixtures(t *testing.T) {
 			t.Errorf("%s: error %v, want %q", name, err, *c.Error)
 		}
 	}
-}
-
-// selectAny is the one profile for a mixer executable, chosen by its hash
-// alone, for a model that needs no opt-in. The desktop never selects a
-// runtime; this stays here so the select fixtures keep checking the Go
-// VerifyImage that InspectForModel uses.
-func (c *Catalog) selectAny(image []byte) (*Profile, error) {
-	hash := sum(image)
-	var found *Profile
-	for i := range c.Profiles {
-		if c.Profiles[i].MixerSHA256 != hash {
-			continue
-		}
-		if found != nil {
-			return nil, errors.New("ambiguous mixer executable: select using verified device model")
-		}
-		found = &c.Profiles[i]
-	}
-	if found == nil {
-		return nil, fmt.Errorf("unrecognized mixer executable SHA-256 %s", hash)
-	}
-	model, err := ParseModel(found.Model)
-	if err != nil {
-		return nil, err
-	}
-	if err := model.RequireRuntimeWith(false); err != nil {
-		return nil, err
-	}
-	if err := found.VerifyImage(image); err != nil {
-		return nil, err
-	}
-	return found, nil
 }
 
 // selectForModel is the mixer's Rust Catalog::select_for_model_with: the

@@ -106,11 +106,17 @@ class Tests(unittest.TestCase):
         self.assertIn('--- kernel', (self.root / 'last-exit.log').read_text())
 
     def test_launch_records_the_supervisors_own_pid(self):
-        launch = function('launch')
-        start = launch.index('setsid env')
-        self.assertIn('"$home/rc2fx-supervisor" --mixer', launch[start:])
-        self.assertIn('local watcher=$!\n  printf \'%s\\n\' "$watcher" > "$run/supervisor.pid"', launch[start:])
-        self.assertLess(launch.index('controller_arguments'), launch.index('"$stock_mixer" "$@" 2>>'))
+        # The supervisor keeps the PID launch starts it with through setsid and
+        # env, and gets the controller's arguments after `--`.
+        own, args = self.root / 'supervisor-own-pid', self.root / 'supervisor-args'
+        code, log = self.injected_launch(
+            f'test "${{1:-}}" = --version && exit 0\necho $$ > {own}\nprintf "%s\\n" "$@" > {args}\nexit 0',
+            'sleep 1\nexit 7')
+        self.assertEqual(code, 7, log)
+        self.assertEqual((self.root / 'run/supervisor.pid').read_text(), own.read_text())
+        passed = args.read_text().splitlines()
+        self.assertEqual(passed[0], '--mixer')
+        self.assertEqual(passed[passed.index('--') + 1:][:2], ['--data', f'{self.root}/data'])
 
     def stop_owned(self, target, started):
         body = ''.join(line + '\n' for line in SCRIPT.split('\n')

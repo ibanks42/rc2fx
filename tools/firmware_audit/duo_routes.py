@@ -10,7 +10,6 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn import arm64_const as regs
 
 from .canonical import canonical
-from .elf import Image
 from .__main__ import checked_image, ROOT
 
 

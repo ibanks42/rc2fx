@@ -51,7 +51,6 @@ impl VendorModel {
         Self::with_filter(geometry, filter)
     }
     fn with_filter(geometry: Geometry, mut filter: rc2fx_dfn::DeepFilter) -> Result<Self, Error> {
-        filter.set_layer_pause(None);
         // Staged GRU preparation: the worker prepares the next frame's
         // recurrent products after publishing each result.
         filter.set_gru_prep(true);

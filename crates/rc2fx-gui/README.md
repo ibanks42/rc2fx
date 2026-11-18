@@ -15,11 +15,7 @@ itself.
 ## Building
 
 The module is C and is built outside Cargo. `./xtask mixer-build` compiles
-it with zig for the mixer:
-
-```text
-gui_pacing.c -DRC2FX_PACING_DIRTY -DRC2FX_PACING_PARTIAL -DRC2FX_GUI_RECT_PLAN3
-```
+`gui_pacing.c` with zig for the mixer, with no feature flags.
 
 `gui_pacing.c` includes `gui_partial.c` (the conversion) and `rotate/` (CPU
 rotation). The header comment of each file lists the pinned call sites and
@@ -63,8 +59,8 @@ sites by symbol name instead of pinned address. It runs the module under
 and `fake_v4l2.c`, a stand-in GE2D device. It doesn't need a mixer, and it is
 part of `just test-mixer`.
 
-The source also contains earlier trial builds that the tests still exercise:
-the presentation-pacing modes (`RC2FX_GUI_PACING=observe`, `30` … `2`), the
-observe-only dirty-region build, the two-job planner (built without
-`-DRC2FX_GUI_RECT_PLAN3`), and a forced full-frame test dose read from
-`/opt/rc2fx/data/gui-force-full`. The mixer build uses none of them.
+`RC2FX_GUI_PACING=observe` counts and times frames and paints without
+converting anything; the mixer runs `partial-cw`. The test build also has
+host-only controls, such as a forced full-frame dose, that the mixer build
+does not contain. `partial_plan_test.c` drives `gui_partial.c` as the mixer
+builds it, without the LD_AUDIT harness.

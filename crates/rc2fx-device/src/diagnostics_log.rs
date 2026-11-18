@@ -210,10 +210,6 @@ impl Default for DiagnosticsLog {
 }
 
 impl DiagnosticsLog {
-    pub fn epoch(&self) -> u64 {
-        self.epoch
-    }
-
     /// Takes one reading: appends events and remembers the raw figures. It does
     /// not change `meter`; `shown` gives the figures relative to the baseline,
     /// so the baseline is applied exactly once.
@@ -307,15 +303,6 @@ impl DiagnosticsLog {
         }
     }
 
-    /// Entries held, for tests.
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-
     fn push(&mut self, mut event: DiagnosticsEvent) {
         event.seq = self.next_seq;
         self.next_seq = self.next_seq.wrapping_add(1);
@@ -327,14 +314,6 @@ impl DiagnosticsLog {
 
     /// Rewrites `meter`'s cumulative figures relative to `baseline`.
     fn rewrite(&self, meter: &mut Meter, reading: &Reading, baseline: &Reading) {
-        meter.diagnostics_epoch = self.epoch;
-        let (risk, rlate, rwall, rcpu) = (
-            reading.xruns,
-            reading.helper_late,
-            &reading.callback,
-            &reading.callback,
-        );
-        let _ = (rwall, rcpu);
         for target in &mut meter.targets {
             let (Some(current), Some(base)) = (
                 reading.targets.get(&target.id),
@@ -353,7 +332,7 @@ impl DiagnosticsLog {
             let Some(performance) = target.performance.as_mut() else {
                 continue;
             };
-            performance.xruns = since(risk, baseline.xruns);
+            performance.xruns = since(reading.xruns, baseline.xruns);
             let after_reset = self.baseline_is_reset;
             performance.callback = timing_since(&reading.callback, &baseline.callback, after_reset);
             performance.worker_wall =
@@ -362,7 +341,7 @@ impl DiagnosticsLog {
                 timing_since(&current.worker_cpu, &base.worker_cpu, after_reset);
             performance.helper_late = performance
                 .helper_late
-                .map(|_| since(rlate, baseline.helper_late));
+                .map(|_| since(reading.helper_late, baseline.helper_late));
             performance.helper_stalls = performance
                 .helper_stalls
                 .map(|_| since(reading.helper_stalls, baseline.helper_stalls));
@@ -446,7 +425,7 @@ impl DiagnosticsLog {
     }
 
     fn engine_event(&mut self, event: &NativeEvent) {
-        let mut kind = match event.kind {
+        let kind = match event.kind {
             NativeEventKind::Xrun => DiagnosticsKind::Xrun,
             NativeEventKind::HelperBusy => DiagnosticsKind::HelperBusy,
             NativeEventKind::HelperStall => DiagnosticsKind::HelperStall,
@@ -483,10 +462,6 @@ impl DiagnosticsLog {
                 Some(us) => format!("JACK xrun (jackd reported {us} us of backend delay)"),
                 None => "JACK xrun".into(),
             };
-        }
-        if kind == DiagnosticsKind::Other {
-            // Keep the kind honest rather than inventing one.
-            kind = DiagnosticsKind::Other;
         }
         self.push(DiagnosticsEvent {
             seq: 0,
@@ -828,9 +803,9 @@ mod tests {
         let mut log = DiagnosticsLog::default();
         let mut first = meter(timing(10, 500, [0; 8]), timing(4, 300, [0; 8]));
         observe(&mut log, &mut first, 1_000);
-        assert_eq!(log.epoch(), 0);
+        assert_eq!(log.epoch, 0);
         log.reset(1_500);
-        assert_eq!(log.epoch(), 1);
+        assert_eq!(log.epoch, 1);
         // The same raw values now show zero.
         let mut second = meter(timing(10, 500, [0; 8]), timing(4, 300, [0; 8]));
         observe(&mut log, &mut second, 2_000);
@@ -903,13 +878,13 @@ mod tests {
             page.events[0].message
         );
         // A steady reading adds nothing.
-        let before = log.len();
+        let before = log.events.len();
         let mut third = meter(timing(3, 100, [0; 8]), timing(3, 100, [0; 8]));
         third.targets[0].stale_results = second.targets[0].stale_results;
         third.targets[0].input_drops = second.targets[0].input_drops;
         third.targets[0].clipped = second.targets[0].clipped;
         observe(&mut log, &mut third, 1_500);
-        assert_eq!(log.len(), before);
+        assert_eq!(log.events.len(), before);
     }
 
     #[test]
@@ -941,7 +916,10 @@ mod tests {
         let engine = context(&raw, Vec::new());
         log.observe(Some(&raw), std::slice::from_ref(&engine), 1_000);
         log.observe(None, std::slice::from_ref(&engine), 1_250);
-        assert!(log.is_empty(), "a reading without a meter adds nothing");
+        assert!(
+            log.events.is_empty(),
+            "a reading without a meter adds nothing"
+        );
         let mut later = raw.clone();
         later.targets[0].input_drops += 3;
         log.observe(Some(&later), &[context(&later, Vec::new())], 1_500);
@@ -964,7 +942,7 @@ mod tests {
                 details: EventDetails::default(),
             });
         }
-        assert_eq!(log.len(), LOG_CAPACITY);
+        assert_eq!(log.events.len(), LOG_CAPACITY);
         let page = log.page(0, EVENTS_PAGE, 0);
         // Ten entries fell out before this client's cursor.
         assert_eq!(page.lost, 10);
@@ -1011,7 +989,7 @@ mod tests {
         log.observe(Some(&meter), std::slice::from_ref(&context), 1_000);
         // The same tail again (as every context reports it) adds nothing.
         log.observe(Some(&meter), std::slice::from_ref(&context), 1_100);
-        assert_eq!(log.len(), 1);
+        assert_eq!(log.events.len(), 1);
         // A gap: the engine produced 2 and 3 while nobody read them.
         context.events = vec![native_event(4, NativeEventKind::Xrun)];
         log.observe(Some(&meter), std::slice::from_ref(&context), 1_200);
@@ -1082,19 +1060,23 @@ mod tests {
         let meter = meter(timing(1, 100, [0; 8]), timing(1, 100, [0; 8]));
         log.observe(Some(&meter), &[history_context(&status)], 1_000);
         log.observe(Some(&meter), &[history_context(&status)], 1_100);
-        assert_eq!(log.len(), 2, "one miss and one late frame, read once");
+        assert_eq!(
+            log.events.len(),
+            2,
+            "one miss and one late frame, read once"
+        );
         // A new worker (new runtime epoch) whose frame numbers are higher than
         // the old cursor's: every one of its records is new, from the first.
         status.runtime_epoch = 2;
         status.misses = Some(history(vec![(0, 300), (5, 350)], 2));
         status.lates = Some(history(vec![], 0));
         log.observe(Some(&meter), &[history_context(&status)], 1_200);
-        assert_eq!(log.len(), 4);
+        assert_eq!(log.events.len(), 4);
         // Then its next miss is new, even at a lower frame than the old
         // worker's records.
         status.misses = Some(history(vec![(0, 300), (5, 350), (7, 500)], 3));
         log.observe(Some(&meter), &[history_context(&status)], 1_300);
-        assert_eq!(log.len(), 5);
+        assert_eq!(log.events.len(), 5);
         let page = log.page(0, EVENTS_PAGE, 2_000);
         assert_eq!(
             page.events
@@ -1125,13 +1107,13 @@ mod tests {
         // The 64 kept records and 3 more that were only counted.
         let mut status = history_status(history(kept.clone(), 67), history(vec![], 0));
         log.observe(Some(&meter), &[history_context(&status)], 1_000);
-        assert_eq!(log.len(), 65);
+        assert_eq!(log.events.len(), 65);
         // Five more, only counted: one entry for the five.
         status.misses = Some(history(kept.clone(), 72));
         log.observe(Some(&meter), &[history_context(&status)], 1_500);
         // Nothing new: nothing added.
         log.observe(Some(&meter), &[history_context(&status)], 1_600);
-        assert_eq!(log.len(), 66);
+        assert_eq!(log.events.len(), 66);
         let page = log.page(0, EVENTS_PAGE, 2_000);
         let counted: Vec<_> = page
             .events
@@ -1172,10 +1154,10 @@ mod tests {
             history(vec![], 0),
         );
         log.observe(Some(&meter), &[history_context(&status)], 1_000);
-        assert_eq!(log.len(), 0);
+        assert_eq!(log.events.len(), 0);
         status.misses = Some(history(vec![(0, 50), (3, 100)], 2));
         log.observe(Some(&meter), &[history_context(&status)], 1_100);
-        assert_eq!(log.len(), 2);
+        assert_eq!(log.events.len(), 2);
     }
 
     #[test]

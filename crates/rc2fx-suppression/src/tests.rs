@@ -431,9 +431,11 @@ fn queued_time_is_included_in_turnaround_and_missing_stamps_are_errors() {
     assert!(output.pop().is_some());
 }
 #[test]
-fn gap_history_and_partial_drain_geometry() {
-    // The generic geometry's intrinsic delay is shorter than one frame.
-    let g = geometry();
+fn a_gap_invalidates_every_frame_of_a_longer_than_frame_history() {
+    // LA1's intrinsic delay (360) spans two frames of 240, so a gap must
+    // invalidate two frames; the generic geometry's single frame is covered
+    // by recovery_invalidates_model_history_and_then_recovers.
+    let g = Geometry::for_lookahead(1).unwrap();
     let (mut input, consumer) = queue::channel();
     let (producer, mut output) = queue::channel();
     for sequence in [0, 3, 4, 5, 6] {
@@ -448,7 +450,7 @@ fn gap_history_and_partial_drain_geometry() {
     run(Box::new(Identity), consumer, producer, &shared, g);
     assert!(output.pop().unwrap().valid);
     let invalid = g.intrinsic_delay_samples.div_ceil(g.frame_samples);
-    assert_eq!(invalid, 1);
+    assert_eq!(invalid, 2);
     for i in 0..4 {
         assert_eq!(output.pop().unwrap().valid, i >= invalid);
     }

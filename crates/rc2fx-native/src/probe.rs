@@ -205,7 +205,7 @@ pub fn record(kind: Kind, value: u64) {
 
 /// `extra` is the kind's second value: for an xrun, jackd's
 /// jack_get_xrun_delayed_usecs() in microseconds (MAX when unavailable).
-pub fn record_extra(kind: Kind, value: u64, extra: u64) {
+fn record_extra(kind: Kind, value: u64, extra: u64) {
     let now = timing::monotonic();
     let index = NEXT.fetch_add(1, Ordering::Relaxed);
     let slot = &RING[(index % EVENTS as u64) as usize];
@@ -649,8 +649,6 @@ static XRUN_DELAYED_ZERO: AtomicU64 = AtomicU64::new(0);
 static XRUN_DELAYED_VALUE: AtomicU64 = AtomicU64::new(0);
 static XRUN_DELAYED_MISSING: AtomicU64 = AtomicU64::new(0);
 
-/// Called once, when the mixer registers its xrun callback: `libjack.so` is
-/// loaded by then. Returns whether the getter was found.
 /// Where the getter was found; in audit.json so a device run says which way
 /// the lookup had to go. Empty until a lookup happens.
 static XRUN_DELAYED_ROUTE: AtomicU8 = AtomicU8::new(0);
@@ -690,17 +688,16 @@ fn find_in_mixer(name: &CStr) -> Option<usize> {
     None
 }
 
-pub fn resolve_xrun_delayed() -> bool {
+/// Called once, when the mixer registers its xrun callback: `libjack.so` is
+/// loaded by then.
+pub fn resolve_xrun_delayed() {
     if XRUN_DELAYED.load(Ordering::Acquire) != 0 {
-        return true;
+        return;
     }
     let Some(address) = find_in_mixer(c"jack_get_xrun_delayed_usecs") else {
-        return false;
+        return;
     };
-    XRUN_DELAYED
-        .compare_exchange(0, address as u64, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-        || XRUN_DELAYED.load(Ordering::Acquire) != 0
+    let _ = XRUN_DELAYED.compare_exchange(0, address as u64, Ordering::AcqRel, Ordering::Acquire);
 }
 
 /// The mixer's own xrun callbacks, by client, kept behind this library's.

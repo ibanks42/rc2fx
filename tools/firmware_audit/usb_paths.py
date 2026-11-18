@@ -53,7 +53,7 @@ OUTPUT_GATHER = (0x12D4, 0x14CC)
 OUTPUT_DISPATCH = (0x1BA4, 0x1A68)
 CALLS = {
     "prepareA": 0x2FC, "prepareB": 0x364, "prepareC": 0x378, "board": 0x448,
-    "property": 0xB90, "wrapper": 0xCC0, "dispatchWrapper": 0x1D24,
+    "property": 0xB90, "dispatchWrapper": 0x1D24,
 }
 # Internal slot -> 1-based JUCEJack input port, read from the gather.
 SLOT_PORTS = {0: 1, 1: 2, 2: 3, 3: 4, 10: 5, 11: 6, 4: 7, 5: 8, 8: 9, 9: 10, 6: 11, 7: 12,

@@ -2,8 +2,7 @@
 use rc2fx_core::Target;
 use rc2fx_native_control::{
     ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode,
-    RESET_POLICY_VERSION, Reply, Request, ResetPolicy, Response, Session, TargetStatus,
-    Transaction, VERSION,
+    RESET_POLICY_VERSION, Reply, Request, ResetPolicy, Response, Session, Transaction, VERSION,
 };
 use serde::Serialize;
 use std::{
@@ -128,7 +127,6 @@ impl Drop for AdmissionLease {
 
 pub trait Backend: Send + 'static {
     fn inventory(&mut self) -> Result<Vec<ContextStatus>, ErrorCode>;
-    fn status(&mut self, context: u64, id: &str) -> Result<TargetStatus, ErrorCode>;
     fn prepare(
         &mut self,
         transaction: &Transaction,
@@ -151,17 +149,13 @@ fn omit_fields_unknown_to(version: u32, reply: &mut Reply) {
     if version >= RECENT_MAXIMA_VERSION {
         return;
     }
-    match reply {
-        Reply::Inventory { contexts } => {
-            for context in contexts {
-                context.recent_callback_wall_ns = None;
-                for target in &mut context.targets {
-                    target.worker_recent_max_ns = None;
-                }
+    if let Reply::Inventory { contexts } = reply {
+        for context in contexts {
+            context.recent_callback_wall_ns = None;
+            for target in &mut context.targets {
+                target.worker_recent_max_ns = None;
             }
         }
-        Reply::Status { target, .. } => target.worker_recent_max_ns = None,
-        _ => {}
     }
 }
 
@@ -185,15 +179,9 @@ fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> 
             Operation::Inventory => backend
                 .inventory()
                 .map(|contexts| Reply::Inventory { contexts }),
-            Operation::Status { context, id } => {
-                if context == 0 || !rc2fx_core::valid_id(&id) {
-                    Err(ErrorCode::InvalidParameters)
-                } else {
-                    backend
-                        .status(context, &id)
-                        .map(|target| Reply::Status { context, target })
-                }
-            }
+            // Still in the protocol for compatibility, but no client sends
+            // it: the inventory carries every target's status.
+            Operation::Status { .. } => Err(ErrorCode::InvalidParameters),
             Operation::Prepare {
                 transaction,
                 target,
@@ -481,7 +469,7 @@ impl Drop for Server {
 mod tests {
     use super::*;
     use rc2fx_core::TargetKind;
-    use rc2fx_native_control::Client;
+    use rc2fx_native_control::{Client, TargetStatus};
     use std::os::unix::fs::DirBuilderExt;
 
     #[derive(Default)]
@@ -494,18 +482,8 @@ mod tests {
         /// The reset policy of the last prepare that reached the backend.
         reset: Option<ResetPolicy>,
     }
-    impl Backend for Fake {
-        fn inventory(&mut self) -> Result<Vec<ContextStatus>, ErrorCode> {
-            Ok(vec![ContextStatus {
-                context: 7,
-                targets: vec![self.status(7, "headphones")?],
-                timing: None,
-                counters: Default::default(),
-                events: Vec::new(),
-                // The v7-only fields, which a reply to a v6 peer must omit.
-                recent_callback_wall_ns: Some(900),
-            }])
-        }
+    impl Fake {
+        /// The one target's status, as the inventory reports it.
         fn status(&mut self, context: u64, id: &str) -> Result<TargetStatus, ErrorCode> {
             if context != 7 || id != "headphones" {
                 return Err(ErrorCode::Unavailable);
@@ -531,6 +509,19 @@ mod tests {
                 // The v7-only field, which a reply to a v6 peer must omit.
                 worker_recent_max_ns: Some(7_000),
             })
+        }
+    }
+    impl Backend for Fake {
+        fn inventory(&mut self) -> Result<Vec<ContextStatus>, ErrorCode> {
+            Ok(vec![ContextStatus {
+                context: 7,
+                targets: vec![self.status(7, "headphones")?],
+                timing: None,
+                counters: Default::default(),
+                events: Vec::new(),
+                // The v7-only fields, which a reply to a v6 peer must omit.
+                recent_callback_wall_ns: Some(900),
+            }])
         }
         fn prepare(
             &mut self,
@@ -704,6 +695,26 @@ mod tests {
         assert_eq!(backend.mutations, 0);
     }
     #[test]
+    fn a_status_request_is_refused_without_touching_the_backend() {
+        let mut backend = Fake::default();
+        let request = Request {
+            version: VERSION,
+            request_id: 1,
+            session: Some(session("current")),
+            operation: Operation::Status {
+                context: 7,
+                id: "headphones".into(),
+            },
+        };
+        assert!(matches!(
+            dispatch(&session("current"), request, &mut backend).reply,
+            Reply::Error {
+                code: ErrorCode::InvalidParameters
+            }
+        ));
+        assert_eq!(backend.mutations, 0);
+    }
+    #[test]
     fn reconnecting_cannot_rebind_an_old_receipt_to_a_new_process_session() {
         let current = session(&"a".repeat(32));
         let transaction = Transaction {
@@ -851,33 +862,21 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(response.reply, Reply::Prepared { .. }));
-        let response = client
-            .request(Operation::Status {
-                context: 7,
-                id: "headphones".into(),
-            })
-            .unwrap();
-        assert!(matches!(
-            response.reply,
-            Reply::Status {
-                target: TargetStatus { published: 1, .. },
-                ..
-            }
-        ));
+        let response = client.request(Operation::Inventory).unwrap();
+        match response.reply {
+            Reply::Inventory { contexts } => assert_eq!(contexts[0].targets[0].published, 1),
+            _ => panic!("inventory reply required"),
+        }
         let response = client.request(Operation::Commit { transaction }).unwrap();
         assert!(matches!(response.reply, Reply::Published { .. }));
-        let response = client
-            .request(Operation::Status {
-                context: 7,
-                id: "headphones".into(),
-            })
-            .unwrap();
+        let response = client.request(Operation::Inventory).unwrap();
         match response.reply {
-            Reply::Status { target, .. } => {
+            Reply::Inventory { contexts } => {
+                let target = &contexts[0].targets[0];
                 assert_eq!(target.published, 2);
                 assert_eq!(target.applied, 1);
             }
-            _ => panic!("status reply required"),
+            _ => panic!("inventory reply required"),
         }
         assert!(server.shutdown());
         let status = server.status();
@@ -955,22 +954,6 @@ mod tests {
                 );
             }
             assert_eq!(json.contains("900"), newer, "{json}");
-            assert_eq!(json.contains("7000"), newer, "{json}");
-            let response = dispatch(
-                &current,
-                request(Operation::Status {
-                    context: 7,
-                    id: "headphones".into(),
-                }),
-                &mut backend,
-            );
-            assert_eq!(response.version, version);
-            let json = serde_json::to_string(&response).unwrap();
-            assert_eq!(
-                json.contains("workerRecentMaxNs"),
-                newer,
-                "version {version}: {json}"
-            );
             assert_eq!(json.contains("7000"), newer, "{json}");
         }
     }

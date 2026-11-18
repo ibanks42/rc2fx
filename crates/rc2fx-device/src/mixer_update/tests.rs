@@ -213,7 +213,6 @@ fn a_signed_release_is_accepted_on_the_mixer() {
     let profile = pro_ii_profile();
     let verified = verify_release(&repository, Some(&profile), &Default::default()).unwrap();
     assert_eq!(verified.version, "0.2.0");
-    assert_eq!(verified.target, "payload");
     assert_eq!(verified.from.as_deref(), Some("0.1.5"));
     assert_eq!(verified.metadata_versions.targets_version, 1);
     assert_eq!(verified.metadata_versions.snapshot_version, 1);
@@ -786,7 +785,6 @@ fn a_swap_keeps_settings_and_a_rollback_copy() {
         fs::read(paths.previous().join("rc2fxd")).unwrap(),
         b"old rc2fxd\n"
     );
-    assert!(install::rollback_bundle(&paths).is_some());
     // The shims are installed.
     assert_eq!(
         fs::read(paths.shims.join("rc_audio_mixer")).unwrap(),
@@ -806,10 +804,6 @@ fn a_power_cut_mid_swap_restores_the_previous_bundle() {
     // The driver is gone with RAM; the marker is what a boot finds.
     fs::write(paths.driver(), b"").unwrap();
     assert!(!install::driver_alive(&paths));
-    assert_eq!(
-        install::rollback_bundle(&paths).as_deref(),
-        Some(paths.previous().as_path())
-    );
     let update = new_update(paths.clone());
     update.recover();
     // The old files are live again, settings stayed, and the outcome is kept.
@@ -1063,7 +1057,6 @@ fn a_live_driver_keeps_the_new_bundle_and_its_marker() {
         .unwrap();
     fs::write(paths.driver(), format!("{} {start}\n", child.id())).unwrap();
     assert!(install::driver_alive(&paths));
-    assert!(install::rollback_bundle(&paths).is_none());
     let update = new_update(paths.clone());
     update.recover();
     assert!(

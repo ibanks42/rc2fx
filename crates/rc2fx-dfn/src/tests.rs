@@ -99,16 +99,6 @@ fn digest(out: &[f32]) -> u64 {
     })
 }
 
-/// Prints a digest of the embedded model's output bits on `signal()`, so two
-/// builds can be compared exactly:
-/// `cargo test output_digest -- --ignored --nocapture`.
-#[test]
-#[ignore]
-fn output_digest() {
-    let out = run(&mut DeepFilter::new().unwrap(), &signal());
-    println!("output digest {:016x} samples {}", digest(&out), out.len());
-}
-
 /// Two seconds of loud speech-like bursts under strong broadband noise, with
 /// the stretches a kernel could mishandle: digital silence, full-scale
 /// clipping, values far below one LSB, and noise alone. Finite throughout.
@@ -440,8 +430,12 @@ fn assert_matches_reference(ours: &[f32], reference: &[f32]) {
     );
 }
 
+/// The voice gate reads this value through `VendorModel::process`. The
+/// output sigmoid already bounds it to [-15, 35] for any finite input, so
+/// what this guards is a NaN (which fails the range check); the other LSNR
+/// tests compare two paths' bits and would pass if both gave NaN.
 #[test]
-fn reports_a_bounded_local_snr_for_every_frame() {
+fn reports_a_finite_local_snr_for_every_frame() {
     let mut filter = DeepFilter::new().unwrap();
     for frame in signal().chunks_exact(filter.frame()) {
         let lsnr = filter.process(&mut frame.to_vec());
@@ -465,6 +459,7 @@ fn the_lookahead_selector_picks_the_embedded_export() {
     let la0 = DeepFilter::for_lookahead(0).unwrap();
     assert_eq!(la0.lookahead(), 0);
     assert_eq!(la0.delay(), 120);
+    assert_eq!(la0.frame(), 240);
     let mut la1 = DeepFilter::for_lookahead(1).unwrap();
     assert_eq!(la1.lookahead(), 1);
     assert_eq!(la1.delay(), 360);
@@ -477,14 +472,6 @@ fn the_lookahead_selector_picks_the_embedded_export() {
     for lookahead in [2, 3, 240] {
         assert!(DeepFilter::for_lookahead(lookahead).is_err(), "{lookahead}");
     }
-}
-
-#[test]
-fn embedded_model_framing() {
-    let filter = DeepFilter::new().unwrap();
-    assert_eq!(filter.frame(), 240);
-    assert_eq!(filter.lookahead(), 0);
-    assert_eq!(filter.delay(), 360 - 240);
 }
 
 /// Two hops per call give bit for bit what the same hops give one per call,
@@ -602,7 +589,6 @@ const MODELS: [&[u8]; 2] = [WEIGHTS, include_bytes!("../model/la1/weights.bin")]
 #[test]
 fn gru_prep_is_off_by_default_and_inert_when_off() {
     let mut filter = DeepFilter::new().unwrap();
-    assert!(!filter.gru_prep());
     assert_eq!(filter.prep_pending(), 0);
     assert!(!filter.prepare_step());
     assert_eq!(filter.prepare_while(|| true), 0);
@@ -619,7 +605,6 @@ fn gru_prep_is_off_by_default_and_inert_when_off() {
 fn gru_prep_works_one_layer_at_a_time() {
     let mut filter = DeepFilter::new().unwrap();
     filter.set_gru_prep(true);
-    assert!(filter.gru_prep());
     let layers = filter.prep_pending();
     // LA0: one encoder layer, two ERB decoder layers, two DF decoder layers.
     assert_eq!(layers, 5);

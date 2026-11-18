@@ -1,8 +1,7 @@
 //! The firmware fixtures the desktop's Go port (desktop/firmware) reads too,
 //! so the mixer's checks and the installer's cannot drift. The USB identities
-//! in models.json and selection by executable hash alone (`select` cases with
-//! an `unrecognized` or `ambiguous` answer) are the desktop's: the mixer
-//! identifies itself by its board, so only Go reads those.
+//! in models.json are the desktop's: the mixer identifies itself by its
+//! board, so only Go reads those.
 use rc2fx_firmware::{Catalog, Model};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -101,15 +100,8 @@ fn executables_are_selected_the_same_way() {
         let experimental = case["experimentalDuo"].as_bool().unwrap_or(false);
         let op = text(case, "op");
         let result = match op {
-            // The mixer never selects by executable hash alone; the rest of
-            // these cases check the image verification a selection ends with.
+            // The image verification every selection ends with.
             "select" => {
-                if case["error"]
-                    .as_str()
-                    .is_some_and(|e| e.starts_with("unrecognized") || e.starts_with("ambiguous"))
-                {
-                    continue;
-                }
                 assert_eq!(catalog.profiles.len(), 1, "{}", text(case, "catalog"));
                 catalog.profiles[0]
                     .verify_image(&image)

@@ -1,5 +1,4 @@
 //! Explicit topology requests; effects saves never carry this request.
-use crate::{Config, CoreError, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,49 +22,6 @@ pub struct SelectionStatus {
     pub active_target_ids: Vec<String>,
     pub pending_target_ids: Vec<String>,
     pub message: String,
-}
-impl SelectionStatus {
-    pub fn validate(&self, config: &Config) -> Result<()> {
-        if self.channel_capacity.is_some_and(|limit| limit > 128) {
-            return Err(CoreError("Invalid processing channel capacity".into()));
-        }
-        if !crate::valid_display_text(&self.message, crate::MAX_STATUS_TEXT) {
-            return Err(CoreError("Invalid selection status message".into()));
-        }
-        for ids in [
-            &self.qualified_target_ids,
-            &self.active_target_ids,
-            &self.pending_target_ids,
-        ] {
-            let canonical: Vec<_> = config
-                .targets
-                .iter()
-                .filter(|t| ids.contains(&t.id))
-                .map(|t| t.id.clone())
-                .collect();
-            if &canonical != ids {
-                return Err(CoreError("Invalid processing path catalog or order".into()));
-            }
-        }
-        for ids in [&self.active_target_ids, &self.pending_target_ids] {
-            config.validate_selection(ids)?;
-        }
-        // Allocation is observed, not a promise of physical qualification
-        // (for example, a synthetic engine can allocate unqualified paths).
-        if self
-            .pending_target_ids
-            .iter()
-            .any(|id| !self.qualified_target_ids.contains(id))
-        {
-            return Err(CoreError("Unqualified pending processing path".into()));
-        }
-        if self.status == SelectionPhase::Changing && self.allowed {
-            return Err(CoreError(
-                "A pending path change cannot allow another transition".into(),
-            ));
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

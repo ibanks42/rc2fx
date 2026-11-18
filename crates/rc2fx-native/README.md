@@ -152,13 +152,11 @@ latency.
 | --- | --- |
 | `RC2FX_FIRMWARE_PROFILES` | Path to the validated firmware catalog (embedded catalog is the fallback) |
 | `RC2FX_FIRMWARE_PROFILE` | Expected profile ID; exact executable hash selects and verifies it |
-| `RC2FX_NATIVE_PROBE_CALLBACK_OFFSET` | Optional diagnostic cross-check; must equal the selected profile's callback |
 | `RC2FX_NATIVE_PROBE_PLAN` | Launch plan JSON (version 1, 48 kHz, 112 frames, at most 32 paths, 64 KiB) |
 | `RC2FX_NATIVE_PROBE_CONTROL_SOCKET` | Control socket path for `rc2fxd` |
 | `RC2FX_NATIVE_PROBE_REPORT` | Path for the audit report, rewritten every second: callback, helper, and jackd-cycle timing, xruns, and the latest anomaly events |
 | `RC2FX_NATIVE_PROBE_EVENTS` | Log file appended once a second with every timestamped anomaly (late callback starts or ends, helper late or stalled, gaps, xruns, late vendor jobs, USB gadget rebuilds), each with the time since the last USB control report |
 | `RC2FX_NATIVE_PROBE_REPORT_SELECTED_ONLY` | `1` reports processed paths only |
-| `RC2FX_NATIVE_PROBE_VENDOR_JOB_LIFETIME` | Diagnostic opt-in to profile selection; profile checks still apply |
 
 ## Reading xrun diagnostics
 

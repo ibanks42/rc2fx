@@ -53,63 +53,6 @@ fn dequantize_rows(q: &[i8], scale: &[f32], row: usize) -> Vec<f32> {
         .collect()
 }
 
-/// f32 to IEEE half precision, rounding to nearest even.
-#[cfg(test)]
-pub(crate) fn f16_bits(x: f32) -> u16 {
-    let b = x.to_bits();
-    let sign = ((b >> 16) & 0x8000) as u16;
-    let exp = ((b >> 23) & 0xff) as i32;
-    let man = b & 0x7f_ffff;
-    if exp == 0xff {
-        return sign | 0x7c00 | if man != 0 { 0x200 } else { 0 };
-    }
-    let e = exp - 127 + 15;
-    if e >= 0x1f {
-        return sign | 0x7c00;
-    }
-    if e <= 0 {
-        if e < -10 {
-            return sign;
-        }
-        // Subnormal: the 24-bit significand shifted down to units of 2^-24.
-        let m = man | 0x80_0000;
-        let shift = (14 - e) as u32;
-        let (q, rem, halfway) = (m >> shift, m & ((1 << shift) - 1), 1 << (shift - 1));
-        let q = if rem > halfway || (rem == halfway && q & 1 == 1) {
-            q + 1
-        } else {
-            q
-        };
-        return sign | q as u16;
-    }
-    let mut h = ((e as u32) << 10) | (man >> 13);
-    let rem = man & 0x1fff;
-    // A carry out of the significand correctly bumps the exponent (to infinity at the top).
-    if rem > 0x1000 || (rem == 0x1000 && h & 1 == 1) {
-        h += 1;
-    }
-    sign | h as u16
-}
-
-/// IEEE half precision to f32.
-#[cfg(test)]
-pub(crate) fn f16_value(h: u16) -> f32 {
-    let sign = ((h & 0x8000) as u32) << 16;
-    let exp = ((h >> 10) & 0x1f) as u32;
-    let man = (h & 0x3ff) as u32;
-    let bits = match exp {
-        0 if man == 0 => sign,
-        0 => {
-            // Subnormal: normalize the significand.
-            let shift = man.leading_zeros() - 21;
-            sign | ((113 - shift) << 23) | ((man << shift) & 0x3ff) << 13
-        }
-        0x1f => sign | 0x7f80_0000 | man << 13,
-        _ => sign | (exp + 112) << 23 | man << 13,
-    };
-    f32::from_bits(bits)
-}
-
 #[cfg(target_arch = "aarch64")]
 mod neon {
     use std::arch::aarch64::*;
@@ -1841,26 +1784,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn f16_round_trips_every_finite_value() {
-        for h in 0..=u16::MAX {
-            if h & 0x7c00 == 0x7c00 {
-                continue;
-            }
-            assert_eq!(f16_bits(f16_value(h)), h, "{h:#06x}");
-        }
-    }
-
-    #[test]
-    fn f16_rounds_to_nearest_even() {
-        // 1 + 2^-11 is halfway between 1 and the next f16; ties go to even (1).
-        assert_eq!(f16_bits(1. + 2f32.powi(-11)), 0x3c00);
-        assert_eq!(f16_bits(1. + 3. * 2f32.powi(-11)), 0x3c02);
-        assert_eq!(f16_bits(65520.), 0x7c00);
-        assert_eq!(f16_bits(2f32.powi(-25)), 0);
-        assert_eq!(f16_bits(-2f32.powi(-24)), 0x8001);
     }
 
     #[test]

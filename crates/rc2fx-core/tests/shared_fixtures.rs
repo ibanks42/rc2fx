@@ -1,12 +1,26 @@
 //! The shared accept and reject fixtures in `fixtures/core`. The desktop's Go
-//! port (`desktop/core/shared_fixtures_test.go`) reads the same files: both
-//! must accept and reject the same inputs, and write accepted values back
-//! byte for byte as the `canonical` (compact) and `pretty` files hold them.
-//! A rejected case that names an `error` must fail with exactly that message.
+//! port (`desktop/core/shared_fixtures_test.go`) reads the same files. Each
+//! side checks its own direction: the mixer must write accepted values back
+//! byte for byte as the `canonical` (compact) and `pretty` files hold them,
+//! and must accept and reject alike the documents it reads itself. Documents
+//! only the desktop reads (device state, versions, SSH status, meters,
+//! diagnostics events and preset lists) are checked here for the encoding
+//! only; their reject cases are the desktop's. A rejected case that names an
+//! `error` must fail with exactly that message.
 use rc2fx_core::{
     Config, ConfigUpdate, CoreError, DeviceState, DeviceVersions, DiagnosticsEvents, Meter,
     MixerRelease, PresetSummary, SshStatus, StockInventory, from_json,
 };
+
+/// The kinds of document only the desktop reads. The mixer writes them.
+const WRITTEN_ONLY: [&str; 6] = [
+    "deviceState",
+    "deviceVersions",
+    "sshStatus",
+    "meter",
+    "diagnosticsEvents",
+    "presetSummaries",
+];
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -29,7 +43,7 @@ fn written<T: serde::Serialize>(value: &T) -> (String, String) {
     )
 }
 
-/// How the desktop reads each kind of document, and what it writes back.
+/// How the mixer reads each kind of document, and what it writes back.
 fn decode(kind: &str, data: &[u8]) -> Result<(String, String), String> {
     if kind == "mixerRelease" {
         return MixerRelease::parse(data)
@@ -38,20 +52,16 @@ fn decode(kind: &str, data: &[u8]) -> Result<(String, String), String> {
     }
     let text = std::str::from_utf8(data).map_err(|e| e.to_string())?;
     Ok(match kind {
-        "config" => written(&Config::from_json(text).map_err(message)?),
-        "deviceState" => written(&DeviceState::from_json(text).map_err(message)?),
+        "config" => {
+            let config: Config = from_json(text).map_err(message)?;
+            config.validate().map_err(message)?;
+            written(&config)
+        }
+        "deviceState" => written(&from_json::<DeviceState>(text).map_err(message)?),
         "configUpdate" => written(&from_json::<ConfigUpdate>(text).map_err(message)?),
         "presetSummaries" => written(&from_json::<Vec<PresetSummary>>(text).map_err(message)?),
-        "deviceVersions" => {
-            let versions: DeviceVersions = from_json(text).map_err(message)?;
-            versions.validate().map_err(message)?;
-            written(&versions)
-        }
-        "sshStatus" => {
-            let status: SshStatus = from_json(text).map_err(message)?;
-            status.validate().map_err(message)?;
-            written(&status)
-        }
+        "deviceVersions" => written(&from_json::<DeviceVersions>(text).map_err(message)?),
+        "sshStatus" => written(&from_json::<SshStatus>(text).map_err(message)?),
         "meter" => written(&from_json::<Meter>(text).map_err(message)?),
         "diagnosticsEvents" => written(&from_json::<DiagnosticsEvents>(text).map_err(message)?),
         "stockInventory" => {
@@ -74,6 +84,9 @@ fn rust_reaches_the_shared_verdicts_and_encodings() {
         let name = case["name"].as_str().expect("name");
         let kind = case["type"].as_str().expect("type");
         let accept = case["accept"].as_bool().expect("accept");
+        if !accept && WRITTEN_ONLY.contains(&kind) {
+            continue;
+        }
         let result = decode(kind, &read(case["file"].as_str().expect("file")));
         match result {
             Ok((compact, pretty)) if accept => {

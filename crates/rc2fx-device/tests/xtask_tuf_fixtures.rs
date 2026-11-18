@@ -65,7 +65,6 @@ fn the_mixer_accepts_every_repository_the_go_signer_wrote() {
                 &StoredState::default(),
             )
             .unwrap_or_else(|e| panic!("{repo}/{metadata}: {e}"));
-            assert_eq!(verified.target, PAYLOAD, "{repo}/{metadata}");
             assert_eq!(verified.version, "1.2.3", "{repo}/{metadata}");
             assert_eq!(verified.metadata.minimum_app_version, "1.0.1");
             assert_eq!(verified.metadata_versions.root_version, 1);

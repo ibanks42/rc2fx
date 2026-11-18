@@ -1,8 +1,9 @@
 //! The USB framing fixtures the desktop's Go port (desktop/usbproto) reads
 //! too, so the mixer and the app cannot drift. The packed messages were
-//! written by the Go side. The `hello4` and `descriptors` sections are
-//! client-side checks that only Go has, so only Go reads them.
-use rc2fx_usb::{Frame, Reply, Request};
+//! written by the Go side. Each side checks its own direction: the
+//! `hello4`, `descriptors`, `requests` (request encoding) and `replies`
+//! (reply decoding) sections are the client's, so only Go reads them.
+use rc2fx_usb::{Frame, Request};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -109,31 +110,7 @@ fn go_packed_messages_unpack_the_same_way() {
 }
 
 #[test]
-fn requests_serialize_to_the_same_bytes() {
-    for case in list(&cases(), "requests") {
-        let body = &case["body"];
-        let request = Request {
-            method: text(case, "method").into(),
-            path: text(case, "path").into(),
-            body: (!body.is_null()).then(|| body.clone()),
-        };
-        assert_eq!(serde_json::to_string(&request).unwrap(), text(case, "json"));
-    }
-}
-
-#[test]
-fn replies_and_requests_parse_the_same_way() {
-    for case in list(&cases(), "replies") {
-        let json = text(case, "json");
-        let parsed = serde_json::from_str::<Reply>(json);
-        // `rustOk` marks a case where serde is knowingly laxer than the Go
-        // decoder (the case's `note` says why); `ok` is the Go verdict.
-        let ok = case.get("rustOk").unwrap_or(&case["ok"]);
-        assert_eq!(parsed.is_ok(), ok.as_bool().unwrap(), "{json}: {parsed:?}");
-        if let (Ok(reply), Some(status)) = (parsed, case["status"].as_u64()) {
-            assert_eq!(u64::from(reply.status), status, "{json}");
-        }
-    }
+fn requests_parse_the_same_way() {
     for case in list(&cases(), "requestsIn") {
         let json = text(case, "json");
         let parsed = serde_json::from_str::<Request>(json);

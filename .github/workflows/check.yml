@@ -85,12 +85,9 @@ jobs:
           cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
       # Every cargo command here takes the same settings (cargo-ci.toml), so
       # they share their build scripts and proc-macros.
-      # `--no-default-features` lints rc2fx-firmware without its
-      # embedded-catalog feature (the catalog compiled into its command-line
-      # tool), as before the desktop app left the workspace.
       - name: Lint the workspace
         run: |
-          cargo clippy --config .github/cargo-ci.toml --locked --workspace --all-targets --no-default-features -- -D warnings
+          cargo clippy --config .github/cargo-ci.toml --locked --workspace --all-targets -- -D warnings
           # The workspace run turns on rc2fx-delta's test-only encoder (an
           # rc2fx-device dev-dependency); the mixer builds it without.
           cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-delta --lib -- -D warnings

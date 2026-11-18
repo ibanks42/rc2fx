@@ -1,6 +1,6 @@
 {
   "comment": [
-    "Executable selection over small AArch64 ELF images. Files are in this directory. selectForModel is select_for_model_with; verifyLauncher checks the catalog's first profile. profile is the selected profile's id; error is the exact message."
+    "Executable selection over small AArch64 ELF images. Files are in this directory. select verifies the image against the catalog's one profile; selectForModel is select_for_model_with; verifyLauncher checks the catalog's first profile. profile is the selected profile's id; error is the exact message."
   ],
   "cases": [
     {
@@ -74,18 +74,6 @@
       "catalog": "two-segments.json",
       "image": "two-segments.elf",
       "profile": "rodecaster-pro-ii-1.7.6"
-    },
-    {
-      "op": "select",
-      "catalog": "image.json",
-      "image": "flipped.elf",
-      "error": "unrecognized mixer executable SHA-256 849258646e7824681bca5ea6f66ebf0a5ec1b2abe75329c4f63827cf0704b854"
-    },
-    {
-      "op": "select",
-      "catalog": "shared.json",
-      "image": "image.elf",
-      "error": "ambiguous mixer executable: select using verified device model"
     },
     {
       "op": "selectForModel",
@@ -186,12 +174,6 @@
       "model": "rodecaster-pro-ii",
       "experimentalDuo": true,
       "profile": "rodecaster-pro-ii-1.7.6"
-    },
-    {
-      "op": "select",
-      "catalog": "duo.json",
-      "image": "image.elf",
-      "error": "ambiguous mixer executable: select using verified device model"
     },
     {
       "op": "select",
