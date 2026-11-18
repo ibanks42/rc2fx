@@ -94,7 +94,7 @@ func StageOf(step Step) Stage {
 func (m *Model) Stage() Stage {
 	run := m.Run
 	switch {
-	case run == nil && m.Finished:
+	case run == nil && m.Finished():
 		return StageCount
 	case run == nil:
 		return StageBefore
@@ -122,14 +122,14 @@ func (m *Model) Stage() Stage {
 // PowerCycle reports a run waiting for the mixer to be switched off and on.
 func (m *Model) PowerCycle() bool {
 	run := m.Run
-	return run != nil && run.Failed == nil && run.Waiting != nil && run.Waiting.PowerCycle
+	return run != nil && run.status.Kind == RunWaiting && run.status.PowerCycle
 }
 
 // TaskSteps is the sidebar: every stage, marked done, now, failed or to
 // come.
 func (m *Model) TaskSteps() []TaskStep {
 	at := m.Stage()
-	failed := m.Run != nil && m.Run.Failed != nil
+	failed := m.Failed()
 	steps := make([]TaskStep, 0, StageCount)
 	for stage := StageBefore; stage < StageCount; stage++ {
 		mark := MarkToCome
@@ -179,7 +179,7 @@ type Unplug struct {
 func (m *Model) Unplug() Unplug {
 	run := m.Run
 	switch {
-	case run == nil && m.Finished:
+	case run == nil && m.Finished():
 		return Unplug{Kind: UnplugYes}
 	case run == nil:
 		switch {
@@ -191,7 +191,7 @@ func (m *Model) Unplug() Unplug {
 			return Unplug{Reason: "the mixer may still be updating"}
 		}
 		return Unplug{Kind: UnplugYes, Reason: "nothing has changed yet"}
-	case run.Failed != nil:
+	case run.status.Kind == RunFailed:
 		back := m.usbOne(false) != nil && (!run.Flashed || m.Stock || m.Answering())
 		switch {
 		case back && !run.Committed && !run.Flashed:
@@ -268,7 +268,7 @@ func (m *Model) SeenNow() []SeenLine {
 // failed.
 func (m *Model) FailureTitle() string {
 	run := m.Run
-	if run == nil || run.Failed == nil || run.Index < 0 || run.Index >= len(Steps) {
+	if run == nil || run.status.Kind != RunFailed || run.Index < 0 || run.Index >= len(Steps) {
 		return ""
 	}
 	switch Steps[run.Index] {
@@ -290,7 +290,7 @@ func (m *Model) FailureTitle() string {
 // StartBlocker is why the start button can't be pressed yet, in words; ""
 // when it can (or a request is merely in flight).
 func (m *Model) StartBlocker() string {
-	if m.Busy != nil || m.CanStartOnceGranted() {
+	if m.Busy() || m.CanStartOnceGranted() {
 		return ""
 	}
 	s := m.Status

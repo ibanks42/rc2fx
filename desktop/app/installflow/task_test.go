@@ -45,12 +45,12 @@ func TestTheSidebarFollowsTheRunThroughEveryStage(t *testing.T) {
 	if got := m.Stage(); got != StageCheck {
 		t.Fatalf("RC2FX answers, so its file check is next: %v", got)
 	}
-	m.Run.Failed = ptr("damaged")
-	m.ImageCheck = &core.ImageCheck{Status: core.ImageStatusDamaged}
+	m.Run.fail("damaged")
+	m.imageCheck = imageCheck{kind: imageCheckAnswered, result: core.ImageCheck{Status: core.ImageStatusDamaged}}
 	if got := taskMarks(m); !slices.Equal(got, []Mark{MarkDone, MarkDone, MarkDone, MarkDone, MarkDone, MarkFailed}) {
 		t.Fatalf("marks %v", got)
 	}
-	m.Run, m.Finished = nil, true
+	m.Run, m.finished = nil, &Run{}
 	if got := taskMarks(m); !slices.Equal(got, []Mark{MarkDone, MarkDone, MarkDone, MarkDone, MarkDone, MarkDone}) {
 		t.Fatalf("finished marks %v", got)
 	}
@@ -111,7 +111,7 @@ func TestUnplugIsYesOnlyWhenKnownSafe(t *testing.T) {
 		t.Fatalf("running: %+v", u)
 	}
 	// Failed with nothing sent to the mixer, and it is there.
-	m.Run.Failed = ptr("offline")
+	m.Run.fail("offline")
 	if u := m.Unplug(); u.Kind != UnplugYes || !strings.Contains(u.Reason, "nothing") {
 		t.Fatalf("failed early: %+v", u)
 	}
@@ -130,7 +130,7 @@ func TestUnplugIsYesOnlyWhenKnownSafe(t *testing.T) {
 		t.Fatalf("update mode: %+v", u)
 	}
 	// Finished.
-	m.Run, m.Finished = nil, true
+	m.Run, m.finished = nil, &Run{}
 	if u := m.Unplug(); u.Kind != UnplugYes {
 		t.Fatalf("finished: %+v", u)
 	}
@@ -141,7 +141,7 @@ func TestAFailedPageSaysOnlyWhatTheAppSees(t *testing.T) {
 	fw := "1.7.7"
 	m.Status.USB[0].Firmware = &fw
 	m.Run = &Run{Index: slices.Index(Steps[:], StepFlash), Serial: "GV1", Device: firmware.ModelProIi,
-		BackedUp: true, Selected: true, Prepared: true, Failed: ptr("drive busy")}
+		BackedUp: true, Selected: true, Prepared: true, status: RunStatus{Kind: RunFailed, Why: "drive busy"}}
 	seen := m.SeenNow()
 	var texts []string
 	for _, s := range seen {

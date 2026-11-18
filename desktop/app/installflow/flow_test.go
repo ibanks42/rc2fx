@@ -193,10 +193,10 @@ func wantState(t *testing.T, m *Model, step Step, kind StepStateKind) StepState 
 
 func failedRun(t *testing.T, m *Model) string {
 	t.Helper()
-	if m.Run == nil || m.Run.Failed == nil {
+	if m.Run == nil || m.Run.Status().Kind != RunFailed {
 		t.Fatal("the run did not fail")
 	}
-	return *m.Run.Failed
+	return m.Run.Status().Why
 }
 
 func TestDuoPreferenceGatesPreparationAndModelChangesDropCachedChoices(t *testing.T) {
@@ -309,7 +309,7 @@ func TestFlashingWaitsForAdministratorAccess(t *testing.T) {
 	}
 	m.Run = &Run{
 		Device: firmware.ModelProIi,
-		Failed: ptr("Grant administrator access first."),
+		status: RunStatus{Kind: RunFailed, Why: "Grant administrator access first."},
 	}
 	if m.Retry() != nil {
 		t.Fatal("a failed run waits too")
@@ -442,7 +442,7 @@ func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 		return &core.ImageCheck{Status: status, Repaired: []string{"usr/bin/rode-init-update-env.sh"}}
 	}
 	m.ImageCheckRead(check(core.ImageStatusPending), nil)
-	if m.Run == nil || m.Finished {
+	if m.Run == nil || m.Finished() {
 		t.Fatal("a pending check is waited on")
 	}
 	// Restored files need a restart, which clears the answer until RC2FX
@@ -453,7 +453,7 @@ func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 		t.Fatalf("waiting %q", w.Detail)
 	}
 	m.SetService(nil)
-	if m.ImageCheckAnswered || m.ImageCheck != nil {
+	if m.imageCheck.kind != imageCheckUnasked {
 		t.Fatal("the answer is cleared while RC2FX is not running")
 	}
 	m.SetService(ready())
@@ -462,7 +462,7 @@ func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 		t.Fatal("a failed read is asked again")
 	}
 	m.ImageCheckRead(check(core.ImageStatusOk), nil)
-	if m.Run != nil || !m.Finished {
+	if m.Run != nil || !m.Finished() {
 		t.Fatal("not finished")
 	}
 }
@@ -488,7 +488,7 @@ func TestFilesTheMixerCouldNotRestoreFailTheInstall(t *testing.T) {
 	// Mixer software from before the check has nothing to wait for.
 	m = atStart()
 	m.ImageCheckRead(nil, nil)
-	if m.Run != nil || !m.Finished {
+	if m.Run != nil || !m.Finished() {
 		t.Fatal("not finished")
 	}
 }
@@ -521,7 +521,6 @@ func TestStockFirmwareSavesSettingsFlashesUnchangedAndWaitsForNormalMode(t *test
 	}
 	// Flashed; RC2FX is gone, but normal mode is enough.
 	m.Run.Flashed = true
-	m.Busy = nil
 	m.queue = nil
 	poll := m.Probe()
 	if report(t, m, poll, status(nil, absent(), true, false)) != nil {
@@ -530,7 +529,7 @@ func TestStockFirmwareSavesSettingsFlashesUnchangedAndWaitsForNormalMode(t *test
 	wantState(t, m, StepStart, StepStateWaiting)
 	poll = m.Probe()
 	report(t, m, poll, status(gv1(false), absent(), true, false))
-	if m.Run != nil || !m.Finished {
+	if m.Run != nil || !m.Finished() {
 		t.Fatal("not finished")
 	}
 	// Back to RC2FX: an unsupported choice is replaced.
@@ -767,7 +766,7 @@ func TestAFailureStopsAtItsStepAndRetryContinuesFromThere(t *testing.T) {
 	if !isRequest(poll, installer.RequestProbe) {
 		t.Fatalf("polls while failed: %#v", poll)
 	}
-	if report(t, m, poll, status(gv1(true), absent(), true, true)) != nil || m.Run.Failed == nil {
+	if report(t, m, poll, status(gv1(true), absent(), true, true)) != nil || !m.Failed() {
 		t.Fatal("a poll never retries by itself")
 	}
 	if from, ok := m.RetryFrom(); !ok || from != StepFlash {
@@ -824,7 +823,7 @@ func TestRetryAfterDamagedFilesFlashesAgain(t *testing.T) {
 		t.Fatalf("retry from %v", from)
 	}
 	poll := m.Retry()
-	if m.Run.Flashed || m.ImageCheckAnswered {
+	if m.Run.Flashed || m.imageCheck.kind != imageCheckUnasked {
 		t.Fatal("the damaged flash still counts")
 	}
 	usb := report(t, m, poll, status(gv1(false), ready(), true, false))
@@ -854,11 +853,11 @@ func TestAPowerCycleWaitIsTimedFromItsRequest(t *testing.T) {
 	m := setUp(status(gv1(false), absent(), true, false))
 	m.Run = &Run{Index: slices.Index(Steps[:], StepStart), Serial: "GV1", Device: firmware.ModelProIi,
 		BackedUp: true, Selected: true, Prepared: true, Flashed: true, Committed: true,
-		Waiting: &Waiting{Why: "updating", Since: time.Now().Add(-19 * time.Minute)}}
+		status: RunStatus{Kind: RunWaiting, Why: "updating", Since: time.Now().Add(-19 * time.Minute)}}
 	m.SetService(ready())
 	m.ImageCheckRead(&core.ImageCheck{Status: core.ImageStatusRepaired, Repaired: []string{"a"}}, nil)
-	w := m.Run.Waiting
-	if w == nil || !w.PowerCycle || time.Since(w.Since) > time.Minute {
+	w := m.Run.Status()
+	if w.Kind != RunWaiting || !w.PowerCycle || time.Since(w.Since) > time.Minute {
 		t.Fatalf("waiting %+v", w)
 	}
 	if !strings.Contains(w.Why, "1 of RØDE's files") {
@@ -872,7 +871,7 @@ func TestALongWaitCanBeStopped(t *testing.T) {
 	m := setUp(status(nil, absent(), true, false))
 	m.Run = &Run{Index: slices.Index(Steps[:], StepStart), Serial: "GV1", Device: firmware.ModelProIi,
 		BackedUp: true, Selected: true, Prepared: true, Flashed: true, Committed: true,
-		Waiting: &Waiting{Why: "updating", Since: time.Now()}}
+		status: RunStatus{Kind: RunWaiting, Why: "updating", Since: time.Now()}}
 	now := time.Now()
 	if m.TakingLonger(now) || m.CanStop(now) {
 		t.Fatal("stoppable at once")
@@ -886,7 +885,7 @@ func TestALongWaitCanBeStopped(t *testing.T) {
 	if !m.TakingLonger(later) {
 		t.Fatal("no way out while RC2FX answers")
 	}
-	m.Run.Waiting = nil
+	m.Run.resume()
 	if m.TakingLonger(later) || m.CanStop(later) {
 		t.Fatal("only a wait takes longer")
 	}
@@ -927,7 +926,7 @@ func TestAResumedRunThatCouldNotGetTheCatalogCanRetryIt(t *testing.T) {
 	if !strings.Contains(m.Error, "offline") || !m.Running() {
 		t.Fatalf("error %q, running %v", m.Error, m.Running())
 	}
-	m.Run.Failed = ptr("did not get there in time")
+	m.Run.fail("did not get there in time")
 	poll = m.Retry()
 	seen := Seen{status: deepCopy(*m.Status), service: nil}
 	wantRequest(t, report(t, m, poll, seen), installer.Request{Kind: installer.RequestReleases}, "retry")
@@ -999,7 +998,7 @@ func TestStockHasItsOwnReleaseAndAFailedCheckCanBeRepeated(t *testing.T) {
 	wantChoice(t, m.Chosen(), "stable", "1.7.6", "RC2FX chosen")
 
 	m.StockCheck = StockCheck{Kind: StockCheckChecking}
-	m.queue = append(m.queue, true)
+	m.queue = append(m.queue, queued{background: true})
 	if m.Finish(installer.Request{Kind: installer.RequestStockReleases}, installer.Reply{}, errors.New("offline")) != nil {
 		t.Fatal("request after a failed stock check")
 	}
@@ -1014,9 +1013,9 @@ func TestStockHasItsOwnReleaseAndAFailedCheckCanBeRepeated(t *testing.T) {
 
 func TestACancelledFirmwareCheckIsNotReportedAsAFailure(t *testing.T) {
 	m := NewModel()
-	m.queue = append(m.queue, true)
-	m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{}, errors.New(installer.Cancelled))
-	if m.Error != "The check for supported firmware was cancelled." {
+	m.queue = append(m.queue, queued{background: true})
+	m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{}, errors.New(installer.Canceled))
+	if m.Error != "The check for supported firmware was canceled." {
 		t.Fatalf("error %q", m.Error)
 	}
 }
@@ -1032,7 +1031,7 @@ func TestAFinishedUpdateStaysFinishedAndTheNextPlanIsFresh(t *testing.T) {
 	if pending := report(t, m, poll, recent(ready())); pending != nil {
 		report(t, m, pending, recent(ready()))
 	}
-	if m.Finished || m.Run != nil {
+	if m.Finished() || m.Run != nil {
 		t.Fatal("a run resumed while RC2FX answers")
 	}
 	m.SetStock(true)
@@ -1075,7 +1074,7 @@ func TestReopeningAfterAFinishedStockRunStartsClean(t *testing.T) {
 	}
 	poll := m.Probe()
 	report(t, m, poll, afterStockFlash(gv1(false)))
-	if !m.Finished || m.Run != nil {
+	if !m.Finished() || m.Run != nil {
 		t.Fatal("not finished")
 	}
 	// Left, then opened again, even with the mixer restarting once more.
@@ -1084,7 +1083,7 @@ func TestReopeningAfterAFinishedStockRunStartsClean(t *testing.T) {
 		if m.Stock {
 			t.Fatal("RC2FX firmware is selected again")
 		}
-		if m.Run != nil || m.Finished || m.Last != nil {
+		if m.Run != nil || m.Finished() || m.LastRun() != nil {
 			t.Fatal("not clean")
 		}
 		wantState(t, m, StepFlash, StepStatePending)
@@ -1096,7 +1095,7 @@ func TestARestartedAppDoesNotBringBackAFinishedStockRun(t *testing.T) {
 	if m.Stock {
 		t.Fatal("stock")
 	}
-	if m.Run != nil || m.Finished || m.Last != nil {
+	if m.Run != nil || m.Finished() || m.LastRun() != nil {
 		t.Fatal("not clean")
 	}
 }
@@ -1130,7 +1129,7 @@ func TestBackgroundRefreshesNeverDisableThePage(t *testing.T) {
 	if !isRequest(poll, installer.RequestProbe) {
 		t.Fatalf("request %#v", poll)
 	}
-	if m.Busy != nil {
+	if m.Busy() {
 		t.Fatal("a refresh is not busy")
 	}
 	if !m.CanStart() {
@@ -1138,6 +1137,88 @@ func TestBackgroundRefreshesNeverDisableThePage(t *testing.T) {
 	}
 	if m.Tick(time.Now().Add(60*time.Second)) != nil {
 		t.Fatal("one refresh at a time")
+	}
+}
+
+func TestARunIsInOneStatusAtATime(t *testing.T) {
+	var run Run
+	start := time.Now()
+	if since := run.wait("Connect the mixer.", false, start); !since.Equal(start) {
+		t.Fatalf("since %v", since)
+	}
+	// Another reason is the same wait for the mixer.
+	if since := run.wait("Waiting for the update drive.", false, start.Add(time.Minute)); !since.Equal(start) {
+		t.Fatalf("a new reason restarted the wait: %v", since)
+	}
+	if s := run.Status(); s.Kind != RunWaiting || s.Why != "Waiting for the update drive." {
+		t.Fatalf("status %+v", s)
+	}
+	run.fail("broke")
+	if s := run.Status(); s != (RunStatus{Kind: RunFailed, Why: "broke"}) {
+		t.Fatalf("a failure keeps nothing of the wait: %+v", s)
+	}
+	run.resume()
+	if run.Status().Kind != RunFailed {
+		t.Fatal("ending a wait cleared a failure")
+	}
+	run.retry()
+	if run.Status() != (RunStatus{}) {
+		t.Fatalf("retry %+v", run.Status())
+	}
+	run.cancel()
+	run.resume()
+	run.retry()
+	if run.Status().Kind != RunCanceling {
+		t.Fatal("a canceling run went on")
+	}
+}
+
+func TestMixerSoftwareWithoutTheImageCheckHasNothingToWaitFor(t *testing.T) {
+	m := setUp(status(gv1(false), ready(), true, false))
+	if m.imageChecked() {
+		t.Fatal("unasked counts as checked")
+	}
+	m.imageCheck = imageCheck{kind: imageCheckUnsupported}
+	if !m.imageChecked() {
+		t.Fatal("no check to wait for")
+	}
+	for status, want := range map[core.ImageStatus]bool{
+		core.ImageStatusOk:       true,
+		core.ImageStatusNone:     true,
+		core.ImageStatusPending:  false,
+		core.ImageStatusRepaired: false,
+		core.ImageStatusDamaged:  false,
+	} {
+		m.imageCheck = imageCheck{kind: imageCheckAnswered, result: core.ImageCheck{Status: status}}
+		if m.imageChecked() != want {
+			t.Fatalf("%v checked %v", status, !want)
+		}
+	}
+	m.SetService(nil)
+	if m.imageCheck.kind != imageCheckUnasked {
+		t.Fatal("kept while RC2FX is not running")
+	}
+}
+
+func TestThePageIsBusyExactlyWhileItsOwnRequestIsOut(t *testing.T) {
+	m := setUp(status(nil, ready(), false, false))
+	refresh := m.Tick(time.Now())
+	probe := m.Probe()
+	if !isRequest(probe, installer.RequestProbe) || !m.Busy() {
+		t.Fatal("the page waits on its own request")
+	}
+	if m.Probe() != nil {
+		t.Fatal("one request the page waits on at a time")
+	}
+	// The runner answers in order: the refresh sent first is not the one
+	// the page waits on.
+	m.Finish(*refresh, installer.Reply{}, errors.New("offline"))
+	if !m.Busy() {
+		t.Fatal("a background answer ended the page's request")
+	}
+	m.Finish(*probe, installer.Reply{}, errors.New("offline"))
+	if m.Busy() {
+		t.Fatal("still busy after the answer")
 	}
 }
 
@@ -1209,7 +1290,7 @@ func TestFirmwareForANewerAppIsExplainedAndCanNeverBeChosen(t *testing.T) {
 	m := NewModel()
 	seen := status(gv1(false), nil, false, false)
 	m.Status = &seen.status
-	m.queue = append(m.queue, true)
+	m.queue = append(m.queue, queued{background: true})
 	m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{Kind: installer.ReplyReleases, Releases: []installer.Release{
 		{
 			Channel:           "stable",
@@ -1241,7 +1322,7 @@ func TestWhenEveryFirmwareNeedsANewerAppThePageStillSaysSo(t *testing.T) {
 	m := NewModel()
 	seen := status(gv1(false), nil, false, false)
 	m.Status = &seen.status
-	m.queue = append(m.queue, true)
+	m.queue = append(m.queue, queued{background: true})
 	m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{Kind: installer.ReplyReleases, Releases: []installer.Release{{
 		Channel:           "stable",
 		Version:           "1.7.8",
@@ -1257,7 +1338,7 @@ func TestWhenEveryFirmwareNeedsANewerAppThePageStillSaysSo(t *testing.T) {
 
 func TestFirmwareHeldBackForAnotherReasonIsNotBlamedOnTheApp(t *testing.T) {
 	m := NewModel()
-	m.queue = append(m.queue, true)
+	m.queue = append(m.queue, queued{background: true})
 	m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{Kind: installer.ReplyReleases, Releases: []installer.Release{{
 		Version:           "1.7.8",
 		MinimumAppVersion: "0.0.1",
@@ -1290,7 +1371,7 @@ func TestAFailedCheckNeverFallsBackToTheBundledCopy(t *testing.T) {
 	m.Bundled = ptr("0.9.0")
 	m.Mixer = nil
 	m.Offers = Offers{Kind: OffersChecking}
-	m.queue = append(m.queue, true)
+	m.queue = append(m.queue, queued{background: true})
 	m.Finish(installer.Request{Kind: installer.RequestMixerReleases}, installer.Reply{}, errors.New("no configured trust root"))
 	if m.Mixer != nil {
 		t.Fatal("nothing is picked for the user")
@@ -1455,6 +1536,46 @@ func TestARunInstallsWhatWasReviewedWhateverChangesOnThePage(t *testing.T) {
 	}
 }
 
+func TestAFailedRunKeepsItsModeAndFirmwareUntilStopped(t *testing.T) {
+	m := idle()
+	m.Releases = append(m.Releases, installer.Release{
+		Channel:   "beta",
+		Version:   "1.8.0",
+		Profile:   profile,
+		Supported: true,
+	})
+	prepare := selected(t, m, m.Start())
+	if !isRequest(prepare, installer.RequestPrepare) {
+		t.Fatalf("request %#v", prepare)
+	}
+	m.Finish(*prepare, installer.Reply{}, errors.New("offline"))
+	m.queue = nil
+	if !m.Failed() {
+		t.Fatal("not failed")
+	}
+	// The page offers no firmware choices during a run, failed or not.
+	m.Choose(1)
+	m.ChooseStock(0)
+	if m.Run == nil || m.Stock {
+		t.Fatal("a failed run was dropped or changed mode")
+	}
+	wantChoice(t, m.Choice, "stable", "1.7.6", "a failed run's choice")
+	// What the page shows can still change (a catalog reply, say); the
+	// run goes on with what was reviewed.
+	m.Choice = &Choice{Channel: "beta", Version: "1.8.0"}
+	poll := m.Retry()
+	again := report(t, m, poll, status(gv1(false), absent(), false, false))
+	wantRequest(t, again, *prepare, "retry prepares the reviewed firmware")
+	m.Finish(*again, installer.Reply{}, errors.New("offline"))
+	m.queue = nil
+	// Choosing a mode (the notice's Install update, or the mode tabs)
+	// stops a failed run and starts over from the page.
+	m.SetStock(true)
+	if m.Run != nil || !m.Stock {
+		t.Fatal("choosing a mode stops a failed run")
+	}
+}
+
 func TestAFailedSelectionStopsBeforePreparingAndRetryRepeatsTheSameOffer(t *testing.T) {
 	m := idle()
 	sel := m.Start()
@@ -1516,29 +1637,29 @@ func TestANewerRC2FXOnTheSameFirmwareInstallsInPlace(t *testing.T) {
 
 func TestAConnectionChangeFailsAnUploadButNotAnInstall(t *testing.T) {
 	m := runningRC2FX("1.0.0")
-	m.InPlace = InPlace{Kind: InPlaceUploading, Version: "2.0.0", Sent: 3, Total: 7}
+	m.inPlace = InPlace{Kind: InPlaceUploading, Version: "2.0.0", Sent: 3, Total: 7}
 	m.ConnectionChanged()
-	if !reflect.DeepEqual(m.InPlace, InPlace{Kind: InPlaceFailed, Error: inPlaceDisconnected}) {
-		t.Fatalf("in place %+v", m.InPlace)
+	if !reflect.DeepEqual(m.InPlace(), InPlace{Kind: InPlaceFailed, Error: inPlaceDisconnected}) {
+		t.Fatalf("in place %+v", m.InPlace())
 	}
-	if m.InPlace.Active() {
+	if m.InPlace().Active() {
 		t.Fatal("a failed upload blocks another update")
 	}
 	// An accepted update goes on without the app; the reconnect is how its
 	// outcome is read.
 	since := time.Now()
 	installing := InPlace{Kind: InPlaceInstalling, Version: "2.0.0", Since: since}
-	m.InPlace = installing
+	m.inPlace = installing
 	m.ConnectionChanged()
-	if !reflect.DeepEqual(m.InPlace, installing) {
-		t.Fatalf("in place %+v", m.InPlace)
+	if !reflect.DeepEqual(m.InPlace(), installing) {
+		t.Fatalf("in place %+v", m.InPlace())
 	}
 	// A release verified but not sent yet goes out on the next connection.
 	ready := InPlace{Kind: InPlaceReady, Bundle: installer.InPlaceBundle{Version: "2.0.0"}}
-	m.InPlace = ready
+	m.inPlace = ready
 	m.ConnectionChanged()
-	if !reflect.DeepEqual(m.InPlace, ready) {
-		t.Fatalf("in place %+v", m.InPlace)
+	if !reflect.DeepEqual(m.InPlace(), ready) {
+		t.Fatalf("in place %+v", m.InPlace())
 	}
 }
 
@@ -1548,7 +1669,7 @@ func TestAnInPlaceUpdateIsPreparedOnceAndFailuresChangeNothing(t *testing.T) {
 	if !isRequest(prepare, installer.RequestInPlaceBundle) {
 		t.Fatalf("request %#v", prepare)
 	}
-	if !m.InPlace.Active() {
+	if !m.inPlace.Active() {
 		t.Fatal("not active")
 	}
 	if m.StartInPlace(offer("2.0.0"), profile) != nil {
@@ -1572,10 +1693,10 @@ func TestAnInPlaceUpdateIsPreparedOnceAndFailuresChangeNothing(t *testing.T) {
 		t.Fatalf("bundle %+v %v", got, ok)
 	}
 	uploading := func() bool {
-		return m.InPlace.Kind == InPlaceUploading && m.InPlace.Sent == 0 && m.InPlace.Total == 7
+		return m.inPlace.Kind == InPlaceUploading && m.inPlace.Sent == 0 && m.inPlace.Total == 7
 	}
 	if !uploading() {
-		t.Fatalf("in place %+v", m.InPlace)
+		t.Fatalf("in place %+v", m.inPlace)
 	}
 	if _, ok := m.TakeInPlaceBundle(); ok {
 		t.Fatal("handed over once")
@@ -1583,12 +1704,12 @@ func TestAnInPlaceUpdateIsPreparedOnceAndFailuresChangeNothing(t *testing.T) {
 	if !uploading() {
 		t.Fatal("asking again leaves the update in progress")
 	}
-	m.InPlace = InPlace{Kind: InPlaceFailed, Error: "refused"}
+	m.inPlace = InPlace{Kind: InPlaceFailed, Error: "refused"}
 	if _, ok := m.TakeInPlaceBundle(); ok {
 		t.Fatal("handed over after a failure")
 	}
-	if !reflect.DeepEqual(m.InPlace, InPlace{Kind: InPlaceFailed, Error: "refused"}) {
-		t.Fatalf("in place %+v", m.InPlace)
+	if !reflect.DeepEqual(m.inPlace, InPlace{Kind: InPlaceFailed, Error: "refused"}) {
+		t.Fatalf("in place %+v", m.inPlace)
 	}
 
 	m = runningRC2FX("1.0.0")
@@ -1597,10 +1718,10 @@ func TestAnInPlaceUpdateIsPreparedOnceAndFailuresChangeNothing(t *testing.T) {
 		t.Fatal("no request")
 	}
 	m.Finish(*prepare, installer.Reply{}, errors.New("offline"))
-	if m.InPlace.Kind != InPlaceFailed || !strings.Contains(m.InPlace.Error, "Nothing changed") {
-		t.Fatalf("in place %+v", m.InPlace)
+	if m.inPlace.Kind != InPlaceFailed || !strings.Contains(m.inPlace.Error, "Nothing changed") {
+		t.Fatalf("in place %+v", m.inPlace)
 	}
-	if m.InPlace.Active() {
+	if m.inPlace.Active() {
 		t.Fatal("active")
 	}
 }
@@ -1682,7 +1803,7 @@ func TestSignedDiscoveryFollowsTheFirmwareListOnce(t *testing.T) {
 	m := NewModel()
 	seen := status(nil, nil, false, false)
 	m.Status = &seen.status
-	m.queue = append(m.queue, true)
+	m.queue = append(m.queue, queued{background: true})
 	check := m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{Kind: installer.ReplyReleases, Releases: nil}, nil)
 	wantRequest(t, check, installer.Request{Kind: installer.RequestMixerReleases}, "check")
 	if m.Tick(time.Now().Add(60*time.Second)) != nil {

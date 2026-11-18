@@ -104,13 +104,22 @@ pub struct Chunk {
     pub data: String,
 }
 
+/// A session's path: Accepting, then Complete once every upload byte is in,
+/// then Installing, which ends in Restarting or Failed. A Failed session may
+/// be installed again; an Accepting or Complete one may be replaced or
+/// aborted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SessionState {
     Accepting,
     Complete,
     Installing,
-    Restarting,
-    Failed,
+    /// The install handed the restart on. `warning` says the swap failed
+    /// part way and the previous version is being restored.
+    Restarting {
+        warning: Option<String>,
+    },
+    /// Verification or the install failed, for this reason.
+    Failed(String),
 }
 
 impl SessionState {
@@ -119,8 +128,36 @@ impl SessionState {
             Self::Accepting => "accepting",
             Self::Complete => "complete",
             Self::Installing => "installing",
-            Self::Restarting => "restarting",
-            Self::Failed => "failed",
+            Self::Restarting { .. } => "restarting",
+            Self::Failed(_) => "failed",
+        }
+    }
+    /// What the progress reply carries as its error.
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::Restarting { warning } => warning.as_deref(),
+            Self::Failed(why) => Some(why),
+            Self::Accepting | Self::Complete | Self::Installing => None,
+        }
+    }
+}
+
+/// What a session's upload holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Upload {
+    /// The signed envelope itself.
+    Envelope,
+    /// A `delta-1` encoding of it. `decoded` says the envelope has been
+    /// rebuilt from it once, so a retried install verifies that envelope
+    /// instead of decoding again.
+    Delta { decoded: bool },
+}
+
+impl Upload {
+    fn encoding(self) -> Option<&'static str> {
+        match self {
+            Self::Envelope => None,
+            Self::Delta { .. } => Some(DELTA_ENCODING),
         }
     }
 }
@@ -133,12 +170,8 @@ struct Session {
     upload_size: u64,
     received: u64,
     state: SessionState,
-    error: Option<String>,
-    /// `"delta-1"` when the upload is a delta; the envelope size is `request.size`.
-    encoding: Option<&'static str>,
-    /// The delta has been decoded over the upload once, so a retried install
-    /// verifies the rebuilt envelope instead of decoding it again.
-    decoded: bool,
+    /// The envelope size is `request.size` either way.
+    upload: Upload,
 }
 
 /// The reply the upload endpoints return.
@@ -336,7 +369,7 @@ impl MixerUpdate {
         if let Some(session) = slot.as_ref() {
             if matches!(
                 session.state,
-                SessionState::Installing | SessionState::Restarting
+                SessionState::Installing | SessionState::Restarting { .. }
             ) {
                 return Err(UpdateError::Busy(
                     "an update is being installed; wait for it to finish".into(),
@@ -388,9 +421,11 @@ impl MixerUpdate {
             upload_size,
             received: 0,
             state: SessionState::Accepting,
-            error: None,
-            encoding,
-            decoded: false,
+            upload: if encoding.is_some() {
+                Upload::Delta { decoded: false }
+            } else {
+                Upload::Envelope
+            },
         });
         Ok(Progress {
             id,
@@ -424,7 +459,7 @@ impl MixerUpdate {
         // the progress reply rather than a refusal.
         match session.state {
             SessionState::Accepting | SessionState::Complete => {}
-            SessionState::Failed => {
+            SessionState::Failed(_) => {
                 return Err(UpdateError::Conflict(
                     "this session failed; start a new one".into(),
                 ));
@@ -501,7 +536,7 @@ impl MixerUpdate {
         };
         if matches!(
             session.state,
-            SessionState::Installing | SessionState::Restarting
+            SessionState::Installing | SessionState::Restarting { .. }
         ) {
             return Err(UpdateError::Conflict(
                 "the update is being installed and cannot be aborted".into(),
@@ -516,14 +551,14 @@ impl MixerUpdate {
     /// (so its refusal is the reply); the install and swap continue on a
     /// thread of their own and are reported by [`Self::progress`].
     pub fn install(self: Arc<Self>, id: &str) -> Result<Progress, UpdateError> {
-        let (request, encoding, decoded) = {
+        let (request, upload) = {
             let mut slot = self.session();
             let session = slot
                 .as_mut()
                 .filter(|s| s.id == id)
                 .ok_or(UpdateError::NotFound)?;
             match session.state {
-                SessionState::Complete | SessionState::Failed => {}
+                SessionState::Complete | SessionState::Failed(_) => {}
                 SessionState::Accepting => {
                     return Err(UpdateError::Conflict(
                         "the upload is not complete yet".into(),
@@ -532,14 +567,13 @@ impl MixerUpdate {
                 _ => return Ok(progress_of(id, session)),
             }
             session.state = SessionState::Installing;
-            session.error = None;
-            (session.request.clone(), session.encoding, session.decoded)
+            (session.request.clone(), session.upload)
         };
         // A delta is rebuilt into the signed envelope before verification, so
         // everything after this is exactly the plain-upload path. The envelope
         // is checked against the signed target there; nothing decoded here is
         // trusted until then.
-        if encoding.is_some() && !decoded {
+        if matches!(upload, Upload::Delta { decoded: false }) {
             let envelope_needed = request.size.saturating_add(RUN_HEADROOM);
             if let Some(free) = install::free_bytes(&self.paths.run)
                 && free < envelope_needed
@@ -557,7 +591,7 @@ impl MixerUpdate {
             }
             let mut slot = self.session();
             if let Some(session) = slot.as_mut().filter(|s| s.id == id) {
-                session.decoded = true;
+                session.upload = Upload::Delta { decoded: true };
             }
         }
         let payload = self.payload_path(id);
@@ -623,29 +657,17 @@ impl MixerUpdate {
     fn fail(&self, id: &str, why: &str) {
         let mut slot = self.session();
         if let Some(session) = slot.as_mut().filter(|s| s.id == id)
-            && session.state != SessionState::Restarting
+            && !matches!(session.state, SessionState::Restarting { .. })
         {
-            session.state = SessionState::Failed;
-            session.error = Some(why.to_owned());
+            session.state = SessionState::Failed(why.to_owned());
         }
     }
 
-    fn set_state(&self, id: &str, state: SessionState, error: Option<String>) -> Progress {
+    /// Records how the install thread ended, if the session is still there.
+    fn set_state(&self, id: &str, state: SessionState) {
         let mut slot = self.session();
         if let Some(session) = slot.as_mut().filter(|s| s.id == id) {
             session.state = state;
-            session.error = error;
-            return progress_of(id, session);
-        }
-        Progress {
-            id: id.to_owned(),
-            state: state.name(),
-            version: String::new(),
-            size: 0,
-            received: 0,
-            encoding: None,
-            upload_size: None,
-            error: None,
         }
     }
 
@@ -685,7 +707,7 @@ impl MixerUpdate {
     fn run_install(&self, id: &str, verified: verify::VerifiedRelease) {
         match self.install_inner(id, &verified) {
             Ok(()) => {
-                self.set_state(id, SessionState::Restarting, None);
+                self.set_state(id, SessionState::Restarting { warning: None });
             }
             Err(failure) => {
                 if failure.swapped_in_doubt {
@@ -694,15 +716,16 @@ impl MixerUpdate {
                     let _ = self.spawn_driver(id, &verified, true, &install::Swapped::default());
                     self.set_state(
                         id,
-                        SessionState::Restarting,
-                        Some(format!(
-                            "{}; the previous version is being restored",
-                            failure.message
-                        )),
+                        SessionState::Restarting {
+                            warning: Some(format!(
+                                "{}; the previous version is being restored",
+                                failure.message
+                            )),
+                        },
                     );
                 } else {
                     let _ = fs::remove_dir_all(self.paths.opt.join(format!(".rc2fx-stage.{id}")));
-                    self.set_state(id, SessionState::Failed, Some(failure.message));
+                    self.set_state(id, SessionState::Failed(failure.message));
                 }
             }
         }
@@ -1047,9 +1070,9 @@ fn progress_of(id: &str, session: &Session) -> Progress {
         version: session.request.version.clone(),
         size: session.request.size,
         received: session.received,
-        encoding: session.encoding,
-        upload_size: session.encoding.map(|_| session.upload_size),
-        error: session.error.clone(),
+        encoding: session.upload.encoding(),
+        upload_size: session.upload.encoding().map(|_| session.upload_size),
+        error: session.state.error().map(str::to_owned),
     }
 }
 

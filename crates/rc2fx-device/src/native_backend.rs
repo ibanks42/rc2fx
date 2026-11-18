@@ -103,8 +103,8 @@ pub struct Runtime {
     next_poll: Instant,
     /// The wait for `next_poll` is an idle one, which a new subscriber ends.
     idle: bool,
-    /// The latest read saw every processed path advance, and at least one path.
-    all_advancing: bool,
+    /// The latest read found the engine Running, and nothing was written
+    /// since. See `can_save_or_enable` and `can_disable` for what it admits.
     writable: bool,
     started: Instant,
     pub(crate) process: crate::diagnostic_history::NativeProcess,
@@ -115,15 +115,46 @@ pub struct Runtime {
     /// Since when live edits have played with nobody subscribed.
     orphaned_since: Option<Instant>,
 }
+/// One read of the engine.
 pub(crate) struct Observation {
-    pub failure: bool,
-    pub applied: bool,
-    pub advancing: bool,
+    pub progress: Progress,
     pub enabled: bool,
     pub active_ids: Vec<String>,
     pub message: String,
-    pub meter: Option<Meter>,
     pub native: Vec<ContextStatus>,
+}
+/// Where the engine stands after one read.
+#[derive(Debug)]
+pub(crate) enum Progress {
+    /// The engine could not be read, a worker failed or a path stopped.
+    Failed,
+    /// Readable, but a path has not applied the saved settings yet, or the
+    /// audio is not live. `advancing` says whether the audio itself moves: a
+    /// path can advance before it applies a new publication.
+    Settling { advancing: bool },
+    /// Every path applied the saved settings, no publication is pending and
+    /// the audio advances. The meter is None until every path has a window
+    /// for the applied publication. `all_advanced` says this read saw every
+    /// processed path advance, and at least one path; only then may polling
+    /// slow to the idle interval.
+    Running {
+        meter: Option<Meter>,
+        all_advanced: bool,
+    },
+}
+impl Progress {
+    /// Whether the audio moves, applied or not.
+    pub(crate) fn advancing(&self) -> bool {
+        match self {
+            Progress::Failed => false,
+            Progress::Settling { advancing } => *advancing,
+            Progress::Running { .. } => true,
+        }
+    }
+    /// Whether every path applied the saved settings and the audio advances.
+    pub(crate) fn running(&self) -> bool {
+        matches!(self, Progress::Running { .. })
+    }
 }
 struct ExpectedPath {
     id: String,
@@ -345,7 +376,6 @@ impl Runtime {
             idle_interval: IDLE_POLL_INTERVAL.min((progress_timeout / 2).max(POLL_INTERVAL)),
             next_poll: now,
             idle: false,
-            all_advancing: false,
             writable: false,
             started: now,
             process,
@@ -444,7 +474,7 @@ impl Runtime {
     /// such a save needs nothing from the library, so it is taken even while
     /// an earlier publication waits for its acknowledgement.
     pub(crate) fn save(&mut self, save: PreparedSave<'_>) -> Result<bool, Error> {
-        if (!self.writable || !self.pending.is_empty()) && !self.plays(save.candidate_config()) {
+        if !self.can_save_or_enable() && !self.plays(save.candidate_config()) {
             return Err(failure(
                 "Native audio is not ready for another settings change; no settings were saved",
             ));
@@ -488,7 +518,7 @@ impl Runtime {
     /// shortly. Unlike a save this does not make the engine unwritable or
     /// hurry the next read, so a live edit never shows as an unsettled engine.
     pub(crate) fn live(&mut self, candidate: &Config, saved: &Config) -> Result<(), Error> {
-        if !self.writable || !self.pending.is_empty() {
+        if !self.can_save_or_enable() {
             return Err(Error::NativeBusy);
         }
         if candidate.revision != self.revision
@@ -570,9 +600,12 @@ impl Runtime {
         }
     }
     pub(crate) fn set_enabled(&mut self, config: &Config, enabled: bool) -> Result<(), Error> {
-        // Explicit disable can still remove a failed DSP path. It must not
-        // overwrite an already-saved publication whose acknowledgement is pending.
-        if !self.pending.is_empty() || (enabled && !self.writable) {
+        let admitted = if enabled {
+            self.can_save_or_enable()
+        } else {
+            self.can_disable()
+        };
+        if !admitted {
             return Err(Error::NativeBusy);
         }
         let prepared = self.prepare_retrying(config, enabled, ResetPolicy::Allow)?;
@@ -589,6 +622,19 @@ impl Runtime {
         } else {
             ResetPolicy::Allow
         }
+    }
+    /// A settings save, a live edit or an enable needs the engine Running at
+    /// the last read, and no publication pending. A save or an enable clears
+    /// `writable` until the next read; a live edit does not, but may leave a
+    /// publication pending, so both are checked.
+    fn can_save_or_enable(&self) -> bool {
+        self.writable && self.pending.is_empty()
+    }
+    /// An explicit disable can still remove a failed DSP path, so it does not
+    /// need a Running engine. It must not overwrite an already-saved
+    /// publication whose acknowledgement is pending.
+    fn can_disable(&self) -> bool {
+        self.pending.is_empty()
     }
     /// The native library refuses with Busy while RØDE's mixer registers or
     /// closes audio ports (USB streams starting or stopping) or a replaced
@@ -770,10 +816,14 @@ impl Runtime {
     }
     /// How long until the next read, after a successful `observation`.
     fn interval_after(&self, observation: &Observation, watched: bool) -> Duration {
-        let settled = observation.applied
-            && observation.advancing
-            && self.pending.is_empty()
-            && self.all_advancing;
+        // A write since the read may have left a publication pending.
+        let settled = matches!(
+            observation.progress,
+            Progress::Running {
+                all_advanced: true,
+                ..
+            }
+        ) && self.pending.is_empty();
         if settled && !watched {
             self.idle_interval
         } else {
@@ -806,13 +856,10 @@ impl Runtime {
             Err(error) => {
                 self.writable = false;
                 Some(Observation {
-                    failure: true,
-                    applied: false,
-                    advancing: false,
+                    progress: Progress::Failed,
                     enabled: self.enabled,
                     active_ids: Vec::new(),
                     message: error.to_string(),
-                    meter: None,
                     native: Vec::new(),
                 })
             }
@@ -993,7 +1040,6 @@ impl Runtime {
             return Err(failure("native audio callback stopped advancing"));
         }
         advancing &= any_live;
-        self.all_advancing = processed_advanced && any_advanced;
         self.writable = advancing && applied;
         let message = if advancing && applied {
             "Native audio paths applied and advancing"
@@ -1003,7 +1049,7 @@ impl Runtime {
             "Waiting for matching native audio progress"
         }
         .into();
-        let meter = (advancing && applied && meters.len() == self.paths.len()).then_some(Meter {
+        let meter = (meters.len() == self.paths.len()).then_some(Meter {
             message_type: MeterType::Meter,
             revision: self.revision,
             generation: self.generation,
@@ -1017,14 +1063,19 @@ impl Runtime {
             running_for_ns: None,
             targets: meters,
         });
+        let progress = if advancing && applied {
+            Progress::Running {
+                meter,
+                all_advanced: processed_advanced && any_advanced,
+            }
+        } else {
+            Progress::Settling { advancing }
+        };
         Ok(Observation {
-            failure: false,
-            applied,
-            advancing,
+            progress,
             enabled: self.enabled,
             active_ids: self.selected_ids(),
             message,
-            meter,
             native: contexts,
         })
     }

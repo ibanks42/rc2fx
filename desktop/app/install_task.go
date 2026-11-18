@@ -60,11 +60,11 @@ func (a *App) installTask(i *Installer, cx *gk.Cx) guidedTask {
 		unplug: m.Unplug(),
 	}
 	switch run := m.Run; {
-	case run == nil && m.Finished:
+	case run == nil && m.Finished():
 		a.finishedPage(i, &t)
 	case run == nil:
 		a.beforePage(i, &t)
-	case run.Failed != nil:
+	case run.Status().Kind == installflow.RunFailed:
 		a.failedPage(i, &t)
 	default:
 		a.runningPage(i, &t)
@@ -88,8 +88,8 @@ func versionLine(m *installflow.Model) string {
 	mixer := m.Mixer
 	if run := m.Run; run != nil && run.Mixer != nil {
 		mixer = run.Mixer
-	} else if m.Last != nil && m.Last.Mixer != nil {
-		mixer = m.Last.Mixer
+	} else if last := m.LastRun(); last != nil && last.Mixer != nil {
+		mixer = last.Mixer
 	}
 	if mixer != nil {
 		rc2fx = " " + mixer.Version()
@@ -206,7 +206,7 @@ func (a *App) versionsDisclosure(i *Installer) gk.DivEl {
 			}
 			a.notify(cx)
 		})
-	busy := m.Busy != nil
+	busy := m.Busy()
 	noReleases := true
 	for range m.ReleasesFor(false) {
 		noReleases = false
@@ -385,7 +385,7 @@ func fetchLine(m *installflow.Model, p *installer.Progress) string {
 func updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
 	step := installflow.Steps[m.Run.Index]
 	var fill *float32
-	if step == installflow.StepFlash && m.Busy != nil && p != nil && p.Phase == "stage" {
+	if step == installflow.StepFlash && m.Busy() && p != nil && p.Phase == "stage" {
 		fill = installflow.Fraction(p)
 	}
 	share, value := "", float32(0)
@@ -404,7 +404,7 @@ func updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
 			Child(gk.Div().TextColor(rgb(Faint)).Child(txt(share)))).
 		Child(gk.Div().Mt(px(4)).Mb(px(12)).Child(gk.Progress("task-progress").Value(value))).
 		Child(seenRow(surface().Line, "2. The mixer installs it, then restarts. This part has no progress to show.", false))
-	if step == installflow.StepUSBMode || (step == installflow.StepFlash && m.Busy == nil) {
+	if step == installflow.StepUSBMode || (step == installflow.StepFlash && !m.Busy()) {
 		panel = panel.Child(gk.Div(s.Pt2).Child(spinnerLine("Putting the mixer in update mode…")))
 	}
 	return panel
@@ -482,7 +482,7 @@ func (a *App) failedPage(i *Installer, t *guidedTask) {
 			Child(prose(fmt.Sprintf("The part of the app that has administrator access stopped %s. This can happen if the computer was locked for a long time.", when), Muted))
 	} else {
 		body = body.Child(taskHeading(m.FailureTitle())).
-			Child(prose(*run.Failed, Muted))
+			Child(prose(run.Status().Why, Muted))
 	}
 	seen := taskPanel().Child(eyebrow("What the app sees now"))
 	for n, line := range m.SeenNow() {
@@ -653,7 +653,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	if !i.preferFlash {
 		offer = a.inPlaceOffer()
 	}
-	p := m.InPlace
+	p := m.InPlace()
 	at, failed := inPlaceStep(p)
 	steps := make([]installflow.TaskStep, len(inPlaceStages))
 	for n, title := range inPlaceStages {
@@ -683,7 +683,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 		return taskButton(id, label, primary).Disabled(i.busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				if a.installer != nil {
-					a.installer.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceIdle}
+					a.installer.model.InPlaceDismiss()
 				}
 				a.closeTask(cx, overview)
 			})
@@ -692,14 +692,14 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			if a.installer != nil {
 				a.installer.preferFlash = true
-				a.installer.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceIdle}
+				a.installer.model.InPlaceDismiss()
 			}
 			a.notify(cx)
 		})
 	retry := taskButton("task-retry", "Try again", true).Disabled(i.busy() || offer == nil).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			if a.installer != nil {
-				a.installer.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceIdle}
+				a.installer.model.InPlaceDismiss()
 			}
 			a.startInPlaceUpdate(cx)
 		})

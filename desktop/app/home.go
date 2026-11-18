@@ -110,7 +110,7 @@ func (a *App) homeKey() HomeKey {
 // channel's editor. Indicators move only then; Settings and the installer
 // draw no animated lines.
 func (a *App) animatedPage() bool {
-	return a.session.Connected && !a.settingsOpen && a.installer == nil
+	return a.session.Connected && a.nav.basePageInFront() && a.installer == nil
 }
 
 // levelBar is one overview bar: its view (line_overlay.go), or drawn still
@@ -148,8 +148,7 @@ func (a *App) openChannel(cx *gk.Cx, index int) {
 	a.channel = core.ChannelLeft
 	a.importDraft = nil
 	a.importError = nil
-	a.homeOpen = false
-	a.setSettingsOpen(false)
+	a.nav.showChannel()
 	a.rebuildEditors(cx)
 	a.notify(cx)
 }

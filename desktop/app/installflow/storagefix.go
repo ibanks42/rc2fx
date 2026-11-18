@@ -39,7 +39,8 @@ func (m *Model) WantsStorageFix() bool {
 
 // FixRunning reports the storage fix's request in flight.
 func (m *Model) FixRunning() bool {
-	return m.Run != nil && m.Run.Fix != nil && m.Busy != nil && m.Busy.Kind == installer.RequestStorageFix
+	busy := m.BusyRequest()
+	return m.Run != nil && m.Run.Fix != nil && busy != nil && busy.Kind == installer.RequestStorageFix
 }
 
 // FixProgress hands over the fix's newest progress while it runs.
@@ -136,10 +137,10 @@ const (
 // FixNote is what the finished install says about the storage fix it
 // tried. Only an outcome the script reported counts as fixed.
 func (m *Model) FixNote() FixNoteKind {
-	if m.Last == nil || m.Last.Fix == nil {
+	if m.finished == nil || m.finished.Fix == nil {
 		return FixNoteNone
 	}
-	reply := m.Last.Fix.Reply
+	reply := m.finished.Fix.Reply
 	switch {
 	case reply == nil:
 		return FixNoteNotApplied
@@ -157,7 +158,7 @@ func (m *Model) FixNote() FixNoteKind {
 // trying again installs with a normal flash.
 func (m *Model) FixStopped() bool {
 	run := m.Run
-	if run == nil || run.Failed == nil || run.Fix == nil {
+	if run == nil || run.status.Kind != RunFailed || run.Fix == nil {
 		return false
 	}
 	return run.Fix.Error != "" || (run.Fix.Reply != nil && run.Fix.Reply.Touched && !run.Fix.Reply.FinalSent)

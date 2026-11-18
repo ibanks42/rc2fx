@@ -54,15 +54,28 @@ struct Reading {
 /// under the same settings, so skipping can never supply the second read of
 /// the authority rule. A failed or differing read forgets it.
 #[derive(Default)]
-struct UnchangedShow {
-    last: Option<Reading>,
-    confirmed: bool,
+enum UnchangedShow {
+    /// Nothing to reuse: no stable complete read yet, or the last one failed.
+    #[default]
+    Unread,
+    /// One stable complete read, not yet confirmed by a second.
+    Once(Reading),
+    /// The last two stable complete reads agreed; this one may be reused.
+    Confirmed(Reading),
 }
 impl UnchangedShow {
     fn reusable(&self, identity: Option<&FileIdentity>, revision: u64) -> Option<HashSet<String>> {
-        let last = self.last.as_ref()?;
-        (self.confirmed && identity == Some(&last.identity) && last.revision == revision)
+        let Self::Confirmed(last) = self else {
+            return None;
+        };
+        (identity == Some(&last.identity) && last.revision == revision)
             .then(|| last.assignment.clone())
+    }
+    fn last(&self) -> Option<&Reading> {
+        match self {
+            Self::Unread => None,
+            Self::Once(reading) | Self::Confirmed(reading) => Some(reading),
+        }
     }
     fn record(
         &mut self,
@@ -82,22 +95,39 @@ impl UnchangedShow {
             *self = Self::default();
             return;
         };
-        self.confirmed = self.last.as_ref().is_some_and(|last| {
+        let agrees = self.last().is_some_and(|last| {
             last.identity == identity && last.revision == revision && &last.assignment == assignment
         });
-        self.last = Some(Reading {
+        let reading = Reading {
             identity,
             revision,
             assignment: assignment.clone(),
-        });
+        };
+        *self = if agrees {
+            Self::Confirmed(reading)
+        } else {
+            Self::Once(reading)
+        };
     }
+}
+
+/// How far the show's assignment is trusted.
+#[derive(Default)]
+enum Authority {
+    /// No complete read yet, or an unavailable read reset the candidate.
+    #[default]
+    Unconfirmed,
+    /// One complete read; the next must match it.
+    Candidate(HashSet<String>),
+    /// Two consecutive complete reads agreed. Every later complete read is
+    /// acted on, and an unavailable read no longer resets anything.
+    Established,
 }
 
 /// Identity-only state; bounded by the configured processing target catalog.
 #[derive(Default)]
 pub struct Watch {
-    assigned: Option<HashSet<String>>,
-    established: bool,
+    authority: Authority,
     pending: HashSet<String>,
 }
 impl Watch {
@@ -110,8 +140,8 @@ impl Watch {
         assigned: Option<HashSet<String>>,
     ) -> Option<SelectionRequest> {
         let Some(assigned) = assigned else {
-            if !self.established {
-                self.assigned = None;
+            if !matches!(self.authority, Authority::Established) {
+                self.authority = Authority::Unconfirmed;
             }
             return None;
         };
@@ -126,17 +156,19 @@ impl Watch {
             .map(|t| t.id.clone())
             .collect();
         let assigned: HashSet<_> = assigned.intersection(&known).cloned().collect();
-        if !self.established {
-            if self.assigned.as_ref() != Some(&assigned) {
-                self.assigned = Some(assigned);
+        match &self.authority {
+            Authority::Established => {}
+            Authority::Candidate(candidate) if *candidate == assigned => {
+                self.authority = Authority::Established;
+            }
+            Authority::Unconfirmed | Authority::Candidate(_) => {
+                self.authority = Authority::Candidate(assigned);
                 return None;
             }
-            self.established = true;
         }
         // Also reconcile initially stale selections, or a later explicit
         // enable of a source that the confirmed show no longer assigns.
         self.pending.extend(known.difference(&assigned).cloned());
-        self.assigned = Some(assigned.clone());
         // Reappearance cancels a queued removal, but never turns a chain on.
         // An already-disabled target needs no retry, and disappears from debt.
         self.pending.retain(|id| {
@@ -324,7 +356,7 @@ mod tests {
             assigned(&["mic-1"]).as_ref(),
             SystemTime::now(),
         );
-        assert!(show.last.is_none());
+        assert!(matches!(show, UnchangedShow::Unread));
         let mut fresh = identity(1);
         fresh.modified = SystemTime::now();
         for _ in 0..2 {
@@ -395,12 +427,17 @@ mod tests {
         let state = state();
         let mut w = Watch::default();
         assert!(w.observe(&state, assigned(&[])).is_none());
+        assert!(matches!(w.authority, Authority::Candidate(_)));
         assert!(w.observe(&state, None).is_none());
+        assert!(matches!(w.authority, Authority::Unconfirmed));
         assert!(w.observe(&state, assigned(&[])).is_none());
         // A different complete snapshot restarts the confirmation pair.
         assert!(w.observe(&state, assigned(&["usb-main"])).is_none());
         let request = w.observe(&state, assigned(&["usb-main"])).unwrap();
         assert_eq!(request.target_ids, ["usb-main", "send-chat"]);
+        // Once established, an unavailable read keeps the authority.
+        assert!(w.observe(&state, None).is_none());
+        assert!(matches!(w.authority, Authority::Established));
         // Outputs cannot be introduced to removal debt by bad caller input.
         assert!(w.pending.iter().all(|id| id != "send-chat"));
     }

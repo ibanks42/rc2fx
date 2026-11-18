@@ -1486,3 +1486,35 @@ fn the_payload_lists_match_the_desktop_installers() {
     assert_eq!(install::BINARIES[..], go_list("Binaries")[..]);
     assert_eq!(install::SCRIPTS[..], go_list("Scripts")[..]);
 }
+
+/// Only a failed or restarting session reports an error, and a restart
+/// reports one only when the previous version is being restored.
+#[test]
+fn a_session_state_carries_its_own_error() {
+    let cases = [
+        (SessionState::Accepting, "accepting", None),
+        (SessionState::Complete, "complete", None),
+        (SessionState::Installing, "installing", None),
+        (
+            SessionState::Restarting { warning: None },
+            "restarting",
+            None,
+        ),
+        (
+            SessionState::Restarting {
+                warning: Some("swap failed".into()),
+            },
+            "restarting",
+            Some("swap failed"),
+        ),
+        (SessionState::Failed("bad".into()), "failed", Some("bad")),
+    ];
+    for (state, name, error) in cases {
+        assert_eq!(state.name(), name);
+        assert_eq!(state.error(), error, "{state:?}");
+    }
+    assert_eq!(Upload::Envelope.encoding(), None);
+    for decoded in [false, true] {
+        assert_eq!(Upload::Delta { decoded }.encoding(), Some(DELTA_ENCODING));
+    }
+}

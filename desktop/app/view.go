@@ -17,7 +17,7 @@ import (
 // channelNav is the channel list: processed channels first, each with its
 // live line and effects; then the rest by kind; and the filter at the foot.
 func (a *App) channelNav(cx *gk.Cx) gk.Element {
-	editing := !a.homeOpen && !a.settingsOpen
+	editing := a.nav.channelInFront()
 	sources := a.showSources()
 	sourceOf := func(id string) *core.StockSource {
 		for _, src := range sources {
@@ -65,7 +65,6 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 				sourceDetail(source, ""), selected).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 					a.inputs.selected = &id
-					a.homeOpen = false
 					if index >= 0 {
 						a.selected = index
 					}
@@ -73,7 +72,7 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 					a.channel = core.ChannelLeft
 					a.importDraft = nil
 					a.importError = nil
-					a.setSettingsOpen(false)
+					a.nav.showChannel()
 					a.rebuildEditors(cx)
 					a.notify(cx)
 				}))
@@ -106,8 +105,8 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 		list = list.Child(gk.Div(s.Pt2).Px(px(12)).TextSize(px(12)).TextColor(rgb(Faint)).
 			Child(txt("Loading show inputs…")))
 	}
-	overview := !a.settingsOpen && a.homeOpen
-	settings := a.settingsOpen
+	overview := a.nav.homeInFront()
+	settings := a.nav.settings()
 	return gk.VFlex(s.FlexShrink0, s.HFull, s.BorderR1).W(px(SidebarWidth)).
 		BorderColor(rgb(surface().Line)).
 		Child(gk.Div().Px(px(12)).Pt(px(14)).
@@ -323,8 +322,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	target := a.target().Clone()
 	// A channel's editor fills the window to its foot; the other pages keep
 	// some room below their last section.
-	editorPage := !a.settingsOpen && !a.homeOpen &&
-		a.unprocessedSource() == nil
+	editorPage := a.nav.channelInFront() && a.unprocessedSource() == nil
 	bottom := PageBottom
 	if editorPage {
 		bottom = EditorBottom
@@ -347,9 +345,9 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	}
 	var rail gk.Element
 	switch {
-	case a.settingsOpen:
+	case a.nav.settings():
 		content = content.Child(a.settingsPage(cx))
-	case a.homeOpen:
+	case a.nav.home():
 		content = content.Child(a.homePage(cx))
 	default:
 		if source := a.unprocessedSource(); source != nil {
@@ -381,7 +379,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	root := gk.VFlex(s.SizeFull).FontFamily("Inter").Bg(rgb(surface().Bg)).TextColor(rgb(Text)).
 		TrackFocus(a.focus).
 		OnKeyDown(func(cx *gk.Cx, e gk.KeyEvent) {
-			away := !a.homeOpen || a.settingsOpen
+			away := !a.nav.homeInFront()
 			// Ctrl+Z / Ctrl+Shift+Z (Cmd on macOS) undo and redo edits,
 			// except while a text field has the keys.
 			if e.Key == "z" && e.Modifiers&(gk.ModControl|gk.ModPlatform) != 0 && a.editingValue == nil {

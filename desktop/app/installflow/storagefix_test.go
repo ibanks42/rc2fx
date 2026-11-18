@@ -121,14 +121,14 @@ func TestAFixedInstallWaitsForRC2FXAndSaysSo(t *testing.T) {
 	m, fix := startedFix(t)
 	reply := installer.StorageFix{Outcome: "fixed", Backup: "/backups/rcfix", Touched: true, FinalSent: true, Flashes: 2}
 	refresh := answer(t, m, fix, installer.Reply{Kind: installer.ReplyStorageFix, StorageFix: &reply})
-	if !m.Run.Flashed || m.Run.Failed != nil {
+	if !m.Run.Flashed || m.Failed() {
 		t.Fatalf("run %+v", m.Run)
 	}
 	if report(t, m, refresh, status(nil, absent(), true, false)) != nil {
 		t.Fatal("nothing more is sent: the fix flashed the firmware")
 	}
 	wantState(t, m, StepStart, StepStateWaiting)
-	m.Last = m.Run
+	m.finished = m.Run
 	if got := m.FixNote(); got != FixNoteFixed {
 		t.Fatalf("note %v", got)
 	}
@@ -142,12 +142,12 @@ func TestAFixThatLeftTheMixerAloneInstallsWithANormalFlash(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, fix := startedFix(t)
 			refresh := answer(t, m, fix, installer.Reply{Kind: installer.ReplyStorageFix, StorageFix: &reply})
-			if m.Run.Failed != nil || m.Run.Committed {
+			if m.Failed() || m.Run.Committed {
 				t.Fatalf("run %+v", m.Run)
 			}
 			usb := report(t, m, refresh, status(gv1(false), absent(), true, false))
 			wantRequest(t, usb, installer.Request{Kind: installer.RequestEnterUSBMode, Serial: "GV1"}, "the normal flash")
-			m.Last = m.Run
+			m.finished = m.Run
 			if got := m.FixNote(); got != FixNoteNotApplied {
 				t.Fatalf("note %v", got)
 			}
@@ -177,7 +177,7 @@ func TestAFixStoppedPartWayFailsAndTryAgainFlashesNormally(t *testing.T) {
 func TestAFixRequestThatFailedIsNotSentAgain(t *testing.T) {
 	m, fix := startedFix(t)
 	refresh := m.Finish(*fix, installer.Reply{}, errors.New("the installer helper stopped; choose Try again or start again"))
-	if m.Run.Fix.Error == "" || m.Run.Failed == nil {
+	if m.Run.Fix.Error == "" || !m.Failed() {
 		t.Fatalf("run %+v", m.Run)
 	}
 	report(t, m, refresh, status(gv1(false), absent(), true, false))
@@ -191,7 +191,7 @@ func TestTheFinishedInstallSaysWhatTheFixDid(t *testing.T) {
 	if m.FixNote() != FixNoteNone {
 		t.Fatal("no run, no note")
 	}
-	m.Last = &Run{}
+	m.finished = &Run{}
 	if m.FixNote() != FixNoteNone {
 		t.Fatal("a run without the fix says nothing about it")
 	}
@@ -202,12 +202,12 @@ func TestTheFinishedInstallSaysWhatTheFixDid(t *testing.T) {
 		"failed":        FixNoteNotApplied,
 		"unconfirmed":   FixNoteNotApplied,
 	} {
-		m.Last = &Run{Fix: &RunFix{Reply: &installer.StorageFix{Outcome: outcome, FinalSent: true}}}
+		m.finished = &Run{Fix: &RunFix{Reply: &installer.StorageFix{Outcome: outcome, FinalSent: true}}}
 		if got := m.FixNote(); got != want {
 			t.Errorf("%s: note %v", outcome, got)
 		}
 	}
-	m.Last = &Run{Fix: &RunFix{}}
+	m.finished = &Run{Fix: &RunFix{}}
 	if m.FixNote() != FixNoteNotApplied {
 		t.Fatal("a fix that never ran was not applied")
 	}

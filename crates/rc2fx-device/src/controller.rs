@@ -135,33 +135,27 @@ impl Controller {
             self.routing.clone(),
             self.selection.clone(),
         );
-        self.engine.audio_advancing = observation.advancing;
-        self.engine.applied_revision = if observation.applied && observation.advancing {
-            self.config().revision
-        } else {
-            0
-        };
-        if observation.advancing && !observation.failure {
+        use crate::native_backend::Progress;
+        let advancing = observation.progress.advancing();
+        let running = observation.progress.running();
+        self.engine.audio_advancing = advancing;
+        self.engine.applied_revision = if running { self.config().revision } else { 0 };
+        if advancing {
             self.note_running(self.engine.generation);
         }
-        self.engine.status = if observation.failure {
-            EnginePhase::Error
-        } else if observation.advancing {
-            EnginePhase::Running
-        } else {
-            EnginePhase::Starting
+        self.engine.status = match observation.progress {
+            Progress::Failed => EnginePhase::Error,
+            Progress::Settling { advancing: false } => EnginePhase::Starting,
+            Progress::Settling { advancing: true } | Progress::Running { .. } => {
+                EnginePhase::Running
+            }
         };
         self.engine.message = observation.message.clone();
-        self.routing.status = if observation.failure {
-            RoutingPhase::Error
-        } else if observation.advancing && observation.applied {
-            if observation.enabled {
-                RoutingPhase::Active
-            } else {
-                RoutingPhase::Bypassed
-            }
-        } else {
-            RoutingPhase::Unmanaged
+        self.routing.status = match observation.progress {
+            Progress::Failed => RoutingPhase::Error,
+            Progress::Running { .. } if observation.enabled => RoutingPhase::Active,
+            Progress::Running { .. } => RoutingPhase::Bypassed,
+            Progress::Settling { .. } => RoutingPhase::Unmanaged,
         };
         self.routing.channels = if self.routing.status == RoutingPhase::Active {
             self.config().selected_channels()
@@ -169,14 +163,15 @@ impl Controller {
             0
         };
         self.routing.message = observation.message;
-        self.selection.allowed =
-            observation.applied && observation.advancing && !observation.failure;
-        if observation.failure {
-            self.selection.status = SelectionPhase::Error;
-        } else if observation.applied && observation.advancing {
-            self.selection.status = SelectionPhase::Idle;
-            self.selection.active_target_ids = observation.active_ids;
-            self.selection.pending_target_ids.clear();
+        self.selection.allowed = running;
+        match observation.progress {
+            Progress::Failed => self.selection.status = SelectionPhase::Error,
+            Progress::Running { .. } => {
+                self.selection.status = SelectionPhase::Idle;
+                self.selection.active_target_ids = observation.active_ids;
+                self.selection.pending_target_ids.clear();
+            }
+            Progress::Settling { .. } => {}
         }
         if self.engine != before.0 || self.routing != before.1 || self.selection != before.2 {
             self.saved();
@@ -185,7 +180,10 @@ impl Controller {
         // cumulative figures relative to the last reset. The meter is None
         // while the engine settles; the engine's own events are still kept.
         let now_ns = crate::diagnostics_log::monotonic_ns();
-        let meter = observation.meter;
+        let meter = match observation.progress {
+            Progress::Running { meter, .. } => meter,
+            Progress::Failed | Progress::Settling { .. } => None,
+        };
         self.diagnostics
             .observe(meter.as_ref(), &observation.native, now_ns);
         if let Some(mut meter) = meter

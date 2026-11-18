@@ -103,7 +103,7 @@ func (a *App) pollFirstLook(cx *gk.Cx) {
 	if a.session.Connected && !a.flowFixture {
 		a.look = nil
 	}
-	if a.flowFixture || a.looking || a.session.Connected || a.installer != nil || !a.autoConnect ||
+	if a.flowFixture || a.looking || a.session.Connected || a.installer != nil || !a.link.auto() ||
 		time.Since(a.lookedAt) < firstLookEvery {
 		return
 	}
@@ -172,7 +172,7 @@ const (
 )
 
 func (a *App) connectionScreen(cx *gk.Cx) gk.Element {
-	if a.autoConnect && runtime.GOOS == "linux" && usbPermission(a.message) {
+	if a.link.auto() && runtime.GOOS == "linux" && usbPermission(a.message) {
 		return a.usbAccessScreen(cx)
 	}
 	h := a.firstHero()
@@ -224,11 +224,11 @@ func heroSpinner(text string) gk.DivEl {
 
 // firstHero is the first screen for the state the app sees now.
 func (a *App) firstHero() hero {
-	if !a.autoConnect {
+	if !a.link.auto() {
 		return hero{
 			first: "Disconnected from", second: "your RØDECaster.",
 			lead: "The mixer keeps processing on its own while the app is disconnected.",
-			act: heroButton("connect", "Connect").Disabled(a.connecting).
+			act: heroButton("connect", "Connect").Disabled(a.link.connecting()).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.connect(cx) }),
 			dot: Faint, status: "Disconnected",
 		}

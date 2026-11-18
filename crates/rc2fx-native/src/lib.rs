@@ -31,7 +31,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -120,14 +120,94 @@ static CYCLE: Line<CycleCounters> = Line(CycleCounters {
     gaps: [const { AtomicU64::new(0) }; 7],
 });
 
+/// Whether a context's pipeline still waits for its client's ports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Attach {
+    /// Built once the client's planned ports are registered.
+    Pending,
+    /// Not waiting: built at registration or after the ports, refused, or
+    /// never planned.
+    Settled,
+}
+
+/// Where a context slot is in its lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    /// Unclaimed; a new registration may take it.
+    Free,
+    /// Claimed and the client's installed callback: control requests and
+    /// reports reach it.
+    Live(Attach),
+    /// Claimed but not the installed callback: native registration has not
+    /// succeeded yet, failed, been replaced by a newer one, or the client is
+    /// being closed. Kept until native close quiesces its callbacks.
+    Retained(Attach),
+}
+impl Slot {
+    const FREE: u8 = 0;
+    const RETAINED_PENDING: u8 = 1;
+    const RETAINED_SETTLED: u8 = 2;
+    const LIVE_PENDING: u8 = 3;
+    const LIVE_SETTLED: u8 = 4;
+    const fn to_u8(self) -> u8 {
+        match self {
+            Self::Free => Self::FREE,
+            Self::Retained(Attach::Pending) => Self::RETAINED_PENDING,
+            Self::Retained(Attach::Settled) => Self::RETAINED_SETTLED,
+            Self::Live(Attach::Pending) => Self::LIVE_PENDING,
+            Self::Live(Attach::Settled) => Self::LIVE_SETTLED,
+        }
+    }
+    /// Total: only `to_u8` writes the atomic, so other values never occur.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::RETAINED_PENDING => Self::Retained(Attach::Pending),
+            Self::RETAINED_SETTLED => Self::Retained(Attach::Settled),
+            Self::LIVE_PENDING => Self::Live(Attach::Pending),
+            Self::LIVE_SETTLED => Self::Live(Attach::Settled),
+            _ => Self::Free,
+        }
+    }
+    const fn is_claimed(self) -> bool {
+        !matches!(self, Self::Free)
+    }
+    const fn is_live(self) -> bool {
+        matches!(self, Self::Live(_))
+    }
+    /// The same slot, installed or not, keeping its attach state.
+    const fn installed(self, installed: bool) -> Self {
+        match self {
+            Self::Free => Self::Free,
+            Self::Live(attach) | Self::Retained(attach) if installed => Self::Live(attach),
+            Self::Live(attach) | Self::Retained(attach) => Self::Retained(attach),
+        }
+    }
+}
+
+/// A context's `Slot`, in one atomic so that a reader without CONTROL sees a
+/// consistent lifetime. Only CONTROL holders change it; the audio callback
+/// never reads it.
+struct Lifecycle(AtomicU8);
+impl Lifecycle {
+    const fn new() -> Self {
+        Self(AtomicU8::new(Slot::FREE))
+    }
+    fn load(&self, order: Ordering) -> Slot {
+        Slot::from_u8(self.0.load(order))
+    }
+    fn store(&self, slot: Slot, order: Ordering) {
+        self.0.store(slot.to_u8(), order);
+    }
+}
+
 /// One wrapped callback registration. Its callback thread reads the head and
 /// writes the timing and the stamps every cycle, so each context starts on a
 /// cache line and shares none with anything else.
 #[repr(align(64))]
 struct Context {
-    claimed: AtomicBool,
-    installed: AtomicBool,
-    pending: AtomicBool,
+    /// Published last on claim and cleared last on close, with Release, so a
+    /// reader that loads it with Acquire sees the fields it guards.
+    slot: Lifecycle,
     token: AtomicU64,
     client: AtomicUsize,
     callback: AtomicUsize,
@@ -145,9 +225,7 @@ struct Context {
 impl Context {
     const fn new() -> Self {
         Self {
-            claimed: AtomicBool::new(false),
-            installed: AtomicBool::new(false),
-            pending: AtomicBool::new(false),
+            slot: Lifecycle::new(),
             token: AtomicU64::new(0),
             client: AtomicUsize::new(0),
             callback: AtomicUsize::new(0),
@@ -696,11 +774,12 @@ unsafe fn native_registration(
     let result = unsafe { original(client, callback, argument) };
     if result == 0 {
         for context in &CONTEXTS {
-            if context.claimed.load(Ordering::Acquire)
-                && context.client.load(Ordering::Relaxed) == client as usize
-            {
-                context.installed.store(
-                    installed.is_some_and(|selected| std::ptr::eq(context, selected)),
+            let slot = context.slot.load(Ordering::Acquire);
+            if slot.is_claimed() && context.client.load(Ordering::Relaxed) == client as usize {
+                context.slot.store(
+                    slot.installed(
+                        installed.is_some_and(|selected| std::ptr::eq(context, selected)),
+                    ),
                     Ordering::Release,
                 );
             }
@@ -780,7 +859,7 @@ unsafe extern "C" fn set_process(
     // instead of allocating and immediately destroying a DSP on exhaustion.
     let Some(context) = CONTEXTS
         .iter()
-        .find(|context| !context.claimed.load(Ordering::Acquire))
+        .find(|context| !context.slot.load(Ordering::Acquire).is_claimed())
     else {
         CAPACITY_FAILURES.fetch_add(1, Ordering::Relaxed);
         // Retained contexts cannot be reclaimed until native close quiesces
@@ -818,7 +897,6 @@ unsafe extern "C" fn set_process(
         None
     };
     context.client.store(client as usize, Ordering::Relaxed);
-    context.pending.store(pending, Ordering::Release);
     // CONTROL serializes token assignment. A reused client pointer or static
     // context slot cannot accept a request for its previous installed lifetime.
     NEXT_CONTEXT_TOKEN.store(token + 1, Ordering::Relaxed);
@@ -831,7 +909,15 @@ unsafe extern "C" fn set_process(
             .store(Box::into_raw(engine), Ordering::Release);
         PIPELINES_CREATED.fetch_add(1, Ordering::Relaxed);
     }
-    context.claimed.store(true, Ordering::Release);
+    // Not yet installed: native registration below makes it live.
+    context.slot.store(
+        Slot::Retained(if pending {
+            Attach::Pending
+        } else {
+            Attach::Settled
+        }),
+        Ordering::Release,
+    );
     // Retain old/failed registrations until successful native close. Context
     // addresses are static; no racing callback can observe a freed allocation.
     let result = unsafe {
@@ -1124,14 +1210,14 @@ fn attach_pending(registry: &pipeline::Registry, client: usize) -> bool {
     }
     let mut attached = false;
     for context in &CONTEXTS {
-        if !context.claimed.load(Ordering::Acquire)
-            || !context.installed.load(Ordering::Acquire)
+        if context.slot.load(Ordering::Acquire) != Slot::Live(Attach::Pending)
             || context.client.load(Ordering::Relaxed) != client
-            || !context.pending.load(Ordering::Acquire)
         {
             continue;
         }
-        context.pending.store(false, Ordering::Release);
+        context
+            .slot
+            .store(Slot::Live(Attach::Settled), Ordering::Release);
         let Ok(mut controls) = context.parameters.lock() else {
             continue;
         };
@@ -1180,7 +1266,7 @@ unsafe extern "C" fn close(client: *mut c_void) -> c_int {
     if result == 0 {
         registry.close(client as usize);
         for context in &CONTEXTS {
-            if context.claimed.load(Ordering::Relaxed)
+            if context.slot.load(Ordering::Relaxed).is_claimed()
                 && context.client.load(Ordering::Relaxed) == client as usize
             {
                 let engine = context
@@ -1203,14 +1289,16 @@ unsafe extern "C" fn close(client: *mut c_void) -> c_int {
                 if let Ok(mut controls) = context.parameters.lock() {
                     controls.clear();
                 }
-                context.installed.store(false, Ordering::Release);
+                // No longer reported as live, and no longer waiting for ports.
+                context
+                    .slot
+                    .store(Slot::Retained(Attach::Settled), Ordering::Release);
                 context.timing.retire_into(&RETIRED_TIMING);
-                context.pending.store(false, Ordering::Release);
                 context.token.store(0, Ordering::Relaxed);
                 context.callback.store(0, Ordering::Relaxed);
                 context.argument.store(0, Ordering::Relaxed);
                 context.client.store(0, Ordering::Relaxed);
-                context.claimed.store(false, Ordering::Release);
+                context.slot.store(Slot::Free, Ordering::Release);
                 RECLAIMED.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -1276,8 +1364,7 @@ fn with_parameter_control<T>(
     // Return backpressure instead of waiting behind a native lifecycle call.
     let _registry = CONTROL.try_lock().map_err(lock_error)?;
     let Some(context) = CONTEXTS.iter().find(|context| {
-        context.claimed.load(Ordering::Acquire)
-            && context.installed.load(Ordering::Acquire)
+        context.slot.load(Ordering::Acquire).is_live()
             && context.token.load(Ordering::Relaxed) == token
     }) else {
         return Err(rc2fx_native_control::ErrorCode::Unavailable);
@@ -1358,9 +1445,7 @@ impl ipc::Backend for NativeBackend {
         // inventory that follows its retirement.
         let retired_recent = RETIRED_TIMING.take_callback_recent();
         for context in &CONTEXTS {
-            if !context.claimed.load(Ordering::Acquire)
-                || !context.installed.load(Ordering::Acquire)
-            {
+            if !context.slot.load(Ordering::Acquire).is_live() {
                 continue;
             }
             let mut controls = context.parameters.try_lock().map_err(lock_error)?;
@@ -1486,7 +1571,7 @@ fn build_report() -> serde_json::Value {
     let gauged = gauges::enabled();
     let retained = CONTEXTS
         .iter()
-        .filter(|context| context.claimed.load(Ordering::Acquire))
+        .filter(|context| context.slot.load(Ordering::Acquire).is_claimed())
         .count();
     let mut report = serde_json::json!({"probeOnly":true,"dspEnabled":read(&INPUT_BLOCKS)+read(&OUTPUT_BLOCKS)>0,
         "registrations":read(&REGISTRATIONS),"callbacks":read(&CYCLE.callbacks),"buffersInside":read(&CYCLE.buffer_calls_inside),
@@ -1517,7 +1602,7 @@ fn build_report() -> serde_json::Value {
         serde_json::to_value(RETIRED_TIMING.snapshot()).unwrap_or(serde_json::Value::Null);
     report["callbackTiming"] = CONTEXTS
         .iter()
-        .filter(|context| context.installed.load(Ordering::Acquire))
+        .filter(|context| context.slot.load(Ordering::Acquire).is_live())
         .map(|context| serde_json::to_value(context.timing.snapshot()).unwrap_or_default())
         .collect();
     report["helper"] = serde_json::json!({
@@ -1548,7 +1633,7 @@ fn build_report() -> serde_json::Value {
     let mut preparation_workers = Vec::new();
     let mut unavailable = 0usize;
     for (context_slot, context) in CONTEXTS.iter().enumerate() {
-        if !context.installed.load(Ordering::Acquire) {
+        if !context.slot.load(Ordering::Acquire).is_live() {
             continue;
         }
         let Ok(controls) = context.parameters.try_lock() else {
@@ -1575,7 +1660,7 @@ fn build_report() -> serde_json::Value {
     report["workerPreparationUnavailableReads"] = unavailable.into();
     report["workers"] = CONTEXTS
         .iter()
-        .filter(|context| context.installed.load(Ordering::Acquire))
+        .filter(|context| context.slot.load(Ordering::Acquire).is_live())
         .filter_map(|context| context.parameters.try_lock().ok())
         .flat_map(|controls| {
             controls
@@ -1590,7 +1675,7 @@ fn build_report() -> serde_json::Value {
         .collect();
     report["workerOutliers"] = CONTEXTS
         .iter()
-        .filter(|context| context.installed.load(Ordering::Acquire))
+        .filter(|context| context.slot.load(Ordering::Acquire).is_live())
         .filter_map(|context| context.parameters.try_lock().ok())
         .flat_map(|controls| {
             controls
@@ -2135,6 +2220,46 @@ mod hook_tests {
         }
         let distinct: std::collections::HashSet<_> = lines.iter().collect();
         assert_eq!(distinct.len(), lines.len());
+    }
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    const ALL: [Slot; 5] = [
+        Slot::Free,
+        Slot::Retained(Attach::Pending),
+        Slot::Retained(Attach::Settled),
+        Slot::Live(Attach::Pending),
+        Slot::Live(Attach::Settled),
+    ];
+
+    #[test]
+    fn every_slot_survives_its_atomic_encoding() {
+        let lifecycle = Lifecycle::new();
+        assert_eq!(lifecycle.load(Ordering::Acquire), Slot::Free);
+        for slot in ALL {
+            lifecycle.store(slot, Ordering::Release);
+            assert_eq!(lifecycle.load(Ordering::Acquire), slot);
+        }
+        for value in 5..=u8::MAX {
+            assert_eq!(Slot::from_u8(value), Slot::Free);
+        }
+    }
+
+    #[test]
+    fn installing_keeps_the_attach_state_and_never_claims_a_free_slot() {
+        for attach in [Attach::Pending, Attach::Settled] {
+            for slot in [Slot::Live(attach), Slot::Retained(attach)] {
+                assert_eq!(slot.installed(true), Slot::Live(attach));
+                assert_eq!(slot.installed(false), Slot::Retained(attach));
+                assert!(slot.is_claimed());
+            }
+        }
+        assert_eq!(Slot::Free.installed(true), Slot::Free);
+        assert!(!Slot::Free.is_claimed() && !Slot::Free.is_live());
+        assert!(!Slot::Retained(Attach::Settled).is_live());
     }
 }
 

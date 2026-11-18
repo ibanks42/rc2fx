@@ -78,6 +78,28 @@ fn a_native_paths_recent_peaks_age_out_and_clear() {
     );
 }
 
+/// A failed read never advances; running always does; settling says which.
+#[test]
+fn progress_reports_advancing_and_running() {
+    let cases = [
+        (Progress::Failed, false, false),
+        (Progress::Settling { advancing: false }, false, false),
+        (Progress::Settling { advancing: true }, true, false),
+        (
+            Progress::Running {
+                meter: None,
+                all_advanced: false,
+            },
+            true,
+            true,
+        ),
+    ];
+    for (progress, advancing, running) in cases {
+        assert_eq!(progress.advancing(), advancing, "{progress:?}");
+        assert_eq!(progress.running(), running, "{progress:?}");
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Event {
     prepare: bool,
@@ -399,7 +421,7 @@ fn fixture_with(progress_timeout: Duration) -> (tempfile::TempDir, Peer, Control
 }
 fn advance(controller: &mut Controller, runtime: &mut Runtime) {
     let observation = runtime.observe(Instant::now()).unwrap();
-    assert!(observation.applied && observation.advancing);
+    assert!(observation.progress.running());
     controller.native_progress(observation);
 }
 fn toggle(controller: &mut Controller, runtime: &mut Runtime, enabled: bool) {
@@ -650,6 +672,28 @@ fn bound_path_selection_and_structural_replacement_touch_only_changed_paths() {
     );
 }
 
+/// A running engine takes any change; a pending publication blocks every
+/// change, a disable included, until a read confirms it.
+#[test]
+fn a_pending_publication_admits_no_change_until_confirmed() {
+    let (_directory, peer, mut controller, mut runtime) = fixture();
+    assert!(runtime.can_save_or_enable());
+    assert!(runtime.can_disable());
+    peer.drop_commit.store(true, Ordering::Release);
+    toggle(&mut controller, &mut runtime, false);
+    assert!(!runtime.pending.is_empty());
+    assert!(!runtime.can_save_or_enable());
+    assert!(!runtime.can_disable());
+    assert!(matches!(
+        runtime.set_enabled(controller.config(), false),
+        Err(Error::NativeBusy)
+    ));
+    advance(&mut controller, &mut runtime);
+    assert!(runtime.pending.is_empty());
+    assert!(runtime.can_save_or_enable());
+    assert!(runtime.can_disable());
+}
+
 #[test]
 fn lost_global_commit_reply_retries_same_receipt_without_another_prepare_or_save() {
     let (_directory, peer, mut controller, mut runtime) = fixture();
@@ -732,8 +776,10 @@ fn external_publications_do_not_turn_live_frames_into_stalls_and_exact_restore_r
     change(&mut client, 2, PathMode::Passthrough);
     runtime.paths[0].last_progress = Instant::now() - Duration::from_secs(3);
     let observation = runtime.observe(Instant::now()).unwrap();
-    assert!(observation.advancing && !observation.applied);
-    assert!(!observation.failure);
+    assert!(matches!(
+        observation.progress,
+        Progress::Settling { advancing: true }
+    ));
     change(&mut client, 3, PathMode::Processed);
     // Applied acknowledgement can precede the next ~50ms meter window. Do not
     // relabel old amplitudes as the restored publication or report a stall.
@@ -741,8 +787,10 @@ fn external_publications_do_not_turn_live_frames_into_stalls_and_exact_restore_r
     let observation = runtime
         .observe(Instant::now() + Duration::from_millis(50))
         .unwrap();
-    assert!(observation.applied && observation.advancing);
-    assert!(observation.meter.is_none());
+    assert!(matches!(
+        observation.progress,
+        Progress::Running { meter: None, .. }
+    ));
     peer.hold_window.store(false, Ordering::Release);
     advance(&mut controller, &mut runtime);
     assert!(controller.state().is_applied());
@@ -912,12 +960,16 @@ fn a_busy_engine_after_an_idle_wait_is_not_a_stall() {
     assert!(runtime.poll(|| false).is_none());
     aged(&mut runtime, timeout);
     let stalled = runtime.poll(|| false).expect("a real stall is reported");
-    assert!(stalled.failure);
+    assert!(matches!(stalled.progress, Progress::Failed));
+    // A failed engine takes no new settings, but a disable may still remove
+    // a failed DSP path.
+    assert!(!runtime.can_save_or_enable());
+    assert!(runtime.can_disable());
     // The engine answers again: one read clears it.
     peer.busy.store(false, Ordering::Release);
     runtime.next_poll = Instant::now();
     let recovered = runtime.poll(|| false).unwrap();
-    assert!(!recovered.failure && recovered.advancing);
+    assert!(recovered.progress.advancing());
 }
 
 /// The saved settings with mic-1's gain at `db`, based on the saved revision.
@@ -989,7 +1041,7 @@ async fn a_live_edit_plays_at_once_without_saving_or_publishing_state() {
     // routed and applied. A live edit never shows as "Not routed".
     peer.hold_apply.store(true, Ordering::Release);
     let observation = runtime.observe(Instant::now()).unwrap();
-    assert!(observation.applied && observation.advancing);
+    assert!(observation.progress.running());
     controller.native_progress(observation);
     let held = controller.state();
     assert_eq!(held.engine.status, EnginePhase::Running);

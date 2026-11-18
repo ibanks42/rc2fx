@@ -36,7 +36,6 @@ type presetPending struct {
 
 // PresetLibrary is the preset list and the request that is out.
 type PresetLibrary struct {
-	open          bool
 	items         []core.PresetSummary
 	name          gk.InputState
 	pending       *presetPending

@@ -25,17 +25,34 @@ const CLIENT_IDLE: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct Session {
     nonce: u64,
+    /// When the owner last sent a valid report or had a request answered.
+    /// None until the first client says hello, so that hello is never
+    /// refused. Another client may take the session over once this is
+    /// `CLIENT_IDLE` old. The server's own `active` clock, on tokio's time,
+    /// decides when the owner's event subscription lapses.
     seen: Option<Instant>,
+    /// The newest request ID admitted in this session. A request at or
+    /// below it is a replay and is refused, whatever `exchange` holds.
     last: u32,
-    receiving: bool,
-    assembly: Assembly,
-    reply: Vec<u8>,
+    /// What became of request `last`.
+    exchange: Exchange,
     /// Protocol 4, which acknowledges a non-final request fragment only at a
     /// window boundary and fetches several reply reports at once. Empty data
     /// in a hello keeps protocol 3, exactly as before.
     v4: bool,
     /// The window the server sized for this link when it started.
     window: usize,
+}
+/// The request `Session::last` names, from its first fragment to its reply.
+#[derive(Default)]
+enum Exchange {
+    /// No request yet, its fragments were refused, or it is running.
+    #[default]
+    Idle,
+    /// Its fragments are arriving in order.
+    Receiving(Assembly),
+    /// It ran, and this packed reply can be fetched.
+    Answered(Vec<u8>),
 }
 enum Action {
     /// Zero reports means the fragment needs no acknowledgement.
@@ -125,16 +142,17 @@ impl Session {
                         return error("USB request was already admitted; not replayed");
                     }
                     self.last = f.request;
-                    self.receiving = true;
-                    self.reply.clear();
-                    self.assembly.clear();
+                    self.exchange = Exchange::Receiving(Assembly::default());
                 }
-                if !self.receiving || f.request != self.last {
+                let Exchange::Receiving(assembly) = &mut self.exchange else {
+                    return error("Invalid USB request sequence");
+                };
+                if f.request != self.last {
                     return error("Invalid USB request sequence");
                 }
-                match self.assembly.push(f, MAX_REQUEST) {
+                match assembly.push(f, MAX_REQUEST) {
                     Ok(Some(request)) => {
-                        self.receiving = false;
+                        self.exchange = Exchange::Idle;
                         Action::Execute(request)
                     }
                     Ok(None) => {
@@ -151,16 +169,17 @@ impl Session {
                         }
                     }
                     Err(message) => {
-                        self.receiving = false;
+                        self.exchange = Exchange::Idle;
                         error(message)
                     }
                 }
             }
             Kind::Fetch
                 if f.request == self.last
-                    && !self.reply.is_empty()
+                    && let Exchange::Answered(reply) = &self.exchange
+                    && !reply.is_empty()
                     && f.data.is_empty()
-                    && f.offset < self.reply.len()
+                    && f.offset < reply.len()
                     && f.offset.is_multiple_of(INPUT_PAYLOAD) =>
             {
                 // Protocol 3 asks for one report and requires `total` to be
@@ -179,16 +198,16 @@ impl Session {
                 let mut replies = Vec::with_capacity(count);
                 for index in 0..count {
                     let start = f.offset + index * INPUT_PAYLOAD;
-                    if start >= self.reply.len() {
+                    if start >= reply.len() {
                         break;
                     }
-                    let end = (start + INPUT_PAYLOAD).min(self.reply.len());
+                    let end = (start + INPUT_PAYLOAD).min(reply.len());
                     replies.push(response(
                         f,
                         Kind::Reply,
                         start,
-                        self.reply.len(),
-                        &self.reply[start..end],
+                        reply.len(),
+                        &reply[start..end],
                     ));
                 }
                 Action::Send(replies)
@@ -235,7 +254,12 @@ impl Drop for SocketFile {
 pub(crate) struct Server {
     session: Session,
     api: Api,
-    /// When the session's owner last sent a report or had a request answered.
+    /// When the session's owner last sent a report or had a request answered,
+    /// on tokio's clock. It decides when the owner's event subscription
+    /// lapses; `Session::seen` decides when another client may take over.
+    /// They move together, except that a report the session refuses before
+    /// it checks the session ID (a malformed hello from the owner) counts
+    /// here and not there.
     active: tokio::time::Instant,
 }
 
@@ -330,7 +354,7 @@ impl Server {
                 // must not take the session over before its reply is fetched.
                 self.session.seen = Some(Instant::now());
                 let json = serde_json::to_vec(&reply).map_err(io::Error::other)?;
-                self.session.reply = match rc2fx_usb::pack(&json, MAX_REPLY) {
+                let packed = match rc2fx_usb::pack(&json, MAX_REPLY) {
                     Ok(bytes) => bytes,
                     Err(_) => rc2fx_usb::pack(
                         &serde_json::to_vec(&fail(413, "USB reply too large"))
@@ -339,6 +363,7 @@ impl Server {
                     )
                     .map_err(io::Error::other)?,
                 };
+                self.session.exchange = Exchange::Answered(packed);
                 vec![response(&frame, Kind::Ack, frame.total, frame.total, &[])]
             }
         };
@@ -612,6 +637,71 @@ mod tests {
         }
     }
 
+    /// A request's fragments are taken only while it is being received, and
+    /// its reply can be fetched only once it was answered and until the next
+    /// request is admitted.
+    #[test]
+    fn a_request_is_received_then_answered_and_a_new_one_replaces_it() {
+        let now = Instant::now();
+        let mut session = Session::default();
+        assert!(matches!(
+            session.accept(&hello(1, b""), now),
+            Action::Reset(_)
+        ));
+        let kind = |action: Action| match action {
+            Action::Send(replies) if replies.len() == 1 => {
+                Frame::decode(&replies[0], INPUT_ID).unwrap().kind
+            }
+            _ => panic!("one report answers"),
+        };
+        let fragment = |request: u32, offset: usize, total: usize| Frame {
+            kind: Kind::Request,
+            session: 1,
+            request,
+            offset,
+            total,
+            data: &FILL[..1],
+        };
+        let fetch = |request: u32| Frame {
+            kind: Kind::Fetch,
+            session: 1,
+            request,
+            offset: 0,
+            total: 0,
+            data: &[],
+        };
+        // Nothing is received yet: a continuation and a fetch are refused.
+        assert_eq!(kind(session.accept(&fragment(1, 1, 2), now)), Kind::Error);
+        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Error);
+        assert!(matches!(session.exchange, Exchange::Idle));
+        // The first fragment starts receiving and the second completes it.
+        assert_eq!(kind(session.accept(&fragment(1, 0, 2), now)), Kind::Ack);
+        assert!(matches!(session.exchange, Exchange::Receiving(_)));
+        assert!(matches!(
+            session.accept(&fragment(1, 1, 2), now),
+            Action::Execute(bytes) if bytes.len() == 2
+        ));
+        // While it runs there is no reply to fetch and nothing to continue.
+        assert!(matches!(session.exchange, Exchange::Idle));
+        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Error);
+        assert_eq!(kind(session.accept(&fragment(1, 1, 2), now)), Kind::Error);
+        // Answered, its reply can be fetched, but only by its own ID.
+        session.exchange = Exchange::Answered(vec![0x33; 3]);
+        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Reply);
+        assert_eq!(kind(session.accept(&fetch(2), now)), Kind::Error);
+        // A replay of its first fragment is refused and keeps the reply.
+        assert_eq!(kind(session.accept(&fragment(1, 0, 2), now)), Kind::Error);
+        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Reply);
+        // The next request drops the reply.
+        assert_eq!(kind(session.accept(&fragment(2, 0, 2), now)), Kind::Ack);
+        assert_eq!(kind(session.accept(&fetch(1), now)), Kind::Error);
+        // A fragment that breaks the sequence ends the receipt for good.
+        assert_eq!(kind(session.accept(&fragment(2, 1, 3), now)), Kind::Error);
+        assert!(matches!(session.exchange, Exchange::Idle));
+        assert_eq!(kind(session.accept(&fragment(2, 1, 2), now)), Kind::Error);
+        assert_eq!(session.last, 2);
+    }
+
     #[test]
     fn protocol_four_fetches_several_reply_reports_but_never_more_than_its_window() {
         let now = Instant::now();
@@ -624,7 +714,7 @@ mod tests {
             Action::Reset(_)
         ));
         session.last = 4;
-        session.reply = vec![0x33; 2 * INPUT_PAYLOAD + 5];
+        session.exchange = Exchange::Answered(vec![0x33; 2 * INPUT_PAYLOAD + 5]);
         let fetch = |total: usize, offset: usize| Frame {
             kind: Kind::Fetch,
             session: 1,
@@ -643,7 +733,7 @@ mod tests {
             .collect();
         assert_eq!(frames[0].offset, 0);
         assert_eq!(frames[1].offset, INPUT_PAYLOAD);
-        assert_eq!(frames[0].total, session.reply.len());
+        assert_eq!(frames[0].total, 2 * INPUT_PAYLOAD + 5);
         assert_eq!(frames[1].data.len(), INPUT_PAYLOAD);
         // The last report stops at the end of the reply.
         let Action::Send(replies) = session.accept(&fetch(3, 2 * INPUT_PAYLOAD), now) else {
@@ -670,7 +760,7 @@ mod tests {
             Action::Reset(_)
         ));
         session.last = 4;
-        session.reply = vec![0x33; 2 * INPUT_PAYLOAD + 5];
+        session.exchange = Exchange::Answered(vec![0x33; 2 * INPUT_PAYLOAD + 5]);
         let Action::Send(replies) = session.accept(&fetch(0, 0), now) else {
             panic!("a protocol 3 fetch answers")
         };

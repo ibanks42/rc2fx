@@ -122,7 +122,7 @@ func TestAPackageItsReleaseRejectsIsRemovedAndShown(t *testing.T) {
 	if outcome.State != Failed("This update has not been signed yet.") {
 		t.Fatalf("state %+v", outcome.State)
 	}
-	if outcome.Ready != nil || outcome.Retry != nil {
+	if outcome.State.HasAsset {
 		t.Fatal("rejected package offered")
 	}
 }
@@ -140,16 +140,16 @@ func TestAPackageThatCouldNotBeCheckedIsKeptToCheckAgain(t *testing.T) {
 		t.Fatal("unchecked package removed")
 	}
 	outcome := CheckedOutcome(pkg, result)
-	if outcome.State != Failed("Could not check this update.") || outcome.Ready != nil {
+	if outcome.State != FailedKept("Could not check this update.", pkg) {
 		t.Fatalf("outcome %+v", outcome)
 	}
 	update := empty(nil)
-	update.packages, update.state, update.retry = packages, outcome.State, outcome.Retry
+	update.packages, update.state = packages, outcome.State
 	// Shown even when today's check offers nothing, with a retry.
 	if !update.StaysShown() || update.InProgress() {
 		t.Fatal("not shown")
 	}
-	if !update.Retrying() || !update.OnDisk(*update.retry) {
+	if !update.Retrying() || !update.OnDisk(update.State().Asset) {
 		t.Fatal("no retry")
 	}
 	update.state = Idle()
@@ -182,7 +182,7 @@ func TestAPackageThatPassesIsReady(t *testing.T) {
 		t.Fatal("package removed")
 	}
 	outcome := CheckedOutcome(pkg, result)
-	if outcome.State != Ready("1.2.3") || outcome.Ready == nil || outcome.Ready.Version != "1.2.3" {
+	if outcome.State != ReadyToApply(pkg) || outcome.State.Version != "1.2.3" {
 		t.Fatalf("outcome %+v", outcome)
 	}
 }
@@ -336,7 +336,7 @@ func TestADownloadThatPassesIsReadyAndAppliedOnlyOnARestart(t *testing.T) {
 	if changed, ended := u.Advance(progress); !changed || !ended || u.State() != VerifyingState("1.2.3") {
 		t.Fatalf("advance %v %v %+v", changed, ended, u.State())
 	}
-	if _, check := u.FinishDownload(result); check || u.State() != Ready("1.2.3") {
+	if _, check := u.FinishDownload(result); check || u.State() != ReadyToApply(pkg) {
 		t.Fatalf("finish %+v", u.State())
 	}
 	u.LaunchOnQuit()
@@ -395,7 +395,11 @@ func TestAFailedDownloadSaysWhy(t *testing.T) {
 		u.feed, u.checks = feed, feed.checks
 		u.Start()
 		u.FinishDownload(u.Download(NewProgress())())
-		if u.State() != Failed(c.message) || u.Retrying() != c.retry {
+		want := Failed(c.message)
+		if c.retry {
+			want = FailedKept(c.message, pkg)
+		}
+		if u.State() != want || u.Retrying() != c.retry {
 			t.Fatalf("%s: %+v retry %v", c.name, u.State(), u.Retrying())
 		}
 	}
@@ -405,5 +409,46 @@ func TestAFailedDownloadSaysWhy(t *testing.T) {
 	u.FinishDownload(u.Download(NewProgress())())
 	if u.State() != Failed("This update is not ready to download yet. Try again later.") {
 		t.Fatalf("%+v", u.State())
+	}
+}
+
+func TestTheStateCarriesThePackageToApplyOrCheckAgain(t *testing.T) {
+	packages := t.TempDir()
+	pkg := asset(own("1.2.3"))
+	file(t, filepath.Join(packages, own("1.2.3")))
+	m := &fakeManager{kind: UpdateAvailable, target: pkg}
+
+	// A preview's Ready has nothing to apply.
+	u := empty(m)
+	u.packages, u.state = packages, Ready("1.2.3")
+	if u.Restart(false) != RestartNothing || u.applyOnQuit != nil {
+		t.Fatal("restarted into nothing")
+	}
+
+	// A kept package is only checked again, and checking takes it.
+	u = empty(m)
+	u.packages, u.state = packages, FailedKept("Could not check.", pkg)
+	if kind, got := u.Start(); kind != StartCheck || got != pkg {
+		t.Fatalf("start %v %+v", kind, got)
+	}
+	if _, ok := u.BeginCheck(pkg); !ok || u.Retrying() || u.State() != VerifyingState("1.2.3") {
+		t.Fatalf("check %+v", u.State())
+	}
+
+	// A kept package that went missing is downloaded again.
+	u = empty(m)
+	u.packages, u.state = t.TempDir(), FailedKept("Could not check.", pkg)
+	if kind, _ := u.Start(); kind == StartCheck {
+		t.Fatal("checked a package that is gone")
+	}
+
+	// A ready package that went missing fails, keeping nothing.
+	u = empty(m)
+	u.packages, u.state = t.TempDir(), ReadyToApply(pkg)
+	if u.Restart(false) != RestartGone || u.State().HasAsset || u.State().Kind != StateFailed {
+		t.Fatalf("restart into a missing package: %+v", u.State())
+	}
+	if u.Restart(false) != RestartNothing {
+		t.Fatal("restarted twice")
 	}
 }

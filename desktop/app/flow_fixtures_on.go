@@ -142,6 +142,11 @@ func fixtureRun(m *installflow.Model, index int) *installflow.Run {
 		Selected: index > 1,
 		Prepared: index > 2,
 		Flashed:  index > 4,
+		Stock:    m.Stock,
+	}
+	if c := m.Chosen(); c != nil {
+		choice := *c
+		run.Choice = &choice
 	}
 	if !m.Stock && m.Mixer != nil {
 		source := *m.Mixer
@@ -194,10 +199,9 @@ var taskFixtures = map[string]func(a *App, cx *gk.Cx) *Installer{
 	"B5": func(a *App, cx *gk.Cx) *Installer {
 		m := fixtureModel(false)
 		m.Run = fixtureRun(m, 5)
-		m.Run.Waiting = &installflow.Waiting{Why: "Turn the mixer off and on again.", Since: fixtureAgo(30 * time.Second), PowerCycle: true}
+		m.Run.ShowStatus(installflow.RunStatus{Kind: installflow.RunWaiting, Why: "Turn the mixer off and on again.", Since: fixtureAgo(30 * time.Second), PowerCycle: true})
 		m.SetService(&installer.Service{Kind: installer.ServiceReady})
-		m.ImageCheck = &core.ImageCheck{Status: core.ImageStatusRepaired, Repaired: []string{"a", "b"}}
-		m.ImageCheckAnswered = true
+		m.ShowImageCheck(core.ImageCheck{Status: core.ImageStatusRepaired, Repaired: []string{"a", "b"}})
 		i := a.fixtureInstaller(cx, taskInstall, m)
 		fixtureSince(i, 4*time.Minute+42*time.Second)
 		i.pausedAt = 4*time.Minute + 12*time.Second
@@ -218,7 +222,7 @@ var taskFixtures = map[string]func(a *App, cx *gk.Cx) *Installer{
 		m.Run.Fix = &installflow.RunFix{}
 		event := fixtureFixEvent(autofix.StageCopy, 1, true, 58)
 		m.Run.Fix.Event = &event
-		m.Busy = &installer.Request{Kind: installer.RequestStorageFix, Final: true}
+		m.ShowBusy(installer.Request{Kind: installer.RequestStorageFix, Final: true})
 		i := a.fixtureInstaller(cx, taskInstall, m)
 		fixtureSince(i, 2*time.Minute+10*time.Second)
 		return i
@@ -231,7 +235,7 @@ var taskFixtures = map[string]func(a *App, cx *gk.Cx) *Installer{
 		event := installer.Progress{Phase: installer.StorageFixPhase + autofix.StageWait, Flash: 1, Carrier: true,
 			Completed: 34, Total: 288, Detail: "The mixer is running again; waiting for it to confirm the fix."}
 		m.Run.Fix.Event = &event
-		m.Busy = &installer.Request{Kind: installer.RequestStorageFix, Final: true}
+		m.ShowBusy(installer.Request{Kind: installer.RequestStorageFix, Final: true})
 		i := a.fixtureInstaller(cx, taskInstall, m)
 		fixtureSince(i, 3*time.Minute+5*time.Second)
 		i.waitLine, i.waitSince = fixWaitLine(m), fixtureAgo(34*time.Second)
@@ -239,7 +243,7 @@ var taskFixtures = map[string]func(a *App, cx *gk.Cx) *Installer{
 	},
 	"B6F": func(a *App, cx *gk.Cx) *Installer {
 		i := finished(a, cx, false)
-		i.model.Last.Fix = &installflow.RunFix{Reply: &installer.StorageFix{
+		i.model.LastRun().Fix = &installflow.RunFix{Reply: &installer.StorageFix{
 			Outcome: string(autofix.OutcomeFixed), Backup: "rcfix-sector0", Touched: true, FinalSent: true}}
 		return i
 	},
@@ -331,7 +335,7 @@ func inPlace(a *App, cx *gk.Cx, p installflow.InPlace) *Installer {
 	installed := "0.2.1"
 	m.Installed = &installed
 	m.SetService(&installer.Service{Kind: installer.ServiceReady})
-	m.InPlace = p
+	m.ShowInPlace(p)
 	serial, profile, updates := "FX1", fixtureProfile, uint32(2)
 	a.connectedMixer = &serial
 	a.deviceVersions = &core.DeviceVersions{Runtime: &installed, FirmwareProfile: &profile, InPlaceUpdates: &updates}
@@ -357,7 +361,7 @@ func repairTask(a *App, cx *gk.Cx, stage installflow.RepairStage) *Installer {
 // one-line hint, from the default catalog and no mixer. It pretends to be
 // connected only so the page draws; nothing connects.
 func (a *App) openFirstChannel(cx *gk.Cx) {
-	a.autoConnect = false
+	a.link = linkIntent{}
 	a.session = core.DefaultSession()
 	a.session.Connected = true
 	for index := range a.session.Draft {
@@ -380,7 +384,7 @@ func updating(a *App, cx *gk.Cx, stock bool, percent uint64) *Installer {
 		kind = taskRemove
 	}
 	m.Run = fixtureRun(m, 4)
-	m.Busy = &installer.Request{Kind: installer.RequestFlash, Serial: "FX1"}
+	m.ShowBusy(installer.Request{Kind: installer.RequestFlash, Serial: "FX1"})
 	i := a.fixtureInstaller(cx, kind, m)
 	i.progress = &installer.Progress{Phase: "stage", Completed: percent, Total: 100}
 	fixtureSince(i, 3*time.Minute+48*time.Second)
@@ -391,7 +395,7 @@ func waiting(a *App, cx *gk.Cx, d time.Duration, help bool) *Installer {
 	m := fixtureModel(false)
 	m.Status.USB = nil
 	m.Run = fixtureRun(m, 5)
-	m.Run.Waiting = &installflow.Waiting{Why: "The mixer is updating.", Since: fixtureAgo(d)}
+	m.Run.ShowStatus(installflow.RunStatus{Kind: installflow.RunWaiting, Why: "The mixer is updating.", Since: fixtureAgo(d)})
 	i := a.fixtureInstaller(cx, taskInstall, m)
 	fixtureSince(i, d)
 	i.waitHelp = help
@@ -401,7 +405,7 @@ func waiting(a *App, cx *gk.Cx, d time.Duration, help bool) *Installer {
 func failed(a *App, cx *gk.Cx, index int, why string) *Installer {
 	m := fixtureModel(false)
 	m.Run = fixtureRun(m, index)
-	m.Run.Failed = &why
+	m.Run.ShowStatus(installflow.RunStatus{Kind: installflow.RunFailed, Why: why})
 	return a.fixtureInstaller(cx, taskInstall, m)
 }
 
@@ -412,8 +416,7 @@ func finished(a *App, cx *gk.Cx, stock bool) *Installer {
 		m.SetStock(true)
 		kind = taskRemove
 	}
-	m.Last = fixtureRun(m, len(installflow.Steps))
-	m.Finished = true
+	m.ShowFinished(fixtureRun(m, len(installflow.Steps)))
 	m.Status.PreparedPresent = true
 	m.Status.Saved.Prepared = &installer.Prepared{Channel: "stable", Version: "1.7.7", Stock: stock, Settings: "{}"}
 	return a.fixtureInstaller(cx, kind, m)
@@ -422,9 +425,9 @@ func finished(a *App, cx *gk.Cx, stock bool) *Installer {
 // openFlowFixture opens the flow state id from made-up data.
 func (a *App) openFlowFixture(cx *gk.Cx, id string) {
 	a.flowFixture = true
-	a.autoConnect = true
+	a.link = linkIntent{phase: linkOn}
 	if id == "Aoff" {
-		a.autoConnect = false
+		a.link = linkIntent{}
 		a.notify(cx)
 		return
 	}

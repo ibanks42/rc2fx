@@ -8,8 +8,8 @@
 //! period on a core of its own. The first call warms the model on that
 //! thread, the only allocation it ever makes.
 use crate::{
-    Error, Geometry, Model, Shared, Snapshot, StopMode, Telemetry, Terminal, VendorModel, metrics,
-    queue::MAX_FRAME,
+    Error, Geometry, Model, Shared, Snapshot, StopMode, Telemetry, Terminal, Termination,
+    VendorModel, metrics, queue::MAX_FRAME,
 };
 use rc2fx_dsp::MAX_SUPPRESSION_DELAY;
 use std::sync::{Arc, atomic::Ordering};
@@ -55,7 +55,7 @@ impl Inline {
         }
         let shared = Arc::new(Shared::default());
         // No thread: ownership never needs joining.
-        shared.termination.store(3, Ordering::Release);
+        shared.set_termination(Termination::Joined);
         Ok(Self {
             geometry,
             shared,

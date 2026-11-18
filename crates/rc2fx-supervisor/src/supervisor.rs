@@ -91,11 +91,18 @@ struct Supervisor {
     signals: Option<OwnedFd>,
     /// Without one (no kernel support) exits are seen on the next second.
     mixer_fd: Option<Pidfd>,
-    controller: Option<Child>,
-    controller_fd: Option<Pidfd>,
+    controller: Option<Controller>,
     /// Thread names already in the log. A thread that keeps pinning itself must
     /// not write a line to flash every pass.
     reported: HashSet<String>,
+}
+
+/// A running controller. Its exit handle goes with it: a reaped controller
+/// leaves nothing behind for `poll` to wait on.
+struct Controller {
+    child: Child,
+    /// Without one (no kernel support) its exit is seen on the next second.
+    fd: Option<Pidfd>,
 }
 
 impl Supervisor {
@@ -118,7 +125,6 @@ impl Supervisor {
             signals,
             mixer_fd,
             controller: None,
-            controller_fd: None,
             reported: HashSet::new(),
         }
     }
@@ -199,7 +205,9 @@ impl Supervisor {
         let mut fds = [
             self.signals.as_ref().map_or(-1, AsRawFd::as_raw_fd),
             fd(&self.mixer_fd),
-            fd(&self.controller_fd),
+            self.controller
+                .as_ref()
+                .map_or(-1, |controller| fd(&controller.fd)),
         ]
         .map(|fd| libc::pollfd {
             fd,
@@ -273,8 +281,8 @@ impl Supervisor {
         match spawned {
             Ok(child) => {
                 say(&format!("Controller started (PID {})", child.id()));
-                self.controller_fd = Pidfd::open(child.id() as i32);
-                self.controller = Some(child);
+                let fd = Pidfd::open(child.id() as i32);
+                self.controller = Some(Controller { child, fd });
                 true
             }
             Err(error) => {
@@ -295,8 +303,11 @@ impl Supervisor {
     /// could not start and the mixer has been ended.
     fn reload_controller(&mut self) -> bool {
         say("Reloading the controller for an update; the mixer keeps running");
-        if let Some(mut controller) = self.controller.take() {
-            self.controller_fd = None;
+        if let Some(Controller {
+            child: mut controller,
+            ..
+        }) = self.controller.take()
+        {
             // Not yet reaped, so the PID is still this child's.
             unsafe { libc::kill(controller.id() as i32, libc::SIGTERM) };
             let deadline = std::time::Instant::now() + RELOAD_STOP;
@@ -332,9 +343,8 @@ impl Supervisor {
 
     /// Reaps a controller that has exited and returns its shell-style status.
     fn controller_exit(&mut self) -> Option<i32> {
-        let status = self.controller.as_mut()?.try_wait().ok()??;
+        let status = self.controller.as_mut()?.child.try_wait().ok()??;
         self.controller = None;
-        self.controller_fd = None;
         Some(shell_status(status))
     }
 
@@ -359,9 +369,8 @@ impl Supervisor {
         if self.script(&args) {
             // Stopped by the script; anything left here would be stopped twice.
             if let Some(mut controller) = self.controller.take() {
-                let _ = controller.try_wait();
+                let _ = controller.child.try_wait();
             }
-            self.controller_fd = None;
         } else {
             say("Leaving the mixer running without RC2FX control; rc2fx.sh start recovers it");
         }
@@ -371,11 +380,11 @@ impl Supervisor {
         let mut args = vec![OsString::from("supervise-exit")];
         args.extend(self.controller_pid());
         let finished = self.script(&args);
-        if let Some(controller) = self.controller.as_mut() {
+        if let Some(Controller { child, .. }) = self.controller.as_mut() {
             if !finished {
-                let _ = controller.kill();
+                let _ = child.kill();
             }
-            let _ = controller.try_wait();
+            let _ = child.try_wait();
         }
         // Only this supervisor's own record: the next launch may have written its.
         let record = self.options.run.join("supervisor.pid");
@@ -388,7 +397,7 @@ impl Supervisor {
     }
 
     fn controller_pid(&self) -> Option<OsString> {
-        let pid = self.controller.as_ref()?.id();
+        let pid = self.controller.as_ref()?.child.id();
         Some(pid.to_string().into())
     }
 
@@ -878,6 +887,40 @@ mod tests {
             fs::read_to_string(calls).unwrap(),
             format!("supervise-restart 0 {pid} {start}\nsupervise-exit\n")
         );
+    }
+
+    #[test]
+    fn a_reaped_controller_takes_its_exit_handle_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // The shell itself, not a script written here: executing a file that was
+        // just written fails with "text file busy" if another test thread forks
+        // while the file is still open for writing.
+        let line = fs::read_to_string("/proc/self/stat").unwrap();
+        let (_, start) = parse_stat(&line).unwrap();
+        let options = Options {
+            mixer: std::process::id() as i32,
+            mixer_start: start,
+            script: dir.path().join("rc2fx.sh"),
+            controller: PathBuf::from("/bin/sh"),
+            controller_args: vec!["-c".into(), "exit 3".into()],
+            run: dir.path().to_owned(),
+            boot: dir.path().join("boot"),
+            ready_seconds: READY_SECONDS,
+        };
+        let mut supervisor = Supervisor::new(options, None);
+        assert_eq!(supervisor.controller_exit(), None);
+        assert!(supervisor.start_controller());
+        assert!(supervisor.controller_pid().is_some());
+        assert!(supervisor.controller.as_ref().unwrap().fd.is_some());
+        let status = loop {
+            if let Some(status) = supervisor.controller_exit() {
+                break status;
+            }
+            supervisor.wait();
+        };
+        assert_eq!(status, 3);
+        assert!(supervisor.controller.is_none());
+        assert_eq!(supervisor.controller_pid(), None);
     }
 
     #[test]

@@ -106,9 +106,9 @@ type App struct {
 	resave bool
 	// awaitingRefresh: waiting for the refresh that follows a refused save.
 	awaitingRefresh bool
-	// diagnosticsOpen: Settings shows its Diagnostics page (telemetry,
-	// events, files).
-	diagnosticsOpen bool
+	// nav is the page in front: Home or a channel, and Settings, its
+	// Diagnostics page or the installer over it (navigation.go).
+	nav navigation
 	// contentScroll is the main column's scroll position, shared by the
 	// pages shown in it.
 	contentScroll gk.ScrollHandle
@@ -134,19 +134,10 @@ type App struct {
 	// failure is ours to report. A failure the mixer reports on its own
 	// (while shutting down for an update, say) is not.
 	selectionAsked bool
-	settingsOpen   bool
-	// homeOpen: Home is the page in front (below settings and the installer).
-	homeOpen bool
 	// installerAutostart is set by a notice's Install update or the first
 	// screen's Continue the install: start the task as soon as it can, until
 	// this deadline.
 	installerAutostart *time.Time
-	// inPlaceAsked is when the app last asked the mixer how an in-place
-	// update ended.
-	inPlaceAsked *time.Time
-	// inPlaceBefore is the mixer's update/last record from just before the
-	// in-place update in progress was sent.
-	inPlaceBefore inPlaceBaseline
 	// settledFlash is the last flash this run of the app saw finish
 	// (Model::settled_flash).
 	settledFlash *uint64
@@ -183,12 +174,9 @@ type App struct {
 	resetPending       bool
 	diagnosticsPending bool
 	presets            PresetLibrary
-	connecting         bool
-	autoConnect        bool
-	// pausedForFlash: the connection was dropped for a flash and resumes when
-	// it is done.
-	pausedForFlash  bool
-	reconnectAt     *time.Time
+	// link is what the app is doing about the connection: off, connecting,
+	// on, retrying at a time, or paused for a flash (link.go).
+	link            linkIntent
 	streamConnected bool
 	streamError     *string
 	usb             model.USBObservation
@@ -270,7 +258,6 @@ func newApp() *App {
 		devPage:             DevPageFromEnv(),
 		effect:              core.EffectSuppression,
 		channel:             core.ChannelLeft,
-		homeOpen:            true,
 		telemetryOpen:       rememberedTelemetry(),
 		eventLog:            &log,
 		message:             message,
@@ -404,9 +391,7 @@ func (a *App) connect(cx *gk.Cx) { a.beginConnection(cx, false) }
 func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 	// Only the scheduled retry path may retain a previous observation.
 	// An explicit connection starts a new lineage, even with a timer pending.
-	a.autoConnect = true
-	a.homeOpen = true
-	a.reconnectAt = nil
+	a.nav.homeBehind()
 	a.generation++
 	a.installerConnectionChanged()
 	a.diagnosticsPending = false
@@ -431,8 +416,9 @@ func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 	a.engineSeen = nil
 	a.streamConnected = false
 	a.streamError = nil
-	a.connecting = a.command(transport.CommandConnect{Generation: a.generation})
-	if a.connecting && !backgroundRetry {
+	sent := a.command(transport.CommandConnect{Generation: a.generation})
+	a.link.begin(sent)
+	if sent && !backgroundRetry {
 		a.message = ""
 	}
 	a.notify(cx)
@@ -441,8 +427,7 @@ func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 func (a *App) disconnect(cx *gk.Cx) {
 	a.diagnosticsPending = false
 	a.resetEvents(cx)
-	a.autoConnect = false
-	a.reconnectAt = nil
+	a.link.stop()
 	a.generation++
 	a.installerConnectionChanged()
 	a.command(transport.CommandDisconnect{Generation: a.generation})
@@ -458,7 +443,6 @@ func (a *App) disconnect(cx *gk.Cx) {
 	a.restartPending = nil
 	a.selectionPending = nil
 	a.presets.reset()
-	a.connecting = false
 	a.streamConnected = false
 	a.streamError = nil
 	a.meter = nil
@@ -662,7 +646,7 @@ func (a *App) poll(cx *gk.Cx) {
 				a.inPlaceOutcome(k.Last)
 			}
 		case transport.EventKindConnected:
-			a.connecting = false
+			a.link.connected()
 			a.message = ""
 			// Edits carry over to the same mixer, not to another one.
 			if a.connectedMixer == nil || *a.connectedMixer != k.Mixer {
@@ -691,7 +675,7 @@ func (a *App) poll(cx *gk.Cx) {
 			a.openDevPage(cx)
 			// Versions change only across a restart: read once per connection.
 			a.command(transport.CommandVersion{Generation: a.generation})
-			if a.presets.open {
+			if a.nav.settings() {
 				a.listPresets()
 			}
 		case transport.EventKindPreset:
@@ -795,16 +779,12 @@ func (a *App) poll(cx *gk.Cx) {
 		case transport.EventKindFailure:
 			saving := a.pending != nil
 			a.pending = nil
-			a.connecting = false
 			if saving {
 				a.saveFailed(k.Message)
 			} else {
 				a.message = k.Message
 			}
-			if !a.session.Connected && a.autoConnect {
-				at := time.Now().Add(3 * time.Second)
-				a.reconnectAt = &at
-			}
+			a.link.failed(a.session.Connected, time.Now())
 		}
 	}
 	if a.session.Conflict && !a.awaitingRefresh {
@@ -830,19 +810,15 @@ func (a *App) poll(cx *gk.Cx) {
 	// nothing: hand the window to the installer. Once flashed, look for the
 	// mixer again; reconnecting is how the installer sees RC2FX back.
 	if a.installerFlashing() {
-		if a.session.Connected || a.autoConnect {
+		if a.session.Connected || a.link.auto() {
 			a.disconnect(cx)
 			a.message = "The mixer is updating."
-			a.pausedForFlash = true
+			a.link.pauseForFlash()
 		}
-	} else if a.pausedForFlash {
-		a.pausedForFlash = false
+	} else if a.link.flashDone(time.Now()) {
 		// The pre-flash connection result belongs to an earlier device
 		// state. Start a new observation after the expected USB transition.
 		a.message = ""
-		a.autoConnect = true
-		now := time.Now()
-		a.reconnectAt = &now
 	}
 	a.refreshInputs()
 	a.eventsTick(cx)
@@ -851,14 +827,14 @@ func (a *App) poll(cx *gk.Cx) {
 	// Compared on this existing 50 ms tick; no extra frames are scheduled,
 	// and a redraw happens only when what Home shows changes.
 	var homeKey *HomeKey
-	if a.session.Connected && a.homeOpen {
+	if a.session.Connected && a.nav.home() {
 		k := a.homeKey()
 		homeKey = &k
 	}
 	// A reading redraws the app unless the overview is in front and the
 	// overlay is already drawing its bars every frame. Each such redraw is a
 	// whole extra frame, on top of the overlay's.
-	overview := homeKey != nil && !a.settingsOpen && a.installer == nil
+	overview := homeKey != nil && a.nav.basePageInFront() && a.installer == nil
 	isFresh := fresh != nil
 	if changed || isFresh != a.wasFresh || !homeKeyEqual(homeKey, a.lastHomeKey) ||
 		(meterArrived && !(overview && a.barsAnimate(cx))) {
@@ -870,8 +846,7 @@ func (a *App) poll(cx *gk.Cx) {
 	// The live indicators' views and ticker, and the signature's
 	// (line_overlay.go: in Go each indicator is its own view, audit 2.4).
 	a.pollIndicators(cx)
-	if !a.session.Connected && !a.connecting && a.autoConnect && a.reconnectAt != nil &&
-		!time.Now().Before(*a.reconnectAt) {
+	if a.link.due(a.session.Connected, time.Now()) {
 		a.beginConnection(cx, true)
 	}
 }
@@ -914,7 +889,7 @@ func (a *App) reportedLookahead() Reported {
 // that outrank everything else, shared by the status line and Home.
 func (a *App) systemStatus() (string, uint32, bool) {
 	switch {
-	case a.connecting:
+	case a.link.connecting():
 		return "Connecting", Warn, true
 	case !a.session.Connected:
 		return "Offline draft", Muted, true
@@ -1058,8 +1033,7 @@ func (a *App) toastMessage(cx *gk.Cx) {
 
 // openOverview is the overview of every channel, from the sidebar or Esc.
 func (a *App) openOverview(cx *gk.Cx) {
-	a.homeOpen = true
-	a.setSettingsOpen(false)
+	a.nav.showHome()
 	a.notify(cx)
 }
 

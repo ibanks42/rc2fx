@@ -24,8 +24,38 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-/// One callback-side atomic check. Zero is the explicit standalone research
-/// mode; required receivers must become ready before DSP is admitted.
+/// Where the control receiver's gate on DSP stands. Only `Admission` moves
+/// it, and only forward: Standalone to Required to Active to Stopped, or
+/// Required straight to Stopped.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gate {
+    /// No receiver was requested: research mode, DSP always admitted.
+    Standalone = 0,
+    /// A receiver was requested and is not ready yet: DSP is held off.
+    Required = 1,
+    /// The requested receiver is ready: DSP is admitted.
+    Active = 2,
+    /// The receiver stopped or failed to start: DSP stays off for good.
+    Stopped = 3,
+}
+impl Gate {
+    const STANDALONE: u8 = Self::Standalone as u8;
+    const REQUIRED: u8 = Self::Required as u8;
+    const ACTIVE: u8 = Self::Active as u8;
+    const STOPPED: u8 = Self::Stopped as u8;
+    /// Total: any value `Admission` never writes reads as Stopped.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::STANDALONE => Self::Standalone,
+            Self::REQUIRED => Self::Required,
+            Self::ACTIVE => Self::Active,
+            _ => Self::Stopped,
+        }
+    }
+}
+/// One callback-side atomic check. Standalone is the explicit research mode;
+/// required receivers must become ready before DSP is admitted.
 pub struct Admission {
     state: AtomicU8,
     skipped: AtomicU64,
@@ -33,23 +63,39 @@ pub struct Admission {
 impl Admission {
     pub const fn new() -> Self {
         Self {
-            state: AtomicU8::new(0),
+            state: AtomicU8::new(Gate::STANDALONE),
             skipped: AtomicU64::new(0),
         }
     }
+    /// Holds DSP off until a receiver activates. Only a standalone gate
+    /// moves: a required or active one stays as it is, and a stopped one
+    /// can never be armed again.
     pub fn require(&self) {
-        self.state.store(1, Ordering::Release);
+        let _ = self.state.compare_exchange(
+            Gate::STANDALONE,
+            Gate::REQUIRED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
     fn activate(&self) -> bool {
         self.state
-            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(
+                Gate::REQUIRED,
+                Gate::ACTIVE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
     }
     fn stop(&self) {
-        self.state.store(3, Ordering::Release);
+        self.state.store(Gate::STOPPED, Ordering::Release);
     }
     pub fn admit(&self) -> bool {
-        if matches!(self.state.load(Ordering::Acquire), 0 | 2) {
+        if matches!(
+            self.state.load(Ordering::Acquire),
+            Gate::STANDALONE | Gate::ACTIVE
+        ) {
             true
         } else {
             self.skipped.fetch_add(1, Ordering::Relaxed);
@@ -57,7 +103,10 @@ impl Admission {
         }
     }
     pub fn required(&self) -> bool {
-        self.state.load(Ordering::Acquire) != 0
+        self.gate() != Gate::Standalone
+    }
+    fn gate(&self) -> Gate {
+        Gate::from_u8(self.state.load(Ordering::Acquire))
     }
     pub fn skipped(&self) -> u64 {
         self.skipped.load(Ordering::Relaxed)
@@ -748,6 +797,39 @@ mod tests {
         assert!(!GATE.activate());
         assert_eq!(fs::read(&path).unwrap(), b"existing owned entry");
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn a_stopped_gate_cannot_be_armed_again() {
+        let gate = Admission::new();
+        assert_eq!(gate.gate(), Gate::Standalone);
+        assert!(gate.admit());
+        gate.require();
+        assert_eq!(gate.gate(), Gate::Required);
+        assert!(gate.activate());
+        // Requiring an active gate again leaves DSP admitted.
+        gate.require();
+        assert_eq!(gate.gate(), Gate::Active);
+        assert!(gate.admit());
+        gate.stop();
+        gate.require();
+        assert_eq!(gate.gate(), Gate::Stopped);
+        assert!(!gate.activate());
+        assert!(!gate.admit());
+        assert!(gate.required());
+    }
+    #[test]
+    fn every_gate_value_decodes() {
+        for gate in [
+            Gate::Standalone,
+            Gate::Required,
+            Gate::Active,
+            Gate::Stopped,
+        ] {
+            assert_eq!(Gate::from_u8(gate as u8), gate);
+        }
+        for value in 4..=u8::MAX {
+            assert_eq!(Gate::from_u8(value), Gate::Stopped);
+        }
     }
     #[test]
     fn actual_local_socket_reports_publication_separately_from_audio_and_cleans_up() {

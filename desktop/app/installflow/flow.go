@@ -24,14 +24,11 @@ type Model struct {
 	// service is what RC2FX reports over the app's USB connection; nil while
 	// the app is not connected to it.
 	service *installer.Service
-	// ImageCheck is the mixer's check of the files the flash unpacked, once
-	// ImageCheckAnswered; nil then means mixer software that predates the
-	// check (Rust's `Some(None)`). Cleared whenever RC2FX is not running, so
-	// a restart reads it afresh.
-	ImageCheck         *core.ImageCheck
-	ImageCheckAnswered bool
-	settingsRead       SettingsRead
-	Releases           []installer.Release
+	// imageCheck is the mixer's check of the files the flash unpacked.
+	// Cleared whenever RC2FX is not running, so a restart reads it afresh.
+	imageCheck   imageCheck
+	settingsRead SettingsRead
+	Releases     []installer.Release
 	// NeedsApp is qualified firmware only a newer app may install, newest
 	// first.
 	NeedsApp      []installer.Release
@@ -58,23 +55,29 @@ type Model struct {
 	// Stock: flash unchanged RØDE firmware rather than firmware with RC2FX.
 	Stock bool
 	Run   *Run
-	// Busy is the request the page waits on; nil when idle.
-	Busy *installer.Request
-	// queue holds the requests in flight, oldest first; true for background
-	// refreshes, which never disable the page. The runner answers in order.
-	queue []bool
+	// queue holds the requests in flight, oldest first. The runner answers
+	// in order.
+	queue []queued
 	Error string
-	// Finished: the last run finished.
-	Finished bool
-	// Last is the finished run, for showing what it did.
-	Last *Run
+	// finished is the last run, once it finished, for showing what it did;
+	// nil while a run goes on and after the page starts over. Set only when
+	// Run becomes nil, so a finished run and a run in progress never
+	// coexist.
+	finished *Run
 	// SettledFlash is when the flash of the last finished run was sent. The
 	// app carries it to the next installer, so a run that finished is not
 	// picked up as an update in progress.
 	SettledFlash *uint64
 	// lastPoll is zero before the first poll.
 	lastPoll time.Time
-	InPlace  InPlace
+	// inPlace is the in-place update, if any (see InPlace).
+	inPlace InPlace
+	// inPlaceAsked is when the mixer was last asked how the in-place update
+	// ended; zero for never.
+	inPlaceAsked time.Time
+	// inPlaceBefore is the mixer's update/last record from just before the
+	// in-place update in progress was sent.
+	inPlaceBefore inPlaceBaseline
 	// FixPolicy is whether a run fixes the mixer's storage first.
 	FixPolicy FixPolicy
 }
@@ -104,7 +107,7 @@ func NewModel() *Model {
 		FirmwareCheck: FirmwareCheckUnchecked,
 		StockCheck:    StockCheck{Kind: StockCheckUnchecked},
 		Offers:        Offers{Kind: OffersUnchecked},
-		InPlace:       InPlace{Kind: InPlaceIdle},
+		inPlace:       InPlace{Kind: InPlaceIdle},
 	}
 }
 
@@ -139,7 +142,7 @@ func (m *Model) DuoConnected() bool {
 
 // SetAllowDuo sets the experimental Duo opt-in.
 func (m *Model) SetAllowDuo(allow bool) *installer.Request {
-	if m.Busy != nil || m.Run != nil {
+	if m.Busy() || m.Run != nil {
 		return nil
 	}
 	m.AllowDuo = allow
@@ -149,28 +152,54 @@ func (m *Model) SetAllowDuo(allow bool) *installer.Request {
 	m.NeedsApp = nil
 	m.FirmwareCheck = FirmwareCheckUnchecked
 	m.Error = ""
-	m.Finished = false
+	m.finished = nil
 	return m.send(installer.Request{Kind: installer.RequestAllowExperimentalDuo, Allow: allow})
 }
 
+// queued is one request in flight: a background refresh, which never
+// disables the page, or the one request the page waits on (see Busy).
+type queued struct {
+	background bool
+	request    installer.Request
+}
+
+// Busy reports a request the page waits on: one sent, not yet finished.
+func (m *Model) Busy() bool {
+	return m.BusyRequest() != nil
+}
+
+// BusyRequest is the request the page waits on; nil when there is none.
+func (m *Model) BusyRequest() *installer.Request {
+	for i := range m.queue {
+		if !m.queue[i].background {
+			return &m.queue[i].request
+		}
+	}
+	return nil
+}
+
+// ShowBusy puts request in flight as the one the page waits on, for pages
+// made from made-up state (the app's flow fixtures). Nothing answers it.
+func (m *Model) ShowBusy(request installer.Request) {
+	m.queue = append(m.queue, queued{request: request})
+}
+
 func (m *Model) send(request installer.Request) *installer.Request {
-	if m.Busy != nil {
+	if m.Busy() {
 		return nil
 	}
-	busy := request
-	m.Busy = &busy
-	m.queue = append(m.queue, false)
+	m.queue = append(m.queue, queued{request: request})
 	return &request
 }
 
 // quiet is a request the user does not wait on.
 func (m *Model) quiet(request installer.Request) *installer.Request {
-	m.queue = append(m.queue, true)
+	m.queue = append(m.queue, queued{background: true, request: request})
 	return &request
 }
 
 func (m *Model) polling() bool {
-	return slices.Contains(m.queue, true)
+	return slices.ContainsFunc(m.queue, func(q queued) bool { return q.background })
 }
 
 // refresh what the mixer reports, in the background.
@@ -257,7 +286,7 @@ func (m *Model) Service() *installer.Service {
 // it is not connected.
 func (m *Model) SetService(service *installer.Service) {
 	if service == nil || service.Kind != installer.ServiceReady {
-		m.ImageCheck, m.ImageCheckAnswered = nil, false
+		m.imageCheck = imageCheck{}
 	}
 	m.service = service
 }
@@ -266,24 +295,41 @@ func (m *Model) SetService(service *installer.Service) {
 // check, so the app should ask for it.
 func (m *Model) WantsImageCheck() bool {
 	run := m.Run
-	atStart := run != nil && run.Failed == nil && run.Index >= 0 && run.Index < len(Steps) && Steps[run.Index] == StepStart
+	atStart := run != nil && run.status.Kind != RunFailed && run.Index >= 0 && run.Index < len(Steps) && Steps[run.Index] == StepStart
 	service := m.Service()
 	return atStart &&
-		!m.Stock &&
+		!run.Stock &&
 		m.flashed() &&
 		service != nil && service.Kind == installer.ServiceReady &&
 		!m.imageChecked()
 }
 
+// ImageCheckResult is the mixer's answer to the image check, once it gave
+// one; nil before that and for mixer software that predates the check.
+func (m *Model) ImageCheckResult() *core.ImageCheck {
+	if m.imageCheck.kind != imageCheckAnswered {
+		return nil
+	}
+	check := m.imageCheck.result
+	return &check
+}
+
+// ShowImageCheck sets the mixer's answer to the image check, for pages made
+// from made-up state (the app's flow fixtures).
+func (m *Model) ShowImageCheck(check core.ImageCheck) {
+	m.imageCheck = imageCheck{kind: imageCheckAnswered, result: check}
+}
+
 // imageChecked: the check passed, or there is nothing to check.
 func (m *Model) imageChecked() bool {
-	switch {
-	case !m.ImageCheckAnswered:
+	switch m.imageCheck.kind {
+	case imageCheckUnasked:
 		return false
-	case m.ImageCheck == nil:
+	case imageCheckUnsupported:
 		return true
 	}
-	return m.ImageCheck.Status == core.ImageStatusOk || m.ImageCheck.Status == core.ImageStatusNone
+	status := m.imageCheck.result.Status
+	return status == core.ImageStatusOk || status == core.ImageStatusNone
 }
 
 // ImageCheckRead hands over the mixer's answer to `GET api/v1/image-check`
@@ -296,7 +342,11 @@ func (m *Model) ImageCheckRead(check *core.ImageCheck, readErr error) *installer
 	if !m.WantsImageCheck() {
 		return nil
 	}
-	m.ImageCheck, m.ImageCheckAnswered = check, true
+	if check == nil {
+		m.imageCheck = imageCheck{kind: imageCheckUnsupported}
+	} else {
+		m.imageCheck = imageCheck{kind: imageCheckAnswered, result: *check}
+	}
 	return m.advance()
 }
 
@@ -322,7 +372,7 @@ func (m *Model) SettingsRead(settings string, readErr error) *installer.Request 
 	if run == nil {
 		return nil
 	}
-	run.Waiting = nil
+	run.resume()
 	serial := run.Serial
 	if readErr != nil {
 		return m.fail(fmt.Sprintf("Couldn't read RC2FX's settings: %s", readErr.Error()))
@@ -340,8 +390,8 @@ func (m *Model) ConnectionChanged() {
 	if m.settingsRead == SettingsReadAsked {
 		m.settingsRead = SettingsReadWanted
 	}
-	if m.InPlace.Kind == InPlaceUploading {
-		m.InPlace = InPlace{Kind: InPlaceFailed, Error: inPlaceDisconnected}
+	if m.inPlace.Kind == InPlaceUploading {
+		m.inPlace = InPlace{Kind: InPlaceFailed, Error: inPlaceDisconnected}
 	}
 }
 
@@ -419,10 +469,18 @@ func (m *Model) flashed() bool {
 	return m.Run != nil && m.Run.Flashed
 }
 
+// stock: the run, or else the page, is for unchanged RØDE firmware.
+func (m *Model) stock() bool {
+	if m.Run != nil {
+		return m.Run.Stock
+	}
+	return m.Stock
+}
+
 // Goal is what starting achieves.
 func (m *Model) Goal() Goal {
 	switch {
-	case m.Stock:
+	case m.stock():
 		return GoalStock
 	case m.Answering() && !m.flashed():
 		return GoalReinstall
@@ -447,7 +505,7 @@ func (m *Model) satisfied(step Step) bool {
 		}
 	case StepMixer:
 		// Stock firmware carries no mixer software.
-		return flashed || m.Stock || (run != nil && run.Selected)
+		return flashed || m.stock() || (run != nil && run.Selected)
 	case StepPrepare:
 		return flashed || (run != nil && run.Prepared)
 	case StepUSBMode:
@@ -455,7 +513,7 @@ func (m *Model) satisfied(step Step) bool {
 	case StepFlash:
 		return flashed
 	default:
-		if m.Stock {
+		if m.stock() {
 			// Stock firmware is done once the mixer is back in normal mode.
 			return flashed && m.usbOne(false) != nil
 		}
@@ -470,14 +528,14 @@ func (m *Model) State(step Step) StepState {
 	if run := m.Run; run != nil {
 		position := slices.Index(Steps[:], step)
 		if position >= 0 && position == run.Index {
-			if run.Failed != nil {
-				return StepState{Kind: StepStateFailed, Detail: *run.Failed}
-			}
-			if run.Waiting != nil {
-				return StepState{Kind: StepStateWaiting, Detail: run.Waiting.Why}
+			switch status := run.status; status.Kind {
+			case RunFailed:
+				return StepState{Kind: StepStateFailed, Detail: status.Why}
+			case RunWaiting:
+				return StepState{Kind: StepStateWaiting, Detail: status.Why}
 			}
 			// Between an action and the refresh that follows it.
-			if m.Busy != nil || m.polling() {
+			if m.Busy() || m.polling() {
 				return StepState{Kind: StepStateRunning}
 			}
 		}
@@ -491,9 +549,37 @@ func (m *Model) State(step Step) StepState {
 	return StepState{Kind: StepStatePending}
 }
 
+// Finished reports that the last run finished and nothing has started
+// since: the page shows what it did.
+func (m *Model) Finished() bool {
+	return m.finished != nil
+}
+
+// LastRun is the run in progress, or else the one that finished; nil for
+// neither.
+func (m *Model) LastRun() *Run {
+	if m.Run != nil {
+		return m.Run
+	}
+	return m.finished
+}
+
+// ShowFinished makes run the finished run, with none in progress, for pages
+// made from made-up state (the app's flow fixtures).
+func (m *Model) ShowFinished(run *Run) {
+	m.Run = nil
+	m.finished = run
+}
+
 // Running reports a run that has not failed.
 func (m *Model) Running() bool {
-	return m.Run != nil && m.Run.Failed == nil
+	return m.Run != nil && m.Run.status.Kind != RunFailed
+}
+
+// Failed reports a run that stopped at a failed step: it can be retried
+// from there, or stopped.
+func (m *Model) Failed() bool {
+	return m.Run != nil && m.Run.status.Kind == RunFailed
 }
 
 func (m *Model) supportedChoice(choice *Choice) bool {
@@ -536,7 +622,7 @@ func (m *Model) canStartStock() bool {
 // canFlash is what any flash needs besides access: an idle page and at
 // most one mixer.
 func (m *Model) canFlash() bool {
-	return m.Busy == nil &&
+	return !m.Busy() &&
 		!m.Running() &&
 		m.Status != nil && m.Status.USBError == nil && len(m.Status.USB) <= 1 &&
 		(m.Device != firmware.ModelDuo || m.AllowDuo)
@@ -544,9 +630,10 @@ func (m *Model) canFlash() bool {
 
 // ---- Events -----------------------------------------------------------------
 
-// Choose picks the firmware release at index of Releases.
+// Choose picks the firmware release at index of Releases. A run, even a
+// failed one, keeps the release it started with.
 func (m *Model) Choose(index int) {
-	if m.Running() || m.Busy != nil {
+	if m.Run != nil || m.Busy() {
 		return
 	}
 	// Both modes are restricted to this build's qualified catalog.
@@ -559,7 +646,7 @@ func (m *Model) Choose(index int) {
 
 // ChooseStock picks the stock release at index of StockReleases.
 func (m *Model) ChooseStock(index int) {
-	if m.Running() || m.Busy != nil {
+	if m.Run != nil || m.Busy() {
 		return
 	}
 	if index >= 0 && index < len(m.StockReleases) {
@@ -588,7 +675,7 @@ func (m *Model) checkStock() *installer.Request {
 
 // RecheckStock checks RØDE's list again after a failed or cancelled check.
 func (m *Model) RecheckStock() *installer.Request {
-	if m.StockCheck.Kind != StockCheckFailed || m.Busy != nil {
+	if m.StockCheck.Kind != StockCheckFailed || m.Busy() {
 		return nil
 	}
 	m.StockCheck = StockCheck{Kind: StockCheckUnchecked}
@@ -604,13 +691,13 @@ func (m *Model) forgetStock() {
 
 // ---- Mixer software -----------------------------------------------------------
 
-// firmwareProfile is the catalog profile of the chosen firmware.
-func (m *Model) firmwareProfile() (string, bool) {
-	if m.Choice == nil {
+// firmwareProfile is the catalog profile of the firmware release choice.
+func (m *Model) firmwareProfile(choice *Choice) (string, bool) {
+	if choice == nil {
 		return "", false
 	}
 	for _, r := range m.Releases {
-		if r.Channel == m.Choice.Channel && r.Version == m.Choice.Version {
+		if r.Channel == choice.Channel && r.Version == choice.Version {
 			return r.Profile, r.Profile != ""
 		}
 	}
@@ -621,7 +708,7 @@ func (m *Model) firmwareProfile() (string, bool) {
 // this app, newest first, then the copy built into this app.
 func (m *Model) MixerOptions() []MixerSource {
 	var options []MixerSource
-	if profile, ok := m.firmwareProfile(); m.Offers.Kind == OffersReady && ok {
+	if profile, ok := m.firmwareProfile(m.Choice); m.Offers.Kind == OffersReady && ok {
 		for _, offer := range m.Offers.List {
 			if model.OfferFits(offer, profile) {
 				options = append(options, Signed(offer))
@@ -703,10 +790,10 @@ func (m *Model) InPlaceOffer(support InPlaceSupport) *installer.MixerOffer {
 // StartInPlace starts an in-place update with offer: download and verify it
 // here, then InPlaceReady hands it to the app to send.
 func (m *Model) StartInPlace(offer installer.MixerOffer, profile string) *installer.Request {
-	if m.Busy != nil || m.InPlace.Active() || m.Run != nil {
+	if m.Busy() || m.inPlace.Active() || m.Run != nil {
 		return nil
 	}
-	m.InPlace = InPlace{Kind: InPlacePreparing, Version: offer.Metadata.Version}
+	m.inPlace = InPlace{Kind: InPlacePreparing, Version: offer.Metadata.Version}
 	var installed *string
 	if m.Installed != nil {
 		v := *m.Installed
@@ -721,14 +808,18 @@ func (m *Model) StartInPlace(offer installer.MixerOffer, profile string) *instal
 }
 
 // TakeInPlaceBundle is the verified release, once, for the app to send to
-// the mixer.
+// the mixer. The app first asks for the mixer's update/last record, which
+// InPlaceOutcome keeps as the one from before this update, then sends the
+// release, reporting a failure to send with InPlaceSendFailed and what the
+// mixer says with InPlaceProgress, InPlaceAccepted and InPlaceRefused.
 func (m *Model) TakeInPlaceBundle() (installer.InPlaceBundle, bool) {
 	// Asked on every poll: anything but Ready stays exactly as it is.
-	if m.InPlace.Kind != InPlaceReady {
+	if m.inPlace.Kind != InPlaceReady {
 		return installer.InPlaceBundle{}, false
 	}
-	bundle := m.InPlace.Bundle
-	m.InPlace = InPlace{
+	bundle := m.inPlace.Bundle
+	m.inPlaceBefore = inPlaceBaseline{}
+	m.inPlace = InPlace{
 		Kind:    InPlaceUploading,
 		Version: bundle.Version,
 		Sent:    0,
@@ -739,7 +830,7 @@ func (m *Model) TakeInPlaceBundle() (installer.InPlaceBundle, bool) {
 
 // ChooseMixer picks the mixer software to install.
 func (m *Model) ChooseMixer(source MixerSource) {
-	if m.Run == nil && m.Busy == nil && containsSource(m.MixerOptions(), source) {
+	if m.Run == nil && !m.Busy() && containsSource(m.MixerOptions(), source) {
 		m.Mixer = &source
 		m.mixerChosen = true
 	}
@@ -896,14 +987,21 @@ func (m *Model) newestMixer(source MixerSource) bool {
 }
 
 // SetStock chooses between firmware with RC2FX and unchanged RØDE firmware,
-// keeping the version choice valid for the mode.
+// keeping the version choice valid for the mode. A run going on keeps its
+// mode. A failed run is stopped first (as Stop does), so choosing a mode,
+// which the Home notice's Install update does, starts over from the page.
 func (m *Model) SetStock(stock bool) {
-	if m.Running() || m.Busy != nil {
+	if m.Running() || m.Busy() {
 		return
 	}
+	if m.Failed() {
+		m.Stop()
+		if m.Run != nil {
+			return
+		}
+	}
 	m.Stock = stock
-	m.Run = nil
-	m.Finished = false
+	m.finished = nil
 	if !m.supportedChoice(m.Choice) {
 		m.Choice = defaultChoice(m.Releases)
 	}
@@ -944,8 +1042,7 @@ func (m *Model) Start() *installer.Request {
 		return nil
 	}
 	m.Error = ""
-	m.Finished = false
-	m.Last = nil
+	m.finished = nil
 	m.settingsRead = SettingsReadIdle
 	serial := ""
 	if usb := m.USB(); len(usb) > 0 {
@@ -956,11 +1053,15 @@ func (m *Model) Start() *installer.Request {
 		source := *m.Mixer
 		mixer = &source
 	}
+	// CanStart checked that there is a choice for the mode.
+	choice := *m.Chosen()
 	m.Run = &Run{
 		Started:     time.Now(),
 		Device:      m.Device,
 		Serial:      serial,
 		Mixer:       mixer,
+		Stock:       m.Stock,
+		Choice:      &choice,
 		NeedsBackup: m.Answering(),
 	}
 	if m.WantsStorageFix() {
@@ -978,7 +1079,7 @@ func (m *Model) Retry() *installer.Request {
 		return nil
 	}
 	run := m.Run
-	if run == nil || run.Failed == nil || m.Busy != nil {
+	if run == nil || run.status.Kind != RunFailed || m.Busy() {
 		return nil
 	}
 	m.replan()
@@ -992,15 +1093,13 @@ func (m *Model) Retry() *installer.Request {
 // skips through to the first one the mixer's state leaves undone.
 func (m *Model) replan() {
 	run := m.Run
-	run.Failed = nil
-	run.Waiting = nil
-	run.Cancelling = false
+	run.retry()
 	m.settingsRead = SettingsReadIdle
 	// Damaged files have no copy to restore them from on the mixer: only
 	// sending the firmware again fixes them.
 	if m.damaged() {
 		run.Flashed = false
-		m.ImageCheck, m.ImageCheckAnswered = nil, false
+		m.imageCheck = imageCheck{}
 	}
 	// A mixer back in normal mode before the flash is as it was, so the run
 	// can be stopped again.
@@ -1009,13 +1108,13 @@ func (m *Model) replan() {
 }
 
 func (m *Model) damaged() bool {
-	return m.ImageCheck != nil && m.ImageCheck.Status == core.ImageStatusDamaged
+	return m.imageCheck.kind == imageCheckAnswered && m.imageCheck.result.Status == core.ImageStatusDamaged
 }
 
 // RetryFrom is the step Retry would start from, judged from what the mixer
 // reports now; ok false without a failed run.
 func (m *Model) RetryFrom() (step Step, ok bool) {
-	if m.Run == nil || m.Run.Failed == nil {
+	if !m.Failed() {
 		return 0, false
 	}
 	plan := *m
@@ -1032,7 +1131,7 @@ func (m *Model) RetryFrom() (step Step, ok bool) {
 
 // Stop ends the run.
 func (m *Model) Stop() {
-	if m.Busy == nil {
+	if !m.Busy() {
 		m.Run = nil
 		m.settingsRead = SettingsReadIdle
 		// A failed selection may mean the offers changed: look again, so
@@ -1046,12 +1145,12 @@ func (m *Model) Stop() {
 // CanCancel reports that the run has not touched the mixer's mode or
 // firmware yet.
 func (m *Model) CanCancel() bool {
-	return m.Run != nil && !m.Run.Committed && !m.Run.Flashed && !m.Run.Cancelling
+	return m.Run != nil && !m.Run.Committed && !m.Run.Flashed && m.Run.status.Kind != RunCanceling
 }
 
-// Cancelling reports a run cancelled while its request is in flight.
-func (m *Model) Cancelling() bool {
-	return m.Run != nil && m.Run.Cancelling
+// Canceling reports a run canceled while its request is in flight.
+func (m *Model) Canceling() bool {
+	return m.Run != nil && m.Run.status.Kind == RunCanceling
 }
 
 // Cancel cancels before the point of no return. A request in flight (saving
@@ -1061,8 +1160,8 @@ func (m *Model) Cancel() bool {
 	if !m.CanCancel() {
 		return false
 	}
-	if m.Busy != nil {
-		m.Run.Cancelling = true
+	if m.Busy() {
+		m.Run.cancel()
 		return true
 	}
 	m.Run = nil
@@ -1073,8 +1172,7 @@ func (m *Model) Cancel() bool {
 func (m *Model) fail(message string) *installer.Request {
 	m.settingsRead = SettingsReadIdle
 	if m.Run != nil {
-		m.Run.Failed = &message
-		m.Run.Waiting = nil
+		m.Run.fail(message)
 	}
 	return nil
 }
@@ -1088,14 +1186,10 @@ func (m *Model) waitFor(why string, powerCycle bool) *installer.Request {
 	if run == nil {
 		return nil
 	}
-	since := time.Now()
-	if run.Waiting != nil && run.Waiting.PowerCycle == powerCycle {
-		since = run.Waiting.Since
-	}
-	if time.Since(since) > waitLimit {
+	now := time.Now()
+	if since := run.wait(why, powerCycle, now); now.Sub(since) > waitLimit {
 		return m.fail(fmt.Sprintf("%s The mixer didn't get there in time. Check it, then press “Try again”.", why))
 	}
-	run.Waiting = &Waiting{Why: why, Since: since, PowerCycle: powerCycle}
 	return nil
 }
 
@@ -1104,8 +1198,8 @@ func (m *Model) waitFor(why string, powerCycle bool) *installer.Request {
 // way out, whether or not RC2FX answers meanwhile.
 func (m *Model) TakingLonger(now time.Time) bool {
 	run := m.Run
-	return run != nil && run.Failed == nil && run.Waiting != nil &&
-		now.Sub(run.Waiting.Since) >= TakingLongerAfter
+	return run != nil && run.status.Kind == RunWaiting &&
+		now.Sub(run.status.Since) >= TakingLongerAfter
 }
 
 // CanStop reports that the run can be stopped now: before it touches the
@@ -1114,12 +1208,12 @@ func (m *Model) CanStop(now time.Time) bool {
 	switch run := m.Run; {
 	case run == nil:
 		return false
-	case run.Failed != nil:
-		return m.Busy == nil
+	case run.status.Kind == RunFailed:
+		return !m.Busy()
 	case m.CanCancel():
 		return true
 	}
-	return m.Busy == nil && m.TakingLonger(now)
+	return !m.Busy() && m.TakingLonger(now)
 }
 
 // advance carries out the next unsatisfied step, or waits for the mixer.
@@ -1129,7 +1223,7 @@ func (m *Model) advance() *installer.Request {
 		if run == nil {
 			return nil
 		}
-		if run.Failed != nil || m.Busy != nil {
+		if run.status.Kind == RunFailed || m.Busy() {
 			return nil
 		}
 		if m.Status != nil && (len(m.Status.USB) > 1 ||
@@ -1145,8 +1239,7 @@ func (m *Model) advance() *installer.Request {
 			run.Serial = m.Status.USB[0].Serial
 		}
 		if run.Index < 0 || run.Index >= len(Steps) {
-			m.Finished = true
-			m.Last = m.Run
+			m.finished = m.Run
 			m.Run = nil
 			if m.Status != nil {
 				if c := m.Status.Saved.LastCommand(); c != nil && c.Command == "flash" {
@@ -1159,7 +1252,7 @@ func (m *Model) advance() *installer.Request {
 		step := Steps[run.Index]
 		if m.satisfied(step) {
 			run.Index++
-			run.Waiting = nil
+			run.resume()
 			continue
 		}
 		serial := run.Serial
@@ -1177,7 +1270,7 @@ func (m *Model) advance() *installer.Request {
 			}
 			return m.wait("Reading RC2FX's settings over USB.")
 		case StepMixer:
-			profile, hasProfile := m.firmwareProfile()
+			profile, hasProfile := m.firmwareProfile(run.Choice)
 			switch {
 			case run.Mixer != nil && run.Mixer.Kind == MixerSourceSigned && hasProfile:
 				offer := cloneOffer(run.Mixer.Offer)
@@ -1192,7 +1285,7 @@ func (m *Model) advance() *installer.Request {
 				return m.fail("Choose the mixer software to install.")
 			}
 		case StepPrepare:
-			chosen := m.Chosen()
+			chosen := run.Choice
 			if chosen == nil {
 				return m.fail("Choose a firmware version.")
 			}
@@ -1201,7 +1294,7 @@ func (m *Model) advance() *installer.Request {
 				Channel: chosen.Channel,
 				Version: chosen.Version,
 				Serial:  serial,
-				Stock:   m.Stock,
+				Stock:   run.Stock,
 			})
 		case StepUSBMode:
 			usb := m.USB()
@@ -1218,7 +1311,7 @@ func (m *Model) advance() *installer.Request {
 				return m.wait("Connect the mixer to this computer.")
 			case len(usb) == 1 && !usb[0].UpdateMode:
 				serial := usb[0].Serial
-				if run.Waiting != nil && m.usbModeSent() {
+				if run.status.Kind == RunWaiting && m.usbModeSent() {
 					return m.wait("Waiting for the mixer to switch to USB update mode.")
 				}
 				run.Committed = true
@@ -1239,7 +1332,7 @@ func (m *Model) advance() *installer.Request {
 				return m.wait("Waiting for the mixer to enter USB update mode.")
 			}
 		default: // StepStart
-			if m.Stock {
+			if run.Stock {
 				if len(m.USB()) == 0 {
 					return m.wait("The mixer is installing the firmware and restarting. Keep it connected to see when it is back.")
 				}
@@ -1250,11 +1343,13 @@ func (m *Model) advance() *installer.Request {
 				return m.wait(fmt.Sprintf("RC2FX is starting: %s", service.Detail))
 			}
 			if service != nil && service.Kind == installer.ServiceReady {
-				switch check := m.ImageCheck; {
-				case check != nil && check.Status == core.ImageStatusDamaged:
-					return m.fail(damagedMessage(check))
-				case check != nil && check.Status == core.ImageStatusRepaired:
-					return m.waitFor(repairedMessage(check), true)
+				if check := &m.imageCheck.result; m.imageCheck.kind == imageCheckAnswered {
+					switch check.Status {
+					case core.ImageStatusDamaged:
+						return m.fail(damagedMessage(check))
+					case core.ImageStatusRepaired:
+						return m.waitFor(repairedMessage(check), true)
+					}
 				}
 				return m.wait("RC2FX is running and is checking the files the flash installed. This takes a minute or two.")
 			}
@@ -1301,12 +1396,12 @@ func (m *Model) usbModeSent() bool {
 // page says what the mixer is doing now, and Try again starts from that),
 // slowly otherwise so the page follows USB and network changes.
 func (m *Model) Tick(now time.Time) *installer.Request {
-	if m.Busy != nil || m.polling() {
+	if m.Busy() || m.polling() {
 		return nil
 	}
 	var interval time.Duration
 	switch {
-	case m.Run != nil && (m.Run.Waiting != nil || m.Run.Failed != nil):
+	case m.Run != nil && (m.Run.status.Kind == RunWaiting || m.Run.status.Kind == RunFailed):
 		interval = 3 * time.Second
 	case m.Run != nil:
 		return nil
@@ -1324,14 +1419,11 @@ func (m *Model) Tick(now time.Time) *installer.Request {
 func (m *Model) Finish(request installer.Request, reply installer.Reply, err error) *installer.Request {
 	background := false
 	if len(m.queue) > 0 {
-		background = m.queue[0]
+		background = m.queue[0].background
 		m.queue = m.queue[1:]
 	}
-	if !background {
-		m.Busy = nil
-	}
-	// A cancelled run ends when its request returns, whatever it says.
-	if !background && m.Cancelling() {
+	// A canceled run ends when its request returns, whatever it says.
+	if !background && m.Canceling() {
 		m.Run = nil
 		return m.refresh()
 	}
@@ -1412,7 +1504,7 @@ func (m *Model) Finish(request installer.Request, reply installer.Reply, err err
 		if r.InPlaceBundle != nil {
 			bundle = *r.InPlaceBundle
 		}
-		m.InPlace = InPlace{Kind: InPlaceReady, Bundle: bundle}
+		m.inPlace = InPlace{Kind: InPlaceReady, Bundle: bundle}
 	case installer.ReplyMixerSelected:
 		release := ""
 		if r.Identity != nil {
@@ -1463,11 +1555,10 @@ func (m *Model) Finish(request installer.Request, reply installer.Reply, err err
 				m.Run.Flashed = true
 			}
 		case installer.RequestEnterUSBMode:
-			if m.Run != nil {
-				m.Run.Waiting = &Waiting{
-					Why:   "Waiting for the mixer to switch to USB update mode.",
-					Since: time.Now(),
-				}
+			if m.Running() {
+				// A new wait, not the one before the request.
+				m.Run.resume()
+				m.wait("Waiting for the mixer to switch to USB update mode.")
 			}
 		}
 	}
@@ -1497,7 +1588,7 @@ func (m *Model) failed(request installer.Request, err error) *installer.Request 
 		if cancelled(err) {
 			message = "The update was cancelled. Nothing changed on the mixer."
 		}
-		m.InPlace = InPlace{Kind: InPlaceFailed, Error: message}
+		m.inPlace = InPlace{Kind: InPlaceFailed, Error: message}
 		return nil
 	case installer.RequestStorageFix:
 		if run := m.Run; run != nil && run.Fix != nil {
@@ -1550,9 +1641,12 @@ func (m *Model) receiveStatus(status installer.Status) *installer.Request {
 	if first && m.Run == nil && m.recentlyFlashed() {
 		if p := m.Prepared(); p != nil {
 			m.Stock = p.Stock
+			m.finished = nil
 			m.Run = &Run{
 				Started:  time.Now(),
 				Device:   m.Device,
+				Stock:    p.Stock,
+				Choice:   &Choice{Channel: p.Channel, Version: p.Version},
 				BackedUp: true,
 				Prepared: true,
 				Flashed:  true,

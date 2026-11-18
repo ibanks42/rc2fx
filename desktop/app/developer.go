@@ -45,7 +45,7 @@ func (a *App) developerVisible() bool {
 
 // readSSH asks the mixer for its SSH status, when the controls are visible.
 func (a *App) readSSH() {
-	if a.developerVisible() && a.ssh.Pending == nil {
+	if a.developerVisible() && !a.ssh.Change.Sent() {
 		id := a.ssh.Track(false)
 		if !a.command(transport.CommandSSH{Generation: a.generation, ID: id}) {
 			a.ssh.Untrack(id)
@@ -105,10 +105,12 @@ func (a *App) receiveSSH(cx *gk.Cx, id uint64, status *core.SSHStatus, err error
 }
 
 func (a *App) sendSSH(request core.SSHRequest) {
-	enable := request.Enabled
 	id := a.ssh.Track(true)
 	if a.command(transport.CommandSetSSH{Generation: a.generation, ID: id, Request: request}) {
-		a.ssh.Pending = &enable
+		a.ssh.Change = developer.ChangeDisabling
+		if request.Enabled {
+			a.ssh.Change = developer.ChangeEnabling
+		}
 	} else {
 		a.ssh.Untrack(id)
 	}
@@ -138,11 +140,15 @@ func cloneSerial(serial *string) *string {
 // enableSSH prepares this computer's key off the UI thread, then sends it,
 // but only for the connection the user confirmed on.
 func (a *App) enableSSH(cx *gk.Cx, epoch uint64, serial *string) {
-	if !a.sameConnection(epoch, serial) || a.ssh.Pending != nil {
+	if !a.sameConnection(epoch, serial) {
 		a.message = "The mixer connection changed; SSH was not enabled."
 		return
 	}
-	a.ssh.PreparingKey = true
+	if a.ssh.Change.Busy() {
+		a.message = "SSH access is already changing; try again when it is done."
+		return
+	}
+	a.ssh.Change = developer.ChangePreparingKey
 	type prepared struct {
 		key string
 		err error
@@ -151,8 +157,8 @@ func (a *App) enableSSH(cx *gk.Cx, epoch uint64, serial *string) {
 		key, err := installer.SSHPublicKey()
 		return prepared{key, err}
 	}, func(cx *gk.Cx, p prepared) {
-		if a.ssh.Epoch == epoch {
-			a.ssh.PreparingKey = false
+		if a.ssh.Epoch == epoch && a.ssh.Change == developer.ChangePreparingKey {
+			a.ssh.Change = developer.ChangeNone
 		}
 		switch {
 		case !a.sameConnection(epoch, serial):
@@ -187,8 +193,12 @@ func (a *App) confirmEnableSSH(cx *gk.Cx) {
 }
 
 func (a *App) disableSSH(epoch uint64, serial *string) {
-	if !a.sameConnection(epoch, serial) || a.ssh.Pending != nil {
+	if !a.sameConnection(epoch, serial) {
 		a.message = "The mixer connection changed; SSH was not disabled."
+		return
+	}
+	if a.ssh.Change.Busy() {
+		a.message = "SSH access is already changing; try again when it is done."
 		return
 	}
 	a.sendSSH(core.SSHRequest{Enabled: false})
@@ -242,15 +252,11 @@ func (a *App) sshLogin(cx *gk.Cx, command string) [2]gk.DivEl {
 // sshRows is what the mixer reported, with what's needed to log in when it
 // can work.
 func (a *App) sshRows(cx *gk.Cx) gk.DivEl {
-	pending := a.ssh.Pending
-	if pending == nil && a.ssh.PreparingKey {
-		on := true
-		pending = &on
-	}
+	change := a.ssh.Change
 	local := a.ssh.LocalFingerprint
-	summary := developer.Describe(a.ssh.Status, pending, local)
+	summary := developer.Describe(a.ssh.Status, change, local)
 	var reported *core.SSHStatus
-	if st := a.ssh.Status; st != nil && st.Err == nil && st.Status != nil && pending == nil && st.Status.Managed {
+	if st := a.ssh.Status; st != nil && st.Err == nil && st.Status != nil && !change.Busy() && st.Status.Managed {
 		reported = st.Status
 	}
 	var pinned *developer.Pinned
@@ -287,7 +293,7 @@ func (a *App) sshRows(cx *gk.Cx) gk.DivEl {
 		}
 	}
 	var button gk.Element
-	enable, offer := developer.Action(a.ssh.Status, pending)
+	enable, offer := developer.Action(a.ssh.Status, change)
 	switch {
 	case offer && enable:
 		button = ghost("enable-ssh", "Enable SSH").
@@ -295,7 +301,7 @@ func (a *App) sshRows(cx *gk.Cx) gk.DivEl {
 	case offer:
 		button = ghost("disable-ssh", "Disable SSH").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.confirmDisableSSH(cx) })
-	case a.ssh.Status != nil && a.ssh.Status.Err != nil && pending == nil:
+	case a.ssh.Status != nil && a.ssh.Status.Err != nil && !change.Busy():
 		button = ghost("retry-ssh", "Try again").OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			a.ssh.Status = nil
 			a.ssh.Pinned = nil

@@ -304,7 +304,7 @@ fn recovery_invalidates_model_history_and_then_recovers() {
             }));
         }
         let shared = Shared::default();
-        shared.stop.store(2, Ordering::Release);
+        shared.request_stop(StopRequest::Drain);
         run(Box::new(Identity), consumer, producer, &shared, geometry());
         for expected in valid {
             let frame = output.pop().unwrap();
@@ -415,7 +415,7 @@ fn queued_time_is_included_in_turnaround_and_missing_stamps_are_errors() {
         }));
     }
     let shared = Shared::default();
-    shared.stop.store(2, Ordering::Release);
+    shared.request_stop(StopRequest::Drain);
     run(Box::new(Identity), consumer, producer, &shared, geometry());
     let wait = shared.queue_wait.snapshot();
     let turnaround = shared.turnaround.snapshot();
@@ -444,7 +444,7 @@ fn gap_history_and_partial_drain_geometry() {
         }));
     }
     let shared = Shared::default();
-    shared.stop.store(2, Ordering::Release);
+    shared.request_stop(StopRequest::Drain);
     run(Box::new(Identity), consumer, producer, &shared, g);
     assert!(output.pop().unwrap().valid);
     let invalid = g.intrinsic_delay_samples.div_ceil(g.frame_samples);
@@ -813,9 +813,35 @@ fn output_overflow_is_retained_in_joined_verdict() {
         ..Frame::default()
     }));
     let shared = Shared::default();
-    shared.stop.store(2, Ordering::Release);
+    shared.request_stop(StopRequest::Drain);
     run(Box::new(Identity), consumer, producer, &shared, geometry());
     assert_eq!(shared.output_drops.load(Ordering::Acquire), 1);
     assert_eq!(shared.completed.load(Ordering::Acquire), 1);
     assert!(output.pop().is_some());
+}
+#[test]
+fn retirement_codes_decode_totally() {
+    for request in [StopRequest::Run, StopRequest::Cancel, StopRequest::Drain] {
+        assert_eq!(StopRequest::from_u8(request as u8), request);
+    }
+    for termination in [
+        Termination::Running,
+        Termination::Stopping,
+        Termination::TimedOut,
+        Termination::Joined,
+    ] {
+        assert_eq!(Termination::from_u8(termination as u8), termination);
+    }
+    for value in 3..=u8::MAX {
+        assert_eq!(StopRequest::from_u8(value), StopRequest::Cancel);
+    }
+    for value in 4..=u8::MAX {
+        assert_eq!(Termination::from_u8(value), Termination::Joined);
+    }
+    let shared = Shared::default();
+    assert_eq!(shared.stop_request(), StopRequest::Run);
+    shared.request_stop(StopRequest::for_mode(StopMode::Drain));
+    assert_eq!(shared.stop_request(), StopRequest::Drain);
+    shared.request_stop(StopRequest::for_mode(StopMode::Cancel));
+    assert_eq!(shared.stop_request(), StopRequest::Cancel);
 }

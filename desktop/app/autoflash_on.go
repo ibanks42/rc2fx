@@ -52,13 +52,13 @@ func autoFlashBlocked(a *App) string {
 		return i.model.Error
 	case i.busy():
 		return "the installer stayed busy"
-	case i.model.Run != nil && i.model.Run.Waiting != nil:
-		return "a run was still waiting: " + i.model.Run.Waiting.Why
+	case i.model.Run != nil && i.model.Run.Status().Kind == installflow.RunWaiting:
+		return "a run was still waiting: " + i.model.Run.Status().Why
 	}
 	m := i.model
 	return fmt.Sprintf("the installer could not start: choice=%v mixer=%v options=%v run=%v finished=%v status=%v privileged=%v busy=%v recently=%v error=%q",
-		choiceVersion(m.Choice), m.Mixer, m.MixerOptions(), m.Run != nil, m.Finished, m.Status != nil,
-		m.Privileged, m.Busy != nil, m.RecentlyFlashed(), m.Error)
+		choiceVersion(m.Choice), m.Mixer, m.MixerOptions(), m.Run != nil, m.Finished(), m.Status != nil,
+		m.Privileged, m.Busy(), m.RecentlyFlashed(), m.Error)
 }
 
 var autoFlash struct {
@@ -138,7 +138,7 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 	if !autoFlash.started {
 		// Opened just after a flash, the task picks that run up and may show
 		// its result; Done closes it, and the next poll opens a fresh one.
-		if m.Finished && m.Run == nil && !i.busy() {
+		if m.Finished() && !i.busy() {
 			a.closeTask(cx, false)
 			autoFlash.opened = false
 			return
@@ -183,19 +183,19 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 		return
 	}
 	switch {
-	case m.Run != nil && m.Run.Failed != nil:
-		autoFlash.outcome = "failed: " + *m.Run.Failed
-	case m.Run == nil && m.Finished:
+	case m.Failed():
+		autoFlash.outcome = "failed: " + m.Run.Status().Why
+	case m.Finished():
 		autoFlash.outcome = "ok"
-		if last := m.Last; last != nil && last.Fix != nil {
+		if last := m.LastRun(); last != nil && last.Fix != nil {
 			fmt.Fprintf(os.Stderr, "autoflash: storage fix %+v (error %q)\n", last.Fix.Reply, last.Fix.Error)
 		}
 		// The result page stays until dismissed; dismiss it as Done does.
 		a.closeTask(cx, true)
-	case m.ImageCheck != nil && m.ImageCheck.Status == core.ImageStatusRepaired:
-		autoFlash.outcome = "repaired: " + strings.Join(m.ImageCheck.Repaired, " ")
-	case m.ImageCheck != nil && m.ImageCheck.Status == core.ImageStatusDamaged:
-		autoFlash.outcome = "damaged: " + strings.Join(m.ImageCheck.Damaged, " ")
+	case m.ImageCheckResult() != nil && m.ImageCheckResult().Status == core.ImageStatusRepaired:
+		autoFlash.outcome = "repaired: " + strings.Join(m.ImageCheckResult().Repaired, " ")
+	case m.ImageCheckResult() != nil && m.ImageCheckResult().Status == core.ImageStatusDamaged:
+		autoFlash.outcome = "damaged: " + strings.Join(m.ImageCheckResult().Damaged, " ")
 	case time.Since(autoFlash.startedAt) > autoFlashTimeout:
 		autoFlash.outcome = "timeout"
 	}
@@ -204,14 +204,14 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 // autoFlashFinish turns developer SSH on (as the Developer page's switch
 // does) while the mixer is connected, then records the outcome and quits.
 func (a *App) autoFlashFinish(cx *gk.Cx, result string) {
-	if !autoFlash.sshSent && a.session.Connected && a.ssh.Pending == nil {
+	if !autoFlash.sshSent && a.session.Connected && !a.ssh.Change.Busy() {
 		if key, err := installer.SSHPublicKey(); err == nil {
 			autoFlash.sshSent, autoFlash.sshSentAt = true, time.Now()
 			a.sendSSH(core.SSHRequest{Enabled: true, PublicKey: &key})
 			return
 		}
 	}
-	waiting := autoFlash.sshSent && a.ssh.Pending != nil && time.Since(autoFlash.sshSentAt) < 30*time.Second
+	waiting := autoFlash.sshSent && a.ssh.Change.Sent() && time.Since(autoFlash.sshSentAt) < 30*time.Second
 	// The mixer may still be restarting when the run ends; give it a few
 	// minutes to connect so SSH can be turned on.
 	if waiting || (!autoFlash.sshSent && time.Since(autoFlash.outcomeAt) < autoFlashSSHWait) {

@@ -71,6 +71,12 @@ type State struct {
 	Percent uint8
 	Version string
 	Message string
+	// Asset, when HasAsset: for StateReady, the checked package to apply on
+	// restart; for StateFailed, the package kept because no check could be
+	// made, which trying again only checks. A Ready state without one (a
+	// preview) has nothing to apply.
+	Asset    Asset
+	HasAsset bool
 }
 
 // Idle is State::Idle.
@@ -82,11 +88,22 @@ func Downloading(percent uint8) State { return State{Kind: StateDownloading, Per
 // VerifyingState is State::Verifying.
 func VerifyingState(version string) State { return State{Kind: StateVerifying, Version: version} }
 
-// Ready is State::Ready.
+// Ready is State::Ready with nothing to apply, as a preview shows it.
 func Ready(version string) State { return State{Kind: StateReady, Version: version} }
+
+// ReadyToApply is State::Ready for asset, checked and applied on restart.
+func ReadyToApply(asset Asset) State {
+	return State{Kind: StateReady, Version: asset.Version, Asset: asset, HasAsset: true}
+}
 
 // Failed is State::Failed.
 func Failed(message string) State { return State{Kind: StateFailed, Message: message} }
+
+// FailedKept is State::Failed with asset kept to check again, because no
+// check could be made.
+func FailedKept(message string, asset Asset) State {
+	return State{Kind: StateFailed, Message: message, Asset: asset, HasAsset: true}
+}
 
 // Asset is a Velopack asset (VelopackAsset): a package in the feed or on
 // disk. The JSON names are Velopack's.
@@ -332,22 +349,19 @@ func VerifyPackage(work, packages string, asset Asset, verify Verify) *installer
 	return VerifyFile(work, asset, filepath.Join(packages, name), verify)
 }
 
-// Outcome is what a finished check leaves.
+// Outcome is what a finished check leaves: Ready with the package when it
+// passed, Failed keeping it when no check could be made, else Failed.
 type Outcome struct {
 	State State
-	// Ready is the package to apply on restart, only when it passed.
-	Ready *Asset
-	// Retry is the package kept to check again, when no check could be made.
-	Retry *Asset
 }
 
 // CheckedOutcome is self_update.rs checked.
 func CheckedOutcome(asset Asset, result *installer.VerifyError) Outcome {
 	switch {
 	case result == nil:
-		return Outcome{State: Ready(asset.Version), Ready: &asset}
+		return Outcome{State: ReadyToApply(asset)}
 	case !result.Rejected:
-		return Outcome{State: Failed(result.Message), Retry: &asset}
+		return Outcome{State: FailedKept(result.Message, asset)}
 	}
 	return Outcome{State: Failed(result.Message)}
 }

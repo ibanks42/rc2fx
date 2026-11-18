@@ -24,17 +24,15 @@ type SelfUpdate struct {
 	// preview: RC2FX_DEV_UPDATE set a state to show; nothing can be
 	// downloaded.
 	preview bool
-	state   State
+	// state is where the update stands, with the package to apply (Ready)
+	// or to check again (Failed) when there is one.
+	state State
 	// pending is a package found at startup, until it is checked.
 	pending *Asset
-	// retry is a kept package whose check could not be made; trying again
-	// checks it without downloading.
-	retry *Asset
 	// checks is what the feed's check of the last download found.
 	checks *Checks
 	// applyOnQuit is the downloaded package to apply as RC2FX quits.
 	applyOnQuit *Asset
-	ready       *Asset
 	// verify checks a package against its signed release.
 	verify Verify
 }
@@ -156,7 +154,7 @@ func (u *SelfUpdate) StaysShown() bool { return u.InProgress() || u.state.Kind =
 
 // Retrying: a failed check kept its package, so trying again only checks
 // it.
-func (u *SelfUpdate) Retrying() bool { return u.retry != nil }
+func (u *SelfUpdate) Retrying() bool { return u.state.Kind == StateFailed && u.state.HasAsset }
 
 // State is where the update stands.
 func (u *SelfUpdate) State() State { return u.state }
@@ -211,7 +209,6 @@ func (u *SelfUpdate) BeginCheck(asset Asset) (check func() Outcome, ok bool) {
 	if packages == "" {
 		return nil, false
 	}
-	u.ready, u.retry = nil, nil
 	u.state = VerifyingState(asset.Version)
 	verify := u.verify
 	return func() Outcome {
@@ -221,7 +218,7 @@ func (u *SelfUpdate) BeginCheck(asset Asset) (check func() Outcome, ok bool) {
 
 // FinishCheck is finish_check.
 func (u *SelfUpdate) FinishCheck(o Outcome) {
-	u.state, u.ready, u.retry = o.State, o.Ready, o.Retry
+	u.state = o.State
 }
 
 // StartKind is what download_app_update does first.
@@ -245,11 +242,8 @@ func (u *SelfUpdate) Start() (StartKind, Asset) {
 	if u.manager == nil || u.InProgress() {
 		return StartNothing, Asset{}
 	}
-	if retry := u.retry; retry != nil {
-		u.retry = nil
-		if u.OnDisk(*retry) {
-			return StartCheck, *retry
-		}
+	if u.Retrying() && u.OnDisk(u.state.Asset) {
+		return StartCheck, u.state.Asset
 	}
 	if runtime.GOOS == "linux" && u.packages != "" {
 		if err := EnsurePrivate(u.packages); err != nil {
@@ -355,7 +349,10 @@ func (u *SelfUpdate) Advance(progress *Progress) (changed, ended bool) {
 func (u *SelfUpdate) FinishDownload(r DownloadResult) (check Asset, needsCheck bool) {
 	switch {
 	case r.Failed:
-		u.state, u.retry = Failed(r.Message), r.Retry
+		u.state = Failed(r.Message)
+		if r.Retry != nil {
+			u.state = FailedKept(r.Message, *r.Retry)
+		}
 	case r.Checked:
 		u.FinishCheck(CheckedOutcome(r.Asset, nil))
 	default:
@@ -380,13 +377,12 @@ const (
 // Restart is restart_to_update up to the quit. blocked is
 // update_restart_blocker's answer.
 func (u *SelfUpdate) Restart(blocked bool) RestartKind {
-	if blocked || u.ready == nil {
+	if blocked || u.state.Kind != StateReady || !u.state.HasAsset {
 		return RestartNothing
 	}
-	asset := *u.ready
+	asset := u.state.Asset
 	// Cleaned up or removed since it was checked: nothing to apply.
 	if !u.OnDisk(asset) {
-		u.ready = nil
 		u.state = Failed("The downloaded update is no longer on this computer. Download it again.")
 		return RestartGone
 	}

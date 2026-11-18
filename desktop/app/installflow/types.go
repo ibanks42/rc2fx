@@ -8,8 +8,9 @@
 // stopping at the first error, which can be retried from that step.
 //
 // A mixer whose RC2FX installs signed releases in place needs no flash for an
-// RC2FX update that keeps its RØDE firmware: InPlace tracks that shorter
-// path, which the app finishes over its USB connection.
+// RC2FX update that keeps its RØDE firmware: Model.InPlace tracks that
+// shorter path. The app only carries it to and from the mixer over its USB
+// connection; what each answer means is decided here (inplace.go).
 //
 // The model only decides. It returns the installer.Request to run next (nil
 // for none); the UI runs it with the installer engine on a worker, one at a time and in the
@@ -20,6 +21,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
@@ -286,9 +288,29 @@ type Choice struct {
 	Version string
 }
 
-// Waiting is what a run waits for, and since when.
-type Waiting struct {
-	Why   string
+// RunStatusKind is where a run stands at its current step.
+type RunStatusKind int
+
+const (
+	// RunGoing: carrying out its steps.
+	RunGoing RunStatusKind = iota
+	// RunWaiting: waiting for the mixer; Why says what for, since Since.
+	RunWaiting
+	// RunFailed: stopped at its step; Why says why. Retry goes on from it.
+	RunFailed
+	// RunCanceling: canceled while a request was in flight; the run ends
+	// when it returns.
+	RunCanceling
+)
+
+// RunStatus is where a run stands at its current step. Only the fields of
+// its Kind are set.
+type RunStatus struct {
+	Kind RunStatusKind
+	// Why, for RunWaiting and RunFailed.
+	Why string
+	// Since, for RunWaiting: when the wait began. A wait that changes its
+	// reason keeps it, so the limit covers the whole wait for the mixer.
 	Since time.Time
 	// PowerCycle: the mixer has to be switched off and on by hand. Its wait
 	// is timed on its own, from when that was asked.
@@ -301,8 +323,9 @@ type Run struct {
 	// restarted, when it was picked up).
 	Started time.Time
 	Index   int
-	Failed  *string
-	Waiting *Waiting
+	// status is where the run stands; written only by fail, wait, resume,
+	// retry and cancel (and ShowStatus, for made-up pages).
+	status RunStatus
 	// Serial is the mixer this run is for, from USB.
 	Serial string
 	Device firmware.Model
@@ -315,6 +338,10 @@ type Run struct {
 	// firmware. Held here so nothing that changes on the page can alter a
 	// run.
 	Mixer *MixerSource
+	// Stock and Choice are the mode and the firmware release the user
+	// reviewed, held for the same reason; Choice is nil when not known.
+	Stock  bool
+	Choice *Choice
 	// Selected: Mixer was verified and selected for this run.
 	Selected bool
 	Prepared bool
@@ -322,12 +349,79 @@ type Run struct {
 	// Committed: USB update mode or the flash was requested: past this the
 	// mixer is not left as it was, so the run can no longer be cancelled.
 	Committed bool
-	// Cancelling: cancelled while a request was in flight; stops when it
-	// returns.
-	Cancelling bool
 	// Fix is the storage fix this run does before installing, nil for a
 	// run without it (decided at Start, see WantsStorageFix).
 	Fix *RunFix
+}
+
+// Status is where the run stands at its current step.
+func (r *Run) Status() RunStatus {
+	return r.status
+}
+
+// ShowStatus sets where the run stands, for pages made from made-up state
+// (the app's flow fixtures).
+func (r *Run) ShowStatus(status RunStatus) {
+	r.status = status
+}
+
+// fail stops the run at its step, whatever it was doing.
+func (r *Run) fail(why string) {
+	r.status = RunStatus{Kind: RunFailed, Why: why}
+}
+
+// wait records waiting for the mixer, for why, and returns when the wait
+// began. A wait keeps when an earlier one began across a change of reason,
+// unless it starts or ends waiting for a power cycle, which is timed on its
+// own from when it was asked.
+func (r *Run) wait(why string, powerCycle bool, now time.Time) time.Time {
+	since := now
+	if r.status.Kind == RunWaiting && r.status.PowerCycle == powerCycle {
+		since = r.status.Since
+	}
+	r.status = RunStatus{Kind: RunWaiting, Why: why, Since: since, PowerCycle: powerCycle}
+	return since
+}
+
+// resume ends a wait; a failed or canceling run stays as it is.
+func (r *Run) resume() {
+	if r.status.Kind == RunWaiting {
+		r.status = RunStatus{}
+	}
+}
+
+// retry goes on with a failed or waiting run; a canceling run stays as it
+// is.
+func (r *Run) retry() {
+	if r.status.Kind != RunCanceling {
+		r.status = RunStatus{}
+	}
+}
+
+// cancel marks a run canceled while its request is in flight.
+func (r *Run) cancel() {
+	r.status = RunStatus{Kind: RunCanceling}
+}
+
+// imageCheckKind is how far the mixer's check of the files the flash
+// unpacked is.
+type imageCheckKind int
+
+const (
+	// imageCheckUnasked: no answer since RC2FX last started.
+	imageCheckUnasked imageCheckKind = iota
+	// imageCheckUnsupported: the mixer software predates the check (Rust's
+	// `Some(None)`), so there is nothing to wait for.
+	imageCheckUnsupported
+	// imageCheckAnswered: result is the mixer's answer.
+	imageCheckAnswered
+)
+
+// imageCheck is the mixer's check of the files the flash unpacked.
+type imageCheck struct {
+	kind imageCheckKind
+	// result, for imageCheckAnswered.
+	result core.ImageCheck
 }
 
 // RunFix is the storage fix inside an install: RØDE's archive with the

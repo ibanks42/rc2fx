@@ -249,10 +249,41 @@ struct Preparing {
     skipped: AtomicU64,
     abandoned: AtomicU64,
 }
+/// What control has asked of the worker thread, in `Shared::stop`.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopRequest {
+    /// Keep running.
+    Run = 0,
+    /// Stop at once, leaving queued input unprocessed.
+    Cancel = 1,
+    /// Stop once the queued input has been processed.
+    Drain = 2,
+}
+impl StopRequest {
+    const RUN: u8 = Self::Run as u8;
+    const DRAIN: u8 = Self::Drain as u8;
+    /// Total: any value never written reads as Cancel, which stops the worker.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::RUN => Self::Run,
+            Self::DRAIN => Self::Drain,
+            _ => Self::Cancel,
+        }
+    }
+    const fn for_mode(mode: StopMode) -> Self {
+        match mode {
+            StopMode::Cancel => Self::Cancel,
+            StopMode::Drain => Self::Drain,
+        }
+    }
+}
 #[derive(Default)]
 struct Shared {
     wake: wake::Wake,
+    /// A `StopRequest`.
     stop: AtomicU8,
+    /// A `Termination`.
     termination: AtomicU8,
     failed: AtomicBool,
     completed: AtomicU64,
@@ -276,12 +307,39 @@ struct Shared {
 /// snapshots are quiescent and suitable for exact accounting.
 #[derive(Clone)]
 pub struct Telemetry(Arc<Shared>);
+impl Shared {
+    fn request_stop(&self, request: StopRequest) {
+        self.stop.store(request as u8, Ordering::Release);
+    }
+    fn stop_request(&self) -> StopRequest {
+        StopRequest::from_u8(self.stop.load(Ordering::Acquire))
+    }
+    fn set_termination(&self, termination: Termination) {
+        self.termination.store(termination as u8, Ordering::Release);
+    }
+}
+/// How far control-side retirement of a worker has gone.
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Termination {
-    Running,
-    Stopping,
-    TimedOut,
-    Joined,
+    Running = 0,
+    Stopping = 1,
+    TimedOut = 2,
+    Joined = 3,
+}
+impl Termination {
+    const RUNNING: u8 = Self::Running as u8;
+    const STOPPING: u8 = Self::Stopping as u8;
+    const TIMED_OUT: u8 = Self::TimedOut as u8;
+    /// Total: any value never written reads as Joined.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::RUNNING => Self::Running,
+            Self::STOPPING => Self::Stopping,
+            Self::TIMED_OUT => Self::TimedOut,
+            _ => Self::Joined,
+        }
+    }
 }
 impl Telemetry {
     /// Published exactly once by control-side retirement after the worker joins.
@@ -292,12 +350,7 @@ impl Telemetry {
     /// Retain this handle across control-side Dsp destruction. Only Joined
     /// confirms worker ownership ended; TimedOut must block replacement.
     pub fn termination(&self) -> Termination {
-        match self.0.termination.load(Ordering::Acquire) {
-            0 => Termination::Running,
-            1 => Termination::Stopping,
-            2 => Termination::TimedOut,
-            _ => Termination::Joined,
-        }
+        Termination::from_u8(self.0.termination.load(Ordering::Acquire))
     }
     /// The slowest and latest slow frames and the latest missed and late
     /// deadlines. Never waits for a writer: a record mid-update reads Busy.
@@ -537,7 +590,7 @@ impl Worker {
             thread::sleep(Duration::from_millis(1));
         };
         if let Err(e) = ready {
-            shared.stop.store(1, Ordering::Release);
+            shared.request_stop(StopRequest::Cancel);
             if !shared.wake.notify() {
                 shared.failed.store(true, Ordering::Release);
             }
@@ -601,17 +654,14 @@ impl Worker {
         let mode = *self.retirement_mode.get_or_insert(mode);
         let mut panicked = false;
         if let Some(handle) = self.thread.as_ref() {
-            self.shared.termination.store(1, Ordering::Release);
-            self.shared.stop.store(
-                if mode == StopMode::Drain { 2 } else { 1 },
-                Ordering::Release,
-            );
+            self.shared.set_termination(Termination::Stopping);
+            self.shared.request_stop(StopRequest::for_mode(mode));
             if !self.shared.wake.notify() {
                 self.shared.failed.store(true, Ordering::Release);
             }
             let Some(end) = Instant::now().checked_add(timeout) else {
                 self.retirement_timed_out = true;
-                self.shared.termination.store(2, Ordering::Release);
+                self.shared.set_termination(Termination::TimedOut);
                 return Err(Error::JoinTimeout);
             };
             if !completion_observed_before_deadline(
@@ -620,13 +670,13 @@ impl Worker {
                 Instant::now,
                 || thread::sleep(Duration::from_millis(1)),
             ) {
-                self.shared.termination.store(2, Ordering::Release);
+                self.shared.set_termination(Termination::TimedOut);
                 self.retirement_timed_out = true;
                 return Err(Error::JoinTimeout);
             }
             let result = self.thread.take().expect("owned handle").join();
             self.finished = true;
-            self.shared.termination.store(3, Ordering::Release);
+            self.shared.set_termination(Termination::Joined);
             if result.is_err() {
                 self.shared.failed.store(true, Ordering::Release);
                 panicked = true;
@@ -1085,12 +1135,12 @@ fn run(
         // Observe before checking stop/queue: any subsequent producer or
         // retirement notification prevents sleeping through that transition.
         let observed = s.wake.observe();
-        let stop = s.stop.load(Ordering::Acquire);
-        if stop == 1 || s.failed.load(Ordering::Acquire) {
+        let stop = s.stop_request();
+        if stop == StopRequest::Cancel || s.failed.load(Ordering::Acquire) {
             break;
         }
         let Some(mut frame) = input.pop() else {
-            if stop == 2 {
+            if stop == StopRequest::Drain {
                 break;
             }
             if !s.wake.wait(observed) {
@@ -1209,7 +1259,7 @@ fn prepare(
     let p = &s.prep;
     let blocked = || {
         input.pending() != 0
-            || s.stop.load(Ordering::Acquire) != 0
+            || s.stop_request() != StopRequest::Run
             || s.failed.load(Ordering::Acquire)
     };
     if model.prep_pending() == 0 {

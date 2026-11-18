@@ -42,18 +42,39 @@ type sentRequest struct {
 	change bool
 }
 
+// Change is the SSH change under way, if any.
+type Change int
+
+const (
+	// ChangeNone: nothing is changing.
+	ChangeNone Change = iota
+	// ChangePreparingKey: preparing this computer's key before an Enable is
+	// sent.
+	ChangePreparingKey
+	// ChangeEnabling: an Enable was sent and not yet answered.
+	ChangeEnabling
+	// ChangeDisabling: a Disable was sent and not yet answered.
+	ChangeDisabling
+)
+
+// Busy reports a change under way: no other may start, and the row offers
+// no action.
+func (c Change) Busy() bool { return c != ChangeNone }
+
+// Sent reports a change with the mixer: a read answered meanwhile would
+// show the state from before it.
+func (c Change) Sent() bool { return c == ChangeEnabling || c == ChangeDisabling }
+
 // SSH is what the mixer last said about SSH, for the current connection
 // only. The zero value is Rust's Default.
 type SSH struct {
 	// Status is nil while not read yet.
 	Status *Reading
-	// Pending is an Enable (true) or Disable (false) sent and not yet
-	// answered; nil for none.
-	Pending *bool
+	// Change is the change under way: preparing the key for an Enable, or
+	// an Enable or Disable sent and not yet answered.
+	Change Change
 	// Pinned is reset with every status.
 	Pinned *Pinned
-	// PreparingKey: preparing this computer's key before an Enable is sent.
-	PreparingKey bool
 	// sent is requests sent and not yet answered, oldest first. A reply
 	// whose id is not here belongs to an earlier connection or state and is
 	// ignored.
@@ -106,7 +127,7 @@ func (s *SSH) AcceptReply(id uint64) bool {
 	change := s.sent[at].change
 	s.sent = slices.Delete(s.sent, 0, at+1)
 	if change {
-		s.Pending = nil
+		s.Change = ChangeNone
 	}
 	return change || !slices.ContainsFunc(s.sent, func(r sentRequest) bool { return r.change })
 }
@@ -127,12 +148,12 @@ type Summary struct {
 func plain(line string, flag *Flag) Summary { return Summary{Line: line, Flag: flag} }
 
 // Describe is the SSH row's sentence, flag and any caution, in plain words.
-// localFingerprint "" is none.
-func Describe(status *Reading, pending *bool, localFingerprint string) Summary {
-	if pending != nil {
-		what := "Disabling"
-		if *pending {
-			what = "Enabling"
+// Preparing the key already counts as enabling. localFingerprint "" is none.
+func Describe(status *Reading, change Change, localFingerprint string) Summary {
+	if change.Busy() {
+		what := "Enabling"
+		if change == ChangeDisabling {
+			what = "Disabling"
 		}
 		return plain(what+" SSH access…", &Flag{"Working", model.ToneUnknown})
 	}
@@ -225,9 +246,9 @@ func ReadLocalFingerprint() string {
 }
 
 // Action is which action to offer: Enable (true) or Disable (false); ok
-// false for none.
-func Action(status *Reading, pending *bool) (enable, ok bool) {
-	if status != nil && status.Err == nil && status.Status != nil && pending == nil {
+// false for none, as while a change is under way.
+func Action(status *Reading, change Change) (enable, ok bool) {
+	if status != nil && status.Err == nil && status.Status != nil && !change.Busy() {
 		return !status.Status.Managed, true
 	}
 	return false, false

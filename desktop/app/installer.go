@@ -432,7 +432,7 @@ const (
 )
 
 func (i *Installer) busy() bool {
-	return i.model.Busy != nil || (i.repair != nil && i.repair.Busy()) || (i.fix != nil && i.fix.Busy())
+	return i.model.Busy() || (i.repair != nil && i.repair.Busy()) || (i.fix != nil && i.fix.Busy())
 }
 
 // send runs request, if any (nil for none).
@@ -570,8 +570,7 @@ func (a *App) closeTask(cx *gk.Cx, overview bool) {
 	}
 	a.discardInstaller(cx)
 	if overview && a.session.Connected {
-		a.homeOpen = true
-		a.setSettingsOpen(false)
+		a.nav.showHome()
 	}
 	a.notify(cx)
 }
@@ -666,7 +665,7 @@ func (a *App) stopTask(cx *gk.Cx) {
 	m := i.model
 	switch run := m.Run; {
 	case run == nil:
-	case run.Failed != nil:
+	case run.Status().Kind == installflow.RunFailed:
 		m.Stop()
 	case m.CanCancel():
 		if m.Cancel() {
@@ -871,11 +870,11 @@ func (a *App) trackStage(i *Installer) bool {
 		}
 		return changed
 	}
-	if kind := i.model.InPlace.Kind; kind != i.inPlaceKind {
+	if kind := i.model.InPlace().Kind; kind != i.inPlaceKind {
 		i.inPlaceKind, i.stageSince = kind, now
 		changed = true
 	}
-	if i.model.InPlace.Active() && now.Unix() != i.shown {
+	if i.model.InPlace().Active() && now.Unix() != i.shown {
 		i.shown = now.Unix()
 		changed = true
 	}
@@ -901,7 +900,7 @@ func (a *App) trackStage(i *Installer) bool {
 		i.waitLine, i.waitSince = line, now
 		changed = true
 	}
-	if i.model.Run != nil && i.model.Run.Failed == nil && now.Unix() != i.shown {
+	if i.model.Running() && now.Unix() != i.shown {
 		i.shown = now.Unix()
 		changed = true
 	}
@@ -1034,11 +1033,9 @@ func inPlaceStart(bundle installer.InPlaceBundle) (json.RawMessage, error) {
 }
 
 // driveInPlaceUpdate moves an in-place update along: sends a verified
-// release to the mixer, and after the mixer restarts asks how it ended. True
-// when it changed.
+// release to the mixer, and while it installs asks how it ended. True when
+// it changed. What the mixer says is the model's to judge.
 func (a *App) driveInPlaceUpdate() bool {
-	const askEvery = 3 * time.Second
-	const giveUp = 6 * time.Minute
 	generation := a.generation
 	i := a.installer
 	if i == nil {
@@ -1047,7 +1044,6 @@ func (a *App) driveInPlaceUpdate() bool {
 	if bundle, ok := i.model.TakeInPlaceBundle(); ok {
 		// What update/last says before this update: the transport runs
 		// commands in order, so the reply predates the install.
-		a.inPlaceBefore = inPlaceBaseline{}
 		if !a.command(transport.CommandMixerUpdateLast{Generation: generation}) {
 			a.message = ""
 		}
@@ -1065,140 +1061,41 @@ func (a *App) driveInPlaceUpdate() bool {
 			}
 			a.message = ""
 			if a.installer != nil {
-				a.installer.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceFailed,
-					Error: fmt.Sprintf("Couldn't reach the mixer. Nothing changed on it. %s", why)}
+				a.installer.model.InPlaceSendFailed(why)
 			}
 		}
 		return true
 	}
-	if i.model.InPlace.Kind != installflow.InPlaceInstalling {
-		return false
-	}
-	since := i.model.InPlace.Since
-	if time.Since(since) >= giveUp {
-		i.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceFailed,
-			Error: "The mixer didn't say how the update ended. Check the RC2FX version it reports; " +
-				"if it didn't change, the previous version is still running."}
-		return true
-	}
-	if a.session.Connected && (a.inPlaceAsked == nil || time.Since(*a.inPlaceAsked) >= askEvery) {
-		now := time.Now()
-		a.inPlaceAsked = &now
+	ask, changed := i.model.InPlaceTick(time.Now(), a.session.Connected)
+	if ask {
 		a.command(transport.CommandMixerUpdateLast{Generation: generation})
 	}
-	return false
+	return changed
 }
 
 // inPlaceEvent is the transport's report on an in-place update.
 func (a *App) inPlaceEvent(event transport.MixerUpdateEvent) {
 	i := a.installer
-	if i == nil || i.model.InPlace.Kind != installflow.InPlaceUploading {
-		return
-	}
-	version := i.model.InPlace.Version
-	switch e := event.(type) {
-	case transport.MixerUpdateEventUploading:
-		i.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceUploading,
-			Version: version, Sent: e.Sent, Total: e.Total}
-	case transport.MixerUpdateEventInstalling:
-		now := time.Now()
-		a.inPlaceAsked = &now
-		i.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceInstalling,
-			Version: version, Since: time.Now()}
-	case transport.MixerUpdateEventFailed:
-		i.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceFailed,
-			Error: fmt.Sprintf("The mixer didn't accept the update. Nothing changed on it. %s", e.Message)}
-	}
-}
-
-// inPlaceBaseline is the mixer's update/last record as it was just before
-// an in-place update was sent. Mixer software that does not clear the record
-// when it accepts an install keeps reporting it while the new update runs,
-// and it can name the same version (a retry after a rollback), so the same
-// record is not taken as the new outcome until the record has been seen to
-// change.
-type inPlaceBaseline struct {
-	read    bool
-	record  map[string]any
-	changed bool
-}
-
-func decodeRecord(record json.RawMessage) map[string]any {
-	var fields map[string]any
-	if json.Unmarshal(record, &fields) != nil {
-		return nil
-	}
-	return fields
-}
-
-// capture keeps the first record read before the update, if none was kept.
-func (b *inPlaceBaseline) capture(record json.RawMessage) {
-	if !b.read {
-		b.read, b.record = true, decodeRecord(record)
-	}
-}
-
-// stale reports that record is still the one from before the update.
-func (b *inPlaceBaseline) stale(record json.RawMessage) bool {
-	if !b.read || b.changed {
-		return false
-	}
-	if reflect.DeepEqual(decodeRecord(record), b.record) {
-		return true
-	}
-	b.changed = true
-	return false
-}
-
-// inPlaceOutcome is the mixer's record of its last in-place update (JSON
-// null is None). Only the outcome of the update in progress counts;
-// anything else is an older record.
-func (a *App) inPlaceOutcome(record json.RawMessage) {
-	i := a.installer
 	if i == nil {
 		return
 	}
-	switch i.model.InPlace.Kind {
-	case installflow.InPlaceUploading:
-		a.inPlaceBefore.capture(record)
-		return
-	case installflow.InPlaceInstalling:
-	default:
-		return
+	switch e := event.(type) {
+	case transport.MixerUpdateEventUploading:
+		i.model.InPlaceProgress(e.Sent, e.Total)
+	case transport.MixerUpdateEventInstalling:
+		i.model.InPlaceAccepted(time.Now())
+	case transport.MixerUpdateEventFailed:
+		i.model.InPlaceRefused(e.Message)
 	}
-	if a.inPlaceBefore.stale(record) {
-		return
+}
+
+// inPlaceOutcome is the mixer's record of its last in-place update (JSON
+// null is None); once it ends the update, read the versions the mixer now
+// runs.
+func (a *App) inPlaceOutcome(record json.RawMessage) {
+	if i := a.installer; i != nil && i.model.InPlaceOutcome(record) {
+		a.command(transport.CommandVersion{Generation: a.generation})
 	}
-	version := i.model.InPlace.Version
-	fields := decodeRecord(record)
-	if fields == nil {
-		return
-	}
-	str := func(key string) (string, bool) {
-		v, ok := fields[key].(string)
-		return v, ok
-	}
-	if to, ok := str("to"); !ok || to != version {
-		return
-	}
-	outcome, _ := str("outcome")
-	committed := outcome == "committed"
-	reason, _ := str("reason")
-	reboot, _ := fields["guiShimNeedsReboot"].(bool)
-	var detail string
-	switch {
-	case committed && reboot:
-		detail = "Part of the update applies the next time the mixer restarts."
-	case committed:
-		detail = ""
-	case reason != "":
-		detail = fmt.Sprintf("The previous version was put back: %s", reason)
-	default:
-		detail = "The previous version was put back."
-	}
-	i.model.InPlace = installflow.InPlace{Kind: installflow.InPlaceDone,
-		Version: version, Committed: committed, Detail: detail}
-	a.command(transport.CommandVersion{Generation: a.generation})
 }
 
 // autostartInstaller starts a task opened by Install update or Continue
@@ -1216,7 +1113,7 @@ func (a *App) autostartInstaller(cx *gk.Cx) {
 	}
 	inPlace := a.inPlaceOffer()
 	switch {
-	case i.model.Run != nil || i.model.InPlace.Active() || !time.Now().Before(deadline):
+	case i.model.Run != nil || i.model.InPlace().Active() || !time.Now().Before(deadline):
 		a.installerAutostart = nil
 	case !i.busy() && inPlace != nil:
 		a.installerAutostart = nil
@@ -1272,7 +1169,7 @@ func (a *App) confirmCloseInstaller(cx *gk.Cx) (verdict, ok bool) {
 // inPlaceShown reports that the page is about an in-place update rather
 // than a flash.
 func (a *App) inPlaceShown(i *Installer) bool {
-	return i.model.InPlace.Kind != installflow.InPlaceIdle ||
+	return i.model.InPlace().Kind != installflow.InPlaceIdle ||
 		(!i.preferFlash && a.inPlaceOffer() != nil)
 }
 

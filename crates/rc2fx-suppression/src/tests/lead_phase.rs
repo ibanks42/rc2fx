@@ -90,7 +90,7 @@ fn lead_320_sequence_gaps_reset_history_and_invalidate_only_recovery_frames() {
         }));
     }
     let shared = Shared::default();
-    shared.stop.store(2, Ordering::Release);
+    shared.request_stop(StopRequest::Drain);
     let mut geometry = geometry();
     assert_eq!(geometry.frame_samples, 240);
     geometry.worker_lead_samples = 320;

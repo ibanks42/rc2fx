@@ -27,7 +27,7 @@ func (a *App) openDevPage(cx *gk.Cx) {
 		a.setSettingsOpen(true)
 	case DevPageDiagnostics:
 		a.setSettingsOpen(true)
-		a.diagnosticsOpen = true
+		a.nav.setDiagnostics(true)
 	case DevPageInstaller:
 		a.openTask(cx, taskInstall)
 	case DevPageRepair:

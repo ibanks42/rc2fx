@@ -64,7 +64,9 @@ The installer checks the mixer on USB 1 (normal or update mode, and its
 serial number) and asks the app's connection whether RC2FX is running. It
 then builds a single plan and skips any step the mixer already satisfies. One
 confirmation starts the plan, which runs to the end unattended. It stops at
-the first error and offers **Retry** from that step.
+the first error and offers **Retry** from that step. A retry uses the firmware,
+mode and mixer software that were confirmed. Choosing a different mode stops
+the failed run.
 
 1. **Save settings.** If RC2FX is running, the app reads its settings file
    over USB with `GET /api/v1/settings`. This is `state.json`, containing
