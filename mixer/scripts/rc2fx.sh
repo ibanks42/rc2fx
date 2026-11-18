@@ -798,6 +798,8 @@ launch() {
   uptime_s > "$boot/seen"
   # Checks the flashed image's RØDE files in the background (image check).
   image_check_start || true
+  # Wraps RØDE's update script so a flash is checked before RØDE reboots.
+  flash_watch_start || true
   local why= selected old n
   if test -e /opt/rc2fx/disabled; then why='autostart is disabled'
   elif test -e /usr/bin/first-boot; then why='first boot after a firmware update'
@@ -1913,6 +1915,162 @@ xrun_trace() {
   esac
 }
 
+# ---- flash evidence ----------------------------------------------------------
+# Flashes have left a few of RØDE's files damaged on the new root (one was all
+# NUL at its right size). To learn where that happens, a flash is checked twice
+# and the evidence kept on the settings partition, which survives the reboots:
+# - flash-verify runs right after RØDE's /usr/bin/rode-update.sh, before RØDE
+#   reboots: it syncs, drops the page cache so the reads come from the eMMC,
+#   and checks the new partition against its image.sha256;
+# - the image check copies each damaged file before it repairs it.
+# rode-update.sh is wrapped for this boot only, by a bind mount over it: RØDE's
+# file is not changed, its script runs unchanged with the same arguments, and
+# its exit status is returned. Nothing here can fail or stop an update.
+evidence_root=${RC2FX_EVIDENCE_ROOT:-/Application/update-staging/rc2fx-flash}
+rode_update=${RC2FX_RODE_UPDATE:-/usr/bin/rode-update.sh}
+update_partition=${RC2FX_UPDATE_PARTITION:-/Application/update-partition}
+# A new evidence folder named for now and why, printed; nothing on failure.
+evidence_dir() {
+  local dir
+  dir="$evidence_root/$(date -u +%Y%m%dT%H%M%SZ)-$1"
+  mkdir -p "$dir" 2> /dev/null && printf '%s\n' "$dir"
+}
+# Appends one line to the evidence history.
+evidence_note() {
+  mkdir -p "$evidence_root" 2> /dev/null && say "$*" >> "$evidence_root/history.log" 2> /dev/null || true
+}
+# Copies the damaged file root/name into dir and describes it: size, inode,
+# how many of its bytes are NUL, and its digest against the one wanted.
+evidence_file() {
+  local dir=$1 root=$2 name=$3 want=$4 size nonnul
+  test -f "$root/$name" || { printf '%s missing\n' "$name" >> "$dir/files.txt"; return 0; }
+  size=$(stat -c %s "$root/$name" 2> /dev/null || echo ?)
+  nonnul=$(tr -d '\000' < "$root/$name" 2> /dev/null | wc -c || echo ?)
+  printf '%s size=%s nul=%s inode=%s mtime=%s got=%s want=%s\n' "$name" "$size" \
+    "$(( ${size:-0} - ${nonnul:-0} ))" "$(stat -c %i "$root/$name" 2> /dev/null || echo ?)" \
+    "$(stat -c %Y "$root/$name" 2> /dev/null || echo ?)" \
+    "$(sha256sum < "$root/$name" 2> /dev/null | cut -d' ' -f1)" "$want" >> "$dir/files.txt"
+  # Small enough to keep whole: RØDE's damaged files so far were scripts,
+  # headers and small binaries.
+  if test "${size:-0}" -le 16777216 2> /dev/null; then
+    mkdir -p "$dir/files/$(dirname "$name")" 2> /dev/null \
+      && cp "$root/$name" "$dir/files/$name" 2> /dev/null || true
+  fi
+}
+# The storage picture: kernel messages, mounts, the eMMC and both roots'
+# superblock times and mount counts.
+evidence_storage() {
+  local dir=$1 p
+  { uptime; cat /proc/cmdline; echo; findmnt -rn -o SOURCE,TARGET,FSTYPE,OPTIONS 2> /dev/null | grep -E 'mmcblk|update' || true
+    echo; for p in name type manfid fwrev date; do printf '%s=%s ' "$p" "$(cat "/sys/block/mmcblk1/device/$p" 2> /dev/null)"; done
+    printf 'write_cache=%s\n' "$(cat /sys/block/mmcblk1/queue/write_cache 2> /dev/null)"
+    # What RC2FX's audio changes in scheduling, as it stands during the flash.
+    printf 'sched_rt_runtime_us=%s\n' "$(cat /proc/sys/kernel/sched_rt_runtime_us 2> /dev/null)"
+    grep -E 'mmc' /proc/interrupts 2> /dev/null | while read -r p _; do
+      p=${p%:}; printf 'irq %s affinity=%s effective=%s\n' "$p" "$(cat "/proc/irq/$p/smp_affinity_list" 2> /dev/null)" "$(cat "/proc/irq/$p/effective_affinity_list" 2> /dev/null)"
+    done
+    for p in $blackbox_irqs; do printf 'audio irq %s affinity=%s\n' "$p" "$(cat "/proc/irq/$p/smp_affinity_list" 2> /dev/null)"; done
+    printf 'rc2fx running=%s\n' "$(pgrep -f '[r]c2fxd' > /dev/null && echo yes || echo no)"
+    for p in 1 2; do
+      # ext4 superblock at 1024: mount count (0x34), state (0x3A), feature
+      # flags (0x5C..), mkfs time (0x108).
+      printf 'p%s superblock: %s\n' "$p" "$(dd if=/dev/mmcblk1p$p bs=1024 skip=1 count=1 status=none 2> /dev/null | od -An -tx1 -j52 -N48 | tr -s ' \n' ' ')"
+    done
+  } > "$dir/storage.txt" 2>&1 || true
+  dmesg > "$dir/dmesg.txt" 2> /dev/null || true
+}
+# Wraps rode-update.sh for this boot (from launch). Idempotent: a later
+# launch (a new bundle installed without a reboot) rewrites the wrapper in
+# place, which the bind mount shows at once; RØDE's original is copied only
+# while nothing is mounted over it.
+flash_watch_start() {
+  local mounted=0
+  test -f "$rode_update" && test -d "$boot" || return 0
+  mountpoint -q "$rode_update" 2> /dev/null && mounted=1
+  if test $mounted = 0; then
+    cp -p "$rode_update" "$boot/rode-update.sh" || return 0
+  fi
+  test -f "$boot/rode-update.sh" || return 0
+  cat > "$boot/rode-update.wrap.sh" << EOF || return 0
+#!/bin/sh
+# RC2FX: runs RØDE's rode-update.sh unchanged, then checks what it wrote
+# (rc2fx.sh flash-verify) before RØDE reboots, rewriting any file that did not
+# reach the eMMC intact from the same archive. Its exit status is RØDE's.
+# RØDE's script deletes the archive when it is done; a sleeping child keeps it
+# open, so it stays readable through /proc until the check is over.
+keeper=
+if test -r "\${1}archive.tar.gz"; then
+  sleep 1800 9< "\${1}archive.tar.gz" > /dev/null 2>&1 &
+  keeper=\$!
+fi
+/bin/sh $(printf %q "$boot/rode-update.sh") "\$@"
+status=\$?
+archive=
+test -n "\$keeper" && archive=/proc/\$keeper/fd/9
+timeout 900 /bin/bash $(printf %q "$home/rc2fx.sh") flash-verify "\$status" "\$archive" < /dev/null > /dev/null 2>&1 || true
+test -n "\$keeper" && kill "\$keeper" 2> /dev/null
+exit \$status
+EOF
+  chmod 755 "$boot/rode-update.wrap.sh" || return 0
+  test $mounted = 1 || mount --bind "$boot/rode-update.wrap.sh" "$rode_update" || return 0
+}
+# After RØDE's update script: is what it wrote on the eMMC what the image has?
+flash_verify() {
+  local status=${1:-?} archive=${2:-} dir manifest failed=() line name want started round left
+  started=$(uptime_s)
+  dir=$(evidence_dir verify) || return 0
+  exec > "$dir/verify.log" 2>&1
+  say "rode-update.sh exited $status"
+  manifest=$update_partition/opt/rc2fx/image.sha256
+  if ! test -f "$manifest"; then
+    say "No image.sha256 on $update_partition; nothing to check"
+    evidence_note "flash verify: no manifest on the new partition (rode-update.sh exit $status)"
+    return 0
+  fi
+  sync
+  # Reads must come from the eMMC, not from what the kernel still holds.
+  echo 3 > /proc/sys/vm/drop_caches 2> /dev/null || say 'Could not drop the page cache'
+  while IFS= read -r line; do
+    name=${line%: FAILED*}
+    test "$name" != "$line" && failed+=("$name")
+  done < <(cd "$update_partition" && sha256sum -c --quiet "$manifest" 2> /dev/null || true)
+  for name in "${failed[@]}"; do
+    [[ $name == /* || $name == *..* ]] && continue
+    want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$manifest")
+    evidence_file "$dir" "$update_partition" "$name" "$want"
+  done
+  evidence_storage "$dir"
+  say "Checked $(wc -l < "$manifest") files in $(( $(uptime_s) - started )) s: ${#failed[@]} damaged"
+  evidence_note "flash verify (before RØDE's reboot): ${#failed[@]} damaged${failed:+: ${failed[*]}} [$(basename "$dir")]"
+  test ${#failed[@]} -gt 0 || return 0
+  # Writes the damaged files again from the archive RØDE unpacked, as RØDE's
+  # tar did, and checks them again, until they read back right.
+  if test -z "$archive" || ! test -r "$archive"; then
+    say 'The archive is gone; the image check at boot will repair what it can'
+    evidence_note "flash repair: no archive to repair from"
+    return 0
+  fi
+  left=("${failed[@]}")
+  for round in 1 2 3; do
+    # The archive names most files ./path and RØDE's additions path; tar
+    # takes the members that exist under either name.
+    tar -xzf "$archive" -C "$update_partition" "${left[@]/#/./}" 2> /dev/null || true
+    tar -xzf "$archive" -C "$update_partition" "${left[@]}" 2> /dev/null || true
+    sync
+    echo 3 > /proc/sys/vm/drop_caches 2> /dev/null || true
+    failed=()
+    for name in "${left[@]}"; do
+      want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$manifest")
+      test "$(sha256sum < "$update_partition/$name" 2> /dev/null | cut -d' ' -f1)" = "$want" || failed+=("$name")
+    done
+    say "Repair round $round: $(( ${#left[@]} - ${#failed[@]} )) rewritten, ${#failed[@]} still damaged"
+    left=("${failed[@]}")
+    test ${#left[@]} -eq 0 && break
+  done
+  evidence_note "flash repair (before RØDE's reboot): ${#left[@]} still damaged after round $round${left:+: ${left[*]}}"
+}
+# ---- end of flash evidence ----------------------------------------------------
+
 # ---- image check -------------------------------------------------------------
 # The installer lists RØDE's files in the image with their SHA-256
 # (image.sha256, next to this script). A flash once left one of RØDE's boot
@@ -1927,6 +2085,7 @@ image_manifest=${RC2FX_IMAGE_MANIFEST:-$home/image.sha256}
 image_root=${RC2FX_IMAGE_ROOT:-/}
 image_result=$data/image-check
 image_other_mount=/run/rc2fx-other-root
+image_root_view=/run/rc2fx-root
 # Starts the check unless it has passed for this manifest or one is running.
 image_check_start() {
   test -f "$image_manifest" || return 0
@@ -1960,12 +2119,31 @@ image_check() {
   local digest started failed=() repaired=() damaged=() line name want other source tmp status
   digest=$(sha256sum < "$image_manifest" | cut -d' ' -f1)
   started=$(stamp)
+  # The real root's files, not what is mounted over them: this boot's flash
+  # watch binds a wrapper over rode-update.sh, which must neither read as
+  # damage nor take a repair. A bind of / without its submounts shows the
+  # files on the eMMC.
+  if test "$image_root" = / && mkdir -p "$image_root_view" \
+     && { mountpoint -q "$image_root_view" || mount --bind / "$image_root_view"; }; then
+    image_root=$image_root_view
+  fi
   say "Checking $(wc -l < "$image_manifest") files listed in $image_manifest"
   # Only the listed files that do not match, as "path: FAILED ...".
   while IFS= read -r line; do
     name=${line%: FAILED*}
     test "$name" != "$line" && failed+=("$name")
   done < <(cd "$image_root" && nice -n 19 ionice -c3 sha256sum -c --quiet "$image_manifest" 2> /dev/null || true)
+  # The damaged files as found, before any repair (flash evidence).
+  local evidence=
+  if test ${#failed[@]} -gt 0 && evidence=$(evidence_dir boot); then
+    evidence_storage "$evidence"
+    for name in "${failed[@]}"; do
+      [[ $name == /* || $name == *..* ]] && continue
+      want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$image_manifest")
+      evidence_file "$evidence" "$image_root" "$name" "$want"
+    done
+  fi
+  evidence_note "image check at boot: ${#failed[@]} damaged${failed:+: ${failed[*]}}${evidence:+ [$(basename "$evidence")]}"
   for name in "${failed[@]}"; do
     # The manifest's own paths, never one that leaves the root.
     if [[ $name == /* || $name == *..* ]]; then damaged+=("$name"); continue; fi
@@ -1999,6 +2177,7 @@ image_check() {
     fi
   done
   if mountpoint -q "$image_other_mount" 2> /dev/null; then umount "$image_other_mount" || true; fi
+  if test "$image_root" = "$image_root_view"; then umount "$image_root_view" 2> /dev/null || true; fi
   if test ${#damaged[@]} -gt 0; then status=damaged
   elif test ${#repaired[@]} -gt 0; then status=repaired
   else status=ok
@@ -2184,5 +2363,6 @@ case "${1:-}" in
   supervise-exit) shift; supervise_exit "$@" ;;
   developer-ssh) shift; developer_ssh "$@" ;;
   image-check) image_check ;;
+  flash-verify) shift; flash_verify "$@" ;;
   *) sed -n '2,28s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

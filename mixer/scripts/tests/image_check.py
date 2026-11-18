@@ -40,6 +40,7 @@ class ImageCheck(unittest.TestCase):
                 path.write_bytes(data)
         self.manifest = base / 'image.sha256'
         self.write_manifest(FILES)
+        self.evidence = base / 'evidence'
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -51,7 +52,7 @@ class ImageCheck(unittest.TestCase):
         env = dict(os.environ,
                    RC2FX_IMAGE_MANIFEST=str(self.manifest), RC2FX_IMAGE_ROOT=str(self.root),
                    RC2FX_OTHER_ROOT=str(self.other), RC2FX_DATA=str(self.data),
-                   RC2FX_LOGS=str(self.logs))
+                   RC2FX_LOGS=str(self.logs), RC2FX_EVIDENCE_ROOT=str(self.evidence))
         out = subprocess.run(['/bin/bash', str(SCRIPT), 'image-check'], env=env,
                              capture_output=True, text=True, timeout=60)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
@@ -76,6 +77,94 @@ class ImageCheck(unittest.TestCase):
         self.assertIn('status=repaired', record)
         self.assertIn(f'repaired={name}', record)
         self.assertIn('Repaired from the other root partition', out)
+
+    def evidence_dirs(self, kind):
+        return sorted(d for d in self.evidence.iterdir() if d.is_dir() and d.name.endswith('-' + kind))
+
+    def test_damaged_files_are_kept_as_found_before_the_repair(self):
+        name = 'usr/bin/rode-init-update-env.sh'
+        size = len(FILES[name])
+        (self.root / name).write_bytes(b'\0' * size)
+        self.run_check()
+        (found,) = self.evidence_dirs('boot')
+        self.assertEqual((found / 'files' / name).read_bytes(), b'\0' * size, 'the copy is the damaged file')
+        line = (found / 'files.txt').read_text()
+        self.assertIn(f'{name} size={size} nul={size} ', line)
+        self.assertIn(f'want={sha(FILES[name])}', line)
+        self.assertTrue((found / 'storage.txt').exists())
+        history = (self.evidence / 'history.log').read_text()
+        self.assertIn(f'image check at boot: 1 damaged: {name} [{found.name}]', history)
+        self.assertEqual((self.root / name).read_bytes(), FILES[name], 'and then repaired')
+
+    def test_a_clean_image_keeps_no_evidence_but_notes_the_check(self):
+        self.run_check()
+        self.assertEqual(self.evidence_dirs('boot'), [])
+        self.assertIn('image check at boot: 0 damaged', (self.evidence / 'history.log').read_text())
+
+    def run_verify(self, partition, status='0', archive=''):
+        env = dict(os.environ, RC2FX_UPDATE_PARTITION=str(partition), RC2FX_DATA=str(self.data),
+                   RC2FX_LOGS=str(self.logs), RC2FX_EVIDENCE_ROOT=str(self.evidence))
+        out = subprocess.run(['/bin/bash', str(SCRIPT), 'flash-verify', status, archive], env=env,
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_flash_verify_checks_the_new_partition_before_the_reboot(self):
+        partition = Path(self.tmp.name) / 'update-partition'
+        for name, data in FILES.items():
+            path = partition / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        (partition / 'opt/rc2fx').mkdir(parents=True)
+        (partition / 'opt/rc2fx/image.sha256').write_text(self.manifest.read_text())
+        name = 'usr/lib/libthing.so'
+        damaged = FILES[name][:1000] + b'\0' * (len(FILES[name]) - 1000)
+        (partition / name).write_bytes(damaged)
+        self.run_verify(partition, '0')
+        (found,) = self.evidence_dirs('verify')
+        log = (found / 'verify.log').read_text()
+        self.assertIn('rode-update.sh exited 0', log)
+        self.assertIn('Checked 3 files', log)
+        self.assertIn(': 1 damaged', log)
+        self.assertIn(f'{name} size={len(damaged)} nul={len(damaged) - 1000} ', (found / 'files.txt').read_text())
+        self.assertEqual((found / 'files' / name).read_bytes(), damaged)
+        self.assertIn(f'flash verify (before RØDE\'s reboot): 1 damaged: {name}',
+                      (self.evidence / 'history.log').read_text())
+
+    def test_flash_verify_rewrites_damaged_files_from_the_archive(self):
+        import tarfile
+        base = Path(self.tmp.name)
+        partition = base / 'update-partition'
+        for name, data in FILES.items():
+            path = partition / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        (partition / 'opt/rc2fx').mkdir(parents=True)
+        (partition / 'opt/rc2fx/image.sha256').write_text(self.manifest.read_text())
+        # RØDE's files are stored as ./path in the archive.
+        archive = base / 'archive.tar.gz'
+        with tarfile.open(archive, 'w:gz') as tar:
+            for name in FILES:
+                tar.add(partition / name, arcname='./' + name)
+        damaged = ['usr/bin/rode-init-update-env.sh', 'usr/lib/libthing.so']
+        for name in damaged:
+            (partition / name).write_bytes(b'\0' * len(FILES[name]))
+        self.run_verify(partition, '0', str(archive))
+        for name in damaged:
+            self.assertEqual((partition / name).read_bytes(), FILES[name], name)
+        (found,) = self.evidence_dirs('verify')
+        self.assertIn('Repair round 1: 2 rewritten, 0 still damaged', (found / 'verify.log').read_text())
+        history = (self.evidence / 'history.log').read_text()
+        self.assertIn('flash verify (before RØDE\'s reboot): 2 damaged', history)
+        self.assertIn('flash repair (before RØDE\'s reboot): 0 still damaged after round 1', history)
+        self.assertEqual(sorted(p.name for p in (found / 'files').rglob('*') if p.is_file()),
+                         ['libthing.so', 'rode-init-update-env.sh'], 'the damaged copies are kept')
+
+    def test_flash_verify_without_a_manifest_only_notes_it(self):
+        partition = Path(self.tmp.name) / 'update-partition'
+        partition.mkdir()
+        self.run_verify(partition, '1')
+        self.assertIn('flash verify: no manifest on the new partition (rode-update.sh exit 1)',
+                      (self.evidence / 'history.log').read_text())
 
     def test_a_missing_or_resized_file_is_copied_back(self):
         (self.root / 'etc/hostname').unlink()
