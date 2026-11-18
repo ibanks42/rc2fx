@@ -11,6 +11,7 @@ import (
 	"gpuikit.dev/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
+	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
@@ -228,12 +229,12 @@ func (a *App) engineErrorCard(cx *gk.Cx) (gk.DivEl, bool) {
 	if a.session.Saved == nil {
 		return gk.DivEl{}, false
 	}
-	notice, ok := telemetryEngineError(a.session.Saved)
+	notice, ok := telemetry.EngineError(a.session.Saved)
 	if !ok {
 		return gk.DivEl{}, false
 	}
 	return card().BorderColor(rgb(Warn)).
-		Child(gk.Div(s.FontSemibold).TextColor(rgb(Warn)).Child(txt(telemetryEngineErrorNoticeTitle))).
+		Child(gk.Div(s.FontSemibold).TextColor(rgb(Warn)).Child(txt(telemetry.EngineErrorNoticeTitle))).
 		Child(gk.Div(s.TextSm).Child(txt(notice.Message))).
 		Child(gk.Div(s.TextSm).TextColor(rgb(Muted)).
 			Child(txt("Last reported recovery status: " + notice.RecoveryDetail))).

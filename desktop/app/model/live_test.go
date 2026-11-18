@@ -99,7 +99,7 @@ func TestLiveEditAndSave(t *testing.T) {
 		t.Fatal("save due after SaveDelay with the draft heard")
 	}
 	l.Saved(draft)
-	if !TargetsEqual(l.Running(draft), draft) || l.running != nil {
+	if !core.TargetsEqual(l.Running(draft), draft) || l.running != nil {
 		t.Fatal("after the save the audio plays the saved settings")
 	}
 	// Suppression switched on needs a restart: not sent live.

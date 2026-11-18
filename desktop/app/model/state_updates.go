@@ -112,7 +112,7 @@ func CheckEcho(session *core.Session, state core.DeviceState, pendingApply *core
 	}
 	if pendingApply != nil {
 		c.ApplyFollows = follows(pendingApply.Request.ExpectedRevision)
-		c.ApplySameTargets = equal(pendingApply.Request.Targets, state.Config.Targets)
+		c.ApplySameTargets = core.TargetsEqual(pendingApply.Request.Targets, state.Config.Targets)
 	}
 	if pendingPresetRevision != nil {
 		c.PresetFollows = follows(*pendingPresetRevision)

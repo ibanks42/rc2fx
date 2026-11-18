@@ -347,10 +347,10 @@ func TestPerformanceReportsHelperCountersAndAcceptsPayloadsWithoutThem(t *testin
 		Callback:            timing,
 		WorkerWall:          timing,
 		WorkerCPU:           timing,
-		HelperLate:          ptr[uint64](2),
-		HelperStalls:        ptr[uint64](1),
-		CallbackRecentMaxNs: ptr[uint64](180),
-		WorkerRecentMaxNs:   ptr[uint64](900),
+		HelperLate:          new(uint64(2)),
+		HelperStalls:        new(uint64(1)),
+		CallbackRecentMaxNs: new(uint64(180)),
+		WorkerRecentMaxNs:   new(uint64(900)),
 	}
 	target := TargetMeter{
 		ID:                "mic-1",
@@ -403,15 +403,15 @@ func TestMetersWithoutADiagnosticsEpochLoadAsZeroAndEventPagesRoundTrip(t *testi
 				Kind:    DiagnosticsKindXrun,
 				AtNs:    5,
 				Message: "JACK xrun",
-				Details: EventDetails{ValueNs: ptr[uint64](1120), DelayedUs: ptr[uint64](240)},
+				Details: EventDetails{ValueNs: new(uint64(1120)), DelayedUs: new(uint64(240))},
 			},
 			{
 				Seq:     2,
 				Kind:    DiagnosticsKindOutputDrops,
-				Path:    ptr("mic-1"),
+				Path:    new("mic-1"),
 				AtNs:    6,
 				Message: "3 output drops on mic-1",
-				Details: EventDetails{Delta: ptr[uint64](3), IntervalNs: ptr[uint64](20_000_000)},
+				Details: EventDetails{Delta: new(uint64(3)), IntervalNs: new(uint64(20_000_000))},
 			},
 		},
 	}
@@ -467,14 +467,14 @@ func TestDeviceStatusTextMustBeFitToShow(t *testing.T) {
 		state = good.Clone()
 		state.Selection.Message = bad
 		fails(t, state.Validate(), "selection", bad)
-		versions := DeviceVersions{Firmware: ptr(bad)}
+		versions := DeviceVersions{Firmware: new(bad)}
 		fails(t, versions.Validate(), "version", bad)
 	}
 	versions := DeviceVersions{
-		Runtime:         ptr("0.1.2"),
-		Protocol:        ptr[uint32](1),
-		Firmware:        ptr("1.7.7"),
-		FirmwareProfile: ptr("rodecaster-pro-ii-1.7.7"),
+		Runtime:         new("0.1.2"),
+		Protocol:        new(uint32(1)),
+		Firmware:        new("1.7.7"),
+		FirmwareProfile: new("rodecaster-pro-ii-1.7.7"),
 	}
 	ok(t, versions.Validate())
 }
@@ -484,10 +484,10 @@ func TestDiagnosticsEventsAreMadeSafeToShow(t *testing.T) {
 		return DiagnosticsEvent{Seq: 1, Kind: DiagnosticsKindReset, Path: path, AtNs: 1, Message: message}
 	}
 	for _, path := range []string{"", "Not An Id", "../x", strings.Repeat("a", 49)} {
-		_, shown := event(ptr(path), "x").ForDisplay()
+		_, shown := event(new(path), "x").ForDisplay()
 		check(t, !shown, path)
 	}
-	shown, _ := event(ptr("mic-1"), "a\nb\x1bc\u202ed\u2066e").ForDisplay()
+	shown, _ := event(new("mic-1"), "a\nb\x1bc\u202ed\u2066e").ForDisplay()
 	check(t, shown.Message == "abcde", shown.Message)
 	// Cut on a character boundary, never past the cap.
 	long, _ := event(nil, strings.Repeat("\u00e9", MaxEventMessage)).ForDisplay()
@@ -702,15 +702,15 @@ func TestEmptyAndUnequalChannelExportNeverEmitZeroBands(t *testing.T) {
 func TestExplicitEqualizerAndMonoChannelSelection(t *testing.T) {
 	text := easyFixture(t, "output-split-different.json")
 	check(t, must(ImportEasyEffects(text, ImportOptions{})).Kind == ImportResultChooseChannel)
-	left := must(ImportEasyEffects(text, ImportOptions{Channel: ptr(ChannelLeft)}))
-	right := must(ImportEasyEffects(text, ImportOptions{Channel: ptr(ChannelRight)}))
+	left := must(ImportEasyEffects(text, ImportOptions{Channel: new(ChannelLeft)}))
+	right := must(ImportEasyEffects(text, ImportOptions{Channel: new(ChannelRight)}))
 	check(t, !left.Equal(right))
 	multiple := parse(t, text)
 	output, _ := multiple.Get("output")
 	multiple.Set("input", output.Clone())
 	choice := must(ImportEasyEffects(multiple.String(), ImportOptions{}))
 	check(t, choice.Kind == ImportResultChooseEqualizer && len(choice.Candidates) == 2, choice)
-	chosen := must(ImportEasyEffects(multiple.String(), ImportOptions{Stereo: true, Selected: ptr("input/equalizer#0")}))
+	chosen := must(ImportEasyEffects(multiple.String(), ImportOptions{Stereo: true, Selected: new("input/equalizer#0")}))
 	check(t, chosen.Kind == ImportResultReady, chosen)
 }
 

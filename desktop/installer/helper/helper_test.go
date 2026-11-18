@@ -41,7 +41,7 @@ func TestRepliesAndProgressShareOneWireFormat(t *testing.T) {
 	for _, m := range []message{
 		{Progress: &installer.Progress{Phase: "download", Completed: 1, Total: 2, Detail: "x"}},
 		{Done: &done{Reply: &installer.Reply{Kind: installer.ReplyDone}}},
-		{Done: &done{Error: ptr("refused")}},
+		{Done: &done{Error: new("refused")}},
 	} {
 		line, err := sjson.Marshal(m)
 		if err != nil {
@@ -57,5 +57,3 @@ func TestRepliesAndProgressShareOneWireFormat(t *testing.T) {
 		}
 	}
 }
-
-func ptr(s string) *string { return &s }

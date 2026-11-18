@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 )
 
 // RepairLookEvery is how often the page looks for the mixer's storage while
@@ -92,20 +93,13 @@ func (r *Repair) DueToLook(now time.Time) bool {
 // the check starts now, which it does once the storage is there and access
 // is granted, and whether anything the page shows changed.
 func (r *Repair) Looked(disk *uint64, allowed bool) (start, changed bool) {
-	changed = !sameU64(disk, r.Disk)
+	changed = !opt.Equal(disk, r.Disk)
 	r.Disk = disk
 	if disk != nil && allowed {
 		r.Stage = RepairStage{Kind: RepairChecking}
 		return true, true
 	}
 	return false, changed
-}
-
-func sameU64(a, b *uint64) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
 }
 
 // NotSent: the runner did not take the page's request.

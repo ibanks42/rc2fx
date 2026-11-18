@@ -17,6 +17,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 const (
@@ -102,7 +104,7 @@ func same(claim Claim, drawn, level *float32) bool {
 		return true
 	}
 	if drawn != nil && level != nil {
-		return abs32(*drawn-*level) < BarStep
+		return num.Abs32(*drawn-*level) < BarStep
 	}
 	return drawn == nil && level == nil
 }
@@ -122,7 +124,7 @@ func StillUnchanged(claim Claim, drawn, level *float32) bool {
 	if !claim.Measured {
 		return *drawn == *level
 	}
-	return abs32(*drawn-*level)*claim.Shape.Line.Amplitude*claim.Height < Flat
+	return num.Abs32(*drawn-*level)*claim.Shape.Line.Amplitude*claim.Height < Flat
 }
 
 // Tick is how often the shared ticker runs: Frame, UnfocusedFrame while the
@@ -139,5 +141,3 @@ func Tick(animating int, reducedMotion, active bool) (period time.Duration, run 
 	}
 	return UnfocusedFrame, true
 }
-
-func abs32(v float32) float32 { return float32(math.Abs(float64(v))) }

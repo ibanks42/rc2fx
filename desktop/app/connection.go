@@ -19,6 +19,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/flash"
 )
@@ -421,7 +422,7 @@ func (a *App) usbAccessScreen(cx *gk.Cx) gk.Element {
 			Child(gk.Textarea(a.usbRuleText).Readonly(true).Appearance(false).H(px(220)).
 				AriaLabel("The udev rule RC2FX installs")).
 			Child(gk.Div(s.Absolute).Top(px(8)).Right(px(8)).
-				Child(a.copyButton("copy-usb-rule", installerUSBRule, cx))))
+				Child(a.copyButton("copy-usb-rule", helper.USBRule, cx))))
 	}
 	card = card.Child(gk.Div().Mt(px(18)).TextSize(px(13)).Child(txt("To undo it later:"))).
 		Child(codeBox(mono).Mt(px(6)).Pr(px(76)).
@@ -460,7 +461,7 @@ func (a *App) allowUSB(cx *gk.Cx) {
 	}
 	a.usbRule = USBRule{Kind: USBRuleAsking}
 	a.notify(cx)
-	gk.Go(cx, installerRequestUSBRule, func(cx *gk.Cx, err error) {
+	gk.Go(cx, helper.RequestUSBRule, func(cx *gk.Cx, err error) {
 		if err == nil {
 			a.usbRule = USBRule{Kind: USBRuleIdle}
 			a.beginConnection(cx, false)

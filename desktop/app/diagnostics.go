@@ -14,8 +14,10 @@ import (
 	"gpuikit.dev/gk"
 	"gpuikit.dev/gk/s"
 
+	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
@@ -82,7 +84,7 @@ func (a *App) saveDiagnostics(cx *gk.Cx, report json.RawMessage, err error) {
 			done(cx, "", nil)
 		default:
 			path := d.Paths[0]
-			gk.Go(cx, func() error { return writeExport(path, text) }, func(cx *gk.Cx, err error) {
+			gk.Go(cx, func() error { return edit.WriteExport(path, text) }, func(cx *gk.Cx, err error) {
 				done(cx, path, err)
 			})
 		}
@@ -190,13 +192,6 @@ func (a *App) eventsReply(cx *gk.Cx, events core.DiagnosticsEvents, err error) {
 	}
 }
 
-func optionalEqual(a, b *uint64) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
 // eventsTick is called from the main poll: it keeps the events window's
 // view of the connection current and, while it is open, reads new events.
 // (A closed window is noticed by openEvents' close handler, which the Rust
@@ -208,7 +203,7 @@ func (a *App) eventsTick(cx *gk.Cx) {
 		p := uint64(state.Engine.BlockSize) * 1_000_000_000 / uint64(state.Engine.SampleRate)
 		periodNs = &p
 	}
-	if !optionalEqual(a.eventLog.Peek().PeriodNs, periodNs) {
+	if !opt.Equal(a.eventLog.Peek().PeriodNs, periodNs) {
 		a.eventLog.Update(cx, func(log *EventLog) { log.PeriodNs = periodNs })
 	}
 	var epoch *uint64

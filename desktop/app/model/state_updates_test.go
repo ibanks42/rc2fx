@@ -2,6 +2,7 @@ package model
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -10,7 +11,7 @@ import (
 func state() core.DeviceState {
 	selected := []string{"mic-1", "usb-main", "send-chat"}
 	config := core.DefaultConfig()
-	config.SelectedTargets = deepCopy(selected)
+	config.SelectedTargets = slices.Clone(selected)
 	return core.DeviceState{
 		Config: config,
 		Engine: core.EngineStatus{
@@ -34,8 +35,8 @@ func state() core.DeviceState {
 			ChannelCapacity:    nil,
 			Status:             core.SelectionPhaseIdle,
 			Allowed:            true,
-			QualifiedTargetIDs: deepCopy(selected),
-			ActiveTargetIDs:    deepCopy(selected),
+			QualifiedTargetIDs: slices.Clone(selected),
+			ActiveTargetIDs:    slices.Clone(selected),
 			PendingTargetIDs:   []string{},
 			Message:            "",
 		},
@@ -43,7 +44,7 @@ func state() core.DeviceState {
 }
 
 func failure(state core.DeviceState) core.DeviceState {
-	state = deepCopy(state)
+	state = state.Clone()
 	state.Engine.Generation++
 	state.Engine.Status = core.EnginePhaseError
 	state.Engine.AudioAdvancing = false
@@ -58,13 +59,13 @@ func failure(state core.DeviceState) core.DeviceState {
 func assertRuntime(t *testing.T, session *core.Session, observed *core.DeviceState) {
 	t.Helper()
 	saved := session.Saved
-	if !equal(saved.Engine, observed.Engine) {
+	if saved.Engine != observed.Engine {
 		t.Fatalf("engine %+v, want %+v", saved.Engine, observed.Engine)
 	}
-	if !equal(saved.Routing, observed.Routing) {
+	if saved.Routing != observed.Routing {
 		t.Fatalf("routing %+v, want %+v", saved.Routing, observed.Routing)
 	}
-	if !equal(saved.Selection, observed.Selection) {
+	if !saved.Selection.Equal(observed.Selection) {
 		t.Fatalf("selection %+v, want %+v", saved.Selection, observed.Selection)
 	}
 	if session.IsApplied() {
@@ -91,23 +92,23 @@ func receiveSaved(t *testing.T, session *core.Session, state core.DeviceState) {
 func TestApplyEchoObservesFailureBeforeAckWithoutAcceptingSettingsOrLosingEdits(t *testing.T) {
 	old := state()
 	session := core.DefaultSession()
-	receiveSaved(t, &session, deepCopy(old))
+	receiveSaved(t, &session, old.Clone())
 	session.Draft[1].Gain.DB = -6
 	pending, err := session.BeginApply()
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply := deepCopy(old)
+	reply := old.Clone()
 	reply.Config.Revision++
-	reply.Config.Targets = deepCopy(pending.Request.Targets)
+	reply.Config.Targets = core.CloneTargets(pending.Request.Targets)
 	observed := failure(reply)
 	session.Draft[1].Gain.DB = -9
 	session.SelectionDraft = session.SelectionDraft[:0]
-	if got := mustReceive(t, &session, deepCopy(observed), &pending, nil, false, false).Update; got != core.RemoteUpdateUnchanged {
+	if got := mustReceive(t, &session, observed.Clone(), &pending, nil, false, false).Update; got != core.RemoteUpdateUnchanged {
 		t.Fatalf("update %v", got)
 	}
 	assertRuntime(t, &session, &observed)
-	if !equal(session.Saved.Config, old.Config) {
+	if !session.Saved.Config.Equal(old.Config) {
 		t.Fatal("settings accepted before the ACK")
 	}
 	if got := session.Draft[1].Gain.DB; got != -9 {
@@ -120,11 +121,11 @@ func TestApplyEchoObservesFailureBeforeAckWithoutAcceptingSettingsOrLosingEdits(
 		t.Fatal("conflict")
 	}
 	// A late refresh reply of the same write cannot undo the stream status.
-	if got := mustReceive(t, &session, deepCopy(reply), &pending, nil, true, true).Update; got != core.RemoteUpdateStale {
+	if got := mustReceive(t, &session, reply.Clone(), &pending, nil, true, true).Update; got != core.RemoteUpdateStale {
 		t.Fatalf("update %v", got)
 	}
 	assertRuntime(t, &session, &observed)
-	if err := session.Acknowledge(pending, deepCopy(reply)); err != nil {
+	if err := session.Acknowledge(pending, reply.Clone()); err != nil {
 		t.Fatal(err)
 	}
 	assertRuntime(t, &session, &observed)
@@ -142,23 +143,23 @@ func TestApplyEchoObservesFailureBeforeAckWithoutAcceptingSettingsOrLosingEdits(
 func TestPresetEchoObservesFailureAndKeepsDraftUntilAck(t *testing.T) {
 	old := state()
 	session := core.DefaultSession()
-	receiveSaved(t, &session, deepCopy(old))
-	original := deepCopy(session.Draft)
-	reply := deepCopy(old)
+	receiveSaved(t, &session, old.Clone())
+	original := core.CloneTargets(session.Draft)
+	reply := old.Clone()
 	reply.Config.Revision++
 	reply.Config.Targets[1].Gain.DB = -6
 	observed := failure(reply)
 	session.Draft[1].Gain.DB = -9
 	session.SelectionDraft = session.SelectionDraft[:0]
-	mustReceive(t, &session, deepCopy(observed), nil, ptr[uint64](1), false, false)
+	mustReceive(t, &session, observed.Clone(), nil, new(uint64(1)), false, false)
 	assertRuntime(t, &session, &observed)
-	if !equal(session.Saved.Config, old.Config) {
+	if !session.Saved.Config.Equal(old.Config) {
 		t.Fatal("settings accepted before the ACK")
 	}
 	if got := session.Draft[1].Gain.DB; got != -9 {
 		t.Fatalf("draft gain %v", got)
 	}
-	if err := session.AcknowledgePreset(1, original, deepCopy(reply)); err != nil {
+	if err := session.AcknowledgePreset(1, original, reply.Clone()); err != nil {
 		t.Fatal(err)
 	}
 	assertRuntime(t, &session, &observed)
@@ -174,17 +175,17 @@ func TestHigherRevisionIsNotAnEchoEvenWithMatchingEffects(t *testing.T) {
 	for _, preset := range []bool{false, true} {
 		old := state()
 		session := core.DefaultSession()
-		receiveSaved(t, &session, deepCopy(old))
+		receiveSaved(t, &session, old.Clone())
 		session.Draft[1].Gain.DB = -6
 		pending, err := session.BeginApply()
 		if err != nil {
 			t.Fatal(err)
 		}
-		original := deepCopy(session.Draft)
-		reply := deepCopy(old)
+		original := core.CloneTargets(session.Draft)
+		reply := old.Clone()
 		reply.Config.Revision++
-		reply.Config.Targets = deepCopy(pending.Request.Targets)
-		newer := deepCopy(reply)
+		reply.Config.Targets = core.CloneTargets(pending.Request.Targets)
+		newer := reply.Clone()
 		newer.Config.Revision++
 		newer.Config.SelectedTargets = newer.Config.SelectedTargets[:0]
 		newer.Selection.ActiveTargetIDs = newer.Selection.ActiveTargetIDs[:0]
@@ -196,28 +197,28 @@ func TestHigherRevisionIsNotAnEchoEvenWithMatchingEffects(t *testing.T) {
 		var pendingApply *core.PendingApply
 		var presetRevision *uint64
 		if preset {
-			presetRevision = ptr[uint64](1)
+			presetRevision = new(uint64(1))
 		} else {
 			pendingApply = &pending
 		}
-		mustReceive(t, &session, deepCopy(newer), pendingApply, presetRevision, false, false)
-		if !equal(*session.Saved, newer) {
+		mustReceive(t, &session, newer.Clone(), pendingApply, presetRevision, false, false)
+		if !session.Saved.Equal(newer) {
 			t.Fatalf("preset %v: saved is not the newer state", preset)
 		}
-		if !equal(session.Draft, original) {
+		if !core.TargetsEqual(session.Draft, original) {
 			t.Fatalf("preset %v: draft changed", preset)
 		}
 		if !session.Conflict {
 			t.Fatalf("preset %v: no conflict", preset)
 		}
 		if preset {
-			if err := session.AcknowledgePreset(1, original, deepCopy(reply)); err == nil {
+			if err := session.AcknowledgePreset(1, original, reply.Clone()); err == nil {
 				t.Fatal("stale preset ACK accepted")
 			}
-		} else if err := session.Acknowledge(pending, deepCopy(reply)); err == nil {
+		} else if err := session.Acknowledge(pending, reply.Clone()); err == nil {
 			t.Fatal("stale ACK accepted")
 		}
-		if !equal(*session.Saved, newer) {
+		if !session.Saved.Equal(newer) {
 			t.Fatalf("preset %v: saved is not the newer state", preset)
 		}
 	}
@@ -238,27 +239,27 @@ func TestOldGenerationAndUnrelatedExactRevisionCannotHideChanges(t *testing.T) {
 	}
 	echo := state()
 	echo.Config.Revision++
-	echo.Config.Targets = deepCopy(pending.Request.Targets)
+	echo.Config.Targets = core.CloneTargets(pending.Request.Targets)
 	observed := failure(echo)
-	mustReceive(t, &session, deepCopy(observed), &pending, nil, false, false)
-	if got := mustReceive(t, &session, deepCopy(echo), &pending, nil, false, false).Update; got != core.RemoteUpdateStale {
+	mustReceive(t, &session, observed.Clone(), &pending, nil, false, false)
+	if got := mustReceive(t, &session, echo.Clone(), &pending, nil, false, false).Update; got != core.RemoteUpdateStale {
 		t.Fatalf("update %v", got)
 	}
 	assertRuntime(t, &session, &observed)
-	unrelated := deepCopy(observed)
+	unrelated := observed.Clone()
 	unrelated.Config.Targets[2].Gain.DB = -3
-	savedBefore := deepCopy(session.Saved.Config)
-	if got := mustReceive(t, &session, deepCopy(unrelated), &pending, nil, false, false).Update; got == core.RemoteUpdateConflict {
+	savedBefore := session.Saved.Config.Clone()
+	if got := mustReceive(t, &session, unrelated.Clone(), &pending, nil, false, false).Update; got == core.RemoteUpdateConflict {
 		t.Fatalf("update %v", got)
 	}
-	if !equal(session.Saved.Config, savedBefore) {
+	if !session.Saved.Config.Equal(savedBefore) {
 		t.Fatal("settings taken before the save's reply")
 	}
 	// The mixer refused our save: the refresh brings the other write in.
-	if got := mustReceive(t, &session, deepCopy(unrelated), nil, nil, true, false).Update; got != core.RemoteUpdateConflict {
+	if got := mustReceive(t, &session, unrelated.Clone(), nil, nil, true, false).Update; got != core.RemoteUpdateConflict {
 		t.Fatalf("refresh update %v", got)
 	}
-	if !equal(*session.Saved, unrelated) {
+	if !session.Saved.Equal(unrelated) {
 		t.Fatal("saved is not the unrelated state")
 	}
 	if got := session.Draft[1].Gain.DB; got != -6 {
@@ -281,15 +282,15 @@ func TestSaveStoredOneULPOffIsAcceptedAndLeavesNothingToSave(t *testing.T) {
 		}
 		stored := state()
 		stored.Config.Revision++
-		stored.Config.Targets = deepCopy(pending.Request.Targets)
+		stored.Config.Targets = core.CloneTargets(pending.Request.Targets)
 		storedFrequency := math.Nextafter(sent, math.Inf(1))
 		stored.Config.Targets[1].Highpass.Frequency = storedFrequency
 		if echoFirst {
-			if got := mustReceive(t, &session, deepCopy(stored), &pending, nil, false, false).Update; got == core.RemoteUpdateConflict {
+			if got := mustReceive(t, &session, stored.Clone(), &pending, nil, false, false).Update; got == core.RemoteUpdateConflict {
 				t.Fatalf("echo first: echo taken as a conflict")
 			}
 		}
-		if err := session.Acknowledge(pending, deepCopy(stored)); err != nil {
+		if err := session.Acknowledge(pending, stored.Clone()); err != nil {
 			t.Fatalf("echo first %v: %v", echoFirst, err)
 		}
 		if session.Conflict || session.Dirty() {
@@ -300,7 +301,7 @@ func TestSaveStoredOneULPOffIsAcceptedAndLeavesNothingToSave(t *testing.T) {
 		}
 		if !echoFirst {
 			// The stream's copy after the reply changes nothing.
-			if got := mustReceive(t, &session, deepCopy(stored), nil, nil, false, false).Update; got == core.RemoteUpdateConflict {
+			if got := mustReceive(t, &session, stored.Clone(), nil, nil, false, false).Update; got == core.RemoteUpdateConflict {
 				t.Fatal("echo after reply taken as a conflict")
 			}
 			if session.Dirty() {
@@ -313,7 +314,7 @@ func TestSaveStoredOneULPOffIsAcceptedAndLeavesNothingToSave(t *testing.T) {
 func TestInvalidPresetEchoIsNotARuntimeObservation(t *testing.T) {
 	old := state()
 	session := core.DefaultSession()
-	receiveSaved(t, &session, deepCopy(old))
+	receiveSaved(t, &session, old.Clone())
 	invalid := failure(old)
 	invalid.Config.Revision++
 	invalid.Config.Targets[1].ID = "unknown-mic"
@@ -321,13 +322,13 @@ func TestInvalidPresetEchoIsNotARuntimeObservation(t *testing.T) {
 	if err := invalid.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Receive(&session, invalid, nil, ptr[uint64](1), false, false); err == nil {
+	if _, err := Receive(&session, invalid, nil, new(uint64(1)), false, false); err == nil {
 		t.Fatal("accepted")
 	}
-	if !equal(*session.Saved, old) {
+	if !session.Saved.Equal(old) {
 		t.Fatal("saved changed")
 	}
-	if !equal(session.Draft, old.Config.Targets) {
+	if !core.TargetsEqual(session.Draft, old.Config.Targets) {
 		t.Fatal("draft changed")
 	}
 	if session.Conflict {
@@ -342,13 +343,13 @@ func TestRefreshPreservingRuntimeCannotRenewItsObservation(t *testing.T) {
 		t.Fatal("initial state not observed")
 	}
 	observed := failure(state())
-	event := mustReceive(t, &session, deepCopy(observed), nil, nil, false, false)
+	event := mustReceive(t, &session, observed.Clone(), nil, nil, false, false)
 	if !event.RuntimeObserved {
 		t.Fatal("event not observed")
 	}
 	// The request's reply was captured before the failure event in this
 	// same engine lifetime, but includes a later settings revision.
-	snapshot := deepCopy(observed)
+	snapshot := observed.Clone()
 	snapshot.Engine.Status = core.EnginePhaseRunning
 	snapshot.Engine.AudioAdvancing = true
 	snapshot.Config.Revision++
@@ -359,20 +360,20 @@ func TestRefreshPreservingRuntimeCannotRenewItsObservation(t *testing.T) {
 	if refresh.RuntimeObserved {
 		t.Fatal("refresh renewed the observation")
 	}
-	if !equal(session.Saved.Engine, observed.Engine) {
+	if session.Saved.Engine != observed.Engine {
 		t.Fatal("engine changed")
 	}
 	if got := session.Saved.Config.Revision; got != 2 {
 		t.Fatalf("revision %d", got)
 	}
 	// A newer lifetime is a new observation even through the refresh path.
-	newer := deepCopy(*session.Saved)
+	newer := session.Saved.Clone()
 	newer.Engine.Generation++
-	refresh = mustReceive(t, &session, deepCopy(newer), nil, nil, true, true)
+	refresh = mustReceive(t, &session, newer.Clone(), nil, nil, true, true)
 	if !refresh.RuntimeObserved {
 		t.Fatal("newer lifetime not observed")
 	}
-	if !equal(session.Saved.Engine, newer.Engine) {
+	if session.Saved.Engine != newer.Engine {
 		t.Fatal("engine not the newer one")
 	}
 }
@@ -387,21 +388,21 @@ func TestStaleWriteEchoIsNotAnObservationButOrderedRuntimeIs(t *testing.T) {
 	}
 	echo := state()
 	echo.Config.Revision++
-	echo.Config.Targets = deepCopy(pending.Request.Targets)
-	http := mustReceive(t, &session, deepCopy(echo), &pending, nil, true, true)
+	echo.Config.Targets = core.CloneTargets(pending.Request.Targets)
+	http := mustReceive(t, &session, echo.Clone(), &pending, nil, true, true)
 	if http.Update != core.RemoteUpdateStale {
 		t.Fatalf("update %v", http.Update)
 	}
 	if http.RuntimeObserved {
 		t.Fatal("snapshot echo observed")
 	}
-	stream := mustReceive(t, &session, deepCopy(echo), &pending, nil, false, false)
+	stream := mustReceive(t, &session, echo.Clone(), &pending, nil, false, false)
 	if !stream.RuntimeObserved {
 		t.Fatal("stream echo not observed")
 	}
 	observed := failure(echo)
-	mustReceive(t, &session, deepCopy(observed), &pending, nil, false, false)
-	old := mustReceive(t, &session, deepCopy(echo), &pending, nil, false, false)
+	mustReceive(t, &session, observed.Clone(), &pending, nil, false, false)
+	old := mustReceive(t, &session, echo.Clone(), &pending, nil, false, false)
 	if old.Update != core.RemoteUpdateStale {
 		t.Fatalf("update %v", old.Update)
 	}

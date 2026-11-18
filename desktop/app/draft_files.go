@@ -157,7 +157,7 @@ func (a *App) saveDraft(cx *gk.Cx) {
 			finish(cx, "", err)
 			return
 		}
-		gk.Go(cx, func() error { return writeExport(path, text) }, func(cx *gk.Cx, err error) {
+		gk.Go(cx, func() error { return edit.WriteExport(path, text) }, func(cx *gk.Cx, err error) {
 			if err != nil {
 				finish(cx, "", err)
 			} else {

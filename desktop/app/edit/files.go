@@ -20,8 +20,7 @@ import (
 )
 
 // IOMessage is a Rust std::io::Error's Display for an OS error: the
-// system's text, capitalised as strerror gives it, and " (os error N)".
-// (The same as package app's ioMessage, which prefs.go keeps.)
+// system's text, capitalized as strerror gives it, and " (os error N)".
 func IOMessage(err error) string {
 	var errno syscall.Errno
 	if !errors.As(err, &errno) {

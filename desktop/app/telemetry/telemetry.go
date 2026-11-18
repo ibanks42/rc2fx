@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 // StartupAudio is how long after an engine generation starts running counts
@@ -20,14 +21,6 @@ import (
 // threads settling. Bursts inside it are expected and left out of telemetry
 // and the events window; a fault after it counts normally.
 const StartupAudio = 60 * time.Second
-
-// satSub is u64::saturating_sub.
-func satSub(a, b uint64) uint64 {
-	if a < b {
-		return 0
-	}
-	return a - b
-}
 
 // sinceSat is Instant::saturating_duration_since: now - at, or 0 when at is
 // later.
@@ -226,32 +219,32 @@ func (w *StartupWindow) GiveUp() {
 func (w *StartupWindow) Settle(meter *core.TargetMeter) {
 	faults := &w.Faults
 	if path, ok := faults.paths[meter.ID]; ok {
-		meter.Clipped = satSub(meter.Clipped, path.clipped)
-		meter.MissedDeadlines = satSub(meter.MissedDeadlines, path.missedDeadlines)
-		meter.StaleResults = satSub(meter.StaleResults, path.staleResults)
-		meter.InputDrops = satSub(meter.InputDrops, path.inputDrops)
-		meter.OutputDrops = satSub(meter.OutputDrops, path.outputDrops)
+		meter.Clipped = num.SatSub(meter.Clipped, path.clipped)
+		meter.MissedDeadlines = num.SatSub(meter.MissedDeadlines, path.missedDeadlines)
+		meter.StaleResults = num.SatSub(meter.StaleResults, path.staleResults)
+		meter.InputDrops = num.SatSub(meter.InputDrops, path.inputDrops)
+		meter.OutputDrops = num.SatSub(meter.OutputDrops, path.outputDrops)
 		if p := meter.Performance; p != nil {
-			p.WorkerWall.Overruns = satSub(p.WorkerWall.Overruns, path.workerOverruns)
+			p.WorkerWall.Overruns = num.SatSub(p.WorkerWall.Overruns, path.workerOverruns)
 			// Wall clock errors go first; the rest come off the CPU clock.
 			wall := min(p.WorkerWall.ClockErrors, path.workerClockErrors)
 			p.WorkerWall.ClockErrors -= wall
-			p.WorkerCPU.ClockErrors = satSub(p.WorkerCPU.ClockErrors, path.workerClockErrors-wall)
+			p.WorkerCPU.ClockErrors = num.SatSub(p.WorkerCPU.ClockErrors, path.workerClockErrors-wall)
 		}
 	}
 	p := meter.Performance
 	if p == nil {
 		return
 	}
-	p.Xruns = satSub(p.Xruns, faults.Xruns)
-	p.Callback.Overruns = satSub(p.Callback.Overruns, faults.overruns)
-	p.Callback.ClockErrors = satSub(p.Callback.ClockErrors, faults.clockErrors)
+	p.Xruns = num.SatSub(p.Xruns, faults.Xruns)
+	p.Callback.Overruns = num.SatSub(p.Callback.Overruns, faults.overruns)
+	p.Callback.ClockErrors = num.SatSub(p.Callback.ClockErrors, faults.clockErrors)
 	if p.HelperLate != nil {
-		n := satSub(*p.HelperLate, faults.helperLate)
+		n := num.SatSub(*p.HelperLate, faults.helperLate)
 		p.HelperLate = &n
 	}
 	if p.HelperStalls != nil {
-		n := satSub(*p.HelperStalls, faults.helperStalls)
+		n := num.SatSub(*p.HelperStalls, faults.helperStalls)
 		p.HelperStalls = &n
 	}
 }
@@ -263,7 +256,7 @@ func (w *StartupWindow) SettledXruns(meter *core.Meter) (uint64, bool) {
 	if p == nil {
 		return 0, false
 	}
-	return satSub(p.Xruns, w.Faults.Xruns), true
+	return num.SatSub(p.Xruns, w.Faults.Xruns), true
 }
 
 // CloneTargetMeter is TargetMeter::clone: a copy whose performance block (the
@@ -350,7 +343,7 @@ func (r *RecentCount) Within() (uint64, bool) {
 	if len(r.readings) == 0 {
 		return 0, false
 	}
-	return satSub(r.readings[len(r.readings)-1].count, r.readings[0].count), true
+	return num.SatSub(r.readings[len(r.readings)-1].count, r.readings[0].count), true
 }
 
 // Recent is the counter as telemetry shows it.

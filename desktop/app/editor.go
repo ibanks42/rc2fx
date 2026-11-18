@@ -112,7 +112,7 @@ func (a *App) rebuildEditors(cx *gk.Cx) {
 				gk.Quiet(cx)
 				return
 			}
-			editor.parameter.Set(a.targetMut(), a.channel, a.band, value)
+			editor.parameter.Set(a.target(), a.channel, a.band, value)
 			editor.slider.SetValue(cx, float32(value))
 			a.notifyBandPreview(cx, a.band)
 			a.notify(cx)
@@ -125,7 +125,7 @@ func (a *App) rebuildEditors(cx *gk.Cx) {
 			}
 			editor := a.editors[index]
 			value := float64(gk.SliderValueNumber(change.Value))
-			editor.parameter.Set(a.targetMut(), a.channel, a.band, value)
+			editor.parameter.Set(a.target(), a.channel, a.band, value)
 			editor.input.SetValue(cx, edit.Format(value, editor.decimals))
 			a.notifyBandPreview(cx, a.band)
 			a.notify(cx)
@@ -425,7 +425,7 @@ func (a *App) editValue(cx *gk.Cx, parameter Parameter) {
 // channel or band).
 func (a *App) resetValue(cx *gk.Cx, parameter Parameter) {
 	value := parameter.DefaultValue(a.target())
-	parameter.Set(a.targetMut(), a.channel, a.band, value)
+	parameter.Set(a.target(), a.channel, a.band, value)
 	a.syncEditorValues(cx)
 	a.notify(cx)
 }
@@ -453,7 +453,7 @@ func (a *App) suppressionControls(cx *gk.Cx) gk.Element {
 			}
 			choices = choices.Child(pill(gk.Key("lookahead", index), label, choice == lookahead).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-					a.targetMut().Suppression.SelectLookahead(choice)
+					a.target().Suppression.SelectLookahead(choice)
 					a.notify(cx)
 				}))
 		}
@@ -473,12 +473,12 @@ func (a *App) suppressionControls(cx *gk.Cx) gk.Element {
 	}
 	gateMode := pills().
 		Child(pill("voice-gate-simple", "Simple", !custom).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-			a.targetMut().Suppression.Gate.SetAdvanced(false)
+			a.target().Suppression.Gate.SetAdvanced(false)
 			a.rebuildEditors(cx)
 			a.notify(cx)
 		})).
 		Child(pill("voice-gate-custom", "Custom", custom).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-			a.targetMut().Suppression.Gate.SetAdvanced(true)
+			a.target().Suppression.Gate.SetAdvanced(true)
 			a.rebuildEditors(cx)
 			a.notify(cx)
 		}))

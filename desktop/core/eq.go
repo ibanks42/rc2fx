@@ -1,6 +1,10 @@
 package core
 
-import "math"
+import (
+	"math"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
+)
 
 // Theoretical filter response, not an FFT or an audio processor.
 //
@@ -25,7 +29,7 @@ func DesignQ(band Band) float64 {
 	case band.Mode == BandModeRlcBt:
 		return (1.0 + band.Q) / 2.0
 	}
-	return fmax(band.Q, 0.1)
+	return num.Max(band.Q, 0.1)
 }
 
 func DesignCoefficients(band Band) (Coefficients, error) {
@@ -35,7 +39,7 @@ func DesignCoefficients(band Band) (Coefficients, error) {
 	if band.BandType == BandTypeOff {
 		return CoefficientsIdentity, nil
 	}
-	w := float64(2.0*math.Pi) * fmin(band.Frequency, float64(0.49*SampleRate)) / SampleRate
+	w := float64(2.0*math.Pi) * num.Min(band.Frequency, float64(0.49*SampleRate)) / SampleRate
 	c := math.Cos(w)
 	alpha := math.Sin(w) / float64(2.0*DesignQ(band))
 	a := math.Pow(10.0, band.Gain/40.0)

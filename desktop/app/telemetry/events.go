@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 // Capacity is how many events the window keeps.
@@ -423,7 +424,7 @@ func (l *EventLog) ToggleExpanded(seq uint64) {
 // clock, given the mixer's clock when the reply was made and when it
 // arrived.
 func HostTime(atNs, nowNs uint64, received time.Time) time.Time {
-	return received.Add(-nanos(satSub(nowNs, atNs)))
+	return received.Add(-nanos(num.SatSub(nowNs, atNs)))
 }
 
 // Ago is "just now", "12 s ago", "4 min ago", "2 h ago".

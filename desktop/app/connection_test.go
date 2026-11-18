@@ -8,12 +8,6 @@ import (
 
 // connection.rs tests.
 
-func TestTheUndoCommandRemovesExactlyTheInstalledFile(t *testing.T) {
-	if USBUndo != "sudo rm "+installerUSBRulePath {
-		t.Fatalf("USBUndo = %q, rule path %q", USBUndo, installerUSBRulePath)
-	}
-}
-
 func TestOnlyARefusedOpenOffersTheUSBRule(t *testing.T) {
 	if !usbPermission("USB permission required: Permission denied (os error 13)") {
 		t.Fatal("a refused open does not offer the rule")

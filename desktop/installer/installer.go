@@ -31,9 +31,11 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 )
 
-// AppVersion is the desktop app's version (Rust's CARGO_PKG_VERSION). Set it
-// with -ldflags "-X github.com/ibanks42/rc2fx/desktop/installer.AppVersion=…".
-var AppVersion = "0.1.7"
+// AppVersion is the desktop app's version and its only copy in the Go code.
+// No build stamps it: .github/scripts/release.py sets it to the workspace
+// version in Cargo.toml when it prepares a release, in the commit that
+// release builds from.
+const AppVersion = "0.1.7"
 
 // DeviceModel is the mixer model.
 type DeviceModel = firmware.Model
@@ -656,16 +658,16 @@ func (e *Engine) probe() (*Status, error) {
 	var usbError *string
 	items, err := e.Platform.Inventory()
 	if err != nil {
-		usb, usbError = []USBMixer{}, ptr(err.Error())
+		usb, usbError = []USBMixer{}, new(err.Error())
 	} else {
 		usb = mixers(items)
 		if len(usb) == 1 {
 			e.model = usb[0].Model
 		}
 		if len(usb) > 1 {
-			usbError = ptr("More than one RØDECaster is connected; connect only one.")
+			usbError = new("More than one RØDECaster is connected; connect only one.")
 		} else if err := rejectExperimental(items, "", e.allowExperimentalDuo); err != nil {
-			usbError = ptr(err.Error())
+			usbError = new(err.Error())
 		}
 	}
 	updateDrive := false
@@ -673,7 +675,7 @@ func (e *Engine) probe() (*Status, error) {
 	if slices.ContainsFunc(usb, func(m USBMixer) bool { return m.UpdateMode }) {
 		volumes, err := e.Platform.Volumes()
 		if err != nil {
-			driveError = ptr(err.Error())
+			driveError = new(err.Error())
 		} else {
 			updateDrive = slices.ContainsFunc(volumes, func(v Volume) bool {
 				return updateSize(v.Total) && slices.ContainsFunc(usb, func(m USBMixer) bool {
@@ -703,8 +705,6 @@ func (e *Engine) probe() (*Status, error) {
 		RecoveryDisk:    recoveryDisk,
 	}, nil
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // LoadSaved reads the cache; empty if there is none yet.
 func LoadSaved(work string) (*Saved, error) {

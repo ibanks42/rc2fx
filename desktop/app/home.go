@@ -16,6 +16,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/home"
 	"github.com/ibanks42/rc2fx/desktop/app/levels"
 	"github.com/ibanks42/rc2fx/desktop/app/model"
+	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
@@ -47,7 +48,7 @@ func (a *App) homeHeadline(processed []int) (string, string) {
 		if !a.streamConnected {
 			detail = "Mixer processing is independent of this app; it keeps running."
 		} else if a.session.Saved != nil {
-			if _, engineError := telemetryEngineError(a.session.Saved); engineError {
+			if _, engineError := telemetry.EngineError(a.session.Saved); engineError {
 				detail = "The notice above says what happened and what to do."
 			}
 		}

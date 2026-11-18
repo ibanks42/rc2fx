@@ -82,8 +82,6 @@ func check(t *testing.T, condition bool, context ...any) {
 	}
 }
 
-func ptr[T any](value T) *T { return &value }
-
 // imported is the Rust tests' `imported`: an EasyEffects import that must be
 // ready.
 func imported(t *testing.T, text string, stereo bool) EQSettings {

@@ -103,7 +103,7 @@ func (a *App) eqSides(cx *gk.Cx) gk.Element {
 	linked := a.target().EQ.RightBands == nil
 	side := func(id, label string, channel core.Channel) gk.StatefulDivEl {
 		return pill(id, label, !linked && a.channel == channel).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-			model.Split(a.targetMut())
+			model.Split(a.target())
 			a.channel = channel
 			a.band = 0
 			a.rebuildEditors(cx)
@@ -124,7 +124,7 @@ func (a *App) eqSides(cx *gk.Cx) gk.Element {
 		} {
 			keep := choice.keep
 			menu = menu.Item(gk.NewPopupMenuItem(choice.label).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-				model.Link(a.targetMut(), keep)
+				model.Link(a.target(), keep)
 				a.channel = core.ChannelLeft
 				a.band = 0
 				a.rebuildEditors(cx)
@@ -243,7 +243,7 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 		ID(gk.Key("band-number", index)).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			gk.StopPropagation(cx)
-			bands := a.targetMut().EQ.ChannelMut(a.channel)
+			bands := a.target().EQ.ChannelMut(a.channel)
 			if index < len(*bands) {
 				(*bands)[index].Enabled = !(*bands)[index].Enabled
 			}
@@ -288,7 +288,7 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 				id := current[a.band].ID
 				selectedID = &id
 			}
-			model.PlaceBand(&a.targetMut().EQ, channel, from, index)
+			model.PlaceBand(&a.target().EQ, channel, from, index)
 			a.band = edit.SelectBandAfterMove(a.target().EQ.Channel(channel), selectedID, a.band)
 			a.rebuildEditors(cx)
 			a.notify(cx)
@@ -331,7 +331,7 @@ func (a *App) overallGain(label string, parameter Parameter, off bool) gk.Elemen
 					step = -0.5
 				}
 				next := min(max(parameter.Get(a.target(), a.channel, a.band)+step, editor.min), editor.max)
-				parameter.Set(a.targetMut(), a.channel, a.band, next)
+				parameter.Set(a.target(), a.channel, a.band, next)
 				a.syncEditorValues(cx)
 				a.notify(cx)
 			}).
@@ -379,7 +379,7 @@ func (a *App) popoverIndex() (int, bool) {
 // gain).
 func (a *App) addBand(cx *gk.Cx, at *[2]float64) {
 	channel := a.channel
-	band, err := a.targetMut().EQ.AddBand(channel)
+	band, err := a.target().EQ.AddBand(channel)
 	if err != nil {
 		a.message = err.Error()
 	} else if at != nil {
@@ -394,7 +394,7 @@ func (a *App) addBand(cx *gk.Cx, at *[2]float64) {
 // selectedBand is the selected band of the active channel, nil when there
 // is none.
 func (a *App) selectedBand() *core.Band {
-	bands := a.targetMut().EQ.ChannelMut(a.channel)
+	bands := a.target().EQ.ChannelMut(a.channel)
 	if a.band < 0 || a.band >= len(*bands) {
 		return nil
 	}
@@ -449,7 +449,7 @@ func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 		design = design.Child(pill(gk.Key("band-mode", index), choice.label, mode == band.Mode).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				if b := a.selectedBand(); b != nil {
-					model.SetModel(b, mode)
+					b.Mode = mode
 				}
 				a.rebuildEditors(cx)
 				a.notify(cx)
@@ -489,7 +489,7 @@ func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 				ID("remove-band").
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 					a.bandPopover = nil
-					a.targetMut().EQ.RemoveBand(a.channel, id)
+					a.target().EQ.RemoveBand(a.channel, id)
 					a.rebuildEditors(cx)
 					a.notify(cx)
 				})))

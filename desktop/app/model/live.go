@@ -89,7 +89,7 @@ func (l *Live) Observe(draft []core.Target, now time.Time) bool {
 		l.lastDraft = core.CloneTargets(draft)
 		return false
 	}
-	if TargetsEqual(draft, l.lastDraft) {
+	if core.TargetsEqual(draft, l.lastDraft) {
 		return false
 	}
 	if !l.grouping || now.Sub(l.lastChange) > UndoGroup {
@@ -201,7 +201,7 @@ func (l *Live) NextLive(draft, saved []core.Target, now time.Time) LiveStep {
 		return LiveNothing
 	}
 	running := l.Running(saved)
-	if TargetsEqual(draft, running) {
+	if core.TargetsEqual(draft, running) {
 		return LiveNothing
 	}
 	if core.LiveNeedsSave(running, draft) {
@@ -233,7 +233,7 @@ func (l *Live) LiveAnswered(accepted, unsupported, busy, needsSave bool, now tim
 // Saved takes newly saved settings: a live edit that matches them is now just
 // the saved settings.
 func (l *Live) Saved(saved []core.Target) {
-	if l.running != nil && TargetsEqual(l.running, saved) {
+	if l.running != nil && core.TargetsEqual(l.running, saved) {
 		l.running = nil
 	}
 }
@@ -283,24 +283,11 @@ func (l *Live) SaveDue(draft, saved []core.Target, dirty bool, now time.Time) bo
 	if now.Sub(l.lastChange) < delay {
 		return false
 	}
-	return l.Support == LiveNo || TargetsEqual(draft, l.Running(saved))
+	return l.Support == LiveNo || core.TargetsEqual(draft, l.Running(saved))
 }
 
 // Quiet is how long since the draft last changed.
 func (l *Live) Quiet(now time.Time) time.Duration { return now.Sub(l.lastChange) }
-
-// TargetsEqual is whether two target lists hold the same settings.
-func TargetsEqual(a, b []core.Target) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !a[i].Equal(b[i]) {
-			return false
-		}
-	}
-	return true
-}
 
 func targetByID(targets []core.Target, id string) *core.Target {
 	for i := range targets {

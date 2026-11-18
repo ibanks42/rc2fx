@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 // Text, accent and problem colors are shared by every appearance; the
@@ -98,8 +100,8 @@ func bandColor(index int) uint32 {
 // level is peak amplitude as a 0..1 meter position over a 60 dB range.
 // (desk.rs level)
 func level(peak float64) float32 {
-	v := (20*math.Log10(fmax(peak, 1e-6)) + 60) / 60
-	return float32(fclamp(v, 0, 1))
+	v := (20*math.Log10(num.Max(peak, 1e-6)) + 60) / 60
+	return float32(num.Clamp(v, 0, 1))
 }
 
 // formatHz is desk.rs format_hz.
@@ -112,31 +114,9 @@ func formatHz(frequency float64) string {
 
 // dbfs is a reported peak as dBFS text. (ui.rs dbfs)
 func dbfs(peak float64) string {
-	db := 20 * math.Log10(fmax(peak, 1e-9))
+	db := 20 * math.Log10(num.Max(peak, 1e-9))
 	if db <= -60 {
 		return "below −60 dBFS"
 	}
 	return strings.ReplaceAll(fmt.Sprintf("%.0f dBFS", db), "-", "−")
-}
-
-// fmax is f64::max: a NaN argument gives the other one (math.Max gives NaN).
-func fmax(a, b float64) float64 {
-	if math.IsNaN(a) {
-		return b
-	}
-	if math.IsNaN(b) {
-		return a
-	}
-	return math.Max(a, b)
-}
-
-// fclamp is f64::clamp (NaN stays NaN).
-func fclamp(v, lo, hi float64) float64 {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }

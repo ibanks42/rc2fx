@@ -14,10 +14,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// AppVersion is this app's version (CARGO_PKG_VERSION in the Rust app).
-// Release builds set it with
-// -ldflags "-X github.com/ibanks42/rc2fx/desktop/app/model.AppVersion=<version>".
-var AppVersion = "0.1.7"
+// AppVersion is this app's version: installer.AppVersion, the one copy that
+// release preparation bumps.
+const AppVersion = installer.AppVersion
 
 // Compare compares two versions numerically; false when either is not a
 // version. The int is negative, zero or positive as a is older, the same or
@@ -651,19 +650,19 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 	case app.Kind == AppStandingUpdate:
 		lead = Lead{
 			Title:   fmt.Sprintf("RC2FX %s is available", app.Version),
-			Detail:  ptr(fmt.Sprintf("You have %s.", i.App)),
-			Changes: ptr(PartApp),
+			Detail:  new(fmt.Sprintf("You have %s.", i.App)),
+			Changes: new(PartApp),
 		}
 	case app.Kind == AppStandingChecking:
 		lead = Lead{Title: "Checking for updates…"}
 	case waiting:
 		lead = Lead{
 			Title:  "A mixer update is ready",
-			Detail: ptr("Mixer software and RØDE firmware install together."),
+			Detail: new("Mixer software and RØDE firmware install together."),
 		}
 		for _, l := range lines {
 			if l.Tone == ToneUpdate && l.ReadChanges {
-				lead.Changes = ptr(l.Part)
+				lead.Changes = new(l.Part)
 				break
 			}
 		}
@@ -671,7 +670,7 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 		if rodeOK {
 			lead = Lead{
 				Title:  "RC2FX is up to date",
-				Detail: ptr(fmt.Sprintf("RØDE firmware %s is out, but RC2FX doesn't support it yet.", rode)),
+				Detail: new(fmt.Sprintf("RØDE firmware %s is out, but RC2FX doesn't support it yet.", rode)),
 			}
 		} else {
 			lead = Lead{Title: "Everything is up to date"}
@@ -695,5 +694,3 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 		OfferInstaller: checkInInstaller || (hasNotice && notice.OfferInstaller),
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

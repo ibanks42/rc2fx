@@ -355,7 +355,7 @@ func TestMetersStopWhileAChangeSettles(t *testing.T) {
 	}
 	m.handle(mockRequest("PUT", "api/v1/config", mustMarshal(t, update)), now)
 	m.events = nil
-	m.lastUSB = ptr(now)
+	m.lastUSB = new(now)
 	during := now.Add(meterPeriod)
 	event := m.handle(mockRequest("GET", "api/v1/events", nil), during)
 	if !isNull(event.Body) {

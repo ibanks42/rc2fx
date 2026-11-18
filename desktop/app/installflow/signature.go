@@ -12,6 +12,7 @@ import (
 	"math"
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 // SignatureKind is what the signature shows.
@@ -44,22 +45,15 @@ func Fraction(progress *installer.Progress) *float32 {
 	return &v
 }
 
-// The Rust computes in f32; Go has no float32 sin or pow, so these compute in
-// float64 and round to float32 after each call. The result can differ from
-// Rust's in the last bits, which the picture cannot show.
-func sin32(x float32) float32    { return float32(math.Sin(float64(x))) }
-func pow32(x, y float32) float32 { return float32(math.Pow(float64(x), float64(y))) }
-func floor32(x float32) float32  { return float32(math.Floor(float64(x))) }
-
 // Offset is the line's height at u (0 to 1 across), as a share of the
 // amplitude, for sample i at phase.
 func Offset(u, phase float32, sample int, noise, voice float32) float32 {
 	// Same tapered, word-shaped carrier and grain as the approved HTML.
 	// Clamp the taper before fractional powf (sin(pi) can be negative in f32).
-	taper := pow32(max(sin32(math.Pi*u), 0), 1.2)
-	word := pow32(max(sin32(2*math.Pi*(u*3.4-phase*0.12)), 0), 1.6)
-	carrier := sin32(u*140-phase*8)*0.6 + sin32(u*61+phase*3)*0.4
-	seed := sin32((float32(sample)+floor32(phase*30)*7)*12.9898) * 43758.547
-	grain := (seed - floor32(seed) - 0.5) * noise * 0.6
+	taper := num.Pow32(max(num.Sin32(math.Pi*u), 0), 1.2)
+	word := num.Pow32(max(num.Sin32(2*math.Pi*(u*3.4-phase*0.12)), 0), 1.6)
+	carrier := num.Sin32(u*140-phase*8)*0.6 + num.Sin32(u*61+phase*3)*0.4
+	seed := num.Sin32((float32(sample)+num.Floor32(phase*30)*7)*12.9898) * 43758.547
+	grain := (seed - num.Floor32(seed) - 0.5) * noise * 0.6
 	return taper * (voice*word*carrier + grain)
 }

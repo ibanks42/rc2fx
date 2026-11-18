@@ -12,11 +12,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 )
 
 const profile = "rodecaster-pro-ii-1.7.6"
-
-func ptr[T any](v T) *T { return &v }
 
 func offerFor(version, profile string) installer.MixerOffer {
 	return installer.MixerOffer{
@@ -53,16 +52,9 @@ func isRequest(request *installer.Request, kind installer.RequestKind) bool {
 	return request != nil && request.Kind == kind
 }
 
-func sameChoice(a, b *Choice) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
 func wantChoice(t *testing.T, got *Choice, channel, version, why string) {
 	t.Helper()
-	if !sameChoice(got, &Choice{Channel: channel, Version: version}) {
+	if !opt.Equal(got, &Choice{Channel: channel, Version: version}) {
 		t.Fatalf("%s: choice %+v, want %s %s", why, got, channel, version)
 	}
 }
@@ -170,7 +162,7 @@ func answer(t *testing.T, m *Model, request *installer.Request, reply installer.
 func report(t *testing.T, m *Model, request *installer.Request, s Seen) *installer.Request {
 	t.Helper()
 	m.SetService(s.service)
-	return answer(t, m, request, installer.Reply{Kind: installer.ReplyStatus, Status: ptr(s.status)})
+	return answer(t, m, request, installer.Reply{Kind: installer.ReplyStatus, Status: new(s.status)})
 }
 
 // readSettings: the app reads the settings the plan asked for.
@@ -204,7 +196,7 @@ func TestDuoPreferenceGatesPreparationAndModelChangesDropCachedChoices(t *testin
 	seen := status([]usbSeen{{"DUO", false}}, nil, true, false)
 	seen.status.USB[0].Model = firmware.ModelDuo
 	probe := m.Probe()
-	releases := m.Finish(*probe, installer.Reply{Kind: installer.ReplyStatus, Status: ptr(deepCopy(seen.status))}, nil)
+	releases := m.Finish(*probe, installer.Reply{Kind: installer.ReplyStatus, Status: new(deepCopy(seen.status))}, nil)
 	if releases == nil {
 		t.Fatal("no request")
 	}
@@ -232,7 +224,7 @@ func TestDuoPreferenceGatesPreparationAndModelChangesDropCachedChoices(t *testin
 	if m.SetAllowDuo(false) != nil {
 		t.Fatal("don't mutate in-flight policy")
 	}
-	releases = m.Finish(*enable, installer.Reply{Kind: installer.ReplyStatus, Status: ptr(seen.status)}, nil)
+	releases = m.Finish(*enable, installer.Reply{Kind: installer.ReplyStatus, Status: new(seen.status)}, nil)
 	if releases == nil {
 		t.Fatal("no request")
 	}
@@ -262,7 +254,7 @@ func TestDuoPreferenceGatesPreparationAndModelChangesDropCachedChoices(t *testin
 		t.Fatal("no request")
 	}
 	changed := status([]usbSeen{{"DUO", false}}, nil, false, false)
-	m.Finish(*probe, installer.Reply{Kind: installer.ReplyStatus, Status: ptr(changed.status)}, nil)
+	m.Finish(*probe, installer.Reply{Kind: installer.ReplyStatus, Status: new(changed.status)}, nil)
 	if !strings.Contains(failedRun(t, m), "mixer changed") {
 		t.Fatalf("failure %q", failedRun(t, m))
 	}
@@ -339,7 +331,7 @@ func TestTheDuoOptInIsOfferedOnlyWhileADuoIsConnected(t *testing.T) {
 func TestTurningOffDuoHidesItsPreparationAndBlocksStart(t *testing.T) {
 	s := status([]usbSeen{{"DUO", true}}, nil, true, true)
 	s.status.USB[0].Model = firmware.ModelDuo
-	s.status.Saved.Prepared.Model = ptr(firmware.ModelDuo)
+	s.status.Saved.Prepared.Model = new(firmware.ModelDuo)
 	m := setUp(s)
 	m.Device = firmware.ModelDuo
 	m.AllowDuo = true
@@ -381,7 +373,7 @@ func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 	wantRequest(t, backup, installer.Request{Kind: installer.RequestSaveSettings, Serial: "GV1", Settings: `{"config":{}}`}, "backup")
 	refresh := answer(t, m, backup, installer.Reply{Kind: installer.ReplyBackup})
 	sel := report(t, m, refresh, status(gv1(false), ready(), false, false))
-	wantRequest(t, sel, installer.Request{Kind: installer.RequestSelectMixer, Offer: ptr(offer("1.0.0")), FirmwareProfile: profile},
+	wantRequest(t, sel, installer.Request{Kind: installer.RequestSelectMixer, Offer: new(offer("1.0.0")), FirmwareProfile: profile},
 		"the exact offer, before anything is built from it")
 	prepare := selected(t, m, sel)
 	wantRequest(t, prepare, installer.Request{
@@ -539,21 +531,21 @@ func TestStockFirmwareSavesSettingsFlashesUnchangedAndWaitsForNormalMode(t *test
 
 func TestReadinessCountsOnlyForTheSameMixer(t *testing.T) {
 	m := setUp(status(gv1(false), absent(), false, false))
-	if !m.IsSessionMixer(ptr("GV1")) {
+	if !m.IsSessionMixer(new("GV1")) {
 		t.Fatal("GV1")
 	}
-	if m.IsSessionMixer(ptr("GV2")) {
+	if m.IsSessionMixer(new("GV2")) {
 		t.Fatal("GV2")
 	}
 	if m.IsSessionMixer(nil) {
 		t.Fatal("no session")
 	}
 	updating := setUp(status(gv1(true), absent(), false, false))
-	if updating.IsSessionMixer(ptr("GV1")) {
+	if updating.IsSessionMixer(new("GV1")) {
 		t.Fatal("updating")
 	}
 	two := setUp(status([]usbSeen{{"GV1", false}, {"GV2", false}}, absent(), false, false))
-	if two.IsSessionMixer(ptr("GV1")) {
+	if two.IsSessionMixer(new("GV1")) {
 		t.Fatal("two mixers")
 	}
 }
@@ -598,7 +590,7 @@ func TestEachModeCardShowsTheReleaseItWouldUse(t *testing.T) {
 	wantChoice(t, m.ChoiceFor(true), "stable", "1.7.6", "stock")
 	wantChoice(t, m.ChoiceFor(false), "stable", "1.7.6", "an unsupported release falls back for RC2FX")
 	m.SetStock(false)
-	if !sameChoice(m.Choice, m.ChoiceFor(false)) {
+	if !opt.Equal(m.Choice, m.ChoiceFor(false)) {
 		t.Fatalf("choice %+v", m.Choice)
 	}
 }
@@ -1368,7 +1360,7 @@ func TestANewerOfferForANewerAppIsMentionedBesideWhatCanBeInstalled(t *testing.T
 
 func TestAFailedCheckNeverFallsBackToTheBundledCopy(t *testing.T) {
 	m := idle()
-	m.Bundled = ptr("0.9.0")
+	m.Bundled = new("0.9.0")
 	m.Mixer = nil
 	m.Offers = Offers{Kind: OffersChecking}
 	m.queue = append(m.queue, queued{background: true})
@@ -1392,8 +1384,8 @@ func TestAFailedCheckNeverFallsBackToTheBundledCopy(t *testing.T) {
 
 func TestTheMenuSaysWhereEachVersionComesFromAndWhatGoesBackwards(t *testing.T) {
 	m := idle()
-	m.Bundled = ptr("0.9.0")
-	m.SetInstalled(ptr("0.9.5"), nil)
+	m.Bundled = new("0.9.0")
+	m.SetInstalled(new("0.9.5"), nil)
 	type entry struct {
 		name   string
 		chosen bool
@@ -1444,7 +1436,7 @@ func TestAFailedOrCancelledCheckCanBeRepeatedAndNeverRepeatsItself(t *testing.T)
 
 func TestADowngradeIsNeverTheDefaultAndIsAlwaysCalledOut(t *testing.T) {
 	m := idle()
-	m.SetInstalled(ptr("1.1.0"), nil)
+	m.SetInstalled(new("1.1.0"), nil)
 	if m.Mixer != nil {
 		t.Fatal("only an older offer: nothing is picked")
 	}
@@ -1486,15 +1478,15 @@ func TestAnUnknownInstalledVersionIsSaidOnlyForAnOlderChoice(t *testing.T) {
 	if w := m.WarningsFor(m.Stock); len(w) == 0 || !strings.Contains(w[0], "can't tell") {
 		t.Fatalf("warnings %q", w)
 	}
-	m.SetInstalled(ptr("not a version"), nil)
+	m.SetInstalled(new("not a version"), nil)
 	if w := m.WarningsFor(m.Stock); len(w) == 0 || !strings.Contains(w[0], "can't tell") {
 		t.Fatalf("warnings %q", w)
 	}
-	m.SetInstalled(ptr("0.9.0"), nil)
+	m.SetInstalled(new("0.9.0"), nil)
 	if w := m.WarningsFor(m.Stock); len(w) != 0 {
 		t.Fatalf("warnings %q", w)
 	}
-	m.SetInstalled(ptr("1.0.0"), nil)
+	m.SetInstalled(new("1.0.0"), nil)
 	if w := m.WarningsFor(m.Stock); len(w) != 0 {
 		t.Fatalf("reinstalling the same version: %q", w)
 	}
@@ -1505,7 +1497,7 @@ func TestAnUnknownInstalledVersionIsSaidOnlyForAnOlderChoice(t *testing.T) {
 
 func TestGoingBackOnFirmwareIsSaidToo(t *testing.T) {
 	m := idle()
-	m.SetInstalled(ptr("0.9.0"), ptr("1.7.7"))
+	m.SetInstalled(new("0.9.0"), new("1.7.7"))
 	warnings := m.WarningsFor(m.Stock)
 	if len(warnings) != 1 {
 		t.Fatalf("warnings %q", warnings)
@@ -1523,7 +1515,7 @@ func TestARunInstallsWhatWasReviewedWhateverChangesOnThePage(t *testing.T) {
 	m := idle()
 	sel := m.Start()
 	m.Offers = Offers{Kind: OffersReady, List: []installer.MixerOffer{offer("2.0.0")}}
-	m.SetInstalled(ptr("3.0.0"), nil)
+	m.SetInstalled(new("3.0.0"), nil)
 	pinned := m.Run.Mixer
 	if !sameSource(pinned, signed("1.0.0")) {
 		t.Fatalf("pinned %+v", pinned)
@@ -1599,11 +1591,11 @@ func TestAFailedSelectionStopsBeforePreparingAndRetryRepeatsTheSameOffer(t *test
 func runningRC2FX(installed string) *Model {
 	m := setUp(status(gv1(false), ready(), false, false))
 	m.Offers = Offers{Kind: OffersReady, List: []installer.MixerOffer{offer("2.0.0")}}
-	m.SetInstalled(ptr(installed), ptr("1.7.6"))
+	m.SetInstalled(new(installed), new("1.7.6"))
 	return m
 }
 
-var inPlace = InPlaceSupport{Supported: true, Profile: ptr(profile)}
+var inPlace = InPlaceSupport{Supported: true, Profile: new(profile)}
 
 func TestANewerRC2FXOnTheSameFirmwareInstallsInPlace(t *testing.T) {
 	m := runningRC2FX("1.0.0")
@@ -1616,7 +1608,7 @@ func TestANewerRC2FXOnTheSameFirmwareInstallsInPlace(t *testing.T) {
 		t.Fatal("older mixer software")
 	}
 	otherFirmware := inPlace
-	otherFirmware.Profile = ptr("rodecaster-pro-ii-1.7.7")
+	otherFirmware.Profile = new("rodecaster-pro-ii-1.7.7")
 	if m.InPlaceOffer(otherFirmware) != nil {
 		t.Fatal("a release for other firmware needs a flash")
 	}
@@ -1688,7 +1680,7 @@ func TestAnInPlaceUpdateIsPreparedOnceAndFailuresChangeNothing(t *testing.T) {
 		},
 		Base: nil,
 	}
-	m.Finish(*prepare, installer.Reply{Kind: installer.ReplyInPlaceBundle, InPlaceBundle: ptr(deepCopy(bundle))}, nil)
+	m.Finish(*prepare, installer.Reply{Kind: installer.ReplyInPlaceBundle, InPlaceBundle: new(deepCopy(bundle))}, nil)
 	if got, ok := m.TakeInPlaceBundle(); !ok || !reflect.DeepEqual(got, bundle) {
 		t.Fatalf("bundle %+v %v", got, ok)
 	}
@@ -1832,7 +1824,7 @@ func TestReleasesDefaultToStableAndPreparedFirmwareWins(t *testing.T) {
 	s := status(nil, nil, true, false)
 	s.status.Saved.Prepared.Channel = "beta"
 	s.status.Saved.Prepared.Version = "1.7.7"
-	next := m.Finish(installer.Request{Kind: installer.RequestProbe}, installer.Reply{Kind: installer.ReplyStatus, Status: ptr(s.status)}, nil)
+	next := m.Finish(installer.Request{Kind: installer.RequestProbe}, installer.Reply{Kind: installer.ReplyStatus, Status: new(s.status)}, nil)
 	wantRequest(t, next, installer.Request{Kind: installer.RequestReleases}, "releases")
 	m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{Kind: installer.ReplyReleases, Releases: releases}, nil)
 	wantChoice(t, m.Choice, "beta", "1.7.7", "prepared")

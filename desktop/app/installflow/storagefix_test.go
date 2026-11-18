@@ -46,7 +46,7 @@ func TestWhichInstallsFixTheStorage(t *testing.T) {
 	}{
 		"no RC2FX":                              {status(gv1(false), absent(), false, false), FixAuto, nil, true},
 		"RC2FX answers":                         {status(gv1(false), ready(), false, false), FixAuto, nil, false},
-		"RC2FX reported":                        {status(gv1(false), absent(), false, false), FixAuto, func(m *Model) { m.Installed = ptr("0.2.1") }, false},
+		"RC2FX reported":                        {status(gv1(false), absent(), false, false), FixAuto, func(m *Model) { m.Installed = new("0.2.1") }, false},
 		"update mode":                           {status(gv1(true), absent(), false, false), FixAuto, nil, false},
 		"no mixer":                              {status(nil, absent(), false, false), FixAuto, nil, false},
 		"removing RC2FX":                        {status(gv1(false), absent(), false, false), FixAuto, func(m *Model) { m.SetStock(true) }, false},

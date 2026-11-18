@@ -19,7 +19,7 @@ func TestAssignmentsRequireUniquePhysicalSourcesAndProcessingBindings(t *testing
 		Inputs: []StockSource{{
 			ID:       "input-3",
 			SourceID: 3,
-			Fader:    ptr[uint8](1),
+			Fader:    new(uint8(1)),
 			Name:     "Mic 4",
 			Color:    "fffdba0e",
 			TargetID: "mic-1",
@@ -29,12 +29,12 @@ func TestAssignmentsRequireUniquePhysicalSourcesAndProcessingBindings(t *testing
 	other := inventory.Inputs[0]
 	other.ID = "input-7"
 	other.SourceID = 7
-	other.Fader = ptr[uint8](2)
+	other.Fader = new(uint8(2))
 	inventory.Inputs = append(inventory.Inputs, other)
 	fails(t, inventory.Validate())
 	inventory.Inputs[1].TargetID = ""
 	ok(t, inventory.Validate())
-	inventory.Inputs[1].Fader = ptr[uint8](1)
+	inventory.Inputs[1].Fader = new(uint8(1))
 	fails(t, inventory.Validate())
 	inventory.Inputs[0].Fader = nil
 	inventory.Inputs[1].Fader = nil
@@ -43,9 +43,9 @@ func TestAssignmentsRequireUniquePhysicalSourcesAndProcessingBindings(t *testing
 	var decoded StockInventory
 	ok(t, DecodeStrict(encoded, &decoded))
 	check(t, decoded.Equal(inventory))
-	inventory.Inputs[1].Fader = ptr[uint8](0)
+	inventory.Inputs[1].Fader = new(uint8(0))
 	fails(t, inventory.Validate())
-	inventory.Inputs[1].Fader = ptr[uint8](10)
+	inventory.Inputs[1].Fader = new(uint8(10))
 	fails(t, inventory.Validate())
 	inventory.Inputs = inventory.Inputs[:1]
 	inventory.Available = false
@@ -147,9 +147,9 @@ func TestAnythingElseIsRefused(t *testing.T) {
 func TestStatusTextIsCheckedBeforeItIsShownOrPinned(t *testing.T) {
 	good := SSHStatus{
 		Managed:            true,
-		ManagedFingerprint: ptr("SHA256:abc"),
+		ManagedFingerprint: new("SHA256:abc"),
 		HostKeys:           []string{testKey},
-		Detail:             ptr("Running"),
+		Detail:             new("Running"),
 	}
 	ok(t, good.Validate())
 	with := func(change func(*SSHStatus)) SSHStatus {
@@ -166,8 +166,8 @@ func TestStatusTextIsCheckedBeforeItIsShownOrPinned(t *testing.T) {
 		with(func(s *SSHStatus) { s.HostKeys = []string{testKey + "\nssh-ed25519 other"} }),
 		with(func(s *SSHStatus) { s.HostKeys = manyKeys }),
 		with(func(s *SSHStatus) { s.HostKeys = []string{strings.Repeat("x", maxHostKey+1)} }),
-		with(func(s *SSHStatus) { s.ManagedFingerprint = ptr("SHA256:\u202ecba") }),
-		with(func(s *SSHStatus) { s.Detail = ptr(strings.Repeat("x", MaxStatusText+1)) }),
+		with(func(s *SSHStatus) { s.ManagedFingerprint = new("SHA256:\u202ecba") }),
+		with(func(s *SSHStatus) { s.Detail = new(strings.Repeat("x", MaxStatusText+1)) }),
 	} {
 		fails(t, bad.Validate(), i)
 	}
@@ -176,10 +176,10 @@ func TestStatusTextIsCheckedBeforeItIsShownOrPinned(t *testing.T) {
 func TestStatusAndRequestRoundTrip(t *testing.T) {
 	status := SSHStatus{
 		Managed:            true,
-		ManagedFingerprint: ptr("SHA256:abc"),
+		ManagedFingerprint: new("SHA256:abc"),
 		UnmanagedKeys:      1,
 		HostKeys:           []string{testKey},
-		ServerRunning:      ptr(true),
+		ServerRunning:      new(true),
 	}
 	text := encode(t, status)
 	check(t, must(FromJSON[SSHStatus](text)).Equal(status))

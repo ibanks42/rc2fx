@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 // Snapshot is everything the section shows, read from the app at render
@@ -55,19 +56,8 @@ type PathView struct {
 	Recent PathRecent
 }
 
-// fmax is f64::max: a NaN argument gives the other one.
-func fmax(a, b float64) float64 {
-	if math.IsNaN(a) {
-		return b
-	}
-	if math.IsNaN(b) {
-		return a
-	}
-	return math.Max(a, b)
-}
-
 // DBFS is a peak level in dBFS, floored at −120.
-func DBFS(peak float64) float64 { return 20.0 * math.Log10(fmax(peak, 1e-6)) }
+func DBFS(peak float64) float64 { return 20.0 * math.Log10(num.Max(peak, 1e-6)) }
 
 // DBValue is a level for a column already headed dB: "-14.9", or "silent".
 func DBValue(peak float64) string {

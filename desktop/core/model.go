@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 const (
@@ -223,7 +225,7 @@ const log2OnePointFive = 0.58496250072115618145373894394781650876
 // equal slider steps sound even. Opening is always 5 ms, inside the model's
 // 10-30 ms lookahead.
 func GateShapeForStrength(strength float64) GateShape {
-	s := fclamp(strength, 0.0, 1.0)
+	s := num.Clamp(strength, 0.0, 1.0)
 	// The explicit float64 conversions keep Go from fusing a multiply-add,
 	// so results match the Rust bit for bit on every architecture.
 	linear := func(gentle, strict float64) float64 { return gentle + float64((strict-gentle)*s) }
@@ -240,7 +242,7 @@ func GateShapeForStrength(strength float64) GateShape {
 func newGateShape(threshold, reductionDB, attackMs, holdMs, releaseMs float64) GateShape {
 	return GateShape{
 		Threshold:      threshold,
-		CloseThreshold: fmax(threshold-GateHysteresis, 0.0),
+		CloseThreshold: num.Max(threshold-GateHysteresis, 0.0),
 		ReductionDB:    reductionDB,
 		AttackMs:       attackMs,
 		HoldMs:         holdMs,

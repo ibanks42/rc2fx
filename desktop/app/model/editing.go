@@ -45,11 +45,6 @@ func PlaceBand(eq *core.EQSettings, channel core.Channel, from, to int) int {
 	return to
 }
 
-// SetModel sets the band's filter model.
-func SetModel(band *core.Band, mode core.BandMode) {
-	band.Mode = mode
-}
-
 // PlaceEffect moves effect to where onto is in the visible chain, shifting
 // the stages between them, as dropping one stage card on another does.
 // Stages this target cannot use keep their places.

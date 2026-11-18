@@ -22,9 +22,9 @@ func TestHiddenOwnerNeedsExplicitReleaseAndSavedAckBeforeReassignment(t *testing
 	config.Targets = append(config.Targets, core.NewTarget("mic-2", "Mic 1", core.TargetKindMic, 1))
 	owner := findTarget(config.Targets, "mic-1")
 	owner.Suppression.Enabled = true
-	saved := deepCopy(config.Targets)
-	before := deepCopy(*findTarget(saved, "mic-1"))
-	draft := deepCopy(saved)
+	saved := core.CloneTargets(config.Targets)
+	before := findTarget(saved, "mic-1").Clone()
+	draft := core.CloneTargets(saved)
 	// Identity, not the original index or a fader position, locates the owner.
 	slices.Reverse(draft)
 	next := slices.IndexFunc(draft, func(t core.Target) bool { return t.ID == "mic-2" })
@@ -39,7 +39,7 @@ func TestHiddenOwnerNeedsExplicitReleaseAndSavedAckBeforeReassignment(t *testing
 	}
 	expected := before
 	expected.Suppression.Enabled = false
-	if !equal(*findTarget(draft, "mic-1"), expected) {
+	if !findTarget(draft, "mic-1").Equal(expected) {
 		t.Fatal("release changed more than suppression")
 	}
 	if ReleaseSuppression(draft, "mic-1") {
@@ -52,7 +52,7 @@ func TestHiddenOwnerNeedsExplicitReleaseAndSavedAckBeforeReassignment(t *testing
 		t.Fatal("enabled while the saved owner holds it")
 	}
 	// A successful Save acknowledges the disabled owner.
-	acknowledged := deepCopy(draft)
+	acknowledged := core.CloneTargets(draft)
 	if !EnableEffect(draft, acknowledged, next, core.EffectSuppression, true) {
 		t.Fatal("not enabled after the acknowledgement")
 	}
@@ -67,7 +67,7 @@ func TestSuppressionDraftHasOneOwnerAndChatVoiceIsBeforeTheStereoChain(t *testin
 	if !EnableEffect(targets, nil, 0, core.EffectSuppression, true) {
 		t.Fatal("mic-1 not enabled")
 	}
-	saved := deepCopy(targets)
+	saved := core.CloneTargets(targets)
 	if EnableEffect(targets, nil, 1, core.EffectSuppression, true) {
 		t.Fatal("a second owner")
 	}
@@ -77,7 +77,7 @@ func TestSuppressionDraftHasOneOwnerAndChatVoiceIsBeforeTheStereoChain(t *testin
 	if EnableEffect(targets, saved, 1, core.EffectSuppression, true) {
 		t.Fatal("apply the disable before claiming a new live destination")
 	}
-	saved = deepCopy(targets)
+	saved = core.CloneTargets(targets)
 	if !EnableEffect(targets, saved, 1, core.EffectSuppression, true) {
 		t.Fatal("send-chat not enabled")
 	}
@@ -100,13 +100,13 @@ func bandIDs(t *core.Target) []string {
 }
 
 func TestSplitEditReorderLinkPreservesSelectedChannelAndIDs(t *testing.T) {
-	target := deepCopy(core.DefaultConfig().Targets[4])
+	target := core.DefaultConfig().Targets[4].Clone()
 	for range 3 {
 		if _, err := target.EQ.AddBand(core.ChannelLeft); err != nil {
 			t.Fatal(err)
 		}
 	}
-	original := deepCopy(target.EQ.Bands)
+	original := slices.Clone(target.EQ.Bands)
 	Split(&target)
 	(*target.EQ.ChannelMut(core.ChannelRight))[0].Gain = -7.5
 	selected := PlaceBand(&target.EQ, core.ChannelRight, 0, 1)
@@ -116,7 +116,7 @@ func TestSplitEditReorderLinkPreservesSelectedChannelAndIDs(t *testing.T) {
 	if got := target.EQ.Channel(core.ChannelRight)[1].ID; got != original[0].ID {
 		t.Fatalf("id %q", got)
 	}
-	if !equal(target.EQ.Bands, original) {
+	if !slices.Equal(target.EQ.Bands, original) {
 		t.Fatal("left bands changed")
 	}
 	Link(&target, core.ChannelRight)
@@ -152,16 +152,12 @@ func TestSplitEditReorderLinkPreservesSelectedChannelAndIDs(t *testing.T) {
 }
 
 func TestModelChangeAndVisibleEffectOrderStayValid(t *testing.T) {
-	target := deepCopy(core.DefaultConfig().Targets[4])
+	target := core.DefaultConfig().Targets[4].Clone()
 	band, err := target.EQ.AddBand(core.ChannelLeft)
 	if err != nil {
 		t.Fatal(err)
 	}
 	band.BandType = core.BandTypeHighShelf
-	SetModel(band, core.BandModeRlcBt)
-	if band.Mode != core.BandModeRlcBt {
-		t.Fatalf("mode %v", band.Mode)
-	}
 	PlaceEffect(&target, core.EffectEQ, core.EffectHighpass)
 	if target.Order[0] != core.EffectEQ || target.Order[1] != core.EffectSuppression || target.Order[2] != core.EffectHighpass {
 		t.Fatalf("order %v", target.Order)
@@ -189,7 +185,7 @@ func TestModelChangeAndVisibleEffectOrderStayValid(t *testing.T) {
 	if err := target.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	mono := deepCopy(core.DefaultConfig().Targets[0])
+	mono := core.DefaultConfig().Targets[0].Clone()
 	Split(&mono)
 	if mono.EQ.RightBands != nil {
 		t.Fatal("a mono target split")

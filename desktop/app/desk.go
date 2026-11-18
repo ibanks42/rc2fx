@@ -200,7 +200,7 @@ func (a *App) railStage(target *core.Target, effect core.Effect) gk.Element {
 				gk.Quiet(cx)
 				return
 			}
-			model.PlaceEffect(a.targetMut(), core.EffectAll[from], effect)
+			model.PlaceEffect(a.target(), core.EffectAll[from], effect)
 			a.notify(cx)
 		})
 }

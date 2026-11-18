@@ -4,7 +4,11 @@
 // tick choice). The level history itself is desktop/app/model.
 package levels
 
-import "math"
+import (
+	"math"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
+)
 
 // LineState is live_line.rs LineState.
 type LineState int
@@ -48,7 +52,7 @@ var Glows = [2]struct{ Spread, Alpha float32 }{{7.0 / 3.0, 0.12}, {1, 0.25}}
 // every 3 px. ok is false if any point isn't finite: an invalid line is not
 // drawn, rather than drawn with a substituted point.
 func Offsets(width, phase, amplitude float32) ([]Point, bool) {
-	steps := int(fmax32(float32(math.Ceil(float64(width/3))), 2))
+	steps := int(num.Max(float32(math.Ceil(float64(width/3))), 2))
 	points := make([]Point, 0, steps+1)
 	for i := 0; i <= steps; i++ {
 		u := float32(i) / float32(steps)
@@ -56,9 +60,9 @@ func Offsets(width, phase, amplitude float32) ([]Point, bool) {
 		// zero between the ends, so it draws no silence that wasn't
 		// measured. sin(π) is slightly negative in f32, and a negative
 		// base would make powf NaN and the whole path invalid.
-		taper := pow32(fmax32(sin32(math.Pi*u), 0), 1.1)
-		carrier := (sin32(u*140-phase*8)*0.6 + sin32(u*61+phase*3)*0.4) *
-			(0.65 + 0.35*sin32(u*6.3-phase*1.1))
+		taper := num.Pow32(num.Max(num.Sin32(math.Pi*u), 0), 1.1)
+		carrier := (num.Sin32(u*140-phase*8)*0.6 + num.Sin32(u*61+phase*3)*0.4) *
+			(0.65 + 0.35*num.Sin32(u*6.3-phase*1.1))
 		x, offset := u*width, taper*amplitude*carrier
 		if !finite(x) || !finite(offset) {
 			return nil, false
@@ -89,21 +93,6 @@ func LinePoints(width, height, phase, level float32, state LineState, style Line
 		offsets[i].Y = mid - offsets[i].Y
 	}
 	return offsets, true
-}
-
-// sin32 and pow32 are f32::sin and f32::powf: the f64 result rounded to f32.
-func sin32(x float32) float32    { return float32(math.Sin(float64(x))) }
-func pow32(x, y float32) float32 { return float32(math.Pow(float64(x), float64(y))) }
-
-// fmax32 is f32::max: a NaN argument gives the other one.
-func fmax32(a, b float32) float32 {
-	switch {
-	case a != a:
-		return b
-	case b != b:
-		return a
-	}
-	return max(a, b)
 }
 
 func finite(v float32) bool { return !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0) }

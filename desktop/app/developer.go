@@ -15,6 +15,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/developer"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
@@ -116,25 +117,10 @@ func (a *App) sendSSH(request core.SSHRequest) {
 	}
 }
 
-func sameSerial(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
 // sameConnection is whether a confirmation still applies to what the user
 // confirmed it on.
 func (a *App) sameConnection(epoch uint64, serial *string) bool {
-	return a.ssh.Epoch == epoch && sameSerial(a.connectedMixer, serial) && a.developerVisible()
-}
-
-func cloneSerial(serial *string) *string {
-	if serial == nil {
-		return nil
-	}
-	v := *serial
-	return &v
+	return a.ssh.Epoch == epoch && opt.Equal(a.connectedMixer, serial) && a.developerVisible()
 }
 
 // enableSSH prepares this computer's key off the UI thread, then sends it,
@@ -177,7 +163,7 @@ func (a *App) enableSSH(cx *gk.Cx, epoch uint64, serial *string) {
 // confirmed. The confirmation only counts for the connection it was asked
 // on.
 func (a *App) confirmEnableSSH(cx *gk.Cx) {
-	epoch, serial := a.ssh.Epoch, cloneSerial(a.connectedMixer)
+	epoch, serial := a.ssh.Epoch, opt.Clone(a.connectedMixer)
 	a.confirm(cx, confirmKindOther, Confirm{
 		Eyebrow: "Developer mode",
 		Title:   "Enable SSH access?",
@@ -207,7 +193,7 @@ func (a *App) disableSSH(epoch uint64, serial *string) {
 // confirmDisableSSH: the confirmation only counts for the connection it was
 // asked on.
 func (a *App) confirmDisableSSH(cx *gk.Cx) {
-	epoch, serial := a.ssh.Epoch, cloneSerial(a.connectedMixer)
+	epoch, serial := a.ssh.Epoch, opt.Clone(a.connectedMixer)
 	a.confirm(cx, confirmKindOther, Confirm{
 		Eyebrow: "Developer mode",
 		Title:   "Disable SSH access?",

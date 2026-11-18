@@ -27,10 +27,6 @@ type ImportDraft struct {
 	stage   core.ImportResult
 }
 
-// writeExport is interchange.rs write_export (edit.WriteExport); the view
-// preferences (prefs.go) use it too.
-func writeExport(path, text string) error { return edit.WriteExport(path, text) }
-
 func (a *App) stageImport(target edit.ImportTarget, name, text string) {
 	options := core.ImportOptions{Stereo: target.Channels == 2}
 	stage, err := edit.ParseImport(text, options)
@@ -168,7 +164,7 @@ func (a *App) finishImport(cx *gk.Cx) {
 		message := "This EQ changed after the import started. Import again to replace its current settings."
 		a.importError = &message
 	} else if imp.stage.Kind == core.ImportResultReady {
-		a.targetMut().EQ = imp.stage.EQ
+		a.target().EQ = imp.stage.EQ
 		a.channel = core.ChannelLeft
 		a.band = 0
 		a.message = fmt.Sprintf("Imported %s into %s. It is saved to the mixer once edits stop.",
@@ -261,7 +257,7 @@ func (a *App) exportEQ(cx *gk.Cx) {
 			finish(cx, "", err)
 			return
 		}
-		gk.Go(cx, func() error { return writeExport(path, text) }, func(cx *gk.Cx, err error) {
+		gk.Go(cx, func() error { return edit.WriteExport(path, text) }, func(cx *gk.Cx, err error) {
 			if err != nil {
 				finish(cx, "", err)
 			} else {

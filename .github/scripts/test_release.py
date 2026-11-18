@@ -48,8 +48,7 @@ class ReleaseTests(unittest.TestCase):
 
     def put_go_desktop(self, version="0.1.0"):
         self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
-        self.put("desktop/installer/installer.go", f'package installer\n\nvar AppVersion = "{version}"\n')
-        self.put("desktop/app/model/versions.go", f'package model\n\nvar AppVersion = "{version}"\n')
+        self.put("desktop/installer/installer.go", f'package installer\n\nconst AppVersion = "{version}"\n')
         self.put("desktop/transport/mock.go", f'package transport\n\nconst mockRuntime = "{version}"\n')
 
     def test_go_desktop_release_downloads_mixer_and_bumps_the_go_versions(self):
@@ -64,7 +63,7 @@ class ReleaseTests(unittest.TestCase):
         notes = (self.root / "target/release-input/release-notes.md").read_text()
         self.assertIn("Mixer software is downloaded separately", notes)
         self.assertNotIn("Bundled RC2FX", notes)
-        go_files = ["desktop/installer/installer.go", "desktop/app/model/versions.go", "desktop/transport/mock.go"]
+        go_files = ["desktop/installer/installer.go", "desktop/transport/mock.go"]
         for name in go_files:
             self.assertIn('= "0.1.1"\n', (self.root / name).read_text(), name)
         plan = json.loads((self.root / "target/release-input/plan.json").read_text())

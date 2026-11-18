@@ -16,7 +16,10 @@ import (
 	"gpuikit.dev/gk"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
+	"github.com/ibanks42/rc2fx/desktop/app/selfupdate"
+	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
@@ -74,7 +77,7 @@ type App struct {
 	// deviceVersions is what the connected mixer reported; nil is unknown.
 	deviceVersions *core.DeviceVersions
 	appUpdate      AppUpdate
-	selfUpdate     SelfUpdate
+	selfUpdate     selfupdate.SelfUpdate
 	// developerMode shows developer controls in Settings; grants nothing by
 	// itself.
 	developerMode bool
@@ -182,14 +185,14 @@ type App struct {
 	usb             model.USBObservation
 	message         string
 	meter           *core.Meter
-	meterProgress   map[string]*telemetryProgress
+	meterProgress   map[string]*telemetry.Progress
 	// levels is recent output peaks per processed path, for the live line.
 	levels model.LevelHistories
 	// startup is what the mixer counted while starting, kept out of telemetry.
-	startup telemetryStartupWindow
+	startup telemetry.StartupWindow
 	// recentFaults is audible faults in the last minute, and when each last
 	// happened.
-	recentFaults telemetryRecentFaults
+	recentFaults telemetry.RecentFaults
 	// renderGeneration counts this view's renders; Home's line slot is
 	// claimed per render (line_overlay.rs; WP3 redesigns it, audit 2.4).
 	renderGeneration    uint64
@@ -261,7 +264,7 @@ func newApp() *App {
 		telemetryOpen:       rememberedTelemetry(),
 		eventLog:            &log,
 		message:             message,
-		meterProgress:       map[string]*telemetryProgress{},
+		meterProgress:       map[string]*telemetry.Progress{},
 		systemMotionChecked: time.Now(),
 	}
 	if v, ok := model.BundledMixerSoftware(); ok {
@@ -281,7 +284,7 @@ func (a *App) init(cx *gk.Cx) {
 	setAppearance(cx, rememberedAppearance())
 	makeHalo(cx)
 	a.sshAddress = addressInput(cx)
-	a.usbRuleText = gk.NewTextareaState(cx).DefaultValue(installerUSBRule).Build()
+	a.usbRuleText = gk.NewTextareaState(cx).DefaultValue(helper.USBRule).Build()
 	a.usbUndoText = gk.NewInputState(cx).DefaultValue(USBUndo).Build()
 	a.presets = newPresetLibrary(cx)
 	a.contentScroll = gk.NewScrollHandle(cx)
@@ -361,7 +364,7 @@ func (a *App) confirmClose(cx *gk.Cx) bool {
 		// Only when cancelled: "Discard and close" sets discarded before
 		// this runs, and its quit must still apply a requested update.
 		if !discarded {
-			a.selfUpdate.cancelRestart()
+			a.selfUpdate.CancelRestart()
 		}
 		a.notify(cx)
 	})
@@ -372,9 +375,6 @@ func (a *App) confirmClose(cx *gk.Cx) bool {
 func (a *App) target() *core.Target {
 	return &a.session.Draft[max(0, min(a.selected, len(a.session.Draft)-1))]
 }
-
-// targetMut is target_mut; the same pointer as target in Go.
-func (a *App) targetMut() *core.Target { return a.target() }
 
 func (a *App) command(command transport.Command) bool {
 	if err := a.transport.send(command); err != nil {
@@ -411,8 +411,8 @@ func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 	a.meter = nil
 	clear(a.meterProgress)
 	a.levels.Clear()
-	a.startup = telemetryStartupWindow{}
-	a.recentFaults = telemetryRecentFaults{}
+	a.startup = telemetry.StartupWindow{}
+	a.recentFaults = telemetry.RecentFaults{}
 	a.engineSeen = nil
 	a.streamConnected = false
 	a.streamError = nil
@@ -448,8 +448,8 @@ func (a *App) disconnect(cx *gk.Cx) {
 	a.meter = nil
 	clear(a.meterProgress)
 	a.levels.Clear()
-	a.startup = telemetryStartupWindow{}
-	a.recentFaults = telemetryRecentFaults{}
+	a.startup = telemetry.StartupWindow{}
+	a.recentFaults = telemetry.RecentFaults{}
 	a.engineSeen = nil
 	a.message = "Disconnected • mixer processing is independent of this app"
 	a.notify(cx)
@@ -710,7 +710,7 @@ func (a *App) poll(cx *gk.Cx) {
 		case transport.EventKindMeter:
 			var meter core.Meter
 			if core.DecodeStrict(k.Meter, &meter) == nil && a.session.Saved != nil &&
-				telemetryReceiveMeter(a.session.Saved, &meter, a.meterProgress, &a.engineSeen, time.Now()) {
+				telemetry.ReceiveMeter(a.session.Saved, &meter, a.meterProgress, &a.engineSeen, time.Now()) {
 				a.levels.Receive(time.Now(), meterTargets(&meter))
 				var rate uint32
 				if a.session.Saved != nil {
@@ -859,7 +859,7 @@ func (a *App) freshMeterFor(targetID string) (*core.TargetMeter, bool) {
 	if !a.session.Connected || !a.streamConnected || a.session.Saved == nil || a.meter == nil {
 		return nil, false
 	}
-	return telemetryFreshMeter(a.session.Saved, a.meter, a.meterProgress, targetID, a.engineSeen, time.Now())
+	return telemetry.FreshMeter(a.session.Saved, a.meter, a.meterProgress, targetID, a.engineSeen, time.Now())
 }
 
 // reportedLookahead is what the mixer reports for the selected path: the
@@ -903,8 +903,8 @@ func (a *App) systemStatus() (string, uint32, bool) {
 		return "Processing path change failed", Warn, true
 	}
 	if a.session.Saved != nil {
-		if _, ok := telemetryEngineError(a.session.Saved); ok {
-			return telemetryEngineErrorNoticeTitle, Warn, true
+		if _, ok := telemetry.EngineError(a.session.Saved); ok {
+			return telemetry.EngineErrorNoticeTitle, Warn, true
 		}
 	}
 	return "", 0, false
@@ -973,9 +973,9 @@ func (a *App) status() (string, uint32) {
 	return "Saved · audio unconfirmed", Muted
 }
 
-func (a *App) audioWarning() (telemetryWarning, bool) { return a.audioWarningFor(a.target().ID) }
+func (a *App) audioWarning() (telemetry.Warning, bool) { return a.audioWarningFor(a.target().ID) }
 
-func (a *App) audioWarningFor(targetID string) (telemetryWarning, bool) {
+func (a *App) audioWarningFor(targetID string) (telemetry.Warning, bool) {
 	meter, synthetic := a.freshMeterFor(targetID)
 	state := a.session.Saved
 	if meter == nil || state == nil || synthetic || state.Routing.Status != core.RoutingPhaseActive {
@@ -1073,21 +1073,21 @@ func windowTitle() string {
 // the installer starts this executable in, then the window.
 func Run() {
 	args := os.Args
-	if len(args) > 1 && args[1] == installerUSBRuleFlag {
+	if len(args) > 1 && args[1] == helper.USBRuleFlag {
 		// Started through pkexec by the USB permission screen: write the
 		// embedded rule, reload udev, exit. No window, no other input.
-		if err := installerInstallUSBRule(); err != nil {
+		if err := helper.InstallUSBRule(); err != nil {
 			fmt.Fprintf(os.Stderr, "rc2fx: %s\n", err)
 			os.Exit(1)
 		}
 		return
 	}
-	if len(args) > 1 && args[1] == installerHelperFlag {
+	if len(args) > 1 && args[1] == helper.Flag {
 		// The privileged installer process: no window, JSON lines on stdio.
 		if len(args) < 4 {
 			os.Exit(2)
 		}
-		if err := installerServe(args[2], args[3]); err != nil {
+		if err := helper.Serve(args[2], args[3]); err != nil {
 			fmt.Fprintf(os.Stderr, "rc2fx installer helper: %s\n", err)
 			os.Exit(1)
 		}
@@ -1112,7 +1112,7 @@ func Run() {
 		}), a.root)
 		// A confirmed "Restart to update" hands over to the updater as RC2FX
 		// quits, whichever prompt ends up quitting.
-		gk.OnAppQuit(cx, func(*gk.Cx) { a.selfUpdate.launchOnQuit() })
+		gk.OnAppQuit(cx, func(*gk.Cx) { a.selfUpdate.LaunchOnQuit() })
 		// The close button (and Alt-F4, Cmd-W) asks as Quit does; the quit
 		// itself comes from requestQuit or the prompt it opens.
 		gk.OnWindowShouldClose(cx, a.window, func(cx *gk.Cx) bool {

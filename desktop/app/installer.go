@@ -31,6 +31,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
+	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
@@ -521,7 +522,7 @@ func (a *App) openTask(cx *gk.Cx, kind taskKind) {
 	// This app runs the storage fix's request, so its installs may fix the
 	// mixer's storage first.
 	i.model.FixPolicy = installflow.FixAuto
-	i.model.Bundled = cloneString(a.bundledMixerSoftware)
+	i.model.Bundled = opt.Clone(a.bundledMixerSoftware)
 	i.model.SettledFlash = a.settledFlash
 	if kind == taskRemove {
 		i.model.SetStock(true)
@@ -530,21 +531,6 @@ func (a *App) openTask(cx *gk.Cx, kind taskKind) {
 	i.send(first)
 	a.installer = i
 	a.notify(cx)
-}
-
-func cloneString(v *string) *string {
-	if v == nil {
-		return nil
-	}
-	c := *v
-	return &c
-}
-
-func sameString(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
 }
 
 // grantInstallerAccess asks the system for administrator access: this is
@@ -737,8 +723,8 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 	}
 	var mixer, fw *string
 	if sameMixer && a.deviceVersions != nil {
-		mixer = cloneString(a.deviceVersions.Runtime)
-		fw = cloneString(a.deviceVersions.Firmware)
+		mixer = opt.Clone(a.deviceVersions.Runtime)
+		fw = opt.Clone(a.deviceVersions.Firmware)
 	}
 	// RC2FX names the exact firmware profile it runs on; without RC2FX, the
 	// mixer's USB device information still says which RØDE firmware it has,
@@ -749,11 +735,11 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 		}
 	}
 	changed := false
-	if !sameString(i.model.Installed, mixer) || !sameString(i.model.InstalledFirmware, fw) {
+	if !opt.Equal(i.model.Installed, mixer) || !opt.Equal(i.model.InstalledFirmware, fw) {
 		i.model.SetInstalled(mixer, fw)
 		changed = true
 	}
-	if !sameString(engine, i.engine) {
+	if !opt.Equal(engine, i.engine) {
 		var service *installer.Service
 		if engine != nil {
 			s := installer.EmbeddedService([]byte(*engine))
@@ -810,7 +796,7 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 		}
 		if o.err == nil {
 			if offers, ok := installflow.MixerReleaseOffers(o.reply); ok {
-				a.appUpdate.setSigned(slices.Clone(offers))
+				a.appUpdate.SetSigned(slices.Clone(offers))
 			}
 		}
 		if installflow.ChangesCatalog(o.request) {
@@ -826,7 +812,7 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 	}
 	if i.busy() {
 		progress := i.runner.currentProgress()
-		if !sameProgress(progress, i.progress) {
+		if !opt.Equal(progress, i.progress) {
 			i.progress = progress
 			changed = true
 			// The storage fix's steps come as progress.
@@ -905,13 +891,6 @@ func (a *App) trackStage(i *Installer) bool {
 		changed = true
 	}
 	return changed
-}
-
-func sameProgress(a, b *installer.Progress) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
 }
 
 // installMixerUpdate is a notice's Install update: open Update RC2FX on
@@ -1311,7 +1290,7 @@ func (p *picker[V]) sync(cx *gk.Cx, items []pickerItem[V], selected *V) {
 		k := p.key(*selected)
 		key = &k
 	}
-	if changed || !sameString(key, p.selected) {
+	if changed || !opt.Equal(key, p.selected) {
 		if key != nil {
 			p.state.SetSelectedValue(cx, *key)
 		} else {

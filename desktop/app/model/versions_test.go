@@ -18,11 +18,11 @@ func inputs(rt, fw *string) Inputs {
 	return Inputs{
 		App:                     "0.3.0",
 		InstalledRuntime:        rt,
-		AvailableRuntime:        ptr("0.3.0"),
+		AvailableRuntime:        new("0.3.0"),
 		SignedKnown:             true,
 		NeedsApp:                nil,
 		InstalledFirmware:       fw,
-		NewestSupportedFirmware: ptr("1.8.0"),
+		NewestSupportedFirmware: new("1.8.0"),
 		RodeFirmware:            nil,
 		DeviceProtocol:          protocol(0),
 	}
@@ -60,13 +60,13 @@ func bundled(version string) installer.MixerUpdateState {
 }
 
 func TestNewerRodeFirmwareRC2FXCantInstallIsNotCalledUpToDate(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	if o.Lead.Title != "Everything is up to date" {
 		t.Fatalf("lead %q", o.Lead.Title)
 	}
 
-	i.RodeFirmware = ptr("1.9.0")
+	i.RodeFirmware = new("1.9.0")
 	o = OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	if o.Lead.Title != "RC2FX is up to date" {
 		t.Fatalf("lead %q", o.Lead.Title)
@@ -87,7 +87,7 @@ func TestNewerRodeFirmwareRC2FXCantInstallIsNotCalledUpToDate(t *testing.T) {
 
 	// RØDE's newest is what RC2FX supports, or what the mixer has.
 	for _, rode := range []string{"1.8.0", "1.7.0"} {
-		i.RodeFirmware = ptr(rode)
+		i.RodeFirmware = new(rode)
 		o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 		if o.Lead.Title != "Everything is up to date" {
 			t.Fatalf("%s: lead %q", rode, o.Lead.Title)
@@ -95,8 +95,8 @@ func TestNewerRodeFirmwareRC2FXCantInstallIsNotCalledUpToDate(t *testing.T) {
 	}
 
 	// An update RC2FX can install still leads; RØDE's news is a note.
-	i.InstalledFirmware = ptr("1.7.0")
-	i.RodeFirmware = ptr("1.9.0")
+	i.InstalledFirmware = new("1.7.0")
+	i.RodeFirmware = new("1.9.0")
 	o = OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	if o.Lines[2].Tone != ToneUpdate {
 		t.Fatalf("tone %v", o.Lines[2].Tone)
@@ -107,7 +107,7 @@ func TestNewerRodeFirmwareRC2FXCantInstallIsNotCalledUpToDate(t *testing.T) {
 }
 
 func TestProtocolMismatchBlocksUpdatesAndSaysUpdateTheApp(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.8.0"))
+	i := inputs(new("0.2.0"), new("1.8.0"))
 	i.DeviceProtocol = protocol(1)
 	s := Summarize(&i)
 	if s.UpdateAvailable() {
@@ -120,7 +120,7 @@ func TestProtocolMismatchBlocksUpdatesAndSaysUpdateTheApp(t *testing.T) {
 }
 
 func TestOlderProtocolOffersCompatibleMixerSoftware(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.8.0"))
+	i := inputs(new("0.2.0"), new("1.8.0"))
 	i.DeviceProtocol = protocol(-1)
 	s := Summarize(&i)
 	if s.Compatibility != CompatibilityMixerOlder {
@@ -131,7 +131,7 @@ func TestOlderProtocolOffersCompatibleMixerSoftware(t *testing.T) {
 		t.Fatalf("notice %+v %v", n, ok)
 	}
 	// Never if the combined image would take the firmware backwards.
-	i.InstalledFirmware = ptr("1.9.0")
+	i.InstalledFirmware = new("1.9.0")
 	if n, ok := Summarize(&i).Notice(); !ok || n.OfferInstaller {
 		t.Fatalf("notice %+v %v", n, ok)
 	}
@@ -142,7 +142,7 @@ func TestOlderProtocolOffersCompatibleMixerSoftware(t *testing.T) {
 }
 
 func TestUnknownProtocolNeverOffersAnUpdate(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.8.0"))
+	i := inputs(new("0.2.0"), new("1.8.0"))
 	i.DeviceProtocol = nil
 	s := Summarize(&i)
 	if s.Compatibility != CompatibilityUnknown {
@@ -200,13 +200,13 @@ func TestUnknownDeviceVersionsNeverPrompt(t *testing.T) {
 }
 
 func TestUnparseableIsUnknown(t *testing.T) {
-	if got := StandingOf(ptr("dev-build"), ptr("0.3.0")); got != StandingUnknown {
+	if got := StandingOf(new("dev-build"), new("0.3.0")); got != StandingUnknown {
 		t.Fatalf("standing %v", got)
 	}
 }
 
 func TestNewerDeviceIsNotADowngradeOffer(t *testing.T) {
-	i := inputs(ptr("0.4.0"), ptr("1.9.0"))
+	i := inputs(new("0.4.0"), new("1.9.0"))
 	s := Summarize(&i)
 	if s.Runtime != StandingNewer || s.Firmware != StandingNewer {
 		t.Fatalf("summary %+v", s)
@@ -223,7 +223,7 @@ func TestNewerDeviceIsNotADowngradeOffer(t *testing.T) {
 func TestMixedVersionsNeverOfferTheCombinedFlash(t *testing.T) {
 	// Older mixer software but newer RØDE firmware, and the reverse.
 	for _, c := range [][2]string{{"0.2.0", "1.9.0"}, {"0.4.0", "1.7.6"}} {
-		i := inputs(ptr(c[0]), ptr(c[1]))
+		i := inputs(new(c[0]), new(c[1]))
 		s := Summarize(&i)
 		if s.UpdateAvailable() {
 			t.Fatalf("%s %s", c[0], c[1])
@@ -235,7 +235,7 @@ func TestMixedVersionsNeverOfferTheCombinedFlash(t *testing.T) {
 }
 
 func TestOneUnknownPartNeverOffersTheCombinedFlash(t *testing.T) {
-	for _, c := range [][2]*string{{ptr("0.2.0"), nil}, {nil, ptr("1.7.6")}} {
+	for _, c := range [][2]*string{{new("0.2.0"), nil}, {nil, new("1.7.6")}} {
 		i := inputs(c[0], c[1])
 		s := Summarize(&i)
 		if s.UpdateAvailable() {
@@ -248,7 +248,7 @@ func TestOneUnknownPartNeverOffersTheCombinedFlash(t *testing.T) {
 }
 
 func TestOlderRuntimeOffersFlashAndRestart(t *testing.T) {
-	i := inputs(ptr("0.2.1"), ptr("1.8.0"))
+	i := inputs(new("0.2.1"), new("1.8.0"))
 	s := Summarize(&i)
 	if s.Runtime != StandingUpdateAvailable {
 		t.Fatalf("runtime %v", s.Runtime)
@@ -269,7 +269,7 @@ func TestOlderRuntimeOffersFlashAndRestart(t *testing.T) {
 }
 
 func TestOlderFirmwareOffersUpdate(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.7.6"))
+	i := inputs(new("0.3.0"), new("1.7.6"))
 	n, ok := Summarize(&i).Notice()
 	if !ok || !strings.Contains(n.Text, "RØDE firmware") {
 		t.Fatalf("notice %+v %v", n, ok)
@@ -277,7 +277,7 @@ func TestOlderFirmwareOffersUpdate(t *testing.T) {
 }
 
 func TestAnAppUpdateLeadsAndOffersItsChanges(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	o := OverviewOf(&i, appUpdate(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	if o.Lead.Title != "RC2FX 0.4.0 is available" {
 		t.Fatalf("lead %q", o.Lead.Title)
@@ -291,7 +291,7 @@ func TestAnAppUpdateLeadsAndOffersItsChanges(t *testing.T) {
 }
 
 func TestAMixerUpdateLeadsWhenTheAppIsCurrent(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.7.0"))
+	i := inputs(new("0.2.0"), new("1.7.0"))
 	o := OverviewOf(&i, current(), bundled("0.3.0"))
 	if o.Lead.Title != "A mixer update is ready" {
 		t.Fatalf("lead %q", o.Lead.Title)
@@ -302,7 +302,7 @@ func TestAMixerUpdateLeadsWhenTheAppIsCurrent(t *testing.T) {
 }
 
 func TestNothingToDoSaysSoAndOffersNothing(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	if o.Lead.Title != "Everything is up to date" {
 		t.Fatalf("lead %q", o.Lead.Title)
@@ -313,8 +313,8 @@ func TestNothingToDoSaysSoAndOffersNothing(t *testing.T) {
 }
 
 func TestAMixerNewerThanTheAppPointsAtTheAppUpdate(t *testing.T) {
-	i := inputs(ptr("0.4.0"), ptr("1.8.0"))
-	i.AvailableRuntime = ptr("0.3.0")
+	i := inputs(new("0.4.0"), new("1.8.0"))
+	i.AvailableRuntime = new("0.3.0")
 	waiting := OverviewOf(&i, appUpdate(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	if got := line(t, waiting, PartMixer).Status; got != "Update the app first" {
 		t.Fatalf("status %q", got)
@@ -326,12 +326,12 @@ func TestAMixerNewerThanTheAppPointsAtTheAppUpdate(t *testing.T) {
 }
 
 func TestAnUnknownLatestVersionIsOnlySaidWhenNothingBetterIs(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerUnknown})
 	if !slices.Equal(o.Details, []string{"The latest published mixer software is unknown."}) {
 		t.Fatalf("details %q", o.Details)
 	}
-	i = inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i = inputs(new("0.3.0"), new("1.8.0"))
 	i.NeedsApp = &AppNeed{Version: "9.0.0", MinimumApp: "99.0.0"}
 	o = OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerUnknown})
 	if anyDetail(o, contains("unknown")) {
@@ -364,7 +364,7 @@ func TestOnlyCompatibleOffersCountAsAvailable(t *testing.T) {
 	if got, ok := NewestAvailable(offers, nil); !ok || got != "2.0.0" {
 		t.Fatalf("newest %q %v", got, ok)
 	}
-	if got, ok := NewestAvailable(offers, ptr("3.0.0")); !ok || got != "3.0.0" {
+	if got, ok := NewestAvailable(offers, new("3.0.0")); !ok || got != "3.0.0" {
 		t.Fatalf("a newer built-in copy is available too: %q %v", got, ok)
 	}
 	if got, ok := NewestAvailable(nil, nil); ok {
@@ -379,20 +379,20 @@ func TestNewerSoftwareThatNeedsANewerAppIsNamedWithTheVersionItNeeds(t *testing.
 		offer("2.0.0", "0.0.1", protocol),
 	}
 	needed := AppNeed{Version: "9.0.0", MinimumApp: "99.0.0"}
-	if got, ok := NeedsNewerApp(offers, ptr("2.0.0")); !ok || got != needed {
+	if got, ok := NeedsNewerApp(offers, new("2.0.0")); !ok || got != needed {
 		t.Fatalf("needs %+v %v", got, ok)
 	}
 	if got, ok := NeedsNewerApp(offers, nil); !ok || got != needed {
 		t.Fatalf("needs %+v %v", got, ok)
 	}
-	if got, ok := NeedsNewerApp(offers, ptr("9.0.0")); ok {
+	if got, ok := NeedsNewerApp(offers, new("9.0.0")); ok {
 		t.Fatalf("needs %+v", got)
 	}
-	if got, ok := NeedsNewerApp(offers[1:], ptr("1.0.0")); ok {
+	if got, ok := NeedsNewerApp(offers[1:], new("1.0.0")); ok {
 		t.Fatalf("needs %+v", got)
 	}
 
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	i.NeedsApp = &AppNeed{Version: "9.0.0", MinimumApp: "99.0.0"}
 	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	mixer := line(t, o, PartMixer)
@@ -408,7 +408,7 @@ func TestNewerSoftwareThatNeedsANewerAppIsNamedWithTheVersionItNeeds(t *testing.
 }
 
 func TestWhatCanBeInstalledNowStillComesFirst(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.8.0"))
+	i := inputs(new("0.2.0"), new("1.8.0"))
 	i.NeedsApp = &AppNeed{Version: "9.0.0", MinimumApp: "99.0.0"}
 	o := OverviewOf(&i, current(), bundled("0.3.0"))
 	if got := line(t, o, PartMixer).Status; got != "Update available" {
@@ -423,8 +423,8 @@ func TestWhatCanBeInstalledNowStillComesFirst(t *testing.T) {
 }
 
 func TestASignedUpdateNeedsNoPayloadInTheApp(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.8.0"))
-	i.AvailableRuntime = ptr("0.3.0")
+	i := inputs(new("0.2.0"), new("1.8.0"))
+	i.AvailableRuntime = new("0.3.0")
 	o := OverviewOf(&i, current(), bundled("0.3.0"))
 	if !o.OfferInstaller {
 		t.Fatal("no installer offered")
@@ -435,7 +435,7 @@ func TestASignedUpdateNeedsNoPayloadInTheApp(t *testing.T) {
 }
 
 func TestWithoutASignedAnswerTheAppIsNotBlamedAndTheInstallerCanCheck(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	i.AvailableRuntime = nil
 	i.SignedKnown = false
 	state := installer.MixerUpdateState{Kind: installer.MixerAppUpdateRequired, Latest: "0.4.0", AppVersion: "0.4.0"}
@@ -453,14 +453,14 @@ func TestWithoutASignedAnswerTheAppIsNotBlamedAndTheInstallerCanCheck(t *testing
 		t.Fatalf("details %q", o.Details)
 	}
 	// Newer than anything known: nothing to look for.
-	i.InstalledFirmware = ptr("1.9.0")
+	i.InstalledFirmware = new("1.9.0")
 	if OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerUnknown}).OfferInstaller {
 		t.Fatal("installer offered")
 	}
 }
 
 func TestAPublishedMixerNeverOffersTheInstaller(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	state := installer.MixerUpdateState{Kind: installer.MixerAppUpdateRequired, Latest: "0.4.0", AppVersion: "0.4.0"}
 	o := OverviewOf(&i, current(), state)
 	if o.OfferInstaller {
@@ -479,7 +479,7 @@ func TestAPublishedMixerNeverOffersTheInstaller(t *testing.T) {
 }
 
 func TestABundledUpdateOffersTheInstallerAndItsChanges(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.8.0"))
+	i := inputs(new("0.2.0"), new("1.8.0"))
 	o := OverviewOf(&i, current(), bundled("0.3.0"))
 	if !o.OfferInstaller {
 		t.Fatal("no installer offered")
@@ -499,7 +499,7 @@ func TestABundledUpdateOffersTheInstallerAndItsChanges(t *testing.T) {
 }
 
 func TestABlockedUpdateExplainsItselfAndOffersNothing(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.9.0"))
+	i := inputs(new("0.2.0"), new("1.9.0"))
 	o := OverviewOf(&i, current(), bundled("0.3.0"))
 	if o.OfferInstaller {
 		t.Fatal("installer offered")
@@ -519,7 +519,7 @@ func TestABlockedUpdateExplainsItselfAndOffersNothing(t *testing.T) {
 }
 
 func TestTooOldMixerSoftwareIsTheMostUrgent(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.8.0"))
+	i := inputs(new("0.2.0"), new("1.8.0"))
 	i.DeviceProtocol = protocol(-1)
 	o := OverviewOf(&i, current(), bundled("0.3.0"))
 	if !o.OfferInstaller {
@@ -555,7 +555,7 @@ func TestADisconnectedMixerStaysUnknown(t *testing.T) {
 }
 
 func TestAnUnknownPublishedVersionStaysVisible(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	o := OverviewOf(&i, AppStanding{Kind: AppStandingUnknown}, installer.MixerUpdateState{Kind: installer.MixerUnknown})
 	if got := line(t, o, PartMixer).Status; got != "Up to date" {
 		t.Fatalf("status %q", got)
@@ -566,7 +566,7 @@ func TestAnUnknownPublishedVersionStaysVisible(t *testing.T) {
 }
 
 func TestNewerSoftwareOffersNothing(t *testing.T) {
-	i := inputs(ptr("0.4.0"), ptr("1.8.0"))
+	i := inputs(new("0.4.0"), new("1.8.0"))
 	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerNewer})
 	if got := line(t, o, PartMixer).Status; got != "Newer" {
 		t.Fatalf("status %q", got)
@@ -580,7 +580,7 @@ func TestNewerSoftwareOffersNothing(t *testing.T) {
 }
 
 func TestUpdatesAreCountedAndACheckingAppSaysSo(t *testing.T) {
-	i := inputs(ptr("0.2.0"), ptr("1.7.0"))
+	i := inputs(new("0.2.0"), new("1.7.0"))
 	state := bundled("0.3.0")
 	o := OverviewOf(&i, AppStanding{Kind: AppStandingUpdate, Version: "0.4.0"}, state)
 	if o.Flag != "3 updates available" {
@@ -598,7 +598,7 @@ func TestUpdatesAreCountedAndACheckingAppSaysSo(t *testing.T) {
 }
 
 func TestAllCurrentIsUpToDate(t *testing.T) {
-	i := inputs(ptr("0.3.0"), ptr("1.8.0"))
+	i := inputs(new("0.3.0"), new("1.8.0"))
 	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
 	if o.Flag != "Up to date" || o.FlagTone != ToneQuiet {
 		t.Fatalf("flag %q %v", o.Flag, o.FlagTone)

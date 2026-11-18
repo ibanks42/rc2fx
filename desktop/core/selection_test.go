@@ -12,7 +12,7 @@ func ids(values ...string) []string { return append([]string{}, values...) }
 
 func TestCapacityBlocksOverfullDraftsWithoutChangingCurrentSettings(t *testing.T) {
 	saved := selectionState()
-	saved.Selection.ChannelCapacity = ptr[uint32](3)
+	saved.Selection.ChannelCapacity = new(uint32(3))
 	session := DefaultSession()
 	receive(t, &session, saved.Clone())
 	session.SelectionDraft = ids("usb-main", "send-chat")
@@ -23,7 +23,7 @@ func TestCapacityBlocksOverfullDraftsWithoutChangingCurrentSettings(t *testing.T
 	ok(t, must2(session.BeginSelection()))
 	session.SelectionDraft = session.SelectionDraft[:0]
 	ok(t, must2(session.BeginSelection()))
-	saved.Selection.ChannelCapacity = ptr[uint32](129)
+	saved.Selection.ChannelCapacity = new(uint32(129))
 	fails(t, saved.Validate())
 }
 

@@ -305,10 +305,6 @@ func since(now, earlier time.Time) time.Duration {
 	return now.Sub(earlier)
 }
 
-func ptr[T any](v T) *T {
-	return &v
-}
-
 // orEmpty keeps an empty list a list: a nil slice would encode as null.
 func orEmpty(ids []string) []string {
 	if ids == nil {
@@ -402,7 +398,7 @@ func (m *mockMixer) beginChange(now time.Time) {
 	m.engine.AppliedRevision = 0
 	m.engine.Message = "Settings saved; waiting for native audio acknowledgement"
 	m.selection.Allowed = false
-	m.settleAt = ptr(now.Add(settleTime))
+	m.settleAt = new(now.Add(settleTime))
 }
 
 // settle: the engine has caught up with the saved settings.
@@ -452,7 +448,7 @@ func (m *mockMixer) advance(now time.Time) {
 	if m.engine.Status == core.EnginePhaseRunning && since(now, m.lastXrun) >= xrunPeriod {
 		m.lastXrun = now
 		m.xruns++
-		details := core.EventDetails{DelayedUs: ptr(uint64(180))}
+		details := core.EventDetails{DelayedUs: new(uint64(180))}
 		m.record(core.DiagnosticsKindXrun, "Simulated xrun", details, now)
 	}
 }
@@ -561,7 +557,7 @@ func (m *mockMixer) save(update core.ConfigUpdate, now time.Time) (usbproto.Repl
 	}
 	// Saving what a live edit already plays changes no audio, so the engine
 	// stays running, as the mixer's does.
-	alreadyRunning := m.engine.Status == core.EnginePhaseRunning && targetsEqual(m.running(), update.Targets)
+	alreadyRunning := m.engine.Status == core.EnginePhaseRunning && core.TargetsEqual(m.running(), update.Targets)
 	m.config.Revision++
 	m.config.Targets = update.Targets
 	m.liveTargets = nil
@@ -587,7 +583,7 @@ func (m *mockMixer) sshStatus() core.SSHStatus {
 		Managed:            m.sshFingerprint != nil,
 		ManagedFingerprint: m.sshFingerprint,
 		HostKeys:           []string{},
-		ServerRunning:      ptr(true),
+		ServerRunning:      new(true),
 	}
 }
 
@@ -609,7 +605,7 @@ func (m *mockMixer) setSSH(body json.RawMessage) (usbproto.Reply, *refused) {
 	if err != nil {
 		return usbproto.Reply{}, &refused{mockFailure(400, err.Error())}
 	}
-	m.sshFingerprint = ptr(key.Fingerprint())
+	m.sshFingerprint = new(key.Fingerprint())
 	return mockReply(200, m.sshStatus()), nil
 }
 
@@ -630,26 +626,13 @@ func (m *mockMixer) applyLive(update core.ConfigUpdate) (usbproto.Reply, *refuse
 	if core.LiveNeedsSave(m.running(), update.Targets) {
 		return usbproto.Reply{}, &refused{mockFailure(422, "liveRequiresSave: this change needs a save")}
 	}
-	if targetsEqual(m.config.Targets, update.Targets) {
+	if core.TargetsEqual(m.config.Targets, update.Targets) {
 		m.liveTargets = nil
 	} else {
 		m.liveTargets = core.CloneTargets(update.Targets)
 	}
 	return mockReply(200, object(member{"accepted", json.RawMessage("true")},
 		member{"baseRevision", json.RawMessage(strconv.FormatUint(m.config.Revision, 10))})), nil
-}
-
-// targetsEqual is whether two target lists hold the same settings.
-func targetsEqual(a, b []core.Target) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !a[i].Equal(b[i]) {
-			return false
-		}
-	}
-	return true
 }
 
 func (m *mockMixer) setRouting(body json.RawMessage, now time.Time) (usbproto.Reply, *refused) {
@@ -797,7 +780,7 @@ func (m *mockMixer) nextEvent(now time.Time) json.RawMessage {
 		return event
 	}
 	if m.lastUSB == nil || since(now, *m.lastUSB) >= usbPeriod {
-		m.lastUSB = ptr(now)
+		m.lastUSB = new(now)
 		usb, err := marshal(core.USBStatus{USB1: core.USBLinkStateConfigured})
 		if err != nil {
 			panic("mock replies serialize")
@@ -853,7 +836,7 @@ func (m *mockMixer) targetMeter(target *core.Target, seconds float64) core.Targe
 	}
 	var performance *core.Performance
 	if active {
-		performance = ptr(m.performance(suppressionFrames))
+		performance = new(m.performance(suppressionFrames))
 	}
 	meter := core.TargetMeter{
 		ID:                target.ID,
@@ -901,10 +884,10 @@ func (m *mockMixer) performance(workerFrames uint64) core.Performance {
 	callbacks := m.frames / uint64(blockSize)
 	var callbackRecent, workerRecent *uint64
 	if callbacks > 0 {
-		callbackRecent = ptr(uint64(910_000))
+		callbackRecent = new(uint64(910_000))
 	}
 	if workerFrames > 0 {
-		workerRecent = ptr(uint64(3_800_000))
+		workerRecent = new(uint64(3_800_000))
 	}
 	return core.Performance{
 		CallbackBudgetNs:    2_333_333,
@@ -913,8 +896,8 @@ func (m *mockMixer) performance(workerFrames uint64) core.Performance {
 		Callback:            timing(callbacks, 420_000, 910_000),
 		WorkerWall:          timing(workerFrames, 2_100_000, 3_800_000),
 		WorkerCPU:           timing(workerFrames, 1_900_000, 3_400_000),
-		HelperLate:          ptr(uint64(0)),
-		HelperStalls:        ptr(uint64(0)),
+		HelperLate:          new(uint64(0)),
+		HelperStalls:        new(uint64(0)),
 		CallbackRecentMaxNs: callbackRecent,
 		WorkerRecentMaxNs:   workerRecent,
 	}
@@ -922,11 +905,11 @@ func (m *mockMixer) performance(workerFrames uint64) core.Performance {
 
 func versions() core.DeviceVersions {
 	return core.DeviceVersions{
-		Runtime:         ptr(mockRuntime),
-		Protocol:        ptr(uint32(core.MixerProtocolVersion)),
+		Runtime:         new(mockRuntime),
+		Protocol:        new(uint32(core.MixerProtocolVersion)),
 		NativeProtocol:  nil,
-		Firmware:        ptr(mockFirmware),
-		FirmwareProfile: ptr(mockFirmwareProfile),
+		Firmware:        new(mockFirmware),
+		FirmwareProfile: new(mockFirmwareProfile),
 		InPlaceUpdates:  nil,
 	}
 }
@@ -937,7 +920,7 @@ func inventory() core.StockInventory {
 		inputs = append(inputs, core.StockSource{
 			ID:       fmt.Sprintf("input-%d", fader.sourceID),
 			SourceID: fader.sourceID,
-			Fader:    ptr(uint8(i + 1)),
+			Fader:    new(uint8(i + 1)),
 			Name:     fader.name,
 			Color:    fader.color,
 			TargetID: fader.target,

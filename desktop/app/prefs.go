@@ -6,15 +6,15 @@ package app
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 
+	"github.com/ibanks42/rc2fx/desktop/app/edit"
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 )
 
 func preferencesDir() (string, bool) {
@@ -128,7 +128,7 @@ func rememberView(key string, value core.Value) {
 		return
 	}
 	// A preference that fails to save only costs the choice next time.
-	_ = writeExport(path, view.json())
+	_ = edit.WriteExport(path, view.json())
 }
 
 // rememberedTelemetry is whether the Telemetry section was last on.
@@ -199,35 +199,21 @@ func saveFlag(path, key string, on bool) error {
 		return errors.New("No settings parent")
 	}
 	if err := os.MkdirAll(dir, 0o777); err != nil {
-		return errors.New(ioMessage(err))
+		return errors.New(edit.IOMessage(err))
 	}
 	view := readView(path)
 	view[key] = core.BoolValue(on)
-	return writeExport(path, view.json())
-}
-
-// ioMessage is a Rust std::io::Error's Display for an OS error: the system's
-// text, capitalised as strerror gives it, and " (os error N)".
-func ioMessage(err error) string {
-	var errno syscall.Errno
-	if !errors.As(err, &errno) {
-		return err.Error()
-	}
-	text := errno.Error()
-	if text != "" {
-		text = strings.ToUpper(text[:1]) + text[1:]
-	}
-	return fmt.Sprintf("%s (os error %d)", text, int(errno))
+	return edit.WriteExport(path, view.json())
 }
 
 // USBUndo is how to remove the rule again, as the screen shows and copies it.
-const USBUndo = "sudo rm /etc/udev/rules.d/70-rc2fx.rules"
+const USBUndo = "sudo rm " + helper.USBRulePath
 
 // usbPermission is whether Linux refused the app the mixer's USB 1 control
 // interface: the one failure the udev rule fixes
 // (rc2fx_installer::helper::USB_PERMISSION).
 func usbPermission(lastResult string) bool {
-	return strings.HasPrefix(lastResult, installerUSBPermission)
+	return strings.HasPrefix(lastResult, helper.USBPermission)
 }
 
 // mixerFound: this exact discovery failure is emitted only after finding one

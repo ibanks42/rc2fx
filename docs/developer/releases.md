@@ -10,7 +10,7 @@ started manually.
 
 | Version | Where it lives | Released as |
 | --- | --- | --- |
-| Desktop app | `[workspace.package] version` in `Cargo.toml`, with its Go copies `AppVersion` in `desktop/installer/installer.go` and `desktop/app/model/versions.go` | `vX.Y.Z`, with the app packages |
+| Desktop app | `[workspace.package] version` in `Cargo.toml`, with its Go copy `AppVersion` in `desktop/installer/installer.go`, which release preparation bumps with it | `vX.Y.Z`, with the app packages |
 | RC2FX mixer runtime | `config/mixer-release.json` | `mixer-vX.Y.Z`, with a signed standalone payload |
 | RØDE firmware | the versions pinned in `config/firmware-profiles.json` | RØDE's own releases; RC2FX publishes nothing |
 

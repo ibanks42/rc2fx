@@ -27,13 +27,12 @@ def version_tuple(version):
     return tuple(map(int, version.split(".")))
 
 
-# The Go desktop app's copies of the app version, which the Rust app took
-# from the workspace version (CARGO_PKG_VERSION): the version packages are
-# named and stamped with, the version the app reports, and the mock mixer's
-# runtime version.
+# The Go desktop's copies of the workspace version: the app version
+# (installer.AppVersion, which packages are named with and the app reports;
+# package model refers to it rather than keeping a copy) and the mock
+# mixer's runtime version.
 GO_VERSIONS = {
-    Path("desktop/installer/installer.go"): "var AppVersion",
-    Path("desktop/app/model/versions.go"): "var AppVersion",
+    Path("desktop/installer/installer.go"): "const AppVersion",
     Path("desktop/transport/mock.go"): "const mockRuntime",
 }
 

@@ -23,10 +23,6 @@ type AppUpdate struct {
 	changes changesDialog
 }
 
-// setSigned is AppUpdate::set_signed, which the installer also calls when it
-// lists signed releases itself.
-func (u *AppUpdate) setSigned(offers []installer.MixerOffer) { u.SetSigned(offers) }
-
 // link is a ghost button opening url, nil (ok false) unless updates.SafeURL
 // allows it.
 func link(id gk.ID, label, url string) (gk.ButtonEl, bool) {

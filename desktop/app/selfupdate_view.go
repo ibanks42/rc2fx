@@ -16,22 +16,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate/vpkc"
 )
 
-// SelfUpdate is self_update.rs SelfUpdate (app/selfupdate), with the
-// lowerCamel names app.go calls.
-type SelfUpdate struct {
-	selfupdate.SelfUpdate
-}
-
 // newSelfUpdate is SelfUpdate::new: Velopack's manager when Velopack
 // installed this copy (and this build has it), else a copy that only links
 // to the release page.
-func newSelfUpdate() SelfUpdate { return SelfUpdate{selfupdate.New(vpkc.Open)} }
-
-// launchOnQuit is SelfUpdate::launch_on_quit (a no-op once taken).
-func (u *SelfUpdate) launchOnQuit() { u.LaunchOnQuit() }
-
-// cancelRestart is SelfUpdate::cancel_restart.
-func (u *SelfUpdate) cancelRestart() { u.CancelRestart() }
+func newSelfUpdate() selfupdate.SelfUpdate { return selfupdate.New(vpkc.Open) }
 
 // startSelfUpdate is start_self_update: at startup, check a package an
 // earlier run downloaded.
@@ -93,14 +81,10 @@ func (a *App) downloadAppUpdate(cx *gk.Cx) {
 	})
 }
 
-// updateRestartBlocker is why RC2FX should not restart for an update now,
-// ok false when it may.
-func (a *App) updateRestartBlocker() (string, bool) { return a.installerRestartBlocker() }
-
 // restartToUpdate quits and applies the downloaded update, once nothing
 // holds it back. Unsaved edits are asked about as for any quit.
 func (a *App) restartToUpdate(cx *gk.Cx) {
-	_, blocked := a.updateRestartBlocker()
+	_, blocked := a.installerRestartBlocker()
 	switch a.selfUpdate.Restart(blocked) {
 	case selfupdate.RestartGone:
 		a.notify(cx)
@@ -115,6 +99,6 @@ func (a *App) quitForUpdate(cx *gk.Cx) {
 	} else if !a.closingPrompt() {
 		// Refused outright (a file dialog is open): no later quit may
 		// restart unasked. An open prompt clears it on cancel.
-		a.selfUpdate.cancelRestart()
+		a.selfUpdate.CancelRestart()
 	}
 }

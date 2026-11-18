@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 func f(v float32) *float32 { return &v }
@@ -26,11 +28,11 @@ func TestEveryPointIsFiniteAndBothEndsMeetTheMiddle(t *testing.T) {
 						if first.X != 0 || last.X != width {
 							t.Fatalf("ends at %v and %v, want 0 and %v", first.X, last.X, width)
 						}
-						if abs32(first.Y) >= 1e-3 || abs32(last.Y) >= 1e-3 {
+						if num.Abs32(first.Y) >= 1e-3 || num.Abs32(last.Y) >= 1e-3 {
 							t.Fatalf("tapered ends: %v, %v", first.Y, last.Y)
 						}
 						for _, p := range points {
-							if abs32(p.Y) > amplitude+1e-3 {
+							if num.Abs32(p.Y) > amplitude+1e-3 {
 								t.Fatalf("offset %v beyond amplitude %v", p.Y, amplitude)
 							}
 						}
@@ -71,7 +73,7 @@ func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 	}
 	points, _ = LinePoints(100, 40, 1.7, 2, LineStateLive, Channel)
 	for _, p := range points {
-		if abs32(p.Y-20) > Channel.Amplitude*40+1e-3 {
+		if num.Abs32(p.Y-20) > Channel.Amplitude*40+1e-3 {
 			t.Fatalf("level not clamped to 1: %v", p.Y)
 		}
 	}

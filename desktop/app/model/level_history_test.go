@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
 // level is the desk's meter scale (desk.rs `level`): peak amplitude as a 0..1
@@ -28,13 +30,6 @@ func steady(h *LevelHistory, from time.Time, step time.Duration, count int, peak
 	return from.Add(step * time.Duration(max(count-1, 0)))
 }
 
-func abs32(v float32) float32 {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
 func TestARiseReachesTheReadingQuicklyWithoutJumping(t *testing.T) {
 	start := time.Now()
 	var h LevelHistory
@@ -47,7 +42,7 @@ func TestARiseReachesTheReadingQuicklyWithoutJumping(t *testing.T) {
 		t.Fatalf("%v", soon)
 	}
 	settled := h.Display(start.Add(200*time.Millisecond), level)
-	if abs32(settled-level(0.5)) >= 0.01 {
+	if num.Abs32(settled-level(0.5)) >= 0.01 {
 		t.Fatalf("%v", settled)
 	}
 }
@@ -86,7 +81,7 @@ func TestANewReadingChangesDirectionWithoutMovingTheLevel(t *testing.T) {
 	}{{1.0, last.Add(step)}, {0.01, last.Add(step * 2)}} {
 		before := h.Display(c.at, level)
 		h.Push(c.at, c.peak)
-		if abs32(h.Display(c.at, level)-before) >= 1e-5 {
+		if num.Abs32(h.Display(c.at, level)-before) >= 1e-5 {
 			t.Fatalf("peak %v moved the level", c.peak)
 		}
 	}
@@ -111,7 +106,7 @@ func TestSparseReadingsMoveInSmallStepsEachFrame(t *testing.T) {
 		}
 		shown := h.Display(now, level)
 		// After the first rise from nothing.
-		if i > 30 && abs32(shown-last) >= 0.1 {
+		if i > 30 && num.Abs32(shown-last) >= 0.1 {
 			t.Fatalf("frame %d: %v to %v", i, last, shown)
 		}
 		last = shown
@@ -139,7 +134,7 @@ func TestAReadingFromBeforeAGapNeverShowsAfterIt(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 	settled := h.Display(back.Add(300*time.Millisecond), level)
-	if abs32(settled-level(0.01)) >= 0.01 {
+	if num.Abs32(settled-level(0.01)) >= 0.01 {
 		t.Fatalf("%v", settled)
 	}
 	// And with no reading for longer than the gap, nothing is shown.

@@ -33,7 +33,7 @@ func (a *App) moveBand(cx *gk.Cx, position [2]float32) {
 		gk.Quiet(cx)
 		return
 	}
-	bands := a.targetMut().EQ.ChannelMut(a.channel)
+	bands := a.target().EQ.ChannelMut(a.channel)
 	if a.band >= 0 && a.band < len(*bands) {
 		band := &(*bands)[a.band]
 		band.Frequency = frequency
@@ -210,7 +210,7 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 					a.band = index
 					a.rebuildEditors(cx)
 				}
-				bands := a.targetMut().EQ.ChannelMut(a.channel)
+				bands := a.target().EQ.ChannelMut(a.channel)
 				if index < len(*bands) {
 					b := &(*bands)[index]
 					factor := 1 / 1.08

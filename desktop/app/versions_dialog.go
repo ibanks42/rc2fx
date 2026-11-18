@@ -346,7 +346,7 @@ func (a *App) updateButton(state selfupdate.State) (gk.ButtonEl, string) {
 		return button.Label("Checking update").Icon(gk.IconLoaderCircle).Disabled(true),
 			fmt.Sprintf("Checking RC2FX %s against its signed release.", state.Version)
 	case selfupdate.StateReady:
-		reason, blocked := a.updateRestartBlocker()
+		reason, blocked := a.installerRestartBlocker()
 		note := fmt.Sprintf("RC2FX %s is downloaded. RC2FX restarts to install it.", state.Version)
 		if blocked {
 			note = fmt.Sprintf("RC2FX %s is downloaded. %s", state.Version, reason)

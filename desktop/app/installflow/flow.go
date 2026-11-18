@@ -10,6 +10,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 )
 
 // Model is the installer page's state and the plan it carries out.
@@ -88,13 +90,6 @@ func nowUnix() uint64 {
 		return 0
 	}
 	return uint64(now)
-}
-
-func saturatingSub(a, b uint64) uint64 {
-	if a < b {
-		return 0
-	}
-	return a - b
 }
 
 // NewModel is an installer page that has not heard from the mixer yet.
@@ -461,7 +456,7 @@ func FlashedRecently(saved *installer.Saved, settled *uint64, now uint64) bool {
 	c := saved.LastCommand()
 	return c != nil &&
 		c.Command == "flash" &&
-		saturatingSub(now, c.AtUnix) < updateWindow &&
+		num.SatSub(now, c.AtUnix) < updateWindow &&
 		(settled == nil || c.AtUnix > *settled)
 }
 
@@ -836,17 +831,10 @@ func (m *Model) ChooseMixer(source MixerSource) {
 	}
 }
 
-func sameString(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
 // SetInstalled sets the versions this mixer reports; nil for what it did not
 // report.
 func (m *Model) SetInstalled(mixer, firmware *string) {
-	if !sameString(m.Installed, mixer) || !sameString(m.InstalledFirmware, firmware) {
+	if !opt.Equal(m.Installed, mixer) || !opt.Equal(m.InstalledFirmware, firmware) {
 		m.Installed = mixer
 		m.InstalledFirmware = firmware
 		m.settleMixer()
@@ -1389,7 +1377,7 @@ func (m *Model) usbModeSent() bool {
 		return false
 	}
 	c := m.Status.Saved.LastCommand()
-	return c != nil && c.Command == "usb-mode" && saturatingSub(nowUnix(), c.AtUnix) < 120
+	return c != nil && c.Command == "usb-mode" && num.SatSub(nowUnix(), c.AtUnix) < 120
 }
 
 // Tick polls: often while a run waits for the mixer or has failed (a failed
