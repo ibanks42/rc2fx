@@ -21,31 +21,8 @@ const (
 	BarHorizontal
 )
 
-// Rect is a rectangle in pixels: its top left and its size.
-type Rect struct{ X, Y, W, H float32 }
-
-// Bottom is the rectangle's bottom edge.
-func (r Rect) Bottom() float32 { return r.Y + r.H }
-
 // FillFraction is the part of the track's length a fresh level fills.
 func FillFraction(level float32) float32 { return min(max(level, Lowest), 1) }
-
-// Fill is the part of track to fill for level; nil level is the stub.
-func (b Bar) Fill(track Rect, level *float32) Rect {
-	length := func(whole float32) float32 {
-		if level == nil {
-			return Stub
-		}
-		return whole * FillFraction(*level)
-	}
-	switch b {
-	case BarVertical:
-		height := length(track.H)
-		return Rect{track.X, track.Y + track.H - height, track.W, height}
-	default:
-		return Rect{track.X, track.Y, length(track.W), track.H}
-	}
-}
 
 // Radius is the fill's corner radius in pixels.
 func (b Bar) Radius() float32 {

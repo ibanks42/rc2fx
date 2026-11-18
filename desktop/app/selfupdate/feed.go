@@ -177,7 +177,7 @@ func (f *SignedFeed) DownloadReleaseEntry(asset Asset, localFile string, report 
 	if progress != nil {
 		progress.Send(Verifying)
 	}
-	result := VerifyFile(WorkDirectory(), asset, localFile, f.verify)
+	result := VerifyFile(asset, localFile, f.verify)
 	f.checks.Record(asset, result)
 	if result != nil && !result.Rejected {
 		if name, ok := PackageName(asset.FileName); ok {

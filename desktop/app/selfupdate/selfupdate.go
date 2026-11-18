@@ -295,9 +295,9 @@ func FullPackages(assets []Asset) []Asset {
 	return kept
 }
 
-// Verify is installer.VerifyUpdatePackage's signature: work folder,
-// version, asset name, file. A failure is a *installer.VerifyError.
-type Verify func(work, version, asset, file string) error
+// Verify is installer.VerifyUpdatePackage's signature: version, asset name,
+// file. A failure is a *installer.VerifyError.
+type Verify func(version, asset, file string) error
 
 // asVerifyError is err as the verifier's error; anything else could not be
 // checked.
@@ -317,21 +317,18 @@ func rejected(message string) *installer.VerifyError {
 }
 
 // VerifyFile checks file, the download of asset, against its signed release
-// before it may be applied. work is "" when the working folder is unknown.
-// A package the release rejects is removed, so nothing can apply it
+// before it may be applied. A package the release rejects is removed, so nothing can apply it
 // unchecked later. One that could not be checked (offline, say) is kept: it
 // may be good, and checking again needs no download.
-func VerifyFile(work string, asset Asset, file string, verify Verify) *installer.VerifyError {
+func VerifyFile(asset Asset, file string, verify Verify) *installer.VerifyError {
 	own := IsOwnPackage(asset.Version, asset.FileName)
 	name, named := PackageName(asset.FileName)
 	var result *installer.VerifyError
 	switch {
 	case !named || !own:
 		result = rejected(fmt.Sprintf("%s is not an update package for this computer.", asset.FileName))
-	case work == "":
-		result = &installer.VerifyError{Message: "RC2FX could not find its working folder to check this update."}
 	default:
-		result = asVerifyError(verify(work, asset.Version, name, file))
+		result = asVerifyError(verify(asset.Version, name, file))
 	}
 	if result != nil && result.Rejected {
 		os.Remove(file)
@@ -340,12 +337,12 @@ func VerifyFile(work string, asset Asset, file string, verify Verify) *installer
 }
 
 // VerifyPackage is VerifyFile for a package in the packages folder.
-func VerifyPackage(work, packages string, asset Asset, verify Verify) *installer.VerifyError {
+func VerifyPackage(packages string, asset Asset, verify Verify) *installer.VerifyError {
 	name, ok := PackageName(asset.FileName)
 	if !ok {
 		return rejected(fmt.Sprintf("%s is not an app update package.", asset.FileName))
 	}
-	return VerifyFile(work, asset, filepath.Join(packages, name), verify)
+	return VerifyFile(asset, filepath.Join(packages, name), verify)
 }
 
 // Outcome is what a finished check leaves: Ready with the package when it
@@ -365,25 +362,4 @@ func CheckedOutcome(asset Asset, result *installer.VerifyError) Outcome {
 		return Outcome{State: FailedKept(result.Message, asset)}
 	}
 	return Outcome{State: Failed(result.Message)}
-}
-
-// WorkDirectory is the installer's folder for downloads and backups, ""
-// when unknown.
-// The feed checks packages there, so this package has its own copy.
-func WorkDirectory() string {
-	if path, ok := os.LookupEnv("RC2FX_INSTALLER_WORK"); ok {
-		if filepath.IsAbs(path) {
-			return path
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return ""
-		}
-		return filepath.Join(cwd, path)
-	}
-	work, ok := installer.DefaultWork()
-	if !ok {
-		return ""
-	}
-	return work
 }

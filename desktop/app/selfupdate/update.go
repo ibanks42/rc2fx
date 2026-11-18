@@ -162,12 +162,6 @@ func (u *SelfUpdate) Retrying() bool { return u.state.Kind == StateFailed && u.s
 // State is where the update stands.
 func (u *SelfUpdate) State() State { return u.state }
 
-// SetState replaces the state (the view's own failures).
-func (u *SelfUpdate) SetState(state State) { u.state = state }
-
-// Packages is the packages folder, "" when unknown.
-func (u *SelfUpdate) Packages() string { return u.packages }
-
 // OnDisk is whether the package asset is still in the packages folder.
 func (u *SelfUpdate) OnDisk(asset Asset) bool {
 	name, ok := PackageName(asset.FileName)
@@ -215,7 +209,7 @@ func (u *SelfUpdate) BeginCheck(asset Asset) (check func() Outcome, ok bool) {
 	u.state = VerifyingState(asset.Version)
 	verify := u.verify
 	return func() Outcome {
-		return CheckedOutcome(asset, VerifyPackage(WorkDirectory(), packages, asset, verify))
+		return CheckedOutcome(asset, VerifyPackage(packages, asset, verify))
 	}, true
 }
 

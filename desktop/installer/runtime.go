@@ -218,13 +218,6 @@ func checkSettings(data []byte) error {
 	return nil
 }
 
-// ServiceFromState is what RC2FX's state (`GET api/v1/state`, as the app's
-// USB connection reads it) says about readiness, judged against the
-// installer folder's runtime profile.
-func ServiceFromState(root string, state []byte) Service {
-	return folderSource(root).service(state)
-}
-
 // saveSettings keeps RC2FX's settings file, read over USB by the app, for
 // the mixer serial.
 func (e *Engine) saveSettings(serial, settings string) (*BackupRecord, error) {

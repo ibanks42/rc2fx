@@ -233,42 +233,6 @@ func TestPendingChangesIncludeOtherChannelsWhenTheEditorSwitches(t *testing.T) {
 	}
 }
 
-// --- restart --------------------------------------------------------------------------------
-
-func TestOnlyExplicitBackendEligibilityOnAFailedJackEngineOffersRestart(t *testing.T) {
-	engine := core.EngineStatus{
-		Generation:      4,
-		RestartAllowed:  true,
-		Mode:            core.EngineModeJack,
-		Status:          core.EnginePhaseError,
-		AppliedRevision: 1,
-		SampleRate:      48000,
-		BlockSize:       112,
-		Message:         "",
-		AudioAdvancing:  false,
-	}
-	if !engine.RestartEligible() {
-		t.Fatal("not eligible")
-	}
-	for _, phase := range []core.EnginePhase{core.EnginePhaseStarting, core.EnginePhaseRestarting,
-		core.EnginePhaseRunning, core.EnginePhaseOffline} {
-		engine.Status = phase
-		if engine.RestartEligible() {
-			t.Fatalf("eligible while %s", phase)
-		}
-	}
-	engine.Status = core.EnginePhaseError
-	engine.RestartAllowed = false
-	if engine.RestartEligible() {
-		t.Fatal("eligible without permission")
-	}
-	engine.RestartAllowed = true
-	engine.Mode = core.EngineModeSimulation
-	if engine.RestartEligible() {
-		t.Fatal("eligible in simulation")
-	}
-}
-
 // --- EQ import and export -------------------------------------------------------------------
 
 func TestImportDetectsAutoEQTextAndNativeEasyEffectsWithoutAFormatPicker(t *testing.T) {

@@ -47,9 +47,6 @@ type CandidateSummary struct {
 	Error          *string
 }
 
-// Equal compares field by field (deepEqual).
-func (c CandidateSummary) Equal(other CandidateSummary) bool { return deepEqual(c, other) }
-
 type ImportResultKind uint8
 
 const (
@@ -70,9 +67,6 @@ type ImportResult struct {
 	OtherEffects int
 	Candidates   []CandidateSummary
 }
-
-// Equal compares field by field (deepEqual).
-func (r ImportResult) Equal(other ImportResult) bool { return deepEqual(r, other) }
 
 type easyEqualizer struct {
 	enabled    bool

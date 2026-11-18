@@ -60,7 +60,7 @@ func TestOnlyThisPlatformsPackageOfThatVersionIsAccepted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rc2fx-other")
 	file(t, path)
 	other := asset(PackID + "-1.2.3-elsewhere-full.nupkg")
-	result := VerifyFile("/", other, path, func(_, _, _, _ string) error { return nil })
+	result := VerifyFile(other, path, func(_, _, _ string) error { return nil })
 	if result == nil || !result.Rejected {
 		t.Fatalf("result %v", result)
 	}
@@ -107,14 +107,14 @@ func TestDownloadFailuresSayWhatToDo(t *testing.T) {
 }
 
 func TestAPackageItsReleaseRejectsIsRemovedAndShown(t *testing.T) {
-	work, packages := t.TempDir(), t.TempDir()
+	packages := t.TempDir()
 	path := filepath.Join(packages, own("1.2.3"))
 	file(t, path)
-	refuse := func(_, _, _, _ string) error {
+	refuse := func(_, _, _ string) error {
 		return &installer.VerifyError{Rejected: true, Message: "This update has not been signed yet."}
 	}
 	pkg := asset(own("1.2.3"))
-	result := VerifyPackage(work, packages, pkg, refuse)
+	result := VerifyPackage(packages, pkg, refuse)
 	if exist(path) {
 		t.Fatal("rejected package kept")
 	}
@@ -128,14 +128,14 @@ func TestAPackageItsReleaseRejectsIsRemovedAndShown(t *testing.T) {
 }
 
 func TestAPackageThatCouldNotBeCheckedIsKeptToCheckAgain(t *testing.T) {
-	work, packages := t.TempDir(), t.TempDir()
+	packages := t.TempDir()
 	path := filepath.Join(packages, own("1.2.3"))
 	file(t, path)
-	offline := func(_, _, _, _ string) error {
+	offline := func(_, _, _ string) error {
 		return &installer.VerifyError{Message: "Could not check this update."}
 	}
 	pkg := asset(own("1.2.3"))
-	result := VerifyPackage(work, packages, pkg, offline)
+	result := VerifyPackage(packages, pkg, offline)
 	if !exist(path) {
 		t.Fatal("unchecked package removed")
 	}
@@ -159,13 +159,10 @@ func TestAPackageThatCouldNotBeCheckedIsKeptToCheckAgain(t *testing.T) {
 }
 
 func TestAPackageThatPassesIsReady(t *testing.T) {
-	work, packages := t.TempDir(), t.TempDir()
+	packages := t.TempDir()
 	path := filepath.Join(packages, own("1.2.3"))
 	file(t, path)
-	accept := func(w, version, name, f string) error {
-		if info, err := os.Stat(w); err != nil || !info.IsDir() {
-			t.Fatal("no work folder")
-		}
+	accept := func(version, name, f string) error {
 		if version != "1.2.3" || name != own("1.2.3") {
 			t.Fatalf("%s %s", version, name)
 		}
@@ -177,7 +174,7 @@ func TestAPackageThatPassesIsReady(t *testing.T) {
 	// A feed may name a package in a sub-folder; Velopack stores and the
 	// release names only its file name.
 	pkg := asset("sub/" + own("1.2.3"))
-	result := VerifyPackage(work, packages, pkg, accept)
+	result := VerifyPackage(packages, pkg, accept)
 	if !exist(path) {
 		t.Fatal("package removed")
 	}
@@ -187,40 +184,30 @@ func TestAPackageThatPassesIsReady(t *testing.T) {
 	}
 }
 
-func TestAPackageWithoutAWorkFolderIsNotTrusted(t *testing.T) {
+func TestAPackageWithoutAFileNameIsRejectedUnchecked(t *testing.T) {
 	packages := t.TempDir()
-	path := filepath.Join(packages, own("1.2.3"))
-	file(t, path)
-	never := func(_, _, _, _ string) error { panic("nothing to check against") }
-	result := VerifyPackage("", packages, asset(own("1.2.3")), never)
-	// Nothing is wrong with the package itself.
-	if result == nil || result.Rejected {
-		t.Fatalf("result %v", result)
-	}
-	if !exist(path) {
-		t.Fatal("package removed")
-	}
-	if result := VerifyPackage(packages, packages, asset("dir/"), never); result == nil || !result.Rejected {
+	never := func(_, _, _ string) error { panic("nothing to check against") }
+	if result := VerifyPackage(packages, asset("dir/"), never); result == nil || !result.Rejected {
 		t.Fatalf("result %v", result)
 	}
 }
 
 func TestADownloadIsCheckedUnderItsTemporaryNameAndDiscardedIfRejected(t *testing.T) {
-	work, packages := t.TempDir(), t.TempDir()
+	packages := t.TempDir()
 	// Velopack downloads beside the final name and renames only after the
 	// source returns.
 	partialName := strings.Replace(own("1.2.3"), ".nupkg", ".partial", 1)
 	partial := filepath.Join(packages, partialName)
 	file(t, partial)
 	pkg := asset(own("1.2.3"))
-	seen := func(_, version, name, f string) error {
+	seen := func(version, name, f string) error {
 		if version != "1.2.3" || name != own("1.2.3") || !strings.HasSuffix(f, partialName) {
 			t.Fatalf("%s %s %s", version, name, f)
 		}
 		return &installer.VerifyError{Rejected: true, Message: "mismatch"}
 	}
 	checks := &Checks{}
-	result := VerifyFile(work, pkg, partial, seen)
+	result := VerifyFile(pkg, partial, seen)
 	checks.Record(pkg, result)
 	if exist(partial) {
 		t.Fatal("rejected download kept")

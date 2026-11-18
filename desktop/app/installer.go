@@ -285,7 +285,7 @@ func (r *installerRunner) stopDownload() {
 	}
 }
 
-// close is Runner's Drop: closing the page ends a release check rather than
+// close runs when the page closes: it ends a release check rather than
 // leaving it, and any helper, running until the network gives up.
 func (r *installerRunner) close() {
 	r.stopDownload()
@@ -1175,7 +1175,7 @@ func (a *App) syncInstallerSelects(cx *gk.Cx) {
 			value: installflow.Choice{Channel: r.Channel, Version: r.Version}}
 	}
 	var releases []pickerItem[installflow.Choice]
-	for _, r := range m.ReleasesFor(false) {
+	for _, r := range m.ReleasesFor() {
 		releases = append(releases, release(r))
 	}
 	var mixers []pickerItem[installflow.MixerSource]
@@ -1194,7 +1194,7 @@ func (a *App) syncInstallerSelects(cx *gk.Cx) {
 			}
 		})
 	}
-	i.firmwareSelect.sync(cx, releases, m.ChoiceFor(false))
+	i.firmwareSelect.sync(cx, releases, m.ChoiceFor())
 	if i.mixerSelect == nil {
 		i.mixerSelect = newPicker(a, cx, mixerSourceKey, func(m *installflow.Model, source installflow.MixerSource) {
 			m.ChooseMixer(source)

@@ -166,7 +166,7 @@ func readBlock(r io.Reader, h *Header) (bool, error) {
 }
 
 func walkTar(r io.Reader, raw bool, visit func(*Member) error) error {
-	var longName, longLink []byte
+	var longName []byte
 	var pax map[string][]byte
 	for {
 		var h Header
@@ -204,7 +204,8 @@ func walkTar(r io.Reader, raw bool, visit func(*Member) error) error {
 				case TypeLongName:
 					longName = data
 				case TypeLongLink:
-					longLink = data
+					// The link target is not used; the record is read
+					// and skipped.
 				default:
 					records, err := paxRecords(data)
 					if err != nil {
@@ -228,8 +229,7 @@ func walkTar(r io.Reader, raw bool, visit func(*Member) error) error {
 					padded = (size + block - 1) / block * block
 				}
 			}
-			longName, longLink, pax = nil, nil, nil
-			_ = longLink
+			longName, pax = nil, nil
 		}
 		entry := &Member{
 			Header: h,

@@ -208,7 +208,7 @@ func (a *App) versionsDisclosure(i *Installer) gk.DivEl {
 		})
 	busy := m.Busy()
 	noReleases := true
-	for range m.ReleasesFor(false) {
+	for range m.ReleasesFor() {
 		noReleases = false
 		break
 	}

@@ -30,7 +30,7 @@ HID handle and serves requests in order.
   using its session beside the next one. An upload canceled this way leaves its
   partial session on the mixer until the next update starts.
 
-Engine restart, global processing and path selection are single writes. Each
+Global processing and path selection are single writes. Each
 names the revision and engine generation it was based on and requires a 202
 with a valid state. A 409 or an uncertain outcome is reported to the caller and
 not retried. Request bodies have size limits, and replies are parsed with the

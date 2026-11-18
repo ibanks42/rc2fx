@@ -43,7 +43,7 @@ func TestAssignmentsRequireUniquePhysicalSourcesAndProcessingBindings(t *testing
 	encoded := must(Encode(inventory))
 	var decoded StockInventory
 	ok(t, DecodeStrict(encoded, &decoded))
-	check(t, decoded.Equal(inventory))
+	check(t, deepEqual(decoded, inventory))
 	inventory.Inputs[1].Fader = new(uint8(0))
 	fails(t, inventory.Validate())
 	inventory.Inputs[1].Fader = new(uint8(10))
@@ -117,7 +117,6 @@ const testKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEPzD7gW9u5+SC5iq8gzujWEOTB
 func TestAPlainEd25519KeyIsAcceptedAndItsCommentDropped(t *testing.T) {
 	key := must(ParseEd25519PublicKey(testKey + " me@laptop\n"))
 	check(t, key.AsStr() == testKey)
-	check(t, key.ManagedLine() == testKey+" rc2fx-managed-developer-key")
 }
 
 func TestTheFingerprintMatchesSSHKeygen(t *testing.T) {
@@ -183,7 +182,7 @@ func TestStatusAndRequestRoundTrip(t *testing.T) {
 		ServerRunning:      new(true),
 	}
 	text := encode(t, status)
-	check(t, must(FromJSON[SSHStatus](text)).Equal(status))
+	check(t, deepEqual(must(FromJSON[SSHStatus](text)), status))
 	check(t, strings.Contains(text, `"unmanagedKeys":1`), text)
 	// Newer fields are tolerated by an older reader...
 	newer := must(FromJSON[SSHStatus](`{"managed":false,"unmanagedKeys":0,"hostKeys":[],"future":1}`))

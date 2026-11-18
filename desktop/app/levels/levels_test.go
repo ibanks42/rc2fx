@@ -13,28 +13,26 @@ func f(v float32) *float32 { return &v }
 // The live line.
 
 func TestEveryPointIsFiniteAndBothEndsMeetTheMiddle(t *testing.T) {
-	for _, style := range []LineStyle{Channel, Mini} {
-		for _, height := range []float32{34, 170} {
-			// Levels from silence to full scale, as paint_line scales them.
-			for _, level := range []float32{0, 0.5, 1} {
-				amplitude := level * style.Amplitude * height
-				for _, width := range []float32{4, 300, 899, 1280} {
-					for _, phase := range []float32{0, 0.016_667, 1.7, 1234.5} {
-						points, ok := Offsets(width, phase, amplitude)
-						if !ok {
-							t.Fatalf("a valid line for valid inputs: width %v phase %v amplitude %v", width, phase, amplitude)
-						}
-						first, last := points[0], points[len(points)-1]
-						if first.X != 0 || last.X != width {
-							t.Fatalf("ends at %v and %v, want 0 and %v", first.X, last.X, width)
-						}
-						if num.Abs32(first.Y) >= 1e-3 || num.Abs32(last.Y) >= 1e-3 {
-							t.Fatalf("tapered ends: %v, %v", first.Y, last.Y)
-						}
-						for _, p := range points {
-							if num.Abs32(p.Y) > amplitude+1e-3 {
-								t.Fatalf("offset %v beyond amplitude %v", p.Y, amplitude)
-							}
+	for _, height := range []float32{34, 170} {
+		// Levels from silence to full scale, as paint_line scales them.
+		for _, level := range []float32{0, 0.5, 1} {
+			amplitude := level * Mini.Amplitude * height
+			for _, width := range []float32{4, 300, 899, 1280} {
+				for _, phase := range []float32{0, 0.016_667, 1.7, 1234.5} {
+					points, ok := Offsets(width, phase, amplitude)
+					if !ok {
+						t.Fatalf("a valid line for valid inputs: width %v phase %v amplitude %v", width, phase, amplitude)
+					}
+					first, last := points[0], points[len(points)-1]
+					if first.X != 0 || last.X != width {
+						t.Fatalf("ends at %v and %v, want 0 and %v", first.X, last.X, width)
+					}
+					if num.Abs32(first.Y) >= 1e-3 || num.Abs32(last.Y) >= 1e-3 {
+						t.Fatalf("tapered ends: %v, %v", first.Y, last.Y)
+					}
+					for _, p := range points {
+						if num.Abs32(p.Y) > amplitude+1e-3 {
+							t.Fatalf("offset %v beyond amplitude %v", p.Y, amplitude)
 						}
 					}
 				}
@@ -61,7 +59,7 @@ func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 	if _, ok := LinePoints(100, 1.9, 0, 1, LineStateLive, Mini); ok {
 		t.Fatal("drew in a too low element")
 	}
-	points, ok := LinePoints(100, 40, 1.7, 1, LineStateUnavailable, Channel)
+	points, ok := LinePoints(100, 40, 1.7, 1, LineStateUnavailable, Mini)
 	if !ok {
 		t.Fatal("no unavailable line")
 	}
@@ -70,9 +68,9 @@ func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 			t.Fatalf("unavailable line not flat at the middle: %v", p.Y)
 		}
 	}
-	points, _ = LinePoints(100, 40, 1.7, 2, LineStateLive, Channel)
+	points, _ = LinePoints(100, 40, 1.7, 2, LineStateLive, Mini)
 	for _, p := range points {
-		if num.Abs32(p.Y-20) > Channel.Amplitude*40+1e-3 {
+		if num.Abs32(p.Y-20) > Mini.Amplitude*40+1e-3 {
 			t.Fatalf("level not clamped to 1: %v", p.Y)
 		}
 	}
@@ -80,46 +78,24 @@ func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 
 // The level bars.
 
-func track() Rect { return Rect{10, 20, 100, 200} }
-
-func TestAVerticalBarRisesFromTheBottomOfItsTrack(t *testing.T) {
-	fill := BarVertical.Fill(track(), f(0.5))
-	if fill.W != 100 || fill.H != 100 {
-		t.Fatalf("size %v × %v", fill.W, fill.H)
-	}
-	if fill.X != 10 || fill.Y != 120 {
-		t.Fatalf("origin %v, %v", fill.X, fill.Y)
-	}
-	if fill.Bottom() != track().Bottom() {
-		t.Fatalf("bottom %v, want %v", fill.Bottom(), track().Bottom())
-	}
-}
-
-func TestAHorizontalBarGrowsFromTheLeftOfItsTrack(t *testing.T) {
-	fill := BarHorizontal.Fill(track(), f(0.25))
-	if fill.X != track().X || fill.Y != track().Y {
-		t.Fatalf("origin %v, %v", fill.X, fill.Y)
-	}
-	if fill.W != 25 || fill.H != 200 {
-		t.Fatalf("size %v × %v", fill.W, fill.H)
-	}
-}
-
+// A fresh level fills its share of the track, clamped so silence stays
+// visible and a level above full scale stays inside; no reading is the
+// fixed stub, whatever the track's size.
 func TestLevelsStayInsideTheTrackAndSilenceStaysVisible(t *testing.T) {
-	if full := BarVertical.Fill(track(), f(2)); full != track() {
-		t.Fatalf("full %v, want %v", full, track())
+	cases := []struct{ level, want float32 }{
+		{0.5, 0.5},
+		{0.25, 0.25},
+		{2, 1},
+		{0, Lowest},
+		{-1, Lowest},
 	}
-	if silent := BarHorizontal.Fill(track(), f(0)); silent.W != 100*Lowest {
-		t.Fatalf("silent width %v", silent.W)
+	for _, c := range cases {
+		if got := FillFraction(c.level); got != c.want {
+			t.Errorf("FillFraction(%v) = %v, want %v", c.level, got, c.want)
+		}
 	}
-}
-
-func TestNoReadingIsAFixedStubAtTheStartOfTheTrack(t *testing.T) {
-	if h := BarVertical.Fill(track(), nil).H; h != Stub {
-		t.Fatalf("vertical stub %v", h)
-	}
-	if w := BarHorizontal.Fill(track(), nil).W; w != Stub {
-		t.Fatalf("horizontal stub %v", w)
+	if Stub != 6 {
+		t.Fatalf("stub %v px, want 6", Stub)
 	}
 }
 

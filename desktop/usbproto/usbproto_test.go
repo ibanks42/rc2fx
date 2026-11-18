@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -60,35 +59,11 @@ func TestBoundedMessageCodecRejectsTruncationTrailingDataAndExpansionLies(t *tes
 	}
 }
 
-func TestOnlyAProtocolFourAcknowledgementCarriesAWindow(t *testing.T) {
-	for data, want := range map[string]int{"RC2FX USB 4 1": 1, "RC2FX USB 4 32": 32, "RC2FX USB 4 64": 64} {
-		if got, ok := Hello4Window([]byte(data)); !ok || got != want {
-			t.Errorf("Hello4Window(%q) = %d, %v", data, got, ok)
-		}
-	}
-	for _, bad := range []string{
-		"RC2FX USB 4 0",
-		"RC2FX USB 4 65",
-		"RC2FX USB 4 ",
-		"RC2FX USB 4  8",
-		"RC2FX USB 4 8x",
-		"RC2FX USB 4 -1",
-		"RC2FX USB 4",
-		"RC2FX USB 3",
-		"RC2FX USB 4 999999999999999999999999",
-		"",
-	} {
-		if got, ok := Hello4Window([]byte(bad)); ok {
-			t.Errorf("Hello4Window(%q) = %d", bad, got)
-		}
-	}
-}
-
 func TestIsolatedInputReportRejectsVendorIDsAndExcessPayload(t *testing.T) {
 	data := bytes.Repeat([]byte{42}, Payload)
 	f := Frame{Kind: KindReply, Session: 1, Request: 1, Offset: 0, Total: Payload, Data: data}
 	packet := f.Encode(InputID)
-	if got, ok := DecodeFrame(packet[:InputReportSize], InputID); !ok || !bytes.Equal(got.Data, data) {
+	if got, ok := DecodeFrame(packet[:ReportSize], InputID); !ok || !bytes.Equal(got.Data, data) {
 		t.Fatal("input report did not decode")
 	}
 	if got, ok := DecodeFrame(packet[:], InputID); !ok || !bytes.Equal(got.Data, data) {
@@ -164,12 +139,6 @@ func TestUnrelatedReportsPassButMalformedMarkedReportsAreOwned(t *testing.T) {
 	}
 }
 
-// RODE's 1.7.6/1.7.7 descriptor and the copy `rc2fx.sh` stages from it.
-const (
-	stock  = "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff8102c0"
-	staged = "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff8102c0"
-)
-
 func mustHex(t *testing.T, text string) []byte {
 	t.Helper()
 	b, err := hex.DecodeString(text)
@@ -177,26 +146,6 @@ func mustHex(t *testing.T, text string) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func TestStagedLayoutIsOneCollectionWithTheControlReports(t *testing.T) {
-	stockBytes, stagedBytes := mustHex(t, stock), mustHex(t, staged)
-	if !bytes.Equal(stagedBytes[:len(stockBytes)-1], stockBytes[:len(stockBytes)-1]) {
-		t.Fatal("staged descriptor does not extend the stock one")
-	}
-	// One application collection, closed once, at the very end.
-	if bytes.Count(stagedBytes, []byte{0xa1}) != 1 || stagedBytes[len(stagedBytes)-1] != 0xc0 {
-		t.Fatal("staged descriptor is not one collection")
-	}
-	if !DeclaresControl(stagedBytes) || DeclaresControl(stockBytes) {
-		t.Fatal("control detection")
-	}
-	// Each half alone, or the IDs swapped, is not RC2FX's layout.
-	if DeclaresControl(mustHex(t, strings.ReplaceAll(staged, "850595ff9102", ""))) ||
-		DeclaresControl(mustHex(t, strings.ReplaceAll(staged, "850695ff8102", ""))) ||
-		DeclaresControl(stagedBytes[:len(stagedBytes)-3]) {
-		t.Fatal("a partial layout declares control")
-	}
 }
 
 // The Rust structs are (de)serialized by serde; these pin the same shape.

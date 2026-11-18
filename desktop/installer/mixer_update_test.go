@@ -3,6 +3,7 @@ package installer
 import (
 	"bytes"
 	"context"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -194,6 +195,11 @@ func TestSignedCatalogEnforcesProfileAppMinimumAndCannotBeReplaced(t *testing.T)
 	}
 }
 
+// samePayload compares two verified payloads' files and bytes.
+func samePayload(a, b *VerifiedMixerPayload) bool {
+	return maps.EqualFunc(a.bundle, b.bundle, bytes.Equal) && bytes.Equal(a.bytes, b.bytes)
+}
+
 func TestSignedRepositoryEnforcesAuthenticityCompatibilityExpiryAndRollback(t *testing.T) {
 	ctx := context.Background()
 	f := newMixerFixture(t)
@@ -203,8 +209,8 @@ func TestSignedRepositoryEnforcesAuthenticityCompatibilityExpiryAndRollback(t *t
 	profile := f.metadata.FirmwareProfiles[0]
 	verified, err := repository.Download(ctx, "payload", "1.0.1", 1, profile)
 	must(t, err)
-	if verified.metadata.Version != "1.2.3" {
-		t.Fatal(verified.metadata.Version)
+	if !bytes.Equal(verified.bytes, f.payload) {
+		t.Fatal("the verified bytes differ from the published payload")
 	}
 	offers, err := repository.Offers()
 	must(t, err)
@@ -212,7 +218,7 @@ func TestSignedRepositoryEnforcesAuthenticityCompatibilityExpiryAndRollback(t *t
 	cache := filepath.Join(f.dir, "cache")
 	cached, err := repository.AcceptCached(ctx, &offer, "1.0.1", 1, profile, cache)
 	must(t, err)
-	if !cached.Equal(verified) {
+	if !samePayload(cached, verified) {
 		t.Fatal("the cached payload differs")
 	}
 	source := Source{Kind: SourceVerified, Verified: cached}
@@ -253,7 +259,7 @@ func TestSignedRepositoryEnforcesAuthenticityCompatibilityExpiryAndRollback(t *t
 	}
 	// An already verified object owns its bytes; changing the cache cannot
 	// change what subsequent firmware preparation consumes.
-	if !cached.Equal(verified) {
+	if !samePayload(cached, verified) {
 		t.Fatal("the verified payload changed")
 	}
 	for _, c := range []struct {

@@ -1,4 +1,4 @@
-package tufsign
+package release
 
 import (
 	"bytes"
@@ -9,26 +9,32 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
 
-// Loaded is a repository verified by Load: tough's RepositoryLoader::load
-// for local folders.
-type Loaded struct {
-	Root      *Root
-	Timestamp *Document
-	Snapshot  *Document
-	Targets   *Targets
+// The tests' own verifier of the repositories the release commands write:
+// tough's RepositoryLoader::load for local folders. The app verifies with
+// installer/internal/tuf; this one is independent of both it and the
+// signing code.
+
+// loadedRepository is a repository verified by loadRepository.
+type loadedRepository struct {
+	Root      *tufsign.Root
+	Timestamp *tufsign.Document
+	Snapshot  *tufsign.Document
+	Targets   *tufsign.Targets
 	targets   string
 }
 
-// Load verifies the repository in metadata, from the trusted root file
-// trusted, as of now: the root chain (`N.root.json` from the trusted
-// version + 1, each signed by the previous root and itself), then
+// loadRepository verifies the repository in metadata, from the trusted
+// root file trusted, as of now: the root chain (`N.root.json` from the
+// trusted version + 1, each signed by the previous root and itself), then
 // timestamp, snapshot and targets, each signed by its role, pinned by the
 // role above it (version, length, SHA-256) and unexpired. Targets are read
 // from targets/NAME.
-func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, error) {
-	root, err := ParseRoot(trusted)
+func loadRepository(trusted []byte, metadata, targets string, now time.Time) (*loadedRepository, error) {
+	root, err := tufsign.ParseRoot(trusted)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +50,7 @@ func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, err
 		if err != nil {
 			return nil, err
 		}
-		newer, err := ParseRoot(data)
+		newer, err := tufsign.ParseRoot(data)
 		if err != nil {
 			return nil, err
 		}
@@ -68,7 +74,7 @@ func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, err
 	if err != nil {
 		return nil, err
 	}
-	timestamp, err := ParseRole(timestampFile, RoleTimestamp)
+	timestamp, err := tufsign.ParseRole(timestampFile, tufsign.RoleTimestamp)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +84,7 @@ func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, err
 	if !timestamp.Expires.After(now) {
 		return nil, errors.New("timestamp metadata is expired")
 	}
-	meta, _ := Meta(timestamp)
+	meta, _ := tufsign.Meta(timestamp)
 	pin, ok := meta["snapshot.json"]
 	if !ok {
 		return nil, errors.New("timestamp does not list snapshot.json")
@@ -91,10 +97,10 @@ func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, err
 	if err != nil {
 		return nil, err
 	}
-	if err := CheckPin(pin, snapshotFile); err != nil {
+	if err := checkMetaPin(pin, snapshotFile); err != nil {
 		return nil, err
 	}
-	snapshot, err := ParseRole(snapshotFile, RoleSnapshot)
+	snapshot, err := tufsign.ParseRole(snapshotFile, tufsign.RoleSnapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +113,7 @@ func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, err
 	if !snapshot.Expires.After(now) {
 		return nil, errors.New("snapshot metadata is expired")
 	}
-	meta, _ = Meta(snapshot)
+	meta, _ = tufsign.Meta(snapshot)
 	pin, ok = meta["targets.json"]
 	if !ok {
 		return nil, errors.New("snapshot does not list targets.json")
@@ -120,10 +126,10 @@ func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, err
 	if err != nil {
 		return nil, err
 	}
-	if err := CheckPin(pin, targetsFile); err != nil {
+	if err := checkMetaPin(pin, targetsFile); err != nil {
 		return nil, err
 	}
-	targetsDoc, err := ParseRole(targetsFile, RoleTargets)
+	targetsDoc, err := tufsign.ParseRole(targetsFile, tufsign.RoleTargets)
 	if err != nil {
 		return nil, err
 	}
@@ -136,16 +142,16 @@ func Load(trusted []byte, metadata, targets string, now time.Time) (*Loaded, err
 	if !targetsDoc.Expires.After(now) {
 		return nil, errors.New("targets metadata is expired")
 	}
-	parsed, err := TargetsOf(targetsDoc)
+	parsed, err := tufsign.TargetsOf(targetsDoc)
 	if err != nil {
 		return nil, err
 	}
-	return &Loaded{Root: root, Timestamp: timestamp, Snapshot: snapshot, Targets: parsed, targets: targets}, nil
+	return &loadedRepository{Root: root, Timestamp: timestamp, Snapshot: snapshot, Targets: parsed, targets: targets}, nil
 }
 
-// CheckPin checks data against a snapshot or timestamp entry: its length
-// and SHA-256, when the entry gives them.
-func CheckPin(pin Metafile, data []byte) error {
+// checkMetaPin checks data against a snapshot or timestamp entry: its
+// length and SHA-256, when the entry gives them.
+func checkMetaPin(pin tufsign.Metafile, data []byte) error {
 	if pin.Length != nil && *pin.Length != uint64(len(data)) {
 		return errors.New("metadata length differs from its pin")
 	}
@@ -159,7 +165,7 @@ func CheckPin(pin Metafile, data []byte) error {
 }
 
 // ReadTarget reads target name and checks its signed length and SHA-256.
-func (l *Loaded) ReadTarget(name string) ([]byte, error) {
+func (l *loadedRepository) ReadTarget(name string) ([]byte, error) {
 	entry, ok := l.Targets.Entries[name]
 	if !ok {
 		return nil, fmt.Errorf("target %s is not signed", name)

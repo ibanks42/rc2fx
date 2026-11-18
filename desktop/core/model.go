@@ -330,14 +330,6 @@ func (g SuppressionGeometry) LatencySamples() uint32 {
 	return g.FrameSamples + g.IntrinsicDelaySamples + g.WorkerLeadSamples
 }
 
-// WithWorkerLead is the same geometry with a different worker scheduling
-// allowance, for tests and benchmarks: the model's own buffering is
-// unchanged.
-func (g SuppressionGeometry) WithWorkerLead(workerLeadSamples uint32) SuppressionGeometry {
-	g.WorkerLeadSamples = workerLeadSamples
-	return g
-}
-
 func SuppressionModelGeometryWithLookahead(lookahead uint8) ModelGeometry {
 	return ModelGeometry{
 		FrameSamples:          DFNHopSamples,
@@ -478,9 +470,6 @@ func (b Band) Validate() error {
 	return rangeCheck(b.Q, 0.0, 100.0, "Q")
 }
 
-// Equal compares field by field.
-func (b Band) Equal(other Band) bool { return b == other }
-
 func DefaultEQSettings() EQSettings {
 	return EQSettings{Enabled: true, Bands: []Band{}}
 }
@@ -612,9 +601,6 @@ func (t Target) Validate() error {
 	if err := t.Suppression.validateLookahead(); err != nil {
 		return err
 	}
-	if _, ok := t.Suppression.Geometry(); !ok {
-		return CoreError("Lookahead " + strconv.Itoa(int(t.Suppression.Lookahead)) + " is not admitted for saved settings")
-	}
 	return t.validateFields()
 }
 
@@ -740,8 +726,6 @@ func CloneTargets(targets []Target) []Target {
 
 // TargetsEqual compares two target lists element by element (deepEqual).
 func TargetsEqual(a, b []Target) bool { return deepEqual(a, b) }
-
-func stringsEqual(a, b []string) bool { return slices.Equal(a, b) }
 
 func (c Config) Validate() error { return c.validateWith(Target.Validate) }
 

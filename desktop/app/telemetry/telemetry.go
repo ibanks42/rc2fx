@@ -131,9 +131,7 @@ type StartupWindow struct {
 	// clock; nil after a diagnostics reset, which hides the true start.
 	started *time.Time
 	phase   startupPhase
-	// unreadStarted is when audio started, while phase is phaseUnread.
-	unreadStarted time.Time
-	Faults        StartupFaults
+	Faults  StartupFaults
 }
 
 // Observe takes one reading of the whole meter.
@@ -167,7 +165,6 @@ func (w *StartupWindow) Observe(meter *core.Meter, sampleRate uint32, now time.T
 				w.phase = phaseOpen
 			} else {
 				w.phase = phaseUnread
-				w.unreadStarted = started
 			}
 		}
 	}
@@ -200,7 +197,8 @@ func (w *StartupWindow) WantsEvents() bool { return w.phase == phaseUnread }
 // range it is given.
 func (w *StartupWindow) ReadEvents(xruns func(from, until time.Time) uint64) {
 	if w.phase == phaseUnread {
-		started := w.unreadStarted
+		// started is always set when the phase becomes phaseUnread.
+		started := *w.started
 		w.Faults.Xruns = xruns(started, started.Add(StartupAudio))
 		w.phase = phaseClosed
 	}
@@ -537,27 +535,15 @@ func EngineError(state *core.DeviceState) (EngineErrorNotice, bool) {
 		return EngineErrorNotice{}, false
 	}
 	var recovery string
+	// Mixers report only native and offline modes; anything else confirms
+	// nothing.
 	switch state.Engine.Mode {
-	case core.EngineModeSimulation:
-		recovery = "Simulation does not confirm mixer audio or route recovery."
 	case core.EngineModeOffline:
 		recovery = "No live audio routing is confirmed in offline mode."
 	case core.EngineModeNative:
 		recovery = "Native channel processing reported an error. Mixer audio delivery is not confirmed by this status."
-	default: // Jack
-		switch {
-		case state.Routing.Status == core.RoutingPhaseBypassed &&
-			state.Routing.Channels == 0 &&
-			state.Routing.Recovered == 0 &&
-			len(state.Selection.ActiveTargetIDs) == 0 &&
-			state.Engine.RestartAllowed &&
-			!state.Engine.AudioAdvancing:
-			recovery = "Original audio routes were restored."
-		case state.Routing.Status == core.RoutingPhaseBypassing:
-			recovery = "Original audio route restoration was in progress; completion is not confirmed."
-		default:
-			recovery = "Original audio route recovery is not confirmed."
-		}
+	default:
+		recovery = "Original audio route recovery is not confirmed."
 	}
 	message := state.Engine.Message
 	if strings.TrimSpace(message) == "" {

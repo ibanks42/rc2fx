@@ -1,8 +1,8 @@
 package app
 
-// The overview's level bars. A bar is a div inside its track, placed as
-// levels.Bar.Fill places it: a fader's from the bottom, an output's from the
-// left, the 6 px stub without a fresh reading. When it is redrawn is
+// The overview's level bars. A bar is a div inside its track, filled to
+// levels.FillFraction: a fader's from the bottom, an output's from the
+// left, the levels.Stub pixels without a fresh reading. When it is redrawn is
 // line_overlay.go's.
 
 import (

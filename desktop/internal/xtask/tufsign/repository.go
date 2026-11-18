@@ -3,7 +3,6 @@ package tufsign
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -69,23 +68,24 @@ type Release struct {
 
 // Repository is a signed repository's files.
 type Repository struct {
-	consistent bool
-	rootName   string
-	Root       []byte
-	Targets    []byte
-	Snapshot   []byte
-	Timestamp  []byte
-	targetsV   uint64
-	snapshotV  uint64
+	rootName  string
+	Root      []byte
+	Targets   []byte
+	Snapshot  []byte
+	Timestamp []byte
 }
 
 // SignRelease is RepositoryEditor::sign for a new top-level targets role:
 // targets (with an empty delegations object, as tough's new editor writes),
 // then a snapshot pinning targets.json, then a timestamp pinning
-// snapshot.json, each signed by the signers root lists for it.
+// snapshot.json, each signed by the signers root lists for it. The files
+// keep their plain names, so a root with consistent snapshots is refused.
 func SignRelease(release Release, signers []Signer) (*Repository, error) {
 	if err := release.Root.CheckStable(); err != nil {
 		return nil, err
+	}
+	if release.Root.ConsistentSnapshot {
+		return nil, task.Error("signing requires consistent_snapshot=false")
 	}
 	targets := RoleValue(RoleTargets, release.TargetsVersion, release.TargetsExpires)
 	entries := core.ObjectValue()
@@ -123,14 +123,11 @@ func SignRelease(release Release, signers []Signer) (*Repository, error) {
 		return nil, err
 	}
 	return &Repository{
-		consistent: release.Root.ConsistentSnapshot,
-		rootName:   strconv.FormatUint(release.Root.Version, 10) + ".root.json",
-		Root:       release.RootFile,
-		Targets:    targetsFile,
-		Snapshot:   snapshotFile,
-		Timestamp:  timestampFile,
-		targetsV:   release.TargetsVersion,
-		snapshotV:  release.SnapshotVersion,
+		rootName:  strconv.FormatUint(release.Root.Version, 10) + ".root.json",
+		Root:      release.RootFile,
+		Targets:   targetsFile,
+		Snapshot:  snapshotFile,
+		Timestamp: timestampFile,
 	}, nil
 }
 
@@ -140,18 +137,13 @@ func (r *Repository) Write(dir string) error {
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return task.Errorf("Failed to create directory %s: %s", dir, task.IOError(err))
 	}
-	targets, snapshot := "targets.json", "snapshot.json"
-	if r.consistent {
-		targets = fmt.Sprintf("%d.targets.json", r.targetsV)
-		snapshot = fmt.Sprintf("%d.snapshot.json", r.snapshotV)
-	}
 	for _, file := range []struct {
 		name string
 		data []byte
 	}{
 		{r.rootName, r.Root},
-		{targets, r.Targets},
-		{snapshot, r.Snapshot},
+		{"targets.json", r.Targets},
+		{"snapshot.json", r.Snapshot},
 		{"timestamp.json", r.Timestamp},
 	} {
 		path := filepath.Join(dir, file.name)

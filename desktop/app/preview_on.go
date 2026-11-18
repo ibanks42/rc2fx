@@ -156,7 +156,7 @@ func (p *telemetryPreview) view(cx *gk.Cx) gk.Element {
 	return gk.Div(s.SizeFull, s.Px6, s.Py5).Bg(rgb(surface().Bg)).TextColor(rgb(Text)).
 		ID("telemetry-preview").OverflowYScroll().
 		Child(gk.VFlex(s.Gap6, s.WFull, s.MxAuto).MaxW(px(760)).
-			Child(telemetrySection(&snapshot, mono, aside, toggle, nil)))
+			Child(telemetrySection(&snapshot, mono, aside, toggle)))
 }
 
 func runTelemetryPreview(reported bool) {

@@ -6,30 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
-
-// Skipped unless asked for: requires zig; builds only the two recorder
-// payloads, never audio/app. Run with RC2FX_XTASK_ZIG_TESTS=1.
-func TestRecorderBuilderProducesBothCheckedArmPayloads(t *testing.T) {
-	if os.Getenv("RC2FX_XTASK_ZIG_TESTS") != "1" {
-		t.Skip("requires zig; set RC2FX_XTASK_ZIG_TESTS=1")
-	}
-	root := task.Root()
-	outputs, err := BuildJackRecorder(root, filepath.Join(root, "target", "recorder-builder-test"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if filepath.Base(outputs[0]) != JackerrModule || filepath.Base(outputs[1]) != JackerrSnapshot {
-		t.Fatalf("%v", outputs)
-	}
-	for _, path := range outputs {
-		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-			t.Fatalf("%s is not a file", path)
-		}
-	}
-}
 
 func TestMixerBuildRefusesToReplaceAPromotedBundleLink(t *testing.T) {
 	if runtime.GOOS == "windows" {

@@ -83,9 +83,8 @@ func badge(name, text string, color uint32) gk.TagEl {
 }
 
 // badges is the status, how long audio has run, the format, and anything
-// unusual; nextStep (nil for none) sits beside a status the user can act on.
-func badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *TelemetrySnapshot,
-	nextStep gk.Element) gk.DivEl {
+// unusual.
+func badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *TelemetrySnapshot) gk.DivEl {
 	status := telemetry.StatusOf(engine, routing, snapshot)
 	color := toneColor(status.Tone())
 	row := gk.HFlex(s.FlexWrap, s.ItemsCenter, s.Gap2).
@@ -93,9 +92,6 @@ func badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *Te
 			gk.HFlex(s.ItemsCenter, s.Gap1p5, s.TextXs, s.FontSemibold).TextColor(rgb(color)).
 				Child(telemetryDot(color)).
 				Child(txt(status.Label()))))
-	if nextStep != nil && status.NeedsAction() {
-		row = row.Child(nextStep)
-	}
 	for _, b := range telemetry.Badges(engine, routing, snapshot) {
 		row = row.Child(badge(b.Name, b.Text, toneColor(b.Tone)))
 	}
@@ -200,17 +196,15 @@ func factGrid(facts []telemetry.Fact, mono string) gk.DivEl {
 }
 
 // telemetrySection is the TELEMETRY section; aside holds its header
-// controls, toggle opens or closes Technical details, and nextStep (such as
-// a restart; nil for none) shows beside a status the user can act on.
-func telemetrySection(snapshot *TelemetrySnapshot, mono string, aside gk.DivEl, toggle gk.Element,
-	nextStep gk.Element) gk.DivEl {
+// controls and toggle opens or closes Technical details.
+func telemetrySection(snapshot *TelemetrySnapshot, mono string, aside gk.DivEl, toggle gk.Element) gk.DivEl {
 	sampleRate := uint32(48_000)
 	if snapshot.HasEngine {
 		sampleRate = snapshot.Engine.SampleRate
 	}
 	body := gk.VFlex(s.Gap3, s.Py3)
 	if snapshot.HasEngine {
-		body = body.Child(badges(&snapshot.Engine, &snapshot.Routing, snapshot, nextStep))
+		body = body.Child(badges(&snapshot.Engine, &snapshot.Routing, snapshot))
 	}
 	if snapshot.Notice != "" {
 		body = body.Child(telemetryValue(snapshot.Notice, Muted))

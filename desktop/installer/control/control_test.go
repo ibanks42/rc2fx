@@ -95,8 +95,8 @@ func (m *mixer) Write(report []byte, _ time.Duration) (int, error) {
 				if offset >= len(m.reply) {
 					break
 				}
-				end := min(offset+usbproto.InputPayload, len(m.reply))
-				index := offset / usbproto.InputPayload
+				end := min(offset+usbproto.Payload, len(m.reply))
+				index := offset / usbproto.Payload
 				if m.loseReport != nil && *m.loseReport == index {
 					m.loseReport = nil
 				} else {
@@ -374,7 +374,7 @@ func TestALostReplyReportIsFetchedAgainFromWhereItStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	reply := pack(t, data)
-	if len(reply) <= 6*usbproto.InputPayload {
+	if len(reply) <= 6*usbproto.Payload {
 		t.Fatalf("reply of %d bytes is too short for this test", len(reply))
 	}
 	m := newMixer()

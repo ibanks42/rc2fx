@@ -82,15 +82,6 @@ func (e EngineStatus) Validate() error {
 	return nil
 }
 
-func (e EngineStatus) RestartEligible() bool {
-	return e.RestartAllowed && e.Mode == EngineModeJack && e.Status == EnginePhaseError
-}
-
-type EngineRestartRequest struct {
-	ExpectedRevision   uint64 `json:"expectedRevision"`
-	ExpectedGeneration uint64 `json:"expectedGeneration"`
-}
-
 // RoutingRequest is the global processing enable/disable. Generation checks
 // distinguish this from per-channel effect bypass and reject requests from a
 // retired audio owner.
@@ -138,26 +129,6 @@ func (p PendingRouting) ValidateAcknowledgement(state DeviceState) error {
 		state.Selection.Status != SelectionPhaseIdle ||
 		len(state.Selection.PendingTargetIDs) != 0 {
 		return CoreError("Processing response does not match the requested transition and saved settings")
-	}
-	return nil
-}
-
-type PendingRestart struct {
-	Request EngineRestartRequest
-	config  Config
-}
-
-func (p PendingRestart) ValidateAcknowledgement(state DeviceState) error {
-	if err := state.Validate(); err != nil {
-		return err
-	}
-	if !state.Config.Equal(p.config) ||
-		!checkedAddOne(p.Request.ExpectedGeneration).is(state.Engine.Generation) ||
-		state.Engine.Mode != EngineModeJack ||
-		state.Engine.Status != EnginePhaseRestarting ||
-		state.Engine.RestartAllowed ||
-		state.Engine.AudioAdvancing {
-		return CoreError("Restart response does not match the requested engine and saved settings")
 	}
 	return nil
 }
@@ -245,13 +216,6 @@ type Timing struct {
 	Overruns    uint64    `json:"overruns"`
 	ClockErrors uint64    `json:"clockErrors"`
 	Histogram   [8]uint64 `json:"histogram"`
-}
-
-func (t Timing) MeanMs() float64 {
-	if t.Calls == 0 {
-		return 0.
-	}
-	return float64(t.TotalNs) / float64(t.Calls) / 1_000_000.
 }
 
 // Performance accepts unknown fields: a newer mixer may report more.
@@ -554,18 +518,6 @@ func (s *Session) unobservedOrOlder(generation uint64) bool {
 	return !s.observedEngineGeneration.ok || s.observedEngineGeneration.value < generation
 }
 
-func (s *Session) ReceiveEngine(engine EngineStatus) bool {
-	if s.observedNewer(engine.Generation) {
-		return false
-	}
-	if s.Saved == nil {
-		return false
-	}
-	s.observedEngineGeneration = someU64(engine.Generation)
-	s.Saved.Engine = engine
-	return true
-}
-
 // ReceiveRuntime observes the live portion of our pending settings write's
 // stream echo. The caller identifies the exact request/revision; the
 // request's reply will acknowledge its settings. Keep all saved settings and
@@ -802,38 +754,6 @@ func (s *Session) AcknowledgeRouting(pending PendingRouting, state DeviceState) 
 		s.Saved.Routing == pending.runtime.routing &&
 		s.Saved.Selection.Equal(pending.runtime.selection)
 	if nativeTransition || s.unobservedOrOlder(state.Engine.Generation) {
-		if _, err := s.Receive(state); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Session) BeginRestart() (PendingRestart, error) {
-	if s.Saved == nil || !s.Connected {
-		return PendingRestart{}, CoreError("Connect to the mixer before restarting processing")
-	}
-	saved := s.Saved
-	if !saved.Engine.RestartEligible() || saved.Engine.Generation == maxUint64 {
-		return PendingRestart{}, CoreError("The mixer is not ready for an engine restart")
-	}
-	return PendingRestart{
-		Request: EngineRestartRequest{
-			ExpectedRevision:   saved.Config.Revision,
-			ExpectedGeneration: saved.Engine.Generation,
-		},
-		config: saved.Config.Clone(),
-	}, nil
-}
-
-// AcknowledgeRestart: the stream may have already reported the result of
-// this reservation. Preserve newer runtime state and all local edits in that
-// case.
-func (s *Session) AcknowledgeRestart(pending PendingRestart, state DeviceState) error {
-	if err := pending.ValidateAcknowledgement(state); err != nil {
-		return err
-	}
-	if s.unobservedOrOlder(state.Engine.Generation) {
 		if _, err := s.Receive(state); err != nil {
 			return err
 		}

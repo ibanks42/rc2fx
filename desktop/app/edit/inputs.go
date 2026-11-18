@@ -5,7 +5,6 @@ package edit
 
 import (
 	"fmt"
-	"math"
 	"slices"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -93,10 +92,4 @@ func ChangedPaths(saved, draft []string) []string {
 		}
 	}
 	return changed
-}
-
-// RestartCandidate is whether the mixer allows a processing restart of this
-// state's engine.
-func RestartCandidate(state *core.DeviceState) bool {
-	return state.Engine.RestartEligible() && state.Engine.Generation < math.MaxUint64
 }

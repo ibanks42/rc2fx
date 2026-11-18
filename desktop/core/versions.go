@@ -87,9 +87,6 @@ type DeviceVersions struct {
 
 func (DeviceVersions) AllowUnknownJSONFields() {}
 
-// Equal compares field by field (deepEqual).
-func (d DeviceVersions) Equal(other DeviceVersions) bool { return deepEqual(d, other) }
-
 // Validate refuses text no real version has: these fields are shown as they
 // arrive.
 func (d DeviceVersions) Validate() error {

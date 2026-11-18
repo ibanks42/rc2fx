@@ -8,7 +8,7 @@ import (
 )
 
 func TestTheEmbeddedBundleParses(t *testing.T) {
-	sections, err := Parse(Embedded())
+	sections, err := Parse(embedded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestTheCommittedBundleIsThePlaceholder(t *testing.T) {
 	if os.Getenv("RC2FX_RELEASE_BUILD") == "1" {
 		t.Skip("release build")
 	}
-	if !IsPlaceholder() {
+	if embedded != Placeholder {
 		t.Skip("licenses.json was regenerated")
 	}
 	if got := Sections(); len(got) != 1 || !strings.Contains(got[0].Title, "not bundled") {

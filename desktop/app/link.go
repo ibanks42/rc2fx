@@ -47,9 +47,6 @@ func (l linkIntent) auto() bool {
 // connecting is whether a connect command is out.
 func (l linkIntent) connecting() bool { return l.phase == linkConnecting }
 
-// pausedForFlash is whether the connection waits for a flash to finish.
-func (l linkIntent) pausedForFlash() bool { return l.phase == linkPausedForFlash }
-
 // begin starts an attempt, canceling any scheduled one; sent is whether the
 // connect command went out.
 func (l *linkIntent) begin(sent bool) {

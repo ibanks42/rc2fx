@@ -7,7 +7,8 @@ import (
 )
 
 // licenses.json is what this build shows. The copy in the repository is
-// Placeholder, for development builds; release packaging regenerates it from
+// Placeholder, for development builds (xtask packaging refuses an
+// executable that still carries it); release packaging regenerates it from
 // the generated notices before building:
 //
 //	RC2FX_RELEASE_BUILD=1 RC2FX_LICENSES_JSON=/path/to/licenses.json go generate ./app/licenses
@@ -18,17 +19,6 @@ import (
 
 //go:embed licenses.json
 var embedded string
-
-// Embedded is the license bundle this build carries, as generated.
-func Embedded() string {
-	return embedded
-}
-
-// IsPlaceholder reports a build that carries Placeholder rather than the
-// notices; release packaging can refuse such a build.
-func IsPlaceholder() bool {
-	return embedded == Placeholder
-}
 
 var sections = sync.OnceValue(func() []Section {
 	parsed, err := Parse(embedded)

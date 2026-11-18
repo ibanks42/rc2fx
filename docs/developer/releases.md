@@ -28,7 +28,7 @@ repository and, when a newer app is out, pages through the release list for
 the notes since the installed version. It accepts only published, stable
 `vMAJOR.MINOR.PATCH` tags, and it links
 to release pages built from the validated tag. It never downloads anything.
-The repository is a fixed constant (`AppRepository`) in that file, so builds from forks also
+The repository is written into that file's URL constants, so builds from forks also
 check the official releases.
 
 Copies installed by Velopack (the Windows and macOS installers and portable

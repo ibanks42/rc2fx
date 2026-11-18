@@ -161,15 +161,13 @@ func TestDroppingOwnerStopsWorkerWithoutDrainingCommands(t *testing.T) {
 }
 
 func TestUpdateChunksAreStandardBase64(t *testing.T) {
+	// The mixer reads padded standard base64: "Zg==" would catch a switch
+	// to the unpadded variant, "//4A" one to the URL alphabet.
 	for _, c := range []struct {
 		in   []byte
 		want string
 	}{
-		{[]byte(""), ""},
 		{[]byte("f"), "Zg=="},
-		{[]byte("fo"), "Zm8="},
-		{[]byte("foo"), "Zm9v"},
-		{[]byte("foobar"), "Zm9vYmFy"},
 		{[]byte{0xff, 0xfe, 0x00}, "//4A"},
 	} {
 		if got := encodeBase64(c.in); got != c.want {

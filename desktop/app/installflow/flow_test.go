@@ -580,17 +580,13 @@ func TestEachModeCardShowsTheReleaseItWouldUse(t *testing.T) {
 		{Channel: "stable", Version: "1.7.6", Supported: true},
 		{Channel: "beta", Version: "1.8.0", Supported: false},
 	}
-	if got := count(m.ReleasesFor(false)); got != 1 {
-		t.Fatalf("%d releases", got)
-	}
-	if got := count(m.ReleasesFor(true)); got != 1 {
+	if got := count(m.ReleasesFor()); got != 1 {
 		t.Fatalf("%d releases", got)
 	}
 	m.Select(true, 1)
-	wantChoice(t, m.ChoiceFor(true), "stable", "1.7.6", "stock")
-	wantChoice(t, m.ChoiceFor(false), "stable", "1.7.6", "an unsupported release falls back for RC2FX")
+	wantChoice(t, m.ChoiceFor(), "stable", "1.7.6", "an unsupported release falls back")
 	m.SetStock(false)
-	if !opt.Equal(m.Choice, m.ChoiceFor(false)) {
+	if !opt.Equal(m.Choice, m.ChoiceFor()) {
 		t.Fatalf("choice %+v", m.Choice)
 	}
 }
@@ -1298,7 +1294,7 @@ func TestFirmwareForANewerAppIsExplainedAndCanNeverBeChosen(t *testing.T) {
 		},
 	}}, nil)
 	wantChoice(t, m.Choice, "stable", "1.7.6", "choice")
-	if got := count(m.ReleasesFor(false)); got != 1 {
+	if got := count(m.ReleasesFor()); got != 1 {
 		t.Fatalf("%d releases", got)
 	}
 	note, ok := m.FirmwareNote()

@@ -149,10 +149,10 @@ func writeFixtures(t *testing.T) {
 }
 
 // loadFixture verifies one repository of the fixture as the client does.
-func loadFixture(t *testing.T, repo, metadata string, now time.Time) *tufsign.Loaded {
+func loadFixture(t *testing.T, repo, metadata string, now time.Time) *loadedRepository {
 	t.Helper()
 	dir := fixtureDir()
-	loaded, err := tufsign.Load(mustRead(t, filepath.Join(dir, repo, "root.json")),
+	loaded, err := loadRepository(mustRead(t, filepath.Join(dir, repo, "root.json")),
 		filepath.Join(dir, repo, metadata), filepath.Join(dir, "targets"), now)
 	if err != nil {
 		t.Fatalf("%s/%s: %v", repo, metadata, err)

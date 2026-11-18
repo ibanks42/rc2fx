@@ -7,7 +7,7 @@ import (
 
 func TestTheLinkStartsOff(t *testing.T) {
 	var l linkIntent
-	if l.auto() || l.connecting() || l.pausedForFlash() || l.due(false, time.Now()) {
+	if l.auto() || l.connecting() || l.phase == linkPausedForFlash || l.due(false, time.Now()) {
 		t.Fatalf("zero link %+v is not off", l)
 	}
 }
@@ -106,19 +106,19 @@ func TestAFlashPausesAndThenRetriesAtOnce(t *testing.T) {
 	}
 	l.stop()
 	l.pauseForFlash()
-	if l.auto() || !l.pausedForFlash() || l.due(false, now.Add(time.Hour)) {
+	if l.auto() || l.phase != linkPausedForFlash || l.due(false, now.Add(time.Hour)) {
 		t.Fatalf("paused: %+v", l)
 	}
 	// Disconnect during the flash keeps the pause.
 	l.stop()
 	l.failed(false, now)
-	if !l.pausedForFlash() {
+	if l.phase != linkPausedForFlash {
 		t.Fatalf("pause lost: %+v", l)
 	}
 	if !l.flashDone(now) {
 		t.Fatal("pause not ended")
 	}
-	if l.pausedForFlash() || !l.auto() || !l.due(false, now) {
+	if l.phase == linkPausedForFlash || !l.auto() || !l.due(false, now) {
 		t.Fatalf("after the flash: %+v", l)
 	}
 }

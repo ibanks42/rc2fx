@@ -42,25 +42,8 @@ func coreState(revision uint64) DeviceState {
 	}
 }
 
-func restartableState() DeviceState {
-	state := coreState(7)
-	state.Engine.Status = EnginePhaseError
-	state.Engine.Generation = 8
-	state.Engine.RestartAllowed = true
-	state.Engine.AudioAdvancing = false
-	return state
-}
-
-func restartAck(state DeviceState) DeviceState {
-	ack := state.Clone()
-	ack.Engine.Generation++
-	ack.Engine.Status = EnginePhaseRestarting
-	ack.Engine.RestartAllowed = false
-	return ack
-}
-
-func TestRestartWireRequiresGenerationAndExplicitEligibility(t *testing.T) {
-	original := restartableState()
+func TestEngineWireRequiresGenerationAndExplicitEligibility(t *testing.T) {
+	original := coreState(7)
 	value := toValue(t, original)
 	check(t, must(DeviceStateFromJSON(value.String())).Equal(original))
 	for _, key := range []string{"generation", "restartAllowed"} {
@@ -68,8 +51,6 @@ func TestRestartWireRequiresGenerationAndExplicitEligibility(t *testing.T) {
 		value.GetMut("engine").Remove(key)
 		fails(t, must2(DeviceStateFromJSON(value.String())), key)
 	}
-	request := EngineRestartRequest{ExpectedRevision: 7, ExpectedGeneration: 8}
-	check(t, toValue(t, request).Equal(parse(t, `{"expectedRevision":7,"expectedGeneration":8}`)))
 	meter := parse(t, `{"type":"meter","revision":7,"generation":8,"synthetic":false,"targets":[]}`)
 	ok(t, must2(FromJSON[Meter](meter.String())))
 	old := meter.Clone()
@@ -77,77 +58,21 @@ func TestRestartWireRequiresGenerationAndExplicitEligibility(t *testing.T) {
 	fails(t, must2(FromJSON[Meter](old.String())))
 }
 
+func TestOnlyANewConnectionForgetsTheObservedEngineGeneration(t *testing.T) {
+	old := coreState(1)
+	newer := old.Clone()
+	newer.Engine.Generation++
+	session := DefaultSession()
+	receive(t, &session, newer)
+	check(t, receive(t, &session, old.Clone()) == RemoteUpdateStale)
+	// A deliberate new connection can target a different mixer with its
+	// own generation sequence.
+	session.Disconnect()
+	check(t, receive(t, &session, old) != RemoteUpdateStale)
+}
+
 // must2 keeps only the error of a (value, error) pair.
 func must2[T any](_ T, err error) error { return err }
-
-func TestRestartPreservesSavedRevisionSettingsAndUnsavedDraft(t *testing.T) {
-	saved := restartableState()
-	session := DefaultSession()
-	receive(t, &session, saved.Clone())
-	session.Draft[0].Gain.DB = -9.
-	draft := CloneTargets(session.Draft)
-	pending := must(session.BeginRestart())
-	check(t, pending.Request.ExpectedRevision == 7)
-	check(t, pending.Request.ExpectedGeneration == 8)
-	ok(t, session.AcknowledgeRestart(pending, restartAck(saved)))
-	check(t, session.Saved.Config.Equal(saved.Config))
-	check(t, TargetsEqual(session.Draft, draft))
-	check(t, !session.IsApplied())
-	fails(t, must2(session.BeginApply()))
-	fails(t, must2(session.BeginRestart()))
-}
-
-func TestLateRestartAckCannotOverwriteTerminalStreamState(t *testing.T) {
-	for _, phase := range []EnginePhase{EnginePhaseRunning, EnginePhaseError} {
-		saved := restartableState()
-		session := DefaultSession()
-		receive(t, &session, saved.Clone())
-		pending := must(session.BeginRestart())
-		ack := restartAck(saved)
-		terminal := ack.Clone()
-		terminal.Engine.Status = phase
-		terminal.Engine.Message = "Stream result"
-		receive(t, &session, terminal.Clone())
-		ok(t, session.AcknowledgeRestart(pending, ack))
-		check(t, session.Saved.Equal(terminal))
-		must(session.ReceiveSnapshot(restartAck(saved)))
-		check(t, session.Saved.Equal(terminal))
-		check(t, receive(t, &session, saved.Clone()) == RemoteUpdateStale)
-		check(t, !session.ReceiveEngine(saved.Engine))
-		// A deliberate new connection can target a different mixer with its
-		// own generation sequence. A transient event-stream reconnect does not reset it.
-		session.Disconnect()
-		check(t, receive(t, &session, saved) != RemoteUpdateStale)
-	}
-}
-
-func TestRestartRejectsWrongGenerationMutatedSettingsOrUnreservedResponse(t *testing.T) {
-	saved := restartableState()
-	session := DefaultSession()
-	receive(t, &session, saved.Clone())
-	pending := must(session.BeginRestart())
-	for mutation := 0; mutation < 6; mutation++ {
-		ack := restartAck(saved)
-		switch mutation {
-		case 0:
-			ack.Engine.Generation++
-		case 1:
-			ack.Config.Revision++
-		case 2:
-			ack.Config.Targets[0].Gain.DB = -5.
-		case 3:
-			ack.Engine.Status = EnginePhaseRunning
-		case 4:
-			ack.Engine.RestartAllowed = true
-		default:
-			ack.Engine.AudioAdvancing = true
-		}
-		fails(t, session.AcknowledgeRestart(pending, ack), mutation)
-		check(t, session.Saved.Equal(saved))
-	}
-	session.Disconnect()
-	fails(t, must2(session.BeginRestart()))
-}
 
 func TestAppliedRequiresAllHardwareChannelsRouted(t *testing.T) {
 	value := coreState(1)
@@ -336,11 +261,6 @@ func TestLookaheadOneAddsExactlyOneHopToTheAdmittedLatency(t *testing.T) {
 	check(t, la1.LatencySamples()-la0.LatencySamples() == DFNHopSamples)
 	_, admitted := SuppressionAdmittedGeometry(2)
 	check(t, !admitted)
-}
-
-func TestTheWorkerLeadAndTheLatencyAddUp(t *testing.T) {
-	geometry, _ := SuppressionAdmittedGeometry(0)
-	check(t, geometry.WithWorkerLead(112).LatencySamples() == 240+120+112)
 }
 
 func TestPerformanceReportsHelperCountersAndAcceptsPayloadsWithoutThem(t *testing.T) {
@@ -659,8 +579,6 @@ func TestResponseGainsSoloBypassAndChannelIsolation(t *testing.T) {
 	eq.Enabled = false
 	check(t, slices.Equal(ResponseCurve(eq, ChannelLeft, frequencies, true), []float64{0, 0, 0}))
 	check(t, ResponseDB(eq, ChannelLeft, 1000.0, true) == 0.0)
-	check(t, slices.Equal(LogFrequencies(1, 10.0, 24000.0), []float64{10.0}))
-	check(t, len(LogFrequencies(0, 10.0, 24000.0)) == 0)
 	high := NewBand("band-1")
 	high.Frequency = 24000.0
 	clamped := must(DesignCoefficients(high))
@@ -688,7 +606,7 @@ func TestEmptyAndUnequalChannelExportNeverEmitZeroBands(t *testing.T) {
 	empty := DefaultEQSettings()
 	text := must(ExportEasyEffects(empty, PipelineInput))
 	tree := parse(t, text)
-	count, _ := tree.Pointer("/input/equalizer#0/num-bands").AsI64()
+	count, _ := tree.Pointer("/input/equalizer#0/num-bands").AsU64()
 	check(t, count == 1, text)
 	check(t, imported(t, text, true).Equal(empty))
 	split := DefaultEQSettings()
@@ -709,7 +627,7 @@ func TestExplicitEqualizerAndMonoChannelSelection(t *testing.T) {
 	check(t, must(ImportEasyEffects(text, ImportOptions{})).Kind == ImportResultChooseChannel)
 	left := must(ImportEasyEffects(text, ImportOptions{Channel: new(ChannelLeft)}))
 	right := must(ImportEasyEffects(text, ImportOptions{Channel: new(ChannelRight)}))
-	check(t, !left.Equal(right))
+	check(t, !deepEqual(left, right))
 	multiple := parse(t, text)
 	output, _ := multiple.Get("output")
 	multiple.Set("input", output.Clone())

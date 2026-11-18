@@ -131,7 +131,6 @@ type App struct {
 	retired, retiring []any
 	pending           *core.PendingApply
 	routingPending    *core.PendingRouting
-	restartPending    *core.PendingRestart
 	selectionPending  *core.PendingSelection
 	// selectionAsked: this app asked for the current path change, so its
 	// failure is ours to report. A failure the mixer reports on its own
@@ -198,8 +197,6 @@ type App struct {
 	renderGeneration    uint64
 	lineSlots           LineSlots
 	onboardingSignature gk.View
-	// layout is the window's size and scale at this view's last render.
-	layout LineLayout
 	// reducedMotion is the cached system policy, from GPUI/Base's platform
 	// motion integration. This is not an RC2FX preference; old persisted
 	// values are ignored.
@@ -237,7 +234,6 @@ type App struct {
 	window        gk.Window
 	confirmDialog gk.Built[gk.DialogEl]
 	confirmOpen   *confirmState
-	pollTimer     gk.Timer
 	// stagePreviews are the flow lane's drag previews (DraggedStage), one
 	// view per effect, made once.
 	stagePreviews map[core.Effect]gk.View
@@ -320,7 +316,7 @@ func (a *App) init(cx *gk.Cx) {
 	}
 	// A timer made in init redraws the root view after each tick; poll opts
 	// out (gk.Quiet) and redraws only when it calls a.notify.
-	a.pollTimer = gk.Every(cx, 50*time.Millisecond, a.poll)
+	gk.Every(cx, 50*time.Millisecond, a.poll)
 }
 
 // notify is cx.notify() on the app's view.
@@ -405,7 +401,6 @@ func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 	a.resave = false
 	a.awaitingRefresh = false
 	a.routingPending = nil
-	a.restartPending = nil
 	a.selectionPending = nil
 	a.presets.reset()
 	a.meter = nil
@@ -440,7 +435,6 @@ func (a *App) disconnect(cx *gk.Cx) {
 	a.resave = false
 	a.awaitingRefresh = false
 	a.routingPending = nil
-	a.restartPending = nil
 	a.selectionPending = nil
 	a.presets.reset()
 	a.streamConnected = false
@@ -616,8 +610,6 @@ func (a *App) poll(cx *gk.Cx) {
 		switch k := event.Kind.(type) {
 		case transport.EventKindSelection:
 			a.selectionReply(k.State, k.Err)
-		case transport.EventKindRestartEngine:
-			a.restartReply(k.State, k.Err)
 		case transport.EventKindInputs:
 			a.receiveInputs(cx, k.Inventory, k.Err)
 		case transport.EventKindDiagnostics:
@@ -688,25 +680,6 @@ func (a *App) poll(cx *gk.Cx) {
 		case transport.EventKindRefreshed:
 			a.receive(cx, k.State, false, true)
 			a.awaitingRefresh = false
-		case transport.EventKindEngine:
-			var engine core.EngineStatus
-			if core.DecodeStrict(k.Engine, &engine) == nil && engine.Validate() == nil {
-				reset := a.session.Saved == nil || a.session.Saved.Engine.Generation != engine.Generation ||
-					engine.Status != core.EnginePhaseRunning
-				if a.session.ReceiveEngine(engine) {
-					if reset {
-						a.meter = nil
-						clear(a.meterProgress)
-						a.levels.Clear()
-					}
-					now := time.Now()
-					a.engineSeen = &now
-				}
-			} else {
-				a.message = "Invalid engine status received"
-				a.engineSeen = nil
-				a.meter = nil
-			}
 		case transport.EventKindMeter:
 			var meter core.Meter
 			if core.DecodeStrict(k.Meter, &meter) == nil && a.session.Saved != nil &&
@@ -758,7 +731,6 @@ func (a *App) poll(cx *gk.Cx) {
 				// reconnect. Preserve the observed high-water mark; only
 				// the new stream can reconcile uncertain writes.
 				a.routingPending = nil
-				a.restartPending = nil
 				a.selectionPending = nil
 				a.meter = nil
 				clear(a.meterProgress)
@@ -837,7 +809,7 @@ func (a *App) poll(cx *gk.Cx) {
 	overview := homeKey != nil && a.nav.basePageInFront() && a.installer == nil
 	isFresh := fresh != nil
 	if changed || isFresh != a.wasFresh || !homeKeyEqual(homeKey, a.lastHomeKey) ||
-		(meterArrived && !(overview && a.barsAnimate(cx))) {
+		(meterArrived && !(overview && a.barsAnimate())) {
 		a.notify(cx)
 	}
 	a.toastMessage(cx)

@@ -52,25 +52,10 @@ func TestTypedStorageParserPreservesExactNumericAndStructuralAcceptance(t *testi
 		{`{"integer":1,"signed":0,"float":1,"values":[],"other":1}`, false},
 		{`{"integer":1,"signed":0,"float":1,"values":[],"integer":2}`, false},
 	}
+	// These are serde's verdicts.
 	for _, fixture := range fixtures {
-		tree, treeErr := FromJSON[numericFixture](fixture.text)
-		direct, directErr := FromJSONLimited[numericFixture](fixture.text, 512*1024, 200_000)
-		check(t, (treeErr == nil) == (directErr == nil), fixture.text)
-		// The Rust test only compares the two paths; these are serde's
-		// verdicts.
-		check(t, (treeErr == nil) == fixture.accept, fixture.text, treeErr)
-		if treeErr != nil || directErr != nil {
-			continue
-		}
-		check(t, deepEqual(tree, direct), fixture.text)
-		check(t, math.Float64bits(tree.Float) == math.Float64bits(direct.Float), fixture.text)
-		for i := range tree.Values {
-			a, b := tree.Values[i], direct.Values[i]
-			check(t, (a == nil) == (b == nil), fixture.text)
-			if a != nil {
-				check(t, math.Float64bits(*a) == math.Float64bits(*b), fixture.text)
-			}
-		}
+		_, err := FromJSON[numericFixture](fixture.text)
+		check(t, (err == nil) == fixture.accept, fixture.text, err)
 	}
 	first := must(FromJSON[numericFixture](fixtures[0].text))
 	check(t, first.Integer == math.MaxUint64 && first.Signed == math.MinInt64)

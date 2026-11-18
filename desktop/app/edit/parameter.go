@@ -358,7 +358,7 @@ func (p Parameter) Set(target *core.Target, channel core.Channel, band int, valu
 }
 
 // ParseValue reads a typed value as a decimal float (inf and nan parse;
-// Editable refuses them). Go's ParseFloat also takes hexadecimal floats and
+// the editor refuses them). Go's ParseFloat also takes hexadecimal floats and
 // digit underscores, which are refused here.
 func ParseValue(text string) (float64, bool) {
 	if strings.ContainsAny(text, "xX_") {
@@ -373,13 +373,6 @@ func ParseValue(text string) (float64, bool) {
 		return 0, false
 	}
 	return value, true
-}
-
-// Editable is whether a typed value may be set: finite and within the
-// parameter's range.
-func (p Parameter) Editable(value float64) bool {
-	d := p.Describe()
-	return !math.IsInf(value, 0) && !math.IsNaN(value) && value >= d.Min && value <= d.Max
 }
 
 // Parameters is which controls an effect's editor shows, in order.

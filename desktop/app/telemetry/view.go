@@ -210,9 +210,6 @@ func (s Status) Tone() Tone {
 	return ToneDanger
 }
 
-// NeedsAction is whether a next step, such as a restart, belongs beside it.
-func (s Status) NeedsAction() bool { return s.Kind == StatusFailed || s.Kind == StatusStopped }
-
 // where is "Mic 4", or "2 channels" when there are several.
 func where(names []string) string {
 	if len(names) == 1 {

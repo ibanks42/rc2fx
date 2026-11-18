@@ -11,6 +11,7 @@ import (
 	"gpuikit.dev/gk"
 	"gpuikit.dev/gk/s"
 
+	"github.com/ibanks42/rc2fx/desktop/app/levels"
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/app/telemetry"
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -205,7 +206,7 @@ func (a *App) processedRow(index int, selected bool, cx *gk.Cx) gk.StatefulDivEl
 	}
 	line := gk.Div(s.FlexShrink0).W(px(46)).H(px(18))
 	if !a.reducedMotion {
-		line = line.Child(a.indicator(linePath(target.ID), fresh, liveLineMini))
+		line = line.Child(a.indicator(linePath(target.ID), fresh, levels.Mini))
 	}
 	row := gk.HFlex(s.Relative, s.ItemsCenter, s.CursorPointer).Gap(px(11)).H(px(48)).Px(px(12)).
 		Rounded(px(10)).TextSize(px(14)).TextColor(rgb(nameColor))
@@ -335,7 +336,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	if c, ok := a.engineErrorCard(cx); ok {
 		content = content.Child(c)
 	}
-	content = content.Child(a.restartPanel(cx))
+	content = content.Child(a.restartPanel())
 	if a.session.Conflict {
 		content = content.Child(a.conflictCard(cx))
 	}

@@ -171,7 +171,7 @@ func TestAPayloadRoundTripsThroughTheEnvelope(t *testing.T) {
 	exe := append([]byte("\x7fELF not really an executable"), blob...)
 	exe = append(exe, "trailing .rodata"...)
 	found, err := Find(exe)
-	if err != nil || !found.Equal(envelope) {
+	if err != nil || !bytes.Equal(found.AsBytes(), envelope.AsBytes()) || !bytes.Equal(found.Body(), envelope.Body()) {
 		t.Fatalf("%v", err)
 	}
 }

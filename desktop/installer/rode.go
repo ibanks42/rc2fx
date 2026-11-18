@@ -59,14 +59,6 @@ func locationForModel(model firmware.Model, value, suffix, version string) (stri
 	return rode.Location(model.Hardware(), value, suffix, version)
 }
 
-func patchArchive(src, dst string, extra []Entry) (string, string, error) {
-	p, err := patchArchiveForModel(firmware.ModelProIi, src, dst, extra, nil)
-	if err != nil {
-		return "", "", err
-	}
-	return p.Mixer, p.Launcher, nil
-}
-
 // patchArchiveForModel writes a copy of src to dst with extra added (see
 // archive.Patch). What RC2FX's image needs beyond RØDE's archive is checked
 // here: root's authorized_keys must be as empty as RØDE ships it and SSH

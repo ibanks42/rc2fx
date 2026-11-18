@@ -124,13 +124,7 @@ func TestRequestsTakeTheFolderLock(t *testing.T) {
 	}
 }
 
-func TestDescriptorAndPIDGuards(t *testing.T) {
-	if !VendorUsage([]byte{0x06, 0x00, 0xff, 0x09, 0x01, 0xa1, 0x01}) {
-		t.Fatal("vendor page refused")
-	}
-	if VendorUsage([]byte{0x05, 0x01, 0x09, 0x06, 0xa1, 0x01}) {
-		t.Fatal("keyboard accepted")
-	}
+func TestPIDGuards(t *testing.T) {
 	has := func(pid uint16) bool {
 		for _, p := range normalPIDs {
 			if p == pid {
@@ -479,14 +473,6 @@ func TestRealPayloadReleases(t *testing.T) {
 }
 
 // Probes the host's USB. Read-only: no report channel is opened.
-func TestLiveProbe(t *testing.T) {
-	root := realEnv(t, "RC2FX_REAL_ROOT")
-	engine := New(root, t.TempDir())
-	status, err := engine.probe()
-	must(t, err)
-	t.Logf("%+v", status)
-}
-
 // stockImage is a minimal stock root filesystem with the members the patch
 // checks.
 func stockImage(t *testing.T, path string) {

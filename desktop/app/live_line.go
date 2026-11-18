@@ -1,6 +1,6 @@
 package app
 
-// The level indicator, the design's glowing line. Its height
+// The level indicator, the design's live line. Its height
 // follows a path's reported output level (peak-meter ballistics,
 // LevelHistory.Display); its shape is decorative, not an audio waveform, and
 // the UI says so. This file only draws: when it moves is line_overlay.go's,
@@ -17,10 +17,6 @@ import (
 
 // LineStyle is the sizes of one indicator (levels.LineStyle).
 type LineStyle = levels.LineStyle
-
-// liveLineMini is the sidebar's small line beside each
-// processed channel.
-var liveLineMini = levels.Mini
 
 // levelOf is level_of: the displayed level of history at now, 0 to 1 on the
 // meter scale.
@@ -52,11 +48,6 @@ func livePlot(width, height, phase, lvl float32, state levels.LineState, style L
 			return gk.NewLinearGradient(90,
 				gk.NewLinearColorStop(rgbAlpha(Accent, alpha), 0),
 				gk.NewLinearColorStop(rgbAlpha(Violet, alpha), 1))
-		}
-		if style.Glow > 0 {
-			for _, glow := range levels.Glows {
-				parts = append(parts, gk.NewPlotLine(path, style.Stroke*style.Glow*glow.Spread, faded(glow.Alpha)))
-			}
 		}
 		parts = append(parts, gk.NewPlotLine(path, style.Stroke, faded(1)))
 	case levels.LineStateUnavailable:

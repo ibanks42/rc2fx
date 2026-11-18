@@ -26,11 +26,9 @@ const (
 	// page ff00), whose own reports are 1-4. Every reader of that collection
 	// receives input report 6 and must ignore it; RODE's software reads by
 	// report ID.
-	InputID         = 6
-	InputReportSize = ReportSize
-	InputPayload    = InputReportSize - Header
-	MaxRequest      = 512*1024 + 1024
-	MaxReply        = 8*1024*1024 + 1024
+	InputID    = 6
+	MaxRequest = 512*1024 + 1024
+	MaxReply   = 8*1024*1024 + 1024
 	// MaxEventBytes is the largest event a mixer publishes.
 	MaxEventBytes = 512 * 1024
 	// MaxEventReply is the largest reply to an event poll: one event and its

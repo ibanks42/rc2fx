@@ -63,13 +63,6 @@ func (p Profile) Clone() Profile {
 	return p
 }
 
-// Equal compares every field of a profile, the runtime by SameRuntime.
-func (p Profile) Equal(o Profile) bool {
-	return p.MinimumAppVersion == o.MinimumAppVersion && p.ID == o.ID && p.Model == o.Model &&
-		p.Version == o.Version && p.MixerSHA == o.MixerSHA && p.LauncherSHA == o.LauncherSHA &&
-		p.ArchiveSHA == o.ArchiveSHA && p.ArchiveMD5 == o.ArchiveMD5 && SameRuntime(p.Runtime, o.Runtime)
-}
-
 // Clone copies a catalog.
 func (c Catalog) Clone() Catalog {
 	out := Catalog{Schema: c.Schema, Profiles: make([]Profile, len(c.Profiles))}

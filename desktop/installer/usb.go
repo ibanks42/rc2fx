@@ -11,11 +11,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 )
-
-// VendorID is RØDE's USB vendor.
-const VendorID = firmware.VendorID
 
 // allowedModels is the session's model policy for the flashing library:
 // the Duo only with the experimental opt-in.
@@ -43,10 +39,6 @@ func mixers(items []HID) []USBMixer {
 	}
 	return out
 }
-
-// VendorUsage is whether a HID report descriptor declares a vendor-page
-// (0xff00) application collection. Parsing never sends data to the device.
-func VendorUsage(descriptor []byte) bool { return platform.VendorUsage(descriptor) }
 
 // FirmwareVersion is a RØDE firmware version from a USB release number
 // (see flash.FirmwareVersion).
@@ -77,10 +69,6 @@ func archiveMatches(dir string, p *Prepared, progress func(uint64, uint64)) erro
 		return Error("archive.md5 does not match the prepared firmware")
 	}
 	return nil
-}
-
-func verifyArchive(dir string, p *Prepared) error {
-	return archiveMatches(dir, p, func(uint64, uint64) {})
 }
 
 // updateSize is whether size could be an update drive (see

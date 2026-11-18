@@ -283,23 +283,23 @@ func TestAnUnusableFeedIsRefused(t *testing.T) {
 func TestTheLatestMixerIsWhatTheExactLatestAppBundles(t *testing.T) {
 	latest := snapshotOf(t, fullFeed(), "1.3.0")
 	one := uint32(1)
-	if !reflect.DeepEqual(latest.LatestMixer(), &PublishedMixer{Version: "1.2.0", Protocol: &one, AppVersion: "1.3.0"}) {
-		t.Fatalf("%+v", latest.LatestMixer())
+	if !reflect.DeepEqual(latest.latestMixer, &PublishedMixer{Version: "1.2.0", Protocol: &one, AppVersion: "1.3.0"}) {
+		t.Fatalf("%+v", latest.latestMixer)
 	}
 	// The feed has not caught up, or its row does not say.
-	if snap := snapshotOf(t, fullFeed(), "1.4.0"); snap.LatestMixer() != nil {
+	if snap := snapshotOf(t, fullFeed(), "1.4.0"); snap.latestMixer != nil {
 		t.Fatal("stale feed")
 	}
 	unmapped := feedText([]row{{"1.3.0", nil}, {"1.2.0", some("1.1.0")}}, nil)
-	if snap := snapshotOf(t, unmapped, "1.3.0"); snap.LatestMixer() != nil {
+	if snap := snapshotOf(t, unmapped, "1.3.0"); snap.latestMixer != nil {
 		t.Fatal("unmapped row")
 	}
 }
 
 func TestEntriesAboveTheLatestReleaseAreIgnored(t *testing.T) {
 	early := snapshotOf(t, fullFeed(), "1.2.0")
-	if early.LatestMixer().Version != "1.1.0" {
-		t.Fatal(early.LatestMixer().Version)
+	if early.latestMixer.Version != "1.1.0" {
+		t.Fatal(early.latestMixer.Version)
 	}
 	update := early.MixerUpdate(some("1.0.0"), some("1.0.0"))
 	if update.State != (MixerUpdateState{Kind: MixerAppUpdateRequired, Latest: "1.1.0", AppVersion: "1.2.0"}) {
@@ -472,7 +472,7 @@ func TestAMissingVersionIsUnknownAndNothingIsOffered(t *testing.T) {
 func TestWithoutACheckOnlyLocalVersionsAreCompared(t *testing.T) {
 	failure := SnapshotFromCheck(UpdateCheck{Kind: UpdateFailed, Error: UpdateError{Kind: UpdateOffline}})
 	for _, snap := range []UpdateSnapshot{UncheckedSnapshot(), failure} {
-		if snap.LatestMixer() != nil {
+		if snap.latestMixer != nil {
 			t.Fatal("a latest mixer without a check")
 		}
 		update := snap.MixerUpdate(some("1.0.0"), some("1.1.0"))
@@ -553,17 +553,17 @@ func TestAFeedSuppliesTheNotesAndGitHubStaysTheAuthority(t *testing.T) {
 	if snap.App.Kind != UpdateAvailable || snap.App.Changelog.Status.Kind != ChangelogComplete || !slices.Equal(versionsOf(&snap.App.Changelog), []string{"1.3.0"}) {
 		t.Fatalf("%+v", snap.App)
 	}
-	if snap.LatestMixer().Version != "1.2.0" {
-		t.Fatal(snap.LatestMixer())
+	if snap.latestMixer.Version != "1.2.0" {
+		t.Fatal(snap.latestMixer)
 	}
 	// An up-to-date app still learns about the mixer.
 	snap = snapshotAt(serve(t, "200 OK", "", releaseBody("v1.3.0")), listNeverRead, serve(t, "200 OK", "", fullFeed()), "1.3.0")
-	if snap.App.Kind != UpdateUpToDate || snap.LatestMixer().Version != "1.2.0" {
+	if snap.App.Kind != UpdateUpToDate || snap.latestMixer.Version != "1.2.0" {
 		t.Fatalf("%+v", snap.App)
 	}
 	// GitHub's answer is missing, so the feed is not even asked.
 	snap = snapshotAt(serve(t, "500 Oops", "", ""), listNeverRead, "http://127.0.0.1:9/unused", "1.0.0")
-	if snap.App.Kind != UpdateFailed || snap.LatestMixer() != nil {
+	if snap.App.Kind != UpdateFailed || snap.latestMixer != nil {
 		t.Fatalf("%+v", snap.App)
 	}
 }
@@ -576,21 +576,21 @@ func TestAppNotesFallBackToGitHubWithoutAUsableFeed(t *testing.T) {
 		if snap.App.Kind != UpdateAvailable || snap.App.Changelog.Status.Kind != ChangelogComplete || snap.App.Changelog.Entries[0].Notes != "From GitHub" {
 			t.Fatalf("%+v", snap.App)
 		}
-		if snap.LatestMixer() != nil {
+		if snap.latestMixer != nil {
 			t.Fatal("a mixer from a stale feed")
 		}
 	}
 	// The prose line is no source of a mixer identity.
 	body := `{"tag_name":"v1.4.0","body":"Bundled RC2FX mixer software: 9.9.9."}`
 	snap := snapshotAt(serve(t, "200 OK", "", body), github(), serve(t, "404 Not Found", "", ""), "1.3.0")
-	if snap.LatestMixer() != nil {
+	if snap.latestMixer != nil {
 		t.Fatal("a mixer from prose")
 	}
 }
 
 func TestAnOversizedFeedIsRefused(t *testing.T) {
 	snap := snapshotAt(serve(t, "200 OK", "", releaseBody("v1.3.0")), "http://127.0.0.1:9/unused", serve(t, "200 OK", "", strings.Repeat(" ", maxFeedBody+10)), "1.3.0")
-	if snap.LatestMixer() != nil {
+	if snap.latestMixer != nil {
 		t.Fatal("a mixer from an oversized feed")
 	}
 	status := snap.MixerUpdate(some("1.0.0"), some("1.1.0")).Changelog.Status
@@ -612,8 +612,9 @@ func TestNothingListeningReadsAsOffline(t *testing.T) {
 }
 
 func TestEveryEndpointAndLinkIsOnTheOfficialRepository(t *testing.T) {
-	api := "https://api.github.com/repos/" + AppRepository + "/releases"
-	if listAPI != api || latestAPI != api+"/latest" || AppReleasesURL != "https://github.com/"+AppRepository+"/releases" {
+	const repository = "ibanks42/rc2fx"
+	api := "https://api.github.com/repos/" + repository + "/releases"
+	if listAPI != api || latestAPI != api+"/latest" || AppReleasesURL != "https://github.com/"+repository+"/releases" {
 		t.Fatal("API URLs")
 	}
 	if !strings.HasPrefix(releaseURL("1.2.3"), AppReleasesURL+"/tag/") {

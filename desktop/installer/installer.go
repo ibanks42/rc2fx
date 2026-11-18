@@ -344,20 +344,9 @@ func DownloadOnly(work string) *Engine {
 	return withSource(Source{Kind: SourceDownload}, work)
 }
 
-// Verified prepares firmware from authenticated, owned download bytes. The
-// flashing mechanism is identical to the embedded payload path.
-func Verified(payload *VerifiedMixerPayload, work string) *Engine {
-	return withSource(Source{Kind: SourceVerified, Verified: payload}, work)
-}
-
 // New is an engine for the installer folder root, caching in work.
 func New(root, work string) *Engine {
 	return withSource(folderSource(root), work)
-}
-
-// WithPlatform is New with a given platform.
-func WithPlatform(root, work string, p Platform) *Engine {
-	return withSourcePlatform(folderSource(root), work, p)
 }
 
 func withSource(source Source, work string) *Engine {

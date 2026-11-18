@@ -31,7 +31,6 @@ const USBPermission = platform.USBPermission
 func Host() Platform { return platform.Host() }
 
 func IsUpdatePID(pid uint16) bool                { return platform.IsUpdatePID(pid) }
-func VendorUsage(descriptor []byte) bool         { return platform.VendorUsage(descriptor) }
 func RecoveryDiskOf(p Platform) (*uint64, error) { return platform.RecoveryDiskOf(p) }
 func RecoveryDeviceOf(p Platform) (*RecoveryDevice, error) {
 	return platform.RecoveryDeviceOf(p)

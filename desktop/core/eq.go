@@ -140,43 +140,10 @@ func (e EQSettings) responseChannels() uint8 {
 	return 1
 }
 
-func CheckedResponseDB(eq EQSettings, channel Channel, frequency float64, includeGains bool) (float64, error) {
-	if err := eq.Validate(eq.responseChannels()); err != nil {
-		return 0, err
-	}
-	if err := rangeCheck(frequency, 0.0, SampleRate/2.0, "Response frequency"); err != nil {
-		return 0, err
-	}
-	if !eq.Enabled {
-		return 0.0, nil
-	}
-	value := 0.0
-	if includeGains {
-		value = eq.InputGainDB + eq.OutputGainDB
-	}
-	for _, band := range activeBands(eq.Channel(channel)) {
-		coefficients, err := DesignCoefficients(band)
-		if err != nil {
-			return 0, err
-		}
-		value += MagnitudeDB(coefficients, frequency)
-	}
-	return value, nil
-}
-
-// ResponseDB is a convenience for a validated editor draft; invalid or
-// transient edits plot flat.
-func ResponseDB(eq EQSettings, channel Channel, frequency float64, includeGains bool) float64 {
-	value, err := CheckedResponseDB(eq, channel, frequency, includeGains)
-	if err != nil {
-		return 0.0
-	}
-	return value
-}
-
-// ResponseCurve is ResponseDB at many frequencies, validating the EQ and
-// designing each band once rather than once per point. Values match
-// per-point calls.
+// ResponseCurve is the EQ's response in dB at each frequency, with the input
+// and output gains when includeGains is set. It validates the EQ and designs
+// each band once; an invalid or transient draft, or a frequency outside
+// 0..Nyquist, plots flat.
 func ResponseCurve(eq EQSettings, channel Channel, frequencies []float64, includeGains bool) []float64 {
 	curve := make([]float64, len(frequencies))
 	if eq.Validate(eq.responseChannels()) != nil || !eq.Enabled {
@@ -207,19 +174,4 @@ func ResponseCurve(eq EQSettings, channel Channel, frequencies []float64, includ
 		curve[i] = value
 	}
 	return curve
-}
-
-func LogFrequencies(count int, min, max float64) []float64 {
-	if count <= 0 || count > 65_536 || math.IsNaN(min) || math.IsInf(min, 0) ||
-		math.IsNaN(max) || math.IsInf(max, 0) || min <= 0.0 || max < min {
-		return []float64{}
-	}
-	if count == 1 {
-		return []float64{min}
-	}
-	frequencies := make([]float64, count)
-	for i := range frequencies {
-		frequencies[i] = min * math.Pow(max/min, float64(i)/float64(count-1))
-	}
-	return frequencies
 }

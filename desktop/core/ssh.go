@@ -16,10 +16,6 @@ import (
 // RC2FX's, and remove it again; every other key is reported and left alone.
 // Removing the key stops new logins; it does not end sessions already open.
 
-// SSHManagedMarker is the comment that marks the one `authorized_keys` line
-// RC2FX manages.
-const SSHManagedMarker = "rc2fx-managed-developer-key"
-
 // MaxSSHPublicKey is the longest public key line accepted, far above an
 // Ed25519 key's length.
 const MaxSSHPublicKey = 512
@@ -44,9 +40,6 @@ type SSHStatus struct {
 }
 
 func (SSHStatus) AllowUnknownJSONFields() {}
-
-// Equal compares field by field (deepEqual).
-func (s SSHStatus) Equal(other SSHStatus) bool { return deepEqual(s, other) }
 
 // The most host keys a reply may list; a server has one per key type.
 const maxHostKeys = 16
@@ -152,9 +145,6 @@ func (k Ed25519PublicKey) Fingerprint() string {
 	digest := sha256.Sum256(blob)
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:])
 }
-
-// ManagedLine is the line RC2FX writes: the key and its marker comment.
-func (k Ed25519PublicKey) ManagedLine() string { return k.line + " " + SSHManagedMarker }
 
 // decodeBase64 is padded standard base64 that, like the mixer's, does not check
 // the unused low bits of the last group.

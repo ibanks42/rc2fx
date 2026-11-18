@@ -13,8 +13,10 @@
 // connection; what each answer means is decided here (inplace.go).
 //
 // The model only decides. It returns the installer.Request to run next (nil
-// for none); the UI runs it with the installer engine on a worker, one at a time and in the
-// order returned, and hands each result back to Model.Finish (see Runner).
+// for none); the UI runs it with the installer engine (installer.Engine's
+// Handle) on a worker. Every request a Model method returns must be run
+// exactly once, in the order returned, and its result passed to Model.Finish
+// with the same request.
 package installflow
 
 import (
@@ -25,14 +27,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
-
-// Runner is what the UI provides to carry out the requests a Model returns:
-// the installer engine (installer.Engine's Handle), on a worker thread. Every
-// request a Model method returns must be run exactly once, in the order
-// returned, and its result passed to Model.Finish with the same request.
-type Runner interface {
-	Handle(request installer.Request) (installer.Reply, error)
-}
 
 // InPlaceKind is the stage of an RC2FX update installed in place, without a
 // flash.

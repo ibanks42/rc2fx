@@ -128,12 +128,6 @@ func IsBinary(name string) bool { return slices.Contains(Binaries[:], name) }
 // IsScript reports whether name is one of Scripts.
 func IsScript(name string) bool { return slices.Contains(Scripts[:], name) }
 
-// IsPinned reports whether name is one of Pinned.
-func IsPinned(name string) bool { return slices.Contains(Pinned[:], name) }
-
-// IsPayloadName reports whether name is one of PayloadNames.
-func IsPayloadName(name string) bool { return slices.Contains(PayloadNames[:], name) }
-
 // Sum is a lowercase hex SHA-256.
 func Sum(data []byte) string {
 	digest := sha256.Sum256(data)
@@ -584,11 +578,6 @@ func (e *Envelope) AsBytes() []byte { return e.blob }
 
 // Body is the envelope's body.
 func (e *Envelope) Body() []byte { return e.blob[e.start:e.end] }
-
-// Equal compares two envelopes.
-func (e *Envelope) Equal(o *Envelope) bool {
-	return bytes.Equal(e.blob, o.blob) && e.start == o.start && e.end == o.end
-}
 
 // Files is the payload's files, in PayloadNames order, each checked against
 // the manifest.

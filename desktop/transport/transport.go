@@ -81,11 +81,6 @@ type CommandSelection struct {
 	Request    core.SelectionRequest
 }
 
-type CommandRestartEngine struct {
-	Generation uint64
-	Request    core.EngineRestartRequest
-}
-
 type CommandDiagnostics struct {
 	Generation uint64
 }
@@ -192,7 +187,6 @@ type CommandImageCheck struct {
 }
 
 func (CommandSelection) command()         {}
-func (CommandRestartEngine) command()     {}
 func (CommandDiagnostics) command()       {}
 func (CommandResetDiagnostics) command()  {}
 func (CommandDiagnosticsEvents) command() {}
@@ -248,11 +242,6 @@ type EventKind interface {
 }
 
 type EventKindSelection struct {
-	State core.DeviceState
-	Err   error
-}
-
-type EventKindRestartEngine struct {
 	State core.DeviceState
 	Err   error
 }
@@ -343,10 +332,6 @@ type EventKindRefreshed struct {
 	State json.RawMessage
 }
 
-type EventKindEngine struct {
-	Engine json.RawMessage
-}
-
 type EventKindMeter struct {
 	Meter json.RawMessage
 }
@@ -393,7 +378,6 @@ type EventKindLiveApplied struct {
 }
 
 func (EventKindSelection) eventKind()         {}
-func (EventKindRestartEngine) eventKind()     {}
 func (EventKindDiagnostics) eventKind()       {}
 func (EventKindResetDiagnostics) eventKind()  {}
 func (EventKindDiagnosticsEvents) eventKind() {}
@@ -410,7 +394,6 @@ func (EventKindConnected) eventKind()         {}
 func (EventKindApplied) eventKind()           {}
 func (EventKindState) eventKind()             {}
 func (EventKindRefreshed) eventKind()         {}
-func (EventKindEngine) eventKind()            {}
 func (EventKindMeter) eventKind()             {}
 func (EventKindUSB) eventKind()               {}
 func (EventKindStreamStatus) eventKind()      {}
@@ -1261,21 +1244,6 @@ func run(ctx context.Context, commands <-chan Command, events chan<- Event, conn
 				err = asError(failed)
 			}
 			emit(ctx, events, generation, EventKindSelection{State: state, Err: err})
-		case CommandRestartEngine:
-			if command.Generation != generation {
-				continue
-			}
-			state, failed := core.DeviceState{}, noMixer()
-			if current != nil {
-				state, failed = current.transition(ctx, "POST", "api/v1/engine/restart", command.Request)
-			}
-			var err error
-			if failed.isStatus(409) {
-				err = errors.New("The engine or settings changed, or recovery is not ready. Checking the mixer state; no restart was retried.")
-			} else {
-				err = asError(failed)
-			}
-			emit(ctx, events, generation, EventKindRestartEngine{State: state, Err: err})
 		case CommandDiagnostics:
 			if command.Generation != generation {
 				continue
@@ -1580,8 +1548,6 @@ func readStream(ctx context.Context, d device, generation uint64, events chan<- 
 			switch name {
 			case "state":
 				kind = EventKindState{data}
-			case "engine":
-				kind = EventKindEngine{data}
 			case "meter":
 				kind = EventKindMeter{data}
 			case "usb":

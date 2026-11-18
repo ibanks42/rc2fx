@@ -144,7 +144,6 @@ func TestStoppedProcessingAndAFailedWorkerAreRed(t *testing.T) {
 	check(t, StatusOf(&engine, &broken, &s) == Status{Kind: StatusStopped}, "broken routing not stopped")
 	s = snapshot(path(func(m *core.TargetMeter) { m.WorkerFailed = true }), Recent{})
 	check(t, stateOf(&s) == Status{StatusFailed, "Noise suppression failed on Mic 4"}, "status %v", stateOf(&s))
-	check(t, stateOf(&s).NeedsAction() && !(Status{Kind: StatusHealthy}).NeedsAction(), "needs action")
 }
 
 func TestChecksHoldTheirPlaceWhenNothingIsReported(t *testing.T) {

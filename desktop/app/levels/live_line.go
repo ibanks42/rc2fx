@@ -28,25 +28,15 @@ type LineStyle struct {
 	// element's height.
 	Amplitude float32
 	Stroke    float32
-	// Glow is how far the glow spreads, in multiples of the stroke; 0 for
-	// none.
-	Glow float32
 }
 
-var (
-	// Channel is the channel editor's line under the channel name.
-	Channel = LineStyle{Amplitude: 0.34, Stroke: 2.5, Glow: 2}
-	// Mini is the sidebar's small line beside each processed channel.
-	Mini = LineStyle{Amplitude: 0.42, Stroke: 1.6, Glow: 0}
-)
+// Mini is the sidebar's small line beside each processed channel, the only
+// line the app draws.
+var Mini = LineStyle{Amplitude: 0.42, Stroke: 1.6}
 
 // Point is a point of the line: X across the element, Y the offset from its
 // middle (Offsets), or a position in pixels inside the element (LinePoints).
 type Point struct{ X, Y float32 }
-
-// Glows are the live line's two glow passes under the stroke: the stroke
-// widened by Spread (times the style's Glow), at Alpha.
-var Glows = [2]struct{ Spread, Alpha float32 }{{7.0 / 3.0, 0.12}, {1, 0.25}}
 
 // Offsets is the line's points across width: (x, offset from the middle), one
 // every 3 px. ok is false if any point isn't finite: an invalid line is not

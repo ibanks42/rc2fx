@@ -996,9 +996,10 @@ func (m *Model) SetStock(stock bool) {
 	m.settleMixer()
 }
 
-// ReleasesFor is the releases a mode offers, with their index in Releases.
-// Both modes offer only qualified catalog releases.
-func (m *Model) ReleasesFor(stock bool) iter.Seq2[int, installer.Release] {
+// ReleasesFor is the releases the firmware menu offers, with their index in
+// Releases. Stock and RC2FX installs offer the same: only qualified catalog
+// releases.
+func (m *Model) ReleasesFor() iter.Seq2[int, installer.Release] {
 	return func(yield func(int, installer.Release) bool) {
 		for i, r := range m.Releases {
 			if r.Supported && !yield(i, r) {
@@ -1008,9 +1009,10 @@ func (m *Model) ReleasesFor(stock bool) iter.Seq2[int, installer.Release] {
 	}
 }
 
-// ChoiceFor is the release a mode would use: the current choice when it
-// fits the mode, as SetStock keeps it, else the mode's default.
-func (m *Model) ChoiceFor(stock bool) *Choice {
+// ChoiceFor is the release an install would use, in either mode: the
+// current choice when it is supported, as SetStock keeps it, else the
+// default.
+func (m *Model) ChoiceFor() *Choice {
 	if m.supportedChoice(m.Choice) {
 		choice := *m.Choice
 		return &choice

@@ -317,11 +317,6 @@ func StartDownloadOnly(work string) (*Helper, error) {
 	return spawn(Download, work)
 }
 
-// Start starts the helper for the installer folder root through `pkexec`.
-func Start(root, work string) (*Helper, error) {
-	return spawn(root, work)
-}
-
 func spawn(root, work string) (*Helper, error) {
 	cmd, appdir, err := privilegedLaunch()
 	if err != nil {

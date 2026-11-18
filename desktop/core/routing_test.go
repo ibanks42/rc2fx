@@ -151,7 +151,6 @@ func TestNativeControlsUseConfirmedLivePassthroughWithoutLegacyRetirement(t *tes
 	check(t, ready.CanEnableProcessing())
 	check(t, !ready.CanDisableProcessing())
 	check(t, ready.Engine.Mode.HasProcessingControls())
-	check(t, !ready.Engine.RestartEligible())
 	for i, mutate := range []func(*DeviceState){
 		func(s *DeviceState) { s.Engine.Status = EnginePhaseStarting },
 		func(s *DeviceState) { s.Engine.AudioAdvancing = false },

@@ -33,24 +33,28 @@ func parse(t *testing.T, text string) Value {
 	return value
 }
 
-// toValue is ToValue, failing the test on error.
+// toValue is serde_json::to_value, failing the test on error.
 func toValue(t *testing.T, v any) Value {
 	t.Helper()
-	value, err := ToValue(v)
+	data, err := Encode(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := parseWithDepth(data, math.MaxInt, math.MaxInt, math.MaxInt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return value
 }
 
-// encode is EncodeString, failing the test on error.
+// encode is Encode as a string, failing the test on error.
 func encode(t *testing.T, v any) string {
 	t.Helper()
-	text, err := EncodeString(v)
+	data, err := Encode(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return text
+	return string(data)
 }
 
 // must is unwrap(): a failure panics, which fails the test with a trace.

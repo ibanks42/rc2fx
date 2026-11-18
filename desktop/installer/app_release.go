@@ -80,8 +80,8 @@ func AppUpdatesConfigured() bool {
 // app version. The error is a *VerifyError. Blocking: it fetches the app metadata, so call it from a
 // background goroutine. A file whose bytes do not match is removed, so
 // nothing can apply it afterwards. The metadata is kept only in memory, for
-// this check; work, the app's working folder, is not written.
-func VerifyUpdatePackage(work, version, asset, file string) error {
+// this check; nothing is written to disk.
+func VerifyUpdatePackage(version, asset, file string) error {
 	if err := verifyUpdatePackage(version, asset, file); err != nil {
 		return err
 	}

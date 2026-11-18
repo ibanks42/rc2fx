@@ -7,36 +7,9 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/delta/internal/fixture"
 )
-
-type file struct {
-	name string
-	data []byte
-}
-
-func envelope(files []file) []byte {
-	var body []byte
-	for _, f := range files {
-		body = fmt.Appendf(body, "%s  %d  %s\n", sum(f.data), len(f.data), f.name)
-	}
-	for _, f := range files {
-		body = append(body, f.data...)
-	}
-	out := []byte(envelopeMagic)
-	out = fmt.Appendf(out, "length %d\n", len(body))
-	out = fmt.Appendf(out, "sha256 %s\n", sum(body))
-	return append(out, body...)
-}
-
-func sample() (shared, old, updated, gui []byte) {
-	shared = bytes.Repeat([]byte("a file the mixer already has\n"), 20)
-	old = bytes.Repeat([]byte("the previous rc2fxd build\n"), 200)
-	updated = bytes.Clone(old)
-	updated[7] ^= 1
-	updated = append(updated, bytes.Repeat([]byte("and its new tail\n"), 20)...)
-	gui = bytes.Repeat([]byte("compressible gui bytes "), 2000)
-	return
-}
 
 func installedFor(shared, old []byte) map[string]string {
 	return map[string]string{"librc2fx_native.so": sum(shared), "rc2fxd": sum(old)}
@@ -76,8 +49,8 @@ func mustEncode(t *testing.T, envelope []byte, installed map[string]string, base
 }
 
 func TestCopyZstdAndPatchRoundTripToTheSameEnvelope(t *testing.T) {
-	shared, old, updated, gui := sample()
-	env := envelope([]file{{"librc2fx_native.so", shared}, {"rc2fxd", updated}, {"librc2fx_gui.so", gui}})
+	shared, old, updated, gui := fixture.Sample()
+	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}, {Name: "librc2fx_gui.so", Data: gui}})
 	delta := mustEncode(t, env, installedFor(shared, old), basesFor(old), 19)
 	if !bytes.HasPrefix(delta, []byte(Magic)) {
 		t.Fatal("no magic")
@@ -105,8 +78,8 @@ func TestCopyZstdAndPatchRoundTripToTheSameEnvelope(t *testing.T) {
 }
 
 func TestAFileTheMixerDoesNotHaveIsCompressedAlone(t *testing.T) {
-	_, _, _, gui := sample()
-	env := envelope([]file{{"librc2fx_gui.so", gui}})
+	_, _, _, gui := fixture.Sample()
+	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_gui.so", Data: gui}})
 	// A reported hash that matches the envelope would make this a copy;
 	// a different one means the mixer's file is not the payload file.
 	installed := map[string]string{"librc2fx_gui.so": strings.Repeat("0", 64)}
@@ -123,11 +96,11 @@ func TestAFileTheMixerDoesNotHaveIsCompressedAlone(t *testing.T) {
 }
 
 func TestTheManifestIsReadWithoutAFixedFileCount(t *testing.T) {
-	var files []file
+	var files []fixture.File
 	for index := range 20 {
-		files = append(files, file{fmt.Sprintf("file-%d.bin", index), bytes.Repeat([]byte{byte(index)}, index)})
+		files = append(files, fixture.File{Name: fmt.Sprintf("file-%d.bin", index), Data: bytes.Repeat([]byte{byte(index)}, index)})
 	}
-	env := envelope(files)
+	env := fixture.Envelope(files)
 	head, entries, err := EnvelopeEntries(env)
 	if err != nil {
 		t.Fatal(err)
@@ -143,15 +116,15 @@ func TestTheManifestIsReadWithoutAFixedFileCount(t *testing.T) {
 		t.Fatalf("head and files are %d bytes of %d", total, len(env))
 	}
 	for i, e := range entries {
-		if e.Name != files[i].name || e.Size != uint64(len(files[i].data)) || e.SHA256 != sum(files[i].data) {
+		if e.Name != files[i].Name || e.Size != uint64(len(files[i].Data)) || e.SHA256 != sum(files[i].Data) {
 			t.Errorf("entry %d: %+v", i, e)
 		}
 	}
 }
 
 func TestMalformedEnvelopesAndDeltasAreRefused(t *testing.T) {
-	shared, old, updated, _ := sample()
-	env := envelope([]file{{"librc2fx_native.so", shared}, {"rc2fxd", updated}})
+	shared, old, updated, _ := fixture.Sample()
+	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}})
 	valid := mustEncode(t, env, installedFor(shared, old), basesFor(old), 19)
 	live := liveFiles(shared, old)
 
@@ -210,8 +183,8 @@ func TestMalformedEnvelopesAndDeltasAreRefused(t *testing.T) {
 }
 
 func TestAPatchAgainstTheWrongBaseIsRefused(t *testing.T) {
-	shared, old, updated, _ := sample()
-	env := envelope([]file{{"librc2fx_native.so", shared}, {"rc2fxd", updated}})
+	shared, old, updated, _ := fixture.Sample()
+	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}})
 	delta := mustEncode(t, env, installedFor(shared, old), basesFor(old), 19)
 	_, _, err := decodeAll(delta, func(name string) ([]byte, error) {
 		if name == "rc2fxd" {
@@ -225,8 +198,8 @@ func TestAPatchAgainstTheWrongBaseIsRefused(t *testing.T) {
 }
 
 func TestACopyThatNoLongerMatchesTheEnvelopeIsRefused(t *testing.T) {
-	shared, _, _, _ := sample()
-	env := envelope([]file{{"librc2fx_native.so", shared}})
+	shared, _, _, _ := fixture.Sample()
+	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}})
 	delta := mustEncode(t, env, map[string]string{"librc2fx_native.so": sum(shared)}, nil, 19)
 	_, _, err := decodeAll(delta, func(string) ([]byte, error) {
 		return bytes.Repeat([]byte{'x'}, len(shared)), nil
@@ -237,8 +210,8 @@ func TestACopyThatNoLongerMatchesTheEnvelopeIsRefused(t *testing.T) {
 }
 
 func TestAnEnvelopeWithoutFilesOrWithStaleBytesIsNotEncoded(t *testing.T) {
-	shared, _, _, _ := sample()
-	env := envelope([]file{{"librc2fx_native.so", shared}})
+	shared, _, _, _ := fixture.Sample()
+	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}})
 	if _, err := Encode(env, nil, nil, 19); err != nil {
 		t.Fatal(err)
 	}
@@ -253,8 +226,8 @@ func TestAnEnvelopeWithoutFilesOrWithStaleBytesIsNotEncoded(t *testing.T) {
 }
 
 func TestAStaleBaseIsNotUsedEvenWhenTheNameMatches(t *testing.T) {
-	_, old, updated, _ := sample()
-	env := envelope([]file{{"rc2fxd", updated}})
+	_, old, updated, _ := fixture.Sample()
+	env := fixture.Envelope([]fixture.File{{Name: "rc2fxd", Data: updated}})
 	// The app's base is stale relative to what the mixer reports, so it
 	// must send the file whole rather than patch against the wrong bytes.
 	installed := map[string]string{"rc2fxd": sum([]byte("something else"))}
@@ -271,9 +244,9 @@ func TestAStaleBaseIsNotUsedEvenWhenTheNameMatches(t *testing.T) {
 // Go-only: the frames the encoder writes have the shape the mixer's C
 // decoder needs, at every level the app could pass.
 func TestFramesSuitTheMixersDecoder(t *testing.T) {
-	shared, old, updated, gui := sample()
+	shared, old, updated, gui := fixture.Sample()
 	empty := []byte{}
-	env := envelope([]file{{"librc2fx_native.so", shared}, {"rc2fxd", updated}, {"librc2fx_gui.so", gui}, {"empty", empty}, {"empty-patch", empty}})
+	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}, {Name: "librc2fx_gui.so", Data: gui}, {Name: "empty", Data: empty}, {Name: "empty-patch", Data: empty}})
 	installed := installedFor(shared, old)
 	installed["empty-patch"] = sum(old)
 	bases := basesFor(old)

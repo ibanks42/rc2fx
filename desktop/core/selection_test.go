@@ -415,7 +415,9 @@ func TestLateEffectSaveDoesNotReplaceNewerEngineObservations(t *testing.T) {
 		}
 		observed.AudioAdvancing = false
 		observed.Message = "A newer stream observation"
-		check(t, session.ReceiveEngine(observed))
+		streamed := old.Clone()
+		streamed.Engine = observed
+		check(t, receive(t, &session, streamed) == RemoteUpdateUnchanged)
 		session.Draft[1].Gain.DB = -7. // edit while the save is in flight
 		ok(t, session.Acknowledge(pending, reply))
 
@@ -448,7 +450,9 @@ func TestLatePresetSaveKeepsNewerRuntimeAndLocalDrafts(t *testing.T) {
 			observed.Status = EnginePhaseRestarting
 		}
 		observed.AudioAdvancing = false
-		check(t, session.ReceiveEngine(observed))
+		streamed := old.Clone()
+		streamed.Engine = observed
+		check(t, receive(t, &session, streamed) == RemoteUpdateUnchanged)
 		session.Draft[1].Gain.DB = -9.
 		session.SelectionDraft = session.SelectionDraft[:0]
 		ok(t, session.AcknowledgePreset(1, original, reply))
@@ -505,5 +509,5 @@ func TestSettingsAcknowledgementCanEstablishAnUnobservedNewerGeneration(t *testi
 	reply.Engine.AudioAdvancing = false
 	ok(t, session.Acknowledge(pending, reply.Clone()))
 	check(t, session.Saved.Equal(reply))
-	check(t, !session.ReceiveEngine(selectionState().Engine))
+	check(t, receive(t, &session, selectionState()) == RemoteUpdateStale)
 }

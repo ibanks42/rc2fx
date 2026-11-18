@@ -16,7 +16,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
 
 // fixturePackage lays out a source tree in base with stand-in ARM64
@@ -102,7 +101,7 @@ func TestSigningOutputVerifiesAndPreservesTheInstallerPayloadContract(t *testing
 		t.Fatal(err)
 	}
 	rootFile := mustRead(t, filepath.Join(base, "root.json"))
-	repository, err := tufsign.Load(rootFile, filepath.Join(base, "metadata"), filepath.Join(base, "targets"), time.Now())
+	repository, err := loadRepository(rootFile, filepath.Join(base, "metadata"), filepath.Join(base, "targets"), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +184,7 @@ func TestSigningOutputVerifiesAndPreservesTheInstallerPayloadContract(t *testing
 		t.Fatal(err)
 	}
 	pemRoot := mustRead(t, filepath.Join(keys, "public", "root.json"))
-	pemRepository, err := tufsign.Load(pemRoot, filepath.Join(base, "pem-metadata"), filepath.Join(base, "targets"), time.Now())
+	pemRepository, err := loadRepository(pemRoot, filepath.Join(base, "pem-metadata"), filepath.Join(base, "targets"), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

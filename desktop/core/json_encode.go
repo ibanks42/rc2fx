@@ -26,21 +26,6 @@ func EncodePretty(value any) ([]byte, error) {
 	return appendAny(nil, reflect.ValueOf(value), &indenter{})
 }
 
-// EncodeString is Encode as a string.
-func EncodeString(value any) (string, error) {
-	data, err := Encode(value)
-	return string(data), err
-}
-
-// ToValue is serde_json::to_value.
-func ToValue(value any) (Value, error) {
-	data, err := Encode(value)
-	if err != nil {
-		return Value{}, err
-	}
-	return parseWithDepth(data, math.MaxInt, math.MaxInt, math.MaxInt)
-}
-
 type indenter struct{ depth int }
 
 func (in *indenter) newline(dst []byte) []byte {

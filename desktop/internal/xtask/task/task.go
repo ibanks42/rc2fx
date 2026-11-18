@@ -186,12 +186,3 @@ func ParseUint(text string, bits int) (uint64, bool) {
 
 // CRLFToLF replaces every "\r\n" with "\n".
 func CRLFToLF(text string) string { return strings.ReplaceAll(text, "\r\n", "\n") }
-
-// ReadFile is os.ReadFile with the path and IOError's text in its error.
-func ReadFile(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, Errorf("%s: %s", path, IOError(err))
-	}
-	return data, nil
-}

@@ -38,10 +38,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
 )
 
+// The addresses name the official repository on purpose: a build from a fork
+// still checks the official releases.
 const (
-	// AppRepository is the official repository, as `owner/name`. Fixed on
-	// purpose: a build from a fork still checks the official releases.
-	AppRepository = "ibanks42/rc2fx"
 	// AppReleasesURL is the repository's releases page.
 	AppReleasesURL = "https://github.com/ibanks42/rc2fx/releases"
 	latestAPI      = "https://api.github.com/repos/ibanks42/rc2fx/releases/latest"
@@ -216,7 +215,7 @@ const (
 	// one. Nothing is offered: that would be a downgrade.
 	MixerNewer
 	// MixerBundled: the bundled Version is newer than the installed one.
-	// Says nothing about what is published when LatestMixer is nil, and
+	// Says nothing about what is published when latestMixer is nil, and
 	// nothing about whether the installer may run.
 	MixerBundled
 	// MixerBundledThenApp: the bundled Version is newer than the installed
@@ -251,9 +250,6 @@ func SnapshotFromCheck(app UpdateCheck) UpdateSnapshot {
 func UncheckedSnapshot() UpdateSnapshot {
 	return UpdateSnapshot{historyError: otherError("no update check has finished")}
 }
-
-// LatestMixer is nil when the latest published mixer software is unknown.
-func (s UpdateSnapshot) LatestMixer() *PublishedMixer { return s.latestMixer }
 
 func optionalVersion(v *string) (string, bool) {
 	if v == nil || !comparable(*v) {
@@ -640,7 +636,7 @@ func fetch(u string, maxBody int64, timeout time.Duration) (*reply, *UpdateError
 		return nil, &e
 	}
 	defer response.Body.Close()
-	exhausted := strings.TrimSpace(response.Header.Get("x-ratelimit-remaining")) == "0" && response.Header.Get("x-ratelimit-remaining") != ""
+	exhausted := strings.TrimSpace(response.Header.Get("x-ratelimit-remaining")) == "0"
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxBody+1))
 	if err != nil {
 		e := otherError(fmt.Sprintf("reading the reply: %v", err))

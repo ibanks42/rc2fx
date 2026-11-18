@@ -27,9 +27,6 @@ type StockInventory struct {
 	Inputs    []StockSource `json:"inputs"`
 }
 
-// Equal compares field by field (deepEqual).
-func (s StockInventory) Equal(other StockInventory) bool { return deepEqual(s, other) }
-
 func (s StockInventory) Validate() error {
 	text := func(value string, maximum int) bool {
 		if len(value) > maximum {

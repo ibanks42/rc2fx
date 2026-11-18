@@ -72,7 +72,7 @@ func TestRenewalPreservesTargetsAndRejectsWrongKeysStaleVersionsAndTampering(t *
 	}
 	// The renewed metadata loads as the client loads it: the root from
 	// root.json, the roles from new/.
-	repository, err := tufsign.Load(rootFile, filepath.Join(dir, "new"), dir, time.Now())
+	repository, err := loadRepository(rootFile, filepath.Join(dir, "new"), dir, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

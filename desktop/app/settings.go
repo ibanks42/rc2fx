@@ -187,8 +187,7 @@ func (a *App) diagnosticsPage(cx *gk.Cx) gk.DivEl {
 				OnClick(func(cx *gk.Cx, on bool) {
 					a.telemetryDetails = on
 					a.notify(cx)
-				}),
-			a.telemetryNextStep(cx)))
+				})))
 	}
 	return page
 }

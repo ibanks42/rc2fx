@@ -275,7 +275,7 @@ func TestAppMetadataComesOnlyFromItsOwnBranchOnTheOfficialHosts(t *testing.T) {
 func TestVerifyUpdatePackageReturnsAVerifyError(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "x")
 	put(t, file, []byte("x"))
-	err := VerifyUpdatePackage("", "one", testPackage, file)
+	err := VerifyUpdatePackage("one", testPackage, file)
 	var verifyError *VerifyError
 	if !errors.As(err, &verifyError) || !verifyError.Rejected {
 		t.Fatalf("%v", err)

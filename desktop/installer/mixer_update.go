@@ -466,25 +466,8 @@ func (m *MixerTarget) validate() error {
 // VerifiedMixerPayload is owned, authenticated bytes. No public constructor
 // accepts an unchecked bundle.
 type VerifiedMixerPayload struct {
-	bundle   Bundle
-	bytes    []byte
-	metadata MixerTarget
-}
-
-// Metadata is the payload's signed compatibility claims.
-func (p *VerifiedMixerPayload) Metadata() *MixerTarget { return &p.metadata }
-
-// Equal compares the bundle's files, the bytes and the metadata.
-func (p *VerifiedMixerPayload) Equal(o *VerifiedMixerPayload) bool {
-	if len(p.bundle) != len(o.bundle) {
-		return false
-	}
-	for name, data := range p.bundle {
-		if other, ok := o.bundle[name]; !ok || !bytes.Equal(data, other) {
-			return false
-		}
-	}
-	return bytes.Equal(p.bytes, o.bytes) && p.metadata.Equal(&o.metadata)
+	bundle Bundle
+	bytes  []byte
 }
 
 // MixerRepository is a repository authenticated against a caller-supplied,
@@ -988,5 +971,5 @@ func verifyPayload(data []byte, m MixerTarget, profile string, appVersion *strin
 	if !slices.ContainsFunc(catalog.Profiles, func(p Profile) bool { return p.ID == profile && supported(&p) }) {
 		return nil, mixerError("payload does not support the selected firmware profile")
 	}
-	return &VerifiedMixerPayload{bundle: bundle, bytes: bytes.Clone(data), metadata: m}, nil
+	return &VerifiedMixerPayload{bundle: bundle, bytes: bytes.Clone(data)}, nil
 }

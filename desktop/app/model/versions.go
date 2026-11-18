@@ -193,15 +193,6 @@ func CompatibilityOf(deviceProtocol *uint32) Compatibility {
 	}
 }
 
-// Notice is what to tell the user. The installer flashes RC2FX mixer software
-// and RØDE firmware as one image, so an update is offered only when neither
-// would go backwards and both are known.
-type Notice struct {
-	Text string
-	// OfferInstaller: whether to offer opening the installer.
-	OfferInstaller bool
-}
-
 // UpdateAvailable: both parts known, neither newer than what this app
 // installs, and at least one older.
 func (s Summary) UpdateAvailable() bool {
@@ -216,27 +207,23 @@ func (s Summary) UpdateAvailable() bool {
 			(s.Runtime == StandingCurrent && s.Firmware == StandingUpdateAvailable))
 }
 
-// Notice is what to tell the user, if anything.
-func (s Summary) Notice() (Notice, bool) {
+// Blocker is why this app cannot update the mixer, when that needs saying:
+// the installer flashes RC2FX mixer software and RØDE firmware as one
+// image, so an update is offered (UpdateAvailable) only when neither would
+// go backwards and both are known.
+func (s Summary) Blocker() (string, bool) {
 	if s.Compatibility == CompatibilityMixerOlder {
-		offer := s.UpdateAvailable()
-		text := "The RC2FX mixer software on this mixer is older than this app supports, " +
-			"and its RØDE firmware is newer or unknown, so this app cannot update it " +
-			"safely."
-		if offer {
-			text = "The RC2FX mixer software on this mixer is older than this app supports. " +
-				"Installing compatible mixer software flashes the mixer, which then " +
-				"restarts; audio stops until it is back. Your drafts are kept."
+		if s.UpdateAvailable() {
+			return "", false
 		}
-		return Notice{Text: text, OfferInstaller: offer}, true
+		return "The RC2FX mixer software on this mixer is older than this app supports, " +
+			"and its RØDE firmware is newer or unknown, so this app cannot update it " +
+			"safely.", true
 	}
 	if s.Compatibility == CompatibilityMixerNewer {
-		return Notice{
-			Text: "The RC2FX mixer software on this mixer was made for a different " +
-				"version of this app, so compatibility is unknown. Update the app " +
-				"before changing anything on the mixer.",
-			OfferInstaller: false,
-		}, true
+		return "The RC2FX mixer software on this mixer was made for a different " +
+			"version of this app, so compatibility is unknown. Update the app " +
+			"before changing anything on the mixer.", true
 	}
 	newer := ""
 	switch {
@@ -248,30 +235,11 @@ func (s Summary) Notice() (Notice, bool) {
 		newer = "newer RØDE firmware"
 	}
 	if newer != "" {
-		return Notice{
-			Text: fmt.Sprintf("This mixer has %s than this app can install. The installer "+
-				"flashes RC2FX mixer software and RØDE firmware together, so installing "+
-				"from this app would replace it with older versions. Update the app first.", newer),
-			OfferInstaller: false,
-		}, true
+		return fmt.Sprintf("This mixer has %s than this app can install. The installer "+
+			"flashes RC2FX mixer software and RØDE firmware together, so installing "+
+			"from this app would replace it with older versions. Update the app first.", newer), true
 	}
-	if !s.UpdateAvailable() {
-		return Notice{}, false
-	}
-	var what string
-	switch {
-	case s.Runtime == StandingUpdateAvailable && s.Firmware == StandingUpdateAvailable:
-		what = "Newer RC2FX mixer software and a newer supported RØDE firmware are available"
-	case s.Runtime == StandingUpdateAvailable:
-		what = "Newer RC2FX mixer software is available"
-	default:
-		what = "A newer supported RØDE firmware is available"
-	}
-	return Notice{
-		Text: fmt.Sprintf("%s. Installing flashes the mixer, which then restarts; "+
-			"audio stops until it is back. Your drafts are kept.", what),
-		OfferInstaller: true,
-	}, true
+	return "", false
 }
 
 // Inputs is what Settings knows about versions.
@@ -389,10 +357,6 @@ type Lead struct {
 type Overview struct {
 	Lead  Lead
 	Lines []Line
-	// Summary reads `App 1.0.0 · Mixer 0.1.0 · Firmware 1.7.7`.
-	Summary  string
-	Flag     string
-	FlagTone Tone
 	// Details: why nothing can be installed, and what a newer app would bring.
 	Details []string
 	// OfferInstaller: whether to offer the installer: this app can install
@@ -569,10 +533,9 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 			ReadChanges: firmwareRead,
 		},
 	}
-	notice, hasNotice := s.Notice()
 	var details []string
-	if hasNotice && !notice.OfferInstaller {
-		details = append(details, notice.Text)
+	if blocker, ok := s.Blocker(); ok {
+		details = append(details, blocker)
 	}
 	if i.SignedKnown && i.NeedsApp == nil {
 		latest, appVersion, ok := "", "", false
@@ -684,13 +647,9 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 			"RØDE firmware %s is out, but RC2FX doesn't support it yet, so this app can't install it.", rode))
 	}
 	return Overview{
-		Lead: lead,
-		Summary: fmt.Sprintf("App %s · Mixer %s · Firmware %s",
-			lines[0].Installed, lines[1].Installed, lines[2].Installed),
+		Lead:           lead,
 		Lines:          lines,
-		Flag:           flag,
-		FlagTone:       flagTone,
 		Details:        details,
-		OfferInstaller: checkInInstaller || (hasNotice && notice.OfferInstaller),
+		OfferInstaller: checkInInstaller || s.UpdateAvailable(),
 	}
 }

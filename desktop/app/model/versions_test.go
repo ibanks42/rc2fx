@@ -113,9 +113,9 @@ func TestProtocolMismatchBlocksUpdatesAndSaysUpdateTheApp(t *testing.T) {
 	if s.UpdateAvailable() {
 		t.Fatal("update available")
 	}
-	n, ok := s.Notice()
-	if !ok || n.OfferInstaller || !strings.Contains(n.Text, "Update the app") {
-		t.Fatalf("notice %+v %v", n, ok)
+	n, ok := s.Blocker()
+	if !ok || !strings.Contains(n, "Update the app") {
+		t.Fatalf("blocker %q %v", n, ok)
 	}
 }
 
@@ -126,18 +126,22 @@ func TestOlderProtocolOffersCompatibleMixerSoftware(t *testing.T) {
 	if s.Compatibility != CompatibilityMixerOlder {
 		t.Fatalf("compatibility %v", s.Compatibility)
 	}
-	n, ok := s.Notice()
-	if !ok || !n.OfferInstaller || !strings.Contains(n.Text, "older than this app supports") {
-		t.Fatalf("notice %+v %v", n, ok)
+	if !s.UpdateAvailable() {
+		t.Fatal("no update offered")
+	}
+	if n, ok := s.Blocker(); ok {
+		t.Fatalf("blocker %q", n)
 	}
 	// Never if the combined image would take the firmware backwards.
-	i.InstalledFirmware = new("1.9.0")
-	if n, ok := Summarize(&i).Notice(); !ok || n.OfferInstaller {
-		t.Fatalf("notice %+v %v", n, ok)
-	}
-	i.InstalledFirmware = nil
-	if n, ok := Summarize(&i).Notice(); !ok || n.OfferInstaller {
-		t.Fatalf("notice %+v %v", n, ok)
+	for _, firmware := range []*string{new("1.9.0"), nil} {
+		i.InstalledFirmware = firmware
+		s := Summarize(&i)
+		if s.UpdateAvailable() {
+			t.Fatal("update available")
+		}
+		if n, ok := s.Blocker(); !ok || !strings.Contains(n, "older than this app supports") {
+			t.Fatalf("blocker %q %v", n, ok)
+		}
 	}
 }
 
@@ -151,8 +155,8 @@ func TestUnknownProtocolNeverOffersAnUpdate(t *testing.T) {
 	if s.UpdateAvailable() {
 		t.Fatal("update available")
 	}
-	if n, ok := s.Notice(); ok {
-		t.Fatalf("notice %+v", n)
+	if n, ok := s.Blocker(); ok {
+		t.Fatalf("blocker %q", n)
 	}
 }
 
@@ -194,8 +198,8 @@ func TestUnknownDeviceVersionsNeverPrompt(t *testing.T) {
 	if s.UpdateAvailable() {
 		t.Fatal("update available")
 	}
-	if n, ok := s.Notice(); ok {
-		t.Fatalf("notice %+v", n)
+	if n, ok := s.Blocker(); ok {
+		t.Fatalf("blocker %q", n)
 	}
 }
 
@@ -214,9 +218,9 @@ func TestNewerDeviceIsNotADowngradeOffer(t *testing.T) {
 	if s.UpdateAvailable() {
 		t.Fatal("update available")
 	}
-	n, ok := s.Notice()
-	if !ok || n.OfferInstaller || !strings.Contains(n.Text, "Update the app first") {
-		t.Fatalf("notice %+v %v", n, ok)
+	n, ok := s.Blocker()
+	if !ok || !strings.Contains(n, "Update the app first") {
+		t.Fatalf("blocker %q %v", n, ok)
 	}
 }
 
@@ -228,8 +232,8 @@ func TestMixedVersionsNeverOfferTheCombinedFlash(t *testing.T) {
 		if s.UpdateAvailable() {
 			t.Fatalf("%s %s", c[0], c[1])
 		}
-		if n, ok := s.Notice(); !ok || n.OfferInstaller {
-			t.Fatalf("%s %s: %+v %v", c[0], c[1], n, ok)
+		if _, ok := s.Blocker(); !ok {
+			t.Fatalf("%s %s: no blocker", c[0], c[1])
 		}
 	}
 }
@@ -241,8 +245,8 @@ func TestOneUnknownPartNeverOffersTheCombinedFlash(t *testing.T) {
 		if s.UpdateAvailable() {
 			t.Fatal("update available")
 		}
-		if n, ok := s.Notice(); ok {
-			t.Fatalf("notice %+v", n)
+		if n, ok := s.Blocker(); ok {
+			t.Fatalf("blocker %q", n)
 		}
 	}
 }
@@ -256,23 +260,19 @@ func TestOlderRuntimeOffersFlashAndRestart(t *testing.T) {
 	if s.Firmware != StandingCurrent {
 		t.Fatalf("firmware %v", s.Firmware)
 	}
-	n, ok := s.Notice()
-	if !ok || !n.OfferInstaller {
-		t.Fatalf("notice %+v %v", n, ok)
+	if !s.UpdateAvailable() {
+		t.Fatal("no update offered")
 	}
-	if !strings.Contains(n.Text, "RC2FX mixer software") || !strings.Contains(n.Text, "flashes") {
-		t.Fatalf("text %q", n.Text)
-	}
-	if !strings.Contains(n.Text, "restarts") {
-		t.Fatalf("text %q", n.Text)
+	if n, ok := s.Blocker(); ok {
+		t.Fatalf("blocker %q", n)
 	}
 }
 
 func TestOlderFirmwareOffersUpdate(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.7.6"))
-	n, ok := Summarize(&i).Notice()
-	if !ok || !strings.Contains(n.Text, "RØDE firmware") {
-		t.Fatalf("notice %+v %v", n, ok)
+	s := Summarize(&i)
+	if s.Firmware != StandingUpdateAvailable || !s.UpdateAvailable() {
+		t.Fatalf("summary %+v", s)
 	}
 }
 
@@ -490,11 +490,8 @@ func TestABundledUpdateOffersTheInstallerAndItsChanges(t *testing.T) {
 	if !line(t, o, PartMixer).ReadChanges {
 		t.Fatal("no changes to read")
 	}
-	if o.Flag != "Update available" || o.FlagTone != ToneUpdate {
-		t.Fatalf("flag %q %v", o.Flag, o.FlagTone)
-	}
-	if o.Summary != "App 0.3.0 · Mixer 0.2.0 · Firmware 1.8.0" {
-		t.Fatalf("summary %q", o.Summary)
+	if o.Lead.Title != "A mixer update is ready" || o.Lead.Changes == nil || *o.Lead.Changes != PartMixer {
+		t.Fatalf("lead %+v", o.Lead)
 	}
 }
 
@@ -513,8 +510,8 @@ func TestABlockedUpdateExplainsItselfAndOffersNothing(t *testing.T) {
 	if !anyDetail(o, contains("Update the app first")) {
 		t.Fatalf("details %q", o.Details)
 	}
-	if o.FlagTone != ToneWarn {
-		t.Fatalf("flag tone %v", o.FlagTone)
+	if o.Lead.Title != "Needs attention" {
+		t.Fatalf("lead %q", o.Lead.Title)
 	}
 }
 
@@ -528,8 +525,8 @@ func TestTooOldMixerSoftwareIsTheMostUrgent(t *testing.T) {
 	if got := line(t, o, PartMixer).Status; got != "Too old" {
 		t.Fatalf("status %q", got)
 	}
-	if o.Flag != "Needs update" || o.FlagTone != ToneBad {
-		t.Fatalf("flag %q %v", o.Flag, o.FlagTone)
+	if o.Lead.Title != "Needs update" {
+		t.Fatalf("lead %q", o.Lead.Title)
 	}
 }
 
@@ -538,8 +535,8 @@ func TestADisconnectedMixerStaysUnknown(t *testing.T) {
 	i.DeviceProtocol = nil
 	i.NewestSupportedFirmware = nil
 	o := OverviewOf(&i, AppStanding{Kind: AppStandingUnknown}, installer.MixerUpdateState{Kind: installer.MixerUnknown})
-	if o.Flag != "Not connected" {
-		t.Fatalf("flag %q", o.Flag)
+	if o.Lead.Title != "Not connected" {
+		t.Fatalf("lead %q", o.Lead.Title)
 	}
 	if got := line(t, o, PartMixer).Installed; got != "Unknown" {
 		t.Fatalf("installed %q", got)
@@ -583,12 +580,12 @@ func TestUpdatesAreCountedAndACheckingAppSaysSo(t *testing.T) {
 	i := inputs(new("0.2.0"), new("1.7.0"))
 	state := bundled("0.3.0")
 	o := OverviewOf(&i, AppStanding{Kind: AppStandingUpdate, Version: "0.4.0"}, state)
-	if o.Flag != "3 updates available" {
-		t.Fatalf("flag %q", o.Flag)
+	if o.Lead.Title != "RC2FX 0.4.0 is available" {
+		t.Fatalf("lead %q", o.Lead.Title)
 	}
 	for _, l := range o.Lines {
-		if !l.ReadChanges {
-			t.Fatalf("line %+v has no changes to read", l)
+		if l.Tone != ToneUpdate || !l.ReadChanges {
+			t.Fatalf("line %+v is not an update with changes to read", l)
 		}
 	}
 	o = OverviewOf(&i, AppStanding{Kind: AppStandingChecking}, state)
@@ -600,8 +597,8 @@ func TestUpdatesAreCountedAndACheckingAppSaysSo(t *testing.T) {
 func TestAllCurrentIsUpToDate(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
 	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
-	if o.Flag != "Up to date" || o.FlagTone != ToneQuiet {
-		t.Fatalf("flag %q %v", o.Flag, o.FlagTone)
+	if o.Lead.Title != "Everything is up to date" {
+		t.Fatalf("lead %q", o.Lead.Title)
 	}
 	for _, l := range o.Lines {
 		if l.ReadChanges {

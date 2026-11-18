@@ -37,15 +37,6 @@ type Number struct {
 // NumberFromU64 is a non-negative integer.
 func NumberFromU64(value uint64) Number { return Number{kind: numberU64, bits: value} }
 
-// NumberFromI64 is an integer; a non-negative one is stored as serde_json
-// stores it, as an unsigned integer.
-func NumberFromI64(value int64) Number {
-	if value >= 0 {
-		return Number{kind: numberU64, bits: uint64(value)}
-	}
-	return Number{kind: numberI64, bits: uint64(value)}
-}
-
 // NumberFromF64 is a float; false for NaN and infinities, which JSON cannot
 // carry.
 func NumberFromF64(value float64) (Number, bool) {
@@ -53,14 +44,6 @@ func NumberFromF64(value float64) (Number, bool) {
 		return Number{}, false
 	}
 	return Number{kind: numberF64, bits: math.Float64bits(value)}, true
-}
-
-// IsU64 reports a non-negative integer.
-func (n Number) IsU64() bool { return n.kind == numberU64 }
-
-// IsI64 reports an integer that fits in int64.
-func (n Number) IsI64() bool {
-	return n.kind == numberI64 || (n.kind == numberU64 && n.bits <= math.MaxInt64)
 }
 
 // IsF64 reports a number written with a fraction or exponent, or one too
@@ -71,17 +54,6 @@ func (n Number) IsF64() bool { return n.kind == numberF64 }
 func (n Number) AsU64() (uint64, bool) {
 	if n.kind == numberU64 {
 		return n.bits, true
-	}
-	return 0, false
-}
-
-// AsI64 is serde_json's as_i64: integers that fit in int64.
-func (n Number) AsI64() (int64, bool) {
-	switch {
-	case n.kind == numberI64:
-		return int64(n.bits), true
-	case n.kind == numberU64 && n.bits <= math.MaxInt64:
-		return int64(n.bits), true
 	}
 	return 0, false
 }
@@ -143,9 +115,6 @@ func NumberValue(value Number) Value { return Value{kind: ValueNumber, number: v
 // U64Value is a non-negative integer.
 func U64Value(value uint64) Value { return NumberValue(NumberFromU64(value)) }
 
-// I64Value is an integer.
-func I64Value(value int64) Value { return NumberValue(NumberFromI64(value)) }
-
 // F64Value is a float; NaN and infinities become null, as in serde_json's
 // `json!`.
 func F64Value(value float64) Value {
@@ -206,14 +175,6 @@ func (v Value) AsU64() (uint64, bool) {
 		return 0, false
 	}
 	return v.number.AsU64()
-}
-
-// AsI64 is serde_json's as_i64.
-func (v Value) AsI64() (int64, bool) {
-	if v.kind != ValueNumber {
-		return 0, false
-	}
-	return v.number.AsI64()
 }
 
 // AsArray is the array's items, if the value is an array. The slice aliases

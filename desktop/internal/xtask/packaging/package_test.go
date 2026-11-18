@@ -161,15 +161,6 @@ func packageFor(t *testing.T, system string) (string, Files) {
 	return root, files
 }
 
-func TestStandalonePackageDoesNotShipInstallerSidecars(t *testing.T) {
-	_, files := packageFor(t, "windows")
-	for name := range files {
-		if strings.HasPrefix(name, "runtime/") || strings.HasPrefix(name, "xtask/") || strings.HasPrefix(name, "mixer/") || name == "config/firmware-profiles.json" {
-			t.Errorf("installer inputs must be embedded, not sidecars: %s", name)
-		}
-	}
-}
-
 func TestPackageHasSelfContainedExecutableAndLicenses(t *testing.T) {
 	root, files := packageFor(t, "windows")
 	if files["rc2fx.exe"].Mode != 0o755 {
@@ -181,6 +172,7 @@ func TestPackageHasSelfContainedExecutableAndLicenses(t *testing.T) {
 	if string(files["licenses/LICENSE-MIT"].Data) != "MIT terms" {
 		t.Fatal("license text")
 	}
+	// Installer inputs are embedded in the executable, never shipped beside it.
 	for _, forbidden := range []string{"config/", "crates/", "docs/", "experiments/", "runtime/", "xtask/", "mixer/", "desktop/", "README"} {
 		for name := range files {
 			if strings.HasPrefix(name, forbidden) {
@@ -215,12 +207,6 @@ func TestPackageHasSelfContainedExecutableAndLicenses(t *testing.T) {
 	}
 	if err := found.RequireMatches(envelope); err != nil {
 		t.Fatal(err)
-	}
-	// No sidecars are needed to inspect/validate the copied executable.
-	for _, path := range []string{"runtime", "xtask", "mixer", "config/firmware-profiles.json"} {
-		if _, err := os.Stat(filepath.Join(folder, path)); err == nil {
-			t.Errorf("%s exists", path)
-		}
 	}
 	// A missing source payload is refused, not silently packaged stale.
 	if err := os.Remove(filepath.Join(root, "target", "mixer", "rc2fxd")); err != nil {
@@ -283,95 +269,5 @@ func TestTheAppShipsOnlyVelopackOnWindowsBesideIt(t *testing.T) {
 		strings.Contains(script, "1 24 ") ||
 		!strings.Contains(script, `VALUE "ProductVersion", "1.2.3"`) {
 		t.Fatal(script)
-	}
-}
-
-// localTargets is the relative targets of a Markdown file's links and
-// VitePress includes, outside code. URLs and same-page anchors are not
-// files.
-func localTargets(text string) []string {
-	var targets []string
-	fenced := false
-	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "```") {
-			fenced = !fenced
-			continue
-		}
-		if fenced {
-			continue
-		}
-		// Drop inline code spans: every other backtick-separated piece.
-		var prose strings.Builder
-		for i, piece := range strings.Split(line, "`") {
-			if i%2 == 0 {
-				prose.WriteString(piece)
-			}
-		}
-		p := prose.String()
-		var found []string
-		for at := 0; ; {
-			i := strings.Index(p[at:], "](")
-			if i < 0 {
-				break
-			}
-			rest := p[at+i+2:]
-			end := strings.IndexAny(rest, ") ")
-			if end < 0 {
-				end = len(rest)
-			}
-			found = append(found, rest[:end])
-			at += i + 1
-		}
-		for at := 0; ; {
-			i := strings.Index(p[at:], "<!--@include: ")
-			if i < 0 {
-				break
-			}
-			rest := p[at+i+14:]
-			end := strings.Index(rest, "-->")
-			if end < 0 {
-				end = len(rest)
-			}
-			found = append(found, strings.TrimSpace(rest[:end]))
-			at += i + 1
-		}
-		for _, target := range found {
-			target, _, _ = strings.Cut(target, "#")
-			if target != "" && !strings.Contains(target, ":") {
-				targets = append(targets, target)
-			}
-		}
-	}
-	return targets
-}
-
-// resolve is target as a repository path, relative to the file from.
-func resolve(t *testing.T, from, target string) string {
-	parts := strings.Split(from, "/")
-	parts = parts[:len(parts)-1]
-	for _, part := range strings.Split(target, "/") {
-		switch part {
-		case "..":
-			if len(parts) == 0 {
-				t.Fatalf("%s: %s leaves the package", from, target)
-			}
-			parts = parts[:len(parts)-1]
-		case ".", "":
-		default:
-			parts = append(parts, part)
-		}
-	}
-	return strings.Join(parts, "/")
-}
-
-func TestLinkTargetsSkipCodeURLsAndAnchors(t *testing.T) {
-	text := "See [a](../a.md#x), [b](https://b), [c](#c) and `[d](d.md)`.\n" +
-		"```\n[e](e.md)\n```\n<!--@include: ../../crates/f/README.md-->\n"
-	if got := strings.Join(localTargets(text), ","); got != "../a.md,../../crates/f/README.md" {
-		t.Fatal(got)
-	}
-	if got := resolve(t, "docs/user/x.md", "../a.md"); got != "docs/a.md" {
-		t.Fatal(got)
 	}
 }

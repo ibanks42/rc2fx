@@ -85,10 +85,6 @@ type LineSlots struct {
 	signature  *signature
 }
 
-// LineLayout is empty: the indicators refuse no geometry, so nothing needs
-// the window's size and scale. App.layout can go.
-type LineLayout struct{}
-
 // canAnimate is whether an indicator with a fresh reading moves now.
 func (a *App) canAnimate() bool {
 	return levels.Enabled() && a.animatedPage() && !a.reducedMotion
@@ -261,7 +257,6 @@ func (a *App) pollIndicators(cx *gk.Cx) {
 // themselves, so a reading needs no redraw of the app. In Go every bar with
 // a view does, moving or still; only a bar drawn in place (before the poll
 // made its view) needs the app redrawn.
-func (a *App) barsAnimate(cx *gk.Cx) bool {
-	_ = cx
+func (a *App) barsAnimate() bool {
 	return a.lineSlots.inlineBars != a.renderGeneration+1
 }

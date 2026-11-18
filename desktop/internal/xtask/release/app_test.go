@@ -13,7 +13,6 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
 
 // testRelease is a downloaded release: two assets and their SHA256SUMS.
@@ -47,7 +46,7 @@ func TestEveryAssetButTheSumsBecomesAVersionedTarget(t *testing.T) {
 	if err := signInto(dir, "signed", "1.2.3", "targets.pk8"); err != nil {
 		t.Fatal(err)
 	}
-	repository, err := tufsign.Load(mustRead(t, filepath.Join(dir, "root.json")), filepath.Join(dir, "signed"), dir, time.Now())
+	repository, err := loadRepository(mustRead(t, filepath.Join(dir, "root.json")), filepath.Join(dir, "signed"), dir, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

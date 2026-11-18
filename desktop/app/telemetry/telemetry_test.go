@@ -1,9 +1,6 @@
 package telemetry
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
 	"slices"
 	"testing"
 	"time"
@@ -88,39 +85,6 @@ func TestOldQueuedMetersCannotConfirmANewEngineAtTheSameRevision(t *testing.T) {
 	for _, phase := range []core.EnginePhase{core.EnginePhaseRestarting, core.EnginePhaseStarting, core.EnginePhaseError} {
 		state.Engine.Status = phase
 		check(t, !MeterMatchesEngine(&state, &queued), "%s matched", phase)
-	}
-}
-
-func TestRecoveryRequiresACompleteConfirmedBypass(t *testing.T) {
-	state := failedState()
-	const restored = "Original audio routes were restored."
-	detail := func() string {
-		t.Helper()
-		n, ok := EngineError(&state)
-		check(t, ok, "no notice")
-		return n.RecoveryDetail
-	}
-	for _, phase := range []core.RoutingPhase{core.RoutingPhaseUnmanaged, core.RoutingPhaseStarting,
-		core.RoutingPhaseActive, core.RoutingPhaseBypassing, core.RoutingPhaseError} {
-		state.Routing.Status = phase
-		state.Routing.Recovered = state.Routing.Channels
-		check(t, detail() != restored, "%s restored", phase)
-	}
-	state.Routing.Status = core.RoutingPhaseBypassed
-	for _, c := range [][2]uint32{{0, 0}, {2, 0}, {2, 1}, {2, 3}} {
-		state.Routing.Channels, state.Routing.Recovered = c[0], c[1]
-		check(t, detail() != restored, "%v restored", c)
-	}
-	state.Routing.Channels, state.Routing.Recovered = 2, 2
-	check(t, detail() != restored, "2/2 restored")
-	state.Routing.Channels, state.Routing.Recovered = 0, 0
-	state.Selection.ActiveTargetIDs = nil
-	check(t, detail() != restored, "restart not allowed restored")
-	state.Engine.RestartAllowed = true
-	check(t, detail() == restored, "not restored: %q", detail())
-	for _, mode := range []core.EngineMode{core.EngineModeSimulation, core.EngineModeOffline} {
-		state.Engine.Mode = mode
-		check(t, detail() != restored, "%s restored", mode)
 	}
 }
 
@@ -395,58 +359,6 @@ func TestReceiveToUSBMeterRenderRemainsFreshPastThirtySeconds(t *testing.T) {
 	check(t, timeEq(engineSeen, observed), "repeated receipt must not renew observation")
 	m, _ = FreshMeter(&state, &current, progress, "usb-main", engineSeen, end.Add(sec(1)))
 	check(t, m == nil, "silence expires the visible meter")
-}
-
-// Skipped unless asked for: it needs locally saved device state and
-// diagnostics, and never contacts the mixer. Set RC2FX_TEST_STATE and
-// RC2FX_TEST_DIAGNOSTICS to run it.
-func TestSavedDeviceMetersFollowTheDesktopReceiveAndRenderPath(t *testing.T) {
-	statePath, diagnosticsPath := os.Getenv("RC2FX_TEST_STATE"), os.Getenv("RC2FX_TEST_DIAGNOSTICS")
-	if statePath == "" || diagnosticsPath == "" {
-		t.Skip("requires explicit locally saved device state and diagnostics; never contacts the mixer")
-	}
-	stateText, err := os.ReadFile(statePath)
-	check(t, err == nil, "%v", err)
-	state, err := core.DeviceStateFromJSON(string(stateText))
-	check(t, err == nil, "%v", err)
-	reportText, err := os.ReadFile(diagnosticsPath)
-	check(t, err == nil, "%v", err)
-	var report struct {
-		Samples []map[string]json.RawMessage `json:"samples"`
-	}
-	check(t, json.Unmarshal(reportText, &report) == nil, "report")
-	var meters []core.Meter
-	for _, sample := range report.Samples {
-		raw, ok := sample["telemetry"]
-		if !ok {
-			continue
-		}
-		var telemetry map[string]json.RawMessage
-		if json.Unmarshal(raw, &telemetry) != nil || telemetry["meter"] == nil {
-			continue
-		}
-		m, err := core.FromJSON[core.Meter](string(telemetry["meter"]))
-		check(t, err == nil, "%v", err)
-		if m.Generation == state.Engine.Generation && m.Revision == state.Engine.AppliedRevision {
-			meters = append(meters, m)
-		}
-	}
-	check(t, len(meters) > 61, "need more than30seconds of unchanged saved-state replay")
-	start := time.Now()
-	progress := map[string]*Progress{}
-	engineSeen := &start
-	for n := range meters {
-		// Replay real serialized payloads at a deterministic desktop receipt
-		// cadence; this tests acceptance/display, not target timing.
-		now := start.Add(ms(n * 500))
-		check(t, ReceiveMeter(&state, &meters[n], progress, &engineSeen, now), "rejected real meter%d", n)
-		if n > 0 {
-			displayed, _ := FreshMeter(&state, &meters[n], progress, "usb-main", engineSeen, now)
-			check(t, displayed != nil && displayed.ID == "usb-main", "actual USBmain telemetry should render")
-		}
-	}
-	fmt.Printf("Accepted and rendered %d actual full meters at generation%d revision%d; unchanged-state replay%dms\n",
-		len(meters), state.Engine.Generation, state.Engine.AppliedRevision, (len(meters)-1)*500)
 }
 
 func TestContinuousCurrentMetersKeepUnchangedEngineObservationFresh(t *testing.T) {
