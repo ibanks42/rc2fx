@@ -11,9 +11,8 @@ const (
 
 // Recovery is the part of Platform that finds a mixer's whole eMMC while its
 // bootloader shows it as a USB disk (see the installer's repair). It is
-// separate from Platform, as Rust's trait gives these methods defaults:
-// a Platform without them has no such disk, and use RecoveryDiskOf and
-// RecoveryDeviceOf.
+// separate from Platform so a Platform may leave it out: one without it
+// has no such disk; callers use RecoveryDiskOf and RecoveryDeviceOf.
 type Recovery interface {
 	// RecoveryDisk is the size in bytes of that disk, or nil.
 	RecoveryDisk() (*uint64, error)

@@ -1,6 +1,6 @@
 package installflow
 
-// signature.rs tests, case for case.
+// The signature's progress and the shape of its line.
 
 import (
 	"math"

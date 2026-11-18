@@ -148,7 +148,7 @@ class PacingTests(unittest.TestCase):
         out, stats = run('observe', 'wait')
         last = stats[-1][1]
         # repaint_a (~30 ms) and repaint_b (~10 ms) blocked; the already-
-        # signalled repaint does not reach the condition wait at all; the
+        # signaled repaint does not reach the condition wait at all; the
         # other caller's wait is seen at the site but not as a repaint wait.
         self.assertEqual((last['repaint_entered'], last['repaint_completed']), ('2', '2'))
         self.assertGreaterEqual(int(last['repaint_wait_max_ns']), 25_000_000)
@@ -180,9 +180,9 @@ class PacingTests(unittest.TestCase):
         for mode, interval_ms in (('15', 66.7), ('5', 200.0), ('2', 500.0)):
             with self.subTest(mode):
                 out, _ = run(mode, 'cancel')
-                m = re.search(r'cancelled (\d) locked_after_cancel_ms (-?[\d.]+)', out)
+                m = re.search(r'canceled (\d) locked_after_cancel_ms (-?[\d.]+)', out)
                 self.assertEqual(m.group(1), '1')
-                # Cancelled 10 ms into a ~66 (~200) ms wait: the wait completed and
+                # Canceled 10 ms into a ~66 (~200) ms wait: the wait completed and
                 # the lock was taken before the cancel took effect at pthread_testcancel.
                 after = float(m.group(2))
                 self.assertGreater(after, interval_ms - 30)
@@ -224,7 +224,7 @@ class PacingTests(unittest.TestCase):
 
     def test_a_pending_cancel_does_not_act_inside_a_log_write(self):
         out, stats = run('observe', 'cancel-write')
-        self.assertIn('cancelled 1 reached 1', out)
+        self.assertIn('canceled 1 reached 1', out)
         self.assertIn('first-pass', [x[0] for x in stats], 'the write happened with the cancel pending')
 
     def test_a_forked_child_never_acts(self):

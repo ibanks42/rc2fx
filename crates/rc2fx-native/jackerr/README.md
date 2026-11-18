@@ -7,7 +7,7 @@ It doesn't capture audio, create JACK ports, run a processing callback, or
 turn on jackd's callback or ALSA tracing.
 
 The normal mixer build produces this library and `rc2fx_jackerr_snapshot`.
-Both are required, checksummed files in the SSH installer, the release package
+Both are required, checksummed files in the SSH installer, the release package,
 and the firmware-image installer. RØDE's executables are left unchanged. The
 launcher integration is in `mixer/scripts/rc2fx.sh`.
 
@@ -22,7 +22,7 @@ a firmware update or under the other conditions that fall back to stock.
 Setting the persistent `data/jack-recorder-off` flag stops it from starting.
 
 Starting the recorder means replacing the running jackd. The launcher checks
-the original JACK arguments, environment, thread placement, PCM devices and
+the original JACK arguments, environment, thread placement, PCM devices, and
 audio IRQ state. If the replacement fails, it tries a verified fallback to a
 plain server, and it records the failure for the rest of the boot so it isn't
 retried in a loop. A mapped library doesn't by itself mean the recorder is
@@ -37,14 +37,14 @@ again on the next boot.
 - `/run/rc2fx-recorder/active`: the current attempt's path and the JACK PID and
   birth token.
 - `run.XXXXXX/`: one directory per attempt, with inventories, server logs, a
-  readiness snapshot and a ring directory.
+  readiness snapshot, and a ring directory.
 
 The root and attempt directories are private. Earlier attempts are kept
 without pruning or overwriting. The ring has a fixed size, and its decoder reports
 wraparound, loss, and unpublished or torn records.
 
 The 8 MiB check on the whole root applies when a new attempt starts. It doesn't
-limit vendor stdout logs while running. The recorder doesn't rotate, truncate
+limit vendor stdout logs while running. The recorder doesn't rotate, truncate,
 or cap any file the real-time server writes.
 
 ## Reading records
@@ -73,9 +73,9 @@ tells you where a failure was reported. It doesn't establish the root cause,
 whether it was audible, how many distinct dropouts there were, or exactly how
 long the incident lasted.
 
-## Real-time behaviour
+## Real-time behavior
 
-The error hook doesn't allocate, lock, format or do I/O. Its atomic
+The error hook doesn't allocate, lock, format, or do I/O. Its atomic
 read-modify-write operations can retry, so it has no hard bound on execution
 time. Its pages are prefaulted but not locked by this code.
 

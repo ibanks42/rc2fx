@@ -4,9 +4,9 @@ package app
 
 // kitDefaultDarkColors is the "colors" table of the "Default Dark" theme in gpui-component 0.9.1's
 // src/theme/default-theme.json, the theme gpui-kit 0.9.1 applies for ThemeMode::Dark.
-// themeSetJSON lays RC2FX's colours over it, so every colour RC2FX does not set keeps the
-// value the Rust app saw after Theme::change(ThemeMode::Dark) (the kit's apply_config falls
-// back to derived colours for keys a theme leaves out, which would differ). Update it with
+// themeSetJSON lays RC2FX's colors over it, so every color RC2FX does not set keeps the
+// value it has after Theme::change(ThemeMode::Dark) (the kit's apply_config falls
+// back to derived colors for keys a theme leaves out, which would differ). Update it with
 // the library: it must match the gpui-kit version VERSIONS names.
 var kitDefaultDarkColors = map[string]string{
 	"accent.background":                 "neutral-800",

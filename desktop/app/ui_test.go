@@ -10,7 +10,7 @@ import (
 	"gpuikit.dev/gk"
 )
 
-// ui.rs icon_tests: windows match the packaged desktop identity and icon.
+// Windows match the packaged desktop identity and icon.
 func TestWindowsMatchThePackagedDesktopIdentity(t *testing.T) {
 	if appID != "rc2fx" {
 		t.Fatalf("appID = %q", appID)

@@ -5,16 +5,16 @@ layout: home
 <HomeHero />
 
 RC2FX adds audio processing to the RØDECaster Pro II: a parametric EQ, a
-compressor, a limiter, a high-pass filter, a gain stage and noise
+compressor, a limiter, a high-pass filter, a gain stage, and noise
 suppression. It runs on the mixer, inside RØDE's audio engine, and you
 control it from a desktop app over USB.
 
 ## Background
 
 The RØDECaster's built-in processing offers a three-band EQ, a basic
-compressor and a noise gate, but no noise suppression.
+compressor, and a noise gate, but no noise suppression.
 Processing on the computer instead, with a plugin host, a virtual audio cable,
-EasyEffects or Equalizer APO, only affects audio from that one computer. It
+EasyEffects, or Equalizer APO, only affects audio from that one computer. It
 stops helping once a second computer or a console is connected, or when an
 app opens the raw device.
 
@@ -23,7 +23,7 @@ uses this to load its processing into the mixer's own audio engine.
 
 ## Features
 
-- Processing happens on the mixer. Every computer, console or phone
+- Processing happens on the mixer. Every computer, console, or phone
   connected to it hears the processed audio, and the desktop app only needs
   to be open while you change settings.
 - A parametric EQ with up to 32 bands per channel, for correcting a
@@ -35,7 +35,7 @@ uses this to load its processing into the mixer's own audio engine.
 - Suppression on the Chat output. People on Discord or Zoom hear every
   microphone in the room with suppression applied, while Smart Pad sounds and
   music pass through unchanged.
-- Processing on headphones, monitors and the USB mix outputs as well as on
+- Processing on headphones, monitors, and the USB mix outputs as well as on
   inputs.
 - A fresh install processes nothing. You turn on each channel and effect
   yourself.
@@ -48,10 +48,10 @@ RC2FX can process 25 paths on the Pro II:
 
 - Microphones: the four combo inputs and both wireless receivers.
 - Sources: USB 1, USB 2, the Chat USB input, the three CallMe channels,
-  Bluetooth, and the four virtual USB inputs (Game, Music, Virtual A and
+  Bluetooth, and the four virtual USB inputs (Game, Music, Virtual A, and
   Virtual B).
 - Headphones: all four headphone outputs.
-- Outputs: the monitors, Main Mix Out, Chat Mix Out and Secondary Mix Out.
+- Outputs: the monitors, Main Mix Out, Chat Mix Out, and Secondary Mix Out.
 
 Each path has its own effect chain, in any order. The
 [virtual USB paths](reference/usb-paths.md) reference lists how these map to
@@ -63,12 +63,12 @@ the mixer.
   installer flashes one of those versions. RØDECaster Duo support is
   [experimental and untested](user/installing.md#rødecaster-duo-experimental)
   and is off by default.
-- A computer running Windows, Linux or macOS, connected to the mixer's
+- A computer running Windows, Linux, or macOS, connected to the mixer's
   **USB 1** port with a USB-C cable. The computer is needed to install RC2FX
   and to change settings.
 - The RC2FX desktop app ([getting started](user/getting-started.md)).
 
-No network connection to the mixer, SSH access or command-line tools are
+No network connection to the mixer, SSH access, or command-line tools are
 needed.
 
 ## Next steps
@@ -88,7 +88,7 @@ The [developer guide](developer/index.md) covers building RC2FX, and the
 ## License and disclaimer
 
 RC2FX's own code and its trained noise suppression weights are licensed under
-MIT. Third-party components keep their own licences, and the datasets the
+MIT. Third-party components keep their own licenses, and the datasets the
 weights were trained on keep their own terms. The app lists them all under
 **Settings › About › Licenses**.
 

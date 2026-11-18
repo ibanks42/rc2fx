@@ -1,17 +1,16 @@
 package app
 
-// line_overlay.rs, redesigned: Home's and the editor's animated level
-// indicators, the glowing lines and the overview's bars.
+// Home's and the editor's animated level indicators, the glowing lines and
+// the overview's bars.
 //
-// Why the Rust had an overlay: GPUI renders the window root on every frame,
-// and notifying a view also dirties its ancestors, so animating inside the
-// app would have re-rendered the whole app on every frame. In the binding a
+// Why there is no overlay: GPUI renders the window root on every frame, and
+// notifying a view also dirties its ancestors, so animating inside the app
+// would re-render the whole app on every frame. In the binding a
 // view marked with gk.Notify is described alone, its parent kept: so each
-// indicator is its own gk.View, embedded where the Rust claimed a slot, and
+// indicator is its own gk.View, embedded where it is shown, and
 // one shared gk.Every redraws only the indicators whose picture would
-// change (levels.Slots.Unchanged). The slots, claims, latches, content masks
-// and geometry checks are gone; the decisions the Rust tests cover stay, in
-// app/levels.
+// change (levels.Slots.Unchanged). The decisions about when to draw live
+// in app/levels.
 //
 // Who draws an indicator (never both, never neither): Home, the sidebar and
 // the editor ask for one with indicator or levelBar; it is that indicator's
@@ -21,11 +20,10 @@ package app
 // When: the ticker runs at 60 Hz, 30 Hz while the window is not focused,
 // only while some indicator on screen can animate (levels.Tick: a fresh
 // reading, on Home or an editor, without reduced motion, animation on).
-// Window visibility is not readable in Go, so a minimised window keeps
+// Window visibility is not readable in Go, so a minimized window keeps
 // ticking at 30 Hz. Indicators that do not animate (no fresh reading,
 // reduced motion, Settings, RC2FX_ANIMATED_LINE=0) are drawn still, and the
-// app's 50 ms poll redraws one when its level or freshness changes, as each
-// app render redrew them in the Rust.
+// app's 50 ms poll redraws one when its level or freshness changes.
 
 import (
 	"slices"
@@ -37,11 +35,11 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/levels"
 )
 
-// lineSource is line_overlay.rs Source: what an indicator shows. Source::Path
-// (one path's reported output peak) is its only kind.
+// lineSource is what an indicator shows: one path's reported output peak,
+// its only kind.
 type lineSource struct{ path string }
 
-// linePath is Source::Path.
+// linePath is the source for the path with this id.
 func linePath(id string) lineSource { return lineSource{path: id} }
 
 // indicatorKey is one indicator: what it shows and how.
@@ -67,8 +65,8 @@ type indicatorView struct {
 	measured bool
 }
 
-// LineSlots is the indicators' state in App (the field kept its Rust name,
-// line_slots): every indicator's view, the ones asked for before their
+// LineSlots is the indicators' state in App (App.lineSlots): every
+// indicator's view, the ones asked for before their
 // view existed, the animation's clock and the shared ticker. Views are
 // kept for the app's life: at most one per path and shape (a line in two
 // styles, a bar in two directions).
@@ -87,13 +85,11 @@ type LineSlots struct {
 	signature  *signature
 }
 
-// LineLayout was line_overlay.rs Layout (the window's size and scale, which
-// released refused geometry). The redesign refuses no geometry, so it holds
-// nothing; App.layout can go.
+// LineLayout is empty: the indicators refuse no geometry, so nothing needs
+// the window's size and scale. App.layout can go.
 type LineLayout struct{}
 
-// canAnimate is home.rs can_animate without the latch: whether an indicator
-// with a fresh reading moves now.
+// canAnimate is whether an indicator with a fresh reading moves now.
 func (a *App) canAnimate() bool {
 	return levels.Enabled() && a.animatedPage() && !a.reducedMotion
 }
@@ -261,11 +257,10 @@ func (a *App) pollIndicators(cx *gk.Cx) {
 	a.pollSignature(cx)
 }
 
-// barsAnimate is home.rs bars_animate: whether the overview's bars redraw
+// barsAnimate is whether the overview's bars redraw
 // themselves, so a reading needs no redraw of the app. In Go every bar with
 // a view does, moving or still; only a bar drawn in place (before the poll
-// made its view) needs the app redrawn. (The Rust asked the overlay, which
-// stopped under reduced motion and while hidden.)
+// made its view) needs the app redrawn.
 func (a *App) barsAnimate(cx *gk.Cx) bool {
 	_ = cx
 	return a.lineSlots.inlineBars != a.renderGeneration+1

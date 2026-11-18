@@ -1,7 +1,7 @@
 # USB control
 
 The desktop app controls RC2FX over USB 1, the connection RØDE's app also
-uses. Wi-Fi, Ethernet, IP addressing and USB networking are not used, and
+uses. Wi-Fi, Ethernet, IP addressing, and USB networking are not used, and
 `rc2fxd` has no network listener.
 
 Tested on Windows with a Pro II on 1.7.7: settings writes, telemetry, running
@@ -25,7 +25,7 @@ resulting descriptor is 62 bytes:
 09 04 85 03 95 ff 91 02 09 05 85 04 95 ff 81 02  09 06 85 05 95 ff 91 02  09 07 85 06 95 ff 81 02  c0
 ```
 
-No audio endpoint, channel layout, USB function or endpoint is added. Every
+No audio endpoint, channel layout, USB function, or endpoint is added. Every
 reader of the collection receives report 6. RØDE's software reads by report
 ID and ignores it, and RC2FX reads only its own marked reports. The app
 treats a mixer as running RC2FX only if the collection declares reports 5
@@ -41,13 +41,13 @@ RØDE's traffic cannot push RC2FX's replies out of the queue.
   audio devices disappeared. Any additional HID device in the container has
   the same problem.
 - **Second USB interface or serial port.** The mixer's USB controller has
-  five IN endpoints. Chat audio, main audio, MIDI, mass storage and HID use
+  five IN endpoints. Chat audio, main audio, MIDI, mass storage, and HID use
   all five, along with all the FIFO memory.
 - **Reusing RØDE's report IDs.** Early prototypes did this and round trips
   worked. Under sustained traffic RØDE's app got stuck on "synchronizing"
   because it took RC2FX's replies for its own.
 - **USB networking.** RØDE's sync mode includes CDC networking, but it also
-  changes the audio layout, removes the separate Chat function and replaces
+  changes the audio layout, removes the separate Chat function, and replaces
   mass storage.
 
 ### Installation on the mixer
@@ -85,13 +85,13 @@ the kernel's datagram queue length.
 ## Framing
 
 Protocol version 3 or 4. Each 256-byte report carries a seven-byte marker, a
-random session nonce, a request ID, an offset, a total size and a payload
+random session nonce, a request ID, an offset, a total size, and a payload
 length, leaving 224 bytes of payload. Windows delivers OUT reports to this
 firmware as 257 bytes, and the one extra byte is ignored. The frame layout is
 the same in both versions; only the acknowledgement and fetch rules change.
 
 Messages are JSON, zlib-compressed when that makes them smaller. Both sides
-enforce size limits. Truncated streams, trailing data and incorrect lengths
+enforce size limits. Truncated streams, trailing data, and incorrect lengths
 are rejected.
 
 `rc2fxd` passes each request to its [control API](api.md) in process. Events
@@ -124,7 +124,7 @@ added during uploads.
   up to `n` Reply reports at consecutive offsets, stopping at the end of the
   cached reply.
 - Errors are sent as soon as they happen, and the client reads them on its
-  next wait. The existing size limits, request IDs and reply cache still
+  next wait. The existing size limits, request IDs, and reply cache still
   apply.
 
 ### Reliability
@@ -150,9 +150,9 @@ added during uploads.
 On every start, the stock engine tears down and rebuilds the USB gadget.
 RC2FX skips this for its own restarts. When the gadget is already up with
 RC2FX's descriptor and the engine is in its start-up window, the library
-makes the engine's USB stop, start and unbind commands report success
+makes the engine's USB stop, start, and unbind commands report success
 without running them. The host sees no disconnect, so audio streams, RØDE's
-virtual devices and the app's session continue. If the saved USB mode
+virtual devices, and the app's session continue. If the saved USB mode
 changed in the meantime, the gadget is rebuilt.
 
 Until start-up finishes, the hook also makes the engine's attempt to open
@@ -189,7 +189,7 @@ checking, which increments the revision. It does not retry on a conflict.
 
 Unit tests cover fragmentation, malformed sizes, reordering, bounded
 decompression, stale sessions, unrelated vendor reports, ambiguous writes,
-reconnection, protocol 4 negotiation, windowed acknowledgements and multi-report
+reconnection, protocol 4 negotiation, windowed acknowledgements, and multi-report
 fetches. The xtask tests (`desktop/internal/xtask/mixer`) rebuild the staged
 descriptor and check that RØDE's items are unchanged.
 

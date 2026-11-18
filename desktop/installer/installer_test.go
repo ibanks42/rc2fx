@@ -54,7 +54,7 @@ func readConfig(t *testing.T, name string) []byte {
 	return data
 }
 
-// testHeader is a GNU header shaped like the Rust tests' `header`.
+// testHeader is a GNU tar header for a test entry.
 func testHeader(t *testing.T, name string, kind byte, size int) *tarHeader {
 	t.Helper()
 	var h tarHeader

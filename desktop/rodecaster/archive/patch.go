@@ -293,7 +293,7 @@ func Patch(src, dst string, o PatchOptions) (*Patched, error) {
 	}, nil
 }
 
-// TrimASCII is Rust's <[u8]>::trim_ascii.
+// TrimASCII trims ASCII whitespace from both ends.
 func TrimASCII(data []byte) []byte {
 	return bytes.Trim(data, " \t\n\r\f")
 }

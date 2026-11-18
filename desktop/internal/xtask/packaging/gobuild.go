@@ -4,7 +4,7 @@ package packaging
 // before): cgo against the gpuikit static library in
 // desktop/third_party/gpuikit, which links into the executable with only the
 // component families the app uses, Velopack's C library (`velopack` tag,
-// desktop/third_party/velopack), the generated licence notices compiled in
+// desktop/third_party/velopack), the generated license notices compiled in
 // through `go generate ./app/licenses`, and with --embedded the mixer payload
 // staged by installer/embed/cmd/stage-payload (`embedded` tag). The
 // executable, and on Windows velopack_libc.dll beside it, land in
@@ -213,8 +213,8 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 		return command
 	}
 	if embedded {
-		// The payload the `embedded` tag compiles in, checked as the Rust
-		// build script did; RC2FX_RELEASE_BUILD=1 applies the release build
+		// The payload the `embedded` tag compiles in, checked by
+		// stage-payload; RC2FX_RELEASE_BUILD=1 applies the release build
 		// line.
 		if err := task.Run(host("run", "./installer/embed/cmd/stage-payload", "-root", root)); err != nil {
 			return err
@@ -320,9 +320,9 @@ func copyLibrary(from, to string) error {
 	return os.Chmod(to, 0o755)
 }
 
-// windowsResources gives rc2fx.exe its icon and version details (the Rust
-// app's build.rs): Explorer, the Start menu, Installed apps and the taskbar
-// read the details, and the window loads icon 1. The application manifest
+// windowsResources gives rc2fx.exe its icon and version details: Explorer,
+// the Start menu, Installed apps and the taskbar read the details, and the
+// window loads icon 1. The application manifest
 // (common controls 6, without which the program does not start, and
 // per-monitor DPI awareness) is not among them: package gk links its own
 // (gpuikit_windows_amd64.syso), and the linker keeps that one over MinGW's
@@ -377,8 +377,8 @@ func windowsResources(root string) (string, error) {
 	return syso, nil
 }
 
-// resourceScript is build.rs's rc2fx.rc for version, without its manifest
-// (package gk's).
+// resourceScript is the rc2fx.rc resource script for version, without a
+// manifest (package gk links its own).
 func resourceScript(icon, version string) string {
 	parts := strings.FieldsFunc(version, func(r rune) bool { return r == '.' || r == '-' || r == '+' })
 	numbers := make([]string, 4)

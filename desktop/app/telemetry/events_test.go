@@ -11,7 +11,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// The tests of the Rust app's events.rs, case for case.
+// The event log: counting, groups, paging, resets, wording and host times.
 
 // page is a page as the mixer would send it, decoded the way the transport
 // decodes one (strictly), with room for the hostile case's megabyte.

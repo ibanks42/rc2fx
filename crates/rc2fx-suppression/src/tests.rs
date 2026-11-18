@@ -671,7 +671,7 @@ fn the_worker_records_its_slowest_frame_consistently_with_its_timings() {
 }
 
 #[test]
-fn cancel_receipt_cannot_be_relabelled_drain_and_survives_drop() {
+fn cancel_receipt_cannot_be_relabeled_drain_and_survives_drop() {
     let mut worker =
         Worker::spawn(geometry(), Box::new(Identity), WorkerOptions::default()).unwrap();
     for _ in 0..17 {

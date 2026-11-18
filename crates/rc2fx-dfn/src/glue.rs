@@ -903,7 +903,7 @@ pub(crate) mod tests {
     impl std::ops::Deref for Fenced {
         type Target = [f32];
         fn deref(&self) -> &[f32] {
-            // SAFETY: `len` initialised f32 in the mapping, page-aligned or
+            // SAFETY: `len` initialized f32 in the mapping, page-aligned or
             // a multiple of four bytes from a page boundary.
             unsafe { std::slice::from_raw_parts(self.data, self.len) }
         }

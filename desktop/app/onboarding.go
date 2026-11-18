@@ -1,6 +1,6 @@
 package app
 
-// onboarding.rs: the opening screens' background, halo, headline and
+// The opening screens' background, halo, headline and
 // animated signature. Onboarding has its own animation lifetime: it does not
 // use Home's indicators. Its decorative motion follows the system motion
 // policy.
@@ -38,8 +38,8 @@ func background() gk.LinearGradient {
 var haloImage *gk.RenderImage
 
 // makeHalo makes haloImage (in the app's init; images can't be made while a
-// view is described). home.HaloPixels gives the bytes the Rust handed
-// RenderImage, which reads them as BGRA; gk.PixelImage takes RGBA and swaps
+// view is described). home.HaloPixels gives bytes in RenderImage's own
+// order, BGRA; gk.PixelImage takes RGBA and swaps
 // red and blue on its way to the same RenderImage, so they are swapped here
 // first.
 func makeHalo(cx *gk.Cx) {
@@ -60,7 +60,7 @@ func makeHalo(cx *gk.Cx) {
 func backdrop() gk.Element {
 	d := gk.Div(s.Absolute, s.Inset0, s.SizeFull)
 	if appearance() == AppearanceDusk && haloImage != nil {
-		// The Rust stretched it (.object_fit(ObjectFit::Fill)); gk's ImgEl
+		// The halo is meant to stretch (ObjectFit::Fill); gk's ImgEl
 		// has no ObjectFit yet, so gpui's default (Contain) applies: at a
 		// window shape other than the halo's own (1320 × 860) the glow is
 		// narrower or shorter than the window.
@@ -79,10 +79,10 @@ func headline(first, second string) gk.DivEl {
 }
 
 // signatureFrame is 30 Hz. The line's noise steps 30 times a second (see
-// signature.rs offset), so faster frames only repaint the same picture.
+// installflow.Offset), so faster frames only repaint the same picture.
 const signatureFrame = 33 * time.Millisecond
 
-// signature is onboarding.rs Signature: the connection screen's and the
+// signature is the connection screen's and the
 // installer's animated line, a view of its own redrawn by its own ticker.
 type signature struct {
 	view    gk.View
@@ -91,7 +91,7 @@ type signature struct {
 	ticking bool
 }
 
-// newSignature is Signature::new: the view (call in init). Its ticker is
+// newSignature makes the signature's view (call in init). Its ticker is
 // started and stopped by the poll (pollSignature).
 func newSignature(a *App) gk.View {
 	sig := &signature{epoch: time.Now()}
@@ -104,9 +104,9 @@ func newSignature(a *App) gk.View {
 	return sig.view
 }
 
-// signatureActive is Signature::active: whether the first screen's line
-// moves. It stands still while two mixers wait for one to be unplugged.
-// (The Rust also stopped while the window was hidden; Go cannot read that.)
+// signatureActive is whether the first screen's line moves. It stands
+// still while two mixers wait for one to be unplugged. (It keeps moving
+// while the window is hidden: gk does not report that.)
 func (a *App) signatureActive() bool {
 	return !a.reducedMotion && !a.session.Connected && a.installer == nil &&
 		a.firstState() != installflow.FirstTwo

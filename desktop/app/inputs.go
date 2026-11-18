@@ -1,6 +1,6 @@
 package app
 
-// inputs.rs: the show's inputs as the RØDECaster lists them (names and
+// The show's inputs as the RØDECaster lists them (names and
 // faders), refreshed every few seconds, and the panel for a show source
 // RC2FX has no path for. The cache logic is in edit/inputs.go.
 
@@ -128,7 +128,7 @@ func (a *App) unprocessedPanel(source *core.StockSource) gk.Element {
 				TextColor(rgb(Muted)).Child(txt(why))))
 }
 
-// sourceDetail is inputs.rs source_detail ("" note is None).
+// sourceDetail is a source's line in the channel list (edit.SourceDetail).
 func sourceDetail(source *core.StockSource, note string) string {
 	return edit.SourceDetail(source, note)
 }

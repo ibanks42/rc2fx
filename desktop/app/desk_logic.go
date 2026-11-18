@@ -1,6 +1,7 @@
 package app
 
-// desk.rs, the parts that do not draw. This file does not import gk: its
+// The desk's helpers that do not draw: effect names, signal order and stage
+// summaries. This file does not import gk: its
 // functions are tested with plain `go test`.
 
 import (

@@ -1,7 +1,7 @@
 # Commands
 
 Every task is an `./xtask` command (the Go tool in `desktop/cmd/xtask`) and works the same on Windows,
-Linux and macOS. `just` wraps the common ones. `just --list` shows the
+Linux, and macOS. `just` wraps the common ones. `just --list` shows the
 recipes and `./xtask help` lists the underlying commands.
 
 ## Build and test
@@ -15,12 +15,12 @@ recipes and `./xtask help` lists the underlying commands.
 | `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run a development build / build a release build of the app with the optional embedded payload. |
 | `just app-embedded-release` | Cross-build the mixer runtime, then run the release build with the optional embedded payload. |
 | `just mixer-build` | Cross-build the mixer runtime into `target/mixer` |
-| `just test` | Go formatting, `go vet` and tests for the desktop app (the transport also with the `mockmixer` tag), then the Rust workspace tests and Clippy with warnings as errors, also for rc2fxd (`native-pipeline`) and the `eq-fma` and `bench-kernels` features |
-| `just test-mixer` | Native library tests and Clippy, a benchmark build check (Linux), plus the launcher, recorder, screen-module and xrun flight recorder tests (Linux or macOS) |
+| `just test` | Go formatting, `go vet`, and tests for the desktop app (the transport also with the `mockmixer` tag), then the Rust workspace tests and Clippy with warnings as errors, also for rc2fxd (`native-pipeline`) and the `eq-fma` and `bench-kernels` features |
+| `just test-mixer` | Native library tests and Clippy, a benchmark build check (Linux), plus the launcher, recorder, screen-module, and xrun flight recorder tests (Linux or macOS) |
 | `just package` | Build a release package for this computer into `target/package` |
 | `just package-check` | Build the AppImage from the working tree in the release container (AlmaLinux 8, glibc 2.28), then check it in clean containers of several distributions (x86-64 Linux with Podman or Docker) |
 | `just docs` / `just docs-serve` | Build / serve this documentation site |
-| `./xtask app [--release] [--mock] [--embedded] [--build-only]` | What the app recipes run: build the desktop app for this computer into `target/debug`, `target/release` or `target/mock`, and start it unless `--build-only` |
+| `./xtask app [--release] [--mock] [--embedded] [--build-only]` | What the app recipes run: build the desktop app for this computer into `target/debug`, `target/release`, or `target/mock`, and start it unless `--build-only` |
 | `./xtask check-elf FILE [--shared]` | Check a mixer binary against the mixer's ABI (glibc 2.35, GCC 11) |
 
 The docs build and development server generate update history first. They need
@@ -42,7 +42,7 @@ npm exec -- vitepress dev
 
 `just app-mock` runs a development build of the app with the `mockmixer`
 build tag, which swaps USB 1 for a simulated mixer inside the app process. The
-app, its validation and its `api/v1` requests are the real ones.
+app, its validation, and its `api/v1` requests are the real ones.
 
 - It starts from the same demo setup every time. Settings and presets last until
   the app quits, and Disconnect keeps them.
@@ -59,7 +59,7 @@ app, its validation and its `api/v1` requests are the real ones.
 system. gpuikit is linked into it, so it needs nothing beside it.
 
 `./xtask app` refuses `--mock` with `--release`, and packaging refuses an
-executable built with the `mockmixer`, `rc2fxdev` or `rc2fxdebug` tag. `RC2FX_DEV_PAGE` works with
+executable built with the `mockmixer`, `rc2fxdev`, or `rc2fxdebug` tag. `RC2FX_DEV_PAGE` works with
 it, for example `RC2FX_DEV_PAGE=channel:mic\ 4:eq just app-mock`.
 
 ## On the mixer over SSH
@@ -83,4 +83,4 @@ restarts the mixer's audio engine.
 | Command | Description |
 | --- | --- |
 | `./xtask mixer api METHOD PATH [BODY\|@file]` | Send one [controller API](../reference/api.md) request |
-| `go -C desktop run ./cmd/usb-probe` | Read-only probe. `--extended` also reads inputs, presets and diagnostics. |
+| `go -C desktop run ./cmd/usb-probe` | Read-only probe. `--extended` also reads inputs, presets, and diagnostics. |

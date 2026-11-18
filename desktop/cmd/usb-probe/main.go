@@ -26,8 +26,7 @@ func main() {
 	}
 }
 
-// lookup is value[key][key]..., or null where something is missing, as
-// serde_json's Index is.
+// lookup is value[key][key]..., or null where something is missing.
 func lookup(value json.RawMessage, keys ...string) json.RawMessage {
 	for _, key := range keys {
 		var fields map[string]json.RawMessage
@@ -43,7 +42,7 @@ func lookup(value json.RawMessage, keys ...string) json.RawMessage {
 	return value
 }
 
-// display is a value as serde_json's Display writes it: compact JSON.
+// display is a value as compact JSON, or as it came when it does not parse.
 func display(value json.RawMessage) string {
 	var out bytes.Buffer
 	if json.Compact(&out, value) != nil {
@@ -52,7 +51,7 @@ func display(value json.RawMessage) string {
 	return out.String()
 }
 
-// asUint is Value::as_u64.
+// asUint is a plain unsigned integer: digits only, within 64 bits.
 func asUint(value json.RawMessage) (uint64, bool) {
 	text := string(bytes.TrimSpace(value))
 	if text == "" {

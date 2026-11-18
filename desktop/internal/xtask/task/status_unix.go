@@ -37,7 +37,7 @@ func statusText(state *os.ProcessState) string {
 	case wait.Continued():
 		return "continued (WIFCONTINUED)"
 	}
-	return "unrecognised wait status: " + strconv.Itoa(int(wait))
+	return "unrecognized wait status: " + strconv.Itoa(int(wait))
 }
 
 func errnoText(errno syscall.Errno) string {

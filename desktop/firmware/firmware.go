@@ -3,9 +3,9 @@
 // catalog and the offline compatibility checks the installer needs.
 //
 // Port of the parts of crates/rc2fx-firmware the desktop uses: the catalog
-// and offline inspection. Runtime selection (Rust Catalog::select and
-// select_for_model) and the CLI stay mixer-side. Both read the shared
-// fixtures in fixtures/firmware.
+// and offline inspection. Runtime selection (Catalog::select_for_model_with)
+// and the CLI stay mixer-side. Both read the shared fixtures in
+// fixtures/firmware.
 package firmware
 
 import (
@@ -368,8 +368,7 @@ func (p *Profile) VerifyLauncher(launcher []byte) error {
 
 // imageBytes resolves a virtual address through executable ELF PT_LOAD
 // segments, never assuming that the file offset happens to equal the
-// executable-relative offset. Arithmetic is on 64 bits, as the Rust usize
-// on every platform the app runs on.
+// executable-relative offset. Arithmetic is on 64 bits on every platform.
 func imageBytes(image []byte, address uint64) ([]byte, error) {
 	truncated := errors.New("truncated ELF image")
 	read := func(offset, size uint64) ([]byte, error) {

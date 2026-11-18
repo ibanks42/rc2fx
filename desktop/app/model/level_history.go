@@ -6,7 +6,7 @@ package model
 // processing), at the time this app received it. Meter events carry no
 // timestamp of their own, so times are approximate: they include transport
 // delay, and readings the device delayed or reordered can't be detected.
-// What redraws an idle Home when readings stop is the app's poll (main.rs).
+// What redraws an idle Home when readings stop is the app's poll (App.poll).
 
 import (
 	"iter"
@@ -33,7 +33,7 @@ const (
 	// segments: the displayed level uses only the latest segment, so a
 	// reading from before a gap (telemetry stale, then back) never shows
 	// after it. The same 1 s after which a path stops counting as fresh
-	// (telemetry.rs).
+	// (telemetry.Progress.Fresh).
 	levelGap = time.Second
 )
 

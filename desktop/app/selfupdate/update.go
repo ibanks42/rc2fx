@@ -14,7 +14,8 @@ import (
 // Velopack.
 type Opener func(feed *SignedFeed, locator *LocatorConfig) (Manager, error)
 
-// SelfUpdate is self_update.rs SelfUpdate.
+// SelfUpdate is this copy's self-update: its Velopack manager, if any, and
+// the update's state.
 type SelfUpdate struct {
 	// manager is nil when Velopack did not install this copy.
 	manager Manager
@@ -37,7 +38,9 @@ type SelfUpdate struct {
 	verify Verify
 }
 
-// New is SelfUpdate::new.
+// New is the app's updater: a preview when one is asked for, else
+// Velopack's manager when open finds it, else one that only links to the
+// release page.
 func New(open Opener) SelfUpdate {
 	if preview, ok := previewUpdate(); ok {
 		return preview
@@ -67,7 +70,7 @@ func empty(manager Manager) SelfUpdate {
 	return SelfUpdate{manager: manager, state: Idle(), checks: &Checks{}, verify: installer.VerifyUpdatePackage}
 }
 
-// velopackManager is self_update.rs velopack_manager: on Linux with the
+// velopackManager opens Velopack's update manager: on Linux with the
 // private packages folder (closed to others first), elsewhere with
 // Velopack's own paths, of which only the packages folder is needed here.
 func velopackManager(open Opener, feed *SignedFeed) (Manager, string, bool) {
@@ -98,7 +101,7 @@ func velopackManager(open Opener, feed *SignedFeed) (Manager, string, bool) {
 	return manager, packages, true
 }
 
-// previewUpdate is self_update.rs preview: RC2FX_DEV_UPDATE, in
+// previewUpdate is RC2FX_DEV_UPDATE: in
 // development builds only, shows the update actions in a given state, for
 // screenshots: idle, downloading, verifying, ready or failed.
 func previewUpdate() (SelfUpdate, bool) {
@@ -188,7 +191,7 @@ func (u *SelfUpdate) LaunchOnQuit() {
 	}
 }
 
-// CancelRestart: a restart was asked for but the quit was then cancelled.
+// CancelRestart: a restart was asked for but the quit was then canceled.
 func (u *SelfUpdate) CancelRestart() { u.applyOnQuit = nil }
 
 // TakePending is start_self_update's `pending.take()`.

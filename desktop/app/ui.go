@@ -1,6 +1,6 @@
 package app
 
-// ui.rs: the channel editor's building blocks: status dots, toggles, pill
+// The channel editor's building blocks: status dots, toggles, pill
 // groups, section headings, choice cards, the "Live on the mixer" readouts
 // and the app's confirm dialog. The sizes are in layout.go, dbfs in
 // colors.go, the window identity's app id in layout.go.
@@ -12,7 +12,7 @@ import (
 	"gpuikit.dev/gk/s"
 )
 
-// rgb is gpui's rgb(0xRRGGBB) as a colour a builder takes.
+// rgb is gpui's rgb(0xRRGGBB) as a color a builder takes.
 func rgb(hex uint32) gk.Color { return rgba(hex<<8 | 0xff) }
 
 // rgba is gpui's rgba(0xRRGGBBAA).
@@ -40,9 +40,9 @@ var windowIcon []byte
 // SetWindowIcon sets the PNG every window opens with (see windowIdentity).
 func SetWindowIcon(png []byte) { windowIcon = png }
 
-// windowIdentity is ui.rs window_options: the desktop entry and every window
-// share one identity (app id "rc2fx", StartupWMClass=rc2fx) and the waveform
-// icon.
+// windowIdentity gives a window the app's identity: the desktop entry and
+// every window share one identity (app id "rc2fx", StartupWMClass=rc2fx)
+// and the waveform icon.
 func windowIdentity(c gk.WindowConfig) gk.WindowConfig {
 	c.AppID = appID
 	c.Icon = windowIcon
@@ -53,13 +53,13 @@ func windowIdentity(c gk.WindowConfig) gk.WindowConfig {
 // washes.
 func white(alpha float32) gk.Color { return gk.HSLA(0, 0, 1, alpha) }
 
-// txt is a text child, Rust's `.child("…")`.
+// txt is a text child.
 func txt(s string) gk.Element { return gk.Text(s) }
 
 // px is gpui's px().
 func px(v float32) gk.Length { return gk.Px(v) }
 
-// hover is a hover style: Rust's `.hover(|s| s…)`.
+// hover is an empty style to refine for hover.
 func hover() gk.StyleRefinement { return gk.NewStyleRefinementDefault() }
 
 // dot is a status dot: the gradient when on, a hollow ring when off.
@@ -120,8 +120,8 @@ func pill(id gk.ID, label string, on bool) gk.StatefulDivEl {
 }
 
 // section is a small uppercase heading with a rule after it, and an optional
-// control (nil for none) at the end of the rule. (ui.rs section; settings.rs
-// has its own, settingsSection.)
+// control (nil for none) at the end of the rule. (Settings has its own,
+// settingsSection.)
 func section(title string, trailing gk.Element) gk.DivEl {
 	d := gk.HFlex(s.ItemsCenter, s.Gap3).Mt(px(6)).Mb(px(16)).
 		Child(gk.Div(s.FontSemibold).TextSize(px(11)).TextColor(rgb(Faint)).
@@ -188,7 +188,7 @@ type Fact struct {
 
 func newFact(label, value string) Fact { return Fact{Label: label, Value: value} }
 
-// withBar is Fact::bar.
+// withBar is f with a bar filled to fraction, clamped to 0..1.
 func (f Fact) withBar(fraction float32) Fact {
 	v := min(max(fraction, 0), 1)
 	f.Bar = &v
@@ -271,8 +271,8 @@ type confirmState struct {
 // confirm is the app's dialog (the installer's flash confirmation is the
 // model): dark, rounded, Inter, white primary pill. The OS keeps only its own
 // password prompt. onOK runs for the action; onClose whenever the dialog
-// closes, the action included. Clicking outside does nothing. (ui.rs confirm,
-// which took the window; here it is a method so the dialog can be made once.)
+// closes, the action included. Clicking outside does nothing. It is a method
+// so the dialog can be made once.
 //
 // Only one dialog is open at a time: while one is open a new one is refused
 // and confirm returns false without running either callback, so the caller

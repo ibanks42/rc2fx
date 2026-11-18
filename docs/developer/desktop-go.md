@@ -11,11 +11,11 @@ the two copies in step.
 
 | Go package (under `desktop/`) | Rust counterpart | Notes |
 | --- | --- | --- |
-| `core` | `crates/rc2fx-core` | The desktop's copy of the settings schema, presets, EQ maths and strict JSON. The Rust crate is the mixer's. |
+| `core` | `crates/rc2fx-core` | The desktop's copy of the settings schema, presets, EQ math, and strict JSON. The Rust crate is the mixer's. |
 | `usbproto` | `crates/rc2fx-usb` | HID report framing and the control protocol constants |
 | `delta` | `crates/rc2fx-delta` | The encoder the app uses, and a decoder for tests |
-| `firmware` | `crates/rc2fx-firmware` | Models, profiles and the offline checks the installer needs |
-| `installer` (and `installer/platform`, `installer/embed`, `installer/control` and others) | none | Installer engine: firmware download and patching, USB update mode, the USB control client |
+| `firmware` | `crates/rc2fx-firmware` | Models, profiles, and the offline checks the installer needs |
+| `installer` (and `installer/platform`, `installer/embed`, `installer/control`, and others) | none | Installer engine: firmware download and patching, USB update mode, the USB control client |
 | `ext2fs` | none | libext2fs from the vendored e2fsprogs, through cgo, for Repair mixer. Without cgo it builds as a stub. |
 | `transport` | none | The app's USB 1 control client, and the simulated mixer behind the `mockmixer` tag |
 | `app` (and subpackages), `cmd/rc2fx` | none | The UI. The only packages that import `gpuikit.dev/gk`. |
@@ -23,7 +23,7 @@ the two copies in step.
 | `cmd/xtask`, `internal/xtask/...` | none | The repository's development and release tool, run by `./xtask` |
 
 The files the packages ship are in `desktop/packaging`: the AppImage launcher,
-the desktop entry, the icons and the macOS entitlements. The scripts that run
+the desktop entry, the icons, and the macOS entitlements. The scripts that run
 on the mixer are in `mixer/scripts`.
 
 ## Shared fixtures
@@ -32,9 +32,9 @@ Anything both sides must agree on (configuration JSON, presets, the USB
 framing, delta payloads, release metadata, the image check list) has accept
 and reject cases in `fixtures/` at the repository root. A Go test and a Rust
 test read the same files: the Rust side in `crates/*/tests/shared_fixtures.rs`,
-`crates/rc2fx-core/tests/image_check_fixtures.rs` and
+`crates/rc2fx-core/tests/image_check_fixtures.rs`, and
 `crates/rc2fx-device/tests/xtask_tuf_fixtures.rs`, the Go side in the matching
-package's tests. When you change shared behaviour, change both copies and add
+package's tests. When you change shared behavior, change both copies and add
 the case to `fixtures/`, so the mixer's Rust and the desktop's Go cannot drift
 apart.
 
@@ -48,7 +48,7 @@ from the other:
   a subpackage.
 - Functions and types keep their names in exported Go CamelCase:
   `compare_versions` becomes `CompareVersions`, `MixerRelease::parse`
-  `ParseMixerRelease`, `Model::from_board` `ModelFromBoard` and `valid_id`
+  `ParseMixerRelease`, `Model::from_board` `ModelFromBoard`, and `valid_id`
   `ValidID`. Initialisms follow Go style (`ID`, `USB`, `JSON`, `HTTP`, `SSH`,
   `EQ`, `HPF`, `TUF`, `URL`).
 - Constants: `MIXER_PROTOCOL_VERSION` becomes `MixerProtocolVersion`.
@@ -58,9 +58,9 @@ from the other:
   reads better where it is used.
 - `Result<T, E>` is `(T, error)`. `Option<T>` is a pointer or `(T, bool)`.
 
-## Behaviour
+## Behavior
 
-- The two copies behave the same, including every limit, bound, ordering rule
+- The two copies behave the same, including every limit, bound, ordering rule,
   and message the user sees.
 - JSON from outside the process is read as strictly as `rc2fx-core`'s strict
   JSON and serde's `deny_unknown_fields`: unknown fields, missing required
@@ -69,12 +69,12 @@ from the other:
   of those, so use the strict decoder in `core` (`core.DecodeStrict` and
   `core.DecodeStrictLimited`) everywhere such JSON is read.
 - JSON the app writes is byte-identical to what the Rust writes wherever the
-  mixer or a file on disk reads it: field order, number formatting and
+  mixer or a file on disk reads it: field order, number formatting, and
   escaping.
 - Dependencies: the standard library first. The module uses
   `github.com/klauspost/compress` (zstd and gzip), `golang.org/x/crypto`,
   `golang.org/x/sys`, `github.com/theupdateframework/go-tuf/v2`,
-  `github.com/sigstore/sigstore` and `howett.net/plist`. Adding another needs a
+  `github.com/sigstore/sigstore`, and `howett.net/plist`. Adding another needs a
   reason.
 
 ## cgo and build tags
@@ -100,17 +100,17 @@ GOOS=windows CGO_ENABLED=0 go vet $nocgo
 GOOS=darwin CGO_ENABLED=0 go vet $nocgo
 ```
 
-| Tag | Effect | Rust counterpart |
+| Tag | Effect | In the Rust app (removed in 89296ea) |
 | --- | --- | --- |
 | `rc2fxdebug` | The telemetry preview (`rc2fx --telemetry-preview`) | `debug_assertions` |
 | `rc2fxdev` | Mixer releases from a local folder (`RC2FX_DEV_MIXER_REPOSITORY`) | a debug build |
 | `mockmixer` | The simulated mixer in place of USB 1 | the `mock-mixer` feature |
 | `embedded` | The mixer payload staged by `installer/embed/cmd/stage-payload`, compiled in | the `embedded` feature |
-| `velopack` | Self-update through Velopack's C library. Without it the app cannot update itself, ignores Velopack's install hooks and accepts `RC2FX_DEV_UPDATE`. | always on |
+| `velopack` | Self-update through Velopack's C library. Without it the app cannot update itself, ignores Velopack's install hooks, and accepts `RC2FX_DEV_UPDATE`. | always on |
 
 `./xtask app` builds with `rc2fxdebug,rc2fxdev` unless given `--release`, and
 packaging builds with `velopack` (and `embedded` with `--embedded`) and refuses
-an executable built with `mockmixer`, `rc2fxdev` or `rc2fxdebug`.
+an executable built with `mockmixer`, `rc2fxdev`, or `rc2fxdebug`.
 
 ## Tests
 

@@ -9,7 +9,7 @@ Pro II and Duo share executables, so the mixer always selects for its board's
 model; Rust checks the other `select` cases as plain image verification.
 
 - `models.json`: each model's identity strings and USB IDs, USB lookups,
-  board evidence (`boards`: hostname and extlinux.conf text) and model IDs.
+  board evidence (`boards`: hostname and extlinux.conf text), and model IDs.
 - `catalogs.json`: catalog texts (paths from the repository root; the first
   is the real `config/firmware-profiles.json`) and whether `Catalog::parse`
   accepts them. `error` is the exact message, or `*` where only the refusal is

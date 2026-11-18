@@ -1,7 +1,7 @@
 //go:build ignore
 
-// gen writes licenses.json, the bundle the licenses package embeds, the way
-// the Rust app's build.rs did: RC2FX_LICENSES_JSON names the generated file,
+// gen writes licenses.json, the bundle the licenses package embeds:
+// RC2FX_LICENSES_JSON names the generated file,
 // and with RC2FX_RELEASE_BUILD=1 a valid one is required. Without one, a
 // development build embeds the placeholder.
 //

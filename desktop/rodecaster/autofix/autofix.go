@@ -213,9 +213,9 @@ type Refusal struct{ Err error }
 func (r *Refusal) Error() string { return r.Err.Error() }
 func (r *Refusal) Unwrap() error { return r.Err }
 
-// ErrCancelled is wrapped by the error of a run stopped through
+// ErrCanceled is wrapped by the error of a run stopped through
 // Options.Cancel.
-var ErrCancelled = errors.New("stopped")
+var ErrCanceled = errors.New("stopped")
 
 // Members the carrier script needs in the firmware it runs on.
 var requiredMembers = [][]string{
@@ -402,12 +402,12 @@ func (r *run) progress(stage, text string) func(completed, total uint64) {
 	}
 }
 
-func (r *run) cancelled() error {
+func (r *run) canceled() error {
 	if r.o.Cancel == nil {
 		return nil
 	}
 	if err := r.o.Cancel(); err != nil {
-		return fmt.Errorf("%w: %v", ErrCancelled, err)
+		return fmt.Errorf("%w: %v", ErrCanceled, err)
 	}
 	return nil
 }
@@ -417,7 +417,7 @@ func (r *run) run() (Result, error) {
 		return Result{}, err
 	}
 	res := Result{Model: r.model.ID(), Serial: r.serial, Firmware: r.version}
-	if err := r.cancelled(); err != nil {
+	if err := r.canceled(); err != nil {
 		return res, fmt.Errorf("%w. Nothing was changed", err)
 	}
 	plain := filepath.Join(r.o.Work, plainDir)
@@ -425,7 +425,7 @@ func (r *run) run() (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	if err := r.cancelled(); err != nil {
+	if err := r.canceled(); err != nil {
 		return res, fmt.Errorf("%w. Nothing was changed", err)
 	}
 	if err := r.inspect(filepath.Join(plain, flash.UpdateFiles[0])); err != nil {
@@ -436,7 +436,7 @@ func (r *run) run() (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	if err := r.cancelled(); err != nil {
+	if err := r.canceled(); err != nil {
 		return res, fmt.Errorf("%w. Nothing was changed", err)
 	}
 
@@ -661,9 +661,9 @@ func (r *run) download(dir string) (string, error) {
 					check(completed, total)
 				}
 			},
-			Cancel: r.cancelled,
+			Cancel: r.canceled,
 		})
-		if errors.Is(err, ErrCancelled) {
+		if errors.Is(err, ErrCanceled) {
 			return "", fmt.Errorf("%w. Nothing was changed", err)
 		}
 		if err != nil {
@@ -894,7 +894,7 @@ func (r *run) flash(dir, md string, carried, already bool) error {
 }
 
 // waitUpdateDrive waits for the mixer in update mode with its update drive.
-// It cannot be cancelled: the mixer is already in update mode.
+// It cannot be canceled: the mixer is already in update mode.
 func (r *run) waitUpdateDrive(stage string) error {
 	r.emit(stage, "Waiting for the mixer's update drive")
 	deadline := r.o.now().Add(r.o.UpdateModeLimit)
@@ -957,7 +957,7 @@ type report struct {
 // disappearance, for Settle (at most finalSettle after a plain flash). After a carrier flash (carried) whose script
 // offers the USB report it also looks for that report on every poll, and
 // returns as soon as one is acknowledged; the last report it read, if any,
-// comes back either way. It can be cancelled: the mixer finishes on its own.
+// comes back either way. It can be canceled: the mixer finishes on its own.
 func (r *run) waitBack(carried bool) (*report, error) {
 	settle := r.o.Settle
 	if !carried && settle > finalSettle {
@@ -972,7 +972,7 @@ func (r *run) waitBack(carried bool) (*report, error) {
 	var got *report
 	lastText, lastAt := "", time.Time{}
 	for {
-		if err := r.cancelled(); err != nil {
+		if err := r.canceled(); err != nil {
 			return got, err
 		}
 		now := r.o.now()
@@ -1121,7 +1121,7 @@ func (r *run) waitError(err error, res *Result) error {
 	if res != nil {
 		done = res.Summary + "\n\n"
 	}
-	if errors.Is(err, ErrCancelled) {
+	if errors.Is(err, ErrCanceled) {
 		if res != nil {
 			return fmt.Errorf("%s%w. The mixer is finishing RØDE's update on its own; leave it on until it shows its normal screen", done, err)
 		}

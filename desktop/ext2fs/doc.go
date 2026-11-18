@@ -27,7 +27,7 @@
 // without cgo, the package compiles to a stub whose Open reports that.
 //
 // libext2fs is licensed under the GNU Library General Public License,
-// version 2, and libcom_err under an MIT-style licence; the texts are in
+// version 2, and libcom_err under an MIT-style license; the texts are in
 // e2fsprogs/NOTICE. This package's own code is MIT (MIT AND LGPL-2.0-only
 // as a whole).
 package ext2fs

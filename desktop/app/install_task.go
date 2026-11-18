@@ -356,11 +356,11 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 	}
 	t.body = body
 	stop := "Stop"
-	if m.Cancelling() {
+	if m.Canceling() {
 		stop = "Stopping…"
 	}
 	t.secondary = []gk.ButtonEl{taskButton("task-stop", stop, false).
-		Disabled(!m.CanStop(now) || m.Cancelling()).
+		Disabled(!m.CanStop(now) || m.Canceling()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.stopTask(cx) })}
 	t.primary = taskButton("task-done", "Done", true).Disabled(true)
 }

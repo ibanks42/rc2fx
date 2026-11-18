@@ -72,7 +72,7 @@ func privilegedLaunch() (*exec.Cmd, *stagedAppDir, error) {
 	return exec.Command("pkexec", executable), guard, nil
 }
 
-// message is serde's `{"progress": …}` / `{"done": {"Ok"|"Err": …}}`.
+// message is `{"progress": …}` or `{"done": {"Ok"|"Err": …}}`.
 type message struct {
 	Progress *installer.Progress
 	Done     *done
@@ -299,12 +299,12 @@ type stdinBox struct {
 	w  io.WriteCloser
 }
 
-// Canceller asks a running helper to stop its current download, from any
+// Canceler asks a running helper to stop its current download, from any
 // goroutine.
-type Canceller struct{ stdin *stdinBox }
+type Canceler struct{ stdin *stdinBox }
 
 // Cancel sends the cancel line.
-func (c Canceller) Cancel() {
+func (c Canceler) Cancel() {
 	c.stdin.mu.Lock()
 	defer c.stdin.mu.Unlock()
 	if c.stdin.w != nil {
@@ -377,8 +377,8 @@ func (h *Helper) Alive() bool {
 	}
 }
 
-// Canceller is a canceller for this helper.
-func (h *Helper) Canceller() Canceller { return Canceller{h.stdin} }
+// Canceler is a canceler for this helper.
+func (h *Helper) Canceler() Canceler { return Canceler{h.stdin} }
 
 // stopped classifies a helper whose stdin or stdout has failed: it waits
 // (briefly) for the exit status, so the outcome does not depend on whether

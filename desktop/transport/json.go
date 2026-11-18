@@ -10,27 +10,25 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// The Rust side moves untyped JSON as serde_json::Value with insertion order
-// kept (the app's build enables serde_json's preserve_order). Here it is a
-// json.RawMessage, and these helpers read and build it the way that Value
-// does: field lookups, as_str and as_u64, and compact output escaped as
-// serde_json escapes it.
+// Untyped JSON is a json.RawMessage, its keys in the order they came. These
+// helpers read and build it: field lookups, strings and unsigned integers,
+// and compact output escaped as the mixer's serde_json escapes it.
 
-// marshal is serde_json::to_vec for a typed value: core.Encode writes field
-// order, floats and escapes as serde_json does. Never pass it a
+// marshal encodes a typed value: core.Encode writes field order, floats and
+// escapes as the mixer's serde_json does. Never pass it a
 // json.RawMessage, which it would write as an array of bytes.
 func marshal(v any) (json.RawMessage, error) {
 	return core.Encode(v)
 }
 
-// decode is serde_json::from_value: the typed checks of the strict decoder
+// decode decodes into out with the typed checks of the strict decoder
 // (unknown fields, required fields, ranges) over a reply the control client
 // has already parsed within its own limits, so no further size limit.
 func decode(value json.RawMessage, out any) error {
 	return core.DecodeStrictLimited(value, len(value), math.MaxInt, out)
 }
 
-// jsonString is s as serde_json writes a string.
+// jsonString is s as a JSON string, escaped as serde_json escapes it.
 func jsonString(s string) json.RawMessage {
 	const hex = "0123456789abcdef"
 	out := make([]byte, 0, len(s)+2)
@@ -54,7 +52,7 @@ func jsonString(s string) json.RawMessage {
 		case r < 0x20:
 			out = append(out, '\\', 'u', '0', '0', hex[r>>4], hex[r&0xf])
 		default:
-			// Invalid UTF-8 cannot occur in a Rust string; it reads as U+FFFD.
+			// Invalid UTF-8 is written as U+FFFD.
 			out = utf8.AppendRune(out, r)
 		}
 	}
@@ -120,7 +118,7 @@ func members(raw json.RawMessage) (map[string]json.RawMessage, bool) {
 	return fields, true
 }
 
-// field is Value::get: false when raw is not an object or lacks key.
+// field is raw's member key: false when raw is not an object or lacks key.
 func field(raw json.RawMessage, key string) (json.RawMessage, bool) {
 	fields, ok := members(raw)
 	if !ok {
@@ -142,7 +140,7 @@ func elements(raw json.RawMessage) ([]json.RawMessage, bool) {
 	return items, true
 }
 
-// asString is Value::as_str.
+// asString is raw as a string; false when it is not a JSON string.
 func asString(raw json.RawMessage) (string, bool) {
 	t := trimmed(raw)
 	if len(t) == 0 || t[0] != '"' {
@@ -155,8 +153,8 @@ func asString(raw json.RawMessage) (string, bool) {
 	return s, true
 }
 
-// asUint is Value::as_u64: an integer literal from 0 to 2^64-1. A fraction,
-// an exponent or a sign makes serde_json read another kind of number.
+// asUint is an integer literal from 0 to 2^64-1; never one with a fraction,
+// an exponent or a sign.
 func asUint(raw json.RawMessage) (uint64, bool) {
 	t := trimmed(raw)
 	if len(t) == 0 {
@@ -187,7 +185,7 @@ func uintField(raw json.RawMessage, key string) (uint64, bool) {
 	return asUint(value)
 }
 
-// compact is raw as serde_json::Value's to_string writes it.
+// compact is raw as compact JSON.
 func compact(raw json.RawMessage) (json.RawMessage, error) {
 	var out bytes.Buffer
 	if err := json.Compact(&out, raw); err != nil {
@@ -197,8 +195,8 @@ func compact(raw json.RawMessage) (json.RawMessage, error) {
 }
 
 // withMembers is `value[key] = new` for each member: a key already there
-// keeps its place, a new one goes last. Null becomes an object first, as
-// serde_json's IndexMut does; false for any other kind of value.
+// keeps its place, a new one goes last. Null becomes an object first; false
+// for any other kind of value.
 func withMembers(raw json.RawMessage, set ...member) (json.RawMessage, bool) {
 	var fields []member
 	if !isNull(raw) {

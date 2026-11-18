@@ -1,8 +1,8 @@
 package app
 
-// graph.rs: the EQ graph: the response, its bands as numbered points, and
-// the grid. Drag a point; scroll on it for Q; double-click empty space to
-// add a band. The axis maths and the curve cache are in edit/graph.go; the
+// The EQ graph: the response, its bands as numbered points, and the grid.
+// Drag a point; scroll on it for Q; double-click empty space to add a band.
+// The axis math and the curve cache are in edit/graph.go; the
 // canvas's paths are a gk.Plot.
 
 import (
@@ -16,10 +16,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// EqCurve is graph.rs EqCurve (edit.EQCurve).
+// EqCurve is the graph's cached response (edit.EQCurve).
 type EqCurve = edit.EQCurve
 
-// eqCurveDB is graph.rs eq_curve: the selected EQ's response in dB at
+// eqCurveDB is the selected EQ's response in dB at
 // evenly spaced points across the log frequency axis, cached.
 func (a *App) eqCurveDB() []float64 {
 	return edit.Curve(&a.eqCurve, a.target().EQ, a.channel)
@@ -52,10 +52,9 @@ func (a *App) graphPoint(position [2]float32) (frequency, gain float64, ok bool)
 	return edit.GraphPoint(b.Origin.X, b.Origin.Y, b.Size.Width, b.Size.Height, position[0], position[1])
 }
 
-// eqPlot is graph.rs's canvas paint: the grid, the response's area and its
+// eqPlot is the graph's canvas: the grid, the response's area and its
 // line, in pixels inside a plot of width × tall (the graph's bounds at the
-// last prepaint; the first frame after a resize draws at the old size, as
-// the audit's 2.2 says).
+// last prepaint, so the first frame after a resize draws at the old size).
 func (a *App) eqPlot(curve []float64, width, tall float32) gk.Element {
 	if width <= 0 || tall <= 0 {
 		return gk.Plot()

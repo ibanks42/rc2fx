@@ -1,6 +1,5 @@
 // Package opt holds the helpers for optional values, which the desktop code
-// keeps as pointers that may be nil (Rust's Option in the code it was ported
-// from).
+// keeps as pointers that may be nil.
 package opt
 
 // Equal is whether a and b are both nil, or both set to equal values.

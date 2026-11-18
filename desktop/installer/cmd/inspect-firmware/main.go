@@ -1,6 +1,5 @@
 // Command inspect-firmware is a read-only audit of an official firmware
-// archive; it needs no device or extracted root filesystem
-// (crates/rc2fx-installer/examples/inspect-firmware.rs before).
+// archive; it needs no device or extracted root filesystem.
 //
 //	go -C desktop run ./installer/cmd/inspect-firmware MODEL OS.tar.gz [CATALOG]
 //

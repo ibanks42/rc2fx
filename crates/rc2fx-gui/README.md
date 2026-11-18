@@ -7,11 +7,10 @@ binaries run unmodified.
 The GUI draws upright, but the panel is mounted sideways, so each frame is
 rotated before display. Stock firmware has the GE2D converter rotate the full
 frame every time, and the memory traffic disturbs the audio. This module
-converts only the regions that changed, in up to three jobs per frame. With
-the app's
-[screen conversion](../../docs/user/settings-and-diagnostics.md#screen-conversion)
-setting it can also rotate large redraws on the CPU, fully or partly. It
-patches no instructions and draws nothing itself.
+converts only the regions that changed, in up to three jobs per frame, and
+rotates large redraws on the CPU instead. The size threshold is fixed; there
+is no runtime setting for it. It patches no instructions and draws nothing
+itself.
 
 ## Building
 

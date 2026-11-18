@@ -33,9 +33,10 @@ import (
 // This file owns the payload's lists; the xtask mixer build and upload read
 // them from here. Two copies are kept by hand and checked by tests:
 // mixer/scripts/install.sh (lists_test.go) and the Rust in-place updater's
-// crates/rc2fx-device/src/mixer_update/install.rs (its
-// the_payload_lists_match_the_desktop_installers test parses these
-// declarations, so keep each a plain `var Name = [N]string{...}`).
+// crates/rc2fx-device/src/mixer_update/install.rs (the
+// the_payload_lists_match_the_desktop_installers test in
+// mixer_update/tests.rs parses these declarations, so keep each a plain
+// `var Name = [N]string{...}`).
 var PayloadNames = [14]string{
 	"librc2fx_native.so",
 	"rc2fxd",
@@ -157,7 +158,8 @@ type buildLine struct {
 	start, end int
 }
 
-// splitInclusive is Rust's str::split_inclusive('\n').
+// splitInclusive splits text after each '\n', keeping it; no empty part at
+// the end.
 func splitInclusive(text string) []string {
 	var out []string
 	for len(text) > 0 {
@@ -217,7 +219,7 @@ func parseBuildLine(script []byte) (buildLine, error) {
 	return *found, nil
 }
 
-// isSpace is Rust's char::is_whitespace, which str::trim uses.
+// isSpace is Unicode White_Space.
 func isSpace(r rune) bool {
 	switch r {
 	case '\t', '\n', '\v', '\f', '\r', ' ', 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:
@@ -415,7 +417,8 @@ func Validate(files Files) error {
 	return err
 }
 
-// AsU64 is serde_json's Value::as_u64 for a number.
+// AsU64 is a number written as an integer (no fraction or exponent) from 0
+// to 2^64-1; "-0" counts as 0.
 func AsU64(v any) (uint64, bool) {
 	n, ok := v.(json.Number)
 	if !ok || strings.ContainsAny(string(n), ".eE") {
@@ -642,7 +645,7 @@ func (e *Envelope) Files() (Files, error) {
 	return files, nil
 }
 
-// parseUsize is Rust's usize::from_str: optional '+', digits only.
+// parseUsize is an optional '+', then digits only, below 2^63.
 func parseUsize(text string) (int, error) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" || strings.Trim(digits, "0123456789") != "" {
@@ -779,9 +782,9 @@ func header(data []byte, prefix string) (string, int, error) {
 	return value, end + 1, nil
 }
 
-// ValueEqual is serde_json's Value equality for trees from sjson.Value.
-// Numbers are equal when serde_json would store the same number: integers
-// by value, floats by value, never an integer and a float.
+// ValueEqual compares trees from sjson.Value, objects whatever their key
+// order. Numbers written as integers compare by integer value, numbers
+// with a fraction or exponent by float value, and never one with the other.
 func ValueEqual(a, b any) bool {
 	switch a := a.(type) {
 	case nil:
@@ -841,7 +844,7 @@ func numberEqual(a, b json.Number) bool {
 	if err1 == nil && err2 == nil {
 		return x == y
 	}
-	// Beyond u64 serde_json reads a float.
+	// Integers beyond 64 bits compare as floats.
 	xf, err1 := a.Float64()
 	yf, err2 := b.Float64()
 	return err1 == nil && err2 == nil && xf == yf

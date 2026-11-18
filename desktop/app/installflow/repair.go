@@ -1,7 +1,7 @@
 package installflow
 
-// installer/repair.rs, the part without views: Repair mixer's stages, which
-// step of the sidebar each one reached, and the words it shows. For a mixer
+// Repair mixer, the part without views: its stages, which step of the
+// sidebar each one reached, and the words it shows. For a mixer
 // a flash left unable to keep its setup, or to start: the user holds the
 // power button for 15 seconds so the bootloader shows the mixer's storage
 // over USB; the administrator helper then checks it and restores damaged
@@ -34,8 +34,8 @@ const (
 	RepairFailed
 )
 
-// RepairStage is repair.rs Stage. Findings is for RepairFindings, Result for
-// RepairDone and Error for RepairFailed.
+// RepairStage is where Repair mixer is. Findings is for RepairFindings,
+// Result for RepairDone and Error for RepairFailed.
 type RepairStage struct {
 	Kind     RepairStageKind
 	Findings *installer.RepairFindings
@@ -70,7 +70,7 @@ func IsRepair(request installer.Request) bool {
 	return request.Kind == installer.RequestRepairInspect || request.Kind == installer.RequestRepair
 }
 
-// RepairInspectRequest is Request::RepairInspect.
+// RepairInspectRequest is a RequestRepairInspect.
 func RepairInspectRequest() installer.Request {
 	return installer.Request{Kind: installer.RequestRepairInspect}
 }
@@ -122,7 +122,7 @@ func (r *Repair) StartRepair() (installer.Request, bool) {
 // Outcome is a finished repair request.
 func (r *Repair) Outcome(request installer.Request, reply installer.Reply, err error) {
 	switch {
-	case err != nil && err.Error() == installer.Cancelled:
+	case err != nil && err.Error() == installer.Canceled:
 		r.Stage = RepairStage{Kind: RepairWaiting}
 	case err != nil:
 		r.Stage = RepairStage{Kind: RepairFailed, Error: err.Error()}

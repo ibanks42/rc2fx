@@ -122,7 +122,7 @@ type MixerOffer struct {
 	Metadata MixerTarget `json:"metadata"`
 }
 
-// Equal is Rust's derived equality.
+// Equal compares every field, the metadata by MixerTarget.Equal.
 func (o *MixerOffer) Equal(other *MixerOffer) bool {
 	return o.Target == other.Target && o.SHA256 == other.SHA256 && o.Length == other.Length && o.Metadata.Equal(&other.Metadata)
 }
@@ -146,8 +146,8 @@ const (
 	maxRoots         = 8
 )
 
-// FetchRawMetadata fetches the published role files byte for byte (Rust's
-// raw_metadata). The mixer verifies them against its own trusted root; this
+// FetchRawMetadata fetches the published role files byte for byte. The
+// mixer verifies them against its own trusted root; this
 // only makes sure they belong together, retrying when a release was
 // published between two reads.
 func FetchRawMetadata() (*RawMetadata, error) {
@@ -379,7 +379,7 @@ type MixerTarget struct {
 	FirmwareProfiles  []string `json:"firmwareProfiles"`
 }
 
-// Equal is Rust's derived equality.
+// Equal compares every field.
 func (m *MixerTarget) Equal(o *MixerTarget) bool {
 	return m.Version == o.Version && m.PayloadFormat == o.PayloadFormat && m.ProtocolVersion == o.ProtocolVersion &&
 		m.MinimumAppVersion == o.MinimumAppVersion && slices.Equal(m.FirmwareProfiles, o.FirmwareProfiles)
@@ -474,7 +474,7 @@ type VerifiedMixerPayload struct {
 // Metadata is the payload's signed compatibility claims.
 func (p *VerifiedMixerPayload) Metadata() *MixerTarget { return &p.metadata }
 
-// Equal is Rust's derived equality.
+// Equal compares the bundle's files, the bytes and the metadata.
 func (p *VerifiedMixerPayload) Equal(o *VerifiedMixerPayload) bool {
 	if len(p.bundle) != len(o.bundle) {
 		return false
@@ -499,7 +499,7 @@ func mixerError(text string) error {
 }
 
 // mixerOperation runs an operation that may download, stopping it when the
-// engine is cancelled or after 30 minutes.
+// engine is canceled or after 30 minutes.
 func mixerOperation[T any](e *Engine, operation func(context.Context) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1800*time.Second)
 	defer cancel()
@@ -516,10 +516,10 @@ func mixerOperation[T any](e *Engine, operation func(context.Context) (T, error)
 	defer ticker.Stop()
 	var zero T
 	for {
-		if e.cancelled() {
+		if e.canceled() {
 			cancel()
 			<-done
-			return zero, Error(Cancelled)
+			return zero, Error(Canceled)
 		}
 		select {
 		case r := <-done:

@@ -6,7 +6,10 @@ import (
 	"testing"
 )
 
-// Port of crates/rc2fx-core/tests/selection.rs.
+// Path selection: validation, capacity, and in the editor session the
+// reservations, acknowledgements and rebasing of unsaved edits.
+// crates/rc2fx-core/tests/selection.rs keeps the validation checks the
+// mixer's model still has.
 
 func ids(values ...string) []string { return append([]string{}, values...) }
 

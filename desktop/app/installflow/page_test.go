@@ -1,6 +1,6 @@
 package installflow
 
-// mod.rs selection_tests and access_step_tests, case for case.
+// What the helper is sent and holds, and when the page asks for access.
 
 import (
 	"testing"

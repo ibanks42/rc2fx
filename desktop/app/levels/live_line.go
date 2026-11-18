@@ -1,7 +1,7 @@
-// Package levels is the drawing maths of Home's live indicators, without gk:
-// the live line's shape (live_line.rs), the level bars' fill (level_bar.rs)
-// and the animation's decisions (line_overlay.rs: Slots::unchanged and the
-// tick choice). The level history itself is desktop/app/model.
+// Package levels is the drawing math of Home's live indicators, without gk:
+// the live line's shape, the level bars' fill and the animation's decisions
+// (Slots.Unchanged and the tick choice). The level history itself is
+// desktop/app/model.
 package levels
 
 import (
@@ -10,14 +10,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-// LineState is live_line.rs LineState.
+// LineState is whether a line shows a fresh reading.
 type LineState int
 
 const (
 	// LineStateLive is fresh readings: the RC2FX gradient at the displayed
 	// level.
 	LineStateLive LineState = iota
-	// LineStateUnavailable is no fresh readings: a flat, dim line, labelled by
+	// LineStateUnavailable is no fresh readings: a flat, dim line, labeled by
 	// the caller as unavailable so it can't be read as measured silence.
 	LineStateUnavailable
 )

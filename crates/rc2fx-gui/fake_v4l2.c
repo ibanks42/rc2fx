@@ -3,7 +3,7 @@
  * call (as in the GUI) that the module can bind. Only the fake video fd is
  * emulated; every other fd goes to the real syscall.
  *
- * The fake GE2D models the behaviour G1 is to confirm: a full-frame 90°
+ * The fake GE2D models the behavior G1 is to confirm: a full-frame 90°
  * rotation masked by the COMPOSE rectangle (pixels outside it untouched).
  * FAKE_GE2D_DIR=cw|ccw picks the rotation, FAKE_GE2D_DELAY_US adds time per
  * job, FAKE_GE2D_FAIL_QBUF=n fails the n-th output QBUF (counting all, from

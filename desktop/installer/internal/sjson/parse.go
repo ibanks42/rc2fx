@@ -1,5 +1,5 @@
-// Package sjson reads and writes JSON the way the Rust installer's serde
-// types do, which Go's encoding/json does not: field names match exactly,
+// Package sjson reads and writes JSON by serde's rules, which Go's
+// encoding/json does not follow: field names match exactly,
 // a struct field appears at most once, a missing field is an error unless
 // the field or its struct has a default, `null` is only an absent Option,
 // numbers keep their integer types, strings must be valid UTF-8 without

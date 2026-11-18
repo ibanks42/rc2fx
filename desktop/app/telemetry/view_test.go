@@ -9,7 +9,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// The tests of the Rust app's telemetry_view.rs, case for case.
+// What the Telemetry section says: its status, checks and figures.
 
 func viewEngine() core.EngineStatus {
 	return core.EngineStatus{

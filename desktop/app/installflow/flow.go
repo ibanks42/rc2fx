@@ -123,8 +123,8 @@ func change(installed *string, target string) MixerChange {
 	}
 }
 
-func cancelled(err error) bool {
-	return err.Error() == installer.Cancelled
+func canceled(err error) bool {
+	return err.Error() == installer.Canceled
 }
 
 // DuoConnected reports whether a Duo is on USB now: the experimental Duo
@@ -668,7 +668,7 @@ func (m *Model) checkStock() *installer.Request {
 	return m.quiet(installer.Request{Kind: installer.RequestStockReleases})
 }
 
-// RecheckStock checks RØDE's list again after a failed or cancelled check.
+// RecheckStock checks RØDE's list again after a failed or canceled check.
 func (m *Model) RecheckStock() *installer.Request {
 	if m.StockCheck.Kind != StockCheckFailed || m.Busy() {
 		return nil
@@ -849,7 +849,7 @@ func (m *Model) checkMixers() *installer.Request {
 	return m.quiet(installer.Request{Kind: installer.RequestMixerReleases})
 }
 
-// RecheckMixers checks again after a failed or cancelled check.
+// RecheckMixers checks again after a failed or canceled check.
 func (m *Model) RecheckMixers() *installer.Request {
 	if m.Offers.Kind != OffersFailed {
 		return nil
@@ -878,8 +878,8 @@ func (m *Model) MixerNote() (string, bool) {
 	}
 	switch m.Offers.Kind {
 	case OffersFailed:
-		if m.Offers.Error == installer.Cancelled {
-			return "The check for mixer software was cancelled." + fallback, true
+		if m.Offers.Error == installer.Canceled {
+			return "The check for mixer software was canceled." + fallback, true
 		}
 		return fmt.Sprintf("Couldn't check for mixer software. %s%s", m.Offers.Error, fallback), true
 	case OffersReady:
@@ -903,8 +903,8 @@ func (m *Model) MixerNote() (string, bool) {
 			}
 			return "Choose the mixer software to install.", true
 		}
-		// The newest option; like Iterator::max_by with incomparable
-		// versions counted equal, the later of equal versions wins.
+		// The newest option; with incomparable versions counted equal, the
+		// later of equal versions wins.
 		var newest *string
 		for _, source := range options {
 			version := source.Version()
@@ -1573,8 +1573,8 @@ func (m *Model) failed(request installer.Request, err error) *installer.Request 
 		return nil
 	case installer.RequestInPlaceBundle:
 		message := fmt.Sprintf("Couldn't get the update ready. Nothing changed on the mixer. %s", e)
-		if cancelled(err) {
-			message = "The update was cancelled. Nothing changed on the mixer."
+		if canceled(err) {
+			message = "The update was canceled. Nothing changed on the mixer."
 		}
 		m.inPlace = InPlace{Kind: InPlaceFailed, Error: message}
 		return nil
@@ -1586,8 +1586,8 @@ func (m *Model) failed(request installer.Request, err error) *installer.Request 
 		return m.refresh()
 	case installer.RequestReleases:
 		m.FirmwareCheck = FirmwareCheckDone
-		if cancelled(err) {
-			m.Error = "The check for supported firmware was cancelled."
+		if canceled(err) {
+			m.Error = "The check for supported firmware was canceled."
 		} else {
 			m.Error = fmt.Sprintf("Couldn't check for supported firmware. %s", e)
 		}

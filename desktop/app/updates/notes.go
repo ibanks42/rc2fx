@@ -2,7 +2,7 @@ package updates
 
 // The Versions section's changelog: notes come from the network, so they are
 // treated as untrusted: raw HTML and image syntax are escaped, images never
-// load, and links open only when SafeURL allows them. (versions_dialog.rs)
+// load, and links open only when SafeURL allows them.
 
 import (
 	"fmt"
@@ -64,7 +64,8 @@ func SafeMarkdown(notes string) string {
 	return out.String()
 }
 
-// splitInclusive is str::split_inclusive('\n').
+// splitInclusive splits s after each '\n', keeping it; no empty part at
+// the end.
 func splitInclusive(s string) []string {
 	var lines []string
 	for s != "" {

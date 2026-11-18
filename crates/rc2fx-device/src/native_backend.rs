@@ -639,7 +639,7 @@ impl Runtime {
     /// The native library refuses with Busy while RØDE's mixer registers or
     /// closes audio ports (USB streams starting or stopping) or a replaced
     /// worker is still retiring. Both clear within moments, and a refused
-    /// preparation has cancelled everything it staged, so try again briefly.
+    /// preparation has canceled everything it staged, so try again briefly.
     fn prepare_retrying(
         &mut self,
         config: &Config,

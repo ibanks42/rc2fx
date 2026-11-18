@@ -10,8 +10,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// Rust's #[ignore]: requires zig; builds only the two recorder payloads,
-// never audio/app. Run with RC2FX_XTASK_ZIG_TESTS=1.
+// Skipped unless asked for: requires zig; builds only the two recorder
+// payloads, never audio/app. Run with RC2FX_XTASK_ZIG_TESTS=1.
 func TestRecorderBuilderProducesBothCheckedArmPayloads(t *testing.T) {
 	if os.Getenv("RC2FX_XTASK_ZIG_TESTS") != "1" {
 		t.Skip("requires zig; set RC2FX_XTASK_ZIG_TESTS=1")

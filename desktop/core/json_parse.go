@@ -28,9 +28,10 @@ func ParseJSON(text string) (Value, error) {
 	return ParseJSONLimited(text, DefaultMaxJSONBytes, DefaultMaxJSONNodes)
 }
 
-// ParseJSONLimited is parse_json_limited: strict JSON as serde_json reads it,
-// plus duplicate keys rejected at every depth, at most maximumBytes of input,
-// at most maximumNodes values and nesting no deeper than MaxJSONDepth.
+// ParseJSONLimited is strict JSON as the mixer's serde_json reads it
+// (rc2fx_core::strict_json::parse_with_limits), plus duplicate keys rejected
+// at every depth, at most maximumBytes of input, at most maximumNodes values
+// and nesting no deeper than MaxJSONDepth.
 func ParseJSONLimited(text string, maximumBytes, maximumNodes int) (Value, error) {
 	return parseStrict([]byte(text), maximumBytes, maximumNodes)
 }
@@ -413,7 +414,7 @@ func (p *parser) unicodeEscape() (rune, error) {
 }
 
 // number reads a JSON number exactly as serde_json 1.0 does without its
-// float_roundtrip feature (the build the Rust app and mixer use), so every
+// float_roundtrip feature (the build the mixer uses), so every
 // value, and every out-of-range error, is the same bit for bit:
 //
 //   - an integer literal is unsigned if it fits in u64, negative if it fits
@@ -422,7 +423,7 @@ func (p *parser) unicodeEscape() (rune, error) {
 //     only scale it) converted to f64, then multiplied or divided by a power
 //     of ten from a table. That is not always the correctly rounded value
 //     (123456789012345678901 reads as 1.2345678901234567e20), which is the
-//     point: Go reads what Rust reads.
+//     point: Go reads what the mixer reads.
 //   - a result that overflows to infinity is "number out of range".
 func (p *parser) number() (Number, error) {
 	start := p.pos

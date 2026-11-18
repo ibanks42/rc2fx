@@ -35,7 +35,8 @@ const (
 	USBRuleFailed
 )
 
-// USBRule is connection.rs UsbRule.
+// USBRule is the Linux USB permission screen's request: its state and the
+// error from a failed attempt.
 type USBRule struct {
 	Kind  USBRuleKind
 	Error string

@@ -1,6 +1,6 @@
 package edit
 
-// eq_controls.rs, the parts that do not draw.
+// The EQ page's helpers that do not draw.
 
 import (
 	"fmt"
@@ -85,7 +85,7 @@ func TypeShape(kind core.BandType, t float32) float32 {
 }
 
 // TypeIconPoints is the icon's line in a w×h box: 25 points, 1 px in from
-// the sides and 2 px from the top and bottom (eq_controls.rs type_icon).
+// the sides and 2 px from the top and bottom.
 func TypeIconPoints(kind core.BandType, w, h float32) [][2]float32 {
 	points := make([][2]float32, 0, 25)
 	for i := 0; i <= 24; i++ {

@@ -1,6 +1,7 @@
 package app
 
-// dev_page.rs, the navigating half (the parsing is in devpage.go).
+// RC2FX_DEV_PAGE, the navigating half: opening the chosen page (the parsing
+// is in devpage.go).
 
 import (
 	"fmt"

@@ -1,7 +1,7 @@
 # rc2fx-suppression
 
 The noise suppression worker. It contains the audio-frame adapter, startup
-preparation, the worker lifecycle, bounded queues, dry/wet alignment and
+preparation, the worker lifecycle, bounded queues, dry/wet alignment, and
 telemetry, and it implements `rc2fx_dsp::Suppression`.
 
 `VendorModel` runs DeepFilterNet3 from `rc2fx-dfn`. It is plain Rust and
@@ -36,7 +36,7 @@ loads a candidate model for benchmarking, builds a zero-lead geometry.
 
 Construct `Worker` on the control thread, keep its `Telemetry`, and move its
 box into `Dsp`. The audio callback has mutable access to that DSP and only
-does bounded frame copies, atomic operations and mixing. Each model and its
+does bounded frame copies, atomic operations, and mixing. Each model and its
 recurrent history belong to one worker. The 8-slot queues have a single
 producer endpoint and a single consumer endpoint, neither cloneable, and
 acquire/release indices pass ownership of each slot.
@@ -85,7 +85,7 @@ needs an OS-level process supervisor.
 
 `Dsp::drain_suppression` reaches the worker's drain path through the shared
 provider trait after callbacks have returned. The first stop mode is kept.
-Later calls to `finish`, retries and `Drop` don't change it.
+Later calls to `finish`, retries, and `Drop` don't change it.
 
 `Telemetry::terminal()` returns the first joined `Terminal`, which is
 immutable, or `None` before the join. Its `retirement_timed_out` field stays
@@ -108,7 +108,7 @@ immediately.
 
 ## Audio handling
 
-When a result is missing, stale, invalidated by recovery, nonfinite or failed,
+When a result is missing, stale, invalidated by recovery, nonfinite, or failed,
 the callback outputs the dry audio with the same delay. A worker result that
 arrives after its frame has started is used for the rest of that frame. It is
 counted both as a late result and as a missed deadline. Turning wet
@@ -125,7 +125,7 @@ Worker CPU time uses `CLOCK_THREAD_CPUTIME_ID` and wall time uses
 `CLOCK_MONOTONIC`. Histograms are relative to the frame's compute budget.
 `allowance_overruns` separately compares wall time with the shorter playback
 allowance. A good mean or a zero overrun count doesn't qualify the queue,
-wakeup or callback deadlines.
+wakeup, or callback deadlines.
 
 Each live snapshot is atomic on its own. Joined snapshots are taken after the
 worker has stopped. On non-Linux test builds, CPU time readings return clock

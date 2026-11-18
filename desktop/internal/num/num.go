@@ -1,7 +1,6 @@
 // Package num holds the small numeric helpers the desktop code shares where
-// the language and the standard library differ from the Rust it was ported
-// from: NaN-ignoring float min and max, saturating subtraction and float32
-// math.
+// Go's built-ins and standard library do not fit: NaN-ignoring float min
+// and max, saturating subtraction and float32 math.
 //
 // Prefer the built-in min and max where NaN cannot occur or must spread; use
 // Max and Min only where a NaN argument must give the other one.
@@ -12,7 +11,7 @@ import "math"
 // Float is the floating-point types.
 type Float interface{ ~float32 | ~float64 }
 
-// Max is Rust's f64::max and f32::max: a NaN argument gives the other one.
+// Max is the larger of a and b, but a NaN argument gives the other one.
 // (The built-in max gives NaN.)
 func Max[T Float](a, b T) T {
 	switch {
@@ -24,7 +23,7 @@ func Max[T Float](a, b T) T {
 	return max(a, b)
 }
 
-// Min is Rust's f64::min and f32::min: a NaN argument gives the other one.
+// Min is the smaller of a and b, but a NaN argument gives the other one.
 // (The built-in min gives NaN.)
 func Min[T Float](a, b T) T {
 	switch {
@@ -36,8 +35,7 @@ func Min[T Float](a, b T) T {
 	return min(a, b)
 }
 
-// Clamp is Rust's f64::clamp for lo <= hi: v limited to [lo, hi], and a NaN
-// v stays NaN.
+// Clamp is v limited to [lo, hi] (for lo <= hi), and a NaN v stays NaN.
 func Clamp[T Float](v, lo, hi T) T {
 	if v < lo {
 		return lo
@@ -48,7 +46,7 @@ func Clamp[T Float](v, lo, hi T) T {
 	return v
 }
 
-// SatSub is Rust's u64::saturating_sub: a - b, or 0 when b is larger.
+// SatSub is a - b, or 0 when b is larger.
 func SatSub(a, b uint64) uint64 {
 	if a < b {
 		return 0
@@ -57,16 +55,16 @@ func SatSub(a, b uint64) uint64 {
 }
 
 // Go has no float32 math functions, so these compute in float64 and round
-// the result to float32, like Rust's f32 methods up to the last bit.
+// the result to float32.
 
-// Sin32 is f32::sin.
+// Sin32 is math.Sin for a float32.
 func Sin32(x float32) float32 { return float32(math.Sin(float64(x))) }
 
-// Pow32 is f32::powf.
+// Pow32 is math.Pow for float32s.
 func Pow32(x, y float32) float32 { return float32(math.Pow(float64(x), float64(y))) }
 
-// Floor32 is f32::floor.
+// Floor32 is math.Floor for a float32.
 func Floor32(x float32) float32 { return float32(math.Floor(float64(x))) }
 
-// Abs32 is f32::abs.
+// Abs32 is math.Abs for a float32.
 func Abs32(x float32) float32 { return float32(math.Abs(float64(x))) }

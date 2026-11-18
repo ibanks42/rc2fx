@@ -1,6 +1,6 @@
 package app
 
-// live_line.rs: the level indicator, the design's glowing line. Its height
+// The level indicator, the design's glowing line. Its height
 // follows a path's reported output level (peak-meter ballistics,
 // LevelHistory.Display); its shape is decorative, not an audio waveform, and
 // the UI says so. This file only draws: when it moves is line_overlay.go's,
@@ -15,10 +15,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 )
 
-// LineStyle is live_line.rs LineStyle.
+// LineStyle is the sizes of one indicator (levels.LineStyle).
 type LineStyle = levels.LineStyle
 
-// liveLineMini is live_line.rs MINI: the sidebar's small line beside each
+// liveLineMini is the sidebar's small line beside each
 // processed channel.
 var liveLineMini = levels.Mini
 

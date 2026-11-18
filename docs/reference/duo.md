@@ -4,13 +4,13 @@ RC2FX has experimental support for the Duo on official Duo firmware 1.7.6 and
 1.7.7. It is off by default. To flash a Duo, the installer needs a saved
 opt-in plus a risk confirmation on every run.
 
-None of it has been tried on a real Duo: flashing, recovery and audio are all
+None of it has been tried on a real Duo: flashing, recovery, and audio are all
 untested. Everything on this page comes from the official firmware files,
-static analysis and ARM64 emulation. Flashing a Duo may leave it unusable,
+static analysis, and ARM64 emulation. Flashing a Duo may leave it unusable,
 recovery may fail, and audio may be loud or wrong. Use it at your own risk.
 
 Do not flash Pro II firmware onto a Duo or Duo firmware onto a Pro II. The two
-share a mixer program, but their kernel, boot files and controller firmware
+share a mixer program, but their kernel, boot files, and controller firmware
 differ.
 
 ## Enabling it
@@ -25,13 +25,13 @@ With the switch on and a Duo connected:
 
 - Each run, and each retry before the flash step, shows `DuoWarning`
   (`desktop/installer/installer.go`) and asks for **Flash Duo at my own
-  risk**. The confirmation is cancelled if the model, serial or release
+  risk**. The confirmation is canceled if the model, serial, or release
   changes while the question is open.
 - For RC2FX, the installer offers only the two pinned official Duo archives,
   1.7.7 and 1.7.6. Stock firmware comes from RØDE's Duo manifest,
   `rcp2-mini-manifest.json`. It never offers Pro II images for a Duo.
 - All other checks still apply: archive pins and model, board identity,
-  instruction signatures and serial continuity.
+  instruction signatures, and serial continuity.
 - The prepared image gets a file `/opt/rc2fx/experimental-duo` containing
   `1`. The launcher (`mixer/scripts/rc2fx.sh`) turns it into
   `RC2FX_EXPERIMENTAL_DUO=1`, which lets the runtime accept this Duo board
@@ -54,7 +54,7 @@ The Duo has its own route layout, `duo-23-v1`, and saved-show source enum,
 | Mic 1, Mic 2, Headset mic | Headphones 1, Headphones 2, Headset |
 | USB 1, USB 2, Chat | Monitors |
 | Game, Music, Virtual A, Virtual B | |
-| Bluetooth, CallMe 1-3 | Main Mix Out, Chat Mix Out, Secondary Mix Out (to USB 1, Chat and USB 2) |
+| Bluetooth, CallMe 1-3 | Main Mix Out, Chat Mix Out, Secondary Mix Out (to USB 1, Chat, and USB 2) |
 | Wireless 1, Wireless 2 | |
 
 Every saved Duo target ID starts with `duo-`, so a Pro II preset cannot put a
@@ -64,12 +64,12 @@ multitrack output feeds. Source names are established separately from route
 availability, in [the source-name evidence](source-name-evidence.md).
 
 [The Duo routing note](duo-routing.md) gives the port for each path, the
-firmware addresses behind it and the evidence. In summary:
+firmware addresses behind it, and the evidence. In summary:
 
 - Headphones 1 is `out_3`/`out_4` and Headphones 2 is `out_1`/`out_2`. The
   headset output mirrors Headphones 1 on `out_8` (left) and `out_7` (right).
 - The USB sends are named connections from mixer ports to USB endpoints:
-  `out_15`/`16` to USB 1, `17`/`18` to Chat and `19`/`20` to USB 2. Running
+  `out_15`/`16` to USB 1, `17`/`18` to Chat, and `19`/`20` to USB 2. Running
   the firmware's own connection code confirmed them.
 - Monitors is `out_5`/`out_6`. That is the firmware's mapping when all eight
   hardware outputs are active. Nobody has seen a real Duo's JACK graph at
@@ -124,12 +124,12 @@ whose binary keeps its symbols. The Windows build names the same manifests
 and files.
 
 - One class, `Rodecaster2FirmwareUpdater`, updates the Pro II, the Duo, the
-  Streamer X and an unreleased "RØDECaster Pro II-A". It has no
+  Streamer X, and an unreleased "RØDECaster Pro II-A". It has no
   model-specific branch.
 - It sends HID `M` (report 1, 63 bytes) and expects an `A` reply. It waits up
   to 30 seconds for update mode, copies `archive.md5` and then
   `archive.tar.gz` to the update drive, runs `sync`, waits 1 second, ejects
-  the drive and sends HID `U`. A factory reset sends `R` before `M`. A mixer
+  the drive, and sends HID `U`. A factory reset sends `R` before `M`. A mixer
   that is already in update mode is asked for its drive's volume ID with HID
   `V`. On macOS the drive is the mounted `NO NAME` volume on the same USB
   device.
@@ -152,7 +152,7 @@ These all need a real Duo, and a separate decision to flash one:
 
 1. Flashing either release, the first-boot controller update, and returning
    to stock.
-2. USB mode changes, reconnects and the app's control session.
+2. USB mode changes, reconnects, and the app's control session.
 3. Each path with an audio loopback, including Monitors in each USB mode and
    the headset's channel order.
 4. Source reassignment, fallback to stock on failure, and sustained
@@ -224,6 +224,6 @@ under its verification receipt. None of those results involve a real Duo.
 RØDE's launcher has a "production" branch, selected by the file
 `/usr/bin/production-boot`. It is the factory self-test mode. It runs at 128
 frames, reflashes the VL805 controller firmware, deletes saved
-`system-config*` files, changes bootloader settings and starts a self-test
+`system-config*` files, changes bootloader settings, and starts a self-test
 engine. Do not create that marker, including to experiment with buffer sizes.
 RC2FX supports only normal-mode 112-frame operation on both models.

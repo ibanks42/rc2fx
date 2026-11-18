@@ -1,7 +1,7 @@
 package app
 
-// The four gpui_test tests of licenses/mod.rs as offscreen runs (audit
-// section 6.3): each mode runs a small window under a gk-meter script with
+// The license dialog's rendering tests as offscreen runs: each mode runs a
+// small window under a gk-meter script with
 // the diag library, checks inside the app and prints `PASS name` or
 // `FAIL name: why`. desktop/app/uitest is the program and its test.
 
@@ -17,7 +17,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/licenses"
 )
 
-// UITestModes are the modes RunUITest knows, and the Rust test each is.
+// UITestModes are the modes RunUITest knows, and the name each reports (that
+// of the test it was ported from).
 var UITestModes = map[string]string{
 	"licenses-markup":  "license_words_and_markup_characters_survive_rich_text_rendering",
 	"licenses-long":    "long_notices_keep_a_bounded_viewport_and_copy_the_entire_text",
@@ -39,7 +40,7 @@ func (t *uitest) fail(format string, args ...any) {
 	t.failed = true
 }
 
-func normalise(text string) string {
+func normalize(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -94,8 +95,7 @@ func RunUITest(mode string) bool {
 	return !t.failed
 }
 
-// noticeRoot is the Rust tests' NoticeRoot: a 640 px column with one notice
-// box.
+// noticeRoot is a 640 px column with one notice box.
 func noticeRoot(cx *gk.Cx, text string, frame func(cx *gk.Cx, state gk.TextViewState)) {
 	var state gk.TextViewState
 	var theme gk.BaseTheme
@@ -119,10 +119,10 @@ func (t *uitest) markup() (string, func(cx *gk.Cx)) {
 			case 1:
 				state.SelectAll(cx)
 			case 2:
-				if got := normalise(state.RenderedText(cx).AsStr(cx)); got != text {
+				if got := normalize(state.RenderedText(cx).AsStr(cx)); got != text {
 					t.fail("rendered %q", got)
 				}
-				if got := normalise(state.SelectedText(cx)); got != text {
+				if got := normalize(state.SelectedText(cx)); got != text {
 					t.fail("selected %q", got)
 				}
 			}
@@ -140,9 +140,9 @@ func (t *uitest) long() (string, func(cx *gk.Cx)) {
 	if shots == "" {
 		shots = os.TempDir()
 	}
-	// The Rust read the list's viewport (bounded, the last row below it,
-	// then revealed by scrolling); Go has no ListState reads, so a shot
-	// before and after scrolling to the end shows the same, checked by eye.
+	// gk has no ListState reads, so the list's viewport (bounded, the last
+	// row below it, then revealed by scrolling) is shown by a shot before
+	// and after scrolling to the end, checked by eye.
 	script := "size 700 420\nframe\nframe\n" +
 		"shot " + shots + "/licenses-long-top.png\n" +
 		"scroll 320 200 -10000000\nframe\nframe\n" +
@@ -194,7 +194,7 @@ func (t *uitest) lazy() (string, func(cx *gk.Cx)) {
 					if l.textViews[0] != original {
 						t.fail("section 0 was parsed again")
 					}
-					t.sameText("selected", normalise(original.SelectedText(cx)), normalise(licenses.Sections()[0].Text))
+					t.sameText("selected", normalize(original.SelectedText(cx)), normalize(licenses.Sections()[0].Text))
 				}
 			})
 		}, func(cx *gk.Cx) gk.Element {
@@ -221,7 +221,7 @@ func (t *uitest) measure() (string, func(cx *gk.Cx)) {
 				case t.frame == 1:
 					fmt.Printf("first draw: %s\n", time.Since(started))
 					for index, state := range l.textViews {
-						if normalise(state.RenderedText(cx).AsStr(cx)) != normalise(licenses.Sections()[index].Text) {
+						if normalize(state.RenderedText(cx).AsStr(cx)) != normalize(licenses.Sections()[index].Text) {
 							t.fail("section %d rendered differently", index)
 						}
 					}

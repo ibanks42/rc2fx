@@ -160,8 +160,8 @@ func ext2(err error) error {
 	return errorf("libext2fs: %v", err)
 }
 
-// strLines is Rust's str::lines: split at \n, with a \r just before a \n
-// going with it, and no empty last line for a final \n.
+// strLines splits at \n, with a \r just before a \n going with it, and no
+// empty last line for a final \n.
 func strLines(text string) []string {
 	parts := strings.Split(text, "\n")
 	last := len(parts) - 1
@@ -382,8 +382,8 @@ func (e *Engine) compare(fs *ext2fs.Filesystem, index int, manifest [][2]string)
 	total := uint64(len(manifest))
 	for done, m := range manifest {
 		want, path := m[0], m[1]
-		if e.cancelled() {
-			return nil, nil, Error(Cancelled)
+		if e.canceled() {
+			return nil, nil, Error(Canceled)
 		}
 		if done%64 == 0 {
 			e.reporter("repair-check", detail)(uint64(done), total)
@@ -692,8 +692,8 @@ func (e *Engine) backupSettings(layout *diskLayout) (string, error) {
 	buf := make([]byte, 1<<20)
 	var done uint64
 	for done < part.len {
-		if e.cancelled() {
-			return "", Error(Cancelled)
+		if e.canceled() {
+			return "", Error(Canceled)
 		}
 		n := uint64(len(buf))
 		if part.len-done < n {

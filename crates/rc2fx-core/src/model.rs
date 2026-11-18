@@ -261,7 +261,7 @@ impl Suppression {
         self.lookahead = lookahead;
     }
     /// The geometry the saved settings stand for, and hence the latency they
-    /// add, without a worker scheduling allowance.
+    /// add, including the worker's scheduling allowance.
     pub fn geometry(&self) -> Option<SuppressionGeometry> {
         Self::admitted_geometry(self.lookahead)
     }

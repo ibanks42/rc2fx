@@ -29,7 +29,7 @@ var GroupAll = [4]Group{
 // OutputLabel is what the app calls the mixer's other outputs, the same on a
 // Pro II and a Duo. Configs saved before these names carry older ones.
 func OutputLabel(id string) (string, bool) {
-	// Like Rust's trim_start_matches: every leading "duo-" goes.
+	// Every leading "duo-" goes, not just the first.
 	for strings.HasPrefix(id, "duo-") {
 		id = id[len("duo-"):]
 	}
@@ -46,7 +46,7 @@ func OutputLabel(id string) (string, bool) {
 	return "", false
 }
 
-// DisplayName is a channel name as the app shows it: every word capitalised,
+// DisplayName is a channel name as the app shows it: every word capitalized,
 // like "Main Mix Out", and USB in capitals ("USB a" becomes "USB A"). Words
 // already carrying capitals keep them ("CallMe", "RØDE"). Display only: saved
 // settings keep the mixer's own names.
@@ -61,9 +61,8 @@ func DisplayName(name string) string {
 		if size == 0 {
 			continue
 		}
-		// Rust's char::to_uppercase uses full case mapping ("ß" becomes
-		// "SS"); Go maps one rune to one rune, so such letters stay as they
-		// are here.
+		// unicode.ToUpper maps one rune to one rune, so a letter whose
+		// capital is longer ("ß", "SS") stays as it is.
 		words[i] = string(unicode.ToUpper(first)) + word[size:]
 	}
 	return strings.Join(words, " ")

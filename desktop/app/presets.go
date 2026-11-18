@@ -1,6 +1,6 @@
 package app
 
-// presets.rs: presets saved on the mixer: save the current settings, then
+// Presets saved on the mixer: save the current settings, then
 // load or delete each one.
 
 import (
@@ -26,8 +26,8 @@ const (
 	presetPendingDelete
 )
 
-// presetPending is presets.rs Pending; revision and original belong to a
-// load.
+// presetPending is the preset request that is out; revision and original
+// belong to a load.
 type presetPending struct {
 	kind     presetPendingKind
 	revision uint64
@@ -42,8 +42,7 @@ type PresetLibrary struct {
 	confirmDelete *string
 }
 
-// newPresetLibrary is PresetLibrary::new (makes its name input: call in
-// init).
+// newPresetLibrary is an empty library with its name input (call in init).
 func newPresetLibrary(cx *gk.Cx) PresetLibrary {
 	return PresetLibrary{name: gk.NewInputState(cx).Placeholder("Preset name").Build()}
 }

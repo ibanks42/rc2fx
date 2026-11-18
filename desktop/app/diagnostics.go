@@ -1,6 +1,6 @@
 package app
 
-// diagnostics.rs: the diagnostics file export, the events window's polling
+// The diagnostics file export, the events window's polling
 // and reset, and the Telemetry section's header controls.
 
 import (
@@ -32,8 +32,8 @@ func (a *App) requestDiagnostics(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// prettyReport is serde_json::to_string_pretty of the report the mixer sent
-// (core's Value keeps the mixer's key order and serde's layout).
+// prettyReport is the report the mixer sent, indented two spaces (core's
+// Value keeps the mixer's key order and number formatting).
 func prettyReport(report json.RawMessage) (string, error) {
 	value, err := core.ParseJSONBytes(report, max(len(report), 1), math.MaxInt)
 	if err != nil {
@@ -95,7 +95,7 @@ func (a *App) saveDiagnostics(cx *gk.Cx, report json.RawMessage, err error) {
 func (a *App) openEvents(cx *gk.Cx) {
 	reopened := a.eventsWindow != nil
 	a.eventsWindow = openEventsWindow(cx, a.eventsWindow, a.eventLog, a, func(cx *gk.Cx) {
-		// Closed by the user: stop reading (diagnostics.rs events_tick).
+		// Closed by the user: stop reading.
 		a.eventsWindow = nil
 		a.eventsPending = false
 	})
@@ -110,8 +110,8 @@ func (a *App) openEvents(cx *gk.Cx) {
 // counters start, the events window and the reset.
 func (a *App) telemetryAside(cx *gk.Cx) gk.DivEl {
 	connected := a.session.Connected && a.streamConnected
-	// Peek: the Rust read the log without observing it; the main view
-	// redraws on its own changes.
+	// Peek: read the log without observing it; the main view redraws on its
+	// own changes.
 	log := a.eventLog.Peek()
 	setConfirm := func(value bool) func(cx *gk.Cx) {
 		return func(cx *gk.Cx) {
@@ -194,8 +194,7 @@ func (a *App) eventsReply(cx *gk.Cx, events core.DiagnosticsEvents, err error) {
 
 // eventsTick is called from the main poll: it keeps the events window's
 // view of the connection current and, while it is open, reads new events.
-// (A closed window is noticed by openEvents' close handler, which the Rust
-// checked here.)
+// (A closed window is noticed by openEvents' close handler, not here.)
 func (a *App) eventsTick(cx *gk.Cx) {
 	connected := a.session.Connected && a.streamConnected
 	var periodNs *uint64

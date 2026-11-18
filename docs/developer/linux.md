@@ -1,7 +1,7 @@
 # Linux setup
 
 These are the packages needed to build and run the desktop app on
-Debian/Ubuntu, Fedora or Arch. The app is Go with a C compiler for cgo; its UI
+Debian/Ubuntu, Fedora, or Arch. The app is Go with a C compiler for cgo; its UI
 library, gpuikit, comes prebuilt ([Building from source](building.md)) and is
 linked into the app; it needs the libraries below to link and run. Audio processing happens on the
 mixer, so no audio setup is needed on the computer.

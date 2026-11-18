@@ -1,8 +1,7 @@
 package installflow
 
-// The maths of the installer's signature (the Rust app's
-// installer/signature.rs before): which picture it shows and the shape of its line. Package
-// app draws it (installer_signature.go).
+// The math of the installer's signature: which picture it shows and the
+// shape of its line. Package app draws it (installer_signature.go).
 //
 // Decorative onboarding signature, not audio or overall install progress.
 // Decorative motion is driven by onboarding's Signature and the OS motion
@@ -28,8 +27,8 @@ const (
 	SignatureComplete
 )
 
-// SignatureState is signature.rs State. Fill is nil when unknown (and for
-// the kinds without one).
+// SignatureState is which picture the signature shows. Fill is nil when
+// unknown (and for the kinds without one).
 type SignatureState struct {
 	Kind SignatureKind
 	Fill *float32

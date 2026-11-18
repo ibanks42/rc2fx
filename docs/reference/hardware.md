@@ -24,8 +24,8 @@ CPU-0 housekeeping threads to other cores.
 - After `/sbin/reboot` the mixer sometimes stays dark until it is
   power-cycled.
 - On the first boot after an update, the stock launcher unloads the audio
-  drivers, reflashes the Bluetooth, digital and fader controllers, removes
-  `/usr/bin/first-boot` and restarts. Leave the mixer alone until it
+  drivers, reflashes the Bluetooth, digital, and fader controllers, removes
+  `/usr/bin/first-boot`, and restarts. Leave the mixer alone until it
   finishes.
 - The stock engine prints the Wi-Fi password to its output at start-up.
   RC2FX's tooling removes it from anything it displays or saves.

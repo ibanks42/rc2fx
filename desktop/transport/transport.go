@@ -582,8 +582,8 @@ type Transport struct {
 	done chan struct{}
 }
 
-// New starts the transport. The error is kept for the Rust API's shape; the
-// goroutines cannot fail to start.
+// New starts the transport. The error is always nil: the goroutines cannot
+// fail to start.
 func New() (*Transport, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &Transport{
@@ -621,7 +621,7 @@ func (t *Transport) TryRecv() (Event, bool) {
 
 // Close stops the transport without waiting for it.
 func (t *Transport) Close() {
-	// Do not drain queued writes when the window owner is gone. Cancelling
+	// Do not drain queued writes when the window owner is gone. Canceling
 	// stops outstanding operations and the event poll. A write already
 	// received by the mixer cannot be recalled here.
 	t.cancel()
@@ -1594,7 +1594,7 @@ func readStream(ctx context.Context, d device, generation uint64, events chan<- 
 			}
 		}
 		if !sleep(ctx, 50*time.Millisecond) {
-			// Cancelled; the caller's next emit sees it too.
+			// Canceled; the caller's next emit sees it too.
 			return errors.New("Device event stream closed")
 		}
 	}

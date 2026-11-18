@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Write the licence report for Velopack's bundled programs.
+"""Write the license report for Velopack's bundled programs.
 
 The Windows and macOS packages include Velopack's launcher, updater and
 installer, and the AppImage its updater (UpdateNix), all built by Velopack
 from its own Rust workspace. Their dependencies' notices must ship with RC2FX
 like the app's own, so this runs cargo-about on that workspace at the pinned
 tag, for the targets Velopack builds them for (Windows, macOS, and the static
-musl Linux build UpdateNix comes from), under the licences RC2FX's about.toml
-accepts plus VELOPACK_ACCEPTED, and keeps only what the licence document
-uses: each licence's name, text and the crates using it.
+musl Linux build UpdateNix comes from), under the licenses RC2FX's about.toml
+accepts plus VELOPACK_ACCEPTED, and keeps only what the license document
+uses: each license's name, text and the crates using it.
 
   velopack-licenses.py VERSION
       Writes licenses/velopack-VERSION.json. Needs git, cargo and
@@ -26,13 +26,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Licences accepted for Velopack's report only, beyond about.toml's (which
+# Licenses accepted for Velopack's report only, beyond about.toml's (which
 # covers the mixer's Rust): the list about.toml held while the desktop app
 # was Rust and shared it.
 VELOPACK_ACCEPTED = [
     "MPL-2.0",
     # webpki-roots: Mozilla's root certificates, which Velopack's updater
-    # trusts for its downloads. A permissive data licence.
+    # trusts for its downloads. A permissive data license.
     "CDLA-Permissive-2.0",
 ]
 
@@ -82,10 +82,10 @@ def main():
     ]
     licenses.sort(key=lambda l: (l["name"], l["text"]))
     if not licenses:
-        sys.exit("cargo-about found no licences")
+        sys.exit("cargo-about found no licenses")
     out = ROOT / "licenses" / f"velopack-{version}.json"
     out.write_text(json.dumps({"velopack": version, "licenses": licenses}, indent=1) + "\n")
-    print(f"wrote {out.relative_to(ROOT)}: {len(licenses)} licence texts")
+    print(f"wrote {out.relative_to(ROOT)}: {len(licenses)} license texts")
 
 
 if __name__ == "__main__":

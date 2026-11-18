@@ -204,7 +204,7 @@ func sha256Bytes(data []byte) []byte {
 	return sum[:]
 }
 
-// exists is Path::exists: something is there, following links.
+// exists is whether something is there, following links.
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

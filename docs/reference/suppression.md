@@ -12,7 +12,7 @@ responses, and recordings of mouse clicks and keyboards, with those recordings
 weighted to a quarter of the noise. The shipped weights are a zero-lookahead
 (LA0) checkpoint. A one-step-lookahead (LA1) export is also embedded, and the
 per-path `lookahead` setting selects between them. The
-[weights chapter](../crates/rc2fx-dfn.md) covers the file format, provenance
+[weights chapter](../crates/rc2fx-dfn.md) covers the file format, provenance,
 and reference tests.
 
 Weights are int8 with one scale per row. The mixer's four cores share one L2
@@ -26,7 +26,7 @@ with data under `~/dfn`. Its `TRAINING.md` documents it.
 
 Other models were tried and dropped, mostly because they could not keep up on
 the Cortex-A53 cores without disturbing RØDE's audio. These included
-full-size DeepFilterNet3, FastEnhancer, DPDFNet, DTLN and
+full-size DeepFilterNet3, FastEnhancer, DPDFNet, DTLN, and
 several classic DSP suppressors.
 
 ## Worker thread
@@ -64,7 +64,7 @@ Hardware and USB outputs are processed in place in the audio callback and do
 not have it. A microphone suppressed with DeepFilterNet3 at lookahead 0
 therefore reaches the headphones 792 samples (16.5 ms) later than it would
 without RC2FX. These are RC2FX's digital delays only. RØDE's engine, JACK,
-the converters and the route add their own.
+the converters, and the route add their own.
 
 The 320-sample lead is 6.67 ms. It is counted in samples against the mixer's
 112-sample cycles and is not a wall-clock guarantee. A result that is still
@@ -85,7 +85,7 @@ apply, then enable it on the new one.
 
 On Chat, the native library captures only the microphone contributions to
 the Chat send. It reads them from RØDE's routing functions after per-source
-processing and fader gains, including main, custom, solo and mix-minus
+processing and fader gains, including main, custom, solo, and mix-minus
 routing. Four hash-pinned detours supply this microphone stem for the current
 callback. RØDE's routing objects are read and left unmodified.
 
@@ -129,5 +129,5 @@ just bench recording.wav
 
 This runs every model on the mixer over a 48 kHz recording, using the
 production scheduling policy, and copies the cleaned audio back for
-listening. Flags select an unpaced run, a different policy, CPUs, priority or
+listening. Flags select an unpaced run, a different policy, CPUs, priority, or
 weights file. See `./xtask help`.

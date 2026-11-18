@@ -1,6 +1,6 @@
 package edit
 
-// editor.rs: the parameters the editor's controls set, how each shows its
+// The parameters the editor's controls set, how each shows its
 // value, and the lookahead figures.
 
 import (
@@ -47,7 +47,7 @@ type Description struct {
 	Log            bool
 }
 
-// Describe is Parameter::description.
+// Describe is the parameter's label, unit, range, step and scale.
 func (p Parameter) Describe() Description {
 	d := func(label, unit string, min, max, step float64, log bool) Description {
 		return Description{label, unit, min, max, step, log}
@@ -118,7 +118,7 @@ func Format(value float64, decimals int) string {
 	return strconv.FormatFloat(value, 'f', decimals, 64)
 }
 
-// Fraction is ParameterEditor::fraction: where value sits along a slider
+// Fraction is where value sits along a slider
 // from min to max, 0 to 1, on its scale.
 func Fraction(value, min, max float64, log bool) float32 {
 	value = math.Min(math.Max(value, min), max)
@@ -357,16 +357,16 @@ func (p Parameter) Set(target *core.Target, channel core.Channel, band int, valu
 	}
 }
 
-// ParseValue is `str::parse::<f64>()` of a typed value: Rust's float
-// grammar, which Go's ParseFloat widens with hexadecimal floats and digit
-// underscores; those are refused here as Rust refuses them.
+// ParseValue reads a typed value as a decimal float (inf and nan parse;
+// Editable refuses them). Go's ParseFloat also takes hexadecimal floats and
+// digit underscores, which are refused here.
 func ParseValue(text string) (float64, bool) {
 	if strings.ContainsAny(text, "xX_") {
 		return 0, false
 	}
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
-		// Out of range is Rust's ±inf, which the caller refuses as not finite.
+		// Out of range gives ±inf, which the caller refuses as not finite.
 		if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
 			return value, true
 		}
@@ -382,8 +382,8 @@ func (p Parameter) Editable(value float64) bool {
 	return !math.IsInf(value, 0) && !math.IsNaN(value) && value >= d.Min && value <= d.Max
 }
 
-// Parameters is which controls an effect's editor shows, in order (editor.rs
-// rebuild_editors). advancedGate is the target's custom voice gate, and
+// Parameters is which controls an effect's editor shows, in order.
+// advancedGate is the target's custom voice gate, and
 // hasBands whether the channel's EQ has any band.
 func Parameters(effect core.Effect, advancedGate, hasBands bool) []Parameter {
 	switch effect {

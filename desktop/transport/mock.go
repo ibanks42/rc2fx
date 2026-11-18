@@ -479,7 +479,7 @@ func (m *mockMixer) handle(request *usbproto.Request, now time.Time) usbproto.Re
 	case method == "GET" && strings.HasPrefix(path, "api/v1/diagnostics/events"):
 		after := uint64(0)
 		if _, text, found := strings.Cut(path, "after="); found {
-			// Rust's u64 parse also takes a leading plus.
+			// The mixer's u64 parse also takes a leading plus.
 			if parsed, err := strconv.ParseUint(strings.TrimPrefix(text, "+"), 10, 64); err == nil {
 				after = parsed
 			}
@@ -611,7 +611,7 @@ func (m *mockMixer) setSSH(body json.RawMessage) (usbproto.Reply, *refused) {
 
 // applyLive is PUT api/v1/live: the targets go on the running audio at
 // once, unless they need the engine restarted. The app saves them once edits
-// stop; the mixer keeps what plays if the app goes away first (not modelled
+// stop; the mixer keeps what plays if the app goes away first (not modeled
 // here).
 func (m *mockMixer) applyLive(update core.ConfigUpdate) (usbproto.Reply, *refused) {
 	if failed := m.checkRevision(update.ExpectedRevision); failed != nil {

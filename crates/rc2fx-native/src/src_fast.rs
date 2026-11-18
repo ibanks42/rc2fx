@@ -24,7 +24,7 @@ const VERIFY: u8 = 2;
 /// mode change starts new client threads, so the table is sized for many of
 /// them, as `client_timing`'s is. A slot's pages are touched only once a
 /// thread claims it. A thread that finds the table full runs the real library
-/// from then on, which is stock behaviour, and is counted once in `noSlot`.
+/// from then on, which is stock behavior, and is counted once in `noSlot`.
 const SLOTS: usize = 128;
 /// This thread has not asked for a slot yet.
 const UNCLAIMED: usize = usize::MAX;

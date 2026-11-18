@@ -309,8 +309,8 @@ func (m *Model) StartBlocker() string {
 		case StockCheckUnchecked, StockCheckChecking:
 			return "Checking RØDE’s firmware list…"
 		case StockCheckFailed:
-			if m.StockCheck.Error == installer.Cancelled {
-				return "The check of RØDE’s firmware list was cancelled."
+			if m.StockCheck.Error == installer.Canceled {
+				return "The check of RØDE’s firmware list was canceled."
 			}
 			return fmt.Sprintf("Couldn’t read RØDE’s firmware list. %s", m.StockCheck.Error)
 		}

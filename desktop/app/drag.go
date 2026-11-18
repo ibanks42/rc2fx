@@ -1,10 +1,9 @@
 package app
 
-// The two Rust drag payload types (desk.rs DraggedStage, eq_controls.rs
-// DraggedBand) as gk.DragValue ids: one value type for every drag of the
-// app, the kind in the top 32 bits and the stage's or band's index below.
-// A drop target takes only its own kind (gk.DropAccept, as drag_over::<T>
-// and on_drop::<T> did).
+// The app's two drags, a chain stage and an EQ band, as gk.DragValue ids:
+// one value type for every drag of the app, the kind in the top 32 bits and
+// the stage's or band's index below. A drop target takes only its own kind
+// (gk.DropAccept).
 
 // The drag kinds.
 const (

@@ -34,7 +34,7 @@ pub(crate) struct Framing {
     /// FFT size and analysis window length.
     pub(crate) fft: usize,
     /// Synthesis window length: the last `synthesis` samples of each frame
-    /// are resynthesised (see `dsp::windows`).
+    /// are resynthesized (see `dsp::windows`).
     pub(crate) synthesis: usize,
     pub(crate) hop: usize,
     /// Frames of input past the one being enhanced.
@@ -234,7 +234,7 @@ impl Linear {
 struct Gru {
     wih: QWeights,
     whh: QWeights,
-    /// Scratch for the quantised input of `matvec_q8`.
+    /// Scratch for the quantized input of `matvec_q8`.
     xq: Vec<i16>,
     bih: Vec<f32>,
     bhh: Vec<f32>,

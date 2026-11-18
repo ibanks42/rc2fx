@@ -14,9 +14,9 @@ import (
 var shippedDLLs = []string{"velopack_libc.dll"}
 
 // checkWindowsImports refuses an rc2fx.exe that needs a DLL a clean Windows
-// does not have and the package does not ship. The Rust app was built by
-// MSVC and needed only system DLLs; the Go app is linked by MinGW gcc, which
-// can add its own runtime DLLs (libgcc_s, libwinpthread, libstdc++). Such an
+// does not have and the package does not ship. The app is linked by MinGW
+// gcc, which can add its own runtime DLLs (libgcc_s, libwinpthread,
+// libstdc++). Such an
 // executable would pass every other check, be signed, and then not start on
 // users' machines.
 func checkWindowsImports(exe string) error {

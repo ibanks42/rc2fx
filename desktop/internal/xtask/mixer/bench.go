@@ -217,7 +217,8 @@ func benchIn(bench string, mixer func() (*Mixer, error), input string, flags []s
 	return report(out, run, overruns)
 }
 
-// fileStem is Path::file_stem as a string (lossy).
+// fileStem is path's file name without its last extension; a name that
+// starts with its only dot keeps it.
 func fileStem(path string) string {
 	name := filepath.Base(path)
 	if name == "." || name == string(filepath.Separator) {
@@ -353,7 +354,7 @@ func overrunsDuring(window []byte) *overrun {
 	return &overrun{count, float64(last.at-first.at) / 1e3}
 }
 
-// path is serde_json's chained indexing: Null where a key is missing.
+// path is value[key][key]...: Null where a key is missing.
 func path(value core.Value, keys ...string) core.Value {
 	for _, key := range keys {
 		next, ok := value.Get(key)

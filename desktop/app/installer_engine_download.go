@@ -8,12 +8,11 @@ import (
 )
 
 // installerEngine is the installer without an embedded payload: it has no
-// mixer software until a signed release is selected (installer/mod.rs
-// engine).
+// mixer software until a signed release is selected.
 func installerEngine(work string) *installer.Engine { return installer.DownloadOnly(work) }
 
 // startInstallerHelper is the privileged helper for the same payload as
-// installerEngine (installer/mod.rs start_helper).
+// installerEngine.
 func startInstallerHelper(work string) (*helper.Helper, error) {
 	return helper.StartDownloadOnly(work)
 }

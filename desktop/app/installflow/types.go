@@ -347,7 +347,7 @@ type Run struct {
 	Prepared bool
 	Flashed  bool
 	// Committed: USB update mode or the flash was requested: past this the
-	// mixer is not left as it was, so the run can no longer be cancelled.
+	// mixer is not left as it was, so the run can no longer be canceled.
 	Committed bool
 	// Fix is the storage fix this run does before installing, nil for a
 	// run without it (decided at Start, see WantsStorageFix).
@@ -410,8 +410,8 @@ type imageCheckKind int
 const (
 	// imageCheckUnasked: no answer since RC2FX last started.
 	imageCheckUnasked imageCheckKind = iota
-	// imageCheckUnsupported: the mixer software predates the check (Rust's
-	// `Some(None)`), so there is nothing to wait for.
+	// imageCheckUnsupported: the mixer software predates the check, so
+	// there is nothing to wait for.
 	imageCheckUnsupported
 	// imageCheckAnswered: result is the mixer's answer.
 	imageCheckAnswered

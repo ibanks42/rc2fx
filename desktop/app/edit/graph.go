@@ -1,8 +1,8 @@
-// Package edit is the channel editor's logic that does not draw (graph.rs's
-// axis maths and curve cache, editor.rs's parameters and lookahead figures,
-// eq_controls.rs's band helpers, inputs.rs's show cache, selection.rs,
-// restart.rs, interchange.rs and draft_files.rs's file logic). It does not
-// import gk, so it tests with plain `go test`; package app draws with it.
+// Package edit is the channel editor's logic that does not draw: the EQ
+// graph's axis math and curve cache, the editor's parameters and lookahead
+// figures, the EQ band helpers, the show inputs cache, the selection's changed
+// paths, the restart candidate, and EQ and settings file handling. It does
+// not import gk, so it tests with plain `go test`; package app draws with it.
 package edit
 
 import (
@@ -70,8 +70,8 @@ func GridLabel(frequency float64) string {
 	return rustFloat(frequency)
 }
 
-// rustFloat is Rust's `{}` of an f64 that holds a whole number or a short
-// decimal (the grid's values): no trailing ".0".
+// rustFloat writes a whole number or a short decimal (the grid's values)
+// with no trailing ".0".
 func rustFloat(v float64) string {
 	return fmt.Sprint(v)
 }
@@ -81,7 +81,7 @@ func DBLabel(db float64) string {
 	return strings.ReplaceAll(fmt.Sprintf("%+.0f", db), "-", "\u2212")
 }
 
-// EQCurve is graph.rs EqCurve: the selected EQ's response on the graph
+// EQCurve is the selected EQ's response on the graph
 // axis, kept until the EQ changes. Meter updates and hovering redraw the
 // window often; the curve rarely moves.
 type EQCurve struct {

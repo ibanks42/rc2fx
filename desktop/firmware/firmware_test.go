@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// The Rust embeds this file as DEFAULT_CATALOG.
+// The mixer's firmware crate embeds this file as DEFAULT_CATALOG.
 const defaultCatalogPath = "../../config/firmware-profiles.json"
 
 func defaultCatalog(t *testing.T) string {
@@ -40,7 +40,7 @@ func toJSON(t *testing.T, c *Catalog) string {
 	return string(text)
 }
 
-// clone is the Rust tests' Catalog::clone.
+// clone is a deep copy of c, through JSON.
 func clone(t *testing.T, c *Catalog) *Catalog {
 	t.Helper()
 	var out Catalog
@@ -131,8 +131,8 @@ func TestCatalogRejectsUnknownABIsDuplicateIdentitiesAndUnsafeTrampolines(t *tes
 	}
 }
 
-// testImage is the Rust tests' fixture(): the default catalog's first
-// profile, with its sites moved into a small AArch64 ELF image.
+// testImage is the default catalog's first profile, with its sites moved
+// into a small AArch64 ELF image.
 func testImage(t *testing.T) (*Catalog, []byte) {
 	t.Helper()
 	catalog := mustParse(t, defaultCatalog(t))

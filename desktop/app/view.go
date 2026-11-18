@@ -1,6 +1,7 @@
 package app
 
-// lib.rs's drawing: render_page, the sidebar, the footer and the notices.
+// The window's drawing: the current page, the sidebar, the footer and the
+// notices.
 
 import (
 	"fmt"
@@ -306,7 +307,7 @@ func quietRow(id gk.ID, name, meta string, selected bool) gk.StatefulDivEl {
 		ID(id)
 }
 
-// view is the root view's function (impl Render for Rc2FxApp).
+// view is the root view's function.
 func (a *App) view(cx *gk.Cx) gk.Element { return a.renderPage(cx) }
 
 func (a *App) renderPage(cx *gk.Cx) gk.Element {

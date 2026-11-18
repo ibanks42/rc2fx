@@ -12,8 +12,7 @@ import (
 )
 
 // Loaded is a repository verified by Load: tough's RepositoryLoader::load
-// for local folders, which the Rust tests used to check what the signer
-// writes.
+// for local folders.
 type Loaded struct {
 	Root      *Root
 	Timestamp *Document

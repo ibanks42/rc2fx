@@ -42,7 +42,7 @@ const (
 	EffectLimiter     Effect = "limiter"
 )
 
-// EffectAll is Effect::ALL, the default order.
+// EffectAll is every effect, in the default order.
 var EffectAll = [6]Effect{
 	EffectHighpass,
 	EffectSuppression,
@@ -85,7 +85,7 @@ const (
 	BandTypeNotch     BandType = "notch"
 )
 
-// BandTypeAll is BandType::ALL.
+// BandTypeAll is every band type.
 var BandTypeAll = [7]BandType{
 	BandTypeOff,
 	BandTypeBell,
@@ -227,7 +227,7 @@ const log2OnePointFive = 0.58496250072115618145373894394781650876
 func GateShapeForStrength(strength float64) GateShape {
 	s := num.Clamp(strength, 0.0, 1.0)
 	// The explicit float64 conversions keep Go from fusing a multiply-add,
-	// so results match the Rust bit for bit on every architecture.
+	// so results match the mixer's bit for bit on every architecture.
 	linear := func(gentle, strict float64) float64 { return gentle + float64((strict-gentle)*s) }
 	geometric := func(gentle, strict float64) float64 { return float64(gentle * math.Pow(strict/gentle, s)) }
 	return newGateShape(
@@ -478,7 +478,7 @@ func (b Band) Validate() error {
 	return rangeCheck(b.Q, 0.0, 100.0, "Q")
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field.
 func (b Band) Equal(other Band) bool { return b == other }
 
 func DefaultEQSettings() EQSettings {
@@ -572,7 +572,7 @@ func (e EQSettings) Clone() EQSettings {
 	return e
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (e EQSettings) Equal(other EQSettings) bool { return deepEqual(e, other) }
 
 func NewTarget(id, name string, kind TargetKind, channels uint8) Target {
@@ -723,7 +723,7 @@ func (t Target) Clone() Target {
 	return t
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (t Target) Equal(other Target) bool { return deepEqual(t, other) }
 
 // CloneTargets deep-copies a target list.
@@ -738,7 +738,7 @@ func CloneTargets(targets []Target) []Target {
 	return copied
 }
 
-// TargetsEqual is Vec<Target> equality.
+// TargetsEqual compares two target lists element by element (deepEqual).
 func TargetsEqual(a, b []Target) bool { return deepEqual(a, b) }
 
 func stringsEqual(a, b []string) bool { return slices.Equal(a, b) }
@@ -872,7 +872,7 @@ func (c Config) Clone() Config {
 	return c
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (c Config) Equal(other Config) bool { return deepEqual(c, other) }
 
 // DefaultConfig is Config::default(): every path the mixer can process, none

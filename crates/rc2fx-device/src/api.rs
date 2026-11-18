@@ -654,7 +654,7 @@ mod tests {
     /// The new bridge must mean exactly the same thing on the wire as the old
     /// Value roundtrip: both decode, with the HOST's `Reply`, to the same
     /// value. (Byte identity is not the guarantee — the Value path sorts keys
-    /// and normalises numbers; the wire *contract* is the decoded document.)
+    /// and normalizes numbers; the wire *contract* is the decoded document.)
     #[test]
     fn the_raw_bridge_matches_the_former_value_bridge_semantically() {
         // An event payload as the hub serializes it, with awkward content:
@@ -670,7 +670,7 @@ mod tests {
         .unwrap();
         let new = serde_json::to_vec(&raw).unwrap();
         // Byte identity is not possible (the Value path sorts keys and
-        // normalises numbers); the HOST's decode must be equal, which is what
+        // normalizes numbers); the HOST's decode must be equal, which is what
         // the wire contract is.
         let decoded: rc2fx_usb::Reply = serde_json::from_slice(&new).unwrap();
         let before: rc2fx_usb::Reply = serde_json::from_slice(&old).unwrap();

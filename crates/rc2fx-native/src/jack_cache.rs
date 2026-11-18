@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn the_generation_and_port_count_are_neighbours() {
+    fn the_generation_and_port_count_are_neighbors() {
         assert_eq!(GENERATION, 0x2456810);
         assert_eq!(PORT_COUNT, GENERATION + 8);
         assert_eq!(PORT_STRIDE, 0x8410);

@@ -164,7 +164,7 @@ no candidate output to keep or clean up.
   history is unknown; it is never an empty list pretending there were no
   changes. The newest published app entry always has notes; older entries may
   not.
-- `mixerVersion`, `protocolVersion`, `date` and `firstAppVersion` may be
+- `mixerVersion`, `protocolVersion`, `date`, and `firstAppVersion` may be
   `null` when unknown.
 - `firstAppVersion` is the oldest published app release that bundled the
   mixer version, or `null` for a standalone version never bundled by an app.

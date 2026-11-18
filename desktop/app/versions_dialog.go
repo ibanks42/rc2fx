@@ -1,12 +1,12 @@
 package app
 
-// versions_dialog.rs: the Versions section of Settings, and the changelog
+// The Versions section of Settings, and the changelog
 // that What's new opens.
 //
 // Notes come from the network, so they are treated as untrusted: raw HTML
 // and image syntax are escaped (updates.SafeMarkdown), and links open only
-// when updates.SafeURL allows them. (The Rust also gave the text view an
-// image loader that loads nothing; see changesView.)
+// when updates.SafeURL allows them. (The text view cannot yet be given an
+// image source that loads nothing; see the TODO on changesView.)
 
 import (
 	"fmt"
@@ -44,15 +44,14 @@ func flag(text string, tone model.Tone) gk.DivEl {
 		Child(txt(text))
 }
 
-// styledDialog is the shell every RC2FX dialog shares (versions_dialog.rs
-// styled).
+// styledDialog is the shell every RC2FX dialog shares.
 func styledDialog(width float32) gk.DialogEl {
 	return gk.Dialog(s.P6, s.Border1).W(width).Rounded(px(20)).Bg(rgb(surface().Panel)).
 		BorderColor(rgb(surface().LineStrong)).TextColor(rgb(Text)).FontFamily("Inter")
 }
 
-// versionsPill is a button in the Versions section (versions_dialog.rs
-// pill; ui.go has the app's own pill).
+// versionsPill is a button in the Versions section (ui.go has the app's own
+// pill).
 func versionsPill(button gk.ButtonEl) gk.ButtonEl {
 	return button.H(px(34)).Px(px(16)).Rounded(float32(17))
 }
@@ -138,8 +137,8 @@ func (a *App) openChangesDialog(cx *gk.Cx, spec Changes) {
 
 // changesView draws the open changes dialog.
 //
-// TODO(B1 image source): the Rust gave each notes view `.image_source(..)`
-// returning an empty image, so no note could make the app fetch one. The Go
+// TODO(B1 image source): each notes view should get an image source that
+// returns an empty image, so no note could make the app fetch one. The Go
 // BaseTextViewEl has no image source call; SafeMarkdown already escapes
 // every `![` outside code, which is what kept images out in the first place.
 func (a *App) changesView(cx *gk.Cx) gk.DialogEl {

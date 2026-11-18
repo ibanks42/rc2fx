@@ -19,7 +19,7 @@ natively on Apple silicon and on Intel Macs. Releases also publish it as
 Apple silicon-only downloads, so older links still work.
 
 The release also has other files: `.nupkg` and `releases.*.json` files, which
-the app updates itself from, the AppImage runtime's sources and
+the app updates itself from, the AppImage runtime's sources, and
 `SHA256SUMS`. You don't need to download them.
 
 The installer is built into the app, and it downloads official RØDE firmware
@@ -53,7 +53,7 @@ flash stock RØDE firmware with the installer first; see
 
 - Windows: uninstall RC2FX from **Settings › Apps › Installed apps**. It asks
   whether to also delete RC2FX's data on this computer: downloaded firmware,
-  the backups of your mixer's RC2FX settings and your preferences, in
+  the backups of your mixer's RC2FX settings, and your preferences, in
   `%LOCALAPPDATA%\RC2FX`, and the SSH key pair
   `~/.ssh/rc2fx_rodecaster_pro_ii` and `~/.ssh/rc2fx_rodecaster_pro_ii.pub`.
   **No** is the default and keeps them, in case you install RC2FX again. An
@@ -75,7 +75,7 @@ flash stock RØDE firmware with the installer first; see
 
 ## Versions and updates
 
-The app, the RC2FX mixer software and RØDE's firmware have separate versions.
+The app, the RC2FX mixer software, and RØDE's firmware have separate versions.
 The **Versions** section of **Settings** shows each part:
 
 | Line | Installed | Available |
@@ -135,7 +135,7 @@ The app checks GitHub for a newer RC2FX app once when it starts, and again
 when you press **Check for updates** in **Settings › Versions**. It asks
 GitHub's public releases API for the official repository
 (`github.com/ibanks42/rc2fx`), without signing in, and considers only
-published app releases: drafts, pre-releases and mixer software releases are
+published app releases: drafts, pre-releases, and mixer software releases are
 ignored. A separate signed check discovers compatible mixer releases. The RC2FX
 update feed supplies release notes, not permission to install a mixer payload. The check at startup stays quiet if it fails,
 for example when you're offline.
@@ -162,7 +162,7 @@ until you ask. How you update depends on how you installed the app:
   **Download update** to try again. If RC2FX says the update hasn't been
   signed yet, try again later: each release is signed shortly after it's
   published. Once the check passes, press **Restart to update**:
-  RC2FX closes, installs the new version and starts again. The AppImage
+  RC2FX closes, installs the new version, and starts again. The AppImage
   update replaces the AppImage file you started, under the same name.
 
   An update you downloaded but haven't restarted for is checked again the

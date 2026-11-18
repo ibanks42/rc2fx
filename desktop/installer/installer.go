@@ -134,7 +134,7 @@ func (p *Prepared) ModelOr(fallback firmware.Model) firmware.Model {
 	return *p.Model
 }
 
-// Equal is Rust's derived equality.
+// Equal compares every field, the model by value; two nils are equal.
 func (p *Prepared) Equal(o *Prepared) bool {
 	if p == nil || o == nil {
 		return p == nil && o == nil
@@ -316,8 +316,8 @@ type Progress struct {
 	Carrier bool `json:"carrier"`
 }
 
-// Cancelled is the error of a request stopped through Engine.Cancel.
-const Cancelled = "Cancelled."
+// Canceled is the error of a request stopped through Engine.Cancel.
+const Canceled = "Canceled."
 
 // Engine runs installer requests in one work folder.
 type Engine struct {
@@ -328,7 +328,7 @@ type Engine struct {
 	Platform Platform
 	Progress func(Progress)
 	// Cancel is set from another goroutine to stop a download; the request
-	// then fails with Cancelled. Cleared when the next request starts.
+	// then fails with Canceled. Cleared when the next request starts.
 	Cancel *atomic.Bool
 	http   *http.Client
 	model  DeviceModel
@@ -374,7 +374,7 @@ func withSourcePlatform(source Source, work string, p Platform) *Engine {
 	}
 }
 
-func (e *Engine) cancelled() bool {
+func (e *Engine) canceled() bool {
 	return e.Cancel != nil && e.Cancel.Load()
 }
 
@@ -537,7 +537,7 @@ func (e *Engine) Handle(request Request) (Reply, error) {
 		if err != nil {
 			return Reply{}, err
 		}
-		// Only an optimisation: without it the whole release is sent.
+		// Only an optimization: without it the whole release is sent.
 		var base *string
 		if request.Installed != nil {
 			version := *request.Installed
@@ -550,7 +550,7 @@ func (e *Engine) Handle(request Request) (Reply, error) {
 				return repository.BasePayload(ctx, version, cache)
 			})
 			switch {
-			case err != nil && err.Error() == Cancelled:
+			case err != nil && err.Error() == Canceled:
 				return Reply{}, err
 			case err == nil:
 				base = found

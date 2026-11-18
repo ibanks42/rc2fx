@@ -8,8 +8,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-// level is the desk's meter scale (desk.rs `level`): peak amplitude as a 0..1
-// meter position over a 60 dB range. Copied here because the desk is UI.
+// level is the desk's meter scale (package app's `level`): peak amplitude as
+// a 0..1 meter position over a 60 dB range. Copied here because the desk is
+// UI.
 func level(peak float64) float32 {
 	return float32(min(max((20*math.Log10(max(peak, 1e-6))+60)/60, 0), 1))
 }

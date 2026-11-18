@@ -1,6 +1,6 @@
 package app
 
-// interchange.rs: importing an EQ from APO text or EasyEffects JSON (a file
+// Importing an EQ from APO text or EasyEffects JSON (a file
 // or the clipboard), reviewing it, and exporting the channel's EQ. The file
 // logic is in edit/files.go.
 
@@ -111,7 +111,7 @@ func (a *App) importEQ(cx *gk.Cx) {
 }
 
 // chosenPath is a file dialog's answer: the last path chosen, "" when it
-// was cancelled, or why it could not be shown.
+// was canceled, or why it could not be shown.
 func chosenPath(d gk.PathsDone) (string, error) {
 	switch d.Status {
 	case gk.DoneFailed:
@@ -124,8 +124,7 @@ func chosenPath(d gk.PathsDone) (string, error) {
 	return "", nil
 }
 
-// fileName is Path::file_name, lossy: the last part of path, "" when it
-// has none.
+// fileName is the last part of path, "" when it has none.
 func fileName(path string) string {
 	base := filepath.Base(path)
 	if base == "." || base == ".." || base == string(filepath.Separator) {

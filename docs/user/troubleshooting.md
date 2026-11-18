@@ -41,8 +41,7 @@ If the mixer stops responding, power-cycle it.
    counters and the events window while the problem happens. See
    [Settings and diagnostics](settings-and-diagnostics.md#diagnostics).
 3. If the glitches only happen with noise suppression on, turn off
-   **Lookahead**, or try another [screen conversion](settings-and-diagnostics.md#screen-conversion)
-   setting.
+   **Lookahead**.
 4. Turn off **Settings › Mixer › Processing**. If the glitches stop, RC2FX is
    the cause. If they continue, the cause is elsewhere.
 
@@ -54,7 +53,7 @@ Wait for it to finish before using it.
 
 ## The mixer forgets its setup at every restart
 
-RØDE keeps the mixer's setup, Wi-Fi, shows and serial number on a settings
+RØDE keeps the mixer's setup, Wi-Fi, shows, and serial number on a settings
 partition that it mounts at every start. If that doesn't happen, the mixer
 asks for its initial setup every time, Wi-Fi doesn't stay connected, and the
 RØDECaster App shows a serial number of zeros. **Don't redo the setup while
@@ -95,7 +94,7 @@ No. Processing runs on the mixer. The app only edits settings.
 No. The app saves your settings to the mixer a moment after each change, and
 they persist across restarts.
 
-**Does it work with a console, phone or second computer?**
+**Does it work with a console, phone, or second computer?**
 Yes. Any device that receives audio from the mixer gets the processed audio.
 
 **Does a RØDE firmware update remove it?**

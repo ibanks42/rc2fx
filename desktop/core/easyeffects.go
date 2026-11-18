@@ -47,7 +47,7 @@ type CandidateSummary struct {
 	Error          *string
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (c CandidateSummary) Equal(other CandidateSummary) bool { return deepEqual(c, other) }
 
 type ImportResultKind uint8
@@ -61,7 +61,7 @@ const (
 	ImportResultChooseChannel
 )
 
-// ImportResult is the Rust enum ImportResult; Kind says which fields mean
+// ImportResult is an import's outcome; Kind says which fields mean
 // something.
 type ImportResult struct {
 	Kind         ImportResultKind
@@ -71,7 +71,7 @@ type ImportResult struct {
 	Candidates   []CandidateSummary
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (r ImportResult) Equal(other ImportResult) bool { return deepEqual(r, other) }
 
 type easyEqualizer struct {
@@ -472,7 +472,8 @@ func stripPadding(bands []Band) []Band {
 	return bands
 }
 
-// ImportEasyEffects is easyeffects::import.
+// ImportEasyEffects reads an EasyEffects preset's equalizers: one ready to
+// use, or the choice the user must make.
 func ImportEasyEffects(text string, options ImportOptions) (ImportResult, error) {
 	candidates, otherEffects, err := readCandidates(text)
 	if err != nil {
@@ -593,10 +594,9 @@ func exportBand(band Band) Value {
 	)
 }
 
-// ExportEasyEffects is easyeffects::export: an EasyEffects preset holding
-// one IIR equalizer, pretty-printed with a final newline. Keys are written in
-// the order the Rust app writes them (serde_json with preserve_order, which
-// the desktop build enables).
+// ExportEasyEffects is an EasyEffects preset holding one IIR equalizer,
+// pretty-printed with a final newline. Keys are written in the order they
+// are listed here, the order earlier versions of the app wrote.
 func ExportEasyEffects(eq EQSettings, pipeline Pipeline) (string, error) {
 	if err := eq.Validate(eq.responseChannels()); err != nil {
 		return "", err

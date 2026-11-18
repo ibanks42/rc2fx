@@ -24,8 +24,8 @@ import (
 //
 // Velopack calls it through its custom update source (vpkc), on its own
 // threads: ReleaseFeed for check_for_updates, DownloadReleaseEntry for
-// download_updates. It does what Velopack's HttpSource did for the Rust app,
-// in Go: the C library has no way to wrap its own HTTP source.
+// download_updates. It does what Velopack's own HttpSource does, in Go: the
+// C library has no way to wrap its own HTTP source.
 type SignedFeed struct {
 	url    string
 	checks *Checks
@@ -40,7 +40,8 @@ type SignedFeed struct {
 	failure *Error
 }
 
-// NewSignedFeed is self_update.rs signed_feed.
+// NewSignedFeed is the signed feed at Feed, checking packages with the
+// installer's update package verification.
 func NewSignedFeed(checks *Checks) *SignedFeed {
 	return &SignedFeed{url: Feed, checks: checks, verify: installer.VerifyUpdatePackage, client: http.DefaultClient}
 }
@@ -251,7 +252,7 @@ func (f *SignedFeed) download(asset Asset, localFile string, report func(int16))
 // Progress is the download's progress channel: the latest value sent, and
 // whether the download has ended (its sender dropped). Once Verifying is
 // sent, later percentages are ignored: the C library sends 100 after the
-// source returns, which the Rust source never did.
+// source returns.
 type Progress struct {
 	mu        sync.Mutex
 	latest    int16
@@ -290,7 +291,7 @@ func (p *Progress) setVersion(version string) {
 	p.mu.Unlock()
 }
 
-// drain is the Rust loop's try_recv: the latest value since the last
+// drain reads the channel without waiting: the latest value since the last
 // drain (has false for none), the version being fetched for Verifying, and
 // whether the download has ended.
 func (p *Progress) drain() (latest int16, has bool, version string, fetching, ended bool) {

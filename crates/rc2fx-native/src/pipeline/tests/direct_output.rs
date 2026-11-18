@@ -164,7 +164,7 @@ fn a_hardware_output_reaches_the_mixer_one_period_earlier_and_is_otherwise_bitwi
             &format!("frame {k} vs helper {}", k + 1),
         );
     }
-    // The helper's first frame hands back the still zero-initialised slot it
+    // The helper's first frame hands back the still zero-initialized slot it
     // has to write (nothing was copied yet): an untreated delivery, not a
     // result. The callback's first frame is processed.
     assert!(silent(&helper_frames[0].out));

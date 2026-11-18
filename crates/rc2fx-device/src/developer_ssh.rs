@@ -1,7 +1,7 @@
 //! Developer SSH access for the desktop app over USB 1: status, and adding or
 //! removing RC2FX's one managed `authorized_keys` line, without reflashing.
 //!
-//! The behaviour lives in `rc2fx.sh developer-ssh`; this module validates the
+//! The behavior lives in `rc2fx.sh developer-ssh`; this module validates the
 //! request, runs the script off the async executor with bounded time, input
 //! and output, serializes every call, and parses the script's report. It is
 //! only reachable from the USB control API: the touchscreen socket is never
@@ -58,7 +58,7 @@ impl std::fmt::Display for SshError {
 }
 
 /// The handle the USB API uses. Cloned into every client; one permit, owned
-/// by the blocking task for as long as the script runs, so a cancelled
+/// by the blocking task for as long as the script runs, so a canceled
 /// request cannot let a second change start while the first is still going.
 pub struct DeveloperSsh {
     script: PathBuf,
@@ -449,12 +449,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cancelled_request_keeps_the_permit_until_the_script_ends() {
+    async fn a_canceled_request_keeps_the_permit_until_the_script_ends() {
         let dir = tempfile::tempdir().unwrap();
         let handle = Arc::new(DeveloperSsh::new(slow_script(dir.path(), "1")));
         // Cancel the first call while its script is still running.
         let first = tokio::time::timeout(Duration::from_millis(200), handle.status()).await;
-        assert!(first.is_err(), "the first call was cancelled");
+        assert!(first.is_err(), "the first call was canceled");
         assert_eq!(handle.status().await.unwrap_err(), SshError::Busy);
         assert_eq!(handle.set(enable(KEY)).await.unwrap_err(), SshError::Busy);
         // Once the script has ended, the permit is free again.

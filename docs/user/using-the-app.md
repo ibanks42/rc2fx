@@ -11,7 +11,7 @@ at the top of the sidebar, or Esc, returns to this page.
 ## Channels
 
 The sidebar lists the channels you are processing first. The remaining
-channels follow in groups: **Microphones**, **Sources**, **Headphones** and
+channels follow in groups: **Microphones**, **Sources**, **Headphones**, and
 **Outputs**. Sources appear only if they are assigned to a fader in the
 current show. RC2FX does not list or process SMART Pads, and the mixer's pad
 playback works as before. **Settings** is at the bottom of the sidebar.
@@ -52,7 +52,7 @@ start switched off.
 
 | Effect | Use |
 | --- | --- |
-| High-pass | Cuts rumble, desk thumps and handling noise |
+| High-pass | Cuts rumble, desk thumps, and handling noise |
 | Noise suppression | Removes background noise from a voice (microphones and Chat Mix Out only) |
 | EQ | Shapes the tone, with up to 32 bands |
 | Compressor | Evens out loud and quiet passages |
@@ -92,7 +92,7 @@ your edits are saved, it asks for confirmation first.
 **Settings**, at the bottom of the sidebar, contains:
 
 - **Presets**, stored on the mixer. You can save the current settings as a
-  preset, load one or delete one, for example to switch between a podcast
+  preset, load one, or delete one, for example to switch between a podcast
   setup and a gaming setup.
 - **Settings files** on your computer, under **Files**. **Open…** loads a
   file into your edits. **Save…** writes the current settings to a file, for
@@ -100,7 +100,7 @@ your edits are saved, it asks for confirmation first.
 
 ## Importing and exporting EQ
 
-The EQ toolbar has **Import…**, **Paste** and **Export…**. Import and Paste
+The EQ toolbar has **Import…**, **Paste**, and **Export…**. Import and Paste
 accept:
 
 - Equalizer APO and AutoEQ parametric text. AutoEQ publishes corrections for
@@ -133,4 +133,4 @@ To remove RC2FX from the mixer, see
 The bar at the bottom of the window shows how many channels are processed.
 When something needs attention, such as unsaved changes or a lost
 connection, the bar shows that instead. Results of actions such as saving,
-importing or exporting appear as notifications.
+importing, or exporting appear as notifications.

@@ -102,7 +102,7 @@ func (s SelectionStatus) Clone() SelectionStatus {
 	return s
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (s SelectionStatus) Equal(other SelectionStatus) bool { return deepEqual(s, other) }
 
 type SelectionRequest struct {

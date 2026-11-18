@@ -258,7 +258,7 @@ func (o *Options) progress(phase, detail string) func(completed, total uint64) {
 	return o.Progress(phase, detail)
 }
 
-func (o *Options) cancelled() error {
+func (o *Options) canceled() error {
 	if o.Cancel == nil {
 		return nil
 	}
@@ -487,7 +487,7 @@ func Flash(p platform.Platform, m model.Model, serial, work string, verify Verif
 	}
 	drive := v.Path
 	for _, name := range UpdateFiles {
-		if err := o.cancelled(); err != nil {
+		if err := o.canceled(); err != nil {
 			return err
 		}
 		if err := stageFile(filepath.Join(work, name), filepath.Join(drive, name), o.progress("stage", name)); err != nil {
@@ -508,7 +508,7 @@ func Flash(p platform.Platform, m model.Model, serial, work string, verify Verif
 			return err
 		}
 	}
-	if err := o.cancelled(); err != nil {
+	if err := o.canceled(); err != nil {
 		return err
 	}
 	o.step("eject", "Safely ejecting the update drive")

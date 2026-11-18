@@ -132,8 +132,8 @@ mod tests {
         assert_eq!(target["id"], "mic-1");
         assert_eq!(target["suppression"]["lookahead"], 1);
         // And the reverse: what the plan says is what the settings mean.
-        let travelled: rc2fx_core::Target = serde_json::from_value(target.clone()).unwrap();
-        assert_eq!(travelled, config.targets[0]);
+        let traveled: rc2fx_core::Target = serde_json::from_value(target.clone()).unwrap();
+        assert_eq!(traveled, config.targets[0]);
         // A path that does not set it keeps LA0.
         config.targets[1].suppression.lookahead = 0;
         let value = plan(&config).unwrap();

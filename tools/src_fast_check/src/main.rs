@@ -1,5 +1,5 @@
 //! Compares every byte of `src_fast_core` output and converter state with the
-//! real libsamplerate over randomised and vendor-shaped calls. Exits non-zero
+//! real libsamplerate over randomized and vendor-shaped calls. Exits non-zero
 //! at the first difference.
 //!
 //! Both interpolations are compared with the library on every call: the one
@@ -90,7 +90,7 @@ enum Samples {
     Special,
 }
 
-/// Signed zeros, infinities, quiet and signalling NaNs with several payloads,
+/// Signed zeros, infinities, quiet and signaling NaNs with several payloads,
 /// and the largest and smallest normal and subnormal values. Random bits
 /// almost never give a zero or an infinity, and seldom two NaNs side by side.
 const SPECIAL: [u32; 22] = [

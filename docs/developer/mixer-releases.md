@@ -73,7 +73,7 @@ directory privately; do not use it unless `COMPLETE` exists.
 Read the generated `SETUP.md`. Verify offline backups of `offline/root.pem`
 before removing the online original. Copy only `public/root.json` into
 `config/mixer-update-root.json`. The files under `release/` are the PEM values
-for the GitHub secrets below. Keep all private keys out of chat, logs, artifacts
+for the GitHub secrets below. Keep all private keys out of chat, logs, artifacts,
 and version control. Local generation is not an air-gapped ceremony: build and
 run the tool on an offline machine if that is your custody policy. Do not use
 this initialization command to replace a root already deployed to users.
@@ -108,7 +108,7 @@ signed release and its metadata are public.
 
 1. Review both app minimums and, if you can, write curated mixer notes for the
    next version. Commit them on protected main.
-2. Dispatch **Mixer release** and choose the bump: patch, minor or major, from
+2. Dispatch **Mixer release** and choose the bump: patch, minor, or major, from
    the latest published `mixer-v` release. `.github/scripts/mixer_version.py`
    writes the new version to `config/mixer-release.json` before the build. A
    checked-in version that already equals the result is kept; any other one
@@ -170,7 +170,7 @@ chain. Do not replace an old numbered root with different bytes.
 An update that changes only RC2FX can be installed on a running mixer without
 flashing RØDE's firmware. The app uploads the signed payload over USB 1, the
 mixer verifies it with the same trust root and metadata the desktop trusts, and
-then swaps `/opt/rc2fx` in place. RØDE's files, its audio engine binary and the
+then swaps `/opt/rc2fx` in place. RØDE's files, its audio engine binary, and the
 firmware are never touched; only the audio engine is restarted. The endpoints
 are in [the controller API](../reference/api.md#in-place-updates).
 
@@ -179,11 +179,11 @@ The mixer does the verification itself, from the root compiled into `rc2fxd`
 
 1. The four role documents are verified as a TUF repository: root signatures
    and thresholds, key rotation when the app sends the intermediate roots,
-   timestamp, snapshot and targets, and the hashes and versions that tie them
+   timestamp, snapshot, and targets, and the hashes and versions that tie them
    together. Delegated targets are refused. The mixer verifies with
    [sigstore-tuf](https://github.com/sigstore/sigstore-rust). The desktop app
    parses metadata with [go-tuf](https://github.com/theupdateframework/go-tuf)
-   and follows sigstore-tuf's refresh, rollback and expiry rules
+   and follows sigstore-tuf's refresh, rollback, and expiry rules
    (`desktop/installer/internal/tuf`), so both accept exactly the same
    repositories. Signing uses `./xtask` (`desktop/internal/xtask/tufsign`,
    which writes what tough writes) and `tuftool`. The Go and Rust tests read
@@ -191,11 +191,11 @@ The mixer does the verification itself, from the root compiled into `rc2fxd`
    under two IDs for a role is refused, because the library counts signatures
    by key ID.
 2. Exactly one target may carry the `rc2fxMixer` compatibility claims. Its
-   version, length and SHA-256 must match the request and the uploaded file.
+   version, length, and SHA-256 must match the request and the uploaded file.
 3. Its `firmwareProfiles` must include the profile the launcher validated for
    the running mixer, and its `minimumAppVersion` and release identity must be
    well formed.
-4. The payload's own envelope, `SHA256SUMS`, ARM64 binaries, firmware catalog
+4. The payload's own envelope, `SHA256SUMS`, ARM64 binaries, firmware catalog,
    and `mixer-release.json` must agree with those claims. A development build
    is refused: there is no unsigned or developer path through this API.
 5. Nothing is executed and nothing under `/opt` changes before all of that
@@ -203,7 +203,7 @@ The mixer does the verification itself, from the root compiled into `rc2fxd`
 
 The mixer has no trusted clock, so expiry cannot be enforced there: an unset or
 wrong clock would either block every update or accept a stale one silently.
-Instead the mixer records the highest verified root, targets, snapshot and
+Instead the mixer records the highest verified root, targets, snapshot, and
 timestamp versions (plus a digest of the verified targets) beside its settings
 in `/opt/rc2fx/data/update-state.json`, and refuses an older set or different
 content under the same version. The installed RC2FX version is recorded there
@@ -230,7 +230,7 @@ restores the files and records the rollback. The outcome is
 reported by `GET api/v1/update/last` after the app reconnects.
 
 When the update changes none of the files RØDE's running mixer process holds
-(the native and GUI libraries, the supervisor, the JACK recorder, `rc2fx.sh`
+(the native and GUI libraries, the supervisor, the JACK recorder, `rc2fx.sh`,
 and the audio shim), only the controller is restarted and audio keeps running:
 `rc2fxd` passes `restart=controller` to the driver, which asks the supervisor
 to reload by creating `/run/rc2fx/reload`. The supervisor stops the
@@ -238,7 +238,7 @@ controller and starts the new `rc2fxd`, which refuses to run unless the native
 library's paths and settings match the saved ones. The driver uses this only
 when the running mixer was launched from `/opt/rc2fx` with the same files and
 its supervisor lists `reload` in `/run/rc2fx/supervisor.features`. Readiness,
-the commit and rollback are the same as above; if the new controller is not
+the commit, and rollback are the same as above; if the new controller is not
 ready within a minute, the driver restarts the mixer instead.
 
 A power cut at any point leaves something launchable:
@@ -275,7 +275,7 @@ patches against bytes whose digest matches what the mixer reported.
 The mixer decodes into `/run` before verification, checking every file's
 SHA-256 and exact size and the patch's base digest. It then treats the rebuilt
 envelope exactly like a plain upload: the signed target's size and digest, TUF,
-the payload manifest and the version checks all run unchanged. Nothing decoded
+the payload manifest, and the version checks all run unchanged. Nothing decoded
 is executed or installed before they pass.
 
 ## Where metadata lives
@@ -283,7 +283,7 @@ is executed or installed before they pass.
 Payloads are GitHub release assets, published once and never changed. Metadata
 changes at every renewal, so it can't be a release once immutable releases are on.
 It lives on the orphan branch `mixer-metadata`, which holds only `N.root.json`,
-`targets.json`, `snapshot.json`, `timestamp.json` and a short README, and the app
+`targets.json`, `snapshot.json`, `timestamp.json`, and a short README, and the app
 reads it from `https://raw.githubusercontent.com/ibanks42/rc2fx/mixer-metadata/`.
 That address and the payload address are compiled into the app, which refuses
 any other host.
@@ -363,7 +363,7 @@ release without a new version, such as after a key rotation.
 To reauthorize, retain the original package directory, including its compatibility
 file. Run `./xtask mixer-sign` with that package, the current trusted root,
 a fresh output directory, and a sequence greater than the currently published
-targets, snapshot and timestamp versions. Review the resulting signed metadata,
+targets, snapshot, and timestamp versions. Review the resulting signed metadata,
 then run:
 
 ```sh
@@ -371,9 +371,9 @@ python3 .github/scripts/publish_mixer.py --reauthorize PACKAGE SIGNED_METADATA
 ```
 
 This requires an already published mixer release and metadata branch. It checks
-that the target paths, hashes and compatibility requirements are unchanged and
+that the target paths, hashes, and compatibility requirements are unchanged and
 downloads the existing assets to compare their bytes before writing anything.
-Only targets, snapshot and timestamp change, in one commit.
+Only targets, snapshot, and timestamp change, in one commit.
 Changing a payload or compatibility requirement requires a new mixer release.
 Run this under the same exclusive publication lock as the release and renewal
 workflows; do not run concurrent metadata publishers.

@@ -1,6 +1,6 @@
 package app
 
-// telemetry_view.rs: the Diagnostics page's TELEMETRY section, shown when
+// The Diagnostics page's TELEMETRY section, shown when
 // Show telemetry is on. It answers whether RC2FX is keeping up, in words a
 // person reads at a glance: a row of status badges, four yes/no checks, then
 // one line per processed channel. Technical details opens the raw figures,
@@ -20,10 +20,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// TelemetrySnapshot is telemetry_view.rs Snapshot.
+// TelemetrySnapshot is the figures the TELEMETRY section shows.
 type TelemetrySnapshot = telemetry.Snapshot
 
-// toneColor is a telemetry tone's colour.
+// toneColor is a telemetry tone's color.
 func toneColor(t telemetry.Tone) uint32 {
 	switch t {
 	case telemetry.ToneAccent:
@@ -38,12 +38,12 @@ func toneColor(t telemetry.Tone) uint32 {
 	return Text
 }
 
-// telemetryValue is telemetry_view.rs value.
+// telemetryValue is a figure's text in its color.
 func telemetryValue(text string, color uint32) gk.DivEl {
 	return gk.Div(s.FlexShrink0, s.TextSm).TextColor(rgb(color)).Child(txt(text))
 }
 
-// telemetryDot is telemetry_view.rs dot (ui.go's dot is the gradient one).
+// telemetryDot is a plain status dot (ui.go's dot is the gradient one).
 func telemetryDot(color uint32) gk.DivEl {
 	return gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(8)).Bg(rgb(color))
 }
@@ -114,8 +114,8 @@ func headerCell(text string) gk.DivEl {
 	return gk.Div(s.TextXs).TextColor(rgb(Faint)).Child(txt(text))
 }
 
-// telemetryLevel is telemetry_view.rs level: a level bar from −60 to 0 dBFS,
-// red at or over full scale, and its value. (colors.go's level is desk.rs's.)
+// telemetryLevel is a level bar from −60 to 0 dBFS, red at or over full
+// scale, and its value. (colors.go's level is the overview's meter scale.)
 func telemetryLevel(peak float64, mono string) gk.DivEl {
 	width, over := telemetry.LevelWidth(peak)
 	color, valueColor := Accent, Text

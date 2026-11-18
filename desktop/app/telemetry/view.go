@@ -1,8 +1,8 @@
 package telemetry
 
-// telemetry_view.rs without drawing: what the Diagnostics page's TELEMETRY
-// section says. It answers whether RC2FX is keeping up, in words a person
-// reads at a glance: a status, four yes/no checks, then one line per
+// What the Diagnostics page's TELEMETRY section says, without drawing. It
+// answers whether RC2FX is keeping up, in words a person reads at a glance:
+// a status, four yes/no checks, then one line per
 // processed channel, and the raw figures behind them. Only audible problems
 // are flagged, and only while they are recent: older ones become history,
 // and the mixer starting is left out. Built from a plain Snapshot so it reads
@@ -189,7 +189,7 @@ func (s Status) Label() string {
 	return s.What
 }
 
-// Tone is a colour as the app picks it: Accent, Warn, Danger or Faint.
+// Tone is a color as the app picks it: Accent, Warn, Danger or Faint.
 type Tone int
 
 const (
@@ -199,7 +199,7 @@ const (
 	ToneFaint
 )
 
-// Tone is the badge's colour.
+// Tone is the badge's color.
 func (s Status) Tone() Tone {
 	switch s.Kind {
 	case StatusHealthy:
@@ -262,7 +262,7 @@ func workersOf(paths []PathView) []*PathView {
 }
 
 // busiest is the worker using the most of its budget on average (the last of
-// equals, as Iterator::max_by).
+// equals).
 func busiest(workers []*PathView) *core.Performance {
 	var best *core.Performance
 	for _, w := range workers {
@@ -366,7 +366,7 @@ const (
 	CheckOff
 )
 
-// Tone is the check's dot colour.
+// Tone is the check's dot color.
 func (c CheckState) Tone() Tone {
 	switch c {
 	case CheckOK:
@@ -488,7 +488,7 @@ type Badge struct {
 	Tone Tone
 }
 
-// ToneText is a badge's plain text colour.
+// ToneText is a badge's plain text color.
 const ToneText Tone = 100
 
 // Badges is the badges after the status, in order: the engine phase when

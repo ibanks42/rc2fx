@@ -1,6 +1,6 @@
 package app
 
-// restart.rs: restarting processing on the mixer when its engine stopped,
+// Restarting processing on the mixer when its engine stopped,
 // and the panel shown while processing changes state.
 
 import (

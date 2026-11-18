@@ -73,7 +73,7 @@ Set `known_hosts` to the file in the installer's cache folder, and
 | Linux | `~/.local/share/RC2FX/installer` |
 
 The environment variables `RC2FX_MIXER_IP`, `RC2FX_MIXER_USER`,
-`RC2FX_MIXER_KEY`, `RC2FX_MIXER_KNOWN_HOSTS` and
+`RC2FX_MIXER_KEY`, `RC2FX_MIXER_KNOWN_HOSTS`, and
 `RC2FX_MIXER_HOST_KEY_ALIAS` override the file.
 
 Test the connection:
@@ -150,22 +150,22 @@ bootloader:
 2. Make every partition read-only before looking:
    `sudo blockdev --setro /dev/sdX /dev/sdX[1-4]`. The DOS partition table
    is p1 (ext4, 507 MB) and p2 (ext4, 583 MB) for the two roots, p3 (FAT,
-   835 MB) for `/Application/update-staging` (the settings, `unit-serial.txt`
-   and the update-drive image) and p4 (FAT, 4.9 GB) for
+   835 MB) for `/Application/update-staging` (the settings, `unit-serial.txt`,
+   and the update-drive image), and p4 (FAT, 4.9 GB) for
    `/Application/emmc-data`. The running root is the one
    `/boot/extlinux/extlinux.conf` names in `root=`.
 3. Check p3 with `fsck.vfat -n` and mount it read-only to confirm the setup
    is there; back it up. Mount the roots with `-o ro,noload`, compare the
    running root against the flashed image
-   (`~/.local/share/RC2FX/installer/archive.tar.gz` on Linux) and check
+   (`~/.local/share/RC2FX/installer/archive.tar.gz` on Linux), and check
    free space with `df`.
 4. To repair, make only the one partition writable (`blockdev --setrw`),
    restore the damaged file from the image or from the other root, remove
    `usb-update.img` and the empty settings files from the root's
    `/Application/update-staging` if the root is full, and add a developer
    key to `/home/root/.ssh/authorized_keys` (mode 600) if SSH will be
-   needed. Unmount, set it read-only again and run `fsck -n`.
-5. Unmount everything, **disconnect USB 1** and the power, wait 30 seconds
+   needed. Unmount, set it read-only again, and run `fsck -n`.
+5. Unmount everything, **disconnect USB 1** and the power, wait 30 seconds,
    and power on normally. In the one recovery so far, the mixer didn't boot
    until USB 1 was disconnected.
 

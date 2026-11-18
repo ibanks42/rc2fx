@@ -76,5 +76,5 @@ DSP references:
 The vectors compare the algebraic prototypes with the RBJ formulas. They are not
 recordings or output captured from a compiled LSP build, so runtime smoke
 tests against EasyEffects and LSP are still needed. JSON syntax,
-contiguous channel bands and RFC 6902 patch paths were checked locally without
+contiguous channel bands, and RFC 6902 patch paths were checked locally without
 Python.

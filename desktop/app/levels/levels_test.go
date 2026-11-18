@@ -10,7 +10,7 @@ import (
 
 func f(v float32) *float32 { return &v }
 
-// live_line.rs tests.
+// The live line.
 
 func TestEveryPointIsFiniteAndBothEndsMeetTheMiddle(t *testing.T) {
 	for _, style := range []LineStyle{Channel, Mini} {
@@ -52,9 +52,8 @@ func TestAnInvalidLineIsRejectedNotPatched(t *testing.T) {
 	}
 }
 
-// LinePoints is paint_line's geometry; not a Rust test of its own, but the
-// Rust's arithmetic: the middle of the element, flat when unavailable,
-// nothing below 4 × 2 px.
+// LinePoints is a line's geometry: the middle of the element, flat when
+// unavailable, nothing below 4 × 2 px.
 func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 	if _, ok := LinePoints(3.9, 40, 0, 1, LineStateLive, Mini); ok {
 		t.Fatal("drew in a too narrow element")
@@ -79,7 +78,7 @@ func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 	}
 }
 
-// level_bar.rs tests.
+// The level bars.
 
 func track() Rect { return Rect{10, 20, 100, 200} }
 
@@ -124,7 +123,7 @@ func TestNoReadingIsAFixedStubAtTheStartOfTheTrack(t *testing.T) {
 	}
 }
 
-// line_overlay.rs tests.
+// When an indicator redraws and the ticker runs.
 
 func slots(shape Shape, drawn *float32) Slots {
 	return Slots{
@@ -166,8 +165,7 @@ func TestANewSetOfClaimsAlwaysDraws(t *testing.T) {
 	}
 }
 
-// Beyond the Rust tests: the bar rule, unmeasured lines, still indicators
-// and the tick choice.
+// The bar rule, unmeasured lines, still indicators and the tick choice.
 
 func TestABarRedrawsOnlyWhenItMovesAPixelOrLosesItsReading(t *testing.T) {
 	bar := BarShape(BarVertical)

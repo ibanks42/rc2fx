@@ -1,6 +1,6 @@
 package app
 
-// desk.rs: the desk visual language: the theme, the notice card, the grip
+// The desk visual language: the theme, the notice card, the grip
 // and the signal-flow lane. The surfaces are in appearance.go, the
 // non-drawing helpers in desk_logic.go and colors.go.
 
@@ -30,7 +30,7 @@ func setAppearance(cx *gk.Cx, a Appearance) {
 	applyTheme(cx)
 }
 
-// applyTheme is desk.rs apply_theme: the components' colours, font size and
+// applyTheme sets the components' colors, font size and
 // radii for the current appearance, by applying its theme from the registry
 // (theme.go says why it is not written field by field).
 func applyTheme(cx *gk.Cx) {

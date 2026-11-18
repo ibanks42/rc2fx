@@ -54,8 +54,8 @@ type Fix struct {
 	Reply *installer.StorageFix
 	// Error is why the request failed (the engine, not the fix).
 	Error string
-	// Cancelling: Stop asked the run to stop before it touched the mixer.
-	Cancelling bool
+	// Canceling: Stop asked the run to stop before it touched the mixer.
+	Canceling bool
 }
 
 // NewFix is the task before it starts.
@@ -99,7 +99,7 @@ func (f *Fix) Progress(p installer.Progress) {
 // CanStop reports that Stop can stop the run now: before it touches the
 // mixer.
 func (f *Fix) CanStop() bool {
-	return f.Kind == FixRunning && !f.Touched && !f.Cancelling
+	return f.Kind == FixRunning && !f.Touched && !f.Canceling
 }
 
 // Cancel asks the run to stop; false once it has touched the mixer.
@@ -107,7 +107,7 @@ func (f *Fix) Cancel() bool {
 	if !f.CanStop() {
 		return false
 	}
-	f.Cancelling = true
+	f.Canceling = true
 	return true
 }
 
@@ -117,10 +117,10 @@ func (f *Fix) Outcome(reply installer.Reply, err error) {
 	if f.Kind != FixRunning {
 		return
 	}
-	cancelling := f.Cancelling
-	f.Kind, f.Cancelling = FixEnded, false
+	canceling := f.Canceling
+	f.Kind, f.Canceling = FixEnded, false
 	switch {
-	case err != nil && err.Error() == installer.Cancelled && cancelling:
+	case err != nil && err.Error() == installer.Canceled && canceling:
 		*f = Fix{Kind: FixBefore}
 	case err != nil:
 		f.Error = err.Error()

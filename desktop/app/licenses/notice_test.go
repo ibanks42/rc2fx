@@ -2,7 +2,7 @@ package licenses
 
 import "testing"
 
-// The rendering checks of licenses/mod.rs run offscreen (desktop/app/uitest);
+// The license dialog's rendering checks run offscreen (desktop/app/uitest);
 // these check the Markdown they render.
 
 func TestNoticesEscapeMarkupAndKeepLeadingSpace(t *testing.T) {

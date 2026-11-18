@@ -11,7 +11,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// The tests of the Rust app's telemetry.rs, case for case.
+// Meter freshness, audio progress, fault baselines and the startup window.
 
 func failedState() core.DeviceState {
 	return core.DeviceState{
@@ -397,8 +397,8 @@ func TestReceiveToUSBMeterRenderRemainsFreshPastThirtySeconds(t *testing.T) {
 	check(t, m == nil, "silence expires the visible meter")
 }
 
-// Rust: #[ignore = "requires explicit locally saved device state and
-// diagnostics; never contacts the mixer"]. Set RC2FX_TEST_STATE and
+// Skipped unless asked for: it needs locally saved device state and
+// diagnostics, and never contacts the mixer. Set RC2FX_TEST_STATE and
 // RC2FX_TEST_DIAGNOSTICS to run it.
 func TestSavedDeviceMetersFollowTheDesktopReceiveAndRenderPath(t *testing.T) {
 	statePath, diagnosticsPath := os.Getenv("RC2FX_TEST_STATE"), os.Getenv("RC2FX_TEST_DIAGNOSTICS")

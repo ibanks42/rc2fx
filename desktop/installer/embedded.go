@@ -178,7 +178,7 @@ func catalogBytes() ([]byte, error) {
 
 // EmbeddedService is whether RC2FX's state (as the app's USB connection
 // reads it) says this payload's runtime is ready, the way the app asks
-// about a folder's payload (Rust's embed::service).
+// about a folder's payload.
 func EmbeddedService(state []byte) Service {
 	if !embed.Present {
 		catalog, err := Source{Kind: SourceDownload}.catalog()
@@ -207,8 +207,7 @@ func EmbeddedService(state []byte) Service {
 	return service(p.bundle, state)
 }
 
-// EmbeddedIdentity is the identity of the payload this binary serves
-// (Rust's embed::identity).
+// EmbeddedIdentity is the identity of the payload this binary serves.
 func EmbeddedIdentity() (Identity, error) {
 	p, err := payload()
 	if err != nil {

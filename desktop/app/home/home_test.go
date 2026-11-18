@@ -2,7 +2,7 @@ package home
 
 import "testing"
 
-// home.rs tests.
+// Home: which channels the overview lists.
 
 func TestAProcessedInputWithoutAFaderStaysOnTheOverview(t *testing.T) {
 	faders := []string{"usb-game", "usb-chat"}
@@ -23,7 +23,7 @@ func TestAProcessedInputWithoutAFaderStaysOnTheOverview(t *testing.T) {
 	}
 }
 
-// onboarding.rs tests.
+// The opening screens: the Dusk halo.
 
 func TestTheHaloIsFaintAndStrongestAroundTheMiddle(t *testing.T) {
 	width, height := 165, 108
@@ -40,9 +40,9 @@ func TestTheHaloIsFaintAndStrongestAroundTheMiddle(t *testing.T) {
 	if float32(peak) > 2*HaloOpacity*255 {
 		t.Fatalf("peak alpha %d", peak)
 	}
-	centre := alpha(width/2, height*28/100)
-	if !(centre > 0 && centre > alpha(0, height-1)) {
-		t.Fatalf("centre alpha %d, corner %d", centre, alpha(0, height-1))
+	center := alpha(width/2, height*28/100)
+	if !(center > 0 && center > alpha(0, height-1)) {
+		t.Fatalf("center alpha %d, corner %d", center, alpha(0, height-1))
 	}
 }
 

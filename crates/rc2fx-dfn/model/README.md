@@ -15,7 +15,7 @@ three Zenodo keystroke datasets and the project author's own recordings), with
 the click and keyboard recordings weighted to a quarter of the noise. The
 training kit is kept outside this repository. The weights are released under
 MIT; [PROVENANCE.md](PROVENANCE.md#training-data) credits every training
-dataset and notes the licences that still apply to them.
+dataset and notes the licenses that still apply to them.
 
 The weights here are the best checkpoint by validation loss from run
 `a960s360d64-la0-b20` (epoch 120, 0.997914731502533). They were exported
@@ -44,7 +44,7 @@ and one integral f32 value:
 
 A file without these tensors is rejected. The engine takes its STFT framing
 from them. The FFT size, which must be even, is the analysis window. The last
-`synthesis_size` samples of it, between one and two hops, are resynthesised at
+`synthesis_size` samples of it, between one and two hops, are resynthesized at
 the hop. The lookahead must be less than the deep-filter order. The output
 lags by `synthesis_size - hop_size` plus the lookahead. `src/dsp.rs` describes
 the window pair.
@@ -68,7 +68,7 @@ window and the five causal DF taps add no delay.
 
 ## Precision
 
-The engine quantises the weights to int8 when it loads them, with one scale
+The engine quantizes the weights to int8 when it loads them, with one scale
 per row. The mixer's four cores share one L2 cache, and streaming 1.2 MB of
 f16 weights every 5 ms hop made JACK drop buffers. int8 halves that traffic
 and removed nearly all of the drops. `PRODUCTION_WORKER` in
@@ -116,4 +116,4 @@ The training kit's `export/handoff.sh` takes the run's best checkpoint and:
 4. copies both files here.
 
 Then run `cargo test -p rc2fx-dfn`. If the per-frame time changed, review the
-worker lead for `SuppressionAlgorithm::DeepFilterNet3` in `rc2fx-core`.
+worker lead (320 samples) in `Suppression::admitted_geometry` in `rc2fx-core`.

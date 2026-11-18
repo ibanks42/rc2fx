@@ -1,6 +1,6 @@
 package app
 
-// home.rs: Home, a calm overview of the processed channels, one click from
+// Home, a calm overview of the processed channels, one click from
 // each channel's editor.
 
 import (
@@ -332,8 +332,7 @@ func verticalMeter(bar gk.Element) gk.DivEl {
 }
 
 // horizontalMeter is an output's level: a short track around its bar.
-// Relative so the bar's fill is placed in it (the Rust's canvas needed no
-// positioning); that changes no layout.
+// Relative so the bar's fill is placed in it; that changes no layout.
 func horizontalMeter(bar gk.Element) gk.DivEl {
 	return gk.Div(s.Flex1, s.Relative, s.OverflowHidden).MinW(px(40)).H(px(6)).Rounded(px(4)).
 		Bg(rgb(surface().Sunken)).Child(bar)

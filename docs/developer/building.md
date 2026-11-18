@@ -1,6 +1,6 @@
 # Building from source
 
-These steps build the desktop app and the mixer runtime on Windows, Linux or
+These steps build the desktop app and the mixer runtime on Windows, Linux, or
 macOS. Every task is an `./xtask` command (the Go tool in `desktop/cmd/xtask`),
 and `just` wraps them, so the steps are the same on each platform. The desktop
 app is written in Go; the mixer side is Rust.
@@ -10,7 +10,7 @@ app is written in Go; the mixer side is Rust.
 - [Go](https://go.dev/dl/), the version `desktop/go.mod` names. `./xtask`
   builds and runs the tool with `go run`, so every task needs it.
 - Rust, through [rustup](https://rustup.rs), for the mixer side, and for the
-  licence notices `just package` collects from the mixer crates. The toolchain
+  license notices `just package` collects from the mixer crates. The toolchain
   is pinned in `rust-toolchain.toml`, and rustup installs it on first use.
 - [just](https://just.systems): `cargo install --locked just`,
   `winget install Casey.Just`, `brew install just`, or your package manager.
@@ -39,7 +39,7 @@ pre-commit hook in `.githooks`.
 
 `fetch-gpuikit.sh` downloads gpuikit, the UI library the app links (GPUI-kit
 through its Go bindings), at the pinned version for your platform, checks its
-SHA-256 and unpacks it into `desktop/third_party/gpuikit`, which git ignores.
+SHA-256, and unpacks it into `desktop/third_party/gpuikit`, which git ignores.
 It is a static library (`lib/libgpuikit_static.a`): the app carries it inside
 its executable, and nothing ships beside it. Set `GPUIKIT_TOKEN` to a GitHub
 token if the bindings repository is private to you. With a local build of the
@@ -74,7 +74,7 @@ and does not contact the mixer. Files that haven't changed are left in place,
 so repeat runs are quick.
 
 An embedded build (the Go build tag `embedded`) embeds that runtime, the
-firmware catalog, the mixer release manifest and the installer scripts in the
+firmware catalog, the mixer release manifest, and the installer scripts in the
 executable. Before the build, `desktop/installer/embed/cmd/stage-payload`
 collects them into `desktop/installer/embed/payload`, and fails if any of them
 is missing or corrupt. `target/mixer` carries a copy of
@@ -87,7 +87,7 @@ There is one mixer build configuration, the one the Pro II was measured with,
 compiled for its Cortex-A53. Installing and using a source build works as
 described in the [user guide](../user/installing.md).
 
-Any Clippy warning, `go vet` finding or unformatted Go file fails `just test`,
+Any Clippy warning, `go vet` finding, or unformatted Go file fails `just test`,
 even if every test passes. It also tests and lints rc2fxd (the
 `native-pipeline` feature) and lints the `eq-fma` and `bench-kernels`
 features. The native library and the benchmark are separate workspaces: their
@@ -100,7 +100,7 @@ just package
 ```
 
 This builds the self-contained desktop app for the current computer into
-`target/package`, with its licence notices built in. What it writes depends on
+`target/package`, with its license notices built in. What it writes depends on
 the system:
 
 | System | Files |
@@ -109,7 +109,7 @@ the system:
 | macOS | `rc2fx-macos-universal.pkg` (installer), `rc2fx-macos-universal.zip` (portable), `io.github.ibanks42.rc2fx-VERSION-osx-full.nupkg` and `releases.osx.json` (update package and feed), all universal (Apple silicon and Intel) |
 | Linux | `rc2fx-linux-x64.AppImage`, `io.github.ibanks42.rc2fx-VERSION-linux-full.nupkg` and `releases.linux.json` (update package and feed) |
 
-Velopack's `vpk` makes all of them. The installers, portable zips and the
+Velopack's `vpk` makes all of them. The installers, portable zips, and the
 AppImage have no version in their names, so the newest release always has the
 same download links, and an AppImage update replaces the file in place. The
 update package and feed keep vpk's names, because the feed names the package;
@@ -120,7 +120,7 @@ documentation isn't packaged.
 
 On macOS the app is universal, for macOS 13 (the oldest Go 1.27 supports) and
 later. `./xtask package` builds `cmd/rc2fx` twice with cgo, for `arm64` and
-`amd64` (`CC`, `CGO_CFLAGS` and `CGO_LDFLAGS` with `-arch` and
+`amd64` (`CC`, `CGO_CFLAGS`, and `CGO_LDFLAGS` with `-arch` and
 `-mmacosx-version-min=13.0`), against the universal gpuikit static library and
 each architecture's static `velopack_libc`, and joins them with `lipo -create`
 (`RC2FX_LIPO` names another `lipo`). It then checks, in Go, that the
@@ -129,20 +129,20 @@ exactly an `arm64` and an `x86_64` slice built for no newer macOS than the
 bundle's `LSMinimumSystemVersion`, that every library they load is the
 system's or one beside the executable, and that the installer's
 `hostArchitectures` name both. Each slice of the executable gets the payload,
-notice and build-tag checks on its own. `vpk` packs it with `--runtime osx`,
+notice, and build-tag checks on its own. `vpk` packs it with `--runtime osx`,
 without an architecture: on macOS the RID is only recorded in the package, and
 the channel, and so the feed and update package names, stays `osx`, which
 copies installed from the earlier Apple silicon-only releases update from.
 
-Packaging needs the gpuikit download, Velopack's C library and `cargo-about`
+Packaging needs the gpuikit download, Velopack's C library, and `cargo-about`
 (`cargo install --locked cargo-about`):
 
 - `desktop/scripts/fetch-velopack.sh` fetches Velopack's C library at the
-  version vpk packs with, checks it and unpacks it into
+  version vpk packs with, checks it, and unpacks it into
   `desktop/third_party/velopack`. Packages are built with the `velopack` build
   tag, which links it so the app can update itself; with `--embedded`, also
   with the `embedded` tag.
-- `cargo-about` collects the licences of the mixer's Rust crates, which the
+- `cargo-about` collects the licenses of the mixer's Rust crates, which the
   app installs. The Go modules' and gpuikit's notices are added to them.
 
 - Every platform also needs .NET and vpk 1.3.39-g8d2844f:
@@ -153,8 +153,8 @@ Packaging needs the gpuikit download, Velopack's C library and `cargo-about`
   `windres` (`RC2FX_WINDRES`, or `x86_64-w64-mingw32-windres` or `windres` on
   the `PATH`), to give `rc2fx.exe` its icon and version details; other builds
   skip them when there is none.
-- The packages include Velopack's own launcher, updater and installer, so the
-  app's licence notices include their dependencies, from
+- The packages include Velopack's own launcher, updater, and installer, so the
+  app's license notices include their dependencies, from
   `licenses/velopack-VERSION.json`. When you change the vpk version
   (`VPKVersion` in `desktop/internal/xtask/licenses/licenses.go`,
   `.github/scripts/setup-vpk.sh`, and `version` and `sha` in
@@ -164,12 +164,12 @@ Packaging needs the gpuikit download, Velopack's C library and `cargo-about`
 - Linux also needs `mksquashfs` (from `squashfs-tools`) on the `PATH`, which
   vpk builds the AppImage's image with, and `linuxdeploy` and `patchelf`,
   given by absolute path in `RC2FX_LINUXDEPLOY` and `RC2FX_PATCHELF`. `bash .github/scripts/setup-release-tools.sh appimage`
-  downloads the pinned versions, checks them and keeps them under
+  downloads the pinned versions, checks them, and keeps them under
   `~/.cache/rc2fx-release-tools/appimage`. vpk puts its own AppImage runtime
   at the start of the AppImage, so there is no separate runtime or
   `appimagetool` to install. Before packaging, run
   `python3 .github/scripts/prepare-appimage-notices.py`: it writes that
-  runtime's licence notices, which packaging requires, and its source archive
+  runtime's license notices, which packaging requires, and its source archive
   (see [AppImage runtime sources](releases.md#appimage-runtime-sources)).
 - The AppImage runs on distributions with at least the glibc it was built
   against, so a release builds it in the AlmaLinux 8 container described
@@ -193,12 +193,12 @@ just package-check
 
 This builds the AppImage the way a release does, then extracts and checks it
 in clean containers of AlmaLinux 8, Ubuntu 22.04, Debian 12, Ubuntu 24.04,
-Debian 13 and Fedora 44. It needs x86-64 Linux with Podman or Docker, plus network access, and
+Debian 13, and Fedora 44. It needs x86-64 Linux with Podman or Docker, plus network access, and
 no mixer or GitHub run. Set `CONTAINER_ENGINE` to `podman` or `docker` to choose
 one; otherwise Podman is used if it's installed.
 
 The checks are headless. They don't start a desktop session, mount the AppImage
-with FUSE or talk to a mixer, so try those by hand.
+with FUSE, or talk to a mixer, so try those by hand.
 
 The build runs on a copy of your working tree, including uncommitted and new
 files but not ignored ones, in an AlmaLinux 8 container defined in
@@ -214,7 +214,7 @@ The last lines report the commit and a digest of the source that was checked.
 If the source changes during the run, the check fails, because the result no
 longer describes your working tree.
 
-Its build output, downloads and packages stay in `target/package-check`, and
+Its build output, downloads, and packages stay in `target/package-check`, and
 the packages are in `target/package-check/target/package`. The first run builds
 everything and takes the longest; later runs reuse that directory. Delete it to
 start clean.

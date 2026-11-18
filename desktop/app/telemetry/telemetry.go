@@ -1,7 +1,7 @@
 // Package telemetry is the desktop's reading of the mixer's meters and
-// diagnostics, without drawing: the Rust app's telemetry.rs, plus the
-// pure halves of events.rs (EventLog, the event rows and their wording) and
-// telemetry_view.rs (the Telemetry section's statuses, checks and figures).
+// diagnostics, without drawing: meter freshness and audio progress, plus
+// the pure halves of the events window (EventLog, the event rows and their
+// wording) and of the Telemetry section (its statuses, checks and figures).
 // It does not import gk, so it tests with plain `go test`.
 package telemetry
 
@@ -22,11 +22,10 @@ import (
 // and the events window; a fault after it counts normally.
 const StartupAudio = 60 * time.Second
 
-// sinceSat is Instant::saturating_duration_since: now - at, or 0 when at is
-// later.
+// sinceSat is now - at, or 0 when at is later.
 func sinceSat(now, at time.Time) time.Duration { return max(now.Sub(at), 0) }
 
-// nanos is Duration::from_nanos, capped at what a time.Duration holds.
+// nanos is ns nanoseconds, capped at what a time.Duration holds.
 func nanos(ns uint64) time.Duration {
 	if ns > math.MaxInt64 {
 		return time.Duration(math.MaxInt64)
@@ -108,7 +107,7 @@ type startupPhase int
 
 const (
 	// phaseClosed: the startup faults are known, or none can be told apart.
-	// The zero value, as Rust's #[default].
+	// The zero value.
 	phaseClosed startupPhase = iota
 	// phaseOpen: audio is younger than the window: everything counted is
 	// startup.
@@ -124,7 +123,7 @@ type generationEpoch struct{ generation, epoch uint64 }
 // StartupWindow separates what the mixer counted while starting from what
 // came after. The shown counters start at the first reading of an engine
 // generation, so audio processed since then is a measured age, and a new
-// generation is a restart. The zero value is Rust's Default.
+// generation is a restart. The zero value has seen nothing yet.
 type StartupWindow struct {
 	// seen is the generation and diagnostics epoch the counters belong to.
 	seen *generationEpoch
@@ -132,7 +131,7 @@ type StartupWindow struct {
 	// clock; nil after a diagnostics reset, which hides the true start.
 	started *time.Time
 	phase   startupPhase
-	// unreadStarted is StartupPhase::Unread's `started`.
+	// unreadStarted is when audio started, while phase is phaseUnread.
 	unreadStarted time.Time
 	Faults        StartupFaults
 }
@@ -259,7 +258,7 @@ func (w *StartupWindow) SettledXruns(meter *core.Meter) (uint64, bool) {
 	return num.SatSub(p.Xruns, w.Faults.Xruns), true
 }
 
-// CloneTargetMeter is TargetMeter::clone: a copy whose performance block (the
+// CloneTargetMeter is a copy of t whose performance block (the
 // one part Settle changes through a pointer) is its own.
 func CloneTargetMeter(t *core.TargetMeter) core.TargetMeter {
 	c := *t
@@ -287,8 +286,8 @@ func CloneTargetMeter(t *core.TargetMeter) core.TargetMeter {
 	return c
 }
 
-// RecentWindow is how long RecentCount looks back (Rust's RECENT; the name
-// Recent is the struct's).
+// RecentWindow is how long RecentCount looks back (the name Recent is the
+// struct's).
 const RecentWindow = 60 * time.Second
 
 // Recent is a counter as telemetry shows it: how much it rose in the last
@@ -435,7 +434,8 @@ func MeterMatchesEngine(state *core.DeviceState, meter *core.Meter) bool {
 
 // ReceiveMeter is the desktop receive path. Invalid, stale-generation and
 // unrelated-revision telemetry must not alter the progress baseline or renew
-// engine freshness. engineSeen is Rust's `&mut Option<Instant>`.
+// engine freshness. engineSeen is when the engine was last seen working (nil
+// for never); new work from every active path sets it to now.
 func ReceiveMeter(state *core.DeviceState, meter *core.Meter, progress map[string]*Progress,
 	engineSeen **time.Time, now time.Time) bool {
 	for i := range meter.Targets {
@@ -526,10 +526,10 @@ type EngineErrorNotice struct {
 	RecoveryDetail string
 }
 
-// EngineErrorNoticeTitle is EngineErrorNotice::TITLE.
+// EngineErrorNoticeTitle is the title of every EngineErrorNotice.
 const EngineErrorNoticeTitle = "Audio processing error"
 
-// EngineError is engine_error: terminal failures outlive meter freshness.
+// EngineError: terminal failures outlive meter freshness.
 // Read the saved engine/routing state, never infer recovery from missing
 // meters or a stopped worker.
 func EngineError(state *core.DeviceState) (EngineErrorNotice, bool) {
@@ -680,7 +680,7 @@ type Progress struct {
 	workerFailed      bool
 }
 
-// NewProgress is Progress::new.
+// NewProgress is progress at frames, not yet seen advancing.
 func NewProgress(frames uint64) *Progress { return &Progress{frames: frames} }
 
 // Observe is a frame count read at now.

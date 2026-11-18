@@ -17,13 +17,13 @@ func repoFile(t *testing.T, parts ...string) []byte {
 	return data
 }
 
-// easyFixture is the Rust tests' `fixture`: fixtures/easyeffects/<name>.
+// easyFixture is fixtures/easyeffects/<name>.
 func easyFixture(t *testing.T, name string) string {
 	t.Helper()
 	return string(repoFile(t, "fixtures", "easyeffects", name))
 }
 
-// parse is serde_json::from_str::<Value> for test inputs.
+// parse reads a test input as a Value, with no size or node limit.
 func parse(t *testing.T, text string) Value {
 	t.Helper()
 	value, err := ParseJSONLimited(text, math.MaxInt, math.MaxInt)
@@ -33,7 +33,7 @@ func parse(t *testing.T, text string) Value {
 	return value
 }
 
-// toValue is serde_json::to_value.
+// toValue is ToValue, failing the test on error.
 func toValue(t *testing.T, v any) Value {
 	t.Helper()
 	value, err := ToValue(v)
@@ -43,7 +43,7 @@ func toValue(t *testing.T, v any) Value {
 	return value
 }
 
-// encode is serde_json::to_string.
+// encode is EncodeString, failing the test on error.
 func encode(t *testing.T, v any) string {
 	t.Helper()
 	text, err := EncodeString(v)
@@ -82,8 +82,7 @@ func check(t *testing.T, condition bool, context ...any) {
 	}
 }
 
-// imported is the Rust tests' `imported`: an EasyEffects import that must be
-// ready.
+// imported is an EasyEffects import that must be ready.
 func imported(t *testing.T, text string, stereo bool) EQSettings {
 	t.Helper()
 	result := must(ImportEasyEffects(text, ImportOptions{Stereo: stereo}))

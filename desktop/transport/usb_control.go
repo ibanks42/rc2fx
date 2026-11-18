@@ -37,8 +37,7 @@ type Session interface {
 }
 
 // usbLink is what every holder of one Usb shares. The serving goroutine
-// stops once the last holder lets go, as the Rust worker thread stops when
-// the last job sender is dropped.
+// stops once the last holder lets go.
 type usbLink struct {
 	jobs    chan job
 	stopped chan struct{}

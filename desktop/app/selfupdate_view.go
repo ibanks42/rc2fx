@@ -1,6 +1,6 @@
 package app
 
-// self_update.rs, the app's half: the state lives in app/selfupdate (with
+// Self-update, the drawing half: the state lives in app/selfupdate (with
 // Velopack behind app/selfupdate/vpkc); these start its background work and
 // show its results. Nothing happens on its own: the user downloads, then
 // chooses "Restart to update", which is held back while the installer has a
@@ -16,13 +16,12 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate/vpkc"
 )
 
-// newSelfUpdate is SelfUpdate::new: Velopack's manager when Velopack
+// newSelfUpdate is the app's updater: Velopack's manager when Velopack
 // installed this copy (and this build has it), else a copy that only links
 // to the release page.
 func newSelfUpdate() selfupdate.SelfUpdate { return selfupdate.New(vpkc.Open) }
 
-// startSelfUpdate is start_self_update: at startup, check a package an
-// earlier run downloaded.
+// startSelfUpdate checks, at startup, a package an earlier run downloaded.
 func (a *App) startSelfUpdate(cx *gk.Cx) {
 	if asset, ok := a.selfUpdate.TakePending(); ok {
 		a.checkUpdatePackage(cx, asset)

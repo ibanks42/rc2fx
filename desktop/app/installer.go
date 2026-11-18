@@ -1,6 +1,6 @@
 package app
 
-// installer/mod.rs: install or update RC2FX on a RØDECaster Pro II.
+// The installer page: install or update RC2FX on a RØDECaster Pro II.
 //
 // Requests run one at a time on a goroutine that owns the installer engine.
 // On Linux without root, switching to USB update mode and flashing run in a
@@ -8,9 +8,9 @@ package app
 // it. It starts only when the person presses the button that starts the run
 // (or tries it again), which then asks for the password.
 //
-// The plan itself is app/installflow (installer/flow.rs); the page's own
-// decisions (access, what the helper runs and holds) are in
-// installflow/page.go, and the signature's maths in installflow/signature.go.
+// The plan itself is app/installflow; the page's own decisions (access, what
+// the helper runs and holds) are in installflow/page.go, and the signature's
+// math in installflow/signature.go.
 
 import (
 	"bytes"
@@ -35,7 +35,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// installerOutcome is a finished request and its result (mod.rs Outcome).
+// installerOutcome is a finished request and its result.
 type installerOutcome struct {
 	request installer.Request
 	reply   installer.Reply
@@ -49,23 +49,22 @@ type helperSlot struct {
 	helper *helper.Helper
 }
 
-// cancellerSlot stops a download in the helper, from any goroutine.
-type cancellerSlot struct {
-	mu        sync.Mutex
-	canceller *helper.Canceller
+// cancelerSlot stops a download in the helper, from any goroutine.
+type cancelerSlot struct {
+	mu       sync.Mutex
+	canceler *helper.Canceler
 }
 
-func (c *cancellerSlot) set(canceller *helper.Canceller) {
+func (c *cancelerSlot) set(canceler *helper.Canceler) {
 	c.mu.Lock()
-	c.canceller = canceller
+	c.canceler = canceler
 	c.mu.Unlock()
 }
 
-// helperLink is the request goroutine's side of the privileged helper (mod.rs
-// HelperLink).
+// helperLink is the request goroutine's side of the privileged helper.
 type helperLink struct {
-	slot      *helperSlot
-	canceller *cancellerSlot
+	slot     *helperSlot
+	canceler *cancelerSlot
 	// lost reports a helper that ended.
 	lost func(err error)
 	// allowDuo is what the helper should be told about Duo flashing, and
@@ -92,7 +91,7 @@ func (l *helperLink) run(request *installer.Request, report func(installer.Progr
 	if err != nil && !h.Alive() {
 		l.slot.helper = nil
 		h.Close()
-		l.canceller.set(nil)
+		l.canceler.set(nil)
 		l.helperDuo = nil
 		l.selection.HelperCleared()
 		l.lost(errors.New("Administrator access ended. Grant it again to continue."))
@@ -118,7 +117,7 @@ func (l *helperLink) sync(h *helper.Helper, report func(installer.Progress)) err
 	return nil
 }
 
-// installerRunner runs the engine on its own goroutine (mod.rs Runner). Its
+// installerRunner runs the engine on its own goroutine. Its
 // results reach the UI thread through gk.Post into done and access, which
 // only the UI thread touches; poll drains them.
 type installerRunner struct {
@@ -131,7 +130,7 @@ type installerRunner struct {
 	progress   *installer.Progress
 	// cancel stops a download in progress, in this process or in the helper.
 	cancel *atomic.Bool
-	helper *cancellerSlot
+	helper *cancelerSlot
 	// privileged is the helper, once access is granted.
 	privileged *helperSlot
 	work       string
@@ -143,12 +142,12 @@ type installerRunner struct {
 	access []error
 }
 
-// startInstallerRunner is Runner::start.
+// startInstallerRunner starts the runner's goroutine.
 func startInstallerRunner(work string) *installerRunner {
 	r := &installerRunner{
 		wake:       make(chan struct{}, 1),
 		cancel:     new(atomic.Bool),
-		helper:     &cancellerSlot{},
+		helper:     &cancelerSlot{},
 		privileged: &helperSlot{},
 		work:       work,
 	}
@@ -167,9 +166,9 @@ func (r *installerRunner) serve() {
 	engine.Cancel = r.cancel
 	separate := helper.Needed()
 	link := &helperLink{
-		slot:      r.privileged,
-		canceller: r.helper,
-		lost:      r.reportAccess,
+		slot:     r.privileged,
+		canceler: r.helper,
+		lost:     r.reportAccess,
 	}
 	defer r.closeHelper()
 	for {
@@ -195,10 +194,10 @@ func (r *installerRunner) serve() {
 				link.selection.EngineAnswered(request, err == nil)
 			}
 			// The helper fetches and verifies its own copy now, in the same
-			// cancellable step, before the mixer is touched.
+			// cancelable step, before the mixer is touched.
 			if separate && installflow.IsSelection(request) && err == nil {
 				if r.cancel.Load() {
-					reply, err = installer.Reply{}, installer.Error(installer.Cancelled)
+					reply, err = installer.Reply{}, installer.Error(installer.Canceled)
 				} else if _, lerr := link.run(nil, report); lerr != nil {
 					reply, err = installer.Reply{}, lerr
 				}
@@ -230,7 +229,7 @@ func (r *installerRunner) next() (installer.Request, bool) {
 }
 
 // deliver hands an outcome to the UI thread; false once the page is closed,
-// which ends the goroutine (the Rust thread stopped when its receiver went).
+// which ends the goroutine.
 func (r *installerRunner) deliver(o installerOutcome) bool {
 	r.mu.Lock()
 	closed := r.closed
@@ -247,8 +246,7 @@ func (r *installerRunner) reportAccess(err error) {
 	gk.Post(func(cx *gk.Cx) { r.access = append(r.access, err) })
 }
 
-// closeHelper ends a helper still held when the goroutine stops (the Rust
-// helper was dropped with the thread).
+// closeHelper ends a helper still held when the goroutine stops.
 func (r *installerRunner) closeHelper() {
 	r.privileged.mu.Lock()
 	h := r.privileged.helper
@@ -275,12 +273,12 @@ func (r *installerRunner) send(request installer.Request) bool {
 	return true
 }
 
-// stopDownload is Runner::cancel: stops a download in progress, here or in
+// stopDownload stops a download in progress, here or in
 // the helper.
 func (r *installerRunner) stopDownload() {
 	r.cancel.Store(true)
 	r.helper.mu.Lock()
-	c := r.helper.canceller
+	c := r.helper.canceler
 	r.helper.mu.Unlock()
 	if c != nil {
 		c.Cancel()
@@ -320,7 +318,7 @@ func (r *installerRunner) grant() {
 				h.Close()
 				return
 			}
-			c := h.Canceller()
+			c := h.Canceler()
 			r.helper.set(&c)
 			r.privileged.mu.Lock()
 			r.privileged.helper = h
@@ -353,8 +351,8 @@ func (r *installerRunner) currentProgress() *installer.Progress {
 	return &p
 }
 
-// Installer is installer/mod.rs Installer: the guided task's model and the
-// runner that carries out its requests, with what the page itself keeps.
+// Installer is the guided task's model and the runner that carries out its
+// requests, with what the page itself keeps.
 type Installer struct {
 	model  *installflow.Model
 	runner *installerRunner
@@ -562,7 +560,7 @@ func (a *App) closeTask(cx *gk.Cx, overview bool) {
 }
 
 // discardInstaller drops the installer, keeping only which flash has
-// finished. (Rust's had no cx: dropping the entity freed its menus.)
+// finished. It takes cx to free the installer's menus.
 func (a *App) discardInstaller(cx *gk.Cx) {
 	if i := a.installer; i != nil {
 		a.installer = nil
@@ -585,8 +583,8 @@ func (a *App) installerEvent(cx *gk.Cx, event func(m *installflow.Model) *instal
 	a.notify(cx)
 }
 
-// installerSettingsRead is lib.rs's EventKind::Settings:
-// `self.installer_event(cx, |m| m.settings_read(result))`.
+// installerSettingsRead passes the mixer's settings read (or its error) to
+// the installer's model.
 func (a *App) installerSettingsRead(cx *gk.Cx, settings string, err error) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.SettingsRead(settings, err) })
 }
@@ -996,8 +994,8 @@ func (a *App) startInPlaceUpdate(cx *gk.Cx) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.StartInPlace(*offer, p) })
 }
 
-// inPlaceStart is the body of the mixer's `POST api/v1/update`, in the
-// Rust's key order.
+// inPlaceStart is the body of the mixer's `POST api/v1/update`, keys in the
+// order version, size, sha256, metadata.
 func inPlaceStart(bundle installer.InPlaceBundle) (json.RawMessage, error) {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -1164,8 +1162,7 @@ func mixerSourceKey(source installflow.MixerSource) string {
 
 // syncInstallerSelects brings Before you start's version menus in step with
 // the model: their items, what is chosen, and the menus themselves on first
-// use. (lib.rs ran it before each render; a gk view may not write kit
-// state, so poll runs it.)
+// use. A gk view may not write kit state, so poll runs it.
 func (a *App) syncInstallerSelects(cx *gk.Cx) {
 	i := a.installer
 	if i == nil {
@@ -1209,7 +1206,7 @@ func (a *App) syncInstallerSelects(cx *gk.Cx) {
 	}
 }
 
-// pickerItem is one entry of a version menu (mod.rs Choice): its line
+// pickerItem is one entry of a version menu: its line
 // in the menu, the shorter text the closed menu shows, and what choosing it
 // picks.
 type pickerItem[V any] struct {
@@ -1218,7 +1215,7 @@ type pickerItem[V any] struct {
 }
 
 // picker is a select menu whose items and choice come from the installer's
-// model (mod.rs Picker). The model stays the source of truth: choosing sends
+// model. The model stays the source of truth: choosing sends
 // the pick to it, and each sync brings the menu back in step with it. The
 // kit's items carry key(value) as their value.
 type picker[V any] struct {

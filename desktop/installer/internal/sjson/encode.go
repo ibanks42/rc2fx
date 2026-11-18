@@ -153,7 +153,7 @@ func appendString(out []byte, s string) []byte {
 		if c >= 0x80 {
 			r, size := utf8.DecodeRuneInString(s[i:])
 			if r == utf8.RuneError && size == 1 {
-				// Rust strings are UTF-8; write what it would have read.
+				// Invalid UTF-8 is written as U+FFFD.
 				out = append(out, "�"...)
 			} else {
 				out = append(out, s[i:i+size]...)

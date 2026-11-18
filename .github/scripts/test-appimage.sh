@@ -71,7 +71,7 @@ grep -q '<channel>linux</channel>' "$root/usr/bin/sq.version"
 test -x "$root/usr/bin/UpdateNix"
 file "$root/usr/bin/UpdateNix" | grep -q 'ELF 64-bit'
 
-say "licences and bundled libraries"
+say "licenses and bundled libraries"
 test -s "$root/usr/share/licenses/rc2fx/LICENSES.html"
 grep -qi 'MIT' "$root/usr/share/licenses/rc2fx/LICENSES.html"
 test -d "$root/usr/lib"

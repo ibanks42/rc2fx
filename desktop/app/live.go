@@ -88,7 +88,7 @@ func (a *App) askRestart(cx *gk.Cx) {
 		a.apply(cx)
 	}, func(cx *gk.Cx) {
 		if a.pending == nil && a.session.Saved != nil {
-			// Cancelled: back to what plays.
+			// Canceled: back to what plays.
 			running := a.live.Running(a.session.Saved.Config.Targets)
 			if core.LiveNeedsSave(running, a.session.Draft) {
 				a.session.Draft = core.CloneTargets(running)

@@ -1,7 +1,8 @@
 package app
 
-// dev_page.rs, the parsing half. `RC2FX_DEV_PAGE`: open the app on a chosen
-// page, for development and screenshots. Unset, the app opens as usual.
+// The parsing half of the dev page switch (dev_page.go navigates).
+// `RC2FX_DEV_PAGE`: open the app on a chosen page, for development and
+// screenshots. Unset, the app opens as usual.
 //
 // Values: `home`, `settings`, `diagnostics`, `installer`, `repair`, or
 // `channel:<name or id>[:<effect>]`, where the effect is one of `highpass`,
@@ -41,15 +42,16 @@ const (
 	DevPageFlow
 )
 
-// DevPage is dev_page.rs DevPage. Name and Effect are for DevPageChannel
-// (Name also for DevPageFlow); an empty Effect is None.
+// DevPage is the page RC2FX_DEV_PAGE asks for. Name and Effect are for
+// DevPageChannel (Name also for DevPageFlow); an empty Effect is none.
 type DevPage struct {
 	Kind   DevPageKind
 	Name   string
 	Effect core.Effect
 }
 
-// DevPageFromEnv is DevPage::from_env.
+// DevPageFromEnv is the page RC2FX_DEV_PAGE asks for; nil when it is unset
+// or does not parse (which is reported on stderr).
 func DevPageFromEnv() *DevPage {
 	value, ok := os.LookupEnv("RC2FX_DEV_PAGE")
 	if !ok {
@@ -69,10 +71,10 @@ func (p DevPage) needsMixer() bool {
 	return p.Kind == DevPageChannel || p.Kind == DevPageHome
 }
 
-// parseDevPage is dev_page.rs parse.
+// parseDevPage parses an RC2FX_DEV_PAGE value.
 func parseDevPage(value string) (DevPage, error) {
 	value = strings.TrimSpace(value)
-	// splitn(3, ':')
+	// At most three parts: page, channel, effect.
 	parts := strings.SplitN(value, ":", 3)
 	page := asciiLower(strings.TrimSpace(parts[0]))
 	var out DevPage
@@ -148,7 +150,7 @@ func findChannel(names [][2]string, wanted string) (int, bool) {
 	return 0, false
 }
 
-// asciiEqualFold is str::eq_ignore_ascii_case.
+// asciiEqualFold compares a and b ignoring the case of ASCII letters only.
 func asciiEqualFold(a, b string) bool {
 	if len(a) != len(b) {
 		return false
@@ -168,7 +170,7 @@ func asciiEqualFold(a, b string) bool {
 	return true
 }
 
-// asciiLower is str::to_ascii_lowercase.
+// asciiLower lowercases ASCII letters only.
 func asciiLower(s string) string {
 	b := []byte(s)
 	for i, c := range b {

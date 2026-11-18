@@ -179,8 +179,8 @@ func executableImages(system string, executable []byte) ([]image, error) {
 	return out, nil
 }
 
-// hostTarget is this machine's target triple, as rustc reported it for the
-// Rust build: the Go toolchain's GOOS and GOARCH.
+// hostTarget is this machine's target triple, in rustc's naming, from the
+// Go toolchain's GOOS and GOARCH.
 func hostTarget() (string, error) {
 	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
 	vendor := map[string]string{
@@ -227,7 +227,7 @@ func validateExecutable(root string, executable []byte, release bool) error {
 // checkGoBuild refuses an executable a release package must not ship: one
 // built with the mock mixer or a development tag, without Velopack (it
 // could not update itself and would open on Velopack's install hooks), or
-// with the placeholder licences.
+// with the placeholder licenses.
 func checkGoBuild(executable []byte) error {
 	info, err := buildinfo.Read(bytes.NewReader(executable))
 	if err != nil {
@@ -269,7 +269,7 @@ func collectWith(root, system string, executable []byte, licenseFiles []licenseF
 	return files, nil
 }
 
-// licenseFile is a licence file for the package's licenses folder.
+// licenseFile is a license file for the package's licenses folder.
 type licenseFile struct {
 	name string
 	data []byte

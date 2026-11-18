@@ -28,7 +28,7 @@ type HID struct {
 	Release uint16 `json:"release"`
 }
 
-// ControlProbe recognises an application's own HID control reports, which
+// ControlProbe recognizes an application's own HID control reports, which
 // fill HID.Control. Descriptor reads a HID report descriptor (Linux and
 // macOS); OutputID and InputID are the report IDs Windows looks for.
 type ControlProbe struct {

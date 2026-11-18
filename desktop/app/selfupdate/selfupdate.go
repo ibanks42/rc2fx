@@ -2,7 +2,7 @@
 // installed it: the Windows Setup.exe, the macOS Setup.pkg, their portable
 // zips, or the Linux AppImage. Other copies (development builds, builds from
 // source) only link to the release page. It is the non-UI half of
-// the Rust app's self_update.rs; the buttons are in package app
+// self-update; the buttons are in package app
 // (selfupdate_view.go) and Velopack's C library is behind Manager (package
 // selfupdate/vpkc, built with the `velopack` tag).
 //
@@ -79,27 +79,27 @@ type State struct {
 	HasAsset bool
 }
 
-// Idle is State::Idle.
+// Idle is no update under way.
 func Idle() State { return State{Kind: StateIdle} }
 
-// Downloading is State::Downloading.
+// Downloading is a download percent of the way through.
 func Downloading(percent uint8) State { return State{Kind: StateDownloading, Percent: percent} }
 
-// VerifyingState is State::Verifying.
+// VerifyingState is a downloaded version being checked.
 func VerifyingState(version string) State { return State{Kind: StateVerifying, Version: version} }
 
-// Ready is State::Ready with nothing to apply, as a preview shows it.
+// Ready is a ready update with nothing to apply, as a preview shows it.
 func Ready(version string) State { return State{Kind: StateReady, Version: version} }
 
-// ReadyToApply is State::Ready for asset, checked and applied on restart.
+// ReadyToApply is asset ready, checked and applied on restart.
 func ReadyToApply(asset Asset) State {
 	return State{Kind: StateReady, Version: asset.Version, Asset: asset, HasAsset: true}
 }
 
-// Failed is State::Failed.
+// Failed is an update that failed with message.
 func Failed(message string) State { return State{Kind: StateFailed, Message: message} }
 
-// FailedKept is State::Failed with asset kept to check again, because no
+// FailedKept is a failure with asset kept to check again, because no
 // check could be made.
 func FailedKept(message string, asset Asset) State {
 	return State{Kind: StateFailed, Message: message, Asset: asset, HasAsset: true}
@@ -238,8 +238,7 @@ func (c *Checks) Take(asset Asset) (result *installer.VerifyError, found bool) {
 	return checked.Err, true
 }
 
-// goos is the platform the name rules below follow (cfg!(windows) and
-// cfg!(target_os = "macos") in the Rust).
+// goos is the platform the name rules below follow.
 var goos = runtime.GOOS
 
 // PackageName is the file name Velopack stores fileName under in the
@@ -355,7 +354,9 @@ type Outcome struct {
 	State State
 }
 
-// CheckedOutcome is self_update.rs checked.
+// CheckedOutcome is where a downloaded package's check leaves the update:
+// ready to apply when it passed, failed but kept when the check could not
+// be made, and failed when the package was rejected.
 func CheckedOutcome(asset Asset, result *installer.VerifyError) Outcome {
 	switch {
 	case result == nil:
@@ -366,8 +367,8 @@ func CheckedOutcome(asset Asset, result *installer.VerifyError) Outcome {
 	return Outcome{State: Failed(result.Message)}
 }
 
-// WorkDirectory is the installer's folder for downloads and backups
-// (work_directory in the Rust app's installer/mod.rs), "" when unknown.
+// WorkDirectory is the installer's folder for downloads and backups, ""
+// when unknown.
 // The feed checks packages there, so this package has its own copy.
 func WorkDirectory() string {
 	if path, ok := os.LookupEnv("RC2FX_INSTALLER_WORK"); ok {

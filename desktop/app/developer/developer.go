@@ -1,4 +1,4 @@
-// Package developer is developer.rs without drawing: what the app knows
+// Package developer is Developer mode without drawing: what the app knows
 // about SSH access to the connected mixer (managed over USB 1), how it says
 // it, and the login command. Developer mode only shows these controls.
 // Hiding them changes nothing on the mixer; only Disable removes RC2FX's key.
@@ -22,8 +22,7 @@ import (
 const AddressPlaceholder = "MIXER_IP"
 
 // Reading is one answer to an SSH read: Err set is a failed read; Status nil
-// with Err nil is mixer software too old to manage SSH (Rust's
-// Result<Option<SshStatus>, String>).
+// with Err nil is mixer software too old to manage SSH.
 type Reading struct {
 	Status *core.SSHStatus
 	Err    error
@@ -66,7 +65,7 @@ func (c Change) Busy() bool { return c != ChangeNone }
 func (c Change) Sent() bool { return c == ChangeEnabling || c == ChangeDisabling }
 
 // SSH is what the mixer last said about SSH, for the current connection
-// only. The zero value is Rust's Default.
+// only. The zero value is nothing read and no change under way.
 type SSH struct {
 	// Status is nil while not read yet.
 	Status *Reading
@@ -95,7 +94,7 @@ type SSH struct {
 // Clear forgets everything: a disconnect, a (re)connection, a lost or
 // restored stream, or Developer mode changing.
 func (s *SSH) Clear() {
-	epoch := s.Epoch + 1 // wrapping, as u64::wrapping_add
+	epoch := s.Epoch + 1 // wraps at 2^64
 	nextID := s.nextID
 	*s = SSH{}
 	s.Epoch = epoch

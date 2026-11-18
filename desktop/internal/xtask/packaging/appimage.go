@@ -94,7 +94,7 @@ func writeMember(path string, data []byte, mode os.FileMode) error {
 
 func licenseName(name string) (string, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || filepath.Base(name) != name {
-		return "", task.Errorf("invalid licence file name %s", task.Debug(name))
+		return "", task.Errorf("invalid license file name %s", task.Debug(name))
 	}
 	return name, nil
 }
@@ -108,9 +108,9 @@ func asset(path string) ([]byte, error) {
 }
 
 // stage creates the application payload before dependency deployment. The
-// only repository files here are the icon, desktop entry and licence
+// only repository files here are the icon, desktop entry and license
 // reports.
-func stage(appdir string, executable []byte, licenceFiles []licenseFile) error {
+func stage(appdir string, executable []byte, licenseFiles []licenseFile) error {
 	if _, err := os.Lstat(appdir); err == nil {
 		if err := os.RemoveAll(appdir); err != nil {
 			return task.Errorf("%s: %s", appdir, task.IOError(err))
@@ -137,7 +137,7 @@ func stage(appdir string, executable []byte, licenceFiles []licenseFile) error {
 	if err := writeMember(filepath.Join(appdir, "usr/share/icons/hicolor/scalable/apps/rc2fx.svg"), icon, 0o644); err != nil {
 		return err
 	}
-	for _, l := range licenceFiles {
+	for _, l := range licenseFiles {
 		name, err := licenseName(l.name)
 		if err != nil {
 			return err
@@ -361,7 +361,7 @@ func hostHasLibrary(library string) bool {
 }
 
 // coveredLibrary: a library the AppImage may carry because its notice is in
-// the licence document.
+// the license document.
 func coveredLibrary(name string) bool {
 	for _, prefix := range []string{
 		"libxkbcommon.so",
@@ -429,7 +429,7 @@ func deploy(appdir, arch string, t tools) error {
 // packageAppImage stages and deploys the AppDir, then has vpk package it:
 // the AppImage, its update package and feed, returned as published. The
 // AppDir is removed afterwards; out keeps only published files.
-func packageAppImage(root, out, name, version string, executable []byte, licenceFiles []licenseFile,
+func packageAppImage(root, out, name, version string, executable []byte, licenseFiles []licenseFile,
 	libraries []library, arch string, t tools) ([]string, error) {
 	runtimeNotices, err := readNotices(root)
 	if err != nil {
@@ -454,7 +454,7 @@ func packageAppImage(root, out, name, version string, executable []byte, licence
 	}
 	defer os.RemoveAll(work)
 	appdir := filepath.Join(work, "rc2fx.AppDir")
-	if err := stage(appdir, executable, licenceFiles); err != nil {
+	if err := stage(appdir, executable, licenseFiles); err != nil {
 		return nil, err
 	}
 	if err := stageLibraries(appdir, libraries); err != nil {
@@ -509,7 +509,8 @@ func packageAppImage(root, out, name, version string, executable []byte, licence
 	return published, nil
 }
 
-// extension is Path::extension of a path's file name.
+// extension is what follows the last dot of path's file name; "" for none
+// or a name that starts with its only dot.
 func extension(path string) string {
 	name := filepath.Base(path)
 	at := strings.LastIndexByte(name, '.')

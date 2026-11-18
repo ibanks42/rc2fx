@@ -689,7 +689,7 @@ func TestCancelDuringDownload(t *testing.T) {
 		return nil
 	}
 	_, err := h.run()
-	if !errors.Is(err, ErrCancelled) || !strings.Contains(err.Error(), "Nothing was changed") {
+	if !errors.Is(err, ErrCanceled) || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Fatalf("error %v", err)
 	}
 	if h.commands() != "" {
@@ -707,7 +707,7 @@ func TestCancelDuringWait(t *testing.T) {
 		return nil
 	}
 	_, err := h.run()
-	if !errors.Is(err, ErrCancelled) {
+	if !errors.Is(err, ErrCanceled) {
 		t.Fatalf("error %v", err)
 	}
 	if h.commands() != "MU" || h.mixer.update {

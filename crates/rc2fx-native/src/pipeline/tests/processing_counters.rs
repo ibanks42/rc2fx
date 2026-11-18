@@ -200,7 +200,7 @@ fn live_counters_track_each_processed_block_once() {
     );
     assert_eq!((live.faults, live.skipped), (0, 0));
     // Startup is visible as a fallback delivery, not as a fault or a skip. The
-    // slot it selects is still zero-initialised, so this is a slot selection,
+    // slot it selects is still zero-initialized, so this is a slot selection,
     // not evidence about what the mixer captured.
     assert_eq!(
         live.raw_frame, 1,
@@ -350,7 +350,7 @@ fn the_audit_report_exposes_live_processing_counters() {
     assert!(note.contains("NOT the dspFaults error counter"), "{note}");
     assert!(note.contains("audibility not established"), "{note}");
     assert!(note.contains("qualification failure"), "{note}");
-    assert!(note.contains("zero-initialised startup slot"), "{note}");
+    assert!(note.contains("zero-initialized startup slot"), "{note}");
     // The labels must not claim that fallback deliveries are harmless.
     let json = super::super::processing_counters().to_string();
     for claim in [

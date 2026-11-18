@@ -1,6 +1,6 @@
 package app
 
-// events.rs: the Diagnostic events window: the mixer's recent audio events,
+// The Diagnostic events window: the mixer's recent audio events,
 // newest first, in a window of its own. The main window owns the connection
 // and the event log; this window only shows the log and asks for a reset.
 // The log itself, its groups and the wording of each row are in
@@ -19,14 +19,15 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// EventLog is events.rs EventLog, shared with the events window through a
+// EventLog is the mixer's recent events (telemetry.EventLog), shared with
+// the events window through a
 // gk.Model (App.eventLog).
 type EventLog = telemetry.EventLog
 
-// newEventLog is EventLog::new.
+// newEventLog is an empty event log (telemetry.NewEventLog).
 func newEventLog() EventLog { return telemetry.NewEventLog() }
 
-// kindColor is events.rs kind_color: the colour of a kind's chip.
+// kindColor is the color of a kind's chip.
 func kindColor(kind core.DiagnosticsKind) uint32 {
 	switch telemetry.KindToneOf(kind) {
 	case telemetry.KindToneDanger:
@@ -227,7 +228,7 @@ func (v *eventsView) render(cx *gk.Cx) gk.Element {
 		Child(page.Child(v.table(&log, mono)))
 }
 
-// openEventsWindow is events.rs open: opens the events window, or brings it
+// openEventsWindow opens the events window, or brings it
 // forward when it is open already. closed runs once the window has closed.
 func openEventsWindow(cx *gk.Cx, existing *gk.Window, log *gk.Model[EventLog], app *App,
 	closed func(cx *gk.Cx)) *gk.Window {

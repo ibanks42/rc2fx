@@ -38,9 +38,9 @@ and outputs, then any processed channel that isn't on a fader.
 
 ## Install, Update, Remove, Repair and the storage fix
 
-Installing, updating and removing RC2FX, repairing the mixer and fixing
+Installing, updating, and removing RC2FX, repairing the mixer, and fixing
 RØDE's update bug are guided tasks: a page that stays in front of the window
-from **Before you start** until **Done**, **Stop**, **Close** or **Not now**,
+from **Before you start** until **Done**, **Stop**, **Close**, or **Not now**,
 whether or not the mixer is connected meanwhile. The steps are listed down
 the left; the footer says whether the mixer may be unplugged. After a failure
 the page says what the app sees now, and **Try again** starts from the step
@@ -91,7 +91,7 @@ After an install, **Open Mic N** opens that channel's noise suppression with
 one hint line above its switch; once dismissed or done it never shows again.
 
 In builds with the `rc2fxdev` tag, `RC2FX_DEV_PAGE=flow:<state>` opens one
-state of these flows from made-up data, with no mixer, helper or network:
+state of these flows from made-up data, with no mixer, helper, or network:
 the states are listed in `flow_fixtures_on.go` (for example `flow:B4`).
 `RC2FX_DEV_AUTOFLASH_FIX=on|off` sets whether the unattended flash
 (`RC2FX_DEV_AUTOFLASH`) runs the storage fix first; unset, it runs only where
@@ -118,7 +118,7 @@ Processing is opt-in per channel, and every stage of a new channel starts off.
 - High-pass filter.
 - Noise suppression (DeepFilterNet3) with a wet/dry blend and a voice gate.
   The gate has one strength slider (0% is off), or separate threshold,
-  reduction, attack, hold and release controls under **Custom**.
+  reduction, attack, hold, and release controls under **Custom**.
 - EQ with up to 32 bands, linked or independent stereo, and a draggable
   response curve.
 - Compressor.
@@ -169,12 +169,12 @@ about first. **Apply** saves it; **Undo the change** puts the channel back to
 what plays now.
 
 Each save carries the settings revision. If the mixer's settings changed
-somewhere else, the app reads them, keeps your edits on top and saves them. If
+somewhere else, the app reads them, keeps your edits on top, and saves them. If
 the edits no longer fit (they name channels the mixer no longer has), a notice
 offers **Reload mixer settings**. Closing the app before edits are saved asks
 first.
 
-The app also opens and saves complete settings files, and saves, loads and
+The app also opens and saves complete settings files, and saves, loads, and
 deletes presets stored on the mixer.
 
 ## Settings
@@ -196,7 +196,7 @@ On the Diagnostics page:
 - **Open events** opens a separate window that reads the mixer's event list
   every 500 ms while it is open.
 - **Show telemetry** (remembered between runs) adds the engine's state and
-  timing, plus levels, delay, counters and warnings for every processed path,
+  timing, plus levels, delay, counters, and warnings for every processed path,
   with **Show events…** and **Reset diagnostics…**.
 - **Export diagnostics…** saves the mixer's diagnostics to a file.
 

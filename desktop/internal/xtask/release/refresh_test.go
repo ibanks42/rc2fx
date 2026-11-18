@@ -29,8 +29,7 @@ func TestRenewalPreservesTargetsAndRejectsWrongKeysStaleVersionsAndTampering(t *
 	for _, role := range allRoles {
 		all = append(all, signers[role])
 	}
-	// The editor's output with expired discovery metadata, as the Rust test
-	// made it with tough's RepositoryEditor.
+	// A signed release whose snapshot and timestamp have expired.
 	old, err := tufsign.SignRelease(tufsign.Release{
 		RootFile: rootFile, Root: root,
 		TargetsVersion: 1, TargetsExpires: mustTime(t, "2098-01-01T00:00:00Z"),

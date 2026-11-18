@@ -1100,7 +1100,7 @@ mod tests {
         );
         fs::remove_file(path).unwrap();
     }
-    /// Today's behaviour for a library that answers above this build's
+    /// Today's behavior for a library that answers above this build's
     /// version: the connection fails instead of speaking it.
     #[test]
     fn a_library_newer_than_this_daemon_fails_the_connection() {

@@ -2,16 +2,16 @@ package packaging
 
 // `app`: build the desktop app for this machine and run it, for `just app`
 // and the recipes beside it (cargo run/build -p rc2fx-app before). Unlike
-// `package` it needs neither Velopack nor the licence notices: a build
+// `package` it needs neither Velopack nor the license notices: a build
 // without the `velopack` tag does not update itself, and the checkout's
 // placeholder notices are compiled in.
 //
-//	(default)    development build (-tags rc2fxdebug,rc2fxdev, Rust's debug
-//	             build) in target/debug
+//	(default)    development build (-tags rc2fxdebug,rc2fxdev) in
+//	             target/debug
 //	--release    release build (-trimpath -ldflags="-s -w") in target/release
 //	--mock       the simulated mixer (-tags mockmixer); a development build
 //	             only, stripped so it can go to another computer, in
-//	             target/mock (the Rust `mock` profile)
+//	             target/mock
 //	--embedded   stage the mixer payload from target/mixer and compile it in
 //	             (-tags embedded)
 //	--build-only build, do not run
@@ -158,8 +158,7 @@ func appLinkFlags(goos, libDir, ldflags string) (string, string) {
 	case "darwin":
 		ldflags += "-extldflags=-Wl,-dead_strip"
 	case "windows":
-		// No console window (main.rs's windows_subsystem = "windows"), and
-		// the 8 MiB main stack build.rs reserved: GPUI's layout of the full
+		// No console window, and an 8 MiB main stack: GPUI's layout of the full
 		// EQ editor exceeds Windows' default 1 MiB. LLVM's linker, because
 		// MinGW's GNU ld keeps every function that has unwind data, which is
 		// all of them; -force:multipleres lets package gk's manifest replace

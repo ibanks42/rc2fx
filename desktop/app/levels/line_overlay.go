@@ -1,12 +1,11 @@
 package levels
 
-// line_overlay.rs's decisions, kept from the Rust overlay after its redesign
-// (docs/developer/desktop-go.md): in Go each animated indicator is its
-// own view, redrawn alone, so the overlay's slots, claims, latches and
-// content masks are gone. What stays is when a frame is worth drawing
+// The animated indicators' decisions: each animated indicator is its own
+// view, redrawn alone, so there are no shared slots, claims, latches or
+// content masks. What is decided here is when a frame is worth drawing
 // (Slots.Unchanged) and how often to tick.
 //
-// The Rust overlay's reasoning, which still holds: presenting a frame costs a
+// The reasoning: presenting a frame costs a
 // weak GPU far more than anything drawn in it, so a tick that would show
 // nothing new draws no frame (Slots.Unchanged): a silent mixer costs almost
 // nothing. The tick aims at 60 Hz, or 30 Hz while the window is not focused;
@@ -112,8 +111,7 @@ func same(claim Claim, drawn, level *float32) bool {
 // StillUnchanged is Unchanged for one indicator drawn still (reduced motion,
 // a page without animation, RC2FX_ANIMATED_LINE=0): its shape does not move
 // with time, so it changes only when its level moves it by a pixel or more.
-// The Rust app redrew still indicators with every app render; in Go they
-// are views of their own, checked on the app's poll instead.
+// Still indicators are views of their own, checked on the app's poll.
 func StillUnchanged(claim Claim, drawn, level *float32) bool {
 	if claim.Shape.IsBar {
 		return same(claim, drawn, level)
@@ -130,7 +128,7 @@ func StillUnchanged(claim Claim, drawn, level *float32) bool {
 // Tick is how often the shared ticker runs: Frame, UnfocusedFrame while the
 // window is not active, and run false when it should stop: nothing on screen
 // can animate (no fresh reading, reduced motion, animation off). Window
-// visibility is not readable in Go, so a minimised window keeps ticking at
+// visibility is not readable in Go, so a minimized window keeps ticking at
 // UnfocusedFrame.
 func Tick(animating int, reducedMotion, active bool) (period time.Duration, run bool) {
 	if animating == 0 || reducedMotion || !Enabled() {

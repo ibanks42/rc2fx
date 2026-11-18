@@ -1,6 +1,6 @@
 package app
 
-// editor.rs: the selected stage's editor: its heading and switch, a value
+// The selected stage's editor: its heading and switch, a value
 // and slider per parameter, the noise suppression page and what the mixer
 // reports beside them. The parameters and figures are in edit/parameter.go.
 
@@ -16,10 +16,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// Parameter is editor.rs Parameter (edit.Parameter).
+// Parameter is a control an effect's editor shows (edit.Parameter).
 type Parameter = edit.Parameter
 
-// Reported is editor.rs Reported: what the mixer reports for the selected
+// Reported is what the mixer reports for the selected
 // path (reportedLookahead in app.go makes one).
 type Reported struct {
 	latencySamples *uint32
@@ -57,8 +57,8 @@ func (a *App) rebuildEditors(cx *gk.Cx) {
 	a.draggingBand = false
 	a.editingValue = nil
 	a.channel = model.ActiveChannel(a.target(), a.channel)
-	// Rust drops the old entities with the vectors; here they are given back,
-	// but only once the view has been described without them (retire).
+	// The old editors' views are given back, but only once the view has
+	// been described without them (retire).
 	for _, editor := range a.editors {
 		a.retire(editor.input, editor.slider)
 	}
@@ -553,7 +553,7 @@ func (a *App) stageFacts(effect core.Effect) (gk.DivEl, bool) {
 }
 
 // sliderTrack is the slider's track, its gradient fill up to the value and
-// a tick at the default: editor.rs paint_track's quads as divs, under the
+// a tick at the default, as divs under the
 // toolkit slider, whose own track is clear. The control is 24 px tall, so
 // the 4 px bars sit 10 px down and the 12 px tick 6 px down.
 func sliderTrack(fraction, def float32, off bool) gk.Element {

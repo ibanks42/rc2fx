@@ -1,7 +1,7 @@
 package edit
 
-// inputs.rs's show cache, selection.rs's changed paths and restart.rs's
-// restart candidate.
+// The show inputs cache, the selection's changed paths and the restart
+// candidate.
 
 import (
 	"fmt"
@@ -15,8 +15,8 @@ import (
 // nowhere: the RØDECaster mixes it internally.
 const SmartPadsSource = 11
 
-// InventoryCache is the part of inputs.rs ShowInputs that the show
-// refreshes: the last confirmed inventory, the last refresh's failure, and
+// InventoryCache is the part of the show inputs that a show refresh
+// updates: the last confirmed inventory, the last refresh's failure, and
 // whether a refresh is out.
 type InventoryCache struct {
 	Inventory *core.StockInventory

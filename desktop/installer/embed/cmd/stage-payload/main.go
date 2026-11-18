@@ -2,7 +2,7 @@
 // a release folder and writes the envelope the `embedded` build tag compiles
 // in, at installer/embed/payload/rc2fx-payload.bin.
 //
-// It makes the checks the Rust build script made: every file's checksum, the
+// It checks every file's checksum, the
 // SHA256SUMS manifest, the ARM64 ELFs, the catalog and the single
 // `rc2fx_build=` line. A missing or corrupt payload is an error, so a desktop
 // build never silently loses its installer. RC2FX_RELEASE_BUILD=1 applies the

@@ -1363,7 +1363,7 @@ mod tests {
         assert_eq!(control.status().unwrap().published, 1);
     }
     #[test]
-    fn cancelling_staged_settings_keeps_audio_live_and_bounds_candidate_storage() {
+    fn canceling_staged_settings_keeps_audio_live_and_bounds_candidate_storage() {
         let target = target();
         let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
         let staged = control.prepare(&target, 2).unwrap();
@@ -1796,7 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_provider_is_joined_and_does_not_replace_current_runtime() {
+    fn canceled_provider_is_joined_and_does_not_replace_current_runtime() {
         let mut target = Target::new("mic", "Mic", TargetKind::Mic, 1);
         let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
         target.suppression.enabled = true;

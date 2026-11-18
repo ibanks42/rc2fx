@@ -87,7 +87,7 @@ struct Supervisor {
     /// Held open so that the exit steps need no file: a new launch deletes the
     /// run directory once this process has had a few seconds to leave it.
     script: Option<File>,
-    /// Only wakes `poll` early; `SIGNALLED` is what says a signal arrived.
+    /// Only wakes `poll` early; `SIGNALED` is what says a signal arrived.
     signals: Option<OwnedFd>,
     /// Without one (no kernel support) exits are seen on the next second.
     mixer_fd: Option<Pidfd>,
@@ -153,8 +153,8 @@ impl Supervisor {
                 self.record_mixer_exit();
                 return;
             }
-            if SIGNALLED.load(Ordering::Relaxed) {
-                self.end_mixer("Supervisor signalled; restoring stock audio", true);
+            if SIGNALED.load(Ordering::Relaxed) {
+                self.end_mixer("Supervisor signaled; restoring stock audio", true);
                 return;
             }
             if stop.exists() {
@@ -618,11 +618,11 @@ fn keep_open(fd: RawFd) -> io::Result<()> {
     }
 }
 
-static SIGNALLED: AtomicBool = AtomicBool::new(false);
+static SIGNALED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_WRITER: AtomicI32 = AtomicI32::new(-1);
 
 extern "C" fn on_signal(_: libc::c_int) {
-    SIGNALLED.store(true, Ordering::Relaxed);
+    SIGNALED.store(true, Ordering::Relaxed);
     let byte = 1u8;
     let writer = SIGNAL_WRITER.load(Ordering::Relaxed);
     unsafe { libc::write(writer, (&raw const byte).cast(), 1) };

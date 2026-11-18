@@ -282,7 +282,7 @@ func (a *App) fixRunningPage(i *Installer, t *guidedTask) {
 	}
 	t.body = body
 	stop := "Stop"
-	if f.Cancelling {
+	if f.Canceling {
 		stop = "Stopping…"
 	}
 	t.secondary = []gk.ButtonEl{taskButton("task-stop", stop, false).Disabled(!f.CanStop()).

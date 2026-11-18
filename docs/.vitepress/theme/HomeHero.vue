@@ -39,7 +39,7 @@ const mine = ref(null)
 const version = ref(null)
 
 // The user agent first: it is what every browser sends and what overrides
-// change. navigator.platform is only a fallback for an unrecognised agent.
+// change. navigator.platform is only a fallback for an unrecognized agent.
 function detect() {
   const ua = navigator.userAgent.toLowerCase()
   if (/android|iphone|ipad|ipod|mobile/.test(ua)) return null

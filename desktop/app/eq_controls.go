@@ -1,6 +1,6 @@
 package app
 
-// eq_controls.rs: the EQ page: its heading (stereo sides, Import / Export, the
+// The EQ page: its heading (stereo sides, Import / Export, the
 // switch), the graph, the band table with the overall gains, and the
 // selected band's popover over the graph. The band helpers that do not draw
 // are in edit/eq.go.
@@ -506,7 +506,7 @@ func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 		})
 }
 
-// bandNumber is a band's number on its colour.
+// bandNumber is a band's number on its color.
 func bandNumber(index int, size float32) gk.DivEl {
 	return gk.HFlex(s.FlexShrink0, s.RoundedFull, s.ItemsCenter, s.JustifyCenter, s.FontSemibold).Size(px(size)).
 		Bg(rgb(bandColor(index))).TextSize(px(size * 0.48)).TextColor(rgb(0x0b0d14)).
@@ -514,7 +514,7 @@ func bandNumber(index int, size float32) gk.DivEl {
 }
 
 // bandBadge is bandNumber for a band that may be off: a hollow ring in its
-// colour when off.
+// color when off.
 func bandBadge(index int, size float32, on bool) gk.DivEl {
 	if on {
 		return bandNumber(index, size)

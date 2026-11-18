@@ -14,11 +14,11 @@ There are two milestones, tested to different degrees:
 
 1. The first version, a read-only panel with a touchscreen **Close** button,
    was confirmed on hardware by the user.
-2. The current version (launcher, in-process modal and settings) builds and
+2. The current version (launcher, in-process modal, and settings) builds and
    passes the host integration tests. A bounded hardware trial on 2026-10-29
    reached a real launcher page-flip acknowledgement and then restored stock.
    The user was away during that trial, so visual placement, touch, open,
-   Close, reopen and live setting changes are still unverified.
+   Close, reopen, and live setting changes are still unverified.
 
 ## Controls
 
@@ -53,7 +53,7 @@ cargo test --locked -p rc2fx-device --features native-pipeline ui_control --lib
 
 They need Zig and the cached `.deps/stock-sysroot` headers. The build writes
 to `target/device-ui/`: the AArch64 `librc2fx_ui.so`, the read-only
-`rc2fx-ui-status` tool, the launcher script and their hashes.
+`rc2fx-ui-status` tool, the launcher script, and their hashes.
 
 The Rust tests run the real C client against a real local `rc2fxd` controller
 socket. They cover preset apply, rejection of a stale revision, and a delayed
@@ -88,14 +88,14 @@ Before starting, the script checks:
 - that no GUI injection is already running.
 
 It then stages files under `/run` only, starts a detached restore watchdog,
-pauses the original display supervisor, stops the stock GUI and relaunches it
+pauses the original display supervisor, stops the stock GUI, and relaunches it
 with this module. The relaunched GUI keeps the original environment, working
-directory, umask, CPU affinity, cpuset and nice value.
+directory, umask, CPU affinity, cpuset, and nice value.
 
-When the trial expires, the module faults, the user stops it or the owner
+When the trial expires, the module faults, the user stops it, or the owner
 goes away, the script stops the injected GUI and its helpers and resumes the
 original launcher. A kept session renews a watchdog lease. Boot settings,
-update files and the vendor executable are left alone. A reboot or a later
+update files, and the vendor executable are left alone. A reboot or a later
 audio restart ends the development session. Packaging this in the firmware
 installer has not been done.
 
@@ -111,12 +111,12 @@ do not treat the development launcher as a reliable recovery mechanism.
 accessible only to its owner. It is served by the same coordinator as USB
 control, and the standard mixer supervisor passes the argument. The listener
 adds no TCP port, second store, direct native-transaction client, vendor
-SyncTree write or settings-file edit. The versioned compact wire format is
+SyncTree write, or settings-file edit. The versioned compact wire format is
 documented in `crates/rc2fx-device/src/ui_control.rs`, and both ends limit
 packet and client counts.
 
 A private C worker thread does all socket I/O away from rendering and input.
-It sends the revision, generation and absolute intended value from the screen
+It sends the revision, generation, and absolute intended value from the screen
 the user touched. A reply can report that a change is saved but not yet
 applied. Lost replies to changes are not replayed. Only read-only snapshots
 are resumed. If the socket is unavailable, the launcher and **Close** still
@@ -145,7 +145,7 @@ succeed without V4L2 error flags before presentation metadata is accepted, so
 a partial stock repaint cannot contain RC2FX pixels.
 
 Tagged DRM flips publish immutable scenes through retained atomic tickets.
-Content epochs cover paging, IDs, selection and control eligibility as well
+Content epochs cover paging, IDs, selection, and control eligibility as well
 as whether the panel is open. The original callback selection and user data
 are preserved.
 
@@ -161,7 +161,7 @@ second input reader. Handing input over requires:
 - a quiet contact snapshot,
 - a final zero-readiness check.
 
-Actions with several contacts or a replaced contact are cancelled. Any failure
+Actions with several contacts or a replaced contact are canceled. Any failure
 revokes settings commands and quarantines input straight away.
 
 ### Frame pacing
@@ -192,6 +192,6 @@ That trial was neither a visual or touch test nor evidence of zero underruns.
 The user was at work and put off further device testing.
 
 Still to test, in an attended trial: modal handoff, visual placement, idle
-redraw behaviour, setting changes on the device, and CPU and audio impact.
+redraw behavior, setting changes on the device, and CPU and audio impact.
 The addresses used here are documented in the
 [pinned frame and input map](ui-1.7.7-map.md).

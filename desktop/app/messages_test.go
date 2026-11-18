@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// lib.rs message_tests.
+// Which messages are progress steps and which are outcomes.
 func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
 	for _, step := range []string{
 		"Saving settings to mixer…",

@@ -114,8 +114,8 @@ func createKeys(destination, checkout string) error {
 	return writePrivate(filepath.Join(destination, "COMPLETE"), []byte("Root signatures verified. Follow SETUP.md before use.\n"))
 }
 
-// splitDestination is Rust's Path::parent and Path::file_name for an
-// absolute path: trailing separators and `.` components do not count, and
+// splitDestination is an absolute path's parent folder and file name:
+// trailing separators and `.` components do not count, and
 // a path ending in `..` (or the root) has no file name.
 func splitDestination(path string) (parent, name string, ok bool) {
 	for {
@@ -144,8 +144,8 @@ func splitDestination(path string) (parent, name string, ok bool) {
 	return parent, name, true
 }
 
-// canonicalize is fs::canonicalize: absolute, every link resolved, and the
-// path must exist.
+// canonicalize makes path absolute with every link resolved; the path must
+// exist.
 func canonicalize(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -161,7 +161,7 @@ func canonicalize(path string) (string, error) {
 	return resolved, nil
 }
 
-// within is Path::starts_with: base is a whole-component prefix of path.
+// within is whether base is a whole-component prefix of path.
 func within(path, base string) bool {
 	rel, err := filepath.Rel(base, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
@@ -170,7 +170,7 @@ func within(path, base string) bool {
 // insideGit reports whether path or any directory above it has `.git`.
 func insideGit(path string) bool {
 	for {
-		// Path::exists: anything there, following links.
+		// Anything there, following links.
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			return true
 		}

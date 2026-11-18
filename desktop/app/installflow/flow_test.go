@@ -595,7 +595,7 @@ func TestEachModeCardShowsTheReleaseItWouldUse(t *testing.T) {
 	}
 }
 
-func TestCancellingWorksUntilUSBModeIsRequested(t *testing.T) {
+func TestCancelingWorksUntilUSBModeIsRequested(t *testing.T) {
 	m := setUp(status(gv1(false), absent(), false, false))
 	sel := m.Start()
 	prepare := selected(t, m, sel)
@@ -608,12 +608,12 @@ func TestCancellingWorksUntilUSBModeIsRequested(t *testing.T) {
 	if !m.Cancel() {
 		t.Fatal("the download is asked to stop")
 	}
-	if !m.Cancelling() || m.CanCancel() {
-		t.Fatal("not cancelling")
+	if !m.Canceling() || m.CanCancel() {
+		t.Fatal("not canceling")
 	}
-	refresh := m.Finish(*prepare, installer.Reply{}, errors.New(installer.Cancelled))
+	refresh := m.Finish(*prepare, installer.Reply{}, errors.New(installer.Canceled))
 	if m.Run != nil {
-		t.Fatal("cancelled, not failed")
+		t.Fatal("canceled, not failed")
 	}
 	if !isRequest(refresh, installer.RequestProbe) {
 		t.Fatalf("request %#v", refresh)
@@ -1003,7 +1003,7 @@ func TestStockHasItsOwnReleaseAndAFailedCheckCanBeRepeated(t *testing.T) {
 	}
 }
 
-func TestACancelledFirmwareCheckIsNotReportedAsAFailure(t *testing.T) {
+func TestACanceledFirmwareCheckIsNotReportedAsAFailure(t *testing.T) {
 	m := NewModel()
 	m.queue = append(m.queue, queued{background: true})
 	m.Finish(installer.Request{Kind: installer.RequestReleases}, installer.Reply{}, errors.New(installer.Canceled))
@@ -1416,10 +1416,10 @@ func TestABuildWithoutAPayloadOffersNoBundledCopy(t *testing.T) {
 	}
 }
 
-func TestAFailedOrCancelledCheckCanBeRepeatedAndNeverRepeatsItself(t *testing.T) {
+func TestAFailedOrCanceledCheckCanBeRepeatedAndNeverRepeatsItself(t *testing.T) {
 	m := idle()
-	m.Offers = Offers{Kind: OffersFailed, Error: installer.Cancelled}
-	if note, ok := m.MixerNote(); !ok || !strings.Contains(note, "cancelled") {
+	m.Offers = Offers{Kind: OffersFailed, Error: installer.Canceled}
+	if note, ok := m.MixerNote(); !ok || !strings.Contains(note, "canceled") {
 		t.Fatalf("note %q", note)
 	}
 	if m.checkMixers() != nil {
@@ -1739,7 +1739,7 @@ func TestStoppingAfterAFailureReviewsWhatIsPublishedNow(t *testing.T) {
 	}
 }
 
-func TestASelectionCanBeCancelledAndTouchesNothing(t *testing.T) {
+func TestASelectionCanBeCanceledAndTouchesNothing(t *testing.T) {
 	m := idle()
 	sel := m.Start()
 	if sel == nil {
@@ -1751,7 +1751,7 @@ func TestASelectionCanBeCancelledAndTouchesNothing(t *testing.T) {
 	if !m.Cancel() {
 		t.Fatal("the download is asked to stop")
 	}
-	refresh := m.Finish(*sel, installer.Reply{}, errors.New(installer.Cancelled))
+	refresh := m.Finish(*sel, installer.Reply{}, errors.New(installer.Canceled))
 	if m.Run != nil {
 		t.Fatal("a run")
 	}

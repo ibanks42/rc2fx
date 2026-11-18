@@ -410,7 +410,7 @@ fn max_abs_bits_orders_magnitudes_and_puts_every_non_finite_value_on_top() {
     assert!(!within(&[f64::NEG_INFINITY]));
     assert!(!within(&[f64::NAN]));
     assert!(!within(&[-f64::NAN]));
-    // Signalling NaNs, either sign.
+    // Signaling NaNs, either sign.
     assert!(!within(&[f64::from_bits(0x7ff0_0000_0000_0001)]));
     assert!(!within(&[f64::from_bits(0xfff0_0000_0000_0001)]));
     assert!(!within(&[f64::MAX]));

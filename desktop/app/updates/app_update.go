@@ -1,5 +1,5 @@
-// Package updates is the non-drawing half of the Rust app's
-// app_update.rs and versions_dialog.rs: what the last update check found,
+// Package updates is the non-drawing half of the update check and the
+// Versions section: what the last update check found,
 // which links may open, and the untrusted release notes made safe to
 // render. Nothing here imports gpuikit.dev.
 //
@@ -18,8 +18,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// RodeNotesURL is RØDE's published notes for the Pro II and the Duo
-// (versions_dialog.rs RODE_NOTES_URL).
+// RodeNotesURL is RØDE's published notes for the Pro II and the Duo.
 const RodeNotesURL = "https://update.rode.com/notes/rcp2/"
 
 // check is the last result, and whether the user asked for it.
@@ -28,10 +27,10 @@ type check struct {
 	manual   bool
 }
 
-// AppUpdate is app_update.rs AppUpdate. The zero value has checked
+// AppUpdate is what the update checks found. The zero value has checked
 // nothing.
 type AppUpdate struct {
-	// Checking: a check is running (the Rust's `checking` field).
+	// Checking: a check is running.
 	Checking bool
 	// last is the last result. A failed check at startup stays quiet; one
 	// the user asked for says what went wrong.
@@ -46,8 +45,8 @@ type AppUpdate struct {
 	rode []installer.Release
 }
 
-// Finish records a finished check of the app (the Rust's
-// `last = Some((result, manual))` with `checking = false`).
+// Finish records a finished check of the app: its result and whether it
+// was asked for, and that no check is under way.
 func (u *AppUpdate) Finish(result installer.UpdateSnapshot, manual bool) {
 	u.Checking = false
 	u.last = &check{snapshot: result, manual: manual}

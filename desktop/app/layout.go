@@ -3,7 +3,7 @@ package app
 // This file does not import gk.
 
 // The sizes pages share, so the app stays compact in one place. The default
-// window has to fit a 1440×900 screen with its menu bar and dock. (ui.rs)
+// window has to fit a 1440×900 screen with its menu bar and dock.
 var (
 	Window    = [2]float32{1280, 760}
 	WindowMin = [2]float32{900, 580}
@@ -53,5 +53,5 @@ const (
 )
 
 // appID is the window's identity: the desktop entry's StartupWMClass and Icon
-// (desktop/packaging/rc2fx.desktop). ui.rs window_options.
+// (desktop/packaging/rc2fx.desktop); windowIdentity applies it.
 const appID = "rc2fx"

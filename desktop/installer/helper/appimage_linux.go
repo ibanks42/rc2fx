@@ -44,7 +44,7 @@ func canonicalize(path string) (string, error) {
 	return filepath.EvalSymlinks(abs)
 }
 
-// within is Rust's component-wise Path::starts_with.
+// within is whether path is root or inside it, by whole components.
 func within(path, root string) bool {
 	return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/")
 }

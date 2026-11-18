@@ -1,6 +1,6 @@
 package app
 
-// developer.rs: Developer mode: SSH access to the connected mixer, managed
+// Developer mode: SSH access to the connected mixer, managed
 // over USB 1. Developer mode only shows these controls. Hiding them changes
 // nothing on the mixer; only Disable removes RC2FX's key. Nothing here
 // flashes. What the row says and the login command are in app/developer.
@@ -19,11 +19,11 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// SSH is developer.rs Ssh: what the mixer last said about SSH, for the
+// SSH is what the mixer last said about SSH, for the
 // current connection only.
 type SSH struct{ developer.SSH }
 
-// clear is Ssh::clear.
+// clear forgets everything the mixer said about SSH (developer.SSH.Clear).
 func (s *SSH) clear() { s.Clear() }
 
 // addressInput is the Mixer address field. Only real edits redraw the page,
@@ -208,12 +208,12 @@ func (a *App) confirmDisableSSH(cx *gk.Cx) {
 }
 
 // highlightedCommand is the login command with the address placeholder
-// picked out in amber (StyledText::with_highlights).
+// picked out in amber.
 //
 // TODO(B1 styled text): gk has no StyledText with highlight ranges
 // (gpui's StyledText::with_highlights is not in the Go API). Until then the
 // command is one plain run of text, the placeholder included, in the box's
-// own colour; the layout and wrapping are the same.
+// own color; the layout and wrapping are the same.
 func highlightedCommand(command string) gk.Element {
 	return txt(command)
 }
@@ -303,7 +303,7 @@ func (a *App) sshRows(cx *gk.Cx) gk.DivEl {
 	if button != nil {
 		controls = controls.Child(button)
 	}
-	r := row(labelled("SSH access", summary.Line), controls)
+	r := row(labeled("SSH access", summary.Line), controls)
 	if open {
 		r = r.Style(s.BorderB0).Pb(px(12))
 	}
@@ -323,7 +323,7 @@ func (a *App) sshRows(cx *gk.Cx) gk.DivEl {
 
 func (a *App) developerSection(cx *gk.Cx) gk.DivEl {
 	rows := gk.Div().Child(row(
-		labelled("Developer mode",
+		labeled("Developer mode",
 			"Shows developer controls for the connected mixer. Turning it off only hides them: it does not remove access."),
 		gk.Switch("developer-mode").Checked(a.developerMode).
 			OnClick(func(cx *gk.Cx, on bool) { a.setDeveloperMode(cx, on) })))
@@ -331,7 +331,7 @@ func (a *App) developerSection(cx *gk.Cx) gk.DivEl {
 		if a.developerVisible() {
 			rows = rows.Child(a.sshRows(cx))
 		} else {
-			rows = rows.Child(row(labelled("SSH access", "Connect the mixer over USB 1 to manage SSH."), gk.Div()))
+			rows = rows.Child(row(labeled("SSH access", "Connect the mixer over USB 1 to manage SSH."), gk.Div()))
 		}
 	}
 	return settingsSection("Developer", gk.Div(), rows)

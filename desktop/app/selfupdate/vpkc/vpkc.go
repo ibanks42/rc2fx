@@ -3,12 +3,12 @@
 // Package vpkc is Velopack's C library (velopack_libc 1.3.39-g8d2844f, the
 // version vpk packs with: .github/scripts/setup-vpk.sh) for package
 // selfupdate: the startup hooks, and an UpdateManager over selfupdate's
-// SignedFeed through Velopack's custom update source (audit 4.3).
+// SignedFeed through Velopack's custom update source.
 //
 // Built only with the `velopack` tag, after desktop/scripts/fetch-velopack.sh
 // has put the library in desktop/third_party/velopack. Without the tag
-// (vpkc_none.go) a build cannot update itself and runs no hooks, like a
-// development build of the Rust app; release packaging must use the tag.
+// (vpkc_none.go) a build cannot update itself and runs no hooks; release
+// packaging must use the tag.
 //
 // Linking: the static library on Linux and macOS; on Windows the MSVC DLL,
 // shipped as velopack_libc.dll beside rc2fx.exe, through a MinGW import
@@ -176,7 +176,7 @@ func (m *manager) WaitExitThenApplyUpdates(asset selfupdate.Asset, silent, resta
 	return nil
 }
 
-// RunHooks is main.rs's VelopackApp: first thing in main, it handles
+// RunHooks is Velopack's VelopackApp startup: first thing in main, it handles
 // --veloapp-install|updated|obsolete|uninstall <version> (runs the hook,
 // then exits the process), sets the Windows AppUserModelID and deletes old
 // packages. Updates apply only when the user chooses "Restart to update",

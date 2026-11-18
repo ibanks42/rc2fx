@@ -173,7 +173,7 @@ static int below(int n) { return (int)(next() % (uint32_t)n); }
 
 /* One paint: the renderer draws inside the part of each rectangle that is in
  * the source, and the module gets the list as the GUI holds it. */
-static void paint(int32_t (*list)[4], int count, uint32_t colour) {
+static void paint(int32_t (*list)[4], int count, uint32_t color) {
     for (int r = 0; r < count; r++) {
         long long x0 = list[r][0], y0 = list[r][1], x1 = x0 + list[r][2], y1 = y0 + list[r][3];
         if (x0 < 0) x0 = 0;
@@ -182,7 +182,7 @@ static void paint(int32_t (*list)[4], int count, uint32_t colour) {
         if (y1 > SRC_H) y1 = SRC_H;
         for (long long y = y0; y < y1; y++)
             for (long long x = x0; x < x1; x++)
-                source[y * SRC_W + x] = colour ^ (uint32_t)(y * SRC_W + x) * 0x01000193u;
+                source[y * SRC_W + x] = color ^ (uint32_t)(y * SRC_W + x) * 0x01000193u;
     }
     atomic_fetch_add(&paints, 1);
     partial_paint(&list[0][0], count);
@@ -203,7 +203,7 @@ static int meters(void) {
     return n; /* some hang over the right and bottom edges */
 }
 static int paint_some(int frame) {
-    uint32_t colour = 0x9e3779b9u * (uint32_t)(frame + 1);
+    uint32_t color = 0x9e3779b9u * (uint32_t)(frame + 1);
     int kind = below(24), n = 0;
     switch (kind) {
     case 0: /* nothing painted */
@@ -248,8 +248,8 @@ static int paint_some(int frame) {
             list[n][0] = 500 + below(60), list[n][1] = 300 + below(40);
             list[n][2] = 1 + below(6), list[n][3] = 1 + below(6);
         }
-        paint(list, 25, colour);
-        paint(list + 25, 15, colour ^ 0x5a5a5a5au);
+        paint(list, 25, color);
+        paint(list + 25, 15, color ^ 0x5a5a5a5au);
         return kind;
     case 8: /* a rejected paint: the renderer may have drawn anywhere */
         for (int i = 0; i < 50; i++) {
@@ -272,12 +272,12 @@ static int paint_some(int frame) {
     default: /* meter updates, the common case; sometimes two paints */
         n = meters();
         if (below(4) == 0) {
-            paint(list, n, colour ^ 0x33333333u);
+            paint(list, n, color ^ 0x33333333u);
             n = meters();
         }
         break;
     }
-    paint(list, n, colour);
+    paint(list, n, color);
     return kind;
 }
 

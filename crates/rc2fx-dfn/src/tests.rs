@@ -1,7 +1,7 @@
 use super::*;
 
 /// One second of speech-like harmonic bursts, clicks and a low noise floor,
-/// quantised to 16 bits (the reference was rendered from this as a WAV).
+/// quantized to 16 bits (the reference was rendered from this as a WAV).
 fn signal() -> Vec<f32> {
     let mut seed = 0x2545_f491u32;
     let mut noise = move || {
@@ -179,7 +179,7 @@ fn golden_runs(open: bool) -> Vec<(String, Vec<f32>)> {
 }
 
 /// `golden_runs(false)` digests of the build before the glue loops were
-/// vectorised and df_convp kept running sums (2026-11-09), in `golden_runs`
+/// vectorized and df_convp kept running sums (2026-11-09), in `golden_runs`
 /// order: on x86-64 (Fedora 44's libm), and on AArch64 under
 /// `qemu-aarch64 -cpu cortex-a53` with the mixer's glibc 2.35. The model
 /// calls libm's `expf`, `log10f` and `sin`, so another libm can legitimately

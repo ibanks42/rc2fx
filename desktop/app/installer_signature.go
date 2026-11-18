@@ -1,9 +1,8 @@
 package app
 
-// installer/signature.rs: the decorative signature line of the first
-// screen. Its maths (which picture, the line's shape) is in
-// installflow/signature.go; this draws it as a gk.Plot
-// at the pixel positions the Rust's canvas paint computed.
+// The decorative signature line of the first screen. Its math (which
+// picture, the line's shape) is in installflow/signature.go; this draws it
+// as a gk.Plot.
 
 import (
 	"math"
@@ -14,14 +13,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 )
 
-// signatureSize is the signature's slot as last laid out. The Rust's canvas
-// read its bounds while painting; a gk view cannot, so the slot reports its
+// signatureSize is the signature's slot as last laid out. A gk view cannot
+// read its bounds while painting, so the slot reports its
 // size after each frame (OnChildrenPrepainted) and the next frame draws at
 // it. There is one signature view in the app (App.onboardingSignature), so
 // one size. UI thread only.
 var signatureSize gk.GpuiSize
 
-// signatureScene is signature::scene: the connection screen's signature,
+// signatureScene is the connection screen's signature,
 // ready once a mixer is found.
 func signatureScene(found bool, phase float32) gk.Element {
 	state := installflow.SignatureState{Kind: installflow.SignatureLooking}
@@ -52,8 +51,8 @@ func signatureStroke(path [][2]float32, width float32, start, end uint32, alpha 
 		gk.NewLinearColorStop(rgbAlpha(end, alpha), 1)))
 }
 
-// signatureParts is signature.rs paint's canvas, for a slot of width ×
-// height pixels: the grey line, then the filled part in the gradient.
+// signatureParts is the signature's plot, for a slot of width ×
+// height pixels: the gray line, then the filled part in the gradient.
 func signatureParts(state installflow.SignatureState, phase, width, height float32) []gk.PlotPart {
 	if width < 4 || height < 2 || math.IsNaN(float64(phase)) || math.IsInf(float64(phase), 0) {
 		return nil
@@ -103,18 +102,18 @@ func signatureParts(state installflow.SignatureState, phase, width, height float
 		}
 		return points[:n]
 	}
-	grey := float32(0.45)
+	gray := float32(0.45)
 	if state.Kind == installflow.SignatureLooking {
-		grey = 0.25
+		gray = 0.25
 	}
-	greyColor := uint32(0xf4efe6)
+	grayColor := uint32(0xf4efe6)
 	if failed {
-		greyColor = Warn
+		grayColor = Warn
 	}
 	var parts []gk.PlotPart
-	for _, pass := range [][2]float32{{8. / 2, grey * 0.25}, {2.5 / 2, grey}} {
+	for _, pass := range [][2]float32{{8. / 2, gray * 0.25}, {2.5 / 2, gray}} {
 		if line := stroke(1); len(line) > 0 {
-			parts = append(parts, gk.NewPlotLine(line, pass[0], rgbAlpha(greyColor, pass[1])))
+			parts = append(parts, gk.NewPlotLine(line, pass[0], rgbAlpha(grayColor, pass[1])))
 		}
 	}
 	if fill != nil && *fill > 0 {

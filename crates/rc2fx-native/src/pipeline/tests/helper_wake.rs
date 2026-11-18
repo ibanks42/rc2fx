@@ -11,12 +11,12 @@ use std::time::{Duration, Instant};
 // `Helper::queue` (and `Drop`) with those of `await_frame` and the frame.
 // ---------------------------------------------------------------------------
 
-/// Frames the modelled callback hands off.
+/// Frames the modeled callback hands off.
 const MODEL_FRAMES: u8 = 3;
-/// When the modelled callbacks started, for `must_wake`.
+/// When the modeled callbacks started, for `must_wake`.
 const MODEL_BEGUN: u64 = 1_000_000_000;
 
-/// What the modelled helper publishes in `wake_at`.
+/// What the modeled helper publishes in `wake_at`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Sleep {
     Awake,

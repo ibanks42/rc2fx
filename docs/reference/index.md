@@ -1,10 +1,10 @@
 # Technical reference
 
-These pages cover protocols, file formats, firmware support and the crates.
+These pages cover protocols, file formats, firmware support, and the crates.
 Read [Architecture](../developer/architecture.md) first.
 
 - [Noise suppression internals](suppression.md): the models, delay figures,
-  the worker thread, Chat Mix Out and the voice gate.
+  the worker thread, Chat Mix Out, and the voice gate.
 - [Installer internals](installer.md): the files the installer adds to the
   firmware image and the steps it takes to flash it.
 - [USB control](usb-control.md): how RC2FX shares RØDE's HID interface, the
@@ -23,7 +23,7 @@ Read [Architecture](../developer/architecture.md) first.
 - [Virtual USB paths](usb-paths.md): buffer identities for the virtual USB
   inputs and USB sends, how they were qualified offline, and what hardware
   testing remains.
-- [Hardware](hardware.md): the mixer's processor, memory and quirks.
+- [Hardware](hardware.md): the mixer's processor, memory, and quirks.
 
 Each crate chapter is that crate's `README.md`, written for people changing
 the crate. The unfinished on-screen panel is documented in

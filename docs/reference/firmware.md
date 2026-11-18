@@ -13,14 +13,14 @@ unsupported until it has been reviewed.
 | RØDECaster Pro II | 1.7.6 | Supported. RC2FX was first built on this release. |
 | RØDECaster Duo | 1.7.6, 1.7.7 | [Experimental](duo.md). Untested on hardware. Opt-in only. |
 
-The screen module ([screen conversion](../user/settings-and-diagnostics.md#screen-conversion))
+The screen module ([rc2fx-gui](../crates/rc2fx-gui.md))
 is pinned separately, to the Pro II 1.7.7 `rc_gui_juce`
 (`aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca`). With
 any other screen program, including the one in 1.7.6, the screen runs stock.
 
 ## The catalog
 
-`config/firmware-profiles.json` is read by the installer, the launcher and
+`config/firmware-profiles.json` is read by the installer, the launcher, and
 the native library. Each supported release pins:
 
 - the SHA-256 of the official archive (RØDE's MD5 is checked too);
@@ -36,7 +36,7 @@ the native library. Each supported release pins:
 
 `rc2fx-firmware` validates the file. Each ABI name selects code that is
 already compiled into RC2FX. The JSON does not describe structures for RC2FX
-to interpret. Unknown ABI names, misaligned addresses, duplicate identities
+to interpret. Unknown ABI names, misaligned addresses, duplicate identities,
 and missing signatures are rejected.
 
 ### Where the catalog is checked
@@ -73,7 +73,7 @@ experimental opt-in marker present. A Duo always gets the Duo route layout. See 
   them. All matched.
 - The job's closure layout and lifetime were checked by running RØDE's ARM64
   code under emulation.
-- The launcher, updater, USB gadget script, libc, libstdc++ and libjack are
+- The launcher, updater, USB gadget script, libc, libstdc++, and libjack are
   byte-identical to 1.7.6.
 
 The result is
@@ -97,10 +97,10 @@ hardware test.
 
 1. Download the image from RØDE
    (`https://update.rode.com/rcp2/VERSION/os.tar.gz` for the Pro II,
-   `rcp2-duo/` for the Duo) and record the archive, engine and launcher
+   `rcp2-duo/` for the Duo) and record the archive, engine, and launcher
    hashes.
 2. Find the callback and job functions. Check the port and source mappings,
-   the frame format and the closure layout. If nothing changed, add the new
+   the frame format, and the closure layout. If nothing changed, add the new
    addresses and their original 16-byte signatures to the catalog. If
    something changed, write and test a new ABI implementation first.
 3. Add the profile only after that review. The installer offers a release

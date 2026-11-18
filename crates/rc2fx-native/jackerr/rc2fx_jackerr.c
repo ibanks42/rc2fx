@@ -3,7 +3,7 @@
  * The mixer's libjackserver and jack_alsa.so report failures through
  * jack_error(), whose vendor body is a no-op. This library defines
  * jack_error() earlier in jackd's lookup scope and records the calls it
- * recognises (the server's late-client checks and the ALSA driver's xrun and
+ * recognizes (the server's late-client checks and the ALSA driver's xrun and
  * poll messages) into a fixed ring in a shared RAM file. Nothing is printed
  * or forwarded (the original does nothing), and errno is left as it was.
  *
@@ -164,7 +164,7 @@ static void record(enum kind kind, int64_t value1, int64_t value2, const char *s
 #define FORMAT_POLL_INTERRUPT "ALSA: poll interrupt"
 
 /* The vendor's jack_error() is a no-op; this one records instead, reading
- * arguments only for a recognised format and only with exactly its types. */
+ * arguments only for a recognized format and only with exactly its types. */
 EXPORT void jack_error(const char *format, ...) {
     if (!ring_header) return;
     int saved = errno;

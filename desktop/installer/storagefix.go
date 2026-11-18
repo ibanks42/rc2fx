@@ -80,8 +80,8 @@ func (e *Engine) storageFix(final, debug bool) (*StorageFix, error) {
 		// update mode: after that the fix runs to its end, which leaves the
 		// mixer on RØDE's (or the prepared) firmware.
 		Cancel: func() error {
-			if !touched && e.cancelled() {
-				return Error(Cancelled)
+			if !touched && e.canceled() {
+				return Error(Canceled)
 			}
 			return nil
 		},
@@ -141,8 +141,8 @@ func (e *Engine) storageFix(final, debug bool) (*StorageFix, error) {
 		out.Reason = res.Marker.Reason
 	}
 	if err != nil {
-		if errors.Is(err, autofix.ErrCancelled) && !touched {
-			return nil, Error(Cancelled)
+		if errors.Is(err, autofix.ErrCanceled) && !touched {
+			return nil, Error(Canceled)
 		}
 		var refusal *autofix.Refusal
 		out.Error, out.Refused = err.Error(), errors.As(err, &refusal)

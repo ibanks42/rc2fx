@@ -1,5 +1,5 @@
-// Command uitest runs the app's offscreen UI tests (audit section 6.3): one
-// mode per run, chosen by RC2FX_UITEST, under the diag library. It prints
+// Command uitest runs the app's offscreen UI tests: one mode per run, chosen
+// by RC2FX_UITEST, under the diag library. It prints
 // `PASS name` or `FAIL name: why` and exits 0 or 1. uitest_test.go builds
 // and runs it.
 package main

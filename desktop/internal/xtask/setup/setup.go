@@ -197,7 +197,7 @@ func BuildMixer() error {
 			return task.Errorf("%s: %s", name, task.IOError(err))
 		}
 		if source.path != "" {
-			// fs::copy's permissions, whatever the umask.
+			// The source's permissions, whatever the umask.
 			if err := os.Chmod(file, mode); err != nil {
 				return task.Errorf("%s: %s", name, task.IOError(err))
 			}

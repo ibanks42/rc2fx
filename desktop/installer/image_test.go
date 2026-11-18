@@ -151,8 +151,8 @@ func TestUTCFormatsRFC3339(t *testing.T) {
 	}
 }
 
-// appendData is Rust's tar Builder::append_data for a test header: the
-// path goes into the header, or into a GNU long-name record before it.
+// appendData adds a file under a test header: the path goes into the
+// header, or into a GNU long-name record before it.
 func appendData(t *testing.T, w *tarWriter, base *tarHeader, path string, data []byte) {
 	t.Helper()
 	h := *base

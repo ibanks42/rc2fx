@@ -1,4 +1,4 @@
-# Licences accepted for RC2FX's release license reports (see THIRD_PARTY_NOTICES.md).
+# Licenses accepted for RC2FX's release license reports (see THIRD_PARTY_NOTICES.md).
 # Release targets: the mixer's ARM Linux. cargo-about covers only the mixer's
 # Rust; the desktop app is Go.
 targets = [

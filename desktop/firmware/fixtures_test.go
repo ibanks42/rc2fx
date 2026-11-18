@@ -182,8 +182,8 @@ func TestSharedSelectFixtures(t *testing.T) {
 	}
 }
 
-// selectAny is the mixer's Rust Catalog::select: the one profile for a mixer
-// executable, for a model that needs no opt-in. The desktop never selects a
+// selectAny is the one profile for a mixer executable, chosen by its hash
+// alone, for a model that needs no opt-in. The desktop never selects a
 // runtime; this stays here so the select fixtures keep checking the Go
 // VerifyImage that InspectForModel uses.
 func (c *Catalog) selectAny(image []byte) (*Profile, error) {

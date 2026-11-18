@@ -92,12 +92,12 @@ A read-only check on a Pro II running 1.7.7, on 2026-11-04, found:
 
 - `JUCEJack:in_1` through `in_36` and `out_1` through `out_46` all
   registered.
-- Game, Music, Virtual A and Virtual B connected to the USB input ports in the
+- Game, Music, Virtual A, and Virtual B connected to the USB input ports in the
   table.
 - Main and Chat sends connected. Secondary's two mixer ports registered but
   unconnected, with USB 2 absent.
 
-The check changed no ports, show settings, processing settings or running
+The check changed no ports, show settings, processing settings, or running
 audio, and no updated runtime was installed for it. It confirms the current
 JACK graph. Audio and latency on the new paths have not been tested, other
 USB modes and reconnect sequences still need checking on hardware, and no
@@ -112,12 +112,12 @@ have not been established for every USB mode.
 
 ## Saved settings and limits
 
-The Pro II's saved catalog already had the six targets, so their existing
-effect settings are kept. Schema 8 adds the four virtual targets, with
-default settings, to a complete older Duo catalog and to its saved presets.
-The migration does not select the new paths, change existing chains, or copy
-Pro II presets onto a Duo. Schema 8 needs the desktop app and the mixer
-runtime to be updated together.
+Both models' default catalogs include the targets in the table above, with
+default settings and not selected. The Duo's target IDs are distinct from
+the Pro II's, so a Pro II preset never moves a chain onto a Duo. Saved
+settings must be in the current schema: settings from an older schema are
+rejected, not migrated (see [Settings](api.md#settings)), so the desktop app
+and the mixer runtime must be updated together.
 
 The native plan and the controller share a limit of 32 paths (`MAX_PATHS`),
 which covers the 25-path Pro II catalog. This is a structural limit. Whether

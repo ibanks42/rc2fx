@@ -281,7 +281,8 @@ func Load() (*Mixer, error) {
 	return &Mixer{host: user + "@" + ip, options: options, program: "ssh"}, nil
 }
 
-// lines is str::lines.
+// lines splits at '\n', drops a '\r' before it, and gives no empty line
+// after a final '\n'.
 func lines(text string) []string {
 	var out []string
 	for text != "" {
@@ -474,8 +475,8 @@ func (a *Armed) captureScript(script string) ([]byte, error) {
 
 func (a *Armed) script(script string) error { return a.ssh("/bin/sh -s", []byte(script)) }
 
-// ustar appends one regular file to a tar archive as Rust's tar crate wrote
-// it with Header::new_ustar: mode, size, time 0, no owner.
+// ustar appends one regular file to a tar archive with a ustar header:
+// mode, size, time 0, no owner.
 func ustar(archive *tar.Writer, name string, data []byte, mode int64) error {
 	header := &tar.Header{
 		Typeflag: tar.TypeReg,
@@ -619,7 +620,7 @@ func api(method, path string, body *string) error {
 	return task.Errorf("the controller answered %d", reply.Status)
 }
 
-// prettyBody is serde_json::to_string_pretty of a reply body.
+// prettyBody is a reply body indented two spaces; "null" when empty.
 func prettyBody(raw []byte) (string, error) {
 	if len(raw) == 0 {
 		return "null", nil
@@ -703,7 +704,7 @@ func apiStream(input *bufio.Reader, output flushWriter, request func(control.Req
 	}
 }
 
-// blank is every byte ASCII whitespace (u8::is_ascii_whitespace).
+// blank is every byte ASCII whitespace.
 func blank(line []byte) bool {
 	for _, b := range line {
 		switch b {

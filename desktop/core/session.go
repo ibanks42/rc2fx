@@ -9,7 +9,7 @@ import (
 
 const maxUint64 = math.MaxUint64
 
-// optU64 is an Option<u64>.
+// optU64 is a uint64 that may be absent (ok false).
 type optU64 struct {
 	value uint64
 	ok    bool
@@ -434,7 +434,7 @@ func (d DeviceState) Clone() DeviceState {
 	return d
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (d DeviceState) Equal(other DeviceState) bool { return deepEqual(d, other) }
 
 func (m TargetMeter) Validate() error {
@@ -505,7 +505,7 @@ type Session struct {
 	observedEngineGeneration optU64
 }
 
-// DefaultSession is Session::default(): no mixer read yet, the default
+// DefaultSession is a session with no mixer read yet, the default
 // catalog as the draft.
 func DefaultSession() Session {
 	defaults := DefaultConfig()

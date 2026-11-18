@@ -31,7 +31,7 @@ coefficients.
 | Field | Values |
 | --- | --- |
 | `bands` | 0–32 bands |
-| `id` | Lowercase letters, digits and hyphens, up to 48 characters, unique within the channel |
+| `id` | Lowercase letters, digits, and hyphens, up to 48 characters, unique within the channel |
 | `type` | `off`, `bell`, `low-shelf`, `high-shelf`, `low-pass`, `high-pass`, `notch` |
 | `mode` | `apo-dr` (Equalizer APO's model) or `rlc-bt` |
 | `frequency` | 10–24000 Hz |
@@ -80,7 +80,7 @@ always the originals, so a gain change recomputes the converted Q
 correctly. Reference formulas and independent coefficient vectors are in
 `fixtures/easyeffects/`.
 
-Adding, removing or reordering bands does not restart the other effects or
+Adding, removing, or reordering bands does not restart the other effects or
 noise suppression. Bands that remain after an edit keep their filter state.
 
 ## EasyEffects presets

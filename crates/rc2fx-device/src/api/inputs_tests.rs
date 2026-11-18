@@ -253,7 +253,7 @@ async fn show_reads_never_change_selected_mic4_or_its_effects() {
 }
 
 #[tokio::test]
-async fn cancelled_or_timed_out_blocking_read_keeps_its_permit_until_it_finishes() {
+async fn canceled_or_timed_out_blocking_read_keeps_its_permit_until_it_finishes() {
     for cancel in [false, true] {
         let permits = Arc::new(Semaphore::new(1));
         let permit = permits.clone().acquire_owned().await.unwrap();

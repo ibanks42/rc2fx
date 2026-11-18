@@ -19,8 +19,8 @@ meter tolerances were changed for it. The probe is kept in
 `.local/rust-all-sources-arm64.zs5gaIGp/build/checks/arm-scalar-probe.log`.
 
 The test still refuses to build for other architectures until they are
-qualified. Windows behaviour tests are separate. The ARM result comes from
-emulation, so it shows functional agreement only. Device timing, models and
+qualified. Windows behavior tests are separate. The ARM result comes from
+emulation, so it shows functional agreement only. Device timing, models, and
 recovery aren't covered here.
 
 ## Files
@@ -30,7 +30,7 @@ recovery aren't covered here.
 | `mono.bin` | 181760 | `20c4a1cd67b1249e9fa79e7a2fefe269df21541bede7632c95312926ae0a39ef` |
 | `stereo.bin` | 354880 | `cd356d1f66e8a83b07d21c3e24e3c226bdf1a65315b20e4d1da6fffceeb9f347` |
 
-`provenance.json` pins the eight original source, header and test files, the
+`provenance.json` pins the eight original source, header, and test files, the
 GCC driver, cc1, the assembler, the linker, libc, libm, the loader, and the
 oracle executable.
 
@@ -55,7 +55,7 @@ until it is retired more broadly.
 
 ## Scenario and record format
 
-Both fixtures use 48 kHz, 180 blocks and 43,280 samples per channel. Block
+Both fixtures use 48 kHz, 180 blocks, and 43,280 samples per channel. Block
 sizes cycle through `[112, 7, 480, 1, 240, 63, 1024, 13]`, and the last cycle
 is partial. Each block stores, in order:
 
@@ -96,8 +96,8 @@ are:
 The left EQ has seven bands, one of each existing type. In stereo, the right
 channel has six independent bands with offset values. Band `i` uses frequency
 `75+401*i+73*right`, gain `(-1 if i odd else 1)*(1.5+i)`, Q `.41+.23*i`,
-alternating APO and RLC modes, slope 1 and width 1. The Rust scenario code is
-the same code that was compared against the oracle. Its band, config and
+alternating APO and RLC modes, slope 1, and width 1. The Rust scenario code is
+the same code that was compared against the oracle. Its band, config, and
 sample source span is pinned in the provenance.
 
 ### Changes during the run
@@ -115,6 +115,6 @@ sample source span is pinned in the provenance.
 | 150 | 32-band cascade, frequency `30+700*i`, alternating ±12 dB; EQ input and output both -36 dB |
 
 These changes cover coefficient smoothing, band ID and history handling, rapid
-structural crossfades, linked stereo dynamics, bypass smoothing and arbitrary
+structural crossfades, linked stereo dynamics, bypass smoothing, and arbitrary
 block sizes. Add new scenarios as separate fixtures and leave this one
 unchanged.

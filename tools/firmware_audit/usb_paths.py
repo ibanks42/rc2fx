@@ -159,7 +159,7 @@ class ProcessMachine(Machine):
         return destination
 
     def pointer_table(self, count):
-        """Distinct, recognisable pointers standing in for sample buffers."""
+        """Distinct, recognizable pointers standing in for sample buffers."""
         return [self.allocate(FRAMES * 4) for _ in range(count)]
 
     def frame(self):
@@ -473,7 +473,7 @@ def source_chain(image, source_change):
             "aliases": {str(source): source + 10 for source in range(12, 16)}}
 
 
-def analyse(image, sites, roles):
+def analyze(image, sites, roles):
     process = sites["mixerProcess"]
     full_in = (1 << 36) - 1
     stereo_in = full_in & ~(((1 << 16) - 1) << 12)
@@ -546,17 +546,17 @@ def audit(catalog, archives):
         sha = hashlib.sha256(archive.read_bytes()).hexdigest()
         profile = profiles.get(sha)
         if profile is None:
-            raise ValueError(f"{archive} is not a catalogued official archive")
+            raise ValueError(f"{archive} is not a cataloged official archive")
         image, sites = checked_image(archive, profile)
         roles = ROLES[image.sha256]
         images.append((image, sites, roles))
-        report[profile["id"]] = {"archiveSha256": sha, **analyse(image, sites, roles)}
+        report[profile["id"]] = {"archiveSha256": sha, **analyze(image, sites, roles)}
     return {
         "schemaVersion": 1,
         "profiles": report,
         "crossRelease": cross_check(images),
         "method": "Unicorn execution of the vendor port-event handler and of three excerpts of Mixer::Process "
-                  "(input gather, output gather, output dispatch) with buffers replaced by recognisable pointers "
+                  "(input gather, output gather, output dispatch) with buffers replaced by recognizable pointers "
                   "and processors replaced by recording vtables; static instruction checks for the bridge, "
                   "active-mask source, registration loop and queued job.",
         "findings": [

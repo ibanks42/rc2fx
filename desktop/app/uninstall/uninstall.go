@@ -1,5 +1,5 @@
-// Package uninstall is what uninstalling RC2FX on Windows offers to remove
-// (the Rust app's uninstall.rs before): the data RC2FX keeps for this user
+// Package uninstall is what uninstalling RC2FX on Windows offers to remove:
+// the data RC2FX keeps for this user
 // (downloaded firmware, backups of the mixer's RC2FX settings, the
 // installer's journal and known_hosts, preferences) and the SSH key pair it
 // made for the mixer's developer option.

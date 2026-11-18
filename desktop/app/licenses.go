@@ -1,6 +1,6 @@
 package app
 
-// licenses/mod.rs: the license dialog. The bundle, its schema and
+// The license dialog. The bundle, its schema and
 // NoticeMarkdown are app/licenses.
 
 import (
@@ -12,15 +12,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/licenses"
 )
 
-// licensesView is licenses/mod.rs LicensesView: the sections, each opened
+// licensesView is the license dialog's state: the sections, each opened
 // on its own.
 type licensesView struct {
 	expanded map[int]bool
 	// textViews is parsed once per opened section, when it is first opened;
 	// it keeps selection and scroll on collapse and reopen instead of
-	// reconstructing thousands of rows each frame. (The Rust made each in
-	// render; a gk view function may not make kit state, so the click that
-	// opens a section makes it.)
+	// reconstructing thousands of rows each frame. (A gk view function may
+	// not make kit state, so the click that opens a section makes it.)
 	textViews map[int]gk.TextViewState
 	view      gk.View
 	theme     gk.BaseTheme
@@ -106,7 +105,7 @@ func noticeBox(state gk.TextViewState, theme gk.BaseTheme) gk.DivEl {
 			OnLinkClick(func(*gk.Cx, gk.Event83) {}))
 }
 
-// openLicenses is licenses/mod.rs open: the license dialog over the current
+// openLicenses opens the license dialog over the current
 // page. It changes nothing else: drafts, connection and window stay as they
 // are.
 func openLicenses(cx *gk.Cx) {

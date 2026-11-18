@@ -1272,7 +1272,7 @@ pub static LIVE_SKIPPED_OUTPUTS: AtomicU64 = AtomicU64::new(0);
 /// established. Outside a planned warm-up an increment is a qualification
 /// failure of that frame, not something to dismiss. `rawFrame` does not prove
 /// the slot held the actual captured mixer block: the first frame's slot is
-/// still zero-initialised (`captured` starts at 0), so startup can select an
+/// still zero-initialized (`captured` starts at 0), so startup can select an
 /// unwritten slot. Counted once per hardware-output frame without a result.
 pub static LIVE_OUTPUT_NO_FRAME: AtomicU64 = AtomicU64::new(0);
 pub static LIVE_OUTPUT_RAW_FRAME: AtomicU64 = AtomicU64::new(0);
@@ -1289,7 +1289,7 @@ pub fn processing_counters() -> serde_json::Value {
         "hardwareOutputsWithoutResult": {
             "noCopiedFrame": read(&LIVE_OUTPUT_NO_FRAME),
             "copiedFrameRaw": read(&LIVE_OUTPUT_RAW_FRAME),
-            "note": "frames whose own DSP result was missing: an untreated block was handed on. NOT the dspFaults error counter; audibility not established; outside planned warm-up an increment is a qualification failure; copiedFrameRaw may be a zero-initialised startup slot, not necessarily the captured mixer frame",
+            "note": "frames whose own DSP result was missing: an untreated block was handed on. NOT the dspFaults error counter; audibility not established; outside planned warm-up an increment is a qualification failure; copiedFrameRaw may be a zero-initialized startup slot, not necessarily the captured mixer frame",
         },
     })
 }
@@ -1300,7 +1300,7 @@ pub fn processing_counters() -> serde_json::Value {
 /// and it never competes with the callback for its core.
 const AUDIO_CPUS: u64 = 0b1110;
 /// Callbacks between re-reads of the callback thread's placement. RØDE pins
-/// and reprioritises that thread after its first callbacks have run.
+/// and reprioritizes that thread after its first callbacks have run.
 const PLACE_EVERY: u32 = 2048;
 /// Until the callback is real-time on its own cores and the helper has taken
 /// the placement derived from it, re-read every this many callbacks instead
@@ -2851,7 +2851,7 @@ mod tests {
                     *sample = match (round / 5) % 6 {
                         // Every bit pattern: NaNs, infinities and denormals.
                         0 => f32::from_bits(bits as u32),
-                        // Programme-level audio.
+                        // Program-level audio.
                         1 => (bits >> 40) as f32 / (1u64 << 23) as f32 - 1.0,
                         // Mostly special values.
                         2 => special[(bits % special.len() as u64) as usize],

@@ -6,7 +6,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// dev_page.rs tests.
+// Parsing RC2FX_DEV_PAGE values.
 
 func TestPagesAndChannelsParse(t *testing.T) {
 	for _, c := range []struct {

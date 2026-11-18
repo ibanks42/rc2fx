@@ -20,7 +20,7 @@ bundled payload for offline use.
 `config/mixer-release.json` names the mixer runtime and records its control
 protocol. **Settings › Versions** shows installed versions and
 compatible signed offers, including when a newer app is required. See
-[Mixer releases](mixer-releases.md) for signing, publication and renewal, and
+[Mixer releases](mixer-releases.md) for signing, publication, and renewal, and
 [Versions and updates](../user/getting-started.md#versions-and-updates).
 For the app itself,
 `installer.CheckForUpdates` (`desktop/installer/app_update.go`) asks GitHub's `releases/latest` API for this
@@ -35,7 +35,7 @@ Copies installed by Velopack (the Windows and macOS installers and portable
 zips, and the AppImage) can also update in place:
 `desktop/app/selfupdate`, through Velopack's C library
 (`desktop/app/selfupdate/vpkc`), reads `releases.win.json`,
-`releases.osx.json` or `releases.linux.json` from `releases/latest/download`,
+`releases.osx.json`, or `releases.linux.json` from `releases/latest/download`,
 downloads the package the feed names when the user presses **Download
 update**, and Velopack checks it against the feed's SHA-256. The feed isn't
 signed, so the app also checks the package against the signed app release
@@ -74,13 +74,13 @@ builds, offer **Download**, which opens the release page.
 3. Commit and push everything to `main`.
 4. On GitHub, open **Actions › Release › Run workflow** and choose branch
    `main`.
-5. Pick **patch**, **minor** or **major** for the app (see
+5. Pick **patch**, **minor**, or **major** for the app (see
    [Desktop app](#desktop-app)).
 6. Run it. Enable **dry-run** to build without publishing.
 
-A successful run packages the app for Linux, Windows and macOS, pushes a
+A successful run packages the app for Linux, Windows, and macOS, pushes a
 `chore(release): vX.Y.Z` commit on `main` with a `vX.Y.Z` tag, creates the
-GitHub release as a draft and, once every package is verified, publishes it
+GitHub release as a draft, and, once every package is verified, publishes it
 (see [Workflow jobs](#workflow-jobs)).
 
 A dry run doesn't push or publish anything.
@@ -112,7 +112,7 @@ The file is strict JSON with three fields:
 
 `version` is dotted numbers such as `MAJOR.MINOR.PATCH`, without a
 pre-release suffix; the app compares versions numerically and treats anything
-else as unknown. **Mixer release** sets it: its bump choice (patch, minor or
+else as unknown. **Mixer release** sets it: its bump choice (patch, minor, or
 major) applies to the latest published mixer release, and the workflow
 commits the result. Release the mixer when anything that ends up on it
 changes: the crates built into the runtime, `mixer/scripts/`,
@@ -124,11 +124,11 @@ a desktop-only release does not require a mixer bump or mixer notes.
 bump it only when an older desktop app can no longer drive the mixer.
 
 `./xtask mixer-build` copies the file into `target/mixer` and adds it to
-`SHA256SUMS`. Building the app with the embedded payload, packaging and
+`SHA256SUMS`. Building the app with the embedded payload, packaging, and
 `./xtask mixer install` all refuse a runtime whose `mixer-release.json`
 differs from `config/mixer-release.json`; rebuild the runtime after a bump. The
 installer writes the file to `/opt/rc2fx/mixer-release.json` and covers it with
-the bundle's `SHA256SUMS`. The mixer reports the runtime, protocol, firmware
+the bundle's `SHA256SUMS`. The mixer reports the runtime, protocol, firmware,
 and firmware profile through [`GET api/v1/version`](../reference/api.md#versions),
 omitting any value it doesn't know. A runtime too old to answer returns 404, which the app shows
 as **Unknown** rather than offering an update or downgrade.
@@ -150,7 +150,7 @@ and adds the release's section to `CHANGELOG.md`.
 On GitHub, the published app release is marked latest and contains:
 
 - the app packages, each built by `./xtask package` (see
-  [packaging](building.md#3-package-it)). Every package carries the licence
+  [packaging](building.md#3-package-it)). Every package carries the license
   notices in the app.
 
   | Platform | Files |
@@ -198,13 +198,13 @@ app fetches signed mixer software when it installs RC2FX on a mixer. See
 ## AppImage runtime sources
 
 The AppImage starts with the AppImage type 2 runtime, which statically links a
-modified libfuse 3.15.0 (LGPL-2.1) with squashfuse, zstd, zlib, musl and
+modified libfuse 3.15.0 (LGPL-2.1) with squashfuse, zstd, zlib, musl, and
 mimalloc. vpk puts its own copy of the runtime there
 (`vendor/appimagekit-runtime-x86_64` in the vpk NuGet package). That copy is a
 continuous build of type2-runtime commit `3d17002` from 2026-03-07; no tagged
 release holds that binary, and the commit differs from the 20251108 release
 only in CI files. `.github/scripts/prepare-appimage-notices.py` runs before
-Linux packaging. It writes the runtime's licence notices to
+Linux packaging. It writes the runtime's license notices to
 `target/appimage-legal/notices.json`, which packaging adds to the app's
 notices, and the corresponding source archive to `target/package`, which the
 release attaches beside the AppImage as
@@ -212,14 +212,14 @@ release attaches beside the AppImage as
 
 The script takes the runtime from the vpk package, checked against the
 package's pinned SHA-256 (the one `setup-vpk.sh` installs), the runtime's own
-SHA-256 and the commit the binary reports. It fetches the runtime source at
+SHA-256, and the commit the binary reports. It fetches the runtime source at
 that commit (checked by git), libfuse
 and squashfuse at the SHA-256 sums the runtime's own build recipe pins, and
-the Alpine build recipes of zstd, zlib, musl and mimalloc at a pinned aports
+the Alpine build recipes of zstd, zlib, musl, and mimalloc at a pinned aports
 commit, from Alpine's official GitHub mirror (`alpinelinux/aports`, also
 checked by git). Their sources come from Alpine's distfiles mirror, checked
-against the recipes' SHA-512 sums. It fails if any download, checksum or
-licence text is missing or wrong. The runtime's recipe doesn't pin those four
+against the recipes' SHA-512 sums. It fails if any download, checksum, or
+license text is missing or wrong. The runtime's recipe doesn't pin those four
 Alpine packages, so the script uses the last aports 3.21-stable commit before
 the runtime was built; the archive's README and `SOURCES.json` mark those revisions as
 inferred. The archive supports rebuilding the runtime with a modified libfuse;
@@ -229,7 +229,7 @@ start with exactly that runtime.
 
 When the vpk version changes, update `VPK_VERSION` and `VPK_SHA256` in the
 script with `setup-vpk.sh`, and check whether its runtime changed: if it did,
-update `RUNTIME_SHA256`, `RUNTIME_COMMIT` and `APORTS_COMMIT` together. Its offline tests
+update `RUNTIME_SHA256`, `RUNTIME_COMMIT`, and `APORTS_COMMIT` together. Its offline tests
 are `python3 .github/scripts/test_prepare_appimage_notices.py`.
 
 ## Release notes
@@ -263,12 +263,12 @@ hardware or none).
 ```
 
 - Start the subject with one of the prefixes above: `feat`, `fix`,
-  `refactor`, `docs`, `perf`, `test`, `chore` or `ci`. An optional scope in
+  `refactor`, `docs`, `perf`, `test`, `chore`, or `ci`. An optional scope in
   parentheses is shown in the changelog, and `!` before the colon
   (`feat!:`) marks a breaking change.
 - After the colon, write a short, human-readable summary of what changed,
   in the imperative and without a trailing period. The changelog shows this
-  text, capitalised, under the prefix's section.
+  text, capitalized, under the prefix's section.
 - Put the reasoning and how the change was validated in the body. The body
   isn't included in the changelog.
 - Don't use `chore(release)`: it is reserved for the release workflow's own
@@ -289,7 +289,7 @@ public until the release is complete.
    site build still includes only published history. It shares the prepared
    version files with later jobs; mixer payloads are built by the separate
    **Mixer release** workflow.
-2. **build** (Windows), **linux** and **macos** run in parallel. **build**
+2. **build** (Windows), **linux**, and **macos** run in parallel. **build**
    and **macos** apply the prepare output, set up the Go version
    `desktop/go.mod` names, fetch the gpuikit library
    (`desktop/scripts/fetch-gpuikit.sh`, reading the bindings repository's
@@ -302,7 +302,7 @@ public until the release is complete.
    notarizes the macOS packages. **build** builds with `--build-only`, signs
    in to Azure only then, so the session is fresh when signing starts, and
    packages with `--skip-build`.
-   With signing configured it then checks that `RC2FX.exe`, `Update.exe` and
+   With signing configured it then checks that `RC2FX.exe`, `Update.exe`, and
    `current/rc2fx.exe` in the zip, and the `-setup.exe`, have valid,
    timestamped Authenticode signatures. See [Signing](#signing).
    Packaging verifies the executable's payload mode, including with
@@ -319,10 +319,10 @@ public until the release is complete.
    glibc 2.28, whatever the runner has. The container installs the same vpk,
    prepares the AppImage runtime's notices and sources from that vpk package,
    and packages. The AppImage is then extracted and checked in clean
-   containers of AlmaLinux 8, Ubuntu 22.04, Debian 12, Ubuntu 24.04, Debian 13
+   containers of AlmaLinux 8, Ubuntu 22.04, Debian 12, Ubuntu 24.04, Debian 13,
    and Fedora 44. The checks cover libraries, metadata, permissions,
-   payload-mode checks and a headless executable smoke test. They do not
-   exercise a desktop session, FUSE mounting or mixer USB access.
+   payload-mode checks, and a headless executable smoke test. They do not
+   exercise a desktop session, FUSE mounting, or mixer USB access.
 3. **release** (Ubuntu) checks the Linux and Windows files, writes
    checksums for them, creates and pushes the release commit and tag
    (`release.py commit`), and creates a draft release with these packages and
@@ -331,7 +331,7 @@ public until the release is complete.
    header, the Linux `.nupkg` must hold exactly this AppImage, and
    `releases.linux.json` must list this version's package with its actual
    SHA-256. On Windows, the `-setup.exe` must start with `MZ`, the zip
-   must hold `RC2FX.exe`, `Update.exe` and `current/rc2fx.exe`, the `.nupkg`
+   must hold `RC2FX.exe`, `Update.exe`, and `current/rc2fx.exe`, the `.nupkg`
    must hold `lib/app/rc2fx.exe`, and `releases.win.json` must list exactly
    this version's package with its actual SHA-256. If `main` has moved since
    the run started, it stops without pushing. Start a new run in that case.
@@ -356,7 +356,7 @@ public until the release is complete.
    It needs a reviewer's approval in the `mixer-signing` environment, and is
    skipped while `APP_UPDATES_ENABLED` isn't `true`.
 
-A dry run builds every package but doesn't push, create the draft, publish or
+A dry run builds every package but doesn't push, create the draft, publish, or
 sign.
 Only one release runs at a time. Starting another one queues it.
 
@@ -376,11 +376,11 @@ writes to a published release: the app release stays an editable draft until
 **publish** has attached the macOS files, and mixer payload releases are published
 once. Correcting either one takes a new version.
 
-The **Check** workflow lints, tests and audits the code on pushes to `main`
+The **Check** workflow lints, tests, and audits the code on pushes to `main`
 and on pull requests to it, excluding documentation-only changes, and runs
 the release tooling's tests. Its **desktop** job checks the Go app on Ubuntu,
-Windows and macOS: `gofmt` on Linux, then `go vet` and `go test` for every
-package but the UI (the packages that depend on gpuikit: `app`, `app/uitest`
+Windows, and macOS: `gofmt` on Linux, then `go vet` and `go test` for every
+package but the UI (the packages that depend on gpuikit: `app`, `app/uitest`,
 and `cmd/rc2fx`), the transport's tests with the `mockmixer` tag, a vet with
 the `rc2fxdev` and `embedded` tags (against an empty stand-in payload), and,
 on Linux, `govulncheck` over those packages' Go dependencies. Its
@@ -401,9 +401,9 @@ vendored libext2fs) in the AlmaLinux 8 image releases build the AppImage
 in. Both jobs read the gpuikit bindings release with the `GPUIKIT_TOKEN`
 secret, falling back to the workflow's own token; a pull request from a
 fork (which gets no secrets) that cannot fetch it skips the UI build with a
-warning, and any other run that cannot fetch it fails. For the Rust crates, on Linux it formats, lints and tests in that same
+warning, and any other run that cannot fetch it fails. For the Rust crates, on Linux it formats, lints, and tests in that same
 image. The Linux job builds without debug info and, through
-`.github/cargo-ci.toml`, with unoptimised dependencies, which more than
+`.github/cargo-ci.toml`, with unoptimized dependencies, which more than
 halves a cold build. Only runs on `main` save build caches, Rust and Go
 alike; pull requests read them, and a twice-weekly scheduled run keeps them
 from expiring.
@@ -432,7 +432,7 @@ signed app release metadata (see [Signed app updates](#signed-app-updates)).
 ### Windows
 
 Windows packages are signed with Azure Artifact Signing. vpk signs
-`rc2fx.exe`, its launcher, the updater and the `-setup.exe`. The **build** job
+`rc2fx.exe`, its launcher, the updater, and the `-setup.exe`. The **build** job
 signs in through GitHub's OIDC token with `azure/login`, so there is no
 secret. It needs these repository variables:
 
@@ -486,14 +486,14 @@ repository from the mixer's, with the same trust root
 keys, so nothing about mixer releases or older apps changes. The package must
 be the target `vVERSION/ASSET`, with the custom field `{"version": VERSION}`,
 and match its signed length and SHA-256. A package that doesn't is deleted.
-This applies to every package Velopack downloads: Windows, macOS and the
+This applies to every package Velopack downloads: Windows, macOS, and the
 AppImage.
 
 ### The `app-metadata` branch
 
 Release assets never change, but the metadata is re-signed at every renewal, so
 it lives on the orphan branch `app-metadata`. The branch holds only the
-numbered root files, `targets.json`, `snapshot.json`, `timestamp.json` and a
+numbered root files, `targets.json`, `snapshot.json`, `timestamp.json`, and a
 short README. The app reads it from
 `https://raw.githubusercontent.com/ibanks42/rc2fx/app-metadata/` and the
 packages from `https://github.com/ibanks42/rc2fx/releases/download/`, and
@@ -526,7 +526,7 @@ release's `SHA256SUMS`, which must list exactly the other assets. Called by
 the release, apart from `SHA256SUMS`, must hold exactly those files, with the
 same size and SHA-256, or nothing is signed. So it signs only what that run
 built, not files changed on the release in between. It then signs
-targets, snapshot and timestamp with `./xtask app-sign`, and adds them to
+targets, snapshot, and timestamp with `./xtask app-sign`, and adds them to
 the branch in one commit (`publish_app.py publish`). Targets expire with the
 root, as for mixer releases, and snapshot and timestamp after seven days.
 Until a release is signed, apps that check updates refuse its packages with
@@ -534,7 +534,7 @@ Until a release is signed, apps that check updates refuse its packages with
 
 It can also be run by hand (**Run workflow**, with the published tag), for
 example to sign a release whose automatic signing was skipped. The same gates
-apply: `APP_UPDATES_ENABLED`, `main` only, the `mixer-signing` reviewers and
+apply: `APP_UPDATES_ENABLED`, `main` only, the `mixer-signing` reviewers, and
 the shared concurrency group. No build vouches for a manual run, so it checks
 the release against GitHub's digests and its `SHA256SUMS` only.
 
@@ -563,7 +563,7 @@ first release that follows an app version that checks updates.
 **Renew app metadata** (`app-metadata.yml`) runs twice a week in the
 `mixer-renewal` environment, and can be run by hand. It re-signs only snapshot
 and timestamp (seven days) with `./xtask app-refresh`, keeping the exact
-`targets.json`. It can't authorise other assets or outlive the root. Targets
+`targets.json`. It can't authorize other assets or outlive the root. Targets
 last until the root expires. If renewal fails, investigate before the
 metadata expires. Both workflows run only from `main` and share one
 concurrency group, so they never write the branch at the same time.
@@ -637,7 +637,7 @@ python3 .github/scripts/test_update_history.py
 ```
 
 The workflows themselves only run on GitHub. A **Release** dry run builds every
-package without pushing, publishing or signing anything.
+package without pushing, publishing, or signing anything.
 
 ## Before the first release
 

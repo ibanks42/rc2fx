@@ -29,7 +29,7 @@ RØDE's own programs are left unmodified.
 
 At startup RC2FX compares the audio engine byte for byte with the builds it
 has been tested against. If there is no match, it doesn't load, and the mixer
-runs stock firmware behaviour.
+runs stock firmware behavior.
 
 ## Falling back to stock
 
@@ -57,7 +57,7 @@ restart. The app only needs to be open while you are changing settings.
 The app talks to the mixer over USB 1, the same connection RØDE's app uses.
 That connection has a control channel for RØDE's app, and RC2FX sends its own
 messages on it in a form RØDE's software ignores. It needs no network, IP
-address or extra drivers, and USB audio is unaffected.
+address, or extra drivers, and USB audio is unaffected.
 
 ## Installing by flashing firmware
 

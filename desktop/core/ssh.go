@@ -45,7 +45,7 @@ type SSHStatus struct {
 
 func (SSHStatus) AllowUnknownJSONFields() {}
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (s SSHStatus) Equal(other SSHStatus) bool { return deepEqual(s, other) }
 
 // The most host keys a reply may list; a server has one per key type.
@@ -132,8 +132,7 @@ func ParseEd25519PublicKey(text string) (Ed25519PublicKey, error) {
 	return Ed25519PublicKey{line: "ssh-ed25519 " + blob}, nil
 }
 
-// isASCIIWhitespace is Rust's u8::is_ascii_whitespace: space, \t, \n, \x0C,
-// \r.
+// isASCIIWhitespace is ASCII whitespace: space, \t, \n, \x0C, \r (not \v).
 func isASCIIWhitespace(c rune) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\x0c' || c == '\r'
 }
@@ -157,7 +156,7 @@ func (k Ed25519PublicKey) Fingerprint() string {
 // ManagedLine is the line RC2FX writes: the key and its marker comment.
 func (k Ed25519PublicKey) ManagedLine() string { return k.line + " " + SSHManagedMarker }
 
-// decodeBase64 is padded standard base64 that, like the Rust, does not check
+// decodeBase64 is padded standard base64 that, like the mixer's, does not check
 // the unused low bits of the last group.
 func decodeBase64(text string) ([]byte, bool) {
 	value := func(c byte) (uint32, bool) {

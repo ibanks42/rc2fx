@@ -1,7 +1,7 @@
 package edit
 
-// interchange.rs and draft_files.rs, the parts that do not draw: reading
-// and staging EQ files, writing exports, and the settings-file draft.
+// EQ import and export and settings files, the parts that do not draw:
+// reading and staging EQ files, writing exports, and the settings-file draft.
 
 import (
 	"errors"
@@ -19,8 +19,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// IOMessage is a Rust std::io::Error's Display for an OS error: the
-// system's text, capitalized as strerror gives it, and " (os error N)".
+// IOMessage words an OS error as the system's text, capitalized as strerror
+// gives it, and " (os error N)"; any other error as it is.
 func IOMessage(err error) string {
 	var errno syscall.Errno
 	if !errors.As(err, &errno) {
@@ -42,7 +42,7 @@ type ImportTarget struct {
 	Generation uint64
 }
 
-// CaptureImportTarget is ImportTarget::capture.
+// CaptureImportTarget records target's channel and EQ as they are now.
 func CaptureImportTarget(target *core.Target, generation uint64) ImportTarget {
 	return ImportTarget{ID: target.ID, Channels: target.Channels, EQ: target.EQ.Clone(), Generation: generation}
 }
@@ -107,8 +107,8 @@ func DecodeText(bytes []byte) (string, error) {
 	return trimBOMs(string(bytes)), nil
 }
 
-// fromUTF16 is String::from_utf16: an unpaired surrogate is an error (Go's
-// utf16.Decode would replace it).
+// fromUTF16 decodes UTF-16 strictly: an unpaired surrogate is an error
+// (Go's utf16.Decode would replace it).
 func fromUTF16(units []uint16) (string, bool) {
 	var b strings.Builder
 	for i := 0; i < len(units); i++ {
@@ -210,7 +210,8 @@ type DraftSnapshot struct {
 	saved           *core.Config
 }
 
-// CaptureDraft is DraftSnapshot::capture.
+// CaptureDraft records the session's draft, selection and saved settings as
+// they are now.
 func CaptureDraft(session *core.Session, generation uint64) DraftSnapshot {
 	snapshot := DraftSnapshot{
 		generation:      generation,

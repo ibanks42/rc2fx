@@ -1,7 +1,7 @@
 package levels
 
-// The overview's level bars (level_bar.rs): which part of its track a bar
-// fills. The app draws the fill as a div inside the track (audit 2.3).
+// The overview's level bars: which part of its track a bar fills. The app
+// draws the fill as a div inside the track.
 
 const (
 	// Lowest is the shortest bar with a fresh reading, as a fraction of its
@@ -11,7 +11,7 @@ const (
 	Stub float32 = 6
 )
 
-// Bar is level_bar.rs Bar.
+// Bar is a level bar's direction.
 type Bar int
 
 const (

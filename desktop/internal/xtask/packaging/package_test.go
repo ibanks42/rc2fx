@@ -170,16 +170,16 @@ func TestStandalonePackageDoesNotShipInstallerSidecars(t *testing.T) {
 	}
 }
 
-func TestPackageHasSelfContainedExecutableAndLicences(t *testing.T) {
+func TestPackageHasSelfContainedExecutableAndLicenses(t *testing.T) {
 	root, files := packageFor(t, "windows")
 	if files["rc2fx.exe"].Mode != 0o755 {
 		t.Fatal("mode")
 	}
 	if _, ok := files["licenses/rust-crates.html"]; !ok {
-		t.Fatal("licences")
+		t.Fatal("licenses")
 	}
 	if string(files["licenses/LICENSE-MIT"].Data) != "MIT terms" {
-		t.Fatal("licence text")
+		t.Fatal("license text")
 	}
 	for _, forbidden := range []string{"config/", "crates/", "docs/", "experiments/", "runtime/", "xtask/", "mixer/", "desktop/", "README"} {
 		for name := range files {

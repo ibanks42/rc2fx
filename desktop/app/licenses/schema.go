@@ -97,8 +97,8 @@ func Parse(text string) ([]Section, error) {
 	return result, nil
 }
 
-// unknownKey is the first key, in sorted order as serde_json reports it, that
-// is not one of allowed.
+// unknownKey is the first key, in sorted order so the error names the same
+// key every time, that is not one of allowed.
 func unknownKey(object map[string]any, allowed ...string) (string, bool) {
 	keys := make([]string, 0, len(object))
 	for key := range object {
@@ -113,8 +113,8 @@ func unknownKey(object map[string]any, allowed ...string) (string, bool) {
 	return "", false
 }
 
-// asUint64 is serde_json's Value::as_u64: an integer literal from 0 to
-// 2^64-1; never a fraction, exponent or negative number.
+// asUint64 is an integer literal from 0 to 2^64-1; never a fraction,
+// exponent or negative number.
 func asUint64(value any) (uint64, bool) {
 	number, ok := value.(json.Number)
 	if !ok {

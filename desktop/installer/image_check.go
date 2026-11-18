@@ -32,7 +32,7 @@ var volatile = [6]string{
 	"var/lib/alsa/asound.state",
 }
 
-// rootPartitions (Rust ROOTS) is the two root filesystems RØDE's updater
+// rootPartitions is the two root filesystems RØDE's updater
 // creates with `mkfs.ext4` on a Pro II, as (block size, blocks) from
 // `statfs` on 1.7.7. The first is the 507 MB partition, the second the
 // 583 MB one. The Duo uses the same scripts.
@@ -44,7 +44,7 @@ var rootPartitions = [2][2]uint64{{1024, 476_546}, {4096, 142_585}}
 // from ever being the first thing that breaks.
 const rootHeadroom uint64 = 48 << 20
 
-// inManifest (Rust image_check::listed) is whether a member belongs in the
+// inManifest is whether a member belongs in the
 // manifest: RØDE's own regular files, minus the ones it changes itself.
 // RC2FX's files are checked by its SHA256SUMS.
 func inManifest(name string) bool {

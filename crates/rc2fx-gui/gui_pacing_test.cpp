@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(argv[1], "wait")) {
         // repaint_a blocks ~30 ms, repaint_b ~10 ms, other ~20 ms (not counted)
-        // Each signaller starts just before its wait, so every wait blocks.
+        // Each signaler starts just before its wait, so every wait blocks.
         Event a, b, o;
         std::thread ta(signal_after, &a, 30);
         test_repaint_a(&a);
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
         std::thread to(signal_after, &o, 20);
         test_other(&o);
         ta.join(), tb.join(), to.join();
-        // Already signalled: no wait at all, as an unblocked repaint would be.
+        // Already signaled: no wait at all, as an unblocked repaint would be.
         Event ready;
         ready.flag = true;
         test_repaint_a(&ready);
@@ -391,7 +391,7 @@ int main(int argc, char **argv) {
                 {985 + f % 20, 45, 3, 30}, {1003, 67, 7, 8}, {131, 0, 274, 120}};
             int n = f % 10 == 7 ? 6 : 5;
             // Exact pending paints reconstructed from Follow-up 10: each
-            // destination has been initialised before these are submitted.
+            // destination has been initialized before these are submitted.
             const char *event = getenv("PARTIAL_EVENT_CASE");
             if (event) {
                 static const int32_t a[][4] = {
@@ -585,7 +585,7 @@ int main(int argc, char **argv) {
         go = 1;
         void *result;
         pthread_join(thread, &result);
-        printf("cancelled %d reached %d\n", result == PTHREAD_CANCELED, reached.load());
+        printf("canceled %d reached %d\n", result == PTHREAD_CANCELED, reached.load());
         return 0;
     }
     if (!strcmp(argv[1], "fork")) {
@@ -609,7 +609,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(argv[1], "cancel")) {
-        // A pass waiting inside the pacing is cancelled: the cancel must take
+        // A pass waiting inside the pacing is canceled: the cancel must take
         // effect only at the program's own next cancellation point, after the
         // lock was taken (no new cancellation point in the pump).
         static unsigned long long locked_at = 0;
@@ -624,13 +624,13 @@ int main(int argc, char **argv) {
             return nullptr;
         }, nullptr);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        unsigned long long cancelled_at = now_ns();
+        unsigned long long canceled_at = now_ns();
         pthread_cancel(thread);
         void *result;
         pthread_join(thread, &result);
-        printf("cancelled %d locked_after_cancel_ms %.1f\n", result == PTHREAD_CANCELED,
+        printf("canceled %d locked_after_cancel_ms %.1f\n", result == PTHREAD_CANCELED,
                // Signed: a lock taken before the cancel must show as negative.
-               locked_at ? (double)((long long)locked_at - (long long)cancelled_at) / 1e6 : -1.0);
+               locked_at ? (double)((long long)locked_at - (long long)canceled_at) / 1e6 : -1.0);
         return 0;
     }
     return 2;

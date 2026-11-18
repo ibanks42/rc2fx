@@ -28,7 +28,7 @@ func u32(v uint32) *uint32 { return &v }
 func u8(v uint8) *uint8    { return &v }
 func str(v string) *string { return &v }
 
-// --- graph.rs -------------------------------------------------------------------------------
+// --- EQ graph -------------------------------------------------------------------------------
 
 func TestLogAxisRoundTripAndClamps(t *testing.T) {
 	for _, f := range []float64{10., 20., 100., 1000., 20000., 24000.} {
@@ -44,7 +44,7 @@ func TestLogAxisRoundTripAndClamps(t *testing.T) {
 	}
 }
 
-// --- editor.rs ------------------------------------------------------------------------------
+// --- editor parameters ----------------------------------------------------------------------
 
 func reported(latencySamples *uint32, liveLookahead *uint8) Reported {
 	return Reported{LatencySamples: latencySamples, LiveLookahead: liveLookahead}
@@ -104,7 +104,7 @@ func TestWithoutAReportOnlyTheRelativeCostIsStated(t *testing.T) {
 	eq(LookaheadFigure(idle, 1), "")
 }
 
-// --- inputs.rs ------------------------------------------------------------------------------
+// --- show inputs ----------------------------------------------------------------------------
 
 func inventory(name string) core.StockInventory {
 	fader := uint8(1)
@@ -220,7 +220,7 @@ func TestFailedRefreshRetainsLastConfirmedAssignmentUntilSuccess(t *testing.T) {
 	}
 }
 
-// --- selection.rs ---------------------------------------------------------------------------
+// --- selection ------------------------------------------------------------------------------
 
 func TestPendingChangesIncludeOtherChannelsWhenTheEditorSwitches(t *testing.T) {
 	saved := []string{"mic-1", "usb-main"}
@@ -233,7 +233,7 @@ func TestPendingChangesIncludeOtherChannelsWhenTheEditorSwitches(t *testing.T) {
 	}
 }
 
-// --- restart.rs -----------------------------------------------------------------------------
+// --- restart --------------------------------------------------------------------------------
 
 func TestOnlyExplicitBackendEligibilityOnAFailedJackEngineOffersRestart(t *testing.T) {
 	engine := core.EngineStatus{
@@ -269,7 +269,7 @@ func TestOnlyExplicitBackendEligibilityOnAFailedJackEngineOffersRestart(t *testi
 	}
 }
 
-// --- interchange.rs -------------------------------------------------------------------------
+// --- EQ import and export -------------------------------------------------------------------
 
 func TestImportDetectsAutoEQTextAndNativeEasyEffectsWithoutAFormatPicker(t *testing.T) {
 	options := core.ImportOptions{Stereo: true}
@@ -367,7 +367,7 @@ func TestNativeFileRoundtripPreservesSplitEQAndReplacesExportAtomically(t *testi
 	}
 }
 
-// --- draft_files.rs -------------------------------------------------------------------------
+// --- settings files -------------------------------------------------------------------------
 
 func TestImportPreservesLiveChannelOrderAndRefusesDifferentHardware(t *testing.T) {
 	live := core.DefaultConfig()

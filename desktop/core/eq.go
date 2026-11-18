@@ -9,7 +9,7 @@ import (
 // Theoretical filter response, not an FFT or an audio processor.
 //
 // Products are wrapped in float64() where they feed a sum: that stops Go from
-// fusing them into FMA instructions on arm64, so curves match the Rust on
+// fusing them into FMA instructions on arm64, so curves are the same on
 // every platform.
 
 type Coefficients struct {

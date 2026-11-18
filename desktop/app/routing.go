@@ -1,6 +1,6 @@
 package app
 
-// routing.rs: RC2FX's processing on the mixer, on or off for every
+// RC2FX's processing on the mixer, on or off for every
 // processed channel at once (Settings' Processing row).
 
 import (
@@ -133,5 +133,5 @@ func (a *App) processingRow(cx *gk.Cx) (gk.DivEl, bool) {
 	if !steady {
 		controls = controls.Child(gk.Div().TextSize(px(13)).TextColor(rgb(Warn)).Child(txt(label)))
 	}
-	return row(labelled("Processing", hint), controls.Child(sw)), true
+	return row(labeled("Processing", hint), controls.Child(sw)), true
 }

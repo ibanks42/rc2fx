@@ -29,7 +29,7 @@ Band settings:
 - **Type**: bell, low shelf, high shelf, low-pass, high-pass, notch, or off.
 - **Filter design** (APO or RLC, next to the type) sets how Q maps to the
   filter shape. Imported EQ files set it for you.
-- **Frequency** (10–24000 Hz), **gain** (±36 dB) and **Q** (band width).
+- **Frequency** (10–24000 Hz), **gain** (±36 dB), and **Q** (band width).
 - **On** disables a band without deleting it.
 - **Solo** plays only the soloed bands, so you can hear what one band does.
 

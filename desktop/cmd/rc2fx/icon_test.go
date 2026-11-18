@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// ui.rs icon_tests: the embedded window icon is the packaged one, 64×64 and
-// not fully transparent.
+// The embedded window icon is the packaged one, 64×64 and not fully
+// transparent.
 func TestTheEmbeddedIconIsThePackagedIcon(t *testing.T) {
 	packaged, err := os.ReadFile("../../packaging/rc2fx.png")
 	if err != nil {

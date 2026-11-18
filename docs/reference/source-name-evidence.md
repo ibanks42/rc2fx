@@ -36,8 +36,8 @@ string the RC2FX API returns, which shortens some vendor labels.
 | 19–20 | Wireless 1, Wireless 2 | — (public enum ends at 18) | Wireless 1–2 |
 | 21–29 | RCV Channel 1–9 | — | RCV Channel 1–9 |
 
-IDs 12–15 are Game, Music, Virtual A and Virtual B. The vendor switch, the
-public enum and RØDE's virtual-device guide all agree on these four. IDs 19
+IDs 12–15 are Game, Music, Virtual A, and Virtual B. The vendor switch, the
+public enum, and RØDE's virtual-device guide all agree on these four. IDs 19
 and 20 are established by the firmware audit. The public enum stops at 18.
 
 ## Firmware audit
@@ -112,14 +112,14 @@ and contains no device labels or personal saved-show labels.
 `Yeradon/rodecaster-protocol` v0.15.0 (tag `v0.15.0`, commit
 `9373ccecb7ec9b03b398b2214515b4b2a0ef3ddb`, published 2026-09-11) is an
 independent reverse-engineering project. Its model-independent `Source` enum
-covers 0–18 and labels 12–15 as `Game`, `Music`, `Virtual A` and `Virtual B`:
+covers 0–18 and labels 12–15 as `Game`, `Music`, `Virtual A`, and `Virtual B`:
 
 - <https://docs.rs/rodecaster-protocol/0.15.0/rodecaster_protocol/names/enum.Source.html>
 - [`src/names/core.rs` L202–L282](https://github.com/Yeradon/rodecaster-protocol/blob/v0.15.0/src/names/core.rs#L202-L282)
 - [`src/names/core.rs` L291–L313](https://github.com/Yeradon/rodecaster-protocol/blob/v0.15.0/src/names/core.rs#L291-L313)
 
 The enum shortens some names (`USB 1`, `Chat`, `Sound Pad`) and ends at
-`CallMe3 = 18`. It confirms 12–15. For 7, 8, 11 and 19–29 the vendor switch
+`CallMe3 = 18`. It confirms 12–15. For 7, 8, 11, and 19–29 the vendor switch
 is the source of record.
 
 ### rodey
@@ -133,7 +133,7 @@ has no entries for 12–15, so it neither confirms nor contradicts them.
 
 ### RØDE's Virtual Devices guide
 
-RØDE's guide names the four virtual sources Game, Music, A and B, and
+RØDE's guide names the four virtual sources Game, Music, A, and B, and
 describes the names as organisational:
 
 - <https://rode.com/en-us/user-guides/rodecaster-pro-ii/virtual-devices>
@@ -173,7 +173,7 @@ inputMicrophoneGain, inputDigitalGain, inputInstrumentGain, inputPhaseFlip,
 inputWirelessSN, inputSipCallSlot, inputRcvAudioSourceType
 ```
 
-None of these is a name, label or title. `inputColor` is the only
+None of these is a name, label, or title. `inputColor` is the only
 per-source display metadata. The crate's naming module also notes that the
 nodes carry no labels
 ([`src/names/mod.rs` L13–L15](https://github.com/Yeradon/rodecaster-protocol/blob/v0.15.0/src/names/mod.rs#L13-L15)).
@@ -201,13 +201,13 @@ parser would skip it.
 - The 0–18 vocabulary is shared across models, but its labels are not
   per-model socket names. Public ordinal 2 is `Combo3`, while the Duo's third
   hardware source is the headset mic, which the API shows as "Headset mic".
-  IDs 3, 5 and 6 are not physical sources on the Duo.
+  IDs 3, 5, and 6 are not physical sources on the Duo.
 - The public enum ends at 18. No public mapping for 19 or 20 was found, so
   they rest on the firmware audit, and 21–29 (RCV Channel 1–9) are known only
   from firmware. The 1.7.4 capture contributes the property set and no ID
   data.
 - The audit covers Pro II and Duo 1.7.6 and 1.7.7. RØDE's notes for those
-  releases list compatibility, performance and bug fixes, with no mention of
+  releases list compatibility, performance, and bug fixes, with no mention of
   input sources.
 
 ## References

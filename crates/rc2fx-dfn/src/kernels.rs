@@ -1,6 +1,6 @@
 //! The few dense kernels the networks need. Large weights are stored as int8
 //! with one f32 scale per row and widened as they are read (NEON on AArch64);
-//! all arithmetic is f32. Elsewhere the weights are kept as the dequantised
+//! all arithmetic is f32. Elsewhere the weights are kept as the dequantized
 //! f32 values, so results match the mixer's.
 
 /// A weight array: int8 with one f32 scale per `row` consecutive values
@@ -17,7 +17,7 @@ pub(crate) struct Weights {
 }
 
 impl Weights {
-    /// `row` is the span of one quantisation scale.
+    /// `row` is the span of one quantization scale.
     pub(crate) fn rows(v: &[f32], row: usize) -> Self {
         debug_assert!(row > 0 && v.len().is_multiple_of(row));
         {
@@ -100,7 +100,7 @@ pub(crate) fn f16_value(h: u16) -> f32 {
     let bits = match exp {
         0 if man == 0 => sign,
         0 => {
-            // Subnormal: normalise the significand.
+            // Subnormal: normalize the significand.
             let shift = man.leading_zeros() - 21;
             sign | ((113 - shift) << 23) | ((man << shift) & 0x3ff) << 13
         }
@@ -525,7 +525,7 @@ const fn grouped_registers_enabled<const N: usize>(hs: usize) -> bool {
     cfg!(target_arch = "aarch64") && N == 1 && matches!(hs, 8 | 16 | 32 | 40)
 }
 
-// N is monomorphised to one or two, so the two inputs use the same loaded
+// N is monomorphized to one or two, so the two inputs use the same loaded
 // and widened weight, without changing either input's accumulation order.
 fn grouped_steps<const N: usize>(
     w: &Weights,
@@ -700,7 +700,7 @@ fn tiled(r: usize, c: usize, cols: usize, grouped: usize) -> usize {
 }
 
 impl QWeights {
-    /// Quantises a row-major `rows` x `cols` matrix (`cols` a multiple of
+    /// Quantizes a row-major `rows` x `cols` matrix (`cols` a multiple of
     /// 16) straight into the tiled layout: one pass and one allocation.
     pub(crate) fn new(w: &[f32], rows: usize, cols: usize) -> Self {
         assert!(cols.is_multiple_of(16) && w.len() == rows * cols);
@@ -709,7 +709,7 @@ impl QWeights {
         #[cfg(any(test, feature = "bench-kernels"))]
         let mut row_major = Vec::with_capacity(rows * cols);
         let mut scale = Vec::with_capacity(rows);
-        // One quantised row at a time, then its 16-column pieces into their
+        // One quantized row at a time, then its 16-column pieces into their
         // tiles.
         let mut line = vec![0i8; cols];
         for (r, row) in w.chunks_exact(cols).enumerate() {
@@ -749,7 +749,7 @@ impl QWeights {
     }
 
     /// A matrix from int8 values and scales as given, so a test can hold
-    /// values the quantiser never produces (-128).
+    /// values the quantizer never produces (-128).
     fn from_int8(q: &[i8], scale: &[f32], cols: usize) -> Self {
         let rows = scale.len();
         assert!(cols.is_multiple_of(16) && q.len() == rows * cols);
@@ -772,7 +772,7 @@ impl QWeights {
     }
 }
 
-/// `x` quantised to 12-bit integers with one scale: the largest magnitude maps
+/// `x` quantized to 12-bit integers with one scale: the largest magnitude maps
 /// to 2047, so a 1024-column int8 dot product stays inside i32.
 fn quantize_x(x: &[f32], out: &mut [i16]) -> f32 {
     let max = x.iter().fold(0f32, |m, &v| m.max(v.abs()));
@@ -785,13 +785,13 @@ fn quantize_x(x: &[f32], out: &mut [i16]) -> f32 {
 }
 
 /// y = W x for an int8 matrix of `rows` rows (all of `w`'s; `cols` a
-/// multiple of 16, at most 1024). The input is quantised to 12 bits once; the
+/// multiple of 16, at most 1024). The input is quantized to 12 bits once; the
 /// products accumulate in i32 and are scaled back at the end of each row.
 pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y: &mut [f32]) {
     matvec_q8_steps::<1>(w, rows, x, xq, y);
 }
 
-/// Two independent inputs, quantised separately, sharing each int8 load.
+/// Two independent inputs, quantized separately, sharing each int8 load.
 pub(crate) fn matvec_q8_pair(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y: &mut [f32]) {
     matvec_q8_steps::<2>(w, rows, x, xq, y);
 }
@@ -834,7 +834,7 @@ fn matvec_q8_steps<const N: usize>(
     assert!(rows == w.scale.len() && w.q.len() == rows * cols);
     assert!(cols.is_multiple_of(16) && cols <= 1024);
     assert!(x.len() >= N * cols && xq.len() >= N * cols && y.len() >= N * rows);
-    // x is quantised once into xq, which every group of rows re-reads.
+    // x is quantized once into xq, which every group of rows re-reads.
     #[cfg(test)]
     {
         use crate::traffic::*;
@@ -980,7 +980,7 @@ fn matvec_q8_rows<const N: usize>(
     let cols = w.cols;
     debug_assert!(cols.is_multiple_of(16) && cols <= 1024);
     debug_assert!(x.len() >= N * cols && xq.len() >= N * cols && y.len() >= N * rows);
-    // x is quantised once into xq, which every row re-reads.
+    // x is quantized once into xq, which every row re-reads.
     #[cfg(test)]
     {
         use crate::traffic::*;
@@ -1428,7 +1428,7 @@ mod tests {
     }
 
     /// One class of int8 weights: 0 every value including -128, 1 the
-    /// extremes only, 2 mostly zero with stray extremes, 3 what the quantiser
+    /// extremes only, 2 mostly zero with stray extremes, 3 what the quantizer
     /// makes of ordinary floats (handled by the caller).
     fn int8_weights(rng: &mut crate::glue::tests::Rng, class: usize, n: usize) -> Vec<i8> {
         (0..n)
@@ -1442,7 +1442,7 @@ mod tests {
     }
 
     /// One class of input for one step: 0 ordinary, 1 every element at the
-    /// largest magnitude (quantises to +-2047), 2 subnormals (the scaling
+    /// largest magnitude (quantizes to +-2047), 2 subnormals (the scaling
     /// overflows and the i16 cast saturates, so the sums wrap), 3 zero, 4
     /// huge and tiny magnitudes, 5 infinities and NaNs among finite values.
     fn step_input(rng: &mut crate::glue::tests::Rng, class: usize, n: usize) -> Vec<f32> {
@@ -1466,7 +1466,7 @@ mod tests {
     /// included: the model's 384 x 128 matrices and every other shape class
     /// (whole groups of four rows, one to three rows left over, fewer than
     /// four rows, 16 to 1024 columns), with random, extreme and sparse int8
-    /// weights and quantised float weights, ordinary to subnormal and huge
+    /// weights and quantized float weights, ordinary to subnormal and huge
     /// row scales, six classes of input, one step and two, under each float
     /// mode. Nothing outside the output is written.
     #[test]

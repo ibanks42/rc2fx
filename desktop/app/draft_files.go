@@ -1,6 +1,6 @@
 package app
 
-// draft_files.rs: opening a settings file into the draft and saving the
+// Opening a settings file into the draft and saving the
 // draft as one. The file logic is in edit/files.go.
 
 import (

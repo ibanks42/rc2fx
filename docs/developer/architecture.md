@@ -45,16 +45,15 @@ that copy is identical. See
 The screen uses the same mechanism. A shim at `/usr/sbin/rc_gui_juce` starts
 RØDE's screen program with RC2FX's screen module if a bundle is present and
 passes its checks, and starts it unchanged otherwise. The module only changes
-how large redraws are rotated (the
-[screen conversion](../user/settings-and-diagnostics.md#screen-conversion)
-setting).
+how redraws are rotated (see
+[rc2fx-gui](../crates/rc2fx-gui.md)).
 
 ## Inside the audio engine
 
 `LD_AUDIT` lets the library observe and redirect symbol binding while the
 engine loads. `LD_PRELOAD` is insufficient because JUCE loads libjack with
 `dlopen`/`dlsym`. The library wraps a few libjack calls: callback and xrun
-registration, buffer lookup, port registration and client close. It then wraps
+registration, buffer lookup, port registration, and client close. It then wraps
 RØDE's JACK process callback, after checking the executable's hash and the
 instructions at the callback address. If either check fails, the stock
 callback runs unwrapped.
@@ -74,10 +73,10 @@ the model's bound paths, 25 on the Pro II and 23 on the Duo:
   If a result is late, the equally delayed dry signal plays instead.
 - Paths with no processing are only metered, every eighth cycle.
 
-The callback doesn't lock, allocate or wait.
+The callback doesn't lock, allocate, or wait.
 
 For Chat Mix Out, the library captures the microphone contributions from
-RØDE's routing code, after faders, mutes and mix-minus. It runs one mono
+RØDE's routing code, after faders, mutes, and mix-minus. It runs one mono
 denoiser and voice gate on them, delays the rest of the mix by the same
 amount, and recombines the two before the normal stereo effects. If the
 microphone contributions can't be captured exactly, suppression on Chat Mix
@@ -100,7 +99,7 @@ and if it crashes or is killed, the shell that launched the engine records the
 stock request and ends the engine itself.
 
 This logic is in `mixer/scripts/rc2fx.sh`, under subcommands such as `launch`,
-`start`, `restart`, `stop`, `status` and `logs`. Change mixer-side behaviour in
+`start`, `restart`, `stop`, `status`, and `logs`. Change mixer-side behavior in
 that script. The supervisor runs beside live audio for as long as the engine
 does and recovers from everything else failing, so it is its own small binary:
 it's in `crates/rc2fx-supervisor`, shares no code with the controller, and calls
@@ -114,7 +113,7 @@ the script back for the rare steps, such as ending the engine.
 2. `rc2fxd` validates the settings, prepares the change in the native library,
    saves `state.json`, and commits the prepared change
    ([rc2fx-native-control](../crates/rc2fx-native-control.md)).
-3. The new settings apply from the next cycle with no restart. Meter, engine
+3. The new settings apply from the next cycle with no restart. Meter, engine,
    and state events are sent back to the app.
 
 If the revision is out of date, the write is refused so it can't overwrite a
@@ -126,7 +125,7 @@ The mixer exposes a vendor HID interface on USB 1 for RØDE's app. RC2FX adds
 report IDs 5 and 6 to RØDE's HID collection by staging a modified copy of the
 descriptor in RAM. A hook on the engine's HID read passes RØDE's reports
 through unchanged and forwards RC2FX's reports to `rc2fxd`. No USB function,
-endpoint or audio channel is added. [USB control](../reference/usb-control.md)
+endpoint, or audio channel is added. [USB control](../reference/usb-control.md)
 covers the design and how it survives restarts.
 
 ## Installing

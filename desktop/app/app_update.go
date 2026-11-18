@@ -1,6 +1,6 @@
 package app
 
-// app_update.rs: checking GitHub for a newer desktop app. The check only
+// Checking GitHub for a newer desktop app. The check only
 // notifies. Copies Velopack installed download and install an update when
 // the user asks (selfupdate_view.go); other copies link to the release page.
 // The logic is app/updates; this starts the checks and draws the links.
@@ -16,7 +16,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// AppUpdate is app_update.rs AppUpdate (app/updates), with the changes
+// AppUpdate is the last update check (updates.AppUpdate), with the changes
 // dialog the Versions section opens (kit state, made once in a handler).
 type AppUpdate struct {
 	updates.AppUpdate

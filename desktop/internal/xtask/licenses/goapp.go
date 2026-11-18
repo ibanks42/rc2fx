@@ -1,9 +1,9 @@
 package licenses
 
 // The desktop app is Go on the gpuikit library, so its package also carries
-// the notices of what the Rust app did not have: the Go standard library,
+// the notices of what the Rust crates do not cover: the Go standard library,
 // every Go module linked into cmd/rc2fx, and everything inside libgpuikit
-// (its own THIRD_PARTY.md and licence texts).
+// (its own THIRD_PARTY.md and license texts).
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// mainModule is the desktop module; its own licence is RC2FX's.
+// mainModule is the desktop module; its own license is RC2FX's.
 const mainModule = "github.com/ibanks42/rc2fx/desktop"
 
 // gpuikitModule is the bindings, part of the gpuikit download whose notices
@@ -85,12 +85,12 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 		if version != "" {
 			user += " " + version
 		}
-		files, err := licenceFiles(dir)
+		files, err := licenseFiles(dir)
 		if err != nil {
 			return nil, err
 		}
 		if len(files) == 0 {
-			return nil, task.Errorf("Go module %s has no licence file in %s", user, dir)
+			return nil, task.Errorf("Go module %s has no license file in %s", user, dir)
 		}
 		for _, file := range files {
 			text, err := os.ReadFile(filepath.Join(dir, file))
@@ -112,8 +112,8 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 	return append(sections, gpuikit...), nil
 }
 
-// licenceFiles is a module's licence and notice files, by name.
-func licenceFiles(dir string) ([]string, error) {
+// licenseFiles is a module's license and notice files, by name.
+func licenseFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, task.Errorf("%s: %s", dir, task.IOError(err))
@@ -136,7 +136,7 @@ func licenceFiles(dir string) ([]string, error) {
 }
 
 // Gpuikit is libgpuikit's notices from an unpacked gpuikit download: its
-// THIRD_PARTY.md, then every licence text it ships (licences/texts/NAME-
+// THIRD_PARTY.md, then every license text it ships (licences/texts/NAME-
 // VERSION/FILE), byte-identical texts merged with the crates that use them.
 func Gpuikit(dir string) ([]Section, error) {
 	listing, err := os.ReadFile(filepath.Join(dir, "THIRD_PARTY.md"))
@@ -177,11 +177,11 @@ func Gpuikit(dir string) ([]Section, error) {
 			if strings.TrimSpace(string(text)) == "" {
 				continue
 			}
-			groups.add("libgpuikit licence texts", string(text), crate.Name()+" ("+file.Name()+")")
+			groups.add("libgpuikit license texts", string(text), crate.Name()+" ("+file.Name()+")")
 		}
 	}
 	if len(groups) == 0 {
-		return nil, task.Errorf("%s holds no licence texts", texts)
+		return nil, task.Errorf("%s holds no license texts", texts)
 	}
 	return append(sections, groups.Sections("GPUI-kit library — ")...), nil
 }

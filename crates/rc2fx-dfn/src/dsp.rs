@@ -1,11 +1,11 @@
 //! DeepFilterNet's framing and features, ported from libDF 0.5.6 (`DFState`)
 //! with every buffer allocated up front: a windowed STFT, ERB band energies
-//! in dB and complex bins, each under an exponential running normalisation.
+//! in dB and complex bins, each under an exponential running normalization.
 //! The FFT size, synthesis window, hop and band counts come from the model.
 //!
 //! The window pair may be asymmetric: the analysis window spans the whole
 //! FFT (reaching back into already-heard audio, which costs no delay), while
-//! only its last `synthesis` samples are resynthesised and overlap-added at
+//! only its last `synthesis` samples are resynthesized and overlap-added at
 //! the hop. The output then lags the input by `synthesis - hop` samples. With
 //! the synthesis length equal to the FFT and twice the hop, both windows are
 //! libDF's Vorbis window and the engine matches DeepFilterNet exactly.
@@ -16,10 +16,10 @@ use std::sync::Arc;
 pub(crate) const SAMPLE_RATE: usize = 48_000;
 /// Minimum STFT bins per ERB band.
 const MIN_BAND_BINS: usize = 2;
-/// Starting points for the running normalisations, low to high band.
+/// Starting points for the running normalizations, low to high band.
 const MEAN_NORM_INIT: [f32; 2] = [-60., -90.];
 const UNIT_NORM_INIT: [f32; 2] = [0.001, 0.0001];
-/// Normalisation time constant in seconds.
+/// Normalization time constant in seconds.
 const NORM_TAU: f32 = 1.;
 
 pub(crate) struct Dsp {
@@ -141,7 +141,7 @@ impl Dsp {
             inverse,
             analysis_window,
             synthesis_window,
-            // The unnormalised inverse scales by `fft`; this undoes it, so the
+            // The unnormalized inverse scales by `fft`; this undoes it, so the
             // window product alone sets the reconstruction (libDF's
             // `2 hop / fft²` for its two-hop FFT).
             wnorm: 1. / fft as f32,
@@ -271,7 +271,7 @@ impl Dsp {
         self.synthesis_mem.copy_from_slice(&frame[hop..]);
     }
 
-    /// ERB band energies in dB, mean-normalised and scaled by 1/40
+    /// ERB band energies in dB, mean-normalized and scaled by 1/40
     /// (`out` holds one value per band).
     pub(crate) fn feat_erb(&mut self, spec: &[Complex32], out: &mut [f32]) {
         debug_assert_eq!(out.len(), self.erb.len());
@@ -304,7 +304,7 @@ impl Dsp {
         }
     }
 
-    /// The lowest `nb_df` bins (`spec` holds exactly those), unit-normalised
+    /// The lowest `nb_df` bins (`spec` holds exactly those), unit-normalized
     /// by their running magnitude.
     pub(crate) fn feat_cplx(&mut self, spec: &[Complex32], re: &mut [f32], im: &mut [f32]) {
         debug_assert_eq!(spec.len(), self.unit_norm.len());

@@ -1,8 +1,7 @@
 package app
 
-// connection.rs: the view preferences file and the connection screen's
-// decisions. This file does not import gk: its functions are tested with
-// plain `go test`.
+// The view preferences file and the connection screen's decisions. This file
+// does not import gk: its functions are tested with plain `go test`.
 
 import (
 	"errors"
@@ -54,9 +53,8 @@ func viewPath() (string, bool) {
 	return filepath.Join(dir, "view.json"), true
 }
 
-// viewPrefs is the file's top-level object. serde_json's Map (no
-// preserve_order) is a BTreeMap, so the Rust wrote keys sorted; writeView does
-// the same.
+// viewPrefs is the file's top-level object. json writes its keys sorted,
+// as the file has always been written.
 type viewPrefs map[string]core.Value
 
 func rememberedView() viewPrefs {
@@ -67,8 +65,8 @@ func rememberedView() viewPrefs {
 	return readView(path)
 }
 
-// readView is connection.rs read_view: an empty path is None. Anything
-// unreadable, over 4096 bytes, not strict JSON or not an object is an empty
+// readView reads the view preferences. An empty path, or anything
+// unreadable, over 4096 bytes, not strict JSON or not an object, is an empty
 // view.
 func readView(path string) viewPrefs {
 	view := viewPrefs{}
@@ -93,7 +91,7 @@ func readView(path string) viewPrefs {
 	return view
 }
 
-// json is serde_json::Value::Object(view).to_string(): keys in sorted order.
+// json is the object as compact JSON, keys in sorted order.
 func (v viewPrefs) json() string {
 	keys := make([]string, 0, len(v))
 	for k := range v {
@@ -210,14 +208,13 @@ func saveFlag(path, key string, on bool) error {
 const USBUndo = "sudo rm " + helper.USBRulePath
 
 // usbPermission is whether Linux refused the app the mixer's USB 1 control
-// interface: the one failure the udev rule fixes
-// (rc2fx_installer::helper::USB_PERMISSION).
+// interface: the one failure the udev rule fixes (helper.USBPermission).
 func usbPermission(lastResult string) bool {
 	return strings.HasPrefix(lastResult, helper.USBPermission)
 }
 
 // mixerFound: this exact discovery failure is emitted only after finding one
-// supported mixer without the RC2FX interface (control::control_interface).
+// supported mixer without the RC2FX interface (control's controlInterface).
 // Do not infer "found" from arbitrary failures/timeouts or a substring of an
 // error.
 func mixerFound(lastResult string) bool {

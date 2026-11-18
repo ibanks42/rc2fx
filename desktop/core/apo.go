@@ -21,7 +21,7 @@ func apoNumber(text string, line int) (float64, error) {
 	return 0, apoError(line, "Expected a finite number, found "+text)
 }
 
-// asciiEqualFold is Rust's eq_ignore_ascii_case.
+// asciiEqualFold compares a and b ignoring the case of ASCII letters only.
 func asciiEqualFold(a, b string) bool {
 	if len(a) != len(b) {
 		return false
@@ -51,8 +51,8 @@ func asciiUpper(text string) string {
 	return string(out)
 }
 
-// rustLines is Rust's str::lines: split on \n, drop a \r before it, and no
-// empty final line after a trailing newline.
+// rustLines splits on \n, drops a \r before it, and gives no empty final
+// line after a trailing newline.
 func rustLines(text string) []string {
 	if text == "" {
 		return nil
@@ -67,7 +67,7 @@ func rustLines(text string) []string {
 	return lines
 }
 
-// parseRustFloat is Rust's f64::from_str: an optional sign, then `inf`,
+// parseRustFloat reads a float strictly: an optional sign, then `inf`,
 // `infinity` or `nan` in any case, or decimal digits with an optional point
 // and exponent (`5.`, `.5` and `1e5` are numbers; hex and underscores are
 // not).
@@ -115,7 +115,7 @@ func parseRustFloat(text string) (float64, bool) {
 	}
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil && !math.IsInf(value, 0) {
-		// Underflow is a valid parse; overflow gives an infinity, as in Rust.
+		// Underflow is a valid parse; overflow gives an infinity.
 		if numError, ok := err.(*strconv.NumError); !ok || numError.Err != strconv.ErrRange {
 			return 0, false
 		}
@@ -123,7 +123,7 @@ func parseRustFloat(text string) (float64, bool) {
 	return value, true
 }
 
-// ImportAPO (apo::import) imports up to 32 filters, keeping order, enabled
+// ImportAPO imports up to 32 filters, keeping order, enabled
 // state and exact parameter values. APO's preamp maps to EQ input gain and
 // applies to both linked sides.
 func ImportAPO(text string) (EQSettings, error) {

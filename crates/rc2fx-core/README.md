@@ -1,15 +1,15 @@
 # rc2fx-core
 
-The mixer's copy of RC2FX's models: the settings, the control API's messages
+The mixer's copy of RC2FX's models: the settings, the control API's messages,
 and the EQ coefficients. The desktop's Go copy is `desktop/core`, which also
 holds the editor logic (local edits, EQ response curves, EasyEffects and APO
 import), and `fixtures/core` keeps the two in step. The crate is plain Rust with
-no audio processing, network access, file I/O or GUI code.
+no audio processing, network access, file I/O, or GUI code.
 
 ## Configuration and device state
 
-`Config::from_json` and `DeviceState::from_json` parse schema 7 and validate
-configuration values. Parsing rejects:
+`Config::from_json` and `DeviceState::from_json` parse schema 9
+(`SCHEMA_VERSION`) and validate configuration values. Parsing rejects:
 
 - duplicate JSON keys at any depth,
 - unknown model fields,
@@ -21,13 +21,11 @@ target or band IDs, invalid effect order, and independent right-channel EQ on
 mono targets. `Config::validate_update` also refuses to change an existing
 target's kind or channel count.
 
-Older settings are upgraded on the raw JSON before strict parsing, one step
-per schema change (the `schema` module). Schemas 5 and 6 can be upgraded.
-Anything older is rejected.
+Settings in any other schema are rejected; nothing is upgraded.
 
-`Config::default` provides logical editing targets with every stage off.
-`SuppressionAlgorithm` accepts DeepFilterNet3 (`deepfilternet3-h128`) and
-gives its frame size, intrinsic delay and worker allowance.
+`Config::default` provides the Pro II's target catalog with every stage off.
+`Suppression::admitted_geometry` gives DeepFilterNet3's frame size, intrinsic
+delay, and worker allowance for a lookahead of 0 or 1.
 
 Meter types require the current callback and worker counters,
 `latencySamples`, `workerFailed`, and a spectrum array (`[]` when there is no

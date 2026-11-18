@@ -46,14 +46,14 @@ const help = `./xtask <command>
                         Time every suppression model on the mixer over a 48 kHz
                         recording and fetch the denoised audio
   check-elf FILE [--shared]  Check a mixer binary against the mixer ABI baseline
-  licenses FILE         Write consolidated licence notices to FILE
+  licenses FILE         Write consolidated license notices to FILE
   app [--release] [--mock] [--embedded] [--build-only] [-- ARGS...]
                         Build the desktop app for this machine into target/debug (a development
                         build), target/release (--release) or target/mock (--mock: the simulated
                         mixer) and run it; --embedded compiles in the mixer payload from target/mixer
   package [--target TRIPLE] [--skip-build] [--embedded]
                         Build the download-only desktop app (or embed the mixer with --embedded) and bundle
-                        documentation, licences and SHA256SUMS in target/package
+                        documentation, licenses and SHA256SUMS in target/package
 
 Mixer connection: .rc2fx-mixer.conf (see .rc2fx-mixer.conf.example) or the
 RC2FX_MIXER_IP, RC2FX_MIXER_USER, RC2FX_MIXER_KEY and RC2FX_MIXER_KNOWN_HOSTS

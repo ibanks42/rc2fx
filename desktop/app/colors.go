@@ -12,7 +12,7 @@ import (
 
 // Text, accent and problem colors are shared by every appearance; the
 // surfaces come from `surface()` (desk.go). Cyan and violet mark processing;
-// amber and red mark problems. (lib.rs)
+// amber and red mark problems.
 const (
 	Text         uint32 = 0xf2f4f7
 	Muted        uint32 = 0x939cad
@@ -27,13 +27,12 @@ const (
 	// Primary actions are white pills.
 	PrimaryHover  uint32 = 0xffffff
 	PrimaryActive uint32 = 0xd9dde4
-	// The draft's dimmest text (`--dim`): off values and empty readouts. (ui.rs)
+	// The draft's dimmest text (`--dim`): off values and empty readouts.
 	Dim uint32 = 0x4c5468
 )
 
 // hslaOf is gpui's `Hsla::from(rgba(hex))`: the same f32 arithmetic, so the
-// colours the Go app draws are the colours the Rust app drew. hex is
-// 0xRRGGBBAA.
+// colors match what gpui computes for the same hex. hex is 0xRRGGBBAA.
 func hslaOf(hex uint32) [4]float32 {
 	r := float32(hex>>24&0xff) / 255
 	g := float32(hex>>16&0xff) / 255
@@ -66,8 +65,8 @@ func hslaOf(hex uint32) [4]float32 {
 	return [4]float32{h, s, l, a}
 }
 
-// remEuclid is f32::rem_euclid. fmod is exact, so doing it in float64 gives
-// the f32 result.
+// remEuclid is x modulo m, never negative. fmod is exact, so doing it in
+// float64 gives the float32 result.
 func remEuclid(x, m float32) float32 {
 	r := float32(math.Mod(float64(x), float64(m)))
 	if r < 0 {
@@ -76,8 +75,8 @@ func remEuclid(x, m float32) float32 {
 	return r
 }
 
-// mixHex blends two 0xRRGGBB colours, t from 0 (from) to 1 (to), rounding
-// each channel the way band_color does.
+// mixHex blends two 0xRRGGBB colors, t from 0 (from) to 1 (to), rounding
+// each channel half away from zero (roundF32).
 func mixHex(from, to uint32, t float32) uint32 {
 	mix := func(shift uint32) uint32 {
 		a := float32(from >> shift & 0xff)
@@ -87,24 +86,24 @@ func mixHex(from, to uint32, t float32) uint32 {
 	return mix(16) | mix(8) | mix(0)
 }
 
-// roundF32 is f32::round: halves away from zero.
+// roundF32 rounds to a whole number, halves away from zero.
 func roundF32(v float32) float32 { return float32(math.Round(float64(v))) }
 
 // bandColor is a band's color: eight steps from RC2FX cyan to violet,
-// repeating. Amber and red stay reserved for problems. (desk.rs band_color)
+// repeating. Amber and red stay reserved for problems.
 func bandColor(index int) uint32 {
 	t := float32(index%8) / 7
 	return mixHex(Accent, Violet, t)
 }
 
 // level is peak amplitude as a 0..1 meter position over a 60 dB range.
-// (desk.rs level)
 func level(peak float64) float32 {
 	v := (20*math.Log10(num.Max(peak, 1e-6)) + 60) / 60
 	return float32(num.Clamp(v, 0, 1))
 }
 
-// formatHz is desk.rs format_hz.
+// formatHz is a frequency as text: Hz below 1 kHz, kHz with one decimal
+// from there.
 func formatHz(frequency float64) string {
 	if frequency >= 1000 {
 		return fmt.Sprintf("%.1f kHz", frequency/1000)
@@ -112,7 +111,7 @@ func formatHz(frequency float64) string {
 	return fmt.Sprintf("%.0f Hz", frequency)
 }
 
-// dbfs is a reported peak as dBFS text. (ui.rs dbfs)
+// dbfs is a reported peak as dBFS text.
 func dbfs(peak float64) string {
 	db := 20 * math.Log10(num.Max(peak, 1e-9))
 	if db <= -60 {

@@ -218,8 +218,8 @@ class Runtime(unittest.TestCase):
         self.assertIn(f"grep -q ' go{re.escape(version)} '", image)
 
 
-class Licences(unittest.TestCase):
-    def test_licence_files_are_taken_from_the_top_of_the_source(self):
+class Licenses(unittest.TestCase):
+    def test_license_files_are_taken_from_the_top_of_the_source(self):
         source = tarball([
             ("zlib-1.3.1/LICENSE", b"top", tarfile.REGTYPE),
             ("zlib-1.3.1/contrib/x/LICENSE", b"nested", tarfile.REGTYPE),

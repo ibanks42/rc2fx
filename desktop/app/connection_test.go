@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// connection.rs tests.
+// The connection screen's decisions and the view preferences file.
 
 func TestOnlyARefusedOpenOffersTheUSBRule(t *testing.T) {
 	if !usbPermission("USB permission required: Permission denied (os error 13)") {
@@ -133,8 +133,8 @@ func TestAFailedDeveloperSaveIsReported(t *testing.T) {
 	}
 }
 
-// The Rust wrote view.json through serde_json's BTreeMap: keys sorted,
-// compact. The file must stay byte-identical so either app reads the other's.
+// view.json is written with its keys sorted, compact, so the file stays
+// byte-identical to what earlier versions of the app wrote.
 func TestTheViewFileIsWrittenWithSortedKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "RC2FX/view.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

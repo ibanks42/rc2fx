@@ -10,8 +10,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// Not in the Rust (installer/repair.rs has no tests): the repair page's
-// logic, which the Go port keeps out of the view.
+// The repair page's logic, which is kept out of the view.
 
 func marks(steps []TaskStep) []Mark {
 	out := make([]Mark, len(steps))
@@ -69,9 +68,9 @@ func TestTheRepairPageLooksOnceASecondAndChecksOnceAllowed(t *testing.T) {
 func TestRepairOutcomesMoveThePage(t *testing.T) {
 	r := NewRepair()
 	r.Stage = RepairStage{Kind: RepairChecking}
-	r.Outcome(RepairInspectRequest(), installer.Reply{}, errors.New(installer.Cancelled))
+	r.Outcome(RepairInspectRequest(), installer.Reply{}, errors.New(installer.Canceled))
 	if r.Stage.Kind != RepairWaiting {
-		t.Fatal("a cancelled check waits again")
+		t.Fatal("a canceled check waits again")
 	}
 	why := "no identical copy to restore it from"
 	findings := &installer.RepairFindings{SettingsOK: true, Roots: []installer.RootFindings{

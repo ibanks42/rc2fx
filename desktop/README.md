@@ -1,6 +1,6 @@
 # RC2FX desktop app (Go)
 
-The desktop app for Windows, macOS and Linux, written in Go on GPUI-kit through
+The desktop app for Windows, macOS, and Linux, written in Go on GPUI-kit through
 the gpuikit Go bindings. The mixer side stays in Rust under `crates/`; the
 scripts that run on the mixer are in `mixer/scripts`, and the files the app's
 packages ship (AppImage launcher, desktop entry, icons, entitlements) are in
@@ -9,7 +9,7 @@ packages ship (AppImage launcher, desktop entry, icons, entitlements) are in
 ## Building
 
 You need Go 1.27 (the version `go.mod` names), a C compiler (cgo, for the UI,
-the storage repair and Velopack) and the gpuikit download. Fetch it once, from
+the storage repair, and Velopack), and the gpuikit download. Fetch it once, from
 the repository root:
 
 ```sh
@@ -17,7 +17,7 @@ desktop/scripts/fetch-gpuikit.sh
 ```
 
 It downloads the pinned version for this platform from the
-ibanks42/gpui-kit-bindings releases, checks its SHA-256 and unpacks it into
+ibanks42/gpui-kit-bindings releases, checks its SHA-256, and unpacks it into
 the gitignored `third_party/gpuikit`. It is a static library, linked into the
 app, so nothing ships beside it. On macOS that is the universal download
 (`darwin-universal`, arm64 and x86_64 in one library): the macOS app ships
@@ -78,4 +78,4 @@ build and test on any machine without the library.
 
 [The desktop app in Go](../docs/developer/desktop-go.md) describes the
 packages, how they map to the mixer's Rust crates, and the naming, strict JSON,
-shared fixture and cgo rules the code follows.
+shared fixture, and cgo rules the code follows.

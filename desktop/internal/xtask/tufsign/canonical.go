@@ -1,6 +1,6 @@
-// Package tufsign signs TUF metadata exactly as tough 0.24, the Rust
-// release tooling's signer, did, so the mixer's sigstore-tuf client and the
-// desktop's verifier accept what it writes:
+// Package tufsign signs TUF metadata exactly as the tough 0.24 crate does,
+// so the mixer's sigstore-tuf client and the desktop's verifier accept what
+// it writes:
 //
 //   - roles are signed over OLPC canonical JSON of their `signed` object
 //     (keys sorted by their bytes, only `"` and `\` escaped, no floats);

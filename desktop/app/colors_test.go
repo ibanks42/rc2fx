@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// The hex helpers must give gpui's Hsla::from(rgb(x)) exactly (audit 2.1).
-func TestHexColoursConvertAsGpuiDoes(t *testing.T) {
+// The hex helpers must give gpui's Hsla::from(rgb(x)) exactly.
+func TestHexColorsConvertAsGpuiDoes(t *testing.T) {
 	for _, c := range []struct {
 		hex  uint32
 		want [4]float32
@@ -30,7 +30,7 @@ func TestAlphaIsTheLowByte(t *testing.T) {
 	}
 }
 
-func TestBandColoursRunFromCyanToViolet(t *testing.T) {
+func TestBandColorsRunFromCyanToViolet(t *testing.T) {
 	if bandColor(0) != Accent || bandColor(7) != Violet || bandColor(8) != Accent {
 		t.Fatalf("%06x %06x %06x", bandColor(0), bandColor(7), bandColor(8))
 	}
@@ -85,7 +85,7 @@ func TestTheThemeCarriesEveryAppearance(t *testing.T) {
 			th.Colors["selection.background"] != "#5ce1e640" {
 			t.Errorf("%s: %v", th.Name, th.Colors)
 		}
-		// Everything RC2FX does not set keeps the kit's default dark colour.
+		// Everything RC2FX does not set keeps the kit's default dark color.
 		for k, v := range kitDefaultDarkColors {
 			if !rc2fxKey(k) && th.Colors[k] != v {
 				t.Errorf("%s: %s = %s, kit default %s", th.Name, k, th.Colors[k], v)

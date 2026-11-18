@@ -20,7 +20,7 @@ struct rc2fx_jackerr_header {
     uint64_t created_ns;
     _Atomic uint64_t claimed;  /* indices handed out */
     _Atomic uint64_t dropped;  /* claimed, but the slot was busy or newer: not written */
-    _Atomic uint64_t unknown;  /* calls with an unrecognised or null format */
+    _Atomic uint64_t unknown;  /* calls with an unrecognized or null format */
     _Atomic uint64_t calls;    /* every jack_error call */
 };
 /* One record. `seq` is the slot's sequence lock: 2i+1 while record i is

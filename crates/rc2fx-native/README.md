@@ -32,7 +32,7 @@ lifetime ended.
 
 At startup the library reads the launch plan written by `rc2fxd plan`, binds
 every path in it, and processes the selected paths with `rc2fx-dsp`. The audio
-callback does not lock, allocate or wait.
+callback does not lock, allocate, or wait.
 
 `rc2fxd` connects to the library over a Unix control socket
 (`rc2fx-native-control`) to publish new settings, which apply without
@@ -84,7 +84,7 @@ Until the helper has been placed it runs with the placement it started with,
 so the first callbacks after start aren't covered. The report's
 `placement.history` keeps the first 16 placement changes since the library
 loaded, without overwriting. Each entry records the pipeline, the callback's
-mask, policy and priority, the helper's requested and actual placement, the
+mask, policy, and priority, the helper's requested and actual placement, the
 cycle, whether it was deferred, and the monotonic time.
 
 ### Why the helper
@@ -108,7 +108,7 @@ voice mix. It keeps that slot while bypassed or deselected.
 
 For Chat, `chat_mix` captures only the microphone contributions from the
 qualified vendor routing functions. It takes them after per-source processing
-and fader gains, through main, custom, solo and mix-minus routing. Each
+and fader gains, through main, custom, solo, and mix-minus routing. Each
 original function is called once, and vendor routing objects are only read.
 
 Four hash-pinned detours, installed before any threads start, provide a stem
@@ -132,7 +132,7 @@ be processed, what the mixer received:
 - the first raw cause:
   - `rawHelperUnready`,
   - `rawNoHandoff`: the first frame, or the frame after a stall, an inactive
-    frame or a switch to processing,
+    frame, or a switch to processing,
   - `rawNotDone`,
   - `rawInvalid`,
 - `unobserved`, when the mixer didn't ask for it.
@@ -155,7 +155,7 @@ latency.
 | `RC2FX_NATIVE_PROBE_CALLBACK_OFFSET` | Optional diagnostic cross-check; must equal the selected profile's callback |
 | `RC2FX_NATIVE_PROBE_PLAN` | Launch plan JSON (version 1, 48 kHz, 112 frames, at most 32 paths, 64 KiB) |
 | `RC2FX_NATIVE_PROBE_CONTROL_SOCKET` | Control socket path for `rc2fxd` |
-| `RC2FX_NATIVE_PROBE_REPORT` | Path for the audit report, rewritten every second: callback, helper and jackd-cycle timing, xruns and the latest anomaly events |
+| `RC2FX_NATIVE_PROBE_REPORT` | Path for the audit report, rewritten every second: callback, helper, and jackd-cycle timing, xruns, and the latest anomaly events |
 | `RC2FX_NATIVE_PROBE_EVENTS` | Log file appended once a second with every timestamped anomaly (late callback starts or ends, helper late or stalled, gaps, xruns, late vendor jobs, USB gadget rebuilds), each with the time since the last USB control report |
 | `RC2FX_NATIVE_PROBE_REPORT_SELECTED_ONLY` | `1` reports processed paths only |
 | `RC2FX_NATIVE_PROBE_VENDOR_JOB_LIFETIME` | Diagnostic opt-in to profile selection; profile checks still apply |
@@ -176,7 +176,7 @@ ends past the full period. Neither replaces evidence from the server.
 The [JACK error recorder](jackerr/README.md) is loaded into jackd on every
 RC2FX start. It records the late client and state, or the ALSA error, that the
 server reports. `just mixer-xruns` shows what it recorded over a window. Check
-it together with the callback, helper and worker diagnostics before changing
+it together with the callback, helper, and worker diagnostics before changing
 buffering.
 
 ## Tests

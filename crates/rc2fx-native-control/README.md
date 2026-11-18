@@ -25,7 +25,7 @@ reconnecting. Receipts carry no addresses or Rust ownership handles.
 
 If preparation fails, the save closure isn't called. A persistence error is
 returned unchanged together with the cancellation outcome. This includes
-uncertain Store errors, and cancelling does not restore an old saved file.
+uncertain Store errors, and canceling does not restore an old saved file.
 
 After a successful save the result is always `Saved<T>`. If the commit is
 refused or its reply is lost, the result is `Publication::Pending` with the

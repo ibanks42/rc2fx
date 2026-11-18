@@ -1,7 +1,8 @@
 package telemetry
 
-// events.rs without drawing: the event log the main window fills and the
-// events window shows, the filter groups, and the wording of each row.
+// The Diagnostic events window without drawing: the event log the main
+// window fills and the events window shows, the filter groups, and the
+// wording of each row.
 
 import (
 	"fmt"
@@ -121,8 +122,8 @@ func KindLabel(kind core.DiagnosticsKind) string {
 	return "other"
 }
 
-// KindTone is how a kind's chip is coloured: the app maps it to Danger,
-// Muted or Warn (events.rs kind_color).
+// KindTone is how a kind's chip is colored: the app maps it to Danger,
+// Muted or Warn (kindColor).
 type KindTone int
 
 const (
@@ -131,7 +132,7 @@ const (
 	KindToneMuted
 )
 
-// KindToneOf is events.rs kind_color without the colours.
+// KindToneOf is how a kind's chip is colored.
 func KindToneOf(kind core.DiagnosticsKind) KindTone {
 	switch kind {
 	case core.DiagnosticsKindXrun, core.DiagnosticsKindLost, core.DiagnosticsKindClipped:
@@ -216,13 +217,13 @@ func Message(kind core.DiagnosticsKind, mixer string) string {
 	if kind == core.DiagnosticsKindXrun {
 		return "JACK xrun notification · impact unknown"
 	}
-	// "the callback ended late" reads as a sentence once capitalised.
+	// "the callback ended late" reads as a sentence once capitalized.
 	first, size := utf8.DecodeRuneInString(mixer)
 	if size == 0 {
 		return mixer
 	}
-	// unicode.ToUpper is the simple mapping: unlike Rust's to_uppercase it
-	// leaves a first 'ß' as it is. The mixer's sentences start in ASCII.
+	// unicode.ToUpper is the simple mapping: it leaves a first 'ß' as it
+	// is. The mixer's sentences start in ASCII.
 	return string(unicode.ToUpper(first)) + mixer[size:]
 }
 
@@ -274,7 +275,7 @@ type EventLog struct {
 	ShowStartup bool
 }
 
-// NewEventLog is EventLog::new.
+// NewEventLog is an empty log with no group hidden.
 func NewEventLog() EventLog { return EventLog{Hidden: map[Group]bool{}} }
 
 // Rows is the log, newest first. Read only.

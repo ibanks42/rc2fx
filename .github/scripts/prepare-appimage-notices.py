@@ -16,7 +16,7 @@ script:
 - fetches the Alpine aports build recipes and sources of zstd, zlib, musl and
   mimalloc at the aports 3.21-stable commit current when the runtime was
   built, checked against Alpine's SHA-512 sums,
-- writes target/appimage-legal/notices.json with the full licence texts and
+- writes target/appimage-legal/notices.json with the full license texts and
   the runtime's digest and size, which packaging checks the finished AppImage
   against, and
 - writes the AppImage runtime source archive to target/package with all of the
@@ -32,7 +32,7 @@ commit used here is the last 3.21-stable commit before that build. The
 revisions are therefore inferred, and are recorded as such; zlib 1.3.1 and
 zstd 1.5.6 match the version strings in the runtime binary.
 
-The script fails if any source or licence text is unavailable or
+The script fails if any source or license text is unavailable or
 does not match its checksum.
 
 Usage: prepare-appimage-notices.py [--root DIR] [--cache DIR] [--vpk-package FILE]
@@ -86,8 +86,8 @@ ALPINE_PACKAGES = {
     "musl": "main/musl",
     "mimalloc": "community/mimalloc2",
 }
-# Licence files inside each verified source, in the order they are printed.
-LICENCE_FILES = {
+# License files inside each verified source, in the order they are printed.
+LICENSE_FILES = {
     "zstd": ["LICENSE"],
     "zlib": ["LICENSE"],
     "musl": ["COPYRIGHT"],
@@ -292,7 +292,7 @@ def collect(
     })
 
     pins = recipe_pins(script)
-    for name, title, licences in [
+    for name, title, licenses in [
         ("fuse-3.15.0.tar.xz", "libfuse 3.15.0 (modified)", ["LGPL2.txt"]),
         ("0.5.2.tar.gz", "squashfuse 0.5.2", ["LICENSE"]),
     ]:
@@ -310,7 +310,7 @@ def collect(
             "sha256": pins[name],
             "verification": "sha256 pinned by the runtime's install-dependencies.sh",
         })
-        text = "\n\n".join(member(data, f).decode() for f in licences)
+        text = "\n\n".join(member(data, f).decode() for f in licenses)
         if name.startswith("fuse-"):
             text = (
                 "The AppImage runtime links the libfuse library statically, modified by "
@@ -334,11 +334,11 @@ def collect(
         apkbuild = recipe["APKBUILD"].decode()
         origin = path.split("/")[1]
         version = f"{apkbuild_field(apkbuild, 'pkgver')}-r{apkbuild_field(apkbuild, 'pkgrel')}"
-        licence = apkbuild_field(apkbuild, "license")
+        license = apkbuild_field(apkbuild, "license")
         prefix = f"alpine/{origin}-{version}"
         for name, data in recipe.items():
             files[f"{prefix}/aports/{name}"] = data
-        licence_text = None
+        license_text = None
         for sha512, name in parse_sums(apkbuild):
             if name in recipe:
                 require("sha512", recipe[name], sha512, f"{path}/{name}")
@@ -358,15 +358,15 @@ def collect(
                     "the revision linked into the runtime"
                 ),
             })
-            if licence_text is None and re.search(r"\.tar\.(gz|xz|bz2|zst)$", name):
-                licence_text = "\n\n".join(
-                    member(data, f).decode() for f in LICENCE_FILES[component]
+            if license_text is None and re.search(r"\.tar\.(gz|xz|bz2|zst)$", name):
+                license_text = "\n\n".join(
+                    member(data, f).decode() for f in LICENSE_FILES[component]
                 )
-        if licence_text is None:
-            raise Failure(f"no source archive with a licence for {component}")
+        if license_text is None:
+            raise Failure(f"no source archive with a license for {component}")
         sections.append({
             "title": f"{component} {version.rsplit('-r', 1)[0]} (AppImage runtime)",
-            "text": f"Licence: {licence}\n\n{licence_text}",
+            "text": f"License: {license}\n\n{license_text}",
         })
     return files, manifest, sections, len(binary)
 
@@ -393,7 +393,7 @@ it in front of RC2FX's application image.
 - `alpine/`: the Alpine {alpine} build recipes (aports {aports}) and sources
   of zstd, zlib, musl and mimalloc, including Alpine's patches.
 - `SOURCES.json`: every file's origin, checksum and how it was verified.
-- `LICENSES.json`: the licence texts, as shown in RC2FX's licence notices.
+- `LICENSES.json`: the license texts, as shown in RC2FX's license notices.
 
 ## What is and isn't verified
 

@@ -9,7 +9,7 @@ use rc2fx_device::{
 use std::time::Duration;
 
 #[tokio::test]
-async fn bounded_admission_cancelled_replies_and_shutdown_drain() {
+async fn bounded_admission_canceled_replies_and_shutdown_drain() {
     let directory = tempfile::tempdir().unwrap();
     let initial = Config::default();
     let (handle, coordinator) = Coordinator::new(Controller::new(

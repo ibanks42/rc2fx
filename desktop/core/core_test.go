@@ -8,7 +8,12 @@ import (
 	"testing"
 )
 
-// Port of crates/rc2fx-core/tests/core.rs.
+// The settings model and device state: wire round trips and defaults, strict
+// validation, suppression latency and the voice gate, meters and diagnostics,
+// EQ coefficients, response curves and EasyEffects interchange, and the
+// editor session (restarts, conflicts, late replies). Rust's
+// crates/rc2fx-core/tests/core.rs checks the mixer's side of the model; the
+// curves, interchange and session are Go only.
 
 func coreState(revision uint64) DeviceState {
 	selected := []string{"mic-1", "usb-main", "send-chat"}

@@ -352,7 +352,7 @@ func TestADownloadThatPassesIsReadyAndAppliedOnlyOnARestart(t *testing.T) {
 	u.CancelRestart()
 	u.LaunchOnQuit()
 	if len(m.applied) != 0 {
-		t.Fatal("applied after a cancelled restart")
+		t.Fatal("applied after a canceled restart")
 	}
 	u.Restart(false)
 	u.LaunchOnQuit()

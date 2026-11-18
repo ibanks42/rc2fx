@@ -283,7 +283,7 @@ impl Server {
     ///
     /// A subscribed client that stays silent for `CLIENT_IDLE` loses its event
     /// subscription, so the controller stops polling the engine at the watched
-    /// rate and stops serialising meter events for it. The session itself is
+    /// rate and stops serializing meter events for it. The session itself is
     /// kept: its admitted request ID and cached reply still refuse a replay.
     /// When the client returns, its next event poll subscribes again and
     /// starts with the current state.

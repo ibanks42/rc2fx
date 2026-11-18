@@ -265,7 +265,7 @@ func TestTheFixTaskFollowsItsRun(t *testing.T) {
 		}
 	}
 	if f.Cancel() {
-		t.Fatal("cancelled after touching the mixer")
+		t.Fatal("canceled after touching the mixer")
 	}
 	f.Outcome(installer.Reply{Kind: installer.ReplyStorageFix, StorageFix: &installer.StorageFix{
 		Outcome: "fixed", Backup: "/b", Touched: true, FinalSent: true}}, nil)
@@ -344,7 +344,7 @@ func TestStopBeforeTheMixerIsTouchedGoesBack(t *testing.T) {
 	if !f.Cancel() || f.CanStop() {
 		t.Fatal("stop before the mixer is touched")
 	}
-	f.Outcome(installer.Reply{}, errors.New(installer.Cancelled))
+	f.Outcome(installer.Reply{}, errors.New(installer.Canceled))
 	if f.Kind != FixBefore {
 		t.Fatalf("kind %v", f.Kind)
 	}

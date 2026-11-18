@@ -62,7 +62,7 @@ func NewestAvailable(offers []installer.MixerOffer, bundled *string) (string, bo
 		if _, ok := Compare(version, version); !ok {
 			continue
 		}
-		// Like Iterator::max_by: the last of equal versions wins.
+		// The last of equal versions wins.
 		if c, _ := Compare(best, version); !found || c <= 0 {
 			best, found = version, true
 		}
@@ -106,8 +106,8 @@ func NeedsNewerApp(offers []installer.MixerOffer, available *string) (AppNeed, b
 				continue
 			}
 		}
-		// Like Iterator::max_by with incomparable versions counted equal: the
-		// later of equal versions wins.
+		// Incomparable versions count as equal, and the later of equal
+		// versions wins.
 		if best == nil {
 			best = m
 		} else if c, ok := Compare(best.Version, m.Version); !ok || c <= 0 {

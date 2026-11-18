@@ -5761,7 +5761,7 @@
       "activeMask": "0x61d900"
     }
   },
-  "method": "Unicorn execution of the vendor port-event handler and of three excerpts of Mixer::Process (input gather, output gather, output dispatch) with buffers replaced by recognisable pointers and processors replaced by recording vtables; static instruction checks for the bridge, active-mask source, registration loop and queued job.",
+  "method": "Unicorn execution of the vendor port-event handler and of three excerpts of Mixer::Process (input gather, output gather, output dispatch) with buffers replaced by recognizable pointers and processors replaced by recording vtables; static instruction checks for the bridge, active-mask source, registration loop and queued job.",
   "findings": [
     "Source IDs 12-15 and 22-25 share internal slots 22-29, which the gather fills from JUCEJack in_13..in_20 when those channels are active; the port-event handler connects usb1in:capture_3..10 to exactly those ports. These are four physical stereo pairs, not eight independent paths: IDs 12/22, 13/23, 14/24, 15/25 alias.",
     "Slots 30-37 (IDs 26-29) are in_21..in_28 (usb1in:capture_11..18). Slots 12-13 (ID 11, SMART Pads) are two mixer-internal buffer channels (object mixer+0xc73c8, channel-table pointer at +0x10), never a JACK port.",

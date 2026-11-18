@@ -3,7 +3,7 @@
 The installer downloads official RØDE firmware, adds RC2FX and any saved
 settings to it on your computer, and flashes the result through the mixer's
 USB update mode. RC2FX then starts automatically each time the mixer turns
-on. Installing, updating and repairing all use the same process.
+on. Installing, updating, and repairing all use the same process.
 
 When the app finds a mixer without RC2FX, it offers **Install RC2FX**. On a
 mixer that already runs RC2FX, open the installer from **Settings › Mixer ›
@@ -109,7 +109,7 @@ using RC2FX don't need it.
 
 ## Installer files
 
-The installer stores downloads, settings backups and a log of every command
+The installer stores downloads, settings backups, and a log of every command
 sent to the mixer in an `RC2FX/installer` folder inside your user data
 folder:
 

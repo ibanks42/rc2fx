@@ -1,6 +1,6 @@
 package app
 
-// settings.rs: the settings page: connection, presets, files and
+// The settings page: connection, presets, files and
 // diagnostics.
 
 import (
@@ -10,10 +10,10 @@ import (
 	"gpuikit.dev/gk/s"
 )
 
-// settingsColumn is the width of the settings page's centred column.
+// settingsColumn is the width of the settings page's centered column.
 const settingsColumn float32 = 760
 
-// settingsSection is settings.rs section: a titled group of rows, a small
+// settingsSection is a titled group of rows: a small
 // uppercase heading, optional controls beside it (nil for none), then the
 // rows.
 func settingsSection(title string, aside gk.Element, body gk.DivEl) gk.DivEl {
@@ -36,8 +36,8 @@ func row(label, controls gk.Element) gk.DivEl {
 		Child(gk.Div(s.FlexShrink0).Child(controls))
 }
 
-// labelled is a row's title and the sentence under it.
-func labelled(title, detail string) gk.DivEl {
+// labeled is a row's title and the sentence under it.
+func labeled(title, detail string) gk.DivEl {
 	d := gk.VFlex().Gap(px(3)).Child(txt(title))
 	if detail != "" {
 		d = d.Child(gk.Div(s.FontNormal).TextSize(px(13.5)).LineHeight(gk.Relative(1.45)).
@@ -75,7 +75,7 @@ func (a *App) mixerSection(cx *gk.Cx) gk.DivEl {
 		Child(row(labeled("RØDECaster", connected),
 			ghost("disconnect", "Disconnect").Disabled(!a.session.Connected && !a.link.connecting()).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.disconnect(cx) }))).
-		Child(row(labelled("RC2FX on this mixer",
+		Child(row(labeled("RC2FX on this mixer",
 			"Update RC2FX to a newer version, or remove it and put RØDE’s stock firmware back. Your settings are saved first."),
 			gk.HFlex(s.Gap2).
 				Child(ghost("update-rc2fx", "Update RC2FX").
@@ -97,14 +97,14 @@ func (a *App) showDiagnostics(cx *gk.Cx, open bool) {
 
 func (a *App) aboutSection(cx *gk.Cx) gk.DivEl {
 	rows := gk.Div().Child(row(
-		labelled("Licenses", "RC2FX is MIT licensed. Third-party notices and credits are included."),
+		labeled("Licenses", "RC2FX is MIT licensed. Third-party notices and credits are included."),
 		ghost("open-licenses", "View licenses").OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { openLicenses(cx) })))
 	return settingsSection("About", nil, rows)
 }
 
 func (a *App) filesSection(cx *gk.Cx) gk.DivEl {
 	return settingsSection("Files", nil, gk.Div().Child(
-		row(labelled("Settings file", "Open a settings file into your draft, or save this draft to share or keep."),
+		row(labeled("Settings file", "Open a settings file into your draft, or save this draft to share or keep."),
 			gk.HFlex(s.Gap2).
 				Child(ghost("open-settings-file", "Open…").
 					Disabled(a.fileBusy || a.pending != nil || a.presets.writing() || a.link.connecting() || a.transitionBusy()).
@@ -123,9 +123,9 @@ func (a *App) appearanceSection(cx *gk.Cx) gk.DivEl {
 		note := "Near black"
 		switch ap {
 		case AppearanceDusk:
-			note = "Deep blue-grey · default"
+			note = "Deep blue-gray · default"
 		case AppearanceGraphite:
-			note = "Neutral dark grey"
+			note = "Neutral dark gray"
 		}
 		choices = choices.Child(choice(gk.Key("appearance", index), ap.Label(), note, ap == current).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
@@ -136,21 +136,21 @@ func (a *App) appearanceSection(cx *gk.Cx) gk.DivEl {
 			}))
 	}
 	return settingsSection("Appearance", nil, gk.Div(s.BorderB1).Py(px(16)).BorderColor(rgb(surface().Line)).
-		Child(labelled("Colors", "").TextSize(px(15)).Style(s.FontMedium).Mb(px(14))).
+		Child(labeled("Colors", "").TextSize(px(15)).Style(s.FontMedium).Mb(px(14))).
 		Child(choices))
 }
 
 func (a *App) diagnosticsTools(cx *gk.Cx) gk.DivEl {
 	return settingsSection("Troubleshooting", nil, gk.Div().
-		Child(row(labelled("Events", "What the mixer reported: overruns, path changes and recoveries, newest first. Opens in its own window."),
+		Child(row(labeled("Events", "What the mixer reported: overruns, path changes and recoveries, newest first. Opens in its own window."),
 			ghost("open-events", "Open events").OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openEvents(cx) }))).
-		Child(row(labelled("Show telemetry", "Levels, delay, counters and timing for every processed path, shown below."),
+		Child(row(labeled("Show telemetry", "Levels, delay, counters and timing for every processed path, shown below."),
 			toggle("show-telemetry", a.telemetryOpen, false, false).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				a.telemetryOpen = !a.telemetryOpen
 				rememberTelemetry(a.telemetryOpen)
 				a.notify(cx)
 			}))).
-		Child(row(labelled("Diagnostics file", "The mixer's state and recent timing history, for reporting a problem."),
+		Child(row(labeled("Diagnostics file", "The mixer's state and recent timing history, for reporting a problem."),
 			ghost("export-diagnostics", "Export diagnostics…").
 				Disabled(a.diagnosticsPending || a.fileBusy || !a.session.Connected).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.requestDiagnostics(cx) })).
@@ -160,7 +160,7 @@ func (a *App) diagnosticsTools(cx *gk.Cx) gk.DivEl {
 // diagnosticsEntry is one quiet row at the foot of Settings; troubleshooting
 // lives behind it.
 func (a *App) diagnosticsEntry(cx *gk.Cx) gk.DivEl {
-	return settingsSection("Diagnostics", nil, gk.Div().Child(row(labelled("Diagnostics", ""),
+	return settingsSection("Diagnostics", nil, gk.Div().Child(row(labeled("Diagnostics", ""),
 		ghost("open-diagnostics", "Open").OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			a.showDiagnostics(cx, true)
 			a.notify(cx)

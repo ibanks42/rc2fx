@@ -310,7 +310,8 @@ func readinessError(body []byte, r *RuntimeProfile) string {
 		a.SampleRate, a.BlockSize, r.SampleRate, r.BlockFrames)
 }
 
-// debugString is Rust's `{:?}` for a str.
+// debugString quotes s, escaping quotes, backslashes, \n \r \t \0, and other
+// unprintable runes as \u{hex}.
 func debugString(s string) string {
 	var out strings.Builder
 	out.WriteByte('"')

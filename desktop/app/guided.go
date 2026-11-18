@@ -207,7 +207,7 @@ func numbered(items ...string) gk.DivEl {
 	return list
 }
 
-// seenRow is a line of what the app sees: a dot coloured by whether it is
+// seenRow is a line of what the app sees: a dot colored by whether it is
 // as it should be.
 func seenRow(color uint32, text string, strong bool) gk.DivEl {
 	textColor := Muted

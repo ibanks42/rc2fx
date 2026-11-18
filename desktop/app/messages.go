@@ -5,7 +5,7 @@ package app
 import "strings"
 
 // progressMessage is whether message reports a step still under way rather
-// than an outcome. (lib.rs progress_message)
+// than an outcome.
 func progressMessage(message string) bool {
 	if strings.HasPrefix(message, saveFailedPrefix) {
 		// A failed save is an outcome whatever its reason says.

@@ -424,7 +424,7 @@ fn a_signal_ends_the_mixer_into_stock_at_once() {
     let pid = rig.supervisor.as_ref().unwrap().id() as i32;
     assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
     rig.finish();
-    assert!(rig.stock().unwrap().contains("Supervisor signalled"));
+    assert!(rig.stock().unwrap().contains("Supervisor signaled"));
     assert_eq!(
         rig.calls()[0],
         format!("{} {controller}", rig.restart_call(0))

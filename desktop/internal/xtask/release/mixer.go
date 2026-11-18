@@ -155,7 +155,8 @@ func releaseKeys(root *tufsign.Root, roles [3][2]string) ([]tufsign.Signer, erro
 	return signers, nil
 }
 
-// MixerTargetValue is the signed claims as serde writes MixerTarget.
+// MixerTargetValue is the signed claims as the mixer's serde writes its
+// MixerTarget.
 func MixerTargetValue(m *installer.MixerTarget) core.Value {
 	profiles := make([]core.Value, len(m.FirmwareProfiles))
 	for i, p := range m.FirmwareProfiles {
@@ -336,7 +337,7 @@ func writeStaged(out string, signed *tufsign.Repository) error {
 	return nil
 }
 
-// extension is Path::extension: what follows the last dot of a name that
+// extension is what follows the last dot of a name that
 // does not start with its only dot.
 func extension(name string) string {
 	at := -1

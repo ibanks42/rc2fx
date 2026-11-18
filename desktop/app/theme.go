@@ -7,16 +7,16 @@ import (
 	"fmt"
 )
 
-// The Rust app's desk::apply_theme wrote 34 colours, the font size and two
-// radii straight into the kit's Theme (`Theme::update`). The Go package
-// cannot: gk.KitThemeColor has no field setters (only its default), and
+// applyTheme sets 34 colors, the font size and two radii, but cannot write
+// them straight into the kit's Theme (`Theme::update`):
+// gk.KitThemeColor has no field setters (only its default), and
 // Theme.Colors returns a different record (KitThemeColor2). What the binding
 // does carry is the kit's theme file format: ThemeRegistry.LoadThemesFromStr
 // and Theme.ApplyConfig. So the same values go in as one theme per
 // appearance, applied by name (applyTheme in desk.go).
 //
 // TODO(B1): a KitThemeColor with setters (or SetColors taking the record
-// Colors returns) would let applyTheme write the fields as the Rust did.
+// Colors returns) would let applyTheme write the fields directly.
 
 // themeSetName is the theme set RC2FX loads into the kit's registry.
 const themeSetName = "RC2FX"
@@ -24,12 +24,12 @@ const themeSetName = "RC2FX"
 // themeName is the registry name of an appearance's theme.
 func themeName(a Appearance) string { return "RC2FX " + a.Label() }
 
-// hexColor is a 0xRRGGBB colour in the theme file's "#rrggbb" form.
+// hexColor is a 0xRRGGBB color in the theme file's "#rrggbb" form.
 func hexColor(c uint32) string { return fmt.Sprintf("#%06x", c&0xffffff) }
 
-// themeColors is desk.rs apply_theme's colours for one appearance, by the
+// themeColors is applyTheme's colors for one appearance, by the
 // kit's theme-file keys (gpui-component src/theme/schema.rs
-// ThemeConfigColors), over the kit's default dark colours.
+// ThemeConfigColors), over the kit's default dark colors.
 func themeColors(a Appearance) map[string]string {
 	sf := a.surface()
 	colors := make(map[string]string, len(kitDefaultDarkColors)+34)

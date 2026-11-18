@@ -3,9 +3,9 @@
 // them.
 package archive
 
-// A tar reader and writer that keep every 512-byte header as it is, as the
-// Rust `tar` crate's raw mode does: GNU long-name and PAX records can be
-// copied verbatim, which archive/tar cannot do.
+// A tar reader and writer that keep every 512-byte header as it is: GNU
+// long-name and PAX records can be copied verbatim, which archive/tar
+// cannot do.
 
 import (
 	"bytes"
@@ -292,7 +292,7 @@ func Octal(field []byte, v uint64) {
 	}
 }
 
-// ArchivePath is the name Rust's tar builder stores for path: leading `./`
+// ArchivePath is the name stored for path: leading `./`
 // and empty or `.` components dropped, a trailing slash kept.
 func ArchivePath(path string) (string, error) {
 	var parts []string
@@ -383,7 +383,7 @@ func paxRecords(data []byte) (map[string][]byte, error) {
 	return records, nil
 }
 
-// parseUsizeText is Rust's usize::from_str.
+// parseUsizeText is an optional '+', then digits only, below 2^63.
 func parseUsizeText(text string) (int, error) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" || strings.Trim(digits, "0123456789") != "" {

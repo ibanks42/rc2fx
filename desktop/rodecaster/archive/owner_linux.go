@@ -122,7 +122,7 @@ func invoker(
 	return nil, nil
 }
 
-// parseU32 is Rust's u32::from_str: an optional '+', then digits.
+// parseU32 is an optional '+', then digits, within 32 bits.
 func parseU32(text string) (uint32, error) {
 	digits := text
 	if len(digits) > 0 && digits[0] == '+' {

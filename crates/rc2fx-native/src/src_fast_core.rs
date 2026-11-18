@@ -423,7 +423,7 @@ fn consecutive(used: &[u16], frame: usize) -> bool {
 /// The vector block runs the scalar frame's instructions lane by lane: widen
 /// (`fcvtl`), subtract, fused multiply-add with `before` as the addend
 /// (`fmla`), narrow (`fcvtn`). Each has the scalar instruction's rounding, NaN
-/// and flush-to-zero behaviour, so the bits match. It reads input frames
+/// and flush-to-zero behavior, so the bits match. It reads input frames
 /// `used - 1 ..= used + 3` and writes four output frames, which are the frames
 /// the scalar code reads and writes.
 ///
@@ -573,7 +573,7 @@ mod tests {
         Samples::Special,
     ];
 
-    /// Signed zeros, infinities, quiet and signalling NaNs with several
+    /// Signed zeros, infinities, quiet and signaling NaNs with several
     /// payloads, the largest and smallest normal and subnormal values.
     const SPECIAL: [u32; 22] = [
         0x0000_0000,

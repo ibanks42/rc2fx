@@ -1,9 +1,9 @@
 package app
 
-// level_bar.rs: the overview's level bars. A bar is a div inside its track
-// (paint_quad's fill as a div, audit 2.3), placed as levels.Bar.Fill places
-// it: a fader's from the bottom, an output's from the left, the 6 px stub
-// without a fresh reading. When it is redrawn is line_overlay.go's.
+// The overview's level bars. A bar is a div inside its track, placed as
+// levels.Bar.Fill places it: a fader's from the bottom, an output's from the
+// left, the 6 px stub without a fresh reading. When it is redrawn is
+// line_overlay.go's.
 
 import (
 	"gpuikit.dev/gk"
@@ -12,7 +12,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/levels"
 )
 
-// levelBarFill is level_bar.rs paint: the bar in its track, which it fills
+// levelBarFill is the bar in its track, which it fills
 // (the track must be relative, as both meters are). level is 0 to 1, or nil
 // without a fresh reading.
 func levelBarFill(bar levels.Bar, level *float32) gk.Element {

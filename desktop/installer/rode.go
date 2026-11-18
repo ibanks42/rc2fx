@@ -262,8 +262,8 @@ func (e *Engine) download(value, dest string, sha *string, md string) error {
 			e.emit(Progress{Phase: phase, Completed: completed, Total: total, Detail: detail})
 		},
 		Cancel: func() error {
-			if e.cancelled() {
-				return Error(Cancelled)
+			if e.canceled() {
+				return Error(Canceled)
 			}
 			return nil
 		},

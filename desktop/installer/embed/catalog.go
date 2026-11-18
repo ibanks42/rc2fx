@@ -46,7 +46,7 @@ type Catalog struct {
 	Profiles []Profile `json:"profiles"`
 }
 
-// SameRuntime is Rust's `Option<RuntimeProfile>` equality.
+// SameRuntime is whether a and b are both nil or equal runtimes.
 func SameRuntime(a, b *RuntimeProfile) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -63,7 +63,7 @@ func (p Profile) Clone() Profile {
 	return p
 }
 
-// Equal is Rust's derived `PartialEq` for a profile.
+// Equal compares every field of a profile, the runtime by SameRuntime.
 func (p Profile) Equal(o Profile) bool {
 	return p.MinimumAppVersion == o.MinimumAppVersion && p.ID == o.ID && p.Model == o.Model &&
 		p.Version == o.Version && p.MixerSHA == o.MixerSHA && p.LauncherSHA == o.LauncherSHA &&

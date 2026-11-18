@@ -1,7 +1,7 @@
 // Package task is what every xtask command shares: the repository root,
-// running a program to completion, SHA-256 in hex, and the Rust standard
-// library's wording for exit statuses, I/O errors and quoted strings, so
-// messages read exactly as the former Rust xtask printed them.
+// running a program to completion, SHA-256 in hex, and fixed wording for
+// exit statuses, I/O errors and quoted strings: the Rust standard library's,
+// as the xtask printed them before it was ported to Go.
 package task
 
 import (
@@ -84,8 +84,8 @@ func Run(command *exec.Cmd) error {
 	return Errorf("%s failed (%s)", Debug(program), Status(command.ProcessState))
 }
 
-// Program is the program a command runs, as it was named (Rust's
-// Command::get_program), not the path it was found at.
+// Program is the program a command runs, as it was named, not the path it
+// was found at.
 func Program(command *exec.Cmd) string {
 	if len(command.Args) > 0 {
 		return command.Args[0]
@@ -99,8 +99,8 @@ func Sha256(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Status is a finished process's status as Rust's ExitStatus displays it:
-// `exit status: 1`, `signal: 9 (SIGKILL)`, or on Windows `exit code: 1`.
+// Status is a finished process's status: `exit status: 1`,
+// `signal: 9 (SIGKILL)`, or on Windows `exit code: 1`.
 func Status(state *os.ProcessState) string {
 	if state == nil {
 		return "exit status: unknown"
@@ -108,16 +108,15 @@ func Status(state *os.ProcessState) string {
 	return statusText(state)
 }
 
-// IOError is an error as Rust's io::Error displays it: an operating system
-// error is its description and `(os error N)`; anything else as it is.
-// Path and syscall wrappers are dropped: the Rust messages name the path
-// themselves.
+// IOError is an error's text: an operating system error is its description
+// and `(os error N)`; anything else as it is. Path and syscall wrappers are
+// dropped: the callers' messages name the path themselves.
 func IOError(err error) string {
 	if err == nil {
 		return ""
 	}
 	if errors.Is(err, exec.ErrNotFound) {
-		// execvp's ENOENT, which Rust reports for a program not on PATH.
+		// A program not on PATH is reported as execvp's ENOENT.
 		return errnoText(syscall.ENOENT)
 	}
 	var errno syscall.Errno
@@ -169,8 +168,8 @@ func Debug(text string) string {
 	return out.String()
 }
 
-// ParseUint is Rust's str::parse for an unsigned integer of bits bits: an
-// optional `+` and ASCII digits only, within range.
+// ParseUint is an unsigned integer of bits bits: an optional `+` and ASCII
+// digits only, within range.
 func ParseUint(text string, bits int) (uint64, bool) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" {
@@ -185,10 +184,10 @@ func ParseUint(text string, bits int) (uint64, bool) {
 	return value, err == nil
 }
 
-// CRLFToLF is Rust's `.replace("\r\n", "\n")`.
+// CRLFToLF replaces every "\r\n" with "\n".
 func CRLFToLF(text string) string { return strings.ReplaceAll(text, "\r\n", "\n") }
 
-// ReadFile is fs::read with the path and Rust's error text.
+// ReadFile is os.ReadFile with the path and IOError's text in its error.
 func ReadFile(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

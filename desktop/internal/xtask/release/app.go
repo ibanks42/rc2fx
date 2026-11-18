@@ -168,7 +168,8 @@ func isHex(text string) bool {
 	return true
 }
 
-// lines is str::lines.
+// lines splits at '\n', drops a '\r' before it, and gives no empty line
+// after a final '\n'.
 func lines(text string) []string {
 	var out []string
 	for text != "" {

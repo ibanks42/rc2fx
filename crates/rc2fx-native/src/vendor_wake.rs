@@ -7,7 +7,7 @@
 //! most of them wake a thread that has nothing to do.
 //!
 //! This entry replaces the loop at `0x5c9028` with a scan for the first worker
-//! that is neither running a job (`worker+0x190 == 0`) nor already signalled
+//! that is neither running a job (`worker+0x190 == 0`) nor already signaled
 //! (`worker+0x128 == 0`), then re-enters the original loop body at `0x5c9040`
 //! with the array cursor on that worker, so the signal itself is the vendor's
 //! own call. With no such worker it jumps straight to the vendor epilogue.
@@ -24,7 +24,7 @@
 //!   event mutex (`0x5dba2c`) and checks that byte under the same mutex in its
 //!   wait (`0x5db660`), so it cannot sleep past the flag.
 //! - A worker with both words zero is exactly a worker that is neither running
-//!   nor signalled, so signalling it is sufficient.
+//!   nor signaled, so signaling it is sufficient.
 //!
 //! The visible difference is which worker takes the job and how many futex
 //! wakeups happen. The wait sites keep their 500 ms guard, so even a missed
@@ -44,7 +44,7 @@ static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static BODY: AtomicUsize = AtomicUsize::new(0);
 static EPILOGUE: AtomicUsize = AtomicUsize::new(0);
 static CALLS: AtomicU64 = AtomicU64::new(0);
-static SIGNALLED: AtomicU64 = AtomicU64::new(0);
+static SIGNALED: AtomicU64 = AtomicU64::new(0);
 static NOBODY: AtomicU64 = AtomicU64::new(0);
 
 /// This thread's submit counters. `select` runs on whichever thread submits a
@@ -79,7 +79,7 @@ pub fn publish() {
         CALLS.fetch_add(counters.calls, Ordering::Relaxed);
     }
     if counters.signals != 0 {
-        SIGNALLED.fetch_add(counters.signals, Ordering::Relaxed);
+        SIGNALED.fetch_add(counters.signals, Ordering::Relaxed);
     }
     if counters.nobody != 0 {
         NOBODY.fetch_add(counters.nobody, Ordering::Relaxed);
@@ -142,8 +142,8 @@ fn choose(pool: usize) -> usize {
             continue;
         }
         // The wake flag is one byte (`stlrb` at 0x5dba3c, `ldarb` at 0x5db69c).
-        // Reading a wider word would mix in the neighbouring bytes, and a
-        // nonzero neighbour would hide a sleeping worker until its 500 ms
+        // Reading a wider word would mix in the neighboring bytes, and a
+        // nonzero neighbor would hide a sleeping worker until its 500 ms
         // timeout.
         let pending = unsafe { (*((worker + PENDING) as *const AtomicU8)).load(Ordering::Acquire) };
         if pending != 0 {
@@ -223,7 +223,7 @@ pub fn status() -> serde_json::Value {
         "installed": ORIGINAL.load(Ordering::Acquire) != 0,
         "skipped": SKIPPED.get(),
         "calls": CALLS.load(Ordering::Relaxed),
-        "signals": SIGNALLED.load(Ordering::Relaxed),
+        "signals": SIGNALED.load(Ordering::Relaxed),
         "nobodyIdle": NOBODY.load(Ordering::Relaxed),
         "rule": "first worker with running job 0 and pending wake 0",
     })
@@ -268,13 +268,13 @@ mod tests {
     fn only_the_flag_byte_and_the_whole_job_pointer_count() {
         let _serial = SERIAL.lock().unwrap_or_else(|poison| poison.into_inner());
         // Nonzero bytes beside the flag must not hide an idle worker.
-        let mut neighbours = worker(0, 0);
-        neighbours[PENDING / 8] = 0xffff_ff00;
+        let mut neighbors = worker(0, 0);
+        neighbors[PENDING / 8] = 0xffff_ff00;
         // A running job whose pointer has zero low 32 bits is still running.
         let high = worker(0x1_0000_0000, 0);
         let block = pool(&[
             Some(high.as_ptr() as usize),
-            Some(neighbours.as_ptr() as usize),
+            Some(neighbors.as_ptr() as usize),
         ]);
         let array = unsafe {
             (block.as_ptr() as *const u8)
@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn the_first_idle_unsignalled_worker_is_chosen() {
+    fn the_first_idle_unsignaled_worker_is_chosen() {
         let _serial = SERIAL.lock().unwrap_or_else(|poison| poison.into_inner());
         let busy = worker(1, 0);
         let flagged = worker(0, 1);
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_signalled_when_every_worker_is_busy_or_flagged() {
+    fn nothing_is_signaled_when_every_worker_is_busy_or_flagged() {
         let _serial = SERIAL.lock().unwrap_or_else(|poison| poison.into_inner());
         let busy = worker(1, 0);
         let flagged = worker(0, 1);
@@ -325,7 +325,7 @@ mod tests {
         COUNTERS.with(|cell| cell.set(Counters::ZERO));
         let before = (
             CALLS.load(Ordering::Relaxed),
-            SIGNALLED.load(Ordering::Relaxed),
+            SIGNALED.load(Ordering::Relaxed),
             NOBODY.load(Ordering::Relaxed),
         );
         let busy = worker(1, 0);
@@ -337,7 +337,7 @@ mod tests {
         // counters have moved before any frame ends.
         assert_eq!(CALLS.load(Ordering::Relaxed), before.0 + 2);
         assert_eq!(NOBODY.load(Ordering::Relaxed), before.2 + 2);
-        assert_eq!(SIGNALLED.load(Ordering::Relaxed), before.1);
+        assert_eq!(SIGNALED.load(Ordering::Relaxed), before.1);
         // Publishing again adds nothing.
         publish();
         assert_eq!(CALLS.load(Ordering::Relaxed), before.0 + 2);

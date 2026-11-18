@@ -2,7 +2,7 @@
 
 The installer flashes official RØDE firmware with RC2FX added to it. It
 builds a modified root filesystem image on the computer containing the
-runtime, the start-up shims and the saved settings, and the mixer's USB
+runtime, the start-up shims, and the saved settings, and the mixer's USB
 update mode installs it. A first install, a repair after a failed state, and
 any update that changes RØDE's firmware use this flash. When only RC2FX
 changes, the app installs the signed mixer payload in place over USB 1
@@ -18,7 +18,7 @@ tools; Repair mixer reads and writes ext4 through libext2fs, vendored in
 ## Inputs
 
 The desktop executable embeds the [firmware catalog](firmware.md), the mixer
-runtime and the installer scripts at build time. The installer and its
+runtime, and the installer scripts at build time. The installer and its
 privileged helper use only those embedded bytes. They ignore files beside the
 executable or in the working directory. Developer tools and tests can pass a
 folder explicitly.
@@ -39,16 +39,16 @@ Working files go in `RC2FX/installer` under the user data folder:
 | Linux | `$XDG_DATA_HOME`, or `~/.local/share` |
 
 `RC2FX_INSTALLER_WORK` overrides the location. The folder holds
-`installer.json`, the prepared firmware, settings backups and the command
+`installer.json`, the prepared firmware, settings backups, and the command
 log. Only one installer can use a given folder at a time.
 
 ### Platforms
 
 - Windows uses its built-in HID and volume APIs.
-- macOS uses IOKit, `ioreg` and `diskutil`.
-- Linux needs root for raw USB, mounting and ejecting. The app itself runs as
-  the user, and so do checking the mixer, listing releases and saving
-  settings. Preparing firmware, switching to update mode and flashing are done
+- macOS uses IOKit, `ioreg`, and `diskutil`.
+- Linux needs root for raw USB, mounting, and ejecting. The app itself runs as
+  the user, and so do checking the mixer, listing releases, and saving
+  settings. Preparing firmware, switching to update mode, and flashing are done
   by a helper started through `pkexec`, which is the same executable in
   installer-helper mode. The cache folder belongs to the user, so the helper
   flashes only an RC2FX image it built itself. The helper starts when the user presses
@@ -65,7 +65,7 @@ serial number) and asks the app's connection whether RC2FX is running. It
 then builds a single plan and skips any step the mixer already satisfies. One
 confirmation starts the plan, which runs to the end unattended. It stops at
 the first error and offers **Retry** from that step. A retry uses the firmware,
-mode and mixer software that were confirmed. Choosing a different mode stops
+mode, and mixer software that were confirmed. Choosing a different mode stops
 the failed run.
 
 1. **Save settings.** If RC2FX is running, the app reads its settings file
@@ -78,7 +78,7 @@ the failed run.
    - `/opt/rc2fx/`: the runtime bundle with `bundle.sha256`,
      `mixer-release.json` (the RC2FX mixer software version, listed in the
      bundle's `SHA256SUMS` and reported by
-     [`GET /api/v1/version`](api.md#versions)), `data/state.json` (the newest saved settings for this mixer) and `logs/`.
+     [`GET /api/v1/version`](api.md#versions)), `data/state.json` (the newest saved settings for this mixer), and `logs/`.
    - `/usr/sbin/rc_audio_mixer`: the audio engine shim (see
      [Architecture](../developer/architecture.md#starting-with-the-mixer)).
    - `/usr/sbin/rc_gui_juce`: the matching shim for the screen program.
@@ -87,7 +87,7 @@ the failed run.
      the files RØDE rewrites or removes itself (`authorized_keys`,
      `/boot/extlinux/extlinux.conf`, which RØDE's updater points at the
      second root when it installs there, `/etc/asound.conf`,
-     `/etc/timestamp`, `/usr/bin/first-boot` and
+     `/etc/timestamp`, `/usr/bin/first-boot`, and
      `/var/lib/alsa/asound.state`) and RC2FX's own files, which the bundle's
      `SHA256SUMS` covers.
 
@@ -98,7 +98,7 @@ the failed run.
    Files in RØDE's image are left as they are. The installer refuses an image
    that already contains any of these paths, requires the audio binaries to
    match a supported profile, and requires the runtime to support that
-   profile. A prepared image is reused when the release, runtime and
+   profile. A prepared image is reused when the release, runtime, and
    settings all match.
 
    RØDE's updater unpacks the image into whichever of its two root
@@ -131,7 +131,7 @@ the failed run.
    first boot after the update it reflashes its controllers and restarts
    again, and the shim runs stock during that boot. On the following boot the
    first engine start loads RC2FX. The app keeps reconnecting over USB 1. The
-   plan finishes when RC2FX reports the engine running, audio advancing and
+   plan finishes when RC2FX reports the engine running, audio advancing, and
    the saved settings applied, and then waits for the
    [image check](#image-check). The computer sends nothing to the mixer during
    these boots.
@@ -203,7 +203,7 @@ short write count is treated as an error.
 The command sequence comes from a
 [published write-up of the Duo's update process](https://hhh.hn/rodecaster-duo-fw/)
 and its traces. The Pro II's USB product IDs come from RØDE's
-`uac2_gadget.sh`: `0037`, `0078`, `008d`, `0092` and `0094` in normal modes,
+`uac2_gadget.sh`: `0037`, `0078`, `008d`, `0092`, and `0094` in normal modes,
 and `0030` in update mode.
 
 ## Release package
@@ -211,21 +211,21 @@ and `0030` in update mode.
 `just package`, or `./xtask package`, writes the release packages for the
 current system to `target/package` (see
 [packaging](../developer/building.md#3-package-it)): on Windows and macOS an
-installer, a portable zip and the update package and feed, made by Velopack's
+installer, a portable zip, and the update package and feed, made by Velopack's
 `vpk`; on Linux an AppImage with its update package and feed, also made by
 `vpk`. Each holds:
 
 - the self-contained app,
-- the project licence, third-party notices, training-data credits and the
-  licence text of every Rust crate, Go module and component of the gpuikit
+- the project license, third-party notices, training-data credits, and the
+  license text of every Rust crate, Go module, and component of the gpuikit
   library, built into the app under **Settings › About › View
   licenses** (the AppImage also carries them as `LICENSES.html`).
 
 Release builds download the mixer payload. With `--embedded`, the runtime,
-catalog, `mixer-release.json` and scripts are embedded in the app instead and
+catalog, `mixer-release.json`, and scripts are embedded in the app instead and
 are not shipped as separate files. Packaging inspects the executable's payload
 mode, and for an embedded build its payload, and fails if it is missing,
-corrupt, stale or from the wrong build kind. This check also runs with
+corrupt, stale, or from the wrong build kind. This check also runs with
 `--skip-build`.
 
 `--target TRIPLE` (a Rust-style target triple, such as

@@ -398,11 +398,11 @@ class ReplacementTests(unittest.TestCase):
         self.assertEqual(f.run(), 0, f.log())
         self.assertEqual(f.lines('kills'), [f'-TERM {ORIGINAL}', f'-KILL {ORIGINAL}'])
 
-    def test_a_dead_server_whose_pid_was_reused_is_never_signalled(self):
+    def test_a_dead_server_whose_pid_was_reused_is_never_signaled(self):
         f = self.fixture('reborn')
         self.assertEqual(f.run(), 1)
         for server in f.servers():
-            os.kill(server, 0)  # still running: neither was signalled
+            os.kill(server, 0)  # still running: neither was signaled
         self.assertIn('PLAIN JACKD DID NOT COME UP CORRECTLY', f.log())
         self.assertEqual(f.lines('callme'), ['stop', 'start'])
 

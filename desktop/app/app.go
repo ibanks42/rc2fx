@@ -1,7 +1,7 @@
-// Package app is the RC2FX desktop app: the port of crates/rc2fx-app (lib.rs
-// and its modules) onto gpuikit.dev/gk. One Go file per Rust module; the
-// non-drawing parts live in the subpackages without gk (model, installflow,
-// licenses, ...). stubs.go says how names inside the package are made.
+// Package app is the RC2FX desktop app's UI on gpuikit.dev/gk. It was ported
+// from the Rust app (crates/rc2fx-app, removed in 89296ea); one Go file per
+// screen or part of one. The non-drawing parts live in the subpackages
+// without gk (model, installflow, licenses, ...).
 package app
 
 import (
@@ -51,8 +51,8 @@ func (b *Backend) tryRecv() (transport.Event, bool) {
 	return b.live.TryRecv()
 }
 
-// HomeKey is what Home last drew that can change with time alone
-// (home.rs home_key's (String, String, Vec<bool>)).
+// HomeKey is what Home last drew that can change with time alone: the
+// headline, its detail and the freshness flags (see homeKey).
 type HomeKey struct {
 	V0, V1 string
 	V2     []bool
@@ -97,7 +97,7 @@ type App struct {
 	band                 int
 	channel              core.Channel
 	editorEpoch          uint64
-	// importDraft is lib.rs `import` (a Go keyword).
+	// importDraft is the EQ import under review, nil for none.
 	importDraft *ImportDraft
 	importError *string
 	fileBusy    bool
@@ -141,8 +141,8 @@ type App struct {
 	// screen's Continue the install: start the task as soon as it can, until
 	// this deadline.
 	installerAutostart *time.Time
-	// settledFlash is the last flash this run of the app saw finish
-	// (Model::settled_flash).
+	// settledFlash is the last flash this run of the app saw finish; it
+	// outlives the guided task (installflow's Model.SettledFlash).
 	settledFlash *uint64
 	// allowDuo is the remembered opt-in to install on an (untested) Duo.
 	allowDuo bool
@@ -194,7 +194,7 @@ type App struct {
 	// happened.
 	recentFaults telemetry.RecentFaults
 	// renderGeneration counts this view's renders; Home's line slot is
-	// claimed per render (line_overlay.rs; WP3 redesigns it, audit 2.4).
+	// claimed per render (line_overlay.go).
 	renderGeneration    uint64
 	lineSlots           LineSlots
 	onboardingSignature gk.View
@@ -223,8 +223,8 @@ type App struct {
 	// the first); narrow() reads it.
 	pageWidth float32
 	wasFresh  bool
-	// lastHomeKey is lib.rs `home_key` (the field; Go cannot have a field
-	// and the homeKey method of one name).
+	// lastHomeKey is the HomeKey of Home's last render (not homeKey: Go
+	// cannot have a field and the homeKey method of one name).
 	lastHomeKey *HomeKey
 	installer   *Installer
 	// focus keeps keyboard focus in the window so Esc returns to the overview.
@@ -246,7 +246,7 @@ type App struct {
 	bandPreviews []gk.View
 }
 
-// newApp is the half of Rc2FxApp::new that needs no window; init is the
+// newApp is the half of the app's setup that needs no window; init is the
 // rest.
 func newApp() *App {
 	backend, message := newBackend()
@@ -273,7 +273,7 @@ func newApp() *App {
 	return a
 }
 
-// init is the rest of Rc2FxApp::new: kit state, focus, the first
+// init is the rest of the app's setup: kit state, focus, the first
 // connection, the background checks and the 50 ms poll. It runs when the
 // window first shows the root view.
 func (a *App) init(cx *gk.Cx) {
@@ -319,7 +319,7 @@ func (a *App) init(cx *gk.Cx) {
 		gk.SetMenus(cx, gk.Menu{Name: "RC2FX", Items: []gk.MenuItem{gk.MenuAction{Name: "Quit", Action: quit}}})
 	}
 	// A timer made in init redraws the root view after each tick; poll opts
-	// out (gk.Quiet) and redraws only where the Rust called cx.notify().
+	// out (gk.Quiet) and redraws only when it calls a.notify.
 	a.pollTimer = gk.Every(cx, 50*time.Millisecond, a.poll)
 }
 
@@ -361,7 +361,7 @@ func (a *App) confirmClose(cx *gk.Cx) bool {
 		// Quit with the window still open: see requestQuit.
 		gk.Quit(cx)
 	}, func(cx *gk.Cx) {
-		// Only when cancelled: "Discard and close" sets discarded before
+		// Only when canceled: "Discard and close" sets discarded before
 		// this runs, and its quit must still apply a requested update.
 		if !discarded {
 			a.selfUpdate.CancelRestart()
@@ -800,8 +800,8 @@ func (a *App) poll(cx *gk.Cx) {
 	changed = a.pollRepair() || changed
 	a.pollFirstLook(cx)
 	a.autostartInstaller(cx)
-	// lib.rs called this at the top of every render; a gk view function may
-	// not write kit state, so it runs here, on the same 50 ms tick.
+	// A gk view function may not write kit state, so the installer's
+	// selects are synced here, on the 50 ms tick, rather than in render.
 	a.syncInstallerSelects(cx)
 	if a.session.Saved != nil && a.session.Saved.Selection.Status == core.SelectionPhaseIdle {
 		a.selectionAsked = false
@@ -844,7 +844,7 @@ func (a *App) poll(cx *gk.Cx) {
 	a.wasFresh = isFresh
 	a.lastHomeKey = homeKey
 	// The live indicators' views and ticker, and the signature's
-	// (line_overlay.go: in Go each indicator is its own view, audit 2.4).
+	// (line_overlay.go: each indicator is its own view).
 	a.pollIndicators(cx)
 	if a.link.due(a.session.Connected, time.Now()) {
 		a.beginConnection(cx, true)
@@ -1037,7 +1037,7 @@ func (a *App) openOverview(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// quitFromMain is lib.rs quit_from: requestQuit on the main window; quits
+// quitFromMain is requestQuit on the main window; it quits
 // outright if it is already gone.
 func (a *App) quitFromMain(cx *gk.Cx) {
 	if slices.Contains(gk.Windows(cx), a.window) {
@@ -1069,7 +1069,7 @@ func windowTitle() string {
 	return "RC2FX"
 }
 
-// Run is the native application's entry point (lib.rs run): the helper modes
+// Run is the native application's entry point: the helper modes
 // the installer starts this executable in, then the window.
 func Run() {
 	args := os.Args
@@ -1100,9 +1100,8 @@ func Run() {
 	gk.Run(func(cx *gk.Cx) {
 		gk.QuitOnLastWindow(cx, true)
 		a.root = gk.NewView(a.init, a.view)
-		// Home's animated indicators wrapped the app in a shell in the Rust
-		// (line_overlay.rs, RC2FX_ANIMATED_LINE); in Go each indicator is its
-		// own view (audit 2.4, WP3), so the window holds the app directly.
+		// Each of Home's animated indicators is its own view
+		// (line_overlay.go), so the window holds the app directly.
 		a.window = gk.OpenWindowWith(cx, windowIdentity(gk.WindowConfig{
 			Width:     Window[0],
 			Height:    Window[1],

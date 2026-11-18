@@ -1,7 +1,7 @@
 # Xrun flight recorder
 
 Kernel scheduler timestamps must pass a cadence check before the analyzer
-attributes durations, CPU occupancy or cross-CPU ordering. Invalid or incomplete
+attributes durations, CPU occupancy, or cross-CPU ordering. Invalid or incomplete
 kernel timing is reported explicitly; native monotonic histories can still be
 examined separately. Task selection uses `set_event_pid` rather than event-field
 filters to avoid the kernel event-discard path. Nearby callbacks alone do not
@@ -34,7 +34,7 @@ client timing or the gauges are on, and every three seconds otherwise. Keep
 `status.json` records `measurementLevel` and a `measurement` block for the whole
 window since the baseline, all from level 1 counters: `slowCallbacks` (the
 growth of `audit.cycle.endPos.histogram[4:]`), `slowCallbacksPerHour`, and
-`meanCallbackWallUs`, `meanNativeWallUs` and `meanOwnedWallUs` from
+`meanCallbackWallUs`, `meanNativeWallUs`, and `meanOwnedWallUs` from
 `callbackTiming[0]`. Means are precise within five minutes. Rates are not: level
 1 gives only about 4 slow callbacks per five minutes, so judge a rate over 30
 minutes or more.
@@ -56,7 +56,7 @@ block to `measurement`:
   capture). Silence is written only when fill drops below 0, and target fill is
   146 frames. `--ring-frames` defaults to 784, which is 4 periods of 196 frames
   on the S32 gadget. Check it if the USB mode differs.
-- `srcMeanUsPerCycle`, `srcMaxCycleUs` and `srcCallsPerCycle`: resampler time
+- `srcMeanUsPerCycle`, `srcMaxCycleUs`, and `srcCallsPerCycle`: resampler time
   for that client, measured around each `src_process` call.
 - `vendorJob`: where RØDE's monitor job ended in its own cycle, as a histogram
   in the `endPos` bins, and `pastJackdRead`, the jobs that ended after jackd's
@@ -86,7 +86,7 @@ in an instance. This tool therefore requires exclusive use of an idle global
 tracer, refuses existing tracing instances, saves the prior buffer/clock/on/off
 settings, and restores them on `clear`. Capture uses a rolling 4 MiB buffer per
 CPU, scheduling events and syscalls filtered to the measured USB callback, JACK
-driver and external SIP process. Kernel tracing adds overhead: this is an instrumented qualification,
+driver, and external SIP process. Kernel tracing adds overhead: this is an instrumented qualification,
 not a claim that observation is free. There are no per-callback uprobes.
 
 Set the usual `RC2FX_MIXER_IP`, `RC2FX_MIXER_KEY`,
@@ -100,7 +100,7 @@ python3 tools/xrun_trace/bench.py --keep-going --bundle /path/to/verified/mixer-
 ```
 
 The bench plays six quiet, distinct modulated stereo signals through System,
-Game, Music, Virtual A, Virtual B and Chat. It reads the mixer every 30 seconds by default (configurable with `--interval`),
+Game, Music, Virtual A, Virtual B, and Chat. It reads the mixer every 30 seconds by default (configurable with `--interval`),
 checks process/boot identity, telemetry freshness, callback progress, xruns and
 other error counters, and stops its own playback on completion. Run it in a
 persistent foreground session or service. It does not publish releases or touch
@@ -131,10 +131,10 @@ A failed setup likewise requires inspection and explicit cleanup.
 The analysis distinguishes execution, runnable scheduling delay, blocking
 syscalls, and an outstanding wake before callback entry. It names observed
 competitors and records syscall numbers/arguments, IRQ spans, and wake sources.
-Missing identity, missing intervals or lost events are reported as limitations;
+Missing identity, missing intervals, or lost events are reported as limitations;
 a scheduler mechanism alone does not establish which source-code defect caused
 it. The raw trace, native audit, JACK binary snapshot, process maps, thread
-priorities, boot identity and buffer-loss counters remain available for deeper
+priorities, boot identity, and buffer-loss counters remain available for deeper
 analysis.
 
 ## Controlled validation
@@ -142,7 +142,7 @@ analysis.
 `cpu_hog.c` is a diagnostic injector, never part of the runtime. The host command
 `python3 tools/xrun_trace/run.py self-test --out /path/to/new-self-test`
 cross-compiles it with Zig, uploads it into RAM, injects the fault, collects the
-capture and requires attribution to the hog. The launcher command temporarily pins the measured USB callback to CPU 3 and injects 10 ms
+capture, and requires attribution to the hog. The launcher command temporarily pins the measured USB callback to CPU 3 and injects 10 ms
 of FIFO-80 work there. It restores the original affinity and has a one-second
 watchdog. This intentionally interrupts audio and is only for an authorized
 bench. A validated capture must name that hog as the thread delaying the USB
@@ -181,14 +181,14 @@ delay. Dispatch lookup also rejects wakes from an earlier completed callback.
 live thread identities and affinity masks, it restricts the JACK FIFO-51 driver
 to CPU 1 and restricts the two USB output threads to CPU 3, intersecting
 their existing masks. The main callback remains on CPU 2.
-The original masks, process IDs and thread start times are saved with the
+The original masks, process IDs, and thread start times are saved with the
 capture. `clear` restores them only if the same process/thread still exists.
 This is an experimental bench policy, not a production fix. The ordinary bench
 leaves affinity unchanged. Diagnostic tracing uses `set_event_pid` for mixer,
-JACK and SIP tasks. Event field filters are disabled to avoid the known discard path.
+JACK, and SIP tasks. Event field filters are disabled to avoid the known discard path.
 See the [kernel PID-selection documentation](https://docs.kernel.org/trace/ftrace.html#set-event-pid).
 
-The default profile records transitions involving selected mixer, JACK and SIP
+The default profile records transitions involving selected mixer, JACK, and SIP
 tasks through PID selection, and omits syscall events. `--deep` adds syscall
 capture for those tasks, including external SIP semaphore identity. The minimal profile cannot establish
 continuous occupancy by an intermediate competitor; analysis marks that scope
@@ -210,7 +210,7 @@ For an observation-overhead control, disable the optional client-timing marker
 with the launcher's `xrun-trace unprepare`, explicitly restart audio using the
 installed launcher, then run `bench.py --no-trace --seconds 300 --interval 30`.
 The control refuses a baseline with the optional timing probe still enabled.
-It uses the same audio, compressed checkpoint transport and error-counter
+It uses the same audio, compressed checkpoint transport, and error-counter
 checks, but does not arm or collect a kernel trace. Restarting is explicit;
 `unprepare` itself only removes the diagnostic marker for the next audio start.
 

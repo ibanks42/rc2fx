@@ -5,10 +5,11 @@ import (
 	"testing"
 )
 
-// Ports of the #[cfg(test)] modules in inputs.rs, versions.rs, ssh.rs and
-// apo.rs.
+// Show input assignments, release versions, SSH status and Equalizer APO
+// import. rc2fx-core's inputs.rs, versions.rs and ssh.rs have unit tests of
+// their own; APO import is Go only.
 
-// inputs.rs
+// Show inputs
 
 func TestAssignmentsRequireUniquePhysicalSourcesAndProcessingBindings(t *testing.T) {
 	inventory := StockInventory{
@@ -52,7 +53,7 @@ func TestAssignmentsRequireUniquePhysicalSourcesAndProcessingBindings(t *testing
 	fails(t, inventory.Validate())
 }
 
-// versions.rs
+// Versions
 
 func TestVersionsCompareNumericallyNotLexically(t *testing.T) {
 	for _, c := range []struct {
@@ -107,7 +108,7 @@ func TestDeviceVersionsOmitWhatIsUnknownAndTolerateNewFields(t *testing.T) {
 	check(t, newer.FirmwareProfile != nil && *newer.FirmwareProfile == "rodecaster-pro-ii-1.7.7")
 }
 
-// ssh.rs
+// SSH
 
 // A real Ed25519 public key, generated for these tests; its private half was
 // discarded.
@@ -203,7 +204,7 @@ func TestStatusAndRequestRoundTrip(t *testing.T) {
 	fails(t, must2(FromJSON[SSHRequest](`{"enabled":true,"x":1}`)))
 }
 
-// apo.rs
+// Equalizer APO import
 
 func TestSuppliedAutoEQAndFifteenBandPresetsPreserveTheirCurves(t *testing.T) {
 	for _, preset := range []struct {

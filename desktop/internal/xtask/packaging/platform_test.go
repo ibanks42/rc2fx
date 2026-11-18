@@ -188,7 +188,7 @@ func walk(t *testing.T, base string) map[string][]byte {
 	return seen
 }
 
-func TestAppDirHasOnlyTheRuntimeUIAndLicences(t *testing.T) {
+func TestAppDirHasOnlyTheRuntimeUIAndLicenses(t *testing.T) {
 	appdir := filepath.Join(t.TempDir(), "AppDir")
 	exe := []byte("ELF executable")
 	if err := stage(appdir, exe, []licenseFile{{"rust-crates.html", []byte("<html>")}}); err != nil {
@@ -204,7 +204,7 @@ func TestAppDirHasOnlyTheRuntimeUIAndLicences(t *testing.T) {
 		}
 	}
 	if string(files["usr/share/licenses/rc2fx/rust-crates.html"]) != "<html>" {
-		t.Fatal("licence")
+		t.Fatal("license")
 	}
 	apprun := string(files["AppRun"])
 	if !strings.Contains(apprun, "$APPDIR/usr/bin/rc2fx") || !strings.Contains(apprun, "LD_LIBRARY_PATH") || strings.Contains(apprun, "APPIMAGE=") {
@@ -255,7 +255,7 @@ func TestDeployKeepsThePayloadAndTheAppDirTheHelperNeeds(t *testing.T) {
 	appdir := filepath.Join(root, "work", "rc2fx.AppDir")
 	exe := []byte("registry-pinned executable bytes")
 	tools := fakeTools(t, root)
-	if err := stage(appdir, exe, []licenseFile{{"rust-crates.html", []byte("licence")}}); err != nil {
+	if err := stage(appdir, exe, []licenseFile{{"rust-crates.html", []byte("license")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := deploy(appdir, "x64", tools); err != nil {

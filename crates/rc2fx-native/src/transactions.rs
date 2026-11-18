@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(paths.control.status().unwrap().applied, 2);
     }
     #[test]
-    fn lost_commit_reply_is_reconcilable_and_cannot_be_cancelled_after_publication() {
+    fn lost_commit_reply_is_reconcilable_and_cannot_be_canceled_after_publication() {
         let target = target();
         let transaction = transaction();
         let now = Instant::now();

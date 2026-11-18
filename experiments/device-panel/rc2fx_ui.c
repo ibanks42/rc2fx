@@ -242,7 +242,7 @@ static void fault(const char *reason) {
     if(!atomic_exchange_explicit(&failed,true,memory_order_acq_rel))request_exit(reason);
 }
 
-/* Original 5x7 lettering. Neutral greys/white avoid assuming V4L2 BA24 color
+/* Original 5x7 lettering. Neutral grays/white avoid assuming V4L2 BA24 color
  * channels match DRM XR24; both byte orders render equal R/G/B correctly. */
 static const uint8_t font[26][7]={
  {14,17,17,31,17,17,17},{30,17,17,30,17,17,30},{14,17,16,16,16,17,14},

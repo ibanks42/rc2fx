@@ -24,8 +24,8 @@ func mustTime(t *testing.T, text string) time.Time {
 }
 
 // testRoot writes a root expiring 2099-01-01 with one disposable Ed25519
-// key per role, as ROLE.pk8 (PKCS #8 DER) in dir, and root.json, as the
-// Rust tests made with tough. It returns the signers by role.
+// key per role, as ROLE.pk8 (PKCS #8 DER) in dir, and root.json. It returns
+// the signers by role.
 func testRoot(t *testing.T, dir string) map[string]tufsign.Signer {
 	t.Helper()
 	signers := map[string]tufsign.Signer{}
@@ -72,7 +72,7 @@ func testRoot(t *testing.T, dir string) map[string]tufsign.Signer {
 	return signers
 }
 
-// weekAhead is jiff's `(Timestamp::now() + 7 days).to_string()`.
+// weekAhead is seven days from now, as DisplayTimestamp writes it.
 func weekAhead() string {
 	return tufsign.DisplayTimestamp(time.Now().Add(7 * 86400 * time.Second))
 }

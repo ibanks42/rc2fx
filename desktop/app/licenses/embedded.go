@@ -12,8 +12,7 @@ import (
 //
 //	RC2FX_RELEASE_BUILD=1 RC2FX_LICENSES_JSON=/path/to/licenses.json go generate ./app/licenses
 //
-// gen.go checks the file the way build.rs did and refuses a release build
-// without one.
+// gen.go checks the file and refuses a release build without one.
 //
 //go:generate go run gen.go
 

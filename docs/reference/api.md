@@ -267,7 +267,7 @@ the mixer) or `damaged`. `repaired` and `damaged` list up to 32 paths each;
 ## Developer SSH
 `GET /api/v1/ssh` and `PUT /api/v1/ssh` exist only on USB 1. The touchscreen
 socket answers them with 404, as does `rc2fxd` from before them. `rc2fxd` runs
-`rc2fx.sh developer-ssh`, which owns the behaviour, off its async executor,
+`rc2fx.sh developer-ssh`, which owns the behavior, off its async executor,
 one call at a time, with a ten-second limit for the script and everything it
 starts, and with bounded input and output.
 
@@ -314,7 +314,7 @@ The protocol is compact and versioned, and is documented in
 `crates/rc2fx-device/src/ui_control.rs`. It provides state and preset
 summaries, applying presets, and turning processing on and off. These go
 through the same API and coordinator as USB requests, so writes keep the
-revision and generation checks and the same save and publish behaviour.
+revision and generation checks and the same save and publish behavior.
 There is one settings store, and the panel has no direct path to the DSP.
 Eligibility distinguishes presets, ON, and an explicit OFF during a fault. A
 lost reply to a write does not allow the write to be replayed.
@@ -326,29 +326,23 @@ buttons act only when touched.
 
 ## Settings
 
-Saved settings use schema version 8. Settings saved under schemas 5 to 7 are
-upgraded when loaded:
-
-- Schema 5 gains the voice gate, set to off.
-- Schema 6's gate switch becomes a strength. An off gate becomes strength 0.
-- Schema 7's EQ bands drop `width` and `slope`.
-
-Older schemas are rejected. The desktop app and the mixer runtime must use
+Saved settings use schema version 9. Settings in any other schema are
+rejected, not upgraded: the controller refuses a saved state it cannot read
+and leaves the file as it is. The desktop app and the mixer runtime must use
 the same schema, so update them together.
 
 ```json
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "revision": 1,
   "selectedTargets": ["mic-1"],
-  "screenConversion": "hardware",
   "targets": [{
     "id": "mic-1", "name": "Mic 1", "kind": "mic", "channels": 1,
     "bypass": false,
     "order": ["highpass", "suppression", "eq", "compressor", "gain", "limiter"],
     "highpass": {"enabled": false, "frequency": 80},
     "suppression": {
-      "enabled": false, "wet": 1, "algorithm": "deepfilternet3-h128", "lookahead": 0,
+      "enabled": false, "wet": 1, "lookahead": 0,
       "gate": {
         "strength": 0, "advanced": false,
         "threshold": 0.3, "reduction": 0, "attack": 5, "hold": 350, "release": 300
@@ -386,8 +380,8 @@ the same schema, so update them together.
   covers all saved targets, including bypassed and deselected ones. To move
   it, disable and apply the old target first. Other outputs and playback
   inputs reject suppression.
-- `algorithm` is `deepfilternet3-h128`. `wet` blends the result with the
-  dry signal.
+- Suppression always uses DeepFilterNet3; settings name no model. `wet`
+  blends the result with the dry signal.
 - `lookahead` is 0 or 1. A value of 1 adds one 240-sample hop of delay. If
   omitted it is 0.
 - On Chat, one mono denoiser processes the microphone contribution, captured
@@ -403,7 +397,7 @@ the same schema, so update them together.
 
 `gate` turns the microphone down while the suppression model hears no voice.
 It works only while suppression is on. The voice score and the open, hold
-and close behaviour are described in
+and close behavior are described in
 [Voice gate](suppression.md#voice-gate). A gate with zero reduction is off.
 
 When `advanced` is false, `strength` (0 off to 1 strict) sets threshold,
@@ -437,10 +431,8 @@ app, and runs without the desktop app. Rules:
 
 ### Other fields
 
-`screenConversion` is the
-[screen conversion](../user/settings-and-diagnostics.md#screen-conversion)
-setting: `hardware` (the default, also used when the field is omitted),
-`balanced` or `cpu-large`. It affects only the screen.
+The retired `screenConversion` setting and suppression `algorithm` field are
+unknown fields in schema 9.
 
 Unknown, duplicate, missing or out-of-range fields fail validation.
 

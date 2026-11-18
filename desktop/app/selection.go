@@ -1,6 +1,6 @@
 package app
 
-// selection.rs: which paths the mixer processes, switched one at a time
+// Which paths the mixer processes, switched one at a time
 // from a channel's header or all at once from a settings file's selection.
 
 import (

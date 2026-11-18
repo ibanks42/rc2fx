@@ -2,8 +2,8 @@ package installflow
 
 import "reflect"
 
-// deepCopy is Rust's derived Clone for test values: slices, maps and pointers
-// are copied, not shared, so changing the copy leaves the original alone.
+// deepCopy copies a test value deeply: slices, maps and pointers are copied,
+// not shared, so changing the copy leaves the original alone.
 // Unexported fields are copied shallowly.
 func deepCopy[T any](v T) T {
 	var out T

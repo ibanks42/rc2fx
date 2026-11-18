@@ -5,7 +5,7 @@ package app
 import "sync/atomic"
 
 // Surface is the window's surfaces for one appearance. Text, accent and
-// problem colors are shared (colors.go). (desk.rs Surface)
+// problem colors are shared (colors.go).
 type Surface struct {
 	Bg          uint32
 	Sunken      uint32
@@ -17,19 +17,19 @@ type Surface struct {
 	LineStrong  uint32
 }
 
-// Appearance is desk.rs Appearance.
+// Appearance is the app's color scheme, chosen in Settings.
 type Appearance int
 
 const (
-	// AppearanceDusk is deep blue-grey, the default.
+	// AppearanceDusk is deep blue-gray, the default.
 	AppearanceDusk Appearance = iota
-	// AppearanceGraphite is neutral dark grey.
+	// AppearanceGraphite is neutral dark gray.
 	AppearanceGraphite
 	// AppearanceBlack is near black.
 	AppearanceBlack
 )
 
-// AppearanceAll is Appearance::ALL.
+// AppearanceAll is every appearance, in menu order.
 var AppearanceAll = [3]Appearance{AppearanceDusk, AppearanceGraphite, AppearanceBlack}
 
 // Key is the appearance's name in view.json.
@@ -53,7 +53,7 @@ func (a Appearance) Label() string {
 	return "Dusk"
 }
 
-// AppearanceFromKey is Appearance::from_key.
+// AppearanceFromKey is the appearance whose Key is key; false for none.
 func AppearanceFromKey(key string) (Appearance, bool) {
 	for _, a := range AppearanceAll {
 		if a.Key() == key {
@@ -118,8 +118,8 @@ func appearance() Appearance {
 // surface is the current appearance's surfaces.
 func surface() *Surface { return appearance().surface() }
 
-// storeAppearance is the state half of desk.rs set_appearance (the theme half
-// is setAppearance in desk.go).
+// storeAppearance is the state half of changing the appearance (the theme
+// half is setAppearance in desk.go).
 func storeAppearance(a Appearance) {
 	i := 0
 	for j, x := range AppearanceAll {

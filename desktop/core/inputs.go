@@ -27,7 +27,7 @@ type StockInventory struct {
 	Inputs    []StockSource `json:"inputs"`
 }
 
-// Equal is Rust's derived PartialEq.
+// Equal compares field by field (deepEqual).
 func (s StockInventory) Equal(other StockInventory) bool { return deepEqual(s, other) }
 
 func (s StockInventory) Validate() error {

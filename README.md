@@ -1,10 +1,10 @@
 # RC2FX
 
 RC2FX adds audio processing to the RØDECaster Pro II: a parametric EQ with up
-to 32 bands, a compressor, a limiter, a high-pass filter, a gain stage and
+to 32 bands, a compressor, a limiter, a high-pass filter, a gain stage, and
 noise suppression. The processing runs on the mixer inside RØDE's audio
 engine, so every device connected to the mixer hears the result. A desktop
-app for Windows, Linux and macOS changes the settings over USB. The settings
+app for Windows, Linux, and macOS changes the settings over USB. The settings
 are stored on the mixer and stay in effect after the app is closed.
 
 ![The RC2FX app with noise suppression on a microphone channel](docs/public/screenshots/mic-noise-suppression.png)
@@ -17,7 +17,7 @@ are stored on the mixer and stay in effect after the app is closed.
 | macOS 13 or later (Apple silicon and Intel) | [.pkg](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.pkg) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.zip) |
 | Linux (x64) | — | [AppImage](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage) |
 
-Release notes, checksums and every file are on the
+Release notes, checksums, and every file are on the
 [latest release](https://github.com/ibanks42/rc2fx/releases/latest). Then
 follow [Getting started](https://ibanks42.github.io/rc2fx/user/getting-started).
 
@@ -29,10 +29,10 @@ follow [Getting started](https://ibanks42.github.io/rc2fx/user/getting-started).
   noise, with an optional voice gate.
 - Suppression on Chat Mix Out, which cleans up the microphones that people on
   a call hear and leaves Smart Pads and music alone.
-- Compressor, limiter, high-pass and gain, in any order.
+- Compressor, limiter, high-pass, and gain, in any order.
 - 25 processing paths on the Pro II: microphones, USB and Chat inputs,
   CallMe, wireless, Bluetooth, the virtual USB inputs, all four headphone
-  outputs, the monitors and the USB mix outputs.
+  outputs, the monitors, and the USB mix outputs.
 
 A fresh install processes nothing until you turn a channel on. Flashing
 stock RØDE firmware removes RC2FX.
@@ -45,9 +45,9 @@ stock RØDE firmware removes RC2FX.
    have a portable zip.
 2. Connect the computer to the mixer's **USB 1** port.
 3. Choose **Install RC2FX**. The app downloads official RØDE firmware, adds
-   RC2FX to it and flashes it through the mixer's USB update mode. The
+   RC2FX to it, and flashes it through the mixer's USB update mode. The
    computer needs an internet connection for the download.
-4. Pick a channel, turn on **Processing** and switch on some effects. Each
+4. Pick a channel, turn on **Processing**, and switch on some effects. Each
    change is heard at once and saved to the mixer on its own.
 
 The [user guide](docs/introduction.md) covers each step in more detail.
@@ -76,18 +76,18 @@ just test                           # Go and Rust tests, go vet and Clippy
 just mixer-build                    # cross-build the mixer runtime into target/mixer
 ```
 
-The build works on Windows, Linux and macOS. The
+The build works on Windows, Linux, and macOS. The
 [developer guide](docs/developer/index.md) covers setup, working on a real
-mixer and the project layout.
+mixer, and the project layout.
 
 ## License
 
 RC2FX's own code and its trained noise suppression weights are licensed under
-[MIT](LICENSE-MIT). Third-party components keep their own licences, listed in
+[MIT](LICENSE-MIT). Third-party components keep their own licenses, listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The datasets the weights
 were trained on are credited in
 [crates/rc2fx-dfn/model/PROVENANCE.md](crates/rc2fx-dfn/model/PROVENANCE.md);
-their own terms are not changed by this licence.
+their own terms are not changed by this license.
 
 RC2FX is an unofficial project and is not affiliated with or endorsed by
 RØDE. It needs root access to the mixer and only runs on firmware it has been

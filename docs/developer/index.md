@@ -35,9 +35,9 @@ that keep it in step with the mixer's Rust.
 | `desktop/app`, `desktop/cmd/rc2fx` | Desktop app and its installer page |
 | `desktop/transport` | The app's USB 1 control client |
 | `desktop/installer` | Installer engine: firmware download and patching, USB update mode, the USB control client. `desktop/ext2fs` is the vendored libext2fs that Repair mixer uses. |
-| `desktop/packaging` | AppImage launcher, desktop entry, icons and macOS entitlements |
+| `desktop/packaging` | AppImage launcher, desktop entry, icons, and macOS entitlements |
 | `crates/rc2fx-usb` | USB control framing for `rc2fxd`; the app's copy is `desktop/usbproto` |
-| `crates/rc2fx-core` | Settings model, control API messages and EQ coefficients; the app's copy, `desktop/core`, also holds the editor logic and EasyEffects and APO import/export |
+| `crates/rc2fx-core` | Settings model, control API messages, and EQ coefficients; the app's copy, `desktop/core`, also holds the editor logic and EasyEffects and APO import/export |
 | `crates/rc2fx-delta` | Delta transport for in-place payload uploads: the mixer's decoder, plus a test-only encoder behind the `encode` feature; the app's encoder is `desktop/delta` |
 | `crates/rc2fx-dsp` | Effect chain |
 | `crates/rc2fx-suppression` | Noise-suppression worker and models |
@@ -45,14 +45,17 @@ that keep it in step with the mixer's Rust.
 | `crates/rc2fx-native` | `librc2fx_native.so`, the library loaded into the mixer |
 | `crates/rc2fx-native-control` | Protocol between that library and `rc2fxd` |
 | `crates/rc2fx-device` | `rc2fxd`: controller, control API, settings store |
-| `crates/rc2fx-firmware` | Firmware catalog validation and the offline compatibility checker; the app's copy is `desktop/firmware` |
+| `crates/rc2fx-supervisor` | `rc2fx-supervisor`: watches the audio engine and `rc2fxd`, and hands audio back to stock when either fails |
+| `crates/rc2fx-firmware` | Firmware catalog validation, the mixer's profile selection, and the offline compatibility checker; the app's side, `desktop/firmware`, reads the catalog and inspects images |
 | `crates/rc2fx-bench` | Benchmarks the suppression models on the mixer |
 | `crates/rc2fx-gui` | `librc2fx_gui.so` (C), loaded into RØDE's screen program. It converts only the changed parts of the screen, which reduces the load redraws put on audio. |
-| `xtask`, `desktop/cmd/xtask` | Build, deploy and packaging tasks. `./xtask` at the root runs the Go tool in `desktop/cmd/xtask` and `desktop/internal/xtask`. |
-| `mixer/scripts` | The launcher, shims and installer script that run on the mixer, with their tests in `mixer/scripts/tests` |
+| `xtask`, `desktop/cmd/xtask` | Build, deploy, and packaging tasks. `./xtask` at the root runs the Go tool in `desktop/cmd/xtask` and `desktop/internal/xtask`. |
+| `mixer/scripts` | The launcher, shims, and installer script that run on the mixer, with their tests in `mixer/scripts/tests` |
 | `fixtures/` | Accept and reject cases that the Rust and Go tests both read, so the two copies of shared code agree |
 | `config/firmware-profiles.json` | [Firmware catalog](../reference/firmware.md) |
 | `tools/firmware_audit` | Audits a new RØDE firmware against the hooks RC2FX depends on |
+| `tools/src_fast_check` | Compares the library's sample-rate converter (`src_fast_core.rs`) with the real libsamplerate, on AArch64 or under qemu |
+| `tools/xrun_trace` | Xrun flight recorder: bench runs and kernel scheduler traces on a mixer |
 | `experiments/` | Unfinished work outside the build (currently the on-screen panel) |
 | `docs/` | This documentation |
 
@@ -62,22 +65,22 @@ Rust; the desktop app is the Go module in `desktop/`.
 
 ## Pages in this guide
 
-- [Building from source](building.md): tools, builds and tests on Windows,
-  Linux or macOS.
-- [Linux setup](linux.md): package lists for Debian/Ubuntu, Fedora and Arch.
+- [Building from source](building.md): tools, builds, and tests on Windows,
+  Linux, or macOS.
+- [Linux setup](linux.md): package lists for Debian/Ubuntu, Fedora, and Arch.
 - [Working on a mixer](mixer-workflow.md): enabling SSH from the app and
   running a build on a mixer over SSH without reflashing.
 - [Commands](commands.md): all `just` recipes.
 - [Architecture](architecture.md): start-up, fallback to stock, and how
   settings are applied.
 - [The desktop app in Go](desktop-go.md): the Go packages, naming, strict
-  JSON and the fixtures shared with the Rust crates.
+  JSON, and the fixtures shared with the Rust crates.
 - [Releases](releases.md): cutting a release.
 - [Update histories and the feed](update-history.md): the generated app and
   mixer histories and `updates.json`.
 
 The [technical reference](../reference/index.md) covers protocols, file
-formats, firmware support and per-crate notes.
+formats, firmware support, and per-crate notes.
 
 ## Rules for changes
 
@@ -85,8 +88,8 @@ This code runs inside someone's audio hardware, so a few rules apply
 everywhere:
 
 - RC2FX only adds files to the mixer. Leave RØDE's files as they are, and put
-  mixer-side behaviour in `mixer/scripts/rc2fx.sh`.
-- The audio callback must not lock, allocate or wait. Move slow work to
+  mixer-side behavior in `mixer/scripts/rc2fx.sh`.
+- The audio callback must not lock, allocate, or wait. Move slow work to
   another thread.
 - When a check fails or something is uncertain, fall back to stock and let
   RØDE's code run unchanged.
@@ -110,5 +113,5 @@ GitHub. The **Docs** workflow builds the site after a release is published,
 from that release's tag, or when it is run manually from `main`; a push does
 not deploy it. Update histories and `updates.json` are generated during that
 build (see [Update histories and the feed](update-history.md)). User pages are
-in `docs/user/`, developer pages in `docs/developer/` and the technical
+in `docs/user/`, developer pages in `docs/developer/`, and the technical
 reference in `docs/reference/`.

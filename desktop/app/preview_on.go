@@ -2,11 +2,10 @@
 
 package app
 
-// The debug-only previews (telemetry_view.rs preview, events.rs preview):
+// The debug-only previews of the Telemetry section and the events window:
 // `rc2fx --telemetry-preview [old|events]` shows the Telemetry section, or
 // the events window, alone, filled with made-up data, for looking at the
-// layout. They open no connection of any kind. The Rust built them only with
-// debug assertions; Go has no such switch, so they are built with
+// layout. They open no connection of any kind. They are built only with
 // `-tags rc2fxdebug` (preview_off.go is the release side).
 
 import (
@@ -20,10 +19,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// telemetryPreviewFlag is telemetry_view::preview::FLAG.
+// telemetryPreviewFlag is the argument that opens the telemetry preview.
 const telemetryPreviewFlag = "--telemetry-preview"
 
-// previewMode is lib.rs run's debug-only preview branch: it reports whether
+// previewMode is Run's debug-only preview branch: it reports whether
 // args asked for a preview, and runs it.
 func previewMode(args []string) bool {
 	if len(args) < 2 || args[1] != telemetryPreviewFlag {
@@ -49,7 +48,7 @@ func previewTheme(cx *gk.Cx) {
 	applyTheme(cx)
 }
 
-// --- telemetry_view.rs preview ---------------------------------------------------------------
+// --- Telemetry section preview ---------------------------------------------------------------
 
 func previewPath(id string, latency uint32, worker bool) core.TargetMeter {
 	timing := func(calls, meanNs, maxNs, overruns uint64) core.Timing {
@@ -171,7 +170,7 @@ func runTelemetryPreview(reported bool) {
 	})
 }
 
-// --- events.rs preview -----------------------------------------------------------------------
+// --- events window preview -------------------------------------------------------------------
 
 func previewLog() EventLog {
 	const S uint64 = 1_000_000_000

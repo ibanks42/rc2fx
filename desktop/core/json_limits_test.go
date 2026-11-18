@@ -6,7 +6,9 @@ import (
 	"testing"
 )
 
-// Port of crates/rc2fx-core/tests/json_limits.rs.
+// The strict JSON parser's limits: duplicate keys, depth, trailing data and
+// the default sizes. crates/rc2fx-core/tests/json_limits.rs checks the Rust
+// parser the same way.
 
 func TestExplicitLimitsRetainDuplicateDepthAndTrailingGuards(t *testing.T) {
 	ok(t, must2(FromJSONLimited[Value]("[1,2]", 5, 3)))

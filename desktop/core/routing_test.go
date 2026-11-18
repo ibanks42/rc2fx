@@ -2,7 +2,9 @@ package core
 
 import "testing"
 
-// Port of crates/rc2fx-core/tests/routing.rs.
+// Processing on and off: which routing requests the editor sends and how
+// their acknowledgements apply. crates/rc2fx-core/tests/routing.rs keeps the
+// state checks the mixer's model still has.
 
 func routingState(enabled bool) DeviceState {
 	config := DefaultConfig()

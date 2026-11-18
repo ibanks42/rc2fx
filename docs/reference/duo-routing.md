@@ -4,7 +4,7 @@ This note explains how the experimental Duo route layout, `duo-23-v1`, was
 derived from official firmware, and why an earlier draft had fewer paths.
 
 All of it comes from static analysis and ARM64 emulation of official RØDE
-files. No Duo was contacted, flashed or used for audio. The note does not show
+files. No Duo was contacted, flashed, or used for audio. The note does not show
 that a real Duo produces sound on these ports in every USB mode or after every
 reconnect.
 
@@ -19,7 +19,7 @@ reconnect.
 | `audio-start.sh`, both | `f27368e6d68296ebb9c6f22401f2fe00317643bee23c08b86d44d183408fa263` |
 
 In both releases the mixer program is byte-identical to the Pro II's. The
-board files (hostname, device tree, kernel, modules and controller firmware)
+board files (hostname, device tree, kernel, modules, and controller firmware)
 are the Duo's, so neither archive can be used on the other model.
 
 The analysis used the 1.7.7 beta archive. The stable 1.7.7 archive, checked
@@ -32,7 +32,7 @@ The evidence files are byte-for-byte copies from `.deps/duo-investigation/`:
   --candidate-id rodecaster-duo-1.7.7`. Nine whole functions are
   relocation-equivalent across the releases: the callback, enqueue, manager,
   invoker, job body, `Mixer::Process`, the function copy constructor, JACK
-  registration teardown and active registration. Both ARM64 job-lifetime
+  registration teardown, and active registration. Both ARM64 job-lifetime
   fixture sets pass. The hook offsets therefore match the corresponding Pro II
   releases. Only the route layout and source enum differ.
 - [`docs/firmware-audits/rodecaster-duo-routes.json`](../firmware-audits/rodecaster-duo-routes.json)
@@ -77,8 +77,8 @@ layout.
 The saved-show source enum is `duo-sources-v1` (named in
 `crates/rc2fx-firmware/src/model.rs` and projected in
 `crates/rc2fx-device/src/stock_inputs.rs`). It has seven faders, and source 2
-is labelled "Headset mic". The vendor code also gives source ID 2 its own
-digital-gain and phantom bypass (1.7.6 `0x40a27c`, `0x3a20d8` and nearby).
+is labeled "Headset mic". The vendor code also gives source ID 2 its own
+digital-gain and phantom bypass (1.7.6 `0x40a27c`, `0x3a20d8`, and nearby).
 
 ### Source-enum table
 
@@ -122,7 +122,7 @@ with the buffers swapped: `out_8` is left and `out_7` is right.
 
 The JACK port-event handler (`0x3716e0`, 1.7.7 `0x374410`) connects ports by
 literal name. The route audit runs its real instructions in Unicorn, stubbing
-JUCE strings, allocations and the JACK connect call, and records the
+JUCE strings, allocations, and the JACK connect call, and records the
 arguments passed to connect. Both releases produce exactly these
 connections:
 
@@ -139,8 +139,8 @@ the same input ports as on the Pro II.
 ### Monitors
 
 The mixer constructor stores three monitor routing fields. The Pro II default
-store (`0x66b494`, 1.7.7 `0x67488c`) sets 10, 4 and 7. The Duo override
-(`0x66f77c`, 1.7.7 `0x678ad4`) sets 8, 4 and 5. The route audit finds each
+store (`0x66b494`, 1.7.7 `0x67488c`) sets 10, 4, and 7. The Duo override
+(`0x66f77c`, 1.7.7 `0x678ad4`) sets 8, 4, and 5. The route audit finds each
 store by its instruction pattern and runs it for both board results.
 
 The job body at `0x41bcb0` (1.7.7 `0x41ecf0`) then copies the monitor left and
@@ -184,9 +184,9 @@ outputs and USB sends are processed in the audio callback.
   at startup or after a reconnect. The `out_5`/`out_6` mapping is the
   firmware's intended producer mapping, backed by the runtime guard. If the
   guard does not see both buffers, Monitors stays unprocessed.
-- Live behaviour. The fixtures stub JUCE strings, allocations, events and JACK
+- Live behavior. The fixtures stub JUCE strings, allocations, events, and JACK
   connections, and skip PAC/BTI hint instructions.
-- Hardware. No flashing, recovery, audio loopback, timing, CPU load or USB
+- Hardware. No flashing, recovery, audio loopback, timing, CPU load, or USB
   mode test has been done on a Duo.
 
 ## Reproducing
@@ -205,19 +205,19 @@ python -m tools.firmware_audit.duo_routes \
   --output duo-routing-audit.json
 ```
 
-Both stop on any hash, instruction or fixture mismatch. Each report has a
+Both stop on any hash, instruction, or fixture mismatch. Each report has a
 `limitations` field describing what it does not cover.
 
 ## Verification receipt
 
 These offline checks were run when the layout was added, with no device:
 
-- The firmware, device and installer unit tests pass.
+- The firmware, device, and installer unit tests pass.
 - The native library tests pass. They include a stereo output with only one
   channel observed, where both channels are left untouched, and a missing
   `out_6`, which is not replaced by `out_7`.
-- `./xtask mixer-build` passes its AArch64, glibc 2.35 and GCC 11 checks.
+- `./xtask mixer-build` passes its AArch64, glibc 2.35, and GCC 11 checks.
 - A temporary image built from the official Duo 1.7.7 archive keeps the boot
-  and controller content and headers, the exact mixer and launcher hashes and
+  and controller content and headers, the exact mixer and launcher hashes, and
   the Duo device tree. It carries the runtime opt-in marker and fits the
   275 MiB size limit.

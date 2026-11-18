@@ -183,8 +183,7 @@ func TestUpdateChunksAreStandardBase64(t *testing.T) {
 	}
 }
 
-// The tests below cover the Go-only JSON helpers that stand in for
-// serde_json::Value.
+// The tests below cover the JSON helpers on json.RawMessage.
 
 func TestStringsAreWrittenAsSerdeWritesThem(t *testing.T) {
 	if got := string(jsonString("\"\\\b\f\n\r\t\x01\x7f é")); got != "\"\\\"\\\\\\b\\f\\n\\r\\t\\u0001\x7f é\"" {

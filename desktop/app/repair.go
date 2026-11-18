@@ -1,6 +1,6 @@
 package app
 
-// installer/repair.rs: Repair mixer, for a mixer a flash left unable to keep
+// Repair mixer, for a mixer a flash left unable to keep
 // its setup, or to start. The user holds the power button for 15 seconds so
 // the bootloader shows the mixer's storage over USB; the administrator
 // helper then checks it and restores damaged files (the installer's

@@ -1,5 +1,5 @@
 // Package licenses builds the one notice document that feeds the app's
-// embedded licence dialog (desktop/app/licenses), the Linux package's HTML
+// embedded license dialog (desktop/app/licenses), the Linux package's HTML
 // and a standalone mixer release's THIRD-PARTY-NOTICES.html.
 package licenses
 
@@ -37,7 +37,7 @@ type Document struct {
 	HTML []byte
 }
 
-// Limits for reports read here: cargo-about's JSON carries every licence
+// Limits for reports read here: cargo-about's JSON carries every license
 // text.
 const (
 	maxReportBytes = 256 << 20
@@ -56,7 +56,7 @@ func readText(root, path string) (string, error) {
 }
 
 // Generate is the notice document: RC2FX's and its bundled components'
-// licences, the Rust standard library's, every crate cargo-about reports
+// licenses, the Rust standard library's, every crate cargo-about reports
 // for the workspace and the native library, Velopack's report, then extra.
 func Generate(root string, extra []Section) (*Document, error) {
 	var sections []Section
@@ -239,18 +239,18 @@ func decodeEntity(entity string) (rune, bool) {
 	default:
 		return 0, false
 	}
-	// char::from_u32: no surrogates, nothing past U+10FFFF.
+	// A valid rune: no surrogates, nothing past U+10FFFF.
 	if err != nil || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF) {
 		return 0, false
 	}
 	return rune(value), true
 }
 
-// Groups is notices by licence name, then by exact text, with the
+// Groups is notices by license name, then by exact text, with the
 // components that use each.
 type Groups map[string]map[string]map[string]bool
 
-// add records that user uses notice text under licence name.
+// add records that user uses notice text under license name.
 func (g Groups) add(name, text, user string) {
 	texts, ok := g[name]
 	if !ok {
@@ -267,7 +267,7 @@ func (g Groups) add(name, text, user string) {
 	}
 }
 
-// Sections is one section per licence name, in name order, titled prefix +
+// Sections is one section per license name, in name order, titled prefix +
 // name: each distinct text with the sorted components that use it.
 func (g Groups) Sections(prefix string) []Section {
 	var out []Section
@@ -291,7 +291,7 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// MergeReport adds a cargo-about report's licences to groups.
+// MergeReport adds a cargo-about report's licenses to groups.
 func MergeReport(groups Groups, report core.Value) error {
 	licensesValue, _ := report.Get("licenses")
 	licenses, ok := licensesValue.AsArray()

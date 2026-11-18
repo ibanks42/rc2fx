@@ -1,5 +1,5 @@
-// Package home is the pure parts of Home (home.rs) and of the opening
-// screens (onboarding.rs), without gk: which channels the overview lists
+// Package home is the pure parts of Home and of the opening screens, without
+// gk: which channels the overview lists
 // outside the show, and the Dusk halo's pixels.
 package home
 
@@ -113,10 +113,10 @@ func HaloPixels(width, height int) []byte {
 	return pixels
 }
 
-// epsilon32 is f32::EPSILON.
+// epsilon32 is float32's machine epsilon, 2^-23.
 const epsilon32 = 1.1920929e-07
 
-// toU8 is `v.round() as u8`: rounded half away from zero, saturating.
+// toU8 is v rounded half away from zero, saturating at 0 and 255.
 func toU8(v float32) byte {
 	r := math.Round(float64(v))
 	switch {

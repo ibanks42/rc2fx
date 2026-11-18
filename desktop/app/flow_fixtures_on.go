@@ -115,7 +115,7 @@ func (a *App) fixtureInstaller(cx *gk.Cx, kind taskKind, m *installflow.Model) *
 	runner := &installerRunner{
 		wake:       make(chan struct{}, 1),
 		cancel:     new(atomic.Bool),
-		helper:     &cancellerSlot{},
+		helper:     &cancelerSlot{},
 		privileged: &helperSlot{},
 		closed:     true,
 	}

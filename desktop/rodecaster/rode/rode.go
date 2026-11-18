@@ -244,7 +244,7 @@ func SortNewestFirst[T any](releases []T, version func(T) string) {
 	})
 }
 
-// parseU64 is Rust's u64::from_str.
+// parseU64 is an optional '+', then digits only, within 64 bits.
 func parseU64(text string) (uint64, error) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" || strings.Trim(digits, "0123456789") != "" {

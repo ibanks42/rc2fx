@@ -28,7 +28,7 @@ const (
 
 // Number is a JSON number kept the way serde_json keeps it: a non-negative
 // integer, a negative integer, or a finite float. The kind is part of the
-// value: 1 and 1.0 are different numbers and serialise differently.
+// value: 1 and 1.0 are different numbers and serialize differently.
 type Number struct {
 	kind numberKind
 	bits uint64
