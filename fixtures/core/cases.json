@@ -1,5 +1,5 @@
 {
-  "comment": "Shared accept/reject fixtures for rc2fx-core. The Go port (desktop/core, shared_fixtures_test.go) and the Rust crate (crates/rc2fx-core/tests/shared_fixtures.rs) read the same files and must reach the same verdicts; for accepted cases the decoded value, written back, must equal `canonical` (compact) and `pretty` (to_string_pretty) byte for byte. generate.py writes this directory: change it and run it rather than editing files by hand. .gitattributes keeps every byte as committed (CRLF and odd bytes are part of some cases).",
+  "comment": "Shared accept/reject fixtures for rc2fx-core. The Go port (desktop/core, shared_fixtures_test.go) and the Rust crate (crates/rc2fx-core/tests/shared_fixtures.rs) read the same files and must reach the same verdicts; for accepted cases the decoded value, written back, must equal `canonical` (compact) and `pretty` (to_string_pretty) byte for byte. A rejected case with `error` must fail with exactly that message on both sides. generate.py writes this directory: change it and run it rather than editing files by hand. .gitattributes keeps every byte as committed (CRLF and odd bytes are part of some cases).",
   "cases": [
     {
       "name": "default config",
@@ -68,6 +68,7 @@
       "type": "config",
       "file": "config/reject-schema-8.json",
       "accept": false,
+      "error": "Expected schema version 9 and a positive revision",
       "why": "only the current schema"
     },
     {
@@ -75,6 +76,7 @@
       "type": "config",
       "file": "config/reject-schema-10.json",
       "accept": false,
+      "error": "Expected schema version 9 and a positive revision",
       "why": "only the current schema"
     },
     {
@@ -82,6 +84,7 @@
       "type": "config",
       "file": "config/reject-revision-zero.json",
       "accept": false,
+      "error": "Expected schema version 9 and a positive revision",
       "why": "a positive revision"
     },
     {
@@ -292,6 +295,15 @@
       "type": "config",
       "file": "config/reject-no-targets.json",
       "accept": false,
+      "error": "Expected 1 to 32 targets",
+      "why": "1 to 32 targets"
+    },
+    {
+      "name": "33-targets",
+      "type": "config",
+      "file": "config/reject-33-targets.json",
+      "accept": false,
+      "error": "Expected 1 to 32 targets",
       "why": "1 to 32 targets"
     },
     {

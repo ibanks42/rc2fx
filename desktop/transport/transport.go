@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -27,6 +28,16 @@ const requestLimit = 512 * 1024
 // updateChunk is the bytes per update chunk: base64 and the JSON around it
 // stay well inside requestLimit, and the mixer accepts up to 256 KiB.
 const updateChunk = 192 * 1024
+
+// An upload whose USB session broke resumes after waiting uploadRetryFirst,
+// doubled up to uploadRetryMax between attempts, and gives up once
+// uploadRetryWindow passes without a chunk getting through. Variables so tests
+// can shorten them.
+var (
+	uploadRetryWindow = 30 * time.Second
+	uploadRetryFirst  = 250 * time.Millisecond
+	uploadRetryMax    = 4 * time.Second
+)
 
 // deltaLevel is zstd's level for update deltas: about 3 s for a whole release
 // here, and every byte saved is worth far more over USB.
@@ -583,7 +594,7 @@ func New() (*Transport, error) {
 	}
 	go func() {
 		defer close(t.done)
-		run(ctx, t.commands, t.events)
+		run(ctx, t.commands, t.events, connectDevice)
 	}()
 	return t, nil
 }
@@ -819,7 +830,10 @@ func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload 
 	}
 	path := "api/v1/update/" + id
 	offset := uint64(0)
-	retries := 0
+	// Set while resuming after a broken USB session; cleared by a chunk that
+	// gets through.
+	var retryUntil time.Time
+	wait := uploadRetryFirst
 	progress(0, total)
 	for offset < total {
 		if ctx.Err() != nil {
@@ -838,7 +852,8 @@ func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload 
 				return errProtocol()
 			}
 			offset = received
-			retries = 0
+			retryUntil = time.Time{}
+			wait = uploadRetryFirst
 			progress(offset, total)
 		// The mixer is elsewhere (a reply was lost): continue from there.
 		case failed == nil && reply.Status == 409:
@@ -849,8 +864,21 @@ func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload 
 			offset = expected
 		case failed == nil:
 			return statusError(reply.Status, errorDetail(reply.Body))
-		case failed.kind == requestUSB && retries < 3:
-			retries++
+		// The USB session broke, so the chunk may or may not have arrived,
+		// and the session refuses every change until a read reopens it.
+		case failed.kind == requestUSB:
+			if ctx.Err() != nil {
+				return usbError(ctx.Err().Error())
+			}
+			if retryUntil.IsZero() {
+				retryUntil = time.Now().Add(uploadRetryWindow)
+			}
+			resumed, unresumed := d.resumeUpload(ctx, path, total, failed, retryUntil, &wait)
+			if unresumed != nil {
+				return unresumed
+			}
+			offset = resumed
+			progress(offset, total)
 		default:
 			return failed
 		}
@@ -885,6 +913,60 @@ func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload 
 		}
 	}
 	return nil
+}
+
+// resumeUpload finds where an upload continues after its USB session broke.
+// Only a body-less read reopens the session, so it waits (with backoff in
+// wait) and reads the update session at path until that read gets through,
+// then answers the offset the mixer has reached: total once the upload is
+// complete. cause is returned if the session is still unreachable at until.
+func (d device) resumeUpload(ctx context.Context, path string, total uint64, cause *requestError, until time.Time, wait *time.Duration) (uint64, *requestError) {
+	for time.Now().Add(*wait).Before(until) {
+		if !sleep(ctx, *wait) {
+			return 0, usbError(ctx.Err().Error())
+		}
+		*wait = min(*wait*2, uploadRetryMax)
+		session, failed := d.request(ctx, "GET", path, nil)
+		switch {
+		case failed == nil:
+			return resumePoint(session, total)
+		case failed.kind == requestUSB:
+			if ctx.Err() != nil {
+				return 0, usbError(ctx.Err().Error())
+			}
+			cause = failed
+		default:
+			return 0, failed
+		}
+	}
+	return 0, cause
+}
+
+// resumePoint is the offset an upload continues at, read from its update
+// session: what the mixer has received while it is accepting, total once
+// every byte is there.
+func resumePoint(session json.RawMessage, total uint64) (uint64, *requestError) {
+	state, ok := stringField(session, "state")
+	if !ok {
+		return 0, errProtocol()
+	}
+	received, ok := uintField(session, "received")
+	if !ok || received > total {
+		return 0, errProtocol()
+	}
+	switch state {
+	case "accepting":
+		return received, nil
+	case "complete":
+		if received != total {
+			return 0, errProtocol()
+		}
+		return total, nil
+	case "failed":
+		return 0, statusError(409, errorDetail(session))
+	default:
+		return 0, errProtocol()
+	}
 }
 
 // readError is the reason a file could not be read, without Go's operation
@@ -1052,17 +1134,98 @@ func noMixer() *requestError {
 	return usbError("No connected mixer")
 }
 
-func run(ctx context.Context, commands <-chan Command, events chan<- Event) {
-	var current *device
-	generation := uint64(0)
-	var stopStream context.CancelFunc
-	drop := func() {
-		if stopStream != nil {
-			stopStream()
-			stopStream = nil
+// mixerConnection is one connection to the mixer: its USB session and the
+// goroutines that use it beside the command loop, the event stream and an
+// in-place update. They all run under ctx, so close ends them together and
+// nothing of one connection outlives it or shares the USB session with the
+// next.
+type mixerConnection struct {
+	device
+	ctx    context.Context
+	cancel context.CancelFunc
+	// tasks counts the goroutines started with spawn.
+	tasks sync.WaitGroup
+	// update is closed when the in-place update started on this connection
+	// ends; nil while none was started.
+	update chan struct{}
+}
+
+func newConnection(ctx context.Context, d device) *mixerConnection {
+	ctx, cancel := context.WithCancel(ctx)
+	return &mixerConnection{device: d, ctx: ctx, cancel: cancel}
+}
+
+// spawn runs task on its own goroutine with its own hold on the USB session,
+// until the task returns or the connection closes.
+func (c *mixerConnection) spawn(task func(ctx context.Context, d device)) {
+	d := c.device.clone()
+	c.tasks.Add(1)
+	go func() {
+		defer c.tasks.Done()
+		defer d.release()
+		task(c.ctx, d)
+	}()
+}
+
+// updating reports an in-place update still running on this connection.
+func (c *mixerConnection) updating() bool {
+	if c.update == nil {
+		return false
+	}
+	select {
+	case <-c.update:
+		return false
+	default:
+		return true
+	}
+}
+
+// startUpdate sends command's release on its own goroutine, reporting
+// progress as generation's EventKindMixerUpdate. Only one runs per
+// connection: starting another update session on the mixer replaces the
+// one the first is still uploading to.
+func (c *mixerConnection) startUpdate(command CommandMixerUpdate, generation uint64, events chan<- Event) {
+	done := make(chan struct{})
+	c.update = done
+	c.spawn(func(ctx context.Context, d device) {
+		progress := func(sent, total uint64) {
+			emit(ctx, events, generation, EventKindMixerUpdate{MixerUpdateEventUploading{Sent: sent, Total: total}})
 		}
+		var kind MixerUpdateEvent = MixerUpdateEventInstalling{}
+		if failed := d.mixerUpdate(ctx, command.Start, command.Payload, command.Base, progress); failed != nil {
+			kind = MixerUpdateEventFailed{failed.message()}
+		}
+		// Ended before it says so: once the app reads how it ended, another
+		// update may start.
+		close(done)
+		emit(ctx, events, generation, EventKindMixerUpdate{kind})
+	})
+}
+
+// close cancels everything running on the connection, waits for it to let
+// go of the USB session, then lets go itself. Every task ends promptly on
+// cancel: each wait in it also waits on its context. Once the last hold is
+// released, the session's goroutine finishes the request it may be serving,
+// skips any queued, and closes the handle.
+func (c *mixerConnection) close() {
+	c.cancel()
+	c.tasks.Wait()
+	c.device.release()
+}
+
+// connector opens a connection to the mixer and reads its state:
+// connectDevice, or a stand-in in tests.
+type connector func(ctx context.Context) (device, string, json.RawMessage, error)
+
+func run(ctx context.Context, commands <-chan Command, events chan<- Event, connect connector) {
+	var current *mixerConnection
+	generation := uint64(0)
+	// Connect and Disconnect end the connection and everything on it,
+	// including an in-place update still uploading: its events would belong
+	// to a generation the app no longer reads.
+	drop := func() {
 		if current != nil {
-			current.release()
+			current.close()
 			current = nil
 		}
 	}
@@ -1209,21 +1372,14 @@ func run(ctx context.Context, commands <-chan Command, events chan<- Event) {
 				emit(ctx, events, generation, EventKindMixerUpdate{failed})
 				continue
 			}
+			if current.updating() {
+				failed := MixerUpdateEventFailed{"Another update is still being sent to the mixer"}
+				emit(ctx, events, generation, EventKindMixerUpdate{failed})
+				continue
+			}
 			// The upload runs beside other requests; the mixer restarts once
 			// it installs, which ends this connection anyway.
-			updating := current.clone()
-			generation := generation
-			go func() {
-				defer updating.release()
-				progress := func(sent, total uint64) {
-					emit(ctx, events, generation, EventKindMixerUpdate{MixerUpdateEventUploading{Sent: sent, Total: total}})
-				}
-				var kind MixerUpdateEvent = MixerUpdateEventInstalling{}
-				if failed := updating.mixerUpdate(ctx, command.Start, command.Payload, command.Base, progress); failed != nil {
-					kind = MixerUpdateEventFailed{failed.message()}
-				}
-				emit(ctx, events, generation, EventKindMixerUpdate{kind})
-			}()
+			current.startUpdate(command, generation, events)
 		case CommandMixerUpdateLast:
 			if command.Generation != generation {
 				continue
@@ -1307,7 +1463,7 @@ func run(ctx context.Context, commands <-chan Command, events chan<- Event) {
 		case CommandConnect:
 			drop()
 			generation = command.Generation
-			d, mixer, state, err := connectDevice(ctx)
+			d, mixer, state, err := connect(ctx)
 			if err != nil {
 				emit(ctx, events, generation, EventKindFailure{err.Error()})
 				continue
@@ -1316,10 +1472,11 @@ func run(ctx context.Context, commands <-chan Command, events chan<- Event) {
 				d.release()
 				return
 			}
-			streamCtx, cancel := context.WithCancel(ctx)
-			stopStream = cancel
-			go streamEvents(streamCtx, d.clone(), generation, events)
-			current = &d
+			current = newConnection(ctx, d)
+			generation := generation
+			current.spawn(func(ctx context.Context, d device) {
+				streamEvents(ctx, d, generation, events)
+			})
 		case CommandDisconnect:
 			drop()
 			generation = command.Generation
@@ -1377,7 +1534,6 @@ func run(ctx context.Context, commands <-chan Command, events chan<- Event) {
 // streamEvents polls the mixer's events, backing off while the poll fails. A
 // poll that worked for a while starts the backoff again from one second.
 func streamEvents(ctx context.Context, d device, generation uint64, events chan<- Event) {
-	defer d.release()
 	delay := 1
 	for {
 		started := time.Now()

@@ -126,6 +126,9 @@ enum Command {
     Transition(Request, Answer<DeviceState>),
     /// Nothing to do: ends the loop's wait so it looks at its deadlines again.
     Wake,
+    /// Panics the loop, for tests of what a panicking pass leaves behind.
+    #[cfg(test)]
+    Panic,
 }
 
 #[derive(Debug)]
@@ -404,6 +407,14 @@ struct Live<'owner> {
     overload: crate::overload::Overload,
 }
 
+/// Sets the loop's completion when dropped, on return or during a panic.
+struct Completed(watch::Sender<bool>);
+impl Drop for Completed {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
+}
+
 pub struct Coordinator<'owner> {
     controller: Controller,
     live: Option<Live<'owner>>,
@@ -589,8 +600,10 @@ impl<'owner> Coordinator<'owner> {
         self.controller
     }
     fn run_loop(&mut self) {
+        // Marks the loop complete even when a pass panics, so `shutdown`
+        // never waits for a loop that is gone and the daemon can exit.
+        let _completed = Completed(self.completed.clone());
         while self.pass() {}
-        self.completed.send_replace(true);
     }
 
     /// One pass of the loop: the timed work, then a wait for a command or the
@@ -853,6 +866,8 @@ impl<'owner> Coordinator<'owner> {
         // Reply cancellation never cancels an admitted operation or file commit.
         match command {
             Command::Wake => {}
+            #[cfg(test)]
+            Command::Panic => panic!("a test panicked the control loop"),
             Command::ResetDiagnostics(reply) => {
                 if let Some(live) = &mut self.live {
                     for recent in &mut live.recent {
@@ -1267,6 +1282,31 @@ mod loop_tests {
         assert!(!handle.0.waking.load(Ordering::Acquire));
         handle.close();
         task.join().unwrap();
+    }
+
+    /// A pass that panics still marks the loop complete: later commands are
+    /// refused as stopped, and `shutdown` returns instead of waiting for a
+    /// loop that is gone, so rc2fxd can exit and the supervisor react.
+    #[test]
+    fn a_panicking_pass_still_completes_the_loop() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path(), Config::default()).unwrap();
+        let (handle, owner) = Coordinator::new(Controller::new(store), None).unwrap();
+        let task = std::thread::spawn(move || owner.run());
+        let _reply = handle.enqueue(|_: Answer<()>| Command::Panic).unwrap();
+        assert!(task.join().is_err(), "the loop did not panic");
+        assert!(matches!(handle.settings(), Err(Error::Stopped)));
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let shutdown = executor.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), handle.shutdown()).await
+        });
+        assert!(
+            matches!(shutdown, Ok(Ok(()))),
+            "shutdown waited for a dead loop"
+        );
     }
 
     #[test]

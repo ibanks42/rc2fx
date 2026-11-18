@@ -53,6 +53,32 @@ const OPT_HEADROOM: u64 = 16 << 20;
 /// How long the detached driver waits for the new controller and audio.
 const RESTART_SECONDS: u64 = 300;
 
+/// Which installed copy a controller was started from, judged by the
+/// directory that holds its release manifest (`rc2fx.sh launch` passes
+/// `--release "$home/mixer-release.json"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstalledBundle {
+    /// `/opt/rc2fx`: the bundle in-place updates install into.
+    Live,
+    /// `/opt/.rc2fx-previous`: the rollback copy the shims start while an
+    /// update has not committed. Its controller must still run `recover()`,
+    /// or the unfinished update is never undone, but it offers no new update.
+    Previous,
+}
+
+/// Where a release manifest places the controller: `None` for anything that
+/// is not an installed bundle, such as a build run from RAM.
+pub fn installed_bundle(paths: &Paths, release: &Path) -> Option<InstalledBundle> {
+    let dir = release.parent()?;
+    if dir == paths.bundle() {
+        Some(InstalledBundle::Live)
+    } else if dir == paths.previous() {
+        Some(InstalledBundle::Previous)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRequest {
@@ -199,6 +225,9 @@ pub struct MixerUpdate {
     running: Option<String>,
     trusted_root: Vec<u8>,
     session: Mutex<Option<Session>>,
+    /// False for a controller started from the rollback copy: it recovers and
+    /// reports, but new updates wait for a start from the live bundle.
+    offers_updates: bool,
 }
 
 impl MixerUpdate {
@@ -211,7 +240,22 @@ impl MixerUpdate {
             running,
             trusted_root: verify::TRUSTED_ROOT.to_vec(),
             session: Mutex::new(None),
+            offers_updates: true,
         }
+    }
+
+    /// A handle for a controller started from the rollback copy
+    /// ([`InstalledBundle::Previous`]): `recover()` and the outcome endpoints
+    /// work, and every new update is refused.
+    pub fn without_new_updates(mut self) -> Self {
+        self.offers_updates = false;
+        self
+    }
+
+    /// Whether this controller accepts new updates (and so advertises
+    /// `inPlaceUpdates`).
+    pub fn offers_updates(&self) -> bool {
+        self.offers_updates
     }
 
     fn session(&self) -> std::sync::MutexGuard<'_, Option<Session>> {
@@ -271,6 +315,14 @@ impl MixerUpdate {
             }
             (None, None) => request.size,
         };
+        if !self.offers_updates {
+            return Err(UpdateError::Conflict(
+                "RC2FX is running its rollback copy; restart the mixer before updating".into(),
+            ));
+        }
+        // Refused before the upload, not only after it: the record cannot
+        // become readable while the upload runs.
+        self.stored_state().map_err(UpdateError::Conflict)?;
         if self.paths.pending().exists() || self.paths.install_pending().exists() {
             return Err(UpdateError::Busy(
                 "another install is pending; finish it or recover before updating".into(),
@@ -366,8 +418,12 @@ impl MixerUpdate {
             .filter(|s| s.id == id)
             .ok_or(UpdateError::NotFound)?;
         let expected = session.received;
+        // A replay of a chunk whose reply was lost is answered while the
+        // upload is still accepting and also once it is complete: the last
+        // chunk moves the session to Complete, and its replay must still get
+        // the progress reply rather than a refusal.
         match session.state {
-            SessionState::Accepting => {}
+            SessionState::Accepting | SessionState::Complete => {}
             SessionState::Failed => {
                 return Err(UpdateError::Conflict(
                     "this session failed; start a new one".into(),
@@ -399,6 +455,11 @@ impl MixerUpdate {
             }
             let progress = progress_of(id, session);
             return Ok(progress);
+        }
+        if matches!(session.state, SessionState::Complete) {
+            return Err(UpdateError::Conflict(
+                "the upload is already complete".into(),
+            ));
         }
         if offset != expected {
             return Err(UpdateError::Offset { expected });
@@ -500,7 +561,13 @@ impl MixerUpdate {
             }
         }
         let payload = self.payload_path(id);
-        let prior = StoredState::load(&self.paths.state());
+        let prior = match self.stored_state() {
+            Ok(prior) => prior,
+            Err(why) => {
+                self.fail(id, &why);
+                return Err(UpdateError::Conflict(why));
+            }
+        };
         let facts = verify::ReleaseRequest {
             version: request.version.clone(),
             size: request.size,
@@ -527,6 +594,12 @@ impl MixerUpdate {
         if let Err(error) = self.save_state(&verified.metadata_versions) {
             self.fail(id, &error);
             return Err(UpdateError::Failed(error));
+        }
+        // Accepted: the previous outcome must not pass for this one's.
+        if let Err(error) = install::clear_last(&self.paths) {
+            let why = format!("cannot clear the previous update's outcome: {error}");
+            self.fail(id, &why);
+            return Err(UpdateError::Failed(why));
         }
         let this = Arc::clone(&self);
         let thread_id = id.to_owned();
@@ -574,6 +647,20 @@ impl MixerUpdate {
             upload_size: None,
             error: None,
         }
+    }
+
+    /// The recorded replay and downgrade protection, empty before the first
+    /// record. An unreadable record refuses the update instead of starting
+    /// over, which would accept older signed metadata.
+    fn stored_state(&self) -> Result<StoredState, String> {
+        StoredState::load(&self.paths.state())
+            .map(Option::unwrap_or_default)
+            .map_err(|why| {
+                eprintln!("RC2FX update: {why}");
+                format!(
+                    "the mixer's update record is unreadable, so no update can be checked against it ({why}); a full flash replaces it"
+                )
+            })
     }
 
     fn save_state(&self, state: &StoredState) -> Result<(), String> {
@@ -893,8 +980,16 @@ impl MixerUpdate {
                 }
             }
         }
-        // This start is not an unproven one: record what is running.
-        let mut state = StoredState::load(&self.paths.state());
+        // This start is not an unproven one: record what is running. An
+        // unreadable record is left as it is: writing a fresh one would make
+        // the loss of its protection permanent. Updates stay refused instead.
+        let mut state = match StoredState::load(&self.paths.state()) {
+            Ok(state) => state.unwrap_or_default(),
+            Err(why) => {
+                eprintln!("RC2FX update: {why}; left unchanged, and updates are refused");
+                return;
+            }
+        };
         state.schema = 1;
         if let Some(running) = &self.running {
             state.installed_version = Some(running.clone());

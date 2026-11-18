@@ -176,7 +176,7 @@ func TestAFixStoppedPartWayFailsAndTryAgainFlashesNormally(t *testing.T) {
 
 func TestAFixRequestThatFailedIsNotSentAgain(t *testing.T) {
 	m, fix := startedFix(t)
-	refresh := m.Finish(*fix, installer.Reply{}, errors.New("the installer helper stopped; reopen the installer"))
+	refresh := m.Finish(*fix, installer.Reply{}, errors.New("the installer helper stopped; choose Try again or start again"))
 	if m.Run.Fix.Error == "" || m.Run.Failed == nil {
 		t.Fatalf("run %+v", m.Run)
 	}

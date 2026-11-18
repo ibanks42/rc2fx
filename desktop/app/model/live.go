@@ -36,6 +36,10 @@ const (
 	CheckpointQuiet = 10 * time.Minute
 	// LiveRetry is the wait after the mixer said it was busy.
 	LiveRetry = 250 * time.Millisecond
+	// SaveRetryFirst is the wait after a failed save before it is tried
+	// again; each failure in a row doubles it, up to SaveRetryMax.
+	SaveRetryFirst = time.Second
+	SaveRetryMax   = 30 * time.Second
 	// undoLimit is the most undo steps kept.
 	undoLimit = 200
 )
@@ -66,6 +70,12 @@ type Live struct {
 	grouping    bool
 	checkpoints map[string]Checkpoint
 	lastEdit    map[string]time.Time
+	// saveFailures is how many saves of this draft failed in a row;
+	// saveRetryAt is when the next may be tried. An edit clears both.
+	saveFailures int
+	saveRetryAt  time.Time
+	// saveError is why the last save failed, until a save succeeds.
+	saveError string
 }
 
 // Reset forgets everything: a new connection.
@@ -106,6 +116,8 @@ func (l *Live) Observe(draft []core.Target, now time.Time) bool {
 	l.grouping = true
 	l.lastDraft = core.CloneTargets(draft)
 	l.lastChange = now
+	l.saveFailures = 0
+	l.saveRetryAt = time.Time{}
 	return true
 }
 
@@ -143,6 +155,8 @@ func (l *Live) jump(draft []core.Target, now time.Time) {
 	l.lastDraft = core.CloneTargets(draft)
 	l.lastChange = now
 	l.grouping = false
+	l.saveFailures = 0
+	l.saveRetryAt = time.Time{}
 }
 
 // Changed is when channel id's checkpoint was taken, if its settings differ
@@ -224,12 +238,42 @@ func (l *Live) Saved(saved []core.Target) {
 	}
 }
 
+// SaveFailed notes that saving the draft failed at now, and why: the same
+// draft is not saved again until a wait that starts at SaveRetryFirst and
+// doubles with each failure in a row, up to SaveRetryMax. An edit ends the
+// wait.
+func (l *Live) SaveFailed(reason string, now time.Time) {
+	wait := SaveRetryFirst
+	for range l.saveFailures {
+		wait *= 2
+		if wait >= SaveRetryMax {
+			wait = SaveRetryMax
+			break
+		}
+	}
+	l.saveFailures++
+	l.saveRetryAt = now.Add(wait)
+	l.saveError = reason
+}
+
+// SaveSucceeded notes a save the mixer took: the failure, if any, is over.
+func (l *Live) SaveSucceeded() {
+	l.saveFailures = 0
+	l.saveRetryAt = time.Time{}
+	l.saveError = ""
+}
+
+// SaveError is why the last save failed, "" when the last save succeeded or
+// none failed.
+func (l *Live) SaveError() string { return l.saveError }
+
 // SaveDue is whether to save now: the draft differs from the saved settings
-// (dirty), edits stopped long enough ago, no live edit is in flight, and the
+// (dirty), edits stopped long enough ago, no live edit is in flight, a
+// failed save of the same draft has waited its turn (SaveFailed), and the
 // audio already plays the draft (so the save changes nothing heard) or the
 // mixer has no live editing.
 func (l *Live) SaveDue(draft, saved []core.Target, dirty bool, now time.Time) bool {
-	if !dirty || l.inFlight {
+	if !dirty || l.inFlight || now.Before(l.saveRetryAt) {
 		return false
 	}
 	delay := SaveDelay

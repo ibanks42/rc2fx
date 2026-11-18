@@ -9,7 +9,8 @@ import (
 // The shared accept and reject fixtures in fixtures/core. The Rust crate
 // (crates/rc2fx-core/tests/shared_fixtures.rs) reads the same files: both
 // must accept and reject the same inputs, and write accepted values back byte
-// for byte as the `canonical` (compact) and `pretty` files hold them.
+// for byte as the `canonical` (compact) and `pretty` files hold them. A
+// rejected case that names an `error` must fail with exactly that message.
 
 type fixtureCase struct {
 	Name      string  `json:"name"`
@@ -18,6 +19,7 @@ type fixtureCase struct {
 	Accept    bool    `json:"accept"`
 	Canonical *string `json:"canonical"`
 	Pretty    *string `json:"pretty"`
+	Error     *string `json:"error"`
 	Why       string  `json:"why"`
 }
 
@@ -89,6 +91,9 @@ func TestSharedFixturesVerdictsAndEncodings(t *testing.T) {
 			t.Errorf("%s: accepted, expected a rejection (%s)", c.Name, c.Why)
 			continue
 		case err != nil:
+			if c.Error != nil && err.Error() != *c.Error {
+				t.Errorf("%s: error differs\n got %s\nwant %s", c.Name, err, *c.Error)
+			}
 			continue
 		}
 		for _, want := range []struct {

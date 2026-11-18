@@ -135,3 +135,64 @@ func TestLiveCompressorGoesLiveMidDrag(t *testing.T) {
 		t.Fatalf("step %v mid-drag, want send", step)
 	}
 }
+
+// A failed save is not resent at every poll: it waits 1 s, then twice as long
+// after each failure in a row up to SaveRetryMax, and an edit ends the wait.
+func TestLiveFailedSaveBacksOff(t *testing.T) {
+	var l Live
+	at := time.Unix(1000, 0)
+	saved := liveTargets(0)
+	l.Observe(saved, at)
+	l.Support = LiveNo
+	draft := liveTargets(2)
+	l.Observe(draft, at)
+	now := at.Add(SaveDelayWithoutLive)
+	if !l.SaveDue(draft, saved, true, now) {
+		t.Fatal("the save is not due")
+	}
+	if l.SaveError() != "" {
+		t.Fatal("an error before any save failed")
+	}
+	for _, wait := range []time.Duration{1, 2, 4, 8, 16, 30, 30} {
+		wait *= time.Second
+		l.SaveFailed("disk full", now)
+		if l.SaveError() != "disk full" {
+			t.Fatalf("SaveError = %q", l.SaveError())
+		}
+		if l.SaveDue(draft, saved, true, now.Add(wait-time.Millisecond)) {
+			t.Fatalf("saved again before %v", wait)
+		}
+		now = now.Add(wait)
+		if !l.SaveDue(draft, saved, true, now) {
+			t.Fatalf("not saved again after %v", wait)
+		}
+	}
+	// An edit ends the wait: the new draft is saved once edits stop, and a
+	// failure of it waits the first step again.
+	l.SaveFailed("disk full", now)
+	edited := liveTargets(3)
+	l.Observe(edited, now.Add(time.Millisecond))
+	if !l.SaveDue(edited, saved, true, now.Add(time.Millisecond+SaveDelayWithoutLive)) {
+		t.Fatal("an edit did not end the wait")
+	}
+	if l.SaveError() != "disk full" {
+		t.Fatal("an edit is not a successful save: the error stays shown")
+	}
+	l.SaveFailed("disk full", now.Add(time.Second))
+	if !l.SaveDue(edited, saved, true, now.Add(2*time.Second)) {
+		t.Fatal("the first failure of a new draft waits more than SaveRetryFirst")
+	}
+	// So does undo, which changes the draft without an edit.
+	l.SaveFailed("disk full", now.Add(2*time.Second))
+	previous, ok := l.Undo(edited, now.Add(2*time.Second))
+	if !ok {
+		t.Fatal("nothing to undo")
+	}
+	if !l.SaveDue(previous, saved, true, now.Add(2*time.Second+SaveDelayWithoutLive)) {
+		t.Fatal("undo did not end the wait")
+	}
+	l.SaveSucceeded()
+	if l.SaveError() != "" {
+		t.Fatalf("SaveError after a save = %q", l.SaveError())
+	}
+}

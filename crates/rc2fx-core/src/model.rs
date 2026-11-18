@@ -662,12 +662,12 @@ impl Config {
         validate_target: impl Fn(&Target) -> Result<()>,
     ) -> Result<()> {
         if self.schema_version != SCHEMA_VERSION || self.revision == 0 {
-            return Err(CoreError(
-                "Expected schema version 6 and a positive revision".into(),
-            ));
+            return Err(CoreError(format!(
+                "Expected schema version {SCHEMA_VERSION} and a positive revision"
+            )));
         }
         if self.targets.is_empty() || self.targets.len() > MAX_TARGETS {
-            return Err(CoreError("Expected 1 to 24 targets".into()));
+            return Err(CoreError(format!("Expected 1 to {MAX_TARGETS} targets")));
         }
         if self
             .targets

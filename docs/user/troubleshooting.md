@@ -92,8 +92,8 @@ RC2FX is running on USB 1. These two issues also occur on stock firmware:
 No. Processing runs on the mixer. The app only edits settings.
 
 **Do I need to keep the app open?**
-No. After **Save to mixer**, the settings are stored on the mixer and persist
-across restarts.
+No. The app saves your settings to the mixer a moment after each change, and
+they persist across restarts.
 
 **Does it work with a console, phone or second computer?**
 Yes. Any device that receives audio from the mixer gets the processed audio.

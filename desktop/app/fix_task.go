@@ -164,7 +164,7 @@ func (a *App) explainUpdateBug(cx *gk.Cx, install bool) {
 	if install {
 		what = "During the install the app makes that area larger, which stops it from happening again. It needs no action from you, keeps your settings, and stays fixed if you later remove RC2FX."
 	}
-	a.confirm(cx, Confirm{
+	a.confirm(cx, confirmKindOther, Confirm{
 		Title: "A bug in RØDE’s firmware",
 		Detail: "This is a bug in RØDE’s own firmware, not in RC2FX. It can affect every second firmware update, including the ones RØDE’s app installs.\n\n" +
 			"The mixer keeps its system on a small storage area that is laid out in a way that can damage files during an update. Most of the time nothing happens; sometimes the mixer forgets its setup or does not start afterwards.\n\n" +

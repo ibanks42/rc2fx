@@ -132,9 +132,10 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.stop_owned(child.pid, started).returncode, 0)
         self.assertEqual(child.wait(timeout=5), -15)
 
-    def injected_launch(self, supervisor, mixer='exec sleep 30'):
+    def injected_launch(self, supervisor, mixer='exec sleep 30', full_log=False):
         """Runs the real launch with its system steps stubbed, as far as the end
-        of the mixer. Returns the exit code and the log."""
+        of the mixer. Returns the exit code and the log. With full_log, the log
+        is /dev/full and the real-time throttle steps run against a file."""
         home, run, boot = self.root / 'home', self.root / 'run', self.root / 'boot'
         home.mkdir()
         for name, text in {'rc2fx-supervisor': supervisor, 'rc2fxd': 'exit 0',
@@ -145,18 +146,27 @@ class Tests(unittest.TestCase):
         subprocess.run('sha256sum rc2fxd > SHA256SUMS', shell=True, cwd=home, check=True)
         helpers = ''.join(line + '\n' for line in SCRIPT.split('\n') if line.startswith(
             ('stamp() ', 'say() ', 'start_time() ', 'alive() ', 'alive_as() ', 'uptime_s() ', 'supervisor() ')))
-        stubs = ''.join(f'{name}() {{ :; }}\n' for name in (
-            'prepare_usb', 'relax_rt_throttle', 'restore_rt_throttle', 'jack_recorder', 'retire_usb_node'))
+        stubbed = ['prepare_usb', 'jack_recorder', 'retire_usb_node']
+        throttle = ['relax_rt_throttle', 'restore_rt_throttle']
+        if full_log:
+            (self.root / 'rc2fx.log').symlink_to('/dev/full')
+            (self.root / 'rt').write_text('950000\n')
+        else:
+            stubbed += throttle
+        stubs = ''.join(f'{name}() {{ :; }}\n' for name in stubbed)
         body = (f'home={home}\ndata={self.root}/data\nlogs={self.root}\nrun={run}\nboot={boot}\n'
                 f'stock_mixer={home}/stock\nshow=\nprofile_id=\nvendor_log=/nonexistent\n'
+                f'rt_throttle={self.root}/rt\nrt_throttle_default=950000\n'
                 'keep_usb=0\nmixer_start=\nredact() { cat; }\n'
                 'pgrep() { return 1; }\n'
                 + helpers + stubs
                 + ''.join(function(name) for name in (
                     'stop_owned', 'restart_mixer', 'supervise_exit', 'controller_arguments',
-                    'supervisor_lost', 'launch'))
+                    'supervisor_lost', 'launch', *(throttle if full_log else [])))
                 + 'launch\n')
         r = subprocess.run(['bash', '-euc', body], capture_output=True, text=True, timeout=30)
+        if full_log:
+            return r.returncode, ''
         return r.returncode, (self.root / 'rc2fx.log').read_text()
 
     def test_a_supervisor_that_crashes_at_once_leaves_stock_behind(self):
@@ -191,6 +201,18 @@ class Tests(unittest.TestCase):
         code, log = self.injected_launch('test "${1:-}" = --version && exit 0\nsleep 5', 'sleep 1\nexit 7')
         self.assertFalse((self.root / 'boot/stock').exists())
         self.assertIn('Mixer exited with status 7', log)
+        self.assertEqual(code, 7)
+
+    @unittest.skipUnless(Path('/dev/full').exists(), '/dev/full is not on this host')
+    def test_a_full_log_after_the_stock_fallback_is_gone_still_runs_the_mixer(self):
+        # Past `trap - EXIT` nothing falls back to stock: a log write that fails
+        # (a full root) must not end the launch shell before or after the mixer.
+        ran, during = self.root / 'mixer-ran', self.root / 'rt-during'
+        code, _ = self.injected_launch(
+            'exit 0', f'cp {self.root}/rt {during}\ntouch {ran}\nsleep 1\nexit 7', full_log=True)
+        self.assertTrue(ran.exists())
+        self.assertEqual(during.read_text(), '-1\n')
+        self.assertEqual((self.root / 'rt').read_text(), '950000\n')
         self.assertEqual(code, 7)
 
     def launch_with(self, supervisor):

@@ -303,7 +303,8 @@ func (m *Model) ImageCheckRead(check *core.ImageCheck, readErr error) *installer
 // TakeSettingsRequest reports that the app should read RC2FX's settings now;
 // true once per request.
 func (m *Model) TakeSettingsRequest() bool {
-	wanted := m.settingsRead == SettingsReadWanted
+	// Only RC2FX can answer; while it does not, the run decides (advance).
+	wanted := m.settingsRead == SettingsReadWanted && m.Answering()
 	if wanted {
 		m.settingsRead = SettingsReadAsked
 	}
@@ -328,6 +329,26 @@ func (m *Model) SettingsRead(settings string, readErr error) *installer.Request 
 	}
 	return m.send(installer.Request{Kind: installer.RequestSaveSettings, Serial: serial, Settings: settings})
 }
+
+// ConnectionChanged reports that the app's USB connection to RC2FX was
+// dropped or replaced. A settings read in flight on the old connection is
+// never answered, so it is asked again once RC2FX answers; if RC2FX does
+// not come back, the run fails (advance) rather than going on unsaved. An
+// in-place update still uploading ends with the connection (the transport
+// cancels it), and nothing reports that, so it fails here.
+func (m *Model) ConnectionChanged() {
+	if m.settingsRead == SettingsReadAsked {
+		m.settingsRead = SettingsReadWanted
+	}
+	if m.InPlace.Kind == InPlaceUploading {
+		m.InPlace = InPlace{Kind: InPlaceFailed, Error: inPlaceDisconnected}
+	}
+}
+
+// inPlaceDisconnected is why an in-place update failed when the connection
+// ended mid-upload. The mixer may already have accepted it, just before.
+const inPlaceDisconnected = "The mixer was disconnected before it confirmed the update. " +
+	"If the RC2FX version it reports did not change, nothing changed on it."
 
 // Answering reports that RC2FX answers over the app's USB connection.
 func (m *Model) Answering() bool {
@@ -415,7 +436,15 @@ func (m *Model) satisfied(step Step) bool {
 	flashed := m.flashed()
 	switch step {
 	case StepBackup:
-		return flashed || (run != nil && run.BackedUp) || !m.Answering()
+		switch {
+		case flashed:
+			return true
+		case run == nil:
+			// Before a run: the plan shows whether there is anything to save.
+			return !m.Answering()
+		default:
+			return run.BackedUp || !run.NeedsBackup
+		}
 	case StepMixer:
 		// Stock firmware carries no mixer software.
 		return flashed || m.Stock || (run != nil && run.Selected)
@@ -928,10 +957,11 @@ func (m *Model) Start() *installer.Request {
 		mixer = &source
 	}
 	m.Run = &Run{
-		Started: time.Now(),
-		Device:  m.Device,
-		Serial:  serial,
-		Mixer:   mixer,
+		Started:     time.Now(),
+		Device:      m.Device,
+		Serial:      serial,
+		Mixer:       mixer,
+		NeedsBackup: m.Answering(),
 	}
 	if m.WantsStorageFix() {
 		m.Run.Fix = &RunFix{}
@@ -1135,6 +1165,10 @@ func (m *Model) advance() *installer.Request {
 		serial := run.Serial
 		switch step {
 		case StepBackup:
+			if !m.Answering() {
+				return m.fail("RC2FX stopped answering before its settings were saved, so they were not saved and nothing was changed. " +
+					"Reconnect the mixer and choose Try again, or choose Stop and start again to continue without saving them.")
+			}
 			if serial == "" {
 				return m.wait("Connect the mixer so its settings can be matched to it.")
 			}
@@ -1340,11 +1374,16 @@ func (m *Model) Finish(request installer.Request, reply installer.Reply, err err
 		}
 		m.Releases = items
 		m.settleMixer()
-		return m.checkMixers()
+		// The catalog was read, so mixer software is looked for even when it
+		// lists no firmware for this mixer.
+		if next := m.checkMixers(); next != nil {
+			return next
+		}
+		return m.nextCheck()
 	case installer.ReplyMixerReleases:
 		m.Offers = Offers{Kind: OffersReady, List: r.Offers}
 		m.settleMixer()
-		return m.checkStock()
+		return m.nextCheck()
 	case installer.ReplyStockReleases:
 		device := m.Device.ID()
 		var items []installer.Release
@@ -1367,7 +1406,7 @@ func (m *Model) Finish(request installer.Request, reply installer.Reply, err err
 		}
 		m.StockReleases = items
 		m.StockCheck = StockCheck{Kind: StockCheckDone}
-		return nil
+		return m.nextCheck()
 	case installer.ReplyInPlaceBundle:
 		var bundle installer.InPlaceBundle
 		if r.InPlaceBundle != nil {
@@ -1442,10 +1481,10 @@ func (m *Model) failed(request installer.Request, err error) *installer.Request 
 	case installer.RequestMixerReleases:
 		m.Offers = Offers{Kind: OffersFailed, Error: e}
 		m.settleMixer()
-		return m.checkStock()
+		return m.nextCheck()
 	case installer.RequestStockReleases:
 		m.StockCheck = StockCheck{Kind: StockCheckFailed, Error: e}
-		return nil
+		return m.nextCheck()
 	case installer.RequestProbe:
 		// A failed poll while waiting is not the end of the run.
 		if m.Run != nil {
@@ -1473,8 +1512,9 @@ func (m *Model) failed(request installer.Request, err error) *installer.Request 
 		} else {
 			m.Error = fmt.Sprintf("Couldn't check for supported firmware. %s", e)
 		}
-		// Stock firmware doesn't depend on RC2FX's catalog.
-		return m.checkStock()
+		// Stock firmware doesn't depend on RC2FX's catalog; mixer software
+		// waits for it (see nextCheck).
+		return m.nextCheck()
 	default:
 		m.fail(e)
 		// Show what the mixer reports after the failure.
@@ -1530,10 +1570,40 @@ func (m *Model) receiveStatus(status installer.Status) *installer.Request {
 		}
 		return nil
 	}
-	if len(m.Releases) > 0 || m.Status.USBError != nil {
-		return m.checkMixers()
+	return m.nextCheck()
+}
+
+// nextCheck is the first catalog check still to do, in order: RC2FX's
+// firmware, its mixer software, then RØDE's stock firmware. The checks run one
+// at a time: while one is under way, nothing else starts, and its reply calls
+// nextCheck again. A check that is done or failed is passed over instead of
+// ending the chain, so a list forgotten after a model change or the Duo switch
+// is fetched again even when the lists before it are still current.
+//
+// The firmware list depends on the mixer's model, so it waits while USB
+// can't be read. Mixer software is looked for once RC2FX's catalog listed
+// firmware, or while USB can't be read; a failed catalog check doesn't also
+// try it (a reply to the catalog check does, whatever it lists). Stock
+// firmware is RØDE's and is always looked for.
+func (m *Model) nextCheck() *installer.Request {
+	usbFailed := m.Status != nil && m.Status.USBError != nil
+	if !usbFailed {
+		if next := m.checkFirmware(); next != nil {
+			return next
+		}
+		if m.FirmwareCheck == FirmwareCheckChecking {
+			return nil
+		}
 	}
-	return m.checkFirmware()
+	if len(m.Releases) > 0 || usbFailed {
+		if next := m.checkMixers(); next != nil {
+			return next
+		}
+		if m.Offers.Kind == OffersChecking {
+			return nil
+		}
+	}
+	return m.checkStock()
 }
 
 // defaultChoice is stable when RC2FX supports it, else the first supported

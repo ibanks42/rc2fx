@@ -197,7 +197,8 @@ into the signed envelope is refused and the session is `failed`. See
 `PUT /api/v1/update/{id}` carries `{"offset": N, "data": "<base64>"}` with at
 most 256 KiB of raw bytes per request. It appends at `offset`, which must be
 where the upload has reached. A chunk the mixer already holds is accepted
-again, so a lost reply is recovered by resending it. Any other offset is
+again, also after the final chunk has made the session `complete`, so a lost
+reply is recovered by resending it. Any other offset is
 `409` with the position to resume at:
 
 ```json
@@ -235,7 +236,10 @@ The app reconnects and reads `GET /api/v1/update/last` for the outcome:
 `outcome` is `committed` or `rolledBack`; `reason` explains a rollback. The
 GUI shim only takes effect at the next boot, which
 `guiShimNeedsReboot` records. A mixer that has never run an in-place update
-answers `{}`. `DELETE /api/v1/update/{id}` aborts a session that is not
+answers `{}`. Accepting an install (`installing`) removes the previous
+record, so until the new update records its own outcome the endpoint also
+answers `{}`; a record never describes an earlier attempt at the same
+version. `DELETE /api/v1/update/{id}` aborts a session that is not
 installing and deletes its upload; `409` refuses one that is.
 
 | Status | Meaning |

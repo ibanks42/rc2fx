@@ -245,10 +245,24 @@ type Confirm struct {
 	Link, LinkLabel string
 }
 
+// confirmKind is which question the open confirm dialog asks, for the
+// prompts the rest of the app waits on.
+type confirmKind int
+
+const (
+	// confirmKindOther is any prompt nothing else waits on.
+	confirmKindOther confirmKind = iota
+	// confirmKindRestart is askRestart's question.
+	confirmKindRestart
+	// confirmKindClose is confirmClose's "Close without saving?".
+	confirmKindClose
+)
+
 // confirmState is the open confirm dialog: one at a time, drawn by the one
 // gk.Built made in init (a Built is kit state: it cannot be made per call
 // without leaking it).
 type confirmState struct {
+	kind    confirmKind
 	spec    Confirm
 	onOK    func(cx *gk.Cx)
 	onClose func(cx *gk.Cx)
@@ -259,10 +273,49 @@ type confirmState struct {
 // password prompt. onOK runs for the action; onClose whenever the dialog
 // closes, the action included. Clicking outside does nothing. (ui.rs confirm,
 // which took the window; here it is a method so the dialog can be made once.)
-func (a *App) confirm(cx *gk.Cx, spec Confirm, onOK, onClose func(cx *gk.Cx)) {
-	a.confirmOpen = &confirmState{spec: spec, onOK: onOK, onClose: onClose}
+//
+// Only one dialog is open at a time: while one is open a new one is refused
+// and confirm returns false without running either callback, so the caller
+// undoes whatever it set up for it. Replacing the open one would lose its
+// onClose, and with it the state its caller clears there.
+func (a *App) confirm(cx *gk.Cx, kind confirmKind, spec Confirm, onOK, onClose func(cx *gk.Cx)) bool {
+	if !a.claimConfirm(kind, spec, onOK, onClose) {
+		return false
+	}
 	gk.OpenDialog(cx, a.confirmDialog)
+	return true
 }
+
+// claimConfirm takes the one dialog slot for a new prompt; false when a
+// prompt already holds it.
+func (a *App) claimConfirm(kind confirmKind, spec Confirm, onOK, onClose func(cx *gk.Cx)) bool {
+	if a.confirmOpen != nil {
+		return false
+	}
+	a.confirmOpen = &confirmState{kind: kind, spec: spec, onOK: onOK, onClose: onClose}
+	return true
+}
+
+// releaseConfirm frees the slot when c's dialog closes; false when c no
+// longer holds it.
+func (a *App) releaseConfirm(c *confirmState) bool {
+	if a.confirmOpen != c || c == nil {
+		return false
+	}
+	a.confirmOpen = nil
+	return true
+}
+
+// confirmShowing is whether the open dialog asks kind's question.
+func (a *App) confirmShowing(kind confirmKind) bool {
+	return a.confirmOpen != nil && a.confirmOpen.kind == kind
+}
+
+// restartAsked: the restart question is open (askRestart).
+func (a *App) restartAsked() bool { return a.confirmShowing(confirmKindRestart) }
+
+// closingPrompt: "Close without saving?" is open (confirmClose).
+func (a *App) closingPrompt() bool { return a.confirmShowing(confirmKindClose) }
 
 // confirmView draws a.confirmOpen; made into a gk.Built in init.
 func (a *App) confirmView(cx *gk.Cx) gk.DialogEl {
@@ -301,9 +354,7 @@ func (a *App) confirmView(cx *gk.Cx) gk.DialogEl {
 			return true
 		}).
 		OnClose(func(cx *gk.Cx, _ gk.ClickEvent) {
-			if a.confirmOpen == c {
-				a.confirmOpen = nil
-			}
+			a.releaseConfirm(c)
 			if c.onClose != nil {
 				c.onClose(cx)
 			}

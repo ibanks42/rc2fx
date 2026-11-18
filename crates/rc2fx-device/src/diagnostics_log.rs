@@ -19,9 +19,10 @@
 //! * **Events.** A bounded ring (2048) with a monotonic sequence number, built
 //!   from the engine's own event ring, each worker's miss and late histories,
 //!   and the counter increases this module can only see as totals. A gap in the
-//!   engine's sequence numbers becomes one `lost` entry, so the list never
-//!   silently misses anything, and a client that fell behind the ring is told
-//!   how many entries it missed.
+//!   engine's sequence numbers becomes one `lost` entry, and events past a
+//!   worker's kept history become one counted entry per reading, so the list
+//!   never silently misses anything; a client that fell behind the ring is
+//!   told how many entries it missed.
 
 use rc2fx_core::{
     DiagnosticsEvent, DiagnosticsEvents, DiagnosticsKind, EVENTS_PAGE, EventDetails, Meter, Timing,
@@ -56,7 +57,8 @@ pub fn monotonic_ns() -> u64 {
 pub struct DiagnosticsLog {
     epoch: u64,
     generation: Option<u64>,
-    /// The last raw reading; a reset also stores it as the new baseline.
+    /// The last raw reading; a reset also stores it as the new baseline. A
+    /// reading without a meter keeps the path figures of the one before.
     last: Option<Reading>,
     baselines: Option<Reading>,
     /// The baseline came from a user's reset, not an engine's first reading. A
@@ -66,10 +68,30 @@ pub struct DiagnosticsLog {
     next_seq: u64,
     /// The engine ring's last sequence number seen.
     engine_seq: u64,
-    /// Each path's last miss and late sequence numbers. They restart with a
-    /// worker, so a smaller number is a new worker, not a loss.
-    worker_seqs: BTreeMap<String, (u64, u64)>,
+    /// Each path's read position in its worker's miss and late histories,
+    /// keyed on the runtime epoch: a new epoch is a new worker whose
+    /// histories start over.
+    worker_seqs: BTreeMap<String, HistoryCursor>,
     last_reading_ns: Option<u64>,
+}
+
+/// How far one path's worker histories have been read.
+#[derive(Clone, Copy, Default)]
+struct HistoryCursor {
+    runtime_epoch: u64,
+    misses: HistoryRead,
+    lates: HistoryRead,
+}
+
+/// One history's read position: records are read by their ordinal in the
+/// worker's ring (never by frame number, since a miss on frame 0 is real),
+/// and events past the kept ones are reported as counts.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct HistoryRead {
+    /// Records listed, the next ordinal to read.
+    listed: u64,
+    /// Events beyond the kept records already reported as a count.
+    counted: u64,
 }
 
 /// One raw reading of everything cumulative.
@@ -204,7 +226,15 @@ impl DiagnosticsLog {
             self.baseline_is_reset = false;
             self.worker_seqs.clear();
         }
-        let reading = Reading::of(meter, native);
+        let mut reading = Reading::of(meter, native);
+        // With no meter (the engine is settling) only the engine-wide figures
+        // are new. The paths keep their last figures, so growth across the gap
+        // still becomes events and a reset still has a baseline for each path.
+        if meter.is_none()
+            && let Some(last) = &self.last
+        {
+            reading.targets = last.targets.clone();
+        }
         self.collect_events(&reading, native, now_ns);
         self.baselines.get_or_insert_with(|| reading.clone());
         self.last = Some(reading);
@@ -350,11 +380,14 @@ impl DiagnosticsLog {
                 }
             }
         }
+        let interval = self
+            .last_reading_ns
+            .map_or(0, |before| now_ns.saturating_sub(before));
         // 2. Each worker's miss and late histories, per path.
         for context in native {
             for status in &context.targets {
-                self.worker_history(&status.id, status, true);
-                self.worker_history(&status.id, status, false);
+                self.worker_history(status, true, now_ns, interval);
+                self.worker_history(status, false, now_ns, interval);
             }
         }
         // 3. Counter increases with no per-event record, one entry each per
@@ -362,9 +395,6 @@ impl DiagnosticsLog {
         let Some(previous) = self.last.clone() else {
             return;
         };
-        let interval = self
-            .last_reading_ns
-            .map_or(0, |before| now_ns.saturating_sub(before));
         for (id, target) in &reading.targets {
             let Some(old) = previous.targets.get(id) else {
                 continue;
@@ -472,7 +502,8 @@ impl DiagnosticsLog {
         });
     }
 
-    fn worker_history(&mut self, path: &str, status: &TargetStatus, misses: bool) {
+    fn worker_history(&mut self, status: &TargetStatus, misses: bool, now_ns: u64, interval: u64) {
+        let path = status.id.as_str();
         let history = if misses {
             &status.misses
         } else {
@@ -481,44 +512,70 @@ impl DiagnosticsLog {
         let Some(history) = history else {
             return;
         };
-        let mut slot = self.worker_seqs.get(path).copied().unwrap_or((0, 0));
-        let mut last = if misses { slot.0 } else { slot.1 };
-        // A worker restart begins its sequences at 1 again: adopt the new
-        // numbering, so nothing repeats and nothing is skipped.
-        if history
-            .events
-            .last()
-            .is_some_and(|record| record.sequence < last)
-        {
-            last = 0;
-        }
-        let fresh: Vec<_> = history
-            .events
-            .iter()
-            .filter(|record| record.sequence > last)
-            .collect();
-        for record in fresh {
-            let kind = if misses {
-                DiagnosticsKind::MissedDeadline
-            } else {
-                DiagnosticsKind::LateFrame
+        let mut cursor = self.worker_seqs.get(path).copied().unwrap_or_default();
+        // A new runtime epoch is a new worker: its histories start over.
+        if cursor.runtime_epoch != status.runtime_epoch {
+            cursor = HistoryCursor {
+                runtime_epoch: status.runtime_epoch,
+                ..HistoryCursor::default()
             };
-            self.push(DiagnosticsEvent {
-                seq: 0,
-                kind,
-                path: Some(path.to_owned()),
-                at_ns: record.at_ns,
-                message: format!("{path}: {}", describe(kind)),
-                details: EventDetails::default(),
-            });
-            last = record.sequence;
+        }
+        let mut read = if misses { cursor.misses } else { cursor.lates };
+        // A history never shrinks within one worker; if it did, start over
+        // rather than skip what it holds now.
+        if history.total < read.listed.saturating_add(read.counted) {
+            read = HistoryRead::default();
+        }
+        let (kind, noun) = if misses {
+            (DiagnosticsKind::MissedDeadline, "missed deadlines")
+        } else {
+            (DiagnosticsKind::LateFrame, "late frames")
+        };
+        // A record's position in the list is its ordinal in the ring only
+        // when every kept record is readable. One still being written (the
+        // total is published last, so this is not expected) leaves the
+        // ordinals unknown: wait for the next reading.
+        let kept = history.total.saturating_sub(history.lost);
+        if history.events.len() as u64 >= kept {
+            for record in history.events.iter().skip(read.listed as usize) {
+                self.push(DiagnosticsEvent {
+                    seq: 0,
+                    kind,
+                    path: Some(path.to_owned()),
+                    at_ns: record.at_ns,
+                    message: format!("{path}: {}", describe(kind)),
+                    details: EventDetails::default(),
+                });
+            }
+            read.listed = read.listed.max(history.events.len() as u64);
+            // The worker keeps only its first records; later ones are only
+            // counted. Report each increase as one counted entry.
+            if history.lost > read.counted {
+                let delta = history.lost - read.counted;
+                self.push(DiagnosticsEvent {
+                    seq: 0,
+                    kind,
+                    path: Some(path.to_owned()),
+                    at_ns: now_ns,
+                    message: format!(
+                        "{path}: {delta} more {noun} (only the first {} are listed)",
+                        history.events.len()
+                    ),
+                    details: EventDetails {
+                        delta: Some(delta),
+                        interval_ns: Some(interval),
+                        ..EventDetails::default()
+                    },
+                });
+                read.counted = history.lost;
+            }
         }
         if misses {
-            slot.0 = last;
+            cursor.misses = read;
         } else {
-            slot.1 = last;
+            cursor.lates = read;
         }
-        self.worker_seqs.insert(path.to_owned(), slot);
+        self.worker_seqs.insert(path.to_owned(), cursor);
     }
 }
 
@@ -856,6 +913,45 @@ mod tests {
     }
 
     #[test]
+    fn a_reset_while_the_engine_settles_still_baselines_every_path() {
+        let mut log = DiagnosticsLog::default();
+        let raw = meter(timing(10, 500, [0; 8]), timing(4, 300, [0; 8]));
+        let engine = context(&raw, Vec::new());
+        log.observe(Some(&raw), std::slice::from_ref(&engine), 1_000);
+        // The engine settles: a reading with no meter, only engine figures.
+        log.observe(None, std::slice::from_ref(&engine), 1_250);
+        log.reset(1_500);
+        let mut later = raw.clone();
+        later.targets[0].callbacks += 7;
+        later.targets[0].clipped += 2;
+        log.observe(Some(&later), &[context(&later, Vec::new())], 2_000);
+        let shown = log.shown(&later);
+        assert_eq!(shown.diagnostics_epoch, 1);
+        // Only the growth since the reset, not the lifetime counts.
+        assert_eq!(shown.targets[0].callbacks, 7);
+        assert_eq!(shown.targets[0].clipped, 2);
+        assert_eq!(shown.targets[0].processed_frames, 0);
+        assert_eq!(shown.targets[0].performance.as_ref().unwrap().xruns, 0);
+    }
+
+    #[test]
+    fn counter_increases_across_a_reading_without_a_meter_are_kept() {
+        let mut log = DiagnosticsLog::default();
+        let raw = meter(timing(1, 100, [0; 8]), timing(1, 100, [0; 8]));
+        let engine = context(&raw, Vec::new());
+        log.observe(Some(&raw), std::slice::from_ref(&engine), 1_000);
+        log.observe(None, std::slice::from_ref(&engine), 1_250);
+        assert!(log.is_empty(), "a reading without a meter adds nothing");
+        let mut later = raw.clone();
+        later.targets[0].input_drops += 3;
+        log.observe(Some(&later), &[context(&later, Vec::new())], 1_500);
+        let page = log.page(0, EVENTS_PAGE, 2_000);
+        let kinds: Vec<_> = page.events.iter().map(|event| event.kind).collect();
+        assert_eq!(kinds, vec![DiagnosticsKind::InputDrops]);
+        assert_eq!(page.events[0].details.delta, Some(3));
+    }
+
+    #[test]
     fn the_ring_drops_the_oldest_and_counts_what_a_client_missed() {
         let mut log = DiagnosticsLog::default();
         for index in 0..(LOG_CAPACITY + 10) {
@@ -935,20 +1031,21 @@ mod tests {
         assert_eq!(page.events[2].details.value_ns, Some(500));
     }
 
-    #[test]
-    fn worker_histories_arrive_once_and_a_restarted_worker_is_not_reported_again() {
-        let mut log = DiagnosticsLog::default();
-        let history = |events: Vec<(u64, u64)>| NativeHistory {
-            total: events.len() as u64,
-            lost: 0,
+    fn history(events: Vec<(u64, u64)>, total: u64) -> NativeHistory {
+        NativeHistory {
+            total,
+            lost: total.saturating_sub(events.len() as u64),
             events: events
                 .into_iter()
                 .map(
                     |(sequence, at_ns)| rc2fx_native_control::NativeEventRecord { sequence, at_ns },
                 )
                 .collect(),
-        };
-        let mut status = TargetStatus {
+        }
+    }
+
+    fn history_status(misses: NativeHistory, lates: NativeHistory) -> TargetStatus {
+        TargetStatus {
             id: "mic-1".into(),
             mode: rc2fx_native_control::PathMode::Processed,
             runtime_epoch: 1,
@@ -960,34 +1057,125 @@ mod tests {
             fingerprint: [0; 32],
             meter: None,
             worker: None,
-            misses: Some(history(vec![(1, 100)])),
-            lates: Some(history(vec![(1, 200)])),
+            misses: Some(misses),
+            lates: Some(lates),
             worker_recent_max_ns: None,
-        };
-        let context = |status: &TargetStatus| ContextStatus {
+        }
+    }
+
+    fn history_context(status: &TargetStatus) -> ContextStatus {
+        ContextStatus {
             context: 1,
             targets: vec![status.clone()],
             timing: None,
             counters: Default::default(),
             events: vec![],
             recent_callback_wall_ns: None,
-        };
+        }
+    }
+
+    #[test]
+    fn worker_histories_arrive_once_and_a_new_worker_starts_over() {
+        let mut log = DiagnosticsLog::default();
+        // Frames are 0-based: the cold first frame of a worker can miss.
+        let mut status = history_status(history(vec![(0, 100)], 1), history(vec![(0, 200)], 1));
         let meter = meter(timing(1, 100, [0; 8]), timing(1, 100, [0; 8]));
-        log.observe(Some(&meter), &[context(&status)], 1_000);
-        log.observe(Some(&meter), &[context(&status)], 1_100);
+        log.observe(Some(&meter), &[history_context(&status)], 1_000);
+        log.observe(Some(&meter), &[history_context(&status)], 1_100);
         assert_eq!(log.len(), 2, "one miss and one late frame, read once");
-        // A new worker restarts the sequences at 1: adopt, don't repeat.
-        status.misses = Some(history(vec![(1, 300)]));
-        status.lates = Some(history(vec![(1, 400)]));
-        log.observe(Some(&meter), &[context(&status)], 1_200);
-        assert_eq!(log.len(), 2);
-        // Then its second miss is new.
-        status.misses = Some(history(vec![(1, 300), (2, 500)]));
-        log.observe(Some(&meter), &[context(&status)], 1_300);
-        assert_eq!(log.len(), 3);
+        // A new worker (new runtime epoch) whose frame numbers are higher than
+        // the old cursor's: every one of its records is new, from the first.
+        status.runtime_epoch = 2;
+        status.misses = Some(history(vec![(0, 300), (5, 350)], 2));
+        status.lates = Some(history(vec![], 0));
+        log.observe(Some(&meter), &[history_context(&status)], 1_200);
+        assert_eq!(log.len(), 4);
+        // Then its next miss is new, even at a lower frame than the old
+        // worker's records.
+        status.misses = Some(history(vec![(0, 300), (5, 350), (7, 500)], 3));
+        log.observe(Some(&meter), &[history_context(&status)], 1_300);
+        assert_eq!(log.len(), 5);
         let page = log.page(0, EVENTS_PAGE, 2_000);
-        assert_eq!(page.events[2].kind, DiagnosticsKind::MissedDeadline);
-        assert_eq!(page.events[2].path.as_deref(), Some("mic-1"));
+        assert_eq!(
+            page.events
+                .iter()
+                .map(|event| (event.kind, event.at_ns))
+                .collect::<Vec<_>>(),
+            vec![
+                (DiagnosticsKind::MissedDeadline, 100),
+                (DiagnosticsKind::LateFrame, 200),
+                (DiagnosticsKind::MissedDeadline, 300),
+                (DiagnosticsKind::MissedDeadline, 350),
+                (DiagnosticsKind::MissedDeadline, 500),
+            ]
+        );
+        assert!(
+            page.events
+                .iter()
+                .all(|event| event.details.delta.is_none())
+        );
+        assert_eq!(page.events[4].path.as_deref(), Some("mic-1"));
+    }
+
+    #[test]
+    fn events_past_a_full_history_are_counted_not_dropped() {
+        let mut log = DiagnosticsLog::default();
+        let meter = meter(timing(1, 100, [0; 8]), timing(1, 100, [0; 8]));
+        let kept: Vec<(u64, u64)> = (0..64).map(|frame| (frame, 1_000 + frame)).collect();
+        // The 64 kept records and 3 more that were only counted.
+        let mut status = history_status(history(kept.clone(), 67), history(vec![], 0));
+        log.observe(Some(&meter), &[history_context(&status)], 1_000);
+        assert_eq!(log.len(), 65);
+        // Five more, only counted: one entry for the five.
+        status.misses = Some(history(kept.clone(), 72));
+        log.observe(Some(&meter), &[history_context(&status)], 1_500);
+        // Nothing new: nothing added.
+        log.observe(Some(&meter), &[history_context(&status)], 1_600);
+        assert_eq!(log.len(), 66);
+        let page = log.page(0, EVENTS_PAGE, 2_000);
+        let counted: Vec<_> = page
+            .events
+            .iter()
+            .filter(|event| event.details.delta.is_some())
+            .collect();
+        assert_eq!(counted.len(), 2);
+        assert!(
+            counted
+                .iter()
+                .all(|event| event.kind == DiagnosticsKind::MissedDeadline)
+        );
+        assert_eq!(counted[0].details.delta, Some(3));
+        assert_eq!(counted[1].details.delta, Some(5));
+        assert_eq!(counted[1].details.interval_ns, Some(500));
+        assert_eq!(counted[1].at_ns, 1_500);
+        assert!(
+            counted[1].message.contains("5 more missed deadlines"),
+            "{}",
+            counted[1].message
+        );
+    }
+
+    #[test]
+    fn a_record_still_being_written_waits_for_the_next_reading() {
+        let mut log = DiagnosticsLog::default();
+        let meter = meter(timing(1, 100, [0; 8]), timing(1, 100, [0; 8]));
+        // Two counted, one readable: which ordinal it holds is unknown.
+        let mut status = history_status(
+            NativeHistory {
+                total: 2,
+                lost: 0,
+                events: vec![rc2fx_native_control::NativeEventRecord {
+                    sequence: 3,
+                    at_ns: 100,
+                }],
+            },
+            history(vec![], 0),
+        );
+        log.observe(Some(&meter), &[history_context(&status)], 1_000);
+        assert_eq!(log.len(), 0);
+        status.misses = Some(history(vec![(0, 50), (3, 100)], 2));
+        log.observe(Some(&meter), &[history_context(&status)], 1_100);
+        assert_eq!(log.len(), 2);
     }
 
     #[test]

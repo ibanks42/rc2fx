@@ -68,10 +68,16 @@ show=${RC2FX_STOCK_SHOW:-}
 profile_id=${RC2FX_FIRMWARE_PROFILE:-}
 # Only an opted-in Duo image carries this marker. It admits experimental
 # runtime behavior, never a different board or a Pro II firmware image.
+# The installer writes it to the installed bundle, and the rollback copy an
+# unfinished update starts (/opt/.rc2fx-previous) has none of its own, so it
+# is read from that fixed place first, then beside this script.
+duo_marker=${RC2FX_DUO_MARKER:-/opt/rc2fx/experimental-duo}
 RC2FX_EXPERIMENTAL_DUO=0
-if [[ -f "$home/experimental-duo" && $(< "$home/experimental-duo") == 1 ]]; then
-  RC2FX_EXPERIMENTAL_DUO=1
-fi
+for marker in "$duo_marker" "$home/experimental-duo"; do
+  if [[ -f "$marker" && $(< "$marker") == 1 ]]; then
+    RC2FX_EXPERIMENTAL_DUO=1
+  fi
+done
 export RC2FX_EXPERIMENTAL_DUO
 # Restart a mixer only once it has run this long: its USB audio gadget comes
 # about 42 s into a run, and a rebuild under a build in progress is unsafe.
@@ -194,7 +200,8 @@ retire_usb_node() {
     return 1
   fi
   rm -- /dev/hidg0
-  say 'Retired old USB HID node before mixer restart'
+  # The node is gone; a log write that fails must not refuse the restart.
+  say 'Retired old USB HID node before mixer restart' || true
 }
 
 # The mixer (stock or RC2FX) running under the launcher, which is waiting on
@@ -841,6 +848,9 @@ launch() {
   # gets logged: the launcher records neither. No taskset: stock starts
   # unpinned and pins its own threads. RC2FX's diagnostics go to stderr.
   trap - EXIT
+  # From here on nothing falls back to stock, so no failed step may end this
+  # shell: a log write that fails (a full root) would leave no mixer at all.
+  set +e
   relax_rt_throttle >> "$logs/rc2fx.log"
   jack_recorder || true
   # Explicit RAM-only measurement switch. Never inherit a caller's probe flag;

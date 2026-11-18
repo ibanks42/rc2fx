@@ -35,7 +35,8 @@ With the switch on and a Duo connected:
 - The prepared image gets a file `/opt/rc2fx/experimental-duo` containing
   `1`. The launcher (`mixer/scripts/rc2fx.sh`) turns it into
   `RC2FX_EXPERIMENTAL_DUO=1`, which lets the runtime accept this Duo board
-  with the Duo profile. The Duo is still identified as a Duo.
+  with the Duo profile. The Duo is still identified as a Duo. The rollback
+  copy an unfinished in-place update starts reads the same file.
 
 Turning the switch off blocks further Duo flashes. It does not remove RC2FX
 from a Duo that already has it. To remove it, flash stock Duo firmware, which

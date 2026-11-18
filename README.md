@@ -47,8 +47,8 @@ stock RØDE firmware removes RC2FX.
 3. Choose **Install RC2FX**. The app downloads official RØDE firmware, adds
    RC2FX to it and flashes it through the mixer's USB update mode. The
    computer needs an internet connection for the download.
-4. Pick a channel, turn on **Processing**, switch on some effects and press
-   **Save to mixer**.
+4. Pick a channel, turn on **Processing** and switch on some effects. Each
+   change is heard at once and saved to the mixer on its own.
 
 The [user guide](docs/introduction.md) covers each step in more detail.
 

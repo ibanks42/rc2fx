@@ -87,9 +87,11 @@ pub enum DiagnosticsKind {
     /// The mixer rebuilt its USB gadget (a USB mode change).
     UsbGadget,
     /// The suppression worker missed a frame's deadline: the listener heard
-    /// the delayed original for that frame.
+    /// the delayed original for that frame. With a `delta`, that many more
+    /// misses past the worker's kept history, counted between two readings.
     MissedDeadline,
     /// A worker result arrived after its deadline (still used, but late).
+    /// With a `delta`, a count past the kept history, as for misses.
     LateFrame,
     /// Stale suppression results, counted between two readings.
     StaleResults,

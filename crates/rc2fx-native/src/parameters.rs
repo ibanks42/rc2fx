@@ -862,19 +862,23 @@ impl Control {
         let worker = versions.current.get().runtime.as_ref()?.worker()?;
         Some(outliers_json(worker.telemetry().outliers()))
     }
-    /// The current worker's (missed-deadline, late-result) histories, typed
-    /// for the control API. Both come from one outliers snapshot under one
-    /// version lock, so they always belong to the same worker. None without
-    /// a worker; the histories retain their existing per-ring read semantics.
+    /// The current worker's runtime epoch and (missed-deadline, late-result)
+    /// histories, typed for the control API. All three are read under one
+    /// version lock, so the histories always belong to the same worker and
+    /// the epoch names it. None without a worker; the histories retain their
+    /// existing per-ring read semantics.
     pub fn worker_histories(
         &self,
     ) -> Option<(
+        u64,
         rc2fx_native_control::NativeHistory,
         rc2fx_native_control::NativeHistory,
     )> {
         let versions = self.shared.versions.lock().ok()?;
-        let worker = versions.current.get().runtime.as_ref()?.worker()?;
-        Some(native_histories(worker.telemetry().outliers()))
+        let runtime = versions.current.get().runtime.as_ref()?;
+        let worker = runtime.worker()?;
+        let (misses, lates) = native_histories(worker.telemetry().histories());
+        Some((runtime.epoch(), misses, lates))
     }
     pub fn retired_workers(&self) -> Vec<RetiredWorker> {
         self.shared
@@ -922,7 +926,10 @@ fn check(versions: &Versions, staged: &Staged) -> Result<(), Error> {
     }
 }
 fn native_histories(
-    outliers: rc2fx_suppression::Outliers,
+    (misses, lates): (
+        rc2fx_suppression::EventHistory,
+        rc2fx_suppression::EventHistory,
+    ),
 ) -> (
     rc2fx_native_control::NativeHistory,
     rc2fx_native_control::NativeHistory,
@@ -941,10 +948,7 @@ fn native_histories(
     };
     // Keep the wire mapping unchanged: unpublished records remain accounted
     // for by total, not added to lost; zero timestamps remain zero.
-    (
-        convert(outliers.miss_history),
-        convert(outliers.late_history),
-    )
+    (convert(misses), convert(lates))
 }
 
 pub(crate) fn worker_timing(value: rc2fx_suppression::Timing) -> rc2fx_native_control::Timing {
@@ -1139,7 +1143,7 @@ mod tests {
         let empty = rc2fx_native_control::NativeHistory::default();
         assert_eq!(
             control.worker_histories(),
-            Some((empty.clone(), empty.clone()))
+            Some((1, empty.clone(), empty.clone()))
         );
         let status = crate::target_status(&mut control).unwrap();
         assert_eq!(
@@ -1152,15 +1156,9 @@ mod tests {
     #[test]
     fn paired_histories_preserve_both_rings_loss_unpublished_and_clock_failures() {
         use rc2fx_native_control::{NativeEventRecord, NativeHistory};
-        use rc2fx_suppression::{EventHistory, EventRecord, Outliers, Recorded};
-        let outliers = Outliers {
-            worst: Recorded::Empty,
-            latest_slow: Recorded::Empty,
-            slow_frames: 0,
-            above: [0; 4],
-            last_miss: Recorded::Empty,
-            last_late: Recorded::Empty,
-            miss_history: EventHistory {
+        use rc2fx_suppression::{EventHistory, EventRecord};
+        let histories = (
+            EventHistory {
                 total: 8,
                 capacity: 2,
                 events: vec![
@@ -1176,7 +1174,7 @@ mod tests {
                 lost: 5,
                 unpublished: 1,
             },
-            late_history: EventHistory {
+            EventHistory {
                 total: 4,
                 capacity: 2,
                 events: vec![
@@ -1192,9 +1190,9 @@ mod tests {
                 lost: 0,
                 unpublished: 2,
             },
-        };
+        );
         assert_eq!(
-            native_histories(outliers),
+            native_histories(histories),
             (
                 NativeHistory {
                     total: 8,

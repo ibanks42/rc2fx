@@ -304,9 +304,13 @@ type Run struct {
 	Failed  *string
 	Waiting *Waiting
 	// Serial is the mixer this run is for, from USB.
-	Serial   string
-	Device   firmware.Model
-	BackedUp bool
+	Serial string
+	Device firmware.Model
+	// NeedsBackup: RC2FX answered when the run started, so its settings
+	// must be saved before anything changes. Decided once, so RC2FX
+	// dropping off later never skips the backup silently.
+	NeedsBackup bool
+	BackedUp    bool
 	// Mixer is the mixer software the user reviewed; nil for stock
 	// firmware. Held here so nothing that changes on the page can alter a
 	// run.

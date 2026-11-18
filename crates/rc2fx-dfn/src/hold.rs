@@ -82,6 +82,13 @@ pub fn grant(budget_ns: u64, since_submitted_ns: Option<u64>) {
 /// Called before each large weight product.
 #[inline(always)]
 pub(crate) fn gate() {
+    // The limits are process-wide, so in tests only the hold tests' own
+    // threads may wait: a model test on another thread would otherwise share
+    // their budget and write it back, ending their waits early.
+    #[cfg(test)]
+    if !tests::GATED.with(std::cell::Cell::get) {
+        return;
+    }
     if CALLBACK_BUSY.load(Ordering::Relaxed) && LEFT_NS.load(Ordering::Relaxed) != 0 {
         wait();
     }
@@ -128,6 +135,17 @@ mod tests {
     /// The statics are shared; these tests take turns.
     static TURN: Mutex<()> = Mutex::new(());
 
+    thread_local! {
+        /// Whether `gate` may wait on this thread (see `gate`).
+        pub(super) static GATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Takes this test's turn and lets `gate` wait on this thread.
+    fn turn() -> std::sync::MutexGuard<'static, ()> {
+        GATED.with(|gated| gated.set(true));
+        TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn timed(f: impl FnOnce()) -> Duration {
         let t = Instant::now();
         f();
@@ -136,7 +154,7 @@ mod tests {
 
     #[test]
     fn nothing_waits_without_a_grant_or_without_the_mark() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(DEFAULT_WINDOW_NS, Ordering::Relaxed);
         let spent = timed(|| {
             grant(0, Some(0));
@@ -152,7 +170,7 @@ mod tests {
 
     #[test]
     fn a_frame_waits_at_most_its_budget_in_total() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(1_000_000_000, Ordering::Relaxed);
         CALLBACK_BUSY.store(true, Ordering::Relaxed);
         grant(2_000_000, Some(0));
@@ -168,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_frame_never_waits_past_its_window() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(3_000_000, Ordering::Relaxed);
         CALLBACK_BUSY.store(true, Ordering::Relaxed);
         // Submitted 1 ms ago with a 3 ms window: at most about 2 ms of waiting
@@ -192,7 +210,7 @@ mod tests {
 
     #[test]
     fn a_wait_ends_when_the_callback_clears_the_mark() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(1_000_000_000, Ordering::Relaxed);
         CALLBACK_BUSY.store(true, Ordering::Relaxed);
         grant(1_000_000_000, Some(0));

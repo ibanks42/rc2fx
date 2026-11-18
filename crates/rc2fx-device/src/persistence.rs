@@ -30,8 +30,9 @@ mod platform {
 
     pub(crate) struct Directory {
         directory: File,
-        // The descriptor, rather than the pathname, owns the flock for this lifetime.
-        _lock: File,
+        // The descriptor, rather than the pathname, owns the flock for this
+        // lifetime. Drop unlocks it explicitly (see the Drop impl).
+        lock: File,
         #[cfg(test)]
         failure: Option<CommitPhase>,
     }
@@ -105,7 +106,7 @@ mod platform {
             }
             Ok(Self {
                 directory,
-                _lock: lock,
+                lock,
                 #[cfg(test)]
                 failure: None,
             })
@@ -204,6 +205,21 @@ mod platform {
         }
     }
 
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            // A flock belongs to the open file description, not to this one
+            // descriptor. When another thread spawns a process, the child holds
+            // a copy of every descriptor, O_CLOEXEC ones included, from fork
+            // until exec. Closing only our copy in that window would leave the
+            // lock held, so a reopen in this process would see Locked. Unlocking
+            // releases it for every copy at once.
+            // SAFETY: flock only uses this valid descriptor, still owned here.
+            unsafe {
+                libc::flock(self.lock.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
+
     pub(crate) fn random_id() -> io::Result<String> {
         let mut bytes = [0_u8; 16];
         File::open("/dev/urandom")?.read_exact(&mut bytes)?;
@@ -213,6 +229,34 @@ mod platform {
             write!(&mut id, "{byte:02x}").expect("writing to String");
         }
         Ok(id)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn drop_releases_the_lock_while_a_descriptor_copy_is_still_open() {
+            let temporary = tempfile::tempdir().unwrap();
+            let directory = Directory::open(temporary.path()).unwrap();
+            // A dup shares the open file description, exactly like the copy a
+            // child holds between fork and exec.
+            // SAFETY: dup of a valid descriptor; the new one is owned below.
+            let copy = unsafe { libc::dup(directory.lock.as_raw_fd()) };
+            assert!(copy >= 0, "{}", io::Error::last_os_error());
+            // SAFETY: dup returned a fresh descriptor that nothing else owns.
+            let copy = unsafe { File::from_raw_fd(copy) };
+            assert_eq!(
+                Directory::open(temporary.path())
+                    .err()
+                    .map(|error| error.kind()),
+                Some(io::ErrorKind::WouldBlock)
+            );
+            drop(directory);
+            let reopened = Directory::open(temporary.path());
+            drop(copy);
+            reopened.unwrap();
+        }
     }
 }
 

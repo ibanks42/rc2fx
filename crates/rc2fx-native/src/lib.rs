@@ -1243,9 +1243,13 @@ fn target_status(
     let status = control.status().map_err(parameter_error)?;
     let worker = control.worker_status();
     let worker_recent_max_ns = control.worker_recent_turnaround_ns();
+    // Histories from a worker other than the status's runtime (one replaced
+    // between the two reads) are left out: a reader keys them on the epoch.
     let (misses, lates) = match control.worker_histories() {
-        Some((misses, lates)) => (Some(misses), Some(lates)),
-        None => (None, None),
+        Some((epoch, misses, lates)) if epoch == status.runtime_epoch => {
+            (Some(misses), Some(lates))
+        }
+        _ => (None, None),
     };
     Ok(rc2fx_native_control::TargetStatus {
         id: control.id().into(),

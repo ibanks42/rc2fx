@@ -116,7 +116,7 @@ func (a *App) processingRow(cx *gk.Cx) (gk.DivEl, bool) {
 		hint += " Waiting for the mixer connection."
 	case phase == core.RoutingPhaseBypassed && !ready:
 		if a.session.Dirty() || a.session.Conflict {
-			hint += " Apply or reload your changes before enabling processing."
+			hint += " Waiting for your changes to save to the mixer."
 		} else {
 			hint += " Waiting for the mixer to finish saving and become ready."
 		}

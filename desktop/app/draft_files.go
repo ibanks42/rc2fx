@@ -108,7 +108,7 @@ func (a *App) confirmReplaceDraft(cx *gk.Cx, snapshot edit.DraftSnapshot, target
 	selectedTargets []string, name string) {
 	detail := fmt.Sprintf("Open %s with %d chains. This doesn't change the mixer's saved settings.", name, len(targets))
 	opened := false
-	a.confirm(cx, Confirm{
+	if !a.confirm(cx, confirmKindOther, Confirm{
 		Title:  "Replace your unsaved draft?",
 		Detail: detail,
 		Cancel: "Keep editing",
@@ -121,7 +121,11 @@ func (a *App) confirmReplaceDraft(cx *gk.Cx, snapshot edit.DraftSnapshot, target
 			a.fileBusy = false
 			a.notify(cx)
 		}
-	})
+	}) {
+		// Another question is open: the file is not opened.
+		a.fileBusy = false
+		a.message = "Answer the open question first, then open the file again."
+	}
 }
 
 // saveDraft writes the draft as a settings file the user names.

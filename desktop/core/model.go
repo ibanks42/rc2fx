@@ -745,10 +745,10 @@ func (c Config) Validate() error { return c.validateWith(Target.Validate) }
 
 func (c Config) validateWith(validateTarget func(Target) error) error {
 	if c.SchemaVersion != SchemaVersion || c.Revision == 0 {
-		return CoreError("Expected schema version 6 and a positive revision")
+		return CoreError("Expected schema version " + strconv.FormatUint(uint64(SchemaVersion), 10) + " and a positive revision")
 	}
 	if len(c.Targets) == 0 || len(c.Targets) > MaxTargets {
-		return CoreError("Expected 1 to 24 targets")
+		return CoreError("Expected 1 to " + strconv.Itoa(MaxTargets) + " targets")
 	}
 	suppressed := 0
 	for _, target := range c.Targets {

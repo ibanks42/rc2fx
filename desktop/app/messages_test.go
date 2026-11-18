@@ -1,6 +1,12 @@
 package app
 
-import "testing"
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // lib.rs message_tests.
 func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
@@ -21,10 +27,48 @@ func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
 		"Saved settings file to /tmp/a.json",
 		"Preset ‘Podcast’ saved on the mixer",
 		"Enter a preset name of 1–128 bytes.",
-		"Mixer settings changed elsewhere. Keep your draft or reload the mixer settings.",
+		mixerChangedElsewhere,
 	} {
 		if progressMessage(outcome) {
 			t.Errorf("%s", outcome)
 		}
+	}
+}
+
+// A failed save is an outcome, so it is toasted whatever its reason says,
+// and says it failed.
+func TestAFailedSaveIsToasted(t *testing.T) {
+	for _, reason := range []string{"", "HTTP 500: config write failed", "timed out waiting for the mixer…"} {
+		message := saveFailedMessage(reason)
+		if progressMessage(message) {
+			t.Errorf("%q reads as progress", message)
+		}
+		if reason != "" && message != "Couldn't save: "+reason {
+			t.Errorf("saveFailedMessage(%q) = %q", reason, message)
+		}
+	}
+}
+
+// Settings save on their own once edits stop: no text in the app may send the
+// user to the "Save to mixer" button, which is gone.
+func TestNoTextPointsToTheRemovedSaveButton(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(source), "Save to mixer") {
+			t.Errorf("%s mentions the removed Save to mixer button", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

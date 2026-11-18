@@ -306,9 +306,12 @@ func (a *App) stageHead(effect core.Effect, cx *gk.Cx) gk.DivEl {
 		}
 		disabled := !a.session.Connected || a.pending != nil || a.routingPending != nil || a.presets.busy() ||
 			a.transitionBusy()
-		line := "Save to mixer to release the suppression slot before enabling it here."
+		// Edits save on their own once they stop: the slot is free as soon
+		// as turning suppression off on the other channel is saved.
+		line := fmt.Sprintf("%s holds the suppression slot until turning its suppression off is saved. Enable it here after that.",
+			a.targetName(blocker))
 		if needsRelease {
-			line = fmt.Sprintf("%s uses the suppression slot. Turn its suppression off and save before enabling it here.",
+			line = fmt.Sprintf("%s uses the suppression slot. Turn its suppression off, then enable it here once that is saved.",
 				a.targetName(blocker))
 		}
 		about = about.Child(gk.Div(s.Mt2).TextColor(rgb(Warn)).Child(txt(line)))

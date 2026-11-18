@@ -95,11 +95,10 @@ type App struct {
 	channel              core.Channel
 	editorEpoch          uint64
 	// importDraft is lib.rs `import` (a Go keyword).
-	importDraft   *ImportDraft
-	importError   *string
-	fileBusy      bool
-	closingPrompt bool
-	editors       []ParameterEditor
+	importDraft *ImportDraft
+	importError *string
+	fileBusy    bool
+	editors     []ParameterEditor
 	// editingValue is the control whose value is being typed, if any.
 	editingValue *Parameter
 	// resave: a save was refused for an older revision; it is sent again once
@@ -145,6 +144,9 @@ type App struct {
 	// inPlaceAsked is when the app last asked the mixer how an in-place
 	// update ended.
 	inPlaceAsked *time.Time
+	// inPlaceBefore is the mixer's update/last record from just before the
+	// in-place update in progress was sent.
+	inPlaceBefore inPlaceBaseline
 	// settledFlash is the last flash this run of the app saw finish
 	// (Model::settled_flash).
 	settledFlash *uint64
@@ -226,8 +228,6 @@ type App struct {
 	// live is live editing: edits on the running audio, saving once edits
 	// stop, undo and checkpoints (live.go).
 	live model.Live
-	// restartAsked: the restart question is open (askRestart).
-	restartAsked bool
 	// pageWidth is the page's content width at the last prepaint (0 before
 	// the first); narrow() reads it.
 	pageWidth float32
@@ -351,29 +351,29 @@ func (a *App) confirmClose(cx *gk.Cx) bool {
 		a.routingPending == nil && !a.transitionBusy() {
 		return true
 	}
-	if a.closingPrompt {
+	if a.confirmOpen != nil {
+		// "Close without saving?" is already asked, or another question
+		// is open: answer that first.
 		return false
 	}
-	a.closingPrompt = true
 	detail := "Your local edits have not been saved to the mixer."
 	if a.pending != nil || a.presets.writing() || a.routingPending != nil || a.transitionBusy() {
 		detail = "A change already sent to the mixer may still finish. Any remaining local edits will be discarded."
 	}
-	a.confirm(cx, Confirm{
+	discarded := false
+	a.confirm(cx, confirmKindClose, Confirm{
 		Title:  "Close without saving your edits?",
 		Detail: detail,
 		Cancel: "Keep editing",
 		Action: "Discard and close",
 	}, func(cx *gk.Cx) {
-		a.closingPrompt = false
+		discarded = true
 		// Quit with the window still open: see requestQuit.
 		gk.Quit(cx)
 	}, func(cx *gk.Cx) {
-		// Still set only when cancelled: "Discard and close" clears it
-		// before this runs, and its quit must still apply a requested
-		// update.
-		if a.closingPrompt {
-			a.closingPrompt = false
+		// Only when cancelled: "Discard and close" sets discarded before
+		// this runs, and its quit must still apply a requested update.
+		if !discarded {
 			a.selfUpdate.cancelRestart()
 		}
 		a.notify(cx)
@@ -408,6 +408,7 @@ func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 	a.homeOpen = true
 	a.reconnectAt = nil
 	a.generation++
+	a.installerConnectionChanged()
 	a.diagnosticsPending = false
 	a.resetEvents(cx)
 	a.session.Disconnect()
@@ -443,6 +444,7 @@ func (a *App) disconnect(cx *gk.Cx) {
 	a.autoConnect = false
 	a.reconnectAt = nil
 	a.generation++
+	a.installerConnectionChanged()
 	a.command(transport.CommandDisconnect{Generation: a.generation})
 	a.session.Disconnect()
 	a.deviceVersions = nil
@@ -476,14 +478,26 @@ func (a *App) apply(cx *gk.Cx) {
 	pending, err := a.session.BeginApply()
 	if err != nil {
 		saveLogf("apply not begun: %s", err)
-		a.message = err.Error()
+		a.saveFailed(err.Error())
 	} else if a.command(transport.CommandApply{Generation: a.generation, Update: pending.Request}) {
 		a.pending = &pending
 		saveLogf("apply sent: expected revision %d", pending.Request.ExpectedRevision)
 		saveLogTargets("  apply targets", pending.Request.Targets)
-		a.message = "Saving settings to mixer…"
+		// Not over an outcome the user has not seen yet, nor over a failed
+		// save tried again: that stays the message, and is not toasted
+		// again at every retry.
+		if a.live.SaveError() == "" && (a.message == a.toasted || progressMessage(a.message)) {
+			a.message = "Saving settings to mixer…"
+		}
 	}
 	a.notify(cx)
+}
+
+// saveFailed notes a save that failed for reason: it is not tried again
+// until its backoff passes (Live.SaveFailed), and the reason is shown.
+func (a *App) saveFailed(reason string) {
+	a.live.SaveFailed(reason, time.Now())
+	a.message = saveFailedMessage(reason)
 }
 
 // savedGeneration is the saved state's engine generation, ok false without
@@ -541,7 +555,10 @@ func (a *App) receive(cx *gk.Cx, value json.RawMessage, acknowledged, snapshot b
 		case core.RemoteUpdateStale:
 			return
 		case core.RemoteUpdateConflict:
-			a.message = "Mixer settings changed elsewhere. Keep your draft or reload the mixer settings."
+			// settleConflict puts the edits on top of the new settings and
+			// the next autosave saves them; edits that no longer fit show
+			// the conflict card instead.
+			a.message = mixerChangedElsewhere
 		case core.RemoteUpdateLoaded:
 			a.message = "Mixer settings loaded"
 		}
@@ -680,6 +697,7 @@ func (a *App) poll(cx *gk.Cx) {
 		case transport.EventKindPreset:
 			a.presetReply(cx, k.Reply, k.Err)
 		case transport.EventKindApplied:
+			a.live.SaveSucceeded()
 			a.receive(cx, k.State, true, false)
 		case transport.EventKindState:
 			a.receive(cx, k.State, false, false)
@@ -775,9 +793,14 @@ func (a *App) poll(cx *gk.Cx) {
 			a.resave = true
 			a.awaitingRefresh = a.command(transport.CommandRefresh{Generation: a.generation})
 		case transport.EventKindFailure:
+			saving := a.pending != nil
 			a.pending = nil
 			a.connecting = false
-			a.message = k.Message
+			if saving {
+				a.saveFailed(k.Message)
+			} else {
+				a.message = k.Message
+			}
 			if !a.session.Connected && a.autoConnect {
 				at := time.Now().Add(3 * time.Second)
 				a.reconnectAt = &at

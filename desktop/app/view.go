@@ -322,7 +322,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	}
 	target := a.target().Clone()
 	// A channel's editor fills the window to its foot; the other pages keep
-	// room below for the floating Save bar.
+	// some room below their last section.
 	editorPage := !a.settingsOpen && !a.homeOpen &&
 		a.unprocessedSource() == nil
 	bottom := PageBottom

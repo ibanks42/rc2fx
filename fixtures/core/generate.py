@@ -191,9 +191,11 @@ def write(name, data):
         f.write(data)
 
 
-def case(name, kind, file, data, accept, why, canonical=None, pretty=None):
+def case(name, kind, file, data, accept, why, canonical=None, pretty=None, error=None):
     write(file, data)
     entry = {"name": name, "type": kind, "file": file, "accept": accept}
+    if error is not None:
+        entry["error"] = error
     if canonical is not None:
         cname, ctext = canonical
         if ctext is not None:
@@ -330,8 +332,11 @@ def set_path(c, path, value):
     node[path[-1]] = value
 
 
-def bad(name, why, text):
-    case(name, "config", f"config/reject-{name}.json", text, False, why)
+def bad(name, why, text, error=None):
+    case(name, "config", f"config/reject-{name}.json", text, False, why, error=error)
+
+
+SCHEMA_ERROR = "Expected schema version 9 and a positive revision"
 
 
 bad("unknown-top-level-field", "deny_unknown_fields", mutate(lambda c: c.update(screenConversion="retired")))
@@ -340,8 +345,8 @@ bad("retired-suppression-field", "removed suppression options",
 bad("missing-selected-targets", "schema 5+ requires a selection", mutate(lambda c: c.pop("selectedTargets")))
 bad("missing-gate", "required field", mutate(lambda c: c["targets"][3]["suppression"].pop("gate")))
 for v in [8, 10]:
-    bad(f"schema-{v}", "only the current schema", mutate(lambda c, v=v: c.update(schemaVersion=v)))
-bad("revision-zero", "a positive revision", mutate(lambda c: c.update(revision=0)))
+    bad(f"schema-{v}", "only the current schema", mutate(lambda c, v=v: c.update(schemaVersion=v)), SCHEMA_ERROR)
+bad("revision-zero", "a positive revision", mutate(lambda c: c.update(revision=0)), SCHEMA_ERROR)
 bad("revision-negative", "u64 out of range", mutate(lambda c: c.update(revision=-1)))
 bad("revision-float", "integer fields need integer literals", mutate(lambda c: c.update(revision=1.0)))
 bad("revision-overflow", "beyond u64 is a float", SMALL_TEXT.replace('"revision":1,', '"revision":18446744073709551616,', 1))
@@ -379,7 +384,9 @@ bad("duplicate-target-id", "target ids are unique", mutate(lambda c: set_path(c,
 bad("duplicate-stage", "each stage once", mutate(lambda c: set_path(c, ["targets", 0, "order", 1], "eq")))
 bad("unknown-selection", "selection names known targets", mutate(lambda c: c.update(selectedTargets=["nowhere"])))
 bad("duplicate-selection", "selection is unique", mutate(lambda c: c.update(selectedTargets=["mic-1", "mic-1"])))
-bad("no-targets", "1 to 32 targets", mutate(lambda c: c.update(targets=[])))
+bad("no-targets", "1 to 32 targets", mutate(lambda c: c.update(targets=[])), "Expected 1 to 32 targets")
+bad("33-targets", "1 to 32 targets", mutate(lambda c: c.update(targets=[
+    dict(copy.deepcopy(c["targets"][0]), id=f"mic-{i}") for i in range(1, 34)])), "Expected 1 to 32 targets")
 bad("number-out-of-range", "1e400 is not a finite number", SMALL_TEXT.replace('"frequency":80.0', '"frequency":1e400', 1))
 bad("byte-order-mark", "JSON text does not start with a BOM", "\ufeff" + SMALL_TEXT)
 bad("raw-tab-in-string", "control characters must be escaped", SMALL_TEXT.replace('"Mic 4"', '"Mic\t4"', 1))
@@ -691,7 +698,7 @@ case("json not UTF-8", "json", "json/reject-not-utf8.json", b'"\xc3\x28"', False
 manifest = {"comment": "Shared accept/reject fixtures for rc2fx-core. The Go port (desktop/core, shared_fixtures_test.go) "
             "and the Rust crate (crates/rc2fx-core/tests/shared_fixtures.rs) read the same files and must reach the "
             "same verdicts; for accepted cases the decoded value, written back, must equal `canonical` (compact) "
-            "and `pretty` (to_string_pretty) byte for byte. generate.py writes this directory: change it and run it rather than editing files by hand. .gitattributes keeps every byte as committed (CRLF and odd bytes are part of some cases).",
+            "and `pretty` (to_string_pretty) byte for byte. A rejected case with `error` must fail with exactly that message on both sides. generate.py writes this directory: change it and run it rather than editing files by hand. .gitattributes keeps every byte as committed (CRLF and odd bytes are part of some cases).",
             "cases": cases}
 write("cases.json", ser(manifest, True) + "\n")
 print(len(cases), "cases")

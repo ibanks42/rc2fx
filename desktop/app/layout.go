@@ -23,7 +23,8 @@ const (
 	SubheadingText float32 = 20
 	// LeadText is the opening screens' sentence under the headline.
 	LeadText float32 = 15
-	// Around a page's content. The bottom clears the floating Save button.
+	// Around a page's content. PageBottom is the room below a page's last
+	// section.
 	PageX      float32 = 32
 	PageTop    float32 = 20
 	PageBottom float32 = 96

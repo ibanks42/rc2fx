@@ -184,16 +184,23 @@ func isHex(s string) bool {
 }
 
 // parseManifest reads `sha256  path` lines, as image_check.go writes them,
-// as (sha, path) pairs.
-func parseManifest(text string) [][2]string {
+// as (sha, path) pairs. ok is false when the list is damaged: a non-empty
+// line is not one of those (zero-filled, cut short) or there are none. A
+// damaged list is not used at all, since the files it lost would otherwise
+// look intact.
+func parseManifest(text string) ([][2]string, bool) {
 	var out [][2]string
 	for _, l := range strLines(text) {
-		sha, path, ok := strings.Cut(l, "  ")
-		if ok && len(sha) == 64 && isHex(sha) && path != "" {
-			out = append(out, [2]string{sha, path})
+		if l == "" {
+			continue
 		}
+		sha, path, ok := strings.Cut(l, "  ")
+		if !ok || len(sha) != 64 || !isHex(sha) || path == "" || strings.Contains(path, "\x00") {
+			return nil, false
+		}
+		out = append(out, [2]string{sha, path})
 	}
-	return out
+	return out, len(out) > 0
 }
 
 // savedImage is the firmware image saved on this computer: its RC2FX
@@ -272,25 +279,42 @@ type suspect struct {
 	size uint64
 }
 
-// manifestOf is where a root's expected hashes come from.
-func manifestOf(fs *ext2fs.Filesystem, saved *savedImage) (string, [][2]string, error) {
+// manifestOf is where a root's expected hashes come from. damaged is
+// non-nil, and says what was done instead, when the root's own file list is
+// there but damaged. saved is called only when the saved image is needed.
+func manifestOf(fs *ext2fs.Filesystem, saved func() *savedImage) (reference string, manifest [][2]string, damaged *string, err error) {
 	// The image's own list, or the saved image when it is the one this root
 	// was flashed with.
-	_, data, err := readRootFile(fs, manifestMember)
+	list, data, err := readRootFile(fs, manifestMember)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if len(data) > 0 {
-		return "the image's file list", parseManifest(strings.ToValidUTF8(string(data), "�")), nil
+		if own, ok := parseManifest(strings.ToValidUTF8(string(data), "�")); ok {
+			return "the image's file list", own, nil, nil
+		}
 	}
 	entry, sums, err := readRootFile(fs, sumsMember)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	if saved != nil && entry != nil && saved.sums != nil && bytes.Equal(saved.sums, sums) {
-		return "the firmware image saved on this computer", slices.Clone(saved.manifest), nil
+	// An empty or unparsable list that is there is damaged; one that isn't
+	// there is an image from before the list existed.
+	why := func(text string) *string {
+		if list == nil {
+			return nil
+		}
+		return &text
 	}
-	return "nothing: no file list for this system", nil, nil
+	if image := saved(); image != nil && entry != nil && image.sums != nil && bytes.Equal(image.sums, sums) {
+		return "the firmware image saved on this computer", slices.Clone(image.manifest),
+			why("this system's files were compared with the firmware image saved on this computer instead"), nil
+	}
+	if list != nil {
+		return "nothing: this system's file list is damaged", nil,
+			why("this system's files can't be checked without it; flashing the mixer again replaces it"), nil
+	}
+	return "nothing: no file list for this system", nil, nil, nil
 }
 
 // repairSources is, for files whose contents don't match, the identical
@@ -442,13 +466,16 @@ func (e *Engine) inspectRoot(layout *diskLayout, index int, saved *savedImage) (
 	other := openOther(layout.device, layout.parts[1-index].start)
 	defer other.Close()
 	unclean := fs.NeedsRecovery()
-	reference, manifest, err := manifestOf(fs, saved)
+	reference, manifest, listDamaged, err := manifestOf(fs, func() *savedImage { return saved })
 	if err != nil {
 		return nil, err
 	}
 	damaged, suspects, err := e.compare(fs, index+1, manifest)
 	if err != nil {
 		return nil, err
+	}
+	if listDamaged != nil {
+		damaged = append(damaged, DamagedFile{Path: manifestMember, Why: listDamaged})
 	}
 	_, more, err := repairSources(other, saved, unclean, suspects)
 	if err != nil {
@@ -535,14 +562,12 @@ func (e *Engine) planRoot(layout *diskLayout, index int, wanted []string, saved 
 	defer fs.Close()
 	other := openOther(layout.device, layout.parts[1-index].start)
 	defer other.Close()
-	entry, _, err := readRootFile(fs, manifestMember)
-	if err != nil {
-		return nil, err
-	}
-	if entry == nil && *saved == nil {
-		*saved = e.savedImage()
-	}
-	_, manifest, err := manifestOf(fs, *saved)
+	_, manifest, _, err := manifestOf(fs, func() *savedImage {
+		if *saved == nil {
+			*saved = e.savedImage()
+		}
+		return *saved
+	})
 	if err != nil {
 		return nil, err
 	}

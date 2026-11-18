@@ -13,12 +13,12 @@ Turn it on with the **Noise suppression** effect in a channel's chain.
 Suppression can run on one microphone or on Chat Mix Out, one at a time. The
 mixer's processor can't run more than one instance.
 
-To move it, switch it off on the current channel, press **Save to mixer**,
-then switch it on in the new place. If the channel that had it is no longer in
-the show, open suppression on the new channel and choose **Release
-suppression slot**. That switches suppression off on the old source in your
-unsaved edits and keeps its other settings. Press **Save to mixer** before
-enabling suppression on the new channel.
+To move it, switch it off on the current channel and choose **Apply** when
+the app asks about restarting the audio. Once that is saved, switch it on in
+the new place. If the channel that had it is no longer in the show, open
+suppression on the new channel and choose **Release suppression slot**. That
+switches suppression off on the old source and keeps its other settings. Wait
+until that change is saved before enabling suppression on the new channel.
 
 ### On Chat Mix Out
 

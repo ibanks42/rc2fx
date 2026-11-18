@@ -30,9 +30,9 @@ func (a *App) syncLive(cx *gk.Cx) {
 	a.live.Observe(draft, now)
 	a.live.Saved(saved)
 	if !a.streamConnected || a.session.Conflict || a.pending != nil || a.presets.busy() || a.fileBusy ||
-		a.transitionBusy() || a.restartAsked {
+		a.transitionBusy() || a.restartAsked() {
 		a.logHeld(fmt.Sprintf("held: stream %v conflict %v pending %v presets %v file %v transition %v restartAsked %v",
-			a.streamConnected, a.session.Conflict, a.pending != nil, a.presets.busy(), a.fileBusy, a.transitionBusy(), a.restartAsked))
+			a.streamConnected, a.session.Conflict, a.pending != nil, a.presets.busy(), a.fileBusy, a.transitionBusy(), a.restartAsked()))
 		return
 	}
 	a.logHeld("")
@@ -40,6 +40,11 @@ func (a *App) syncLive(cx *gk.Cx) {
 	case model.LiveSend:
 		pending, err := a.session.BeginApply()
 		saveLogf("live edit sent (err %v)", err)
+		if err != nil {
+			// The draft can't be sent as it is: say why, rather than retry
+			// in silence. The same text is toasted once.
+			a.message = err.Error()
+		}
 		if err != nil || !a.command(transport.CommandLive{Generation: a.generation, Update: pending.Request}) {
 			// Not sendable now (a transition, a lost link): try again shortly.
 			a.live.LiveAnswered(false, false, true, false, now)
@@ -66,10 +71,13 @@ const restartAskDelay = 400 * time.Millisecond
 
 // askRestart asks before saving a change that restarts the audio engine (a
 // short gap in the audio). Keep saves it; otherwise the channel goes back to
-// what plays now.
+// what plays now. Not while another dialog is open: the question waits until
+// it closes (syncLive asks again).
 func (a *App) askRestart(cx *gk.Cx) {
-	a.restartAsked = true
-	a.confirm(cx, Confirm{
+	if a.confirmOpen != nil {
+		return
+	}
+	a.confirm(cx, confirmKindRestart, Confirm{
 		Eyebrow: "Restarts the audio",
 		Title:   "Apply this change now?",
 		Detail: "Switching noise suppression or its lookahead, or reordering effects while it is on, restarts " +
@@ -79,7 +87,6 @@ func (a *App) askRestart(cx *gk.Cx) {
 	}, func(cx *gk.Cx) {
 		a.apply(cx)
 	}, func(cx *gk.Cx) {
-		a.restartAsked = false
 		if a.pending == nil && a.session.Saved != nil {
 			// Cancelled: back to what plays.
 			running := a.live.Running(a.session.Saved.Config.Targets)
@@ -106,7 +113,7 @@ func (a *App) liveReply(cx *gk.Cx, k transport.EventKindLiveApplied) {
 	case transport.LiveFailed:
 		a.message = k.Message
 	}
-	if needsSave && !a.restartAsked {
+	if needsSave && a.confirmOpen == nil {
 		a.askRestart(cx)
 	}
 }
@@ -176,18 +183,24 @@ func (a *App) liveBar(target *core.Target) gk.Element {
 			Tooltip(gk.NewKitTooltip(tip))
 	}
 	status := gk.Div(s.Flex1, s.MinW0, s.Truncate).TextSize(px(12)).TextColor(rgb(Faint))
-	if since, changed := a.live.Changed(*target); changed {
-		status = status.Child(txt("Changed " + ago(time.Since(since))))
+	var statusEl gk.Element
+	if reason := a.live.SaveError(); reason != "" && (a.pending != nil || a.session.Dirty()) {
+		// Until a save goes through: the edits are not on the mixer yet.
+		message := saveFailedMessage(reason)
+		statusEl = status.TextColor(rgb(Danger)).Child(txt(message)).ID("save-error").
+			Tooltip(gk.NewKitTooltip(message + " RC2FX tries again shortly."))
+	} else if since, changed := a.live.Changed(*target); changed {
+		statusEl = status.Child(txt("Changed " + ago(time.Since(since))))
 	} else if a.pending != nil || a.session.Dirty() {
-		status = status.Child(txt("Saving…"))
+		statusEl = status.Child(txt("Saving…"))
 	} else {
-		status = status.Child(txt("Saved"))
+		statusEl = status.Child(txt("Saved"))
 	}
 	bar := gk.HFlex(s.ItemsCenter, s.Gap1).Pl(px(8)).Pr(px(4)).Mt(px(10)).
 		Child(icon("undo", gk.IconUndo2, a.live.CanUndo(), "Undo (Ctrl+Z)", a.undo)).
 		Child(icon("redo", gk.IconRedo2, a.live.CanRedo(), "Redo (Ctrl+Shift+Z)", a.redo)).
 		Child(gk.Div().W(px(6))).
-		Child(status)
+		Child(statusEl)
 	if _, changed := a.live.Changed(*target); changed {
 		bar = bar.Child(gk.Div(s.FlexShrink0, s.CursorPointer).Px(px(6)).Rounded(px(5)).TextSize(px(12)).
 			TextColor(rgb(Accent)).Hover(hover().Bg(white(0.06))).

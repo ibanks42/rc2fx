@@ -299,7 +299,7 @@ func (a *App) firstHero() hero {
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.continueInstall(cx) })).
 				Child(gk.Button("leave-update-mode").Ghost().Label("Leave update mode…").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-						a.confirm(cx, Confirm{
+						a.confirm(cx, confirmKindOther, Confirm{
 							Title: "Leave update mode without installing",
 							Detail: "Disconnect the mixer’s power cable for 30 seconds, then plug it back in and turn the mixer on.\n\n" +
 								"It starts with the firmware it had before, and its audio comes back. You can install RC2FX later from the first screen.",
@@ -311,7 +311,7 @@ func (a *App) firstHero() hero {
 	case installflow.FirstStorage:
 		leave := gk.Button("leave-storage-mode").Ghost().Label("How to leave storage mode").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
-				a.confirm(cx, Confirm{
+				a.confirm(cx, confirmKindOther, Confirm{
 					Title:  "How to leave storage mode",
 					Detail: "Unplug USB 1 and plug it back in. The mixer starts normally.\n\nLeaving storage mode changes nothing on the mixer.",
 					Action: "Close",

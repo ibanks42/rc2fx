@@ -220,15 +220,22 @@ pub struct StoredState {
 }
 
 impl StoredState {
-    pub fn load(path: &Path) -> Self {
+    /// The recorded state, or `None` when nothing has been recorded yet. A
+    /// file that cannot be read or parsed is an error, never a fresh state:
+    /// that would silently forget the replay and downgrade protection.
+    pub fn load(path: &Path) -> Result<Option<Self>, String> {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+        };
         let mut text = String::new();
-        if File::open(path)
-            .and_then(|file| file.take(16 * 1024).read_to_string(&mut text))
-            .is_err()
-        {
-            return Self::default();
-        }
-        serde_json::from_str(&text).unwrap_or_default()
+        file.take(16 * 1024)
+            .read_to_string(&mut text)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|error| format!("{} is damaged: {error}", path.display()))
     }
 
     /// Write atomically, so a power cut leaves the older record.
@@ -791,6 +798,18 @@ pub fn restore_previous(paths: &Paths) -> Result<(), String> {
 pub fn clear_pending(paths: &Paths) {
     let _ = fs::remove_file(paths.pending());
     let _ = fsync_dir(&paths.opt);
+}
+
+/// Forget the previous update's outcome once a new install is accepted, so
+/// `GET api/v1/update/last` never reports it as this install's outcome (both
+/// can name the same target version). Until the new outcome is recorded the
+/// endpoint answers as if no update had run.
+pub fn clear_last(paths: &Paths) -> io::Result<()> {
+    match fs::remove_file(paths.last()) {
+        Ok(()) => fsync_dir(&paths.data()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Free bytes on the filesystem that holds `path`, when it can be read.

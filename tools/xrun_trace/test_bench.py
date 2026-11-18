@@ -8,7 +8,7 @@ from analyze import captured_flight_audit
 
 class Qualification(unittest.TestCase):
     def setUp(self):
-        self.base={'home':'/opt/rc2fx','bootId':'boot','uptime':100,'tracing':1,'audit':{'processPid':42,'monotonicNs':100_000_000_000,'callbacks':100,'xruns':3,'dspFaults':0,'capacityFailures':0,'planErrors':0,'controlServerErrors':0,'helper':{'late':0,'stalls':0},'clientTiming':{'flightToken':123,'flightFrozenAtNs':0}}}
+        self.base={'home':'/opt/rc2fx','bootId':'boot','uptime':100,'tracing':1,'audit':{'processPid':42,'monotonicNs':100_000_000_000,'callbacks':100,'xruns':3,'dspFaults':0,'processingCounters':{'dspFaults':0},'capacityFailures':0,'planErrors':0,'controlServerErrors':0,'helper':{'late':0,'stalls':0},'clientTiming':{'flightToken':123,'flightFrozenAtNs':0}}}
         self.current=copy.deepcopy(self.base)
         self.current['audit']['callbacks']+=1
     def test_control_run_does_not_require_a_kernel_capture(self):
@@ -23,6 +23,16 @@ class Qualification(unittest.TestCase):
     def test_counter_fault_is_a_failure_even_if_capture_failed(self):
         self.current['audit']['xruns']+=1
         self.assertIn('xruns changed',check(self.base,self.base,self.current))
+    def test_live_dsp_fault_is_a_failure_while_the_pipeline_runs(self):
+        # The top-level dspFaults moves only when a client closes, so it stays 0 here.
+        self.current['audit']['processingCounters']['dspFaults']+=1
+        self.assertIn('dspFaults changed',check(self.base,self.base,self.current))
+    def test_missing_live_dsp_fault_counter_cannot_pass(self):
+        del self.current['audit']['processingCounters']
+        self.assertIn('Live dspFaults counter missing',check(self.base,self.base,self.current))
+        self.setUp()
+        del self.base['audit']['processingCounters']['dspFaults']
+        self.assertIn('Live dspFaults counter missing',check(self.base,self.base,self.current))
     def test_frozen_trace_is_a_failure_even_before_counter_update(self):
         self.current['tracing']=0
         self.assertIn('Fault recorder froze',check(self.base,self.base,self.current))

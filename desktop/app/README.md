@@ -129,8 +129,8 @@ Noise suppression can be on for one target at a time: one mono microphone or
 the Chat voice mix. On Chat, the routed microphone sources are combined into
 one model input. Smart Pads and playback skip suppression and gating and stay
 stereo. The voice stage comes before the stereo output chain. To move
-suppression to a different target, the old target's disable has to be applied
-first.
+suppression to a different target, turning it off on the old target has to be
+saved first.
 
 EQ curves can be imported from APO / AutoEQ text or EasyEffects JSON, from a
 file or the clipboard, and exported as EasyEffects JSON.
@@ -149,9 +149,30 @@ stays reachable in the app while confirmation or reconciliation is pending.
 
 ## Saving
 
-**Save to mixer** checks the settings revision. If the mixer's settings were
-changed somewhere else, the app asks whether to reload them or keep your
-edits. Closing the app with unsaved edits asks first.
+There is no save button: edits save themselves. Each edit goes onto the
+mixer's running audio at once (a live edit), and the settings are saved to
+the mixer about 2 seconds after edits stop; if the app goes away first, the
+mixer saves what plays. A mixer without live editing (no `api/v1/live`) hears
+nothing until the save, which then follows 0.6 seconds after edits stop. A failed save
+is tried again after 1 second, doubling up to 30 seconds, and the line under
+the channel in the chain rail says why it failed.
+
+That line also shows whether the channel is saved, or since when it changed.
+**Revert** there puts the channel back as it was before the current round of
+edits. Undo and redo (Ctrl+Z and Ctrl+Shift+Z, Cmd on macOS, or the buttons on
+the same line) step through edits; a burst of edits with no pause of 2 seconds
+undoes as one step.
+
+A change that restarts the mixer's audio engine (switching noise suppression
+or its lookahead, or reordering effects while suppression is on) is asked
+about first. **Apply** saves it; **Undo the change** puts the channel back to
+what plays now.
+
+Each save carries the settings revision. If the mixer's settings changed
+somewhere else, the app reads them, keeps your edits on top and saves them. If
+the edits no longer fit (they name channels the mixer no longer has), a notice
+offers **Reload mixer settings**. Closing the app before edits are saved asks
+first.
 
 The app also opens and saves complete settings files, and saves, loads and
 deletes presets stored on the mixer.
@@ -162,9 +183,12 @@ deletes presets stored on the mixer.
 
 - Mixer: the connection, **Update RC2FX** and **Remove RC2FX**, and the
   **Processing** switch for all of RC2FX.
-- Presets and settings files.
+- Versions of the app and the mixer software, and updates.
+- About: licenses and third-party notices.
+- Presets, stored on the mixer.
+- Files: settings files on the computer.
 - Appearance.
-- Screen conversion.
+- Developer mode.
 - **Diagnostics**.
 
 On the Diagnostics page:

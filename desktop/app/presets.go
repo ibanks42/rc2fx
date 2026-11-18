@@ -200,7 +200,7 @@ func (a *App) presetReply(cx *gk.Cx, reply transport.PresetReply, err *transport
 				a.message = perr.Error()
 				a.session.Conflict = true
 			case a.session.Conflict:
-				a.message = "Preset loaded. Your newer edits were kept on top; save them or discard them."
+				a.message = "Preset loaded. Your newer edits were kept and are saved on top of it."
 			default:
 				a.message = "Preset saved to mixer • waiting for applied telemetry"
 			}
@@ -247,7 +247,7 @@ func (a *App) presetPanel(cx *gk.Cx) gk.Element {
 	if a.session.Dirty() || a.session.Conflict {
 		body = body.Child(gk.Div(s.Px4, s.Py2, s.TextSm, s.BorderB1).TextColor(rgb(Warn)).
 			BorderColor(rgb(surface().Line)).
-			Child(txt("Apply or reload your edits to save or load presets.")))
+			Child(txt("Presets can be saved or loaded once your edits are saved to the mixer.")))
 	}
 	list := gk.VFlex().MaxH(px(320))
 	if len(a.presets.items) == 0 {

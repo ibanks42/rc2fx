@@ -236,13 +236,19 @@ func TestDuoPreferenceGatesPreparationAndModelChangesDropCachedChoices(t *testin
 	if releases == nil {
 		t.Fatal("no request")
 	}
-	m.Finish(*releases, installer.Reply{Kind: installer.ReplyReleases, Releases: []installer.Release{{
+	// The mixer software list is still current, but the switch forgot RØDE's
+	// stock list: it is fetched again.
+	stock := m.Finish(*releases, installer.Reply{Kind: installer.ReplyReleases, Releases: []installer.Release{{
 		Model:     firmware.ModelDuo.ID(),
 		Channel:   "stable",
 		Version:   "1.7.6",
 		Profile:   profile,
 		Supported: true,
 	}}}, nil)
+	wantRequest(t, stock, installer.Request{Kind: installer.RequestStockReleases}, "stock after the Duo switch")
+	if next := answer(t, m, stock, installer.Reply{Kind: installer.ReplyStockReleases, Releases: nil}); next != nil {
+		t.Fatalf("request %#v after every list is current", next)
+	}
 	sel := m.Start()
 	request := selected(t, m, sel)
 	if !isRequest(request, installer.RequestPrepare) {
@@ -259,6 +265,33 @@ func TestDuoPreferenceGatesPreparationAndModelChangesDropCachedChoices(t *testin
 	m.Finish(*probe, installer.Reply{Kind: installer.ReplyStatus, Status: ptr(changed.status)}, nil)
 	if !strings.Contains(failedRun(t, m), "mixer changed") {
 		t.Fatalf("failure %q", failedRun(t, m))
+	}
+}
+
+func TestAModelChangeFetchesTheStockListAgain(t *testing.T) {
+	m := setUp(status(gv1(false), absent(), false, false))
+	duo := status([]usbSeen{{"DUO", false}}, absent(), false, false)
+	duo.status.USB[0].Model = firmware.ModelDuo
+	check := report(t, m, m.Probe(), duo)
+	wantRequest(t, check, installer.Request{Kind: installer.RequestReleases}, "firmware for the new model")
+	if m.StockCheck.Kind != StockCheckUnchecked || m.StockReleases != nil {
+		t.Fatalf("the Pro II stock list is kept: %+v", m.StockCheck)
+	}
+	// The mixer software list doesn't depend on the model and is still
+	// current, so the stock list is next.
+	stock := answer(t, m, check, installer.Reply{Kind: installer.ReplyReleases, Releases: nil})
+	wantRequest(t, stock, installer.Request{Kind: installer.RequestStockReleases}, "stock for the new model")
+	next := answer(t, m, stock, installer.Reply{Kind: installer.ReplyStockReleases, Releases: []installer.Release{{
+		Model:   firmware.ModelDuo.ID(),
+		Channel: "stable",
+		Version: "1.0.0",
+	}}})
+	if next != nil {
+		t.Fatalf("request %#v after every list is current", next)
+	}
+	wantChoice(t, m.StockChoice, "stable", "1.0.0", "Duo stock choice")
+	if m.polling() {
+		t.Fatal("a check is left queued")
 	}
 }
 
@@ -635,6 +668,75 @@ func TestSettingsNeedTheMixerOnUSBToBeMatched(t *testing.T) {
 	if !isRequest(backup, installer.RequestSaveSettings) || backup.Serial != "GV1" {
 		t.Fatalf("request %#v", backup)
 	}
+}
+
+func TestRC2FXStoppingBeforeTheBackupFailsTheRunInsteadOfSkippingIt(t *testing.T) {
+	m := setUp(status(gv1(false), ready(), false, false))
+	if m.Start() != nil {
+		t.Fatal("the app reads the settings first")
+	}
+	if !m.Run.NeedsBackup {
+		t.Fatal("RC2FX answered at Start, so the run owes a backup")
+	}
+	if !m.TakeSettingsRequest() {
+		t.Fatal("the plan asks for the settings")
+	}
+	// The connection drops before the reply; RC2FX no longer answers.
+	m.ConnectionChanged()
+	poll := m.Probe()
+	if next := report(t, m, poll, status(gv1(false), absent(), false, false)); next != nil {
+		t.Fatalf("went on without the settings: %#v", next)
+	}
+	if why := failedRun(t, m); !strings.Contains(why, "were not saved") {
+		t.Fatalf("failure %q", why)
+	}
+	wantState(t, m, StepBackup, StepStateFailed)
+	if m.TakeSettingsRequest() {
+		t.Fatal("a failed run asks for nothing")
+	}
+	// Retrying while RC2FX is still away fails the same way.
+	m.Privileged = true
+	if next := report(t, m, m.Retry(), status(gv1(false), absent(), false, false)); next != nil {
+		t.Fatalf("went on without the settings: %#v", next)
+	}
+	failedRun(t, m)
+	// Starting again without RC2FX is the explicit way to go on unsaved.
+	m.Stop()
+	m.Offers = Offers{Kind: OffersReady, List: []installer.MixerOffer{offer("1.0.0")}}
+	if sel := m.Start(); !isRequest(sel, installer.RequestSelectMixer) {
+		t.Fatalf("request %#v", sel)
+	}
+	if m.Run.NeedsBackup {
+		t.Fatal("nothing answered at Start, so there is nothing to save")
+	}
+	wantState(t, m, StepBackup, StepStateDone)
+}
+
+func TestASettingsReadLostWithItsConnectionIsAskedAgain(t *testing.T) {
+	m := setUp(status(gv1(false), ready(), false, false))
+	if m.Start() != nil {
+		t.Fatal("the app reads the settings first")
+	}
+	if !m.TakeSettingsRequest() {
+		t.Fatal("the plan asks for the settings")
+	}
+	// The reply on the old connection is dropped; while RC2FX is away the
+	// read waits, and it is asked again once RC2FX answers.
+	m.ConnectionChanged()
+	m.SetService(absent())
+	if m.TakeSettingsRequest() {
+		t.Fatal("asked while RC2FX does not answer")
+	}
+	m.SetService(ready())
+	backup := readSettings(t, m)
+	wantRequest(t, backup, installer.Request{Kind: installer.RequestSaveSettings, Serial: "GV1", Settings: `{"config":{}}`}, "backup")
+	refresh := answer(t, m, backup, installer.Reply{Kind: installer.ReplyBackup})
+	// Once saved, RC2FX stopping no longer matters.
+	sel := report(t, m, refresh, status(gv1(false), absent(), false, false))
+	if !isRequest(sel, installer.RequestSelectMixer) {
+		t.Fatalf("request %#v", sel)
+	}
+	wantState(t, m, StepBackup, StepStateDone)
 }
 
 func TestAFailureStopsAtItsStepAndRetryContinuesFromThere(t *testing.T) {
@@ -1409,6 +1511,34 @@ func TestANewerRC2FXOnTheSameFirmwareInstallsInPlace(t *testing.T) {
 	stock.SetStock(true)
 	if stock.InPlaceOffer(inPlace) != nil {
 		t.Fatal("stock")
+	}
+}
+
+func TestAConnectionChangeFailsAnUploadButNotAnInstall(t *testing.T) {
+	m := runningRC2FX("1.0.0")
+	m.InPlace = InPlace{Kind: InPlaceUploading, Version: "2.0.0", Sent: 3, Total: 7}
+	m.ConnectionChanged()
+	if !reflect.DeepEqual(m.InPlace, InPlace{Kind: InPlaceFailed, Error: inPlaceDisconnected}) {
+		t.Fatalf("in place %+v", m.InPlace)
+	}
+	if m.InPlace.Active() {
+		t.Fatal("a failed upload blocks another update")
+	}
+	// An accepted update goes on without the app; the reconnect is how its
+	// outcome is read.
+	since := time.Now()
+	installing := InPlace{Kind: InPlaceInstalling, Version: "2.0.0", Since: since}
+	m.InPlace = installing
+	m.ConnectionChanged()
+	if !reflect.DeepEqual(m.InPlace, installing) {
+		t.Fatalf("in place %+v", m.InPlace)
+	}
+	// A release verified but not sent yet goes out on the next connection.
+	ready := InPlace{Kind: InPlaceReady, Bundle: installer.InPlaceBundle{Version: "2.0.0"}}
+	m.InPlace = ready
+	m.ConnectionChanged()
+	if !reflect.DeepEqual(m.InPlace, ready) {
+		t.Fatalf("in place %+v", m.InPlace)
 	}
 }
 

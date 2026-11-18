@@ -172,7 +172,7 @@ func (a *App) enableSSH(cx *gk.Cx, epoch uint64, serial *string) {
 // on.
 func (a *App) confirmEnableSSH(cx *gk.Cx) {
 	epoch, serial := a.ssh.Epoch, cloneSerial(a.connectedMixer)
-	a.confirm(cx, Confirm{
+	a.confirm(cx, confirmKindOther, Confirm{
 		Eyebrow: "Developer mode",
 		Title:   "Enable SSH access?",
 		Detail: "This adds this computer's RC2FX key to the mixer, so anyone with that key " +
@@ -198,7 +198,7 @@ func (a *App) disableSSH(epoch uint64, serial *string) {
 // asked on.
 func (a *App) confirmDisableSSH(cx *gk.Cx) {
 	epoch, serial := a.ssh.Epoch, cloneSerial(a.connectedMixer)
-	a.confirm(cx, Confirm{
+	a.confirm(cx, confirmKindOther, Confirm{
 		Eyebrow: "Developer mode",
 		Title:   "Disable SSH access?",
 		Detail: "This removes the RC2FX-managed key, so new logins with it stop working. " +

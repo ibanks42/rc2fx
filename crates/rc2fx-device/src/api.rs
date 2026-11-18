@@ -417,10 +417,15 @@ impl Api {
                 Err(reply) => reply,
             },
             ("POST", _) if path.starts_with("api/v1/presets/") && path.ends_with("/apply") => {
-                let id = &path["api/v1/presets/".len()..path.len() - "/apply".len()];
-                if !rc2fx_core::valid_id(id) {
+                // "api/v1/presets/apply" matches the guard above, but its prefix
+                // and suffix overlap, so slicing by their lengths would panic.
+                let Some(id) = path
+                    .strip_prefix("api/v1/presets/")
+                    .and_then(|rest| rest.strip_suffix("/apply"))
+                    .filter(|id| rc2fx_core::valid_id(id))
+                else {
                     return error(404, "Unknown preset");
-                }
+                };
                 match parse::<Revision>(body) {
                     Ok(input) => {
                         let applied =
@@ -1207,6 +1212,13 @@ mod tests {
         ] {
             let status = api.request(request(method, path, body)).await.status;
             assert!((400..500).contains(&status), "{method} {path}: {status}");
+        }
+        // The overlapping prefix and suffix once sliced out of bounds and
+        // panicked the daemon; an empty or missing id is an unknown preset.
+        for path in ["api/v1/presets/apply", "api/v1/presets//apply"] {
+            let input = json!({"expectedRevision": revision});
+            let status = api.request(request("POST", path, Some(input))).await.status;
+            assert_eq!(status, 404, "POST {path}");
         }
         api.reset();
         handle.close();

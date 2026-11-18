@@ -2,6 +2,7 @@
 //! port (`desktop/core/shared_fixtures_test.go`) reads the same files: both
 //! must accept and reject the same inputs, and write accepted values back
 //! byte for byte as the `canonical` (compact) and `pretty` files hold them.
+//! A rejected case that names an `error` must fail with exactly that message.
 use rc2fx_core::{
     Config, ConfigUpdate, CoreError, DeviceState, DeviceVersions, DiagnosticsEvents, Meter,
     MixerRelease, PresetSummary, SshStatus, StockInventory, from_json,
@@ -88,7 +89,13 @@ fn rust_reaches_the_shared_verdicts_and_encodings() {
             }
             Ok(_) => failures.push(format!("{name}: accepted, expected a rejection")),
             Err(error) if accept => failures.push(format!("{name}: rejected: {error}")),
-            Err(_) => {}
+            Err(error) => {
+                if let Some(want) = case.get("error").and_then(Value::as_str)
+                    && error != want
+                {
+                    failures.push(format!("{name}: error differs\n got {error}\nwant {want}"));
+                }
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

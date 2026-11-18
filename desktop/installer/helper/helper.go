@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
@@ -268,11 +269,27 @@ func trimNewline(line string) string {
 	return line
 }
 
+// ErrNotGranted is what a request fails with when the system's password
+// prompt was dismissed or the password was not accepted (pkexec exits 126
+// or 127 before the helper starts). Compare with errors.Is.
+var ErrNotGranted error = installer.Error("administrator permission was not granted")
+
+// ErrStopped is what a request fails with when the helper exited for any
+// other reason. Compare with errors.Is.
+var ErrStopped error = installer.Error("the installer helper stopped; choose Try again or start again")
+
+// exitGrace bounds the wait for the helper's exit status once its stdout
+// has ended or its stdin refused a write.
+const exitGrace = 5 * time.Second
+
 // Helper is the desktop side of a running helper.
 type Helper struct {
-	cmd    *exec.Cmd
-	stdin  *stdinBox
+	cmd   *exec.Cmd
+	stdin *stdinBox
+	// stdout is read from our own pipe rather than cmd.StdoutPipe, so
+	// cmd.Wait never closes it under a read in progress.
 	stdout *bufio.Reader
+	output *os.File
 	exited chan struct{}
 	appdir *stagedAppDir
 }
@@ -311,22 +328,37 @@ func spawn(root, work string) (*Helper, error) {
 		return nil, err
 	}
 	cmd.Args = append(cmd.Args, Flag, root, work)
+	h, err := start(cmd, appdir)
+	if err != nil {
+		appdir.Remove()
+		return nil, err
+	}
+	return h, nil
+}
+
+// start runs cmd as a helper. The caller removes appdir on an error.
+func start(cmd *exec.Cmd, appdir *stagedAppDir) (*Helper, error) {
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		appdir.Remove()
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	output, input, err := os.Pipe()
 	if err != nil {
-		appdir.Remove()
+		stdin.Close()
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
-		appdir.Remove()
+	cmd.Stdout = input
+	err = cmd.Start()
+	// The child has its own copy; ours must go so the read end sees EOF
+	// when the child exits.
+	input.Close()
+	if err != nil {
+		output.Close()
+		stdin.Close()
 		return nil, installer.Error(fmt.Sprintf("could not ask for administrator permission (pkexec): %v", err))
 	}
-	h := &Helper{cmd: cmd, stdin: &stdinBox{w: stdin}, stdout: bufio.NewReader(stdout), exited: make(chan struct{}), appdir: appdir}
+	h := &Helper{cmd: cmd, stdin: &stdinBox{w: stdin}, stdout: bufio.NewReader(output), output: output, exited: make(chan struct{}), appdir: appdir}
 	go func() {
 		cmd.Wait()
 		close(h.exited)
@@ -348,6 +380,22 @@ func (h *Helper) Alive() bool {
 // Canceller is a canceller for this helper.
 func (h *Helper) Canceller() Canceller { return Canceller{h.stdin} }
 
+// stopped classifies a helper whose stdin or stdout has failed: it waits
+// (briefly) for the exit status, so the outcome does not depend on whether
+// cmd.Wait has finished yet. fallback is returned when the helper is still
+// running after exitGrace.
+func (h *Helper) stopped(fallback error) error {
+	select {
+	case <-h.exited:
+	case <-time.After(exitGrace):
+		return fallback
+	}
+	if code := h.cmd.ProcessState.ExitCode(); code == 126 || code == 127 {
+		return ErrNotGranted
+	}
+	return ErrStopped
+}
+
 // Handle sends one request and waits for its reply.
 func (h *Helper) Handle(request installer.Request, progress func(installer.Progress)) (installer.Reply, error) {
 	h.stdin.mu.Lock()
@@ -358,22 +406,18 @@ func (h *Helper) Handle(request installer.Request, progress func(installer.Progr
 	err := writeLine(h.stdin.w, inbound{Request: &request})
 	h.stdin.mu.Unlock()
 	if err != nil {
-		return installer.Reply{}, err
+		// A helper that has exited (or a pkexec whose prompt was
+		// dismissed) refuses the write; report why it exited.
+		return installer.Reply{}, h.stopped(err)
 	}
 	for {
 		line, err := h.stdout.ReadString('\n')
 		if len(line) == 0 && err != nil {
+			fallback := ErrStopped
 			if !errors.Is(err, io.EOF) {
-				return installer.Reply{}, err
+				fallback = err
 			}
-			select {
-			case <-h.exited:
-				if code := h.cmd.ProcessState.ExitCode(); code == 126 || code == 127 {
-					return installer.Reply{}, installer.Error("administrator permission was not granted")
-				}
-			default:
-			}
-			return installer.Reply{}, installer.Error("the installer helper stopped; reopen the installer")
+			return installer.Reply{}, h.stopped(fallback)
 		}
 		var m message
 		if err := sjson.Unmarshal([]byte(trimNewline(line)), &m); err != nil {
@@ -400,6 +444,7 @@ func (h *Helper) Close() error {
 	}
 	h.stdin.mu.Unlock()
 	<-h.exited
+	h.output.Close()
 	h.appdir.Remove()
 	return nil
 }

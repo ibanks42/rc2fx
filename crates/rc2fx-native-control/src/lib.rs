@@ -197,8 +197,12 @@ pub struct TargetStatus {
     pub fingerprint: [u8; 32],
     pub meter: Option<AudioMeter>,
     pub worker: Option<WorkerMeter>,
-    /// The endpoint's missed-deadline and late-result histories. Each restarts
-    /// with a new worker, so a reader resets its sequence when one decreases.
+    /// The endpoint's missed-deadline and late-result histories, both from the
+    /// worker of `runtime_epoch`. Each restarts with a new worker (a new
+    /// epoch), so a reader keys its position on the epoch and on a record's
+    /// ordinal in the list, not on its frame `sequence` (0-based, and not
+    /// increasing across workers). Only the first records are kept; `lost`
+    /// counts the ones after them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub misses: Option<NativeHistory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

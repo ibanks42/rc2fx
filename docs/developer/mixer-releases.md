@@ -208,7 +208,9 @@ timestamp versions (plus a digest of the verified targets) beside its settings
 in `/opt/rc2fx/data/update-state.json`, and refuses an older set or different
 content under the same version. The installed RC2FX version is recorded there
 too, and a downgrade is refused unless the request asks for one. A full flash
-replaces that file, so a flash starts recording again.
+replaces that file, so a flash starts recording again. A file that exists but
+cannot be read or parsed is never treated as a fresh start: the mixer leaves it
+as it is and refuses in-place updates until a full flash replaces it.
 
 After verification the bundle is staged on `/opt`'s filesystem, checked again
 from disk, and its own `rc2fx-firmware check-device` must accept the running

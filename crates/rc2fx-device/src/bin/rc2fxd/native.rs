@@ -278,6 +278,25 @@ impl Stop {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+    /// Ends `wait` as a stop signal would, from an ordinary thread.
+    fn wake(&self) {
+        STOP.store(true, Ordering::Relaxed);
+        let one = 1u64.to_ne_bytes();
+        // SAFETY: the descriptor is valid and stays open for the life of the
+        // process. A full counter still leaves the eventfd readable.
+        unsafe { libc::write(self.0, one.as_ptr().cast(), one.len()) };
+    }
+}
+/// Wakes `Stop` if the thread that holds it panics. A panic on the control
+/// thread then ends the daemon, and the join reports it as an error, so the
+/// supervisor sees a failed exit instead of a daemon serving stale state.
+struct StopOnPanic<'stop>(&'stop Stop);
+impl Drop for StopOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.wake();
+        }
+    }
 }
 struct Close(rc2fx_device::coordinator::Handle);
 impl Drop for Close {
@@ -320,20 +339,29 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
         eprintln!("{problem}");
     }
     // In-place updates install into /opt/rc2fx and are offered only when this
-    // controller runs from the installed bundle, not from a RAM build.
-    let installed = args
+    // controller runs from that bundle, not from a RAM build. A start from the
+    // rollback copy (the shims choose it while an update has not committed)
+    // still recovers and reports that update, but offers no new one.
+    let paths = rc2fx_device::mixer_update::install::Paths::mixer();
+    let started_from = args
         .release
         .as_deref()
-        .and_then(std::path::Path::parent)
-        .is_some_and(|bundle| bundle == std::path::Path::new("/opt/rc2fx"));
-    let mixer_update = installed.then(|| {
-        std::sync::Arc::new(rc2fx_device::mixer_update::MixerUpdate::new(
-            rc2fx_device::mixer_update::install::Paths::mixer(),
+        .and_then(|release| rc2fx_device::mixer_update::installed_bundle(&paths, release));
+    let mixer_update = started_from.map(|bundle| {
+        let update = rc2fx_device::mixer_update::MixerUpdate::new(
+            paths,
             args.firmware_profile.clone(),
             versions.runtime.clone(),
-        ))
+        );
+        std::sync::Arc::new(match bundle {
+            rc2fx_device::mixer_update::InstalledBundle::Live => update,
+            rc2fx_device::mixer_update::InstalledBundle::Previous => update.without_new_updates(),
+        })
     });
-    if mixer_update.is_some() {
+    if mixer_update
+        .as_ref()
+        .is_some_and(|update| update.offers_updates())
+    {
         versions.in_place_updates = Some(rc2fx_device::mixer_update::IN_PLACE_UPDATES);
     }
     if let Some(update) = &mixer_update {
@@ -365,9 +393,13 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
     let stop = Stop::install()?;
     std::thread::scope(|scope| -> io::Result<()> {
         let _close = Close(handle.clone());
+        let stop_ref = &stop;
         let controller = std::thread::Builder::new()
             .name("rc2fx-control".into())
-            .spawn_scoped(scope, move || owner.run())?;
+            .spawn_scoped(scope, move || {
+                let _stop = StopOnPanic(stop_ref);
+                owner.run()
+            })?;
         let outcome = executor.block_on(async {
             let options = api::Options {
                 stock_config: args.stock,
@@ -491,6 +523,32 @@ mod tests {
             assert!(STOP.load(Ordering::Relaxed));
         }
     }
+    /// A control thread that panics ends the daemon's wait; one that
+    /// returns does not, since the daemon's own stop decides that.
+    #[test]
+    fn a_panicking_control_thread_stops_the_daemon() {
+        let _one = SIGNALS.lock().unwrap_or_else(|e| e.into_inner());
+        let stop = fresh_stop();
+        std::thread::scope(|scope| {
+            let returned = scope.spawn(|| {
+                let _stop = StopOnPanic(&stop);
+            });
+            assert!(returned.join().is_ok());
+        });
+        assert!(!stopped_within(&stop, Duration::from_millis(150)));
+        std::thread::scope(|scope| {
+            let panicked = scope.spawn(|| {
+                let _stop = StopOnPanic(&stop);
+                panic!("the control thread panicked");
+            });
+            assert!(panicked.join().is_err());
+        });
+        assert!(stopped_within(&stop, PROMPT), "the panic did not stop it");
+        // The eventfd alone also ends it, as for a signal.
+        STOP.store(false, Ordering::Relaxed);
+        assert!(stopped_within(&stop, PROMPT), "the eventfd alone ends it");
+    }
+
     #[test]
     fn start_needs_absolute_data_and_sockets_and_nothing_else() {
         let command = |values: &[&str]| parse(values.iter().map(OsString::from));

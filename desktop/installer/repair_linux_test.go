@@ -157,6 +157,37 @@ func (d *fakeDiskImage) zero(index int, path string) {
 	must(d.t, fs.Close())
 }
 
+// zeroFrom zeroes a file from byte keep on, keeping its size.
+func (d *fakeDiskImage) zeroFrom(index int, path string, keep int) {
+	data := d.contents(index, path)
+	clear(data[keep:])
+	fs := d.root(index, true)
+	entry, err := fs.Lookup(path)
+	must(d.t, err)
+	must(d.t, fs.Overwrite(*entry, data))
+	must(d.t, fs.Close())
+}
+
+// saveFlashedImage saves the image that was flashed on this computer: the
+// same RC2FX checksums and an intact script.
+func (d *fakeDiskImage) saveFlashedImage() {
+	t := d.t
+	archive := filepath.Join(d.dir, "work/archive.tar.gz")
+	must(t, os.MkdirAll(filepath.Dir(archive), 0o755))
+	var items []tarItem
+	for _, m := range []struct {
+		name string
+		data []byte
+	}{
+		{"./etc/hostname", []byte("rodecaster-pro-ii\n")},
+		{"./usr/bin/rode-init-update-env.sh", repairScript},
+		{"./opt/rc2fx/SHA256SUMS", []byte("aa  rc2fxd\n")},
+	} {
+		items = append(items, tarItem{testHeader(t, m.name, typeRegular, len(m.data)), m.data})
+	}
+	testTar(t, archive, items)
+}
+
 func (d *fakeDiskImage) contents(index int, path string) []byte {
 	fs := d.root(index, false)
 	defer fs.Close()
@@ -372,21 +403,7 @@ func TestARootWithoutAFileListIsComparedWithTheFlashedImageSavedHere(t *testing.
 	if !strings.HasPrefix(findings.Roots[0].Reference, "nothing") || len(findings.Roots[0].Damaged) != 0 {
 		t.Fatalf("%+v", findings.Roots[0])
 	}
-	// The image that was flashed: same RC2FX checksums, intact script.
-	archive := filepath.Join(disk.dir, "work/archive.tar.gz")
-	must(t, os.MkdirAll(filepath.Dir(archive), 0o755))
-	var items []tarItem
-	for _, m := range []struct {
-		name string
-		data []byte
-	}{
-		{"./etc/hostname", []byte("rodecaster-pro-ii\n")},
-		{"./usr/bin/rode-init-update-env.sh", repairScript},
-		{"./opt/rc2fx/SHA256SUMS", []byte("aa  rc2fxd\n")},
-	} {
-		items = append(items, tarItem{testHeader(t, m.name, typeRegular, len(m.data)), m.data})
-	}
-	testTar(t, archive, items)
+	disk.saveFlashedImage()
 	engine := disk.engine()
 	findings, err = engine.repairInspect()
 	must(t, err)
@@ -442,5 +459,93 @@ func TestOnlyTheFilesAskedForAreRestoredAndEachIsCheckedAgain(t *testing.T) {
 	must(t, err)
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("backup mode %o", info.Mode().Perm())
+	}
+}
+
+func TestADamagedFileListIsNotUsed(t *testing.T) {
+	good := rootManifest("rodecaster-pro-ii")
+	if list, ok := parseManifest(good); !ok || len(list) != 3 {
+		t.Fatalf("%v %v", list, ok)
+	}
+	half := []byte(good)
+	clear(half[len(half)/2:])
+	// Cut inside the second path: its hash is intact, its path is not.
+	cut := []byte(good)
+	clear(cut[strings.Index(good, "\n")+1+70:])
+	for name, text := range map[string]string{
+		"zero-filled": string(make([]byte, len(good))),
+		"half-zeroed": string(half),
+		"cut in path": string(cut),
+		"empty":       "",
+		"garbage":     "not a list\n",
+	} {
+		if list, ok := parseManifest(text); ok {
+			t.Fatalf("%s: used %v", name, list)
+		}
+	}
+}
+
+// damagedList is the finding for a root's own damaged file list, if any.
+func damagedList(root RootFindings) *DamagedFile {
+	for i, file := range root.Damaged {
+		if file.Path == manifestMember {
+			return &root.Damaged[i]
+		}
+	}
+	return nil
+}
+
+func TestAZeroFilledFileListIsAFindingNotAHealthySystem(t *testing.T) {
+	disk := newDisk(t, [2]tree{proII, proII})
+	disk.zero(0, manifestMember)
+	disk.zero(0, initScript)
+	// Without the saved image nothing can be checked, and that is said.
+	findings, err := disk.engine().repairInspect()
+	must(t, err)
+	root := findings.Roots[0]
+	if root.Reference != "nothing: this system's file list is damaged" {
+		t.Fatalf("reference %q", root.Reference)
+	}
+	if list := damagedList(root); list == nil || !whyContains(*list, "can't be checked") {
+		t.Fatalf("%+v", root)
+	}
+	if findings.Repairable() != 0 || len(findings.Roots[1].Damaged) != 0 {
+		t.Fatalf("%+v", findings)
+	}
+	// With the image that was flashed, the files are checked against it.
+	disk.saveFlashedImage()
+	engine := disk.engine()
+	findings, err = engine.repairInspect()
+	must(t, err)
+	root = findings.Roots[0]
+	if root.Reference != "the firmware image saved on this computer" {
+		t.Fatalf("reference %q", root.Reference)
+	}
+	if list := damagedList(root); list == nil || !whyContains(*list, "compared with the firmware image") {
+		t.Fatalf("%+v", root)
+	}
+	targets := findings.Targets()
+	if len(targets) != 1 || targets[0] != target(1, initScript) {
+		t.Fatalf("targets %+v", targets)
+	}
+	result, err := engine.repair(targets)
+	must(t, err)
+	if !slices.Equal(result.Repaired, []string{initScript}) {
+		t.Fatalf("%+v", result)
+	}
+	if !bytes.Equal(disk.contents(0, initScript), repairScript) {
+		t.Fatal("root 1 not restored")
+	}
+	disk.clean(0)
+}
+
+func TestAHalfZeroedFileListIsAFinding(t *testing.T) {
+	disk := newDisk(t, [2]tree{proII, proII})
+	disk.zeroFrom(0, manifestMember, len(rootManifest("rodecaster-pro-ii"))/2)
+	findings, err := disk.engine().repairInspect()
+	must(t, err)
+	root := findings.Roots[0]
+	if !strings.HasPrefix(root.Reference, "nothing") || damagedList(root) == nil {
+		t.Fatalf("a root with a half-zeroed file list was reported as %+v", root)
 	}
 }

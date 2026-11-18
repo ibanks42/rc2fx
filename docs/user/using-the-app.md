@@ -64,15 +64,28 @@ page: [Noise suppression](noise-suppression.md).
 
 ## Saving changes
 
-Effect changes are held in the app until you press **Save to mixer** in the
-bar at the bottom of the window. **Discard** drops them. Saving does not
-interrupt audio. Settings are stored on the mixer, so processing continues
-after you close the app or switch the computer off.
+There is no save button. Each change is heard at once, and the app saves it
+to the mixer about two seconds after you stop editing. If a save fails, the
+line under the channel in the chain says why, and the app tries again on its
+own. Settings are stored on the mixer, so processing continues after you close
+the app or switch the computer off.
+
+To take changes back, use the undo and redo buttons on that line, or Ctrl+Z
+and Ctrl+Shift+Z (Cmd+Z and Cmd+Shift+Z on macOS). While a channel differs
+from how it was before your current round of edits, the line also shows
+**Revert**, which puts it back.
+
+Saving does not interrupt audio, with one exception: switching noise
+suppression or its lookahead, or reordering effects while suppression is on,
+restarts the mixer's audio engine, and processed channels go quiet for a
+moment. The app asks first: **Apply** saves the change, **Undo the change**
+puts the channel back.
 
 If the mixer's settings change from another source while you are editing,
-such as a second computer, the app shows a notice and asks whether to keep
-your edits or reload the mixer's settings. If you close the app with unsaved
-edits, it asks for confirmation first.
+such as a second computer, the app keeps your edits and saves them on top. If
+they no longer fit the mixer, for example because they name a channel it no
+longer has, it offers **Reload mixer settings**. If you close the app before
+your edits are saved, it asks for confirmation first.
 
 ## Presets and settings files
 

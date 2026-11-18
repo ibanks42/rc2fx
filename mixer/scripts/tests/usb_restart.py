@@ -37,6 +37,15 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     run("pid=999; retire_usb_node 100; test \"$pid\" = 999")
     assert not node.exists()  # Allowed owner; caller's PID variable is preserved.
     (fd / "8").unlink()
+    if Path("/dev/full").exists():
+        # A log write that fails once the node is gone must not refuse the
+        # restart, in either of the ways the script calls this.
+        node.write_text("fixture")
+        run("retire_usb_node > /dev/full")
+        assert not node.exists()
+        node.write_text("fixture")
+        run("retire_usb_node > /dev/full || exit 9")
+        assert not node.exists()
     other = dev / "other"
     other.write_text("untouched")
     node.symlink_to(other)

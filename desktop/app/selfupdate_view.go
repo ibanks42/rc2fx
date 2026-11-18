@@ -112,7 +112,7 @@ func (a *App) restartToUpdate(cx *gk.Cx) {
 func (a *App) quitForUpdate(cx *gk.Cx) {
 	if a.confirmClose(cx) {
 		gk.Quit(cx)
-	} else if !a.closingPrompt {
+	} else if !a.closingPrompt() {
 		// Refused outright (a file dialog is open): no later quit may
 		// restart unasked. An open prompt clears it on cancel.
 		a.selfUpdate.cancelRestart()

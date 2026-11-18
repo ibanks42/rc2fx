@@ -41,36 +41,28 @@ type envelope struct {
 	signatures []signature
 }
 
+// envelopeDocument is a metadata file's top level. It must hold exactly
+// `signed` and `signatures`, each once and spelled exactly so: go-tuf reads
+// the same bytes with encoding/json, which matches member names
+// case-insensitively and lets a later member win, so a second `SIGNED` or
+// `signed` member would be what go-tuf acts on while the signatures were
+// checked over the first.
+type envelopeDocument struct {
+	_          struct{}    `serde:"deny_unknown_fields"`
+	Signed     any         `json:"signed"`
+	Signatures []signature `json:"signatures"`
+}
+
 func parseEnvelope(data []byte) (*envelope, error) {
-	value, err := sjson.Value(data)
-	if err != nil {
+	var doc envelopeDocument
+	if err := sjson.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("malformed metadata: %w", err)
 	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil, errors.New("malformed metadata: top level is not a JSON object")
-	}
-	signed, ok := object["signed"]
-	if !ok {
-		return nil, errors.New("malformed metadata: missing `signed`")
-	}
-	sigs, ok := object["signatures"]
-	if !ok {
-		return nil, errors.New("malformed metadata: missing `signatures`")
-	}
-	canonical, err := Canonical(signed)
+	canonical, err := Canonical(doc.Signed)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := sjson.Marshal(sigs)
-	if err != nil {
-		return nil, err
-	}
-	var signatures []signature
-	if err := sjson.Unmarshal(raw, &signatures); err != nil {
-		return nil, fmt.Errorf("malformed metadata signatures: %w", err)
-	}
-	return &envelope{canonical: canonical, signatures: signatures}, nil
+	return &envelope{canonical: canonical, signatures: doc.Signatures}, nil
 }
 
 // Canonical is securesystemslib-style canonical JSON: sorted keys, no

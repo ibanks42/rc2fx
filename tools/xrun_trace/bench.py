@@ -43,6 +43,13 @@ def snapshot():
     return dict(hostUtc=utc(),bootId=fields['boot'],uptime=float(fields['uptime'].split()[0]),home=fields['home'],tracing=int(fields['tracing']),uptimeAfter=float(fields['uptimeAfter'].split()[0]),audit=json.loads(fields['audit']))
 
 
+def live_dsp_faults(audit):
+    """The live DSP fault count, or None when the audit does not report it."""
+    counters=audit.get('processingCounters')
+    if not isinstance(counters,dict): return None
+    return counters.get('dspFaults')
+
+
 def check(base, previous, current, expect_trace=True):
     a, b = current['audit'], base['audit']
     errors=[]
@@ -50,8 +57,13 @@ def check(base, previous, current, expect_trace=True):
     if current['bootId']!=base['bootId'] or a['processPid']!=b['processPid']: errors.append('Mixer restarted')
     if not -.02<=current.get('uptimeAfter',current['uptime'])-a['monotonicNs']/1e9<5: errors.append('Stale telemetry')
     if a['callbacks']<=previous['audit']['callbacks']: errors.append('Callbacks stopped')
-    for key in ['xruns','dspFaults','capacityFailures','planErrors','controlServerErrors']:
+    for key in ['xruns','capacityFailures','planErrors','controlServerErrors']:
         if a[key]!=b[key]: errors.append(key+' changed')
+    # The top-level dspFaults is summed only when a client closes, so it stays
+    # still while the pipeline runs; the live counter is the one that moves.
+    live_a,live_b=live_dsp_faults(a),live_dsp_faults(b)
+    if live_a is None or live_b is None: errors.append('Live dspFaults counter missing')
+    elif live_a!=live_b: errors.append('dspFaults changed')
     before_workers={w['id']:w['worker'] for w in b.get('workers',[])}
     for worker in a.get('workers',[]):
         prior=before_workers.get(worker['id'])

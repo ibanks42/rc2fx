@@ -171,7 +171,7 @@ func (a *App) finishImport(cx *gk.Cx) {
 		a.targetMut().EQ = imp.stage.EQ
 		a.channel = core.ChannelLeft
 		a.band = 0
-		a.message = fmt.Sprintf("Imported %s into %s. Use Save to mixer to save it to the mixer.",
+		a.message = fmt.Sprintf("Imported %s into %s. It is saved to the mixer once edits stop.",
 			imp.name, a.targetName(a.target()))
 		a.rebuildEditors(cx)
 	}

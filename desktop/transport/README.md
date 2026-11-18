@@ -20,6 +20,15 @@ HID handle and serves requests in order.
   reply the mixer cached is recovered.
 - Events are polled with `GET api/v1/events`. Polling backs off while it fails,
   and the backoff resets after a period of successful polls.
+- An in-place update (`CommandMixerUpdate`) uploads beside other requests,
+  one at a time; a second is refused while one is still sending. If the USB
+  session breaks mid-upload, the upload reads the update session to reopen it
+  and resumes where the mixer says it is, for up to 30 s.
+- The event poll and an in-place update belong to their connection.
+  `CommandConnect` and `CommandDisconnect` cancel both and wait for them to let
+  go of the USB session before going on, so nothing of an old connection keeps
+  using its session beside the next one. An upload canceled this way leaves its
+  partial session on the mixer until the next update starts.
 
 Engine restart, global processing and path selection are single writes. Each
 names the revision and engine generation it was based on and requires a 202

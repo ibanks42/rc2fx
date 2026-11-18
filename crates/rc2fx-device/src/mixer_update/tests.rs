@@ -1,7 +1,13 @@
 use super::*;
 use aws_lc_rs::{rand::SystemRandom, signature::Ed25519KeyPair};
 use serde_json::json;
-use std::{collections::HashMap, fs, num::NonZeroU64, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tough::{
     editor::{RepositoryEditor, signed::SignedRole},
     key_source::{KeySource, LocalKeySource},
@@ -499,6 +505,41 @@ fn uploads_append_at_offsets_and_resume_after_a_lost_reply() {
         .unwrap();
     assert_eq!(last.received, 9);
     assert_eq!(last.state, "complete");
+    // A lost reply to the final chunk: its replay is answered with the
+    // progress, not refused because the upload is now complete.
+    let replay = update
+        .append(
+            &started.id,
+            Chunk {
+                offset: 4,
+                data: base64(b"efghi"),
+            },
+        )
+        .unwrap();
+    assert_eq!(replay.received, 9);
+    assert_eq!(replay.state, "complete");
+    // A tail of the final chunk is a replay too.
+    let replay = update
+        .append(
+            &started.id,
+            Chunk {
+                offset: 7,
+                data: base64(b"hi"),
+            },
+        )
+        .unwrap();
+    assert_eq!(replay.received, 9);
+    // Different bytes over the complete upload are not a replay.
+    let error = update
+        .append(
+            &started.id,
+            Chunk {
+                offset: 4,
+                data: base64(b"zzzzz"),
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error, UpdateError::Offset { expected: 9 });
     // Past the declared size is refused.
     let error = update
         .append(
@@ -784,6 +825,66 @@ fn a_power_cut_mid_swap_restores_the_previous_bundle() {
 }
 
 #[test]
+fn both_installed_copies_count_as_installed_but_only_the_live_one_offers_updates() {
+    let paths = install::Paths::mixer();
+    assert_eq!(
+        installed_bundle(&paths, Path::new("/opt/rc2fx/mixer-release.json")),
+        Some(InstalledBundle::Live)
+    );
+    assert_eq!(
+        installed_bundle(&paths, Path::new("/opt/.rc2fx-previous/mixer-release.json")),
+        Some(InstalledBundle::Previous)
+    );
+    // A build run from RAM, or anything else, is not an installed bundle.
+    assert_eq!(
+        installed_bundle(&paths, Path::new("/run/rc2fx-dev/mixer-release.json")),
+        None
+    );
+    assert_eq!(
+        installed_bundle(&paths, Path::new("/opt/mixer-release.json")),
+        None
+    );
+    assert_eq!(installed_bundle(&paths, Path::new("/")), None);
+    let (_dir, test) = test_paths();
+    assert_eq!(
+        installed_bundle(&test, &test.previous().join("mixer-release.json")),
+        Some(InstalledBundle::Previous)
+    );
+    assert!(new_update(test.clone()).offers_updates());
+    assert!(
+        !MixerUpdate::new(test, None, None)
+            .without_new_updates()
+            .offers_updates()
+    );
+}
+
+#[test]
+fn a_controller_started_from_the_rollback_copy_recovers_and_refuses_new_updates() {
+    let (_dir, paths) = test_paths();
+    write_bundle(&paths, &bundle_files("old"));
+    let staged = install::stage(&paths, "cccccccccccccccc", &bundle_files("new")).unwrap();
+    install::swap(&paths, &staged, "0.1.5", "0.2.0").unwrap();
+    fs::write(paths.driver(), b"").unwrap();
+    // The shim starts .rc2fx-previous; its controller gets this handle.
+    let update = Arc::new(
+        MixerUpdate::new(paths.clone(), Some(pro_ii_profile()), Some("0.1.5".into()))
+            .without_new_updates(),
+    );
+    update.recover();
+    assert_eq!(
+        fs::read(paths.bundle().join("librc2fx_native.so")).unwrap(),
+        b"old librc2fx_native.so\n"
+    );
+    assert!(!paths.pending().exists());
+    assert_eq!(update.last().unwrap().outcome, "rolledBack");
+    // Even with the marker gone, a new update waits for a start from the
+    // live bundle.
+    let refused = update.start(start_request(9)).unwrap_err();
+    assert!(matches!(refused, UpdateError::Conflict(_)), "{refused:?}");
+    assert_eq!(refused.status(), 409);
+}
+
+#[test]
 fn an_interrupted_update_without_a_rollback_copy_clears_the_marker() {
     let (_dir, paths) = test_paths();
     write_bundle(&paths, &bundle_files("old"));
@@ -799,8 +900,130 @@ fn an_interrupted_update_without_a_rollback_copy_clears_the_marker() {
     assert!(!paths.pending().exists());
     assert_eq!(update.last().unwrap().outcome, "rolledBack");
     // The running version is what the next update is compared against.
-    let state = install::StoredState::load(&paths.state());
+    let state = install::StoredState::load(&paths.state()).unwrap().unwrap();
     assert_eq!(state.installed_version.as_deref(), Some("0.1.5"));
+}
+
+/// Damaged records like the zero-filled files seen on the mixer's flash, a
+/// record cut short, and an empty one.
+fn damaged_records() -> [Vec<u8>; 3] {
+    [
+        vec![0; 512],
+        br#"{"schema":1,"installedVersion":"0.2.0","rootVersion":3,"targ"#.to_vec(),
+        Vec::new(),
+    ]
+}
+
+#[test]
+fn an_unreadable_update_record_refuses_updates_and_is_left_as_it_is() {
+    for damaged in damaged_records() {
+        let (_dir, paths) = test_paths();
+        fs::create_dir_all(paths.data()).unwrap();
+        fs::write(paths.state(), &damaged).unwrap();
+        assert!(install::StoredState::load(&paths.state()).is_err());
+        let update = new_update(paths.clone());
+        // A start must not replace the record with a fresh one: that would
+        // make the loss of its replay and downgrade protection permanent.
+        update.recover();
+        assert_eq!(fs::read(paths.state()).unwrap(), damaged);
+        match update.start(start_request(1024)) {
+            Err(UpdateError::Conflict(why)) => assert!(why.contains("update record"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(fs::read(paths.state()).unwrap(), damaged);
+    }
+    // No record yet is a fresh state, not an error.
+    let (_dir, paths) = test_paths();
+    assert_eq!(install::StoredState::load(&paths.state()), Ok(None));
+}
+
+#[test]
+fn a_record_damaged_during_the_upload_refuses_the_install() {
+    let repository = block(Repository::new());
+    block(repository.publish(1));
+    for damaged in damaged_records() {
+        let (_dir, paths) = test_paths();
+        let update = Arc::new(MixerUpdate {
+            trusted_root: repository.root.clone(),
+            ..MixerUpdate::new(paths.clone(), Some(pro_ii_profile()), Some("0.1.5".into()))
+        });
+        let started = update
+            .start(StartRequest {
+                version: repository.metadata.version.clone(),
+                size: repository.bytes.len() as u64,
+                sha256: install::sum(&repository.bytes),
+                metadata: repository.input(),
+                allow_downgrade: false,
+                encoding: None,
+                upload_size: None,
+            })
+            .unwrap();
+        append_upload(&update, &started.id, &repository.bytes);
+        fs::create_dir_all(paths.data()).unwrap();
+        fs::write(paths.state(), &damaged).unwrap();
+        match Arc::clone(&update).install(&started.id) {
+            Err(UpdateError::Conflict(why)) => assert!(why.contains("update record"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(update.progress(&started.id).unwrap().state, "failed");
+        assert_eq!(fs::read(paths.state()).unwrap(), damaged);
+    }
+}
+
+#[test]
+fn an_accepted_install_forgets_the_previous_outcome() {
+    let repository = block(Repository::new());
+    block(repository.publish(1));
+    let (_dir, paths) = test_paths();
+    // A rolled-back attempt at the same version as the one about to start.
+    fs::create_dir_all(paths.data()).unwrap();
+    let stale = install::LastOutcome {
+        outcome: "rolledBack".into(),
+        from: Some("0.1.5".into()),
+        to: Some("0.2.0".into()),
+        reason: Some("audio did not start".into()),
+        gui_shim_needs_reboot: false,
+    };
+    stale.save(&paths.last()).unwrap();
+    let request = || StartRequest {
+        version: repository.metadata.version.clone(),
+        size: repository.bytes.len() as u64,
+        sha256: install::sum(&repository.bytes),
+        metadata: repository.input(),
+        allow_downgrade: false,
+        encoding: None,
+        upload_size: None,
+    };
+
+    // A release this mixer refuses changes nothing, so its record stays.
+    let refusing = new_update(paths.clone());
+    let started = refusing.start(request()).unwrap();
+    append_upload(&refusing, &started.id, &repository.bytes);
+    Arc::clone(&refusing).install(&started.id).unwrap_err();
+    assert_eq!(refusing.last(), Some(stale.clone()));
+
+    // An accepted one: until it records its own outcome there is none.
+    let update = Arc::new(MixerUpdate {
+        trusted_root: repository.root.clone(),
+        ..MixerUpdate::new(paths.clone(), Some(pro_ii_profile()), Some("0.1.5".into()))
+    });
+    let started = update.start(request()).unwrap();
+    append_upload(&update, &started.id, &repository.bytes);
+    Arc::clone(&update).install(&started.id).unwrap();
+    assert_eq!(update.last(), None);
+    assert!(!paths.last().exists());
+    // The test payload is not a bundle, so the install thread stops before
+    // touching any file; wait for it so nothing outlives the directory.
+    for _ in 0..500 {
+        if update.progress(&started.id).unwrap().state == "failed" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(update.progress(&started.id).unwrap().state, "failed");
+    assert_eq!(update.last(), None);
+    // Nothing to forget is not an error.
+    install::clear_last(&paths).unwrap();
 }
 
 #[test]

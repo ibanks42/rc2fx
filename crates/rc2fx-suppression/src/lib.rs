@@ -304,6 +304,11 @@ impl Telemetry {
     pub fn outliers(&self) -> Outliers {
         outlier::snapshot(&self.0.worker_outliers, &self.0.endpoint_outliers)
     }
+    /// The missed-deadline and late-result histories alone, as in
+    /// `outliers`, for a reader that polls them often.
+    pub fn histories(&self) -> (EventHistory, EventHistory) {
+        outlier::histories(&self.0.endpoint_outliers)
+    }
     /// Developer capture only; never resets counters or changes audio settings.
     pub fn arm_capture(&self, epoch: u32) -> bool {
         self.0.capture.arm(epoch)

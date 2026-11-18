@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -701,6 +700,27 @@ func engineState(saved *core.DeviceState) (string, bool) {
 	return string(body), true
 }
 
+// installerConnectionChanged: the connection's generation changed, so a
+// settings read sent on the old one is never answered; ask it again. An
+// in-place upload on the old connection was canceled with it and fails.
+func (a *App) installerConnectionChanged() {
+	if a.installer != nil {
+		a.installer.model.ConnectionChanged()
+	}
+}
+
+// accessOf is the access a grant outcome (or a lost helper) leaves.
+func accessOf(err error) installflow.Access {
+	switch {
+	case err == nil:
+		return installflow.Access{Kind: installflow.AccessGranted}
+	case errors.Is(err, helper.ErrNotGranted):
+		return installflow.Access{Kind: installflow.AccessRefused,
+			Why: "The password prompt was closed, or the password wasn't accepted."}
+	}
+	return installflow.Access{Kind: installflow.AccessRefused, Why: err.Error()}
+}
+
 // pollInstaller collects finished requests, polls and progress. Returns
 // whether to redraw.
 func (a *App) pollInstaller(cx *gk.Cx) bool {
@@ -764,15 +784,7 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 	}
 	for _, err := range i.runner.takeAccess() {
 		changed = true
-		switch {
-		case err == nil:
-			i.access = installflow.Access{Kind: installflow.AccessGranted}
-		case strings.Contains(err.Error(), "not granted"):
-			i.access = installflow.Access{Kind: installflow.AccessRefused,
-				Why: "The password prompt was closed, or the password wasn't accepted."}
-		default:
-			i.access = installflow.Access{Kind: installflow.AccessRefused, Why: err.Error()}
-		}
+		i.access = accessOf(err)
 		i.model.Privileged = i.access.AllowsFlashing()
 		start, retry, fix := i.startOnGrant, i.retryOnGrant, i.fixOnGrant
 		i.startOnGrant, i.retryOnGrant, i.fixOnGrant = false, false, false
@@ -1033,6 +1045,12 @@ func (a *App) driveInPlaceUpdate() bool {
 		return false
 	}
 	if bundle, ok := i.model.TakeInPlaceBundle(); ok {
+		// What update/last says before this update: the transport runs
+		// commands in order, so the reply predates the install.
+		a.inPlaceBefore = inPlaceBaseline{}
+		if !a.command(transport.CommandMixerUpdateLast{Generation: generation}) {
+			a.message = ""
+		}
 		start, err := inPlaceStart(bundle)
 		sent := err == nil && a.command(transport.CommandMixerUpdate{
 			Generation: generation,
@@ -1093,17 +1111,67 @@ func (a *App) inPlaceEvent(event transport.MixerUpdateEvent) {
 	}
 }
 
+// inPlaceBaseline is the mixer's update/last record as it was just before
+// an in-place update was sent. Mixer software that does not clear the record
+// when it accepts an install keeps reporting it while the new update runs,
+// and it can name the same version (a retry after a rollback), so the same
+// record is not taken as the new outcome until the record has been seen to
+// change.
+type inPlaceBaseline struct {
+	read    bool
+	record  map[string]any
+	changed bool
+}
+
+func decodeRecord(record json.RawMessage) map[string]any {
+	var fields map[string]any
+	if json.Unmarshal(record, &fields) != nil {
+		return nil
+	}
+	return fields
+}
+
+// capture keeps the first record read before the update, if none was kept.
+func (b *inPlaceBaseline) capture(record json.RawMessage) {
+	if !b.read {
+		b.read, b.record = true, decodeRecord(record)
+	}
+}
+
+// stale reports that record is still the one from before the update.
+func (b *inPlaceBaseline) stale(record json.RawMessage) bool {
+	if !b.read || b.changed {
+		return false
+	}
+	if reflect.DeepEqual(decodeRecord(record), b.record) {
+		return true
+	}
+	b.changed = true
+	return false
+}
+
 // inPlaceOutcome is the mixer's record of its last in-place update (JSON
 // null is None). Only the outcome of the update in progress counts;
 // anything else is an older record.
 func (a *App) inPlaceOutcome(record json.RawMessage) {
 	i := a.installer
-	if i == nil || i.model.InPlace.Kind != installflow.InPlaceInstalling {
+	if i == nil {
+		return
+	}
+	switch i.model.InPlace.Kind {
+	case installflow.InPlaceUploading:
+		a.inPlaceBefore.capture(record)
+		return
+	case installflow.InPlaceInstalling:
+	default:
+		return
+	}
+	if a.inPlaceBefore.stale(record) {
 		return
 	}
 	version := i.model.InPlace.Version
-	var fields map[string]any
-	if json.Unmarshal(record, &fields) != nil || fields == nil {
+	fields := decodeRecord(record)
+	if fields == nil {
 		return
 	}
 	str := func(key string) (string, bool) {
@@ -1193,7 +1261,7 @@ func (a *App) confirmCloseInstaller(cx *gk.Cx) (verdict, ok bool) {
 	if a.installer == nil || !a.installer.busy() {
 		return false, false
 	}
-	a.confirm(cx, Confirm{
+	a.confirm(cx, confirmKindOther, Confirm{
 		Title:  "The app is working",
 		Detail: "Wait for the current step to finish before closing the app. Keep the mixer connected and switched on.",
 		Action: "OK",
