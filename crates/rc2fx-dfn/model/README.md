@@ -11,7 +11,7 @@ DeepFilterNet3 with the GRUs narrowed to 128 units
 (`emb_hidden_dim = df_hidden_dim = 128`, `nb_df = 64`, 601,660 parameters).
 RC2FX retrained it on DNS-4 speech and noise, VCTK, room impulse responses,
 and mouse-click and keyboard recordings (Freesound, FSD50K, ESC-50, AudioSet,
-three Zenodo keystroke datasets and the project author's own recordings), with
+three Zenodo keystroke datasets, and the project author's own recordings), with
 the click and keyboard recordings weighted to a quarter of the noise. The
 training kit is kept outside this repository. The weights are released under
 MIT; [PROVENANCE.md](PROVENANCE.md#training-data) credits every training
@@ -21,16 +21,15 @@ The weights here are the best checkpoint by validation loss from run
 `a960s360d64-la0-b20` (epoch 120, 0.997914731502533). They were exported
 without retraining or changing the lookahead. `config.ini` is the exact run
 configuration. [PROVENANCE.md](PROVENANCE.md) has the hashes and the commands
-used to generate the reference. The previous LA1 weights, reference and
-configuration are kept in `la1/`, and the reference and batching-equivalence
-tests still cover them.
+used to generate the reference. The previous LA1 weights, reference, and
+configuration are kept in `la1/`, and the reference tests still cover them.
 
 ## File format
 
 `weights.bin` contains every float tensor of the model's PyTorch state dict,
 in the format `Tensors::parse` reads (`src/net.rs`): a little-endian u32
 tensor count, then for each tensor a u32 name length, the name, a u32 rank,
-u32 dims and f32 data.
+u32 dims, and f32 data.
 
 Four framing tensors follow the state dict and are required. Each has rank 1
 and one integral f32 value:

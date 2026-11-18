@@ -301,8 +301,7 @@ func (s Suppression) validateLookahead() error {
 }
 
 // DFNHopSamples is DeepFilterNet3's STFT hop, in samples: one lookahead step
-// adds exactly this much latency (5.0 ms at 48 kHz), in both the one- and
-// two-hop builds.
+// adds exactly this much latency (5.0 ms at 48 kHz).
 const DFNHopSamples uint32 = 240
 
 // Lookaheads is the lookahead values DeepFilterNet3 admits, lowest latency

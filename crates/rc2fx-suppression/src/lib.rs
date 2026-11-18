@@ -5,7 +5,6 @@
 //! Explicit `finish` is the observable shutdown path; timeout is unresolved
 //! ownership and must prevent starting a replacement worker.
 
-mod capture;
 mod inline;
 mod metrics;
 mod model;
@@ -13,10 +12,6 @@ mod outlier;
 mod queue;
 mod scheduling;
 mod wake;
-pub use capture::{
-    CAPTURE_FRAMES, CAPTURE_POST_SEQUENCES, CaptureFrame, CaptureMetadata, CaptureState,
-    CaptureWindow,
-};
 pub use inline::Inline;
 pub use metrics::Timing;
 use model::Model;
@@ -282,7 +277,6 @@ struct Shared {
     turnaround: metrics::Counters,
     worker_outliers: outlier::WorkerOutliers,
     endpoint_outliers: outlier::EndpointOutliers,
-    capture: capture::Capture,
     terminal: OnceLock<Terminal>,
     prep: Preparing,
 }
@@ -344,20 +338,6 @@ impl Telemetry {
     /// `outliers`, for a reader that polls them often.
     pub fn histories(&self) -> (EventHistory, EventHistory) {
         outlier::histories(&self.0.endpoint_outliers)
-    }
-    /// Developer capture only; never resets counters or changes audio settings.
-    pub fn arm_capture(&self, epoch: u32) -> bool {
-        self.0.capture.arm(epoch)
-    }
-    pub fn capture_identity(&self) -> (u64, u32) {
-        self.0.capture.identity()
-    }
-    pub fn capture_metadata(&self) -> Recorded<CaptureMetadata> {
-        self.0.capture.metadata()
-    }
-    /// Cold diagnostic path, not routine telemetry: allocates a bounded copy.
-    pub fn capture_window(&self) -> Recorded<CaptureWindow> {
-        self.0.capture.snapshot()
     }
     pub fn preparation(&self) -> Preparation {
         let (s, p) = (&self.0, &self.0.prep);
@@ -801,12 +781,10 @@ impl Worker {
                     self.pending = Some(due);
                     // Rare: the only clock read this path adds.
                     let at = metrics::now(false).unwrap_or(0);
-                    let event = EventRecord {
+                    self.shared.endpoint_outliers.missed(EventRecord {
                         sequence: due,
                         at_ns: at,
-                    };
-                    self.shared.endpoint_outliers.missed(event);
-                    self.shared.capture.missed(event);
+                    });
                 }
             } else if self.pending == Some(due) && self.choose(due) {
                 // A late result still serves the rest of its frame.
@@ -1100,7 +1078,6 @@ fn run(
 ) {
     let mut expected = 0;
     let mut recovery = 0;
-    let mut capture = capture::Recorder::new(&s.capture);
     let time_steps = s.prep.step_timing.load(Ordering::Relaxed);
     loop {
         // Observe before checking stop/queue: any subsequent producer or
@@ -1122,18 +1099,9 @@ fn run(
         };
         let wall = metrics::now(false);
         let cpu = metrics::now(true);
-        capture.begin(wall);
-        let mut capture_frame = CaptureFrame {
-            sequence: frame.sequence,
-            submitted_ns: frame.submitted_ns,
-            started_ns: wall,
-            input_pending_after_pop: input.pending(),
-            ..CaptureFrame::default()
-        };
         if frame.sequence != expected {
             if model.reset().is_err() {
                 s.failed.store(true, Ordering::Release);
-                capture.record(capture_frame);
                 break;
             }
             recovery = g.intrinsic_delay_samples.div_ceil(g.frame_samples);
@@ -1154,15 +1122,12 @@ fn run(
             Ok(voice) => frame.voice = voice,
             Err(_) => {
                 s.failed.store(true, Ordering::Release);
-                capture.record(capture_frame);
                 break;
             }
         }
         expected = frame.sequence + 1;
         let cpu_end = metrics::now(true);
         let wall_end = metrics::now(false);
-        capture_frame.finished_ns = wall_end;
-        capture_frame.cpu_ns = cpu.zip(cpu_end).and_then(|(a, b)| b.checked_sub(a));
         s.queue_wait
             .record(frame.submitted_ns, wall, g.worker_allowance_ns());
         s.cpu.record(cpu, cpu_end, g.frame_budget_ns());
@@ -1178,8 +1143,6 @@ fn run(
             s.output_drops.fetch_add(1, Ordering::Relaxed);
         } else {
             let published = metrics::now(false);
-            capture_frame.output_published = true;
-            capture_frame.published_ns = published;
             s.turnaround
                 .record(frame.submitted_ns, published, g.worker_allowance_ns());
             if let (Some(submitted), Some(started), Some(finished), Some(published)) =
@@ -1202,7 +1165,6 @@ fn run(
                 );
             }
         }
-        capture.record(capture_frame);
         s.completed.fetch_add(1, Ordering::Release);
         prepare(model.as_mut(), &input, s, g, cpu_end, time_steps);
     }

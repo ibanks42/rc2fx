@@ -90,7 +90,7 @@ fn scalar_packed(
 mod neon {
     use std::arch::aarch64::*;
 
-    /// `matvec_q8_steps::<1>`'s original row loop.
+    /// `matvec_q8`'s original row loop.
     #[inline(never)]
     pub fn baseline(
         q: &[i8],

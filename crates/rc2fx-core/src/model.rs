@@ -269,7 +269,7 @@ impl Suppression {
     }
 }
 /// DeepFilterNet3's STFT hop, in samples: one lookahead step adds exactly
-/// this much latency (5.0 ms at 48 kHz), in both the one- and two-hop builds.
+/// this much latency (5.0 ms at 48 kHz).
 pub const DFN_HOP_SAMPLES: u32 = 240;
 
 /// Model-defined buffering, independent of any worker scheduling allowance.

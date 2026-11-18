@@ -19,7 +19,7 @@ mod net;
 mod traffic;
 
 use dsp::Dsp;
-use net::{Dfn, Framing, STEPS, Tensors};
+use net::{Dfn, Framing, Tensors};
 use realfft::num_complex::Complex32;
 use std::collections::VecDeque;
 
@@ -65,13 +65,11 @@ pub struct DeepFilter {
     nb_df: usize,
     /// Recent spectra, oldest first: `masked` for the ERB gains (applied
     /// `lookahead` frames back), `noisy` for the deep filter's `order` taps.
-    /// Each holds `STEPS - 1` more than one hop needs, as a call pushes all
-    /// its hops before filtering the first.
     masked: VecDeque<Vec<Complex32>>,
     noisy: VecDeque<Vec<Complex32>>,
     spec: Vec<Complex32>,
     enhanced: Vec<Complex32>,
-    /// [STEPS][..]: each hop's features.
+    /// The hop's features.
     feat_erb: Vec<f32>,
     feat_re: Vec<f32>,
     feat_im: Vec<f32>,
@@ -113,16 +111,16 @@ impl DeepFilter {
             framing,
             order,
             nb_df,
-            masked: (0..order + framing.lookahead + STEPS - 1)
+            masked: (0..order + framing.lookahead)
                 .map(|_| zero.clone())
                 .collect(),
             // The lookahead is under the order, so the taps span the ring.
-            noisy: (0..order + STEPS - 1).map(|_| zero.clone()).collect(),
+            noisy: (0..order).map(|_| zero.clone()).collect(),
             spec: zero.clone(),
             enhanced: zero,
-            feat_erb: vec![0.; STEPS * nb_erb],
-            feat_re: vec![0.; STEPS * nb_df],
-            feat_im: vec![0.; STEPS * nb_df],
+            feat_erb: vec![0.; nb_erb],
+            feat_re: vec![0.; nb_df],
+            feat_im: vec![0.; nb_df],
             gru_prep: false,
         })
     }
@@ -151,98 +149,78 @@ impl DeepFilter {
 
     /// Enhances one frame (`frame()` samples) in place; the result belongs to
     /// the input `delay()` samples earlier. Returns the model's local SNR
-    /// estimate in dB (-15 to 35) for the frame's newest hop, its measure of
-    /// speech presence.
+    /// estimate in dB (-15 to 35) for the frame, its measure of speech
+    /// presence.
     pub fn process(&mut self, frame: &mut [f32]) -> f32 {
         assert_eq!(frame.len(), self.frame());
-        self.process_hops(frame)
-    }
-
-    /// `process` for one to `STEPS` hops.
-    fn process_hops(&mut self, frame: &mut [f32]) -> f32 {
-        let (hop, nb_df) = (self.framing.hop, self.nb_df);
-        let nb_erb = self.feat_erb.len() / STEPS;
-        let steps = frame.len() / hop;
-        assert!(frame.len() == steps * hop && (1..=STEPS).contains(&steps));
+        let nb_df = self.nb_df;
         profile::start();
-        for (t, input) in frame.chunks_exact(hop).enumerate() {
-            // The rings' oldest spectra are overwritten; the STFT's own
-            // buffers are counted in dsp.
-            #[cfg(test)]
-            {
-                use traffic::*;
-                slice(Class::Act, &self.spec);
-                traffic::store(
-                    Class::State,
-                    self.masked[0].as_ptr(),
-                    self.masked[0].len() * 8,
-                );
-                traffic::store(
-                    Class::State,
-                    self.noisy[0].as_ptr(),
-                    self.noisy[0].len() * 8,
-                );
-            }
-            self.dsp.analysis(input, &mut self.spec);
-            push(&mut self.masked, &self.spec);
-            push(&mut self.noisy, &self.spec);
-            self.dsp
-                .feat_erb(&self.spec, &mut self.feat_erb[t * nb_erb..(t + 1) * nb_erb]);
-            self.dsp.feat_cplx(
-                &self.spec[..nb_df],
-                &mut self.feat_re[t * nb_df..(t + 1) * nb_df],
-                &mut self.feat_im[t * nb_df..(t + 1) * nb_df],
+        // The rings' oldest spectra are overwritten; the STFT's own buffers
+        // are counted in dsp.
+        #[cfg(test)]
+        {
+            use traffic::*;
+            slice(Class::Act, &self.spec);
+            traffic::store(
+                Class::State,
+                self.masked[0].as_ptr(),
+                self.masked[0].len() * 8,
+            );
+            traffic::store(
+                Class::State,
+                self.noisy[0].as_ptr(),
+                self.noisy[0].len() * 8,
             );
         }
+        self.dsp.analysis(frame, &mut self.spec);
+        push(&mut self.masked, &self.spec);
+        push(&mut self.noisy, &self.spec);
+        self.dsp.feat_erb(&self.spec, &mut self.feat_erb);
+        self.dsp
+            .feat_cplx(&self.spec[..nb_df], &mut self.feat_re, &mut self.feat_im);
         profile::mark(0);
-        let lsnr = self.net.encode(
-            &self.feat_erb[..steps * nb_erb],
-            &self.feat_re[..steps * nb_df],
-            &self.feat_im[..steps * nb_df],
-        );
-        self.net.erb_decode(steps);
-        self.net.df_decode(steps);
+        let lsnr = self
+            .net
+            .encode(&self.feat_erb, &self.feat_re, &self.feat_im);
+        self.net.erb_decode();
+        self.net.df_decode();
 
-        for (t, output) in frame.chunks_exact_mut(hop).enumerate() {
-            // Hop t's spectra sit `later` places before the rings' ends.
-            let later = steps - 1 - t;
-            // Stage 1: ERB gains on the spectrum `lookahead` frames back.
-            let at = self.masked.len() - 1 - later - self.framing.lookahead;
-            let target = &mut self.masked[at];
-            #[cfg(test)]
+        // Stage 1: ERB gains on the spectrum `lookahead` frames back.
+        let at = self.masked.len() - 1 - self.framing.lookahead;
+        let target = &mut self.masked[at];
+        #[cfg(test)]
+        {
+            use traffic::*;
+            touch_n(Class::State, target.as_ptr(), target.len() * 8, 1);
+            traffic::store(Class::State, target.as_ptr(), target.len() * 8);
+            slice(Class::Act, &self.enhanced);
+            for spec in self
+                .noisy
+                .range(self.noisy.len() - self.order..self.noisy.len())
             {
-                use traffic::*;
-                touch_n(Class::State, target.as_ptr(), target.len() * 8, 1);
-                traffic::store(Class::State, target.as_ptr(), target.len() * 8);
-                slice(Class::Act, &self.enhanced);
-                for spec in self
-                    .noisy
-                    .range(self.noisy.len() - later - self.order..self.noisy.len() - later)
-                {
-                    slice(Class::State, &spec[..nb_df]);
-                }
-                slice(Class::Act, self.net.coefs(t));
+                slice(Class::State, &spec[..nb_df]);
             }
-            self.dsp.apply_gains(target, self.net.mask(t));
-            self.enhanced.copy_from_slice(target);
-            // Stage 2: the deep filter replaces the lowest bins with a complex
-            // filter over the last `order` noisy spectra, oldest tap first;
-            // the newest is `lookahead` frames past the target.
-            let coefs = self.net.coefs(t);
-            let end = self.noisy.len() - later;
-            for (f, out) in self.enhanced[..nb_df].iter_mut().enumerate() {
-                let taps = &coefs[f * self.order * 2..(f + 1) * self.order * 2];
-                *out = self
-                    .noisy
-                    .range(end - self.order..end)
-                    .zip(taps.as_chunks::<2>().0)
-                    .map(|(spec, c)| spec[f] * Complex32::new(c[0], c[1]))
-                    .sum();
-            }
-            profile::mark(13);
-            self.dsp.synthesis(&mut self.enhanced, output);
-            profile::mark(14);
+            slice(Class::Act, self.net.coefs());
         }
+        self.dsp.apply_gains(target, self.net.mask());
+        self.enhanced.copy_from_slice(target);
+        // Stage 2: the deep filter replaces the lowest bins with a complex
+        // filter over the last `order` noisy spectra, oldest tap first; the
+        // newest is `lookahead` frames past the target.
+        let coefs = self.net.coefs();
+        let end = self.noisy.len();
+        for (f, out) in self.enhanced[..nb_df].iter_mut().enumerate() {
+            let taps = &coefs[f * self.order * 2..(f + 1) * self.order * 2];
+            *out = self
+                .noisy
+                .range(end - self.order..end)
+                .zip(taps.as_chunks::<2>().0)
+                .map(|(spec, c)| spec[f] * Complex32::new(c[0], c[1]))
+                .sum();
+        }
+        profile::mark(13);
+        self.dsp.synthesis(&mut self.enhanced, frame);
+        profile::mark(14);
         lsnr
     }
 
@@ -266,8 +244,8 @@ impl DeepFilter {
     /// `process` call, which then uses them instead of computing them
     /// itself. Kernel, input and arithmetic are unchanged, so the output is
     /// bit for bit the same, prepared or not; the work moves rather than
-    /// shrinks. Only a call's first hop can use prepared products. A reset
-    /// or the next call discards them; turning this off discards them too.
+    /// shrinks. A reset or the next call discards them; turning this off
+    /// discards them too.
     pub fn set_gru_prep(&mut self, on: bool) {
         self.gru_prep = on;
         if !on {
@@ -384,9 +362,8 @@ fn push(ring: &mut VecDeque<Vec<Complex32>>, spec: &[Complex32]) {
 /// Per-stage timing of `process`, printed to stderr every 2,000 hops when
 /// built with `--cfg dfn_profile` (RUSTFLAGS); compiled out otherwise.
 /// `start` opens a call; each `mark(stage)` charges the time since the
-/// previous mark to that stage. Stages are the model's layers in order; the
-/// layers run once per call for all its hops, the last two stages once per
-/// hop, and the means are per hop.
+/// previous mark to that stage. Stages are the model's layers in order, and
+/// the means are per hop.
 pub(crate) mod profile {
     #[cfg(dfn_profile)]
     use std::{

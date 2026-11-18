@@ -34,7 +34,7 @@ fn same(frame: &Frame) -> bool {
 fn a_settled_cycle_visits_what_is_processed_and_what_is_due_to_meter() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, _controls) = build(&plan, &buffers, true);
+    let (pipeline, _controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, false);
     run(&pipeline, &buffers, index, [true, true], true);
@@ -53,7 +53,7 @@ fn a_settled_cycle_visits_what_is_processed_and_what_is_due_to_meter() {
 fn a_path_left_alone_is_not_held_to_its_last_visit() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, _controls) = build(&plan, &buffers, true);
+    let (pipeline, _controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, true);
     // Visited, and so active, on this frame.
@@ -76,7 +76,7 @@ fn a_path_left_alone_is_not_held_to_its_last_visit() {
 fn an_unbound_port_is_handed_straight_back() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, _controls) = build(&plan, &buffers, true);
+    let (pipeline, _controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, false);
     unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
@@ -91,8 +91,10 @@ fn an_unbound_port_is_handed_straight_back() {
 fn frames_left_alone_count_exactly_as_frames_counted_every_cycle() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (helper, mut helper_controls) = build(&plan, &buffers, false);
-    let (direct, mut direct_controls) = build(&plan, &buffers, true);
+    // The oracle visits every path on every cycle, so it counts each frame as
+    // it happens; the other leaves the output alone between meter readings.
+    let (every, mut every_controls) = build(&plan, &buffers);
+    let (direct, mut direct_controls) = build(&plan, &buffers);
     let meter = |controls: &mut Vec<parameters::Control>| {
         let value = controls[OUTPUT].status().unwrap().meter.unwrap();
         (value.callbacks, value.processed_frames, value.rms.to_bits())
@@ -102,11 +104,14 @@ fn frames_left_alone_count_exactly_as_frames_counted_every_cycle() {
     // of strides, so each reading falls just after a visit.
     for index in 0..1040 {
         let success = index % 7 != 3 && index % 37 != 0;
-        run(&helper, &buffers, index, [true, true], success);
+        // SAFETY: between callbacks; the callback side owns `front`.
+        unsafe { (*every.front.get()).full_left = METER_STRIDE };
+        run(&every, &buffers, index, [true, true], success);
+        assert!(front(&every).full, "frame {index}: the oracle visits all");
         run(&direct, &buffers, index, [true, true], success);
         if (index + 1) % 104 == 0 {
             assert_eq!(
-                meter(&mut helper_controls),
+                meter(&mut every_controls),
                 meter(&mut direct_controls),
                 "frame {index}"
             );
@@ -120,7 +125,7 @@ fn frames_left_alone_count_exactly_as_frames_counted_every_cycle() {
 fn a_callback_owned_mode_change_takes_effect_on_the_next_frame() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, mut controls) = build(&plan, &buffers, true);
+    let (pipeline, mut controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, false);
     assert!(same(&run(&pipeline, &buffers, index, [true, true], true)));
@@ -144,7 +149,7 @@ fn a_callback_owned_mode_change_takes_effect_on_the_next_frame() {
 fn a_mode_seen_before_its_publication_is_counted_is_never_a_lone_frame() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, mut controls) = build(&plan, &buffers, true);
+    let (pipeline, mut controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, false);
     publish(&mut controls[OUTPUT], &plan, 2, PathMode::Processed);
@@ -195,10 +200,10 @@ fn a_helper_owned_mode_change_arrives_as_soon_as_when_every_path_is_visited() {
         control.reserve(staged).unwrap().commit();
     };
     let buffers = Buffers::new();
-    let (visiting, mut controls) = build(&plan, &buffers, true);
+    let (visiting, mut controls) = build(&plan, &buffers);
     commit(&mut controls[0]);
     let expected = frames_until_processed(&visiting, &buffers);
-    let (sparse, mut controls) = build(&plan, &buffers, true);
+    let (sparse, mut controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&sparse, &buffers, &mut index, false);
     assert_eq!(front(&sparse).visits.iter().flatten().count(), 1 + 1);
@@ -210,7 +215,7 @@ fn a_helper_owned_mode_change_arrives_as_soon_as_when_every_path_is_visited() {
 fn a_path_the_mixer_never_requests_still_acknowledges_a_setting() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, mut controls) = build(&plan, &buffers, true);
+    let (pipeline, mut controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, true);
     // Published on its meter cycle, when an unrequested path cannot apply: it
@@ -227,7 +232,7 @@ fn a_path_the_mixer_never_requests_still_acknowledges_a_setting() {
 fn a_mixer_failure_does_not_lose_a_settings_acknowledgement() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, mut controls) = build(&plan, &buffers, true);
+    let (pipeline, mut controls) = build(&plan, &buffers);
     for index in 0..40 {
         run(&pipeline, &buffers, index, [true, true], true);
     }
@@ -245,7 +250,7 @@ fn a_mixer_failure_does_not_lose_a_settings_acknowledgement() {
 fn a_failed_path_stays_visited_and_stops_counting() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, mut controls) = build(&plan, &buffers, true);
+    let (pipeline, mut controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, true);
     // A wrong buffer on its visit fails the path.
@@ -285,7 +290,7 @@ fn sparse_cycles_and_replanning_allocate_nothing_in_the_callback() {
     };
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, mut controls) = build(&plan, &buffers, true);
+    let (pipeline, mut controls) = build(&plan, &buffers);
     let counts = || {
         [
             CALLBACK_ALLOCATIONS.load(Ordering::Relaxed),
@@ -316,7 +321,7 @@ fn sparse_cycles_and_replanning_allocate_nothing_in_the_callback() {
 fn the_port_lookup_finds_every_pin_and_nothing_else() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    let (pipeline, _controls) = build(&plan, &buffers, true);
+    let (pipeline, _controls) = build(&plan, &buffers);
     let ports = &front(&pipeline).ports;
     let lookup = PinLookup::new(ports);
     for (path, port) in ports.iter().enumerate() {

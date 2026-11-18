@@ -76,12 +76,10 @@ fn reference_sample(w: &mut Worker, input: f32, wet: f32) -> f32 {
                 w.shared.missed.fetch_add(1, Ordering::Relaxed);
                 w.pending = Some(due);
                 let at = metrics::now(false).unwrap_or(0);
-                let event = EventRecord {
+                w.shared.endpoint_outliers.missed(EventRecord {
                     sequence: due,
                     at_ns: at,
-                };
-                w.shared.endpoint_outliers.missed(event);
-                w.shared.capture.missed(event);
+                });
             }
         } else if w.pending == Some(due) && w.choose(due) {
             w.pending = None;

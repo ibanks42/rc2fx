@@ -42,7 +42,7 @@ restarting the mixer, and to read meters and timing.
 
 Outputs are the USB sends and the mixer's hardware outputs, headphones and
 monitors. They are processed in place in the callback, after the mixer's own
-processing and before the callback returns (`pipeline::DIRECT_OUTPUT`).
+processing and before the callback returns, in the same frame.
 
 ## Sources
 

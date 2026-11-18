@@ -21,12 +21,6 @@ use std::{
 };
 
 pub const FRAMES: usize = 112;
-/// Hardware outputs (heard only on the mixer's own outputs) are processed in
-/// the callback, in place, after the mixer's own processing returns, rather
-/// than by the helper one frame later. Every hardware output does, meter-only
-/// ones included: ownership is fixed at construction, not chosen per mode or
-/// history. Sources stay with the helper.
-pub const DIRECT_OUTPUT: bool = true;
 /// Unprocessed paths only feed level meters; fetch and meter their buffers on
 /// one callback in this many. Every callback still counts their frames: the
 /// helper's paths each frame, callback-owned ones at their next visit.
@@ -211,15 +205,16 @@ impl Registry {
     }
 }
 
-/// Which side processes a path.
+/// Which side processes a path. Ownership follows the direction and is fixed
+/// at construction, not chosen per mode or history.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Owner {
-    /// In the callback, before it returns: outputs, which jackd hands on as
-    /// soon as the graph completes.
+    /// In the callback, in place, after the mixer's own processing returns and
+    /// before the callback does: every output, USB sends and hardware outputs
+    /// alike, meter-only ones included.
     Callback,
-    /// By the helper, from a copy the callback makes: sources, and outputs
-    /// heard only on the mixer's own hardware. Both reach the mixer one
-    /// frame later, and the helper never touches a jackd buffer.
+    /// By the helper, from a copy the callback makes: sources, which reach the
+    /// mixer one frame later. The helper never touches a jackd buffer.
     Helper,
 }
 /// What the helper does with the frame the callback copied for a path.
@@ -236,8 +231,6 @@ enum Job {
     Meter,
     /// Process a copied source; the mixer reads the result next frame.
     Input,
-    /// Process a copied hardware output; the callback writes it next frame.
-    Output,
 }
 
 /// The callback's view of a path.
@@ -1254,22 +1247,6 @@ pub static LIVE_INPUT_BLOCKS: Line<AtomicU64> = Line(AtomicU64::new(0));
 pub static LIVE_OUTPUT_BLOCKS: Line<AtomicU64> = Line(AtomicU64::new(0));
 pub static LIVE_FAULTS: AtomicU64 = AtomicU64::new(0);
 pub static LIVE_SKIPPED_OUTPUTS: AtomicU64 = AtomicU64::new(0);
-/// Hardware outputs that got no result from their own DSP for this frame, so an
-/// untreated (unprocessed) block was handed on instead: `noFrame` when no copied
-/// slot was available (first frame after construction, an inactive frame, a
-/// gap), `rawFrame` when the copied slot was written back instead of processed
-/// audio (the helper was late, or the frame before failed).
-///
-/// These are fallback deliveries, not the DSP's error counter: a frame can be
-/// counted here with `dspFaults` unchanged, and a DSP error can happen in a frame
-/// whose delivery is counted here too. Whether such a frame is audible is NOT
-/// established. Outside a planned warm-up an increment is a qualification
-/// failure of that frame, not something to dismiss. `rawFrame` does not prove
-/// the slot held the actual captured mixer block: the first frame's slot is
-/// still zero-initialized (`captured` starts at 0), so startup can select an
-/// unwritten slot. Counted once per hardware-output frame without a result.
-pub static LIVE_OUTPUT_NO_FRAME: AtomicU64 = AtomicU64::new(0);
-pub static LIVE_OUTPUT_RAW_FRAME: AtomicU64 = AtomicU64::new(0);
 
 /// The audit's live view (see `LIVE_*`). Read-only, lock-free, no clocks.
 pub fn processing_counters() -> serde_json::Value {
@@ -1280,11 +1257,6 @@ pub fn processing_counters() -> serde_json::Value {
         "outputBlocks": read(&LIVE_OUTPUT_BLOCKS),
         "dspFaults": read(&LIVE_FAULTS),
         "skippedOutputs": read(&LIVE_SKIPPED_OUTPUTS),
-        "hardwareOutputsWithoutResult": {
-            "noCopiedFrame": read(&LIVE_OUTPUT_NO_FRAME),
-            "copiedFrameRaw": read(&LIVE_OUTPUT_RAW_FRAME),
-            "note": "frames whose own DSP result was missing: an untreated block was handed on. NOT the dspFaults error counter; audibility not established; outside planned warm-up an increment is a qualification failure; copiedFrameRaw may be a zero-initialized startup slot, not necessarily the captured mixer frame",
-        },
     })
 }
 
@@ -1814,9 +1786,8 @@ fn helper_loop<P: Pace>(shared: &Shared, pace: &P) {
         for job in handoff.jobs.iter_mut().filter(|job| **job == Job::Skipped) {
             *job = left_alone;
         }
-        // Sources first: the next callback reads them before it writes the
-        // hardware outputs at its end.
-        for wanted in [Job::Input, Job::Output, Job::Meter, Job::Count, Job::None] {
+        // Sources first: the next callback reads them.
+        for wanted in [Job::Input, Job::Meter, Job::Count, Job::None] {
             for (work, job) in handoff.work.iter_mut().zip(&handoff.jobs) {
                 if let Some(work) = work
                     && *job == wanted
@@ -1972,7 +1943,7 @@ impl Work {
                 reader.record(frames, meter, latency);
             }
             // A mode change under a copied frame leaves it unprocessed.
-            Job::Input | Job::Output if !processed => {
+            Job::Input if !processed => {
                 let meter = native_meter(view(&self.raw[slot], frames, stereo));
                 reader.record(frames, meter, latency);
             }
@@ -1986,26 +1957,6 @@ impl Work {
                         counters.input_blocks += 1;
                         LIVE_INPUT_BLOCKS.fetch_add(1, Ordering::Relaxed);
                         // Processed sources reach the mixer one frame later.
-                        reader.record(frames, meter, latency + FRAMES as u32);
-                    }
-                    Err(_) => {
-                        applied = false;
-                        counters.faults += 1;
-                        LIVE_FAULTS.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-            Job::Output => {
-                // SAFETY: as above.
-                let (raw, processed) =
-                    (&self.raw[slot], unsafe { &mut *self.processed[slot].get() });
-                copy(view(raw, frames, stereo), processed, frames);
-                match reader.output(split(processed, frames, stereo)) {
-                    Ok(meter) => {
-                        self.done[slot] = true;
-                        counters.output_blocks += 1;
-                        LIVE_OUTPUT_BLOCKS.fetch_add(1, Ordering::Relaxed);
-                        // Hardware outputs are written one frame later.
                         reader.record(frames, meter, latency + FRAMES as u32);
                     }
                     Err(_) => {
@@ -2114,9 +2065,7 @@ struct Ended {
     frames: usize,
     native_success: bool,
     slot: usize,
-    previous: usize,
     seq: u64,
-    previous_ready: bool,
     /// `Front::skipped_frames` before this cycle, and after it.
     owed: u64,
     credited: u64,
@@ -2213,34 +2162,11 @@ unsafe fn end_port(
             if usable {
                 let [left, right] = unsafe { port.slices(cycle.frames) };
                 if work.processed_mode {
+                    // Only sources are helper-owned (see Pipeline::new).
+                    debug_assert_eq!(port.direction, Direction::Input);
                     copy([&*left, &*right], &mut work.raw[cycle.slot], cycle.frames);
                     work.captured[cycle.slot] = cycle.seq;
-                    if port.direction == Direction::Input {
-                        job = Job::Input;
-                    } else {
-                        job = Job::Output;
-                        // Write the previous frame: processed if the
-                        // helper finished it, else as the mixer made it.
-                        let source = if cycle.previous_ready && work.done[cycle.previous] {
-                            // SAFETY: the helper is idle.
-                            Some(unsafe { &*work.processed[cycle.previous].get() })
-                        } else if work.captured[cycle.previous] == cycle.seq - 1 {
-                            // An unprocessed slot taken from the copy:
-                            // counted as a fallback, not as a DSP error
-                            // (see LIVE_OUTPUT_RAW_FRAME).
-                            LIVE_OUTPUT_RAW_FRAME.fetch_add(1, Ordering::Relaxed);
-                            Some(&work.raw[cycle.previous])
-                        } else {
-                            LIVE_OUTPUT_NO_FRAME.fetch_add(1, Ordering::Relaxed);
-                            None
-                        };
-                        if let Some(source) = source {
-                            left.copy_from_slice(&source[0][..cycle.frames]);
-                            if !right.is_empty() {
-                                right.copy_from_slice(&source[1][..cycle.frames]);
-                            }
-                        }
-                    }
+                    job = Job::Input;
                 } else {
                     copy([&*left, &*right], &mut work.raw[cycle.slot], cycle.frames);
                     job = Job::Meter;
@@ -2315,17 +2241,6 @@ impl Pipeline {
         registry: &Registry,
         client: usize,
     ) -> Result<(Self, Vec<parameters::Control>), String> {
-        Self::with_ownership(plan, registry, client, DIRECT_OUTPUT)
-    }
-    /// `direct_output`: every hardware output is callback-owned (see
-    /// DIRECT_OUTPUT), fixed here rather than per mode. Tests also build the
-    /// helper-owned arrangement.
-    fn with_ownership(
-        plan: &Plan,
-        registry: &Registry,
-        client: usize,
-        direct_output: bool,
-    ) -> Result<(Self, Vec<parameters::Control>), String> {
         let mut ports = Vec::with_capacity(plan.paths.len());
         let mut work = Vec::with_capacity(plan.paths.len());
         let mut controls = Vec::with_capacity(plan.paths.len());
@@ -2376,7 +2291,6 @@ impl Pipeline {
             controls.push(control);
             let owner = match target.direction {
                 Direction::Input => Owner::Helper,
-                Direction::Output if target.hardware && !direct_output => Owner::Helper,
                 Direction::Output => Owner::Callback,
             };
             let pass = reader.pass_fade();
@@ -2666,7 +2580,6 @@ impl Pipeline {
             0
         };
         let slot = (front.seq & 1) as usize;
-        let previous = slot ^ 1;
         // SAFETY: the helper is idle (see `begin`), so the callback owns the
         // handoff until it is queued below.
         let mut handoff = front.idle.then(|| unsafe { &mut *self.handoff.get() });
@@ -2683,9 +2596,7 @@ impl Pipeline {
             frames,
             native_success,
             slot,
-            previous,
             seq: front.seq,
-            previous_ready: front.previous_ready,
             owed,
             credited,
             gauged: front.gauged,
@@ -3049,8 +2960,7 @@ mod tests {
                 2
             ));
         }
-        // These tests describe helper-owned sources; the direct ones say so.
-        Pipeline::with_ownership(plan, &registry, 1, false).unwrap()
+        Pipeline::new(plan, &registry, 1).unwrap()
     }
     fn block(pipeline: &mut Pipeline, buffers: &Buffers, native_success: bool) {
         unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
@@ -3293,9 +3203,8 @@ mod tests {
                 [&mut expected, &mut []],
             )
             .unwrap();
-        // The mixer hears a processed source one frame later, and its
-        // hardware output is written one frame after that.
-        block(&mut pipeline, &buffers, true);
+        // The mixer hears a processed source one frame later; its hardware
+        // output is processed in the same callback.
         block(&mut pipeline, &buffers, true);
         block(&mut pipeline, &buffers, true);
         assert!(expected.iter().any(|value| value.abs() > 1e-6));
@@ -3333,28 +3242,28 @@ mod tests {
         controls[1].publish(&plan.paths[1].target, 3).unwrap();
     }
 
+    /// A frame where the mixer asked for only one of two output channels is
+    /// neither processed nor rewritten, and is not a fault.
     #[test]
     fn a_stereo_output_never_processes_only_one_observed_channel() {
-        for hardware in [false, true] {
-            let mut plan = plan_with_source_and_output(false);
-            plan.paths[1].hardware = hardware;
-            let buffers = Buffers::new();
-            let (pipeline, mut controls) = pipeline(&plan, &buffers);
-            controls[1].publish(&plan.paths[1].target, 2).unwrap();
-            unsafe {
-                (*buffers.output[0].get()).fill(0.7);
-                (*buffers.output[1].get()).fill(-0.4);
-                pipeline.begin(FRAMES, test_buffer, 0);
-            }
-            let left = buffers.output(0);
-            pipeline.buffer(left as usize, FRAMES, left.cast());
-            unsafe { pipeline.end(FRAMES, true) };
-            pipeline.settle();
-            assert_eq!(controls[1].status().unwrap().applied, 0);
-            assert_eq!(pipeline.counters().skipped_outputs, 1);
-            assert_eq!(unsafe { &*buffers.output[0].get() }, &[0.7; FRAMES]);
-            assert_eq!(unsafe { &*buffers.output[1].get() }, &[-0.4; FRAMES]);
+        let plan = plan_with_source_and_output(false);
+        let buffers = Buffers::new();
+        let (pipeline, mut controls) = pipeline(&plan, &buffers);
+        controls[1].publish(&plan.paths[1].target, 2).unwrap();
+        unsafe {
+            (*buffers.output[0].get()).fill(0.7);
+            (*buffers.output[1].get()).fill(-0.4);
+            pipeline.begin(FRAMES, test_buffer, 0);
         }
+        let left = buffers.output(0);
+        pipeline.buffer(left as usize, FRAMES, left.cast());
+        unsafe { pipeline.end(FRAMES, true) };
+        pipeline.settle();
+        assert_eq!(controls[1].status().unwrap().applied, 0);
+        assert_eq!(pipeline.counters().skipped_outputs, 1);
+        assert_eq!(pipeline.counters().faults, 0);
+        assert_eq!(unsafe { &*buffers.output[0].get() }, &[0.7; FRAMES]);
+        assert_eq!(unsafe { &*buffers.output[1].get() }, &[-0.4; FRAMES]);
     }
 
     #[test]
@@ -3412,7 +3321,7 @@ mod tests {
                 1
             ));
         }
-        Pipeline::with_ownership(plan, &registry, 1, false).unwrap()
+        Pipeline::new(plan, &registry, 1).unwrap()
     }
     /// One callback in which the mixer requests the source channels in
     /// `order` (repeats allowed) and copies what each request returned.
@@ -3451,10 +3360,10 @@ mod tests {
         unsafe { pipeline.end(FRAMES, native_success) };
     }
 
-    /// Helper-owned stages each add one frame: the source's, then the hardware
-    /// output's, written by the helper one frame after the mixer made it.
+    /// The helper-owned source adds one frame; the callback-owned hardware
+    /// output, processed in place before the callback returns, adds none.
     #[test]
-    fn helper_owned_source_and_output_each_add_a_frame() {
+    fn only_the_helper_owned_source_adds_a_frame() {
         let plan = plan_with_source_and_output(false);
         let buffers = Buffers::new();
         let mut registry = Registry::default();
@@ -3472,8 +3381,7 @@ mod tests {
                 2
             ));
         }
-        let (mut pipeline, _controls) =
-            Pipeline::with_ownership(&plan, &registry, 1, false).unwrap();
+        let (mut pipeline, _controls) = Pipeline::new(&plan, &registry, 1).unwrap();
         // Source 0.25 x 0.5, mixer x 2, output x 0.5: 0.125 once both
         // stages have been applied.
         let mut first = None;
@@ -3484,7 +3392,7 @@ mod tests {
                 first = Some(frame);
             }
         }
-        assert_eq!(first, Some(2));
+        assert_eq!(first, Some(1));
         assert_eq!(pipeline.counters().faults, 0);
     }
 
@@ -4096,7 +4004,7 @@ mod tests {
                 2
             ));
         }
-        let (pipeline, _controls) = Pipeline::with_ownership(&plan, &registry, 1, false).unwrap();
+        let (pipeline, _controls) = Pipeline::new(&plan, &registry, 1).unwrap();
         let first_pin = [buffers.input(0), buffers.input(1), buffers.output(0)];
         let mut metered = [const { Vec::new() }; 3];
         for cycle in 0..2 * METER_STRIDE {

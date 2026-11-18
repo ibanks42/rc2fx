@@ -73,7 +73,7 @@ fn build(plan: &Plan, buffers: &Buffers) -> (Pipeline, Vec<parameters::Control>)
     assert!(registry.register(1, buffers.input(0) as usize, b"in_1", 1));
     assert!(registry.register(1, buffers.input(1) as usize, b"in_2", 1));
     assert!(registry.register(1, buffers.output(0) as usize, b"in_3", 1));
-    Pipeline::with_ownership(plan, &registry, 1, false).unwrap()
+    Pipeline::new(plan, &registry, 1).unwrap()
 }
 /// A different block for every frame and channel, so a stale block or a stale
 /// pointer cannot pass for the current one.
