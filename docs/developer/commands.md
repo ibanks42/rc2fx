@@ -15,8 +15,9 @@ recipes and `./xtask help` lists the underlying commands.
 | `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run a development build / build a release build of the app with the optional embedded payload. |
 | `just app-embedded-release` | Cross-build the mixer runtime, then run the release build with the optional embedded payload. |
 | `just mixer-build` | Cross-build the mixer runtime into `target/mixer` |
-| `just test` | Go formatting, `go vet`, and tests for the desktop app (the transport also with the `mockmixer` tag), then the Rust workspace tests and Clippy with warnings as errors, also for rc2fxd (`native-pipeline`) and the `eq-fma` and `bench-kernels` features |
-| `just test-mixer` | Native library tests and Clippy, a benchmark build check (Linux), plus the launcher, recorder, screen-module, and xrun flight recorder tests (Linux or macOS) |
+| `just test` | Go formatting, `go vet`, and tests for the desktop app (the transport also with the `mockmixer` tag), then, on Linux, `just test-rust` |
+| `just test-rust` | The Rust workspace tests and Clippy with warnings as errors, also for the `eq-fma` and `bench-kernels` features (Linux only, like every Rust crate here) |
+| `just test-mixer` | Native library tests and Clippy, a benchmark build check, plus the launcher, recorder, screen-module, and xrun flight recorder tests (Linux) |
 | `just package` | Build a release package for this computer into `target/package` |
 | `just package-check` | Build the AppImage from the working tree in the release container (AlmaLinux 8, glibc 2.28), then check it in clean containers of several distributions (x86-64 Linux with Podman or Docker) |
 | `just docs` / `just docs-serve` | Build / serve this documentation site |

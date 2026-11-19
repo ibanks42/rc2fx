@@ -59,14 +59,14 @@ that keep it in step with the mixer's Rust.
 | `experiments/` | Unfinished work outside the build (currently the on-screen panel) |
 | `docs/` | This documentation |
 
-`rc2fx-native` and `rc2fx-bench` are separate Cargo workspaces. They build
-only for Linux and are cross-compiled for the mixer. Only the mixer side is
-Rust; the desktop app is the Go module in `desktop/`.
+`rc2fx-native` and `rc2fx-bench` are separate Cargo workspaces and are
+cross-compiled for the mixer. Every Rust crate builds for Linux only. Only the
+mixer side is Rust; the desktop app is the Go module in `desktop/`.
 
 ## Pages in this guide
 
 - [Building from source](building.md): tools, builds, and tests on Windows,
-  Linux, or macOS.
+  Linux, or macOS (the Rust tests on Linux only).
 - [Linux setup](linux.md): package lists for Debian/Ubuntu, Fedora, and Arch.
 - [Working on a mixer](mixer-workflow.md): enabling SSH from the app and
   running a build on a mixer over SSH without reflashing.

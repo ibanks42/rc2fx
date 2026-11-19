@@ -13,7 +13,6 @@ struct Published {
     presets: Vec<PresetSummary>,
     hub: Hub,
     history: History,
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     native_process: Option<crate::diagnostic_history::NativeProcess>,
 }
 impl Published {
@@ -35,7 +34,6 @@ impl Published {
     }
 }
 impl Facade {
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn native_process(&self, process: crate::diagnostic_history::NativeProcess) {
         self.0
             .lock()
@@ -58,7 +56,6 @@ impl Facade {
             .presets
             .clone()
     }
-    #[cfg(all(target_os = "linux", any(test, feature = "native-pipeline")))]
     pub(crate) fn has_clients(&self) -> bool {
         self.0
             .lock()
@@ -82,7 +79,6 @@ impl Facade {
         front.state = Some(state);
         front.publish_event(event);
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     /// `shown` goes to subscribers (baselines applied); `raw` is what the
     /// diagnostics export keeps, so an exported report is never relative to a
     /// reset the analysis did not ask for.
@@ -97,7 +93,6 @@ impl Facade {
         front.history.native_meter(raw, native);
         front.publish_event(event);
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn rejection(
         &self,
         generation: u64,
@@ -134,7 +129,6 @@ impl Facade {
             // Bounded /proc I/O is outside the facade lock and every callback.
             let resources = process_resources();
             let usb = crate::usb::observe();
-            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             let native_process = {
                 self.0
                     .lock()
@@ -142,15 +136,11 @@ impl Facade {
                     .native_process
                     .clone()
             };
-            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             let native_resources = native_process.map(|process| process.resources());
             let mut front = self.0.lock().expect("control facade poisoned");
-            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             front
                 .history
                 .finish_sample_with_native(ticket, resources, usb, native_resources);
-            #[cfg(not(all(feature = "native-pipeline", target_os = "linux")))]
-            front.history.finish_sample(ticket, resources, usb);
             let event = front.event(EventKind::Usb, &usb);
             front.publish_event(event);
         }
@@ -175,8 +165,7 @@ impl Facade {
     }
 }
 
-// The store needs Unix directory durability and file locking.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;

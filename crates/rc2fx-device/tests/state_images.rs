@@ -1,4 +1,3 @@
-#![cfg(unix)]
 use rc2fx_core::Config;
 use rc2fx_device::store::Store;
 

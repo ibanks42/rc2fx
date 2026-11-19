@@ -7,7 +7,6 @@
 //! The in-place update verifier must accept every one of them, from the
 //! repository's own `root.json`, exactly as it accepts the tough-signed
 //! metadata of the other tests.
-#![cfg(target_os = "linux")]
 
 use rc2fx_device::mixer_update::install::StoredState;
 use rc2fx_device::mixer_update::verify::{MetadataInput, ReleaseRequest, verify};

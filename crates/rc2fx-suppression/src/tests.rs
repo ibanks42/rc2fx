@@ -107,7 +107,6 @@ fn geometry_and_rejection() {
             "{options:?}"
         );
     }
-    #[cfg(target_os = "linux")]
     assert_eq!(scheduling::validate(crate::PRODUCTION_WORKER), Ok(()));
 }
 #[test]
@@ -318,7 +317,6 @@ fn recovery_invalidates_model_history_and_then_recovers() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn queued_time_is_included_in_turnaround_and_missing_stamps_are_errors() {
     let (mut input, consumer) = queue::channel();
@@ -457,7 +455,7 @@ fn held_terminal_job_timeout_late_failure_and_queued_drain() {
             assert_eq!(terminal.drained, !fail);
             assert_eq!(terminal.snapshot.completed_frames, if fail { 0 } else { 3 });
             assert_eq!(terminal.pending_input_frames, if fail { 2 } else { 0 });
-            if !fail && cfg!(unix) {
+            if !fail {
                 assert!(terminal.snapshot.wall.overruns >= 1);
                 assert!(terminal.snapshot.allowance_overruns >= 1);
             }

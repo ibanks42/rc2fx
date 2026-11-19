@@ -1,9 +1,9 @@
 name: Check
 
-# The mixer's Rust workspace is formatted, linted with warnings as errors and
-# tested on Linux, in the AlmaLinux 8 build image releases build the AppImage
-# in, and so are rc2fxd (the native-pipeline feature) and the native library
-# (its own workspace); the benchmark (another) and the eq-fma and
+# The mixer's Rust crates build for Linux only. The workspace, rc2fxd
+# included, is formatted, linted with warnings as errors, and tested on Linux, in the
+# AlmaLinux 8 build image releases build the AppImage in, and so is the native
+# library (its own workspace); the benchmark (another) and the eq-fma and
 # bench-kernels features are compiled. The Go desktop app and the Go xtask are vetted and tested on
 # every platform the app ships for, and the UI is built there against the
 # gpuikit download; the desktop's cgo code is also built in that AlmaLinux
@@ -94,13 +94,6 @@ jobs:
       - name: Test the workspace
         # Linux is what the mixer runs, so the whole suite runs here.
         run: cargo test --config .github/cargo-ci.toml --locked --workspace
-      # rc2fxd and the native backend exist only with native-pipeline, which
-      # nothing in the workspace turns on (the mixer build passes it). The
-      # default build keeps its own cfg arms, so both are checked.
-      - name: Lint and test rc2fxd
-        run: |
-          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-device --features native-pipeline --all-targets -- -D warnings
-          cargo test --config .github/cargo-ci.toml --locked -p rc2fx-device --features native-pipeline
       # Features only rc2fx-bench turns on, and the eq-fma arithmetic, which
       # no build turns on yet.
       - name: Lint the eq-fma and bench-kernels features

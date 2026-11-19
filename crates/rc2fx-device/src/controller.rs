@@ -1,12 +1,4 @@
 //! State owned exclusively by the coordinator. Audio never borrows it.
-// Engine observations, and the engine age they carry, come only from the
-// native engine. A build without it (the store-only coordinator that tests
-// and non-Linux hosts compile) has no caller for them.
-#![cfg_attr(
-    not(all(feature = "native-pipeline", target_os = "linux")),
-    allow(dead_code)
-)]
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 use crate::coordinator::Request;
 use crate::{
     coordinator::{Error, RuntimeDescriptor},
@@ -56,10 +48,6 @@ enum RunningAnchor {
 /// covers noise suppression switched on or off, its lookahead, and the effect
 /// order around it), plus a changed kind, channel count or target set. The
 /// app predicts the same thing before it asks.
-#[cfg_attr(
-    not(all(feature = "native-pipeline", target_os = "linux")),
-    allow(dead_code)
-)]
 pub(crate) fn live_needs_save(
     running: &[rc2fx_core::Target],
     candidate: &[rc2fx_core::Target],
@@ -94,7 +82,6 @@ pub(crate) fn live_needs_save(
 }
 
 impl Controller {
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn attach_native(
         &mut self,
         runtime: &mut crate::native_backend::Runtime,
@@ -124,7 +111,6 @@ impl Controller {
         self.saved();
         Ok(())
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn native_progress(&mut self, observation: crate::native_backend::Observation) {
         if let Some(fault) = self.durability_fault().map(str::to_owned) {
             self.unavailable(&format!("Durable save uncertain: {fault}"));
@@ -197,12 +183,10 @@ impl Controller {
         }
     }
     /// Whether anyone is subscribed to live events.
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn has_clients(&self) -> bool {
         self.front.has_clients()
     }
     /// `result` says whether the save published anything to the audio.
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     fn native_saved(&mut self, result: Result<bool, Error>) -> Result<DeviceState, Error> {
         if let Some(fault) = self.durability_fault().map(str::to_owned) {
             self.unavailable(&format!("Durable save uncertain: {fault}"));
@@ -224,7 +208,6 @@ impl Controller {
         Ok(self.saved())
     }
     /// The engine runs, advancing, with everything it was given applied.
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     fn settled(&self) -> bool {
         self.engine.status == EnginePhase::Running
             && self.engine.audio_advancing
@@ -237,7 +220,6 @@ impl Controller {
     /// the engine stays Running. The app saves them once edits stop, or the
     /// daemon does (`keep_live`). Answers with the saved revision the edit was
     /// based on.
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn live_native(
         &mut self,
         update: ConfigUpdate,
@@ -276,7 +258,6 @@ impl Controller {
     /// saved settings go back on the audio instead, so the audio and the
     /// store agree. A library that is not ready otherwise leaves the edits
     /// playing for the next try. Ok(None) when there was nothing to keep.
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn keep_live(
         &mut self,
         runtime: &mut crate::native_backend::Runtime,
@@ -308,11 +289,10 @@ impl Controller {
         }
     }
     /// Makes the store's next commit fail at `phase`, for tests.
-    #[cfg(all(test, feature = "native-pipeline", target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn fail_next_commit(&mut self, phase: crate::persistence::CommitPhase) {
         self.store.fail_next_commit(phase);
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn native_transition(
         &mut self,
         request: Request,
@@ -406,7 +386,6 @@ impl Controller {
         }
         result
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn apply_native(
         &mut self,
         update: ConfigUpdate,
@@ -430,7 +409,6 @@ impl Controller {
         }
         result
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn apply_native_preset(
         &mut self,
         id: &str,
@@ -448,7 +426,6 @@ impl Controller {
         }
         result
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn record_rejection(
         &self,
         operation: &str,

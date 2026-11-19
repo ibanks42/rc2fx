@@ -21,7 +21,6 @@ const SETTLE_TIME: Duration = Duration::from_secs(2);
 struct FileIdentity {
     size: u64,
     modified: SystemTime,
-    #[cfg(unix)]
     unix: (u64, u64, i64, i64),
 }
 fn file_identity(path: &Path) -> Option<FileIdentity> {
@@ -29,12 +28,10 @@ fn file_identity(path: &Path) -> Option<FileIdentity> {
     if !metadata.is_file() {
         return None;
     }
-    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     Some(FileIdentity {
         size: metadata.len(),
         modified: metadata.modified().ok()?,
-        #[cfg(unix)]
         unix: (
             metadata.dev(),
             metadata.ino(),
@@ -299,7 +296,6 @@ mod tests {
         FileIdentity {
             size,
             modified: SystemTime::UNIX_EPOCH,
-            #[cfg(unix)]
             unix: (1, 2, 3, 4),
         }
     }

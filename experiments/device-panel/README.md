@@ -48,10 +48,11 @@ These commands do not access the mixer:
 bash experiments/device-panel/build.sh
 bash experiments/device-panel/check.sh
 CC=clang SANITIZE=1 bash experiments/device-panel/check.sh
-cargo test --locked -p rc2fx-device --features native-pipeline ui_control --lib
+cargo test --locked -p rc2fx-device ui_control --lib
 ```
 
-They need Zig and the cached `.deps/stock-sysroot` headers. The build writes
+They need Zig and the cached `.deps/stock-sysroot` headers, and the Rust
+tests need Linux, which every Rust crate here builds for. The build writes
 to `target/device-ui/`: the AArch64 `librc2fx_ui.so`, the read-only
 `rc2fx-ui-status` tool, the launcher script, and their hashes.
 

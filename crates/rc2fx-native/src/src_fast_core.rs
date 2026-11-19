@@ -1435,10 +1435,7 @@ mod tests {
     }
 
     /// Buffers that end, or start, against memory that faults when touched.
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     mod guarded {
         use super::*;
         use std::ffi::{c_int, c_void};

@@ -457,7 +457,6 @@ fn toggle(controller: &mut Controller, runtime: &mut Runtime, enabled: bool) {
         .unwrap();
 }
 
-#[cfg(feature = "native-pipeline")]
 #[tokio::test]
 async fn show_removal_selection_is_committed_by_the_coordinator_handle() {
     use crate::{
@@ -1500,7 +1499,6 @@ fn connecting_refuses_a_restore_that_would_rebuild_processing() {
 /// The controller's loop with the real event hub, USB session and API. The
 /// tests above pass a literal for "someone is watching"; these let the
 /// subscription decide.
-#[cfg(feature = "native-pipeline")]
 mod coordinator_loop {
     use super::*;
     use crate::{

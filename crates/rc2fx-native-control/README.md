@@ -38,11 +38,11 @@ no periodic timer.
 
 ## Presets
 
-The device's `native-pipeline` profile uses the same messages behind its
-control API for presets: it prepares every changed active target, saves once,
-and then commits each path on its own. A missing commit reply stays pending and
-is retried without saving again. A preset change is therefore applied path by
-path, and the paths can switch at different times.
+rc2fxd uses the same messages behind its control API for presets: it
+prepares every changed active target, saves once, and then commits each path
+on its own. A missing commit reply stays pending and is retried without saving
+again. A preset change is therefore applied path by path, and the paths can
+switch at different times.
 
 ## Status and telemetry
 

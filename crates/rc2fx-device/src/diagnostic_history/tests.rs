@@ -1,10 +1,8 @@
 use super::*;
 use rc2fx_core::{Config, EngineMode, EnginePhase, RoutingPhase, SelectionPhase};
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 use rc2fx_core::{MeterType, Timing};
 use serde_json::Value;
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn native_payload(callbacks: u64) -> (Meter, Vec<rc2fx_native_control::ContextStatus>) {
     use rc2fx_native_control::{
         AudioMeter, CallbackTiming, ContextStatus, PathMode, TargetStatus, WorkerMeter,
@@ -79,7 +77,6 @@ fn native_payload(callbacks: u64) -> (Meter, Vec<rc2fx_native_control::ContextSt
     )
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn native_shared_xruns_do_not_flood_per_target_fault_history() {
     let mut history = History::new(Instant::now());
@@ -116,7 +113,6 @@ fn native_shared_xruns_do_not_flood_per_target_fault_history() {
     assert_eq!(targets[0]["counters"]["id"], "mic-1");
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn native_fault_baselines_follow_resets_and_generation_not_settings_revision() {
     let start = Instant::now();
@@ -150,7 +146,6 @@ fn native_fault_baselines_follow_resets_and_generation_not_settings_revision() {
     assert_eq!(faults[2]["generation"], 10);
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn native_fault_timing_survives_sample_eviction_without_duplicate_snapshots() {
     let start = Instant::now();
@@ -178,7 +173,6 @@ fn native_fault_timing_survives_sample_eviction_without_duplicate_snapshots() {
     assert!(history.event_bytes <= MAX_EVENT_HISTORY_BYTES);
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn full_native_catalog_retains_timing_with_bounded_history() {
     let start = Instant::now();
@@ -233,7 +227,6 @@ fn full_native_catalog_retains_timing_with_bounded_history() {
 /// The largest state the controller admits (a full catalog, five selected
 /// paths and maximum-length messages) with saturated timings on every path
 /// still exports as a fresh sample that a strict client can parse.
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn maximum_admitted_paths_and_full_catalog_fit_the_export_and_strict_client_parser() {
     let start = Instant::now();
@@ -304,7 +297,6 @@ fn maximum_admitted_paths_and_full_catalog_fit_the_export_and_strict_client_pars
     assert!(exported["report"]["state"].get("config").is_none());
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn native_pending_encodes_only_latest_window_and_keeps_fault_detection_at_poll_rate() {
     let start = Instant::now();
@@ -347,7 +339,6 @@ fn native_pending_encodes_only_latest_window_and_keeps_fault_detection_at_poll_r
     );
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn lazy_native_epoch_changes_and_oversize_records_never_export_stale_telemetry() {
     let start = Instant::now();
@@ -386,7 +377,6 @@ fn lazy_native_epoch_changes_and_oversize_records_never_export_stale_telemetry()
     assert_eq!(history.retention.rejected_records, 1);
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn native_exports_preserve_worker_and_callback_clocks_without_main_callback_fabrication() {
     use rc2fx_native_control::{CallbackTiming, ContextStatus, TargetStatus, Timing, WorkerMeter};
@@ -523,7 +513,6 @@ fn controller_and_native_process_resources_are_separate_and_pid_reuse_is_rejecte
         observation["nativeMixerResources"]["message"],
         "native accounting"
     );
-    #[cfg(target_os = "linux")]
     {
         let process = NativeProcess::capture(std::process::id());
         assert!(matches!(
@@ -609,7 +598,6 @@ fn state(generation: u64, revision: u64) -> DeviceState {
         },
     }
 }
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn timing() -> Timing {
     Timing {
         calls: 10,
@@ -620,7 +608,6 @@ fn timing() -> Timing {
         histogram: [0, 0, 10, 0, 0, 0, 0, 0],
     }
 }
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn meter(generation: u64, revision: u64, callbacks: u64) -> Meter {
     Meter {
         message_type: MeterType::Meter,
@@ -664,7 +651,6 @@ fn meter(generation: u64, revision: u64, callbacks: u64) -> Meter {
     }
 }
 /// One native context holding every target of `meter`, with no events.
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn contexts(meter: &Meter) -> Vec<rc2fx_native_control::ContextStatus> {
     use rc2fx_native_control::{ContextStatus, PathMode, TargetStatus};
     vec![ContextStatus {
@@ -712,7 +698,6 @@ fn sample(history: &mut History, now: Instant) {
         },
     );
 }
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 fn kinds(value: &Value) -> Vec<&str> {
     value["events"]
         .as_array()
@@ -722,7 +707,6 @@ fn kinds(value: &Value) -> Vec<&str> {
         .collect()
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn sample_consumes_only_fresh_meter_and_does_not_catch_up_or_relabel() {
     let start = Instant::now();
@@ -757,7 +741,6 @@ fn sample_consumes_only_fresh_meter_and_does_not_catch_up_or_relabel() {
     assert_eq!(report["report"]["state"]["engine"]["generation"], 8);
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn idle_bound_path_does_not_make_advancing_windows_duplicates() {
     let start = Instant::now();
@@ -789,7 +772,6 @@ fn idle_bound_path_does_not_make_advancing_windows_duplicates() {
     assert_eq!(value["report"]["retention"]["duplicateMeters"], 1);
 }
 
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 #[test]
 fn fault_deltas_preserve_baselines_across_effects_revision_and_reset_on_replacement() {
     let mut history = History::default();
@@ -903,7 +885,6 @@ fn process_parser_uses_final_comm_delimiter_and_rejects_invalid_units_numbers_an
     assert!(parse_process(input(&fields).as_bytes(), 123, 100, 4096).is_err());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn real_linux_process_resource_probe_is_measured_with_current_identity() {
     match process_resources() {
@@ -1111,7 +1092,6 @@ fn the_stat_start_time_converts_onto_the_event_clock() {
     assert_eq!(start.at_ns, 9_870_000_000);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn an_unreadable_process_stat_leaves_no_process_start() {
     let process = NativeProcess::capture(u32::MAX);

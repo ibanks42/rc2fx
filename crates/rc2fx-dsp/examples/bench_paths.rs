@@ -1,6 +1,5 @@
 //! DSP-only saved-path benchmark. No JACK, worker, routing or settings writes.
 //! Suppression is explicitly removed to isolate our callback-local DSP cost.
-#[cfg(target_os = "linux")]
 fn main() {
     use rc2fx_core::Config;
     use rc2fx_dsp::{Dsp, Prepared};
@@ -73,8 +72,4 @@ fn main() {
             serde_json::json!({"target":id,"channels":target.channels,"blocksPerRound":blocks,"framesPerBlock":FRAMES,"suppressionRemoved":suppression_removed,"fingerprint":format!("{fingerprint:016x}"),"rounds":rounds})
         );
     }
-}
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    panic!("Linux-only DSP timing benchmark");
 }

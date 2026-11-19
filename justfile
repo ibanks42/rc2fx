@@ -96,35 +96,36 @@ mixer-enable:
 mixer-disable:
     {{ xtask }} mixer disable
 
-# Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and the Rust workspace
+# Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and, on Linux, the Rust workspace
 [unix]
 test: mixer-build
     cd desktop && test -z "$(gofmt -l $(go list -e -f '{{ "{{" }}.Dir{{ "}}" }}' ./...))"
     cd desktop && CGO_ENABLED=0 go vet $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')
     cd desktop && if [ -e third_party/gpuikit ]; then CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go test ./...; else go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$'); fi
     go -C desktop test -tags mockmixer ./transport/...
+    if [ "$(uname -s)" = Linux ]; then {{ just_executable() }} test-rust; else echo "Rust tests skipped: the Rust crates build for Linux only"; fi
+
+# Tests and lints of the Rust workspace, warnings as errors (the Rust crates build for Linux only)
+[linux]
+test-rust:
     cargo test --locked --workspace
     cargo clippy --locked --workspace --all-targets -- -D warnings
-    if [ "$(uname -s)" = Linux ]; then cargo test --locked -p rc2fx-device --features native-pipeline; fi
-    if [ "$(uname -s)" = Linux ]; then cargo clippy --locked -p rc2fx-device --features native-pipeline --all-targets -- -D warnings; fi
     cargo clippy --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
     cargo clippy --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
 
-# Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and the Rust workspace
+# Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked). The Rust crates build for Linux only.
 [windows]
 test: mixer-build
     $ui = '/app$|/app/uitest$|/cmd/rc2fx$'; $all = go -C desktop list ./...; $nocgo = $all | Where-Object { $_ -notmatch $ui }; $pkgs = if (Test-Path desktop/third_party/gpuikit) { $all } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/gpuikit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/gpuikit/lib).Path)" }; go -C desktop test $pkgs; if (-not $?) { exit 1 }
     go -C desktop test -tags mockmixer ./transport/...
-    cargo test --locked --workspace
-    cargo clippy --locked --workspace --all-targets -- -D warnings
 
-# Tests of the mixer side: the native library, launcher scripts and C modules (Linux or macOS, with python3 and cc)
+# Tests of the mixer side: the native library, launcher scripts and C modules (Linux, with python3 and cc)
 test-mixer:
     cargo fmt --all --manifest-path crates/rc2fx-native/Cargo.toml -- --check
     cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
     cargo test --locked --manifest-path crates/rc2fx-native/Cargo.toml
     cargo clippy --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets -- -D warnings
-    if [ "$(uname -s)" = Linux ]; then cargo check --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets; fi
+    cargo check --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets
     cargo build --locked --manifest-path crates/rc2fx-native/Cargo.toml
     for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done
     python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p 'test_*.py'

@@ -41,7 +41,6 @@ pub fn read(path: &Path, config: &Config, catalog: &[CatalogChannel<'_>]) -> Sto
     let result = (|| -> io::Result<_> {
         let mut options = OpenOptions::new();
         options.read(true);
-        #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
@@ -66,19 +65,12 @@ fn same_file(a: &Metadata, b: &Metadata) -> bool {
         && b.is_file()
         && a.len() == b.len()
         && matches!((a.modified(), b.modified()), (Ok(x), Ok(y)) if x == y);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        common
-            && a.dev() == b.dev()
-            && a.ino() == b.ino()
-            && a.ctime() == b.ctime()
-            && a.ctime_nsec() == b.ctime_nsec()
-    }
-    #[cfg(not(unix))]
-    {
-        common
-    }
+    use std::os::unix::fs::MetadataExt;
+    common
+        && a.dev() == b.dev()
+        && a.ino() == b.ino()
+        && a.ctime() == b.ctime()
+        && a.ctime_nsec() == b.ctime_nsec()
 }
 
 fn read_file(

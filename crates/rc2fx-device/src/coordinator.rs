@@ -30,7 +30,6 @@ const TICK: Duration = Duration::from_millis(20);
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 /// The shortest wait for a command, so a deadline that is already due costs
 /// one pass of the loop and never a spin.
-#[cfg(all(feature = "native-pipeline", target_os = "linux"))]
 const MIN_WAIT: Duration = Duration::from_millis(1);
 
 #[derive(Debug)]
@@ -117,11 +116,6 @@ enum Command {
 /// The control API's receiver never cancels this work; only the generation manager decides
 /// its durable outcome. A lost owner must not synthesize a successful save.
 #[derive(Debug)]
-// Only the native engine reads a request; without it every one is refused.
-#[cfg_attr(
-    not(all(feature = "native-pipeline", target_os = "linux")),
-    allow(dead_code)
-)]
 pub(crate) enum Request {
     Routing(RoutingRequest),
     Restart(EngineRestartRequest),
@@ -186,7 +180,7 @@ impl Handle {
         }
     }
     /// Whether anyone is subscribed to live events.
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn has_clients(&self) -> bool {
         self.0.front.has_clients()
     }
@@ -333,7 +327,6 @@ impl Drop for Completed {
 
 pub struct Coordinator {
     controller: Controller,
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     native: Option<crate::native_backend::Runtime>,
     commands: mpsc::Receiver<Command>,
     completed: watch::Sender<bool>,
@@ -344,7 +337,6 @@ pub struct Coordinator {
 impl Coordinator {
     /// The coordinator rc2fxd runs: the bounded commands, control Handle and
     /// event stream, connected to the native engine in the mixer process.
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub fn new_native(
         mut controller: Controller,
         mut runtime: crate::native_backend::Runtime,
@@ -367,7 +359,6 @@ impl Coordinator {
         handle.install(sender)?;
         let owner = Self {
             controller,
-            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             native: None,
             commands,
             completed: handle.0.completion.clone(),
@@ -384,7 +375,6 @@ impl Coordinator {
         // Live edits still playing are what the user has: they are saved
         // before the daemon stops. The native library outlives this daemon,
         // and the next start checks that it plays the saved settings.
-        #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
         if let Some(native) = &mut self.native
             && native.live_editing()
             && let Err(error) = self.controller.keep_live(native, true)
@@ -432,7 +422,6 @@ impl Coordinator {
     /// after every command, because a save makes the next read due now.
     /// Without an engine the loop keeps the fixed tick.
     pub(crate) fn turn(&mut self) -> Duration {
-        #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
         if let Some(native) = &mut self.native {
             let controller = &self.controller;
             if let Some(observation) = native.poll(|| controller.has_clients()) {
@@ -453,7 +442,6 @@ impl Coordinator {
             let taken = self.controller.front.sample_resources(now);
             self.next_sample = now + if taken { SAMPLE_INTERVAL } else { TICK };
         }
-        #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
         if let Some(native) = &self.native {
             return native
                 .next_poll()
@@ -465,7 +453,7 @@ impl Coordinator {
     }
 
     /// The native runtime, for tests that set its timing.
-    #[cfg(all(test, feature = "native-pipeline", target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn native_mut(&mut self) -> &mut crate::native_backend::Runtime {
         self.native.as_mut().expect("native coordinator")
     }
@@ -477,7 +465,6 @@ impl Coordinator {
             #[cfg(test)]
             Command::Panic => panic!("a test panicked the control loop"),
             Command::ResetDiagnostics(reply) => {
-                #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
                 if let Some(native) = &mut self.native {
                     native.clear_recent();
                 }
@@ -493,7 +480,6 @@ impl Coordinator {
                 let _ = reply.send(Ok(page));
             }
             Command::Apply(update, reply) => {
-                #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
                 if let Some(native) = &mut self.native {
                     let result = self.controller.apply_native(update, native);
                     let _ = reply.send(result);
@@ -502,7 +488,6 @@ impl Coordinator {
                 let _ = reply.send(self.controller.apply(update));
             }
             Command::Live(update, reply) => {
-                #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
                 if let Some(native) = &mut self.native {
                     let result = self.controller.live_native(update, native);
                     let _ = reply.send(result);
@@ -520,7 +505,6 @@ impl Coordinator {
                 let _ = reply.send(result);
             }
             Command::ApplyPreset(id, revision, reply) => {
-                #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
                 if let Some(native) = &mut self.native {
                     let result = self.controller.apply_native_preset(&id, revision, native);
                     let _ = reply.send(result);
@@ -536,7 +520,6 @@ impl Coordinator {
                 let _ = reply.send(result);
             }
             Command::Transition(request, reply) => {
-                #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
                 if let Some(native) = &mut self.native {
                     let result = self.controller.native_transition(request, native);
                     let _ = reply.send(result);
@@ -556,8 +539,7 @@ impl Coordinator {
     }
 }
 
-// The store needs Unix directory durability and file locking.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod loop_tests {
     use super::*;
     use crate::store::Store;

@@ -1337,7 +1337,7 @@ mod tests {
     /// The tiled kernel with its input and its output each ending at an
     /// inaccessible page, and again each beginning at one: no load or store
     /// leaves them, for whole groups and row tails.
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn tiled_matvec_stays_inside_its_slices() {
         use crate::glue::tests::{Fenced, Rng};
@@ -1498,7 +1498,7 @@ mod tests {
     /// inaccessible page, and again each beginning at one (`Fenced`): no
     /// load or store leaves them, for whole and short blocks of rows and
     /// with and without the 8-bin tail.
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn pointwise_onto_stays_inside_its_slices() {
         use crate::glue::tests::{Fenced, Rng};

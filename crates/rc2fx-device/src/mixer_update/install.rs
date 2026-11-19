@@ -804,7 +804,6 @@ pub fn clear_last(paths: &Paths) -> io::Result<()> {
 }
 
 /// Free bytes on the filesystem that holds `path`, when it can be read.
-#[cfg(target_os = "linux")]
 pub fn free_bytes(path: &Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
@@ -817,9 +816,4 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
     #[allow(clippy::useless_conversion)]
     let (blocks, size) = (u64::from(stats.f_bavail), u64::from(stats.f_frsize));
     Some(blocks.saturating_mul(size))
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn free_bytes(_: &Path) -> Option<u64> {
-    None
 }

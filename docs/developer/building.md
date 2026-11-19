@@ -5,6 +5,10 @@ macOS. Every task is an `./xtask` command (the Go tool in `desktop/cmd/xtask`),
 and `just` wraps them, so the steps are the same on each platform. The desktop
 app is written in Go; the mixer side is Rust.
 
+The Rust crates build for Linux only: the mixer (AArch64), and Linux computers
+for their tests. On Windows and macOS, `just mixer-build` still cross-builds
+the mixer runtime for the mixer's Linux, but the Rust tests do not run there.
+
 ## 1. Install the tools
 
 - [Go](https://go.dev/dl/), the version `desktop/go.mod` names. `./xtask`
@@ -51,8 +55,8 @@ the app's UI packages need it; the tests of everything else run without it.
 
 ```sh
 just app           # run the desktop app (development build; `just app-release` for release)
-just test          # Go vet and tests for the desktop app, then the Rust workspace tests and Clippy
-just test-mixer    # mixer-side tests (Linux or macOS, with python3 and a C compiler)
+just test          # Go vet and tests for the desktop app, then (on Linux) the Rust workspace tests and Clippy
+just test-mixer    # mixer-side tests (Linux, with python3 and a C compiler)
 ```
 
 `just app` needs no mixer cross-build: the app downloads signed mixer
@@ -88,10 +92,11 @@ compiled for its Cortex-A53. Installing and using a source build works as
 described in the [user guide](../user/installing.md).
 
 Any Clippy warning, `go vet` finding, or unformatted Go file fails `just test`,
-even if every test passes. It also tests and lints rc2fxd (the
-`native-pipeline` feature) and lints the `eq-fma` and `bench-kernels`
-features. The native library and the benchmark are separate workspaces: their
-checks run under `just test-mixer`, with the Python and C suites.
+even if every test passes. On Linux it also lints the `eq-fma` and
+`bench-kernels` features; elsewhere it runs only the Go checks, since the Rust
+crates build for Linux only (`just test-rust` runs the Rust part alone). The
+native library and the benchmark are separate workspaces: their checks run
+under `just test-mixer`, with the Python and C suites.
 
 ## 3. Package it
 

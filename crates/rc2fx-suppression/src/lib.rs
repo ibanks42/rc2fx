@@ -4,6 +4,8 @@
 //! bounded frames through SPSC queues and performs aligned dry/wet blending.
 //! Explicit `finish` is the observable shutdown path; timeout is unresolved
 //! ownership and must prevent starting a replacement worker.
+#[cfg(not(target_os = "linux"))]
+compile_error!("rc2fx's mixer crates build for Linux only");
 
 mod inline;
 mod metrics;

@@ -72,11 +72,12 @@ cd rc2fx
 just setup                          # once: the mixer's Rust target and cargo-zigbuild
 desktop/scripts/fetch-gpuikit.sh    # once: the UI library the app links
 just app                            # run the desktop app (development build)
-just test                           # Go and Rust tests, go vet and Clippy
+just test                           # Go tests and go vet, then on Linux the Rust tests and Clippy
 just mixer-build                    # cross-build the mixer runtime into target/mixer
 ```
 
-The build works on Windows, Linux, and macOS. The
+The build works on Windows, Linux, and macOS. The Rust crates build for Linux
+only, so their tests run on Linux. The
 [developer guide](docs/developer/index.md) covers setup, working on a real
 mixer, and the project layout.
 

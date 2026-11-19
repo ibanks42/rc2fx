@@ -2,14 +2,10 @@
 use rc2fx_core::{UsbLinkState, UsbStatus};
 
 pub(crate) fn observe() -> UsbStatus {
-    #[cfg(target_os = "linux")]
     let usb1 = read_state(std::path::Path::new("/sys/class/udc/ff400000.usb/state"));
-    #[cfg(not(target_os = "linux"))]
-    let usb1 = UsbLinkState::Unavailable;
     UsbStatus { usb1 }
 }
 
-#[cfg(any(target_os = "linux", test))]
 fn read_state(path: &std::path::Path) -> UsbLinkState {
     use std::io::Read;
     let mut bytes = [0; 65];
@@ -28,7 +24,6 @@ fn read_state(path: &std::path::Path) -> UsbLinkState {
     result.unwrap_or(UsbLinkState::Unavailable)
 }
 
-#[cfg(any(target_os = "linux", test))]
 fn parse(bytes: &[u8]) -> UsbLinkState {
     // Accept exactly one kernel state, with its optional trailing newline.
     match bytes.strip_suffix(b"\n").unwrap_or(bytes) {

@@ -35,7 +35,7 @@ Then use the usual entry points from the repository root:
 ```sh
 just app              # ./xtask app: development build in target/debug, then run it
 just app-mock         # ./xtask app --mock: against a simulated mixer
-just test             # Go vet and tests, then the Rust workspace
+just test             # Go vet and tests, then the Rust workspace (on Linux)
 ./xtask package       # release packages in target/package
 ```
 

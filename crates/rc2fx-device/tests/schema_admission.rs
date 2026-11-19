@@ -1,5 +1,4 @@
 //! Removed settings must be refused without replacing them with fresh defaults.
-#![cfg(unix)]
 
 use rc2fx_core::Config;
 use rc2fx_device::store::{Store, StoreError};

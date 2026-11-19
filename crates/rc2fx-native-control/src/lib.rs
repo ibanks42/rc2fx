@@ -1,14 +1,12 @@
 //! Internal native-audio control protocol and client. No ELF audit entry points,
 //! callback implementation, global allocator or audio processing dependencies.
+#[cfg(not(target_os = "linux"))]
+compile_error!("rc2fx's mixer crates build for Linux only");
 use rc2fx_core::Target;
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "linux")]
 mod linux;
-#[cfg(target_os = "linux")]
 pub use linux::Client;
-#[cfg(target_os = "linux")]
 mod save;
-#[cfg(target_os = "linux")]
 pub use save::{ControlFailure, Publication};
 /// The control protocol this build speaks.
 ///

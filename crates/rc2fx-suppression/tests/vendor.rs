@@ -121,10 +121,8 @@ fn real_worker_is_off_callback_and_joins_complete_frames() {
     let done = w.finish(StopMode::Drain, Duration::from_secs(5)).unwrap();
     assert!(done.joined && done.drained);
     assert_eq!(done.snapshot.completed_frames, 4);
-    // The worker's clocks are Unix-only; elsewhere frames go untimed.
-    let timed = if cfg!(unix) { 4 } else { 0 };
-    assert_eq!(done.snapshot.wall.calls, timed);
-    assert_eq!(done.snapshot.cpu.calls, timed);
+    assert_eq!(done.snapshot.wall.calls, 4);
+    assert_eq!(done.snapshot.cpu.calls, 4);
     // Deliberately paced functional waits, never a host deadline admission.
 }
 

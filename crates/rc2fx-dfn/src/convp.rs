@@ -424,7 +424,7 @@ mod tests {
     /// `step` on frames of c0 that each end at an inaccessible page, and
     /// again that each begin at one (`Fenced`): no load leaves the frame,
     /// and the sums are still the full convolution's.
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn step_reads_nothing_outside_its_frame() {
         use crate::glue::tests::Fenced;

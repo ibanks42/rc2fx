@@ -1021,7 +1021,6 @@ fn an_accepted_install_forgets_the_previous_outcome() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_live_driver_keeps_the_new_bundle_and_its_marker() {
     let (_dir, paths) = test_paths();
     write_bundle(&paths, &bundle_files("old"));

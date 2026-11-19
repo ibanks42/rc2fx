@@ -131,4 +131,4 @@ too. `app/uitest` runs the offscreen UI tests when `RC2FX_GPUIKIT_DIAG` names a
 folder holding gpuikit's diagnostic library, and skips them otherwise. The
 downloads have none: build it from the bindings repository (`make lib` there,
 then its `lib/diag`). `just test`
-runs all of this, then the Rust workspace tests.
+runs all of this, then, on Linux, the Rust workspace tests.

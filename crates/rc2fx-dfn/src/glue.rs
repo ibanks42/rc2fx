@@ -826,7 +826,7 @@ pub(crate) mod tests {
     /// ordinary values would only catch a write. The vector loops load whole
     /// vectors through raw pointers, so a load past a slice's end is the
     /// mistake no other test here would see.
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     pub(crate) struct Fenced {
         map: *mut u8,
         mapped: usize,
@@ -834,7 +834,7 @@ pub(crate) mod tests {
         len: usize,
     }
 
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     mod sys {
         use std::ffi::c_void;
         // The C library is linked into every test binary already.
@@ -857,7 +857,7 @@ pub(crate) mod tests {
         pub(super) const MAP_PRIVATE_ANONYMOUS: i32 = 0x22;
     }
 
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     impl Fenced {
         /// `values` copied into a fenced buffer that ends where the page
         /// after it begins (`at_end`), or begins where the page before it
@@ -899,7 +899,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     impl std::ops::Deref for Fenced {
         type Target = [f32];
         fn deref(&self) -> &[f32] {
@@ -909,7 +909,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     impl std::ops::DerefMut for Fenced {
         fn deref_mut(&mut self) -> &mut [f32] {
             // SAFETY: as `deref`, and uniquely borrowed.
@@ -917,7 +917,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     impl Drop for Fenced {
         fn drop(&mut self) {
             // SAFETY: the mapping made in `new`, no longer borrowed.
@@ -929,7 +929,7 @@ pub(crate) mod tests {
     /// inaccessible page, and again with each beginning at one: no load or
     /// store leaves its slice, at the model's row lengths and at every short
     /// or odd one, and the results are still the scalar ones.
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn no_loop_reads_or_writes_outside_its_slices() {
         let mut rng = Rng(0x5eed_fe1c_ed00_0001);

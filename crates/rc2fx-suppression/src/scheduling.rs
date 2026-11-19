@@ -9,21 +9,14 @@ pub(crate) fn validate(options: WorkerOptions) -> Result<(), Error> {
     {
         return Err(Error::Scheduling);
     }
-    #[cfg(not(target_os = "linux"))]
-    if options.cpu_mask.is_some() || options.realtime_priority.is_some() || options.nice.is_some() {
-        return Err(Error::Scheduling);
-    }
     Ok(())
 }
-#[cfg(target_os = "linux")]
 pub(crate) fn apply(options: WorkerOptions) -> Result<(), Error> {
     apply_scope(options, false)
 }
-#[cfg(target_os = "linux")]
 pub(crate) fn apply_kernel_allowed(options: WorkerOptions) -> Result<(), Error> {
     apply_scope(options, true)
 }
-#[cfg(target_os = "linux")]
 fn apply_scope(options: WorkerOptions, kernel_allowed: bool) -> Result<(), Error> {
     validate(options)?;
     // SAFETY: all calls target this owned worker; valid stack structs, no
@@ -116,16 +109,8 @@ fn apply_scope(options: WorkerOptions, kernel_allowed: bool) -> Result<(), Error
     }
     Ok(())
 }
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn apply(options: WorkerOptions) -> Result<(), Error> {
-    validate(options)
-}
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn apply_kernel_allowed(options: WorkerOptions) -> Result<(), Error> {
-    apply(options)
-}
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

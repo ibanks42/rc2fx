@@ -308,7 +308,7 @@ impl Store {
     }
 
     /// Makes the next commit fail at `phase`, for tests.
-    #[cfg(all(test, feature = "native-pipeline", target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn fail_next_commit(&mut self, phase: crate::persistence::CommitPhase) {
         self.directory.fail_next(phase);
     }
@@ -332,7 +332,6 @@ impl Store {
         match self.directory.commit(&output) {
             Ok(()) => Ok(()),
             Err(CommitError::BeforeRename(error)) => Err(StoreError::Io(error)),
-            #[cfg(unix)]
             Err(CommitError::AfterRename(error)) => {
                 let message = error.to_string();
                 self.durability_fault = Some(message.clone());
@@ -417,6 +416,6 @@ fn validate_disk(disk: &DiskState) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "../tests/support/store_faults.rs"]
 mod faults;

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Durable lifecycle tokens across a daemon replacement. A client orders the
 //! states it receives by generation, then by settings revision, so a restarted
 //! daemon must publish a newer generation with the saved settings unchanged.

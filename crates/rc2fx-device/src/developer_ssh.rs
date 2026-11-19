@@ -79,7 +79,7 @@ impl DeveloperSsh {
     }
 
     /// Extra environment for the script; tests point its paths elsewhere.
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn with_env(mut self, env: &[(&str, &str)]) -> Self {
         self.env = env
             .iter()
@@ -304,10 +304,8 @@ mod tests {
 
     const KEY: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEPzD7gW9u5+SC5iq8gzujWEOTBQO1CbVCLO8fAOGkip";
-    #[cfg(target_os = "linux")]
     const MARK: &str = rc2fx_core::SSH_MANAGED_MARKER;
 
-    #[cfg(target_os = "linux")]
     struct Fixture {
         _dir: tempfile::TempDir,
         ssh: PathBuf,
@@ -315,7 +313,6 @@ mod tests {
         handle: DeveloperSsh,
     }
 
-    #[cfg(target_os = "linux")]
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let ssh = dir.path().join("home/root/.ssh");
@@ -353,8 +350,6 @@ mod tests {
         }
     }
 
-    // The real script uses GNU stat: Linux only.
-    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn enable_status_and_disable_round_trip_through_the_real_script() {
         let f = fixture();
@@ -419,8 +414,6 @@ mod tests {
         }
     }
 
-    // The real script uses GNU stat: Linux only.
-    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn first_boot_and_unsafe_paths_are_conflicts() {
         let f = fixture();

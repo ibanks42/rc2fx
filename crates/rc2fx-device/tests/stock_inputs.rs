@@ -610,7 +610,6 @@ fn removing_mic4_source_keeps_selected_effects_and_never_moves_them() {
     assert_eq!(serde_json::to_vec(&config).unwrap(), before);
 }
 
-#[cfg(unix)]
 #[test]
 fn special_files_and_symlinks_do_not_block_or_read_another_file() {
     use std::os::unix::fs::symlink;

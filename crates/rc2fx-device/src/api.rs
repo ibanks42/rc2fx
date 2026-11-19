@@ -96,7 +96,6 @@ fn empty() -> Reply {
 
 /// An error page, for the USB layer's own failures (a bad request, a reply
 /// that would not fit): the same shape the API's errors have.
-#[cfg(target_os = "linux")]
 pub(crate) fn failure(status: u16, message: impl AsRef<str>) -> Reply {
     error(status, message)
 }
@@ -219,7 +218,6 @@ impl Api {
 
     /// Whether this client holds an event subscription. While it does, the
     /// controller counts it as someone watching the meters.
-    #[cfg(target_os = "linux")]
     pub(crate) fn subscribed(&self) -> bool {
         self.subscription.is_some()
     }
@@ -754,7 +752,6 @@ mod tests {
         assert!(rc2fx_usb::pack(&big, rc2fx_usb::MAX_REPLY).is_err());
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn developer_ssh_answers_only_where_it_was_given() {
         let dir = tempfile::tempdir().unwrap();
@@ -914,7 +911,6 @@ mod tests {
         thread.join().unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn settings_presets_conflicts_and_events() {
         let dir = tempfile::tempdir().unwrap();
@@ -1035,6 +1031,6 @@ mod tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "api/inputs_tests.rs"]
 mod inputs_tests;

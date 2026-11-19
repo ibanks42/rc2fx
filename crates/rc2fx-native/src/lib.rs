@@ -1,5 +1,8 @@
 //! Private ELF-audit/DSP feasibility probe; never a device installation.
-#![cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#![cfg(target_pointer_width = "64")]
+
+#[cfg(not(target_os = "linux"))]
+compile_error!("rc2fx's mixer crates build for Linux only");
 
 mod chat_mix;
 mod client_timing;

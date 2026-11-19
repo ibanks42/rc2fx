@@ -1,4 +1,4 @@
-//! Linux/Unix durable state storage, anchored to an open directory descriptor.
+//! Linux durable state storage, anchored to an open directory descriptor.
 //! A successful commit includes both the file and containing directory sync.
 use std::io;
 use std::path::Path;
@@ -6,11 +6,10 @@ use std::path::Path;
 #[derive(Debug)]
 pub(crate) enum CommitError {
     BeforeRename(io::Error),
-    #[cfg(unix)]
     AfterRename(io::Error),
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommitPhase {
     Write,
@@ -19,7 +18,6 @@ pub(crate) enum CommitPhase {
     DirectorySync,
 }
 
-#[cfg(unix)]
 mod platform {
     use super::*;
     use std::ffi::{CStr, CString};
@@ -257,32 +255,6 @@ mod platform {
             drop(copy);
             reopened.unwrap();
         }
-    }
-}
-
-#[cfg(not(unix))]
-mod platform {
-    use super::*;
-    pub(crate) struct Directory;
-    fn unsupported() -> io::Error {
-        io::Error::new(
-            io::ErrorKind::Unsupported,
-            "device state requires Unix directory durability and file locking",
-        )
-    }
-    impl Directory {
-        pub(crate) fn open(_: &Path) -> io::Result<Self> {
-            Err(unsupported())
-        }
-        pub(crate) fn read(&self, _: usize) -> io::Result<Option<Vec<u8>>> {
-            Err(unsupported())
-        }
-        pub(crate) fn commit(&mut self, _: &[u8]) -> Result<(), CommitError> {
-            Err(CommitError::BeforeRename(unsupported()))
-        }
-    }
-    pub(crate) fn random_id() -> io::Result<String> {
-        Err(unsupported())
     }
 }
 

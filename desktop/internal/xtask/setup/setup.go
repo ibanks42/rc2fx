@@ -131,7 +131,7 @@ func BuildMixer() error {
 		args []string
 	}{
 		{"Building librc2fx_native.so", []string{"--manifest-path", "crates/rc2fx-native/Cargo.toml", "--lib"}},
-		{"Building rc2fxd", []string{"-p", "rc2fx-device", "--features", "native-pipeline", "--bin", "rc2fxd"}},
+		{"Building rc2fxd", []string{"-p", "rc2fx-device", "--bin", "rc2fxd"}},
 		{"Building rc2fx-supervisor", []string{"-p", "rc2fx-supervisor", "--bin", "rc2fx-supervisor"}},
 		{"Building firmware profile checker", []string{"-p", "rc2fx-firmware", "--bin", "rc2fx-firmware"}},
 	}

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! The store-only coordinator: bounded admission and shutdown.
 use rc2fx_core::{Config, ConfigUpdate};
 use rc2fx_device::{

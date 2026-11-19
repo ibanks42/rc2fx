@@ -9,6 +9,8 @@
 //! DeepFilterNet3-shaped model. Each `process` call takes one STFT hop. The
 //! weights are embedded from `model/weights.bin` (LA0) and
 //! `model/la1/weights.bin` (LA1); see `model/README.md`.
+#[cfg(not(target_os = "linux"))]
+compile_error!("rc2fx's mixer crates build for Linux only");
 mod convp;
 mod dsp;
 mod glue;

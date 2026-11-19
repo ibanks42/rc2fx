@@ -87,8 +87,7 @@ behavior. The real providers are the worker and inline endpoints in
 On Linux x86_64 it also compares 43,280 samples per channel, in mono and
 stereo, against frozen output from an independent scalar oracle. The expected
 output is embedded as binary fixtures. The test runs no compiler, child
-process, or legacy DSP source. On Windows only the Rust tests run, and the
-differential test is compiled out. On other Linux architectures the build
+process, or legacy DSP source. On other Linux architectures the build
 fails with a message that the fixtures are unqualified for that architecture,
 until its numerical behavior has been checked.
 

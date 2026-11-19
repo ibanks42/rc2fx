@@ -34,22 +34,14 @@ use std::collections::{BTreeMap, VecDeque};
 pub const LOG_CAPACITY: usize = 2048;
 
 /// The mixer's CLOCK_MONOTONIC, the clock the engine's own event times use.
-/// Other Unix hosts (macOS, for the tests) read their own monotonic clock.
 pub fn monotonic_ns() -> u64 {
-    #[cfg(unix)]
-    {
-        let mut value = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) } == 0 {
-            (value.tv_sec as u64) * 1_000_000_000 + value.tv_nsec as u64
-        } else {
-            0
-        }
-    }
-    #[cfg(not(unix))]
-    {
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) } == 0 {
+        (value.tv_sec as u64) * 1_000_000_000 + value.tv_nsec as u64
+    } else {
         0
     }
 }

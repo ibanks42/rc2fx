@@ -1,12 +1,5 @@
 //! Bounded main-service history. Only control/manager threads call this module.
 //! Records contain no audio and are never relabeled across generation changes.
-// Meter telemetry comes only from the native engine. A build without it (the
-// store-only coordinator that tests and non-Linux hosts compile) has no
-// caller for that half of the history.
-#![cfg_attr(
-    not(all(feature = "native-pipeline", target_os = "linux")),
-    allow(dead_code)
-)]
 use rc2fx_core::{
     DeviceState, EngineStatus, Meter, Performance, RoutingStatus, SelectionStatus, TargetMeter,
 };
@@ -148,40 +141,30 @@ pub(crate) fn process_resources() -> ProcessResources {
     process_resources_for(std::process::id())
 }
 fn process_resources_for(pid: u32) -> ProcessResources {
-    #[cfg(target_os = "linux")]
-    {
-        use std::io::Read;
-        let result = (|| {
-            let mut bytes = Vec::new();
-            std::fs::File::open(format!("/proc/{pid}/stat"))?
-                .take(8193)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > 8192 {
-                return Err(io::Error::other("process stat exceeds bound"));
-            }
-            // These queries do not modify process state and run only off-callback.
-            let (hz, page) = unsafe {
-                (
-                    libc::sysconf(libc::_SC_CLK_TCK),
-                    libc::sysconf(libc::_SC_PAGESIZE),
-                )
-            };
-            if hz <= 0 || page <= 0 {
-                return Err(io::Error::other("process units unavailable"));
-            }
-            parse_process(&bytes, pid, hz as u64, page as u64)
-        })();
-        result.unwrap_or_else(|error| ProcessResources::Unavailable {
-            message: short(&error.to_string()),
-        })
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = pid;
-        ProcessResources::Unavailable {
-            message: "Process accounting requires Linux /proc".into(),
+    use std::io::Read;
+    let result = (|| {
+        let mut bytes = Vec::new();
+        std::fs::File::open(format!("/proc/{pid}/stat"))?
+            .take(8193)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 8192 {
+            return Err(io::Error::other("process stat exceeds bound"));
         }
-    }
+        // These queries do not modify process state and run only off-callback.
+        let (hz, page) = unsafe {
+            (
+                libc::sysconf(libc::_SC_CLK_TCK),
+                libc::sysconf(libc::_SC_PAGESIZE),
+            )
+        };
+        if hz <= 0 || page <= 0 {
+            return Err(io::Error::other("process units unavailable"));
+        }
+        parse_process(&bytes, pid, hz as u64, page as u64)
+    })();
+    result.unwrap_or_else(|error| ProcessResources::Unavailable {
+        message: short(&error.to_string()),
+    })
 }
 /// When the process that runs the engine started, on the same clock the
 /// diagnostics events are stamped with.
@@ -230,7 +213,6 @@ impl ProcessStart {
 
 /// Bind accounting once to the native process's start identity. A reused PID
 /// must never relabel some other process's CPU/RSS as mixer performance.
-#[cfg(all(target_os = "linux", any(test, feature = "native-pipeline")))]
 #[derive(Clone)]
 pub(crate) struct NativeProcess {
     pid: u32,
@@ -240,7 +222,6 @@ pub(crate) struct NativeProcess {
     /// `/proc` again, and nothing here runs on an audio thread.
     started: Option<ProcessStart>,
 }
-#[cfg(all(target_os = "linux", any(test, feature = "native-pipeline")))]
 impl NativeProcess {
     pub(crate) fn capture(pid: u32) -> Self {
         match process_resources_for(pid) {
@@ -286,7 +267,6 @@ impl NativeProcess {
         }
     }
 }
-#[cfg(any(target_os = "linux", test))]
 fn parse_process(bytes: &[u8], pid: u32, hz: u64, page: u64) -> io::Result<ProcessResources> {
     let invalid = || io::Error::other("invalid process stat");
     let text = std::str::from_utf8(bytes).map_err(|_| invalid())?;
@@ -338,7 +318,6 @@ struct Counters {
     performance: Option<Performance>,
 }
 enum PendingTelemetry {
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     Native {
         at: Stamp,
         meter: Meter,
@@ -351,7 +330,6 @@ struct Telemetry<'a> {
     at: Stamp,
     source: &'static str,
     meter: &'a Meter,
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     native_diagnostics: Option<&'a [rc2fx_native_control::ContextStatus]>,
 }
@@ -470,9 +448,7 @@ pub(crate) struct History {
     previous: Vec<Counters>,
     epoch: Option<(u64, u64)>,
     retention: Retention,
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     native_retirements: Vec<(String, u64)>,
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     native_fault_counters: Vec<(u64, u64, rc2fx_native_control::EngineCounters)>,
 }
 impl Default for History {
@@ -495,9 +471,7 @@ impl History {
             previous: vec![],
             epoch: None,
             retention: Retention::default(),
-            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             native_retirements: Vec::new(),
-            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             native_fault_counters: Vec::new(),
         }
     }
@@ -590,7 +564,6 @@ impl History {
         };
         *count = count.saturating_add(1);
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     pub(crate) fn native_meter(
         &mut self,
         meter: Meter,
@@ -677,7 +650,6 @@ impl History {
             self.telemetry_status = TelemetryStatus::Fresh;
         }
     }
-    #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
     fn capture_native_faults(
         &mut self,
         meter: &Meter,
@@ -846,7 +818,6 @@ impl History {
             }
         }
     }
-    #[cfg(any(test, all(feature = "native-pipeline", target_os = "linux")))]
     pub(crate) fn rejection(
         &mut self,
         generation: u64,
@@ -887,7 +858,6 @@ impl History {
     }
     fn materialize_pending(&mut self) -> Option<Arc<[u8]>> {
         match self.pending.take() {
-            #[cfg(all(feature = "native-pipeline", target_os = "linux"))]
             Some(PendingTelemetry::Native {
                 at,
                 meter,
@@ -941,7 +911,7 @@ impl History {
         self.telemetry_status = TelemetryStatus::NoFreshWindow;
         Some(ticket)
     }
-    #[cfg(any(test, not(all(feature = "native-pipeline", target_os = "linux"))))]
+    #[cfg(test)]
     pub(crate) fn finish_sample(
         &mut self,
         ticket: SampleTicket,

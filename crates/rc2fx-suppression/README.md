@@ -128,11 +128,11 @@ allowance. A good mean or a zero overrun count doesn't qualify the queue,
 wakeup, or callback deadlines.
 
 Each live snapshot is atomic on its own. Joined snapshots are taken after the
-worker has stopped. On non-Linux test builds, CPU time readings return clock
-errors.
+worker has stopped.
 
 ## Tests
 
-`cargo test -p rc2fx-suppression` runs on every platform. The tests cover model state and reset, dry/wet sample alignment, zero
+`cargo test -p rc2fx-suppression` runs on Linux, which the crate builds for
+only. The tests cover model state and reset, dry/wet sample alignment, zero
 allocations on the callback thread, fixed queue capacity and wraparound, stale
 and late results, timeouts, and partial final frames.

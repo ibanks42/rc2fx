@@ -1,15 +1,12 @@
 //! Direct HID control, fed by the native owner's filtered reports over a local
 //! datagram socket. This process writes HID but never competes for HID reads.
-#[cfg(target_os = "linux")]
 use crate::{
     api::{Api, Options},
     coordinator::Handle,
 };
 use rc2fx_usb::{Assembly, Frame, INPUT_ID, INPUT_PAYLOAD, Kind, MAX_REQUEST, REPORT_SIZE};
-#[cfg(target_os = "linux")]
 use rc2fx_usb::{INPUT_REPORT_SIZE, MAX_REPLY, OUTPUT_ID};
 use std::time::{Duration, Instant};
-#[cfg(target_os = "linux")]
 use std::{
     io,
     path::{Path, PathBuf},
@@ -218,13 +215,11 @@ impl Session {
 }
 
 /// Removes the socket this daemon bound, and nothing a successor put there.
-#[cfg(target_os = "linux")]
 struct SocketFile {
     path: PathBuf,
     identity: (u64, u64),
 }
 
-#[cfg(target_os = "linux")]
 impl SocketFile {
     fn identity(path: &Path) -> io::Result<(u64, u64)> {
         use std::os::unix::fs::MetadataExt;
@@ -240,7 +235,6 @@ impl SocketFile {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for SocketFile {
     fn drop(&mut self) {
         if Self::identity(&self.path).is_ok_and(|identity| identity == self.identity) {
@@ -250,7 +244,6 @@ impl Drop for SocketFile {
 }
 
 /// One USB client's session and its view of the API.
-#[cfg(target_os = "linux")]
 pub(crate) struct Server {
     session: Session,
     api: Api,
@@ -263,7 +256,6 @@ pub(crate) struct Server {
     active: tokio::time::Instant,
 }
 
-#[cfg(target_os = "linux")]
 impl Server {
     /// `window` is the protocol 4 receive window, sized once when the server
     /// starts. Tests pass it in; the daemon reads it from the kernel queue that
@@ -381,7 +373,6 @@ impl Server {
 /// 10 ms) instead of dropping a report, so the window is not bounded by
 /// `net.unix.max_dgram_qlen`; USB itself holds the host back while the hook
 /// is waiting.
-#[cfg(target_os = "linux")]
 fn transport_window() -> usize {
     rc2fx_usb::MAX_WINDOW
 }
@@ -389,7 +380,6 @@ fn transport_window() -> usize {
 /// Writes one batch of input reports to the HID gadget, opening it once. The
 /// launcher retires the node and stops this daemon before rebuilding the
 /// gadget, so a handle is kept only for the batch.
-#[cfg(target_os = "linux")]
 async fn write_reports(replies: &[[u8; REPORT_SIZE]]) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     use tokio::io::unix::AsyncFd;
@@ -415,7 +405,6 @@ async fn write_reports(replies: &[[u8; REPORT_SIZE]]) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
 async fn write_report(
     output: &tokio::io::unix::AsyncFd<std::fs::File>,
     reply: &[u8; REPORT_SIZE],
@@ -445,7 +434,6 @@ async fn write_report(
     }
 }
 
-#[cfg(target_os = "linux")]
 pub async fn serve(path: &Path, controller: Handle, options: Options) -> io::Result<()> {
     use std::os::unix::{fs::PermissionsExt, net::UnixDatagram};
     // Do not unlink an existing listener (another daemon may own it).
@@ -777,7 +765,7 @@ mod tests {
 
 /// A USB client for tests: builds the reports the native library forwards
 /// and decodes the reports the server answers with.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) mod testing {
     use super::*;
 
@@ -895,7 +883,7 @@ pub(crate) mod testing {
 /// The event subscription of a client that went away. Time is paused: a timer
 /// that is armed moves the clock when nothing else can run, so the tests take
 /// no real time, and a clock that did not move proves that no timer was armed.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod subscription_tests {
     use super::{testing::*, *};
     use crate::{controller::Controller, coordinator::Coordinator, store::Store};
@@ -1211,7 +1199,7 @@ mod subscription_tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod socket_file_tests {
     use super::SocketFile;
     use std::os::unix::net::UnixDatagram;

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 use rc2fx_core::{Config, ConfigUpdate, TargetKind};
 use rc2fx_device::store::{MAX_PRESETS, MAX_STATE_BYTES, Store, StoreError};
 use std::fs;

@@ -1,6 +1,5 @@
 //! Runs the real `rc2fx-supervisor` against real child processes, with a stub
 //! `rc2fx.sh` and controller. No mixer, USB device or system file is touched.
-#![cfg(target_os = "linux")]
 use std::{
     fs,
     os::unix::{fs::PermissionsExt, net::UnixDatagram},
