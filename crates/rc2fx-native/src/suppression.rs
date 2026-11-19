@@ -100,26 +100,24 @@ impl Runtime {
         } else {
             None
         };
-        let (mut providers, worker) = if target.suppression.enabled {
+        let (mut provider, worker) = if target.suppression.enabled {
             let (provider, record) = worker(target.suppression.lookahead, options)
                 .map_err(|_| super::parameters::Error::Runtime)?;
-            ([Some(provider), None], Some(record))
+            (Some(provider), Some(record))
         } else {
-            ([None, None], None)
+            (None, None)
         };
         let mut dsp = if prepared.is_chat_voice() {
             Processor::Chat(Box::new(
                 rc2fx_dsp::Chat::new(
                     prepared,
-                    providers[0]
-                        .take()
-                        .ok_or(super::parameters::Error::Runtime)?,
+                    provider.take().ok_or(super::parameters::Error::Runtime)?,
                 )
                 .map_err(|_| super::parameters::Error::Runtime)?,
             ))
         } else {
             Processor::Ordinary(Box::new(
-                rc2fx_dsp::Dsp::new(prepared, providers)
+                rc2fx_dsp::Dsp::new(prepared, provider)
                     .map_err(|_| super::parameters::Error::Runtime)?,
             ))
         };

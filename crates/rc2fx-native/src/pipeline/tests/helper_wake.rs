@@ -1663,14 +1663,20 @@ fn a_helper_that_starts_by_itself_returns_the_same_audio() {
         let (stamped, _stamped_controls) = pipeline_owned(&plan, &stamped_buffers);
         let (plain, _plain_controls) = pipeline_owned(&plan, &plain_buffers);
         let first = crate::timing::monotonic() + PERIOD_NS;
+        // What each pipeline added to the source totals.
+        let mut sources = [stats::here::SourceCounts::default(); 2];
         for index in 0..frames {
             // A callback a period: spin to its start, as jackd would wake it.
             let begin = first + index as u64 * PERIOD_NS;
             while crate::timing::monotonic() < begin {
                 std::hint::spin_loop();
             }
+            let start = stats::here::sources();
             let a = callback(&stamped, &stamped_buffers, index, true);
+            let between = stats::here::sources();
             let b = callback(&plain, &plain_buffers, index, false);
+            sources[0] = sources[0].add(between.since(start));
+            sources[1] = sources[1].add(stats::here::sources().since(between));
             // What each returned was processed by its helper a frame before.
             stamped.settle();
             plain.settle();
@@ -1688,10 +1694,8 @@ fn a_helper_that_starts_by_itself_returns_the_same_audio() {
         // Never stamped: never on a timer.
         assert!(plain_ran.iter().all(|f| !matches!(f.1, Start::Slept(_))));
         let (a, b) = (stamped.counters(), plain.counters());
-        assert_eq!(
-            (a.input_blocks, a.faults, a.sources),
-            (b.input_blocks, b.faults, b.sources)
-        );
+        assert_eq!((a.input_blocks, a.faults), (b.input_blocks, b.faults));
+        assert_eq!(sources[0], sources[1]);
         assert_eq!(a.input_blocks, frames as u64);
         self_started += stamped_ran
             .iter()

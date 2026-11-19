@@ -505,12 +505,12 @@ unsafe fn grouped_registers<const V: usize>(
 /// symmetric, `|q| <= 127`): half the bytes of f16, for the GRU matrices that
 /// make up most of the weights streamed per frame.
 ///
-/// The bytes are tiled for `matvec_q8`. Rows are taken four at a time; the
-/// four rows' bytes for columns 0 to 15 come first (row by row, 64 bytes, one
-/// cache line), then their bytes for columns 16 to 31, and so on. Rows past
-/// the last complete group of four follow row-major. A matrix takes exactly
-/// the bytes it takes row-major, and a product still reads them front to
-/// back as one stream.
+/// The bytes are tiled for `matvec_q8`. Rows are taken four at a time (a
+/// matrix has a multiple of four rows: the GRU's are three times a hidden
+/// size that is a multiple of 16); the four rows' bytes for columns 0 to 15
+/// come first (row by row, 64 bytes, one cache line), then their bytes for
+/// columns 16 to 31, and so on. A matrix takes exactly the bytes it takes
+/// row-major, and a product still reads them front to back as one stream.
 pub(crate) struct QWeights {
     q: Vec<i8>,
     scale: Vec<f32>,
@@ -521,23 +521,22 @@ pub(crate) struct QWeights {
     rows: Vec<i8>,
 }
 
-/// Where the tiled layout keeps row-major element (`r`, `c`); `grouped` is
-/// the number of rows in complete groups of four.
+/// Where the tiled layout keeps row-major element (`r`, `c`).
 #[cfg(test)]
-fn tiled(r: usize, c: usize, cols: usize, grouped: usize) -> usize {
-    if r < grouped {
-        (r & !3) * cols + (c & !15) * 4 + (r & 3) * 16 + (c & 15)
-    } else {
-        r * cols + c
-    }
+fn tiled(r: usize, c: usize, cols: usize) -> usize {
+    (r & !3) * cols + (c & !15) * 4 + (r & 3) * 16 + (c & 15)
 }
 
+/// Why a matrix whose row count is not a multiple of four is refused.
+const ROWS_IN_FOURS: &str = "an int8 matrix has a multiple of four rows";
+
 impl QWeights {
-    /// Quantizes a row-major `rows` x `cols` matrix (`cols` a multiple of
-    /// 16) straight into the tiled layout: one pass and one allocation.
+    /// Quantizes a row-major `rows` x `cols` matrix (`rows` a multiple of 4,
+    /// `cols` of 16) straight into the tiled layout: one pass and one
+    /// allocation.
     pub(crate) fn new(w: &[f32], rows: usize, cols: usize) -> Self {
+        assert!(rows.is_multiple_of(4), "{ROWS_IN_FOURS}");
         assert!(cols.is_multiple_of(16) && w.len() == rows * cols);
-        let grouped = rows / 4 * 4;
         let mut q = vec![0i8; rows * cols];
         #[cfg(any(test, feature = "bench-kernels"))]
         let mut row_major = Vec::with_capacity(rows * cols);
@@ -552,14 +551,10 @@ impl QWeights {
             for (o, &x) in line.iter_mut().zip(row) {
                 *o = (x / s).round().clamp(-127., 127.) as i8;
             }
-            if r < grouped {
-                let group = &mut q[(r & !3) * cols..][..4 * cols];
-                let tiles = group.as_chunks_mut::<64>().0;
-                for (tile, piece) in tiles.iter_mut().zip(line.as_chunks::<16>().0) {
-                    tile[(r & 3) * 16..][..16].copy_from_slice(piece);
-                }
-            } else {
-                q[r * cols..(r + 1) * cols].copy_from_slice(&line);
+            let group = &mut q[(r & !3) * cols..][..4 * cols];
+            let tiles = group.as_chunks_mut::<64>().0;
+            for (tile, piece) in tiles.iter_mut().zip(line.as_chunks::<16>().0) {
+                tile[(r & 3) * 16..][..16].copy_from_slice(piece);
             }
             #[cfg(any(test, feature = "bench-kernels"))]
             row_major.extend_from_slice(&line);
@@ -585,11 +580,11 @@ impl QWeights {
     /// values the quantizer never produces (-128).
     fn from_int8(q: &[i8], scale: &[f32], cols: usize) -> Self {
         let rows = scale.len();
+        assert!(rows.is_multiple_of(4), "{ROWS_IN_FOURS}");
         assert!(cols.is_multiple_of(16) && q.len() == rows * cols);
-        let grouped = rows / 4 * 4;
         let mut tiles = vec![0i8; rows * cols];
         for (i, &v) in q.iter().enumerate() {
-            tiles[tiled(i / cols, i % cols, cols, grouped)] = v;
+            tiles[tiled(i / cols, i % cols, cols)] = v;
         }
         Self {
             q: tiles,
@@ -634,9 +629,10 @@ fn row_major_selected() -> bool {
     test || bench
 }
 
-/// y = W x for an int8 matrix of `rows` rows (all of `w`'s; `cols` a
-/// multiple of 16, at most 1024). The input is quantized to 12 bits once; the
-/// products accumulate in i32 and are scaled back at the end of each row.
+/// y = W x for an int8 matrix of `rows` rows (all of `w`'s, a multiple of 4
+/// as `QWeights` holds them; `cols` a multiple of 16, at most 1024). The
+/// input is quantized to 12 bits once; the products accumulate in i32 and are
+/// scaled back at the end of each row.
 ///
 /// The tiled kernel. Each row's sum is the sum, modulo 2^32, of the same
 /// `cols` exact i8 x i16 products the row-major kernel adds, and it is scaled
@@ -666,16 +662,15 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
         store(Class::Act, y.as_ptr(), rows * 4);
     }
     let xs = quantize_x(&x[..cols], &mut xq[..cols]);
-    let grouped = rows / 4 * 4;
     #[cfg(target_arch = "aarch64")]
-    // SAFETY: the asserts above cover every load and store. The tile pointer
-    // advances 64 bytes per 16 columns of a group, `grouped * cols` bytes in
-    // all, and the rows after that are read row-major up to `rows * cols`;
-    // xq holds `cols` values and y `rows`.
+    // SAFETY: the asserts above cover every load and store, with `rows` a
+    // multiple of 4 (`QWeights::new`). The tile pointer advances 64 bytes per
+    // 16 columns of a group, `rows * cols` bytes in all; xq holds `cols`
+    // values and y `rows`.
     unsafe {
         use std::arch::aarch64::*;
         let mut tile = w.q.as_ptr();
-        for g in (0..grouped).step_by(4) {
+        for g in (0..rows).step_by(4) {
             // [row][2]: two accumulators per row, as the row-major kernel
             // keeps.
             let mut acc = [[vdupq_n_s32(0); 2]; 4];
@@ -713,35 +708,13 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
             let by = vmulq_f32(scale, vdupq_n_f32(xs));
             vst1q_f32(y.as_mut_ptr().add(g), vmulq_f32(sums, by));
         }
-        for r in grouped..rows {
-            let row = w.q.as_ptr().add(r * cols);
-            let mut acc = [vdupq_n_s32(0); 2];
-            let mut i = 0;
-            while i < cols {
-                let wv = vld1q_s8(row.add(i));
-                let w01 = vmovl_s8(vget_low_s8(wv));
-                let w23 = vmovl_high_s8(wv);
-                let xp = xq.as_ptr().add(i);
-                let x01 = vld1q_s16(xp);
-                let x23 = vld1q_s16(xp.add(8));
-                acc[0] = vmlal_s16(acc[0], vget_low_s16(w01), vget_low_s16(x01));
-                acc[1] = vmlal_high_s16(acc[1], w01, x01);
-                acc[0] = vmlal_s16(acc[0], vget_low_s16(w23), vget_low_s16(x23));
-                acc[1] = vmlal_high_s16(acc[1], w23, x23);
-                i += 16;
-            }
-            let scale = *w.scale.get_unchecked(r);
-            let [a, b] = acc;
-            let sum = vaddvq_s32(vaddq_s32(a, b));
-            *y.get_unchecked_mut(r) = sum as f32 * (scale * xs);
-        }
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
         // The NEON sums wrap; these wrap too. Sixteen running sums per row,
         // one per column of a tile, so the compiler can keep them in vector
         // registers; any grouping of a wrapping sum gives the same total.
-        for g in (0..grouped).step_by(4) {
+        for g in (0..rows).step_by(4) {
             let mut acc = [[0i32; 16]; 4];
             let tiles = w.q[g * cols..(g + 4) * cols].as_chunks::<64>().0;
             for (b, tile) in tiles.iter().enumerate() {
@@ -756,13 +729,6 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
                 let sum = acc.into_iter().fold(0i32, i32::wrapping_add);
                 y[g + k] = sum as f32 * (w.scale[g + k] * xs);
             }
-        }
-        for r in grouped..rows {
-            let sum = w.q[r * cols..(r + 1) * cols]
-                .iter()
-                .zip(&xq[..cols])
-                .fold(0i32, |a, (&wv, &xv)| a.wrapping_add(wv as i32 * xv as i32));
-            y[r] = sum as f32 * (w.scale[r] * xs);
         }
     }
 }
@@ -981,7 +947,7 @@ mod tests {
     /// an odd multiple of 16), for two inputs.
     #[test]
     fn int8_matvec_matches_a_scalar_reference_bit_for_bit() {
-        for (rows, cols) in [(5, 16), (7, 48), (12, 96), (9, 272), (24, 1024)] {
+        for (rows, cols) in [(4, 16), (8, 48), (12, 96), (20, 272), (24, 1024)] {
             let weights = values(rows * cols);
             let w = QWeights::new(&weights, rows, cols);
             let (q, scale) = (w.int8(), &w.scale);
@@ -1022,7 +988,7 @@ mod tests {
 
     #[test]
     fn q8_matches_scalar_bits_on_shapes_and_inputs() {
-        for rows in [1, 3, 4, 5, 7, 12, 384] {
+        for rows in [4, 8, 12, 384] {
             for cols in [16, 32, 48, 128, 272, 1024] {
                 let w = QWeights::new(&values(rows * cols), rows, cols);
                 for mode in 0..4 {
@@ -1081,7 +1047,7 @@ mod tests {
     #[cfg(target_arch = "aarch64")]
     #[test]
     fn q8_subnormal_saturation_matches_wrapping_reference() {
-        let (rows, cols) = (5, 1024);
+        let (rows, cols) = (8, 1024);
         let weights: Vec<f32> = (0..rows * cols)
             .map(|i| if i / cols % 2 == 0 { 1. } else { -1. })
             .collect();
@@ -1115,7 +1081,7 @@ mod tests {
     #[cfg(target_arch = "aarch64")]
     #[test]
     fn q8_nonfinite_scaling_matches_baseline_bits() {
-        let (rows, cols) = (5, 16);
+        let (rows, cols) = (8, 16);
         let w = QWeights::new(&values(rows * cols), rows, cols);
         for value in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
             let x = vec![value; cols];
@@ -1208,11 +1174,10 @@ mod tests {
     /// The tiled kernel against the row-major kernel it replaced
     /// (`matvec_q8_rows`, kept unchanged), every output bit, NaN payloads
     /// included: the model's 384 x 128 matrices and every other shape class
-    /// (whole groups of four rows, one to three rows left over, fewer than
-    /// four rows, 16 to 1024 columns), with random, extreme and sparse int8
-    /// weights and quantized float weights, ordinary to subnormal and huge
-    /// row scales, six classes of input, under each float mode. Nothing
-    /// outside the output is written.
+    /// (one group of four rows to many, 16 to 1024 columns), with random,
+    /// extreme, and sparse int8 weights and quantized float weights, ordinary
+    /// to subnormal and huge row scales, six classes of input, under each
+    /// float mode. Nothing outside the output is written.
     #[test]
     fn tiled_matvec_matches_the_row_major_kernel_bit_for_bit() {
         use crate::glue::tests::{Rng, each_float_mode};
@@ -1226,18 +1191,15 @@ mod tests {
             let mut rng = Rng(0x51ed_270b_a5a5_0001);
             let shapes = [
                 (384, 128),
-                (1, 16),
-                (2, 48),
-                (3, 128),
                 (4, 16),
-                (5, 32),
-                (6, 272),
-                (7, 128),
+                (4, 48),
+                (8, 32),
                 (8, 1024),
-                (9, 64),
                 (12, 128),
-                (63, 1024),
-                (387, 128),
+                (16, 272),
+                (20, 64),
+                (64, 1024),
+                (388, 128),
             ];
             for (rows, cols) in shapes {
                 for weight_class in 0..4 {
@@ -1300,19 +1262,18 @@ mod tests {
 
     /// The tiled layout holds each int8 value once, at the place the kernel
     /// reads it: against a plain scalar sum over the row-major values, with
-    /// wrapping i32 sums, for whole groups and row tails.
+    /// wrapping i32 sums, for one group of four rows and for many.
     #[test]
     fn tiled_matvec_matches_a_wrapping_scalar_sum() {
         let mut rng = crate::glue::tests::Rng(0x7117_ed00_0000_0003);
-        for (rows, cols) in [(384, 128), (4, 16), (7, 48), (10, 1024), (3, 32)] {
+        for (rows, cols) in [(384, 128), (4, 16), (8, 48), (12, 1024), (4, 32)] {
             let q = int8_weights(&mut rng, 0, rows * cols);
             let scale: Vec<f32> = (0..rows).map(|r| (r + 1) as f32 * 1e-3).collect();
             let w = QWeights::from_int8(&q, &scale, cols);
             // Every value is in the tiles exactly once.
-            let grouped = rows / 4 * 4;
             let mut seen = vec![false; rows * cols];
             for (i, &v) in q.iter().enumerate() {
-                let at = tiled(i / cols, i % cols, cols, grouped);
+                let at = tiled(i / cols, i % cols, cols);
                 assert!(!seen[at] && w.q[at] == v);
                 seen[at] = true;
             }
@@ -1336,14 +1297,14 @@ mod tests {
 
     /// The tiled kernel with its input and its output each ending at an
     /// inaccessible page, and again each beginning at one: no load or store
-    /// leaves them, for whole groups and row tails.
+    /// leaves them, for one group of four rows and for many.
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn tiled_matvec_stays_inside_its_slices() {
         use crate::glue::tests::{Fenced, Rng};
         let mut rng = Rng(0xfe1c_ed00_70c0_de04);
         for at_end in [true, false] {
-            for (rows, cols) in [(384, 128), (4, 16), (7, 48), (3, 32), (9, 1024)] {
+            for (rows, cols) in [(384, 128), (4, 16), (8, 48), (4, 32), (12, 1024)] {
                 let w = QWeights::new(&rng.values(0, rows * cols), rows, cols);
                 let plain = rng.values(0, cols);
                 let x = Fenced::new(&plain, at_end);
@@ -1353,6 +1314,29 @@ mod tests {
                 matvec_q8(&w, rows, &x, &mut xq, &mut y);
                 matvec_q8_rows(&w, rows, &plain, &mut xq, &mut want);
                 same_bits(&y, &want);
+            }
+        }
+    }
+
+    /// A row count that is not a multiple of four is refused when the
+    /// matrix is built, from float weights and from int8 values alike, so
+    /// the kernel never meets one.
+    #[test]
+    fn a_matrix_whose_rows_are_not_a_multiple_of_four_is_refused() {
+        for rows in [1, 2, 3, 5, 6, 7, 9, 383] {
+            let cols = 16;
+            let from_floats =
+                std::panic::catch_unwind(|| QWeights::new(&values(rows * cols), rows, cols));
+            let from_int8 = std::panic::catch_unwind(|| {
+                QWeights::from_int8(&vec![1; rows * cols], &vec![1e-3; rows], cols)
+            });
+            for (built, how) in [(from_floats.err(), "new"), (from_int8.err(), "from_int8")] {
+                let payload = built.unwrap_or_else(|| panic!("{rows} rows accepted by {how}"));
+                let message = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied());
+                assert_eq!(message, Some(ROWS_IN_FOURS), "{rows} rows, {how}");
             }
         }
     }

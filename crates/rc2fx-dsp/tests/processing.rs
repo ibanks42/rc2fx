@@ -92,13 +92,13 @@ fn constructor_rejects_missing_or_mismatched_microphone_worker() {
     ));
     let bad = Delay::new(7);
     assert!(matches!(
-        Dsp::new(&prepared(&t), [Some(Box::new(bad)), None]),
+        Dsp::new(&prepared(&t), Some(Box::new(bad))),
         Err(DspError::SuppressionGeometry)
     ));
     t.kind = TargetKind::Output;
     t.suppression.enabled = false;
     assert!(matches!(
-        Dsp::new(&prepared(&t), [Some(Box::new(Delay::new(7))), None]),
+        Dsp::new(&prepared(&t), Some(Box::new(Delay::new(7)))),
         Err(DspError::UnexpectedSuppression)
     ));
 }
@@ -302,7 +302,7 @@ fn exact_shape_not_just_total_delay_is_required() {
         suppression_delay()
     );
     assert!(matches!(
-        Dsp::new(&p, [Some(Box::new(wrong)), None]),
+        Dsp::new(&p, Some(Box::new(wrong))),
         Err(DspError::SuppressionGeometry)
     ));
     struct Invalid;
@@ -326,7 +326,7 @@ fn exact_shape_not_just_total_delay_is_required() {
     // Reject shape before invoking the default latency sum, which would
     // overflow on this deliberately malformed provider's public geometry.
     assert!(matches!(
-        Dsp::new(&p, [Some(Box::new(Invalid)), None]),
+        Dsp::new(&p, Some(Box::new(Invalid))),
         Err(DspError::SuppressionGeometry)
     ));
 }
@@ -340,7 +340,7 @@ fn control_drain_irreversibly_retires_even_on_timeout() {
         let p = prepared(&t);
         let mut provider = Delay::new(suppression_delay());
         provider.drain_error = error;
-        let mut dsp = Dsp::new(&p, [Some(Box::new(provider)), None]).unwrap();
+        let mut dsp = Dsp::new(&p, Some(Box::new(provider))).unwrap();
         assert_eq!(
             dsp.drain_suppression(std::time::Duration::ZERO),
             error.map_or(Ok(()), Err)
@@ -373,7 +373,7 @@ fn provider_must_match_every_field_of_the_prepared_model() {
         drain_error: None,
         voice: Arc::new(AtomicU32::new(NO_VOICE)),
     };
-    let dsp = Dsp::new(&p, [Some(Box::new(provider())), None]).unwrap();
+    let dsp = Dsp::new(&p, Some(Box::new(provider()))).unwrap();
     assert_eq!(dsp.latency_samples(), suppression_delay());
     for field in 0..3 {
         let mut wrong = provider();
@@ -389,7 +389,7 @@ fn provider_must_match_every_field_of_the_prepared_model() {
             }
         }
         assert!(matches!(
-            Dsp::new(&p, [Some(Box::new(wrong)), None]),
+            Dsp::new(&p, Some(Box::new(wrong))),
             Err(DspError::SuppressionGeometry)
         ));
     }
@@ -406,7 +406,7 @@ fn bypass_and_zero_blend_keep_exact_injected_delay() {
     t.suppression.wet = 0.0;
     t.bypass = true;
     let p = prepared(&t);
-    let mut dsp = Dsp::new(&p, [Some(Box::new(Delay::new(suppression_delay()))), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(Box::new(Delay::new(suppression_delay())))).unwrap();
     assert_eq!(dsp.latency_samples(), suppression_delay());
     let input = wave(5000, 0);
     let mut out = vec![0.; 5000];
@@ -718,13 +718,10 @@ fn every_mic_order_keeps_enabled_provider_warm_across_wet_zero_and_bypass() {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut dsp = Dsp::new(
             &initial,
-            [
-                Some(Box::new(ObservedDelay {
-                    inner: Delay::new(suppression_delay()),
-                    calls: calls.clone(),
-                })),
-                None,
-            ],
+            Some(Box::new(ObservedDelay {
+                inner: Delay::new(suppression_delay()),
+                calls: calls.clone(),
+            })),
         )
         .unwrap();
         let input: Vec<f32> = (0..1500).map(|i| 0.125 + (i % 17) as f32 / 128.0).collect();
@@ -798,7 +795,7 @@ fn voice_gate_closes_after_its_hold_and_reopens_on_voice() {
     let p = prepared(&t);
     let provider = Delay::new(suppression_delay());
     let voice = provider.voice.clone();
-    let mut dsp = Dsp::new(&p, [Some(Box::new(provider)), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(Box::new(provider))).unwrap();
     set_voice(&voice, Some(0.9));
     let (y, m) = run_constant(&mut dsp, &p, 4816, 0.25);
     assert_eq!(y, 0.25, "an open gate is exact");
@@ -843,7 +840,7 @@ fn voice_gate_opens_when_the_model_has_no_score() {
     let p = prepared(&t);
     let provider = Delay::new(suppression_delay());
     let voice = provider.voice.clone();
-    let mut dsp = Dsp::new(&p, [Some(Box::new(provider)), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(Box::new(provider))).unwrap();
     set_voice(&voice, Some(0.));
     run_constant(&mut dsp, &p, 72016, 0.25);
     // The delayed original (late or failed worker) is never cut.
@@ -860,7 +857,7 @@ fn voice_gate_off_is_bit_exact_and_its_settings_are_live() {
     let off = prepared(&t);
     let provider = Delay::new(suppression_delay());
     let voice = provider.voice.clone();
-    let mut dsp = Dsp::new(&off, [Some(Box::new(provider)), None]).unwrap();
+    let mut dsp = Dsp::new(&off, Some(Box::new(provider))).unwrap();
     set_voice(&voice, Some(0.));
     let input = wave(4816, 0);
     let mut out = vec![0.; 4816];

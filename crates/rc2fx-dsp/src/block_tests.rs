@@ -237,7 +237,7 @@ fn check(
 
 fn pair(p: &Prepared, voice: Option<(u32, bool)>) -> (Dsp, Dsp) {
     let make = || match voice {
-        Some((stretch, wild)) => Dsp::new(p, [Some(Voice::boxed(stretch, wild)), None]).unwrap(),
+        Some((stretch, wild)) => Dsp::new(p, Some(Voice::boxed(stretch, wild))).unwrap(),
         None => Dsp::without_suppression(p).unwrap(),
     };
     (make(), make())
@@ -1287,90 +1287,6 @@ fn random_settings_edits_and_input_match_the_reference() {
         total.samples, total.clipped
     );
     assert!(total.clipped > 0 && settled > 0 && moving > 0);
-}
-
-#[test]
-fn a_stereo_microphone_with_a_delay_ring_per_channel_matches_the_reference() {
-    // Validation admits suppression on a mono microphone or the Chat voice
-    // mix only, so no target reaches this today. The state is built past
-    // validation to keep the two-channel ring and the merged score checked
-    // all the same. `None` keeps the worker's own delay; the short rings
-    // wrap inside a block.
-    let prepared =
-        |target: &Target| Prepared::validated(target, target.suppression.geometry()).unwrap();
-    for (latency, wild) in [
-        (None, false),
-        (None, true),
-        (Some(5), false),
-        (Some(113), true),
-    ] {
-        let mut target = Target::new("mic", "Mic", TargetKind::Mic, 2);
-        target.suppression.enabled = true;
-        target.suppression.wet = 0.8;
-        target.suppression.gate = rc2fx_core::VoiceGate::with_strength(0.61);
-        target.eq.enabled = true;
-        target.eq.bands = bands(5, false);
-        let mut p = prepared(&target);
-        // The channels' scores change at different times, so the gate sees
-        // the lower of two different scores.
-        let make = |p: &Prepared| {
-            let mut dsp = Dsp::new(
-                p,
-                [Some(Voice::boxed(300, wild)), Some(Voice::boxed(170, wild))],
-            )
-            .unwrap();
-            if let Some(latency) = latency {
-                dsp.latency = latency;
-                for channel in &mut dsp.channels {
-                    channel.bypass_dry = vec![0.0; latency].into_boxed_slice();
-                }
-            }
-            dsp
-        };
-        let (mut actual, mut reference) = (make(&p), make(&p));
-        let mut total = Meter::default();
-        for block in 0..180 {
-            let before = target.clone();
-            match block {
-                40 => target.bypass = true,
-                80 => target.bypass = false,
-                100 => target.suppression.wet = 0.3,
-                120 => target.suppression.gate = rc2fx_core::VoiceGate::with_strength(1.0),
-                140 => target.eq.bands[1].gain = 12.0,
-                _ => {}
-            }
-            if target != before {
-                p = prepared(&target);
-            }
-            let frames = LENGTHS[block % LENGTHS.len()];
-            let mut input = tone(block, frames, 2, 0.5);
-            // One channel alone needs limiting, at either end of the block.
-            match block % 23 {
-                5 => input[1][frames - 1] = f32::NAN,
-                7 => input[0][0] = 30.0,
-                11 => input[1][0] = f32::NEG_INFINITY,
-                _ => {}
-            }
-            let meter = check(
-                &mut actual,
-                &mut reference,
-                &p,
-                &input,
-                block % 2 == 0,
-                &|| format!("latency {latency:?} wild {wild} block {block} frames {frames}"),
-            );
-            total.clipped += meter.clipped;
-            total.voice = total.voice.max(meter.voice);
-            total.gate_open = total.gate_open.max(meter.gate_open);
-        }
-        assert!(total.clipped > 0);
-        assert!(total.voice > 0.5);
-        assert_eq!(total.gate_open, 1.0);
-        assert_eq!(
-            actual.channels[0].bypass_position,
-            actual.channels[1].bypass_position
-        );
-    }
 }
 
 /// Runs `body` on a thread of its own with flush-to-zero set, as an audio

@@ -715,93 +715,66 @@ fn output_counters_follow_the_sample_count() {
     }
 }
 
-/// A model that halves its input and reports a voice score of 0.75.
-struct Halve;
-impl Model for Halve {
-    fn process(&mut self, samples: &mut [f32]) -> Result<f32, Error> {
-        samples.iter_mut().for_each(|x| *x *= 0.5);
-        Ok(0.75)
-    }
-    fn reset(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-}
-
 /// `Endpoint::process_block` against `Endpoint::process_sample` and
-/// `Endpoint::voice` for both kinds of endpoint: every output bit and every
-/// voice, over uneven block sizes, non-finite input and a moving wet. The
-/// inline endpoint runs its model inside the call that completes a frame.
+/// `Endpoint::voice`: every output bit and every voice, over uneven block
+/// sizes, non-finite input and a moving wet.
 #[test]
-fn endpoint_blocks_match_endpoint_samples_for_both_kinds() {
-    let inline = || {
-        let geometry = Geometry {
-            worker_lead_samples: 0,
-            ..PRODUCTION
-        };
-        Endpoint::Inline(Inline::with_model(geometry, Box::new(Halve)).unwrap())
-    };
+fn endpoint_blocks_match_endpoint_samples() {
     // The threadless worker fixture; nothing serves it, so it plays dry and
     // counts misses, which both paths must do alike.
-    let threaded = || Endpoint::Worker(worker(PRODUCTION).0);
-    for (kind, make) in [
-        ("inline", &inline as &dyn Fn() -> Endpoint),
-        ("worker", &threaded),
-    ] {
-        let (mut by_sample, mut by_block) = (make(), make());
-        let mut rng = Rng(0x1234_5678_9abc_def1);
-        let (mut done, mut played) = (0usize, false);
-        while done < 6_000 {
-            let n = 1 + (rng.next() % 300) as usize;
-            let x: Vec<f32> = (0..n)
-                .map(|i| match (done + i) % 131 {
-                    0 => f32::NAN,
-                    1 => f32::INFINITY,
-                    2 => -0.,
-                    _ => rng.sample(),
-                })
-                .collect();
-            let wet: Vec<f32> = (0..n)
-                .map(|i| 0.5 + 0.5 * ((done + i) as f32 * 0.003).sin())
-                .collect();
-            let mut want = vec![(0u32, None); n];
-            for i in 0..n {
-                let y = by_sample.process_sample(x[i], wet[i]);
-                want[i] = (y.to_bits(), by_sample.voice().map(f32::to_bits));
-            }
-            let mut out = x.clone();
-            // Longer than the block: only the block's part is written.
-            let mut voice = vec![Some(-1f32); n + 3];
-            by_block.process_block(&mut out, &wet, &mut voice);
-            let got: Vec<_> = out
-                .iter()
-                .zip(&voice)
-                .map(|(y, v)| (y.to_bits(), v.map(f32::to_bits)))
-                .collect();
-            assert!(got == want, "{kind} at sample {done}, block of {n}");
-            assert!(voice[n..].iter().all(|v| *v == Some(-1.)), "{kind}");
-            assert_eq!(by_block.voice(), by_sample.voice(), "{kind}");
-            played |= voice[..n].iter().any(|v| v.is_some());
-            done += n;
+    let make = || Endpoint::Worker(worker(PRODUCTION).0);
+    let (mut by_sample, mut by_block) = (make(), make());
+    let mut rng = Rng(0x1234_5678_9abc_def1);
+    let (mut done, mut played) = (0usize, false);
+    while done < 6_000 {
+        let n = 1 + (rng.next() % 300) as usize;
+        let x: Vec<f32> = (0..n)
+            .map(|i| match (done + i) % 131 {
+                0 => f32::NAN,
+                1 => f32::INFINITY,
+                2 => -0.,
+                _ => rng.sample(),
+            })
+            .collect();
+        let wet: Vec<f32> = (0..n)
+            .map(|i| 0.5 + 0.5 * ((done + i) as f32 * 0.003).sin())
+            .collect();
+        let mut want = vec![(0u32, None); n];
+        for i in 0..n {
+            let y = by_sample.process_sample(x[i], wet[i]);
+            want[i] = (y.to_bits(), by_sample.voice().map(f32::to_bits));
         }
-        // The inline endpoint played its model's results; the unserved
-        // worker played none.
-        assert_eq!(played, kind == "inline");
-        // The counters agree; the inline endpoint's timings are its own.
-        let counters = |e: &Endpoint| {
-            let s = e.telemetry().snapshot();
-            (
-                s.completed_frames,
-                s.input_drops,
-                s.output_drops,
-                s.missed_deadlines,
-                s.late_results,
-                s.stale_results,
-                s.failed,
-            )
-        };
-        assert_eq!(counters(&by_block), counters(&by_sample), "{kind}");
-        assert!(counters(&by_block).0 > 0 || kind == "worker", "{kind}");
+        let mut out = x.clone();
+        // Longer than the block: only the block's part is written.
+        let mut voice = vec![Some(-1f32); n + 3];
+        by_block.process_block(&mut out, &wet, &mut voice);
+        let got: Vec<_> = out
+            .iter()
+            .zip(&voice)
+            .map(|(y, v)| (y.to_bits(), v.map(f32::to_bits)))
+            .collect();
+        assert!(got == want, "at sample {done}, block of {n}");
+        assert!(voice[n..].iter().all(|v| *v == Some(-1.)));
+        assert_eq!(by_block.voice(), by_sample.voice());
+        played |= voice[..n].iter().any(|v| v.is_some());
+        done += n;
     }
+    // The unserved worker played none of its model's results.
+    assert!(!played);
+    // The counters agree.
+    let counters = |e: &Endpoint| {
+        let s = e.telemetry().snapshot();
+        (
+            s.completed_frames,
+            s.input_drops,
+            s.output_drops,
+            s.missed_deadlines,
+            s.late_results,
+            s.stale_results,
+            s.failed,
+        )
+    };
+    assert_eq!(counters(&by_block), counters(&by_sample));
 }
 
 /// Operation counts per sample of the production path, from the source.

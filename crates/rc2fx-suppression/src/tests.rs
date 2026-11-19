@@ -110,14 +110,6 @@ fn geometry_and_rejection() {
     assert_eq!(scheduling::validate(crate::PRODUCTION_WORKER), Ok(()));
 }
 #[test]
-fn inline_endpoint_removes_only_the_worker_lead() {
-    let inline = Inline::new(0).unwrap();
-    assert_eq!(inline.geometry().worker_lead_samples, 0);
-    assert_eq!(inline.geometry().frame_samples, 240);
-    assert_eq!(inline.geometry().intrinsic_delay_samples, 120);
-    assert_eq!(inline.latency_samples(), 360);
-}
-#[test]
 fn exact_dry_delay_when_late_or_failed_in_arbitrary_chunks() {
     {
         let (mut w, _, _) = endpoint();
@@ -677,7 +669,7 @@ fn dsp_retirement_bridge_keeps_late_worker_fault_and_unresolved_timeout() {
     target.suppression.enabled = true;
     target.suppression.lookahead = lookahead;
     let prepared = rc2fx_dsp::Prepared::new(&target, 48000).unwrap();
-    let mut dsp = rc2fx_dsp::Dsp::new(&prepared, [Some(Box::new(worker)), None]).unwrap();
+    let mut dsp = rc2fx_dsp::Dsp::new(&prepared, Some(Box::new(worker))).unwrap();
     // Two full frames and 17 samples of a third.
     let samples = 2 * geometry().frame_samples + 17;
     let input = vec![0.125; samples];

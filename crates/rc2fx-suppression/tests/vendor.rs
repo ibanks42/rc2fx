@@ -260,8 +260,8 @@ fn dsp_on_the_real_worker_matches_its_per_sample_form_and_allocates_nothing() {
     let telemetry = endpoints.each_ref().map(|endpoint| endpoint.telemetry());
     let [by_block, by_sample] = endpoints;
     let mut dsps = [
-        rc2fx_dsp::Dsp::new(&p, [Some(Box::new(by_block)), None]).unwrap(),
-        rc2fx_dsp::Dsp::new(&p, [Some(Box::new(PerSample(by_sample))), None]).unwrap(),
+        rc2fx_dsp::Dsp::new(&p, Some(Box::new(by_block))).unwrap(),
+        rc2fx_dsp::Dsp::new(&p, Some(Box::new(PerSample(by_sample)))).unwrap(),
     ];
     let input: Vec<f32> = (0..9)
         .flat_map(|frame| signal(frame, size))

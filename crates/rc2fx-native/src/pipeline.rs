@@ -195,13 +195,14 @@ impl Port {
     }
     /// Records what one buffer request of a source meant to be processed
     /// returned. The frame's outcome keeps its first raw cause.
-    fn note(&mut self, outcome: Outcome, counters: &mut Counters) {
+    fn note(&mut self, outcome: Outcome) {
         if self.direction != Direction::Input || !self.processed_intent {
             return;
         }
         if outcome != Outcome::Processed {
-            counters.sources.raw_returns += 1;
             SOURCES.raw_returns.fetch_add(1, Ordering::Relaxed);
+            #[cfg(test)]
+            stats::here::tally(None);
         }
         if matches!(self.outcome, None | Some(Outcome::Processed)) {
             self.outcome = Some(outcome);
@@ -209,14 +210,14 @@ impl Port {
     }
     /// Counts this frame's outcome for a source meant to be processed;
     /// `usable`: the frame completed (native success, every channel).
-    fn tally_source(&mut self, usable: bool, counters: &mut Counters) {
+    fn tally_source(&mut self, usable: bool) {
         if self.direction == Direction::Input && self.processed_intent {
             let outcome = match self.outcome {
                 None => Outcome::Unobserved,
                 Some(Outcome::Processed) if !usable => Outcome::ProcessedUnacknowledged,
                 Some(outcome) => outcome,
             };
-            tally(&mut counters.sources, outcome);
+            tally(outcome);
         }
     }
     /// A path a cycle leaves alone must look like one that was never touched:
@@ -650,7 +651,7 @@ unsafe fn end_port(
     let usable = usable && !port.failed;
     // An unprocessed path left alone applies trivially.
     let counted = cycle.native_success && port.counted;
-    port.tally_source(usable, counters);
+    port.tally_source(usable);
     match port.owner {
         Owner::Callback => {
             let mut applied = counted;
@@ -1061,7 +1062,7 @@ impl Pipeline {
         };
         let item = &mut front.ports[index];
         if !item.active {
-            item.note(Outcome::Invalid, &mut front.counters);
+            item.note(Outcome::Invalid);
             return native;
         }
         if frames != FRAMES
@@ -1069,7 +1070,7 @@ impl Pipeline {
             || item.native[channel] != native as usize
         {
             item.fail(&mut front.counters);
-            item.note(Outcome::Invalid, &mut front.counters);
+            item.note(Outcome::Invalid);
             return native;
         }
         item.observed |= 1 << channel;
@@ -1077,7 +1078,7 @@ impl Pipeline {
             return native;
         }
         if !front.idle || !front.previous_ready {
-            item.note(Outcome::HelperUnready, &mut front.counters);
+            item.note(Outcome::HelperUnready);
             // SAFETY: checked above to be this channel's jackd buffer.
             return unsafe { item.raw(channel, native) };
         }
@@ -1089,7 +1090,7 @@ impl Pipeline {
         };
         let previous = ((front.seq - 1) & 1) as usize;
         if work.done[previous] {
-            item.note(Outcome::Processed, &mut front.counters);
+            item.note(Outcome::Processed);
             item.processed_flowing = true;
             let cell = &work.processed[previous];
             // In bounds, and without a mutable borrow of the slot.
@@ -1103,7 +1104,7 @@ impl Pipeline {
             } else {
                 Outcome::NoHandoff
             };
-            item.note(outcome, &mut front.counters);
+            item.note(outcome);
             // SAFETY: as above.
             unsafe { item.raw(channel, native) }
         }

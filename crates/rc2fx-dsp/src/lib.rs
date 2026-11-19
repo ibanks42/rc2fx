@@ -40,10 +40,8 @@ pub(crate) const GAIN_SMOOTH: f64 = 0.0020811647007;
 pub(crate) const EQ_INTERNAL_LIMIT: f64 = 1.3407807929942597e154; // 2^512
 
 /// Callback-facing owned worker endpoint. Its implementation must not allocate,
-/// lock, wait, or call the control service in `process_sample` or
-/// `process_block`. Inference there is allowed only for an inline endpoint
-/// whose model's worst frame fits the calling thread's period budget (the
-/// mixer's DSP helper).
+/// lock, wait, run inference, or call the control service in `process_sample`
+/// or `process_block`: the model runs on the worker's own thread.
 /// Dry and wet streams must have the same immutable delay, including on failure.
 /// Construction, worker startup, joining and destruction belong outside callbacks.
 pub trait Suppression: Send {
@@ -331,7 +329,6 @@ impl Prepared {
 }
 
 struct ChannelState {
-    suppression: Option<Box<dyn Suppression>>,
     bypass_dry: Box<[f32]>,
     bypass_position: usize,
 }
@@ -383,6 +380,10 @@ pub struct Dsp {
     retired: bool,
     channels: [ChannelState; 2],
     latency: usize,
+    /// The suppression provider. Validation admits suppression on a mono
+    /// microphone only (the Chat voice mix is one too), so there is at most
+    /// one, for channel 0.
+    suppression: Option<Box<dyn Suppression>>,
     gain: f64,
     wet: f64,
     /// Voice gate level in dB (0 = open) and its linear gain, the samples
@@ -863,46 +864,41 @@ impl Stages {
 impl Dsp {
     /// This constructor is deliberately outside the audio callback. Only enabled
     /// suppression needs a provider; bypass retains that provider and its delay.
-    pub fn new(
-        p: &Prepared,
-        mut suppression: [Option<Box<dyn Suppression>>; 2],
-    ) -> Result<Self, DspError> {
+    /// A mono target takes it: validation admits suppression on no other.
+    pub fn new(p: &Prepared, suppression: Option<Box<dyn Suppression>>) -> Result<Self, DspError> {
         if p.is_chat_voice() {
             // A completed Chat mix contains pads. Only Chat::process, with a
             // separately captured microphone stem, may use its suppressor.
             return Err(DspError::MissingChatStem);
         }
         let mut latency = 0;
-        for (ch, provider) in suppression.iter().enumerate() {
-            if ch < p.channels() && p.signature.geometry.is_some() {
-                let provider = provider.as_ref().ok_or(DspError::MissingSuppression)?;
-                let geometry = provider.geometry();
-                if Some(geometry) != p.signature.geometry {
-                    return Err(DspError::SuppressionGeometry);
-                }
-                let delay = provider.latency_samples();
-                if delay != geometry.latency_samples() as usize
-                    || delay == 0
-                    || delay > MAX_SUPPRESSION_DELAY
-                    || (ch > 0 && delay != latency)
-                {
-                    return Err(DspError::SuppressionGeometry);
-                }
-                latency = delay;
-            } else if provider.is_some() {
-                return Err(DspError::UnexpectedSuppression);
+        if p.signature.geometry.is_some() {
+            let provider = suppression.as_ref().ok_or(DspError::MissingSuppression)?;
+            let geometry = provider.geometry();
+            if Some(geometry) != p.signature.geometry || p.channels() != 1 {
+                return Err(DspError::SuppressionGeometry);
             }
+            let delay = provider.latency_samples();
+            if delay != geometry.latency_samples() as usize
+                || delay == 0
+                || delay > MAX_SUPPRESSION_DELAY
+            {
+                return Err(DspError::SuppressionGeometry);
+            }
+            latency = delay;
+        } else if suppression.is_some() {
+            return Err(DspError::UnexpectedSuppression);
         }
         Ok(Self {
             signature: p.signature,
             retired: false,
             channels: std::array::from_fn(|ch| ChannelState {
-                suppression: suppression[ch].take(),
                 bypass_dry: vec![0.0; if ch < p.channels() { latency } else { 0 }]
                     .into_boxed_slice(),
                 bypass_position: 0,
             }),
             latency,
+            suppression,
             gain: if p.gain_on { p.gain } else { 1.0 },
             wet: if p.noise_on { p.wet } else { 0.0 },
             gate_db: 0.0,
@@ -992,14 +988,14 @@ impl Dsp {
         Ramp::Moving(steps)
     }
     pub fn without_suppression(p: &Prepared) -> Result<Self, DspError> {
-        Self::new(p, [None, None])
+        Self::new(p, None)
     }
     pub fn latency_samples(&self) -> usize {
         self.latency
     }
-    /// Irreversible control-side retirement after callback quiescence. The
-    /// deadline is shared by all channel providers; retry can observe a late
-    /// join, but processing remains disabled even if the first call times out.
+    /// Irreversible control-side retirement after callback quiescence. Retry
+    /// can observe a late join, but processing remains disabled even if the
+    /// first call times out.
     pub fn drain_suppression(
         &mut self,
         timeout: std::time::Duration,
@@ -1008,16 +1004,12 @@ impl Dsp {
         let end = std::time::Instant::now()
             .checked_add(timeout)
             .ok_or(RetirementError::TimedOut)?;
-        let mut failure = None;
-        for channel in &mut self.channels {
-            if let Some(provider) = &mut channel.suppression
-                && let Err(error) =
-                    provider.drain(end.saturating_duration_since(std::time::Instant::now()))
-            {
-                failure.get_or_insert(error);
+        match &mut self.suppression {
+            Some(provider) => {
+                provider.drain(end.saturating_duration_since(std::time::Instant::now()))
             }
+            None => Ok(()),
         }
-        failure.map_or(Ok(()), Err)
     }
     fn check(&self, p: &Prepared, lengths: [usize; 2]) -> Result<usize, DspError> {
         if self.retired {
@@ -1445,8 +1437,8 @@ impl Dsp {
             }
         }
     }
-    /// The suppression stage over `n` samples of `x`: each channel's
-    /// provider, then the voice gate.
+    /// The suppression stage over `n` samples of `x`: the provider on the
+    /// one channel, then the voice gate.
     #[inline]
     fn suppression_block(
         &mut self,
@@ -1460,19 +1452,14 @@ impl Dsp {
         let mut voice = [None; BLOCK];
         let mut wet32 = [0.0; BLOCK];
         wet.each(n, |t, wet| wet32[t] = wet as f32);
-        let mut first = true;
-        for (state, samples) in self.channels.iter_mut().zip(x.iter_mut()).take(channels) {
-            if let Some(provider) = state.suppression.as_mut() {
-                suppress(
-                    provider.as_mut(),
-                    &mut samples[..n],
-                    &wet32[..n],
-                    first,
-                    &mut voice[..n],
-                    m,
-                );
-                first = false;
-            }
+        if let Some(provider) = self.suppression.as_mut() {
+            suppress(
+                provider.as_mut(),
+                &mut x[0][..n],
+                &wet32[..n],
+                &mut voice[..n],
+                m,
+            );
         }
         let mut t = 0;
         while t < n {
@@ -1498,15 +1485,12 @@ impl Dsp {
         for stage in order[..count].iter().copied() {
             if stage == Effect::Suppression {
                 let mut voice = None;
-                let mut first = true;
-                for (ch, sample) in x.iter_mut().enumerate().take(p.channels()) {
-                    if let Some(provider) = self.channels[ch].suppression.as_mut() {
-                        *sample = provider
-                            .process_sample(safe(*sample, 16.0, m) as f32, self.wet as f32)
-                            as f64;
-                        voice = merge_voice(first, voice, provider.voice());
-                        first = false;
-                    }
+                if let Some(provider) = self.suppression.as_mut() {
+                    let sample = &mut x[0];
+                    *sample = provider
+                        .process_sample(safe(*sample, 16.0, m) as f32, self.wet as f32)
+                        as f64;
+                    voice = provider.voice();
                 }
                 let gain = self.gate_step_reference(p, voice, m);
                 for sample in x.iter_mut().take(p.channels()) {
@@ -1856,11 +1840,10 @@ fn limiter_gain(held: f64, peak: f64, ceiling: f64, release: f64) -> f64 {
     needed.min(1.0 - (1.0 - held) * release)
 }
 
-/// One channel's block through its suppression provider, in place. Each
+/// The channel's block through its suppression provider, in place. Each
 /// sample sees what `frame` does to it: `safe` at 16, the conversion to the
 /// provider's f32, the provider with that sample's `wet`, the conversion
-/// back, and its voice score merged into `voice`, which holds the scores of
-/// the channels before this one (`first` when there are none).
+/// back, and its voice score into `voice`.
 ///
 /// `safe` changes no provider state and the provider reads no meter, so the
 /// whole block is limited first and the provider then takes it in one call.
@@ -1869,7 +1852,6 @@ fn suppress(
     provider: &mut dyn Suppression,
     samples: &mut [f64],
     wet: &[f32],
-    first: bool,
     voice: &mut [Option<f32>],
     m: &mut Meter,
 ) {
@@ -1880,29 +1862,9 @@ fn suppress(
     for (narrow, sample) in narrow.iter_mut().zip(samples.iter()) {
         *narrow = *sample as f32;
     }
-    if first {
-        // Nothing to merge with: the scores are this channel's own.
-        provider.process_block(narrow, wet, voice);
-    } else {
-        let mut scores = [None; BLOCK];
-        let scores = &mut scores[..n];
-        provider.process_block(narrow, wet, scores);
-        for (so_far, score) in voice.iter_mut().zip(scores.iter()) {
-            *so_far = merge_voice(false, *so_far, *score);
-        }
-    }
+    provider.process_block(narrow, wet, voice);
     for (sample, narrow) in samples.iter_mut().zip(narrow.iter()) {
         *sample = f64::from(*narrow);
-    }
-}
-
-/// Combines channel voice scores for one sample: the lower one (a stereo
-/// pair opens only on voice in both), and none if any channel has no score.
-fn merge_voice(first: bool, so_far: Option<f32>, next: Option<f32>) -> Option<f32> {
-    if first {
-        next
-    } else {
-        so_far.zip(next).map(|(a, b)| a.min(b))
     }
 }
 

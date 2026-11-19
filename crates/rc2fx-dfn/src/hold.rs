@@ -13,8 +13,8 @@
 //! A frame that starts late (its predecessor ran long) therefore waits less or
 //! not at all, so one slow frame cannot push the next ones later. A callback
 //! that never clears the mark (a stopped engine) costs each frame at most the
-//! budget, and a caller that granted nothing (the inline endpoint, tests)
-//! never waits.
+//! budget, and a caller that granted nothing (a benchmark that runs the
+//! model directly, tests) never waits.
 //!
 //! One denoiser runs per process (the service allows suppression on one
 //! target), so the limits are statics.

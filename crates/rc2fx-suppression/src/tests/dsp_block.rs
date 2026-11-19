@@ -96,7 +96,7 @@ fn mic_path_bench() {
         other => panic!("RC2FX_MIC_PATH={other}"),
     };
     let p = Prepared::new(&microphone(1, 0.79, 0.61), 48_000).unwrap();
-    let mut dsp = Dsp::new(&p, [Some(provider), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(provider)).unwrap();
     let x: Vec<f32> = (0..PERIOD * 64)
         .map(|i| (i as f32 * 0.013).sin() * 0.25)
         .collect();
@@ -392,7 +392,7 @@ fn a_microphone_with_the_block_endpoint_matches_the_per_sample_endpoint() {
             let (providers, mut wires) = endpoints(case % 2 == 1);
             let mut target = microphone(1, 0.79, 0.61);
             let mut p = Prepared::new(&target, 48_000).unwrap();
-            let mut dsps = providers.map(|provider| Dsp::new(&p, [provider, None]).unwrap());
+            let mut dsps = providers.map(|provider| Dsp::new(&p, provider).unwrap());
             let mut model = Model::new(timing, 0x9E37_79B9 + case as u64);
             let mut rng = Rng(0x2545_F491_4F6C_DD1D + case as u64);
             for block in 0..BLOCKS {

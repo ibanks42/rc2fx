@@ -394,6 +394,8 @@ fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
     };
     let (costs_before, wakes_before) = (costs(), wakes());
     let frames = 240;
+    // What each pipeline added to the source totals.
+    let mut sources = [stats::here::SourceCounts::default(); 2];
     for index in 0..frames {
         let mut revised = plan.paths[1].target.clone();
         match index {
@@ -417,8 +419,12 @@ fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
         }
         let ask = [index % 11 != 3, index % 17 != 5];
         let success = index % 13 != 7;
+        let start = stats::here::sources();
         let a = run(&plain, &buffers, index, ask, success);
+        let between = stats::here::sources();
         let b = run(&gauged, &buffers, index, ask, success);
+        sources[0] = sources[0].add(between.since(start));
+        sources[1] = sources[1].add(stats::here::sources().since(between));
         assert_bits_same(&a.raw, &b.raw, &format!("frame {index}: the mixer's audio"));
         assert_bits_same(&a.out, &b.out, &format!("frame {index}: output"));
     }
@@ -427,7 +433,7 @@ fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
         (a.input_blocks, a.output_blocks, a.faults, a.skipped_outputs),
         (b.input_blocks, b.output_blocks, b.faults, b.skipped_outputs)
     );
-    assert_eq!(a.sources, b.sources);
+    assert_eq!(sources[0], sources[1]);
     assert!(a.output_blocks > 100 && a.skipped_outputs > 0);
     for path in 0..2 {
         let meter = |controls: &mut Vec<parameters::Control>| {

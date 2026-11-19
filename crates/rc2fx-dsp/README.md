@@ -72,13 +72,13 @@ adds nothing to the callback: no drain, clock read, lock, or receipt
 publication. DSPs that are dropped without draining follow the provider's own
 `Drop` behavior.
 
-A microphone state needs a real provider for each channel even when
-suppression is off, because the microphone path keeps the suppression delay.
+A microphone state needs one real provider (suppression runs on mono
+microphones only) even when suppression is off, because the microphone path
+keeps the suppression delay.
 Construction fails if a provider is missing or mismatched. The crate has no
 inference code and no selectable fake denoiser. A test-only delay endpoint
 exercises the contract. It says nothing about model quality or real-time
-behavior. The real providers are the worker and inline endpoints in
-`rc2fx-suppression`.
+behavior. The real provider is the worker endpoint in `rc2fx-suppression`.
 
 ## Tests
 

@@ -22,7 +22,6 @@ pub struct Counters {
     pub output_blocks: u64,
     pub faults: u64,
     pub skipped_outputs: u64,
-    pub sources: SourceCounts,
 }
 impl Counters {
     #[cfg(test)]
@@ -32,65 +31,37 @@ impl Counters {
             output_blocks: self.output_blocks + other.output_blocks,
             faults: self.faults + other.faults,
             skipped_outputs: self.skipped_outputs + other.skipped_outputs,
-            sources: self.sources.add(other.sources),
         }
     }
 }
-/// Per frame, for each source meant to be processed: what the mixer read.
-/// Every raw outcome is a fallback to unprocessed audio, whatever its cause.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct SourceCounts {
+/// Live totals across pipelines, for the native report: per frame, for each
+/// source meant to be processed, what the mixer read. Every raw outcome is a
+/// fallback to unprocessed audio, whatever its cause. The callback thread
+/// writes them, one per processed source each cycle, so they share a line of
+/// their own.
+pub(super) struct SourceTotals {
     /// Every request got processed audio and the frame was acknowledged.
-    pub processed: u64,
+    processed: AtomicU64,
     /// Every request got processed audio, but the frame did not complete:
     /// the mixer's callback failed, a channel went unrequested, or the path
     /// was unusable at the end. Not a raw fallback, and not counted processed.
-    pub processed_unacknowledged: u64,
+    processed_unacknowledged: AtomicU64,
     /// Helper still busy, or it had not finished the previous frame.
-    pub raw_helper_unready: u64,
+    raw_helper_unready: AtomicU64,
     /// No frame was handed to the helper last time: the first frame, the
     /// frame after a stall, inactive frame or switch to processing.
-    pub raw_no_handoff: u64,
+    raw_no_handoff: AtomicU64,
     /// The helper was handed the previous frame but produced no result for
     /// it (a mode change or DSP error under that frame).
-    pub raw_not_done: u64,
+    raw_not_done: AtomicU64,
     /// The path failed or was unusable this frame (settings fence, frame
     /// size, dead port, buffer mismatch).
-    pub raw_invalid: u64,
+    raw_invalid: AtomicU64,
     /// Meant to be processed, but the mixer never requested the buffer.
-    pub unobserved: u64,
+    unobserved: AtomicU64,
     /// Individual buffer requests answered with raw input, for any reason.
     /// A frame counts once above, under its first raw cause, even when an
     /// earlier request in it got processed audio.
-    pub raw_returns: u64,
-}
-impl SourceCounts {
-    #[cfg(test)]
-    fn add(self, other: Self) -> Self {
-        Self {
-            processed: self.processed + other.processed,
-            processed_unacknowledged: self.processed_unacknowledged
-                + other.processed_unacknowledged,
-            raw_helper_unready: self.raw_helper_unready + other.raw_helper_unready,
-            raw_no_handoff: self.raw_no_handoff + other.raw_no_handoff,
-            raw_not_done: self.raw_not_done + other.raw_not_done,
-            raw_invalid: self.raw_invalid + other.raw_invalid,
-            unobserved: self.unobserved + other.unobserved,
-            raw_returns: self.raw_returns + other.raw_returns,
-        }
-    }
-}
-/// Live totals of `SourceCounts` across pipelines, for the native report. The
-/// callback thread writes them, one per processed source each cycle, so they
-/// share a line of their own.
-pub(super) struct SourceTotals {
-    processed: AtomicU64,
-    processed_unacknowledged: AtomicU64,
-    raw_helper_unready: AtomicU64,
-    raw_no_handoff: AtomicU64,
-    raw_not_done: AtomicU64,
-    raw_invalid: AtomicU64,
-    unobserved: AtomicU64,
     pub(super) raw_returns: AtomicU64,
 }
 pub(super) static SOURCES: Line<SourceTotals> = Line(SourceTotals {
@@ -114,21 +85,19 @@ pub(super) enum Outcome {
     Invalid,
     Unobserved,
 }
-pub(super) fn tally(counts: &mut SourceCounts, outcome: Outcome) {
-    let (count, total) = match outcome {
-        Outcome::Processed => (&mut counts.processed, &SOURCES.processed),
-        Outcome::ProcessedUnacknowledged => (
-            &mut counts.processed_unacknowledged,
-            &SOURCES.processed_unacknowledged,
-        ),
-        Outcome::HelperUnready => (&mut counts.raw_helper_unready, &SOURCES.raw_helper_unready),
-        Outcome::NoHandoff => (&mut counts.raw_no_handoff, &SOURCES.raw_no_handoff),
-        Outcome::NotDone => (&mut counts.raw_not_done, &SOURCES.raw_not_done),
-        Outcome::Invalid => (&mut counts.raw_invalid, &SOURCES.raw_invalid),
-        Outcome::Unobserved => (&mut counts.unobserved, &SOURCES.unobserved),
+pub(super) fn tally(outcome: Outcome) {
+    let total = match outcome {
+        Outcome::Processed => &SOURCES.processed,
+        Outcome::ProcessedUnacknowledged => &SOURCES.processed_unacknowledged,
+        Outcome::HelperUnready => &SOURCES.raw_helper_unready,
+        Outcome::NoHandoff => &SOURCES.raw_no_handoff,
+        Outcome::NotDone => &SOURCES.raw_not_done,
+        Outcome::Invalid => &SOURCES.raw_invalid,
+        Outcome::Unobserved => &SOURCES.unobserved,
     };
-    *count += 1;
     total.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    here::tally(Some(outcome));
 }
 pub fn sources() -> serde_json::Value {
     let read = |value: &AtomicU64| value.load(Ordering::Relaxed);
@@ -320,4 +289,78 @@ pub fn processing_counters() -> serde_json::Value {
         "dspFaults": read(&LIVE_FAULTS),
         "skippedOutputs": read(&LIVE_SKIPPED_OUTPUTS),
     })
+}
+/// Tests: what this thread's callbacks added to `SOURCES`. The statics are
+/// shared by every test running at once, and a test's callbacks run on its
+/// own thread.
+#[cfg(test)]
+pub(super) mod here {
+    use super::Outcome;
+    use std::cell::Cell;
+
+    /// As `SourceTotals`, field for field.
+    #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+    pub struct SourceCounts {
+        pub processed: u64,
+        pub processed_unacknowledged: u64,
+        pub raw_helper_unready: u64,
+        pub raw_no_handoff: u64,
+        pub raw_not_done: u64,
+        pub raw_invalid: u64,
+        pub unobserved: u64,
+        pub raw_returns: u64,
+    }
+    impl SourceCounts {
+        /// What was added between `before` and `self`.
+        pub fn since(self, before: Self) -> Self {
+            Self {
+                processed: self.processed - before.processed,
+                processed_unacknowledged: self.processed_unacknowledged
+                    - before.processed_unacknowledged,
+                raw_helper_unready: self.raw_helper_unready - before.raw_helper_unready,
+                raw_no_handoff: self.raw_no_handoff - before.raw_no_handoff,
+                raw_not_done: self.raw_not_done - before.raw_not_done,
+                raw_invalid: self.raw_invalid - before.raw_invalid,
+                unobserved: self.unobserved - before.unobserved,
+                raw_returns: self.raw_returns - before.raw_returns,
+            }
+        }
+        pub fn add(self, other: Self) -> Self {
+            Self {
+                processed: self.processed + other.processed,
+                processed_unacknowledged: self.processed_unacknowledged
+                    + other.processed_unacknowledged,
+                raw_helper_unready: self.raw_helper_unready + other.raw_helper_unready,
+                raw_no_handoff: self.raw_no_handoff + other.raw_no_handoff,
+                raw_not_done: self.raw_not_done + other.raw_not_done,
+                raw_invalid: self.raw_invalid + other.raw_invalid,
+                unobserved: self.unobserved + other.unobserved,
+                raw_returns: self.raw_returns + other.raw_returns,
+            }
+        }
+    }
+    thread_local! {
+        static COUNTS: Cell<SourceCounts> = Cell::new(SourceCounts::default());
+    }
+    /// One outcome, or with `None` one raw return.
+    pub(in super::super) fn tally(outcome: Option<Outcome>) {
+        COUNTS.with(|counts| {
+            let mut value = counts.get();
+            *match outcome {
+                Some(Outcome::Processed) => &mut value.processed,
+                Some(Outcome::ProcessedUnacknowledged) => &mut value.processed_unacknowledged,
+                Some(Outcome::HelperUnready) => &mut value.raw_helper_unready,
+                Some(Outcome::NoHandoff) => &mut value.raw_no_handoff,
+                Some(Outcome::NotDone) => &mut value.raw_not_done,
+                Some(Outcome::Invalid) => &mut value.raw_invalid,
+                Some(Outcome::Unobserved) => &mut value.unobserved,
+                None => &mut value.raw_returns,
+            } += 1;
+            counts.set(value);
+        });
+    }
+    /// The totals this thread has added so far.
+    pub fn sources() -> SourceCounts {
+        COUNTS.with(Cell::get)
+    }
 }

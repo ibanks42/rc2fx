@@ -34,7 +34,7 @@ pub struct Chat {
 impl Chat {
     pub fn new(p: &Prepared, provider: Box<dyn Suppression>) -> Result<Self, DspError> {
         let cp = p.chat.as_ref().ok_or(DspError::MissingChatStem)?;
-        let voice = Dsp::new(&cp.voice, [Some(provider), None])?;
+        let voice = Dsp::new(&cp.voice, Some(provider))?;
         let latency = voice.latency_samples();
         Ok(Self {
             voice,
@@ -117,7 +117,7 @@ impl Chat {
                     GAIN_SMOOTH * ((if vp.bypass { 0. } else { 1. }) - self.voice.processing_blend);
                 blends[t] = self.voice.processing_blend;
             }
-            self.voice.channels[0]
+            self.voice
                 .suppression
                 .as_mut()
                 .ok_or(DspError::MissingSuppression)?
@@ -197,7 +197,8 @@ impl Chat {
             self.voice.wet += GAIN_SMOOTH * (vp.wet - self.voice.wet);
             self.voice.processing_blend +=
                 GAIN_SMOOTH * ((if vp.bypass { 0. } else { 1. }) - self.voice.processing_blend);
-            let provider = self.voice.channels[0]
+            let provider = self
+                .voice
                 .suppression
                 .as_mut()
                 .ok_or(DspError::MissingSuppression)?;

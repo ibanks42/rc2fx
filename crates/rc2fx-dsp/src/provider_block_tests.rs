@@ -64,8 +64,8 @@ struct Hop {
     count: u64,
     voice: Option<f32>,
     digest: u64,
-    /// Frames each step of the schedule lasts, and where this channel is in
-    /// it, so two channels score differently.
+    /// Frames each step of the schedule lasts, and where this provider is in
+    /// it, so providers built for different channels score differently.
     stretch: u64,
     offset: u64,
     wild: bool,
@@ -283,25 +283,19 @@ impl Providers {
     }
 }
 
-/// One state and its providers' probes.
+/// One state and its provider's probe.
 struct Side {
     dsp: Dsp,
-    probes: [Arc<Probe>; 2],
+    probe: Arc<Probe>,
 }
 impl Side {
     fn new(p: &Prepared, providers: Providers, block: bool) -> Self {
-        let probes: [Arc<Probe>; 2] = Default::default();
-        let dsp = Dsp::new(
-            p,
-            std::array::from_fn(|ch| {
-                (ch < p.channels()).then(|| providers.boxed(ch, block, &probes[ch]))
-            }),
-        )
-        .unwrap();
-        Self { dsp, probes }
+        let probe = Arc::<Probe>::default();
+        let dsp = Dsp::new(p, Some(providers.boxed(0, block, &probe))).unwrap();
+        Self { dsp, probe }
     }
-    fn probe_bits(&self) -> [[u64; 4]; 2] {
-        [self.probes[0].bits(), self.probes[1].bits()]
+    fn probe_bits(&self) -> [u64; 4] {
+        self.probe.bits()
     }
 }
 
@@ -403,12 +397,10 @@ impl Trio {
         expected_meter
     }
     /// The overridden method ran for every block, and only there.
-    fn assert_paths(&self, channels: usize) {
-        for ch in 0..2 {
-            let blocks = |side: &Side| side.probes[ch].blocks.load(Relaxed);
-            assert_eq!(blocks(&self.block) > 0, ch < channels);
-            assert_eq!(blocks(&self.default) + blocks(&self.reference), 0);
-        }
+    fn assert_paths(&self) {
+        let blocks = |side: &Side| side.probe.blocks.load(Relaxed);
+        assert!(blocks(&self.block) > 0);
+        assert_eq!(blocks(&self.default) + blocks(&self.reference), 0);
     }
 }
 
@@ -420,24 +412,13 @@ fn microphone(channels: u8) -> Target {
     target
 }
 
-/// A mono microphone goes through validation. Validation admits no stereo
-/// one, so that state is built past it to keep the merged score checked.
 fn prepare(target: &Target) -> Prepared {
     try_prepare(target).unwrap()
 }
 
 /// None for settings that validation refuses.
 fn try_prepare(target: &Target) -> Option<Prepared> {
-    if target.channels == 1 {
-        return Prepared::new(target, 48_000).ok();
-    }
-    // Everything but the channel count is validated all the same.
-    let mono = Target {
-        channels: 1,
-        ..target.clone()
-    };
-    mono.validate().ok()?;
-    Prepared::validated(target, target.suppression.geometry()).ok()
+    Prepared::new(target, 48_000).ok()
 }
 
 /// Input with a few values no source should send: one in about `rare`.
@@ -472,7 +453,8 @@ fn input(r: &mut Rng, frames: usize, channels: u8, amplitude: f64, rare: u64) ->
 /// settings. Block lengths go through every length from 1 to `BLOCK`, then
 /// lengths `Dsp` has to cut, then the device period alone so that every
 /// smoother stops.
-fn scripted(channels: u8, providers: Providers, order: [Effect; 6]) -> [[u64; 2]; 2] {
+fn scripted(providers: Providers, order: [Effect; 6]) -> [[u64; 2]; 2] {
+    let channels = 1;
     let mut target = microphone(channels);
     target.order = order.to_vec();
     target.eq.enabled = true;
@@ -530,7 +512,7 @@ fn scripted(channels: u8, providers: Providers, order: [Effect; 6]) -> [[u64; 2]
         total.voice = total.voice.max(meter.voice);
         total.gate_open = total.gate_open.max(meter.gate_open);
     }
-    trio.assert_paths(channels as usize);
+    trio.assert_paths();
     assert!(lengths[1..].iter().all(|count| *count > 0));
     assert!(total.clipped > 0);
     assert!(total.voice > 0.0);
@@ -580,25 +562,7 @@ fn a_mono_microphone_matches_with_a_provider_block_method() {
             offset: 0,
             wild,
         };
-        scripted(1, providers, order)
-    });
-    assert_moving_and_steady(&runs);
-}
-
-#[test]
-fn a_stereo_microphone_matches_with_a_provider_block_method() {
-    let runs = [
-        (1, true, SUPPRESSION_FIRST),
-        (40, false, SUPPRESSION_LAST),
-        (400, true, SUPPRESSION_FIRST),
-    ]
-    .map(|(stretch, wild, order)| {
-        let providers = Providers {
-            stretch,
-            offset: 0,
-            wild,
-        };
-        scripted(2, providers, order)
+        scripted(providers, order)
     });
     assert_moving_and_steady(&runs);
 }
@@ -627,7 +591,7 @@ fn suppression_switched_off_and_on_restarts_and_matches() {
             }
         }
         if target.suppression.enabled {
-            trio.assert_paths(1);
+            trio.assert_paths();
         }
         target.suppression.enabled = !target.suppression.enabled;
         let next = Prepared::new(&target, 48_000).unwrap();
@@ -655,7 +619,7 @@ fn random_settings_edits_and_input_match_with_a_provider_block_method() {
     let mut r = Rng(0x94D0_49BB_1331_11EB);
     let (mut clipped, mut gate, mut wet) = (0, [0; 2], [0; 2]);
     for case in 0..cases {
-        let channels = 1 + r.below(2) as u8;
+        let channels = 1;
         let mut target = microphone(channels);
         target.suppression.wet = r.unit();
         target.suppression.gate = rc2fx_core::VoiceGate::with_strength(r.unit());
@@ -708,7 +672,7 @@ fn random_settings_edits_and_input_match_with_a_provider_block_method() {
             });
             clipped += meter.clipped;
         }
-        trio.assert_paths(channels as usize);
+        trio.assert_paths();
         for i in 0..2 {
             gate[i] += trio.gate[i];
             wet[i] += trio.wet[i];
@@ -721,16 +685,16 @@ fn random_settings_edits_and_input_match_with_a_provider_block_method() {
 
 /// The stage on its own, with samples no earlier stage would leave: not
 /// finite, above 16, beyond an f32. Each sample must get `safe`, both
-/// conversions, its own wet value and the merge exactly as `frame` writes
-/// them, whatever the provider's form.
+/// conversions, its own wet value and its voice score exactly as `frame`
+/// writes them, whatever the provider's form, over whatever the scores
+/// held before.
 #[test]
-fn the_stage_limits_converts_and_merges_like_the_per_sample_calls() {
+fn the_stage_limits_and_converts_like_the_per_sample_calls() {
     let mut r = Rng(0xA076_1D64_78BD_642F);
     let mut clipped = 0;
     for round in 0..3000 {
         let n = 1 + r.below(BLOCK as u64) as usize;
         let spoiled = r.below(3) != 0;
-        let first = r.below(2) == 0;
         let providers = Providers {
             stretch: 1 + r.below(3),
             offset: r.below(14),
@@ -761,6 +725,7 @@ fn the_stage_limits_converts_and_merges_like_the_per_sample_calls() {
                     _ => r.unit() as f32,
                 })
                 .collect();
+            // Left from before: every one is replaced.
             let so_far: Vec<Option<f32>> = (0..n)
                 .map(|_| match r.below(6) {
                     0 => None,
@@ -778,7 +743,7 @@ fn the_stage_limits_converts_and_merges_like_the_per_sample_calls() {
                 expected[t] = by_sample
                     .process_sample(safe(expected[t], 16.0, &mut expected_meter) as f32, wet[t])
                     as f64;
-                expected_voice[t] = merge_voice(first, expected_voice[t], by_sample.voice());
+                expected_voice[t] = by_sample.voice();
             }
             let bits = |x: &[f64]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
             let voice_bits =
@@ -787,15 +752,8 @@ fn the_stage_limits_converts_and_merges_like_the_per_sample_calls() {
                 let mut actual = samples.clone();
                 let mut voice = so_far.clone();
                 let mut meter = Meter::default();
-                suppress(
-                    provider.as_mut(),
-                    &mut actual,
-                    &wet,
-                    first,
-                    &mut voice,
-                    &mut meter,
-                );
-                let context = format!("{name} round {round} step {step} n {n} first {first}");
+                suppress(provider.as_mut(), &mut actual, &wet, &mut voice, &mut meter);
+                let context = format!("{name} round {round} step {step} n {n}");
                 assert_eq!(bits(&actual), bits(&expected), "{context}");
                 assert_eq!(
                     voice_bits(&voice),

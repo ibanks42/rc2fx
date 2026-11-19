@@ -7,14 +7,12 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("rc2fx's mixer crates build for Linux only");
 
-mod inline;
 mod metrics;
 mod model;
 mod outlier;
 mod queue;
 mod scheduling;
 mod wake;
-pub use inline::Inline;
 pub use metrics::Timing;
 use model::Model;
 pub use model::VendorModel;
@@ -38,7 +36,6 @@ use std::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    InvalidAllowance,
     InvalidFrame,
     ModelGeometry,
     ModelCreation,
@@ -434,8 +431,7 @@ pub struct Worker {
     retirement_timed_out: bool,
 }
 impl Worker {
-    /// A threaded worker for the fixed geometry; `Endpoint::new` picks this
-    /// or the inline endpoint by the geometry's worker lead.
+    /// A threaded worker for the fixed geometry.
     pub fn new(lookahead: u8, options: WorkerOptions) -> Result<Self, Error> {
         Self::new_with_affinity(lookahead, options, AffinityScope::Inherited)
     }
@@ -444,38 +440,7 @@ impl Worker {
         options: WorkerOptions,
         scope: AffinityScope,
     ) -> Result<Self, Error> {
-        Self::new_with_affinity_and_lead(lookahead, None, options, scope)
-    }
-    /// `lead` replaces the model's scheduling allowance, for testing or
-    /// benchmarking a shorter or longer one; the prepared DSP must be
-    /// built with the same value. None keeps the admitted allowance.
-    pub fn new_with_affinity_and_lead(
-        lookahead: u8,
-        lead: Option<usize>,
-        options: WorkerOptions,
-        scope: AffinityScope,
-    ) -> Result<Self, Error> {
-        let mut geometry = Geometry::for_lookahead(lookahead)?;
-        if let Some(lead) = lead {
-            geometry.worker_lead_samples = lead;
-        }
-        if geometry.worker_lead_samples == 0 {
-            return Err(Error::InvalidAllowance);
-        }
-        scheduling::validate(options)?;
-        let model = VendorModel::new(lookahead)?;
-        Self::spawn_with_affinity(geometry, Box::new(model), options, scope)
-    }
-}
-impl Worker {
-    /// A worker with an explicit geometry (a lead override); the model and
-    /// the DSP prepared for the same geometry must match it.
-    fn with_geometry(
-        lookahead: u8,
-        geometry: Geometry,
-        options: WorkerOptions,
-        scope: AffinityScope,
-    ) -> Result<Self, Error> {
+        let geometry = Geometry::for_lookahead(lookahead)?;
         scheduling::validate(options)?;
         let model = VendorModel::new(lookahead)?;
         Self::spawn_with_affinity(geometry, Box::new(model), options, scope)
@@ -945,47 +910,24 @@ impl Worker {
         }
     }
 }
-/// The callback endpoint: a threaded `Worker` when its
-/// geometry has a worker lead, the `Inline` endpoint (the model runs on the
-/// calling thread as each frame completes) when the lead is zero.
+/// The callback endpoint: the model runs on a threaded `Worker`.
 pub enum Endpoint {
     Worker(Worker),
-    Inline(Inline),
 }
 impl Endpoint {
     pub fn new(lookahead: u8, options: WorkerOptions) -> Result<Self, Error> {
         Self::new_with_affinity(lookahead, options, AffinityScope::Inherited)
     }
-    /// `options` and `scope` apply to a threaded worker only.
     pub fn new_with_affinity(
         lookahead: u8,
         options: WorkerOptions,
         scope: AffinityScope,
     ) -> Result<Self, Error> {
-        Self::new_with_affinity_and_lead(lookahead, None, options, scope)
-    }
-    /// `lead` overrides the worker's scheduling allowance (see
-    /// `Worker::new_with_affinity_and_lead`); the inline endpoint has none.
-    pub fn new_with_affinity_and_lead(
-        lookahead: u8,
-        lead: Option<usize>,
-        options: WorkerOptions,
-        scope: AffinityScope,
-    ) -> Result<Self, Error> {
-        let mut geometry = Geometry::for_lookahead(lookahead)?;
-        if let Some(lead) = lead {
-            geometry.worker_lead_samples = lead;
-        }
-        if geometry.worker_lead_samples == 0 {
-            Inline::new(lookahead).map(Self::Inline)
-        } else {
-            Worker::with_geometry(lookahead, geometry, options, scope).map(Self::Worker)
-        }
+        Worker::new_with_affinity(lookahead, options, scope).map(Self::Worker)
     }
     pub fn geometry(&self) -> Geometry {
         match self {
             Self::Worker(w) => w.geometry(),
-            Self::Inline(i) => i.geometry(),
         }
     }
     pub fn latency_samples(&self) -> usize {
@@ -994,40 +936,28 @@ impl Endpoint {
     pub fn telemetry(&self) -> Telemetry {
         match self {
             Self::Worker(w) => w.telemetry(),
-            Self::Inline(i) => i.telemetry(),
         }
     }
     pub fn voice(&self) -> Option<f32> {
         match self {
             Self::Worker(w) => w.voice(),
-            Self::Inline(i) => i.voice(),
         }
     }
     pub fn finish(&mut self, mode: StopMode, timeout: Duration) -> Result<Terminal, Error> {
         match self {
             Self::Worker(w) => w.finish(mode, timeout),
-            Self::Inline(i) => Ok(i.finish(mode)),
         }
     }
     pub fn process_sample(&mut self, input: f32, wet: f32) -> f32 {
         match self {
             Self::Worker(w) => w.process_sample(input, wet),
-            Self::Inline(i) => i.process_sample(input, wet),
         }
     }
     /// `process_sample` for a block, in place, with each sample's `voice()`;
-    /// see `Worker::process_block`. The inline endpoint takes the samples one
-    /// at a time.
+    /// see `Worker::process_block`.
     pub fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
         match self {
             Self::Worker(w) => w.process_block(samples, wet, voice),
-            Self::Inline(i) => {
-                assert!(wet.len() >= samples.len() && voice.len() >= samples.len());
-                for ((sample, &wet), voice) in samples.iter_mut().zip(wet).zip(voice) {
-                    *sample = i.process_sample(*sample, wet);
-                    *voice = i.voice();
-                }
-            }
         }
     }
 }
@@ -1041,13 +971,6 @@ impl Suppression for Endpoint {
     fn drain(&mut self, timeout: Duration) -> Result<(), RetirementError> {
         match self {
             Self::Worker(w) => w.drain_provider(timeout),
-            Self::Inline(i) => {
-                if i.finish(StopMode::Drain).snapshot.failed {
-                    Err(RetirementError::WorkerFailed)
-                } else {
-                    Ok(())
-                }
-            }
         }
     }
     fn process_sample(&mut self, input: f32, wet: f32) -> f32 {

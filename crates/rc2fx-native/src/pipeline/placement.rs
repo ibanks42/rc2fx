@@ -22,8 +22,6 @@ pub(super) struct Sampler {
     pub(super) settled: bool,
     /// The first boundary not yet sampled: its callback had no handoff.
     pub(super) pending: Option<u32>,
-    /// Samples taken after their boundary's callback.
-    pub(super) deferred: u64,
 }
 impl Sampler {
     /// Every callback: note a boundary, with or without a handoff. Later
@@ -38,7 +36,6 @@ impl Sampler {
     pub(super) fn take(&mut self, cycle: u32) -> Option<bool> {
         let deferred = self.pending.take()? != cycle;
         if deferred {
-            self.deferred += 1;
             PLACEMENT_DEFERRED.fetch_add(1, Ordering::Relaxed);
         }
         Some(deferred)

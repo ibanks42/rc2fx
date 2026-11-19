@@ -14,23 +14,14 @@ included in every build.
 | DeepFilterNet3, lookahead 0 | worker | 240 | 120 | 320 | 680 (14.2 ms) |
 | DeepFilterNet3, lookahead 1 | worker | 240 | 360 | 320 | 920 (19.2 ms) |
 
-`Endpoint::new` chooses the endpoint from the algorithm's admitted geometry in
-`rc2fx-core`.
+`Endpoint::new` takes the geometry from the algorithm's admitted geometry in
+`rc2fx-core`. Every endpoint runs its model on the threaded `Worker`.
 
-A nonzero worker allowance selects the threaded `Worker`. The allowance is a
-whole number of 112-sample device periods, sized from the model's worst frame
-time measured on the mixer. A result that misses it plays dry until it
-arrives. The mixer's own period is
-unchanged.
-
-A zero allowance selects `Inline`. The model runs on the calling thread as
-each frame completes. On the mixer that thread is the DSP helper, which has a
-whole device period on its own core, so the output needs no scheduling margin.
-This only works for a model whose worst frame fits in what remains of the
-helper's period after its start offset and the other paths' DSP. None of the
-admitted algorithms uses the inline endpoint. It
-is kept for a model with a shorter hop. `deep_filter_from_weights`, which
-loads a candidate model for benchmarking, builds a zero-lead geometry.
+The worker allowance is a whole number of 112-sample device periods, sized
+from the model's worst frame time measured on the mixer. A result that misses
+it plays dry until it arrives. The mixer's own period is unchanged.
+`deep_filter_from_weights`, which loads a candidate model for benchmarking,
+builds a zero-lead geometry.
 
 ## Threaded worker
 
@@ -96,15 +87,6 @@ thread's resources can be released. Live snapshots and
 An already finished worker can be joined with a zero wait. After any wait,
 completion has to be observed strictly before the deadline. A late wakeup of
 the control thread can't certify that the worker finished in time.
-
-## Inline endpoint
-
-`Inline` has no thread. The model runs inside `process_sample` as each frame
-completes, and the result plays over the next frame. Its single warm-up runs
-on the first call, which is the only time it allocates. It reports through the
-same `Telemetry` type (frame CPU and wall time, completed frames, failure),
-which starts in the joined state, and `finish` publishes the terminal receipt
-immediately.
 
 ## Audio handling
 
