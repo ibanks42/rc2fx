@@ -2217,7 +2217,7 @@ fn a_pipeline_dropped_with_a_frame_in_flight_stops_its_helper_first() {
 /// This fails when someone touches them, so that they read `await_frame`.
 #[test]
 fn the_handshakes_four_accesses_are_sequentially_consistent_in_the_source() {
-    let source = include_str!("../../pipeline.rs");
+    let source = include_str!("../helper.rs");
     let between = |from: &str, to: &str| {
         let start = source.find(from).unwrap_or_else(|| panic!("{from}"));
         let length = source[start..].find(to).unwrap_or_else(|| panic!("{to}"));
@@ -2227,7 +2227,7 @@ fn the_handshakes_four_accesses_are_sequentially_consistent_in_the_source() {
         text.match_indices(what).map(|found| found.0).collect()
     };
     // The helper: before each of its two sleeps, the store, then the look.
-    let helper = between("\nfn await_frame<", "\nfn helper_loop<");
+    let helper = between("\npub(super) fn await_frame<", "\nfn helper_loop<");
     let stores = places(helper, "shared.wake_at.store(");
     let looks = places(helper, "shared.state.load(");
     let sleeps = [
@@ -2245,7 +2245,7 @@ fn the_handshakes_four_accesses_are_sequentially_consistent_in_the_source() {
     }
     assert!(stores[1] > sleeps[0]);
     // The callback: the store, then the read, then the wake.
-    let callback = between("\n    fn queue(", "\nimpl Helper {");
+    let callback = between("\n    pub(super) fn queue(", "\nimpl Helper {");
     let store = places(callback, "shared.state.store(QUEUED, Ordering::SeqCst);");
     let read = places(callback, "shared.wake_at.load(Ordering::SeqCst);");
     let wake = places(callback, ".unpark()");

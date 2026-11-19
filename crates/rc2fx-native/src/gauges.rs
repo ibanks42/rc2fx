@@ -5,7 +5,7 @@
 //!
 //! The same switch turns on the measurements that cost the callback time and
 //! that nothing but a bench run reads: thread CPU clocks (timing.rs), per-path
-//! and buffer-resolve costs and the helper wake gauge (pipeline.rs), the
+//! and buffer-resolve costs and the helper wake gauge (pipeline/stats.rs), the
 //! cycle-start drift check and the count of buffer lookups made outside the
 //! callback (lib.rs).
 //!
