@@ -3,6 +3,7 @@ package installer
 import (
 	"bytes"
 	"context"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"maps"
 	"net/url"
 	"os"
@@ -16,8 +17,9 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/tuf"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/internal/tuf/tuftest"
 )
 
 func TestTheEmbeddedTrustRootIsTheConfiguredOne(t *testing.T) {
@@ -58,7 +60,7 @@ func TestConfiguredProductionRootIsValidAndSeparatesRootFromReleaseKeys(t *testi
 type mixerFixture struct {
 	t        *testing.T
 	dir      string
-	repo     *tufRepo
+	repo     *tuftest.Repo
 	metadata MixerTarget
 	payload  []byte
 }
@@ -102,7 +104,7 @@ func mixerPayload(t *testing.T) []byte {
 
 func newMixerFixture(t *testing.T) *mixerFixture {
 	dir := t.TempDir()
-	repo := newTufRepo(t, dir)
+	repo := tuftest.NewRepo(t, dir)
 	payload := mixerPayload(t)
 	envelope, err := embed.Standalone(payload)
 	must(t, err)
@@ -139,16 +141,16 @@ func (f *mixerFixture) publish(sequence int64, expires string) {
 	must(t, err)
 	value, err := sjson.Value(raw)
 	must(t, err)
-	f.repo.sign([]tufTarget{
-		{name: "firmware-profiles.json", file: catalogPath, custom: map[string]any{"rc2fxCatalog": f.metadata.Version}},
-		{name: "payload", file: path, custom: map[string]any{"rc2fxMixer": value}},
+	f.repo.Sign([]tuftest.Target{
+		{Name: "firmware-profiles.json", File: catalogPath, Custom: map[string]any{"rc2fxCatalog": f.metadata.Version}},
+		{Name: "payload", File: path, Custom: map[string]any{"rc2fxMixer": value}},
 	}, [3]int64{sequence, sequence, sequence}, expires)
 }
 
 func (f *mixerFixture) load() (*MixerRepository, error) {
 	state := filepath.Join(f.dir, "state")
 	must(f.t, os.MkdirAll(state, 0o755))
-	return openMixerRepository(context.Background(), tuf.Folders{Metadata: filepath.Join(f.dir, "metadata"), Targets: f.dir}, f.repo.trusted, state)
+	return openMixerRepository(context.Background(), tuf.Folders{Metadata: filepath.Join(f.dir, "metadata"), Targets: f.dir}, f.repo.Trusted, state)
 }
 
 func TestSignedCatalogEnforcesProfileAppMinimumAndCannotBeReplaced(t *testing.T) {
@@ -189,7 +191,7 @@ func TestSignedCatalogEnforcesProfileAppMinimumAndCannotBeReplaced(t *testing.T)
 		t.Fatal("a replaced catalog was accepted")
 	}
 	expired := *verified
-	expired.expires = mustTime(t, "2000-01-01T00:00:00Z")
+	expired.expires = tuftest.MustTime(t, "2000-01-01T00:00:00Z")
 	if _, err := expired.Catalog(); err == nil {
 		t.Fatal("an expired catalog authorization was used")
 	}
@@ -237,13 +239,13 @@ func TestSignedRepositoryEnforcesAuthenticityCompatibilityExpiryAndRollback(t *t
 	if d != digest(verified.bundle) {
 		t.Fatal("digest")
 	}
-	if !slices.ContainsFunc(entries, func(e Entry) bool { return e.Path == "usr/sbin/rc_audio_mixer" }) {
+	if !slices.ContainsFunc(entries, func(e archive.Entry) bool { return e.Path == "usr/sbin/rc_audio_mixer" }) {
 		t.Fatal("no mixer shim")
 	}
 	for name, data := range verified.bundle {
 		want := "opt/rc2fx/" + name
-		if !slices.ContainsFunc(entries, func(e Entry) bool {
-			return e.Kind == EntryFile && e.Path == want && bytes.Equal(e.Data, data)
+		if !slices.ContainsFunc(entries, func(e archive.Entry) bool {
+			return e.Kind == archive.EntryFile && e.Path == want && bytes.Equal(e.Data, data)
 		}) {
 			t.Fatalf("%s not in the image", want)
 		}
@@ -313,7 +315,7 @@ func TestTrustedRootRotatesOnlyWithAValidOldAndNewSignatureChain(t *testing.T) {
 	f.publish(1, "2099-01-01T00:00:00Z")
 	_, err := f.load()
 	must(t, err)
-	f.repo.rotateRoot()
+	f.repo.RotateRoot()
 	f.publish(2, "2099-01-01T00:00:00Z")
 	repository, err := f.load()
 	must(t, err)
@@ -323,7 +325,7 @@ func TestTrustedRootRotatesOnlyWithAValidOldAndNewSignatureChain(t *testing.T) {
 	must(t, err)
 	// A different self-signed root cannot replace the root shipped by the app.
 	impostor := newMixerFixture(t)
-	put(t, filepath.Join(f.dir, "metadata/2.root.json"), impostor.repo.trusted)
+	put(t, filepath.Join(f.dir, "metadata/2.root.json"), impostor.repo.Trusted)
 	// The verified chain is kept, so the mirror's copy is never read again...
 	kept, err := f.load()
 	must(t, err)
@@ -374,7 +376,7 @@ func TestUpdatesComeOnlyFromTheTwoOfficialHosts(t *testing.T) {
 
 func TestPublishedMetadataBelongsTogetherOnlyWhenListedExactly(t *testing.T) {
 	snapshot := `{"signed":{"version":4}}`
-	hash := sum([]byte(snapshot))
+	hash := archive.Sum([]byte(snapshot))
 	timestamp := `{"signed":{"meta":{"snapshot.json":{"length":` + itoa(len(snapshot)) + `,"hashes":{"sha256":"` + hash + `"}}}}}`
 	if !lists(timestamp, "snapshot.json", snapshot) {
 		t.Fatal("an exact listing refused")

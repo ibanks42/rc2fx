@@ -1,13 +1,6 @@
 package platform
 
-import "os"
-
-// The USB identity of the bootloader's mass-storage gadget (`ums mmc 0`,
-// Amlogic's gadget), which shows a RØDECaster's whole eMMC as a USB disk.
-const (
-	recoveryVendor  = "1b8e"
-	recoveryProduct = "fada"
-)
+import "io"
 
 // Recovery is the part of Platform that finds a mixer's whole eMMC while its
 // bootloader shows it as a USB disk (see the installer's repair). It is
@@ -28,7 +21,7 @@ type RecoveryDevice struct {
 	Path string
 	Len  uint64
 	// Claim keeps the disk claimed (on Linux, an O_EXCL descriptor).
-	Claim *os.File
+	Claim io.Closer
 }
 
 // Close releases the claim.

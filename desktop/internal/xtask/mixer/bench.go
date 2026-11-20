@@ -19,10 +19,10 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
-	"github.com/ibanks42/rc2fx/desktop/installer/control"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/elfcheck"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/setup"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
 
 // models is the fixed suppression engine; custom is a DeepFilterNet weights
@@ -306,12 +306,12 @@ func overrunsDuring(window []byte) *overrun {
 	if !ok1 || !ok2 {
 		return nil
 	}
-	client, err := control.Open()
+	client, err := usbcontrol.Open()
 	if err != nil {
 		return nil
 	}
 	defer client.Close()
-	reply, err := client.Request(&control.Request{Method: "GET", Path: "api/v1/diagnostics"})
+	reply, err := client.Request(&usbcontrol.Request{Method: "GET", Path: "api/v1/diagnostics"})
 	if err != nil || len(reply.Body) == 0 {
 		return nil
 	}

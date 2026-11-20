@@ -1,11 +1,14 @@
 package installer
 
-import "github.com/ibanks42/rc2fx/desktop/firmware"
+import (
+	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
+)
 
 // Short forms of production functions for the tests: the Pro II's model,
 // a folder root, or a check without progress.
 
-func patchArchive(src, dst string, extra []Entry) (string, string, error) {
+func patchArchive(src, dst string, extra []archive.Entry) (string, string, error) {
 	p, err := patchArchiveForModel(firmware.ModelProIi, src, dst, extra, nil)
 	if err != nil {
 		return "", "", err

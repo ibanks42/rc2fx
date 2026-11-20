@@ -4,36 +4,37 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-func changelog(status installer.ChangelogStatus) installer.Changelog {
-	return installer.Changelog{
-		Entries: []installer.ReleaseNotes{{
+func changelog(status appupdate.ChangelogStatus) appupdate.Changelog {
+	return appupdate.Changelog{
+		Entries: []appupdate.ReleaseNotes{{
 			Version: "0.2.0",
-			URL:     installer.AppReleasesURL + "/tag/v0.2.0",
+			URL:     appupdate.AppReleasesURL + "/tag/v0.2.0",
 			Notes:   "- Faster meters",
 		}},
 		Status: status,
 	}
 }
 
-func after(result installer.UpdateCheck, manual bool) AppUpdate {
+func after(result appupdate.UpdateCheck, manual bool) AppUpdate {
 	var u AppUpdate
-	u.Finish(installer.SnapshotFromCheck(result), manual)
+	u.Finish(appupdate.SnapshotFromCheck(result), manual)
 	return u
 }
 
 func TestIncompleteHistoryIsNeverPresentedAsComplete(t *testing.T) {
-	if _, ok := HistoryNote(installer.ChangelogStatus{Kind: installer.ChangelogComplete}); ok {
+	if _, ok := HistoryNote(appupdate.ChangelogStatus{Kind: appupdate.ChangelogComplete}); ok {
 		t.Fatal("complete history has a note")
 	}
-	if n, _ := HistoryNote(installer.ChangelogStatus{Kind: installer.ChangelogPartial}); !strings.Contains(n, "could not be loaded") {
+	if n, _ := HistoryNote(appupdate.ChangelogStatus{Kind: appupdate.ChangelogPartial}); !strings.Contains(n, "could not be loaded") {
 		t.Fatal(n)
 	}
-	offline := installer.UpdateError{Kind: installer.UpdateOffline}
-	n, _ := HistoryNote(installer.ChangelogStatus{Kind: installer.ChangelogUnavailable, Error: offline})
+	offline := appupdate.UpdateError{Kind: appupdate.UpdateOffline}
+	n, _ := HistoryNote(appupdate.ChangelogStatus{Kind: appupdate.ChangelogUnavailable, Error: offline})
 	if !strings.Contains(n, "could not be loaded") || !strings.Contains(n, offline.Error()) {
 		t.Fatal(n)
 	}
@@ -42,14 +43,14 @@ func TestIncompleteHistoryIsNeverPresentedAsComplete(t *testing.T) {
 func TestOnlyProjectReleasePagesOpen(t *testing.T) {
 	safe := func(url string) bool { _, ok := SafeURL(url); return ok }
 	for url, want := range map[string]bool{
-		installer.AppReleasesURL:                      true,
-		installer.AppReleasesURL + "/tag/v0.2.0":      true,
+		appupdate.AppReleasesURL:                      true,
+		appupdate.AppReleasesURL + "/tag/v0.2.0":      true,
 		"https://github.com/ibanks42/rc2fx/releasesX": false,
 		"https://evil.example/":                       false,
-		installer.AppHistoryURL:                       true,
-		installer.MixerHistoryURL + "#v1.2.3":         true,
-		installer.MixerHistoryURL + "#v1.2.3x":        false,
-		installer.AppHistoryURL + ".evil.example":     false,
+		appupdate.AppHistoryURL:                       true,
+		appupdate.MixerHistoryURL + "#v1.2.3":         true,
+		appupdate.MixerHistoryURL + "#v1.2.3x":        false,
+		appupdate.AppHistoryURL + ".evil.example":     false,
 		RodeNotesURL:                    true,
 		"https://update.rode.com/other": false,
 		"javascript:alert(1)":           false,
@@ -61,17 +62,17 @@ func TestOnlyProjectReleasePagesOpen(t *testing.T) {
 }
 
 func TestTheOfferedChangelogIsExposed(t *testing.T) {
-	a := after(installer.UpdateCheck{
-		Kind:      installer.UpdateAvailable,
+	a := after(appupdate.UpdateCheck{
+		Kind:      appupdate.UpdateAvailable,
 		Version:   "0.2.0",
-		URL:       installer.AppReleasesURL + "/tag/v0.2.0",
-		Changelog: changelog(installer.ChangelogStatus{Kind: installer.ChangelogComplete}),
+		URL:       appupdate.AppReleasesURL + "/tag/v0.2.0",
+		Changelog: changelog(appupdate.ChangelogStatus{Kind: appupdate.ChangelogComplete}),
 	}, false)
 	v, c, ok := a.Offered()
 	if !ok || v != "0.2.0" || len(c.Entries) != 1 {
 		t.Fatalf("%v %s %+v", ok, v, c)
 	}
-	n := after(installer.UpdateCheck{Kind: installer.UpdateNoRelease}, true)
+	n := after(appupdate.UpdateCheck{Kind: appupdate.UpdateNoRelease}, true)
 	if _, _, ok := n.Offered(); ok {
 		t.Fatal("no release offered something")
 	}
@@ -83,7 +84,7 @@ func TestRodeFirmwareIsRodesNewestStableForTheMixersModel(t *testing.T) {
 	}
 	p := func(s string) *string { return &s }
 	get := func(u *AppUpdate, profile *string) string { v, _ := u.RodeFirmware(profile); return v }
-	u := after(installer.UpdateCheck{Kind: installer.UpdateNoRelease}, false)
+	u := after(appupdate.UpdateCheck{Kind: appupdate.UpdateNoRelease}, false)
 	if v, ok := u.RodeFirmware(p("rodecaster-pro-ii-1.7.7")); ok {
 		t.Fatal(v)
 	}
@@ -120,31 +121,31 @@ func TestRodeFirmwareIsRodesNewestStableForTheMixersModel(t *testing.T) {
 }
 
 func TestStartupFailuresAreQuietAndManualOnesReadable(t *testing.T) {
-	for _, e := range []installer.UpdateError{{Kind: installer.UpdateOffline}, {Kind: installer.UpdateRateLimited}} {
-		quiet := after(installer.UpdateCheck{Kind: installer.UpdateFailed, Error: e}, false)
+	for _, e := range []appupdate.UpdateError{{Kind: appupdate.UpdateOffline}, {Kind: appupdate.UpdateRateLimited}} {
+		quiet := after(appupdate.UpdateCheck{Kind: appupdate.UpdateFailed, Error: e}, false)
 		if s, ok := quiet.Status(); ok {
 			t.Fatal(s)
 		}
-		loud := after(installer.UpdateCheck{Kind: installer.UpdateFailed, Error: e}, true)
+		loud := after(appupdate.UpdateCheck{Kind: appupdate.UpdateFailed, Error: e}, true)
 		if s, ok := loud.Status(); !ok || s != e.Error() {
 			t.Fatal(s)
 		}
 	}
-	quiet := after(installer.UpdateCheck{Kind: installer.UpdateNoRelease}, false)
+	quiet := after(appupdate.UpdateCheck{Kind: appupdate.UpdateNoRelease}, false)
 	if s, ok := quiet.Status(); ok {
 		t.Fatal(s)
 	}
-	loud := after(installer.UpdateCheck{Kind: installer.UpdateNoRelease}, true)
+	loud := after(appupdate.UpdateCheck{Kind: appupdate.UpdateNoRelease}, true)
 	if s, ok := loud.Status(); !ok || s != "No release published yet" {
 		t.Fatal(s)
 	}
 }
 
 func TestOnlyAnAvailableReleaseOnThisProjectIsLinked(t *testing.T) {
-	ok := installer.AppReleasesURL + "/tag/v0.2.0"
-	a := after(installer.UpdateCheck{
-		Kind: installer.UpdateAvailable, Version: "0.2.0", URL: ok,
-		Changelog: changelog(installer.ChangelogStatus{Kind: installer.ChangelogComplete}),
+	ok := appupdate.AppReleasesURL + "/tag/v0.2.0"
+	a := after(appupdate.UpdateCheck{
+		Kind: appupdate.UpdateAvailable, Version: "0.2.0", URL: ok,
+		Changelog: changelog(appupdate.ChangelogStatus{Kind: appupdate.ChangelogComplete}),
 	}, false)
 	if url, _ := a.ReleaseURL(); url != ok {
 		t.Fatal(url)
@@ -152,14 +153,14 @@ func TestOnlyAnAvailableReleaseOnThisProjectIsLinked(t *testing.T) {
 	if s, _ := a.Status(); s != "RC2FX 0.2.0 is available" {
 		t.Fatal(s)
 	}
-	elsewhere := after(installer.UpdateCheck{
-		Kind: installer.UpdateAvailable, Version: "0.2.0", URL: "https://example.com/rc2fx",
-		Changelog: changelog(installer.ChangelogStatus{Kind: installer.ChangelogPartial}),
+	elsewhere := after(appupdate.UpdateCheck{
+		Kind: appupdate.UpdateAvailable, Version: "0.2.0", URL: "https://example.com/rc2fx",
+		Changelog: changelog(appupdate.ChangelogStatus{Kind: appupdate.ChangelogPartial}),
 	}, true)
 	if url, linked := elsewhere.ReleaseURL(); linked {
 		t.Fatal(url)
 	}
-	current := after(installer.UpdateCheck{Kind: installer.UpdateUpToDate, Latest: "0.1.0"}, false)
+	current := after(appupdate.UpdateCheck{Kind: appupdate.UpdateUpToDate, Latest: "0.1.0"}, false)
 	if url, linked := current.ReleaseURL(); linked {
 		t.Fatal(url)
 	}
@@ -212,8 +213,8 @@ func TestCodeStaysLiteralAndEscapesAreKept(t *testing.T) {
 }
 
 func TestVersionsThisAppCannotInstallAreMarked(t *testing.T) {
-	entry := func(version string) installer.ReleaseNotes {
-		return installer.ReleaseNotes{Version: version, URL: installer.AppReleasesURL + "/tag/v" + version}
+	entry := func(version string) appupdate.ReleaseNotes {
+		return appupdate.ReleaseNotes{Version: version, URL: appupdate.AppReleasesURL + "/tag/v" + version}
 	}
 	v := "1.0.0"
 	if got := EntryHeading("Mixer software", entry("1.1.0"), &v); got != "Mixer software 1.1.0 · needs an app update" {

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
 // SignedFeed is the release feed, checking each package against its signed
@@ -43,7 +43,7 @@ type SignedFeed struct {
 // NewSignedFeed is the signed feed at Feed, checking packages with the
 // installer's update package verification.
 func NewSignedFeed(checks *Checks) *SignedFeed {
-	return &SignedFeed{url: Feed, checks: checks, verify: installer.VerifyUpdatePackage, client: http.DefaultClient}
+	return &SignedFeed{url: Feed, checks: checks, verify: appupdate.VerifyUpdatePackage, client: http.DefaultClient}
 }
 
 func (f *SignedFeed) setFailure(err *Error) {

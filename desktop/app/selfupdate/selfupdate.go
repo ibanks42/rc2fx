@@ -15,7 +15,7 @@
 // Updates come from the latest GitHub release: its `releases.{channel}.json`
 // names the package and its SHA-256, which Velopack checks after download.
 // That feed is not signed, so a package is also checked against the signed
-// app release metadata (installer.VerifyUpdatePackage) as it downloads,
+// app release metadata (appupdate.VerifyUpdatePackage) as it downloads,
 // before Velopack moves it into place, and again when one is found at
 // startup. Only full packages are taken from the feed.
 //
@@ -31,7 +31,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
 // Feed is the assets of the release GitHub marks latest; only app releases
@@ -208,7 +208,7 @@ type Checked struct {
 	Version  string
 	FileName string
 	// Err is nil when the package passed.
-	Err *installer.VerifyError
+	Err *appupdate.VerifyError
 }
 
 // Checks is the package the feed last checked as it downloaded, shared with
@@ -219,7 +219,7 @@ type Checks struct {
 }
 
 // Record keeps the outcome of checking asset.
-func (c *Checks) Record(asset Asset, result *installer.VerifyError) {
+func (c *Checks) Record(asset Asset, result *appupdate.VerifyError) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.last = &Checked{Version: asset.Version, FileName: asset.FileName, Err: result}
@@ -227,7 +227,7 @@ func (c *Checks) Record(asset Asset, result *installer.VerifyError) {
 
 // Take is how the feed's check of asset went, if it made one, forgetting
 // it. found is false when it made none (or checked another package).
-func (c *Checks) Take(asset Asset) (result *installer.VerifyError, found bool) {
+func (c *Checks) Take(asset Asset) (result *appupdate.VerifyError, found bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	checked := c.last
@@ -295,35 +295,35 @@ func FullPackages(assets []Asset) []Asset {
 	return kept
 }
 
-// Verify is installer.VerifyUpdatePackage's signature: version, asset name,
-// file. A failure is a *installer.VerifyError.
+// Verify is appupdate.VerifyUpdatePackage's signature: version, asset name,
+// file. A failure is a *appupdate.VerifyError.
 type Verify func(version, asset, file string) error
 
 // asVerifyError is err as the verifier's error; anything else could not be
 // checked.
-func asVerifyError(err error) *installer.VerifyError {
+func asVerifyError(err error) *appupdate.VerifyError {
 	if err == nil {
 		return nil
 	}
-	var v *installer.VerifyError
+	var v *appupdate.VerifyError
 	if errors.As(err, &v) {
 		return v
 	}
-	return &installer.VerifyError{Message: err.Error()}
+	return &appupdate.VerifyError{Message: err.Error()}
 }
 
-func rejected(message string) *installer.VerifyError {
-	return &installer.VerifyError{Rejected: true, Message: message}
+func rejected(message string) *appupdate.VerifyError {
+	return &appupdate.VerifyError{Rejected: true, Message: message}
 }
 
 // VerifyFile checks file, the download of asset, against its signed release
 // before it may be applied. A package the release rejects is removed, so nothing can apply it
 // unchecked later. One that could not be checked (offline, say) is kept: it
 // may be good, and checking again needs no download.
-func VerifyFile(asset Asset, file string, verify Verify) *installer.VerifyError {
+func VerifyFile(asset Asset, file string, verify Verify) *appupdate.VerifyError {
 	own := IsOwnPackage(asset.Version, asset.FileName)
 	name, named := PackageName(asset.FileName)
-	var result *installer.VerifyError
+	var result *appupdate.VerifyError
 	switch {
 	case !named || !own:
 		result = rejected(fmt.Sprintf("%s is not an update package for this computer.", asset.FileName))
@@ -337,7 +337,7 @@ func VerifyFile(asset Asset, file string, verify Verify) *installer.VerifyError 
 }
 
 // VerifyPackage is VerifyFile for a package in the packages folder.
-func VerifyPackage(packages string, asset Asset, verify Verify) *installer.VerifyError {
+func VerifyPackage(packages string, asset Asset, verify Verify) *appupdate.VerifyError {
 	name, ok := PackageName(asset.FileName)
 	if !ok {
 		return rejected(fmt.Sprintf("%s is not an app update package.", asset.FileName))
@@ -354,7 +354,7 @@ type Outcome struct {
 // CheckedOutcome is where a downloaded package's check leaves the update:
 // ready to apply when it passed, failed but kept when the check could not
 // be made, and failed when the package was rejected.
-func CheckedOutcome(asset Asset, result *installer.VerifyError) Outcome {
+func CheckedOutcome(asset Asset, result *appupdate.VerifyError) Outcome {
 	switch {
 	case result == nil:
 		return Outcome{State: ReadyToApply(asset)}

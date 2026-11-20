@@ -1,21 +1,16 @@
 package installer
 
-// What the two signed repositories (mixer releases and app releases) share:
-// the HTTPS transport, the metadata store and a check of each trusted root.
-// Verification itself follows sigstore-tuf, the library the mixer uses (see
-// internal/tuf).
+// Shared TUF transport and metadata store helpers for mixer updates.
+// Verification itself lives in desktop/internal/tuf.
 
 import (
-	"encoding/hex"
-	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
 )
 
 // tufHTTP is an HTTPS repository with metadata under metadataURL and
@@ -52,39 +47,6 @@ func (m metadataOnly) Store(name string, data []byte) error {
 	return m.FileStore.Store(name, data)
 }
 
-// distinctKeys refuses a root that lists one key under two IDs for a role.
-// The client counts signatures by key ID, so such a root could meet a
-// threshold of two with a single key. RC2FX's roles need one signature each
-// today; this keeps a future threshold honest. The mixer makes the same
-// check.
-func distinctKeys(root *metadata.RootType) error {
-	roles := make([]string, 0, len(root.Roles))
-	for role := range root.Roles {
-		roles = append(roles, role)
-	}
-	sort.Strings(roles)
-	for _, role := range roles {
-		material := map[[2]string]bool{}
-		for _, id := range root.Roles[role].KeyIDs {
-			key := root.Keys[id]
-			if key == nil {
-				continue
-			}
-			m := [2]string{key.Type, strings.TrimSpace(key.Value.PublicKey)}
-			if material[m] {
-				return fmt.Errorf("the signed root lists one %s key under two IDs", role)
-			}
-			material[m] = true
-		}
-	}
-	return nil
-}
+func distinctKeys(root *metadata.RootType) error { return tuf.DistinctKeys(root) }
 
-// targetSha256 is the SHA-256 a target is signed with, lowercase.
-func targetSha256(target *metadata.TargetFiles) (string, bool) {
-	h, ok := target.Hashes["sha256"]
-	if !ok || len(h) != 32 {
-		return "", false
-	}
-	return hex.EncodeToString(h), true
-}
+func targetSha256(target *metadata.TargetFiles) (string, bool) { return tuf.TargetSHA256(target) }

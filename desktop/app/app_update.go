@@ -12,6 +12,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/app/updates"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
@@ -50,9 +51,9 @@ func (a *App) checkAppUpdate(cx *gk.Cx, manual bool) {
 	}
 	a.appUpdate.Checking = true
 	a.notify(cx)
-	gk.Go(cx, func() installer.UpdateSnapshot { return installer.CheckForUpdates(model.AppVersion) },
-		func(cx *gk.Cx, result installer.UpdateSnapshot) {
-			if result.App != nil && result.App.Kind == installer.UpdateAvailable {
+	gk.Go(cx, func() appupdate.UpdateSnapshot { return appupdate.CheckForUpdates(model.AppVersion) },
+		func(cx *gk.Cx, result appupdate.UpdateSnapshot) {
+			if result.App != nil && result.App.Kind == appupdate.UpdateAvailable {
 				// Settings has the link; this makes sure it is seen.
 				gk.PushNotification(cx, fmt.Sprintf("RC2FX %s is available. See Settings > Versions.", result.App.Version))
 			}

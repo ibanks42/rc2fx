@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
 // Flag starts the helper.

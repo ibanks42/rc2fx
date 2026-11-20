@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/control"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
@@ -86,12 +86,12 @@ func TestAPISessionPreservesOneRequesterAndFlushesEachReply(t *testing.T) {
 	var output countingOutput
 	calls := 0
 	input := "{\"method\":\"GET\",\"path\":\"api/v1/state\"}\n{\"method\":\"GET\",\"path\":\"api/v1/state\"}\n"
-	err := apiStream(bufio.NewReader(strings.NewReader(input)), &output, func(request control.Request) (*control.Reply, error) {
+	err := apiStream(bufio.NewReader(strings.NewReader(input)), &output, func(request usbcontrol.Request) (*usbcontrol.Reply, error) {
 		calls++
 		if request.Path != "api/v1/state" {
 			t.Errorf("path %q", request.Path)
 		}
-		return &control.Reply{Status: 200, Body: json.RawMessage(`{"call":` + strconv.Itoa(calls) + `}`)}, nil
+		return &usbcontrol.Reply{Status: 200, Body: json.RawMessage(`{"call":` + strconv.Itoa(calls) + `}`)}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestAPISessionPreservesOneRequesterAndFlushesEachReply(t *testing.T) {
 func TestAPISessionDoesNotReplayTransportFailures(t *testing.T) {
 	calls := 0
 	err := apiStream(bufio.NewReader(strings.NewReader("{\"method\":\"PUT\",\"path\":\"api/v1/config\"}\n")), &countingOutput{},
-		func(control.Request) (*control.Reply, error) {
+		func(usbcontrol.Request) (*usbcontrol.Reply, error) {
 			calls++
 			return nil, task.Error("outcome unknown")
 		})

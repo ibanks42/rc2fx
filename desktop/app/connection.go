@@ -20,8 +20,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/flash"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
 
 // USBRuleKind is the USB permission screen's request state.
@@ -71,6 +72,7 @@ const firstLookEvery = 2 * time.Second
 // whether this app sent a flash in the last few minutes. It only reads.
 func lookAtMixer(work string, settled *uint64) firstLook {
 	var look firstLook
+	usbcontrol.RegisterControlProbe()
 	host := platform.Host()
 	if items, err := host.Inventory(); err == nil {
 		look.usbOK = true

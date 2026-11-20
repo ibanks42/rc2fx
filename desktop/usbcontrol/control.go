@@ -1,8 +1,8 @@
-// Package control is RC2FX control over USB 1: requests and replies framed
+// Package usbcontrol is RC2FX control over USB 1: requests and replies framed
 // into RC2FX's reports in the mixer's vendor HID collection (see
 // docs/reference/usb-control.md). Blocking; one client owns the mixer's
 // session at a time.
-package control
+package usbcontrol
 
 import (
 	"bytes"
@@ -16,10 +16,21 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
+
+// RegisterControlProbe registers RC2FX's USB control report probe with
+// rodecaster/platform so HID.Control reports whether RC2FX's USB layout is
+// live on a mixer. Call before scanning HID devices when HID.Control is read.
+func RegisterControlProbe() {
+	platform.SetControlProbe(platform.ControlProbe{
+		Descriptor: usbproto.DeclaresControl,
+		OutputID:   usbproto.OutputID,
+		InputID:    usbproto.InputID,
+	})
+}
 
 // Request and Reply are the control protocol's messages.
 type (
@@ -133,6 +144,7 @@ func (c *Client) Reopen() error {
 
 func (c *Client) connect(expected *string) error {
 	c.Close()
+	RegisterControlProbe()
 	host := platform.Host()
 	items, err := host.Inventory()
 	if err != nil {

@@ -5,6 +5,7 @@ package installer
 
 import (
 	"fmt"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,9 +42,9 @@ func BundleFiles(root string) (Bundle, error) {
 func digest(files Bundle) string {
 	var manifest strings.Builder
 	for _, n := range PayloadNames {
-		fmt.Fprintf(&manifest, "%s  %s\n", sum(files[n]), n)
+		fmt.Fprintf(&manifest, "%s  %s\n", archive.Sum(files[n]), n)
 	}
-	return sum([]byte(manifest.String()))
+	return archive.Sum([]byte(manifest.String()))
 }
 
 // view is the payload's files in pinned order, for the shared checks.
@@ -98,7 +99,7 @@ func service(files Bundle, state []byte) Service {
 // `install.sh` creates on a running mixer, with autostart, and optional
 // saved settings. Returns the entries and the runtime digest (recorded as
 // bundle.sha256).
-func imageEntries(files Bundle, profile *Profile, settings []byte) ([]Entry, string, error) {
+func imageEntries(files Bundle, profile *Profile, settings []byte) ([]archive.Entry, string, error) {
 	c, err := catalogOf(files)
 	if err != nil {
 		return nil, "", err
@@ -146,34 +147,34 @@ func imageEntries(files Bundle, profile *Profile, settings []byte) ([]Entry, str
 		return nil, "", errorf("the bundled runtime does not support firmware %s", profile.Version)
 	}
 	d := digest(files)
-	entries := []Entry{
-		{Kind: EntryDir, Path: "opt/rc2fx", Mode: 0o700},
-		{Kind: EntryDir, Path: "opt/rc2fx/data", Mode: 0o700},
-		{Kind: EntryDir, Path: "opt/rc2fx/logs", Mode: 0o700},
+	entries := []archive.Entry{
+		{Kind: archive.EntryDir, Path: "opt/rc2fx", Mode: 0o700},
+		{Kind: archive.EntryDir, Path: "opt/rc2fx/data", Mode: 0o700},
+		{Kind: archive.EntryDir, Path: "opt/rc2fx/logs", Mode: 0o700},
 	}
 	for _, n := range PayloadNames {
 		mode := uint32(0o600)
 		if embed.IsBinary(n) || embed.IsScript(n) {
 			mode = 0o700
 		}
-		entries = append(entries, Entry{Kind: EntryFile, Path: "opt/rc2fx/" + n, Mode: mode, Data: files[n]})
+		entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "opt/rc2fx/" + n, Mode: mode, Data: files[n]})
 	}
 	if profile.Model == firmware.ModelDuo.ID() {
-		entries = append(entries, Entry{Kind: EntryFile, Path: "opt/rc2fx/experimental-duo", Mode: 0o600, Data: []byte("1\n")})
+		entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "opt/rc2fx/experimental-duo", Mode: 0o600, Data: []byte("1\n")})
 	}
-	entries = append(entries, Entry{Kind: EntryFile, Path: "opt/rc2fx/bundle.sha256", Mode: 0o600, Data: []byte(d + "\n")})
+	entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "opt/rc2fx/bundle.sha256", Mode: 0o600, Data: []byte(d + "\n")})
 	if settings != nil {
-		entries = append(entries, Entry{Kind: EntryFile, Path: "opt/rc2fx/data/state.json", Mode: 0o600, Data: settings})
+		entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "opt/rc2fx/data/state.json", Mode: 0o600, Data: settings})
 	}
 	// RØDE's launcher starts the mixer by name with /usr/sbin ahead of
 	// /usr/bin, so this runs in its place and execs the stock executable with
 	// RC2FX injected from the first mixer start of every boot.
-	entries = append(entries, Entry{Kind: EntryFile, Path: "usr/sbin/rc_audio_mixer", Mode: 0o755, Data: files["rc2fx-shim.sh"]})
+	entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "usr/sbin/rc_audio_mixer", Mode: 0o755, Data: files["rc2fx-shim.sh"]})
 	// The same for RØDE's display loop, which starts rc_gui_juce by name with
 	// /usr/sbin first: the GUI shim hands over to `rc2fx.sh gui-launch`,
 	// which always execs the stock GUI, with the partial-conversion module
 	// only when every check passes.
-	entries = append(entries, Entry{Kind: EntryFile, Path: "usr/sbin/rc_gui_juce", Mode: 0o755, Data: files["rc2fx-gui-shim.sh"]})
+	entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "usr/sbin/rc_gui_juce", Mode: 0o755, Data: files["rc2fx-gui-shim.sh"]})
 	return entries, d, nil
 }
 
@@ -186,7 +187,7 @@ func backupSettings(work string, b *BackupRecord) ([]byte, error) {
 		filepath.Base(path) == ".." || filepath.Base(path) == "." {
 		return nil, Error("the settings backup is not in the installer's folder")
 	}
-	file, err := openWorkFile(path)
+	file, err := archive.OpenWorkFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +196,7 @@ func backupSettings(work string, b *BackupRecord) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if sum(data) != b.SHA {
+	if archive.Sum(data) != b.SHA {
 		return nil, Error("the settings backup changed since it was saved")
 	}
 	if err := checkSettings(data); err != nil {
@@ -238,12 +239,12 @@ func (e *Engine) saveSettings(serial, settings string) (*BackupRecord, error) {
 			stamp.WriteRune(r)
 		}
 	}
-	name := fmt.Sprintf("settings-%s-%s.json", sum([]byte(serial))[:12], stamp.String())
+	name := fmt.Sprintf("settings-%s-%s.json", archive.Sum([]byte(serial))[:12], stamp.String())
 	dest := filepath.Join(e.Work, name)
-	if err := atomicFile(dest, data); err != nil {
+	if err := archive.AtomicFile(dest, data); err != nil {
 		return nil, err
 	}
-	record := BackupRecord{Serial: serial, File: dest, SHA: sum(data), Created: utc()}
+	record := BackupRecord{Serial: serial, File: dest, SHA: archive.Sum(data), Created: utc()}
 	saved, err := e.load()
 	if err != nil {
 		return nil, err

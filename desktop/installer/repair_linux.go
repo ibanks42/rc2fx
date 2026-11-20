@@ -34,7 +34,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 
 	"github.com/ibanks42/rc2fx/desktop/ext2fs"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
 // RepairSupported: this system can check and repair a mixer in storage
@@ -215,13 +215,13 @@ type savedImage struct {
 
 func readSavedImage(path string) (*savedImage, error) {
 	saved := &savedImage{path: path}
-	err := walkArchive(path, 4<<30, false, func(entry *tarEntry) error {
+	err := archive.Walk(path, 4<<30, false, func(entry *archive.Member) error {
 		if !entry.Header.Regular() {
 			return nil
 		}
-		name := normalized(entry.Path)
+		name := archive.Normalized(entry.Path)
 		if name == sumsMember {
-			data, err := readAll(entry)
+			data, err := archive.ReadAll(entry)
 			if err != nil {
 				return err
 			}
@@ -248,10 +248,10 @@ func savedMembers(path string, wanted map[string]bool) (map[string][]byte, error
 	if len(wanted) == 0 {
 		return found, nil
 	}
-	err := walkArchive(path, 4<<30, false, func(entry *tarEntry) error {
-		name := normalized(entry.Path)
+	err := archive.Walk(path, 4<<30, false, func(entry *archive.Member) error {
+		name := archive.Normalized(entry.Path)
 		if wanted[name] && entry.Size <= maxRepairFile {
-			data, err := readAll(entry)
+			data, err := archive.ReadAll(entry)
 			if err != nil {
 				return err
 			}
@@ -334,7 +334,7 @@ func repairSources(other *ext2fs.Filesystem, saved *savedImage, unclean bool, su
 				return nil, nil, err
 			}
 		}
-		if entry != nil && sum(data) == s.want {
+		if entry != nil && archive.Sum(data) == s.want {
 			found[s.path] = data
 		} else {
 			missing[s.path] = true
@@ -359,7 +359,7 @@ func repairSources(other *ext2fs.Filesystem, saved *savedImage, unclean bool, su
 		switch {
 		case unclean:
 			file.Why = why("the mixer wasn't shut down cleanly, so nothing is written to this system; start the mixer normally once, then check again")
-		case ok && sum(data) != s.want:
+		case ok && archive.Sum(data) != s.want:
 			file.Why = why("no identical copy to restore it from")
 		case ok && uint64(len(data)) != s.size:
 			file.Why = why("its size changed; a repair only replaces contents of the same size")
@@ -399,7 +399,7 @@ func (e *Engine) compare(fs *ext2fs.Filesystem, index int, manifest [][2]string)
 		case !entry.Regular:
 			why := "it is no longer a regular file"
 			broken = append(broken, DamagedFile{Path: path, Why: &why})
-		case sum(data) != want:
+		case archive.Sum(data) != want:
 			suspects = append(suspects, suspect{path: path, want: want, size: entry.Size})
 		}
 	}
@@ -654,7 +654,7 @@ func (e *Engine) writeRoot(layout *diskLayout, plan repairPlan, result *RepairRe
 		if err != nil {
 			return err
 		}
-		if entry != nil && sum(data) == fix.want {
+		if entry != nil && archive.Sum(data) == fix.want {
 			result.Repaired = append(result.Repaired, fix.path)
 		} else {
 			notRepaired(fix.path, "the restored copy didn't read back identical")

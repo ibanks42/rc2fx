@@ -10,13 +10,13 @@ import (
 	"unicode"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
-	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
 // EntryHeading is one version's heading, marking notes this app cannot
 // install: entries newer than available (nil for none) need an app update
 // first.
-func EntryHeading(prefix string, entry installer.ReleaseNotes, available *string) string {
+func EntryHeading(prefix string, entry appupdate.ReleaseNotes, available *string) string {
 	if available != nil {
 		if order, ok := model.Compare(entry.Version, *available); ok && order > 0 {
 			return fmt.Sprintf("%s %s · needs an app update", prefix, entry.Version)

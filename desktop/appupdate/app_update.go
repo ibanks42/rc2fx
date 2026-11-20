@@ -1,4 +1,7 @@
-package installer
+// Package appupdate checks published RC2FX desktop app and mixer release
+// feeds and verifies downloaded desktop app update packages against signed
+// TUF metadata.
+package appupdate
 
 // What the official project has published: the latest RC2FX desktop app,
 // the mixer software it bundles, and the release notes leading to both.
@@ -32,6 +35,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -322,7 +326,7 @@ func snapshotAt(latestURL, listURL, feedURL, current string) UpdateSnapshot {
 	if !comparable(current) {
 		return SnapshotFromCheck(UpdateCheck{Kind: UpdateFailed, Error: otherError(fmt.Sprintf("this app's version %s is not a release version", debugString(current)))})
 	}
-	reply, err := fetch(latestURL, maxReleaseBody, updateTimeout)
+	reply, err := fetch(latestURL, current, maxReleaseBody, updateTimeout)
 	if err != nil {
 		return SnapshotFromCheck(UpdateCheck{Kind: UpdateFailed, Error: *err})
 	}
@@ -340,7 +344,7 @@ func snapshotAt(latestURL, listURL, feedURL, current string) UpdateSnapshot {
 	}
 	var h *history
 	var historyErr UpdateError
-	feed, ferr := fetch(feedURL, maxFeedBody, updateTimeout)
+	feed, ferr := fetch(feedURL, current, maxFeedBody, updateTimeout)
 	if ferr != nil {
 		historyErr = *ferr
 	} else if parsed, perr := parseHistory(feed, latest); perr != nil {
@@ -379,7 +383,7 @@ func githubChangelog(listURL, current, offered string) Changelog {
 			e := otherError("the release notes took too long")
 			return nil, &e
 		}
-		return fetch(fmt.Sprintf("%s?per_page=%d&page=%d", listURL, perPage, page), maxListBody, min(remaining, updateTimeout))
+		return fetch(fmt.Sprintf("%s?per_page=%d&page=%d", listURL, perPage, page), current, maxListBody, min(remaining, updateTimeout))
 	})
 }
 
@@ -604,7 +608,7 @@ type reply struct {
 	body               []byte
 }
 
-func fetch(u string, maxBody int64, timeout time.Duration) (*reply, *UpdateError) {
+func fetch(u, current string, maxBody int64, timeout time.Duration) (*reply, *UpdateError) {
 	if !strings.HasPrefix(u, "https://") && !allowPlainHTTP {
 		e := otherError("refusing a non-HTTPS URL")
 		return nil, &e
@@ -627,7 +631,7 @@ func fetch(u string, maxBody int64, timeout time.Duration) (*reply, *UpdateError
 		e := otherError(err.Error())
 		return nil, &e
 	}
-	request.Header.Set("User-Agent", "rc2fx-update-check/"+AppVersion)
+	request.Header.Set("User-Agent", "rc2fx-update-check/"+current)
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	response, err := client.Do(request)
@@ -814,4 +818,35 @@ func changelog(current, offered string, deadline time.Time, page func(uint32) (*
 		status.Kind = ChangelogComplete
 	}
 	return Changelog{Entries: entries, Status: status}
+}
+
+// debugString quotes s, escaping quotes, backslashes, \n \r \t \0, and other
+// unprintable runes as \u{hex}.
+func debugString(s string) string {
+	var out strings.Builder
+	out.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			out.WriteString(`\"`)
+		case '\\':
+			out.WriteString(`\\`)
+		case '\n':
+			out.WriteString(`\n`)
+		case '\r':
+			out.WriteString(`\r`)
+		case '\t':
+			out.WriteString(`\t`)
+		case 0:
+			out.WriteString(`\0`)
+		default:
+			if r == utf8.RuneError || unicode.IsControl(r) || (!unicode.IsPrint(r) && r != ' ') {
+				fmt.Fprintf(&out, `\u{%x}`, r)
+			} else {
+				out.WriteRune(r)
+			}
+		}
+	}
+	out.WriteByte('"')
+	return out.String()
 }

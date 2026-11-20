@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
@@ -23,7 +24,7 @@ const RodeNotesURL = "https://update.rode.com/notes/rcp2/"
 
 // check is the last result, and whether the user asked for it.
 type check struct {
-	snapshot installer.UpdateSnapshot
+	snapshot appupdate.UpdateSnapshot
 	manual   bool
 }
 
@@ -47,12 +48,12 @@ type AppUpdate struct {
 
 // Finish records a finished check of the app: its result and whether it
 // was asked for, and that no check is under way.
-func (u *AppUpdate) Finish(result installer.UpdateSnapshot, manual bool) {
+func (u *AppUpdate) Finish(result appupdate.UpdateSnapshot, manual bool) {
 	u.Checking = false
 	u.last = &check{snapshot: result, manual: manual}
 }
 
-func (u *AppUpdate) result() *installer.UpdateCheck {
+func (u *AppUpdate) result() *appupdate.UpdateCheck {
 	if u.last == nil {
 		return nil
 	}
@@ -66,9 +67,9 @@ func (u *AppUpdate) Standing() model.AppStanding {
 	}
 	if r := u.result(); r != nil {
 		switch r.Kind {
-		case installer.UpdateUpToDate:
+		case appupdate.UpdateUpToDate:
 			return model.AppStanding{Kind: model.AppStandingCurrent, Latest: r.Latest}
-		case installer.UpdateAvailable:
+		case appupdate.UpdateAvailable:
 			return model.AppStanding{Kind: model.AppStandingUpdate, Version: r.Version}
 		}
 	}
@@ -78,11 +79,11 @@ func (u *AppUpdate) Standing() model.AppStanding {
 // MixerUpdate compares a mixer with what this app can install and, once a
 // check has answered, published. It needs no network, so it works before
 // the first check.
-func (u *AppUpdate) MixerUpdate(installed, available *string) installer.MixerUpdate {
+func (u *AppUpdate) MixerUpdate(installed, available *string) appupdate.MixerUpdate {
 	if u.last != nil {
 		return u.last.snapshot.MixerUpdate(installed, available)
 	}
-	unchecked := installer.UncheckedSnapshot()
+	unchecked := appupdate.UncheckedSnapshot()
 	return unchecked.MixerUpdate(installed, available)
 }
 
@@ -145,13 +146,13 @@ func (u *AppUpdate) Status() (string, bool) {
 	}
 	r, manual := u.last.snapshot.App, u.last.manual
 	switch r.Kind {
-	case installer.UpdateUpToDate:
+	case appupdate.UpdateUpToDate:
 		return fmt.Sprintf("Up to date (latest release %s)", r.Latest), true
-	case installer.UpdateAvailable:
+	case appupdate.UpdateAvailable:
 		return fmt.Sprintf("RC2FX %s is available", r.Version), true
-	case installer.UpdateNoRelease:
+	case appupdate.UpdateNoRelease:
 		return "No release published yet", manual
-	case installer.UpdateFailed:
+	case appupdate.UpdateFailed:
 		return r.Error.Error(), manual
 	}
 	return "", false
@@ -161,7 +162,7 @@ func (u *AppUpdate) Status() (string, bool) {
 // project.
 func (u *AppUpdate) ReleaseURL() (string, bool) {
 	r := u.result()
-	if r == nil || r.Kind != installer.UpdateAvailable {
+	if r == nil || r.Kind != appupdate.UpdateAvailable {
 		return "", false
 	}
 	return SafeURL(r.URL)
@@ -169,9 +170,9 @@ func (u *AppUpdate) ReleaseURL() (string, bool) {
 
 // Offered is the offered version and its changes, when an update is
 // available.
-func (u *AppUpdate) Offered() (string, *installer.Changelog, bool) {
+func (u *AppUpdate) Offered() (string, *appupdate.Changelog, bool) {
 	r := u.result()
-	if r == nil || r.Kind != installer.UpdateAvailable {
+	if r == nil || r.Kind != appupdate.UpdateAvailable {
 		return "", nil, false
 	}
 	return r.Version, &r.Changelog, true
@@ -197,11 +198,11 @@ func SignedMixers(work string) ([]installer.MixerOffer, bool) {
 
 // HistoryNote is what the changes view says about missing notes; ok false
 // when complete.
-func HistoryNote(status installer.ChangelogStatus) (string, bool) {
+func HistoryNote(status appupdate.ChangelogStatus) (string, bool) {
 	switch status.Kind {
-	case installer.ChangelogComplete:
+	case appupdate.ChangelogComplete:
 		return "", false
-	case installer.ChangelogPartial:
+	case appupdate.ChangelogPartial:
 		return "Some release notes could not be loaded. The full update history is online.", true
 	}
 	return fmt.Sprintf("Release notes could not be loaded (%s). The full update history is online.", status.Error.Error()), true
@@ -210,9 +211,9 @@ func HistoryNote(status installer.ChangelogStatus) (string, bool) {
 // SafeURL lets only this project's release pages and update history, and
 // RØDE's notes, open. A history link may name a version: `#v1.2.3`.
 func SafeURL(url string) (string, bool) {
-	release := url == installer.AppReleasesURL || strings.HasPrefix(url, installer.AppReleasesURL+"/")
+	release := url == appupdate.AppReleasesURL || strings.HasPrefix(url, appupdate.AppReleasesURL+"/")
 	history := false
-	for _, page := range []string{installer.AppHistoryURL, installer.MixerHistoryURL} {
+	for _, page := range []string{appupdate.AppHistoryURL, appupdate.MixerHistoryURL} {
 		if rest, ok := strings.CutPrefix(url, page); ok {
 			if rest == "" {
 				history = true

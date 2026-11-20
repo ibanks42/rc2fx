@@ -1,4 +1,4 @@
-package control
+package usbcontrol
 
 import (
 	"bytes"
@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 

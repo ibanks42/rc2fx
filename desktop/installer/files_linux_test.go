@@ -16,14 +16,14 @@ func TestLinksAndSpecialFilesInTheCacheAreNotOpened(t *testing.T) {
 	real, link := filepath.Join(dir, "real"), filepath.Join(dir, "link")
 	put(t, real, []byte("data"))
 	must(t, os.Symlink(real, link))
-	file, err := openWorkFile(real)
+	file, err := archive.OpenWorkFile(real)
 	must(t, err)
 	file.Close()
-	if f, err := openRegular(link); err == nil {
+	if f, err := archive.OpenRegular(link); err == nil {
 		f.Close()
 		t.Fatal("openRegular followed a link")
 	}
-	if f, err := openWorkFile(link); err == nil {
+	if f, err := archive.OpenWorkFile(link); err == nil {
 		f.Close()
 		t.Fatal("openWorkFile followed a link")
 	}
@@ -31,10 +31,10 @@ func TestLinksAndSpecialFilesInTheCacheAreNotOpened(t *testing.T) {
 		f.Close()
 		t.Fatal("openLocalFile followed a link")
 	}
-	if _, _, err := hashBoth(link, func(uint64, uint64) {}); err == nil {
+	if _, _, err := archive.HashBoth(link, func(uint64, uint64) {}); err == nil {
 		t.Fatal("hashBoth followed a link")
 	}
-	if _, err := fileHash(link, algorithmSha256); err == nil {
+	if _, err := archive.FileHash(link, archive.SHA256); err == nil {
 		t.Fatal("fileHash followed a link")
 	}
 	if err := copyWithProgress(link, filepath.Join(dir, "copy"), func(uint64, uint64) {}); err == nil {
@@ -43,11 +43,11 @@ func TestLinksAndSpecialFilesInTheCacheAreNotOpened(t *testing.T) {
 	// A FIFO neither blocks the open nor passes as a file.
 	fifo := filepath.Join(dir, "fifo")
 	must(t, syscall.Mkfifo(fifo, 0o600))
-	if f, err := openRegular(fifo); err == nil {
+	if f, err := archive.OpenRegular(fifo); err == nil {
 		f.Close()
 		t.Fatal("a FIFO passed as a file")
 	}
-	if f, err := openRegular(dir); err == nil {
+	if f, err := archive.OpenRegular(dir); err == nil {
 		f.Close()
 		t.Fatal("a directory passed as a file")
 	}

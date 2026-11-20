@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"io"
 	"net/http"
 	"os"
@@ -27,8 +28,8 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
 // AppVersion is the desktop app's version and its only copy in the Go code.
@@ -336,6 +337,15 @@ type Engine struct {
 	allowExperimentalDuo bool
 	// anchorDir stands in for the helper's root-owned folder in tests.
 	anchorDir *string
+	// catalogs holds this engine's verified signed firmware catalog cache.
+	catalogs *CatalogCache
+}
+
+func (e *Engine) catalogCache() *CatalogCache {
+	if e.catalogs == nil {
+		e.catalogs = new(CatalogCache)
+	}
+	return e.catalogs
 }
 
 // DownloadOnly is the download-only desktop installer; no checkout or
@@ -360,6 +370,7 @@ func withSourcePlatform(source Source, work string, p Platform) *Engine {
 		Platform: p,
 		Cancel:   new(atomic.Bool),
 		model:    firmware.ModelProIi,
+		catalogs: new(CatalogCache),
 	}
 }
 
@@ -421,7 +432,7 @@ func (e *Engine) Handle(request Request) (Reply, error) {
 				if err != nil {
 					return struct{}{}, err
 				}
-				return struct{}{}, refreshCatalog(ctx, repository)
+				return struct{}{}, e.refreshCatalog(ctx, repository)
 			}); err != nil {
 				return Reply{}, err
 			}
@@ -462,7 +473,7 @@ func (e *Engine) Handle(request Request) (Reply, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err := refreshCatalog(ctx, repository); err != nil {
+			if err := e.refreshCatalog(ctx, repository); err != nil {
 				return nil, err
 			}
 			return repository.Offers()
@@ -635,7 +646,7 @@ func (e *Engine) save(saved *Saved) error {
 		return err
 	}
 	data = append(data, '\n')
-	return atomicFile(filepath.Join(e.Work, savedName), data)
+	return archive.AtomicFile(filepath.Join(e.Work, savedName), data)
 }
 
 func (e *Engine) probe() (*Status, error) {
@@ -697,7 +708,7 @@ func (e *Engine) probe() (*Status, error) {
 
 // LoadSaved reads the cache; empty if there is none yet.
 func LoadSaved(work string) (*Saved, error) {
-	file, err := openWorkFile(filepath.Join(work, savedName))
+	file, err := archive.OpenWorkFile(filepath.Join(work, savedName))
 	if errors.Is(err, os.ErrNotExist) {
 		return &Saved{}, nil
 	}

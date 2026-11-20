@@ -3,6 +3,7 @@ package installer
 import (
 	"bytes"
 	"fmt"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,12 +203,12 @@ func TestPatchChangesOnlyAuthorizedKeyAndKeepsLongNames(t *testing.T) {
 	put(t, src, out.Bytes())
 	mix, launcher, err := patchArchive(src, dst, nil)
 	must(t, err)
-	if mix != sum([]byte("mixer")) || launcher != sum([]byte("launcher")) {
+	if mix != archive.Sum([]byte("mixer")) || launcher != archive.Sum([]byte("launcher")) {
 		t.Fatal("hashes")
 	}
 	i := 0
-	must(t, walkArchive(dst, 1<<20, false, func(entry *tarEntry) error {
-		b, err := readAll(entry)
+	must(t, archive.Walk(dst, 1<<20, false, func(entry *archive.Member) error {
+		b, err := archive.ReadAll(entry)
 		must(t, err)
 		if !bytes.Equal(b, data[i]) {
 			t.Fatalf("member %d: %q", i, b)
@@ -219,7 +220,7 @@ func TestPatchChangesOnlyAuthorizedKeyAndKeepsLongNames(t *testing.T) {
 		if mode != 0o755 || uid != 4 || gid != 5 || mtime != 123 {
 			t.Fatalf("member %d: %o %d %d %d", i, mode, uid, gid, mtime)
 		}
-		if normalized(entry.Path) != normalized(names[i]) {
+		if archive.Normalized(entry.Path) != archive.Normalized(names[i]) {
 			t.Fatalf("member %d: %s", i, entry.Path)
 		}
 		i++
@@ -374,29 +375,29 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 	}
 	expected := map[string]string{}
 	for _, e := range entries {
-		if e.Kind == EntryFile {
-			expected[e.Path] = sum(e.Data)
+		if e.Kind == archive.EntryFile {
+			expected[e.Path] = archive.Sum(e.Data)
 		}
 	}
-	protected := func(archive string) (map[string]string, map[string]string) {
+	protected := func(archivePath string) (map[string]string, map[string]string) {
 		hashes, added := map[string]string{}, map[string]string{}
-		must(t, walkArchive(archive, 4<<30, false, func(entry *tarEntry) error {
-			name := normalized(entry.Path)
+		must(t, archive.Walk(archivePath, 4<<30, false, func(entry *archive.Member) error {
+			name := archive.Normalized(entry.Path)
 			if strings.HasPrefix(name, "boot/") || strings.HasPrefix(name, "Application/mcu-images/") || name == "etc/hostname" {
-				contents, err := readAll(entry)
+				contents, err := archive.ReadAll(entry)
 				if err != nil {
 					return err
 				}
-				hashes[name] = fmt.Sprintf("%x %s", entry.Header[:], sum(contents))
+				hashes[name] = fmt.Sprintf("%x %s", entry.Header[:], archive.Sum(contents))
 			} else if _, ok := expected[name]; ok {
-				contents, err := readAll(entry)
+				contents, err := archive.ReadAll(entry)
 				if err != nil {
 					return err
 				}
 				if _, dup := added[name]; dup {
 					t.Fatalf("%s twice", name)
 				}
-				added[name] = sum(contents)
+				added[name] = archive.Sum(contents)
 			}
 			return nil
 		}))
@@ -410,7 +411,7 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 	if len(originalAdded) != 0 || fmt.Sprint(patchedAdded) != fmt.Sprint(expected) {
 		t.Fatal("all runtime files, including the opt-in marker, must actually be in the image")
 	}
-	if patchedAdded["opt/rc2fx/experimental-duo"] != sum([]byte("1\n")) {
+	if patchedAdded["opt/rc2fx/experimental-duo"] != archive.Sum([]byte("1\n")) {
 		t.Fatal("no opt-in marker")
 	}
 }
@@ -518,14 +519,14 @@ func TestAnRC2FXImageListsRodesFilesForTheMixerToCheck(t *testing.T) {
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "stock.gz"), filepath.Join(dir, "rc2fx.gz")
 	stockImage(t, src)
-	manifest := func(archive string) *string {
+	manifest := func(archivePath string) *string {
 		var found *string
-		must(t, walkArchive(archive, 1<<24, false, func(entry *tarEntry) error {
-			if normalized(entry.Path) == manifestMember {
+		must(t, archive.Walk(archivePath, 1<<24, false, func(entry *archive.Member) error {
+			if archive.Normalized(entry.Path) == manifestMember {
 				if mode, _ := numeric(entry.Header[100:108]); mode != 0o600 {
 					t.Fatalf("manifest mode %o", mode)
 				}
-				data, err := readAll(entry)
+				data, err := archive.ReadAll(entry)
 				if err != nil {
 					return err
 				}
@@ -549,7 +550,7 @@ func TestAnRC2FXImageListsRodesFilesForTheMixerToCheck(t *testing.T) {
 		{"usr/bin/rc_audio_mixer", []byte("mixer")},
 		{"usr/bin/audio-start.sh", []byte("launcher")},
 	} {
-		fmt.Fprintf(&want, "%s  %s\n", sum(m.data), m.name)
+		fmt.Fprintf(&want, "%s  %s\n", archive.Sum(m.data), m.name)
 	}
 	// RØDE's files in image order; authorized_keys, which the mixer may
 	// change, and RC2FX's own files are left out.
@@ -579,12 +580,12 @@ func TestImageGetsRC2FXAutostartAndSettingsAndNothingIsReplaced(t *testing.T) {
 	_, _, err = patchArchive(src, dst, entries)
 	must(t, err)
 	seen := map[string]found{}
-	must(t, walkArchive(dst, 1<<24, false, func(entry *tarEntry) error {
-		name := normalized(entry.Path)
+	must(t, archive.Walk(dst, 1<<24, false, func(entry *archive.Member) error {
+		name := archive.Normalized(entry.Path)
 		mode, _ := numeric(entry.Header[100:108])
 		uid, _ := numeric(entry.Header[108:116])
 		gid, _ := numeric(entry.Header[116:124])
-		data, err := readAll(entry)
+		data, err := archive.ReadAll(entry)
 		must(t, err)
 		if strings.HasPrefix(name, "opt") || name == "usr/sbin/rc_audio_mixer" || name == "usr/sbin/rc_gui_juce" {
 			if uid != 0 || gid != 0 {
@@ -650,8 +651,8 @@ func TestImageGetsRC2FXAutostartAndSettingsAndNothingIsReplaced(t *testing.T) {
 
 	// An image that already has RC2FX paths is refused rather than merged.
 	taken := []tarItem{{testHeader(t, "./opt/rc2fx/rc2fxd", typeRegular, 1), []byte("x")}}
-	must(t, walkArchive(src, 1<<20, false, func(entry *tarEntry) error {
-		data, err := readAll(entry)
+	must(t, archive.Walk(src, 1<<20, false, func(entry *archive.Member) error {
+		data, err := archive.ReadAll(entry)
 		must(t, err)
 		h := entry.Header
 		taken = append(taken, tarItem{&h, data})
@@ -677,7 +678,7 @@ func TestImageEntriesRefuseARuntimeThatDoesNotSupportTheFirmware(t *testing.T) {
 	must(t, err)
 	has := func(path string, mode uint32) bool {
 		for _, e := range entries {
-			if e.Kind == EntryFile && e.Path == path && (mode == 0 || e.Mode == mode) {
+			if e.Kind == archive.EntryFile && e.Path == path && (mode == 0 || e.Mode == mode) {
 				return true
 			}
 		}
@@ -716,8 +717,8 @@ func TestRecorderPayloadsAreRequiredAndMustBeARM64ELFs(t *testing.T) {
 		sumsPath := filepath.Join(x.root, "runtime", "SHA256SUMS")
 		sums, err := os.ReadFile(sumsPath)
 		must(t, err)
-		old := sum(good) + "  " + name + "\n"
-		replaced := sum(corrupt) + "  " + name + "\n"
+		old := archive.Sum(good) + "  " + name + "\n"
+		replaced := archive.Sum(corrupt) + "  " + name + "\n"
 		if !strings.Contains(string(sums), old) {
 			t.Fatalf("%s manifest line", name)
 		}
@@ -733,7 +734,7 @@ func TestSettingsReadOverUSBAreKeptPerMixerAndUsedForTheImage(t *testing.T) {
 	body := `{"config":{"revision":7},"presets":[]}`
 	saved, err := x.engine.saveSettings(serial, body)
 	must(t, err)
-	if saved.SHA != sum([]byte(body)) {
+	if saved.SHA != archive.Sum([]byte(body)) {
 		t.Fatal("sha")
 	}
 	data, err := backupSettings(x.engine.Work, x.saved().BackupFor(serial))
@@ -775,7 +776,7 @@ func TestPatchingRefusesOversizedMembersBeforeReadingThem(t *testing.T) {
 	testTar(t, src, patchableMembers(t, false))
 	_, _, err := patchArchive(src, dst, nil)
 	must(t, err)
-	small := maxSmallMember + 1
+	small := archive.MaxSmallMember + 1
 	launcher := func(size int) []tarItem {
 		members := patchableMembers(t, false)
 		members[4] = tarItem{testHeader(t, "usr/bin/audio-start.sh", typeRegular, size), bytes.Repeat([]byte("x"), size)}
@@ -789,7 +790,7 @@ func TestPatchingRefusesOversizedMembersBeforeReadingThem(t *testing.T) {
 	contains(t, err, "oversized")
 
 	members := patchableMembers(t, false)
-	size := maxMixerMember + 1
+	size := archive.MaxMixerMember + 1
 	members[3] = tarItem{testHeader(t, "usr/bin/rc_audio_mixer", typeRegular, size), make([]byte, size)}
 	testTar(t, src, members)
 	_, _, err = patchArchive(src, dst, nil)
@@ -808,16 +809,16 @@ func TestPatchingHashesWhatItReadAndWroteNotWhatThePathsHold(t *testing.T) {
 	dir := t.TempDir()
 	src, dst := filepath.Join(dir, "src.tar.gz"), filepath.Join(dir, "dst.tar.gz")
 	testTar(t, src, patchableMembers(t, false))
-	sha, err := fileHash(src, algorithmSha256)
+	sha, err := archive.FileHash(src, archive.SHA256)
 	must(t, err)
-	patch := func(want string) (*patched, error) {
+	patch := func(want string) (*archive.Patched, error) {
 		return patchArchiveForModel(firmware.ModelProIi, src, dst, nil, &want)
 	}
 	p, err := patch(sha)
 	must(t, err)
-	gotSha, err := fileHash(dst, algorithmSha256)
+	gotSha, err := archive.FileHash(dst, archive.SHA256)
 	must(t, err)
-	gotMd5, err := fileHash(dst, algorithmMd5)
+	gotMd5, err := archive.FileHash(dst, archive.MD5)
 	must(t, err)
 	if p.ArchiveSHA != gotSha || p.ArchiveMD5 != gotMd5 {
 		t.Fatal("hashes are not of what was written")

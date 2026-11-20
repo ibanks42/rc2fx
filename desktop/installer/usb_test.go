@@ -3,6 +3,7 @@ package installer
 import (
 	"bytes"
 	"fmt"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -294,12 +295,12 @@ func duoFixture(t *testing.T) *fixture {
 	for _, c := range contents {
 		items = append(items, tarItem{testHeader(t, c.name, typeRegular, len(c.data)), c.data})
 	}
-	archive := filepath.Join(x.engine.Work, "archive.tar.gz")
-	testTar(t, archive, items)
+	archivePath := filepath.Join(x.engine.Work, "archive.tar.gz")
+	testTar(t, archivePath, items)
 	var err error
-	profile.ArchiveSHA, err = fileHash(archive, algorithmSha256)
+	profile.ArchiveSHA, err = archive.FileHash(archivePath, archive.SHA256)
 	must(t, err)
-	profile.ArchiveMD5, err = fileHash(archive, algorithmMd5)
+	profile.ArchiveMD5, err = archive.FileHash(archivePath, archive.MD5)
 	must(t, err)
 	catalog := catalogJSON(t, []Profile{profile})
 	put(t, filepath.Join(x.root, "config/firmware-profiles.json"), catalog)
@@ -310,7 +311,7 @@ func duoFixture(t *testing.T) *fixture {
 	must(t, err)
 	found := false
 	for _, e := range image {
-		if e.Kind == EntryFile && e.Path == "opt/rc2fx/experimental-duo" && bytes.Equal(e.Data, []byte("1\n")) {
+		if e.Kind == archive.EntryFile && e.Path == "opt/rc2fx/experimental-duo" && bytes.Equal(e.Data, []byte("1\n")) {
 			found = true
 		}
 	}

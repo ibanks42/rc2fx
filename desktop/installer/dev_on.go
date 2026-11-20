@@ -13,3 +13,7 @@ import "os"
 func devRepository() (string, bool) {
 	return os.LookupEnv("RC2FX_DEV_MIXER_REPOSITORY")
 }
+
+// fixDebugAllowed: development builds (`-tags rc2fxdev`) let a storage fix
+// request ask for the script's debug log on the mixer (Request.FixDebug).
+const fixDebugAllowed = true

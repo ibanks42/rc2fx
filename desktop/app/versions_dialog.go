@@ -18,7 +18,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate"
 	"github.com/ibanks42/rc2fx/desktop/app/updates"
-	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
 func versionsDialogToneColor(tone model.Tone) uint32 {
@@ -70,7 +70,7 @@ type Changes struct {
 	title   string
 	// entryPrefix starts each entry's heading.
 	entryPrefix string
-	changelog   *installer.Changelog
+	changelog   *appupdate.Changelog
 	// note is said above the notes instead of the changelog's own status;
 	// "" for none.
 	note string
@@ -404,7 +404,7 @@ func (a *App) openChanges(cx *gk.Cx, part model.Part) {
 		if !ok {
 			return
 		}
-		links := []changeLink{{"All app updates", fmt.Sprintf("%s#v%s", installer.AppHistoryURL, version)}}
+		links := []changeLink{{"All app updates", fmt.Sprintf("%s#v%s", appupdate.AppHistoryURL, version)}}
 		if url, ok := a.appUpdate.ReleaseURL(); ok {
 			links = append(links, changeLink{"Download", url})
 		}
@@ -428,7 +428,7 @@ func (a *App) openChanges(cx *gk.Cx, part model.Part) {
 			entryPrefix: "Mixer software",
 			changelog:   update.Changelog,
 			available:   available,
-			links:       []changeLink{{"All mixer updates", fmt.Sprintf("%s#v%s", installer.MixerHistoryURL, newest)}},
+			links:       []changeLink{{"All mixer updates", fmt.Sprintf("%s#v%s", appupdate.MixerHistoryURL, newest)}},
 		}
 	case model.PartFirmware:
 		spec = Changes{

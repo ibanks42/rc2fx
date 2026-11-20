@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
@@ -55,19 +56,19 @@ func contains(sub string) func(string) bool {
 	return func(s string) bool { return strings.Contains(s, sub) }
 }
 
-func bundled(version string) installer.MixerUpdateState {
-	return installer.MixerUpdateState{Kind: installer.MixerBundled, Version: version}
+func bundled(version string) appupdate.MixerUpdateState {
+	return appupdate.MixerUpdateState{Kind: appupdate.MixerBundled, Version: version}
 }
 
 func TestNewerRodeFirmwareRC2FXCantInstallIsNotCalledUpToDate(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
-	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if o.Lead.Title != "Everything is up to date" {
 		t.Fatalf("lead %q", o.Lead.Title)
 	}
 
 	i.RodeFirmware = new("1.9.0")
-	o = OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	o = OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if o.Lead.Title != "RC2FX is up to date" {
 		t.Fatalf("lead %q", o.Lead.Title)
 	}
@@ -88,7 +89,7 @@ func TestNewerRodeFirmwareRC2FXCantInstallIsNotCalledUpToDate(t *testing.T) {
 	// RØDE's newest is what RC2FX supports, or what the mixer has.
 	for _, rode := range []string{"1.8.0", "1.7.0"} {
 		i.RodeFirmware = new(rode)
-		o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+		o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 		if o.Lead.Title != "Everything is up to date" {
 			t.Fatalf("%s: lead %q", rode, o.Lead.Title)
 		}
@@ -97,7 +98,7 @@ func TestNewerRodeFirmwareRC2FXCantInstallIsNotCalledUpToDate(t *testing.T) {
 	// An update RC2FX can install still leads; RØDE's news is a note.
 	i.InstalledFirmware = new("1.7.0")
 	i.RodeFirmware = new("1.9.0")
-	o = OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	o = OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if o.Lines[2].Tone != ToneUpdate {
 		t.Fatalf("tone %v", o.Lines[2].Tone)
 	}
@@ -278,7 +279,7 @@ func TestOlderFirmwareOffersUpdate(t *testing.T) {
 
 func TestAnAppUpdateLeadsAndOffersItsChanges(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
-	o := OverviewOf(&i, appUpdate(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	o := OverviewOf(&i, appUpdate(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if o.Lead.Title != "RC2FX 0.4.0 is available" {
 		t.Fatalf("lead %q", o.Lead.Title)
 	}
@@ -303,7 +304,7 @@ func TestAMixerUpdateLeadsWhenTheAppIsCurrent(t *testing.T) {
 
 func TestNothingToDoSaysSoAndOffersNothing(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
-	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if o.Lead.Title != "Everything is up to date" {
 		t.Fatalf("lead %q", o.Lead.Title)
 	}
@@ -315,11 +316,11 @@ func TestNothingToDoSaysSoAndOffersNothing(t *testing.T) {
 func TestAMixerNewerThanTheAppPointsAtTheAppUpdate(t *testing.T) {
 	i := inputs(new("0.4.0"), new("1.8.0"))
 	i.AvailableRuntime = new("0.3.0")
-	waiting := OverviewOf(&i, appUpdate(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	waiting := OverviewOf(&i, appUpdate(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if got := line(t, waiting, PartMixer).Status; got != "Update the app first" {
 		t.Fatalf("status %q", got)
 	}
-	noUpdate := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	noUpdate := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if got := line(t, noUpdate, PartMixer).Status; got != "Newer" {
 		t.Fatalf("status %q", got)
 	}
@@ -327,13 +328,13 @@ func TestAMixerNewerThanTheAppPointsAtTheAppUpdate(t *testing.T) {
 
 func TestAnUnknownLatestVersionIsOnlySaidWhenNothingBetterIs(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
-	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerUnknown})
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerUnknown})
 	if !slices.Equal(o.Details, []string{"The latest published mixer software is unknown."}) {
 		t.Fatalf("details %q", o.Details)
 	}
 	i = inputs(new("0.3.0"), new("1.8.0"))
 	i.NeedsApp = &AppNeed{Version: "9.0.0", MinimumApp: "99.0.0"}
-	o = OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerUnknown})
+	o = OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerUnknown})
 	if anyDetail(o, contains("unknown")) {
 		t.Fatalf("details %q", o.Details)
 	}
@@ -394,7 +395,7 @@ func TestNewerSoftwareThatNeedsANewerAppIsNamedWithTheVersionItNeeds(t *testing.
 
 	i := inputs(new("0.3.0"), new("1.8.0"))
 	i.NeedsApp = &AppNeed{Version: "9.0.0", MinimumApp: "99.0.0"}
-	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	mixer := line(t, o, PartMixer)
 	if mixer.Status != "Needs app update" || mixer.Available != "9.0.0" {
 		t.Fatalf("mixer %q %q", mixer.Status, mixer.Available)
@@ -438,7 +439,7 @@ func TestWithoutASignedAnswerTheAppIsNotBlamedAndTheInstallerCanCheck(t *testing
 	i := inputs(new("0.3.0"), new("1.8.0"))
 	i.AvailableRuntime = nil
 	i.SignedKnown = false
-	state := installer.MixerUpdateState{Kind: installer.MixerAppUpdateRequired, Latest: "0.4.0", AppVersion: "0.4.0"}
+	state := appupdate.MixerUpdateState{Kind: appupdate.MixerAppUpdateRequired, Latest: "0.4.0", AppVersion: "0.4.0"}
 	o := OverviewOf(&i, current(), state)
 	if got := line(t, o, PartMixer).Status; got != "Unknown" {
 		t.Fatalf("status %q", got)
@@ -454,14 +455,14 @@ func TestWithoutASignedAnswerTheAppIsNotBlamedAndTheInstallerCanCheck(t *testing
 	}
 	// Newer than anything known: nothing to look for.
 	i.InstalledFirmware = new("1.9.0")
-	if OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerUnknown}).OfferInstaller {
+	if OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerUnknown}).OfferInstaller {
 		t.Fatal("installer offered")
 	}
 }
 
 func TestAPublishedMixerNeverOffersTheInstaller(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
-	state := installer.MixerUpdateState{Kind: installer.MixerAppUpdateRequired, Latest: "0.4.0", AppVersion: "0.4.0"}
+	state := appupdate.MixerUpdateState{Kind: appupdate.MixerAppUpdateRequired, Latest: "0.4.0", AppVersion: "0.4.0"}
 	o := OverviewOf(&i, current(), state)
 	if o.OfferInstaller {
 		t.Fatal("installer offered")
@@ -534,7 +535,7 @@ func TestADisconnectedMixerStaysUnknown(t *testing.T) {
 	i := inputs(nil, nil)
 	i.DeviceProtocol = nil
 	i.NewestSupportedFirmware = nil
-	o := OverviewOf(&i, AppStanding{Kind: AppStandingUnknown}, installer.MixerUpdateState{Kind: installer.MixerUnknown})
+	o := OverviewOf(&i, AppStanding{Kind: AppStandingUnknown}, appupdate.MixerUpdateState{Kind: appupdate.MixerUnknown})
 	if o.Lead.Title != "Not connected" {
 		t.Fatalf("lead %q", o.Lead.Title)
 	}
@@ -553,7 +554,7 @@ func TestADisconnectedMixerStaysUnknown(t *testing.T) {
 
 func TestAnUnknownPublishedVersionStaysVisible(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
-	o := OverviewOf(&i, AppStanding{Kind: AppStandingUnknown}, installer.MixerUpdateState{Kind: installer.MixerUnknown})
+	o := OverviewOf(&i, AppStanding{Kind: AppStandingUnknown}, appupdate.MixerUpdateState{Kind: appupdate.MixerUnknown})
 	if got := line(t, o, PartMixer).Status; got != "Up to date" {
 		t.Fatalf("status %q", got)
 	}
@@ -564,7 +565,7 @@ func TestAnUnknownPublishedVersionStaysVisible(t *testing.T) {
 
 func TestNewerSoftwareOffersNothing(t *testing.T) {
 	i := inputs(new("0.4.0"), new("1.8.0"))
-	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerNewer})
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerNewer})
 	if got := line(t, o, PartMixer).Status; got != "Newer" {
 		t.Fatalf("status %q", got)
 	}
@@ -596,7 +597,7 @@ func TestUpdatesAreCountedAndACheckingAppSaysSo(t *testing.T) {
 
 func TestAllCurrentIsUpToDate(t *testing.T) {
 	i := inputs(new("0.3.0"), new("1.8.0"))
-	o := OverviewOf(&i, current(), installer.MixerUpdateState{Kind: installer.MixerCurrent})
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerCurrent})
 	if o.Lead.Title != "Everything is up to date" {
 		t.Fatalf("lead %q", o.Lead.Title)
 	}

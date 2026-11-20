@@ -5,7 +5,7 @@ RC2FX control over USB 1 from the desktop app (package `transport` in
 program, and uses no network.
 
 `CommandConnect` opens the single RØDECaster Pro II on USB 1 through the
-installer's control client (`installer/control`). The framing is described in
+USB control client (`usbcontrol`). The framing is described in
 [USB control](../../docs/reference/usb-control.md). One goroutine holds the
 HID handle and serves requests in order.
 

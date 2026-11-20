@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/control"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
@@ -104,7 +104,7 @@ func (m *uploadMixer) Request(request *usbproto.Request) (usbproto.Reply, error)
 		}
 		if breaks {
 			m.open = false
-			return usbproto.Reply{}, &control.Failure{Kind: control.Broken, Message: "USB read timed out"}
+			return usbproto.Reply{}, &usbcontrol.Failure{Kind: usbcontrol.Broken, Message: "USB read timed out"}
 		}
 		return uploadReply(200, member{"received", jsonUint(uint64(len(m.data)))})
 	case request.Method == "GET" && request.Path == path:

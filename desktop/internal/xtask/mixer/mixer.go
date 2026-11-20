@@ -22,9 +22,9 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/control"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
 
 // Two of the scripts that run on the mixer (embed.Scripts), in the
@@ -598,8 +598,8 @@ func api(method, path string, body *string) error {
 		}
 		raw = []byte(value.String())
 	}
-	request := control.Request{Method: strings.ToUpper(method), Path: strings.TrimLeft(path, "/"), Body: raw}
-	client, err := control.Open()
+	request := usbcontrol.Request{Method: strings.ToUpper(method), Path: strings.TrimLeft(path, "/"), Body: raw}
+	client, err := usbcontrol.Open()
 	if err != nil {
 		return task.Error(err.Error())
 	}
@@ -642,13 +642,13 @@ type flushWriter interface {
 // Separate one-shot invocations otherwise contend with their own previous
 // five-second lease.
 func apiSession() error {
-	client, err := control.Open()
+	client, err := usbcontrol.Open()
 	if err != nil {
 		return task.Error(err.Error())
 	}
 	defer client.Close()
 	output := bufio.NewWriter(os.Stdout)
-	return apiStream(bufio.NewReader(os.Stdin), output, func(request control.Request) (*control.Reply, error) {
+	return apiStream(bufio.NewReader(os.Stdin), output, func(request usbcontrol.Request) (*usbcontrol.Reply, error) {
 		reply, err := client.Request(&request)
 		if err != nil {
 			return nil, task.Error(err.Error())
@@ -657,7 +657,7 @@ func apiSession() error {
 	})
 }
 
-func apiStream(input *bufio.Reader, output flushWriter, request func(control.Request) (*control.Reply, error)) error {
+func apiStream(input *bufio.Reader, output flushWriter, request func(usbcontrol.Request) (*usbcontrol.Reply, error)) error {
 	line := make([]byte, 0, 4096)
 	for {
 		line = line[:0]
@@ -683,7 +683,7 @@ func apiStream(input *bufio.Reader, output flushWriter, request func(control.Req
 		if blank(line) {
 			continue
 		}
-		var parsed control.Request
+		var parsed usbcontrol.Request
 		if err := parsed.UnmarshalJSON(line); err != nil {
 			return task.Errorf("Invalid request JSON: %s", err)
 		}

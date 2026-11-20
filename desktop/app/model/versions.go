@@ -10,6 +10,7 @@ package model
 import (
 	"fmt"
 
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
@@ -383,21 +384,21 @@ var (
 	rodeNewer = statusTone{"Newer from RØDE", ToneQuiet}
 )
 
-func mixerStatus(s Summary, mixer installer.MixerUpdateState, signedKnown bool) (statusTone, bool) {
+func mixerStatus(s Summary, mixer appupdate.MixerUpdateState, signedKnown bool) (statusTone, bool) {
 	if s.Compatibility == CompatibilityMixerNewer {
 		return statusTone{"Update the app", ToneWarn}, false
 	}
 	tooOld := s.Compatibility == CompatibilityMixerOlder
 	switch mixer.Kind {
-	case installer.MixerAppUpdateRequired:
+	case appupdate.MixerAppUpdateRequired:
 		if signedKnown {
 			return statusTone{"Needs app update", ToneWarn}, true
 		}
 		// A signed release may carry it: only that check can say.
 		return unknownStatus, true
-	case installer.MixerNewer:
+	case appupdate.MixerNewer:
 		return newerStatus, false
-	case installer.MixerBundled, installer.MixerBundledThenApp:
+	case appupdate.MixerBundled, appupdate.MixerBundledThenApp:
 		switch {
 		case !s.UpdateAvailable():
 			return blocked, true
@@ -452,7 +453,7 @@ func showVersion(v *string) string {
 
 // OverviewOf is what to show for the app, the mixer software and the
 // firmware. mixer is informational: OfferInstaller ignores it.
-func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Overview {
+func OverviewOf(i *Inputs, app AppStanding, mixer appupdate.MixerUpdateState) Overview {
 	s := Summarize(i)
 	var (
 		appAvailable string
@@ -497,7 +498,7 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 	mixerAvailable := showVersion(i.AvailableRuntime)
 	if i.NeedsApp != nil {
 		mixerAvailable = i.NeedsApp.Version
-	} else if mixer.Kind == installer.MixerAppUpdateRequired {
+	} else if mixer.Kind == appupdate.MixerAppUpdateRequired {
 		mixerAvailable = mixer.Latest
 	}
 	firmwareAvailable := showVersion(i.NewestSupportedFirmware)
@@ -540,7 +541,7 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 	if i.SignedKnown && i.NeedsApp == nil {
 		latest, appVersion, ok := "", "", false
 		switch mixer.Kind {
-		case installer.MixerBundledThenApp, installer.MixerAppUpdateRequired:
+		case appupdate.MixerBundledThenApp, appupdate.MixerAppUpdateRequired:
 			latest, appVersion, ok = mixer.Latest, mixer.AppVersion, true
 		}
 		if ok {
@@ -555,7 +556,7 @@ func OverviewOf(i *Inputs, app AppStanding, mixer installer.MixerUpdateState) Ov
 			i.NeedsApp.Version, i.NeedsApp.MinimumApp))
 	}
 	connected := i.InstalledRuntime != nil || i.InstalledFirmware != nil
-	if mixer.Kind == installer.MixerUnknown && connected && len(details) == 0 {
+	if mixer.Kind == appupdate.MixerUnknown && connected && len(details) == 0 {
 		details = append(details, "The latest published mixer software is unknown.")
 	}
 	checkInInstaller := connected &&

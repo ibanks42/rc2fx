@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +20,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/ext2fs"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
 var repairScript = []byte("#!/bin/sh\nmount -t vfat /dev/mmcblk1p3 /Application/update-staging\n")
@@ -61,9 +62,9 @@ func bigFile() []byte {
 }
 
 func rootManifest(hostname string) string {
-	return line(sum([]byte(hostname+"\n")), "etc/hostname") +
-		line(sum(repairScript), "usr/bin/rode-init-update-env.sh") +
-		line(sum(bigFile()), "usr/bin/big")
+	return line(archive.Sum([]byte(hostname+"\n")), "etc/hostname") +
+		line(archive.Sum(repairScript), "usr/bin/rode-init-update-env.sh") +
+		line(archive.Sum(bigFile()), "usr/bin/big")
 }
 
 func writeAt(t *testing.T, path string, offset uint64, data []byte) {

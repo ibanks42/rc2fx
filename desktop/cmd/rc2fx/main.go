@@ -9,6 +9,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/app"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
 
 // icon is the window icon, a copy of desktop/packaging/rc2fx.png
@@ -26,6 +27,7 @@ func main() {
 	// Keeps the installer's payload-mode marker in the executable, so the
 	// linker does not drop it.
 	_ = installer.PayloadMode()
+	usbcontrol.RegisterControlProbe()
 	app.SetWindowIcon(icon)
 	app.Run()
 }

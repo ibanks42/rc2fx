@@ -1,4 +1,4 @@
-package installer
+package appupdate
 
 // Check downloaded app updates against signed release metadata.
 //
@@ -35,8 +35,11 @@ import (
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/installer/trust"
+	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
 )
+
+var trustedRoot = trust.Root()
 
 const (
 	appMetadataHost = "raw.githubusercontent.com"
@@ -106,7 +109,12 @@ func verifyUpdatePackage(version, asset, file string) *VerifyError {
 	if err := checkAppRepositoryURL(targetsBase, appTargetsHost); err != nil {
 		return unavailable(err.Error())
 	}
-	return verifyAppPackage(trustedRoot, tufHTTP(metadataBase, targetsBase, appTimeout), version, asset, file)
+	return verifyAppPackage(trustedRoot, tuf.NewHTTPRepository(metadataBase, targetsBase, appTimeout), version, asset, file)
+}
+
+func comparable(v string) bool {
+	_, ok := core.CompareVersions(v, v)
+	return ok
 }
 
 // verifyAppPackage: repository is the official one, or local files in tests.
@@ -133,7 +141,7 @@ func verifyAppPackage(root []byte, repository tuf.Repository, version, asset, fi
 	if err != nil {
 		return rejected(fmt.Sprintf("Could not read the downloaded update: %v", err))
 	}
-	want, ok := targetSha256(target)
+	want, ok := tuf.TargetSHA256(target)
 	if !ok || length != uint64(target.Length) || sha != want {
 		// Best effort: the caller discards the update either way.
 		os.Remove(file)
@@ -164,7 +172,7 @@ func signedTarget(root []byte, repository tuf.Repository, name string) (*metadat
 		}
 		return nil, "", fail(err)
 	}
-	if err := distinctKeys(updater.Trusted().Root()); err != nil {
+	if err := tuf.DistinctKeys(updater.Trusted().Root()); err != nil {
 		return nil, "", fail(err)
 	}
 	targets := updater.Trusted().TargetsRole(metadata.TARGETS)
@@ -196,7 +204,7 @@ func signedTarget(root []byte, repository tuf.Repository, name string) (*metadat
 
 // versionOf is the version a signed asset says it belongs to.
 func versionOf(target *metadata.TargetFiles) (string, bool) {
-	v, ok := customValue(target, "version").(string)
+	v, ok := tuf.CustomValue(target, "version").(string)
 	return v, ok
 }
 
@@ -218,8 +226,8 @@ func fileDigest(path string) (uint64, string, error) {
 // checkAppRepositoryURL: the two addresses app metadata may come from, over
 // plain HTTPS.
 func checkAppRepositoryURL(u *url.URL, host string) error {
-	if !officialURL(u, host) {
-		return Error("App update repository URLs must use the official HTTPS hosts.")
+	if !tuf.OfficialURL(u, host) {
+		return errors.New("App update repository URLs must use the official HTTPS hosts.")
 	}
 	return nil
 }

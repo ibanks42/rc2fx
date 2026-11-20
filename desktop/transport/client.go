@@ -3,13 +3,13 @@
 package transport
 
 import (
-	"github.com/ibanks42/rc2fx/desktop/installer/control"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
 // clientSession serves requests through the installer's control client.
 type clientSession struct {
-	client *control.Client
+	client *usbcontrol.Client
 }
 
 func (s clientSession) Request(request *usbproto.Request) (usbproto.Reply, error) {
@@ -36,7 +36,7 @@ func (s clientSession) Close() {
 // openSession opens the one connected mixer; called on the goroutine that
 // will serve it.
 func openSession() (Session, string, error) {
-	client, err := control.Open()
+	client, err := usbcontrol.Open()
 	if err != nil {
 		return nil, "", err
 	}

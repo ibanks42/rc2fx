@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -192,7 +193,7 @@ func MixerHostAlias(serial string) (string, error) {
 	if strings.TrimSpace(serial) == "" {
 		return "", Error("connect the mixer so its SSH identity can be matched to it")
 	}
-	return "rc2fx-" + sum([]byte(serial))[:12], nil
+	return "rc2fx-" + archive.Sum([]byte(serial))[:12], nil
 }
 
 // PinMixerHostKeys pins hostKeys (public host key lines the mixer reported
@@ -278,7 +279,7 @@ func pinHostKeysIn(work, serial string, hostKeys []string) (*PinnedHost, error) 
 	for _, line := range lines {
 		text = append(text, line...)
 	}
-	if err := atomicFile(path, text); err != nil {
+	if err := archive.AtomicFile(path, text); err != nil {
 		return nil, err
 	}
 	return &PinnedHost{Alias: alias, KnownHosts: path}, nil

@@ -12,6 +12,7 @@ package installer
 
 import (
 	"errors"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func (e *Engine) anchorFile() (string, error) {
 	if dir == "" {
 		return "", nil
 	}
-	return filepath.Join(dir, sum([]byte(e.Work))), nil
+	return filepath.Join(dir, archive.Sum([]byte(e.Work))), nil
 }
 
 // anchorPrepared records prepared, whose hashes this process computed while
@@ -57,7 +58,7 @@ func (e *Engine) anchorPrepared(prepared *Prepared) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(part, data, 0o666); err != nil {
+	if err := os.WriteFile(part, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(part, path)

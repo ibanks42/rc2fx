@@ -1,6 +1,6 @@
 /*
  * The few libext2fs operations RC2FX's mixer repair uses, behind functions
- * that take and return only plain C types, so the Rust side never depends on
+ * that take and return only plain C types, so the Go side never depends on
  * libext2fs's structure layouts. Every filesystem operation is libext2fs's
  * own; nothing here reads or writes the disk itself.
  */

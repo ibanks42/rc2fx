@@ -65,7 +65,7 @@ func locationForModel(model firmware.Model, value, suffix, version string) (stri
 // must allow root's key; an image with RC2FX gets the manifest the mixer
 // checks on its first boots and must fit the root once unpacked
 // (image_check.go).
-func patchArchiveForModel(model firmware.Model, src, dst string, extra []Entry, sourceSha *string) (*patched, error) {
+func patchArchiveForModel(model firmware.Model, src, dst string, extra []archive.Entry, sourceSha *string) (*archive.Patched, error) {
 	keyOK, sshOK := false, false
 	var manifest strings.Builder
 	var usage rootUsage
@@ -98,16 +98,16 @@ func patchArchiveForModel(model firmware.Model, src, dst string, extra []Entry, 
 			}
 			return nil
 		},
-		Finish: func(add func(Entry) error) error {
+		Finish: func(add func(archive.Entry) error) error {
 			for _, entry := range extra {
-				if entry.Kind == EntryDir {
+				if entry.Kind == archive.EntryDir {
 					usage.block()
 				} else {
 					usage.file(uint64(len(entry.Data)))
 				}
 			}
 			// Only an image with RC2FX has the launcher that reads the manifest.
-			list := Entry{Kind: EntryFile, Path: manifestMember, Mode: 0o600, Data: []byte(manifest.String())}
+			list := archive.Entry{Kind: archive.EntryFile, Path: manifestMember, Mode: 0o600, Data: []byte(manifest.String())}
 			usage.file(uint64(len(list.Data)))
 			if err := add(list); err != nil {
 				return err
@@ -130,7 +130,7 @@ func (e *Engine) get(value string, limit uint64) ([]byte, error) {
 }
 
 func (e *Engine) catalog() (*Catalog, error) {
-	return e.source.catalog()
+	return e.source.catalogFrom(e.catalogCache())
 }
 
 func (e *Engine) releases() ([]Release, error) {
@@ -279,7 +279,7 @@ func (e *Engine) profile(id string) (*Profile, error) {
 // imageFor is what the image for profile adds: the runtime, autostart and
 // the newest settings saved for serial. Returns the entries, the runtime
 // digest and the settings digest (empty without settings).
-func (e *Engine) imageFor(profile *Profile, serial string) ([]Entry, string, string, error) {
+func (e *Engine) imageFor(profile *Profile, serial string) ([]archive.Entry, string, string, error) {
 	bundle, err := e.source.bundle()
 	if err != nil {
 		return nil, "", "", err
@@ -296,7 +296,7 @@ func (e *Engine) imageFor(profile *Profile, serial string) ([]Entry, string, str
 	}
 	digest := ""
 	if settings != nil {
-		digest = sum(settings)
+		digest = archive.Sum(settings)
 	}
 	entries, runtime, err := imageEntries(bundle, profile, settings)
 	if err != nil {
@@ -391,7 +391,7 @@ func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared
 	if built.Mixer != p.MixerSHA || built.Launcher != p.LauncherSHA {
 		return nil, Error("firmware binaries do not match the supported profile")
 	}
-	sha, md5sum, err := hashBoth(dst, e.reporter("verify", "Checking the built firmware"))
+	sha, md5sum, err := archive.HashBoth(dst, e.reporter("verify", "Checking the built firmware"))
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +415,7 @@ func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared
 	if err := e.anchorPrepared(prepared); err != nil {
 		return nil, err
 	}
-	if err := atomicFile(filepath.Join(e.Work, "archive.md5"), []byte(prepared.ArchiveMD5)); err != nil {
+	if err := archive.AtomicFile(filepath.Join(e.Work, "archive.md5"), []byte(prepared.ArchiveMD5)); err != nil {
 		return nil, err
 	}
 	saved.Prepared = prepared.clone()
@@ -502,7 +502,7 @@ func (e *Engine) prepareStock(channel, version string) (*Prepared, error) {
 	if err := archive.ReplaceLocalFile(part, dst); err != nil {
 		return nil, err
 	}
-	archiveSha, archiveMd5, err := hashBoth(dst, e.reporter("verify", "Checking the stock firmware"))
+	archiveSha, archiveMd5, err := archive.HashBoth(dst, e.reporter("verify", "Checking the stock firmware"))
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +526,7 @@ func (e *Engine) prepareStock(channel, version string) (*Prepared, error) {
 	if err := e.anchorPrepared(prepared); err != nil {
 		return nil, err
 	}
-	if err := atomicFile(filepath.Join(e.Work, "archive.md5"), []byte(md)); err != nil {
+	if err := archive.AtomicFile(filepath.Join(e.Work, "archive.md5"), []byte(md)); err != nil {
 		return nil, err
 	}
 	saved.Prepared = prepared.clone()
@@ -537,12 +537,12 @@ func (e *Engine) prepareStock(channel, version string) (*Prepared, error) {
 }
 
 func chownToInvoker(path string) error {
-	file, err := openRegular(path)
+	file, err := archive.OpenRegular(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	return localOwner(file)
+	return archive.LocalOwner(file)
 }
 
 func isHexText(text string) bool {

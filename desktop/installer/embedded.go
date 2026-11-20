@@ -12,6 +12,7 @@ package installer
 
 import (
 	"bytes"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"os"
 	"path/filepath"
 	"sync"
@@ -131,7 +132,7 @@ func identityOf(kind string, bundle Bundle) (Identity, error) {
 	identity := Identity{
 		Kind:     kind,
 		Build:    build,
-		Catalog:  sum(catalogData),
+		Catalog:  archive.Sum(catalogData),
 		Release:  release.Version,
 		Runtime:  digest(bundle),
 		Files:    []FilePin{},
@@ -139,7 +140,7 @@ func identityOf(kind string, bundle Bundle) (Identity, error) {
 	}
 	for _, name := range embed.PayloadNames {
 		data := bundle[name]
-		identity.Files = append(identity.Files, FilePin{Name: name, SHA256: sum(data), Size: uint64(len(data))})
+		identity.Files = append(identity.Files, FilePin{Name: name, SHA256: archive.Sum(data), Size: uint64(len(data))})
 	}
 	for i := range catalog.Profiles {
 		p := &catalog.Profiles[i]
@@ -173,7 +174,7 @@ func catalogBytes() ([]byte, error) {
 		}
 		return bytes.Clone(p.bundle["firmware-profiles.json"]), nil
 	}
-	return cachedCatalogBytes()
+	return defaultCatalogCache.Bytes()
 }
 
 // EmbeddedService is whether RC2FX's state (as the app's USB connection
@@ -328,9 +329,13 @@ func (s Source) bundle() (Bundle, error) {
 }
 
 func (s Source) catalog() (*Catalog, error) {
+	return s.catalogFrom(&defaultCatalogCache)
+}
+
+func (s Source) catalogFrom(cache *CatalogCache) (*Catalog, error) {
 	switch s.Kind {
 	case SourceDownload:
-		return cachedCatalog()
+		return cache.Catalog()
 	case SourceFolder:
 		return catalogFromDisk(s.Root)
 	}

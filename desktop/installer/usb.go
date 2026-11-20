@@ -5,6 +5,7 @@ package installer
 
 import (
 	"bytes"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"path/filepath"
 
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/flash"
@@ -48,15 +49,15 @@ func FirmwareVersion(release uint16) (string, bool) { return flash.FirmwareVersi
 // the prepared firmware, reading the archive once. progress receives bytes
 // read.
 func archiveMatches(dir string, p *Prepared, progress func(uint64, uint64)) error {
-	archive := filepath.Join(dir, "archive.tar.gz")
-	sha, md5sum, err := hashBoth(archive, progress)
+	archivePath := filepath.Join(dir, "archive.tar.gz")
+	sha, md5sum, err := archive.HashBoth(archivePath, progress)
 	if err != nil {
 		return err
 	}
 	if sha != p.ArchiveSHA || md5sum != p.ArchiveMD5 {
-		return errorf("%s does not match the prepared firmware", archive)
+		return errorf("%s does not match the prepared firmware", archivePath)
 	}
-	file, err := openRegular(filepath.Join(dir, "archive.md5"))
+	file, err := archive.OpenRegular(filepath.Join(dir, "archive.md5"))
 	if err != nil {
 		return err
 	}
@@ -65,7 +66,7 @@ func archiveMatches(dir string, p *Prepared, progress func(uint64, uint64)) erro
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(trimASCII(md), []byte(p.ArchiveMD5)) {
+	if !bytes.Equal(archive.TrimASCII(md), []byte(p.ArchiveMD5)) {
 		return Error("archive.md5 does not match the prepared firmware")
 	}
 	return nil

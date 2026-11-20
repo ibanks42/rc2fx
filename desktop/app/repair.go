@@ -20,7 +20,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/installer"
-	"github.com/ibanks42/rc2fx/desktop/installer/platform"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
 // openRepair opens the installer straight on the repair page.

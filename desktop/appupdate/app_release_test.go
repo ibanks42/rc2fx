@@ -1,4 +1,4 @@
-package installer
+package appupdate
 
 import (
 	"bytes"
@@ -9,22 +9,41 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/internal/tuf/tuftest"
 )
 
 const testPackage = "io.github.ibanks42.rc2fx-1.2.3-full.nupkg"
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func put(t *testing.T, path string, data []byte) {
+	t.Helper()
+	must(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	must(t, os.WriteFile(path, data, 0o644))
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
 
 // appFixture is a test-only root and key, with metadata written under
 // dir/metadata and the signed asset under dir.
 type appFixture struct {
 	t    *testing.T
 	dir  string
-	repo *tufRepo
+	repo *tuftest.Repo
 }
 
 func newAppFixture(t *testing.T) *appFixture {
 	dir := t.TempDir()
-	repo := newTufRepo(t, dir)
+	repo := tuftest.NewRepo(t, dir)
 	put(t, filepath.Join(dir, testPackage), []byte("signed update package"))
 	return &appFixture{t: t, dir: dir, repo: repo}
 }
@@ -32,7 +51,7 @@ func newAppFixture(t *testing.T) *appFixture {
 // signWith signs the package as target name with version in its custom
 // field, at the given targets, snapshot and timestamp versions.
 func (f *appFixture) signWith(name, version string, versions [3]int64, expires string) {
-	f.repo.sign([]tufTarget{{name: name, file: filepath.Join(f.dir, testPackage), custom: map[string]any{"version": version}}}, versions, expires)
+	f.repo.Sign([]tuftest.Target{{Name: name, File: filepath.Join(f.dir, testPackage), Custom: map[string]any{"version": version}}}, versions, expires)
 }
 
 func (f *appFixture) sign(versions [3]int64) {
@@ -48,7 +67,7 @@ func (f *appFixture) download(data []byte) string {
 }
 
 func (f *appFixture) verify(version, asset, file string) *VerifyError {
-	return verifyAppPackage(f.repo.trusted, tuf.Folders{Metadata: filepath.Join(f.dir, "metadata"), Targets: f.dir}, version, asset, file)
+	return verifyAppPackage(f.repo.Trusted, tuf.Folders{Metadata: filepath.Join(f.dir, "metadata"), Targets: f.dir}, version, asset, file)
 }
 
 // signedApp is a fixture with version 1.2.3's package signed at metadata
@@ -59,10 +78,7 @@ func signedApp(t *testing.T) *appFixture {
 	return f
 }
 
-func TestConfiguredProductionRootIsValidAndSharedWithMixerUpdates(t *testing.T) {
-	if AppUpdatesConfigured() != MixerConfigured() {
-		t.Fatal("the app and mixer roots differ")
-	}
+func TestConfiguredProductionRootIsValid(t *testing.T) {
 	if !AppUpdatesConfigured() {
 		return
 	}

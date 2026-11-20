@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/control"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
@@ -29,7 +29,7 @@ type job struct {
 }
 
 // Session is something that serves requests: the real client, or a test
-// stand-in. Request returns an *control.Failure when it fails.
+// stand-in. Request returns an *usbcontrol.Failure when it fails.
 type Session interface {
 	Request(request *usbproto.Request) (usbproto.Reply, error)
 	IsOpen() bool
@@ -160,7 +160,7 @@ func refuse(answer chan<- outcome, message string) {
 
 // failureMessage is the text a failed request answers with.
 func failureMessage(err error) string {
-	var failure *control.Failure
+	var failure *usbcontrol.Failure
 	if errors.As(err, &failure) {
 		return failure.Message
 	}
@@ -169,8 +169,8 @@ func failureMessage(err error) string {
 
 // broken is whether the session broke and the request's outcome is unknown.
 func broken(err error) bool {
-	var failure *control.Failure
-	return errors.As(err, &failure) && failure.Kind == control.Broken
+	var failure *usbcontrol.Failure
+	return errors.As(err, &failure) && failure.Kind == usbcontrol.Broken
 }
 
 func serve(jobs <-chan job, session Session) {

@@ -44,7 +44,7 @@ func privateDirs(dir string) error {
 		return err
 	}
 	defer file.Close()
-	return localOwner(file)
+	return archive.LocalOwner(file)
 }
 
 // openLocalFile creates the file privately if missing, otherwise opens the
@@ -56,7 +56,7 @@ func openLocalFile(path string, appendMode bool) (*os.File, error) {
 	}
 	file, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
-		if err := localOwner(file); err != nil {
+		if err := archive.LocalOwner(file); err != nil {
 			file.Close()
 			return nil, err
 		}
@@ -72,7 +72,7 @@ func openLocalFile(path string, appendMode bool) (*os.File, error) {
 	if file, err = archive.RegularOnly(file); err != nil {
 		return nil, err
 	}
-	return ownedByInvoker(file)
+	return archive.OwnedByInvoker(file)
 }
 
 // exclusiveFile creates a new file exclusively; it refuses to replace an
@@ -83,7 +83,7 @@ func exclusiveFile(path string, data []byte) error {
 		return err
 	}
 	defer file.Close()
-	if err := localOwner(file); err != nil {
+	if err := archive.LocalOwner(file); err != nil {
 		return err
 	}
 	if _, err := file.Write(data); err != nil {

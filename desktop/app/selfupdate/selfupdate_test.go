@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
 func asset(file string) Asset { return Asset{Version: "1.2.3", FileName: file} }
@@ -111,7 +111,7 @@ func TestAPackageItsReleaseRejectsIsRemovedAndShown(t *testing.T) {
 	path := filepath.Join(packages, own("1.2.3"))
 	file(t, path)
 	refuse := func(_, _, _ string) error {
-		return &installer.VerifyError{Rejected: true, Message: "This update has not been signed yet."}
+		return &appupdate.VerifyError{Rejected: true, Message: "This update has not been signed yet."}
 	}
 	pkg := asset(own("1.2.3"))
 	result := VerifyPackage(packages, pkg, refuse)
@@ -132,7 +132,7 @@ func TestAPackageThatCouldNotBeCheckedIsKeptToCheckAgain(t *testing.T) {
 	path := filepath.Join(packages, own("1.2.3"))
 	file(t, path)
 	offline := func(_, _, _ string) error {
-		return &installer.VerifyError{Message: "Could not check this update."}
+		return &appupdate.VerifyError{Message: "Could not check this update."}
 	}
 	pkg := asset(own("1.2.3"))
 	result := VerifyPackage(packages, pkg, offline)
@@ -204,7 +204,7 @@ func TestADownloadIsCheckedUnderItsTemporaryNameAndDiscardedIfRejected(t *testin
 		if version != "1.2.3" || name != own("1.2.3") || !strings.HasSuffix(f, partialName) {
 			t.Fatalf("%s %s %s", version, name, f)
 		}
-		return &installer.VerifyError{Rejected: true, Message: "mismatch"}
+		return &appupdate.VerifyError{Rejected: true, Message: "mismatch"}
 	}
 	checks := &Checks{}
 	result := VerifyFile(pkg, partial, seen)
@@ -362,11 +362,11 @@ func TestAFailedDownloadSaysWhy(t *testing.T) {
 			return LibraryError("User vpkc_download_asset_delegate_t returned false to indicate download failed")
 		}, "The update could not be downloaded. Check the internet connection and try again.", false},
 		{"unavailable", func(feed *SignedFeed) error {
-			feed.checks.Record(pkg, &installer.VerifyError{Message: "Could not check."})
+			feed.checks.Record(pkg, &appupdate.VerifyError{Message: "Could not check."})
 			return LibraryError("User vpkc_download_asset_delegate_t returned false to indicate download failed")
 		}, "Could not check.", true},
 		{"rejected", func(feed *SignedFeed) error {
-			feed.checks.Record(pkg, &installer.VerifyError{Rejected: true, Message: "Not signed."})
+			feed.checks.Record(pkg, &appupdate.VerifyError{Rejected: true, Message: "Not signed."})
 			return LibraryError("User vpkc_download_asset_delegate_t returned false to indicate download failed")
 		}, "Not signed.", false},
 		{"checksum after a passed check", func(feed *SignedFeed) error {

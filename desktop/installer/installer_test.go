@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"io"
 	"os"
 	"path/filepath"
@@ -345,7 +346,7 @@ func writeRuntime(t *testing.T, root string, catalog []byte) {
 	}
 	var manifest strings.Builder
 	for _, n := range []string{"librc2fx_native.so", "rc2fxd", "rc2fx-supervisor", "rc2fx-firmware", "firmware-profiles.json", "librc2fx_gui.so", "librc2fx_jackerr.so", "rc2fx_jackerr_snapshot", "mixer-release.json"} {
-		manifest.WriteString(sum(bundle[n]) + "  " + n + "\n")
+		manifest.WriteString(archive.Sum(bundle[n]) + "  " + n + "\n")
 		put(t, filepath.Join(root, "runtime", n), bundle[n])
 	}
 	put(t, filepath.Join(root, "runtime", "SHA256SUMS"), []byte(manifest.String()))
@@ -372,7 +373,7 @@ func newFixture(t *testing.T) *fixture {
 	writeRuntime(t, root, catalog)
 	data := []byte("fixture firmware")
 	put(t, filepath.Join(work, "archive.tar.gz"), data)
-	md, err := fileHash(filepath.Join(work, "archive.tar.gz"), algorithmMd5)
+	md, err := archive.FileHash(filepath.Join(work, "archive.tar.gz"), archive.MD5)
 	must(t, err)
 	put(t, filepath.Join(work, "archive.md5"), []byte(md))
 	bundle, err := BundleFiles(root)
@@ -385,7 +386,7 @@ func newFixture(t *testing.T) *fixture {
 		Version:    "1.7.7",
 		Channel:    "beta",
 		Profile:    "fixture",
-		ArchiveSHA: sum(data),
+		ArchiveSHA: archive.Sum(data),
 		ArchiveMD5: md,
 		Runtime:    runtime,
 	}
@@ -539,11 +540,11 @@ func TestTheHelperRefusesAnImageRewrittenTogetherWithItsCacheRecord(t *testing.T
 	forged := []byte("forged firmware")
 	work := x.engine.Work
 	put(t, filepath.Join(work, "archive.tar.gz"), forged)
-	md, err := fileHash(filepath.Join(work, "archive.tar.gz"), algorithmMd5)
+	md, err := archive.FileHash(filepath.Join(work, "archive.tar.gz"), archive.MD5)
 	must(t, err)
 	put(t, filepath.Join(work, "archive.md5"), []byte(md))
 	saved := x.saved()
-	saved.Prepared.ArchiveSHA = sum(forged)
+	saved.Prepared.ArchiveSHA = archive.Sum(forged)
 	saved.Prepared.ArchiveMD5 = md
 	must(t, x.engine.save(saved))
 	if x.engine.flash("") == nil {
@@ -636,13 +637,13 @@ func TestADownloadChecksRodesMD5AndAnySHA256TheCatalogPins(t *testing.T) {
 	x := newFixture(t)
 	dest := filepath.Join(x.engine.Work, "cached.tar.gz")
 	put(t, dest, []byte("cached firmware"))
-	md, err := fileHash(dest, algorithmMd5)
+	md, err := archive.FileHash(dest, archive.MD5)
 	must(t, err)
 	url := "https://update.rode.com/rodecaster-pro-ii/1.7.7/os.tar.gz"
 	empty := ""
 	contains(t, x.engine.download(url, dest, &empty, md), "firmware checksums")
 	contains(t, x.engine.download(url, dest, nil, ""), "firmware checksums")
-	sha, err := fileHash(dest, algorithmSha256)
+	sha, err := archive.FileHash(dest, archive.SHA256)
 	must(t, err)
 	must(t, x.engine.download(url, dest, &sha, md))
 	// Stock firmware RØDE lists without a catalog pin: RØDE's MD5 alone.

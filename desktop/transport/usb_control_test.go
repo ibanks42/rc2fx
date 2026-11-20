@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/control"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
@@ -22,7 +22,7 @@ func (f *flaky) Request(*usbproto.Request) (usbproto.Reply, error) {
 	if !f.brokenOnce {
 		f.brokenOnce = true
 		f.open = false
-		return usbproto.Reply{}, &control.Failure{Kind: control.Broken, Message: "lost"}
+		return usbproto.Reply{}, &usbcontrol.Failure{Kind: usbcontrol.Broken, Message: "lost"}
 	}
 	return usbproto.Reply{Status: 200, Body: json.RawMessage("null")}, nil
 }

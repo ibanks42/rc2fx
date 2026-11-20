@@ -8,6 +8,7 @@ package installer
 
 import (
 	"errors"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -120,9 +121,9 @@ func (e *Engine) storageFix(final, debug bool) (*StorageFix, error) {
 		// it again.
 		if profile, err := e.profile(p.Profile); err == nil {
 			src := filepath.Join(e.Work, "rode-original.tar.gz")
-			if md, err := fileHash(src, algorithmMd5); err == nil && md == profile.ArchiveMD5 {
+			if md, err := archive.FileHash(src, archive.MD5); err == nil && md == profile.ArchiveMD5 {
 				digest := filepath.Join(e.Work, "rode-original.md5")
-				if atomicFile(digest, []byte(md)) == nil {
+				if archive.AtomicFile(digest, []byte(md)) == nil {
 					o.LocalArchive, o.LocalMD5 = src, digest
 				}
 			}

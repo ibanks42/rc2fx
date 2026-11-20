@@ -4,6 +4,7 @@ package installer
 // opens USB, or grants runtime support to an experimental board.
 
 import (
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"os"
 	"slices"
 	"unicode/utf8"
@@ -42,15 +43,15 @@ func InspectArchive(model firmware.Model, archive string) (*Inspection, error) {
 
 // InspectArchiveWithCatalog lets offline tooling explicitly provide a
 // catalog instead of downloading it.
-func InspectArchiveWithCatalog(model firmware.Model, archive string, catalog *firmware.Catalog) (*Inspection, error) {
-	info, err := os.Stat(archive)
+func InspectArchiveWithCatalog(model firmware.Model, archivePath string, catalog *firmware.Catalog) (*Inspection, error) {
+	info, err := os.Stat(archivePath)
 	if err != nil {
 		return nil, err
 	}
 	if info.Size() > maxDownload {
 		return nil, Error("firmware exceeds size limit")
 	}
-	sha, md5sum, err := hashBoth(archive, func(uint64, uint64) {})
+	sha, md5sum, err := archive.HashBoth(archivePath, func(uint64, uint64) {})
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +62,7 @@ func InspectArchiveWithCatalog(model firmware.Model, archive string, catalog *fi
 		return nil, Error("archive is not pinned for the requested model (wrong model or uninspected release)")
 	}
 	release := catalog.Profiles[i]
-	members, err := readMembers(archive, model)
+	members, err := readMembers(archivePath, model)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +125,7 @@ func verifyArchiveModel(model firmware.Model, archive string) error {
 	return nil
 }
 
-func readMembers(archive string, model firmware.Model) (map[string][]byte, error) {
+func readMembers(archivePath string, model firmware.Model) (map[string][]byte, error) {
 	required := []string{
 		"etc/hostname",
 		"boot/extlinux/extlinux.conf",
@@ -133,19 +134,19 @@ func readMembers(archive string, model firmware.Model) (map[string][]byte, error
 		model.BoardDTB()[1:],
 	}
 	members := map[string][]byte{}
-	err := walkArchive(archive, 2<<30, false, func(entry *tarEntry) error {
-		name := normalized(entry.Path)
+	err := archive.Walk(archivePath, 2<<30, false, func(entry *archive.Member) error {
+		name := archive.Normalized(entry.Path)
 		if !slices.Contains(required, name) {
 			return nil
 		}
-		limit := uint64(maxSmallMember)
+		limit := uint64(archive.MaxSmallMember)
 		if name == "usr/bin/rc_audio_mixer" {
-			limit = maxMixerMember
+			limit = archive.MaxMixerMember
 		}
 		if _, ok := members[name]; ok || !entry.Header.Regular() || entry.Size > limit {
 			return errorf("duplicate, nonregular or oversized identity member %s", name)
 		}
-		data, err := readAll(entry)
+		data, err := archive.ReadAll(entry)
 		if err != nil {
 			return err
 		}

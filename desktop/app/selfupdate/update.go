@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
 // Opener makes Velopack's UpdateManager over feed (vpkc.Open). locator is
@@ -67,7 +67,7 @@ func New(open Opener) SelfUpdate {
 }
 
 func empty(manager Manager) SelfUpdate {
-	return SelfUpdate{manager: manager, state: Idle(), checks: &Checks{}, verify: installer.VerifyUpdatePackage}
+	return SelfUpdate{manager: manager, state: Idle(), checks: &Checks{}, verify: appupdate.VerifyUpdatePackage}
 }
 
 // velopackManager opens Velopack's update manager: on Linux with the
