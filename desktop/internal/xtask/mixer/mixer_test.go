@@ -223,3 +223,37 @@ func TestStagingOnlyAcceptsTheStockDescriptorItWasBuiltFrom(t *testing.T) {
 		t.Fatal(body)
 	}
 }
+
+func TestParseBenchFlagsForwardsAllBenchOptions(t *testing.T) {
+	passed, weights, err := parseBenchFlags([]string{
+		"--unpaced", "--spin",
+		"--policy", "production",
+		"--cpus", "2,3",
+		"--priority", "80",
+		"--pause-us", "500",
+		"--kernel", "compare",
+		"--weights", "custom.bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--unpaced", "--spin", "--policy", "production", "--cpus", "2,3", "--priority", "80", "--pause-us", "500", "--kernel", "compare"}
+	if strings.Join(passed, " ") != strings.Join(want, " ") {
+		t.Fatalf("passed = %q, want %q", passed, want)
+	}
+	if weights != "custom.bin" {
+		t.Fatalf("weights = %q", weights)
+	}
+	for _, bad := range [][]string{
+		{"--pause-us"},
+		{"--pause-us", "-5"},
+		{"--pause-us", "abc"},
+		{"--kernel"},
+		{"--kernel", "invalid"},
+		{"--unknown"},
+	} {
+		if _, _, err := parseBenchFlags(bad); err == nil {
+			t.Errorf("accepted invalid bench flags %v", bad)
+		}
+	}
+}

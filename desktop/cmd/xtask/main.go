@@ -42,11 +42,13 @@ const help = `./xtask <command>
       enable | disable  allow or skip starting at boot
   bench-build           Cross-build the suppression benchmark into target/bench
   bench WAV [--unpaced] [--policy production|inherited] [--cpus LIST] [--priority N]
-                        [--weights FILE]
+                        [--pause-us N] [--spin] [--kernel tiled|rows|compare] [--weights FILE]
                         Time every suppression model on the mixer over a 48 kHz
                         recording and fetch the denoised audio
   check-elf FILE [--shared]  Check a mixer binary against the mixer ABI baseline
-  licenses FILE         Write consolidated license notices to FILE
+  licenses [--base] FILE  Write consolidated license notices HTML (or --base JSON for release jobs)
+  non-ui-packages       List desktop Go packages that do not depend on gpuikit
+  check-ui-link [DIR]   Link ./cmd/rc2fx with release Velopack and gpuikit flags
   app [--release] [--mock] [--embedded] [--build-only] [-- ARGS...]
                         Build the desktop app for this machine into target/debug (a development
                         build), target/release (--release) or target/mock (--mock: the simulated
@@ -118,6 +120,14 @@ func dispatch(args []string) error {
 		return elfcheck.Check(rest[0], true)
 	case command == "licenses" && len(rest) == 1:
 		return licenses.WriteLicenses(rest[0])
+	case command == "licenses" && len(rest) == 2 && rest[0] == "--base":
+		return licenses.WriteBaseLicenses(rest[1])
+	case command == "non-ui-packages" && len(rest) == 0:
+		return packaging.NonUIPackages()
+	case command == "check-ui-link" && len(rest) == 0:
+		return packaging.CheckUILink("")
+	case command == "check-ui-link" && len(rest) == 1:
+		return packaging.CheckUILink(rest[0])
 	case command == "app":
 		return packaging.RunApp(rest)
 	case command == "package":

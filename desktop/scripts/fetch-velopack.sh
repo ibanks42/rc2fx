@@ -24,10 +24,14 @@
 # GOARCH`, except that macOS always gets darwin-universal.
 set -euo pipefail
 
-version=1.3.39-g8d2844f
-sha=73c727362cc615d0423f434f949431818f7dbd85acadc7c301a58e5cdc2a3881
-
 here=$(cd "$(dirname "$0")" && pwd)
+velopack_config=$here/../../config/velopack.json
+json_field() {
+    sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$velopack_config" | head -n 1
+}
+version=$(json_field version)
+sha=$(json_field libcSha256)
+[[ -n $version && -n $sha ]] || { echo "could not read version/libcSha256 from $velopack_config" >&2; exit 1; }
 out=$(dirname "$here")/third_party/velopack
 targets=("$@")
 if [[ ${#targets[@]} -eq 0 ]]; then

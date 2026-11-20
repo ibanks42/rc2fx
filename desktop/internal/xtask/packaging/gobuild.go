@@ -6,7 +6,7 @@ package packaging
 // component families the app uses, Velopack's C library (`velopack` tag,
 // desktop/third_party/velopack), the generated license notices compiled in
 // through `go generate ./app/licenses`, and with --embedded the mixer payload
-// staged by installer/embed/cmd/stage-payload (`embedded` tag). The
+// staged by cmd/stage-payload (`embedded` tag). The
 // executable, and on Windows velopack_libc.dll beside it, land in
 // target/[TRIPLE/]release.
 //
@@ -17,16 +17,19 @@ package packaging
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 
+	applicenses "github.com/ibanks42/rc2fx/desktop/app/licenses"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
@@ -110,15 +113,19 @@ func fetchTarget(goos, goarch string) string {
 // desktop/scripts/fetch-velopack.sh, which must be the version vpk packs
 // with. fetch is the script's target.
 func velopackDir(root, goos, goarch, fetch string) (string, error) {
+	vpkVersion, err := licenses.VPKVersion(root)
+	if err != nil {
+		return "", err
+	}
 	base := filepath.Join(root, "desktop", "third_party", "velopack")
 	version, err := os.ReadFile(filepath.Join(base, "VERSION"))
 	if err != nil {
 		return "", task.Errorf("%s: %s; run desktop/scripts/fetch-velopack.sh %s",
 			filepath.Join(base, "VERSION"), task.IOError(err), fetch)
 	}
-	if got := strings.TrimSpace(string(version)); got != licenses.VPKVersion {
+	if got := strings.TrimSpace(string(version)); got != vpkVersion {
 		return "", task.Errorf("desktop/third_party/velopack is velopack_libc %s, not %s; run desktop/scripts/fetch-velopack.sh %s",
-			got, licenses.VPKVersion, fetch)
+			got, vpkVersion, fetch)
 	}
 	dir := filepath.Join(base, goos+"-"+goarch)
 	if _, err := os.Stat(dir); err != nil {
@@ -216,23 +223,39 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 		// The payload the `embedded` tag compiles in, checked by
 		// stage-payload; RC2FX_RELEASE_BUILD=1 applies the release build
 		// line.
-		if err := task.Run(host("run", "./installer/embed/cmd/stage-payload", "-root", root)); err != nil {
+		if err := task.Run(host("run", "./cmd/stage-payload", "-root", root)); err != nil {
 			return err
 		}
 	}
-	// go generate writes app/licenses/licenses.json, which the build embeds;
-	// the checkout's copy (the development placeholder) comes back
-	// afterwards.
-	licensesFile := filepath.Join(desktop, "app", "licenses", "licenses.json")
-	original, err := os.ReadFile(licensesFile)
+	// Build with a Go -overlay that replaces desktop/app/licenses/licenses.json
+	// with the validated notices file in a temp directory, so the tracked
+	// placeholder file in the checkout is never mutated on disk.
+	licensesText, err := applicenses.Resolve(true, documentPath)
 	if err != nil {
-		return task.Errorf("%s: %s", licensesFile, task.IOError(err))
+		return task.Errorf("cannot embed licenses: %s", err)
 	}
-	defer func() { _ = os.WriteFile(licensesFile, original, 0o644) }()
-	generate := host("generate", "./app/licenses")
-	generate.Env = append(os.Environ(), "RC2FX_RELEASE_BUILD=1", "RC2FX_LICENSES_JSON="+documentPath)
-	if err := task.Run(generate); err != nil {
-		return err
+	overlayDir, err := os.MkdirTemp("", "rc2fx-licenses-overlay-*")
+	if err != nil {
+		return task.Error(task.IOError(err))
+	}
+	defer func() { _ = os.RemoveAll(overlayDir) }()
+	overlayLicenses := filepath.Join(overlayDir, "licenses.json")
+	if err := os.WriteFile(overlayLicenses, []byte(licensesText), 0o644); err != nil {
+		return task.Errorf("%s: %s", overlayLicenses, task.IOError(err))
+	}
+	overlayPath := filepath.Join(overlayDir, "overlay.json")
+	overlayBytes, err := json.Marshal(struct {
+		Replace map[string]string `json:"Replace"`
+	}{
+		Replace: map[string]string{
+			filepath.Join(desktop, "app", "licenses", "licenses.json"): overlayLicenses,
+		},
+	})
+	if err != nil {
+		return task.Error(err.Error())
+	}
+	if err := os.WriteFile(overlayPath, overlayBytes, 0o644); err != nil {
+		return task.Errorf("%s: %s", overlayPath, task.IOError(err))
 	}
 	if goos == "windows" {
 		syso, err := windowsResources(root)
@@ -269,7 +292,7 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 		if err != nil {
 			return err
 		}
-		build := host("build", "-trimpath", "-tags", tags, "-ldflags", ldflags, "-o", out, "./cmd/rc2fx")
+		build := host("build", "-trimpath", "-overlay", overlayPath, "-tags", tags, "-ldflags", ldflags, "-o", out, "./cmd/rc2fx")
 		build.Env = buildEnv(os.Environ(), goos, arch, cgoLDFlags+" "+velopackLinkFlags(goos, vpk))
 		if err := task.Run(build); err != nil {
 			return err
@@ -304,6 +327,75 @@ func BuildApp(root string, target *string, goos, goarch, documentPath string, em
 		}
 		if err := copyLibrary(filepath.Join(velopack, "velopack_libc.dll"), filepath.Join(release, "velopack_libc.dll")); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// CheckUILink verifies that ./cmd/rc2fx links with the release Velopack and
+// gpuikit linker flags (appLinkFlags + velopackLinkFlags + buildEnv) for the
+// host platform (both arm64 and amd64 slices on macOS), without duplicating
+// those flags in CI workflows.
+func CheckUILink(outDir string) error {
+	root := task.Root()
+	desktop := filepath.Join(root, "desktop")
+	gpuikit, err := findGpuikit(root)
+	if err != nil {
+		return err
+	}
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	if goos == "darwin" {
+		goarch = "universal"
+	}
+	arches := goArches(goos, goarch)
+	if outDir == "" {
+		dir, err := os.MkdirTemp("", "rc2fx-ui-check-*")
+		if err != nil {
+			return task.Error(task.IOError(err))
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		outDir = dir
+	} else if err := os.MkdirAll(outDir, 0o777); err != nil {
+		return task.Error(task.IOError(err))
+	}
+	ldflags, cgoLDFlags := appLinkFlags(goos, gpuikit, "-s -w")
+	for _, arch := range arches {
+		vpk, err := velopackDir(root, goos, arch, fetchTarget(goos, goarch))
+		if err != nil {
+			return err
+		}
+		name := "rc2fx"
+		if goos == "darwin" {
+			name += "-" + arch
+		} else if goos == "windows" {
+			name += ".exe"
+		}
+		build := exec.Command("go", "build", "-tags", "velopack", "-ldflags", ldflags, "-o", filepath.Join(outDir, name), "./cmd/rc2fx")
+		build.Dir = desktop
+		build.Env = buildEnv(os.Environ(), goos, arch, cgoLDFlags+" "+velopackLinkFlags(goos, vpk))
+		if err := task.Run(build); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NonUIPackages prints every Go package under desktop/ that does not depend
+// on gpuikit.dev/gk, one per line. Both `just test` and CI call this so the
+// package filter is defined in one place.
+func NonUIPackages() error {
+	desktop := filepath.Join(task.Root(), "desktop")
+	cmd := exec.Command("go", "list", "-e", "-f",
+		`{{$ui := false}}{{range .Deps}}{{if eq . "gpuikit.dev/gk"}}{{$ui = true}}{{end}}{{end}}{{if not $ui}}{{.ImportPath}}{{end}}`,
+		"./...")
+	cmd.Dir = desktop
+	out, err := cmd.Output()
+	if err != nil {
+		return task.Errorf("go list non-ui packages: %s", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			fmt.Println(line)
 		}
 	}
 	return nil

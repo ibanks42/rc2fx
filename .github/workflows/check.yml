@@ -238,10 +238,7 @@ jobs:
           unformatted=$(go list -e -f '{{.Dir}}' ./... | xargs gofmt -l)
           test -z "$unformatted" || { printf 'gofmt would change:\n%s\n' "$unformatted" >&2; exit 1; }
       - name: List everything but the UI
-        run: |
-          # The packages that do not depend on gpuikit, one per line.
-          # shellcheck disable=SC2016 # a Go template
-          go list -e -f '{{$ui := false}}{{range .Deps}}{{if eq . "gpuikit.dev/gk"}}{{$ui = true}}{{end}}{{end}}{{if not $ui}}{{.ImportPath}}{{end}}' ./... > "$RUNNER_TEMP/non-ui-packages"
+        run: ../xtask non-ui-packages > "$RUNNER_TEMP/non-ui-packages"
       - name: Vet and test everything but the UI
         run: |
           pkgs=$(cat "$RUNNER_TEMP/non-ui-packages")
@@ -413,32 +410,11 @@ jobs:
           # The development and embedded builds (./xtask app, --embedded),
           # with an empty stand-in for the payload only a real build stages.
           : > installer/embed/payload/rc2fx-payload.bin
-          go vet -tags rc2fxdebug,rc2fxdev,embedded ./app/... ./cmd/rc2fx ./installer/...
+          go vet -tags rc2fxdev,embedded ./app/... ./cmd/rc2fx ./installer/...
           rm installer/embed/payload/rc2fx-payload.bin
-          # velopack_libc is named in CGO_LDFLAGS, as ./xtask package does: its
-          # static builds carry LLVM bitcode, which cgo refuses in a #cgo
-          # directive (app/selfupdate/vpkc).
-          vpk=$PWD/third_party/velopack
-          [ "$RUNNER_OS" != Windows ] || vpk=$(cygpath -m "$vpk")
-          # The link flags ./xtask package's appLinkFlags gives: only the
-          # component families the app uses, with LLVM's linker on Windows.
-          case $RUNNER_OS in
-            Linux) ldflags="-s -w -extldflags=-Wl,--gc-sections" ;;
-            macOS) ldflags="-s -w -extldflags=-Wl,-dead_strip" ;;
-            Windows) ldflags="-s -w -H windowsgui '-extldflags=-fuse-ld=lld -Wl,--stack,8388608,--gc-sections,-Xlink=-force:multipleres'" ;;
-          esac
-          # On Linux both static libraries carry Rust's rust_eh_personality;
-          # GNU ld keeps the first copy only when told to (velopackLinkFlags).
-          dup=
-          [ "$RUNNER_OS" != Linux ] || dup=" -Wl,--allow-multiple-definition"
-          CGO_LDFLAGS="$CGO_LDFLAGS -L$vpk/$(go env GOOS)-$(go env GOARCH) -lvelopack_libc$dup" \
-            go build -tags velopack -ldflags "$ldflags" -o "$RUNNER_TEMP/rc2fx-ui-check/" ./cmd/rc2fx
-          if [ "$RUNNER_OS" = macOS ]; then
-            # The release app is universal: the Intel slice links too.
-            GOARCH=amd64 CGO_CFLAGS="-O2 -g -arch x86_64" \
-              CGO_LDFLAGS="$CGO_LDFLAGS -arch x86_64 -L$vpk/darwin-amd64 -lvelopack_libc" \
-              go build -tags velopack -ldflags "$ldflags" -o "$RUNNER_TEMP/rc2fx-ui-check/rc2fx-amd64" ./cmd/rc2fx
-          fi
+          # Release Velopack link (shared with ./xtask package via appLinkFlags,
+          # velopackLinkFlags and buildEnv, including both slices on macOS).
+          ../xtask check-ui-link "$RUNNER_TEMP/rc2fx-ui-check"
           # Package gk embeds the manifest Windows needs to start a program,
           # in test binaries too.
           go test ./app/... ./cmd/rc2fx
@@ -520,10 +496,7 @@ jobs:
         run: bash scripts/fetch-velopack.sh linux-amd64
       - name: Build the app
         if: steps.gpuikit.outputs.ready == 'true'
-        run: |
-          export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib"
-          CGO_LDFLAGS="$CGO_LDFLAGS -L$PWD/third_party/velopack/linux-amd64 -lvelopack_libc -Wl,--allow-multiple-definition" \
-            go build -tags velopack -ldflags "-s -w -extldflags=-Wl,--gc-sections" -o "$RUNNER_TEMP/rc2fx-alma-check/" ./cmd/rc2fx
+        run: ../xtask check-ui-link "$RUNNER_TEMP/rc2fx-alma-check"
       - name: Test the installer
         run: CGO_ENABLED=1 go test ./installer/... ./ext2fs/...
       - uses: actions/cache/save@v4.2.3

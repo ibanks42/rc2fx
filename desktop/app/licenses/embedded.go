@@ -8,12 +8,11 @@ import (
 
 // licenses.json is what this build shows. The copy in the repository is
 // Placeholder, for development builds (xtask packaging refuses an
-// executable that still carries it); release packaging regenerates it from
-// the generated notices before building:
-//
-//	RC2FX_RELEASE_BUILD=1 RC2FX_LICENSES_JSON=/path/to/licenses.json go generate ./app/licenses
-//
-// gen.go checks the file and refuses a release build without one.
+// executable that still carries it); release packaging substitutes the
+// generated notices at build time with `go build -overlay`, leaving the
+// tracked placeholder file untouched on disk. Manual regeneration via
+// `go generate ./app/licenses` (with RC2FX_RELEASE_BUILD=1 and
+// RC2FX_LICENSES_JSON) remains supported by gen.go.
 //
 //go:generate go run gen.go
 

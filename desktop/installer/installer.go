@@ -33,8 +33,8 @@ import (
 )
 
 // AppVersion is the desktop app's version and its only copy in the Go code.
-// No build stamps it: .github/scripts/release.py sets it to the workspace
-// version in Cargo.toml when it prepares a release, in the commit that
+// No build stamps it: .github/scripts/release.py keeps it in sync with
+// config/app-release.json when it prepares a release, in the commit that
 // release builds from.
 const AppVersion = "0.1.7"
 

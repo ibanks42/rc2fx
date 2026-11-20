@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
-import tomllib
 import unittest
 
 
@@ -20,12 +19,7 @@ class ReleaseTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.env = {k: v for k, v in os.environ.items() if k not in ("ACT", "GITHUB_OUTPUT")}
-        self.put("Cargo.toml", '[workspace]\nmembers = ["crates/app", "crates/core"]\n[workspace.package]\nversion = "0.1.0"\n')
-        self.put("crates/app/Cargo.toml", '[package]\nname = "app"\nversion = "0.1.0"\n')
-        self.put("crates/core/Cargo.toml", '[package]\nname = "core"\nversion.workspace = true\n')
-        lock = 'version = 4\n\n[[package]]\nname = "app"\nversion = "0.1.0"\n\n[[package]]\nname = "core"\nversion = "0.1.0"\n'
-        for filename in ("Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
-            self.put(filename, lock)
+        self.put("config/app-release.json", '{\n  "schemaVersion": 1,\n  "version": "0.1.0"\n}\n')
         self.put("cliff.toml", (ROOT / "cliff.toml").read_text())
         self.put_go_desktop()
         self.git("init", "-b", "main")
@@ -50,7 +44,7 @@ class ReleaseTests(unittest.TestCase):
         self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
         self.put("desktop/installer/installer.go", f'package installer\n\nconst AppVersion = "{version}"\n')
 
-    def test_go_desktop_release_downloads_mixer_and_bumps_the_go_versions(self):
+    def test_go_desktop_release_downloads_mixer_and_bumps_the_app_versions(self):
         self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":1}')
         self.git("add", ".")
         self.git("commit", "-m", "feat: go desktop")
@@ -62,34 +56,29 @@ class ReleaseTests(unittest.TestCase):
         notes = (self.root / "target/release-input/release-notes.md").read_text()
         self.assertIn("Mixer software is downloaded separately", notes)
         self.assertNotIn("Bundled RC2FX", notes)
-        go_files = ["desktop/installer/installer.go"]
-        for name in go_files:
-            self.assertIn('= "0.1.1"\n', (self.root / name).read_text(), name)
+        self.assertEqual(json.loads((self.root / "config/app-release.json").read_text())["version"], "0.1.1")
+        version_files = ["config/app-release.json", "desktop/installer/installer.go"]
+        self.assertIn('= "0.1.1"\n', (self.root / "desktop/installer/installer.go").read_text())
         plan = json.loads((self.root / "target/release-input/plan.json").read_text())
-        self.assertLessEqual(set(go_files), set(plan["files"]))
+        self.assertLessEqual(set(version_files), set(plan["files"]))
         with tarfile.open(self.root / "target/release-input/versioned.tar") as archive:
-            self.assertLessEqual(set(go_files), set(archive.getnames()))
-        for filename in ("Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
-            packages = tomllib.loads((self.root / filename).read_text())["package"]
-            self.assertTrue(all(p["version"] == "0.1.1" for p in packages), filename)
-        self.assertIn('version = "0.1.1"', (self.root / "crates/app/Cargo.toml").read_text())
-        self.assertIn("version.workspace = true", (self.root / "crates/core/Cargo.toml").read_text())
+            self.assertLessEqual(set(version_files), set(archive.getnames()))
 
-    def test_go_version_that_differs_from_the_workspace_is_refused(self):
+    def test_go_version_that_differs_from_app_release_is_refused(self):
         self.git("tag", "v0.1.0")
         self.put("desktop/installer/installer.go", 'package installer\n\nconst AppVersion = "0.0.9"\n')
         self.git("add", ".")
         self.git("commit", "-m", "feat: go desktop")
         result = self.prepare(check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("AppVersion differs from workspace version", result.stderr)
+        self.assertIn("AppVersion differs from config/app-release.json version", result.stderr)
 
-    def test_real_repository_go_versions_match_workspace(self):
+    def test_real_repository_go_versions_match_app_release(self):
         import re
         import sys
         sys.path.insert(0, str(ROOT / ".github/scripts"))
         import release
-        current = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+        current = release.current_app_version(ROOT)
         for rel, declaration in release.GO_VERSIONS.items():
             text = (ROOT / rel).read_text()
             found = re.findall(rf'^({re.escape(declaration)} = )"([^"\n]*)"$', text, flags=re.M)
@@ -144,7 +133,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotEqual(self.prepare(check=False).returncode, 0)
 
     def test_dirty_checkout_rejected(self):
-        self.put("Cargo.lock", "dirty")
+        self.put("config/app-release.json", "dirty")
         self.assertNotEqual(self.prepare(check=False).returncode, 0)
 
     def test_existing_next_tag_rejected(self):

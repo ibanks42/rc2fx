@@ -71,45 +71,78 @@ func Bench(input string, flags []string) error {
 	return benchIn(filepath.Join(task.Root(), "target", "bench"), Load, input, flags)
 }
 
-// benchIn: bench is target/bench; a test passes its own, and a stand-in
-// mixer.
-func benchIn(bench string, mixer func() (*Mixer, error), input string, flags []string) error {
-	// Flags pass through to rc2fx-bench except --weights, whose file is
-	// uploaded and run alongside the embedded weights.
-	var passed []string
-	var weights []byte
-	haveWeights := false
+// parseBenchFlags validates flags forwarded to rc2fx-bench and extracts any
+// --weights file path (which benchIn uploads beside the binary).
+func parseBenchFlags(flags []string) (passed []string, weightsPath string, err error) {
 	for i := 0; i < len(flags); i++ {
 		flag := flags[i]
 		switch flag {
-		case "--unpaced":
+		case "--unpaced", "--spin":
 			passed = append(passed, flag)
 		case "--policy", "--cpus", "--priority":
 			if i+1 >= len(flags) {
-				return task.Errorf("%s needs a value", flag)
+				return nil, "", task.Errorf("%s needs a value", flag)
 			}
 			i++
 			value := flags[i]
 			for _, c := range value {
 				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ',' || c == '-') {
-					return task.Errorf("bad %s value %s", flag, value)
+					return nil, "", task.Errorf("bad %s value %s", flag, value)
 				}
+			}
+			passed = append(passed, flag, value)
+		case "--pause-us":
+			if i+1 >= len(flags) {
+				return nil, "", task.Error("--pause-us needs microseconds")
+			}
+			i++
+			value := flags[i]
+			if _, ok := task.ParseUint(value, 64); !ok {
+				return nil, "", task.Errorf("bad --pause-us value %s", value)
+			}
+			passed = append(passed, flag, value)
+		case "--kernel":
+			if i+1 >= len(flags) {
+				return nil, "", task.Error("--kernel needs tiled, rows or compare")
+			}
+			i++
+			value := flags[i]
+			switch value {
+			case "tiled", "rows", "compare":
+			default:
+				return nil, "", task.Errorf("bad --kernel value %s (expected tiled, rows or compare)", value)
 			}
 			passed = append(passed, flag, value)
 		case "--weights":
 			if i+1 >= len(flags) {
-				return task.Error("--weights needs a file")
+				return nil, "", task.Error("--weights needs a file")
 			}
 			i++
-			path := flags[i]
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return task.Errorf("%s: %s", path, task.IOError(err))
-			}
-			weights, haveWeights = data, true
+			weightsPath = flags[i]
 		default:
-			return task.Errorf("unknown flag %s", flag)
+			return nil, "", task.Errorf("unknown flag %s", flag)
 		}
+	}
+	return passed, weightsPath, nil
+}
+
+// benchIn: bench is target/bench; a test passes its own, and a stand-in
+// mixer.
+func benchIn(bench string, mixer func() (*Mixer, error), input string, flags []string) error {
+	// Flags pass through to rc2fx-bench except --weights, whose file is
+	// uploaded and run alongside the embedded weights.
+	passed, weightsPath, err := parseBenchFlags(flags)
+	if err != nil {
+		return err
+	}
+	var weights []byte
+	haveWeights := false
+	if weightsPath != "" {
+		data, err := os.ReadFile(weightsPath)
+		if err != nil {
+			return task.Errorf("%s: %s", weightsPath, task.IOError(err))
+		}
+		weights, haveWeights = data, true
 	}
 	recording, err := os.ReadFile(input)
 	if err != nil {

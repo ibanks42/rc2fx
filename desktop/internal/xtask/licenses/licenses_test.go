@@ -71,7 +71,11 @@ func TestDifferentCopyrightsAreNotLostWhenLicenseNamesMatch(t *testing.T) {
 }
 
 func TestTheVelopackReportMatchesThePinnedVpkAndMerges(t *testing.T) {
-	path := filepath.Join(task.Root(), "licenses", "velopack-"+VPKVersion+".json")
+	vpkVersion, err := VPKVersion(task.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(task.Root(), "licenses", "velopack-"+vpkVersion+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +84,7 @@ func TestTheVelopackReportMatchesThePinnedVpkAndMerges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := r.Get("velopack"); !isString(v, VPKVersion) {
+	if v, _ := r.Get("velopack"); !isString(v, vpkVersion) {
 		t.Fatalf("report is for %s", v.String())
 	}
 	groups := Groups{}
@@ -135,5 +139,31 @@ func TestGpuikitNoticesMergeIdenticalTextsAndKeepTheListing(t *testing.T) {
 	}
 	if _, err := Gpuikit(filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("a missing download was accepted")
+	}
+}
+
+func TestGenerateReusesBaseLicensesWithoutRunningCargo(t *testing.T) {
+	base := []Section{
+		{"RC2FX", "MIT"},
+		{"Rust standard library", "Apache-2.0 OR MIT"},
+	}
+	extra := []Section{
+		{"Go standard library", "BSD-3-Clause"},
+	}
+	want := Render(append(append([]Section(nil), base...), extra...))
+	basePath := filepath.Join(t.TempDir(), "base-licenses.json")
+	if err := os.WriteFile(basePath, Render(base).JSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RC2FX_BASE_LICENSES", basePath)
+	got, err := Generate(t.TempDir(), extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.JSON) != string(want.JSON) {
+		t.Fatalf("JSON mismatch:\ngot:  %s\nwant: %s", got.JSON, want.JSON)
+	}
+	if string(got.HTML) != string(want.HTML) {
+		t.Fatalf("HTML mismatch")
 	}
 }

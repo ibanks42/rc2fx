@@ -75,16 +75,7 @@ esac
 [ -d "$ARTIFACTS" ] || fail "artifact directory does not exist: $ARTIFACTS"
 
 if [ -z "$VERSION" ]; then
-    VERSION=$(awk '
-        /^\[workspace\.package\]/ { section = 1; next }
-        /^\[/ { section = 0 }
-        section && /^version[[:space:]]*=/ {
-            sub(/^version[[:space:]]*=[[:space:]]*"/, "")
-            sub(/".*$/, "")
-            print
-            exit
-        }
-    ' "$ROOT/Cargo.toml")
+    VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/config/app-release.json" | head -n 1)
 fi
 printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
     || fail "invalid version: $VERSION"

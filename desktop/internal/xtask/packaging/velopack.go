@@ -36,9 +36,9 @@ import (
 // remove.
 const PackID = "io.github.ibanks42.rc2fx"
 
-// VPKVersion is the vpk release this packaging is written for (see
+// VPKVersion returns the vpk release this packaging is written for (see
 // licenses.VPKVersion).
-const VPKVersion = licenses.VPKVersion
+func VPKVersion(root string) (string, error) { return licenses.VPKVersion(root) }
 
 const entitlements = task.AssetsDir + "/rc2fx.entitlements"
 
@@ -233,7 +233,8 @@ func pack(root, system, arch, version, name, packDir, out string) ([]string, err
 	}
 	args = append(args, signing...)
 	if err := run(vpk, args); err != nil {
-		return nil, task.Errorf("%s\nInstall vpk %s: dotnet tool install -g vpk --version %s", err, VPKVersion, VPKVersion)
+		vpkVer, _ := VPKVersion(root)
+		return nil, task.Errorf("%s\nInstall vpk %s: dotnet tool install -g vpk --version %s", err, vpkVer, vpkVer)
 	}
 	var published []string
 	for _, o := range t.outputs() {

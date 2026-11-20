@@ -48,7 +48,6 @@ import json
 import re
 import shutil
 import subprocess
-import tomllib
 import sys
 import tarfile
 import tempfile
@@ -62,11 +61,12 @@ RUNTIME_REPO = "https://github.com/AppImage/type2-runtime"
 # https://github.com/AppImage/type2-runtime/commit/3d17002).
 RUNTIME_COMMIT = "3d17002ee2a519a288e28aeb7bc41af5f5adaf4e"
 RUNTIME_SHA256 = "a2419dce47568395ae79c01ffa9a5a341dd339581352ff104d073527543177e5"
-# The vpk that vendors it: keep in step with setup-vpk.sh,
-# desktop/scripts/fetch-velopack.sh and VPKVersion in
-# desktop/internal/xtask/licenses/licenses.go.
-VPK_VERSION = "1.3.39-g8d2844f"
-VPK_SHA256 = "1a7e031f285768b6418cae43baf98d3bc295510c140a7dc5757bf99af9b78ecf"
+# The vpk that vendors it, pinned once in config/velopack.json.
+_VELOPACK_CONFIG = json.loads(
+    (Path(__file__).resolve().parents[2] / "config" / "velopack.json").read_text()
+)
+VPK_VERSION = _VELOPACK_CONFIG["version"]
+VPK_SHA256 = _VELOPACK_CONFIG["vpkSha256"]
 VPK_PACKAGE = "https://api.nuget.org/v3-flatcontainer/vpk/{version}/vpk.{version}.nupkg"
 VPK_RUNTIME = "vendor/appimagekit-runtime-x86_64"
 ALPINE_BRANCH = "v3.21"
@@ -501,7 +501,7 @@ def main() -> int:
     legal = args.root / "target" / "appimage-legal"
     legal.mkdir(parents=True, exist_ok=True)
     (legal / "notices.json").write_bytes(files["LICENSES.json"])
-    version = tomllib.loads((args.root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    version = json.loads((args.root / "config" / "app-release.json").read_text())["version"]
     bundle = args.root / "target" / "package" / f"rc2fx-{version}-appimage-runtime-sources.tar.gz"
     write_bundle(bundle, files)
     print(f"wrote {legal / 'notices.json'} ({len(sections)} sections)")

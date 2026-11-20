@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # Verified vpk, Velopack's packager, for `./xtask package` on Windows, macOS
-# and in the Linux build container. The NuGet package is checked against a
-# pinned SHA-256 and installed from a local copy only. Sets RC2FX_VPK for
-# later steps. The version must match desktop/scripts/fetch-velopack.sh and
-# VPKVersion in desktop/internal/xtask/licenses/licenses.go
-# (test_prepare_appimage_notices.py checks all of them).
+# and in the Linux build container. The NuGet package is checked against the
+# pinned version and SHA-256 in config/velopack.json and installed from a
+# local copy only. Sets RC2FX_VPK for later steps.
 set -euo pipefail
 
-version=1.3.39-g8d2844f
-sha=1a7e031f285768b6418cae43baf98d3bc295510c140a7dc5757bf99af9b78ecf
+here=$(cd "$(dirname "$0")" && pwd)
+velopack_config=$here/../../config/velopack.json
+json_field() {
+    sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$velopack_config" | head -n 1
+}
+version=$(json_field version)
+sha=$(json_field vpkSha256)
+[[ -n $version && -n $sha ]] || { echo "could not read version/vpkSha256 from $velopack_config" >&2; exit 1; }
 
 # Git Bash on Windows: Unix paths for this script, Windows paths for dotnet
 # and xtask.

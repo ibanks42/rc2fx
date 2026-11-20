@@ -15,15 +15,32 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	applicenses "github.com/ibanks42/rc2fx/desktop/app/licenses"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// VPKVersion is the vpk release packaging is written for. Changing it needs
-// a new licenses/velopack-VERSION.json, covering the Windows, macOS and
-// Linux (musl) builds of the programs vpk adds
+// VPKVersion reads the pinned vpk version from config/velopack.json.
+// Changing it needs a new licenses/velopack-VERSION.json, covering the
+// Windows, macOS and Linux (musl) builds of the programs vpk adds
 // (.github/scripts/velopack-licenses.py).
-const VPKVersion = "1.3.39-g8d2844f"
+func VPKVersion(root string) (string, error) {
+	path := filepath.Join(root, "config", "velopack.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", task.Errorf("%s: %s", path, task.IOError(err))
+	}
+	doc, err := core.ParseJSONBytes(data, 64<<10, 1024)
+	if err != nil {
+		return "", task.Errorf("%s: %s", path, err)
+	}
+	v, _ := doc.Get("version")
+	s, ok := v.AsString()
+	if !ok || strings.TrimSpace(s) == "" {
+		return "", task.Errorf("%s has no version", path)
+	}
+	return s, nil
+}
 
 // Section is one notice: a title and its text.
 type Section struct {
@@ -55,10 +72,10 @@ func readText(root, path string) (string, error) {
 	return string(data), nil
 }
 
-// Generate is the notice document: RC2FX's and its bundled components'
-// licenses, the Rust standard library's, every crate cargo-about reports
-// for the workspace and the native library, Velopack's report, then extra.
-func Generate(root string, extra []Section) (*Document, error) {
+// GenerateBase builds the platform-independent notice sections: RC2FX's and
+// its bundled components' licenses, the Rust standard library's, every crate
+// cargo-about reports for the workspace, and Velopack's report.
+func GenerateBase(root string) ([]Section, error) {
 	var sections []Section
 	for _, fixed := range []struct{ title, path string }{
 		{"RC2FX and trained weights — MIT", "LICENSE-MIT"},
@@ -108,25 +125,75 @@ func Generate(root string, extra []Section) (*Document, error) {
 	// macOS packages, and its updater (UpdateNix, a static musl build) in the
 	// AppImage; their notices come from a report generated from Velopack's
 	// source for those three targets by .github/scripts/velopack-licenses.py.
-	velopack := "licenses/velopack-" + VPKVersion + ".json"
+	vpkVersion, err := VPKVersion(root)
+	if err != nil {
+		return nil, err
+	}
+	velopack := "licenses/velopack-" + vpkVersion + ".json"
 	report, err := VelopackReport(root)
 	if err != nil {
 		return nil, err
 	}
-	if v, _ := report.Get("velopack"); !isString(v, VPKVersion) {
-		return nil, task.Errorf("%s is not for vpk %s", velopack, VPKVersion)
+	if v, _ := report.Get("velopack"); !isString(v, vpkVersion) {
+		return nil, task.Errorf("%s is not for vpk %s", velopack, vpkVersion)
 	}
 	if err := MergeReport(groups, report); err != nil {
 		return nil, err
 	}
 	sections = append(sections, groups.Sections("Dependencies — ")...)
+	return sections, nil
+}
+
+// ReadBase loads pre-generated base notice sections written by
+// WriteBaseLicenses, allowing Windows and macOS release jobs to assemble the
+// final notices without installing a Rust toolchain.
+func ReadBase(path string) ([]Section, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, task.Errorf("%s: %s", path, task.IOError(err))
+	}
+	if !utf8.Valid(data) {
+		return nil, task.Errorf("%s: stream did not contain valid UTF-8", path)
+	}
+	parsed, err := applicenses.Parse(string(data))
+	if err != nil {
+		return nil, task.Errorf("%s: %s", path, err)
+	}
+	out := make([]Section, len(parsed))
+	for i, s := range parsed {
+		out[i] = Section{Title: s.Title, Text: s.Text}
+	}
+	return out, nil
+}
+
+// Generate is the notice document: the base notices (read from
+// RC2FX_BASE_LICENSES when set, or built via GenerateBase), then extra.
+func Generate(root string, extra []Section) (*Document, error) {
+	var (
+		base []Section
+		err  error
+	)
+	if path := os.Getenv("RC2FX_BASE_LICENSES"); path != "" {
+		base, err = ReadBase(path)
+	} else {
+		base, err = GenerateBase(root)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sections := make([]Section, 0, len(base)+len(extra))
+	sections = append(sections, base...)
 	sections = append(sections, extra...)
 	return Render(sections), nil
 }
 
-// VelopackReport reads licenses/velopack-VPKVersion.json.
+// VelopackReport reads licenses/velopack-<VPKVersion>.json.
 func VelopackReport(root string) (core.Value, error) {
-	velopack := "licenses/velopack-" + VPKVersion + ".json"
+	vpkVersion, err := VPKVersion(root)
+	if err != nil {
+		return core.Value{}, err
+	}
+	velopack := "licenses/velopack-" + vpkVersion + ".json"
 	data, err := os.ReadFile(filepath.Join(root, velopack))
 	if err != nil {
 		return core.Value{}, task.Errorf("%s: %s\nRun .github/scripts/velopack-licenses.py for this vpk version.", velopack, task.IOError(err))
@@ -378,6 +445,26 @@ func WriteLicenses(destination string) error {
 		}
 	}
 	if err := os.WriteFile(destination, document.HTML, 0o666); err != nil {
+		return task.Error(task.IOError(err))
+	}
+	return nil
+}
+
+// WriteBaseLicenses is `licenses --base FILE`: platform-independent base
+// notices JSON (Rust workspace, Rust stdlib, Velopack) for release jobs to
+// reuse via RC2FX_BASE_LICENSES without installing Rust on Windows/macOS.
+func WriteBaseLicenses(destination string) error {
+	base, err := GenerateBase(task.Root())
+	if err != nil {
+		return err
+	}
+	document := Render(base)
+	if parent := filepath.Dir(destination); parent != "" {
+		if err := os.MkdirAll(parent, 0o777); err != nil {
+			return task.Error(task.IOError(err))
+		}
+	}
+	if err := os.WriteFile(destination, document.JSON, 0o666); err != nil {
 		return task.Error(task.IOError(err))
 	}
 	return nil

@@ -192,18 +192,34 @@ class Runtime(unittest.TestCase):
                 notices.vendored_runtime(path, None)
 
     def test_the_pins_agree_with_setup_vpk(self):
+        root = SCRIPT.parent.parent.parent
+        config = root / "config/velopack.json"
+        self.assertTrue(config.is_file(), "config/velopack.json is missing")
         setup = SCRIPT.with_name("setup-vpk.sh").read_text()
-        self.assertIn(f"version={notices.VPK_VERSION}\n", setup)
-        self.assertIn(f"sha={notices.VPK_SHA256}\n", setup)
+        self.assertIn("config/velopack.json", setup)
+        # Verify the bash extractor in setup-vpk.sh reads the exact pins.
+        extracted = subprocess.check_output(
+            [
+                "bash",
+                "-c",
+                f'velopack_config={config}; '
+                'sed -n "s/^[[:space:]]*\\"version\\"[[:space:]]*:[[:space:]]*\\"\\([^\\"]*\\)\\".*/\\1/p" "$velopack_config" | head -n 1; '
+                'sed -n "s/^[[:space:]]*\\"vpkSha256\\"[[:space:]]*:[[:space:]]*\\"\\([^\\"]*\\)\\".*/\\1/p" "$velopack_config" | head -n 1',
+            ],
+            text=True,
+        ).splitlines()
+        self.assertEqual(extracted, [notices.VPK_VERSION, notices.VPK_SHA256])
 
     def test_the_app_links_the_velopack_that_vpk_packs_with(self):
-        # Packaging refuses a velopack_libc of another version than
-        # VPKVersion, and vpk must be that version too.
+        # Packaging, fetch-velopack.sh and prepare-appimage-notices.py all read
+        # their Velopack version pin from config/velopack.json.
         root = SCRIPT.parent.parent.parent
         fetch = (root / "desktop/scripts/fetch-velopack.sh").read_text()
-        self.assertIn(f"version={notices.VPK_VERSION}\n", fetch)
+        self.assertIn("config/velopack.json", fetch)
         licenses = (root / "desktop/internal/xtask/licenses/licenses.go").read_text()
-        self.assertIn(f'const VPKVersion = "{notices.VPK_VERSION}"\n', licenses)
+        self.assertIn("config", licenses)
+        self.assertIn("velopack.json", licenses)
+        self.assertTrue((root / f"licenses/velopack-{notices.VPK_VERSION}.json").is_file())
 
     def test_the_build_image_has_the_go_go_mod_pins(self):
         # The AppImage is built with the image's Go and the Windows and macOS

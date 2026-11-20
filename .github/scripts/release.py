@@ -8,13 +8,13 @@ import re
 import shutil
 import subprocess
 import tarfile
-import tomllib
 
 from update_history import parse_changelog
 
 
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 OUTPUT = Path("target/release-input")
+APP_RELEASE = Path("config/app-release.json")
 
 
 def git(*args):
@@ -27,6 +27,15 @@ def version_tuple(version):
     return tuple(map(int, version.split(".")))
 
 
+def current_app_version(root=Path(".")):
+    data = json.loads((root / APP_RELEASE).read_text())
+    version = data.get("version")
+    if not isinstance(version, str):
+        raise ValueError(f"{APP_RELEASE} has no version")
+    version_tuple(version)
+    return version
+
+
 # The Go desktop's copy of the app version (installer.AppVersion, which
 # packages are named with and the app reports; package model refers to it
 # rather than keeping a copy). The mock mixer's runtime version tracks
@@ -36,52 +45,12 @@ GO_VERSIONS = {
 }
 
 
-def replace_version(text, section, version):
-    pattern = rf'(^\[{re.escape(section)}\]\s*\n(?:(?!\[)[\s\S])*?^version\s*=\s*)"[^"\n]+"'
-    result, count = re.subn(pattern, lambda m: m[1] + json.dumps(version), text, flags=re.M)
-    if count != 1:
-        raise ValueError(f"Expected one version in [{section}], got {count}")
-    return result
-
-
 def update_versions(version):
-    root = Path("Cargo.toml")
-    cargo = tomllib.loads(root.read_text())
-    current = cargo["workspace"]["package"]["version"]
+    current = current_app_version()
     version_tuple(version)
-    manifests = [Path(member) / "Cargo.toml" for member in cargo["workspace"]["members"]]
-    packages = {tomllib.loads(path.read_text())["package"]["name"]: path for path in manifests}
-    updates = {root: replace_version(root.read_text(), "workspace.package", version)}
-    for name, path in packages.items():
-        package = tomllib.loads(path.read_text())["package"]
-        declared = package["version"]
-        if isinstance(declared, str):
-            if declared != current:
-                raise ValueError(f"{name} version differs from workspace version")
-            updates[path] = replace_version(path.read_text(), "package", version)
-        elif declared != {"workspace": True}:
-            raise ValueError(f"Unexpected version declaration for {name}")
-
-    # Separate benchmark workspace locks some of these same path packages.
-    for path in [Path("Cargo.lock"), Path("crates/rc2fx-bench/Cargo.lock")]:
-        text = path.read_text()
-        found = set()
-
-        def update(match):
-            block = match[0]
-            package = tomllib.loads(block)["package"][0]
-            if package["name"] not in packages or "source" in package:
-                return block
-            if package["version"] != current:
-                raise ValueError(f"{path}: stale version for {package['name']}")
-            found.add(package["name"])
-            return re.sub(r'^version = "[^"\n]+"', f'version = "{version}"', block, count=1, flags=re.M)
-
-        updated = re.sub(r'\[\[package\]\][\s\S]*?(?=\n\[\[package\]\]|\Z)', update, text)
-        if path == Path("Cargo.lock") and found != set(packages):
-            raise ValueError("Workspace lockfile is missing local packages")
-        if found:
-            updates[path] = updated
+    release = json.loads(APP_RELEASE.read_text())
+    release["version"] = version
+    updates = {APP_RELEASE: json.dumps(release, indent=2) + "\n"}
     for path, declaration in GO_VERSIONS.items():
         text = path.read_text()
         pattern = rf'^({re.escape(declaration)} = )"([^"\n]*)"$'
@@ -89,7 +58,7 @@ def update_versions(version):
         if len(found) != 1:
             raise ValueError(f"Expected one {declaration} in {path}, got {len(found)}")
         if found[0][1] != current:
-            raise ValueError(f"{path}: {declaration} differs from workspace version")
+            raise ValueError(f"{path}: {declaration} differs from {APP_RELEASE} version")
         updates[path] = re.sub(pattern, lambda m: m[1] + json.dumps(version), text, flags=re.M)
     for path, text in updates.items():
         path.write_text(text)
@@ -99,7 +68,7 @@ def update_versions(version):
 def prepare(bump):
     if not os.environ.get("ACT") and git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("Release checkout must be clean")
-    current = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
+    current = current_app_version()
     version_tuple(current)
     previous = "v" + current
     cliff = ["git-cliff", "--config", "cliff.toml", "--topo-order", "--use-branch-tags"]
