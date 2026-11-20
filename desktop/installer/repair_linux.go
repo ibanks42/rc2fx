@@ -23,7 +23,6 @@ package installer
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -31,9 +30,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
-
 	"github.com/ibanks42/rc2fx/desktop/ext2fs"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/disk"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/fix"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
@@ -41,7 +41,7 @@ import (
 // mode. The app offers Repair mixer only where it is.
 const RepairSupported = true
 
-const repairSector = 512
+const repairSector = disk.SectorSize
 
 var mixerHostnames = [2]string{"rodecaster-pro-ii", "rodecaster-pro-ii-mini"}
 
@@ -56,25 +56,19 @@ type repairPart struct {
 	start, len uint64
 }
 
-// partitions is the four primary partitions of an MBR, refusing anything
-// that isn't four ordered, non-overlapping partitions inside the disk.
+// partitions is the four primary partitions of an MBR, delegating to
+// rodecaster/fix.ParseMBR so both repair and storage-fix share one MBR parser.
 func partitions(sector0 *[512]byte, diskLen uint64) ([4]repairPart, error) {
 	var parts [4]repairPart
-	if sector0[510] != 0x55 || sector0[511] != 0xAA {
-		return parts, Error("the disk has no partition table")
+	parsed, err := fix.ParseMBR(sector0[:], diskLen/repairSector)
+	if err != nil {
+		return parts, Error(err.Error())
 	}
-	end := uint64(repairSector)
-	for i := range parts {
-		entry := sector0[446+16*i : 462+16*i]
-		kind := entry[4]
-		lba := uint64(binary.LittleEndian.Uint32(entry[8:12]))
-		sectors := uint64(binary.LittleEndian.Uint32(entry[12:16]))
-		start, length := lba*repairSector, sectors*repairSector
-		if kind == 0 || sectors == 0 || start < end || start+length > diskLen {
-			return parts, Error("the disk's partitions are not a RØDECaster's")
+	for i, p := range parsed {
+		parts[i] = repairPart{
+			start: uint64(p.Start) * repairSector,
+			len:   uint64(p.Sectors) * repairSector,
 		}
-		end = start + length
-		parts[i] = repairPart{start, length}
 	}
 	return parts, nil
 }

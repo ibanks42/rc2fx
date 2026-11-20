@@ -81,6 +81,35 @@ func parse(sector0 []byte) []report.Partition {
 	return parts
 }
 
+// ErrNoPartitionTable reports that sector 0 does not carry the 55 AA MBR
+// signature.
+var ErrNoPartitionTable = fmt.Errorf("the disk has no partition table")
+
+// ErrInvalidMBR reports that an MBR does not hold four ordered,
+// non-overlapping non-empty primary partitions inside the disk.
+var ErrInvalidMBR = fmt.Errorf("the disk's partitions are not a RØDECaster's")
+
+// ParseMBR reads the four primary partitions of an MBR sector, refusing
+// anything that is not four ordered, non-overlapping non-empty partitions
+// inside diskSectors.
+func ParseMBR(sector0 []byte, diskSectors uint64) ([4]report.Partition, error) {
+	var parts [4]report.Partition
+	if len(sector0) != disk.SectorSize || sector0[510] != 0x55 || sector0[511] != 0xAA {
+		return parts, ErrNoPartitionTable
+	}
+	parsed := parse(sector0)
+	var end uint64 = 1 // sector 0 holds the MBR itself
+	for i, p := range parsed {
+		start, count := uint64(p.Start), uint64(p.Sectors)
+		if p.Type == 0 || count == 0 || start < end || start+count > diskSectors {
+			return parts, ErrInvalidMBR
+		}
+		end = start + count
+		parts[i] = p
+	}
+	return parts, nil
+}
+
 // Decide says whether sector0 is a known layout that needs the fix, already
 // has it, or is something else. A near miss is unrecognized: this tool
 // never guesses.
