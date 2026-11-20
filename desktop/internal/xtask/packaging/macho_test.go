@@ -471,7 +471,7 @@ func TestNoticesCoverEverySlicesDependencies(t *testing.T) {
 
 func TestTheMacPackageKeepsTheOsxChannelUnderUniversalNames(t *testing.T) {
 	mac := target{os: "macos", arch: "universal", version: "1.2.3", name: "rc2fx-macos-universal"}
-	if mac.runtime() != "osx" || mac.channel() != "osx" || mac.feed() != "releases.osx.json" ||
+	if mac.runtime() != "osx-arm64" || mac.channel() != "osx" || mac.feed() != "releases.osx.json" ||
 		mac.packageName() != "io.github.ibanks42.rc2fx-1.2.3-osx-full.nupkg" {
 		t.Fatal(mac.runtime(), mac.feed(), mac.packageName())
 	}
@@ -484,7 +484,7 @@ func TestTheMacPackageKeepsTheOsxChannelUnderUniversalNames(t *testing.T) {
 		t.Fatalf("%v", published)
 	}
 	joined := strings.Join(packArgs("/r", mac, "/p/RC2FX.app", "/s"), " ")
-	if !strings.Contains(joined, "--runtime osx --") || strings.Contains(joined, "osx-") || strings.Contains(joined, "--channel") {
+	if !strings.Contains(joined, "--runtime osx-arm64 --") || strings.Contains(joined, "--channel") {
 		t.Fatal(joined)
 	}
 }

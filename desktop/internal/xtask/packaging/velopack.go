@@ -59,16 +59,17 @@ func (t target) channel() string {
 	return "osx"
 }
 
-// runtime is vpk's --runtime. The macOS app is universal, so its RID has
-// no architecture: on macOS vpk only records the RID in the package's
-// manifest, and neither the installer nor Velopack's updater checks it (the
-// installer's hostArchitectures come from the binaries, see
-// checkInstaller). The channel, and so the feed and package names, stay
-// "osx", which every installed copy, the arm64-only ones included, updates
-// from.
+// runtime is vpk's --runtime. vpk refuses a RID without an architecture,
+// so the universal macOS app packs as osx-arm64, as the arm64-only releases
+// did. On macOS that RID is only metadata: vpk bundles the same UpdateMac
+// for every architecture, Velopack checks machineArchitecture only when
+// installing on Windows, and the installer's hostArchitectures come from
+// the binaries (see checkInstaller). The channel, and so the feed and
+// package names, stay "osx", which every installed copy, the arm64-only ones
+// included, updates from.
 func (t target) runtime() string {
 	if t.os == "macos" {
-		return t.channel()
+		return t.channel() + "-arm64"
 	}
 	return t.channel() + "-" + t.arch
 }

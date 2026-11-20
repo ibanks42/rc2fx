@@ -138,9 +138,10 @@ verifies in Go that both the app binary and vpk's `UpdateMac` contain exactly
 `LSMinimumSystemVersion`, that all linked libraries are either system libraries
 or bundled alongside the executable, and that the `.pkg`'s `hostArchitectures`
 lists both. Payload, license notice, and build-tag checks run independently on
-each slice. `vpk` packs with `--runtime osx` (no architecture suffix): on macOS
-the RID is only metadata in the package, keeping the channel (`osx`) and feed
-names identical so users on earlier Apple silicon-only builds can update
+each slice. `vpk` packs with `--runtime osx-arm64`, since it refuses a runtime
+without an architecture. On macOS the RID is only metadata in the package: vpk
+bundles the same `UpdateMac` either way, and the channel (`osx`) and feed names
+stay the same, so users on earlier Apple silicon-only builds update
 seamlessly.
 
 Packaging requires the gpuikit download, Velopack's C library, and
