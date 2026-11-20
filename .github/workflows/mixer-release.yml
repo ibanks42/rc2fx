@@ -9,6 +9,10 @@ on:
         type: choice
         default: patch
         options: [patch, minor, major]
+      dry-run:
+        description: Build and package without signing, pushing, or publishing
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,6 +70,8 @@ jobs:
 
   sign-and-publish:
     needs: build
+    # A dry run stops at the unsigned artifact: no signing keys, no push, no release.
+    if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-24.04
     # Requires reviewers and main-only deployment; keep root keys offline.
     environment: mixer-signing
