@@ -1,21 +1,14 @@
-//! Installing a signed RC2FX release on a running mixer, over USB 1, without
-//! flashing RØDE's firmware.
+//! Signed in-place RC2FX updates over USB 1 without reflashing stock firmware.
 //!
-//! The desktop sends the release's TUF role documents and the payload bytes;
-//! this module verifies both against the trust root compiled into `rc2fxd`
-//! (the same one the desktop uses), swaps the bundle in `/opt/rc2fx` in place
-//! with a rollback copy, and hands the restart and commit to a detached
-//! `rc2fx.sh update-commit` step that survives this controller being replaced.
-//! `GET api/v1/update/last` reports how it ended after the app reconnects.
+//! Verifies TUF role metadata and payload bytes against the compiled-in trust
+//! root, swaps `/opt/rc2fx` in place with a rollback copy, and hands restart
+//! and commit off to a detached `rc2fx.sh update-commit` process. After
+//! reconnect, `GET api/v1/update/last` reports the outcome.
 //!
-//! A full flash is still required for a first install and for any RØDE
-//! firmware change; this path never touches the stock files and never runs
-//! anything from the payload before the signature, size, hash, firmware
-//! profile and version checks have passed.
-//!
-//! The upload may also be a `delta-1` encoding (see `rc2fx-delta`): the mixer
-//! rebuilds the signed envelope from the files it already has, then verifies
-//! and installs that exactly as it does a whole one.
+//! First installs and stock firmware changes still require a full flash. Nothing
+//! from an uploaded payload executes until signature, size, digest, firmware
+//! profile, and version checks pass. `delta-1` uploads (`rc2fx-delta`) are
+//! reconstructed into the signed envelope first, then verified identically.
 
 pub mod install;
 pub mod payload;
@@ -53,6 +46,32 @@ const OPT_HEADROOM: u64 = 16 << 20;
 /// How long the detached driver waits for the new controller and audio.
 const RESTART_SECONDS: u64 = 300;
 
+/// Which installed copy a controller was started from, judged by the
+/// directory that holds its release manifest (`rc2fx.sh launch` passes
+/// `--release "$home/mixer-release.json"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstalledBundle {
+    /// `/opt/rc2fx`: the bundle in-place updates install into.
+    Live,
+    /// `/opt/.rc2fx-previous`: the rollback copy the shims start while an
+    /// update has not committed. Its controller must still run `recover()`,
+    /// or the unfinished update is never undone, but it offers no new update.
+    Previous,
+}
+
+/// Where a release manifest places the controller: `None` for anything that
+/// is not an installed bundle, such as a build run from RAM.
+pub fn installed_bundle(paths: &Paths, release: &Path) -> Option<InstalledBundle> {
+    let dir = release.parent()?;
+    if dir == paths.bundle() {
+        Some(InstalledBundle::Live)
+    } else if dir == paths.previous() {
+        Some(InstalledBundle::Previous)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRequest {
@@ -78,13 +97,22 @@ pub struct Chunk {
     pub data: String,
 }
 
+/// A session's path: Accepting, then Complete once every upload byte is in,
+/// then Installing, which ends in Restarting or Failed. A Failed session may
+/// be installed again; an Accepting or Complete one may be replaced or
+/// aborted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SessionState {
     Accepting,
     Complete,
     Installing,
-    Restarting,
-    Failed,
+    /// The install handed the restart on. `warning` says the swap failed
+    /// part way and the previous version is being restored.
+    Restarting {
+        warning: Option<String>,
+    },
+    /// Verification or the install failed, for this reason.
+    Failed(String),
 }
 
 impl SessionState {
@@ -93,8 +121,36 @@ impl SessionState {
             Self::Accepting => "accepting",
             Self::Complete => "complete",
             Self::Installing => "installing",
-            Self::Restarting => "restarting",
-            Self::Failed => "failed",
+            Self::Restarting { .. } => "restarting",
+            Self::Failed(_) => "failed",
+        }
+    }
+    /// What the progress reply carries as its error.
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::Restarting { warning } => warning.as_deref(),
+            Self::Failed(why) => Some(why),
+            Self::Accepting | Self::Complete | Self::Installing => None,
+        }
+    }
+}
+
+/// What a session's upload holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Upload {
+    /// The signed envelope itself.
+    Envelope,
+    /// A `delta-1` encoding of it. `decoded` says the envelope has been
+    /// rebuilt from it once, so a retried install verifies that envelope
+    /// instead of decoding again.
+    Delta { decoded: bool },
+}
+
+impl Upload {
+    fn encoding(self) -> Option<&'static str> {
+        match self {
+            Self::Envelope => None,
+            Self::Delta { .. } => Some(DELTA_ENCODING),
         }
     }
 }
@@ -107,12 +163,8 @@ struct Session {
     upload_size: u64,
     received: u64,
     state: SessionState,
-    error: Option<String>,
-    /// `"delta-1"` when the upload is a delta; the envelope size is `request.size`.
-    encoding: Option<&'static str>,
-    /// The delta has been decoded over the upload once, so a retried install
-    /// verifies the rebuilt envelope instead of decoding it again.
-    decoded: bool,
+    /// The envelope size is `request.size` either way.
+    upload: Upload,
 }
 
 /// The reply the upload endpoints return.
@@ -199,6 +251,9 @@ pub struct MixerUpdate {
     running: Option<String>,
     trusted_root: Vec<u8>,
     session: Mutex<Option<Session>>,
+    /// False for a controller started from the rollback copy: it recovers and
+    /// reports, but new updates wait for a start from the live bundle.
+    offers_updates: bool,
 }
 
 impl MixerUpdate {
@@ -211,7 +266,22 @@ impl MixerUpdate {
             running,
             trusted_root: verify::TRUSTED_ROOT.to_vec(),
             session: Mutex::new(None),
+            offers_updates: true,
         }
+    }
+
+    /// A handle for a controller started from the rollback copy
+    /// ([`InstalledBundle::Previous`]): `recover()` and the outcome endpoints
+    /// work, and every new update is refused.
+    pub fn without_new_updates(mut self) -> Self {
+        self.offers_updates = false;
+        self
+    }
+
+    /// Whether this controller accepts new updates (and so advertises
+    /// `inPlaceUpdates`).
+    pub fn offers_updates(&self) -> bool {
+        self.offers_updates
     }
 
     fn session(&self) -> std::sync::MutexGuard<'_, Option<Session>> {
@@ -271,6 +341,14 @@ impl MixerUpdate {
             }
             (None, None) => request.size,
         };
+        if !self.offers_updates {
+            return Err(UpdateError::Conflict(
+                "RC2FX is running its rollback copy; restart the mixer before updating".into(),
+            ));
+        }
+        // Refused before the upload, not only after it: the record cannot
+        // become readable while the upload runs.
+        self.stored_state().map_err(UpdateError::Conflict)?;
         if self.paths.pending().exists() || self.paths.install_pending().exists() {
             return Err(UpdateError::Busy(
                 "another install is pending; finish it or recover before updating".into(),
@@ -284,7 +362,7 @@ impl MixerUpdate {
         if let Some(session) = slot.as_ref() {
             if matches!(
                 session.state,
-                SessionState::Installing | SessionState::Restarting
+                SessionState::Installing | SessionState::Restarting { .. }
             ) {
                 return Err(UpdateError::Busy(
                     "an update is being installed; wait for it to finish".into(),
@@ -336,9 +414,11 @@ impl MixerUpdate {
             upload_size,
             received: 0,
             state: SessionState::Accepting,
-            error: None,
-            encoding,
-            decoded: false,
+            upload: if encoding.is_some() {
+                Upload::Delta { decoded: false }
+            } else {
+                Upload::Envelope
+            },
         });
         Ok(Progress {
             id,
@@ -366,9 +446,13 @@ impl MixerUpdate {
             .filter(|s| s.id == id)
             .ok_or(UpdateError::NotFound)?;
         let expected = session.received;
+        // A replay of a chunk whose reply was lost is answered while the
+        // upload is still accepting and also once it is complete: the last
+        // chunk moves the session to Complete, and its replay must still get
+        // the progress reply rather than a refusal.
         match session.state {
-            SessionState::Accepting => {}
-            SessionState::Failed => {
+            SessionState::Accepting | SessionState::Complete => {}
+            SessionState::Failed(_) => {
                 return Err(UpdateError::Conflict(
                     "this session failed; start a new one".into(),
                 ));
@@ -399,6 +483,11 @@ impl MixerUpdate {
             }
             let progress = progress_of(id, session);
             return Ok(progress);
+        }
+        if matches!(session.state, SessionState::Complete) {
+            return Err(UpdateError::Conflict(
+                "the upload is already complete".into(),
+            ));
         }
         if offset != expected {
             return Err(UpdateError::Offset { expected });
@@ -440,7 +529,7 @@ impl MixerUpdate {
         };
         if matches!(
             session.state,
-            SessionState::Installing | SessionState::Restarting
+            SessionState::Installing | SessionState::Restarting { .. }
         ) {
             return Err(UpdateError::Conflict(
                 "the update is being installed and cannot be aborted".into(),
@@ -455,14 +544,14 @@ impl MixerUpdate {
     /// (so its refusal is the reply); the install and swap continue on a
     /// thread of their own and are reported by [`Self::progress`].
     pub fn install(self: Arc<Self>, id: &str) -> Result<Progress, UpdateError> {
-        let (request, encoding, decoded) = {
+        let (request, upload) = {
             let mut slot = self.session();
             let session = slot
                 .as_mut()
                 .filter(|s| s.id == id)
                 .ok_or(UpdateError::NotFound)?;
             match session.state {
-                SessionState::Complete | SessionState::Failed => {}
+                SessionState::Complete | SessionState::Failed(_) => {}
                 SessionState::Accepting => {
                     return Err(UpdateError::Conflict(
                         "the upload is not complete yet".into(),
@@ -471,14 +560,13 @@ impl MixerUpdate {
                 _ => return Ok(progress_of(id, session)),
             }
             session.state = SessionState::Installing;
-            session.error = None;
-            (session.request.clone(), session.encoding, session.decoded)
+            (session.request.clone(), session.upload)
         };
         // A delta is rebuilt into the signed envelope before verification, so
         // everything after this is exactly the plain-upload path. The envelope
         // is checked against the signed target there; nothing decoded here is
         // trusted until then.
-        if encoding.is_some() && !decoded {
+        if matches!(upload, Upload::Delta { decoded: false }) {
             let envelope_needed = request.size.saturating_add(RUN_HEADROOM);
             if let Some(free) = install::free_bytes(&self.paths.run)
                 && free < envelope_needed
@@ -496,11 +584,17 @@ impl MixerUpdate {
             }
             let mut slot = self.session();
             if let Some(session) = slot.as_mut().filter(|s| s.id == id) {
-                session.decoded = true;
+                session.upload = Upload::Delta { decoded: true };
             }
         }
         let payload = self.payload_path(id);
-        let prior = StoredState::load(&self.paths.state());
+        let prior = match self.stored_state() {
+            Ok(prior) => prior,
+            Err(why) => {
+                self.fail(id, &why);
+                return Err(UpdateError::Conflict(why));
+            }
+        };
         let facts = verify::ReleaseRequest {
             version: request.version.clone(),
             size: request.size,
@@ -528,6 +622,12 @@ impl MixerUpdate {
             self.fail(id, &error);
             return Err(UpdateError::Failed(error));
         }
+        // Accepted: the previous outcome must not pass for this one's.
+        if let Err(error) = install::clear_last(&self.paths) {
+            let why = format!("cannot clear the previous update's outcome: {error}");
+            self.fail(id, &why);
+            return Err(UpdateError::Failed(why));
+        }
         let this = Arc::clone(&self);
         let thread_id = id.to_owned();
         let request_id = id.to_owned();
@@ -550,30 +650,32 @@ impl MixerUpdate {
     fn fail(&self, id: &str, why: &str) {
         let mut slot = self.session();
         if let Some(session) = slot.as_mut().filter(|s| s.id == id)
-            && session.state != SessionState::Restarting
+            && !matches!(session.state, SessionState::Restarting { .. })
         {
-            session.state = SessionState::Failed;
-            session.error = Some(why.to_owned());
+            session.state = SessionState::Failed(why.to_owned());
         }
     }
 
-    fn set_state(&self, id: &str, state: SessionState, error: Option<String>) -> Progress {
+    /// Records how the install thread ended, if the session is still there.
+    fn set_state(&self, id: &str, state: SessionState) {
         let mut slot = self.session();
         if let Some(session) = slot.as_mut().filter(|s| s.id == id) {
             session.state = state;
-            session.error = error;
-            return progress_of(id, session);
         }
-        Progress {
-            id: id.to_owned(),
-            state: state.name(),
-            version: String::new(),
-            size: 0,
-            received: 0,
-            encoding: None,
-            upload_size: None,
-            error: None,
-        }
+    }
+
+    /// The recorded replay and downgrade protection, empty before the first
+    /// record. An unreadable record refuses the update instead of starting
+    /// over, which would accept older signed metadata.
+    fn stored_state(&self) -> Result<StoredState, String> {
+        StoredState::load(&self.paths.state())
+            .map(Option::unwrap_or_default)
+            .map_err(|why| {
+                eprintln!("RC2FX update: {why}");
+                format!(
+                    "the mixer's update record is unreadable, so no update can be checked against it ({why}); a full flash replaces it"
+                )
+            })
     }
 
     fn save_state(&self, state: &StoredState) -> Result<(), String> {
@@ -598,7 +700,7 @@ impl MixerUpdate {
     fn run_install(&self, id: &str, verified: verify::VerifiedRelease) {
         match self.install_inner(id, &verified) {
             Ok(()) => {
-                self.set_state(id, SessionState::Restarting, None);
+                self.set_state(id, SessionState::Restarting { warning: None });
             }
             Err(failure) => {
                 if failure.swapped_in_doubt {
@@ -607,15 +709,16 @@ impl MixerUpdate {
                     let _ = self.spawn_driver(id, &verified, true, &install::Swapped::default());
                     self.set_state(
                         id,
-                        SessionState::Restarting,
-                        Some(format!(
-                            "{}; the previous version is being restored",
-                            failure.message
-                        )),
+                        SessionState::Restarting {
+                            warning: Some(format!(
+                                "{}; the previous version is being restored",
+                                failure.message
+                            )),
+                        },
                     );
                 } else {
                     let _ = fs::remove_dir_all(self.paths.opt.join(format!(".rc2fx-stage.{id}")));
-                    self.set_state(id, SessionState::Failed, Some(failure.message));
+                    self.set_state(id, SessionState::Failed(failure.message));
                 }
             }
         }
@@ -803,24 +906,6 @@ impl MixerUpdate {
     /// Missing or non-regular files are simply absent: the app then sends them
     /// whole. A running version the launcher could not read has nothing to
     /// diff, so the endpoint is unavailable rather than guessed.
-    /// The launcher's check of the flashed image (`rc2fx.sh image-check`).
-    pub fn image_check(&self) -> rc2fx_core::ImageCheck {
-        let bundle = self.paths.bundle();
-        let read = |path: PathBuf, limit: u64| -> Option<Vec<u8>> {
-            let mut data = Vec::new();
-            fs::File::open(path)
-                .ok()?
-                .take(limit)
-                .read_to_end(&mut data)
-                .ok()?;
-            Some(data)
-        };
-        let digest = read(bundle.join("image.sha256"), 16 << 20).map(|data| install::sum(&data));
-        let record = read(bundle.join("data/image-check"), 64 * 1024)
-            .map(|data| String::from_utf8_lossy(&data).into_owned());
-        rc2fx_core::ImageCheck::from_record(record.as_deref(), digest.as_deref())
-    }
-
     pub fn installed(&self) -> Result<Installed, UpdateError> {
         let version = self.running.clone().ok_or_else(|| {
             UpdateError::Unavailable("the running RC2FX version is unknown".into())
@@ -893,8 +978,16 @@ impl MixerUpdate {
                 }
             }
         }
-        // This start is not an unproven one: record what is running.
-        let mut state = StoredState::load(&self.paths.state());
+        // This start is not an unproven one: record what is running. An
+        // unreadable record is left as it is: writing a fresh one would make
+        // the loss of its protection permanent. Updates stay refused instead.
+        let mut state = match StoredState::load(&self.paths.state()) {
+            Ok(state) => state.unwrap_or_default(),
+            Err(why) => {
+                eprintln!("RC2FX update: {why}; left unchanged, and updates are refused");
+                return;
+            }
+        };
         state.schema = 1;
         if let Some(running) = &self.running {
             state.installed_version = Some(running.clone());
@@ -952,9 +1045,9 @@ fn progress_of(id: &str, session: &Session) -> Progress {
         version: session.request.version.clone(),
         size: session.request.size,
         received: session.received,
-        encoding: session.encoding,
-        upload_size: session.encoding.map(|_| session.upload_size),
-        error: session.error.clone(),
+        encoding: session.upload.encoding(),
+        upload_size: session.upload.encoding().map(|_| session.upload_size),
+        error: session.state.error().map(str::to_owned),
     }
 }
 
@@ -1049,50 +1142,7 @@ fn uptime_nanos() -> u64 {
 
 /// Strict standard base64, padding required. Returns `None` for anything else.
 fn decode_base64(text: &str) -> Option<Vec<u8>> {
-    let bytes = text.as_bytes();
-    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
-        return None;
-    }
-    let value = |b: u8| -> Option<u32> {
-        Some(match b {
-            b'A'..=b'Z' => u32::from(b - b'A'),
-            b'a'..=b'z' => u32::from(b - b'a') + 26,
-            b'0'..=b'9' => u32::from(b - b'0') + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        })
-    };
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    let chunks = bytes.len() / 4;
-    for index in 0..chunks {
-        let block = &bytes[index * 4..index * 4 + 4];
-        let padding = block.iter().rev().take_while(|b| **b == b'=').count();
-        if padding > 2 || (padding > 0 && index + 1 != chunks) {
-            return None;
-        }
-        let mut combined = 0u32;
-        for (position, byte) in block.iter().enumerate() {
-            let value = if position >= 4 - padding {
-                // Padding is only ever at the very end of the last block.
-                if *byte != b'=' {
-                    return None;
-                }
-                0
-            } else {
-                value(*byte)?
-            };
-            combined = combined << 6 | value;
-        }
-        out.push((combined >> 16) as u8);
-        if padding < 2 {
-            out.push((combined >> 8) as u8);
-        }
-        if padding < 1 {
-            out.push(combined as u8);
-        }
-    }
-    Some(out)
+    rc2fx_core::ssh::decode_base64(text)
 }
 
 /// The decoder's inverse, for the tests only.

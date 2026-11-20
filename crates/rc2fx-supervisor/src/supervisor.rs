@@ -1,23 +1,25 @@
-//! Watches one RC2FX mixer from beside it, for as long as that mixer runs.
+//! Supervises a single RC2FX mixer process for its entire lifetime.
 //!
-//! Runs next to live audio, so its steady state is one `poll` a second and one
-//! `stat`, with no forks: main slows down whenever the other CPUs are busy. A
-//! process exit or a signal wakes it at once. The once-a-second pace is kept on
-//! purpose. The controller gives up on the mixer after two seconds, and the
-//! control socket exists before the mixer has finished starting, so starting
-//! the controller the instant the socket appears could fail into stock audio.
-//! A watch on the run directory is no use either: every report written there
-//! would wake this process.
+//! Because this runs alongside live audio, the steady-state loop does one
+//! `poll` and one `stat` per second with no forks (busy background cores slow
+//! down the main mixer process). Process exits and signals still wake it
+//! immediately.
 //!
-//! The rare, delicate steps stay in `rc2fx.sh` and are called on the way out:
-//! `supervise-restart` retires the USB node and stops the processes, and
-//! `supervise-exit` stops a remaining controller and writes the last-exit log.
+//! The 1-second poll interval is intentional. The controller times out after
+//! two seconds if it can't connect, and the control socket is created before
+//! the mixer finishes initializing, so starting the controller the instant the
+//! socket appears risks failing back to stock audio. Watching the run directory
+//! with inotify doesn't help either, since every report written there would
+//! wake the supervisor.
 //!
-//! An in-place update that leaves the mixer's side unchanged asks for the
-//! controller alone to be replaced, by creating `reload` in the run directory:
-//! the controller is stopped and its executable started again, and audio keeps
-//! running. `supervisor.features` lists `reload` so that the update can tell a
-//! supervisor that does this from an older one.
+//! Teardown work stays in `rc2fx.sh`: `supervise-restart` tears down the USB
+//! gadget and stops the processes, and `supervise-exit` cleans up any leftover
+//! controller and writes the last-exit log.
+//!
+//! For controller-only updates, creating `reload` in the run directory stops
+//! the controller and starts the new binary without interrupting mixer audio.
+//! `supervisor.features` advertises `reload` so the updater can tell whether
+//! the running supervisor supports it.
 use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
@@ -36,30 +38,29 @@ use std::{
     sync::atomic::{AtomicBool, AtomicI32, Ordering},
 };
 
-/// How long a mixer has to open its control socket.
+/// Maximum time to wait for the mixer to open its control socket.
 pub const READY_SECONDS: u32 = 60;
-/// A mixer that exits sooner than this counts towards falling back to stock.
+/// Mixer exits before this uptime count toward falling back to stock audio.
 const EARLY_EXIT_SECONDS: i64 = 120;
-/// Early exits in one boot before the launcher's next restart is stock.
+/// Number of early exits in one boot before the launcher falls back to stock.
 const EARLY_EXITS: usize = 2;
-/// Let the mixer start its threads before the first housekeeping pass.
+/// Delay before the first housekeeping pass so the mixer can spawn its threads.
 const HOUSEKEEPING_FIRST: u32 = 10;
-/// Later passes catch a thread that pins itself to CPU 0 after starting.
+/// Interval for follow-up passes to catch threads that pin themselves to CPU 0 later.
 const HOUSEKEEPING_EVERY: u32 = 5;
 const OOM_SCORE: &str = "/proc/self/oom_score_adj";
-/// How long a controller being reloaded has to finish before it is killed.
+/// Grace period for a controller to exit on reload before sending SIGKILL.
 const RELOAD_STOP: std::time::Duration = std::time::Duration::from_secs(10);
-/// What `supervisor.features` lists, one per line.
 const FEATURES: &str = "reload\n";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Options {
     pub mixer: i32,
-    /// The mixer's start time in clock ticks, as in `/proc/PID/stat`. A PID
-    /// alone could already belong to another process.
+    /// Mixer start time in clock ticks from `/proc/PID/stat`, used to avoid
+    /// acting on a reused PID.
     pub mixer_start: u64,
-    /// The run directory's copy of `rc2fx.sh`, not the bundle's: an install can
-    /// remove or replace the bundle while this process still has to use it.
+    /// Copy of `rc2fx.sh` in the run directory (not the bundle copy, which an
+    /// install may replace or delete while we're still running).
     pub script: PathBuf,
     pub controller: PathBuf,
     pub controller_args: Vec<OsString>,
@@ -68,13 +69,14 @@ pub struct Options {
     pub ready_seconds: u32,
 }
 
-/// Supervises until the mixer is gone or has been handed back. Nothing here can
-/// stop it watching: every problem is logged and ends in the exit steps, because
-/// a mixer with nothing watching it has no way back to stock audio. Launch
-/// covers what this cannot, a death by signal.
+/// Runs the supervision loop until the mixer exits or is stopped. Errors are
+/// logged and still run the exit steps, because an unsupervised mixer has no
+/// way to recover back to stock audio. The launcher handles the one case we
+/// can't catch here: being killed by an uncatchable signal.
 pub fn run(options: Options) {
     unsafe { libc::umask(0o077) };
-    // The launcher restarts the mixer, so the OOM killer should pick it first.
+    // Shield the supervisor so the OOM killer targets the mixer first; the
+    // launcher can restart the mixer.
     if let Err(error) = fs::write(OOM_SCORE, "-1000") {
         say(&format!("Could not protect the supervisor: {error}"));
     }
@@ -84,18 +86,24 @@ pub fn run(options: Options) {
 
 struct Supervisor {
     options: Options,
-    /// Held open so that the exit steps need no file: a new launch deletes the
-    /// run directory once this process has had a few seconds to leave it.
+    /// Kept open so teardown still works even if a newer launch deletes the run
+    /// directory.
     script: Option<File>,
-    /// Only wakes `poll` early; `SIGNALLED` is what says a signal arrived.
+    /// Self-pipe reader used to wake `poll` immediately; `SIGNALED` tracks
+    /// whether a signal actually arrived.
     signals: Option<OwnedFd>,
-    /// Without one (no kernel support) exits are seen on the next second.
+    /// Falls back to 1-second polling if the kernel doesn't support pidfd.
     mixer_fd: Option<Pidfd>,
-    controller: Option<Child>,
-    controller_fd: Option<Pidfd>,
-    /// Thread names already in the log. A thread that keeps pinning itself must
-    /// not write a line to flash every pass.
+    controller: Option<Controller>,
+    /// Thread names we've already logged so recurring re-pins don't spam flash.
     reported: HashSet<String>,
+}
+
+/// Running controller child and its pidfd. Keeping them together ensures a
+/// reaped controller's fd is dropped before the next `poll`.
+struct Controller {
+    child: Child,
+    fd: Option<Pidfd>,
 }
 
 impl Supervisor {
@@ -107,9 +115,9 @@ impl Supervisor {
                 options.script.display()
             ));
         }
-        // Checked after opening, so that the handle is known to be the mixer's.
-        // The mixer may already be gone and its PID someone else's; with no
-        // handle, the first look finds that and treats it as the mixer's exit.
+        // Verify start time after opening the pidfd to close the PID-reuse
+        // race. If it no longer matches, drop the fd and let the first loop
+        // check treat the mixer as exited.
         let mixer_fd =
             Pidfd::open(options.mixer).filter(|_| process_is(options.mixer, options.mixer_start));
         Self {
@@ -118,12 +126,11 @@ impl Supervisor {
             signals,
             mixer_fd,
             controller: None,
-            controller_fd: None,
             reported: HashSet::new(),
         }
     }
 
-    /// A panic in `watch` must still leave through the exit steps.
+    /// Ensures a panic inside `watch` still triggers stock fallback and cleanup.
     fn supervise(&mut self, watch: impl FnOnce(&mut Self)) {
         if panic::catch_unwind(AssertUnwindSafe(|| watch(self))).is_err() {
             self.end_mixer("Supervisor panicked; restoring stock audio", true);
@@ -147,8 +154,8 @@ impl Supervisor {
                 self.record_mixer_exit();
                 return;
             }
-            if SIGNALLED.load(Ordering::Relaxed) {
-                self.end_mixer("Supervisor signalled; restoring stock audio", true);
+            if SIGNALED.load(Ordering::Relaxed) {
+                self.end_mixer("Supervisor signaled; restoring stock audio", true);
                 return;
             }
             if stop.exists() {
@@ -161,8 +168,7 @@ impl Supervisor {
                         return;
                     }
                 } else if tick >= self.options.ready_seconds {
-                    // A mixer that never opens its control socket would leave
-                    // a blank screen.
+                    // Don't leave the device on a blank screen if the mixer never opens its socket.
                     let reason = format!(
                         "Mixer not ready after {} s; restoring stock audio",
                         self.options.ready_seconds
@@ -173,7 +179,7 @@ impl Supervisor {
             }
             if reload.exists() {
                 let _ = fs::remove_file(&reload);
-                // Without a controller, the next start already runs the new one.
+                // If the controller hasn't started yet, it will pick up the new binary anyway.
                 if self.controller.is_some() && !self.reload_controller() {
                     return;
                 }
@@ -192,14 +198,16 @@ impl Supervisor {
         }
     }
 
-    /// One second, or less when a process exits or a signal arrives.
+    /// Waits up to 1 second, waking early on process exit or signal.
     fn wait(&mut self) {
         let fd = |pidfd: &Option<Pidfd>| pidfd.as_ref().map_or(-1, |pidfd| pidfd.0.as_raw_fd());
-        // `poll` skips a negative descriptor.
+        // `poll` ignores negative fds.
         let mut fds = [
             self.signals.as_ref().map_or(-1, AsRawFd::as_raw_fd),
             fd(&self.mixer_fd),
-            fd(&self.controller_fd),
+            self.controller
+                .as_ref()
+                .map_or(-1, |controller| fd(&controller.fd)),
         ]
         .map(|fd| libc::pollfd {
             fd,
@@ -224,7 +232,6 @@ impl Supervisor {
         if age >= EARLY_EXIT_SECONDS {
             return;
         }
-        // Two early exits in one boot: the launcher's next restart is stock.
         let exits = self.boot_file("exits");
         let appended = OpenOptions::new()
             .create(true)
@@ -247,8 +254,8 @@ impl Supervisor {
         }
     }
 
-    /// Launch has made the directory. Only a write that needs it finds out if
-    /// it has gone, and that write reports the failure.
+    /// `launch` creates the boot directory, so we recreate it best-effort here
+    /// and let the actual file write surface any failure.
     fn boot_file(&self, name: &str) -> PathBuf {
         let _ = fs::DirBuilder::new()
             .recursive(true)
@@ -257,7 +264,7 @@ impl Supervisor {
         self.options.boot.join(name)
     }
 
-    /// False when the controller could not start and the mixer has been ended.
+    /// Returns `false` if the controller failed to spawn and the mixer was ended.
     fn start_controller(&mut self) -> bool {
         let spawned = File::create(self.options.run.join("controller.log")).and_then(|log| {
             let mut command = Command::new(&self.options.controller);
@@ -266,15 +273,15 @@ impl Supervisor {
                 .stdin(Stdio::null())
                 .stdout(log.try_clone()?)
                 .stderr(log);
-            // Only this process is shielded from the OOM killer.
+            // Don't inherit the supervisor's OOM immunity into the controller.
             unsafe { command.pre_exec(reset_oom_score) };
             command.spawn()
         });
         match spawned {
             Ok(child) => {
                 say(&format!("Controller started (PID {})", child.id()));
-                self.controller_fd = Pidfd::open(child.id() as i32);
-                self.controller = Some(child);
+                let fd = Pidfd::open(child.id() as i32);
+                self.controller = Some(Controller { child, fd });
                 true
             }
             Err(error) => {
@@ -288,16 +295,18 @@ impl Supervisor {
         }
     }
 
-    /// Replaces the controller with a new start of its executable and leaves
-    /// the mixer running. The old one gets `RELOAD_STOP` to finish, then is
-    /// killed; the sockets only a controller binds are cleared after it, so a
-    /// killed one's cannot block the new one. False when the new controller
-    /// could not start and the mixer has been ended.
+    /// Restarts the controller in place while leaving the mixer running.
+    /// Sends SIGTERM, waits up to `RELOAD_STOP` before SIGKILL, removes stale
+    /// controller sockets, and spawns the new binary. Returns `false` if the
+    /// new controller failed to start and the mixer was ended.
     fn reload_controller(&mut self) -> bool {
         say("Reloading the controller for an update; the mixer keeps running");
-        if let Some(mut controller) = self.controller.take() {
-            self.controller_fd = None;
-            // Not yet reaped, so the PID is still this child's.
+        if let Some(Controller {
+            child: mut controller,
+            ..
+        }) = self.controller.take()
+        {
+            // Safe to signal by PID since we haven't reaped this child yet.
             unsafe { libc::kill(controller.id() as i32, libc::SIGTERM) };
             let deadline = std::time::Instant::now() + RELOAD_STOP;
             loop {
@@ -330,15 +339,14 @@ impl Supervisor {
         self.start_controller()
     }
 
-    /// Reaps a controller that has exited and returns its shell-style status.
+    /// Reaps an exited controller and returns its shell-style exit status.
     fn controller_exit(&mut self) -> Option<i32> {
-        let status = self.controller.as_mut()?.try_wait().ok()??;
+        let status = self.controller.as_mut()?.child.try_wait().ok()??;
         self.controller = None;
-        self.controller_fd = None;
         Some(shell_status(status))
     }
 
-    /// Ends the mixer for the launcher to restart, stock when `stock` is set.
+    /// Stops the mixer so the launcher can restart it (into stock audio if `stock` is true).
     fn end_mixer(&mut self, reason: &str, stock: bool) {
         say(reason);
         if stock {
@@ -347,7 +355,7 @@ impl Supervisor {
         if !self.mixer_alive() {
             return;
         }
-        // Only a restart into RC2FX asks to keep the gadget; stock rebuilds it.
+        // Only preserve the USB gadget when restarting into RC2FX; stock rebuilds it.
         let keep_usb = !stock && self.options.run.join("keep-usb").exists();
         let mut args = vec![
             OsString::from("supervise-restart"),
@@ -357,11 +365,10 @@ impl Supervisor {
         ];
         args.extend(self.controller_pid());
         if self.script(&args) {
-            // Stopped by the script; anything left here would be stopped twice.
+            // The script already stopped the controller; just reap it here.
             if let Some(mut controller) = self.controller.take() {
-                let _ = controller.try_wait();
+                let _ = controller.child.try_wait();
             }
-            self.controller_fd = None;
         } else {
             say("Leaving the mixer running without RC2FX control; rc2fx.sh start recovers it");
         }
@@ -371,13 +378,13 @@ impl Supervisor {
         let mut args = vec![OsString::from("supervise-exit")];
         args.extend(self.controller_pid());
         let finished = self.script(&args);
-        if let Some(controller) = self.controller.as_mut() {
+        if let Some(Controller { child, .. }) = self.controller.as_mut() {
             if !finished {
-                let _ = controller.kill();
+                let _ = child.kill();
             }
-            let _ = controller.try_wait();
+            let _ = child.try_wait();
         }
-        // Only this supervisor's own record: the next launch may have written its.
+        // Only remove supervisor.pid if it still points to us (a newer launch may have overwritten it).
         let record = self.options.run.join("supervisor.pid");
         let own = fs::read_to_string(&record)
             .is_ok_and(|text| text.trim() == std::process::id().to_string());
@@ -388,7 +395,7 @@ impl Supervisor {
     }
 
     fn controller_pid(&self) -> Option<OsString> {
-        let pid = self.controller.as_ref()?.id();
+        let pid = self.controller.as_ref()?.child.id();
         Some(pid.to_string().into())
     }
 
@@ -398,7 +405,7 @@ impl Supervisor {
             Some(file) => {
                 let fd = file.as_raw_fd();
                 command.arg(format!("/proc/self/fd/{fd}"));
-                // Bash alone gets it: the file closes on exec everywhere else.
+                // Clear CLOEXEC only for this bash child so other children don't inherit the script fd.
                 unsafe { command.pre_exec(move || keep_open(fd)) };
             }
             None => {
@@ -437,7 +444,7 @@ fn housekeeping_due(tick: u32) -> bool {
     tick >= HOUSEKEEPING_FIRST && (tick - HOUSEKEEPING_FIRST).is_multiple_of(HOUSEKEEPING_EVERY)
 }
 
-/// True when a pass moved a thread name the log has not shown yet.
+/// Returns `true` if `moved` contains at least one thread name we haven't logged yet.
 fn worth_reporting(reported: &mut HashSet<String>, moved: &[String]) -> bool {
     let mut fresh = false;
     for name in moved {
@@ -446,9 +453,9 @@ fn worth_reporting(reported: &mut HashSet<String>, moved: &[String]) -> bool {
     fresh
 }
 
-/// What housekeeping needs to know about, and do to, the mixer's threads. A
-/// thread can exit at any moment, so each answer may be that it is gone, and
-/// `list` can miss a live thread while another exits: the next pass finds it.
+/// Thread inspection/affinity operations for housekeeping. Threads can exit at
+/// any point, and `list` can miss a thread during concurrent exits, which the
+/// next pass will pick up.
 trait Threads {
     fn list(&self) -> Vec<i32>;
     fn pinned_to_cpu0(&self, tid: i32) -> bool;
@@ -457,15 +464,15 @@ trait Threads {
     fn move_off_cpu0(&self, tid: i32) -> bool;
 }
 
-/// RØDE pins about fifteen SCHED_OTHER threads of the mixer process to CPU 0
-/// only (its main thread, HIDThread, UartRunThread, JUCE Timer, SysMonThread
-/// and others). CPU 0 is where the RR5 suppression worker runs, and the audio
-/// path waits on non-PI locks those threads hold: moving them to CPUs 1 and 3
-/// removed the fader-triggered callback stalls (device test, 2026-11-01).
-/// Only threads the mixer owns are touched, only SCHED_OTHER ones, and only
-/// those whose affinity is exactly CPU 0; RT threads and any other affinity
-/// are left alone. The affinity test comes first: it is one system call, and
-/// it rules out almost every thread on every pass after the first.
+/// RØDE pins ~15 `SCHED_OTHER` mixer threads to CPU 0 (main thread, HIDThread,
+/// UartRunThread, JUCE Timer, SysMonThread, etc.). CPU 0 also runs the RR5
+/// suppression worker, and the audio path contends on non-PI locks held by
+/// those threads; moving them to CPUs 1 and 3 eliminated fader-triggered
+/// callback stalls (device test, 2026-11-01).
+///
+/// Only non-`rc2fx`, `SCHED_OTHER` threads pinned exclusively to CPU 0 are
+/// moved. We check affinity first because it's a single syscall and filters out
+/// almost every thread after the first pass.
 fn relocate(threads: &impl Threads) -> Vec<String> {
     let mut moved = Vec::new();
     for tid in threads.list() {
@@ -513,7 +520,7 @@ impl Threads for MixerThreads {
     }
 
     fn is_normal_priority(&self, tid: i32) -> bool {
-        // The reset-on-fork flag rides along in the result.
+        // Mask out SCHED_RESET_ON_FORK, which can be OR'd into the returned policy.
         let policy = unsafe { libc::sched_getscheduler(tid) };
         policy >= 0 && policy & !libc::SCHED_RESET_ON_FORK == libc::SCHED_OTHER
     }
@@ -528,8 +535,7 @@ impl Threads for MixerThreads {
     }
 }
 
-/// A process handle that cannot come to mean another process, and that `poll`
-/// reports as readable when the process exits.
+/// PID-reuse-safe process handle that becomes readable in `poll` on exit.
 struct Pidfd(OwnedFd);
 
 impl Pidfd {
@@ -548,8 +554,8 @@ impl Pidfd {
     }
 }
 
-/// The state and start time from a `/proc/PID/stat` line. The name is skipped
-/// up to the last `) `, because it can hold spaces and brackets of its own.
+/// Parses state and start time from `/proc/PID/stat`. Uses `rsplit_once(") ")`
+/// because the comm field can contain spaces and parentheses.
 fn parse_stat(line: &str) -> Option<(char, u64)> {
     let (_, rest) = line.rsplit_once(") ")?;
     let mut fields = rest.split_ascii_whitespace();
@@ -588,9 +594,9 @@ fn clock_ticks() -> i64 {
     unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1)
 }
 
-/// Runs between `fork` and `exec`, so it allocates nothing.
+/// Runs between `fork` and `exec`; must be async-signal-safe (no allocations).
 fn reset_oom_score() -> io::Result<()> {
-    // Spelled out because this cannot allocate the C string for `OOM_SCORE`.
+    // Use a literal C string here instead of allocating from `OOM_SCORE`.
     let fd = unsafe { libc::open(c"/proc/self/oom_score_adj".as_ptr(), libc::O_WRONLY) };
     if fd >= 0 {
         unsafe {
@@ -601,7 +607,7 @@ fn reset_oom_score() -> io::Result<()> {
     Ok(())
 }
 
-/// Runs between `fork` and `exec`: lets one descriptor through the exec.
+/// Runs between `fork` and `exec` to clear `FD_CLOEXEC` on one descriptor.
 fn keep_open(fd: RawFd) -> io::Result<()> {
     match unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } {
         0 => Ok(()),
@@ -609,20 +615,20 @@ fn keep_open(fd: RawFd) -> io::Result<()> {
     }
 }
 
-static SIGNALLED: AtomicBool = AtomicBool::new(false);
+static SIGNALED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_WRITER: AtomicI32 = AtomicI32::new(-1);
 
 extern "C" fn on_signal(_: libc::c_int) {
-    SIGNALLED.store(true, Ordering::Relaxed);
+    SIGNALED.store(true, Ordering::Relaxed);
     let byte = 1u8;
     let writer = SIGNAL_WRITER.load(Ordering::Relaxed);
     unsafe { libc::write(writer, (&raw const byte).cast(), 1) };
 }
 
-/// Catches SIGINT, SIGTERM and SIGHUP. The pipe it returns turns them into
-/// something `poll` sees, so none can land just before the wait and go unnoticed
-/// for a second; without a pipe that second is all that is lost. Both ends close
-/// on exec, and handlers do not survive it, so children start clean.
+/// Installs handlers for SIGINT, SIGTERM, and SIGHUP and returns the read end
+/// of a self-pipe so `poll` wakes immediately. If pipe creation fails, we still
+/// install the handlers and fall back to noticing `SIGNALED` on the next tick.
+/// Both ends are `O_CLOEXEC`, so children start clean.
 fn watch_signals() -> Option<OwnedFd> {
     let mut ends = [-1; 2];
     let reader =
@@ -651,8 +657,8 @@ fn watch_signals() -> Option<OwnedFd> {
     reader
 }
 
-/// One line of `rc2fx.log`, in the same form as the script's `say`. Never
-/// `println!`: it panics on a failed write, and a full disk must not end the
+/// Writes a timestamped line to `rc2fx.log` matching `rc2fx.sh`'s `say`.
+/// Uses `writeln!` instead of `println!` so a full disk doesn't panic the
 /// supervisor.
 fn say(message: &str) {
     let _ = writeln!(
@@ -698,7 +704,7 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         threads: HashMap<i32, Thread>,
-        /// Listed, then gone by the time anything asks about them.
+        /// Returned by `list`, then gone before any follow-up query.
         vanished: Vec<i32>,
         moved: RefCell<Vec<i32>>,
         named: RefCell<Vec<i32>>,
@@ -881,6 +887,39 @@ mod tests {
     }
 
     #[test]
+    fn a_reaped_controller_takes_its_exit_handle_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // Run `/bin/sh` directly instead of a freshly written script to avoid
+        // ETXTBSY if another test thread forks while the file is open for writing.
+        let line = fs::read_to_string("/proc/self/stat").unwrap();
+        let (_, start) = parse_stat(&line).unwrap();
+        let options = Options {
+            mixer: std::process::id() as i32,
+            mixer_start: start,
+            script: dir.path().join("rc2fx.sh"),
+            controller: PathBuf::from("/bin/sh"),
+            controller_args: vec!["-c".into(), "exit 3".into()],
+            run: dir.path().to_owned(),
+            boot: dir.path().join("boot"),
+            ready_seconds: READY_SECONDS,
+        };
+        let mut supervisor = Supervisor::new(options, None);
+        assert_eq!(supervisor.controller_exit(), None);
+        assert!(supervisor.start_controller());
+        assert!(supervisor.controller_pid().is_some());
+        assert!(supervisor.controller.as_ref().unwrap().fd.is_some());
+        let status = loop {
+            if let Some(status) = supervisor.controller_exit() {
+                break status;
+            }
+            supervisor.wait();
+        };
+        assert_eq!(status, 3);
+        assert!(supervisor.controller.is_none());
+        assert_eq!(supervisor.controller_pid(), None);
+    }
+
+    #[test]
     fn housekeeping_runs_from_tick_10_every_5_ticks() {
         let due: Vec<_> = (0..26).filter(|tick| housekeeping_due(*tick)).collect();
         assert_eq!(due, [10, 15, 20, 25]);
@@ -924,11 +963,10 @@ mod tests {
     #[test]
     fn the_real_thread_queries_see_this_process() {
         let this = MixerThreads(std::process::id() as i32);
-        // The raw call: glibc only has gettid() from 2.30, and the checks build
-        // on 2.28.
+        // Use the raw syscall because glibc 2.28 (our CI/check target) lacks gettid().
         let tid = unsafe { libc::syscall(libc::SYS_gettid) } as libc::pid_t;
-        // Listing can skip a live thread while another exits, and the other
-        // tests' threads are exiting. On the mixer the next pass finds it.
+        // Reading /proc/self/task can transiently miss a live thread while
+        // sibling test threads exit; retry a few times.
         assert!((0..1000).any(|_| this.list().contains(&tid)));
         assert!(this.name(tid).is_some());
         assert!(this.is_normal_priority(tid));

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 use rc2fx_core::{Config, ConfigUpdate, TargetKind};
 use rc2fx_device::store::{MAX_PRESETS, MAX_STATE_BYTES, Store, StoreError};
 use std::fs;
@@ -194,8 +193,12 @@ fn state_strict_decoding_and_failed_open_release_lock() {
     let valid = serde_json::json!({"engineGeneration":0,"config": initial(), "presets": []});
     let good = serde_json::to_string(&valid).unwrap();
     let mut corrupt = vec![
-        format!("{good} {{}}"),
-        good.replacen("\"revision\":1", "\"revision\":1,\"revision\":2", 1),
+        format!("{good} {{}}").into_bytes(),
+        good.replacen("\"revision\":1", "\"revision\":1,\"revision\":2", 1)
+            .into_bytes(),
+        // Not UTF-8, and a file cut short.
+        vec![0xff],
+        good.as_bytes()[..good.len() - 1].to_vec(),
     ];
     for mutation in 0..8 {
         let mut value = valid.clone();
@@ -220,12 +223,12 @@ fn state_strict_decoding_and_failed_open_release_lock() {
             }
             _ => unreachable!(),
         }
-        corrupt.push(value.to_string());
+        corrupt.push(value.to_string().into_bytes());
     }
     let mut duplicates = valid.clone();
     let preset = serde_json::json!({"id":"same", "name":"same", "targets":initial().targets});
     duplicates["presets"] = serde_json::json!([preset.clone(), preset]);
-    corrupt.push(duplicates.to_string());
+    corrupt.push(duplicates.to_string().into_bytes());
     for text in corrupt {
         fs::write(temporary.path().join("state.json"), text).unwrap();
         assert!(matches!(

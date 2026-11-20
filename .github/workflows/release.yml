@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: App version bump (first release uses the checked-in version)
+        description: App version bump
         type: choice
         default: patch
         options: [patch, minor, major]
@@ -35,6 +35,17 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
+      # Fail early if any shipped platform is missing a gpuikit SHA-256 pin.
+      - name: Require a gpuikit pin for every shipped platform
+        run: |
+          missing=
+          for pin in sha_windows_x86_64 sha_linux_x86_64 sha_macos_universal; do
+            grep -Eq "^$pin=[0-9a-f]{64}\$" desktop/scripts/fetch-gpuikit.sh || missing="$missing $pin"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::desktop/scripts/fetch-gpuikit.sh has no SHA-256 for:$missing"
+            exit 1
+          fi
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: git-cliff@2.14.1
@@ -43,44 +54,9 @@ jobs:
         id: version
         env:
           BUMP: ${{ inputs.bump }}
-        run: python3 .github/scripts/release.py prepare --bump "$BUMP" --preserve-initial-notes
-      - uses: actions/setup-node@v7.1.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: docs/package-lock.json
-      - name: Validate candidate release notes and build documentation
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          npm ci --prefix docs --no-audit --no-fund
-          # prepare validates pending notes. The site build always exposes
-          # published history only, even while validating a future release.
-          npm run build --prefix docs
-      - uses: actions/upload-artifact@v7.0.2
-        with:
-          name: release-input
-          retention-days: 90
-          path: target/release-input/
-          if-no-files-found: error
-
-  build:
-    needs: prepare
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    permissions:
-      contents: read
-      # Azure Artifact Signing signs in through GitHub's OIDC token.
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7.0.1
+        run: python3 .github/scripts/release.py prepare --bump "$BUMP"
+      # Generate platform-independent base license notices (Rust crates, stdlib,
+      # Velopack) once here so Windows and macOS jobs don't need Rust or cargo-about.
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache: false
@@ -91,21 +67,65 @@ jobs:
         with:
           tool: cargo-about@0.8.4
           fallback: none
+      - uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - name: Generate base license notices
+        run: ./xtask licenses --base target/release-input/base-licenses.json
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Validate candidate release notes and build documentation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm ci --prefix docs --no-audit --no-fund
+          # Site build only publishes released history, even when validating pending notes.
+          npm run build --prefix docs
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release-input
+          retention-days: 90
+          path: target/release-input/
+          if-no-files-found: error
+
+  build:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # Azure Artifact Signing signs in through GitHub's OIDC token.
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
       - uses: actions/download-artifact@v8.0.2
         with:
           name: release-input
           path: .release-input
       - name: Apply release version
         run: tar -xf .release-input/versioned.tar
-      # Key the cache against the manifests actually being compiled.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Go + cgo against gpuikit and velopack_libc (base notices come from prepare).
+      - uses: actions/setup-go@v6.0.0
         with:
-          key: release-desktop
-          cache-bin: false
-          cache-workspace-crates: true
-          cache-on-failure: true
-      # Velopack's vpk makes the packages and signs them, with Azure Artifact
-      # Signing when the signing variables are set.
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - name: Fetch gpuikit
+        env:
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
+        run: bash desktop/scripts/fetch-gpuikit.sh windows-amd64
+      - name: Fetch the Velopack C library
+        run: bash desktop/scripts/fetch-velopack.sh windows-amd64
+      # MinGW gcc + lld strips unused gpuikit components; windres embeds icon/version info.
+      - name: Check the C toolchain
+        run: gcc --version && ld.lld --version && windres --version
+      # vpk packages and signs with Azure Artifact Signing when configured.
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: 10.0.x
@@ -121,12 +141,12 @@ jobs:
           ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
           ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
         run: .github/scripts/windows-signing.ps1
-      # Sign in to Azure only after the long build, so the session is fresh
-      # when signing starts.
+      # Delay Azure login until after the build so the OIDC token is fresh for signing.
       - name: Build the Windows release executable
         env:
           RC2FX_RELEASE_BUILD: "1"
-        run: cargo xtask package --build-only
+          RC2FX_BASE_LICENSES: .release-input/base-licenses.json
+        run: ./xtask package --build-only
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         if: steps.windows-signing.outputs.enabled == 'true'
         with:
@@ -137,7 +157,8 @@ jobs:
       - name: Sign and package the Windows release
         env:
           RC2FX_RELEASE_BUILD: "1"
-        run: cargo xtask package --skip-build
+          RC2FX_BASE_LICENSES: .release-input/base-licenses.json
+        run: ./xtask package --skip-build
       - name: Verify the Windows signatures
         if: steps.windows-signing.outputs.enabled == 'true'
         shell: pwsh
@@ -148,8 +169,8 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP rc2fx-signature-check
           Remove-Item -Recurse -Force $dir -ErrorAction Ignore
           Expand-Archive $zip[0].FullName -DestinationPath $dir
-          # The launcher, the updater, the app itself, and Setup.
-          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
+          # Verify launcher, updater, app binary, Velopack DLL, and setup executable.
+          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe', 'current/velopack_libc.dll' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature $file.FullName
             if ($signature.Status -ne 'Valid') { throw "$($file.Name) signature is $($signature.Status): $($signature.StatusMessage)" }
@@ -158,7 +179,7 @@ jobs:
           }
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: rc2fx-package-${{ matrix.os }}
+          name: rc2fx-package-windows
           path: |
             target/package/rc2fx-windows-x64.zip
             target/package/rc2fx-windows-x64-setup.exe
@@ -166,16 +187,14 @@ jobs:
             target/package/releases.win.json
           if-no-files-found: error
 
-  # The AlmaLinux 8 build image (glibc 2.28), published by build-image.yml.
+  # AlmaLinux 8 build image (glibc 2.28), published by build-image.yml.
   image:
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/build-image.yml
 
-  # The AppImage is built in that image, as `just package-check` builds it, so
-  # it runs on older distributions than the runner's, and is then tested in
-  # clean containers of several distributions.
+  # Build the AppImage in the AlmaLinux 8 container and verify it across distros.
   linux:
     needs: [prepare, image]
     runs-on: ubuntu-24.04
@@ -187,7 +206,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      # Outside the work tree: package-check builds from a snapshot of it.
+      # Keep release-input outside the worktree since package-check snapshots the tree.
       - uses: actions/download-artifact@v8.0.2
         with:
           name: release-input
@@ -205,6 +224,8 @@ jobs:
         env:
           CONTAINER_ENGINE: docker
           RC2FX_BUILD_IMAGE: ${{ needs.image.outputs.image }}
+          # Read by desktop/scripts/fetch-gpuikit.sh in the build container.
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
         run: bash .github/scripts/package-check.sh
       - uses: actions/upload-artifact@v7.0.2
         with:
@@ -216,8 +237,7 @@ jobs:
             target/package-check/target/package/rc2fx-*-appimage-runtime-sources.tar.gz
           if-no-files-found: error
 
-  # Beside the other platforms; only publish waits for it. If it fails, the
-  # draft stays unpublished: re-run the failed jobs.
+  # Runs in parallel with Windows/Linux; publish waits for all three.
   macos:
     needs: prepare
     runs-on: macos-latest
@@ -232,22 +252,17 @@ jobs:
           path: .release-input
       - name: Apply release version
         run: tar -xf .release-input/versioned.tar
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      # Universal Go + cgo build (arm64 + x86_64 joined with lipo); base notices come from prepare.
+      - uses: actions/setup-go@v6.0.0
         with:
-          cache: false
-          rustflags: ""
-      - name: Install standard-library license notices
-        run: rustup component add rust-docs
-      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
-        with:
-          tool: cargo-about@0.8.4
-          fallback: none
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: release-desktop
-          cache-bin: false
-          cache-workspace-crates: true
-          cache-on-failure: true
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - name: Fetch gpuikit
+        env:
+          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
+        run: bash desktop/scripts/fetch-gpuikit.sh darwin-universal
+      - name: Fetch the Velopack C library
+        run: bash desktop/scripts/fetch-velopack.sh darwin-universal
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: 10.0.x
@@ -266,11 +281,20 @@ jobs:
       - name: Build macOS release package
         env:
           RC2FX_RELEASE_BUILD: "1"
-        run: cargo xtask package
+          RC2FX_BASE_LICENSES: .release-input/base-licenses.json
+        run: ./xtask package
+      # Keep legacy rc2fx-macos-arm64.* aliases for pre-0.1.8 download links
+      # (macos_release.py verifies they are byte-identical to universal).
+      - name: Keep the earlier macOS download names
+        run: |
+          cp target/package/rc2fx-macos-universal.zip target/package/rc2fx-macos-arm64.zip
+          cp target/package/rc2fx-macos-universal.pkg target/package/rc2fx-macos-arm64.pkg
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: macos-package
           path: |
+            target/package/rc2fx-macos-universal.zip
+            target/package/rc2fx-macos-universal.pkg
             target/package/rc2fx-macos-arm64.zip
             target/package/rc2fx-macos-arm64.pkg
             target/package/io.github.ibanks42.rc2fx-*-osx-full.nupkg
@@ -304,19 +328,17 @@ jobs:
           from pathlib import Path
           import zipfile
           import tarfile
-          import tomllib
 
           directory = Path('target/release-assets')
           archives = sorted(directory.iterdir())
-          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          version = json.loads(Path('config/app-release.json').read_text())['version']
           prefix = f'rc2fx-{version}'
           sources_name = f'{prefix}-appimage-runtime-sources.tar.gz'
           pack = 'io.github.ibanks42.rc2fx'
-          # Velopack's update packages and feeds keep its names: each feed names its package.
+          # Velopack update feeds and versioned nupkgs.
           feeds = {'releases.win.json': f'{pack}-{version}-full.nupkg',
                    'releases.linux.json': f'{pack}-{version}-linux-full.nupkg'}
-          # Published names have no version, so releases/latest/download/NAME
-          # always links the newest release.
+          # Unversioned asset names keep releases/latest/download/ URLs stable.
           appimage = 'rc2fx-linux-x64.AppImage'
           expected = {appimage, 'rc2fx-windows-x64.zip', 'rc2fx-windows-x64-setup.exe', sources_name,
                       *feeds, *feeds.values()}
@@ -334,7 +356,7 @@ jobs:
                   with archive.open('rb') as stream:
                       assert stream.read(2) == b'MZ', 'Invalid Windows installer'
               elif archive.suffix == '.json':
-                  # The app downloads the package this feed names and checks it against this digest.
+                  # Verify the feed entry matches the nupkg filename and SHA-256.
                   package_name = feeds[archive.name]
                   assets = json.loads(archive.read_text())['Assets']
                   package = (directory / package_name).read_bytes()
@@ -347,11 +369,14 @@ jobs:
                       assert package.testzip() is None
                       members = set(package.namelist())
                       if archive.name == feeds['releases.linux.json']:
-                          # An AppImage update puts this file in place of the running AppImage.
+                          # Verify the Linux update nupkg wraps this exact AppImage.
                           inside = package.read(f'lib/app/{pack}.AppImage')
                           assert inside == (directory / appimage).read_bytes(), f'{archive.name} holds another AppImage'
                           continue
-                  needed = {'lib/app/rc2fx.exe'} if archive.suffix == '.nupkg' else {'RC2FX.exe', 'Update.exe', 'current/rc2fx.exe'}
+                  # Required Windows app binary and sibling Velopack DLL.
+                  app = ('rc2fx.exe', 'velopack_libc.dll')
+                  needed = ({f'lib/app/{name}' for name in app} if archive.suffix == '.nupkg'
+                            else {'RC2FX.exe', 'Update.exe', *(f'current/{name}' for name in app)})
                   assert needed <= members, f'{archive.name} lacks {sorted(needed - members)}'
           sums = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in archives)
           (directory / 'SHA256SUMS').write_text(sums)
@@ -392,8 +417,7 @@ jobs:
           gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file target/release-input/release-notes.md
           gh release upload "$TAG" target/release-assets/*
 
-  # Adds the macOS package to the draft, verifies every package and checksum,
-  # and publishes the release as latest, last of all.
+  # Attach macOS assets, verify all packages/checksums, and publish the release.
   publish:
     needs: [prepare, macos, release]
     if: ${{ !inputs.dry-run }}
@@ -420,7 +444,7 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: python3 .github/scripts/macos_release.py publish --tag "$RELEASE_TAG" --source "$RELEASE_SOURCE" --package-dir target/macos-assets
 
-  # Its own job, so a failed dispatch never holds up signing the release.
+  # Separate job so a docs dispatch failure never blocks update-metadata signing.
   docs:
     needs: [publish]
     if: ${{ !inputs.dry-run }}
@@ -435,8 +459,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: gh workflow run docs.yml --ref main -f source=latest-release
 
-  # Signs the published release into the app update metadata, which the app
-  # checks every update package against.
+  # Sign the published release into the app update metadata.
   app-metadata:
     needs: [prepare, publish]
     if: ${{ !inputs.dry-run }}

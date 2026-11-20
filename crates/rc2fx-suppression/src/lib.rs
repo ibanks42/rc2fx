@@ -4,20 +4,15 @@
 //! bounded frames through SPSC queues and performs aligned dry/wet blending.
 //! Explicit `finish` is the observable shutdown path; timeout is unresolved
 //! ownership and must prevent starting a replacement worker.
+#[cfg(not(target_os = "linux"))]
+compile_error!("rc2fx's mixer crates build for Linux only");
 
-mod capture;
-mod inline;
 mod metrics;
 mod model;
 mod outlier;
 mod queue;
 mod scheduling;
 mod wake;
-pub use capture::{
-    CAPTURE_FRAMES, CAPTURE_POST_SEQUENCES, CaptureFrame, CaptureMetadata, CaptureState,
-    CaptureWindow,
-};
-pub use inline::Inline;
 pub use metrics::Timing;
 use model::Model;
 pub use model::VendorModel;
@@ -41,7 +36,6 @@ use std::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    InvalidAllowance,
     InvalidFrame,
     ModelGeometry,
     ModelCreation,
@@ -126,23 +120,6 @@ pub struct WorkerOptions {
     pub realtime_priority: Option<u8>,
     pub nice: Option<i8>,
 }
-/// Whether workers started from now on time each preparation step; see
-/// `set_preparation_step_timing`.
-static STEP_TIMING: AtomicBool = AtomicBool::new(true);
-
-/// Turns the per-step preparation timing (`Preparation::step_wall`) on or
-/// off for workers started afterwards. It costs the worker one clock read
-/// and one histogram update per step, five of each per frame for
-/// DeepFilterNet3, and only a bench run reads the result, so a host that can
-/// tell a bench run from a production run should turn it off for production.
-/// It is on until the host says otherwise, so that no report loses
-/// `step_wall` without the host having decided it. The per-pass timings and
-/// the step counts are recorded either way. Control thread only; a running
-/// worker keeps the setting it started with.
-pub fn set_preparation_step_timing(on: bool) {
-    STEP_TIMING.store(on, Ordering::Relaxed);
-}
-
 /// The mixer's suppression worker: SCHED_RR 5, pinned to CPU 0.
 ///
 /// RR 5 sits below RØDE's audio threads (RR 50, JACK's driver FIFO 51), so
@@ -152,7 +129,7 @@ pub fn set_preparation_step_timing(on: bool) {
 /// CPU 2. Measured on the mixer with DeepFilterNet3 on mic-1 and USB
 /// playback (2026-10-29), xruns per minute:
 ///
-/// - RR 5 floating over CPUs 1–3, f16 weights: about 2,700. The worker
+/// - RR 5 floating over CPUs 1-3, f16 weights: about 2,700. The worker
 ///   migrated about 2,000 times a second and never missed a deadline.
 /// - nice 0 on CPU 3: 119, and under the RR 50 threads sharing the core the
 ///   worker missed 57% of its deadlines, so most frames played dry.
@@ -213,16 +190,16 @@ pub struct Snapshot {
 /// is the worker's CPU time in both. Live values are individually atomic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Preparation {
-    pub enabled: bool,
     /// Wall and thread CPU time per preparation pass (one per publication
     /// that started preparing), against the frame period. The CPU time runs
     /// from the end of the frame's `process`, so it also holds the
     /// publication and bookkeeping between the two (a few microseconds).
     pub pass_wall: Timing,
     pub pass_cpu: Timing,
-    /// Whether this worker times each step (`set_preparation_step_timing`).
-    /// When false, `step_wall` stays empty: that is "not measured", not "no
-    /// slow steps". `pass_wall.max_ns` still bounds the longest step.
+    /// Whether this worker times each step. Every worker starts with it on;
+    /// only tests turn it off. When false, `step_wall` stays empty: that is
+    /// "not measured", not "no slow steps". `pass_wall.max_ns` still bounds
+    /// the longest step.
     pub step_timing: bool,
     /// Wall time of each step against a sixteenth of the frame period;
     /// `max_ns` is the longest step, which arriving input may wait out.
@@ -243,16 +220,47 @@ struct Preparing {
     pass_wall: metrics::Counters,
     pass_cpu: metrics::Counters,
     step_wall: metrics::Counters,
-    /// Set before the worker starts; see `set_preparation_step_timing`.
+    /// Set before the worker starts: on for every worker, off only in tests.
     step_timing: AtomicBool,
     steps: AtomicU64,
     skipped: AtomicU64,
     abandoned: AtomicU64,
 }
+/// What control has asked of the worker thread, in `Shared::stop`.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopRequest {
+    /// Keep running.
+    Run = 0,
+    /// Stop at once, leaving queued input unprocessed.
+    Cancel = 1,
+    /// Stop once the queued input has been processed.
+    Drain = 2,
+}
+impl StopRequest {
+    const RUN: u8 = Self::Run as u8;
+    const DRAIN: u8 = Self::Drain as u8;
+    /// Total: any value never written reads as Cancel, which stops the worker.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::RUN => Self::Run,
+            Self::DRAIN => Self::Drain,
+            _ => Self::Cancel,
+        }
+    }
+    const fn for_mode(mode: StopMode) -> Self {
+        match mode {
+            StopMode::Cancel => Self::Cancel,
+            StopMode::Drain => Self::Drain,
+        }
+    }
+}
 #[derive(Default)]
 struct Shared {
     wake: wake::Wake,
+    /// A `StopRequest`.
     stop: AtomicU8,
+    /// A `Termination`.
     termination: AtomicU8,
     failed: AtomicBool,
     completed: AtomicU64,
@@ -268,7 +276,6 @@ struct Shared {
     turnaround: metrics::Counters,
     worker_outliers: outlier::WorkerOutliers,
     endpoint_outliers: outlier::EndpointOutliers,
-    capture: capture::Capture,
     terminal: OnceLock<Terminal>,
     prep: Preparing,
 }
@@ -276,12 +283,39 @@ struct Shared {
 /// snapshots are quiescent and suitable for exact accounting.
 #[derive(Clone)]
 pub struct Telemetry(Arc<Shared>);
+impl Shared {
+    fn request_stop(&self, request: StopRequest) {
+        self.stop.store(request as u8, Ordering::Release);
+    }
+    fn stop_request(&self) -> StopRequest {
+        StopRequest::from_u8(self.stop.load(Ordering::Acquire))
+    }
+    fn set_termination(&self, termination: Termination) {
+        self.termination.store(termination as u8, Ordering::Release);
+    }
+}
+/// How far control-side retirement of a worker has gone.
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Termination {
-    Running,
-    Stopping,
-    TimedOut,
-    Joined,
+    Running = 0,
+    Stopping = 1,
+    TimedOut = 2,
+    Joined = 3,
+}
+impl Termination {
+    const RUNNING: u8 = Self::Running as u8;
+    const STOPPING: u8 = Self::Stopping as u8;
+    const TIMED_OUT: u8 = Self::TimedOut as u8;
+    /// Total: any value never written reads as Joined.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::RUNNING => Self::Running,
+            Self::STOPPING => Self::Stopping,
+            Self::TIMED_OUT => Self::TimedOut,
+            _ => Self::Joined,
+        }
+    }
 }
 impl Telemetry {
     /// Published exactly once by control-side retirement after the worker joins.
@@ -292,37 +326,22 @@ impl Telemetry {
     /// Retain this handle across control-side Dsp destruction. Only Joined
     /// confirms worker ownership ended; TimedOut must block replacement.
     pub fn termination(&self) -> Termination {
-        match self.0.termination.load(Ordering::Acquire) {
-            0 => Termination::Running,
-            1 => Termination::Stopping,
-            2 => Termination::TimedOut,
-            _ => Termination::Joined,
-        }
+        Termination::from_u8(self.0.termination.load(Ordering::Acquire))
     }
     /// The slowest and latest slow frames and the latest missed and late
     /// deadlines. Never waits for a writer: a record mid-update reads Busy.
     pub fn outliers(&self) -> Outliers {
         outlier::snapshot(&self.0.worker_outliers, &self.0.endpoint_outliers)
     }
-    /// Developer capture only; never resets counters or changes audio settings.
-    pub fn arm_capture(&self, epoch: u32) -> bool {
-        self.0.capture.arm(epoch)
-    }
-    pub fn capture_identity(&self) -> (u64, u32) {
-        self.0.capture.identity()
-    }
-    pub fn capture_metadata(&self) -> Recorded<CaptureMetadata> {
-        self.0.capture.metadata()
-    }
-    /// Cold diagnostic path, not routine telemetry: allocates a bounded copy.
-    pub fn capture_window(&self) -> Recorded<CaptureWindow> {
-        self.0.capture.snapshot()
+    /// The missed-deadline and late-result histories alone, as in
+    /// `outliers`, for a reader that polls them often.
+    pub fn histories(&self) -> (EventHistory, EventHistory) {
+        outlier::histories(&self.0.endpoint_outliers)
     }
     pub fn preparation(&self) -> Preparation {
         let (s, p) = (&self.0, &self.0.prep);
         let pass_cpu = p.pass_cpu.snapshot();
         Preparation {
-            enabled: true,
             pass_wall: p.pass_wall.snapshot(),
             pass_cpu,
             step_timing: p.step_timing.load(Ordering::Relaxed),
@@ -355,14 +374,6 @@ impl Telemetry {
     /// consumes the peak.
     pub fn take_turnaround_recent(&self) -> Option<u64> {
         match self.0.turnaround.take_recent() {
-            0 => None,
-            value => Some(value),
-        }
-    }
-    /// The worst model wall time since the last control-status read, on the
-    /// same terms as `take_turnaround_recent`.
-    pub fn take_wall_recent(&self) -> Option<u64> {
-        match self.0.wall.take_recent() {
             0 => None,
             value => Some(value),
         }
@@ -420,8 +431,7 @@ pub struct Worker {
     retirement_timed_out: bool,
 }
 impl Worker {
-    /// A threaded worker for the fixed geometry; `Endpoint::new` picks this
-    /// or the inline endpoint by the geometry's worker lead.
+    /// A threaded worker for the fixed geometry.
     pub fn new(lookahead: u8, options: WorkerOptions) -> Result<Self, Error> {
         Self::new_with_affinity(lookahead, options, AffinityScope::Inherited)
     }
@@ -430,38 +440,7 @@ impl Worker {
         options: WorkerOptions,
         scope: AffinityScope,
     ) -> Result<Self, Error> {
-        Self::new_with_affinity_and_lead(lookahead, None, options, scope)
-    }
-    /// `lead` replaces the model's scheduling allowance, for testing or
-    /// benchmarking a shorter or longer one; the prepared DSP must be
-    /// built with the same value. None keeps the admitted allowance.
-    pub fn new_with_affinity_and_lead(
-        lookahead: u8,
-        lead: Option<usize>,
-        options: WorkerOptions,
-        scope: AffinityScope,
-    ) -> Result<Self, Error> {
-        let mut geometry = Geometry::for_lookahead(lookahead)?;
-        if let Some(lead) = lead {
-            geometry.worker_lead_samples = lead;
-        }
-        if geometry.worker_lead_samples == 0 {
-            return Err(Error::InvalidAllowance);
-        }
-        scheduling::validate(options)?;
-        let model = VendorModel::new(lookahead)?;
-        Self::spawn_with_affinity(geometry, Box::new(model), options, scope)
-    }
-}
-impl Worker {
-    /// A worker with an explicit geometry (a lead override); the model and
-    /// the DSP prepared for the same geometry must match it.
-    fn with_geometry(
-        lookahead: u8,
-        geometry: Geometry,
-        options: WorkerOptions,
-        scope: AffinityScope,
-    ) -> Result<Self, Error> {
+        let geometry = Geometry::for_lookahead(lookahead)?;
         scheduling::validate(options)?;
         let model = VendorModel::new(lookahead)?;
         Self::spawn_with_affinity(geometry, Box::new(model), options, scope)
@@ -483,10 +462,7 @@ impl Worker {
         scope: AffinityScope,
     ) -> Result<Self, Error> {
         let shared = Arc::new(Shared::default());
-        shared
-            .prep
-            .step_timing
-            .store(STEP_TIMING.load(Ordering::Relaxed), Ordering::Relaxed);
+        shared.prep.step_timing.store(true, Ordering::Relaxed);
         let (input, worker_input) = queue::channel();
         let (worker_output, output) = queue::channel();
         let worker_shared = shared.clone();
@@ -532,7 +508,7 @@ impl Worker {
             thread::sleep(Duration::from_millis(1));
         };
         if let Err(e) = ready {
-            shared.stop.store(1, Ordering::Release);
+            shared.request_stop(StopRequest::Cancel);
             if !shared.wake.notify() {
                 shared.failed.store(true, Ordering::Release);
             }
@@ -596,17 +572,14 @@ impl Worker {
         let mode = *self.retirement_mode.get_or_insert(mode);
         let mut panicked = false;
         if let Some(handle) = self.thread.as_ref() {
-            self.shared.termination.store(1, Ordering::Release);
-            self.shared.stop.store(
-                if mode == StopMode::Drain { 2 } else { 1 },
-                Ordering::Release,
-            );
+            self.shared.set_termination(Termination::Stopping);
+            self.shared.request_stop(StopRequest::for_mode(mode));
             if !self.shared.wake.notify() {
                 self.shared.failed.store(true, Ordering::Release);
             }
             let Some(end) = Instant::now().checked_add(timeout) else {
                 self.retirement_timed_out = true;
-                self.shared.termination.store(2, Ordering::Release);
+                self.shared.set_termination(Termination::TimedOut);
                 return Err(Error::JoinTimeout);
             };
             if !completion_observed_before_deadline(
@@ -615,13 +588,13 @@ impl Worker {
                 Instant::now,
                 || thread::sleep(Duration::from_millis(1)),
             ) {
-                self.shared.termination.store(2, Ordering::Release);
+                self.shared.set_termination(Termination::TimedOut);
                 self.retirement_timed_out = true;
                 return Err(Error::JoinTimeout);
             }
             let result = self.thread.take().expect("owned handle").join();
             self.finished = true;
-            self.shared.termination.store(3, Ordering::Release);
+            self.shared.set_termination(Termination::Joined);
             if result.is_err() {
                 self.shared.failed.store(true, Ordering::Release);
                 panicked = true;
@@ -775,12 +748,10 @@ impl Worker {
                     self.pending = Some(due);
                     // Rare: the only clock read this path adds.
                     let at = metrics::now(false).unwrap_or(0);
-                    let event = EventRecord {
+                    self.shared.endpoint_outliers.missed(EventRecord {
                         sequence: due,
                         at_ns: at,
-                    };
-                    self.shared.endpoint_outliers.missed(event);
-                    self.shared.capture.missed(event);
+                    });
                 }
             } else if self.pending == Some(due) && self.choose(due) {
                 // A late result still serves the rest of its frame.
@@ -829,20 +800,13 @@ impl Worker {
         dry + (output - dry) * wet
     }
 
-    /// `process_sample` for a block, in place: `samples[i]` with `wet[i]`
-    /// becomes the output sample, and `voice[i]` is what `voice()` returns
-    /// after it. Output, voices, counters and the endpoint's state are bit
-    /// for bit those of the per-sample calls.
+    /// In-place block version of `process_sample`, matching its output, voice
+    /// scores, counters, and state bit-for-bit.
     ///
-    /// A sample that holds an event goes through `process_sample` itself:
-    /// the first sample of an output frame (where a result is chosen), the
-    /// sample that completes an input frame (queue push and wake), and
-    /// every sample while a late result is still awaited or after `finish`.
-    /// The samples between events run a plain loop with none of those
-    /// checks; a run also ends on the dry ring's last slot, where the loop
-    /// wraps the ring itself. The worker-failure flag is still read at
-    /// every sample that would play a result, so a failure takes effect at
-    /// the same sample as in `process_sample`.
+    /// Samples with events (output frame start, input frame completion, awaiting
+    /// a late result, or post-`finish`) fall through to `process_sample`; runs
+    /// between events use a tight loop bounded by the dry ring wrap. Worker
+    /// failure is still checked per sample so fallback starts on the exact sample.
     pub fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
         assert!(wet.len() >= samples.len() && voice.len() >= samples.len());
         let frame = self.geometry.frame_samples;
@@ -939,47 +903,24 @@ impl Worker {
         }
     }
 }
-/// The callback endpoint: a threaded `Worker` when its
-/// geometry has a worker lead, the `Inline` endpoint (the model runs on the
-/// calling thread as each frame completes) when the lead is zero.
+/// The callback endpoint: the model runs on a threaded `Worker`.
 pub enum Endpoint {
     Worker(Worker),
-    Inline(Inline),
 }
 impl Endpoint {
     pub fn new(lookahead: u8, options: WorkerOptions) -> Result<Self, Error> {
         Self::new_with_affinity(lookahead, options, AffinityScope::Inherited)
     }
-    /// `options` and `scope` apply to a threaded worker only.
     pub fn new_with_affinity(
         lookahead: u8,
         options: WorkerOptions,
         scope: AffinityScope,
     ) -> Result<Self, Error> {
-        Self::new_with_affinity_and_lead(lookahead, None, options, scope)
-    }
-    /// `lead` overrides the worker's scheduling allowance (see
-    /// `Worker::new_with_affinity_and_lead`); the inline endpoint has none.
-    pub fn new_with_affinity_and_lead(
-        lookahead: u8,
-        lead: Option<usize>,
-        options: WorkerOptions,
-        scope: AffinityScope,
-    ) -> Result<Self, Error> {
-        let mut geometry = Geometry::for_lookahead(lookahead)?;
-        if let Some(lead) = lead {
-            geometry.worker_lead_samples = lead;
-        }
-        if geometry.worker_lead_samples == 0 {
-            Inline::new(lookahead).map(Self::Inline)
-        } else {
-            Worker::with_geometry(lookahead, geometry, options, scope).map(Self::Worker)
-        }
+        Worker::new_with_affinity(lookahead, options, scope).map(Self::Worker)
     }
     pub fn geometry(&self) -> Geometry {
         match self {
             Self::Worker(w) => w.geometry(),
-            Self::Inline(i) => i.geometry(),
         }
     }
     pub fn latency_samples(&self) -> usize {
@@ -988,40 +929,28 @@ impl Endpoint {
     pub fn telemetry(&self) -> Telemetry {
         match self {
             Self::Worker(w) => w.telemetry(),
-            Self::Inline(i) => i.telemetry(),
         }
     }
     pub fn voice(&self) -> Option<f32> {
         match self {
             Self::Worker(w) => w.voice(),
-            Self::Inline(i) => i.voice(),
         }
     }
     pub fn finish(&mut self, mode: StopMode, timeout: Duration) -> Result<Terminal, Error> {
         match self {
             Self::Worker(w) => w.finish(mode, timeout),
-            Self::Inline(i) => Ok(i.finish(mode)),
         }
     }
     pub fn process_sample(&mut self, input: f32, wet: f32) -> f32 {
         match self {
             Self::Worker(w) => w.process_sample(input, wet),
-            Self::Inline(i) => i.process_sample(input, wet),
         }
     }
     /// `process_sample` for a block, in place, with each sample's `voice()`;
-    /// see `Worker::process_block`. The inline endpoint takes the samples one
-    /// at a time.
+    /// see `Worker::process_block`.
     pub fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
         match self {
             Self::Worker(w) => w.process_block(samples, wet, voice),
-            Self::Inline(i) => {
-                assert!(wet.len() >= samples.len() && voice.len() >= samples.len());
-                for ((sample, &wet), voice) in samples.iter_mut().zip(wet).zip(voice) {
-                    *sample = i.process_sample(*sample, wet);
-                    *voice = i.voice();
-                }
-            }
         }
     }
 }
@@ -1035,13 +964,6 @@ impl Suppression for Endpoint {
     fn drain(&mut self, timeout: Duration) -> Result<(), RetirementError> {
         match self {
             Self::Worker(w) => w.drain_provider(timeout),
-            Self::Inline(i) => {
-                if i.finish(StopMode::Drain).snapshot.failed {
-                    Err(RetirementError::WorkerFailed)
-                } else {
-                    Ok(())
-                }
-            }
         }
     }
     fn process_sample(&mut self, input: f32, wet: f32) -> f32 {
@@ -1074,18 +996,17 @@ fn run(
 ) {
     let mut expected = 0;
     let mut recovery = 0;
-    let mut capture = capture::Recorder::new(&s.capture);
     let time_steps = s.prep.step_timing.load(Ordering::Relaxed);
     loop {
         // Observe before checking stop/queue: any subsequent producer or
         // retirement notification prevents sleeping through that transition.
         let observed = s.wake.observe();
-        let stop = s.stop.load(Ordering::Acquire);
-        if stop == 1 || s.failed.load(Ordering::Acquire) {
+        let stop = s.stop_request();
+        if stop == StopRequest::Cancel || s.failed.load(Ordering::Acquire) {
             break;
         }
         let Some(mut frame) = input.pop() else {
-            if stop == 2 {
+            if stop == StopRequest::Drain {
                 break;
             }
             if !s.wake.wait(observed) {
@@ -1096,18 +1017,9 @@ fn run(
         };
         let wall = metrics::now(false);
         let cpu = metrics::now(true);
-        capture.begin(wall);
-        let mut capture_frame = CaptureFrame {
-            sequence: frame.sequence,
-            submitted_ns: frame.submitted_ns,
-            started_ns: wall,
-            input_pending_after_pop: input.pending(),
-            ..CaptureFrame::default()
-        };
         if frame.sequence != expected {
             if model.reset().is_err() {
                 s.failed.store(true, Ordering::Release);
-                capture.record(capture_frame);
                 break;
             }
             recovery = g.intrinsic_delay_samples.div_ceil(g.frame_samples);
@@ -1128,15 +1040,12 @@ fn run(
             Ok(voice) => frame.voice = voice,
             Err(_) => {
                 s.failed.store(true, Ordering::Release);
-                capture.record(capture_frame);
                 break;
             }
         }
         expected = frame.sequence + 1;
         let cpu_end = metrics::now(true);
         let wall_end = metrics::now(false);
-        capture_frame.finished_ns = wall_end;
-        capture_frame.cpu_ns = cpu.zip(cpu_end).and_then(|(a, b)| b.checked_sub(a));
         s.queue_wait
             .record(frame.submitted_ns, wall, g.worker_allowance_ns());
         s.cpu.record(cpu, cpu_end, g.frame_budget_ns());
@@ -1152,8 +1061,6 @@ fn run(
             s.output_drops.fetch_add(1, Ordering::Relaxed);
         } else {
             let published = metrics::now(false);
-            capture_frame.output_published = true;
-            capture_frame.published_ns = published;
             s.turnaround
                 .record(frame.submitted_ns, published, g.worker_allowance_ns());
             if let (Some(submitted), Some(started), Some(finished), Some(published)) =
@@ -1176,23 +1083,16 @@ fn run(
                 );
             }
         }
-        capture.record(capture_frame);
         s.completed.fetch_add(1, Ordering::Release);
         prepare(model.as_mut(), &input, s, g, cpu_end, time_steps);
     }
 }
 
-/// After a frame's result is published and counted: the model's bounded
-/// preparation steps for the next frame, while no input is queued, no stop
-/// is requested and the worker has not failed. Checked before each step
-/// only, so input arriving during a step waits for it to finish (the next
-/// frame then uses what it prepared). Never spins or sleeps.
+/// Runs bounded model preparation steps for the next frame while idle (no input
+/// queued, no stop requested, not failed). Never spins or sleeps.
 ///
-/// `process_cpu_end` is the thread CPU reading taken when the frame's
-/// `process` returned; the pass's CPU time is counted from it, which saves a
-/// clock system call per frame and adds the publication in between to
-/// `pass_cpu`. With `time_steps` off the pass reads the wall clock twice,
-/// whatever the number of steps.
+/// `process_cpu_end` is the thread CPU reading taken right after `process`
+/// returned, avoiding an extra clock syscall per frame.
 fn prepare(
     model: &mut dyn Model,
     input: &Consumer,
@@ -1204,7 +1104,7 @@ fn prepare(
     let p = &s.prep;
     let blocked = || {
         input.pending() != 0
-            || s.stop.load(Ordering::Acquire) != 0
+            || s.stop_request() != StopRequest::Run
             || s.failed.load(Ordering::Acquire)
     };
     if model.prep_pending() == 0 {
@@ -1244,8 +1144,5 @@ fn prepare(
     p.pass_wall.record(wall, at, g.frame_budget_ns());
 }
 
-#[cfg(test)]
-#[path = "tests/gru_prep.rs"]
-mod gru_prep_tests;
 #[cfg(test)]
 mod tests;

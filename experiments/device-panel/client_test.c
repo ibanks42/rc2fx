@@ -1,4 +1,4 @@
-/* Run only against the parent test's local, runtime-less Rust controller. */
+/* Integration test run against the local Rust test controller socket. */
 #include "control.c"
 #include <inttypes.h>
 #include <stdlib.h>
@@ -41,9 +41,9 @@ int main(int argc,char **argv) {
     CHECK(strcmp(initial.presets[0].name,"VOICE")==0);
     CHECK(initial.presets[0].id[0]!='\0'&&initial.revision<UINT64_MAX);
 
-    /* Do not gate on ready: this fixture deliberately has no audio runtime.
-     * Pass the real generation to the C serializer; apply must zero it on the
-     * wire, as required by Rust's actual decoder (unlike processing toggles). */
+    /* The test fixture has no audio runtime, so skip checking ready.
+     * Pass a non-zero generation to verify that preset apply zeroes it on the
+     * wire (only processing toggles carry a generation). */
     struct UiCommand apply={
         .op=1,.revision=initial.revision,.generation=initial.generation
     };
@@ -57,7 +57,7 @@ int main(int argc,char **argv) {
     CHECK(apply.op==original.op&&apply.enabled==original.enabled);
     CHECK(strcmp(apply.id,original.id)==0);
 
-    CHECK(rpc(fd,&apply,&reply,&status)); /* The exact same, now stale request. */
+    CHECK(rpc(fd,&apply,&reply,&status)); /* Resending the same revision should fail with 409. */
     expect_status(status,409);
     CHECK(rpc(fd,&snapshot,&reply,&status));
     expect_status(status,200);

@@ -1,6 +1,6 @@
 //! The worker's staged preparation after each published frame: when it runs,
 //! when it stops, and that it never changes a result.
-use super::*;
+use super::super::*;
 use std::{
     cell::Cell,
     sync::{Mutex, mpsc},
@@ -15,7 +15,7 @@ enum Event {
 #[derive(Clone, Copy)]
 enum Action {
     Push(u64),
-    Stop(u8),
+    Stop(StopRequest),
     Fail,
 }
 
@@ -40,7 +40,7 @@ impl Rig {
                 assert!(self.shared.wake.notify());
             }
             Action::Stop(mode) => {
-                self.shared.stop.store(mode, Ordering::Release);
+                self.shared.request_stop(mode);
                 assert!(self.shared.wake.notify());
             }
             Action::Fail => self.shared.failed.store(true, Ordering::Release),
@@ -190,13 +190,12 @@ fn steps(n: usize) -> impl Iterator<Item = Event> {
 
 #[test]
 fn an_idle_worker_prepares_every_step_after_publishing() {
-    let (events, prep) = scripted(&[0], &[], &[(LAYERS, Action::Stop(2))]);
+    let (events, prep) = scripted(&[0], &[], &[(LAYERS, Action::Stop(StopRequest::Drain))]);
     let expected: Vec<_> = [Event::Process(0)]
         .into_iter()
         .chain(steps(LAYERS))
         .collect();
     assert_eq!(events, expected);
-    assert!(prep.enabled);
     assert_eq!(
         (prep.steps, prep.skipped, prep.abandoned),
         (LAYERS as u64, 0, 0)
@@ -219,7 +218,10 @@ fn without_step_timing_the_pass_is_still_measured() {
             &[0],
             step_timing,
             &[],
-            &[(2, Action::Push(1)), (2 + LAYERS, Action::Stop(2))],
+            &[
+                (2, Action::Push(1)),
+                (2 + LAYERS, Action::Stop(StopRequest::Drain)),
+            ],
         );
         let expected: Vec<_> = [Event::Process(0)]
             .into_iter()
@@ -251,29 +253,14 @@ fn without_step_timing_the_pass_is_still_measured() {
     }
 }
 
-/// A worker takes the process-wide setting when it starts.
+/// Every worker times each preparation step.
 #[test]
-fn workers_start_with_the_process_wide_step_timing_setting() {
-    // It is on until a host turns it off.
-    let worker = |expected: bool| {
-        let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
-        assert_eq!(worker.telemetry().preparation().step_timing, expected);
-        worker
-            .finish(StopMode::Cancel, Duration::from_secs(5))
-            .unwrap();
-    };
-    worker(true);
-    // Other tests start workers concurrently; they do not read `step_wall`,
-    // so a setting that is briefly off does not disturb them. The loop ends
-    // with the default restored.
-    for on in [false, true] {
-        crate::set_preparation_step_timing(on);
-        let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
-        assert_eq!(worker.telemetry().preparation().step_timing, on);
-        worker
-            .finish(StopMode::Cancel, Duration::from_secs(5))
-            .unwrap();
-    }
+fn workers_start_with_step_timing_on() {
+    let mut worker = Worker::new(0, WorkerOptions::default()).unwrap();
+    assert!(worker.telemetry().preparation().step_timing);
+    worker
+        .finish(StopMode::Cancel, Duration::from_secs(5))
+        .unwrap();
 }
 
 /// Three preparation steps of at least two milliseconds each after every
@@ -297,7 +284,7 @@ impl Model for Slow {
         thread::sleep(Duration::from_millis(2));
         self.pending -= 1;
         if self.pending == 0 {
-            self.rig.act(Action::Stop(2));
+            self.rig.act(Action::Stop(StopRequest::Drain));
         }
         true
     }
@@ -332,7 +319,7 @@ fn the_pass_wall_time_spans_its_steps_with_or_without_step_timing() {
 
 #[test]
 fn queued_input_at_publication_prevents_preparation() {
-    let (events, prep) = scripted(&[0, 1], &[], &[(LAYERS, Action::Stop(2))]);
+    let (events, prep) = scripted(&[0, 1], &[], &[(LAYERS, Action::Stop(StopRequest::Drain))]);
     let expected: Vec<_> = [Event::Process(0), Event::Process(1)]
         .into_iter()
         .chain(steps(LAYERS))
@@ -348,7 +335,10 @@ fn input_arriving_between_steps_stops_preparation() {
     let (events, prep) = scripted(
         &[0],
         &[],
-        &[(2, Action::Push(1)), (2 + LAYERS, Action::Stop(2))],
+        &[
+            (2, Action::Push(1)),
+            (2 + LAYERS, Action::Stop(StopRequest::Drain)),
+        ],
     );
     let expected: Vec<_> = [Event::Process(0)]
         .into_iter()
@@ -365,14 +355,18 @@ fn input_arriving_between_steps_stops_preparation() {
 
 #[test]
 fn a_stop_or_failure_ends_preparation_after_the_current_step() {
-    for action in [Action::Stop(1), Action::Stop(2), Action::Fail] {
+    for action in [
+        Action::Stop(StopRequest::Cancel),
+        Action::Stop(StopRequest::Drain),
+        Action::Fail,
+    ] {
         let (events, prep) = scripted(&[0], &[], &[(2, action)]);
         let expected: Vec<_> = [Event::Process(0)].into_iter().chain(steps(2)).collect();
         assert_eq!(events, expected);
         assert_eq!((prep.steps, prep.abandoned), (2, 1));
     }
     // Already stopping when the frame is published: nothing runs.
-    let (events, prep) = scripted(&[0], &[(0, Action::Stop(2))], &[]);
+    let (events, prep) = scripted(&[0], &[(0, Action::Stop(StopRequest::Drain))], &[]);
     assert_eq!(events, [Event::Process(0)]);
     assert_eq!((prep.steps, prep.skipped), (0, 1));
 }
@@ -384,7 +378,10 @@ fn a_sequence_gap_resets_before_the_next_frame() {
     let (events, _) = scripted(
         &[0],
         &[],
-        &[(3, Action::Push(2)), (3 + LAYERS, Action::Stop(2))],
+        &[
+            (3, Action::Push(2)),
+            (3 + LAYERS, Action::Stop(StopRequest::Drain)),
+        ],
     );
     let expected: Vec<_> = [Event::Process(0)]
         .into_iter()
@@ -405,7 +402,7 @@ fn preparation_runs_only_with_the_flag() {
         let stopper = rig.clone();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
-            stopper.act(Action::Stop(2));
+            stopper.act(Action::Stop(StopRequest::Drain));
         });
         Box::new(Scripted {
             rig,
@@ -418,7 +415,6 @@ fn preparation_runs_only_with_the_flag() {
     });
     let events = log.lock().unwrap().clone();
     let prep = Telemetry(rig.shared.clone()).preparation();
-    assert!(prep.enabled);
     let expected: Vec<_> = [Event::Process(0)]
         .into_iter()
         .chain(steps(LAYERS))
@@ -462,7 +458,7 @@ fn deep_filter_results_match_the_unprepared_model() {
                     );
                     assert!(self.rig.shared.wake.notify());
                 }
-                None => self.rig.act(Action::Stop(2)),
+                None => self.rig.act(Action::Stop(StopRequest::Drain)),
             }
         }
     }

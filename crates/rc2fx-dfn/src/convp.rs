@@ -1,54 +1,48 @@
-//! df_convp's temporal convolution: `kt` frames of c0 to the deep filter's
-//! coefficient pathway, in two groups.
+//! Temporal convolution for `df_convp`: `kt` frames of `c0` feeding the deep
+//! filter's coefficient path, split into two groups.
 //!
-//! Per group it is a pointwise convolution over `kt` frames of the group's
-//! c0 channels. Output n sums its taps in this order, which the results
-//! depend on and which this module keeps exactly: taps 0 to kt-2 read frames
-//! n-(kt-2) to n, oldest first, and the last tap, kt-1, reads frame n-(kt-1).
-//! The engine has summed them this way since it was written. A causal
-//! convolution in the training framework pairs tap j with frame n-(kt-1)+j
-//! instead; whether the difference is intended is an open question, and
-//! changing the pairing would change output samples, so it is left alone
-//! here.
+//! Within each group this is a pointwise convolution over `kt` frames of `c0`.
+//! Output `n` accumulates its taps in a specific order that we preserve
+//! bit-for-bit: taps `0..kt-1` read frames `n-(kt-2)..=n` (oldest first), and
+//! the final tap `kt-1` reads frame `n-(kt-1)`. That ordering has been in the
+//! engine from the beginning; the training code's causal conv pairs tap `j`
+//! with frame `n-(kt-1)+j` instead, and we leave it untouched so output samples
+//! don't shift.
 //!
-//! Instead of keeping `kt` frames of c0 and reading them all for every
-//! output, each frame is added, as it arrives, to the running sum of every
-//! output it belongs to: tap j of frame n goes to output n+(kt-2)-j. Frame n
-//! is the last frame output n waits for except for its final tap, which
-//! needs the frame kt-1 back; that one frame per output is all the history
-//! kept. Each output still receives the same multiply-adds in the same
-//! order, so the sums are bit for bit those of the full pointwise
-//! convolution (`reference::History`, kept for the tests).
+//! To avoid storing and re-reading all `kt` frames of `c0` on every step, each
+//! incoming frame is accumulated into the running sums of every future output
+//! that uses it (tap `j` of frame `n` goes into output `n+(kt-2)-j`). When
+//! frame `n` arrives, output `n` only still needs its final tap from frame
+//! `n-(kt-1)`, so a single-frame-per-slot ring of length `kt-1` is the only
+//! history we keep. Every output gets the exact same multiply-adds in the exact
+//! same order, matching the full-history reference (`reference::History`)
+//! bit-for-bit.
 use crate::kernels::{Weights, pack_pointwise, pointwise_onto};
 
 pub(crate) struct Convp {
-    /// Per group, [op][kt * gin] packed for `pointwise` (four outputs per
-    /// input), the `half` outputs padded to `op` with zero rows.
+    /// Per group, `[op][kt * gin]` weights packed for `pointwise` (4 outputs
+    /// per input), with `half` outputs zero-padded to `op`.
     w: Vec<Weights>,
-    /// Input channels per group.
     gin: usize,
-    /// Outputs per group.
     half: usize,
     kt: usize,
-    /// Bins per channel.
+    /// Frequency bins per channel.
     f: usize,
-    /// Per group, kt-1 frames of the group's c0 ([gin][f] each): frame m is
-    /// in slot m % (kt-1) until frame m+kt-1 has read it and takes its place.
+    /// Per group, `kt - 1` frames of `c0` (`[gin][f]` each). Frame `m` sits in
+    /// slot `m % (kt - 1)` until frame `m + kt - 1` consumes and replaces it.
     ring: Vec<Vec<f32>>,
-    /// Per group, `slots()` running sums ([half][f] each): output m's is in
-    /// slot m % slots(). The slot of the output finished last stays valid
-    /// until the next frame arrives.
+    /// Per group, `slots()` running sums (`[half][f]` each), indexed by
+    /// `m % slots()`. The most recently completed output stays valid until the
+    /// next `step`.
     sums: Vec<Vec<f32>>,
-    /// The next frame's index modulo `slots()`.
     pos: usize,
-    /// The same convolution by the original method; it runs instead while
-    /// `crate::reference` is on.
+    /// Original full-history implementation, used when `crate::reference` is enabled.
     #[cfg(test)]
     reference: reference::History,
 }
 
 impl Convp {
-    /// `w` is the conv's [2 * half][gin][kt][1] weight.
+    /// Expects `w` in `[2 * half][gin][kt][1]` layout.
     pub(crate) fn new(w: &[f32], half: usize, gin: usize, kt: usize, f: usize) -> Self {
         assert!(kt > 0 && w.len() == 2 * half * gin * kt);
         let op = half.next_multiple_of(4);
@@ -84,7 +78,6 @@ impl Convp {
         (self.kt - 1).max(1)
     }
 
-    /// Forgets every frame: zero sums are what zero frames add up to.
     pub(crate) fn reset(&mut self) {
         self.ring.iter_mut().for_each(|r| r.fill(0.));
         self.sums.iter_mut().for_each(|s| s.fill(0.));
@@ -93,8 +86,7 @@ impl Convp {
         self.reference.reset();
     }
 
-    /// Adds one frame of c0 ([2 * gin][f]) and finishes its output, which
-    /// `mix` then reads.
+    /// Push one frame of `c0` (`[2 * gin][f]`) and finalize the current output for `mix`.
     pub(crate) fn step(&mut self, c0: &[f32]) {
         #[cfg(test)]
         if crate::reference::on() {
@@ -111,16 +103,16 @@ impl Convp {
             .enumerate()
         {
             let new = &c0[g * slot..(g + 1) * slot];
-            // Every tap but the last reads the new frame: tap j belongs to
-            // the output kt-2-j frames ahead. Tap 0 starts a new output's
-            // sum, in the slot of the output finished one frame ago.
+            // Taps 0..kt-1 consume the new frame; tap j feeds the output
+            // kt-2-j frames ahead. Tap 0 overwrites the slot just finished on
+            // the previous step.
             for j in 0..kt - 1 {
                 let at = (pos + kt - 2 - j) % slots;
                 let y = &mut sums[at * sum..(at + 1) * sum];
                 pointwise_onto(w, half, total, j * gin, gin, new, f, y, j == 0);
             }
-            // The last tap finishes this frame's output from the frame kt-1
-            // back, which the new frame then replaces.
+            // Final tap finishes the current output using the frame from kt-1
+            // steps ago, then stores the new frame in that slot.
             let y = &mut sums[pos * sum..(pos + 1) * sum];
             if kt == 1 {
                 pointwise_onto(w, half, total, 0, gin, new, f, y, true);
@@ -139,17 +131,14 @@ impl Convp {
         self.pos = (pos + 1) % slots;
     }
 
-    /// Group `g`'s output of the last `step`, [half][f].
     fn out(&self, g: usize) -> &[f32] {
         let sum = self.half * self.f;
         let at = (self.pos + self.slots() - 1) % self.slots();
         &self.sums[g][at * sum..(at + 1) * sum]
     }
 
-    /// The 1x1 convolution after the temporal one, over the last `step`'s
-    /// outputs of both groups: z[o][f] = sum_i pw[o][i] y[i][f], each sum
-    /// starting from zero and taking its inputs in order. z is
-    /// [2 * half][f].
+    /// 1x1 pointwise mix over both groups' latest outputs:
+    /// `z[o][f] = sum_i pw[o][i] * y[i][f]` (`z` has shape `[2 * half][f]`).
     pub(crate) fn mix(&self, pw: &[f32], z: &mut [f32]) {
         #[cfg(test)]
         if crate::reference::on() {
@@ -158,7 +147,6 @@ impl Convp {
         let (half, f) = (self.half, self.f);
         let out = 2 * half;
         let y = [self.out(0), self.out(1)];
-        // Every output reads every conv output over every bin.
         #[cfg(test)]
         for y in y {
             use crate::traffic::*;
@@ -177,9 +165,7 @@ impl Convp {
     }
 }
 
-/// The convolution and the mix after it as they were first written, kept as
-/// the tests' reference: `kt` frames of c0 per group, read in full by
-/// `pointwise` for every output.
+/// Original full-history convolution and mix, kept as a test reference.
 #[cfg(test)]
 pub(crate) mod reference {
     use crate::kernels::{Weights, pointwise};
@@ -189,13 +175,11 @@ pub(crate) mod reference {
         half: usize,
         kt: usize,
         nb_df: usize,
-        // Per group, 2 kt slots of [gin][nb_df]; frame n goes to slots
-        // n % kt and n % kt + kt, so the last kt frames are always
-        // contiguous.
+        // Mirrored ring (2 * kt slots of [gin][nb_df]) so the last kt frames
+        // are always contiguous.
         hist: Vec<Vec<f32>>,
         pos: usize,
-        /// [2][op][nb_df]: the last step's outputs, zero-padded rows
-        /// included.
+        /// `[2][op][nb_df]` output buffer including zero-padded rows.
         y: Vec<f32>,
     }
 
@@ -217,7 +201,6 @@ pub(crate) mod reference {
             self.pos = 0;
         }
 
-        /// `Convp::step` by the original method, with `Convp`'s weights.
         pub(crate) fn step(&mut self, w: &[Weights], c0: &[f32]) {
             let (gin, kt, nb_df) = (self.gin, self.kt, self.nb_df);
             let op = self.half.next_multiple_of(4);
@@ -244,13 +227,11 @@ pub(crate) mod reference {
             }
         }
 
-        /// Group `g`'s output of the last `step`, [half][nb_df].
         pub(crate) fn out(&self, g: usize) -> &[f32] {
             let op = self.half.next_multiple_of(4);
             &self.y[g * op * self.nb_df..][..self.half * self.nb_df]
         }
 
-        /// `Convp::mix` as it was first written.
         pub(crate) fn mix(&self, pw: &[f32], z: &mut [f32]) {
             let (half, nb_df) = (self.half, self.nb_df);
             let (out, op) = (2 * half, half.next_multiple_of(4));
@@ -279,8 +260,8 @@ mod tests {
         x.iter().map(|v| v.to_bits()).collect()
     }
 
-    /// Runs `frames` through both forms and compares every output; returns
-    /// whether any output was nonzero. `exact` also compares NaN payloads.
+    // Run `frames` through both implementations and compare outputs; returns
+    // true if any output was nonzero. `exact` also checks NaN payloads.
     fn compare(
         c: &mut Convp,
         h: &mut reference::History,
@@ -303,9 +284,8 @@ mod tests {
         nonzero
     }
 
-    /// The model's shape and every awkward one: one to six taps, outputs
-    /// that fill blocks of four or leave one to three over, 16-bin blocks
-    /// with and without the 8-bin tail.
+    // Covers the model's shape plus edge cases: 1..=6 taps, odd output counts,
+    // and 16-bin blocks with/without an 8-bin tail.
     #[test]
     fn running_sums_match_the_full_convolution_bit_for_bit() {
         let mut rng = Rng(0x0dd_ba11_5eed_f00d);
@@ -322,8 +302,7 @@ mod tests {
             (8, 4, 1, 16),
             (9, 2, 3, 32),
         ];
-        // Under each float mode too: flush-to-zero changes what the sums
-        // of subnormals are, in both forms alike.
+        // Check all float modes too; FTZ affects subnormal sums in both paths.
         each_float_mode(|mode| {
             for (half, gin, kt, f) in shapes {
                 let what = format!("{mode}: half {half} gin {gin} kt {kt} f {f}");
@@ -331,13 +310,11 @@ mod tests {
                 let mut c = Convp::new(&w, half, gin, kt, f);
                 let mut h = reference::History::new(half, gin, kt, f);
                 for class in 0..CLASSES {
-                    // Inputs without infinities or NaNs must agree in every
-                    // bit; with them, NaN payloads are left to the compiler's
-                    // operand order (see `glue`).
+                    // Finite inputs must match bit-for-bit; NaN payloads depend
+                    // on compiler operand order (see `glue`).
                     let exact = class < CLASSES - 1;
                     let frames: Vec<Vec<f32>> = (0..3 * kt + 7)
                         .map(|n| match n % 11 {
-                            // Silence, and negative zeros.
                             4 => vec![0.; 2 * gin * f],
                             9 => vec![-0.; 2 * gin * f],
                             _ => rng.values(class, 2 * gin * f),
@@ -345,7 +322,7 @@ mod tests {
                         .collect();
                     let nonzero = compare(&mut c, &mut h, &frames, exact);
                     assert!(nonzero, "{what}: the outputs are not trivially zero");
-                    // A reset part way, with outputs still pending.
+                    // Reset mid-stream while sums are still in flight.
                     c.reset();
                     h.reset();
                     compare(&mut c, &mut h, &frames[..kt + 2], exact);
@@ -356,8 +333,6 @@ mod tests {
         });
     }
 
-    /// The mix after the convolution, against its original form on the
-    /// original padded layout.
     #[test]
     fn mix_matches_the_original_bit_for_bit() {
         let mut rng = Rng(0xabad_1dea_0bad_c0de);
@@ -382,12 +357,10 @@ mod tests {
         }
     }
 
-    /// With the reference switch on, `step` runs the original form. Both
-    /// forms give the same sums, so the sums cannot show which one ran; the
-    /// traffic accounting can. The running sums are stored as state, and the
-    /// original form stores only its activations. Without this the
-    /// whole-model comparison in `tests.rs` could compare the running sums
-    /// with themselves and never fail.
+    // Verify that `reference::set(true)` actually dispatches to the reference
+    // path. Since both paths produce identical sums, we check via state-store
+    // traffic accounting (the running-sum path writes `Class::State`; the
+    // reference path doesn't).
     #[test]
     fn the_reference_switch_selects_the_original_form() {
         use crate::traffic::{self, Class};
@@ -417,14 +390,12 @@ mod tests {
             stores
         };
         assert_eq!(state_stores(true), 0, "the original form");
-        // Per group: one store of sums per tap, and the ring slot.
+        // Per group: one state store per tap plus the ring slot write.
         assert_eq!(state_stores(false), 2 * (kt + 1), "the running sums");
     }
 
-    /// `step` on frames of c0 that each end at an inaccessible page, and
-    /// again that each begin at one (`Fenced`): no load leaves the frame,
-    /// and the sums are still the full convolution's.
-    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    // Guard-page check that `step` never reads past either end of `c0`.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn step_reads_nothing_outside_its_frame() {
         use crate::glue::tests::Fenced;
@@ -446,7 +417,6 @@ mod tests {
         }
     }
 
-    /// Outputs after a reset are those of a new instance.
     #[test]
     fn reset_forgets_pending_sums_and_history() {
         let mut rng = Rng(42);

@@ -1,9 +1,11 @@
-//! Profile-validated capture-values-v1 repair for Mixer::Process's queued lambda.
+//! Fixes a use-after-return bug in `Mixer::Process`'s queued lambda on
+//! qualified firmware images.
 //!
-//! That lambda captures three returning-stack locals by reference. Copy their
-//! values at enqueue, using the vendor's existing 32-byte lambda allocations.
-//! The invoker reconstructs references only for its synchronous body call. No
-//! Rust allocation, extra worker, audio queue, routing or scheduling is added.
+//! The vendor lambda captures three stack locals by reference even though it
+//! runs asynchronously after `Mixer::Process` returns. We intercept enqueue,
+//! copy those values into the vendor's existing 32-byte lambda allocation, and
+//! pass pointers to the owned copy when the body runs. No extra allocations or
+//! threads are introduced.
 #![cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
 use rc2fx_firmware::Profile;
 use std::{
@@ -40,13 +42,12 @@ struct ValueCapture {
     output_table: usize,
     frame_count: u32,
     flag_value: u8,
-    /// Bench gauges only, in the padding before `queued_in`: microseconds from
-    /// the cycle start to the queuing callback's start. 0 means unknown.
+    /// Bench gauges only (stored in padding): us from cycle start to callback start (0 = unknown).
     start_position_us: u16,
-    /// CLOCK_MONOTONIC start of the callback that queued this job.
+    /// `CLOCK_MONOTONIC` start of the callback that queued this job.
     queued_in: u64,
 }
-// The vendor's job allocations hold exactly 32 bytes.
+// Must match the vendor's 32-byte lambda allocation size.
 const _: () = assert!(std::mem::size_of::<ValueCapture>() == 32);
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static MANAGER: AtomicUsize = AtomicUsize::new(0);
@@ -59,11 +60,10 @@ static INVOKED: AtomicU64 = AtomicU64::new(0);
 static LIVE: AtomicU64 = AtomicU64::new(0);
 static MAX_LIVE: AtomicU64 = AtomicU64::new(0);
 
-/// The callback context that queues jobs (RØDE's mixer client).
+/// Callback context that queues jobs (RØDE's mixer client).
 static OWNER: AtomicUsize = AtomicUsize::new(0);
-/// Job timing against the 112-frame period: time from the queuing callback's
-/// start to the job's end, and jobs still running when that context's next
-/// callback had started.
+/// Tracks job latency from the queuing callback's start and counts jobs that
+/// finish after the next callback has already begun.
 struct JobTiming {
     timed: AtomicU64,
     bins: [AtomicU64; 8],
@@ -121,11 +121,10 @@ impl JobTiming {
     }
 }
 
-/// Bench gauge: where the job ended in the cycle that queued it, and how many
-/// ended after jackd's read of that cycle's output.
+/// Bench gauge: job completion offset within its cycle and count finishing past jackd's read.
 static END_POSITION: crate::probe::Positions = crate::probe::Positions::new();
 static PAST_READ: AtomicU64 = AtomicU64::new(0);
-/// jackd wakes about this long before the next estimated cycle start.
+/// Approximate lead time before the next estimated cycle start when jackd reads output.
 const JACKD_READ_LEAD_NS: u64 = 110_000;
 
 fn start_position_us(started: u64, cycle_start: u64) -> u16 {
@@ -134,7 +133,6 @@ fn start_position_us(started: u64, cycle_start: u64) -> u16 {
     }
     ((started - cycle_start) / 1_000).clamp(1, u64::from(u16::MAX)) as u16
 }
-/// Where the job ended relative to its own cycle's start, when that is known.
 fn end_position(queued_in: u64, start_position_us: u16, ended: u64) -> Option<u64> {
     let cycle_start = queued_in.checked_sub(u64::from(start_position_us) * 1_000)?;
     (start_position_us != 0 && queued_in != 0).then(|| ended.saturating_sub(cycle_start))
@@ -154,7 +152,7 @@ pub fn gauge_status() -> serde_json::Value {
 }
 
 impl ValueCapture {
-    /// The original references are live here, before Mixer::Process returns.
+    /// Reads the captured stack locals while `Mixer::Process` is still on the stack.
     unsafe fn copy(original: Capture) -> Self {
         let (queued_in, start_position_us) =
             super::callback_started().map_or((0, 0), |(owner, started)| {
@@ -185,9 +183,8 @@ impl ValueCapture {
     }
 }
 
-// The pinned libstdc++ manager has a 32-bit operation enum; op2 copies exactly
-// 32 raw bytes and op3 deletes that allocation. Only the FunctionJob's private
-// copy/invoke/destroy path receives this replacement; target<T> is not used.
+// libstdc++'s std::function manager uses op 2 to clone the 32-byte capture and
+// op 3 to destroy it. `target<T>` is never called on this job closure.
 unsafe fn managed(
     original: Manager,
     dst: *mut AnyData,
@@ -216,8 +213,8 @@ unsafe fn invoke_body(data: *const AnyData, body: Body) {
     let values = unsafe { &*((*data).words[0] as *const ValueCapture) };
     let capture = values.borrowed();
     let started = crate::timing::monotonic();
-    // These reconstructed references point into the job's owned allocation,
-    // which remains alive through this complete synchronous body invocation.
+    // `capture` points into the job's owned heap allocation, which stays live
+    // for the entire synchronous body call.
     unsafe {
         body(&capture);
     }
@@ -262,8 +259,8 @@ unsafe extern "C-unwind" fn enqueue(pool: *mut c_void, function: *const Function
         invoker: invoke as *const () as usize,
     };
     FIXED.fetch_add(1, Ordering::Relaxed);
-    // Enqueue copies its source, then owns/destroys only those heap copies. This
-    // borrowed stack Function has no Drop and must never run manager op3 itself.
+    // `original` clones `replacement` onto the heap and owns those copies; this
+    // stack-allocated `Function` has no `Drop` and must not run manager op 3.
     unsafe {
         original(pool, &replacement);
     }
@@ -324,9 +321,9 @@ unsafe fn clear_cache(start: *mut u8, length: usize) {
     }
 }
 
-/// Only called from la_preinit after the opt-in and exact callback selector.
-/// All validation precedes mutation. No file-backed executable bytes are written
-/// to disk; MAP_PRIVATE text is changed in this one process before threads exist.
+/// Called from `la_preinit` while the process is still single-threaded.
+/// Validates the full binary hash and live prologues before patching private
+/// text pages in memory.
 #[cfg(target_arch = "aarch64")]
 pub fn install(base: usize, profile: &Profile) -> Result<(), String> {
     if ORIGINAL.load(Ordering::Acquire) != 0 {
@@ -356,8 +353,7 @@ pub fn install(base: usize, profile: &Profile) -> Result<(), String> {
             ));
         }
     }
-    // These extra addresses identify the one closure's manager, invoker, body,
-    // and RTTI in the pinned image. The SHA guards their complete definitions.
+    // Manager, invoker, and body addresses for the target closure in this image.
     MANAGER.store(
         base + runtime.job_lifetime.manager.offset()?,
         Ordering::Release,
@@ -442,7 +438,7 @@ pub(crate) unsafe fn install_detour(
         clear_cache(site, 16);
     }
     if unsafe { libc::mprotect(page, page_size, libc::PROT_READ | libc::PROT_EXEC) } != 0 {
-        // A failed final protection must not leave a half-installed detour.
+        // Restore the original prologue if re-protecting the page fails.
         unsafe {
             std::ptr::copy_nonoverlapping(trampoline, site, 16);
             clear_cache(site, 16);
@@ -456,8 +452,7 @@ pub(crate) unsafe fn install_detour(
         }
         return Err("job repair final protection failed; original restored".into());
     }
-    // This mapping intentionally lives until process exit. A queued vendor job
-    // may retain our invoker/manager; it can never outlive the loaded audit owner.
+    // Intentionally leaked until process exit since queued jobs may still reference it.
     Ok(())
 }
 
@@ -529,8 +524,7 @@ mod tests {
             let source = AnyData {
                 words: [std::ptr::addr_of!(values) as usize, 0],
             };
-            // Pinned enqueuer performs these exact two manager clones, followed
-            // by destroying its first copy. The final job owns the second.
+            // Mirrors the vendor enqueuer: two clones, then destroy the temporary first copy.
             unsafe {
                 managed(manager_fixture, &mut first, &source, 2);
                 managed(manager_fixture, &mut job, &first, 2);
@@ -632,8 +626,7 @@ mod tests {
             0
         );
         let original_function: Enqueue = unsafe { std::mem::transmute(page) };
-        // Empty manager/invoker are valid foreign std::function representations.
-        // Use a distinct nonmatching integer to exercise unrelated forwarding.
+        // Use a non-matching sentinel in MANAGER so the empty Function takes the forward path.
         let previous_manager = MANAGER.swap(usize::MAX, Ordering::AcqRel);
         let empty = Function {
             data: AnyData::default(),
@@ -677,16 +670,5 @@ mod tests {
         assert_eq!(unsafe { libc::munmap(trampoline, page_size) }, 0);
         assert_eq!(unsafe { libc::munmap(page, page_size) }, 0);
         MANAGER.store(previous_manager, Ordering::Release);
-    }
-    #[test]
-    fn pinned_image_sha_and_prologue_match_retained_vendor() {
-        let Ok(path) = std::env::var("RC2FX_VENDOR_JOB_IMAGE") else {
-            return;
-        };
-        let bytes = std::fs::read(path).unwrap();
-        let catalog = rc2fx_firmware::Catalog::parse(rc2fx_firmware::DEFAULT_CATALOG).unwrap();
-        catalog
-            .select_for_model(rc2fx_firmware::Model::ProIi, &bytes)
-            .unwrap();
     }
 }

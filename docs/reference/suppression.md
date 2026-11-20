@@ -4,112 +4,60 @@
 
 | Model | Implementation | Frame |
 | --- | --- | --- |
-| DeepFilterNet3 (`deepfilternet3-h128`) | RC2FX's engine in `crates/rc2fx-dfn`. libDF's framing and features are reimplemented in Rust, and the networks run with NEON kernels and int8 weights. | 240 samples (one hop per call) |
+| DeepFilterNet3 (`deepfilternet3-h128`) | RC2FX's custom engine in `crates/rc2fx-dfn`. Reimplements libDF's framing and feature extraction in Rust, running the networks with NEON kernels and int8 weights. | 240 samples (one hop per call) |
 
-The DeepFilterNet3 model has its GRUs narrowed to 128 units, about 600k
-parameters. RC2FX retrained it on DNS-4 speech and noise, VCTK, room impulse
-responses, and recordings of mouse clicks and keyboards, with those recordings
-weighted to a quarter of the noise. The shipped weights are a zero-lookahead
-(LA0) checkpoint. A one-step-lookahead (LA1) export is also embedded, and the
-per-path `lookahead` setting selects between them. The
-[weights chapter](../crates/rc2fx-dfn.md) covers the file format, provenance
-and reference tests.
+We narrowed DeepFilterNet3's GRUs down to 128 units (~600k parameters) and retrained it on DNS-4 speech and noise, VCTK, room impulse responses, and mouse-click/keyboard recordings (weighted to a quarter of the noise mix). The default weights are a zero-lookahead (LA0) checkpoint. A one-step-lookahead (LA1) checkpoint is embedded alongside it, controlled by the per-path `lookahead` setting. See the [weights chapter](../crates/rc2fx-dfn.md) for the file format, provenance, and reference tests.
 
-Weights are int8 with one scale per row. The mixer's four cores share one L2
-cache, and streaming 1.2 MB of f16 weights every 5 ms caused JACK to drop
-buffers. After publishing each result, the worker computes the next frame's
-GRU recurrent products in small steps. This spreads the work so less of it
-lands right after a frame's input arrives.
+Weights are quantized to int8 with one scale factor per row. Because all four Cortex-A53 cores share a single L2 cache, streaming 1.2 MB of f16 weights every 5 ms caused JACK xruns. After publishing each frame's output, the worker precomputes the next frame's GRU recurrent products in small chunks, spreading the work out so less of it piles up right when the next input frame arrives.
 
-The training kit is kept outside the repository, in `target/dfn-training`
-with data under `~/dfn`. Its `TRAINING.md` documents it.
+The training kit lives outside this repo in `target/dfn-training`, with datasets under `~/dfn`. Check its `TRAINING.md` for details.
 
-Other models were tried and dropped, mostly because they could not keep up on
-the Cortex-A53 cores without disturbing RØDE's audio. These included
-full-size DeepFilterNet3, FastEnhancer, DPDFNet, DTLN and
-several classic DSP suppressors.
+We tested and dropped several other models (full-size DeepFilterNet3, FastEnhancer, DPDFNet, DTLN, and a handful of classic DSP suppressors), mostly because they couldn't keep up on the Cortex-A53 cores without stepping on RØDE's audio.
 
 ## Worker thread
 
-Suppression runs on a dedicated worker thread at SCHED_RR priority 5, pinned
-to CPU 0. The audio callback copies each 112-sample cycle into a bounded
-lock-free queue. The worker processes whole frames and returns each result a
-fixed number of cycles later. That fixed offset is the worker lead.
+Suppression runs on a dedicated worker thread pinned to CPU 0 at `SCHED_RR` priority 5. Each 112-sample JACK callback copies audio into a bounded lock-free queue; the worker processes full 240-sample frames and hands results back a fixed number of cycles later (the worker lead).
 
-If a result has not arrived in time, the output uses the dry signal with the
-same delay. The audio stays continuous and that frame is unsuppressed.
-Telemetry counts these as missed deadlines and fallbacks.
+If a result misses its deadline, RC2FX outputs the dry signal delayed by the same amount. Audio stays glitch-free, just unsuppressed for that frame, and telemetry bumps the missed-deadline and fallback counters.
 
-`PRODUCTION_WORKER` in `rc2fx-suppression` records the measurements behind
-the priority and CPU choice. The launcher moves RØDE's CPU-0 housekeeping
-threads to other cores, because the audio path waits on locks they hold.
+`PRODUCTION_WORKER` in `rc2fx-suppression` documents the measurements behind the CPU and priority choices. The launcher also moves RØDE's CPU-0 housekeeping threads onto other cores because the audio path waits on locks they hold.
 
 ## Delay
 
-All figures are samples at 48 kHz.
+All numbers below are in samples at 48 kHz.
 
 | | Frame | Model delay | Worker lead | Suppression | With block shift |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | DeepFilterNet3, lookahead 0 | 240 | 120 | 320 | 680 (14.17 ms) | 792 (16.5 ms) |
 | DeepFilterNet3, lookahead 1 | 240 | 360 | 320 | 920 (19.17 ms) | 1032 (21.5 ms) |
 
-The model delay is the synthesis overlap, plus one 240-sample hop at
-lookahead 1. DeepFilterNet3's 960-sample analysis window and five causal deep-filter taps
-add nothing further.
+Model delay is just the synthesis overlap, plus one 240-sample hop when lookahead is set to 1. DeepFilterNet3's 960-sample analysis window and five causal deep-filter taps don't add any extra delay.
 
-The block shift is one 112-sample cycle (2.33 ms). The helper thread applies
-it to processed microphones (see
-[Architecture](../developer/architecture.md#inside-the-audio-engine)).
-Hardware and USB outputs are processed in place in the audio callback and do
-not have it. A microphone suppressed with DeepFilterNet3 at lookahead 0
-therefore reaches the headphones 792 samples (16.5 ms) later than it would
-without RC2FX. These are RC2FX's digital delays only. RØDE's engine, JACK,
-the converters and the route add their own.
+The block shift is one 112-sample cycle (2.33 ms), which the helper thread adds to processed microphones (see [Architecture](../developer/architecture.md#inside-the-audio-engine)). Hardware and USB outputs run in place inside the audio callback, so they skip the block shift. That puts a microphone with DeepFilterNet3 at lookahead 0 at 792 samples (16.5 ms) of extra delay in the headphones compared to stock. These figures only count RC2FX's digital delay; RØDE's engine, JACK, the converters, and the physical route add their own on top.
 
-The 320-sample lead is 6.67 ms. It is counted in samples against the mixer's
-112-sample cycles and is not a wall-clock guarantee. A result that is still
-late plays dry and is counted in telemetry.
+The 320-sample worker lead (6.67 ms) is counted in samples against the mixer's 112-sample cycles, not as a hard wall-clock guarantee. If a frame still comes back late, it plays dry and shows up in telemetry.
 
-The app shows the delay the mixer reports for each path. The other effects
-add no delay beyond the block shift.
+The desktop app displays the exact delay reported by the mixer for each path. All other effects add zero delay beyond the block shift.
 
 ## One target at a time
 
-Suppression can be enabled on one mono microphone or on Chat Mix Out
-(`send-chat`, or `duo-send-chat` on a Duo), and only one of these at a time.
-The rule is checked against the saved settings and counts bypassed and
-deselected targets. To move suppression, disable it on the old target and
-apply, then enable it on the new one.
+You can only enable suppression on a single target at once: either one mono microphone or Chat Mix Out (`send-chat`, or `duo-send-chat` on a Duo). This check runs across all saved targets, including bypassed and deselected ones. To move suppression somewhere else, turn it off on the old target and apply first, then turn it on for the new one.
 
 ## Chat Mix Out
 
-On Chat, the native library captures only the microphone contributions to
-the Chat send. It reads them from RØDE's routing functions after per-source
-processing and fader gains, including main, custom, solo and mix-minus
-routing. Four hash-pinned detours supply this microphone stem for the current
-callback. RØDE's routing objects are read and left unmodified.
+On Chat Mix Out, the native library taps only the microphone feeds going into the Chat send. It reads them out of RØDE's routing functions after per-source processing and fader gains (covering main, custom, solo, and mix-minus routing), using four hash-pinned detours that leave RØDE's routing objects untouched.
 
-One mono model and voice gate process the stem. Smart Pads and other playback
-skip both, keep their stereo image, and get the same delay. The two parts are
-summed and the normal stereo output effects run on the result. Because of
-this, suppression on Chat always runs first, whatever its position in
-`order`. The other effects keep their relative order.
+A single mono denoiser and voice gate process that microphone stem. SMART Pads and other playback skip both, stay stereo, and get matched delay. RC2FX then sums the two halves back together and runs the regular stereo output effects on the combined signal. Because of that structure, suppression on Chat always runs first no matter where it sits in `order`; the rest of the effects keep their relative order.
 
-If the stem is missing or the layout is unknown, suppression on Chat fails
-closed and the finished mix is passed through without denoising.
+If the microphone stem is missing or the layout isn't recognized, Chat suppression fails closed and passes the finished mix through dry.
 
 ## Voice gate
 
-The gate uses a voice score from 0 to 1 for each 5 ms frame: the model's
-local SNR estimate, mapped from −15 dB (0) to +15 dB (1).
+The gate tracks a 0-to-1 voice score for every 5 ms frame, derived from the model's local SNR estimate mapped from −15 dB (0) to +15 dB (1).
 
-The gate opens when the score reaches the threshold and stays open until the
-score drops below threshold − 0.15. It then holds for `hold` ms and closes to
-−`reduction` dB with a `release` time constant. Opening uses `attack`. Gain
-moves in dB. A frame with no model result opens the gate.
+It opens when the score hits `threshold` and stays open until the score falls below `threshold − 0.15`. Once it drops, it waits `hold` ms, then closes down to `−reduction` dB with a `release` time constant. Opening uses `attack`, and gain ramps in dB. If a frame has no model result, the gate opens.
 
-In simple mode one `strength` value from 0 (off) to 1 (strict) sets all of
-these:
+In simple mode, a single `strength` control from 0 (off) to 1 (strict) drives all five parameters:
 
 | | Strength 0 → 1 |
 | --- | --- |
@@ -119,7 +67,7 @@ these:
 | Hold | 350 → 150 ms |
 | Release | 300 → 90 ms (geometric) |
 
-The [settings format](api.md#settings) lists the stored fields and ranges.
+See the [settings format](api.md#settings) for the exact stored fields and valid ranges.
 
 ## Benchmarking on a mixer
 
@@ -127,7 +75,4 @@ The [settings format](api.md#settings) lists the stored fields and ranges.
 just bench recording.wav
 ```
 
-This runs every model on the mixer over a 48 kHz recording, using the
-production scheduling policy, and copies the cleaned audio back for
-listening. Flags select an unpaced run, a different policy, CPUs, priority or
-weights file. See `cargo xtask help`.
+This runs every model on the mixer against a 48 kHz recording under the production scheduling policy and pulls the processed audio back so you can listen to it. Flags let you run unpaced or override the scheduling policy, CPUs, priority, or weights file; check `./xtask help` for the full list.

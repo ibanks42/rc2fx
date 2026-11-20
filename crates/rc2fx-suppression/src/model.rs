@@ -36,9 +36,8 @@ impl VendorModel {
             rc2fx_dfn::DeepFilter::for_lookahead(lookahead).map_err(|_| Error::ModelCreation)?;
         Self::with_filter(geometry, filter)
     }
-    /// DeepFilterNet on the given weights file instead of the embedded model,
-    /// with the geometry those weights define and no worker lead: for timing
-    /// a candidate model on the mixer before it is trained or admitted.
+    /// Load DeepFilterNet from raw exported weights with zero worker lead
+    /// (used for benchmarking candidate models on the mixer before admission).
     pub fn deep_filter_from_weights(weights: &[u8]) -> Result<Self, Error> {
         let filter =
             rc2fx_dfn::DeepFilter::from_weights(weights).map_err(|_| Error::ModelCreation)?;
@@ -51,7 +50,6 @@ impl VendorModel {
         Self::with_filter(geometry, filter)
     }
     fn with_filter(geometry: Geometry, mut filter: rc2fx_dfn::DeepFilter) -> Result<Self, Error> {
-        filter.set_layer_pause(None);
         // Staged GRU preparation: the worker prepares the next frame's
         // recurrent products after publishing each result.
         filter.set_gru_prep(true);
@@ -74,12 +72,9 @@ impl VendorModel {
     pub fn set_layer_pause(&mut self, pause: Option<rc2fx_dfn::LayerPause>) {
         self.filter.set_layer_pause(pause);
     }
-    /// Entire frame is validated before model history or caller output changes.
-    /// Finite headroom is clamped exactly as the old normalized factory did.
-    ///
-    /// Returns the frame's voice score from 0 (no speech) to 1: DeepFilterNet's
-    /// local SNR estimate mapped linearly from -15 dB (the bottom of its range)
-    /// to +15 dB, so 0 dB local SNR scores 0.5.
+    /// Validates the full frame before mutating state, clamps input to `[-1, 1]`,
+    /// and returns a `0.0..=1.0` voice score mapped linearly from local SNR
+    /// (`-15 dB` -> `0.0`, `+15 dB` -> `1.0`).
     pub fn process(&mut self, samples: &mut [f32]) -> Result<f32, Error> {
         if samples.len() != self.geometry.frame_samples || samples.iter().any(|x| !x.is_finite()) {
             return Err(Error::InvalidFrame);

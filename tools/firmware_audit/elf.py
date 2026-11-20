@@ -1,4 +1,4 @@
-"""Offline ELF/function analysis. No firmware is extracted or executed natively."""
+"""Offline ELF and unwind-table reader for firmware archives."""
 from __future__ import annotations
 
 import hashlib
@@ -73,7 +73,7 @@ class Image:
         return list(self.disassembler.disasm(self.code(address, self.functions[address]), address))
 
     def address_references(self, target: int) -> list[tuple[int, int]]:
-        """Find ADRP + nearby ADD address materializations, with register-clobber checks."""
+        """Find ADRP + nearby ADD sequences materializing target, stopping if the base register is clobbered."""
         text = self.elf.get_section_by_name(".text")
         data, base = text.data(), text["sh_addr"]
         hits = []
@@ -101,7 +101,7 @@ class Image:
         return hits
 
     def exception_edges(self, address: int) -> list[tuple[int, int, int]]:
-        """Decode the LSDA call-site table so exception landing pads retain the right register facts."""
+        """Decode the LSDA call-site table to recover exception landing-pad edges."""
         pointer = self.fdes[address].lsda_pointer
         if pointer is None:
             return []

@@ -1,4 +1,4 @@
-"""Arm, check, then run: run.py and bench.py arm power recovery before anything else, and stop if they cannot."""
+"""Verify run.py and bench.py arm power recovery before doing anything else."""
 import contextlib
 import io
 import json
@@ -13,10 +13,10 @@ import run
 ARMING=['bash -s -- arm-power-recovery','fw_printenv -n reboot_pwr_button_bypass']
 
 class Reached(Exception):
-    """The tool got past arming, to its first other step."""
+    """Raised by the fake mixer once a tool passes power-recovery arming."""
 
 class Mixer:
-    """Stands in for run.ssh: keeps the flag, logs every command, and stops the tool at its first command after arming."""
+    """Fake run.ssh that tracks the recovery flag and stops after arming."""
     def __init__(self,read_back=None):self.flag='0';self.read_back=read_back;self.events=[]
     def ssh(self,command,data=None,timeout=60):
         self.events.append(command)
@@ -24,7 +24,7 @@ class Mixer:
         if command==ARMING[1]:return (self.read_back or self.flag).encode()
         raise Reached(command)
     def local(self,arguments,**kwargs):
-        """Stands in for zig, pactl and pw-play: logged, and playback stops the tool."""
+        """Fake subprocess runner for zig, pactl, and pw-play."""
         self.events.append(arguments[0])
         if arguments[0]=='pw-play':raise Reached(arguments[0])
         if arguments[0]=='zig':Path(arguments[arguments.index('-o')+1]).write_bytes(b'binary')
@@ -32,7 +32,7 @@ class Mixer:
 
 class PowerRecovery(unittest.TestCase):
     def tool(self,module,mixer,*arguments):
-        """Run a tool's main(); returns its exit status and what it wrote to stderr."""
+        """Invoke module.main() with mocked SSH/subprocess and return (exit_code, stderr)."""
         with tempfile.TemporaryDirectory() as directory:
             argv=['tool',*arguments,'--out',directory+'/out','--bundle',directory]
             stderr=io.StringIO()
@@ -46,7 +46,6 @@ class PowerRecovery(unittest.TestCase):
             with self.subTest(action=action):
                 mixer=Mixer()
                 with self.assertRaises(Reached):self.tool(run,mixer,action)
-                # Reached: the action then went on to its own first step.
                 if action=='status':self.assertEqual(mixer.events,['bash -s -- xrun-trace status'])
                 else:self.assertEqual(mixer.events[:2],ARMING)
 
@@ -61,7 +60,7 @@ class PowerRecovery(unittest.TestCase):
     def test_bench_py_arms_before_it_lists_sinks_or_plays(self):
         for flags in [[],['--no-trace','--gauges']]:
             mixer=Mixer()
-            self.assertEqual(self.tool(bench,mixer,*flags)[0],1)  # the stand-in stops it at its first stream
+            self.assertEqual(self.tool(bench,mixer,*flags)[0],1)  # fake mixer stops at the first pw-play stream
             self.assertEqual(mixer.events,ARMING+['pactl','pw-play'])
 
     def test_bench_py_aborts_when_arming_fails(self):

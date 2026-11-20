@@ -10,9 +10,7 @@ description = "Owned Rust bounded suppression worker and the DeepFilterNet engin
 rc2fx-core = { path = "../rc2fx-core" }
 rc2fx-dsp = { path = "../rc2fx-dsp" }
 rc2fx-dfn = { path = "../rc2fx-dfn" }
-
 # Thread clocks and scheduling (`metrics`, `scheduling`).
-[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [features]

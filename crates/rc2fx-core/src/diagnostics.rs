@@ -1,127 +1,97 @@
-//! The mixer's diagnostics event list: a bounded, sequenced log of what went
-//! wrong and when, and the paged reply a client reads it with.
+//! Bounded, sequenced diagnostics event log and its paged wire response.
 //!
-//! Entries are made off the audio path by rc2fxd (see the device crate): it
-//! turns the engine's own event ring, each worker's miss and late histories,
-//! and the counter increases it can only see as totals, into these. Timestamps
-//! are the mixer's CLOCK_MONOTONIC nanoseconds; a client maps them to host time
-//! through `nowNs` at receipt (the mixer's wall clock is not reliable).
+//! `rc2fxd` builds these off the audio thread from the engine event ring,
+//! worker miss/late histories, and monotonic counter deltas. Timestamps use
+//! the mixer's `CLOCK_MONOTONIC` in nanoseconds; clients map them to local
+//! wall time via `nowNs` because the mixer's wall clock is unreliable.
 
 use serde::{Deserialize, Serialize};
 
-/// The longest page a client can ask for. Chosen so a full reply stays well
-/// inside the USB control transport's frame limit.
+/// Max entries per page, sized to fit inside the USB control frame limit.
 pub const EVENTS_PAGE: usize = 256;
 
-/// One entry. `seq` increases by one per entry, never repeats, and survives a
-/// diagnostics reset (which adds a `reset` entry rather than restarting).
+/// Single diagnostics log entry. `seq` increments by 1, never repeats, and
+/// continues across a diagnostics reset (which appends a `reset` entry).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsEvent {
     pub seq: u64,
     pub kind: DiagnosticsKind,
-    /// The path it concerns; absent for engine-wide events.
+    /// Target path, or `None` for engine-wide events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// The mixer's CLOCK_MONOTONIC nanoseconds.
+    /// Mixer `CLOCK_MONOTONIC` timestamp in nanoseconds.
     pub at_ns: u64,
-    /// A short sentence for the window, already phrased for a person.
+    /// Human-readable summary for the UI.
     pub message: String,
-    /// What the kind measured, when it measured something.
+    /// Measured values for this event, if any.
     #[serde(default, skip_serializing_if = "EventDetails::is_empty")]
     pub details: EventDetails,
 }
 
-/// The longest event sentence a client keeps.
-pub const MAX_EVENT_MESSAGE: usize = 512;
-
-impl DiagnosticsEvent {
-    /// This event as it is safe to show: the sentence cut to
-    /// [`MAX_EVENT_MESSAGE`] bytes with control characters removed. `None` if
-    /// `path` is not an id, which no mixer sends.
-    pub fn for_display(mut self) -> Option<Self> {
-        if self.path.as_deref().is_some_and(|id| !crate::valid_id(id)) {
-            return None;
-        }
-        let mut message = String::with_capacity(self.message.len().min(MAX_EVENT_MESSAGE));
-        for c in self
-            .message
-            .chars()
-            .filter(|&c| !c.is_control() && !crate::is_bidi_control(c))
-        {
-            if message.len() + c.len_utf8() > MAX_EVENT_MESSAGE {
-                break;
-            }
-            message.push(c);
-        }
-        self.message = message;
-        Some(self)
-    }
-}
-
-/// What happened, in a closed set: the window can label each kind without
-/// guessing, and a newer mixer's addition arrives as `other`.
+/// Closed set of event kinds; unknown kinds from newer firmware deserialize as `Other`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagnosticsKind {
-    /// A JACK xrun notification (the engine was late somewhere).
+    /// JACK xrun notification.
     Xrun,
-    /// A callback found the helper still busy with the previous frame.
+    /// Audio callback found the helper still busy with the previous frame.
     HelperBusy,
-    /// A callback gave up waiting for the helper and passed its frame through.
+    /// Audio callback gave up waiting for the helper and passed the frame through.
     HelperStall,
-    /// The helper finished after its frame's cycle had ended.
+    /// Helper finished after its frame's cycle had already ended.
     HelperLateFinish,
-    /// The callback ended this late into its cycle.
+    /// Audio callback finished late in its cycle.
     LateEnd,
-    /// The callback took longer than a period.
+    /// Audio callback took longer than one period.
     Overrun,
-    /// The callback started this late into its cycle.
+    /// Audio callback started late in its cycle.
     LateStart,
-    /// Consecutive callbacks were further apart than a period and a half.
+    /// Gap between consecutive callbacks exceeded 1.5 periods.
     Gap,
-    /// The estimated cycle start jumped by more than a period and a half.
+    /// Estimated cycle start jumped by more than 1.5 periods.
     CycleSkip,
-    /// A vendor job finished after the next callback had started.
+    /// Vendor job finished after the next callback had started.
     VendorJobLate,
-    /// The mixer rebuilt its USB gadget (a USB mode change).
+    /// Mixer rebuilt its USB gadget (USB mode change).
     UsbGadget,
-    /// The suppression worker missed a frame's deadline: the listener heard
-    /// the delayed original for that frame.
+    /// Suppression worker missed a frame deadline (listener heard delayed dry audio).
+    /// With `delta`, reports additional misses beyond the worker's kept history.
     MissedDeadline,
-    /// A worker result arrived after its deadline (still used, but late).
+    /// Worker result arrived past its deadline (still used, but late).
+    /// With `delta`, reports additional late frames beyond the kept history.
     LateFrame,
-    /// Stale suppression results, counted between two readings.
+    /// Stale suppression results observed between readings.
     StaleResults,
-    /// Dropped input frames, counted between two readings.
+    /// Dropped input frames observed between readings.
     InputDrops,
-    /// Dropped output frames, counted between two readings.
+    /// Dropped output frames observed between readings.
     OutputDrops,
-    /// Clipped samples, counted between two readings.
+    /// Clipped samples observed between readings.
     Clipped,
-    /// Events that fell out of the engine's ring before they could be read.
+    /// Events dropped from the engine ring before they were read.
     Lost,
-    /// The user reset diagnostics; the counters the window shows restart here.
+    /// Diagnostics reset marker; UI counters restart from here.
     Reset,
-    /// A kind this build does not know (a newer mixer).
+    /// Unknown event kind from a newer mixer build.
+    #[serde(other)]
     Other,
 }
 
-/// The numbers a kind carries. Every field is optional: an xrun has no delta,
-/// a counter increase has no duration.
+/// Optional numeric payload for a diagnostics event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventDetails {
-    /// What the kind measured: a cycle position, a gap, a turnaround.
+    /// Measured duration or timestamp offset (cycle position, gap, turnaround).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_ns: Option<u64>,
-    /// jackd's xrun delay in microseconds, when it reported one.
+    /// Xrun delay reported by jackd, in microseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delayed_us: Option<u64>,
-    /// How much a counted figure rose (drops, clipped samples, lost events).
+    /// Counter increase since the previous reading (drops, clips, lost events).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delta: Option<u64>,
-    /// The interval the delta accumulated over, from the previous reading.
+    /// Elapsed time over which `delta` accumulated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interval_ns: Option<u64>,
 }
@@ -135,20 +105,17 @@ impl EventDetails {
     }
 }
 
-/// One page of the log.
+/// Paged diagnostics log response.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsEvents {
-    /// The mixer's CLOCK_MONOTONIC at the moment of the reply: a client adds
-    /// (local receive time − this) to each `atNs`.
+    /// Mixer `CLOCK_MONOTONIC` at reply time; clients add `(local_recv - now_ns)` to `atNs`.
     pub now_ns: u64,
-    /// The sequence number the next entry will take, i.e. what to pass as
-    /// `after` to continue reading.
+    /// Next sequence number; pass as `after` to fetch subsequent entries.
     pub next_seq: u64,
-    /// Entries that fell out of the bounded log after `after` and can no
-    /// longer be read. Zero when the client kept up.
+    /// Entries evicted after `after` before the client read them (0 if caught up).
     pub lost: u64,
-    /// More entries are waiting: ask again with `after = nextSeq`.
+    /// True if more entries are available starting at `nextSeq`.
     pub more: bool,
     pub events: Vec<DiagnosticsEvent>,
 }

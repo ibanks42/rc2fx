@@ -1,5 +1,5 @@
-//! Bounded late-callback history. Writers never wait; readers reject changing
-//! slots. Sequentially consistent atomics keep every accepted row coherent.
+//! Lock-free seqlock ring for late-callback records. Writers drop rather than
+//! spin on contention; readers discard rows whose version changes mid-read.
 use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 pub type Events = History<32>;
 pub type MainEvents = History<256>;
@@ -55,8 +55,8 @@ impl<const CAPACITY: usize> History<CAPACITY> {
         let index = self.next.fetch_add(1, SeqCst);
         let row = &self.rows[index as usize % CAPACITY];
         let version = row.version.load(SeqCst);
-        // Refuse busy or newer writers. No spin, and no stale writer can erase
-        // a later publication after it has acquired this row.
+        // Bail out if the slot is locked (odd version) or already claimed by a
+        // newer sequence number so we never spin or overwrite a newer record.
         if !version.is_multiple_of(2)
             || version > index * 2
             || row

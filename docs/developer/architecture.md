@@ -3,7 +3,7 @@
 ```text
  computer                               RØDECaster Pro II
 ┌──────────────┐  USB 1 (vendor HID)   ┌────────────────────────────────────────┐
-│ rc2fx-app    │◄─────────────────────►│ rc_audio_mixer (RØDE, unmodified)      │
+│ desktop app  │◄─────────────────────►│ rc_audio_mixer (RØDE, unmodified)      │
 │  transport   │  reports 5 and 6      │  └─ librc2fx_native.so (LD_AUDIT)      │
 │  installer   │                       │      ├─ JACK callback: 25 paths, DSP   │
 └──────────────┘                       │      ├─ helper thread                  │
@@ -16,132 +16,133 @@
 
 ## Starting with the mixer
 
-RØDE's audio launcher starts `rc_audio_mixer` by name, with `/usr/sbin` before
-`/usr/bin` on its `PATH`. RC2FX installs a shim at `/usr/sbin/rc_audio_mixer`,
-which the launcher finds first. The shim runs `rc2fx.sh launch`, which:
+RØDE's audio launcher looks up `rc_audio_mixer` on `PATH` with `/usr/sbin` ahead
+of `/usr/bin`. RC2FX drops a shim at `/usr/sbin/rc_audio_mixer` so it gets
+picked up first. That shim invokes `rc2fx.sh launch`, which:
 
-1. checks the firmware against the [catalog](../reference/firmware.md) and
-   checks that stock audio hasn't been requested during this boot;
-2. execs RØDE's `/usr/bin/rc_audio_mixer` with `librc2fx_native.so` loaded
-   through `LD_AUDIT`;
-3. starts `rc2fx-supervisor`, which starts the `rc2fxd` controller.
+1. checks the firmware against the [catalog](../reference/firmware.md) and makes
+   sure stock audio wasn't requested for this boot;
+2. execs RØDE's real `/usr/bin/rc_audio_mixer` with `librc2fx_native.so` loaded
+   via `LD_AUDIT`;
+3. starts `rc2fx-supervisor`, which in turn spawns the `rc2fxd` controller.
 
-While the engine runs, the launcher lifts the kernel's real-time CPU cap. When
-a core reaches that cap, the kernel suspends every real-time thread on it,
-including the USB gadget's. RC2FX's suppression worker already runs at a lower
-priority than all of RØDE's real-time threads. The default cap is restored
-when the engine exits.
+While the engine is up, the launcher lifts the kernel's real-time CPU cap. If a
+core hits that cap, the kernel throttles every real-time thread on it, including
+the USB gadget. RC2FX's suppression worker already runs at a lower priority than
+all of RØDE's RT threads. Once the engine exits, the default cap goes back in
+place.
 
-During the first boot after a firmware update, `/usr/bin/first-boot` exists
-and the mixer reflashes its controllers. The shim then starts the stock engine
-without RC2FX.
+On the first boot after a firmware update, `/usr/bin/first-boot` is present
+while the mixer reflashes its internal controllers. The shim detects that and
+starts the stock engine without RC2FX.
 
-On every later boot, until it has passed once, the launcher also checks
-RØDE's files against the list the installer put in the image, in the
-background, and restores a damaged one from the other root partition when
-that copy is identical. See
+On subsequent boots, until the check passes once, the launcher also runs a
+background check of RØDE's files against the list the installer embedded in the
+image. If a file is damaged and the other root partition has a clean copy, it
+restores it from there. See
 [Installer internals](../reference/installer.md#image-check).
 
-The screen uses the same mechanism. A shim at `/usr/sbin/rc_gui_juce` starts
-RØDE's screen program with RC2FX's screen module if a bundle is present and
-passes its checks, and starts it unchanged otherwise. The module only changes
-how large redraws are rotated (the
-[screen conversion](../user/settings-and-diagnostics.md#screen-conversion)
-setting).
+The screen works the same way. A shim at `/usr/sbin/rc_gui_juce` launches RØDE's
+screen binary with RC2FX's screen module if a valid bundle is present, and
+launches it untouched otherwise. That module only changes how screen redraws are
+rotated (see [rc2fx-gui](../crates/rc2fx-gui.md)).
 
 ## Inside the audio engine
 
-`LD_AUDIT` lets the library observe and redirect symbol binding while the
-engine loads. `LD_PRELOAD` is insufficient because JUCE loads libjack with
-`dlopen`/`dlsym`. The library wraps a few libjack calls: callback and xrun
-registration, buffer lookup, port registration and client close. It then wraps
-RØDE's JACK process callback, after checking the executable's hash and the
-instructions at the callback address. If either check fails, the stock
-callback runs unwrapped.
+`LD_AUDIT` lets `librc2fx_native.so` watch and redirect symbol bindings as the
+engine loads. `LD_PRELOAD` isn't enough because JUCE loads `libjack` with
+`dlopen`/`dlsym`. The library wraps a small set of `libjack` calls (callback and
+xrun registration, buffer lookup, port registration, and client close). Once it
+verifies the executable's hash and the instructions at the callback address, it
+wraps RØDE's JACK process callback. If either check fails, the stock callback
+runs unwrapped.
 
-Each cycle is 112 samples at 48 kHz (2.33 ms). The wrapped callback handles
-the model's bound paths, 25 on the Pro II and 23 on the Duo:
+Audio runs in 112-sample cycles at 48 kHz (2.33 ms). The wrapped callback
+handles the model's bound paths (25 on the Pro II, 23 on the Duo):
 
 - Outputs (USB sends, headphones, monitors) are processed in place inside the
-  callback, after RØDE's processing and before the callback returns.
-- Sources (microphones and other inputs) are processed one cycle later by a
-  helper thread, working on copies the callback makes. RØDE's raw buffers
-  aren't written. The helper runs on the audio cores one priority level below
-  the callback. This one-cycle delay is the 2.33 ms block shift in the latency
-  figures.
-- Noise suppression runs on a separate worker thread (SCHED_RR priority 5, on
-  CPU 0), several cycles behind, connected through bounded lock-free queues.
-  If a result is late, the equally delayed dry signal plays instead.
-- Paths with no processing are only metered, every eighth cycle.
+  callback after RØDE finishes its own work and before the callback returns.
+- Sources (microphones and other inputs) are processed one cycle later on a
+  helper thread using copies captured by the callback, leaving RØDE's raw
+  buffers untouched. That helper runs on the audio cores one priority below the
+  callback, which is where the 2.33 ms block shift in the latency numbers comes
+  from.
+- Noise suppression runs on its own worker thread (`SCHED_RR` priority 5 on CPU
+  0), several cycles behind, fed by bounded lock-free queues. If a denoised
+  block arrives late, the equally delayed dry signal plays instead.
+- Paths with no active processing are just metered every eighth cycle.
 
-The callback doesn't lock, allocate or wait.
+The callback itself never locks, allocates, or waits.
 
-For Chat Mix Out, the library captures the microphone contributions from
-RØDE's routing code, after faders, mutes and mix-minus. It runs one mono
-denoiser and voice gate on them, delays the rest of the mix by the same
-amount, and recombines the two before the normal stereo effects. If the
-microphone contributions can't be captured exactly, suppression on Chat Mix
-Out is refused instead of denoising the finished mix.
+For Chat Mix Out, the library taps the microphone contributions directly out of
+RØDE's routing code after faders, mutes, and mix-minus. It runs one mono
+denoiser and voice gate on those mics, delays the rest of the mix to match, and
+sums them back together before the regular stereo effects. If those microphone
+taps can't be captured cleanly, suppression on Chat Mix Out is refused instead
+of trying to denoise the full mix.
 
 See the [rc2fx-native](../crates/rc2fx-native.md) and
-[rc2fx-suppression](../crates/rc2fx-suppression.md) chapters for details.
+[rc2fx-suppression](../crates/rc2fx-suppression.md) chapters for the deeper
+details.
 
 ## Falling back to stock
 
-The supervisor monitors the controller and the engine. If the controller
-exits, or the engine isn't ready within 60 seconds, the supervisor records a
-stock request for the rest of the boot and ends the engine. RØDE's launcher
-restarts it, and the shim starts it stock. An engine that exits early twice in
-one boot is handled the same way. A RAM run (`just mixer-run`) is gone after
-the next reboot.
+`rc2fx-supervisor` watches both the controller and the audio engine. If `rc2fxd`
+exits, or if the engine doesn't report ready within 60 seconds, the supervisor
+writes a stock-fallback request for the rest of the boot and terminates the
+engine. RØDE's launcher immediately restarts it, and the shim sees the request
+and starts stock audio. If the engine exits early twice in the same boot, the
+same fallback kicks in. A RAM run (`just mixer-run`) disappears on the next
+reboot anyway.
 
-The supervisor is watched too. A panic inside it takes the same route to stock,
-and if it crashes or is killed, the shell that launched the engine records the
-stock request and ends the engine itself.
+The supervisor itself is watched too. A panic inside it follows the same path to
+stock, and if it crashes or gets killed, the launch shell writes the stock
+request and kills the engine on its own.
 
-This logic is in `xtask/mixer/rc2fx.sh`, under subcommands such as `launch`,
-`start`, `restart`, `stop`, `status` and `logs`. Change mixer-side behaviour in
-that script. The supervisor runs beside live audio for as long as the engine
-does and recovers from everything else failing, so it is its own small binary:
-it's in `crates/rc2fx-supervisor`, shares no code with the controller, and calls
-the script back for the rare steps, such as ending the engine.
+All of this orchestration lives in `mixer/scripts/rc2fx.sh` under subcommands
+like `launch`, `start`, `restart`, `stop`, `status`, and `logs`, which is where
+mixer-side behavior changes go. Because the supervisor stays up alongside live
+audio for the whole lifetime of the engine and has to recover when everything
+else fails, it's its own tiny binary in `crates/rc2fx-supervisor`. It shares no
+code with the controller and calls back into `rc2fx.sh` for rare actions like
+stopping the engine.
 
 ## Settings flow
 
-1. The app edits a local copy of the settings and sends it together with the
-   revision it started from (`PUT /api/v1/config`, see the
+1. The desktop app edits a local copy of the settings and sends it along with
+   the revision it started from (`PUT /api/v1/config`, documented in the
    [controller API](../reference/api.md)).
-2. `rc2fxd` validates the settings, prepares the change in the native library,
-   saves `state.json`, and commits the prepared change
+2. `rc2fxd` validates the payload, stages the update in the native library,
+   writes `state.json`, and commits the staged change
    ([rc2fx-native-control](../crates/rc2fx-native-control.md)).
-3. The new settings apply from the next cycle with no restart. Meter, engine
-   and state events are sent back to the app.
+3. The new settings take effect on the next audio cycle with no restart, and
+   meter, engine, and state events stream back to the app.
 
-If the revision is out of date, the write is refused so it can't overwrite a
-newer change.
+If the client's revision is stale, the write is rejected so it won't clobber a
+newer update.
 
 ## USB control channel
 
-The mixer exposes a vendor HID interface on USB 1 for RØDE's app. RC2FX adds
-report IDs 5 and 6 to RØDE's HID collection by staging a modified copy of the
-descriptor in RAM. A hook on the engine's HID read passes RØDE's reports
-through unchanged and forwards RC2FX's reports to `rc2fxd`. No USB function,
-endpoint or audio channel is added. [USB control](../reference/usb-control.md)
-covers the design and how it survives restarts.
+The mixer already exposes a vendor HID interface on USB 1 for RØDE's own app.
+RC2FX adds report IDs 5 and 6 to that HID collection by staging a modified
+descriptor in RAM. A hook on the engine's HID read lets RØDE's reports pass
+through untouched and routes RC2FX's reports to `rc2fxd`, without adding any new
+USB function, endpoint, or audio channel. See
+[USB control](../reference/usb-control.md) for the protocol and how it survives
+restarts.
 
 ## Installing
 
-The installer downloads RØDE's official firmware, checks it, adds RC2FX's
-files to the root filesystem image on the computer, and flashes it through
-RØDE's USB update mode. It doesn't log in to a running mixer. See
+The installer fetches RØDE's official firmware, verifies it, adds RC2FX's files
+to the root filesystem image on your computer, and flashes the result through
+RØDE's USB update mode. It never logs into a running mixer. See
 [Installer internals](../reference/installer.md).
 
 ## Work in progress
 
-- Touchscreen panel: a launcher button and settings panel on the mixer's
-  screen for choosing a preset and turning processing on or off, served by
-  `rc2fxd` over a local socket. It builds and has run on hardware from RAM,
-  but isn't included in the installed firmware yet. See
-  `experiments/device-panel/README.md`.
+- Touchscreen panel: a launcher button and settings UI right on the mixer's
+  screen for picking presets and toggling processing, served by `rc2fxd` over a
+  local socket. It compiles and has run on hardware from RAM, but isn't part of
+  the installed firmware yet. See `experiments/device-panel/README.md`.
 - RØDECaster Duo: implemented from firmware analysis and
   [not yet run on a Duo](../reference/duo.md).

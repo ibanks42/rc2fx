@@ -1,15 +1,125 @@
 //! Per-path immutable descriptors; all runtime construction/retirement is control work.
-use super::suppression::{Admission, Claim, Runtime};
+use super::suppression::{Admission, Claim, Runtime, Start};
 use rc2fx_core::Target;
 use rc2fx_dsp::Prepared;
-use rc2fx_native_control::{PathMode, RetiredWorker};
+use rc2fx_native_control::{PathMode, ResetPolicy, RetiredWorker};
 use std::{
     ptr::NonNull,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicPtr, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
+
+/// How long publishing waits for a runtime that is being replaced to fade
+/// out. The fade itself is `rc2fx_dsp::STAGE_FADE_SAMPLES` (10 ms) of
+/// callbacks; without callbacks (the engine stopped, the path not running)
+/// the wait ends here and the new snapshot is published anyway.
+pub const HANDOFF_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// What the callback does with a path's unprocessed audio while it plays it
+/// (`PassFade::target`). The pipeline fades that audio over
+/// `rc2fx_dsp::STAGE_FADE_SAMPLES`, so that switching processing on or off
+/// never steps between unprocessed audio and a processor's output.
+pub const RAW_PLAY: u8 = 0;
+/// Fade the unprocessed audio out, before a processor takes over: the
+/// callback answers `faded` once it is silent. While the processor has not
+/// yet delivered a frame, the unprocessed fallback stays silent too.
+pub const RAW_MUTE: u8 = 1;
+/// Before the processor hands back to unprocessed audio: start that audio
+/// from silence and fade it in.
+pub const RAW_RISE: u8 = 2;
+/// A path's unprocessed-audio fade, shared by control and the callback.
+#[derive(Default)]
+pub struct PassFade {
+    target: std::sync::atomic::AtomicU8,
+    faded: std::sync::atomic::AtomicBool,
+    /// Set once by the pipeline: the path is processed in the callback, in
+    /// place, so its processor's dry signal is the unprocessed audio at the
+    /// same moment (no helper frame between them).
+    aligned: std::sync::atomic::AtomicBool,
+}
+impl PassFade {
+    /// Callback: the requested `RAW_*`.
+    pub fn target(&self) -> u8 {
+        self.target.load(Ordering::Acquire)
+    }
+    /// Callback: whether the unprocessed audio is now silent after
+    /// `RAW_MUTE`.
+    pub fn answer(&self, faded: bool) {
+        self.faded.store(faded, Ordering::Release);
+    }
+    /// Pipeline construction: see `aligned`.
+    pub fn set_aligned(&self, aligned: bool) {
+        self.aligned.store(aligned, Ordering::Relaxed);
+    }
+    fn aligned(&self) -> bool {
+        self.aligned.load(Ordering::Relaxed)
+    }
+    fn faded(&self) -> bool {
+        self.faded.load(Ordering::Acquire)
+    }
+    fn request(&self, target: u8) {
+        if target == RAW_MUTE {
+            self.faded.store(false, Ordering::Release);
+        }
+        self.target.store(target, Ordering::Release);
+    }
+}
+/// A hand-off under way for one staged publication (`Control::hand_off`):
+/// what it asked of the callback and what it waits for. It holds no lock,
+/// only shared references, so it can be waited on with every lock released.
+/// Dropped before its publication commits, it asks the callback to undo it.
+pub struct HandingOff {
+    ticket: u64,
+    /// The runtime asked to fade out.
+    runtime: Option<Arc<Runtime>>,
+    /// The path's unprocessed-audio fade, and whether this waits for it.
+    pass: Arc<PassFade>,
+    pass_wait: bool,
+    /// The target to restore when undone.
+    pass_before: u8,
+    publications: Arc<AtomicU64>,
+    timeout: Duration,
+    committed: bool,
+}
+impl HandingOff {
+    /// Whether every fade this waits for has finished.
+    pub fn done(&self) -> bool {
+        self.runtime
+            .as_ref()
+            .is_none_or(|runtime| runtime.handed_off())
+            && (!self.pass_wait || self.pass.faded())
+    }
+    /// Polls `done` for up to the control's hand-off timeout; returns it.
+    /// Holds no lock. Without callbacks (the engine stopped) the timeout
+    /// ends the wait and the publication goes ahead.
+    pub fn wait(&self) -> bool {
+        let end = Instant::now() + self.timeout;
+        while !self.done() {
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+}
+impl Drop for HandingOff {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if let Some(runtime) = &self.runtime {
+            runtime.request_hand_off(None);
+        }
+        if self.pass.target() != self.pass_before {
+            self.pass.request(self.pass_before);
+            self.publications.fetch_add(1, Ordering::Release);
+        }
+    }
+}
 
 struct Snapshot {
     revision: u64,
@@ -65,6 +175,7 @@ struct Versions {
     retired_worker_count: u64,
 }
 struct Shared {
+    pass: Arc<PassFade>,
     versions: Mutex<Versions>,
     published: AtomicPtr<Snapshot>,
     seen: AtomicU64,
@@ -93,6 +204,7 @@ pub struct Status {
 }
 pub struct Control {
     id: String,
+    handoff_timeout: Duration,
     shared: Arc<Shared>,
     next_ticket: u64,
     next_epoch: u64,
@@ -213,12 +325,8 @@ const ZERO_TIMING: rc2fx_native_control::Timing = rc2fx_native_control::Timing {
     histogram: [0; 8],
 };
 
-/// Every retired worker's wall, CPU and turnaround, added up. A worker's own
-/// counters start at zero, so without this the app's view would jump back on
-/// every pipeline rebuild (and its fault counters would treat that as a new
-/// baseline rather than a fault, but the totals would be useless). Each worker
-/// is archived exactly once, so nothing is counted twice; the live worker is
-/// added on top when a meter is built.
+/// Accumulated wall, CPU, and turnaround timings of retired workers.
+/// Archived once per worker so totals stay monotonic across pipeline rebuilds.
 static RETIRED_TIMINGS: Mutex<[rc2fx_native_control::Timing; 3]> = Mutex::new([ZERO_TIMING; 3]);
 
 fn merge_into(slot: &mut rc2fx_native_control::Timing, add: rc2fx_native_control::Timing) {
@@ -341,6 +449,9 @@ impl Drop for Staged {
 }
 pub struct Reservation<'a> {
     versions: MutexGuard<'a, Versions>,
+    /// The hand-off this publication waited for: undone if the reservation
+    /// is dropped uncommitted.
+    handing: HandingOff,
     published: &'a AtomicPtr<Snapshot>,
     publications: &'a AtomicU64,
     ticket: u64,
@@ -356,6 +467,8 @@ impl Reservation<'_> {
             release_after: Some(revision),
         });
         self.versions.pending = None;
+        // What was handed off stays so for whatever frames it still serves.
+        self.handing.committed = true;
         self.published
             .store(self.versions.current.pointer(), Ordering::Release);
         // After the store: a callback that sees the count sees this snapshot.
@@ -393,7 +506,14 @@ pub fn channel_with_options(
         None
     };
     let runtime = if mode == PathMode::Processed {
-        Some(Runtime::new(target, &prepared, options, 1, &admission)?)
+        Some(Runtime::new(
+            target,
+            &prepared,
+            options,
+            1,
+            &admission,
+            Start::Playing,
+        )?)
     } else {
         None
     };
@@ -407,6 +527,7 @@ pub fn channel_with_options(
     );
     let (producer, consumer) = super::telemetry::channel();
     let shared = Arc::new(Shared {
+        pass: Arc::default(),
         published: AtomicPtr::new(current.pointer()),
         versions: Mutex::new(Versions {
             current,
@@ -421,6 +542,7 @@ pub fn channel_with_options(
     Ok((
         Control {
             id: target.id.clone(),
+            handoff_timeout: HANDOFF_TIMEOUT,
             shared: Arc::clone(&shared),
             next_ticket: 1,
             next_epoch: 2,
@@ -470,11 +592,31 @@ impl Control {
     pub fn id(&self) -> &str {
         &self.id
     }
+    /// How long `reserve` waits for a replaced runtime to fade out.
+    #[cfg(test)]
+    pub fn set_handoff_timeout(&mut self, timeout: Duration) {
+        self.handoff_timeout = timeout;
+    }
+    /// `prepare_with` allowing a reset, for tests that predate the policy.
+    #[cfg(test)]
     pub fn prepare_mode(
         &mut self,
         target: &Target,
         revision: u64,
         mode: PathMode,
+    ) -> Result<Staged, Error> {
+        self.prepare_with(target, revision, mode, ResetPolicy::Allow)
+    }
+    /// `prepare_mode` that, with `ResetPolicy::Refuse`, answers
+    /// `RequiresReset` instead of building a new runtime: when the path mode
+    /// changes, or a processed path's settings need one (`requires_reset`).
+    /// Nothing is staged or claimed then.
+    pub fn prepare_with(
+        &mut self,
+        target: &Target,
+        revision: u64,
+        mode: PathMode,
+        reset: ResetPolicy,
     ) -> Result<Staged, Error> {
         if target.id != self.id {
             return Err(Error::WrongTarget);
@@ -497,6 +639,13 @@ impl Control {
         {
             return Err(Error::RequiresReset);
         }
+        if reset == ResetPolicy::Refuse
+            && (versions.current.get().mode != mode
+                || (mode == PathMode::Processed
+                    && versions.current.get().prepared.requires_reset(&prepared)))
+        {
+            return Err(Error::RequiresReset);
+        }
         let claim = if target.suppression.enabled {
             Some(self.admission.claim(&target.id)?)
         } else {
@@ -509,12 +658,20 @@ impl Control {
         {
             versions.current.get().runtime.clone()
         } else {
+            // Published only after the current runtime, if any, has faded
+            // out (`reserve`), so it starts silent or from the dry signal.
+            let start = if versions.current.get().runtime.is_none() && self.shared.pass.aligned() {
+                Start::AfterPassthrough
+            } else {
+                Start::Silent
+            };
             let runtime = Runtime::new(
                 target,
                 &prepared,
                 self.options,
                 self.next_epoch,
                 &self.admission,
+                start,
             )?;
             self.next_epoch += 1;
             Some(runtime)
@@ -541,31 +698,109 @@ impl Control {
     pub fn prepare(&mut self, target: &Target, revision: u64) -> Result<Staged, Error> {
         self.prepare_mode(target, revision, PathMode::Processed)
     }
-    pub fn reserve(&mut self, mut staged: Staged) -> Result<Reservation<'_>, Error> {
+    /// Starts the fade hand-off required to publish `staged` without waiting.
+    ///
+    /// - Reset (old runtime -> new runtime): old fades to silence; new starts
+    ///   silent for its delay, then fades in (`Start::Silent`).
+    /// - Processing off: zero-delay aligned paths fade to dry; others fade to
+    ///   silence and raw audio fades in (`RAW_RISE`).
+    /// - Processing on: zero-delay aligned paths need no wait (start from dry);
+    ///   others mute raw audio first (`RAW_MUTE`) and start silent.
+    ///
+    /// Wait on the returned handle with all locks dropped, then call `reserve_after`.
+    pub fn hand_off(&self, staged: &Staged) -> Result<HandingOff, Error> {
         if !Arc::ptr_eq(&self.shared, &staged.shared) {
             return Err(Error::WrongTarget);
         }
-        let versions = self.shared.versions.lock().map_err(|_| Error::Poisoned)?;
-        let error = if versions.pending != Some(staged.ticket)
-            || versions.current.get().revision != staged.expected_revision
-        {
-            Some(Error::StaleRevision)
-        } else if versions.retired.is_some() {
-            Some(Error::Busy)
-        } else {
-            None
+        let (runtime, to, raw) = {
+            let versions = self.shared.versions.lock().map_err(|_| Error::Poisoned)?;
+            check(&versions, staged)?;
+            let current = versions.current.get();
+            let next = staged.snapshot.as_ref().expect("staged snapshot").get();
+            let aligned = self.shared.pass.aligned();
+            match (&current.runtime, &next.runtime) {
+                _ if same_runtime(current, next) => (None, None, None),
+                // A reset: silence between the two.
+                (Some(old), Some(_)) => (
+                    Some(Arc::clone(old)),
+                    Some(rc2fx_dsp::HandOff::Silence),
+                    None,
+                ),
+                // Processing off.
+                (Some(old), None) if aligned && old.latency_samples() == 0 => (
+                    Some(Arc::clone(old)),
+                    Some(rc2fx_dsp::HandOff::Dry),
+                    Some(RAW_PLAY),
+                ),
+                (Some(old), None) => (
+                    Some(Arc::clone(old)),
+                    Some(rc2fx_dsp::HandOff::Silence),
+                    Some(RAW_RISE),
+                ),
+                // Processing on.
+                (None, Some(new)) if aligned && new.latency_samples() == 0 => {
+                    (None, None, Some(RAW_PLAY))
+                }
+                (None, Some(_)) => (None, None, Some(RAW_MUTE)),
+                (None, None) => (None, None, None),
+            }
         };
-        if let Some(error) = error {
+        let pass_before = self.shared.pass.target();
+        if let Some(raw) = raw
+            && raw != pass_before
+        {
+            self.shared.pass.request(raw);
+            // Every path is visited the next callbacks, this one included.
+            self.publications.fetch_add(1, Ordering::Release);
+        }
+        if let (Some(runtime), Some(to)) = (&runtime, to) {
+            runtime.request_hand_off(Some(to));
+        }
+        Ok(HandingOff {
+            ticket: staged.ticket,
+            runtime,
+            pass: Arc::clone(&self.shared.pass),
+            pass_wait: raw == Some(RAW_MUTE),
+            pass_before,
+            publications: Arc::clone(&self.publications),
+            timeout: self.handoff_timeout,
+            committed: false,
+        })
+    }
+    /// Takes the version lock for publishing `staged` once `handing` (its
+    /// `hand_off`) has been waited for. On an error, `handing` is undone.
+    pub fn reserve_after(
+        &mut self,
+        mut staged: Staged,
+        handing: HandingOff,
+    ) -> Result<Reservation<'_>, Error> {
+        if !Arc::ptr_eq(&self.shared, &staged.shared) || handing.ticket != staged.ticket {
+            return Err(Error::WrongTarget);
+        }
+        // Only this control changes the versions; the reader never locks.
+        let versions = self.shared.versions.lock().map_err(|_| Error::Poisoned)?;
+        if let Err(error) = check(&versions, &staged) {
             drop(versions);
             return Err(error);
         }
         Ok(Reservation {
             versions,
+            handing,
             published: &self.shared.published,
             publications: &self.publications,
             ticket: staged.ticket,
             next: staged.snapshot.take(),
         })
+    }
+    /// `hand_off`, its wait (no lock held, though `self` is) and
+    /// `reserve_after`: for tests, which own the control outright. The IPC
+    /// commit runs the three steps itself so it can drop its locks for the
+    /// wait.
+    #[cfg(test)]
+    pub fn reserve(&mut self, staged: Staged) -> Result<Reservation<'_>, Error> {
+        let handing = self.hand_off(&staged)?;
+        handing.wait();
+        self.reserve_after(staged, handing)
     }
     #[cfg(test)]
     pub fn publish(&mut self, target: &Target, revision: u64) -> Result<(), Error> {
@@ -617,19 +852,23 @@ impl Control {
         let worker = versions.current.get().runtime.as_ref()?.worker()?;
         Some(outliers_json(worker.telemetry().outliers()))
     }
-    /// The current worker's (missed-deadline, late-result) histories, typed
-    /// for the control API. Both come from one outliers snapshot under one
-    /// version lock, so they always belong to the same worker. None without
-    /// a worker; the histories retain their existing per-ring read semantics.
+    /// The current worker's runtime epoch and (missed-deadline, late-result)
+    /// histories, typed for the control API. All three are read under one
+    /// version lock, so the histories always belong to the same worker and
+    /// the epoch names it. None without a worker; the histories retain their
+    /// existing per-ring read semantics.
     pub fn worker_histories(
         &self,
     ) -> Option<(
+        u64,
         rc2fx_native_control::NativeHistory,
         rc2fx_native_control::NativeHistory,
     )> {
         let versions = self.shared.versions.lock().ok()?;
-        let worker = versions.current.get().runtime.as_ref()?.worker()?;
-        Some(native_histories(worker.telemetry().outliers()))
+        let runtime = versions.current.get().runtime.as_ref()?;
+        let worker = runtime.worker()?;
+        let (misses, lates) = native_histories(worker.telemetry().histories());
+        Some((runtime.epoch(), misses, lates))
     }
     pub fn retired_workers(&self) -> Vec<RetiredWorker> {
         self.shared
@@ -664,8 +903,23 @@ impl Control {
         })
     }
 }
+/// Whether `staged` may still be published over `versions`.
+fn check(versions: &Versions, staged: &Staged) -> Result<(), Error> {
+    if versions.pending != Some(staged.ticket)
+        || versions.current.get().revision != staged.expected_revision
+    {
+        Err(Error::StaleRevision)
+    } else if versions.retired.is_some() {
+        Err(Error::Busy)
+    } else {
+        Ok(())
+    }
+}
 fn native_histories(
-    outliers: rc2fx_suppression::Outliers,
+    (misses, lates): (
+        rc2fx_suppression::EventHistory,
+        rc2fx_suppression::EventHistory,
+    ),
 ) -> (
     rc2fx_native_control::NativeHistory,
     rc2fx_native_control::NativeHistory,
@@ -684,10 +938,7 @@ fn native_histories(
     };
     // Keep the wire mapping unchanged: unpublished records remain accounted
     // for by total, not added to lost; zero timestamps remain zero.
-    (
-        convert(outliers.miss_history),
-        convert(outliers.late_history),
-    )
+    (convert(misses), convert(lates))
 }
 
 pub(crate) fn worker_timing(value: rc2fx_suppression::Timing) -> rc2fx_native_control::Timing {
@@ -706,6 +957,11 @@ impl Reader {
     }
     pub fn mode(&self) -> Option<PathMode> {
         self.descriptor().map(|s| s.mode)
+    }
+    /// The path's unprocessed-audio fade, for the pipeline to keep beside
+    /// the reader (construction only).
+    pub fn pass_fade(&self) -> Arc<PassFade> {
+        Arc::clone(&self.shared.pass)
     }
     pub fn input(
         &self,
@@ -821,633 +1077,4 @@ impl Reader {
     }
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use rc2fx_core::TargetKind;
-
-    fn target() -> Target {
-        Target::new("headphones", "Headphones", TargetKind::Output, 2)
-    }
-    /// Arithmetic for disjoint worker totals. The live lookahead-switch test
-    /// covers retirement at the real call site, including archive feedback.
-    #[test]
-    fn timing_merge_sums_disjoint_workers() {
-        let first = rc2fx_native_control::Timing {
-            calls: 10,
-            total_ns: 1_000,
-            max_ns: 200,
-            overruns: 2,
-            clock_errors: 1,
-            histogram: [1, 0, 0, 0, 0, 0, 0, 0],
-        };
-        let second = rc2fx_native_control::Timing {
-            calls: 5,
-            total_ns: 400,
-            max_ns: 300,
-            overruns: 1,
-            clock_errors: 0,
-            histogram: [0, 2, 0, 0, 0, 0, 0, 0],
-        };
-        let once = merge_timing(first, second);
-        assert_eq!(
-            (
-                once.calls,
-                once.total_ns,
-                once.max_ns,
-                once.overruns,
-                once.clock_errors,
-                once.histogram,
-            ),
-            (15, 1_400, 300, 3, 1, [1, 2, 0, 0, 0, 0, 0, 0])
-        );
-        // A worker that has not run contributes nothing.
-        assert_eq!(merge_timing(once, ZERO_TIMING), once);
-    }
-
-    #[test]
-    fn paired_worker_histories_preserve_empty_and_absent_wire_fields() {
-        let mut target = Target::new("source", "Source", TargetKind::Mic, 1);
-        let (mut control, _reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        assert_eq!(control.worker_histories(), None);
-        let status = crate::target_status(&mut control).unwrap();
-        assert_eq!((status.misses, status.lates), (None, None));
-
-        target.suppression.enabled = true;
-        let (mut control, _reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        let empty = rc2fx_native_control::NativeHistory::default();
-        assert_eq!(
-            control.worker_histories(),
-            Some((empty.clone(), empty.clone()))
-        );
-        let status = crate::target_status(&mut control).unwrap();
-        assert_eq!(
-            (status.misses, status.lates),
-            (Some(empty.clone()), Some(empty))
-        );
-        assert_eq!(status.runtime_epoch, 1);
-    }
-
-    #[test]
-    fn paired_histories_preserve_both_rings_loss_unpublished_and_clock_failures() {
-        use rc2fx_native_control::{NativeEventRecord, NativeHistory};
-        use rc2fx_suppression::{EventHistory, EventRecord, Outliers, Recorded};
-        let outliers = Outliers {
-            worst: Recorded::Empty,
-            latest_slow: Recorded::Empty,
-            slow_frames: 0,
-            above: [0; 4],
-            last_miss: Recorded::Empty,
-            last_late: Recorded::Empty,
-            miss_history: EventHistory {
-                total: 8,
-                capacity: 2,
-                events: vec![
-                    EventRecord {
-                        sequence: 1,
-                        at_ns: 123,
-                    },
-                    EventRecord {
-                        sequence: 2,
-                        at_ns: 0,
-                    },
-                ],
-                lost: 5,
-                unpublished: 1,
-            },
-            late_history: EventHistory {
-                total: 4,
-                capacity: 2,
-                events: vec![
-                    EventRecord {
-                        sequence: 7,
-                        at_ns: 456,
-                    },
-                    EventRecord {
-                        sequence: 11,
-                        at_ns: 789,
-                    },
-                ],
-                lost: 0,
-                unpublished: 2,
-            },
-        };
-        assert_eq!(
-            native_histories(outliers),
-            (
-                NativeHistory {
-                    total: 8,
-                    lost: 5,
-                    events: vec![
-                        NativeEventRecord {
-                            sequence: 1,
-                            at_ns: 123
-                        },
-                        NativeEventRecord {
-                            sequence: 2,
-                            at_ns: 0
-                        },
-                    ],
-                },
-                NativeHistory {
-                    total: 4,
-                    lost: 0,
-                    events: vec![
-                        NativeEventRecord {
-                            sequence: 7,
-                            at_ns: 456
-                        },
-                        NativeEventRecord {
-                            sequence: 11,
-                            at_ns: 789
-                        },
-                    ],
-                },
-            )
-        );
-    }
-
-    #[test]
-    fn deadline_histories_report_their_accounting_and_no_invented_times() {
-        use rc2fx_suppression::{EventHistory, EventRecord, Outliers, Recorded};
-        let events: Vec<_> = (0..64)
-            .map(|sequence| EventRecord {
-                sequence,
-                at_ns: if sequence == 2 { 0 } else { 100 + sequence },
-            })
-            .collect();
-        let outliers = Outliers {
-            worst: Recorded::Empty,
-            latest_slow: Recorded::Empty,
-            slow_frames: 0,
-            above: [3, 2, 1, 0],
-            last_miss: Recorded::Stable(EventRecord {
-                sequence: 69,
-                at_ns: 500,
-            }),
-            last_late: Recorded::Empty,
-            miss_history: EventHistory {
-                total: 70,
-                capacity: 64,
-                events,
-                lost: 6,
-                unpublished: 0,
-            },
-            late_history: EventHistory {
-                capacity: 64,
-                ..Default::default()
-            },
-        };
-        let json = outliers_json(outliers);
-        let misses = &json["missHistory"];
-        for key in [
-            "capacity",
-            "total",
-            "recorded",
-            "lost",
-            "unpublished",
-            "complete",
-            "events",
-        ] {
-            assert!(misses.get(key).is_some(), "missing {key}");
-        }
-        assert_eq!(
-            (misses["total"].as_u64(), misses["recorded"].as_u64()),
-            (Some(70), Some(64))
-        );
-        assert_eq!(misses["lost"], 6);
-        assert_eq!(misses["complete"], false);
-        assert_eq!(
-            misses["events"][0],
-            serde_json::json!({"sequence": 0, "atNs": 100})
-        );
-        // A failed clock read is null, not epoch 0.
-        assert_eq!(
-            misses["events"][2],
-            serde_json::json!({"sequence": 2, "atNs": null})
-        );
-        let lates = &json["lateHistory"];
-        assert_eq!(
-            (lates["total"].as_u64(), lates["recorded"].as_u64()),
-            (Some(0), Some(0))
-        );
-        assert_eq!(lates["complete"], true);
-        assert_eq!(lates["events"], serde_json::json!([]));
-        // The latest records are unchanged alongside.
-        assert_eq!(json["lastMiss"]["sequence"], 69);
-        assert_eq!(json["lastLate"]["state"], "empty");
-    }
-    #[test]
-    fn compatible_updates_keep_an_enabled_classic_provider_signature() {
-        let mut target = Target::new("source", "Source", TargetKind::Mic, 1);
-        target.suppression.enabled = true;
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        assert_eq!(control.status().unwrap().runtime_epoch, 1);
-        target.eq.input_gain_db = -6.0;
-        let staged = control.prepare(&target, 2).unwrap();
-        control.reserve(staged).unwrap().commit();
-        assert!(reader.begin());
-        reader.finish(true);
-        assert_eq!(control.status().unwrap().applied, 2);
-        assert_eq!(control.status().unwrap().runtime_epoch, 1);
-        target.suppression.enabled = false;
-        let staged = control.prepare(&target, 3).unwrap();
-        control.reserve(staged).unwrap().commit();
-        assert_eq!(control.status().unwrap().runtime_epoch, 2);
-        assert!(control.worker_status().is_none());
-        assert!(reader.begin());
-        reader.finish(true);
-        control.status().unwrap();
-        assert_eq!(control.retired_worker_count(), 1);
-        let retired = control.retired_workers();
-        assert_eq!(retired[0].runtime_epoch, 1);
-        assert!(retired[0].joined && retired[0].drained);
-    }
-    #[test]
-    fn old_frame_remains_valid_and_updates_backpressure_until_new_frame_finishes() {
-        let target = target();
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        assert!(reader.begin());
-        control.publish(&target, 2).unwrap();
-        assert_eq!(reader.prepared().unwrap().channels(), 2);
-        assert_eq!(control.publish(&target, 3), Err(Error::Busy));
-        reader.finish(true);
-        assert!(reader.prepared().is_none());
-        assert_eq!(control.status().unwrap().applied, 1);
-        assert_eq!(control.publish(&target, 3), Err(Error::Busy));
-        assert!(reader.begin());
-        reader.finish(true);
-        control.publish(&target, 3).unwrap();
-        assert_eq!(control.status().unwrap().published, 3);
-        assert_eq!(control.status().unwrap().applied, 2);
-    }
-    #[test]
-    fn reader_retains_storage_after_control_is_dropped() {
-        let target = target();
-        let (control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        assert!(reader.begin());
-        drop(control);
-        assert_eq!(reader.prepared().unwrap().channels(), 2);
-        reader.finish(true);
-        assert!(reader.begin());
-        reader.finish(true);
-    }
-    #[test]
-    fn rejected_updates_leave_current_revision_unchanged() {
-        let mut target = target();
-        let (mut control, _reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        assert_eq!(control.publish(&target, 1), Err(Error::StaleRevision));
-        target.channels = 1;
-        assert_eq!(control.publish(&target, 2), Err(Error::RequiresReset));
-        target.id = "another-path".into();
-        assert_eq!(control.publish(&target, 2), Err(Error::WrongTarget));
-        assert_eq!(control.status().unwrap().published, 1);
-    }
-    #[test]
-    fn cancelling_staged_settings_keeps_audio_live_and_bounds_candidate_storage() {
-        let target = target();
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        let staged = control.prepare(&target, 2).unwrap();
-        assert_eq!(control.status().unwrap().published, 1);
-        assert!(matches!(control.prepare(&target, 3), Err(Error::Busy)));
-        assert!(reader.begin());
-        reader.finish(true);
-        assert_eq!(control.status().unwrap().applied, 1);
-        drop(staged);
-        let staged = control.prepare(&target, 3).unwrap();
-        drop(staged);
-        assert_eq!(control.status().unwrap().published, 1);
-    }
-    #[test]
-    fn commit_loan_does_not_block_reader_and_drop_aborts_publication() {
-        let target = target();
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        let staged = control.prepare(&target, 2).unwrap();
-        let reservation = control.reserve(staged).unwrap();
-        assert!(reader.begin());
-        assert_eq!(reader.prepared().unwrap().channels(), 2);
-        reader.finish(true);
-        drop(reservation);
-        assert_eq!(control.status().unwrap().published, 1);
-        assert_eq!(control.status().unwrap().applied, 1);
-        let staged = control.prepare(&target, 3).unwrap();
-        control.reserve(staged).unwrap().commit();
-        assert_eq!(control.status().unwrap().published, 3);
-        assert!(reader.begin());
-        reader.finish(true);
-        assert_eq!(control.status().unwrap().applied, 3);
-    }
-    #[test]
-    fn replacement_endpoint_refuses_old_staging_and_releases_its_original_slot() {
-        let target = target();
-        let prepared = Prepared::new(&target, 48_000).unwrap();
-        let (mut original, _original_reader) = channel(&target, prepared.clone());
-        let (mut replacement, _replacement_reader) = channel(&target, prepared);
-        let staged = original.prepare(&target, 2).unwrap();
-        assert!(matches!(
-            replacement.reserve(staged),
-            Err(Error::WrongTarget)
-        ));
-        assert_eq!(replacement.status().unwrap().published, 1);
-        assert!(original.prepare(&target, 3).is_ok());
-    }
-
-    #[test]
-    fn mode_descriptor_is_fixed_for_the_frame_and_retirement_waits_for_newer_release() {
-        let target = target();
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        let old = Arc::downgrade(
-            control
-                .shared
-                .versions
-                .lock()
-                .unwrap()
-                .current
-                .get()
-                .runtime
-                .as_ref()
-                .unwrap(),
-        );
-        assert!(reader.begin());
-        let staged = control
-            .prepare_mode(&target, 2, PathMode::Passthrough)
-            .unwrap();
-        control.reserve(staged).unwrap().commit();
-        assert_eq!(reader.mode(), Some(PathMode::Processed));
-        assert_eq!(control.status().unwrap().runtime_epoch, 0);
-        assert!(old.upgrade().is_some());
-        reader.finish(true);
-        control.status().unwrap();
-        assert!(
-            old.upgrade().is_some(),
-            "old frame release is not the newer descriptor fence"
-        );
-        assert!(reader.begin());
-        assert_eq!(reader.mode(), Some(PathMode::Passthrough));
-        assert_eq!(reader.latency_samples(), 0);
-        reader.finish(true);
-        control.status().unwrap();
-        assert!(old.upgrade().is_none());
-        let staged = control
-            .prepare_mode(&target, 3, PathMode::Processed)
-            .unwrap();
-        control.reserve(staged).unwrap().commit();
-        assert_eq!(control.status().unwrap().runtime_epoch, 2);
-    }
-
-    #[test]
-    fn cancelled_provider_is_joined_and_does_not_replace_current_runtime() {
-        let mut target = Target::new("mic", "Mic", TargetKind::Mic, 1);
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        target.suppression.enabled = true;
-        let staged = control
-            .prepare_mode(&target, 2, PathMode::Processed)
-            .unwrap();
-        assert_eq!(control.status().unwrap().runtime_epoch, 1);
-        assert!(reader.begin());
-        reader.finish(true);
-        drop(staged);
-        assert_eq!(control.status().unwrap().runtime_epoch, 1);
-        assert_eq!(control.retired_worker_count(), 1);
-        let retired = control.retired_workers();
-        assert_eq!(retired[0].runtime_epoch, 2);
-        assert!(retired[0].joined && retired[0].drained);
-        let staged = control
-            .prepare_mode(&target, 3, PathMode::Processed)
-            .unwrap();
-        control.reserve(staged).unwrap().commit();
-        assert_eq!(control.status().unwrap().runtime_epoch, 3);
-    }
-
-    #[test]
-    fn active_and_staged_descriptors_admit_only_one_mono_microphone_target() {
-        let admission = Admission::default();
-        let first = Target::new("first", "First", TargetKind::Mic, 1);
-        let mut second = Target::new("second", "Second", TargetKind::Mic, 1);
-        let (mut a, mut ar) = channel_with_options(
-            &first,
-            Prepared::new(&first, 48_000).unwrap(),
-            rc2fx_suppression::WorkerOptions::default(),
-            admission.clone(),
-            PathMode::Processed,
-        )
-        .unwrap();
-        let (mut b, _br) = channel_with_options(
-            &second,
-            Prepared::new(&second, 48_000).unwrap(),
-            rc2fx_suppression::WorkerOptions::default(),
-            admission,
-            PathMode::Processed,
-        )
-        .unwrap();
-        let mut enabled_first = first.clone();
-        enabled_first.suppression.enabled = true;
-        let staged = a
-            .prepare_mode(&enabled_first, 2, PathMode::Processed)
-            .unwrap();
-        second.suppression.enabled = true;
-        assert!(matches!(
-            b.prepare_mode(&second, 2, PathMode::Processed),
-            Err(Error::SuppressionInUse)
-        ));
-        drop(staged);
-        let staged = b.prepare_mode(&second, 3, PathMode::Passthrough).unwrap();
-        b.reserve(staged).unwrap().commit();
-        assert!(
-            matches!(
-                a.prepare_mode(&enabled_first, 3, PathMode::Processed),
-                Err(Error::SuppressionInUse)
-            ),
-            "a saved enable keeps its claim even while its path is unprocessed"
-        );
-        assert!(ar.begin());
-        ar.finish(true);
-    }
-
-    #[test]
-    fn chat_owns_one_worker_and_excludes_an_enabled_microphone() {
-        let admission = Admission::default();
-        let mut chat = Target::new("send-chat", "Chat", TargetKind::Output, 2);
-        chat.suppression.enabled = true;
-        let (control, mut reader) = channel_with_options(
-            &chat,
-            Prepared::new(&chat, 48_000).unwrap(),
-            rc2fx_suppression::WorkerOptions::default(),
-            admission.clone(),
-            PathMode::Processed,
-        )
-        .unwrap();
-        assert!(control.worker_status().is_some());
-        let mut mic = Target::new("mic-1", "Mic", rc2fx_core::TargetKind::Mic, 1);
-        mic.suppression.enabled = true;
-        assert!(matches!(
-            channel_with_options(
-                &mic,
-                Prepared::new(&mic, 48_000).unwrap(),
-                rc2fx_suppression::WorkerOptions::default(),
-                admission,
-                PathMode::Processed
-            ),
-            Err(Error::SuppressionInUse)
-        ));
-        assert!(reader.begin());
-        let mut left = [0.25; 112];
-        let mut right = [-0.25; 112];
-        assert_eq!(
-            reader.output([&mut left, &mut right]).unwrap_err(),
-            rc2fx_dsp::DspError::MissingChatStem
-        );
-        assert_eq!(left, [0.25; 112]);
-        assert_eq!(right, [-0.25; 112]);
-        reader
-            .chat_output([&[0.; 112], &[0.; 112]], [&mut left, &mut right])
-            .unwrap();
-        reader.finish(true);
-    }
-
-    #[test]
-    fn unresolved_cancel_retains_one_runtime_and_blocks_only_its_path() {
-        let mut target = Target::new("mic", "Mic", TargetKind::Mic, 1);
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        target.suppression.enabled = true;
-        let staged = control
-            .prepare_mode(&target, 2, PathMode::Processed)
-            .unwrap();
-        let runtime = staged
-            .snapshot
-            .as_ref()
-            .unwrap()
-            .get()
-            .runtime
-            .as_ref()
-            .unwrap()
-            .clone();
-        runtime.block_retirement(true);
-        drop(staged);
-        let blocked = matches!(
-            control.prepare_mode(&target, 3, PathMode::Processed),
-            Err(Error::Busy)
-        );
-        let retained = control.shared.versions.lock().unwrap().retired.is_some();
-        let archived = control.retired_worker_count();
-        assert!(reader.begin());
-        reader.finish(true);
-        // Release the test fence before any assertion can unwind into teardown.
-        runtime.block_retirement(false);
-        control.status().unwrap();
-        assert!(blocked && retained);
-        assert_eq!(archived, 0, "unresolved work is not a completed retirement");
-        assert_eq!(control.retired_worker_count(), 1);
-        assert!(control.shared.versions.lock().unwrap().retired.is_none());
-        assert_eq!(control.status().unwrap().runtime_epoch, 1);
-        assert!(
-            control
-                .prepare_mode(&target, 4, PathMode::Processed)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn repeated_eq_enable_changes_on_512k_callback_thread_keep_runtime_alive() {
-        use std::{
-            sync::atomic::AtomicBool,
-            time::{Duration, Instant},
-        };
-        let mut target = target();
-        target.limiter.enabled = false;
-        target.eq.enabled = true;
-        target.eq.bands = (0..20)
-            .map(|index| {
-                let mut band = rc2fx_core::Band::new(format!("toggle-{index}"));
-                band.frequency = 40.0 * 1.3_f64.powi(index);
-                band.gain = if index % 2 == 0 { 3.0 } else { -3.0 };
-                band
-            })
-            .collect();
-        let (mut control, mut reader) = channel(&target, Prepared::new(&target, 48_000).unwrap());
-        let initial = Arc::downgrade(
-            control
-                .shared
-                .versions
-                .lock()
-                .unwrap()
-                .current
-                .get()
-                .runtime
-                .as_ref()
-                .unwrap(),
-        );
-        let stop = Arc::new(AtomicBool::new(false));
-        let frames = Arc::new(AtomicU64::new(0));
-        let audio_stop = Arc::clone(&stop);
-        let audio_frames = Arc::clone(&frames);
-        let stack = std::env::var("RC2FX_EQ_CALLBACK_STACK_BYTES")
-            .map_or(524288, |value| value.parse::<usize>().unwrap());
-        assert!((32768..=2097152).contains(&stack));
-        // Runtime and prepared storage are constructed on control first. Only
-        // callback work runs on the explicitly bounded audio thread stack.
-        let audio = std::thread::Builder::new()
-            .name("eq-toggle-audio".into())
-            .stack_size(stack)
-            .spawn(move || {
-                let mut left = [0.01_f32; 112];
-                let mut right = [-0.02_f32; 112];
-                while !audio_stop.load(Ordering::Acquire) {
-                    left.fill(0.01);
-                    right.fill(-0.02);
-                    assert!(reader.begin());
-                    let meter = reader.output([&mut left, &mut right]).unwrap();
-                    assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
-                    reader.record(112, meter, reader.latency_samples() as u32);
-                    reader.finish(true);
-                    audio_frames.fetch_add(1, Ordering::Release);
-                }
-                reader
-            })
-            .unwrap();
-        let result = (|| -> Result<(), String> {
-            for revision in 2..=257 {
-                target.eq.enabled = revision % 2 != 0;
-                let deadline = Instant::now() + Duration::from_secs(10);
-                let staged = loop {
-                    match control.prepare_mode(&target, revision, PathMode::Processed) {
-                        Ok(staged) => break staged,
-                        Err(Error::Busy) if Instant::now() < deadline => std::thread::yield_now(),
-                        Err(error) => {
-                            return Err(format!("prepare revision {revision}: {error:?}"));
-                        }
-                    }
-                };
-                control
-                    .reserve(staged)
-                    .map_err(|error| format!("{error:?}"))?
-                    .commit();
-                let mut applied_at = None;
-                loop {
-                    let status = control.status().map_err(|error| format!("{error:?}"))?;
-                    if status.runtime_epoch != 1 || initial.upgrade().is_none() {
-                        return Err("compatible runtime was replaced or freed".into());
-                    }
-                    let at = frames.load(Ordering::Acquire);
-                    if status.applied == revision {
-                        applied_at.get_or_insert(at);
-                    }
-                    if applied_at.is_some_and(|start| at >= start + 8) {
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        return Err(format!("audio revision {revision} did not advance"));
-                    }
-                    std::thread::yield_now();
-                }
-            }
-            Ok(())
-        })();
-        stop.store(true, Ordering::Release);
-        let reader = audio.join().expect("EQ callback thread failed");
-        drop(reader);
-        result.unwrap();
-        assert_eq!(control.status().unwrap().runtime_epoch, 1);
-        assert_eq!(control.retired_worker_count(), 0);
-        assert!(frames.load(Ordering::Acquire) >= 256 * 8);
-    }
-}
+mod tests;

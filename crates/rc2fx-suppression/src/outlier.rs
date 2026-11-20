@@ -1,9 +1,6 @@
-//! The worker's slowest and latest slow frames and the endpoint's latest
-//! missed and late deadlines, for placing an outlier in a measurement window,
-//! plus the endpoint's first missed and late deadlines in order.
-//! Each record has exactly one writer and is a sequence lock over atomic
-//! words: no allocation, no lock, and a reader that gives up after a few
-//! tries rather than wait for a writer.
+//! Lock-free outlier and deadline-event recording for the worker and callback
+//! endpoint. Uses single-writer atomic seqlocks (`Slot`) so readers never block
+//! writers (bailing out as `Recorded::Busy` after a few retries).
 use std::sync::atomic::{AtomicU64, Ordering, fence};
 
 /// One frame through the worker. Times are CLOCK_MONOTONIC (wall) or the
@@ -160,9 +157,8 @@ impl WorkerOutliers {
 }
 /// Events each history keeps.
 pub const HISTORY: usize = 64;
-/// The first HISTORY events of one kind, in order and never overwritten;
-/// later ones are only counted. One writer; a record is published (its index
-/// + 1) after its words, and the total after that.
+/// First `HISTORY` events of one kind in order (later events are only counted).
+/// Single-writer; each entry publishes `index + 1` after its payload, then bumps `total`.
 pub(crate) struct History {
     total: AtomicU64,
     published: [AtomicU64; HISTORY],
@@ -292,6 +288,13 @@ pub(crate) fn snapshot(worker: &WorkerOutliers, endpoint: &EndpointOutliers) -> 
         late_history: endpoint.late_history.snapshot(),
     }
 }
+/// The (missed-deadline, late-result) histories only.
+pub(crate) fn histories(endpoint: &EndpointOutliers) -> (EventHistory, EventHistory) {
+    (
+        endpoint.miss_history.snapshot(),
+        endpoint.late_history.snapshot(),
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -341,6 +344,30 @@ mod tests {
                 at_ns: 123
             })
         );
+    }
+
+    #[test]
+    fn the_histories_alone_match_the_full_snapshot() {
+        let worker = WorkerOutliers::default();
+        let endpoint = EndpointOutliers::default();
+        endpoint.missed(EventRecord {
+            sequence: 0,
+            at_ns: 10,
+        });
+        endpoint.missed(EventRecord {
+            sequence: 4,
+            at_ns: 20,
+        });
+        endpoint.late(EventRecord {
+            sequence: 4,
+            at_ns: 25,
+        });
+        let full = snapshot(&worker, &endpoint);
+        let (misses, lates) = histories(&endpoint);
+        assert_eq!(misses, full.miss_history);
+        assert_eq!(lates, full.late_history);
+        assert_eq!(misses.total, 2);
+        assert_eq!(misses.events[0].sequence, 0);
     }
 
     #[test]

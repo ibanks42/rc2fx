@@ -1,25 +1,21 @@
-//! The feasibility probe that preceded the library's tiled int8 kernel
-//! (`kernels::matvec_q8`, 4-row x 16-column tiles). Standalone: it carries
-//! its own copies of the row-major kernel, of a four-rows-at-a-time kernel
-//! over row-major weights (the removed `dfn_q8_rows4` kernel, whose reason
-//! for removal is not recorded) and of a first packed-tile kernel. The
-//! library's kernel is a later form of `packed`, and `rc2fx-bench --kernel
-//! compare` times it against the row-major one through the whole model;
-//! this probe remains for timing the three layouts on one resident matrix.
+//! Standalone microbenchmark comparing three int8 matvec layouts on a single
+//! cache-resident matrix: row-major, 4-rows-at-a-time over row-major weights
+//! (the old `dfn_q8_rows4` approach), and 4x16 packed tiles (which evolved into
+//! `kernels::matvec_q8`). For full-model timing, use `rc2fx-bench --kernel compare`.
 //!
-//!     cargo run --release -p rc2fx-dfn --example packing_bench -- [ITERATIONS]
+//! ```text
+//! cargo run --release -p rc2fx-dfn --example packing_bench -- [ITERATIONS]
+//! ```
 //!
-//! On AArch64 (or under QEMU) it checks the three NEON kernels bit for bit
-//! against a scalar reference with wrapping i32 sums, over several shapes
-//! (including row tails and 1024 columns with i16 extremes, where the sums
-//! wrap), then times them. Elsewhere it checks packing and the scalar
-//! packed reference only. Timings from x86 or QEMU say nothing about the
-//! mixer's Cortex-A53.
+//! On AArch64 (or QEMU), this verifies all three NEON kernels bit-for-bit
+//! against a wrapping-i32 scalar reference across several shapes (including row
+//! tails and 1024-column i16 extremes that force i32 wraparound), then times
+//! them. On other architectures it only checks packing and the scalar packed
+//! reference. Timings from x86 or QEMU don't reflect the mixer's Cortex-A53.
 #![cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
 
-/// Row-major int8 rows to 4-row x 16-column tiles: for each group of four
-/// rows, for each 16 columns, the four rows' 16 bytes in row order (64
-/// bytes). Rows past the last complete group follow row-major.
+/// Pack row-major int8 weights into 4x16 tiles (64 bytes per tile, 4 rows x 16
+/// cols in row order). Trailing rows past the last full group of 4 stay row-major.
 fn pack(q: &[i8], rows: usize, cols: usize) -> Vec<i8> {
     assert!(cols.is_multiple_of(16) && q.len() == rows * cols);
     let mut out = Vec::with_capacity(q.len());
@@ -37,7 +33,7 @@ fn pack(q: &[i8], rows: usize, cols: usize) -> Vec<i8> {
     out
 }
 
-/// The library's scalar arithmetic, with explicitly wrapping i32 sums.
+/// Scalar reference matching the library's wrapping i32 accumulation.
 fn scalar(q: &[i8], scale: &[f32], rows: usize, cols: usize, xq: &[i16], xs: f32, y: &mut [f32]) {
     for r in 0..rows {
         let mut acc = 0i32;
@@ -48,7 +44,7 @@ fn scalar(q: &[i8], scale: &[f32], rows: usize, cols: usize, xq: &[i16], xs: f32
     }
 }
 
-/// The scalar packed reference: the same sums read from tiles.
+/// Scalar reference over the 4x16 tiled layout.
 fn scalar_packed(
     p: &[i8],
     scale: &[f32],
@@ -90,7 +86,7 @@ fn scalar_packed(
 mod neon {
     use std::arch::aarch64::*;
 
-    /// `matvec_q8_steps::<1>`'s original row loop.
+    /// Original row-by-row `matvec_q8` loop.
     #[inline(never)]
     pub fn baseline(
         q: &[i8],
@@ -128,7 +124,7 @@ mod neon {
         }
     }
 
-    /// `matvec_q8_rows4` over complete groups, the row loop for the rest.
+    /// Four rows at a time over row-major weights, falling back to `baseline` for the tail.
     #[inline(never)]
     pub fn rows4(
         q: &[i8],
@@ -178,8 +174,8 @@ mod neon {
         );
     }
 
-    /// The same products as `rows4`, reading each 4 x 16 tile as one
-    /// contiguous 64-byte block through a single advancing pointer.
+    /// Same 4-row accumulation as `rows4`, loading each 4x16 tile as a
+    /// contiguous 64-byte block via a single pointer.
     #[inline(never)]
     pub fn packed(
         p: &[i8],
@@ -246,8 +242,8 @@ fn main() {
         .map_or(2000, |a| a.parse().expect("ITERATIONS"));
     let mut rng = Lcg(0x2545_f491);
     let bits = |y: &[f32]| y.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
-    // (rows, cols, extremes): the LA0 GRU shape, row tails, and 1024 columns
-    // with i16 extremes so the i32 sums wrap.
+    // (rows, cols, extremes): LA0 GRU shape, odd row tails, and 1024-column
+    // extremes that force i32 wraparound.
     let shapes = [
         (384, 128, false),
         (384, 128, true),

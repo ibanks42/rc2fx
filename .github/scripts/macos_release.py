@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""Finish an app release by adding the macOS packages, then publish it.
+"""Attach macOS packages to an existing app release draft and publish it.
 
-The Release workflow creates the release as a DRAFT with the Linux and Windows
-packages; its last job calls this script with the macOS packages Velopack
-built in the same run: the portable zip, the installer, and the update package
-and feed. It adds them, rewrites SHA256SUMS, removes the pending notice and, as
-the very last step after every check, publishes the release as latest.
-A published release is never changed afterwards by this script.
+The Release workflow opens a draft release with Linux and Windows assets, then
+calls this script with the macOS packages built by Velopack (universal portable
+zip and .pkg installer, legacy arm64 aliases, update nupkg, and releases.osx.json).
+It uploads them, regenerates SHA256SUMS, strips the pending notice, and publishes
+the release as latest. Already-published releases are left untouched once complete.
 
   publish --tag TAG --source SHA --package-dir DIR
-      Finish the draft and publish it as latest, last. A release someone
-      published by hand before it was complete is finished but not published
-      again, so which release is latest is left as they chose. On a complete
-      published release, only check that it holds these exact macOS packages. A
-      draft older than the newest published release is refused before any
-      change and again just before publishing: publishing it as latest would
-      move latest backwards.
+      Complete and publish the draft release. If the release was manually
+      published early, finish missing assets without changing `latest`. Refuses
+      drafts older than the newest published release so `latest` never moves
+      backwards.
 
-Needs `gh` with GH_TOKEN, and GH_REPO (or GITHUB_REPOSITORY). Every refusal
-exits 1.
+Requires `gh` with GH_TOKEN and GH_REPO (or GITHUB_REPOSITORY). Exits 1 on refusal.
 """
 
 import argparse
@@ -48,9 +43,8 @@ def require(condition, message):
 
 
 class Gh:
-    """The GitHub operations this script uses, by release ID through the REST
-    API (which, unlike lookups by tag, also sees drafts). Tests replace it
-    with an in-memory fake."""
+    """Thin wrapper over GitHub's release REST API (by ID so drafts are visible).
+    Replaced with an in-memory fake in tests."""
 
     def __init__(self, repo):
         self.repo = repo
@@ -63,7 +57,7 @@ class Gh:
         return result.stdout
 
     def api(self, path):
-        """The JSON at repos/REPO/PATH, or None if it does not exist."""
+        """Return parsed JSON for repos/REPO/PATH, or None on 404."""
         result = subprocess.run(
             ["gh", "api", f"repos/{self.repo}/{path}"], capture_output=True, text=True
         )
@@ -74,8 +68,7 @@ class Gh:
         return json.loads(result.stdout)
 
     def releases(self):
-        """Every release, drafts included. `--slurp` gives a list of pages,
-        each a list of releases; they are flattened here."""
+        """Return all releases including drafts, flattened across paginated responses."""
         pages = json.loads(self._gh("api", "--paginate", "--slurp",
                                     f"repos/{self.repo}/releases?per_page=100") or "[]")
         require(isinstance(pages, list) and all(isinstance(p, list) for p in pages),
@@ -98,11 +91,10 @@ class Gh:
         self._gh("api", "--method", "DELETE", f"repos/{self.repo}/releases/assets/{asset_id}")
 
     def release(self, release_id):
-        """One release by ID, drafts included, or None."""
+        """Return one release by ID (including drafts), or None."""
         return self.api(f"releases/{release_id}")
 
-    # A PATCH on a draft that omits tag_name leaves the draft untagged, so
-    # both updates always send it.
+    # Always include tag_name when PATCHing a draft, otherwise GitHub clears it.
     def set_notes(self, release_id, tag, notes):
         self._gh("api", "--method", "PATCH", f"repos/{self.repo}/releases/{release_id}",
                  "-f", f"tag_name={tag}", "-f", f"body={notes}")
@@ -127,22 +119,20 @@ def safe_relative(name):
 
 
 def find_release(gh, tag):
-    """The one release (draft or published) for TAG, or None."""
+    """Return the release (draft or published) matching TAG, or None."""
     found = [r for r in gh.releases() if r.get("tag_name") == tag]
     require(len(found) <= 1, f"more than one release uses tag {tag}")
     return found[0] if found else None
 
 
 def app_version(tag):
-    """The numbers of a stable app tag; None for anything else."""
+    """Parse a stable app tag into a (major, minor, patch) tuple, or None."""
     match = re.fullmatch("v" + STABLE, tag) if isinstance(tag, str) else None
     return tuple(int(part) for part in match.groups()) if match else None
 
 
 def refuse_if_behind(gh, tag):
-    """Refuse a draft of TAG when a newer stable app release is published.
-    Other drafts, prereleases and non-app tags are not releases it could fall
-    behind. The list is read fresh on every call."""
+    """Refuse to publish TAG if a newer stable app release is already published."""
     published = [r.get("tag_name") for r in gh.releases()
                  if not r.get("draft") and not r.get("prerelease")]
     versions = [(app_version(t), t) for t in published if app_version(t) is not None]
@@ -154,11 +144,10 @@ def refuse_if_behind(gh, tag):
 
 
 def check_tag(gh, tag, source):
-    """TAG must point at SOURCE or its version-bump release commit."""
+    """Verify TAG points to SOURCE or the chore(release) commit directly on top of it."""
     commit = gh.api(f"commits/{tag}")
     require(commit is not None, f"tag {tag} has no commit")
-    # An already-versioned initial release needs no additional commit. The
-    # successful parent run and its immutable input artifact pin this source.
+    # Initial releases don't create a version-bump commit.
     if commit.get("sha") == source:
         return
     message = (commit.get("commit") or {}).get("message", "")
@@ -178,18 +167,22 @@ APP_MEMBERS = (
 )
 
 
+# Releases <= 0.1.7 used arm64-specific filenames; keep publishing identical
+# copies under those names so existing releases/latest/download/ links still work.
+LEGACY_ALIASES = {
+    "rc2fx-macos-arm64.zip": "rc2fx-macos-universal.zip",
+    "rc2fx-macos-arm64.pkg": "rc2fx-macos-universal.pkg",
+}
+
+
 def mac_names(version):
-    """The macOS packages, which this script adds: the portable zip, the
-    installer, and the update package and its feed (which keep vpk's names,
-    since the feed names the package). The feed comes last."""
-    return ("rc2fx-macos-arm64.zip", "rc2fx-macos-arm64.pkg",
+    """Return macOS asset names in upload order (Velopack feed last)."""
+    return ("rc2fx-macos-universal.zip", "rc2fx-macos-universal.pkg", *LEGACY_ALIASES,
             f"{PACK_ID}-{version}-osx-full.nupkg", "releases.osx.json")
 
 
 def expected_assets(version):
-    """The twelve packages, without SHA256SUMS. Published names have no
-    version, so releases/latest/download/NAME always links the newest one;
-    the update packages and feeds keep vpk's names, which do."""
+    """Return the full set of expected release assets (excluding SHA256SUMS)."""
     return {
         "rc2fx-linux-x64.AppImage", f"{PACK_ID}-{version}-linux-full.nupkg",
         "releases.linux.json", f"rc2fx-{version}-appimage-runtime-sources.tar.gz",
@@ -199,7 +192,7 @@ def expected_assets(version):
 
 
 def sound_zip(path):
-    """The entry names of a sound zip; a repeated name is refused."""
+    """Validate a zip archive and return its entry names, rejecting duplicates."""
     require(zipfile.is_zipfile(path), f"{path.name} is not a zip")
     with zipfile.ZipFile(path) as package:
         require(package.testzip() is None, f"{path.name} is damaged")
@@ -209,10 +202,7 @@ def sound_zip(path):
 
 
 def check_portable(path):
-    """Velopack's portable zip: the app bundle (`ditto --keepParent`), with
-    its updater, and nothing outside it but the bundle's sequestered
-    AppleDouble entries (`--sequesterRsrc`): __MACOSX/._RC2FX.app for the
-    bundle folder itself, and those under __MACOSX/RC2FX.app/."""
+    """Validate Velopack's portable zip (RC2FX.app plus ditto AppleDouble metadata)."""
     entries = sound_zip(path)
     for entry in entries:
         require(entry.startswith((APP, SEQUESTERED + APP))
@@ -224,7 +214,7 @@ def check_portable(path):
 
 
 def check_installer(path):
-    """A macOS installer package: a non-empty xar archive."""
+    """Validate that a macOS .pkg installer is a non-empty xar archive."""
     with path.open("rb") as package:
         magic = package.read(4)
     require(magic, f"{path.name} is empty")
@@ -232,15 +222,14 @@ def check_installer(path):
 
 
 def check_update_package(path):
-    """A NuGet package: a sound zip with its .nuspec at the root."""
+    """Validate a NuGet update package (valid zip with a root .nuspec)."""
     entries = sound_zip(path)
     require(any("/" not in e and e.endswith(".nuspec") for e in entries),
             f"{path.name} has no .nuspec at its root")
 
 
 def check_feed(path, version, package, digest):
-    """The feed must offer exactly this release's package, with its digest:
-    that digest is what the app checks the download against."""
+    """Verify releases.osx.json points to this exact nupkg and SHA-256."""
     try:
         feed = json.loads(path.read_bytes())
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -258,7 +247,7 @@ def check_feed(path, version, package, digest):
 
 
 def asset_map(release):
-    """The release's assets by name; a repeated name is refused."""
+    """Return {name: asset} for a release, rejecting duplicate names."""
     names = [a["name"] for a in release.get("assets", [])]
     require(len(set(names)) == len(names), "the release repeats an asset name")
     return {a["name"]: a for a in release.get("assets", [])}
@@ -270,7 +259,7 @@ def asset_digest(asset):
 
 
 def verified_bytes(gh, asset):
-    """An asset's bytes, which must match GitHub's digest when it has one."""
+    """Download an asset and verify it matches GitHub's reported SHA-256 if present."""
     data = gh.asset_bytes(asset["id"])
     claimed = asset_digest(asset)
     require(claimed in (None, sha256(data)), f"{asset['name']} does not match GitHub's digest")
@@ -278,7 +267,7 @@ def verified_bytes(gh, asset):
 
 
 def sums_for(gh, assets, version):
-    """SHA256SUMS text for the packages, from their actual bytes."""
+    """Build SHA256SUMS contents from the downloaded release assets."""
     names = set(assets) - {"SHA256SUMS"}
     require(names == expected_assets(version),
             f"release assets are not exactly the expected packages: {sorted(names)}")
@@ -286,9 +275,8 @@ def sums_for(gh, assets, version):
 
 
 def complete(gh, release, version, mac_shas=None):
-    """Whether a release holds exactly the packages and a SHA256SUMS that
-    matches them, has no pending notice, and (if given, as {name: sha256})
-    these macOS packages."""
+    """Return True if the release has all expected assets, matching SHA256SUMS,
+    no pending notice, and (when provided) matching macOS asset digests."""
     assets = asset_map(release)
     names = set(assets) - {"SHA256SUMS"}
     if "SHA256SUMS" not in assets or names != expected_assets(version):
@@ -302,9 +290,7 @@ def complete(gh, release, version, mac_shas=None):
 
 
 def changeable(gh, tag, release_id):
-    """The release as it is now, by ID, which must still carry TAG and accept
-    changes: a draft, or a published release that is not immutable
-    (published early by hand)."""
+    """Re-fetch a release by ID and verify it still has TAG and can be modified."""
     release = gh.release(release_id)
     require(release is not None, f"release {tag} disappeared")
     require(release.get("tag_name") == tag,
@@ -319,7 +305,8 @@ def publish(gh, tag, source, package_dir):
     require(re.fullmatch("v" + STABLE, tag), f"{tag!r} is not a stable app tag")
     require(re.fullmatch("[0-9a-f]{40}", source), f"{source!r} is not a commit id")
     version = tag[1:]
-    zip_name, pkg_name, nupkg_name, feed_name = names = mac_names(version)
+    names = mac_names(version)
+    zip_name, pkg_name, nupkg_name, feed_name = names[0], names[1], names[-2], names[-1]
     files = sorted(p.name for p in Path(package_dir).iterdir())
     require(files == sorted(names),
             f"{package_dir} must hold exactly {', '.join(sorted(names))}, not {files}")
@@ -328,6 +315,9 @@ def publish(gh, tag, source, package_dir):
         require(package.is_file() and not package.is_symlink(), f"{name} is not a regular file")
     check_portable(packages[zip_name])
     check_installer(packages[pkg_name])
+    for alias, original in LEGACY_ALIASES.items():
+        require(packages[alias].read_bytes() == packages[original].read_bytes(),
+                f"{alias} is not the same file as {original}")
     check_update_package(packages[nupkg_name])
     check_feed(packages[feed_name], version, nupkg_name,
                sha256(packages[nupkg_name].read_bytes()))
@@ -336,19 +326,17 @@ def publish(gh, tag, source, package_dir):
     require(release is not None, f"release {tag} does not exist")
     check_tag(gh, tag, source)
     if not release.get("draft") and complete(gh, release, version, mac_shas=ours):
-        return "already complete\n"  # read only: nothing to change
+        return "already complete\n"
     if release.get("draft"):
         refuse_if_behind(gh, tag)
-    # The release is re-read before every change: someone may publish the
-    # draft by hand meanwhile, which is fine while it stays changeable.
+    # Re-fetch before every mutation in case someone manually published the draft mid-run.
     release_id = release["id"]
     release = changeable(gh, tag, release_id)
     assets = asset_map(release)
     present = set(assets) - {"SHA256SUMS", *names}
     require(present == expected_assets(version) - set(names),
             f"release {tag} does not hold exactly the other packages: {sorted(present)}")
-    # Every existing copy is checked before any upload. The feed is uploaded
-    # last, after the package it names.
+    # Verify any already-uploaded macOS assets before uploading the rest (feed goes last).
     for name in names:
         if name in assets:
             require(sha256(verified_bytes(gh, assets[name])) == ours[name],
@@ -376,12 +364,11 @@ def publish(gh, tag, source, package_dir):
     notes = release.get("body") or ""
     if PENDING.search(notes):
         gh.set_notes(release_id, tag, PENDING.sub("\n", notes).strip("\n") + "\n")
-    # Last: everything checked again on the release as it now is. A draft is
-    # published as latest; a release already published by hand is left so.
+    # Final verification before publishing; leave manually published releases alone.
     release = changeable(gh, tag, release_id)
     require(complete(gh, release, version, mac_shas=ours), f"release {tag} is not complete")
     if release.get("draft"):
-        # A newer release may have been published during this run.
+        # Re-check in case a newer release was published while we were uploading.
         refuse_if_behind(gh, tag)
         gh.publish(release_id, tag)
     return sums

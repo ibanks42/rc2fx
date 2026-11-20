@@ -1,13 +1,28 @@
 #!/bin/sh
-# Refuses a commit whose Rust code is not rustfmt-formatted, as CI would.
-# Clippy and the tests take minutes: run `just test` before pushing instead.
+# Refuses a commit whose Rust code is not rustfmt-formatted, or whose staged
+# Go files are not gofmt-formatted, as CI would. Clippy, go vet and the tests
+# take minutes: run `just test` before pushing instead.
 # Enabled by `just setup`; skip once with `git commit --no-verify`.
 
-# Commits without Rust changes have nothing to format.
-git diff --cached --quiet -- '*.rs' && exit 0
+# rustfmt checks the working tree, so unstaged edits count too. The benchmark
+# and standalone tools are workspaces of their own, which `--all` skips.
+if ! git diff --cached --quiet -- '*.rs'; then
+    for manifest in Cargo.toml crates/rc2fx-bench/Cargo.toml tools/src_fast_check/Cargo.toml; do
+        if ! cargo fmt --all --manifest-path "$manifest" -- --check >/dev/null 2>&1; then
+            echo "pre-commit: Rust code is not formatted. Run \`cargo fmt --all --manifest-path $manifest\`, stage the changes and commit again." >&2
+            exit 1
+        fi
+    done
+fi
 
-# rustfmt checks the working tree, so unstaged edits count too.
-if ! cargo fmt --all -- --check >/dev/null 2>&1; then
-    echo "pre-commit: Rust code is not formatted. Run \`cargo fmt --all\`, stage the changes and commit again." >&2
-    exit 1
+# gofmt checks the staged Go files as they are in the working tree.
+go_files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if [ -n "$go_files" ]; then
+    # shellcheck disable=SC2086 # one file per word; the repo's paths have no spaces
+    unformatted=$(gofmt -l $go_files)
+    if [ -n "$unformatted" ]; then
+        echo "pre-commit: Go code is not formatted. Run \`gofmt -w\` on these, stage the changes and commit again:" >&2
+        echo "$unformatted" >&2
+        exit 1
+    fi
 fi

@@ -1,26 +1,17 @@
-//! Software prefetch for the callback's own work (`Front::warm` in
-//! pipeline.rs).
+//! Software cache prefetching for the audio callback (`Front::warm`).
 //!
-//! RØDE's processing runs between `Pipeline::begin` and `Pipeline::end` and
-//! pushes what they use out of the cache. The mixer's Cortex-A53 executes in
-//! order: a load that misses stops it until the line arrives, so the cold
-//! lines of a phase are waited for one after another. A prefetch only starts
-//! a line loading. Each phase therefore first asks for what it is about to
-//! touch, and then does its work.
-//!
-//! A prefetch reads and writes nothing and cannot fault, so it changes timing
-//! only. Even so, every address asked for lies inside an object the phase
-//! holds and is about to use. On other architectures these compile to
-//! nothing. Prefetching is always on.
+//! RØDE's native callback runs between `Pipeline::begin` and `Pipeline::end`
+//! and evicts our state from L1/L2. On the in-order Cortex-A53, cold loads
+//! stall sequentially, so each phase issues `prfm` hints up front for the lines
+//! it's about to touch. No-op on non-aarch64 targets.
 const LINE: usize = 64;
-/// How much of each end of a large value `ends` asks for.
+/// Bytes to prefetch from each end of large structs in `ends`.
 const END: usize = 256;
 
 #[inline(always)]
 fn line(address: *const u8, write: bool) {
     #[cfg(target_arch = "aarch64")]
-    // SAFETY: a hint. It accesses no memory, raises no fault for any address
-    // and leaves the flags and the stack alone.
+    // SAFETY: `prfm` is a pure cache hint; it never faults or mutates memory/flags/stack.
     unsafe {
         use std::arch::asm;
         if write {
@@ -32,21 +23,19 @@ fn line(address: *const u8, write: bool) {
     #[cfg(not(target_arch = "aarch64"))]
     let _ = (address, write);
 }
-/// How many lines `bytes` bytes can lie on when they start on a multiple of
-/// `align`.
+/// Max cache lines spanned by `bytes` starting at an `align`-byte boundary.
 const fn lines(bytes: usize, align: usize) -> usize {
     let align = if align < LINE { align } else { LINE };
     (LINE - align + bytes).div_ceil(LINE)
 }
-/// Where in those bytes the `index`th line is asked for: a line further on
-/// each time, and never past the last byte.
+/// Byte offset for the `index`th prefetch, clamped to the last byte of the span.
 const fn offset(index: usize, bytes: usize) -> usize {
     let offset = index * LINE;
     if offset < bytes { offset } else { bytes - 1 }
 }
-/// Every line that `bytes` bytes at `start` can lie on: one address per line,
-/// none outside the bytes. Sizes are constants at almost every call, where
-/// this is a run of `prfm`.
+/// Prefetches every cache line `bytes` at `start` can touch without stepping
+/// past the end. Since `bytes` is almost always a compile-time constant, this
+/// unrolls to a short run of `prfm` instructions.
 #[inline(always)]
 fn span(start: *const u8, bytes: usize, align: usize, write: bool) {
     if bytes == 0 {
@@ -56,7 +45,6 @@ fn span(start: *const u8, bytes: usize, align: usize, write: bool) {
         line(start.wrapping_add(offset(index, bytes)), write);
     }
 }
-/// Asks for `count` values at `pointer`, to read them.
 #[inline(always)]
 pub fn read<T>(pointer: *const T, count: usize) {
     span(
@@ -66,7 +54,6 @@ pub fn read<T>(pointer: *const T, count: usize) {
         false,
     );
 }
-/// As `read`, for values about to be written.
 #[inline(always)]
 pub fn write<T>(pointer: *const T, count: usize) {
     span(
@@ -76,10 +63,9 @@ pub fn write<T>(pointer: *const T, count: usize) {
         true,
     );
 }
-/// Asks for the first and the last `END` bytes of one value, or all of a
-/// small one. For rc2fx-dsp's processor and settings, which are far larger
-/// than a block uses and whose layout is not this crate's to know: today
-/// what every block uses of them lies at their two ends.
+/// Prefetches the first and last `END` bytes of `pointer` (or the whole value
+/// if it's small). Used for large `rc2fx-dsp` processor/settings structs whose
+/// hot per-block fields live near both ends.
 #[inline(always)]
 pub fn ends<T>(pointer: *const T, write: bool) {
     let (start, bytes) = (pointer.cast::<u8>(), size_of::<T>());
@@ -95,8 +81,6 @@ pub fn ends<T>(pointer: *const T, write: bool) {
 mod tests {
     use super::*;
 
-    /// The addresses `span` asks for: every line of the value and no address
-    /// outside it, wherever its alignment lets it start.
     #[test]
     fn a_span_asks_for_every_line_of_the_value_and_nothing_outside_it() {
         for (bytes, align) in [(8, 8), (48, 8), (200, 8), (448, 4), (END, 1), (1, 1)] {
@@ -113,12 +97,10 @@ mod tests {
                 }
             }
         }
-        // One channel's block is seven lines, or eight when it starts inside
-        // one; a value on a line of its own is asked for once.
+        // 112-sample f32 block = 448 bytes (7 lines if 64B-aligned, 8 otherwise).
         assert_eq!(lines(448, 4), 8);
         assert_eq!(lines(448, 64), 7);
         assert_eq!(lines(8, 8), 1);
-        // The calls themselves, on values of each shape.
         let block = [0.0f32; 112];
         read(block.as_ptr(), block.len());
         write(block.as_ptr(), block.len());

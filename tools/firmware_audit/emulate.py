@@ -1,8 +1,7 @@
-"""Execute selected vendor instructions under Unicorn, with OS/JUCE services stubbed.
+"""Unicorn-based test harness for selected vendor functions with OS/JUCE calls stubbed.
 
-This checks closure/copy/invocation semantics locally, not audio performance or
-device transport. PAC/BTI hints are skipped; allocation, strings, events and
-thread-pool submission have deterministic fixture implementations.
+Checks closure copy and invocation semantics offline; PAC/BTI hints are skipped
+and allocations, strings, events, and thread-pool submission use deterministic stubs.
 """
 import struct
 
@@ -37,7 +36,7 @@ class Harness:
         globals_ = dict(enqueue["globals"])
         self.empty_string = globals_[0x5C]
         self.stubs[calls[0x40]] = lambda: self.empty_string + 16
-        self.stubs[calls[0x84]] = lambda: 0  # WaitableEvent construction is outside the copy ABI.
+        self.stubs[calls[0x84]] = lambda: 0  # WaitableEvent init is irrelevant to the copy ABI.
         self.stubs[calls[0xF0]] = self.add_job
         self.cpu.hook_add(UC_HOOK_CODE, self.instruction)
 

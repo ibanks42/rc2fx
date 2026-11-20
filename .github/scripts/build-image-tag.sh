@@ -1,7 +1,6 @@
 #!/bin/sh
-# The build image's tag: a digest of what it is built from, so the image is
-# rebuilt exactly when its Containerfile or the pinned Rust changes. Shared by
-# package-check.sh and the build-image workflow.
+# Compute the build image tag from package-check.Containerfile and rust-toolchain.toml
+# so both package-check.sh and build-image.yml rebuild whenever Go, Rust, or base packages change.
 set -eu
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cat "$root/.github/scripts/package-check.Containerfile" "$root/rust-toolchain.toml" |

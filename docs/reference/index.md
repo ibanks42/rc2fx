@@ -1,30 +1,16 @@
 # Technical reference
 
-These pages cover protocols, file formats, firmware support and the crates.
-Read [Architecture](../developer/architecture.md) first.
+These docs cover RC2FX's protocols, file formats, firmware support, and individual crates. If you haven't read [Architecture](../developer/architecture.md) yet, start there.
 
-- [Noise suppression internals](suppression.md): the models, delay figures,
-  the worker thread, Chat Mix Out and the voice gate.
-- [Installer internals](installer.md): the files the installer adds to the
-  firmware image and the steps it takes to flash it.
-- [USB control](usb-control.md): how RC2FX shares RØDE's HID interface, the
-  message framing, and engine restarts that keep USB connected.
-- [Controller API and settings](api.md): the requests `rc2fxd` answers and
-  the saved settings format.
-- [EQ format and EasyEffects](eq-format.md): how EQ bands are stored and
-  calculated, and how they convert to and from EasyEffects presets.
-- [Firmware support](firmware.md): the firmware catalog, how a release is
-  qualified, and how to add one.
-- [RØDECaster Duo](duo.md): the experimental Duo support and the work that
-  still needs a real Duo.
-- [Stock source names](source-name-evidence.md): where input labels come
-  from in the public protocol and the pinned firmware. This is separate from
-  which paths can be processed.
-- [Virtual USB paths](usb-paths.md): buffer identities for the virtual USB
-  inputs and USB sends, how they were qualified offline, and what hardware
-  testing remains.
-- [Hardware](hardware.md): the mixer's processor, memory and quirks.
+- [Noise suppression internals](suppression.md): the models, delay numbers, worker thread setup, Chat Mix Out handling, and voice gate.
+- [Installer internals](installer.md): what gets added to the firmware image and how the flashing process works.
+- [USB control](usb-control.md): sharing RØDE's HID interface, message framing, and restarting the audio engine without dropping USB.
+- [Controller API and settings](api.md): the endpoints `rc2fxd` exposes and the saved settings schema.
+- [EQ format and EasyEffects](eq-format.md): how EQ bands are stored and computed, plus EasyEffects preset conversion.
+- [Firmware support](firmware.md): the firmware catalog, how releases get qualified, and how to add a new one.
+- [RØDECaster Duo](duo.md): experimental Duo support and what still needs testing on real hardware.
+- [Stock source names](source-name-evidence.md): where input labels come from in the public protocol and pinned firmware (separate from which paths RC2FX can actually process).
+- [Virtual USB paths](usb-paths.md): buffer identities for the virtual USB inputs and USB sends, offline qualification, and remaining hardware checks.
+- [Hardware](hardware.md): CPU, memory, and hardware quirks on the mixer.
 
-Each crate chapter is that crate's `README.md`, written for people changing
-the crate. The unfinished on-screen panel is documented in
-[`experiments/device-panel`](../../experiments/device-panel/README.md).
+Each crate section pulls directly from that crate's `README.md`, aimed at anyone working inside that crate. The unfinished on-screen panel is covered in [`experiments/device-panel`](../../experiments/device-panel/README.md).

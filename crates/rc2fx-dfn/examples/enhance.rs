@@ -1,7 +1,9 @@
-//! Runs the embedded model over a 48 kHz 16-bit mono WAV, writing the enhanced
-//! audio aligned to the input, for listening tests of engine changes:
+//! Run the embedded model on a 48 kHz 16-bit mono WAV and write the
+//! delay-aligned enhanced output for listening checks:
 //!
-//!     cargo run --release -p rc2fx-dfn --example enhance -- in.wav out.wav
+//! ```text
+//! cargo run --release -p rc2fx-dfn --example enhance -- in.wav out.wav
+//! ```
 use rc2fx_dfn::DeepFilter;
 
 fn main() {
@@ -60,7 +62,7 @@ fn main() {
     eprintln!("{output}: {} samples, delay {delay}", aligned.len());
 }
 
-/// (sample rate, channels, bits per sample, PCM data) from a canonical WAV.
+/// Returns `(sample_rate, channels, bits_per_sample, pcm_data)` from a standard WAV.
 fn parse_wav(b: &[u8]) -> (u32, u16, u16, &[u8]) {
     assert!(&b[..4] == b"RIFF" && &b[8..12] == b"WAVE", "not a WAV file");
     let u16_at = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]);

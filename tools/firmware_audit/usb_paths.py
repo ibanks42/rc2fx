@@ -34,8 +34,7 @@ from .duo_routes import Machine, call_at, counterpart, source_table
 from unicorn import arm64_const as regs
 
 FRAMES = 112
-# Analyst roles per mixer executable hash (ELF virtual addresses). The
-# relocation-normalized comparison in `cross_check` ties the two sets together.
+# Per-binary ELF addresses; cross_check() verifies relocation-normalized equivalence.
 ROLES = {
     "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c": {  # 1.7.6
         "callbackBridge": 0x370A70, "portEvents": 0x3716E0,
@@ -46,14 +45,13 @@ ROLES = {
         "sourceChange": 0x40CFD0, "activeMask": 0x61D900,
     },
 }
-# Offsets inside Mixer::Process (identical in both releases; `cross_check`
-# proves the whole function relocation-equivalent).
+# Offsets within Mixer::Process (identical across both releases).
 INPUT_GATHER = (0x270, 0xB94)
 OUTPUT_GATHER = (0x12D4, 0x14CC)
 OUTPUT_DISPATCH = (0x1BA4, 0x1A68)
 CALLS = {
     "prepareA": 0x2FC, "prepareB": 0x364, "prepareC": 0x378, "board": 0x448,
-    "property": 0xB90, "wrapper": 0xCC0, "dispatchWrapper": 0x1D24,
+    "property": 0xB90, "dispatchWrapper": 0x1D24,
 }
 # Internal slot -> 1-based JUCEJack input port, read from the gather.
 SLOT_PORTS = {0: 1, 1: 2, 2: 3, 3: 4, 10: 5, 11: 6, 4: 7, 5: 8, 8: 9, 9: 10, 6: 11, 7: 12,
@@ -159,7 +157,7 @@ class ProcessMachine(Machine):
         return destination
 
     def pointer_table(self, count):
-        """Distinct, recognisable pointers standing in for sample buffers."""
+        """Distinct, recognizable pointers standing in for sample buffers."""
         return [self.allocate(FRAMES * 4) for _ in range(count)]
 
     def frame(self):
@@ -296,7 +294,7 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
 
     def recorder(index):
         def record():
-            # Wrapper objects are reused on the stack: resolve the buffers now.
+            # Wrapper objects are stack-reused, so resolve their buffer pointers immediately.
             calls.append((members[m.register(0)], index, wrappers.get(m.register(1)), m.register(2)))
         return record
 
@@ -324,8 +322,7 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
     m.register(26, m.stack + 0x808)
     m.register(3, FRAMES)  # loaded at Process+0x16e8 before this branch
     if flags["rawStripCopyMode"]:
-        # Actual raw-mode branch copies the nine strips' source buffers. The
-        # first strip pair uses out_15/16; the other eight use out_27..42.
+        # Raw-strip mode copies the nine strips' source buffers (first pair -> out_15/16, rest -> out_27..42).
         stream = m.allocate(0x480)
         m.words(m.mixer + MIXER + 0x1FB0, stream)
         for index in range(9):
@@ -352,8 +349,7 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
             other.append({"member": hex(member), "vtableIndex": index})
     expected = dict(EXPECTED_DISPATCH)
     if flags["rawStripCopyMode"]:
-        # Raw strips replace Main send; Chat's synchronous Process call is
-        # skipped here too (its mix-minus preparation is separately gated).
+        # Raw-strip mode skips both the Main send and Chat's synchronous Process call.
         del expected[0x2080]
         del expected[0x2088]
         assert 0x2080 not in dispatch and 0x2088 not in dispatch
@@ -473,7 +469,7 @@ def source_chain(image, source_change):
             "aliases": {str(source): source + 10 for source in range(12, 16)}}
 
 
-def analyse(image, sites, roles):
+def analyze(image, sites, roles):
     process = sites["mixerProcess"]
     full_in = (1 << 36) - 1
     stereo_in = full_in & ~(((1 << 16) - 1) << 12)
@@ -546,17 +542,17 @@ def audit(catalog, archives):
         sha = hashlib.sha256(archive.read_bytes()).hexdigest()
         profile = profiles.get(sha)
         if profile is None:
-            raise ValueError(f"{archive} is not a catalogued official archive")
+            raise ValueError(f"{archive} is not a cataloged official archive")
         image, sites = checked_image(archive, profile)
         roles = ROLES[image.sha256]
         images.append((image, sites, roles))
-        report[profile["id"]] = {"archiveSha256": sha, **analyse(image, sites, roles)}
+        report[profile["id"]] = {"archiveSha256": sha, **analyze(image, sites, roles)}
     return {
         "schemaVersion": 1,
         "profiles": report,
         "crossRelease": cross_check(images),
         "method": "Unicorn execution of the vendor port-event handler and of three excerpts of Mixer::Process "
-                  "(input gather, output gather, output dispatch) with buffers replaced by recognisable pointers "
+                  "(input gather, output gather, output dispatch) with buffers replaced by recognizable pointers "
                   "and processors replaced by recording vtables; static instruction checks for the bridge, "
                   "active-mask source, registration loop and queued job.",
         "findings": [

@@ -1,4 +1,4 @@
-//! Blocking device-local control client. No audio/runtime or allocator hooks.
+//! Blocking Unix datagram client for the local native audio control socket.
 use crate::{
     ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, Reply, Request, Response,
     Session, Transaction, VERSION,
@@ -56,20 +56,18 @@ pub struct Client {
     next: u64,
     session: Option<Session>,
     buffer: Box<[u8]>,
-    /// The protocol this session speaks: `VERSION`, or the one an older
-    /// library offered while connecting.
+    /// Negotiated protocol version for this session.
     protocol: u32,
 }
 impl Client {
-    /// The protocol the library agreed to for this session.
     pub fn protocol(&self) -> u32 {
         self.protocol
     }
     pub fn session(&self) -> Option<&Session> {
         self.session.as_ref()
     }
-    /// A receipt pins this connection's exact native process session even when
-    /// retried through a later connection. It contains no address or audio data.
+    /// Creates a transaction receipt bound to this connection's session so
+    /// retries on a new socket still target the same native process.
     pub fn transaction(
         &self,
         context: u64,
@@ -104,10 +102,8 @@ impl Client {
             protocol: VERSION,
         };
         let mut response = client.request(Operation::Hello)?;
-        // A library older than this daemon refuses a version it does not know,
-        // and answers at the one it speaks. Re-hello there and keep it for the
-        // session: version 6 lacks only the fields this build added, which
-        // arrive as `None`.
+        // If the library is older and replies with UnsupportedVersion at a
+        // version we still support, downgrade and retry the handshake.
         if matches!(
             response.reply,
             Reply::Error {
@@ -165,10 +161,9 @@ impl Client {
             .map_err(io::Error::other)?;
             if response.request_id != request_id {
                 continue;
-            } // Discard a delayed older reply.
-            // A reply speaks the session's version. Before a session exists,
-            // one refusal at an older supported version is how an older
-            // library offers the version it speaks; `connect` takes it.
+            }
+            // Allow an older library to counter-offer its version during the
+            // initial handshake before a session is established.
             let version_changed = response.version != self.protocol;
             let offered = version_changed
                 && self.session.is_none()

@@ -1,8 +1,4 @@
-"""Read the vendor's source-name switch from pinned firmware, entirely offline.
-
-This establishes enum labels, not live availability or processing qualification.
-Uses only capstone and pyelftools from requirements.txt; no mixer is contacted.
-"""
+"""Extract the source-name jump table from a pinned firmware archive offline."""
 from __future__ import annotations
 
 import argparse
@@ -55,7 +51,7 @@ def audit(archive: Path, profile: dict) -> dict:
     page, add, anchor = dispatches[0]
     table = page.operands[1].imm + add.operands[2].imm
     base = anchor.operands[1].imm
-    # The index is the channel's source enum + 1, not its fader position.
+    # Jump table is indexed by (source enum + 1), not fader position.
     guards = []
     for index in range(len(instructions) - 3):
         a, b, c, d = instructions[index:index + 4]

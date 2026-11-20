@@ -1,0 +1,203 @@
+{
+  "mixerTargets": {
+    "accept": [
+      {
+        "name": "pro-ii-and-duo",
+        "json": {
+          "version": "0.2.1",
+          "payloadFormat": 1,
+          "protocolVersion": 1,
+          "minimumAppVersion": "0.1.7",
+          "firmwareProfiles": [
+            "rodecaster-pro-ii-1.7.7",
+            "rodecaster-duo-1.7.7"
+          ]
+        }
+      }
+    ],
+    "reject": [
+      {
+        "name": "unknown-field",
+        "json": {
+          "version": "0.2.1",
+          "payloadFormat": 1,
+          "protocolVersion": 1,
+          "minimumAppVersion": "0.1.7",
+          "firmwareProfiles": [
+            "rodecaster-pro-ii-1.7.7"
+          ],
+          "extra": true
+        }
+      },
+      {
+        "name": "missing-minimum-app",
+        "json": {
+          "version": "0.2.1",
+          "payloadFormat": 1,
+          "protocolVersion": 1,
+          "firmwareProfiles": [
+            "rodecaster-pro-ii-1.7.7"
+          ]
+        }
+      },
+      {
+        "name": "empty-profiles",
+        "json": {
+          "version": "0.2.1",
+          "payloadFormat": 1,
+          "protocolVersion": 1,
+          "minimumAppVersion": "0.1.7",
+          "firmwareProfiles": []
+        }
+      }
+    ]
+  },
+  "startRequests": {
+    "accept": [
+      {
+        "name": "whole-envelope",
+        "json": {
+          "version": "0.2.1",
+          "size": 9403,
+          "sha256": "8fb8f5ce993567895775f544a14450a6f9be0660f6ca146f04e6b75428a77a12",
+          "metadata": {
+            "root": [
+              "{}"
+            ],
+            "timestamp": "{}",
+            "snapshot": "{}",
+            "targets": "{}"
+          }
+        }
+      },
+      {
+        "name": "delta-upload-with-downgrade",
+        "json": {
+          "version": "0.2.0",
+          "size": 9403,
+          "sha256": "8fb8f5ce993567895775f544a14450a6f9be0660f6ca146f04e6b75428a77a12",
+          "metadata": {
+            "root": [
+              "{}",
+              "{}"
+            ],
+            "timestamp": "{}",
+            "snapshot": "{}",
+            "targets": "{}"
+          },
+          "allowDowngrade": true,
+          "encoding": "delta-1",
+          "uploadSize": 1024
+        }
+      }
+    ],
+    "reject": [
+      {
+        "name": "unknown-field",
+        "json": {
+          "version": "0.2.1",
+          "size": 100,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "metadata": {
+            "root": [
+              "{}"
+            ],
+            "timestamp": "{}",
+            "snapshot": "{}",
+            "targets": "{}"
+          },
+          "unexpected": 1
+        }
+      },
+      {
+        "name": "missing-metadata",
+        "json": {
+          "version": "0.2.1",
+          "size": 100,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    ]
+  },
+  "chunks": {
+    "accept": [
+      {
+        "name": "first-chunk",
+        "rawHex": "72633266782d7570646174652d6368756e6b",
+        "json": {
+          "offset": 0,
+          "data": "cmMyZngtdXBkYXRlLWNodW5r"
+        }
+      },
+      {
+        "name": "offset-chunk",
+        "rawHex": "0001feff",
+        "json": {
+          "offset": 196608,
+          "data": "AAH+/w=="
+        }
+      }
+    ],
+    "reject": [
+      {
+        "name": "unknown-field",
+        "json": {
+          "offset": 0,
+          "data": "AA==",
+          "extra": true
+        }
+      },
+      {
+        "name": "missing-offset",
+        "json": {
+          "data": "AA=="
+        }
+      }
+    ]
+  },
+  "progress": [
+    {
+      "name": "accepting-plain",
+      "json": {
+        "id": "0123456789abcdef",
+        "state": "accepting",
+        "version": "0.2.1",
+        "size": 9403,
+        "received": 4096
+      }
+    },
+    {
+      "name": "accepting-delta",
+      "json": {
+        "id": "fedcba9876543210",
+        "state": "accepting",
+        "version": "0.2.1",
+        "size": 9403,
+        "received": 512,
+        "encoding": "delta-1",
+        "uploadSize": 1024
+      }
+    },
+    {
+      "name": "restarting",
+      "json": {
+        "id": "0123456789abcdef",
+        "state": "restarting",
+        "version": "0.2.1",
+        "size": 9403,
+        "received": 9403
+      }
+    },
+    {
+      "name": "failed",
+      "json": {
+        "id": "0123456789abcdef",
+        "state": "failed",
+        "version": "0.2.1",
+        "size": 9403,
+        "received": 9403,
+        "error": "verification failed"
+      }
+    }
+  ]
+}

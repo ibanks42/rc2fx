@@ -1,27 +1,22 @@
-//! Release identities: the RC2FX mixer runtime's own version, kept apart from
-//! the desktop app's version and from RØDE's firmware version.
+//! Mixer runtime release identity, tracked separately from the desktop app
+//! and RØDE's firmware version.
 //!
-//! The mixer runtime ships `mixer-release.json` (see `config/`), installed as
-//! `/opt/rc2fx/mixer-release.json`. The device reports what it actually has
-//! installed through `GET api/v1/version` as [`DeviceVersions`]. A runtime
-//! that predates the endpoint answers 404, and its versions stay unknown.
+//! Each mixer runtime ships `config/mixer-release.json` (installed at
+//! `/opt/rc2fx/mixer-release.json`) and exposes installed versions via
+//! `GET api/v1/version` as [`DeviceVersions`]. Older runtimes return 404.
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-/// The control protocol this build speaks over USB 1. Bump it when a desktop
-/// app built against an older protocol could no longer drive the mixer.
+/// USB 1 control protocol version. Bump when older desktop apps can no longer
+/// talk to the mixer.
 pub const MIXER_PROTOCOL_VERSION: u32 = 1;
 
-/// The only `mixer-release.json` schema this build reads.
 pub const MIXER_RELEASE_SCHEMA: u32 = 1;
 
-/// The largest manifest accepted, far above any real one.
 const MAX_RELEASE_BYTES: usize = 4 * 1024;
-/// A firmware profile id may be up to 96 bytes; versions are far shorter.
-const MAX_VERSION_TEXT: usize = 128;
 
-/// `mixer-release.json`: the RC2FX mixer runtime's release identity.
+/// Contents of `mixer-release.json`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MixerRelease {
@@ -31,8 +26,7 @@ pub struct MixerRelease {
 }
 
 impl MixerRelease {
-    /// Parse and check a manifest: strict JSON, schema 1, a dotted numeric
-    /// version and a non-zero protocol.
+    /// Parses and validates a `mixer-release.json` manifest.
     pub fn parse(data: &[u8]) -> crate::Result<Self> {
         let text = std::str::from_utf8(data)
             .map_err(|_| crate::CoreError("mixer-release.json is not UTF-8".into()))?;
@@ -58,48 +52,31 @@ impl MixerRelease {
     }
 }
 
-/// What the mixer reports from `GET api/v1/version`. Every field is optional:
-/// a field the runtime cannot establish is absent, never guessed. Unknown
-/// fields are accepted so an older app can read a newer mixer.
+/// Response payload for `GET api/v1/version`. Unknown fields are ignored for
+/// forward compatibility, and any version the mixer can't determine is omitted.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DeviceVersions {
-    /// The installed RC2FX mixer release version.
+    /// Installed RC2FX mixer release version.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
-    /// The installed runtime's control protocol version.
+    /// Installed runtime's control protocol version.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<u32>,
-    /// The native library's control protocol, when older than this daemon's.
+    /// Native library's control protocol version, when older than the daemon's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_protocol: Option<u32>,
-    /// RØDE's firmware version, from the profile the launcher validated.
+    /// RØDE firmware version from the launcher-validated profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware: Option<String>,
-    /// The validated firmware profile's id.
+    /// Validated firmware profile ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware_profile: Option<String>,
-    /// Set when this controller installs signed RC2FX releases in place over
-    /// USB 1 (see `docs/developer/mixer-releases.md`); absent when it cannot.
-    /// 1 takes whole uploads; 2 also lists its installed files and takes delta
-    /// uploads. Any value above zero installs in place.
+    /// In-place USB 1 update capability (see `docs/developer/mixer-releases.md`),
+    /// omitted if unsupported. 1 supports full uploads; 2 adds file listing and
+    /// delta uploads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_place_updates: Option<u32>,
-}
-
-impl DeviceVersions {
-    /// Refuse text no real version has: these fields are shown as they arrive.
-    pub fn validate(&self) -> crate::Result<()> {
-        let fields = [&self.runtime, &self.firmware, &self.firmware_profile];
-        if fields
-            .into_iter()
-            .flatten()
-            .any(|text| !crate::valid_display_text(text, MAX_VERSION_TEXT))
-        {
-            return Err(crate::CoreError("Invalid mixer version text".into()));
-        }
-        Ok(())
-    }
 }
 
 fn parse_version(text: &str) -> Option<Vec<u64>> {
@@ -117,9 +94,9 @@ fn parse_version(text: &str) -> Option<Vec<u64>> {
         .collect()
 }
 
-/// Compare dotted numeric versions (`1.7.7`, `0.1`). Missing trailing parts
-/// count as zero, so `1.7` equals `1.7.0`. Anything else, including
-/// pre-release suffixes, is not comparable and gives `None`.
+/// Compares dotted numeric versions (`1.7.7`, `0.1`), treating missing trailing
+/// components as 0 (`1.7` == `1.7.0`). Returns `None` for non-numeric or
+/// pre-release strings.
 pub fn compare_versions(a: &str, b: &str) -> Option<Ordering> {
     let (a, b) = (parse_version(a)?, parse_version(b)?);
     let width = a.len().max(b.len());

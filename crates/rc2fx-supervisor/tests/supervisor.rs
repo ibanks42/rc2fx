@@ -1,6 +1,6 @@
-//! Runs the real `rc2fx-supervisor` against real child processes, with a stub
-//! `rc2fx.sh` and controller. No mixer, USB device or system file is touched.
-#![cfg(target_os = "linux")]
+//! Integration tests for `rc2fx-supervisor` using real child processes with
+//! stub `rc2fx.sh` and controller scripts. No mixer, USB device, or system
+//! files are touched.
 use std::{
     fs,
     os::unix::{fs::PermissionsExt, net::UnixDatagram},
@@ -10,8 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Records each call, then behaves like the real script: a restart ends the
-/// mixer and controller unless `restart-fails` exists.
+/// Stub `rc2fx.sh` that logs calls and mimics real teardown behavior unless
+/// `restart-fails` is present.
 const SCRIPT: &str = r#"#!/bin/bash
 root=ROOT
 echo "$*" >> "$root/calls"
@@ -213,13 +213,13 @@ fn a_reload_replaces_the_controller_and_leaves_the_mixer_running() {
         fs::read_to_string(rig.path("run/supervisor.features")).unwrap(),
         "reload\n"
     );
-    // A socket a killed controller left behind must not block the new one.
+    // Ensure a leftover socket from a killed controller gets cleaned up before restart.
     let stale = UnixDatagram::bind(rig.path("run/usb.sock")).unwrap();
     fs::remove_file(rig.path("controller-started")).unwrap();
     fs::write(rig.path("run/reload"), "").unwrap();
     let second = rig.wait_for_controller();
     assert_ne!(first, second);
-    // Stopped and reaped before the new one started.
+    // The old controller should be stopped and reaped before the new one starts.
     assert!(!Path::new(&format!("/proc/{first}")).exists());
     assert!(!rig.path("run/reload").exists());
     assert!(!rig.path("run/usb.sock").exists());
@@ -307,8 +307,8 @@ fn a_mixer_that_never_opens_its_socket_restores_stock() {
 
 #[test]
 fn the_controller_waits_for_the_next_second_after_the_socket_appears() {
-    // The controller's two-second connect starts from here, so it must not
-    // race a socket that has only just been bound.
+    // Wait until the next 1s tick before starting the controller so it doesn't
+    // race a freshly bound socket against its 2s connect timeout.
     let mut rig = Rig::new();
     rig.start(60, None);
     rig.wait_until_supervising();
@@ -385,7 +385,7 @@ fn a_boot_directory_it_cannot_write_does_not_stop_it_watching() {
 
 #[test]
 fn the_exit_steps_still_run_once_the_run_directory_has_gone() {
-    // The next launch deletes it after five seconds, whatever is still here.
+    // A newer launch deletes the run directory after 5s even if this supervisor is still exiting.
     let mut rig = Rig::new();
     fs::rename(rig.path("rc2fx.sh"), rig.path("run/rc2fx.sh")).unwrap();
     rig.start_with_script(1, &rig.path("run/rc2fx.sh"));
@@ -424,7 +424,7 @@ fn a_signal_ends_the_mixer_into_stock_at_once() {
     let pid = rig.supervisor.as_ref().unwrap().id() as i32;
     assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
     rig.finish();
-    assert!(rig.stock().unwrap().contains("Supervisor signalled"));
+    assert!(rig.stock().unwrap().contains("Supervisor signaled"));
     assert_eq!(
         rig.calls()[0],
         format!("{} {controller}", rig.restart_call(0))
@@ -463,8 +463,7 @@ fn the_record_of_a_newer_supervisor_is_left_alone() {
 
 #[test]
 fn it_never_answers_to_the_controllers_process_name() {
-    // `pgrep -x rc2fxd` decides that an install worked: it must find only the
-    // controller.
+    // Install verification uses `pgrep -x rc2fxd`, which must only match the controller.
     let mut rig = Rig::new();
     rig.start(60, None);
     rig.wait_until_supervising();

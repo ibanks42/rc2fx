@@ -15,45 +15,28 @@ impl Wake {
 
     pub fn notify(&self) -> bool {
         self.epoch.fetch_add(1, Ordering::Release);
-        #[cfg(target_os = "linux")]
-        {
-            // SAFETY: AtomicU32 has the required four-byte alignment. Shared
-            // owns this stable address until the worker has exited. WAKE never
-            // blocks and does not dereference the unused timeout arguments.
-            unsafe {
-                libc::syscall(
-                    libc::SYS_futex,
-                    self.epoch.as_ptr(),
-                    libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
-                    1,
-                    std::ptr::null::<libc::timespec>(),
-                    std::ptr::null::<u32>(),
-                    0,
-                ) >= 0
-            }
+        // SAFETY: AtomicU32 has the required four-byte alignment. Shared
+        // owns this stable address until the worker has exited. WAKE never
+        // blocks and does not dereference the unused timeout arguments.
+        unsafe {
+            libc::syscall(
+                libc::SYS_futex,
+                self.epoch.as_ptr(),
+                libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
+                1,
+                std::ptr::null::<libc::timespec>(),
+                std::ptr::null::<u32>(),
+                0,
+            ) >= 0
         }
-        #[cfg(not(target_os = "linux"))]
-        true
     }
 
     pub fn wait(&self, observed: u32) -> bool {
-        #[cfg(target_os = "linux")]
-        {
-            // The timeout is a control-side failure escape, not the normal
-            // audio wake cadence. Spurious wakes and signals recheck the queue.
-            self.wait_for(observed, 100_000_000).is_ok()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // Desktop hosts do not run the product audio engine. Retain their
-            // portable test/qualification behavior without a Linux syscall.
-            let _ = observed;
-            std::thread::sleep(std::time::Duration::from_micros(100));
-            true
-        }
+        // The timeout is a control-side failure escape, not the normal
+        // audio wake cadence. Spurious wakes and signals recheck the queue.
+        self.wait_for(observed, 100_000_000).is_ok()
     }
 
-    #[cfg(target_os = "linux")]
     fn wait_for(&self, observed: u32, nanoseconds: libc::c_long) -> Result<Wait, ()> {
         let timeout = libc::timespec {
             tv_sec: 0,
@@ -85,7 +68,6 @@ impl Wake {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Debug, PartialEq, Eq)]
 enum Wait {
     Woken,
@@ -94,7 +76,7 @@ enum Wait {
     TimedOut,
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

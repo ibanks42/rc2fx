@@ -1,55 +1,44 @@
-//! Keeps the denoiser's weight streaming out of the audio callback's time.
+//! Pause denoiser weight streaming while the audio callback is running.
 //!
-//! The mixer's four cores share one L2 cache and one memory bus. The
-//! suppression worker (CPU 0) reads about 590 KB of weights every 5 ms hop,
-//! and while it does, the audio callback (CPU 2) waits longer for each of its
-//! own cache misses. The library marks the callback's span in
-//! [`CALLBACK_BUSY`]; before each large weight product the worker's model
-//! checks it, and while it is set, sleeps in [`NAP`] slices until it clears.
+//! On the mixer, all four cores share one L2 cache and memory bus. The
+//! suppression worker (CPU 0) streams ~590 KB of weights every 5 ms hop, which
+//! stalls the audio callback (CPU 2) on cache misses. The audio callback sets
+//! [`CALLBACK_BUSY`] while it runs, and the worker checks it before each large
+//! matvec and sleeps in [`NAP`] increments until it clears.
 //!
-//! Two limits keep the waiting from costing the frame its deadline, both set
-//! per frame by [`grant`]: a budget for the frame's total wait, and a window
-//! measured from the frame's submission, after which the frame never waits.
-//! A frame that starts late (its predecessor ran long) therefore waits less or
-//! not at all, so one slow frame cannot push the next ones later. A callback
-//! that never clears the mark (a stopped engine) costs each frame at most the
-//! budget, and a caller that granted nothing (the inline endpoint, tests)
-//! never waits.
+//! To keep waiting from blowing a frame's deadline, [`grant`] sets two limits
+//! per frame: a total wait budget and a cutoff window measured from frame
+//! submission. Late-starting frames wait less (or not at all) so slow frames
+//! don't cascade. If the callback never clears the flag (e.g. engine stopped),
+//! each frame burns at most its budget; callers that never call `grant`
+//! (benchmarks, tests) never wait.
 //!
-//! One denoiser runs per process (the service allows suppression on one
-//! target), so the limits are statics.
+//! Only one denoiser runs per process, so the state lives in statics.
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// Set by the audio callback while it runs.
+/// Set by the audio callback while it is active.
 pub static CALLBACK_BUSY: AtomicBool = AtomicBool::new(false);
-/// The longest one sleep while held. A callback takes about 800 us on the
-/// mixer, so a wait is a handful of sleeps, and the frame resumes at most this
-/// much (plus the wake-up) after the callback ends. Measured on the mixer
-/// (2026-11-11): sleeping costs the worker about 77 us of CPU per 5 ms frame,
-/// spinning about 300, for the same callback gain.
+/// Maximum sleep slice while holding. Callbacks run ~800 us on the mixer, so
+/// waiting takes a handful of sleeps. Measured on-device (2026-11-11): sleeping
+/// uses ~77 us of worker CPU per 5 ms frame vs ~300 us for spinning, with the
+/// same callback benefit.
 pub const NAP: Duration = Duration::from_micros(100);
-/// How long after its submission a frame may still wait, in nanoseconds.
-/// Production uses the default; tests vary it.
+/// Cutoff window after frame submission (ns); overridden in tests.
 pub static WINDOW_NS: AtomicU64 = AtomicU64::new(DEFAULT_WINDOW_NS);
-/// Measured on the mixer (2026-11-12, 10-minute blocks): with a window of
-/// 1.5 ms or less a frame has rarely started before the window closes, and
-/// waits under 100 us per frame, which gains the callback nothing; from 2.5 ms
-/// on it waits 600 to 750 us and RØDE's share of the callback falls by about
-/// 14 us, the same at 4 and 6 ms. Frames then take up to 3.75 ms from
-/// submission (2.5 without the hold). The worst case is bounded by the
-/// frame's budget, not the window: the slowest frames take about 3.9 ms
-/// without the hold, plus at most the 1 ms budget, inside the 6.67 ms
-/// allowance.
+/// Measured on-device (2026-11-12, 10-minute blocks): at <=1.5 ms, frames
+/// rarely start before the window closes (<100 us wait, no callback win); at
+/// 2.5 ms and above they wait 600-750 us and RØDE's callback time drops ~14 us
+/// (flat at 4 ms and 6 ms). Worst-case frame time is bounded by the 1 ms wait
+/// budget (~3.9 ms + 1 ms, comfortably under the 6.67 ms allowance).
 pub const DEFAULT_WINDOW_NS: u64 = 2_500_000;
-/// Nanoseconds the current frame may still spend waiting.
+/// Remaining wait budget for the current frame (ns).
 static LEFT_NS: AtomicU64 = AtomicU64::new(0);
-/// When the current frame's window closes, in nanoseconds since [`epoch`].
+/// Deadline (ns since [`epoch`]) when the current frame's wait window closes.
 static UNTIL_NS: AtomicU64 = AtomicU64::new(0);
-/// Totals, for reports: waits, nanoseconds waited, waits that used up the
-/// frame's budget with the callback still running, and waits cut short or
-/// skipped because the frame's window had closed.
+/// Diagnostic counters: total holds, total ns held, holds that hit the budget,
+/// and holds skipped or cut short by the submission window.
 pub static HOLDS: AtomicU64 = AtomicU64::new(0);
 pub static HELD_NS: AtomicU64 = AtomicU64::new(0);
 pub static EXHAUSTED: AtomicU64 = AtomicU64::new(0);
@@ -64,10 +53,9 @@ fn now_ns() -> u64 {
     epoch().elapsed().as_nanos() as u64
 }
 
-/// Lets the next frame wait up to `budget_ns` in total, and only within the
-/// window that opened `since_submitted_ns` ago (None, an unreadable clock,
-/// grants nothing). The worker calls this before each frame and
-/// `grant(0, None)` after it.
+/// Allow the next frame to wait up to `budget_ns` total, within the window
+/// opened `since_submitted_ns` ago (`None` grants nothing). Call before each
+/// frame and reset with `grant(0, None)` afterward.
 pub fn grant(budget_ns: u64, since_submitted_ns: Option<u64>) {
     let open = since_submitted_ns
         .map(|since| WINDOW_NS.load(Ordering::Relaxed).saturating_sub(since))
@@ -79,9 +67,15 @@ pub fn grant(budget_ns: u64, since_submitted_ns: Option<u64>) {
     LEFT_NS.store(budget_ns.min(open), Ordering::Relaxed);
 }
 
-/// Called before each large weight product.
+/// Checked before each large weight matvec.
 #[inline(always)]
 pub(crate) fn gate() {
+    // Only let the hold tests' own threads wait so parallel model tests don't
+    // stomp on the shared budget statics.
+    #[cfg(test)]
+    if !tests::GATED.with(std::cell::Cell::get) {
+        return;
+    }
     if CALLBACK_BUSY.load(Ordering::Relaxed) && LEFT_NS.load(Ordering::Relaxed) != 0 {
         wait();
     }
@@ -95,8 +89,8 @@ fn wait() {
     let open = UNTIL_NS.load(Ordering::Relaxed).saturating_sub(start);
     let limit = left.min(open);
     let mut waited = 0;
-    // The line holding the flag stays in this core's L1 until the callback
-    // writes it, so looking at it adds no memory traffic.
+    // The flag's cache line stays local in L1 until the callback writes it, so
+    // polling it here adds no bus traffic.
     while CALLBACK_BUSY.load(Ordering::Acquire) {
         if waited >= limit {
             if open < left {
@@ -109,7 +103,6 @@ fn wait() {
         std::thread::sleep(NAP.min(Duration::from_nanos(limit - waited)));
         waited = now_ns().saturating_sub(start);
     }
-    // A window that has closed ends this frame's waiting.
     let left = if open <= waited {
         0
     } else {
@@ -125,8 +118,17 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// The statics are shared; these tests take turns.
+    // Serialize tests that touch the global statics.
     static TURN: Mutex<()> = Mutex::new(());
+
+    thread_local! {
+        pub(super) static GATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn turn() -> std::sync::MutexGuard<'static, ()> {
+        GATED.with(|gated| gated.set(true));
+        TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn timed(f: impl FnOnce()) -> Duration {
         let t = Instant::now();
@@ -136,7 +138,7 @@ mod tests {
 
     #[test]
     fn nothing_waits_without_a_grant_or_without_the_mark() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(DEFAULT_WINDOW_NS, Ordering::Relaxed);
         let spent = timed(|| {
             grant(0, Some(0));
@@ -152,7 +154,7 @@ mod tests {
 
     #[test]
     fn a_frame_waits_at_most_its_budget_in_total() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(1_000_000_000, Ordering::Relaxed);
         CALLBACK_BUSY.store(true, Ordering::Relaxed);
         grant(2_000_000, Some(0));
@@ -168,18 +170,17 @@ mod tests {
 
     #[test]
     fn a_frame_never_waits_past_its_window() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(3_000_000, Ordering::Relaxed);
         CALLBACK_BUSY.store(true, Ordering::Relaxed);
-        // Submitted 1 ms ago with a 3 ms window: at most about 2 ms of waiting
-        // left, though the budget allows a second.
+        // Submitted 1 ms ago with a 3 ms window -> ~2 ms left despite a 1 s budget.
         grant(1_000_000_000, Some(1_000_000));
         let spent = timed(|| (0..10).for_each(|_| gate()));
         assert!(
             spent.as_micros() >= 1_500 && spent.as_micros() < 20_000,
             "{spent:?}"
         );
-        // Submitted after its window closed: no waiting at all.
+        // Window already closed -> shouldn't wait.
         let past = PAST_WINDOW.load(Ordering::Relaxed);
         grant(1_000_000_000, Some(3_000_000));
         let spent = timed(gate);
@@ -192,7 +193,7 @@ mod tests {
 
     #[test]
     fn a_wait_ends_when_the_callback_clears_the_mark() {
-        let _turn = TURN.lock().unwrap();
+        let _turn = turn();
         WINDOW_NS.store(1_000_000_000, Ordering::Relaxed);
         CALLBACK_BUSY.store(true, Ordering::Relaxed);
         grant(1_000_000_000, Some(0));

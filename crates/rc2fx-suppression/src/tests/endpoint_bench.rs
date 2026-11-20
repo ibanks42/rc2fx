@@ -1,17 +1,13 @@
-//! The callback endpoint against its original per-sample form, and its host
-//! cost.
+//! Endpoint differential tests and host-side microbenchmark (x86 host only,
+//! not Cortex-A53). Runs without a worker thread: a synchronous fake model
+//! services queues between blocks so scheduling doesn't add noise.
 //!
-//! The endpoint fixture has no OS worker thread. A fake model on the same
-//! thread services the input queue between blocks and publishes each frame
-//! immediately (scaled by 0.5, voice 0.75), so neither DFN timing nor
-//! scheduling enters. Timings are host x86, NOT A53.
+//! `reference_sample` is the original division-based `Worker::process_sample`;
+//! both `process_sample` and `process_block` must match it bit-for-bit.
 //!
-//! `reference_sample` is `Worker::process_sample` as it was before the
-//! output phase and frame became counters: it divides the sample count for
-//! both at every sample. `Worker::process_sample` and `Worker::process_block`
-//! must reproduce it bit for bit: outputs, voices, state and counters.
-//!
-//!     cargo test --release -p rc2fx-suppression endpoint_bench -- --include-ignored --nocapture
+//! ```text
+//! cargo test --release -p rc2fx-suppression endpoint_bench -- --include-ignored --nocapture
+//! ```
 use super::*;
 use std::hint::black_box;
 
@@ -46,10 +42,9 @@ fn serve(input: &mut Consumer, output: &mut Producer, nan_at: Option<u64>) {
     }
 }
 
-/// `Worker::process_sample` as first written, kept as the reference: the
-/// output phase and the due frame come from a modulo and a division of the
-/// sample count at every sample. It neither reads nor advances the counters
-/// that replaced them, so a worker must be driven by this alone.
+// Original `Worker::process_sample` using per-sample division/modulo instead of
+// running counters. Must not be mixed with `process_sample`/`process_block` on
+// the same `Worker` instance since it doesn't update `out_phase`/`due`.
 fn reference_sample(w: &mut Worker, input: f32, wet: f32) -> f32 {
     let input = if input.is_finite() { input } else { 0. };
     let dry = w.dry[w.dry_position];
@@ -76,12 +71,10 @@ fn reference_sample(w: &mut Worker, input: f32, wet: f32) -> f32 {
                 w.shared.missed.fetch_add(1, Ordering::Relaxed);
                 w.pending = Some(due);
                 let at = metrics::now(false).unwrap_or(0);
-                let event = EventRecord {
+                w.shared.endpoint_outliers.missed(EventRecord {
                     sequence: due,
                     at_ns: at,
-                };
-                w.shared.endpoint_outliers.missed(event);
-                w.shared.capture.missed(event);
+                });
             }
         } else if w.pending == Some(due) && w.choose(due) {
             w.pending = None;
@@ -285,11 +278,8 @@ fn run(
     (outs, voices, state)
 }
 
-/// `Worker::process_sample` (counters in place of the division) and
-/// `Worker::process_block`, alone and mixed, against `reference_sample`:
-/// every output bit, every voice, and the endpoint's state and counters, over
-/// block sizes, geometries, service patterns (results on time, late, stale,
-/// never) and input and failure scenarios.
+// Compare `process_sample`, `process_block`, and mixed calls against
+// `reference_sample` across geometries, block sizes, and fault scenarios.
 #[test]
 fn endpoint_paths_match_the_reference_bit_for_bit() {
     let mut rng = Rng(99);
@@ -559,14 +549,8 @@ fn run_scheduled(
     )
 }
 
-/// The three paths against `reference_sample` with results arriving at any
-/// sample, not only between blocks, and exactly around each deadline: the
-/// last sample at which a result is on time, the first at which it is late,
-/// the last at which a late result still plays and the first at which it is
-/// stale. Over geometries whose output frames start on, next to and away
-/// from the sample that completes an input frame, other frame lengths (down
-/// to one sample, up to the queue's largest), the longest dry delay, and
-/// blocks from one sample to several frames that never align with a frame.
+// Test exact deadline boundaries (on-time, first late sample, last late sample,
+// first stale sample) with publications arriving mid-block across geometries.
 #[test]
 fn endpoint_paths_match_the_reference_around_every_deadline() {
     let mut rng = Rng(77);
@@ -717,93 +701,66 @@ fn output_counters_follow_the_sample_count() {
     }
 }
 
-/// A model that halves its input and reports a voice score of 0.75.
-struct Halve;
-impl Model for Halve {
-    fn process(&mut self, samples: &mut [f32]) -> Result<f32, Error> {
-        samples.iter_mut().for_each(|x| *x *= 0.5);
-        Ok(0.75)
-    }
-    fn reset(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-}
-
 /// `Endpoint::process_block` against `Endpoint::process_sample` and
-/// `Endpoint::voice` for both kinds of endpoint: every output bit and every
-/// voice, over uneven block sizes, non-finite input and a moving wet. The
-/// inline endpoint runs its model inside the call that completes a frame.
+/// `Endpoint::voice`: every output bit and every voice, over uneven block
+/// sizes, non-finite input and a moving wet.
 #[test]
-fn endpoint_blocks_match_endpoint_samples_for_both_kinds() {
-    let inline = || {
-        let geometry = Geometry {
-            worker_lead_samples: 0,
-            ..PRODUCTION
-        };
-        Endpoint::Inline(Inline::with_model(geometry, Box::new(Halve)).unwrap())
-    };
+fn endpoint_blocks_match_endpoint_samples() {
     // The threadless worker fixture; nothing serves it, so it plays dry and
     // counts misses, which both paths must do alike.
-    let threaded = || Endpoint::Worker(worker(PRODUCTION).0);
-    for (kind, make) in [
-        ("inline", &inline as &dyn Fn() -> Endpoint),
-        ("worker", &threaded),
-    ] {
-        let (mut by_sample, mut by_block) = (make(), make());
-        let mut rng = Rng(0x1234_5678_9abc_def1);
-        let (mut done, mut played) = (0usize, false);
-        while done < 6_000 {
-            let n = 1 + (rng.next() % 300) as usize;
-            let x: Vec<f32> = (0..n)
-                .map(|i| match (done + i) % 131 {
-                    0 => f32::NAN,
-                    1 => f32::INFINITY,
-                    2 => -0.,
-                    _ => rng.sample(),
-                })
-                .collect();
-            let wet: Vec<f32> = (0..n)
-                .map(|i| 0.5 + 0.5 * ((done + i) as f32 * 0.003).sin())
-                .collect();
-            let mut want = vec![(0u32, None); n];
-            for i in 0..n {
-                let y = by_sample.process_sample(x[i], wet[i]);
-                want[i] = (y.to_bits(), by_sample.voice().map(f32::to_bits));
-            }
-            let mut out = x.clone();
-            // Longer than the block: only the block's part is written.
-            let mut voice = vec![Some(-1f32); n + 3];
-            by_block.process_block(&mut out, &wet, &mut voice);
-            let got: Vec<_> = out
-                .iter()
-                .zip(&voice)
-                .map(|(y, v)| (y.to_bits(), v.map(f32::to_bits)))
-                .collect();
-            assert!(got == want, "{kind} at sample {done}, block of {n}");
-            assert!(voice[n..].iter().all(|v| *v == Some(-1.)), "{kind}");
-            assert_eq!(by_block.voice(), by_sample.voice(), "{kind}");
-            played |= voice[..n].iter().any(|v| v.is_some());
-            done += n;
+    let make = || Endpoint::Worker(worker(PRODUCTION).0);
+    let (mut by_sample, mut by_block) = (make(), make());
+    let mut rng = Rng(0x1234_5678_9abc_def1);
+    let (mut done, mut played) = (0usize, false);
+    while done < 6_000 {
+        let n = 1 + (rng.next() % 300) as usize;
+        let x: Vec<f32> = (0..n)
+            .map(|i| match (done + i) % 131 {
+                0 => f32::NAN,
+                1 => f32::INFINITY,
+                2 => -0.,
+                _ => rng.sample(),
+            })
+            .collect();
+        let wet: Vec<f32> = (0..n)
+            .map(|i| 0.5 + 0.5 * ((done + i) as f32 * 0.003).sin())
+            .collect();
+        let mut want = vec![(0u32, None); n];
+        for i in 0..n {
+            let y = by_sample.process_sample(x[i], wet[i]);
+            want[i] = (y.to_bits(), by_sample.voice().map(f32::to_bits));
         }
-        // The inline endpoint played its model's results; the unserved
-        // worker played none.
-        assert_eq!(played, kind == "inline");
-        // The counters agree; the inline endpoint's timings are its own.
-        let counters = |e: &Endpoint| {
-            let s = e.telemetry().snapshot();
-            (
-                s.completed_frames,
-                s.input_drops,
-                s.output_drops,
-                s.missed_deadlines,
-                s.late_results,
-                s.stale_results,
-                s.failed,
-            )
-        };
-        assert_eq!(counters(&by_block), counters(&by_sample), "{kind}");
-        assert!(counters(&by_block).0 > 0 || kind == "worker", "{kind}");
+        let mut out = x.clone();
+        // Longer than the block: only the block's part is written.
+        let mut voice = vec![Some(-1f32); n + 3];
+        by_block.process_block(&mut out, &wet, &mut voice);
+        let got: Vec<_> = out
+            .iter()
+            .zip(&voice)
+            .map(|(y, v)| (y.to_bits(), v.map(f32::to_bits)))
+            .collect();
+        assert!(got == want, "at sample {done}, block of {n}");
+        assert!(voice[n..].iter().all(|v| *v == Some(-1.)));
+        assert_eq!(by_block.voice(), by_sample.voice());
+        played |= voice[..n].iter().any(|v| v.is_some());
+        done += n;
     }
+    // The unserved worker played none of its model's results.
+    assert!(!played);
+    // The counters agree.
+    let counters = |e: &Endpoint| {
+        let s = e.telemetry().snapshot();
+        (
+            s.completed_frames,
+            s.input_drops,
+            s.output_drops,
+            s.missed_deadlines,
+            s.late_results,
+            s.stale_results,
+            s.failed,
+        )
+    };
+    assert_eq!(counters(&by_block), counters(&by_sample));
 }
 
 /// Operation counts per sample of the production path, from the source.

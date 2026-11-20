@@ -1,37 +1,28 @@
-//! Bit-exact `SRC_LINEAR` for mono converters of libsamplerate 0.2.2, as built
-//! in the 1.7.7 image. Kept free of crate dependencies so that
-//! `tools/src_fast_check` can run this file against the real library.
+//! Bit-exact mono `SRC_LINEAR` implementation matching libsamplerate 0.2.2 in
+//! the 1.7.7 mixer image. Kept dependency-free so `tools/src_fast_check` can
+//! compile and fuzz it directly against the real library.
 //!
-//! The vendor gives each USB channel its own mono converter and passes every
-//! channel the same ratio and frame counts in a cycle. In `linear_vari_process`
-//! no control flow depends on a sample: the position, ratio and frame counts
-//! alone fix which input frames feed each output frame. So converters in the
-//! same state share one [`Plan`], and only the interpolation runs per channel.
-//! That removes the per-frame divide and two `lrint` calls from all channels
-//! but the first.
+//! Each USB channel has its own mono converter, all driven with identical ratio
+//! and frame counts per cycle. Because `linear_vari_process` control flow
+//! depends only on position, ratio, and frame counts, channels in the same
+//! state share one [`Plan`] and skip the per-frame divide and `lrint` calls.
 //!
-//! Every operation follows the library's disassembly, including the fused
-//! multiply-add its compiler chose. `prepare` declines anything but the plain
-//! mono case, and the caller then runs the real library.
-//!
-//! [`interpolate_scalar`] is the reference interpolation. On AArch64
-//! [`interpolate`] runs a NEON form of it, four frames at a time, which applies
-//! the same IEEE operations to each lane and so writes the same bits. The tests
-//! below compare the two, and `tools/src_fast_check` compares both with the
-//! library.
+//! [`interpolate_scalar`] is the scalar reference; on AArch64 [`interpolate`]
+//! runs a 4-wide NEON path using matching IEEE ops (`fcvtl`, `fsub`, `fmla`,
+//! `fcvtn`) so output bits match identically. Unhandled shapes are declined in
+//! [`prepare`] and fall back to libsamplerate.
 use std::ffi::{c_int, c_long};
 
-/// The verified library's file size, and its `.text`: offset, shared by the
-/// file and the mapping, and FNV-1a 64.
+/// Verified libsamplerate binary size, `.text` range, and FNV-1a 64 hash.
 pub const FILE_SIZE: i64 = 1_497_272;
 pub const TEXT_OFFSET: usize = 0x11f0;
 pub const TEXT_SIZE: usize = 0x4e64;
 pub const TEXT_FNV: u64 = 0xbf48_b5bf_76f3_ed46;
-/// `linear_state_vt` and its first entry, `linear_vari_process`.
+/// Offsets of `linear_state_vt` and its first vtable entry (`linear_vari_process`).
 pub const LINEAR_VT_OFFSET: usize = 0x17_d0f8;
 pub const LINEAR_VARI_OFFSET: usize = 0x5700;
 
-/// Largest frame count one plan holds. The vendor uses about 112.
+/// Max frames per plan (vendor calls are ~112 frames).
 pub const MAX_FRAMES: usize = 1024;
 const MIN_RATIO: f64 = 1.0 / 256.0;
 const MAX_RATIO: f64 = 256.0;
@@ -87,11 +78,11 @@ struct Key {
     output_frames: c_long,
 }
 
-/// One cycle's schedule, built for the first channel and reused while the
-/// next converter's state and request match exactly.
+/// Precomputed resampling schedule for a single cycle, reused across channels
+/// with identical converter state and request parameters.
 pub struct Plan {
     key: Option<Key>,
-    /// Outputs that interpolate from the saved last sample.
+    /// Number of leading output frames interpolating from `last_value`.
     first: usize,
     count: usize,
     used: [u16; MAX_FRAMES],
@@ -116,7 +107,6 @@ impl Plan {
             builds: 0,
         }
     }
-    /// How many schedules this plan has built.
     pub fn builds(&self) -> u64 {
         self.builds
     }
@@ -133,10 +123,8 @@ impl Plan {
         self.count
     }
 
-    /// The fraction and input frame of each output frame, and how many of the
-    /// frames start from the saved last sample. The clamps hold whatever the
-    /// fields are, so the interpolation loops index without a check per frame
-    /// and cannot panic.
+    /// Returns clamped `(fraction, used, head)` slices so the interpolation
+    /// loops don't need per-frame bounds checks.
     #[inline(always)]
     fn schedule(&self) -> (&[f64], &[u16], usize) {
         let count = self.count.min(MAX_FRAMES);
@@ -147,7 +135,7 @@ impl Plan {
         )
     }
 
-    /// Fills the schedule. False when the request needs the real library.
+    /// Populates the schedule; returns false if the request must fall back to libsamplerate.
     fn build(
         &mut self,
         last_ratio: f64,
@@ -252,12 +240,12 @@ fn round_to_nearest() -> bool {
     }
 }
 
-/// Makes `plan` current for this call. False leaves the call to the real
-/// library. Reads the state only.
+/// Validates `state`/`data` and ensures `plan` matches this call (read-only on
+/// `state`/`data`). Returns false to fall back to libsamplerate.
 ///
 /// # Safety
-/// `state` and `data` must be null or valid; `linear_vt` must be the address of
-/// the verified library's `linear_state_vt`, and `linear_vari` its first entry.
+/// `state` and `data` must be null or valid; `linear_vt` and `linear_vari` must
+/// be the verified library's `linear_state_vt` and `linear_vari_process` addresses.
 pub unsafe fn prepare(
     plan: &mut Plan,
     state: *const State,
@@ -326,19 +314,16 @@ pub unsafe fn prepare(
     true
 }
 
-/// One output frame: `before + fraction * (after - before)` in double
-/// precision, with the fused multiply-add the library uses.
+/// Linear interpolation `before + fraction * (after - before)` in f64 using
+/// FMA to match libsamplerate's compiled codegen.
 #[inline(always)]
 fn blend(fraction: f64, before: f32, after: f32) -> f32 {
     let before = f64::from(before);
     fraction.mul_add(f64::from(after) - before, before) as f32
 }
 
-/// Writes the frames that lie between the saved last sample and the first
-/// input frame, one per entry of `fraction`.
-///
 /// # Safety
-/// As for [`interpolate`], with `output` holding `fraction.len()` frames.
+/// Same as [`interpolate`], with `output` writable for `fraction.len()` frames.
 #[inline(always)]
 unsafe fn interpolate_head(
     fraction: &[f64],
@@ -397,9 +382,9 @@ pub unsafe fn interpolate_scalar(
     }
 }
 
-/// True when the four output frames from `frame` read four consecutive input
-/// frames, so that two vector loads cover them. Each of the three steps is
-/// compared: steps of 0, 1 and 2 also add up to 3.
+/// Returns true if `used[frame..frame + 4]` steps by +1 each frame so two
+/// 4-wide NEON loads cover all four output frames. Checking each step avoids
+/// false positives like `[+0, +1, +2]` which also sum to +3.
 #[cfg(any(test, target_arch = "aarch64"))]
 #[inline(always)]
 fn consecutive(used: &[u16], frame: usize) -> bool {
@@ -414,21 +399,14 @@ fn consecutive(used: &[u16], frame: usize) -> bool {
     }
 }
 
-/// [`interpolate_scalar`] with NEON. Four frames that read consecutive input
-/// frames go through one vector block; any other frame goes through the scalar
-/// code, one at a time. At the vendor's ratios the input index repeats or
-/// skips two or three times in a call of about 112 frames, so almost every
-/// frame takes the vector block.
-///
-/// The vector block runs the scalar frame's instructions lane by lane: widen
-/// (`fcvtl`), subtract, fused multiply-add with `before` as the addend
-/// (`fmla`), narrow (`fcvtn`). Each has the scalar instruction's rounding, NaN
-/// and flush-to-zero behaviour, so the bits match. It reads input frames
-/// `used - 1 ..= used + 3` and writes four output frames, which are the frames
-/// the scalar code reads and writes.
+/// 4-wide NEON implementation of [`interpolate_scalar`]. Runs the vector path
+/// on 4-frame consecutive runs (the vast majority of frames at USB audio ratios)
+/// and falls back to scalar `blend` on repeats/skips. Uses matching lane ops
+/// (`fcvtl`, `fsub`, `fmla` with `before` as addend, `fcvtn`) so rounding, NaN,
+/// and FTZ behavior are bit-identical.
 ///
 /// # Safety
-/// As for [`interpolate`].
+/// Same as [`interpolate`].
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn interpolate_neon(plan: &Plan, state: *const State, input: *const f32, output: *mut f32) {
@@ -449,13 +427,9 @@ unsafe fn interpolate_neon(plan: &Plan, state: *const State, input: *const f32, 
                 let before_high = vcvt_high_f64_f32(before);
                 let after_low = vcvt_f64_f32(vget_low_f32(after));
                 let after_high = vcvt_high_f64_f32(after);
-                // `consecutive` found four frames from `frame`, and `fraction`
-                // is as long as `used`.
                 let fraction_low = vld1q_f64(fraction.as_ptr().add(frame));
                 let fraction_high = vld1q_f64(fraction.as_ptr().add(frame + 2));
-                // `before` is the addend, as in `blend`, so that a NaN there
-                // takes the same precedence. The order of the two factors does
-                // not matter: no plan holds a NaN fraction.
+                // Keep `before` as the FMA addend to match `blend`'s NaN precedence.
                 let low = vfmaq_f64(before_low, fraction_low, vsubq_f64(after_low, before_low));
                 let high = vfmaq_f64(
                     before_high,
@@ -503,11 +477,7 @@ pub unsafe fn commit(plan: &Plan, state: *mut State, data: *mut Data) {
 mod tests {
     use super::*;
 
-    /// The interpolation as it was before the vector block and the slices,
-    /// kept word for word. Every test compares against it.
-    // The index loops are the preserved original shape; rewriting them to
-    // iterators (clippy 1.100's needless_range_loop) would change the thing
-    // the tests check the fast path against.
+    /// Preserved pre-NEON scalar baseline used as the oracle for all tests.
     #[allow(clippy::needless_range_loop)]
     unsafe fn original(plan: &Plan, state: *const State, input: *const f32, output: *mut f32) {
         unsafe {
@@ -573,7 +543,7 @@ mod tests {
         Samples::Special,
     ];
 
-    /// Signed zeros, infinities, quiet and signalling NaNs with several
+    /// Signed zeros, infinities, quiet and signaling NaNs with several
     /// payloads, the largest and smallest normal and subnormal values.
     const SPECIAL: [u32; 22] = [
         0x0000_0000,
@@ -725,9 +695,8 @@ mod tests {
         }
     }
 
-    /// Runs `body` once for each setting of flush-to-zero and default-NaN that
-    /// AArch64 offers, and once elsewhere. The vendor's threads may run with
-    /// either bit set.
+    /// Runs `body` under every combination of AArch64 FPCR FZ (flush-to-zero)
+    /// and DN (default-NaN) bits, or once on non-aarch64 hosts.
     fn each_float_mode(mut body: impl FnMut(&str, u64)) {
         #[cfg(target_arch = "aarch64")]
         {
@@ -1435,10 +1404,7 @@ mod tests {
     }
 
     /// Buffers that end, or start, against memory that faults when touched.
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "aarch64", target_arch = "x86_64")
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     mod guarded {
         use super::*;
         use std::ffi::{c_int, c_void};

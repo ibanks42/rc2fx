@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two-hour six-channel qualification; device reads only at the requested checkpoints."""
+"""Six-channel qualification bench that polls the device only at requested intervals."""
 import argparse
 import array
 import datetime
@@ -27,7 +27,7 @@ def save(path, value):
 
 
 def preserve_fault(root, base, current, errors):
-    """Keep the first observed fault using data already in the checkpoint."""
+    """Snapshot the first observed fault and frozen flight audit from checkpoint data."""
     if errors and not (root/'first-observed-fault.json').exists():
         save(root/'first-observed-fault.json',current)
     flight=current['audit']['clientTiming']
@@ -43,6 +43,13 @@ def snapshot():
     return dict(hostUtc=utc(),bootId=fields['boot'],uptime=float(fields['uptime'].split()[0]),home=fields['home'],tracing=int(fields['tracing']),uptimeAfter=float(fields['uptimeAfter'].split()[0]),audit=json.loads(fields['audit']))
 
 
+def live_dsp_faults(audit):
+    """Return the live dspFaults counter, or None if absent from the audit."""
+    counters=audit.get('processingCounters')
+    if not isinstance(counters,dict): return None
+    return counters.get('dspFaults')
+
+
 def check(base, previous, current, expect_trace=True):
     a, b = current['audit'], base['audit']
     errors=[]
@@ -50,8 +57,11 @@ def check(base, previous, current, expect_trace=True):
     if current['bootId']!=base['bootId'] or a['processPid']!=b['processPid']: errors.append('Mixer restarted')
     if not -.02<=current.get('uptimeAfter',current['uptime'])-a['monotonicNs']/1e9<5: errors.append('Stale telemetry')
     if a['callbacks']<=previous['audit']['callbacks']: errors.append('Callbacks stopped')
-    for key in ['xruns','dspFaults','capacityFailures','planErrors','controlServerErrors']:
+    for key in ['xruns','capacityFailures','planErrors','controlServerErrors']:
         if a[key]!=b[key]: errors.append(key+' changed')
+    live_a,live_b=live_dsp_faults(a),live_dsp_faults(b)
+    if live_a is None or live_b is None: errors.append('Live dspFaults counter missing')
+    elif live_a!=live_b: errors.append('dspFaults changed')
     before_workers={w['id']:w['worker'] for w in b.get('workers',[])}
     for worker in a.get('workers',[]):
         prior=before_workers.get(worker['id'])
@@ -67,10 +77,10 @@ def check(base, previous, current, expect_trace=True):
 
 
 def measurement(base, current):
-    """Always-on load figures for the window between two audits, from counters only."""
+    """Compute window-level callback timing and slow-callback rate from counter deltas."""
     a,b=current['audit'],base['audit']
     seconds=(a['monotonicNs']-b['monotonicNs'])/1e9
-    # endPos bins 4 onward: main ended past 0.75 of the period.
+    # Bins 4+ are main callbacks finishing past 75% of the period.
     slow=sum(a['cycle']['endPos']['histogram'][4:])-sum(b['cycle']['endPos']['histogram'][4:])
     result=dict(windowSeconds=seconds,slowCallbacks=slow,slowCallbacksPerHour=slow*3600/seconds if seconds>0 else None)
     for key,name in [('callbackWall','meanCallbackWallUs'),('nativeWall','meanNativeWallUs'),('ownedWall','meanOwnedWallUs')]:
@@ -81,7 +91,7 @@ def measurement(base, current):
 
 
 def gauge_measurement(base, current, ring_frames):
-    """Bench gauges for the window: extremes restart at the epoch, totals are deltas."""
+    """Summarize bench gauges over the window (deltas for totals, epoch-scoped extremes)."""
     a,b=current['audit']['gauges'],base['audit']['gauges']
     handles=[]
     for index,now in enumerate(a['handles']):
@@ -122,10 +132,10 @@ def main():
     parser.add_argument('--seconds', type=int, default=7200)
     parser.add_argument('--interval',type=int,default=30)
     parser.add_argument('--keep-going',action='store_true',help='Observe the full duration after faults; any observed fault still fails qualification')
-    # Interval may equal duration for a baseline/end-only qualification.
+    # Interval may equal duration to check only baseline and end.
     args=parser.parse_args()
     if args.seconds<=0 or args.interval<=0 or args.trials<=0:parser.error('Duration and interval must be positive')
-    # A bench on the live mixer: arm power recovery before anything plays or is read.
+    # Arm one-shot power recovery before starting playback or device reads.
     try:run.arm_power_recovery('bench.py')
     except run.PowerRecoveryNotArmed as error:
         print(error,file=sys.stderr);return 1
@@ -182,7 +192,7 @@ def main():
         if args.gauges:
             if 'gauges' not in baseline['audit']:raise RuntimeError('Gauge run requires bench gauges enabled at audio start')
             run.remote('gauges','epoch',time.time_ns())
-            time.sleep(5)  # the report thread picks the epoch up at its next refresh
+            time.sleep(5)  # wait for the report thread's next refresh to pick up the epoch
             baseline=snapshot()
         elif 'gauges' in baseline['audit']:raise RuntimeError('Bench gauges are enabled; use --gauges or disable them and restart audio')
         if not args.no_trace:baseline=snapshot()
@@ -197,7 +207,7 @@ def main():
         index=0
         while True:
             remaining=duration-(time.monotonic()-start)
-            # Local waiting only: no device polls between the requested intervals.
+            # Sleep locally without polling the device between checkpoints.
             time.sleep(min(args.interval,max(0,remaining)) + (5 if remaining<=args.interval else 0))
             current=snapshot();index+=1
             save(root/f'snapshot-{index:04}.json',current)

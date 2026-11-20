@@ -16,7 +16,23 @@ use rc2fx_core::{
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const EQ_FADE_SAMPLES: usize = 240;
+/// Samples over which the highpass, compressor and limiter fade in when they
+/// are switched on and out when they are switched off: 10 ms, the time
+/// constant of the gain smoother, so a switch sounds like a gain change.
+/// The stage's output is mixed with its input linearly, so the fade ends on
+/// an exact sample and the stage then costs nothing more.
+pub const STAGE_FADE_SAMPLES: u32 = 480;
 pub const MAX_SUPPRESSION_DELAY: usize = 2368;
+
+/// Where a processor's output goes when it hands off to whatever replaces
+/// it (`Dsp::hand_off`): to silence, before a processor with another delay;
+/// or to its dry signal, before the unprocessed path, which plays the same
+/// signal when the processor has no delay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandOff {
+    Silence,
+    Dry,
+}
 /// Samples per channel each stage processes at a time; covers the mixer's
 /// 112-sample period in one pass.
 pub(crate) const BLOCK: usize = 128;
@@ -24,10 +40,8 @@ pub(crate) const GAIN_SMOOTH: f64 = 0.0020811647007;
 pub(crate) const EQ_INTERNAL_LIMIT: f64 = 1.3407807929942597e154; // 2^512
 
 /// Callback-facing owned worker endpoint. Its implementation must not allocate,
-/// lock, wait, or call the control service in `process_sample` or
-/// `process_block`. Inference there is allowed only for an inline endpoint
-/// whose model's worst frame fits the calling thread's period budget (the
-/// mixer's DSP helper).
+/// lock, wait, run inference, or call the control service in `process_sample`
+/// or `process_block`: the model runs on the worker's own thread.
 /// Dry and wet streams must have the same immutable delay, including on failure.
 /// Construction, worker startup, joining and destruction belong outside callbacks.
 pub trait Suppression: Send {
@@ -62,7 +76,6 @@ pub trait Suppression: Send {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetirementError {
-    Unsupported,
     TimedOut,
     WorkerFailed,
     Incomplete,
@@ -155,7 +168,9 @@ pub struct Prepared {
     makeup: f64,
     ceiling: f64,
     threshold_db: f64,
-    ratio: f64,
+    /// `1 - 1 / ratio`: the share of the level over the threshold that the
+    /// compressor takes off.
+    comp_slope: f64,
     comp_threshold: f64,
     comp_attack: f64,
     comp_release: f64,
@@ -256,24 +271,28 @@ impl Prepared {
             makeup: db_gain(target.compressor.makeup),
             ceiling: db_gain(target.limiter.ceiling),
             threshold_db: target.compressor.threshold,
-            ratio: target.compressor.ratio,
+            comp_slope: 1.0 - 1.0 / target.compressor.ratio,
             comp_threshold: db_gain(target.compressor.threshold),
             comp_attack: (-1.0 / (target.compressor.attack * 0.001 * SAMPLE_RATE)).exp(),
             comp_release: (-1.0 / (target.compressor.release * 0.001 * SAMPLE_RATE)).exp(),
             limiter_release: (-1.0 / (target.limiter.release * 0.001 * SAMPLE_RATE)).exp(),
         };
-        // Only stages whose disabled path is an identity can be omitted;
-        // EQ/gain smoothing and an allocated microphone provider continue while
-        // the chain is bypassed. Order changes without a provider retain the
-        // existing filter/envelope histories and take effect on the next block.
-        // Enabling/disabling suppression changes geometry and requires restart.
+        // Every stage but an absent suppression provider stays in the order:
+        // a highpass, compressor or limiter that is switched off fades out
+        // over `STAGE_FADE_SAMPLES` and is skipped once it is silent, and EQ
+        // and gain keep smoothing while off. An allocated microphone provider
+        // continues while the chain is bypassed. Order changes without a
+        // provider retain the existing filter/envelope histories and take
+        // effect on the next block. Enabling/disabling suppression changes
+        // geometry and requires restart.
         for stage in target.order.iter().copied() {
             let include = match stage {
-                Effect::Highpass => p.hp_on,
-                Effect::Compressor => p.comp_on,
-                Effect::Limiter => p.limit_on,
                 Effect::Suppression => geometry.is_some(),
-                Effect::Eq | Effect::Gain => true,
+                Effect::Highpass
+                | Effect::Compressor
+                | Effect::Limiter
+                | Effect::Eq
+                | Effect::Gain => true,
             };
             if include {
                 p.active_order[p.active_count] = stage;
@@ -304,19 +323,54 @@ impl Prepared {
     pub fn is_chat_voice(&self) -> bool {
         self.chat.is_some()
     }
-    pub fn suppression_geometry(&self) -> Option<SuppressionGeometry> {
-        self.signature.geometry
-    }
     pub fn requires_reset(&self, next: &Self) -> bool {
         self.signature != next.signature
     }
 }
 
 struct ChannelState {
-    suppression: Option<Box<dyn Suppression>>,
     bypass_dry: Box<[f32]>,
     bypass_position: usize,
-    hp: Filter,
+}
+
+/// What the highpass, EQ, compressor and limiter keep from one sample to the
+/// next. A change of effect order crossfades from a copy of it running the
+/// old order to the original running the new one (`Dsp::order_remaining`).
+#[derive(Clone, Copy)]
+struct Stages {
+    hp: [Filter; 2],
+    eq: [EqBank; 2],
+    eq_current: usize,
+    eq_remaining: usize,
+    envelope: f64,
+    limiter_gain: f64,
+    /// The limiter's reduction in dB for the meter, and the gain it was
+    /// worked out from.
+    limiter_reduction: f64,
+    limiter_reduction_for: f64,
+    /// Where each switchable stage is in its fade, 0 (off, skipped) to
+    /// `STAGE_FADE_SAMPLES` (on, its output alone). See `fade_step`.
+    hp_fade: u32,
+    comp_fade: u32,
+    limiter_fade: u32,
+    /// The compressor's threshold in dB, slope and makeup gain, and the
+    /// limiter's ceiling and release coefficient, each smoothed toward the
+    /// prepared value with the gain's time constant (`Ramp::approach`), so
+    /// that moving them changes the gain gradually. They move only while
+    /// their stage runs, and take the prepared value outright when the stage
+    /// is switched on from silence.
+    comp_threshold_db: f64,
+    comp_slope: f64,
+    comp_makeup: f64,
+    limiter_ceiling: f64,
+    limiter_release: f64,
+    /// While a compressor or limiter fades out, it runs on a copy of its
+    /// detector (the envelope or the limiter gain), so the stage keeps the
+    /// history it had when it was switched off, as it always has. Switched
+    /// back on before the fade ends, it continues from the copy instead, so
+    /// its gain does not jump.
+    comp_scratch: Option<f64>,
+    limiter_scratch: Option<f64>,
 }
 
 /// One owner serializes processing and snapshot handoff. No shared reference
@@ -326,6 +380,10 @@ pub struct Dsp {
     retired: bool,
     channels: [ChannelState; 2],
     latency: usize,
+    /// The suppression provider. Validation admits suppression on a mono
+    /// microphone only (the Chat voice mix is one too), so there is at most
+    /// one, for channel 0.
+    suppression: Option<Box<dyn Suppression>>,
     gain: f64,
     wet: f64,
     /// Voice gate level in dB (0 = open) and its linear gain, the samples
@@ -339,142 +397,62 @@ pub struct Dsp {
     /// it was worked out from.
     gate_open: f64,
     gate_open_for: [u64; 2],
-    envelope: f64,
-    limiter_gain: f64,
-    /// The limiter's reduction in dB for the meter, and the gain it was
-    /// worked out from.
-    limiter_reduction: f64,
-    limiter_reduction_for: f64,
     processing_blend: f64,
-    eq: [EqBank; 2],
-    eq_current: usize,
-    eq_remaining: usize,
+    stages: Stages,
+    /// The effect order `stages` runs. A different order is taken up in
+    /// `begin_block`: `prior` becomes a copy of `stages` that keeps running
+    /// the old order (`prior_order`) for `order_remaining` more samples, and
+    /// the output fades from its result to the new order's over
+    /// `EQ_FADE_SAMPLES`. An order arriving during that fade waits for it to
+    /// end. `prior` is allocated with the processor, never in a callback.
+    order: [Effect; 6],
+    order_count: usize,
+    prior: Box<Stages>,
+    prior_order: [Effect; 6],
+    prior_count: usize,
+    order_remaining: usize,
+    /// The output's hand-off fade: 0 (handed off: silent, or the dry signal
+    /// when `handoff_dry`) to `STAGE_FADE_SAMPLES` (the processed output),
+    /// moving toward `handoff_on`, after `handoff_hold` samples of silence.
+    /// See `start_silent`, `start_dry` and `hand_off`.
+    handoff_fade: u32,
+    handoff_on: bool,
+    handoff_dry: bool,
+    handoff_hold: usize,
     /// The serial of the `Prepared` whose `begin_block` would change nothing
     /// if it ran again, or 0. Only `begin_block` and `block` change the EQ
-    /// banks, the fade and the filters; anything else that does must set
+    /// banks, the fades and the filters; anything else that does must set
     /// this back to 0.
     seen: u64,
 }
-impl Dsp {
-    /// This constructor is deliberately outside the audio callback. Only enabled
-    /// suppression needs a provider; bypass retains that provider and its delay.
-    pub fn new(
-        p: &Prepared,
-        mut suppression: [Option<Box<dyn Suppression>>; 2],
-    ) -> Result<Self, DspError> {
-        if p.is_chat_voice() {
-            // A completed Chat mix contains pads. Only Chat::process, with a
-            // separately captured microphone stem, may use its suppressor.
-            return Err(DspError::MissingChatStem);
-        }
-        let mut latency = 0;
-        for (ch, provider) in suppression.iter().enumerate() {
-            if ch < p.channels() && p.signature.geometry.is_some() {
-                let provider = provider.as_ref().ok_or(DspError::MissingSuppression)?;
-                let geometry = provider.geometry();
-                if Some(geometry) != p.signature.geometry {
-                    return Err(DspError::SuppressionGeometry);
-                }
-                let delay = provider.latency_samples();
-                if delay != geometry.latency_samples() as usize
-                    || delay == 0
-                    || delay > MAX_SUPPRESSION_DELAY
-                    || (ch > 0 && delay != latency)
-                {
-                    return Err(DspError::SuppressionGeometry);
-                }
-                latency = delay;
-            } else if provider.is_some() {
-                return Err(DspError::UnexpectedSuppression);
-            }
-        }
-        Ok(Self {
-            signature: p.signature,
-            retired: false,
-            channels: std::array::from_fn(|ch| ChannelState {
-                suppression: suppression[ch].take(),
-                bypass_dry: vec![0.0; if ch < p.channels() { latency } else { 0 }]
-                    .into_boxed_slice(),
-                bypass_position: 0,
-                hp: Filter::with_coefficients(p.hp),
-            }),
-            latency,
-            gain: if p.gain_on { p.gain } else { 1.0 },
-            wet: if p.noise_on { p.wet } else { 0.0 },
-            gate_db: 0.0,
-            gate_gain: 1.0,
-            gate_hold: 0,
-            gate_voiced: true,
-            // An open gate with no floor reads fully open.
-            gate_open: 1.0,
-            gate_open_for: [0.0_f64.to_bits(); 2],
+impl Stages {
+    fn new(p: &Prepared) -> Self {
+        Self {
+            hp: [Filter::with_coefficients(p.hp); 2],
+            eq: [EqBank::new(p, None), EqBank::default()],
+            eq_current: 0,
+            eq_remaining: 0,
             envelope: 0.0,
             limiter_gain: 1.0,
             // A gain of 1 has no reduction and is never looked up.
             limiter_reduction: 0.0,
             limiter_reduction_for: 1.0,
-            processing_blend: if p.bypass { 0.0 } else { 1.0 },
-            eq: [EqBank::new(p, None), EqBank::default()],
-            eq_current: 0,
-            eq_remaining: 0,
-            seen: 0,
-        })
-    }
-    pub fn without_suppression(p: &Prepared) -> Result<Self, DspError> {
-        Self::new(p, [None, None])
-    }
-    pub fn latency_samples(&self) -> usize {
-        self.latency
-    }
-    /// Irreversible control-side retirement after callback quiescence. The
-    /// deadline is shared by all channel providers; retry can observe a late
-    /// join, but processing remains disabled even if the first call times out.
-    pub fn drain_suppression(
-        &mut self,
-        timeout: std::time::Duration,
-    ) -> Result<(), RetirementError> {
-        self.retired = true;
-        let end = std::time::Instant::now()
-            .checked_add(timeout)
-            .ok_or(RetirementError::TimedOut)?;
-        let mut failure = None;
-        for channel in &mut self.channels {
-            if let Some(provider) = &mut channel.suppression
-                && let Err(error) =
-                    provider.drain(end.saturating_duration_since(std::time::Instant::now()))
-            {
-                failure.get_or_insert(error);
-            }
+            hp_fade: if p.hp_on { STAGE_FADE_SAMPLES } else { 0 },
+            comp_fade: if p.comp_on { STAGE_FADE_SAMPLES } else { 0 },
+            limiter_fade: if p.limit_on { STAGE_FADE_SAMPLES } else { 0 },
+            comp_threshold_db: p.threshold_db,
+            comp_slope: p.comp_slope,
+            comp_makeup: p.makeup,
+            limiter_ceiling: p.ceiling,
+            limiter_release: p.limiter_release,
+            comp_scratch: None,
+            limiter_scratch: None,
         }
-        failure.map_or(Ok(()), Err)
     }
-    fn check(&self, p: &Prepared, lengths: [usize; 2]) -> Result<usize, DspError> {
-        if self.retired {
-            return Err(DspError::Retired);
-        }
-        if self.signature != p.signature {
-            return Err(DspError::IncompatibleSnapshot);
-        }
-        if (p.channels() == 2 && lengths[0] != lengths[1]) || (p.channels() == 1 && lengths[1] != 0)
-        {
-            return Err(DspError::BufferShape);
-        }
-        Ok(lengths[0])
-    }
-    /// Takes up `p`'s EQ shape and targets and decides which filters smooth
-    /// their coefficients over this block.
-    ///
-    /// The same `Prepared` usually arrives for thousands of blocks. Once a
-    /// full pass finds the shape unchanged, no fade running and no filter
-    /// smoothing, another pass with the same `Prepared` would write back
-    /// exactly what is there: the targets are the same, no coefficient moves
-    /// while its filter is not smoothing, and `Filter::begin` then finds the
-    /// same answer. `seen` records that, and the pass is skipped until a
-    /// different `Prepared` arrives.
-    fn begin_block(&mut self, p: &Prepared, frames: usize) {
-        if frames == 0 || self.seen == p.serial {
-            return;
-        }
+    /// `Dsp::begin_block` for these stages: takes up `p`'s EQ shape and
+    /// targets and decides which filters smooth their coefficients. Returns
+    /// whether another pass with the same `p` would change nothing.
+    fn begin(&mut self, p: &Prepared) -> bool {
         let current = self.eq_current;
         let same_shape = self.eq[current].shape.same_as(&p.eq_shape);
         if !same_shape {
@@ -489,8 +467,8 @@ impl Dsp {
         let mut steady = same_shape && self.eq_remaining == 0;
         for ch in 0..p.channels() {
             if p.hp_on {
-                self.channels[ch].hp.begin(p.hp);
-                steady &= !self.channels[ch].hp.is_smoothing();
+                self.hp[ch].begin(p.hp);
+                steady &= !self.hp[ch].is_smoothing();
             }
             for bank in 0..2 {
                 if bank == self.eq_current || self.eq_remaining != 0 {
@@ -498,6 +476,580 @@ impl Dsp {
                 }
             }
             steady &= !self.eq[self.eq_current].is_smoothing(ch);
+        }
+        steady
+    }
+    /// One stage other than suppression over `n` samples of `x`, as `block`
+    /// runs it. Returns false when the stage left every sample within the
+    /// stage limit, so the clamp after it can be skipped. `dynamics` is set
+    /// when the compressor or limiter ran and wrote `reduction`.
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn block(
+        &mut self,
+        stage: Effect,
+        p: &Prepared,
+        x: &mut [[f64; BLOCK]; 2],
+        n: usize,
+        gain: &Ramp,
+        reduction: &mut [f64; BLOCK],
+        dynamics: &mut bool,
+        m: &mut Meter,
+    ) -> bool {
+        let channels = p.channels();
+        match stage {
+            Effect::Highpass => {
+                if !p.hp_on && self.hp_fade == 0 {
+                    // Off and faded out: nothing to do, and the samples are
+                    // as the stage before left them.
+                    return false;
+                }
+                if p.hp_on && self.hp_fade == STAGE_FADE_SAMPLES {
+                    for (filter, samples) in self.hp.iter_mut().zip(x.iter_mut()).take(channels) {
+                        filter.process_block(&p.hp, &mut samples[..n], 16.0, m);
+                    }
+                } else {
+                    for t in 0..n {
+                        let y = self.highpass_step(p, [x[0][t], x[1][t]], channels, m);
+                        (x[0][t], x[1][t]) = (y[0], y[1]);
+                    }
+                }
+            }
+            Effect::Eq => {
+                let fading = self.eq_remaining.min(n);
+                if fading == 0 {
+                    let bank = &mut self.eq[self.eq_current];
+                    bank.process_block(x, n, channels, m);
+                    // An enabled bank ends by limiting its own output to 16.
+                    return !bank.is_on();
+                }
+                // The previous bank fades out over the first samples.
+                let mut prior = *x;
+                self.eq[1 - self.eq_current].process_block(&mut prior, fading, channels, m);
+                self.eq[self.eq_current].process_block(x, n, channels, m);
+                for t in 0..fading {
+                    let mix =
+                        (EQ_FADE_SAMPLES - self.eq_remaining + 1) as f64 / EQ_FADE_SAMPLES as f64;
+                    for ch in 0..channels {
+                        x[ch][t] = prior[ch][t] + mix * (x[ch][t] - prior[ch][t]);
+                    }
+                    self.eq_remaining -= 1;
+                }
+            }
+            Effect::Compressor => {
+                if !p.comp_on && self.comp_fade == 0 {
+                    return false;
+                }
+                *dynamics = true;
+                if p.comp_on && self.comp_fade == STAGE_FADE_SAMPLES {
+                    self.compress_block(p, x, n, channels, reduction);
+                } else {
+                    for t in 0..n {
+                        let y = self.compressor_step(
+                            p,
+                            [x[0][t], x[1][t]],
+                            channels,
+                            &mut reduction[t],
+                        );
+                        (x[0][t], x[1][t]) = (y[0], y[1]);
+                    }
+                }
+            }
+            Effect::Gain => {
+                if gain.is_one() {
+                    // Finite samples times exactly 1 are unchanged, and the
+                    // stage before left them within the limit.
+                    return false;
+                }
+                for samples in x.iter_mut().take(channels) {
+                    let samples = &mut samples[..n];
+                    gain.each(n, |t, gain| samples[t] *= gain);
+                }
+            }
+            Effect::Limiter => {
+                if !p.limit_on && self.limiter_fade == 0 {
+                    return false;
+                }
+                *dynamics = true;
+                if p.limit_on && self.limiter_fade == STAGE_FADE_SAMPLES {
+                    self.limit_block(p, x, n, channels, reduction);
+                } else {
+                    for t in 0..n {
+                        let y =
+                            self.limiter_step(p, [x[0][t], x[1][t]], channels, &mut reduction[t]);
+                        (x[0][t], x[1][t]) = (y[0], y[1]);
+                    }
+                }
+            }
+            Effect::Suppression => unreachable!("suppression belongs to the processor"),
+        }
+        true
+    }
+    /// One stage other than suppression for one sample, as `Dsp::frame`
+    /// runs it; `gain` is that sample's smoothed gain.
+    #[cfg(test)]
+    fn frame(
+        &mut self,
+        stage: Effect,
+        p: &Prepared,
+        x: &mut [f64; 2],
+        gain: f64,
+        reduction: &mut f64,
+        m: &mut Meter,
+    ) {
+        let channels = p.channels();
+        match stage {
+            Effect::Highpass => *x = self.highpass_step(p, *x, channels, m),
+            Effect::Eq => {
+                if self.eq_remaining != 0 {
+                    let mut prior = *x;
+                    self.eq[1 - self.eq_current].process(&mut prior, channels, m);
+                    self.eq[self.eq_current].process(x, channels, m);
+                    let mix =
+                        (EQ_FADE_SAMPLES - self.eq_remaining + 1) as f64 / EQ_FADE_SAMPLES as f64;
+                    for ch in 0..channels {
+                        x[ch] = prior[ch] + mix * (x[ch] - prior[ch]);
+                    }
+                    self.eq_remaining -= 1;
+                } else {
+                    self.eq[self.eq_current].process(x, channels, m);
+                }
+            }
+            Effect::Compressor => *x = self.compressor_step(p, *x, channels, reduction),
+            Effect::Gain => {
+                for sample in x.iter_mut().take(channels) {
+                    *sample *= gain;
+                }
+            }
+            Effect::Limiter => *x = self.limiter_step(p, *x, channels, reduction),
+            Effect::Suppression => unreachable!("suppression belongs to the processor"),
+        }
+    }
+    /// Moves a stage's fade one sample toward on or off and returns where it
+    /// now is: 0 skips the stage for this sample.
+    #[inline(always)]
+    fn fade_step(position: &mut u32, on: bool) -> u32 {
+        if on {
+            if *position < STAGE_FADE_SAMPLES {
+                *position += 1;
+            }
+        } else if *position > 0 {
+            *position -= 1;
+        }
+        *position
+    }
+    /// What a stage at fade `position` (not 0) passes on, from its input `x`
+    /// and its own output `y`: `y` alone once fully on.
+    #[inline(always)]
+    fn faded(x: f64, y: f64, position: u32) -> f64 {
+        if position == STAGE_FADE_SAMPLES {
+            y
+        } else {
+            x + (y - x) * (position as f64 / STAGE_FADE_SAMPLES as f64)
+        }
+    }
+    /// One sample of the highpass stage: its fade, and the filter while it
+    /// runs. Switched on from silence, the filter starts at rest on the
+    /// prepared coefficients instead of the history and coefficients it was
+    /// left with, which belong to audio long gone and would ring out. `frame`
+    /// takes every sample here; the block path takes the samples of a fade.
+    #[inline]
+    fn highpass_step(
+        &mut self,
+        p: &Prepared,
+        x: [f64; 2],
+        channels: usize,
+        m: &mut Meter,
+    ) -> [f64; 2] {
+        if p.hp_on && self.hp_fade == 0 {
+            for filter in self.hp.iter_mut().take(channels) {
+                *filter = Filter::at_rest(p.hp);
+            }
+        }
+        let position = Self::fade_step(&mut self.hp_fade, p.hp_on);
+        let mut y = x;
+        if position == 0 {
+            return y;
+        }
+        for (ch, sample) in y.iter_mut().enumerate().take(channels) {
+            let filtered = self.hp[ch].process(&p.hp, x[ch], 16.0, m);
+            *sample = Self::faded(x[ch], filtered, position);
+        }
+        y
+    }
+    /// One sample of the compressor stage: its fade, its smoothed settings,
+    /// its detector (or the copy of it a fade-out runs on) and its gain.
+    /// `reduction` gets the reduction in dB. `frame` takes every sample here;
+    /// the block path takes the samples of a fade.
+    #[inline]
+    fn compressor_step(
+        &mut self,
+        p: &Prepared,
+        x: [f64; 2],
+        channels: usize,
+        reduction: &mut f64,
+    ) -> [f64; 2] {
+        if p.comp_on && self.comp_fade == 0 {
+            self.comp_threshold_db = p.threshold_db;
+            self.comp_slope = p.comp_slope;
+            self.comp_makeup = p.makeup;
+        }
+        let position = Self::fade_step(&mut self.comp_fade, p.comp_on);
+        if position == 0 {
+            self.comp_scratch = None;
+            return x;
+        }
+        Ramp::approach_step(&mut self.comp_threshold_db, p.threshold_db);
+        Ramp::approach_step(&mut self.comp_slope, p.comp_slope);
+        Ramp::approach_step(&mut self.comp_makeup, p.makeup);
+        let envelope = if p.comp_on {
+            if let Some(kept) = self.comp_scratch.take() {
+                self.envelope = kept;
+            }
+            &mut self.envelope
+        } else {
+            self.comp_scratch.get_or_insert(self.envelope)
+        };
+        let (scale, gr) = compressor_gain(
+            envelope,
+            x[0].abs().max(x[1].abs()),
+            p,
+            [self.comp_threshold_db, self.comp_slope, self.comp_makeup],
+            self.comp_threshold_db.to_bits() != p.threshold_db.to_bits(),
+        );
+        *reduction += gr;
+        let mut y = x;
+        for (ch, sample) in y.iter_mut().enumerate().take(channels) {
+            *sample = Self::faded(x[ch], x[ch] * scale, position);
+        }
+        y
+    }
+    /// One sample of the limiter stage, as `compressor_step` is for the
+    /// compressor.
+    #[inline]
+    fn limiter_step(
+        &mut self,
+        p: &Prepared,
+        x: [f64; 2],
+        channels: usize,
+        reduction: &mut f64,
+    ) -> [f64; 2] {
+        if p.limit_on && self.limiter_fade == 0 {
+            self.limiter_ceiling = p.ceiling;
+            self.limiter_release = p.limiter_release;
+        }
+        let position = Self::fade_step(&mut self.limiter_fade, p.limit_on);
+        if position == 0 {
+            self.limiter_scratch = None;
+            return x;
+        }
+        Ramp::approach_step(&mut self.limiter_ceiling, p.ceiling);
+        Ramp::approach_step(&mut self.limiter_release, p.limiter_release);
+        let held = if p.limit_on {
+            if let Some(kept) = self.limiter_scratch.take() {
+                self.limiter_gain = kept;
+            }
+            self.limiter_gain
+        } else {
+            *self.limiter_scratch.get_or_insert(self.limiter_gain)
+        };
+        let gain = limiter_gain(
+            held,
+            x[0].abs().max(x[1].abs()),
+            self.limiter_ceiling,
+            self.limiter_release,
+        );
+        if p.limit_on {
+            self.limiter_gain = gain;
+        } else {
+            self.limiter_scratch = Some(gain);
+        }
+        if gain < 1.0 {
+            *reduction += self.limiter_reduction_of(gain);
+        }
+        let mut y = x;
+        for (ch, sample) in y.iter_mut().enumerate().take(channels) {
+            *sample = Self::faded(x[ch], x[ch] * gain, position);
+        }
+        y
+    }
+    /// The limiter's reduction in dB at `gain`. After its first reduction
+    /// the gain never gets back to exactly 1: it stops just below and holds
+    /// that value. The logarithm, which only the meter reads, is taken when
+    /// the gain changes, not for every sample.
+    #[inline(always)]
+    fn limiter_reduction_of(&mut self, gain: f64) -> f64 {
+        if gain.to_bits() != self.limiter_reduction_for.to_bits() {
+            self.limiter_reduction_for = gain;
+            self.limiter_reduction = -20.0 * gain.max(1e-20).log10();
+        }
+        self.limiter_reduction
+    }
+    /// The compressor over a block while it is fully on and stays on:
+    /// `compressor_step` for every sample, bit for bit.
+    #[inline]
+    fn compress_block(
+        &mut self,
+        p: &Prepared,
+        x: &mut [[f64; BLOCK]; 2],
+        n: usize,
+        channels: usize,
+        reduction: &mut [f64; BLOCK],
+    ) {
+        let threshold = Ramp::approach(&mut self.comp_threshold_db, p.threshold_db, n);
+        let slope = Ramp::approach(&mut self.comp_slope, p.comp_slope, n);
+        let makeup = Ramp::approach(&mut self.comp_makeup, p.makeup, n);
+        let mut sample = |t: usize, settings: [f64; 3], moving: bool| {
+            let peak = x[0][t].abs().max(x[1][t].abs());
+            let (scale, gr) = compressor_gain(&mut self.envelope, peak, p, settings, moving);
+            reduction[t] += gr;
+            for samples in x.iter_mut().take(channels) {
+                samples[t] *= scale;
+            }
+        };
+        if let (Ramp::Flat(threshold), Ramp::Flat(slope), Ramp::Flat(makeup)) =
+            (&threshold, &slope, &makeup)
+        {
+            // Settled: the settings of the block are the prepared ones (a
+            // flat `approach` has reached its target).
+            for t in 0..n {
+                sample(t, [*threshold, *slope, *makeup], false);
+            }
+        } else {
+            for t in 0..n {
+                let threshold = threshold.at(t);
+                sample(
+                    t,
+                    [threshold, slope.at(t), makeup.at(t)],
+                    threshold.to_bits() != p.threshold_db.to_bits(),
+                );
+            }
+        }
+    }
+    /// The limiter over a block while it is fully on and stays on:
+    /// `limiter_step` for every sample, bit for bit.
+    #[inline]
+    fn limit_block(
+        &mut self,
+        p: &Prepared,
+        x: &mut [[f64; BLOCK]; 2],
+        n: usize,
+        channels: usize,
+        reduction: &mut [f64; BLOCK],
+    ) {
+        let ceiling = Ramp::approach(&mut self.limiter_ceiling, p.ceiling, n);
+        let release = Ramp::approach(&mut self.limiter_release, p.limiter_release, n);
+        let mut sample = |dsp: &mut Self, t: usize, ceiling: f64, release: f64| {
+            let peak = x[0][t].abs().max(x[1][t].abs());
+            dsp.limiter_gain = limiter_gain(dsp.limiter_gain, peak, ceiling, release);
+            if dsp.limiter_gain < 1.0 {
+                reduction[t] += dsp.limiter_reduction_of(dsp.limiter_gain);
+            }
+            for samples in x.iter_mut().take(channels) {
+                samples[t] *= dsp.limiter_gain;
+            }
+        };
+        if let (Ramp::Flat(ceiling), Ramp::Flat(release)) = (&ceiling, &release) {
+            for t in 0..n {
+                sample(self, t, *ceiling, *release);
+            }
+        } else {
+            for t in 0..n {
+                sample(self, t, ceiling.at(t), release.at(t));
+            }
+        }
+    }
+}
+
+impl Dsp {
+    /// This constructor is deliberately outside the audio callback. Only enabled
+    /// suppression needs a provider; bypass retains that provider and its delay.
+    /// A mono target takes it: validation admits suppression on no other.
+    pub fn new(p: &Prepared, suppression: Option<Box<dyn Suppression>>) -> Result<Self, DspError> {
+        if p.is_chat_voice() {
+            // A completed Chat mix contains pads. Only Chat::process, with a
+            // separately captured microphone stem, may use its suppressor.
+            return Err(DspError::MissingChatStem);
+        }
+        let mut latency = 0;
+        if p.signature.geometry.is_some() {
+            let provider = suppression.as_ref().ok_or(DspError::MissingSuppression)?;
+            let geometry = provider.geometry();
+            if Some(geometry) != p.signature.geometry || p.channels() != 1 {
+                return Err(DspError::SuppressionGeometry);
+            }
+            let delay = provider.latency_samples();
+            if delay != geometry.latency_samples() as usize
+                || delay == 0
+                || delay > MAX_SUPPRESSION_DELAY
+            {
+                return Err(DspError::SuppressionGeometry);
+            }
+            latency = delay;
+        } else if suppression.is_some() {
+            return Err(DspError::UnexpectedSuppression);
+        }
+        Ok(Self {
+            signature: p.signature,
+            retired: false,
+            channels: std::array::from_fn(|ch| ChannelState {
+                bypass_dry: vec![0.0; if ch < p.channels() { latency } else { 0 }]
+                    .into_boxed_slice(),
+                bypass_position: 0,
+            }),
+            latency,
+            suppression,
+            gain: if p.gain_on { p.gain } else { 1.0 },
+            wet: if p.noise_on { p.wet } else { 0.0 },
+            gate_db: 0.0,
+            gate_gain: 1.0,
+            gate_hold: 0,
+            gate_voiced: true,
+            // An open gate with no floor reads fully open.
+            gate_open: 1.0,
+            gate_open_for: [0.0_f64.to_bits(); 2],
+            processing_blend: if p.bypass { 0.0 } else { 1.0 },
+            stages: Stages::new(p),
+            order: p.active_order,
+            order_count: p.active_count,
+            prior: Box::new(Stages::new(p)),
+            prior_order: p.active_order,
+            prior_count: p.active_count,
+            order_remaining: 0,
+            handoff_fade: STAGE_FADE_SAMPLES,
+            handoff_on: true,
+            handoff_dry: false,
+            handoff_hold: 0,
+            seen: 0,
+        })
+    }
+    /// Control, before the processor's first block: start silent, stay
+    /// silent for `hold` samples, then fade in over `STAGE_FADE_SAMPLES`. A
+    /// processor that replaces another passes its own delay, so the fade
+    /// runs over the first delayed audio instead of its empty delay line.
+    pub fn start_silent(&mut self, hold: usize) {
+        self.handoff_fade = 0;
+        self.handoff_on = true;
+        self.handoff_dry = false;
+        self.handoff_hold = hold;
+    }
+    /// Control, before the processor's first block: start at the dry signal
+    /// and fade to the processed output over `STAGE_FADE_SAMPLES`. For a
+    /// processor without a delay that takes over from the unprocessed path.
+    pub fn start_dry(&mut self) {
+        self.handoff_fade = 0;
+        self.handoff_on = true;
+        self.handoff_dry = true;
+        self.handoff_hold = 0;
+    }
+    /// Callback, before a block: `Some` fades the output out to silence or
+    /// to the dry signal over `STAGE_FADE_SAMPLES` (`handed_off` then says
+    /// so); `None` fades it back in. A fade already under way keeps its
+    /// destination, so the output never jumps. Costs a few stores.
+    pub fn hand_off(&mut self, to: Option<HandOff>) {
+        match to {
+            Some(to) => {
+                if self.handoff_fade == STAGE_FADE_SAMPLES {
+                    self.handoff_dry = to == HandOff::Dry;
+                }
+                // Still silent from its start: handed off already.
+                self.handoff_hold = 0;
+                self.handoff_on = false;
+            }
+            None => self.handoff_on = true,
+        }
+    }
+    /// Whether the output has faded out completely after `hand_off`.
+    pub fn handed_off(&self) -> bool {
+        !self.handoff_on && self.handoff_fade == 0 && self.handoff_hold == 0
+    }
+    /// One sample of the hand-off fade: the share of the processed output to
+    /// keep, 1 once fully in.
+    #[inline(always)]
+    fn handoff_step(&mut self) -> f64 {
+        if self.handoff_hold > 0 {
+            self.handoff_hold -= 1;
+            return 0.0;
+        }
+        Stages::fade_step(&mut self.handoff_fade, self.handoff_on) as f64
+            / STAGE_FADE_SAMPLES as f64
+    }
+    /// `handoff_step` for `n` samples: flat 1 without a step while the
+    /// output is fully in, as it is but for a switch.
+    #[inline(always)]
+    fn handoff_ramp(&mut self, n: usize) -> Ramp {
+        if self.handoff_on && self.handoff_fade == STAGE_FADE_SAMPLES && self.handoff_hold == 0 {
+            return Ramp::Flat(1.0);
+        }
+        let mut steps = [0.0; BLOCK];
+        for step in &mut steps[..n] {
+            *step = self.handoff_step();
+        }
+        Ramp::Moving(steps)
+    }
+    pub fn without_suppression(p: &Prepared) -> Result<Self, DspError> {
+        Self::new(p, None)
+    }
+    pub fn latency_samples(&self) -> usize {
+        self.latency
+    }
+    /// Irreversible control-side retirement after callback quiescence. Retry
+    /// can observe a late join, but processing remains disabled even if the
+    /// first call times out.
+    pub fn drain_suppression(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<(), RetirementError> {
+        self.retired = true;
+        let end = std::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or(RetirementError::TimedOut)?;
+        match &mut self.suppression {
+            Some(provider) => {
+                provider.drain(end.saturating_duration_since(std::time::Instant::now()))
+            }
+            None => Ok(()),
+        }
+    }
+    fn check(&self, p: &Prepared, lengths: [usize; 2]) -> Result<usize, DspError> {
+        if self.retired {
+            return Err(DspError::Retired);
+        }
+        if self.signature != p.signature {
+            return Err(DspError::IncompatibleSnapshot);
+        }
+        if (p.channels() == 2 && lengths[0] != lengths[1]) || (p.channels() == 1 && lengths[1] != 0)
+        {
+            return Err(DspError::BufferShape);
+        }
+        Ok(lengths[0])
+    }
+    /// Applies `p`'s effect order (starting a crossfade), EQ shape, and filter
+    /// smoothing targets.
+    ///
+    /// Skips the pass when `p.serial == self.seen`, since steady state with the
+    /// same immutable `Prepared` is a no-op.
+    fn begin_block(&mut self, p: &Prepared, frames: usize) {
+        if frames == 0 || self.seen == p.serial {
+            return;
+        }
+        let mut steady = true;
+        if p.active_order[..p.active_count] != self.order[..self.order_count] {
+            if self.order_remaining == 0 {
+                *self.prior = self.stages;
+                self.prior_order = self.order;
+                self.prior_count = self.order_count;
+                self.order = p.active_order;
+                self.order_count = p.active_count;
+                self.order_remaining = EQ_FADE_SAMPLES;
+            }
+            // Otherwise the order is taken up after the running fade.
+            steady = false;
+        }
+        steady &= self.stages.begin(p);
+        if self.order_remaining != 0 {
+            self.prior.begin(p);
+            steady = false;
         }
         self.seen = if steady { p.serial } else { 0 };
     }
@@ -594,10 +1146,17 @@ impl Dsp {
             && !p.noise_on
             && !p.comp_on
             && !p.limit_on
+            && self.stages.hp_fade == 0
+            && self.stages.comp_fade == 0
+            && self.stages.limiter_fade == 0
+            && self.order_remaining == 0
+            && self.handoff_on
+            && self.handoff_fade == STAGE_FADE_SAMPLES
+            && self.handoff_hold == 0
             && (if p.gain_on { p.gain } else { 1.0 }) == 1.0
             && self.gain == 1.0
-            && self.eq_remaining == 0
-            && self.eq[self.eq_current].steady_disabled()
+            && self.stages.eq_remaining == 0
+            && self.stages.eq[self.stages.eq_current].steady_disabled()
             && (self.wet + GAIN_SMOOTH * (0.0 - self.wet)).to_bits() == self.wet.to_bits()
             && self.processing_blend.is_finite()
             && (self.processing_blend
@@ -673,19 +1232,9 @@ impl Dsp {
         let gain = self.gate_step(p, scores[0], m);
         (gain, 1 + self.gate_rest(p, &scores[1..], m))
     }
-    /// How many of `scores`, from the first, `gate_step` would take without
-    /// changing the gate or its gain; their scores go to the meter here.
-    /// Call it straight after a `gate_step` with the same `p`.
-    ///
-    /// That step left the hold and the kept position as `p` makes them. A
-    /// further step changes nothing when the gate is open and at rest (voiced,
-    /// the hold full, the level at 0 dB) and the next score counts as voice
-    /// again, or shut and at rest (not voiced, the hold run out, the level on
-    /// the floor) and the next score does not: the same verdict keeps the
-    /// hold, the target is the level the gate is at, and the position
-    /// `gate_step` gave the meter is the one it would give again. The first
-    /// score with the other verdict ends the count and is left to
-    /// `gate_step`.
+    /// Counts consecutive leading scores that leave the gate at rest (fully open
+    /// and voiced, or fully shut and unvoiced), updating the meter as it goes.
+    /// Must be called immediately after `gate_step` with the same `p`.
     #[inline]
     fn gate_rest(&self, p: &Prepared, scores: &[Option<f32>], m: &mut Meter) -> usize {
         let at_rest = if self.gate_voiced {
@@ -781,6 +1330,171 @@ impl Dsp {
         }
         output
     }
+    /// The effect order over `n` samples of `x`: the current one on
+    /// `stages`, or with `prior` the old one on its copy during an order
+    /// fade. `reduction` gets the compressor's and limiter's reductions;
+    /// returns whether either ran.
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn stages_block(
+        &mut self,
+        p: &Prepared,
+        prior: bool,
+        x: &mut [[f64; BLOCK]; 2],
+        n: usize,
+        gain: &Ramp,
+        wet: &Ramp,
+        reduction: &mut [f64; BLOCK],
+        m: &mut Meter,
+    ) -> bool {
+        let (order, count) = if prior {
+            (self.prior_order, self.prior_count)
+        } else {
+            (self.order, self.order_count)
+        };
+        let mut dynamics = false;
+        for stage in order[..count].iter().copied() {
+            if stage == Effect::Suppression {
+                // A provider fixes the order: it never changes, so only the
+                // current order has this stage.
+                debug_assert!(!prior);
+                self.suppression_block(p, x, n, wet, m);
+            } else {
+                let stages = if prior {
+                    &mut *self.prior
+                } else {
+                    &mut self.stages
+                };
+                if !stages.block(stage, p, x, n, gain, reduction, &mut dynamics, m) {
+                    continue;
+                }
+            }
+            for samples in x.iter_mut().take(p.channels()) {
+                clamp(&mut samples[..n], 16.0, m);
+            }
+        }
+        dynamics
+    }
+    /// `stages_block` while an order change fades in: the old order runs on
+    /// its copy of the stages for the samples of the fade, from the same
+    /// input, and the output moves from its result to the new order's.
+    #[inline(never)]
+    fn order_fade_block(
+        &mut self,
+        p: &Prepared,
+        x: &mut [[f64; BLOCK]; 2],
+        n: usize,
+        gain: &Ramp,
+        wet: &Ramp,
+        m: &mut Meter,
+    ) {
+        let fading = self.order_remaining.min(n);
+        let mut prior = *x;
+        let mut prior_reduction = [0.0; BLOCK];
+        let prior_dynamics = self.stages_block(
+            p,
+            true,
+            &mut prior,
+            fading,
+            gain,
+            wet,
+            &mut prior_reduction,
+            m,
+        );
+        let mut reduction = [0.0; BLOCK];
+        let dynamics = self.stages_block(p, false, x, n, gain, wet, &mut reduction, m);
+        for t in 0..fading {
+            let mix = (EQ_FADE_SAMPLES - self.order_remaining + 1) as f64 / EQ_FADE_SAMPLES as f64;
+            for ch in 0..p.channels() {
+                x[ch][t] = prior[ch][t] + mix * (x[ch][t] - prior[ch][t]);
+            }
+            self.order_remaining -= 1;
+        }
+        if dynamics {
+            for value in &reduction[..n] {
+                m.gain_reduction = m.gain_reduction.max(*value);
+            }
+        }
+        if prior_dynamics {
+            for value in &prior_reduction[..fading] {
+                m.gain_reduction = m.gain_reduction.max(*value);
+            }
+        }
+    }
+    /// The suppression stage over `n` samples of `x`: the provider on the
+    /// one channel, then the voice gate.
+    #[inline]
+    fn suppression_block(
+        &mut self,
+        p: &Prepared,
+        x: &mut [[f64; BLOCK]; 2],
+        n: usize,
+        wet: &Ramp,
+        m: &mut Meter,
+    ) {
+        let channels = p.channels();
+        let mut voice = [None; BLOCK];
+        let mut wet32 = [0.0; BLOCK];
+        wet.each(n, |t, wet| wet32[t] = wet as f32);
+        if let Some(provider) = self.suppression.as_mut() {
+            suppress(
+                provider.as_mut(),
+                &mut x[0][..n],
+                &wet32[..n],
+                &mut voice[..n],
+                m,
+            );
+        }
+        let mut t = 0;
+        while t < n {
+            let (gain, run) = self.gate_run(p, &voice[t..n], m);
+            for samples in x.iter_mut().take(channels) {
+                for sample in &mut samples[t..t + run] {
+                    *sample *= gain;
+                }
+            }
+            t += run;
+        }
+    }
+    /// The stages of the effect order for one sample, as `stages_block` runs
+    /// them for a block. Returns the compressor's and limiter's reduction.
+    #[cfg(test)]
+    fn stages_frame(&mut self, p: &Prepared, prior: bool, x: &mut [f64; 2], m: &mut Meter) -> f64 {
+        let (order, count) = if prior {
+            (self.prior_order, self.prior_count)
+        } else {
+            (self.order, self.order_count)
+        };
+        let mut reduction = 0.0;
+        for stage in order[..count].iter().copied() {
+            if stage == Effect::Suppression {
+                let mut voice = None;
+                if let Some(provider) = self.suppression.as_mut() {
+                    let sample = &mut x[0];
+                    *sample = provider
+                        .process_sample(safe(*sample, 16.0, m) as f32, self.wet as f32)
+                        as f64;
+                    voice = provider.voice();
+                }
+                let gain = self.gate_step_reference(p, voice, m);
+                for sample in x.iter_mut().take(p.channels()) {
+                    *sample *= gain;
+                }
+            } else {
+                let gain = self.gain;
+                let stages = if prior {
+                    &mut *self.prior
+                } else {
+                    &mut self.stages
+                };
+                stages.frame(stage, p, x, gain, &mut reduction, m);
+            }
+            for sample in x.iter_mut().take(p.channels()) {
+                *sample = safe(*sample, 16.0, m);
+            }
+        }
+        reduction
+    }
     /// `frame` for `n` samples per channel, one stage at a time. Every sample
     /// sees the same operations in the same order as `frame`, so the output,
     /// meter and state match it bit for bit. Mono leaves `x[1]` at zero.
@@ -842,157 +1556,29 @@ impl Dsp {
             if p.bypass { 0.0 } else { 1.0 },
             n,
         );
-        let mut reduction = [0.0; BLOCK];
-        for stage in p.active_order[..p.active_count].iter().copied() {
-            match stage {
-                Effect::Highpass => {
-                    if p.hp_on {
-                        for (state, samples) in
-                            self.channels.iter_mut().zip(x.iter_mut()).take(channels)
-                        {
-                            state.hp.process_block(&p.hp, &mut samples[..n], 16.0, m);
-                        }
-                    }
+        if self.order_remaining != 0 {
+            self.order_fade_block(p, x, n, &gain, &wet, m);
+        } else {
+            let mut reduction = [0.0; BLOCK];
+            if self.stages_block(p, false, x, n, &gain, &wet, &mut reduction, m) {
+                for value in &reduction[..n] {
+                    m.gain_reduction = m.gain_reduction.max(*value);
                 }
-                Effect::Suppression => {
-                    let mut voice = [None; BLOCK];
-                    let mut wet32 = [0.0; BLOCK];
-                    wet.each(n, |t, wet| wet32[t] = wet as f32);
-                    let mut first = true;
-                    for (state, samples) in
-                        self.channels.iter_mut().zip(x.iter_mut()).take(channels)
-                    {
-                        if let Some(provider) = state.suppression.as_mut() {
-                            suppress(
-                                provider.as_mut(),
-                                &mut samples[..n],
-                                &wet32[..n],
-                                first,
-                                &mut voice[..n],
-                                m,
-                            );
-                            first = false;
-                        }
-                    }
-                    let mut t = 0;
-                    while t < n {
-                        let (gain, run) = self.gate_run(p, &voice[t..n], m);
-                        for samples in x.iter_mut().take(channels) {
-                            for sample in &mut samples[t..t + run] {
-                                *sample *= gain;
-                            }
-                        }
-                        t += run;
-                    }
-                }
-                Effect::Eq => {
-                    let fading = self.eq_remaining.min(n);
-                    if fading == 0 {
-                        let bank = &mut self.eq[self.eq_current];
-                        bank.process_block(x, n, channels, m);
-                        if bank.is_on() {
-                            // An enabled bank ends by limiting its own
-                            // output to 16.
-                            continue;
-                        }
-                    } else {
-                        // The previous bank fades out over the first samples.
-                        let mut prior = *x;
-                        self.eq[1 - self.eq_current].process_block(&mut prior, fading, channels, m);
-                        self.eq[self.eq_current].process_block(x, n, channels, m);
-                        for t in 0..fading {
-                            let mix = (EQ_FADE_SAMPLES - self.eq_remaining + 1) as f64
-                                / EQ_FADE_SAMPLES as f64;
-                            for ch in 0..channels {
-                                x[ch][t] = prior[ch][t] + mix * (x[ch][t] - prior[ch][t]);
-                            }
-                            self.eq_remaining -= 1;
-                        }
-                    }
-                }
-                Effect::Compressor => {
-                    if p.comp_on {
-                        for t in 0..n {
-                            let peak = x[0][t].abs().max(x[1][t].abs());
-                            let coeff = if peak > self.envelope {
-                                p.comp_attack
-                            } else {
-                                p.comp_release
-                            };
-                            self.envelope = coeff * self.envelope + (1.0 - coeff) * peak;
-                            let over = if self.envelope > p.comp_threshold {
-                                (20.0 * self.envelope.max(1e-20).log10() - p.threshold_db).max(0.0)
-                            } else {
-                                0.0
-                            };
-                            let gr = over * (1.0 - 1.0 / p.ratio);
-                            let scale = (if gr > 0.0 { db_gain(-gr) } else { 1.0 }) * p.makeup;
-                            reduction[t] += gr;
-                            for samples in x.iter_mut().take(channels) {
-                                samples[t] *= scale;
-                            }
-                        }
-                    }
-                }
-                Effect::Gain => {
-                    if gain.is_one() {
-                        // Finite samples times exactly 1 are unchanged, and
-                        // the stage before left them within the limit.
-                        continue;
-                    }
-                    for samples in x.iter_mut().take(channels) {
-                        let samples = &mut samples[..n];
-                        gain.each(n, |t, gain| samples[t] *= gain);
-                    }
-                }
-                Effect::Limiter => {
-                    if p.limit_on {
-                        for t in 0..n {
-                            let peak = x[0][t].abs().max(x[1][t].abs());
-                            let needed = if peak > p.ceiling {
-                                p.ceiling / peak
-                            } else {
-                                1.0
-                            };
-                            self.limiter_gain =
-                                needed.min(1.0 - (1.0 - self.limiter_gain) * p.limiter_release);
-                            if self.limiter_gain < 1.0 {
-                                // After its first reduction the gain never
-                                // gets back to exactly 1: it stops just
-                                // below and holds that value. The logarithm,
-                                // which only the meter reads, is taken when
-                                // the gain changes, not for every sample.
-                                if self.limiter_gain.to_bits()
-                                    != self.limiter_reduction_for.to_bits()
-                                {
-                                    self.limiter_reduction_for = self.limiter_gain;
-                                    self.limiter_reduction =
-                                        -20.0 * self.limiter_gain.max(1e-20).log10();
-                                }
-                                reduction[t] += self.limiter_reduction;
-                            }
-                            for samples in x.iter_mut().take(channels) {
-                                samples[t] *= self.limiter_gain;
-                            }
-                        }
-                    }
-                }
-            }
-            for samples in x.iter_mut().take(channels) {
-                clamp(&mut samples[..n], 16.0, m);
             }
         }
-        if p.comp_on || p.limit_on {
-            for value in &reduction[..n] {
-                m.gain_reduction = m.gain_reduction.max(*value);
-            }
-        }
+        let handoff = self.handoff_ramp(n);
+        let to_dry = self.handoff_dry;
         let mut peak = 0;
         for ch in 0..channels {
             let (mixed, dry) = (&mut x[ch][..n], &bypass[ch][..n]);
             blend.each(n, |t, blend| {
                 mixed[t] = dry[t] + (mixed[t] - dry[t]) * blend
             });
+            if !handoff.is_one() {
+                handoff.each(n, |t, gain| {
+                    mixed[t] = handed_off(mixed[t], dry[t], gain, to_dry)
+                });
+            }
             peak = peak.max(max_abs_bits(mixed));
         }
         if peak <= 1.0_f64.to_bits() {
@@ -1024,7 +1610,7 @@ impl Dsp {
     fn frame(&mut self, p: &Prepared, input: [f32; 2], m: &mut Meter) -> [f32; 2] {
         let mut x = [0.0_f64; 2];
         let mut bypass = [0.0_f64; 2];
-        let mut reduction = 0.0;
+        let reduction;
         for ch in 0..p.channels() {
             let raw = input[ch] as f64;
             if raw.is_finite() {
@@ -1046,102 +1632,30 @@ impl Dsp {
         self.wet += GAIN_SMOOTH * ((if p.noise_on { p.wet } else { 0.0 }) - self.wet);
         self.processing_blend +=
             GAIN_SMOOTH * ((if p.bypass { 0.0 } else { 1.0 }) - self.processing_blend);
-        for stage in p.active_order[..p.active_count].iter().copied() {
-            match stage {
-                Effect::Highpass => {
-                    if p.hp_on {
-                        for (ch, sample) in x.iter_mut().enumerate().take(p.channels()) {
-                            *sample = self.channels[ch].hp.process(&p.hp, *sample, 16.0, m);
-                        }
-                    }
-                }
-                Effect::Suppression => {
-                    let mut voice = None;
-                    let mut first = true;
-                    for (ch, sample) in x.iter_mut().enumerate().take(p.channels()) {
-                        if let Some(provider) = self.channels[ch].suppression.as_mut() {
-                            *sample = provider
-                                .process_sample(safe(*sample, 16.0, m) as f32, self.wet as f32)
-                                as f64;
-                            voice = merge_voice(first, voice, provider.voice());
-                            first = false;
-                        }
-                    }
-                    let gain = self.gate_step_reference(p, voice, m);
-                    for sample in x.iter_mut().take(p.channels()) {
-                        *sample *= gain;
-                    }
-                }
-                Effect::Eq => {
-                    if self.eq_remaining != 0 {
-                        let mut prior = x;
-                        self.eq[1 - self.eq_current].process(&mut prior, p.channels(), m);
-                        self.eq[self.eq_current].process(&mut x, p.channels(), m);
-                        let mix = (EQ_FADE_SAMPLES - self.eq_remaining + 1) as f64
-                            / EQ_FADE_SAMPLES as f64;
-                        for ch in 0..p.channels() {
-                            x[ch] = prior[ch] + mix * (x[ch] - prior[ch]);
-                        }
-                        self.eq_remaining -= 1;
-                    } else {
-                        self.eq[self.eq_current].process(&mut x, p.channels(), m);
-                    }
-                }
-                Effect::Compressor => {
-                    if p.comp_on {
-                        let peak = x[0].abs().max(x[1].abs());
-                        let coeff = if peak > self.envelope {
-                            p.comp_attack
-                        } else {
-                            p.comp_release
-                        };
-                        self.envelope = coeff * self.envelope + (1.0 - coeff) * peak;
-                        let over = if self.envelope > p.comp_threshold {
-                            (20.0 * self.envelope.max(1e-20).log10() - p.threshold_db).max(0.0)
-                        } else {
-                            0.0
-                        };
-                        let gr = over * (1.0 - 1.0 / p.ratio);
-                        let gain = (if gr > 0.0 { db_gain(-gr) } else { 1.0 }) * p.makeup;
-                        reduction += gr;
-                        for sample in x.iter_mut().take(p.channels()) {
-                            *sample *= gain;
-                        }
-                    }
-                }
-                Effect::Gain => {
-                    for sample in x.iter_mut().take(p.channels()) {
-                        *sample *= self.gain;
-                    }
-                }
-                Effect::Limiter => {
-                    if p.limit_on {
-                        let peak = x[0].abs().max(x[1].abs());
-                        let needed = if peak > p.ceiling {
-                            p.ceiling / peak
-                        } else {
-                            1.0
-                        };
-                        self.limiter_gain =
-                            needed.min(1.0 - (1.0 - self.limiter_gain) * p.limiter_release);
-                        if self.limiter_gain < 1.0 {
-                            reduction += -20.0 * self.limiter_gain.max(1e-20).log10();
-                        }
-                        for sample in x.iter_mut().take(p.channels()) {
-                            *sample *= self.limiter_gain;
-                        }
-                    }
-                }
+        if self.order_remaining != 0 {
+            let mut prior = x;
+            let prior_reduction = self.stages_frame(p, true, &mut prior, m);
+            reduction = self.stages_frame(p, false, &mut x, m);
+            let mix = (EQ_FADE_SAMPLES - self.order_remaining + 1) as f64 / EQ_FADE_SAMPLES as f64;
+            for ch in 0..p.channels() {
+                x[ch] = prior[ch] + mix * (x[ch] - prior[ch]);
             }
-            for sample in x.iter_mut().take(p.channels()) {
-                *sample = safe(*sample, 16.0, m);
-            }
+            self.order_remaining -= 1;
+            m.gain_reduction = m.gain_reduction.max(prior_reduction);
+        } else {
+            reduction = self.stages_frame(p, false, &mut x, m);
         }
         m.gain_reduction = m.gain_reduction.max(reduction);
+        let handoff = self.handoff_step();
         let mut output = [0.0; 2];
         for ch in 0..p.channels() {
             let y = safe(
-                bypass[ch] + (x[ch] - bypass[ch]) * self.processing_blend,
+                handed_off(
+                    bypass[ch] + (x[ch] - bypass[ch]) * self.processing_blend,
+                    bypass[ch],
+                    handoff,
+                    self.handoff_dry,
+                ),
                 1.0,
                 m,
             );
@@ -1154,12 +1668,22 @@ impl Dsp {
     }
 }
 
-/// The largest magnitude in `x`, as bits. For finite values the bit order of
-/// `abs` is the numeric order, and every infinity and NaN sorts above them. So
-/// `max_abs_bits(x) <= limit.to_bits()`, for a finite positive `limit`, says
-/// every sample is finite and within `limit`: `safe` would return each one
-/// unchanged and count nothing. The comparison has to stay on the integers;
-/// as floats it would let a NaN through.
+/// The output `y` with the hand-off gain applied: `y` itself at 1, otherwise
+/// faded toward silence or toward `dry`.
+#[inline(always)]
+fn handed_off(y: f64, dry: f64, gain: f64, to_dry: bool) -> f64 {
+    if gain == 1.0 {
+        y
+    } else if to_dry {
+        dry + (y - dry) * gain
+    } else {
+        y * gain
+    }
+}
+
+/// Largest `|x|` as raw `u64` bits. Comparing `max_abs_bits(x) <= limit.to_bits()`
+/// in integer space proves every sample is finite and within `limit` (infinities
+/// and NaNs sort above all finite values; float comparison would let NaN pass).
 #[inline(always)]
 pub(crate) fn max_abs_bits(x: &[f64]) -> u64 {
     x.iter().fold(0, |most, sample| {
@@ -1207,13 +1731,42 @@ impl Ramp {
         }
         Self::Moving(steps)
     }
+    /// One step of `approach`.
+    #[inline(always)]
+    pub(crate) fn approach_step(value: &mut f64, target: f64) {
+        if value.to_bits() != target.to_bits() {
+            let next = *value + GAIN_SMOOTH * (target - *value);
+            *value = if next.to_bits() == value.to_bits() {
+                target
+            } else {
+                next
+            };
+        }
+    }
+    /// `advance` for a setting: a value the step can no longer move takes
+    /// the target exactly (a jump of a few hundred ulps at most), so the
+    /// setting ends on the prepared value instead of stalling short of it,
+    /// and whatever compares the two finds them equal.
+    #[inline(always)]
+    pub(crate) fn approach(value: &mut f64, target: f64, n: usize) -> Self {
+        if value.to_bits() == target.to_bits() {
+            return Self::Flat(*value);
+        }
+        let mut steps = [0.0; BLOCK];
+        for step in &mut steps[..n] {
+            Self::approach_step(value, target);
+            *step = *value;
+        }
+        Self::Moving(steps)
+    }
     /// True when every sample's gain is exactly 1.
     #[inline(always)]
     pub(crate) fn is_one(&self) -> bool {
         matches!(self, Self::Flat(value) if *value == 1.0)
     }
-    #[cfg(test)]
-    fn at(&self, t: usize) -> f64 {
+    /// The gain of sample `t`.
+    #[inline(always)]
+    pub(crate) fn at(&self, t: usize) -> f64 {
         match self {
             Self::Flat(value) => *value,
             Self::Moving(steps) => steps[t],
@@ -1232,11 +1785,46 @@ impl Ramp {
     }
 }
 
-/// One channel's block through its suppression provider, in place. Each
+/// One sample of the compressor's detector and gain curve: moves `envelope`
+/// toward `peak` and returns the gain to apply and the reduction in dB. With
+/// the threshold at the prepared value, the level is worked out only above
+/// it; a threshold still on its way there (`moving`: not `p`'s, bit for bit)
+/// works it out for every sample, so the curve moves with it.
+#[inline(always)]
+fn compressor_gain(
+    envelope: &mut f64,
+    peak: f64,
+    p: &Prepared,
+    [threshold_db, slope, makeup]: [f64; 3],
+    moving: bool,
+) -> (f64, f64) {
+    let coeff = if peak > *envelope {
+        p.comp_attack
+    } else {
+        p.comp_release
+    };
+    *envelope = coeff * *envelope + (1.0 - coeff) * peak;
+    let over = if moving || *envelope > p.comp_threshold {
+        (20.0 * envelope.max(1e-20).log10() - threshold_db).max(0.0)
+    } else {
+        0.0
+    };
+    let gr = over * slope;
+    ((if gr > 0.0 { db_gain(-gr) } else { 1.0 }) * makeup, gr)
+}
+
+/// One sample of the limiter's gain: down at once to what keeps `peak` under
+/// the ceiling, otherwise back toward 1 at the release rate from `held`.
+#[inline(always)]
+fn limiter_gain(held: f64, peak: f64, ceiling: f64, release: f64) -> f64 {
+    let needed = if peak > ceiling { ceiling / peak } else { 1.0 };
+    needed.min(1.0 - (1.0 - held) * release)
+}
+
+/// The channel's block through its suppression provider, in place. Each
 /// sample sees what `frame` does to it: `safe` at 16, the conversion to the
 /// provider's f32, the provider with that sample's `wet`, the conversion
-/// back, and its voice score merged into `voice`, which holds the scores of
-/// the channels before this one (`first` when there are none).
+/// back, and its voice score into `voice`.
 ///
 /// `safe` changes no provider state and the provider reads no meter, so the
 /// whole block is limited first and the provider then takes it in one call.
@@ -1245,7 +1833,6 @@ fn suppress(
     provider: &mut dyn Suppression,
     samples: &mut [f64],
     wet: &[f32],
-    first: bool,
     voice: &mut [Option<f32>],
     m: &mut Meter,
 ) {
@@ -1256,35 +1843,11 @@ fn suppress(
     for (narrow, sample) in narrow.iter_mut().zip(samples.iter()) {
         *narrow = *sample as f32;
     }
-    if first {
-        // Nothing to merge with: the scores are this channel's own.
-        provider.process_block(narrow, wet, voice);
-    } else {
-        let mut scores = [None; BLOCK];
-        let scores = &mut scores[..n];
-        provider.process_block(narrow, wet, scores);
-        for (so_far, score) in voice.iter_mut().zip(scores.iter()) {
-            *so_far = merge_voice(false, *so_far, *score);
-        }
-    }
+    provider.process_block(narrow, wet, voice);
     for (sample, narrow) in samples.iter_mut().zip(narrow.iter()) {
         *sample = f64::from(*narrow);
     }
 }
 
-/// Combines channel voice scores for one sample: the lower one (a stereo
-/// pair opens only on voice in both), and none if any channel has no score.
-fn merge_voice(first: bool, so_far: Option<f32>, next: Option<f32>) -> Option<f32> {
-    if first {
-        next
-    } else {
-        so_far.zip(next).map(|(a, b)| a.min(b))
-    }
-}
-
 #[cfg(test)]
-mod block_tests;
-#[cfg(test)]
-mod identity_tests;
-#[cfg(test)]
-mod provider_block_tests;
+mod tests;

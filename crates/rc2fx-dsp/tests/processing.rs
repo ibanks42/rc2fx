@@ -51,7 +51,6 @@ fn eq_only_microphone_has_no_worker_delay_and_suppression_toggle_requires_restar
     t.eq.enabled = true;
     t.eq.input_gain_db = -6.0;
     let disabled = prepared(&t);
-    assert_eq!(disabled.suppression_geometry(), None);
     let mut dsp = Dsp::without_suppression(&disabled).unwrap();
     assert_eq!(dsp.latency_samples(), 0);
     let input = [0.125; 112];
@@ -93,13 +92,13 @@ fn constructor_rejects_missing_or_mismatched_microphone_worker() {
     ));
     let bad = Delay::new(7);
     assert!(matches!(
-        Dsp::new(&prepared(&t), [Some(Box::new(bad)), None]),
+        Dsp::new(&prepared(&t), Some(Box::new(bad))),
         Err(DspError::SuppressionGeometry)
     ));
     t.kind = TargetKind::Output;
     t.suppression.enabled = false;
     assert!(matches!(
-        Dsp::new(&prepared(&t), [Some(Box::new(Delay::new(7))), None]),
+        Dsp::new(&prepared(&t), Some(Box::new(Delay::new(7)))),
         Err(DspError::UnexpectedSuppression)
     ));
 }
@@ -303,7 +302,7 @@ fn exact_shape_not_just_total_delay_is_required() {
         suppression_delay()
     );
     assert!(matches!(
-        Dsp::new(&p, [Some(Box::new(wrong)), None]),
+        Dsp::new(&p, Some(Box::new(wrong))),
         Err(DspError::SuppressionGeometry)
     ));
     struct Invalid;
@@ -321,13 +320,13 @@ fn exact_shape_not_just_total_delay_is_required() {
             None
         }
         fn drain(&mut self, _: std::time::Duration) -> Result<(), RetirementError> {
-            Err(RetirementError::Unsupported)
+            Ok(())
         }
     }
     // Reject shape before invoking the default latency sum, which would
     // overflow on this deliberately malformed provider's public geometry.
     assert!(matches!(
-        Dsp::new(&p, [Some(Box::new(Invalid)), None]),
+        Dsp::new(&p, Some(Box::new(Invalid))),
         Err(DspError::SuppressionGeometry)
     ));
 }
@@ -341,7 +340,7 @@ fn control_drain_irreversibly_retires_even_on_timeout() {
         let p = prepared(&t);
         let mut provider = Delay::new(suppression_delay());
         provider.drain_error = error;
-        let mut dsp = Dsp::new(&p, [Some(Box::new(provider)), None]).unwrap();
+        let mut dsp = Dsp::new(&p, Some(Box::new(provider))).unwrap();
         assert_eq!(
             dsp.drain_suppression(std::time::Duration::ZERO),
             error.map_or(Ok(()), Err)
@@ -366,8 +365,7 @@ fn provider_must_match_every_field_of_the_prepared_model() {
     t.kind = TargetKind::Mic;
     t.suppression.enabled = true;
     let p = prepared(&t);
-    let geometry = p.suppression_geometry().unwrap();
-    assert_eq!(geometry, t.suppression.geometry().unwrap());
+    let geometry = t.suppression.geometry().unwrap();
     let provider = || Delay {
         ring: vec![0.; geometry.latency_samples() as usize],
         position: 0,
@@ -375,7 +373,7 @@ fn provider_must_match_every_field_of_the_prepared_model() {
         drain_error: None,
         voice: Arc::new(AtomicU32::new(NO_VOICE)),
     };
-    let dsp = Dsp::new(&p, [Some(Box::new(provider())), None]).unwrap();
+    let dsp = Dsp::new(&p, Some(Box::new(provider()))).unwrap();
     assert_eq!(dsp.latency_samples(), suppression_delay());
     for field in 0..3 {
         let mut wrong = provider();
@@ -391,7 +389,7 @@ fn provider_must_match_every_field_of_the_prepared_model() {
             }
         }
         assert!(matches!(
-            Dsp::new(&p, [Some(Box::new(wrong)), None]),
+            Dsp::new(&p, Some(Box::new(wrong))),
             Err(DspError::SuppressionGeometry)
         ));
     }
@@ -408,7 +406,7 @@ fn bypass_and_zero_blend_keep_exact_injected_delay() {
     t.suppression.wet = 0.0;
     t.bypass = true;
     let p = prepared(&t);
-    let mut dsp = Dsp::new(&p, [Some(Box::new(Delay::new(suppression_delay()))), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(Box::new(Delay::new(suppression_delay())))).unwrap();
     assert_eq!(dsp.latency_samples(), suppression_delay());
     let input = wave(5000, 0);
     let mut out = vec![0.; 5000];
@@ -535,14 +533,25 @@ fn ordered_gain_and_limiter_change_audio_as_configured() {
 
     assert!(!limiter_first.requires_reset(&gain_first));
     // Reuse the running limiter-first processor. A live reordering must change
-    // the actual signal, not merely accept and acknowledge new settings.
+    // the actual signal, not merely accept and acknowledge new settings. It
+    // fades from the old order's output to the new one's, without a step.
+    let fading = [0.1; rc2fx_dsp::EQ_FADE_SAMPLES];
+    let mut faded = [0.0; rc2fx_dsp::EQ_FADE_SAMPLES];
+    b.process(&gain_first, [&fading, &[]], [&mut faded, &mut []])
+        .unwrap();
+    assert!((faded[0] - raised).abs() < 1e-2);
+    assert!(faded.windows(2).all(|w| w[1] <= w[0] && w[0] - w[1] < 1e-3));
     b.process(&gain_first, [&input, &[]], [&mut y, &mut []])
         .unwrap();
     assert!(y.iter().all(|v| (*v - ceiling).abs() < 1e-7));
 }
 
+// Verify that disabling a stage fades out over `STAGE_FADE_SAMPLES`, passes
+// audio bit-exact once off, and restores detector history on re-enable
+// (highpass resets its biquad state on re-enable so stale history doesn't ring).
 #[test]
-fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
+fn disabled_stages_fade_out_keep_history_and_fade_back_in() {
+    let fade = rc2fx_dsp::STAGE_FADE_SAMPLES as usize;
     for stage in [Effect::Highpass, Effect::Compressor, Effect::Limiter] {
         let mut t = target(1);
         t.eq.enabled = false;
@@ -550,7 +559,8 @@ fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
         t.compressor.threshold = -30.0;
         t.compressor.ratio = 10.0;
         t.compressor.attack = 0.1;
-        t.limiter.ceiling = -12.0;
+        // Below the wave's peaks, so the limiter has work to do.
+        t.limiter.ceiling = -18.0;
         let enabled = prepared(&t);
         let mut with_disabled_interval = Dsp::without_suppression(&enabled).unwrap();
         let mut without_interval = Dsp::without_suppression(&enabled).unwrap();
@@ -560,25 +570,66 @@ fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
             dsp.process(&enabled, [&warm, &[]], [&mut scratch, &mut []])
                 .unwrap();
         }
+        // Settings changed while the stage is off take effect when it is
+        // back on. The limiter's ceiling and release are left alone: they
+        // smooth toward a change while the stage runs, and the uninterrupted
+        // limiter would be part way there.
         t.set_effect_enabled(stage, false);
         t.highpass.frequency = 230.0;
         t.compressor.release = 230.0;
-        t.limiter.release = 230.0;
         let disabled = prepared(&t);
         assert!(!enabled.requires_reset(&disabled));
-        let middle = wave(397, 256);
+        let middle = wave(fade + 397, 256);
         let mut dry = vec![0.0; middle.len()];
         with_disabled_interval
             .process(&disabled, [&middle, &[]], [&mut dry, &mut []])
             .unwrap();
+        assert_ne!(
+            dry[0].to_bits(),
+            middle[0].to_bits(),
+            "{stage:?} cut at once"
+        );
         assert_eq!(
-            dry.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-            middle.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            dry[fade..].iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            middle[fade..]
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>(),
+            "{stage:?}"
         );
         t.set_effect_enabled(stage, true);
         let resumed = prepared(&t);
         assert!(!disabled.requires_reset(&resumed));
-        let probe = wave(512, 653);
+        if stage == Effect::Highpass {
+            let probe = wave(48_000, 256 + middle.len());
+            let mut a = vec![0.0; probe.len()];
+            let mut b = vec![0.0; probe.len()];
+            with_disabled_interval
+                .process(&resumed, [&probe, &[]], [&mut a, &mut []])
+                .unwrap();
+            without_interval
+                .process(&resumed, [&probe, &[]], [&mut b, &mut []])
+                .unwrap();
+            let settled = a[probe.len() - 4800..]
+                .iter()
+                .zip(&b[probe.len() - 4800..])
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(settled < 1e-6, "highpass still {settled} away");
+            continue;
+        }
+        // The fade in, then the same stage as the one never switched off.
+        let fading = wave(fade, 653);
+        let probe = wave(512, 653 + fade);
+        let mut a = vec![0.0; fade];
+        let mut b = vec![0.0; fade];
+        with_disabled_interval
+            .process(&resumed, [&fading, &[]], [&mut a, &mut []])
+            .unwrap();
+        without_interval
+            .process(&resumed, [&fading, &[]], [&mut b, &mut []])
+            .unwrap();
+        assert_ne!(a[0].to_bits(), b[0].to_bits(), "{stage:?} on at once");
         let mut a = [0.0; 512];
         let mut b = [0.0; 512];
         let ma = with_disabled_interval
@@ -587,7 +638,7 @@ fn disabled_stage_updates_freeze_history_and_reenable_without_reset() {
         let mb = without_interval
             .process(&resumed, [&probe, &[]], [&mut b, &mut []])
             .unwrap();
-        assert_eq!(a.map(f32::to_bits), b.map(f32::to_bits));
+        assert_eq!(a.map(f32::to_bits), b.map(f32::to_bits), "{stage:?}");
         assert_eq!(
             [
                 ma.input_peak,
@@ -663,13 +714,10 @@ fn every_mic_order_keeps_enabled_provider_warm_across_wet_zero_and_bypass() {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut dsp = Dsp::new(
             &initial,
-            [
-                Some(Box::new(ObservedDelay {
-                    inner: Delay::new(suppression_delay()),
-                    calls: calls.clone(),
-                })),
-                None,
-            ],
+            Some(Box::new(ObservedDelay {
+                inner: Delay::new(suppression_delay()),
+                calls: calls.clone(),
+            })),
         )
         .unwrap();
         let input: Vec<f32> = (0..1500).map(|i| 0.125 + (i % 17) as f32 / 128.0).collect();
@@ -743,7 +791,7 @@ fn voice_gate_closes_after_its_hold_and_reopens_on_voice() {
     let p = prepared(&t);
     let provider = Delay::new(suppression_delay());
     let voice = provider.voice.clone();
-    let mut dsp = Dsp::new(&p, [Some(Box::new(provider)), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(Box::new(provider))).unwrap();
     set_voice(&voice, Some(0.9));
     let (y, m) = run_constant(&mut dsp, &p, 4816, 0.25);
     assert_eq!(y, 0.25, "an open gate is exact");
@@ -788,7 +836,7 @@ fn voice_gate_opens_when_the_model_has_no_score() {
     let p = prepared(&t);
     let provider = Delay::new(suppression_delay());
     let voice = provider.voice.clone();
-    let mut dsp = Dsp::new(&p, [Some(Box::new(provider)), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(Box::new(provider))).unwrap();
     set_voice(&voice, Some(0.));
     run_constant(&mut dsp, &p, 72016, 0.25);
     // The delayed original (late or failed worker) is never cut.
@@ -805,7 +853,7 @@ fn voice_gate_off_is_bit_exact_and_its_settings_are_live() {
     let off = prepared(&t);
     let provider = Delay::new(suppression_delay());
     let voice = provider.voice.clone();
-    let mut dsp = Dsp::new(&off, [Some(Box::new(provider)), None]).unwrap();
+    let mut dsp = Dsp::new(&off, Some(Box::new(provider))).unwrap();
     set_voice(&voice, Some(0.));
     let input = wave(4816, 0);
     let mut out = vec![0.; 4816];

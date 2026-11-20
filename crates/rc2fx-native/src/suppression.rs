@@ -1,17 +1,18 @@
-//! Control-side provider ownership and exact retirement evidence. The existing
-//! Rust worker is the callback endpoint; inference never runs in this module.
+//! Control-side ownership and retirement tracking for DSP runtimes and noise
+//! suppression workers. Inference runs on the `rc2fx-suppression` worker thread.
 use rc2fx_dsp::Suppression;
 use rc2fx_suppression::{Endpoint, Telemetry, Termination, WorkerOptions};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::{
     cell::UnsafeCell,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
-/// Shared by the fixed bound slots in one pipeline. A staged replacement may
-/// coexist with its own slot, but cannot admit a second microphone target.
+/// Enforces that only one target in a pipeline uses noise suppression at a time.
+/// Refcounted so a staged replacement for the same target can overlap briefly
+/// with the active runtime.
 #[derive(Clone, Default)]
 pub struct Admission(Arc<Mutex<Option<(String, usize)>>>);
 pub(super) struct Claim(Admission);
@@ -43,24 +44,45 @@ impl Drop for Claim {
         }
     }
 }
-/// Control owns this allocation. The path's Reader may mutate the processor
-/// only while its immutable descriptor is held for a frame: from the callback,
-/// or from the pipeline's helper while the callback has handed that frame off.
+/// Owns a path's DSP processor and optional denoiser worker.
+///
+/// Allocated and retired on the control thread; the audio callback (or helper
+/// thread during a handed-off frame) has exclusive mutable access to `state`
+/// while holding the descriptor.
 pub struct Runtime {
     state: UnsafeCell<Processor>,
+    /// Requested hand-off mode (`HANDOFF_*`) from control, and completion flag
+    /// set by the audio thread once the fade-out finishes.
+    handoff: AtomicU8,
+    handed_off: AtomicBool,
+    /// Fixed at construction so control can query latency without touching `state`.
+    latency: usize,
     worker: Option<Record>,
     epoch: u64,
     _claim: Option<Claim>,
     #[cfg(test)]
     retirement_blocked: std::sync::atomic::AtomicBool,
 }
-// No control code touches State until the reader releases a newer descriptor.
-// Telemetry uses its existing atomic/SPSC ownership independently of State.
+// SAFETY: Control never accesses `state` until the audio reader drops all
+// references to this descriptor; telemetry uses independent atomics/SPSC rings.
 unsafe impl Send for Runtime {}
 unsafe impl Sync for Runtime {}
 enum Processor {
     Ordinary(Box<rc2fx_dsp::Dsp>),
     Chat(Box<rc2fx_dsp::Chat>),
+}
+const HANDOFF_NONE: u8 = 0;
+const HANDOFF_SILENCE: u8 = 1;
+const HANDOFF_DRY: u8 = 2;
+/// Initial output envelope when a new runtime takes over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// Start immediately (first runtime on this path).
+    Playing,
+    /// Hold silence for the runtime's latency, then fade in (replacing a faded-out runtime).
+    Silent,
+    /// Replacing passthrough: crossfade from dry if zero-latency, otherwise `Silent`.
+    AfterPassthrough,
 }
 impl Runtime {
     pub fn new(
@@ -69,37 +91,55 @@ impl Runtime {
         options: WorkerOptions,
         epoch: u64,
         admission: &Admission,
+        start: Start,
     ) -> Result<Arc<Self>, super::parameters::Error> {
         let claim = if target.suppression.enabled {
             Some(admission.claim(&target.id)?)
         } else {
             None
         };
-        let (mut providers, worker) = if target.suppression.enabled {
+        let (mut provider, worker) = if target.suppression.enabled {
             let (provider, record) = worker(target.suppression.lookahead, options)
                 .map_err(|_| super::parameters::Error::Runtime)?;
-            ([Some(provider), None], Some(record))
+            (Some(provider), Some(record))
         } else {
-            ([None, None], None)
+            (None, None)
         };
-        let dsp = if prepared.is_chat_voice() {
+        let mut dsp = if prepared.is_chat_voice() {
             Processor::Chat(Box::new(
                 rc2fx_dsp::Chat::new(
                     prepared,
-                    providers[0]
-                        .take()
-                        .ok_or(super::parameters::Error::Runtime)?,
+                    provider.take().ok_or(super::parameters::Error::Runtime)?,
                 )
                 .map_err(|_| super::parameters::Error::Runtime)?,
             ))
         } else {
             Processor::Ordinary(Box::new(
-                rc2fx_dsp::Dsp::new(prepared, providers)
+                rc2fx_dsp::Dsp::new(prepared, provider)
                     .map_err(|_| super::parameters::Error::Runtime)?,
             ))
         };
+        let latency = match &dsp {
+            Processor::Ordinary(dsp) => dsp.latency_samples(),
+            Processor::Chat(dsp) => dsp.latency_samples(),
+        };
+        // Safe to configure directly before publishing to the audio thread.
+        match (&mut dsp, start) {
+            (_, Start::Playing) => {}
+            (Processor::Ordinary(dsp), Start::AfterPassthrough) if dsp.latency_samples() == 0 => {
+                dsp.start_dry()
+            }
+            (Processor::Ordinary(dsp), _) => {
+                let hold = dsp.latency_samples();
+                dsp.start_silent(hold);
+            }
+            (Processor::Chat(chat), _) => chat.start_silent(),
+        }
         Ok(Arc::new(Self {
             state: UnsafeCell::new(dsp),
+            handoff: AtomicU8::new(HANDOFF_NONE),
+            handed_off: AtomicBool::new(false),
+            latency,
             worker,
             epoch,
             _claim: claim,
@@ -110,11 +150,52 @@ impl Runtime {
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
+    /// Requests the audio thread to fade out (`Some`) or resume (`None`). Non-blocking.
+    pub fn request_hand_off(&self, to: Option<rc2fx_dsp::HandOff>) {
+        if to.is_some() {
+            self.handed_off.store(false, Ordering::Release);
+        }
+        let value = match to {
+            None => HANDOFF_NONE,
+            Some(rc2fx_dsp::HandOff::Silence) => HANDOFF_SILENCE,
+            Some(rc2fx_dsp::HandOff::Dry) => HANDOFF_DRY,
+        };
+        self.handoff.store(value, Ordering::Release);
+    }
+    pub fn latency_samples(&self) -> usize {
+        self.latency
+    }
+    /// True once the audio thread has completed the requested fade-out.
+    pub fn handed_off(&self) -> bool {
+        self.handed_off.load(Ordering::Acquire)
+    }
+    #[inline]
+    fn handing_off<T>(&self, dsp: &mut Processor, block: impl FnOnce(&mut Processor) -> T) -> T {
+        let to = match self.handoff.load(Ordering::Acquire) {
+            HANDOFF_NONE => None,
+            HANDOFF_SILENCE => Some(rc2fx_dsp::HandOff::Silence),
+            _ => Some(rc2fx_dsp::HandOff::Dry),
+        };
+        match dsp {
+            Processor::Ordinary(dsp) => dsp.hand_off(to),
+            Processor::Chat(dsp) => dsp.hand_off(to),
+        }
+        let result = block(dsp);
+        let done = to.is_some()
+            && match dsp {
+                Processor::Ordinary(dsp) => dsp.handed_off(),
+                Processor::Chat(dsp) => dsp.handed_off(),
+            };
+        if done != self.handed_off.load(Ordering::Relaxed) {
+            self.handed_off.store(done, Ordering::Release);
+        }
+        result
+    }
     pub fn worker(&self) -> Option<&Record> {
         self.worker.as_ref()
     }
-    /// Only control, after all callback descriptor loans have ended. A timeout
-    /// retains the entire runtime in its bounded quarantine slot for retry.
+    /// Control-only, called after all audio descriptor loans have ended.
+    /// Returns false on drain timeout so the runtime stays in quarantine for retry.
     pub fn retire(&self) -> bool {
         #[cfg(test)]
         if self.retirement_blocked.load(Ordering::Relaxed) {
@@ -139,20 +220,20 @@ impl Runtime {
         input: [&[f32]; 2],
         output: [&mut [f32]; 2],
     ) -> Result<rc2fx_dsp::Meter, rc2fx_dsp::DspError> {
-        match unsafe { &mut *self.state.get() } {
+        self.handing_off(unsafe { &mut *self.state.get() }, |dsp| match dsp {
             Processor::Ordinary(dsp) => dsp.process(prepared, input, output),
             Processor::Chat(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
-        }
+        })
     }
     pub unsafe fn output(
         &self,
         prepared: &rc2fx_dsp::Prepared,
         buffers: [&mut [f32]; 2],
     ) -> Result<rc2fx_dsp::Meter, rc2fx_dsp::DspError> {
-        match unsafe { &mut *self.state.get() } {
+        self.handing_off(unsafe { &mut *self.state.get() }, |dsp| match dsp {
             Processor::Ordinary(dsp) => dsp.process_in_place(prepared, buffers),
             Processor::Chat(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
-        }
+        })
     }
     pub unsafe fn chat_output(
         &self,
@@ -160,16 +241,15 @@ impl Runtime {
         voice: [&[f32]; 2],
         buffers: [&mut [f32]; 2],
     ) -> Result<rc2fx_dsp::Meter, rc2fx_dsp::DspError> {
-        match unsafe { &mut *self.state.get() } {
+        self.handing_off(unsafe { &mut *self.state.get() }, |dsp| match dsp {
             Processor::Chat(dsp) => dsp.process(prepared, voice, buffers),
             Processor::Ordinary(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
-        }
+        })
     }
-    /// Asks for both ends of the processor (see prefetch.rs). Reads only
-    /// which processor this is, which construction fixed.
+    /// Prefetches the hot ends of the processor (see `prefetch.rs`).
     ///
     /// # Safety
-    /// As `latency`: the caller holds this runtime's descriptor for a frame.
+    /// Caller must hold this runtime's descriptor for the current frame.
     pub unsafe fn warm(&self) {
         match unsafe { &*self.state.get() } {
             Processor::Ordinary(dsp) => super::prefetch::ends(&raw const **dsp, true),
@@ -185,8 +265,8 @@ impl Runtime {
 }
 impl Drop for Runtime {
     fn drop(&mut self) {
-        // Final teardown cannot unload code under an unresolved worker. Normal
-        // retirement retains unresolved runtimes instead of reaching Drop.
+        // Abort if a worker thread still hasn't joined so we never unload the
+        // audit library underneath a live thread.
         if !self.retire() {
             std::process::abort();
         }
@@ -233,8 +313,8 @@ static OUTPUT_DROPS: AtomicU64 = AtomicU64::new(0);
 static FAILED: AtomicU64 = AtomicU64::new(0);
 static DELAY: AtomicU64 = AtomicU64::new(0);
 
-/// Declare after its DSP owner so that provider retirement precedes this check.
-/// An unresolved worker must never survive unloading its owning audit library.
+/// Must be declared after the DSP owner in `Runtime` so the provider drains and
+/// joins before this drop check runs.
 pub struct Record(Telemetry, rc2fx_suppression::Geometry);
 impl Record {
     pub fn telemetry(&self) -> Telemetry {
@@ -247,8 +327,6 @@ impl Record {
 impl Drop for Record {
     fn drop(&mut self) {
         if self.0.termination() != Termination::Joined {
-            // Research process only. A qualified independent stock-launch
-            // recovery owner is mandatory before any physical native trial.
             std::process::abort();
         }
         let Some(terminal) = self.0.terminal() else {
@@ -309,13 +387,10 @@ pub fn stats() -> Stats {
     }
 }
 
-/// Non-RT report only. These are individually atomic observations, not a
-/// coherent transaction. The CPU sum covers process and preparation windows,
-/// not every instruction executed by the worker thread.
+/// Formats worker preparation metrics for non-RT status reports.
 pub fn preparation_report(value: rc2fx_suppression::Preparation) -> serde_json::Value {
     use crate::parameters::worker_timing;
     serde_json::json!({
-        "buildEnabled": value.enabled,
         "passWall": worker_timing(value.pass_wall),
         "passCpu": worker_timing(value.pass_cpu),
         "stepWall": worker_timing(value.step_wall),
@@ -332,7 +407,6 @@ mod tests {
     #[test]
     fn preparation_report_distinguishes_shifted_work_from_process_cpu() {
         let mut value = rc2fx_suppression::Preparation {
-            enabled: true,
             steps: 5,
             total_cpu_ns: 226,
             ..Default::default()
@@ -340,7 +414,6 @@ mod tests {
         value.pass_cpu.total_ns = 21;
         value.step_wall.max_ns = 9;
         let report = super::preparation_report(value);
-        assert_eq!(report["buildEnabled"], true);
         assert_eq!(report["steps"], 5);
         assert_eq!(report["passCpu"]["totalNs"], 21);
         assert_eq!(report["stepWall"]["maxNs"], 9);

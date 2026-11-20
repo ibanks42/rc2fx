@@ -1,0 +1,5 @@
+schema=1
+status=repaired
+manifest=abc
+checked=2026-11-15T22:10:00Z
+repaired=usr/bin/rode-init-update-env.sh

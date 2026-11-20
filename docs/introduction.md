@@ -4,94 +4,82 @@ layout: home
 
 <HomeHero />
 
-RC2FX adds audio processing to the RØDECaster Pro II: a parametric EQ, a
-compressor, a limiter, a high-pass filter, a gain stage and noise
-suppression. It runs on the mixer, inside RØDE's audio engine, and you
-control it from a desktop app over USB.
+RC2FX adds a full set of audio effects to the RØDECaster Pro II: a 32-band
+parametric EQ, AI noise suppression, a compressor, a limiter, a high-pass
+filter, and a gain stage. Everything runs right on the mixer itself, and you
+control it over USB from a desktop app.
 
-## Background
+## Why run effects on the mixer?
 
-The RØDECaster's built-in processing offers a three-band EQ, a basic
-compressor and a noise gate, but no noise suppression.
-Processing on the computer instead, with a plugin host, a virtual audio cable,
-EasyEffects or Equalizer APO, only affects audio from that one computer. It
-stops helping once a second computer or a console is connected, or when an
-app opens the raw device.
+The RØDECaster's built-in DSP gives you a 3-band EQ, a basic compressor, and a
+noise gate, but no real noise suppression or parametric EQ. You can run effects
+on your PC with software like Equalizer APO, EasyEffects, or a VST host, but
+that only works on that one computer. Plug in a second PC, a game console, or a
+phone, and you lose your processing.
 
-RØDE's firmware updates are unsigned archives and the mixer runs Linux. RC2FX
-uses this to load its processing into the mixer's own audio engine.
+With RC2FX, the processing happens inside the mixer's own audio engine. Every
+device connected to your RØDECaster gets the exact same processed sound, with
+zero CPU load on your computer, and you only need the desktop app open when
+you want to tweak something.
 
-## Features
+## What you get
 
-- Processing happens on the mixer. Every computer, console or phone
-  connected to it hears the processed audio, and the desktop app only needs
-  to be open while you change settings.
-- A parametric EQ with up to 32 bands per channel, for correcting a
-  microphone or applying an AutoEQ headphone correction. It accepts
-  Equalizer APO and AutoEQ text and EasyEffects presets.
-- Noise suppression with DeepFilterNet3, retrained by this project with
-  keyboard and mouse-click noise in the training data. An optional voice gate
-  lowers the microphone between phrases.
-- Suppression on the Chat output. People on Discord or Zoom hear every
-  microphone in the room with suppression applied, while Smart Pad sounds and
-  music pass through unchanged.
-- Processing on headphones, monitors and the USB mix outputs as well as on
-  inputs.
-- A fresh install processes nothing. You turn on each channel and effect
-  yourself.
-- If RC2FX fails, it stops processing and the mixer runs as stock. Flashing
-  stock firmware removes it.
+- **32-band parametric EQ** on any channel, great for dialing in a microphone
+  or loading an AutoEQ profile for your headphones. Imports Equalizer APO,
+  AutoEQ, and EasyEffects presets.
+- **AI noise suppression (DeepFilterNet3)** retrained with keyboard and mouse
+  clicks in mind, paired with an optional voice gate that quiets your mic
+  between phrases.
+- **Chat Mix Out noise suppression**, so people on Discord or Zoom hear every
+  mic in the room cleaned up while your Smart Pads and music stay untouched.
+- **Compressor, limiter, high-pass filter, and gain**, which you can drag into
+  any order.
+- **Effects on outputs too**, including all four headphone outputs, monitors,
+  and USB mix outputs.
+- **Safe by default**: nothing is processed until you turn a channel on, and if
+  anything ever goes wrong, RC2FX steps out of the way and lets the mixer run
+  stock. Flashing stock firmware removes it completely.
 
 ## Supported channels
 
-RC2FX can process 25 paths on the Pro II:
+RC2FX works on 25 channels on the Pro II:
 
-- Microphones: the four combo inputs and both wireless receivers.
-- Sources: USB 1, USB 2, the Chat USB input, the three CallMe channels,
-  Bluetooth, and the four virtual USB inputs (Game, Music, Virtual A and
-  Virtual B).
-- Headphones: all four headphone outputs.
-- Outputs: the monitors, Main Mix Out, Chat Mix Out and Secondary Mix Out.
+- **Microphones**: all four combo inputs and both wireless receivers.
+- **Sources**: USB 1, USB 2, Chat, all three CallMe channels, Bluetooth, and
+  the four virtual USB inputs (Game, Music, Virtual A, and Virtual B).
+- **Headphones**: all four headphone outputs.
+- **Outputs**: monitors, Main Mix Out, Chat Mix Out, and Secondary Mix Out.
 
-Each path has its own effect chain, in any order. The
-[virtual USB paths](reference/usb-paths.md) reference lists how these map to
-the mixer.
+## What you need
 
-## Requirements
-
-- A RØDECaster Pro II. RC2FX supports RØDE firmware 1.7.7 and 1.7.6, and the
-  installer flashes one of those versions. RØDECaster Duo support is
+- A **RØDECaster Pro II** (the installer handles updating it to a supported
+  RØDE firmware, 1.7.7 or 1.7.6). RØDECaster Duo support is
   [experimental and untested](user/installing.md#rødecaster-duo-experimental)
-  and is off by default.
-- A computer running Windows, Linux or macOS, connected to the mixer's
-  **USB 1** port with a USB-C cable. The computer is needed to install RC2FX
-  and to change settings.
-- The RC2FX desktop app ([getting started](user/getting-started.md)).
+  and stays off by default.
+- A **Windows, macOS, or Linux** computer plugged into the mixer's **USB 1**
+  port.
+- The **RC2FX desktop app** ([Getting started](user/getting-started.md)).
 
-No network connection to the mixer, SSH access or command-line tools are
-needed.
+You don't need to connect the mixer to Wi-Fi, set up SSH, or touch a terminal.
 
-## Next steps
+## Getting started
 
-1. [Getting started](user/getting-started.md): download the app and connect
-   the mixer.
-2. [Installing RC2FX](user/installing.md): flash RC2FX onto the mixer.
-3. [Using the app](user/using-the-app.md): turn on processing and set up
-   effects.
-4. [Tips and troubleshooting](user/troubleshooting.md): fixes for common
-   problems.
+1. [Getting started](user/getting-started.md): download the app and plug in
+   your mixer.
+2. [Installing RC2FX](user/installing.md): install RC2FX onto the mixer.
+3. [Using the app](user/using-the-app.md): turn on processing and build your
+   effect chains.
+4. [Tips and troubleshooting](user/troubleshooting.md): quick fixes for common
+   issues.
 
-[How it works](user/how-it-works.md) describes what RC2FX does on the mixer.
-The [developer guide](developer/index.md) covers building RC2FX, and the
-[technical reference](reference/index.md) has the implementation details.
+Curious how it works under the hood? Check out
+[How it works](user/how-it-works.md). For building from source or diving into
+internals, see the [developer guide](developer/index.md) and
+[technical reference](reference/index.md).
 
-## License and disclaimer
+## Disclaimer
 
-RC2FX's own code and its trained noise suppression weights are licensed under
-MIT. Third-party components keep their own licences, and the datasets the
-weights were trained on keep their own terms. The app lists them all under
-**Settings › About › Licenses**.
-
-RC2FX is an unofficial project and is not affiliated with or endorsed by
-RØDE. It is provided as is, without warranty. Installing custom firmware may
-void your warranty.
+RC2FX is open source under the MIT license (you can view all third-party and
+dataset licenses inside the app under **Settings › About › Licenses**). It is
+an unofficial project, not affiliated with or endorsed by RØDE, provided as-is
+without warranty. Installing custom firmware may void your warranty.

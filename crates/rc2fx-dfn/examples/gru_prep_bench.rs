@@ -1,33 +1,33 @@
-//! Host stage benchmark for experimental staged GRU preparation
-//! (`DeepFilter::set_gru_prep`). Not a mixer measurement: host caches, clock
-//! and kernels differ from the Cortex-A53.
+//! Host-side benchmark for staged GRU preparation (`DeepFilter::set_gru_prep`).
+//! Note that host caches, clocks, and kernels differ from the mixer's Cortex-A53.
 //!
-//!     cargo run --release -p rc2fx-dfn --example gru_prep_bench -- [ROUNDS] [HOPS]
+//! ```text
+//! cargo run --release -p rc2fx-dfn --example gru_prep_bench -- [ROUNDS] [HOPS]
+//! ```
 //!
-//! Each mode has its own filter, fed the same input; the modes take turns in
-//! blocks of HOPS calls for ROUNDS rounds, so slow drift in the host affects
-//! them alike. Prints one JSON object. Times are wall nanoseconds per call
-//! (`frame()` samples: one hop).
+//! Each mode runs its own `DeepFilter` on the same input. Modes interleave in
+//! blocks of `HOPS` calls across `ROUNDS` rounds to cancel out slow host drift,
+//! then emit one JSON summary with wall-clock nanoseconds per hop (`frame()` samples).
 //!
 //! Modes:
-//! - `baseline`: staged preparation off.
-//! - `none`: on, never prepared (the cost of checking).
-//! - `partialK`: the first K layers prepared after each call.
-//! - `full`: every layer prepared after each call; each step timed.
-//! - `reset-baseline`, `reset-full`: a reset before every call, then (full)
-//!   preparation from the zero states.
+//! - `baseline`: staged prep disabled.
+//! - `none`: staged prep enabled, nothing prepared (measures dispatch overhead).
+//! - `partialK`: first `K` layers prepared after each hop.
+//! - `full`: all layers prepared after each hop, with per-step timings.
+//! - `reset-baseline`, `reset-full`: reset before every hop, then (for `full`)
+//!   prepare from the zeroed states.
 use rc2fx_dfn::DeepFilter;
 use std::time::Instant;
 
 struct Mode {
     name: String,
     filter: DeepFilter,
-    /// Layers prepared after each call (`usize::MAX`: all).
+    /// Number of layers to prepare after each hop (`usize::MAX` means all).
     prep: usize,
     reset: bool,
     process: Vec<u64>,
     prep_total: Vec<u64>,
-    /// Per layer index, in preparation order.
+    /// Per-layer timings in preparation order.
     steps: Vec<Vec<u64>>,
     out: Vec<f32>,
 }
@@ -116,7 +116,7 @@ fn main() {
     let mut position = 0usize;
     for round in 0..=rounds {
         let start = position;
-        // Round 0 warms every mode up and is not recorded.
+        // Round 0 is warmup only.
         let count = if round == 0 { warmup } else { hops };
         for m in &mut modes {
             for at in start..start + count {
@@ -161,7 +161,7 @@ fn main() {
         position = start + count;
     }
 
-    // The staged modes must reproduce the baseline output exactly.
+    // Staged modes must match baseline output bit-for-bit.
     let bits = |x: &[f32]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
     let base = bits(&modes[0].out);
     let reset_base = bits(

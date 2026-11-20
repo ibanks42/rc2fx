@@ -1,10 +1,9 @@
-"""Read-only, version-pinned UI-B ELF audit; never loads or executes firmware.
+"""Read-only, version-pinned ELF audit of rc_gui_juce (no firmware execution).
 
 Run: python -m tools.firmware_audit.gui ARCHIVE [--out PATH]
-Requires host capstone and pyelftools (see requirements.txt). Unicorn is unused.
-Addresses are link-time ELF virtual addresses, NOT live pointers or file offsets.
-The selected ranges/interpretations below are manually mapped UI-B evidence, not
-symbols recovered from .symtab, type layouts, hook qualification, or authorization.
+Requires capstone and pyelftools (see requirements.txt). All addresses are
+link-time ELF virtual addresses; function labels and snippets are manually
+curated analyst mappings.
 """
 from __future__ import annotations
 
@@ -37,7 +36,7 @@ TYPES = (
     "N4juce13V4L2PixelDataE",
     "N4juce13V4L2ImageTypeE",
 )
-# Labels are analyst interpretations, explicitly not vendor debug symbols.
+# Manually inferred labels (the binary has no .symtab).
 FUNCTIONS = {
     0x7CF020: "V4L2PixelData bitmap-address calculation",
     0x7CF230: "registered DRM page-flip callback (no-op)",
@@ -54,7 +53,7 @@ FUNCTIONS = {
     0x93CE40: "plane atomic-property helper",
     0x93CF40: "CRTC atomic-property helper",
 }
-# Decisive bounded snippets; full selected-function digests are also emitted.
+# Key disassembly snippets; full function hashes are emitted separately.
 RANGES = (
     ("input_wait_and_closure", 0x7CFA48, 0x128),
     ("input_read_and_event_type", 0x7E0750, 0x90),
@@ -94,7 +93,7 @@ def hx(address):
 
 
 class GuiImage:
-    """GUI-specific identity and ELF reader, deliberately not mixer Image."""
+    """ELF reader pinned to the 1.7.7 rc_gui_juce binary."""
     def __init__(self, archive_path):
         archive_path = Path(archive_path)
         with archive_path.open("rb") as stream:
@@ -140,7 +139,7 @@ class GuiImage:
             address = plt["sh_addr"] + 32 + index * 16
             data = self.code(address, 16)
             adrp, ldr, add, branch = struct.unpack("<4I", data)
-            # Verify this exact AArch64 PLT layout rather than trusting slot order.
+            # Validate the AArch64 PLT stub pattern directly instead of assuming slot order.
             if (adrp & 0x9F00001F != 0x90000010 or ldr & 0xFFC003FF != 0xF9400211
                     or add & 0xFFC003FF != 0x91000210 or branch != 0xD61F0220):
                 raise ValueError(f"unexpected PLT instructions at {address:#x}")
@@ -401,7 +400,7 @@ def main(argv=None):
         if args.out is None:
             sys.stdout.write(encoded)
         else:
-            # No directory creation, extraction, shell, subprocess, native loader or device commands.
+            # Refuse to overwrite existing files.
             with args.out.open("x", encoding="utf-8") as stream:
                 stream.write(encoded)
     except (OSError, ValueError, tarfile.TarError) as error:

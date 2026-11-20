@@ -1,0 +1,70 @@
+package state
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
+	for _, step := range []string{
+		"Saving settings to mixer…",
+		"Saved to mixer • waiting for applied telemetry",
+		"Path change accepted • waiting for the mixer's result",
+		"Requesting processing paths. Local effect edits are kept; saved effects will be used.",
+		"Loading preset on the mixer…",
+		"Collecting mixer diagnostics…",
+	} {
+		if !ProgressMessage(step) {
+			t.Errorf("%s", step)
+		}
+	}
+	for _, outcome := range []string{
+		"Could not import EQ: Unsupported filter type: Allpass",
+		"Saved settings file to /tmp/a.json",
+		"Preset ‘Podcast’ saved on the mixer",
+		"Enter a preset name of 1–128 bytes.",
+		MixerChangedElsewhere,
+	} {
+		if ProgressMessage(outcome) {
+			t.Errorf("%s", outcome)
+		}
+	}
+}
+
+func TestAFailedSaveIsToasted(t *testing.T) {
+	for _, reason := range []string{"", "HTTP 500: config write failed", "timed out waiting for the mixer…"} {
+		message := SaveFailedMessage(reason)
+		if ProgressMessage(message) {
+			t.Errorf("%q reads as progress", message)
+		}
+		if reason != "" && message != "Couldn't save: "+reason {
+			t.Errorf("SaveFailedMessage(%q) = %q", reason, message)
+		}
+	}
+}
+
+// Guard against stale copy referencing the removed manual save button.
+func TestNoTextPointsToTheRemovedSaveButton(t *testing.T) {
+	err := filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(source), "Save to mixer") {
+			t.Errorf("%s mentions the removed Save to mixer button", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

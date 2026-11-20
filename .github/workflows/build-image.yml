@@ -1,11 +1,9 @@
 name: Build image
 
-# The AlmaLinux 8 build image (package-check.Containerfile) that Check lints
-# and tests in and Release builds the AppImage in, published to GitHub's
-# container registry. Its tag is a digest of the Containerfile and the pinned
-# Rust (build-image-tag.sh), so callers build it only when that changes. The
-# weekly run rebuilds the current tag so the image, and the libraries the
-# AppImage bundles from it, pick up security updates.
+# Builds and pushes the AlmaLinux 8 image (package-check.Containerfile) used by
+# Check and Release to ghcr.io. Tags are derived from the Containerfile and
+# rust-toolchain.toml via build-image-tag.sh, so callers skip rebuilds when
+# nothing changed; the weekly schedule refreshes packages for security updates.
 on:
   workflow_call:
     inputs:
@@ -52,8 +50,7 @@ jobs:
           ACTOR: ${{ github.actor }}
           TOKEN: ${{ github.token }}
         run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
-      # Calls from Check and Release reuse the image when it exists; a manual
-      # or weekly run rebuilds it with current packages.
+      # Reuse an existing tag when called from Check/Release; manual and scheduled runs rebuild.
       - name: Build and push the image
         env:
           IMAGE: ${{ steps.tag.outputs.image }}

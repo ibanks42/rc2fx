@@ -2,122 +2,109 @@
 
 ## Overview
 
-After connecting, the app opens on the **Overview**. It shows one strip for
-each fader in your current RØDE show, except SMART Pads, with a live level
-meter. Headphones and outputs are listed below the faders. Processed channels
-show the effects they run. Click a strip to edit that channel. **Overview**
-at the top of the sidebar, or Esc, returns to this page.
+When your mixer connects, the app opens on the **Overview**. You'll see a live
+level meter for every fader in your current RØDE show (except SMART Pads), with
+headphones and outputs underneath. Channels with processing turned on show
+their active effects right on the strip. Click any strip to open its editor,
+and click **Overview** (or press Esc) to come back.
 
 ## Channels
 
-The sidebar lists the channels you are processing first. The remaining
-channels follow in groups: **Microphones**, **Sources**, **Headphones** and
-**Outputs**. Sources appear only if they are assigned to a fader in the
-current show. RC2FX does not list or process SMART Pads, and the mixer's pad
-playback works as before. **Settings** is at the bottom of the sidebar.
+Channels you're actively processing sit at the top of the sidebar, with
+everything else grouped below under **Microphones**, **Sources**,
+**Headphones**, and **Outputs**. Sources only appear if they're assigned to a
+fader in your current RØDE show. SMART Pads aren't processed, so they behave
+just like stock.
 
-Selecting a channel opens its editor. Audio passes through a channel
-unchanged until you turn on the **Processing** switch at the top right of its
-page. The switch takes effect on the mixer immediately. Turning it off stops
-processing and keeps the channel's effect settings. You can also set up
-effects before turning processing on.
+Clicking a channel opens its editor. Audio passes through untouched until you
+flip on the **Processing** switch at the top right. Turning it off bypasses the
+chain without losing your settings, so you can set everything up before turning
+it on.
 
-### Changing the show
+### Changing your RØDE show
 
-Processing settings are tied to a source and follow it between faders.
+Your effect settings follow each input source, not the fader slot:
 
-- Removing an input from the show turns its processing off and keeps its
-  effect settings.
-- Moving an input to another fader keeps its processing and effects with that
-  input. The input that takes over the old fader keeps its own settings.
-- Adding a removed input back leaves processing off. Turn it on again when
-  you want it.
-- Headphones and outputs are unaffected by show changes.
+- Remove an input from your show and its processing pauses, while its effect
+  settings stay saved.
+- Move an input to a different fader and its effects move with it.
+- Add a removed input back and it stays bypassed until you turn processing back
+  on.
+- Headphones and outputs aren't affected by show changes.
 
-RC2FX acts on a show change only after it reads two matching, complete copies
-of the show, including at startup. Failed or partial reads change nothing.
-Once the show is confirmed, processing is turned off for any saved input that
-is absent, and enabling an absent input is undone. Until the show is
-confirmed, an input that is still processed may appear under **PROCESSED,
-NOT IN THIS SHOW** on the Overview.
+## Building an effect chain
 
-## Building a chain
-
-A processed channel is shown as a signal chain, read left to right. Effects
-start switched off.
+Each channel shows its signal chain from left to right. Every effect starts
+off.
 
 - Click an effect to open its controls and switch it on.
-- Drag an effect onto another to change the order. For example, placing the
+- Drag effects onto each other to reorder them. For example, putting the
   compressor before or after the EQ changes how it responds.
 
-| Effect | Use |
+| Effect | What it's for |
 | --- | --- |
-| High-pass | Cuts rumble, desk thumps and handling noise |
-| Noise suppression | Removes background noise from a voice (microphones and Chat Mix Out only) |
-| EQ | Shapes the tone, with up to 32 bands |
-| Compressor | Evens out loud and quiet passages |
-| Gain | Raises or lowers the level |
-| Limiter | Keeps peaks below a ceiling |
+| High-pass | Cuts rumble, desk bumps, and AC hum |
+| Noise suppression | Removes background noise from speech (mics and Chat Mix Out) |
+| EQ | Shapes tone with up to 32 parametric bands |
+| Compressor | Evens out loud and quiet parts |
+| Gain | Raises or lowers level |
+| Limiter | Stops peaks from clipping |
 
-[Effects](effects.md) describes each control. Noise suppression has its own
-page: [Noise suppression](noise-suppression.md).
+See [Effects](effects.md) for every control, and
+[Noise suppression](noise-suppression.md) for the denoiser and voice gate.
 
 ## Saving changes
 
-Effect changes are held in the app until you press **Save to mixer** in the
-bar at the bottom of the window. **Discard** drops them. Saving does not
-interrupt audio. Settings are stored on the mixer, so processing continues
-after you close the app or switch the computer off.
+There's no save button. You hear edits immediately, and the app saves them to
+the mixer automatically a couple of seconds after you stop tweaking. Because
+settings live on the mixer, your effects keep running after you close the app
+or turn off your computer.
 
-If the mixer's settings change from another source while you are editing,
-such as a second computer, the app shows a notice and asks whether to keep
-your edits or reload the mixer's settings. If you close the app with unsaved
-edits, it asks for confirmation first.
+Use the undo/redo buttons (or Ctrl+Z / Ctrl+Shift+Z, Cmd+Z / Cmd+Shift+Z on
+macOS) to step back through edits, or click **Revert** to reset a channel back
+to how it started.
+
+Most changes apply with zero audio interruption. The one exception is turning
+noise suppression on or off, toggling its lookahead, or reordering effects
+around it: that briefly restarts the audio engine, so the app will ask you to
+click **Apply** before doing it.
 
 ## Presets and settings files
 
-**Settings**, at the bottom of the sidebar, contains:
+Under **Settings** at the bottom of the sidebar:
 
-- **Presets**, stored on the mixer. You can save the current settings as a
-  preset, load one or delete one, for example to switch between a podcast
-  setup and a gaming setup.
-- **Settings files** on your computer, under **Files**. **Open…** loads a
-  file into your edits. **Save…** writes the current settings to a file, for
-  a backup or to copy them to another mixer.
+- **Presets** are saved right on the mixer, so you can quickly switch between
+  setups (like streaming vs. podcasting).
+- **Files** lets you save your entire RC2FX setup to a file on your computer
+  (**Save…**) or load one back (**Open…**), handy for backups or moving
+  settings to another mixer.
 
 ## Importing and exporting EQ
 
-The EQ toolbar has **Import…**, **Paste** and **Export…**. Import and Paste
-accept:
+The EQ toolbar has **Import…**, **Paste**, and **Export…**:
 
-- Equalizer APO and AutoEQ parametric text. AutoEQ publishes corrections for
-  thousands of headphones, which you can paste onto a headphone channel.
-- EasyEffects presets.
+- **Import…** and **Paste** accept Equalizer APO text, AutoEQ profiles
+  (great for loading headphone correction curves onto a headphone output), and
+  EasyEffects presets.
+- **Export…** saves the current channel's EQ as an EasyEffects preset.
 
-**Export…** saves the channel's EQ as an EasyEffects preset.
+Importing only replaces the EQ on the channel you're editing. If a file has
+more than one equalizer or you import a stereo EQ onto a mono channel, the app
+asks which one to use.
 
-Importing replaces only the selected channel's EQ. If a file contains more
-than one equalizer, or a stereo EQ is imported onto a mono channel, the app
-asks which one to use. EasyEffects Width and Slope fields are ignored on
-import and left out on export. Steeper slopes (x2–x4) are imported as a
-single, gentler filter section. Other unsupported settings are rejected with
-a short explanation.
-
-The EQ curve in the editor is calculated from the settings. It does not
-reflect the live audio.
+Note that the EQ graph shows your filter curve, not a live spectrum analyzer.
 
 ## Turning RC2FX off
 
-- **Settings › Mixer › Processing** turns all RC2FX processing off or on
-  again. Your settings are kept.
-- The **Processing** switch on a channel turns off that channel only.
+- Flip off **Settings › Mixer › Processing** to bypass all RC2FX processing
+  while keeping your settings.
+- Flip off the **Processing** switch on an individual channel to bypass just
+  that channel.
 
-To remove RC2FX from the mixer, see
+To remove RC2FX from the mixer completely, see
 [Going back to stock](installing.md#going-back-to-stock).
 
 ## The status bar
 
-The bar at the bottom of the window shows how many channels are processed.
-When something needs attention, such as unsaved changes or a lost
-connection, the bar shows that instead. Results of actions such as saving,
-importing or exporting appear as notifications.
+The bar at the bottom shows how many channels are being processed, or flags
+anything that needs your attention (like a disconnected mixer or pending save).

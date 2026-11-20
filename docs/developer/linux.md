@@ -1,11 +1,14 @@
 # Linux setup
 
-These are the packages needed to build and run the desktop app on
-Debian/Ubuntu, Fedora or Arch. Audio processing happens on the mixer, so no
-audio setup is needed on the computer.
+Here are the system packages you need to build and run the desktop app on
+Debian/Ubuntu, Fedora, or Arch. The app is written in Go with a C compiler for
+cgo; its UI library, gpuikit, comes prebuilt (see
+[Building from source](building.md)) and links straight into the binary, which
+pulls in the graphics and windowing libraries below. All audio DSP runs on the
+mixer itself, so you don't need any audio dev packages on your PC.
 
-The project is developed on Fedora. The Debian/Ubuntu and Arch lists haven't
-been tested end to end, and package names change between releases.
+Development happens on Fedora. The Debian/Ubuntu and Arch lists haven't been
+tested end-to-end, and package names drift across releases.
 
 ## System packages
 
@@ -13,51 +16,53 @@ been tested end to end, and package names change between releases.
 
 ```bash
 sudo apt update
-sudo apt install git curl build-essential pkg-config cmake clang \
-  libfontconfig1-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
-  libx11-dev libxcb1-dev libvulkan1 mesa-vulkan-drivers libasound2-dev \
-  libssl-dev libudev-dev libdbus-1-dev policykit-1
+sudo apt install git curl build-essential golang-go \
+  libxkbcommon0 libxkbcommon-x11-0 libxcb1 libfreetype6 libwayland-client0 \
+  libvulkan1 mesa-vulkan-drivers policykit-1
 ```
 
-On some releases the polkit package is called `pkexec` instead of
-`policykit-1`. Install `just` and `zig` from your distribution if it packages
-them, or from upstream.
+On some releases `policykit-1` is named `pkexec` instead. Install `just` and
+`zig` from your distro repos if they're new enough, or grab them upstream.
 
 ### Fedora
 
 ```bash
-sudo dnf install git curl gcc gcc-c++ pkgconf-pkg-config cmake clang \
-  fontconfig-devel wayland-devel libxkbcommon-devel libxkbcommon-x11-devel \
-  libX11-devel libxcb-devel vulkan-loader mesa-vulkan-drivers alsa-lib-devel \
-  openssl-devel systemd-devel dbus-devel polkit just zig
+sudo dnf install git curl gcc golang \
+  libxkbcommon libxkbcommon-x11 libxcb freetype libwayland-client \
+  vulkan-loader mesa-vulkan-drivers polkit just zig
 ```
 
 ### Arch
 
 ```bash
-sudo pacman -S --needed git curl base-devel pkgconf cmake clang \
-  fontconfig wayland libxkbcommon libxkbcommon-x11 libx11 libxcb \
-  vulkan-icd-loader alsa-lib openssl systemd dbus polkit just zig
+sudo pacman -S --needed git curl base-devel go \
+  libxkbcommon libxkbcommon-x11 libxcb freetype2 wayland \
+  vulkan-icd-loader polkit just zig
 ```
 
-Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`,
-or NVIDIA's packages).
+You'll need the Go version specified in `desktop/go.mod`. If your distro ships
+an older release, install Go directly from [go.dev](https://go.dev/dl/).
+
+Make sure you also have the Vulkan driver for your GPU (`vulkan-radeon`,
+`vulkan-intel`, or NVIDIA's driver packages).
 
 ## Notes
 
-- GPUI needs a graphical session and a working Vulkan driver.
-- The installer gets root through `pkexec`. On minimal desktops, make sure a
-  polkit authentication agent is running.
+- The UI (gpuikit over GPUI) requires a graphical session and a working Vulkan
+  driver.
+- The installer elevates via `pkexec`. If you're on a minimal desktop or window
+  manager, make sure a polkit authentication agent is running.
 - Fedora's zig 0.16 with cargo-zigbuild 0.24 is known to work for the mixer
-  build. Other version combinations probably work but haven't all been tested.
+  cross-build. Other pairings probably work fine, they just haven't all been
+  verified.
 
-Continue with [Building from source](building.md).
+From here, continue with [Building from source](building.md).
 
 ## USB permission
 
-The app needs read/write access to the mixer's `hidraw` device. The rule in
-the repository grants it to the user logged in at the desktop, for the Pro II
-and Duo in their normal USB modes:
+The desktop app needs read/write access to the mixer's `hidraw` device. The udev
+rule in the repo grants access to the locally logged-in desktop user for both
+the Pro II and Duo in their normal USB modes:
 
 ```bash
 sudo cp config/udev/70-rc2fx.rules /etc/udev/rules.d/
@@ -65,11 +70,11 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --subsystem-match=hidraw
 ```
 
-The rule does not cover USB update mode. In that mode only the installer's
+This rule doesn't cover USB update mode. In that mode, only the installer's
 root helper talks to the mixer.
 
-Access comes from the desktop seat (logind), so an SSH-only session may not
-get it. If the app reports `USB permission required: Permission denied`,
-check that the rule is installed and that you are logged in at the machine.
-The app retries on its own, so nothing needs restarting. Don't run the app as
-root.
+Because access is granted through the desktop seat (`logind`), an SSH-only
+session might not get it. If the app says `USB permission required: Permission denied`,
+double-check that the udev rule is installed and that you're logged in locally.
+The app retries automatically, so you don't need to restart it. Don't run the
+app as root.

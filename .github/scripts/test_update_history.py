@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tests for update_history.py: python3 .github/scripts/test_update_history.py."""
+"""Offline tests for update_history.py."""
 
 import importlib.util
 import io
@@ -380,6 +380,18 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(app["downloadsMixer"])
         self.assertTrue(bundle.feed["mixer"]["historyComplete"])
         self.assertNotIn("unknown", bundle.app_page)
+        self.assertNotIn("9.9.9", bundle.mixer_page)
+        self.assertIn("downloaded separately", bundle.app_page)
+
+    def test_go_desktop_tag_does_not_claim_a_bundled_mixer(self):
+        self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":2}')
+        self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
+        self.init_git()
+        self.tag("1.0.0")
+        bundle = self.build(release("1.0.0"), release("1.0.0", tag="mixer-v1.0.0"), use_git=True)
+        app = bundle.feed["app"]["releases"][0]
+        self.assertIsNone(app["mixerVersion"])
+        self.assertTrue(app["downloadsMixer"])
         self.assertNotIn("9.9.9", bundle.mixer_page)
         self.assertIn("downloaded separately", bundle.app_page)
 

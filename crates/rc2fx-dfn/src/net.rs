@@ -1,43 +1,26 @@
-//! DeepFilterNet3's three networks (encoder, ERB decoder, DF decoder), up to
-//! `STEPS` frames at a time. Each layer runs every step of the call before
-//! the next layer starts (the GRUs step in order, carrying their hidden
-//! state). Independent matrix products fuse both steps, using each loaded
-//! weight for both inputs; recurrent products reuse weights from cache.
-//! Per step the arithmetic is the same as for one frame alone. Layer sizes,
-//! band counts and the STFT framing come from the weights, so slimmed
-//! variants (narrower GRUs, fewer layers, fewer
-//! deep-filter bins, a shorter hop) load unchanged.
+//! Streaming DeepFilterNet3 networks (encoder, ERB decoder, DF decoder), run
+//! one hop at a time with persistent GRU hidden states. Layer dimensions, band
+//! counts, and STFT framing are inferred from the weights blob so slimmed
+//! variants load without code changes.
 use crate::Error;
 use crate::convp::Convp;
 use crate::glue::{add_transposed, conv3x3, depthwise_t3, depthwise3, shift3_add, transpose};
-use crate::kernels::{QWeights, matvec_q8, matvec_q8_pair};
-use crate::kernels::{
-    Weights, grouped, grouped_pair, pack_pointwise, pointwise, pointwise_pair, sigmoid_slice,
-    tanh_slice,
-};
+use crate::kernels::{QWeights, matvec_q8};
+use crate::kernels::{Weights, grouped, pack_pointwise, pointwise, sigmoid_slice, tanh_slice};
 use crate::profile;
 use std::collections::HashMap;
 
-/// Most frames one call runs.
-pub(crate) const STEPS: usize = 2;
-
-/// Named f32 tensors in the exporter's format: a u32 count, then per tensor a
-/// u32 name length, the name, a u32 rank, u32 dims and little-endian f32 data.
-/// Besides the model's state dict, the file carries the STFT framing as
-/// `rc2fx.fft_size`, `rc2fx.hop_size` and `rc2fx.lookahead`, each a rank-1
-/// tensor holding one integral f32.
+/// Named f32 tensors from the binary export format: `u32` tensor count, then
+/// per tensor `[name_len, name_utf8, rank, dims..., f32_le_data...]`. Framing
+/// metadata is stored alongside the state dict as scalar rank-1 tensors
+/// (`rc2fx.fft_size`, `rc2fx.synthesis_size`, `rc2fx.hop_size`, `rc2fx.lookahead`).
 pub(crate) struct Tensors(pub(crate) HashMap<String, (Vec<usize>, Vec<f32>)>);
 
-/// The STFT framing a model was trained for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Framing {
-    /// FFT size and analysis window length.
     pub(crate) fft: usize,
-    /// Synthesis window length: the last `synthesis` samples of each frame
-    /// are resynthesised (see `dsp::windows`).
     pub(crate) synthesis: usize,
     pub(crate) hop: usize,
-    /// Frames of input past the one being enhanced.
     pub(crate) lookahead: usize,
 }
 
@@ -86,7 +69,6 @@ impl Tensors {
         self.0.get(name).ok_or(Error::Weights)
     }
 
-    /// A tensor with the given rank.
     fn shaped(&self, name: &str, rank: usize) -> Result<(&[usize], &[f32]), Error> {
         let (d, v) = self.get(name)?;
         if d.len() != rank || v.is_empty() {
@@ -103,7 +85,6 @@ impl Tensors {
         Ok(v.clone())
     }
 
-    /// A rank-1 tensor holding one non-negative integer as f32.
     fn scalar(&self, name: &str) -> Result<usize, Error> {
         let (d, v) = self.shaped(name, 1)?;
         let x = v[0];
@@ -114,7 +95,6 @@ impl Tensors {
     }
 }
 
-/// Reads the weights file front to back.
 struct Cursor<'a>(&'a [u8]);
 
 impl<'a> Cursor<'a> {
@@ -221,33 +201,23 @@ impl Linear {
     fn run(&self, x: &[f32], y: &mut [f32]) {
         grouped(&self.w, self.groups, self.ws, self.hs, x, y)
     }
-    fn steps(&self, x: &[f32], y: &mut [f32]) {
-        if x.len() == 2 * self.inp() {
-            grouped_pair(&self.w, self.groups, self.ws, self.hs, x, y);
-        } else {
-            self.run(x, y);
-        }
-    }
 }
 
-/// One GRU layer (PyTorch gate order r, z, n) with its hidden state.
+/// Single GRU layer (PyTorch gate order: `r`, `z`, `n`).
 struct Gru {
     wih: QWeights,
     whh: QWeights,
-    /// Scratch for the quantised input of `matvec_q8`.
     xq: Vec<i16>,
     bih: Vec<f32>,
     bhh: Vec<f32>,
     hidden: usize,
     h: Vec<f32>,
-    /// Advances whenever `h` changes (a step or a reset).
+    /// Incremented whenever `h` changes (step or reset) to validate `gh_for`.
     h_gen: u64,
-    /// [STEPS][3 * hidden]: every step's input products.
     gi: Vec<f32>,
-    /// The recurrent products W_hh h (biases not added).
+    /// Recurrent products `W_hh * h` (without bias).
     gh: Vec<f32>,
-    /// `Some(h_gen)` when `gh` was prepared ahead (`prepare`) from the
-    /// current `h`; the next step then uses it instead of recomputing it.
+    /// Generation of `h` that `gh` was precomputed for, if any.
     gh_for: Option<u64>,
 }
 
@@ -268,26 +238,23 @@ impl Gru {
         Ok(Self {
             wih: QWeights::new(wih, 3 * hidden, inp),
             whh: QWeights::new(whh, 3 * hidden, hidden),
-            xq: vec![0; STEPS * inp.max(hidden)],
+            xq: vec![0; inp.max(hidden)],
             bih: t.vector(&format!("{prefix}.bias_ih_l{layer}"), 3 * hidden)?,
             bhh: t.vector(&format!("{prefix}.bias_hh_l{layer}"), 3 * hidden)?,
             hidden,
             h: vec![0.; hidden],
             h_gen: 0,
-            gi: vec![0.; STEPS * 3 * hidden],
+            gi: vec![0.; 3 * hidden],
             gh: vec![0.; 3 * hidden],
             gh_for: None,
         })
     }
 
-    /// Whether `gh` holds the recurrent products of the current `h`.
     fn prepared(&self) -> bool {
         self.gh_for == Some(self.h_gen)
     }
 
-    /// W_hh h for the current hidden state, by the same kernel and from the
-    /// same input as the next step would compute it, so the step's result
-    /// is unchanged. Returns false if it was already prepared.
+    /// Precomputes `W_hh * h` for the current hidden state. Returns `false` if already up to date.
     fn prepare(&mut self) -> bool {
         if self.prepared() {
             return false;
@@ -302,64 +269,52 @@ impl Gru {
         self.gh_for = None;
     }
 
-    /// Advances one step per `inp`-wide row of `xs` (at most `STEPS`), in
-    /// order, replacing each row with the new hidden state (`inp` equals
-    /// `hidden` in a SqueezedGRU). The input products of every step come
-    /// first, as they don't depend on the hidden state: the fused kernel
-    /// applies each loaded weight to both inputs. W_hh remains sequential,
-    /// with the second step reusing its weights from cache. A first step
-    /// whose W_hh h was prepared (`prepare`) uses it; later steps can't, as
-    /// they follow a hidden state this call computes.
-    fn steps(&mut self, xs: &mut [f32]) {
+    /// Advances one step in place (`x` is overwritten with the new hidden state),
+    /// reusing precomputed `gh` when available.
+    fn step(&mut self, x: &mut [f32]) {
         let n = self.hidden;
-        let gi = &mut self.gi[..xs.len() / n * 3 * n];
-        if xs.len() == 2 * n {
-            matvec_q8_pair(&self.wih, 3 * n, xs, &mut self.xq, gi);
-        } else {
-            matvec_q8(&self.wih, 3 * n, xs, &mut self.xq, gi);
+        let gi = &mut self.gi[..3 * n];
+        matvec_q8(&self.wih, 3 * n, x, &mut self.xq, gi);
+        // Biases, gate products and the hidden state the update reads and
+        // writes (the products' own inputs are counted by the kernels).
+        #[cfg(test)]
+        {
+            use crate::traffic::*;
+            slice(Class::Param, &self.bih);
+            slice(Class::Param, &self.bhh);
+            touch_n(Class::Act, gi.as_ptr(), 3 * n * 4, 3);
+            store_n(Class::Act, gi.as_ptr(), 3 * n * 4, 2);
+            touch_n(Class::Act, self.gh.as_ptr(), 3 * n * 4, 2);
+            touch_n(Class::State, self.h.as_ptr(), n * 4, 2);
+            store(Class::State, self.h.as_ptr(), n * 4);
+            store(Class::Act, x.as_ptr(), n * 4);
         }
-        for (x, gi) in xs.chunks_exact_mut(n).zip(gi.chunks_exact_mut(3 * n)) {
-            // Biases, gate products and the hidden state the update reads and
-            // writes (the products' own inputs are counted by the kernels).
-            #[cfg(test)]
-            {
-                use crate::traffic::*;
-                slice(Class::Param, &self.bih);
-                slice(Class::Param, &self.bhh);
-                touch_n(Class::Act, gi.as_ptr(), 3 * n * 4, 3);
-                store_n(Class::Act, gi.as_ptr(), 3 * n * 4, 2);
-                touch_n(Class::Act, self.gh.as_ptr(), 3 * n * 4, 2);
-                touch_n(Class::State, self.h.as_ptr(), n * 4, 2);
-                store(Class::State, self.h.as_ptr(), n * 4);
-                store(Class::Act, x.as_ptr(), n * 4);
-            }
-            if self.gh_for != Some(self.h_gen) {
-                self.gh_for = None;
-                matvec_q8(&self.whh, 3 * n, &self.h, &mut self.xq, &mut self.gh);
-            }
-            // r and z gates
-            for (((g, bi), h), bh) in gi[..2 * n]
-                .iter_mut()
-                .zip(&self.bih)
-                .zip(&self.gh)
-                .zip(&self.bhh)
-            {
-                *g += bi + h + bh;
-            }
-            sigmoid_slice(&mut gi[..2 * n]);
-            // candidate n = tanh(W_in x + b_in + r (W_hn h + b_hn))
-            for j in 0..n {
-                let k = 2 * n + j;
-                gi[k] += self.bih[k] + gi[j] * (self.gh[k] + self.bhh[k]);
-            }
-            tanh_slice(&mut gi[2 * n..3 * n]);
-            for j in 0..n {
-                let z = gi[n + j];
-                self.h[j] = (1. - z) * gi[2 * n + j] + z * self.h[j];
-            }
-            self.h_gen = self.h_gen.wrapping_add(1);
-            x.copy_from_slice(&self.h);
+        if self.gh_for != Some(self.h_gen) {
+            self.gh_for = None;
+            matvec_q8(&self.whh, 3 * n, &self.h, &mut self.xq, &mut self.gh);
         }
+        // r and z gates
+        for (((g, bi), h), bh) in gi[..2 * n]
+            .iter_mut()
+            .zip(&self.bih)
+            .zip(&self.gh)
+            .zip(&self.bhh)
+        {
+            *g += bi + h + bh;
+        }
+        sigmoid_slice(&mut gi[..2 * n]);
+        // candidate n = tanh(W_in x + b_in + r (W_hn h + b_hn))
+        for j in 0..n {
+            let k = 2 * n + j;
+            gi[k] += self.bih[k] + gi[j] * (self.gh[k] + self.bhh[k]);
+        }
+        tanh_slice(&mut gi[2 * n..3 * n]);
+        for j in 0..n {
+            let z = gi[n + j];
+            self.h[j] = (1. - z) * gi[2 * n + j] + z * self.h[j];
+        }
+        self.h_gen = self.h_gen.wrapping_add(1);
+        x.copy_from_slice(&self.h);
     }
 
     fn reset(&mut self) {
@@ -375,7 +330,7 @@ struct SqueezedGru {
     lin_in: Linear,
     layers: Vec<Gru>,
     lin_out: Option<Linear>,
-    /// [STEPS][hidden]
+    /// [hidden]
     x: Vec<f32>,
 }
 
@@ -405,7 +360,7 @@ impl SqueezedGru {
             lin_in,
             layers,
             lin_out,
-            x: vec![0.; STEPS * hidden],
+            x: vec![0.; hidden],
         })
     }
 
@@ -416,19 +371,18 @@ impl SqueezedGru {
             .unwrap_or(self.lin_in.out())
     }
 
-    /// One step per `inp`-wide row of `input` into the matching `out()`-wide
-    /// row of `y`, layer by layer.
-    fn steps(&mut self, input: &[f32], y: &mut [f32]) {
-        let (inp, hidden) = (self.lin_in.inp(), self.lin_in.out());
-        let x = &mut self.x[..input.len() / inp * hidden];
-        self.lin_in.steps(input, x);
+    /// One step: `inp` values of `input` into `out()` values of `y`, layer by
+    /// layer.
+    fn step(&mut self, input: &[f32], y: &mut [f32]) {
+        let x = &mut self.x[..self.lin_in.out()];
+        self.lin_in.run(input, x);
         relu(x);
         for l in &mut self.layers {
-            l.steps(x);
+            l.step(x);
         }
         match &self.lin_out {
             Some(o) => {
-                o.steps(x, y);
+                o.run(x, y);
                 relu(y);
             }
             None => y[..x.len()].copy_from_slice(x),
@@ -499,34 +453,24 @@ impl SepConv {
         })
     }
 
-    /// Step-major x [steps][ch][f] -> y [steps][ys], with ch*fo
-    /// values per output step. Scratch holds [steps][ch][fo].
-    fn steps(&self, x: &[f32], f: usize, tmp: &mut [f32], y: &mut [f32], ys: usize, steps: usize) {
+    /// x [ch][f] -> y [ch][fo], the first ch*fo values of `y`. Scratch holds
+    /// [ch][fo].
+    fn run(&self, x: &[f32], f: usize, tmp: &mut [f32], y: &mut [f32]) {
         let fo = if self.transposed {
             2 * f
         } else {
             f / self.stride
         };
         let len = self.ch * fo;
-        for (x, tmp) in x
-            .chunks_exact(self.ch * f)
-            .zip(tmp.chunks_exact_mut(len))
-            .take(steps)
-        {
-            if self.transposed {
-                depthwise_t3(&self.dw, x, self.ch, f, tmp);
-            } else {
-                depthwise3(&self.dw, x, self.ch, f, self.stride, tmp);
-            }
-        }
-        if steps == 2 {
-            pointwise_pair(&self.pw, self.ch, self.ch, tmp, fo, y, ys);
+        let x = &x[..self.ch * f];
+        let scratch = &mut tmp[..len];
+        if self.transposed {
+            depthwise_t3(&self.dw, x, self.ch, f, scratch);
         } else {
-            pointwise(&self.pw, self.ch, self.ch, tmp, fo, y);
+            depthwise3(&self.dw, x, self.ch, f, self.stride, scratch);
         }
-        for y in y.chunks_exact_mut(ys).take(steps) {
-            self.norm.apply(&mut y[..len], fo, Act::Relu);
-        }
+        pointwise(&self.pw, self.ch, self.ch, tmp, fo, y);
+        self.norm.apply(&mut y[..len], fo, Act::Relu);
     }
 }
 
@@ -579,9 +523,8 @@ pub(crate) struct Dfn {
     enc_gru: SqueezedGru,
     lsnr_w: Vec<f32>,
     lsnr_b: f32,
-    /// 2 + STEPS frames of [1][nb_erb] ERB features, oldest first: the last
-    /// two of the previous call, then this call's; step t convolves frames
-    /// t to t + 2.
+    /// 3 frames of [1][nb_erb] ERB features, oldest first: the last two of
+    /// the previous call, then this call's.
     erb_hist: Vec<f32>,
     /// The same for [2][nb_df] complex features (re, im).
     spec_hist: Vec<f32>,
@@ -600,7 +543,7 @@ pub(crate) struct Dfn {
     convp_pw: Vec<f32>,
     convp_norm: Norm,
     convp_out: usize,
-    // Activations, [STEPS][..]: what one layer hands the next.
+    // Activations: what one layer hands the next.
     e0: Vec<f32>,
     e1: Vec<f32>,
     e2: Vec<f32>,
@@ -616,7 +559,7 @@ pub(crate) struct Dfn {
     dbuf: Vec<f32>,
     mask: Vec<f32>,
     coefs: Vec<f32>, // [nb_df][convp_out]
-    // Scratch within one layer and step.
+    // Scratch within one layer.
     tmp: Vec<f32>,
     tmp2: Vec<f32>,
     xbuf: Vec<f32>,
@@ -644,7 +587,9 @@ impl Dfn {
         }
         let nb_erb = 4 * emb_len / ch;
         let nb_df = 2 * df_fc_emb.inp() / ch;
-        if nb_erb == 0 || nb_erb % 4 != 0 || nb_df == 0 || nb_df % 2 != 0 {
+        // Pointwise kernels process 8 bins at a time with no tail padding, so
+        // every downsampled width (nb_erb/4, nb_df/2) must be a multiple of 8.
+        if nb_erb == 0 || nb_erb % 32 != 0 || nb_df == 0 || nb_df % 16 != 0 {
             return Err(Error::Weights);
         }
         let (pd, convp_w) = t.shaped("df_dec.df_convp.1.weight", 4)?;
@@ -673,6 +618,13 @@ impl Dfn {
             return Err(Error::Weights);
         }
         let big = ch * nb_df;
+        // Every use of the two scratch buffers: the encoder's and decoder's
+        // [ch][f] layers up to f = nb_erb or nb_df, the DF decoder's hidden
+        // state and df_convp's [out][nb_df].
+        let scratch = (ch * nb_erb.max(nb_df))
+            .max(emb_len)
+            .max(hidden)
+            .max(convp_out * nb_df);
         Ok(Self {
             ch,
             nb_erb,
@@ -692,8 +644,8 @@ impl Dfn {
             enc_gru,
             lsnr_w: t.vector("enc.lsnr_fc.0.weight", emb_len)?,
             lsnr_b: t.vector("enc.lsnr_fc.0.bias", 1)?[0],
-            erb_hist: vec![0.; (2 + STEPS) * nb_erb],
-            spec_hist: vec![0.; (2 + STEPS) * 2 * nb_df],
+            erb_hist: vec![0.; 3 * nb_erb],
+            spec_hist: vec![0.; 3 * 2 * nb_df],
             erb_gru,
             pathway: [
                 Pathway::load(t, "erb_dec.conv3p", ch)?,
@@ -716,29 +668,28 @@ impl Dfn {
             convp_norm: Norm::load(t, "df_dec.df_convp.3", convp_out)?,
             convp_out,
             pause: None,
-            e0: vec![0.; STEPS * ch * nb_erb],
-            e1: vec![0.; STEPS * ch * nb_erb / 2],
-            e2: vec![0.; STEPS * ch * nb_erb / 4],
-            e3: vec![0.; STEPS * ch * nb_erb / 4],
-            c0: vec![0.; STEPS * big],
-            c1: vec![0.; STEPS * big / 2],
-            cemb: vec![0.; STEPS * emb_len],
-            emb: vec![0.; STEPS * emb_len],
-            erb_g: vec![0.; STEPS * emb_len],
-            df_g: vec![0.; STEPS * hidden],
-            dbuf: vec![0.; STEPS * ch * nb_erb],
-            mask: vec![0.; STEPS * nb_erb],
-            coefs: vec![0.; STEPS * nb_df * convp_out],
-            tmp: vec![0.; STEPS * big],
-            tmp2: vec![0.; STEPS * big],
+            e0: vec![0.; ch * nb_erb],
+            e1: vec![0.; ch * nb_erb / 2],
+            e2: vec![0.; ch * nb_erb / 4],
+            e3: vec![0.; ch * nb_erb / 4],
+            c0: vec![0.; big],
+            c1: vec![0.; big / 2],
+            cemb: vec![0.; emb_len],
+            emb: vec![0.; emb_len],
+            erb_g: vec![0.; emb_len],
+            df_g: vec![0.; hidden],
+            dbuf: vec![0.; ch * nb_erb],
+            mask: vec![0.; nb_erb],
+            coefs: vec![0.; nb_df * convp_out],
+            tmp: vec![0.; scratch],
+            tmp2: vec![0.; scratch],
             xbuf: vec![0.; emb_len],
         })
     }
 
-    /// Raises df_convp's batch-norm shift so its ReLU passes every value.
-    /// With the embedded weights the pathway's output is almost always
-    /// clipped to zero; opened, whatever its convolution computes reaches
-    /// the coefficients and the output samples.
+    /// Bumps `df_convp`'s batch-norm shift so its ReLU doesn't clip everything
+    /// to zero (with the embedded weights it is mostly inactive), letting tests
+    /// verify that `df_convp` reaches the output samples.
     #[cfg(test)]
     pub(crate) fn open_convp(&mut self) {
         self.convp_norm.shift.iter_mut().for_each(|s| *s += 4.);
@@ -763,14 +714,12 @@ impl Dfn {
         self.nb_df
     }
 
-    /// Prepares one GRU layer's recurrent products for the next call, in
-    /// the order the call reaches them (encoder, ERB decoder, DF decoder);
-    /// false if every layer is prepared.
+    /// Prepares the next unprepared GRU layer in execution order (encoder, ERB
+    /// decoder, DF decoder).
     pub(crate) fn prepare_gru(&mut self) -> bool {
         self.enc_gru.prepare_next() || self.erb_gru.prepare_next() || self.df_gru.prepare_next()
     }
 
-    /// GRU layers not yet prepared for the next call.
     pub(crate) fn gru_unprepared(&self) -> usize {
         self.enc_gru.unprepared() + self.erb_gru.unprepared() + self.df_gru.unprepared()
     }
@@ -790,12 +739,10 @@ impl Dfn {
         self.convp.reset();
     }
 
-    /// Encoder for one to `STEPS` frames of features, each `[steps][..]`,
-    /// oldest first; returns the newest frame's local SNR estimate in dB.
+    /// Encoder for one frame of features; returns its local SNR estimate in
+    /// dB.
     pub(crate) fn encode(&mut self, feat_erb: &[f32], feat_re: &[f32], feat_im: &[f32]) -> f32 {
         let (ch, nb_erb, nb_df) = (self.ch, self.nb_erb, self.nb_df);
-        let steps = feat_erb.len() / nb_erb;
-        debug_assert!((1..=STEPS).contains(&steps));
         #[cfg(test)]
         {
             // The histories are read by the 3x3 convs and shifted at the end.
@@ -827,244 +774,165 @@ impl Dfn {
             slice(Class::Act, feat_im);
             slice(Class::Param, &self.lsnr_w);
         }
-        // The new frames follow the last two of the previous call.
-        self.erb_hist[2 * nb_erb..(2 + steps) * nb_erb].copy_from_slice(feat_erb);
-        for (t, newest) in self.spec_hist[2 * 2 * nb_df..]
-            .chunks_exact_mut(2 * nb_df)
-            .take(steps)
-            .enumerate()
-        {
-            newest[..nb_df].copy_from_slice(&feat_re[t * nb_df..(t + 1) * nb_df]);
-            newest[nb_df..].copy_from_slice(&feat_im[t * nb_df..(t + 1) * nb_df]);
-        }
-        let (l0, l1, l3) = (ch * nb_erb, ch * nb_erb / 2, ch * nb_erb / 4);
+        // The new frame follows the last two of the previous call.
+        self.erb_hist[2 * nb_erb..3 * nb_erb].copy_from_slice(feat_erb);
+        let newest = &mut self.spec_hist[2 * 2 * nb_df..3 * 2 * nb_df];
+        newest[..nb_df].copy_from_slice(&feat_re[..nb_df]);
+        newest[nb_df..].copy_from_slice(&feat_im[..nb_df]);
+        let (l0, l3) = (ch * nb_erb, ch * nb_erb / 4);
 
         // erb_conv0: 1 -> ch, 3x3 (3 frames, 3 bins), BN, ReLU.
-        for (t, e0) in self.e0.chunks_exact_mut(l0).take(steps).enumerate() {
-            let x = &self.erb_hist[t * nb_erb..(t + 3) * nb_erb];
-            conv3x3(&self.erb_conv0, ch, x, 1, nb_erb, e0);
-            self.erb_norm0.apply(e0, nb_erb, Act::Relu);
-        }
+        let e0 = &mut self.e0[..l0];
+        conv3x3(&self.erb_conv0, ch, &self.erb_hist, 1, nb_erb, e0);
+        self.erb_norm0.apply(e0, nb_erb, Act::Relu);
         profile::mark(1);
-        self.erb_conv[0].steps(&self.e0, nb_erb, &mut self.tmp, &mut self.e1, l1, steps);
-        self.erb_conv[1].steps(&self.e1, nb_erb / 2, &mut self.tmp, &mut self.e2, l3, steps);
-        self.erb_conv[2].steps(&self.e2, nb_erb / 4, &mut self.tmp, &mut self.e3, l3, steps);
+        self.erb_conv[0].run(&self.e0, nb_erb, &mut self.tmp, &mut self.e1);
+        self.erb_conv[1].run(&self.e1, nb_erb / 2, &mut self.tmp, &mut self.e2);
+        self.erb_conv[2].run(&self.e2, nb_erb / 4, &mut self.tmp, &mut self.e3);
         profile::mark(2);
         pause_for(self.pause);
 
         // df_conv0: 2 -> ch in two groups, 3x3, then pointwise, BN, ReLU.
         let big = ch * nb_df;
-        for (t, tmp) in self.tmp.chunks_exact_mut(big).take(steps).enumerate() {
-            let x = &self.spec_hist[t * 2 * nb_df..(t + 3) * 2 * nb_df];
-            conv3x3(&self.df_conv0, ch, x, 2, nb_df, tmp);
-        }
-        if steps == 2 {
-            pointwise_pair(&self.df_pw0, ch, ch, &self.tmp, nb_df, &mut self.c0, big);
-        } else {
-            pointwise(&self.df_pw0, ch, ch, &self.tmp, nb_df, &mut self.c0);
-        }
-        for c0 in self.c0.chunks_exact_mut(big).take(steps) {
-            self.df_norm0.apply(c0, nb_df, Act::Relu);
-        }
+        conv3x3(
+            &self.df_conv0,
+            ch,
+            &self.spec_hist,
+            2,
+            nb_df,
+            &mut self.tmp[..big],
+        );
+        pointwise(&self.df_pw0, ch, ch, &self.tmp, nb_df, &mut self.c0);
+        self.df_norm0.apply(&mut self.c0[..big], nb_df, Act::Relu);
         profile::mark(3);
         self.df_conv1
-            .steps(&self.c0, nb_df, &mut self.tmp, &mut self.c1, big / 2, steps);
+            .run(&self.c0, nb_df, &mut self.tmp, &mut self.c1);
         profile::mark(4);
         pause_for(self.pause);
         // cemb: c1 flattened bin-major ([f][ch]), grouped linear, ReLU.
         let n = self.df_fc_emb.out();
         let ci = self.df_fc_emb.inp();
-        for (c1, tmp) in self
-            .c1
-            .chunks_exact(big / 2)
-            .zip(self.tmp.chunks_exact_mut(ci))
-            .take(steps)
-        {
-            transpose(c1, ch, nb_df / 2, tmp);
-        }
-        self.df_fc_emb
-            .steps(&self.tmp[..steps * ci], &mut self.cemb[..steps * n]);
-        relu(&mut self.cemb[..steps * n]);
+        transpose(&self.c1[..big / 2], ch, nb_df / 2, &mut self.tmp[..ci]);
+        self.df_fc_emb.run(&self.tmp[..ci], &mut self.cemb[..n]);
+        relu(&mut self.cemb[..n]);
         profile::mark(5);
         // emb = GRU(e3 flattened bin-major + cemb).
         let f3 = nb_erb / 4;
-        for (e3, cemb) in self
-            .e3
-            .chunks_exact(l3)
-            .zip(self.cemb.chunks_exact_mut(n))
-            .take(steps)
-        {
-            transpose(e3, ch, f3, &mut self.tmp);
-            for (a, b) in cemb.iter_mut().zip(&self.tmp[..n]) {
-                *a += b;
-            }
+        transpose(&self.e3[..l3], ch, f3, &mut self.tmp);
+        for (a, b) in self.cemb[..n].iter_mut().zip(&self.tmp[..n]) {
+            *a += b;
         }
-        self.enc_gru
-            .steps(&self.cemb[..steps * n], &mut self.emb[..steps * n]);
-        let newest = &self.emb[(steps - 1) * n..steps * n];
+        self.enc_gru.step(&self.cemb[..n], &mut self.emb[..n]);
         let z: f32 = self
             .lsnr_w
             .iter()
-            .zip(newest)
+            .zip(&self.emb[..n])
             .map(|(a, b)| a * b)
             .sum::<f32>()
             + self.lsnr_b;
         // Keep the last two frames for the next call.
-        self.erb_hist
-            .copy_within(steps * nb_erb..(steps + 2) * nb_erb, 0);
-        self.spec_hist
-            .copy_within(steps * 2 * nb_df..(steps + 2) * 2 * nb_df, 0);
+        self.erb_hist.copy_within(nb_erb..3 * nb_erb, 0);
+        self.spec_hist.copy_within(2 * nb_df..3 * 2 * nb_df, 0);
         profile::mark(6);
         pause_for(self.pause);
         sigmoid(z) * 50. - 15.
     }
 
-    /// ERB decoder: the per-band gain masks for the last `encode`'s
-    /// `steps` frames; see `mask`.
-    pub(crate) fn erb_decode(&mut self, steps: usize) {
+    /// ERB decoder: the per-band gain mask for the last `encode`'s frame;
+    /// see `mask`.
+    pub(crate) fn erb_decode(&mut self) {
         let (ch, nb_erb) = (self.ch, self.nb_erb);
         let f3 = nb_erb / 4;
-        let n = self.emb.len() / STEPS;
-        self.erb_gru
-            .steps(&self.emb[..steps * n], &mut self.erb_g[..steps * n]);
+        let n = self.emb.len();
+        self.erb_gru.step(&self.emb[..n], &mut self.erb_g[..n]);
         profile::mark(7);
         pause_for(self.pause);
         let ld = ch * nb_erb;
         // d3 = convt3(conv3p(e3) + emb)
-        for ((g, e3), tmp) in self
-            .erb_g
-            .chunks_exact(n)
-            .zip(self.e3.chunks_exact(n))
-            .zip(self.tmp2.chunks_exact_mut(n))
-            .take(steps)
-        {
-            // [f][ch] -> [ch][f]
-            transpose(g, f3, ch, &mut self.xbuf);
-            self.pathway[0].run(e3, f3, tmp);
-            add(tmp, &self.xbuf);
-        }
-        self.convt[0].steps(
-            &self.tmp2[..steps * n],
-            f3,
-            &mut self.tmp,
-            &mut self.dbuf,
-            ld,
-            steps,
-        );
+        // [f][ch] -> [ch][f]
+        transpose(&self.erb_g[..n], f3, ch, &mut self.xbuf);
+        self.pathway[0].run(&self.e3[..n], f3, &mut self.tmp2[..n]);
+        add(&mut self.tmp2[..n], &self.xbuf);
+        self.convt[0].run(&self.tmp2[..n], f3, &mut self.tmp, &mut self.dbuf);
         // d2 = convt2(conv2p(e2) + d3), d1 = convt1(conv1p(e1) + d2)
         let mut f = f3;
         for (k, e) in [(1, &self.e2), (2, &self.e1)] {
             let len = ch * f;
-            for ((e, d), tmp) in e
-                .chunks_exact(len)
-                .zip(self.dbuf.chunks_exact(ld))
-                .zip(self.tmp2.chunks_exact_mut(len))
-                .take(steps)
-            {
-                self.pathway[k].run(e, f, tmp);
-                add(tmp, &d[..len]);
-            }
-            self.convt[k].steps(
-                &self.tmp2[..steps * len],
-                f,
-                &mut self.tmp,
-                &mut self.dbuf,
-                ld,
-                steps,
-            );
+            self.pathway[k].run(&e[..len], f, &mut self.tmp2[..len]);
+            add(&mut self.tmp2[..len], &self.dbuf[..len]);
+            self.convt[k].run(&self.tmp2[..len], f, &mut self.tmp, &mut self.dbuf);
             f *= 2;
         }
         profile::mark(8);
         pause_for(self.pause);
         // m = conv0_out(conv0p(e0) + d1): ch -> 1, 1x3, BN, sigmoid.
-        for ((e0, d), mask) in self
-            .e0
-            .chunks_exact(ld)
-            .zip(self.dbuf.chunks_exact(ld))
-            .zip(self.mask.chunks_exact_mut(nb_erb))
-            .take(steps)
+        self.pathway[3].run(&self.e0[..ld], nb_erb, &mut self.tmp2);
+        add(&mut self.tmp2[..ld], &self.dbuf[..ld]);
+        let mask = &mut self.mask[..nb_erb];
+        #[cfg(test)]
         {
-            self.pathway[3].run(e0, nb_erb, &mut self.tmp2);
-            add(&mut self.tmp2[..ld], d);
-            #[cfg(test)]
-            {
-                use crate::traffic::*;
-                slice(Class::Param, &self.out_w);
-                touch(Class::Act, self.tmp2.as_ptr(), ld * 4);
-                touch_n(Class::Act, mask.as_ptr(), nb_erb * 4, ch);
-                crate::traffic::store_n(Class::Act, mask.as_ptr(), nb_erb * 4, 1 + ch);
-            }
-            mask.fill(0.);
-            for (c, row) in self.tmp2[..ld].chunks_exact(nb_erb).enumerate() {
-                let k = &self.out_w[c * 3..c * 3 + 3];
-                shift3_add(k[0], k[1], k[2], row, mask);
-            }
-            self.out_norm.apply(mask, nb_erb, Act::Sigmoid);
+            use crate::traffic::*;
+            slice(Class::Param, &self.out_w);
+            touch(Class::Act, self.tmp2.as_ptr(), ld * 4);
+            touch_n(Class::Act, mask.as_ptr(), nb_erb * 4, ch);
+            crate::traffic::store_n(Class::Act, mask.as_ptr(), nb_erb * 4, 1 + ch);
         }
+        mask.fill(0.);
+        for (c, row) in self.tmp2[..ld].chunks_exact(nb_erb).enumerate() {
+            let k = &self.out_w[c * 3..c * 3 + 3];
+            shift3_add(k[0], k[1], k[2], row, mask);
+        }
+        self.out_norm.apply(mask, nb_erb, Act::Sigmoid);
         profile::mark(9);
     }
 
-    /// Step `t`'s gain mask from `erb_decode`.
-    pub(crate) fn mask(&self, t: usize) -> &[f32] {
-        &self.mask[t * self.nb_erb..(t + 1) * self.nb_erb]
+    /// The gain mask from `erb_decode`.
+    pub(crate) fn mask(&self) -> &[f32] {
+        &self.mask[..self.nb_erb]
     }
 
-    /// DF decoder: deep-filter coefficients for the last `encode`'s `steps`
-    /// frames; see `coefs`.
-    pub(crate) fn df_decode(&mut self, steps: usize) {
+    /// DF decoder: deep-filter coefficients for the last `encode`'s frame;
+    /// see `coefs`.
+    pub(crate) fn df_decode(&mut self) {
         let (ch, nb_df) = (self.ch, self.nb_df);
         let hidden = self.df_gru.out();
-        let n = self.emb.len() / STEPS;
-        self.df_gru
-            .steps(&self.emb[..steps * n], &mut self.df_g[..steps * hidden]);
-        self.df_skip
-            .steps(&self.emb[..steps * n], &mut self.tmp2[..steps * hidden]);
-        add(
-            &mut self.df_g[..steps * hidden],
-            &self.tmp2[..steps * hidden],
-        );
+        let n = self.emb.len();
+        self.df_gru.step(&self.emb[..n], &mut self.df_g[..hidden]);
+        self.df_skip.run(&self.emb[..n], &mut self.tmp2[..hidden]);
+        add(&mut self.df_g[..hidden], &self.tmp2[..hidden]);
         profile::mark(10);
         pause_for(self.pause);
         // df_out: grouped linear + tanh -> [nb_df][out]
         let out = self.convp_out;
-        self.df_out.steps(
-            &self.df_g[..steps * hidden],
-            &mut self.coefs[..steps * nb_df * out],
-        );
-        tanh_slice(&mut self.coefs[..steps * nb_df * out]);
+        self.df_out
+            .run(&self.df_g[..hidden], &mut self.coefs[..nb_df * out]);
+        tanh_slice(&mut self.coefs[..nb_df * out]);
         profile::mark(11);
         // df_convp over the c0 history: ch -> out in two groups, kt x 1
-        // (`Convp`), then pointwise, BN, ReLU, added channels-last. Each
-        // step's c0 joins the history just before its own conv.
-        for (c0, coefs) in self
-            .c0
-            .chunks_exact(ch * nb_df)
-            .zip(self.coefs.chunks_exact_mut(nb_df * out))
-            .take(steps)
+        // (`Convp`), then pointwise, BN, ReLU, added channels-last. The
+        // frame's c0 joins the history just before the conv.
+        let coefs = &mut self.coefs[..nb_df * out];
+        self.convp.step(&self.c0[..ch * nb_df]);
+        // The 1x1 mix reads each of its weights over every bin.
+        #[cfg(test)]
         {
-            self.convp.step(c0);
-            // The 1x1 mix reads each of its weights over every bin.
-            #[cfg(test)]
-            {
-                use crate::traffic::*;
-                slice(Class::Param, &self.convp_pw);
-                touch_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, out);
-                crate::traffic::store_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, 1 + out);
-                touch(Class::Act, coefs.as_ptr(), nb_df * out * 4);
-                crate::traffic::store(Class::Act, coefs.as_ptr(), nb_df * out * 4);
-            }
-            let z = &mut self.tmp2[..out * nb_df];
-            self.convp.mix(&self.convp_pw, z);
-            self.convp_norm.apply(z, nb_df, Act::Relu);
-            add_transposed(z, out, nb_df, coefs);
+            use crate::traffic::*;
+            slice(Class::Param, &self.convp_pw);
+            touch_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, out);
+            crate::traffic::store_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, 1 + out);
+            touch(Class::Act, coefs.as_ptr(), nb_df * out * 4);
+            crate::traffic::store(Class::Act, coefs.as_ptr(), nb_df * out * 4);
         }
+        let z = &mut self.tmp2[..out * nb_df];
+        self.convp.mix(&self.convp_pw, z);
+        self.convp_norm.apply(z, nb_df, Act::Relu);
+        add_transposed(z, out, nb_df, coefs);
         profile::mark(12);
     }
 
-    /// Step `t`'s coefficients from `df_decode`, [nb_df][order * 2].
-    pub(crate) fn coefs(&self, t: usize) -> &[f32] {
-        let len = self.nb_df * self.convp_out;
-        &self.coefs[t * len..(t + 1) * len]
+    /// The coefficients from `df_decode`, [nb_df][order * 2].
+    pub(crate) fn coefs(&self) -> &[f32] {
+        &self.coefs[..self.nb_df * self.convp_out]
     }
 }
 

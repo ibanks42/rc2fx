@@ -1,8 +1,9 @@
-//! Opt-in audit-namespace receiver. No audio buffer or Rust pointer crosses IPC.
+//! Unix datagram control server running inside the audit namespace.
+//! No audio buffers or raw pointers cross IPC.
 use rc2fx_core::Target;
 use rc2fx_native_control::{
-    ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode, Reply,
-    Request, Response, Session, TargetStatus, Transaction, VERSION,
+    ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode,
+    RESET_POLICY_VERSION, Reply, Request, ResetPolicy, Response, Session, Transaction, VERSION,
 };
 use serde::Serialize;
 use std::{
@@ -23,8 +24,36 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-/// One callback-side atomic check. Zero is the explicit standalone research
-/// mode; required receivers must become ready before DSP is admitted.
+/// Monotonic state machine gating DSP execution behind the control server:
+/// `Standalone -> Required -> Active -> Stopped` (or `Required -> Stopped`).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gate {
+    /// No control socket configured (standalone/research mode); DSP runs immediately.
+    Standalone = 0,
+    /// Control socket required, waiting for server startup; DSP held off.
+    Required = 1,
+    /// Control server is live; DSP admitted.
+    Active = 2,
+    /// Control server stopped or failed; DSP permanently disabled.
+    Stopped = 3,
+}
+impl Gate {
+    const STANDALONE: u8 = Self::Standalone as u8;
+    const REQUIRED: u8 = Self::Required as u8;
+    const ACTIVE: u8 = Self::Active as u8;
+    const STOPPED: u8 = Self::Stopped as u8;
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::STANDALONE => Self::Standalone,
+            Self::REQUIRED => Self::Required,
+            Self::ACTIVE => Self::Active,
+            _ => Self::Stopped,
+        }
+    }
+}
+/// Lock-free gate checked on every audio callback to ensure DSP only runs
+/// while the control server is active (when required).
 pub struct Admission {
     state: AtomicU8,
     skipped: AtomicU64,
@@ -32,23 +61,37 @@ pub struct Admission {
 impl Admission {
     pub const fn new() -> Self {
         Self {
-            state: AtomicU8::new(0),
+            state: AtomicU8::new(Gate::STANDALONE),
             skipped: AtomicU64::new(0),
         }
     }
+    /// Transitions `Standalone -> Required`; no-op once active or stopped.
     pub fn require(&self) {
-        self.state.store(1, Ordering::Release);
+        let _ = self.state.compare_exchange(
+            Gate::STANDALONE,
+            Gate::REQUIRED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
     fn activate(&self) -> bool {
         self.state
-            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(
+                Gate::REQUIRED,
+                Gate::ACTIVE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
     }
     fn stop(&self) {
-        self.state.store(3, Ordering::Release);
+        self.state.store(Gate::STOPPED, Ordering::Release);
     }
     pub fn admit(&self) -> bool {
-        if matches!(self.state.load(Ordering::Acquire), 0 | 2) {
+        if matches!(
+            self.state.load(Ordering::Acquire),
+            Gate::STANDALONE | Gate::ACTIVE
+        ) {
             true
         } else {
             self.skipped.fetch_add(1, Ordering::Relaxed);
@@ -56,7 +99,10 @@ impl Admission {
         }
     }
     pub fn required(&self) -> bool {
-        self.state.load(Ordering::Acquire) != 0
+        self.gate() != Gate::Standalone
+    }
+    fn gate(&self) -> Gate {
+        Gate::from_u8(self.state.load(Ordering::Acquire))
     }
     pub fn skipped(&self) -> u64 {
         self.skipped.load(Ordering::Relaxed)
@@ -78,46 +124,37 @@ impl Drop for AdmissionLease {
 
 pub trait Backend: Send + 'static {
     fn inventory(&mut self) -> Result<Vec<ContextStatus>, ErrorCode>;
-    fn status(&mut self, context: u64, id: &str) -> Result<TargetStatus, ErrorCode>;
     fn prepare(
         &mut self,
         transaction: &Transaction,
         target: &Target,
         mode: PathMode,
+        reset: ResetPolicy,
     ) -> Result<(), ErrorCode>;
     fn commit(&mut self, transaction: &Transaction) -> Result<(), ErrorCode>;
     fn cancel(&mut self, transaction: &Transaction) -> Result<(), ErrorCode>;
 }
 
-/// The first protocol version whose replies carry the two recent maxima
-/// (`ContextStatus::recent_callback_wall_ns` and
-/// `TargetStatus::worker_recent_max_ns`). Both are skipped when none, so a
-/// reply to an older peer leaves them out by clearing them.
+/// First protocol version that supports `recent_callback_wall_ns` and
+/// `worker_recent_max_ns` on inventory replies.
 const RECENT_MAXIMA_VERSION: u32 = 7;
 
-/// Clears the reply fields a peer at `version` cannot decode.
 fn omit_fields_unknown_to(version: u32, reply: &mut Reply) {
     if version >= RECENT_MAXIMA_VERSION {
         return;
     }
-    match reply {
-        Reply::Inventory { contexts } => {
-            for context in contexts {
-                context.recent_callback_wall_ns = None;
-                for target in &mut context.targets {
-                    target.worker_recent_max_ns = None;
-                }
+    if let Reply::Inventory { contexts } = reply {
+        for context in contexts {
+            context.recent_callback_wall_ns = None;
+            for target in &mut context.targets {
+                target.worker_recent_max_ns = None;
             }
         }
-        Reply::Status { target, .. } => target.worker_recent_max_ns = None,
-        _ => {}
     }
 }
 
 fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> Response {
-    // Answer in the peer's own version, so an older peer reads a reply shaped
-    // for what it knows. Only the supported range is spoken; anything else is
-    // refused at this build's version.
+    // Reply at the peer's negotiated version if supported, otherwise reject at ours.
     let supported = (MIN_VERSION..=VERSION).contains(&request.version);
     let result = if !supported {
         Err(ErrorCode::UnsupportedVersion)
@@ -134,30 +171,25 @@ fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> 
             Operation::Inventory => backend
                 .inventory()
                 .map(|contexts| Reply::Inventory { contexts }),
-            Operation::Status { context, id } => {
-                if context == 0 || !rc2fx_core::valid_id(&id) {
-                    Err(ErrorCode::InvalidParameters)
-                } else {
-                    backend
-                        .status(context, &id)
-                        .map(|target| Reply::Status { context, target })
-                }
-            }
+            // Deprecated; use `Operation::Inventory` instead.
+            Operation::Status { .. } => Err(ErrorCode::InvalidParameters),
             Operation::Prepare {
                 transaction,
                 target,
                 mode,
+                reset,
             } => {
                 if transaction.session != *session {
                     Err(ErrorCode::WrongSession)
                 } else if !transaction.valid()
                     || transaction.target_id != target.id
                     || target.validate().is_err()
+                    || (reset != ResetPolicy::Allow && request.version < RESET_POLICY_VERSION)
                 {
                     Err(ErrorCode::InvalidParameters)
                 } else {
                     backend
-                        .prepare(&transaction, &target, mode)
+                        .prepare(&transaction, &target, mode, reset)
                         .map(|()| Reply::Prepared { transaction })
                 }
             }
@@ -224,7 +256,7 @@ fn bind(path: &Path) -> io::Result<(UnixDatagram, SocketFile)> {
             "socket parent must be an existing private directory",
         ));
     }
-    // bind refuses an existing entry. Never unlink an old or unrelated socket.
+    // `bind` fails if `path` already exists; never unlink an existing socket.
     let socket = UnixDatagram::bind(path)?;
     let metadata = fs::symlink_metadata(path)?;
     let owned = SocketFile {
@@ -287,7 +319,7 @@ impl Server {
             .spawn(move || {
                 let _owned = owned;
                 let _admission = admission;
-                // Do not inherit an elevated policy from a vendor control caller.
+                // Drop any elevated scheduling policy inherited from the caller.
                 let policy = libc::sched_param { sched_priority: 0 };
                 if unsafe {
                     libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_OTHER, &policy)
@@ -314,7 +346,7 @@ impl Server {
                             revents: 0,
                         },
                     ];
-                    // No timeout polling: no periodic wakeups while the app is closed.
+                    // Block indefinitely so the server doesn't wake up while idle.
                     let ready = unsafe { libc::poll(poll.as_mut_ptr(), 2, -1) };
                     if ready < 0 {
                         if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
@@ -372,8 +404,8 @@ impl Server {
             gate,
         })
     }
-    /// Control only. Keeps the handle on timeout; the caller must not unload a
-    /// module with its receiver still executing. No callback ever joins this task.
+    /// Control-only shutdown. Retains the join handle on timeout so callers
+    /// know the server thread is still running.
     pub fn shutdown(&mut self) -> bool {
         if let Some(gate) = self.gate {
             gate.stop();
@@ -426,7 +458,7 @@ impl Drop for Server {
 mod tests {
     use super::*;
     use rc2fx_core::TargetKind;
-    use rc2fx_native_control::Client;
+    use rc2fx_native_control::{Client, TargetStatus};
     use std::os::unix::fs::DirBuilderExt;
 
     #[derive(Default)]
@@ -436,19 +468,11 @@ mod tests {
         pending: Option<Transaction>,
         pending_mode: Option<PathMode>,
         mode: Option<PathMode>,
+        /// The reset policy of the last prepare that reached the backend.
+        reset: Option<ResetPolicy>,
     }
-    impl Backend for Fake {
-        fn inventory(&mut self) -> Result<Vec<ContextStatus>, ErrorCode> {
-            Ok(vec![ContextStatus {
-                context: 7,
-                targets: vec![self.status(7, "headphones")?],
-                timing: None,
-                counters: Default::default(),
-                events: Vec::new(),
-                // The v7-only fields, which a reply to a v6 peer must omit.
-                recent_callback_wall_ns: Some(900),
-            }])
-        }
+    impl Fake {
+        /// The one target's status, as the inventory reports it.
         fn status(&mut self, context: u64, id: &str) -> Result<TargetStatus, ErrorCode> {
             if context != 7 || id != "headphones" {
                 return Err(ErrorCode::Unavailable);
@@ -475,13 +499,28 @@ mod tests {
                 worker_recent_max_ns: Some(7_000),
             })
         }
+    }
+    impl Backend for Fake {
+        fn inventory(&mut self) -> Result<Vec<ContextStatus>, ErrorCode> {
+            Ok(vec![ContextStatus {
+                context: 7,
+                targets: vec![self.status(7, "headphones")?],
+                timing: None,
+                counters: Default::default(),
+                events: Vec::new(),
+                // The v7-only fields, which a reply to a v6 peer must omit.
+                recent_callback_wall_ns: Some(900),
+            }])
+        }
         fn prepare(
             &mut self,
             transaction: &Transaction,
             target: &Target,
             mode: PathMode,
+            reset: ResetPolicy,
         ) -> Result<(), ErrorCode> {
             self.status(transaction.context, &target.id)?;
+            self.reset = Some(reset);
             if transaction.revision <= self.revision.max(1) {
                 return Err(ErrorCode::StaleRevision);
             }
@@ -528,6 +567,7 @@ mod tests {
             operation: Operation::Prepare {
                 transaction,
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(Target::new(
                     "headphones",
                     "Headphones",
@@ -536,6 +576,43 @@ mod tests {
                 )),
             },
         }
+    }
+    /// The reset policy reaches the backend, and only from a peer that
+    /// negotiated a version that knows it.
+    #[test]
+    fn a_refusing_prepare_needs_the_version_that_defines_it() {
+        let current = session(&"a".repeat(32));
+        let refusing = |version| {
+            let mut request = prepare(current.clone());
+            request.version = version;
+            let Operation::Prepare { reset, .. } = &mut request.operation else {
+                unreachable!();
+            };
+            *reset = ResetPolicy::Refuse;
+            request
+        };
+        let mut backend = Fake::default();
+        assert!(matches!(
+            dispatch(&current, refusing(VERSION), &mut backend).reply,
+            Reply::Prepared { .. }
+        ));
+        assert_eq!(backend.reset, Some(ResetPolicy::Refuse));
+        let mut older = Fake::default();
+        assert!(matches!(
+            dispatch(&current, refusing(RESET_POLICY_VERSION - 1), &mut older).reply,
+            Reply::Error {
+                code: ErrorCode::InvalidParameters
+            }
+        ));
+        assert_eq!(older.reset, None, "never reached the backend");
+        // An Allow prepare from an older peer is what it always was.
+        let mut request = prepare(current.clone());
+        request.version = RESET_POLICY_VERSION - 1;
+        assert!(matches!(
+            dispatch(&current, request, &mut older).reply,
+            Reply::Prepared { .. }
+        ));
+        assert_eq!(older.reset, Some(ResetPolicy::Allow));
     }
     #[test]
     fn requested_path_mode_changes_only_after_commit() {
@@ -607,6 +684,26 @@ mod tests {
         assert_eq!(backend.mutations, 0);
     }
     #[test]
+    fn a_status_request_is_refused_without_touching_the_backend() {
+        let mut backend = Fake::default();
+        let request = Request {
+            version: VERSION,
+            request_id: 1,
+            session: Some(session("current")),
+            operation: Operation::Status {
+                context: 7,
+                id: "headphones".into(),
+            },
+        };
+        assert!(matches!(
+            dispatch(&session("current"), request, &mut backend).reply,
+            Reply::Error {
+                code: ErrorCode::InvalidParameters
+            }
+        ));
+        assert_eq!(backend.mutations, 0);
+    }
+    #[test]
     fn reconnecting_cannot_rebind_an_old_receipt_to_a_new_process_session() {
         let current = session(&"a".repeat(32));
         let transaction = Transaction {
@@ -621,6 +718,7 @@ mod tests {
             Operation::Prepare {
                 transaction: transaction.clone(),
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(Target::new(
                     "headphones",
                     "Headphones",
@@ -701,6 +799,39 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
     #[test]
+    fn a_stopped_gate_cannot_be_armed_again() {
+        let gate = Admission::new();
+        assert_eq!(gate.gate(), Gate::Standalone);
+        assert!(gate.admit());
+        gate.require();
+        assert_eq!(gate.gate(), Gate::Required);
+        assert!(gate.activate());
+        // Requiring an active gate again leaves DSP admitted.
+        gate.require();
+        assert_eq!(gate.gate(), Gate::Active);
+        assert!(gate.admit());
+        gate.stop();
+        gate.require();
+        assert_eq!(gate.gate(), Gate::Stopped);
+        assert!(!gate.activate());
+        assert!(!gate.admit());
+        assert!(gate.required());
+    }
+    #[test]
+    fn every_gate_value_decodes() {
+        for gate in [
+            Gate::Standalone,
+            Gate::Required,
+            Gate::Active,
+            Gate::Stopped,
+        ] {
+            assert_eq!(Gate::from_u8(gate as u8), gate);
+        }
+        for value in 4..=u8::MAX {
+            assert_eq!(Gate::from_u8(value), Gate::Stopped);
+        }
+    }
+    #[test]
     fn actual_local_socket_reports_publication_separately_from_audio_and_cleans_up() {
         let folder = Folder::new();
         let path = folder.0.join("control.sock");
@@ -715,37 +846,26 @@ mod tests {
             .request(Operation::Prepare {
                 transaction: transaction.clone(),
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(target),
             })
             .unwrap();
         assert!(matches!(response.reply, Reply::Prepared { .. }));
-        let response = client
-            .request(Operation::Status {
-                context: 7,
-                id: "headphones".into(),
-            })
-            .unwrap();
-        assert!(matches!(
-            response.reply,
-            Reply::Status {
-                target: TargetStatus { published: 1, .. },
-                ..
-            }
-        ));
+        let response = client.request(Operation::Inventory).unwrap();
+        match response.reply {
+            Reply::Inventory { contexts } => assert_eq!(contexts[0].targets[0].published, 1),
+            _ => panic!("inventory reply required"),
+        }
         let response = client.request(Operation::Commit { transaction }).unwrap();
         assert!(matches!(response.reply, Reply::Published { .. }));
-        let response = client
-            .request(Operation::Status {
-                context: 7,
-                id: "headphones".into(),
-            })
-            .unwrap();
+        let response = client.request(Operation::Inventory).unwrap();
         match response.reply {
-            Reply::Status { target, .. } => {
+            Reply::Inventory { contexts } => {
+                let target = &contexts[0].targets[0];
                 assert_eq!(target.published, 2);
                 assert_eq!(target.applied, 1);
             }
-            _ => panic!("status reply required"),
+            _ => panic!("inventory reply required"),
         }
         assert!(server.shutdown());
         let status = server.status();
@@ -789,6 +909,7 @@ mod tests {
             .request(Operation::Prepare {
                 transaction,
                 mode: PathMode::Processed,
+                reset: ResetPolicy::Allow,
                 target: Box::new(target),
             })
             .unwrap_err();
@@ -796,8 +917,6 @@ mod tests {
         assert!(server.shutdown());
         assert_eq!(server.status().received, 1); // Hello only.
     }
-    /// A reply to a version 6 peer is a version 6 reply: the two fields 7 added
-    /// are absent from its JSON. The same reply at 7 carries them.
     #[test]
     fn older_peers_are_answered_at_their_version_without_the_fields_they_lack() {
         let current = session(&"a".repeat(32));
@@ -823,26 +942,8 @@ mod tests {
             }
             assert_eq!(json.contains("900"), newer, "{json}");
             assert_eq!(json.contains("7000"), newer, "{json}");
-            let response = dispatch(
-                &current,
-                request(Operation::Status {
-                    context: 7,
-                    id: "headphones".into(),
-                }),
-                &mut backend,
-            );
-            assert_eq!(response.version, version);
-            let json = serde_json::to_string(&response).unwrap();
-            assert_eq!(
-                json.contains("workerRecentMaxNs"),
-                newer,
-                "version {version}: {json}"
-            );
-            assert_eq!(json.contains("7000"), newer, "{json}");
         }
     }
-    /// Only the supported range is spoken: 5 (below `MIN_VERSION`) and 8
-    /// (above `VERSION`) are refused at this build's version.
     #[test]
     fn only_the_supported_protocol_range_is_answered() {
         let current = session(&"a".repeat(32));
@@ -881,10 +982,6 @@ mod tests {
             assert_eq!(response.version, version);
         }
     }
-    /// A library that speaks only version 6, as the released mixer has. It
-    /// refuses this build's newer version and answers at its own; the client
-    /// re-hellos there and keeps it, and the v6 replies decode without the
-    /// fields 7 added.
     #[test]
     fn client_negotiates_down_to_a_library_that_speaks_only_v6() {
         let folder = Folder::new();
@@ -967,8 +1064,6 @@ mod tests {
         );
         fs::remove_file(path).unwrap();
     }
-    /// Today's behaviour for a library that answers above this build's
-    /// version: the connection fails instead of speaking it.
     #[test]
     fn a_library_newer_than_this_daemon_fails_the_connection() {
         let folder = Folder::new();

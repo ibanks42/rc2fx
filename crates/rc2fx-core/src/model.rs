@@ -33,16 +33,6 @@ impl Effect {
         Self::Gain,
         Self::Limiter,
     ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Highpass => "High-pass",
-            Self::Suppression => "Noise suppression",
-            Self::Eq => "Equalizer",
-            Self::Compressor => "Compressor",
-            Self::Gain => "Gain",
-            Self::Limiter => "Limiter",
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -65,17 +55,6 @@ impl BandType {
         Self::HighPass,
         Self::Notch,
     ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Off => "Off",
-            Self::Bell => "Bell",
-            Self::LowShelf => "Low shelf",
-            Self::HighShelf => "High shelf",
-            Self::LowPass => "Low-pass",
-            Self::HighPass => "High-pass",
-            Self::Notch => "Notch",
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -125,43 +104,39 @@ pub struct Highpass {
 pub struct Suppression {
     pub enabled: bool,
     pub wet: f64,
-    /// DeepFilterNet3's lookahead in hops: 0 (the default, and what settings
-    /// saved before this field existed mean) or 1, which adds exactly one hop
-    /// of latency.
+    /// DeepFilterNet3 lookahead in hops: 0 (default, also used for legacy configs)
+    /// or 1 (adds one hop of latency).
     #[serde(default)]
     pub lookahead: u8,
     pub gate: VoiceGate,
 }
-/// Turns the suppressed microphone down while the model hears no voice. It
-/// acts only while suppression is enabled, since the voice score comes from
-/// the suppression model.
+/// Attenuates the suppressed microphone when the model detects no voice.
+/// Only active while suppression is enabled, since it reads the model's voice score.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoiceGate {
-    /// 0 (off) to 1 (strict); sets every parameter unless `advanced`.
+    /// 0 (off) to 1 (strict); derives all parameters unless `advanced` is set.
     pub strength: f64,
-    /// Use the parameters below instead of the ones `strength` stands for.
+    /// Use the explicit fields below instead of deriving them from `strength`.
     pub advanced: bool,
-    /// Voice score (0 to 1) at or above which the gate opens.
+    /// Voice score (0..=1) at or above which the gate opens.
     pub threshold: f64,
-    /// How far the closed gate turns the signal down, in dB; 0 is off.
+    /// Attenuation when closed, in dB (0 disables the gate).
     pub reduction: f64,
-    /// Opening time constant, in ms.
+    /// Opening time constant in ms.
     pub attack: f64,
-    /// How long the gate stays open after the score last reached the
-    /// threshold, in ms.
+    /// Time in ms the gate stays open after the voice score drops below threshold.
     pub hold: f64,
-    /// Closing time constant after the hold, in ms.
+    /// Closing time constant after `hold`, in ms.
     pub release: f64,
 }
-/// The parameters the gate runs with. Its smoothing runs in dB.
+/// Resolved runtime gate parameters (smoothing operates in dB).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GateShape {
     /// Voice score that opens the gate.
     pub threshold: f64,
-    /// Voice score an open gate stays open down to (`threshold` minus
-    /// `GATE_HYSTERESIS`), so a score hovering near the threshold, as in soft
-    /// consonants, does not flutter it.
+    /// Score down to which an open gate remains open (`threshold - GATE_HYSTERESIS`)
+    /// to prevent flutter on soft consonants.
     pub close_threshold: f64,
     pub reduction_db: f64,
     pub attack_ms: f64,
@@ -170,14 +145,12 @@ pub struct GateShape {
 }
 pub const GATE_HYSTERESIS: f64 = 0.15;
 impl GateShape {
-    /// What a strength from 0 (off) through gentle (keeps breaths) to 1
-    /// (strict) stands for. Depth grows from nothing, like a blend, reaching
-    /// 20 dB at half strength. Strictness comes mostly from the threshold and
-    /// depth, so the gate never becomes a hard mute: the residual after
-    /// neural suppression is already low, and deeper reduction only makes the
-    /// switching audible. Hold and release shrink less; the release moves
-    /// geometrically so equal slider steps sound even. Opening is always 5 ms,
-    /// inside the model's 10-30 ms lookahead.
+    /// Maps a 0..=1 strength slider to concrete gate parameters.
+    ///
+    /// Depth ramps from 0 dB to 30 dB (20 dB at 0.5) so the gate stays soft
+    /// instead of hard-muting low residual noise. Release scales geometrically
+    /// so equal slider steps feel even; attack is fixed at 5 ms, inside the
+    /// model's 10-30 ms lookahead.
     pub fn for_strength(strength: f64) -> Self {
         let s = strength.clamp(0.0, 1.0);
         let linear = |gentle: f64, strict: f64| gentle + (strict - gentle) * s;
@@ -208,7 +181,7 @@ impl GateShape {
     }
 }
 impl VoiceGate {
-    /// A gate at `strength`, its advanced parameters matching it.
+    /// Builds a gate at `strength` with its advanced fields pre-populated to match.
     pub fn with_strength(strength: f64) -> Self {
         let mut gate = Self {
             strength,
@@ -223,7 +196,6 @@ impl VoiceGate {
         gate.advanced = false;
         gate
     }
-    /// Whether the gate turns anything down.
     pub fn active(&self) -> bool {
         self.shape().reduction_db > 0.0
     }
@@ -240,9 +212,9 @@ impl VoiceGate {
             GateShape::for_strength(self.strength)
         }
     }
-    /// Switches between the strength slider and the separate parameters.
-    /// Entering advanced mode starts the parameters from the current
-    /// strength, so the sound does not jump; leaving keeps them for later.
+    /// Toggles between the strength slider and explicit fields.
+    /// Entering advanced mode seeds the fields from `strength` to avoid a jump;
+    /// leaving keeps them intact.
     pub fn set_advanced(&mut self, advanced: bool) {
         if advanced && !self.advanced {
             let shape = GateShape::for_strength(self.strength);
@@ -256,12 +228,7 @@ impl VoiceGate {
     }
 }
 impl Suppression {
-    /// 0 (lowest latency) or 1 (more context, one hop more).
-    pub fn select_lookahead(&mut self, lookahead: u8) {
-        self.lookahead = lookahead;
-    }
-    /// The geometry the saved settings stand for, and hence the latency they
-    /// add, without a worker scheduling allowance.
+    /// Resolved buffering geometry and total added latency for these settings.
     pub fn geometry(&self) -> Option<SuppressionGeometry> {
         Self::admitted_geometry(self.lookahead)
     }
@@ -272,22 +239,17 @@ impl Suppression {
         Ok(())
     }
 }
-/// DeepFilterNet3's STFT hop, in samples: one lookahead step adds exactly
-/// this much latency (5.0 ms at 48 kHz), in both the one- and two-hop builds.
+/// DeepFilterNet3 STFT hop size in samples (5.0 ms at 48 kHz per lookahead step).
 pub const DFN_HOP_SAMPLES: u32 = 240;
 
-/// The lookahead values DeepFilterNet3 admits, lowest latency first.
-pub const LOOKAHEADS: [u8; 2] = [0, 1];
-
-/// Model-defined buffering, independent of any worker scheduling allowance.
+/// Model-defined buffering, excluding worker scheduling allowance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ModelGeometry {
-    pub frame_samples: u32,
-    pub intrinsic_delay_samples: u32,
+struct ModelGeometry {
+    frame_samples: u32,
+    intrinsic_delay_samples: u32,
 }
 
-/// A resolved processing geometry: the model's buffering plus the worker's
-/// scheduling allowance. Factories use `admitted_geometry`.
+/// Full suppression geometry: model buffering plus worker scheduling lead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SuppressionGeometry {
     pub sample_rate: u32,
@@ -299,17 +261,9 @@ impl SuppressionGeometry {
     pub fn latency_samples(self) -> u32 {
         self.frame_samples + self.intrinsic_delay_samples + self.worker_lead_samples
     }
-    /// The same geometry with a different worker scheduling allowance, for
-    /// tests and benchmarks: the model's own buffering is unchanged.
-    pub fn with_worker_lead(self, worker_lead_samples: u32) -> Self {
-        Self {
-            worker_lead_samples,
-            ..self
-        }
-    }
 }
 impl Suppression {
-    pub fn model_geometry_with_lookahead(lookahead: u8) -> ModelGeometry {
+    fn model_geometry_with_lookahead(lookahead: u8) -> ModelGeometry {
         ModelGeometry {
             frame_samples: DFN_HOP_SAMPLES,
             intrinsic_delay_samples: 120 + DFN_HOP_SAMPLES * u32::from(lookahead),
@@ -391,22 +345,6 @@ pub(crate) fn range(value: f64, min: f64, max: f64, name: &str) -> Result<()> {
         Ok(())
     }
 }
-/// The longest status sentence a mixer may send. It leaves room for 512 of the
-/// widest characters and the context around them.
-pub const MAX_STATUS_TEXT: usize = 4096;
-
-/// Whether `text` from the mixer is fit to show: at most `maximum` bytes, one
-/// line, and no bidirectional controls that would make it read as something
-/// else.
-pub fn valid_display_text(text: &str, maximum: usize) -> bool {
-    text.len() <= maximum && !text.chars().any(|c| c.is_control() || is_bidi_control(c))
-}
-
-/// Unicode's embedding, override and isolate controls.
-pub fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-}
-
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 48
@@ -486,38 +424,6 @@ impl EqSettings {
             Channel::Left => &self.bands,
         }
     }
-    pub fn channel_mut(&mut self, side: Channel) -> &mut Vec<Band> {
-        match side {
-            Channel::Right if self.right_bands.is_some() => self.right_bands.as_mut().unwrap(),
-            _ => &mut self.bands,
-        }
-    }
-    pub fn add_band(&mut self, side: Channel) -> Result<&mut Band> {
-        let bands = self.channel_mut(side);
-        if bands.len() >= MAX_BANDS {
-            return Err(CoreError(
-                "At most 32 bands are supported per channel".into(),
-            ));
-        }
-        let next = bands
-            .iter()
-            .filter_map(|b| b.id.strip_prefix("band-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| CoreError("Band ID space exhausted".into()))?;
-        bands.push(Band::new(format!("band-{next}")));
-        Ok(bands.last_mut().unwrap())
-    }
-    pub fn remove_band(&mut self, side: Channel, id: &str) -> bool {
-        let b = self.channel_mut(side);
-        if let Some(i) = b.iter().position(|b| b.id == id) {
-            b.remove(i);
-            true
-        } else {
-            false
-        }
-    }
 }
 impl Target {
     pub fn new(
@@ -543,8 +449,7 @@ impl Target {
                 lookahead: 0,
                 gate: VoiceGate::with_strength(0.0),
             },
-            // Processing is opt-in: a new path passes audio through unchanged
-            // until each stage is explicitly enabled.
+            // Processing is opt-in; new targets pass audio through untouched.
             eq: EqSettings {
                 enabled: false,
                 ..EqSettings::default()
@@ -622,8 +527,8 @@ impl Target {
         range(self.limiter.ceiling, -24.0, 0.0, "Limiter ceiling")?;
         range(self.limiter.release, 10.0, 2000.0, "Limiter release")
     }
-    /// Chat suppression acts on a separate mono microphone stem, never on the
-    /// completed stereo mix (which also carries pads and playback).
+    /// Chat suppression runs on a separate mono mic stem, not the final stereo mix
+    /// (which also includes pads and playback).
     pub fn is_chat_output(&self) -> bool {
         self.kind == TargetKind::Output
             && self.channels == 2
@@ -631,16 +536,6 @@ impl Target {
     }
     pub fn supports_suppression(&self) -> bool {
         (self.kind == TargetKind::Mic && self.channels == 1) || self.is_chat_output()
-    }
-    pub fn effect_enabled(&self, effect: Effect) -> bool {
-        match effect {
-            Effect::Highpass => self.highpass.enabled,
-            Effect::Suppression => self.suppression.enabled,
-            Effect::Eq => self.eq.enabled,
-            Effect::Compressor => self.compressor.enabled,
-            Effect::Gain => self.gain.enabled,
-            Effect::Limiter => self.limiter.enabled,
-        }
     }
     pub fn set_effect_enabled(&mut self, effect: Effect, enabled: bool) {
         match effect {
@@ -662,12 +557,12 @@ impl Config {
         validate_target: impl Fn(&Target) -> Result<()>,
     ) -> Result<()> {
         if self.schema_version != SCHEMA_VERSION || self.revision == 0 {
-            return Err(CoreError(
-                "Expected schema version 6 and a positive revision".into(),
-            ));
+            return Err(CoreError(format!(
+                "Expected schema version {SCHEMA_VERSION} and a positive revision"
+            )));
         }
         if self.targets.is_empty() || self.targets.len() > MAX_TARGETS {
-            return Err(CoreError("Expected 1 to 24 targets".into()));
+            return Err(CoreError(format!("Expected 1 to {MAX_TARGETS} targets")));
         }
         if self
             .targets
@@ -689,8 +584,8 @@ impl Config {
         }
         self.validate_selection(&self.selected_targets)
     }
-    /// Selection is distinct from saved effect settings. Physical eligibility
-    /// is supplied by the connected controller, not inferred from this catalog.
+    /// Selection is separate from saved effect settings; physical eligibility
+    /// comes from the connected controller, not this catalog.
     pub fn validate_selection(&self, selected: &[String]) -> Result<()> {
         let mut ids = HashSet::new();
         for id in selected {
@@ -723,13 +618,6 @@ impl Config {
             .map(|t| t.id.clone())
             .collect())
     }
-    /// Strict parsing of saved settings in the current schema.
-    pub fn from_json(text: &str) -> Result<Self> {
-        let value = crate::strict_json::parse(text, 512 * 1024)?;
-        let config: Self = serde_json::from_value(value)?;
-        config.validate()?;
-        Ok(config)
-    }
     pub fn validate_update(&self, targets: &[Target]) -> Result<()> {
         if targets.len() != self.targets.len()
             || targets
@@ -761,8 +649,7 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         let mut targets = Vec::new();
-        // This existing saved chain owns physical combo input 4. Do not move
-        // its effects to input 1 merely because its durable ID says mic-1.
+        // Legacy saved ID `mic-1` maps to physical combo input 4; keep it pinned there.
         targets.push(Target::new("mic-1", "Mic 4", TargetKind::Mic, 1));
         for i in 1..=3 {
             targets.push(Target::new(

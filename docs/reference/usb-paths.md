@@ -1,13 +1,8 @@
 # Virtual USB inputs and mix outputs
 
-The `pro-ii-25-v1` route layout adds six paths to the original 19 Pro II
-paths: four virtual USB inputs and two USB sends. The `duo-23-v1` layout adds
-the four virtual inputs to the Duo's 19 paths. The Duo's three USB sends were
-already in its layout.
+The `pro-ii-25-v1` route layout adds six paths on top of the original 19 Pro II paths: four virtual USB inputs and two USB sends. `duo-23-v1` adds the same four virtual inputs to the Duo's 19 paths (the Duo already had all three USB sends).
 
-All of these paths use the existing JACK buffer hooks. No new instruction
-hooks were added. The source names come from the
-[stock source-name evidence](source-name-evidence.md).
+Everything here rides on the existing JACK buffer hooks; no new instruction hooks were needed. Source labels come from the [stock source-name evidence](source-name-evidence.md).
 
 ## Path identities
 
@@ -21,58 +16,25 @@ hooks were added. The source names come from the
 | Chat Mix Out | `send-chat` | `duo-send-chat` | `out_17`, `out_18` | `usb1-chat-out:playback_1`, `_2` |
 | Secondary Mix Out | `send-secondary` | `duo-send-secondary` | `out_19`, `out_20` | `usb2out:playback_1`, `_2` |
 
-All mixer ports in the table have the `JUCEJack:` prefix.
+Every mixer port in the table carries the `JUCEJack:` prefix.
 
-A chain belongs to the source, independent of which fader it is on. If Game
-moves to another fader, its chain moves with it. If Mic 4 is removed from the
-show, Mic 4's chain does not apply to whatever takes its fader.
+Chains follow the source, not the fader. Move Game to another fader and its chain comes along; remove Mic 4 from the show and its chain won't bleed onto whatever replaces it on that fader.
 
-The virtual inputs are playback paths. They accept the ordinary effects but
-not noise suppression. Suppression is limited to one mono microphone, or to
-the microphone contribution to Chat Mix Out. Both the settings model and the
-native plan enforce that limit.
+The virtual inputs are playback paths, so they support the usual effects but not noise suppression. Suppression stays restricted to a single mono mic or the microphone stem going into Chat Mix Out, enforced in both the settings model and the native plan.
 
 ## Offline audit
 
-`tools/firmware_audit/usb_paths.py` checks the official archive and mixer
-hashes against the catalog. It then runs bounded sections of the real
-AArch64 firmware in Unicorn, with synthetic buffers, stubbing only the
-external services those sections call. It runs no complete firmware and
-makes no contact with a mixer.
+`tools/firmware_audit/usb_paths.py` checks the official archive and mixer hashes against the catalog, then runs bounded slices of the actual AArch64 firmware inside Unicorn with synthetic buffers, stubbing only the external calls those slices make. It doesn't boot a full firmware or talk to a real mixer.
 
-The audit passes on all four pinned archives: Pro II and Duo, each on 1.7.6
-and 1.7.7. Its report is
-[`firmware-audits/usb-paths.json`](../firmware-audits/usb-paths.json). It
-checks that:
+The audit passes across all four pinned archives (Pro II and Duo, 1.7.6 and 1.7.7). You can read the full report in [`firmware-audits/usb-paths.json`](../firmware-audits/usb-paths.json). Specifically, it verifies that:
 
-- The vendor's port-event handler connects each external endpoint above to
-  the named mixer port.
-- The vendor's source table maps source IDs 12–15 to internal slots 22–29,
-  and the input gather maps those slots to `in_13` through `in_20`, taking the
-  active-input mask and packed channel array into account. An inactive input
-  reads the vendor's silence buffer. It does not pick up the next active
-  input.
-- The output gather keeps each send pair tied to its own active-output bits.
-  Unplugging a USB endpoint does not shift Secondary Mix Out onto Chat.
-- In the normal stereo fixture and the table-copy multitrack fixture, the
-  output processors for all three sends run synchronously in
-  `Mixer::Process`. In the raw-strip multitrack fixture, the first strip's
-  raw stereo source is copied to `out_15`/`out_16` in place of the Main
-  processor's output, the Chat processor is not dispatched, and Secondary is
-  still processed synchronously. The deferred vendor job uses the packed
-  output table for the monitor outputs only. RC2FX processes the send buffers
-  after the original callback and makes no assumption that they hold a
-  stereo main mix.
-- Named-port registration and active-mask construction are separate steps,
-  so a registered port may have no external endpoint connected.
+- RØDE's port-event handler wires each external endpoint in the table to the named mixer port.
+- The source table maps source IDs 12–15 to internal slots 22–29, and the input gather maps those slots to `in_13` through `in_20` while honoring the active-input mask and packed channel array. An inactive input reads the vendor's silence buffer instead of shifting onto the next active channel.
+- The output gather keeps each send pair tied to its own active-output bits, so unplugging a USB endpoint won't shift Secondary Mix Out onto Chat.
+- In both the normal stereo fixture and the table-copy multitrack fixture, all three send output processors run synchronously inside `Mixer::Process`. In the raw-strip multitrack fixture, the first strip's raw stereo source gets copied to `out_15`/`out_16` instead of the Main processor's output, the Chat processor isn't dispatched, and Secondary still runs synchronously. The deferred vendor job only uses the packed output table for monitor outputs. RC2FX processes the send buffers after the original callback finishes and doesn't assume they hold a stereo main mix.
+- Named-port registration and active-mask construction happen separately, meaning a port can be registered even when no external endpoint is plugged in.
 
-Whole-function comparisons match the relevant code across both firmware
-versions. The report lists the fixture coverage and its limits, including
-which multitrack branches were exercised. None of this is a hardware timing
-or listening test. The vendor field that selects between the raw-strip and
-table-copy multitrack branches has not been traced to a GUI setting, so Main
-Mix Out is a fixed endpoint whose contents depend on the vendor mode. RC2FX
-leaves RØDE's routing as it is.
+Whole-function comparisons match across both firmware versions. The report details what the fixtures cover and where their limits are, including which multitrack branches ran. None of this replaces a real hardware timing or listening test. Also, we haven't traced the vendor field that switches between the raw-strip and table-copy multitrack branches back to a GUI setting, so Main Mix Out is just a fixed endpoint whose contents depend on whatever mode the mixer is in; RC2FX doesn't touch RØDE's routing.
 
 To reproduce from a source checkout:
 
@@ -88,51 +50,24 @@ python -m tools.firmware_audit.usb_paths \
 
 ## Hardware check
 
-A read-only check on a Pro II running 1.7.7, on 2026-11-04, found:
+A read-only check on a Pro II running 1.7.7 (on 2026-11-04) confirmed:
 
-- `JUCEJack:in_1` through `in_36` and `out_1` through `out_46` all
-  registered.
-- Game, Music, Virtual A and Virtual B connected to the USB input ports in the
-  table.
-- Main and Chat sends connected. Secondary's two mixer ports registered but
-  unconnected, with USB 2 absent.
+- `JUCEJack:in_1` through `in_36` and `out_1` through `out_46` were all registered.
+- Game, Music, Virtual A, and Virtual B were connected to the exact USB input ports in the table.
+- Main and Chat sends were connected, while Secondary's two mixer ports were registered but unconnected (USB 2 wasn't plugged in).
 
-The check changed no ports, show settings, processing settings or running
-audio, and no updated runtime was installed for it. It confirms the current
-JACK graph. Audio and latency on the new paths have not been tested, other
-USB modes and reconnect sequences still need checking on hardware, and no
-Duo has been tested.
+That check didn't modify any ports, show settings, processing settings, or live audio, and didn't install a new runtime. It confirms the JACK graph, but audio quality and latency on the new paths still haven't been tested on hardware, other USB modes and reconnect sequences need checking, and no Duo has been tested yet.
 
-Before starting, the native pipeline requires every planned port to be
-registered exactly once. If a port is missing or registered more than once,
-the plan is refused. If a registered stereo path's two buffers are not seen
-in the callback, the path stays unobserved and is not processed. The
-registration loop has been verified offline, but its caller's array sizes
-have not been established for every USB mode.
+Before starting up, the native pipeline insists that every planned port is registered once and only once; a missing or duplicate port causes the plan to be rejected. If a registered stereo path's two buffers don't show up in the callback, that path stays unobserved and unprocessed. We've verified the registration loop offline, though its caller's array sizes haven't been confirmed across every USB mode.
 
 ## Saved settings and limits
 
-The Pro II's saved catalog already had the six targets, so their existing
-effect settings are kept. Schema 8 adds the four virtual targets, with
-default settings, to a complete older Duo catalog and to its saved presets.
-The migration does not select the new paths, change existing chains, or copy
-Pro II presets onto a Duo. Schema 8 needs the desktop app and the mixer
-runtime to be updated together.
+Both models' default catalogs include all targets from the table above, starting unselected with default settings. Because Duo target IDs are separate from Pro II IDs, a Pro II preset won't accidentally land on a Duo. Saved settings must match the current schema: older schemas are rejected outright rather than migrated (see [Settings](api.md#settings)), so keep the desktop app and mixer runtime in sync.
 
-The native plan and the controller share a limit of 32 paths (`MAX_PATHS`),
-which covers the 25-path Pro II catalog. This is a structural limit. Whether
-a given combination of effects fits the real-time audio budget is a separate
-question.
+The native plan and controller both cap total paths at 32 (`MAX_PATHS`), which leaves room for the 25-path Pro II catalog. That's purely a structural cap; whether a particular pile of effects fits inside the real-time CPU budget is a separate question.
 
 ## Sources that are not separate paths
 
-- Source IDs 22–25 alias the same internal slots as 12–15. Giving them their
-  own chains would process the same buffers twice.
-- Linked microphone sources 4–6 reuse pairs of the mono microphone buffers.
-  The mono microphone paths are where their processing happens. A stereo
-  chain on top would process the same audio twice.
-- SMART Pads (source 11) use two mixer-internal source buffers and have no
-  JACK input pair. Assigning them a spare `in_N`, or processing a whole output
-  mix, would not reach them. Processing them would need a separate,
-  qualified integration with the internal buffers, which this layout does not
-  include.
+- Source IDs 22–25 alias the same internal slots as 12–15, so giving them separate chains would double-process the same buffers.
+- Linked microphone sources 4–6 reuse pairs of the mono mic buffers. Processing happens on the mono mic paths already; adding a stereo chain on top would process them twice.
+- SMART Pads (source 11) live on two mixer-internal source buffers with no JACK input pair. Pointing them at a spare `in_N` or processing an output mix wouldn't isolate them. Supporting SMART Pads properly would take a separate, qualified integration into those internal buffers, which this layout doesn't include.

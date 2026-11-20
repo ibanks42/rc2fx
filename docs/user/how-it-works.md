@@ -1,68 +1,53 @@
 # How it works
 
-This page describes how RC2FX runs on the mixer. The
-[architecture](../developer/architecture.md) page has the technical detail.
+Here's a quick overview of how RC2FX runs on the mixer. For low-level details,
+see [Architecture](../developer/architecture.md).
 
-## The audio engine
+## Running inside the audio engine
 
-The RØDECaster Pro II contains a four-core ARM processor running Linux. All
-of its audio passes through RØDE's audio engine, which processes a block of
-audio every 2.3 ms, about 430 times per second.
+Inside the RØDECaster Pro II is a quad-core ARM processor running Linux. All
+audio passes through RØDE's audio engine in 2.3 ms blocks (about 430 times a
+second).
 
-RC2FX is a library that the audio engine loads at startup. In each 2.3 ms
-block it runs the effects on the channels you have enabled and leaves the
-other channels untouched. Because it runs inside the engine, it adds no extra
-audio connections and has no fixed limit on how many channels it can process.
+RC2FX loads into that engine as a shared library when the mixer starts. On each
+block, it runs your enabled effects and leaves every other channel untouched.
+Because it runs directly inside RØDE's engine, there are no extra virtual
+routing hops and zero CPU load on your computer.
 
-Noise suppression takes longer than 2.3 ms per block, so it runs on its own
-core a few blocks behind the engine. That is the source of its delay.
+Noise suppression takes more than 2.3 ms per block, so it runs on its own CPU
+core a few blocks behind the main audio loop, which is where its ~16 ms latency
+comes from.
 
-## How RC2FX is loaded
+## How it installs without modifying RØDE's binaries
 
-The installer starts from RØDE's official firmware release and checks that it
-is a version RC2FX supports. It then adds three things: RC2FX itself, your
-settings, and a small launcher. RØDE's system starts the audio engine by name,
-and the launcher is found first under that name, so the engine starts with
-RC2FX loaded. A second launcher does the same for the screen program, which is
-how [screen conversion](settings-and-diagnostics.md#screen-conversion) works.
-RØDE's own programs are left unmodified.
+The installer downloads an official RØDE firmware image, adds RC2FX, your
+settings, and a small launcher script, and flashes it through the mixer's
+standard USB update mode. RØDE's own audio engine binary isn't modified.
 
-At startup RC2FX compares the audio engine byte for byte with the builds it
-has been tested against. If there is no match, it doesn't load, and the mixer
-runs stock firmware behaviour.
+On every boot, RC2FX verifies the audio engine binary against the exact
+firmware builds it was tested on. If anything doesn't match, RC2FX stays out of
+the way and the mixer boots stock.
+
+On Pro II firmware 1.7.7, RC2FX also optimizes how the mixer's sideways
+touchscreen redraws are rotated so heavy screen updates don't compete with
+audio when noise suppression is running.
 
 ## Falling back to stock
 
-RC2FX switches itself off for the rest of the session, leaving the mixer
-running as stock, if any of these happen:
+If something goes wrong on the mixer (its control service stops, startup takes
+over a minute, or the engine crashes twice in one boot), RC2FX automatically
+disables itself for the rest of the session and hands audio back to stock.
+Power-cycling the mixer lets RC2FX try again.
 
-- its control program stops
-- the mixer doesn't finish starting within a minute
-- the mixer stops unexpectedly twice in one session
+RC2FX also sits out the first boot right after a firmware update while the
+mixer updates its internal controllers.
 
-Power-cycling the mixer gives RC2FX another try.
+## Settings and USB control
 
-RC2FX doesn't run during the first start after a firmware update. The mixer
-uses that start to update its internal controllers.
+Your settings and presets are stored on the mixer itself. As you adjust sliders
+in the desktop app, changes are sent over USB 1 and saved automatically. Most
+updates swap in cleanly between two audio blocks with no dropout or restart.
 
-## Settings storage
-
-Settings and presets are stored on the mixer. When you press **Save to
-mixer**, the app sends the settings over USB. RC2FX validates them, saves
-them, and switches to them between two audio blocks, so there is no gap or
-restart. The app only needs to be open while you are changing settings.
-
-## USB control
-
-The app talks to the mixer over USB 1, the same connection RØDE's app uses.
-That connection has a control channel for RØDE's app, and RC2FX sends its own
-messages on it in a form RØDE's software ignores. It needs no network, IP
-address or extra drivers, and USB audio is unaffected.
-
-## Installing by flashing firmware
-
-The installer adds RC2FX during a firmware update. At that point nothing is
-running, and RØDE's updater writes the files. The installer prepares a
-modified copy of the firmware on your computer, and the mixer installs it
-through its normal update mode. If the update fails before the final step,
-switching the mixer off for 30 seconds restores the previous firmware.
+RC2FX shares the same USB 1 control link that RØDE's app uses, in a format
+RØDE's software ignores. You don't need Wi-Fi, Ethernet, or extra drivers, and
+USB audio isn't affected.

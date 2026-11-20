@@ -1,11 +1,12 @@
 # RC2FX
 
-RC2FX adds audio processing to the RØDECaster Pro II: a parametric EQ with up
-to 32 bands, a compressor, a limiter, a high-pass filter, a gain stage and
-noise suppression. The processing runs on the mixer inside RØDE's audio
-engine, so every device connected to the mixer hears the result. A desktop
-app for Windows, Linux and macOS changes the settings over USB. The settings
-are stored on the mixer and stay in effect after the app is closed.
+RC2FX adds a full suite of audio effects to the RØDECaster Pro II: a 32-band
+parametric EQ, AI noise suppression, a compressor, a limiter, a high-pass
+filter, and a gain stage. Everything runs right on the mixer inside RØDE's
+audio engine, so every computer, console, or phone connected to it gets the
+processed sound. You configure it from a desktop app on Windows, macOS, or
+Linux over USB, and your settings stay on the mixer even after you close the
+app.
 
 ![The RC2FX app with noise suppression on a microphone channel](docs/public/screenshots/mic-noise-suppression.png)
 
@@ -14,76 +15,75 @@ are stored on the mixer and stay in effect after the app is closed.
 | System | Installer | Portable |
 | --- | --- | --- |
 | Windows (x64) | [Setup (.exe)](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64-setup.exe) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64.zip) |
-| macOS (Apple silicon) | [.pkg](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.pkg) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-arm64.zip) |
-| Linux (x64) | — | [AppImage](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage) |
+| macOS 13+ (Apple silicon & Intel) | [.pkg](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.pkg) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.zip) |
+| Linux (x64) | - | [AppImage](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage) |
 
-Release notes, checksums and every file are on the
-[latest release](https://github.com/ibanks42/rc2fx/releases/latest). Then
-follow [Getting started](https://ibanks42.github.io/rc2fx/user/getting-started).
+Release notes and checksums are on the
+[latest release](https://github.com/ibanks42/rc2fx/releases/latest) page. Once
+you have the app, follow
+[Getting started](https://ibanks42.github.io/rc2fx/user/getting-started).
 
 ## Features
 
-- Parametric EQ with up to 32 bands per channel. It can import Equalizer APO
-  and AutoEQ text and EasyEffects presets.
-- Noise suppression with DeepFilterNet3, retrained for keyboard and mouse
-  noise, with an optional voice gate.
-- Suppression on Chat Mix Out, which cleans up the microphones that people on
-  a call hear and leaves Smart Pads and music alone.
-- Compressor, limiter, high-pass and gain, in any order.
-- 25 processing paths on the Pro II: microphones, USB and Chat inputs,
-  CallMe, wireless, Bluetooth, the virtual USB inputs, all four headphone
-  outputs, the monitors and the USB mix outputs.
+- **32-band parametric EQ** per channel, with import support for Equalizer APO,
+  AutoEQ, and EasyEffects presets.
+- **DeepFilterNet3 noise suppression**, retrained to handle keyboard and mouse
+  clicks, plus an optional voice gate.
+- **Chat Mix Out noise suppression**, which cleans up every microphone on your
+  call while leaving Smart Pads and music untouched.
+- **Compressor, limiter, high-pass filter, and gain**, freely reorderable on
+  every channel.
+- **25 channels on the Pro II**: microphones, wireless receivers, USB and Chat
+  inputs, CallMe, Bluetooth, virtual USB inputs, all four headphone outputs,
+  monitors, and USB mix outputs.
 
-A fresh install processes nothing until you turn a channel on. Flashing
-stock RØDE firmware removes RC2FX.
+Nothing is processed on a fresh install until you turn a channel on. If you
+ever want to remove RC2FX, flashing stock RØDE firmware puts the mixer right
+back to normal.
 
 ## Quick start
 
-1. [Download](#download) the app for your computer and install it. On
-   Windows, run the `-setup.exe`. On macOS, open the `.pkg`. On Linux, make
-   `rc2fx-linux-x64.AppImage` executable and run it. Windows and macOS also
-   have a portable zip.
-2. Connect the computer to the mixer's **USB 1** port.
-3. Choose **Install RC2FX**. The app downloads official RØDE firmware, adds
-   RC2FX to it and flashes it through the mixer's USB update mode. The
-   computer needs an internet connection for the download.
-4. Pick a channel, turn on **Processing**, switch on some effects and press
-   **Save to mixer**.
+1. [Download](#download) and install the app for your OS.
+2. Plug your computer into the mixer's **USB 1** port.
+3. Click **Install RC2FX**. The app downloads official RØDE firmware, adds
+   RC2FX to it, and flashes your mixer over USB.
+4. Pick a channel, turn on **Processing**, and dial in your effects. Changes
+   apply immediately and save to the mixer automatically.
 
-The [user guide](docs/introduction.md) covers each step in more detail.
+See the [user guide](docs/introduction.md) for the full walkthrough.
 
 RC2FX supports Pro II firmware 1.7.7 and 1.7.6. RØDECaster Duo support is
-[experimental and untested on hardware](docs/reference/duo.md) and is off
-unless you enable it.
+[experimental and untested on hardware](docs/reference/duo.md) and stays off
+unless you opt in.
 
 ## Building from source
 
-You need Rust ([rustup](https://rustup.rs)), [just](https://just.systems),
-[zig](https://ziglang.org/download/) 0.13 or newer and your platform's C build
-tools ([details](docs/developer/building.md)).
+The desktop app is written in Go, and the mixer runtime is Rust. You'll need
+[Go](https://go.dev/dl/) (the version in `desktop/go.mod`), a C compiler for
+cgo (MinGW-w64 gcc on Windows), Rust ([rustup](https://rustup.rs)),
+[zig](https://ziglang.org/download/) 0.13+, and [just](https://just.systems)
+([details](docs/developer/building.md)).
 
 ```sh
 git clone https://github.com/ibanks42/rc2fx
 cd rc2fx
-just setup            # once: the mixer's Rust target and cargo-zigbuild
-just app              # run the desktop app (debug build)
-just test             # tests and Clippy
+just setup                          # once: Rust target and cargo-zigbuild
+desktop/scripts/fetch-gpuikit.sh    # once: prebuilt UI library
+just app                            # run the desktop app (dev build)
+just test                           # run Go tests/vet (and Rust tests/clippy on Linux)
+just mixer-build                    # cross-build the mixer runtime into target/mixer
 ```
 
-The build works on Windows, Linux and macOS. The
-[developer guide](docs/developer/index.md) covers setup, working on a real
-mixer and the project layout.
+See the [developer guide](docs/developer/index.md) for setup details and how
+the project is organized.
 
 ## License
 
-RC2FX's own code and its trained noise suppression weights are licensed under
-[MIT](LICENSE-MIT). Third-party components keep their own licences, listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The datasets the weights
-were trained on are credited in
-[crates/rc2fx-dfn/model/PROVENANCE.md](crates/rc2fx-dfn/model/PROVENANCE.md);
-their own terms are not changed by this licence.
+RC2FX's code and trained noise suppression weights are MIT licensed
+([LICENSE-MIT](LICENSE-MIT)). Third-party licenses are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and training dataset credits
+are in [crates/rc2fx-dfn/model/PROVENANCE.md](crates/rc2fx-dfn/model/PROVENANCE.md).
 
-RC2FX is an unofficial project and is not affiliated with or endorsed by
-RØDE. It needs root access to the mixer and only runs on firmware it has been
-checked against. It is provided as is, without warranty. Installing it may
-void your warranty.
+RC2FX is an unofficial project and is not affiliated with or endorsed by RØDE.
+It is provided as-is without warranty, and installing it may void your
+warranty.

@@ -1,14 +1,11 @@
-/* RODECaster Pro II on-screen RC2FX panel (unfinished experiment).
- * GNU ld.so audit module for the exact 1.7.7 rc_gui_juce executable.
+/* RODECaster Pro II on-screen RC2FX panel (experimental).
+ * GNU ld.so audit module targeting the exact 1.7.7 rc_gui_juce binary.
  *
- * The vendor paints a PRIVATE shadow of its V4L2 OUTPUT mapping. Immediately
- * before its original QBUF, under its original repaint mutex, we copy the
- * shadow into the real driver mapping and draw the panel there. Vendor dirty
- * paints never see our pixels. A queued/failed-to-dequeue buffer is NEVER
- * written again. No foreign JUCE widgets, code patches, DRM-master takeover or second
- * evdev reader. A launcher opens/closes the panel in-process. Display changes
- * are acknowledged by the actual DRM page-flip event before touch ownership
- * can be returned to stock. A supervisor still bounds development trials.
+ * JUCE paints into a private shadow of its V4L2 OUTPUT buffer. Right before
+ * VIDIOC_QBUF (while the vendor repaint mutex is held), we copy the shadow into
+ * the real DMA mapping and composite the panel on top. Queued or failed-to-dequeue
+ * buffers are never touched again. Touch ownership only returns to stock after
+ * the DRM page-flip event acknowledges the new view.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -47,8 +44,7 @@
 #define PIXELS (WIDTH * HEIGHT * 4u)
 #define RAW_TOUCH_HEIGHT 720
 
-/* In this pinned executable, each is the instruction AFTER the imported call.
- * Identity is additionally checked with the full executable SHA-256 below. */
+/* Return addresses right after each hooked call in the pinned 1.7.7 binary (verified by SHA-256 below). */
 #define SITE_FMT       0x7cfe00u
 #define SITE_QUERY     0x7d002cu
 #define SITE_MMAP      0x7d004cu
@@ -74,9 +70,7 @@ static size_t source_length;
 static off_t source_offset;
 static bool format_ok, query_ok;
 static uint8_t *driver_pixels, *paint_pixels;
-/* These are used only on the original frame/IOCTL thread after initialization.
- * Allocation publishes before source QBUF; we never race vendor repainting:
- * the pinned conversion caller holds the vendor's shared repaint mutex. */
+/* Accessed only on the frame/ioctl thread after init; the caller holds the vendor repaint mutex. */
 static bool queued;
 static unsigned long frames;
 static int touch_fd = -1;
@@ -85,7 +79,7 @@ static ino_t touch_inode;
 static int raw_x, raw_y;
 static bool have_x, have_y;
 static _Atomic bool retiring_mapping;
-/* Only the original DRM frame thread writes these conversion fields. */
+/* Written only by the DRM frame thread. */
 static bool capture_dequeued, conversion_ready;
 static uint64_t source_view;
 static _Atomic uint64_t wanted_view;
@@ -111,7 +105,7 @@ struct UiScene {
     unsigned page;
     char selected[49];
 };
-/* A scene is published with its real flip, not when merely painted/queued. */
+/* Scenes become active on DRM page-flip completion, not when painted or queued. */
 static struct UiScene drawing_scene, displayed_scene;
 enum TicketState { TICKET_FREE, TICKET_QUEUED, TICKET_COMPLETE, TICKET_READING };
 struct FlipTicket { _Atomic unsigned state; struct UiScene scene; };
@@ -136,8 +130,7 @@ static pthread_mutex_t event_mutex=PTHREAD_MUTEX_INITIALIZER;
 static void *renderer_event;
 static bool pump_started;
 static void (*signal_renderer)(void *);
-/* ld.so audit modules have a separate libc/TLS namespace. errno must refer
- * to the caller's libc, NOT this module's errno, after a forwarded call. */
+/* Audit modules run in a separate libc/TLS namespace, so preserve and restore the host binary's errno. */
 static int *(*vendor_errno)(void);
 static int saved_vendor_errno(void) { return vendor_errno ? *vendor_errno() : 0; }
 static void restore_vendor_errno(int value) { if(vendor_errno)*vendor_errno()=value; }
@@ -146,7 +139,7 @@ static uintptr_t call_site(void *address) {
     return (uintptr_t)__builtin_extract_return_addr(address) - main_base;
 }
 
-/* Standalone SHA-256 so admission needs no OpenSSL or libjuce dependency. */
+/* Minimal standalone SHA-256 to avoid pulling in OpenSSL or libjuce. */
 struct sha256 { uint32_t h[8]; uint64_t bytes; uint8_t block[64]; size_t used; };
 static uint32_t rotr(uint32_t x, unsigned n) { return (x >> n) | (x << (32 - n)); }
 static void sha_block(struct sha256 *s, const uint8_t *p) {
@@ -215,7 +208,7 @@ static bool admitted_executable(void) {
 }
 
 static void note(const char *message) {
-    /* Only initialization, first frame, Close or fault, not per-frame logging. */
+    /* Low-volume lifecycle logging only (init, first frame, close, fault). */
     static const char prefix[]="RC2FX UI: ";
     (void)write(STDERR_FILENO,prefix,sizeof prefix-1);
     (void)write(STDERR_FILENO,message,strlen(message));
@@ -234,7 +227,7 @@ static void mark_session(const char *name) {
 static void request_exit(const char *reason) {
     if(atomic_exchange_explicit(&close_requested,true,memory_order_acq_rel))return;
     note(reason);
-    // Only private RAM files; never vendor settings or boot configuration.
+    /* Writes only to private RAM session files, never vendor or boot storage. */
     mark_session("close");
 }
 static void fault(const char *reason) {
@@ -242,8 +235,7 @@ static void fault(const char *reason) {
     if(!atomic_exchange_explicit(&failed,true,memory_order_acq_rel))request_exit(reason);
 }
 
-/* Original 5x7 lettering. Neutral greys/white avoid assuming V4L2 BA24 color
- * channels match DRM XR24; both byte orders render equal R/G/B correctly. */
+/* 5x7 bitmap font. Grayscale avoids depending on whether V4L2 BA24 channel order matches DRM XR24. */
 static const uint8_t font[26][7]={
  {14,17,17,31,17,17,17},{30,17,17,30,17,17,30},{14,17,16,16,16,17,14},
  {30,17,17,17,17,17,30},{31,16,16,30,16,16,31},{31,16,16,30,16,16,16},
@@ -286,17 +278,14 @@ static void draw_panel(void) {
     (void)ui_control_snapshot(&latest);
     drawing_scene.state=latest;
     if(pthread_mutex_trylock(&input_mutex)==0) {
-        // A view tag certifies these exact local contents. On contention keep
-        // the old tag too; never ACK a requested selection/page we failed to
-        // copy while its input handler was still publishing it.
+        /* Keep the previous view tag on lock contention so we never acknowledge a page/selection we didn't copy. */
         drawing_scene.view=atomic_load_explicit(&wanted_view,memory_order_acquire);
         drawing_scene.page=page;
         memcpy(drawing_scene.selected,selected_id,sizeof selected_id);
         pthread_mutex_unlock(&input_mutex);
     }
     source_view=drawing_scene.view;
-    /* Empty top-bar space in the user's photograph, clear of clock, monitor,
-     * Wi-Fi and the stock Settings button. This is always drawn last. */
+    /* Drawn last in the empty top-bar gap (clear of clock, monitor, Wi-Fi, and Settings). */
     rectangle(600,14,150,52,190);rectangle(603,17,144,46,35);
     text(630,29,"RC2FX",3,255);
     if(!(source_view&1))return;
@@ -342,8 +331,7 @@ static NOINLINE void *ui_mmap(void *address,size_t size,int prot,int flags,int f
        &&!driver_pixels&&!retiring_mapping&&mapped!=MAP_FAILED&&size==source_length
        &&offset==source_offset&&size>=PIXELS&&size<=16u*1024u*1024u
        &&prot==(PROT_READ|PROT_WRITE)&&flags==MAP_SHARED&&address==NULL) {
-        /* Different allocation: never expose the DMA-owned mapping to JUCE.
-         * Keep both mapped until process exit; teardown is preview-scoped. */
+        /* Hand JUCE a private shadow buffer instead of the DMA mapping; both stay mapped until exit. */
         void *shadow=mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
         if(shadow!=MAP_FAILED) {
             memcpy(shadow,mapped,size);
@@ -365,9 +353,8 @@ static NOINLINE int ui_ioctl(int fd,unsigned long request,uintptr_t argument) {
     if(copy) {
         struct v4l2_buffer *b=(void *)argument;
         if(queued) {
-            /* Crucial: timeout does NOT transfer a queued buffer back to CPU.
-             * Do not copy/restore/write or submit another buffer in that state.
-             * Supervisor terminates this preview, closing the driver normally. */
+            /* A timed-out buffer is still owned by the driver, so never write or re-queue it;
+             * let the supervisor exit and close the fd cleanly. */
             fault("previous V4L2 source is still queued; no memory write; returning to stock UI");
             restore_vendor_errno(EBUSY);return -1;
         }
@@ -462,15 +449,12 @@ static bool touch_quiet(int fd) {
         if(ioctl(fd,EVIOCGABS(ABS_X),&x)!=0||ioctl(fd,EVIOCGABS(ABS_Y),&y)!=0)return false;
         raw_x=x.value;raw_y=y.value;
     }
-    // A snapshot is not an ordering barrier if records arrived during it.
-    // No other code reads this FD; a final nonblocking readiness check means
-    // future records start from the coordinates just snapshotted above.
+    /* Verify no new events arrived during the ioctl snapshot so future reads start cleanly from this state. */
     struct pollfd p={.fd=fd,.events=POLLIN};
     if(poll(&p,1,0)!=0)return false;
     key_touch=false;key_left=false;return true;
 }
-/* Must hold input_mutex. Both the empty read/select and the final snapshot
- * must follow the exact acknowledged content epoch, not just an open bit. */
+/* Caller must hold input_mutex. Requires the empty read/select and snapshot to follow the exact acknowledged epoch. */
 static void release_barrier(int fd,uint64_t before) {
     uint64_t ack=atomic_load_explicit(&acknowledged_epoch,memory_order_acquire);
     if(!atomic_load_explicit(&failed,memory_order_acquire)&&!atomic_load_explicit(&retiring_mapping,memory_order_acquire)
@@ -533,9 +517,7 @@ static void finish_gesture(int x,int y) {
     default:break;
     }
 }
-/* Buffer exactly one complete evdev report before deciding ownership. Current
- * kernel coordinates MUST NOT classify older queued contacts. Unchanged axes
- * are retained per slot from a snapshot taken at an empty-queue barrier. */
+/* Buffer a full evdev report before deciding ownership; never use live kernel coordinates for queued events. */
 static void process_frame(void) {
     if(atomic_load_explicit(&failed,memory_order_acquire)||atomic_load_explicit(&retiring_mapping,memory_order_acquire)) {
         input_owner=INPUT_DRAIN;gesture_action=ACTION_NONE;return;
@@ -641,9 +623,7 @@ static NOINLINE ssize_t ui_read(int fd,void *buffer,size_t size) {
                 if(e->type==EV_SYN&&e->code==SYN_REPORT){process_frame();frame_count=0;}
             }
         }
-        // Neutral placeholders keep stock's existing record-drain loop moving.
-        // Complete stock-owned reports are replayed, byte-for-byte, before any
-        // more kernel records; panel gestures never produce a stock prefix.
+        /* Return a no-op SYN_REPORT to keep the vendor read loop moving; complete stock reports replay verbatim on subsequent reads. */
         e->type=EV_SYN;e->code=SYN_REPORT;e->value=0;
     }
     pthread_mutex_unlock(&input_mutex);restore_vendor_errno(saved);return n;
@@ -663,8 +643,7 @@ static NOINLINE int ui_select(int nfds,fd_set *reads,fd_set *writes,fd_set *exce
             return 1;
         }
     }
-    // A post-flip empty-queue barrier should not cost the stock 500 ms
-    // polling interval (or swallow the user's first launcher tap at startup).
+    /* Shorten the select timeout while draining so the post-flip barrier doesn't wait a full 500 ms stock poll. */
     struct timeval short_wait={.tv_usec=50000};
     struct timeval *effective=wait;
     if(draining&&wait&&(wait->tv_sec>0||wait->tv_usec>50000))effective=&short_wait;
@@ -700,8 +679,7 @@ static void acknowledge(struct FlipTicket *ticket) {
         mark_session("frame-ready");note("first RC2FX launcher scene physically presented");
     }
     atomic_store_explicit(&ticket->state,TICKET_COMPLETE,memory_order_release);
-    // Never discard a contended completion. The next read/select/commit will
-    // consume the retained scene; the callback itself never waits on input.
+    /* On lock contention, leave the ticket marked complete for the next read/select/commit so the DRM callback never blocks. */
     if(pthread_mutex_trylock(&input_mutex)==0){consume_completions();pthread_mutex_unlock(&input_mutex);}
 }
 static void page_flip(int fd,unsigned sequence,unsigned sec,unsigned usec,void *data) {
@@ -715,7 +693,7 @@ static void page_flip2(int fd,unsigned sequence,unsigned sec,unsigned usec,unsig
 }
 static bool same_bindings(const struct UiScene *a,const struct UiScene *b) {
     if(a->view!=b->view)return false;
-    if(!(a->view&1))return true; // Hidden panel data cannot change launcher hitboxes.
+    if(!(a->view&1))return true; /* Panel state doesn't affect hitboxes while hidden. */
     if(a->page!=b->page||strcmp(a->selected,b->selected)||a->state.count!=b->state.count
        ||a->state.revision!=b->state.revision||a->state.generation!=b->state.generation
        ||a->state.connected!=b->state.connected||a->state.ready!=b->state.ready||a->state.can_enable!=b->state.can_enable
@@ -737,8 +715,7 @@ static NOINLINE int ui_commit(int fd,void *request,uint32_t flags,void *data) {
                 drawing_scene.serial=++next_serial;
                 previous=drawing_scene;have_previous=true;ticket->scene=drawing_scene;
                 atomic_store_explicit(&ticket->state,TICKET_QUEUED,memory_order_release);
-                // Quarantine before the physical change, including paging and
-                // reordered preset IDs, not only modal open/close transitions.
+                /* Drain input until this commit flips, covering paging and preset list changes as well as open/close. */
                 atomic_store_explicit(&submitted_epoch,drawing_scene.epoch,memory_order_release);
             } else fault("unretired DRM page-flip tickets");
         }
@@ -754,8 +731,7 @@ static NOINLINE int ui_handle_event(int fd,drmEventContextPtr context) {
     if(!context||context->version<2||context->version>4) {
         fault("unsupported DRM callback context");return vendor_handle_event(fd,context);
     }
-    // Copy only fields belonging to the advertised version: older vendor
-    // contexts need not allocate the tail of today's public C struct.
+    /* Only copy fields present in the caller's drmEventContext version. */
     drmEventContext wrapped={.version=context->version};
     wrapped.vblank_handler=context->vblank_handler;
     previous_flip=context->page_flip_handler;wrapped.page_flip_handler=page_flip;
@@ -767,12 +743,10 @@ static NOINLINE int ui_handle_event(int fd,drmEventContextPtr context) {
     if(result!=0)fault("DRM event delivery failed");
     restore_vendor_errno(saved);return result;
 }
-/* The pinned frame loop waits on its native event BEFORE draining the prior
- * DRM flip. Stock animation is not a repaint guarantee. Wake that SAME native
- * event at a bounded rate, without constructing or patching any JUCE object.
- * Event wait/signal bodies and +8 mutex/+0x38 condition are byte-mapped for the
- * admitted GUI (signal 0x8bf130, wait 0x930100); the whole executable is hashed.
- */
+/* The vendor frame loop waits on a native event before draining the previous DRM flip.
+ * Wake that event periodically so panel updates render even when stock animations are idle.
+ * Offsets (+0x08 mutex, +0x38 condvar) and signal/wait addresses (0x8bf130 / 0x930100) are
+ * pinned to the SHA-256-verified 1.7.7 binary. */
 static void *frame_pump(void *unused) {
     (void)unused;
     cpu_set_t cpus;CPU_ZERO(&cpus);CPU_SET(0,&cpus);
@@ -799,9 +773,7 @@ static NOINLINE void ui_condition_wait(void *condition,void *lock) {
         void *native_mutex;memcpy(&native_mutex,lock,sizeof native_mutex);
         if(native_mutex!=(char *)event+8)fault("renderer event ABI mismatch");
         else if(pthread_mutex_trylock(&event_mutex)==0) {
-            // The caller still owns the native event mutex. Never block on
-            // our retirement lock here: the pump may own it while waiting
-            // for that native mutex. Entering the original wait releases it.
+            /* Caller holds the native event mutex; trylock avoids deadlocking against frame_pump while it signals. */
             renderer_event=event;
             if(!pump_started) {
                 pthread_t thread;
@@ -815,8 +787,7 @@ static NOINLINE void ui_condition_wait(void *condition,void *lock) {
 }
 static NOINLINE void ui_condition_destroy(void *condition) {
     if(is_gui()) {
-        // Serialize retirement with any in-flight native signal. The pump
-        // can never keep a pointer to an event after its condition destructor.
+        /* Synchronize with frame_pump so it never signals a destroyed condition variable. */
         pthread_mutex_lock(&event_mutex);
         if(renderer_event&&(char *)renderer_event+0x38==(char *)condition)renderer_event=NULL;
         pthread_mutex_unlock(&event_mutex);
@@ -826,14 +797,12 @@ static NOINLINE void ui_condition_destroy(void *condition) {
 static NOINLINE int ui_munmap(void *address,size_t size) {
     if(is_gui()&&paint_pixels&&(address==paint_pixels||address==driver_pixels)) {
         if(size!=source_length){fault("unexpected source unmap length");restore_vendor_errno(EINVAL);return -1;}
-        /* Keep the hidden real mapping until process exit, even when queued.
-         * Returning success for the vendor's shadow unmap cannot free DMA. */
+        /* Unmap only the shadow buffer; keep the DMA mapping alive until process exit. */
         atomic_store_explicit(&shadow_live,false,memory_order_release);
         pthread_mutex_lock(&event_mutex);renderer_event=NULL;pthread_mutex_unlock(&event_mutex);
         retiring_mapping=true;
         ui_control_revoke();
-        /* Initialization/reconfiguration is outside this preview. Do not
-         * allow a later map/QBUF to reuse a retired shadow or driver mapping. */
+        /* Re-initialization isn't supported in preview mode; exit back to the stock GUI. */
         request_exit("video source retired; returning to stock GUI");
         void *shadow=paint_pixels;paint_pixels=NULL;
         return vendor_munmap(shadow,size);
@@ -841,8 +810,7 @@ static NOINLINE int ui_munmap(void *address,size_t size) {
     return vendor_munmap(address,size);
 }
 static NOINLINE int ui_close(int fd) {
-    // Forked vendor helpers inherit this module before exec, but not its
-    // threads. Never touch copied mutexes or signal the parent's RAM session.
+    /* Forked children inherit the audit library without its threads; bypass GUI state and mutexes. */
     if(!is_gui())return vendor_close(fd);
     if(fd==video_fd) {
         if(atomic_load_explicit(&shadow_live,memory_order_acquire))
@@ -879,7 +847,7 @@ EXPORT void la_preinit(uintptr_t *cookie) {
     if(!errno_symbol){note("base libc errno unavailable; no hooks active");return;}
     _Static_assert(sizeof vendor_errno==sizeof errno_symbol,"ELF function pointer ABI");
     memcpy(&vendor_errno,&errno_symbol,sizeof vendor_errno);
-    /* Keep this existing-libc reference for the lifetime of the preview. */
+    /* Keep the base libc handle open for the lifetime of the process. */
     _Static_assert(sizeof(struct input_event)==24,"pinned input_event ABI");
     _Static_assert(sizeof(struct v4l2_buffer)==88,"pinned V4L2 ABI");
     _Static_assert(VIDIOC_QBUF==0xc058560fUL,"pinned ioctl ABI");
@@ -895,8 +863,7 @@ EXPORT uintptr_t la_symbind64(Elf64_Sym *symbol,unsigned int index,uintptr_t *re
     (void)index;(void)definition;
     uintptr_t original=(uintptr_t)symbol->st_value;
     if(*reference!=1)return original;
-    /* These wrappers use the imported C ABI only. No direct JUCE branches or
-     * vendor addresses are modified. Each real function is loader-supplied. */
+    /* Hook only imported C/C++ symbols via the loader; no binary patching. */
 #define BIND(symbol_name,storage,replacement) \
     if(strcmp(name,symbol_name)==0){ \
         _Static_assert(sizeof storage==sizeof original,"ELF function pointer ABI"); \

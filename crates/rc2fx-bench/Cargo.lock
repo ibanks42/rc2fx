@@ -151,7 +151,6 @@ version = "0.1.0"
 dependencies = [
  "hound",
  "libc",
- "rc2fx-core",
  "rc2fx-suppression",
  "serde_json",
 ]

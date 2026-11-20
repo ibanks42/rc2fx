@@ -10,7 +10,6 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn import arm64_const as regs
 
 from .canonical import canonical
-from .elf import Image
 from .__main__ import checked_image, ROOT
 
 
@@ -99,8 +98,7 @@ def call_at(image, address):
 
 def named_usb_connections(image, port_events):
     m = Machine(image)
-    # Execute the complete vendor port handler, stubbing only JUCE strings,
-    # deallocation, and the virtual JACK connection operation.
+    # Run the full vendor port handler, stubbing only JUCE strings, free/delete, and JACK connect.
     starts, compare = call_at(image, port_events + 0x1C), call_at(image, port_events + 0x3C)
     construct, to_string = call_at(image, port_events + 0x68), call_at(image, port_events + 0x74)
     destroy = call_at(image, port_events + 0x9C)
@@ -136,8 +134,7 @@ def named_usb_connections(image, port_events):
 
 
 def monitor_fields(image, board):
-    # These two stores identify the independently initialized physical-output
-    # count / monitor-left index and the board-specific right-index override.
+    # Locate the default hardware-output/monitor-left store and the Duo monitor-right override.
     text = image.elf.get_section_by_name(".text")
     stores, overrides = [], []
     for address, _, operation, operands in image.disassembler.disasm_lite(text.data(), text["sh_addr"]):
@@ -184,7 +181,7 @@ def monitor_fields(image, board):
 
 
 def regs_cap(image, name):
-    # Register IDs belong to Capstone, not Unicorn.
+    # Capstone register IDs (distinct from Unicorn's).
     from capstone import arm64
     return getattr(arm64, "ARM64_REG_" + name.upper())
 

@@ -9,21 +9,14 @@ pub(crate) fn validate(options: WorkerOptions) -> Result<(), Error> {
     {
         return Err(Error::Scheduling);
     }
-    #[cfg(not(target_os = "linux"))]
-    if options.cpu_mask.is_some() || options.realtime_priority.is_some() || options.nice.is_some() {
-        return Err(Error::Scheduling);
-    }
     Ok(())
 }
-#[cfg(target_os = "linux")]
 pub(crate) fn apply(options: WorkerOptions) -> Result<(), Error> {
     apply_scope(options, false)
 }
-#[cfg(target_os = "linux")]
 pub(crate) fn apply_kernel_allowed(options: WorkerOptions) -> Result<(), Error> {
     apply_scope(options, true)
 }
-#[cfg(target_os = "linux")]
 fn apply_scope(options: WorkerOptions, kernel_allowed: bool) -> Result<(), Error> {
     validate(options)?;
     // SAFETY: all calls target this owned worker; valid stack structs, no
@@ -94,8 +87,7 @@ fn apply_scope(options: WorkerOptions, kernel_allowed: bool) -> Result<(), Error
             if libc::pthread_setschedparam(thread, libc::SCHED_OTHER, &param) != 0 {
                 return Err(Error::Scheduling);
             }
-            // The raw call: glibc only has gettid() from 2.30, and the checks
-            // build on 2.28.
+            // Raw syscall because glibc only added `gettid()` in 2.30 and CI builds on 2.28.
             let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
             if libc::setpriority(libc::PRIO_PROCESS, tid, nice as libc::c_int) != 0 {
                 return Err(Error::Scheduling);
@@ -116,16 +108,8 @@ fn apply_scope(options: WorkerOptions, kernel_allowed: bool) -> Result<(), Error
     }
     Ok(())
 }
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn apply(options: WorkerOptions) -> Result<(), Error> {
-    validate(options)
-}
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn apply_kernel_allowed(options: WorkerOptions) -> Result<(), Error> {
-    apply(options)
-}
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -229,10 +213,8 @@ mod tests {
         .join()
         .unwrap();
     }
-    /// Raising nice needs no privilege, so this runs anywhere; it leaves the
-    /// thread as SCHED_OTHER at the requested value. The value asked for is
-    /// 5, or the test's own nice value when that is already higher (a test
-    /// run under `nice -n 10` may not lower it).
+    // Raising nice requires no privileges, so this works unprivileged (clamped
+    // to >= current nice in case the test runner itself is already niced).
     #[test]
     fn nice_requests_ordinary_scheduling_at_that_value() {
         std::thread::spawn(|| unsafe {

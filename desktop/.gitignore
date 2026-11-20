@@ -1,0 +1,7 @@
+# A link to an unpacked gpuikit download (see README.md); never committed.
+/third_party/gpuikit
+/third_party/gpuikit-diag
+/third_party/.fetch-gpuikit.*
+/bin/
+# Velopack's C library, from scripts/fetch-velopack.sh; never committed.
+/third_party/velopack/

@@ -1,4 +1,4 @@
-"""Separate observing faults from the final zero-fault qualification verdict."""
+"""Track observed faults across checkpoints without losing the overall pass/fail verdict."""
 class ObservationPolicy:
     def __init__(self, keep_going=False):
         self.keep_going=keep_going

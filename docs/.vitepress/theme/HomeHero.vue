@@ -18,10 +18,10 @@ const platforms = [
   {
     id: 'macos',
     name: 'macOS',
-    arch: 'Apple silicon',
+    arch: 'Apple silicon & Intel',
     links: [
-      { label: 'Installer (.pkg)', short: 'Download for macOS', href: file('rc2fx-macos-arm64.pkg') },
-      { label: 'Portable (.zip)', short: 'Portable .zip', href: file('rc2fx-macos-arm64.zip') },
+      { label: 'Installer (.pkg)', short: 'Download for macOS', href: file('rc2fx-macos-universal.pkg') },
+      { label: 'Portable (.zip)', short: 'Portable .zip', href: file('rc2fx-macos-universal.zip') },
     ],
   },
   {
@@ -39,7 +39,7 @@ const mine = ref(null)
 const version = ref(null)
 
 // The user agent first: it is what every browser sends and what overrides
-// change. navigator.platform is only a fallback for an unrecognised agent.
+// change. navigator.platform is only a fallback for an unrecognized agent.
 function detect() {
   const ua = navigator.userAgent.toLowerCase()
   if (/android|iphone|ipad|ipod|mobile/.test(ua)) return null

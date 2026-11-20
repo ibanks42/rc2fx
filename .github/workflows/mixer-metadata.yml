@@ -14,8 +14,7 @@ concurrency:
 
 jobs:
   renew:
-    # The emergency stop: set the variable to false if a signing key leaks
-    # (docs/developer/mixer-releases.md).
+    # Kill switch in case a signing key is compromised (see docs/developer/mixer-releases.md).
     if: vars.MIXER_UPDATES_ENABLED == 'true'
     runs-on: ubuntu-24.04
     environment: mixer-renewal
@@ -29,9 +28,13 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
+      # Disable build cache in jobs with signing key access; build from checkout + go.sum only.
+      - uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: desktop/go.mod
+          cache: false
       - name: Build renewal tool without signing credentials
-        run: cargo build --locked -p xtask
+        run: CGO_ENABLED=0 go -C desktop build -o "$RUNNER_TEMP/rc2fx-xtask" ./cmd/xtask
       - name: Fetch existing signed metadata
         env:
           REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
@@ -49,7 +52,7 @@ jobs:
           unset MIXER_SNAPSHOT_KEY MIXER_TIMESTAMP_KEY
           sequence=$(date -u +%s)
           expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
-          target/debug/xtask mixer-refresh config/mixer-update-root.json target/current-mixer-metadata target/renewed-mixer-metadata "$sequence" "$expires" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
+          RC2FX_XTASK_ROOT="$GITHUB_WORKSPACE" "$RUNNER_TEMP/rc2fx-xtask" mixer-refresh config/mixer-update-root.json target/current-mixer-metadata target/renewed-mixer-metadata "$sequence" "$expires" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
       - name: Commit snapshot and timestamp to the metadata branch
         env:
           GH_TOKEN: ${{ github.token }}

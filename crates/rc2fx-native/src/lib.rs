@@ -1,6 +1,11 @@
-//! Private ELF-audit/DSP feasibility probe; never a device installation.
-#![cfg(all(target_os = "linux", target_pointer_width = "64"))]
+//! Mixer-side audio library injected into `rc_audio_mixer` via `LD_AUDIT`.
+#![cfg(target_pointer_width = "64")]
 
+#[cfg(not(target_os = "linux"))]
+compile_error!("rc2fx's mixer crates build for Linux only");
+
+mod audit_report;
+mod backend;
 mod chat_mix;
 mod client_timing;
 mod client_timing_events;
@@ -19,7 +24,6 @@ mod timing;
 mod transactions;
 mod usb_control;
 mod vendor_job;
-mod vendor_wait;
 mod vendor_wake;
 
 use std::{
@@ -31,7 +35,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -120,14 +124,94 @@ static CYCLE: Line<CycleCounters> = Line(CycleCounters {
     gaps: [const { AtomicU64::new(0) }; 7],
 });
 
+/// Whether a context's pipeline still waits for its client's ports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Attach {
+    /// Built once the client's planned ports are registered.
+    Pending,
+    /// Not waiting: built at registration or after the ports, refused, or
+    /// never planned.
+    Settled,
+}
+
+/// Where a context slot is in its lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    /// Unclaimed; a new registration may take it.
+    Free,
+    /// Claimed and the client's installed callback: control requests and
+    /// reports reach it.
+    Live(Attach),
+    /// Claimed but not the installed callback: native registration has not
+    /// succeeded yet, failed, been replaced by a newer one, or the client is
+    /// being closed. Kept until native close quiesces its callbacks.
+    Retained(Attach),
+}
+impl Slot {
+    const FREE: u8 = 0;
+    const RETAINED_PENDING: u8 = 1;
+    const RETAINED_SETTLED: u8 = 2;
+    const LIVE_PENDING: u8 = 3;
+    const LIVE_SETTLED: u8 = 4;
+    const fn to_u8(self) -> u8 {
+        match self {
+            Self::Free => Self::FREE,
+            Self::Retained(Attach::Pending) => Self::RETAINED_PENDING,
+            Self::Retained(Attach::Settled) => Self::RETAINED_SETTLED,
+            Self::Live(Attach::Pending) => Self::LIVE_PENDING,
+            Self::Live(Attach::Settled) => Self::LIVE_SETTLED,
+        }
+    }
+    /// Total: only `to_u8` writes the atomic, so other values never occur.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            Self::RETAINED_PENDING => Self::Retained(Attach::Pending),
+            Self::RETAINED_SETTLED => Self::Retained(Attach::Settled),
+            Self::LIVE_PENDING => Self::Live(Attach::Pending),
+            Self::LIVE_SETTLED => Self::Live(Attach::Settled),
+            _ => Self::Free,
+        }
+    }
+    const fn is_claimed(self) -> bool {
+        !matches!(self, Self::Free)
+    }
+    const fn is_live(self) -> bool {
+        matches!(self, Self::Live(_))
+    }
+    /// The same slot, installed or not, keeping its attach state.
+    const fn installed(self, installed: bool) -> Self {
+        match self {
+            Self::Free => Self::Free,
+            Self::Live(attach) | Self::Retained(attach) if installed => Self::Live(attach),
+            Self::Live(attach) | Self::Retained(attach) => Self::Retained(attach),
+        }
+    }
+}
+
+/// A context's `Slot`, in one atomic so that a reader without CONTROL sees a
+/// consistent lifetime. Only CONTROL holders change it; the audio callback
+/// never reads it.
+struct Lifecycle(AtomicU8);
+impl Lifecycle {
+    const fn new() -> Self {
+        Self(AtomicU8::new(Slot::FREE))
+    }
+    fn load(&self, order: Ordering) -> Slot {
+        Slot::from_u8(self.0.load(order))
+    }
+    fn store(&self, slot: Slot, order: Ordering) {
+        self.0.store(slot.to_u8(), order);
+    }
+}
+
 /// One wrapped callback registration. Its callback thread reads the head and
 /// writes the timing and the stamps every cycle, so each context starts on a
 /// cache line and shares none with anything else.
 #[repr(align(64))]
 struct Context {
-    claimed: AtomicBool,
-    installed: AtomicBool,
-    pending: AtomicBool,
+    /// Published last on claim and cleared last on close, with Release, so a
+    /// reader that loads it with Acquire sees the fields it guards.
+    slot: Lifecycle,
     token: AtomicU64,
     client: AtomicUsize,
     callback: AtomicUsize,
@@ -145,9 +229,7 @@ struct Context {
 impl Context {
     const fn new() -> Self {
         Self {
-            claimed: AtomicBool::new(false),
-            installed: AtomicBool::new(false),
-            pending: AtomicBool::new(false),
+            slot: Lifecycle::new(),
             token: AtomicU64::new(0),
             client: AtomicUsize::new(0),
             callback: AtomicUsize::new(0),
@@ -192,10 +274,6 @@ static UNREGISTER: AtomicUsize = AtomicUsize::new(0);
 static PLAN_ERRORS: AtomicU64 = AtomicU64::new(0);
 static PIPELINES_CREATED: AtomicU64 = AtomicU64::new(0);
 static PIPELINES_RETIRED: AtomicU64 = AtomicU64::new(0);
-static INPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
-static OUTPUT_BLOCKS: AtomicU64 = AtomicU64::new(0);
-static DSP_FAULTS: AtomicU64 = AtomicU64::new(0);
-static SKIPPED_OUTPUTS: AtomicU64 = AtomicU64::new(0);
 static REGISTRATIONS: AtomicU64 = AtomicU64::new(0);
 /// `jack_port_get_buffer` calls from outside the wrapped callback (the USB
 /// clients, on their own threads). Counted only while the bench gauges are on.
@@ -299,10 +377,7 @@ pub(crate) fn context_cycle_start(owner: usize) -> u64 {
         .load(Ordering::Relaxed)
 }
 
-/// The engine-wide numbers every control reply carries: JACK xrun
-/// notifications and the helper's late finishes and busy callbacks. All are
-/// atomics the audio path already writes; none is sampled here.
-/// The engine event ring's newest entries, mapped to the control types.
+/// Maps the newest entries from the engine event ring to control wire types.
 fn engine_events() -> Vec<rc2fx_native_control::NativeEvent> {
     probe::recent_events()
         .into_iter()
@@ -480,10 +555,7 @@ pub unsafe extern "C" fn la_preinit(_: *mut usize) {
             }
         }
     }
-    if std::env::var_os("RC2FX_FIRMWARE_PROFILE").is_some()
-        || std::env::var_os("RC2FX_NATIVE_PROBE_CALLBACK_OFFSET").is_some()
-        || enabled(c"RC2FX_NATIVE_PROBE_VENDOR_JOB_LIFETIME")
-    {
+    if std::env::var_os("RC2FX_FIRMWARE_PROFILE").is_some() {
         // The mixer passes its environment to ordinary vendor exec helpers.
         // Those helpers must not receive a repair or new stderr diagnostics.
         let vendor_process = std::fs::read_link("/proc/self/exe")
@@ -521,8 +593,7 @@ pub unsafe extern "C" fn la_preinit(_: *mut usize) {
     }
 }
 
-/// Resolve all addresses from one hash-selected, ABI-validated profile. A probe
-/// offset can confirm that profile, but cannot bypass its identity checks.
+/// Resolve all addresses from one hash-selected, ABI-validated profile.
 fn select_firmware() -> Result<usize, String> {
     use rc2fx_firmware::{Catalog, DEFAULT_CATALOG};
     let catalog = match std::env::var_os("RC2FX_FIRMWARE_PROFILES") {
@@ -547,18 +618,10 @@ fn select_firmware() -> Result<usize, String> {
         .ok_or("profile has no qualified runtime")?
         .callback
         .offset()?;
-    if let Ok(requested) = std::env::var("RC2FX_NATIVE_PROBE_CALLBACK_OFFSET") {
-        let requested = usize::from_str_radix(requested.trim_start_matches("0x"), 16)
-            .map_err(|e| e.to_string())?;
-        if requested != offset {
-            return Err("probe callback offset does not match the firmware profile".into());
-        }
-    }
     vendor_job::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     chat_mix::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
-    vendor_wait::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
     vendor_wake::install(MAIN_BASE.load(Ordering::Acquire), profile)?;
-    jack_cache::install(profile)?;
+    jack_cache::install();
     let _ = FIRMWARE_PROFILE.set(profile.id.clone());
     Ok(offset)
 }
@@ -696,11 +759,12 @@ unsafe fn native_registration(
     let result = unsafe { original(client, callback, argument) };
     if result == 0 {
         for context in &CONTEXTS {
-            if context.claimed.load(Ordering::Acquire)
-                && context.client.load(Ordering::Relaxed) == client as usize
-            {
-                context.installed.store(
-                    installed.is_some_and(|selected| std::ptr::eq(context, selected)),
+            let slot = context.slot.load(Ordering::Acquire);
+            if slot.is_claimed() && context.client.load(Ordering::Relaxed) == client as usize {
+                context.slot.store(
+                    slot.installed(
+                        installed.is_some_and(|selected| std::ptr::eq(context, selected)),
+                    ),
                     Ordering::Release,
                 );
             }
@@ -724,7 +788,7 @@ unsafe extern "C" fn set_xrun(
     let original: SetXrun = unsafe { std::mem::transmute(pointer) };
     // libjack is loaded by now, so its xrun delay getter can be found here
     // once, on the control path.
-    let _ = probe::resolve_xrun_delayed();
+    probe::resolve_xrun_delayed();
     let Some(callback) = callback else {
         probe::register_vendor_xrun(client as usize, 0, 0);
         return unsafe { original(client, None, argument) };
@@ -780,7 +844,7 @@ unsafe extern "C" fn set_process(
     // instead of allocating and immediately destroying a DSP on exhaustion.
     let Some(context) = CONTEXTS
         .iter()
-        .find(|context| !context.claimed.load(Ordering::Acquire))
+        .find(|context| !context.slot.load(Ordering::Acquire).is_claimed())
     else {
         CAPACITY_FAILURES.fetch_add(1, Ordering::Relaxed);
         // Retained contexts cannot be reclaimed until native close quiesces
@@ -818,7 +882,6 @@ unsafe extern "C" fn set_process(
         None
     };
     context.client.store(client as usize, Ordering::Relaxed);
-    context.pending.store(pending, Ordering::Release);
     // CONTROL serializes token assignment. A reused client pointer or static
     // context slot cannot accept a request for its previous installed lifetime.
     NEXT_CONTEXT_TOKEN.store(token + 1, Ordering::Relaxed);
@@ -831,7 +894,15 @@ unsafe extern "C" fn set_process(
             .store(Box::into_raw(engine), Ordering::Release);
         PIPELINES_CREATED.fetch_add(1, Ordering::Relaxed);
     }
-    context.claimed.store(true, Ordering::Release);
+    // Not yet installed: native registration below makes it live.
+    context.slot.store(
+        Slot::Retained(if pending {
+            Attach::Pending
+        } else {
+            Attach::Settled
+        }),
+        Ordering::Release,
+    );
     // Retain old/failed registrations until successful native close. Context
     // addresses are static; no racing callback can observe a freed allocation.
     let result = unsafe {
@@ -850,7 +921,7 @@ unsafe extern "C" fn set_process(
     drop(controls);
     drop(registry);
     if result == 0 && !pending {
-        start_control_server();
+        backend::start_control_server();
     }
     result
 }
@@ -1006,13 +1077,8 @@ fn record_gap(gap: u64) {
         probe::record(probe::Kind::Gap, gap);
     }
 }
-/// The mixer's `jack_port_get_buffer`, on every thread that fetches a buffer:
-/// about 68 times a cycle in the wrapped callback and 40 on the USB client
-/// threads. It writes nothing shared. Inside a callback frame it adds to the
-/// thread's own count; outside one it counts only while the bench gauges are
-/// on.
-/// One buffer lookup inside a callback frame: the cache may answer without
-/// calling libjack, and a miss records what the real function returned.
+/// Cached `jack_port_get_buffer` lookup inside a callback frame; misses fall
+/// through to `get` and populate the cache.
 ///
 /// # Safety
 /// `port` and `frames` are the caller's `jack_port_get_buffer` arguments and
@@ -1108,7 +1174,7 @@ unsafe extern "C" fn register(
     let attached = attach_pending(&registry, client as usize);
     drop(registry);
     if attached {
-        start_control_server();
+        backend::start_control_server();
     }
     port
 }
@@ -1124,14 +1190,14 @@ fn attach_pending(registry: &pipeline::Registry, client: usize) -> bool {
     }
     let mut attached = false;
     for context in &CONTEXTS {
-        if !context.claimed.load(Ordering::Acquire)
-            || !context.installed.load(Ordering::Acquire)
+        if context.slot.load(Ordering::Acquire) != Slot::Live(Attach::Pending)
             || context.client.load(Ordering::Relaxed) != client
-            || !context.pending.load(Ordering::Acquire)
         {
             continue;
         }
-        context.pending.store(false, Ordering::Release);
+        context
+            .slot
+            .store(Slot::Live(Attach::Settled), Ordering::Release);
         let Ok(mut controls) = context.parameters.lock() else {
             continue;
         };
@@ -1180,22 +1246,16 @@ unsafe extern "C" fn close(client: *mut c_void) -> c_int {
     if result == 0 {
         registry.close(client as usize);
         for context in &CONTEXTS {
-            if context.claimed.load(Ordering::Relaxed)
+            if context.slot.load(Ordering::Relaxed).is_claimed()
                 && context.client.load(Ordering::Relaxed) == client as usize
             {
                 let engine = context
                     .pipeline
                     .swap(std::ptr::null_mut(), Ordering::AcqRel);
                 if !engine.is_null() {
-                    // Native close has quiesced the client. Destruction and
-                    // telemetry collection stay on this control caller.
-                    let engine = unsafe { Box::from_raw(engine) };
-                    let counters = engine.counters();
-                    INPUT_BLOCKS.fetch_add(counters.input_blocks, Ordering::Relaxed);
-                    OUTPUT_BLOCKS.fetch_add(counters.output_blocks, Ordering::Relaxed);
-                    DSP_FAULTS.fetch_add(counters.faults, Ordering::Relaxed);
-                    SKIPPED_OUTPUTS.fetch_add(counters.skipped_outputs, Ordering::Relaxed);
-                    drop(engine);
+                    // Native close has quiesced the client. Destruction stays
+                    // on this control caller.
+                    drop(unsafe { Box::from_raw(engine) });
                     PIPELINES_RETIRED.fetch_add(1, Ordering::Relaxed);
                 }
                 // The native callback and its parameter readers have stopped.
@@ -1203,14 +1263,16 @@ unsafe extern "C" fn close(client: *mut c_void) -> c_int {
                 if let Ok(mut controls) = context.parameters.lock() {
                     controls.clear();
                 }
-                context.installed.store(false, Ordering::Release);
+                // No longer reported as live, and no longer waiting for ports.
+                context
+                    .slot
+                    .store(Slot::Retained(Attach::Settled), Ordering::Release);
                 context.timing.retire_into(&RETIRED_TIMING);
-                context.pending.store(false, Ordering::Release);
                 context.token.store(0, Ordering::Relaxed);
                 context.callback.store(0, Ordering::Relaxed);
                 context.argument.store(0, Ordering::Relaxed);
                 context.client.store(0, Ordering::Relaxed);
-                context.claimed.store(false, Ordering::Release);
+                context.slot.store(Slot::Free, Ordering::Release);
                 RECLAIMED.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -1218,220 +1280,14 @@ unsafe extern "C" fn close(client: *mut c_void) -> c_int {
     result
 }
 
-fn parameter_error(error: parameters::Error) -> rc2fx_native_control::ErrorCode {
-    match error {
-        parameters::Error::WrongTarget => rc2fx_native_control::ErrorCode::Unavailable,
-        parameters::Error::Busy => rc2fx_native_control::ErrorCode::Busy,
-        parameters::Error::SuppressionInUse => rc2fx_native_control::ErrorCode::SuppressionInUse,
-        parameters::Error::RequiresReset => rc2fx_native_control::ErrorCode::RequiresReset,
-        parameters::Error::StaleRevision => rc2fx_native_control::ErrorCode::StaleRevision,
-        parameters::Error::Invalid => rc2fx_native_control::ErrorCode::InvalidParameters,
-        parameters::Error::Poisoned | parameters::Error::Runtime => {
-            rc2fx_native_control::ErrorCode::Internal
-        }
-    }
-}
-fn lock_error<T>(error: std::sync::TryLockError<T>) -> rc2fx_native_control::ErrorCode {
-    match error {
-        std::sync::TryLockError::WouldBlock => rc2fx_native_control::ErrorCode::Busy,
-        std::sync::TryLockError::Poisoned(_) => rc2fx_native_control::ErrorCode::Internal,
-    }
-}
-fn target_status(
-    control: &mut parameters::Control,
-) -> Result<rc2fx_native_control::TargetStatus, rc2fx_native_control::ErrorCode> {
-    let status = control.status().map_err(parameter_error)?;
-    let worker = control.worker_status();
-    let worker_recent_max_ns = control.worker_recent_turnaround_ns();
-    let (misses, lates) = match control.worker_histories() {
-        Some((misses, lates)) => (Some(misses), Some(lates)),
-        None => (None, None),
-    };
-    Ok(rc2fx_native_control::TargetStatus {
-        id: control.id().into(),
-        published: status.published,
-        seen: status.seen,
-        applied: status.applied,
-        fingerprint: status.fingerprint,
-        mode: status.mode,
-        runtime_epoch: status.runtime_epoch,
-        meter: status.meter,
-        worker,
-        worker_recent_max_ns,
-        misses,
-        lates,
-        retired_workers: control.retired_workers(),
-        retired_worker_count: control.retired_worker_count(),
-    })
-}
-fn with_parameter_control<T>(
-    token: u64,
-    id: &str,
-    apply: impl FnOnce(&mut parameters::Control) -> Result<T, rc2fx_native_control::ErrorCode>,
-) -> Result<T, rc2fx_native_control::ErrorCode> {
-    // Return backpressure instead of waiting behind a native lifecycle call.
-    let _registry = CONTROL.try_lock().map_err(lock_error)?;
-    let Some(context) = CONTEXTS.iter().find(|context| {
-        context.claimed.load(Ordering::Acquire)
-            && context.installed.load(Ordering::Acquire)
-            && context.token.load(Ordering::Relaxed) == token
-    }) else {
-        return Err(rc2fx_native_control::ErrorCode::Unavailable);
-    };
-    let mut controls = context.parameters.try_lock().map_err(lock_error)?;
-    let Some(control) = controls.iter_mut().find(|control| control.id() == id) else {
-        return Err(rc2fx_native_control::ErrorCode::Unavailable);
-    };
-    apply(control)
-}
-#[derive(Default)]
-struct NativeBackend {
-    transactions: transactions::Manager,
-}
-struct LiveEndpoints;
-impl transactions::Endpoints for LiveEndpoints {
-    fn prepare(
-        &mut self,
-        transaction: &rc2fx_native_control::Transaction,
-        target: &rc2fx_core::Target,
-        mode: rc2fx_native_control::PathMode,
-    ) -> Result<parameters::Staged, rc2fx_native_control::ErrorCode> {
-        with_parameter_control(transaction.context, &transaction.target_id, |control| {
-            control
-                .prepare_mode(target, transaction.revision, mode)
-                .map_err(parameter_error)
-        })
-    }
-    fn commit(
-        &mut self,
-        transaction: &rc2fx_native_control::Transaction,
-        staged: &mut Option<parameters::Staged>,
-    ) -> Result<(), rc2fx_native_control::ErrorCode> {
-        with_parameter_control(transaction.context, &transaction.target_id, |control| {
-            let staged = staged
-                .take()
-                .ok_or(rc2fx_native_control::ErrorCode::Unavailable)?;
-            control.reserve(staged).map_err(parameter_error)?.commit();
-            Ok(())
-        })
-    }
-    fn status(
-        &mut self,
-        transaction: &rc2fx_native_control::Transaction,
-    ) -> Result<rc2fx_native_control::TargetStatus, rc2fx_native_control::ErrorCode> {
-        with_parameter_control(transaction.context, &transaction.target_id, |control| {
-            target_status(control)
-        })
-    }
-}
-impl ipc::Backend for NativeBackend {
-    fn inventory(
-        &mut self,
-    ) -> Result<Vec<rc2fx_native_control::ContextStatus>, rc2fx_native_control::ErrorCode> {
-        self.transactions.reap(std::time::Instant::now());
-        let _registry = CONTROL.try_lock().map_err(lock_error)?;
-        let mut inventory = Vec::new();
-        // A retired context's last callback peak is reported once, with the
-        // inventory that follows its retirement.
-        let retired_recent = RETIRED_TIMING.take_callback_recent();
-        for context in &CONTEXTS {
-            if !context.claimed.load(Ordering::Acquire)
-                || !context.installed.load(Ordering::Acquire)
-            {
-                continue;
-            }
-            let mut controls = context.parameters.try_lock().map_err(lock_error)?;
-            let targets = controls
-                .iter_mut()
-                .map(target_status)
-                .collect::<Result<Vec<_>, _>>()?;
-            let recent = context.timing.take_callback_recent().max(retired_recent);
-            inventory.push(rc2fx_native_control::ContextStatus {
-                context: context.token.load(Ordering::Relaxed),
-                targets,
-                // Live context plus what already retired: the app's view stays
-                // monotonic across rebuilds, which is what its fault counters
-                // need to see.
-                timing: Some(context.timing.merged_with(RETIRED_TIMING.snapshot())),
-                recent_callback_wall_ns: (recent != 0).then_some(recent),
-                counters: engine_counters(),
-                events: engine_events(),
-            });
-        }
-        Ok(inventory)
-    }
-    fn status(
-        &mut self,
-        context: u64,
-        id: &str,
-    ) -> Result<rc2fx_native_control::TargetStatus, rc2fx_native_control::ErrorCode> {
-        self.transactions.reap(std::time::Instant::now());
-        with_parameter_control(context, id, target_status)
-    }
-    fn prepare(
-        &mut self,
-        transaction: &rc2fx_native_control::Transaction,
-        target: &rc2fx_core::Target,
-        mode: rc2fx_native_control::PathMode,
-    ) -> Result<(), rc2fx_native_control::ErrorCode> {
-        self.transactions.prepare(
-            transaction,
-            target,
-            mode,
-            std::time::Instant::now(),
-            &mut LiveEndpoints,
-        )
-    }
-    fn commit(
-        &mut self,
-        transaction: &rc2fx_native_control::Transaction,
-    ) -> Result<(), rc2fx_native_control::ErrorCode> {
-        self.transactions
-            .commit(transaction, std::time::Instant::now(), &mut LiveEndpoints)
-    }
-    fn cancel(
-        &mut self,
-        transaction: &rc2fx_native_control::Transaction,
-    ) -> Result<(), rc2fx_native_control::ErrorCode> {
-        self.transactions
-            .cancel(transaction, std::time::Instant::now())
-    }
-}
-fn start_control_server() {
-    start_report_refresh();
-    let Some(path) = CONTROL_SOCKET.get() else {
-        return;
-    };
-    SERVER.get_or_init(|| {
-        Mutex::new(
-            match ipc::Server::start(path, NativeBackend::default(), Some(&CONTROL_ADMISSION)) {
-                Ok(server) => Some(server),
-                Err(_) => {
-                    SERVER_ERRORS.fetch_add(1, Ordering::Relaxed);
-                    None
-                }
-            },
-        )
-    });
-}
-fn stop_control_server() -> bool {
-    let Some(server) = SERVER.get() else {
-        return true;
-    };
-    let Ok(mut server) = server.lock() else {
-        return false;
-    };
-    server.as_mut().is_none_or(|server| server.shutdown())
-}
-
 /// # Safety
 /// The loader owns this cookie and invokes main-object finalization on exit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn la_objclose(cookie: *mut usize) -> c_uint {
     if unsafe { *cookie } == MAIN {
-        let stopped = stop_control_server();
-        write_report();
-        // Research-only finalization gate: returning while receiver code is
+        let stopped = backend::stop_control_server();
+        audit_report::write_report();
+        // Finalization gate: returning while receiver code is
         // still executing would permit unsafe library teardown.
         if !stopped {
             std::process::abort();
@@ -1440,956 +1296,9 @@ pub unsafe extern "C" fn la_objclose(cookie: *mut usize) -> c_uint {
     0
 }
 
-fn write_report() {
-    let held = publishing();
-    if REPORT_SELECTED_ONLY.load(Ordering::Relaxed) && !SELECTOR_SEEN.load(Ordering::Relaxed) {
-        return;
-    }
-    let Some(path) = REPORT.get() else {
-        return;
-    };
-    let report = build_report();
-    let _ = publish_report(&held, path, &report, |partial| {
-        std::fs::File::create(partial)
-    });
-}
-/// The audit report. Report thread and finalization only.
-fn build_report() -> serde_json::Value {
-    let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-    // Bench-only measurements are null without the gauges, never a zero that
-    // could be read as a measured value.
-    let gauged = gauges::enabled();
-    let retained = CONTEXTS
-        .iter()
-        .filter(|context| context.claimed.load(Ordering::Acquire))
-        .count();
-    let mut report = serde_json::json!({"probeOnly":true,"dspEnabled":read(&INPUT_BLOCKS)+read(&OUTPUT_BLOCKS)>0,
-        "registrations":read(&REGISTRATIONS),"callbacks":read(&CYCLE.callbacks),"buffersInside":read(&CYCLE.buffer_calls_inside),
-        "buffersOutside":gauged.then(|| read(&BUFFER_CALLS_OUTSIDE)),"directBindings":read(&DIRECT_BINDINGS),"dlsymBindings":read(&DLSYM_BINDINGS),
-        "bindingsDuringCallback":read(&CALLBACK_BINDINGS),"conflicts":read(&CONFLICTS),"capacityFailures":read(&CAPACITY_FAILURES),
-        "teardownForwards":read(&TEARDOWN_FORWARDS),
-        "reclaimedContexts":read(&RECLAIMED),"retainedContexts":retained,"callbackAllocations":read(&CALLBACK_ALLOCATIONS),
-        "callbackFrees":read(&CALLBACK_FREES),"callbackReallocations":read(&CALLBACK_REALLOCATIONS),
-        "planErrors":read(&PLAN_ERRORS),"pipelinesCreated":read(&PIPELINES_CREATED),"pipelinesRetired":read(&PIPELINES_RETIRED),
-        "inputBlocks":read(&INPUT_BLOCKS),"outputBlocks":read(&OUTPUT_BLOCKS),"dspFaults":read(&DSP_FAULTS),
-        "skippedOutputs":read(&SKIPPED_OUTPUTS),"retainedPorts":CONTROL.lock().map(|registry|registry.ports.len()).unwrap_or(usize::MAX)});
-    report["vendorJobRepair"] = vendor_job::status();
-    report["vendorWaitProfile"] = vendor_wait::status();
-    report["jackBufferCache"] = jack_cache::status();
-    report["vendorWakeOne"] = vendor_wake::status();
-    report["firmwareProfile"] = FIRMWARE_PROFILE.get().cloned().into();
-    report["controlServerErrors"] = read(&SERVER_ERRORS).into();
-    report["controlRequired"] = CONTROL_ADMISSION.required().into();
-    report["processPid"] = std::process::id().into();
-    report["clientTiming"] = client_timing::snapshot();
-    report["srcFast"] = src_fast::snapshot();
-    report["denoiserHold"] = denoiser_hold::report();
-    if gauged {
-        report["gauges"] = gauges::snapshot();
-    }
-    report["mainCallbackTail"] = MAIN_TAIL.snapshot();
-    report["retiredCallbackTiming"] =
-        serde_json::to_value(RETIRED_TIMING.snapshot()).unwrap_or(serde_json::Value::Null);
-    report["callbackTiming"] = CONTEXTS
-        .iter()
-        .filter(|context| context.installed.load(Ordering::Acquire))
-        .map(|context| serde_json::to_value(context.timing.snapshot()).unwrap_or_default())
-        .collect();
-    report["helper"] = serde_json::json!({
-        "frames": read(&pipeline::HELPER_TIME.frames),
-        "totalNs": read(&pipeline::HELPER_TIME.total_ns),
-        "maxNs": read(&pipeline::HELPER_TIME.max_ns),
-        "stalls": read(&pipeline::HELPER_STALLS),
-        "late": read(&pipeline::HELPER_LATE),
-        "minMarginNs": read(&pipeline::HELPER_MIN_MARGIN_NS),
-    });
-    report["sources"] = pipeline::sources();
-    // Live processing counters (mirrors; the fields above stay
-    // retirement-only). Read without touching a pipeline.
-    report["processingCounters"] = pipeline::processing_counters();
-    report["pathCostNs"] = gauged
-        .then(|| pipeline::PATH_COST_NS.iter().map(read).collect::<Vec<_>>())
-        .into();
-    report["resolveNs"] = gauged.then(|| read(&pipeline::RESOLVE_NS)).into();
-    report["callbackGaps"] = CYCLE.gaps.iter().map(read).collect();
-    report["callbackGapsOutsideBand"] = serde_json::json!({
-        "short": read(&CYCLE.gaps_short),
-        "long": read(&CYCLE.gaps_long),
-        "band": "0.9-1.1 periods",
-        "ring": "gap events >= 1.5 periods",
-    });
-    report["maxCallbackGapNs"] = read(&CYCLE.max_gap).into();
-    report["monotonicNs"] = timing::monotonic().into();
-    let mut preparation_workers = Vec::new();
-    let mut unavailable = 0usize;
-    for (context_slot, context) in CONTEXTS.iter().enumerate() {
-        if !context.installed.load(Ordering::Acquire) {
-            continue;
-        }
-        let Ok(controls) = context.parameters.try_lock() else {
-            unavailable += 1;
-            continue;
-        };
-        for (target_slot, control) in controls.iter().enumerate() {
-            match control.worker_telemetry() {
-                Ok(Some((runtime, telemetry))) => {
-                    preparation_workers.push(serde_json::json!({
-                        "id": control.id(), "contextSlot": context_slot,
-                        "targetSlot": target_slot, "runtime": runtime,
-                        "preparation": suppression::preparation_report(telemetry.preparation()),
-                    }));
-                }
-                Ok(None) => {}
-                Err(_) => unavailable += 1,
-            }
-        }
-    }
-    report["workerPreparation"] = preparation_workers.into();
-    // Failed context/path reads are explicit: an empty array with failed
-    // reads is not an idle worker.
-    report["workerPreparationUnavailableReads"] = unavailable.into();
-    report["workers"] = CONTEXTS
-        .iter()
-        .filter(|context| context.installed.load(Ordering::Acquire))
-        .filter_map(|context| context.parameters.try_lock().ok())
-        .flat_map(|controls| {
-            controls
-                .iter()
-                .filter_map(|control| {
-                    control
-                        .worker_status()
-                        .map(|worker| serde_json::json!({"id": control.id(), "worker": worker}))
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    report["workerOutliers"] = CONTEXTS
-        .iter()
-        .filter(|context| context.installed.load(Ordering::Acquire))
-        .filter_map(|context| context.parameters.try_lock().ok())
-        .flat_map(|controls| {
-            controls
-                .iter()
-                .filter_map(|control| {
-                    control.worker_outliers().map(
-                        |outliers| serde_json::json!({"id": control.id(), "outliers": outliers}),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    report["controlSkippedCallbacks"] = CONTROL_ADMISSION.skipped().into();
-    if let serde_json::Value::Object(probe) = probe::snapshot() {
-        for (key, value) in probe {
-            report[key] = value;
-        }
-    }
-    report["chatVoice"] = chat_mix::status();
-    report["placement"] = pipeline::placement();
-    report["suppression"] =
-        serde_json::to_value(suppression::stats()).unwrap_or(serde_json::Value::Null);
-    if let Some(server) = SERVER.get()
-        && let Ok(server) = server.lock()
-        && let Some(server) = server.as_ref()
-        && let Ok(status) = serde_json::to_value(server.status())
-    {
-        report["controlServer"] = status;
-    }
-    report
-}
-/// Report publication, by the refresh thread and at finalization (never a
-/// real-time thread). Held from before a report is built until it is
-/// published, so each published report was built after the previous one was
-/// published, and the partial file is always the holder's own.
-static PUBLISHING: Mutex<()> = Mutex::new(());
-/// Proof that PUBLISHING is held.
-struct Publishing {
-    _held: MutexGuard<'static, ()>,
-}
-fn publishing() -> Publishing {
-    Publishing {
-        _held: PUBLISHING
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    }
-}
-/// Room for a whole report, so it reaches the file in one write instead of
-/// one per JSON token.
-const REPORT_BUFFER: usize = 64 * 1024;
-/// The report as one line of JSON, buffered; a failed flush is returned, not
-/// dropped.
-fn write_json<W: Write>(writer: W, report: &serde_json::Value) -> io::Result<W> {
-    let mut buffered = io::BufWriter::with_capacity(REPORT_BUFFER, writer);
-    serde_json::to_writer(&mut buffered, report)?;
-    writeln!(buffered)?;
-    buffered
-        .into_inner()
-        .map_err(io::IntoInnerError::into_error)
-}
-/// Replaces the report whole, so a reader never sees a partial one: written
-/// and flushed to a partial file, renamed over the previous report only if
-/// all of that succeeded. On failure the previous report stays.
-fn publish_report<W: Write>(
-    _held: &Publishing,
-    path: &Path,
-    report: &serde_json::Value,
-    open: impl FnOnce(&Path) -> io::Result<W>,
-) -> io::Result<()> {
-    let partial = path.with_extension("partial");
-    let result = open(&partial)
-        .and_then(|file| write_json(file, report))
-        .and_then(|_| std::fs::rename(&partial, path));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&partial);
-    }
-    result
-}
-/// Seconds after start in which the report stays at one per second: the
-/// install commit check and the GUI's readiness wait watch `callbacks` advance.
-const REPORT_STARTUP_SECONDS: u64 = 180;
-/// Afterwards, without a diagnostic marker. Must stay well inside the bench's
-/// five-second telemetry limit, which a run without a marker also applies.
-const REPORT_EVERY_SECONDS: u64 = 3;
-fn report_due(elapsed_seconds: u64, diagnostic: bool) -> bool {
-    diagnostic
-        || elapsed_seconds < REPORT_STARTUP_SECONDS
-        || elapsed_seconds.is_multiple_of(REPORT_EVERY_SECONDS)
-}
-
-/// Refresh the report while the mixer runs, so it can be read without stopping
-/// audio. Events still reach their log every second.
-fn start_report_refresh() {
-    static STARTED: AtomicBool = AtomicBool::new(false);
-    if REPORT.get().is_none() || STARTED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    let _ = std::thread::Builder::new()
-        .name("rc2fx-report".into())
-        .spawn(|| {
-            let diagnostic = client_timing::enabled() || gauges::enabled();
-            let mut elapsed_seconds = 0u64;
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                elapsed_seconds += 1;
-                if report_due(elapsed_seconds, diagnostic) {
-                    write_report();
-                }
-                probe::flush_log();
-            }
-        });
-}
-
 #[cfg(test)]
-mod hook_tests {
-    use super::*;
-
-    /// The tests here drive the process wrapper and the buffer hook, which
-    /// count into process-wide statics: one at a time.
-    static HOOKS: Mutex<()> = Mutex::new(());
-    /// What the stand-in vendor callback saw of the published count while it
-    /// was still inside its frame.
-    static SEEN_INSIDE: AtomicU64 = AtomicU64::new(0);
-
-    fn serial() -> (MutexGuard<'static, ()>, MutexGuard<'static, ()>) {
-        let hooks = HOOKS.lock().unwrap_or_else(|poison| poison.into_inner());
-        // Callbacks a few microseconds apart count as short gaps, which the
-        // gap test reads.
-        let events = probe::EVENT_TESTS
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        READ_MOSTLY
-            .get_buffer
-            .store(real_get_buffer as *const () as usize, Ordering::Release);
-        (hooks, events)
-    }
-    /// The real getter: a pointer that names its port and frame count.
-    unsafe extern "C" fn real_get_buffer(port: *mut c_void, frames: u32) -> *mut c_void {
-        (port as usize * 1024 + frames as usize) as *mut c_void
-    }
-    /// The vendor callback: fetches `argument` buffers through the hook.
-    unsafe extern "C" fn vendor(frames: u32, argument: *mut c_void) -> c_int {
-        for port in 1..=argument as usize {
-            let got = unsafe { get_buffer(port as *mut c_void, frames) };
-            assert_eq!(got as usize, port * 1024 + frames as usize);
-        }
-        SEEN_INSIDE.store(
-            CYCLE.buffer_calls_inside.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        0
-    }
-    fn context(calls: usize) -> &'static Context {
-        let context = Box::leak(Box::new(Context::new()));
-        context
-            .callback
-            .store(vendor as *const () as usize, Ordering::Release);
-        context.argument.store(calls, Ordering::Relaxed);
-        context
-    }
-    fn run(context: &'static Context) -> c_int {
-        unsafe { process(112, (context as *const Context).cast_mut().cast()) }
-    }
-    fn clock_reads() -> [u64; 2] {
-        timing::CLOCK_READS.with(Cell::get)
-    }
-
-    /// N callbacks of K hooked buffer calls each publish N x K, once per
-    /// callback at its end, with no pipeline attached.
-    #[test]
-    fn buffer_calls_inside_a_callback_are_published_once_when_it_ends() {
-        let _serial = serial();
-        const CALLS: usize = 68;
-        const CALLBACKS: u64 = 25;
-        let context = context(CALLS);
-        assert!(context.pipeline.load(Ordering::Relaxed).is_null());
-        let inside = || CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
-        let (before, callbacks) = (inside(), CYCLE.callbacks.load(Ordering::Relaxed));
-        let outside = BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed);
-        for done in 0..CALLBACKS {
-            assert_eq!(run(context), 0);
-            // Nothing was published while the callback was inside its frame.
-            assert_eq!(
-                SEEN_INSIDE.load(Ordering::Relaxed),
-                before + done * CALLS as u64
-            );
-            assert_eq!(inside(), before + (done + 1) * CALLS as u64);
-        }
-        assert_eq!(
-            CYCLE.callbacks.load(Ordering::Relaxed),
-            callbacks + CALLBACKS
-        );
-        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside);
-        // The thread is outside any frame again, with nothing left to publish.
-        assert!(!super::inside());
-        assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
-        assert_eq!(
-            context.timing.snapshot().callback_wall.calls,
-            CALLBACKS,
-            "every callback was timed"
-        );
-    }
-
-    /// A call from a thread that is in no callback frame (a USB client's
-    /// thread) returns exactly what the real getter returns and writes no
-    /// counter, unless the bench gauges are on.
-    #[test]
-    fn a_buffer_call_outside_a_callback_is_forwarded_and_counted_only_with_the_gauges() {
-        let _serial = serial();
-        let inside = CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
-        let outside = BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed);
-        std::thread::spawn(move || {
-            for port in 1..=40usize {
-                let got = unsafe { get_buffer(port as *mut c_void, 112) };
-                assert_eq!(got as usize, port * 1024 + 112);
-            }
-            assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
-        })
-        .join()
-        .unwrap();
-        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside);
-        assert_eq!(CYCLE.buffer_calls_inside.load(Ordering::Relaxed), inside);
-        READ_MOSTLY.gauges.store(true, Ordering::Relaxed);
-        for port in 1..=40usize {
-            let got = unsafe { get_buffer(port as *mut c_void, 112) };
-            assert_eq!(got as usize, port * 1024 + 112);
-        }
-        READ_MOSTLY.gauges.store(false, Ordering::Relaxed);
-        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside + 40);
-        assert_eq!(CYCLE.buffer_calls_inside.load(Ordering::Relaxed), inside);
-    }
-
-    /// A frame inside another publishes its own calls when it ends; the
-    /// enclosing frame keeps its own count and publishes it at its own end.
-    #[test]
-    fn a_nested_frame_publishes_only_its_own_buffer_calls() {
-        let _serial = serial();
-        let published = || CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
-        let call = |times: usize| {
-            for port in 1..=times {
-                unsafe { get_buffer(port as *mut c_void, 112) };
-            }
-        };
-        let frame = |owner| CallbackFrame {
-            owner,
-            processing: false,
-            pipeline: 0,
-            started: 0,
-            jack: jack_cache::Snapshot::INACTIVE,
-        };
-        let before = published();
-        let outer = enter_frame(frame(0x10));
-        call(3);
-        let inner = enter_frame(frame(0x20));
-        call(2);
-        assert_eq!(published(), before);
-        leave_frame(inner);
-        assert_eq!(published(), before + 2, "the inner frame's two");
-        assert_eq!(INSIDE.with(|inside| inside.get().owner), 0x10);
-        call(1);
-        leave_frame(outer);
-        assert_eq!(published(), before + 2 + 4, "the outer frame's four");
-        assert!(!super::inside());
-        // A frame with no buffer call publishes nothing.
-        leave_frame(enter_frame(frame(0x30)));
-        assert_eq!(published(), before + 6);
-    }
-
-    /// Several threads in callback frames at once, each with its own number
-    /// of buffer calls, while other threads fetch buffers outside any frame
-    /// (as the USB clients do). Each callback publishes exactly its own
-    /// calls, no thread's count reaches another, and a call from outside a
-    /// frame is counted nowhere while the gauges are off.
-    #[test]
-    fn concurrent_callbacks_and_outside_callers_keep_their_own_counts() {
-        let _serial = serial();
-        const THREADS: usize = 6;
-        const CALLBACKS: u64 = 300;
-        let inside = CYCLE.buffer_calls_inside.load(Ordering::Relaxed);
-        let callbacks = CYCLE.callbacks.load(Ordering::Relaxed);
-        let outside = BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed);
-        let stop = AtomicBool::new(false);
-        let outside_calls = AtomicU64::new(0);
-        let expected: u64 = std::thread::scope(|scope| {
-            for _ in 0..3 {
-                scope.spawn(|| {
-                    let mut port = 1usize;
-                    let mut calls = 0;
-                    while !stop.load(Ordering::Relaxed) {
-                        let got = unsafe { get_buffer(port as *mut c_void, 112) };
-                        assert_eq!(got as usize, port * 1024 + 112);
-                        port = port % 40 + 1;
-                        calls += 1;
-                    }
-                    assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
-                    outside_calls.fetch_add(calls, Ordering::Relaxed);
-                });
-            }
-            let workers: Vec<_> = (0..THREADS)
-                .map(|thread| {
-                    scope.spawn(move || {
-                        let calls = 3 + 13 * thread;
-                        let context = context(calls);
-                        for _ in 0..CALLBACKS {
-                            assert_eq!(run(context), 0);
-                            assert_eq!(INSIDE.with(|inside| inside.buffer_calls.get()), 0);
-                            assert!(!super::inside());
-                        }
-                        assert_eq!(context.timing.snapshot().callback_wall.calls, CALLBACKS);
-                        calls as u64 * CALLBACKS
-                    })
-                })
-                .collect();
-            let expected = workers
-                .into_iter()
-                .map(|worker| worker.join().unwrap())
-                .sum();
-            stop.store(true, Ordering::Relaxed);
-            expected
-        });
-        assert!(outside_calls.load(Ordering::Relaxed) > 0);
-        assert_eq!(
-            CYCLE.buffer_calls_inside.load(Ordering::Relaxed),
-            inside + expected
-        );
-        assert_eq!(
-            CYCLE.callbacks.load(Ordering::Relaxed),
-            callbacks + THREADS as u64 * CALLBACKS
-        );
-        assert_eq!(BUFFER_CALLS_OUTSIDE.load(Ordering::Relaxed), outside);
-    }
-
-    unsafe extern "C" fn ten_frames_in(_: *const c_void) -> u32 {
-        10
-    }
-
-    /// The wrapper's own clock reads: five per callback without a cycle clock
-    /// and six with one, and never the thread CPU clock or the second
-    /// cycle-start estimate unless the bench gauges are on.
-    #[test]
-    fn the_wrapper_reads_no_diagnostic_clock_without_the_gauges() {
-        let _serial = serial();
-        const CALLBACKS: u64 = 40;
-        let context = context(4);
-        // A callback the host deschedules for milliseconds records a gap or
-        // an overrun event, which stamps itself: those reads are not the
-        // wrapper's, and no other test records events while this one runs.
-        let reads = |context: &'static Context| {
-            let (before, events) = (clock_reads(), probe::events_recorded());
-            for _ in 0..CALLBACKS {
-                assert_eq!(run(context), 0);
-            }
-            let after = clock_reads();
-            let events = probe::events_recorded() - events;
-            [after[0] - before[0] - events, after[1] - before[1]]
-        };
-        // No client, so no cycle clock: start, timing entry, before and after
-        // the original callback, exit.
-        assert_eq!(reads(context), [5 * CALLBACKS, 0]);
-        // With a cycle clock: one more read, for the cycle start.
-        let clock = probe::CYCLE_CLOCK.swap(ten_frames_in as *const () as usize, Ordering::AcqRel);
-        context.client.store(0x1234, Ordering::Relaxed);
-        let drift = probe::ESTIMATE_DRIFT_MAX_NS.load(Ordering::Relaxed);
-        assert_eq!(reads(context), [6 * CALLBACKS, 0]);
-        assert_eq!(probe::ESTIMATE_DRIFT_MAX_NS.load(Ordering::Relaxed), drift);
-        assert_eq!(context.timing.snapshot().callback_cpu.calls, 0);
-        // Gauges on: the second estimate (one read per callback that ends in
-        // the first half of its cycle, as all of these do), and four CPU
-        // clock reads on the one sampled callback.
-        let fresh = self::context(4);
-        fresh.client.store(0x1234, Ordering::Relaxed);
-        READ_MOSTLY.gauges.store(true, Ordering::Relaxed);
-        let gauged = reads(fresh);
-        READ_MOSTLY.gauges.store(false, Ordering::Relaxed);
-        probe::CYCLE_CLOCK.store(clock, Ordering::Release);
-        // A callback descheduled past half a period skips the second
-        // estimate, so on a loaded host the count can fall short of seven.
-        assert!(
-            gauged[0] > 6 * CALLBACKS && gauged[0] <= 7 * CALLBACKS,
-            "{gauged:?}"
-        );
-        assert_eq!(gauged[1], 4);
-        assert_eq!(fresh.timing.snapshot().callback_cpu.calls, 1);
-        assert_eq!(fresh.timing.snapshot().owned_cpu.calls, 1);
-    }
-
-    /// Every counter this change moved still reaches the report under its own
-    /// key, and what only a bench run measures is null without the gauges.
-    #[test]
-    fn the_report_keeps_every_key_and_nulls_bench_only_fields_without_the_gauges() {
-        let _serial = serial();
-        let number = |value: &serde_json::Value| value.as_u64().expect("a number");
-        // Marks: each counter gets its own amount, far above anything other
-        // tests add meanwhile, so a swapped key shows as the wrong multiple.
-        const MARK: u64 = 1 << 40;
-        let marked = |after: &serde_json::Value, before: &serde_json::Value| {
-            (number(after) - number(before)) / MARK
-        };
-        let before = build_report();
-        CYCLE.callbacks.fetch_add(MARK, Ordering::Relaxed);
-        CYCLE
-            .buffer_calls_inside
-            .fetch_add(2 * MARK, Ordering::Relaxed);
-        CYCLE.gaps_short.fetch_add(3 * MARK, Ordering::Relaxed);
-        CYCLE.gaps_long.fetch_add(4 * MARK, Ordering::Relaxed);
-        for (bin, gap) in CYCLE.gaps.iter().enumerate() {
-            gap.fetch_add((5 + bin as u64) * MARK, Ordering::Relaxed);
-        }
-        pipeline::HELPER_TIME
-            .frames
-            .fetch_add(12 * MARK, Ordering::Relaxed);
-        pipeline::HELPER_TIME
-            .total_ns
-            .fetch_add(13 * MARK, Ordering::Relaxed);
-        BUFFER_CALLS_OUTSIDE.fetch_add(14 * MARK, Ordering::Relaxed);
-        pipeline::RESOLVE_NS.fetch_add(15 * MARK, Ordering::Relaxed);
-        pipeline::PATH_COST_NS[3].fetch_add(16 * MARK, Ordering::Relaxed);
-        let after = build_report();
-        assert_eq!(marked(&after["callbacks"], &before["callbacks"]), 1);
-        assert_eq!(marked(&after["buffersInside"], &before["buffersInside"]), 2);
-        let (band, band_before) = (
-            &after["callbackGapsOutsideBand"],
-            &before["callbackGapsOutsideBand"],
-        );
-        assert_eq!(marked(&band["short"], &band_before["short"]), 3);
-        assert_eq!(marked(&band["long"], &band_before["long"]), 4);
-        let gaps = after["callbackGaps"].as_array().unwrap();
-        assert_eq!(gaps.len(), 7);
-        for (bin, gap) in gaps.iter().enumerate() {
-            assert_eq!(marked(gap, &before["callbackGaps"][bin]), 5 + bin as u64);
-        }
-        assert_eq!(
-            marked(&after["helper"]["frames"], &before["helper"]["frames"]),
-            12
-        );
-        assert_eq!(
-            marked(&after["helper"]["totalNs"], &before["helper"]["totalNs"]),
-            13
-        );
-        for key in ["maxNs", "stalls", "late", "minMarginNs"] {
-            assert!(after["helper"][key].is_u64(), "helper.{key}");
-        }
-        assert!(after["maxCallbackGapNs"].is_u64());
-        for key in [
-            "processed",
-            "processedUnacknowledged",
-            "rawHelperUnready",
-            "rawNoHandoff",
-            "rawNotDone",
-            "rawInvalid",
-            "unobserved",
-            "rawReturns",
-        ] {
-            assert!(after["sources"][key].is_u64(), "sources.{key}");
-        }
-        for key in ["startPos", "endPos", "helperPos"] {
-            assert_eq!(
-                after["cycle"][key]["histogram"].as_array().unwrap().len(),
-                8
-            );
-        }
-        // Bench-only: present as keys, null without the gauges, and no gauges
-        // section.
-        let object = after.as_object().unwrap();
-        for key in ["buffersOutside", "pathCostNs", "resolveNs"] {
-            assert!(object.contains_key(key), "{key}");
-            assert!(after[key].is_null(), "{key} without the gauges");
-        }
-        let cycle = after["cycle"].as_object().unwrap();
-        assert!(cycle.contains_key("estimateDriftMaxNs"));
-        assert!(cycle["estimateDriftMaxNs"].is_null());
-        assert!(!object.contains_key("gauges"));
-        assert_eq!(after["retiredCallbackTiming"]["cpuSampleEvery"], 0);
-        assert_eq!(
-            after["retiredCallbackTiming"]["callbackCpu"]["calls"], 0,
-            "the wire format keeps its CPU fields"
-        );
-        // The launcher greps the first `"callbacks":` of the file for the
-        // callback count: it must still be the top-level one.
-        let text = serde_json::to_string(&after).unwrap();
-        let first = text.find("\"callbacks\":").unwrap();
-        let count: String = text[first + 12..]
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        assert_eq!(count.parse::<u64>().unwrap(), number(&after["callbacks"]));
-        // With the gauges, the same keys carry the measurements.
-        READ_MOSTLY.gauges.store(true, Ordering::Relaxed);
-        let gauged = build_report();
-        READ_MOSTLY.gauges.store(false, Ordering::Relaxed);
-        assert_eq!(number(&gauged["buffersOutside"]) / MARK, 14);
-        assert_eq!(number(&gauged["resolveNs"]) / MARK, 15);
-        let costs = gauged["pathCostNs"].as_array().unwrap();
-        assert_eq!(costs.len(), rc2fx_native_control::MAX_PATHS);
-        assert_eq!(number(&costs[3]) / MARK, 16);
-        assert_eq!(number(&costs[2]) / MARK, 0);
-        assert!(gauged["cycle"]["estimateDriftMaxNs"].is_u64());
-        assert_eq!(
-            gauged["retiredCallbackTiming"]["cpuSampleEvery"],
-            timing::CPU_SAMPLE_EVERY
-        );
-        let wake = &gauged["gauges"]["helperWake"];
-        assert_eq!(wake["boundsUs"].as_array().unwrap().len(), 7);
-        for key in ["wakeCall", "wakeLatency", "end", "place"] {
-            assert_eq!(wake[key]["histogram"].as_array().unwrap().len(), 8, "{key}");
-            for field in ["calls", "totalNs", "maxNs"] {
-                assert!(wake[key][field].is_u64(), "{key}.{field}");
-            }
-        }
-    }
-
-    /// The statics the callback, the helper and every hooked call use are on
-    /// lines of their own.
-    #[test]
-    fn hot_statics_do_not_share_cache_lines() {
-        let line = |address: usize| address / 64;
-        let read_mostly = &raw const READ_MOSTLY as usize;
-        let cycle = &raw const CYCLE as usize;
-        let outside = &raw const BUFFER_CALLS_OUTSIDE as usize;
-        let admission = &raw const CONTROL_ADMISSION as usize;
-        let helper = &raw const pipeline::HELPER_TIME as usize;
-        let positions = [
-            &raw const probe::START_POS as usize,
-            &raw const probe::END_POS as usize,
-            &raw const probe::HELPER_POS as usize,
-        ];
-        let mut lines = vec![
-            line(read_mostly),
-            line(cycle),
-            line(cycle + 64),
-            line(outside),
-            line(admission),
-            line(helper),
-        ];
-        for start in positions {
-            assert_eq!(start % 64, 0);
-            assert_eq!(std::mem::size_of::<probe::Positions>(), 128);
-            lines.extend([line(start), line(start + 64)]);
-        }
-        for address in [read_mostly, cycle, outside, admission, helper] {
-            assert_eq!(address % 64, 0);
-        }
-        let distinct: std::collections::HashSet<_> = lines.iter().collect();
-        assert_eq!(distinct.len(), lines.len());
-    }
-}
-
+use audit_report::build_report;
 #[cfg(test)]
-mod report_tests {
-    use super::*;
-    use std::sync::atomic::AtomicBool;
-
-    #[test]
-    fn the_report_slows_only_after_startup_and_without_a_marker() {
-        let writes = |range: std::ops::Range<u64>, diagnostic| {
-            range.filter(|tick| report_due(*tick, diagnostic)).count()
-        };
-        assert_eq!(writes(1..REPORT_STARTUP_SECONDS, false), 179);
-        assert_eq!(writes(180..300, true), 120);
-        assert_eq!(writes(180..300, false), 40);
-        // No gap comes near the bench's five-second telemetry limit.
-        let due: Vec<_> = (170..300).filter(|tick| report_due(*tick, false)).collect();
-        assert!(due.windows(2).all(|pair| pair[1] - pair[0] <= 3));
-    }
-
-    /// Counts the writes and bytes that reach it; with `fail_after`, writes
-    /// at most that many bytes in total (a short write at the limit) and then
-    /// fails.
-    struct Counting<W> {
-        inner: W,
-        writes: usize,
-        bytes: usize,
-        fail_after: Option<usize>,
-    }
-    impl<W: Write> Counting<W> {
-        fn new(inner: W, fail_after: Option<usize>) -> Self {
-            Self {
-                inner,
-                writes: 0,
-                bytes: 0,
-                fail_after,
-            }
-        }
-    }
-    impl<W: Write> Write for Counting<W> {
-        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-            let data = match self.fail_after {
-                Some(limit) if self.bytes >= limit => {
-                    return Err(io::Error::other("injected write failure"));
-                }
-                Some(limit) => &data[..data.len().min(limit - self.bytes)],
-                None => data,
-            };
-            let written = self.inner.write(data)?;
-            self.writes += 1;
-            self.bytes += written;
-            Ok(written)
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            self.inner.flush()
-        }
-    }
-
-    /// A report shaped like the mixer's (about 4.3 KB of nested objects,
-    /// arrays, strings and numbers; the mixer's is larger), told apart by
-    /// `writer` and `sequence`.
-    fn report(writer: u64, sequence: u64) -> serde_json::Value {
-        let events: Vec<_> = (0..64)
-            .map(|index| {
-                serde_json::json!({"kind": "helperBusy", "sequence": index, "atNs": 1_000_000 + index, "valueNs": 2 * index})
-            })
-            .collect();
-        serde_json::json!({
-            "writer": writer, "sequence": sequence, "probeOnly": true, "callbacks": 123_456_789,
-            "workers": [{"id": "mic-1", "worker": {"completedFrames": 99, "cpu": {"histogram": [0, 0, 16_684, 594, 0]}}}],
-            "events": events,
-            "placement": {"samples": 3, "deferred": 0, "history": [{"cycle": 64, "callbackCpus": 1}]},
-        })
-    }
-    /// What the unbuffered writer produced, byte for byte.
-    fn old_bytes(report: &serde_json::Value) -> Vec<u8> {
-        let mut bytes = serde_json::to_vec(report).unwrap();
-        bytes.push(b'\n');
-        bytes
-    }
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("rc2fx-report-test-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        directory
-    }
-
-    #[test]
-    fn the_report_is_byte_identical_in_a_few_writes() {
-        let report = report(0, 0);
-        let mut unbuffered = Counting::new(Vec::new(), None);
-        serde_json::to_writer(&mut unbuffered, &report).unwrap();
-        writeln!(unbuffered).unwrap();
-        let buffered = write_json(Counting::new(Vec::new(), None), &report).unwrap();
-        assert_eq!(buffered.inner, old_bytes(&report));
-        assert_eq!(buffered.inner, unbuffered.inner);
-        assert!(
-            unbuffered.writes > 1000,
-            "{} unbuffered writes",
-            unbuffered.writes
-        );
-        assert!(buffered.writes <= 2, "{} buffered writes", buffered.writes);
-    }
-
-    /// Gaps outside 0.9 to 1.1 periods are counted in both directions; the
-    /// event ring keeps only 1.5 periods and more, with the gap as its size.
-    #[test]
-    fn gaps_outside_the_period_band_are_counted_and_only_long_ones_keep_an_event() {
-        let _events = probe::EVENT_TESTS
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let period = timing::BUDGET_NS;
-        let counts = |read: &AtomicU64| read.load(Ordering::Relaxed);
-        let events =
-            |report: &serde_json::Value| report["events"]["total"].as_u64().unwrap_or_default();
-        let total = || events(&probe::snapshot());
-        let before = (
-            counts(&CYCLE.gaps_short),
-            counts(&CYCLE.gaps_long),
-            counts(&CYCLE.gaps[2]),
-            total(),
-        );
-        // Inside the band: neither direction, and no event (the size bins
-        // count every gap, so this one lands in the 0.9-1.1 bin).
-        record_gap(period * 19 / 20);
-        assert_eq!(
-            (counts(&CYCLE.gaps_short), counts(&CYCLE.gaps_long), total()),
-            (before.0, before.1, before.3)
-        );
-        assert_eq!(counts(&CYCLE.gaps[2]) - before.2, 1);
-        // Early (0.5 period) and late (1.3 periods): counted, no event.
-        record_gap(period / 2);
-        record_gap(period * 13 / 10);
-        assert_eq!(
-            (
-                counts(&CYCLE.gaps_short) - before.0,
-                counts(&CYCLE.gaps_long) - before.1,
-                total() - before.3
-            ),
-            (1, 1, 0)
-        );
-        // Two periods: counted and kept, with its size.
-        record_gap(period * 2);
-        assert_eq!(counts(&CYCLE.gaps_long) - before.1, 2);
-        assert_eq!(total() - before.3, 1);
-        let report = probe::snapshot();
-        let recent = report["events"]["recent"].as_array().unwrap();
-        let last = recent.last().unwrap();
-        assert_eq!(last["kind"], "gap");
-        assert_eq!(last["valueNs"], period * 2);
-    }
-
-    #[test]
-    fn a_failed_flush_is_reported() {
-        let report = report(0, 0);
-        // Everything is buffered, so the only write is the final flush.
-        assert!(write_json(Counting::new(Vec::new(), Some(0)), &report).is_err());
-    }
-
-    /// Publishes through the real seam with a writer that fails after
-    /// `fail_after` bytes; the previous report must survive.
-    fn publish_failing(name: &str, fail_after: usize) {
-        let directory = scratch(name);
-        let path = directory.join("audit.json");
-        let previous = report(1, 1);
-        publish_report(&publishing(), &path, &previous, |partial| {
-            std::fs::File::create(partial)
-        })
-        .unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), old_bytes(&previous));
-        // A second handle on the partial file shows what reached it, even
-        // after it is removed.
-        let mut partial_file = None;
-        let failed = publish_report(&publishing(), &path, &report(1, 2), |partial| {
-            let file = std::fs::File::create(partial)?;
-            partial_file = Some(file.try_clone()?);
-            Ok(Counting::new(file, Some(fail_after)))
-        });
-        assert!(failed.is_err());
-        let reached = partial_file.unwrap().metadata().unwrap().len();
-        assert_eq!(reached, fail_after as u64, "bytes in the failed partial");
-        assert!(old_bytes(&report(1, 2)).len() > fail_after);
-        assert_eq!(std::fs::read(&path).unwrap(), old_bytes(&previous));
-        assert!(
-            !path.with_extension("partial").exists(),
-            "partial left behind"
-        );
-        let next = report(1, 3);
-        publish_report(&publishing(), &path, &next, |partial| {
-            std::fs::File::create(partial)
-        })
-        .unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), old_bytes(&next));
-        assert!(!path.with_extension("partial").exists());
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn a_failure_while_flushing_keeps_the_previous_report() {
-        publish_failing("flush", 0);
-    }
-
-    #[test]
-    fn a_failure_part_way_keeps_the_previous_report() {
-        publish_failing("partway", 4096);
-    }
-
-    /// As write_report: hold the publishing lock from before the report is
-    /// built until it is published.
-    fn write_like_write_report(path: &Path, writer: u64, sequence: u64) {
-        let held = publishing();
-        let report = report(writer, sequence);
-        publish_report(&held, path, &report, |partial| {
-            std::fs::File::create(partial)
-        })
-        .unwrap();
-    }
-
-    #[test]
-    fn concurrent_publishers_only_ever_publish_whole_reports_in_order() {
-        let directory = scratch("concurrent");
-        let path = directory.join("audit.json");
-        write_like_write_report(&path, 0, 0);
-        let done = AtomicBool::new(false);
-        std::thread::scope(|scope| {
-            let reader = scope.spawn(|| {
-                let (mut reads, mut published) = (0, 0);
-                let mut latest = [0; 3];
-                while !done.load(Ordering::Acquire) {
-                    let bytes = std::fs::read(&path).unwrap();
-                    let report: serde_json::Value = serde_json::from_slice(&bytes)
-                        .unwrap_or_else(|error| panic!("torn report after {reads} reads: {error}"));
-                    let expected = super::report_tests::report(
-                        report["writer"].as_u64().unwrap(),
-                        report["sequence"].as_u64().unwrap(),
-                    );
-                    assert_eq!(bytes, old_bytes(&expected));
-                    // Never an older report of a writer after a newer one.
-                    let (writer, sequence) = (
-                        report["writer"].as_u64().unwrap() as usize,
-                        report["sequence"].as_u64().unwrap(),
-                    );
-                    assert!(sequence >= latest[writer], "writer {writer} went back");
-                    latest[writer] = sequence;
-                    reads += 1;
-                    published += usize::from(writer != 0);
-                }
-                (reads, published)
-            });
-            let publishers: Vec<_> = (1..=2)
-                .map(|writer| {
-                    let path = &path;
-                    scope.spawn(move || {
-                        for sequence in 1..=150 {
-                            write_like_write_report(path, writer, sequence);
-                        }
-                    })
-                })
-                .collect();
-            for publisher in publishers {
-                publisher.join().unwrap();
-            }
-            done.store(true, Ordering::Release);
-            let (reads, published) = reader.join().unwrap();
-            assert!(
-                reads > 0 && published > 0,
-                "{reads} reads, {published} published"
-            );
-        });
-        // The last report published is whole: one writer's final sequence.
-        let last: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(last["sequence"], 150);
-        assert!(matches!(last["writer"].as_u64(), Some(1 | 2)));
-        assert!(
-            !path.with_extension("partial").exists(),
-            "partial left behind"
-        );
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-}
+use backend::{parameter_error, target_status};
+#[cfg(test)]
+mod lib_tests;

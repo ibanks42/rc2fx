@@ -1,7 +1,7 @@
 use super::*;
 
-/// One second of speech-like harmonic bursts, clicks and a low noise floor,
-/// quantised to 16 bits (the reference was rendered from this as a WAV).
+// 1 s synthetic test signal (harmonic bursts, clicks, low noise floor),
+// quantized to 16-bit PCM to match the reference WAV.
 fn signal() -> Vec<f32> {
     let mut seed = 0x2545_f491u32;
     let mut noise = move || {
@@ -99,19 +99,8 @@ fn digest(out: &[f32]) -> u64 {
     })
 }
 
-/// Prints a digest of the embedded model's output bits on `signal()`, so two
-/// builds can be compared exactly:
-/// `cargo test output_digest -- --ignored --nocapture`.
-#[test]
-#[ignore]
-fn output_digest() {
-    let out = run(&mut DeepFilter::new().unwrap(), &signal());
-    println!("output digest {:016x} samples {}", digest(&out), out.len());
-}
-
-/// Two seconds of loud speech-like bursts under strong broadband noise, with
-/// the stretches a kernel could mishandle: digital silence, full-scale
-/// clipping, values far below one LSB, and noise alone. Finite throughout.
+// 2 s stress signal: speech-like bursts in strong noise plus silence,
+// sub-LSB values, hard clipping, and pure noise stretches.
 fn noisy_signal() -> Vec<f32> {
     let mut seed = 0x1234_5678u32;
     let mut noise = move || {
@@ -144,9 +133,8 @@ fn noisy_signal() -> Vec<f32> {
         .collect()
 }
 
-/// `input` through a model in the irregular one- and two-hop call pattern of
-/// `stream`, with a reset part way. `open` opens df_convp's pathway
-/// (`Dfn::open_convp`).
+/// `input` through a model in `stream`'s irregular groups of hops, with a
+/// reset part way. `open` opens df_convp's pathway (`Dfn::open_convp`).
 fn mixed_stream(weights: &[u8], input: &[f32], open: bool) -> Vec<f32> {
     let mut filter = DeepFilter::from_weights(weights).unwrap();
     if open {
@@ -160,8 +148,8 @@ fn mixed_stream(weights: &[u8], input: &[f32], open: bool) -> Vec<f32> {
     out
 }
 
-/// Every embedded model on both fixed inputs, in one-hop calls and in
-/// `mixed_stream`'s calls.
+/// Every embedded model on both fixed inputs, straight through and as
+/// `mixed_stream`.
 fn golden_runs(open: bool) -> Vec<(String, Vec<f32>)> {
     let mut runs = Vec::new();
     for (m, weights) in MODELS.iter().enumerate() {
@@ -178,13 +166,12 @@ fn golden_runs(open: bool) -> Vec<(String, Vec<f32>)> {
     runs
 }
 
-/// `golden_runs(false)` digests of the build before the glue loops were
-/// vectorised and df_convp kept running sums (2026-11-09), in `golden_runs`
-/// order: on x86-64 (Fedora 44's libm), and on AArch64 under
-/// `qemu-aarch64 -cpu cortex-a53` with the mixer's glibc 2.35. The model
-/// calls libm's `expf`, `log10f` and `sin`, so another libm can legitimately
-/// give other digests; `kernels_match_their_references_through_the_whole_model`
-/// is the check that does not depend on it.
+// Recorded `golden_runs(false)` digests from before the NEON glue and running-sum
+// df_convp changes (2026-11-09), on x86-64 (Fedora 44 libm) and AArch64
+// (`qemu-aarch64 -cpu cortex-a53`, mixer glibc 2.35). Because the model calls
+// libm (`expf`, `log10f`, `sin`), different libm versions can legitimately
+// shift these; `kernels_match_their_references_through_the_whole_model` is the
+// libm-independent check.
 const GOLDEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     [
         0x949f_87b8_fdec_13f0,
@@ -209,11 +196,8 @@ const GOLDEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     ]
 };
 
-/// `golden_runs(true)` digests of the same build (commit 938bdae with
-/// `Dfn::open_convp` added and nothing else changed), on the same two
-/// platforms. With the pathway closed df_convp's convolution reaches a
-/// handful of samples; opened, it reaches all of them, so these digests hold
-/// its arithmetic the way `GOLDEN` holds the rest of the model's.
+// Same baseline commit (938bdae) with `Dfn::open_convp` enabled so df_convp's
+// output isn't clipped away by its ReLU.
 const GOLDEN_OPEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     [
         0x4e74_3374_1cb6_94ac,
@@ -238,11 +222,8 @@ const GOLDEN_OPEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     ]
 };
 
-/// Prints one digest per `golden_runs` stream, pathway closed and open, and
-/// compares it with the digest recorded before the kernels changed (`GOLDEN`,
-/// `GOLDEN_OPEN`): the whole model's output, every sample, bit for bit
-/// across builds. Run it on the host and under qemu-aarch64:
-/// `cargo test -p rc2fx-dfn --release golden_digests -- --ignored --nocapture`.
+// Run with `cargo test -p rc2fx-dfn --release golden_digests -- --ignored --nocapture`
+// on host and qemu-aarch64 to verify bit-exact agreement with `GOLDEN`/`GOLDEN_OPEN`.
 #[test]
 #[ignore]
 fn golden_digests() {
@@ -282,13 +263,8 @@ fn with_reference<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// The whole model with the current kernels against the same model with
-/// the reference kernels (the scalar glue loops, df_convp over its full
-/// history), every output sample bit for bit: both embedded models on the
-/// noisy input's first 1.25 s (speech in noise, silence, values below one
-/// LSB, clipping, noise alone), in one- and two-hop calls with a reset part
-/// way. On AArch64 this compares the NEON glue loops with the scalar ones;
-/// everywhere it compares df_convp's running sums with the full convolution.
+// End-to-end check that the fast kernels (NEON glue + running-sum df_convp +
+// tiled int8) match their scalar/reference counterparts bit-for-bit.
 #[test]
 fn kernels_match_their_references_through_the_whole_model() {
     let input = &noisy_signal()[..dsp::SAMPLE_RATE * 5 / 4];
@@ -358,10 +334,8 @@ fn kernels_match_their_references_on_every_golden_run() {
     }
 }
 
-/// Non-finite and extreme input: frames of huge values, infinities and NaNs
-/// poison the model's state until a reset. The current and the reference
-/// kernels must agree throughout: bit for bit wherever the output is a
-/// number, and NaN for NaN (payloads aside, see `glue`) where it is not.
+// Check that extreme/non-finite inputs produce the same bits (and NaN-for-NaN)
+// in both fast and reference paths, including recovery after `reset()`.
 #[test]
 fn kernels_match_their_references_on_extreme_input() {
     let base = signal();
@@ -389,7 +363,7 @@ fn kernels_match_their_references_on_extreme_input() {
                 if matches!(i, 28 | 40 | 50) {
                     filter.reset();
                 }
-                filter.process_hops(frame);
+                filter.process(frame);
             }
             all.extend(out);
         }
@@ -440,8 +414,9 @@ fn assert_matches_reference(ours: &[f32], reference: &[f32]) {
     );
 }
 
+// Guards against NaN LSNR (finite inputs are already sigmoid-bounded to [-15, 35]).
 #[test]
-fn reports_a_bounded_local_snr_for_every_frame() {
+fn reports_a_finite_local_snr_for_every_frame() {
     let mut filter = DeepFilter::new().unwrap();
     for frame in signal().chunks_exact(filter.frame()) {
         let lsnr = filter.process(&mut frame.to_vec());
@@ -465,6 +440,7 @@ fn the_lookahead_selector_picks_the_embedded_export() {
     let la0 = DeepFilter::for_lookahead(0).unwrap();
     assert_eq!(la0.lookahead(), 0);
     assert_eq!(la0.delay(), 120);
+    assert_eq!(la0.frame(), 240);
     let mut la1 = DeepFilter::for_lookahead(1).unwrap();
     assert_eq!(la1.lookahead(), 1);
     assert_eq!(la1.delay(), 360);
@@ -479,104 +455,20 @@ fn the_lookahead_selector_picks_the_embedded_export() {
     }
 }
 
-#[test]
-fn embedded_model_framing() {
-    let filter = DeepFilter::new().unwrap();
-    assert_eq!(filter.frame(), 240);
-    assert_eq!(filter.lookahead(), 0);
-    assert_eq!(filter.delay(), 360 - 240);
-}
-
-/// Two hops per call give bit for bit what the same hops give one per call,
-/// in any mix of call sizes, and the same local SNR for the newer hop.
-#[test]
-fn two_hops_per_call_match_one_at_a_time() {
-    for weights in [
-        WEIGHTS,
-        include_bytes!("../model/la1/weights.bin").as_slice(),
-    ] {
-        assert_batching_matches(weights);
-    }
-}
-
-fn assert_batching_matches(weights: &[u8]) {
-    let input = signal();
-    let mut batched = DeepFilter::from_weights(weights).unwrap();
-    let mut single = DeepFilter::from_weights(weights).unwrap();
-    let mut mixed = DeepFilter::from_weights(weights).unwrap();
-    // Exercise both internal paths regardless of the public build selection.
-    let hop = batched.framing.hop;
-    let frame = 2 * hop;
-    let (mut a, mut b, mut c) = (input.clone(), input.clone(), input);
-    for (i, ((a, b), c)) in a
-        .chunks_exact_mut(frame)
-        .zip(b.chunks_exact_mut(frame))
-        .zip(c.chunks_exact_mut(frame))
-        .enumerate()
-    {
-        let lsnr = batched.process_hops(a);
-        let (b0, b1) = b.split_at_mut(hop);
-        single.process_hops(b0);
-        assert_eq!(single.process_hops(b1).to_bits(), lsnr.to_bits());
-        // Calls of one hop shift the pairing by a hop.
-        if i % 3 == 1 {
-            let (c0, c1) = c.split_at_mut(hop);
-            mixed.process_hops(c0);
-            mixed.process_hops(c1);
-        } else {
-            mixed.process_hops(c);
-        }
-    }
-    let bits = |x: &[f32]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
-    assert!(a.iter().any(|&x| x != 0.));
-    assert_eq!(bits(&a), bits(&b));
-    assert_eq!(bits(&a), bits(&c));
-}
-
-/// The selected public API must preserve every enhanced sample. One-hop
-/// calls expose their own hop's SNR; paired calls expose the newer hop's.
-#[test]
-fn selected_public_call_matches_paired_stream() {
-    for weights in [
-        WEIGHTS,
-        include_bytes!("../model/la1/weights.bin").as_slice(),
-    ] {
-        let mut selected = DeepFilter::from_weights(weights).unwrap();
-        let mut paired = DeepFilter::from_weights(weights).unwrap();
-        let mut expected = signal();
-        let mut actual = expected.clone();
-        let pair = 2 * paired.framing.hop;
-        for (actual, expected) in actual
-            .chunks_exact_mut(pair)
-            .zip(expected.chunks_exact_mut(pair))
-        {
-            let expected_snr = paired.process_hops(expected);
-            let mut actual_snr = 0.;
-            for frame in actual.chunks_exact_mut(selected.frame()) {
-                actual_snr = selected.process(frame);
-            }
-            assert_eq!(actual_snr.to_bits(), expected_snr.to_bits());
-        }
-        assert_eq!(
-            actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-            expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
-        );
-    }
-}
-
 fn bits(x: &[f32]) -> Vec<u32> {
     x.iter().map(|v| v.to_bits()).collect()
 }
 
-/// Hops per call for a stream: one or two, in a fixed irregular pattern, so
-/// both internal paths and both pairings are covered whatever the build.
-fn call_sizes(i: usize) -> usize {
+/// Hops per group of a stream: one or two, in a fixed irregular pattern.
+/// The pattern, the length it stops at and the reset in `mixed_stream` are
+/// those of the two-hop calls the golden digests were recorded with.
+fn group_sizes(i: usize) -> usize {
     if i % 5 == 2 || i % 7 == 4 { 2 } else { 1 }
 }
 
-/// Runs `input` through `filter` in calls of `call_sizes`, calling `between`
-/// after each call (with the call's index); returns the output and every
-/// call's local SNR bits.
+/// Runs `input` through `filter` one hop per call, in groups of
+/// `group_sizes` hops, calling `between` after each group (with the group's
+/// index); returns the output and each group's last local SNR bits.
 fn stream(
     filter: &mut DeepFilter,
     input: &[f32],
@@ -587,8 +479,12 @@ fn stream(
     let mut snr = Vec::new();
     let (mut at, mut i) = (0, 0);
     while at + 2 * hop <= out.len() {
-        let len = call_sizes(i) * hop;
-        snr.push(filter.process_hops(&mut out[at..at + len]).to_bits());
+        let len = group_sizes(i) * hop;
+        let mut last = 0.;
+        for frame in out[at..at + len].chunks_exact_mut(hop) {
+            last = filter.process(frame);
+        }
+        snr.push(last.to_bits());
         between(filter, i);
         at += len;
         i += 1;
@@ -602,7 +498,6 @@ const MODELS: [&[u8]; 2] = [WEIGHTS, include_bytes!("../model/la1/weights.bin")]
 #[test]
 fn gru_prep_is_off_by_default_and_inert_when_off() {
     let mut filter = DeepFilter::new().unwrap();
-    assert!(!filter.gru_prep());
     assert_eq!(filter.prep_pending(), 0);
     assert!(!filter.prepare_step());
     assert_eq!(filter.prepare_while(|| true), 0);
@@ -619,7 +514,6 @@ fn gru_prep_is_off_by_default_and_inert_when_off() {
 fn gru_prep_works_one_layer_at_a_time() {
     let mut filter = DeepFilter::new().unwrap();
     filter.set_gru_prep(true);
-    assert!(filter.gru_prep());
     let layers = filter.prep_pending();
     // LA0: one encoder layer, two ERB decoder layers, two DF decoder layers.
     assert_eq!(layers, 5);
@@ -668,8 +562,8 @@ fn gru_prep_works_one_layer_at_a_time() {
     );
 }
 
-/// Preparing every layer between calls gives bit for bit the baseline
-/// stream: one- and two-hop calls, both embedded models.
+/// Preparing every layer between groups of calls gives bit for bit the
+/// baseline stream, both embedded models.
 #[test]
 fn full_gru_prep_matches_the_baseline_stream() {
     let input = signal();
@@ -790,8 +684,8 @@ fn prepared_products_follow_the_hidden_state_not_the_clock() {
         .zip(expected.chunks_exact_mut(hop))
         .enumerate()
     {
-        baseline.process_hops(e);
-        staged.process_hops(a);
+        baseline.process(e);
+        staged.process(a);
         staged.prepare_while(|| true);
         if i % 5 == 2 {
             // Asked again where a dropped hop would have been: nothing to do.
@@ -911,6 +805,28 @@ fn rejects_an_invalid_framing() {
     );
 }
 
+/// Band counts whose widths are not whole groups of eight bins in every
+/// pointwise layer are refused at load, since the kernels' buffers have no
+/// slack past the last bin.
+#[test]
+fn rejects_band_counts_the_kernels_cannot_cover() {
+    for (name, groups_of) in [
+        // nb_erb = 40: nb_erb / 4 = 10 is not a multiple of eight.
+        ("enc.emb_gru.linear_in.0.weight", 10),
+        // nb_df = 40: nb_df / 2 = 20 is not a multiple of eight.
+        ("enc.df_fc_emb.0.weight", 20),
+    ] {
+        let mut tensors = Tensors::parse(WEIGHTS).unwrap();
+        let ch = tensors.0["enc.erb_conv0.1.weight"].0[0];
+        let hs = tensors.0[name].0[2];
+        tensors.0.insert(
+            name.to_owned(),
+            (vec![1, ch * groups_of, hs], vec![0.0; ch * groups_of * hs]),
+        );
+        assert_eq!(Dfn::new(&tensors).err(), Some(Error::Weights), "{name}");
+    }
+}
+
 #[test]
 fn rejects_malformed_weights() {
     assert_eq!(Tensors::parse(&WEIGHTS[..100]).err(), Some(Error::Weights));
@@ -955,11 +871,9 @@ fn write_reference_input() {
     std::fs::write(path, wav).unwrap();
 }
 
-/// Loads a candidate weights file, reports its framing and runs the test
-/// signal through it: a host-side check of an export before it goes to the
-/// mixer. `RC2FX_DFN_WEIGHTS=path cargo test -p rc2fx-dfn --release -- --ignored candidate_weights`;
-/// with `RC2FX_DFN_REFERENCE=reference.wav` (handoff.sh's dfref output for the
-/// same weights) it must also match DeepFilterNet as closely as the embedded model.
+// Host-side smoke check for an exported weights file:
+// `RC2FX_DFN_WEIGHTS=path cargo test -p rc2fx-dfn --release -- --ignored candidate_weights`
+// Set `RC2FX_DFN_REFERENCE=reference.wav` to also compare against libDF's output.
 #[test]
 #[ignore]
 fn candidate_weights() {

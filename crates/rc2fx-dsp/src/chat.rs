@@ -34,7 +34,7 @@ pub struct Chat {
 impl Chat {
     pub fn new(p: &Prepared, provider: Box<dyn Suppression>) -> Result<Self, DspError> {
         let cp = p.chat.as_ref().ok_or(DspError::MissingChatStem)?;
-        let voice = Dsp::new(&cp.voice, [Some(provider), None])?;
+        let voice = Dsp::new(&cp.voice, Some(provider))?;
         let latency = voice.latency_samples();
         Ok(Self {
             voice,
@@ -46,6 +46,19 @@ impl Chat {
     }
     pub fn latency_samples(&self) -> usize {
         self.voice.latency_samples()
+    }
+    /// `Dsp::start_silent` for the whole mix, held for the voice delay.
+    pub fn start_silent(&mut self) {
+        let hold = self.latency_samples();
+        self.output.start_silent(hold);
+    }
+    /// `Dsp::hand_off` for the whole mix.
+    pub fn hand_off(&mut self, to: Option<HandOff>) {
+        self.output.hand_off(to);
+    }
+    /// `Dsp::handed_off` for the whole mix.
+    pub fn handed_off(&self) -> bool {
+        self.output.handed_off()
     }
     pub fn drain_suppression(
         &mut self,
@@ -104,7 +117,7 @@ impl Chat {
                     GAIN_SMOOTH * ((if vp.bypass { 0. } else { 1. }) - self.voice.processing_blend);
                 blends[t] = self.voice.processing_blend;
             }
-            self.voice.channels[0]
+            self.voice
                 .suppression
                 .as_mut()
                 .ok_or(DspError::MissingSuppression)?
@@ -184,7 +197,8 @@ impl Chat {
             self.voice.wet += GAIN_SMOOTH * (vp.wet - self.voice.wet);
             self.voice.processing_blend +=
                 GAIN_SMOOTH * ((if vp.bypass { 0. } else { 1. }) - self.voice.processing_blend);
-            let provider = self.voice.channels[0]
+            let provider = self
+                .voice
                 .suppression
                 .as_mut()
                 .ok_or(DspError::MissingSuppression)?;
@@ -224,8 +238,8 @@ impl Chat {
     /// Everything `process` leaves behind, as bits.
     #[cfg(test)]
     pub(crate) fn state_bits(&self) -> Vec<u64> {
-        let mut bits = crate::block_tests::state(&self.voice);
-        bits.extend(crate::block_tests::state(&self.output));
+        let mut bits = crate::tests::block::state(&self.voice);
+        bits.extend(crate::tests::block::state(&self.output));
         bits.push(self.voice.gate_open.to_bits());
         bits.extend(self.voice.gate_open_for);
         bits.push(self.position as u64);

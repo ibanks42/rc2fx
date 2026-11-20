@@ -12,11 +12,11 @@ struct UiSnapshot {
     char message[160];
 };
 struct UiCommand { unsigned op; bool enabled; uint64_t revision, generation; char id[49]; };
-/* All transport I/O is on its own thread, never on rendering/input/audio. */
+/* Socket I/O runs on a background thread so render, input, and audio threads never block. */
 bool ui_control_start(const char *socket_path);
 bool ui_control_snapshot(struct UiSnapshot *out);
 bool ui_control_submit(const struct UiCommand *command);
 void ui_control_visible(bool visible);
-/* Nonblocking revocation after display/input failure; queued writes are dropped. */
+/* Stop accepting or sending mutations after a display/input fault without blocking. */
 void ui_control_revoke(void);
 #endif

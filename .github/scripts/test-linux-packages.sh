@@ -21,8 +21,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 ARTIFACTS=
 VERSION=
 RUNTIME=${CONTAINER_ENGINE:-${RC2FX_CONTAINER_RUNTIME:-auto}}
-# AlmaLinux 8 has the oldest glibc the AppImage supports (2.28); the others
-# span what people run now.
+# AlmaLinux 8 matches the minimum supported glibc (2.28); the rest cover common current distros.
 APPIMAGE_IMAGES=${RC2FX_APPIMAGE_IMAGES:-"docker.io/library/almalinux:8 docker.io/library/ubuntu:22.04 docker.io/library/debian:12-slim docker.io/library/ubuntu:24.04 docker.io/library/debian:13-slim docker.io/library/fedora:44"}
 
 usage() {
@@ -75,21 +74,12 @@ esac
 [ -d "$ARTIFACTS" ] || fail "artifact directory does not exist: $ARTIFACTS"
 
 if [ -z "$VERSION" ]; then
-    VERSION=$(awk '
-        /^\[workspace\.package\]/ { section = 1; next }
-        /^\[/ { section = 0 }
-        section && /^version[[:space:]]*=/ {
-            sub(/^version[[:space:]]*=[[:space:]]*"/, "")
-            sub(/".*$/, "")
-            print
-            exit
-        }
-    ' "$ROOT/Cargo.toml")
+    VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/config/app-release.json" | head -n 1)
 fi
 printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
     || fail "invalid version: $VERSION"
 
-# Published names have no version; the update package and feed name it.
+# Published filenames omit the version; the update package and feed include it.
 APPIMAGE=$ARTIFACTS/rc2fx-linux-x64.AppImage
 NUPKG=$ARTIFACTS/io.github.ibanks42.rc2fx-$VERSION-linux-full.nupkg
 FEED=$ARTIFACTS/releases.linux.json
@@ -108,7 +98,7 @@ check_artifact "$APPIMAGE"
 check_artifact "$NUPKG"
 check_artifact "$FEED"
 
-# A stale, differently versioned file must never be picked up by a glob.
+# Reject stale artifacts from other versions so globs cannot pick them up.
 for path in "$ARTIFACTS"/rc2fx*.AppImage "$ARTIFACTS"/io.github.ibanks42.rc2fx-*-linux-full.nupkg; do
     [ -e "$path" ] || continue
     [ "$path" = "$APPIMAGE" ] || [ "$path" = "$NUPKG" ] \
@@ -136,8 +126,7 @@ verify_sum() {
 verify_sum "$(basename "$APPIMAGE")" "$APPIMAGE"
 verify_sum "$(basename "$NUPKG")" "$NUPKG"
 verify_sum "$(basename "$FEED")" "$FEED"
-# The app downloads the package the feed names, checks its digest, and puts
-# the AppImage inside it in place of the running one: it must be this one.
+# Verify the feed points to this nupkg and the nupkg contains this exact AppImage.
 python3 - "$FEED" "$NUPKG" "$APPIMAGE" "$VERSION" <<'PY' || fail "the update feed or package does not match the AppImage"
 import hashlib, json, sys, zipfile
 from pathlib import Path
@@ -183,8 +172,7 @@ run_check() {
     script=$2
     artifact=$3
     printf '\n=== %s: %s (%s) ===\n' "$image" "$script" "$artifact"
-    # SC2016: the container command is deliberately single-quoted; $work,
-    # $CHECK_SCRIPT and friends expand inside the container, not on the host.
+    # Single-quoted so $work and $CHECK_* expand inside the container.
     # shellcheck disable=SC2016
     if ! tar -cf - -C "$STAGE" . | "$RUNTIME" run --rm -i \
         -e CHECK_SCRIPT="$script" \

@@ -2,9 +2,9 @@
 
 RC2FX's own code and its trained noise suppression weights are licensed under
 MIT (see [LICENSE-MIT](LICENSE-MIT)). It also includes or builds the
-third-party components listed below, each under its own licence. Distribute this
-file, and the licence texts it refers to, with any binaries. The desktop app
-shows these notices, the training-data credits and every licence text under
+third-party components listed below, each under its own license. Distribute this
+file, and the license texts it refers to, with any binaries. The desktop app
+shows these notices, the training-data credits, and every license text under
 **Settings › About › Licenses › View licenses**.
 
 ## Mixer build
@@ -18,8 +18,8 @@ and features and reimplements the DeepFilterNet3 networks. The weights were
 trained by RC2FX with DeepFilterNet's own model code. Full text:
 [crates/rc2fx-dfn/LICENSE-DEEPFILTERNET](crates/rc2fx-dfn/LICENSE-DEEPFILTERNET).
 
-The weights were trained on third-party speech, noise and impulse-response
-datasets, credited with their licences in
+The weights were trained on third-party speech, noise, and impulse-response
+datasets, credited with their licenses in
 [crates/rc2fx-dfn/model/PROVENANCE.md](crates/rc2fx-dfn/model/PROVENANCE.md).
 No dataset audio is included in RC2FX. Releasing the weights under MIT is the
 project's decision; it does not relicense those datasets, whose own terms
@@ -27,28 +27,39 @@ still apply to them.
 
 ## Rust crates
 
-The desktop app, `rc2fxd` and `librc2fx_native.so` link several hundred crates
-from crates.io. Nearly all are MIT and/or Apache-2.0, including GPUI and
-gpui-component. A few use other permissive licences (BSD-2/3, ISC, Zlib,
-Unicode-3.0, CC0, 0BSD). `option-ext` is MPL-2.0; its unmodified source is
-available on crates.io. The desktop app's updater, Velopack, uses
-`webpki-roots`, Mozilla's root certificates, under CDLA-Permissive-2.0.
+The mixer's programs (`rc2fxd`, `rc2fx-supervisor`, `rc2fx-firmware`, and
+`librc2fx_native.so`) link crates from crates.io. Nearly all are MIT and/or
+Apache-2.0; a few use other permissive licenses (BSD-2/3, ISC, Zlib,
+Unicode-3.0, CC0, 0BSD).
+
+The desktop app is written in Go. Its interface library, libgpuikit, is built
+from Rust crates, including GPUI and gpui-component, and is linked into the
+app; the gpuikit download lists those crates with their licenses, and the
+app's license notices include that list and its license texts.
+
+## Go
+
+The desktop app includes the Go standard library (BSD-3-Clause) and the Go
+modules it links, each under its own permissive license. The app's license
+notices include each module's license text.
 
 ## Rust standard library
 
-Every binary includes the Rust standard library from Rust 1.97.1 (the
-toolchain pinned in `rust-toolchain.toml`). It is dual-licensed under MIT or
+The mixer's programs include the Rust standard library from Rust 1.100.0 (the
+toolchain pinned in `rust-toolchain.toml`); libgpuikit and Velopack's C
+library in the desktop app include it from the toolchains they were built
+with. It is dual-licensed under MIT or
 Apache-2.0; copyrights are retained by its contributors
 (https://thanks.rust-lang.org). Some of its components and dependencies carry
-other notices, including Apache-2.0 WITH LLVM-exception, Unicode-3.0 and
+other notices, including Apache-2.0 WITH LLVM-exception, Unicode-3.0, and
 BSD-2-Clause. The Rust project's own notice for the standard library,
 `COPYRIGHT-library.html` from that toolchain's documentation, lists them all
-with their licence texts; the app's licence notices include its full text.
+with their license texts; the app's license notices include its full text.
 
 ## Lucide icons
 
 The desktop app embeds icons from [Lucide](https://lucide.dev) through
-`gpui-kit-assets`. ISC License, Copyright (c) 2026 Lucide Icons and
+the gpuikit library. ISC License, Copyright (c) 2026 Lucide Icons and
 Contributors. The icons Lucide derives from Feather are also under the MIT
 License, Copyright (c) 2013-present Cole Bemis. Full text:
 [licenses/LICENSE-LUCIDE](licenses/LICENSE-LUCIDE).
@@ -60,25 +71,27 @@ The Windows and macOS packages and the Linux AppImage are built with
 updater (`Update.exe` on Windows, `UpdateMac` on macOS, `UpdateNix` in the
 AppImage); the Windows and macOS packages also include its launcher and
 installer. On Windows and macOS, Velopack's packager gives them RC2FX's
-icon and version details, appends the app to Setup and signs them; their code
-is unchanged. The app also links the `velopack` crate. MIT License, Copyright
+icon and version details, appends the app to Setup, and signs them; their code
+is unchanged. The app also links Velopack's C library (`velopack_libc`,
+statically on Linux and macOS; `velopack_libc.dll` beside `rc2fx.exe` on
+Windows). MIT License, Copyright
 © 2021 Caelan Sayler, Copyright © 2024 Velopack Ltd. Full text:
 [licenses/LICENSE-VELOPACK](licenses/LICENSE-VELOPACK). The notices of the
 crates those programs are built from are in
 [licenses/velopack-1.3.39-g8d2844f.json](licenses/velopack-1.3.39-g8d2844f.json),
-generated from Velopack's source for its Windows, macOS and Linux builds,
-and in the app's licence notices. `UpdateNix` is Velopack's static musl
+generated from Velopack's source for its Windows, macOS, and Linux builds,
+and in the app's license notices. `UpdateNix` is Velopack's static musl
 build, so it also includes musl (MIT License), whose text the AppImage's
-licence notices carry.
+license notices carry.
 
 ## e2fsprogs (libext2fs and libcom_err)
 
 Repair mixer, in the desktop app on Linux, uses libext2fs and libcom_err from
 [e2fsprogs](https://e2fsprogs.sourceforge.net/) 1.47.4, built from the sources
-vendored in `crates/rc2fx-ext2fs/e2fsprogs` and linked statically into the
-app. libext2fs is licensed under the GNU Library General Public License,
-version 2; libcom_err under an MIT-style licence (its source file headers).
-The full texts and the notice are in `crates/rc2fx-ext2fs/e2fsprogs/NOTICE`.
+vendored in `desktop/ext2fs/e2fsprogs` and linked statically into the
+app through cgo. libext2fs is licensed under the GNU Library General Public License,
+version 2; libcom_err under an MIT-style license (its source file headers).
+The full texts and the notice are in `desktop/ext2fs/e2fsprogs/NOTICE`.
 The rest of RC2FX's source is public, so the app can be rebuilt with a
 modified libext2fs, as the LGPL requires.
 
@@ -89,26 +102,28 @@ The Linux AppImage starts with the
 build that Velopack's packager supplies (type2-runtime commit `3d17002`). It
 is a static executable that links a modified libfuse 3.15.0, licensed under
 the GNU Lesser General Public License 2.1, with squashfuse 0.5.2, zstd, zlib,
-musl and mimalloc, each under its own licence. The AppImage's licence
-notices include all of their licence texts. Each release publishes the source
-of the runtime and of these libraries, the libfuse patch and the build
+musl, and mimalloc, each under its own license. The AppImage's license
+notices include all of their license texts. Each release publishes the source
+of the runtime and of these libraries, the libfuse patch, and the build
 scripts as
 `rc2fx-VERSION-appimage-runtime-sources.tar.gz`, beside the AppImage, so you
 can rebuild the runtime with a modified libfuse.
 
-## Full licence texts
+## Full license texts
 
-`cargo xtask package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
-for the desktop workspace and the mixer library and combines its reports with
-these notices, the training-data credits and the project licence texts. The
+`./xtask package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+for the mixer workspace and the mixer library and combines its reports with
+these notices, the training-data credits, the project license texts, the Go
+standard library's and Go modules' licenses, and libgpuikit's notices. The
 result is built into the app, under **Settings › About › Licenses › View
 licenses**. The AppImage also carries it as `LICENSES.html` in its system
-licence directory. To write
-the same document as HTML without packaging, install cargo-about
+license directory. To write
+the same document as HTML without packaging, less the Go and libgpuikit
+notices, which only packaging adds, install cargo-about
 (`cargo install --locked cargo-about`) and run:
 
 ```sh
-cargo xtask licenses LICENSES.html
+./xtask licenses LICENSES.html
 ```
 
 ## RØDE

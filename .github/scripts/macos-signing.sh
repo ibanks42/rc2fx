@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Load the Apple signing credentials for `cargo xtask package`, which hands
-# them to vpk: the Developer ID Application certificate signs the app, the
-# Developer ID Installer certificate signs Setup.pkg, and the App Store
-# Connect API key, stored as a notarytool profile in the same keychain,
-# notarizes both. With none configured, the packages are unsigned and the run
-# says so.
+# Import Apple Developer ID certs and notarytool credentials into a temporary
+# keychain for `./xtask package` / vpk. If no signing secrets are set, warn and
+# leave packages unsigned.
 set -euo pipefail
 
 names=(MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD
@@ -39,7 +36,7 @@ security import "$installer" -k "$keychain" -P "$MACOS_INSTALLER_CERTIFICATE_PAS
 security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: -s -k "$password" "$keychain" > /dev/null
 security list-keychains -d user -s "$keychain" login.keychain-db
 
-# codesign and productbuild take the certificates' full names.
+# codesign and productbuild expect full identity strings.
 identity() {
     security find-identity -v -p "$1" "$keychain" | sed -n "s/.*\"\\($2: .*\\)\"/\\1/p" | head -n 1
 }

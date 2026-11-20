@@ -1,7 +1,7 @@
 //! Linux-only frozen scalar-oracle regression. No compiler, child process or C
 //! runtime dependency; fixture provenance is in fixtures/scalar-linux-v1/README.md.
 //! Not built with `eq-fma`, which changes the last bits the oracle pins.
-#![cfg(all(target_os = "linux", not(feature = "eq-fma")))]
+#![cfg(not(feature = "eq-fma"))]
 use rc2fx_core::{Band, BandMode, BandType, Target, TargetKind};
 use rc2fx_dsp::{Dsp, Prepared};
 
@@ -105,6 +105,13 @@ fn take<const N: usize>(bytes: &[u8], offset: &mut usize) -> [u8; N] {
     result
 }
 
+// Frame ranges allowed to diverge from the frozen oracle because compressor and
+// limiter now fade over `STAGE_FADE_SAMPLES` (480) instead of hard-cutting at
+// blocks 130 (fade-out, frames 31159..31639) and 140 (fade-in, starting at
+// 33580; the limiter gain realigns on the next full-scale hit at frame 34405).
+// All other frames must match bit-for-bit.
+const SWITCH_FADES: [std::ops::Range<u32>; 2] = [31_159..31_639, 33_580..34_406];
+
 #[test]
 fn frozen_scalar_oracle_matches_ordered_effects_stereo_and_live_eq_handoffs() {
     const {
@@ -149,8 +156,7 @@ fn frozen_scalar_oracle_matches_ordered_effects_stereo_and_live_eq_handoffs() {
         let mut dsp = Dsp::without_suppression(&p).unwrap();
         let mut frame = 0;
         let mut offset = 0;
-        let mut audio_differences = 0;
-        let mut maximum = 0_f64;
+        let mut faded = 0;
         for block in 0..180 {
             let p = Prepared::new(&config(block, channels), 48000).unwrap();
             let n = [112, 7, 480, 1, 240, 63, 1024, 13][block % 8];
@@ -166,34 +172,37 @@ fn frozen_scalar_oracle_matches_ordered_effects_stereo_and_live_eq_handoffs() {
             let m = dsp
                 .process(&p, [&input[0], &input[1]], [left, right])
                 .unwrap();
+            let in_fade = |at: u32| SWITCH_FADES.iter().any(|fade| fade.contains(&at));
+            let block_fades = (frame..frame + n as u32).any(in_fade);
             for plane in output.iter().take(channels as usize) {
-                for &actual in plane {
+                for (i, &actual) in plane.iter().enumerate() {
                     let expected = f32::from_le_bytes(take(reference, &mut offset));
-                    let error = (actual as f64 - expected as f64).abs();
-                    maximum = maximum.max(error);
-                    audio_differences += usize::from(actual.to_bits() != expected.to_bits());
+                    if in_fade(frame + i as u32) {
+                        faded += usize::from(actual.to_bits() != expected.to_bits());
+                        continue;
+                    }
                     assert_eq!(
                         actual.to_bits(),
                         expected.to_bits(),
-                        "audio mismatch block{block}: {actual} != {expected} ({error})"
+                        "audio mismatch block{block}: {actual} != {expected}"
                     );
                 }
             }
             for actual in [m.input_peak, m.output_peak, m.sum_squares, m.gain_reduction] {
                 let expected = f64::from_le_bytes(take(reference, &mut offset));
                 assert!(
-                    (actual - expected).abs() <= 1e-10 * expected.abs().max(1.),
+                    block_fades || (actual - expected).abs() <= 1e-10 * expected.abs().max(1.),
                     "meter mismatch block{block}: {actual} != {expected}"
                 );
             }
             assert_eq!(m.samples, u64::from_le_bytes(take(reference, &mut offset)));
-            assert_eq!(m.clipped, u64::from_le_bytes(take(reference, &mut offset)));
+            let clipped = u64::from_le_bytes(take(reference, &mut offset));
+            assert!(block_fades || m.clipped == clipped, "clipped block{block}");
             frame += n as u32;
         }
         assert_eq!(offset, reference.len());
         assert_eq!(frame, 43280);
-        eprintln!(
-            "channels={channels} samples={frame} nonidenticalF32={audio_differences} maxError={maximum}\n"
-        );
+        // The switches did fade: most of those samples differ from the cut.
+        assert!(faded > 800, "only {faded} faded samples differ");
     }
 }

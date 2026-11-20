@@ -1,5 +1,5 @@
-//! RC2FX control messages carried directly by the existing vendor HID reports.
-//! Stop-and-wait framing: no unsolicited writes, no automatic mutation replay.
+//! RC2FX control framing over RØDE's vendor HID reports (stop-and-wait, no
+//! unsolicited writes or automatic mutation replay).
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -7,41 +7,24 @@ pub const REPORT_SIZE: usize = 256;
 pub const HEADER: usize = 32;
 pub const PAYLOAD: usize = REPORT_SIZE - HEADER;
 pub const OUTPUT_ID: u8 = 5;
-// RC2FX declares these IDs inside RODE's one top-level collection (usage page
-// ff00), whose own reports are 1-4. Every reader of that collection receives
-// input report 6 and must ignore it; RODE's software reads by report ID.
+// Declared inside RØDE's top-level collection (usage page 0xff00, where stock
+// reports are 1..=4). RØDE's software filters by report ID, so report 6 is
+// ignored by stock readers.
 pub const INPUT_ID: u8 = 6;
 pub const INPUT_REPORT_SIZE: usize = REPORT_SIZE;
 pub const INPUT_PAYLOAD: usize = INPUT_REPORT_SIZE - HEADER;
 pub const MAX_REQUEST: usize = 512 * 1024 + 1024;
 pub const MAX_REPLY: usize = 8 * 1024 * 1024 + 1024;
-/// The largest event a mixer publishes.
 pub const MAX_EVENT_BYTES: usize = 512 * 1024;
-/// The largest reply to an event poll: one event and its envelope.
-pub const MAX_EVENT_REPLY: usize = MAX_EVENT_BYTES + 1024;
 pub const MAGIC: &[u8; 7] = b"\xffRC2FX\0";
-/// The hello data protocol 3 clients send, and the hello acknowledgement they
-/// expect.
+/// Hello payload/ack for protocol 3 clients.
 pub const HELLO_3: &[u8] = b"RC2FX USB 3";
-/// The hello data a protocol 4 client sends; the mixer's acknowledgement names
-/// the window it sized for this link.
+/// Hello payload for protocol 4 clients; the mixer replies with the negotiated window size.
 pub const HELLO_4: &[u8] = b"RC2FX USB 4";
-/// The server's own bound on how many reports a client may keep in flight. The
-/// native hook forwards reports with a non-blocking datagram send, so a queue
-/// longer than the kernel's `max_dgram_qlen` would silently drop one.
+/// Max in-flight reports allowed per client. The native hook forwards reports
+/// over a non-blocking datagram socket, so exceeding the kernel's `max_dgram_qlen`
+/// would silently drop frames.
 pub const MAX_WINDOW: usize = 32;
-
-/// The window in a protocol 4 hello acknowledgement (`RC2FX USB 4 <window>`).
-/// Anything else is not one, including a bare `RC2FX USB 4`.
-pub fn hello_4_window(data: &[u8]) -> Option<usize> {
-    let digits = data.strip_prefix(b"RC2FX USB 4 ")?;
-    let digits = std::str::from_utf8(digits).ok()?;
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let window: usize = digits.parse().ok()?;
-    (1..=64).contains(&window).then_some(window)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -68,49 +51,6 @@ pub struct Frame<'a> {
 /// never be forwarded into RODE's command parser.
 pub fn marked(bytes: &[u8], report: u8) -> bool {
     bytes.first() == Some(&report) && bytes.get(1..8) == Some(MAGIC.as_slice())
-}
-
-/// Whether a HID report descriptor declares RC2FX's output and input reports,
-/// that is, whether RC2FX's USB layout is live. Parsing sends nothing.
-pub fn declares_control(descriptor: &[u8]) -> bool {
-    let (mut report, mut stack) = (0u32, Vec::new());
-    let (mut output, mut input) = (false, false);
-    let mut i = 0;
-    while i < descriptor.len() {
-        let prefix = descriptor[i];
-        i += 1;
-        if prefix == 0xfe {
-            let Some(&size) = descriptor.get(i) else {
-                return false;
-            };
-            i += 2 + size as usize;
-            continue;
-        }
-        let n = match prefix & 3 {
-            3 => 4,
-            n => n as usize,
-        };
-        let Some(bytes) = descriptor.get(i..i + n) else {
-            return false;
-        };
-        i += n;
-        let value = bytes
-            .iter()
-            .rev()
-            .fold(0u32, |v, b| (v << 8) | u32::from(*b));
-        match prefix & 0xfc {
-            0x84 => report = value,
-            0xa4 => stack.push(report),
-            0xb4 => match stack.pop() {
-                Some(r) => report = r,
-                None => return false,
-            },
-            0x80 => input |= report == u32::from(INPUT_ID),
-            0x90 => output |= report == u32::from(OUTPUT_ID),
-            _ => {}
-        }
-    }
-    output && input
 }
 
 /// The Windows/RODE OUT path delivers 257 bytes for a 256-byte report. The
@@ -313,58 +253,6 @@ mod tests {
         assert!(unpack(b"X{}", 64).is_err());
     }
     #[test]
-    fn only_a_protocol_four_acknowledgement_carries_a_window() {
-        assert_eq!(hello_4_window(b"RC2FX USB 4 1"), Some(1));
-        assert_eq!(hello_4_window(b"RC2FX USB 4 32"), Some(32));
-        assert_eq!(hello_4_window(b"RC2FX USB 4 64"), Some(64));
-        for bad in [
-            &b"RC2FX USB 4 0"[..],
-            b"RC2FX USB 4 65",
-            b"RC2FX USB 4 ",
-            b"RC2FX USB 4  8",
-            b"RC2FX USB 4 8x",
-            b"RC2FX USB 4 -1",
-            b"RC2FX USB 4",
-            b"RC2FX USB 3",
-            b"RC2FX USB 4 999999999999999999999999",
-            b"",
-        ] {
-            assert_eq!(
-                hello_4_window(bad),
-                None,
-                "{:?}",
-                String::from_utf8_lossy(bad)
-            );
-        }
-    }
-
-    #[test]
-    fn isolated_input_report_rejects_vendor_ids_and_excess_payload() {
-        let f = Frame {
-            kind: Kind::Reply,
-            session: 1,
-            request: 1,
-            offset: 0,
-            total: PAYLOAD,
-            data: &[42; PAYLOAD],
-        };
-        let mut packet = f.encode(INPUT_ID);
-        assert_eq!(
-            Frame::decode(&packet[..INPUT_REPORT_SIZE], INPUT_ID)
-                .unwrap()
-                .data,
-            &[42; PAYLOAD]
-        );
-        assert_eq!(
-            Frame::decode(&packet, INPUT_ID).unwrap().data,
-            &[42; PAYLOAD]
-        );
-        assert!(!marked(&packet, 2));
-        assert!(!marked(&packet, 4));
-        packet[30] = (PAYLOAD + 1) as u8;
-        assert!(Frame::decode(&packet, INPUT_ID).is_none());
-    }
-    #[test]
     fn boundary_roundtrips_and_rejects_reordered_or_oversized_messages() {
         for size in [1, PAYLOAD, PAYLOAD + 1, 65537] {
             let original = vec![0xa7; size];
@@ -402,52 +290,5 @@ mod tests {
         f.total = 2;
         assert!(a.push(&f, 10).unwrap().is_none());
         assert!(a.push(&f, 10).is_err());
-    }
-    #[test]
-    fn unrelated_reports_pass_but_malformed_marked_reports_are_owned() {
-        let mut b = [0; REPORT_SIZE];
-        b[0] = OUTPUT_ID;
-        b[1..8].copy_from_slice(MAGIC);
-        assert!(marked(&b, OUTPUT_ID));
-        assert!(Frame::decode(&b, OUTPUT_ID).is_none());
-        b[1] = b'M';
-        assert!(!marked(&b, OUTPUT_ID));
-    }
-
-    /// RODE's 1.7.6/1.7.7 descriptor and the copy `rc2fx.sh` stages from it.
-    const STOCK: &str = "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff8102c0";
-    const STAGED: &str = "0600ff0901a1017508150025ff09028501953f910209038502953f81020904850395ff91020905850495ff81020906850595ff91020907850695ff8102c0";
-
-    fn hex(text: &str) -> Vec<u8> {
-        (0..text.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-            .collect()
-    }
-
-    #[test]
-    fn staged_layout_is_one_collection_with_the_control_reports() {
-        let (stock, staged) = (hex(STOCK), hex(STAGED));
-        assert_eq!(staged[..stock.len() - 1], stock[..stock.len() - 1]);
-        // One application collection, closed once, at the very end.
-        assert_eq!(staged.iter().filter(|b| **b == 0xa1).count(), 1);
-        assert_eq!(staged.last(), Some(&0xc0));
-        assert!(declares_control(&staged));
-        assert!(!declares_control(&stock));
-        // Each half alone, or the IDs swapped, is not RC2FX's layout.
-        assert!(!declares_control(&hex(&STAGED.replace("850595ff9102", ""))));
-        assert!(!declares_control(&hex(&STAGED.replace("850695ff8102", ""))));
-        assert!(!declares_control(&staged[..staged.len() - 3]));
-    }
-
-    #[test]
-    fn accepts_exactly_one_transport_byte_beyond_the_descriptor_report() {
-        let mut bytes = vec![0; REPORT_SIZE + 1];
-        assert_eq!(canonical_output(&bytes).unwrap().len(), REPORT_SIZE);
-        bytes[REPORT_SIZE] = 1;
-        assert_eq!(canonical_output(&bytes).unwrap().len(), REPORT_SIZE);
-        bytes.push(0);
-        assert!(canonical_output(&bytes).is_none());
-        assert!(canonical_output(&bytes[..REPORT_SIZE - 1]).is_none());
     }
 }

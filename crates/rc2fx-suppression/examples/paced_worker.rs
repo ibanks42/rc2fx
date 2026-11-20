@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const HELP: &str = "paced_worker dfn SECONDS [--signal silence|continuous|both] [--policy production|inherited]\nSECONDS is 1..30 per phase. 'both' runs silence then continuous in one worker.\nproduction applies the mixer worker policy (RR5 on CPU 3, KernelAllowed affinity);\ninherited (default) keeps this process's scheduling. No JACK/audio routing is opened.";
+const HELP: &str = "paced_worker dfn SECONDS [--signal silence|continuous|both] [--policy production|inherited]\nSECONDS is 1..30 per phase. 'both' runs silence then continuous in one worker.\nproduction applies the mixer worker policy (RR5 on CPU 0, KernelAllowed affinity);\ninherited (default) keeps this process's scheduling. No JACK/audio routing is opened.";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Signal {
     Silence,
@@ -97,7 +97,6 @@ fn snapshot(value: Snapshot) -> Value {
         "allowanceOverruns":value.allowance_overruns,"wall":timing(value.wall),
         "cpu":timing(value.cpu),"queueWait":timing(value.queue_wait),"turnaround":timing(value.turnaround)})
 }
-#[cfg(target_os = "linux")]
 fn readback() -> Result<Value, String> {
     let mut workers = Vec::new();
     for entry in std::fs::read_dir("/proc/self/task").map_err(|e| e.to_string())? {
@@ -139,10 +138,6 @@ fn readback() -> Result<Value, String> {
             .collect();
         Ok(json!({"workerTid":tid,"policy":policy,"priority":param.sched_priority,"cpus":cpus}))
     }
-}
-#[cfg(not(target_os = "linux"))]
-fn readback() -> Result<Value, String> {
-    Ok(Value::Null)
 }
 fn run(args: Args) -> Result<(), String> {
     // Generate non-silent input for feature extraction. The deterministic tone

@@ -1,11 +1,7 @@
 #!/bin/sh
-# Shared by the Linux package check scripts. Source it, then call
-# expect_embedded_envelope PATH.
-#
-# This verifies the embedded installer envelope properly: exactly one marker,
-# its length and SHA-256 headers, and that the body matches the digest. A
-# marker string alone can occur in ordinary compiled data and is not proof by
-# itself.
+# Helpers sourced by the Linux package check scripts.
+# expect_embedded_envelope validates either download-mode markers or a single
+# embedded payload envelope (magic header, length, and matching SHA-256).
 
 expect_embedded_envelope() {
     executable=$1
@@ -24,7 +20,7 @@ expect_embedded_envelope() {
         exit 1
     fi
     offset=$(grep -aob "$magic" "$executable" | head -1 | cut -d: -f1)
-    # MAGIC ends with a newline; the first header starts after it.
+    # Skip past the magic line and its trailing newline.
     header_at=$((offset + ${#magic} + 1))
     headers=$(dd if="$executable" bs=1 skip="$header_at" count=128 2>/dev/null || true)
     length=$(printf '%s\n' "$headers" | sed -n '1s/^length //p')
@@ -58,9 +54,8 @@ expect_embedded_envelope() {
     fi
 }
 
-# Run the shipped program's helper entry with no arguments. It exits 2 before
-# any device, file or GUI work; never pass ROOT/WORK, which would start the
-# privileged installer path.
+# Invoke --installer-helper with no arguments; it should exit 2 immediately
+# without touching devices, files, or GUI (never pass ROOT/WORK here).
 expect_installer_helper_exit_2() {
     out=$(mktemp)
     err=$(mktemp)
@@ -72,9 +67,7 @@ expect_installer_helper_exit_2() {
         return 1
     fi
     if [ -s "$out" ] || [ -s "$err" ]; then
-        # A shell syntax/unbound-variable error also exits 2. A real helper
-        # invocation is silent, so any output means the program did not reach
-        # the helper entry.
+        # Shell syntax/unbound-var errors also exit 2, whereas the real helper exits silently.
         echo "expected --installer-helper to be silent, but it wrote:" >&2
         cat "$out" "$err" >&2
         rm -f "$out" "$err"

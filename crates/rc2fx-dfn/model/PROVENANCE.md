@@ -7,8 +7,8 @@ Both embedded weight sets, LA0 (run `a960s360d64-la0-b20`) and LA1 (run
 same dataset cache, uploaded once with SHA-256 checks. No dataset audio is
 included in RC2FX; only the trained weights are.
 
-Licence decision: the RC2FX project releases these weights under the MIT
-licence, as it does its own code. That is the project's decision, not a legal
+License decision: the RC2FX project releases these weights under the MIT
+license, as it does its own code. That is the project's decision, not a legal
 conclusion about the training data. It does not relicense any dataset, and the
 credits below do not replace any dataset's own terms, which still apply to
 that dataset.
@@ -16,41 +16,41 @@ that dataset.
 A shorter list of these credits, shown in the app, is
 [licenses/TRAINING-CREDITS.txt](../../../licenses/TRAINING-CREDITS.txt).
 
-Each licence below says where it comes from: the training kit's own records,
+Each license below says where it comes from: the training kit's own records,
 or the dataset's upstream page as checked on 2026-11-04. Where it says "see
-the dataset's terms", the licence was not verified and is not stated here.
+the dataset's terms", the license was not verified and is not stated here.
 
 Clip counts are the training split.
 
 1. DNS Challenge 4 (ICASSP 2022), fullband clean read speech, lowest DNSMOS
-   bin skipped: 310,962 clips. Microsoft DNS Challenge. Licence: see the
+   bin skipped: 310,962 clips. Microsoft DNS Challenge. License: see the
    dataset's terms, https://github.com/microsoft/DNS-Challenge
 2. CSTR VCTK Corpus, from the DNS Challenge 4 fullband archives: 80,260
    clips. Centre for Speech Technology Research (CSTR), University of
-   Edinburgh. Licence: see the dataset's terms,
+   Edinburgh. License: see the dataset's terms,
    https://datashare.ed.ac.uk/handle/10283/3443
 3. DNS Challenge 4 fullband noise (its AudioSet 000-006 and Freesound 000-001
-   parts): 61,271 clips. Licence: see the dataset's terms,
+   parts): 61,271 clips. License: see the dataset's terms,
    https://github.com/microsoft/DNS-Challenge . AudioSet:
    https://research.google.com/audioset/ . Freesound: https://freesound.org
 4. DNS Challenge 4 room impulse responses (OpenSLR SLR26 simulated rooms at
-   48 kHz, SLR28 real rooms): 58,334 impulse responses. Licence: Apache 2.0,
+   48 kHz, SLR28 real rooms): 58,334 impulse responses. License: Apache 2.0,
    per the OpenSLR pages, https://www.openslr.org/26/ and
    https://www.openslr.org/28/
 5. Keyboard and click sounds selected from item 3: 1,176 Freesound clips and
-   810 AudioSet clips. Licence: as item 3.
+   810 AudioSet clips. License: as item 3.
 6. FSD50K keyboard and click sounds: 855 clips. The training kit excluded
-   clips under non-commercial and Sampling+ licences; that filter has not been
-   re-verified. Licence: each FSD50K clip has its own Creative Commons
-   licence, per its Zenodo record, https://zenodo.org/records/4060432
+   clips under non-commercial and Sampling+ licenses; that filter has not been
+   re-verified. License: each FSD50K clip has its own Creative Commons
+   license, per its Zenodo record, https://zenodo.org/records/4060432
 7. ESC-50 mouse_click and keyboard_typing classes: 66 clips (plus 9 in
-   validation and 5 in test). Karol J. Piczak. Licence: Creative Commons
+   validation and 5 in test). Karol J. Piczak. License: Creative Commons
    Attribution-NonCommercial 3.0 (CC BY-NC 3.0) per the training kit; the
    upstream README also states a Creative Commons Attribution Non-Commercial
-   licence. This is a non-commercial licence.
+   license. This is a non-commercial license.
    https://github.com/karolpiczak/ESC-50
 8. About 14 further typing clips, probably the OpenGameArt keyboard pack
-   (CC0 per the training kit); not matched to that source. Licence: unverified.
+   (CC0 per the training kit); not matched to that source. License: unverified.
 9. Freesound keyboard and mouse sounds, downloaded directly: 770 + 904
    training clips (keyboard + mouse). Across all splits these come from 952
    Freesound sounds: 796 under CC0 1.0 and 156 under CC BY 4.0, per the
@@ -61,7 +61,7 @@ Clip counts are the training split.
     per its Zenodo record (its README separately describes academic and
     research use). https://zenodo.org/records/17282184
 11. Keystrokes dataset. Pedro Pinto, Diogo Rafael Gonçalves Rodrigues,
-    Gonçalo da Costa Macedo and Silvestre Malta. CC BY 4.0 per the training
+    Gonçalo da Costa Macedo, and Silvestre Malta. CC BY 4.0 per the training
     kit. https://zenodo.org/records/19453177
 12. Keyboard and click recordings (Zenodo record 16564409) by Yoshiyuki
     Kobayashi / Sony Group Corporation. MIT per the training kit; the record's
@@ -103,8 +103,8 @@ not changed.
 
 The ONNX archive hash identifies this particular export. Archive timestamps can
 change if it is exported again. `weights.bin` stores the original f32 tensors
-plus the framing tensors. The engine quantises the weights when it loads them.
-The export itself is unquantised.
+plus the framing tensors. The engine quantizes the weights when it loads them.
+The export itself is unquantized.
 
 ### Conversion and reference
 
@@ -137,7 +137,7 @@ target/la0-export/dfref-build/release/dfref \
 
 The reference therefore comes from the **same LA0 epoch-120 checkpoint**. It
 was produced by libDF from that checkpoint's ONNX export, without engine
-output, LA1 weights or any time shift. Matching it shows the engine's
+output, LA1 weights, or any time shift. Matching it shows the engine's
 inference agrees with libDF. Suppression quality has to be judged separately,
 on a device and by listening.
 
@@ -162,12 +162,12 @@ encoder histories and the five DF taps use only past and current spectra. The
 960-point analysis window extends into the past only. DSP reconstruction tests
 verify the synthesis-overlap delay. The suppression timing test verifies that
 no extra queued frame is inserted between collecting a frame and playing it.
-These figures cover the processing path only. ADC, DAC, host driver and other
+These figures cover the processing path only. ADC, DAC, host driver, and other
 hardware latency are not included.
 
 ### LA1
 
-`la1/` holds the LA1 weights, reference and configuration (epoch 102,
+`la1/` holds the LA1 weights, reference, and configuration (epoch 102,
 validation loss about 0.9706). Tests check the LA1 engine against its own
 reference.
 

@@ -1,31 +1,23 @@
 # Hardware
 
-These figures were read from a running RØDECaster Pro II.
+Everything below was measured directly on a running RØDECaster Pro II.
 
 | | |
 | --- | --- |
-| Processor | Four ARM Cortex-A53 cores (ARMv8-A, AArch64), Amlogic Meson AXG family. The exact SoC part number is unconfirmed. |
-| Clock | 1.416 GHz on all four cores with the performance governor. This is the configured clock; the silicon may allow more. |
-| SIMD | NEON (`asimd`). There are no dot-product or SVE extensions. |
-| Memory | 512 MiB installed, about 459 MiB visible to Linux, typically 180–195 MiB free while running. No swap. The device tree in the firmware says 256 MiB, which is wrong. |
-| Cache | One L2 cache shared by all four cores. Memory bandwidth is the tightest resource: a large working set on any core can slow the audio engine. |
-| OS | Linux 5.10.17 with PREEMPT_RT, glibc 2.35, sysvinit, A/B root partitions. |
-| Audio | JACK at 48 kHz with 112-sample periods (2.33 ms). This is the processing cycle. Total hardware latency is higher. |
+| Processor | Quad-core ARM Cortex-A53 (ARMv8-A, AArch64), Amlogic Meson AXG family. Exact SoC part number isn't confirmed. |
+| Clock | 1.416 GHz across all four cores under the `performance` governor. That's what's configured; the silicon might be capable of more. |
+| SIMD | NEON (`asimd`). No dot-product or SVE extensions. |
+| Memory | 512 MiB installed, ~459 MiB visible to Linux, usually 180–195 MiB free at runtime, with no swap. The firmware's device tree claims 256 MiB, which is wrong. |
+| Cache | A single L2 cache shared across all four cores. Memory bandwidth is the real bottleneck here, since a big working set on any core can starve the audio engine. |
+| OS | Linux 5.10.17 with PREEMPT_RT, glibc 2.35, sysvinit, and A/B root partitions. |
+| Audio | JACK at 48 kHz with 112-sample periods (2.33 ms). That's just the processing cycle; total hardware latency is higher. |
 
 ## Core usage
 
-RØDE's audio work runs on CPUs 1–3, and the main audio thread is pinned to
-CPU 2. RØDE's helper and screen threads also run on those cores, so they are
-busy. RC2FX's suppression worker runs on CPU 0, and the launcher moves RØDE's
-CPU-0 housekeeping threads to other cores.
+RØDE's audio code runs on CPUs 1–3, with the main audio thread pinned to CPU 2. Between that, helper threads, and the UI, those three cores stay busy. RC2FX puts its noise suppression worker on CPU 0, and the launcher moves RØDE's CPU-0 housekeeping threads off onto other cores to keep it clear.
 
 ## Quirks
 
-- After `/sbin/reboot` the mixer sometimes stays dark until it is
-  power-cycled.
-- On the first boot after an update, the stock launcher unloads the audio
-  drivers, reflashes the Bluetooth, digital and fader controllers, removes
-  `/usr/bin/first-boot` and restarts. Leave the mixer alone until it
-  finishes.
-- The stock engine prints the Wi-Fi password to its output at start-up.
-  RC2FX's tooling removes it from anything it displays or saves.
+- Running `/sbin/reboot` occasionally leaves the mixer dark until you pull power and plug it back in.
+- On the first boot after a firmware update, RØDE's stock launcher unloads the audio drivers, reflashes the Bluetooth, digital, and fader controllers, deletes `/usr/bin/first-boot`, and reboots. Don't touch the mixer while it's doing this.
+- The stock engine logs the Wi-Fi password on startup. RC2FX's tools strip it out before displaying or saving any logs.

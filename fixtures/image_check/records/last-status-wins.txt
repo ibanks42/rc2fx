@@ -1,0 +1,3 @@
+status=ok
+status=damaged
+manifest=abc

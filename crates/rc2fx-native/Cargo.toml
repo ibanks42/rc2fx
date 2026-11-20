@@ -1,18 +1,13 @@
 [package]
 name = "rc2fx-native"
-version = "0.1.0"
-edition = "2024"
-publish = false
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
 
 # Mixer-side audio library injected into the stock rc_audio_mixer with LD_AUDIT.
-# Its own workspace: a cdylib with Linux-only code, cross-built for the mixer
-# by `just mixer-build`.
-[workspace]
-
 [lib]
 crate-type = ["cdylib"]
-
 
 [dependencies]
 rc2fx-usb = { path = "../rc2fx-usb" }
@@ -25,7 +20,3 @@ rc2fx-dsp = { path = "../rc2fx-dsp" }
 rc2fx-native-control = { path = "../rc2fx-native-control" }
 rc2fx-firmware = { path = "../rc2fx-firmware" }
 rc2fx-suppression = { path = "../rc2fx-suppression" }
-
-[profile.release]
-lto = "thin"
-codegen-units = 1

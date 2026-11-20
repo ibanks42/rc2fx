@@ -1,36 +1,19 @@
-//! Installing a verified mixer bundle in place, and getting back to the
-//! previous one when that does not work.
+//! Atomic in-place bundle installation and rollback under `/opt`.
 //!
-//! The layout is `/opt/rc2fx` (the live bundle, with `data/` and `logs/`
-//! inside it), `/opt/.rc2fx-previous` (the last known-good bundle's files,
-//! hard-linked, so making it costs no space; once the live files are replaced
-//! it holds the old release's, until the commit removes it) and `/opt/.rc2fx-update-pending` (an
-//! update that has not been committed yet). The marker is this updater's own:
-//! the developer install (`install.sh`) keeps `/opt/.rc2fx-install-pending`
-//! for its transaction, and a launcher must never mistake one for the other. Saved settings are never moved or
-//! replaced: only the files in [`PAYLOAD_NAMES`] change.
+//! Layout:
+//! - `/opt/rc2fx`: live bundle (`data/` and `logs/` are never moved or replaced)
+//! - `/opt/.rc2fx-previous`: hard-linked snapshot of the last known-good files
+//! - `/opt/.rc2fx-update-pending`: uncommitted update marker (distinct from
+//!   `install.sh`'s `/opt/.rc2fx-install-pending`)
 //!
-//! The order is chosen so that a power cut at any point leaves something
-//! launchable:
-//!
-//! 1. The bundle is staged under `/opt` and checked again from disk.
-//! 2. `.rc2fx-previous` is built from the live files. Nothing has changed yet.
-//! 3. The pending marker is written and flushed. From here the launchers
-//!    prefer `.rc2fx-previous` unless an update driver is alive (see
-//!    `xtask/mixer/rc2fx-shim.sh`).
-//! 4. Each payload file is renamed over the live one, then the directory is
-//!    flushed, then the shims are rewritten.
-//! 5. Only after the new controller reports itself and audio advances does the
-//!    driver remove the pending marker (the commit). A boot that finds the
-//!    marker instead restores the previous files before serving.
-//!
-//! The steps are the ones `xtask/mixer/install.sh` performs for a full flash,
-//! ported into Rust rather than running the payload's own `install.sh`: that
-//! script expects the flash upload layout and restarts audio from inside the
-//! installing process, while this path must keep `/opt/rc2fx/data` in place and
-//! hand the restart to something that survives `rc2fxd` being replaced. The
-//! payload still carries `install.sh`, and the full-flash recovery path uses
-//! it.
+//! Order of operations (safe across a power cut at any step):
+//! 1. Stage under `/opt` and re-verify from disk.
+//! 2. Hard-link live files into `.rc2fx-previous` (live bundle untouched).
+//! 3. Write and sync `.rc2fx-update-pending`; launchers now prefer
+//!    `.rc2fx-previous` unless an update driver is alive (`rc2fx-shim.sh`).
+//! 4. Rename payload files over `/opt/rc2fx`, sync the dir, rewrite shims.
+//! 5. Detached driver removes the pending marker only after the new controller
+//!    and audio come up; otherwise the next boot rolls back before serving.
 
 use sha2::{Digest, Sha256};
 use std::{
@@ -40,9 +23,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The files a mixer payload carries, in its order. Mirrors
-/// `rc2fx-installer`'s `embed::format`; this crate must not depend on the
-/// desktop installer.
+/// The files a mixer payload carries, in its order. This and the three lists
+/// below match `fixtures/payload/lists.json`, as `PayloadNames`, `Pinned`,
+/// `Binaries` and `Scripts` in the desktop's
+/// `desktop/installer/embed/format.go` do; the test
+/// `the_payload_lists_match_the_shared_fixture` fails when they differ.
 pub const PAYLOAD_NAMES: [&str; 14] = [
     "librc2fx_native.so",
     "rc2fxd",
@@ -221,15 +206,22 @@ pub struct StoredState {
 }
 
 impl StoredState {
-    pub fn load(path: &Path) -> Self {
+    /// The recorded state, or `None` when nothing has been recorded yet. A
+    /// file that cannot be read or parsed is an error, never a fresh state:
+    /// that would silently forget the replay and downgrade protection.
+    pub fn load(path: &Path) -> Result<Option<Self>, String> {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+        };
         let mut text = String::new();
-        if File::open(path)
-            .and_then(|file| file.take(16 * 1024).read_to_string(&mut text))
-            .is_err()
-        {
-            return Self::default();
-        }
-        serde_json::from_str(&text).unwrap_or_default()
+        file.take(16 * 1024)
+            .read_to_string(&mut text)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|error| format!("{} is damaged: {error}", path.display()))
     }
 
     /// Write atomically, so a power cut leaves the older record.
@@ -696,13 +688,7 @@ pub fn driver_alive(paths: &Paths) -> bool {
     {
         return false;
     }
-    process_start(pid).as_deref() == Some(started)
-}
-
-fn process_start(pid: u32) -> Option<String> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(19).map(str::to_owned)
+    crate::proc_stat::process_start(pid).as_deref() == Some(started)
 }
 
 /// Every payload file in `dir` is present, regular and matches the manifest.
@@ -746,17 +732,6 @@ pub fn remove_stages(paths: &Paths) {
     }
 }
 
-/// The previous bundle is what a boot should start when an update did not
-/// commit. `None` when there is nothing usable to fall back to.
-pub fn rollback_bundle(paths: &Paths) -> Option<PathBuf> {
-    let previous = paths.previous();
-    if paths.pending().exists() && !driver_alive(paths) && bundle_verifies(&previous) {
-        Some(previous)
-    } else {
-        None
-    }
-}
-
 /// Restore the previous files over the live bundle. Used at startup after an
 /// interrupted update, when nothing can restart audio for us.
 pub fn restore_previous(paths: &Paths) -> Result<(), String> {
@@ -794,8 +769,19 @@ pub fn clear_pending(paths: &Paths) {
     let _ = fsync_dir(&paths.opt);
 }
 
+/// Forget the previous update's outcome once a new install is accepted, so
+/// `GET api/v1/update/last` never reports it as this install's outcome (both
+/// can name the same target version). Until the new outcome is recorded the
+/// endpoint answers as if no update had run.
+pub fn clear_last(paths: &Paths) -> io::Result<()> {
+    match fs::remove_file(paths.last()) {
+        Ok(()) => fsync_dir(&paths.data()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Free bytes on the filesystem that holds `path`, when it can be read.
-#[cfg(target_os = "linux")]
 pub fn free_bytes(path: &Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
@@ -808,9 +794,4 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
     #[allow(clippy::useless_conversion)]
     let (blocks, size) = (u64::from(stats.f_bavail), u64::from(stats.f_frsize));
     Some(blocks.saturating_mul(size))
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn free_bytes(_: &Path) -> Option<u64> {
-    None
 }

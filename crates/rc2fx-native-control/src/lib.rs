@@ -1,51 +1,46 @@
-//! Internal native-audio control protocol and client. No ELF audit entry points,
-//! callback implementation, global allocator or audio processing dependencies.
+//! Control protocol types and blocking client for the native audio library.
+//! Kept free of ELF audit hooks, audio callbacks, and DSP dependencies.
+#[cfg(not(target_os = "linux"))]
+compile_error!("rc2fx's mixer crates build for Linux only");
 use rc2fx_core::Target;
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "linux")]
 mod linux;
-#[cfg(target_os = "linux")]
 pub use linux::Client;
-#[cfg(target_os = "linux")]
 mod save;
-#[cfg(target_os = "linux")]
-pub use save::{ControlFailure, Publication, SaveFailure, Saved};
-/// The control protocol this build speaks.
+pub use save::{ControlFailure, Publication};
+/// Current control protocol version.
 ///
-/// Version 7 added two optional reply fields that a version 6 peer cannot
-/// decode (`ContextStatus::recent_callback_wall_ns` and
-/// `TargetStatus::worker_recent_max_ns`); a reply to a version 6 peer leaves
-/// them out, and is otherwise identical to version 6.
-pub const VERSION: u32 = 7;
-/// The oldest control protocol this build still speaks. A request or response
-/// outside `MIN_VERSION..=VERSION` is refused as `UnsupportedVersion`.
+/// - v7 added optional `ContextStatus::recent_callback_wall_ns` and
+///   `TargetStatus::worker_recent_max_ns` (omitted when replying to v6 peers).
+/// - v8 added `Operation::Prepare::reset` ([`ResetPolicy`]). Only `Refuse` is
+///   serialized on the wire, so `Allow` stays compatible with older versions;
+///   libraries reject `Refuse` from peers below v8 (see [`RESET_POLICY_VERSION`]).
+pub const VERSION: u32 = 8;
+/// Minimum protocol version supporting [`ResetPolicy::Refuse`].
+pub const RESET_POLICY_VERSION: u32 = 8;
+/// Oldest protocol version accepted; anything outside `MIN_VERSION..=VERSION`
+/// returns `UnsupportedVersion`.
 pub const MIN_VERSION: u32 = 6;
-/// Shared bound for the native launch plan and controller's path registry.
-/// Includes the physical channels and the virtual USB playback/send paths.
+/// Max number of audio paths (physical channels plus virtual USB playback/send paths).
 pub const MAX_PATHS: usize = 32;
 pub const MAX_REQUEST: usize = 65_536;
 pub const MAX_RESPONSE: usize = 131_072;
-/// Frames in one meter window. The native library finishes a path's window at
-/// the first cycle that reaches this count: 22 cycles of 112 frames, 51 ms.
+/// Frames per meter window. A window closes on the first callback that reaches
+/// this count (22 callbacks of 112 frames, ~51 ms at 48 kHz).
 pub const METER_WINDOW_FRAMES: u64 = 2400;
-/// Finished meter windows the native library keeps per path until the
-/// controller reads them. With a slower reader the ring fills, and each window
-/// that finishes while it is full is lost, which `AudioMeter::dropped_windows`
-/// counts. The controller derives its slowest inventory interval from this
-/// depth.
-///
-/// The native telemetry ring takes its depth from this constant, so the two
-/// cannot drift apart. It must stay a power of two.
+/// Number of completed meter windows buffered per path in the telemetry ring.
+/// If the controller polls too slowly, new windows are dropped and counted in
+/// `AudioMeter::dropped_windows`. Must be a power of two.
 pub const METER_RING_WINDOWS: usize = 8;
 
-/// Exact desired-target identity. Hashing and serialization are control work.
+/// Computes the SHA-256 fingerprint of a validated target configuration.
 pub fn fingerprint(target: &Target) -> Result<[u8; 32], serde_json::Error> {
     use sha2::{Digest, Sha256};
     target.validate().map_err(serde::ser::Error::custom)?;
     serde_json::to_vec(target).map(|bytes| Sha256::digest(bytes).into())
 }
 
-/// A completed audio window, never synthesized from publication or wall time.
+/// Completed audio meter window produced by the audio thread.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AudioMeter {
@@ -56,17 +51,16 @@ pub struct AudioMeter {
     pub output_peak: f64,
     pub rms: f64,
     pub gain_reduction: f64,
-    /// Highest suppression voice score in the window, 0 to 1.
+    /// Peak voice probability in the window (0..=1).
     pub voice: f64,
-    /// Most open voice gate position in the window, 0 to 1.
+    /// Peak voice gate openness in the window (0..=1).
     pub gate_open: f64,
     pub clipped: u64,
     pub latency_samples: u32,
     pub dropped_windows: u64,
 }
-/// Live cumulative timings. Counter fields are individually sampled; histogram
-/// quantiles are bucket bounds, not exact percentiles. Bounds use the containing
-/// budget: <=1/16, <=1/8, <=1/4, <=1/2, <=3/4, <=1, <=2, >2.
+/// Cumulative timing stats. Histogram buckets are fractions of the enclosing
+/// budget: <=1/16, <=1/8, <=1/4, <=1/2, <=3/4, <=1, <=2, and >2.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Timing {
@@ -81,17 +75,17 @@ pub struct Timing {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CallbackTiming {
     pub callback_budget_ns: u64,
-    /// CPU clocks are queried only every Nth callback. Their calls count is the
-    /// sampled population; unsampled callbacks are not clock failures or zero CPU.
+    /// CPU time is sampled every Nth callback, so `callback_cpu.calls` only
+    /// counts sampled callbacks.
     pub cpu_sample_every: u32,
     pub attempts: u64,
     pub unexpected_frame_sizes: u64,
     pub callback_wall: Timing,
     pub callback_cpu: Timing,
-    /// Pre/post DSP and wrapper work, excluding the original vendor callback.
+    /// Our pre/post DSP and wrapper overhead, excluding the vendor callback.
     pub owned_wall: Timing,
     pub owned_cpu: Timing,
-    /// Original native callback including its intercepted buffer lookups.
+    /// Original vendor callback time, including intercepted buffer lookups.
     pub native_wall: Timing,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -106,10 +100,10 @@ pub struct WorkerMeter {
     pub frame_budget_ns: u64,
     pub worker_allowance_ns: u64,
     pub allowance_overruns: u64,
-    /// Model execution; wall and CPU histogram budgets are frame_budget_ns.
+    /// Model inference time (histogram scaled to `frame_budget_ns`).
     pub wall: Timing,
     pub cpu: Timing,
-    /// Submission to dequeue/publication, using worker_allowance_ns as budget.
+    /// Queue wait and end-to-end turnaround (histogram scaled to `worker_allowance_ns`).
     pub queue_wait: Timing,
     pub turnaround: Timing,
 }
@@ -120,8 +114,8 @@ pub struct Session {
     pub pid: u32,
     pub nonce: String,
 }
-/// Identifies one prepared change in an exact native process/context lifetime.
-/// Reuse this receipt when a reply is lost; never manufacture a new save.
+/// Receipt identifying a staged change for a specific process/context lifetime.
+/// Reuse this receipt on retry if a reply is lost instead of starting a new save.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Transaction {
@@ -180,7 +174,8 @@ pub struct TargetStatus {
     pub id: String,
     pub mode: PathMode,
     pub runtime_epoch: u64,
-    /// Latest completed retirement only; the count exposes skipped receipts.
+    /// Most recent retired worker only; check `retired_worker_count` to detect
+    /// skipped retirements.
     pub retired_workers: Vec<RetiredWorker>,
     pub retired_worker_count: u64,
     pub published: u64,
@@ -189,14 +184,17 @@ pub struct TargetStatus {
     pub fingerprint: [u8; 32],
     pub meter: Option<AudioMeter>,
     pub worker: Option<WorkerMeter>,
-    /// The endpoint's missed-deadline and late-result histories. Each restarts
-    /// with a new worker, so a reader resets its sequence when one decreases.
+    /// Missed-deadline and late-result logs for the current `runtime_epoch`
+    /// worker. Both reset when a new worker starts, so readers should track
+    /// progress by `(runtime_epoch, ordinal)` instead of `sequence` (which
+    /// starts at 0 per worker). Only the first N events are retained; extras
+    /// are counted in `lost`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub misses: Option<NativeHistory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lates: Option<NativeHistory>,
-    /// The worst worker turnaround since the previous status read. Only this
-    /// reader takes it, so the cumulative `worker.turnaround` stays intact.
+    /// Peak worker turnaround since the last status read (reset on read without
+    /// disturbing cumulative `worker.turnaround`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_recent_max_ns: Option<u64>,
 }
@@ -206,23 +204,21 @@ pub struct ContextStatus {
     pub context: u64,
     pub targets: Vec<TargetStatus>,
     pub timing: Option<CallbackTiming>,
-    /// The worst callback wall time since the previous inventory read. Only
-    /// the inventory takes it; the audit report's snapshot never does.
+    /// Peak callback wall time since the last inventory read (reset on read;
+    /// audit report snapshots don't consume it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recent_callback_wall_ns: Option<u64>,
-    /// Engine-wide counters, always sent: cheap atomics the audio path already
-    /// writes, independent of whether callback timing is sampled.
+    /// Process-wide audio counters, always populated regardless of timing sampling.
     #[serde(default)]
     pub counters: EngineCounters,
-    /// The engine event ring's tail (the newest entries). The ring is
-    /// process-wide, so every context returns the same tail; a reader keeps
-    /// the highest `seq` it has seen and ignores repeats.
+    /// Tail of the process-wide engine event ring. Every context returns the
+    /// same tail; readers deduplicate by highest seen `seq`.
     #[serde(default)]
     pub events: Vec<NativeEvent>,
 }
-/// One engine event, as the mixer's own ring holds it (see audit.json's
-/// `events`). `valueNs` is whatever the kind measures: a gap, a late end, a
-/// turnaround. `delayedUs` is jackd's xrun delay for an xrun, when known.
+/// Single event from the mixer's engine ring. `value_ns` holds the relevant
+/// duration (gap, overrun, turnaround, etc.); `delayed_us` is jackd's reported
+/// xrun delay when available.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct NativeEvent {
@@ -248,12 +244,11 @@ pub enum NativeEventKind {
     CycleSkip,
     VendorJobLate,
     UsbGadget,
-    /// A kind this reader does not know (a newer mixer).
+    /// Unknown event kind from a newer mixer build.
     Other,
 }
-/// A worker's miss or late history, typed for the control API: the first
-/// `capacity` events with their sequence numbers and times, and how many came
-/// after them.
+/// Bounded log of a worker's missed deadlines or late results, plus how many
+/// overflowed the buffer.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct NativeHistory {
@@ -270,19 +265,39 @@ pub struct NativeEventRecord {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EngineCounters {
-    /// JACK xrun notifications since this process started. The same figure on
-    /// every path; it is not per-notification evidence (audit's xrunDelayed).
+    /// Total JACK xrun callbacks since process start.
     pub xruns: u64,
-    /// Helper routines that finished after their frame's cycle had ended.
+    /// Helper jobs that finished after their audio cycle deadline.
     pub helper_late: u64,
     /// Callbacks that found the helper still busy with the previous frame.
     pub helper_stalls: u64,
+}
+/// Controls whether `Operation::Prepare` may rebuild a path's DSP runtime
+/// (e.g. toggling noise suppression, changing effect order, or switching path
+/// mode) or only update parameters in place. If a rebuild is needed under
+/// `Refuse`, the prepare fails with `RequiresReset` without staging anything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResetPolicy {
+    /// Allow full runtime rebuilds (used for normal saves).
+    #[default]
+    Allow,
+    /// Parameter-only updates (used for live edits or restoring saved settings
+    /// without glitching active audio).
+    Refuse,
+}
+impl ResetPolicy {
+    fn is_allow(&self) -> bool {
+        *self == Self::Allow
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, tag = "op", rename_all = "camelCase")]
 pub enum Operation {
     Hello,
     Inventory,
+    /// Deprecated; rejected with `InvalidParameters` (use `Inventory` instead).
+    /// Kept for wire compatibility.
     Status {
         context: u64,
         id: String,
@@ -291,6 +306,9 @@ pub enum Operation {
         transaction: Transaction,
         target: Box<Target>,
         mode: PathMode,
+        /// Defaults to `Allow` when omitted (matching pre-v8 clients).
+        #[serde(default, skip_serializing_if = "ResetPolicy::is_allow")]
+        reset: ResetPolicy,
     },
     Commit {
         transaction: Transaction,
@@ -309,17 +327,30 @@ pub struct Request {
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, tag = "result", rename_all = "camelCase")]
-// Control-thread wire messages only; keeping Status inline avoids a separate
-// allocation per status query. No Reply is constructed by the audio callback.
+// Control-thread only; never constructed on the audio callback.
 #[allow(clippy::large_enum_variant)]
 pub enum Reply {
     Hello,
-    Inventory { contexts: Vec<ContextStatus> },
-    Status { context: u64, target: TargetStatus },
-    Prepared { transaction: Transaction },
-    Published { transaction: Transaction },
-    Cancelled { transaction: Transaction },
-    Error { code: ErrorCode },
+    Inventory {
+        contexts: Vec<ContextStatus>,
+    },
+    /// Deprecated (see `Operation::Status`).
+    Status {
+        context: u64,
+        target: TargetStatus,
+    },
+    Prepared {
+        transaction: Transaction,
+    },
+    Published {
+        transaction: Transaction,
+    },
+    Cancelled {
+        transaction: Transaction,
+    },
+    Error {
+        code: ErrorCode,
+    },
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -330,8 +361,7 @@ pub struct Response {
     pub reply: Reply,
 }
 
-/// An inventory response as a plain struct, with the reply's tag as an
-/// ordinary field. The same JSON as `Response` with `Reply::Inventory`.
+/// Fast-path mirror of `Response` for `Reply::Inventory` without internal enum tagging.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct InventoryResponse {
@@ -347,11 +377,10 @@ struct InventoryReply {
     _result: InventoryTag,
     contexts: Vec<ContextStatus>,
 }
-/// The tag of an inventory reply: the string "inventory" and nothing else.
+/// Matches only the exact string `"inventory"`.
 ///
-/// A derived enum would not do. serde also reads a unit variant from the map
-/// `{"inventory": null}`, which the general decoder refuses as a tag, so the
-/// direct decoder would accept a document the general one does not.
+/// A derived unit enum would also accept `{"inventory": null}`, which serde's
+/// internally tagged `Reply` rejects, breaking equivalence with the general decoder.
 struct InventoryTag;
 impl<'de> Deserialize<'de> for InventoryTag {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -369,22 +398,18 @@ impl<'de> Deserialize<'de> for InventoryTag {
                 }
             }
         }
-        // As the general decoder reads a tag: an identifier, so a string.
+        // Match how serde decodes an internal tag (string identifier only).
         deserializer.deserialize_identifier(Tag)
     }
 }
 
 impl Response {
-    /// Decodes the response to an inventory request. It gives the same result
-    /// as decoding a `Response` for every input, in less time.
+    /// Fast-path decoder for `Reply::Inventory` responses.
     ///
-    /// `Reply` is internally tagged, and serde decodes such an enum by copying
-    /// the whole object into a generic tree before it reads the typed value
-    /// from that tree. An inventory is about 24 KB and is read nine times a
-    /// second, and the copy is a large part of the controller's work per read.
-    /// This reads a well-formed inventory straight into its types. Anything
-    /// else, such as a Busy error or malformed JSON, is decoded the general
-    /// way, which also produces the error.
+    /// Because `Reply` is internally tagged, serde's derived deserializer buffers
+    /// the entire ~24 KB payload into an intermediate content tree on every poll
+    /// (~9 Hz). Decoding into a flat struct avoids that copy on the common path
+    /// and falls back to `Response` for errors or malformed inputs.
     pub fn decode_inventory(bytes: &[u8]) -> serde_json::Result<Self> {
         match serde_json::from_slice::<InventoryResponse>(bytes) {
             Ok(response) => Ok(Self {
@@ -400,21 +425,20 @@ impl Response {
     }
 }
 
-/// `Response::decode_inventory` against the general decoder, which is the
-/// reference: the same value or the same error for every input.
+/// Differential tests verifying `Response::decode_inventory` matches the
+/// standard `Response` deserializer on valid, malformed, and mutated inputs.
 #[cfg(test)]
 mod decode_tests {
     use super::*;
     use serde_json::{Value, json};
 
-    /// One change to a JSON document.
     type Edit = Box<dyn Fn(&mut Value)>;
 
-    /// Both decoders on the same bytes. Returns whether they accepted them.
+    /// Compares both decoders on `bytes` and returns whether they succeeded.
     fn same(bytes: &[u8]) -> bool {
         let reference = serde_json::from_slice::<Response>(bytes);
         let direct = Response::decode_inventory(bytes);
-        // Debug prints every field, and tells 0.0 from -0.0.
+        // Debug formatting checks every field and distinguishes 0.0 from -0.0.
         assert_eq!(
             format!("{direct:?}"),
             format!("{reference:?}"),
@@ -424,7 +448,6 @@ mod decode_tests {
         reference.is_ok()
     }
 
-    /// A small deterministic generator, so a failure can be reproduced.
     struct Random(u64);
     impl Random {
         fn next(&mut self) -> u64 {
@@ -612,8 +635,6 @@ mod decode_tests {
         }
     }
 
-    /// Every reply the library can send, including each one an inventory
-    /// request can be answered with instead of an inventory.
     fn replies(random: &mut Random) -> Vec<Response> {
         let target = random.target(0);
         let mut all = vec![
@@ -652,14 +673,13 @@ mod decode_tests {
         for response in replies(&mut random) {
             let bytes = serde_json::to_vec(&response).unwrap();
             assert!(same(&bytes));
-            // The same document with its keys in another order (sorted, so
-            // the reply's tag is no longer first) and with whitespace.
+            // Re-serialize with sorted keys (moving the tag off the first slot)
+            // and with pretty-printed whitespace.
             let value: Value = serde_json::from_slice(&bytes).unwrap();
             assert!(same(&serde_json::to_vec(&value).unwrap()));
             assert!(same(&serde_json::to_vec_pretty(&value).unwrap()));
         }
-        // An inventory takes the direct path; the comparisons above are not
-        // all the general decoder against itself.
+        // Confirm an actual inventory hits the fast path.
         let bytes = serde_json::to_vec(&random.inventory()).unwrap();
         assert!(serde_json::from_slice::<InventoryResponse>(&bytes).is_ok());
         assert!(same(&bytes));
@@ -674,8 +694,6 @@ mod decode_tests {
         }
     }
 
-    /// Documents that are almost an inventory. The direct decoder must not
-    /// accept one the general decoder refuses, or read one differently.
     #[test]
     fn malformed_inventories_are_refused_exactly_as_before() {
         let mut random = Random(0xfeed_face_cafe_beef);
@@ -731,9 +749,7 @@ mod decode_tests {
             Box::new(|v| v["reply"]["contexts"][0]["targets"][0]["fingerprint"][3] = json!(256)),
             Box::new(|v| v["reply"]["contexts"][0]["targets"][0]["mode"] = json!("bypass")),
         ];
-        // Well-formed all the same, and the two decoders must read them
-        // alike: optional fields left out or null, defaulted fields left out,
-        // numbers of other kinds.
+        // Valid variations (null/omitted optionals, omitted defaults, integer/float mixes).
         let alike: Vec<Edit> = vec![
             Box::new(|v| v["reply"]["contexts"][0]["targets"][0]["meter"] = json!(null)),
             Box::new(|v| v["reply"]["contexts"][0]["targets"][0]["misses"] = json!(null)),
@@ -773,7 +789,7 @@ mod decode_tests {
             assert!(same(&bytes), "edit {index} was refused");
             assert!(serde_json::from_slice::<InventoryResponse>(&bytes).is_ok());
         }
-        // Duplicate keys and other text a value tree cannot hold.
+        // Duplicate keys and trailing garbage that serde_json::Value can't represent.
         let text = serde_json::to_string(&good).unwrap();
         let tag = r#""result":"inventory""#;
         assert!(text.contains(tag));
@@ -824,11 +840,10 @@ mod decode_tests {
                 accepted += usize::from(same(&changed));
             }
         }
-        // Some corruptions only change a digit: both decoders took those.
+        // Some random mutations only tweak a digit and remain valid JSON.
         assert!(accepted > 0);
     }
 
-    /// Every place in a document, as a JSON pointer.
     fn places(value: &Value, here: &str, out: &mut Vec<String>) {
         out.push(here.to_owned());
         match value {
@@ -846,11 +861,9 @@ mod decode_tests {
         }
     }
 
-    /// Changes of shape rather than of bytes: a value anywhere in the document
-    /// replaced by one of another JSON type, wrapped, or turned from an object
-    /// into an array. A typed decoder and one that goes through a value tree
-    /// are most likely to disagree on these, because serde reads structs,
-    /// enums, options and numbers from more than one JSON form.
+    /// Structural mutations (type swaps, enum map forms, structs-as-sequences)
+    /// where a direct typed deserializer and serde's buffered content tree are
+    /// most likely to diverge.
     #[test]
     fn documents_of_another_shape_decode_as_the_general_decoder_does() {
         let mut random = Random(0x1357_9bdf_0246_8ace);
@@ -879,13 +892,11 @@ mod decode_tests {
                     10 => json!({"inventory": null}),
                     11 => json!({"processed": null}),
                     12 => json!({"xrun": {}}),
-                    // An object as the array of its values, which is how serde
-                    // reads a struct from a sequence.
+                    // Structs serialized as positional arrays.
                     13 => match old {
                         Value::Object(fields) => fields.into_iter().map(|(_, v)| v).collect(),
                         other => json!([other, other]),
                     },
-                    // A number as a string and a string as a number.
                     14 => match old {
                         Value::Number(number) => json!(number.to_string()),
                         Value::String(_) => json!(7),
@@ -902,11 +913,9 @@ mod decode_tests {
                 direct += usize::from(serde_json::from_slice::<InventoryResponse>(&bytes).is_ok());
             }
         }
-        // Both outcomes occur, and the direct path decoded some of them itself.
         assert!(accepted > 100 && refused > 100 && direct > 100);
 
-        // Structs written as sequences, in field order, at each level. The
-        // general decoder takes a tagged enum from a sequence too.
+        // Explicit sequence-encoded structs and tagged enums.
         for text in [
             r#"{"version":6,"requestId":1,"session":[42,"n"],"reply":{"result":"inventory","contexts":[]}}"#,
             r#"{"version":6,"requestId":1,"session":{"pid":42,"nonce":"n"},"reply":["inventory",[]]}"#,
@@ -934,12 +943,9 @@ mod decode_tests {
         }
     }
 
-    /// Float text that a JSON value tree cannot hold as written: the two
-    /// decoders must read every spelling of a number to the same bits.
+    /// Verify edge-case numeric literals parse to identical bit patterns.
     #[test]
     fn every_spelling_of_a_level_reads_to_the_same_bits() {
-        // A real inventory whose six levels are a number that occurs nowhere
-        // else in the text; each spelling is put in its place.
         const MARK: &str = "0.123456789";
         let mut random = Random(0x0f1e_2d3c_4b5a_6978);
         let mut target = random.target(0);
@@ -1080,9 +1086,12 @@ mod tests {
             transaction,
             target: Box::new(target),
             mode: PathMode::Passthrough,
+            reset: ResetPolicy::Allow,
         };
         let mut json = serde_json::to_value(operation).unwrap();
         assert_eq!(json["mode"], "passthrough");
+        // `Allow` is omitted on the wire for backwards compatibility.
+        assert!(json.get("reset").is_none());
         assert!(matches!(
             serde_json::from_value::<Operation>(json.clone()).unwrap(),
             Operation::Prepare {
@@ -1091,6 +1100,45 @@ mod tests {
             }
         ));
         json.as_object_mut().unwrap().remove("mode");
+        assert!(serde_json::from_value::<Operation>(json).is_err());
+    }
+    #[test]
+    fn a_refusing_prepare_carries_its_policy_and_an_older_one_means_allow() {
+        let target = Target::new("source", "Source", rc2fx_core::TargetKind::Mic, 1);
+        let transaction = Transaction {
+            session: Session {
+                pid: 42,
+                nonce: "a".repeat(32),
+            },
+            id: "b".repeat(32),
+            context: 7,
+            target_id: target.id.clone(),
+            revision: 2,
+        };
+        let operation = Operation::Prepare {
+            transaction,
+            target: Box::new(target),
+            mode: PathMode::Processed,
+            reset: ResetPolicy::Refuse,
+        };
+        let mut json = serde_json::to_value(operation).unwrap();
+        assert_eq!(json["reset"], "refuse");
+        assert!(matches!(
+            serde_json::from_value::<Operation>(json.clone()).unwrap(),
+            Operation::Prepare {
+                reset: ResetPolicy::Refuse,
+                ..
+            }
+        ));
+        json.as_object_mut().unwrap().remove("reset");
+        assert!(matches!(
+            serde_json::from_value::<Operation>(json.clone()).unwrap(),
+            Operation::Prepare {
+                reset: ResetPolicy::Allow,
+                ..
+            }
+        ));
+        json["reset"] = "sometimes".into();
         assert!(serde_json::from_value::<Operation>(json).is_err());
     }
 }

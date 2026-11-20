@@ -1,7 +1,7 @@
-//! Bounded control-side staging. No Store, audio work, timers or callback locks.
+//! Bounded control-side transaction staging (prepare / commit / cancel).
 use crate::parameters;
 use rc2fx_core::Target;
-use rc2fx_native_control::{ErrorCode, PathMode, TargetStatus, Transaction};
+use rc2fx_native_control::{ErrorCode, PathMode, ResetPolicy, TargetStatus, Transaction};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 
@@ -13,8 +13,9 @@ pub trait Endpoints {
         transaction: &Transaction,
         target: &Target,
         mode: PathMode,
+        reset: ResetPolicy,
     ) -> Result<parameters::Staged, ErrorCode>;
-    /// Leave the slot intact on lifecycle contention before taking ownership.
+    /// Must leave `staged` intact if committing fails due to contention.
     fn commit(
         &mut self,
         transaction: &Transaction,
@@ -38,10 +39,12 @@ pub struct Manager {
     completed: Vec<Completed>,
 }
 impl Manager {
-    /// Request-driven expiry: no periodic wakeups when a controller disappears.
+    /// Expires stale staged transactions lazily on incoming requests so we
+    /// don't need a background timer.
     pub fn reap(&mut self, now: Instant) {
         self.pending.retain(|pending| pending.expires > now);
     }
+    #[cfg(test)]
     pub fn prepare(
         &mut self,
         transaction: &Transaction,
@@ -50,12 +53,30 @@ impl Manager {
         now: Instant,
         endpoints: &mut impl Endpoints,
     ) -> Result<(), ErrorCode> {
+        self.prepare_with(
+            transaction,
+            target,
+            mode,
+            ResetPolicy::Allow,
+            now,
+            endpoints,
+        )
+    }
+    pub fn prepare_with(
+        &mut self,
+        transaction: &Transaction,
+        target: &Target,
+        mode: PathMode,
+        reset: ResetPolicy,
+        now: Instant,
+        endpoints: &mut impl Endpoints,
+    ) -> Result<(), ErrorCode> {
         self.reap(now);
         if !transaction.valid() || transaction.target_id != target.id {
             return Err(ErrorCode::InvalidParameters);
         }
         let fingerprint: [u8; 32] = Sha256::digest(
-            serde_json::to_vec(&(target, mode)).map_err(|_| ErrorCode::InvalidParameters)?,
+            serde_json::to_vec(&(target, mode, reset)).map_err(|_| ErrorCode::InvalidParameters)?,
         )
         .into();
         if let Some(pending) = self
@@ -64,7 +85,7 @@ impl Manager {
             .find(|pending| pending.transaction.id == transaction.id)
         {
             return if pending.transaction == *transaction && pending.fingerprint == fingerprint {
-                // A retransmission never extends a lease or allocates another snapshot.
+                // Idempotent retry: don't extend the lease or allocate again.
                 endpoints.status(transaction).map(|_| ())
             } else {
                 Err(ErrorCode::InvalidParameters)
@@ -83,7 +104,7 @@ impl Manager {
         if self.pending.len() == LIMIT {
             return Err(ErrorCode::Busy);
         }
-        let staged = endpoints.prepare(transaction, target, mode)?;
+        let staged = endpoints.prepare(transaction, target, mode, reset)?;
         self.pending.push(Pending {
             transaction: transaction.clone(),
             fingerprint,
@@ -134,7 +155,7 @@ impl Manager {
             return Err(error);
         }
         let pending = self.pending.swap_remove(index);
-        // Keep only the latest receipt for a path, plus a bounded recent cache.
+        // Keep only the latest completed receipt per path within the bounded cache.
         self.completed.retain(|completed| {
             (
                 completed.transaction.context,
@@ -214,10 +235,11 @@ mod tests {
             transaction: &Transaction,
             target: &Target,
             mode: PathMode,
+            reset: ResetPolicy,
         ) -> Result<parameters::Staged, ErrorCode> {
             self.status(transaction)?;
             self.control
-                .prepare_mode(target, transaction.revision, mode)
+                .prepare_with(target, transaction.revision, mode, reset)
                 .map_err(crate::parameter_error)
         }
         fn commit(
@@ -291,7 +313,7 @@ mod tests {
         assert_eq!(paths.control.status().unwrap().applied, 2);
     }
     #[test]
-    fn lost_commit_reply_is_reconcilable_and_cannot_be_cancelled_after_publication() {
+    fn lost_commit_reply_is_reconcilable_and_cannot_be_canceled_after_publication() {
         let target = target();
         let transaction = transaction();
         let now = Instant::now();

@@ -6,6 +6,11 @@ publish.workspace = true
 license.workspace = true
 description = "Delta encoding for RC2FX in-place mixer payload uploads"
 
+[features]
+# The encoder, for tests only: the mixer decodes, and the desktop app encodes
+# in Go. rc2fx-device enables it from its dev-dependency.
+encode = []
+
 [dependencies]
 # The mixer cross-build uses cargo-zigbuild, so the bundled C zstd is fine.
 zstd = { workspace = true }

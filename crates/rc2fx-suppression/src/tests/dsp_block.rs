@@ -1,11 +1,6 @@
-//! `Dsp` and `Chat` driving the worker endpoint through the provider trait:
-//! the endpoint's `process_block`, which is what they call, against the
-//! same endpoint behind the per-sample provider methods only.
-//!
-//! The endpoints here have no OS thread. A fake model on the test's thread
-//! takes the frames both endpoints submit, checks that they are the same
-//! frames, and publishes one result to both, in time, late, too late or
-//! never, so the two see identical queues at every block.
+//! Differential tests for `Dsp` and `Chat` driving the worker endpoint via
+//! `Suppression::process_block` vs the per-sample trait fallback. Uses a
+//! single-threaded fake model to feed identical queue timings to both sides.
 use super::*;
 use rc2fx_core::{Target, TargetKind, VoiceGate};
 use rc2fx_dsp::{Chat, Dsp, Meter, Prepared};
@@ -69,14 +64,8 @@ impl Suppression for Delay {
     }
 }
 
-/// The mixer's microphone path as saved (mono, suppression only, wet 0.79,
-/// gate 0.61) in 112-sample blocks, for counting instructions under an
-/// emulator. `RC2FX_MIC_PATH` is `block` (the endpoint's block form, as the
-/// mixer runs it), `sample` (the endpoint's per-sample provider methods) or
-/// `delay` (a delay in place of the endpoint); `RC2FX_MIC_BLOCKS` is the
-/// number of blocks. The fake model serves the endpoint's queues on this
-/// thread after every block, and its cost is in the count: the difference
-/// between two block counts is the steady cost of a block.
+// Instruction-count harness for the saved mic path (112-sample blocks).
+// Set `RC2FX_MIC_PATH=block|sample|delay` and `RC2FX_MIC_BLOCKS=N`.
 #[test]
 #[ignore = "for counting instructions; set RC2FX_MIC_PATH and RC2FX_MIC_BLOCKS"]
 fn mic_path_bench() {
@@ -96,7 +85,7 @@ fn mic_path_bench() {
         other => panic!("RC2FX_MIC_PATH={other}"),
     };
     let p = Prepared::new(&microphone(1, 0.79, 0.61), 48_000).unwrap();
-    let mut dsp = Dsp::new(&p, [Some(provider), None]).unwrap();
+    let mut dsp = Dsp::new(&p, Some(provider)).unwrap();
     let x: Vec<f32> = (0..PERIOD * 64)
         .map(|i| (i as f32 * 0.013).sin() * 0.25)
         .collect();
@@ -378,11 +367,6 @@ const TIMINGS: [Timing; 5] = [
     Timing::Stalling,
 ];
 
-/// A mono microphone through `Dsp` with the endpoint's block form and with
-/// its per-sample form: every output bit, every meter field (the voice
-/// score and gate position among them), every submitted frame and every
-/// endpoint counter, while results come in time, late, too late or not at
-/// all, the worker fails, and the wet gain, gate and bypass are edited.
 #[test]
 fn a_microphone_with_the_block_endpoint_matches_the_per_sample_endpoint() {
     let mut seen = [0_u64; 7];
@@ -392,7 +376,7 @@ fn a_microphone_with_the_block_endpoint_matches_the_per_sample_endpoint() {
             let (providers, mut wires) = endpoints(case % 2 == 1);
             let mut target = microphone(1, 0.79, 0.61);
             let mut p = Prepared::new(&target, 48_000).unwrap();
-            let mut dsps = providers.map(|provider| Dsp::new(&p, [provider, None]).unwrap());
+            let mut dsps = providers.map(|provider| Dsp::new(&p, provider).unwrap());
             let mut model = Model::new(timing, 0x9E37_79B9 + case as u64);
             let mut rng = Rng(0x2545_F491_4F6C_DD1D + case as u64);
             for block in 0..BLOCKS {

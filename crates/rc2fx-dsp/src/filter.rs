@@ -42,7 +42,15 @@ impl Filter {
             ..Self::default()
         }
     }
-    /// The whole filter as bits, for comparing two processing paths.
+    /// Filter settled on `c` with zero state (`begin(c)` is a no-op).
+    pub fn at_rest(c: Coefficients) -> Self {
+        Self {
+            c,
+            checkpoint: c,
+            last_target: c,
+            ..Self::default()
+        }
+    }
     #[cfg(test)]
     pub fn bits(&self) -> Vec<u64> {
         [self.c, self.checkpoint, self.last_target]
@@ -53,12 +61,10 @@ impl Filter {
             .chain([u64::from(self.smoothing)])
             .collect()
     }
-    /// Whether `begin` found coefficients still on their way to the target.
     pub fn is_smoothing(&self) -> bool {
         self.smoothing
     }
-    /// Whether the coefficients stopped moving short of `target`: the
-    /// smoothing step became too small to change them.
+    /// True if smoothing stopped before reaching `target` (step rounded to zero).
     #[cfg(test)]
     pub fn stalled(&self, target: Coefficients) -> bool {
         !self.smoothing && !same_bits(self.c, target)
@@ -69,10 +75,9 @@ impl Filter {
         self.checkpoint = self.c;
         self.last_target = target;
     }
-    /// `process` over a block, bit for bit. A steady filter runs a loop with no
-    /// branches; anything `process` would treat as exceptional leaves a peak
-    /// above the limit or a non-finite state, and the block is then redone with
-    /// `process` from its saved state.
+    /// Block version of `process` (bit-identical). When steady, runs a
+    /// branchless loop and rolls back to per-sample `process` if any peak
+    /// exceeds `limit` or state becomes non-finite.
     pub fn process_block(
         &mut self,
         target: &Coefficients,
@@ -95,10 +100,9 @@ impl Filter {
         }
     }
 }
-/// What a steady block reads and writes for one EQ band: `b0 b1 b2 a1 a2`,
-/// then `z1 z2`, each a `[left, right]` pair, in the order the stereo kernel
-/// walks them. 112 bytes, and 16-byte aligned so that no pair straddles a
-/// cache line.
+/// Hot per-band data for steady-state processing: `b0 b1 b2 a1 a2` and `z1 z2`,
+/// each stored as `[left, right]` so the stereo NEON kernel can load/store pairs
+/// directly. 112 bytes, 16-byte aligned so no pair splits a cache line.
 #[derive(Clone, Copy, Default)]
 #[repr(C, align(16))]
 struct Hot {
@@ -118,10 +122,8 @@ impl Hot {
         (self.z[0][ch], self.z[1][ch]) = (z[0], z[1]);
     }
 }
-/// The filters of an EQ bank, both channels. A steady block touches `hot`
-/// and `smoothing` only; each filter's checkpoint and last target are in
-/// `cold`. `get` and `set` move a whole `Filter` out and in for everything
-/// that is not a steady block.
+/// Stereo filter bank split into hot steady-state data and cold smoothing
+/// metadata (`checkpoint`, `last_target`).
 #[derive(Clone, Copy)]
 pub(crate) struct Filters {
     hot: [Hot; MAX_BANDS],
@@ -172,10 +174,8 @@ impl Filters {
     ) -> bool {
         stereo::process(self, active, counts, samples, n, limit)
     }
-    /// Asks the cache for everything a steady block will touch, all at once,
-    /// so the misses overlap instead of arriving one by one in the loop: the
-    /// lines of each active band among the first `count`, each line once, and
-    /// the first two lines of both sample planes. Nothing on other targets.
+    /// Prefetches the active bands' `Hot` lines and the start of both sample
+    /// buffers to overlap L1 misses before the biquad loop. No-op off AArch64.
     pub fn prefetch(&self, active: &[[bool; MAX_BANDS]; 2], count: usize, x: &[[f64; BLOCK]; 2]) {
         let mut next = 0;
         for (i, hot) in self.hot.iter().enumerate().take(count) {
@@ -193,10 +193,9 @@ impl Filters {
             prefetch_line(plane[8..].as_ptr());
         }
     }
-    /// Each active filter of `ch` in turn, as `Filter::process_block` would
-    /// run it, bit for bit. Steady filters run two at a time, the second one
-    /// sample behind the first, so the in-order A53 overlaps two independent
-    /// recurrences.
+    /// Runs every active filter on `ch` in order (bit-identical to per-filter
+    /// `process_block`). Steady bands run two at a time, pipelined by one sample
+    /// so the in-order Cortex-A53 can overlap two independent recurrences.
     pub fn cascade(
         &mut self,
         ch: usize,
@@ -276,10 +275,8 @@ impl Filter {
             self.c.a1 += COEFF_SMOOTH * (target.a1 - self.c.a1);
             self.c.a2 += COEFF_SMOOTH * (target.a2 - self.c.a2);
         }
-        // With `eq-fma` every product of the recurrence that feeds a sum is
-        // fused into it, here and in `step`, as the NEON kernel does: fewer
-        // operations on the mixer, and last bits that differ from the default
-        // build's. Without it this is the code that was always here.
+        // Under `eq-fma`, fuse the recurrence multiply-adds to match the NEON
+        // kernel (fewer ops on A53, minor LSB difference vs default build).
         #[cfg(not(feature = "eq-fma"))]
         let raw = self.c.b0 * x + self.z1;
         #[cfg(feature = "eq-fma")]
@@ -315,14 +312,12 @@ impl Filter {
         y
     }
 }
-/// A steady block passed through `process` unchanged: every raw output was
-/// within the limit and the state stayed finite. A NaN output also leaves the
-/// state NaN for the rest of the block, and an infinite state makes the next
-/// output infinite, so the peak and the final state cover every sample.
+/// Returns true if no sample clipped or became non-finite (a NaN/Inf output
+/// propagates into `z1`/`z2` or `peak`, so checking peak and final state suffices).
 fn clean(z1: f64, z2: f64, peak: f64, limit: f64) -> bool {
     peak <= limit && z1.is_finite() && z2.is_finite()
 }
-/// The steady `process` recurrence, without its exceptional-value handling.
+/// Branchless steady-state biquad step (no clipping/NaN handling).
 #[inline(always)]
 fn step(c: &Coefficients, z: &mut [f64; 2], input: f64, peak: &mut f64) -> f64 {
     #[cfg(not(feature = "eq-fma"))]

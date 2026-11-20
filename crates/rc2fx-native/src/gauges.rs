@@ -1,22 +1,17 @@
-//! Bench-only gauges, enabled by the RAM marker `/run/rc2fx-gauges` at mixer
-//! start. Without it libasound stays unaudited, and libsamplerate too unless
-//! `src_fast` audits it, so the loader never asks about their symbols, nothing
-//! here is bound and they resolve exactly as stock.
+//! Benchmark-only gauges gated by `RC2FX_GAUGES=1` (from `/run/rc2fx-gauges`
+//! at startup). When disabled, `libasound` (and `libsamplerate` unless
+//! `src_fast` audits it) aren't audited at all and resolve normally.
 //!
-//! The same switch turns on the measurements that cost the callback time and
-//! that nothing but a bench run reads: thread CPU clocks (timing.rs), per-path
-//! and buffer-resolve costs and the helper wake gauge (pipeline.rs), the
-//! cycle-start drift check and the count of buffer lookups made outside the
-//! callback (lib.rs).
+//! Also gates heavier callback-path diagnostics that only bench runs read:
+//! per-thread CPU clocks (`timing.rs`), per-path / buffer-resolve / helper-wake
+//! metrics (`pipeline/stats.rs`), and cycle-start drift checks (`lib.rs`).
 //!
-//! On the 1.7.7 image the USB bridges at 0x6b8900 (out) and 0x6b90d0 (in) are
-//! the only callers of `snd_pcm_avail`, `jack_frames_since_cycle_start` and
-//! `src_process`. Each calls the first two back to back on its client thread,
-//! then runs `src_process` once per channel. The vendor's fill is
-//! `ring - avail - frames` for playback and `avail - frames` for capture.
-//!
-//! A wrapper forwards the call unchanged and adds no allocation, lock or
-//! syscall beyond a clock read. Client names are read at registration.
+//! On the 1.7.7 mixer image, the USB bridges at 0x6b8900 (out) and 0x6b90d0
+//! (in) are the only callers of `snd_pcm_avail`, `jack_frames_since_cycle_start`,
+//! and `src_process`. Each calls the first two back-to-back, then `src_process`
+//! per channel. Fill levels are `ring - avail - frames` (playback) and
+//! `avail - frames` (capture). Wrappers forward unchanged with no allocations
+//! or locks.
 use super::{probe, timing};
 use std::{
     cell::Cell,
@@ -27,7 +22,7 @@ use std::{
     },
 };
 
-/// Loader cookies of the objects audited only while gauges are on.
+/// `la_objopen` cookies for libraries only audited when gauges are enabled.
 pub const ASOUND: usize = 4;
 pub const SAMPLERATE: usize = 5;
 const MAX_HANDLES: usize = 8;
@@ -50,8 +45,8 @@ static EPOCH: AtomicU64 = AtomicU64::new(0);
 static OVERFLOW: AtomicU64 = AtomicU64::new(0);
 static UNATTRIBUTED_SRC: AtomicU64 = AtomicU64::new(0);
 
-/// One ALSA handle. Only its client thread writes after claiming it, so the
-/// plain load-then-store updates below cannot race.
+/// Per-ALSA-handle stats. Written exclusively by its owning client thread after
+/// claiming the slot, so non-CAS load/store updates don't race.
 struct Handle {
     pcm: AtomicUsize,
     client: AtomicUsize,
@@ -84,8 +79,8 @@ impl Handle {
             src_max_cycle_ns: AtomicU64::new(0),
         }
     }
-    /// Starts a cycle: closes the previous one's resampler total, and restarts
-    /// the extremes when the bench has moved the epoch.
+    /// Closes out the previous cycle's resampler total and resets min/max
+    /// watermarks if the bench epoch advanced.
     fn begin_cycle(&self, epoch: u64) {
         let finished = self.src_cycle_ns.swap(0, Ordering::Relaxed);
         if self.epoch.load(Ordering::Relaxed) != epoch {
@@ -131,8 +126,8 @@ static CLIENTS: [Client; MAX_CLIENTS] = [const {
     }
 }; MAX_CLIENTS];
 
-/// This thread's handle since its last `snd_pcm_avail`, and that call's value
-/// until `jack_frames_since_cycle_start` pairs with it.
+/// Thread-local handle from the latest `snd_pcm_avail`, holding its return value
+/// until the paired `jack_frames_since_cycle_start` call arrives.
 #[derive(Clone, Copy)]
 struct Current {
     handle: Option<&'static Handle>,
@@ -142,20 +137,18 @@ thread_local! {
     static CURRENT: Cell<Current> = const { Cell::new(Current { handle: None, pending: None }) };
 }
 
-/// The flag lives with what every hooked call reads (`READ_MOSTLY`), on a
-/// line no thread writes after load.
+/// Stored in `READ_MOSTLY` on a write-once cache line shared by hot hooks.
 pub fn enabled() -> bool {
     super::READ_MOSTLY.gauges.load(Ordering::Relaxed)
 }
 
-/// Read once, before the first object is opened.
+/// Called once at startup before any shared object is opened.
 pub fn initialize() {
     let value = unsafe { libc::getenv(c"RC2FX_GAUGES".as_ptr()) };
     let on = !value.is_null() && unsafe { std::ffi::CStr::from_ptr(value) }.to_bytes() == b"1";
     super::READ_MOSTLY.gauges.store(on, Ordering::Relaxed);
 }
 
-/// The cookie for an object audited only while gauges are on.
 pub fn object(enabled: bool, basename: &[u8]) -> Option<usize> {
     if !enabled {
         None
@@ -172,8 +165,8 @@ pub fn remember_asound(map: usize) {
     ASOUND_MAP.store(map, Ordering::Release);
 }
 
-/// Which storage and wrapper serve a symbol the mixer itself binds. Everything
-/// else, including any call from a library, stays with the real definition.
+/// Maps symbols called directly by the main mixer binary to their wrapper and
+/// original-pointer slot; calls from other shared objects are left alone.
 fn selected(
     enabled: bool,
     reference: usize,
@@ -193,7 +186,6 @@ fn selected(
     }
 }
 
-/// The wrapper to bind in place of `address`, if this symbol has one.
 pub fn replacement(
     reference: usize,
     definition: usize,
@@ -204,8 +196,8 @@ pub fn replacement(
     super::remember(storage, address).then_some(wrapper)
 }
 
-/// Control path: keeps the name so that reports never read it from a client
-/// that may have closed since.
+/// Caches the JACK client name at registration so reports never dereference a
+/// client that may have closed.
 pub fn register_client(client: usize) {
     let Some(slot) = CLIENTS.iter().find(|slot| {
         let current = slot.client.load(Ordering::Acquire);
@@ -367,8 +359,8 @@ fn handle_report(handle: &Handle) -> serde_json::Value {
     })
 }
 
-/// Report thread only. The marker file's epoch restarts the extremes, so that
-/// a settled run does not report the startup transient.
+/// Report thread only. Bumping the epoch in `EPOCH_FILE` resets min/max
+/// watermarks so settled runs exclude startup transients.
 pub fn snapshot() -> serde_json::Value {
     let epoch = std::fs::read_to_string(EPOCH_FILE).map_or(0, |text| parse_epoch(&text));
     EPOCH.store(epoch, Ordering::Relaxed);
@@ -503,7 +495,7 @@ mod tests {
             CALLBACK_ALLOCATIONS, CALLBACK_FREES, CALLBACK_REALLOCATIONS, CallbackFrame, INSIDE,
         };
         let handle = &leaked::<1>()[0];
-        // First touch of the thread's state is outside the measured region.
+        // Initialize TLS outside the measured region.
         observe_avail(Some(handle), 1);
         let counts = || {
             [

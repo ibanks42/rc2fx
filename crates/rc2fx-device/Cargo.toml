@@ -4,54 +4,40 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
-description = "Rust device control, persistence and audio lifecycle orchestration"
+description = "Rust device control and persistence, and the control side of the native engine"
 
 [[bin]]
 name = "rc2fxd"
 path = "src/bin/rc2fxd.rs"
-required-features = ["native-pipeline"]
-
-[features]
-default = []
-native-pipeline = []
 
 [dependencies]
 rc2fx-usb = { path = "../rc2fx-usb" }
 rc2fx-firmware = { path = "../rc2fx-firmware" }
 rc2fx-core = { path = "../rc2fx-core" }
+# Prepared DSP parameters: the live-edit check asks them whether a change
+# needs a restart, and the native backend tests compare against them.
 rc2fx-dsp = { path = "../rc2fx-dsp" }
-rc2fx-suppression = { path = "../rc2fx-suppression" }
 rc2fx-native-control = { path = "../rc2fx-native-control" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.11"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
-
-# Every use is behind cfg(unix) or cfg(target_os = "linux").
-[target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-# In-place mixer updates (`mixer_update`) exist on the mixer, and in tests on
-# any Unix. They verify the same signed TUF metadata as the desktop, with the
-# same library, in memory: no transport, no clock.
-[target.'cfg(target_os = "linux")'.dependencies]
+# In-place mixer updates (`mixer_update`) verify the same signed TUF metadata
+# as the desktop, in memory: no transport, no clock.
 rc2fx-delta = { path = "../rc2fx-delta" }
 sigstore-tuf = { version = "0.16", default-features = false, features = ["aws-lc-rs"] }
 jiff = "0.2"
-
-[target.'cfg(unix)'.dev-dependencies]
-rc2fx-delta = { path = "../rc2fx-delta" }
-sigstore-tuf = { version = "0.16", default-features = false, features = ["aws-lc-rs"] }
 
 [dev-dependencies]
+# The tests encode the deltas they apply.
+rc2fx-delta = { path = "../rc2fx-delta", features = ["encode"] }
 # Signing keys and a signed test repository are generated per test, signed
-# with tough, the release tooling's signer, so the tests also check that the
-# verifier accepts what the publisher writes.
+# with tough; tests/xtask_tuf_fixtures.rs checks what the Go release tooling
+# writes.
 aws-lc-rs = "1"
-jiff = "0.2"
 tempfile = "3"
 tough = "0.24"
 # Paused time for the tests of timeouts. A feature of the tokio already used;
 # it adds no package.
 tokio = { version = "1", features = ["test-util"] }
-

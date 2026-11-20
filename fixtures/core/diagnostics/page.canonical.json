@@ -1,0 +1,1 @@
+{"nowNs":10,"nextSeq":4,"lost":1,"more":false,"events":[{"seq":1,"kind":"xrun","atNs":5,"message":"JACK xrun","details":{"valueNs":1120,"delayedUs":240}},{"seq":2,"kind":"outputDrops","path":"mic-1","atNs":6,"message":"3 output drops on mic-1","details":{"delta":3,"intervalNs":20000000}},{"seq":3,"kind":"reset","atNs":7,"message":"Diagnostics reset"}]}

@@ -135,8 +135,7 @@ static void *worker(void *unused) {
             if(mutation)last_error[0]='\0';
             if(last_error[0])snprintf(current.message,sizeof current.message,"%s",last_error);
         }
-        /* Mutations are consumed once, NEVER replayed after disconnect/lost
-         * replies. The next operation is a read-only refreshed snapshot. */
+        /* Never replay a mutation after a disconnect or lost reply; fetch a fresh snapshot instead. */
         struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
         until.tv_nsec+=atomic_load_explicit(&visible,memory_order_relaxed)?250000000:750000000;
         if(until.tv_nsec>=1000000000){++until.tv_sec;until.tv_nsec-=1000000000;}

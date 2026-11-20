@@ -1,0 +1,1111 @@
+{
+  "comment": "Shared accept/reject fixtures for rc2fx-core. The Go port (desktop/core, shared_fixtures_test.go) and the Rust crate (crates/rc2fx-core/tests/shared_fixtures.rs) read the same files; each checks its own direction. For accepted cases the decoded value, written back, must equal `canonical` (compact) and `pretty` (to_string_pretty) byte for byte. The Go port reaches every verdict; the Rust crate skips the reject cases of documents only the desktop reads (deviceState, deviceVersions, sshStatus, meter, diagnosticsEvents, presetSummaries). A rejected case with `error` must fail with exactly that message on each side that reads it. generate.py writes this directory: change it and run it rather than editing files by hand. .gitattributes keeps every byte as committed (CRLF and odd bytes are part of some cases).",
+  "cases": [
+    {
+      "name": "default config",
+      "type": "config",
+      "file": "config/default.json",
+      "accept": true,
+      "canonical": "config/default.json",
+      "pretty": "config/default-pretty.json",
+      "why": "Config::default() exactly as serde_json::to_string writes it"
+    },
+    {
+      "name": "default config, pretty preset file",
+      "type": "config",
+      "file": "config/default-pretty.json",
+      "accept": true,
+      "canonical": "config/default.json",
+      "pretty": "config/default-pretty.json",
+      "why": "a preset file as the app saves it (to_string_pretty)"
+    },
+    {
+      "name": "lookahead absent means 0",
+      "type": "config",
+      "file": "config/legacy-no-lookahead.json",
+      "accept": true,
+      "canonical": "config/default.json",
+      "why": "settings saved before the lookahead field existed"
+    },
+    {
+      "name": "edited config, hand-written style",
+      "type": "config",
+      "file": "config/edited.json",
+      "accept": true,
+      "canonical": "config/edited.canonical.json",
+      "why": "integers for floats, members in reverse order, CRLF and tabs; rightBands present, an escaped name"
+    },
+    {
+      "name": "unknown-top-level-field",
+      "type": "config",
+      "file": "config/reject-unknown-top-level-field.json",
+      "accept": false,
+      "why": "deny_unknown_fields"
+    },
+    {
+      "name": "retired-suppression-field",
+      "type": "config",
+      "file": "config/reject-retired-suppression-field.json",
+      "accept": false,
+      "why": "removed suppression options"
+    },
+    {
+      "name": "missing-selected-targets",
+      "type": "config",
+      "file": "config/reject-missing-selected-targets.json",
+      "accept": false,
+      "why": "schema 5+ requires a selection"
+    },
+    {
+      "name": "missing-gate",
+      "type": "config",
+      "file": "config/reject-missing-gate.json",
+      "accept": false,
+      "why": "required field"
+    },
+    {
+      "name": "schema-8",
+      "type": "config",
+      "file": "config/reject-schema-8.json",
+      "accept": false,
+      "error": "Expected schema version 9 and a positive revision",
+      "why": "only the current schema"
+    },
+    {
+      "name": "schema-10",
+      "type": "config",
+      "file": "config/reject-schema-10.json",
+      "accept": false,
+      "error": "Expected schema version 9 and a positive revision",
+      "why": "only the current schema"
+    },
+    {
+      "name": "revision-zero",
+      "type": "config",
+      "file": "config/reject-revision-zero.json",
+      "accept": false,
+      "error": "Expected schema version 9 and a positive revision",
+      "why": "a positive revision"
+    },
+    {
+      "name": "revision-negative",
+      "type": "config",
+      "file": "config/reject-revision-negative.json",
+      "accept": false,
+      "why": "u64 out of range"
+    },
+    {
+      "name": "revision-float",
+      "type": "config",
+      "file": "config/reject-revision-float.json",
+      "accept": false,
+      "why": "integer fields need integer literals"
+    },
+    {
+      "name": "revision-overflow",
+      "type": "config",
+      "file": "config/reject-revision-overflow.json",
+      "accept": false,
+      "why": "beyond u64 is a float"
+    },
+    {
+      "name": "channels-256",
+      "type": "config",
+      "file": "config/reject-channels-256.json",
+      "accept": false,
+      "why": "u8 out of range"
+    },
+    {
+      "name": "channels-float",
+      "type": "config",
+      "file": "config/reject-channels-float.json",
+      "accept": false,
+      "why": "integer fields need integer literals"
+    },
+    {
+      "name": "channels-3",
+      "type": "config",
+      "file": "config/reject-channels-3.json",
+      "accept": false,
+      "why": "1 or 2 channels"
+    },
+    {
+      "name": "null-right-bands",
+      "type": "config",
+      "file": "config/reject-null-right-bands.json",
+      "accept": false,
+      "why": "rightBands may be absent but not null"
+    },
+    {
+      "name": "right-bands-on-mono",
+      "type": "config",
+      "file": "config/reject-right-bands-on-mono.json",
+      "accept": false,
+      "why": "independent right EQ needs a stereo target"
+    },
+    {
+      "name": "null-bands",
+      "type": "config",
+      "file": "config/reject-null-bands.json",
+      "accept": false,
+      "why": "a required list"
+    },
+    {
+      "name": "null-lookahead",
+      "type": "config",
+      "file": "config/reject-null-lookahead.json",
+      "accept": false,
+      "why": "a defaulted field is not optional"
+    },
+    {
+      "name": "duplicate-key",
+      "type": "config",
+      "file": "config/reject-duplicate-key.json",
+      "accept": false,
+      "why": "duplicate keys at the top"
+    },
+    {
+      "name": "duplicate-nested-key",
+      "type": "config",
+      "file": "config/reject-duplicate-nested-key.json",
+      "accept": false,
+      "why": "duplicate keys at depth"
+    },
+    {
+      "name": "duplicate-escaped-key",
+      "type": "config",
+      "file": "config/reject-duplicate-escaped-key.json",
+      "accept": false,
+      "why": "an escaped spelling is still a duplicate"
+    },
+    {
+      "name": "trailing-data",
+      "type": "config",
+      "file": "config/reject-trailing-data.json",
+      "accept": false,
+      "why": "one value only"
+    },
+    {
+      "name": "two-suppressed-targets",
+      "type": "config",
+      "file": "config/reject-two-suppressed-targets.json",
+      "accept": false,
+      "why": "suppression on one target at a time"
+    },
+    {
+      "name": "suppression-on-playback",
+      "type": "config",
+      "file": "config/reject-suppression-on-playback.json",
+      "accept": false,
+      "why": "suppression on a mono mic or the Chat mix only"
+    },
+    {
+      "name": "unknown-kind",
+      "type": "config",
+      "file": "config/reject-unknown-kind.json",
+      "accept": false,
+      "why": "unknown enum variant"
+    },
+    {
+      "name": "unknown-band-type",
+      "type": "config",
+      "file": "config/reject-unknown-band-type.json",
+      "accept": false,
+      "why": "unknown enum variant"
+    },
+    {
+      "name": "band-id",
+      "type": "config",
+      "file": "config/reject-band-id.json",
+      "accept": false,
+      "why": "band ids are lowercase ASCII"
+    },
+    {
+      "name": "duplicate-band-id",
+      "type": "config",
+      "file": "config/reject-duplicate-band-id.json",
+      "accept": false,
+      "why": "band ids are unique per channel"
+    },
+    {
+      "name": "band-frequency",
+      "type": "config",
+      "file": "config/reject-band-frequency.json",
+      "accept": false,
+      "why": "frequency within 10..24000"
+    },
+    {
+      "name": "lookahead-2",
+      "type": "config",
+      "file": "config/reject-lookahead-2.json",
+      "accept": false,
+      "why": "lookahead 0 or 1"
+    },
+    {
+      "name": "gate-strength",
+      "type": "config",
+      "file": "config/reject-gate-strength.json",
+      "accept": false,
+      "why": "gate strength within 0..1"
+    },
+    {
+      "name": "gate-retired-shape",
+      "type": "config",
+      "file": "config/reject-gate-retired-shape.json",
+      "accept": false,
+      "why": "the gate's old fields"
+    },
+    {
+      "name": "gain-13",
+      "type": "config",
+      "file": "config/reject-gain-13.json",
+      "accept": false,
+      "why": "gain within -60..12"
+    },
+    {
+      "name": "duplicate-target-id",
+      "type": "config",
+      "file": "config/reject-duplicate-target-id.json",
+      "accept": false,
+      "why": "target ids are unique"
+    },
+    {
+      "name": "duplicate-stage",
+      "type": "config",
+      "file": "config/reject-duplicate-stage.json",
+      "accept": false,
+      "why": "each stage once"
+    },
+    {
+      "name": "unknown-selection",
+      "type": "config",
+      "file": "config/reject-unknown-selection.json",
+      "accept": false,
+      "why": "selection names known targets"
+    },
+    {
+      "name": "duplicate-selection",
+      "type": "config",
+      "file": "config/reject-duplicate-selection.json",
+      "accept": false,
+      "why": "selection is unique"
+    },
+    {
+      "name": "no-targets",
+      "type": "config",
+      "file": "config/reject-no-targets.json",
+      "accept": false,
+      "error": "Expected 1 to 32 targets",
+      "why": "1 to 32 targets"
+    },
+    {
+      "name": "33-targets",
+      "type": "config",
+      "file": "config/reject-33-targets.json",
+      "accept": false,
+      "error": "Expected 1 to 32 targets",
+      "why": "1 to 32 targets"
+    },
+    {
+      "name": "number-out-of-range",
+      "type": "config",
+      "file": "config/reject-number-out-of-range.json",
+      "accept": false,
+      "why": "1e400 is not a finite number"
+    },
+    {
+      "name": "byte-order-mark",
+      "type": "config",
+      "file": "config/reject-byte-order-mark.json",
+      "accept": false,
+      "why": "JSON text does not start with a BOM"
+    },
+    {
+      "name": "raw-tab-in-string",
+      "type": "config",
+      "file": "config/reject-raw-tab-in-string.json",
+      "accept": false,
+      "why": "control characters must be escaped"
+    },
+    {
+      "name": "not-utf8",
+      "type": "config",
+      "file": "config/reject-not-utf8.json",
+      "accept": false,
+      "why": "input must be UTF-8"
+    },
+    {
+      "name": "lone-surrogate",
+      "type": "config",
+      "file": "config/reject-lone-surrogate.json",
+      "accept": false,
+      "why": "a lone surrogate escape"
+    },
+    {
+      "name": "jack engine running",
+      "type": "deviceState",
+      "file": "device-state/jack-running.json",
+      "accept": true,
+      "canonical": "device-state/jack-running.json",
+      "why": "a JACK mixer applying three paths"
+    },
+    {
+      "name": "native engine mid-change",
+      "type": "deviceState",
+      "file": "device-state/native-changing.json",
+      "accept": true,
+      "canonical": "device-state/native-changing.canonical.json",
+      "why": "a native mixer committing a path change; escaped é and \\/ in the input come out raw"
+    },
+    {
+      "name": "missing-selection",
+      "type": "deviceState",
+      "file": "device-state/reject-missing-selection.json",
+      "accept": false,
+      "why": "required field"
+    },
+    {
+      "name": "missing-generation",
+      "type": "deviceState",
+      "file": "device-state/reject-missing-generation.json",
+      "accept": false,
+      "why": "the restart wire needs a generation"
+    },
+    {
+      "name": "missing-restart-allowed",
+      "type": "deviceState",
+      "file": "device-state/reject-missing-restart-allowed.json",
+      "accept": false,
+      "why": "the restart wire needs explicit eligibility"
+    },
+    {
+      "name": "unknown-engine-field",
+      "type": "deviceState",
+      "file": "device-state/reject-unknown-engine-field.json",
+      "accept": false,
+      "why": "deny_unknown_fields"
+    },
+    {
+      "name": "message-escape",
+      "type": "deviceState",
+      "file": "device-state/reject-message-escape.json",
+      "accept": false,
+      "why": "status text with a control character"
+    },
+    {
+      "name": "message-bidi",
+      "type": "deviceState",
+      "file": "device-state/reject-message-bidi.json",
+      "accept": false,
+      "why": "status text with a bidi override"
+    },
+    {
+      "name": "message-too-long",
+      "type": "deviceState",
+      "file": "device-state/reject-message-too-long.json",
+      "accept": false,
+      "why": "status text at most 4096 bytes"
+    },
+    {
+      "name": "capacity-129",
+      "type": "deviceState",
+      "file": "device-state/reject-capacity-129.json",
+      "accept": false,
+      "why": "channel capacity at most 128"
+    },
+    {
+      "name": "pending-unqualified",
+      "type": "deviceState",
+      "file": "device-state/reject-pending-unqualified.json",
+      "accept": false,
+      "why": "pending paths must be qualified"
+    },
+    {
+      "name": "active-out-of-order",
+      "type": "deviceState",
+      "file": "device-state/reject-active-out-of-order.json",
+      "accept": false,
+      "why": "ids in catalog order"
+    },
+    {
+      "name": "changing-allowed",
+      "type": "deviceState",
+      "file": "device-state/reject-changing-allowed.json",
+      "accept": false,
+      "why": "a pending change cannot allow another"
+    },
+    {
+      "name": "engine-mode",
+      "type": "deviceState",
+      "file": "device-state/reject-engine-mode.json",
+      "accept": false,
+      "why": "unknown enum variant"
+    },
+    {
+      "name": "invalid-config",
+      "type": "deviceState",
+      "file": "device-state/reject-invalid-config.json",
+      "accept": false,
+      "why": "the embedded config is validated"
+    },
+    {
+      "name": "sample-rate-float",
+      "type": "deviceState",
+      "file": "device-state/reject-sample-rate-float.json",
+      "accept": false,
+      "why": "integer fields need integer literals"
+    },
+    {
+      "name": "effects update",
+      "type": "configUpdate",
+      "file": "config-update/update.json",
+      "accept": true,
+      "canonical": "config-update/update.json",
+      "why": "a PUT body"
+    },
+    {
+      "name": "update carrying a selection",
+      "type": "configUpdate",
+      "file": "config-update/reject-selected-targets.json",
+      "accept": false,
+      "why": "effects saves never carry a selection"
+    },
+    {
+      "name": "update without a revision",
+      "type": "configUpdate",
+      "file": "config-update/reject-missing-revision.json",
+      "accept": false,
+      "why": "required field"
+    },
+    {
+      "name": "preset list",
+      "type": "presetSummaries",
+      "file": "presets/list.json",
+      "accept": true,
+      "canonical": "presets/list.canonical.json",
+      "why": "the mixer's preset list"
+    },
+    {
+      "name": "preset list, extra field",
+      "type": "presetSummaries",
+      "file": "presets/reject-extra-field.json",
+      "accept": false,
+      "why": "deny_unknown_fields"
+    },
+    {
+      "name": "preset list, missing name",
+      "type": "presetSummaries",
+      "file": "presets/reject-missing-name.json",
+      "accept": false,
+      "why": "required field"
+    },
+    {
+      "name": "preset list, not a list",
+      "type": "presetSummaries",
+      "file": "presets/reject-object.json",
+      "accept": false,
+      "why": "a list"
+    },
+    {
+      "name": "mixer release manifest",
+      "type": "mixerRelease",
+      "file": "mixer-release/release.json",
+      "accept": true,
+      "canonical": "mixer-release/release.canonical.json",
+      "why": "config/mixer-release.json as shipped"
+    },
+    {
+      "name": "mixer release, schema-2",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-schema-2.json",
+      "accept": false,
+      "why": "schema 1 only"
+    },
+    {
+      "name": "mixer release, version-word",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-version-word.json",
+      "accept": false,
+      "why": "dotted numeric version"
+    },
+    {
+      "name": "mixer release, version-prerelease",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-version-prerelease.json",
+      "accept": false,
+      "why": "dotted numeric version"
+    },
+    {
+      "name": "mixer release, version-part-too-long",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-version-part-too-long.json",
+      "accept": false,
+      "why": "parts of at most 9 digits"
+    },
+    {
+      "name": "mixer release, protocol-0",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-protocol-0.json",
+      "accept": false,
+      "why": "a non-zero protocol"
+    },
+    {
+      "name": "mixer release, protocol-overflow",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-protocol-overflow.json",
+      "accept": false,
+      "why": "u32 out of range"
+    },
+    {
+      "name": "mixer release, unknown-field",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-unknown-field.json",
+      "accept": false,
+      "why": "deny_unknown_fields"
+    },
+    {
+      "name": "mixer release, duplicate-version",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-duplicate-version.json",
+      "accept": false,
+      "why": "duplicate key"
+    },
+    {
+      "name": "mixer release, missing-protocol",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-missing-protocol.json",
+      "accept": false,
+      "why": "required field"
+    },
+    {
+      "name": "mixer release, too-many-values",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-too-many-values.json",
+      "accept": false,
+      "why": "16 values at most (checked before fields)"
+    },
+    {
+      "name": "mixer release, too large",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-too-large.json",
+      "accept": false,
+      "why": "4 KiB at most"
+    },
+    {
+      "name": "mixer release, not UTF-8",
+      "type": "mixerRelease",
+      "file": "mixer-release/reject-not-utf8.json",
+      "accept": false,
+      "why": "the manifest is UTF-8"
+    },
+    {
+      "name": "device versions from a newer mixer",
+      "type": "deviceVersions",
+      "file": "device-versions/newer.json",
+      "accept": true,
+      "canonical": "device-versions/newer.canonical.json",
+      "why": "unknown fields are ignored"
+    },
+    {
+      "name": "device versions from an older mixer",
+      "type": "deviceVersions",
+      "file": "device-versions/empty.json",
+      "accept": true,
+      "canonical": "device-versions/empty.json",
+      "why": "every field optional"
+    },
+    {
+      "name": "device versions with nulls",
+      "type": "deviceVersions",
+      "file": "device-versions/nulls.json",
+      "accept": true,
+      "canonical": "device-versions/empty.json",
+      "why": "null is an absent Option"
+    },
+    {
+      "name": "device versions, negative protocol",
+      "type": "deviceVersions",
+      "file": "device-versions/reject-negative.json",
+      "accept": false,
+      "why": "u32 out of range"
+    },
+    {
+      "name": "device versions, text with a newline",
+      "type": "deviceVersions",
+      "file": "device-versions/reject-newline.json",
+      "accept": false,
+      "why": "version text fit to show"
+    },
+    {
+      "name": "device versions, duplicate key",
+      "type": "deviceVersions",
+      "file": "device-versions/reject-duplicate.json",
+      "accept": false,
+      "why": "duplicate key"
+    },
+    {
+      "name": "ssh status",
+      "type": "sshStatus",
+      "file": "ssh-status/status.json",
+      "accept": true,
+      "canonical": "ssh-status/status.canonical.json",
+      "why": "unknown fields are ignored"
+    },
+    {
+      "name": "ssh status, minimal",
+      "type": "sshStatus",
+      "file": "ssh-status/minimal.json",
+      "accept": true,
+      "canonical": "ssh-status/minimal.json",
+      "why": "optional fields absent"
+    },
+    {
+      "name": "ssh status, missing-host-keys",
+      "type": "sshStatus",
+      "file": "ssh-status/reject-missing-host-keys.json",
+      "accept": false,
+      "why": "a reply missing what the status means"
+    },
+    {
+      "name": "ssh status, missing-managed",
+      "type": "sshStatus",
+      "file": "ssh-status/reject-missing-managed.json",
+      "accept": false,
+      "why": "a reply missing what the status means"
+    },
+    {
+      "name": "ssh status, array",
+      "type": "sshStatus",
+      "file": "ssh-status/reject-array.json",
+      "accept": false,
+      "why": "not an object"
+    },
+    {
+      "name": "ssh status, null",
+      "type": "sshStatus",
+      "file": "ssh-status/reject-null.json",
+      "accept": false,
+      "why": "not an object"
+    },
+    {
+      "name": "ssh status, host-key-newline",
+      "type": "sshStatus",
+      "file": "ssh-status/reject-host-key-newline.json",
+      "accept": false,
+      "why": "host keys fit to show"
+    },
+    {
+      "name": "meter with performance",
+      "type": "meter",
+      "file": "meter/performance.json",
+      "accept": true,
+      "canonical": "meter/performance.canonical.json",
+      "why": "float formatting: exponents, -0, subnormals, integers as floats; unknown meter and performance fields ignored"
+    },
+    {
+      "name": "meter from an older mixer",
+      "type": "meter",
+      "file": "meter/minimal.json",
+      "accept": true,
+      "canonical": "meter/minimal.canonical.json",
+      "why": "no epoch reads as 0"
+    },
+    {
+      "name": "meter, missing-generation",
+      "type": "meter",
+      "file": "meter/reject-missing-generation.json",
+      "accept": false,
+      "why": "required field"
+    },
+    {
+      "name": "meter, type",
+      "type": "meter",
+      "file": "meter/reject-type.json",
+      "accept": false,
+      "why": "unknown enum variant"
+    },
+    {
+      "name": "meter, histogram-length",
+      "type": "meter",
+      "file": "meter/reject-histogram-length.json",
+      "accept": false,
+      "why": "exactly 8 buckets"
+    },
+    {
+      "name": "meter, histogram-long",
+      "type": "meter",
+      "file": "meter/reject-histogram-long.json",
+      "accept": false,
+      "why": "exactly 8 buckets"
+    },
+    {
+      "name": "meter, target-unknown-field",
+      "type": "meter",
+      "file": "meter/reject-target-unknown-field.json",
+      "accept": false,
+      "why": "target meters deny unknown fields"
+    },
+    {
+      "name": "meter, target-missing-worker-failed",
+      "type": "meter",
+      "file": "meter/reject-target-missing-worker-failed.json",
+      "accept": false,
+      "why": "required field"
+    },
+    {
+      "name": "diagnostics page",
+      "type": "diagnosticsEvents",
+      "file": "diagnostics/page.json",
+      "accept": true,
+      "canonical": "diagnostics/page.canonical.json",
+      "why": "a null path and empty details are left out when written"
+    },
+    {
+      "name": "diagnostics page, unknown-kind",
+      "type": "diagnosticsEvents",
+      "file": "diagnostics/unknown-kind.json",
+      "accept": true,
+      "canonical": "diagnostics/unknown-kind.canonical.json",
+      "why": "a newer mixer's unknown event kind arrives as other"
+    },
+    {
+      "name": "diagnostics page, details-unknown-field",
+      "type": "diagnosticsEvents",
+      "file": "diagnostics/reject-details-unknown-field.json",
+      "accept": false,
+      "why": "deny_unknown_fields"
+    },
+    {
+      "name": "diagnostics page, page-unknown-field",
+      "type": "diagnosticsEvents",
+      "file": "diagnostics/reject-page-unknown-field.json",
+      "accept": false,
+      "why": "deny_unknown_fields"
+    },
+    {
+      "name": "show inventory",
+      "type": "stockInventory",
+      "file": "inventory/show.json",
+      "accept": true,
+      "canonical": "inventory/show.json",
+      "why": "a saved show"
+    },
+    {
+      "name": "show inventory, duplicate-fader",
+      "type": "stockInventory",
+      "file": "inventory/reject-duplicate-fader.json",
+      "accept": false,
+      "why": "a fader is assigned once"
+    },
+    {
+      "name": "show inventory, source-overflow",
+      "type": "stockInventory",
+      "file": "inventory/reject-source-overflow.json",
+      "accept": false,
+      "why": "u16 out of range"
+    },
+    {
+      "name": "show inventory, source-256",
+      "type": "stockInventory",
+      "file": "inventory/reject-source-256.json",
+      "accept": false,
+      "why": "sources 0 to 255"
+    },
+    {
+      "name": "show inventory, unavailable-with-inputs",
+      "type": "stockInventory",
+      "file": "inventory/reject-unavailable-with-inputs.json",
+      "accept": false,
+      "why": "an unavailable show has no inputs"
+    },
+    {
+      "name": "json depth-64",
+      "type": "json",
+      "file": "json/depth-64.json",
+      "accept": true,
+      "canonical": "json/depth-64.canonical.json",
+      "why": "nesting to depth 64 is accepted"
+    },
+    {
+      "name": "json depth-65",
+      "type": "json",
+      "file": "json/reject-depth-65.json",
+      "accept": false,
+      "why": "nesting beyond depth 64"
+    },
+    {
+      "name": "json negative-zero",
+      "type": "json",
+      "file": "json/negative-zero.json",
+      "accept": true,
+      "canonical": "json/negative-zero.canonical.json",
+      "why": "-0 is the float -0.0"
+    },
+    {
+      "name": "json u64-max",
+      "type": "json",
+      "file": "json/u64-max.json",
+      "accept": true,
+      "canonical": "json/u64-max.canonical.json",
+      "why": "the largest unsigned integer"
+    },
+    {
+      "name": "json beyond-u64",
+      "type": "json",
+      "file": "json/beyond-u64.json",
+      "accept": true,
+      "canonical": "json/beyond-u64.canonical.json",
+      "why": "a larger integer is a float"
+    },
+    {
+      "name": "json i64-min",
+      "type": "json",
+      "file": "json/i64-min.json",
+      "accept": true,
+      "canonical": "json/i64-min.canonical.json",
+      "why": "the smallest signed integer"
+    },
+    {
+      "name": "json beyond-i64",
+      "type": "json",
+      "file": "json/beyond-i64.json",
+      "accept": true,
+      "canonical": "json/beyond-i64.canonical.json",
+      "why": "a smaller integer is a float"
+    },
+    {
+      "name": "json exponent",
+      "type": "json",
+      "file": "json/exponent.json",
+      "accept": true,
+      "canonical": "json/exponent.canonical.json",
+      "why": "an exponent makes a float"
+    },
+    {
+      "name": "json tiny",
+      "type": "json",
+      "file": "json/tiny.json",
+      "accept": true,
+      "canonical": "json/tiny.canonical.json",
+      "why": "underflow rounds to zero"
+    },
+    {
+      "name": "json long-integer",
+      "type": "json",
+      "file": "json/long-integer.json",
+      "accept": true,
+      "canonical": "json/long-integer.canonical.json",
+      "why": "serde_json keeps 20 digits and scales by ten, not the correctly rounded 1.2345678901234568e20"
+    },
+    {
+      "name": "json inexact-float",
+      "type": "json",
+      "file": "json/inexact-float.json",
+      "accept": true,
+      "canonical": "json/inexact-float.canonical.json",
+      "why": "serde_json divides by a rounded power of ten, not the correctly rounded 1.2345678901234568e-300"
+    },
+    {
+      "name": "json many-digits",
+      "type": "json",
+      "file": "json/many-digits.json",
+      "accept": true,
+      "canonical": "json/many-digits.canonical.json",
+      "why": "digits past 19 are ignored"
+    },
+    {
+      "name": "json huge-exponent-zero",
+      "type": "json",
+      "file": "json/huge-exponent-zero.json",
+      "accept": true,
+      "canonical": "json/huge-exponent-zero.canonical.json",
+      "why": "a zero significand with an overflowing exponent"
+    },
+    {
+      "name": "json huge-negative-exponent",
+      "type": "json",
+      "file": "json/huge-negative-exponent.json",
+      "accept": true,
+      "canonical": "json/huge-negative-exponent.canonical.json",
+      "why": "an overflowing negative exponent is zero"
+    },
+    {
+      "name": "json huge-exponent",
+      "type": "json",
+      "file": "json/reject-huge-exponent.json",
+      "accept": false,
+      "why": "an overflowing positive exponent is out of range"
+    },
+    {
+      "name": "json surrogate-pair",
+      "type": "json",
+      "file": "json/surrogate-pair.json",
+      "accept": true,
+      "canonical": "json/surrogate-pair.canonical.json",
+      "why": "an escaped pair is one character"
+    },
+    {
+      "name": "json escapes",
+      "type": "json",
+      "file": "json/escapes.json",
+      "accept": true,
+      "canonical": "json/escapes.canonical.json",
+      "why": "serde_json escapes only quotes, backslashes and control characters"
+    },
+    {
+      "name": "json object",
+      "type": "json",
+      "file": "json/object.json",
+      "accept": true,
+      "canonical": "json/object.canonical.json",
+      "why": "whitespace between tokens"
+    },
+    {
+      "name": "json number-out-of-range",
+      "type": "json",
+      "file": "json/reject-number-out-of-range.json",
+      "accept": false,
+      "why": "not a finite number"
+    },
+    {
+      "name": "json lone-surrogate",
+      "type": "json",
+      "file": "json/reject-lone-surrogate.json",
+      "accept": false,
+      "why": "a lone surrogate"
+    },
+    {
+      "name": "json lone-low-surrogate",
+      "type": "json",
+      "file": "json/reject-lone-low-surrogate.json",
+      "accept": false,
+      "why": "a lone low surrogate"
+    },
+    {
+      "name": "json leading-zero",
+      "type": "json",
+      "file": "json/reject-leading-zero.json",
+      "accept": false,
+      "why": "no leading zeros"
+    },
+    {
+      "name": "json bare-point",
+      "type": "json",
+      "file": "json/reject-bare-point.json",
+      "accept": false,
+      "why": "digits after the point"
+    },
+    {
+      "name": "json plus-sign",
+      "type": "json",
+      "file": "json/reject-plus-sign.json",
+      "accept": false,
+      "why": "no plus sign"
+    },
+    {
+      "name": "json trailing-comma",
+      "type": "json",
+      "file": "json/reject-trailing-comma.json",
+      "accept": false,
+      "why": "no trailing comma"
+    },
+    {
+      "name": "json trailing-comma-object",
+      "type": "json",
+      "file": "json/reject-trailing-comma-object.json",
+      "accept": false,
+      "why": "no trailing comma"
+    },
+    {
+      "name": "json nan",
+      "type": "json",
+      "file": "json/reject-nan.json",
+      "accept": false,
+      "why": "no NaN"
+    },
+    {
+      "name": "json infinity",
+      "type": "json",
+      "file": "json/reject-infinity.json",
+      "accept": false,
+      "why": "no Infinity"
+    },
+    {
+      "name": "json raw-newline",
+      "type": "json",
+      "file": "json/reject-raw-newline.json",
+      "accept": false,
+      "why": "control characters must be escaped"
+    },
+    {
+      "name": "json single-quotes",
+      "type": "json",
+      "file": "json/reject-single-quotes.json",
+      "accept": false,
+      "why": "strings use double quotes"
+    },
+    {
+      "name": "json comment",
+      "type": "json",
+      "file": "json/reject-comment.json",
+      "accept": false,
+      "why": "no comments"
+    },
+    {
+      "name": "json empty",
+      "type": "json",
+      "file": "json/reject-empty.json",
+      "accept": false,
+      "why": "a value is required"
+    },
+    {
+      "name": "json whitespace",
+      "type": "json",
+      "file": "json/reject-whitespace.json",
+      "accept": false,
+      "why": "a value is required"
+    },
+    {
+      "name": "json two-values",
+      "type": "json",
+      "file": "json/reject-two-values.json",
+      "accept": false,
+      "why": "one value only"
+    },
+    {
+      "name": "json unquoted-key",
+      "type": "json",
+      "file": "json/reject-unquoted-key.json",
+      "accept": false,
+      "why": "keys are strings"
+    },
+    {
+      "name": "json bad-escape",
+      "type": "json",
+      "file": "json/reject-bad-escape.json",
+      "accept": false,
+      "why": "only JSON escapes"
+    },
+    {
+      "name": "json duplicate-nested",
+      "type": "json",
+      "file": "json/reject-duplicate-nested.json",
+      "accept": false,
+      "why": "duplicate keys at depth"
+    },
+    {
+      "name": "json duplicate-escaped",
+      "type": "json",
+      "file": "json/reject-duplicate-escaped.json",
+      "accept": false,
+      "why": "an escaped spelling is still a duplicate"
+    },
+    {
+      "name": "json not UTF-8",
+      "type": "json",
+      "file": "json/reject-not-utf8.json",
+      "accept": false,
+      "why": "input must be UTF-8"
+    }
+  ]
+}

@@ -3,6 +3,7 @@ use std::sync::{Condvar, Mutex};
 
 mod dsp_block;
 mod endpoint_bench;
+mod gru_prep;
 mod lead_phase;
 struct Identity;
 impl Model for Identity {
@@ -107,16 +108,7 @@ fn geometry_and_rejection() {
             "{options:?}"
         );
     }
-    #[cfg(target_os = "linux")]
     assert_eq!(scheduling::validate(crate::PRODUCTION_WORKER), Ok(()));
-}
-#[test]
-fn inline_endpoint_removes_only_the_worker_lead() {
-    let inline = Inline::new(0).unwrap();
-    assert_eq!(inline.geometry().worker_lead_samples, 0);
-    assert_eq!(inline.geometry().frame_samples, 240);
-    assert_eq!(inline.geometry().intrinsic_delay_samples, 120);
-    assert_eq!(inline.latency_samples(), 360);
 }
 #[test]
 fn exact_dry_delay_when_late_or_failed_in_arbitrary_chunks() {
@@ -304,7 +296,7 @@ fn recovery_invalidates_model_history_and_then_recovers() {
             }));
         }
         let shared = Shared::default();
-        shared.stop.store(2, Ordering::Release);
+        shared.request_stop(StopRequest::Drain);
         run(Box::new(Identity), consumer, producer, &shared, geometry());
         for expected in valid {
             let frame = output.pop().unwrap();
@@ -318,86 +310,6 @@ fn recovery_invalidates_model_history_and_then_recovers() {
     }
 }
 
-#[cfg(unix)]
-#[test]
-fn worker_loop_capture_preserves_queue_depth_predecessors_and_counters() {
-    let (mut input, consumer) = queue::channel();
-    let (producer, mut output) = queue::channel();
-    for sequence in 0..4 {
-        assert!(input.push(&Frame {
-            sequence,
-            submitted_ns: metrics::now(false),
-            valid: true,
-            ..Frame::default()
-        }));
-    }
-    let shared = Arc::new(Shared::default());
-    let telemetry = Telemetry(shared.clone());
-    shared.missed.store(7, Ordering::Relaxed);
-    assert!(telemetry.arm_capture(1));
-    assert_eq!(
-        telemetry.snapshot().missed_deadlines,
-        7,
-        "arming is not a counter reset"
-    );
-    shared.stop.store(2, Ordering::Release);
-    run(Box::new(Identity), consumer, producer, &shared, geometry());
-    let Recorded::Stable(window) = telemetry.capture_window() else {
-        panic!("capture")
-    };
-    assert_eq!(window.metadata.state, CaptureState::Stopped);
-    assert_eq!(window.frames.len(), 4);
-    assert_eq!(
-        window
-            .frames
-            .iter()
-            .map(|f| f.input_pending_after_pop)
-            .collect::<Vec<_>>(),
-        [3, 2, 1, 0]
-    );
-    for (i, frame) in window.frames.iter().enumerate() {
-        assert_eq!(frame.sequence, i as u64);
-        assert!(frame.output_published);
-        assert!(frame.submitted_ns <= frame.started_ns);
-        assert!(frame.started_ns <= frame.finished_ns);
-        assert!(frame.finished_ns <= frame.published_ns);
-        if i > 0 {
-            assert_eq!(frame.previous_sequence, Some((i - 1) as u64));
-            assert_eq!(
-                frame.previous_published_ns,
-                window.frames[i - 1].published_ns
-            );
-        }
-        assert_eq!(output.pop().unwrap().sequence, i as u64);
-    }
-    assert_eq!(telemetry.snapshot().completed_frames, 4);
-    assert_eq!(telemetry.snapshot().missed_deadlines, 7);
-    assert_eq!(telemetry.snapshot().output_drops, 0);
-}
-
-#[test]
-fn actual_endpoint_miss_triggers_the_acknowledged_capture_epoch() {
-    let (mut worker, _, _) = endpoint();
-    let shared = worker.shared.clone();
-    assert!(worker.telemetry().arm_capture(1));
-    let mut recorder = capture::Recorder::new(&shared.capture);
-    recorder.begin(metrics::now(false));
-    for _ in 0..750 {
-        worker.process_sample(0.0, 1.0);
-    }
-    recorder.record(CaptureFrame {
-        sequence: 0,
-        ..CaptureFrame::default()
-    });
-    let Recorded::Stable(window) = worker.telemetry().capture_window() else {
-        panic!("capture")
-    };
-    assert_eq!(window.metadata.state, CaptureState::Triggered);
-    assert_eq!(window.metadata.trigger.unwrap().sequence, 0);
-    assert_eq!(worker.telemetry().snapshot().missed_deadlines, 1);
-}
-
-#[cfg(unix)]
 #[test]
 fn queued_time_is_included_in_turnaround_and_missing_stamps_are_errors() {
     let (mut input, consumer) = queue::channel();
@@ -415,7 +327,7 @@ fn queued_time_is_included_in_turnaround_and_missing_stamps_are_errors() {
         }));
     }
     let shared = Shared::default();
-    shared.stop.store(2, Ordering::Release);
+    shared.request_stop(StopRequest::Drain);
     run(Box::new(Identity), consumer, producer, &shared, geometry());
     let wait = shared.queue_wait.snapshot();
     let turnaround = shared.turnaround.snapshot();
@@ -431,9 +343,11 @@ fn queued_time_is_included_in_turnaround_and_missing_stamps_are_errors() {
     assert!(output.pop().is_some());
 }
 #[test]
-fn gap_history_and_partial_drain_geometry() {
-    // The generic geometry's intrinsic delay is shorter than one frame.
-    let g = geometry();
+fn a_gap_invalidates_every_frame_of_a_longer_than_frame_history() {
+    // LA1's intrinsic delay (360) spans two frames of 240, so a gap must
+    // invalidate two frames; the generic geometry's single frame is covered
+    // by recovery_invalidates_model_history_and_then_recovers.
+    let g = Geometry::for_lookahead(1).unwrap();
     let (mut input, consumer) = queue::channel();
     let (producer, mut output) = queue::channel();
     for sequence in [0, 3, 4, 5, 6] {
@@ -444,11 +358,11 @@ fn gap_history_and_partial_drain_geometry() {
         }));
     }
     let shared = Shared::default();
-    shared.stop.store(2, Ordering::Release);
+    shared.request_stop(StopRequest::Drain);
     run(Box::new(Identity), consumer, producer, &shared, g);
     assert!(output.pop().unwrap().valid);
     let invalid = g.intrinsic_delay_samples.div_ceil(g.frame_samples);
-    assert_eq!(invalid, 1);
+    assert_eq!(invalid, 2);
     for i in 0..4 {
         assert_eq!(output.pop().unwrap().valid, i >= invalid);
     }
@@ -534,7 +448,7 @@ fn held_terminal_job_timeout_late_failure_and_queued_drain() {
             assert_eq!(terminal.drained, !fail);
             assert_eq!(terminal.snapshot.completed_frames, if fail { 0 } else { 3 });
             assert_eq!(terminal.pending_input_frames, if fail { 2 } else { 0 });
-            if !fail && cfg!(unix) {
+            if !fail {
                 assert!(terminal.snapshot.wall.overruns >= 1);
                 assert!(terminal.snapshot.allowance_overruns >= 1);
             }
@@ -671,7 +585,7 @@ fn the_worker_records_its_slowest_frame_consistently_with_its_timings() {
 }
 
 #[test]
-fn cancel_receipt_cannot_be_relabelled_drain_and_survives_drop() {
+fn cancel_receipt_cannot_be_relabeled_drain_and_survives_drop() {
     let mut worker =
         Worker::spawn(geometry(), Box::new(Identity), WorkerOptions::default()).unwrap();
     for _ in 0..17 {
@@ -756,7 +670,7 @@ fn dsp_retirement_bridge_keeps_late_worker_fault_and_unresolved_timeout() {
     target.suppression.enabled = true;
     target.suppression.lookahead = lookahead;
     let prepared = rc2fx_dsp::Prepared::new(&target, 48000).unwrap();
-    let mut dsp = rc2fx_dsp::Dsp::new(&prepared, [Some(Box::new(worker)), None]).unwrap();
+    let mut dsp = rc2fx_dsp::Dsp::new(&prepared, Some(Box::new(worker))).unwrap();
     // Two full frames and 17 samples of a third.
     let samples = 2 * geometry().frame_samples + 17;
     let input = vec![0.125; samples];
@@ -813,9 +727,35 @@ fn output_overflow_is_retained_in_joined_verdict() {
         ..Frame::default()
     }));
     let shared = Shared::default();
-    shared.stop.store(2, Ordering::Release);
+    shared.request_stop(StopRequest::Drain);
     run(Box::new(Identity), consumer, producer, &shared, geometry());
     assert_eq!(shared.output_drops.load(Ordering::Acquire), 1);
     assert_eq!(shared.completed.load(Ordering::Acquire), 1);
     assert!(output.pop().is_some());
+}
+#[test]
+fn retirement_codes_decode_totally() {
+    for request in [StopRequest::Run, StopRequest::Cancel, StopRequest::Drain] {
+        assert_eq!(StopRequest::from_u8(request as u8), request);
+    }
+    for termination in [
+        Termination::Running,
+        Termination::Stopping,
+        Termination::TimedOut,
+        Termination::Joined,
+    ] {
+        assert_eq!(Termination::from_u8(termination as u8), termination);
+    }
+    for value in 3..=u8::MAX {
+        assert_eq!(StopRequest::from_u8(value), StopRequest::Cancel);
+    }
+    for value in 4..=u8::MAX {
+        assert_eq!(Termination::from_u8(value), Termination::Joined);
+    }
+    let shared = Shared::default();
+    assert_eq!(shared.stop_request(), StopRequest::Run);
+    shared.request_stop(StopRequest::for_mode(StopMode::Drain));
+    assert_eq!(shared.stop_request(), StopRequest::Drain);
+    shared.request_stop(StopRequest::for_mode(StopMode::Cancel));
+    assert_eq!(shared.stop_request(), StopRequest::Cancel);
 }

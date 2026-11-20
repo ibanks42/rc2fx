@@ -1,13 +1,10 @@
-//! Experimental, exact-arithmetic stereo cascade scheduling.
+//! Bit-exact stereo biquad cascade scheduling.
 //!
-//! The eligibility and rollback here are architecture-independent; only the
-//! steady chain differs: on AArch64 both channels ride in the two lanes of an
-//! `f64x2` (the same coefficients in both lanes, explicit NEON ops, no
-//! reassociation, and no FMA unless the `eq-fma` feature fuses the scalar
-//! path too), elsewhere the scalar four-recurrence loop runs. The
-//! scalar loop is the reference. Both reproduce `steady_two`'s per-sample
-//! arithmetic exactly, so a refusal falls back to the per-channel path with no
-//! change in audio.
+//! Eligibility and rollback are shared across targets; the steady-state chain
+//! runs in `float64x2_t` NEON on AArch64 (identical coefficients across both
+//! lanes, matching scalar rounding) and as a 4-recurrence scalar loop elsewhere.
+//! If any band clips or becomes non-finite, state and samples roll back and the
+//! caller falls back to the per-channel path with identical output.
 use super::*;
 
 #[cfg(target_arch = "aarch64")]
@@ -64,9 +61,8 @@ pub(super) fn process(
         }
         valid
     };
-    // The NEON chain works on a copy with the two channels side by side and
-    // `x` takes the result only when every band was clean, so a refusal has
-    // no samples to restore.
+    // NEON works on a local interleaved copy and only writes back into `x` if
+    // every band stayed clean, so rollback only needs to restore filter state.
     #[cfg(target_arch = "aarch64")]
     let valid = {
         let [left, right] = x;
@@ -94,8 +90,7 @@ pub(super) fn process(
     valid
 }
 
-/// The scalar four-recurrence chain: one channel's two bands per pass, two
-/// channels in turn. The reference implementation of `process`'s contract.
+/// Scalar 4-recurrence reference (two bands per pass across both channels).
 #[cfg(not(target_arch = "aarch64"))]
 fn scalar_chain(
     filters: &mut Filters,
@@ -539,12 +534,9 @@ mod tests {
         }
     }
 
-    /// Random chains, lengths, states and input, different in each channel,
-    /// through this scheduling and through the per-channel cascade: samples,
-    /// state and clip counts must match, block after block. States start on
-    /// either side of the flush threshold in one channel and not the other,
-    /// and now and then one channel alone carries a value that refuses the
-    /// whole block.
+    // Random chains, states, and inputs across both channels, including values
+    // near the 1e-25 flush threshold and occasional single-channel spikes that
+    // force a rollback.
     #[test]
     fn random_chains_match_the_per_channel_cascade_in_each_channel() {
         let mut seed = 0x2545_F491_4F6C_DD1D_u64;
@@ -809,8 +801,8 @@ mod tests {
                 ..Band::new(format!("band-{i}"))
             }
         }
-        /// Ten identical bands on both channels, or one channel's bands disabled so
-        /// the stereo scheduling refuses and the per-channel path runs instead.
+        // Ten bands per channel (matching the headphone fixture); disable one
+        // side to force fallback to the per-channel cascade.
         fn target(right_enabled: bool, left_enabled: bool) -> Target {
             let mut target = Target::new("eq", "EQ", TargetKind::Playback, 2);
             target.bypass = false;

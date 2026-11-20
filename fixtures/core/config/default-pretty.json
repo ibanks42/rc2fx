@@ -1,0 +1,1407 @@
+{
+  "schemaVersion": 9,
+  "revision": 1,
+  "selectedTargets": [],
+  "targets": [
+    {
+      "id": "mic-1",
+      "name": "Mic 4",
+      "kind": "mic",
+      "channels": 1,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "analog-1",
+      "name": "Mic 1",
+      "kind": "mic",
+      "channels": 1,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "analog-2",
+      "name": "Mic 2",
+      "kind": "mic",
+      "channels": 1,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "analog-3",
+      "name": "Mic 3",
+      "kind": "mic",
+      "channels": 1,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "usb-main",
+      "name": "USB main",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "usb-chat",
+      "name": "USB chat",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "usb-secondary",
+      "name": "USB secondary",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "usb-game",
+      "name": "USB game",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "usb-music",
+      "name": "USB music",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "usb-a",
+      "name": "USB a",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "usb-b",
+      "name": "USB b",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "headphones-1",
+      "name": "Headphones 1",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "headphones-2",
+      "name": "Headphones 2",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "headphones-3",
+      "name": "Headphones 3",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "headphones-4",
+      "name": "Headphones 4",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "monitors",
+      "name": "Monitors",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "send-main",
+      "name": "Main Mix Out",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "send-chat",
+      "name": "Chat Mix Out",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "send-secondary",
+      "name": "Secondary Mix Out",
+      "kind": "output",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "callme-1",
+      "name": "CallMe 1",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "callme-2",
+      "name": "CallMe 2",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "callme-3",
+      "name": "CallMe 3",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "wireless-1",
+      "name": "Wireless 1",
+      "kind": "mic",
+      "channels": 1,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "wireless-2",
+      "name": "Wireless 2",
+      "kind": "mic",
+      "channels": 1,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    },
+    {
+      "id": "bluetooth",
+      "name": "Bluetooth",
+      "kind": "playback",
+      "channels": 2,
+      "bypass": false,
+      "order": [
+        "highpass",
+        "suppression",
+        "eq",
+        "compressor",
+        "gain",
+        "limiter"
+      ],
+      "highpass": {
+        "enabled": false,
+        "frequency": 80.0
+      },
+      "suppression": {
+        "enabled": false,
+        "wet": 1.0,
+        "lookahead": 0,
+        "gate": {
+          "strength": 0.0,
+          "advanced": false,
+          "threshold": 0.3,
+          "reduction": 0.0,
+          "attack": 5.0,
+          "hold": 350.0,
+          "release": 300.0
+        }
+      },
+      "eq": {
+        "enabled": false,
+        "inputGainDb": 0.0,
+        "outputGainDb": 0.0,
+        "bands": []
+      },
+      "compressor": {
+        "enabled": false,
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 10.0,
+        "release": 120.0,
+        "makeup": 0.0
+      },
+      "gain": {
+        "enabled": false,
+        "db": 0.0
+      },
+      "limiter": {
+        "enabled": false,
+        "ceiling": -1.0,
+        "release": 100.0
+      }
+    }
+  ]
+}

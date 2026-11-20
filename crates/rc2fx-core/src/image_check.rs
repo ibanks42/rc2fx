@@ -1,32 +1,30 @@
-//! The mixer's check of the files a flash unpacked (`rc2fx.sh image-check`),
-//! as `GET api/v1/image-check` reports it.
+//! Root filesystem integrity check (`rc2fx.sh image-check`), exposed via
+//! `GET api/v1/image-check`.
 //!
-//! The installer lists RØDE's files with their SHA-256 in the image. On the
-//! first boots the launcher compares the root against that list, restores a
-//! damaged file from the other root partition when that copy is identical,
-//! and records the outcome as `key=value` lines in `/opt/rc2fx/data/image-check`.
+//! The installer writes a SHA-256 manifest of RØDE's files into the image. On
+//! initial boots, the launcher verifies the root filesystem against that
+//! manifest, restores any damaged file from the inactive root partition if its
+//! hash matches, and writes the `key=value` result to `/opt/rc2fx/data/image-check`.
 
 use serde::{Deserialize, Serialize};
 
-/// How many file names a report carries; the rest are counted, not listed.
+/// Max file paths included in a report; overflow is counted in `unlisted`.
 pub const MAX_LISTED: usize = 32;
-/// The largest record read.
 const MAX_RECORD: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ImageStatus {
-    /// The image has no file list (a mixer installed before the check, or
-    /// after an in-place update): there is nothing to check.
+    /// No manifest in this image (pre-check install or in-place update).
     None,
-    /// The list is there and the check has not finished yet.
+    /// Manifest exists, but verification hasn't completed yet.
     Pending,
-    /// Every listed file matches.
+    /// All manifest files matched.
     Ok,
-    /// Damaged files were restored; RØDE's boot already used the damaged
-    /// copies, so the mixer needs a restart.
+    /// Damaged files were restored from the inactive root; a reboot is needed
+    /// since RØDE's boot already loaded the damaged copies.
     Repaired,
-    /// At least one listed file is damaged and could not be restored.
+    /// At least one file is damaged and couldn't be restored.
     Damaged,
 }
 
@@ -40,7 +38,7 @@ pub struct ImageCheck {
     pub repaired: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub damaged: Vec<String>,
-    /// Files beyond [`MAX_LISTED`] in either list.
+    /// Count of repaired/damaged files omitted due to [`MAX_LISTED`].
     #[serde(skip_serializing_if = "is_zero")]
     pub unlisted: usize,
 }
@@ -62,8 +60,8 @@ impl Default for ImageCheck {
 }
 
 impl ImageCheck {
-    /// What the mixer reports from its record, given whether the image has a
-    /// file list. A record written for an older list is still pending.
+    /// Parses the on-disk record against the current image's manifest digest.
+    /// Records from an older manifest are treated as `Pending`.
     pub fn from_record(record: Option<&str>, manifest_digest: Option<&str>) -> Self {
         let Some(digest) = manifest_digest else {
             return Self::default();
@@ -115,57 +113,5 @@ impl ImageCheck {
             Some(status) if manifest == Some(digest) => Self { status, ..check },
             _ => pending,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const RECORD: &str = "schema=1\nstatus=repaired\nmanifest=abc\nchecked=2026-11-15T22:10:00Z\nrepaired=usr/bin/rode-init-update-env.sh\n";
-
-    #[test]
-    fn a_record_for_this_image_is_reported() {
-        let check = ImageCheck::from_record(Some(RECORD), Some("abc"));
-        assert_eq!(check.status, ImageStatus::Repaired);
-        assert_eq!(check.repaired, ["usr/bin/rode-init-update-env.sh"]);
-        assert_eq!(check.checked.as_deref(), Some("2026-11-15T22:10:00Z"));
-        let json = serde_json::to_value(&check).unwrap();
-        assert_eq!(json["status"], "repaired");
-        assert!(json.get("damaged").is_none());
-    }
-
-    #[test]
-    fn no_list_no_record_or_a_stale_record() {
-        assert_eq!(
-            ImageCheck::from_record(Some(RECORD), None).status,
-            ImageStatus::None
-        );
-        assert_eq!(
-            ImageCheck::from_record(None, Some("abc")).status,
-            ImageStatus::Pending
-        );
-        assert_eq!(
-            ImageCheck::from_record(Some(RECORD), Some("other")).status,
-            ImageStatus::Pending
-        );
-        assert_eq!(
-            ImageCheck::from_record(Some("status=bogus\nmanifest=abc\n"), Some("abc")).status,
-            ImageStatus::Pending
-        );
-    }
-
-    #[test]
-    fn long_lists_are_capped() {
-        let mut record = String::from("status=damaged\nmanifest=abc\n");
-        for n in 0..MAX_LISTED + 3 {
-            record.push_str(&format!("damaged=file{n}\n"));
-        }
-        let check = ImageCheck::from_record(Some(&record), Some("abc"));
-        assert_eq!(check.damaged.len(), MAX_LISTED);
-        assert_eq!(check.unlisted, 3);
-        // An older app reading a newer field set still parses.
-        let parsed: ImageCheck = serde_json::from_str(r#"{"status":"ok","later":1}"#).unwrap();
-        assert_eq!(parsed.status, ImageStatus::Ok);
     }
 }

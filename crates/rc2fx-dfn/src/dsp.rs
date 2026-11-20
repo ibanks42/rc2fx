@@ -1,25 +1,22 @@
-//! DeepFilterNet's framing and features, ported from libDF 0.5.6 (`DFState`)
-//! with every buffer allocated up front: a windowed STFT, ERB band energies
-//! in dB and complex bins, each under an exponential running normalisation.
-//! The FFT size, synthesis window, hop and band counts come from the model.
+//! DeepFilterNet STFT framing and feature extraction, ported from libDF 0.5.6
+//! (`DFState`) with all scratch buffers preallocated. Computes the windowed
+//! STFT, dB ERB band energies, and low-frequency complex bins with exponential
+//! running normalization. Framing and band counts are read from the weights file.
 //!
-//! The window pair may be asymmetric: the analysis window spans the whole
-//! FFT (reaching back into already-heard audio, which costs no delay), while
-//! only its last `synthesis` samples are resynthesised and overlap-added at
-//! the hop. The output then lags the input by `synthesis - hop` samples. With
-//! the synthesis length equal to the FFT and twice the hop, both windows are
-//! libDF's Vorbis window and the engine matches DeepFilterNet exactly.
+//! Analysis and synthesis windows can be asymmetric: analysis spans the full
+//! FFT (looking further into the past adds no latency), while only the last
+//! `synthesis` samples are overlap-added at each hop, giving `synthesis - hop`
+//! samples of latency. When `synthesis == fft == 2 * hop`, both windows reduce
+//! to libDF's symmetric Vorbis window.
 use realfft::num_complex::Complex32;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use std::sync::Arc;
 
 pub(crate) const SAMPLE_RATE: usize = 48_000;
-/// Minimum STFT bins per ERB band.
 const MIN_BAND_BINS: usize = 2;
-/// Starting points for the running normalisations, low to high band.
+/// Initial endpoints (low to high band) for the running normalizers.
 const MEAN_NORM_INIT: [f32; 2] = [-60., -90.];
 const UNIT_NORM_INIT: [f32; 2] = [0.001, 0.0001];
-/// Normalisation time constant in seconds.
 const NORM_TAU: f32 = 1.;
 
 pub(crate) struct Dsp {
@@ -29,38 +26,33 @@ pub(crate) struct Dsp {
     bins: usize,
     forward: Arc<dyn RealToComplex<f32>>,
     inverse: Arc<dyn ComplexToReal<f32>>,
-    /// `fft` analysis weights and `synthesis` synthesis weights.
     analysis_window: Vec<f32>,
     synthesis_window: Vec<f32>,
     wnorm: f32,
-    /// STFT bins per ERB band.
+    /// STFT bin count per ERB band.
     erb: Vec<usize>,
     alpha: f32,
     analysis_mem: Vec<f32>,
-    /// The `synthesis - hop` samples of overlap still to be added to the
-    /// next frame's output.
+    /// `synthesis - hop` overlap tail carried into the next hop.
     synthesis_mem: Vec<f32>,
     time: Vec<f32>,
     scratch: Vec<Complex32>,
     mean_norm: Vec<f32>,
     unit_norm: Vec<f32>,
-    /// Stand-ins for realfft's twiddle tables (forward, inverse), which the
-    /// traffic model cannot address: a complex FFT of `fft / 2` points plus
-    /// the real-FFT post-processing, `fft / 2 + fft / 4` complex values each.
+    /// Proxy buffers for `realfft`'s internal twiddle tables (`fft / 2 + fft / 4`
+    /// complex entries each) so the traffic model can account for them.
     #[cfg(test)]
     twiddles: [Vec<Complex32>; 2],
 }
 
-/// Whether an FFT size, synthesis window length and hop make a usable
-/// framing: an even FFT at least as long as the synthesis window, which
-/// spans between one and two hops (so at most two frames overlap).
+/// Checks that the framing is valid: even FFT, `hop <= synthesis <= 2 * hop`
+/// (at most two overlapping frames), and `fft >= synthesis`.
 pub(crate) fn framing_is_valid(fft: usize, synthesis: usize, hop: usize) -> bool {
     hop > 0 && fft.is_multiple_of(2) && synthesis >= hop && synthesis <= 2 * hop && fft >= synthesis
 }
 
-/// The rising half of libDF's Vorbis window over `len` samples
-/// (`sin(π/2 · sin²(π/2 · (i + ½) / len))`), power-complementary with its
-/// mirror: `rise(i)² + rise(len - 1 - i)² = 1`.
+/// Rising half of libDF's Vorbis window (`sin(π/2 · sin²(π/2 · (i + ½) / len))`).
+/// Power-complementary with its reverse: `rise(i)² + rise(len - 1 - i)² = 1`.
 fn vorbis_rise(len: usize) -> impl Fn(usize) -> f64 {
     move |i| {
         let s = (0.5 * std::f64::consts::PI * (i as f64 + 0.5) / len as f64).sin();
@@ -68,15 +60,13 @@ fn vorbis_rise(len: usize) -> impl Fn(usize) -> f64 {
     }
 }
 
-/// The analysis and synthesis windows of a framing that `framing_is_valid`.
+/// Builds the analysis and synthesis windows for a valid framing.
 ///
-/// The product of the two over the last `synthesis` samples of the frame is
-/// a flat-top window whose `synthesis - hop` tapers are squared Vorbis
-/// halves, so hop-spaced copies sum to one and overlap-add reconstructs the
-/// input exactly. The analysis window rises over everything before its
-/// falling taper, so a long FFT weights the past smoothly without changing
-/// the delay. With `synthesis == fft == 2 * hop` both windows are the Vorbis
-/// window itself.
+/// Over the last `synthesis` samples, `analysis * synthesis` forms a flat-top
+/// window with squared-Vorbis tapers of length `synthesis - hop`, so hop-spaced
+/// copies sum to 1 (COLA). Before the falling taper, the analysis window rises
+/// smoothly over the rest of the FFT without adding latency. When
+/// `synthesis == fft == 2 * hop`, both windows are the standard Vorbis window.
 pub(crate) fn windows(fft: usize, synthesis: usize, hop: usize) -> (Vec<f32>, Vec<f32>) {
     debug_assert!(framing_is_valid(fft, synthesis, hop));
     let overlap = synthesis - hop;
@@ -112,8 +102,6 @@ pub(crate) fn windows(fft: usize, synthesis: usize, hop: usize) -> (Vec<f32>, Ve
 }
 
 impl Dsp {
-    /// `fft`, `synthesis` and `hop` must satisfy `framing_is_valid`; `nb_df`
-    /// is the number of low bins the deep filter covers.
     pub(crate) fn new(
         fft: usize,
         synthesis: usize,
@@ -141,9 +129,8 @@ impl Dsp {
             inverse,
             analysis_window,
             synthesis_window,
-            // The unnormalised inverse scales by `fft`; this undoes it, so the
-            // window product alone sets the reconstruction (libDF's
-            // `2 hop / fft²` for its two-hop FFT).
+            // Compensate for the unnormalized inverse FFT (1/fft) so the
+            // analysis*synthesis window product alone determines unity gain.
             wnorm: 1. / fft as f32,
             erb: erb_bands(nb_erb, bins),
             alpha: norm_alpha(hop),
@@ -173,7 +160,7 @@ impl Dsp {
         ramp(&mut self.unit_norm, UNIT_NORM_INIT);
     }
 
-    /// One hop of input to its spectrum (scaled by the window norm).
+    /// Forward STFT of one hop, scaled by `wnorm`.
     pub(crate) fn analysis(&mut self, input: &[f32], spec: &mut [Complex32]) {
         let (fft, hop) = (self.fft, self.hop);
         debug_assert_eq!(input.len(), hop);
@@ -193,8 +180,6 @@ impl Dsp {
         {
             *x = s * w;
         }
-        // Window and overlap memory into `time`, then the FFT through its
-        // scratch and twiddles into `spec`, scaled in place.
         #[cfg(test)]
         {
             use crate::traffic::*;
@@ -213,7 +198,6 @@ impl Dsp {
         let split = keep - hop;
         self.analysis_mem.rotate_left(hop);
         self.analysis_mem[split..].copy_from_slice(input);
-        // The planned size always matches, so this cannot fail.
         let _ = self
             .forward
             .process_with_scratch(&mut self.time, spec, &mut self.scratch);
@@ -222,17 +206,14 @@ impl Dsp {
         }
     }
 
-    /// One spectrum back to a hop of output: the last `synthesis` samples of
-    /// the inverse, windowed and overlap-added with the previous frame's tail.
+    /// Inverse STFT of one spectrum into a hop of output via overlap-add on the
+    /// last `synthesis` samples.
     pub(crate) fn synthesis(&mut self, spec: &mut [Complex32], output: &mut [f32]) {
         let (fft, synthesis, hop) = (self.fft, self.synthesis, self.hop);
         debug_assert_eq!(output.len(), hop);
-        // Real signals have real DC and Nyquist bins; the inverse ignores
-        // their imaginary parts, which libDF tolerates the same way.
+        // Zero imaginary DC/Nyquist for realfft (matches libDF).
         spec[0].im = 0.;
         spec[self.bins - 1].im = 0.;
-        // The inverse FFT through scratch and twiddles into `time`, the
-        // window, the overlap-add and the new tail.
         #[cfg(test)]
         {
             use crate::traffic::*;
@@ -262,8 +243,7 @@ impl Dsp {
         for (x, &w) in frame.iter_mut().zip(&self.synthesis_window) {
             *x *= w;
         }
-        // The first hop leaves now, its start overlapping the tail kept from
-        // the previous frame; the rest (at most one hop) waits for the next.
+        // Emit the first hop (adding the carried overlap tail) and save the remainder.
         output.copy_from_slice(&frame[..hop]);
         for (o, &m) in output.iter_mut().zip(&self.synthesis_mem) {
             *o += m;
@@ -271,8 +251,7 @@ impl Dsp {
         self.synthesis_mem.copy_from_slice(&frame[hop..]);
     }
 
-    /// ERB band energies in dB, mean-normalised and scaled by 1/40
-    /// (`out` holds one value per band).
+    /// Mean-normalized ERB band energies in dB, scaled by 1/40.
     pub(crate) fn feat_erb(&mut self, spec: &[Complex32], out: &mut [f32]) {
         debug_assert_eq!(out.len(), self.erb.len());
         #[cfg(test)]
@@ -304,8 +283,7 @@ impl Dsp {
         }
     }
 
-    /// The lowest `nb_df` bins (`spec` holds exactly those), unit-normalised
-    /// by their running magnitude.
+    /// Unit-normalized complex features for the lowest `nb_df` bins.
     pub(crate) fn feat_cplx(&mut self, spec: &[Complex32], re: &mut [f32], im: &mut [f32]) {
         debug_assert_eq!(spec.len(), self.unit_norm.len());
         #[cfg(test)]
@@ -329,7 +307,6 @@ impl Dsp {
         }
     }
 
-    /// Multiplies each ERB band's bins by its gain.
     pub(crate) fn apply_gains(&self, spec: &mut [Complex32], gains: &[f32]) {
         #[cfg(test)]
         crate::traffic::slice(crate::traffic::Class::Param, &self.erb);
@@ -351,8 +328,8 @@ fn erb2freq(erb: f32) -> f32 {
     24.7 * 9.265 * ((erb / 9.265).exp() - 1.)
 }
 
-/// STFT bins per ERB band for `nb_erb` bands over `bins` (= fft / 2 + 1)
-/// bins at 48 kHz, at least `MIN_BAND_BINS` each (libDF's `erb_fb`).
+/// Computes STFT bin widths for `nb_erb` ERB bands over `bins` at 48 kHz
+/// (matching libDF's `erb_fb`).
 fn erb_bands(nb_erb: usize, bins: usize) -> Vec<usize> {
     let fft = (bins - 1) * 2;
     let width = SAMPLE_RATE as f32 / fft as f32;
@@ -379,8 +356,8 @@ fn erb_bands(nb_erb: usize, bins: usize) -> Vec<usize> {
     erb
 }
 
-/// exp(-hop / (rate * tau)) rounded to the fewest decimals below 1 (libDF's
-/// `calc_norm_alpha`).
+/// Computes `exp(-hop / (rate * tau))` rounded to the fewest decimals below 1
+/// (matching libDF's `calc_norm_alpha`).
 fn norm_alpha(hop: usize) -> f32 {
     let alpha = (-(hop as f32 / SAMPLE_RATE as f32) / NORM_TAU).exp();
     let mut precision = 3;
@@ -427,8 +404,8 @@ mod tests {
         assert_eq!(norm_alpha(240), 0.995);
     }
 
-    /// Analysis then synthesis reproduces the input, delayed by
-    /// `synthesis - hop` samples, from the first full FFT on.
+    // Analysis followed by synthesis should reproduce the input delayed by
+    // `synthesis - hop` samples once the first full FFT has filled.
     fn reconstructs(fft: usize, synthesis: usize, hop: usize) {
         let bins = fft / 2 + 1;
         let mut dsp = Dsp::new(fft, synthesis, hop, 32, bins / 5);
@@ -464,8 +441,7 @@ mod tests {
 
     #[test]
     fn asymmetric_framings_reconstruct_after_the_synthesis_overlap() {
-        // A 960-point analysis at the 240 hop with synthesis windows of two
-        // hops, one and a half, one and a quarter, and one (no crossfade).
+        // 960-point analysis at 240-sample hop with 2x, 1.5x, 1.25x, and 1x synthesis windows.
         for synthesis in [480, 360, 300, 240] {
             reconstructs(960, synthesis, 240);
         }
@@ -520,16 +496,15 @@ mod tests {
                     "{fft}/{synthesis}/{hop} at {j}: {sum}"
                 );
             }
-            // The analysis window is a smooth rise: no step at the join
-            // with its falling taper.
+            // Analysis window shouldn't have a discontinuity where the rise meets the taper.
             let steps = analysis.windows(2).map(|w| (w[1] - w[0]).abs());
             assert!(steps.fold(0f32, f32::max) < 8. / (synthesis - hop) as f32);
         }
     }
 
-    /// Writes the window pair of `RC2FX_DFN_FRAMING=fft,synthesis,hop` as text to
-    /// `RC2FX_DFN_WINDOWS` (one value per line, analysis then synthesis), for
-    /// checking the training side's libDF port against the engine.
+    // Dumps the window pair for `RC2FX_DFN_FRAMING=fft,synthesis,hop` to
+    // `RC2FX_DFN_WINDOWS` (one float per line, analysis then synthesis) so the
+    // training side's libDF port can diff against it.
     #[test]
     #[ignore]
     fn dump_windows() {

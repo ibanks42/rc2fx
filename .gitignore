@@ -1,5 +1,4 @@
 target/
-/artifacts/
 .deps/
 .local/
 .rc2fx-mixer.conf

@@ -1,6 +1,5 @@
-//! Single-target control transaction. Persistence stays with the controller.
-use crate::{Client, ErrorCode, Operation, PathMode, Reply, Transaction};
-use rc2fx_core::Target;
+//! Commits a prepared settings transaction after the controller has persisted it.
+use crate::{Client, ErrorCode, Operation, Reply, Transaction};
 use std::io;
 
 #[derive(Debug)]
@@ -10,101 +9,20 @@ pub enum ControlFailure {
     InvalidReply,
 }
 #[derive(Debug)]
-pub enum SaveFailure<E> {
-    Preparation {
-        transaction: Option<Transaction>,
-        failure: ControlFailure,
-    },
-    /// Includes uncertain persistence errors unchanged. Cancellation does not
-    /// assert that the old file was restored; the Store defines that outcome.
-    Persistence {
-        transaction: Transaction,
-        error: E,
-        cancellation_confirmed: bool,
-    },
-}
-#[derive(Debug)]
 #[must_use = "publication can remain pending after settings were saved"]
 pub enum Publication {
-    /// Published to the audio reader. Actual applied acknowledgement is separate.
+    /// Published to the audio thread (application on the next callback is tracked separately).
     Published(Transaction),
-    /// Desired settings were saved; retain them and reconcile this receipt.
+    /// Settings are saved on disk, but the audio commit needs reconciliation.
     Pending {
         transaction: Transaction,
         failure: ControlFailure,
     },
 }
-impl Publication {
-    pub fn transaction(&self) -> &Transaction {
-        match self {
-            Self::Published(transaction) | Self::Pending { transaction, .. } => transaction,
-        }
-    }
-}
-#[derive(Debug)]
-#[must_use = "check publication before claiming audio applied the saved value"]
-pub struct Saved<T> {
-    pub value: T,
-    pub publication: Publication,
-}
 impl Client {
-    /// Prepare one live target, invoke persistence exactly once, then publish.
-    /// No audio commit is sent if preparation or persistence fails. After a
-    /// successful save, a missing/refused commit reply returns Saved + Pending,
-    /// never an error that could be mistaken for a failed save or rolled back.
-    /// This does not coordinate a multi-path preset or write any files itself.
-    pub fn save_and_commit<T, E>(
-        &mut self,
-        context: u64,
-        revision: u64,
-        target: &Target,
-        mode: PathMode,
-        save: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Saved<T>, SaveFailure<E>> {
-        let transaction = self
-            .transaction(context, &target.id, revision)
-            .map_err(|error| SaveFailure::Preparation {
-                transaction: None,
-                failure: ControlFailure::Transport(error),
-            })?;
-        let prepared = match self.request(Operation::Prepare {
-            transaction: transaction.clone(),
-            target: Box::new(target.clone()),
-            mode,
-        }) {
-            Ok(response) => match response.reply {
-                Reply::Prepared {
-                    transaction: receipt,
-                } if receipt == transaction => Ok(()),
-                Reply::Error { code } => Err(ControlFailure::Refused(code)),
-                _ => Err(ControlFailure::InvalidReply),
-            },
-            Err(error) => Err(ControlFailure::Transport(error)),
-        };
-        if let Err(failure) = prepared {
-            return Err(SaveFailure::Preparation {
-                transaction: Some(transaction),
-                failure,
-            });
-        }
-        let value = match save() {
-            Ok(value) => value,
-            Err(error) => {
-                let cancellation_confirmed = self.request(Operation::Cancel { transaction: transaction.clone() }).is_ok_and(|response| matches!(response.reply, Reply::Cancelled { transaction: receipt } if receipt == transaction));
-                return Err(SaveFailure::Persistence {
-                    transaction,
-                    error,
-                    cancellation_confirmed,
-                });
-            }
-        };
-        Ok(Saved {
-            value,
-            publication: self.commit_saved(&transaction),
-        })
-    }
-    /// Retry only the audio commit for an already-saved desired value. The
-    /// receipt remains pinned to its original process, even on a new connection.
+    /// Commits (or retries committing) an already-saved transaction. Transport
+    /// errors, refusals, or mismatched replies return `Publication::Pending` so
+    /// callers don't mistake a commit failure for a failed save.
     pub fn commit_saved(&mut self, transaction: &Transaction) -> Publication {
         let failure = match self.request(Operation::Commit {
             transaction: transaction.clone(),
@@ -128,7 +46,8 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MAX_REQUEST, Request, Response, Session, VERSION};
+    use crate::{MAX_REQUEST, PathMode, Request, Response, Session, VERSION};
+    use rc2fx_core::Target;
     use std::{
         fs,
         os::unix::{fs::DirBuilderExt, net::UnixDatagram},
@@ -139,23 +58,12 @@ mod tests {
     #[derive(Clone, Copy)]
     enum Step {
         Prepare,
-        PrepareLost,
-        PrepareRefused,
-        Cancel,
-        Commit,
-        CommitLost,
         CommitRefused,
         CommitWrong,
     }
-    #[derive(Default)]
-    struct Trace {
-        applications: usize,
-        commits: usize,
-        cancellations: usize,
-    }
     struct Peer {
         directory: PathBuf,
-        thread: Option<JoinHandle<Trace>>,
+        thread: Option<JoinHandle<usize>>,
     }
     impl Peer {
         fn new(steps: Vec<Step>) -> Self {
@@ -195,77 +103,41 @@ mod tests {
                 let (hello, peer) = receive(&mut buffer);
                 assert!(matches!(hello.operation, Operation::Hello));
                 send(hello.request_id, &peer, Reply::Hello);
-                let mut trace = Trace::default();
+                let mut applications = 0;
                 let mut staged = None;
-                let mut published = None;
                 for step in steps {
                     let (request, peer) = receive(&mut buffer);
                     assert_eq!(request.version, VERSION);
                     assert_eq!(request.session.as_ref(), Some(&session));
                     let reply = match (step, request.operation) {
                         (
-                            Step::Prepare | Step::PrepareLost,
+                            Step::Prepare,
                             Operation::Prepare {
                                 transaction,
                                 target,
                                 mode,
+                                ..
                             },
                         ) => {
                             assert_eq!(mode, PathMode::Processed);
                             assert_eq!(transaction.target_id, target.id);
                             staged = Some(transaction.clone());
-                            // A lost reply is simulated after the receiver accepted the stage.
-                            if matches!(step, Step::PrepareLost) {
-                                None
-                            } else {
-                                Some(Reply::Prepared { transaction })
-                            }
+                            Reply::Prepared { transaction }
                         }
-                        (Step::PrepareRefused, Operation::Prepare { .. }) => Some(Reply::Error {
+                        (Step::CommitRefused, Operation::Commit { .. }) => Reply::Error {
                             code: ErrorCode::Busy,
-                        }),
-                        (Step::Cancel, Operation::Cancel { transaction }) => {
+                        },
+                        (Step::CommitWrong, Operation::Commit { mut transaction }) => {
                             assert_eq!(staged.take().as_ref(), Some(&transaction));
-                            trace.cancellations += 1;
-                            Some(Reply::Cancelled { transaction })
-                        }
-                        (
-                            Step::Commit
-                            | Step::CommitLost
-                            | Step::CommitRefused
-                            | Step::CommitWrong,
-                            Operation::Commit { mut transaction },
-                        ) => {
-                            trace.commits += 1;
-                            if matches!(step, Step::CommitRefused) {
-                                Some(Reply::Error {
-                                    code: ErrorCode::Busy,
-                                })
-                            } else {
-                                if let Some(receipt) = &published {
-                                    assert_eq!(receipt, &transaction);
-                                } else {
-                                    assert_eq!(staged.take().as_ref(), Some(&transaction));
-                                    trace.applications += 1;
-                                    published = Some(transaction.clone());
-                                }
-                                if matches!(step, Step::CommitLost) {
-                                    None
-                                } else {
-                                    if matches!(step, Step::CommitWrong) {
-                                        transaction.revision += 1;
-                                    }
-                                    Some(Reply::Published { transaction })
-                                }
-                            }
+                            applications += 1;
+                            transaction.revision += 1;
+                            Reply::Published { transaction }
                         }
                         _ => panic!("unexpected save transaction message"),
                     };
-                    if let Some(reply) = reply {
-                        send(request.request_id, &peer, reply);
-                    }
+                    send(request.request_id, &peer, reply);
                 }
-                trace
+                applications
             });
             Self {
                 directory,
@@ -275,7 +147,7 @@ mod tests {
         fn client(&self) -> Client {
             Client::connect(&self.directory.join("s")).unwrap()
         }
-        fn finish(mut self) -> Trace {
+        fn finish(mut self) -> usize {
             self.thread.take().unwrap().join().unwrap()
         }
     }
@@ -284,93 +156,53 @@ mod tests {
             if let Some(task) = self.thread.take() {
                 let _ = task.join();
             }
-            // Only the socket in our fresh private directory; unknown entries survive.
             let _ = fs::remove_file(self.directory.join("s"));
             let _ = fs::remove_dir(&self.directory);
         }
     }
-    fn target() -> Target {
-        Target::new("source", "Source", rc2fx_core::TargetKind::Mic, 1)
-    }
-    #[test]
-    fn refused_or_lost_preparation_never_invokes_persistence() {
-        for step in [Step::PrepareRefused, Step::PrepareLost] {
-            let peer = Peer::new(vec![step]);
-            let mut client = peer.client();
-            let mut saves = 0;
-            let outcome = client.save_and_commit(7, 2, &target(), PathMode::Processed, || {
-                saves += 1;
-                Ok::<_, ()>(77)
-            });
-            assert!(matches!(
-                outcome,
-                Err(SaveFailure::Preparation {
-                    transaction: Some(_),
-                    ..
-                })
-            ));
-            assert_eq!(saves, 0);
-            assert_eq!(peer.finish().commits, 0);
-        }
-    }
-    #[test]
-    fn persistence_failure_preserves_the_error_and_cancels_without_committing_audio() {
-        let peer = Peer::new(vec![Step::Prepare, Step::Cancel]);
-        let mut client = peer.client();
-        let outcome = client.save_and_commit(7, 2, &target(), PathMode::Processed, || {
-            Err::<(), _>("uncertain persistence")
-        });
-        assert!(matches!(
-            outcome,
-            Err(SaveFailure::Persistence {
-                error: "uncertain persistence",
-                cancellation_confirmed: true,
-                ..
+    fn prepared(client: &mut Client) -> Transaction {
+        let target = Target::new("source", "Source", rc2fx_core::TargetKind::Mic, 1);
+        let transaction = client.transaction(7, &target.id, 2).unwrap();
+        let response = client
+            .request(Operation::Prepare {
+                transaction: transaction.clone(),
+                target: Box::new(target),
+                mode: PathMode::Processed,
+                reset: crate::ResetPolicy::Allow,
             })
+            .unwrap();
+        assert!(matches!(
+            response.reply,
+            Reply::Prepared { transaction: ref receipt } if *receipt == transaction
         ));
-        let trace = peer.finish();
-        assert_eq!(trace.commits, 0);
-        assert_eq!(trace.cancellations, 1);
+        transaction
     }
     #[test]
-    fn lost_or_refused_commit_is_saved_pending_and_retry_does_not_repeat_the_save() {
-        for step in [Step::CommitLost, Step::CommitRefused] {
-            let peer = Peer::new(vec![Step::Prepare, step, Step::Commit]);
-            let mut client = peer.client();
-            let mut saves = 0;
-            let saved = client
-                .save_and_commit(7, 2, &target(), PathMode::Processed, || {
-                    saves += 1;
-                    Ok::<_, ()>(77)
-                })
-                .unwrap();
-            assert_eq!(saved.value, 77);
-            assert!(matches!(saved.publication, Publication::Pending { .. }));
-            assert!(matches!(
-                client.commit_saved(saved.publication.transaction()),
-                Publication::Published(_)
-            ));
-            assert_eq!(saves, 1);
-            let trace = peer.finish();
-            assert_eq!(trace.commits, 2);
-            assert_eq!(trace.applications, 1);
+    fn a_refused_commit_stays_pending_with_the_original_receipt() {
+        let peer = Peer::new(vec![Step::Prepare, Step::CommitRefused]);
+        let mut client = peer.client();
+        let transaction = prepared(&mut client);
+        match client.commit_saved(&transaction) {
+            Publication::Pending {
+                transaction: receipt,
+                failure: ControlFailure::Refused(ErrorCode::Busy),
+            } => assert_eq!(receipt, transaction),
+            other => panic!("unexpected publication {other:?}"),
         }
+        assert_eq!(peer.finish(), 0);
     }
     #[test]
     fn a_mismatched_publication_reply_cannot_acknowledge_saved_audio() {
         let peer = Peer::new(vec![Step::Prepare, Step::CommitWrong]);
         let mut client = peer.client();
-        let saved = client
-            .save_and_commit(7, 2, &target(), PathMode::Processed, || Ok::<_, ()>(77))
-            .unwrap();
+        let transaction = prepared(&mut client);
         assert!(matches!(
-            saved.publication,
+            client.commit_saved(&transaction),
             Publication::Pending {
                 failure: ControlFailure::InvalidReply,
                 ..
             }
         ));
-        assert_eq!(saved.value, 77);
-        assert_eq!(peer.finish().applications, 1);
+        assert_eq!(peer.finish(), 1);
     }
 }

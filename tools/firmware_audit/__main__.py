@@ -73,8 +73,8 @@ def audit(catalog, baseline_archive, candidate_archive, baseline_id, candidate_i
         old, new = canonical(baseline, old_address), canonical(candidate, new_address)
         if old["instructions"] != new["instructions"]:
             raise ValueError(f"instruction stream changed: {role}")
-        # Verify direct edges between mapped functions, in addition to retaining
-        # imported symbol names and all internal control flow in the signature.
+        # Also check direct call edges between mapped functions (imports and
+        # internal control flow are already part of the instruction stream).
         for old_call, new_call in zip(old["calls"], new["calls"], strict=True):
             for target_role, target in old_sites.items():
                 if old_call[2] == target and new_call[2] != new_sites[target_role]:

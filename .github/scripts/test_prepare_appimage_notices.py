@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Offline tests for prepare-appimage-notices.py: no network. One test runs
-the local `git` binary on a temporary repository to check that git_source
-pins the commit and archives only the requested recipe directories."""
+"""Offline tests for prepare-appimage-notices.py (uses local git on a temp repo for git_source)."""
 
 import importlib.util
 import io
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -19,7 +18,7 @@ spec.loader.exec_module(notices)
 
 
 def tarball(entries):
-    """A tar.gz from (name, data-or-None, type) entries."""
+    """Build a tar.gz from (name, data, type) entries."""
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w:gz") as tar:
         for name, data, kind in entries:
@@ -139,7 +138,7 @@ class Checksums(unittest.TestCase):
 
 
 class Runtime(unittest.TestCase):
-    """The runtime comes from the pinned vpk package, and must name its commit."""
+    """Verify vendored runtime extraction and commit validation."""
 
     def nupkg(self, runtime):
         raw = io.BytesIO()
@@ -148,7 +147,7 @@ class Runtime(unittest.TestCase):
         return raw.getvalue()
 
     def pinned(self, package, runtime):
-        """Pin the fixture in place of the real vpk and runtime digests."""
+        """Override VPK_SHA256 and RUNTIME_SHA256 with the fixture digests."""
         saved = notices.VPK_SHA256, notices.RUNTIME_SHA256
         notices.VPK_SHA256 = notices.digest("sha256", package)
         notices.RUNTIME_SHA256 = notices.digest("sha256", runtime)
@@ -191,13 +190,48 @@ class Runtime(unittest.TestCase):
                 notices.vendored_runtime(path, None)
 
     def test_the_pins_agree_with_setup_vpk(self):
+        root = SCRIPT.parent.parent.parent
+        config = root / "config/velopack.json"
+        self.assertTrue(config.is_file(), "config/velopack.json is missing")
         setup = SCRIPT.with_name("setup-vpk.sh").read_text()
-        self.assertIn(f"version={notices.VPK_VERSION}\n", setup)
-        self.assertIn(f"sha={notices.VPK_SHA256}\n", setup)
+        self.assertIn("config/velopack.json", setup)
+        # Ensure setup-vpk.sh's sed extractor reads the same pins.
+        extracted = subprocess.check_output(
+            [
+                "bash",
+                "-c",
+                f'velopack_config={config}; '
+                'sed -n "s/^[[:space:]]*\\"version\\"[[:space:]]*:[[:space:]]*\\"\\([^\\"]*\\)\\".*/\\1/p" "$velopack_config" | head -n 1; '
+                'sed -n "s/^[[:space:]]*\\"vpkSha256\\"[[:space:]]*:[[:space:]]*\\"\\([^\\"]*\\)\\".*/\\1/p" "$velopack_config" | head -n 1',
+            ],
+            text=True,
+        ).splitlines()
+        self.assertEqual(extracted, [notices.VPK_VERSION, notices.VPK_SHA256])
+
+    def test_the_app_links_the_velopack_that_vpk_packs_with(self):
+        # Packaging, fetch-velopack.sh, and prepare-appimage-notices.py all share config/velopack.json.
+        root = SCRIPT.parent.parent.parent
+        fetch = (root / "desktop/scripts/fetch-velopack.sh").read_text()
+        self.assertIn("config/velopack.json", fetch)
+        licenses = (root / "desktop/internal/xtask/licenses/licenses.go").read_text()
+        self.assertIn("config", licenses)
+        self.assertIn("velopack.json", licenses)
+        self.assertTrue((root / f"licenses/velopack-{notices.VPK_VERSION}.json").is_file())
+
+    def test_the_build_image_has_the_go_go_mod_pins(self):
+        # Keep the AlmaLinux build container's Go toolchain in sync with desktop/go.mod.
+        root = SCRIPT.parent.parent.parent
+        gomod = (root / "desktop/go.mod").read_text()
+        match = re.search(r"^toolchain go(\d+\.\d+\.\d+)$", gomod, re.M)
+        self.assertIsNotNone(match, "desktop/go.mod has no toolchain line")
+        version = match[1]
+        image = SCRIPT.with_name("package-check.Containerfile").read_text()
+        self.assertIn(f"GOTOOLCHAIN=go{version} ", image)
+        self.assertIn(f"grep -q ' go{re.escape(version)} '", image)
 
 
-class Licences(unittest.TestCase):
-    def test_licence_files_are_taken_from_the_top_of_the_source(self):
+class Licenses(unittest.TestCase):
+    def test_license_files_are_taken_from_the_top_of_the_source(self):
         source = tarball([
             ("zlib-1.3.1/LICENSE", b"top", tarfile.REGTYPE),
             ("zlib-1.3.1/contrib/x/LICENSE", b"nested", tarfile.REGTYPE),

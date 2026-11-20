@@ -1,4 +1,4 @@
-//! Execute each real displaced prologue and the Rust hook ABI under AArch64.
+//! AArch64 tests exercising the real displaced prologues and Rust hook ABI.
 use super::*;
 
 std::arch::global_asm!(
