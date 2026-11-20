@@ -178,7 +178,6 @@ type App struct {
 	recentFaults        telemetry.RecentFaults
 	renderGeneration    uint64
 	lineSlots           LineSlots
-	onboardingSignature gk.View
 	reducedMotion       bool
 	systemMotionChecked time.Time
 	engineSeen          *time.Time
@@ -242,7 +241,7 @@ func (a *App) init(cx *gk.Cx) {
 	a.contentScroll = gk.NewScrollHandle(cx)
 	a.focus = gk.NewFocusHandle(cx)
 	a.reducedMotion = gk.ReduceMotion(cx)
-	a.onboardingSignature = newSignature(a)
+	a.initAmbient()
 	a.confirmDialog = gk.NewBuilt(cx, a.confirmView)
 	a.stagePreviews = map[core.Effect]gk.View{}
 	for _, effect := range core.EffectAll {

@@ -4,8 +4,8 @@ package app
 //
 // Each indicator owns its own gk.View so gk.Notify only re-renders that view
 // instead of dirtying the whole app tree every frame. A single shared gk.Every
-// timer drives redraws at 60 Hz (30 Hz unfocused; minimized windows can't be
-// detected from Go so they also tick at 30 Hz), skipping indicators whose
+// timer drives redraws at 30 Hz (10 Hz unfocused; minimized windows can't be
+// detected from Go so they also tick at 10 Hz), skipping indicators whose
 // rendered output hasn't changed. Static indicators (stale audio, reduced
 // motion, or animation disabled) are updated on the 50 ms app poll instead.
 
@@ -53,7 +53,7 @@ type LineSlots struct {
 	period  time.Duration
 	// renderGeneration+1 of the last render that drew a bar inline (0 = none).
 	inlineBars uint64
-	signature  *signature
+	ambient    *ambientState
 }
 
 func (a *App) canAnimate() bool {
@@ -206,7 +206,7 @@ func (a *App) pollIndicators(cx *gk.Cx) {
 	if !slots.ticking {
 		a.redrawIndicators(cx, now)
 	}
-	a.pollSignature(cx)
+	a.pollAmbient(cx)
 }
 
 // barsAnimate reports whether all overview bars are backed by their own views

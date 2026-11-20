@@ -116,7 +116,7 @@ func (a *App) fixBeforePage(i *Installer, t *guidedTask) {
 		))
 	switch seen {
 	case installflow.FixSeenUnknown:
-		body = body.Child(spinnerLine("Looking at your mixer…"))
+		body = body.Child(a.spinnerLine("Looking at your mixer…"))
 	case installflow.FixSeenNone:
 		body = body.Child(seenRow(Warn, "The app can't see your mixer on USB. Connect its USB 1 port to this computer.", true))
 	case installflow.FixSeenTwo:
@@ -126,7 +126,7 @@ func (a *App) fixBeforePage(i *Installer, t *guidedTask) {
 	}
 	switch i.access.Kind {
 	case installflow.AccessAsking:
-		body = body.Child(spinnerLine("Answer your system’s password prompt to continue."))
+		body = body.Child(a.spinnerLine("Answer your system’s password prompt to continue."))
 	case installflow.AccessRefused:
 		body = body.Child(seenRow(Warn, "Access wasn’t granted. "+strings.TrimSuffix(capitalFirst(i.access.Why), ".")+".", true))
 	}
@@ -174,7 +174,7 @@ func fixPassLine(p *installer.Progress, final string) string {
 	return ""
 }
 
-func fixUpdatePanel(p *installer.Progress) gk.DivEl {
+func (a *App) fixUpdatePanel(p *installer.Progress) gk.DivEl {
 	fill := installflow.FixTransfer(p)
 	waiting := installflow.FixWaiting(p)
 	share, value := "", float32(0)
@@ -196,7 +196,7 @@ func fixUpdatePanel(p *installer.Progress) gk.DivEl {
 		Child(gk.Div().Mt(px(4)).Mb(px(12)).Child(gk.Progress("task-progress").Value(value))).
 		Child(seenRow(installing, "2. The mixer installs it, then restarts. This part has no progress to show.", waiting))
 	if line := fixDetailLine(p); fill == nil && line != "" {
-		panel = panel.Child(gk.Div(s.Pt2).Child(spinnerLine(line)))
+		panel = panel.Child(gk.Div(s.Pt2).Child(a.spinnerLine(line)))
 	}
 	return panel
 }
@@ -236,7 +236,7 @@ func (a *App) fixRunningPage(i *Installer, t *guidedTask) {
 		}
 		body = body.Child(taskHeading("Get RØDE’s firmware")).
 			Child(prose(fmt.Sprintf("The app downloads %s from RØDE and adds the fix to it. Nothing on the mixer has changed yet.", withVersion(fixVersion(i))), Muted)).
-			Child(spinnerLine(line)).
+			Child(a.spinnerLine(line)).
 			Child(soFar)
 	default:
 		title := "Fix the storage"
@@ -250,7 +250,7 @@ func (a *App) fixRunningPage(i *Installer, t *guidedTask) {
 		if line := fixPassLine(f.Event, "RØDE’s firmware"); line != "" {
 			body = body.Child(prose(line, Muted))
 		}
-		body = body.Child(fixUpdatePanel(f.Event)).
+		body = body.Child(a.fixUpdatePanel(f.Event)).
 			Child(taskPanel().
 				Child(eyebrow("Your mixer’s screen")).
 				Child(prose("It says “Updating” while the firmware is sent, then “Installing”. Keep it switched on and connected.", Muted))).
@@ -335,7 +335,7 @@ func (a *App) fixEndedPage(i *Installer, t *guidedTask) {
 	body = body.Child(seen)
 	normal := installflow.FixSeenOf(i.model) == installflow.FixSeenNormal
 	if i.access.Kind == installflow.AccessAsking {
-		body = body.Child(spinnerLine("Answer your system’s password prompt to continue."))
+		body = body.Child(a.spinnerLine("Answer your system’s password prompt to continue."))
 	}
 	t.body = body
 	if f.CanRetry(true) {

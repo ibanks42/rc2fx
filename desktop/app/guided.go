@@ -192,10 +192,8 @@ func seenRow(color uint32, text string, strong bool) gk.DivEl {
 		Child(gk.Div(s.Flex1, s.MinW0).Child(txt(text)))
 }
 
-func spinnerLine(text string) gk.DivEl {
-	return gk.HFlex(s.ItemsCenter, s.Gap3).
-		Child(gk.Spinner().Color(rgb(Accent))).
-		Child(prose(text, Muted))
+func (a *App) spinnerLine(text string) gk.DivEl {
+	return a.waitLine(text, false)
 }
 
 func upper(text string) string {

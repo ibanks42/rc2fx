@@ -104,11 +104,11 @@ func (a *App) repairTask(i *Installer) guidedTask {
 		needAccess := !i.access.AllowsFlashing()
 		switch {
 		case i.access.Kind == installflow.AccessAsking:
-			body = body.Child(spinnerLine("Answer your system’s password prompt to continue."))
+			body = body.Child(a.spinnerLine("Answer your system’s password prompt to continue."))
 		case r.Disk != nil && needAccess:
 			body = body.Child(seenRow(Accent, "The computer sees the mixer in storage mode.", true))
 		default:
-			body = body.Child(spinnerLine("Waiting for the mixer in storage mode…"))
+			body = body.Child(a.spinnerLine("Waiting for the mixer in storage mode…"))
 		}
 		if i.access.Kind == installflow.AccessRefused {
 			body = body.Child(seenRow(Warn, "Access wasn’t granted. "+strings.TrimSuffix(capitalFirst(i.access.Why), ".")+".", true))
@@ -133,7 +133,7 @@ func (a *App) repairTask(i *Installer) guidedTask {
 		if r.Stage.Kind == installflow.RepairRepairing {
 			heading, what = "Back up and repair", "Copying your settings, then restoring the damaged files…"
 		}
-		body = body.Child(taskHeading(heading)).Child(spinnerLine(what))
+		body = body.Child(taskHeading(heading)).Child(a.spinnerLine(what))
 		if p := i.progress; p != nil && p.Total > 0 {
 			body = body.Child(gk.Progress("task-progress").
 				Value(min(max(float32(p.Completed)/float32(p.Total)*100, 0), 100)))

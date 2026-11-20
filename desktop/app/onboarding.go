@@ -1,9 +1,12 @@
 package app
 
 // Landing/onboarding screen chrome: background gradient, cached halo texture,
-// headline, and the 30 Hz animated signature view.
+// headline, and the shared paced ambient ticker for the signature waveform and
+// loading spinners.
 
 import (
+	"math"
+	"strings"
 	"time"
 
 	"gpuikit.dev/gk"
@@ -62,52 +65,243 @@ func headline(first, second string) gk.DivEl {
 		Child(gk.Div().TextColor(rgb(Faint)).Child(txt(second)))
 }
 
-// Match installflow.Offset's 30 Hz noise step rate; faster ticks just redraw the same frame.
-const signatureFrame = 33 * time.Millisecond
+const (
+	// Ambient animation cadence (~30 Hz) shared by the onboarding signature and
+	// loading spinners when focused: matches installflow.Offset's 30 Hz noise
+	// step rate and keeps the spinner smooth without vsync-rate redraws.
+	ambientFPS   = 30
+	ambientFrame = 33 * time.Millisecond
+	// Unfocused ellipsis cadence (2 Hz) so waiting states stay visibly alive in
+	// the background at <1% GPU while the waveform and spinner rest.
+	unfocusedEllipsisFrame = 500 * time.Millisecond
+	// Frames per full rotation of the 8-spoke loader icon (1 rev/s, 12°/frame,
+	// well below the 22.5° aliasing limit for 45°-spaced spokes).
+	spinnerFramesPerTurn = ambientFPS
+	// Maximum simultaneous waiting/spinner views retained by App.
+	spinnerPoolSize = 2
+)
 
-type signature struct {
-	view    gk.View
-	epoch   time.Time
-	ticker  gk.Timer
-	ticking bool
+type spinnerSlot struct {
+	view          gk.View
+	embedded      uint64
+	text          string
+	centered      bool
+	drawnText     string
+	drawnCentered bool
 }
 
-func newSignature(a *App) gk.View {
-	sig := &signature{epoch: time.Now()}
-	sig.view = gk.NewView(nil, func(cx *gk.Cx) gk.Element {
-		phase := float32(time.Since(sig.epoch).Seconds())
-		first := a.firstState()
-		return signatureScene(first == installflow.FirstFound || first == installflow.FirstDuo, phase)
+type ambientState struct {
+	tick        uint64
+	ellipsis    uint64
+	active      bool
+	sigView     gk.View
+	sigEmbedded uint64
+	sigFound    bool
+	spinners    []*spinnerSlot
+	ticker      gk.Timer
+	ticking     bool
+	period      time.Duration
+}
+
+func spinnerAngle(tick uint64) float32 {
+	return float32(tick%spinnerFramesPerTurn) * (2 * math.Pi / spinnerFramesPerTurn)
+}
+
+func ambientTick(sigAnimate, spinAnimate, ellipsisAnimate, reducedMotion, active bool) (time.Duration, bool) {
+	if reducedMotion {
+		return 0, false
+	}
+	if active && (sigAnimate || spinAnimate) {
+		return ambientFrame, true
+	}
+	if !active && ellipsisAnimate {
+		return unfocusedEllipsisFrame, true
+	}
+	return 0, false
+}
+
+func ellipsisDots(step uint64) int {
+	return int(step%3) + 1
+}
+
+func renderWaitRow(text string, centered, active, reducedMotion bool, tick, ellipsis uint64) gk.Element {
+	icon := gk.Icon(gk.IconLoader).Size(px(16)).TextColor(rgb(Accent))
+	if active && !reducedMotion {
+		icon = icon.Rotate(gk.Radians{V0: spinnerAngle(tick)})
+	}
+	base, hasEllipsis := strings.CutSuffix(text, "…")
+	dots := 3
+	if !active && !reducedMotion && hasEllipsis {
+		dots = ellipsisDots(ellipsis)
+	}
+	var label gk.Element
+	if centered {
+		if hasEllipsis {
+			row := gk.HFlex(s.ItemsCenter).Child(txt(base))
+			for i := 1; i <= 3; i++ {
+				d := gk.Div().Child(txt("."))
+				if i > dots {
+					d = d.Opacity(0)
+				}
+				row = row.Child(d)
+			}
+			label = row
+		} else {
+			label = txt(text)
+		}
+		return gk.HFlex(s.ItemsCenter, s.Gap3, s.TextSm).TextColor(rgb(Muted)).
+			Child(icon).
+			Child(label)
+	}
+	display := text
+	if hasEllipsis {
+		display = base + strings.Repeat(".", dots)
+	}
+	return gk.HFlex(s.ItemsCenter, s.Gap3).
+		Child(icon).
+		Child(prose(display, Muted))
+}
+
+func (a *App) initAmbient() {
+	amb := &ambientState{
+		active:   true,
+		spinners: make([]*spinnerSlot, spinnerPoolSize),
+	}
+	amb.sigView = gk.NewView(nil, func(cx *gk.Cx) gk.Element {
+		// Center each tick in its 1/30 s bucket so float32 rounding never repeats floor(phase*30).
+		phase := (float32(amb.tick) + 0.5) / ambientFPS
+		return signatureScene(a.signatureFound(), phase)
 	})
-	a.lineSlots.signature = sig
-	return sig.view
+	for i := range amb.spinners {
+		slot := &spinnerSlot{}
+		slot.view = gk.NewView(nil, func(cx *gk.Cx) gk.Element {
+			slot.drawnText, slot.drawnCentered = slot.text, slot.centered
+			return renderWaitRow(slot.text, slot.centered, amb.active, a.reducedMotion, amb.tick, amb.ellipsis)
+		})
+		amb.spinners[i] = slot
+	}
+	a.lineSlots.ambient = amb
 }
 
-func (a *App) signatureActive() bool {
-	return !a.reducedMotion && !a.session.Connected && a.installer == nil &&
-		a.firstState() != installflow.FirstTwo
+func (a *App) signatureFound() bool {
+	first := a.firstState()
+	return first == installflow.FirstFound || first == installflow.FirstDuo
 }
 
-func (a *App) pollSignature(cx *gk.Cx) {
-	sig := a.lineSlots.signature
-	if sig == nil {
+func (a *App) embedSignature() gk.Element {
+	amb := a.lineSlots.ambient
+	if amb == nil {
+		return gk.Div(s.SizeFull)
+	}
+	amb.sigEmbedded = a.renderGeneration
+	return gk.Div(s.SizeFull).ChildView(amb.sigView)
+}
+
+// waitLine embeds a paced spinner/ellipsis row driven by the shared ambient
+// ticker (30 Hz rotating icon when focused; 2 Hz animated ellipsis when
+// unfocused), avoiding gk.Spinner's uncapped vsync animation loop.
+func (a *App) waitLine(text string, centered bool) gk.DivEl {
+	if a.reducedMotion {
+		return gk.Div().Child(renderWaitRow(text, centered, false, true, 0, 0))
+	}
+	if amb := a.lineSlots.ambient; amb != nil {
+		for _, slot := range amb.spinners {
+			if slot.embedded != a.renderGeneration {
+				slot.embedded = a.renderGeneration
+				slot.text = text
+				slot.centered = centered
+				return gk.Div().ChildView(slot.view)
+			}
+		}
+	}
+	return gk.Div().Child(renderWaitRow(text, centered, false, true, 0, 0))
+}
+
+func (a *App) pollAmbient(cx *gk.Cx) {
+	amb := a.lineSlots.ambient
+	if amb == nil {
 		return
 	}
-	active := a.signatureActive()
-	if !active && sig.ticking {
-		gk.Release(cx, sig.ticker)
-		sig.ticking = false
-	}
-	if active && !sig.ticking {
-		sig.ticker = gk.Every(cx, signatureFrame, func(cx *gk.Cx) {
-			gk.Quiet(cx)
-			if !a.signatureActive() {
-				gk.Release(cx, sig.ticker)
-				sig.ticking = false
-				return
+	sigShown := amb.sigEmbedded != 0 && amb.sigEmbedded == a.renderGeneration
+	sigAnimate := sigShown && !a.reducedMotion && a.firstState() != installflow.FirstTwo
+	spinAnimate, ellipsisAnimate := false, false
+	if !a.reducedMotion {
+		for _, slot := range amb.spinners {
+			if slot.embedded != 0 && slot.embedded == a.renderGeneration {
+				spinAnimate = true
+				if strings.HasSuffix(slot.text, "…") {
+					ellipsisAnimate = true
+				}
+				if slot.text != slot.drawnText || slot.centered != slot.drawnCentered {
+					gk.Notify(cx, slot.view)
+				}
 			}
-			gk.Notify(cx, sig.view)
+		}
+	}
+	if sigShown {
+		found := a.signatureFound()
+		if found != amb.sigFound {
+			amb.sigFound = found
+			gk.Notify(cx, amb.sigView)
+		}
+	}
+	active := amb.active
+	if sigAnimate || spinAnimate {
+		active = gk.GetWindowInfo(cx, a.window).Active
+	}
+	focusChanged := active != amb.active
+	amb.active = active
+	if focusChanged && spinAnimate {
+		if !active {
+			amb.ellipsis = 0
+		}
+		for _, slot := range amb.spinners {
+			if slot.embedded != 0 && slot.embedded == a.renderGeneration {
+				gk.Notify(cx, slot.view)
+			}
+		}
+	}
+	period, run := ambientTick(sigAnimate, spinAnimate, ellipsisAnimate, a.reducedMotion, active)
+	if amb.ticking && (!run || period != amb.period) {
+		gk.Release(cx, amb.ticker)
+		amb.ticking = false
+	}
+	if run && !amb.ticking {
+		amb.ticker = gk.Every(cx, period, func(cx *gk.Cx) {
+			gk.Quiet(cx)
+			a.tickAmbient(cx)
 		})
-		sig.ticking = true
+		amb.ticking, amb.period = true, period
+	}
+}
+
+func (a *App) tickAmbient(cx *gk.Cx) {
+	amb := a.lineSlots.ambient
+	if amb == nil {
+		return
+	}
+	any := false
+	if amb.active {
+		amb.tick++
+		if !a.reducedMotion && amb.sigEmbedded != 0 && amb.sigEmbedded == a.renderGeneration &&
+			a.firstState() != installflow.FirstTwo {
+			amb.sigFound = a.signatureFound()
+			gk.Notify(cx, amb.sigView)
+			any = true
+		}
+	} else {
+		amb.ellipsis++
+	}
+	if !a.reducedMotion {
+		for _, slot := range amb.spinners {
+			if slot.embedded != 0 && slot.embedded == a.renderGeneration {
+				gk.Notify(cx, slot.view)
+				any = true
+			}
+		}
+	}
+	if !any && amb.ticking {
+		gk.Release(cx, amb.ticker)
+		amb.ticking = false
 	}
 }

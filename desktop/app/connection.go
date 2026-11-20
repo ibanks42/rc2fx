@@ -158,7 +158,7 @@ func (a *App) connectionScreen(cx *gk.Cx) gk.Element {
 	h := a.firstHero()
 	signature := gk.Div(s.FlexShrink0).H(px(heroSignatureHeight)).W(gk.Relative(0.62)).Mt(px(22))
 	if !a.reducedMotion {
-		signature = signature.ChildView(a.onboardingSignature)
+		signature = signature.Child(a.embedSignature())
 	}
 	column := gk.VFlex(s.WFull, s.ItemsCenter).Pb(px(64)).
 		Child(signature).
@@ -194,10 +194,8 @@ func heroFacts() gk.DivEl {
 		Child(fact("Can be removed any time"))
 }
 
-func heroSpinner(text string) gk.DivEl {
-	return gk.HFlex(s.ItemsCenter, s.Gap3, s.TextSm).TextColor(rgb(Muted)).
-		Child(gk.Spinner().Color(rgb(Accent))).
-		Child(txt(text))
+func (a *App) heroSpinner(text string) gk.DivEl {
+	return a.waitLine(text, true)
 }
 
 func (a *App) firstHero() hero {
@@ -250,7 +248,7 @@ func (a *App) firstHero() hero {
 		return hero{
 			first: "Your mixer is", second: "finishing an update.",
 			lead: "It restarts while it installs the update, which can take a few minutes. Keep it switched on and connected.",
-			act:  heroSpinner("Waiting for the mixer to come back…"),
+			act:  a.heroSpinner("Waiting for the mixer to come back…"),
 			dot:  Violet, status: "Mixer restarting · updating",
 		}
 	case installflow.FirstStarting:
@@ -261,7 +259,7 @@ func (a *App) firstHero() hero {
 		return hero{
 			first: "RC2FX is starting", second: "on your mixer.",
 			lead: "RC2FX is on your mixer. The app opens your channels as soon as it answers.",
-			act:  heroSpinner("Connecting to RC2FX…"),
+			act:  a.heroSpinner("Connecting to RC2FX…"),
 			dot:  Violet, status: status,
 		}
 	case installflow.FirstUpdateMode:
@@ -312,14 +310,14 @@ func (a *App) firstHero() hero {
 		return hero{
 			first: "Connect only", second: "one mixer.",
 			lead: "Two RØDECasters are connected to this computer. Unplug the one you don’t want to use with RC2FX. The app continues by itself.",
-			act:  heroSpinner("Waiting for one mixer to be unplugged…"),
+			act:  a.heroSpinner("Waiting for one mixer to be unplugged…"),
 			dot:  Warn, status: fmt.Sprintf("%d mixers found on USB", max(len(seen.USB), 2)),
 		}
 	}
 	return hero{
 		first: "Connect your", second: "RØDECaster.",
 		lead: "Use a USB cable from the mixer’s USB 1 port (on the back) to this computer. The app finds it by itself.",
-		act:  heroSpinner("Looking for a mixer…"),
+		act:  a.heroSpinner("Looking for a mixer…"),
 		dot:  Faint, status: "No mixer found on USB",
 	}
 }

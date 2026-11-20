@@ -3,7 +3,7 @@ package levels
 // Frame scheduling and dirty-checking for live level indicators.
 // Presenting a frame on weak GPUs dominates paint cost, so we skip frames when
 // nothing visibly changes (keeping a silent mixer nearly idle) and drop from
-// ~60 Hz to ~30 Hz when the window is unfocused.
+// ~30 Hz to 10 Hz when the window is unfocused.
 
 import (
 	"math"
@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	// Tick interval when the window is focused (~60 Hz).
-	Frame = 16_667 * time.Microsecond
-	// Tick interval when unfocused (~30 Hz).
-	UnfocusedFrame = 33_333 * time.Microsecond
+	// Tick interval when the window is focused (~30 Hz).
+	Frame = 33_333 * time.Microsecond
+	// Tick interval when unfocused (10 Hz).
+	UnfocusedFrame = 100 * time.Millisecond
 	// Half-height threshold in pixels below which a wave line looks flat.
 	Flat float32 = 0.5
 	// Minimum bar level delta that produces a visible pixel change.

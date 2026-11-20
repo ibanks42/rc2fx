@@ -137,7 +137,7 @@ func (a *App) beforePage(i *Installer, t *guidedTask) {
 	}
 	switch i.access.Kind {
 	case installflow.AccessAsking:
-		body = body.Child(spinnerLine("Answer your system’s password prompt to continue."))
+		body = body.Child(a.spinnerLine("Answer your system’s password prompt to continue."))
 	case installflow.AccessRefused:
 		body = body.Child(seenRow(Warn, "Access wasn’t granted. "+strings.TrimSuffix(capitalFirst(i.access.Why), ".")+".", true))
 	}
@@ -216,7 +216,7 @@ func (a *App) versionsDisclosure(i *Installer) gk.DivEl {
 func (a *App) blockerLine(i *Installer, why string) gk.DivEl {
 	m := i.model
 	if strings.HasSuffix(why, "…") {
-		return spinnerLine(why)
+		return a.spinnerLine(why)
 	}
 	var again func(m *installflow.Model) *installer.Request
 	switch {
@@ -269,16 +269,16 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 		}
 		body = body.Child(taskHeading("Save your settings")).
 			Child(prose("The app reads your mixer’s settings over USB and keeps a copy on this computer. They are put back with the new firmware.", Muted)).
-			Child(spinnerLine(line)).
+			Child(a.spinnerLine(line)).
 			Child(soFar)
 	case installflow.StageGet:
 		body = body.Child(taskHeading(installflow.StageTitle(stage, m.Stock))).
 			Child(prose(versionLine(m), Muted)).
-			Child(spinnerLine(fetchLine(m, i.progress))).
+			Child(a.spinnerLine(fetchLine(m, i.progress))).
 			Child(soFar)
 	case installflow.StageUpdate:
 		if m.PowerCycle() {
-			body = body.Child(powerCycleBody(i))
+			body = body.Child(a.powerCycleBody(i))
 			break
 		}
 		body = body.Child(taskHeading("Update the mixer")).
@@ -287,9 +287,9 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 			if line := fixPassLine(m.Run.Fix.Event, strings.TrimSuffix(versionLine(m), ".")); line != "" {
 				body = body.Child(prose(line, Muted))
 			}
-			body = body.Child(fixUpdatePanel(m.Run.Fix.Event))
+			body = body.Child(a.fixUpdatePanel(m.Run.Fix.Event))
 		} else {
-			body = body.Child(updatePanel(m, i.progress))
+			body = body.Child(a.updatePanel(m, i.progress))
 		}
 		body = body.
 			Child(taskPanel().
@@ -299,11 +299,11 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 	case installflow.StageCheck:
 		body = body.Child(taskHeading("Check and finish")).
 			Child(prose("RC2FX is running. It checks the files the update installed; this takes a minute or two.", Muted)).
-			Child(spinnerLine("Checking the files…")).
+			Child(a.spinnerLine("Checking the files…")).
 			Child(soFar)
 	default:
 		if m.PowerCycle() {
-			body = body.Child(powerCycleBody(i))
+			body = body.Child(a.powerCycleBody(i))
 		} else if m.FixRunning() {
 			event := m.Run.Fix.Event
 			waiting := fixWaitLine(m)
@@ -317,7 +317,7 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 				body = body.Child(prose(line, Muted))
 			}
 			body = body.Child(taskPanel().Child(gk.HFlex(s.ItemsCenter, s.JustifyBetween, s.Gap3).
-				Child(gk.Div(s.Flex1, s.MinW0).Child(spinnerLine(waiting))).
+				Child(gk.Div(s.Flex1, s.MinW0).Child(a.spinnerLine(waiting))).
 				Child(prose(installflow.Elapsed(now.Sub(since))+" so far", Faint))))
 		} else {
 			waiting := "Waiting for the mixer to start with RC2FX…"
@@ -327,7 +327,7 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 			body = body.Child(taskHeading("Wait for the mixer")).
 				Child(prose("The mixer restarts on its own. Its screen goes dark while it does.", Muted)).
 				Child(taskPanel().Child(gk.HFlex(s.ItemsCenter, s.JustifyBetween, s.Gap3).
-					Child(spinnerLine(waiting)).
+					Child(a.spinnerLine(waiting)).
 					Child(prose(installflow.Elapsed(now.Sub(i.stageSince))+" so far", Faint))))
 		}
 	}
@@ -358,7 +358,7 @@ func fetchLine(m *installflow.Model, p *installer.Progress) string {
 	return "Getting the firmware ready…"
 }
 
-func updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
+func (a *App) updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
 	step := installflow.Steps[m.Run.Index]
 	var fill *float32
 	if step == installflow.StepFlash && m.Busy() && p != nil && p.Phase == "stage" {
@@ -381,12 +381,12 @@ func updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
 		Child(gk.Div().Mt(px(4)).Mb(px(12)).Child(gk.Progress("task-progress").Value(value))).
 		Child(seenRow(surface().Line, "2. The mixer installs it, then restarts. This part has no progress to show.", false))
 	if step == installflow.StepUSBMode || (step == installflow.StepFlash && !m.Busy()) {
-		panel = panel.Child(gk.Div(s.Pt2).Child(spinnerLine("Putting the mixer in update mode…")))
+		panel = panel.Child(gk.Div(s.Pt2).Child(a.spinnerLine("Putting the mixer in update mode…")))
 	}
 	return panel
 }
 
-func powerCycleBody(i *Installer) gk.DivEl {
+func (a *App) powerCycleBody(i *Installer) gk.DivEl {
 	flashed := i.model.Run.Flashed
 	heading := "Turn the mixer off and on again"
 	if flashed {
@@ -401,7 +401,7 @@ func powerCycleBody(i *Installer) gk.DivEl {
 				"Wait until the screen is dark, then switch it on again.",
 				"Leave the USB cable connected.")).
 			Child(gk.HFlex(s.ItemsCenter, s.Gap3, s.BorderT1).Mt(px(14)).Pt(px(12)).BorderColor(rgb(surface().Line)).
-				Child(gk.Div(s.Flex1, s.MinW0).Child(spinnerLine("Waiting for the mixer to come back. The app continues by itself."))).
+				Child(gk.Div(s.Flex1, s.MinW0).Child(a.spinnerLine("Waiting for the mixer to come back. The app continues by itself."))).
 				Child(prose("Timer paused at "+installflow.Elapsed(i.pausedAt), Faint))))
 	if flashed {
 		body = body.Child(prose("If the mixer asks for its initial setup after it starts, don’t redo it: this restart brings it back.", Faint))
@@ -489,7 +489,7 @@ func (a *App) failedPage(i *Installer, t *guidedTask) {
 		}
 	}
 	if i.access.Kind == installflow.AccessAsking {
-		body = body.Child(spinnerLine("Answer your system’s password prompt to continue."))
+		body = body.Child(a.spinnerLine("Answer your system’s password prompt to continue."))
 	}
 	t.body = body
 	t.secondary = []gk.ButtonEl{taskButton("task-stop", "Stop", false).Disabled(i.busy()).

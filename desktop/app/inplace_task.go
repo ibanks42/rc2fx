@@ -123,7 +123,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	case installflow.InPlacePreparing:
 		body = body.Child(taskHeading("Update RC2FX")).
 			Child(prose("The app downloads the update and checks its signature. Nothing on the mixer has changed yet.", Muted)).
-			Child(spinnerLine(fmt.Sprintf("Downloading and checking RC2FX %s…", p.Version))).
+			Child(a.spinnerLine(fmt.Sprintf("Downloading and checking RC2FX %s…", p.Version))).
 			Child(soFar)
 	case installflow.InPlaceReady, installflow.InPlaceUploading:
 		version := p.Version
@@ -144,7 +144,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	case installflow.InPlaceInstalling:
 		body = body.Child(taskHeading("Check and finish")).
 			Child(prose("RC2FX restarts on the mixer, which interrupts its audio briefly. Keep the mixer on and connected.", Muted)).
-			Child(spinnerLine(fmt.Sprintf("The mixer is checking and installing RC2FX %s…", p.Version))).
+			Child(a.spinnerLine(fmt.Sprintf("The mixer is checking and installing RC2FX %s…", p.Version))).
 			Child(soFar)
 	case installflow.InPlaceDone:
 		t.unplug = afterInPlace(answering)
