@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rc2fx-usb", "crates/rc2fx-delta", "crates/rc2fx-core", "crates/rc2fx-dfn", "crates/rc2fx-device", "crates/rc2fx-dsp", "crates/rc2fx-suppression", "crates/rc2fx-native-control", "crates/rc2fx-firmware", "crates/rc2fx-supervisor"]
+members = ["crates/rc2fx-usb", "crates/rc2fx-delta", "crates/rc2fx-core", "crates/rc2fx-dfn", "crates/rc2fx-device", "crates/rc2fx-dsp", "crates/rc2fx-suppression", "crates/rc2fx-native-control", "crates/rc2fx-native", "crates/rc2fx-firmware", "crates/rc2fx-supervisor"]
 resolver = "3"
 
 # zstd for the delta codec, with the C library built from the crate for the

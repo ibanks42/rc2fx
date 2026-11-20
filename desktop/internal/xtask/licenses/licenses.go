@@ -82,7 +82,7 @@ func Generate(root string, extra []Section) (*Document, error) {
 	// Keep each distinct notice, including its copyright holders; only merge
 	// byte-identical texts, never all MIT texts into a generic MIT template.
 	groups := Groups{}
-	for _, manifest := range []string{"Cargo.toml", "crates/rc2fx-native/Cargo.toml"} {
+	for _, manifest := range []string{"Cargo.toml"} {
 		command := exec.Command("cargo", "about", "generate", "--locked", "--format", "json",
 			"--config", "about.toml", "--manifest-path", manifest)
 		command.Dir = root

@@ -71,18 +71,16 @@ jobs:
           key: check-alma
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-          # The native library and the benchmark are workspaces of their own,
-          # each with its own target folder.
+          # The benchmark is a workspace of its own (for bench-kernels isolation).
           workspaces: |
             . -> target
-            crates/rc2fx-native -> target
             crates/rc2fx-bench -> target
-      # `--all` covers the workspace only; the other two are checked by name.
+      # `--all` covers the workspace only; standalone workspaces are checked by name.
       - name: Check formatting
         run: |
           cargo fmt --all -- --check
-          cargo fmt --all --manifest-path crates/rc2fx-native/Cargo.toml -- --check
           cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
+          cargo fmt --all --manifest-path tools/src_fast_check/Cargo.toml -- --check
       # Every cargo command here takes the same settings (cargo-ci.toml), so
       # they share their build scripts and proc-macros.
       - name: Lint the workspace
@@ -100,14 +98,11 @@ jobs:
         run: |
           cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
           cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
-      - name: Lint the native library
-        run: cargo clippy --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets -- -D warnings
       # gauge_binding.py loads the host build of the library with LD_AUDIT.
       # The tooling job has none and skips it; here a missing build fails.
-      - name: Test the native library
+      - name: Test the native library bindings
         run: |
-          cargo test --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-native/Cargo.toml
-          cargo build --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-native/Cargo.toml
+          cargo build --config .github/cargo-ci.toml --locked -p rc2fx-native
           RC2FX_REQUIRE_NATIVE=1 python3 mixer/scripts/tests/gauge_binding.py
       - name: Check the benchmark
         run: cargo check --config .github/cargo-ci.toml --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets
@@ -170,7 +165,6 @@ jobs:
         # Ignored advisories and their reasons live in .cargo/audit.toml.
         run: |
           cargo-audit audit --file Cargo.lock
-          cargo-audit audit --file crates/rc2fx-native/Cargo.lock
           cargo-audit audit --file crates/rc2fx-bench/Cargo.lock
       - name: Test release and documentation tooling
         run: |

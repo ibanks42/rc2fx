@@ -119,14 +119,12 @@ test:
     $ui = '/app$|/app/uitest$|/cmd/rc2fx$'; $all = go -C desktop list ./...; $nocgo = $all | Where-Object { $_ -notmatch $ui }; $pkgs = if (Test-Path desktop/third_party/gpuikit) { $all } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/gpuikit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/gpuikit/lib).Path)" }; go -C desktop test $pkgs; if (-not $?) { exit 1 }
     go -C desktop test -tags mockmixer ./transport/...
 
-# Tests of the mixer side: the native library, launcher scripts and C modules (Linux, with python3 and cc)
+# Tests of the mixer side: the native library binding check, launcher scripts and C modules (Linux, with python3 and cc)
 test-mixer:
-    cargo fmt --all --manifest-path crates/rc2fx-native/Cargo.toml -- --check
     cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
-    cargo test --locked --manifest-path crates/rc2fx-native/Cargo.toml
-    cargo clippy --locked --manifest-path crates/rc2fx-native/Cargo.toml --all-targets -- -D warnings
+    cargo fmt --all --manifest-path tools/src_fast_check/Cargo.toml -- --check
     cargo check --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets
-    cargo build --locked --manifest-path crates/rc2fx-native/Cargo.toml
+    cargo build --locked -p rc2fx-native
     for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done
     python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p 'test_*.py'
     python3 crates/rc2fx-gui/test_gui_pacing.py

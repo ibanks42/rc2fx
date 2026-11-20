@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host-only proof of what the bench gauges bind, through the real loader.
 
-cargo build --locked --manifest-path crates/rc2fx-native/Cargo.toml
+cargo build --locked -p rc2fx-native
 python3 mixer/scripts/tests/gauge_binding.py
 
 Without gcc or that build it skips, unless RC2FX_REQUIRE_NATIVE=1 (CI's
@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[3]
 LIBRARY = Path(os.environ.get('RC2FX_NATIVE_LIBRARY',
-                              ROOT / 'crates/rc2fx-native/target/debug/librc2fx_native.so'))
+                              ROOT / 'target/debug/librc2fx_native.so'))
 SCRIPT = (Path(__file__).parents[1] / 'rc2fx.sh').read_text()
 REQUIRED = os.environ.get('RC2FX_REQUIRE_NATIVE') == '1'
 
@@ -62,7 +62,7 @@ class Binding(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not LIBRARY.exists():
-            raise FileNotFoundError(f'{LIBRARY}: build it with cargo build --manifest-path crates/rc2fx-native/Cargo.toml')
+            raise FileNotFoundError(f'{LIBRARY}: build it with cargo build -p rc2fx-native')
         cls.temp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.temp.cleanup)
         root = cls.root = Path(cls.temp.name)

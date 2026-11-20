@@ -24,7 +24,7 @@ class ReleaseTests(unittest.TestCase):
         self.put("crates/app/Cargo.toml", '[package]\nname = "app"\nversion = "0.1.0"\n')
         self.put("crates/core/Cargo.toml", '[package]\nname = "core"\nversion.workspace = true\n')
         lock = 'version = 4\n\n[[package]]\nname = "app"\nversion = "0.1.0"\n\n[[package]]\nname = "core"\nversion = "0.1.0"\n'
-        for filename in ("Cargo.lock", "crates/rc2fx-native/Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
+        for filename in ("Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
             self.put(filename, lock)
         self.put("cliff.toml", (ROOT / "cliff.toml").read_text())
         self.put_go_desktop()
@@ -69,7 +69,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertLessEqual(set(go_files), set(plan["files"]))
         with tarfile.open(self.root / "target/release-input/versioned.tar") as archive:
             self.assertLessEqual(set(go_files), set(archive.getnames()))
-        for filename in ("Cargo.lock", "crates/rc2fx-native/Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
+        for filename in ("Cargo.lock", "crates/rc2fx-bench/Cargo.lock"):
             packages = tomllib.loads((self.root / filename).read_text())["package"]
             self.assertTrue(all(p["version"] == "0.1.1" for p in packages), filename)
         self.assertIn('version = "0.1.1"', (self.root / "crates/app/Cargo.toml").read_text())

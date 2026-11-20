@@ -62,8 +62,8 @@ def update_versions(version):
         elif declared != {"workspace": True}:
             raise ValueError(f"Unexpected version declaration for {name}")
 
-    # Separate mixer/benchmark workspaces lock some of these same path packages.
-    for path in [Path("Cargo.lock"), Path("crates/rc2fx-native/Cargo.lock"), Path("crates/rc2fx-bench/Cargo.lock")]:
+    # Separate benchmark workspace locks some of these same path packages.
+    for path in [Path("Cargo.lock"), Path("crates/rc2fx-bench/Cargo.lock")]:
         text = path.read_text()
         found = set()
 

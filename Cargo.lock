@@ -919,6 +919,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc2fx-native"
+version = "0.1.7"
+dependencies = [
+ "libc",
+ "rc2fx-core",
+ "rc2fx-dsp",
+ "rc2fx-firmware",
+ "rc2fx-native-control",
+ "rc2fx-suppression",
+ "rc2fx-usb",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "rc2fx-native-control"
 version = "0.1.7"
 dependencies = [
