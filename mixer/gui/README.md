@@ -50,7 +50,7 @@ counters line per minute. Development builds log every frame.
 ## Tests
 
 ```sh
-python3 crates/rc2fx-gui/test_gui_pacing.py
+python3 mixer/gui/test_gui_pacing.py
 ```
 
 The script builds the module with `-DRC2FX_PACING_TEST`, which finds the call

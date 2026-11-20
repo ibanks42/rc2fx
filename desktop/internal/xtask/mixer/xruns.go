@@ -3,7 +3,7 @@ package mixer
 // `mixer xruns [SECONDS]`: what the JACK error recorder saw while you
 // watched.
 //
-// The recorder (`crates/rc2fx-native/jackerr`) is preloaded into the mixer's
+// The recorder (`mixer/jackerr`) is preloaded into the mixer's
 // jackd at every RC2FX start and keeps a ring of every `jack_error` call in
 // RAM. This command checks that it is the live server's, takes a snapshot of
 // the ring with the bundle's `rc2fx_jackerr_snapshot`, waits SECONDS, takes

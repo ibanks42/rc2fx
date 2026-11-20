@@ -1,4 +1,4 @@
-"""Host tests of gui_pacing.c: python3 crates/rc2fx-gui/test_gui_pacing.py
+"""Host tests of gui_pacing.c: python3 mixer/gui/test_gui_pacing.py
 
 Builds the module with -DRC2FX_PACING_TEST (sites matched by symbol name in
 gui_pacing_test.cpp instead of the pinned GUI offsets; no executable hash) and

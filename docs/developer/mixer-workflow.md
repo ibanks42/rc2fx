@@ -118,7 +118,7 @@ just mixer-xruns 0   # all JACK errors since JACK started
 The JACK error recorder is loaded into RØDE's JACK server each time RC2FX
 starts. It logs driver and ALSA xruns and names clients that missed their
 deadline. Records are kept in RAM and cleared on reboot. See the
-[recorder's README](../../crates/rc2fx-native/jackerr/README.md).
+[recorder's README](../../mixer/jackerr/README.md).
 
 ## Recovering
 

@@ -82,7 +82,7 @@ time. Its pages are prefaulted but not locked by this code.
 ## Tests
 
 ```sh
-python3 -I -m unittest discover -s crates/rc2fx-native/jackerr/tests -p test_jackerr.py
+python3 -I -m unittest discover -s mixer/jackerr/tests -p test_jackerr.py
 python3 mixer/scripts/tests/recorder_launcher.py
 python3 mixer/scripts/tests/install.py
 (cd desktop && go test ./installer/...)

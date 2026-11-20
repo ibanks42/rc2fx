@@ -359,7 +359,7 @@ if __name__ == '__main__':
     root = args.capture
     with gzip.open(root/'trace.txt.gz', 'rt') as stream:
         text = stream.read()
-    decoder_path=Path(__file__).resolve().parents[2]/'crates/rc2fx-native/jackerr/tests/jackerr_ring.py'
+    decoder_path=Path(__file__).resolve().parents[2]/'mixer/jackerr/tests/jackerr_ring.py'
     spec=importlib.util.spec_from_file_location('jackerr_ring',decoder_path)
     decoder=importlib.util.module_from_spec(spec);spec.loader.exec_module(decoder)
     records=decoder.read((root/'jack.snapshot').read_bytes())['records'] if (root/'jack.snapshot').exists() else None

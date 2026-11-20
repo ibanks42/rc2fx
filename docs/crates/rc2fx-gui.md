@@ -1,1 +1,1 @@
-<!--@include: ../../crates/rc2fx-gui/README.md-->
+<!--@include: ../../mixer/gui/README.md-->

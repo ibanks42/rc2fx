@@ -126,8 +126,8 @@ test-mixer:
     cargo check --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets
     cargo build --locked -p rc2fx-native
     for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done
-    python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p 'test_*.py'
-    python3 crates/rc2fx-gui/test_gui_pacing.py
+    python3 -m unittest discover -s mixer/jackerr/tests -p 'test_*.py'
+    python3 mixer/gui/test_gui_pacing.py
     python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
 
 # Cross-build the suppression benchmark

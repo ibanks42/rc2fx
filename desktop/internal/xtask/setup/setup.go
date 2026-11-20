@@ -310,7 +310,7 @@ func SameFiles(a, b string) bool {
 const GUIModule = "librc2fx_gui.so"
 
 // buildGUIModule builds the partial-conversion module from
-// `crates/rc2fx-gui/gui_pacing.c` (the three-job rectangle planner, as the
+// `mixer/gui/gui_pacing.c` (the three-job rectangle planner, as the
 // Pro II profile was measured). The source is passed by its absolute path,
 // so the debug info names it.
 func buildGUIModule(root, targetDir string) (string, error) {
@@ -335,7 +335,7 @@ func buildGUIModule(root, targetDir string) (string, error) {
 		"-Wall",
 		"-Wextra",
 		"-Werror",
-		filepath.Join(root, "crates", "rc2fx-gui", "gui_pacing.c"),
+		filepath.Join(root, "mixer", "gui", "gui_pacing.c"),
 		"-o", out,
 	)
 	command.Dir = root
@@ -346,7 +346,7 @@ func buildGUIModule(root, targetDir string) (string, error) {
 }
 
 // The JACK error recorder and its snapshot reader
-// (`crates/rc2fx-native/jackerr`).
+// (`mixer/jackerr`).
 const (
 	JackerrModule   = "librc2fx_jackerr.so"
 	JackerrSnapshot = "rc2fx_jackerr_snapshot"
@@ -384,7 +384,7 @@ func BuildJackRecorder(root, targetDir string) ([2]string, error) {
 		} else {
 			args = append(args, "-fPIE", "-pie")
 		}
-		args = append(args, filepath.Join(root, "crates", "rc2fx-native", "jackerr", part.source), "-o", outputs[i])
+		args = append(args, filepath.Join(root, "mixer", "jackerr", part.source), "-o", outputs[i])
 		command := exec.Command("zig", args...)
 		command.Dir = root
 		if err := task.Run(command); err != nil {

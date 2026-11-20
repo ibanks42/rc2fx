@@ -48,7 +48,8 @@ that keep it in step with the mixer's Rust.
 | `crates/rc2fx-supervisor` | `rc2fx-supervisor`: watches the audio engine and `rc2fxd`, and hands audio back to stock when either fails |
 | `crates/rc2fx-firmware` | Firmware catalog validation, the mixer's profile selection, and the offline compatibility checker; the app's side, `desktop/firmware`, reads the catalog and inspects images |
 | `crates/rc2fx-bench` | Benchmarks the suppression models on the mixer |
-| `crates/rc2fx-gui` | `librc2fx_gui.so` (C), loaded into RØDE's screen program. It converts only the changed parts of the screen, which reduces the load redraws put on audio. |
+| `mixer/gui` | `librc2fx_gui.so` (C), loaded into RØDE's screen program. It converts only the changed parts of the screen, which reduces the load redraws put on audio. |
+| `mixer/jackerr` | `librc2fx_jackerr.so` and `rc2fx_jackerr_snapshot` (C), the `jackd` error recorder and snapshot reader. |
 | `xtask`, `desktop/cmd/xtask` | Build, deploy, and packaging tasks. `./xtask` at the root runs the Go tool in `desktop/cmd/xtask` and `desktop/internal/xtask`. |
 | `mixer/scripts` | The launcher, shims, and installer script that run on the mixer, with their tests in `mixer/scripts/tests` |
 | `fixtures/` | Accept and reject cases that the Rust and Go tests both read, so the two copies of shared code agree |

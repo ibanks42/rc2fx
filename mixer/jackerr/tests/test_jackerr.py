@@ -1,4 +1,4 @@
-"""Host-only tests: python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p 'test_jackerr.py'.
+"""Host-only tests: python3 -m unittest discover -s mixer/jackerr/tests -p 'test_jackerr.py'.
 
 Builds the jackd error recorder (with its test hooks), its on-device snapshot
 reader and a harness with the host C compiler. The harness reaches

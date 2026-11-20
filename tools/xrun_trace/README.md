@@ -158,7 +158,7 @@ Host checks:
 
 ```sh
 python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
-python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p test_jackerr.py
+python3 -m unittest discover -s mixer/jackerr/tests -p test_jackerr.py
 ```
 
 While armed, callback recording uses wall-clock boundaries only. Per-client

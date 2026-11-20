@@ -187,8 +187,8 @@ jobs:
       # developer's computer (`just test-mixer`).
       - name: Test the jackd error recorder and the screen module
         run: |
-          python3 -m unittest discover -s crates/rc2fx-native/jackerr/tests -p 'test_*.py'
-          python3 crates/rc2fx-gui/test_gui_pacing.py
+          python3 -m unittest discover -s mixer/jackerr/tests -p 'test_*.py'
+          python3 mixer/gui/test_gui_pacing.py
       - name: Test the xrun flight recorder tools
         run: python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
 
