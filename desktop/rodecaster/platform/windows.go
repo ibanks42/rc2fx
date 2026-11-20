@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"runtime"
 	"strings"
 	"syscall"
@@ -381,7 +383,16 @@ func (host) Open(h *HID) (Reports, error) {
 
 func (h host) OpenControl(hid *HID) (Reports, error) { return h.Open(hid) }
 
-func (host) Volumes() ([]Volume, error) {
+func (host) Volumes() ([]Volume, error) { return drives(UpdateSize) }
+
+// ReportDisks: the removable USB drives that hold a medium smaller than any
+// update drive. Flash code matches them to the mixer by serial.
+func (host) ReportDisks() ([]Volume, error) {
+	return drives(func(size uint64) bool { return size > 0 && size < minDiskBytes })
+}
+
+// drives lists the removable USB drives with a medium whose size fits.
+func drives(fits func(uint64) bool) ([]Volume, error) {
 	roots := make([]uint16, 512)
 	n, err := windows.GetLogicalDriveStrings(uint32(len(roots)), &roots[0])
 	if n == 0 {
@@ -415,7 +426,7 @@ func (host) Volumes() ([]Volume, error) {
 			}
 			continue
 		}
-		if !UpdateSize(total) {
+		if !fits(total) {
 			continue
 		}
 		serial, usb, err := storageIdentity(root)
@@ -511,4 +522,76 @@ func (host) Eject(v *Volume) error {
 		return platformError(fmt.Sprintf("could not eject the update drive: %v", err))
 	}
 	return nil
+}
+
+// ReadReport reads name from a report disk through its drive letter.
+func (host) ReadReport(v Volume, name string, limit int64) ([]byte, error) {
+	path, err := reportPath(v, name)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := os.Lstat(path); err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, platformError("not a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(io.LimitReader(file, limit))
+}
+
+// WriteReport writes name to a report disk through its drive letter and
+// flushes it. Eject, which follows, locks and dismounts the volume, which
+// writes back the rest.
+func (host) WriteReport(v Volume, name string, data []byte) error {
+	path, err := reportPath(v, name)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return platformError("not a regular file")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+// reportPath is name on report disk v, once v is checked to still be the
+// same removable USB FAT drive.
+func reportPath(v Volume, name string) (string, error) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
+		return "", platformError("invalid file name")
+	}
+	root, err := DriveRoot(v.Path)
+	if err != nil {
+		return "", err
+	}
+	serial, usb, err := storageIdentity(root)
+	if err != nil {
+		return "", err
+	}
+	if !usb || serial != v.Serial {
+		return "", platformError("USB disk identity changed")
+	}
+	fs, total, _, err := volumeInfo(root)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(strings.ToUpper(fs), "FAT") || total == 0 || total >= minDiskBytes {
+		return "", platformError("the mixer's USB disk is not a small FAT drive")
+	}
+	return root + name, nil
 }

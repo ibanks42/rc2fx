@@ -49,42 +49,64 @@ func plistInteger(v any) (int64, bool) {
 	return 0, false
 }
 
-// USBDisks maps `/dev/diskN[sM]` to the serial of the mixer in update mode
-// above it, from `ioreg -a -l -r -c IOUSBHostDevice`.
-func USBDisks(tree any) map[string]string {
-	out := map[string]string{}
-	var walk func(node any, serial string)
-	walk = func(node any, serial string) {
+// MixerDisk is a BSD disk below a RØDECaster this package knows: the
+// mixer's USB serial and whether it is in update mode.
+type MixerDisk struct {
+	Serial string
+	Update bool
+}
+
+// MixerDisks maps `/dev/diskN[sM]` to the mixer above it, in update or
+// normal mode, from `ioreg -a -l -r -c IOUSBHostDevice`.
+func MixerDisks(tree any) map[string]MixerDisk {
+	out := map[string]MixerDisk{}
+	var walk func(node any, above MixerDisk)
+	walk = func(node any, above MixerDisk) {
 		switch n := node.(type) {
 		case []any:
 			for _, v := range n {
-				walk(v, serial)
+				walk(v, above)
 			}
 		case map[string]any:
 			if _, ok := n["idVendor"]; ok {
 				vendor, vendorOK := plistInteger(n["idVendor"])
 				product, productOK := plistInteger(n["idProduct"])
-				update := vendorOK && vendor == int64(model.VendorID) &&
-					productOK && product >= 0 && product <= 0xffff && IsUpdatePID(uint16(product))
+				mixer, update := false, false
+				if vendorOK && productOK && vendor >= 0 && vendor <= 0xffff && product >= 0 && product <= 0xffff {
+					_, mixer = model.FromUSB(uint16(vendor), uint16(product))
+					update = IsUpdatePID(uint16(product))
+				}
 				own, hasOwn := n["USB Serial Number"].(string)
 				// Nodes below the device can repeat its IDs without the serial,
 				// so they keep the one from above.
 				switch {
-				case !update:
-					serial = ""
+				case !mixer:
+					above = MixerDisk{}
 				case hasOwn:
-					serial = own
+					above = MixerDisk{Serial: own, Update: update}
 				}
 			}
-			if name, ok := n["BSD Name"].(string); serial != "" && ok && ValidDiskName(name) {
-				out["/dev/"+name] = serial
+			if name, ok := n["BSD Name"].(string); above.Serial != "" && ok && ValidDiskName(name) {
+				out["/dev/"+name] = above
 			}
 			if children, ok := n["IORegistryEntryChildren"]; ok {
-				walk(children, serial)
+				walk(children, above)
 			}
 		}
 	}
-	walk(tree, "")
+	walk(tree, MixerDisk{})
+	return out
+}
+
+// USBDisks maps `/dev/diskN[sM]` to the serial of the mixer in update mode
+// above it, from `ioreg -a -l -r -c IOUSBHostDevice`.
+func USBDisks(tree any) map[string]string {
+	out := map[string]string{}
+	for name, d := range MixerDisks(tree) {
+		if d.Update {
+			out[name] = d.Serial
+		}
+	}
 	return out
 }
 

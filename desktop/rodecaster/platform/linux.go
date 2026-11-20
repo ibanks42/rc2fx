@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -711,55 +710,4 @@ func onReportDisk(v Volume, name string, write bool, do func(path string) error)
 		err = platformError(fmt.Sprintf("unmount the mixer's USB disk: %v", uerr))
 	}
 	return err
-}
-
-// writeSynced replaces path with data, not following a link, and flushes
-// the file and its folder.
-func writeSynced(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
-	if err != nil {
-		return err
-	}
-	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
-		file.Close()
-		if err == nil {
-			err = platformError("not a regular file")
-		}
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
-}
-
-// readSmall reads at most limit bytes of a regular file, not following a
-// link.
-func readSmall(path string, limit int64) ([]byte, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, platformError("not a regular file")
-	}
-	return io.ReadAll(io.LimitReader(file, limit))
 }

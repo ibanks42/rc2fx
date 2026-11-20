@@ -47,6 +47,15 @@ func TestFindsDisksBelowAMassStorageNub(t *testing.T) {
 	if len(USBDisks(tree(148))) != 0 {
 		t.Fatal("not in update mode")
 	}
+	// The same tree in normal mode is the mixer's report disk.
+	normal := MixerDisks(tree(148))
+	want := MixerDisk{Serial: "GV0044100"}
+	if len(normal) != 2 || normal["/dev/disk4"] != want || normal["/dev/disk4s1"] != want {
+		t.Fatalf("%v", normal)
+	}
+	if update := MixerDisks(tree(48)); update["/dev/disk4"] != (MixerDisk{Serial: "GV0044100", Update: true}) {
+		t.Fatalf("%v", update)
+	}
 }
 
 func TestIdentifiesUpdateDisksAndDiskInfo(t *testing.T) {
@@ -71,6 +80,13 @@ func TestIdentifiesUpdateDisksAndDiskInfo(t *testing.T) {
 	}
 	if len(disks) != 2 || disks["/dev/disk4s1"] != "GV0044100" {
 		t.Fatalf("%v", disks)
+	}
+	// Normal mode of either model is a mixer's disk too; another RØDE
+	// product (USB 2's 38) and another vendor are not.
+	for pid, want := range map[int]int{148: 2, 80: 2, 38: 0} {
+		if got := len(MixerDisks(plistTree(t, text(pid)))); got != want {
+			t.Fatalf("MixerDisks %d: %d", pid, got)
+		}
 	}
 	info, ok := ParseDiskInfo(plistTree(t, `<plist><dict><key>MountPoint</key><string>/Volumes/Test &amp; Space</string>
 		<key>FilesystemType</key><string>msdos</string>

@@ -472,12 +472,22 @@ func plistOf(program string, args ...string) (any, error) {
 // matched USB device, leaving the disks below it without their `BSD Name`.
 var ioregArgs = []string{"-a", "-l", "-r", "-c", "IOUSBHostDevice"}
 
+// diskMap is the update drives' disks and their mixers' serials.
 func diskMap() (map[string]string, error) {
 	tree, err := plistOf("/usr/sbin/ioreg", ioregArgs...)
 	if err != nil {
 		return nil, err
 	}
 	return USBDisks(tree), nil
+}
+
+// mixerDiskMap is every disk of a mixer, in update or normal mode.
+func mixerDiskMap() (map[string]MixerDisk, error) {
+	tree, err := plistOf("/usr/sbin/ioreg", ioregArgs...)
+	if err != nil {
+		return nil, err
+	}
+	return MixerDisks(tree), nil
 }
 
 func statfs(path string) (bool, uint64, uint64, error) {
@@ -571,33 +581,146 @@ func (host) Mount(v Volume) (Volume, error) {
 	return current, nil
 }
 
+// MediaPresent works on an update drive or a report disk (ReportDisks).
 func (host) MediaPresent(v *Volume) (bool, error) {
-	devices, err := diskMap()
+	devices, err := mixerDiskMap()
 	if err != nil {
 		return false, err
 	}
-	serial, ok := devices[v.Device]
+	d, ok := devices[v.Device]
 	if !ok {
 		return false, nil
 	}
-	if serial != v.Serial {
+	if d.Serial != v.Serial {
 		return false, platformError("macOS disk identity changed")
 	}
-	current, err := volume(v.Device, serial)
+	current, err := volume(v.Device, d.Serial)
 	if err != nil {
 		return false, err
 	}
 	return current.Total > 0, nil
 }
 
+// Eject works on an update drive or a report disk (ReportDisks).
 func (host) Eject(v *Volume) error {
-	devices, err := diskMap()
+	devices, err := mixerDiskMap()
 	if err != nil {
 		return err
 	}
-	if serial, ok := devices[v.Device]; !ok || serial != v.Serial {
+	if d, ok := devices[v.Device]; !ok || d.Serial != v.Serial {
 		return platformError("macOS disk ownership changed before eject")
 	}
 	_, err = run("/usr/sbin/diskutil", "eject", v.Device)
+	return err
+}
+
+// ReportDisks: the mixer's disks in normal mode that hold a medium smaller
+// than any update drive. macOS usually mounts them by itself.
+func (host) ReportDisks() ([]Volume, error) {
+	devices, err := mixerDiskMap()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(devices))
+	for name, d := range devices {
+		if !d.Update {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	var result []Volume
+	for _, device := range names {
+		partitioned := false
+		for _, other := range names {
+			if other != device && strings.HasPrefix(other, device+"s") {
+				partitioned = true
+			}
+		}
+		if partitioned {
+			continue
+		}
+		// A disk that cannot be looked at now (just appearing or going
+		// away) is looked for again at the next poll.
+		v, err := volume(device, devices[device].Serial)
+		if err != nil || v.Total == 0 || v.Total >= minDiskBytes {
+			continue
+		}
+		result = append(result, v)
+	}
+	return result, nil
+}
+
+// ReadReport reads name from a report disk: where macOS has it mounted, or
+// through a read-only mount that is removed again.
+func (host) ReadReport(v Volume, name string, limit int64) ([]byte, error) {
+	var data []byte
+	err := onReportDisk(v, name, false, func(path string) error {
+		var err error
+		data, err = readSmall(path, limit)
+		return err
+	})
+	return data, err
+}
+
+// WriteReport writes name to a report disk: where macOS has it mounted, or
+// through a mount that is removed again. The file is flushed before it
+// returns, and a mount of its own is unmounted, so the data has reached the
+// mixer.
+func (host) WriteReport(v Volume, name string, data []byte) error {
+	return onReportDisk(v, name, true, func(path string) error {
+		return writeSynced(path, data)
+	})
+}
+
+// onReportDisk checks that v is still the mixer's report disk and calls do
+// with the path of name on it, mounting the disk (read-only unless write)
+// when nothing has it mounted, and unmounting it again afterwards.
+func onReportDisk(v Volume, name string, write bool, do func(path string) error) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return platformError("invalid file name")
+	}
+	devices, err := mixerDiskMap()
+	if err != nil {
+		return err
+	}
+	if d, ok := devices[v.Device]; !ok || d.Serial != v.Serial || d.Update {
+		return platformError("USB disk identity changed")
+	}
+	current, err := volume(v.Device, v.Serial)
+	if err != nil {
+		return err
+	}
+	mounted := false
+	if current.Path == "" {
+		args := []string{"mount"}
+		if !write {
+			args = append(args, "readOnly")
+		}
+		if _, err := run("/usr/sbin/diskutil", append(args, v.Device)...); err != nil {
+			return platformError(fmt.Sprintf("mount the mixer's USB disk: %v", err))
+		}
+		mounted = true
+		if current, err = volume(v.Device, v.Serial); err != nil || current.Path == "" {
+			run("/usr/sbin/diskutil", "unmount", v.Device)
+			if err == nil {
+				err = platformError("the mixer's USB disk did not mount")
+			}
+			return err
+		}
+	}
+	if current.FS != "FAT" {
+		if mounted {
+			run("/usr/sbin/diskutil", "unmount", v.Device)
+		}
+		return platformError("the mixer's USB disk is not FAT")
+	}
+	err = do(filepath.Join(current.Path, name))
+	if mounted {
+		// Unmounting writes back whatever the filesystem still holds; a
+		// write counts only once that has worked.
+		if _, uerr := run("/usr/sbin/diskutil", "unmount", v.Device); uerr != nil && write && err == nil {
+			err = platformError(fmt.Sprintf("unmount the mixer's USB disk: %v", uerr))
+		}
+	}
 	return err
 }
