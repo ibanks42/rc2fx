@@ -10,47 +10,44 @@ import (
 	"sync"
 )
 
-// The strict typed decoder: serde's derive semantics over the strict parser.
+// Strict typed JSON decoding matching serde's derive semantics.
 //
-// Struct fields are named by their `json` tag (the field name when untagged;
-// `json:"-"` skips a field). Unlike encoding/json:
+// Struct fields use their `json` tag name (or the Go field name if untagged;
+// `json:"-"` skips the field). Key differences from encoding/json:
 //
-//   - every field is required unless it is a pointer (Rust `Option<T>`:
-//     missing or null is nil) or tagged `default` (missing is the zero
-//     value, Rust `#[serde(default)]`);
-//   - a pointer tagged `nonnull` may be missing but not null (a present
-//     Option that must hold a value);
-//   - unknown fields are rejected, unless the struct type has an
-//     AllowUnknownJSONFields method;
-//   - integers must be integer literals within the field's range; floats
-//     accept any number; a fixed-size array needs exactly its length;
-//   - a type whose pointer implements encoding.TextUnmarshaler is read from a
-//     JSON string (the enums use this to reject unknown variants);
-//   - a type whose pointer implements StrictUnmarshaler decodes itself;
-//   - Tree fields take any JSON.
+//   - Fields are required unless they are pointers (missing or null -> nil)
+//     or tagged `default` (missing -> zero value).
+//   - A pointer tagged `nonnull` may be omitted, but explicit null is rejected.
+//   - Unknown fields are rejected unless the struct implements UnknownJSONFieldsAllowed.
+//   - Integers require integer literals in range; floats accept any number;
+//     fixed-size arrays require an exact length match.
+//   - Types whose pointer implements encoding.TextUnmarshaler decode from a JSON
+//     string (used by enums to reject unknown variants).
+//   - Types whose pointer implements StrictUnmarshaler decode themselves.
+//   - Tree fields accept any JSON value.
 //
-// The `omitempty` option affects encoding only: the field is left out when it
-// is a nil pointer, its zero value, or has an IsEmpty() method returning true
-// (Rust `skip_serializing_if`).
+// The `omitempty` option applies to encoding only: a field is omitted when nil,
+// zero, or when IsEmpty() returns true.
 
-// StrictUnmarshaler lets a type decode itself from a strictly parsed tree.
+// StrictUnmarshaler allows a type to decode itself from a parsed Tree.
 type StrictUnmarshaler interface {
 	UnmarshalStrictJSON(Tree) error
 }
 
-// UnknownJSONFieldsAllowed marks a struct whose unknown fields are ignored
-// rather than rejected (a Rust struct without deny_unknown_fields).
+// UnknownJSONFieldsAllowed marks a struct whose unknown JSON fields are ignored
+// instead of rejected.
 type UnknownJSONFieldsAllowed interface {
 	AllowUnknownJSONFields()
 }
 
-// DecodeStrict is from_json for bytes: default limits, then typed decoding
-// into out (a non-nil pointer).
+// DecodeStrict parses data with the default limits and strictly decodes it into
+// out (a non-nil pointer).
 func DecodeStrict(data []byte, out any) error {
 	return DecodeStrictLimited(data, DefaultMaxJSONBytes, DefaultMaxJSONNodes, out)
 }
 
-// DecodeStrictLimited is from_json_limited for bytes.
+// DecodeStrictLimited parses data with explicit size/node limits and strictly
+// decodes it into out.
 func DecodeStrictLimited(data []byte, maximumBytes, maximumNodes int, out any) error {
 	tree, err := parseStrict(data, maximumBytes, maximumNodes)
 	if err != nil {
@@ -59,15 +56,13 @@ func DecodeStrictLimited(data []byte, maximumBytes, maximumNodes int, out any) e
 	return DecodeTree(tree, out)
 }
 
-// FromJSON is rc2fx_core::from_json: rejects duplicate keys at every depth,
-// oversized input and excessive nesting, then decodes strictly.
+// FromJSON strictly parses text with the default limits (rejecting duplicate
+// keys, oversized input, and excessive nesting) and decodes it into T.
 func FromJSON[T any](text string) (T, error) {
 	return FromJSONLimited[T](text, DefaultMaxJSONBytes, DefaultMaxJSONNodes)
 }
 
-// FromJSONLimited is rc2fx_core::from_json_limited: strict parsing with
-// explicit storage bounds. Callers should prefer FromJSON and its default
-// limits.
+// FromJSONLimited is like FromJSON with explicit byte and node bounds.
 func FromJSONLimited[T any](text string, maximumBytes, maximumNodes int) (T, error) {
 	var out T
 	tree, err := parseStrict([]byte(text), maximumBytes, maximumNodes)
@@ -82,7 +77,7 @@ func FromJSONLimited[T any](text string, maximumBytes, maximumNodes int) (T, err
 	return out, nil
 }
 
-// DecodeTree is serde_json::from_value with the strict rules above.
+// DecodeTree decodes a parsed Tree into out using strict rules.
 func DecodeTree(tree Tree, out any) error {
 	target := reflect.ValueOf(out)
 	if target.Kind() != reflect.Pointer || target.IsNil() {
@@ -420,7 +415,7 @@ func unknownField(name string, info *structInfo) error {
 	return Error(message)
 }
 
-// unexpected is serde's description of the value that did not fit.
+// unexpected formats a value description matching serde's error messages.
 func unexpected(tree Tree) string {
 	switch tree.kind {
 	case KindNull:
@@ -483,8 +478,7 @@ func rustTypeName(t reflect.Type) string {
 	return t.String()
 }
 
-// enumUnmarshal is the shared UnmarshalText of the string enums: the text
-// must be one of the variants.
+// enumUnmarshal validates that text matches one of the allowed string enum variants.
 func enumUnmarshal[T ~string](target *T, text []byte, variants []T) error {
 	for _, variant := range variants {
 		if string(variant) == string(text) {

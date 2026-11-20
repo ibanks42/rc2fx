@@ -213,8 +213,6 @@ func TestTheFinishedInstallSaysWhatTheFixDid(t *testing.T) {
 	}
 }
 
-// ---- The fix on its own ------------------------------------------------
-
 func fixMarks(f *Fix) []Mark {
 	var out []Mark
 	for _, step := range f.Steps() {

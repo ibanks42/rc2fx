@@ -7,14 +7,14 @@ import (
 	"unicode/utf8"
 )
 
-// The limits rc2fx-core's strict_json applies.
+// Default limits matching rc2fx-core's strict_json.
 const (
-	// DefaultMaxJSONBytes is from_json's input limit.
+	// DefaultMaxJSONBytes is the default maximum input size in bytes.
 	DefaultMaxJSONBytes = 512 * 1024
-	// DefaultMaxJSONNodes is from_json's value limit: every value counts,
-	// containers included, object keys not.
+	// DefaultMaxJSONNodes is the default maximum number of JSON values
+	// (containers included, object keys excluded).
 	DefaultMaxJSONNodes = 200_000
-	// MaxJSONDepth is the deepest nesting accepted; the root is depth 0.
+	// MaxJSONDepth is the maximum nesting depth (root is depth 0).
 	MaxJSONDepth = 64
 )
 
@@ -23,26 +23,24 @@ const (
 	errJSONTooDeep  = "JSON is too deeply nested or contains too many values"
 )
 
-// ParseJSON parses with from_json's default limits.
+// ParseJSON parses text with the default strict limits.
 func ParseJSON(text string) (Tree, error) {
 	return ParseJSONLimited(text, DefaultMaxJSONBytes, DefaultMaxJSONNodes)
 }
 
-// ParseJSONLimited is strict JSON as the mixer's serde_json reads it
-// (rc2fx_core::strict_json::parse_with_limits), plus duplicate keys rejected
-// at every depth, at most maximumBytes of input, at most maximumNodes values
-// and nesting no deeper than MaxJSONDepth.
+// ParseJSONLimited parses strict JSON with explicit byte and node bounds,
+// rejecting duplicate keys at every depth and nesting deeper than MaxJSONDepth.
 func ParseJSONLimited(text string, maximumBytes, maximumNodes int) (Tree, error) {
 	return parseStrict([]byte(text), maximumBytes, maximumNodes)
 }
 
-// ParseJSONBytes is ParseJSONLimited for bytes; input that is not UTF-8 is
+// ParseJSONBytes is like ParseJSONLimited for a byte slice; non-UTF-8 input is
 // rejected.
 func ParseJSONBytes(data []byte, maximumBytes, maximumNodes int) (Tree, error) {
 	return parseStrict(data, maximumBytes, maximumNodes)
 }
 
-// SerdeRecursionLimit is serde_json's default nesting bound.
+// SerdeRecursionLimit is serde_json's default nesting limit.
 const SerdeRecursionLimit = 128
 
 func parseStrict(data []byte, maximumBytes, maximumNodes int) (Tree, error) {
@@ -222,8 +220,7 @@ func (p *parser) object(depth int) (Tree, error) {
 		p.pos++
 		return Tree{kind: KindObject, members: members}, nil
 	}
-	// Keys stay live only for this object, so escaped duplicate spellings
-	// ("x" and "x") are still caught.
+	// Track decoded keys for this object so escaped duplicates are caught.
 	var seen map[string]struct{}
 	for {
 		p.skipSpace()
@@ -439,18 +436,16 @@ func (p *parser) unicodeEscape() (rune, error) {
 	return utf16.DecodeRune(first, second), nil
 }
 
-// number reads a JSON number exactly as serde_json 1.0 does without its
-// float_roundtrip feature (the build the mixer uses), so every
-// value, and every out-of-range error, is the same bit for bit:
+// number parses a JSON number identically to serde_json 1.0 without
+// float_roundtrip (matching the mixer):
 //
-//   - an integer literal is unsigned if it fits in u64, negative if it fits
-//     in i64; -0 and other integers become floats;
-//   - a float is its decimal significand (at most 19-20 digits; later digits
-//     only scale it) converted to f64, then multiplied or divided by a power
-//     of ten from a table. That is not always the correctly rounded value
-//     (123456789012345678901 reads as 1.2345678901234567e20), which is the
-//     point: Go reads what the mixer reads.
-//   - a result that overflows to infinity is "number out of range".
+//   - Unsigned integers fit in u64, negative integers in i64; -0 and
+//     out-of-range integers fall back to f64.
+//   - Floats convert the first 19-20 decimal digits to f64 and scale by a
+//     table power of ten. This is not always correctly rounded (e.g.
+//     123456789012345678901 -> 1.2345678901234567e20), intentionally matching
+//     the mixer bit for bit.
+//   - Overflow to infinity returns "number out of range".
 func (p *parser) number() (Number, error) {
 	start := p.pos
 	positive := true
@@ -544,12 +539,11 @@ func (p *parser) longInteger(positive bool, significand uint64) floatOutcome {
 }
 
 func (p *parser) decimal(positive bool, significand uint64, exponentBeforePoint int32) floatOutcome {
-	p.pos++ // '.'
+	p.pos++
 	var exponentAfterPoint int32
 	for p.pos < len(p.data) && isDigit(p.data[p.pos]) {
 		digit := uint64(p.data[p.pos] - '0')
 		if significandOverflows(significand, digit) {
-			// Ignore all further digits.
 			for p.pos < len(p.data) && isDigit(p.data[p.pos]) {
 				p.pos++
 			}
@@ -563,7 +557,6 @@ func (p *parser) decimal(positive bool, significand uint64, exponentBeforePoint 
 		significand = significand*10 + digit
 		exponentAfterPoint--
 	}
-	// At least one digit after the decimal point.
 	if exponentAfterPoint == 0 {
 		if p.pos < len(p.data) {
 			return floatOutcome{err: p.fail("invalid number")}
@@ -578,7 +571,7 @@ func (p *parser) decimal(positive bool, significand uint64, exponentBeforePoint 
 }
 
 func (p *parser) exponent(positive bool, significand uint64, startingExponent int32) floatOutcome {
-	p.pos++ // 'e' or 'E'
+	p.pos++
 	positiveExponent := true
 	if p.pos < len(p.data) {
 		switch p.data[p.pos] {

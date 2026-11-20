@@ -10,8 +10,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// uploadingInPlace is a model whose in-place update of version is with the
-// mixer, as TakeInPlaceBundle leaves it.
 func uploadingInPlace(version string) *Model {
 	m := NewModel()
 	m.inPlace = InPlace{Kind: InPlaceUploading, Version: version}
@@ -22,10 +20,10 @@ const rolledBack = `{"outcome":"rolledBack","from":"0.1.5","to":"0.2.0","reason"
 
 func TestAnOlderRecordForTheSameVersionIsNotTheNewOutcome(t *testing.T) {
 	m := uploadingInPlace("0.2.0")
-	// Read before the update was sent: a rollback of an earlier attempt.
+	// Pre-upload baseline from an earlier rolled-back attempt.
 	m.InPlaceOutcome(json.RawMessage(rolledBack))
 	m.InPlaceAccepted(time.Now())
-	// Mixer software that keeps the record reports it while installing.
+	// Mixer keeps returning the old record while installing.
 	if m.InPlaceOutcome(json.RawMessage(rolledBack)) || m.InPlace().Kind != InPlaceInstalling {
 		t.Fatalf("the older record was taken as the outcome: %+v", m.InPlace())
 	}

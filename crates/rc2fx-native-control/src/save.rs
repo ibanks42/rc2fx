@@ -1,5 +1,4 @@
-//! Publishing a prepared settings transaction after the controller saved it.
-//! Persistence stays with the controller.
+//! Commits a prepared settings transaction after the controller has persisted it.
 use crate::{Client, ErrorCode, Operation, Reply, Transaction};
 use std::io;
 
@@ -12,20 +11,18 @@ pub enum ControlFailure {
 #[derive(Debug)]
 #[must_use = "publication can remain pending after settings were saved"]
 pub enum Publication {
-    /// Published to the audio reader. Actual applied acknowledgement is separate.
+    /// Published to the audio thread (application on the next callback is tracked separately).
     Published(Transaction),
-    /// Desired settings were saved; retain them and reconcile this receipt.
+    /// Settings are saved on disk, but the audio commit needs reconciliation.
     Pending {
         transaction: Transaction,
         failure: ControlFailure,
     },
 }
 impl Client {
-    /// Commit the audio change for an already-saved desired value, or retry
-    /// that commit, without saving again. A refused, lost or mismatched reply
-    /// leaves the receipt `Pending`, never an error that could be mistaken for
-    /// a failed save. The receipt remains pinned to its original process, even
-    /// on a new connection.
+    /// Commits (or retries committing) an already-saved transaction. Transport
+    /// errors, refusals, or mismatched replies return `Publication::Pending` so
+    /// callers don't mistake a commit failure for a failed save.
     pub fn commit_saved(&mut self, transaction: &Transaction) -> Publication {
         let failure = match self.request(Operation::Commit {
             transaction: transaction.clone(),
@@ -159,12 +156,10 @@ mod tests {
             if let Some(task) = self.thread.take() {
                 let _ = task.join();
             }
-            // Only the socket in our fresh private directory; unknown entries survive.
             let _ = fs::remove_file(self.directory.join("s"));
             let _ = fs::remove_dir(&self.directory);
         }
     }
-    /// Prepares one target the way the controller does before it saves.
     fn prepared(client: &mut Client) -> Transaction {
         let target = Target::new("source", "Source", rc2fx_core::TargetKind::Mic, 1);
         let transaction = client.transaction(7, &target.id, 2).unwrap();

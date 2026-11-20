@@ -6,8 +6,8 @@ import (
 	"gpuikit.dev/gk"
 )
 
-// A second question while one is open is refused, so the first keeps its
-// onClose and the state its caller clears there.
+// Opening a second confirm dialog while one is active must be rejected so the
+// first keeps its onClose cleanup.
 func TestAnOpenConfirmRefusesASecondAndKeepsItsOwnClose(t *testing.T) {
 	a := &App{}
 	closed := ""
@@ -42,7 +42,7 @@ func TestAnOpenConfirmRefusesASecondAndKeepsItsOwnClose(t *testing.T) {
 	}
 }
 
-// A dialog that no longer holds the slot does not free it for another.
+// A stale dialog closing must not clear a newer dialog's slot.
 func TestAStaleCloseLeavesTheOpenConfirm(t *testing.T) {
 	a := &App{}
 	a.claimConfirm(confirmKindClose, Confirm{}, nil, nil)

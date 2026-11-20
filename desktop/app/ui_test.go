@@ -9,7 +9,6 @@ import (
 	"gpuikit.dev/gk"
 )
 
-// Windows match the packaged desktop identity and icon.
 func TestWindowsMatchThePackagedDesktopIdentity(t *testing.T) {
 	if appID != "rc2fx" {
 		t.Fatalf("appID = %q", appID)
@@ -23,8 +22,6 @@ func TestWindowsMatchThePackagedDesktopIdentity(t *testing.T) {
 	}
 }
 
-// cmd/rc2fx embeds the packaged icon (its icon test checks the image) and
-// sets it before Run; every window then carries it.
 func TestWindowsCarryThePackagedIcon(t *testing.T) {
 	data, err := os.ReadFile("../packaging/rc2fx.png")
 	if err != nil {

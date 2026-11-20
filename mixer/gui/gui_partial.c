@@ -1,50 +1,21 @@
-/* Partial GE2D conversion (G3), included by gui_pacing.c.
+/* Partial GE2D conversion, included by gui_pacing.c.
  *
- * Modes: "partial-cw" / "partial-ccw" (the rotation GE2D applies) and
- * "partial-verify-cw" / "partial-verify-ccw": the same, plus a whole-frame
- * pixel check after the first PARTIAL_VERIFY_FIRST partial conversions into
- * each destination and every PARTIAL_VERIFY_EVERY-th after that. Any
- * mismatch ends partial conversion for good (reason=verify-fail); each check
- * also reports which rotation the destination matches at sample points
- * where the two predict different pixels, so one run settles the
- * orientation.
+ * Modes: "partial-cw" / "partial-ccw" and "partial-verify-cw" /
+ * "partial-verify-ccw" (adds full-frame pixel verification on the first
+ * PARTIAL_VERIFY_FIRST partials per destination and every PARTIAL_VERIFY_EVERY
+ * after; any mismatch permanently disables partial conversion).
  *
- * Each paint's rectangles (read at the paint lock seam, holding the repaint
- * mutex) join a pending list per destination; both destinations get them,
- * since the two alternate. At the vendor's conversion into destination D
- * (holding the same mutex), the pending list is merged greedily (the pair
- * whose bounding box adds the fewest pixels, while that is under
- * PARTIAL_MERGE_PX, then down to PARTIAL_MAX_JOBS, three) and converted as
- * that many GE2D jobs: all but the last are run here, at the vendor's output
- * QBUF, each as S_SELECTION (OUTPUT CROP, CAPTURE COMPOSE) → QBUF output →
- * poll → DQBUF output and capture → re-QBUF of the vendor's capture buffer;
- * the last one is the vendor's own job, with its selection set. A full frame
- * is converted instead on the first conversion into each destination, after
- * a rejected paint, when merged area exceeds PARTIAL_FULL_PERCENT, and after
- * errors. List overflow collapses the pending set into one bounding box.
- * The extra-job time budget is soft: all planned jobs still run, and a
- * counter records an overrun. The job cap is a count bound, not a time bound
- * (each job can poll for up to two seconds). There is no periodic refresh:
- * the whole-frame verify (below) is what establishes that pending rectangles
- * cover every source change. A file named "partial-off" next to the log
- * disables partial conversion for good at the next conversion.
- * One "convert" line per conversion: destination, kind, reason, jobs,
- * pixels and each job's time.
+ * Dirty rectangles from each paint are queued per destination (both slots,
+ * since destinations alternate). At conversion time the pending list is merged
+ * greedily (minimum added bbox pixels while under PARTIAL_MERGE_PX, then down
+ * to PARTIAL_MAX_JOBS = 3). Jobs 0..k-2 run inline via S_SELECTION -> QBUF ->
+ * ppoll -> DQBUF -> re-QBUF capture; job k-1 runs as the vendor's own QBUF.
+ * Full frames run on the first pass per destination, after a rejected paint,
+ * when merged area exceeds PARTIAL_FULL_PERCENT, or on error. A "partial-off"
+ * file beside the log permanently disables partial conversion.
  *
- * RC2FX_GUI_PARTIAL_MERGE_PX overrides PARTIAL_MERGE_PX: decimal digits only,
- * 0..1000000; anything else keeps the default and logs "merge-px-invalid"
- * once. The start line carries the effective value. In quiet mode the
- * convert and verify lines give way to "fallback" lines (a full frame for a
- * reason other than "forced" or "area" while partial conversion is still on;
- * at most PARTIAL_FALLBACK_LINES), one "disable" line when partial conversion
- * ends for good, and the periodic "counters" line.
- *
- * The counters line ends with plan-shape and size fields (README.md lists
- * them): each conversion counted in one path (path_*, which sum to
- * conversions), GE2D plans by job count and by total pixels, pixels through
- * GE2D and through the CPU, and the CPU rotations' time by kind and by stage.
- * They are cumulative integers added on the pump thread; the stage times read
- * CLOCK_MONOTONIC three times per 16-row strip.
+ * RC2FX_GUI_PARTIAL_MERGE_PX overrides PARTIAL_MERGE_PX (0..1000000); invalid
+ * values log "merge-px-invalid" once and keep the default.
  */
 #include <linux/videodev2.h>
 #include <poll.h>
@@ -425,11 +396,9 @@ static void counter_list(char *out, size_t size, const uint64_t *values, int cou
     }
 }
 
-/* Quiet mode's periodic line. New fields go at the end, after
- * log_reopen_failed, so a reader of the earlier fields is not disturbed; for
- * the same reason budget_merged stays, always 0 since the two-job planner's
- * budget merge was removed. The line is built in a static buffer, off the
- * pump thread's stack: the pump is the only thread that writes it. */
+/* Periodic counters line. Append new fields after log_reopen_failed to keep
+ * existing parsers working (budget_merged stays at 0 for the same reason).
+ * Static buffer keeps it off the pump thread's stack (single writer). */
 static void write_counters(void) {
     if (log_fd < 0) return;
     char reasons[FULL_REASONS * 40 + 2];
@@ -814,10 +783,9 @@ static void partial_verify_now(int fd) {
         struct v4l2_buffer b = {.type = V4L2_BUF_TYPE_VIDEO_OUTPUT, .memory = V4L2_MEMORY_MMAP, .index = 0};
         if (vendor_ioctl(fd, VIDIOC_QUERYBUF, &b) != 0 || b.length < SRC_W * SRC_H * 4)
             return verify_skip("querybuf", dfd, 1, errno);
-        /* PROT_WRITE is required here even though only reads follow: vb2_mmap
-         * rejects a mapping of an OUTPUT-queue buffer without VM_WRITE
-         * ("VM_WRITE needed", -EINVAL) — found on the device, errno 22. The
-         * module never writes through it; verify_source below is const. */
+        /* PROT_WRITE is required even for read-only access: vb2_mmap rejects
+         * OUTPUT-queue mappings without VM_WRITE (-EINVAL, seen on device).
+         * This module never writes through verify_source. */
         const int prot = PROT_READ | PROT_WRITE;
 #ifdef RC2FX_PACING_TEST
         /* The fake GE2D mirrors that rule unconditionally: it cannot

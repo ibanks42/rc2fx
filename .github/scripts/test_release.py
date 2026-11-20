@@ -1,4 +1,4 @@
-"""Run with git-cliff 2.14.1 on PATH: python3 .github/scripts/test_release.py."""
+"""Tests for release.py (requires git-cliff 2.14.1 on PATH)."""
 
 import json
 import os

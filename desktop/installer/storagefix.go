@@ -1,10 +1,7 @@
 package installer
 
-// The storage fix as a request (RequestStorageFix): rodecaster/autofix grows
-// the mixer's first system slot through RØDE's own USB update, so every
-// later update formats it with 4 KB blocks. It writes to the mixer exactly
-// as a flash does, so it runs where flashes run (the helper, on Linux), and
-// it reports autofix's events as progress.
+// Engine integration for RequestStorageFix (rodecaster/autofix), which grows
+// system slot 1 via RØDE's USB update so future updates format with 4 KB blocks.
 
 import (
 	"errors"
@@ -16,65 +13,39 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/autofix"
 )
 
-// StorageFixPhase starts the Phase of every progress event the storage fix
-// reports; the rest is autofix's stage word (autofix.Stage*).
+// StorageFixPhase prefixes Progress.Phase for storage-fix events (followed by autofix.Stage*).
 const StorageFixPhase = "fix-"
 
-// StorageFixStage is the autofix stage of a progress event, ok false for
-// an event that is not the storage fix's.
 func StorageFixStage(p Progress) (string, bool) {
 	stage, ok := strings.CutPrefix(p.Phase, StorageFixPhase)
 	return stage, ok && stage != ""
 }
 
-// StorageFix is what RequestStorageFix did.
+// StorageFix is the result of RequestStorageFix.
 type StorageFix struct {
-	_ struct{} `serde:"default"`
-	// Outcome is autofix's (autofix.Outcome*); "" when the run stopped
-	// before the script reported anything.
-	Outcome string `json:"outcome"`
-	// Reason is what the script said, for unrecognized and failed.
-	Reason string `json:"reason"`
-	// Backup is the saved copy of what the fix changed on the mixer; ""
-	// when none was saved.
-	Backup   string `json:"backup"`
-	Firmware string `json:"firmware"`
-	Flashes  int    `json:"flashes"`
-	// Error is why the run stopped early, in autofix's words; "" when it
-	// finished. Its Outcome may still be set: the script reported, and a
-	// later step stopped.
-	Error string `json:"error"`
-	// Refused: the run would not start, because the mixer or its firmware
-	// is not one the fix supports. Nothing was changed, and starting again
-	// gives the same answer.
-	Refused bool `json:"refused"`
-	// Touched: the run sent the mixer a USB command, so it may no longer be
-	// as it was.
-	Touched bool `json:"touched"`
-	// FinalSent: the mixer accepted the last flash (RØDE's plain archive,
-	// or the prepared firmware with Final) and is installing it.
-	FinalSent bool `json:"final_sent"`
-	// Unsafe: the fix did not leave the slot the last flash would format
-	// large enough for 4 KB blocks, so nothing more was sent
-	// (autofix.NotApplied). Error says why and what to do; installing
-	// anyway would format that slot with 1 KB blocks.
+	_         struct{} `serde:"default"`
+	Outcome   string   `json:"outcome"` // autofix.Outcome* or "" if stopped before reporting
+	Reason    string   `json:"reason"`
+	Backup    string   `json:"backup"`
+	Firmware  string   `json:"firmware"`
+	Flashes   int      `json:"flashes"`
+	Error     string   `json:"error"`
+	Refused   bool     `json:"refused"`    // unsupported mixer/firmware; nothing changed
+	Touched   bool     `json:"touched"`    // at least one USB command was sent
+	FinalSent bool     `json:"final_sent"` // final flash accepted by mixer
+	// Unsafe is true when slot 1 is still too small for 4 KB blocks
+	// (autofix.NotApplied), so the final flash was withheld.
 	Unsafe bool `json:"unsafe"`
 }
 
-// storageFixWork and storageFixBackups are the fix's folders in the work
-// folder: its downloads (removed after a finished run), and the copies of
-// what it changed, which stay.
 const (
 	storageFixWork    = "storage-fix"
 	storageFixBackups = "storage-fix-backups"
 )
 
-// storageFix runs the fix on the one connected mixer. With final, the last
-// flash is the prepared RC2FX firmware, and the carrier is RØDE's archive
-// of the same version. autofix's own refusals and errors come back in the
-// reply, never retried around; only an engine problem is an error.
-// debug has the script keep its debug log on the mixer (development
-// builds only; see fixDebugAllowed).
+// storageFix runs autofix on the connected mixer. With final, the last flash
+// uses the prepared RC2FX firmware instead of plain stock. Autofix refusals
+// and errors are returned inside StorageFix rather than as an engine error.
 func (e *Engine) storageFix(final, debug bool) (*StorageFix, error) {
 	var touched, finalSent bool
 	o := autofix.Options{
@@ -82,9 +53,7 @@ func (e *Engine) storageFix(final, debug bool) (*StorageFix, error) {
 		Work:      filepath.Join(e.Work, storageFixWork),
 		BackupDir: filepath.Join(e.Work, storageFixBackups),
 		Client:    func() *http.Client { return e.client() },
-		// Stopping counts only until the mixer is first told to switch to
-		// update mode: after that the fix runs to its end, which leaves the
-		// mixer on RØDE's (or the prepared) firmware.
+		// Only cancel before the first USB mode switch; once touched, run to completion.
 		Cancel: func() error {
 			if !touched && e.canceled() {
 				return Error(Canceled)
@@ -121,9 +90,7 @@ func (e *Engine) storageFix(final, debug bool) (*StorageFix, error) {
 			return nil, err
 		}
 		o.FinalDir, o.FinalMD5, o.Version = e.Work, p.ArchiveMD5, p.Version
-		// RØDE's archive that prepare downloaded is the carrier's base when
-		// it is still the one for this version; otherwise autofix downloads
-		// it again.
+		// Reuse the locally downloaded stock archive as the carrier base if it matches.
 		if profile, err := e.profile(p.Profile); err == nil {
 			src := filepath.Join(e.Work, "rode-original.tar.gz")
 			if md, err := archive.FileHash(src, archive.MD5); err == nil && md == profile.ArchiveMD5 {

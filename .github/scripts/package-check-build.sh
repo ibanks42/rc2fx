@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-# Runs inside the package-check container, from a snapshot of the source, for
-# releases and `just package-check` alike. The AppImage doesn't carry the
-# mixer runtime (the app downloads it), so nothing here builds the mixer.
+# Runs inside the package-check container against a source snapshot for both
+# releases and `just package-check`. Only builds the desktop AppImage (the app
+# downloads the mixer runtime separately).
 set -euo pipefail
 cd /work/src
 
-# The gpuikit download and Velopack's C library are gitignored, so the
-# snapshot never has them: fetch them first, checked against their pins.
+# Prebuilt gpuikit and velopack_libc are gitignored and absent from the snapshot.
 bash desktop/scripts/fetch-gpuikit.sh linux-amd64
 bash desktop/scripts/fetch-velopack.sh linux-amd64
-# The token that reads the gpuikit bindings is for that fetch alone: nothing
-# after it (tool setup, NuGet, build scripts, module downloads, packaging
-# tools) gets to see it.
+# Drop auth tokens right after fetching gpuikit so later build/packaging steps can't read them.
 unset GPUIKIT_TOKEN GH_TOKEN GITHUB_TOKEN
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 export GITHUB_ENV=$scratch/env
 bash .github/scripts/setup-release-tools.sh appimage
-# setup-vpk.sh downloads into RUNNER_TEMP, as on GitHub.
+# setup-vpk.sh expects RUNNER_TEMP just like on GitHub Actions.
 export RUNNER_TEMP=/work/cache/runner DOTNET_CLI_HOME=/work/cache/home
 mkdir -p "$RUNNER_TEMP"
 bash .github/scripts/setup-vpk.sh

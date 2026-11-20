@@ -1,32 +1,24 @@
-// Package carrier holds the one-shot script that grows partition 1 on the
-// mixer itself, the files that put it into a firmware archive, and the parser
-// for the marker file it leaves on the mixer's USB update drive.
+// Package carrier bundles the on-device init script that grows partition 1,
+// builds the tar entries to inject into a firmware archive, and parses the
+// marker file the script leaves behind.
 //
-// The script is installed as three identical copies, each started by its own
-// /etc/rc5.d link before RØDE's audio service. Its last line carries an end
-// token and the SHA-256 of every line before it, computed here when the files
-// are made; a copy whose tail was lost to the 1 KB-block bug fails that check
-// and does nothing. The hash lives in the file itself rather than in a second
-// file because a second file could lose its own tail, and because one file
-// whose last line must be intact is the simplest thing to check on the mixer
-// with sed and sha256sum.
+// Three identical copies of the script are installed under /etc/init.d and
+// linked from /etc/rc5.d ahead of RØDE's audio service. Each copy ends with a
+// trailing EOF token carrying the SHA-256 of everything above it; if the 1 KB
+// ext-block bug truncates a copy's tail, its self-check fails and it exits
+// harmlessly. Embedding the hash in the script itself avoids relying on a
+// separate checksum file (which could also get truncated) and is easy to verify
+// on-device with sed and sha256sum.
 //
-// With Options.USBReport the script also offers the marker on a small disk
-// of its own in the empty disk slot of RØDE's normal-mode USB gadget, so an
-// app that can read that disk gets the result as soon as the mixer is back
-// instead of switching it to update mode to read the update drive. The app
-// acknowledges it by writing AckName onto that disk and ejecting it; the
-// script finishes when its slot is empty and its own disk holds AckName. A
-// slot emptied without it (on a mixer something empties the slot just after
-// the gadget is bound) gets the disk again, a few times within a limit;
-// after that the script detaches its disk and writes the marker to the
-// update drive as it always did. Only an app that reads, acknowledges and
-// ejects the disk may ask for it.
+// When Options.USBReport is set, the script first exposes the marker on a tiny
+// FAT image in the empty LUN of RØDE's normal-mode USB gadget. The host reads
+// the marker, writes AckName, and ejects the disk to tell the script it's done
+// (avoiding an update-mode switch). If the LUN is emptied without AckName (which
+// happens briefly on real hardware right after gadget bind), the script re-attaches
+// a few times before falling back to writing the marker on the update drive.
 //
-// With Options.DebugLog (development builds of the app only) the script
-// also keeps a log of phase B and a trace of the disk slot under
-// /Application/update-staging/rcfix-debug on the mixer, which nothing
-// removes.
+// With Options.DebugLog (dev builds only), the script also preserves a phase B
+// log and LUN trace under /Application/update-staging/rcfix-debug.
 package carrier
 
 import (
@@ -41,14 +33,9 @@ import (
 var scriptSource []byte
 
 const (
-	// MarkerName is the file the script writes to the root of the update
-	// drive.
-	MarkerName = "RCFIX.TXT"
-	// AckName is the file the app writes to the root of the script's USB
-	// disk to say it has the marker.
-	AckName = "RCFIX.ACK"
-	// ScriptVersion is what the script writes as script= in the marker.
-	ScriptVersion = "4"
+	MarkerName    = "RCFIX.TXT" // marker written to the update drive or report disk
+	AckName       = "RCFIX.ACK" // host acknowledgement written to the report disk
+	ScriptVersion = "4"         // reported as script= in RCFIX.TXT
 
 	eofToken = "# rcfix-eof sha256="
 	initDir  = "etc/init.d"
@@ -58,18 +45,12 @@ const (
 
 var copyNames = []string{"a", "b", "c"}
 
-// Options change what the installed script does.
+// Options configures feature flags baked into the generated carrier script.
 type Options struct {
-	// USBReport: the script offers the marker on the normal-mode USB disk
-	// slot first (see the package comment).
-	USBReport bool
-	// DebugLog: the script keeps its debug log on the mixer (see the
-	// package comment). For development builds only.
-	DebugLog bool
+	USBReport bool // offer marker over the normal-mode USB gadget LUN first
+	DebugLog  bool // keep phase B debug logs on the mixer (dev builds only)
 }
 
-// usbReportOff and usbReportOn are the script's line that holds the
-// USBReport default; debugOff and debugOn the one for DebugLog.
 const (
 	usbReportOff = "RCFIX_USB_REPORT=${RCFIX_USB_REPORT:-0}\n"
 	usbReportOn  = "RCFIX_USB_REPORT=${RCFIX_USB_REPORT:-1}\n"
@@ -77,35 +58,26 @@ const (
 	debugOn      = "RCFIX_DEBUG=${RCFIX_DEBUG:-1}\n"
 )
 
-// File is one entry to add to a firmware archive, relative to the root of
-// the system it is extracted onto.
+// File describes a rootfs-relative entry to inject into a firmware archive.
 type File struct {
-	Path string
-	// Mode holds the permission bits; for a symlink it also has
-	// fs.ModeSymlink.
+	Path    string
 	Mode    fs.FileMode
 	Symlink bool
-	// Target is the link target (relative), only for a symlink.
-	Target string
-	// Data is the file's contents, nil for a symlink.
-	Data []byte
+	Target  string // relative link target when Symlink is true
+	Data    []byte // nil for symlinks
 }
 
-// Script returns the script as it is installed with the default options:
-// the source followed by the line holding the end token and the SHA-256 of
-// everything before it.
+// Script returns the carrier script with default options and its trailing SHA-256 footer.
 func Script() []byte { return ScriptFor(Options{}) }
 
-// ScriptFor is Script with options o, which are written into the script
-// before its hash.
+// ScriptFor returns the carrier script with o baked in before computing the footer hash.
 func ScriptFor(o Options) []byte {
 	src := append([]byte(nil), scriptSource...)
 	if len(src) == 0 || src[len(src)-1] != '\n' {
 		src = append(src, '\n')
 	}
 	if o.USBReport {
-		// The line is checked by the tests; a source without it would
-		// install a script that never reports over USB, which is safe.
+		// Tested by TestScriptForUSBReport; a missing line safely leaves reporting off.
 		src = bytes.Replace(src, []byte(usbReportOff), []byte(usbReportOn), 1)
 	}
 	if o.DebugLog {
@@ -120,11 +92,10 @@ func ScriptFor(o Options) []byte {
 	return out
 }
 
-// Files returns what must be added to a firmware archive: the three script
-// copies and their rc5.d links, with the default options.
+// Files returns the three init scripts and their rc5.d symlinks with default options.
 func Files() []File { return FilesFor(Options{}) }
 
-// FilesFor is Files with options o.
+// FilesFor returns the three init scripts and their rc5.d symlinks with options o.
 func FilesFor(o Options) []File {
 	script := ScriptFor(o)
 	var files []File
@@ -146,10 +117,8 @@ func FilesFor(o Options) []File {
 	return files
 }
 
-// Paths lists every path, relative to a system root, that the script may
-// create on a mixer, including its state directory, its contents and the
-// mount points and the report disk's image under /run. When the script has
-// finished, none of them exists.
+// Paths returns every rootfs-relative path the carrier script can create on the
+// mixer, including its state dir, mount points, and temp images under /run.
 func Paths() []string {
 	var paths []string
 	for _, n := range copyNames {
@@ -165,7 +134,6 @@ func Paths() []string {
 	return append(paths, stateDir, "run/rcfix-p2", "run/rcfix-img", "run/rcfix-ack.img", "run/rcfix-ack")
 }
 
-// stateFiles are the names the script uses inside its state directory.
 var stateFiles = []string{
 	"lock", "boots", "log", "result", "result.new", "hopped",
 	"hop-attempted", "sector0.bin", "sector0.after", "cmp", "marker",

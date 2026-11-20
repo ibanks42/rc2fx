@@ -2,6 +2,5 @@
 
 package app
 
-// mockMixer is cfg!(feature = "mock-mixer"): the transport talks to the mock
-// mixer, and the window says so.
+// Enabled in mockmixer builds to use the in-process mock transport.
 const mockMixer = true

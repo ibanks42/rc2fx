@@ -1,7 +1,6 @@
 package installer
 
-// Authenticate complete mixer payloads before exposing their contents to
-// the installer.
+// TUF authentication and compatibility verification for downloaded mixer payloads.
 
 import (
 	"bytes"
@@ -31,8 +30,7 @@ const (
 	maxCatalog = 2 << 20
 )
 
-// MixerTarget is the compatibility claims covered by the TUF targets
-// signature.
+// MixerTarget holds the signed compatibility claims from TUF targets metadata.
 type MixerTarget struct {
 	_                 struct{} `serde:"deny_unknown_fields"`
 	Version           string   `json:"version"`
@@ -42,7 +40,6 @@ type MixerTarget struct {
 	FirmwareProfiles  []string `json:"firmwareProfiles"`
 }
 
-// Equal compares every field.
 func (m *MixerTarget) Equal(o *MixerTarget) bool {
 	return m.Version == o.Version && m.PayloadFormat == o.PayloadFormat && m.ProtocolVersion == o.ProtocolVersion &&
 		m.MinimumAppVersion == o.MinimumAppVersion && slices.Equal(m.FirmwareProfiles, o.FirmwareProfiles)
@@ -64,9 +61,8 @@ func supportedIDs(catalog *Catalog) []string {
 	return ids
 }
 
-// MixerTargetForPayload derives signing metadata from the same complete
-// release payload the installer validates. Publishers cannot advertise
-// unqualified profiles.
+// MixerTargetForPayload derives signed target metadata from a validated payload
+// so publishers cannot advertise unqualified firmware profiles.
 func MixerTargetForPayload(payload *embed.Envelope, minimumAppVersion string) (*MixerTarget, error) {
 	bundle, err := payload.Bundle()
 	if err != nil {
@@ -96,8 +92,6 @@ func MixerTargetForPayload(payload *embed.Envelope, minimumAppVersion string) (*
 	return m, nil
 }
 
-// RequireCompatible refuses a release this app, protocol or firmware
-// profile cannot use.
 func (m *MixerTarget) RequireCompatible(appVersion string, protocol uint32, profile string) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -126,16 +120,14 @@ func (m *MixerTarget) validate() error {
 	return nil
 }
 
-// VerifiedMixerPayload is owned, authenticated bytes. No public constructor
-// accepts an unchecked bundle.
+// VerifiedMixerPayload holds authenticated payload bytes; constructed only
+// after TUF and internal validation pass.
 type VerifiedMixerPayload struct {
 	bundle Bundle
 	bytes  []byte
 }
 
-// MixerRepository is a repository authenticated against a caller-supplied,
-// previously trusted root. The desktop caller must supply its compiled-in
-// root, never a downloaded root.
+// MixerRepository wraps a TUF updater anchored to a caller-supplied trusted root.
 type MixerRepository struct {
 	updater *tuf.Updater
 }
@@ -144,8 +136,8 @@ func mixerError(text string) error {
 	return Error("Mixer update verification: " + text)
 }
 
-// mixerOperation runs an operation that may download, stopping it when the
-// engine is canceled or after 30 minutes.
+// mixerOperation runs a potentially long download with a 30-minute timeout and
+// polls Engine.Cancel.
 func mixerOperation[T any](e *Engine, operation func(context.Context) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1800*time.Second)
 	defer cancel()
@@ -178,7 +170,8 @@ func mixerOperation[T any](e *Engine, operation func(context.Context) (T, error)
 	}
 }
 
-// VerifiedCatalog is the newest release's signed firmware catalog.
+// VerifiedCatalog downloads and verifies the firmware catalog for the newest
+// signed mixer release.
 func (r *MixerRepository) VerifiedCatalog(ctx context.Context) (*VerifiedCatalog, error) {
 	if err := r.requireCurrent(); err != nil {
 		return nil, err
@@ -263,7 +256,6 @@ func customString(target *metadata.TargetFiles, key string) string {
 	return tuf.CustomString(target, key)
 }
 
-// targets is the verified top-level targets.
 func (r *MixerRepository) targets() (*metadata.TargetsType, error) {
 	t := r.updater.Trusted().TargetsRole(metadata.TARGETS)
 	if t == nil {
@@ -272,7 +264,6 @@ func (r *MixerRepository) targets() (*metadata.TargetsType, error) {
 	return t, nil
 }
 
-// expiries is when each of the four verified roles expires.
 func (r *MixerRepository) expiries() ([4]time.Time, error) {
 	trusted := r.updater.Trusted()
 	timestamp, snapshot := trusted.Timestamp(), trusted.Snapshot()
@@ -283,8 +274,6 @@ func (r *MixerRepository) expiries() ([4]time.Time, error) {
 	return [4]time.Time{trusted.Root().Expires, timestamp.Expires, snapshot.Expires, targets.Expires}, nil
 }
 
-// read downloads the target name and checks it against its signed length
-// and hash before any byte is returned.
 func (r *MixerRepository) read(ctx context.Context, name string, target *metadata.TargetFiles) ([]byte, error) {
 	data, err := r.updater.DownloadTarget(ctx, target, name)
 	if err != nil {
@@ -293,7 +282,6 @@ func (r *MixerRepository) read(ctx context.Context, name string, target *metadat
 	return data, nil
 }
 
-// target is the signed release target name.
 func (r *MixerRepository) target(name string) (*metadata.TargetFiles, error) {
 	targets, err := r.targets()
 	if err != nil {
@@ -317,8 +305,7 @@ func (r *MixerRepository) requireCurrent() error {
 			return mixerError("signed mixer metadata expired; refresh before installation")
 		}
 	}
-	// RC2FX only publishes top-level targets. Avoid extending cached-target
-	// trust to delegated roles without checking each delegation's lifetime.
+	// Reject delegations since we don't validate delegated role lifetimes.
 	targets, err := r.targets()
 	if err != nil {
 		return err
@@ -329,7 +316,6 @@ func (r *MixerRepository) requireCurrent() error {
 	return nil
 }
 
-// AcceptCached is Accept through the payload cache in cache.
 func (r *MixerRepository) AcceptCached(ctx context.Context, offer *MixerOffer, appVersion string, protocol uint32, profile, cache string) (*VerifiedMixerPayload, error) {
 	offers, err := r.Offers()
 	if err != nil {
@@ -356,8 +342,7 @@ func (r *MixerRepository) AcceptCached(ctx context.Context, offer *MixerOffer, a
 		if uint64(len(data)) == offer.Length && archive.Sum(data) == offer.SHA256 {
 			return verifyPayload(data, offer.Metadata.clone(), profile, &appVersion)
 		}
-		// A damaged cache is not another install source. Re-fetch only the
-		// exact same signed offer and atomically replace the cache.
+		// Corrupt cache entry: fall through to re-fetch and atomically replace.
 	case !errors.Is(err, fs.ErrNotExist):
 		return nil, err
 	}
@@ -371,11 +356,9 @@ func (r *MixerRepository) AcceptCached(ctx context.Context, offer *MixerOffer, a
 	return payload, nil
 }
 
-// BasePayload is the signed payload of the release a mixer runs, cached in
-// cache, for the in-place update to send only what changed since. Nothing
-// from it is installed: the mixer rebuilds the new release from its own
-// files and checks the result against the new release's signature. Nil when
-// no signed release has that version (a development build).
+// BasePayload fetches and caches the signed payload for the mixer's current
+// version so in-place updates can send a delta. Returns nil if version isn't
+// a signed release (e.g. a dev build).
 func (r *MixerRepository) BasePayload(ctx context.Context, version, cache string) (*string, error) {
 	if err := r.requireCurrent(); err != nil {
 		return nil, err
@@ -405,7 +388,6 @@ func (r *MixerRepository) BasePayload(ctx context.Context, version, cache string
 	if data, err := os.ReadFile(path); err == nil && int64(len(data)) == length && archive.Sum(data) == sha {
 		return &path, nil
 	}
-	// read checks the signed hash before it hands over the bytes.
 	data, err := r.read(ctx, name, signed)
 	if err != nil {
 		return nil, err
@@ -419,7 +401,7 @@ func (r *MixerRepository) BasePayload(ctx context.Context, version, cache string
 	return &path, nil
 }
 
-// Offers is every signed release, newest first.
+// Offers returns all signed mixer releases, newest first.
 func (r *MixerRepository) Offers() ([]MixerOffer, error) {
 	if err := r.requireCurrent(); err != nil {
 		return nil, err
@@ -447,7 +429,6 @@ func (r *MixerRepository) Offers() ([]MixerOffer, error) {
 	return offers, nil
 }
 
-// Accept downloads offer if it is still signed.
 func (r *MixerRepository) Accept(ctx context.Context, offer *MixerOffer, appVersion string, protocol uint32, profile string) (*VerifiedMixerPayload, error) {
 	offers, err := r.Offers()
 	if err != nil {
@@ -459,7 +440,6 @@ func (r *MixerRepository) Accept(ctx context.Context, offer *MixerOffer, appVers
 	return r.Download(ctx, offer.Target, appVersion, protocol, profile)
 }
 
-// LoadMixerRepository opens the official HTTPS repository.
 func LoadMixerRepository(ctx context.Context, trustedRoot []byte, metadataURL, targetsURL *url.URL, datastore string) (*MixerRepository, error) {
 	if err := checkRepositoryURL(metadataURL, metadataHost); err != nil {
 		return nil, err
@@ -471,10 +451,8 @@ func LoadMixerRepository(ctx context.Context, trustedRoot []byte, metadataURL, t
 	return openMixerRepository(ctx, repository, trustedRoot, datastore)
 }
 
-// openMixerRepository refreshes repository's metadata from trustedRoot,
-// through the verified state in datastore: the newest versions seen there
-// are the floor, so older metadata is refused. Every role must be
-// unexpired.
+// openMixerRepository refreshes TUF metadata against trustedRoot using
+// datastore to enforce rollback floors.
 func openMixerRepository(ctx context.Context, repository tuf.Repository, trustedRoot []byte, datastore string) (*MixerRepository, error) {
 	if err := os.MkdirAll(datastore, 0o777); err != nil {
 		return nil, err
@@ -493,13 +471,11 @@ func openMixerRepository(ctx context.Context, repository tuf.Repository, trusted
 	return &MixerRepository{updater: updater}, nil
 }
 
-// NamedMixerTarget is a release target and its signed claims.
 type NamedMixerTarget struct {
 	Name     string
 	Metadata MixerTarget
 }
 
-// Releases is every target that is a mixer release, in name order.
 func (r *MixerRepository) Releases() ([]NamedMixerTarget, error) {
 	targets, err := r.targets()
 	if err != nil {
@@ -534,7 +510,6 @@ func customHas(target *metadata.TargetFiles, key string) bool {
 	return tuf.CustomHas(target, key)
 }
 
-// Download downloads and verifies the release target name.
 func (r *MixerRepository) Download(ctx context.Context, name, appVersion string, protocol uint32, profile string) (*VerifiedMixerPayload, error) {
 	releases, err := r.Releases()
 	if err != nil {
@@ -552,7 +527,6 @@ func (r *MixerRepository) Download(ctx context.Context, name, appVersion string,
 	if err != nil {
 		return nil, err
 	}
-	// No consumer sees the bytes until their signed hash has been checked.
 	data, err := r.read(ctx, name, target)
 	if err != nil {
 		return nil, err

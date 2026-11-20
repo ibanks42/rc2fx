@@ -1,22 +1,17 @@
 package appupdate
 
-// Check downloaded app updates against signed release metadata.
+// App releases use a separate TUF repo on the app-metadata branch that shares
+// the mixer trust root and role keys. Each release asset is a target named
+// "v{VERSION}/{ASSET}" with a matching custom "version" field. Velopack's feed
+// picks which package to download; this verifies the downloaded bytes against
+// signed metadata.
 //
-// App releases have their own TUF repository, beside the mixer's: the same
-// trust root and role keys, but separate metadata on the `app-metadata`
-// branch. Every asset of a release is a target named `v{VERSION}/{ASSET}`
-// whose custom `version` field repeats the version. Velopack's own feed
-// says which package to fetch; this says whether the bytes fetched are the
-// ones that were signed.
-//
-// Each check starts from the trusted root with no saved state. Both
-// repositories share one root, so mixer metadata served at the app's
-// address verifies; saved state would let such a replay raise the app's
-// rollback floor and freeze its updates. Without it a replay can only offer
-// older metadata, which is acceptable here: the app only checks versions
-// newer than itself, which metadata from before their release cannot name,
-// and expiry (every role must be unexpired; app metadata lasts 7 days)
-// bounds how long stale metadata can hide a newer release.
+// Verification is intentionally stateless (starts from the embedded root every
+// time). Because app and mixer repos share a root, mixer metadata served at the
+// app URL would verify; persisting TUF state would let a replay bump the app's
+// rollback floor and freeze updates. Without saved state, a replay can only
+// serve older metadata, which can't name versions newer than the running app,
+// and the 7-day role expiry bounds how long stale metadata can hide a release.
 
 import (
 	"bytes"
@@ -46,23 +41,22 @@ const (
 	appTargetsHost  = "github.com"
 	appMetadataURL  = "https://raw.githubusercontent.com/ibanks42/rc2fx/app-metadata/"
 	appTargetsURL   = "https://github.com/ibanks42/rc2fx/releases/download/"
-	// appTimeout covers metadata only: the package itself is already on disk.
+	// Covers metadata fetches only; the package is already on disk.
 	appTimeout = 120 * time.Second
 
 	updateUnsigned = "This update has not been signed yet. Try again later."
-	// updateSuperseded: signing lists only the latest release, so an older
-	// download disappears from the signed list once a newer release is
-	// signed.
+	// Only the latest release is signed, so older downloads disappear once a
+	// newer release is published.
 	updateSuperseded = "A newer update has replaced this one. Download the update again."
 	updateMismatch   = "The downloaded update does not match its signed release and was discarded."
 )
 
-// VerifyError is why a package was not accepted.
+// VerifyError describes why an update package failed verification.
 type VerifyError struct {
-	// Rejected: the signed release says this file must not be applied
-	// (unsigned, different bytes, a bad name or version, or unreadable);
-	// discard it. Otherwise the check could not be made (network, metadata,
-	// timeout): the file may still be good, so keep it and try again.
+	// Rejected is true when the file must not be applied (unsigned, hash
+	// mismatch, invalid name/version, unreadable) and should be discarded.
+	// False means verification couldn't complete (network, metadata, timeout)
+	// and can be retried later.
 	Rejected bool
 	Message  string
 }
@@ -73,17 +67,16 @@ func unavailable(message string) *VerifyError { return &VerifyError{Message: mes
 
 func rejected(message string) *VerifyError { return &VerifyError{Rejected: true, Message: message} }
 
-// AppUpdatesConfigured is false in a checkout without a trust root: there is
-// nothing to check updates against, so callers must not offer them.
+// AppUpdatesConfigured reports whether this build has a trust root configured.
+// Without one, callers must not offer app updates.
 func AppUpdatesConfigured() bool {
 	return string(bytes.TrimSpace(trustedRoot)) != "null"
 }
 
-// VerifyUpdatePackage checks that file is exactly the signed asset asset of
-// app version. The error is a *VerifyError. Blocking: it fetches the app metadata, so call it from a
-// background goroutine. A file whose bytes do not match is removed, so
-// nothing can apply it afterwards. The metadata is kept only in memory, for
-// this check; nothing is written to disk.
+// VerifyUpdatePackage checks file against the signed TUF target for version and
+// asset, returning a *VerifyError on failure. It blocks on metadata fetches, so
+// call it off the UI thread. Mismatched files are deleted; metadata stays in
+// memory only.
 func VerifyUpdatePackage(version, asset, file string) error {
 	if err := verifyUpdatePackage(version, asset, file); err != nil {
 		return err
@@ -117,7 +110,6 @@ func comparable(v string) bool {
 	return ok
 }
 
-// verifyAppPackage: repository is the official one, or local files in tests.
 func verifyAppPackage(root []byte, repository tuf.Repository, version, asset, file string) *VerifyError {
 	if !comparable(version) || asset == "" || strings.ContainsAny(asset, `/\`) || strings.HasPrefix(asset, ".") {
 		return rejected(fmt.Sprintf("%s %s is not an app update package.", asset, version))
@@ -143,29 +135,26 @@ func verifyAppPackage(root []byte, repository tuf.Repository, version, asset, fi
 	}
 	want, ok := tuf.TargetSHA256(target)
 	if !ok || length != uint64(target.Length) || sha != want {
-		// Best effort: the caller discards the update either way.
+		// Best-effort cleanup; caller discards the update either way.
 		os.Remove(file)
 		return rejected(updateMismatch)
 	}
 	return nil
 }
 
-// signedTarget is the target name from freshly verified metadata, or nil
-// when no release with that name has been signed, and the newest version
-// signed.
+// signedTarget fetches fresh metadata and returns the named target (or nil if
+// absent) alongside the newest signed version found.
 func signedTarget(root []byte, repository tuf.Repository, name string) (*metadata.TargetFiles, string, error) {
 	fail := func(e any) error {
 		return fmt.Errorf("Could not check this update against its signed release: %v. Try again later.", e)
 	}
-	// No store: every check starts from the trusted root (see the package
-	// comment).
+	// Stateless by design; see package comment.
 	updater, err := tuf.NewUpdater(repository, root)
 	if err != nil {
 		return nil, "", fail(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), appTimeout)
 	defer cancel()
-	// Expired metadata could be a replay that hides a newer release.
 	if err := updater.Refresh(ctx, time.Now()); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return nil, "", fail("timed out")
@@ -179,8 +168,7 @@ func signedTarget(root []byte, repository tuf.Repository, name string) (*metadat
 	if targets == nil {
 		return nil, "", fail("the signed metadata is incomplete")
 	}
-	// Only top-level targets are published. A delegation would extend trust
-	// to roles whose lifetimes nothing here checks.
+	// Reject delegations since we don't validate delegated role lifetimes.
 	if d := targets.Delegations; d != nil && (len(d.Roles) > 0 || d.SuccinctRoles != nil) {
 		return nil, "", fail("delegated app targets are not supported")
 	}
@@ -202,13 +190,11 @@ func signedTarget(root []byte, repository tuf.Repository, name string) (*metadat
 	return targets.Targets[name], newest, nil
 }
 
-// versionOf is the version a signed asset says it belongs to.
 func versionOf(target *metadata.TargetFiles) (string, bool) {
 	v, ok := tuf.CustomValue(target, "version").(string)
 	return v, ok
 }
 
-// fileDigest is the length and SHA-256 of a file, read once in pieces.
 func fileDigest(path string) (uint64, string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -223,8 +209,6 @@ func fileDigest(path string) (uint64, string, error) {
 	return uint64(n), hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// checkAppRepositoryURL: the two addresses app metadata may come from, over
-// plain HTTPS.
 func checkAppRepositoryURL(u *url.URL, host string) error {
 	if !tuf.OfficialURL(u, host) {
 		return errors.New("App update repository URLs must use the official HTTPS hosts.")

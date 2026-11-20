@@ -10,11 +10,8 @@ import (
 
 func f(v float32) *float32 { return &v }
 
-// The live line.
-
 func TestEveryPointIsFiniteAndBothEndsMeetTheMiddle(t *testing.T) {
 	for _, height := range []float32{34, 170} {
-		// Levels from silence to full scale, as paint_line scales them.
 		for _, level := range []float32{0, 0.5, 1} {
 			amplitude := level * Mini.Amplitude * height
 			for _, width := range []float32{4, 300, 899, 1280} {
@@ -50,8 +47,6 @@ func TestAnInvalidLineIsRejectedNotPatched(t *testing.T) {
 	}
 }
 
-// LinePoints is a line's geometry: the middle of the element, flat when
-// unavailable, nothing below 4 × 2 px.
 func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 	if _, ok := LinePoints(3.9, 40, 0, 1, LineStateLive, Mini); ok {
 		t.Fatal("drew in a too narrow element")
@@ -76,11 +71,6 @@ func TestLinePointsSitOnTheMiddleOfTheElement(t *testing.T) {
 	}
 }
 
-// The level bars.
-
-// A fresh level fills its share of the track, clamped so silence stays
-// visible and a level above full scale stays inside; no reading is the
-// fixed stub, whatever the track's size.
 func TestLevelsStayInsideTheTrackAndSilenceStaysVisible(t *testing.T) {
 	cases := []struct{ level, want float32 }{
 		{0.5, 0.5},
@@ -99,8 +89,6 @@ func TestLevelsStayInsideTheTrackAndSilenceStaysVisible(t *testing.T) {
 	}
 }
 
-// When an indicator redraws and the ticker runs.
-
 func slots(shape Shape, drawn *float32) Slots {
 	return Slots{
 		Claims: []Claim{{Shape: shape, Height: 40, Measured: true}},
@@ -115,7 +103,7 @@ func TestAFlatLineNeedsNoFrameButAMovingOneDoes(t *testing.T) {
 	if !s.Unchanged([]*float32{f(0)}) {
 		t.Fatal("a flat line asked for a frame")
 	}
-	// Same level, but the shape moves with time unless it is flat.
+	// Non-flat lines animate phase even when the level is constant.
 	s = slots(line(), f(0.5))
 	if s.Unchanged([]*float32{f(0.5)}) {
 		t.Fatal("a moving line was taken as unchanged")
@@ -140,8 +128,6 @@ func TestANewSetOfClaimsAlwaysDraws(t *testing.T) {
 		t.Fatal("new claims were taken as unchanged")
 	}
 }
-
-// The bar rule, unmeasured lines, still indicators and the tick choice.
 
 func TestABarRedrawsOnlyWhenItMovesAPixelOrLosesItsReading(t *testing.T) {
 	bar := BarShape(BarVertical)

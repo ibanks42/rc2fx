@@ -1,8 +1,7 @@
 package disk
 
-// Windows identifiers and IOCTL buffers, decoded in plain Go. This file has
-// no build constraint (a "_parse" suffix is not a GOOS), so its tests run on
-// every system.
+// Pure-Go decoding of Windows device IDs and IOCTL buffers so unit tests run
+// on all platforms.
 
 import (
 	"encoding/binary"
@@ -33,22 +32,19 @@ const (
 // FILE_DEVICE_DISK, a STORAGE_DEVICE_NUMBER's DeviceType for a disk.
 const winFileDeviceDisk = 7
 
-// winIsUSBDeviceID is a device instance ID of a USB device or interface
-// (`USB\VID_xxxx&PID_xxxx\...`), as opposed to a storage child such as
-// `USBSTOR\...` or a root hub's `USB\ROOT_HUB30\...`.
+// winIsUSBDeviceID matches USB device/interface instance IDs (USB\VID_...),
+// excluding USBSTOR children and root hubs.
 func winIsUSBDeviceID(id string) bool {
 	return strings.HasPrefix(strings.ToUpper(id), `USB\VID_`)
 }
 
-// winIsMixerID is the instance ID of the mixer's storage gadget, or one of
-// its interfaces on a composite device (`...&MI_00`).
+// winIsMixerID matches the storage gadget's device or composite interface ID.
 func winIsMixerID(id string) bool {
 	rest, ok := strings.CutPrefix(strings.ToUpper(id), fmt.Sprintf(`USB\VID_%04X&PID_%04X`, USBVendor, USBProduct))
 	return ok && (strings.HasPrefix(rest, `\`) || strings.HasPrefix(rest, `&`))
 }
 
-// winDecodeDeviceNumber reads STORAGE_DEVICE_NUMBER: DEVICE_TYPE DeviceType
-// (4 bytes), ULONG DeviceNumber, ULONG PartitionNumber.
+// winDecodeDeviceNumber parses STORAGE_DEVICE_NUMBER (DeviceType, DeviceNumber, PartitionNumber).
 func winDecodeDeviceNumber(b []byte) (uint32, error) {
 	if len(b) < 12 {
 		return 0, fmt.Errorf("short device number answer (%d bytes)", len(b))
@@ -59,10 +55,8 @@ func winDecodeDeviceNumber(b []byte) (uint32, error) {
 	return binary.LittleEndian.Uint32(b[4:]), nil
 }
 
-// winDecodeGeometryEx reads DISK_GEOMETRY_EX: DISK_GEOMETRY (LARGE_INTEGER
-// Cylinders at 0, MEDIA_TYPE at 8, DWORD TracksPerCylinder at 12, DWORD
-// SectorsPerTrack at 16, DWORD BytesPerSector at 20), then LARGE_INTEGER
-// DiskSize at 24.
+// winDecodeGeometryEx parses BytesPerSector (offset 20) and DiskSize (offset 24)
+// from DISK_GEOMETRY_EX.
 func winDecodeGeometryEx(b []byte) (bytesPerSector uint32, size uint64, err error) {
 	if len(b) < 32 {
 		return 0, 0, fmt.Errorf("short disk geometry answer (%d bytes)", len(b))
@@ -74,7 +68,7 @@ func winDecodeGeometryEx(b []byte) (bytesPerSector uint32, size uint64, err erro
 	return binary.LittleEndian.Uint32(b[20:]), uint64(s), nil
 }
 
-// winDecodeLength reads GET_LENGTH_INFORMATION: LARGE_INTEGER Length.
+// winDecodeLength parses GET_LENGTH_INFORMATION.
 func winDecodeLength(b []byte) (uint64, error) {
 	if len(b) < 8 {
 		return 0, fmt.Errorf("short disk length answer (%d bytes)", len(b))
@@ -86,16 +80,13 @@ func winDecodeLength(b []byte) (uint64, error) {
 	return uint64(s), nil
 }
 
-// winExtentsHeader is the size of VOLUME_DISK_EXTENTS before its array: a
-// DWORD count padded to the 8-byte alignment of DISK_EXTENT.
-const winExtentsHeader = 8
+// VOLUME_DISK_EXTENTS layout: 4-byte count padded to 8 bytes, then 24-byte DISK_EXTENT entries.
+const (
+	winExtentsHeader = 8
+	winExtentSize    = 24
+)
 
-// winExtentSize is sizeof(DISK_EXTENT): DWORD DiskNumber, 4 bytes padding,
-// LARGE_INTEGER StartingOffset, LARGE_INTEGER ExtentLength.
-const winExtentSize = 24
-
-// winExtentsCount is NumberOfDiskExtents, which the volume fills in even
-// when it answers ERROR_MORE_DATA.
+// winExtentsCount reads NumberOfDiskExtents (populated even on ERROR_MORE_DATA).
 func winExtentsCount(b []byte) (uint32, bool) {
 	if len(b) < 4 {
 		return 0, false
@@ -103,8 +94,6 @@ func winExtentsCount(b []byte) (uint32, bool) {
 	return binary.LittleEndian.Uint32(b), true
 }
 
-// winDecodeExtentDisks lists the disk number of every extent in a
-// VOLUME_DISK_EXTENTS answer of length len(b).
 func winDecodeExtentDisks(b []byte) ([]uint32, error) {
 	count, ok := winExtentsCount(b)
 	if !ok {
@@ -120,15 +109,13 @@ func winDecodeExtentDisks(b []byte) ([]uint32, error) {
 	return disks, nil
 }
 
-// winVolumeDevice is the device path of a volume GUID path: FindFirstVolume
-// gives `\\?\Volume{...}\`, and the trailing backslash would open the root
-// directory instead of the volume.
+// Strip the trailing backslash from \\?\Volume{...}\ so CreateFile opens the
+// volume device itself rather than its root directory.
 func winVolumeDevice(name string) string {
 	return strings.TrimSuffix(name, `\`)
 }
 
-// winFirstPath is the first string of a REG_MULTI_SZ-style list of UTF-16
-// strings (GetVolumePathNamesForVolumeName's answer), or "".
+// winFirstPath returns the first NUL-terminated string from a REG_MULTI_SZ UTF-16 buffer.
 func winFirstPath(list []uint16) string {
 	for i, c := range list {
 		if c == 0 {
@@ -138,7 +125,6 @@ func winFirstPath(list []uint16) string {
 	return ""
 }
 
-// winDriveNumber is N in `\\.\PhysicalDriveN`.
 func winDriveNumber(path string) (uint32, bool) {
 	const prefix = `\\.\PHYSICALDRIVE`
 	if len(path) <= len(prefix) || len(path) > len(prefix)+10 || !strings.EqualFold(path[:len(prefix)], prefix) {
@@ -154,12 +140,10 @@ func winDriveNumber(path string) (uint32, bool) {
 	return uint32(n), err == nil
 }
 
-// winDrivePath is the path Open uses for disk number n.
 func winDrivePath(n uint32) string {
 	return fmt.Sprintf(`\\.\PhysicalDrive%d`, n)
 }
 
-// winDescribe is Info's Name: "Disk 3, 7.3 GB".
 func winDescribe(n uint32, size uint64) string {
 	return fmt.Sprintf("Disk %d, %.1f GB", n, float64(size)/1e9)
 }

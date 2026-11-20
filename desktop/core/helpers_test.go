@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// repoFile reads a file relative to the repository root.
 func repoFile(t *testing.T, parts ...string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(append([]string{"..", ".."}, parts...)...))
@@ -17,13 +16,11 @@ func repoFile(t *testing.T, parts ...string) []byte {
 	return data
 }
 
-// easyFixture is fixtures/easyeffects/<name>.
 func easyFixture(t *testing.T, name string) string {
 	t.Helper()
 	return string(repoFile(t, "fixtures", "easyeffects", name))
 }
 
-// parse reads a test input as a Value, with no size or node limit.
 func parse(t *testing.T, text string) Value {
 	t.Helper()
 	value, err := ParseJSONLimited(text, math.MaxInt, math.MaxInt)
@@ -33,7 +30,6 @@ func parse(t *testing.T, text string) Value {
 	return value
 }
 
-// toValue is serde_json::to_value, failing the test on error.
 func toValue(t *testing.T, v any) Value {
 	t.Helper()
 	data, err := Encode(v)
@@ -47,7 +43,6 @@ func toValue(t *testing.T, v any) Value {
 	return value
 }
 
-// encode is Encode as a string, failing the test on error.
 func encode(t *testing.T, v any) string {
 	t.Helper()
 	data, err := Encode(v)
@@ -57,7 +52,6 @@ func encode(t *testing.T, v any) string {
 	return string(data)
 }
 
-// must is unwrap(): a failure panics, which fails the test with a trace.
 func must[T any](value T, err error) T {
 	if err != nil {
 		panic(err)
@@ -86,7 +80,6 @@ func check(t *testing.T, condition bool, context ...any) {
 	}
 }
 
-// imported is an EasyEffects import that must be ready.
 func imported(t *testing.T, text string, stereo bool) EQSettings {
 	t.Helper()
 	result := must(ImportEasyEffects(text, ImportOptions{Stereo: stereo}))

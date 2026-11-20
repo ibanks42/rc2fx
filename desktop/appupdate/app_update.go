@@ -1,30 +1,18 @@
-// Package appupdate checks published RC2FX desktop app and mixer release
-// feeds and verifies downloaded desktop app update packages against signed
-// TUF metadata.
+// Package appupdate checks published RC2FX app and mixer releases and verifies
+// downloaded app update packages against signed TUF metadata.
 package appupdate
 
-// What the official project has published: the latest RC2FX desktop app,
-// the mixer software it bundles, and the release notes leading to both.
+// Release checks use unauthenticated HTTPS only. GitHub's latest release is the
+// authority for what is published; the docs site's update feed provides release
+// notes and the mixer version bundled by each app release. If the feed is
+// unavailable, app notes fall back to GitHub's release list and the published
+// mixer version stays unknown.
 //
-// Unauthenticated HTTPS requests only. GitHub's latest release decides what
-// is published; the update feed on the documentation site supplies the notes
-// and which mixer software each app release bundles. Without a usable feed,
-// app notes come from GitHub's release list and the published mixer software
-// stays unknown. Nothing is downloaded or installed: the result is versions,
-// release notes and links.
-//
-// GitHub's latest release excludes drafts and prereleases; this module still
-// refuses anything that is not a published, stable `vMAJOR.MINOR.PATCH` app
-// release, such as a `mixer-v` tag left from before mixer runtimes were only
-// released inside the app.
-//
-// A feed entry newer than that release is ignored. That only blocks entries
-// above the latest release: that every lower entry was published is the
-// official generator's guarantee, from GitHub's release list, and is not
-// checked here.
-//
-// This says what exists, not what can be installed: what this app installs
-// comes from its own bundled payload alone.
+// Only stable `vMAJOR.MINOR.PATCH` app releases are accepted (drafts,
+// prereleases, and legacy `mixer-v` tags are rejected). Feed entries newer than
+// GitHub's latest release are ignored; lower entries are trusted as generated
+// from GitHub's release list. Results are informational only and do not govern
+// what the installer can flash.
 
 import (
 	"errors"
@@ -42,60 +30,42 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// The addresses name the official repository on purpose: a build from a fork
-// still checks the official releases.
+// Always point at the official repo even in fork builds.
 const (
-	// AppReleasesURL is the repository's releases page.
-	AppReleasesURL = "https://github.com/ibanks42/rc2fx/releases"
-	latestAPI      = "https://api.github.com/repos/ibanks42/rc2fx/releases/latest"
-	listAPI        = "https://api.github.com/repos/ibanks42/rc2fx/releases"
-	// UpdateFeedURL is the update feed, generated from the same notes as the
-	// history pages.
-	UpdateFeedURL = "https://ibanks42.github.io/rc2fx/updates.json"
-	// AppHistoryURL is every app release's notes, on one page.
-	AppHistoryURL = "https://ibanks42.github.io/rc2fx/updates/app"
-	// MixerHistoryURL is every mixer software release's notes, on one page.
+	AppReleasesURL  = "https://github.com/ibanks42/rc2fx/releases"
+	latestAPI       = "https://api.github.com/repos/ibanks42/rc2fx/releases/latest"
+	listAPI         = "https://api.github.com/repos/ibanks42/rc2fx/releases"
+	UpdateFeedURL   = "https://ibanks42.github.io/rc2fx/updates.json"
+	AppHistoryURL   = "https://ibanks42.github.io/rc2fx/updates/app"
 	MixerHistoryURL = "https://ibanks42.github.io/rc2fx/updates/mixer"
-	// feedSchema is the only feed schema this build reads. New fields are
-	// ignored; a breaking change gets a new URL.
-	feedSchema  = 1
-	maxFeedBody = 4 * 1024 * 1024
-	// maxFeedReleases is per list; far above any real history.
-	maxFeedReleases = 2000
+
+	// Breaking feed schema changes get a new URL; unknown fields are ignored.
+	feedSchema      = 1
+	maxFeedBody     = 4 * 1024 * 1024
+	maxFeedReleases = 2000 // per list
 	updateTimeout   = 10 * time.Second
-	// maxReleaseBody: a release reply is a few KiB; anything past this is
-	// refused.
-	maxReleaseBody = 1024 * 1024
-	// Release-list paging: at most maxPages pages of perPage releases, each
-	// page at most maxListBody, all within notesDeadline.
-	perPage       = 100
-	maxPages      = 5
-	maxListBody   = 4 * 1024 * 1024
-	notesDeadline = 30 * time.Second
-	// maxNotes: one release's notes are cut here, at a character boundary.
-	maxNotes = 64 * 1024
+	maxReleaseBody  = 1024 * 1024
+	perPage         = 100
+	maxPages        = 5
+	maxListBody     = 4 * 1024 * 1024
+	notesDeadline   = 30 * time.Second
+	maxNotes        = 64 * 1024 // per release, cut on a UTF-8 boundary
 )
 
-// allowPlainHTTP lets tests talk to a local server.
+// Overridden in tests for local HTTP servers.
 var allowPlainHTTP = false
 
-// UpdateCheckKind names an UpdateCheck variant.
 type UpdateCheckKind int
 
 const (
-	// UpdateUpToDate: no newer release. Latest is the newest published app
-	// version, which can be older than a development build.
+	// UpdateUpToDate means no newer release exists. Latest can still be older
+	// than a local dev build.
 	UpdateUpToDate UpdateCheckKind = iota
-	// UpdateAvailable: a newer release (Version), and the release page (URL)
-	// built from its validated tag.
 	UpdateAvailable
-	// UpdateNoRelease: the repository has no published app release yet.
 	UpdateNoRelease
-	// UpdateFailed: Error says why.
 	UpdateFailed
 )
 
-// UpdateCheck is this app's check.
 type UpdateCheck struct {
 	Kind      UpdateCheckKind
 	Latest    string
@@ -105,50 +75,36 @@ type UpdateCheck struct {
 	Error     UpdateError
 }
 
-// Changelog is the release notes between the installed version and the
-// offered one.
+// Changelog holds release notes for versions in (installed, offered], newest first.
 type Changelog struct {
-	// Entries is every stable app release with installed < version <=
-	// offered that was found, newest first.
 	Entries []ReleaseNotes
 	Status  ChangelogStatus
 }
 
-// ReleaseNotes is one release's notes.
 type ReleaseNotes struct {
-	// Version is `0.2.0`.
 	Version string
-	// URL is the release page, built from the validated tag.
+	// Release page URL constructed from the validated tag.
 	URL string
-	// Notes is Markdown source, from the feed or GitHub's release body.
-	// Never render it as HTML.
-	Notes string
-	// Truncated: the notes were longer than 64 KiB and were cut.
+	// Raw Markdown from the feed or GitHub release body; never render as HTML.
+	Notes     string
 	Truncated bool
 }
 
-// ChangelogStatusKind names a ChangelogStatus variant.
 type ChangelogStatusKind int
 
 const (
-	// ChangelogComplete: every release in the range is in Entries.
 	ChangelogComplete ChangelogStatusKind = iota
-	// ChangelogPartial: some releases in the range may be missing (a paging
-	// limit or the deadline was reached, a later page failed, or the offered
-	// release was not listed). Link to AppReleasesURL for the rest.
+	// ChangelogPartial means some releases in the range may be missing (paging
+	// cap, deadline, failed later page, or offered release absent).
 	ChangelogPartial
-	// ChangelogUnavailable: the release list could not be read; Entries is
-	// empty and Error says why.
 	ChangelogUnavailable
 )
 
-// ChangelogStatus is how complete a changelog is.
 type ChangelogStatus struct {
 	Kind  ChangelogStatusKind
 	Error UpdateError
 }
 
-// UpdateErrorKind names an UpdateError variant.
 type UpdateErrorKind int
 
 const (
@@ -157,7 +113,6 @@ const (
 	UpdateOther
 )
 
-// UpdateError is why a check failed.
 type UpdateError struct {
 	Kind UpdateErrorKind
 	Why  string
@@ -175,64 +130,48 @@ func (e UpdateError) Error() string {
 
 func otherError(why string) UpdateError { return UpdateError{Kind: UpdateOther, Why: why} }
 
-// UpdateSnapshot is what is known about published releases. MixerUpdate
-// answers for any mixer without another request, also before any check.
+// UpdateSnapshot caches published release metadata so MixerUpdate can be
+// queried offline whenever a mixer's reported version changes.
 type UpdateSnapshot struct {
-	// App is this app's check; nil until one has finished.
+	// App is nil until an update check completes.
 	App          *UpdateCheck
 	latestMixer  *PublishedMixer
 	history      *history
 	historyError UpdateError
 }
 
-// PublishedMixer is the mixer software bundled by the latest published app.
+// PublishedMixer describes the mixer runtime bundled by the latest app release.
 type PublishedMixer struct {
-	Version string
-	// Protocol is nil when the feed does not record it.
-	Protocol *uint32
-	// AppVersion is the app release that bundles it.
+	Version    string
+	Protocol   *uint32
 	AppVersion string
 }
 
-// MixerUpdate is how a mixer's software compares with what is bundled and
-// published.
 type MixerUpdate struct {
 	State MixerUpdateState
-	// Changelog is the notes for installed < version <= the newest version
-	// State names, newest first; nil when it names none. Complete only when
-	// the installed version and every version up to that one are in the
-	// known history with notes.
+	// Notes for (installed, offered], newest first; nil if no update is offered.
 	Changelog *Changelog
 }
 
-// MixerUpdateStateKind names a MixerUpdateState variant.
 type MixerUpdateStateKind int
 
 const (
-	// MixerUnknown: the installed version is missing or not comparable, or
-	// nothing newer is bundled and the latest published version is unknown.
 	MixerUnknown MixerUpdateStateKind = iota
-	// MixerCurrent: as new as the newest of the bundled and latest published
-	// versions.
 	MixerCurrent
-	// MixerNewer: newer than the latest published version and any bundled
-	// one. Nothing is offered: that would be a downgrade.
+	// MixerNewer means the mixer is ahead of both bundled and published
+	// versions; downgrades are not offered.
 	MixerNewer
-	// MixerBundled: the bundled Version is newer than the installed one.
-	// Says nothing about what is published when latestMixer is nil, and
-	// nothing about whether the installer may run.
+	// MixerBundled means the app bundles a newer mixer version than installed.
 	MixerBundled
-	// MixerBundledThenApp: the bundled Version is newer than the installed
-	// one, and the app AppVersion carries the still newer Latest.
+	// MixerBundledThenApp means the app bundles a newer version and a newer
+	// app release carries an even newer mixer version.
 	MixerBundledThenApp
-	// MixerAppUpdateRequired: nothing bundled is newer; the newer app
-	// AppVersion carries Latest.
+	// MixerAppUpdateRequired means only a newer app release has a newer mixer.
 	MixerAppUpdateRequired
 )
 
-// MixerUpdateState is information only. Whether the installer may run is
-// decided from the bundled payload and the firmware it would flash, never
-// from this.
+// MixerUpdateState is informational only; installer eligibility is determined
+// solely from the bundled payload and target firmware.
 type MixerUpdateState struct {
 	Kind       MixerUpdateStateKind
 	Version    string
@@ -240,7 +179,7 @@ type MixerUpdateState struct {
 	AppVersion string
 }
 
-// SnapshotFromCheck is a check that learned nothing about mixer software.
+// SnapshotFromCheck wraps an app check with no mixer history.
 func SnapshotFromCheck(app UpdateCheck) UpdateSnapshot {
 	err := otherError("the update feed was not read")
 	if app.Kind == UpdateFailed {
@@ -249,8 +188,7 @@ func SnapshotFromCheck(app UpdateCheck) UpdateSnapshot {
 	return UpdateSnapshot{App: &app, historyError: err}
 }
 
-// UncheckedSnapshot is before any check: only what the caller passes in is
-// known.
+// UncheckedSnapshot returns a snapshot before any network check has run.
 func UncheckedSnapshot() UpdateSnapshot {
 	return UpdateSnapshot{historyError: otherError("no update check has finished")}
 }
@@ -262,10 +200,8 @@ func optionalVersion(v *string) (string, bool) {
 	return *v, true
 }
 
-// MixerUpdate compares what the mixer reports with what this app bundles
-// and what is published. A version that is missing or not comparable is
-// unknown, never older or newer. No network: call it again whenever the
-// mixer's reported version changes.
+// MixerUpdate compares the mixer's installed version against the bundled and
+// latest published versions without making network requests.
 func (s UpdateSnapshot) MixerUpdate(installed, bundled *string) MixerUpdate {
 	inst, ok := optionalVersion(installed)
 	if !ok {
@@ -313,11 +249,9 @@ func (s UpdateSnapshot) MixerUpdate(installed, bundled *string) MixerUpdate {
 	return MixerUpdate{State: state, Changelog: &log}
 }
 
-// CheckForUpdates asks whether a release newer than current (this app's
-// version, e.g. `0.1.0`) exists and what mixer software is published, and
-// collects the release notes since current. Blocking: up to ten seconds
-// each for GitHub and the feed, and about thirty more if the notes must come
-// from GitHub's release list. Call it off the UI goroutine.
+// CheckForUpdates queries GitHub and the update feed for newer app/mixer
+// releases and release notes since current (e.g. "0.1.0"). Blocks on network
+// I/O (up to ~50s in the fallback path), so call off the UI goroutine.
 func CheckForUpdates(current string) UpdateSnapshot {
 	return snapshotAt(latestAPI, listAPI, UpdateFeedURL, current)
 }
@@ -331,8 +265,7 @@ func snapshotAt(latestURL, listURL, feedURL, current string) UpdateSnapshot {
 		return SnapshotFromCheck(UpdateCheck{Kind: UpdateFailed, Error: *err})
 	}
 	app := evaluate(current, reply)
-	// The feed cannot say what is latest, so without GitHub's answer it is
-	// not read.
+	// Skip the feed if GitHub didn't tell us the latest release.
 	var latest string
 	switch app.Kind {
 	case UpdateUpToDate:
@@ -372,12 +305,9 @@ func snapshotAt(latestURL, listURL, feedURL, current string) UpdateSnapshot {
 	return UpdateSnapshot{App: &app, latestMixer: latestMixer, history: h, historyError: historyErr}
 }
 
-// githubChangelog is the notes since current, from GitHub's paged release
-// list.
 func githubChangelog(listURL, current, offered string) Changelog {
 	deadline := time.Now().Add(notesDeadline)
 	return changelog(current, offered, deadline, func(page uint32) (*reply, *UpdateError) {
-		// No page may outlast the notes deadline.
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			e := otherError("the release notes took too long")
@@ -392,7 +322,7 @@ func isNewer(a, b string) bool {
 	return ok && order > 0
 }
 
-// inRange is low < version <= high.
+// inRange reports whether low < version <= high.
 func inRange(version, low, high string) bool {
 	return isNewer(version, low) && !isNewer(version, high)
 }
@@ -419,23 +349,18 @@ type feed struct {
 	Mixer         feedList[feedMixer] `json:"mixer"`
 }
 
-// history is the feed, reduced to what is published.
+// history is the validated feed filtered down to published releases.
 type history struct {
-	// apps is no newer than the latest published release, newest first.
-	apps []feedApp
-	// mixers is each mixer version a listed app bundled, newest first.
-	mixers []mixerEntry
-	// stale: the latest published release is not listed, so what it bundles
-	// is unknown and a release before it may be missing too.
+	apps   []feedApp    // <= latest published release, newest first
+	mixers []mixerEntry // unique mixer versions bundled by apps, newest first
+	// stale is true when the latest published release is missing from the feed.
 	stale bool
 }
 
 type mixerEntry struct {
-	version string
-	// firstApp is the first app release that bundled it.
-	firstApp string
-	// notes is nil when the feed has no notes for it.
-	notes *string
+	version  string
+	firstApp string // first app release that bundled this mixer version
+	notes    *string
 }
 
 func parseHistory(r *reply, latest string) (*history, *UpdateError) {
@@ -515,8 +440,6 @@ func parseHistory(r *reply, latest string) (*history, *UpdateError) {
 	return &history{apps: apps, mixers: mixers, stale: stale}, nil
 }
 
-// publishedMixer is what the latest release bundles, when the feed lists
-// that exact release and names it.
 func (h *history) publishedMixer(latest string) *PublishedMixer {
 	if len(h.apps) == 0 || h.apps[0].Version != latest || h.apps[0].MixerVersion == nil {
 		return nil
@@ -532,8 +455,6 @@ func deref(s *string) string {
 	return *s
 }
 
-// appChangelog is complete only when current and the offered release are
-// listed and every release in the range has notes.
 func (h *history) appChangelog(current, offered string) Changelog {
 	var inFeed []feedApp
 	for _, app := range h.apps {
@@ -557,11 +478,9 @@ func (h *history) appChangelog(current, offered string) Changelog {
 	return Changelog{Entries: entries, Status: status}
 }
 
-// mixerChangelog is complete only when the installed and offered versions
-// are listed, every version in the range has notes, and no release could
-// hide another version: the feed is current and names the mixer software of
-// every app release. An installed version that is not listed may predate
-// the history, so what lies between is not known.
+// mixerChangelog is marked complete only when the feed is fresh, every listed
+// app maps a mixer version, both endpoints are present, and all intermediate
+// entries have notes.
 func (h *history) mixerChangelog(installed, offered string) Changelog {
 	var inFeed []mixerEntry
 	for _, m := range h.mixers {
@@ -595,13 +514,11 @@ func hasNotes(notes *string) bool {
 	return notes != nil && strings.TrimSpace(*notes) != ""
 }
 
-// notesEntry is version's notes, linking to the release page of appVersion.
 func notesEntry(version, appVersion, text string) ReleaseNotes {
 	notes, truncated := cutNotes(text)
 	return ReleaseNotes{Version: version, URL: releaseURL(appVersion), Notes: notes, Truncated: truncated}
 }
 
-// reply is what the server answered, reduced to what the decision needs.
 type reply struct {
 	status             int
 	rateLimitExhausted bool
@@ -614,7 +531,6 @@ func fetch(u, current string, maxBody int64, timeout time.Duration) (*reply, *Up
 		return nil, &e
 	}
 	client := &http.Client{
-		// Covers connecting, the reply and reading its body.
 		Timeout: timeout,
 		Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
@@ -622,7 +538,7 @@ func fetch(u, current string, maxBody int64, timeout time.Duration) (*reply, *Up
 			TLSHandshakeTimeout:   timeout,
 			ResponseHeaderTimeout: timeout,
 		},
-		// Both hosts answer directly; a redirect elsewhere is not followed.
+		// Don't follow redirects off the expected hosts.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	defer client.CloseIdleConnections()
@@ -662,9 +578,8 @@ func classify(err error) UpdateError {
 	return otherError(err.Error())
 }
 
-// appVersionOf is `v1.2.3` → `1.2.3`; anything else, including `mixer-v…`,
-// is refused. The same rule as the release script's STABLE pattern: three
-// numbers, none with a leading zero.
+// appVersionOf parses strict "vMAJOR.MINOR.PATCH" tags (no leading zeros),
+// matching the release script's STABLE pattern and rejecting mixer-v* tags.
 func appVersionOf(tag string) (string, bool) {
 	version, ok := strings.CutPrefix(tag, "v")
 	if !ok || !strictVersion(version) {
@@ -693,8 +608,6 @@ type githubRelease struct {
 	Body       *string `json:"body,default"`
 }
 
-// statusError is a non-200 reply as an error: rate limits apart from
-// everything else.
 func statusError(r *reply) UpdateError {
 	switch {
 	case r.status == 429:
@@ -744,7 +657,7 @@ func releaseURL(version string) string {
 	return AppReleasesURL + "/tag/v" + version
 }
 
-// cutNotes is text cut to at most maxNotes bytes at a character boundary.
+// cutNotes truncates text to at most maxNotes bytes on a UTF-8 boundary.
 func cutNotes(text string) (string, bool) {
 	if len(text) <= maxNotes {
 		return text, false
@@ -756,11 +669,10 @@ func cutNotes(text string) (string, bool) {
 	return text[:end], true
 }
 
-// changelog is the notes of every stable app release with current <
-// version <= offered, newest first, from the paged release list page(n) (n
-// from 1). Complete only when the whole list was read within the limits and
-// the offered release was in it: the list is ordered by creation date, not
-// by version, so stopping early could miss a release.
+// changelog collects notes for stable releases in (current, offered], newest
+// first, from 1-indexed pages. Because GitHub orders releases by creation date
+// rather than version, the result is only marked complete if all pages are read
+// and offered appears in the list.
 func changelog(current, offered string, deadline time.Time, page func(uint32) (*reply, *UpdateError)) Changelog {
 	entries := []ReleaseNotes{}
 	exhausted := false

@@ -1,4 +1,5 @@
-//! Callback-owned signal state; construction and destruction are control work.
+//! Audio-thread DSP pipeline and helper-thread handoff.
+//! Construction and teardown happen on the control thread.
 mod helper;
 mod lookup;
 mod placement;
@@ -35,85 +36,62 @@ use std::{
 };
 
 pub const FRAMES: usize = 112;
-/// Unprocessed paths only feed level meters; fetch and meter their buffers on
-/// one callback in this many. Every callback still counts their frames: the
-/// helper's paths each frame, callback-owned ones at their next visit.
+/// Unprocessed paths are metered once every `METER_STRIDE` callbacks (staggered
+/// by path index); frames in between are still counted.
 const METER_STRIDE: u32 = 8;
-/// Whether path `path` (plan order) meters on callback `cycle`: each path once
-/// in METER_STRIDE callbacks, the paths staggered so that they do not all
-/// meter on the same one.
 fn meters(cycle: u32, path: usize) -> bool {
     cycle.wrapping_add(path as u32).is_multiple_of(METER_STRIDE)
 }
-/// Which side processes a path. Ownership follows the direction and is fixed
-/// at construction, not chosen per mode or history.
+/// Which thread processes a path (fixed by direction at construction).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Owner {
-    /// In the callback, in place, after the mixer's own processing returns and
-    /// before the callback does: every output, USB sends and hardware outputs
-    /// alike, meter-only ones included.
+    /// Outputs run in-place on the callback thread after the vendor callback.
     Callback,
-    /// By the helper, from a copy the callback makes: sources, which reach the
-    /// mixer one frame later. The helper never touches a jackd buffer.
+    /// Sources run on the helper thread from a copied buffer (1-frame latency);
+    /// the helper never touches JACK buffers directly.
     Helper,
 }
-/// What the helper does with the frame the callback copied for a path.
+/// Per-path work item handed to the helper thread.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Job {
-    /// The callback left this path alone: `Count` if the mixer's callback
-    /// succeeded, else `None`. The helper resolves it and restores it.
+    /// Untouched by the callback; helper resolves to `Count` or `None` based on `native_success`.
     Skipped,
-    /// Nothing to apply: the path was inactive, incomplete or failed.
     None,
-    /// Count the frames of an unprocessed path left alone (METER_STRIDE).
     Count,
-    /// Meter an unprocessed path's copied buffers.
     Meter,
-    /// Process a copied source; the mixer reads the result next frame.
     Input,
 }
 
-/// The callback's view of a path.
+/// Callback-side state for one bound audio path.
 struct Port {
     direction: Direction,
     pins: Vec<Arc<Pin>>,
     owner: Owner,
-    /// Callback-processed paths keep their settings reader here.
+    /// Present for callback-owned outputs; helper-owned sources keep their reader in `Work`.
     reader: Option<parameters::Reader>,
-    /// The source's mode was Processed at the last look (for a helper-owned
-    /// source, the helper's latest snapshot, while the helper was idle).
     processed_intent: bool,
-    /// This frame's outcome so far: processed only while every request was.
     outcome: Option<Outcome>,
     chat: Option<Box<super::chat_mix::Capture>>,
     native: [usize; 2],
     observed: u8,
     active: bool,
-    /// An unprocessed path left alone this frame, its buffers not resolved.
+    /// True when an unprocessed path was skipped this cycle (buffers not resolved).
     counted: bool,
     failed: bool,
-    /// `Front::skipped_frames` when this path was last visited.
+    /// `Front::skipped_frames` snapshot from the last visit.
     credited: u64,
-    /// The path's unprocessed-audio fade (`parameters::RAW_*`), and where it
-    /// stands: 0 (silent) to `STAGE_FADE_SAMPLES` (as the mixer made it).
+    /// Passthrough crossfade state (`0` = muted, `STAGE_FADE_SAMPLES` = unity).
     pass: Arc<parameters::PassFade>,
     raw_position: u32,
-    /// This frame's unprocessed-audio gain: from `raw_from`, a step of
-    /// `raw_step` (-1, 0 or 1) a sample; `raw_scale` when it is not 1.
     raw_from: u32,
     raw_step: i32,
     raw_scale: bool,
-    /// The last `faded` answered.
     raw_answered: bool,
-    /// A processor's frame has reached the mixer since the path last played
-    /// unprocessed audio.
+    /// True once at least one processed frame has been delivered since the last passthrough.
     processed_flowing: bool,
-    /// A helper-owned source's faded unprocessed audio, handed to the mixer
-    /// in place of the jackd buffer.
+    /// Scratch buffer for fading a helper-owned source's raw audio.
     raw_scratch: Box<[[f32; FRAMES]; 2]>,
 }
-/// `Port::raw` for a callback-owned output, in place: the frame's gain,
-/// fading from `from` by `step` a sample.
 fn scale_raw(from: u32, step: i32, buffers: [&mut [f32]; 2]) {
     for buffer in buffers {
         for (t, sample) in buffer.iter_mut().enumerate() {
@@ -121,8 +99,6 @@ fn scale_raw(from: u32, step: i32, buffers: [&mut [f32]; 2]) {
         }
     }
 }
-/// Sample `t`'s gain of a frame of unprocessed audio fading from `from` by
-/// `step` a sample.
 #[inline(always)]
 fn raw_gain(from: u32, step: i32, t: usize) -> f32 {
     let at = (from as i64 + i64::from(step) * (t as i64 + 1))
@@ -130,11 +106,9 @@ fn raw_gain(from: u32, step: i32, t: usize) -> f32 {
     at as f32 / rc2fx_dsp::STAGE_FADE_SAMPLES as f32
 }
 impl Port {
-    /// Decides this frame's unprocessed-audio gain (see `parameters::RAW_*`)
-    /// from the mode the path is in (`processed_intent`) and the requested
-    /// fade, and answers control. Returns whether the path's unprocessed
-    /// audio needs the gain every frame, so the path must be resolved and
-    /// visited every cycle until it does not. One atomic load.
+    /// Advances the passthrough fade ramp for this frame and updates the
+    /// control-visible `faded` flag. Returns true if raw audio is actively
+    /// fading and must be visited every cycle.
     fn step_raw(&mut self) -> bool {
         use parameters::{RAW_MUTE, RAW_PLAY, RAW_RISE};
         let full = rc2fx_dsp::STAGE_FADE_SAMPLES;
@@ -142,12 +116,11 @@ impl Port {
         let processed = self.processed_intent;
         self.raw_from = self.raw_position;
         if processed {
-            // Only a fallback frame plays unprocessed audio now: as the mixer
-            // made it, unless a fade to or from the processor is under way.
+            // While processed, raw audio is only used on fallback frames.
             self.raw_position = match target {
                 RAW_PLAY => full,
                 RAW_RISE => 0,
-                // Silent until the processor's first frame arrives.
+                // Hold silent until the first processed frame arrives.
                 _ if self.processed_flowing => full,
                 _ => 0,
             };
@@ -168,11 +141,10 @@ impl Port {
         }
         !processed && self.raw_scale
     }
-    /// The unprocessed audio of a source's `channel` for the mixer: the jackd
-    /// buffer itself, or this frame's faded copy of it.
+    /// Returns either `native` directly or a faded copy in `raw_scratch`.
     ///
     /// # Safety
-    /// `native` is this channel's live jackd buffer of `FRAMES` samples.
+    /// `native` must point to `FRAMES` valid `f32` samples for this callback.
     unsafe fn raw(&mut self, channel: usize, native: *mut c_void) -> *mut c_void {
         if !self.raw_scale {
             return native;
@@ -193,8 +165,8 @@ impl Port {
         }
         self.failed = true;
     }
-    /// Records what one buffer request of a source meant to be processed
-    /// returned. The frame's outcome keeps its first raw cause.
+    /// Records a single buffer lookup outcome for a processed source, keeping
+    /// the first raw fallback cause for the frame.
     fn note(&mut self, outcome: Outcome) {
         if self.direction != Direction::Input || !self.processed_intent {
             return;
@@ -208,8 +180,6 @@ impl Port {
             self.outcome = Some(outcome);
         }
     }
-    /// Counts this frame's outcome for a source meant to be processed;
-    /// `usable`: the frame completed (native success, every channel).
     fn tally_source(&mut self, usable: bool) {
         if self.direction == Direction::Input && self.processed_intent {
             let outcome = match self.outcome {
@@ -220,8 +190,7 @@ impl Port {
             tally(outcome);
         }
     }
-    /// A path a cycle leaves alone must look like one that was never touched:
-    /// the mixer can still ask for its buffer.
+    /// Clears per-cycle flags so skipped paths look unvisited to `buffer()`.
     fn reset(&mut self) {
         self.active = false;
         self.counted = false;
@@ -236,30 +205,19 @@ impl Port {
             .iter()
             .all(|pin| pin.alive.load(Ordering::Acquire))
     }
-    /// Asks for what `begin_port` reads beyond the `Port` (see prefetch.rs):
-    /// the publication a callback-owned path loads or the helper's mode of
-    /// another, then the pins it resolves. `work`: this path's `Handoff::work`.
     fn warm_begin(&self, work: *const Option<Work>) {
         match &self.reader {
             Some(reader) => reader.warm_begin(),
             None => prefetch::read(work, 1),
         }
-        // The list of pins is loaded here, so asking for it would gain nothing.
         for pin in &self.pins {
             prefetch::read(Arc::as_ptr(pin), 1);
         }
     }
-    /// Asks for what `end_port` uses beyond the `Port` (see prefetch.rs): the
-    /// buffers `begin` resolved for this cycle, then a callback-owned path's
-    /// settings and processor, or the copy a helper-owned one makes into
-    /// `raw[slot]` of its `work`.
-    ///
     /// # Safety
-    /// As `Pipeline::end`, with the helper idle: the callback owns `work`.
+    /// Caller must own `work` (helper idle), as in `Pipeline::end`.
     unsafe fn warm_end(&self, work: *const Option<Work>, slot: usize) {
-        // Only this cycle's addresses: an inactive path resolved none.
         let channels = if self.active { self.pins.len() } else { 0 };
-        // An output is processed in place.
         let written = self.direction == Direction::Output && self.processed_intent;
         for &buffer in self.native.iter().take(channels) {
             if written {
@@ -281,7 +239,7 @@ impl Port {
         }
     }
     /// # Safety
-    /// The resolved native buffers stay valid for this callback.
+    /// Resolved native buffers must remain valid for this callback.
     unsafe fn slices<'a>(&self, frames: usize) -> [&'a mut [f32]; 2] {
         let left = unsafe { std::slice::from_raw_parts_mut(self.native[0] as *mut f32, frames) };
         let right = if self.pins.len() == 2 {
@@ -292,42 +250,36 @@ impl Port {
         [left, right]
     }
 }
-/// A helper-owned path's audio, by frame parity, and its settings reader.
-/// The callback writes `raw[slot]` and reads `processed[slot ^ 1]`; the
-/// helper reads `raw[slot]` and writes `processed[slot]`; `slot` is the
-/// parity of the frame being handed off. Each `processed` slot is its own
-/// cell: the mixer holds raw pointers into one while the helper writes the
-/// other, and the callback hands them out without a mutable borrow.
+/// Double-buffered audio state for a helper-owned source path.
+///
+/// Indexed by frame parity (`slot = seq & 1`): the callback copies raw input
+/// into `raw[slot]` and hands the mixer `processed[slot ^ 1]` from the previous
+/// frame, while the helper processes `raw[slot]` into `processed[slot]`.
+/// `UnsafeCell` lets `buffer()` hand out raw pointers to `processed[slot ^ 1]`
+/// without taking a mutable borrow.
 struct Work {
-    /// The path's settings reader.
     reader: parameters::Reader,
     stereo: bool,
     raw: Box<[[[f32; FRAMES]; 2]; 2]>,
     processed: Box<[UnsafeCell<[[f32; FRAMES]; 2]>; 2]>,
-    /// The frame whose complete audio the callback copied into `raw[slot]`.
+    /// Sequence number of the frame copied into `raw[slot]`.
     captured: [u64; 2],
-    /// `processed[slot]` holds the DSP output for `raw[slot]`.
+    /// Whether `processed[slot]` holds valid DSP output for `raw[slot]`.
     done: [bool; 2],
-    /// The mode of the helper's latest snapshot, for the callback.
     processed_mode: bool,
 }
-/// Everything the callback hands to the helper. The callback owns it while
-/// the helper is idle; the helper from `queue` until it stores IDLE.
+/// Shared handoff block transferred between the callback (when helper is idle)
+/// and the helper (from `queue` until `IDLE`).
 struct Handoff {
     seq: u64,
     frames: usize,
     cycle_start: u64,
-    /// CLOCK_MONOTONIC when this frame's callback started (its `started`).
     started: u64,
     native_success: bool,
     jobs: Vec<Job>,
-    /// By path; callback-owned paths have none.
     work: Vec<Option<Work>>,
     counters: Counters,
-    /// The frame the helper finished last.
     done_seq: u64,
-    /// Tests: the helper this frame is handed to, which must have stopped
-    /// before the frame is freed (see `Drop for Pipeline`).
     #[cfg(test)]
     helper: Option<Arc<Shared>>,
 }
@@ -346,66 +298,45 @@ impl Drop for Handoff {
 struct Front {
     ports: Vec<Port>,
     lookup: PinLookup,
-    /// By `cycle % METER_STRIDE`: in plan order, the paths a sparse cycle
-    /// visits. That is every path that is processed or failed, and each other
-    /// path once in the stride. A failed path must be visited, as it must not
-    /// count frames. The lists keep their capacity, so rebuilding them does
-    /// not allocate.
+    /// Precomputed per-phase visit lists for sparse cycles (processed/failed
+    /// paths every cycle, plus each passthrough path once per `METER_STRIDE`).
+    /// Cleared and refilled in place to avoid allocations.
     visits: [Vec<usize>; METER_STRIDE as usize],
-    /// Successful full-stride cycles still needed before going sparse. Set by
-    /// anything that could change what a path needs. A whole stride, so that
-    /// every path gets the cycles it would have had to acknowledge a setting.
+    /// Remaining full-scan cycles before switching back to sparse visits.
     full_left: u32,
-    /// This cycle visits every path.
     full: bool,
-    /// The index into `visits` of this cycle.
     phase: usize,
-    /// The publication count last acted on.
     publications: u64,
-    /// `counters.faults` last acted on.
     faults: u64,
-    /// Sparse cycles the mixer completed: what a path left alone is owed.
+    /// Completed sparse cycles owed to paths that were skipped.
     skipped_frames: u64,
     counters: Counters,
     cycle: u32,
-    /// This frame's sequence number; `seq - 1` is the frame the helper
-    /// should have finished.
     seq: u64,
-    /// The helper was idle when this callback began: the handoff may be
-    /// used and this frame handed off.
     idle: bool,
-    /// The helper finished the previous frame in time.
     previous_ready: bool,
     sampler: Sampler,
-    /// The bench gauges are on (fixed at load): time each path, the buffer
-    /// resolve and the helper wake. Kept here so that the callback tests a
-    /// field of its own state rather than loading a shared flag per path.
+    /// Cached copy of `gauges::enabled()` to avoid atomic loads per path.
     gauged: bool,
 }
 pub struct Pipeline {
     front: UnsafeCell<Front>,
     handoff: UnsafeCell<Handoff>,
     helper: Helper,
-    /// Every path's settings publications, counted by its Control.
     publications: Arc<AtomicU64>,
 }
-// `front` belongs to the callback; the callback and the helper alternate
-// ownership of `handoff` (see Handoff).
+// SAFETY: `front` is callback-thread only; `handoff` ownership alternates
+// strictly between callback and helper via `Helper::state` Acquire/Release.
 unsafe impl Sync for Pipeline {}
 unsafe impl Send for Pipeline {}
 impl Drop for Pipeline {
-    /// The helper first. The fields drop in the order they are declared,
-    /// `handoff` before `helper`: without this a helper that still had a
-    /// frame (queued and left to its timer, or in the middle of one) would
-    /// work on buffers already freed. Once it has stopped it touches nothing.
     fn drop(&mut self) {
+        // Stop and join the helper before `handoff` drops (fields drop in declaration order).
         self.helper.stop();
     }
 }
-/// The meter of an unprocessed path: left channel then right, sample by
-/// sample. Two plain loops rather than one flattened iterator, whose state
-/// machine the compiler keeps in the loop; the order of every operation, and
-/// so every bit of the result, is unchanged.
+/// Computes peak/RMS/clipping for an unprocessed path. Written as plain loops
+/// rather than a flattened iterator so LLVM keeps the inner loop tight.
 fn native_meter(buffers: [&[f32]; 2]) -> rc2fx_dsp::Meter {
     let mut meter = rc2fx_dsp::Meter::default();
     for buffer in buffers {
@@ -723,16 +654,12 @@ unsafe fn end_port(
     }
 }
 impl Front {
-    /// Asks for what `begin` (`slot`: None) or `end` is about to touch for the
-    /// paths this sparse cycle visits, before either touches any of it (see
-    /// prefetch.rs): first the paths themselves, whose addresses need nothing
-    /// else, then what each points to. It changes nothing, and reads nothing
-    /// that the phase does not read itself.
-    ///
-    /// Out of line, so that a profile shows its cost under its own name.
+    /// Prefetches the `Port` structs and referenced buffers/DSP state for the
+    /// paths visited in this sparse cycle. Kept `#[inline(never)]` so its cost
+    /// shows up cleanly in CPU profiles.
     ///
     /// # Safety
-    /// As `Pipeline::begin` and `end`, with the helper idle.
+    /// Caller must own `handoff` (helper idle).
     #[inline(never)]
     unsafe fn warm(&self, handoff: &Handoff, slot: Option<usize>) {
         let visits = &self.visits[self.phase];
@@ -747,7 +674,6 @@ impl Front {
             }
         }
     }
-    /// Decides what each sparse cycle visits, from what the full cycles found.
     fn plan_visits(&mut self) {
         for (phase, visits) in self.visits.iter_mut().enumerate() {
             visits.clear();
@@ -759,9 +685,8 @@ impl Front {
     }
 }
 impl Pipeline {
-    /// Control-only readiness: native hosts may install their callback before
-    /// registering USB/other ports. Do not construct any worker until the whole
-    /// selected plan has exact live identities on this client.
+    /// Returns true once every port in `plan` has a unique live registration on
+    /// `client` (hosts often register the process callback before all ports).
     pub fn ports_ready(plan: &Plan, registry: &Registry, client: usize) -> bool {
         plan.paths.iter().all(|path| {
             path.ports.iter().all(|name| {
@@ -837,8 +762,8 @@ impl Pipeline {
                 Direction::Output => Owner::Callback,
             };
             let pass = reader.pass_fade();
-            // A callback-owned path's processor reads the very samples the
-            // unprocessed path would play, at the same time.
+            // Callback-owned outputs process the same frame in-place, so dry
+            // and wet are sample-aligned.
             pass.set_aligned(owner == Owner::Callback);
             let reader = if owner == Owner::Helper {
                 work.push(Some(Work::new(
@@ -1190,14 +1115,11 @@ impl Pipeline {
             }
         }
     }
-    /// The callback's end stamp, once it is taken: the helper forecasts the
-    /// next handoff from these. One store; without it the helper parks after
-    /// every frame and each handoff wakes it.
+    /// Records the callback's exit timestamp so the helper can forecast the
+    /// next handoff time.
     pub fn ended(&self, at: u64) {
         self.helper.shared.ended.store(at, Ordering::Relaxed);
     }
-    /// Wait for the helper to finish the frame just handed off, as the next
-    /// callback would find it.
     #[cfg(test)]
     fn settle(&self) {
         while !self.helper.idle() {

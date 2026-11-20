@@ -1,11 +1,6 @@
-// Package model holds the desktop app's logic that does not touch the UI:
-// version notices, level history, editing helpers, state updates, the USB
-// observation and the target layout. Nothing here imports gpuikit.dev.
+// Package model implements non-UI desktop app state and logic: version
+// comparisons, level history, editing helpers, USB observations, and target layout.
 package model
-
-// Version notices. The app, the RC2FX mixer software and RØDE's firmware are
-// versioned separately. A version the mixer did not report is unknown: it is
-// never treated as older or newer than anything.
 
 import (
 	"fmt"
@@ -15,19 +10,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// AppVersion is this app's version: installer.AppVersion, the one copy that
-// release preparation bumps.
 const AppVersion = installer.AppVersion
 
-// Compare compares two versions numerically; false when either is not a
-// version. The int is negative, zero or positive as a is older, the same or
-// newer than b.
+// Compare compares two dotted numeric version strings. Returns ok=false if
+// either version cannot be parsed.
 func Compare(a, b string) (int, bool) {
 	return core.CompareVersions(a, b)
 }
 
-// BundledMixerSoftware is the RC2FX mixer software built into this app;
-// false without a payload.
 func BundledMixerSoftware() (string, bool) {
 	release, err := installer.BundledRelease()
 	if err != nil {
@@ -36,15 +26,13 @@ func BundledMixerSoftware() (string, bool) {
 	return release.Version, true
 }
 
-// OfferFits reports whether this app can install a signed offer on firmware
-// profile.
 func OfferFits(offer installer.MixerOffer, profile string) bool {
 	return offer.Metadata.RequireCompatible(AppVersion, uint32(core.MixerProtocolVersion), profile) == nil
 }
 
-// NewestAvailable is the newest version this app could install, signed or
-// built in. The firmware may change in the same flash, so any firmware the
-// offer supports counts.
+// NewestAvailable returns the highest mixer software version this app can
+// install (from signed offers or the bundled release). Any supported firmware
+// profile counts because flashing can update firmware at the same time.
 func NewestAvailable(offers []installer.MixerOffer, bundled *string) (string, bool) {
 	var candidates []string
 	for _, offer := range offers {
@@ -63,7 +51,7 @@ func NewestAvailable(offers []installer.MixerOffer, bundled *string) (string, bo
 		if _, ok := Compare(version, version); !ok {
 			continue
 		}
-		// The last of equal versions wins.
+		// Break ties in favor of the later entry.
 		if c, _ := Compare(best, version); !found || c <= 0 {
 			best, found = version, true
 		}
@@ -71,8 +59,6 @@ func NewestAvailable(offers []installer.MixerOffer, bundled *string) (string, bo
 	return best, found
 }
 
-// NewestSupportedFirmware is the newest supported RØDE firmware for the same
-// model as the mixer's reported firmware profile; false when that is unknown.
 func NewestSupportedFirmware(firmwareProfile *string) (string, bool) {
 	if firmwareProfile == nil {
 		return "", false
@@ -80,21 +66,18 @@ func NewestSupportedFirmware(firmwareProfile *string) (string, bool) {
 	return installer.NewestSupportedFirmware(*firmwareProfile)
 }
 
-// AppTooOld reports whether minimum rules out this app.
 func AppTooOld(minimum string) bool {
 	c, ok := Compare(AppVersion, minimum)
 	return ok && c < 0
 }
 
-// AppNeed is signed mixer software that only a newer app can install: its
-// version and the app version it needs.
 type AppNeed struct {
 	Version    string
 	MinimumApp string
 }
 
-// NeedsNewerApp is a signed release newer than available that only a newer
-// app can install, as its version and the app version it needs.
+// NeedsNewerApp returns the newest signed mixer offer above available that
+// requires a newer desktop app version.
 func NeedsNewerApp(offers []installer.MixerOffer, available *string) (AppNeed, bool) {
 	var best *installer.MixerTarget
 	for i := range offers {
@@ -107,8 +90,6 @@ func NeedsNewerApp(offers []installer.MixerOffer, available *string) (AppNeed, b
 				continue
 			}
 		}
-		// Incomparable versions count as equal, and the later of equal
-		// versions wins.
 		if best == nil {
 			best = m
 		} else if c, ok := Compare(best.Version, m.Version); !ok || c <= 0 {
@@ -121,22 +102,17 @@ func NeedsNewerApp(offers []installer.MixerOffer, available *string) (AppNeed, b
 	return AppNeed{Version: best.Version, MinimumApp: best.MinimumAppVersion}, true
 }
 
-// Standing is how an installed version relates to the one available here.
+// Standing describes how an installed version compares to the available one.
 type Standing int
 
 const (
-	// StandingUnknown: the mixer did not report it, or it cannot be compared.
 	StandingUnknown Standing = iota
 	StandingCurrent
-	// StandingUpdateAvailable: a newer version is available; installing it
-	// means flashing.
 	StandingUpdateAvailable
-	// StandingNewer: the mixer is newer than this app knows about. Never
-	// offer a downgrade.
+	// StandingNewer means the mixer is ahead of this app; never offer a downgrade.
 	StandingNewer
 )
 
-// StandingOf relates installed to available.
 func StandingOf(installed, available *string) Standing {
 	if installed == nil || available == nil {
 		return StandingUnknown
@@ -154,31 +130,22 @@ func StandingOf(installed, available *string) Standing {
 	}
 }
 
-// Summary is how each part relates to what this app installs.
 type Summary struct {
 	Runtime       Standing
 	Firmware      Standing
 	Compatibility Compatibility
 }
 
-// Compatibility is whether the mixer software speaks this app's control
-// protocol.
+// Compatibility describes whether the mixer's control protocol matches this app.
 type Compatibility int
 
 const (
-	// CompatibilityUnknown: not reported (older mixer software, or not
-	// connected).
 	CompatibilityUnknown Compatibility = iota
 	CompatibilityCompatible
-	// CompatibilityMixerOlder: the mixer software is older than this app
-	// supports; installing compatible mixer software fixes it.
 	CompatibilityMixerOlder
-	// CompatibilityMixerNewer: the mixer software is newer than this app;
-	// only an app update helps.
 	CompatibilityMixerNewer
 )
 
-// CompatibilityOf compares the protocol the mixer reports with this app's.
 func CompatibilityOf(deviceProtocol *uint32) Compatibility {
 	if deviceProtocol == nil {
 		return CompatibilityUnknown
@@ -194,13 +161,11 @@ func CompatibilityOf(deviceProtocol *uint32) Compatibility {
 	}
 }
 
-// UpdateAvailable: both parts known, neither newer than what this app
-// installs, and at least one older.
+// UpdateAvailable reports whether this app can safely flash a newer runtime
+// or firmware without downgrading either component.
 func (s Summary) UpdateAvailable() bool {
 	currentOrUpdate := s.Firmware == StandingCurrent || s.Firmware == StandingUpdateAvailable
 	if s.Compatibility == CompatibilityMixerOlder {
-		// Compatible mixer software is the fix, as long as the combined
-		// image would not take the firmware backwards.
 		return s.Runtime != StandingNewer && currentOrUpdate
 	}
 	return s.Compatibility == CompatibilityCompatible &&
@@ -208,10 +173,8 @@ func (s Summary) UpdateAvailable() bool {
 			(s.Runtime == StandingCurrent && s.Firmware == StandingUpdateAvailable))
 }
 
-// Blocker is why this app cannot update the mixer, when that needs saying:
-// the installer flashes RC2FX mixer software and RØDE firmware as one
-// image, so an update is offered (UpdateAvailable) only when neither would
-// go backwards and both are known.
+// Blocker explains why this app cannot update the mixer (e.g. protocol
+// mismatch or a component that would be downgraded by a combined flash).
 func (s Summary) Blocker() (string, bool) {
 	if s.Compatibility == CompatibilityMixerOlder {
 		if s.UpdateAvailable() {
@@ -243,30 +206,21 @@ func (s Summary) Blocker() (string, bool) {
 	return "", false
 }
 
-// Inputs is what Settings knows about versions.
+// Inputs collects the known app, mixer, and firmware versions for Settings > Versions.
 type Inputs struct {
-	App              string
-	InstalledRuntime *string
-	// AvailableRuntime is the newest mixer software this app could install,
-	// signed or built in.
-	AvailableRuntime *string
-	// SignedKnown: a signed release check has answered, so what isn't in
-	// AvailableRuntime really isn't available to this app.
-	SignedKnown bool
-	// NeedsApp is newer signed mixer software that needs a newer app, and
-	// the app version it needs.
+	App                     string
+	InstalledRuntime        *string
+	AvailableRuntime        *string
+	SignedKnown             bool
 	NeedsApp                *AppNeed
 	InstalledFirmware       *string
 	NewestSupportedFirmware *string
-	// RodeFirmware is RØDE's newest stable firmware for this mixer, from its
-	// manifest; nil until a check answers, or for a mixer RØDE's manifest
-	// omits.
-	RodeFirmware   *string
-	DeviceProtocol *uint32
+	RodeFirmware            *string
+	DeviceProtocol          *uint32
 }
 
-// rodeAhead is RØDE's newest firmware, when it is newer than the mixer's and
-// than anything this app can install with RC2FX.
+// rodeAhead returns RØDE's newest firmware if it is ahead of both the mixer
+// and the newest firmware RC2FX supports.
 func rodeAhead(i *Inputs) (string, bool) {
 	if i.RodeFirmware == nil || i.InstalledFirmware == nil {
 		return "", false
@@ -282,7 +236,6 @@ func rodeAhead(i *Inputs) (string, bool) {
 	return "", false
 }
 
-// Summarize relates each part to what this app installs.
 func Summarize(i *Inputs) Summary {
 	return Summary{
 		Runtime:       StandingOf(i.InstalledRuntime, i.AvailableRuntime),
@@ -291,7 +244,6 @@ func Summarize(i *Inputs) Summary {
 	}
 }
 
-// Part is one part of the system in the Versions dialog.
 type Part int
 
 const (
@@ -300,7 +252,7 @@ const (
 	PartFirmware
 )
 
-// Tone is how much a line's status asks of the user, least first.
+// Tone orders status severity from least to most urgent.
 type Tone int
 
 const (
@@ -311,30 +263,21 @@ const (
 	ToneBad
 )
 
-// AppStandingKind is what the last update check said about this app.
 type AppStandingKind int
 
 const (
-	// AppStandingChecking: a check is running.
 	AppStandingChecking AppStandingKind = iota
-	// AppStandingUnknown: no check has answered yet, or the last one failed.
 	AppStandingUnknown
-	// AppStandingCurrent: Latest is the newest published app.
 	AppStandingCurrent
-	// AppStandingUpdate: Version is a newer app.
 	AppStandingUpdate
 )
 
-// AppStanding is what the last update check said about this app.
 type AppStanding struct {
-	Kind AppStandingKind
-	// Latest, for AppStandingCurrent.
-	Latest string
-	// Version, for AppStandingUpdate.
+	Kind    AppStandingKind
+	Latest  string
 	Version string
 }
 
-// Line is one line of the Versions dialog.
 type Line struct {
 	Part        Part
 	Name        string
@@ -345,25 +288,16 @@ type Line struct {
 	ReadChanges bool
 }
 
-// Lead is the answer Settings leads with: what matters, and what to read
-// about it.
 type Lead struct {
-	Title  string
-	Detail *string
-	// Changes is the part whose changes What's new opens.
+	Title   string
+	Detail  *string
 	Changes *Part
 }
 
-// Overview is everything Settings shows about versions.
 type Overview struct {
-	Lead  Lead
-	Lines []Line
-	// Details: why nothing can be installed, and what a newer app would bring.
-	Details []string
-	// OfferInstaller: whether to offer the installer: this app can install
-	// something newer, or only its signed release check can tell. The update
-	// feed is never enough. Opening the installer changes nothing on the
-	// mixer.
+	Lead           Lead
+	Lines          []Line
+	Details        []string
 	OfferInstaller bool
 }
 
@@ -379,9 +313,7 @@ var (
 	newerStatus    = statusTone{"Newer", ToneWarn}
 	updateAppFirst = statusTone{"Update the app first", ToneWarn}
 	unknownStatus  = statusTone{"Unknown", ToneUnknown}
-	// rodeNewer: RØDE has released newer firmware than RC2FX supports.
-	// Nothing to do yet.
-	rodeNewer = statusTone{"Newer from RØDE", ToneQuiet}
+	rodeNewer      = statusTone{"Newer from RØDE", ToneQuiet}
 )
 
 func mixerStatus(s Summary, mixer appupdate.MixerUpdateState, signedKnown bool) (statusTone, bool) {
@@ -451,8 +383,8 @@ func showVersion(v *string) string {
 	return *v
 }
 
-// OverviewOf is what to show for the app, the mixer software and the
-// firmware. mixer is informational: OfferInstaller ignores it.
+// OverviewOf builds the Versions section summary. OfferInstaller is driven
+// only by signed/bundled availability, never by the unauthenticated mixer feed.
 func OverviewOf(i *Inputs, app AppStanding, mixer appupdate.MixerUpdateState) Overview {
 	s := Summarize(i)
 	var (
@@ -642,7 +574,6 @@ func OverviewOf(i *Inputs, app AppStanding, mixer appupdate.MixerUpdateState) Ov
 	default:
 		lead = Lead{Title: flag}
 	}
-	// Said in the lead when nothing else is going on; otherwise here.
 	if rodeOK && flagTone != ToneQuiet {
 		details = append(details, fmt.Sprintf(
 			"RØDE firmware %s is out, but RC2FX doesn't support it yet, so this app can't install it.", rode))

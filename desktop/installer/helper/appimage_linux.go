@@ -2,11 +2,10 @@
 
 package helper
 
-// Stage an AppImage helper on ordinary storage before asking polkit to run
-// it. Root cannot enter the desktop user's FUSE mount. Copy the complete
-// AppDir, including its loader libraries, rather than extracting the outer
-// image as root into the AppImage runtime's predictable shared temporary
-// directory.
+// Stage an AppImage's AppDir onto regular storage before invoking pkexec,
+// since root can't traverse the desktop user's FUSE mount. We copy the whole
+// AppDir (including bundled shared libs) instead of letting the AppImage
+// runtime extract as root into a predictable /tmp path.
 
 import (
 	"io"
@@ -44,14 +43,13 @@ func canonicalize(path string) (string, error) {
 	return filepath.EvalSymlinks(abs)
 }
 
-// within is whether path is root or inside it, by whole components.
 func within(path, root string) bool {
 	return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/")
 }
 
-// prepare: packaging hints are not authority. Only use an AppDir containing
-// this exact running executable and the expected launcher; unrelated
-// inherited hints leave standalone launches unchanged.
+// prepare verifies APPDIR actually contains this running binary and a valid
+// AppRun before staging a copy; unrelated APPDIR values leave standalone
+// launches alone.
 func prepare(exe string, appdir *string) (string, *stagedAppDir, error) {
 	if appdir == nil {
 		return exe, nil, nil
@@ -85,9 +83,8 @@ func prepare(exe string, appdir *string) (string, *stagedAppDir, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "", nil, installer.Error("the AppImage needs a regular executable AppRun")
 	}
-	// Do not inherit TMPDIR: it can name the FUSE mount (or another unusual
-	// filesystem). /tmp may be noexec, in which case launching fails normally
-	// rather than falling back to unsafe root extraction.
+	// Use /tmp explicitly instead of TMPDIR, which might point inside the FUSE
+	// mount. If /tmp is noexec, launch fails cleanly instead of falling back.
 	dir, err := os.MkdirTemp("/tmp", "rc2fx-helper-")
 	if err != nil {
 		return "", nil, err
@@ -133,8 +130,8 @@ func copyEntry(source, destination, sourceRoot, destinationRoot string, depth in
 		if err != nil {
 			return err
 		}
-		// Relative links retain their exact spelling; contained absolute links
-		// must point into the copy, not back into the inaccessible FUSE mount.
+		// Keep relative symlinks as-is, but rewrite absolute in-AppDir links so
+		// they point into the staged copy instead of the FUSE mount.
 		if filepath.IsAbs(link) {
 			link = filepath.Join(destinationRoot, relative)
 		}
@@ -159,8 +156,7 @@ func copyEntry(source, destination, sourceRoot, destinationRoot string, depth in
 			return installer.Error("AppImage helper staging exceeds its byte limit")
 		}
 		b.bytes -= size
-		// Limit reads as well as the initial stat: a changing source cannot
-		// make this copy unbounded. Source AppImages are read-only mounts.
+		// Cap reads to the stat size in case a non-readonly source changes mid-copy.
 		input, err := os.Open(source)
 		if err != nil {
 			return err

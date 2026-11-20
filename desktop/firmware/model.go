@@ -10,10 +10,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
-// Model is a mixer model. Board identity is independent of the mixer
-// executable: Pro II and Duo 1.7.6 ship the same executable but different
-// board/controller firmware. The zero value is ModelProIi, as the Rust
-// enum's default.
+// Model identifies a mixer hardware model. Board identity is distinct from the
+// mixer executable (Pro II and Duo 1.7.6 share the same binary but run
+// different board firmware). Zero value is ModelProIi to match Rust's Default.
 type Model uint8
 
 const (
@@ -21,13 +20,13 @@ const (
 	ModelDuo
 )
 
-// ModelAll is every model, in the Rust order.
+// ModelAll lists all models in the same order as the Rust crate.
 var ModelAll = [2]Model{ModelProIi, ModelDuo}
 
 // VendorID is RØDE's USB vendor ID.
 const VendorID = model.VendorID
 
-// Hardware is the flashing library's model, where the hardware facts live.
+// Hardware converts m to the flashing library's model type.
 func (m Model) Hardware() model.Model {
 	if m == ModelDuo {
 		return model.Duo
@@ -35,8 +34,7 @@ func (m Model) Hardware() model.Model {
 	return model.ProIi
 }
 
-// FromHardware is the model for a flashing-library model; the inverse of
-// Hardware.
+// FromHardware converts a flashing-library model back to a firmware.Model.
 func FromHardware(h model.Model) Model {
 	if h == model.Duo {
 		return ModelDuo
@@ -44,7 +42,7 @@ func FromHardware(h model.Model) Model {
 	return ModelProIi
 }
 
-// ParseModel finds the model with the given ID.
+// ParseModel parses a model ID string.
 func ParseModel(id string) (Model, error) {
 	h, err := model.Parse(id)
 	if err != nil {
@@ -53,7 +51,7 @@ func ParseModel(id string) (Model, error) {
 	return FromHardware(h), nil
 }
 
-// ID is the model's catalog and serialized name.
+// ID returns the model's catalog and JSON identifier.
 func (m Model) ID() string { return m.Hardware().ID() }
 
 func (m Model) String() string { return m.ID() }
@@ -64,12 +62,12 @@ func (m Model) BoardDTB() string { return m.Hardware().BoardDTB() }
 
 func (m Model) FirmwareDirectory() string { return m.Hardware().FirmwareDirectory() }
 
-// RuntimeEnabled reports whether the model is admitted without an explicit
+// RuntimeEnabled reports whether the model is supported without an explicit
 // experimental opt-in.
 func (m Model) RuntimeEnabled() bool { return m == ModelProIi }
 
-// RequireRuntimeWith refuses a model that is not runtime-enabled unless it
-// is the Duo and experimental Duo support was opted into.
+// RequireRuntimeWith rejects models that aren't runtime-enabled unless
+// experimentalDuo is set for ModelDuo.
 func (m Model) RequireRuntimeWith(experimentalDuo bool) error {
 	if m.RuntimeEnabled() || (m == ModelDuo && experimentalDuo) {
 		return nil
@@ -106,9 +104,8 @@ func ModelFromUSB(vendor, product uint16) (Model, bool) {
 	return FromHardware(h), true
 }
 
-// ModelFromBoard requires consistent rootfs and boot-board evidence. No
-// environment override or executable hash may impersonate a different
-// device model.
+// ModelFromBoard identifies the mixer from its rootfs hostname and extlinux
+// FDT entry, requiring both to agree with no overrides.
 func ModelFromBoard(hostname, extlinux string) (Model, error) {
 	var boards [][]string
 	for _, line := range rustLines(extlinux) {
@@ -132,13 +129,10 @@ func ModelFromBoard(hostname, extlinux string) (Model, error) {
 	return 0, errors.New("unknown or conflicting hostname and boot board identity")
 }
 
-// MarshalJSON writes the model's ID, as serde does.
 func (m Model) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m.ID())
 }
 
-// UnmarshalJSON reads a model ID; anything else is refused, as strictly as
-// serde reads it.
 func (m *Model) UnmarshalJSON(data []byte) error {
 	var id string
 	if err := core.DecodeStrict(data, &id); err != nil {
@@ -153,8 +147,8 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("unknown variant `%s`, expected `rodecaster-pro-ii` or `rodecaster-duo`", id)
 }
 
-// rustLines splits as Rust's str::lines: on \n, dropping one \r before it,
-// with no final empty line.
+// rustLines matches Rust's str::lines: splits on \n, strips a preceding \r,
+// and omits a trailing empty line.
 func rustLines(text string) []string {
 	if text == "" {
 		return nil
@@ -162,7 +156,6 @@ func rustLines(text string) []string {
 	ended := strings.HasSuffix(text, "\n")
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	for i, line := range lines {
-		// Only a \r that ends a line with its \n is part of the line ending.
 		if i < len(lines)-1 || ended {
 			lines[i] = strings.TrimSuffix(line, "\r")
 		}
@@ -170,7 +163,7 @@ func rustLines(text string) []string {
 	return lines
 }
 
-// isRustWhitespace is Rust's char::is_whitespace: Unicode White_Space.
+// isRustWhitespace matches Rust's char::is_whitespace (Unicode White_Space).
 func isRustWhitespace(r rune) bool {
 	switch r {
 	case '\t', '\n', '\v', '\f', '\r', ' ', 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:

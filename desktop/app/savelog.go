@@ -1,8 +1,7 @@
 package app
 
-// The save log: with RC2FX_SAVE_LOG=<file>, every save, live edit, answer and
-// incoming state is written there with its revision, so a misjudged echo or
-// conflict can be traced. Off (and free) without the variable.
+// Optional debug log enabled via RC2FX_SAVE_LOG=<path> for tracing save/live-edit
+// revisions, echoes, and conflicts. No-op when unset.
 
 import (
 	"encoding/json"
@@ -28,7 +27,6 @@ var saveLog = sync.OnceValue(func() *os.File {
 	return f
 })
 
-// saveLogf writes one line to the save log.
 func saveLogf(format string, args ...any) {
 	f := saveLog()
 	if f == nil {
@@ -37,10 +35,8 @@ func saveLogf(format string, args ...any) {
 	fmt.Fprintf(f, "%s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
 }
 
-// saveLogging is whether the save log is on (to skip building what it would print).
 func saveLogging() bool { return saveLog() != nil }
 
-// saveLogTargets writes targets as JSON under a label.
 func saveLogTargets(label string, targets []core.Target) {
 	if !saveLogging() {
 		return
@@ -53,10 +49,8 @@ func saveLogTargets(label string, targets []core.Target) {
 	saveLogf("%s: %s", label, b)
 }
 
-// heldReason is the last reason the live save was held, logged on change.
 var heldReason string
 
-// logHeld logs why syncLive isn't saving, when that changes ("" for not held).
 func (a *App) logHeld(reason string) {
 	if reason == heldReason || !saveLogging() {
 		return
@@ -68,8 +62,6 @@ func (a *App) logHeld(reason string) {
 	saveLogf("%s", reason)
 }
 
-// logReceive logs an incoming state and, while a save or preset load is in
-// flight, model.CheckEcho's verdict on it: the same test model.Receive runs.
 func (a *App) logReceive(state core.DeviceState, acknowledged, snapshot bool) {
 	if !saveLogging() {
 		return

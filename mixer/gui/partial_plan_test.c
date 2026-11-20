@@ -1,52 +1,21 @@
-/* Tests of gui_partial.c as the mixer builds it: no RC2FX_PACING_TEST, so the
- * CPU rules in cpu_eligible are always on, and the real cpu_rotate_regions
- * strip loop runs with whatever rotate_rect the target has (NEON on aarch64).
- * The LD_AUDIT harness in gui_pacing_test.cpp cannot do that: its paint
- * stand-ins are x86-64, and its build gates the CPU path behind a test knob.
+/* Standalone harness for gui_partial.c compiled without RC2FX_PACING_TEST, so
+ * cpu_eligible() and the real strip-staged rotate_rect (NEON on aarch64) run
+ * unconditionally. Includes gui_partial.c directly against a fake GE2D ioctl
+ * and verifies every destination pixel against an independent reference
+ * rotation after each frame.
  *
- * This file includes gui_partial.c and supplies the few things gui_pacing.c
- * gives it, a stand-in GE2D behind vendor_ioctl, and the destination
- * descriptor. The stand-in GE2D rotates with its own loop (not rotate.c), and
- * after every conversion the whole destination is compared with a third,
- * plain rotation of the whole source.
- *
+ * Usage:
  *   partial_plan_test cw|ccw SEED FRAMES [fail-qbuf N | fail-selection N | stage-clock 1]
  *
- * Paints are random: meter-like groups of small rectangles, single pixels,
- * rectangles on the source's edges and corners, rectangles that hang outside
- * the source or have no area, large redraws, more rectangles than the pending
- * list holds, rejected paints, and frames with no paint. It prints one line
- * per conversion (its kind, reason and a hash of the destination) and a
- * summary; the exit status is 1 if any destination differed from the rotated
- * source. Two builds of gui_partial.c given the same arguments must print the
- * same hashes, which is how an edit to the planner or the CPU path is
- * compared with the code before it:
+ * Build:
+ *   host:    cc -O2 -Wall -Wextra -Wno-unused-function partial_plan_test.c
+ *   aarch64: zig cc -target aarch64-linux-musl -mcpu=cortex_a53 -static ...
  *
- *   cc -O2 -DPARTIAL_SOURCE='"old/gui_partial.c"' ...
- *
- * (Add -DRC2FX_GUI_RECT_PLAN3 when the old source still has the two-job
- * planner as its default.)
- *
- * Host: cc -O2 -Wall -Wextra -Wno-unused-function. aarch64: zig cc -target
- * aarch64-linux-musl -mcpu=cortex_a53 -static, run under qemu-aarch64.
- *
- * "fail-qbuf N" fails the N-th output QBUF and "fail-selection N" the N-th
- * S_SELECTION. Then the checks are: a conversion on the CPU path whose token
- * QBUF failed wrote no destination pixel, and every destination is right
- * again at its next conversion. A failed QBUF of a GE2D plan's last job is
- * the vendor's own failed submission; the pending damage is already cleared
- * there, so that case is reported and not checked.
- *
- * "stage-clock 1" replaces the clock with one that only this program moves,
- * so the times on the counters line are known exactly. The CPU rotation reads
- * the clock three times per 16-row strip: after the copy into the stage,
- * after the rotation and after the yield. Under this clock those readings are
- * 1 ms, 10 ms and 100 ms after the one before, so a rotation of S strips
- * shows S ms of staging, 10 S ms of rotation and 100 S ms inside the yield,
- * and lasts 111 S + 1 ms.
- *
- * After the summary the program prints the module's counters line, as the
- * mixer's log would hold it after the last conversion.
+ * - fail-qbuf N / fail-selection N: inject an EIO on the N-th call and verify
+ *   failed CPU token QBUFs don't modify the destination and both destinations
+ *   recover on the next pass.
+ * - stage-clock 1: deterministic clock advancing 1 ms / 10 ms / 100 ms per
+ *   strip (stage / rotate / yield) so counters-line timings are exact.
  */
 #define _GNU_SOURCE
 #include <errno.h>

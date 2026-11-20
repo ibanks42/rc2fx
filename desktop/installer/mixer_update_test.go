@@ -197,7 +197,6 @@ func TestSignedCatalogEnforcesProfileAppMinimumAndCannotBeReplaced(t *testing.T)
 	}
 }
 
-// samePayload compares two verified payloads' files and bytes.
 func samePayload(a, b *VerifiedMixerPayload) bool {
 	return maps.EqualFunc(a.bundle, b.bundle, bytes.Equal) && bytes.Equal(a.bytes, b.bytes)
 }
@@ -259,8 +258,7 @@ func TestSignedRepositoryEnforcesAuthenticityCompatibilityExpiryAndRollback(t *t
 	if _, err := repository.AcceptCached(ctx, &offer, "1.0.1", 1, profile, cache); err != nil {
 		t.Fatal(err)
 	}
-	// An already verified object owns its bytes; changing the cache cannot
-	// change what subsequent firmware preparation consumes.
+	// Cached VerifiedMixerPayload owns its bytes; mutating disk cache doesn't affect it.
 	if !samePayload(cached, verified) {
 		t.Fatal("the verified payload changed")
 	}

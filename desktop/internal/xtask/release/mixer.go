@@ -21,14 +21,13 @@ var sha256Sum = sha256.Sum256
 
 const mixerSignUsage = "usage: ./xtask mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY TIMESTAMP_KEY"
 
-// Package is `mixer-package DIR`: the exact standalone bytes that the signed
-// update repository serves, in a new directory.
+// Package implements `xtask mixer-package DIR`, writing the standalone mixer
+// payload, compatibility metadata, notices, and SHA256SUMS into a new directory.
 func Package(destination string) error {
 	return packageIn(task.Root(), destination, licenses.WriteLicenses)
 }
 
 func packageIn(root, destination string, writeLicenses func(string) error) error {
-	// Create a new directory: never replace an already packaged release.
 	envelope, err := embed.Expected(root, true)
 	if err != nil {
 		return asTask(err)
@@ -107,8 +106,6 @@ func packageIn(root, destination string, writeLicenses func(string) error) error
 	return nil
 }
 
-// loadRoot reads, parses and verifies a root file; readErr words a read
-// failure.
 func loadRoot(path string, readErr func(error) error) (*tufsign.Root, []byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -124,8 +121,8 @@ func loadRoot(path string, readErr func(error) error) (*tufsign.Root, []byte, er
 	return root, data, nil
 }
 
-// releaseKeys loads release-role keys, refusing a root key or a key the
-// root does not authorize for its role.
+// releaseKeys loads the targets/snapshot/timestamp keys and rejects any root
+// key or key not authorized for its role.
 func releaseKeys(root *tufsign.Root, roles [3][2]string) ([]tufsign.Signer, error) {
 	var signers []tufsign.Signer
 	for _, pair := range roles {
@@ -155,8 +152,8 @@ func releaseKeys(root *tufsign.Root, roles [3][2]string) ([]tufsign.Signer, erro
 	return signers, nil
 }
 
-// MixerTargetValue is the signed claims as the mixer's serde writes its
-// MixerTarget.
+// MixerTargetValue encodes m to match the JSON shape expected by the Rust
+// MixerTarget deserializer.
 func MixerTargetValue(m *installer.MixerTarget) core.Value {
 	profiles := make([]core.Value, len(m.FirmwareProfiles))
 	for i, p := range m.FirmwareProfiles {
@@ -171,9 +168,8 @@ func MixerTargetValue(m *installer.MixerTarget) core.Value {
 	)
 }
 
-// Sign is `mixer-sign`: sign only a fully packaged, checked release. Key
-// creation and root changes are deliberately separate from this operation
-// and from the build worker.
+// Sign implements `xtask mixer-sign`, signing a packaged mixer release into a
+// new metadata directory.
 func Sign(args []string) error {
 	if len(args) != 8 {
 		return task.Error(mixerSignUsage)
@@ -195,8 +191,7 @@ func Sign(args []string) error {
 	if err != nil {
 		return err
 	}
-	// A release stays authorized for as long as the root trusts its key, so
-	// nothing needs signing with the targets key between releases.
+	// Targets expire with the root so routine renewals never need the targets key.
 	targetsExpires := root.Expires
 	if !expires.Before(targetsExpires) {
 		return task.Error("discovery metadata must expire before the targets and root")
@@ -315,8 +310,6 @@ func Sign(args []string) error {
 	return nil
 }
 
-// writeStaged writes a signed repository to a private directory beside out
-// and renames it to out.
 func writeStaged(out string, signed *tufsign.Repository) error {
 	parent := outputParent(out)
 	if err := os.MkdirAll(parent, 0o777); err != nil {
@@ -337,8 +330,6 @@ func writeStaged(out string, signed *tufsign.Repository) error {
 	return nil
 }
 
-// extension is what follows the last dot of a name that
-// does not start with its only dot.
 func extension(name string) string {
 	at := -1
 	for i := len(name) - 1; i > 0; i-- {

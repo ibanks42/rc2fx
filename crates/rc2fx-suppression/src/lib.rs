@@ -129,7 +129,7 @@ pub struct WorkerOptions {
 /// CPU 2. Measured on the mixer with DeepFilterNet3 on mic-1 and USB
 /// playback (2026-10-29), xruns per minute:
 ///
-/// - RR 5 floating over CPUs 1–3, f16 weights: about 2,700. The worker
+/// - RR 5 floating over CPUs 1-3, f16 weights: about 2,700. The worker
 ///   migrated about 2,000 times a second and never missed a deadline.
 /// - nice 0 on CPU 3: 119, and under the RR 50 threads sharing the core the
 ///   worker missed 57% of its deadlines, so most frames played dry.
@@ -800,20 +800,13 @@ impl Worker {
         dry + (output - dry) * wet
     }
 
-    /// `process_sample` for a block, in place: `samples[i]` with `wet[i]`
-    /// becomes the output sample, and `voice[i]` is what `voice()` returns
-    /// after it. Output, voices, counters and the endpoint's state are bit
-    /// for bit those of the per-sample calls.
+    /// In-place block version of `process_sample`, matching its output, voice
+    /// scores, counters, and state bit-for-bit.
     ///
-    /// A sample that holds an event goes through `process_sample` itself:
-    /// the first sample of an output frame (where a result is chosen), the
-    /// sample that completes an input frame (queue push and wake), and
-    /// every sample while a late result is still awaited or after `finish`.
-    /// The samples between events run a plain loop with none of those
-    /// checks; a run also ends on the dry ring's last slot, where the loop
-    /// wraps the ring itself. The worker-failure flag is still read at
-    /// every sample that would play a result, so a failure takes effect at
-    /// the same sample as in `process_sample`.
+    /// Samples with events (output frame start, input frame completion, awaiting
+    /// a late result, or post-`finish`) fall through to `process_sample`; runs
+    /// between events use a tight loop bounded by the dry ring wrap. Worker
+    /// failure is still checked per sample so fallback starts on the exact sample.
     pub fn process_block(&mut self, samples: &mut [f32], wet: &[f32], voice: &mut [Option<f32>]) {
         assert!(wet.len() >= samples.len() && voice.len() >= samples.len());
         let frame = self.geometry.frame_samples;
@@ -1095,17 +1088,11 @@ fn run(
     }
 }
 
-/// After a frame's result is published and counted: the model's bounded
-/// preparation steps for the next frame, while no input is queued, no stop
-/// is requested and the worker has not failed. Checked before each step
-/// only, so input arriving during a step waits for it to finish (the next
-/// frame then uses what it prepared). Never spins or sleeps.
+/// Runs bounded model preparation steps for the next frame while idle (no input
+/// queued, no stop requested, not failed). Never spins or sleeps.
 ///
-/// `process_cpu_end` is the thread CPU reading taken when the frame's
-/// `process` returned; the pass's CPU time is counted from it, which saves a
-/// clock system call per frame and adds the publication in between to
-/// `pass_cpu`. With `time_steps` off the pass reads the wall clock twice,
-/// whatever the number of steps.
+/// `process_cpu_end` is the thread CPU reading taken right after `process`
+/// returned, avoiding an extra clock syscall per frame.
 fn prepare(
     model: &mut dyn Model,
     input: &Consumer,

@@ -1,7 +1,9 @@
-//! Optional non-main callback measurement. Slots are never reused in a process:
-//! failed/replaced registrations may still have an in-flight callback. Exhaustion
-//! forwards stock unchanged. This deliberately trades finite coverage for lifetime
-//! safety without introducing callback locks or reclamation machinery.
+//! Optional timing wrapper for non-main JACK client callbacks.
+//!
+//! Slots are never recycled for the lifetime of the process because a failed or
+//! replaced registration might still have an in-flight callback. Once all slots
+//! are taken, further registrations pass through unwrapped. This avoids callback
+//! locks or hazard-pointer reclamation at the cost of a fixed slot cap.
 use super::{Process, timing};
 use std::{
     ffi::{c_int, c_void},
@@ -98,8 +100,8 @@ pub fn active() -> bool {
 pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("RC2FX_CLIENT_TIMING").is_some_and(|v| v == "1"))
 }
-// Registration is serialized by the caller's CONTROL lock. Callback data is
-// published before JACK receives the wrapper, and never mutated afterwards.
+// Serialized by the caller's CONTROL lock. Slot fields are published with
+// Release before JACK sees the wrapper and stay immutable thereafter.
 fn reserve(
     slots: &'static [Slot],
     client: usize,
@@ -150,10 +152,9 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
         slot.active_start.store(started, Ordering::Release);
     }
     let cycle = super::probe::cycle_start(slot.client.load(Ordering::Relaxed));
-    // A flight capture needs wall-clock boundaries, not per-thread CPU clocks.
-    // Sampling CPU clocks on every client's aligned cycle perturbs the deadline.
-    // Unarmed, CPU clocks are read only with the bench gauges, as in the main
-    // callback.
+    // Flight captures only record wall-clock boundaries; reading per-thread CPU
+    // clocks across every aligned client callback would skew the deadline.
+    // When unarmed, CPU sampling follows the bench gauge setting like the main callback.
     let frame = (token == 0).then(|| slot.timing.begin(frames, super::gauges::enabled()));
     let before = frame.as_ref().map(timing::Frame::before_native);
     let result = unsafe { callback(frames, slot.argument.load(Ordering::Relaxed) as *mut c_void) };
@@ -183,7 +184,7 @@ unsafe extern "C" fn process(frames: u32, opaque: *mut c_void) -> c_int {
     result
 }
 pub fn snapshot() -> serde_json::Value {
-    // File access stays on the report thread; audio only reads atomics.
+    // Only the report thread touches the filesystem; audio callbacks read atomics.
     let token = if active() {
         std::fs::read_to_string("/run/rc2fx-flight-arm")
             .ok()
@@ -313,8 +314,7 @@ mod tests {
         let (second, arg2) = reserve(slots, 42, vendor, 123, Some("usb1out".into())).unwrap();
         assert_ne!(arg1, arg2, "client-pointer reuse gets a distinct slot");
         assert!(reserve(slots, 43, vendor, 123, None).is_none());
-        // Both old and new callback arguments remain valid even if the caller
-        // rejected or replaced a registration, or closed and reused its client.
+        // Both old and new slots stay valid after replacement or client reuse.
         assert_eq!(unsafe { first(112, arg1) }, -7);
         assert_eq!(unsafe { second(112, arg2) }, -7);
         assert_eq!(slots[0].name.get().map(String::as_str), Some("usb1out"));

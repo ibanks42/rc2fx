@@ -55,7 +55,6 @@ func readConfig(t *testing.T, name string) []byte {
 	return data
 }
 
-// testHeader is a GNU tar header for a test entry.
 func testHeader(t *testing.T, name string, kind byte, size int) *tarHeader {
 	t.Helper()
 	var h tarHeader
@@ -112,8 +111,8 @@ func testTar(t *testing.T, path string, items []tarItem) {
 	put(t, path, out.Bytes())
 }
 
-// catalogJSON is profiles as a catalog file, in the full form the strict
-// parser needs: the fields Profile leaves out come from the real catalog.
+// Fill in fields omitted from Profile by cloning a matching entry from the
+// real catalog so strict parsing succeeds.
 func catalogJSON(t *testing.T, profiles []Profile) []byte {
 	t.Helper()
 	real, err := sjson.Value(readConfig(t, "firmware-profiles.json"))
@@ -288,7 +287,6 @@ type fixture struct {
 
 const serial = "fixture-device"
 
-// with runs f with the fake locked.
 func (x *fixture) with(f func(*fake)) {
 	x.p.mu.Lock()
 	defer x.p.mu.Unlock()
@@ -360,8 +358,6 @@ func writeRuntime(t *testing.T, root string, catalog []byte) {
 	}
 }
 
-// newFixture is an installer folder with a runtime bundle and prepared
-// firmware, and one normal-mode mixer on USB.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	root, err := filepath.Abs(t.TempDir())
@@ -534,8 +530,7 @@ func TestTheHelperRefusesAnImageRewrittenTogetherWithItsCacheRecord(t *testing.T
 		t.Fatal("device accessed")
 	}
 
-	// A same-user process rewrites the archive and everything that describes
-	// it, so every hash in the user's folder agrees.
+	// Simulate a same-user process rewriting archive + cache metadata together.
 	must(t, x.engine.anchorPrepared(&x.prepared))
 	forged := []byte("forged firmware")
 	work := x.engine.Work
@@ -569,8 +564,7 @@ func TestOnlyTheHelperThatRecordsAnImageCanFlashIt(t *testing.T) {
 	anchors := t.TempDir()
 	x := newFixture(t)
 
-	// The desktop process has no root-owned folder: recording does nothing,
-	// and its own check passes, so only the helper can notice.
+	// Unprivileged desktop process skips anchoring; only the helper catches it.
 	desktop := func() *Engine { return WithPlatform(x.root, x.engine.Work, x.p) }
 	must(t, desktop().anchorPrepared(&x.prepared))
 	must(t, desktop().verifyPrepared(&x.prepared))

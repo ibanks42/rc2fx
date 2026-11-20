@@ -2,10 +2,9 @@
 
 package vpkc
 
-// The Go side of Velopack's callbacks. They run on Velopack's threads (the
-// source's on the download thread it starts), never on the UI thread, and
-// touch no gk state: the app reads their effects through selfupdate's
-// Checks and Progress.
+// Go callbacks exported to Velopack. These run on Velopack's worker threads
+// (never the UI thread) and communicate back through selfupdate.Checks and
+// selfupdate.Progress.
 
 /*
 #include <stdlib.h>
@@ -51,7 +50,7 @@ func rc2fxProgress(user unsafe.Pointer, progress C.size_t) {
 	to := progressTo
 	progressMu.Unlock()
 	if to != nil {
-		// The library widens its i16 to size_t; this narrows it back.
+		// velopack_libc widens int16 to size_t; narrow it back.
 		to(int16(uint64(progress)))
 	}
 }

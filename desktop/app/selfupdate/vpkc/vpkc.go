@@ -1,26 +1,18 @@
 //go:build velopack
 
-// Package vpkc is Velopack's C library (velopack_libc 1.3.39-g8d2844f, the
-// version vpk packs with: .github/scripts/setup-vpk.sh) for package
-// selfupdate: the startup hooks, and an UpdateManager over selfupdate's
-// SignedFeed through Velopack's custom update source.
+// Package vpkc wraps Velopack's C library (velopack_libc 1.3.39-g8d2844f,
+// matching .github/scripts/setup-vpk.sh) for startup hooks and UpdateManager
+// backed by selfupdate.SignedFeed.
 //
-// Built only with the `velopack` tag, after desktop/scripts/fetch-velopack.sh
-// has put the library in desktop/third_party/velopack. Without the tag
-// (vpkc_none.go) a build cannot update itself and runs no hooks; release
-// packaging must use the tag.
+// Enabled with the `velopack` build tag after desktop/scripts/fetch-velopack.sh
+// populates desktop/third_party/velopack. Linux and macOS link statically;
+// Windows links velopack_libc.dll (shipped beside rc2fx.exe) via a MinGW
+// import library.
 //
-// Linking: the static library on Linux and macOS; on Windows the MSVC DLL,
-// shipped as velopack_libc.dll beside rc2fx.exe, through a MinGW import
-// library (or GNU ld linking the DLL itself). Only plain C crosses the
-// boundary, so the different C runtimes do not meet.
-//
-// The library itself is named by the builder in CGO_LDFLAGS
-// (-L<desktop/third_party/velopack/GOOS-GOARCH> -lvelopack_libc;
-// ./xtask app and ./xtask package add it), not by a #cgo directive here:
-// its static builds carry LLVM bitcode, and Go refuses a library with an LTO
-// section that a #cgo directive names. The directives below keep the system
-// libraries it needs.
+// -lvelopack_libc is passed via CGO_LDFLAGS by ./xtask app and ./xtask package
+// instead of a #cgo directive here, because the static archives include LLVM
+// bitcode that Go's #cgo loader rejects. The #cgo directives below supply the
+// required system libraries.
 package vpkc
 
 /*
@@ -32,7 +24,7 @@ package vpkc
 #include <stdlib.h>
 #include "Velopack.h"
 
-// In vpkc_shim.c, which can see the Go exports.
+// Defined in vpkc_shim.c.
 vpkc_update_source_t *rc2fxNewSource(void);
 void rc2fxSetUninstallHook(void);
 bool rc2fxDownloadUpdates(vpkc_update_manager_t *m, vpkc_update_info_t *u);
@@ -48,15 +40,12 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate"
 )
 
-// Open is selfupdate's Opener: Velopack's UpdateManager over feed, with
-// locator's paths or (nil) its own.
 var Open selfupdate.Opener = open
 
 var (
 	sourceOnce sync.Once
 	source     unsafe.Pointer
-	// feed is the SignedFeed the one custom source calls. Velopack advises
-	// one custom source for the app's lifetime.
+	// Velopack expects a single custom source for the process lifetime.
 	feedMu sync.Mutex
 	feed   *selfupdate.SignedFeed
 )
@@ -176,18 +165,15 @@ func (m *manager) WaitExitThenApplyUpdates(asset selfupdate.Asset, silent, resta
 	return nil
 }
 
-// RunHooks is Velopack's VelopackApp startup: first thing in main, it handles
-// --veloapp-install|updated|obsolete|uninstall <version> (runs the hook,
-// then exits the process), sets the Windows AppUserModelID and deletes old
-// packages. Updates apply only when the user chooses "Restart to update",
-// never at the next launch by itself. The locator is the private packages
-// folder the app downloads updates into (Linux). beforeUninstall runs on
-// Windows just before Velopack removes the app.
+// RunHooks must be called at the start of main. It handles Velopack's
+// --veloapp-* lifecycle flags (running the hook and exiting), sets the Windows
+// AppUserModelID, cleans up old packages, and disables auto-apply on startup
+// so updates only apply on explicit restart.
 func RunHooks(beforeUninstall func()) {
 	C.vpkc_app_set_auto_apply_on_startup(false)
 	if locator, ok := selfupdate.VelopackLocator(); ok {
 		c, free := cLocator(locator)
-		C.vpkc_app_set_locator(c) // copied
+		C.vpkc_app_set_locator(c) // Velopack copies the struct
 		free()
 	}
 	if runtime.GOOS == "windows" && beforeUninstall != nil {
@@ -199,7 +185,6 @@ func RunHooks(beforeUninstall func()) {
 
 var uninstallHook func()
 
-// lastError is vpkc_get_last_error as a selfupdate error.
 func lastError() error {
 	buf := make([]byte, 4096)
 	for {
@@ -239,7 +224,6 @@ func goAsset(a *C.vpkc_asset_t) selfupdate.Asset {
 	}
 }
 
-// cAsset is asset in C memory, for one call; free releases it.
 func cAsset(asset selfupdate.Asset) (*C.vpkc_asset_t, func()) {
 	a := (*C.vpkc_asset_t)(C.calloc(1, C.size_t(unsafe.Sizeof(C.vpkc_asset_t{}))))
 	a.PackageId = C.CString(asset.PackageID)
@@ -259,7 +243,6 @@ func cAsset(asset selfupdate.Asset) (*C.vpkc_asset_t, func()) {
 	}
 }
 
-// cLocator is config in C memory, for one call (the library copies it).
 func cLocator(config selfupdate.LocatorConfig) (*C.vpkc_locator_config_t, func()) {
 	c := (*C.vpkc_locator_config_t)(C.calloc(1, C.size_t(unsafe.Sizeof(C.vpkc_locator_config_t{}))))
 	c.RootAppDir = C.CString(config.RootAppDir)

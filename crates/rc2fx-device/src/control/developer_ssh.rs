@@ -1,11 +1,10 @@
-//! Developer SSH access for the desktop app over USB 1: status, and adding or
-//! removing RC2FX's one managed `authorized_keys` line, without reflashing.
+//! Developer SSH access over USB 1: status and adding/removing RC2FX's single
+//! managed `authorized_keys` line without reflashing.
 //!
-//! The behavior lives in `rc2fx.sh developer-ssh`; this module validates the
-//! request, runs the script off the async executor with bounded time, input
-//! and output, serializes every call, and parses the script's report. It is
-//! only reachable from the USB control API: the touchscreen socket is never
-//! given a handle. Removing the key stops new logins; open sessions stay open.
+//! Delegates to `rc2fx.sh developer-ssh` off the async executor with serialized
+//! access and bounded runtime/output. Exposed only on the USB control API (never
+//! the touchscreen socket). Removing the key blocks new logins; existing sessions
+//! stay open.
 
 use rc2fx_core::{Ed25519PublicKey, SshRequest, SshStatus};
 use std::{
@@ -164,10 +163,9 @@ impl DeveloperSsh {
     }
 }
 
-/// Run `command` in its own process group with `input` on stdin. The whole
-/// operation, including reading both streams to their end, has one
-/// `timeout`; past it the process group is killed. Output over `MAX_OUTPUT`
-/// is an error, never parsed. Blocking: call it from `spawn_blocking`.
+/// Runs `command` in its own process group with `input` on stdin under a single
+/// end-to-end `timeout`, killing the group on expiry. Output exceeding `MAX_OUTPUT`
+/// is rejected. Blocking; call from `spawn_blocking`.
 fn run_bounded(
     mut command: Command,
     input: String,

@@ -1,10 +1,6 @@
 #!/bin/sh
-# Run only in a disposable container, with the AppImage and expected version
-# passed by test-linux-packages.sh.
-#
-# The image is extracted with its own embedded runtime; the desktop app is
-# never started, no FUSE mount is made and no USB device or host setting is
-# touched. This checks the payload an AppImage user would actually receive.
+# Runs inside a disposable container via test-linux-packages.sh to inspect an
+# extracted AppImage (no FUSE mount, GUI launch, or device access).
 set -eu
 test -f /.dockerenv || test -f /run/.containerenv
 test "$#" -eq 2
@@ -63,8 +59,7 @@ test -f "$root/usr/share/icons/hicolor/scalable/apps/rc2fx.svg"
 desktop-file-validate "$root/usr/share/applications/rc2fx.desktop"
 
 say "Velopack updater and version"
-# The name carries no version, so the image must: vpk's manifest beside the
-# executable is what the app's updates read.
+# The AppImage filename is unversioned, so verify the version in vpk's sq.version manifest.
 grep -q "<id>io.github.ibanks42.rc2fx</id>" "$root/usr/bin/sq.version"
 grep -q "<version>$EXPECTED</version>" "$root/usr/bin/sq.version"
 grep -q '<channel>linux</channel>' "$root/usr/bin/sq.version"
@@ -76,9 +71,7 @@ test -s "$root/usr/share/licenses/rc2fx/LICENSES.html"
 grep -qi 'MIT' "$root/usr/share/licenses/rc2fx/LICENSES.html"
 test -d "$root/usr/lib"
 find "$root/usr/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' | grep -q .
-# linuxdeploy sets the payload's runpath relative to the executable. Reject
-# every absolute or non-$ORIGIN entry, so a mixed "$ORIGIN:/build/path" value
-# cannot sneak through.
+# Every RUNPATH/RPATH entry must be relative to $ORIGIN (reject absolute build paths).
 runpath=$(readelf -d "$root/usr/bin/rc2fx" \
     | sed -n 's/.*(\(RUNPATH\|RPATH\)).*\[\(.*\)\]/\2/p')
 if [ -n "$runpath" ]; then
@@ -95,11 +88,8 @@ if [ -n "$runpath" ]; then
 fi
 
 say "dynamic libraries and the embedded mixer envelope"
-# The image intentionally leaves the desktop runtime's system libraries to the
-# host. Install that explicit baseline, but not the xkb libraries the image
-# must bundle, so a missing bundled library is still caught. libresolv and
-# libutil are glibc's own: Go's net package links the first under cgo, and
-# Velopack's C library the second.
+# Allow only core host libraries (not xkb, which must be bundled).
+# libresolv comes from Go's cgo net package; libutil comes from velopack_libc.
 baseline='libc.so.6 libm.so.6 libgcc_s.so.1 libxcb.so.1 libfontconfig.so.1 libwayland-client.so.0 libvulkan.so.1 libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2 libutil.so.1 ld-linux-x86-64.so.2'
 needed=$(readelf -d "$root/usr/bin/rc2fx" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
 for library in $needed; do
@@ -111,9 +101,8 @@ for library in $needed; do
         *) echo "AppImage needs $library, but does not bundle it and it is not in the host baseline" >&2; exit 1 ;;
     esac
 done
-# Exercise the AppImage runtime, AppRun and rewritten ELF before exporting a
-# developer library path: a real user gets AppRun's own wiring. The helper
-# entry exits 2 before any device, file or GUI work; never pass ROOT/WORK.
+# Test AppRun's own library wiring before setting LD_LIBRARY_PATH.
+# --installer-helper with no args exits 2 without touching devices, files, or GUI.
 unset LD_LIBRARY_PATH
 APPIMAGE_EXTRACT_AND_RUN=1 expect_installer_helper_exit_2 "$app" --installer-helper
 export LD_LIBRARY_PATH="$root/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -125,8 +114,7 @@ if grep -E 'not found|undefined symbol|version .* not found' /tmp/rc2fx-ldd.txt;
 fi
 expect_embedded_envelope "$root/usr/bin/rc2fx"
 
-# The AppImage contains the app and its notices only; the mixer payload must
-# stay inside the executable, not appear as sidecars.
+# Mixer binaries belong inside the embedded payload, never as loose files in the AppImage.
 if find "$root" -name 'librc2fx_native.so' -o -name 'rc2fxd' -o -name 'mixer-release.json' | grep -q .; then
     echo 'AppImage contains mixer payload sidecars' >&2
     exit 1

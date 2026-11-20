@@ -1,61 +1,30 @@
-/* GUI frame monitor and partial conversion (LD_AUDIT module).
+/* LD_AUDIT frame monitor and partial GE2D conversion for RØDECaster Pro II
+ * GUI 1.7.7 (rc_gui_juce, SHA-256 aa92a92d...). Wraps selected PLT imports
+ * of the main executable via la_symbind64 and only acts at pinned call sites;
+ * no instructions are patched and nothing is written to GUI memory.
+ * Partial conversion lives in gui_partial.c (included below).
  *
- * For the RØDECaster Pro II GUI 1.7.7 only (rc_gui_juce, SHA-256 aa92a92d…).
- * No instruction is patched and nothing is drawn. Through la_symbind64 it
- * wraps some of the GUI executable's OWN imported calls (libraries' calls are
- * not bound), and acts only at pinned call sites; every other call passes
- * straight through. gui_partial.c (included below) does the partial
- * conversion.
+ * Pinned call sites:
+ *  - Frame pump (RodecasterDRMThread::run, 0x7d08a0): pthread_mutex_lock at
+ *    0x7d09d0 (ret 0x7d09d4), unlock after GE2D at 0x7d09e0, drmModeAtomicCommit
+ *    at 0x7d0ae4. Tracks pass intervals and per-frame stage timestamps.
+ *  - Message thread (WaitableEvent::wait, 0x930100): condition_variable::wait
+ *    at 0x930158 (ret 0x93015c), called from repaint sites 0x7cf79c / 0x7dd094.
+ *  - Repaint paths A (0x7cf5d0) and B (0x7dcf20): pthread_mutex_lock returning
+ *    to 0x7cf7b0 / 0x7dd0a8, with dirty RectangleList pointer/count at
+ *    x29 + 0x60/+0x6c (A) or +0x50/+0x5c (B). Global 0x12ec610 points to the
+ *    active destination descriptor (DMABUF fd at +0x24, FB ID at +0x20).
  *
- *  - The frame pump (juce::RodecasterDRMThread::run, 0x7d08a0) locks the
- *    repaint mutex through pthread_mutex_lock at 0x7d09d0 (returns to
- *    0x7d09d4) before each GE2D conversion and DRM commit. At that point the
- *    pump holds no lock: its native event wait has returned and the repaint
- *    mutex is not yet taken. Each pass is counted, and the intervals between
- *    passes go into a histogram; the pump never waits here.
- *  - The message thread waits for the pump inside juce::WaitableEvent::wait
- *    (0x930100), whose imported std::condition_variable::wait is at 0x930158
- *    (returns to 0x93015c), before each paint (callers 0x7cf79c and
- *    0x7dd094, returning to 0x7cf7a0 / 0x7dd098). Those waits are counted
- *    and timed.
+ * Env:
+ *  - RC2FX_GUI_PACING: "observe", a partial mode (see gui_partial.c; production
+ *    uses "partial-cw"), or "off"/unset.
+ *  - RC2FX_GUI_PACING_LOG: /run/... path (created O_EXCL, rotated at 4 MiB).
+ *  - RC2FX_GUI_PACING_QUIET=1 (production): logs only start, first-pass,
+ *    fallback/disable events, and periodic counters (every 60 s).
  *
- * Per frame (when logging): the pump's request (before the lock), lock
- * acquired, conversion done (its pthread_mutex_unlock at 0x7d09e0) and the
- * blocking drmModeAtomicCommit at 0x7d0ae4 (start, end), one "frame" line
- * after the commit returns, so frames can be joined with audio events on
- * CLOCK_MONOTONIC. At most 20000 frame lines.
- *
- * RC2FX_GUI_PACING: "observe" (count and time, convert nothing), a partial
- * conversion mode (see gui_partial.c; the mixer runs "partial-cw"), or
- * "off"/unset (bind nothing); anything else leaves the module inactive.
- * RC2FX_GUI_PACING_LOG: a new file under /run/ (created O_EXCL) for one stats
- * line at most every 5 s (written by the pump thread outside any lock), at the
- * first pass through the pump seam ("first-pass": the launcher's readiness
- * signal) and at exit; rotated at 4 MiB.
- *
- * It also logs every paint's dirty region and each conversion's destination.
- * The repaint callbacks (0x7cf5d0 path A, 0x7dcf20 path B) copy their dirty
- * RectangleList into a malloc'd array of {x, y, w, h} int32 entries, then
- * lock the repaint mutex (returning to 0x7cf7b0 / 0x7dd0a8); at that point
- * the array and its count are in the caller's frame at x29 + 0x60 / + 0x6c
- * (A) or + 0x50 / + 0x5c (B). One "paint" line per paint gives the count,
- * bounding box, summed area and up to 16 rectangles. Each "frame" line adds
- * the destination's DMABUF fd and FB ID: global 0x12ec610 points to the
- * current destination descriptor (fd at +0x24, FB ID at +0x20), which the
- * pump reads into x22 before its lock and swaps only after the commit.
- * Nothing is written to the GUI's memory.
- *
- * RC2FX_GUI_PACING_QUIET=1 (production): the log gets only the "start" and
- * "first-pass" lines, every fallback / disable with its reason, and one
- * "counters" line at most every 60 s (written by the pump at its next pass);
- * no frame, paint, convert, verify or stats lines, and no exit line. Unset or
- * any other value: the full diagnostic log above.
- *
- * The module adds no cancellation point to the pump (its log writes and
- * waits are raw syscalls), and the GUI's errno is saved and restored around
- * the module's own work. Host tests build this with -DRC2FX_PACING_TEST,
- * which matches the sites by symbol name instead of by the pinned offsets and
- * skips the executable hash; everything else is the production code.
+ * All log writes and waits use raw syscalls to avoid introducing cancellation
+ * points, and the GUI's errno is saved/restored around module work.
+ * -DRC2FX_PACING_TEST matches sites by symbol name and skips the binary hash.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -215,23 +184,13 @@ static int open_log(const char *path) {
     return fd;
 }
 
-/* A verbose log would reach the cap within hours; instead of stopping, the
- * full log becomes "<log>.1" (replacing an older one) and a fresh log is
- * opened, so /run holds at most 2x the cap. Raw syscalls only: no libc
- * stdio and no cancellation point (renameat/openat/dup3/close, like write
- * below).
+/* Rotate "<log>" to "<log>.1" and reopen "<log>" so /run holds at most 2x cap.
+ * Uses raw syscalls only (no stdio, no cancellation points).
  *
- * log_fd keeps its number for the whole run: the new file is opened into a
- * temporary descriptor and dup3 replaces the live one. Closing it instead
- * would free the number for the GUI to open something else, and a thread
- * already past the log_rotating check below would write a log line into that
- * unrelated file. With dup3 a late line lands in the old file or the new
- * one, both this log. Should the rename or the reopen fail, writes continue
- * in the renamed file and the failure is counted.
- *
- * One thread rotates; another thread's line is dropped meanwhile, counted.
- * A writer that was mid-count when the byte count reset only makes the next
- * rotation a little early. */
+ * Replaces log_fd in place via dup3 instead of closing it first: closing
+ * log_fd would let another GUI thread reuse the fd number and receive an
+ * in-flight log write. Only one thread rotates at a time; concurrent writers
+ * drop and count their line. */
 static void rotate_log(void) {
     int expected = 0;
     if (!atomic_compare_exchange_strong(&log_rotating, &expected, 1)) {
@@ -329,10 +288,8 @@ static void log_paint(int path, const uint8_t *fp) {
         return;
     }
     partial_paint(list, count);
-    /* Everything below only builds the "paint" line and the paint_outside
-     * count, which the "dirty-" stats line prints. Quiet mode and a run
-     * without a log write neither, so the paint stops here, before any
-     * formatting. This runs on the message thread under the repaint mutex. */
+    /* Stop before formatting in quiet mode or when no log is open (runs on
+     * the message thread under the repaint mutex). */
     if (log_fd < 0 || quiet) return;
     int64_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
     uint64_t area = 0;

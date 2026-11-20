@@ -7,11 +7,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// idYes is WinUser.h IDYES, which x/sys/windows does not define.
+// WinUser.h IDYES (missing from x/sys/windows).
 const idYes = 6
 
-// OfferCleanup asks whether to delete RC2FX's data too, and does so if the
-// user agrees.
+// OfferCleanup prompts the user to optionally delete RC2FX's local data.
 func OfferCleanup() {
 	targets := existing()
 	if len(targets) == 0 {

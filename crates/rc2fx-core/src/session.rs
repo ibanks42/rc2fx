@@ -96,11 +96,9 @@ pub struct TargetMeter {
     pub output_peak: f64,
     pub rms: f64,
     pub gain_reduction: f64,
-    /// Highest suppression-model voice score in the window, 0 to 1 (0 without
-    /// suppression).
+    /// Peak voice score (0..=1) from the suppression model in this window, or 0 when suppression is off.
     pub voice: f64,
-    /// How far open the voice gate was at its most open in the window, 0
-    /// (fully closed) to 1. 1 while the gate is off; 0 without suppression.
+    /// Peak voice gate openness (0 = closed, 1 = open) in this window. 1 when the gate is off; 0 when suppression is off.
     pub gate_open: f64,
     pub clipped: u64,
     pub spectrum: Vec<f64>,
@@ -153,23 +151,20 @@ pub struct Performance {
     pub callback_budget_ns: u64,
     pub worker_budget_ns: u64,
     pub xruns: u64,
-    /// `calls == 0` means callback timing was not sampled in this build, not
-    /// that callbacks take no time.
+    /// `calls == 0` means callback timing wasn't sampled in this build, not zero duration.
     pub callback: Timing,
-    /// The suppression worker's wall and CPU time; zeros when the path has no
-    /// worker. Cumulative for the engine generation, across worker rebuilds.
+    /// Suppression worker wall and CPU time (all zeros if no worker). Cumulative
+    /// across worker rebuilds within the current engine generation.
     pub worker_wall: Timing,
     pub worker_cpu: Timing,
-    /// Helper routines that finished after their frame's cycle had ended, and
-    /// callbacks that found the helper still busy. Absent from a mixer that
-    /// predates them (and from the JACK path).
+    /// Helper routines that finished past their cycle deadline, and callbacks
+    /// that found the helper still busy. Omitted by older firmware and on the JACK path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_late: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_stalls: Option<u64>,
-    /// Slowest audio callback, and slowest suppression worker turnaround
-    /// (wall time), within roughly the last 10 s of audio. Absent from a
-    /// mixer that predates them, or before any timing in the window.
+    /// Slowest audio callback and slowest suppression worker wall-time turnaround
+    /// over roughly the last 10 s of audio. Omitted by older firmware or before any samples.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback_recent_max_ns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,16 +177,13 @@ pub struct Meter {
     pub revision: u64,
     pub generation: u64,
     pub synthetic: bool,
-    /// Bumped by each diagnostics reset. The counters below are relative to
-    /// that reset, so a reader rebaselines its fault tracking when this
-    /// changes. 0 means "never reset" (and is what an older mixer sends).
+    /// Incremented on each diagnostics reset so clients know to rebaseline
+    /// their counter deltas. 0 means never reset (or older firmware).
     #[serde(default, rename = "diagnosticsEpoch")]
     pub diagnostics_epoch: u64,
-    /// How long this engine generation has been running when the reading
-    /// was made, on the daemon's monotonic clock: from the start of the audio
-    /// process that runs the engine (the mixer's own process), or from the
-    /// moment it was first reported Running when that start cannot be read.
-    /// Lets a reader place the startup window. Absent from older mixers.
+    /// Uptime of this engine generation on the daemon's monotonic clock
+    /// (measured from audio process start, or from when it first reached `Running`
+    /// if process start time isn't readable). Omitted by older firmware.
     #[serde(
         default,
         rename = "runningForNs",

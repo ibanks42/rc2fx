@@ -1,6 +1,5 @@
-// Package trust holds the trusted root both signed repositories share: a
-// copy of config/mixer-update-root.json (a test keeps the two identical),
-// embedded here because go:embed cannot reach outside this module.
+// Package trust embeds config/mixer-update-root.json (kept in sync by tests)
+// for both the mixer and app TUF repos, since go:embed can't cross module roots.
 package trust
 
 import (
@@ -11,5 +10,5 @@ import (
 //go:embed mixer-update-root.json
 var root []byte
 
-// Root is the trusted root for mixer and app releases.
+// Root returns a copy of the embedded TUF root metadata.
 func Root() []byte { return bytes.Clone(root) }

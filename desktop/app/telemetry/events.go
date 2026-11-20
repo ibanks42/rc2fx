@@ -1,9 +1,5 @@
 package telemetry
 
-// The Diagnostic events window without drawing: the event log the main
-// window fills and the events window shows, the filter groups, and the
-// wording of each row.
-
 import (
 	"fmt"
 	"strings"
@@ -15,13 +11,13 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-// Capacity is how many events the window keeps.
+// Capacity is the maximum number of diagnostic event rows retained in memory.
 const Capacity = 2048
 
-// Poll is how often an open window asks the mixer for new events.
+// Poll is how often an open diagnostic events window polls the mixer.
 const Poll = 500 * time.Millisecond
 
-// Group is a filter group, in chip order.
+// Group categorizes diagnostic events for filter chips, in display order.
 type Group int
 
 const (
@@ -34,10 +30,10 @@ const (
 	GroupOther
 )
 
-// GroupAll is every group, in chip order.
+// GroupAll lists all filter groups in chip order.
 var GroupAll = [7]Group{GroupXruns, GroupHelper, GroupTiming, GroupFallbacks, GroupDrops, GroupStale, GroupOther}
 
-// Label is the group's chip text.
+// Label returns the filter chip label for g.
 func (g Group) Label() string {
 	switch g {
 	case GroupXruns:
@@ -56,7 +52,7 @@ func (g Group) Label() string {
 	return "Other"
 }
 
-// GroupOf is the group a kind falls into.
+// GroupOf maps a diagnostics event kind to its filter group.
 func GroupOf(kind core.DiagnosticsKind) Group {
 	switch kind {
 	case core.DiagnosticsKindXrun:
@@ -73,11 +69,10 @@ func GroupOf(kind core.DiagnosticsKind) Group {
 	case core.DiagnosticsKindStaleResults:
 		return GroupStale
 	}
-	// UsbGadget, Clipped, Lost, Reset, Other.
 	return GroupOther
 }
 
-// KindLabel is the text of a kind's chip.
+// KindLabel returns the badge text for a diagnostics event kind.
 func KindLabel(kind core.DiagnosticsKind) string {
 	switch kind {
 	case core.DiagnosticsKindXrun:
@@ -122,8 +117,7 @@ func KindLabel(kind core.DiagnosticsKind) string {
 	return "other"
 }
 
-// KindTone is how a kind's chip is colored: the app maps it to Danger,
-// Muted or Warn (kindColor).
+// KindTone selects the semantic color for an event kind badge.
 type KindTone int
 
 const (
@@ -132,7 +126,7 @@ const (
 	KindToneMuted
 )
 
-// KindToneOf is how a kind's chip is colored.
+// KindToneOf returns the badge color tone for kind.
 func KindToneOf(kind core.DiagnosticsKind) KindTone {
 	switch kind {
 	case core.DiagnosticsKindXrun, core.DiagnosticsKindLost, core.DiagnosticsKindClipped:
@@ -145,12 +139,12 @@ func KindToneOf(kind core.DiagnosticsKind) KindTone {
 
 func msText(ns uint64) string { return fmt.Sprintf("%.2f ms", float64(ns)/1_000_000.) }
 
-// XrunNote is what JACK's xrun delay does and does not mean.
+// XrunNote clarifies what JACK's backend delay figure does and does not mean.
 const XrunNote = "This is JACK’s last backend delay, not a measurement tied to this notification. It does not establish audio loss or audibility."
 
-// DetailsLines is what an event measured, one phrase per figure, for its
-// expanded row. periodNs is the engine's block period, nil when unknown.
-// Each kind's valueNs measures something different; none is a bare "value".
+// DetailsLines formats the measurement phrases shown when an event row is
+// expanded. Each event kind interprets ValueNs differently; periodNs is the
+// engine block period when known.
 func DetailsLines(kind core.DiagnosticsKind, details *core.EventDetails, periodNs *uint64) []string {
 	intoCycle := func(ns uint64) string {
 		if periodNs != nil {
@@ -211,94 +205,73 @@ func DetailsLines(kind core.DiagnosticsKind, details *core.EventDetails, periodN
 	return lines
 }
 
-// Message is the row's sentence. The mixer's own wording is kept except for
-// xruns, whose figures it reads ambiguously.
+// Message formats the row's headline sentence, normalizing xruns to avoid
+// misleading mixer copy and capitalizing the first character of other messages.
 func Message(kind core.DiagnosticsKind, mixer string) string {
 	if kind == core.DiagnosticsKindXrun {
 		return "JACK xrun notification · impact unknown"
 	}
-	// "the callback ended late" reads as a sentence once capitalized.
 	first, size := utf8.DecodeRuneInString(mixer)
 	if size == 0 {
 		return mixer
 	}
-	// unicode.ToUpper is the simple mapping: it leaves a first 'ß' as it
-	// is. The mixer's sentences start in ASCII.
 	return string(unicode.ToUpper(first)) + mixer[size:]
 }
 
-// Row is one row of the window: an event, or (Lost) events the mixer dropped,
-// older than the ones after it, before they could be read.
+// Row is one entry in the diagnostic events list, either an event or a marker
+// for events dropped on the mixer before they could be polled.
 type Row struct {
-	// Lost marks a lost-events row; Count is how many.
-	Lost  bool
-	Count uint64
-
-	Seq  uint64
-	Kind core.DiagnosticsKind
-	// Path is the path's display name, when the event belongs to one.
-	Path *string
-	// At is when it happened, on this computer's clock.
+	Lost    bool
+	Count   uint64
+	Seq     uint64
+	Kind    core.DiagnosticsKind
+	Path    *string
 	At      time.Time
 	Message string
-	// Details is what it measured, one phrase per figure.
 	Details []string
 }
 
-// EventLog is the events read so far, shared by the main window (which
-// fills it) and the events window (which shows it).
+// EventLog holds polled diagnostic events and UI filter state shared between
+// the main window and the events window.
 type EventLog struct {
-	// rows newest first.
-	rows []Row
-	// NextSeq is the sequence number to ask for next; nil until the first
-	// read.
-	NextSeq   *uint64
-	Hidden    map[Group]bool
-	Expanded  *uint64
-	Connected bool
-	// Since is when the counters and events were last reset, if this app saw
-	// it.
-	Since *time.Time
-	// Epoch is the mixer's diagnostics epoch, from its meters: above 0 after
-	// a reset.
-	Epoch uint64
-	// PeriodNs is the engine's block period, which cycle positions are
-	// measured in.
+	rows         []Row // newest first
+	NextSeq      *uint64
+	Hidden       map[Group]bool
+	Expanded     *uint64
+	Connected    bool
+	Since        *time.Time
+	Epoch        uint64
 	PeriodNs     *uint64
 	ConfirmReset bool
-	// Error is why the last read failed; "" for none.
-	Error string
-	// Startup is the engine's first seconds of audio, on this computer's
-	// clock, when known. Bursts there are expected, so they are hidden unless
-	// asked.
+	Error        string
+	// Engine startup interval on the host clock; events inside it are hidden unless ShowStartup is set.
 	Startup     *[2]time.Time
 	ShowStartup bool
 }
 
-// NewEventLog is an empty log with no group hidden.
+// NewEventLog returns an empty log with all groups visible.
 func NewEventLog() EventLog { return EventLog{Hidden: map[Group]bool{}} }
 
-// Rows is the log, newest first. Read only.
+// Rows returns the stored rows newest-first. Callers must not mutate the slice.
 func (l *EventLog) Rows() []Row { return l.rows }
 
-// Clear forgets every event, as after a reset or a new connection.
+// Clear discards all stored events and resets pagination state.
 func (l *EventLog) Clear() {
 	l.rows = nil
 	l.NextSeq = nil
 	l.Expanded = nil
 }
 
-// Receive adds events read in one reply, oldest first, and any the mixer
-// lost before them.
+// Receive prepends an oldest-first batch of events (plus any lost-event marker)
+// into the newest-first log, clearing prior rows on a reset event.
 func (l *EventLog) Receive(lost uint64, events []Row) {
-	// Pushed in order; the log is newest first, so they go in front reversed.
 	var pushed []Row
 	if lost > 0 {
 		pushed = append(pushed, Row{Lost: true, Count: lost})
 	}
 	for _, row := range events {
 		if !row.Lost && row.Kind == core.DiagnosticsKindReset {
-			// The mixer clears its list at a reset; so does the window.
+			// Mirror the mixer clearing its ring buffer on reset.
 			l.rows = nil
 			pushed = pushed[:0]
 			at := row.At
@@ -316,9 +289,8 @@ func (l *EventLog) Receive(lost uint64, events []Row) {
 	l.rows = rows
 }
 
-// ReceivePage takes one page from the mixer, received at received; name
-// gives a path's display name. The one place the wire format meets the
-// window.
+// ReceivePage converts a wire DiagnosticsEvents page into display rows and
+// appends them to the log, substituting path IDs with display names via name.
 func (l *EventLog) ReceivePage(page core.DiagnosticsEvents, received time.Time, name func(id string) string) {
 	rows := make([]Row, 0, len(page.Events))
 	for _, raw := range page.Events {
@@ -331,7 +303,7 @@ func (l *EventLog) ReceivePage(page core.DiagnosticsEvents, received time.Time, 
 		if event.Path != nil {
 			id := *event.Path
 			display := name(id)
-			// The mixer names paths by id ("3 output drops on mic-1").
+			// Mixer messages embed raw target IDs (e.g. "3 output drops on mic-1").
 			mixer = strings.ReplaceAll(event.Message, id, display)
 			path = &display
 		}
@@ -349,8 +321,7 @@ func (l *EventLog) ReceivePage(page core.DiagnosticsEvents, received time.Time, 
 	l.NextSeq = &next
 }
 
-// XrunsBetween is the xruns read from the mixer that happened from from
-// until until.
+// XrunsBetween counts xrun events in [from, until).
 func (l *EventLog) XrunsBetween(from, until time.Time) uint64 {
 	var n uint64
 	for _, row := range l.rows {
@@ -361,15 +332,13 @@ func (l *EventLog) XrunsBetween(from, until time.Time) uint64 {
 	return n
 }
 
-// duringStartup is whether row happened while the engine was starting.
 func (l *EventLog) duringStartup(row *Row) bool {
 	return !row.Lost && l.Startup != nil && !row.At.Before(l.Startup[0]) && row.At.Before(l.Startup[1])
 }
 
-// counted: startup rows are left out of everything unless shown.
 func (l *EventLog) counted(row *Row) bool { return l.ShowStartup || !l.duringStartup(row) }
 
-// Count is how many counted events fall in group.
+// Count returns the number of counted events in group.
 func (l *EventLog) Count(group Group) int {
 	n := 0
 	for i := range l.rows {
@@ -381,7 +350,7 @@ func (l *EventLog) Count(group Group) int {
 	return n
 }
 
-// StartupCount is how many events fell in the startup window.
+// StartupCount returns how many events fell inside the startup window.
 func (l *EventLog) StartupCount() int {
 	n := 0
 	for i := range l.rows {
@@ -392,7 +361,7 @@ func (l *EventLog) StartupCount() int {
 	return n
 }
 
-// Visible is whether row shows under the current filters.
+// Visible reports whether row passes the current startup and group filters.
 func (l *EventLog) Visible(row *Row) bool {
 	if !l.counted(row) {
 		return false
@@ -400,7 +369,7 @@ func (l *EventLog) Visible(row *Row) bool {
 	return row.Lost || !l.Hidden[GroupOf(row.Kind)]
 }
 
-// ToggleGroup shows a hidden group or hides a shown one.
+// ToggleGroup flips the visibility of group.
 func (l *EventLog) ToggleGroup(group Group) {
 	if l.Hidden == nil {
 		l.Hidden = map[Group]bool{}
@@ -412,7 +381,7 @@ func (l *EventLog) ToggleGroup(group Group) {
 	}
 }
 
-// ToggleExpanded opens an event's details, or closes them when open.
+// ToggleExpanded expands seq, or collapses it if already expanded.
 func (l *EventLog) ToggleExpanded(seq uint64) {
 	if l.Expanded != nil && *l.Expanded == seq {
 		l.Expanded = nil
@@ -421,14 +390,13 @@ func (l *EventLog) ToggleExpanded(seq uint64) {
 	l.Expanded = &seq
 }
 
-// HostTime is a mixer time (nanoseconds on its clock) on this computer's
-// clock, given the mixer's clock when the reply was made and when it
-// arrived.
+// HostTime maps a mixer monotonic timestamp onto the host clock using the
+// reply's mixer timestamp (nowNs) and host arrival time (received).
 func HostTime(atNs, nowNs uint64, received time.Time) time.Time {
 	return received.Add(-nanos(num.SatSub(nowNs, atNs)))
 }
 
-// Ago is "just now", "12 s ago", "4 min ago", "2 h ago".
+// Ago formats a relative age such as "just now", "12 s ago", "4 min ago", or "2 h ago".
 func Ago(at, now time.Time) string {
 	seconds := uint64(max(now.Sub(at), 0) / time.Second)
 	switch {
@@ -442,12 +410,11 @@ func Ago(at, now time.Time) string {
 	return fmt.Sprintf("%d h ago", seconds/3600)
 }
 
-// Clock is a row's time of day: "20:41:07.123" (chrono's %H:%M:%S%.3f).
+// Clock formats at as local wall-clock time with milliseconds ("15:04:05.000").
 func Clock(at time.Time) string { return at.Local().Format("15:04:05.000") }
 
-// SinceLabel is "since 20:41:07 (reset)", "since the last reset" (one this
-// app did not see) or "since the engine started"; epoch is the meter's
-// diagnostics epoch.
+// SinceLabel describes when counters started based on a known reset time or
+// the diagnostics epoch.
 func SinceLabel(since *time.Time, epoch uint64) string {
 	switch {
 	case since != nil:

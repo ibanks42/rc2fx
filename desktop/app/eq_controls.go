@@ -1,9 +1,7 @@
 package app
 
-// The EQ page: its heading (stereo sides, Import / Export, the
-// switch), the graph, the band table with the overall gains, and the
-// selected band's popover over the graph. The band helpers that do not draw
-// are in edit/eq.go.
+// EQ stage view: header (stereo linking, import/export, toggle), band table,
+// overall gains, and the floating band editor popover.
 
 import (
 	"fmt"
@@ -17,19 +15,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// EQ page sizes: the band table's and the band popover's width.
 const (
-	BandTableWidth float32 = 280
-	// QColumnWidth fits a Q of three decimals, and its text field while it
-	// is typed.
-	QColumnWidth float32 = 56
-	PopoverWidth float32 = 300
-	// NarrowTableHeight is the table's height under the graph.
+	BandTableWidth    float32 = 280
+	QColumnWidth      float32 = 56 // wide enough for 3-decimal Q values + inline input
+	PopoverWidth      float32 = 300
 	NarrowTableHeight float32 = 230
 )
 
-// popoverBand is the band whose popover is open: which channel, which side
-// and which band (by ID, so reordering keeps it).
+// popoverBand identifies the open band popover by band ID so reordering preserves it.
 type popoverBand struct {
 	target  string
 	channel core.Channel
@@ -45,8 +38,6 @@ func (a *App) eqControls(cx *gk.Cx) gk.Element {
 	if a.importDraft != nil {
 		page = page.Child(a.importPanel(a.importDraft, cx))
 	}
-	// The graph and the table fill the rest of the page: side by side, or
-	// the table under the graph in a narrow window.
 	if a.narrow() {
 		return page.Child(gk.VFlex(s.Flex1, s.MinH0).Gap(px(18)).
 			Child(gk.Div(s.Flex1, s.WFull).MinH(px(240)).Child(a.eqGraph(cx))).
@@ -57,8 +48,6 @@ func (a *App) eqControls(cx *gk.Cx) gk.Element {
 		Child(a.bandTable(cx).W(px(BandTableWidth)).Style(s.HFull)))
 }
 
-// eqHead is the page's heading: its title (how to edit is its tooltip), the
-// stereo sides, the Import / Export menu and the switch.
 func (a *App) eqHead(cx *gk.Cx) gk.Element {
 	target := a.target()
 	about := "Up to 32 bands. Drag a point, scroll on it for Q, double-click the graph to add a band, click a point to edit it."
@@ -97,8 +86,6 @@ func (a *App) eqHead(cx *gk.Cx) gk.Element {
 		Child(a.effectSwitch(target, core.EffectEQ))
 }
 
-// eqSides is both sides (one EQ for left and right), or each side on its
-// own. Rejoining two different sides keeps one of them, so it asks which.
 func (a *App) eqSides(cx *gk.Cx) gk.Element {
 	linked := a.target().EQ.RightBands == nil
 	side := func(id, label string, channel core.Channel) gk.StatefulDivEl {
@@ -139,10 +126,6 @@ func (a *App) eqSides(cx *gk.Cx) gk.Element {
 		Child(side("eq-right", "Right", core.ChannelRight))
 }
 
-// bandTable is every band as a row (number, type, frequency, gain and Q),
-// then the overall gains and the add button. Click a value to type it, a
-// row's number to turn the band on or off, its type to open its popover;
-// drag a row onto another to reorder.
 func (a *App) bandTable(cx *gk.Cx) gk.DivEl {
 	bands := a.target().EQ.Channel(a.channel)
 	off := !a.target().EQ.Enabled
@@ -186,12 +169,8 @@ func (a *App) bandTable(cx *gk.Cx) gk.DivEl {
 	return gk.VFlex(s.FlexShrink0).Child(header).Child(list).Child(foot)
 }
 
-// bandColumns is the table's row layout, shared by its heading and rows.
 func bandColumns(row gk.DivEl) gk.DivEl { return row.Gap(px(8)).Px(px(10)) }
 
-// bandRow is one band in the table. The selected band's row is tinted, a
-// band that is off has a hollow number, and the value being typed shows its
-// text field.
 func (a *App) bandRow(index int, band core.Band) gk.Element {
 	selected := index == a.band
 	row := bandColumns(gk.HFlex(s.ItemsCenter, s.CursorPointer)).H(px(30)).Rounded(px(7)).TextSize(px(13))
@@ -214,8 +193,7 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 			return cell.Style(s.TextRight).TextColor(rgb(Dim)).Child(txt("–"))
 		}
 		if selected && a.editingValue != nil && *a.editingValue == parameter {
-			// The box gives the padding: the kit's input keeps its own
-			// otherwise, and a three-decimal Q would scroll out of sight.
+			// Strip the input's built-in horizontal padding so 3-decimal Q values don't clip.
 			if editor := a.editorFor(parameter); editor != nil {
 				return cell.Child(gk.Div(s.Border1).Px(px(4)).Rounded(px(5)).Bg(rgb(0x0b0e16)).
 					BorderColor(rgb(Accent)).Child(gk.Input(editor.input).Appearance(false).Style(s.Px0)))
@@ -267,8 +245,6 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 		a.selectBand(cx, index)
 		a.notify(cx)
 	})
-	// The previews are made with the editors (rebuildBandPreviews), one per
-	// possible band.
 	if index < len(a.bandPreviews) {
 		stateful = stateful.OnDrag(gk.DragValue{ID: dragID(dragBand, index), Text: bandSummary(&band)},
 			a.bandPreviews[index])
@@ -295,8 +271,6 @@ func (a *App) bandRow(index int, band core.Band) gk.Element {
 		})
 }
 
-// overallGain is one of the EQ's overall gains in the table's foot: click
-// to type it, scroll on it to step it.
 func (a *App) overallGain(label string, parameter Parameter, off bool) gk.Element {
 	editor := a.editorFor(parameter)
 	value := parameter.Get(a.target(), a.channel, a.band)
@@ -341,7 +315,6 @@ func (a *App) overallGain(label string, parameter Parameter, off bool) gk.Elemen
 		Child(txt(label)).Child(view)
 }
 
-// selectBand makes band index the selected one.
 func (a *App) selectBand(cx *gk.Cx, index int) {
 	if a.band != index {
 		a.band = index
@@ -349,7 +322,6 @@ func (a *App) selectBand(cx *gk.Cx, index int) {
 	}
 }
 
-// openBandPopover selects band index and opens its popover over the graph.
 func (a *App) openBandPopover(cx *gk.Cx, index int) {
 	a.selectBand(cx, index)
 	bands := a.target().EQ.Channel(a.channel)
@@ -361,8 +333,6 @@ func (a *App) openBandPopover(cx *gk.Cx, index int) {
 	a.notify(cx)
 }
 
-// popoverIndex is the band whose popover is open, if it is still the
-// selected band of the channel and side on screen.
 func (a *App) popoverIndex() (int, bool) {
 	p := a.bandPopover
 	if p == nil || a.effect != core.EffectEQ || p.target != a.target().ID || p.channel != a.channel {
@@ -375,8 +345,6 @@ func (a *App) popoverIndex() (int, bool) {
 	return a.band, true
 }
 
-// addBand adds a bell, at a point on the graph when given (frequency,
-// gain).
 func (a *App) addBand(cx *gk.Cx, at *[2]float64) {
 	channel := a.channel
 	band, err := a.target().EQ.AddBand(channel)
@@ -391,8 +359,6 @@ func (a *App) addBand(cx *gk.Cx, at *[2]float64) {
 	a.notify(cx)
 }
 
-// selectedBand is the selected band of the active channel, nil when there
-// is none.
 func (a *App) selectedBand() *core.Band {
 	bands := a.target().EQ.ChannelMut(a.channel)
 	if a.band < 0 || a.band >= len(*bands) {
@@ -401,9 +367,6 @@ func (a *App) selectedBand() *core.Band {
 	return &(*bands)[a.band]
 }
 
-// bandPopoverPanel is the selected band's editor, over the graph beside its
-// point: its type and filter design, switches, the settings that type uses,
-// and removal. A press outside it closes it, as Esc does.
 func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 	kind := band.BandType
 	types := pills()
@@ -495,8 +458,6 @@ func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 				})))
 	return panel.Occlude().
 		OnMouseDownOut(func(cx *gk.Cx, _ gk.MouseEvent) {
-			// The type and design tooltips and the slider drags stay inside;
-			// any other press closes it.
 			if a.bandPopover == nil {
 				gk.Quiet(cx)
 				return
@@ -506,15 +467,12 @@ func (a *App) bandPopoverPanel(band core.Band, cx *gk.Cx) gk.DivEl {
 		})
 }
 
-// bandNumber is a band's number on its color.
 func bandNumber(index int, size float32) gk.DivEl {
 	return gk.HFlex(s.FlexShrink0, s.RoundedFull, s.ItemsCenter, s.JustifyCenter, s.FontSemibold).Size(px(size)).
 		Bg(rgb(bandColor(index))).TextSize(px(size * 0.48)).TextColor(rgb(0x0b0d14)).
 		Child(txt(fmt.Sprint(index + 1)))
 }
 
-// bandBadge is bandNumber for a band that may be off: a hollow ring in its
-// color when off.
 func bandBadge(index int, size float32, on bool) gk.DivEl {
 	if on {
 		return bandNumber(index, size)
@@ -524,20 +482,15 @@ func bandBadge(index int, size float32, on bool) gk.DivEl {
 		Child(txt(fmt.Sprint(index + 1)))
 }
 
-// typeIcon is the filter type's shape, as a small line.
 func typeIcon(kind core.BandType, color uint32) gk.Element {
 	return gk.Div(s.FlexShrink0).W(px(18)).H(px(14)).
 		Child(gk.Plot(gk.NewPlotLine(edit.TypeIconPoints(kind, 18, 14), 1.5, rgb(color))))
 }
 
-// bandSummary is a dragged band's preview text: its type and frequency.
 func bandSummary(band *core.Band) string {
 	return fmt.Sprintf("%s · %s", band.BandType.Label(), formatHz(band.Frequency))
 }
 
-// bandPreview is DraggedBand's Render: the band chip under the pointer
-// while band index is dragged (a view, as a drag preview is). It reads the band when drawn; rebuildBandPreviews and
-// notifyBandPreview mark it when the band changes.
 func (a *App) bandPreview(index int) gk.Element {
 	summary := ""
 	if bands := a.target().EQ.Channel(a.channel); index < len(bands) {
@@ -549,9 +502,8 @@ func (a *App) bandPreview(index int) gk.Element {
 		Child(txt(summary))
 }
 
-// rebuildBandPreviews makes the band chips' drag previews once (one view
-// per possible band; a view function may not make views) and marks them
-// all to be drawn again.
+// rebuildBandPreviews allocates the drag-preview views once (views cannot be
+// created during render) and marks them dirty.
 func (a *App) rebuildBandPreviews(cx *gk.Cx) {
 	if a.bandPreviews == nil {
 		a.bandPreviews = make([]gk.View, core.MaxBands)
@@ -565,8 +517,6 @@ func (a *App) rebuildBandPreviews(cx *gk.Cx) {
 	}
 }
 
-// notifyBandPreview marks band index's drag preview after its settings
-// changed.
 func (a *App) notifyBandPreview(cx *gk.Cx, index int) {
 	if index >= 0 && index < len(a.bandPreviews) {
 		gk.Notify(cx, a.bandPreviews[index])

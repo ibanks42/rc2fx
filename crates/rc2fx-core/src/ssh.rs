@@ -1,60 +1,57 @@
 //! Developer SSH access managed over USB 1 without reflashing.
 //!
-//! RØDE's firmware runs OpenSSH with key-only root login and an empty
-//! `authorized_keys`. RC2FX can add one key of its own to that file, marked as
-//! RC2FX's, and remove it again; every other key is reported and left alone.
-//! Removing the key stops new logins; it does not end sessions already open.
+//! Stock firmware runs OpenSSH with key-only root login and an empty
+//! `authorized_keys`. RC2FX manages a single tagged line in that file and leaves
+//! all other keys untouched (though still reported). Removing the key blocks
+//! new logins without killing active sessions.
 
 use serde::{Deserialize, Serialize};
 
-/// The comment that marks the one `authorized_keys` line RC2FX manages.
+/// Comment marker identifying the single `authorized_keys` line managed by RC2FX.
 pub const SSH_MANAGED_MARKER: &str = "rc2fx-managed-developer-key";
-/// The longest public key line accepted, far above an Ed25519 key's length.
+/// Maximum accepted public key line length (well above an Ed25519 key).
 pub const MAX_SSH_PUBLIC_KEY: usize = 512;
 
-/// What the mixer reports about SSH access. `managed`, `unmanagedKeys` and
-/// `hostKeys` are required, so a malformed reply is an error rather than a
-/// confident "off"; unknown extra fields are accepted.
+/// Mixer SSH access state. `managed`, `unmanagedKeys`, and `hostKeys` are
+/// required so a malformed reply fails rather than reading as "off"; unknown
+/// extra fields are ignored.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshStatus {
-    /// The RC2FX-managed key is installed.
+    /// Whether the RC2FX-managed key is installed.
     pub managed: bool,
-    /// `SHA256:…` of the managed key, when installed.
+    /// `SHA256:...` fingerprint of the managed key, if installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_fingerprint: Option<String>,
-    /// Other `authorized_keys` lines, such as a key built into an earlier
-    /// flash. RC2FX never changes them.
+    /// Count of other `authorized_keys` lines (e.g. baked into an earlier image).
     pub unmanaged_keys: u32,
-    /// The mixer's SSH server public host keys, for pinning.
+    /// Mixer SSH server public host keys for host pinning.
     pub host_keys: Vec<String>,
-    /// Whether the SSH server was seen running; `None` if that could not be
-    /// determined.
+    /// Whether sshd was observed running, or `None` if unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_running: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
 
-/// `PUT api/v1/ssh`.
+/// Payload for `PUT api/v1/ssh`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshRequest {
     pub enabled: bool,
-    /// Required when enabling: one plain `ssh-ed25519` public key line.
+    /// Required when enabling: a single `ssh-ed25519` public key line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_key: Option<String>,
 }
 
-/// An Ed25519 public key in its canonical `ssh-ed25519 BASE64` form, without
-/// options or comment.
+/// Canonical `ssh-ed25519 BASE64` public key with options and comment stripped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ed25519PublicKey(String);
 
 impl Ed25519PublicKey {
-    /// Accept exactly one line `ssh-ed25519 BASE64 [comment]` whose blob is a
-    /// well-formed Ed25519 key. Options, other key types, control characters,
-    /// extra lines and oversized input are refused. The comment is dropped.
+    /// Parses a single `ssh-ed25519 BASE64 [comment]` line and validates its wire blob.
+    /// Rejects key options, other key types, control characters, multi-line input,
+    /// and oversized lines; strips any trailing comment.
     pub fn parse(text: &str) -> crate::Result<Self> {
         let fail = |why: &str| Err(crate::CoreError(format!("invalid SSH public key: {why}")));
         if text.len() > MAX_SSH_PUBLIC_KEY {
@@ -93,8 +90,7 @@ impl Ed25519PublicKey {
         &self.0
     }
 
-    /// OpenSSH's fingerprint, `SHA256:` and the unpadded base64 of the
-    /// SHA-256 of the key blob, as `ssh-keygen -l` prints it.
+    /// OpenSSH `SHA256:<unpadded-base64>` fingerprint, matching `ssh-keygen -l`.
     pub fn fingerprint(&self) -> String {
         use sha2::{Digest, Sha256};
         let blob = decode_base64(&self.0["ssh-ed25519 ".len()..]).expect("checked by parse");
@@ -154,8 +150,7 @@ pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    // A real Ed25519 public key, generated for these tests; its private half
-    // was discarded.
+    // Throwaway Ed25519 test key (private half discarded).
     pub(crate) const KEY: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEPzD7gW9u5+SC5iq8gzujWEOTBQO1CbVCLO8fAOGkip";
 
@@ -167,7 +162,7 @@ mod tests {
 
     #[test]
     fn the_fingerprint_matches_ssh_keygen() {
-        // `ssh-keygen -lf` of this key printed this fingerprint.
+        // Expected value from `ssh-keygen -lf`.
         assert_eq!(
             Ed25519PublicKey::parse(KEY).unwrap().fingerprint(),
             "SHA256:QbAgxtEX0z3ZCUzJ86NO6a0PYcnvrkRmVh0+cMm05TY"
@@ -208,12 +203,12 @@ mod tests {
         let text = serde_json::to_string(&status).unwrap();
         assert_eq!(serde_json::from_str::<SshStatus>(&text).unwrap(), status);
         assert!(text.contains("\"unmanagedKeys\":1"));
-        // Newer fields are tolerated by an older reader...
+        // Unknown future fields are ignored.
         let newer: SshStatus =
             serde_json::from_str(r#"{"managed":false,"unmanagedKeys":0,"hostKeys":[],"future":1}"#)
                 .unwrap();
         assert!(!newer.managed);
-        // ...but a reply missing what the status means is an error, never "off".
+        // Missing required fields must fail rather than default to "off".
         for bad in [
             "{}",
             "null",

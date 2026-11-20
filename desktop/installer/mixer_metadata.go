@@ -34,7 +34,7 @@ type CatalogCache struct {
 
 var defaultCatalogCache CatalogCache
 
-// VerifiedCatalog is a firmware catalog the signed metadata names.
+// VerifiedCatalog holds a TUF-verified firmware catalog and its expiry.
 type VerifiedCatalog struct {
 	catalog        Catalog
 	bytes          []byte
@@ -43,7 +43,6 @@ type VerifiedCatalog struct {
 	expires        time.Time
 }
 
-// Catalog is the verified catalog while its authorization lasts.
 func (v *VerifiedCatalog) Catalog() (*Catalog, error) {
 	if !time.Now().Before(v.expires) {
 		return nil, mixerError("firmware catalog authorization expired; check for updates again")
@@ -117,12 +116,10 @@ const (
 	targetsURL   = "https://github.com/ibanks42/rc2fx/releases/download/"
 )
 
-// trustedRoot is the compiled-in root.
 var trustedRoot = trust.Root()
 
-// MixerOffer is an exact signed offer, safe to pass between the app and
-// helper. The helper still retrieves trusted metadata and checks every field
-// before accepting it.
+// MixerOffer describes a signed mixer release passed between the desktop app
+// and helper. The helper re-verifies all fields against trusted TUF metadata.
 type MixerOffer struct {
 	_        struct{}    `serde:"deny_unknown_fields"`
 	Target   string      `json:"target"`
@@ -131,19 +128,15 @@ type MixerOffer struct {
 	Metadata MixerTarget `json:"metadata"`
 }
 
-// Equal compares every field, the metadata by MixerTarget.Equal.
 func (o *MixerOffer) Equal(other *MixerOffer) bool {
 	return o.Target == other.Target && o.SHA256 == other.SHA256 && o.Length == other.Length && o.Metadata.Equal(&other.Metadata)
 }
 
-// RawMetadata is a release's signed metadata exactly as published, for a
-// mixer that checks it itself (an in-place update). Each role is its
-// file's text: the snapshot and timestamp sign the bytes of the files they
-// list.
+// RawMetadata carries verbatim TUF role files for on-device verification
+// during an in-place update.
 type RawMetadata struct {
 	_ struct{} `serde:"deny_unknown_fields"`
-	// Root is every root, oldest first: the mixer follows a key rotation from
-	// the root it was built with.
+	// Root versions oldest first so the mixer can follow key rotations.
 	Root      []string `json:"root"`
 	Timestamp string   `json:"timestamp"`
 	Snapshot  string   `json:"snapshot"`
@@ -155,10 +148,9 @@ const (
 	maxRoots         = 8
 )
 
-// FetchRawMetadata fetches the published role files byte for byte. The
-// mixer verifies them against its own trusted root; this
-// only makes sure they belong together, retrying when a release was
-// published between two reads.
+// FetchRawMetadata downloads the published TUF role files verbatim and checks
+// that timestamp, snapshot, and targets belong to the same publication (retrying
+// if a release landed mid-fetch). The mixer verifies signatures on-device.
 func FetchRawMetadata() (*RawMetadata, error) {
 	if folder, ok := devRepository(); ok {
 		return assemble(func(name string) (*string, error) {
@@ -218,7 +210,6 @@ func FetchRawMetadata() (*RawMetadata, error) {
 	return assemble(fetch)
 }
 
-// assemble is the role files fetch returns, checked to belong together.
 func assemble(fetch func(string) (*string, error)) (*RawMetadata, error) {
 	required := func(name string) (string, error) {
 		text, err := fetch(name)
@@ -264,8 +255,8 @@ func assemble(fetch func(string) (*string, error)) (*RawMetadata, error) {
 	return nil, mixerError("signed metadata kept changing while it was read; try again")
 }
 
-// lists is whether listing names file with the length and SHA-256 (where
-// given) of content, as TUF's timestamp and snapshot do.
+// lists reports whether a timestamp or snapshot JSON document references name
+// with matching length and SHA-256 (when specified).
 func lists(listing, name, content string) bool {
 	value, err := sjson.Value([]byte(listing))
 	if err != nil {
@@ -321,8 +312,6 @@ func equalFoldASCII(a, b string) bool {
 	return true
 }
 
-// checkRepositoryURL: the two addresses updates may come from, over plain
-// HTTPS.
 func checkRepositoryURL(u *url.URL, host string) error {
 	if !tuf.OfficialURL(u, host) {
 		return mixerError("update repository URLs must use the official HTTPS hosts")
@@ -330,7 +319,7 @@ func checkRepositoryURL(u *url.URL, host string) error {
 	return nil
 }
 
-// MixerConfigured is false in a checkout without a trust root.
+// MixerConfigured reports whether this build has a mixer trust root configured.
 func MixerConfigured() bool {
 	return string(bytes.TrimSpace(trustedRoot)) != "null"
 }
@@ -340,7 +329,7 @@ func official(ctx context.Context, work string) (*MixerRepository, error) {
 		return nil, mixerError("this app has no configured mixer release trust root")
 	}
 	if folder, ok := devRepository(); ok {
-		// Its own floors, so a test root never meets the official one's.
+		// Separate state dir so dev rollback floors don't mix with production.
 		return openMixerRepository(ctx, tuf.Folders{Metadata: filepath.Join(folder, "metadata"), Targets: folder},
 			trustedRoot, filepath.Join(work, "mixer-metadata-dev"))
 	}
@@ -360,9 +349,8 @@ func official(ctx context.Context, work string) (*MixerRepository, error) {
 }
 
 func metadataDirectory(work string) (string, error) {
-	// The Linux helper must not let a desktop-controlled symlink redirect the
-	// metadata store's writes as root. Its rollback state is independent and
-	// root-owned.
+	// On Linux, keep the privileged helper's TUF state in a root-owned dir so
+	// a user-controlled symlink in work can't redirect root writes.
 	path, err := helperDirectory("mixer-updates")
 	if err != nil {
 		return "", err

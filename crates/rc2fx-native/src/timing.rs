@@ -1,24 +1,22 @@
-//! Callback timing. Wall clocks cover every callback. Thread CPU clocks are read
-//! only while the bench gauges are on, once in `CPU_SAMPLE_EVERY` callbacks:
-//! `CLOCK_THREAD_CPUTIME_ID` is a system call on the mixer (the arm64 vDSO does
-//! not serve it), four of them per sampled callback. Recording is bounded,
-//! allocation/lock/wait free. The original callback includes buffer hooks;
-//! owned is pre/post processing only.
+//! Lock-free, allocation-free audio callback timing histograms.
+//!
+//! Wall time is measured on every callback. Thread CPU time is only sampled
+//! when bench gauges are enabled, once every `CPU_SAMPLE_EVERY` callbacks,
+//! because `CLOCK_THREAD_CPUTIME_ID` isn't in the arm64 vDSO and costs 4
+//! syscalls per sampled callback. `native_wall` covers the vendor callback
+//! (including buffer hooks); `owned_*` covers our pre/post DSP work.
 use rc2fx_native_control::{CallbackTiming, Timing};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
-/// With the bench gauges on, the callbacks between CPU-clock samples. A prime,
-/// so that the samples spread over every phase of the meter stride
-/// (pipeline.rs) and of anything else periodic in the callback; a multiple of
-/// the stride would put every sample on one phase.
+/// Sampling cadence for thread CPU clocks when bench gauges are on. Prime so
+/// samples don't alias with the meter stride or other periodic callback work.
 pub const CPU_SAMPLE_EVERY: u32 = 509;
-/// What `CallbackTiming::cpu_sample_every` reports: 0 while CPU clocks are not
-/// read at all, so that an empty CPU population is not read as a sampled one.
+/// Reports 0 when CPU sampling is off so consumers don't misread zero samples.
 fn reported_sample_every(cpu_clocks: bool) -> u32 {
     if cpu_clocks { CPU_SAMPLE_EVERY } else { 0 }
 }
-/// Adds to a counter that one thread writes: a plain load and store. An atomic
-/// add is an exclusive-pair loop on the Cortex-A53, and buys nothing here.
+/// Single-writer atomic increment. Uses plain load+store to avoid Cortex-A53
+/// LL/SC retry loops when only the callback thread writes.
 fn add(counter: &AtomicU64, value: u64) {
     counter.store(counter.load(Relaxed).wrapping_add(value), Relaxed);
 }
@@ -27,8 +25,7 @@ struct Counters {
     calls: AtomicU64,
     total: AtomicU64,
     max: AtomicU64,
-    /// Worst measurement since the last control read; only the inventory takes
-    /// it. The cumulative `max` stays for the audit report.
+    /// Peak since the last inventory poll; audit reports read `max` instead.
     recent: AtomicU64,
     overruns: AtomicU64,
     errors: AtomicU64,
@@ -100,13 +97,12 @@ impl Counters {
             counter.fetch_add(value, Relaxed);
         }
     }
-    /// Carries a recent peak across a retirement, like `merge` does the maxima.
     fn merge_recent(&self, recent: u64) {
         if recent > self.recent.load(Relaxed) {
             self.recent.store(recent, Relaxed);
         }
     }
-    /// The worst measurement since the last call, and zero from then on.
+    /// Returns and clears the peak since the last call.
     fn take_recent(&self) -> u64 {
         self.recent.swap(0, Relaxed)
     }
@@ -126,8 +122,6 @@ impl Counters {
         }
     }
 }
-/// Two Timings added: calls, totals, overruns and clock errors sum, maxima
-/// take the larger, histograms add bin by bin.
 pub(crate) fn merge_timing(
     a: rc2fx_native_control::Timing,
     b: rc2fx_native_control::Timing,
@@ -167,10 +161,7 @@ impl Shared {
             native_wall: Counters::new(),
         }
     }
-    /// Starts timing one callback. `cpu_clocks`: the bench gauges are on, so
-    /// this callback may be one that also reads the thread CPU clock.
     pub fn begin(&self, frames: u32, cpu_clocks: bool) -> Frame {
-        // One callback writer per context (see Counters::record).
         let attempt = self.attempts.load(Relaxed);
         self.attempts.store(attempt.wrapping_add(1), Relaxed);
         if frames as usize != super::pipeline::FRAMES {
@@ -182,8 +173,8 @@ impl Shared {
             cpu,
         }
     }
-    /// Records the callback, and returns its exit stamp: CLOCK_MONOTONIC in
-    /// nanoseconds, or 0 if the clock is unavailable (as `monotonic`).
+    /// Finishes timing a callback and returns the exit `CLOCK_MONOTONIC` timestamp
+    /// (or 0 if the clock read failed).
     pub fn finish(&self, frame: Frame, before_native: Stamp, after_native: Stamp) -> u64 {
         let end = Stamp::exit(frame.cpu);
         self.record(frame, before_native, after_native, end);
@@ -217,8 +208,7 @@ impl Shared {
             native_wall: self.native_wall.snapshot(),
         }
     }
-    /// Adds another snapshot into this one: sums, maxima and summed bins.
-    /// Used to keep a process-wide total across context rebuilds.
+    /// Combines this snapshot with `other` to preserve totals across context rebuilds.
     pub fn merged_with(&self, other: CallbackTiming) -> CallbackTiming {
         let mut merged = self.snapshot();
         merged.attempts = merged.attempts.saturating_add(other.attempts);
@@ -232,7 +222,7 @@ impl Shared {
         merged.native_wall = merge_timing(merged.native_wall, other.native_wall);
         merged
     }
-    /// Only after native close has quiesced this context, under CONTROL.
+    /// Called under CONTROL after the native context has quiesced.
     pub fn retire_into(&self, retired: &Shared) {
         let value = self.snapshot();
         retired.attempts.fetch_add(value.attempts, Relaxed);
@@ -255,8 +245,7 @@ impl Shared {
         self.owned_cpu.reset();
         self.native_wall.reset();
     }
-    /// The worst callback wall time since the last read; only the inventory
-    /// reports it, so the audit report cannot consume the peak.
+    /// Returns and clears the worst callback wall time since the last inventory read.
     pub fn take_callback_recent(&self) -> u64 {
         self.callback_wall.take_recent()
     }
@@ -307,8 +296,7 @@ fn sum(a: Option<u64>, b: Option<u64>) -> Option<u64> {
 pub(crate) fn monotonic() -> u64 {
     now(false).unwrap_or(0)
 }
-// Clock reads made by this thread, [CLOCK_MONOTONIC, thread CPU]: tests count
-// what a callback costs with the bench gauges off and on.
+// Per-thread clock read counts [CLOCK_MONOTONIC, CLOCK_THREAD_CPUTIME_ID] for tests.
 #[cfg(test)]
 thread_local! {
     pub(crate) static CLOCK_READS: std::cell::Cell<[u64; 2]> = const { std::cell::Cell::new([0; 2]) };
@@ -324,7 +312,6 @@ fn now(cpu: bool) -> Option<u64> {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // Supported Linux clocks, fixed writable stack storage, no allocation.
     let rc = unsafe {
         libc::clock_gettime(
             if cpu {
@@ -407,8 +394,6 @@ mod tests {
     fn clock_reads() -> [u64; 2] {
         CLOCK_READS.with(std::cell::Cell::get)
     }
-    /// The recent peak is taken once, and a smaller measurement never wins.
-    /// `snapshot` reads it without consuming it; the cumulative `max` stays.
     #[test]
     fn the_recent_peak_is_taken_once_and_keeps_the_largest() {
         let counters = Counters::new();
@@ -419,12 +404,10 @@ mod tests {
         assert_eq!(counters.take_recent(), 0);
         counters.record(Some(700));
         counters.record(Some(400));
-        // A snapshot is not a reader of the peak.
         assert_eq!(counters.snapshot().max_ns, 700);
         assert_eq!(counters.take_recent(), 700);
         assert_eq!(counters.snapshot().max_ns, 700);
     }
-    /// A callback peak survives the context's retirement.
     #[test]
     fn retirement_carries_the_recent_callback_peak() {
         let counters = Shared::new();
@@ -464,13 +447,11 @@ mod tests {
             2
         );
         assert_eq!(value.owned_cpu.calls + value.owned_cpu.clock_errors, 2);
-        // Four wall reads per callback, and four CPU reads per sampled one.
+        // 4 wall reads per callback, 4 CPU reads per sampled callback.
         let after = clock_reads();
         assert_eq!(after[0] - before[0], 4 * callbacks);
         assert_eq!(after[1] - before[1], 4 * 2);
     }
-    /// Without the bench gauges no callback reads the thread CPU clock, which
-    /// is a system call on the mixer; the wire format keeps its fields, empty.
     #[test]
     fn without_the_gauges_no_cpu_clock_is_read_and_the_fields_stay_empty() {
         let callbacks = 3 * u64::from(CPU_SAMPLE_EVERY);
@@ -491,12 +472,8 @@ mod tests {
         assert_eq!(value.native_wall.calls, callbacks);
         assert_eq!(value.callback_cpu, Timing::default());
         assert_eq!(value.owned_cpu, Timing::default());
-        // 0 says CPU clocks are not sampled, where a cadence with an empty
-        // population would say they are.
         assert_eq!(reported_sample_every(false), 0);
         assert_eq!(reported_sample_every(true), CPU_SAMPLE_EVERY);
-        // The whole snapshot still serializes with every field of the wire
-        // format, and reads back.
         let json = serde_json::to_value(value).unwrap();
         for key in [
             "callbackBudgetNs",
@@ -515,16 +492,12 @@ mod tests {
         let back: CallbackTiming = serde_json::from_value(json).unwrap();
         assert_eq!(back, value);
     }
-    /// The cadence shares no factor with the meter stride, so CPU samples do
-    /// not all land on one meter phase.
     #[test]
     fn cpu_samples_cover_every_meter_phase() {
         let phases: std::collections::HashSet<u32> =
             (0..8).map(|sample| sample * CPU_SAMPLE_EVERY % 8).collect();
         assert_eq!(phases.len(), 8);
     }
-    /// The callback's end time is the exit stamp of its timing: the same
-    /// clock read, not a second one.
     #[test]
     fn finish_returns_the_exit_stamp_it_recorded() {
         let counters = Shared::new();
@@ -538,7 +511,7 @@ mod tests {
         assert!(ended >= start && ended >= after.wall.unwrap());
         assert_eq!(counters.snapshot().callback_wall.total_ns, ended - start);
     }
-    /// The counters as they were before: an atomic add for every update.
+    /// Reference implementation using fetch_add for differential testing.
     struct Reference {
         calls: AtomicU64,
         total: AtomicU64,
@@ -587,9 +560,6 @@ mod tests {
             }
         }
     }
-    /// Plain load-and-store counting gives the same snapshot as atomic adds,
-    /// for every bin boundary, clock errors, huge values that wrap the total,
-    /// and after a retirement.
     #[test]
     fn single_writer_counters_match_the_atomic_ones() {
         let reference = Reference {
@@ -637,7 +607,6 @@ mod tests {
         assert_eq!(counters.snapshot(), expected);
         assert!(expected.histogram.iter().all(|bin| *bin > 0));
         assert!(expected.clock_errors > 0 && expected.overruns > 0);
-        // Retirement still sums into the retired total and clears the source.
         let retired = Counters::new();
         retired.merge(counters.snapshot());
         retired.merge(counters.snapshot());
@@ -648,7 +617,6 @@ mod tests {
             merge_timing_wrapping(expected, expected)
         );
     }
-    /// `Counters::merge` adds with wrap-around, as its atomics do.
     fn merge_timing_wrapping(a: Timing, b: Timing) -> Timing {
         Timing {
             calls: a.calls.wrapping_add(b.calls),
@@ -659,7 +627,6 @@ mod tests {
             histogram: std::array::from_fn(|i| a.histogram[i].wrapping_add(b.histogram[i])),
         }
     }
-    /// Counted attempts are unchanged by the plain load and store.
     #[test]
     fn attempts_count_every_callback_and_choose_the_sampled_ones() {
         let callbacks = 2 * CPU_SAMPLE_EVERY + 3;

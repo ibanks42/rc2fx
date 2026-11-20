@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Decode a snapshot of the jackd error ring.
+"""Decode a jackd error ring snapshot written by rc2fx_jackerr_snapshot.
 
     jackerr_ring.py SNAPSHOT
 
-SNAPSHOT is written ON THE DEVICE by rc2fx_jackerr_snapshot (in the parent
-directory), which reads each live slot with its sequence lock. The tests'
-reference decoder; `./xtask mixer xruns` decodes the same format.
-This decoder never reads a live ring file: a raw copy cannot show whether a
-slot changed while it was copied. Prints JSON: the ring's counters as read
-and every stable record, oldest first.
+Reference decoder for tests (matches `./xtask mixer xruns`). Refuses raw live
+ring files because they lack per-slot seqlock consistency checks.
 """
 import json
 import struct

@@ -1,8 +1,5 @@
 package release
 
-// Publisher-to-client contract using disposable keys and a synthetic
-// payload.
-
 import (
 	"bytes"
 	"fmt"
@@ -18,9 +15,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// fixturePackage lays out a source tree in base with stand-in ARM64
-// binaries, and the packaged release 1.2.3 at targets/mixer-v1.2.3, as
-// mixer-package writes it. It returns the payload.
+// fixturePackage populates base with dummy ARM64 binaries and writes a
+// packaged 1.2.3 release under targets/mixer-v1.2.3.
 func fixturePackage(t *testing.T, base string) []byte {
 	t.Helper()
 	runtimeDir := filepath.Join(base, "runtime")
@@ -150,8 +146,7 @@ func TestSigningOutputVerifiesAndPreservesTheInstallerPayloadContract(t *testing
 	if _, err := repository.ReadTarget(name); err == nil {
 		t.Fatal("a tampered payload was read")
 	}
-	// Restore the payload so this failure specifically exercises catalog
-	// binding.
+	// Restore the payload so the next Sign call isolates the catalog-mismatch check.
 	mustWrite(t, filepath.Join(base, "targets", "mixer-v1.2.3", "rc2fx-mixer-1.2.3.payload"), payload)
 	mustWrite(t, filepath.Join(base, "targets", "mixer-v1.2.3", "firmware-profiles.json"), []byte("{}"))
 	if err := Sign(arguments("bad-catalog", "targets.pk8")); err == nil || !strings.Contains(err.Error(), "catalog differs") {
@@ -163,8 +158,7 @@ func TestSigningOutputVerifiesAndPreservesTheInstallerPayloadContract(t *testing
 	if runtime.GOOS == "windows" {
 		return
 	}
-	// Exercise the exact PEM files emitted by the user-facing key tool,
-	// through release signing and the client's TUF verifier.
+	// Round-trip PEM keys from createKeys through Sign and loadRepository.
 	keys := filepath.Join(base, "generated-keys")
 	if err := createKeys(keys, task.Root()); err != nil {
 		t.Fatal(err)

@@ -1,7 +1,7 @@
 package mixer
 
-// Times DeepFilterNet on the mixer over a recording (crates/rc2fx-bench) and
-// fetches the denoised audio; optionally compares a candidate weights file.
+// Benchmarks DeepFilterNet on the mixer over a recording (crates/rc2fx-bench)
+// and fetches the denoised audio, optionally comparing a candidate weights file.
 
 import (
 	"archive/tar"
@@ -126,8 +126,8 @@ func parseBenchFlags(flags []string) (passed []string, weightsPath string, err e
 	return passed, weightsPath, nil
 }
 
-// benchIn: bench is target/bench; a test passes its own, and a stand-in
-// mixer.
+// benchIn runs the benchmark using benchDir (normally target/bench) and a
+// mixer constructor (overridden in tests).
 func benchIn(bench string, mixer func() (*Mixer, error), input string, flags []string) error {
 	// Flags pass through to rc2fx-bench except --weights, whose file is
 	// uploaded and run alongside the embedded weights.

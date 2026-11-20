@@ -2,9 +2,6 @@
 
 package archive
 
-// The user who started a privileged helper with sudo or pkexec, who owns
-// the files it creates and the cache files it reads.
-
 import (
 	"errors"
 	"fmt"
@@ -15,7 +12,7 @@ import (
 	"syscall"
 )
 
-// Account is the gid and home of uid by the password database.
+// Account looks up the primary GID and home directory for uid.
 func Account(uid uint32) (uint32, string, bool) {
 	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
 	if err != nil {
@@ -28,7 +25,6 @@ func Account(uid uint32) (uint32, string, bool) {
 	return uint32(gid), u.HomeDir, true
 }
 
-// accountUID is the uid the account name has, by the password database.
 func accountUID(name string) (uint32, bool) {
 	u, err := user.Lookup(name)
 	if err != nil || !filepath.IsAbs(u.HomeDir) {
@@ -41,9 +37,10 @@ func accountUID(name string) (uint32, bool) {
 	return uint32(uid), true
 }
 
-// LocalOwner gives files created by the privileged Linux helper to the
-// invoking user, especially the SSH key that the desktop client reuses
-// later. Never change ownership of an existing file or of staged USB files.
+// LocalOwner chowns a newly created file back to the invoking user when running
+// under sudo/pkexec (needed for things like the SSH key reused by the desktop
+// client). Only call this on freshly created local files, not on existing files
+// or staged USB files.
 func LocalOwner(file *os.File) error {
 	if os.Geteuid() != 0 {
 		return nil
@@ -55,8 +52,8 @@ func LocalOwner(file *os.File) error {
 	return file.Chown(int(invoker[0]), int(invoker[1]))
 }
 
-// InvokingUser is the user (uid, gid) who started a privileged helper with
-// sudo or pkexec.
+// InvokingUser returns the (uid, gid) of the user who launched a privileged
+// helper via sudo or pkexec.
 func InvokingUser() (*[2]uint32, error) {
 	return invoker(
 		func(name string) (string, bool) { return os.LookupEnv(name) },
@@ -68,9 +65,9 @@ func InvokingUser() (*[2]uint32, error) {
 	)
 }
 
-// invoker: pkexec sets PKEXEC_UID itself, so it wins. The SUDO_* variables
-// can be inherited by anything, so they count only when the password
-// database agrees that SUDO_USER has SUDO_UID.
+// PKEXEC_UID is set directly by pkexec, so it takes precedence. SUDO_* env vars
+// can be inherited by arbitrary processes, so we only trust them when the
+// passwd database confirms SUDO_USER maps to SUDO_UID.
 func invoker(
 	variable func(string) (string, bool),
 	gidOf func(uint32) (uint32, bool),
@@ -122,7 +119,6 @@ func invoker(
 	return nil, nil
 }
 
-// parseU32 is an optional '+', then digits, within 32 bits.
 func parseU32(text string) (uint32, error) {
 	digits := text
 	if len(digits) > 0 && digits[0] == '+' {
@@ -135,8 +131,8 @@ func parseU32(text string) (uint32, error) {
 	return uint32(n), err
 }
 
-// OwnedByInvoker returns file if it belongs to the user who started a
-// privileged helper (or to root when there is none), and closes it if not.
+// OwnedByInvoker checks that file belongs to the invoking user (or root when
+// not invoked through sudo/pkexec), closing it on mismatch.
 func OwnedByInvoker(file *os.File) (*os.File, error) {
 	if os.Geteuid() != 0 {
 		return file, nil
@@ -163,7 +159,6 @@ func OwnedByInvoker(file *os.File) (*os.File, error) {
 	return file, nil
 }
 
-// invokerOwns: running as root with no invoker, the folder is root's own.
 func invokerOwns(owner uint32, invoker *uint32) bool {
 	want := uint32(0)
 	if invoker != nil {

@@ -8,9 +8,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-// level is the desk's meter scale (package app's `level`): peak amplitude as
-// a 0..1 meter position over a 60 dB range. Copied here because the desk is
-// UI.
+// Mirror of the 60 dB meter scale from package app so model tests stay UI-free.
 func level(peak float64) float32 {
 	return float32(min(max((20*math.Log10(max(peak, 1e-6))+60)/60, 0), 1))
 }
@@ -22,8 +20,6 @@ func (h *LevelHistory) lastAt() (time.Time, bool) {
 	return h.points[len(h.points)-1].at, true
 }
 
-// steady pushes count readings of peak, step apart. Returns the last one's
-// time.
 func steady(h *LevelHistory, from time.Time, step time.Duration, count int, peak float64) time.Time {
 	for i := range count {
 		h.Push(from.Add(step*time.Duration(i)), peak)

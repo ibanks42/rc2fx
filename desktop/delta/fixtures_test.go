@@ -14,8 +14,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/delta/internal/fixture"
 )
 
-// The same files are read by crates/rc2fx-delta/tests/shared_fixtures.rs;
-// `go generate ./delta` rewrites them.
+// Shared with crates/rc2fx-delta/tests/shared_fixtures.rs; regenerate with
+// `go generate ./delta`.
 const fixtureDir = "../../fixtures/delta"
 
 func caseDirs(t *testing.T, kind string) []string {
@@ -94,9 +94,9 @@ func TestSharedAcceptFixtures(t *testing.T) {
 			if !bytes.Equal(out.Bytes(), envelope) || written != uint64(len(envelope)) {
 				t.Fatal("the envelope was not rebuilt")
 			}
-			// What the encoder writes today must decode the same way. The
-			// bytes may differ from the stored delta after a zstd upgrade;
-			// regenerate the fixtures then, so the Rust test sees them.
+			// Also verify the current encoder's output round-trips. Compressed
+			// bytes may change after a zstd upgrade (regenerate fixtures then so
+			// the Rust tests pick them up).
 			hashes := map[string]string{}
 			for name, data := range installed {
 				hashes[name] = sum(data)

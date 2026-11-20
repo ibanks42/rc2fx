@@ -1,8 +1,6 @@
 package app
 
-// Importing an EQ from APO text or EasyEffects JSON (a file
-// or the clipboard), reviewing it, and exporting the channel's EQ. The file
-// logic is in edit/files.go.
+// EQ import (Equalizer APO text / EasyEffects JSON via file or clipboard) and export.
 
 import (
 	"errors"
@@ -16,9 +14,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// ImportDraft is an EQ import under review: the channel it was started
-// for, the file's text and name, the choices made so far and where they
-// leave it.
 type ImportDraft struct {
 	target  edit.ImportTarget
 	text    string
@@ -42,7 +37,6 @@ func (a *App) stageImport(target edit.ImportTarget, name, text string) {
 	a.importDraft = &ImportDraft{target: target, text: text, name: name, options: options, stage: stage}
 }
 
-// pasteEQ stages the clipboard's text as an EQ import.
 func (a *App) pasteEQ(cx *gk.Cx) {
 	if a.fileBusy {
 		return
@@ -59,8 +53,6 @@ func (a *App) pasteEQ(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// importEQ asks for an EQ file and stages it, unless the channel or its EQ
-// changed while the dialog was open.
 func (a *App) importEQ(cx *gk.Cx) {
 	if a.fileBusy {
 		return
@@ -110,8 +102,6 @@ func (a *App) importEQ(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// chosenPath is a file dialog's answer: the last path chosen, "" when it
-// was canceled, or why it could not be shown.
 func chosenPath(d gk.PathsDone) (string, error) {
 	switch d.Status {
 	case gk.DoneFailed:
@@ -124,7 +114,6 @@ func chosenPath(d gk.PathsDone) (string, error) {
 	return "", nil
 }
 
-// fileName is the last part of path, "" when it has none.
 func fileName(path string) string {
 	base := filepath.Base(path)
 	if base == "." || base == ".." || base == string(filepath.Separator) {
@@ -133,9 +122,6 @@ func fileName(path string) string {
 	return base
 }
 
-// chooseImport answers the import's question: which equalizer (selected,
-// "" to keep the current one) and which side for a mono input (nil for
-// none).
 func (a *App) chooseImport(cx *gk.Cx, selected string, channel *core.Channel) {
 	if imp := a.importDraft; imp != nil {
 		if selected != "" {
@@ -152,7 +138,6 @@ func (a *App) chooseImport(cx *gk.Cx, selected string, channel *core.Channel) {
 	a.notify(cx)
 }
 
-// finishImport replaces the channel's EQ with the reviewed import.
 func (a *App) finishImport(cx *gk.Cx) {
 	imp := a.importDraft
 	if imp == nil {
@@ -173,8 +158,6 @@ func (a *App) finishImport(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// importPanel is the import under review: the question it asks, or what it
-// will bring and the button that replaces the EQ.
 func (a *App) importPanel(imp *ImportDraft, cx *gk.Cx) gk.Element {
 	panel := gk.VFlex(s.Gap3, s.P3, s.RoundedMd).Bg(rgb(surface().Raised)).
 		Child(gk.Div(s.FontSemibold).Child(txt("Import " + imp.name)))
@@ -220,8 +203,6 @@ func (a *App) importPanel(imp *ImportDraft, cx *gk.Cx) gk.Element {
 		}))
 }
 
-// exportEQ writes the channel's EQ as EasyEffects JSON to a file the user
-// names.
 func (a *App) exportEQ(cx *gk.Cx) {
 	if a.fileBusy {
 		return

@@ -1,10 +1,8 @@
-// Package transport is RC2FX control over USB 1, owned by the desktop
-// process. It never starts a local service, uses the network or requires
-// credentials.
+// Package transport handles RC2FX control over USB 1 directly from the desktop
+// process (no local daemon, network, or credentials).
 //
-// Built with the tag mockmixer, a simulated mixer takes USB 1's place, for
-// working on the app without hardware. That build is for development only; a
-// release must talk to a real mixer.
+// With -tags mockmixer, a simulated mixer stands in for USB 1 during
+// development; release builds always talk to a real mixer.
 package transport
 
 import (

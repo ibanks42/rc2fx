@@ -1,8 +1,7 @@
-/* Host-only tests of the actual implementation. No loader entry points,
- * touch_quiet/release_barrier, device I/O or native event pump run. One close
- * wrapper is tested against a local pipe to verify forked-helper isolation.
- * INPUT_NONE fixtures assume an already-established empty-queue barrier;
- * these tests do not validate that hardware-dependent barrier itself. */
+/* Host-only tests for input and presentation state transitions in rc2fx_ui.c.
+ * Syscall hooks, touch_quiet/release_barrier, and the native event pump are not run
+ * (except one fork test for ui_close over a pipe). INPUT_NONE fixtures assume
+ * the empty-queue barrier has already completed. */
 #include "rc2fx_ui.c"
 #include <sys/wait.h>
 #include <signal.h>
@@ -35,12 +34,12 @@ static void send_report(struct Report *r,bool stock) {
     memcpy(event_frame,r->events,r->count*sizeof *event_frame);
     frame_count=r->count;
     process_frame();
-    frame_count=0; /* As in ui_read, without calling that syscall hook. */
+    frame_count=0; /* Match ui_read's reset after process_frame(). */
     CHECK(!atomic_load(&failed)&&!atomic_load(&close_requested));
     if(stock) {
         CHECK(replay_count==r->count&&replay_cursor==0);
         CHECK(memcmp(replay,r->events,r->count*sizeof *replay)==0);
-        replay_cursor=replay_count; /* All verified replay records consumed. */
+        replay_cursor=replay_count; /* Mark replayed events consumed. */
     } else {
         CHECK(replay_count==old_count&&replay_cursor==old_cursor);
         CHECK(memcmp(replay,old_replay,sizeof replay)==0);
@@ -97,8 +96,7 @@ static void reset_input(bool open,unsigned count) {
         atomic_store(&tickets[i].state,TICKET_FREE);
     }
     previous_flip=NULL;previous_flip2=NULL;
-    ui_control_visible(false); /* The real control worker is never started. */
-    /* process_frame's local gesture_slot is assigned by every new down. */
+    ui_control_visible(false); /* Control worker is not started in host tests. */
 }
 
 static struct Report mt_down(unsigned slot,int id,int x,int y,unsigned key,bool key_first) {
@@ -145,8 +143,7 @@ static void test_launcher_order(void) {
 
 static void test_queued_coordinates_and_stock_replay(void) {
     reset_input(false,0);
-    /* Misleading retained single-touch and other-slot coordinates cannot
-     * classify this complete, queued slot-3 report. No kernel query is used. */
+    /* Stale single-touch and slot-0 coordinates must not affect a queued slot-3 report. */
     raw_x=20;raw_y=1200;
     contacts[0].x=20;contacts[0].y=1200;
     struct Report down=mt_down(3,21,650,40,BTN_TOUCH,true);
@@ -159,8 +156,7 @@ static void test_queued_coordinates_and_stock_replay(void) {
     reset_input(false,0);
     raw_x=680;raw_y=650;
     contacts[0].x=680;contacts[0].y=650;
-    /* The converse: stale launcher coordinates must not steal stock input.
-     * Nonzero timestamps and ignored fields must survive byte-for-byte. */
+    /* Stale launcher coordinates must not steal stock input, and timestamps/extra fields must replay verbatim. */
     down=mt_down(0,22,100,400,BTN_TOUCH,true);
     add(&down,EV_ABS,ABS_MT_PRESSURE,37);
     send_report(&down,true);
@@ -173,8 +169,7 @@ static void test_queued_coordinates_and_stock_replay(void) {
     send_report(&up,true);
     CHECK(input_owner==INPUT_NONE&&contact_count()==0);
     CHECK(atomic_load(&wanted_view)==0);
-    /* A following UI gesture must neither replay nor alter the exhausted
-     * stock replay buffer, even when it still contains a previous report. */
+    /* A subsequent UI tap must not replay or disturb the already-drained stock buffer. */
     tap(650,40);
     CHECK(atomic_load(&wanted_view)==3&&input_owner==INPUT_DRAIN);
     puts("input_test: PASS queued coordinates and byte-exact stock replay");
@@ -231,12 +226,12 @@ static void queue_scene(unsigned index,const struct UiScene *scene) {
 
 static void test_modal_close(void) {
     reset_input(true,1);
-    tap(100,400); /* Even outside the modal, UI-owned reports never replay. */
+    tap(100,400); /* Taps outside the modal are still consumed while the panel is open. */
     CHECK(atomic_load(&wanted_view)==1&&input_owner==INPUT_NONE);
     tap(900,575);
     CHECK(atomic_load(&wanted_view)==2&&atomic_load(&presented_view)==1);
     CHECK(input_owner==INPUT_DRAIN);
-    tap(100,400); /* No stock ownership while the close is not presented. */
+    tap(100,400); /* Stay in drain until the close frame is actually presented. */
     CHECK(input_owner==INPUT_DRAIN&&atomic_load(&wanted_view)==2);
     struct UiScene closed=displayed_scene;
     closed.view=2;closed.epoch=11;closed.serial=11;
@@ -245,7 +240,7 @@ static void test_modal_close(void) {
     page_flip(-1,1,0,0,&tickets[0]);
     CHECK(atomic_load(&presented_view)==2&&atomic_load(&acknowledged_epoch)==11);
     CHECK(input_owner==INPUT_DRAIN&&atomic_load(&tickets[0].state)==TICKET_FREE);
-    tap(650,40); /* ACK alone does not establish an empty-queue barrier. */
+    tap(650,40); /* Flip ACK alone does not clear drain; the empty-queue barrier still has to run. */
     CHECK(input_owner==INPUT_DRAIN&&atomic_load(&wanted_view)==2);
     puts("input_test: PASS modal close needs a new view and remains draining after ACK");
 }
@@ -321,7 +316,7 @@ static void test_binding_identity(void) {
     a.view=0;b.view=0;
     b.page=1;b.state.count=0;b.state.revision++;
     strcpy(b.selected,"other");
-    CHECK(same_bindings(&a,&b)); /* Hidden data cannot change launcher bindings. */
+    CHECK(same_bindings(&a,&b)); /* Panel state is ignored while the panel is closed. */
     puts("input_test: PASS actual same_bindings distinguishes semantic and cosmetic changes");
 }
 
@@ -336,9 +331,8 @@ static void test_pending_binding_epoch(void) {
             next.state.presets[5]=swap;
         }
         CHECK(!same_bindings(&displayed_scene,&next));
-        /* Represent a submitted commit, not a replacement commit model. We
-         * do not call ui_commit (a syscall hook). Keep view unchanged here to
-         * isolate the production epoch guard from its separate view guard. */
+        /* Simulate a submitted commit without calling the ui_commit hook, keeping view
+         * unchanged so this exercises the epoch guard independently of the view guard. */
         next.epoch=11;next.serial=11;
         page=next.page;
         queue_scene(0,&next);
@@ -351,9 +345,9 @@ static void test_pending_binding_epoch(void) {
         page_flip(-1,1,0,0,&tickets[0]);
         CHECK(displayed_scene.page==next.page&&atomic_load(&acknowledged_epoch)==11);
         CHECK(input_owner==INPUT_DRAIN);
-        tap(350,290); /* Still quarantined until the hardware barrier. */
+        tap(350,290); /* Still draining until the post-flip barrier clears. */
         CHECK(selected_id[0]=='\0'&&input_owner==INPUT_DRAIN);
-        /* Independent post-barrier precondition; no touch_quiet syscall. */
+        /* Simulate the post-barrier state without calling touch_quiet(). */
         CHECK(contact_count()==0&&frame_count==0&&replay_cursor==replay_count);
         input_owner=INPUT_NONE;
         tap(350,290);
@@ -374,7 +368,7 @@ static void test_contact_replacement(void) {
         add(&replacement,EV_ABS,ABS_MT_SLOT,0);
         add(&replacement,EV_ABS,ABS_MT_TRACKING_ID,-1);
         add(&replacement,EV_ABS,ABS_MT_SLOT,same_slot?0:1);
-        // Include ID reuse: numeric equality must not revive an ended contact.
+        /* Reuse the same tracking ID to make sure it does not revive the ended contact. */
         add(&replacement,EV_ABS,ABS_MT_TRACKING_ID,same_slot?71:72);
         add(&replacement,EV_ABS,ABS_MT_POSITION_X,320);
         add(&replacement,EV_ABS,ABS_MT_POSITION_Y,100);
@@ -422,9 +416,8 @@ static void test_forked_helper_isolation(void) {
     int fds[2];CHECK(pipe(fds)==0);
     int (*old_close)(int)=vendor_close;
     vendor_close=close;video_fd=fds[0];touch_fd=fds[0];enabled=true;gui_pid=getpid();
-    // A fork child inherits this locked mutex, but not its owning thread.
-    // Its FD cleanup must bypass GUI state instead of deadlocking or asking
-    // the parent's real runtime supervisor to terminate the preview.
+    /* A forked child inherits the locked mutex without its owning thread, so
+     * ui_close() must skip GUI state and avoid deadlocking or faulting the parent. */
     CHECK(pthread_mutex_lock(&input_mutex)==0);
     pid_t child=fork();CHECK(child>=0);
     if(child==0) {

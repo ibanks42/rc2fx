@@ -1,10 +1,9 @@
-//! The few dense kernels the networks need. Large weights are stored as int8
-//! with one f32 scale per row and widened as they are read (NEON on AArch64);
-//! all arithmetic is f32. Elsewhere the weights are kept as the dequantized
-//! f32 values, so results match the mixer's.
+//! Dense kernels for the DeepFilterNet networks. Large weight matrices are
+//! quantized to symmetric int8 with one f32 scale per row and widened on the
+//! fly in NEON on AArch64; on other architectures they are pre-dequantized to
+//! f32 so host results match the mixer.
 
-/// A weight array: int8 with one f32 scale per `row` consecutive values
-/// (symmetric, `|q| <= 127`).
+/// Symmetric int8 weights (`|q| <= 127`) with one f32 scale per `row` elements.
 pub(crate) struct Weights {
     #[cfg(target_arch = "aarch64")]
     q: Vec<i8>,
@@ -57,11 +56,13 @@ fn dequantize_rows(q: &[i8], scale: &[f32], row: usize) -> Vec<f32> {
 mod neon {
     use std::arch::aarch64::*;
 
-    /// Four int8 weights times one scale, as an f32 vector. `p` must point
-    /// to four readable i8.
+    /// Load four int8 weights and multiply by `scale` as an f32x4.
+    ///
+    /// # Safety
+    /// `p` must point to at least 4 readable bytes.
     #[inline(always)]
     pub(super) unsafe fn w4_q8(p: *const i8, scale: f32) -> float32x4_t {
-        // SAFETY: the caller guarantees 4 readable bytes at `p`.
+        // SAFETY: caller guarantees 4 readable bytes at `p`.
         unsafe {
             let raw = (p as *const i32).read_unaligned();
             let q = vreinterpret_s8_s32(vdup_n_s32(raw));
@@ -70,13 +71,13 @@ mod neon {
         }
     }
 
-    /// One block of four outputs over `NV` vectors of bins, for int8
-    /// weights with one scale per [inp] row of four outputs (`sp[i]`).
+    /// Four-output pointwise block over `NV` f32x4 frequency vectors, using
+    /// per-input int8 weights (`sp[i]` scales the 4 outputs for input `i`).
     ///
     /// # Safety
-    /// `wp` and `sp` cover `inp` inputs of the block; `xp` rows are `f`
-    /// apart with `NV * 4` readable bins each; `yp` rows are `f` apart with
-    /// `NV * 4` writable bins each, four rows.
+    /// `wp` and `sp` cover `inp` inputs; `xp` has `inp` rows strided by `f`
+    /// with `NV * 4` readable bins each; `yp` has 4 rows strided by `f` with
+    /// `NV * 4` writable bins each.
     #[inline(always)]
     pub(super) unsafe fn pointwise_block_q8<const NV: usize>(
         wp: *const i8,
@@ -130,16 +131,14 @@ mod neon {
         }
     }
 
-    /// `pointwise_block_q8` for the first `R` (1 to 4) outputs of one block
-    /// over `NV` vectors of bins, with the sums starting from what `yp`
-    /// holds (`fresh` false) or from zero. Per output and bin the
-    /// multiply-adds are those of `pointwise_block_q8`, in the same order;
-    /// outputs past `R` are not computed.
+    /// `pointwise_block_q8` generalized to `R` (`1..=4`) outputs, either
+    /// starting from zero (`fresh`) or accumulating into `yp` with the exact
+    /// same FMA sequence.
     ///
     /// # Safety
-    /// `wp` and `sp` cover `inp` inputs of the block; `xp` rows are `f`
-    /// apart with `NV * 4` readable bins each; `yp` rows are `f` apart with
-    /// `NV * 4` readable and writable bins each, `R` rows.
+    /// `wp` and `sp` cover `inp` inputs; `xp` has `inp` rows strided by `f`
+    /// with `NV * 4` readable bins each; `yp` has `R` rows strided by `f` with
+    /// `NV * 4` readable/writable bins each.
     #[inline(always)]
     pub(super) unsafe fn pointwise_onto_block<const NV: usize, const R: usize>(
         wp: *const i8,
@@ -256,18 +255,12 @@ pub(crate) fn pointwise(w: &Weights, out: usize, inp: usize, x: &[f32], f: usize
     }
 }
 
-/// One run of a pointwise convolution's inputs, added to running sums:
-/// y[o][f] += sum_i W[o][at + i] x[i][f] for `rows` outputs and inputs
-/// `at .. at + inp` of the `total` that `w` was packed for (`pack_pointwise`
-/// with the outputs padded to a multiple of four, `Weights::rows(.., 4)`).
-/// `fresh` starts the sums from zero instead of from `y`. `f` is a multiple
-/// of 8; x is [inp][f], y is [rows][f].
+/// Partial pointwise conv accumulating inputs `at..at + inp` (out of `total`)
+/// into `y` (`[rows][f]`), or overwriting `y` when `fresh` is true.
 ///
-/// Per output and bin this performs the multiply-adds `pointwise` performs
-/// for the same inputs, in the same order. Running `pointwise`'s inputs
-/// through it in order, in any number of runs, the first of them fresh,
-/// gives `pointwise`'s result bit for bit: the sums only pass through `y`
-/// between runs.
+/// Uses the same FMA order per output and bin as `pointwise`, so splitting a
+/// full pointwise conv into arbitrary sequential runs (first with `fresh = true`)
+/// produces bit-identical output.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pointwise_onto(
     w: &Weights,
@@ -501,39 +494,33 @@ unsafe fn grouped_registers<const V: usize>(
     }
 }
 
-/// A matrix stored as int8 with one f32 scale per row (`w = q * scale`,
-/// symmetric, `|q| <= 127`): half the bytes of f16, for the GRU matrices that
-/// make up most of the weights streamed per frame.
+/// Symmetric per-row int8 weight matrix (`w = q * scale`, `|q| <= 127`) for
+/// GRU layers, cutting memory bandwidth in half relative to f16.
 ///
-/// The bytes are tiled for `matvec_q8`. Rows are taken four at a time (a
-/// matrix has a multiple of four rows: the GRU's are three times a hidden
-/// size that is a multiple of 16); the four rows' bytes for columns 0 to 15
-/// come first (row by row, 64 bytes, one cache line), then their bytes for
-/// columns 16 to 31, and so on. A matrix takes exactly the bytes it takes
-/// row-major, and a product still reads them front to back as one stream.
+/// Stored in 4x16 tiles for `matvec_q8` (row count must be a multiple of 4):
+/// each group of 4 rows is laid out in 64-byte (one cache line) chunks of
+/// 16 columns at a time. Total size equals row-major, and `matvec_q8` streams
+/// it linearly front to back.
 pub(crate) struct QWeights {
     q: Vec<i8>,
     scale: Vec<f32>,
     cols: usize,
-    /// The same bytes row-major, for `matvec_q8_rows`. Tests and bench
-    /// builds only.
+    /// Row-major copy for `matvec_q8_rows` in tests and benchmarks.
     #[cfg(any(test, feature = "bench-kernels"))]
     rows: Vec<i8>,
 }
 
-/// Where the tiled layout keeps row-major element (`r`, `c`).
+/// Maps row-major `(r, c)` to its index in the 4x16 tiled buffer.
 #[cfg(test)]
 fn tiled(r: usize, c: usize, cols: usize) -> usize {
     (r & !3) * cols + (c & !15) * 4 + (r & 3) * 16 + (c & 15)
 }
 
-/// Why a matrix whose row count is not a multiple of four is refused.
 const ROWS_IN_FOURS: &str = "an int8 matrix has a multiple of four rows";
 
 impl QWeights {
-    /// Quantizes a row-major `rows` x `cols` matrix (`rows` a multiple of 4,
-    /// `cols` of 16) straight into the tiled layout: one pass and one
-    /// allocation.
+    /// Quantizes a row-major `rows x cols` matrix (`rows % 4 == 0`,
+    /// `cols % 16 == 0`) directly into the 4x16 tiled layout.
     pub(crate) fn new(w: &[f32], rows: usize, cols: usize) -> Self {
         assert!(rows.is_multiple_of(4), "{ROWS_IN_FOURS}");
         assert!(cols.is_multiple_of(16) && w.len() == rows * cols);
@@ -600,8 +587,8 @@ impl QWeights {
     }
 }
 
-/// `x` quantized to 12-bit integers with one scale: the largest magnitude maps
-/// to 2047, so a 1024-column int8 dot product stays inside i32.
+/// Quantize `x` to signed 12-bit integers (`[-2047, 2047]`) so a 1024-element
+/// int8 dot product cannot overflow `i32`.
 fn quantize_x(x: &[f32], out: &mut [i16]) -> f32 {
     let max = x.iter().fold(0f32, |m, &v| m.max(v.abs()));
     let s = if max > 0. { max / 2047. } else { 1. };
@@ -612,9 +599,6 @@ fn quantize_x(x: &[f32], out: &mut [i16]) -> f32 {
     s
 }
 
-/// Whether `matvec_q8` runs the retained row-major kernel instead of the
-/// tiled one: under the tests' `reference` switch, and in a bench build when
-/// the bench has selected it. Production builds have neither.
 #[cfg(any(test, feature = "bench-kernels"))]
 #[inline(always)]
 fn row_major_selected() -> bool {
@@ -629,15 +613,10 @@ fn row_major_selected() -> bool {
     test || bench
 }
 
-/// y = W x for an int8 matrix of `rows` rows (all of `w`'s, a multiple of 4
-/// as `QWeights` holds them; `cols` a multiple of 16, at most 1024). The
-/// input is quantized to 12 bits once; the products accumulate in i32 and are
-/// scaled back at the end of each row.
-///
-/// The tiled kernel. Each row's sum is the sum, modulo 2^32, of the same
-/// `cols` exact i8 x i16 products the row-major kernel adds, and it is scaled
-/// by the same two f32 multiplications, so every result has the same bits
-/// (`tiled_matvec_matches_the_row_major_kernel_bit_for_bit`).
+/// Tiled int8 matvec `y = W * x` (`rows % 4 == 0`, `cols % 16 == 0`,
+/// `cols <= 1024`). Quantizes `x` to 12-bit ints once, accumulates exact
+/// `i8 * i16` products in wrapping `i32`, and dequantizes per row with the
+/// same f32 scaling as `matvec_q8_rows` (bit-for-bit identical).
 pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y: &mut [f32]) {
     crate::hold::gate();
     #[cfg(any(test, feature = "bench-kernels"))]
@@ -678,9 +657,8 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
             while i < cols {
                 let [w0, w1, w2, w3] = [0, 16, 32, 48].map(|o| vld1q_s8(tile.add(o)));
                 tile = tile.add(64);
-                // Columns 0 to 7 of the four rows, then columns 8 to 15, so
-                // that the two additions to one accumulator are eight
-                // multiply-accumulates apart.
+                // Process columns 0..8 across all 4 rows, then 8..16, keeping
+                // consecutive updates to the same accumulator 8 MLAs apart.
                 let lo = [w0, w1, w2, w3].map(|v| vmovl_s8(vget_low_s8(v)));
                 let hi = [w0, w1, w2, w3].map(|v| vmovl_high_s8(v));
                 let xp = xq.as_ptr().add(i);
@@ -696,10 +674,8 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
                 }
                 i += 16;
             }
-            // The four rows' sums in one vector (pairwise adds wrap as the
-            // row-major kernel's across-vector add does), converted and
-            // scaled lane by lane with the scalar expression's operations:
-            // sum as f32 * (scale * xs).
+            // Horizontally reduce all 4 rows into one vector and apply
+            // `sum as f32 * (scale * xs)` to match the scalar scaling order.
             let scale = vld1q_f32(w.scale.as_ptr().add(g));
             let [a, b, c, d] = acc;
             let ab = vpaddq_s32(vaddq_s32(a[0], a[1]), vaddq_s32(b[0], b[1]));
@@ -711,9 +687,8 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
-        // The NEON sums wrap; these wrap too. Sixteen running sums per row,
-        // one per column of a tile, so the compiler can keep them in vector
-        // registers; any grouping of a wrapping sum gives the same total.
+        // Wrapping i32 accumulation matching NEON; 16 lanes per row lets LLVM
+        // vectorize the inner loop.
         for g in (0..rows).step_by(4) {
             let mut acc = [[0i32; 16]; 4];
             let tiles = w.q[g * cols..(g + 4) * cols].as_chunks::<64>().0;
@@ -733,10 +708,8 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
     }
 }
 
-/// The row-major kernel that `matvec_q8` was until 2026-11-10, unchanged
-/// apart from reading the row-major copy of the weights: one row at a time,
-/// 16 columns per iteration. Tests compare the tiled kernel with it, and a
-/// bench build can run it instead, to time the two on the mixer.
+/// Legacy row-major int8 matvec (used until 2026-11-10), kept for test
+/// comparisons and on-device A/B benchmarking.
 #[cfg(any(test, feature = "bench-kernels"))]
 fn matvec_q8_rows(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y: &mut [f32]) {
     let cols = w.cols;
@@ -1171,13 +1144,8 @@ mod tests {
             .collect()
     }
 
-    /// The tiled kernel against the row-major kernel it replaced
-    /// (`matvec_q8_rows`, kept unchanged), every output bit, NaN payloads
-    /// included: the model's 384 x 128 matrices and every other shape class
-    /// (one group of four rows to many, 16 to 1024 columns), with random,
-    /// extreme, and sparse int8 weights and quantized float weights, ordinary
-    /// to subnormal and huge row scales, six classes of input, under each
-    /// float mode. Nothing outside the output is written.
+    // Compare tiled vs legacy row-major across shapes, weight/input classes,
+    // and FPCR modes, checking guard bands around the output.
     #[test]
     fn tiled_matvec_matches_the_row_major_kernel_bit_for_bit() {
         use crate::glue::tests::{Rng, each_float_mode};
@@ -1415,12 +1383,8 @@ mod tests {
         }
     }
 
-    /// `pointwise_onto` over a pointwise conv's inputs, split into runs at
-    /// arbitrary places, against `pointwise` over all of them at once: every
-    /// row count from one to twelve (whole blocks of four and blocks left
-    /// short), 16-bin blocks with and without the 8-bin tail, every input
-    /// class and float mode, with the sums resting in memory between runs.
-    /// Rows past `rows` and the bins around the output stay untouched.
+    // Check that arbitrary sequential `pointwise_onto` chunks match a single
+    // `pointwise` call bit-for-bit without touching guard bands.
     #[test]
     fn pointwise_onto_in_any_runs_matches_pointwise_bit_for_bit() {
         use crate::glue::tests::{CLASSES, Rng, assert_same, each_float_mode};
@@ -1478,10 +1442,7 @@ mod tests {
         });
     }
 
-    /// `pointwise_onto` with its input and its sums each ending at an
-    /// inaccessible page, and again each beginning at one (`Fenced`): no
-    /// load or store leaves them, for whole and short blocks of rows and
-    /// with and without the 8-bin tail.
+    // Guard-page check that `pointwise_onto` stays within its input/output slices.
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn pointwise_onto_stays_inside_its_slices() {

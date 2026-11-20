@@ -5,9 +5,8 @@ import (
 	"strconv"
 )
 
-// Explicit topology requests; effects saves never carry this request.
+// Selection topology types; effects saves never modify path selection.
 
-// SelectionPhase is serde `rename_all = "lowercase"`.
 type SelectionPhase string
 
 const (
@@ -23,16 +22,13 @@ func (p *SelectionPhase) UnmarshalText(text []byte) error {
 }
 
 type SelectionStatus struct {
-	// Audio-channel capacity from the last verified stock graph, not a CPU
-	// guarantee or reservation. Nil means it has not been observed.
-	ChannelCapacity    *uint32        `json:"channelCapacity"`
+	ChannelCapacity    *uint32        `json:"channelCapacity"` // observed stock-graph channel cap, nil if unknown
 	Status             SelectionPhase `json:"status"`
 	Allowed            bool           `json:"allowed"`
 	QualifiedTargetIDs []string       `json:"qualifiedTargetIds"`
-	// Allocated by the actual engine. Routing independently reports wet edges.
-	ActiveTargetIDs  []string `json:"activeTargetIds"`
-	PendingTargetIDs []string `json:"pendingTargetIds"`
-	Message          string   `json:"message"`
+	ActiveTargetIDs    []string       `json:"activeTargetIds"` // allocated by engine; Routing tracks wet edges separately
+	PendingTargetIDs   []string       `json:"pendingTargetIds"`
+	Message            string         `json:"message"`
 }
 
 func (s SelectionStatus) CheckCapacity(config Config, ids []string) (uint32, error) {

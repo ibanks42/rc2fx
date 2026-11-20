@@ -1,9 +1,7 @@
 package packaging
 
-// The macOS app: `RC2FX.app`. A bare executable opens in Terminal, so the
-// app ships as a bundle. It is universal, for Apple silicon and Intel Macs
-// (see gobuild.go and macho.go). Velopack signs, notarizes and packages it
-// (see velopack.go).
+// Builds the universal RC2FX.app bundle for macOS (signed, notarized, and
+// packaged by Velopack in velopack.go).
 
 import (
 	"fmt"
@@ -16,7 +14,6 @@ import (
 const (
 	app      = "RC2FX.app"
 	bundleID = "io.github.ibanks42.rc2fx"
-	// iconPath is the bundle icon, in the repository.
 	iconPath = task.AssetsDir + "/rc2fx.icns"
 )
 
@@ -43,8 +40,7 @@ func infoPlist(version string) string {
 `, bundleID, version, version, macOSMinimum)
 }
 
-// bundle moves the executable into an app bundle. checkMacBundle checks the
-// result.
+// bundle wraps the rc2fx executable in RC2FX.app with Info.plist and its icon.
 func bundle(files Files, version string) (Files, error) {
 	executable, ok := files["rc2fx"]
 	if !ok {

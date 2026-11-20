@@ -1,68 +1,43 @@
-//! Reuse the port buffers `jack_port_get_buffer` returns while the result
-//! cannot change. The cache is used only when libjack is the qualified build.
+//! Port-buffer pointer cache for `jack_port_get_buffer` on the qualified libjack
+//! build (jack2 1.9.20).
 //!
-//! The callback asks libjack for 82 port buffers per cycle. jack2 1.9.20 builds
-//! each answer from the shared-memory graph manager: a 16-bit generation
-//! counter (`CurIndex`), the port record 0x8410 bytes away, and the current
-//! connection array. On this device those reads miss far more often than they
-//! hit, which is most of the ~80 us the profile attributes to the adapter.
+//! The audio callback resolves 82 port buffers per cycle. Each libjack call
+//! walks the shared-memory graph manager (`CurIndex`, port record 0x8410 bytes
+//! apart, connection table), causing frequent cache misses (~80 us/cycle).
 //!
-//! The result is a property of `(port, CurIndex)`. `CurIndex` changes on every
-//! committed connection change, so a cached pointer recorded under the same
-//! generation is the pointer libjack would return. Which ports may be cached is
-//! taken from the disassembly of `JackGraphManager::GetBuffer` (libjack offset
-//! 0x195c0):
+//! Because `CurIndex` increments on every committed graph change, a buffer
+//! pointer is stable for a given `(port, CurIndex)`. From the disassembly of
+//! `JackGraphManager::GetBuffer` (`+0x195c0`):
+//! - Outputs (`IsOutput` bit 1 at `+0x824`, untied `+0xc0c == 0xfffe`, used
+//!   `+0xc09 != 0`) always return the port's own buffer
+//!   `(manager + 0x2458c10 + 0x8410 * port) & !0x1f + 0x20`.
+//! - Inputs with a single cross-client connection follow the peer and return
+//!   its buffer zero-copy. Unconnected inputs clear their own buffer, and
+//!   same-client or fan-in inputs mix into their own buffer. Only inputs whose
+//!   returned pointer differs from their own buffer are safe to cache.
 //!
-//! - `IsOutput` (`+0x824` bit 1) and not tied (`+0xc0c == 0xfffe`): the return
-//!   value is this port's own buffer, `(manager + 0x2458c10 + 0x8410 * port) &
-//!   !0x1f + 0x20` at 0x196ac. Entry `0x19664` refuses ports that are not used
-//!   (`+0xc09 == 0`).
-//! - Inputs: `GetBuffer` follows a single connection when the peer belongs to
-//!   another client (0x19750 takes the restart at 0x19620, which resolves the
-//!   peer and returns *its* buffer). With no connection it clears this port's
-//!   own buffer, and with a same-client or multiple connections it mixes into
-//!   this port's own buffer. Only the returned pointer that is **not** this
-//!   port's own buffer is therefore a zero-copy result that GetBuffer did not
-//!   write through, and only those inputs are cached.
+//! Everything else (unused ports, tied outputs, mixed/cleared inputs, cold
+//! entries, or mid-callback graph switches) falls through to libjack.
 //!
-//! Everything else calls the real function every cycle: ports that are not
-//! used, tied outputs, inputs with zero or several connections, inputs resolved
-//! to their own buffer (the mix/clear cases), a cold cache, and any lookup made
-//! after the graph generation moved.
+//! [`begin`] runs once per callback to fetch the graph manager (`+0x3d790`) and
+//! `CurIndex`, bumping the cache epoch if either changed. Each lookup still
+//! re-reads `CurIndex` (which stays hot in L1 unless the server switches graphs
+//! mid-callback) so a mid-cycle switch immediately bypasses the cache.
 //!
-//! ## Once per callback
-//!
-//! The callback thread starts each cycle with [`begin`]: it calls libjack's
-//! manager accessor once (0x3d790), reads `CurIndex` once, and advances the
-//! epoch if either changed. The hook then needs no accessor call and no shared
-//! atomic; a lookup is the generation load, the epoch compare and the recorded
-//! pointer.
-//!
-//! libjack itself re-reads `CurIndex` on every `GetBuffer` (0x19644, bank
-//! select 0x19650), so nothing in the client library promises the generation
-//! holds still for the length of a callback. The graph switch (`TrySwitchState`)
-//! is server side and is not in libjack 1.9.20, so the hook keeps one aligned
-//! load of the generation per lookup: if the server did switch mid-callback,
-//! every later lookup bypasses the cache for the rest of that callback, and the
-//! next callback starts a fresh epoch. The load hits L1 after the first lookup
-//! of the cycle, because only a connection change writes that line.
-//!
-//! The layout is tied to the exact libjack build: the module refuses to enable
-//! unless the file hash matches and the pinned instruction bytes are present at
-//! the three offsets it reads.
+//! Activation requires an exact SHA-256 match on `/usr/lib/libjack.so.0.1.0`
+//! and matching instruction bytes at the three pinned offsets.
 use std::{
     cell::Cell,
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
-/// SHA-256 of the mixer's `/usr/lib/libjack.so.0.1.0` (jack2 1.9.20).
+/// SHA-256 of `/usr/lib/libjack.so.0.1.0` (jack2 1.9.20).
 pub(crate) const QUALIFIED_SHA: &str =
     "3395d474fafc7723870d920eec74d1c42f9ed22d2816c98603a00f8c19c7f53e";
 const LIBJACK_PATH: &str = "/usr/lib/libjack.so.0.1.0";
-/// `jack_port_get_buffer`: prologue and the path that yields the manager.
 const GET_BUFFER: usize = 0xc970;
 const MANAGER: usize = 0x3d790;
-/// `JackGraphManager::GetBuffer` entry, used only for its pinned bytes.
+/// `JackGraphManager::GetBuffer` entry (checked against `PINNED`).
 const GRAPH_BUFFER: usize = 0x195b0;
 
 const PORT_STRIDE: usize = 0x8410;
@@ -79,12 +54,10 @@ const CONNECTION_STRIDE: usize = 0x1004;
 const CONNECTION_COUNT: usize = 0x1000;
 const CONNECTION_BANK: usize = 0x122b400;
 
-/// The largest port id `jack_port_get_buffer` accepts (`0xfff`).
+/// Max port ID accepted by `jack_port_get_buffer` (`0xfff`).
 const PORTS: usize = 0x1000;
 
-/// What one callback runs with: the manager it saw, its generation, and the
-/// epoch recorded entries must carry to be reusable. Inactive means every
-/// lookup goes to libjack.
+/// Per-callback view of the graph manager, generation, and cache epoch.
 #[derive(Clone, Copy)]
 pub(crate) struct Snapshot {
     pub(crate) active: bool,
@@ -93,7 +66,6 @@ pub(crate) struct Snapshot {
     pub(crate) generation: u32,
 }
 impl Snapshot {
-    /// Every lookup goes to libjack.
     pub(crate) const INACTIVE: Self = Self {
         active: false,
         epoch: 0,
@@ -111,9 +83,8 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static BASE: AtomicUsize = AtomicUsize::new(0);
 static EPOCH: AtomicU32 = AtomicU32::new(0);
 static LAST_GENERATION: AtomicU32 = AtomicU32::new(0);
-/// The graph manager the recorded pointers belong to. If libjack ever attaches
-/// a different one (a restarted server), its counter starts over and could
-/// match the old value, so a new manager address starts a new epoch too.
+/// Tracks the manager address so a restarted jackd (whose generation counter
+/// starts back at 0) also invalidates the cache.
 static LAST_MANAGER: AtomicUsize = AtomicUsize::new(0);
 static HITS: AtomicU64 = AtomicU64::new(0);
 static MISSES: AtomicU64 = AtomicU64::new(0);
@@ -123,8 +94,7 @@ static UNAVAILABLE: AtomicU64 = AtomicU64::new(0);
 static OUTPUTS: AtomicU64 = AtomicU64::new(0);
 static INPUTS: AtomicU64 = AtomicU64::new(0);
 
-/// One `(generation, kind, pointer)` record per port id. The tag packs the
-/// epoch and kind.
+/// Per-port cache entries; `tag` packs `(epoch << 8) | kind`.
 #[repr(align(64))]
 struct Table {
     tag: [AtomicU64; PORTS],
@@ -135,9 +105,8 @@ static TABLE: Table = Table {
     pointer: [const { AtomicUsize::new(0) }; PORTS],
 };
 
-/// This thread's lookup counters. The callback reads them nowhere; they are
-/// plain thread-owned numbers, published with one add per counter when the
-/// frame ends, so the hook never performs a read-modify-write on a shared line.
+/// Thread-local lookup counters flushed once at callback end to avoid atomic
+/// RMW traffic on every port lookup.
 #[derive(Clone, Copy, Default)]
 struct Counters {
     hits: u64,
@@ -160,23 +129,19 @@ impl Counters {
     };
 }
 thread_local! {
-    /// `UnsafeCell`, not `Cell`: an update is one increment of one field, not a
-    /// copy of the whole struct to and from the cell on every port lookup.
+    // Mutated in place via `as_ptr()` to avoid copying the whole struct on every port lookup.
     static COUNTERS: Cell<Counters> = const { Cell::new(Counters::ZERO) };
 }
 
-/// Update one field in place on this thread's counters.
 fn count(update: impl FnOnce(&mut Counters)) {
     COUNTERS.with(|cell| {
         let counters = cell.as_ptr();
-        // SAFETY: the cell is this thread's, and no reference to it outlives
-        // this closure.
+        // SAFETY: thread-local cell; no other reference is alive during `update`.
         unsafe { update(&mut *counters) };
     });
 }
 
-/// Publish this thread's lookup counters. Called once per callback, after the
-/// vendor callback and our pipeline have finished their lookups.
+/// Flushes this thread's local counters into the global atomics once per callback.
 pub fn publish() {
     let counters =
         COUNTERS.with(|cell| std::mem::replace(unsafe { &mut *cell.as_ptr() }, Counters::ZERO));
@@ -218,13 +183,11 @@ fn load(port: usize) -> (u32, u8, usize) {
     ((tag >> 8) as u32, (tag & 0xff) as u8, pointer)
 }
 
-/// Why the cache is not in use, when it is not. A libjack mismatch only means
-/// every call goes to libjack as before; it never refuses RC2FX itself.
+/// Reason the cache stayed disabled, if any. A mismatch just falls back to libjack.
 static SKIPPED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// Enables the cache when libjack is the qualified build, else records why
-/// not. The graph layout is libjack's, so this checks libjack's own hash, not
-/// the mixer profile.
+/// Enables the cache if `/usr/lib/libjack.so.0.1.0` matches the qualified build
+/// and pinned instructions; otherwise records why it was skipped.
 pub fn install() {
     let bytes = match std::fs::read(LIBJACK_PATH) {
         Ok(bytes) => bytes,
@@ -243,9 +206,7 @@ pub fn install() {
         let _ = SKIPPED.set(format!("libjack {digest} is not the qualified build"));
         return;
     }
-    // libjack is a load-time dependency of the mixer, so it is mapped by
-    // now. Find it here, once, so the audio thread never calls into the
-    // dynamic loader.
+    // Resolve the load base once at startup so the audio thread never touches dl/maps.
     let Some(base) = mapped_base() else {
         let _ = SKIPPED.set(format!("{LIBJACK_PATH} is not mapped"));
         return;
@@ -261,7 +222,6 @@ pub fn install() {
     ENABLED.store(true, Ordering::Release);
 }
 
-/// Load address of libjack: the start of its file-offset-0 mapping.
 fn mapped_base() -> Option<usize> {
     let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
     maps.lines().find_map(|line| {
@@ -276,7 +236,7 @@ fn mapped_base() -> Option<usize> {
     })
 }
 
-/// Bytes that identify the pinned libjack build at each offset we use.
+/// Pinned instruction bytes at `GET_BUFFER`, `GRAPH_BUFFER`, and `MANAGER`.
 const PINNED: [(usize, [u8; 16]); 3] = [
     (
         GET_BUFFER,
@@ -301,15 +261,13 @@ const PINNED: [(usize, [u8; 16]); 3] = [
     ),
 ];
 
-/// The cache is used only when the function the mixer resolved is exactly this
-/// libjack's `jack_port_get_buffer`; anything else (another libjack, an
-/// interposer) goes straight to the original every time.
+/// Only activate when the resolved `jack_port_get_buffer` points directly at
+/// our verified libjack (not another build or interposer).
 fn accepted(base: usize, original: usize) -> bool {
     base != 0 && original == base + GET_BUFFER
 }
 
-/// The graph manager, read through libjack's own accessor (0x3d790: three
-/// loads from libjack's globals). Called once per callback.
+/// Reads the graph manager via libjack's own accessor (`+0x3d790`).
 fn manager() -> usize {
     let base = BASE.load(Ordering::Acquire);
     if base == 0 {
@@ -323,9 +281,8 @@ fn generation(manager: usize) -> u32 {
     u32::from(unsafe { std::ptr::read_volatile((manager + GENERATION) as *const u16) })
 }
 
-/// Start a callback frame's view of the graph: one accessor call, one
-/// generation read, and a new epoch when either the manager or its counter
-/// changed since the last frame.
+/// Snapshots the graph manager and generation at the start of a callback,
+/// advancing the cache epoch if either changed.
 pub fn begin(original: usize) -> Snapshot {
     if !ENABLED.load(Ordering::Relaxed) {
         return Snapshot::default();
@@ -342,8 +299,6 @@ pub fn begin(original: usize) -> Snapshot {
     snapshot(manager)
 }
 
-/// The per-callback part of [`begin`], separated so the epoch rules can be
-/// tested without libjack.
 fn snapshot(manager: usize) -> Snapshot {
     let generation = generation(manager);
     let previous_generation = LAST_GENERATION.load(Ordering::Relaxed);
@@ -361,11 +316,11 @@ fn snapshot(manager: usize) -> Snapshot {
     }
 }
 
-/// A pointer to return instead of calling libjack, if the recorded answer is
-/// still valid for this port.
+/// Returns the cached buffer pointer for `port` if the graph generation and
+/// cache epoch still match.
 ///
 /// # Safety
-/// `port` is the id the caller passed to `jack_port_get_buffer`.
+/// `port` must be the port handle passed to `jack_port_get_buffer`.
 pub unsafe fn hit(
     snapshot: Snapshot,
     port: *mut std::ffi::c_void,
@@ -377,8 +332,7 @@ pub unsafe fn hit(
     if id == 0 || id >= PORTS {
         return None;
     }
-    // One load of the generation word: if the graph state changed while this
-    // callback runs, nothing recorded for the old state may answer.
+    // Re-check CurIndex so a mid-callback graph switch bypasses stale entries.
     if generation(snapshot.manager) != snapshot.generation {
         count(|counters| counters.stale += 1);
         return None;
@@ -392,11 +346,11 @@ pub unsafe fn hit(
     None
 }
 
-/// Record what the real function returned for this port, if the port is in one
-/// of the reusable cases and the generation did not move while the call ran.
+/// Classifies and caches the pointer returned by the real `jack_port_get_buffer`
+/// if it is a stable output or single-connection zero-copy input.
 ///
 /// # Safety
-/// `native` is the value the real `jack_port_get_buffer` returned for `port`.
+/// `native` must be the return value of `jack_port_get_buffer(port, ...)`.
 pub unsafe fn record(
     snapshot: Snapshot,
     port: *mut std::ffi::c_void,
@@ -409,13 +363,11 @@ pub unsafe fn record(
     if id == 0 || id >= PORTS {
         return;
     }
-    // A graph change while the call ran makes the observation ambiguous.
     if generation(snapshot.manager) != snapshot.generation {
         count(|counters| counters.stale += 1);
         return;
     }
-    // A port already classified as unreusable under this generation needs no
-    // second look: the answer cannot change until the generation does.
+    // Skip re-checking ports already marked non-cacheable in this epoch.
     let (recorded, known, _) = load(id);
     if recorded == snapshot.epoch && known == 0 {
         return;
@@ -432,14 +384,14 @@ pub unsafe fn record(
         return;
     }
     let flags = unsafe { std::ptr::read_volatile((record + PORT_FLAGS) as *const u32) };
-    // GetBuffer returns `(address & !0x1f) + 0x20` (0x196ac-0x196b0): the next
-    // 32-byte boundary strictly after the field, not the field rounded up.
+    // `GetBuffer` computes `(addr & !0x1f) + 0x20` (+0x196ac), i.e. the next
+    // 32-byte boundary strictly past `raw`.
     let own = {
         let raw = manager + BUFFERS + id * PORT_STRIDE;
         (raw & !0x1f) + 0x20
     };
     let kind = if flags & 0x2 != 0 {
-        // Output: libjack returns this port's own buffer unless it is tied.
+        // Output port: cacheable only if untied and returning its own buffer.
         let tied = unsafe { std::ptr::read_volatile((record + PORT_TIED) as *const u32) };
         if tied != NOT_TIED || native as usize != own {
             0
@@ -448,8 +400,7 @@ pub unsafe fn record(
             1
         }
     } else {
-        // Input: only a single connection resolved away from this port's own
-        // buffer is a zero-copy answer that GetBuffer did not write through.
+        // Input port: cacheable only for a single zero-copy cross-client connection.
         let bank = snapshot.generation as usize & 1;
         let connection = manager
             + CONNECTIONS
@@ -489,12 +440,11 @@ pub fn status() -> serde_json::Value {
 mod tests {
     use super::*;
 
-    /// The epoch, the table and the counters are process-wide; one test at a
-    /// time.
+    /// Serializes tests that touch the global cache table and epoch.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// A fake graph manager: only the generation word is ever touched, so the
-    /// 37 MB reservation costs one page.
+    /// Sparse anonymous mapping large enough to hold the `GENERATION` word
+    /// (only one page is faulted in).
     struct FakeManager(*mut u8);
     impl FakeManager {
         fn new(generation: u16) -> Self {
@@ -527,13 +477,10 @@ mod tests {
         }
     }
 
-    /// The state `begin` derives, without the libjack accessor.
     fn snapshot_of(manager: usize) -> Snapshot {
         snapshot(manager)
     }
 
-    /// A port id as libjack passes it around: a number in a pointer-typed
-    /// argument, never dereferenced.
     fn port(id: usize) -> *mut std::ffi::c_void {
         std::ptr::without_provenance_mut(id)
     }
@@ -581,8 +528,7 @@ mod tests {
             None,
             "a graph switch mid-callback must not serve the old pointer"
         );
-        // The next callback sees the new generation and a new epoch, so the
-        // entry recorded under the old one is dead even at the same port.
+        // Next callback gets a fresh epoch, so the old entry stays invalid.
         let next = snapshot_of(manager.address());
         assert_ne!(next.epoch, snapshot.epoch);
         assert_eq!(unsafe { hit(next, port(id)) }, None);
@@ -615,7 +561,7 @@ mod tests {
         let _ = unsafe { hit(snapshot, port(21)) };
         manager.set(6);
         let _ = unsafe { hit(snapshot, port(id)) };
-        // Nothing reaches the shared counters before publish.
+        // Shared counters shouldn't change before publish().
         assert_eq!(HITS.load(Ordering::Relaxed), before.0);
         assert_eq!(MISSES.load(Ordering::Relaxed), before.1);
         assert_eq!(STALE.load(Ordering::Relaxed), before.2);
@@ -623,12 +569,10 @@ mod tests {
         assert_eq!(HITS.load(Ordering::Relaxed), before.0 + 3);
         assert_eq!(MISSES.load(Ordering::Relaxed), before.1 + 1);
         assert_eq!(STALE.load(Ordering::Relaxed), before.2 + 1);
-        // A second publish adds nothing.
         publish();
         assert_eq!(HITS.load(Ordering::Relaxed), before.0 + 3);
     }
 
-    /// The reusable cases, as `record` classifies them.
     fn classify(output: bool, used: bool, tied: u32, own: usize, native: usize) -> u8 {
         if !used {
             return 0;

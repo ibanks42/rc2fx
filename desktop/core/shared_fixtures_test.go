@@ -6,12 +6,10 @@ import (
 	"unicode/utf8"
 )
 
-// The shared accept and reject fixtures in fixtures/core. The Rust crate
-// (crates/rc2fx-core/tests/shared_fixtures.rs) reads the same files. Both
-// write accepted values back byte for byte as the `canonical` (compact) and
-// `pretty` files hold them. The desktop reaches every verdict; the mixer
-// skips the reject cases of documents only the desktop reads. A rejected case
-// that names an `error` must fail with exactly that message.
+// Shared accept/reject fixtures in fixtures/core (also run by
+// crates/rc2fx-core/tests/shared_fixtures.rs). Accepted cases must re-encode
+// byte-for-byte to their canonical/pretty files; rejected cases with an
+// expected error must match that message exactly.
 
 type fixtureCase struct {
 	Name      string  `json:"name"`

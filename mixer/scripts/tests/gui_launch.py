@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Host-only tests of rc2fx.sh's gui-launch and the GUI shim (no device, no GUI).
+"""Host-side tests for rc2fx.sh gui-launch and rc2fx-gui-shim.sh.
 
-python3 mixer/scripts/tests/gui_launch.py
+  python3 mixer/scripts/tests/gui_launch.py
 
-Extracts gui_say/gui_bundle/gui_starts/gui_launch and gui_status from the
-script, replaces `exec` with a recorder and stamp() with a fixed prefix, and
-drives every fallback reason, the crash guard, the quiet-log rotation and the
-shim's selection with a fake root (RC2FX_DATA, RC2FX_GUI_HOME,
-RC2FX_STOCK_GUI) in a temporary directory.
+Extracts the GUI functions from rc2fx.sh, stubs exec/stamp/sleep, and exercises
+fallback paths, the crash-loop guard, log rotation, and shim selection in a temp dir.
 """
 import os
 import re
@@ -24,16 +21,13 @@ GUI_SHA = 'aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca'
 WAIT_START = SCRIPT.index('# display-start.sh starts the GUI as soon as')
 START = SCRIPT.index('# Why the stock GUI is starting')
 END = SCRIPT.index('\ncase "${1:-}" in', START)
-# The GUI block, then the mixer-wait helpers it calls (they sit just above it
-# in the script and use gui_say, so they come after it here).
+# Put the mixer-wait helpers after the GUI block since they call gui_say.
 BLOCK = SCRIPT[START:END] + SCRIPT[WAIT_START:START]
-# Only the two command forms are recorded: `exec 9>lock` must still apply
-# its redirection to this shell.
+# Leave `exec 9>lock` untouched so fd redirections still work.
 BLOCK = BLOCK.replace('exec env LD_AUDIT', 'record env LD_AUDIT')
 BLOCK = BLOCK.replace('exec "$stock_gui"', 'record "$stock_gui"')
 BLOCK = BLOCK.replace('  exec "$@"', '  record "$@"')
 
-# The block as the tests run it: recorded exec, fixed stamp, quiet status.
 HARNESS = '''set -euo pipefail
 say() { printf 'REASON %s\\n' "$*"; }
 stamp() { printf 'STAMP'; }
@@ -99,10 +93,8 @@ class GuiLaunch(unittest.TestCase):
         self.boot_dir = self.root / 'boot'
         self.run_dir.mkdir()
         self.boot_dir.mkdir()
-        # A copy of a real program, so /proc/<pid>/exe names this path. Bash,
-        # because it runs under any name: a multi-call coreutils (Ubuntu
-        # 26.04's sleep) picks its tool from the executable's name and refuses
-        # to run as rc_audio_mixer.
+        # Copy bash as a fake rc_audio_mixer so /proc/<pid>/exe resolves to this
+        # path (multicall coreutils like Ubuntu's sleep reject unknown argv[0]).
         self.fake_mixer = self.root / 'rc_audio_mixer'
         shutil.copy(shutil.which('bash'), self.fake_mixer)
         self.env = {
@@ -115,12 +107,11 @@ class GuiLaunch(unittest.TestCase):
             'RC2FX_RUN': str(self.run_dir),
             'RC2FX_BOOT': str(self.boot_dir),
             'RC2FX_STOCK_MIXER': str(self.root / 'rc_audio_mixer'),
-            'RC2FX_GUI_WAIT_MAX': '1',  # two polls, with sleep() stubbed
+            'RC2FX_GUI_WAIT_MAX': '1',  # two polls with stubbed sleep()
             'RC2FX_AUDIO_SHIM': str(self.root / 'audio-shim'),
             'RC2FX_GUI_BOOT_WINDOW': '180',
         }
-        # The qualified GUI: the fake stock executable has whatever hash, so
-        # the test overrides the expected hash with its own.
+        # Override gui_sha with our dummy stock GUI's hash.
         (self.root / 'installed-gui-shim').write_text('#!/bin/sh\n')
         self.stock_hash = subprocess.run(['sha256sum', str(self.stock)], capture_output=True,
                                          text=True).stdout.split()[0]
@@ -152,7 +143,6 @@ class GuiLaunch(unittest.TestCase):
         self.assertNotIn('LD_AUDIT', result.stdout)
         self.assertIn(reason, self.logged())
 
-    # Every reason, in the order gui_launch checks them.
     def test_each_fallback_reason(self):
         cases = {
             'first boot': ('/usr/bin/first-boot', 'first boot after a firmware update'),
@@ -189,7 +179,6 @@ class GuiLaunch(unittest.TestCase):
         self.assert_stock(r, 'fails its checksum')
 
     def test_the_module_starts_with_the_production_environment(self):
-        # A release build, the only kind that starts the module quietly.
         r = self.run_gui('--x', env={'RC2FX_TEST_BUILD': 'release'})
         self.assertEqual(r.returncode, 0, r.stderr)
         line = [l for l in r.stdout.splitlines() if l.startswith('EXEC ')][0]
@@ -202,25 +191,22 @@ class GuiLaunch(unittest.TestCase):
         self.assertIn('STAMP', self.logged())
 
     def test_the_build_kind_picks_the_default_diagnostics(self):
-        # A development build logs verbosely...
         r = self.run_gui('--x')
         self.assertIn('LD_AUDIT=', r.stdout)
         self.assertNotIn('RC2FX_GUI_PACING_QUIET', r.stdout)
         self.assertIn('GUI module starting from', self.logged())
         self.assertIn('(verbose diagnostics)', self.last_logged())
-        # ...and a release build (the packaged script says `release`) is quiet.
-        (self.root / 'uptime').write_text('2000\n')  # a later start: not a crash loop
+        (self.root / 'uptime').write_text('2000\n')  # outside the 30s crash-loop window
         r = self.run_gui('--x', env={'RC2FX_TEST_BUILD': 'release'})
         self.assertIn('RC2FX_GUI_PACING_QUIET=1', r.stdout)
         self.assertNotIn('(verbose diagnostics)', self.last_logged())
 
     def start_mixer(self):
-        """A live process whose /proc/<pid>/exe is the fake stock mixer."""
+        """Start a dummy process whose /proc/<pid>/exe points to fake_mixer."""
         import subprocess
         if not Path('/proc/self/exe').exists():
             self.skipTest('/proc/<pid>/exe is not on this host')
-        # A builtin read on an open pipe waits without starting a child, so
-        # the process stays the copy.
+        # Block in bash's builtin read so no child process is spawned.
         process = subprocess.Popen([str(self.fake_mixer), '-c', 'read -r -t 30 _ || :'],
                                    stdin=subprocess.PIPE)
         self.addCleanup(process.wait)
@@ -230,7 +216,7 @@ class GuiLaunch(unittest.TestCase):
         return process
 
     def control_socket(self):
-        """A real unix socket where the mixer's control socket appears."""
+        """Bind a real Unix socket at $run/control.sock."""
         import socket
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(self.run_dir / 'control.sock'))
@@ -241,7 +227,7 @@ class GuiLaunch(unittest.TestCase):
         (self.run_dir / 'audit.json').write_text('{"callbacks":%d}' % callbacks)
 
     def boot_fixture(self):
-        """Expected this boot: an audio shim, no marker, a young uptime."""
+        """Set up a fresh boot state with the audio shim present and low uptime."""
         (self.root / 'audio-shim').write_text('#!/bin/sh\n')
         (self.root / 'audio-shim').chmod(0o755)
         (self.root / 'uptime').write_text('5\n')
@@ -255,12 +241,11 @@ class GuiLaunch(unittest.TestCase):
                                      'RC2FX_TEST_MIXER_PID': str(mixer.pid),
                                      'RC2FX_GUI_WAIT_MAX': '5'})
         self.assertIn('EXEC ', r.stdout)
-        # native.pid on the first poll, readiness on the second: one second.
+        # native.pid appears on poll 1, callbacks advance on poll 2 (1s total).
         self.assertIn('Waited 1 s for the mixer before starting the GUI', self.logged())
 
     def test_no_audit_json_yet_does_not_abort_the_wait(self):
-        # The socket appears before audit.json, as at boot: the wait must
-        # survive that under set -e and still start the module.
+        # At boot the socket can appear before audit.json; make sure set -e doesn't abort.
         self.boot_fixture()
         self.start_mixer()
         r = self.run_gui('--x', env={'RC2FX_TEST_SLEEP_AUDIT': 'late-audit', 'RC2FX_GUI_WAIT_MAX': '4'})
@@ -270,8 +255,7 @@ class GuiLaunch(unittest.TestCase):
         self.assertIn('Waited', self.logged())
 
     def test_an_unexpected_abort_logs_before_starting_stock(self):
-        # A directory where the stock reason is read from: `cat` fails under
-        # set -e, so the EXIT trap must log and start the stock GUI.
+        # Make `cat $gui_home/stock` fail under set -e to exercise the EXIT trap.
         self.gui_home.mkdir()
         (self.gui_home / 'stock').mkdir()
         r = self.run_gui('--x')
@@ -286,13 +270,12 @@ class GuiLaunch(unittest.TestCase):
         self.assertIn('GUI started before the mixer reported ready (1 s)', self.logged())
 
     def test_a_later_gui_start_with_no_mixer_does_not_wait(self):
-        # Late uptime, no audio shim: RC2FX is not expected, so exec at once.
         (self.root / 'uptime').write_text('1000\n')
         r = self.run_gui('--x', env={'RC2FX_TEST_SLEEP_AUDIT': 'constant', 'RC2FX_GUI_WAIT_MAX': '5'})
         self.assertIn('EXEC ', r.stdout)
         self.assertNotIn('Waited', self.logged())
         self.assertNotIn('reported ready', self.logged())
-        # An installed shim but a late uptime: still not a boot start.
+        # Even with the shim installed, late uptime isn't treated as a boot start.
         (self.root / 'audio-shim').write_text('#!/bin/sh\n')
         (self.root / 'audio-shim').chmod(0o755)
         r = self.run_gui('--x', env={'RC2FX_TEST_SLEEP_AUDIT': 'constant', 'RC2FX_GUI_WAIT_MAX': '5'})
@@ -300,12 +283,11 @@ class GuiLaunch(unittest.TestCase):
         self.assertNotIn('reported ready', self.logged())
 
     def test_no_wait_without_an_rc2fx_mixer_in_charge(self):
-        # No native.pid: nothing to wait for.
         r = self.run_gui('--x')
         self.assertIn('EXEC ', r.stdout)
         self.assertNotIn('Waited', self.logged())
         self.assertNotIn('reported ready', self.logged())
-        # A pid that is not the mixer: the same.
+        # Stale PID pointing to a non-mixer process shouldn't trigger a wait either.
         self.run_dir.joinpath('native.pid').write_text(f'{os.getpid()}\n')
         r = self.run_gui('--x')
         self.assertIn('EXEC ', r.stdout)
@@ -326,8 +308,7 @@ class GuiLaunch(unittest.TestCase):
         self.assertIn('GUI started before the mixer reported ready (1 s)', self.logged())
 
     def test_no_wait_before_the_socket_exists(self):
-        # Callbacks advancing but no control socket: the wait still runs to its
-        # timeout, never treating callbacks alone as readiness.
+        # Callbacks advancing without control.sock shouldn't count as ready.
         self.start_mixer()
         r = self.run_gui('--x', env={'RC2FX_TEST_SLEEP_AUDIT': 'advance', 'RC2FX_GUI_WAIT_MAX': '1'})
         self.assertIn('EXEC ', r.stdout)
@@ -374,7 +355,7 @@ class GuiLaunch(unittest.TestCase):
         self.assert_stock(r, 'crashed it 3 times within 30 s')
         self.assertEqual((self.gui_home / 'stock').read_text().strip(),
                          'the GUI module crashed it 3 times within 30 s')
-        # Stock for the rest of the boot, even long after the window.
+        # Stays on stock for the rest of the boot even after the 30s window passes.
         (self.root / 'uptime').write_text('2000\n')
         self.assert_stock(self.run_gui(), 'crashed it 3 times within 30 s')
 
@@ -406,7 +387,7 @@ class GuiLaunch(unittest.TestCase):
 
 
 class Shim(unittest.TestCase):
-    """The installed shim hands over to rc2fx.sh gui-launch when it can."""
+    """Tests for rc2fx-gui-shim.sh dispatching to rc2fx.sh gui-launch."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

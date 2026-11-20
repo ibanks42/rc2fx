@@ -1,4 +1,4 @@
-/* 90° rotation of 32-bit pixel rectangles; see rotate.c. */
+/* 90-degree rotation of 32-bit pixel rectangles; see rotate.c. */
 #ifndef RC2FX_ROTATE_H
 #define RC2FX_ROTATE_H
 #include <stddef.h>

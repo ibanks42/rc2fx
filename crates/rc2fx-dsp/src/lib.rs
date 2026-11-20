@@ -1024,17 +1024,11 @@ impl Dsp {
         }
         Ok(lengths[0])
     }
-    /// Takes up `p`'s effect order (starting a crossfade to it), EQ shape and
-    /// targets, and decides which filters smooth their coefficients over
-    /// this block.
+    /// Applies `p`'s effect order (starting a crossfade), EQ shape, and filter
+    /// smoothing targets.
     ///
-    /// The same `Prepared` usually arrives for thousands of blocks. Once a
-    /// full pass finds the shape unchanged, no fade running and no filter
-    /// smoothing, another pass with the same `Prepared` would write back
-    /// exactly what is there: the targets are the same, no coefficient moves
-    /// while its filter is not smoothing, and `Filter::begin` then finds the
-    /// same answer. `seen` records that, and the pass is skipped until a
-    /// different `Prepared` arrives.
+    /// Skips the pass when `p.serial == self.seen`, since steady state with the
+    /// same immutable `Prepared` is a no-op.
     fn begin_block(&mut self, p: &Prepared, frames: usize) {
         if frames == 0 || self.seen == p.serial {
             return;
@@ -1238,19 +1232,9 @@ impl Dsp {
         let gain = self.gate_step(p, scores[0], m);
         (gain, 1 + self.gate_rest(p, &scores[1..], m))
     }
-    /// How many of `scores`, from the first, `gate_step` would take without
-    /// changing the gate or its gain; their scores go to the meter here.
-    /// Call it straight after a `gate_step` with the same `p`.
-    ///
-    /// That step left the hold and the kept position as `p` makes them. A
-    /// further step changes nothing when the gate is open and at rest (voiced,
-    /// the hold full, the level at 0 dB) and the next score counts as voice
-    /// again, or shut and at rest (not voiced, the hold run out, the level on
-    /// the floor) and the next score does not: the same verdict keeps the
-    /// hold, the target is the level the gate is at, and the position
-    /// `gate_step` gave the meter is the one it would give again. The first
-    /// score with the other verdict ends the count and is left to
-    /// `gate_step`.
+    /// Counts consecutive leading scores that leave the gate at rest (fully open
+    /// and voiced, or fully shut and unvoiced), updating the meter as it goes.
+    /// Must be called immediately after `gate_step` with the same `p`.
     #[inline]
     fn gate_rest(&self, p: &Prepared, scores: &[Option<f32>], m: &mut Meter) -> usize {
         let at_rest = if self.gate_voiced {
@@ -1697,12 +1681,9 @@ fn handed_off(y: f64, dry: f64, gain: f64, to_dry: bool) -> f64 {
     }
 }
 
-/// The largest magnitude in `x`, as bits. For finite values the bit order of
-/// `abs` is the numeric order, and every infinity and NaN sorts above them. So
-/// `max_abs_bits(x) <= limit.to_bits()`, for a finite positive `limit`, says
-/// every sample is finite and within `limit`: `safe` would return each one
-/// unchanged and count nothing. The comparison has to stay on the integers;
-/// as floats it would let a NaN through.
+/// Largest `|x|` as raw `u64` bits. Comparing `max_abs_bits(x) <= limit.to_bits()`
+/// in integer space proves every sample is finite and within `limit` (infinities
+/// and NaNs sort above all finite values; float comparison would let NaN pass).
 #[inline(always)]
 pub(crate) fn max_abs_bits(x: &[f64]) -> u64 {
     x.iter().fold(0, |most, sample| {

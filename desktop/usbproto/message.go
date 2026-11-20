@@ -23,10 +23,9 @@ type Reply struct {
 	Body   json.RawMessage
 }
 
-// MarshalJSON writes the request exactly as serde_json writes the Rust
-// struct: fields in declaration order, compact, serde's string escaping.
-// Call it directly for the bytes to send: json.Marshal HTML-escapes what a
-// marshaler returns (<, >, &, U+2028, U+2029), which serde does not.
+// MarshalJSON encodes the request matching serde_json (declaration field order,
+// compact, serde string escaping). Call it directly rather than json.Marshal,
+// which HTML-escapes <, >, &, U+2028, and U+2029.
 func (r Request) MarshalJSON() ([]byte, error) {
 	out := []byte(`{"method":`)
 	out = sjson.AppendString(out, r.Method)

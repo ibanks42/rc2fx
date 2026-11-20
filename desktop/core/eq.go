@@ -6,11 +6,11 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-// Theoretical filter response, not an FFT or an audio processor.
+// Analytical biquad frequency response for plotting (not DSP audio processing).
 //
-// Products are wrapped in float64() where they feed a sum: that stops Go from
-// fusing them into FMA instructions on arm64, so curves are the same on
-// every platform.
+// Products feeding sums are wrapped in float64(...) to prevent Go from fusing
+// them into FMA instructions on arm64, keeping curves bit-identical across
+// architectures.
 
 type Coefficients struct {
 	B0, B1, B2, A1, A2 float64
@@ -140,10 +140,9 @@ func (e EQSettings) responseChannels() uint8 {
 	return 1
 }
 
-// ResponseCurve is the EQ's response in dB at each frequency, with the input
-// and output gains when includeGains is set. It validates the EQ and designs
-// each band once; an invalid or transient draft, or a frequency outside
-// 0..Nyquist, plots flat.
+// ResponseCurve evaluates the combined EQ magnitude in dB at each frequency
+// (optionally including input/output gain). Invalid drafts or out-of-range
+// frequencies evaluate to 0 dB.
 func ResponseCurve(eq EQSettings, channel Channel, frequencies []float64, includeGains bool) []float64 {
 	curve := make([]float64, len(frequencies))
 	if eq.Validate(eq.responseChannels()) != nil || !eq.Enabled {

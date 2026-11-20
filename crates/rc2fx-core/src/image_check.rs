@@ -1,32 +1,30 @@
-//! The mixer's check of the files a flash unpacked (`rc2fx.sh image-check`),
-//! as `GET api/v1/image-check` reports it.
+//! Root filesystem integrity check (`rc2fx.sh image-check`), exposed via
+//! `GET api/v1/image-check`.
 //!
-//! The installer lists RØDE's files with their SHA-256 in the image. On the
-//! first boots the launcher compares the root against that list, restores a
-//! damaged file from the other root partition when that copy is identical,
-//! and records the outcome as `key=value` lines in `/opt/rc2fx/data/image-check`.
+//! The installer writes a SHA-256 manifest of RØDE's files into the image. On
+//! initial boots, the launcher verifies the root filesystem against that
+//! manifest, restores any damaged file from the inactive root partition if its
+//! hash matches, and writes the `key=value` result to `/opt/rc2fx/data/image-check`.
 
 use serde::{Deserialize, Serialize};
 
-/// How many file names a report carries; the rest are counted, not listed.
+/// Max file paths included in a report; overflow is counted in `unlisted`.
 pub const MAX_LISTED: usize = 32;
-/// The largest record read.
 const MAX_RECORD: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ImageStatus {
-    /// The image has no file list (a mixer installed before the check, or
-    /// after an in-place update): there is nothing to check.
+    /// No manifest in this image (pre-check install or in-place update).
     None,
-    /// The list is there and the check has not finished yet.
+    /// Manifest exists, but verification hasn't completed yet.
     Pending,
-    /// Every listed file matches.
+    /// All manifest files matched.
     Ok,
-    /// Damaged files were restored; RØDE's boot already used the damaged
-    /// copies, so the mixer needs a restart.
+    /// Damaged files were restored from the inactive root; a reboot is needed
+    /// since RØDE's boot already loaded the damaged copies.
     Repaired,
-    /// At least one listed file is damaged and could not be restored.
+    /// At least one file is damaged and couldn't be restored.
     Damaged,
 }
 
@@ -40,7 +38,7 @@ pub struct ImageCheck {
     pub repaired: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub damaged: Vec<String>,
-    /// Files beyond [`MAX_LISTED`] in either list.
+    /// Count of repaired/damaged files omitted due to [`MAX_LISTED`].
     #[serde(skip_serializing_if = "is_zero")]
     pub unlisted: usize,
 }
@@ -62,8 +60,8 @@ impl Default for ImageCheck {
 }
 
 impl ImageCheck {
-    /// What the mixer reports from its record, given whether the image has a
-    /// file list. A record written for an older list is still pending.
+    /// Parses the on-disk record against the current image's manifest digest.
+    /// Records from an older manifest are treated as `Pending`.
     pub fn from_record(record: Option<&str>, manifest_digest: Option<&str>) -> Self {
         let Some(digest) = manifest_digest else {
             return Self::default();

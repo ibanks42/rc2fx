@@ -9,17 +9,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/report"
 )
 
-// rebuildDiskID is the disk id a rebuilt sector 0 gets when the damaged one
-// has none (all zero or all 0xFF): bytes 24 93 3a ed, the id of a Pro II as
-// shipped. RØDE writes one factory image to every unit, so it is the best
-// guess should anything on the mixer name partitions by PARTUUID.
+// Fallback MBR disk ID used when rebuilding a wiped sector 0 (0xed3a9324, the
+// factory Pro II image ID) in case anything references partitions by PARTUUID.
 var rebuildDiskID = [4]byte{0x24, 0x93, 0x3a, 0xed}
 
-// chsLBA is the CHS value that means "use the LBA fields".
+// Sentinel CHS tuple indicating LBA addressing.
 var chsLBA = [3]byte{0xfe, 0xff, 0xff}
 
-// The few ext4 superblock fields read here, as offsets into the superblock,
-// which starts 1024 bytes into the partition.
+// Offsets into the ext4 superblock (located 1024 bytes into the partition).
 const (
 	sbOffset          = 1024
 	sbBlocksLo        = 4
@@ -30,10 +27,8 @@ const (
 	incompat64bit     = 0x80
 )
 
-// sectorReader reads one sector at a time and remembers nothing.
 type sectorReader struct{ d disk.Disk }
 
-// read returns sector n, or nil when the disk is too small to have it.
 func (r sectorReader) read(n uint64) ([]byte, error) {
 	if n >= r.d.Sectors() {
 		return nil, nil
@@ -45,10 +40,10 @@ func (r sectorReader) read(n uint64) ([]byte, error) {
 	return b, nil
 }
 
-// ext4Size is the size in sectors of the ext4 filesystem starting at sector
-// start, or 0 when there is no plausible ext4 superblock there.
+// ext4Size returns the ext4 filesystem size in 512-byte sectors at start, or 0
+// if no valid ext4 superblock is found there.
 func ext4Size(r sectorReader, start uint64) (uint64, error) {
-	// Every field read is in the superblock's first 512 bytes.
+	// All fields we inspect live in the first 512 bytes of the superblock.
 	sb, err := r.read(start + sbOffset/disk.SectorSize)
 	if err != nil || sb == nil {
 		return 0, err
@@ -60,7 +55,7 @@ func ext4Size(r sectorReader, start uint64) (uint64, error) {
 	if binary.LittleEndian.Uint32(sb[sbFeatureIncompat:])&incompat64bit != 0 {
 		blocks |= uint64(binary.LittleEndian.Uint32(sb[sbBlocksHi:])) << 32
 	}
-	// ext4 block sizes run from 1 KiB to 64 KiB.
+	// ext4 block sizes range from 1 KiB (log=0) to 64 KiB (log=6).
 	logSize := binary.LittleEndian.Uint32(sb[sbLogBlockSize:])
 	if blocks == 0 || logSize > 6 || blocks > (1<<40) {
 		return 0, nil
@@ -68,16 +63,14 @@ func ext4Size(r sectorReader, start uint64) (uint64, error) {
 	return blocks * (1024 << logSize) / disk.SectorSize, nil
 }
 
-// fatBoot reports whether b is a FAT boot sector.
 func fatBoot(b []byte) bool {
 	return b != nil && b[510] == 0x55 && b[511] == 0xAA &&
 		(string(b[54:57]) == "FAT" || string(b[82:85]) == "FAT")
 }
 
-// evidence looks for what makes a disk a RØDECaster with the standard
-// layout, reading one sector per item: the bootloader in sector 1, ext4 at
-// the start of partitions 1 and 2, FAT at the start of 3 and 4. p1 is the
-// size of the filesystem on partition 1, 0 when there is none.
+// evidence probes for the Amlogic bootloader in sector 1, ext4 superblocks on
+// partitions 1-2, and FAT boot sectors on partitions 3-4. Returns the probes
+// and the ext4 size of partition 1 (0 if absent).
 func evidence(d disk.Disk, l *Layout) (ev []report.Evidence, p1 uint64, err error) {
 	r := sectorReader{d}
 	boot, err := r.read(1)
@@ -121,8 +114,6 @@ func missing(ev []report.Evidence) []string {
 	return out
 }
 
-// knownSize is whether n sectors is a size this tool knows for entry i of
-// the layout.
 func knownSize(l *Layout, i int, start, n uint32, diskSectors uint64) bool {
 	switch {
 	case n == 0 || uint64(start)+uint64(n) > diskSectors:
@@ -135,16 +126,12 @@ func knownSize(l *Layout, i int, start, n uint32, diskSectors uint64) bool {
 	return n == l.Entries[i].Sectors
 }
 
-// intact is whether entry i is exactly what the layout has there: type,
-// start and a known size.
 func intact(l *Layout, i int, p report.Partition, diskSectors uint64) bool {
 	return p.Type == l.Entries[i].Type && p.Start == l.Entries[i].Start && knownSize(l, i, p.Start, p.Sectors, diskSectors)
 }
 
-// otherLayout is a reason when the table, though not one this tool knows,
-// is readable rather than damaged: an entry has a standard start and a
-// sensible size this tool does not know. Recover never changes the size of
-// such an entry, so a table like this is left alone.
+// otherLayout detects a plausible non-standard partition size at a standard
+// start offset so recover leaves custom layouts untouched.
 func otherLayout(l *Layout, parts []report.Partition, diskSectors uint64) string {
 	for i, p := range parts {
 		if p.Start != l.Entries[i].Start || p.Sectors == 0 || uint64(p.Start)+uint64(p.Sectors) > diskSectors {
@@ -157,7 +144,6 @@ func otherLayout(l *Layout, parts []report.Partition, diskSectors uint64) string
 	return ""
 }
 
-// damage is a damaged sector 0 and what to rebuild it as.
 type damage struct {
 	layout   *Layout
 	p1       uint64 // ext4 size on partition 1, in sectors
@@ -165,10 +151,8 @@ type damage struct {
 	rebuilt  []byte
 }
 
-// examine decides an Unrecognized sector 0 further, from the rest of the
-// disk. It returns the damage when the table can be rebuilt; otherwise a
-// failure code ("not-a-mixer") and words, or only a reason when the table
-// is another layout and stays Unrecognized. err is a failed read.
+// examine inspects the rest of the disk when sector 0 is unrecognized to
+// distinguish recoverable damage from a non-mixer or custom layout.
 func examine(d disk.Disk, sector0 []byte, parts []report.Partition) (dm *damage, ev []report.Evidence, code, reason string, err error) {
 	l := &layouts[0]
 	if r := otherLayout(l, parts, d.Sectors()); r != "" {
@@ -188,14 +172,12 @@ func examine(d disk.Disk, sector0 []byte, parts []report.Partition) (dm *damage,
 	return &damage{layout: l, p1: p1, evidence: ev, rebuilt: rebuilt}, ev, "", "", nil
 }
 
-// rebuild is sector 0 as recover writes it: the boot code and disk id kept
-// where there are any, every intact entry kept byte for byte, every other
-// entry written new at its standard start, and the 55 AA signature. It
-// returns nil and a reason when the evidence contradicts the table.
+// rebuild constructs a replacement sector 0, preserving any intact boot code,
+// disk ID, and valid partition entries while regenerating damaged ones.
 func rebuild(l *Layout, sector0 []byte, parts []report.Partition, p1, diskSectors uint64) ([]byte, string) {
 	out := make([]byte, disk.SectorSize)
-	// The bootloader is in sector 1 and does not run this code, so a
-	// missing boot code is left as zeros rather than invented.
+	// The Amlogic bootloader lives in sector 1 and doesn't execute MBR boot
+	// code, so leave missing boot code zeroed.
 	if !allBytes(sector0[:440], 0) && !allBytes(sector0[:440], 0xff) {
 		copy(out[:440], sector0[:440])
 	}
@@ -256,8 +238,6 @@ func allBytes(b []byte, v byte) bool {
 	return true
 }
 
-// tooLarge is the words for a filesystem on partition 1 that has outgrown
-// the factory partition, or "" when it has not.
 func tooLarge(l *Layout, p1 uint64) string {
 	if p1 <= uint64(l.Entries[0].Sectors) {
 		return ""

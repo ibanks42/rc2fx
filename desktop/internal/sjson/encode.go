@@ -11,17 +11,17 @@ import (
 	"unicode/utf8"
 )
 
-// Encode is serde_json::to_vec / to_string: compact JSON, struct fields in
-// declaration order, maps in key order, floats as serde_json writes them
-// (shortest round-trip digits, `.0` on integral values, exponent outside
+// Encode serializes value as compact JSON matching serde_json: struct fields
+// in declaration order, maps in sorted key order, floats formatted with
+// shortest round-trip digits (`.0` on integral values, exponent outside
 // 1e-5..1e16), non-finite floats as null, and only `"`, `\` and control
-// characters escaped. See json_decode.go for the tag rules.
+// characters escaped. See decode.go for tag rules.
 func Encode(value any) ([]byte, error) {
 	return appendAny(nil, reflect.ValueOf(value), nil)
 }
 
-// EncodePretty is serde_json::to_vec_pretty / to_string_pretty: two-space
-// indentation and `": "` after keys, no trailing newline.
+// EncodePretty serializes value with two-space indentation and no trailing
+// newline, matching serde_json::to_vec_pretty.
 func EncodePretty(value any) ([]byte, error) {
 	return appendAny(nil, reflect.ValueOf(value), &indenter{})
 }
@@ -69,8 +69,7 @@ func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error
 		return appendTreeJSON(dst, value.Interface().(Tree), pretty), nil
 	}
 	if t == rawMessageType {
-		// Already JSON, as a serde_json Value inside a typed struct: written
-		// as it is (compacted), not as an array of bytes.
+		// Pre-encoded JSON payload: compact as-is rather than encoding as a byte array.
 		raw := value.Bytes()
 		if len(raw) == 0 {
 			return append(dst, "null"...), nil
@@ -306,10 +305,9 @@ func appendTreeJSON(dst []byte, value Tree, pretty *indenter) []byte {
 
 const hexDigits = "0123456789abcdef"
 
-// appendJSONString escapes as serde_json does: `"` and `\`, the short
-// escapes \b \t \n \f \r, other bytes below 0x20 as \u00xx; nothing else
-// (not `/`, `<`, DEL or U+2028). Invalid UTF-8, which a Rust string cannot
-// hold, is written as U+FFFD.
+// appendJSONString escapes `"`, `\`, short escapes (\b \t \n \f \r), and other
+// bytes below 0x20 as \u00xx, matching serde_json (not `/`, `<`, DEL, or U+2028).
+// Invalid UTF-8 bytes are written as U+FFFD.
 func appendJSONString(dst []byte, text string) []byte {
 	dst = append(dst, '"')
 	start := 0
@@ -357,10 +355,10 @@ func appendJSONString(dst []byte, text string) []byte {
 	return append(dst, '"')
 }
 
-// appendJSONFloat writes a float as serde_json 1.0.154 (zmij) does. With
-// d.ddd×10^e the shortest round-trip digits: e within -5..=15 (f32:
-// -6..=12) is written in full (`1000.0`, `0.00012`), otherwise as `d.ddde+X`
-// or `de-X`. Zero is `0.0` or `-0.0`; NaN and infinities are `null`.
+// appendJSONFloat formats a float matching serde_json 1.0.154 (zmij):
+// exponents in -5..=15 (f32: -6..=12) use plain decimal (`1000.0`, `0.00012`),
+// others use scientific notation (`d.ddde+X`, `de-X`). Zero is `0.0`/`-0.0`;
+// NaN and infinities encode as `null`.
 func appendJSONFloat(dst []byte, value float64, bitSize int) []byte {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return append(dst, "null"...)

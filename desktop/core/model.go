@@ -17,7 +17,6 @@ const (
 	MaxBands              = 32
 )
 
-// TargetKind is serde `rename_all = "lowercase"`.
 type TargetKind string
 
 const (
@@ -30,7 +29,6 @@ var targetKinds = []TargetKind{TargetKindMic, TargetKindPlayback, TargetKindOutp
 
 func (k *TargetKind) UnmarshalText(text []byte) error { return enumUnmarshal(k, text, targetKinds) }
 
-// Effect is one processing stage, serde `rename_all = "lowercase"`.
 type Effect string
 
 const (
@@ -42,7 +40,7 @@ const (
 	EffectLimiter     Effect = "limiter"
 )
 
-// EffectAll is every effect, in the default order.
+// EffectAll lists all processing stages in default order.
 var EffectAll = [6]Effect{
 	EffectHighpass,
 	EffectSuppression,
@@ -72,7 +70,6 @@ func (e Effect) Label() string {
 	return string(e)
 }
 
-// BandType is serde `rename_all = "kebab-case"`.
 type BandType string
 
 const (
@@ -85,7 +82,6 @@ const (
 	BandTypeNotch     BandType = "notch"
 )
 
-// BandTypeAll is every band type.
 var BandTypeAll = [7]BandType{
 	BandTypeOff,
 	BandTypeBell,
@@ -118,7 +114,6 @@ func (b BandType) Label() string {
 	return string(b)
 }
 
-// BandMode is serde `rename_all = "kebab-case"`.
 type BandMode string
 
 const (
@@ -130,7 +125,6 @@ var bandModes = []BandMode{BandModeApoDr, BandModeRlcBt}
 
 func (m *BandMode) UnmarshalText(text []byte) error { return enumUnmarshal(m, text, bandModes) }
 
-// Channel is a side of a stereo EQ.
 type Channel uint8
 
 const (
@@ -168,42 +162,27 @@ type Highpass struct {
 type Suppression struct {
 	Enabled bool    `json:"enabled"`
 	Wet     float64 `json:"wet"`
-	// DeepFilterNet3's lookahead in hops: 0 (the default, and what settings
-	// saved before this field existed mean) or 1, which adds exactly one hop
-	// of latency.
+	// DeepFilterNet3 lookahead in hops: 0 (default) or 1 (+1 hop latency).
 	Lookahead uint8     `json:"lookahead,default"`
 	Gate      VoiceGate `json:"gate"`
 }
 
-// VoiceGate turns the suppressed microphone down while the model hears no
-// voice. It acts only while suppression is enabled, since the voice score
-// comes from the suppression model.
+// VoiceGate attenuates a suppressed mic when the model detects no voice.
+// Only active while suppression is enabled.
 type VoiceGate struct {
-	// 0 (off) to 1 (strict); sets every parameter unless `advanced`.
-	Strength float64 `json:"strength"`
-	// Use the parameters below instead of the ones `strength` stands for.
-	Advanced bool `json:"advanced"`
-	// Voice score (0 to 1) at or above which the gate opens.
-	Threshold float64 `json:"threshold"`
-	// How far the closed gate turns the signal down, in dB; 0 is off.
-	Reduction float64 `json:"reduction"`
-	// Opening time constant, in ms.
-	Attack float64 `json:"attack"`
-	// How long the gate stays open after the score last reached the
-	// threshold, in ms.
-	Hold float64 `json:"hold"`
-	// Closing time constant after the hold, in ms.
-	Release float64 `json:"release"`
+	Strength  float64 `json:"strength"` // 0 (off) to 1 (strict); drives all params unless Advanced is set
+	Advanced  bool    `json:"advanced"`
+	Threshold float64 `json:"threshold"` // voice score [0, 1] to open the gate
+	Reduction float64 `json:"reduction"` // attenuation in dB (0 = off)
+	Attack    float64 `json:"attack"`    // ms
+	Hold      float64 `json:"hold"`      // ms
+	Release   float64 `json:"release"`   // ms
 }
 
-// GateShape is the parameters the gate runs with. Its smoothing runs in dB.
+// GateShape holds the resolved runtime gate parameters (smoothed in dB).
 type GateShape struct {
-	// Voice score that opens the gate.
-	Threshold float64
-	// Voice score an open gate stays open down to (`threshold` minus
-	// `GATE_HYSTERESIS`), so a score hovering near the threshold, as in soft
-	// consonants, does not flutter it.
-	CloseThreshold float64
+	Threshold      float64
+	CloseThreshold float64 // Threshold - GateHysteresis to avoid chatter on soft consonants
 	ReductionDB    float64
 	AttackMs       float64
 	HoldMs         float64
@@ -212,24 +191,17 @@ type GateShape struct {
 
 const GateHysteresis = 0.15
 
-// log2OnePointFive is 1.5f64.log2() correctly rounded (what glibc's log2
-// returns); Go's math.Log2 can be an ulp away.
+// Correctly rounded log2(1.5) matching glibc; Go's math.Log2 can be 1 ULP off.
 const log2OnePointFive = 0.58496250072115618145373894394781650876
 
-// GateShapeForStrength is what a strength from 0 (off) through gentle (keeps
-// breaths) to 1 (strict) stands for. Depth grows from nothing, like a blend,
-// reaching 20 dB at half strength. Strictness comes mostly from the threshold
-// and depth, so the gate never becomes a hard mute: the residual after neural
-// suppression is already low, and deeper reduction only makes the switching
-// audible. Hold and release shrink less; the release moves geometrically so
-// equal slider steps sound even. Opening is always 5 ms, inside the model's
-// 10-30 ms lookahead.
+// GateShapeForStrength maps strength in [0, 1] to gate parameters. Reduction
+// scales smoothly up to 30 dB (20 dB at 0.5) rather than hard-muting; release
+// scales geometrically so equal slider steps sound even; attack stays at 5 ms
+// inside the model's lookahead.
 func GateShapeForStrength(strength float64) GateShape {
 	s := num.Clamp(strength, 0.0, 1.0)
-	// The explicit float64 conversions keep Go from fusing a multiply-add,
-	// so the threshold and hold match the mixer's bit for bit on every
-	// architecture. math.Pow is not glibc's pow, so the reduction and release
-	// can be up to two ulps from the mixer's (fixtures/gate).
+	// Explicit float64() conversions inhibit FMA so threshold/hold match the
+	// mixer bit-for-bit. math.Pow may differ from glibc pow by up to 2 ULPs.
 	linear := func(gentle, strict float64) float64 { return gentle + float64((strict-gentle)*s) }
 	geometric := func(gentle, strict float64) float64 { return float64(gentle * math.Pow(strict/gentle, s)) }
 	return newGateShape(
@@ -252,8 +224,6 @@ func newGateShape(threshold, reductionDB, attackMs, holdMs, releaseMs float64) G
 	}
 }
 
-// VoiceGateWithStrength is a gate at `strength`, its advanced parameters
-// matching it.
 func VoiceGateWithStrength(strength float64) VoiceGate {
 	gate := VoiceGate{Strength: strength}
 	gate.SetAdvanced(true)
@@ -261,7 +231,6 @@ func VoiceGateWithStrength(strength float64) VoiceGate {
 	return gate
 }
 
-// Active reports whether the gate turns anything down.
 func (g VoiceGate) Active() bool { return g.Shape().ReductionDB > 0.0 }
 
 func (g VoiceGate) Shape() GateShape {
@@ -271,9 +240,9 @@ func (g VoiceGate) Shape() GateShape {
 	return GateShapeForStrength(g.Strength)
 }
 
-// SetAdvanced switches between the strength slider and the separate
-// parameters. Entering advanced mode starts the parameters from the current
-// strength, so the sound does not jump; leaving keeps them for later.
+// SetAdvanced toggles manual gate parameters. Entering advanced mode seeds
+// them from the current strength so there is no audible jump; leaving keeps
+// the custom values intact.
 func (g *VoiceGate) SetAdvanced(advanced bool) {
 	if advanced && !g.Advanced {
 		shape := GateShapeForStrength(g.Strength)
@@ -286,11 +255,8 @@ func (g *VoiceGate) SetAdvanced(advanced bool) {
 	g.Advanced = advanced
 }
 
-// SelectLookahead: 0 (lowest latency) or 1 (more context, one hop more).
 func (s *Suppression) SelectLookahead(lookahead uint8) { s.Lookahead = lookahead }
 
-// Geometry is the geometry the saved settings stand for, and hence the
-// latency they add, without a worker scheduling allowance.
 func (s Suppression) Geometry() (SuppressionGeometry, bool) {
 	return SuppressionAdmittedGeometry(s.Lookahead)
 }
@@ -302,24 +268,18 @@ func (s Suppression) validateLookahead() error {
 	return nil
 }
 
-// DFNHopSamples is DeepFilterNet3's STFT hop, in samples: one lookahead step
-// adds exactly this much latency (5.0 ms at 48 kHz).
+// DFNHopSamples is DeepFilterNet3's STFT hop (5.0 ms at 48 kHz).
 const DFNHopSamples uint32 = 240
 
-// Lookaheads is the lookahead values DeepFilterNet3 admits, lowest latency
-// first.
 var Lookaheads = [2]uint8{0, 1}
 
-// ModelGeometry is model-defined buffering, independent of any worker
-// scheduling allowance.
+// ModelGeometry is model-inherent buffering, excluding worker scheduling lead.
 type ModelGeometry struct {
 	FrameSamples          uint32
 	IntrinsicDelaySamples uint32
 }
 
-// SuppressionGeometry is a resolved processing geometry: the model's
-// buffering plus the worker's scheduling allowance. Factories use
-// SuppressionAdmittedGeometry.
+// SuppressionGeometry is model buffering plus the worker scheduling allowance.
 type SuppressionGeometry struct {
 	SampleRate            uint32
 	FrameSamples          uint32
@@ -356,7 +316,7 @@ type EQSettings struct {
 	InputGainDB  float64 `json:"inputGainDb"`
 	OutputGainDB float64 `json:"outputGainDb"`
 	Bands        []Band  `json:"bands"`
-	// Nil: the right channel follows the left. May be absent but not null.
+	// Nil means the right channel follows the left; omitted on the wire (never null).
 	RightBands *[]Band `json:"rightBands,omitempty,nonnull"`
 }
 
@@ -391,13 +351,10 @@ type Limiter struct {
 	Release float64 `json:"release"`
 }
 
-// MaxStatusText is the longest status sentence a mixer may send. It leaves
-// room for 512 of the widest characters and the context around them.
 const MaxStatusText = 4096
 
-// ValidDisplayText reports whether `text` from the mixer is fit to show: at
-// most `maximum` bytes, one line, and no bidirectional controls that would
-// make it read as something else.
+// ValidDisplayText checks that mixer-provided text is within maximum bytes and
+// contains no control or bidi override characters.
 func ValidDisplayText(text string, maximum int) bool {
 	if len(text) > maximum {
 		return false
@@ -410,7 +367,7 @@ func ValidDisplayText(text string, maximum int) bool {
 	return true
 }
 
-// IsBidiControl reports Unicode's embedding, override and isolate controls.
+// IsBidiControl reports whether c is a Unicode bidi embedding, override, or isolate control.
 func IsBidiControl(c rune) bool {
 	return (c >= '\u202a' && c <= '\u202e') || (c >= '\u2066' && c <= '\u2069')
 }
@@ -499,8 +456,7 @@ func (e EQSettings) Validate(channels uint8) error {
 	return nil
 }
 
-// Channel is the bands a side plays: the right follows the left unless it
-// has its own.
+// Channel returns the bands active for side (right falls back to left when linked).
 func (e EQSettings) Channel(side Channel) []Band {
 	if side == ChannelRight && e.RightBands != nil {
 		return *e.RightBands
@@ -508,7 +464,6 @@ func (e EQSettings) Channel(side Channel) []Band {
 	return e.Bands
 }
 
-// ChannelMut is the band list a side edits.
 func (e *EQSettings) ChannelMut(side Channel) *[]Band {
 	if side == ChannelRight && e.RightBands != nil {
 		return e.RightBands
@@ -516,8 +471,7 @@ func (e *EQSettings) ChannelMut(side Channel) *[]Band {
 	return &e.Bands
 }
 
-// AddBand appends `band-N`, N one above the highest numbered band. The
-// pointer is valid until the band list next changes.
+// AddBand appends "band-N" using one past the highest existing band number.
 func (e *EQSettings) AddBand(side Channel) (*Band, error) {
 	bands := e.ChannelMut(side)
 	if len(*bands) >= MaxBands {
@@ -549,7 +503,6 @@ func (e *EQSettings) RemoveBand(side Channel, id string) bool {
 	return false
 }
 
-// Clone is a deep copy.
 func (e EQSettings) Clone() EQSettings {
 	e.Bands = slices.Clone(e.Bands)
 	if e.RightBands != nil {
@@ -562,13 +515,11 @@ func (e EQSettings) Clone() EQSettings {
 	return e
 }
 
-// Equal compares field by field (deepEqual).
 func (e EQSettings) Equal(other EQSettings) bool { return deepEqual(e, other) }
 
 func NewTarget(id, name string, kind TargetKind, channels uint8) Target {
 	eq := DefaultEQSettings()
-	// Processing is opt-in: a new path passes audio through unchanged
-	// until each stage is explicitly enabled.
+	// Stages start disabled so a new path passes audio through unchanged.
 	eq.Enabled = false
 	return Target{
 		ID:       id,
@@ -605,8 +556,6 @@ func (t Target) Validate() error {
 	return t.validateFields()
 }
 
-// validateFields is the field validation shared by every settings entry
-// point.
 func (t Target) validateFields() error {
 	if !ValidID(t.ID) || t.Name == "" || len(t.Name) > 128 || t.Channels < 1 || t.Channels > 2 {
 		return CoreError("Invalid target identity: " + t.ID)
@@ -658,8 +607,8 @@ func distinctEffects(order []Effect) bool {
 	return len(seen) == 6
 }
 
-// IsChatOutput: Chat suppression acts on a separate mono microphone stem,
-// never on the completed stereo mix (which also carries pads and playback).
+// IsChatOutput reports whether t is a Chat mix output, which suppresses a
+// dedicated mono mic stem rather than the full stereo mix.
 func (t Target) IsChatOutput() bool {
 	return t.Kind == TargetKindOutput && t.Channels == 2 && (t.ID == "send-chat" || t.ID == "duo-send-chat")
 }
@@ -703,17 +652,14 @@ func (t *Target) SetEffectEnabled(effect Effect, enabled bool) {
 	}
 }
 
-// Clone is a deep copy.
 func (t Target) Clone() Target {
 	t.Order = slices.Clone(t.Order)
 	t.EQ = t.EQ.Clone()
 	return t
 }
 
-// Equal compares field by field (deepEqual).
 func (t Target) Equal(other Target) bool { return deepEqual(t, other) }
 
-// CloneTargets deep-copies a target list.
 func CloneTargets(targets []Target) []Target {
 	if targets == nil {
 		return nil
@@ -725,7 +671,6 @@ func CloneTargets(targets []Target) []Target {
 	return copied
 }
 
-// TargetsEqual compares two target lists element by element (deepEqual).
 func TargetsEqual(a, b []Target) bool { return deepEqual(a, b) }
 
 func (c Config) Validate() error { return c.validateWith(Target.Validate) }
@@ -759,9 +704,8 @@ func (c Config) validateWith(validateTarget func(Target) error) error {
 	return c.ValidateSelection(c.SelectedTargets)
 }
 
-// ValidateSelection: selection is distinct from saved effect settings.
-// Physical eligibility is supplied by the connected controller, not inferred
-// from this catalog.
+// ValidateSelection checks IDs against the catalog. Physical eligibility is
+// reported by the mixer, not inferred here.
 func (c Config) ValidateSelection(selected []string) error {
 	ids := make(map[string]struct{}, len(selected))
 	for _, id := range selected {
@@ -797,7 +741,7 @@ func (c Config) SelectedChannels() uint32 {
 	return channels
 }
 
-// CanonicalSelection is the selection in catalog order.
+// CanonicalSelection validates selected and returns it in catalog order.
 func (c Config) CanonicalSelection(selected []string) ([]string, error) {
 	if err := c.ValidateSelection(selected); err != nil {
 		return nil, err
@@ -811,7 +755,6 @@ func (c Config) CanonicalSelection(selected []string) ([]string, error) {
 	return ids, nil
 }
 
-// ConfigFromJSON is strict parsing of saved settings in the current schema.
 func ConfigFromJSON(text string) (Config, error) {
 	config, err := FromJSON[Config](text)
 	if err != nil {
@@ -850,22 +793,18 @@ func (c Config) ValidateUpdate(targets []Target) error {
 	return nil
 }
 
-// Clone is a deep copy.
 func (c Config) Clone() Config {
 	c.SelectedTargets = slices.Clone(c.SelectedTargets)
 	c.Targets = CloneTargets(c.Targets)
 	return c
 }
 
-// Equal compares field by field (deepEqual).
 func (c Config) Equal(other Config) bool { return deepEqual(c, other) }
 
-// DefaultConfig is Config::default(): every path the mixer can process, none
-// selected, revision 1.
+// DefaultConfig returns the full target catalog with nothing selected at revision 1.
 func DefaultConfig() Config {
 	targets := []Target{}
-	// This existing saved chain owns physical combo input 4. Do not move
-	// its effects to input 1 merely because its durable ID says mic-1.
+	// Legacy ID "mic-1" maps to physical combo input 4; keep the ID stable.
 	targets = append(targets, NewTarget("mic-1", "Mic 4", TargetKindMic, 1))
 	for i := 1; i <= 3; i++ {
 		n := strconv.Itoa(i)
@@ -903,8 +842,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// parseRustUint is Rust's `str::parse` for an unsigned integer of `bits`
-// bits: an optional `+`, then one or more ASCII digits, in range.
+// parseRustUint matches Rust's str::parse for unsigned integers (optional '+'
+// followed by ASCII digits).
 func parseRustUint(text string, bits int) (uint64, bool) {
 	text = strings.TrimPrefix(text, "+")
 	if text == "" {

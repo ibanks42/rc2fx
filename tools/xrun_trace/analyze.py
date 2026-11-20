@@ -1,4 +1,4 @@
-"""Attribute a frozen ftrace window to observed execution states, not guesses."""
+"""Attribute a frozen ftrace window to observed scheduling and blocking states."""
 import argparse
 import collections
 import gzip

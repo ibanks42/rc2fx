@@ -1,13 +1,9 @@
-//! Where audio work lands in jackd's cycle, and a timestamped record of every
-//! observed anomaly, to correlate symptoms with timing evidence. JACK's xrun
-//! notifications alone identify neither the late client nor a hardware direction.
+//! Cycle-position histograms and lock-free anomaly event ring for correlating
+//! JACK xruns with callback/helper timing.
 //!
-//! jackd (JACK2, async) writes a client's output port buffers and reads its
-//! capture buffers at the start of the next cycle, before it triggers the
-//! graph. Positions are estimates in nanoseconds after the cycle start from
-//! `jack_frames_since_cycle_start`; compare them with server evidence rather
-//! than treating them as JACK's actual deadline checks. Recording is allocation
-//! and lock free on every thread.
+//! Positions are estimated in ns from cycle start using
+//! `jack_frames_since_cycle_start`; treat them as local timing evidence rather
+//! than jackd's internal deadline check. All recording is lock- and alloc-free.
 use super::{LinkMap, Symbol, timing};
 use std::{
     ffi::{CStr, c_char, c_int, c_void},
@@ -22,19 +18,14 @@ pub const PERIOD_NS: u64 = timing::BUDGET_NS;
 type FramesSinceCycleStart = unsafe extern "C" fn(*const c_void) -> u32;
 pub type Xrun = unsafe extern "C" fn(*mut c_void) -> c_int;
 
-/// `jack_frames_since_cycle_start`: bound by the mixer, or resolved from
-/// libjack's dynamic symbols. 1 means unavailable.
+/// Resolved `jack_frames_since_cycle_start` pointer (1 = unavailable).
 pub static CYCLE_CLOCK: AtomicUsize = AtomicUsize::new(0);
-/// libjack's link map, from `la_objopen`.
+/// `libjack`'s `LinkMap` pointer from `la_objopen`.
 pub static JACK_MAP: AtomicUsize = AtomicUsize::new(0);
 
-/// Counts positions in the cycle, as fractions of the period:
-/// [<=1/8, <=1/4, <=3/5, <=3/4, <=9/10, <=1, <=11/10, >11/10]. The 3/5 edge is
-/// `LATE_START_NS`, so bins 3 onward count exactly the late starts.
-///
-/// Each instance has one writer thread (the callback, the helper, a vendor
-/// job thread) and is written every cycle, so each starts on a cache line of
-/// its own and shares none with another thread's counters.
+/// Cycle-position histogram with edges at `[1/8, 1/4, 3/5, 3/4, 9/10, 1, 11/10]`
+/// of `PERIOD_NS` (3/5 = `LATE_START_NS`). Cache-line aligned so each writer
+/// thread (callback, helper, vendor job) avoids false sharing.
 #[repr(align(64))]
 pub struct Positions {
     bins: [AtomicU64; 8],
@@ -76,72 +67,47 @@ impl Positions {
         })
     }
 }
-/// Callback start, callback end and helper finish, after the cycle start.
 pub static START_POS: Positions = Positions::new();
 pub static END_POS: Positions = Positions::new();
 pub static HELPER_POS: Positions = Positions::new();
-/// Helper frames finished at or past `HELPER_LATE_NS`: the next callback was
-/// about to start, and may have had to pass its frame through.
+/// Helper frames finishing at or past `HELPER_LATE_NS`.
 pub static HELPER_LATE_FINISHES: AtomicU64 = AtomicU64::new(0);
 /// Callbacks whose estimated cycle-relative end exceeded one period.
-/// This is local timing evidence, not a read of JACK's actual deadline check.
 pub static LATE_ENDS: AtomicU64 = AtomicU64::new(0);
-/// Consecutive callbacks whose estimated cycle starts were more than 1.5
-/// periods apart: evidence of a discontinuity, not proof of its cause.
+/// Consecutive callbacks whose estimated cycle starts jumped by > 1.5 periods.
 pub static CYCLE_SKIPS: AtomicU64 = AtomicU64::new(0);
-/// The largest disagreement between the cycle start estimated at callback
-/// entry and at exit, among callbacks that stayed within their cycle. Checks
-/// consistency of these projected timestamps, not equality of clock epochs.
-/// The second estimate is a libjack call and a clock read after the callback's
-/// end stamp, so it is taken only while the bench gauges are on.
+/// Max drift between entry and exit cycle-start estimates (bench gauges only).
 pub static ESTIMATE_DRIFT_MAX_NS: AtomicU64 = AtomicU64::new(0);
-/// Notifications delivered to instrumented clients, NOT unique failed periods
-/// or proven audible dropouts. JACK can broadcast once for each late client.
+/// Total JACK xrun client notifications (not unique dropouts; JACK can notify multiple clients).
 pub static XRUNS: AtomicU64 = AtomicU64::new(0);
 pub static USB_REPORTS: AtomicU64 = AtomicU64::new(0);
 static LAST_USB_NS: AtomicU64 = AtomicU64::new(0);
 
-/// Risk thresholds that make an event, not proof of a missed deadline. The mixer's
-/// callback normally starts 300-600 us into the cycle, behind the clients
-/// jackd runs before it. A start past 3/5 of the period (1,400 us at 112
-/// frames) still leaves an ordinary callback ending before `LATE_END_NS`.
+/// Warning thresholds for event logging. The mixer callback normally starts
+/// 300–600 us into the cycle behind upstream JACK clients; starting past 3/5
+/// of a period (~1400 us at 112 frames) cuts into margin before `LATE_END_NS`.
 pub const LATE_START_NS: u64 = PERIOD_NS * 3 / 5;
 pub const LATE_END_NS: u64 = PERIOD_NS * 9 / 10;
-/// The helper's results are consumed by the next callback, which starts a
-/// little after the next cycle begins; this far into the frame's own cycle
-/// they are at risk.
+/// Helper results are consumed by the next callback; finishing past 2 periods is at risk.
 pub const HELPER_LATE_NS: u64 = PERIOD_NS * 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Kind {
-    /// The callback started this late into its cycle.
     LateStart = 1,
-    /// The callback returned this late into its cycle.
     LateEnd = 2,
-    /// The callback took longer than a period.
     Overrun = 3,
-    /// Consecutive callbacks started this far apart.
     Gap = 4,
-    /// The helper finished this late into the frame's cycle.
     HelperLateFinish = 5,
-    /// A callback waited for the helper this long and passed its frame
-    /// through: no processed audio for that callback, nothing handed off.
     HelperStall = 6,
-    /// A callback found the helper still busy, this long into its frame.
     HelperBusy = 7,
-    /// A JACK xrun notification arrived. The value is the receiver's cycle
-    /// position at notification time, NOT an xrun duration; MAX means unknown.
+    /// JACK xrun notification (`value` is cycle position at notification time, not duration; `u64::MAX` = unknown).
     Xrun = 8,
-    /// A vendor job ended this long after the next callback had started.
     VendorJobLate = 9,
-    /// The mixer rebuilt its USB gadget (a USB mode change).
     UsbGadget = 10,
-    /// The estimated cycle start jumped by more than 1.5 periods.
     CycleSkip = 11,
 }
 impl Kind {
-    /// The variant for a stored code; None for a code this build never wrote.
     pub fn from_code(code: u8) -> Option<Self> {
         Some(match code {
             1 => Self::LateStart,
@@ -182,7 +148,7 @@ struct Event {
     at: AtomicU64,
     value: AtomicU64,
     since_usb: AtomicU64,
-    /// Kind-specific extra in nanoseconds or microseconds; MAX means unknown.
+    /// Kind-specific extra field (`u64::MAX` = unavailable).
     extra: AtomicU64,
     kind: AtomicU8,
 }
@@ -198,13 +164,11 @@ static RING: [Event; EVENTS] = [const {
 }; EVENTS];
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-/// From any thread. `value` is a duration in nanoseconds where the kind has one.
 pub fn record(kind: Kind, value: u64) {
     record_extra(kind, value, u64::MAX);
 }
 
-/// `extra` is the kind's second value: for an xrun, jackd's
-/// jack_get_xrun_delayed_usecs() in microseconds (MAX when unavailable).
+/// Records an event with a kind-specific `extra` (for `Xrun`, `jack_get_xrun_delayed_usecs()`).
 fn record_extra(kind: Kind, value: u64, extra: u64) {
     let now = timing::monotonic();
     let index = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -253,14 +217,11 @@ impl Snapshot {
             "sinceUsbNs": (self.since_usb != u64::MAX).then_some(self.since_usb),
         });
         if self.kind == Kind::Xrun as u8 {
-            // Keep valueNs for existing consumers, but explicitly name its
-            // meaning. Neither the elapsed notification delay nor the failed
-            // cycle's duration is available from frames_since_cycle_start.
+            // Keep `valueNs` for existing consumers, and annotate what it actually is.
             result["notificationCyclePositionNs"] = serde_json::json!(value);
             result["valueMeaning"] = "notificationCyclePositionNotXrunDuration".into();
-            // jackd's own backend delay value for the last backend xrun, in
-            // microseconds: a client-lateness notification does not update it,
-            // so a stale value is possible.
+            // `jack_get_xrun_delayed_usecs()` only updates on backend xruns, so
+            // a client-lateness notification can carry a stale value.
             result["xrunDelayedUs"] =
                 serde_json::json!((self.extra != u64::MAX).then_some(self.extra));
             result["xrunDelayedMeaning"] = "lastBackendXrunDelayNotThisNotificationDuration".into();
@@ -268,18 +229,16 @@ impl Snapshot {
         result
     }
 }
-/// One event as the control API carries it.
 pub struct EngineEvent {
     pub seq: u64,
     pub at: u64,
     pub value: u64,
-    /// jackd's xrun delay for an xrun; u64::MAX when unknown.
+    /// `jack_get_xrun_delayed_usecs()` for xruns (`u64::MAX` when unknown).
     pub delayed_us: u64,
     pub kind: Kind,
 }
 
-/// The newest entries of the ring (the same tail audit.json shows), oldest
-/// first. `seq` is monotonic across the process, so a reader dedupes by it.
+/// Returns up to the 64 newest ring entries, oldest first.
 pub fn recent_events() -> Vec<EngineEvent> {
     let total = NEXT.load(Ordering::Relaxed);
     events_after(total.saturating_sub(64))
@@ -297,9 +256,8 @@ pub fn recent_events() -> Vec<EngineEvent> {
         .collect()
 }
 
-/// Events with a sequence number above `after`, oldest first. Slots being
-/// written concurrently read inconsistently; a slot is accepted only when its
-/// sequence number is unchanged across the read.
+/// Reads all ring entries with `seq > after` (oldest first), skipping any slot
+/// whose sequence number changes mid-read.
 fn events_after(after: u64) -> Vec<Snapshot> {
     let mut events: Vec<Snapshot> = RING
         .iter()
@@ -364,17 +322,13 @@ pub fn snapshot() -> serde_json::Value {
 
 static LOG: OnceLock<std::path::PathBuf> = OnceLock::new();
 static LOGGED: AtomicU64 = AtomicU64::new(0);
-/// At most this many lines per flush, so a storm cannot wear the flash.
+/// Cap lines per flush and total file size so an event storm doesn't wear flash.
 const LOG_BURST: usize = 200;
-/// The log lives on the mixer's flash and rotates only at a mixer start, so a
-/// fault that lasts for weeks must not fill it. Past this size events stay in
-/// the ring and in `snapshot`, but are no longer written.
 const LOG_CAP: u64 = 4 << 20;
 pub fn set_log(path: std::path::PathBuf) {
     let _ = LOG.set(path);
 }
-/// Append the events since the last flush, with wall-clock and monotonic
-/// times. Called from the report thread once a second.
+/// Flushes new ring events to the log file (called at ~1 Hz from the report thread).
 pub fn flush_log() {
     let Some(path) = LOG.get() else {
         return;
@@ -387,8 +341,6 @@ pub fn flush_log() {
     append_log(path, &events);
     LOGGED.store(last_seq, Ordering::Relaxed);
 }
-/// Append `events`, unless the file has already reached [`LOG_CAP`]. The last
-/// flush to reach it says so, and a flush writes at most [`LOG_BURST`] lines.
 fn append_log(path: &std::path::Path, events: &[Snapshot]) {
     let Ok(file) = std::fs::OpenOptions::new()
         .append(true)
@@ -475,12 +427,8 @@ fn stamp(time: std::time::SystemTime) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}.{millis:03}Z")
 }
 
-/// CLOCK_MONOTONIC at the start of `client`'s current jackd cycle, or 0
-/// without a cycle clock. JACK supplies an elapsed frame count, which is
-/// subtracted from our CLOCK_MONOTONIC time. JACK's absolute timestamps may
-/// use CLOCK_MONOTONIC_RAW instead; their epochs must not be equated.
-/// Read the JACK-owned name during registration, never from an audio callback.
-/// Use libjack's observed map directly rather than the audit namespace.
+/// Reads a JACK client's name during registration via libjack's `LinkMap`
+/// (control path only, never from an audio callback).
 pub fn client_name(client: usize) -> Option<String> {
     let map = JACK_MAP.load(Ordering::Acquire);
     if map == 0 || client == 0 {
@@ -502,6 +450,8 @@ pub fn client_name(client: usize) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Estimates `CLOCK_MONOTONIC` at the start of `client`'s current JACK cycle
+/// by subtracting elapsed frames from `monotonic()`. Returns 0 if unavailable.
 pub fn cycle_start(client: usize) -> u64 {
     let clock = cycle_clock();
     if clock <= 1 || client == 0 {
@@ -529,10 +479,7 @@ fn cycle_clock() -> usize {
     }
 }
 
-/// Look `name` up in a loaded object's dynamic symbol table, through its GNU
-/// or SysV hash table. 0 when absent. Pointer-valued dynamic entries are
-/// used as the loader left them: relocated once the object is relocated,
-/// otherwise still relative to its load address.
+/// Resolves `name` from a loaded ELF's `DT_GNU_HASH` or `DT_HASH` table, returning 0 if absent.
 pub(crate) unsafe fn dynamic_symbol(map: *const LinkMap, name: &CStr) -> usize {
     #[repr(C)]
     struct Dyn {
@@ -628,8 +575,6 @@ pub(crate) unsafe fn dynamic_symbol(map: *const LinkMap, name: &CStr) -> usize {
     0
 }
 
-/// Reads of counters the audio path already writes: JACK xrun notifications,
-/// and the helper's late finishes and stalls (pipeline's own statics).
 pub fn xrun_notifications() -> u64 {
     XRUNS.load(Ordering::Relaxed)
 }
@@ -640,29 +585,21 @@ pub fn helper_stalls() -> u64 {
     super::pipeline::HELPER_STALLS.load(Ordering::Relaxed)
 }
 
-/// jackd's jack_get_xrun_delayed_usecs(), when libjack exports it: a plain
-/// getter of the client's last backend xrun delay (a float, microseconds).
-/// Resolved once at registration, from the control path, never the callback.
+/// Resolved `jack_get_xrun_delayed_usecs` pointer (populated once on registration).
 static XRUN_DELAYED: AtomicU64 = AtomicU64::new(0);
-/// What the getter said at each notification: 0, non-zero, or unavailable.
 static XRUN_DELAYED_ZERO: AtomicU64 = AtomicU64::new(0);
 static XRUN_DELAYED_VALUE: AtomicU64 = AtomicU64::new(0);
 static XRUN_DELAYED_MISSING: AtomicU64 = AtomicU64::new(0);
 
-/// Where the getter was found; in audit.json so a device run says which way
-/// the lookup had to go. Empty until a lookup happens.
 static XRUN_DELAYED_ROUTE: AtomicU8 = AtomicU8::new(0);
 const ROUTE_MAIN: u8 = 1;
 const ROUTE_DEFAULT: u8 = 2;
 const ROUTE_MISSING: u8 = 3;
 
-/// Finds a symbol in the MIXER's namespace. This library is injected with
-/// LD_AUDIT, which glibc loads into its own link map namespace: `dlsym` with
-/// RTLD_DEFAULT then searches only that namespace's global scope, where the
-/// mixer's libjack is not, so `jack_get_xrun_delayed_usecs` was never found on
-/// the device (`xrunDelayed.getter:false`). The main program's namespace is
-/// reached with dlmopen(LM_ID_BASE, NULL, RTLD_NOLOAD); RTLD_DEFAULT stays as
-/// a fallback for an injection that does not use LD_AUDIT.
+/// Looks up `name` in the main program's link-map namespace. Because `LD_AUDIT`
+/// loads us into a separate namespace, `dlsym(RTLD_DEFAULT, ...)` can't see
+/// the mixer's `libjack`; we open `LM_ID_BASE` first and fall back to
+/// `RTLD_DEFAULT` for non-audit tests.
 fn find_in_mixer(name: &CStr) -> Option<usize> {
     let base = unsafe {
         libc::dlmopen(
@@ -688,8 +625,6 @@ fn find_in_mixer(name: &CStr) -> Option<usize> {
     None
 }
 
-/// Called once, when the mixer registers its xrun callback: `libjack.so` is
-/// loaded by then.
 pub fn resolve_xrun_delayed() {
     if XRUN_DELAYED.load(Ordering::Acquire) != 0 {
         return;
@@ -700,7 +635,7 @@ pub fn resolve_xrun_delayed() {
     let _ = XRUN_DELAYED.compare_exchange(0, address as u64, Ordering::AcqRel, Ordering::Acquire);
 }
 
-/// The mixer's own xrun callbacks, by client, kept behind this library's.
+/// Vendor xrun callbacks chained behind our wrapper, keyed by client pointer.
 struct Vendor {
     client: AtomicUsize,
     callback: AtomicUsize,
@@ -713,8 +648,6 @@ static VENDOR_XRUN: [Vendor; 8] = [const {
         argument: AtomicUsize::new(0),
     }
 }; 8];
-/// Record the mixer's registration; the library registers `xrun` instead,
-/// with the client as its argument. Returns false when no slot is free.
 pub fn register_vendor_xrun(client: usize, callback: usize, argument: usize) -> bool {
     let slot = VENDOR_XRUN
         .iter()
@@ -733,15 +666,11 @@ pub fn register_vendor_xrun(client: usize, callback: usize, argument: usize) -> 
     slot.callback.store(callback, Ordering::Release);
     true
 }
-/// jackd's xrun notification, on the client's notification thread.
 pub unsafe extern "C" fn xrun(client: *mut c_void) -> c_int {
     super::client_timing::freeze(timing::monotonic());
     XRUNS.fetch_add(1, Ordering::Relaxed);
-    // jackd's own view, when it exports one: the delay of its last backend
-    // xrun in microseconds. A client-lateness notification does not update
-    // it, so a non-zero value proves only that a backend xrun happened at
-    // some point; zero does not prove that this notification is a client
-    // timeout (JACK2 1.9.20's JackEngine sets it only for backend xruns).
+    // JACK2 only updates `jack_get_xrun_delayed_usecs` on backend xruns, not
+    // client timeouts, so 0 or a stale non-zero value is possible here.
     let delayed = XRUN_DELAYED.load(Ordering::Acquire);
     let delayed_us = if delayed == 0 {
         XRUN_DELAYED_MISSING.fetch_add(1, Ordering::Relaxed);
@@ -784,8 +713,7 @@ pub unsafe extern "C" fn xrun(client: *mut c_void) -> c_int {
     unsafe { callback(slot.argument.load(Ordering::Relaxed) as *mut c_void) }
 }
 
-/// Thread placement, for the report: this thread's id, CPU, policy and
-/// priority packed into one word each.
+/// Returns `[tid, cpu, sched_policy, sched_priority]` for the calling thread.
 pub fn placement() -> [i64; 4] {
     unsafe {
         let mut policy = 0;
@@ -806,9 +734,7 @@ pub fn placement_json(values: [i64; 4]) -> serde_json::Value {
     serde_json::json!({"tid": values[0], "cpu": values[1], "policy": values[2], "priority": values[3]})
 }
 
-/// Held by tests that hold a pipeline's helper busy (each such callback
-/// records probe events) and by the one that reads the event ring expecting
-/// only its own: they would otherwise interleave across test threads.
+/// Serializes tests that inspect or emit into the global probe event ring.
 #[cfg(test)]
 pub(crate) static EVENT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -853,16 +779,11 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
-    /// The lookup goes to the main program's namespace, not the audit one:
-    /// an LD_AUDIT module cannot see the mixer's libjack through RTLD_DEFAULT,
-    /// which is what left jack_get_xrun_delayed_usecs unresolved on the device.
     #[test]
     fn the_xrun_delay_getter_is_looked_up_in_the_mixers_namespace() {
-        // libc is in both namespaces; the route must be the main one.
         let found = find_in_mixer(c"getpid");
         assert!(found.is_some(), "getpid not found in the main namespace");
         assert_eq!(XRUN_DELAYED_ROUTE.load(Ordering::Relaxed), ROUTE_MAIN);
-        // And a name that exists nowhere is reported as missing, not guessed.
         assert!(find_in_mixer(c"rc2fx_no_such_symbol_exists").is_none());
         assert_eq!(XRUN_DELAYED_ROUTE.load(Ordering::Relaxed), ROUTE_MISSING);
     }

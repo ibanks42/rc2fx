@@ -26,8 +26,7 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// usbDevice is the sysfs directory of the USB device a block device hangs
-// off, or "" when it is not on USB.
+// usbDevice walks up sysfs from a block device to its enclosing USB device dir.
 func usbDevice(sys string) string {
 	current, err := filepath.EvalSymlinks(sys)
 	if err != nil {
@@ -61,7 +60,7 @@ func find() ([]Info, error) {
 			!strings.EqualFold(readTrim(filepath.Join(usb, "idProduct")), product) {
 			continue
 		}
-		// sysfs "size" is in 512-byte units whatever the device's sector size.
+		// sysfs size is always in 512-byte sectors regardless of physical sector size.
 		sectors, err := strconv.ParseUint(readTrim(filepath.Join(sys, "size")), 10, 64)
 		if err != nil || sectors == 0 {
 			continue
@@ -75,7 +74,6 @@ func find() ([]Info, error) {
 	return found, nil
 }
 
-// isPartitionName is whether name is the disk's name followed by digits only.
 func isPartitionName(name, diskName string) bool {
 	n, ok := strings.CutPrefix(name, diskName)
 	if !ok || n == "" {
@@ -89,7 +87,6 @@ func isPartitionName(name, diskName string) bool {
 	return true
 }
 
-// partitionDevs is the "major:minor" of each of the disk's partitions.
 func partitionDevs(diskName string) map[string]bool {
 	devs := map[string]bool{}
 	entries, _ := os.ReadDir(filepath.Join(sysBlock, diskName))
@@ -103,7 +100,7 @@ func partitionDevs(diskName string) map[string]bool {
 	return devs
 }
 
-// unescapeMount undoes mountinfo's octal escapes (\040 for a space, …).
+// unescapeMount decodes octal escapes in /proc/self/mountinfo (e.g. \040).
 func unescapeMount(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
@@ -119,9 +116,7 @@ func unescapeMount(s string) string {
 	return b.String()
 }
 
-// mountsOf is the mount points of the disk's partitions, in the order they
-// were mounted. A mount counts when its source is /dev/<disk><digits> or its
-// device number is one of the disk's partitions; nothing else.
+// mountsOf returns mount points belonging to diskName's partitions in mount order.
 func mountsOf(diskName string) ([]string, error) {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
@@ -151,7 +146,7 @@ func unmountPartitions(diskName string) error {
 	if err != nil {
 		return fmt.Errorf("could not read the list of mounted disks: %w", err)
 	}
-	// Last mounted first, so a mount inside another goes before it.
+	// Unmount in reverse order in case of nested mounts.
 	for i := len(points) - 1; i >= 0; i-- {
 		for {
 			err = unix.Unmount(points[i], 0)
@@ -161,7 +156,7 @@ func unmountPartitions(diskName string) error {
 		}
 		switch err {
 		case nil, unix.EINVAL, unix.ENOENT:
-			// EINVAL/ENOENT: already gone.
+			// Already unmounted.
 		case unix.EPERM, unix.EACCES:
 			return ErrPermission
 		case unix.EBUSY:
@@ -174,7 +169,7 @@ func unmountPartitions(diskName string) error {
 }
 
 func open(info Info, write bool) (Disk, error) {
-	// Device names are reused: make sure this path is still the same mixer.
+	// Re-verify the device name still points to the same mixer since sdX names get reused.
 	current, err := find()
 	if err != nil {
 		return nil, err
@@ -194,8 +189,8 @@ func open(info Info, write bool) (Disk, error) {
 	if write {
 		flags = unix.O_RDWR
 	}
-	// O_EXCL on a whole disk fails while one of its partitions is mounted,
-	// and once held it keeps the desktop from mounting one again.
+	// O_EXCL rejects the open if any partition is still mounted, and once
+	// acquired prevents automounters from remounting them.
 	flags |= unix.O_EXCL | unix.O_CLOEXEC
 	var fd int
 	for attempt := 0; ; attempt++ {
@@ -206,8 +201,7 @@ func open(info Info, write bool) (Disk, error) {
 		if err == unix.EINTR {
 			continue
 		}
-		// A desktop can mount a partition again between the unmount and
-		// the open.
+		// Retry briefly in case the desktop automounter raced us between unmount and open.
 		if err == unix.EBUSY && attempt < 5 {
 			time.Sleep(500 * time.Millisecond)
 			continue
@@ -258,8 +252,7 @@ func (d *linuxDisk) ioctl(req uint) error {
 	return ioErr
 }
 
-// Sync flushes to the device, then drops the kernel's cached copy of the
-// disk so the next read comes from the device.
+// Sync flushes dirty buffers to the device and drops the kernel page cache via BLKFLSBUF.
 func (d *linuxDisk) Sync() error {
 	if err := d.f.Sync(); err != nil {
 		return err

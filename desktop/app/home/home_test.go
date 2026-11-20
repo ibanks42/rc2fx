@@ -2,28 +2,21 @@ package home
 
 import "testing"
 
-// Home: which channels the overview lists.
-
 func TestAProcessedInputWithoutAFaderStaysOnTheOverview(t *testing.T) {
 	faders := []string{"usb-game", "usb-chat"}
-	// Mic 4 was taken out of the show but is still processed.
 	if !ProcessedOffFaders("mic-1", true, faders) {
 		t.Fatal("a processed input off the faders vanished")
 	}
-	// On a fader, its strip shows it; unprocessed, it isn't listed twice.
 	if ProcessedOffFaders("usb-game", true, faders) {
 		t.Fatal("an input on a fader was listed twice")
 	}
 	if ProcessedOffFaders("mic-1", false, faders) {
 		t.Fatal("an unprocessed input was listed")
 	}
-	// An empty or unread show still lists it.
 	if !ProcessedOffFaders("mic-1", true, nil) {
 		t.Fatal("an empty show hid a processed input")
 	}
 }
-
-// The opening screens: the Dusk halo.
 
 func TestTheHaloIsFaintAndStrongestAroundTheMiddle(t *testing.T) {
 	width, height := 165, 108

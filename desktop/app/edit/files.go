@@ -1,8 +1,5 @@
 package edit
 
-// EQ import and export and settings files, the parts that do not draw:
-// reading and staging EQ files, writing exports, and the settings-file draft.
-
 import (
 	"errors"
 	"fmt"
@@ -19,8 +16,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// IOMessage words an OS error as the system's text, capitalized as strerror
-// gives it, and " (os error N)"; any other error as it is.
+// IOMessage formats an OS error with capitalized strerror text and "(os error N)",
+// leaving non-errno errors unchanged.
 func IOMessage(err error) string {
 	var errno syscall.Errno
 	if !errors.As(err, &errno) {
@@ -33,8 +30,8 @@ func IOMessage(err error) string {
 	return fmt.Sprintf("%s (os error %d)", text, int(errno))
 }
 
-// ImportTarget is the channel an EQ import was started for, so a file that
-// arrives after the channel or its EQ changed is refused.
+// ImportTarget snapshots the channel and EQ state when an import starts so
+// late-arriving file dialog results are rejected if the target changed.
 type ImportTarget struct {
 	ID         string
 	Channels   uint8
@@ -42,20 +39,18 @@ type ImportTarget struct {
 	Generation uint64
 }
 
-// CaptureImportTarget records target's channel and EQ as they are now.
+// CaptureImportTarget snapshots target at the given generation.
 func CaptureImportTarget(target *core.Target, generation uint64) ImportTarget {
 	return ImportTarget{ID: target.ID, Channels: target.Channels, EQ: target.EQ.Clone(), Generation: generation}
 }
 
-// Matches is whether target is still the channel and EQ the import was
-// started for.
+// Matches reports whether target still matches the captured state.
 func (i ImportTarget) Matches(target *core.Target, generation uint64) bool {
 	return i.Generation == generation && i.ID == target.ID && i.Channels == target.Channels &&
 		i.EQ.Equal(target.EQ)
 }
 
-// ReadPreset reads an EQ preset or settings file as text, refusing anything
-// but a file of at most core.MaxFileBytes.
+// ReadPreset reads a regular EQ preset or settings file up to core.MaxFileBytes.
 func ReadPreset(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -79,8 +74,8 @@ func ReadPreset(path string) (string, error) {
 	return DecodeText(bytes)
 }
 
-// DecodeText is a preset's bytes as text: UTF-16 with a byte order mark, or
-// UTF-8 without its byte order marks.
+// DecodeText decodes BOM-marked UTF-16 or UTF-8 preset bytes into a string,
+// stripping leading UTF-8 BOMs.
 func DecodeText(bytes []byte) (string, error) {
 	if len(bytes) >= 2 && ((bytes[0] == 0xff && bytes[1] == 0xfe) || (bytes[0] == 0xfe && bytes[1] == 0xff)) {
 		if len(bytes)%2 != 0 {
@@ -107,8 +102,8 @@ func DecodeText(bytes []byte) (string, error) {
 	return trimBOMs(string(bytes)), nil
 }
 
-// fromUTF16 decodes UTF-16 strictly: an unpaired surrogate is an error
-// (Go's utf16.Decode would replace it).
+// fromUTF16 decodes UTF-16 strictly, rejecting unpaired surrogates instead of
+// substituting U+FFFD like unicode/utf16.Decode.
 func fromUTF16(units []uint16) (string, bool) {
 	var b strings.Builder
 	for i := 0; i < len(units); i++ {
@@ -126,7 +121,6 @@ func fromUTF16(units []uint16) (string, bool) {
 	return b.String(), true
 }
 
-// trimBOMs is trim_start_matches('\u{feff}').
 func trimBOMs(text string) string {
 	for strings.HasPrefix(text, "\ufeff") {
 		text = text[len("\ufeff"):]
@@ -134,8 +128,7 @@ func trimBOMs(text string) string {
 	return text
 }
 
-// ParseImport reads an EQ preset: EasyEffects JSON, or Equalizer APO /
-// AutoEQ parametric text.
+// ParseImport parses an EasyEffects JSON preset or Equalizer APO / AutoEQ text.
 func ParseImport(text string, options core.ImportOptions) (core.ImportResult, error) {
 	text = strings.TrimLeftFunc(trimBOMs(text), unicode.IsSpace)
 	if strings.HasPrefix(text, "{") {
@@ -160,8 +153,8 @@ func ParseImport(text string, options core.ImportOptions) (core.ImportResult, er
 
 var tempSequence atomic.Uint64
 
-// WriteExport replaces path with text: written to a new file beside it,
-// synced, then renamed over it, so a failure leaves the old file whole.
+// WriteExport writes text to a sibling temporary file, fsyncs it, and renames
+// it over path so failures leave any existing file intact.
 func WriteExport(path, text string) error {
 	parent := filepath.Dir(path)
 	if path == "" || parent == path {
@@ -200,9 +193,8 @@ func WriteExport(path, text string) error {
 	return err
 }
 
-// DraftSnapshot is the session a settings file was opened against, so a
-// file that arrives after the draft, the selection, the saved settings or
-// the connection changed is refused.
+// DraftSnapshot captures session state before opening a settings file dialog so
+// the import is rejected if the draft, selection, saved config, or connection changes.
 type DraftSnapshot struct {
 	generation      uint64
 	targets         []core.Target
@@ -210,8 +202,7 @@ type DraftSnapshot struct {
 	saved           *core.Config
 }
 
-// CaptureDraft records the session's draft, selection and saved settings as
-// they are now.
+// CaptureDraft snapshots the session's draft, selection, and saved config.
 func CaptureDraft(session *core.Session, generation uint64) DraftSnapshot {
 	snapshot := DraftSnapshot{
 		generation:      generation,
@@ -225,7 +216,7 @@ func CaptureDraft(session *core.Session, generation uint64) DraftSnapshot {
 	return snapshot
 }
 
-// Matches is whether session is still what the snapshot captured.
+// Matches reports whether session still matches the captured snapshot.
 func (d DraftSnapshot) Matches(session *core.Session, generation uint64) bool {
 	if d.generation != generation || !core.TargetsEqual(d.targets, session.Draft) ||
 		!slices.Equal(d.selectedTargets, session.SelectionDraft) {
@@ -237,9 +228,9 @@ func (d DraftSnapshot) Matches(session *core.Session, generation uint64) bool {
 	return d.saved.Equal(session.Saved.Config)
 }
 
-// ImportedTargets is a settings file's channels for the draft: as the file
-// has them offline (live nil), else in the live engine's channel order,
-// refusing a file for other hardware.
+// ImportedTargets validates config and returns its targets for the draft.
+// When connected (live != nil), it reorders targets to match live hardware and
+// rejects files targeting a different channel layout.
 func ImportedTargets(config core.Config, live *core.Config) ([]core.Target, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -250,8 +241,7 @@ func ImportedTargets(config core.Config, live *core.Config) ([]core.Target, erro
 	if len(live.Targets) != len(config.Targets) {
 		return nil, errors.New("This file uses a different set of mixer channels.")
 	}
-	// Preserve the live engine's channel order. File revision numbers never
-	// replace the session's revision used for a subsequent Apply request.
+	// Keep the live engine's channel order; file revisions never overwrite the session revision.
 	targets := make([]core.Target, 0, len(live.Targets))
 	for _, target := range live.Targets {
 		at := slices.IndexFunc(config.Targets, func(t core.Target) bool {
@@ -265,7 +255,7 @@ func ImportedTargets(config core.Config, live *core.Config) ([]core.Target, erro
 	return targets, nil
 }
 
-// SettingsFile is the draft as a settings file: the text save_draft writes.
+// SettingsFile encodes the session's current draft as a formatted settings file.
 func SettingsFile(session *core.Session) (string, error) {
 	config := core.Config{
 		SchemaVersion:   core.SchemaVersion,
@@ -283,8 +273,7 @@ func SettingsFile(session *core.Session) (string, error) {
 	return string(data), nil
 }
 
-// HomeDirectory is where the file dialogs start: USERPROFILE, else HOME,
-// else ".".
+// HomeDirectory returns the initial directory for file dialogs.
 func HomeDirectory() string {
 	if v, ok := os.LookupEnv("USERPROFILE"); ok {
 		return v

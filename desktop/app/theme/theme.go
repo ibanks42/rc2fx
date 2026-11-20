@@ -1,35 +1,24 @@
 package theme
 
-// This file does not import gk: its functions are tested with plain `go test`.
-
 import (
 	"encoding/json"
 	"fmt"
 )
 
-// applyTheme sets 34 colors, the font size and two radii, but cannot write
-// them straight into the kit's Theme (`Theme::update`):
-// gk.KitThemeColor has no field setters (only its default), and
-// Theme.Colors returns a different record (KitThemeColor2). What the binding
-// does carry is the kit's theme file format: ThemeRegistry.LoadThemesFromStr
-// and Theme.ApplyConfig. So the same values go in as one theme per
-// appearance, applied by name (applyTheme in desk.go).
+// gk.KitThemeColor does not expose field setters, so we serialize each
+// appearance as a theme-set JSON loaded via ThemeRegistry.LoadThemesFromStr
+// and applied by name.
 //
-// TODO(B1): a KitThemeColor with setters (or SetColors taking the record
-// Colors returns) would let applyTheme write the fields directly.
+// TODO(B1): switch to direct field updates if KitThemeColor gains setters.
 
-// themeSetName is the theme set RC2FX loads into the kit's registry.
 const themeSetName = "RC2FX"
 
-// themeName is the registry name of an appearance's theme.
 func Name(a Appearance) string { return "RC2FX " + a.Label() }
 
-// hexColor is a 0xRRGGBB color in the theme file's "#rrggbb" form.
 func HexColor(c uint32) string { return fmt.Sprintf("#%06x", c&0xffffff) }
 
-// themeColors is applyTheme's colors for one appearance, by the
-// kit's theme-file keys (gpui-component src/theme/schema.rs
-// ThemeConfigColors), over the kit's default dark colors.
+// themeColors builds the gpui-component color table for appearance a on top of
+// the kit's default dark theme.
 func themeColors(a Appearance) map[string]string {
 	sf := a.surface()
 	colors := make(map[string]string, len(kitDefaultDarkColors)+34)
@@ -86,7 +75,7 @@ type themeFile struct {
 	Colors   map[string]string `json:"colors"`
 }
 
-// themeSetJSON is the kit theme file holding one theme per appearance.
+// SetJSON marshals the theme set JSON containing one theme per appearance.
 func SetJSON() string {
 	set := struct {
 		Name   string      `json:"name"`

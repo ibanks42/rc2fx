@@ -2,23 +2,24 @@
 
 package app
 
-// The guided flows' states from made-up data, development builds only
-// (packaging refuses rc2fxdev): RC2FX_DEV_PAGE=flow:<state> opens one, with
-// no mixer, no helper and no network, so each can be screenshotted and
-// compared with the approved mock-up. The states are the mock-up's:
+// Synthetic guided-flow states for dev builds (`RC2FX_DEV_PAGE=flow:<state>`),
+// with no mixer, helper, or network activity. Fixture installers have a closed
+// runner so requests are no-ops.
+//
+// Supported states:
 //
 //	A1 nothing connected      A2 found, no RC2FX      A3 finishing an update
 //	A3s RC2FX starting        A4 waiting in update mode
 //	A5 storage mode           A6 two mixers           A7 RØDECaster Duo
-//	Aoff disconnected by the person
+//	Aoff disconnected by user
 //	B1 before you start       B1v versions open       B1L Linux (password)
 //	B2 updating the mixer     B3 waiting for it       B3L taking longer
 //	B3Lh taking longer, "What can I do?" open
 //	B4 failed while sending   B4b failed downloading  B4c access ended
 //	B5 power cycle            B6 done
-//	B4u the fix stopped short of an unsafe update     B5u its retry, still in update mode
+//	B4u fix stopped short of unsafe update            B5u retry in update mode
 //	D1 remove: before         D2 remove: updating     D3 remove: done
-//	B2F install, first of the fix's two updates       B6F done, storage fixed
+//	B2F install, first of fix's two updates           B6F done, storage fixed
 //	G1 fix only: before       G2 fix only: running    G3 fixed
 //	G4 already fixed          Gfail fix didn't finish Gunrec layout unrecognized
 //	C1 update in place: before                        C2 sending
@@ -26,9 +27,6 @@ package app
 //	E1 repair: waiting for storage mode               E2 findings
 //	E3 repaired
 //	F1 first channel, from Done's "Open Mic 1"
-//
-// Nothing here runs a request: the fixture installer's runner is closed and
-// its send does nothing (Installer.fixture).
 
 import (
 	"fmt"
@@ -46,7 +44,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/autofix"
 )
 
-// devFlows: this build opens flow:<state> pages.
 const devFlows = true
 
 func fixtureMixer(model firmware.Model, serial string, updateMode bool) installer.USBMixer {
@@ -70,8 +67,6 @@ var firstFixtures = map[string]installflow.Sighting{
 	"A7": {USB: []installer.USBMixer{fixtureMixer(firmware.ModelDuo, "FXD", false)}},
 }
 
-// fixtureProfile is the made-up RØDE firmware profile the fixtures' RC2FX
-// releases support.
 const fixtureProfile = "rodecaster-pro-ii-1.7.7"
 
 func fixtureOffer(version string) installer.MixerOffer {
@@ -89,8 +84,6 @@ func fixtureOffer(version string) installer.MixerOffer {
 	}
 }
 
-// fixtureModel is a model that has looked at one Pro II on RØDE 1.7.7 and
-// found everything it needs to start.
 func fixtureModel(updateMode bool) *installflow.Model {
 	m := installflow.NewModel()
 	m.Status = &installer.Status{USB: []installer.USBMixer{fixtureMixer(firmware.ModelProIi, "FX1", updateMode)}}
@@ -132,7 +125,6 @@ func (a *App) fixtureInstaller(cx *gk.Cx, kind taskKind, m *installflow.Model) *
 	}
 }
 
-// fixtureRun is a run of the reviewed release that got as far as index.
 func fixtureRun(m *installflow.Model, index int) *installflow.Run {
 	run := &installflow.Run{
 		Started:  time.Now().Add(-5 * time.Minute),
@@ -320,15 +312,11 @@ var taskFixtures = map[string]func(a *App, cx *gk.Cx) *Installer{
 	},
 }
 
-// fixtureFixEvent is the storage fix's progress at stage, in its flash-th
-// flash, percent of the way through copying.
 func fixtureFixEvent(stage string, flash int, carrier bool, percent uint64) installer.Progress {
 	return installer.Progress{Phase: installer.StorageFixPhase + stage, Flash: flash, Carrier: carrier,
 		Completed: percent, Total: 100, Detail: "Copying archive.tar.gz to the mixer"}
 }
 
-// fixTask is the storage fix on its own, before it starts (reply nil) or
-// ended with reply.
 func fixTask(a *App, cx *gk.Cx, reply *installer.StorageFix) *Installer {
 	i := a.fixtureInstaller(cx, taskFix, fixtureModel(false))
 	i.fix = installflow.NewFix()
@@ -341,8 +329,6 @@ func fixTask(a *App, cx *gk.Cx, reply *installer.StorageFix) *Installer {
 	return i
 }
 
-// inPlace is an RC2FX update in place at p, on a mixer running RC2FX 0.2.1
-// that installs signed releases itself and is offered 0.2.2.
 func inPlace(a *App, cx *gk.Cx, p installflow.InPlace) *Installer {
 	m := fixtureModel(false)
 	newer := fixtureOffer("0.2.2")
@@ -361,7 +347,6 @@ func inPlace(a *App, cx *gk.Cx, p installflow.InPlace) *Installer {
 	return i
 }
 
-// repairTask is Repair mixer at stage, with the mixer's storage seen.
 func repairTask(a *App, cx *gk.Cx, stage installflow.RepairStage) *Installer {
 	i := a.fixtureInstaller(cx, taskInstall, fixtureModel(false))
 	i.repair = installflow.NewRepair()
@@ -374,9 +359,8 @@ func repairTask(a *App, cx *gk.Cx, stage installflow.RepairStage) *Installer {
 	return i
 }
 
-// openFirstChannel is F1: the channel Done's "Open Mic 1" opens, with its
-// one-line hint, from the default catalog and no mixer. It pretends to be
-// connected only so the page draws; nothing connects.
+// openFirstChannel sets up fixture F1 (post-install "Open Mic 1" view with the
+// onboarding hint) using a simulated connected session.
 func (a *App) openFirstChannel(cx *gk.Cx) {
 	a.link = linkIntent{}
 	a.session = core.DefaultSession()
@@ -419,8 +403,6 @@ func waiting(a *App, cx *gk.Cx, d time.Duration, help bool) *Installer {
 	return i
 }
 
-// fixtureUnsafe is autofix's words for a fix that stopped short of an
-// update onto a slot too small for 4 KB blocks.
 const fixtureUnsafe = "The storage fix could not finish on the mixer (the space partition 1 would grow into is not empty). The app stopped there: the next update would have gone onto storage that RØDE's update bug can damage (system slot 1 is still its original size). Nothing more was sent to the mixer. It is waiting in USB update mode: switch it off and on, and it starts again as it was."
 
 func failed(a *App, cx *gk.Cx, index int, why string) *Installer {
@@ -443,7 +425,6 @@ func finished(a *App, cx *gk.Cx, stock bool) *Installer {
 	return a.fixtureInstaller(cx, kind, m)
 }
 
-// openFlowFixture opens the flow state id from made-up data.
 func (a *App) openFlowFixture(cx *gk.Cx, id string) {
 	a.flowFixture = true
 	a.link = linkIntent{}

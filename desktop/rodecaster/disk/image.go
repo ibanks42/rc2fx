@@ -5,16 +5,14 @@ import (
 	"os"
 )
 
-// imageDisk is a disk image file standing in for a mixer.
 type imageDisk struct {
 	f       *os.File
 	sectors uint64
 }
 
-// OpenImage opens a regular file as a Disk, for tests and for trying the
-// tool on a copy of a mixer's storage. Sectors is the file size / 512.
+// OpenImage opens a regular disk-image file as a Disk (for tests and dry runs).
 func OpenImage(path string, write bool) (Disk, error) {
-	// Lstat first: opening a device, FIFO or symlink here is never wanted.
+	// Lstat first so we never open a device node, FIFO, or symlink.
 	before, err := os.Lstat(path)
 	if err != nil {
 		return nil, err

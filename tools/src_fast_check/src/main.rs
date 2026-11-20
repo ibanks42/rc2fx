@@ -1,9 +1,6 @@
-//! Compares every byte of `src_fast_core` output and converter state with the
-//! real libsamplerate over randomized and vendor-shaped calls. Exits non-zero
-//! at the first difference.
-//!
-//! Both interpolations are compared with the library on every call: the one
-//! the mixer runs, which is NEON on AArch64, and the scalar reference.
+//! Differential fuzzer comparing `src_fast_core` (both NEON on AArch64 and the
+//! scalar reference) bit-for-bit against `libsamplerate.so.0` across randomized
+//! and vendor-shaped calls. Exits non-zero on the first output or state mismatch.
 #[allow(dead_code)]
 #[path = "../../../crates/rc2fx-native/src/src_fast_core.rs"]
 mod core;
@@ -90,9 +87,8 @@ enum Samples {
     Special,
 }
 
-/// Signed zeros, infinities, quiet and signaling NaNs with several payloads,
-/// and the largest and smallest normal and subnormal values. Random bits
-/// almost never give a zero or an infinity, and seldom two NaNs side by side.
+/// Edge-case floats (signed zeros, infinities, qNaN/sNaN payloads, min/max
+/// normals and subnormals) that uniform random bit patterns rarely hit.
 const SPECIAL: [u32; 22] = [
     0x0000_0000,
     0x8000_0000,
@@ -124,8 +120,8 @@ fn fill(random: &mut Random, kind: Samples, input: &mut [f32]) {
             Samples::Audio => (random.unit() * 2.0 - 1.0) as f32,
             Samples::AnyBits => f32::from_bits(random.next() as u32),
             Samples::Tiny => f32::from_bits((random.next() as u32) & 0x807f_ffff),
-            // Half audio, half from the table, so that a special value meets
-            // both ordinary samples and other special values.
+            // Mix normal audio with edge-case floats so special values interact
+            // with both regular samples and each other.
             Samples::Special => match random.next() {
                 bits if bits & 1 == 0 => (random.unit() * 2.0 - 1.0) as f32,
                 bits => f32::from_bits(SPECIAL[(bits >> 1) as usize % SPECIAL.len()]),
@@ -134,7 +130,6 @@ fn fill(random: &mut Random, kind: Samples, input: &mut [f32]) {
     }
 }
 
-/// A converter pair: the library's own and the one `core` drives.
 struct Pair {
     real: *mut State,
     fast: *mut State,
@@ -230,8 +225,8 @@ fn call(
     compare(pair, &want, &got, &buffers.real, &buffers.fast, what);
 }
 
-/// The scalar reference must write what the library wrote, and neither
-/// interpolation may write past the plan's frames.
+/// Verifies that `interpolate_scalar` matches libsamplerate bit-for-bit and
+/// that neither implementation overwrites the trailing canary guard.
 fn reference(buffers: &Buffers, frames: usize, what: &str) {
     let bits = |samples: &[f32], frame: usize| samples[frame].to_bits();
     let difference = (0..frames).find(|i| bits(&buffers.real, *i) != bits(&buffers.scalar, *i));
@@ -266,15 +261,13 @@ fn reset(library: &Library, pair: &Pair) {
     }
 }
 
-/// Output of the library, of `core::interpolate` and of
-/// `core::interpolate_scalar` for one call.
 struct Buffers {
     real: Vec<f32>,
     fast: Vec<f32>,
     scalar: Vec<f32>,
 }
 
-/// Samples after the plan's frames that must stay as they were.
+/// Guard samples written past the planned frame count to catch buffer overruns.
 const GUARD: usize = 8;
 const CANARY: u32 = 0x5a5a_a5a5;
 
@@ -287,7 +280,8 @@ fn buffers() -> Buffers {
     }
 }
 
-/// The vendor's shape: channels in step, one ratio per cycle on a fine grid.
+/// Exercises vendor-shaped call patterns: multiple channels stepping together
+/// with a shared, finely-quantized ratio per cycle.
 fn vendor(
     library: &Library,
     seed: u64,
@@ -331,7 +325,7 @@ fn vendor(
     }
 }
 
-/// Anything the public interface allows, one converter at a time.
+/// Fuzzes arbitrary valid ratios and frame counts across the public API.
 fn wide(library: &Library, seed: u64, cycles: usize, kind: Samples, counts: &mut Counts) {
     let mut random = Random(seed);
     let converters = pairs(library, 3);

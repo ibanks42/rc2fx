@@ -1,6 +1,5 @@
-// Package model holds what a flashing tool needs to know about each
-// RØDECaster model: its names, USB IDs, board identity and RØDE's update
-// manifest.
+// Package model defines hardware metadata for each RØDECaster model (names,
+// USB IDs, board identity, and update manifest URLs).
 package model
 
 import (
@@ -8,7 +7,7 @@ import (
 	"slices"
 )
 
-// Model is a mixer model. The zero value is ProIi.
+// Model identifies a RØDECaster hardware model (zero value is ProIi).
 type Model uint8
 
 const (
@@ -16,13 +15,11 @@ const (
 	Duo
 )
 
-// All is every model, in a fixed order.
 var All = [2]Model{ProIi, Duo}
 
 // VendorID is RØDE's USB vendor ID.
 const VendorID uint16 = 0x19f7
 
-// Parse finds the model with the given ID.
 func Parse(id string) (Model, error) {
 	for _, m := range All {
 		if m.ID() == id {
@@ -32,7 +29,6 @@ func Parse(id string) (Model, error) {
 	return 0, fmt.Errorf("unknown mixer model %s", id)
 }
 
-// ID is the model's catalog and serialized name.
 func (m Model) ID() string {
 	if m == Duo {
 		return "rodecaster-duo"
@@ -84,8 +80,7 @@ func (m Model) UpdatePID() uint16 {
 	return 0x0030
 }
 
-// ManifestURL is RØDE's update manifest for the model, the list the
-// official updater reads.
+// ManifestURL returns the RØDE update manifest URL for this model.
 func (m Model) ManifestURL() string {
 	if m == Duo {
 		return "https://update.rode.com/rcp2-mini-manifest.json"
@@ -93,7 +88,7 @@ func (m Model) ManifestURL() string {
 	return "https://update.rode.com/manifest.json"
 }
 
-// FromUSB identifies a model by its USB IDs, in normal or update mode.
+// FromUSB matches a USB vendor/product ID pair in either normal or update mode.
 func FromUSB(vendor, product uint16) (Model, bool) {
 	if vendor != VendorID {
 		return 0, false

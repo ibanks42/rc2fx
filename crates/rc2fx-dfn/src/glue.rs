@@ -1,20 +1,17 @@
-//! The small f32 loops between the dense kernels: the 3-tap convolutions
-//! along frequency, the transposes and one transposed add.
+//! Small f32 glue kernels between the dense layers: 3-tap frequency convs,
+//! transposes, and a transposed accumulate.
 //!
-//! Each loop has a scalar form in `scalar`, which is the reference. It runs on
-//! other architectures, for rows too short for a vector, and when
-//! `crate::reference` is on. The NEON forms compute every output with the
-//! same operations in the same order as the scalar form: a separate multiply
-//! and add for each term, never a fused multiply-add, and the same grouping
-//! of the sums. Their results are therefore bit for bit the scalar ones for
-//! all inputs, with one exception: when two different NaNs meet in an add,
-//! which NaN's payload survives depends on the operand order the compiler
-//! chose, so NaN results are only guaranteed to be NaN in both.
+//! `scalar` holds the reference implementations (used on non-AArch64, for rows
+//! narrower than a NEON vector, and when `crate::reference` is enabled). The
+//! NEON versions intentionally use separate mul + add (no FMA) in the exact
+//! same grouping so outputs match bit-for-bit across all finite inputs. The
+//! only exception is NaN payloads when adding two distinct NaNs, which depend
+//! on operand order.
 use crate::reference;
 
-/// The scalar reference forms. `conv3x3` here writes each output row three
-/// times (one overwrite, two accumulations); the NEON form writes it once
-/// with the same sum order.
+/// Scalar reference kernels. `conv3x3` writes each output row three times
+/// (overwrite + two adds), while the NEON version fuses them into one store
+/// with identical summation order.
 pub(crate) mod scalar {
     /// Depthwise convolution along frequency with a 3-tap kernel, padding 1.
     /// x [c][f] -> y [c][f / stride].
@@ -91,8 +88,7 @@ pub(crate) mod scalar {
         for (o, yr) in y[..ch * f].chunks_exact_mut(f).enumerate() {
             let g = o / per;
             let k = &w[o * 9..o * 9 + 9];
-            // Oldest frame first, straight into the output: the first frame
-            // overwrites, the other two accumulate.
+            // Oldest frame first: overwrite on tap 0, accumulate on taps 1..3.
             let xr = &x[g * f..(g + 1) * f];
             shift3(k[0], k[1], k[2], xr, yr);
             for kt in 1..3 {
@@ -125,24 +121,19 @@ pub(crate) mod scalar {
 mod neon {
     use std::arch::aarch64::*;
 
-    /// Fewest outputs per row `stride2_row` takes.
     pub(super) const STRIDE2_MIN_OUT: usize = 5;
-    /// Shortest input row `t3_row` takes.
     pub(super) const T3_MIN: usize = 5;
-    /// Shortest row `taps_fill` and `taps_add` take.
     pub(super) const TAPS_MIN: usize = 6;
 
-    /// One row of the stride-2 depthwise conv: `fo` outputs from `2 * fo`
-    /// inputs, y[o] = (k0 x[2o-1] + k1 x[2o]) + k2 x[2o+1], the first without
-    /// its k0 term.
+    /// Single row of stride-2 depthwise conv: `fo` outputs from `2 * fo`
+    /// inputs, `y[o] = (k0*x[2o-1] + k1*x[2o]) + k2*x[2o+1]` (no `k0` at `o = 0`).
     ///
     /// # Safety
-    /// `fo >= STRIDE2_MIN_OUT`, `2 * fo` readable at `x`, `fo` writable at
-    /// `y`, not overlapping.
+    /// `fo >= STRIDE2_MIN_OUT`; `x` has `2 * fo` readable floats and `y` has
+    /// `fo` writable floats, non-overlapping.
     #[inline(always)]
     pub(super) unsafe fn stride2_row(k: [f32; 3], x: *const f32, fo: usize, y: *mut f32) {
-        // SAFETY: the vector at output o reads x[2o-1 .. 2o+8) and writes
-        // y[o .. o+4), and o stays within 1..=fo-4.
+        // SAFETY: each iteration reads x[2o-1..2o+8) and writes y[o..o+4) with o in 1..=fo-4.
         unsafe {
             *y = k[1] * *x + k[2] * *x.add(1);
             let (v0, v1, v2) = (vdupq_n_f32(k[0]), vdupq_n_f32(k[1]), vdupq_n_f32(k[2]));
@@ -159,23 +150,21 @@ mod neon {
                 if o + 4 >= fo {
                     break;
                 }
-                // The last vector overlaps the one before it: every output
-                // depends on x alone, so writing one twice is harmless.
+                // Final vector may overlap the previous one; pure overwrite from x is idempotent.
                 o = (o + 4).min(fo - 4);
             }
         }
     }
 
-    /// One row of the transposed depthwise conv: y[2i] = k1 x[i],
-    /// y[2i+1] = k2 x[i] + k0 x[i+1], with zero past the row's end.
+    /// Single row of transposed depthwise conv: `y[2i] = k1*x[i]`,
+    /// `y[2i+1] = k2*x[i] + k0*x[i+1]` (zero-padded at the end).
     ///
     /// # Safety
-    /// `f >= T3_MIN`, `f` readable at `x`, `2 * f` writable at `y`, not
-    /// overlapping.
+    /// `f >= T3_MIN`; `x` has `f` readable floats and `y` has `2 * f` writable
+    /// floats, non-overlapping.
     #[inline(always)]
     pub(super) unsafe fn t3_row(k: [f32; 3], x: *const f32, f: usize, y: *mut f32) {
-        // SAFETY: the vector at input i reads x[i .. i+5) and writes
-        // y[2i .. 2i+8), and i stays within 0..=f-5.
+        // SAFETY: each iteration reads x[i..i+5) and writes y[2i..2i+8) with i in 0..=f-5.
         unsafe {
             let (v0, v1, v2) = (vdupq_n_f32(k[0]), vdupq_n_f32(k[1]), vdupq_n_f32(k[2]));
             let mut i = 0;
@@ -190,19 +179,17 @@ mod neon {
                 }
                 i = (i + 4).min(f - 5);
             }
-            // The last input has no successor; its k0 term multiplies the
-            // zero padding, as in the scalar form.
+            // Keep explicit `k[0] * 0.` to match scalar signed-zero/NaN behavior.
             let last = *x.add(f - 1);
             *y.add(2 * f - 2) = k[1] * last;
             *y.add(2 * f - 1) = k[2] * last + k[0] * 0.;
         }
     }
 
-    /// The 3-tap term of one vector of bins starting at `p`:
-    /// (k0 x[b-1] + k1 x[b]) + k2 x[b+1].
+    /// 3-tap vector term at `p`: `(k0*x[b-1] + k1*x[b]) + k2*x[b+1]`.
     #[inline(always)]
     unsafe fn taps(kv: &[float32x4_t; 3], p: *const f32) -> float32x4_t {
-        // SAFETY: the caller keeps p - 1 .. p + 5 readable.
+        // SAFETY: caller guarantees p - 1 .. p + 5 is readable.
         unsafe {
             vaddq_f32(
                 vaddq_f32(
@@ -214,15 +201,12 @@ mod neon {
         }
     }
 
-    /// `T` zero-padded 3-tap rows summed into one output row, written once:
-    /// y[b] = ((0 + r_0[b]) + r_1[b]) + ..., with
-    /// r_t[b] = (k_t0 x_t[b-1] + k_t1 x_t[b]) + k_t2 x_t[b+1]. The leading
-    /// zero is kept: the scalar form clears the row and then accumulates, and
-    /// 0 + (-0) is +0.
+    /// Sum `T` zero-padded 3-tap rows into `y` in a single write pass. Starts
+    /// from `+0.0` to match the scalar zero-fill + add (`0.0 + (-0.0) == +0.0`).
     ///
     /// # Safety
-    /// `n >= TAPS_MIN`, `n` readable at every `x[t]`, `n` writable at `y`,
-    /// not overlapping.
+    /// `n >= TAPS_MIN`; every `x[t]` has `n` readable floats and `y` has `n`
+    /// writable floats, non-overlapping.
     #[inline(always)]
     pub(super) unsafe fn taps_fill<const T: usize>(
         k: &[[f32; 3]; T],
@@ -230,8 +214,7 @@ mod neon {
         n: usize,
         y: *mut f32,
     ) {
-        // SAFETY: the vector at bin b reads x[b-1 .. b+5) and writes
-        // y[b .. b+4), and b stays within 1..=n-5.
+        // SAFETY: each iteration reads x[b-1..b+5) and writes y[b..b+4) with b in 1..=n-5.
         unsafe {
             let (mut first, mut last) = (0f32, 0f32);
             for (k, &x) in k.iter().zip(x) {
@@ -249,8 +232,7 @@ mod neon {
                 if b + 5 >= n {
                     break;
                 }
-                // The last vector overlaps the one before it; the row is
-                // only written, never read, so that is harmless.
+                // Overlapping tail store is safe because `y` is write-only here.
                 b = (b + 4).min(n - 5);
             }
             *y = first;
@@ -258,17 +240,16 @@ mod neon {
         }
     }
 
-    /// One zero-padded 3-tap row added to `y`:
-    /// y[b] += (k0 x[b-1] + k1 x[b]) + k2 x[b+1].
+    /// Accumulate one zero-padded 3-tap row into `y`:
+    /// `y[b] += (k0*x[b-1] + k1*x[b]) + k2*x[b+1]`.
     ///
     /// # Safety
-    /// `n >= TAPS_MIN`, `n` readable at `x`, `n` readable and writable at
-    /// `y`, not overlapping.
+    /// `n >= TAPS_MIN`; `x` has `n` readable floats and `y` has `n`
+    /// readable/writable floats, non-overlapping.
     #[inline(always)]
     pub(super) unsafe fn taps_add(k: [f32; 3], x: *const f32, n: usize, y: *mut f32) {
-        // SAFETY: the vector at bin b reads x[b-1 .. b+5) and updates
-        // y[b .. b+4) with b + 4 <= n - 1; the scalar loop finishes the
-        // interior. No bin is visited twice, as each update reads y.
+        // SAFETY: vector loop touches x[b-1..b+5) and y[b..b+4) for b + 4 <= n - 1,
+        // then scalar loop finishes the remaining interior without revisiting any bin.
         unsafe {
             *y += k[1] * *x + k[2] * *x.add(1);
             let kv = k.map(|v| vdupq_n_f32(v));
@@ -372,9 +353,7 @@ pub(crate) fn depthwise_t3(w: &[f32], x: &[f32], c: usize, f: usize, y: &mut [f3
 pub(crate) fn conv3x3(w: &[f32], ch: usize, x: &[f32], groups: usize, f: usize, y: &mut [f32]) {
     #[cfg(any(test, target_arch = "aarch64"))]
     let per = ch / groups;
-    // `per > 0` leaves a conv without outputs, or with fewer outputs than
-    // groups, to the scalar form, which does nothing or panics as it always
-    // has.
+    // Leave degenerate `per == 0` cases to the scalar fallback.
     #[cfg(target_arch = "aarch64")]
     if f >= neon::TAPS_MIN && per > 0 && !reference::on() {
         // Each output reads its group's three frames and writes itself once.
@@ -470,9 +449,8 @@ pub(crate) mod tests {
             (self.next() & 0xff_ffff) as f32 / (1 << 23) as f32 - 1.
         }
 
-        /// One value of an input class: 0 ordinary audio-sized values, 1
-        /// signed zeros among them, 2 subnormals, 3 magnitudes whose products
-        /// overflow or vanish, 4 all of those with infinities and NaNs.
+        /// Input classes: 0 = normal audio range, 1 = signed zeros, 2 = subnormals,
+        /// 3 = overflow/underflow magnitudes, 4 = infinities and NaNs mixed in.
         pub(crate) fn value(&mut self, class: usize) -> f32 {
             let sign = if self.next() & 1 == 0 { 1. } else { -1. };
             match (class, self.next() % 8) {
@@ -504,8 +482,7 @@ pub(crate) mod tests {
 
     pub(crate) const CLASSES: usize = 5;
 
-    /// Bit for bit, except that two NaNs compare equal whatever their
-    /// payloads (see the module comment).
+    /// Bitwise equality, treating any two NaNs as equal regardless of payload.
     pub(crate) fn assert_same(got: &[f32], want: &[f32], what: &str) {
         assert_eq!(got.len(), want.len(), "{what}");
         for (i, (a, b)) in got.iter().zip(want).enumerate() {
@@ -518,12 +495,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// Runs `body` once for each setting of flush-to-zero (FZ) and
-    /// default-NaN (DN) that AArch64 offers, and once elsewhere. The worker
-    /// thread inherits the floating-point control register of the thread
-    /// that starts it, and the vendor's threads may run with either bit set.
-    /// Both bits govern scalar and vector arithmetic alike, so a kernel and
-    /// its reference must agree under each.
+    /// Runs `body` across all four AArch64 FPCR flush-to-zero (FZ) / default-NaN
+    /// (DN) combinations (or once on other architectures), since the worker
+    /// thread inherits FPCR from whatever vendor thread spawned it.
     pub(crate) fn each_float_mode(mut body: impl FnMut(&str)) {
         #[cfg(target_arch = "aarch64")]
         {
@@ -769,12 +743,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// With the reference switch on, the dispatchers run the scalar forms.
-    /// The two forms give the same values, so the values cannot show which
-    /// one ran; conv3x3's traffic accounting can. The scalar form stores each
-    /// output row three times and the NEON form once. Without this the
-    /// whole-model comparisons in `tests.rs` could compare the NEON loops
-    /// with themselves and never fail.
+    // Verify `reference::set(true)` actually hits the scalar path (checked via
+    // conv3x3's store count: 3 in scalar vs 1 in NEON).
     #[test]
     fn the_reference_switch_selects_the_scalar_forms() {
         let mut rng = Rng(7);
@@ -819,13 +789,9 @@ pub(crate) mod tests {
         assert_eq!(stores(false), [if vector { 1 } else { 3 }], "the fast form");
     }
 
-    /// A buffer of f32 between two pages that cannot be read or written,
-    /// placed against the page after it or against the page before it. A
-    /// kernel that touches one element outside the buffer on that side
-    /// faults, and the test binary dies with SIGSEGV, where a guard band of
-    /// ordinary values would only catch a write. The vector loops load whole
-    /// vectors through raw pointers, so a load past a slice's end is the
-    /// mistake no other test here would see.
+    /// `f32` buffer flanked by `PROT_NONE` guard pages, aligned to either the
+    /// start or end boundary so any out-of-bounds vector load or store faults
+    /// with SIGSEGV.
     #[cfg(target_pointer_width = "64")]
     pub(crate) struct Fenced {
         map: *mut u8,
@@ -925,10 +891,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every loop on weights, input and output that each end at an
-    /// inaccessible page, and again with each beginning at one: no load or
-    /// store leaves its slice, at the model's row lengths and at every short
-    /// or odd one, and the results are still the scalar ones.
+    // Run every kernel with guard-paged inputs and outputs at both boundaries.
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn no_loop_reads_or_writes_outside_its_slices() {

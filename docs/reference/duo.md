@@ -1,50 +1,52 @@
 # RØDECaster Duo support
 
-RC2FX has experimental support for the Duo on official Duo firmware 1.7.6 and
-1.7.7. It is off by default. To flash a Duo, the installer needs a saved
-opt-in plus a risk confirmation on every run.
+RC2FX includes experimental support for the RØDECaster Duo on official Duo
+firmware 1.7.6 and 1.7.7. It is disabled by default: flashing a Duo requires
+both a persisted opt-in toggle and an explicit risk confirmation on every run.
 
-None of it has been tried on a real Duo: flashing, recovery, and audio are all
-untested. Everything on this page comes from the official firmware files,
-static analysis, and ARM64 emulation. Flashing a Duo may leave it unusable,
-recovery may fail, and audio may be loud or wrong. Use it at your own risk.
+None of this has been tested on physical Duo hardware: flashing, recovery, and
+audio playback are all untested. Everything documented here is derived from
+official firmware archives, static analysis, and ARM64 emulation. Flashing a
+Duo could brick the mixer, recovery could fail, and audio could come out wrong
+or dangerously loud. Proceed strictly at your own risk.
 
-Do not flash Pro II firmware onto a Duo or Duo firmware onto a Pro II. The two
-share a mixer program, but their kernel, boot files, and controller firmware
-differ.
+Never flash Pro II firmware onto a Duo or Duo firmware onto a Pro II. Although
+both models share the same mixer binary, their kernel, boot files, and
+controller firmware are different.
 
 ## Enabling it
 
-With a Duo connected, the first-run screen and the install task show a
+When a Duo is connected, the start screen and installer page display a
 **RC2FX is untested on the Duo. Install anyway.** switch, and the install
-button waits for it. The setting is stored as `experimentalDuoFlash` in the
-app's `view.json`. It defaults to off, and a missing or malformed value is
-treated as off (`desktop/app/state/prefs.go`). The switch
-cannot be changed while a run is in progress.
+button stays disabled until it is toggled on. This preference is saved as
+`experimentalDuoFlash` in the app's `view.json`, defaulting to off (missing or
+malformed values are treated as off in `desktop/app/state/prefs.go`). The
+switch is locked while an installer run is active.
 
-With the switch on and a Duo connected:
+With the switch enabled and a Duo connected:
 
-- For RC2FX, the installer offers only the two pinned official Duo archives,
-  1.7.7 and 1.7.6. Stock firmware comes from RØDE's Duo manifest,
-  `rcp2-mini-manifest.json`. It never offers Pro II images for a Duo.
-- All other checks still apply: archive pins and model, board identity,
-  instruction signatures, and serial continuity.
-- The prepared image gets a file `/opt/rc2fx/experimental-duo` containing
-  `1`. The launcher (`mixer/scripts/rc2fx.sh`) turns it into
-  `RC2FX_EXPERIMENTAL_DUO=1`, which lets the runtime accept this Duo board
-  with the Duo profile. The Duo is still identified as a Duo. The rollback
-  copy an unfinished in-place update starts reads the same file.
+- For RC2FX installs, the installer only lists the two pinned official Duo
+  archives (1.7.7 and 1.7.6). Stock firmware options come from RØDE's Duo
+  manifest (`rcp2-mini-manifest.json`). Pro II images are never offered for a
+  Duo.
+- Every standard safety check still runs: archive hash pins, model and board
+  identity, instruction signatures, and USB serial continuity.
+- The patched image includes `/opt/rc2fx/experimental-duo` containing `1`. The
+  launcher (`mixer/scripts/rc2fx.sh`) translates that file into
+  `RC2FX_EXPERIMENTAL_DUO=1`, allowing the runtime to accept the Duo board with
+  the Duo profile while still identifying the mixer as a Duo. Rollback copies
+  booted after an interrupted in-place update read the same marker.
 
-Turning the switch off blocks further Duo flashes. It does not remove RC2FX
-from a Duo that already has it. To remove it, flash stock Duo firmware, which
-in the RC2FX installer also requires the switch to be on. The app connects to
-an installed Duo runtime through the RC2FX USB descriptor and handshake, as it
-does for a Pro II.
+Turning the switch back off prevents future Duo flashes without removing RC2FX
+from a Duo that already has it. Removing RC2FX requires flashing stock Duo
+firmware (which also requires the switch to be on inside the RC2FX installer).
+Once installed, the desktop app connects to a Duo runtime over the same RC2FX
+USB descriptor and handshake used on the Pro II.
 
 ## Processing paths
 
-The Duo has its own route layout, `duo-23-v1`, and saved-show source enum,
-`duo-sources-v1`. As on the Pro II, processing starts off.
+The Duo uses its own route layout (`duo-23-v1`) and saved-show source enum
+(`duo-sources-v1`). Just like on the Pro II, processing starts off.
 
 | Inputs | Outputs |
 | --- | --- |
@@ -54,31 +56,31 @@ The Duo has its own route layout, `duo-23-v1`, and saved-show source enum,
 | Bluetooth, CallMe 1-3 | Main Mix Out, Chat Mix Out, Secondary Mix Out (to USB 1, Chat, and USB 2) |
 | Wireless 1, Wireless 2 | |
 
-Every saved Duo target ID starts with `duo-`, so a Pro II preset cannot put a
-chain on a Duo socket that is wired differently. The layout includes the four
-virtual USB inputs. It does not include SMART Pads or the extra per-channel
-multitrack output feeds. Source names are established separately from route
-availability, in [the source-name evidence](source-name-evidence.md).
+All saved Duo target IDs are prefixed with `duo-` so a Pro II preset can never
+attach an effect chain to a differently wired Duo socket. The layout includes
+the four virtual USB inputs, and omits SMART Pads and the extra per-channel
+multitrack output feeds. Source names are documented independently from route
+availability in [the source-name evidence](source-name-evidence.md).
 
-[The Duo routing note](duo-routing.md) gives the port for each path, the
-firmware addresses behind it, and the evidence. In summary:
+See [the Duo routing note](duo-routing.md) for exact port mappings, firmware
+addresses, and supporting evidence. In brief:
 
-- Headphones 1 is `out_3`/`out_4` and Headphones 2 is `out_1`/`out_2`. The
-  headset output mirrors Headphones 1 on `out_8` (left) and `out_7` (right).
-- The USB sends are named connections from mixer ports to USB endpoints:
-  `out_15`/`16` to USB 1, `17`/`18` to Chat, and `19`/`20` to USB 2. Running
-  the firmware's own connection code confirmed them.
-- Monitors is `out_5`/`out_6`. That is the firmware's mapping when all eight
-  hardware outputs are active. Nobody has seen a real Duo's JACK graph at
-  startup or after a reconnect, so this mapping is unconfirmed for some USB
-  and startup modes.
+- Headphones 1 maps to `out_3`/`out_4` and Headphones 2 maps to
+  `out_1`/`out_2`. The headset output mirrors Headphones 1 on `out_8` (left)
+  and `out_7` (right).
+- USB sends are named connections from mixer ports to USB endpoints:
+  `out_15`/`16` to USB 1, `17`/`18` to Chat, and `19`/`20` to USB 2, confirmed
+  by emulating the firmware's own connection setup code.
+- Monitors maps to `out_5`/`out_6` when all eight hardware outputs are active.
+  Because nobody has observed a real Duo's JACK graph at startup or across USB
+  reconnects, this mapping remains unconfirmed in some startup and USB modes.
 
-The native pipeline binds ports by name and does not fall back to numbered
-buffer indexes. A stereo output is processed only when both of its named
-buffers appear in the vendor callback. Otherwise it is left stock, which
-prevents processing the wrong buffer or only one channel. The pipeline does
-not check which physical socket a port is wired to, and having both names
-present does not prove the stereo mix is correct.
+The native pipeline binds ports strictly by name and never falls back to
+numeric buffer indices. A stereo output is only processed when both of its
+named buffers appear in the vendor callback; otherwise it passes through as
+stock so RC2FX never processes the wrong buffer or only half of a stereo pair.
+That said, the pipeline cannot verify physical socket wiring, and seeing both
+port names does not by itself prove the stereo mix is right.
 
 ## Firmware
 
@@ -87,19 +89,19 @@ present does not prove the stereo mix is correct.
 | 1.7.6 | `47d2ccb0d613b223ca6d5ed57c62ae6ee32ba71b662be5fbfb4ad3f44c757daa` | Same as Pro II 1.7.6 |
 | 1.7.7 | `4f3c7a022f07fd5b05955846e6a9052ad6ae214e12c04cda2d4749d775a304ed` | Same as Pro II 1.7.7 |
 
-Both releases use the same launcher. The hook audit
+Both releases share the same launcher. Both are covered by the hook audit
 ([`rodecaster-duo-1.7.7.json`](../firmware-audits/rodecaster-duo-1.7.7.json))
-and the route audit
-([`rodecaster-duo-routes.json`](../firmware-audits/rodecaster-duo-routes.json))
-cover both, and the routing note explains what each one shows. Both audits
-were run on the 1.7.7 beta archive. The stable 1.7.7 archive, downloaded
-again on 2026-11-03, is byte-identical to it.
+and route audit
+([`rodecaster-duo-routes.json`](../firmware-audits/rodecaster-duo-routes.json)),
+explained in detail in the routing note. Both audits ran against the 1.7.7 beta
+archive; re-downloading the stable 1.7.7 archive on 2026-11-03 confirmed it is
+byte-identical.
 
 ## Identifying the model
 
-The mixer program is the same on both models, so its hash cannot identify the
-mixer. RC2FX describes each model separately (`Model` in
-`crates/rc2fx-firmware/src/model.rs`) and identifies the board directly:
+Because the mixer binary is identical across both models, its hash cannot tell
+a Pro II from a Duo. Instead, RC2FX defines each model explicitly (`Model` in
+`crates/rc2fx-firmware/src/model.rs`) and checks the board directly:
 
 | | Pro II | Duo |
 | --- | --- | --- |
@@ -109,63 +111,63 @@ mixer. RC2FX describes each model separately (`Model` in
 | USB IDs, normal modes | `0037` `0078` `008d` `0092` `0094` | `0050` `0079` `008e` `0093` `0095` |
 | USB ID, update mode | `0030` | `004f` |
 
-On the mixer, RC2FX reads the model from `/etc/hostname` and from the device
-tree named in `/boot/extlinux/extlinux.conf`. The two must agree, and there is
-no override. The USB IDs come from RØDE's gadget script, which both firmwares
-share. They have not been observed on a real Duo.
+On-device, RC2FX reads both `/etc/hostname` and the device tree referenced in
+`/boot/extlinux/extlinux.conf`. Both must agree, with no override. The USB IDs
+are taken from RØDE's shared USB gadget script and have not been observed on a
+physical Duo.
 
 ## How RØDE's app updates a Duo
 
-This comes from static analysis of the RØDECaster App 2.0.115 for macOS,
-whose binary keeps its symbols. The Windows build names the same manifests
-and files.
+These details come from static analysis of RØDECaster App 2.0.115 for macOS
+(whose binary retains symbols); the Windows build references the same manifests
+and filenames.
 
-- One class, `Rodecaster2FirmwareUpdater`, updates the Pro II, the Duo, the
-  Streamer X, and an unreleased "RØDECaster Pro II-A". It has no
-  model-specific branch.
-- It sends HID `M` (report 1, 63 bytes) and expects an `A` reply. It waits up
-  to 30 seconds for update mode, copies `archive.md5` and then
-  `archive.tar.gz` to the update drive, runs `sync`, waits 1 second, ejects
-  the drive, and sends HID `U`. A factory reset sends `R` before `M`. A mixer
-  that is already in update mode is asked for its drive's volume ID with HID
-  `V`. On macOS the drive is the mounted `NO NAME` volume on the same USB
-  device.
-- Each model has its own manifest: `manifest.json` for the Pro II (`0030`),
-  `rcp2-mini-manifest.json` for the Duo (`004f`), and `rcp2-a-manifest.json`
-  for the Pro II-A (`009f`), which is not published yet.
+- A single class, `Rodecaster2FirmwareUpdater`, handles the Pro II, Duo,
+  Streamer X, and an unreleased "RØDECaster Pro II-A" with no model-specific
+  branching.
+- It sends HID `M` (report 1, 63 bytes) and expects an `A` reply, waits up to
+  30 seconds for update mode, copies `archive.md5` followed by
+  `archive.tar.gz` to the update drive, runs `sync`, pauses 1 second, ejects
+  the drive, and sends HID `U`. A factory reset sends `R` before `M`. If a
+  mixer is already in update mode, it queries the drive's volume ID with HID
+  `V`. On macOS, the drive mounts as `NO NAME` on the same USB device.
+- Each model uses a separate manifest: `manifest.json` for Pro II (`0030`),
+  `rcp2-mini-manifest.json` for Duo (`004f`), and `rcp2-a-manifest.json` for
+  Pro II-A (`009f`, not yet published).
 - RØDE's device table lists the Duo as `004f` `0050` `0073` `0079` `0093`
   `0095`, the Pro II as `0030` `0037` `0072` `0078` `0092` `0094`, and the
-  Pro II-A as `009b` to `009f`. RC2FX does not list `0072` or `0073`, and
-  RØDE does not list `008d` or `008e`. RC2FX ignores a device it does not
-  list.
+  Pro II-A as `009b` through `009f`. RC2FX omits `0072` and `0073`, while RØDE
+  omits `008d` and `008e`. RC2FX ignores any USB product ID not in its table.
 
-RC2FX's flash takes the same steps. It also reads both files back before
-ejecting and waits for the drive to go. None of this tests the RC2FX image or
-runtime on Duo hardware.
+RC2FX follows the same flash sequence, additionally reading both files back
+before ejecting and waiting for the drive to disappear. None of this validates
+the RC2FX image or runtime on real Duo hardware.
 
 ## Untested
 
-These all need a real Duo, and a separate decision to flash one:
+The following still require physical Duo hardware and an explicit decision to
+test on one:
 
-1. Flashing either release, the first-boot controller update, and returning
-   to stock.
-2. USB mode changes, reconnects, and the app's control session.
-3. Each path with an audio loopback, including Monitors in each USB mode and
-   the headset's channel order.
-4. Source reassignment, fallback to stock on failure, and sustained
-   processing load. The figures in [Hardware](hardware.md) are for the Pro II.
+1. Flashing either firmware release, completing the first-boot controller
+   update, and returning to stock.
+2. USB mode switches, reconnects, and the desktop app's control session.
+3. Audio loopback verification on every path, including Monitors across all USB
+   modes and headset left/right channel order.
+4. Source reassignment, fallback to stock on error, and sustained DSP load (all
+   measurements in [Hardware](hardware.md) are from a Pro II).
 
-For a first test, back up the RØDE show, disconnect headphones and speakers,
-and leave the mixer alone through its first boot after the flash.
+Before attempting a first hardware test, back up the RØDE show, unplug
+headphones and speakers, and leave the mixer untouched through its first boot
+after flashing.
 
 ## Offline development
 
-This work needs no Duo. The Duo firmware is not in git. Download
-`https://update.rode.com/rcp2-duo/1.7.6/os.tar.gz` and
+You don't need a Duo for offline checks. Duo firmware archives aren't committed
+to git; download `https://update.rode.com/rcp2-duo/1.7.6/os.tar.gz` and
 `https://update.rode.com/rcp2-duo/1.7.7/os.tar.gz` to
 `.deps/duo-investigation/duo-1.7.6-os.tar.gz` and `duo-1.7.7-os.tar.gz`.
 
-To check an official archive without extracting it:
+Inspect an official archive without extracting it:
 
 ```sh
 for v in 1.7.6 1.7.7; do
@@ -174,12 +176,13 @@ for v in 1.7.6 1.7.7; do
 done
 ```
 
-This verifies the checksums, that the root filesystem and boot files are a
-Duo's, the mixer and launcher hashes, and the bytes RC2FX hooks. A good result
-shows `executableVerified: true`. `runtimeQualified` stays `false`, because
-the Duo runtime is accepted only with the opt-in.
+This checks the archive checksums, confirms the root filesystem and boot files
+belong to a Duo, and verifies the mixer hash, launcher hash, and hooked
+instruction bytes. A passing run reports `executableVerified: true`, while
+`runtimeQualified` stays `false` because Duo runtime loading requires the
+explicit opt-in.
 
-To check an extracted mixer and launcher:
+Inspect an extracted mixer binary and launcher script:
 
 ```sh
 cargo run -p rc2fx-firmware -- inspect config/firmware-profiles.json \
@@ -187,7 +190,7 @@ cargo run -p rc2fx-firmware -- inspect config/firmware-profiles.json \
   .deps/duo-investigation/duo/usr/bin/audio-start.sh rodecaster-duo
 ```
 
-Tests that cover Duo handling:
+Run the automated Duo test suite:
 
 ```sh
 cargo test -p rc2fx-firmware -p rc2fx-device
@@ -202,9 +205,9 @@ for v in 1.7.6 1.7.7; do
 done
 ```
 
-To build a temporary Duo image from an official archive and check that it
-keeps the Duo's boot and controller files and has the opt-in marker, first
-cross-build the mixer runtime locally:
+To build a temporary Duo image from an official archive and verify that it
+preserves the Duo's boot and controller files and writes the opt-in marker,
+cross-build the mixer runtime first:
 
 ```sh
 ./xtask mixer-build
@@ -213,14 +216,14 @@ RC2FX_DUO_ARCHIVE="$PWD/.deps/duo-investigation/duo-1.7.7-os.tar.gz" \
   go -C desktop test ./installer -run TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn
 ```
 
-The routing note has the audit commands and the offline results so far,
-under its verification receipt. None of those results involve a real Duo.
+The routing note lists the audit commands and offline results under its
+verification receipt. None of those results come from a real Duo.
 
 ## Factory self-test mode
 
-RØDE's launcher has a "production" branch, selected by the file
-`/usr/bin/production-boot`. It is the factory self-test mode. It runs at 128
-frames, reflashes the VL805 controller firmware, deletes saved
-`system-config*` files, changes bootloader settings, and starts a self-test
-engine. Do not create that marker, including to experiment with buffer sizes.
-RC2FX supports only normal-mode 112-frame operation on both models.
+RØDE's launcher has a "production" branch triggered by the presence of
+`/usr/bin/production-boot`. This is a factory self-test mode: it switches to
+128-frame buffers, reflashes the VL805 controller firmware, deletes saved
+`system-config*` files, modifies bootloader settings, and launches a self-test
+engine. Never create that file, not even to experiment with buffer sizes. RC2FX
+only supports standard 112-frame operation on both models.

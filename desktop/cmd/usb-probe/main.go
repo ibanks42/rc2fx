@@ -1,6 +1,6 @@
-// Command usb-probe is an end-to-end USB check. Read-only unless
-// --write-roundtrip is explicitly used; that flag reapplies the exact current
-// targets with optimistic revision checking.
+// Command usb-probe runs an end-to-end USB check against a connected mixer.
+// It is read-only unless --write-roundtrip is passed, in which case it
+// re-applies the current targets with optimistic revision checking.
 package main
 
 import (
@@ -26,7 +26,7 @@ func main() {
 	}
 }
 
-// lookup is value[key][key]..., or null where something is missing.
+// lookup walks nested JSON objects by key, returning null if any key is missing.
 func lookup(value json.RawMessage, keys ...string) json.RawMessage {
 	for _, key := range keys {
 		var fields map[string]json.RawMessage
@@ -42,7 +42,6 @@ func lookup(value json.RawMessage, keys ...string) json.RawMessage {
 	return value
 }
 
-// display is a value as compact JSON, or as it came when it does not parse.
 func display(value json.RawMessage) string {
 	var out bytes.Buffer
 	if json.Compact(&out, value) != nil {
@@ -51,7 +50,6 @@ func display(value json.RawMessage) string {
 	return out.String()
 }
 
-// asUint is a plain unsigned integer: digits only, within 64 bits.
 func asUint(value json.RawMessage) (uint64, bool) {
 	text := string(bytes.TrimSpace(value))
 	if text == "" {
@@ -66,7 +64,7 @@ func asUint(value json.RawMessage) (uint64, bool) {
 	return n, err == nil
 }
 
-// equal is Value equality: the same tree, whatever the key order.
+// equal compares two JSON values structurally, ignoring key order.
 func equal(a, b json.RawMessage) bool {
 	decode := func(raw json.RawMessage) (any, bool) {
 		decoder := json.NewDecoder(bytes.NewReader(raw))

@@ -71,26 +71,20 @@ pub fn image_check(bundle: &std::path::Path) -> rc2fx_core::ImageCheck {
     rc2fx_core::ImageCheck::from_record(record.as_deref(), digest.as_deref())
 }
 
-/// A response body, carried as validated JSON text rather than a `Value`
-/// tree: typed replies are serialized straight to it, and payloads the
-/// controller already serialized (events, the diagnostics export) are
-/// validated once and then passed through as they are. The wire bytes are the
-/// same either way — the host still decodes `Reply` with a `Value` body.
+/// Response body carried as validated raw JSON text rather than a `Value` tree.
+/// Typed replies serialize directly to it; pre-serialized payloads (events,
+/// diagnostics export) are validated once and forwarded as-is. The host still
+/// decodes `Reply` with a `Value` body.
 pub type Reply = rc2fx_usb::Reply<Box<RawValue>>;
 
 fn reply(status: u16, value: &impl Serialize) -> Reply {
-    // `to_raw_value` is serde_json's own serializer: it writes the JSON text
-    // once and hands it back as a RawValue, so a typed reply is never
-    // serialized and then parsed again.
     match serde_json::value::to_raw_value(value) {
         Ok(body) => Reply { status, body },
         Err(_) => error(500, "Response serialization failed"),
     }
 }
 
-/// A reply from bytes the controller already serialized: validated once here
-/// (this is the boundary; nothing trusts the bytes before it) and then carried
-/// as raw JSON, without building a value tree.
+/// Wraps pre-serialized bytes as a raw JSON reply after validating them once here.
 fn reply_bytes(status: u16, data: &[u8]) -> Reply {
     match serde_json::from_slice::<&RawValue>(data) {
         Ok(body) => Reply {
@@ -101,18 +95,12 @@ fn reply_bytes(status: u16, data: &[u8]) -> Reply {
     }
 }
 
-/// The event envelope `{"event": <kind>, "data": <payload>}`, built without a
-/// value tree: the payload bytes the controller serialized are validated once
-/// here (the trust boundary) and written straight into the envelope. Returns
-/// None when the payload is not valid JSON, which the caller answers as 500
-/// exactly as before.
+/// Builds `{"event": <kind>, "data": <payload>}` directly from pre-serialized
+/// payload bytes, validating JSON syntax once without building a `Value` tree.
+/// Returns `None` on invalid JSON (callers turn that into 500).
 pub(crate) fn event_reply(kind: &str, data: &[u8]) -> Option<Reply> {
     let text = std::str::from_utf8(data).ok()?;
-    // The one validation of the incoming payload: borrowed, so no copy either.
     let payload: &RawValue = serde_json::from_str(text).ok()?;
-    // `to_raw_value` serializes the envelope around that already-validated
-    // text without scanning it a second time; it is a serde serializer, not
-    // unchecked construction from arbitrary bytes.
     let body = serde_json::value::to_raw_value(&RawEvent {
         event: kind,
         data: payload,
@@ -402,11 +390,9 @@ impl Api {
                 },
                 Err(reply) => reply,
             },
-            // Live editing: effect settings on the running audio at once,
-            // saved later. The app sends a control's value while it moves and
-            // saves once it stops; undo and revert send earlier settings the
-            // same way. Nothing is stored here, the revision stays, and no
-            // state event is sent. Native audio only; elsewhere this is 404.
+            // Live editing: push settings straight to the running native engine
+            // without saving, bumping revision, or emitting a state event.
+            // Native audio only (404 elsewhere).
             ("PUT", "api/v1/live") => match parse::<rc2fx_core::ConfigUpdate>(body) {
                 Ok(update) => match receive(controller.live(update)).await {
                     Ok(revision) => {
@@ -688,17 +674,13 @@ mod tests {
         serde_json::from_str(reply.body.get()).unwrap()
     }
 
-    /// The new bridge must mean exactly the same thing on the wire as the old
-    /// Value roundtrip: both decode, with the HOST's `Reply`, to the same
-    /// value. (Byte identity is not the guarantee — the Value path sorts keys
-    /// and normalizes numbers; the wire *contract* is the decoded document.)
+    /// Verifies that the raw JSON bridge decodes to the same `Value` on the host
+    /// as the old `Value` round-trip. Byte identity is not expected (the `Value`
+    /// path sorts keys and normalizes numbers); the wire contract is the decoded document.
     #[test]
     fn the_raw_bridge_matches_the_former_value_bridge_semantically() {
-        // An event payload as the hub serializes it, with awkward content:
-        // quotes, backslashes, a newline, non-ASCII and a nested array.
         let payload = br#"{"id":"mic-1","voice":"a \"quoted\" \\ path","note":"line\nbreak \u00e9","spectrum":[0.5,1e-3,-0.0]}"#;
         let raw = event_reply("meter", payload).expect("valid payload");
-        // The old path: parse to Value, wrap with json!, to_value, serialize.
         let data: Value = serde_json::from_slice(payload).unwrap();
         let old = serde_json::to_vec(&json!({
             "status": 200,
@@ -706,9 +688,7 @@ mod tests {
         }))
         .unwrap();
         let new = serde_json::to_vec(&raw).unwrap();
-        // Byte identity is not possible (the Value path sorts keys and
-        // normalizes numbers); the HOST's decode must be equal, which is what
-        // the wire contract is.
+        // Compare decoded Values since the old path sorted keys and normalized numbers.
         let decoded: rc2fx_usb::Reply = serde_json::from_slice(&new).unwrap();
         let before: rc2fx_usb::Reply = serde_json::from_slice(&old).unwrap();
         assert_eq!(decoded.status, before.status);

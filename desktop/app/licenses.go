@@ -1,7 +1,6 @@
 package app
 
-// The license dialog. The bundle, its schema and
-// NoticeMarkdown are app/licenses.
+// Third-party licenses dialog (notice data and markdown formatting live in app/licenses).
 
 import (
 	"fmt"
@@ -12,20 +11,15 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/licenses"
 )
 
-// licensesView is the license dialog's state: the sections, each opened
-// on its own.
 type licensesView struct {
 	expanded map[int]bool
-	// textViews is parsed once per opened section, when it is first opened;
-	// it keeps selection and scroll on collapse and reopen instead of
-	// reconstructing thousands of rows each frame. (A gk view function may
-	// not make kit state, so the click that opens a section makes it.)
+	// Lazily parsed on first expand (in click handlers, since render can't allocate
+	// kit state) so collapsing/reopening preserves scroll and selection.
 	textViews map[int]gk.TextViewState
 	view      gk.View
 	theme     gk.BaseTheme
 }
 
-// licensesDialog is the one license dialog: made on first open (a handler).
 var licensesDialog struct {
 	made  bool
 	built gk.Built[gk.DialogEl]
@@ -38,12 +32,8 @@ func newLicensesView(cx *gk.Cx) *licensesView {
 	return l
 }
 
-// reset is a fresh LicensesView, as each opening made: a single section
-// (such as the development placeholder) starts open.
 func (l *licensesView) reset(cx *gk.Cx) {
-	// A copy of the theme as it is now (the global itself cannot be handed to
-	// a text view's style), taken again at each opening so an appearance
-	// change shows; the dialog is closed while this runs.
+	// Snapshot the current global theme on open so appearance changes take effect.
 	gk.Release(cx, l.theme)
 	l.theme = gk.NewBaseThemeGlobal(cx)
 	for index, state := range l.textViews {
@@ -56,7 +46,6 @@ func (l *licensesView) reset(cx *gk.Cx) {
 	}
 }
 
-// open shows a section, parsing it the first time.
 func (l *licensesView) open(cx *gk.Cx, index int) {
 	l.expanded[index] = true
 	if _, ok := l.textViews[index]; !ok {
@@ -82,7 +71,7 @@ func (l *licensesView) render(cx *gk.Cx) gk.Element {
 			arrow = "▾"
 		}
 		item := gk.VFlex(s.BorderB1).BorderColor(rgb(surface().Line)).
-			// A button, so the header is reachable by keyboard.
+			// Use a button so section headers are keyboard-focusable.
 			Child(gk.Button(gk.Key("license-section", index)).Ghost().Style(s.WFull, s.JustifyStart).
 				Label(fmt.Sprintf("%s %s", arrow, section.Title)).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { l.toggle(cx, index) }))
@@ -94,9 +83,6 @@ func (l *licensesView) render(cx *gk.Cx) gk.Element {
 	return list
 }
 
-// noticeBox is the same selectable rich-text component as update notices,
-// with its own bounded viewport. Only visible blocks take part in repeated
-// layout and painting.
 func noticeBox(state gk.TextViewState, theme gk.BaseTheme) gk.DivEl {
 	style := gk.NewBaseTextViewStyleFromTheme(theme).WithForeground(rgb(Muted)).WithParagraphGap(0)
 	return gk.Div(s.FlexShrink0, s.My2, s.Border1).H(px(320)).P(px(18)).Rounded(px(12)).
@@ -105,9 +91,6 @@ func noticeBox(state gk.TextViewState, theme gk.BaseTheme) gk.DivEl {
 			OnLinkClick(func(*gk.Cx, gk.Event83) {}))
 }
 
-// openLicenses opens the license dialog over the current
-// page. It changes nothing else: drafts, connection and window stay as they
-// are.
 func openLicenses(cx *gk.Cx) {
 	d := &licensesDialog
 	if !d.made {

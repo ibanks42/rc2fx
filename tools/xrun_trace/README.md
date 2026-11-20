@@ -1,15 +1,16 @@
 # Xrun flight recorder
 
 Kernel scheduler timestamps must pass a cadence check before the analyzer
-attributes durations, CPU occupancy, or cross-CPU ordering. Invalid or incomplete
-kernel timing is reported explicitly; native monotonic histories can still be
-examined separately. Task selection uses `set_event_pid` rather than event-field
-filters to avoid the kernel event-discard path. Nearby callbacks alone do not
-prove which JACK cycle owned a fault.
+attributes durations, CPU occupancy, or cross-CPU ordering. Invalid or
+incomplete kernel timing is surfaced explicitly; native monotonic histories can
+still be inspected on their own. Task selection uses `set_event_pid` rather
+than event-field filters to avoid the kernel's event-discard path. Nearby
+callbacks alone never prove which JACK cycle owned a fault.
 
 ## Measurement levels
 
-Each level slows audio. Measured on main with six streams playing:
+Every level of instrumentation adds audio overhead. Measured on `main` with six
+streams playing:
 
 | Level | How to run it | Main mean | Slow callbacks per hour |
 | --- | --- | --- | --- |
@@ -17,81 +18,86 @@ Each level slows audio. Measured on main with six streams playing:
 | 2. Plus client timing | `run.py prepare`, then restart audio | 907 us | about 180 |
 | 3. Plus kernel tracing | `run.py prepare`, restart audio, then `bench.py` | 940 us | about 1,860 |
 
-A slow callback means main ended past 0.75 of the period.
+A callback counts as slow when `main` finishes past 0.75 of the period.
 
-Pass/fail uses level 1, through the settled control below. Level 3 works as a
-magnifier: it stays available for investigation, and its extra load produces
-faults that a plain run would not. The one two-hour xrun happened with tracing
-on, and none occurred in the 63 traced-off minutes after the trace froze.
+Pass/fail qualification always uses level 1 via the settled control described
+below. Level 3 acts as a magnifier for root-cause work: its extra overhead
+triggers faults that wouldn't happen in an uninstrumented run. (The one
+two-hour xrun occurred while tracing was active, with zero faults in the 63
+untraced minutes after the trace froze.)
 
-The trade-off is that a fault in a level 1 run has no kernel detail. Reproduce
-it with tracing on to investigate it.
+The trade-off is that a level 1 fault carries no kernel trace. To diagnose it,
+reproduce with tracing enabled.
 
-The audit report refreshes every second for its first three minutes and whenever
-client timing or the gauges are on, and every three seconds otherwise. Keep
-`--interval` above three seconds on a level 1 run.
+The audit report refreshes every second for the first three minutes (and
+whenever client timing or gauges are enabled), and every three seconds
+otherwise. Keep `--interval` above three seconds during level 1 runs.
 
-`status.json` records `measurementLevel` and a `measurement` block for the whole
-window since the baseline, all from level 1 counters: `slowCallbacks` (the
-growth of `audit.cycle.endPos.histogram[4:]`), `slowCallbacksPerHour`, and
-`meanCallbackWallUs`, `meanNativeWallUs`, and `meanOwnedWallUs` from
-`callbackTiming[0]`. Means are precise within five minutes. Rates are not: level
-1 gives only about 4 slow callbacks per five minutes, so judge a rate over 30
-minutes or more.
+`status.json` writes `measurementLevel` plus a `measurement` block covering the
+entire window since baseline, derived purely from level 1 counters:
+`slowCallbacks` (growth of `audit.cycle.endPos.histogram[4:]`),
+`slowCallbacksPerHour`, and `meanCallbackWallUs`, `meanNativeWallUs`, and
+`meanOwnedWallUs` from `callbackTiming[0]`. Means stabilize within five
+minutes, while rates do not: level 1 produces only about 4 slow callbacks per
+five minutes, so judge rates over at least 30 minutes.
 
 ## Bench gauges
 
-`run.py gauges-on` sets the RAM marker `/run/rc2fx-gauges`. It takes effect at
-the next audio start, is independent of client timing, and reboot clears it.
-`gauges-off` removes it. Without the marker, libasound and libsamplerate stay
-unaudited and the launcher passes `RC2FX_GAUGES=0`, so no wrapper exists to be
-bound and the audit has no `gauges` block. The gauges add load, so they never
-judge pass/fail, and a run refuses them unless `--gauges` asks for them.
+`run.py gauges-on` creates the RAM marker `/run/rc2fx-gauges`. It takes effect
+on the next audio restart, operates independently of client timing, and clears
+on reboot (`gauges-off` removes it). Without the marker, `libasound` and
+`libsamplerate` stay uninstrumented and the launcher passes `RC2FX_GAUGES=0`,
+so no wrappers bind and no `gauges` block appears in the audit. Because gauges
+add load, they are never used for pass/fail checks, and a run rejects them
+unless `--gauges` is explicitly passed.
 
-`bench.py --gauges` restarts the extremes after settling, then adds a `gauges`
+`bench.py --gauges` resets min/max trackers after settling and adds a `gauges`
 block to `measurement`:
 
-- `handles[]`, one per USB ALSA handle: `lowestFillFrames`, computed as the
-  vendor does (`ring - avail - frames` for playback, `avail - frames` for
-  capture). Silence is written only when fill drops below 0, and target fill is
-  146 frames. `--ring-frames` defaults to 784, which is 4 periods of 196 frames
-  on the S32 gadget. Check it if the USB mode differs.
-- `srcMeanUsPerCycle`, `srcMaxCycleUs`, and `srcCallsPerCycle`: resampler time
-  for that client, measured around each `src_process` call.
-- `vendorJob`: where RØDE's monitor job ended in its own cycle, as a histogram
-  in the `endPos` bins, and `pastJackdRead`, the jobs that ended after jackd's
-  read, about 110 us before the next estimated cycle start. The cycle start is
-  an estimate at one-frame resolution (21 us).
+- `handles[]`, one entry per USB ALSA handle: `lowestFillFrames`, calculated
+  the same way the vendor does (`ring - avail - frames` for playback,
+  `avail - frames` for capture). Silence is only written when fill drops below
+  0, and target fill is 146 frames. `--ring-frames` defaults to 784 (4 periods
+  of 196 frames on the S32 gadget); adjust it if testing another USB mode.
+- `srcMeanUsPerCycle`, `srcMaxCycleUs`, and `srcCallsPerCycle`: per-client
+  resampler time measured around each `src_process` call.
+- `vendorJob`: where RØDE's monitor job finished within its cycle (bucketed
+  into `endPos` histogram bins), plus `pastJackdRead` for jobs finishing after
+  jackd's read (roughly 110 us before the next estimated cycle start, where
+  cycle start is estimated at one-frame resolution, 21 us).
 
 ## How it works
 
-This is opt-in diagnostic tooling for the RØDECaster Pro II. It does not make
-xruns harmless or treat a clean run as proof that every cause has been removed.
-It preserves evidence at the first fault, independently of host polling.
+This is opt-in diagnostic tooling for the RØDECaster Pro II. It neither makes
+xruns harmless nor proves from a clean run that every bug is gone. Its job is
+to freeze evidence at the first fault without depending on host polling.
 
-The JACK recorder publishes its fault record, then reaches a normally empty
-`rc2fx_jackerr_fault` hook. An optional kernel uprobe freezes ftrace there.
-A separate bounded native ring retains callback entry/exit times and freezes
-on the first xrun notification. Audio callbacks perform no diagnostic file I/O.
-The report thread reads the arm token. Changing that token explicitly starts a
-new capture; reading reports cannot accidentally unfreeze an existing capture.
+When a fault occurs, the JACK recorder publishes its fault record and hits a
+normally empty `rc2fx_jackerr_fault` hook, where an optional kernel uprobe
+freezes ftrace. A separate bounded native ring records callback entry/exit
+times and freezes on the first xrun notification. Audio callbacks do zero
+diagnostic file I/O. The report thread watches an arm token: changing the token
+explicitly arms a fresh capture, so reading reports can never accidentally
+unfreeze an existing one.
 
-The mixer kernel's `mono` trace clock failed cross-CPU timestamp calibration.
-The tool uses `mono_raw`, validates 32 bracketed clock samples across four CPUs
-on every arm, and aligns the frozen trace to a monotonic timestamp carried by
-the fault hook. Alignment retains user-to-probe latency uncertainty.
+Because the mixer kernel's `mono` trace clock failed cross-CPU timestamp
+calibration, this tool uses `mono_raw`, validates 32 bracketed clock samples
+across all four CPUs on every arm, and aligns the frozen trace to the monotonic
+timestamp passed by the fault hook (retaining user-to-probe latency
+uncertainty).
 
-The mixer kernel's uprobe `traceoff` affects global tracing even when installed
-in an instance. This tool therefore requires exclusive use of an idle global
-tracer, refuses existing tracing instances, saves the prior buffer/clock/on/off
-settings, and restores them on `clear`. Capture uses a rolling 4 MiB buffer per
-CPU, scheduling events and syscalls filtered to the measured USB callback, JACK
-driver, and external SIP process. Kernel tracing adds overhead: this is an instrumented qualification,
-not a claim that observation is free. There are no per-callback uprobes.
+Because the mixer kernel's uprobe `traceoff` stops global tracing even when
+attached to a sub-instance, this tool demands exclusive access to an idle
+global tracer, refuses to run if other tracing instances exist, saves prior
+buffer/clock/on/off state, and restores it on `clear`. Capture runs with a
+rolling 4 MiB per-CPU buffer covering scheduling events and syscalls filtered to
+the measured USB callback, JACK driver, and external SIP process. Kernel
+tracing isn't free: this is an instrumented investigation tool, not a
+zero-overhead monitor. There are no per-callback uprobes.
 
-Set the usual `RC2FX_MIXER_IP`, `RC2FX_MIXER_KEY`,
-`RC2FX_MIXER_KNOWN_HOSTS`, and `RC2FX_MIXER_HOST_KEY_ALIAS` environment variables.
-Use an exact build bundle whose recorder hash matches the running mixer:
+Export the usual `RC2FX_MIXER_IP`, `RC2FX_MIXER_KEY`,
+`RC2FX_MIXER_KNOWN_HOSTS`, and `RC2FX_MIXER_HOST_KEY_ALIAS` variables, and pass
+a verified build bundle whose recorder hash matches the mixer:
 
 ```sh
 python3 tools/xrun_trace/run.py prepare
@@ -99,22 +105,22 @@ python3 tools/xrun_trace/run.py prepare
 python3 tools/xrun_trace/bench.py --keep-going --bundle /path/to/verified/mixer-bundle --out /path/to/new-receipt-directory
 ```
 
-The bench plays six quiet, distinct modulated stereo signals through System,
-Game, Music, Virtual A, Virtual B, and Chat. It reads the mixer every 30 seconds by default (configurable with `--interval`),
-checks process/boot identity, telemetry freshness, callback progress, xruns and
-other error counters, and stops its own playback on completion. Run it in a
-persistent foreground session or service. It does not publish releases or touch
-the desktop window. With `--keep-going`, faults are recorded immediately and
-playback continues for the requested duration. Any observed fault still makes
-the final qualification fail, even if later checkpoints look clean. The first
-kernel trace stays frozen; subsequent counters and event reports continue.
-The first frozen native audit is saved from the existing checkpoint without an
-extra device read, and matched to the capture token during final analysis.
-The frozen trace is collected when the run ends. Without `--keep-going`, the
-bench retains its earlier stop-on-fault behavior. Playback or transport failure
-can still prevent a complete observation run.
+The bench plays six quiet, distinct modulated stereo signals across System,
+Game, Music, Virtual A, Virtual B, and Chat. By default it polls the mixer
+every 30 seconds (`--interval`), verifying process and boot identity, telemetry
+freshness, callback progress, xruns, and other error counters, and stops
+playback when done. Run it in a persistent foreground session or service; it
+never publishes releases or touches the desktop UI. With `--keep-going`, faults
+are logged immediately while playback continues for the full duration, though
+any fault still fails final qualification even if subsequent checkpoints are
+clean. The first kernel trace remains frozen while counters and events keep
+updating; the first frozen native audit is saved from the existing checkpoint
+without an extra device read and matched to the capture token during analysis,
+and the frozen kernel trace is pulled at the end of the run. Without
+`--keep-going`, the bench stops on the first fault. Playback or transport
+errors can still abort an observation run.
 
-For manual collection:
+For manual capture and cleanup:
 
 ```sh
 python3 tools/xrun_trace/run.py status
@@ -124,98 +130,100 @@ python3 tools/xrun_trace/analyze.py /path/to/new-capture-directory
 python3 tools/xrun_trace/run.py clear
 ```
 
-`clear` preserves the device receipt in a timestamped saved directory and
-removes this recorder's probe. It must be explicit after evidence collection.
-A failed setup likewise requires inspection and explicit cleanup.
+`clear` archives the device receipt into a timestamped directory and removes
+the uprobe. Cleanup is always explicit after collection (including after a
+failed setup).
 
-The analysis distinguishes execution, runnable scheduling delay, blocking
-syscalls, and an outstanding wake before callback entry. It names observed
-competitors and records syscall numbers/arguments, IRQ spans, and wake sources.
-Missing identity, missing intervals, or lost events are reported as limitations;
-a scheduler mechanism alone does not establish which source-code defect caused
-it. The raw trace, native audit, JACK binary snapshot, process maps, thread
-priorities, boot identity, and buffer-loss counters remain available for deeper
-analysis.
+The analyzer separates execution time, runnable scheduling delay, blocking
+syscalls, and pending wakes prior to callback entry, naming observed
+competitors along with syscall numbers/arguments, IRQ spans, and wake sources.
+Missing identities, gaps, or dropped events are called out as limitations, and
+a scheduler symptom by itself does not prove which source-code bug caused it.
+The raw trace, native audit, JACK binary snapshot, process maps, thread
+priorities, boot identity, and buffer-loss counters are all preserved for
+deeper inspection.
 
 ## Controlled validation
 
-`cpu_hog.c` is a diagnostic injector, never part of the runtime. The host command
-`python3 tools/xrun_trace/run.py self-test --out /path/to/new-self-test`
-cross-compiles it with Zig, uploads it into RAM, injects the fault, collects the
-capture, and requires attribution to the hog. The launcher command temporarily pins the measured USB callback to CPU 3 and injects 10 ms
-of FIFO-80 work there. It restores the original affinity and has a one-second
-watchdog. This intentionally interrupts audio and is only for an authorized
-bench. A validated capture must name that hog as the thread delaying the USB
-callback, not merely observe that the xrun count increased.
+`cpu_hog.c` is a diagnostic fault injector that never ships in the runtime.
+Running `python3 tools/xrun_trace/run.py self-test --out /path/to/new-self-test`
+cross-compiles it with Zig, uploads it to RAM, triggers a fault, collects the
+capture, and asserts that the analyzer blames the hog. The launcher temporarily
+pins the measured USB callback to CPU 3, injects 10 ms of FIFO-80 work on that
+CPU, restores the original affinity, and enforces a one-second watchdog. Because
+this deliberately interrupts audio, only run it on an authorized bench. A valid
+self-test must identify the hog as the thread delaying the USB callback, not
+just observe a bumped xrun counter.
 
-On 2026-11-05 the final hardware validation captured `usb1out` TID 1879 waking
-at approximately 9638.601195 s and waiting runnable until JACK reported the
-fault at 9638.602240 s. The trace identified the injected hog occupying CPU 3
-for that entire 1.045 ms interval. Both trace and callback history froze
-without host polling. There were no commit overruns or dropped trace events.
+On 2026-11-05, final hardware validation captured `usb1out` TID 1879 waking at
+roughly 9638.601195 s and sitting runnable until JACK reported the fault at
+9638.602240 s, with the trace showing the injected hog holding CPU 3 across the
+entire 1.045 ms window. Both the kernel trace and callback history froze
+without host polling, with zero commit overruns or dropped trace events.
 
-Host checks:
+Host unit tests:
 
 ```sh
 python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
 python3 -m unittest discover -s mixer/jackerr/tests -p test_jackerr.py
 ```
 
-While armed, callback recording uses wall-clock boundaries only. Per-client
-legacy CPU timing counters pause to avoid synchronized CPU-clock syscalls.
-`clientTiming.registrations[].timing` therefore stops at arm and stays frozen,
-so in a traced run its values predate playback. Use flight medians for loaded
-figures.
-Main callback history, including native-work boundaries, freezes separately.
-IRQ and broad syscall tracing are intentionally omitted from the qualification
-profile because they materially perturb this mixer. A capture may establish
-CPU occupancy without distinguishing hard IRQ time from execution; that
-limitation requires a targeted follow-up rather than an invented conclusion.
+While armed, callback recording captures wall-clock boundaries only. Legacy
+per-client CPU timing counters pause to avoid synchronized CPU-clock syscalls,
+so `clientTiming.registrations[].timing` freezes at arm time and reflects
+pre-playback values; use flight medians for loaded numbers. Main callback
+history (including native-work boundaries) freezes independently. Broad IRQ and
+syscall tracing are intentionally left out of the qualification profile because
+they noticeably perturb the mixer. A capture can therefore show CPU occupancy
+without separating hard IRQ time from normal execution, which calls for a
+targeted follow-up rather than guessing.
 
-Wake attribution uses `sched_waking`, before the target becomes runnable.
-`sched_wakeup` can be logged after the target has already run on another CPU;
-a late wake notification must never turn an executing callback into a runnable
-delay. Dispatch lookup also rejects wakes from an earlier completed callback.
+Wake attribution relies on `sched_waking` (recorded before the target becomes
+runnable), since `sched_wakeup` can arrive after the target is already running
+on another CPU and a late wake must never misclassify an executing callback as
+runnable delay. Dispatch lookup also discards wakes belonging to an earlier
+completed callback.
 
 `bench.py --avoid-driver` is a reversible scheduling experiment. After reading
-live thread identities and affinity masks, it restricts the JACK FIFO-51 driver
-to CPU 1 and restricts the two USB output threads to CPU 3, intersecting
-their existing masks. The main callback remains on CPU 2.
-The original masks, process IDs, and thread start times are saved with the
-capture. `clear` restores them only if the same process/thread still exists.
-This is an experimental bench policy, not a production fix. The ordinary bench
-leaves affinity unchanged. Diagnostic tracing uses `set_event_pid` for mixer,
-JACK, and SIP tasks. Event field filters are disabled to avoid the known discard path.
-See the [kernel PID-selection documentation](https://docs.kernel.org/trace/ftrace.html#set-event-pid).
+live thread IDs and affinity masks, it pins the JACK FIFO-51 driver to CPU 1
+and the two USB output threads to CPU 3 (intersected with their existing
+masks), leaving the main callback on CPU 2. Original masks, PIDs, and thread
+start times are saved with the capture, and `clear` restores them only if the
+same thread is still alive. This is strictly an experimental bench policy, not
+a production setting; normal bench runs leave affinities untouched. Diagnostic
+tracing uses `set_event_pid` for mixer, JACK, and SIP tasks, with event-field
+filters disabled to avoid the known discard path (see the
+[kernel PID-selection documentation](https://docs.kernel.org/trace/ftrace.html#set-event-pid)).
 
-The default profile records transitions involving selected mixer, JACK, and SIP
-tasks through PID selection, and omits syscall events. `--deep` adds syscall
-capture for those tasks, including external SIP semaphore identity. The minimal profile cannot establish
-continuous occupancy by an intermediate competitor; analysis marks that scope
-and reports intervals since observed switches. Use the deep profile when the
-minimal evidence does not distinguish the mechanism.
+The default profile logs scheduling transitions for the selected mixer, JACK,
+and SIP tasks via PID selection without syscalls. `--deep` adds syscall capture
+for those tasks, including external SIP semaphore identity. Because the minimal
+profile can't prove continuous occupancy by an intermediate competitor, the
+analyzer notes that boundary and reports intervals since observed switches;
+switch to `--deep` when the minimal trace is ambiguous.
 
-All report and map downloads use device-side `gzip -1` with shell `pipefail`,
-then host-side decompression. Uploads stay plain. This applies to baseline and
-checkpoint reads as well as arm verification: plain SSH report transfers were
-already shown to interfere with audio. Capture archives are already compressed.
-The default trace clock is `mono_raw`, validated across four CPUs on each arm
-and aligned using the fault hook's monotonic timestamp.
+All report and map downloads stream through device-side `gzip -1` with shell
+`pipefail` and decompress on the host, while uploads stay uncompressed. This
+covers baseline reads, checkpoints, and arm verification, because plain SSH
+report transfers were found to disturb audio. Capture archives are already
+compressed. The default trace clock is `mono_raw`, calibrated across four CPUs
+on each arm and aligned via the fault hook's monotonic timestamp.
 
-`--interval 7200 --seconds 7200` requests baseline/end-only reads for a two-hour
-run. The final read includes five seconds of allowance for report cadence; the
-receipt must still cover the requested duration in both host and device time.
+`--interval 7200 --seconds 7200` runs a two-hour test with only baseline and
+end reads. The final read allows five extra seconds for report cadence while
+still requiring the receipt to cover the full requested duration in both host
+and device time.
 
-For an observation-overhead control, disable the optional client-timing marker
-with the launcher's `xrun-trace unprepare`, explicitly restart audio using the
-installed launcher, then run `bench.py --no-trace --seconds 300 --interval 30`.
-The control refuses a baseline with the optional timing probe still enabled.
-It uses the same audio, compressed checkpoint transport, and error-counter
-checks, but does not arm or collect a kernel trace. Restarting is explicit;
-`unprepare` itself only removes the diagnostic marker for the next audio start.
+For an observation-overhead control, clear the optional client-timing marker
+via the launcher's `xrun-trace unprepare`, explicitly restart audio through the
+installed launcher, and run `bench.py --no-trace --seconds 300 --interval 30`.
+The control aborts if the baseline still has the timing probe active. It runs
+the same six-channel playback, compressed checkpoints, and error-counter checks
+without arming or collecting a kernel trace. Restarting is always explicit;
+`unprepare` only clears the marker for the next audio start.
 
 Settled controls use `--no-trace --settle-seconds 60 --seconds 300 --trials 3
 --interval 30`. They require at least three minutes of audio callback progress
-and a flat event counter for 60 seconds, retain continuous six-channel playback
-between the five-minute trials, and stop at the first failed checkpoint.
-A startup burst cannot be counted as a steady-state control.
+and 60 seconds with a flat event counter, keep continuous six-channel playback
+running between the five-minute trials, and abort on the first failing
+checkpoint so startup bursts can never masquerade as steady-state controls.

@@ -6,9 +6,8 @@ import (
 	"strings"
 )
 
-// Equalizer APO / AutoEQ parametric text. This parses data only: Include,
-// expressions, channel routing and other commands are never executed or
-// ignored.
+// Equalizer APO / AutoEQ parametric text import. Data-only: commands like
+// Include, expressions, and channel routing are rejected rather than ignored.
 
 func apoError(line int, message string) error {
 	return CoreError("APO line " + strconv.Itoa(line) + ": " + message)
@@ -67,10 +66,8 @@ func rustLines(text string) []string {
 	return lines
 }
 
-// parseRustFloat reads a float strictly: an optional sign, then `inf`,
-// `infinity` or `nan` in any case, or decimal digits with an optional point
-// and exponent (`5.`, `.5` and `1e5` are numbers; hex and underscores are
-// not).
+// parseRustFloat matches Rust's f64::from_str (decimal floats plus inf/nan;
+// rejects hex floats and underscores).
 func parseRustFloat(text string) (float64, bool) {
 	body := text
 	if body != "" && (body[0] == '+' || body[0] == '-') {

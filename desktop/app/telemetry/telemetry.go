@@ -1,8 +1,6 @@
-// Package telemetry is the desktop's reading of the mixer's meters and
-// diagnostics, without drawing: meter freshness and audio progress, plus
-// the pure halves of the events window (EventLog, the event rows and their
-// wording) and of the Telemetry section (its statuses, checks and figures).
-// It does not import gk, so it tests with plain `go test`.
+// Package telemetry handles meter freshness, audio progress tracking, startup
+// fault exclusion, the diagnostic event log, and the Telemetry view model.
+// Kept free of gk imports so it tests with plain `go test`.
 package telemetry
 
 import (
@@ -16,16 +14,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-// StartupAudio is how long after an engine generation starts running counts
-// as startup: JACK coming up, RØDE's mixer registering, paths binding,
-// threads settling. Bursts inside it are expected and left out of telemetry
-// and the events window; a fault after it counts normally.
+// StartupAudio is the grace period after an engine generation starts while
+// JACK, RØDE's mixer, and path bindings settle. Fault bursts during this
+// window are excluded from telemetry headlines and hidden by default in the
+// events window.
 const StartupAudio = 60 * time.Second
 
-// sinceSat is now - at, or 0 when at is later.
 func sinceSat(now, at time.Time) time.Duration { return max(now.Sub(at), 0) }
 
-// nanos is ns nanoseconds, capped at what a time.Duration holds.
 func nanos(ns uint64) time.Duration {
 	if ns > math.MaxInt64 {
 		return time.Duration(math.MaxInt64)
@@ -33,17 +29,15 @@ func nanos(ns uint64) time.Duration {
 	return time.Duration(ns)
 }
 
-// StartupFaults is the faults counted while the mixer started. Telemetry
-// leaves them out entirely: they say nothing about how RC2FX runs. The
-// mixer's logs and counters are untouched.
+// StartupFaults captures the fault counters accumulated during StartupAudio so
+// they can be subtracted from displayed telemetry without mutating mixer state.
 type StartupFaults struct {
 	Xruns        uint64
 	overruns     uint64
 	clockErrors  uint64
 	helperLate   uint64
 	helperStalls uint64
-	// paths is each path's own counters, by path id.
-	paths map[string]pathFaults
+	paths        map[string]pathFaults
 }
 
 type pathFaults struct {
@@ -71,8 +65,8 @@ func pathFaultsOf(t *core.TargetMeter) pathFaults {
 	return f
 }
 
-// sharedPerformance is the first path's performance block: the audio
-// callback, xruns and helper are shared by every path.
+// sharedPerformance returns the first available Performance block (callback,
+// xrun, and helper counters are shared across all paths).
 func sharedPerformance(meter *core.Meter) *core.Performance {
 	for i := range meter.Targets {
 		if p := meter.Targets[i].Performance; p != nil {
@@ -106,39 +100,30 @@ func startupFaultsOf(meter *core.Meter) StartupFaults {
 type startupPhase int
 
 const (
-	// phaseClosed: the startup faults are known, or none can be told apart.
-	// The zero value.
+	// Startup faults are finalized or indistinguishable.
 	phaseClosed startupPhase = iota
-	// phaseOpen: audio is younger than the window: everything counted is
-	// startup.
+	// Engine is still within StartupAudio; incoming faults count as startup.
 	phaseOpen
-	// phaseUnread: first seen after the window: only the event log can say
-	// what fell inside it. Faults stay in the headline until it has.
+	// Connected after StartupAudio elapsed; waiting on the event log to classify xruns.
 	phaseUnread
 )
 
-// generationEpoch is a (generation, diagnostics epoch) key.
 type generationEpoch struct{ generation, epoch uint64 }
 
-// StartupWindow separates what the mixer counted while starting from what
-// came after. The shown counters start at the first reading of an engine
-// generation, so audio processed since then is a measured age, and a new
-// generation is a restart. The zero value has seen nothing yet.
+// StartupWindow tracks an engine generation's startup grace period and records
+// the faults that occurred inside it so post-startup telemetry stays clean.
 type StartupWindow struct {
-	// seen is the generation and diagnostics epoch the counters belong to.
 	seen *generationEpoch
-	// started is when this generation's audio started, on this computer's
-	// clock; nil after a diagnostics reset, which hides the true start.
+	// Estimated engine start time on the host clock; nil after a diagnostics reset.
 	started *time.Time
 	phase   startupPhase
 	Faults  StartupFaults
 }
 
-// Observe takes one reading of the whole meter.
+// Observe updates the startup window from a meter snapshot.
 func (w *StartupWindow) Observe(meter *core.Meter, sampleRate uint32, now time.Time) {
-	// The engine's own running time when the mixer reports it; otherwise
-	// audio processed, which starts counting only once paths are bound, so it
-	// runs a few seconds behind.
+	// Prefer the mixer's own running time; falling back to processed frames lags
+	// slightly because frames only start counting once paths bind.
 	var age time.Duration
 	if meter.RunningForNs != nil {
 		age = nanos(*meter.RunningForNs)
@@ -156,8 +141,8 @@ func (w *StartupWindow) Observe(meter *core.Meter, sampleRate uint32, now time.T
 	if w.seen == nil || *w.seen != key {
 		reset := w.seen != nil && w.seen.generation == key.generation
 		*w = StartupWindow{seen: &key}
-		// A diagnostics reset restarts the counters, not the mixer, and one
-		// from before this app connected hides the true start.
+		// A diagnostics reset clears counters without restarting the engine, and an
+		// earlier reset before connect obscures the real engine start time.
 		if !reset && meter.DiagnosticsEpoch == 0 {
 			started := now.Add(-age)
 			w.started = &started
@@ -177,8 +162,7 @@ func (w *StartupWindow) Observe(meter *core.Meter, sampleRate uint32, now time.T
 	}
 }
 
-// Range is the startup window on this computer's clock, once the start is
-// known; nil before.
+// Range returns the startup window bounds on the host clock, or nil if unknown.
 func (w *StartupWindow) Range() *[2]time.Time {
 	if w.started == nil {
 		return nil
@@ -186,33 +170,30 @@ func (w *StartupWindow) Range() *[2]time.Time {
 	return &[2]time.Time{*w.started, w.started.Add(StartupAudio)}
 }
 
-// Open is whether the mixer is still inside the window.
+// Open reports whether the engine is still within the startup grace period.
 func (w *StartupWindow) Open() bool { return w.phase == phaseOpen }
 
-// WantsEvents is whether the event log is needed to place the startup
-// faults.
+// WantsEvents reports whether the event log should be fetched to classify startup xruns.
 func (w *StartupWindow) WantsEvents() bool { return w.phase == phaseUnread }
 
-// ReadEvents is called once the event log is read: xruns counts those in the
-// range it is given.
+// ReadEvents finalizes startup xrun counts using the polled event log.
 func (w *StartupWindow) ReadEvents(xruns func(from, until time.Time) uint64) {
 	if w.phase == phaseUnread {
-		// started is always set when the phase becomes phaseUnread.
 		started := *w.started
 		w.Faults.Xruns = xruns(started, started.Add(StartupAudio))
 		w.phase = phaseClosed
 	}
 }
 
-// GiveUp is called when the event log can't be read: every fault stays in
-// the headline.
+// GiveUp closes the unread phase when the event log cannot be fetched, leaving
+// all faults counted in the headline.
 func (w *StartupWindow) GiveUp() {
 	if w.WantsEvents() {
 		w.phase = phaseClosed
 	}
 }
 
-// Settle takes the startup faults out of everything telemetry counts.
+// Settle subtracts recorded startup faults from meter in place.
 func (w *StartupWindow) Settle(meter *core.TargetMeter) {
 	faults := &w.Faults
 	if path, ok := faults.paths[meter.ID]; ok {
@@ -223,7 +204,7 @@ func (w *StartupWindow) Settle(meter *core.TargetMeter) {
 		meter.OutputDrops = num.SatSub(meter.OutputDrops, path.outputDrops)
 		if p := meter.Performance; p != nil {
 			p.WorkerWall.Overruns = num.SatSub(p.WorkerWall.Overruns, path.workerOverruns)
-			// Wall clock errors go first; the rest come off the CPU clock.
+			// Subtract from wall clock errors first, then spill into CPU clock errors.
 			wall := min(p.WorkerWall.ClockErrors, path.workerClockErrors)
 			p.WorkerWall.ClockErrors -= wall
 			p.WorkerCPU.ClockErrors = num.SatSub(p.WorkerCPU.ClockErrors, path.workerClockErrors-wall)
@@ -246,8 +227,8 @@ func (w *StartupWindow) Settle(meter *core.TargetMeter) {
 	}
 }
 
-// SettledXruns is the xruns counted since startup, from a reading of the
-// whole meter; false without a performance block.
+// SettledXruns returns post-startup xruns from meter, or false if no
+// Performance block is present.
 func (w *StartupWindow) SettledXruns(meter *core.Meter) (uint64, bool) {
 	p := sharedPerformance(meter)
 	if p == nil {
@@ -256,8 +237,8 @@ func (w *StartupWindow) SettledXruns(meter *core.Meter) (uint64, bool) {
 	return num.SatSub(p.Xruns, w.Faults.Xruns), true
 }
 
-// CloneTargetMeter is a copy of t whose performance block (the
-// one part Settle changes through a pointer) is its own.
+// CloneTargetMeter deep-copies t's Spectrum slice and Performance pointers so
+// Settle can mutate the clone safely.
 func CloneTargetMeter(t *core.TargetMeter) core.TargetMeter {
 	c := *t
 	c.Spectrum = slices.Clone(t.Spectrum)
@@ -284,12 +265,11 @@ func CloneTargetMeter(t *core.TargetMeter) core.TargetMeter {
 	return c
 }
 
-// RecentWindow is how long RecentCount looks back (the name Recent is the
-// struct's).
+// RecentWindow is the sliding window over which RecentCount tracks counter rises.
 const RecentWindow = 60 * time.Second
 
-// Recent is a counter as telemetry shows it: how much it rose in the last
-// RecentWindow, and when this app last saw it rise (nil for never).
+// Recent holds a counter's increase over RecentWindow and the last wall-clock
+// time it rose (nil if never observed rising).
 type Recent struct {
 	Count uint64
 	Last  *time.Time
@@ -300,21 +280,16 @@ type reading struct {
 	count uint64
 }
 
-// RecentCount is how much a cumulative counter rose within the last RecentWindow,
-// from the readings this app received, and when it last rose. A new
-// generation or diagnostics reset starts over, since the counter does too.
-// The first reading is only a baseline: what happened before this app was
-// watching is not news.
+// RecentCount tracks how much a cumulative counter increased within the last
+// RecentWindow. Resets on a new generation or diagnostics epoch; the first
+// sample only establishes a baseline.
 type RecentCount struct {
-	key *generationEpoch
-	// readings in arrival order; the oldest may predate the window, as the
-	// baseline for the rise inside it.
-	readings []reading
+	key      *generationEpoch
+	readings []reading // arrival order; oldest entry may predate the window as a baseline
 	lastRise *time.Time
 }
 
-// Observe takes one reading: key is (generation, diagnostics epoch), now
-// the monotonic receipt time and wall this computer's clock.
+// Observe records a sample using monotonic time now and wall-clock time wall.
 func (r *RecentCount) Observe(generation, epoch, count uint64, now, wall time.Time) {
 	key := generationEpoch{generation, epoch}
 	if r.key == nil || *r.key != key {
@@ -325,7 +300,7 @@ func (r *RecentCount) Observe(generation, epoch, count uint64, now, wall time.Ti
 		r.lastRise = &w
 	}
 	r.readings = append(r.readings, reading{now, count})
-	// Keep one reading at or before the window's start as the baseline.
+	// Retain one reading at or before the window boundary as the baseline.
 	drop := 0
 	for len(r.readings)-drop > 1 && sinceSat(now, r.readings[drop+1].at) >= RecentWindow {
 		drop++
@@ -335,7 +310,7 @@ func (r *RecentCount) Observe(generation, epoch, count uint64, now, wall time.Ti
 	}
 }
 
-// Within is the rise within the window; false before any reading.
+// Within returns the delta over RecentWindow, or false before any observation.
 func (r *RecentCount) Within() (uint64, bool) {
 	if len(r.readings) == 0 {
 		return 0, false
@@ -343,29 +318,26 @@ func (r *RecentCount) Within() (uint64, bool) {
 	return num.SatSub(r.readings[len(r.readings)-1].count, r.readings[0].count), true
 }
 
-// Recent is the counter as telemetry shows it.
+// Recent returns the current sliding-window count and last rise timestamp.
 func (r *RecentCount) Recent() Recent {
 	count, _ := r.Within()
 	return Recent{Count: count, Last: r.lastRise}
 }
 
-// RecentFaults is the counters that mean something was audible, each
-// tracked as a RecentCount: dropouts for the engine, and per path late
-// frames (original audio played), dropped frames and clipping. Startup faults
-// are already taken out. The zero value is ready.
+// RecentFaults tracks sliding-window audible fault counters (engine dropouts
+// plus per-path late, dropped, and clipped frames) with startup faults removed.
 type RecentFaults struct {
 	counts map[string]*RecentCount
 }
 
-// PathRecent is one path's audible counters.
+// PathRecent holds one path's recent audible fault counters.
 type PathRecent struct {
 	Late    Recent
 	Dropped Recent
 	Clipped Recent
 }
 
-// Observe takes one reading of the whole meter (now monotonic, wall this
-// computer's clock).
+// Observe updates all recent fault counters from a meter snapshot.
 func (f *RecentFaults) Observe(meter *core.Meter, startup *StartupWindow, now, wall time.Time) {
 	if f.counts == nil {
 		f.counts = map[string]*RecentCount{}
@@ -397,10 +369,10 @@ func (f *RecentFaults) get(name string) Recent {
 	return Recent{}
 }
 
-// Xruns is the engine's dropouts.
+// Xruns returns recent engine dropouts.
 func (f *RecentFaults) Xruns() Recent { return f.get("xruns") }
 
-// Path is one path's audible counters.
+// Path returns recent audible faults for target id.
 func (f *RecentFaults) Path(id string) PathRecent {
 	return PathRecent{
 		Late:    f.get("late/" + id),
@@ -409,7 +381,8 @@ func (f *RecentFaults) Path(id string) PathRecent {
 	}
 }
 
-// MeterMatchesEngine is meter_matches_engine.
+// MeterMatchesEngine reports whether meter belongs to the currently running
+// engine generation, applied revision, and expected target set.
 func MeterMatchesEngine(state *core.DeviceState, meter *core.Meter) bool {
 	expected := state.Selection.ActiveTargetIDs
 	if state.Engine.Mode == core.EngineModeNative {
@@ -430,10 +403,10 @@ func MeterMatchesEngine(state *core.DeviceState, meter *core.Meter) bool {
 	return true
 }
 
-// ReceiveMeter is the desktop receive path. Invalid, stale-generation and
-// unrelated-revision telemetry must not alter the progress baseline or renew
-// engine freshness. engineSeen is when the engine was last seen working (nil
-// for never); new work from every active path sets it to now.
+// ReceiveMeter validates meter against state and updates per-path progress.
+// Invalid, stale-generation, or mismatched-revision meters are rejected without
+// touching progress or engineSeen. engineSeen is renewed only when active paths
+// actually advance.
 func ReceiveMeter(state *core.DeviceState, meter *core.Meter, progress map[string]*Progress,
 	engineSeen **time.Time, now time.Time) bool {
 	for i := range meter.Targets {
@@ -445,17 +418,15 @@ func ReceiveMeter(state *core.DeviceState, meter *core.Meter, progress map[strin
 		return false
 	}
 	if observeMeterProgress(progress, meter, state.Selection.ActiveTargetIDs, now) {
-		// State is published only when it changes. New work from every path
-		// also confirms observation of this same engine/revision.
+		// State events only fire on change; advancing meters also confirm the engine is alive.
 		seen := now
 		*engineSeen = &seen
 	}
 	return true
 }
 
-// FreshMeter is the meter/status rendering predicate after the caller has
-// confirmed both the selected connection and its event stream are
-// connected: the path's reading and whether it is synthetic, nil for None.
+// FreshMeter returns targetID's meter reading and synthetic flag if the engine
+// observation is current (< 30 s), audio is advancing, and targetID itself is fresh.
 func FreshMeter(state *core.DeviceState, meter *core.Meter, progress map[string]*Progress,
 	targetID string, engineSeen *time.Time, now time.Time) (*core.TargetMeter, bool) {
 	visible := state.Selection.ActiveTargetIDs
@@ -487,13 +458,10 @@ func FreshMeter(state *core.DeviceState, meter *core.Meter, progress map[string]
 	return target, meter.Synthetic
 }
 
-// observeMeterProgress: call only for a validated meter matching the current
-// engine generation, revision and complete target set. Receipt alone does not
-// renew the engine observation: every active path must advance from its
-// previous fresh sample, and at least one path must advance. A native
-// passthrough path whose stock source is idle (unplugged USB, disconnected
-// Bluetooth) keeps its own per-path freshness but does not hold back the
-// engine observation.
+// observeMeterProgress advances per-path progress for a validated meter.
+// Returns true only when at least one path advanced and every active path
+// advanced; idle native passthrough paths track their own freshness without
+// blocking engine renewal.
 func observeMeterProgress(progress map[string]*Progress, meter *core.Meter, active []string, now time.Time) bool {
 	for id := range progress {
 		if !slices.ContainsFunc(meter.Targets, func(t core.TargetMeter) bool { return t.ID == id }) {
@@ -518,25 +486,22 @@ func observeMeterProgress(progress map[string]*Progress, meter *core.Meter, acti
 	return anyAdvanced && activeAdvanced
 }
 
-// EngineErrorNotice is a terminal engine failure as the app states it.
+// EngineErrorNotice holds the message and recovery context for a terminal engine error.
 type EngineErrorNotice struct {
 	Message        string
 	RecoveryDetail string
 }
 
-// EngineErrorNoticeTitle is the title of every EngineErrorNotice.
+// EngineErrorNoticeTitle is the heading used for EngineErrorNotice banners.
 const EngineErrorNoticeTitle = "Audio processing error"
 
-// EngineError: terminal failures outlive meter freshness.
-// Read the saved engine/routing state, never infer recovery from missing
-// meters or a stopped worker.
+// EngineError returns a notice when the saved engine state is in EnginePhaseError.
+// Terminal errors persist regardless of meter freshness.
 func EngineError(state *core.DeviceState) (EngineErrorNotice, bool) {
 	if state.Engine.Status != core.EnginePhaseError {
 		return EngineErrorNotice{}, false
 	}
 	var recovery string
-	// Mixers report only native and offline modes; anything else confirms
-	// nothing.
 	switch state.Engine.Mode {
 	case core.EngineModeOffline:
 		recovery = "No live audio routing is confirmed in offline mode."
@@ -552,7 +517,7 @@ func EngineError(state *core.DeviceState) (EngineErrorNotice, bool) {
 	return EngineErrorNotice{Message: message, RecoveryDetail: recovery}, true
 }
 
-// Warning is an audible fault worth a status line.
+// Warning identifies a recent fault condition surfaced in the status bar.
 type Warning int
 
 const (
@@ -562,7 +527,7 @@ const (
 	WarningClockFailure
 )
 
-// Label is the status line for the warning.
+// Label returns the user-facing status text for w.
 func (w Warning) Label() string {
 	switch w {
 	case WarningWorkerFailed:
@@ -582,10 +547,8 @@ type faultCounters struct {
 	suppressionFrames uint64
 	suppression       [4]uint64
 	hasPerformance    bool
-	// audio is (callback overruns, xruns); clock the three clock error
-	// counts.
-	audio [2]uint64
-	clock [3]uint64
+	audio             [2]uint64 // callback overruns, xruns
+	clock             [3]uint64 // callback, worker wall, worker CPU clock errors
 }
 
 func faultCountersFrom(m *core.TargetMeter) faultCounters {
@@ -614,8 +577,8 @@ func (c faultCounters) suppressionResetFrom(old faultCounters) bool {
 	return false
 }
 
-// increased: no counter fell and one rose. A decreasing counter is a new
-// baseline, not an unsigned fault delta.
+// increased reports whether at least one counter rose and none decreased
+// (a decrease indicates a counter reset/new baseline, not a fault).
 func increased(now, before []uint64) bool {
 	rose := false
 	for i := range now {
@@ -649,16 +612,14 @@ type timedWarning struct {
 	warning Warning
 }
 
-// Progress: receipt alone is not progress. The first sample and counter
-// resets require another increasing sample before the display treats
-// telemetry as current.
+// Progress tracks whether a single path's audio frames are advancing and detects
+// new faults against a stable (revision, epoch) baseline. The first sample and
+// any counter reset only set the baseline; a subsequent increase is required
+// before the path is considered fresh.
 type Progress struct {
-	frames     uint64
-	advancedAt *time.Time
-	observedAt *time.Time
-	// baseline is the meter revision and diagnostics epoch the counters
-	// belong to; a change of either (a new config, or a diagnostics reset)
-	// starts a new baseline.
+	frames            uint64
+	advancedAt        *time.Time
+	observedAt        *time.Time
 	baseline          *generationEpoch
 	counters          *faultCounters
 	recentWarning     *timedWarning
@@ -666,10 +627,10 @@ type Progress struct {
 	workerFailed      bool
 }
 
-// NewProgress is progress at frames, not yet seen advancing.
+// NewProgress initializes Progress at frames without marking it fresh.
 func NewProgress(frames uint64) *Progress { return &Progress{frames: frames} }
 
-// Observe is a frame count read at now.
+// Observe updates the frame counter and marks the path fresh when frames increases.
 func (p *Progress) Observe(frames uint64, now time.Time) {
 	if frames > p.frames {
 		at := now
@@ -680,8 +641,7 @@ func (p *Progress) Observe(frames uint64, now time.Time) {
 	p.frames = frames
 }
 
-// ObserveMeter takes one path's reading; (revision, epoch) is its baseline.
-// It reports whether the path advanced.
+// ObserveMeter processes one path's meter sample and reports whether it advanced.
 func (p *Progress) ObserveMeter(revision, epoch uint64, meter *core.TargetMeter, now time.Time) bool {
 	baseline := generationEpoch{revision, epoch}
 	counters := faultCountersFrom(meter)
@@ -720,15 +680,14 @@ func (p *Progress) ObserveMeter(revision, epoch uint64, meter *core.TargetMeter,
 	return advanced
 }
 
-// ForgetStartupDeadline: an audio deadline missed while the mixer starts is
-// expected, so it does not warn. Other faults still do.
+// ForgetStartupDeadline clears a missed audio deadline warning observed during startup.
 func (p *Progress) ForgetStartupDeadline() {
 	if p.recentWarning != nil && p.recentWarning.warning == WarningAudioDeadline {
 		p.recentWarning = nil
 	}
 }
 
-// WarningFor is the path's warning at now, if any.
+// WarningFor returns the highest-priority active warning for the path at now.
 func (p *Progress) WarningFor(now time.Time, suppressionActive bool) (Warning, bool) {
 	if suppressionActive && p.workerFailed {
 		return WarningWorkerFailed, true
@@ -742,7 +701,7 @@ func (p *Progress) WarningFor(now time.Time, suppressionActive bool) (Warning, b
 	return 0, false
 }
 
-// Fresh is whether the path advanced within the last second.
+// Fresh reports whether frames advanced within the last second.
 func (p *Progress) Fresh(now time.Time) bool {
 	return p.advancedAt != nil && sinceSat(now, *p.advancedAt) < time.Second
 }

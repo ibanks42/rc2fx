@@ -54,12 +54,8 @@ static int check(const uint32_t *src, size_t sstride, uint32_t *a, uint32_t *b, 
     return 0;
 }
 
-/* gui_partial.c rotates a region in strips of 16 source rows. Each strip is
- * first copied into a staging buffer whose row 0 is the strip's first row;
- * rotate_rect then gets rows 0..strip-1 of that buffer, with the source
- * height reduced by the strip's row (CW) or the destination advanced by it
- * (CCW). This repeats that calling convention and compares the whole
- * destination with one scalar rotation of the region from the source. */
+/* Verify gui_partial.c's 16-row strip staging convention (shrinking sh by y
+ * for CW or advancing dst by y for CCW) against a single scalar rotation. */
 static uint32_t stage[16 * SW];
 static int check_strips(const uint32_t *src, size_t sstride, uint32_t *a, uint32_t *b, struct rot_rect r,
                         enum rot_dir dir) {

@@ -80,8 +80,7 @@ func TestCopyZstdAndPatchRoundTripToTheSameEnvelope(t *testing.T) {
 func TestAFileTheMixerDoesNotHaveIsCompressedAlone(t *testing.T) {
 	_, _, _, gui := fixture.Sample()
 	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_gui.so", Data: gui}})
-	// A reported hash that matches the envelope would make this a copy;
-	// a different one means the mixer's file is not the payload file.
+	// Different hash from the envelope forces a full zstd upload.
 	installed := map[string]string{"librc2fx_gui.so": strings.Repeat("0", 64)}
 	delta := mustEncode(t, env, installed, nil, 19)
 	if !strings.Contains(string(delta), "zstd ") {
@@ -146,12 +145,10 @@ func TestMalformedEnvelopesAndDeltasAreRefused(t *testing.T) {
 		t.Error("unknown operation accepted")
 	}
 
-	// An envelope that has bytes after its last file. Its head alone
-	// parses (decode reads only the head); encoding the whole is refused.
+	// Trailing bytes after the last file must be rejected by Encode.
 	if _, err := Encode(append(bytes.Clone(env), 0), nil, nil, 3); err == nil {
 		t.Error("padded envelope encoded")
 	}
-	// The mixer's own limit, one byte short.
 	_, _, err := decodeAll(valid, unreachable, uint64(len(env))-1)
 	if err == nil || !strings.Contains(err.Error(), "over") {
 		t.Errorf("limit: %v", err)
@@ -167,7 +164,6 @@ func TestMalformedEnvelopesAndDeltasAreRefused(t *testing.T) {
 			t.Errorf("envelope %q accepted", bad)
 		}
 	}
-	// A manifest with a path, a duplicate name or a non-numeric size.
 	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	for _, line := range []string{
 		a + "  1  ../escape\n",
@@ -228,8 +224,8 @@ func TestAnEnvelopeWithoutFilesOrWithStaleBytesIsNotEncoded(t *testing.T) {
 func TestAStaleBaseIsNotUsedEvenWhenTheNameMatches(t *testing.T) {
 	_, old, updated, _ := fixture.Sample()
 	env := fixture.Envelope([]fixture.File{{Name: "rc2fxd", Data: updated}})
-	// The app's base is stale relative to what the mixer reports, so it
-	// must send the file whole rather than patch against the wrong bytes.
+	// Local base doesn't match the mixer's reported hash, so Encode must fall
+	// back to sending the full file.
 	installed := map[string]string{"rc2fxd": sum([]byte("something else"))}
 	delta := mustEncode(t, env, installed, basesFor(old), 19)
 	if !strings.Contains(string(delta), "zstd ") {
@@ -241,8 +237,7 @@ func TestAStaleBaseIsNotUsedEvenWhenTheNameMatches(t *testing.T) {
 	}
 }
 
-// Go-only: the frames the encoder writes have the shape the mixer's C
-// decoder needs, at every level the app could pass.
+// Verify encoded frames match the header flags the mixer's C decoder expects.
 func TestFramesSuitTheMixersDecoder(t *testing.T) {
 	shared, old, updated, gui := fixture.Sample()
 	empty := []byte{}

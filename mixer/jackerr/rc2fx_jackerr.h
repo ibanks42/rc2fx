@@ -23,10 +23,8 @@ struct rc2fx_jackerr_header {
     _Atomic uint64_t unknown;  /* calls with an unrecognized or null format */
     _Atomic uint64_t calls;    /* every jack_error call */
 };
-/* One record. `seq` is the slot's sequence lock: 2i+1 while record i is
- * written, 2i+2 once published. A writer takes a slot only by CAS from an
- * older, even (published or never written) value, so two writers never
- * write one slot at once. */
+/* Single ring slot. `seq` is a seqlock: 2i+1 while writing record i, 2i+2 once
+ * published. Writers CAS only from an older even value so slots never collide. */
 struct rc2fx_jackerr_slot {
     _Atomic uint64_t seq;
     _Atomic uint64_t t_ns;

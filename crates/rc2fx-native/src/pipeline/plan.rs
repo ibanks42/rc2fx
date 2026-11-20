@@ -1,5 +1,4 @@
-//! The launch plan the pipeline is built from, and the registry of the
-//! mixer's ports it binds.
+//! Pipeline launch plan schema and JACK port registry.
 use super::FRAMES;
 use rc2fx_core::{Target, TargetKind};
 use rc2fx_native_control::{MAX_PATHS, PathMode};
@@ -26,9 +25,7 @@ pub struct Plan {
     pub(super) version: u32,
     pub(super) sample_rate: u32,
     pub(super) frames: usize,
-    /// Tests only: lets an unprivileged fixture run its worker without the
-    /// production policy. A parsed plan never has one (a `worker` key is
-    /// refused as unknown), so production always uses `PRODUCTION_WORKER`.
+    /// Test-only worker override (skipped by serde so production always uses `PRODUCTION_WORKER`).
     #[cfg(test)]
     #[serde(skip)]
     pub(super) worker: Option<WorkerPlan>,
@@ -45,7 +42,6 @@ impl Plan {
     pub(super) fn worker_options(&self) -> WorkerOptions {
         PRODUCTION_WORKER
     }
-    /// The fixture's worker, when it sets one.
     #[cfg(test)]
     pub(super) fn worker_options(&self) -> WorkerOptions {
         self.worker
@@ -64,7 +60,7 @@ pub struct PathPlan {
     pub ports: Vec<String>,
     pub target: Target,
     pub mode: PathMode,
-    /// An output heard only on the mixer's own hardware outputs.
+    /// True for outputs that only feed the mixer's physical hardware jacks.
     pub hardware: bool,
 }
 impl Plan {
@@ -128,9 +124,8 @@ pub struct Registry {
 }
 impl Registry {
     pub fn register(&mut self, client: usize, pointer: usize, name: &[u8], flags: usize) -> bool {
-        // Invalidate the old identity even if the new registration cannot be
-        // tracked. A full registry or invalid replacement must not leave an old
-        // pipeline attached to a pointer now owned by a different port.
+        // Always retire any prior pin for `(client, pointer)` first so a failed
+        // re-registration never leaves a stale pipeline attached to a reused handle.
         self.retire(client, pointer);
         let direction = match flags & 3 {
             1 => Direction::Input,

@@ -10,9 +10,8 @@ import (
 	"syscall"
 )
 
-// helperDirectory is name under `/var/lib/rc2fx` when running as the
-// privileged Linux helper: state the desktop user cannot change. Empty
-// everywhere else.
+// helperDirectory returns /var/lib/rc2fx/<name> when running as root on Linux
+// (creating and verifying it as root-only), or "" when unprivileged.
 func helperDirectory(name string) (string, error) {
 	if os.Geteuid() != 0 {
 		return "", nil

@@ -1,11 +1,5 @@
-// Package embed is the installer payload: which files it ships, the
-// canonical body, the envelope a built executable carries, and the firmware
-// catalog's shape.
-//
-// It is the one place that decides the payload's contents, its checksums and
-// what a release build changes; the desktop app embeds a single envelope of
-// it (behind the `embedded` build tag), so it needs no files beside the
-// executable.
+// Package embed defines the installer payload layout, validation, and binary
+// envelope format compiled into the desktop app under `-tags embedded`.
 package embed
 
 import (
@@ -25,16 +19,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// PayloadNames are the runtime, catalog and scripts the installer adds to
-// official firmware, in the order their bytes appear in an embedded
-// envelope. The order is pinned: the checksummed files first, then the
-// manifest itself.
-//
-// The xtask mixer build and upload read the payload's lists from here. The
-// shared copy is fixtures/payload/lists.json: this package's
-// lists_fixture_test.go and the Rust in-place updater's
-// crates/rc2fx-device/src/mixer_update/install.rs check theirs against it,
-// and lists_test.go checks mixer/scripts/install.sh against these.
+// PayloadNames lists all payload files in canonical envelope order (checksummed
+// files first, then SHA256SUMS, then scripts). Kept in sync with
+// fixtures/payload/lists.json, crates/rc2fx-device/src/mixer_update/install.rs,
+// and mixer/scripts/install.sh via tests.
 var PayloadNames = [14]string{
 	"librc2fx_native.so",
 	"rc2fxd",
@@ -52,7 +40,7 @@ var PayloadNames = [14]string{
 	"install.sh",
 }
 
-// Pinned is the order of the bundle's SHA256SUMS lines.
+// Pinned lists the files in SHA256SUMS order.
 var Pinned = [9]string{
 	"librc2fx_native.so",
 	"rc2fxd",
@@ -65,14 +53,11 @@ var Pinned = [9]string{
 	"mixer-release.json",
 }
 
-// ReleaseManifest is the mixer runtime's release identity, beside the
-// catalog in `config/`.
 const ReleaseManifest = "mixer-release.json"
 
-// ReleaseSchema is the only `mixer-release.json` schema a payload may carry.
 const ReleaseSchema uint64 = 1
 
-// Binaries are the payload files that are ARM64 ELF executables or libraries.
+// Binaries lists payload files that must be ARM64 ELF binaries.
 var Binaries = [7]string{
 	"librc2fx_native.so",
 	"rc2fxd",
@@ -83,8 +68,7 @@ var Binaries = [7]string{
 	"rc2fx_jackerr_snapshot",
 }
 
-// Scripts are the payload files that come from `mixer/scripts` and run in the
-// mixer's shell.
+// Scripts lists shell scripts sourced from mixer/scripts.
 var Scripts = [4]string{
 	"rc2fx.sh",
 	"rc2fx-shim.sh",
@@ -92,15 +76,10 @@ var Scripts = [4]string{
 	"install.sh",
 }
 
-// Magic is the first line of an embedded envelope.
 const Magic = "RC2FX-EMBEDDED-PAYLOAD 1\n"
 
-// BuildLine is the line `rc2fx.sh` carries to say what kind of build it is
-// (see its `gui_diagnostics`): development builds log the GUI verbosely by
-// default, release packages quietly.
+// BuildLine and ReleaseLine control default GUI diagnostic verbosity in rc2fx.sh.
 const BuildLine = "rc2fx_build=development"
-
-// ReleaseLine is the build line of a release.
 const ReleaseLine = "rc2fx_build=release"
 
 const (
@@ -108,31 +87,25 @@ const (
 	Release     = "release"
 )
 
-// maxBody is a sanity limit for the envelope's body: the payload is ~10 MB.
-const maxBody = 256 << 20
+const maxBody = 256 << 20 // sanity cap; real payloads are ~10 MB
 
-// File is one payload file.
 type File struct {
 	Name string
 	Data []byte
 }
 
-// Files is a payload's files, in PayloadNames order.
+// Files holds payload files in PayloadNames order.
 type Files []File
 
-// IsBinary reports whether name is one of Binaries.
 func IsBinary(name string) bool { return slices.Contains(Binaries[:], name) }
 
-// IsScript reports whether name is one of Scripts.
 func IsScript(name string) bool { return slices.Contains(Scripts[:], name) }
 
-// Sum is a lowercase hex SHA-256.
 func Sum(data []byte) string {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
 }
 
-// CRLFToLF drops every CR that precedes an LF.
 func CRLFToLF(data []byte) []byte {
 	out := make([]byte, 0, len(data))
 	for i, b := range data {
@@ -143,15 +116,11 @@ func CRLFToLF(data []byte) []byte {
 	return out
 }
 
-// buildLine is the single `rc2fx_build=` line in a script: what it says and
-// where the assignment is, so a rewrite changes nothing else.
 type buildLine struct {
 	kind       string
 	start, end int
 }
 
-// splitInclusive splits text after each '\n', keeping it; no empty part at
-// the end.
 func splitInclusive(text string) []string {
 	var out []string
 	for len(text) > 0 {
@@ -177,9 +146,8 @@ func utf8Error(script []byte) error {
 	return nil
 }
 
-// Classify a script's build line. Exactly one exact assignment is supported;
-// any other mention of the variable is refused rather than guessed at, so a
-// payload cannot ship a second, conflicting assignment.
+// parseBuildLine locates the single exact rc2fx_build= assignment in rc2fx.sh
+// and rejects any other assignment or duplicate.
 func parseBuildLine(script []byte) (buildLine, error) {
 	if err := utf8Error(script); err != nil {
 		return buildLine{}, fmt.Errorf("rc2fx.sh is not UTF-8: %v", err)
@@ -211,7 +179,6 @@ func parseBuildLine(script []byte) (buildLine, error) {
 	return *found, nil
 }
 
-// isSpace is Unicode White_Space.
 func isSpace(r rune) bool {
 	switch r {
 	case '\t', '\n', '\v', '\f', '\r', ' ', 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:
@@ -220,7 +187,6 @@ func isSpace(r rune) bool {
 	return r >= 0x2000 && r <= 0x200a
 }
 
-// BuildKind is which kind of build a `rc2fx.sh` is, from its own build line.
 func BuildKind(script []byte) (string, error) {
 	line, err := parseBuildLine(script)
 	if err != nil {
@@ -229,8 +195,8 @@ func BuildKind(script []byte) (string, error) {
 	return line.kind, nil
 }
 
-// ReleaseScript is the `rc2fx.sh` a release ships: its build line says
-// `release`, and nothing else changes. A release script is returned as it is.
+// ReleaseScript rewrites rc2fx.sh's build line to release without touching
+// anything else.
 func ReleaseScript(script []byte) ([]byte, error) {
 	line, err := parseBuildLine(script)
 	if err != nil {
@@ -241,7 +207,6 @@ func ReleaseScript(script []byte) ([]byte, error) {
 	}
 	text := string(script)
 	out := []byte(text[:line.start] + ReleaseLine + text[line.end:])
-	// The rewritten script must say release, or the payload is not shippable.
 	kind, err := BuildKind(out)
 	if err != nil {
 		return nil, err
@@ -262,23 +227,18 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// SourceDir is where a payload's runtime files sit: `runtime/` in a release
-// folder, or the mixer build's `target/mixer` in a source checkout.
+// SourceDir returns runtime/ in a release folder or target/mixer in a source checkout.
 func SourceDir(root string) string {
 	runtime := filepath.Join(root, "runtime")
-	// A checkout (including an unpacked source archive) builds into target.
-	// A leftover runtime directory must not shadow that build, even if it
-	// contains a valid older payload. Never fall back after validation fails.
+	// In a source checkout, never let a leftover runtime/ directory shadow target/mixer.
 	if !isFile(filepath.Join(root, "Cargo.toml")) && isDir(runtime) {
 		return runtime
 	}
 	return filepath.Join(root, "target", "mixer")
 }
 
-// Read reads and checks the payload that sits in a source checkout or a
-// release folder: `runtime/` (a release folder) or `target/mixer` (a
-// checkout) for the runtime, `mixer/scripts` for the scripts, and the
-// installer catalog in `config/`. `release` applies the release build line.
+// Read loads and validates a payload from a checkout or release folder.
+// When release is true, rc2fx.sh is rewritten to the release build line.
 func Read(root string, release bool) (Files, error) {
 	source := SourceDir(root)
 	files := make(Files, 0, len(PayloadNames))
@@ -321,8 +281,7 @@ func Read(root string, release bool) (Files, error) {
 	if !ValueEqual(installer, bundled) {
 		return nil, fmt.Errorf("runtime and installer catalogs differ")
 	}
-	// The runtime must carry exactly the release the source tree names, so a
-	// reused runtime build can never ship under another version.
+	// Ensure the runtime wasn't built against a different mixer-release.json.
 	releasePath := filepath.Join(root, "config", ReleaseManifest)
 	sourceRelease, err := os.ReadFile(releasePath)
 	if err != nil {
@@ -341,9 +300,8 @@ func Read(root string, release bool) (Files, error) {
 	return files, nil
 }
 
-// Validate makes the checks every payload passes: when it is staged, again
-// when an embedded one is used, and for the folder a developer tool points
-// at.
+// Validate verifies payload completeness, SHA256SUMS, ARM64 ELF headers,
+// firmware catalog schema, mixer-release.json, and rc2fx.sh's build line.
 func Validate(files Files) error {
 	if len(files) != len(PayloadNames) {
 		return fmt.Errorf("incomplete runtime bundle")
@@ -381,9 +339,7 @@ func Validate(files Files) error {
 	if err != nil {
 		return err
 	}
-	// Syntax first, so a broken file says so, then the exact shape the
-	// installer requires at run time: a catalog it would reject must never
-	// reach a binary.
+	// Check JSON syntax before schema decoding for clearer error reporting.
 	if err := sjson.Valid(data); err != nil {
 		return fmt.Errorf("the runtime catalog is not JSON: %v", err)
 	}
@@ -409,15 +365,13 @@ func Validate(files Files) error {
 	return err
 }
 
-// AsU64 is a number written as an integer (no fraction or exponent) from 0
-// to 2^64-1; "-0" counts as 0.
+// AsU64 parses a json.Number as an exact uint64 (no fraction or exponent; "-0" is 0).
 func AsU64(v any) (uint64, bool) {
 	n, ok := v.(json.Number)
 	if !ok || strings.ContainsAny(string(n), ".eE") {
 		return 0, false
 	}
 	if strings.HasPrefix(string(n), "-") {
-		// Only "-0" is a non-negative integer.
 		i, err := strconv.ParseInt(string(n), 10, 64)
 		if err != nil || i != 0 {
 			return 0, false
@@ -428,9 +382,8 @@ func AsU64(v any) (uint64, bool) {
 	return u, err == nil
 }
 
-// ReleaseVersion checks a `mixer-release.json` and returns its version. The
-// same rules as core.ParseMixerRelease: exactly `schemaVersion` 1, a dotted
-// numeric `version` and a positive integer `protocolVersion`.
+// ReleaseVersion validates mixer-release.json (matching core.ParseMixerRelease)
+// and returns its version string.
 func ReleaseVersion(data []byte) (string, error) {
 	value, err := sjson.Value(data)
 	if err != nil {
@@ -478,9 +431,8 @@ func dataOf(files Files, name string) ([]byte, error) {
 	return nil, fmt.Errorf("runtime missing %s", name)
 }
 
-// Body is the canonical body: one `<sha256>  <size>  <name>` line per file
-// in PayloadNames order, then the files' bytes concatenated in that order.
-// Deterministic: no timestamps, owners or platform details.
+// Body encodes files deterministically: one "<sha256>  <size>  <name>\n" header
+// line per file in PayloadNames order, followed by the concatenated file bytes.
 func Body(files Files) []byte {
 	total := 0
 	for _, f := range files {
@@ -496,7 +448,7 @@ func Body(files Files) []byte {
 	return out
 }
 
-// Wrap frames a body as the envelope an executable carries.
+// Wrap frames body with Magic, length, and SHA-256 headers.
 func Wrap(body []byte) []byte {
 	out := make([]byte, 0, len(Magic)+96+len(body))
 	out = append(out, Magic...)
@@ -505,16 +457,14 @@ func Wrap(body []byte) []byte {
 	return append(out, body...)
 }
 
-// Envelope is one verified embedded payload: the canonical encoded blob an
-// executable carries, parsed and checked.
+// Envelope is a parsed and checksum-verified embedded payload.
 type Envelope struct {
 	blob       []byte
 	start, end int
 }
 
-// Standalone parses a standalone payload, with no executable prefix or
-// trailing bytes. This validates structure and checksums, not publisher
-// authenticity.
+// Standalone parses a standalone payload blob with no prefix or trailing bytes.
+// Checks structure and checksums only, not publisher signatures.
 func Standalone(data []byte) (*Envelope, error) {
 	if len(data) > maxBody+256 || !bytes.HasPrefix(data, []byte(Magic)) {
 		return nil, fmt.Errorf("invalid standalone mixer payload header or size")
@@ -532,7 +482,6 @@ func Standalone(data []byte) (*Envelope, error) {
 	return envelope, nil
 }
 
-// Expected is the payload these sources must embed.
 func Expected(root string, release bool) (*Envelope, error) {
 	files, err := Read(root, release)
 	if err != nil {
@@ -541,9 +490,9 @@ func Expected(root string, release bool) (*Envelope, error) {
 	return Find(Wrap(Body(files)))
 }
 
-// Find finds the payload embedded in an executable's bytes. The marker
-// string can also occur in ordinary compiled data, so every occurrence is
-// checked and exactly one complete, checksummed envelope is required.
+// Find locates the single valid payload envelope inside an executable image.
+// Because Magic may appear in unrelated data, every occurrence is parsed and
+// exactly one valid envelope is required.
 func Find(executable []byte) (*Envelope, error) {
 	var valid []*Envelope
 	candidates := 0
@@ -570,18 +519,13 @@ func Find(executable []byte) (*Envelope, error) {
 	return nil, fmt.Errorf("the executable embeds %d installer payloads; exactly one is required", len(valid))
 }
 
-// AsBytes is the canonical encoded blob: prefix it and append anything to
-// make a stand-in executable.
 func (e *Envelope) AsBytes() []byte { return e.blob }
 
-// Body is the envelope's body.
 func (e *Envelope) Body() []byte { return e.blob[e.start:e.end] }
 
-// Files is the payload's files, in PayloadNames order, each checked against
-// the manifest.
+// Files extracts and checksum-verifies all files in PayloadNames order.
 func (e *Envelope) Files() (Files, error) {
 	rest := e.Body()
-	// All manifest lines come first, then the files' bytes.
 	type pin struct {
 		name, digest string
 		size         int
@@ -632,7 +576,6 @@ func (e *Envelope) Files() (Files, error) {
 	return files, nil
 }
 
-// parseUsize is an optional '+', then digits only, below 2^63.
 func parseUsize(text string) (int, error) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" || strings.Trim(digits, "0123456789") != "" {
@@ -652,8 +595,7 @@ func isHex(text string) bool {
 	return true
 }
 
-// Bundle is the payload as name → bytes, after the same checks a folder's
-// payload passes.
+// Bundle validates the envelope and returns a copy of its files keyed by name.
 func (e *Envelope) Bundle() (map[string][]byte, error) {
 	files, err := e.Files()
 	if err != nil {
@@ -669,7 +611,8 @@ func (e *Envelope) Bundle() (map[string][]byte, error) {
 	return out, nil
 }
 
-// RequireMatches refuses a payload that is not byte-for-byte this build's.
+// RequireMatches verifies byte-for-byte equality with expected, naming any
+// differing files on mismatch.
 func (e *Envelope) RequireMatches(expected *Envelope) error {
 	if bytes.Equal(e.blob, expected.blob) {
 		return nil
@@ -703,8 +646,6 @@ func occurrences(haystack, needle []byte) []int {
 	}
 }
 
-// parseAt parses and verifies one envelope starting at `at`, returning the
-// canonical blob (marker, headers and body).
 func parseAt(data []byte, at int) (*Envelope, error) {
 	used := 0
 	offset := at + len(Magic)
@@ -744,15 +685,12 @@ func parseAt(data []byte, at int) (*Envelope, error) {
 		start: bodyAt - at,
 		end:   end - at,
 	}
-	// The body's own structure must hold before this candidate counts.
 	if _, err := envelope.Files(); err != nil {
 		return nil, err
 	}
 	return envelope, nil
 }
 
-// header reads one `prefix` line; returns its value and how many bytes it
-// took, newline included.
 func header(data []byte, prefix string) (string, int, error) {
 	end := bytes.IndexByte(data, '\n')
 	if end < 0 {
@@ -769,9 +707,8 @@ func header(data []byte, prefix string) (string, int, error) {
 	return value, end + 1, nil
 }
 
-// ValueEqual compares trees from sjson.Value, objects whatever their key
-// order. Numbers written as integers compare by integer value, numbers
-// with a fraction or exponent by float value, and never one with the other.
+// ValueEqual compares sjson.Value trees ignoring object key order. Integer and
+// float json.Numbers never compare equal to each other.
 func ValueEqual(a, b any) bool {
 	switch a := a.(type) {
 	case nil:

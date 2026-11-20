@@ -1,11 +1,7 @@
-// Command inspect-firmware is a read-only audit of an official firmware
-// archive; it needs no device or extracted root filesystem.
+// Command inspect-firmware audits an official firmware archive against a
+// firmware-profiles.json catalog without needing a device or extracted rootfs.
 //
 //	go -C desktop run ./cmd/inspect-firmware MODEL OS.tar.gz [CATALOG]
-//
-// It checks the archive against CATALOG, by default the checkout's
-// config/firmware-profiles.json: the catalog an embedded build compiles in,
-// where a download-only build would first fetch the signed one.
 package main
 
 import (
@@ -21,8 +17,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// defaultCatalog is config/firmware-profiles.json in the checkout this file
-// is in (desktop/cmd/inspect-firmware/main.go).
+// Resolve config/firmware-profiles.json relative to this source file.
 func defaultCatalog() (string, error) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok || !filepath.IsAbs(file) {

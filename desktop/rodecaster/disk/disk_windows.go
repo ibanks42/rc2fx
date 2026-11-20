@@ -1,8 +1,8 @@
 package disk
 
-// Windows: SetupAPI lists disk interfaces, the configuration manager ties
-// each to its USB device, storage IOCTLs give its number and size, and
-// \\.\PhysicalDriveN carries the I/O.
+// Windows raw disk access: SetupAPI enumerates disk interfaces, CfgMgr32 walks
+// up to the USB device, storage IOCTLs query the drive number/size, and I/O
+// goes through \\.\PhysicalDriveN.
 
 import (
 	"errors"
@@ -32,8 +32,7 @@ var winDiskInterface = windows.GUID{
 	Data4: [8]byte{0x94, 0xf2, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b},
 }
 
-// SP_DEVICE_INTERFACE_DATA: DWORD cbSize, GUID InterfaceClassGuid, DWORD
-// Flags, ULONG_PTR Reserved (32 bytes on 64-bit Windows, 28 on 32-bit).
+// SP_DEVICE_INTERFACE_DATA (32 bytes on 64-bit, 28 on 32-bit).
 type winInterfaceData struct {
 	CbSize   uint32
 	Class    windows.GUID
@@ -41,9 +40,7 @@ type winInterfaceData struct {
 	Reserved uintptr
 }
 
-// SP_DEVINFO_DATA: DWORD cbSize, GUID ClassGuid, DWORD DevInst, ULONG_PTR
-// Reserved. windows.DevInfoData keeps cbSize unexported, so it cannot be
-// passed to a hand-made call.
+// SP_DEVINFO_DATA (redeclared because windows.DevInfoData leaves cbSize unexported).
 type winDevInfoData struct {
 	CbSize   uint32
 	Class    windows.GUID
@@ -51,8 +48,7 @@ type winDevInfoData struct {
 	Reserved uintptr
 }
 
-// How long to keep trying to lock a volume that something (Explorer, a
-// virus scanner) has open for a moment.
+// Retry budget for locking volumes briefly held open by Explorer or AV.
 const winLockTimeout = 10 * time.Second
 
 func find() ([]Info, error) {
@@ -89,18 +85,16 @@ func find() ([]Info, error) {
 	return infos, nil
 }
 
-// winInterfaceDetail returns the interface's device path and the device
-// instance (DEVINST) of the disk behind it.
+// winInterfaceDetail returns the device interface path and its DEVINST.
 func winInterfaceDetail(set windows.DevInfo, iface *winInterfaceData) (string, uint32, error) {
 	var needed uint32
-	// The sizing call fails with ERROR_INSUFFICIENT_BUFFER by design.
+	// First call queries required buffer size and is expected to fail with ERROR_INSUFFICIENT_BUFFER.
 	winProcGetDeviceInterfaceDetailW.Call(uintptr(set), uintptr(unsafe.Pointer(iface)), 0, 0, uintptr(unsafe.Pointer(&needed)), 0)
 	if needed < 6 || needed > 64<<10 {
 		return "", 0, errors.New("invalid disk interface path size")
 	}
-	// SP_DEVICE_INTERFACE_DETAIL_DATA_W: DWORD cbSize, then the NUL-terminated
-	// UTF-16 DevicePath at offset 4. cbSize is the size of the struct with a
-	// one-character path: 8 on 64-bit Windows, 6 on 32-bit (packed).
+	// SP_DEVICE_INTERFACE_DETAIL_DATA_W has cbSize=8 on 64-bit and 6 on 32-bit
+	// (packed), followed by the NUL-terminated UTF-16 DevicePath at offset 4.
 	buf := make([]uint64, (needed+7)/8)
 	cb := uint32(6)
 	if unsafe.Sizeof(uintptr(0)) == 8 {
@@ -124,9 +118,8 @@ func winInterfaceDetail(set windows.DevInfo, iface *winInterfaceData) (string, u
 	return windows.UTF16ToString(chars[:n]), dev.DevInst, nil
 }
 
-// winBelongsToMixer walks up the device tree from a disk to its nearest
-// USB device (or interface) and asks whether that is the mixer's gadget.
-// A disk with no USB device above it, or whose IDs cannot be read, is not.
+// winBelongsToMixer walks up the device tree to the nearest USB device node
+// and checks whether it matches the mixer's storage gadget.
 func winBelongsToMixer(inst uint32) bool {
 	for depth := 0; depth < 32; depth++ {
 		id, err := winDeviceID(inst)
@@ -139,7 +132,6 @@ func winBelongsToMixer(inst uint32) bool {
 		var parent uint32
 		r, _, _ := winProcCMGetParent.Call(uintptr(unsafe.Pointer(&parent)), uintptr(inst), 0)
 		if windows.CONFIGRET(r) != windows.CR_SUCCESS {
-			// CR_NO_SUCH_DEVNODE at the root of the tree.
 			return false
 		}
 		inst = parent
@@ -147,7 +139,6 @@ func winBelongsToMixer(inst uint32) bool {
 	return false
 }
 
-// winDeviceID is CM_Get_Device_IDW: the device instance ID of inst.
 func winDeviceID(inst uint32) (string, error) {
 	var buf [windows.MAX_DEVICE_ID_LEN + 1]uint16
 	r, _, _ := winProcCMGetDeviceIDW.Call(uintptr(inst), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0)
@@ -162,11 +153,9 @@ func winDeviceID(inst uint32) (string, error) {
 	return "", errors.New("device instance ID is not terminated")
 }
 
-// winDescribeDisk reads a disk interface's number and size. Both IOCTLs are
-// FILE_ANY_ACCESS, so a handle with no access rights, which needs no
-// elevation, is enough. IOCTL_DISK_GET_LENGTH_INFO would need read access
-// (administrator rights on a physical disk), so the size comes from
-// DISK_GEOMETRY_EX.DiskSize; open checks it against the length.
+// winDescribeDisk queries the disk number and size using FILE_ANY_ACCESS IOCTLs
+// so it works without elevation. IOCTL_DISK_GET_LENGTH_INFO requires read
+// access, so we read DISK_GEOMETRY_EX here and cross-check in open().
 func winDescribeDisk(path string) (Info, error) {
 	h, err := winCreateFile(path, 0, 0)
 	if err != nil {
@@ -192,9 +181,8 @@ func winDescribeDisk(path string) (Info, error) {
 	return Info{Path: winDrivePath(number), Sectors: size / SectorSize, Name: winDescribe(number, size)}, nil
 }
 
-// winIoctl issues a METHOD_BUFFERED IOCTL with no input and returns the
-// bytes it answered. On ERROR_MORE_DATA it returns the whole (zeroed, then
-// partly filled) buffer, whose header says how much is needed.
+// winIoctl runs a no-input METHOD_BUFFERED IOCTL. On ERROR_MORE_DATA it returns
+// the partially filled buffer alongside the error so callers can inspect the header.
 func winIoctl(h windows.Handle, code uint32, outSize int) ([]byte, error) {
 	out := make([]byte, outSize)
 	var n uint32
@@ -232,7 +220,7 @@ func open(info Info, write bool) (Disk, error) {
 	if !ok {
 		return nil, fmt.Errorf("%q is not a physical disk on this computer", info.Path)
 	}
-	// Disk numbers are reused: make sure this one is still the mixer.
+	// Re-verify the drive number still belongs to the mixer.
 	if err := winStillMixer(info); err != nil {
 		return nil, err
 	}
@@ -286,16 +274,14 @@ func winOpenError(path string, err error) error {
 	return fmt.Errorf("could not open the mixer's storage (%s): %w", path, err)
 }
 
-// winVolume is a locked, dismounted volume of the mixer's disk.
 type winVolume struct {
 	h    windows.Handle
 	name string
 }
 
 // winLockVolumes locks and dismounts every volume with an extent on disk
-// number, and returns the handles: while they stay open and locked,
-// Windows neither remounts the volumes nor refuses raw writes to them.
-// Volumes on other disks are only asked for their extents.
+// number. Keeping the handles open prevents Windows from remounting them or
+// blocking raw writes to the underlying physical drive.
 func winLockVolumes(number uint32) ([]winVolume, error) {
 	names, err := winVolumeNames()
 	if err != nil {
@@ -316,7 +302,6 @@ func winLockVolumes(number uint32) ([]winVolume, error) {
 	return held, nil
 }
 
-// winVolumeNames lists `\\?\Volume{...}\` for every volume on the system.
 func winVolumeNames() ([]string, error) {
 	buf := make([]uint16, 1024)
 	find, err := windows.FindFirstVolume(&buf[0], uint32(len(buf)))
@@ -336,8 +321,6 @@ func winVolumeNames() ([]string, error) {
 	}
 }
 
-// winVolumeOnDisk is whether the volume has an extent on disk number. A
-// volume that cannot answer (no media, not a disk volume) is not on it.
 func winVolumeOnDisk(name string, number uint32) bool {
 	h, err := winCreateFile(winVolumeDevice(name), 0, 0)
 	if err != nil {
@@ -471,9 +454,9 @@ func (d *winDisk) Sectors() uint64 { return d.sectors }
 // winChunk is the most one ReadFile or WriteFile moves.
 const winChunk = 1 << 20
 
-// winAligned returns n bytes at a 4096-byte boundary in memory, which
-// covers the sector alignment FILE_FLAG_NO_BUFFERING requires of buffers.
-// Go's heap does not move objects, so the address stays put.
+// winAligned allocates a 4096-byte aligned slice to satisfy
+// FILE_FLAG_NO_BUFFERING's sector alignment requirement. Go's GC is
+// non-moving, so the backing address stays aligned.
 func winAligned(n int) []byte {
 	const align = 4096
 	b := make([]byte, n+align)
@@ -481,8 +464,6 @@ func winAligned(n int) []byte {
 	return b[off : off+n : off+n]
 }
 
-// span checks that I/O is whole sectors at a sector offset and returns how
-// much of it lies on the disk.
 func (d *winDisk) span(n int, off int64) (int, error) {
 	if d.closed {
 		return 0, os.ErrClosed
@@ -497,8 +478,8 @@ func (d *winDisk) span(n int, off int64) (int, error) {
 	return int(min(int64(n), size-off)), nil
 }
 
-// transfer reads or writes b at off. The handle is synchronous, so with an
-// OVERLAPPED the call uses its offset and returns when the I/O is done.
+// transfer reads or writes at off using OVERLAPPED on a synchronous handle
+// (which applies the offset while still completing synchronously).
 func (d *winDisk) transfer(b []byte, off int64, write bool) (int, error) {
 	var ov windows.Overlapped
 	ov.Offset = uint32(off)
@@ -574,8 +555,8 @@ func (d *winDisk) WriteAt(p []byte, off int64) (int, error) {
 	return done, nil
 }
 
-// Sync: with FILE_FLAG_NO_BUFFERING there is no system cache of the disk,
-// and FlushFileBuffers asks the device to commit its own write cache.
+// Sync commits the device's write cache (FILE_FLAG_NO_BUFFERING already
+// bypasses the OS page cache).
 func (d *winDisk) Sync() error {
 	if d.closed {
 		return os.ErrClosed

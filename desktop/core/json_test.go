@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// Tests of the strict decoder and the serde-compatible encoder beyond what
-// the ported Rust tests and the shared fixtures cover.
+// Extra strict-decoder and serde-compatible encoder tests beyond the shared fixtures.
 
 func TestFloatsAreWrittenAsSerdeJSONWritesThem(t *testing.T) {
 	for _, c := range []struct {

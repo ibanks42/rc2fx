@@ -1,8 +1,7 @@
 package app
 
-// The show's inputs as the RØDECaster lists them (names and
-// faders), refreshed every few seconds, and the panel for a show source
-// RC2FX has no path for. The cache logic is in edit/inputs.go.
+// Polls the RØDECaster's show input inventory (names and fader assignments)
+// and renders the placeholder panel for sources without an RC2FX path.
 
 import (
 	"slices"
@@ -17,9 +16,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// ShowInputs is the show's inputs: the last confirmed inventory, the source
-// selected in the channel list (nil for a channel), whether a refresh is
-// out, when the last was asked, and why the last refresh failed.
 type ShowInputs struct {
 	inventory *core.StockInventory
 	selected  *string
@@ -106,8 +102,6 @@ func (a *App) unprocessedSource() *core.StockSource {
 	return nil
 }
 
-// unprocessedPanel is a show source with no RC2FX path: its name and fader,
-// then why it can't be processed.
 func (a *App) unprocessedPanel(source *core.StockSource) gk.Element {
 	note := edit.AssignmentLabel(source) + " · saved on your RØDECaster"
 	if a.inputs.error != nil {
@@ -128,7 +122,6 @@ func (a *App) unprocessedPanel(source *core.StockSource) gk.Element {
 				TextColor(rgb(Muted)).Child(txt(why))))
 }
 
-// sourceDetail is a source's line in the channel list (edit.SourceDetail).
 func sourceDetail(source *core.StockSource, note string) string {
 	return edit.SourceDetail(source, note)
 }

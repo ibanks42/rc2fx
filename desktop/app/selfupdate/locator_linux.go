@@ -8,15 +8,10 @@ import (
 	"syscall"
 )
 
-// VelopackLocator is Velopack's paths for this AppImage, with downloaded
-// packages kept in a folder only this user can open instead of the shared
-// /var/tmp, where another account could swap a package between its check
-// and its use. ok is false when Velopack did not package this copy. main
-// (cmd/rc2fx) gives the same paths to Velopack's startup hooks, so both see
-// the same packages.
-//
-// It is velopack 1.3.39's auto_locate_app_manifest(FromCurrentExe) on Linux,
-// which the C library does not offer.
+// VelopackLocator builds Velopack's AppImage paths with a per-user packages
+// directory instead of shared /var/tmp (which would allow another local user
+// to swap a package between verification and install). Mirrors Velopack
+// 1.3.39's Linux auto-locator, which velopack_libc doesn't expose.
 func VelopackLocator() (LocatorConfig, bool) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -53,14 +48,13 @@ func VelopackLocator() (LocatorConfig, bool) {
 	}, true
 }
 
-// PackagesDir is only used where Velopack finds its own paths.
 func PackagesDir() (string, bool) {
 	config, ok := VelopackLocator()
 	return config.PackagesDir, ok
 }
 
-// PrivatePackagesDir is $XDG_CACHE_HOME/rc2fx/velopack-packages, or under
-// ~/.cache.
+// PrivatePackagesDir returns $XDG_CACHE_HOME/rc2fx/velopack-packages (falling
+// back to ~/.cache).
 func PrivatePackagesDir() (string, bool) {
 	absolute := func(name string) (string, bool) {
 		value, ok := os.LookupEnv(name)
@@ -77,8 +71,9 @@ func PrivatePackagesDir() (string, bool) {
 	return filepath.Join(cache, "rc2fx", "velopack-packages"), true
 }
 
-// EnsurePrivate creates dir with mode 0700, or checks an existing one is a
-// real folder this user owns, and closes it to others.
+// EnsurePrivate creates dir with 0700 permissions, or verifies an existing
+// directory is a real directory owned by the current user and restricts its
+// mode to 0700.
 func EnsurePrivate(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -87,7 +82,6 @@ func EnsurePrivate(dir string) error {
 	if err != nil {
 		return err
 	}
-	// `/proc/self` belongs to this process's user.
 	owner := func(info os.FileInfo) (uint32, bool) {
 		st, ok := info.Sys().(*syscall.Stat_t)
 		if !ok {

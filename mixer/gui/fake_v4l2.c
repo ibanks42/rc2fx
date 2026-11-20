@@ -1,19 +1,15 @@
-/* Host-test stand-in for libdrm's commit and the GE2D V4L2 device, linked
- * into the test program as a shared library so its `ioctl` is an imported
- * call (as in the GUI) that the module can bind. Only the fake video fd is
- * emulated; every other fd goes to the real syscall.
+/* Host-test stand-in for libdrm commit and the GE2D V4L2 device. Built as a
+ * shared library so ioctl() is an imported call that LD_AUDIT can intercept.
+ * Non-video fds pass through to the real ioctl syscall.
  *
- * The fake GE2D models the behavior G1 is to confirm: a full-frame 90°
- * rotation masked by the COMPOSE rectangle (pixels outside it untouched).
- * FAKE_GE2D_DIR=cw|ccw picks the rotation, FAKE_GE2D_DELAY_US adds time per
- * job, FAKE_GE2D_FAIL_QBUF=n fails the n-th output QBUF (counting all, from
- * 1), FAKE_GE2D_FAIL_DQBUF=n fails the n-th capture DQBUF,
- * FAKE_GE2D_FAIL_SELECTION=n fails the n-th S_SELECTION (counting all),
- * FAKE_GE2D_FAIL_QUERYBUF=1 fails QUERYBUF with EIO, and
- * FAKE_GE2D_BAD_OFFSET=1 reports an unmappable offset. vb2's rule that an
- * OUTPUT buffer needs VM_WRITE to be mapped cannot be enforced from here (the
- * audit module's own mmap does not reach this library); the test build of
- * gui_partial.c applies it instead, under RC2FX_TEST_VB2_MMAP_NEEDS_WRITE.
+ * Models a full-frame 90 deg rotation masked by the COMPOSE rectangle (pixels
+ * outside COMPOSE stay untouched). Fault/behavior knobs via env:
+ *   FAKE_GE2D_DIR=cw|ccw, FAKE_GE2D_DELAY_US, FAKE_GE2D_FAIL_QBUF=n,
+ *   FAKE_GE2D_FAIL_DQBUF=n, FAKE_GE2D_FAIL_SELECTION=n,
+ *   FAKE_GE2D_FAIL_QUERYBUF=1, FAKE_GE2D_BAD_OFFSET=1.
+ * vb2's VM_WRITE mmap rule for OUTPUT buffers cannot be enforced here because
+ * the audit module's mmap bypasses this library; gui_partial.c enforces it in
+ * test builds instead.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -52,9 +48,8 @@ static int token_was_clamped;
 /* Counters the test program prints. */
 unsigned long long fake_jobs, fake_pixels;
 
-/* Explicit test-side queue recovery, leaving source/destination pixels intact.
- * This tests module recovery once the caller can submit again; it does not
- * claim that the vendor recovers its queues this way. */
+/* Reset fake V4L2 queues while leaving pixel buffers intact (for testing
+ * module recovery after caller queue recovery). */
 void fake_v4l2_recover_queues(void) {
     capture_queued = -1;
     output_queued = job_done = 0;
@@ -151,8 +146,7 @@ int ioctl(int fd, unsigned long request, ...) {
         if ((b->type != V4L2_BUF_TYPE_VIDEO_OUTPUT && b->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) || b->index != 0)
             return errno = EINVAL, -1;
         if (env_int("FAKE_GE2D_FAIL_QUERYBUF")) return errno = EIO, -1;
-        /* An unaligned offset: mmap itself fails (EINVAL), for the mmap
-         * failure path. */
+        /* Unaligned offset forces mmap to fail with EINVAL. */
         b->m.offset = env_int("FAKE_GE2D_BAD_OFFSET") ? 1u : 0;
         b->length = SW * SH * 4;
         if (b->type == V4L2_BUF_TYPE_VIDEO_CAPTURE && env_int("FAKE_GE2D_SHORT_CAPTURE")) b->length--;

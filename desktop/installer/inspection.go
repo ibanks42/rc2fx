@@ -1,7 +1,7 @@
 package installer
 
-// Offline qualification tooling. Never extracts files, prepares an image,
-// opens USB, or grants runtime support to an experimental board.
+// Offline firmware archive inspection. Read-only: never extracts files,
+// prepares images, touches USB, or enables experimental boards.
 
 import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
@@ -12,7 +12,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 )
 
-// Inspection is what an offline check of an official archive found.
 type Inspection struct {
 	Model              firmware.Model `json:"model"`
 	Profile            string         `json:"profile"`
@@ -22,10 +21,8 @@ type Inspection struct {
 	Notes              string         `json:"notes"`
 }
 
-// InspectArchive verifies an official archive against the built-in pins,
-// model/board evidence, and the already-qualified executable ABI. A
-// successful result for Duo is only offline evidence: RuntimeQualified
-// stays false.
+// InspectArchive checks an official firmware archive against built-in pins,
+// board identity, and executable hashes. For Duo, RuntimeQualified stays false.
 func InspectArchive(model firmware.Model, archive string) (*Inspection, error) {
 	data, err := catalogBytes()
 	if err != nil {
@@ -41,8 +38,7 @@ func InspectArchive(model firmware.Model, archive string) (*Inspection, error) {
 	return InspectArchiveWithCatalog(model, archive, catalog)
 }
 
-// InspectArchiveWithCatalog lets offline tooling explicitly provide a
-// catalog instead of downloading it.
+// InspectArchiveWithCatalog runs InspectArchive against an explicit catalog.
 func InspectArchiveWithCatalog(model firmware.Model, archivePath string, catalog *firmware.Catalog) (*Inspection, error) {
 	info, err := os.Stat(archivePath)
 	if err != nil {
@@ -104,9 +100,8 @@ func InspectArchiveWithCatalog(model firmware.Model, archivePath string, catalog
 	}, nil
 }
 
-// verifyArchiveModel rechecks board evidence in a prepared archive as well.
-// Cache metadata alone must never be enough to turn a Pro II image into a
-// Duo image.
+// verifyArchiveModel rechecks board identity inside a prepared archive so
+// cache metadata alone can't mislabel a Pro II image as Duo (or vice versa).
 func verifyArchiveModel(model firmware.Model, archive string) error {
 	members, err := readMembers(archive, model)
 	if err != nil {

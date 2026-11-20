@@ -1,9 +1,9 @@
-// Package developer is Developer mode without drawing: what the app knows
-// about SSH access to the connected mixer (managed over USB 1), how it says
-// it, and the login command. Developer mode only shows these controls.
-// Hiding them changes nothing on the mixer; only Disable removes RC2FX's key.
-// Nothing here flashes. It does not import gk, so it tests with plain
-// `go test`.
+// Package developer tracks SSH access state for the connected mixer over USB 1,
+// formats status copy, and builds the SSH login command.
+//
+// Toggling Developer mode only shows or hides these controls; only an explicit
+// Disable removes RC2FX's key from the mixer. Kept free of gk imports so it can
+// be tested with plain `go test`.
 package developer
 
 import (
@@ -18,18 +18,18 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// AddressPlaceholder stands in for the address until one is typed.
+// AddressPlaceholder is used in the login command until the user enters an address.
 const AddressPlaceholder = "MIXER_IP"
 
-// Reading is one answer to an SSH read: Err set is a failed read; Status nil
-// with Err nil is mixer software too old to manage SSH.
+// Reading holds the result of an SSH status query. A nil Status with a nil Err
+// means the mixer firmware is too old to manage SSH.
 type Reading struct {
 	Status *core.SSHStatus
 	Err    error
 }
 
-// Pinned is the mixer (serial) whose host keys were pinned, and where; Err
-// when pinning failed.
+// Pinned records the mixer serial whose host keys were pinned, along with the
+// pinned host info or pinning error.
 type Pinned struct {
 	Serial string
 	Host   *installer.PinnedHost
@@ -41,58 +41,44 @@ type sentRequest struct {
 	change bool
 }
 
-// Change is the SSH change under way, if any.
+// Change represents an in-flight SSH mutation.
 type Change int
 
 const (
-	// ChangeNone: nothing is changing.
 	ChangeNone Change = iota
-	// ChangePreparingKey: preparing this computer's key before an Enable is
-	// sent.
+	// Preparing this machine's SSH key before sending an Enable request.
 	ChangePreparingKey
-	// ChangeEnabling: an Enable was sent and not yet answered.
 	ChangeEnabling
-	// ChangeDisabling: a Disable was sent and not yet answered.
 	ChangeDisabling
 )
 
-// Busy reports a change under way: no other may start, and the row offers
-// no action.
+// Busy reports whether an SSH change is in progress and new actions should be blocked.
 func (c Change) Busy() bool { return c != ChangeNone }
 
-// Sent reports a change with the mixer: a read answered meanwhile would
-// show the state from before it.
+// Sent reports whether a change has already been sent to the mixer, meaning an
+// earlier read reply could reflect stale state.
 func (c Change) Sent() bool { return c == ChangeEnabling || c == ChangeDisabling }
 
-// SSH is what the mixer last said about SSH, for the current connection
-// only. The zero value is nothing read and no change under way.
+// SSH holds the last known SSH state for the current mixer connection.
 type SSH struct {
-	// Status is nil while not read yet.
+	// Nil until the first status read completes.
 	Status *Reading
-	// Change is the change under way: preparing the key for an Enable, or
-	// an Enable or Disable sent and not yet answered.
 	Change Change
-	// Pinned is reset with every status.
+	// Reset whenever Status is replaced.
 	Pinned *Pinned
-	// sent is requests sent and not yet answered, oldest first. A reply
-	// whose id is not here belongs to an earlier connection or state and is
-	// ignored.
+	// In-flight requests in send order; replies with unknown IDs are stale and ignored.
 	sent []sentRequest
-	// nextID is the next request id. Never reset, so ids are not reused
-	// after a clear.
+	// Monotonic request ID counter, preserved across Clear so old replies never collide.
 	nextID uint64
-	// LocalFingerprint is this computer's RC2FX key fingerprint, read
-	// without creating a key; "" when there is no key or it could not be
-	// read.
+	// This machine's RC2FX key fingerprint, read without creating a key (empty if absent or unreadable).
 	LocalFingerprint string
-	// Epoch is bumped by every clear. Confirmations and background work
-	// carry it and count only if it is unchanged, even across a same-mixer
-	// reconnect.
+	// Incremented on every Clear so background work and confirmations from an earlier
+	// connection or mode toggle can be discarded, even after reconnecting the same mixer.
 	Epoch uint64
 }
 
-// Clear forgets everything: a disconnect, a (re)connection, a lost or
-// restored stream, or Developer mode changing.
+// Clear resets connection state on disconnect, reconnect, stream loss/recovery,
+// or Developer mode toggle while preserving Epoch and nextID.
 func (s *SSH) Clear() {
 	epoch := s.Epoch + 1 // wraps at 2^64
 	nextID := s.nextID
@@ -101,23 +87,21 @@ func (s *SSH) Clear() {
 	s.nextID = nextID
 }
 
-// Track records a request about to be sent (change: an Enable or Disable)
-// and returns its id.
+// Track registers an outgoing request (with change=true for Enable/Disable) and returns its ID.
 func (s *SSH) Track(change bool) uint64 {
 	s.nextID++
 	s.sent = append(s.sent, sentRequest{s.nextID, change})
 	return s.nextID
 }
 
-// Untrack forgets a request that could not be sent.
+// Untrack removes a request that failed to send.
 func (s *SSH) Untrack(id uint64) {
 	s.sent = slices.DeleteFunc(s.sent, func(r sentRequest) bool { return r.id == id })
 }
 
-// AcceptReply matches a reply to its request. Unknown ids are stale.
-// Replies come in order, so anything sent before this request was answered
-// already. A read answered while a change is still on its way must not
-// replace what is shown.
+// AcceptReply matches a reply against tracked requests and returns whether its
+// payload should update the UI. Replies arrive in order, so older entries are
+// dropped. Read replies that arrive while a change is still in flight are ignored.
 func (s *SSH) AcceptReply(id uint64) bool {
 	at := slices.IndexFunc(s.sent, func(r sentRequest) bool { return r.id == id })
 	if at < 0 {
@@ -131,13 +115,13 @@ func (s *SSH) AcceptReply(id uint64) bool {
 	return change || !slices.ContainsFunc(s.sent, func(r sentRequest) bool { return r.change })
 }
 
-// Flag is the SSH row's short status: its text and tone.
+// Flag is the short status badge shown on the SSH row.
 type Flag struct {
 	Text string
 	Tone model.Tone
 }
 
-// Summary is what the SSH row shows. Flag nil and Caution "" are none.
+// Summary holds the copy, optional badge, and optional caution text for the SSH row.
 type Summary struct {
 	Line    string
 	Flag    *Flag
@@ -146,8 +130,8 @@ type Summary struct {
 
 func plain(line string, flag *Flag) Summary { return Summary{Line: line, Flag: flag} }
 
-// Describe is the SSH row's sentence, flag and any caution, in plain words.
-// Preparing the key already counts as enabling. localFingerprint "" is none.
+// Describe builds the user-facing summary for the current SSH state.
+// ChangePreparingKey is presented as enabling; pass an empty localFingerprint if none exists.
 func Describe(status *Reading, change Change, localFingerprint string) Summary {
 	if change.Busy() {
 		what := "Enabling"
@@ -201,16 +185,14 @@ func Describe(status *Reading, change Change, localFingerprint string) Summary {
 	return Summary{Line: line, Flag: &flag, Caution: caution}
 }
 
-// UsesLocalKey is whether the mixer's managed key is this computer's, so the
-// login command will work from here. localFingerprint "" is none.
+// UsesLocalKey reports whether the mixer's managed key matches this machine's key.
 func UsesLocalKey(status *core.SSHStatus, localFingerprint string) bool {
 	return status.Managed && localFingerprint != "" &&
 		status.ManagedFingerprint != nil && *status.ManagedFingerprint == localFingerprint
 }
 
-// ValidAddress is whether the text could be a host name or an IP address.
-// The field refuses anything else, so a pasted command holds nothing but the
-// address.
+// ValidAddress reports whether text looks like a plain hostname or IP address,
+// preventing shell metacharacters from slipping into the pasted login command.
 func ValidAddress(text string) bool {
 	if len(text) > 253 {
 		return false
@@ -225,8 +207,8 @@ func ValidAddress(text string) bool {
 	return true
 }
 
-// ReadLocalFingerprint is this computer's key fingerprint from its public
-// half; "" when there is none. Never creates a key.
+// ReadLocalFingerprint reads this machine's public key fingerprint without
+// generating a key if one does not exist.
 func ReadLocalFingerprint() string {
 	path, err := installer.SSHKeyPath()
 	if err != nil {
@@ -244,8 +226,8 @@ func ReadLocalFingerprint() string {
 	return key.Fingerprint()
 }
 
-// Action is which action to offer: Enable (true) or Disable (false); ok
-// false for none, as while a change is under way.
+// Action returns which button action to offer (enable=true for Enable, false
+// for Disable), or ok=false when no action should be available.
 func Action(status *Reading, change Change) (enable, ok bool) {
 	if status != nil && status.Err == nil && status.Status != nil && !change.Busy() {
 		return !status.Status.Managed, true
@@ -253,8 +235,7 @@ func Action(status *Reading, change Change) (enable, ok bool) {
 	return false, false
 }
 
-// quote quotes a path for the user's shell, so spaces and quotes survive
-// pasting.
+// quote escapes a file path for pasting into the user's shell.
 func quote(path string) string {
 	if runtime.GOOS == "windows" {
 		return `"` + strings.ReplaceAll(path, `"`, `\"`) + `"`
@@ -262,9 +243,8 @@ func quote(path string) string {
 	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
-// LoginCommand is the login command, with this mixer's pinned host
-// identity. The mixer does not report its network address, so an empty
-// address leaves a placeholder.
+// LoginCommand formats the ssh command using the mixer's pinned host key.
+// Because the mixer does not report its IP, an empty address falls back to AddressPlaceholder.
 func LoginCommand(key, knownHosts, alias, address string) string {
 	if address == "" {
 		address = AddressPlaceholder

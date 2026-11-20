@@ -4,11 +4,10 @@ package archive
 
 import "golang.org/x/sys/windows"
 
-// NoFollow has no Windows equivalent here; reparse points are not followed
-// by the checks that matter (the cache folder is the user's own).
+// NoFollow is a no-op on Windows; the cache directory belongs to the current user.
 const NoFollow = 0
 
-// ReplaceLocalFile renames temp over path, writing through.
+// ReplaceLocalFile atomically replaces path with temp using write-through.
 func ReplaceLocalFile(temp, path string) error {
 	from, err := windows.UTF16PtrFromString(temp)
 	if err != nil {

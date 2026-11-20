@@ -7,15 +7,12 @@ import (
 	"strings"
 )
 
-// VelopackLocator is only given on Linux; elsewhere Velopack's own choice is
-// already private to the user.
+// VelopackLocator is unused on macOS because Velopack's default cache path is
+// already per-user.
 func VelopackLocator() (LocatorConfig, bool) { return LocatorConfig{}, false }
 
-// PackagesDir is where Velopack keeps this copy's packages:
-// auto_locate_app_manifest(FromCurrentExe).get_packages_dir() of velopack
-// 1.3.39 on macOS, which the C library does not offer.
-// ~/Library/Caches/velopack/<id>/packages. ok is false when Velopack did not
-// install this copy.
+// PackagesDir returns ~/Library/Caches/velopack/<id>/packages, matching
+// Velopack 1.3.39's macOS locator (not exposed by velopack_libc).
 func PackagesDir() (string, bool) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -37,7 +34,6 @@ func PackagesDir() (string, bool) {
 			return "", false
 		}
 	}
-	// std::env::home_dir: $HOME, else the user database.
 	home := os.Getenv("HOME")
 	if home == "" {
 		u, err := user.Current()
@@ -49,5 +45,4 @@ func PackagesDir() (string, bool) {
 	return filepath.Join(home, "Library", "Caches", "velopack", m.ID, "packages"), true
 }
 
-// EnsurePrivate is a Linux check; elsewhere the folder is the user's own.
 func EnsurePrivate(dir string) error { return nil }

@@ -1,5 +1,5 @@
-//! RC2FX control messages carried directly by the existing vendor HID reports.
-//! Stop-and-wait framing: no unsolicited writes, no automatic mutation replay.
+//! RC2FX control framing over RØDE's vendor HID reports (stop-and-wait, no
+//! unsolicited writes or automatic mutation replay).
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -7,26 +7,23 @@ pub const REPORT_SIZE: usize = 256;
 pub const HEADER: usize = 32;
 pub const PAYLOAD: usize = REPORT_SIZE - HEADER;
 pub const OUTPUT_ID: u8 = 5;
-// RC2FX declares these IDs inside RODE's one top-level collection (usage page
-// ff00), whose own reports are 1-4. Every reader of that collection receives
-// input report 6 and must ignore it; RODE's software reads by report ID.
+// Declared inside RØDE's top-level collection (usage page 0xff00, where stock
+// reports are 1..=4). RØDE's software filters by report ID, so report 6 is
+// ignored by stock readers.
 pub const INPUT_ID: u8 = 6;
 pub const INPUT_REPORT_SIZE: usize = REPORT_SIZE;
 pub const INPUT_PAYLOAD: usize = INPUT_REPORT_SIZE - HEADER;
 pub const MAX_REQUEST: usize = 512 * 1024 + 1024;
 pub const MAX_REPLY: usize = 8 * 1024 * 1024 + 1024;
-/// The largest event a mixer publishes.
 pub const MAX_EVENT_BYTES: usize = 512 * 1024;
 pub const MAGIC: &[u8; 7] = b"\xffRC2FX\0";
-/// The hello data protocol 3 clients send, and the hello acknowledgement they
-/// expect.
+/// Hello payload/ack for protocol 3 clients.
 pub const HELLO_3: &[u8] = b"RC2FX USB 3";
-/// The hello data a protocol 4 client sends; the mixer's acknowledgement names
-/// the window it sized for this link.
+/// Hello payload for protocol 4 clients; the mixer replies with the negotiated window size.
 pub const HELLO_4: &[u8] = b"RC2FX USB 4";
-/// The server's own bound on how many reports a client may keep in flight. The
-/// native hook forwards reports with a non-blocking datagram send, so a queue
-/// longer than the kernel's `max_dgram_qlen` would silently drop one.
+/// Max in-flight reports allowed per client. The native hook forwards reports
+/// over a non-blocking datagram socket, so exceeding the kernel's `max_dgram_qlen`
+/// would silently drop frames.
 pub const MAX_WINDOW: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

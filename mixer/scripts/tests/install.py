@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Host-only tests of install.sh's rollback keeping and space check (no mixer).
+"""Host-side tests for install.sh (rollback retention, space checks, commit/rollback).
 
-python3 -I mixer/scripts/tests/install.py
+  python3 -I mixer/scripts/tests/install.py
 
-Runs the whole script under /bin/sh with RC2FX_INSTALL_ROOT at a fake root:
-an upload of dummy files with a matching SHA256SUMS, a stub rc2fx-firmware,
-and a stub rc2fx.sh whose `restart` exits 3 (the "starts at the next
-power-on" path, so no readiness wait). `df` can be stubbed through PATH.
+Runs install.sh under /bin/sh with RC2FX_INSTALL_ROOT pointing to a temp dir
+and a stub rc2fx.sh whose `restart` exits 3 (next-power-on path).
 """
 import hashlib
 import os
@@ -21,7 +19,7 @@ BINARIES = ['librc2fx_native.so', 'rc2fxd', 'rc2fx-supervisor', 'rc2fx-firmware'
             'librc2fx_gui.so', 'librc2fx_jackerr.so',
             'rc2fx_jackerr_snapshot', 'mixer-release.json']
 SCRIPTS = ['rc2fx.sh', 'rc2fx-shim.sh', 'rc2fx-gui-shim.sh', 'install.sh']
-# A runtime script with the GUI shim's case, and one from before it.
+# Stub rc2fx.sh with gui-launch support vs. an older pre-GUI-shim version.
 RC2FX_SH = f'''#!/bin/bash
 echo "rc2fx.sh $*" >> "$RC2FX_INSTALL_ROOT/calls"
 case "$1" in
@@ -62,7 +60,7 @@ class Install(unittest.TestCase):
         (self.up / 'install.sh').write_text(SCRIPT.read_text())
 
     def runtime(self, path: Path, script=RC2FX_SH, age=0, data=False):
-        """A runtime directory as an earlier install left it."""
+        """Create a fake installed runtime directory."""
         path.mkdir(parents=True)
         (path / 'rc2fx.sh').write_text(script)
         (path / 'librc2fx_native.so').write_bytes(b'old')
@@ -155,7 +153,7 @@ class Install(unittest.TestCase):
         self.retained('original', script=OLD_RC2FX_SH, age=5000)
         self.retained('later-old', script=OLD_RC2FX_SH, age=3000)
         self.retained('newest-old', script=OLD_RC2FX_SH, age=10)
-        (self.opt / '.rc2fx-retained.empty').mkdir()  # no rc2fx.sh: pre-GUI, but new
+        (self.opt / '.rc2fx-retained.empty').mkdir()  # no rc2fx.sh, counts as pre-GUI but newer
         self.assert_installed(self.install())
         self.assertEqual(self.retained_dirs(), ['.rc2fx-retained.original'])
 
@@ -169,24 +167,24 @@ class Install(unittest.TestCase):
         names = self.retained_dirs()
         self.assertIn('.rc2fx-retained.settings', names)
         self.assertNotIn('.rc2fx-retained.plain', names)
-        # The rollback with settings was moved aside, not deleted.
+        # The rollback holding data/ should be archived, not deleted.
         self.assertEqual(len(names), 2, names)
         self.assertIn('holds saved settings', result.stderr)
         self.assertFalse(previous.exists() and (previous / 'data').exists())
 
     def test_an_original_install_as_the_old_rollback_is_retained(self):
-        # The original install is the old rollback and no copy is older: kept.
+        # Keep the pre-GUI rollback when no older pre-GUI copy exists yet.
         self.runtime(self.opt / 'rc2fx')
         self.runtime(self.opt / '.rc2fx-previous', script=OLD_RC2FX_SH)
         self.assert_installed(self.install())
         names = self.retained_dirs()
         self.assertEqual(len(names), 1, names)
         self.assertEqual((self.opt / names[0] / 'rc2fx.sh').read_text(), OLD_RC2FX_SH)
-        # Once an older original is retained, a pre-GUI rollback goes.
+        # Once one pre-GUI copy is already retained, drop subsequent ones.
         self.runtime(self.opt / '.rc2fx-previous-next', script=OLD_RC2FX_SH)
         os.replace(self.opt / '.rc2fx-previous', self.opt / '.rc2fx-previous-gone')
         os.replace(self.opt / '.rc2fx-previous-next', self.opt / '.rc2fx-previous')
-        self.upload(b'x' * 4096)  # every install uploads afresh; a good one removes the upload
+        self.upload(b'x' * 4096)  # re-upload since the previous install cleared it
         self.assert_installed(self.install())
         self.assertEqual(self.retained_dirs(), names)
 
@@ -205,7 +203,7 @@ class Install(unittest.TestCase):
         self.assertFalse(list(self.opt.glob('.rc2fx-stage.*')))
         self.assertTrue(old.exists(), 'the rollback is untouched')
         self.assertEqual((self.opt / 'rc2fx' / 'librc2fx_native.so').read_bytes(), b'old')
-        # Leftover copies are pruned first, so a disk they filled recovers.
+        # Prune happens before the space check so leftover copies can free room.
         self.assertEqual(self.retained_dirs(), [])
         self.fake_df(need)
         self.assert_installed(self.install())
@@ -218,11 +216,11 @@ class Install(unittest.TestCase):
         self.assertFalse((self.opt / '.rc2fx-install-pending').exists())
         self.assertFalse((self.opt / '.rc2fx-previous').exists(), 'nothing starts it after a commit')
         self.assertEqual(self.retained_dirs(), [])
-        # A commit without a pending install changes nothing.
+        # Committing with no pending marker should be a no-op.
         kept = self.runtime(self.opt / '.rc2fx-previous')
         self.assertEqual(self.install('commit').returncode, 0)
         self.assertTrue(kept.exists())
-        # Saved settings are retained, never deleted.
+        # Preserve data/ instead of deleting it.
         (kept / 'data').mkdir()
         (self.opt / '.rc2fx-install-pending').touch()
         self.assertEqual(self.install('commit').returncode, 0)

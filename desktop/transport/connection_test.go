@@ -14,19 +14,16 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
-// gatedMixer is a mixer whose first upload chunk is held until gate closes,
-// so a test can act while an in-place update is mid-upload. It answers 404
-// to everything else the app asks, the event stream included.
+// gatedMixer pauses on the first upload chunk until gate is closed, letting
+// tests issue commands while an in-place update is mid-upload.
 type gatedMixer struct {
-	gate chan struct{}
-	// Closed once the first chunk arrives.
-	uploading chan struct{}
+	gate      chan struct{}
+	uploading chan struct{} // closed once the first chunk arrives
 
 	mu       sync.Mutex
 	puts     int
 	received int
-	// requests counts what was asked after the first chunk was answered.
-	later []string
+	later    []string // non-event requests received after the first chunk
 }
 
 func newGatedMixer() *gatedMixer {
@@ -99,9 +96,8 @@ func (m *gatedMixer) asked() (puts int, later []string) {
 	return m.puts, append([]string(nil), m.later...)
 }
 
-// fakeMixers connects to each of its sessions in turn, as connectDevice
-// connects to a mixer, and keeps each session's link so a test can see when
-// its goroutine stopped.
+// fakeMixers hands out preconfigured sessions on each connect and tracks their
+// usbLinks so tests can verify worker shutdown.
 type fakeMixers struct {
 	sessions []Session
 	mu       sync.Mutex
@@ -131,7 +127,6 @@ func (f *fakeMixers) link(i int) *usbLink {
 	return f.links[i]
 }
 
-// startRun runs the command loop against mixers until the test ends.
 func startRun(t *testing.T, mixers *fakeMixers) (chan<- Command, <-chan Event) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -149,8 +144,6 @@ func startRun(t *testing.T, mixers *fakeMixers) (chan<- Command, <-chan Event) {
 	return commands, events
 }
 
-// await returns the first event of generation that want accepts, skipping
-// the rest.
 func await(t *testing.T, events <-chan Event, generation uint64, what string, want func(EventKind) bool) EventKind {
 	t.Helper()
 	timeout := time.After(5 * time.Second)
@@ -221,13 +214,11 @@ func TestANewConnectionEndsTheUploadOfTheOldOne(t *testing.T) {
 	await(t, events, 1, "connection", isConnected)
 	commands <- updateCommand(t, 1)
 	<-old.uploading
-	// The first chunk is still with the old mixer when the app connects
-	// again. The new connection does not wait for that request.
+	// Connect again while the first chunk is still blocked; the new connection
+	// shouldn't wait for it.
 	commands <- CommandConnect{Generation: 2}
 	await(t, events, 2, "second connection", isConnected)
 	close(old.gate)
-	// With the upload gone, nothing holds the old session, and nothing more
-	// was sent on it.
 	stopsWithin(t, mixers.link(0), "the old connection")
 	if puts, later := old.asked(); puts != 1 || len(later) != 0 {
 		t.Fatalf("the old session got %d chunks and then %v", puts, later)
@@ -243,9 +234,9 @@ func TestDisconnectingEndsAnUploadInFlight(t *testing.T) {
 	commands <- updateCommand(t, 1)
 	<-mixer.uploading
 	commands <- CommandDisconnect{Generation: 2}
-	// Commands run in order: once an update for generation 2 is refused for
-	// having no mixer, the disconnect has finished dropping the old
-	// connection, so opening the gate can no longer race it.
+	// Commands execute in order, so waiting for the gen-2 refusal guarantees
+	// the disconnect has already torn down the old connection before we unblock
+	// the gate.
 	commands <- updateCommand(t, 2)
 	refused := await(t, events, 2, "refusal without a mixer", isUpdateFailed)
 	if failed, _ := updateEvent(refused); !strings.Contains(failed.(MixerUpdateEventFailed).Message, "No connected mixer") {

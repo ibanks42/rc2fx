@@ -1,83 +1,86 @@
 # JACK error recorder
 
-`librc2fx_jackerr.so` is an interposer for the mixer's stock `jackd` that
-records errors only. In the vendor build `jack_error` does nothing. The
-recorder captures calls to it into a fixed 4096-slot ring in shared memory.
-It doesn't capture audio, create JACK ports, run a processing callback, or
-turn on jackd's callback or ALSA tracing.
+`librc2fx_jackerr.so` is an interposer for the mixer's stock `jackd` that only
+records errors. In RØDE's stock build, `jack_error` is a no-op; this library
+captures calls to it into a fixed 4096-slot ring buffer in shared memory. It
+does not capture audio, open JACK ports, register a processing callback, or
+enable jackd's callback or ALSA tracing.
 
-The normal mixer build produces this library and `rc2fx_jackerr_snapshot`.
-Both are required, checksummed files in the SSH installer, the release package,
-and the firmware-image installer. RØDE's executables are left unchanged. The
-launcher integration is in `mixer/scripts/rc2fx.sh`.
+Standard mixer builds compile both `librc2fx_jackerr.so` and
+`rc2fx_jackerr_snapshot`. Both are required, checksummed artifacts in the SSH
+installer, release packages, and firmware-image installer. RØDE's binaries stay
+untouched, and launcher integration lives in `mixer/scripts/rc2fx.sh`.
 
 ## Startup
 
-When both files are present and valid, the launcher starts the recorder as
-part of the normal mixer start, including at boot. There is no RAM marker or
-developer command to enable it. The launcher preloads the library from the
-active bundle, normally `/opt/rc2fx`. It is not started on the first boot after
-a firmware update or under the other conditions that fall back to stock.
+Whenever both binaries are present and pass verification, the launcher attaches
+the recorder automatically during normal mixer startup, including at boot. No
+RAM marker or developer toggle is needed. The launcher preloads the library
+from the active bundle (typically `/opt/rc2fx`). It stays off on the first boot
+after a firmware update and under any other condition that triggers a stock
+fallback.
 
-Setting the persistent `data/jack-recorder-off` flag stops it from starting.
+Creating the persistent `data/jack-recorder-off` flag disables it.
 
-Starting the recorder means replacing the running jackd. The launcher checks
-the original JACK arguments, environment, thread placement, PCM devices, and
-audio IRQ state. If the replacement fails, it tries a verified fallback to a
-plain server, and it records the failure for the rest of the boot so it isn't
-retried in a loop. A mapped library doesn't by itself mean the recorder is
-working. Check its status.
+Attaching the recorder requires restarting the running `jackd`. Before doing
+so, the launcher inspects the original JACK arguments, environment, thread
+placement, PCM devices, and audio IRQ state. If replacement fails, it attempts
+a verified fallback to a plain `jackd` and records the failure for the rest of
+the boot so it won't retry in a loop. Seeing the library mapped into memory
+doesn't guarantee the recorder is healthy; always check its status.
 
 ## Storage
 
-Recordings are kept in RAM only and are cleared on reboot. The recorder starts
-again on the next boot.
+All recordings live in RAM and vanish on reboot. The recorder starts fresh on
+the next boot.
 
-- `/run/rc2fx-recorder/status`: the last launch's status.
-- `/run/rc2fx-recorder/active`: the current attempt's path and the JACK PID and
-  birth token.
-- `run.XXXXXX/`: one directory per attempt, with inventories, server logs, a
-  readiness snapshot, and a ring directory.
+- `/run/rc2fx-recorder/status`: status of the most recent launch attempt.
+- `/run/rc2fx-recorder/active`: path to the active attempt directory, along
+  with the JACK PID and birth token.
+- `run.XXXXXX/`: one directory per attempt containing inventories, server logs,
+  a readiness snapshot, and the ring directory.
 
-The root and attempt directories are private. Earlier attempts are kept
-without pruning or overwriting. The ring has a fixed size, and its decoder reports
-wraparound, loss, and unpublished or torn records.
+Both the root directory and individual attempt directories are private. Older
+attempts are retained without pruning or overwriting. Because the ring has a
+fixed size, its decoder explicitly flags wraparound, lost entries, and
+unpublished or torn records.
 
-The 8 MiB check on the whole root applies when a new attempt starts. It doesn't
-limit vendor stdout logs while running. The recorder doesn't rotate, truncate,
-or cap any file the real-time server writes.
+An 8 MiB size check on the root directory runs before starting a new attempt.
+It does not cap vendor stdout logs while running, and the recorder never
+rotates, truncates, or limits any file written by the real-time server.
 
 ## Reading records
 
-From the computer, run `just mixer-xruns [SECONDS]` (default 60). It checks
-that the recorder is attached to the live jackd, takes a snapshot at the start
-and end of the window, and prints each record that arrived in between. It then
-prints a summary by kind and by late client, and anything the ring couldn't
-show. `just mixer-xruns 0` prints everything still in the ring for that jackd.
+From your computer, run `just mixer-xruns [SECONDS]` (default 60). It verifies
+the recorder is attached to the live `jackd`, captures snapshots at the start
+and end of the window, prints every record logged in between, and summarizes
+counts by kind, late client, and any gaps the ring couldn't cover. Pass `0`
+(`just mixer-xruns 0`) to dump everything still in the ring for the current
+`jackd`.
 
-To take a snapshot by hand on the device, run the bundled snapshot program
-with a new output file name:
+To capture a snapshot manually on the mixer, run the bundled tool with a new
+output path:
 
 ```text
 /opt/rc2fx/rc2fx_jackerr_snapshot RING_DIRECTORY NEW_SNAPSHOT_PATH
 ```
 
-It reads published slots with sequence checks and writes a snapshot that isn't
-modified afterwards. Copying the live ring directory doesn't give the same
-result. Decode the snapshot on the computer with the decoder used by
-`./xtask mixer xruns`, or with `tests/jackerr_ring.py`.
+It reads published slots with sequence checks and writes an immutable snapshot;
+simply copying the live ring directory does not produce a consistent view.
+Decode snapshots on your computer using `./xtask mixer xruns`'s decoder or
+`tests/jackerr_ring.py`.
 
-When reading records, keep track of the PID, the creation clock, the window
-indices, unknown formats, and the loss and error counts. A late client's name
-tells you where a failure was reported. It doesn't establish the root cause,
-whether it was audible, how many distinct dropouts there were, or exactly how
-long the incident lasted.
+When analyzing records, check the PID, creation clock, window indices, unknown
+formats, and loss/error counts. A late client name only shows where the fault
+was reported; it does not prove root cause, audibility, how many distinct
+dropouts happened, or the exact duration of an incident.
 
 ## Real-time behavior
 
-The error hook doesn't allocate, lock, format, or do I/O. Its atomic
-read-modify-write operations can retry, so it has no hard bound on execution
-time. Its pages are prefaulted but not locked by this code.
+The error hook never allocates, locks, formats strings, or performs I/O.
+Because its atomic read-modify-write operations can retry under contention, it
+does not have a hard upper bound on execution time. Its memory pages are
+prefaulted, though not locked by this code.
 
 ## Tests
 

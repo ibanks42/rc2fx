@@ -1,13 +1,6 @@
-// Package licenses is the data side of the license dialog: the bundle's
-// shape, which bundle a build embeds, and the embedded sections. The dialog
-// itself is UI and lives elsewhere.
+// Package licenses parses, resolves, and embeds the license notice bundle
+// displayed in the license dialog.
 package licenses
-
-// The license bundle's shape, shared by the generator (which checks the file
-// before embedding it) and the app (which reads the embedded copy).
-//
-// `{"schemaVersion":1,"sections":[{"title":"…","text":"…"}]}`, UTF-8.
-// Unknown fields are refused so a newer generator is noticed, not ignored.
 
 import (
 	"encoding/json"
@@ -20,23 +13,23 @@ import (
 	"unicode/utf8"
 )
 
-// SchemaVersion is the bundle format this app reads.
+// SchemaVersion is the supported license bundle format version.
 const SchemaVersion uint64 = 1
 
-// MaxBytes is far above any real bundle; refuses a wrong file passed by
-// mistake.
+// MaxBytes caps bundle size to reject accidentally passed non-license files.
 const MaxBytes = 16 * 1024 * 1024
 
-// maxDepth bounds nesting like the core strict decoder.
 const maxDepth = 64
 
-// Section is one notice: RC2FX's own license or a third-party one.
+// Section is one license entry (either RC2FX itself or a third-party dependency).
 type Section struct {
 	Title string
 	Text  string
 }
 
-// Parse reads a license bundle.
+// Parse strictly validates and decodes a UTF-8 JSON license bundle:
+// `{"schemaVersion":1,"sections":[{"title":"…","text":"…"}]}`.
+// Unknown fields are rejected so schema drift fails loudly.
 func Parse(text string) ([]Section, error) {
 	if len(text) > MaxBytes {
 		return nil, fmt.Errorf("larger than %d bytes", MaxBytes)
@@ -97,8 +90,7 @@ func Parse(text string) ([]Section, error) {
 	return result, nil
 }
 
-// unknownKey is the first key, in sorted order so the error names the same
-// key every time, that is not one of allowed.
+// unknownKey returns the lexicographically first key not in allowed for deterministic errors.
 func unknownKey(object map[string]any, allowed ...string) (string, bool) {
 	keys := make([]string, 0, len(object))
 	for key := range object {
@@ -113,8 +105,7 @@ func unknownKey(object map[string]any, allowed ...string) (string, bool) {
 	return "", false
 }
 
-// asUint64 is an integer literal from 0 to 2^64-1; never a fraction,
-// exponent or negative number.
+// asUint64 parses a non-negative integer literal (no fractions, exponents, or signs).
 func asUint64(value any) (uint64, bool) {
 	number, ok := value.(json.Number)
 	if !ok {
@@ -124,9 +115,8 @@ func asUint64(value any) (uint64, bool) {
 	return n, err == nil
 }
 
-// decode reads one JSON value strictly: valid UTF-8, no duplicate keys, no
-// nesting deeper than maxDepth and nothing after the value. Numbers stay
-// json.Number.
+// decode strictly parses a single JSON value (valid UTF-8, no duplicate keys,
+// bounded nesting, no trailing tokens) while preserving numbers as json.Number.
 func decode(text string) (any, error) {
 	if !utf8.ValidString(text) {
 		return nil, errors.New("invalid UTF-8")

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# `just package-check`, and the release's Linux build: build the AppImage from
-# the working tree in the AlmaLinux 8 container (glibc 2.28), then check it in
-# clean containers of several distributions. Everything stays under
-# target/package-check. Needs no device, display or GitHub run.
+# Builds the Linux AppImage from the current working tree inside the AlmaLinux 8
+# (glibc 2.28) container and tests it across distro containers. Output goes under
+# target/package-check; requires no hardware, display, or GitHub Actions.
 set -euo pipefail
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || {
     echo 'package-check needs x86-64 Linux' >&2
@@ -20,8 +19,7 @@ if [[ -z $engine ]]; then
         exit 1
     fi
 fi
-# Build files on the mount must belong to the calling user. Rootless engines
-# map container root to that user, except podman, which keep-id handles.
+# Keep mounted build outputs owned by the host user.
 case $engine in
     podman) user=(--userns=keep-id) ;;
     docker)
@@ -35,8 +33,7 @@ case $engine in
 esac
 
 scripts=.github/scripts
-# CI passes the published build image (build-image.yml) for this tag; a local
-# run builds it, refreshing its packages.
+# CI passes the prebuilt image from build-image.yml; local runs build it on demand.
 tag=$(sh "$scripts/build-image-tag.sh")
 if [[ -n ${RC2FX_BUILD_IMAGE:-} ]]; then
     [[ $RC2FX_BUILD_IMAGE == *:"$tag" ]] || {
@@ -55,10 +52,8 @@ fi
 check=$root/target/package-check
 mkdir -p "$check/target" "$check/cache"
 
-# docker --user runs as an ID the image doesn't name, and .NET (vpk) then
-# refuses to create its named mutexes: "The system cannot open the device or
-# file specified. : 'NuGet-Migrations'". Podman's keep-id adds the entries;
-# for docker, mount the image's own user and group files with them added.
+# Under `docker --user`, an unmapped UID causes .NET (vpk) to fail creating named
+# mutexes ("NuGet-Migrations"). Synthesize /etc/passwd and /etc/group entries for it.
 if [[ $engine == docker && ${#user[@]} -gt 0 ]]; then
     uid=$(id -u) gid=$(id -g)
     identity=$check/identity
@@ -72,8 +67,7 @@ if [[ $engine == docker && ${#user[@]} -gt 0 ]]; then
     chmod 644 "$identity/passwd" "$identity/group"
     user+=(-v "$identity/passwd:/etc/passwd:ro" -v "$identity/group:/etc/group:ro")
 fi
-# Tracked and new files as they are now, minus deleted and ignored ones.
-# Modification times are kept so the cached build only redoes what changed.
+# Archive tracked and untracked non-ignored files, preserving mtimes for incremental builds.
 snapshot() {
     git ls-files -z --cached --others --exclude-standard |
         while IFS= read -r -d '' file; do
@@ -82,12 +76,12 @@ snapshot() {
         sort --zero-terminated |
         tar --create --null --no-recursion --files-from=- "$@"
 }
-# File names, contents and modes only: touching a file changes no result.
+# Hash names, contents, and modes only (ignore mtimes/ownership).
 digest() {
     snapshot --mtime=@0 --owner=0 --group=0 --numeric-owner | sha256sum | cut -c1-16
 }
 
-# Setup skips tools it already has, so a changed pin needs its own directory.
+# Scope cached tools by script hash so updated pins don't reuse old binaries.
 tools=/work/cache/tools/$(sha256sum "$scripts/setup-release-tools.sh" | cut -c1-12)
 source=$(digest)
 head=$(git rev-parse --short HEAD)
@@ -95,10 +89,8 @@ changes=$(git status --short)
 echo "Packaging $head, source digest $source, with these local changes:"
 echo "${changes:-(none)}"
 
-# Go's caches sit on the mount too; -modcacherw keeps the module cache
-# removable by the calling user. The token that reads the gpuikit bindings
-# goes through as GPUIKIT_TOKEN for desktop/scripts/fetch-gpuikit.sh, taken
-# from GH_TOKEN or GITHUB_TOKEN when only those are set (as for gh).
+# Use -modcacherw so the host user can clean up the mounted Go module cache.
+# Forward GH_TOKEN/GITHUB_TOKEN as GPUIKIT_TOKEN when GPUIKIT_TOKEN isn't set.
 if [ -z "${GPUIKIT_TOKEN:-}" ] && [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
     GPUIKIT_TOKEN=${GH_TOKEN:-$GITHUB_TOKEN}
 fi
@@ -116,7 +108,7 @@ snapshot |
             exec bash .github/scripts/package-check-build.sh'
 
 bash "$scripts/test-linux-packages.sh" --artifacts "$check/target/package" --runtime "$engine"
-# The tests read their scripts from the live tree, and a build takes a while.
+# Fail if the working tree changed mid-run, since the test scripts read from the live tree.
 if [[ $(digest) != "$source" ]]; then
     echo "Package check is void: the source changed during the run (was digest $source)" >&2
     exit 1

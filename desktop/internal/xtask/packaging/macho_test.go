@@ -14,8 +14,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 )
 
-// Synthetic Mach-O files: just the header and the load commands the checks
-// read, which is all debug/macho needs.
+// Minimal synthetic Mach-O builders (header + load commands) for debug/macho.
 
 type loadCommand []byte
 
@@ -98,8 +97,6 @@ func fatMachO(thin ...[]byte) []byte {
 	return append(out, body...)
 }
 
-// executableSlice is a slice of the app, which links gpuikit statically and
-// so loads only the system's libraries.
 func executableSlice(cpu macho.Cpu, minos string) []byte {
 	return thinMachO(cpu, macho.TypeExec, buildVersion(platformMacOS, minos),
 		dylibCommand(lcLoadDylib, "/usr/lib/libSystem.B.dylib"),
@@ -110,8 +107,6 @@ func universalExecutable() []byte {
 	return fatMachO(executableSlice(macho.CpuArm64, "13.0"), executableSlice(macho.CpuAmd64, "13.0"))
 }
 
-// besideSlice is a slice of an executable that loads libextra.dylib from
-// beside itself through its run path.
 func besideSlice(cpu macho.Cpu, rpath bool) []byte {
 	commands := []loadCommand{buildVersion(platformMacOS, "13.0"),
 		dylibCommand(lcLoadDylib, "@rpath/libextra.dylib"), dylibCommand(lcLoadDylib, "/usr/lib/libSystem.B.dylib")}
@@ -308,7 +303,6 @@ func TestThePortableZipChecksVelopacksUpdaterToo(t *testing.T) {
 	}
 }
 
-// xarArchive is a product archive holding only its Distribution file.
 func xarArchive(t *testing.T, distribution string, compressed bool) []byte {
 	t.Helper()
 	stored, style := []byte(distribution), "application/octet-stream"
@@ -375,7 +369,6 @@ func TestTheInstallerOffersItselfToBothKindsOfMac(t *testing.T) {
 	}
 }
 
-// envValue is name's value as exec would use it: the last one.
 func envValue(env []string, name string) string {
 	value := ""
 	for _, entry := range env {
@@ -417,8 +410,7 @@ func TestEachMacSliceIsBuiltForItsArchitectureAndTheMinimum(t *testing.T) {
 		envValue(env, "CGO_CFLAGS") != "" || envValue(env, "MACOSX_DEPLOYMENT_TARGET") != "" {
 		t.Fatalf("%v", env)
 	}
-	// gpuikit's static library, of which the linker keeps only what the app
-	// uses; no run path, since nothing loads from beside the executable.
+	// Static libgpuikit with linker dead-stripping; no @executable_path rpath needed.
 	if ld, cgo := appLinkFlags("darwin", "/g/lib", "-s -w"); !strings.HasSuffix(cgo, "-L/g/lib") || ld != "-s -w -extldflags=-Wl,-dead_strip" {
 		t.Fatal(ld, cgo)
 	}

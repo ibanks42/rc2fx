@@ -1,29 +1,21 @@
-/* RC2FX server-side JACK error recorder, for LD_PRELOAD into jackd only.
+/* Server-side JACK error recorder, preloaded into /usr/bin/jackd only.
  *
- * The mixer's libjackserver and jack_alsa.so report failures through
- * jack_error(), whose vendor body is a no-op. This library defines
- * jack_error() earlier in jackd's lookup scope and records the calls it
- * recognizes (the server's late-client checks and the ALSA driver's xrun and
- * poll messages) into a fixed ring in a shared RAM file. Nothing is printed
- * or forwarded (the original does nothing), and errno is left as it was.
+ * Overrides the vendor's no-op jack_error() to record recognized libjackserver
+ * and jack_alsa.so failure messages into a fixed-size shared-memory ring
+ * without printing, allocating, locking, or altering errno.
  *
- * In the call: one CLOCK_MONOTONIC read, an atomic index claim, a CAS that
- * takes the slot only from an older published generation, relaxed atomic
- * stores and bounded string copies. A slot still being written by a stalled
- * writer, or already holding a newer record, makes this record DROPPED
- * (counted), never waited for. No formatting, allocation, lock or I/O.
- * Unknown formats are counted and keep a bounded prefix of the literal.
+ * Hot path: CLOCK_MONOTONIC read, atomic index claim, CAS on an older even
+ * sequence number (busy or newer slots drop the record rather than blocking),
+ * relaxed stores, and bounded string copies. Unknown formats record a bounded
+ * prefix of the format string without reading varargs.
  *
- * The constructor (not the call) creates the ring, and only when this process
- * is /usr/bin/jackd and 64-bit atomics are lock-free: in a private 0700
- * directory, a new 0600 file per generation (ring-<pid>-<created ns>.ring,
- * O_EXCL: never a truncated or reused mapping), with every page faulted
- * in before use. Anywhere else, jack_error()
- * stays a no-op. Read it with rc2fx_jackerr_snapshot on the device.
+ * Ring creation happens in the constructor only when /proc/self/exe matches
+ * jackd and 64-bit atomics are lock-free (0700 dir, O_EXCL 0600 ring file,
+ * prefaulted). Read snapshots with rc2fx_jackerr_snapshot.
  *
  * Build: zig cc -target aarch64-linux-gnu.2.35 -O2 -shared -fPIC -Wall -Wextra
  *        -Werror -fvisibility=hidden rc2fx_jackerr.c -o librc2fx_jackerr.so
- * (-DRC2FX_JACKERR_TESTING adds host-test hooks; never for the device.)
+ * (-DRC2FX_JACKERR_TESTING enables host test hooks; never use on device.)
  */
 #define _GNU_SOURCE
 #include "rc2fx_jackerr.h"
@@ -61,9 +53,8 @@ EXPORT uint64_t rc2fx_jackerr_test_fault_calls(void) { return atomic_load(&fault
 EXPORT uint64_t rc2fx_jackerr_test_fault_published(void) { return atomic_load(&fault_published); }
 #endif
 
-/* Optional kernel flight-recorder trigger, reached only AFTER the fault
- * record is published. Normally a no-op; unlike callback uprobes this cannot
- * perturb the audio work that caused the first fault. Keep its ELF symbol. */
+/* No-op uprobe target for the kernel flight recorder, called after the fault
+ * record is published so it does not perturb the audio callback. Keep exported. */
 EXPORT __attribute__((noinline)) void rc2fx_jackerr_fault(uint64_t kind, const char *client, uint64_t mono_ns) {
 #ifdef RC2FX_JACKERR_TESTING
     uint64_t count = atomic_load(&ring_header->claimed);
@@ -118,9 +109,8 @@ static void record(enum kind kind, int64_t value1, int64_t value2, const char *s
     if (!now_ns(&t)) flags |= CLOCK_FAILED;
     uint64_t index = atomic_fetch_add_explicit(&ring_header->claimed, 1, memory_order_relaxed);
     struct rc2fx_jackerr_slot *slot = &ring_slots[index % SLOTS];
-    /* Take the slot only from an older, published (even) generation. Odd:
-     * another writer is (or stalled) inside it. >= ours: a later lap already
-     * published there. Either way this record is dropped, not waited for. */
+    /* Claim only an older published (even) slot; odd means a writer is active
+     * or stalled, >= ours means a newer lap won. Drop instead of waiting. */
     uint64_t current = atomic_load_explicit(&slot->seq, memory_order_acquire);
     for (;;) {
         if ((current & 1) || current >= 2 * index + 2) {

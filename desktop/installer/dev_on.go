@@ -4,16 +4,12 @@ package installer
 
 import "os"
 
-// devRepository, in development builds only (`-tags rc2fxdev`):
-// RC2FX_DEV_MIXER_REPOSITORY=FOLDER reads mixer releases from a
-// local folder laid out as published (`FOLDER/metadata/` holds the role
-// files, `FOLDER/mixer-vVERSION/` the targets). It is for testing an app and
-// mixer built with a throwaway trust root; anything signed for the official
-// root verifies the same as it would from GitHub.
+// devRepository reads RC2FX_DEV_MIXER_REPOSITORY in rc2fxdev builds to point
+// at a local TUF layout (FOLDER/metadata/ and FOLDER/mixer-vVERSION/) for
+// testing with a throwaway trust root.
 func devRepository() (string, bool) {
 	return os.LookupEnv("RC2FX_DEV_MIXER_REPOSITORY")
 }
 
-// fixDebugAllowed: development builds (`-tags rc2fxdev`) let a storage fix
-// request ask for the script's debug log on the mixer (Request.FixDebug).
+// Allow Request.FixDebug in rc2fxdev builds.
 const fixDebugAllowed = true

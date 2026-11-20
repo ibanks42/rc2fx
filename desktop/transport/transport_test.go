@@ -107,7 +107,6 @@ func TestASettingsSaveRoundTripsTheCompleteUpdate(t *testing.T) {
 	if err := decode(body, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	// Equal updates encode alike.
 	again, err := marshal(decoded)
 	if err != nil {
 		t.Fatal(err)
@@ -161,8 +160,8 @@ func TestDroppingOwnerStopsWorkerWithoutDrainingCommands(t *testing.T) {
 }
 
 func TestUpdateChunksAreStandardBase64(t *testing.T) {
-	// The mixer reads padded standard base64: "Zg==" would catch a switch
-	// to the unpadded variant, "//4A" one to the URL alphabet.
+	// The mixer expects padded standard base64 ("Zg==" checks padding,
+	// "//4A" checks standard vs URL-safe alphabet).
 	for _, c := range []struct {
 		in   []byte
 		want string
@@ -180,8 +179,6 @@ func TestUpdateChunksAreStandardBase64(t *testing.T) {
 		t.Fatalf("a chunk takes %d bytes", len(chunk))
 	}
 }
-
-// The tests below cover the JSON helpers on json.RawMessage.
 
 func TestStringsAreWrittenAsSerdeWritesThem(t *testing.T) {
 	if got := string(jsonString("\"\\\b\f\n\r\t\x01\x7f é")); got != "\"\\\"\\\\\\b\\f\\n\\r\\t\\u0001\x7f é\"" {

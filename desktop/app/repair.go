@@ -1,14 +1,8 @@
 package app
 
-// Repair mixer, for a mixer a flash left unable to keep
-// its setup, or to start. The user holds the power button for 15 seconds so
-// the bootloader shows the mixer's storage over USB; the administrator
-// helper then checks it and restores damaged files (the installer's
-// repair).
-//
-// The page is a guided task (guided.go); its state and words are in
-// installflow/repair.go. Reached from the first screen while the mixer is in
-// storage mode, on systems that can repair it (installer.RepairSupported).
+// Guided repair flow for mixers in USB storage mode (holding power for 15s),
+// inspecting and restoring files damaged by a firmware update via the admin
+// helper. State and copy live in installflow/repair.go.
 
 import (
 	"fmt"
@@ -23,7 +17,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
-// openRepair opens the installer straight on the repair page.
 func (a *App) openRepair(cx *gk.Cx) {
 	a.openTask(cx, taskInstall)
 	if i := a.installer; i != nil {
@@ -32,8 +25,8 @@ func (a *App) openRepair(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// pollRepair looks for the mixer's storage while waiting, and starts the
-// check once it is there and access is granted. Returns whether to redraw.
+// pollRepair watches for the mixer's recovery disk and kicks off inspection
+// once it appears and privileges are granted. Reports whether to redraw.
 func (a *App) pollRepair() bool {
 	i := a.installer
 	if i == nil || i.repair == nil || i.fixture {
@@ -43,7 +36,7 @@ func (a *App) pollRepair() bool {
 	if !r.DueToLook(time.Now()) {
 		return false
 	}
-	// Sysfs, IOKit or SetupAPI: readable without administrator access.
+	// Readable via sysfs/IOKit/SetupAPI without admin privileges.
 	disk, err := platform.RecoveryDiskOf(platform.Host())
 	if err != nil {
 		disk = nil
@@ -58,7 +51,6 @@ func (a *App) pollRepair() bool {
 	return changed
 }
 
-// repairOutcome is a finished repair request.
 func repairOutcome(i *Installer, request installer.Request, reply installer.Reply, err error) {
 	if i.repair == nil {
 		return
@@ -72,7 +64,6 @@ func (a *App) startRepair(cx *gk.Cx) {
 	if i == nil || i.repair == nil {
 		return
 	}
-	// What the user saw and approved; the helper checks each again.
 	request, ok := i.repair.StartRepair()
 	if !ok {
 		return
@@ -91,7 +82,6 @@ func (a *App) repairAgain(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// repairTask is Repair mixer in the guided-task layout (mock-up E1–E3).
 func (a *App) repairTask(i *Installer) guidedTask {
 	r := i.repair
 	t := guidedTask{
@@ -128,8 +118,8 @@ func (a *App) repairTask(i *Installer) guidedTask {
 		}
 		t.body = body
 		t.secondary = []gk.ButtonEl{stop("Stop")}
-		// Where access is missing the button asks for it; the check then
-		// starts on the next look. Otherwise it starts by itself.
+		// If privileges are still needed, clicking prompts for them and the next
+		// poll starts the check automatically.
 		label := "Check"
 		if needAccess {
 			label = "Check…"
@@ -232,8 +222,6 @@ func (a *App) repairTask(i *Installer) guidedTask {
 	return t
 }
 
-// storageModePanels is how to enter storage mode and how to leave it, side
-// by side, so nobody is stuck in it.
 func storageModePanels() gk.DivEl {
 	return gk.HFlex(s.WFull, s.ItemsStretch).Gap(px(14)).
 		Child(taskPanel().Style(s.Flex1, s.MinW0).
@@ -251,8 +239,6 @@ func storageModePanels() gk.DivEl {
 				"The mixer starts normally.")))
 }
 
-// leaveStorageMode is the last step: the mixer doesn't start while USB 1
-// holds it in storage mode.
 func leaveStorageMode() gk.DivEl {
 	return taskPanel().Child(numbered(
 		"Unplug USB 1 from this computer and plug it back in.",

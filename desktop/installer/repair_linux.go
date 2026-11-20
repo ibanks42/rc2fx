@@ -2,24 +2,15 @@
 
 package installer
 
-// Repairing a mixer from a computer, for when it can't repair itself.
+// Host-side eMMC repair for mixers booted into bootloader USB mass-storage mode
+// (holding power ~15 s at boot exposes eMMC via `ums mmc 0`, Amlogic 1b8e:fada).
 //
-// Holding a RØDECaster's power button for about 15 seconds at power-on makes
-// its bootloader show the whole eMMC to the computer as a USB disk (`ums mmc
-// 0`, Amlogic's gadget `1b8e:fada`). Four partitions are on it: two ext4
-// system roots (RØDE's updater alternates between them), the FAT settings
-// partition and the FAT data partition.
-//
-// A flash once left one of RØDE's start-up scripts zero-filled on the new
-// root: the right size, none of the contents. That script mounts the
-// settings partition, so the mixer lost its setup at every start. The repair
-// compares each root's files with the list the installer put in the image
-// (image_check.go), or with the image saved on this computer when it is the
-// one that was flashed, and replaces a damaged file's contents with a
-// byte-identical copy: from the other root, or from that image. It only ever
-// rewrites a regular file in place with the same number of bytes, and all
-// ext4 work is libext2fs's (package ext2fs). Before writing, it copies the
-// settings partition to this computer.
+// The eMMC has four partitions: two alternating ext4 root slots, a FAT settings
+// partition, and a FAT data partition. If a flash leaves a file zero-filled or
+// corrupted on a root slot, repair compares files against the image's manifest
+// (or the locally cached archive if it matches), backs up the settings partition,
+// and overwrites damaged regular files in place with identical-length copies from
+// the other slot or the cached archive via libext2fs.
 
 import (
 	"bytes"
@@ -37,8 +28,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
-// RepairSupported: this system can check and repair a mixer in storage
-// mode. The app offers Repair mixer only where it is.
+// RepairSupported controls whether the UI exposes host-side eMMC repair.
 const RepairSupported = true
 
 const repairSector = disk.SectorSize
@@ -47,17 +37,12 @@ var mixerHostnames = [2]string{"rodecaster-pro-ii", "rodecaster-pro-ii-mini"}
 
 const sumsMember = "opt/rc2fx/SHA256SUMS"
 
-// maxRepairFile is the largest file read whole; RØDE's largest is its mixer
-// executable.
 const maxRepairFile = 256 << 20
 
-// repairPart is one primary partition, in bytes.
 type repairPart struct {
 	start, len uint64
 }
 
-// partitions is the four primary partitions of an MBR, delegating to
-// rodecaster/fix.ParseMBR so both repair and storage-fix share one MBR parser.
 func partitions(sector0 *[512]byte, diskLen uint64) ([4]repairPart, error) {
 	var parts [4]repairPart
 	parsed, err := fix.ParseMBR(sector0[:], diskLen/repairSector)
@@ -73,9 +58,6 @@ func partitions(sector0 *[512]byte, diskLen uint64) ([4]repairPart, error) {
 	return parts, nil
 }
 
-// diskLayout is RØDE's layout on this disk: four partitions, ext4 roots in
-// the first two with a RØDECaster's hostname, and whether the settings
-// partition's FAT boot sector looks sound.
 type diskLayout struct {
 	device     string
 	parts      [4]repairPart
@@ -130,8 +112,6 @@ func layoutOf(device string, diskLen uint64) (*diskLayout, error) {
 	return &diskLayout{device: device, parts: parts, hostname: hostname, settingsOK: settingsOK}, nil
 }
 
-// readRootFile is a regular file's entry and contents; a nil entry when it
-// doesn't exist, and no contents when it isn't regular or is too large.
 func readRootFile(fs *ext2fs.Filesystem, path string) (*ext2fs.Entry, []byte, error) {
 	entry, err := fs.Lookup(path)
 	if err != nil {
@@ -154,8 +134,6 @@ func ext2(err error) error {
 	return errorf("libext2fs: %v", err)
 }
 
-// strLines splits at \n, with a \r just before a \n going with it, and no
-// empty last line for a final \n.
 func strLines(text string) []string {
 	parts := strings.Split(text, "\n")
 	last := len(parts) - 1
@@ -177,11 +155,9 @@ func isHex(s string) bool {
 	return true
 }
 
-// parseManifest reads `sha256  path` lines, as image_check.go writes them,
-// as (sha, path) pairs. ok is false when the list is damaged: a non-empty
-// line is not one of those (zero-filled, cut short) or there are none. A
-// damaged list is not used at all, since the files it lost would otherwise
-// look intact.
+// parseManifest parses "sha256  path" lines from the image manifest. Returns
+// ok=false if empty or any line is malformed/zeroed, so a truncated manifest
+// won't silently hide missing entries.
 func parseManifest(text string) ([][2]string, bool) {
 	var out [][2]string
 	for _, l := range strLines(text) {
@@ -197,12 +173,8 @@ func parseManifest(text string) ([][2]string, bool) {
 	return out, len(out) > 0
 }
 
-// savedImage is the firmware image saved on this computer: its RC2FX
-// checksums, to tell whether it is what a root was flashed with, and its
-// file list.
 type savedImage struct {
-	path string
-	// sums is nil when the image has none.
+	path     string
 	sums     []byte
 	manifest [][2]string
 }
@@ -236,7 +208,6 @@ func readSavedImage(path string) (*savedImage, error) {
 	return saved, nil
 }
 
-// savedMembers is the members of the saved image named in wanted.
 func savedMembers(path string, wanted map[string]bool) (map[string][]byte, error) {
 	found := map[string][]byte{}
 	if len(wanted) == 0 {
@@ -259,26 +230,22 @@ func savedMembers(path string, wanted map[string]bool) (map[string][]byte, error
 	return found, nil
 }
 
-// repairFix is a damaged file and the identical bytes that restore it.
 type repairFix struct {
 	path string
 	want string
 	data []byte
 }
 
-// suspect is a file whose contents differ: path, expected hash, size.
 type suspect struct {
 	path string
 	want string
 	size uint64
 }
 
-// manifestOf is where a root's expected hashes come from. damaged is
-// non-nil, and says what was done instead, when the root's own file list is
-// there but damaged. saved is called only when the saved image is needed.
+// manifestOf resolves a root's expected file hashes from its own manifest or,
+// failing that, from a matching local archive. damaged is non-nil when the
+// root's manifest exists but is unreadable.
 func manifestOf(fs *ext2fs.Filesystem, saved func() *savedImage) (reference string, manifest [][2]string, damaged *string, err error) {
-	// The image's own list, or the saved image when it is the one this root
-	// was flashed with.
 	list, data, err := readRootFile(fs, manifestMember)
 	if err != nil {
 		return "", nil, nil, err
@@ -292,8 +259,7 @@ func manifestOf(fs *ext2fs.Filesystem, saved func() *savedImage) (reference stri
 	if err != nil {
 		return "", nil, nil, err
 	}
-	// An empty or unparsable list that is there is damaged; one that isn't
-	// there is an image from before the list existed.
+	// Present but empty/corrupt means damaged; absent means an older image.
 	why := func(text string) *string {
 		if list == nil {
 			return nil
@@ -311,10 +277,8 @@ func manifestOf(fs *ext2fs.Filesystem, saved func() *savedImage) (reference stri
 	return "nothing: no file list for this system", nil, nil, nil
 }
 
-// repairSources is, for files whose contents don't match, the identical
-// bytes that restore each, or why there are none. Sources are the other
-// root's copy, then the saved image; a copy counts only if its SHA-256 is
-// the expected one and its size is the damaged file's.
+// repairSources locates verified, same-size replacement bytes for suspects
+// from the other root slot first, then the local archive.
 func repairSources(other *ext2fs.Filesystem, saved *savedImage, unclean bool, suspects []suspect) ([]repairFix, []DamagedFile, error) {
 	found := map[string][]byte{}
 	missing := map[string]bool{}
@@ -367,8 +331,6 @@ func repairSources(other *ext2fs.Filesystem, saved *savedImage, unclean bool, su
 	return fixes, damaged, nil
 }
 
-// compare is one root's manifest compared with its files: the missing or
-// irregular ones, and the ones whose contents differ.
 func (e *Engine) compare(fs *ext2fs.Filesystem, index int, manifest [][2]string) ([]DamagedFile, []suspect, error) {
 	detail := fmt.Sprintf("Checking system partition %d", index)
 	var broken []DamagedFile
@@ -400,7 +362,6 @@ func (e *Engine) compare(fs *ext2fs.Filesystem, index int, manifest [][2]string)
 	return broken, suspects, nil
 }
 
-// savedImage is the saved image, read only when a root needs it.
 func (e *Engine) savedImage() *savedImage {
 	archive := filepath.Join(e.Work, "archive.tar.gz")
 	if !exists(archive) {
@@ -414,7 +375,6 @@ func (e *Engine) savedImage() *savedImage {
 	return saved
 }
 
-// openOther is the other root, or nil when it doesn't open.
 func openOther(device string, start uint64) *ext2fs.Filesystem {
 	fs, err := ext2fs.Open(device, start, false)
 	if err != nil {
@@ -423,7 +383,6 @@ func openOther(device string, start uint64) *ext2fs.Filesystem {
 	return fs
 }
 
-// repairInspect looks the mixer's storage over. Reads only.
 func (e *Engine) repairInspect() (*RepairFindings, error) {
 	device, err := platform.RecoveryDeviceOf(e.Platform)
 	if err != nil {
@@ -490,10 +449,9 @@ type repairPlan struct {
 	fixes []repairFix
 }
 
-// repair backs up the settings partition, then restores the files the user
-// approved from a check. Nothing from the app is trusted: the layout, each
-// file's expected hash, its damage and its source are all checked again
-// here, for those files only, and nothing else is written.
+// repair re-verifies layout, expected hashes, and replacement sources for the
+// requested targets, backs up the settings partition, and restores only those
+// files in place.
 func (e *Engine) repair(targets []RepairTarget) (*RepairResult, error) {
 	device, err := platform.RecoveryDeviceOf(e.Platform)
 	if err != nil {
@@ -546,8 +504,6 @@ func (e *Engine) repair(targets []RepairTarget) (*RepairResult, error) {
 	return result, nil
 }
 
-// planRoot checks the files asked for on one root again and finds their
-// sources, recording what is refused or already intact.
 func (e *Engine) planRoot(layout *diskLayout, index int, wanted []string, saved **savedImage, result *RepairResult, notRepaired func(string, string)) ([]repairFix, error) {
 	fs, err := ext2fs.Open(layout.device, layout.parts[index].start, false)
 	if err != nil {
@@ -608,7 +564,7 @@ func (e *Engine) planRoot(layout *diskLayout, index int, wanted []string, saved 
 	return fixes, nil
 }
 
-// writeRoot restores one root's files, then reads each back from the disk.
+// writeRoot overwrites damaged files in place and reads each back to verify.
 func (e *Engine) writeRoot(layout *diskLayout, plan repairPlan, result *RepairResult, notRepaired func(string, string)) error {
 	start := layout.parts[plan.index].start
 	e.step("repair-write", fmt.Sprintf("Restoring files on system partition %d", plan.index+1))
@@ -657,10 +613,8 @@ func (e *Engine) writeRoot(layout *diskLayout, plan repairPlan, result *RepairRe
 	return nil
 }
 
-// backupSettings is a copy of the settings partition (the mixer's setup,
-// shows, Wi-Fi and CallMe pairing, serial) in the work folder: private to
-// the user who started the installer, even when the helper writes it as
-// root.
+// backupSettings copies the FAT settings partition into work/repair, owned by
+// the invoking desktop user even when run via the root helper.
 func (e *Engine) backupSettings(layout *diskLayout) (string, error) {
 	part := layout.parts[2]
 	dir := filepath.Join(e.Work, "repair")

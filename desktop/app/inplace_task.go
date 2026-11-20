@@ -11,13 +11,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// ---- Update in place (C1–C4) ------------------------------------------------------
-
-// The in-place update's steps.
 var inPlaceStages = [3]string{"Before you start", "Update RC2FX", "Check and finish"}
 
-// inPlaceStep is the step an in-place update is at, and whether it failed
-// there.
 func inPlaceStep(p installflow.InPlace) (at int, failed bool) {
 	switch p.Kind {
 	case installflow.InPlacePreparing, installflow.InPlaceReady, installflow.InPlaceUploading:
@@ -35,9 +30,7 @@ func inPlaceStep(p installflow.InPlace) (at int, failed bool) {
 	return 0, false
 }
 
-// inPlaceTask is an RC2FX update the mixer installs itself, without a
-// flash: only what the in-place machinery reports (installflow.InPlace and
-// the mixer's record of how it ended).
+// inPlaceTask builds the guided task UI for an on-mixer RC2FX update (no flash).
 func (a *App) inPlaceTask(i *Installer) guidedTask {
 	m := i.model
 	var offer *installer.MixerOffer
@@ -69,7 +62,6 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	if failed && p.Kind == installflow.InPlaceDone {
 		t.count = "Step 3 of 3"
 	}
-	// closeAs leaves the update, keeping the overview for a finished one.
 	closeAs := func(id gk.ID, label string, primary, overview bool) gk.ButtonEl {
 		return taskButton(id, label, primary).Disabled(i.busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
@@ -198,8 +190,6 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	return t
 }
 
-// inPlaceSeen is what the app sees after an in-place update ended: whether
-// RC2FX answers, and the version it reports.
 func inPlaceSeen(m *installflow.Model, answering bool) gk.DivEl {
 	seen := taskPanel().Child(eyebrow("What the app sees now"))
 	switch {
@@ -211,8 +201,6 @@ func inPlaceSeen(m *installflow.Model, answering bool) gk.DivEl {
 	return seen.Child(seenRow(Warn, "RC2FX isn’t answering yet. The mixer may still be restarting it.", true))
 }
 
-// afterInPlace is whether the mixer may be unplugged after an in-place
-// update ended: only once RC2FX answers again.
 func afterInPlace(answering bool) installflow.Unplug {
 	if answering {
 		return installflow.Unplug{Kind: installflow.UnplugYes}

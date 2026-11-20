@@ -1,51 +1,51 @@
 # rc2fx-gui: screen conversion module
 
 `librc2fx_gui.so` is an `LD_AUDIT` module for RØDE's screen program,
-`rc_gui_juce` 1.7.7 on the RØDECaster Pro II (SHA-256 `aa92a92d…`). Other
-binaries run unmodified.
+`rc_gui_juce` 1.7.7 on the RØDECaster Pro II (SHA-256 `aa92a92d…`). All other
+binaries run untouched.
 
-The GUI draws upright, but the panel is mounted sideways, so each frame is
-rotated before display. Stock firmware has the GE2D converter rotate the full
-frame every time, and the memory traffic disturbs the audio. This module
-converts only the regions that changed, in up to three jobs per frame, and
-rotates large redraws on the CPU instead. The size threshold is fixed; there
-is no runtime setting for it. It patches no instructions and draws nothing
-itself.
+The GUI renders upright, but the physical display panel is mounted sideways, so
+every frame has to be rotated before it hits the screen. Stock firmware asks
+the GE2D hardware converter to rotate the entire frame every time, and that
+memory traffic can disturb audio. This module converts only the regions that
+actually changed (up to three jobs per frame) and handles large redraws on the
+CPU instead. The size threshold is fixed with no runtime toggle. The module
+doesn't patch any instructions or draw anything itself.
 
 ## Building
 
-The module is C and is built outside Cargo. `./xtask mixer-build` compiles
-`gui_pacing.c` with zig for the mixer, with no feature flags.
+This is a standalone C module built outside Cargo. `./xtask mixer-build`
+compiles `gui_pacing.c` for the mixer using zig, with no feature flags.
 
-`gui_pacing.c` includes `gui_partial.c` (the conversion) and `rotate/` (CPU
-rotation). The header comment of each file lists the pinned call sites and
-what the module does at each one.
+`gui_pacing.c` includes `gui_partial.c` (partial-region conversion) and
+`rotate/` (CPU rotation). The header comment in each file documents its pinned
+call sites and what the module does at each one.
 
 ## Startup
 
-The installer adds a shim at `/usr/sbin/rc_gui_juce`. RØDE's display loop
-starts `rc_gui_juce` by name with `/usr/sbin` first on `PATH`, so the shim
-runs `rc2fx.sh gui-launch`. That script always starts the stock GUI, and adds
-this module only when all of these checks pass:
+The installer places a shim at `/usr/sbin/rc_gui_juce`. Because RØDE's display
+loop launches `rc_gui_juce` by name with `/usr/sbin` first on `PATH`, the shim
+hands off to `rc2fx.sh gui-launch`. That script always runs the stock GUI, and
+only attaches `librc2fx_gui.so` when every one of these checks passes:
 
-- it is not a first boot or a production boot,
-- the module is not switched off,
-- the GUI binary is the qualified one,
+- it is neither a first boot nor a production boot,
+- the module isn't disabled by a switch,
+- the GUI binary matches the qualified hash,
 - the bundle's module matches its checksum,
-- the GUI is not crash-looping. Three GUI starts within 30 s switch to the
-  stock GUI until the next boot.
+- the GUI isn't crash-looping (three starts within 30 s fall back to the stock
+  GUI until the next reboot).
 
-Changes take effect from the boot after installing.
+Changes take effect on the boot after installing.
 
 | Switch | Effect |
 | --- | --- |
-| `/opt/rc2fx/data/gui-partial-disabled` | Stock GUI from the next GUI start (persistent) |
-| `/run/rc2fx-gui/off` | Stock GUI until the next boot |
-| `/run/rc2fx-gui/partial-off` | Full frames from the next conversion, in the running GUI |
+| `/opt/rc2fx/data/gui-partial-disabled` | Run stock GUI from the next GUI start (persistent) |
+| `/run/rc2fx-gui/off` | Run stock GUI until the next reboot |
+| `/run/rc2fx-gui/partial-off` | Convert full frames from the next conversion in the running GUI |
 
-`rc2fx.sh status` shows which switch applies. Release builds log to
-`/run/rc2fx-gui/pacing.log` sparingly: start, first pass, fallbacks, and one
-counters line per minute. Development builds log every frame.
+`rc2fx.sh status` reports which switch is active. Release builds write minimal
+logs to `/run/rc2fx-gui/pacing.log` (startup, first pass, fallbacks, and one
+counters summary per minute). Development builds log every frame.
 
 ## Tests
 
@@ -53,14 +53,15 @@ counters line per minute. Development builds log every frame.
 python3 mixer/gui/test_gui_pacing.py
 ```
 
-The script builds the module with `-DRC2FX_PACING_TEST`, which finds the call
-sites by symbol name instead of pinned address. It runs the module under
-`LD_AUDIT` against `gui_pacing_test.cpp`, a stand-in for the GUI's frame pump,
-and `fake_v4l2.c`, a stand-in GE2D device. It doesn't need a mixer, and it is
-part of `just test-mixer`.
+This builds the module with `-DRC2FX_PACING_TEST` so call sites are resolved by
+symbol name instead of pinned addresses, then runs it under `LD_AUDIT` against
+`gui_pacing_test.cpp` (a mock GUI frame pump) and `fake_v4l2.c` (a mock GE2D
+device). It runs locally with no mixer needed and is included in
+`just test-mixer`.
 
-`RC2FX_GUI_PACING=observe` counts and times frames and paints without
-converting anything; the mixer runs `partial-cw`. The test build also has
-host-only controls, such as a forced full-frame dose, that the mixer build
-does not contain. `partial_plan_test.c` drives `gui_partial.c` as the mixer
-builds it, without the LD_AUDIT harness.
+Setting `RC2FX_GUI_PACING=observe` counts and times frames and paints without
+performing conversions; on the mixer it runs in `partial-cw` mode. The test
+build also exposes host-only controls (such as a forced full-frame dose) that
+aren't compiled into the mixer build. `partial_plan_test.c` exercises
+`gui_partial.c` directly as compiled for the mixer, without the `LD_AUDIT`
+harness.

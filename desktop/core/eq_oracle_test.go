@@ -2,9 +2,7 @@ package core
 
 import "math"
 
-// The per-point response oracle that ResponseCurve is checked against. The
-// app plots only ResponseCurve; these compute the same values one frequency
-// at a time, designing every band again for each point.
+// Per-point reference implementation used to verify ResponseCurve.
 
 func CheckedResponseDB(eq EQSettings, channel Channel, frequency float64, includeGains bool) (float64, error) {
 	if err := eq.Validate(eq.responseChannels()); err != nil {

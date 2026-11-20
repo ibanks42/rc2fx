@@ -7,12 +7,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 )
 
-// installerEngine is the installer without an embedded payload: it has no
-// mixer software until a signed release is selected.
+// Download-only installer engine used when no payload is embedded in the binary.
 func installerEngine(work string) *installer.Engine { return installer.DownloadOnly(work) }
 
-// startInstallerHelper is the privileged helper for the same payload as
-// installerEngine.
 func startInstallerHelper(work string) (*helper.Helper, error) {
 	return helper.StartDownloadOnly(work)
 }

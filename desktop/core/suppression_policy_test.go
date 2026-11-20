@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// Which targets may enable suppression, and the one-target limit across all
-// saved targets. crates/rc2fx-core/tests/suppression_policy.rs checks the
-// same policy in Rust.
+// Suppression eligibility and single-target budget tests (mirrors
+// crates/rc2fx-core/tests/suppression_policy.rs).
 
 func enabledTarget(id string, kind TargetKind, channels uint8) Target {
 	target := NewTarget(id, id, kind, channels)

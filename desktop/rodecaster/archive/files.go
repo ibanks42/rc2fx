@@ -1,8 +1,5 @@
 package archive
 
-// Private local files: hashing, temporary files, atomic writes and
-// regular-file opening.
-
 import (
 	"crypto/md5"
 	"crypto/rand"
@@ -17,13 +14,12 @@ import (
 	"path/filepath"
 )
 
-// Sum is the hex SHA-256 of data.
+// Sum returns the hex-encoded SHA-256 digest of data.
 func Sum(data []byte) string {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
 }
 
-// Algorithm is a file digest algorithm.
 type Algorithm int
 
 const (
@@ -31,7 +27,6 @@ const (
 	MD5
 )
 
-// Name is the algorithm's lowercase name.
 func (a Algorithm) Name() string {
 	if a == MD5 {
 		return "md5"
@@ -46,8 +41,8 @@ func (a Algorithm) hasher() hash.Hash {
 	return sha256.New()
 }
 
-// HashReader hashes a reader, reporting the bytes read so far after each
-// block to progress.
+// HashReader hashes reader and invokes progress with the cumulative byte count
+// after each chunk.
 func HashReader(reader io.Reader, a Algorithm, progress func(uint64)) (string, error) {
 	h := a.hasher()
 	buf := make([]byte, 1<<16)
@@ -69,7 +64,6 @@ func HashReader(reader io.Reader, a Algorithm, progress func(uint64)) (string, e
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// FileHash is the hex digest of a regular file.
 func FileHash(path string, a Algorithm) (string, error) {
 	file, err := OpenRegular(path)
 	if err != nil {
@@ -79,7 +73,7 @@ func FileHash(path string, a Algorithm) (string, error) {
 	return HashReader(file, a, func(uint64) {})
 }
 
-// Matches is nil when the file at path has digest want.
+// Matches verifies that the file at path has the expected hex digest.
 func Matches(path string, a Algorithm, want string) error {
 	got, err := FileHash(path, a)
 	if err != nil {
@@ -91,14 +85,13 @@ func Matches(path string, a Algorithm, want string) error {
 	return nil
 }
 
-// Temp is a uniquely named private file. Close it with Cleanup unless
-// Persist renamed it.
+// Temp wraps a uniquely named 0600 temp file. Call Cleanup to remove it unless
+// Persist or Keep took ownership.
 type Temp struct {
 	file *os.File
 	path string
 }
 
-// NewTemp creates a private file named prefix plus a random suffix in dir.
 func NewTemp(dir, prefix string) (*Temp, error) {
 	for range 64 {
 		nonce := make([]byte, 8)
@@ -123,7 +116,6 @@ func NewTemp(dir, prefix string) (*Temp, error) {
 	return nil, fmt.Errorf("could not create a temporary file in %s", dir)
 }
 
-// Path is the file's path, or "" once it was persisted or kept.
 func (t *Temp) Path() string { return t.path }
 
 func (t *Temp) Write(data []byte) (int, error) {
@@ -133,7 +125,7 @@ func (t *Temp) Write(data []byte) (int, error) {
 	return t.file.Write(data)
 }
 
-// Finish flushes data to disk and closes the handle, keeping the file.
+// Finish syncs and closes the file without deleting it.
 func (t *Temp) Finish() error {
 	if t.file == nil {
 		return nil
@@ -147,7 +139,7 @@ func (t *Temp) Finish() error {
 	return file.Close()
 }
 
-// Persist finishes, then renames over dest.
+// Persist syncs, closes, and atomically replaces dest with the temp file.
 func (t *Temp) Persist(dest string) error {
 	if err := t.Finish(); err != nil {
 		return err
@@ -159,10 +151,10 @@ func (t *Temp) Persist(dest string) error {
 	return nil
 }
 
-// Keep forgets the file without removing it.
+// Keep detaches the path so Cleanup will leave the file on disk.
 func (t *Temp) Keep() { t.path = "" }
 
-// Cleanup closes and removes the file unless it was persisted or kept.
+// Cleanup closes and removes the temp file unless it was persisted or kept.
 func (t *Temp) Cleanup() {
 	if t.file != nil {
 		t.file.Close()
@@ -174,7 +166,7 @@ func (t *Temp) Cleanup() {
 	}
 }
 
-// RegularOnly returns file if it is a regular file, and closes it if not.
+// RegularOnly verifies that file is a regular file, closing it on failure.
 func RegularOnly(file *os.File) (*os.File, error) {
 	info, err := file.Stat()
 	if err != nil {
@@ -188,9 +180,9 @@ func RegularOnly(file *os.File) (*os.File, error) {
 	return file, nil
 }
 
-// OpenRegular opens a regular file for reading. The cache folder is the
-// desktop user's, so the root helper must not be led elsewhere by a link
-// placed in it.
+// OpenRegular opens path for reading without following symlinks and ensures it
+// is a regular file. The cache directory belongs to the desktop user, so the
+// root helper must not follow symlinks planted there.
 func OpenRegular(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_RDONLY|NoFollow, 0)
 	if err != nil {
@@ -199,9 +191,8 @@ func OpenRegular(path string) (*os.File, error) {
 	return RegularOnly(file)
 }
 
-// OpenWorkFile is OpenRegular for a file in the cache folder, which must
-// also belong to the user who started a privileged helper. The drive's
-// files do not.
+// OpenWorkFile opens a regular cache file and checks that it belongs to the
+// user who invoked the privileged helper (unlike files on the USB drive).
 func OpenWorkFile(path string) (*os.File, error) {
 	file, err := OpenRegular(path)
 	if err != nil {
@@ -210,8 +201,7 @@ func OpenWorkFile(path string) (*os.File, error) {
 	return OwnedByInvoker(file)
 }
 
-// AtomicFile writes a whole file through a synced temporary and an atomic
-// rename.
+// AtomicFile writes data to path via a synced temp file and rename.
 func AtomicFile(path string, data []byte) error {
 	t, err := NewTemp(filepath.Dir(path), ".rc2fx-")
 	if err != nil {
@@ -224,9 +214,8 @@ func AtomicFile(path string, data []byte) error {
 	return t.Persist(path)
 }
 
-// Hashing is the SHA-256 and MD5 of the bytes that pass through a reader
-// or writer, so a digest describes what this process read or wrote, not
-// what a path holds afterwards.
+// Hashing tees reads or writes into both SHA-256 and MD5 so digests reflect the
+// exact bytes processed in flight instead of re-reading from disk later.
 type Hashing struct {
 	r   io.Reader
 	w   io.Writer
@@ -256,13 +245,13 @@ func (h *Hashing) Write(buf []byte) (int, error) {
 	return n, err
 }
 
-// Finish is the SHA-256 and MD5 of everything passed through.
+// Finish returns the hex-encoded SHA-256 and MD5 digests.
 func (h *Hashing) Finish() (string, string) {
 	return hex.EncodeToString(h.sha.Sum(nil)), hex.EncodeToString(h.md.Sum(nil))
 }
 
-// HashBoth is the SHA-256 and MD5 of a file in one read. progress gets
-// (read, total).
+// HashBoth computes SHA-256 and MD5 of path in a single pass, reporting
+// (read, total) to progress.
 func HashBoth(path string, progress func(uint64, uint64)) (string, string, error) {
 	file, err := OpenRegular(path)
 	if err != nil {
@@ -296,8 +285,8 @@ func HashBoth(path string, progress func(uint64, uint64)) (string, string, error
 	return hex.EncodeToString(sha.Sum(nil)), hex.EncodeToString(md.Sum(nil)), nil
 }
 
-// CopyWithProgress copies a file to a new destination and flushes it.
-// progress gets (written, total).
+// CopyWithProgress copies src to a new file at dst, syncs it, and reports
+// (written, total) to progress.
 func CopyWithProgress(src, dst string, progress func(uint64, uint64)) error {
 	input, err := OpenWorkFile(src)
 	if err != nil {

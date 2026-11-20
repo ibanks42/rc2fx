@@ -38,7 +38,7 @@ func TestTheWindowsAppMustCarryACommonControls6Manifest(t *testing.T) {
 	if err := checkWindowsManifest(exe); err == nil {
 		t.Fatal("a program without a manifest was accepted")
 	}
-	// Only package gk's embedded manifest counts: nothing puts one beside.
+	// Sidecar .manifest files don't count; it must be embedded in the binary.
 	write(exe+".manifest", manifest)
 	if err := checkWindowsManifest(exe); err == nil {
 		t.Fatal("a manifest beside the program was accepted")

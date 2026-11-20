@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host logic only; no device, firmware, GUI, audio, or controller is started.
+# Build and run the host-only unit tests (no device or runtime required).
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/rc2fx-device-ui-check.XXXXXX")

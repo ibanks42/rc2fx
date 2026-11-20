@@ -1,8 +1,5 @@
 package app
 
-// The window's drawing: the current page, the sidebar, the footer and the
-// notices.
-
 import (
 	"fmt"
 	"slices"
@@ -17,8 +14,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// channelNav is the channel list: processed channels first, each with its
-// live line and effects; then the rest by kind; and the filter at the foot.
 func (a *App) channelNav(cx *gk.Cx) gk.Element {
 	editing := a.nav.ChannelInFront()
 	sources := a.showSources()
@@ -31,7 +26,6 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 		return nil
 	}
 	list := gk.Div(s.Flex1, s.MinH0).Px(px(12)).Pt(px(6)).Pb(px(12)).ID("target-scroll").OverflowYScroll()
-	// Processed channels.
 	processed := a.processedIndexes()
 	count := len(processed)
 	list = list.Child(navHeading("Processing", &count))
@@ -45,8 +39,6 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 		}
 		list = list.Child(a.processedRow(index, selected, cx))
 	}
-	// The rest, by kind: show sources in the show's order, then the mixer's
-	// other paths.
 	groups := map[model.Group][]gk.Element{}
 	for _, source := range sources {
 		index := slices.IndexFunc(a.session.Draft, func(t core.Target) bool { return t.ID == source.TargetID })
@@ -124,10 +116,8 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 				})))
 }
 
-// footer is the window's foot: a problem worth reading (the connection or
-// its USB link, unsaved edits, an engine fault) or else how many channels
-// are processed. Routine progress messages aren't shown; ok false when
-// there's nothing.
+// footer renders the bottom status bar when there is an error/warning or at
+// least one processed channel; routine progress messages are omitted.
 func (a *App) footer() (gk.DivEl, bool) {
 	status, color := a.status()
 	var line string
@@ -163,8 +153,6 @@ func (a *App) footer() (gk.DivEl, bool) {
 		Child(txt(fmt.Sprintf("%d channel%s processed", processed, plural))), true
 }
 
-// processedRow is a processed channel: its name, its first effects (or what
-// is wrong), its live line, and a dot while it has edits not on the mixer.
 func (a *App) processedRow(index int, selected bool, cx *gk.Cx) gk.StatefulDivEl {
 	target := &a.session.Draft[index]
 	var on []string
@@ -245,8 +233,6 @@ func (a *App) engineErrorCard(cx *gk.Cx) (gk.DivEl, bool) {
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.requestDiagnostics(cx) }))), true
 }
 
-// conflictCard shows only when local edits can't be placed on the mixer's
-// settings.
 func (a *App) conflictCard(cx *gk.Cx) gk.DivEl {
 	return card().BorderColor(rgb(Warn)).
 		Child(gk.Div(s.FontSemibold).TextColor(rgb(Warn)).Child(txt("Your edits don't fit the mixer's settings"))).
@@ -261,7 +247,6 @@ func (a *App) conflictCard(cx *gk.Cx) gk.DivEl {
 			})))
 }
 
-// navHeading is a sidebar heading, with a count when given.
 func navHeading(label string, count *int) gk.DivEl {
 	d := gk.HFlex(s.ItemsCenter, s.FontSemibold).Px(px(12)).Pt(px(18)).Pb(px(8)).TextSize(px(11)).
 		TextColor(rgb(Faint)).Child(txt(strings.ToUpper(label))).Child(gk.Div(s.Flex1))
@@ -271,8 +256,6 @@ func navHeading(label string, count *int) gk.DivEl {
 	return d
 }
 
-// pageRow is a page in the sidebar (Overview, Settings): an icon and its
-// name.
 func pageRow(id string, icon gk.IconName, label string, selected bool) gk.StatefulDivEl {
 	iconColor := Muted
 	if selected {
@@ -288,8 +271,6 @@ func pageRow(id string, icon gk.IconName, label string, selected bool) gk.Statef
 	return r.Child(gk.Icon(icon).Size(px(16)).TextColor(rgb(iconColor))).Child(txt(label)).ID(id)
 }
 
-// quietRow is an unprocessed channel in the sidebar: a hollow dot, its name
-// and where it sits (its fader).
 func quietRow(id gk.ID, name, meta string, selected bool) gk.StatefulDivEl {
 	color := Muted
 	if selected {
@@ -308,14 +289,12 @@ func quietRow(id gk.ID, name, meta string, selected bool) gk.StatefulDivEl {
 		ID(id)
 }
 
-// view is the root view's function.
 func (a *App) view(cx *gk.Cx) gk.Element { return a.renderPage(cx) }
 
 func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	a.renderGeneration++
-	// A guided task stays in front, connected or not, until it is
-	// dismissed: the window never jumps away from it as the mixer
-	// restarts.
+	// Keep an active guided task in front regardless of connection state so
+	// mixer restarts don't pull the user away from it.
 	if a.installer != nil {
 		return a.taskScreen(cx)
 	}
@@ -323,8 +302,6 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 		return a.connectionScreen(cx)
 	}
 	target := a.target().Clone()
-	// A channel's editor fills the window to its foot; the other pages keep
-	// some room below their last section.
 	editorPage := a.nav.ChannelInFront() && a.unprocessedSource() == nil
 	bottom := PageBottom
 	if editorPage {
@@ -332,7 +309,6 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	}
 	content := gk.VFlex(s.Gap4, s.Flex1, s.MinW0, s.HFull).Px(px(PageX)).Pt(px(PageTop)).Pb(px(bottom)).
 		ID("content-scroll").TrackScroll(a.contentScroll).OverflowYScroll()
-	// Anything that needs a decision comes before editing.
 	if c, ok := a.engineErrorCard(cx); ok {
 		content = content.Child(c)
 	}
@@ -356,17 +332,12 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 		if source := a.unprocessedSource(); source != nil {
 			content = content.Child(a.unprocessedPanel(source))
 		} else {
-			// Every channel shows its whole editor; the header's Processing
-			// switch is what turns it on.
-			// The rail is beside the page (below); the editor fills what is
-			// left of the window, down to a height it still fits in.
 			rail = a.chainRail(&target, cx)
 			content = content.Child(gk.VFlex(s.Flex1, s.MinW0).MinH(px(EditorMinHeight)).Child(a.renderEditor(cx)))
 		}
 	}
 	page := gk.Div(s.Relative, s.Flex1, s.MinW0, s.HFull).Child(content).
-		// The page's width at the last prepaint, for the editor's narrow
-		// layout (one frame late after a resize, as the graph is).
+		// Track content width for the narrow editor layout (updates one frame after resize).
 		OnChildrenPrepainted(func(cx *gk.Cx, children []gk.Bounds) {
 			if len(children) == 0 || children[0].Size.Width-2*PageX == a.pageWidth {
 				gk.Quiet(cx)
@@ -383,8 +354,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 		TrackFocus(a.focus).
 		OnKeyDown(func(cx *gk.Cx, e gk.KeyEvent) {
 			away := !a.nav.HomeInFront()
-			// Ctrl+Z / Ctrl+Shift+Z (Cmd on macOS) undo and redo edits,
-			// except while a text field has the keys.
+			// Undo/redo when no numeric text field is focused.
 			if e.Key == "z" && e.Modifiers&(gk.ModControl|gk.ModPlatform) != 0 && a.editingValue == nil {
 				if e.Modifiers&gk.ModShift != 0 {
 					a.redo(cx)
@@ -394,7 +364,6 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 				return
 			}
 			if e.Key == "escape" && a.bandPopover != nil {
-				// Esc closes the band's popover first.
 				a.bandPopover = nil
 				a.notify(cx)
 				return

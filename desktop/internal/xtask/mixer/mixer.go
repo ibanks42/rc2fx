@@ -1,8 +1,7 @@
-// Package mixer puts the mixer build on a RODECaster Pro II over SSH, or
-// takes it off again; it also runs the JACK recorder (`mixer xruns`), the
-// suppression benchmark (`bench`) and controller API requests over USB 1.
-// It uses the system `ssh` (bundled with Windows 10+, macOS and Linux).
-// Remote scripts go over stdin, so no quoting differs between host shells.
+// Package mixer deploys or removes the mixer build on a RODECaster Pro II over
+// SSH, runs the JACK recorder (`mixer xruns`) and suppression benchmark (`bench`),
+// and sends controller API requests over USB 1. It uses the system `ssh` binary
+// and passes remote scripts over stdin to avoid host shell quoting differences.
 package mixer
 
 import (
@@ -304,11 +303,11 @@ func (m *Mixer) command(remote string) *exec.Cmd {
 	return exec.Command(m.program, args...)
 }
 
-// ArmPowerRecovery arms, checks, then lets the caller run: a mixer that
-// hangs is reset by cutting its power, and then stays off unless the
-// bootloader's one-shot flag is set. This runs the checkout's `rc2fx.sh
-// arm-power-recovery` on the mixer, reads the flag back and requires `1`.
-// On any failure action must not run. Nothing skips this.
+// ArmPowerRecovery sets and verifies the bootloader's one-shot power-recovery
+// flag before running any mutating action. A hung mixer must be reset by
+// cutting outlet power and would otherwise stay off until its power button is
+// pressed. This runs `rc2fx.sh arm-power-recovery` and checks that
+// reboot_pwr_button_bypass reads back as `1`.
 func (m *Mixer) ArmPowerRecovery(action string) (*Armed, error) {
 	if err := m.arm(); err != nil {
 		return nil, task.Errorf("`%s` was not started: power recovery could not be armed (%s).\n"+

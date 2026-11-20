@@ -125,7 +125,7 @@ func TestSharedFixtures(t *testing.T) {
 			if err != nil || !bytes.Equal(got, want) {
 				t.Errorf("message %s: %v", c.Name, err)
 			}
-			// What Go packs today must unpack the same way.
+			// Verify Go's Pack output also round-trips cleanly.
 			repacked, perr := Pack(want, c.Limit)
 			if perr != nil {
 				t.Errorf("message %s: pack: %v", c.Name, perr)

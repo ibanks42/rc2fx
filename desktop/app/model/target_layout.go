@@ -8,7 +8,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// Group is a section of the mixer's channels.
+// Group categorizes mixer channels in the sidebar.
 type Group int
 
 const (
@@ -18,7 +18,7 @@ const (
 	GroupOutputs
 )
 
-// GroupAll is every group in display order.
+// GroupAll lists channel groups in display order.
 var GroupAll = [4]Group{
 	GroupMicrophones,
 	GroupSources,
@@ -26,10 +26,9 @@ var GroupAll = [4]Group{
 	GroupOutputs,
 }
 
-// OutputLabel is what the app calls the mixer's other outputs, the same on a
-// Pro II and a Duo. Configs saved before these names carry older ones.
+// OutputLabel maps output target IDs (on both Pro II and Duo) to current display
+// labels, overriding older names persisted in saved configs.
 func OutputLabel(id string) (string, bool) {
-	// Every leading "duo-" goes, not just the first.
 	for strings.HasPrefix(id, "duo-") {
 		id = id[len("duo-"):]
 	}
@@ -46,10 +45,9 @@ func OutputLabel(id string) (string, bool) {
 	return "", false
 }
 
-// DisplayName is a channel name as the app shows it: every word capitalized,
-// like "Main Mix Out", and USB in capitals ("USB a" becomes "USB A"). Words
-// already carrying capitals keep them ("CallMe", "RØDE"). Display only: saved
-// settings keep the mixer's own names.
+// DisplayName formats a channel name for display by capitalizing each word and
+// uppercasing "USB" while preserving internal capitals ("CallMe", "RØDE").
+// Saved configs retain the mixer's original names.
 func DisplayName(name string) string {
 	words := strings.Split(name, " ")
 	for i, word := range words {
@@ -61,8 +59,7 @@ func DisplayName(name string) string {
 		if size == 0 {
 			continue
 		}
-		// unicode.ToUpper maps one rune to one rune, so a letter whose
-		// capital is longer ("ß", "SS") stays as it is.
+		// Single-rune ToUpper intentionally leaves multi-rune expansions (like "ß" -> "SS") alone.
 		words[i] = string(unicode.ToUpper(first)) + word[size:]
 	}
 	return strings.Join(words, " ")
@@ -77,7 +74,7 @@ func isASCII(s string) bool {
 	return true
 }
 
-// GroupOf is the group a target is shown in.
+// GroupOf returns the sidebar group for target.
 func GroupOf(target *core.Target) Group {
 	switch target.Kind {
 	case core.TargetKindMic:
@@ -93,7 +90,7 @@ func GroupOf(target *core.Target) Group {
 	}
 }
 
-// Label is the group's heading.
+// Label returns the uppercase section heading for g.
 func (g Group) Label() string {
 	switch g {
 	case GroupMicrophones:

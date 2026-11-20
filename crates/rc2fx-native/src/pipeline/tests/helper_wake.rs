@@ -1,28 +1,22 @@
-//! The helper's own wake-up: the handshake between `Helper::queue` and
-//! `await_frame`, the forecast it sleeps on, and a real helper thread on a
-//! clock the tests own.
-//!
-//! Everything here is host-only: no mixer, no real device, no timing claims.
+//! Host-only tests for the helper wake-up handshake (`Helper::queue` /
+//! `await_frame`), wake forecasting, and real-thread race/shutdown behavior.
 use super::*;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
-// A model of the handshake: every interleaving of the atomic steps of
-// `Helper::queue` (and `Drop`) with those of `await_frame` and the frame.
+// State-space model of the `Helper::queue` / `await_frame` / `Drop` handshake.
 // ---------------------------------------------------------------------------
 
-/// Frames the modeled callback hands off.
 const MODEL_FRAMES: u8 = 3;
-/// When the modeled callbacks started, for `must_wake`.
 const MODEL_BEGUN: u64 = 1_000_000_000;
 
-/// What the modeled helper publishes in `wake_at`.
+/// Value published by the modeled helper in `wake_at`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Sleep {
     Awake,
-    /// A timer the callback may leave the helper to: at the latest self-start.
+    /// Timer at `LATEST_SELF_START_NS` (callback may skip unparking).
     Near,
-    /// A timer later than that.
+    /// Timer past `LATEST_SELF_START_NS` (callback must unpark).
     Far,
     Parked,
 }
@@ -38,32 +32,26 @@ impl Sleep {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Unpark {
-    /// `must_wake`, as `Helper::queue` calls it.
+    /// Matches `must_wake` as used in `Helper::queue`.
     AsWritten,
     Never,
-    /// Only a parked helper, whatever its timer.
+    /// Unpark only when `wake_at == PARKED`, ignoring far timers.
     OnlyParked,
 }
-/// The code the model runs. `SOUND` is the code as written; each test of a
-/// broken variant changes one field.
+/// Knobs for testing the real handshake (`SOUND`) and intentionally broken variants.
 #[derive(Clone, Copy, Debug)]
 struct Rules {
-    /// The helper reads `state` after publishing a timed sleep, and a park.
     look_before_sleep: bool,
     look_before_park: bool,
     unpark: Unpark,
-    /// The callback stores QUEUED before it reads `wake_at`.
+    /// Whether the callback stores `QUEUED` before reading `wake_at`.
     store_first: bool,
-    /// SeqCst on the callback's store of QUEUED, and on the helper's stores
-    /// of `wake_at`. Without it a store may still be in its thread's store
-    /// buffer, unseen by the other thread, when that thread's next load runs.
+    /// When false, model a relaxed store buffer where the other thread may not
+    /// see the store yet on its next load.
     callback_seqcst: bool,
     helper_seqcst: bool,
-    /// The pipeline may be dropped at any time between two callbacks, with a
-    /// frame still queued or in the helper's hands, and before all frames
-    /// were handed off. Otherwise only once the last frame is done.
+    /// Allow `Drop` between any two callbacks, even with a frame still in flight.
     stop_early: bool,
-    /// `Drop` unparks the helper after it stores the stop.
     stop_unparks: bool,
 }
 const SOUND: Rules = Rules {
@@ -78,7 +66,6 @@ const SOUND: Rules = Rules {
 };
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum HelperAt {
-    /// Frame done, IDLE stored: the forecast gives a timer or none.
     Plan,
     TimedStore,
     TimedLook,
@@ -93,35 +80,31 @@ enum HelperAt {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum CallbackAt {
-    /// `Pipeline::begin`: hands off only once the helper is idle.
     Begin,
     First,
     Second,
     Decide,
-    /// `Drop`.
     Stop,
     Done,
 }
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct World {
-    // Memory, as both threads see it.
+    // Shared memory visible to both threads.
     queued: bool,
     wake_at: Sleep,
     stop: bool,
-    /// The helper thread's unpark token.
     token: bool,
-    // Stores not yet visible to the other thread.
+    // Buffered stores not yet flushed to shared memory.
     callback_pending: bool,
     helper_pending: Option<Sleep>,
     helper: HelperAt,
     timer: Sleep,
     blocked: bool,
     callback: CallbackAt,
-    /// What the callback read from `wake_at`.
     read: Sleep,
     handed: u8,
     ran: u8,
-    /// Frames the callback left to the helper's own timer, and that ran.
+    /// Frames started by the helper's own timer without an unpark.
     left_alone: u8,
     fault: Option<&'static str>,
 }
@@ -362,8 +345,8 @@ impl World {
         }
         next
     }
-    /// A state nothing but luck gets out of: the callback has done all it
-    /// will do for the frame it handed off, and the helper sleeps on.
+    /// Returns a fault if the callback is done with its handoff and the helper
+    /// is stuck sleeping with no unpark token coming.
     fn stuck(&self) -> Option<&'static str> {
         let settled = !self.callback_pending
             && self.helper_pending.is_none()
@@ -420,15 +403,10 @@ fn explore(rules: &Rules) -> Explored {
     explored
 }
 
-/// In every interleaving of the handoff with the helper going to sleep on a
-/// timer or parking, each frame runs once and in order, none waits for a wake
-/// that does not come or for a timer set too late, and the stop is noticed.
 #[test]
 fn no_interleaving_of_the_handoff_and_the_helpers_sleep_loses_or_repeats_a_frame() {
     let explored = explore(&SOUND);
     assert!(explored.faults.is_empty(), "{:?}", explored.faults);
-    // Not vacuous: thousands of states, every run ends with the helper gone
-    // and all frames run, and some runs left every frame to the timer.
     assert!(explored.states > 1_000, "{}", explored.states);
     assert!(!explored.ends.is_empty());
     for end in &explored.ends {
@@ -441,8 +419,7 @@ fn no_interleaving_of_the_handoff_and_the_helpers_sleep_loses_or_repeats_a_frame
     assert_eq!(explored.left_alone, MODEL_FRAMES);
 }
 
-/// The model tells each broken handshake from the sound one, so it is the
-/// rules that keep the frames safe and not a model that sees nothing.
+/// Sanity-check the model by breaking each handshake invariant one at a time.
 #[test]
 fn the_model_finds_each_broken_handshake() {
     const LOST: &str = "lost wake: parked with a frame queued";
@@ -515,11 +492,8 @@ fn the_model_finds_each_broken_handshake() {
     }
 }
 
-/// The pipeline dropped at any moment between two callbacks: with a frame
-/// queued and left to the helper's timer, with one in the helper's hands, or
-/// before any. The helper always leaves, out of either sleep; every frame it
-/// started was a queued one, once and in order; and the only frame that may
-/// be left is the last one handed off, still queued and never started.
+/// Dropping the pipeline at any point between callbacks must always let the
+/// helper exit cleanly, without running any frame twice.
 #[test]
 fn a_stop_at_any_moment_ends_the_helper_and_starts_no_frame_twice() {
     let explored = explore(&Rules {
@@ -587,11 +561,10 @@ fn the_callback_wakes_a_parked_helper_and_one_whose_timer_is_too_late() {
 }
 
 const T0: u64 = 50_000_000_000;
-/// A callback's usual length here.
 const LENGTH: u64 = 700_000;
 
-/// Feeds `count` callbacks a period apart from `first`, each ending
-/// `LENGTH + stray(k)` after its start; returns the last forecast.
+/// Feeds `count` callbacks one period apart starting at `first`, each ending at
+/// `begun + LENGTH + stray(k)`, and returns the last forecast.
 fn feed(
     forecast: &mut Forecast,
     first: u64,
@@ -768,8 +741,8 @@ fn the_forecast_takes_a_callbacks_own_end_stamp_or_the_one_before() {
     }
 }
 
-/// When callbacks usually end so late that the next would have to wake the
-/// helper anyway, it sets no timer and parks, exactly as before.
+/// If callbacks routinely run so long that the next callback would have to
+/// unpark anyway, `Forecast` returns `None` and lets the helper park.
 #[test]
 fn no_timer_is_set_that_the_callback_would_override() {
     let fits = LATEST_SELF_START_NS - WAKE_MARGIN_NS;
@@ -782,22 +755,19 @@ fn no_timer_is_set_that_the_callback_would_override() {
         }
         assert_eq!(last.is_some(), timer, "length {length}");
         if let Some(wake_at) = last {
-            // And the callback it is for agrees.
             assert!(!must_wake(wake_at, T0 + 100 * PERIOD_NS));
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// A real helper thread on the tests' clock.
+// Real helper thread driven by a test-controlled clock.
 // ---------------------------------------------------------------------------
 
-/// The longest a test waits for the helper before it calls the frame lost.
 const PATIENCE: Duration = Duration::from_secs(20);
 
-/// The time the tests give the helper, and whether it is in one of its
-/// sleeps: past its last look at `state`, so that a frame handed off now is
-/// one it comes by in that sleep, and not one it finds queued before it.
+/// Test clock shared with `Stepped`. `napping` is set right before `thread::park()`
+/// so tests know the helper has passed its last `state` check.
 #[derive(Default)]
 struct Clock {
     now: AtomicU64,
@@ -811,8 +781,8 @@ impl Clock {
         })
     }
 }
-/// A clock only the test moves. The helper's timed sleep ends when the test
-/// fires its timer (`Rig::advance`), or on an unpark; its park is a real one.
+/// Manual clock `Pace`: timed sleeps park until `Rig::advance` fires the timer
+/// or the callback unparks.
 struct Stepped {
     clock: Arc<Clock>,
 }
@@ -857,17 +827,15 @@ fn until(what: &str, done: impl Fn() -> bool) {
         thread::yield_now();
     }
 }
-/// A helper and the callback's side of it, with empty frames.
 struct Rig {
     helper: Helper,
     handoff: Box<UnsafeCell<Handoff>>,
     clock: Arc<Clock>,
     seq: u64,
-    /// With the bench gauges on: every handoff is stamped.
     gauged: bool,
-    /// The callback's end is published before the handoff, so that the
-    /// helper always finds it and each test has one outcome. The real
-    /// callback publishes it just after: the racing test does too.
+    /// When true, publish `ended` before `queue()` so deterministic tests always
+    /// see the current callback's end timestamp. The real callback publishes it
+    /// right after (tested by `race`).
     end_first: bool,
 }
 impl Rig {
@@ -896,11 +864,8 @@ impl Rig {
     fn now(&self) -> u64 {
         self.clock.now.load(Ordering::SeqCst)
     }
-    /// Waits for the helper to finish its frame and settle into its sleep;
-    /// returns what it published: PARKED, or a timer still ahead. Into the
-    /// sleep itself (`Clock::napping`): what it publishes it publishes before
-    /// its last look at `state`, and a frame handed off between the two it
-    /// rightly starts at once, as one it found queued.
+    /// Waits until the helper is idle and parked in `Stepped::nap`, returning
+    /// its published `wake_at` (`PARKED` or a future deadline).
     fn asleep(&self) -> u64 {
         let shared = self.shared();
         let settled = || {
@@ -913,7 +878,7 @@ impl Rig {
         until("the helper never went to sleep", || settled().is_some());
         settled().unwrap()
     }
-    /// Moves the clock, and fires the helper's timer if that passes it.
+    /// Advances the test clock and unparks the helper if `to` passes its timer.
     fn advance(&self, to: u64) {
         assert!(to >= self.now());
         let shared = self.shared();
@@ -926,7 +891,6 @@ impl Rig {
             });
         }
     }
-    /// The handoff of a callback that started at `begun`, as it is.
     fn queue(&mut self, begun: u64) -> Woke {
         until("the helper never finished its frame", || self.helper.idle());
         self.seq += 1;
@@ -946,10 +910,8 @@ impl Rig {
         self.shared().ended.store(self.now(), Ordering::Relaxed);
         woke
     }
-    /// A whole callback that started at `begun` and ends at `at`, against a
-    /// helper that has settled: the clock runs to `at`, the frame is handed
-    /// off, and the clock runs on to the helper's timer if it was left to it.
-    /// Returns what the handoff did and how and when the helper started.
+    /// Runs a full callback (`begun..at`), firing the helper's timer if `queue`
+    /// left it asleep, and waits for the frame to finish.
     fn callback(&mut self, begun: u64, at: u64) -> (Woke, Start, u64) {
         self.asleep();
         self.advance(at);
@@ -1362,16 +1324,11 @@ fn an_idle_helper_sleeps_and_does_not_spin() {
     rig.stop();
 }
 
-/// A real helper thread, raced into its sleep by handoffs that come as soon
-/// as each frame is back. The clock is the test's. After each frame the
-/// helper dawdles for up to a microsecond before it turns to its sleep, so
-/// that the handoff lands before, in the middle of and after its last look
-/// at `state`.
+/// Stress-tests a real helper thread by racing handoffs into its sleep path.
 ///
-/// `timers_fire`: a timed sleep is a short real one, as if the timer could
-/// fire at any moment. Otherwise it lasts until the test fires the timer,
-/// and the test fires only a timer the callback may leave a frame to: a
-/// helper asleep on a later one, with a frame queued, is never woken.
+/// With `timers_fire == true`, timed sleeps use a short real timeout; with
+/// `false`, the test only fires timers that `must_wake` allows the callback to
+/// rely on, so leaving a frame to an overly late timer hangs and fails.
 fn race(timers_fire: bool, frames: u64) {
     struct Racing {
         clock: Arc<Clock>,
@@ -1496,26 +1453,16 @@ fn race(timers_fire: bool, frames: u64) {
     rig.stop();
 }
 
-/// Handoffs racing the helper into its sleep, a hundred and fifty thousand
-/// times, with the timing of each varied: none is lost, and each frame runs
-/// once and in order. Some find the helper on its timer, near or too far
-/// off, the rest find it parking, straight from a frame or after a timer
-/// that found nothing.
 #[test]
 fn handoffs_racing_the_helper_into_its_sleep_are_never_lost() {
     race(true, 150_000);
 }
 
-/// The same race with timers that fire only when the callback was right to
-/// leave the frame to them: no frame is ever left to a timer set later than
-/// the helper may start by itself, which here would never fire.
 #[test]
 fn no_racing_handoff_is_left_to_a_timer_that_is_too_late() {
     race(false, 150_000);
 }
 
-/// The bench gauges tell the frames the helper started by itself from those
-/// the callback woke it for, and stay untouched without the gauges.
 #[test]
 fn the_wake_gauges_tell_self_starts_from_wakes() {
     let starts = || {
@@ -1629,11 +1576,9 @@ fn the_wake_gauges_tell_self_starts_from_wakes() {
     }
 }
 
-/// A whole pipeline on the real clock: one is given the callbacks' end stamps
-/// a period apart, as the mixer gives them, so its helper comes to start from
-/// its own timer; the other never is, so its helper parks and is woken every
-/// frame as before. Every source sample they return is the same bit for bit,
-/// and both process every frame.
+/// Runs two full pipelines on the real clock (one fed callback end timestamps
+/// so its helper self-starts, one unstamped so it parks every frame) and
+/// checks that output audio is bit-identical.
 #[test]
 fn a_helper_that_starts_by_itself_returns_the_same_audio() {
     let plan = source_plan(1, true, PathMode::Processed);
@@ -1709,15 +1654,12 @@ fn a_helper_that_starts_by_itself_returns_the_same_audio() {
 }
 
 // ---------------------------------------------------------------------------
-// `await_frame` step by step, on the test's own thread: a script says what
-// happens during each sleep the helper takes, and a sleep the script does not
-// have fails the test, so a helper that spins cannot pass.
+// Scripted single-threaded tests for `await_frame`. Any unexpected sleep fails
+// immediately, catching spin loops.
 // ---------------------------------------------------------------------------
 
-/// A sleep the helper took, with what it had published in `wake_at` by then.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Nap {
-    /// Towards `until`.
     Timed {
         published: u64,
         until: u64,
@@ -1726,16 +1668,13 @@ enum Nap {
         published: u64,
     },
 }
-/// What happens during a sleep, before it ends.
+/// Event injected when a scripted sleep returns.
 #[derive(Clone, Copy, Debug)]
 enum Then {
-    /// Nothing: the sleep ends for no reason, or on an older wake's token.
+    /// Spurious wakeup or stale unpark token.
     Nothing,
-    /// The callback hands a frame off.
     Queue,
-    /// The pipeline is dropped.
     Stop,
-    /// The clock reads this from now on.
     Clock(u64),
 }
 struct Script {
@@ -1861,11 +1800,8 @@ fn every_way_through_the_helpers_wait_takes_only_the_sleeps_it_must() {
     }
 }
 
-/// A forecast the clock does not bear out is never slept on: one that is due
-/// or past, one more than two periods ahead (the clock was set back, or the
-/// stamps were not this clock's), and the two values `wake_at` keeps for
-/// AWAKE and PARKED. The helper parks, PARKED is what the callback reads, and
-/// the callback wakes it: as with no forecast at all.
+/// Invalid or out-of-range forecasts (past/due, >2 periods ahead, or sentinel
+/// `AWAKE`/`PARKED` values) must fall back to parking instead of sleeping.
 #[test]
 fn a_forecast_that_makes_no_sense_is_not_slept_on() {
     let park = Nap::Park { published: PARKED };
@@ -1926,12 +1862,10 @@ fn a_forecast_that_makes_no_sense_is_not_slept_on() {
 }
 
 // ---------------------------------------------------------------------------
-// The mixer's own pace (`Kernel`): the real clock and the real futex wait.
-// The host is no real-time system, so nothing here is held to a time of its
-// own: only to the order of things, and to what happens in some round of many.
+// Real `Kernel` pace (monotonic clock + futex wait). Non-RT host tests check
+// ordering and sleep counts rather than tight deadlines.
 // ---------------------------------------------------------------------------
 
-/// `Kernel`, with its sleeps counted.
 #[derive(Default)]
 struct CountedKernel {
     timed: AtomicU64,
@@ -2079,9 +2013,8 @@ fn on_the_mixers_pace_the_timer_starts_a_frame_and_a_wake_ends_the_sleep() {
     );
 }
 
-/// The helper's timed sleeps are not rounded by the 50 us of timer slack a
-/// thread has by default, which this kernel applies to a real-time thread's
-/// futex wait too: `Kernel::prepare` sets it to the least there is.
+/// `Kernel::prepare` sets timer slack to 1 ns so Linux doesn't round the
+/// helper's futex waits by the default 50 us.
 #[test]
 fn the_mixers_pace_takes_the_timer_slack_off_the_helper_thread() {
     let slack = thread::spawn(|| {
@@ -2094,14 +2027,11 @@ fn the_mixers_pace_takes_the_timer_slack_off_the_helper_thread() {
 }
 
 // ---------------------------------------------------------------------------
-// The real-time rule, on its positive side.
+// Real-time gating.
 // ---------------------------------------------------------------------------
 
-/// Where the timed sleep needs a real-time thread, the helper sets its first
-/// timer in the very frame in which it takes a real-time placement, and not
-/// before, however long the callbacks have been regular. The host cannot
-/// make a thread real-time, so the pace here calls the placement the helper
-/// takes real-time; the rule the mixer applies to it is checked by itself.
+/// When `needs_realtime` is true, the helper stays parked until it actually
+/// adopts an RT placement, then starts using its forecast timer immediately.
 #[test]
 fn a_helper_sets_its_timer_once_its_placement_is_real_time() {
     struct Placed(Stepped);
@@ -2176,13 +2106,11 @@ fn a_helper_sets_its_timer_once_its_placement_is_real_time() {
 }
 
 // ---------------------------------------------------------------------------
-// The pipeline's end.
+// Pipeline teardown.
 // ---------------------------------------------------------------------------
 
-/// A pipeline dropped with a frame still in the helper's hands, or just
-/// handed off: the helper has stopped before the frame's buffers are freed
-/// (`Handoff`'s destructor checks that here, for every pipeline every test
-/// drops), and the frame either ran whole or was never started.
+/// Dropping a pipeline with a frame in flight must join the helper before
+/// freeing `Handoff` buffers, leaving the frame either completed or unstarted.
 #[test]
 fn a_pipeline_dropped_with_a_frame_in_flight_stops_its_helper_first() {
     let plan = source_plan(1, true, PathMode::Processed);
@@ -2211,14 +2139,12 @@ fn a_pipeline_dropped_with_a_frame_in_flight_stops_its_helper_first() {
 }
 
 // ---------------------------------------------------------------------------
-// What no host test can see.
+// Source-level ordering guard.
 // ---------------------------------------------------------------------------
 
-/// The orderings of the handshake, read from the source. On the host a
-/// weaker load is the same instruction as a SeqCst one, so no test here can
-/// fail for it; on the mixer's processor it is not, and the helper could then
-/// read `state` before its own store of `wake_at` is visible: a lost wake.
-/// This fails when someone touches them, so that they read `await_frame`.
+/// Verifies that the four Dekker-style handshake accesses in `helper.rs` use
+/// `Ordering::SeqCst`. On x86_64 hosts a weaker load compiles to the same
+/// instruction, so runtime tests can't catch a regression that breaks ARM.
 #[test]
 fn the_handshakes_four_accesses_are_sequentially_consistent_in_the_source() {
     let source = include_str!("../helper.rs");
@@ -2260,13 +2186,11 @@ fn the_handshakes_four_accesses_are_sequentially_consistent_in_the_source() {
 }
 
 // ---------------------------------------------------------------------------
-// The bench gauges, off.
+// Bench gauges disabled.
 // ---------------------------------------------------------------------------
 
-/// Without the bench gauges nothing writes a helper wake gauge: not the
-/// callback and not the helper, whichever way its frames start. The gauges
-/// are the process's, and other tests turn them on, so this runs once more
-/// in a process of its own, where every one of them must still read zero.
+/// Runs in an isolated subprocess so process-global gauges toggled by other
+/// tests don't pollute the check; with gauges off, all wake gauges stay zero.
 #[test]
 fn without_the_gauges_no_wake_gauge_is_written() {
     const CHILD: &str = "RC2FX_TEST_WAKE_GAUGES_OFF";

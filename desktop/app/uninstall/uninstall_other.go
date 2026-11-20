@@ -2,6 +2,6 @@
 
 package uninstall
 
-// OfferCleanup does something on Windows only; Velopack runs uninstall
-// hooks only there, so elsewhere this is never called and does nothing.
+// OfferCleanup is a no-op outside Windows; Velopack only runs uninstall hooks
+// on Windows.
 func OfferCleanup() {}

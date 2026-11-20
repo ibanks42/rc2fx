@@ -45,10 +45,9 @@ arm_power_recovery() {
 }
 
 
-# Isolated GUI preview. This is deliberately NOT part of audio start/install,
-# boot, or the normal runtime bundle. The user must explicitly request a UI
-# restart. The stock display supervisor is paused, never edited, and a separate
-# session watchdog owns restoration even if this SSH/session shell disappears.
+# Isolated GUI preview (not part of normal boot/audio startup). Pauses the
+# stock display supervisor without modifying it; an independent watchdog
+# restores the stock UI even if the caller's SSH session drops.
 ui_retire_process() {
   local pid=$1 started=$2 n
   [[ "$pid" =~ ^[0-9]+$ && "$started" =~ ^[0-9]+$ ]] || return 0
@@ -65,8 +64,7 @@ ui_preview_cleanup() {
   local dir=$1 parent started candidate actual entry fd target n stuck=0
   read -r parent started < "$dir/launcher" || return 1
   touch "$dir/done"
-  # Registration happens BEFORE child exec. It remains safe to retire the
-  # registered PID even in the fork/exec window, without reading its environ.
+  # Child PID is recorded before exec so cleanup can retire it even in the fork/exec window.
   for ((n=0;n<20;n++)); do
     test -e "$dir/child-recorded" && break
     test -e "$dir/launching" || break
@@ -75,8 +73,8 @@ ui_preview_cleanup() {
   if test -e "$dir/child-recorded" && read -r candidate actual < "$dir/child"; then
     ui_retire_process "$candidate" "$actual" || stuck=1
   fi
-  # Retire marked vendor helpers too: system()/popen() can inherit DRM fds.
-  # Bound proc-environ reads; a stuck task must not hang restoration forever.
+  # Also retire vendor helpers (system()/popen() can inherit DRM fds); bound
+  # /proc/*/environ reads so a hung task cannot stall cleanup.
   for entry in /proc/[0-9]*/environ; do
     candidate=${entry#/proc/}; candidate=${candidate%/environ}
     timeout -k 1s 1s /bin/sh -c 'tr "\000" "\n" < "$1"' sh "$entry" 2>/dev/null \
@@ -84,9 +82,8 @@ ui_preview_cleanup() {
     actual=$(start_time "$candidate" 2>/dev/null) || continue
     ui_retire_process "$candidate" "$actual" || stuck=1
   done
-  # No other userspace DRM holder may survive when the stock launcher resumes.
-  # If the original GUI refused TERM it is still the original supervisor's
-  # child and is safe to leave in charge; otherwise all handles must be gone.
+  # Ensure no other DRM holder remains before resuming the stock launcher
+  # (if the original GUI ignored TERM it still belongs to that supervisor).
   local original original_start
   read -r original original_start < "$dir/original"
   for fd in /proc/[0-9]*/fd/*; do
@@ -118,8 +115,8 @@ ui_watch() {
   # A proc entry disappearing must not abort cleanup under errexit.
   set +e
   read -r owner started < "$dir/owner" || return 1
-  # Reopen rather than share the owner's open-file-description lock. Cleanup
-  # serializes with the STOP/kill/fork sequence; it cannot restore too early.
+  # Reopen the lock file to get an independent OFD lock, serializing cleanup
+  # with the STOP/kill/fork sequence.
   exec 8>&-
   exec 8>"$dir/transition.lock"
   trap '' HUP
@@ -135,17 +132,16 @@ ui_watch() {
   ui_preview_cleanup "$dir"
 }
 
-# The environment the injected panel gets on top of its own (RC2FX_UI_CLOSE
-# marks it and any forked helper for cleanup).
+# Extra env vars for the injected panel (RC2FX_UI_CLOSE tags it and any helpers for cleanup).
 ui_injected_environment() {
   local dir=$1 library=$2
   printf '%s\0' "LD_AUDIT=$library" RC2FX_UI_PREVIEW=1 "RC2FX_UI_CLOSE=$dir/close"
 }
-# Whether the injected panel is verifiably active: it presented a frame.
+# True once the injected panel has presented a frame.
 ui_ready() {
   test -e "$1/frame-ready"
 }
-# Diagnostics printed at the end (never the stock GUI's own log lines).
+# Print RC2FX diagnostics only (never stock GUI log lines).
 ui_summary() {
   grep '^RC2FX UI:' "$1/gui.log" || true
 }
@@ -192,9 +188,7 @@ ui_preview() {
   parent_start=$(start_time "$parent")
   local -a environment
   mapfile -d '' -t environment < "/proc/$gui/environ"
-  # The shipped partial-conversion module may already be in place (the GUI
-  # shim injects it at every start); replacing exactly that one is the
-  # experiment's job. Anything else injected is refused.
+  # Allow replacing the shipped partial-conversion module, but refuse any other injection.
   local own_module="$home/librc2fx_gui.so"
   for variable in "${environment[@]}"; do
     case "$variable" in

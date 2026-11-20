@@ -21,7 +21,6 @@ func elf(marker byte) []byte {
 	return b
 }
 
-// resum recomputes SHA256SUMS from the payload's files.
 func resum(t *testing.T, files Files) {
 	var manifest strings.Builder
 	for _, n := range Pinned {
@@ -38,7 +37,6 @@ func resum(t *testing.T, files Files) {
 	}
 }
 
-// payload is a complete, valid payload in PayloadNames order.
 func payload(t *testing.T, marker byte) Files {
 	var files Files
 	for _, name := range PayloadNames {
@@ -167,7 +165,7 @@ func TestAPayloadRoundTripsThroughTheEnvelope(t *testing.T) {
 	if len(bundle) != len(PayloadNames) || !bytes.Equal(bundle["rc2fx.sh"], script) {
 		t.Fatal("bundle")
 	}
-	// A stand-in executable: prefix and suffix around the blob.
+	// Fake executable bytes wrapping the envelope.
 	exe := append([]byte("\x7fELF not really an executable"), blob...)
 	exe = append(exe, "trailing .rodata"...)
 	found, err := Find(exe)
@@ -178,17 +176,16 @@ func TestAPayloadRoundTripsThroughTheEnvelope(t *testing.T) {
 
 func TestExactlyOneCompleteEnvelopeIsRequired(t *testing.T) {
 	one := wrapped(t, 1)
-	// The marker in unrelated compiled data is not a payload.
+	// Stray Magic bytes in unrelated data should be ignored.
 	exe := append(bytes.Clone(one), Magic...)
 	exe = append(exe, "not a header\nand not a body"...)
 	if _, err := Find(exe); err != nil {
 		t.Fatalf("an invalid candidate is ignored: %v", err)
 	}
-	// Two complete payloads are ambiguous: refuse rather than guess.
+	// Two valid payloads are ambiguous and must fail.
 	twice := append(bytes.Clone(one), wrapped(t, 2)...)
 	_, err := Find(twice)
 	wantError(t, err, "2 installer payloads")
-	// Nothing at all.
 	_, err = Find([]byte("\x7fELF with no payload"))
 	wantError(t, err, "does not embed an installer payload")
 }
@@ -211,8 +208,7 @@ func TestADamagedOrTruncatedEnvelopeIsRefused(t *testing.T) {
 		}
 		wantError(t, err, "does not embed", "damaged", "truncated")
 	}
-	// A body whose per-file checksums no longer hold, with its outer digest
-	// consistent: the manifest still has to hold.
+	// Outer envelope digest is valid, but per-file manifest checksum is wrong.
 	wrong := Body(payload(t, 1))
 	copy(wrong[:64], bytes.Repeat([]byte("0"), 64))
 	_, err := Find(Wrap(wrong))
@@ -391,7 +387,7 @@ func write(t *testing.T, path string, data []byte) {
 	}
 }
 
-// folder is a release folder on disk: runtime/, mixer/scripts/ and config/.
+// folder creates a release-layout directory (runtime/, mixer/scripts/, config/).
 func folder(t *testing.T, marker byte, release bool) string {
 	dir := t.TempDir()
 	files := payload(t, marker)

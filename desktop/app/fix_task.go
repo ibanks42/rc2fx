@@ -1,10 +1,7 @@
 package app
 
-// "Fix RØDE's update bug" on its own (mock-up G1–G4), for a mixer that stays
-// on RØDE's firmware, in the guided-task layout: Before you start, the run
-// (RØDE's archive with the fix's script, then RØDE's plain archive again),
-// and how it ended. Its decisions are in installflow/fixtask.go; the
-// request runs where flashes run (installer.RequestStorageFix).
+// Standalone guided flow for fixing RØDE's storage layout bug without
+// installing RC2FX (state machine in installflow/fixtask.go).
 
 import (
 	"fmt"
@@ -19,8 +16,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/autofix"
 )
 
-// openFix is the first screen's "Fix the update bug only": the fix task in
-// front of everything else.
 func (a *App) openFix(cx *gk.Cx) {
 	a.openTask(cx, taskFix)
 	if i := a.installer; i != nil {
@@ -29,8 +24,6 @@ func (a *App) openFix(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// startFix runs the fix, asking for administrator access first where it is
-// missing; the fix starts once it is granted.
 func (a *App) startFix(cx *gk.Cx) {
 	i := a.installer
 	if i == nil || i.fix == nil || i.busy() {
@@ -54,12 +47,11 @@ func (a *App) startFix(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// fixOutcome is the fix's finished request. A run that ended with the
-// mixer back counts as a finished flash, so the first screen doesn't take
-// it for an update in progress.
 func fixOutcome(i *Installer, reply installer.Reply, err error) {
 	i.fix.Outcome(reply, err)
 	i.progress = nil
+	// Mark the flash settled once the mixer is back so the landing screen doesn't
+	// think an update is still in progress.
 	switch i.fix.Ending() {
 	case installflow.FixEndingFixed, installflow.FixEndingAlready,
 		installflow.FixEndingUnrecognized, installflow.FixEndingNotApplied:
@@ -68,8 +60,6 @@ func fixOutcome(i *Installer, reply installer.Reply, err error) {
 	}
 }
 
-// fixVersion is the RØDE firmware the fix runs on: what it reported, else
-// what the mixer reports on USB; "" when neither is known.
 func fixVersion(i *Installer) string {
 	if r := i.fix.Reply; r != nil && r.Firmware != "" {
 		return r.Firmware
@@ -80,8 +70,6 @@ func fixVersion(i *Installer) string {
 	return ""
 }
 
-// withVersion is "RØDE’s firmware 1.7.7", or without the number when it
-// isn't known.
 func withVersion(version string) string {
 	if version == "" {
 		return "RØDE’s firmware"
@@ -157,8 +145,6 @@ func (a *App) fixBeforePage(i *Installer, t *guidedTask) {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.startFix(cx) })
 }
 
-// explainUpdateBug is "What is this?" beside the storage fix, in Install
-// (install) or in the fix on its own.
 func (a *App) explainUpdateBug(cx *gk.Cx, install bool) {
 	what := "The fix makes that area larger, which stops it from happening again."
 	if install {
@@ -175,10 +161,6 @@ func (a *App) explainUpdateBug(cx *gk.Cx, install bool) {
 	}, func(*gk.Cx) {}, func(*gk.Cx) {})
 }
 
-// ---- While it runs (G2) -------------------------------------------------------
-
-// fixPassLine says that the mixer is updated twice and which update this
-// is, for a fix event; "" before the first.
 func fixPassLine(p *installer.Progress, final string) string {
 	pass, attempt := installflow.FixPass(p)
 	switch {
@@ -192,8 +174,6 @@ func fixPassLine(p *installer.Progress, final string) string {
 	return ""
 }
 
-// fixUpdatePanel is one of the fix's updates: sending the firmware, which
-// the app can measure, and the mixer installing it, which it can't.
 func fixUpdatePanel(p *installer.Progress) gk.DivEl {
 	fill := installflow.FixTransfer(p)
 	waiting := installflow.FixWaiting(p)
@@ -221,9 +201,6 @@ func fixUpdatePanel(p *installer.Progress) gk.DivEl {
 	return panel
 }
 
-// fixDetailLine is the line for a fix event without a bar: autofix's own
-// step, except once the mixer is back after the update that carries the
-// fix, when it is reporting the fix's result. "" without an event.
 func fixDetailLine(p *installer.Progress) string {
 	switch {
 	case installflow.FixConfirming(p):
@@ -234,7 +211,6 @@ func fixDetailLine(p *installer.Progress) string {
 	return ""
 }
 
-// sentence ends autofix's step text the way the page's lines end.
 func sentence(text string) string {
 	text = strings.TrimSuffix(text, ".")
 	return text + "…"
@@ -337,7 +313,6 @@ func (a *App) fixEndedPage(i *Installer, t *guidedTask) {
 			what = fmt.Sprintf("The fix couldn’t finish on the mixer. %s was installed again.", capitalFirst(version))
 		}
 	case installflow.FixEndingRefused:
-		// autofix's own words: what it refused, and that nothing changed.
 		title = "The fix can’t run on this mixer"
 		what = capitalFirst(strings.TrimSuffix(r.Error, ".")) + "."
 	default:
@@ -363,8 +338,6 @@ func (a *App) fixEndedPage(i *Installer, t *guidedTask) {
 		body = body.Child(spinnerLine("Answer your system’s password prompt to continue."))
 	}
 	t.body = body
-	// Try again where a new run can help; it needs the mixer back in
-	// normal mode, which the page waits for.
 	if f.CanRetry(true) {
 		label := "Try again"
 		if !i.access.AllowsFlashing() {
@@ -385,8 +358,6 @@ func (a *App) fixEndedPage(i *Installer, t *guidedTask) {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })
 }
 
-// capitalFirst upper-cases an ASCII first letter: autofix's messages start
-// in lower case, as Go errors do.
 func capitalFirst(text string) string {
 	if text == "" || text[0] < 'a' || text[0] > 'z' {
 		return text
@@ -394,8 +365,6 @@ func capitalFirst(text string) string {
 	return string(text[0]-'a'+'A') + text[1:]
 }
 
-// alreadyFixedLine says what a run that found the fix in place left on the
-// mixer. It skips the second update when it got the result over USB.
 func alreadyFixedLine(r *installer.StorageFix, version string) string {
 	if r != nil && r.Flashes < 2 {
 		return fmt.Sprintf("Nothing needed changing, so the app left it as it was. It runs %s, unchanged.", version)

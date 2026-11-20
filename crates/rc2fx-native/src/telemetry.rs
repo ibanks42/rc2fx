@@ -1,5 +1,6 @@
-//! Fixed SPSC windows. Both endpoints are built/destroyed on control; recording
-//! copies a fixed value and uses two indices, with no allocation or waiting.
+//! Lock-free SPSC ring buffer for audio meter windows.
+//! Allocated and dropped on the control thread; audio callbacks only copy fixed
+//! structs and bump atomic indices.
 use rc2fx_dsp::Meter;
 use rc2fx_native_control::AudioMeter;
 use std::{
@@ -10,8 +11,6 @@ use std::{
     },
 };
 
-// Shared with the controller, which derives its slowest read interval from
-// the ring depth.
 const CAPACITY: usize = rc2fx_native_control::METER_RING_WINDOWS;
 const WINDOW_FRAMES: u64 = rc2fx_native_control::METER_WINDOW_FRAMES;
 const _: () = assert!(CAPACITY.is_power_of_two());
@@ -26,8 +25,8 @@ struct Ring {
     head: AtomicUsize,
     tail: AtomicUsize,
 }
-// One non-cloneable Producer and Consumer own opposite ends. Release/acquire
-// indices transfer each slot's exclusive ownership before any non-atomic copy.
+// SAFETY: Single non-cloneable Producer and Consumer own opposite ends;
+// Release/Acquire on `head`/`tail` synchronizes slot access.
 unsafe impl Sync for Ring {}
 pub struct Producer {
     ring: Arc<Ring>,
@@ -67,10 +66,9 @@ impl Producer {
     pub fn record(&mut self, revision: u64, frames: usize, meter: Meter, latency: u32) {
         self.record_cycles(revision, 1, frames as u64, meter, latency);
     }
-    /// `cycles` callbacks of unmetered frames, left alone and counted together.
-    /// Stops at each window boundary, so the windows are exactly those of
-    /// recording the cycles one at a time. They ran before any newer settings
-    /// were read, so they belong to the revision last recorded.
+    /// Records `cycles` skipped (unmetered) callbacks in batches, splitting at
+    /// window boundaries so the resulting windows match recording each cycle
+    /// individually under the current revision.
     pub fn record_skipped(&mut self, cycles: u64, frames: usize, latency: u32) {
         let revision = self.revision;
         let frames = frames.max(1) as u64;
@@ -123,7 +121,7 @@ impl Producer {
                 processed_frames: self.frames,
                 input_peak: self.meter.input_peak,
                 output_peak: self.meter.output_peak,
-                rms: 0.0, // Control computes RMS after the fixed window transfer.
+                rms: 0.0, // Computed on the control thread after reading the window.
                 gain_reduction: self.meter.gain_reduction,
                 voice: self.meter.voice,
                 gate_open: self.meter.gate_open,
@@ -152,7 +150,7 @@ impl Consumer {
     pub fn latest(&mut self) -> Option<AudioMeter> {
         let mut tail = self.ring.tail.load(Ordering::Relaxed);
         let head = self.ring.head.load(Ordering::Acquire);
-        // A single acquired head bounds this drain even while audio continues.
+        // Snapshot `head` once so draining terminates even while audio is running.
         while tail != head {
             if let Some(window) = unsafe { *self.ring.slots[tail % CAPACITY].get() } {
                 let mut value = window.value;
@@ -183,10 +181,9 @@ mod tests {
         };
         let (mut batched, mut batched_out) = channel();
         let (mut single, mut single_out) = channel();
-        // A path is always recorded before any frame is left alone.
         batched.record(1, 112, loud, 9);
         single.record(1, 112, loud, 9);
-        // Every eighth cycle metered, the rest left alone, across many windows.
+        // Meter every 8th cycle and skip the 7 in between across multiple windows.
         for _ in 0..40 {
             batched.record_skipped(7, 112, 9);
             batched.record(1, 112, loud, 9);

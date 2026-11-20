@@ -6,17 +6,15 @@ import (
 	"unicode"
 )
 
-// The saved RØDE show is separate from RC2FX's processing configuration.
+// Stock RØDE show inventory (separate from RC2FX's processing config).
 
 type StockSource struct {
 	ID       string `json:"id"`
 	SourceID uint16 `json:"sourceId"`
-	// Nil for a known source that is not assigned to a show fader.
-	Fader *uint8 `json:"fader"`
-	Name  string `json:"name"`
-	Color string `json:"color"`
-	// Empty when the installed route profile does not process this source.
-	TargetID string `json:"targetId"`
+	Fader    *uint8 `json:"fader"` // nil if not assigned to a show fader
+	Name     string `json:"name"`
+	Color    string `json:"color"`
+	TargetID string `json:"targetId"` // empty if unprocessed by the active route profile
 }
 
 type StockInventory struct {

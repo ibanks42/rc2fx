@@ -12,8 +12,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
 
-// createKeys makes the key directory destination, which must be new and
-// outside every git checkout (checkout among them).
+// createKeys generates a new key set in destination, which must not exist and
+// must live outside every git checkout.
 func createKeys(destination, checkout string) error {
 	parent, name, ok := splitDestination(destination)
 	if !filepath.IsAbs(destination) || !ok {
@@ -31,7 +31,7 @@ func createKeys(destination, checkout string) error {
 		return task.Error("private keys must be outside every git checkout")
 	}
 	destination = filepath.Join(parent, name)
-	// Mkdir is exclusive; neither overwrite nor follow an existing symlink.
+	// Exclusive create avoids overwriting existing files or following symlinks.
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return task.Errorf("use a new key directory (existing paths are never replaced): %s", task.IOError(err))
 	}
@@ -54,8 +54,8 @@ func createKeys(destination, checkout string) error {
 			return task.Error(task.IOError(err))
 		}
 	}
-	// Leave clear recovery instructions even if generation later fails. Never
-	// automatically erase possibly valuable private keys after a partial error.
+	// Write SETUP.md first so recovery guidance is present even if keygen fails
+	// halfway through (we intentionally never auto-delete partial private keys).
 	if err := writePrivate(filepath.Join(destination, "SETUP.md"), []byte(instructions)); err != nil {
 		return err
 	}
@@ -109,14 +109,12 @@ func createKeys(destination, checkout string) error {
 	if err := writePrivate(filepath.Join(destination, "public", "root.sha256"), []byte(task.Sha256(buffer)+"  root.json\n")); err != nil {
 		return err
 	}
-	// Written last: its presence distinguishes a finished setup from a
-	// partial directory that must not be used for production trust.
+	// Sentinel written last to distinguish a finished setup from a partial one.
 	return writePrivate(filepath.Join(destination, "COMPLETE"), []byte("Root signatures verified. Follow SETUP.md before use.\n"))
 }
 
-// splitDestination is an absolute path's parent folder and file name:
-// trailing separators and `.` components do not count, and
-// a path ending in `..` (or the root) has no file name.
+// splitDestination splits an absolute path into (parent, name), stripping
+// trailing slashes and "." segments and rejecting root or "..".
 func splitDestination(path string) (parent, name string, ok bool) {
 	for {
 		trimmed := strings.TrimRight(path, "/")
@@ -144,8 +142,6 @@ func splitDestination(path string) (parent, name string, ok bool) {
 	return parent, name, true
 }
 
-// canonicalize makes path absolute with every link resolved; the path must
-// exist.
 func canonicalize(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -161,16 +157,13 @@ func canonicalize(path string) (string, error) {
 	return resolved, nil
 }
 
-// within is whether base is a whole-component prefix of path.
 func within(path, base string) bool {
 	rel, err := filepath.Rel(base, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)
 }
 
-// insideGit reports whether path or any directory above it has `.git`.
 func insideGit(path string) bool {
 	for {
-		// Anything there, following links.
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			return true
 		}

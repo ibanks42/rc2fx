@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the explicit one-shot power-recovery command without device writes."""
+"""Host tests for `rc2fx.sh arm-power-recovery` and its developer-only callers."""
 from pathlib import Path
 import os
 import shutil

@@ -104,43 +104,39 @@ pub struct Highpass {
 pub struct Suppression {
     pub enabled: bool,
     pub wet: f64,
-    /// DeepFilterNet3's lookahead in hops: 0 (the default, and what settings
-    /// saved before this field existed mean) or 1, which adds exactly one hop
-    /// of latency.
+    /// DeepFilterNet3 lookahead in hops: 0 (default, also used for legacy configs)
+    /// or 1 (adds one hop of latency).
     #[serde(default)]
     pub lookahead: u8,
     pub gate: VoiceGate,
 }
-/// Turns the suppressed microphone down while the model hears no voice. It
-/// acts only while suppression is enabled, since the voice score comes from
-/// the suppression model.
+/// Attenuates the suppressed microphone when the model detects no voice.
+/// Only active while suppression is enabled, since it reads the model's voice score.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoiceGate {
-    /// 0 (off) to 1 (strict); sets every parameter unless `advanced`.
+    /// 0 (off) to 1 (strict); derives all parameters unless `advanced` is set.
     pub strength: f64,
-    /// Use the parameters below instead of the ones `strength` stands for.
+    /// Use the explicit fields below instead of deriving them from `strength`.
     pub advanced: bool,
-    /// Voice score (0 to 1) at or above which the gate opens.
+    /// Voice score (0..=1) at or above which the gate opens.
     pub threshold: f64,
-    /// How far the closed gate turns the signal down, in dB; 0 is off.
+    /// Attenuation when closed, in dB (0 disables the gate).
     pub reduction: f64,
-    /// Opening time constant, in ms.
+    /// Opening time constant in ms.
     pub attack: f64,
-    /// How long the gate stays open after the score last reached the
-    /// threshold, in ms.
+    /// Time in ms the gate stays open after the voice score drops below threshold.
     pub hold: f64,
-    /// Closing time constant after the hold, in ms.
+    /// Closing time constant after `hold`, in ms.
     pub release: f64,
 }
-/// The parameters the gate runs with. Its smoothing runs in dB.
+/// Resolved runtime gate parameters (smoothing operates in dB).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GateShape {
     /// Voice score that opens the gate.
     pub threshold: f64,
-    /// Voice score an open gate stays open down to (`threshold` minus
-    /// `GATE_HYSTERESIS`), so a score hovering near the threshold, as in soft
-    /// consonants, does not flutter it.
+    /// Score down to which an open gate remains open (`threshold - GATE_HYSTERESIS`)
+    /// to prevent flutter on soft consonants.
     pub close_threshold: f64,
     pub reduction_db: f64,
     pub attack_ms: f64,
@@ -149,14 +145,12 @@ pub struct GateShape {
 }
 pub const GATE_HYSTERESIS: f64 = 0.15;
 impl GateShape {
-    /// What a strength from 0 (off) through gentle (keeps breaths) to 1
-    /// (strict) stands for. Depth grows from nothing, like a blend, reaching
-    /// 20 dB at half strength. Strictness comes mostly from the threshold and
-    /// depth, so the gate never becomes a hard mute: the residual after
-    /// neural suppression is already low, and deeper reduction only makes the
-    /// switching audible. Hold and release shrink less; the release moves
-    /// geometrically so equal slider steps sound even. Opening is always 5 ms,
-    /// inside the model's 10-30 ms lookahead.
+    /// Maps a 0..=1 strength slider to concrete gate parameters.
+    ///
+    /// Depth ramps from 0 dB to 30 dB (20 dB at 0.5) so the gate stays soft
+    /// instead of hard-muting low residual noise. Release scales geometrically
+    /// so equal slider steps feel even; attack is fixed at 5 ms, inside the
+    /// model's 10-30 ms lookahead.
     pub fn for_strength(strength: f64) -> Self {
         let s = strength.clamp(0.0, 1.0);
         let linear = |gentle: f64, strict: f64| gentle + (strict - gentle) * s;
@@ -187,7 +181,7 @@ impl GateShape {
     }
 }
 impl VoiceGate {
-    /// A gate at `strength`, its advanced parameters matching it.
+    /// Builds a gate at `strength` with its advanced fields pre-populated to match.
     pub fn with_strength(strength: f64) -> Self {
         let mut gate = Self {
             strength,
@@ -202,7 +196,6 @@ impl VoiceGate {
         gate.advanced = false;
         gate
     }
-    /// Whether the gate turns anything down.
     pub fn active(&self) -> bool {
         self.shape().reduction_db > 0.0
     }
@@ -219,9 +212,9 @@ impl VoiceGate {
             GateShape::for_strength(self.strength)
         }
     }
-    /// Switches between the strength slider and the separate parameters.
-    /// Entering advanced mode starts the parameters from the current
-    /// strength, so the sound does not jump; leaving keeps them for later.
+    /// Toggles between the strength slider and explicit fields.
+    /// Entering advanced mode seeds the fields from `strength` to avoid a jump;
+    /// leaving keeps them intact.
     pub fn set_advanced(&mut self, advanced: bool) {
         if advanced && !self.advanced {
             let shape = GateShape::for_strength(self.strength);
@@ -235,8 +228,7 @@ impl VoiceGate {
     }
 }
 impl Suppression {
-    /// The geometry the saved settings stand for, and hence the latency they
-    /// add, including the worker's scheduling allowance.
+    /// Resolved buffering geometry and total added latency for these settings.
     pub fn geometry(&self) -> Option<SuppressionGeometry> {
         Self::admitted_geometry(self.lookahead)
     }
@@ -247,19 +239,17 @@ impl Suppression {
         Ok(())
     }
 }
-/// DeepFilterNet3's STFT hop, in samples: one lookahead step adds exactly
-/// this much latency (5.0 ms at 48 kHz).
+/// DeepFilterNet3 STFT hop size in samples (5.0 ms at 48 kHz per lookahead step).
 pub const DFN_HOP_SAMPLES: u32 = 240;
 
-/// Model-defined buffering, independent of any worker scheduling allowance.
+/// Model-defined buffering, excluding worker scheduling allowance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ModelGeometry {
     frame_samples: u32,
     intrinsic_delay_samples: u32,
 }
 
-/// A resolved processing geometry: the model's buffering plus the worker's
-/// scheduling allowance. Factories use `admitted_geometry`.
+/// Full suppression geometry: model buffering plus worker scheduling lead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SuppressionGeometry {
     pub sample_rate: u32,
@@ -459,8 +449,7 @@ impl Target {
                 lookahead: 0,
                 gate: VoiceGate::with_strength(0.0),
             },
-            // Processing is opt-in: a new path passes audio through unchanged
-            // until each stage is explicitly enabled.
+            // Processing is opt-in; new targets pass audio through untouched.
             eq: EqSettings {
                 enabled: false,
                 ..EqSettings::default()
@@ -538,8 +527,8 @@ impl Target {
         range(self.limiter.ceiling, -24.0, 0.0, "Limiter ceiling")?;
         range(self.limiter.release, 10.0, 2000.0, "Limiter release")
     }
-    /// Chat suppression acts on a separate mono microphone stem, never on the
-    /// completed stereo mix (which also carries pads and playback).
+    /// Chat suppression runs on a separate mono mic stem, not the final stereo mix
+    /// (which also includes pads and playback).
     pub fn is_chat_output(&self) -> bool {
         self.kind == TargetKind::Output
             && self.channels == 2
@@ -595,8 +584,8 @@ impl Config {
         }
         self.validate_selection(&self.selected_targets)
     }
-    /// Selection is distinct from saved effect settings. Physical eligibility
-    /// is supplied by the connected controller, not inferred from this catalog.
+    /// Selection is separate from saved effect settings; physical eligibility
+    /// comes from the connected controller, not this catalog.
     pub fn validate_selection(&self, selected: &[String]) -> Result<()> {
         let mut ids = HashSet::new();
         for id in selected {
@@ -660,8 +649,7 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         let mut targets = Vec::new();
-        // This existing saved chain owns physical combo input 4. Do not move
-        // its effects to input 1 merely because its durable ID says mic-1.
+        // Legacy saved ID `mic-1` maps to physical combo input 4; keep it pinned there.
         targets.push(Target::new("mic-1", "Mic 4", TargetKind::Mic, 1));
         for i in 1..=3 {
             targets.push(Target::new(

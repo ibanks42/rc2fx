@@ -12,9 +12,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// InstallUSBRule is the privileged side of USBRuleFlag: replace the rule
-// file atomically (0644, root-owned), then have udev reload its rules and
-// apply them to the hidraw devices already plugged in.
+// InstallUSBRule atomically installs USBRule to USBRulePath (0644, root-owned)
+// and reloads udev rules for attached hidraw devices.
 func InstallUSBRule() error {
 	temporary := filepath.Join(filepath.Dir(USBRulePath), ".70-rc2fx.rules.tmp")
 	file, err := os.Create(temporary)
@@ -55,8 +54,7 @@ func InstallUSBRule() error {
 	return nil
 }
 
-// udevadmPaths is where distributions install udevadm. A root process never
-// finds a tool through PATH, which pkexec's caller may have influenced.
+// Fixed paths so the root helper never relies on caller-controlled PATH.
 var udevadmPaths = [3]string{"/usr/bin/udevadm", "/sbin/udevadm", "/bin/udevadm"}
 
 func udevadm() (string, error) {
@@ -68,13 +66,11 @@ func udevadm() (string, error) {
 	return "", installer.Error("udevadm was not found")
 }
 
-// cleanCommand is a command that inherits nothing from the environment.
 func cleanCommand(program string, args ...string) *exec.Cmd {
 	cmd := exec.Command(program, args...)
 	cmd.Env = []string{}
 	return cmd
 }
 
-// Needed is whether device actions need the privileged helper: raw USB,
-// mounting and ejection on Linux require root.
+// Needed reports whether device operations require the privileged helper.
 func Needed() bool { return os.Geteuid() != 0 }

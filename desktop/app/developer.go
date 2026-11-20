@@ -1,9 +1,7 @@
 package app
 
-// Developer mode: SSH access to the connected mixer, managed
-// over USB 1. Developer mode only shows these controls. Hiding them changes
-// nothing on the mixer; only Disable removes RC2FX's key. Nothing here
-// flashes. What the row says and the login command are in app/developer.
+// Developer mode UI for managing SSH access on the connected mixer over USB 1.
+// Toggling developer mode off only hides the controls; only Disable removes the key.
 
 import (
 	"path/filepath"
@@ -19,15 +17,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// SSH is what the mixer last said about SSH, for the
-// current connection only.
 type SSH struct{ developer.SSH }
 
-// clear forgets everything the mixer said about SSH (developer.SSH.Clear).
 func (s *SSH) clear() { s.Clear() }
 
-// addressInput is the Mixer address field. Only real edits redraw the page,
-// not its cursor.
 func addressInput(cx *gk.Cx) gk.InputState {
 	input := gk.NewInputState(cx).Placeholder("192.168.1.20").
 		Validate(func(_ *gk.Cx, text string) bool { return developer.ValidAddress(text) }).
@@ -44,7 +37,6 @@ func (a *App) developerVisible() bool {
 	return a.developerMode && a.session.Connected && a.streamConnected
 }
 
-// readSSH asks the mixer for its SSH status, when the controls are visible.
 func (a *App) readSSH() {
 	if a.developerVisible() && !a.ssh.Change.Sent() {
 		id := a.ssh.Track(false)
@@ -56,7 +48,7 @@ func (a *App) readSSH() {
 
 func (a *App) setDeveloperMode(cx *gk.Cx, on bool) {
 	if err := rememberDeveloper(on); err != nil {
-		// The switch stays as it was: the choice would not survive.
+		// Leave the toggle unchanged if persisting it failed.
 		a.message = "Could not save Developer mode: " + err.Error()
 	} else {
 		a.developerMode = on
@@ -72,11 +64,10 @@ type pinOutcome struct {
 }
 
 func (a *App) receiveSSH(cx *gk.Cx, id uint64, status *core.SSHStatus, err error) {
-	// Stale replies are dropped before they change or pin anything.
 	if !a.ssh.AcceptReply(id) {
 		return
 	}
-	// Never carry one status's (or one mixer's) host identity into the next.
+	// Clear any previous host pin before processing the new status.
 	a.ssh.Pinned = nil
 	if err == nil && status != nil && a.connectedMixer != nil {
 		serial := *a.connectedMixer
@@ -86,8 +77,7 @@ func (a *App) receiveSSH(cx *gk.Cx, id uint64, status *core.SSHStatus, err error
 			var pinned *developer.Pinned
 			switch {
 			case mockMixer:
-				// The mock has no host identity. Show the command a real
-				// mixer would get without writing to known_hosts.
+				// Build a synthetic host entry for the mock mixer without touching known_hosts.
 				pinned = mockPinned(serial)
 			case len(keys) > 0:
 				host, err := installer.PinMixerHostKeys(serial, keys)
@@ -117,14 +107,11 @@ func (a *App) sendSSH(request core.SSHRequest) {
 	}
 }
 
-// sameConnection is whether a confirmation still applies to what the user
-// confirmed it on.
+// sameConnection checks that the mixer connection hasn't changed since the user confirmed.
 func (a *App) sameConnection(epoch uint64, serial *string) bool {
 	return a.ssh.Epoch == epoch && opt.Equal(a.connectedMixer, serial) && a.developerVisible()
 }
 
-// enableSSH prepares this computer's key off the UI thread, then sends it,
-// but only for the connection the user confirmed on.
 func (a *App) enableSSH(cx *gk.Cx, epoch uint64, serial *string) {
 	if !a.sameConnection(epoch, serial) {
 		a.message = "The mixer connection changed; SSH was not enabled."
@@ -159,9 +146,6 @@ func (a *App) enableSSH(cx *gk.Cx, epoch uint64, serial *string) {
 	})
 }
 
-// confirmEnableSSH: enabling gives root access over the network, so it is
-// confirmed. The confirmation only counts for the connection it was asked
-// on.
 func (a *App) confirmEnableSSH(cx *gk.Cx) {
 	epoch, serial := a.ssh.Epoch, opt.Clone(a.connectedMixer)
 	a.confirm(cx, confirmKindOther, Confirm{
@@ -190,8 +174,6 @@ func (a *App) disableSSH(epoch uint64, serial *string) {
 	a.sendSSH(core.SSHRequest{Enabled: false})
 }
 
-// confirmDisableSSH: the confirmation only counts for the connection it was
-// asked on.
 func (a *App) confirmDisableSSH(cx *gk.Cx) {
 	epoch, serial := a.ssh.Epoch, opt.Clone(a.connectedMixer)
 	a.confirm(cx, confirmKindOther, Confirm{
@@ -207,18 +189,12 @@ func (a *App) confirmDisableSSH(cx *gk.Cx) {
 	}, nil)
 }
 
-// highlightedCommand is the login command with the address placeholder
-// picked out in amber.
-//
-// TODO(B1 styled text): gk has no StyledText with highlight ranges
-// (gpui's StyledText::with_highlights is not in the Go API). Until then the
-// command is one plain run of text, the placeholder included, in the box's
-// own color; the layout and wrapping are the same.
+// TODO(B1 styled text): highlight the address placeholder in amber once gk
+// exposes gpui's StyledText::with_highlights.
 func highlightedCommand(command string) gk.Element {
 	return txt(command)
 }
 
-// sshLogin is the address field, the login command and its Copy button.
 func (a *App) sshLogin(cx *gk.Cx, command string) [2]gk.DivEl {
 	mono := gk.KitTheme(cx).MonoFontFamily(cx)
 	return [2]gk.DivEl{
@@ -235,8 +211,6 @@ func (a *App) sshLogin(cx *gk.Cx, command string) [2]gk.DivEl {
 	}
 }
 
-// sshRows is what the mixer reported, with what's needed to log in when it
-// can work.
 func (a *App) sshRows(cx *gk.Cx) gk.DivEl {
 	change := a.ssh.Change
 	local := a.ssh.LocalFingerprint
@@ -337,15 +311,12 @@ func (a *App) developerSection(cx *gk.Cx) gk.DivEl {
 	return settingsSection("Developer", gk.Div(), rows)
 }
 
-// detailRow is a label on the left and what it names on the right.
 func detailRow(label string, value gk.Element) gk.DivEl {
 	return gk.HFlex(s.ItemsCenter).Gap(px(12)).TextSize(px(13.5)).TextColor(rgb(Muted)).
 		Child(gk.Div(s.FlexShrink0).W(px(112)).Child(txt(label))).
 		Child(gk.Div(s.Flex1, s.MinW0).Child(value))
 }
 
-// mockPinned is the host identity the mock mixer's login command names: the
-// real file and alias, with nothing written.
 func mockPinned(serial string) *developer.Pinned {
 	work, ok := installer.DefaultWork()
 	alias, err := installer.MixerHostAlias(serial)

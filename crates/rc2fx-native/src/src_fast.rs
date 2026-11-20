@@ -1,11 +1,11 @@
-//! `src_process` for the vendor's USB bridges, through the bit-exact mono path
-//! in `src_fast_core`. Anything else runs the real library.
+//! Fast-path `src_process` hook for the USB audio bridges, backed by the
+//! bit-exact mono linear resampler in `src_fast_core`. Unhandled cases fall
+//! back to `libsamplerate`.
 //!
-//! `RC2FX_SRC_MODE` picks the mode at audio start. `fast` is what the launcher
-//! passes by default. `verify` keeps the real library's audio and compares the
-//! fast path with it on every call, for bench runs. `stock`, an unset value or
-//! a library whose code differs from the verified build leave the symbol
-//! unbound, so the mixer calls libsamplerate directly.
+//! Controlled by `RC2FX_SRC_MODE` at startup:
+//! - `fast`: use the fast path (default from the launcher)
+//! - `verify`: run both and compare bit-for-bit, returning `libsamplerate`'s output
+//! - `stock` / unset / unverified library: leave `src_process` unbound
 #[path = "src_fast_core.rs"]
 pub mod core;
 
@@ -19,17 +19,13 @@ use std::{
 const STOCK: u8 = 0;
 const FAST: u8 = 1;
 const VERIFY: u8 = 2;
-/// A thread holds a slot for life, and a slot is never handed to a second
-/// thread: two threads writing one plan would produce wrong samples. A USB
-/// mode change starts new client threads, so the table is sized for many of
-/// them, as `client_timing`'s is. A slot's pages are touched only once a
-/// thread claims it. A thread that finds the table full runs the real library
-/// from then on, which is stock behavior, and is counted once in `noSlot`.
+/// Per-thread slot table capacity. Slots are never recycled so two threads
+/// can never race on a `Plan`; sized generously for USB mode switches that
+/// spawn new client threads. Overflow threads fall back to `libsamplerate`.
 const SLOTS: usize = 128;
-/// This thread has not asked for a slot yet.
 const UNCLAIMED: usize = usize::MAX;
-/// The table was full when this thread asked. It does not ask again, so it
-/// touches no shared counter on any later call.
+/// Stored in TLS when the slot table is full so overflow threads never touch
+/// shared atomics again.
 const REFUSED: usize = usize::MAX - 1;
 
 type SrcProcess = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
@@ -40,14 +36,11 @@ static OPENED: AtomicBool = AtomicBool::new(false);
 static REAL: AtomicUsize = AtomicUsize::new(0);
 static LINEAR_VT: AtomicUsize = AtomicUsize::new(0);
 static LINEAR_VARI: AtomicUsize = AtomicUsize::new(0);
-/// Slots claimed, at most `SLOTS`, and the threads that found none left. Both
-/// are written only when a thread makes its first call.
 static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 static NO_SLOT: AtomicU64 = AtomicU64::new(0);
 
-/// One thread's plan and counters. Only that thread writes them; reports read
-/// the counters. Aligned to a cache line, so that the counters one thread
-/// writes on every call share no line with the next thread's plan.
+/// Cache-line-aligned per-thread state so one thread's counter updates don't
+/// false-share with another thread's `Plan`.
 #[repr(align(64))]
 struct Slot {
     plan: UnsafeCell<Plan>,
@@ -58,7 +51,7 @@ struct Slot {
     compared: AtomicU64,
     mismatches: AtomicU64,
 }
-// Each slot is claimed by one thread; see `slot`.
+// SAFETY: Each slot is claimed exclusively by one thread via `NEXT_SLOT`.
 unsafe impl Sync for Slot {}
 
 static SLOT_TABLE: [Slot; SLOTS] = [const {
@@ -89,7 +82,7 @@ fn parse_mode(value: &[u8]) -> u8 {
     }
 }
 
-/// Read once, before the first object is opened.
+/// Called once at startup before any shared object is opened.
 pub fn initialize() {
     let value = unsafe { libc::getenv(c"RC2FX_SRC_MODE".as_ptr()) };
     let mode = if value.is_null() {
@@ -100,7 +93,6 @@ pub fn initialize() {
     MODE.store(mode, Ordering::Relaxed);
 }
 
-/// Whether this object must be audited for the resampler.
 pub fn object(basename: &[u8]) -> bool {
     MODE.load(Ordering::Relaxed) != STOCK && basename.starts_with(b"libsamplerate.so")
 }
@@ -111,8 +103,8 @@ fn fnv(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Whether the file at `path` is the verified library. Reads the file, not the
-/// mapping: another library may be too small to read at these offsets.
+/// Checks `path` on disk rather than reading mapped memory, in case a different
+/// `libsamplerate` build is smaller than `TEXT_OFFSET + TEXT_SIZE`.
 fn verified_file(path: &std::ffi::CStr) -> bool {
     let mut text = [0u8; core::TEXT_SIZE];
     unsafe {
@@ -134,7 +126,6 @@ fn verified_file(path: &std::ffi::CStr) -> bool {
     }
 }
 
-/// Checks the library's code, which fixes every layout `core` relies on.
 pub fn opened(base: usize, path: &std::ffi::CStr) {
     OPENED.store(true, Ordering::Relaxed);
     if verified_file(path) {
@@ -144,7 +135,6 @@ pub fn opened(base: usize, path: &std::ffi::CStr) {
     }
 }
 
-/// The wrapper to bind in place of the real `src_process`, once verified.
 pub fn replacement(address: usize) -> Option<usize> {
     if !VERIFIED.load(Ordering::Acquire) || !super::remember(&REAL, address) {
         return None;
@@ -152,8 +142,6 @@ pub fn replacement(address: usize) -> Option<usize> {
     Some(src_process as *const () as usize)
 }
 
-/// Claims the next of `slots` slots, or counts a refusal: called once per
-/// thread. `next` never passes `slots`, so it is also the number claimed.
 fn claim(next: &AtomicUsize, refused: &AtomicU64, slots: usize) -> usize {
     let mut index = next.load(Ordering::Relaxed);
     loop {
@@ -168,8 +156,6 @@ fn claim(next: &AtomicUsize, refused: &AtomicU64, slots: usize) -> usize {
     }
 }
 
-/// What `current` (a thread's own cell) holds after its first use: its slot
-/// index, or `REFUSED`. Only the first use touches `next` or `refused`.
 fn slot_index(
     current: &Cell<usize>,
     next: &AtomicUsize,
@@ -182,7 +168,6 @@ fn slot_index(
     current.get()
 }
 
-/// This thread's slot, claiming one on first use. None once refused.
 fn slot() -> Option<&'static Slot> {
     let index = CURRENT
         .try_with(|current| slot_index(current, &NEXT_SLOT, &NO_SLOT, SLOTS))
@@ -227,7 +212,8 @@ unsafe extern "C" fn src_process(state: *mut c_void, data: *mut c_void) -> c_int
     0
 }
 
-/// Runs the real library, whose audio the mixer keeps, and compares.
+/// Runs both the fast path (into scratch) and `libsamplerate`, comparing outputs
+/// and state bit-for-bit while keeping `libsamplerate`'s result.
 unsafe fn verify(
     slot: &Slot,
     plan: &Plan,
@@ -262,7 +248,7 @@ unsafe fn verify(
 }
 
 pub fn snapshot() -> serde_json::Value {
-    // Claimed slots only: an unclaimed slot's pages stay untouched.
+    // Only inspect claimed slots so unclaimed pages stay unfaulted.
     let threads = NEXT_SLOT.load(Ordering::Relaxed).min(SLOTS);
     let sum = |field: fn(&Slot) -> &AtomicU64| -> u64 {
         SLOT_TABLE[..threads]
@@ -305,9 +291,6 @@ mod tests {
         }
     }
 
-    /// More threads than slots: every slot goes to exactly one thread, the
-    /// rest are refused once each, and a refused thread writes no shared
-    /// counter on its later calls.
     #[test]
     fn a_full_table_refuses_each_extra_thread_once_and_is_then_left_alone() {
         const TABLE: usize = 32;
@@ -345,8 +328,7 @@ mod tests {
         );
         assert_eq!(next.load(Ordering::Relaxed), TABLE, "never past the table");
         assert_eq!(refused.load(Ordering::Relaxed), (THREADS - TABLE) as u64);
-        // A refused thread's later calls touch neither counter: with both set
-        // to values a write would disturb, they stay as set.
+        // Verify refused threads don't touch `next` or `refused` on subsequent calls.
         let current = Cell::new(REFUSED);
         next.store(7, Ordering::Relaxed);
         refused.store(11, Ordering::Relaxed);
@@ -355,7 +337,6 @@ mod tests {
         }
         assert_eq!(next.load(Ordering::Relaxed), 7);
         assert_eq!(refused.load(Ordering::Relaxed), 11);
-        // Neither sentinel is a table index.
         assert!(SLOT_TABLE.get(REFUSED).is_none() && SLOT_TABLE.get(UNCLAIMED).is_none());
     }
 
@@ -363,10 +344,6 @@ mod tests {
         7
     }
 
-    /// Through the wrapper itself, with more short-lived threads than slots:
-    /// every call reaches the library when the fast path declines, threads
-    /// beyond the table are counted once each, and their calls are not
-    /// counted against any slot.
     #[test]
     fn more_threads_than_slots_all_reach_the_library() {
         const EXTRA: usize = 5;

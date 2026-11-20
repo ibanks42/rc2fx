@@ -1,8 +1,7 @@
-//! DeepFilterNet3's three networks (encoder, ERB decoder, DF decoder), one
-//! frame at a time (the GRUs carry their hidden state from frame to frame).
-//! Layer sizes, band counts and the STFT framing come from the weights, so
-//! slimmed variants (narrower GRUs, fewer layers, fewer deep-filter bins, a
-//! shorter hop) load unchanged.
+//! Streaming DeepFilterNet3 networks (encoder, ERB decoder, DF decoder), run
+//! one hop at a time with persistent GRU hidden states. Layer dimensions, band
+//! counts, and STFT framing are inferred from the weights blob so slimmed
+//! variants load without code changes.
 use crate::Error;
 use crate::convp::Convp;
 use crate::glue::{add_transposed, conv3x3, depthwise_t3, depthwise3, shift3_add, transpose};
@@ -11,23 +10,17 @@ use crate::kernels::{Weights, grouped, pack_pointwise, pointwise, sigmoid_slice,
 use crate::profile;
 use std::collections::HashMap;
 
-/// Named f32 tensors in the exporter's format: a u32 count, then per tensor a
-/// u32 name length, the name, a u32 rank, u32 dims and little-endian f32 data.
-/// Besides the model's state dict, the file carries the STFT framing as
-/// `rc2fx.fft_size`, `rc2fx.hop_size` and `rc2fx.lookahead`, each a rank-1
-/// tensor holding one integral f32.
+/// Named f32 tensors from the binary export format: `u32` tensor count, then
+/// per tensor `[name_len, name_utf8, rank, dims..., f32_le_data...]`. Framing
+/// metadata is stored alongside the state dict as scalar rank-1 tensors
+/// (`rc2fx.fft_size`, `rc2fx.synthesis_size`, `rc2fx.hop_size`, `rc2fx.lookahead`).
 pub(crate) struct Tensors(pub(crate) HashMap<String, (Vec<usize>, Vec<f32>)>);
 
-/// The STFT framing a model was trained for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Framing {
-    /// FFT size and analysis window length.
     pub(crate) fft: usize,
-    /// Synthesis window length: the last `synthesis` samples of each frame
-    /// are resynthesized (see `dsp::windows`).
     pub(crate) synthesis: usize,
     pub(crate) hop: usize,
-    /// Frames of input past the one being enhanced.
     pub(crate) lookahead: usize,
 }
 
@@ -76,7 +69,6 @@ impl Tensors {
         self.0.get(name).ok_or(Error::Weights)
     }
 
-    /// A tensor with the given rank.
     fn shaped(&self, name: &str, rank: usize) -> Result<(&[usize], &[f32]), Error> {
         let (d, v) = self.get(name)?;
         if d.len() != rank || v.is_empty() {
@@ -93,7 +85,6 @@ impl Tensors {
         Ok(v.clone())
     }
 
-    /// A rank-1 tensor holding one non-negative integer as f32.
     fn scalar(&self, name: &str) -> Result<usize, Error> {
         let (d, v) = self.shaped(name, 1)?;
         let x = v[0];
@@ -104,7 +95,6 @@ impl Tensors {
     }
 }
 
-/// Reads the weights file front to back.
 struct Cursor<'a>(&'a [u8]);
 
 impl<'a> Cursor<'a> {
@@ -213,24 +203,21 @@ impl Linear {
     }
 }
 
-/// One GRU layer (PyTorch gate order r, z, n) with its hidden state.
+/// Single GRU layer (PyTorch gate order: `r`, `z`, `n`).
 struct Gru {
     wih: QWeights,
     whh: QWeights,
-    /// Scratch for the quantized input of `matvec_q8`.
     xq: Vec<i16>,
     bih: Vec<f32>,
     bhh: Vec<f32>,
     hidden: usize,
     h: Vec<f32>,
-    /// Advances whenever `h` changes (a step or a reset).
+    /// Incremented whenever `h` changes (step or reset) to validate `gh_for`.
     h_gen: u64,
-    /// [3 * hidden]: the step's input products.
     gi: Vec<f32>,
-    /// The recurrent products W_hh h (biases not added).
+    /// Recurrent products `W_hh * h` (without bias).
     gh: Vec<f32>,
-    /// `Some(h_gen)` when `gh` was prepared ahead (`prepare`) from the
-    /// current `h`; the next step then uses it instead of recomputing it.
+    /// Generation of `h` that `gh` was precomputed for, if any.
     gh_for: Option<u64>,
 }
 
@@ -263,14 +250,11 @@ impl Gru {
         })
     }
 
-    /// Whether `gh` holds the recurrent products of the current `h`.
     fn prepared(&self) -> bool {
         self.gh_for == Some(self.h_gen)
     }
 
-    /// W_hh h for the current hidden state, by the same kernel and from the
-    /// same input as the next step would compute it, so the step's result
-    /// is unchanged. Returns false if it was already prepared.
+    /// Precomputes `W_hh * h` for the current hidden state. Returns `false` if already up to date.
     fn prepare(&mut self) -> bool {
         if self.prepared() {
             return false;
@@ -285,9 +269,8 @@ impl Gru {
         self.gh_for = None;
     }
 
-    /// Advances one step, replacing `x` with the new hidden state (`inp`
-    /// equals `hidden` in a SqueezedGRU). A step whose W_hh h was prepared
-    /// (`prepare`) uses it.
+    /// Advances one step in place (`x` is overwritten with the new hidden state),
+    /// reusing precomputed `gh` when available.
     fn step(&mut self, x: &mut [f32]) {
         let n = self.hidden;
         let gi = &mut self.gi[..3 * n];
@@ -604,10 +587,8 @@ impl Dfn {
         }
         let nb_erb = 4 * emb_len / ch;
         let nb_df = 2 * df_fc_emb.inp() / ch;
-        // The pointwise kernels work on whole groups of eight bins, so every
-        // width they see (nb_erb, nb_erb / 2, nb_erb / 4, nb_df, nb_df / 2)
-        // must be a multiple of eight. Their buffers have no slack past the
-        // last bin to absorb a partial group.
+        // Pointwise kernels process 8 bins at a time with no tail padding, so
+        // every downsampled width (nb_erb/4, nb_df/2) must be a multiple of 8.
         if nb_erb == 0 || nb_erb % 32 != 0 || nb_df == 0 || nb_df % 16 != 0 {
             return Err(Error::Weights);
         }
@@ -706,10 +687,9 @@ impl Dfn {
         })
     }
 
-    /// Raises df_convp's batch-norm shift so its ReLU passes every value.
-    /// With the embedded weights the pathway's output is almost always
-    /// clipped to zero; opened, whatever its convolution computes reaches
-    /// the coefficients and the output samples.
+    /// Bumps `df_convp`'s batch-norm shift so its ReLU doesn't clip everything
+    /// to zero (with the embedded weights it is mostly inactive), letting tests
+    /// verify that `df_convp` reaches the output samples.
     #[cfg(test)]
     pub(crate) fn open_convp(&mut self) {
         self.convp_norm.shift.iter_mut().for_each(|s| *s += 4.);
@@ -734,14 +714,12 @@ impl Dfn {
         self.nb_df
     }
 
-    /// Prepares one GRU layer's recurrent products for the next call, in
-    /// the order the call reaches them (encoder, ERB decoder, DF decoder);
-    /// false if every layer is prepared.
+    /// Prepares the next unprepared GRU layer in execution order (encoder, ERB
+    /// decoder, DF decoder).
     pub(crate) fn prepare_gru(&mut self) -> bool {
         self.enc_gru.prepare_next() || self.erb_gru.prepare_next() || self.df_gru.prepare_next()
     }
 
-    /// GRU layers not yet prepared for the next call.
     pub(crate) fn gru_unprepared(&self) -> usize {
         self.enc_gru.unprepared() + self.erb_gru.unprepared() + self.df_gru.unprepared()
     }

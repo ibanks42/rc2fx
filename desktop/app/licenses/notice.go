@@ -2,11 +2,10 @@ package licenses
 
 import "strings"
 
-// NoticeMarkdown is a notice as Markdown for the dialog's rich text.
-// License sources are plain text, not
-// Markdown: punctuation and leading whitespace are escaped so legal notices
-// cannot turn into headings, links, HTML or images. Small blocks let the
-// text view virtualize even notices with no blank paragraphs.
+// NoticeMarkdown converts a plain-text license notice into safe Markdown for
+// the rich-text dialog. ASCII punctuation and leading whitespace are escaped so
+// notices can't accidentally render as headings, links, or HTML, and lines are
+// chunked into 32-line paragraphs so the text view can virtualize long notices.
 func NoticeMarkdown(text string) string {
 	var result strings.Builder
 	result.Grow(len(text) * 2)
@@ -40,8 +39,7 @@ func NoticeMarkdown(text string) string {
 	return result.String()
 }
 
-// lines splits at '\n', drops a '\r' before it, and gives no empty line
-// after a final '\n'.
+// lines splits text on '\n', stripping '\r' and omitting any trailing empty line.
 func lines(text string) []string {
 	var out []string
 	for text != "" {

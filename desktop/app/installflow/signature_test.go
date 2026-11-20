@@ -1,7 +1,5 @@
 package installflow
 
-// The signature's progress and the shape of its line.
-
 import (
 	"math"
 	"testing"

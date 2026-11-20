@@ -416,9 +416,9 @@ type HTTPRepository struct {
 	Client   *http.Client
 }
 
-// NewHTTPRepository is an HTTPS repository with metadata under metadataURL
-// and targets under targetsURL. A connection fails after 30 s, a stalled
-// read after a minute, and total bounds the whole of any one request.
+// NewHTTPRepository returns an HTTPS repository with metadata under metadataURL
+// and targets under targetsURL. Connections time out after 30s, stalled reads
+// after 60s, and total caps the full request duration.
 func NewHTTPRepository(metadataURL, targetsURL *url.URL, total time.Duration) *HTTPRepository {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
@@ -517,9 +517,8 @@ func BoundedGet(ctx context.Context, client *http.Client, u *url.URL, maxLength 
 	}
 }
 
-// Folders is a repository in two local folders, for tests and development
-// builds' local release folder: what the official hosts serve, laid out the
-// same way.
+// Folders is a local-directory Repository for tests and dev builds, using the
+// same layout as the remote hosts.
 type Folders struct {
 	Metadata string
 	Targets  string

@@ -57,16 +57,15 @@ func TestADraftStatesTheLatencyItWouldBringFromTheMixersOwnReport(t *testing.T) 
 			t.Errorf("got %q, want %q", got, want)
 		}
 	}
-	// The mixer runs LA0 and reports 920 samples (19.2 ms): the helper
-	// build's total, model plus lead plus one mixer period.
+	// Mixer running LA0 reports 920 samples (19.2 ms) total (model + lead + one period).
 	la0 := reported(u32(920), u8(0))
 	eq(LookaheadFigure(la0, 0), "19.2 ms")
 	eq(LookaheadFigure(la0, 1), "24.2 ms after applying")
-	// And the other way: running LA1 at 1160 (24.2 ms).
+	// Vice versa for LA1 at 1160 samples (24.2 ms).
 	la1 := reported(u32(1160), u8(1))
 	eq(LookaheadFigure(la1, 1), "24.2 ms")
 	eq(LookaheadFigure(la1, 0), "19.2 ms after applying")
-	// One hop is exactly 240 samples in either figure.
+	// Each lookahead step is 240 samples.
 	if v, ok := la0.AfterApplying(1); !ok || v != 1160 {
 		t.Errorf("la0.AfterApplying(1) = %v, %v", v, ok)
 	}
@@ -85,20 +84,18 @@ func TestWithoutAReportOnlyTheRelativeCostIsStated(t *testing.T) {
 	offline := reported(nil, nil)
 	eq(LookaheadFigure(offline, 0), "")
 	eq(LookaheadFigure(offline, 1), "")
-	// Offline the draft itself is the reference: more context costs 5 ms,
-	// the lowest latency saves it.
+	// Offline, the draft itself is the baseline.
 	eq(LookaheadCost(offline, 0, 0), "now")
 	eq(LookaheadCost(offline, 1, 0), "+5.0 ms")
 	eq(LookaheadCost(offline, 0, 1), "\u22125.0 ms")
-	// A live report decides the reference even when a draft differs.
+	// Live report overrides the draft as the baseline.
 	live := reported(u32(920), u8(0))
 	eq(LookaheadCost(live, 1, 1), "+5.0 ms")
 	eq(LookaheadCost(live, 0, 0), "now")
 	live = reported(u32(1160), u8(1))
 	eq(LookaheadCost(live, 0, 1), "\u22125.0 ms")
 	eq(LookaheadCost(live, 1, 0), "now")
-	// A report without a latency (the path reports 0 while idle) still
-	// states the relative cost.
+	// Idle path (no latency figure) still reports relative cost.
 	idle := reported(nil, u8(0))
 	eq(LookaheadCost(idle, 1, 0), "+5.0 ms")
 	eq(LookaheadFigure(idle, 1), "")

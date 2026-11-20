@@ -1,11 +1,10 @@
-// Package firmware holds firmware-specific addresses and ABI identities,
-// checked before audio changes: the mixer models, the firmware profile
-// catalog and the offline compatibility checks the installer needs.
+// Package firmware defines mixer models, the firmware profile catalog, and the
+// offline ABI/compatibility checks used by the installer before modifying a
+// mixer.
 //
-// Port of the parts of crates/rc2fx-firmware the desktop uses: the catalog
-// and offline inspection. Runtime selection (Catalog::select_for_model_with)
-// and the CLI stay mixer-side. Both read the shared fixtures in
-// fixtures/firmware.
+// Ports the desktop-relevant parts of crates/rc2fx-firmware (catalog parsing
+// and offline inspection); runtime selection and the CLI stay in Rust on the
+// mixer. Shared fixtures live in fixtures/firmware.
 package firmware
 
 import (
@@ -21,21 +20,18 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// Catalog is the firmware profile catalog (config/firmware-profiles.json).
-// The json tags are read by core's strict decoder, which follows serde's
-// derive: every field is required unless it is a pointer (Rust Option:
-// missing or null is nil) or tagged `default` (Rust #[serde(default)]:
-// missing is empty, null is still refused), and unknown fields are refused,
-// as `deny_unknown_fields` does on every Rust catalog struct.
+// Catalog represents config/firmware-profiles.json. Decoded via core's strict
+// JSON decoder to match Rust serde's deny_unknown_fields behavior: fields are
+// required unless they are pointers (optional/nullable) or tagged `default`
+// (missing allowed, null rejected).
 type Catalog struct {
 	SchemaVersion uint32    `json:"schemaVersion"`
 	Profiles      []Profile `json:"profiles"`
 }
 
-// maxCatalogBytes is the largest catalog read.
 const maxCatalogBytes = 128 * 1024
 
-// Profile is one firmware release of one model.
+// Profile describes a single firmware release for a specific mixer model.
 type Profile struct {
 	MinimumAppVersion string   `json:"minimumAppVersion,default"`
 	ID                string   `json:"id"`
@@ -49,7 +45,8 @@ type Profile struct {
 	Notes             string   `json:"notes"`
 }
 
-// Runtime is what a runtime-qualified release's hooks need.
+// Runtime holds the hook addresses and ABI metadata for a runtime-qualified
+// firmware release.
 type Runtime struct {
 	CallbackABI string      `json:"callbackAbi"`
 	RouteLayout string      `json:"routeLayout"`
@@ -69,8 +66,8 @@ type JobLifetime struct {
 	Body    Site   `json:"body"`
 }
 
-// Site is one hook site: an executable-relative address and the 16
-// original instruction bytes there, as written in the catalog.
+// Site is a hook location: an executable-relative offset and the 16 original
+// instruction bytes expected there.
 type Site struct {
 	Offset   string `json:"offset"`
 	Expected string `json:"expected"`
@@ -93,8 +90,7 @@ func sum(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// OffsetValue is the site's offset as a number (the Rust Site::offset; Go
-// cannot share the field's name).
+// OffsetValue parses s.Offset into an aligned executable-relative byte offset.
 func (s *Site) OffsetValue() (int, error) {
 	value, ok := strings.CutPrefix(s.Offset, "0x")
 	if !ok {
@@ -110,8 +106,7 @@ func (s *Site) OffsetValue() (int, error) {
 	return int(offset), nil
 }
 
-// parseHexUint parses as Rust's usize::from_str_radix(_, 16), with its
-// messages.
+// parseHexUint matches Rust's usize::from_str_radix(_, 16) and its error text.
 func parseHexUint(text string) (uint64, error) {
 	digits := text
 	if strings.HasPrefix(digits, "+") && len(digits) > 1 {
@@ -143,7 +138,7 @@ func parseHexUint(text string) (uint64, error) {
 	return value, nil
 }
 
-// Bytes is the site's 16 original instruction bytes.
+// Bytes decodes the 16 original instruction bytes for this hook site.
 func (s *Site) Bytes() ([16]byte, error) {
 	var out [16]byte
 	if !isHex(s.Expected, 32) {
@@ -155,7 +150,7 @@ func (s *Site) Bytes() ([16]byte, error) {
 	return out, nil
 }
 
-// Sites is every hook site, callback first.
+// Sites returns all five hook sites with the audio callback first.
 func (r *Runtime) Sites() [5]*Site {
 	return [5]*Site{&r.Callback, &r.JobLifetime.Enqueue, &r.JobLifetime.Manager, &r.JobLifetime.Invoker, &r.JobLifetime.Body}
 }
@@ -216,11 +211,8 @@ func showPathBytes(path string) bool {
 	return true
 }
 
-// ParseCatalog reads and validates a catalog. The JSON is read as strictly
-// as serde reads the Rust structs (unknown, duplicate and missing fields,
-// wrong types, floats and out-of-range numbers for integers, invalid UTF-8
-// and lone surrogates are refused). JSON-level messages are core's, in
-// serde's wording; the fixtures share only that such a catalog is refused.
+// ParseCatalog parses and validates a firmware catalog JSON document using the
+// same strict rules as the Rust serde decoder.
 func ParseCatalog(text string) (*Catalog, error) {
 	if len(text) > maxCatalogBytes {
 		return nil, errors.New("firmware catalog exceeds 128 KiB")
@@ -279,7 +271,6 @@ func profileIDBytes(id string) bool {
 	return true
 }
 
-// identify finds the named model's profile for a mixer executable.
 func (c *Catalog) identify(model Model, image []byte) (*Profile, error) {
 	hash := sum(image)
 	for i := range c.Profiles {
@@ -290,9 +281,10 @@ func (c *Catalog) identify(model Model, image []byte) (*Profile, error) {
 	return nil, fmt.Errorf("unrecognized %s mixer executable SHA-256 %s", model.ID(), hash)
 }
 
-// InspectForModel is offline-only executable inspection. Reuse a qualified
-// executable's instruction checks, but do NOT grant its physical routes to
-// this model. The returned release can still have no runtime.
+// InspectForModel runs offline executable and launcher verification for model.
+// It may borrow instruction checks from another model's qualified profile that
+// shares the exact same executable and launcher hashes, without granting that
+// model's physical route layout; the returned profile may still have Runtime==nil.
 func (c *Catalog) InspectForModel(model Model, image, launcher []byte) (*Profile, error) {
 	profile, err := c.identify(model, image)
 	if err != nil {
@@ -366,9 +358,8 @@ func (p *Profile) VerifyLauncher(launcher []byte) error {
 	return nil
 }
 
-// imageBytes resolves a virtual address through executable ELF PT_LOAD
-// segments, never assuming that the file offset happens to equal the
-// executable-relative offset. Arithmetic is on 64 bits on every platform.
+// imageBytes reads 16 bytes at virtual address from an executable ELF64 PT_LOAD
+// segment, translating vaddr -> file offset explicitly.
 func imageBytes(image []byte, address uint64) ([]byte, error) {
 	truncated := errors.New("truncated ELF image")
 	read := func(offset, size uint64) ([]byte, error) {

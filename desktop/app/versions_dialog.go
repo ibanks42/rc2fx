@@ -1,12 +1,10 @@
 package app
 
-// The Versions section of Settings, and the changelog
-// that What's new opens.
+// Settings Versions section and the "What's new" changelog dialog.
 //
-// Notes come from the network, so they are treated as untrusted: raw HTML
-// and image syntax are escaped (updates.SafeMarkdown), and links open only
-// when updates.SafeURL allows them. (The text view cannot yet be given an
-// image source that loads nothing; see the TODO on changesView.)
+// Release notes come from the network and are treated as untrusted: raw HTML
+// and image syntax are escaped via updates.SafeMarkdown, and links only open
+// if updates.SafeURL allows them.
 
 import (
 	"fmt"
@@ -35,7 +33,6 @@ func versionsDialogToneColor(tone model.Tone) uint32 {
 	return Faint
 }
 
-// flag is a status: a small dot and its words, in the status's color.
 func flag(text string, tone model.Tone) gk.DivEl {
 	color := versionsDialogToneColor(tone)
 	return gk.HFlex(s.ItemsCenter, s.FlexShrink0, s.FontMedium, s.WhitespaceNowrap).Gap(px(6)).
@@ -44,14 +41,11 @@ func flag(text string, tone model.Tone) gk.DivEl {
 		Child(txt(text))
 }
 
-// styledDialog is the shell every RC2FX dialog shares.
 func styledDialog(width float32) gk.DialogEl {
 	return gk.Dialog(s.P6, s.Border1).W(width).Rounded(px(20)).Bg(rgb(surface().Panel)).
 		BorderColor(rgb(surface().LineStrong)).TextColor(rgb(Text)).FontFamily("Inter")
 }
 
-// versionsPill is a button in the Versions section (ui.go has the app's own
-// pill).
 func versionsPill(button gk.ButtonEl) gk.ButtonEl {
 	return button.H(px(34)).Px(px(16)).Rounded(float32(17))
 }
@@ -60,27 +54,21 @@ func large(button gk.ButtonEl) gk.ButtonEl {
 	return button.Large().H(px(44)).Style(s.Px5).Rounded(float32(22))
 }
 
-// changeLink is one footer link of the changes dialog.
 type changeLink struct{ label, url string }
 
-// Changes is what the changes dialog shows for one part.
+// Changes describes the contents of the changelog dialog for a single component.
 type Changes struct {
-	// eyebrow is a small line above the title.
-	eyebrow string
-	title   string
-	// entryPrefix starts each entry's heading.
+	eyebrow     string
+	title       string
 	entryPrefix string
 	changelog   *appupdate.Changelog
-	// note is said above the notes instead of the changelog's own status;
-	// "" for none.
+	// note overrides the changelog's own status line when non-empty.
 	note string
-	// available: entries newer than this need an app update first; nil for
-	// none.
+	// available marks entries newer than this version as requiring an app update first.
 	available *string
 	links     []changeLink
 }
 
-// changeEntry is one release's notes, made safe when the dialog opens.
 type changeEntry struct {
 	heading   string
 	notes     string
@@ -88,8 +76,6 @@ type changeEntry struct {
 	truncated bool
 }
 
-// changesDialog is the open changes dialog: one gk.Built made on first use
-// (a handler), drawing open.
 type changesDialog struct {
 	built gk.Built[gk.DialogEl]
 	made  bool
@@ -121,9 +107,8 @@ func (a *App) openChangesDialog(cx *gk.Cx, spec Changes) {
 	}
 	d := &a.appUpdate.changes
 	d.open = &openChanges{spec: spec, note: note, entries: entries}
-	// A copy of the theme as it is now: the global itself cannot be handed
-	// to a text view's style. Taken again at each opening (the dialog is
-	// closed here), so an appearance change shows.
+	// Snapshot the current global theme on each open so appearance changes
+	// take effect (BaseTextViewStyle cannot reference the global directly).
 	if d.made {
 		gk.Release(cx, d.theme)
 	}
@@ -135,12 +120,9 @@ func (a *App) openChangesDialog(cx *gk.Cx, spec Changes) {
 	gk.OpenDialog(cx, d.built)
 }
 
-// changesView draws the open changes dialog.
-//
-// TODO(B1 image source): each notes view should get an image source that
-// returns an empty image, so no note could make the app fetch one. The Go
-// BaseTextViewEl has no image source call; SafeMarkdown already escapes
-// every `![` outside code, which is what kept images out in the first place.
+// TODO(B1 image source): once BaseTextViewEl supports a custom image source,
+// pass one that returns an empty image so untrusted notes can never trigger
+// remote fetches. SafeMarkdown already escapes `![` outside code blocks.
 func (a *App) changesView(cx *gk.Cx) gk.DialogEl {
 	d := &a.appUpdate.changes
 	open := d.open
@@ -192,8 +174,6 @@ func (a *App) changesView(cx *gk.Cx) gk.DialogEl {
 		Footer(footer)
 }
 
-// versionInputs is the mixer's software, its firmware, and the newest
-// firmware this app supports for it; nil for unknown.
 func (a *App) versionInputs() (runtime, firmware, newestFirmware *string) {
 	d := a.deviceVersions
 	if d == nil {
@@ -205,8 +185,6 @@ func (a *App) versionInputs() (runtime, firmware, newestFirmware *string) {
 	return d.Runtime, d.Firmware, newestFirmware
 }
 
-// availableMixerSoftware is the newest mixer software this app could
-// install right now.
 func (a *App) availableMixerSoftware() *string {
 	signed, _ := a.appUpdate.Signed()
 	if v, ok := model.NewestAvailable(signed, a.bundledMixerSoftware); ok {
@@ -215,8 +193,6 @@ func (a *App) availableMixerSoftware() *string {
 	return nil
 }
 
-// versionsOverview is the versions as Settings and the Versions dialog show
-// them.
 func (a *App) versionsOverview() model.Overview {
 	runtime, firmware, newestFirmware := a.versionInputs()
 	available := a.availableMixerSoftware()
@@ -247,8 +223,6 @@ func (a *App) versionsOverview() model.Overview {
 	}, a.appUpdate.Standing(), mixer.State)
 }
 
-// versionsSection is the Versions section: what matters first, then each
-// part.
 func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	overview := a.versionsOverview()
 	lead := overview.Lead
@@ -257,8 +231,8 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	acting := false
 	updateState := a.selfUpdate.State()
 	offered := hasRelease || a.selfUpdate.Previewing()
-	// A started or finished download, or a failed check, stays even if
-	// today's check found nothing.
+	// Keep an in-progress download, ready package, or error visible even if
+	// a later check finds no new release.
 	inPlace := a.selfUpdate.Supported() && (offered || a.selfUpdate.StaysShown())
 	updateNote := ""
 	if inPlace {
@@ -266,7 +240,6 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 		actions = actions.Child(button)
 		updateNote = note
 	}
-	// A copy that cannot update itself downloads from the release page.
 	download := !inPlace
 	hasPrimary := inPlace
 	if hasRelease && (!inPlace || updateState.Kind == selfupdate.StateFailed) {
@@ -284,7 +257,6 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	}
 	acting = acting || inPlace
 	if overview.OfferInstaller {
-		// Only opens Update RC2FX; its Before you start says what happens.
 		var button gk.ButtonEl
 		if hasPrimary {
 			button = versionsPill(gk.Button("versions-installer").Ghost().Style(s.Border1)).
@@ -333,8 +305,8 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 	return settingsSection("Versions", check, body)
 }
 
-// updateButton is the in-place update action, which keeps one width through
-// its states, and what to say beside it.
+// updateButton renders the self-update button (fixed min width across states)
+// and its accompanying status note.
 func (a *App) updateButton(state selfupdate.State) (gk.ButtonEl, string) {
 	button := versionsPill(gk.Button("versions-update").Primary()).FontSemibold().MinW(px(184))
 	switch state.Kind {
@@ -353,12 +325,10 @@ func (a *App) updateButton(state selfupdate.State) (gk.ButtonEl, string) {
 		return button.Label("Restart to update").Icon(gk.IconRefreshCw).Disabled(blocked).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.restartToUpdate(cx) }), note
 	}
-	// Idle or Failed.
 	note := "It downloads in the background. RC2FX restarts only when you choose."
 	if state.Kind == selfupdate.StateFailed {
 		note = state.Message
 	}
-	// A kept package that could not be checked is only checked again.
 	label, icon := "Download update", gk.IconArrowDown
 	if a.selfUpdate.Retrying() {
 		label, icon = "Check again", gk.IconRefreshCw
@@ -373,7 +343,6 @@ func (a *App) whatsNew(id gk.ID, part model.Part) gk.ButtonEl {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openChanges(cx, part) })
 }
 
-// versionTile is one part: its name, version and standing.
 func (a *App) versionTile(line model.Line, whatsNew bool) gk.DivEl {
 	version := line.Installed
 	if line.Tone == model.ToneUpdate {

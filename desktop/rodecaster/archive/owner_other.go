@@ -4,10 +4,8 @@ package archive
 
 import "os"
 
-// LocalOwner gives a file this process created to the user who started a
-// privileged helper; only Linux has such a helper.
+// LocalOwner is a no-op outside Linux, where there is no privileged helper.
 func LocalOwner(*os.File) error { return nil }
 
-// OwnedByInvoker returns file if it belongs to the user who started a
-// privileged helper; only Linux has such a helper.
+// OwnedByInvoker is a no-op outside Linux.
 func OwnedByInvoker(file *os.File) (*os.File, error) { return file, nil }

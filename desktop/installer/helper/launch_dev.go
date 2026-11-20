@@ -7,9 +7,8 @@ import (
 	"os/exec"
 )
 
-// devLaunch starts the helper with `sudo -n` instead of pkexec when
-// RC2FX_DEV_HELPER_SUDO=1: unattended development runs (the app's flash
-// autopilot) have nobody for the password prompt. Development builds only.
+// In dev builds, RC2FX_DEV_HELPER_SUDO=1 uses non-interactive sudo instead of
+// pkexec for unattended test runs.
 func devLaunch(executable string) *exec.Cmd {
 	if os.Getenv("RC2FX_DEV_HELPER_SUDO") != "1" {
 		return nil

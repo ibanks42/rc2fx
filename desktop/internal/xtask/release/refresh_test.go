@@ -29,7 +29,7 @@ func TestRenewalPreservesTargetsAndRejectsWrongKeysStaleVersionsAndTampering(t *
 	for _, role := range allRoles {
 		all = append(all, signers[role])
 	}
-	// A signed release whose snapshot and timestamp have expired.
+	// Initial release with already-expired snapshot and timestamp.
 	old, err := tufsign.SignRelease(tufsign.Release{
 		RootFile: rootFile, Root: root,
 		TargetsVersion: 1, TargetsExpires: mustTime(t, "2098-01-01T00:00:00Z"),
@@ -70,8 +70,6 @@ func TestRenewalPreservesTargetsAndRejectsWrongKeysStaleVersionsAndTampering(t *
 	if !bytes.Equal(mustRead(t, filepath.Join(dir, "old", "targets.json")), mustRead(t, filepath.Join(dir, "new", "targets.json"))) {
 		t.Fatal("targets changed")
 	}
-	// The renewed metadata loads as the client loads it: the root from
-	// root.json, the roles from new/.
 	repository, err := loadRepository(rootFile, filepath.Join(dir, "new"), dir, time.Now())
 	if err != nil {
 		t.Fatal(err)

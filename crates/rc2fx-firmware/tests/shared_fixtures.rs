@@ -1,7 +1,6 @@
-//! The firmware fixtures the desktop's Go port (desktop/firmware) reads too,
-//! so the mixer's checks and the installer's cannot drift. The USB identities
-//! in models.json are the desktop's: the mixer identifies itself by its
-//! board, so only Go reads those.
+//! Shared firmware fixtures also run by the Go desktop port (`desktop/firmware`).
+//! USB identities in `models.json` are desktop-only (the mixer identifies itself
+//! from board files), so only Go checks those.
 use rc2fx_firmware::{Catalog, Model};
 use serde_json::Value;
 use std::path::PathBuf;

@@ -1,8 +1,7 @@
 /*
- * The few libext2fs operations RC2FX's mixer repair uses, behind functions
- * that take and return only plain C types, so the Go side never depends on
- * libext2fs's structure layouts. Every filesystem operation is libext2fs's
- * own; nothing here reads or writes the disk itself.
+ * Thin C shim over libext2fs for mixer repair. Exposes only plain C types so
+ * Go does not depend on libext2fs struct layouts; all disk I/O goes through
+ * libext2fs.
  */
 #include "config.h"
 #include "ext2fs/ext2_fs.h"
@@ -17,7 +16,7 @@ errcode_t rc2fx_ext2fs_open(const char *device, unsigned long long offset,
 	char options[64];
 	int flags = EXT2_FLAG_64BITS | (writable ? EXT2_FLAG_RW : 0);
 
-	/* error_message() names libext2fs's codes once their table is added. */
+	/* Register libext2fs error strings for error_message(). */
 	if (!tables) {
 		initialize_ext2_error_table();
 		tables = 1;
@@ -27,7 +26,7 @@ errcode_t rc2fx_ext2fs_open(const char *device, unsigned long long offset,
 	return ext2fs_open2(device, options, flags, 0, 0, default_io_manager, fs);
 }
 
-/* The journal still holds changes the kernel has not replayed. */
+/* True if the journal has un-replayed changes. */
 int rc2fx_ext2fs_needs_recovery(ext2_filsys fs)
 {
 	return ext2fs_has_feature_journal_needs_recovery(fs->super);
@@ -38,10 +37,7 @@ errcode_t rc2fx_ext2fs_close(ext2_filsys fs)
 	return ext2fs_close_free(&fs);
 }
 
-/*
- * Look up `path` (relative to the root, without following a final
- * symlink) and report whether it is a regular file and its size.
- */
+/* Look up `path` (root-relative, no final symlink follow) and report type/size. */
 errcode_t rc2fx_ext2fs_lookup(ext2_filsys fs, const char *path,
 			      ext2_ino_t *ino, int *regular,
 			      unsigned long long *size)
@@ -61,7 +57,7 @@ errcode_t rc2fx_ext2fs_lookup(ext2_filsys fs, const char *path,
 	return 0;
 }
 
-/* Read the whole file into `buf`, which holds exactly `len` bytes. */
+/* Read the entire file into `buf` (must match the file size exactly). */
 errcode_t rc2fx_ext2fs_read(ext2_filsys fs, ext2_ino_t ino,
 			    unsigned char *buf, unsigned long long len)
 {
@@ -93,9 +89,8 @@ errcode_t rc2fx_ext2fs_read(ext2_filsys fs, ext2_ino_t ino,
 }
 
 /*
- * Replace the contents of a regular file whose size is exactly `len` with
- * `buf`. The size never changes; libext2fs writes into the file's own
- * blocks, allocating only where a block was never allocated.
+ * Overwrite an existing regular file in place with `buf`. Size must equal
+ * `len`; libext2fs writes into existing blocks and only allocates holes.
  */
 errcode_t rc2fx_ext2fs_overwrite(ext2_filsys fs, ext2_ino_t ino,
 				 const unsigned char *buf,

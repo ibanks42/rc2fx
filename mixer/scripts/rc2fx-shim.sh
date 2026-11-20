@@ -1,15 +1,11 @@
 #!/bin/bash
-# Installed by RC2FX as /usr/sbin/rc_audio_mixer. RØDE's audio launcher
-# (audio-start.sh) starts the mixer by name with /usr/sbin ahead of /usr/bin,
-# so this runs in its place, in the launcher's own environment, and ends in an
-# exec of the stock executable: with RC2FX injected when a bundle is present
-# and passes its checks, otherwise unchanged. A build run from RAM wins over
-# the installed one until the next boot.
+# Installed as /usr/sbin/rc_audio_mixer so audio-start.sh hits us before
+# /usr/bin/rc_audio_mixer. Hands off to rc2fx.sh launch (preferring a RAM dev
+# build in /run/rc2fx-dev over /opt/rc2fx), or falls straight through to the
+# stock mixer.
 #
-# A signed in-place update that has not committed leaves
-# /opt/.rc2fx-update-pending (docs/developer/mixer-releases.md). Unless its
-# detached driver is still working, the last known-good bundle in
-# /opt/.rc2fx-previous is what this boot starts.
+# If an in-place update left /opt/.rc2fx-update-pending behind and its driver
+# is no longer running (e.g. after a power cut), boot from /opt/.rc2fx-previous.
 previous=/opt/.rc2fx-previous
 driver_alive() {
   local p s

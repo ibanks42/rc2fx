@@ -12,11 +12,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// How long a client may stay silent before it counts as gone. Another client
-/// may then take the session over, and the silent client's event subscription
-/// is dropped. The protocol has no goodbye, so silence is the only sign that
-/// the app quit or crashed, the cable was pulled or the host went to sleep.
-/// The app polls events about every 50 ms, so five seconds is never a pause.
+/// Silence timeout after which a client is treated as disconnected, dropping
+/// its event subscription and allowing another client to take over. The app
+/// polls events roughly every 50 ms.
 const CLIENT_IDLE: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
@@ -273,17 +271,10 @@ impl Server {
 
     /// Waits for the next report from the native library.
     ///
-    /// A subscribed client that stays silent for `CLIENT_IDLE` loses its event
-    /// subscription, so the controller stops polling the engine at the watched
-    /// rate and stops serializing meter events for it. The session itself is
-    /// kept: its admitted request ID and cached reply still refuse a replay.
-    /// When the client returns, its next event poll subscribes again and
-    /// starts with the current state.
-    ///
-    /// The deadline counts from the owner's last activity, not from the last
-    /// datagram, so reports from another client or malformed reports do not
-    /// keep a dead subscription alive. With no subscription there is no timer:
-    /// an idle controller only waits on the socket.
+    /// Drops the event subscription if the owner is silent for `CLIENT_IDLE`
+    /// (stopping fast engine polling and meter serialization), while keeping
+    /// the session nonce, last request ID, and cached reply for replay safety.
+    /// Unsubscribed servers wait directly on the socket with no timer.
     pub(crate) async fn receive(
         &mut self,
         socket: &tokio::net::UnixDatagram,

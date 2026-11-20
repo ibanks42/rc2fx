@@ -102,7 +102,7 @@ fn voice_gate_roundtrips_and_one_strength_sets_every_parameter() {
         "{text}"
     );
     assert_eq!(config_from_json(&text).unwrap(), config);
-    // The default is off, its advanced parameters what 0 stands for.
+    // Default gate is off, with advanced fields initialized to strength 0.
     let default = Config::default().targets[0].suppression.gate.clone();
     assert!(!default.active());
     let mut advanced = default.clone();
@@ -138,7 +138,7 @@ fn voice_gate_roundtrips_and_one_strength_sets_every_parameter() {
         GateShape::for_strength(0.).attack_ms,
         GateShape::for_strength(1.).attack_ms
     );
-    // Stricter: surer voice to open, deeper, shorter hold, faster close.
+    // Higher strength -> higher threshold, deeper reduction, shorter hold, faster release.
     let mut previous = off;
     for step in 1..=10 {
         let next = shape(step as f64 / 10.);
@@ -273,8 +273,8 @@ fn performance_reports_helper_counters_and_accepts_payloads_without_them() {
     );
     let back: Meter = serde_json::from_str(&text).unwrap();
     assert_eq!(back, meter);
-    // A mixer that predates the fields sends none: they are absent rather than
-    // zero, so "not reported" stays distinguishable from "none".
+    // Older firmware omits these fields; they deserialize as None rather than 0
+    // so "not reported" stays distinct from zero.
     let mut old: serde_json::Value = serde_json::to_value(&meter).unwrap();
     let object = old["targets"][0]["performance"].as_object_mut().unwrap();
     object.remove("helperLate");
@@ -300,7 +300,7 @@ fn performance_reports_helper_counters_and_accepts_payloads_without_them() {
 #[test]
 fn meters_without_a_diagnostics_epoch_load_as_zero_and_event_pages_round_trip() {
     use rc2fx_core::{DiagnosticsEvent, DiagnosticsEvents, DiagnosticsKind, EventDetails};
-    // An older mixer sends no epoch: the app reads 0 and keeps working.
+    // Older firmware omits diagnosticsEpoch; default to 0.
     let mut value = serde_json::json!({
         "type": "meter", "revision": 1, "generation": 1, "synthetic": false, "targets": []
     });
@@ -349,7 +349,7 @@ fn meters_without_a_diagnostics_epoch_load_as_zero_and_event_pages_round_trip() 
         serde_json::from_str::<DiagnosticsEvents>(&text).unwrap(),
         page
     );
-    // Empty details are omitted rather than sent as an object of nulls.
+    // Empty details should be omitted from JSON.
     let plain = DiagnosticsEvent {
         seq: 3,
         kind: DiagnosticsKind::Reset,

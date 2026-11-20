@@ -8,8 +8,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// Meter freshness, audio progress, fault baselines and the startup window.
-
 func failedState() core.DeviceState {
 	return core.DeviceState{
 		Selection: core.SelectionStatus{

@@ -1,5 +1,5 @@
-// Package rode talks to RØDE's update server: its URLs, the firmware
-// manifest it publishes for each model, and verified firmware downloads.
+// Package rode fetches firmware manifests and verified archives from RØDE's
+// update server.
 package rode
 
 import (
@@ -20,15 +20,14 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
-// ValidURL is whether value is an HTTPS URL with a path on RØDE's update
-// server.
+// ValidURL reports whether value is an HTTPS URL with a path on update.rode.com.
 func ValidURL(value string) bool {
 	u, err := url.Parse(value)
 	if err != nil {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	// A bare origin has no path.
+	// Reject bare origins with no path.
 	rest, ok := strings.CutPrefix(value, "https://")
 	hasPath := ok && strings.Contains(rest, "/")
 	portOK := u.Port() == ""
@@ -39,14 +38,13 @@ func ValidURL(value string) bool {
 	return u.Scheme == "https" &&
 		u.User == nil &&
 		hasPath &&
-		// RØDE's update server only, redirects included: stock firmware RØDE
-		// lists without a catalog pin is trusted for coming from here.
+		// Restrict strictly to update.rode.com (including redirects) since
+		// unpinned stock firmware relies on origin trust.
 		host == "update.rode.com" &&
 		portOK
 }
 
-// HTTPClient is the client for RØDE's update server: it never follows a
-// redirect away from it.
+// HTTPClient returns an HTTP client that refuses redirects off update.rode.com.
 func HTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 20 * time.Minute,
@@ -72,9 +70,8 @@ func validVersion(v string) bool {
 	return true
 }
 
-// Location is value as an HTTPS URL, if it names suffix for version in
-// m's firmware folder on RØDE's update server. A missing scheme is taken as
-// HTTPS, as RØDE's manifest leaves it out.
+// Location validates that value points to /<model-dir>/<version>/<suffix> on
+// update.rode.com, prepending "https://" if omitted (as in RØDE's manifest).
 func Location(m model.Model, value, suffix, version string) (string, error) {
 	v := value
 	if !strings.HasPrefix(value, "https://") {
@@ -167,10 +164,9 @@ func Releases(client *http.Client, m model.Model, codec Codec) ([]Release, error
 	return ReleasesFromManifest(m, data, codec)
 }
 
-// channels are the channels RØDE offers to everyone. Its manifest lists
-// others (master, private and closed betas, testing) that are not public
-// downloads, so they are never offered. A version on both takes the stable
-// name.
+// Only expose public channels; the manifest also contains internal/testing
+// channels that aren't meant for public download. Stable wins if a version
+// appears in both.
 var channels = [2][2]string{{"main-version", "stable"}, {"beta-version", "beta"}}
 
 type manifestEntry struct {
@@ -179,9 +175,8 @@ type manifestEntry struct {
 	MD5     string `json:"os-md5"`
 }
 
-// ReleasesFromManifest is the stock releases in RØDE's manifest for m,
-// newest first. Only entries on RØDE's own update server are kept; RØDE's
-// MD5 is what checks them when they are downloaded.
+// ReleasesFromManifest parses public stock releases for m from manifest JSON,
+// sorted newest first. Entries pointing outside update.rode.com are ignored.
 func ReleasesFromManifest(m model.Model, data []byte, codec Codec) ([]Release, error) {
 	var manifest map[string]any
 	if err := codec.unmarshal(data, &manifest); err != nil {
@@ -244,7 +239,6 @@ func SortNewestFirst[T any](releases []T, version func(T) string) {
 	})
 }
 
-// parseU64 is an optional '+', then digits only, within 64 bits.
 func parseU64(text string) (uint64, error) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" || strings.Trim(digits, "0123456789") != "" {
@@ -253,24 +247,15 @@ func parseU64(text string) (uint64, error) {
 	return strconv.ParseUint(digits, 10, 64)
 }
 
-// Download is what DownloadFile needs.
 type Download struct {
-	// Client is called only when a request is needed.
-	Client func() *http.Client
-	URL    string
-	Dest   string
-	// SHA256, when set, is the archive's SHA-256 (a pin the caller holds);
-	// MD5 is RØDE's.
-	SHA256 *string
-	MD5    string
-	// Limit is the largest download accepted.
-	Limit uint64
-	// Progress, when set, gets each progress event: phase is "download" or
-	// "verification"; detail is the URL or the algorithm.
-	Progress func(phase string, completed, total uint64, detail string)
-	// Cancel, when set, is checked before each read; an error stops the
-	// download with that error.
-	Cancel func() error
+	Client   func() *http.Client // called lazily only if a network fetch is needed
+	URL      string
+	Dest     string
+	SHA256   *string // optional caller-pinned SHA-256
+	MD5      string  // RØDE's MD5
+	Limit    uint64
+	Progress func(phase string, completed, total uint64, detail string) // phase: "download" or "verification"
+	Cancel   func() error
 }
 
 func (d *Download) emit(phase string, completed, total uint64, detail string) {
@@ -279,8 +264,8 @@ func (d *Download) emit(phase string, completed, total uint64, detail string) {
 	}
 }
 
-// DownloadFile fetches an official release to d.Dest, checking RØDE's MD5
-// and, when given, its SHA-256. A matching file is kept without a request.
+// DownloadFile fetches d.URL to d.Dest and verifies MD5 (and SHA256 if set).
+// If d.Dest already matches, no network request is made.
 func DownloadFile(d Download) error {
 	value, dest, sha, md := d.URL, d.Dest, d.SHA256, d.MD5
 	if !ValidURL(value) || md == "" || (sha != nil && *sha == "") {

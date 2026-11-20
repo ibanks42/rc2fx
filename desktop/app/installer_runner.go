@@ -12,21 +12,18 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 )
 
-// installerOutcome is a finished request and its result.
 type installerOutcome struct {
 	request installer.Request
 	reply   installer.Reply
 	err     error
 }
 
-// helperSlot is the privileged helper, once access is granted, shared by
-// the access goroutine (which fills it) and the request goroutine.
+// helperSlot shares the privileged helper between the grant and worker goroutines.
 type helperSlot struct {
 	mu     sync.Mutex
 	helper *helper.Helper
 }
 
-// cancelerSlot stops a download in the helper, from any goroutine.
 type cancelerSlot struct {
 	mu       sync.Mutex
 	canceler *helper.Canceler
@@ -38,21 +35,16 @@ func (c *cancelerSlot) set(canceler *helper.Canceler) {
 	c.mu.Unlock()
 }
 
-// helperLink is the request goroutine's side of the privileged helper.
 type helperLink struct {
-	slot     *helperSlot
-	canceler *cancelerSlot
-	// lost reports a helper that ended.
-	lost func(err error)
-	// allowDuo is what the helper should be told about Duo flashing, and
-	// helperDuo what it was last told (nil: nothing yet).
+	slot      *helperSlot
+	canceler  *cancelerSlot
+	lost      func(err error)
 	allowDuo  bool
 	helperDuo *bool
 	selection installflow.Selection
 }
 
-// run brings the helper up to date, then has it handle request, if any (nil
-// for none; the reply is then the zero Reply).
+// run syncs state to the privileged helper and optionally executes request.
 func (l *helperLink) run(request *installer.Request, report func(installer.Progress)) (installer.Reply, error) {
 	l.slot.mu.Lock()
 	defer l.slot.mu.Unlock()
@@ -94,9 +86,8 @@ func (l *helperLink) sync(h *helper.Helper, report func(installer.Progress)) err
 	return nil
 }
 
-// installerRunner runs the engine on its own goroutine. Its
-// results reach the UI thread through gk.Post into done and access, which
-// only the UI thread touches; poll drains them.
+// installerRunner executes installer requests on a background goroutine and
+// posts results to the UI thread via gk.Post for pollInstaller to drain.
 type installerRunner struct {
 	mu     sync.Mutex
 	jobs   []installer.Request
@@ -105,21 +96,16 @@ type installerRunner struct {
 
 	progressMu sync.Mutex
 	progress   *installer.Progress
-	// cancel stops a download in progress, in this process or in the helper.
-	cancel *atomic.Bool
-	helper *cancelerSlot
-	// privileged is the helper, once access is granted.
+	cancel     *atomic.Bool
+	helper     *cancelerSlot
 	privileged *helperSlot
 	work       string
 
 	// UI thread only.
-	done []installerOutcome
-	// access is the outcome of each grant attempt, and a lost helper (nil:
-	// granted).
+	done   []installerOutcome
 	access []error
 }
 
-// startInstallerRunner starts the runner's goroutine.
 func startInstallerRunner(work string) *installerRunner {
 	r := &installerRunner{
 		wake:       make(chan struct{}, 1),
@@ -170,8 +156,8 @@ func (r *installerRunner) serve() {
 			if installflow.IsSelection(request) {
 				link.selection.EngineAnswered(request, err == nil)
 			}
-			// The helper fetches and verifies its own copy now, in the same
-			// cancelable step, before the mixer is touched.
+			// Have the helper fetch and verify its own copy during this cancelable
+			// step, before the mixer is touched.
 			if separate && installflow.IsSelection(request) && err == nil {
 				if r.cancel.Load() {
 					reply, err = installer.Reply{}, installer.Error(installer.Canceled)
@@ -186,7 +172,6 @@ func (r *installerRunner) serve() {
 	}
 }
 
-// next waits for the next request; false once the runner is closed.
 func (r *installerRunner) next() (installer.Request, bool) {
 	for {
 		r.mu.Lock()
@@ -205,8 +190,6 @@ func (r *installerRunner) next() (installer.Request, bool) {
 	}
 }
 
-// deliver hands an outcome to the UI thread; false once the page is closed,
-// which ends the goroutine.
 func (r *installerRunner) deliver(o installerOutcome) bool {
 	r.mu.Lock()
 	closed := r.closed
@@ -218,12 +201,10 @@ func (r *installerRunner) deliver(o installerOutcome) bool {
 	return true
 }
 
-// reportAccess hands a grant outcome or a lost helper to the UI thread.
 func (r *installerRunner) reportAccess(err error) {
 	gk.Post(func(cx *gk.Cx) { r.access = append(r.access, err) })
 }
 
-// closeHelper ends a helper still held when the goroutine stops.
 func (r *installerRunner) closeHelper() {
 	r.privileged.mu.Lock()
 	h := r.privileged.helper
@@ -235,7 +216,6 @@ func (r *installerRunner) closeHelper() {
 	}
 }
 
-// send queues request; false when the goroutine is gone.
 func (r *installerRunner) send(request installer.Request) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -250,8 +230,6 @@ func (r *installerRunner) send(request installer.Request) bool {
 	return true
 }
 
-// stopDownload stops a download in progress, here or in
-// the helper.
 func (r *installerRunner) stopDownload() {
 	r.cancel.Store(true)
 	r.helper.mu.Lock()
@@ -262,8 +240,7 @@ func (r *installerRunner) stopDownload() {
 	}
 }
 
-// close runs when the page closes: it ends a release check rather than
-// leaving it, and any helper, running until the network gives up.
+// close cancels any active download and signals the worker goroutine to exit.
 func (r *installerRunner) close() {
 	r.stopDownload()
 	r.mu.Lock()
@@ -276,8 +253,8 @@ func (r *installerRunner) close() {
 	}
 }
 
-// grant starts the helper, which opens the system's password prompt, and
-// checks that it answers before handing it to the request goroutine.
+// grant spawns the privileged helper (triggering the OS auth prompt) and
+// verifies it responds before attaching it to the worker.
 func (r *installerRunner) grant() {
 	go func() {
 		h, err := startInstallerHelper(r.work)
@@ -291,7 +268,6 @@ func (r *installerRunner) grant() {
 			closed := r.closed
 			r.mu.Unlock()
 			if closed {
-				// The page went away while the prompt was open.
 				h.Close()
 				return
 			}
@@ -317,7 +293,6 @@ func (r *installerRunner) takeOutcomes() []installerOutcome {
 	return out
 }
 
-// currentProgress is the last progress reported, nil before any.
 func (r *installerRunner) currentProgress() *installer.Progress {
 	r.progressMu.Lock()
 	defer r.progressMu.Unlock()

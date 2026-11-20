@@ -6,7 +6,7 @@
     "prebuild": "python3 ../.github/scripts/update_history.py",
     "build": "vitepress build",
     "predev": "python3 ../.github/scripts/update_history.py",
-    "dev": "vitepress dev"
+    "dev": "vitepress dev --host"
   },
   "devDependencies": {
     "vitepress": "1.6.4"

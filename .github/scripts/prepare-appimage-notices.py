@@ -1,39 +1,20 @@
 #!/usr/bin/env python3
-"""Notices and corresponding source for the AppImage type 2 runtime.
+"""Collect license notices and corresponding source for the AppImage type 2 runtime.
 
-The Linux AppImage is made by Velopack's vpk, which starts it with the
-AppImage type 2 runtime it vendors (vendor/appimagekit-runtime-x86_64 in the
-vpk NuGet package). The runtime is a static executable that links a modified
-libfuse (LGPL-2.1) with squashfuse, zstd, zlib, musl and mimalloc. This
-script:
+Velopack's vpk prepends its vendored AppImage type 2 runtime
+(vendor/appimagekit-runtime-x86_64) to the Linux AppImage. That static binary
+links a patched libfuse (LGPL-2.1) alongside squashfuse, zstd, zlib, musl, and
+mimalloc. This script verifies the vendored runtime against its pinned SHA-256,
+fetches the matching runtime commit plus libfuse, squashfuse, and Alpine 3.21
+aports sources/recipes (checked against their pinned hashes), writes
+target/appimage-legal/notices.json, and bundles the source archive in
+target/package.
 
-- takes that runtime from the vpk package, checked against the package's
-  pinned SHA-256 (the one setup-vpk.sh installs) and the runtime's own, and
-  reads the runtime commit the binary reports,
-- fetches the runtime source at that commit (checked by git),
-- fetches libfuse and squashfuse at the versions and SHA-256 checksums that
-  the runtime's own build recipe pins,
-- fetches the Alpine aports build recipes and sources of zstd, zlib, musl and
-  mimalloc at the aports 3.21-stable commit current when the runtime was
-  built, checked against Alpine's SHA-512 sums,
-- writes target/appimage-legal/notices.json with the full license texts and
-  the runtime's digest and size, which packaging checks the finished AppImage
-  against, and
-- writes the AppImage runtime source archive to target/package with all of the
-  above, the build scripts and patches, and a README on rebuilding and
-  relinking.
-
-The vendored runtime is a continuous build of type2-runtime commit 3d17002
-(2026-03-07); no tagged release holds that binary. That commit differs from
-the 20251108 release only in CI workflow files. The runtime's recipe installs
-the four Alpine libraries from `alpine:3.21` without pinning package
-revisions or the image digest, and its build log has expired. The aports
-commit used here is the last 3.21-stable commit before that build. The
-revisions are therefore inferred, and are recorded as such; zlib 1.3.1 and
-zstd 1.5.6 match the version strings in the runtime binary.
-
-The script fails if any source or license text is unavailable or
-does not match its checksum.
+Note: the vendored runtime is a continuous build of type2-runtime commit
+3d17002 (differs from 20251108 only in CI workflows). Because its Dockerfile
+installs Alpine packages without pinning revisions and the build log expired,
+the aports commit here is the last 3.21-stable commit before that build
+(recorded as inferred; zlib 1.3.1 and zstd 1.5.6 match strings in the binary).
 
 Usage: prepare-appimage-notices.py [--root DIR] [--cache DIR] [--vpk-package FILE]
 """
@@ -57,11 +38,10 @@ import urllib.request
 from pathlib import Path
 
 RUNTIME_REPO = "https://github.com/AppImage/type2-runtime"
-# The commit the vendored runtime reports (`--appimage-version` prints
-# https://github.com/AppImage/type2-runtime/commit/3d17002).
+# Commit reported by `--appimage-version` on the vendored runtime.
 RUNTIME_COMMIT = "3d17002ee2a519a288e28aeb7bc41af5f5adaf4e"
 RUNTIME_SHA256 = "a2419dce47568395ae79c01ffa9a5a341dd339581352ff104d073527543177e5"
-# The vpk that vendors it, pinned once in config/velopack.json.
+# Pinned vpk version/hash shared with setup-vpk.sh via config/velopack.json.
 _VELOPACK_CONFIG = json.loads(
     (Path(__file__).resolve().parents[2] / "config" / "velopack.json").read_text()
 )
@@ -70,23 +50,21 @@ VPK_SHA256 = _VELOPACK_CONFIG["vpkSha256"]
 VPK_PACKAGE = "https://api.nuget.org/v3-flatcontainer/vpk/{version}/vpk.{version}.nupkg"
 VPK_RUNTIME = "vendor/appimagekit-runtime-x86_64"
 ALPINE_BRANCH = "v3.21"
-# The last aports 3.21-stable commit before the runtime at RUNTIME_COMMIT was
-# built (2026-03-07 19:32 UTC). Inferred, not proven. The four recipes below
-# are unchanged since February 2025, so earlier builds got the same ones.
+# Last aports 3.21-stable commit before the 2026-03-07 runtime build (inferred;
+# the four recipes below have been unchanged since Feb 2025).
 APORTS_COMMIT = "a1652b510b484befbf2e3f613dca969ba2abbdb7"
 ALPINE_DISTFILES = "https://distfiles.alpinelinux.org/distfiles/{branch}/{name}"
 APORTS_REPO = "https://github.com/alpinelinux/aports"
 
-# The aports that build the -dev/-static packages the runtime's Dockerfile
-# installs for the libraries it links (src/runtime/Makefile LIBS).
-# mimalloc-dev is provided by community/mimalloc2.
+# aports paths for the static libraries linked in src/runtime/Makefile LIBS.
+# mimalloc-dev comes from community/mimalloc2.
 ALPINE_PACKAGES = {
     "zstd": "main/zstd",
     "zlib": "main/zlib",
     "musl": "main/musl",
     "mimalloc": "community/mimalloc2",
 }
-# License files inside each verified source, in the order they are printed.
+# License files to extract from each verified source tarball, in output order.
 LICENSE_FILES = {
     "zstd": ["LICENSE"],
     "zlib": ["LICENSE"],
@@ -125,7 +103,7 @@ def fetch(url: str, cache: Path | None) -> bytes:
 
 
 def safe_relative(name: str) -> str:
-    """A bundle-relative path that stays inside the bundle."""
+    """Validate that an archive path stays within the bundle."""
     parts = name.split("/")
     if (
         not name
@@ -148,7 +126,7 @@ def require(algorithm: str, data: bytes, expected: str, what: str) -> None:
 
 
 def apkbuild_field(apkbuild: str, name: str) -> str:
-    """A simple `name=value` or `name="value"` line of an APKBUILD."""
+    """Read a simple `name=value` or `name="value"` field from an APKBUILD."""
     match = re.search(rf'^{name}="?([^"\n]*)"?$', apkbuild, re.M)
     if not match:
         raise Failure(f"APKBUILD has no {name}")
@@ -156,7 +134,7 @@ def apkbuild_field(apkbuild: str, name: str) -> str:
 
 
 def parse_sums(apkbuild: str) -> list[tuple[str, str]]:
-    """The (sha512, filename) pairs of an APKBUILD's sha512sums block."""
+    """Parse (sha512, filename) pairs from an APKBUILD sha512sums block."""
     match = re.search(r'^sha512sums="(.*?)"', apkbuild, re.S | re.M)
     if not match:
         raise Failure("APKBUILD has no sha512sums")
@@ -170,7 +148,7 @@ def parse_sums(apkbuild: str) -> list[tuple[str, str]]:
 
 
 def recipe_pins(script: str) -> dict[str, str]:
-    """`sha256  filename` pins from the runtime's install-dependencies.sh."""
+    """Extract `sha256  filename` pins from install-dependencies.sh."""
     return {
         name: sha
         for sha, name in re.findall(r'echo "([0-9a-f]{64})  ([^"\s]+)" \| sha256sum -c', script)
@@ -185,7 +163,7 @@ def recipe_url(script: str, filename: str) -> str:
 
 
 def member(archive: bytes, suffix: str) -> bytes:
-    """The one file in a tarball whose path ends with /suffix."""
+    """Read the unique top-level file in a tarball ending with `suffix`."""
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
         found = [
             m for m in tar.getmembers()
@@ -198,8 +176,7 @@ def member(archive: bytes, suffix: str) -> bytes:
 
 
 def aport_files(archive: bytes, path: str) -> dict[str, bytes]:
-    """The regular files under `path` in an aports archive, by safe relative name.
-    Links and other entries are refused, not followed."""
+    """Extract regular files under `path` from an aports tarball; reject links."""
     files = {}
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
         for m in tar.getmembers():
@@ -215,10 +192,10 @@ def aport_files(archive: bytes, path: str) -> dict[str, bytes]:
 
 
 def git_source(repo: str, commit: str, prefix: str, paths: tuple[str, ...] = ()) -> bytes:
-    """`git archive` of `repo` at the pinned `commit`, under `prefix`, limited
-    to `paths` when given. Fetching by commit id means git checks the content.
-    Used for the runtime and for the Alpine aports recipes. Not cached, so the
-    commit is checked on every run."""
+    """Fetch `commit` from `repo` and return its `git archive` tarball.
+
+    Uncached so git verifies the commit object on every run.
+    """
     with tempfile.TemporaryDirectory() as work:
         git = ["git", "-C", work, "-c", "advice.detachedHead=false"]
         subprocess.run(["git", "init", "-q", work], check=True)
@@ -237,8 +214,7 @@ def git_source(repo: str, commit: str, prefix: str, paths: tuple[str, ...] = ())
 
 
 def vendored_runtime(vpk_package: Path | None, cache: Path | None) -> bytes:
-    """The runtime vpk puts in front of every AppImage, from the pinned vpk
-    package, checked to be the expected binary built from RUNTIME_COMMIT."""
+    """Extract and verify the AppImage runtime binary from the pinned vpk package."""
     url = VPK_PACKAGE.format(version=VPK_VERSION)
     package = vpk_package.read_bytes() if vpk_package else fetch(url, cache)
     require("sha256", package, VPK_SHA256, str(vpk_package or url))
@@ -253,7 +229,7 @@ def vendored_runtime(vpk_package: Path | None, cache: Path | None) -> bytes:
 
 
 def check_runtime_commit(binary: bytes) -> None:
-    """The runtime names its source commit in its version string."""
+    """Verify the runtime binary's embedded version string matches RUNTIME_COMMIT."""
     found = set(re.findall(rb"github\.com/AppImage/type2-runtime/commit/([0-9a-f]{7,40})", binary))
     if len(found) != 1 or not RUNTIME_COMMIT.startswith(found.pop().decode()):
         raise Failure(f"the vendored runtime does not report commit {RUNTIME_COMMIT}")
@@ -262,8 +238,7 @@ def check_runtime_commit(binary: bytes) -> None:
 def collect(
     cache: Path | None, vpk_package: Path | None = None
 ) -> tuple[dict[str, bytes], list[dict], list[dict], int]:
-    """Bundle files by path, the source manifest, notice sections, and the
-    runtime's size."""
+    """Return (bundle files, source manifest, notice sections, runtime size)."""
     files: dict[str, bytes] = {}
     manifest: list[dict] = []
     sections: list[dict] = []
@@ -452,7 +427,7 @@ runtime.
 
 
 def write_bundle(path: Path, files: dict[str, bytes]) -> None:
-    """A gzip tarball with sorted entries and fixed metadata."""
+    """Write a deterministic gzip tarball with sorted entries and fixed metadata."""
     top = "rc2fx-appimage-runtime-sources"
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tar:

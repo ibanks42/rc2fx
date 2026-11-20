@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""A launch from the rollback copy hands rc2fxd that copy's release manifest.
-
-While an in-place update has not committed, the audio shim starts
-/opt/.rc2fx-previous/rc2fx.sh. rc2fxd recognizes that directory
-(mixer_update::installed_bundle) and runs recover(), so the release path it is
-given must name the rollback copy, not /opt/rc2fx.
+"""Verify that launching from /opt/.rc2fx-previous passes that copy's release
+manifest to rc2fxd (so mixer_update::installed_bundle recognizes it and triggers
+recover()), and still honors /opt/rc2fx/experimental-duo.
 """
 from pathlib import Path
 import os
@@ -22,7 +19,7 @@ DUO = SCRIPT[SCRIPT.index('# Only an opted-in Duo'):SCRIPT.index('export RC2FX_E
 
 class RollbackLaunch(unittest.TestCase):
     def launch(self, *, pending):
-        """Run the real shim against a fake /opt whose bundles print the controller's arguments."""
+        """Run rc2fx-shim.sh against a fake /opt and return the --release path."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             opt, run = root / 'opt', root / 'run'
@@ -45,7 +42,7 @@ class RollbackLaunch(unittest.TestCase):
             return opt, arguments[arguments.index('--release') + 1]
 
     def duo(self, *, live=None, previous=None, pending=True):
-        """Run the real shim against a fake /opt whose bundles print the Duo opt-in."""
+        """Run rc2fx-shim.sh against a fake /opt and return (bundle_dir, RC2FX_EXPERIMENTAL_DUO)."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             opt, run = root / 'opt', root / 'run'
@@ -70,7 +67,7 @@ class RollbackLaunch(unittest.TestCase):
             return Path(home).relative_to(opt).as_posix(), opted_in
 
     def test_an_opted_in_duo_keeps_its_opt_in_in_the_rollback_copy(self):
-        # The rollback copy has no marker of its own; the installed one counts.
+        # Rollback copy has no marker of its own; it should pick up /opt/rc2fx's.
         self.assertEqual(self.duo(live='1\n'), ('.rc2fx-previous', '1'))
 
     def test_the_installed_bundle_reads_its_own_marker(self):

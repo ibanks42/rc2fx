@@ -1,9 +1,7 @@
 package installflow
 
-// The guided task's decisions: the six steps the Install and Remove tasks
-// show, how far a run is among them, where Try again starts, whether the
-// mixer may be unplugged, and what the app sees after a failure. Package app
-// draws them (guided.go, installer.go).
+// Guided task presentation state: sidebar stages, retry points, unplug safety,
+// and post-failure status summaries.
 
 import (
 	"fmt"
@@ -13,7 +11,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// Mark is how far one step of a guided task's sidebar is.
 type Mark int
 
 const (
@@ -23,14 +20,13 @@ const (
 	MarkToCome
 )
 
-// TaskStep is one step of a guided task's sidebar.
 type TaskStep struct {
 	Title string
 	Mark  Mark
 }
 
-// Stage is one of the steps the Install and Remove tasks show. Each groups
-// one or more steps of the plan (Steps).
+// Stage represents one user-visible step in the Install/Remove sidebar,
+// grouping one or more internal Steps.
 type Stage int
 
 const (
@@ -40,7 +36,7 @@ const (
 	StageUpdate
 	StageWait
 	StageCheck
-	// StageCount is the number of stages, and the stage of a finished run.
+	// StageCount is both the number of stages and the stage of a finished run.
 	StageCount
 )
 
@@ -62,7 +58,6 @@ var removeStages = [StageCount]string{
 	"Check and finish",
 }
 
-// StageTitle is a stage's name in the sidebar, for stock firmware or not.
 func StageTitle(stage Stage, stock bool) string {
 	if stage < 0 || stage >= StageCount {
 		return ""
@@ -73,7 +68,6 @@ func StageTitle(stage Stage, stock bool) string {
 	return installStages[stage]
 }
 
-// StageOf is the stage a step of the plan belongs to.
 func StageOf(step Step) Stage {
 	switch step {
 	case StepBackup:
@@ -86,11 +80,6 @@ func StageOf(step Step) Stage {
 	return StageWait
 }
 
-// Stage is how far the page is: StageBefore until a run starts, StageCount
-// once it finished. While RC2FX checks the files the update installed, the
-// run is at StageCheck; a request to switch the mixer off and on is part of
-// waiting for it. The storage fix updates the mixer and waits for it twice,
-// so it moves between those two stages.
 func (m *Model) Stage() Stage {
 	run := m.Run
 	switch {
@@ -119,14 +108,11 @@ func (m *Model) Stage() Stage {
 	return StageOf(step)
 }
 
-// PowerCycle reports a run waiting for the mixer to be switched off and on.
 func (m *Model) PowerCycle() bool {
 	run := m.Run
 	return run != nil && run.status.Kind == RunWaiting && run.status.PowerCycle
 }
 
-// TaskSteps is the sidebar: every stage, marked done, now, failed or to
-// come.
 func (m *Model) TaskSteps() []TaskStep {
 	at := m.Stage()
 	failed := m.Failed()
@@ -146,8 +132,6 @@ func (m *Model) TaskSteps() []TaskStep {
 	return steps
 }
 
-// RetryStage is the stage Try again starts from, judged from what the mixer
-// reports now; ok false without a failed run.
 func (m *Model) RetryStage() (Stage, bool) {
 	step, ok := m.RetryFrom()
 	if !ok {
@@ -156,26 +140,22 @@ func (m *Model) RetryStage() (Stage, bool) {
 	return StageOf(step), true
 }
 
-// UnplugKind is whether the mixer may be unplugged now.
 type UnplugKind int
 
 const (
 	UnplugNo UnplugKind = iota
 	UnplugYes
-	// UnplugPowerOnly: its power cable, to switch it off and on; USB 1 stays.
+	// UnplugPowerOnly allows unplugging power for a reboot while keeping USB 1 connected.
 	UnplugPowerOnly
 )
 
-// Unplug is the page's "Safe to unplug" note: whether, and why. Reason is
-// "" when there is nothing to add.
 type Unplug struct {
 	Kind   UnplugKind
 	Reason string
 }
 
-// Unplug says whether the mixer may be unplugged now. Only states known to
-// be safe say yes: before anything has started, and after a run finished or
-// failed with the mixer back up and answering. Anything uncertain says no.
+// Unplug reports whether it is currently safe to unplug the mixer. Defaults to
+// UnplugNo whenever the mixer state is uncertain.
 func (m *Model) Unplug() Unplug {
 	run := m.Run
 	switch {
@@ -216,15 +196,12 @@ func (m *Model) Unplug() Unplug {
 	return Unplug{Reason: "the install has started"}
 }
 
-// SeenLine is one thing the app sees after a failure; Good when it is as it
-// should be.
 type SeenLine struct {
 	Good bool
 	Text string
 }
 
-// SeenNow is what the app sees now, for a failed run's page: the mixer, and
-// what the run already has. Only what the app can observe.
+// SeenNow summarizes the observable mixer and run state for the failure screen.
 func (m *Model) SeenNow() []SeenLine {
 	var seen []SeenLine
 	usb := m.USB()
@@ -264,8 +241,6 @@ func (m *Model) SeenNow() []SeenLine {
 	return seen
 }
 
-// FailureTitle is the heading of a failed run's page, from the step that
-// failed.
 func (m *Model) FailureTitle() string {
 	run := m.Run
 	if run == nil || run.status.Kind != RunFailed || run.Index < 0 || run.Index >= len(Steps) {
@@ -290,8 +265,7 @@ func (m *Model) FailureTitle() string {
 	return "The mixer didn’t finish in time"
 }
 
-// StartBlocker is why the start button can't be pressed yet, in words; ""
-// when it can (or a request is merely in flight).
+// StartBlocker returns why a run cannot start yet, or "" if ready.
 func (m *Model) StartBlocker() string {
 	if m.Busy() || m.CanStartOnceGranted() {
 		return ""
@@ -338,8 +312,6 @@ func (m *Model) StartBlocker() string {
 	return "Choose the RC2FX version under “Choose versions”."
 }
 
-// Recommended reports that the versions chosen are the ones the page picks
-// by itself: the default firmware and the newest RC2FX that goes with it.
 func (m *Model) Recommended() bool {
 	return !m.mixerChosen && sameChoicePtr(m.Choice, defaultChoice(m.Releases))
 }
@@ -351,14 +323,11 @@ func sameChoicePtr(a, b *Choice) bool {
 	return *a == *b
 }
 
-// SettingsCarried reports that the firmware the run flashed carries the
-// mixer's settings, so they were put back.
 func (m *Model) SettingsCarried() bool {
 	p := m.Prepared()
 	return p != nil && p.Settings != ""
 }
 
-// Elapsed formats a duration as minutes and seconds, "3:48".
 func Elapsed(d time.Duration) string {
 	if d < 0 {
 		d = 0

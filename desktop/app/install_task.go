@@ -1,10 +1,6 @@
 package app
 
-// The Install, Update and Remove tasks' pages, in the guided-task layout
-// (guided.go): Before you start, one page per stage while the run goes on,
-// a failure re-planned from what the mixer shows now, and the result, which
-// stays until the person dismisses it. The decisions are in
-// installflow/task.go; installer.go runs the requests.
+// Guided task pages for Install, Update, and Remove RC2FX.
 
 import (
 	"fmt"
@@ -19,11 +15,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// rodeUpdateBugURL is where "Learn more" about RØDE's update bug leads.
-// A placeholder: to be replaced with the real write-up before release.
+// Placeholder URL; replace with the real write-up before release.
 const rodeUpdateBugURL = "https://example.com/rodecaster-update-bug"
 
-// taskScreen is the open task, in front of everything else.
 func (a *App) taskScreen(cx *gk.Cx) gk.Element {
 	i := a.installer
 	if i.repair != nil {
@@ -38,7 +32,6 @@ func (a *App) taskScreen(cx *gk.Cx) gk.Element {
 	return a.guidedScreen(a.installTask(i, cx))
 }
 
-// taskTitle is the task's name, from what it was opened for.
 func taskTitle(i *Installer) string {
 	switch {
 	case i.model.Stock:
@@ -72,7 +65,6 @@ func (a *App) installTask(i *Installer, cx *gk.Cx) guidedTask {
 	return t
 }
 
-// versionLine is what the run installs, as a sentence.
 func versionLine(m *installflow.Model) string {
 	choice := m.Chosen()
 	if m.Stock {
@@ -97,8 +89,6 @@ func versionLine(m *installflow.Model) string {
 	return fmt.Sprintf("RØDE firmware%s with RC2FX%s.", firmware, rc2fx)
 }
 
-// ---- Before you start ------------------------------------------------------
-
 func (a *App) beforePage(i *Installer, t *guidedTask) {
 	m := i.model
 	linux := i.access.Kind != installflow.AccessNotNeeded
@@ -113,9 +103,7 @@ func (a *App) beforePage(i *Installer, t *guidedTask) {
 			bullet(txt("Needs an internet connection: the app downloads the firmware from RØDE.")),
 		))
 	} else {
-		// The storage fix runs only where the app can't ask the mixer for
-		// its partition table (installflow.WantsStorageFix); the page
-		// promises it only then.
+		// Only advertise the storage fix when the model will actually run it.
 		fix := m.WantsStorageFix()
 		audio := "The mixer’s audio is off while it updates, about 3 minutes."
 		if fix {
@@ -178,8 +166,6 @@ func (a *App) beforePage(i *Installer, t *guidedTask) {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.startTask(cx) })
 }
 
-// versionsDisclosure is "Choose versions (advanced)": closed, it shows the
-// pair a run would install; open, the two menus.
 func (a *App) versionsDisclosure(i *Installer) gk.DivEl {
 	m := i.model
 	open := i.versionsOpen
@@ -227,8 +213,6 @@ func (a *App) versionsDisclosure(i *Installer) gk.DivEl {
 		Child(gk.Collapsible().Open(open).Content(inner))
 }
 
-// blockerLine is why the start button can't be pressed yet, with a way to
-// look again where looking again can help.
 func (a *App) blockerLine(i *Installer, why string) gk.DivEl {
 	m := i.model
 	if strings.HasSuffix(why, "…") {
@@ -252,8 +236,6 @@ func (a *App) blockerLine(i *Installer, why string) gk.DivEl {
 	return line
 }
 
-// duoOptIn is the Duo's one confirmation: RC2FX has not been tested on it.
-// Remembered on this computer; the install button waits for it.
 func (a *App) duoOptIn(id gk.ID) gk.DivEl {
 	return gk.HFlex(s.ItemsCenter, s.Gap3).
 		Child(gk.Icon(gk.IconTriangleAlert).TextColor(rgb(Warn))).
@@ -263,7 +245,6 @@ func (a *App) duoOptIn(id gk.ID) gk.DivEl {
 			OnClick(func(cx *gk.Cx, value bool) { a.setAllowDuo(cx, value) }))
 }
 
-// setAllowDuo saves the Duo opt-in and hands it to an open installer.
 func (a *App) setAllowDuo(cx *gk.Cx, value bool) {
 	if err := rememberDuo(value); err != nil {
 		a.message = fmt.Sprintf("Couldn't save the Duo choice: %s", err)
@@ -274,8 +255,6 @@ func (a *App) setAllowDuo(cx *gk.Cx, value bool) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.SetAllowDuo(value) })
 	a.notify(cx)
 }
-
-// ---- While it runs -------------------------------------------------------------
 
 func (a *App) runningPage(i *Installer, t *guidedTask) {
 	m := i.model
@@ -299,16 +278,12 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 			Child(soFar)
 	case installflow.StageUpdate:
 		if m.PowerCycle() {
-			// The storage fix stopped short and the mixer still waits in
-			// update mode: it has to be switched off and on before anything
-			// else happens.
 			body = body.Child(powerCycleBody(i))
 			break
 		}
 		body = body.Child(taskHeading("Update the mixer")).
 			Child(prose(versionLine(m), Muted))
 		if m.FixRunning() {
-			// The storage fix updates the mixer twice; the page says which.
 			if line := fixPassLine(m.Run.Fix.Event, strings.TrimSuffix(versionLine(m), ".")); line != "" {
 				body = body.Child(prose(line, Muted))
 			}
@@ -330,8 +305,6 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 		if m.PowerCycle() {
 			body = body.Child(powerCycleBody(i))
 		} else if m.FixRunning() {
-			// Between the fix's two updates: the mixer restarts, then reports
-			// the fix's result. The time counts from when this line began.
 			event := m.Run.Fix.Event
 			waiting := fixWaitLine(m)
 			since := i.waitSince
@@ -372,8 +345,6 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 	t.primary = taskButton("task-done", "Done", true).Disabled(true)
 }
 
-// fetchLine is how getting the firmware is going: a download's size, never
-// file names or checksums.
 func fetchLine(m *installflow.Model, p *installer.Progress) string {
 	if m.Run != nil && installflow.Steps[m.Run.Index] == installflow.StepMixer && !m.Stock {
 		return "Getting RC2FX and checking its signature…"
@@ -387,8 +358,6 @@ func fetchLine(m *installflow.Model, p *installer.Progress) string {
 	return "Getting the firmware ready…"
 }
 
-// updatePanel is the two parts of updating the mixer: sending the firmware,
-// which the app can measure, and the mixer installing it, which it can't.
 func updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
 	step := installflow.Steps[m.Run.Index]
 	var fill *float32
@@ -417,9 +386,6 @@ func updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
 	return panel
 }
 
-// powerCycleBody is the request to switch the mixer off and on: the run
-// waits for it, its time stops, and it goes on by itself. The run's status
-// says why it is needed.
 func powerCycleBody(i *Installer) gk.DivEl {
 	flashed := i.model.Run.Flashed
 	heading := "Turn the mixer off and on again"
@@ -438,14 +404,11 @@ func powerCycleBody(i *Installer) gk.DivEl {
 				Child(gk.Div(s.Flex1, s.MinW0).Child(spinnerLine("Waiting for the mixer to come back. The app continues by itself."))).
 				Child(prose("Timer paused at "+installflow.Elapsed(i.pausedAt), Faint))))
 	if flashed {
-		// After files were restored: the restart brings the setup back.
 		body = body.Child(prose("If the mixer asks for its initial setup after it starts, don’t redo it: this restart brings it back.", Faint))
 	}
 	return body
 }
 
-// longerPanel is a wait that has had no answer for a while: it says so,
-// what can be done, and lets the run be stopped.
 func (a *App) longerPanel(i *Installer) gk.DivEl {
 	m := i.model
 	atStart := installflow.Steps[m.Run.Index] == installflow.StepStart && !m.PowerCycle()
@@ -482,8 +445,6 @@ func (a *App) longerPanel(i *Installer) gk.DivEl {
 	}
 	return panel.Child(buttons)
 }
-
-// ---- After a failure -------------------------------------------------------------
 
 func (a *App) failedPage(i *Installer, t *guidedTask) {
 	m := i.model
@@ -542,15 +503,11 @@ func (a *App) failedPage(i *Installer, t *guidedTask) {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.retryTask(cx) })
 }
 
-// ---- The result ---------------------------------------------------------------
-
-// micChoice is a microphone input the finished page offers to open.
 type micChoice struct {
 	index int
 	name  string
 }
 
-// mics is up to four microphone inputs, in the mixer's order.
 func (a *App) mics() []micChoice {
 	var out []micChoice
 	for index := range a.session.Draft {
@@ -640,8 +597,6 @@ func (a *App) finishedPage(i *Installer, t *guidedTask) {
 		})
 }
 
-// fixWaitLine is the waiting panel's line while an install's storage fix
-// waits for the mixer; "" at any other time.
 func fixWaitLine(m *installflow.Model) string {
 	if !m.FixRunning() || m.Stage() != installflow.StageWait || m.PowerCycle() {
 		return ""

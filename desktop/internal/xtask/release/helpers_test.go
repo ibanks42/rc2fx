@@ -23,9 +23,8 @@ func mustTime(t *testing.T, text string) time.Time {
 	return at
 }
 
-// testRoot writes a root expiring 2099-01-01 with one disposable Ed25519
-// key per role, as ROLE.pk8 (PKCS #8 DER) in dir, and root.json. It returns
-// the signers by role.
+// testRoot generates disposable Ed25519 keys (ROLE.pk8) and a root.json
+// expiring in 2099 inside dir.
 func testRoot(t *testing.T, dir string) map[string]tufsign.Signer {
 	t.Helper()
 	signers := map[string]tufsign.Signer{}
@@ -72,7 +71,6 @@ func testRoot(t *testing.T, dir string) map[string]tufsign.Signer {
 	return signers
 }
 
-// weekAhead is seven days from now, as DisplayTimestamp writes it.
 func weekAhead() string {
 	return tufsign.DisplayTimestamp(time.Now().Add(7 * 86400 * time.Second))
 }

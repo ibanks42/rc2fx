@@ -1,8 +1,8 @@
-"""Exercise the actual retirement function against an isolated proc/dev fixture.
+"""Tests for retire_usb_node() and usb_quiesce() against fake /dev and /proc dirs.
 
-Run on Linux: python3 mixer/scripts/tests/usb_restart.py
-No real device, process, or mixer is opened or modified. Only the character-node
-predicate is replaced with a regular-file predicate for unprivileged fixtures.
+  python3 mixer/scripts/tests/usb_restart.py
+
+Replaces `test -c` with `test -f` so the fixture works without mknod/root.
 """
 from pathlib import Path
 import subprocess
@@ -38,8 +38,7 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     assert not node.exists()  # Allowed owner; caller's PID variable is preserved.
     (fd / "8").unlink()
     if Path("/dev/full").exists():
-        # A log write that fails once the node is gone must not refuse the
-        # restart, in either of the ways the script calls this.
+        # Log write failure after unlinking /dev/hidg0 shouldn't fail the call.
         node.write_text("fixture")
         run("retire_usb_node > /dev/full")
         assert not node.exists()

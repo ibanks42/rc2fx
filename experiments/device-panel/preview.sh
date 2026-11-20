@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# REAL device operation: runs a bounded on-screen preview and restores stock UI.
-# Requires explicit permission to restart the hardware GUI (not audio).
+# Run a bounded on-device GUI preview and restore the stock UI (restarts GUI only, not audio).
 set -euo pipefail
 if [[ ${1:-} != --restart-gui || $# -gt 2 ]]; then
   echo 'Usage: preview.sh --restart-gui [5–30 seconds | --keep-running]' >&2
@@ -41,8 +40,7 @@ if [[ -n "$alias" ]]; then
   options+=(-o "HostKeyAlias=$alias")
 fi
 host="$user@$ip"
-# Arm, check, then run: without the one-shot flag a hung mixer stays off after
-# an outlet power cycle.
+# Arm and verify one-shot power recovery before touching the device.
 ssh "${options[@]}" "$host" '/bin/bash -s -- arm-power-recovery' < "$root/mixer/scripts/rc2fx.sh" > /dev/null \
   && [[ "$(ssh "${options[@]}" "$host" 'fw_printenv -n reboot_pwr_button_bypass')" == 1 ]] || {
   echo 'preview.sh was not started: power recovery could not be armed.' >&2
@@ -51,7 +49,7 @@ ssh "${options[@]}" "$host" '/bin/bash -s -- arm-power-recovery' < "$root/mixer/
 }
 echo 'Power recovery armed: after an outlet power cycle the mixer turns itself on (one boot only)'
 bash "$root/experiments/device-panel/build.sh"
-# Verify current state BEFORE creating even a RAM staging directory.
+# Verify device state before creating the RAM staging directory.
 stage=$(ssh "${options[@]}" "$host" 'set -e
   test ! -e /usr/bin/first-boot
   test ! -e /usr/bin/production-boot
@@ -63,8 +61,8 @@ tar -C "$root/target/device-ui" -cf - librc2fx_ui.so rc2fx-ui-status ui.sh SHA25
   | ssh "${options[@]}" "$host" "set -e; tar -xf - -C '$stage'; cd '$stage'; sha256sum -c SHA256SUMS"
 ssh "${options[@]}" "$host" "'$stage/rc2fx-ui-status'" \
   || echo 'Touchscreen controller not ready; the panel will show offline and refuse setting changes' >&2
-# No vendor/boot/update files are installed. Close hides the panel in-process.
-# Bounded trials end automatically; a kept RAM session has its own watchdog.
+# RAM-only session: no persistent files installed; bounded trials exit on their
+# own and kept sessions run under an independent watchdog.
 if [[ "$keep" == 1 ]]; then
   pid=$(ssh "${options[@]}" "$host" \
     "setsid /bin/bash '$stage/ui.sh' ui-run --restart-gui '$stage/librc2fx_ui.so' < /dev/null > '$stage/session.log' 2>&1 & echo \$!")

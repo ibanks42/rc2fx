@@ -162,16 +162,16 @@ func (v Tree) IsNull() bool { return v.kind == KindNull }
 // IsString reports a JSON string.
 func (v Tree) IsString() bool { return v.kind == KindString }
 
-// AsBool is the boolean, if the value is one.
+// AsBool returns the boolean value if v is a boolean.
 func (v Tree) AsBool() (bool, bool) { return v.boolean, v.kind == KindBool }
 
-// AsString is the string, if the value is one.
+// AsString returns the string value if v is a string.
 func (v Tree) AsString() (string, bool) { return v.text, v.kind == KindString }
 
-// AsNumber is the number, if the value is one.
+// AsNumber returns the Number if v is a number.
 func (v Tree) AsNumber() (Number, bool) { return v.number, v.kind == KindNumber }
 
-// AsF64 is serde_json's as_f64: any number.
+// AsF64 returns any JSON number as a float64.
 func (v Tree) AsF64() (float64, bool) {
 	if v.kind != KindNumber {
 		return 0, false
@@ -179,7 +179,7 @@ func (v Tree) AsF64() (float64, bool) {
 	return v.number.AsF64(), true
 }
 
-// AsU64 is serde_json's as_u64: a non-negative integer.
+// AsU64 returns the value as a uint64 if v is a non-negative integer.
 func (v Tree) AsU64() (uint64, bool) {
 	if v.kind != KindNumber {
 		return 0, false
@@ -187,12 +187,11 @@ func (v Tree) AsU64() (uint64, bool) {
 	return v.number.AsU64()
 }
 
-// AsArray is the array's items, if the value is an array. The slice aliases
-// the value.
+// AsArray returns the array elements if v is an array. The slice aliases v.
 func (v Tree) AsArray() ([]Tree, bool) { return v.items, v.kind == KindArray }
 
-// AsObject is the object's members in order, if the value is an object. The
-// slice aliases the value.
+// AsObject returns the object members in document order if v is an object.
+// The slice aliases v.
 func (v Tree) AsObject() ([]Member, bool) { return v.members, v.kind == KindObject }
 
 // Len is the number of array items or object members, else 0.

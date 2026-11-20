@@ -1,10 +1,6 @@
-// Command genfixtures writes fixtures/delta: deltas the Go encoder made,
-// the envelopes they must rebuild, the files the mixer holds, and corrupt
-// deltas both decoders must refuse. The Rust decoder reads them in
-// crates/rc2fx-delta/tests/shared_fixtures.rs.
-//
-// Run it with `go generate ./delta` from desktop/. It replaces the whole
-// output directory.
+// Command genfixtures regenerates fixtures/delta for both Go and Rust tests
+// (crates/rc2fx-delta/tests/shared_fixtures.rs). Run via `go generate ./delta`
+// from desktop/; it wipes and recreates the output directory.
 package main
 
 import (
@@ -80,8 +76,6 @@ func decode(d []byte, installed files, max uint64) ([]byte, error) {
 	return out.Bytes(), err
 }
 
-// acceptCase writes a delta the Go encoder made with the envelope it must
-// rebuild and the files the mixer holds.
 func (g generator) acceptCase(name string, envelope []byte, installed files, level int) {
 	d := encode(envelope, installed, level)
 	got, err := decode(d, installed, uint64(len(envelope)))
@@ -107,16 +101,16 @@ func (g generator) accept() {
 	g.acceptCase("no-files", fixture.Envelope(nil), nil, 19)
 	empty := fixture.Envelope([]fixture.File{{Name: "empty", Data: nil}, {Name: "empty-patch", Data: nil}, {Name: "one-byte", Data: []byte("x")}, {Name: "tiny-patch", Data: []byte("the previous")}})
 	g.acceptCase("empty-and-tiny", empty, files{"empty-patch": old, "tiny-patch": old}, 19)
-	// Under and over the 256-byte and 64 KiB content-size field steps, and
-	// over one 128 KiB zstd block.
+	// Exercise zstd content-size header boundaries (256 B, 64 KiB) and >128 KiB
+	// multi-block frames.
 	var sized []fixture.File
 	for i, n := range []int{255, 256, 65791, 65792, 131073} {
 		sized = append(sized, fixture.File{Name: fmt.Sprintf("sized-%d", n), Data: fixture.Text(uint64(i)+10, n)})
 	}
 	sized = append(sized, fixture.File{Name: "random", Data: fixture.Random(9, 2000)})
 	g.acceptCase("content-sizes", fixture.Envelope(sized), nil, 19)
-	// The large case is not stored: both tests rebuild its inputs from
-	// fixture.Large's recipe and only the Go-encoded delta is kept.
+	// Only store the delta for the large case; both Go and Rust tests rebuild
+	// the inputs from fixture.Large().
 	envelope, largeInstalled := fixture.Large()
 	d := encode(envelope, largeInstalled, 19)
 	got, err := decode(d, largeInstalled, uint64(len(envelope)))
@@ -130,9 +124,8 @@ func (g generator) accept() {
 	g.write(filepath.Join("accept", "large-patch"), "generated", []byte("fixture.Large in desktop/delta/internal/fixture\n"))
 }
 
-// rejectCase writes a delta both decoders must refuse. want is the exact
-// error both report; empty means any error (zstd's own refusals are worded
-// by each library).
+// rejectCase writes a delta that both decoders must reject. An empty want
+// accepts any error (for library-specific zstd messages).
 func (g generator) rejectCase(name string, d []byte, installed files, max uint64, want string) {
 	_, err := decode(d, installed, max)
 	if err == nil {
@@ -272,7 +265,7 @@ func (g generator) reject() {
 	corrupt[len(corrupt)/2] ^= 0x55
 	g.rejectCase("frame-corrupt", withFrame(valid, patchOp, patchLine, corrupt), installed, all, "")
 
-	// Hand-made frames: raw blocks, so the content is exact.
+	// Hand-crafted raw-block frames to control decoded output length exactly.
 	envelopeOne := fixture.Envelope([]fixture.File{{Name: "file", Data: []byte("0123456789")}})
 	head, _, err := delta.EnvelopeEntries(envelopeOne)
 	if err != nil {
@@ -306,7 +299,6 @@ func replaceHead(d []byte, headLine int, line string) []byte {
 	return append(out, d[headLine:]...)
 }
 
-// acceptCaseRaw writes a delta that was not made by Encode.
 func (g generator) acceptCaseRaw(name string, d, envelope []byte) {
 	got, err := decode(d, nil, uint64(len(envelope)))
 	if err != nil || !bytes.Equal(got, envelope) {
@@ -317,8 +309,8 @@ func (g generator) acceptCaseRaw(name string, d, envelope []byte) {
 	g.write(dir, "envelope", envelope)
 }
 
-// rawFrame is one zstd frame holding data in a single raw block. Without
-// single, it declares 2^windowLog as its window and no content size.
+// rawFrame builds a minimal single-raw-block zstd frame. When single is false,
+// it emits an explicit 2^windowLog window descriptor with no content size.
 func rawFrame(data []byte, windowLog int, single bool) []byte {
 	frame := binary.LittleEndian.AppendUint32(nil, 0xfd2fb528)
 	if single {

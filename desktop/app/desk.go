@@ -1,8 +1,6 @@
 package app
 
-// The desk visual language: the theme, the notice card, the grip
-// and the signal-flow lane. The surfaces are in appearance.go, the
-// non-drawing helpers in desk_logic.go and colors.go.
+// Theme application, shared notice cards, and the channel signal-flow rail.
 
 import (
 	"fmt"
@@ -15,24 +13,19 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// loadThemes puts RC2FX's three themes into the kit's registry (theme.go),
-// once, before the first applyTheme.
+// loadThemes registers RC2FX's themes once at startup before applyTheme runs.
 func loadThemes(cx *gk.Cx) {
 	if err := gk.ThemeRegistryGlobalMut(cx).LoadThemesFromStr(cx, themeSetJSON()); err != nil {
 		fmt.Fprintf(os.Stderr, "rc2fx: the app's theme was refused: %s\n", err)
 	}
 }
 
-// setAppearance switches the window's surfaces and the components' theme to
-// match.
 func setAppearance(cx *gk.Cx, a Appearance) {
 	storeAppearance(a)
 	applyTheme(cx)
 }
 
-// applyTheme sets the components' colors, font size and
-// radii for the current appearance, by applying its theme from the registry
-// (theme.go says why it is not written field by field).
+// applyTheme applies the registered theme for the active appearance (see theme.go).
 func applyTheme(cx *gk.Cx) {
 	name := themeName(appearance())
 	for _, t := range gk.ThemeRegistryGlobal(cx).Themes(cx) {
@@ -44,14 +37,11 @@ func applyTheme(cx *gk.Cx) {
 	fmt.Fprintf(os.Stderr, "rc2fx: theme %q is not loaded\n", name)
 }
 
-// card is a notice above the page: rounded, quiet, and amber or red only
-// through its callers' border and title colors.
 func card() gk.DivEl {
 	return gk.VFlex(s.Gap2, s.Border1).Mt(px(14)).Px(px(20)).Py(px(14)).Rounded(px(14)).
 		Bg(white(0.02)).BorderColor(rgb(surface().LineStrong))
 }
 
-// grip is two columns of dots marking something as draggable.
 func grip() gk.Element {
 	column := func() gk.DivEl {
 		c := gk.VFlex().Gap(px(3))
@@ -63,8 +53,7 @@ func grip() gk.Element {
 	return gk.HFlex(s.FlexShrink0, s.CursorGrab).Gap(px(3)).Px(px(4)).Py(px(4)).Child(column()).Child(column())
 }
 
-// stagePreview is DraggedStage's Render: the stage card under the pointer
-// while it is dragged (a view, as a drag preview is).
+// stagePreview builds the drag preview view shown under the cursor while reordering stages.
 func (a *App) stagePreview(label string) gk.View {
 	return gk.NewView(nil, func(cx *gk.Cx) gk.Element {
 		return gk.Div(s.Px3, s.Py2, s.RoundedLg, s.Border1, s.TextSm).Bg(rgb(surface().Raised)).
@@ -72,11 +61,7 @@ func (a *App) stagePreview(label string) gk.View {
 	})
 }
 
-// chainRail is the channel's own column, full height between the sidebar
-// and its editor: its name, Processing switch and what it is, its stages in
-// signal order (a dot for on, and each one's key value), and its levels at
-// the foot. Click a stage to edit it (its switch is on its page); drag one
-// onto another to move it in the chain.
+// chainRail renders the channel's vertical signal chain between the sidebar and editor.
 func (a *App) chainRail(target *core.Target, cx *gk.Cx) gk.Element {
 	rail := gk.VFlex(s.FlexShrink0, s.HFull, s.BorderR1).W(px(RailWidth)).Px(px(12)).Pt(px(PageTop + 4)).
 		Pb(px(18)).Bg(rgb(surface().Sunken)).BorderColor(rgb(surface().Line)).
@@ -97,8 +82,6 @@ func (a *App) chainRail(target *core.Target, cx *gk.Cx) gk.Element {
 	return rail.Child(levels)
 }
 
-// railHeader is the channel's name and Processing switch, and one line on
-// what it is (mono or stereo, its fader) or what is wrong with its path.
 func (a *App) railHeader(target *core.Target, cx *gk.Cx) gk.Element {
 	var fader *uint8
 	for _, src := range a.showSources() {
@@ -137,8 +120,6 @@ func (a *App) railHeader(target *core.Target, cx *gk.Cx) gk.Element {
 		Child(a.liveBar(target))
 }
 
-// railMeter is a level at the rail's foot: its label and reading in dBFS
-// over a thin bar, or a dash without a fresh reading.
 func railMeter(label string, m *core.TargetMeter, peak func(*core.TargetMeter) float64) gk.DivEl {
 	value, color, fraction := "–", Dim, float32(0)
 	if m != nil {
@@ -152,8 +133,6 @@ func railMeter(label string, m *core.TargetMeter, peak func(*core.TargetMeter) f
 			Child(gk.Div(s.HFull).W(gk.Relative(fraction)).Rounded(px(2)).Bg(gradient())))
 }
 
-// railStage is one stage in the rail: a dot for on, its name and key value.
-// The selected stage is marked.
 func (a *App) railStage(target *core.Target, effect core.Effect) gk.Element {
 	on := target.EffectEnabled(effect) && !target.Bypass
 	selected := a.effect == effect
@@ -175,8 +154,6 @@ func (a *App) railStage(target *core.Target, effect core.Effect) gk.Element {
 	case target.Bypass:
 		value = "Bypassed"
 	}
-	// The grip shows at the row's end while it is hovered: drag the row to
-	// move the stage.
 	row = row.
 		Child(dot(on, 6)).
 		Child(gk.Div(s.Flex1, s.MinW0).
@@ -189,7 +166,6 @@ func (a *App) railStage(target *core.Target, effect core.Effect) gk.Element {
 			a.rebuildEditors(cx)
 			a.notify(cx)
 		}).
-		// Drag a stage onto another to move it there in the chain.
 		OnDrag(gk.DragValue{ID: dragID(dragStage, effectIndex(effect)), Text: effect.Label()},
 			a.stagePreviews[effect]).
 		CanDrop(gk.DropAccept{IDs: dragIDs(dragStage, len(core.EffectAll))}).
@@ -205,9 +181,8 @@ func (a *App) railStage(target *core.Target, effect core.Effect) gk.Element {
 		})
 }
 
-// effectSwitch is a stage's on/off switch, in its page's heading.
-// Suppression's is disabled while another channel holds the one suppression
-// slot (the page says how to release it).
+// effectSwitch renders a stage's on/off toggle, disabling suppression when
+// another channel already holds the single suppression slot.
 func (a *App) effectSwitch(target *core.Target, effect core.Effect) gk.StatefulDivEl {
 	on := target.EffectEnabled(effect)
 	sw := toggle("effect-enable", on, false, a.suppressionBlockerFor(effect) != nil)

@@ -2,9 +2,6 @@ package licenses
 
 import "testing"
 
-// The license dialog's rendering checks run offscreen (desktop/app/uitest);
-// these check the Markdown they render.
-
 func TestNoticesEscapeMarkupAndKeepLeadingSpace(t *testing.T) {
 	for in, want := range map[string]string{
 		"# License <AUTHORS>":    `\# License \<AUTHORS\>`,

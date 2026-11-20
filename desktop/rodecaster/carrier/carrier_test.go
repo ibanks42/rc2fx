@@ -29,7 +29,7 @@ func TestFiles(t *testing.T) {
 			t.Errorf("link %s: %+v", n, l)
 		}
 	}
-	// Each copy owns its data: changing one must not change another.
+	// Copies must not alias the same backing slice.
 	files[0].Data[0] ^= 1
 	if bytes.Equal(files[0].Data, files[1].Data) {
 		t.Error("copies share their data")
@@ -64,7 +64,7 @@ func TestScriptEnd(t *testing.T) {
 	}
 }
 
-// The script and the Go side must agree on names and paths.
+// Verify the embedded shell script and Go constants stay in sync.
 func TestScriptAgrees(t *testing.T) {
 	src := string(scriptSource)
 	for _, want := range []string{
@@ -120,8 +120,6 @@ func TestPaths(t *testing.T) {
 	}
 }
 
-// The USB report is off unless asked for, and asking changes only its
-// default, before the hash.
 func TestScriptForUSBReport(t *testing.T) {
 	if n := strings.Count(string(scriptSource), usbReportOff); n != 1 {
 		t.Fatalf("the source holds the USB report line %d times", n)
@@ -148,8 +146,6 @@ func TestScriptForUSBReport(t *testing.T) {
 	}
 }
 
-// The debug log is off unless asked for, and asking changes only its
-// default, before the hash.
 func TestScriptForDebugLog(t *testing.T) {
 	if n := strings.Count(string(scriptSource), debugOff); n != 1 {
 		t.Fatalf("the source holds the debug line %d times", n)

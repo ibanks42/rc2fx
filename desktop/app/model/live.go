@@ -1,9 +1,8 @@
 package model
 
-// Live editing: every edit goes onto the mixer's running audio at once
-// and is saved once edits stop (the mixer keeps what plays if the app goes
-// away first), with undo in steps and a checkpoint per channel
-// to go back to. This file does not import gk: the app's poll drives it.
+// Live editing state machine: pushes edits to the mixer's live audio immediately,
+// auto-saves after edits pause, and tracks grouped undo/redo plus per-channel
+// revert checkpoints. Driven by App.poll (no gk dependency).
 
 import (
 	"time"
@@ -11,79 +10,66 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// LiveSupport is whether the mixer takes live edits.
+// LiveSupport tracks whether the connected mixer supports the live-edit API.
 type LiveSupport int
 
 const (
 	LiveUnknown LiveSupport = iota
 	LiveYes
-	// LiveNo: an older mixer (no api/v1/live). Edits are saved shortly
-	// after they stop instead.
+	// Older mixer without api/v1/live; edits wait for auto-save instead.
 	LiveNo
 )
 
 const (
-	// UndoGroup is the pause that ends one undo step: a drag, or a burst of
-	// edits with no longer pause, undoes as one.
+	// Idle gap that closes an undo group so a continuous drag undoes as one step.
 	UndoGroup = 2 * time.Second
-	// SaveDelay is how long after the last edit the settings are saved.
+	// Idle delay after the last edit before auto-saving.
 	SaveDelay = 2 * time.Second
-	// SaveDelayWithoutLive is SaveDelay for a mixer without live editing, where
-	// nothing is heard until it saves.
+	// Shorter auto-save delay on mixers without live editing, where changes aren't audible until saved.
 	SaveDelayWithoutLive = 600 * time.Millisecond
-	// CheckpointQuiet is how long a channel goes without edits before its
-	// next edit starts a new checkpoint.
+	// Idle time on a channel before its next edit starts a fresh revert checkpoint.
 	CheckpointQuiet = 10 * time.Minute
-	// LiveRetry is the wait after the mixer said it was busy.
+	// Backoff after the mixer responds busy to a live edit.
 	LiveRetry = 250 * time.Millisecond
-	// SaveRetryFirst is the wait after a failed save before it is tried
-	// again; each failure in a row doubles it, up to SaveRetryMax.
+	// Exponential backoff bounds for consecutive save failures.
 	SaveRetryFirst = time.Second
 	SaveRetryMax   = 30 * time.Second
-	// undoLimit is the most undo steps kept.
-	undoLimit = 200
+	undoLimit      = 200
 )
 
-// Checkpoint is a channel as it was before its current round of edits.
+// Checkpoint snapshots a channel's settings before its current editing session.
 type Checkpoint struct {
 	Target core.Target
 	At     time.Time
 }
 
-// Live is the live-editing state of one connection.
+// Live holds the live-editing, undo, and auto-save state for one connection.
 type Live struct {
 	Support LiveSupport
-	// running is what the audio plays when a live edit differs from the saved
-	// settings; nil when it plays the saved settings.
-	running []core.Target
-	// inFlight: a live edit was sent and has no answer yet; sent is it.
+	// Active live targets when they differ from saved; nil when audio matches saved.
+	running  []core.Target
 	inFlight bool
 	sent     []core.Target
 	retryAt  time.Time
-	// lastDraft is the draft at the last Observe; lastChange when it last
-	// changed.
+	// Last observed draft and timestamp of its most recent change.
 	lastDraft  []core.Target
 	lastChange time.Time
 	undo, redo [][]core.Target
-	// grouping is false right after an undo or redo, so the next edit starts
-	// a new step.
-	grouping    bool
-	checkpoints map[string]Checkpoint
-	lastEdit    map[string]time.Time
-	// saveFailures is how many saves of this draft failed in a row;
-	// saveRetryAt is when the next may be tried. An edit clears both.
+	// Cleared after undo/redo so the next edit opens a new undo step.
+	grouping     bool
+	checkpoints  map[string]Checkpoint
+	lastEdit     map[string]time.Time
 	saveFailures int
 	saveRetryAt  time.Time
-	// saveError is why the last save failed, until a save succeeds.
-	saveError string
+	saveError    string
 }
 
-// Reset forgets everything: a new connection.
+// Reset clears all state for a new connection.
 func (l *Live) Reset() { *l = Live{} }
 
-// Observe notes the draft at now: a change opens an undo step after a pause
-// (UndoGroup) and a checkpoint for a channel quiet for CheckpointQuiet. It
-// reports whether the draft changed.
+// Observe records the current draft, grouping edits into undo steps and
+// capturing per-channel checkpoints after CheckpointQuiet. Returns true if the
+// draft changed.
 func (l *Live) Observe(draft []core.Target, now time.Time) bool {
 	if l.lastDraft == nil {
 		l.lastDraft = core.CloneTargets(draft)
@@ -121,12 +107,10 @@ func (l *Live) Observe(draft []core.Target, now time.Time) bool {
 	return true
 }
 
-// CanUndo and CanRedo are whether there is a step to go back or forward to.
 func (l *Live) CanUndo() bool { return len(l.undo) > 0 }
 func (l *Live) CanRedo() bool { return len(l.redo) > 0 }
 
-// Undo is the draft before the last step, given the current one; ok false
-// with nothing to undo. The caller puts it in the draft.
+// Undo pops the previous undo snapshot and pushes draft onto the redo stack.
 func (l *Live) Undo(draft []core.Target, now time.Time) ([]core.Target, bool) {
 	if len(l.undo) == 0 {
 		return nil, false
@@ -138,7 +122,7 @@ func (l *Live) Undo(draft []core.Target, now time.Time) ([]core.Target, bool) {
 	return core.CloneTargets(previous), true
 }
 
-// Redo is Undo's reverse.
+// Redo pops the next redo snapshot and pushes draft onto the undo stack.
 func (l *Live) Redo(draft []core.Target, now time.Time) ([]core.Target, bool) {
 	if len(l.redo) == 0 {
 		return nil, false
@@ -150,7 +134,6 @@ func (l *Live) Redo(draft []core.Target, now time.Time) ([]core.Target, bool) {
 	return core.CloneTargets(next), true
 }
 
-// jump records a draft set by undo or redo, which is not itself an edit.
 func (l *Live) jump(draft []core.Target, now time.Time) {
 	l.lastDraft = core.CloneTargets(draft)
 	l.lastChange = now
@@ -159,8 +142,8 @@ func (l *Live) jump(draft []core.Target, now time.Time) {
 	l.saveRetryAt = time.Time{}
 }
 
-// Changed is when channel id's checkpoint was taken, if its settings differ
-// from it now.
+// Changed reports whether current differs from its checkpoint and returns when
+// that checkpoint was taken.
 func (l *Live) Changed(current core.Target) (time.Time, bool) {
 	cp, ok := l.checkpoints[current.ID]
 	if !ok || cp.Target.Equal(current) {
@@ -169,13 +152,13 @@ func (l *Live) Changed(current core.Target) (time.Time, bool) {
 	return cp.At, true
 }
 
-// CheckpointOf is channel id's checkpoint, if it has one.
+// CheckpointOf returns a clone of channel id's checkpoint, if one exists.
 func (l *Live) CheckpointOf(id string) (core.Target, bool) {
 	cp, ok := l.checkpoints[id]
 	return cp.Target.Clone(), ok
 }
 
-// Running is what the audio plays: the live edit, or else saved.
+// Running returns the currently audible targets (live override if active, else saved).
 func (l *Live) Running(saved []core.Target) []core.Target {
 	if l.running != nil {
 		return l.running
@@ -183,19 +166,18 @@ func (l *Live) Running(saved []core.Target) []core.Target {
 	return saved
 }
 
-// LiveStep is what to do with the draft now.
+// LiveStep is the action NextLive recommends for the current draft.
 type LiveStep int
 
 const (
 	LiveNothing LiveStep = iota
-	// LiveSend: send the draft as a live edit (NextLive marked it sent).
+	// Send the draft as a live edit (already marked in-flight by NextLive).
 	LiveSend
-	// LiveRestart: the draft needs the engine restarted, so only a save
-	// can make it heard.
+	// Draft requires an engine restart and can only take effect via save.
 	LiveRestart
 )
 
-// NextLive is what to do with draft at now, given the saved targets.
+// NextLive decides whether to push draft live now, require a restart, or wait.
 func (l *Live) NextLive(draft, saved []core.Target, now time.Time) LiveStep {
 	if l.Support == LiveNo || l.inFlight || now.Before(l.retryAt) {
 		return LiveNothing
@@ -212,9 +194,8 @@ func (l *Live) NextLive(draft, saved []core.Target, now time.Time) LiveStep {
 	return LiveSend
 }
 
-// LiveAnswered takes the mixer's answer to the live edit in flight. It
-// reports whether the change needs a save instead (the mixer refused it as
-// needing a restart).
+// LiveAnswered records the mixer's reply to the in-flight live edit and returns
+// whether the mixer rejected it as requiring a full save/restart.
 func (l *Live) LiveAnswered(accepted, unsupported, busy, needsSave bool, now time.Time) bool {
 	l.inFlight = false
 	switch {
@@ -230,18 +211,14 @@ func (l *Live) LiveAnswered(accepted, unsupported, busy, needsSave bool, now tim
 	return needsSave
 }
 
-// Saved takes newly saved settings: a live edit that matches them is now just
-// the saved settings.
+// Saved clears the live override once the saved settings catch up to it.
 func (l *Live) Saved(saved []core.Target) {
 	if l.running != nil && core.TargetsEqual(l.running, saved) {
 		l.running = nil
 	}
 }
 
-// SaveFailed notes that saving the draft failed at now, and why: the same
-// draft is not saved again until a wait that starts at SaveRetryFirst and
-// doubles with each failure in a row, up to SaveRetryMax. An edit ends the
-// wait.
+// SaveFailed records a save failure and schedules exponential backoff up to SaveRetryMax.
 func (l *Live) SaveFailed(reason string, now time.Time) {
 	wait := SaveRetryFirst
 	for range l.saveFailures {
@@ -256,22 +233,19 @@ func (l *Live) SaveFailed(reason string, now time.Time) {
 	l.saveError = reason
 }
 
-// SaveSucceeded notes a save the mixer took: the failure, if any, is over.
+// SaveSucceeded clears save failure state after a successful save.
 func (l *Live) SaveSucceeded() {
 	l.saveFailures = 0
 	l.saveRetryAt = time.Time{}
 	l.saveError = ""
 }
 
-// SaveError is why the last save failed, "" when the last save succeeded or
-// none failed.
+// SaveError returns the most recent save error message, or "" if none.
 func (l *Live) SaveError() string { return l.saveError }
 
-// SaveDue is whether to save now: the draft differs from the saved settings
-// (dirty), edits stopped long enough ago, no live edit is in flight, a
-// failed save of the same draft has waited its turn (SaveFailed), and the
-// audio already plays the draft (so the save changes nothing heard) or the
-// mixer has no live editing.
+// SaveDue reports whether it is time to auto-save draft: it is dirty, edits have
+// settled, no live edit or retry backoff is active, and either the live audio
+// already matches draft or live editing is unsupported.
 func (l *Live) SaveDue(draft, saved []core.Target, dirty bool, now time.Time) bool {
 	if !dirty || l.inFlight || now.Before(l.saveRetryAt) {
 		return false
@@ -286,7 +260,7 @@ func (l *Live) SaveDue(draft, saved []core.Target, dirty bool, now time.Time) bo
 	return l.Support == LiveNo || core.TargetsEqual(draft, l.Running(saved))
 }
 
-// Quiet is how long since the draft last changed.
+// Quiet returns the duration since the draft last changed.
 func (l *Live) Quiet(now time.Time) time.Duration { return now.Sub(l.lastChange) }
 
 func targetByID(targets []core.Target, id string) *core.Target {

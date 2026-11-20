@@ -1,20 +1,17 @@
-//! Hardware outputs owned by the callback, which hands the mixer's own audio to
-//! the DSP in place after the mixer returns (`Owner::Callback`).
-//!
-//! Everything here is host-only: no mixer, no real device, no timing claims.
+//! Host-only tests for callback-owned hardware outputs (`Owner::Callback`),
+//! where DSP runs in place after the mixer callback returns.
 use super::*;
 
-/// A deterministic per-frame, per-channel sample in [-0.5, 0.5). Samples are
-/// recomputed identically for every pipeline a test runs, so a bitwise
-/// comparison of their output is meaningful.
+/// Deterministic per-frame, per-channel sample in [-0.5, 0.5) so bitwise
+/// comparisons across pipelines stay meaningful.
 fn sample(index: usize, channel: usize) -> f32 {
     let x = (index as u32)
         .wrapping_mul(2_654_435_761)
         .wrapping_add((channel as u32 + 1).wrapping_mul(0x9e37_79b9));
     ((x >> 9) & 0xffff) as f32 / 65_535.0 - 0.5
 }
-/// One mono source (in_1) and one output of `channels` channels, its
-/// high-pass (stateful) and EQ input gain `gain` lin (0.5: -6.02 dB).
+/// Mono source (`in_1`) plus a hardware output with stateful high-pass and
+/// linear EQ input gain `gain` (e.g. 0.5 = -6.02 dB).
 pub(super) fn hardware_plan(channels: u8, mode: PathMode, gain: f64) -> Plan {
     let mut source = Target::new("source", "source", TargetKind::Mic, 1);
     source.limiter.enabled = false;
@@ -78,9 +75,8 @@ fn contents(buffers: &Buffers) -> [[f32; FRAMES]; 2] {
         *buffers.output[1].get()
     }]
 }
-/// One callback: the source request, the mixer's own processing writing its
-/// output mix, then the DSP. Returns the output buffers as the mixer left them
-/// (before `end`) and as the callback returns them (after `end`).
+/// Output buffers captured before (`raw`, as written by the mixer) and after
+/// (`out`, post-DSP) `pipeline.end()`.
 pub(super) struct Frame {
     pub(super) raw: [[f32; FRAMES]; 2],
     pub(super) out: [[f32; FRAMES]; 2],
@@ -135,8 +131,8 @@ fn silent(frame: &[[f32; FRAMES]; 2]) -> bool {
     frame.iter().flatten().all(|value| value.to_bits() == 0)
 }
 
-/// The seam: the mixer's own audio is what the DSP reads, and the buffer the
-/// mixer wrote is the buffer the callback rewrites, only after it returns.
+/// Verify the mixer's own output buffer is returned on request and only
+/// processed in place once `end()` runs.
 #[test]
 fn a_callback_owned_hardware_output_is_processed_only_after_the_mixer_returns() {
     let plan = hardware_plan(2, PathMode::Processed, 0.5);
@@ -165,10 +161,10 @@ fn a_callback_owned_hardware_output_is_processed_only_after_the_mixer_returns() 
         unsafe { std::slice::from_raw_parts_mut(output, FRAMES) }.fill(voice * 2.0);
         written.push(output);
     }
-    // Still the mixer's audio: nothing was processed on the request path.
+    // Untouched until `end()` runs.
     assert_eq!(contents(&buffers), [[voice * 2.0; FRAMES]; 2]);
     unsafe { pipeline.end(FRAMES, true) };
-    // Processed where the mixer wrote it, through the pointers it kept.
+    // Processed in place through the same pointers the mixer wrote to.
     for (channel, &output) in written.iter().enumerate() {
         let values = unsafe { std::slice::from_raw_parts(output, FRAMES) };
         assert!(
@@ -180,12 +176,12 @@ fn a_callback_owned_hardware_output_is_processed_only_after_the_mixer_returns() 
     pipeline.settle();
 }
 
-/// A settings revision published between callbacks is adopted by the next
-/// frame, without dropping or repeating one, and so is a mode change.
+/// Settings and mode revisions published between callbacks take effect on the
+/// next frame without dropping or repeating blocks.
 #[test]
 fn output_revisions_are_adopted_at_a_frame_boundary_without_dropping_a_frame() {
     let mut plan = hardware_plan(2, PathMode::Processed, 0.5);
-    // Memoryless, so a frame's value is readable: the mixer's mix x the gain.
+    // Keep the path memoryless so output values are just raw * gain.
     plan.paths[1].target.highpass.enabled = false;
     let buffers = Buffers::new();
     let (direct, mut direct_controls) = build(&plan, &buffers);
@@ -200,31 +196,27 @@ fn output_revisions_are_adopted_at_a_frame_boundary_without_dropping_a_frame() {
             }
         }
     };
-    // Enough frames for the DSP's gain smoothing to settle at 0.5.
+    // Let gain smoothing settle at 0.5.
     for _ in 0..8 {
         run(&direct, &buffers, 0, [true, true], true);
     }
     let frame = run(&direct, &buffers, 0, [true, true], true);
     near(&frame.out, &frame.raw, 0.5, "before");
     let blocks = direct.counters().output_blocks;
-    // One property revision: gain 0.5 -> 2.0.
+    // Bump gain from 0.5 to 2.0 and give smoothing time to settle.
     let mut revised = plan.paths[1].target.clone();
     revised.eq.input_gain_db = 20.0 * 2.0_f64.log10();
     direct_controls[1].publish(&revised, 2).unwrap();
-    // The DSP smooths a gain change over thousands of samples, so allow it to
-    // settle before reading the new value.
     const SETTLE: u64 = 96;
     for _ in 0..SETTLE {
         run(&direct, &buffers, 0, [true, true], true);
     }
     let status = direct_controls[1].status().unwrap();
     assert_eq!((status.published, status.seen, status.applied), (2, 2, 2));
-    // Exactly one processed block per frame: nothing dropped.
     assert_eq!(direct.counters().output_blocks, blocks + SETTLE);
     let frame = run(&direct, &buffers, 0, [true, true], true);
     near(&frame.out, &frame.raw, 2.0, "after");
-    // A mode change at a frame boundary: the mixer's own audio, untouched, from
-    // the very next frame.
+    // Switch to passthrough; the very next frame should pass untouched.
     let staged = direct_controls[1]
         .prepare_mode(&revised, 3, PathMode::Passthrough)
         .unwrap();
@@ -236,20 +228,18 @@ fn output_revisions_are_adopted_at_a_frame_boundary_without_dropping_a_frame() {
     assert_eq!(direct.counters().faults, 0);
 }
 
-/// Meter-only hardware outputs belong to the callback too (ownership is fixed
-/// at construction): the mixer's own audio, untouched, a meter, and no helper
-/// work for the path at all (see `every_reader_is_owned_by_exactly_one_side`).
+/// Meter-only hardware outputs stay callback-owned (ownership is fixed at
+/// construction): audio passes untouched, metering still runs, and the helper
+/// does no work for them.
 #[test]
 fn meter_only_hardware_outputs_keep_their_meter_and_leave_the_helper_free() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
     let (direct, mut direct_controls) = build(&plan, &buffers);
-    // Enough frames to cover the meter stride (8) and one timing sample (17),
-    // ending just after a visit: a callback-owned path left alone publishes a
-    // finished window at its next visit, at most METER_STRIDE - 1 cycles late.
+    // Run long enough to cover METER_STRIDE (8) and one timing sample (17),
+    // ending right after a visit so the completed meter window is published.
     for index in 0..72 {
         let frame = run(&direct, &buffers, index, [true, true], true);
-        // Meter-only: the mixer's own audio, in place.
         assert_bits_same(&frame.out, &frame.raw, "meter-only untouched");
     }
     let meter = direct_controls[1].status().unwrap().meter.unwrap();
@@ -258,8 +248,8 @@ fn meter_only_hardware_outputs_keep_their_meter_and_leave_the_helper_free() {
     assert_eq!(direct.counters().faults, 0);
 }
 
-/// One owner per reader, never two: the helper cannot hold the same reader the
-/// callback processes with, so a frame is never processed twice.
+/// Each path's reader must be owned by either the callback or the helper,
+/// never both.
 #[test]
 fn every_reader_is_owned_by_exactly_one_side() {
     let plan = hardware_plan(2, PathMode::Processed, 0.5);
@@ -276,11 +266,10 @@ fn every_reader_is_owned_by_exactly_one_side() {
     let output = &front.ports[1];
     assert_eq!(output.owner, Owner::Callback);
     assert!(handoff.work[1].is_none(), "no helper work at all");
-    // A hardware output that is not the Chat mix has no chat capture.
     assert!(output.chat.is_none());
 }
 
-/// Frame 0 is processed, whatever order the ports were registered in.
+/// Frame 0 is processed regardless of port registration order.
 #[test]
 fn a_hardware_output_is_processed_from_the_first_frame() {
     let plan = hardware_plan(2, PathMode::Processed, 0.5);
@@ -300,8 +289,6 @@ fn a_hardware_output_is_processed_from_the_first_frame() {
     assert!(!silent(&frame.out), "processed on frame 0");
 }
 
-/// A mono hardware output (one port) is processed in place like a stereo one,
-/// every frame, and the other output buffer is left alone.
 #[test]
 fn a_mono_hardware_output_is_processed_in_place() {
     let plan = hardware_plan(1, PathMode::Processed, 0.5);
@@ -316,10 +303,9 @@ fn a_mono_hardware_output_is_processed_in_place() {
     assert_eq!(direct.counters().faults, 0);
 }
 
-/// A Chat-voice target marked as a hardware output is not admissible (Plan
-/// validation requires the Chat mix to be USB-visible). Even constructed
-/// directly, it is not processed without its captured stem: the callback asks
-/// for the stem and faults.
+/// Plan validation normally rejects a Chat-voice target marked as a hardware
+/// output (the Chat mix must be USB-visible). Even when constructed directly,
+/// the callback faults instead of running suppression without its captured stem.
 #[test]
 fn a_hardware_chat_voice_output_faults_instead_of_processing_without_its_stem() {
     let mut plan = hardware_plan(2, PathMode::Processed, 0.5);
@@ -349,7 +335,7 @@ fn a_hardware_chat_voice_output_faults_instead_of_processing_without_its_stem() 
 fn clock_reads() -> u64 {
     crate::timing::CLOCK_READS.with(|reads| reads.get()[0])
 }
-/// One callback through `begin_at`, so that the test itself reads no clock.
+/// Runs a callback via `begin_at` so the test harness itself doesn't read the clock.
 fn run_at(pipeline: &Pipeline, buffers: &Buffers, index: usize) -> [[f32; FRAMES]; 2] {
     unsafe {
         (*buffers.input[0].get()).fill(sample(index, 0));
@@ -372,9 +358,8 @@ fn run_at(pipeline: &Pipeline, buffers: &Buffers, index: usize) -> [[f32; FRAMES
     contents(buffers)
 }
 
-/// The bench gauges only measure. With them on, every output sample, counter
-/// and meter is the same bit for bit, through settings and mode changes, failed
-/// callbacks and unrequested channels.
+/// Enabling bench gauges must not alter any output sample, counter, or meter
+/// across settings/mode changes, failed callbacks, and skipped channels.
 #[test]
 fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
     let plan = hardware_plan(2, PathMode::Processed, 0.5);
@@ -394,7 +379,6 @@ fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
     };
     let (costs_before, wakes_before) = (costs(), wakes());
     let frames = 240;
-    // What each pipeline added to the source totals.
     let mut sources = [stats::here::SourceCounts::default(); 2];
     for index in 0..frames {
         let mut revised = plan.paths[1].target.clone();
@@ -454,7 +438,6 @@ fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
             "path {path}"
         );
     }
-    // The gauged pipeline recorded; the plain one never stamped a wake.
     assert!(costs() > costs_before);
     for (after, before) in wakes().into_iter().zip(wakes_before) {
         assert!(after >= before + frames as u64, "{after} vs {before}");
@@ -463,10 +446,7 @@ fn the_bench_gauges_change_no_output_sample_counter_or_meter() {
     assert_ne!(gauged.helper.shared.queued_at.load(Ordering::Relaxed), 0);
 }
 
-/// Without the gauges a callback's begin and end read no clock at all: not
-/// for the path costs, the buffer resolve, the helper margin or the wake, nor
-/// for the prefetching of its sparse cycles. With them, each of the first
-/// four is stamped.
+/// With gauges off, `begin_at` and `end` must not read the clock at all.
 #[test]
 fn without_the_gauges_the_pipeline_reads_no_clock_in_the_callback() {
     let plan = hardware_plan(2, PathMode::Processed, 0.5);
@@ -475,8 +455,7 @@ fn without_the_gauges_the_pipeline_reads_no_clock_in_the_callback() {
     let (gauged, _gauged_controls) = build(&plan, &buffers);
     plain.set_gauged(false);
     gauged.set_gauged(true);
-    // Fewer callbacks than the first placement sample (64), which stamps its
-    // record when the placement is new.
+    // Stay under the first placement sample (cycle 64), which timestamps new placements.
     let frames = 48;
     let before = clock_reads();
     let mut plain_out = Vec::new();
@@ -489,10 +468,8 @@ fn without_the_gauges_the_pipeline_reads_no_clock_in_the_callback() {
         let out = run_at(&gauged, &buffers, index);
         assert_bits_same(&out, expected, &format!("frame {index}"));
     }
-    // Per callback: the resolve (2), each visited path (2 each, the source
-    // and the output every cycle), the end, the placement and the wake (4).
+    // Per callback with gauges on: resolve (2) + 2 visited paths (2 each) + end/place/wake (4).
     assert_eq!(clock_reads() - before, frames as u64 * (2 + 2 * 2 + 4));
-    // The margin is taken from the callback's start stamp, which was 1 here:
-    // the helper finished long after it, so the margin reads zero.
+    // Margin is relative to the callback start stamp (1 here), so it saturates at 0.
     assert_eq!(HELPER_MIN_MARGIN_NS.load(Ordering::Relaxed), 0);
 }

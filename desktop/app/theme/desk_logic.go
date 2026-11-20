@@ -1,9 +1,5 @@
 package theme
 
-// The desk's helpers that do not draw: effect names, signal order and stage
-// summaries. This file does not import gk: its
-// functions are tested with plain `go test`.
-
 import (
 	"fmt"
 	"slices"
@@ -11,7 +7,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// shortEffect is a short effect name for the channel list.
 func ShortEffect(effect core.Effect) string {
 	switch effect {
 	case core.EffectHighpass:
@@ -30,8 +25,7 @@ func ShortEffect(effect core.Effect) string {
 	return string(effect)
 }
 
-// effectIndex is `effect as usize`: the effect's place in core.EffectAll, for
-// element ids.
+// EffectIndex returns the position of effect in core.EffectAll (used for stable element IDs).
 func EffectIndex(effect core.Effect) int {
 	if i := slices.Index(core.EffectAll[:], effect); i >= 0 {
 		return i
@@ -39,8 +33,8 @@ func EffectIndex(effect core.Effect) int {
 	return len(core.EffectAll)
 }
 
-// visibleEffects is the effects in signal order, without suppression on
-// targets that cannot use it.
+// VisibleEffects returns target's effects in signal order, omitting suppression
+// on targets that don't support it.
 func VisibleEffects(target *core.Target) []core.Effect {
 	effects := make([]core.Effect, 0, len(target.Order)+1)
 	for _, effect := range target.Order {
@@ -49,14 +43,13 @@ func VisibleEffects(target *core.Target) []core.Effect {
 		}
 	}
 	if target.IsChatOutput() {
-		// The voice branch is before the stereo sum, not a movable output stage.
+		// Voice suppression runs before the stereo sum and cannot be reordered.
 		effects = slices.DeleteFunc(effects, func(e core.Effect) bool { return e == core.EffectSuppression })
 		effects = slices.Insert(effects, 0, core.EffectSuppression)
 	}
 	return effects
 }
 
-// stageSummary is a stage's key value in the flow lane.
 func StageSummary(target *core.Target, effect core.Effect, channel core.Channel) string {
 	switch effect {
 	case core.EffectSuppression:

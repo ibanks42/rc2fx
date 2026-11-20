@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Host-only tests of the steps rc2fx.sh keeps for rc2fx-supervisor.
-
-python3 mixer/scripts/tests/supervisor.py
-
-The supervisor itself is tested in crates/rc2fx-supervisor. These run the real
-script's entry points with RC2FX_LOGS in a temporary directory, and its
-functions with stubs, against no mixer and no USB device.
-"""
+"""Host tests for the rc2fx.sh helpers invoked by rc2fx-supervisor."""
 import os
 import subprocess
 import tempfile

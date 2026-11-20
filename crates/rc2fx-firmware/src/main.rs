@@ -5,7 +5,6 @@ fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
 }
 
-/// What a profile is good for on its own model, as both listings print it.
 fn qualification(profile: &Profile) -> &'static str {
     if profile.model == Model::Duo.id() {
         "experimental; opt-in required, NOT hardware tested"
@@ -41,8 +40,8 @@ fn run(args: &[String]) -> Result<(), String> {
             check(catalog, image, launcher, Model::parse(model)?)
         }
         [command, catalog, image, launcher] if command == "check-device" => {
-            // Read board evidence here as well as in the injected library:
-            // refusal must happen before the launcher stops stock audio.
+            // Check board identity here too (not just in the injected library) so
+            // we bail out before the launcher stops stock audio.
             check(catalog, image, launcher, Model::read_device()?)
         }
         [command, catalog, image, launcher, model] if command == "inspect" => {

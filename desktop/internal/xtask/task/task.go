@@ -1,7 +1,7 @@
-// Package task is what every xtask command shares: the repository root,
-// running a program to completion, SHA-256 in hex, and fixed wording for
-// exit statuses, I/O errors and quoted strings: the Rust standard library's,
-// as the xtask printed them before it was ported to Go.
+// Package task provides shared helpers for xtask commands: locating the repo
+// root, running subprocesses, hashing, and formatting exit statuses, I/O
+// errors, and quoted strings to match the Rust stdlib output from before the
+// Go port.
 package task
 
 import (
@@ -21,27 +21,23 @@ import (
 	"unicode/utf8"
 )
 
-// Error is a message for the user; main prints it after "error: ".
+// Error is a user-facing error message printed by main after "error: ".
 type Error string
 
 func (e Error) Error() string { return string(e) }
 
-// Errorf is fmt.Sprintf as an Error.
 func Errorf(format string, args ...any) error { return Error(fmt.Sprintf(format, args...)) }
 
-// The repository files this tool reads: the scripts that run on the mixer
-// (mixer/scripts), and the package assets (desktop/packaging: launcher,
-// desktop entry, icons, entitlements).
 const (
 	MixerScriptsDir = "mixer/scripts"
 	AssetsDir       = "desktop/packaging"
 )
 
-// RootVariable names the repository root; the ./xtask launcher sets it.
+// RootVariable overrides the repository root (set by the ./xtask launcher).
 const RootVariable = "RC2FX_XTASK_ROOT"
 
-// Root is the repository root: RC2FX_XTASK_ROOT, or, when this program runs
-// from source (go run, go test), the checkout this file is in.
+// Root returns the repository root from RC2FX_XTASK_ROOT, falling back to the
+// checkout containing this source file when run via `go run` or `go test`.
 func Root() string {
 	if root := os.Getenv(RootVariable); root != "" {
 		return root
@@ -51,12 +47,11 @@ func Root() string {
 		wd, _ := os.Getwd()
 		return wd
 	}
-	// desktop/internal/xtask/task/task.go
+	// Walk up from desktop/internal/xtask/task/task.go.
 	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file)))))
 }
 
-// Run runs a command to completion with this process's stdio, failing on a
-// non-zero exit.
+// Run executes command attached to this process's stdio and fails on a non-zero exit.
 func Run(command *exec.Cmd) error {
 	if command.Stdin == nil {
 		command.Stdin = os.Stdin
@@ -84,8 +79,7 @@ func Run(command *exec.Cmd) error {
 	return Errorf("%s failed (%s)", Debug(program), Status(command.ProcessState))
 }
 
-// Program is the program a command runs, as it was named, not the path it
-// was found at.
+// Program returns the invoked command name (Args[0]) rather than the resolved path.
 func Program(command *exec.Cmd) string {
 	if len(command.Args) > 0 {
 		return command.Args[0]
@@ -93,14 +87,13 @@ func Program(command *exec.Cmd) string {
 	return command.Path
 }
 
-// Sha256 is the lowercase hexadecimal SHA-256 of data.
 func Sha256(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// Status is a finished process's status: `exit status: 1`,
-// `signal: 9 (SIGKILL)`, or on Windows `exit code: 1`.
+// Status formats a finished process's exit status (`exit status: 1`,
+// `signal: 9 (SIGKILL)`, or `exit code: 1` on Windows).
 func Status(state *os.ProcessState) string {
 	if state == nil {
 		return "exit status: unknown"
@@ -108,15 +101,14 @@ func Status(state *os.ProcessState) string {
 	return statusText(state)
 }
 
-// IOError is an error's text: an operating system error is its description
-// and `(os error N)`; anything else as it is. Path and syscall wrappers are
-// dropped: the callers' messages name the path themselves.
+// IOError formats OS errors as "<msg> (os error N)", stripping fs.PathError
+// wrappers since callers include the path themselves.
 func IOError(err error) string {
 	if err == nil {
 		return ""
 	}
 	if errors.Is(err, exec.ErrNotFound) {
-		// A program not on PATH is reported as execvp's ENOENT.
+		// Report missing executables as ENOENT to match execvp.
 		return errnoText(syscall.ENOENT)
 	}
 	var errno syscall.Errno
@@ -130,14 +122,13 @@ func IOError(err error) string {
 	return err.Error()
 }
 
-// Debug quotes text as Rust's `{:?}` does for a str, Path or OsStr.
+// Debug quotes text using Rust's `{:?}` escaping rules.
 func Debug(text string) string {
 	var out strings.Builder
 	out.WriteByte('"')
 	for len(text) > 0 {
 		r, size := utf8.DecodeRuneInString(text)
 		if r == utf8.RuneError && size == 1 {
-			// An OsStr's invalid bytes.
 			fmt.Fprintf(&out, "\\x%02X", text[0])
 			text = text[1:]
 			continue
@@ -168,8 +159,7 @@ func Debug(text string) string {
 	return out.String()
 }
 
-// ParseUint is an unsigned integer of bits bits: an optional `+` and ASCII
-// digits only, within range.
+// ParseUint parses an unsigned base-10 integer (allowing an optional leading '+').
 func ParseUint(text string, bits int) (uint64, bool) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" {
@@ -184,5 +174,4 @@ func ParseUint(text string, bits int) (uint64, bool) {
 	return value, err == nil
 }
 
-// CRLFToLF replaces every "\r\n" with "\n".
 func CRLFToLF(text string) string { return strings.ReplaceAll(text, "\r\n", "\n") }

@@ -1,7 +1,7 @@
 use super::*;
 
-/// One second of speech-like harmonic bursts, clicks and a low noise floor,
-/// quantized to 16 bits (the reference was rendered from this as a WAV).
+// 1 s synthetic test signal (harmonic bursts, clicks, low noise floor),
+// quantized to 16-bit PCM to match the reference WAV.
 fn signal() -> Vec<f32> {
     let mut seed = 0x2545_f491u32;
     let mut noise = move || {
@@ -99,9 +99,8 @@ fn digest(out: &[f32]) -> u64 {
     })
 }
 
-/// Two seconds of loud speech-like bursts under strong broadband noise, with
-/// the stretches a kernel could mishandle: digital silence, full-scale
-/// clipping, values far below one LSB, and noise alone. Finite throughout.
+// 2 s stress signal: speech-like bursts in strong noise plus silence,
+// sub-LSB values, hard clipping, and pure noise stretches.
 fn noisy_signal() -> Vec<f32> {
     let mut seed = 0x1234_5678u32;
     let mut noise = move || {
@@ -167,16 +166,12 @@ fn golden_runs(open: bool) -> Vec<(String, Vec<f32>)> {
     runs
 }
 
-/// `golden_runs(false)` digests of the build before the glue loops were
-/// vectorized and df_convp kept running sums (2026-11-09), in `golden_runs`
-/// order. That build ran the "mixed calls" streams as calls of one and two
-/// hops; one hop per call gives the same samples bit for bit, which the
-/// removed two-hop path's own tests checked. On x86-64 (Fedora 44's libm),
-/// and on AArch64 under
-/// `qemu-aarch64 -cpu cortex-a53` with the mixer's glibc 2.35. The model
-/// calls libm's `expf`, `log10f` and `sin`, so another libm can legitimately
-/// give other digests; `kernels_match_their_references_through_the_whole_model`
-/// is the check that does not depend on it.
+// Recorded `golden_runs(false)` digests from before the NEON glue and running-sum
+// df_convp changes (2026-11-09), on x86-64 (Fedora 44 libm) and AArch64
+// (`qemu-aarch64 -cpu cortex-a53`, mixer glibc 2.35). Because the model calls
+// libm (`expf`, `log10f`, `sin`), different libm versions can legitimately
+// shift these; `kernels_match_their_references_through_the_whole_model` is the
+// libm-independent check.
 const GOLDEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     [
         0x949f_87b8_fdec_13f0,
@@ -201,11 +196,8 @@ const GOLDEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     ]
 };
 
-/// `golden_runs(true)` digests of the same build (commit 938bdae with
-/// `Dfn::open_convp` added and nothing else changed), on the same two
-/// platforms. With the pathway closed df_convp's convolution reaches a
-/// handful of samples; opened, it reaches all of them, so these digests hold
-/// its arithmetic the way `GOLDEN` holds the rest of the model's.
+// Same baseline commit (938bdae) with `Dfn::open_convp` enabled so df_convp's
+// output isn't clipped away by its ReLU.
 const GOLDEN_OPEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     [
         0x4e74_3374_1cb6_94ac,
@@ -230,11 +222,8 @@ const GOLDEN_OPEN: [u64; 8] = if cfg!(target_arch = "aarch64") {
     ]
 };
 
-/// Prints one digest per `golden_runs` stream, pathway closed and open, and
-/// compares it with the digest recorded before the kernels changed (`GOLDEN`,
-/// `GOLDEN_OPEN`): the whole model's output, every sample, bit for bit
-/// across builds. Run it on the host and under qemu-aarch64:
-/// `cargo test -p rc2fx-dfn --release golden_digests -- --ignored --nocapture`.
+// Run with `cargo test -p rc2fx-dfn --release golden_digests -- --ignored --nocapture`
+// on host and qemu-aarch64 to verify bit-exact agreement with `GOLDEN`/`GOLDEN_OPEN`.
 #[test]
 #[ignore]
 fn golden_digests() {
@@ -274,12 +263,8 @@ fn with_reference<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// The whole model with the current kernels against the same model with
-/// the reference kernels (the scalar glue loops, df_convp over its full
-/// history), every output sample bit for bit: both embedded models on the
-/// noisy input's first 1.25 s (speech in noise, silence, values below one
-/// LSB, clipping, noise alone), with a reset part way. On AArch64 this compares the NEON glue loops with the scalar ones;
-/// everywhere it compares df_convp's running sums with the full convolution.
+// End-to-end check that the fast kernels (NEON glue + running-sum df_convp +
+// tiled int8) match their scalar/reference counterparts bit-for-bit.
 #[test]
 fn kernels_match_their_references_through_the_whole_model() {
     let input = &noisy_signal()[..dsp::SAMPLE_RATE * 5 / 4];
@@ -349,10 +334,8 @@ fn kernels_match_their_references_on_every_golden_run() {
     }
 }
 
-/// Non-finite and extreme input: frames of huge values, infinities and NaNs
-/// poison the model's state until a reset. The current and the reference
-/// kernels must agree throughout: bit for bit wherever the output is a
-/// number, and NaN for NaN (payloads aside, see `glue`) where it is not.
+// Check that extreme/non-finite inputs produce the same bits (and NaN-for-NaN)
+// in both fast and reference paths, including recovery after `reset()`.
 #[test]
 fn kernels_match_their_references_on_extreme_input() {
     let base = signal();
@@ -431,10 +414,7 @@ fn assert_matches_reference(ours: &[f32], reference: &[f32]) {
     );
 }
 
-/// The voice gate reads this value through `VendorModel::process`. The
-/// output sigmoid already bounds it to [-15, 35] for any finite input, so
-/// what this guards is a NaN (which fails the range check); the other LSNR
-/// tests compare two paths' bits and would pass if both gave NaN.
+// Guards against NaN LSNR (finite inputs are already sigmoid-bounded to [-15, 35]).
 #[test]
 fn reports_a_finite_local_snr_for_every_frame() {
     let mut filter = DeepFilter::new().unwrap();
@@ -891,11 +871,9 @@ fn write_reference_input() {
     std::fs::write(path, wav).unwrap();
 }
 
-/// Loads a candidate weights file, reports its framing and runs the test
-/// signal through it: a host-side check of an export before it goes to the
-/// mixer. `RC2FX_DFN_WEIGHTS=path cargo test -p rc2fx-dfn --release -- --ignored candidate_weights`;
-/// with `RC2FX_DFN_REFERENCE=reference.wav` (handoff.sh's dfref output for the
-/// same weights) it must also match DeepFilterNet as closely as the embedded model.
+// Host-side smoke check for an exported weights file:
+// `RC2FX_DFN_WEIGHTS=path cargo test -p rc2fx-dfn --release -- --ignored candidate_weights`
+// Set `RC2FX_DFN_REFERENCE=reference.wav` to also compare against libDF's output.
 #[test]
 #[ignore]
 fn candidate_weights() {

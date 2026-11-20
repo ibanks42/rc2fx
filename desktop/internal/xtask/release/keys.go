@@ -1,5 +1,5 @@
-// Package release signs and renews the mixer's and the app's TUF release
-// metadata, creates signing keys, and packages a standalone mixer release.
+// Package release signs and renews TUF release metadata for both the mixer and
+// desktop app, generates signing keys, and packages standalone mixer releases.
 package release
 
 import (
@@ -8,8 +8,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// Keys is `mixer-keys DIR`: local, explicit key creation. Never contacts
-// GitHub or modifies the checkout.
+// Keys implements `xtask mixer-keys DIR`, generating local signing keys without
+// touching GitHub or the checkout.
 func Keys(destination string) error {
 	if err := createKeys(destination, task.Root()); err != nil {
 		return err
@@ -20,7 +20,6 @@ func Keys(destination string) error {
 	return nil
 }
 
-// instructions is SETUP.md in a new key directory.
 const instructions = `# RC2FX signing setup
 
 Generation is complete only if COMPLETE exists. If it does not, keep this

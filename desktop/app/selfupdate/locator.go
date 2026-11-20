@@ -9,40 +9,29 @@ import (
 	"runtime"
 )
 
-// LocatorConfig is velopack's VelopackLocatorConfig: the paths Velopack uses
-// for this copy.
+// LocatorConfig mirrors Velopack's VelopackLocatorConfig paths.
 type LocatorConfig struct {
-	// RootAppDir is the root directory of the app, or the AppImage file on
-	// Linux.
-	RootAppDir string
-	// UpdateExePath is Velopack's updater (Update.exe, UpdateMac,
-	// UpdateNix).
-	UpdateExePath string
-	PackagesDir   string
-	// ManifestPath is the app's sq.version.
-	ManifestPath     string
+	RootAppDir       string // app root directory, or AppImage path on Linux
+	UpdateExePath    string // Update.exe, UpdateMac, or UpdateNix
+	PackagesDir      string
+	ManifestPath     string // sq.version path
 	CurrentBinaryDir string
 	IsPortable       bool
 }
 
-// manifest is the part of Velopack's sq.version (a nuspec) these paths
-// need.
 type manifest struct {
 	ID      string
 	Version string
 	MainExe string
 }
 
-// semver is what semver::Version::parse accepts, closely enough to refuse
-// what it refuses: three numbers without leading zeros, then an optional
-// pre-release and build.
+// Matches strict semver (major.minor.patch with optional prerelease/build).
 var semver = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)` +
 	`(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
 
-// readManifest is velopack's read_current_manifest and
-// read_manifest_from_string: the text of the last element of each name
-// counts, wherever it is; id and a non-zero version are required, and on
-// Windows mainExe.
+// readManifest parses Velopack's sq.version nuspec file using the same lenient
+// rules as Velopack itself: the last matching element wins, id and a non-zero
+// version are required, and Windows also requires mainExe.
 func readManifest(path string) (manifest, error) {
 	file, err := os.Open(path)
 	if err != nil {

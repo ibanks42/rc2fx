@@ -413,14 +413,8 @@ impl Coordinator {
         true
     }
 
-    /// The loop's timed work: read the native engine and sample resources
-    /// when each is due. Returns how long the loop may then wait for a command.
-    ///
-    /// With the native engine the wait ends at the earlier of the next engine
-    /// read and the next resource sample, so the thread sleeps between them. A
-    /// command ends the wait at once, and the deadline is worked out again
-    /// after every command, because a save makes the next read due now.
-    /// Without an engine the loop keeps the fixed tick.
+    /// Runs due engine reads and resource samples, returning how long the loop
+    /// can sleep waiting for the next command (or fixed `TICK` without an engine).
     pub(crate) fn turn(&mut self) -> Duration {
         if let Some(native) = &mut self.native {
             let controller = &self.controller;

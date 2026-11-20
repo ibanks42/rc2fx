@@ -1,7 +1,6 @@
-// Package elfcheck makes static checks that a cross-built binary will load
-// on the mixer: AArch64, only the firmware's system libraries, no symbol
-// versions newer than the firmware provides, and no build-host search paths
-// or text relocations.
+// Package elfcheck verifies that cross-compiled ELF binaries match the mixer
+// firmware's ABI (AArch64, only firmware-provided system libraries, no newer
+// symbol versions, and no RPATH/RUNPATH or text relocations).
 package elfcheck
 
 import (
@@ -41,7 +40,7 @@ const (
 	df1PIE    = 0x08000000
 )
 
-// Check checks the file at path, a shared library when shared.
+// Check validates the ELF binary at path. Set shared for a .so library.
 func Check(path string, shared bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -50,8 +49,8 @@ func Check(path string, shared bool) error {
 	return CheckData(path, data, shared)
 }
 
-// CheckData is Check for bytes already read: path only names them, in the
-// error and in the line that says they pass.
+// CheckData validates an already-read ELF image, using path for log and error
+// messages.
 func CheckData(path string, data []byte, shared bool) error {
 	if err := CheckBytes(data, shared); err != nil {
 		return task.Errorf("%s: %s", path, err)
@@ -60,7 +59,7 @@ func CheckData(path string, data []byte, shared bool) error {
 	return nil
 }
 
-// CheckBytes checks an ELF image.
+// CheckBytes runs the ABI checks on a raw ELF image.
 func CheckBytes(data []byte, shared bool) error {
 	file, err := elf.NewFile(bytes.NewReader(data))
 	if err != nil {
@@ -156,9 +155,8 @@ func CheckBytes(data []byte, shared bool) error {
 	return nil
 }
 
-// checkVersionNeeds walks a SHT_GNU_VERNEED section: Elf64_Verneed records
-// (vn_version, vn_cnt, vn_file, vn_aux, vn_next) each with a chain of
-// Elf64_Vernaux (vna_hash, vna_flags, vna_other, vna_name, vna_next).
+// checkVersionNeeds walks SHT_GNU_VERNEED (Elf64_Verneed entries and their
+// Elf64_Vernaux chains) and rejects symbol versions newer than the firmware.
 func checkVersionNeeds(data, table []byte, order binary.ByteOrder) error {
 	invalid := errors.New("Invalid ELF GNU verneed")
 	for at := 0; len(data[at:]) > 0; {
@@ -243,7 +241,7 @@ func readAll(reader interface{ Read([]byte) (int, error) }, size uint64) ([]byte
 	return out, nil
 }
 
-// Supported reports a symbol version the firmware provides.
+// Supported reports whether the mixer firmware provides the given symbol version.
 func Supported(version string) bool {
 	number := func(text string, index int) (uint32, bool) {
 		parts := strings.Split(text, ".")

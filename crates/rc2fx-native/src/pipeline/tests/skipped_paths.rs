@@ -1,6 +1,6 @@
-//! The invariant: a callback that leaves paths alone changes nothing about
-//! them. Settings, modes, faults, frame counts and meters behave as if every
-//! path had been visited on every callback.
+//! Tests verifying that sparse cycles (skipping inactive passthrough paths)
+//! preserve identical settings, modes, faults, frame counts, and meters as
+//! visiting every path on every callback, plus `PinLookup` hash tests.
 use super::direct_output::{Frame, build, hardware_plan, run};
 use super::*;
 
@@ -9,8 +9,7 @@ const OUTPUT: usize = 1;
 fn front(pipeline: &Pipeline) -> &Front {
     unsafe { &*pipeline.front.get() }
 }
-/// Runs frames until the next `begin` would start a sparse cycle in which
-/// `meters` is what the output path's stride says.
+/// Advances until the next `begin()` will run a sparse cycle where `meters(_, OUTPUT) == due`.
 fn run_until(pipeline: &Pipeline, buffers: &Buffers, index: &mut usize, due: bool) {
     loop {
         let frame = front(pipeline);
@@ -56,11 +55,10 @@ fn a_path_left_alone_is_not_held_to_its_last_visit() {
     let (pipeline, _controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, true);
-    // Visited, and so active, on this frame.
     run(&pipeline, &buffers, index, [true, true], true);
     index += 1;
-    // The next frame leaves it alone. JACK may hand out any buffer for it now:
-    // comparing with the visit's pointer would fail a healthy path.
+    // Next frame skips this path, so JACK can return any buffer pointer without
+    // tripping a mismatch against the previous visit.
     unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
     let elsewhere = buffers.input(1).cast::<c_void>();
     let port = buffers.output(0) as usize;
@@ -91,17 +89,15 @@ fn an_unbound_port_is_handed_straight_back() {
 fn frames_left_alone_count_exactly_as_frames_counted_every_cycle() {
     let plan = hardware_plan(2, PathMode::Passthrough, 0.5);
     let buffers = Buffers::new();
-    // The oracle visits every path on every cycle, so it counts each frame as
-    // it happens; the other leaves the output alone between meter readings.
+    // Compare an oracle that visits every path every cycle against normal sparse cycles.
     let (every, mut every_controls) = build(&plan, &buffers);
     let (direct, mut direct_controls) = build(&plan, &buffers);
     let meter = |controls: &mut Vec<parameters::Control>| {
         let value = controls[OUTPUT].status().unwrap().meter.unwrap();
         (value.callbacks, value.processed_frames, value.rms.to_bits())
     };
-    // The mixer fails some callbacks, on and off the output's meter cycles.
-    // Reading as control does drains the windows; 104 frames is a whole number
-    // of strides, so each reading falls just after a visit.
+    // Inject periodic callback failures both on and off meter cycles; 104 is a
+    // multiple of METER_STRIDE (8) so each check lands right after a visit.
     for index in 0..1040 {
         let success = index % 7 != 3 && index % 37 != 0;
         // SAFETY: between callbacks; the callback side owns `front`.
@@ -134,7 +130,7 @@ fn a_callback_owned_mode_change_takes_effect_on_the_next_frame() {
     publish(&mut controls[OUTPUT], &plan, 2, PathMode::Processed);
     assert!(!same(&run(&pipeline, &buffers, index, [true, true], true)));
     index += 1;
-    // Well into sparse cycles, it stays processed: on every frame.
+    // Stays processed on every frame even after sparse cycles resume.
     for _ in 0..40 {
         assert!(!same(&run(&pipeline, &buffers, index, [true, true], true)));
         index += 1;
@@ -153,7 +149,7 @@ fn a_mode_seen_before_its_publication_is_counted_is_never_a_lone_frame() {
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, false);
     publish(&mut controls[OUTPUT], &plan, 2, PathMode::Processed);
-    // As if the control thread stopped between the store and the count.
+    // Simulate the control thread pausing between storing the revision and incrementing `publications`.
     pipeline.publications.fetch_sub(1, Ordering::Release);
     let mut processed = false;
     for _ in 0..3 * METER_STRIDE as usize {
@@ -168,8 +164,8 @@ fn a_mode_seen_before_its_publication_is_counted_is_never_a_lone_frame() {
     assert!(processed);
 }
 
-/// Frames from a Passthrough-to-Processed publication until the mixer is first
-/// handed something other than its own source buffer.
+/// Counts callbacks after a Passthrough -> Processed switch until `buffer()`
+/// returns a processed buffer pointer instead of the raw input pointer.
 fn frames_until_processed(pipeline: &Pipeline, buffers: &Buffers) -> usize {
     for offset in 0..16 {
         unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
@@ -218,8 +214,8 @@ fn a_path_the_mixer_never_requests_still_acknowledges_a_setting() {
     let (pipeline, mut controls) = build(&plan, &buffers);
     let mut index = 0;
     run_until(&pipeline, &buffers, &mut index, true);
-    // Published on its meter cycle, when an unrequested path cannot apply: it
-    // acknowledges on one of the stride's other cycles, as it always did.
+    // Published on its meter cycle (when an unrequested path can't apply yet);
+    // it should still acknowledge on one of the remaining cycles in the stride.
     publish(&mut controls[OUTPUT], &plan, 2, PathMode::Passthrough);
     for offset in 0..METER_STRIDE as usize {
         run(&pipeline, &buffers, index + offset, [false, false], true);
@@ -361,7 +357,7 @@ fn the_port_lookup_finds_every_pin_and_nothing_else() {
     }
 }
 
-/// The table as it was before: the low four bits dropped, bits 20 up.
+/// Previous hash scheme (drop low 4 bits, shift right 20).
 const OLD_HASH: PinHash = PinHash { drop: 4, shift: 20 };
 fn pin_entries(pins: &[usize]) -> Vec<PinEntry> {
     pins.iter()
@@ -373,7 +369,6 @@ fn pin_entries(pins: &[usize]) -> Vec<PinEntry> {
         })
         .collect()
 }
-/// Entries a search for `pointer` reads.
 fn probes(table: &PinLookup, pointer: usize) -> usize {
     let mut index = table.start(pointer);
     let mut count = 1;
@@ -383,7 +378,7 @@ fn probes(table: &PinLookup, pointer: usize) -> usize {
     }
     count
 }
-/// Longest and total search over `asked`.
+/// Returns `(max_probes, total_probes)` across all handles in `asked`.
 fn search_cost(table: &PinLookup, asked: &[usize]) -> (usize, usize) {
     asked
         .iter()
@@ -392,8 +387,8 @@ fn search_cost(table: &PinLookup, asked: &[usize]) -> (usize, usize) {
             (longest.max(length), total + length)
         })
 }
-/// Every candidate hash, and the chosen table, answer exactly as a plain
-/// search of the pins does, for every port asked about.
+/// Verifies every candidate hash and the selected table match a linear scan
+/// over `pins` for all handles in `asked`.
 fn assert_same_answers(pins: &[usize], asked: &[usize]) -> PinLookup {
     let entries = pin_entries(pins);
     let chosen = PinLookup::with_pins(&entries);
@@ -411,9 +406,8 @@ fn assert_same_answers(pins: &[usize], asked: &[usize]) -> PinLookup {
     }
     chosen
 }
-/// The Pro II plan's pins among a client's 122 consecutive handles: sources
-/// in_1..20 and in_29..36 (as many as there are inputs) and 16 outputs.
-/// `inputs` and `inputs_first` vary which handles they get.
+/// Generates Pro II-like pin sets (`in_1..20`, `in_29..36`, and 16 outputs)
+/// inside a 122-handle consecutive range.
 fn pro_pins(base: usize, inputs: usize, inputs_first: bool) -> (Vec<usize>, Vec<usize>) {
     let outputs = 122 - inputs;
     let (first_input, first_output) = if inputs_first {
@@ -430,9 +424,8 @@ fn pro_pins(base: usize, inputs: usize, inputs_first: bool) -> (Vec<usize>, Vec<
     (pins, (base..base + 122).collect())
 }
 
-/// JACK2 hands out small consecutive port indices as handles. Every one of a
-/// client's 122 ports, bound or not, is found or ruled out within three
-/// entries, where the old hash read dozens.
+/// JACK2 uses small consecutive integers as port handles. Check that every
+/// handle in a 122-port client resolves in at most 3 probes (vs dozens with `OLD_HASH`).
 #[test]
 fn consecutive_port_handles_are_found_within_a_few_entries() {
     let (mut new_total, mut old_total, mut old_longest) = (0, 0, 0);
@@ -455,19 +448,17 @@ fn consecutive_port_handles_are_found_within_a_few_entries() {
             }
         }
     }
-    // The real plan: 44 pins in a 128-entry table.
+    // Real Pro II plan: 44 pins in a 128-entry table.
     let (pins, _) = pro_pins(1, 36, true);
     assert_eq!(pins.len(), 44);
     assert_eq!(PinLookup::with_pins(&pin_entries(&pins)).entries.len(), 128);
-    // On the same layouts the old hash read over three times as many entries.
     assert!(
         old_total > 3 * new_total && old_longest > 20,
         "old {old_total} entries (longest {old_longest}), new {new_total}"
     );
 }
 
-/// Handles that are aligned addresses are served as well as before: the old
-/// hash is one of the candidates, and the choice is the cheapest table.
+/// Aligned pointer handles should stay at least as fast as `OLD_HASH`.
 #[test]
 fn aligned_pointer_handles_are_found_within_a_few_entries() {
     let (mut new_total, mut old_total) = (0, 0);
@@ -492,7 +483,6 @@ fn aligned_pointer_handles_are_found_within_a_few_entries() {
                 ports[78..].to_vec(),
             ];
             for pins in layouts {
-                // 41 or 44 pins: a 128-entry table, as the real plan's.
                 assert!((41..=44).contains(&pins.len()));
                 let chosen = assert_same_answers(&pins, &ports);
                 let (longest, total) = search_cost(&chosen, &ports);
@@ -509,12 +499,9 @@ fn aligned_pointer_handles_are_found_within_a_few_entries() {
     );
 }
 
-/// Handles of any form, not only the two expected ones: random words, small
-/// numbers, handles that differ only in their high bits, handles that every
-/// candidate hash starts on one entry (a full collision), repeats, zero and
-/// the largest word. Every candidate table and the chosen one answer exactly
-/// as a plain search of the pins does, for bound and unbound handles, and
-/// every search ends.
+/// Fuzz-style check across pathological handle distributions (random, high-bit
+/// only, full collisions, duplicates, 0, `usize::MAX`) to verify correctness
+/// and termination.
 #[test]
 fn any_handles_are_answered_as_a_plain_search_answers_them() {
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
@@ -536,19 +523,13 @@ fn any_handles_are_answered_as_a_plain_search_answers_them() {
         let mut handle = |n: usize| -> usize {
             let n = n as u64 + 1;
             (match family {
-                // Any word at all.
                 0 => random(),
-                // Small numbers in any order, with repeats.
                 1 => random() % 97,
-                // Only the high bits differ.
                 2 => n << 32,
                 3 => n << 48,
-                // Every candidate starts all of these on entry 0, in a table
-                // of up to 1024 entries. Only 63 are distinct, and one is 0.
+                // Forces every candidate hash to map all entries to slot 0 (up to 1024 slots).
                 4 => n << 58,
-                // Addresses a few bytes apart, unaligned.
                 5 => 0x7f3a_1c2d_4001 + n * 3,
-                // Zero and the extremes among ordinary handles.
                 _ => match random() % 5 {
                     0 => 0,
                     1 => u64::MAX,
@@ -558,7 +539,6 @@ fn any_handles_are_answered_as_a_plain_search_answers_them() {
             }) as usize
         };
         let pins: Vec<usize> = (0..count).map(&mut handle).collect();
-        // Every pin, handles beside each pin, and handles that are not pins.
         let mut asked = pins.clone();
         asked.extend(pins.iter().flat_map(|pin| {
             [
@@ -571,7 +551,7 @@ fn any_handles_are_answered_as_a_plain_search_answers_them() {
         asked.extend((0..64).map(&mut handle));
         asked.extend([0, 1, usize::MAX]);
         let chosen = assert_same_answers(&pins, &asked);
-        // At most half full, so that a search always reaches an empty entry.
+        // Load factor <= 50% guarantees linear probing always hits an empty slot.
         let used = chosen
             .entries
             .iter()
@@ -589,8 +569,6 @@ fn any_handles_are_answered_as_a_plain_search_answers_them() {
     assert!(collided > 0, "the full collision was exercised");
 }
 
-/// A plan with no pins has a one-entry table: nothing is found, and no index
-/// leaves the table.
 #[test]
 fn a_lookup_with_no_pins_finds_nothing() {
     for lookup in [PinLookup::new(&[]), PinLookup::with_pins(&[])] {

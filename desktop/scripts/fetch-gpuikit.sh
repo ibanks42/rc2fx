@@ -1,39 +1,30 @@
 #!/usr/bin/env bash
-# fetch-gpuikit.sh [GOOS-GOARCH | darwin-universal]: the gpuikit download the UI
-# (desktop/app, desktop/cmd/rc2fx) builds against. Fetches it from the
-# pinned release of the gpuikit bindings, checks the archive against a pinned
-# SHA-256 and unpacks it into desktop/third_party/gpuikit (gitignored), where
-# go.mod's replace and ./xtask package look for it:
+# Usage: fetch-gpuikit.sh [GOOS-GOARCH | darwin-universal]
 #
-#   lib/libgpuikit_static.a   the library, linked into the app (package gk
-#                             names it); on Linux also libgpuikit_sys.so, a
-#                             linker script naming the system libraries it needs
-#   go/                       the Go bindings (gpuikit.dev)
-#   THIRD_PARTY.md, licences/ notices the packages carry
+# Downloads the pinned gpuikit bindings release, verifies its SHA-256, and
+# unpacks it into desktop/third_party/gpuikit (gitignored), where go.mod and
+# `./xtask package` expect:
+#   lib/libgpuikit_static.a   static library linked by package gk (plus
+#                             libgpuikit_sys.so linker script on Linux)
+#   go/                       Go bindings (gpuikit.dev)
+#   THIRD_PARTY.md, licences/ bundled license notices
 #
-# The target defaults to this machine's `go env GOOS GOARCH`. macOS has one
-# download for both architectures, gpuikit-VERSION-macos-universal: a
-# universal libgpuikit_static.a (arm64 and x86_64, macOS 11.0 or later),
-# which the universal app links slice by slice; darwin-universal,
-# darwin-arm64 and darwin-amd64 all fetch it. The downloads have no
-# diagnostic library (the offscreen UI tests, RC2FX_GPUIKIT_DIAG): that is
-# built from the bindings repository.
+# Defaults to `go env GOOS`-`go env GOARCH`. macOS uses a single universal
+# archive (arm64 + x86_64, macOS 11.0+) for darwin-universal, darwin-arm64,
+# and darwin-amd64. The offscreen diagnostic library (RC2FX_GPUIKIT_DIAG) is
+# not included here and must be built from the bindings repo.
 #
-# The bindings repository may be private: set GPUIKIT_TOKEN (or GH_TOKEN or
-# GITHUB_TOKEN) to a token that can read it, and the release is fetched
-# through the GitHub API with it. Without a token the public download URL is
-# used.
+# If the bindings repo is private, set GPUIKIT_TOKEN (or GH_TOKEN/GITHUB_TOKEN)
+# to fetch via the GitHub API instead of the public release URL.
 #
-# The sha_ variables are read by name (${!sha_name}); tr maps three
-# characters to newlines.
+# sha_* vars are referenced dynamically via ${!sha_name}.
 # shellcheck disable=SC2034,SC2020
 set -euo pipefail
 
 version=0.0.2
 tag=v$version
 repo=ibanks42/gpui-kit-bindings
-# One SHA-256 per release asset. An empty value stops the script: fill it in
-# from the asset of the release above, checked against the bindings' build.
+# Pinned SHA-256 per platform asset; an empty value aborts the script.
 sha_linux_x86_64=5eac9dc1e38d4570f8bc87eefb726e89175156aa05aa80182460dd4c01d8d4db
 sha_macos_universal=b32b18832069d7350f02c7ddd4a856d93d739a69989fa99b19de1e6da58601e1
 sha_windows_x86_64=959bc528e620e61a2ece5ef4ce745135b3d92218a9c82726c07a58924def0b33
@@ -52,19 +43,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 third_party=$(dirname "$here")/third_party
 token=${GPUIKIT_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}
 
-# Unpacked beside its destination, on disk: the download is several hundred
-# megabytes, and /tmp is often memory.
+# Stage next to the destination on disk; archives are several hundred MB and /tmp is often tmpfs.
 mkdir -p "$third_party"
 tmp=$(mktemp -d "$third_party/.fetch-gpuikit.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 curl_https() { curl --fail --silent --show-error --location --retry 3 --proto '=https' --proto-redir '=https' "$@"; }
-# The token goes to curl on stdin, never on a command line. curl does not
-# send it on to the storage host the API redirects to.
+# Pass the auth header via stdin so the token never shows up in argv; curl strips it on cross-host redirects.
 curl_auth() { printf 'header = "Authorization: Bearer %s"\n' "$token" | curl_https --config - "$@"; }
 
 release_json=
-# download NAME FILE: the release asset NAME into FILE.
 download() {
     local name=$1 file=$2 id
     if [[ -z $token ]]; then
@@ -76,7 +64,7 @@ download() {
         curl_auth -H 'Accept: application/vnd.github+json' \
             "https://api.github.com/repos/$repo/releases/tags/$tag" -o "$release_json"
     fi
-    # Each asset's API URL (…/releases/assets/ID) comes before its name.
+    # Asset API URLs (.../releases/assets/ID) precede their "name" field in the release JSON.
     id=$(tr ',{}' '\n\n\n' < "$release_json" | awk -v name="$name" '
         match($0, /"url"[[:space:]]*:[[:space:]]*"https:\/\/api\.github\.com\/repos\/[^"]*\/releases\/assets\/[0-9]+"/) {
             id = $0; sub(/"[[:space:]]*$/, "", id); sub(/.*\//, "", id); next
@@ -90,8 +78,6 @@ download() {
         "https://api.github.com/repos/$repo/releases/assets/$id" -o "$file"
 }
 
-# fetch DEST: the download gpuikit-VERSION-PLATFORM, checked and unpacked
-# into DEST.
 fetch() {
     local dest=$1 name sha_name sha archive unpacked
     name=gpuikit-$version-$platform
@@ -127,16 +113,15 @@ fetch() {
             fi
             ;;
     esac
-    # The archive holds one folder named after it.
     unpacked=$tmp/x/$name
     [[ -f $unpacked/lib/$library ]] || { echo "$name.$ext has no $name/lib/$library" >&2; exit 1; }
     [[ -f $unpacked/go/go.mod ]] || { echo "$name.$ext has no $name/go/go.mod" >&2; exit 1; }
-    # A link to a local download is replaced, not followed.
+    # Remove any existing directory or symlink before moving the new one into place.
     rm -rf "$dest"
     mv "$unpacked" "$dest"
     printf 'gpuikit %s ready in %s for %s\n' "$version" "$dest" "$target"
 }
 
 fetch "$third_party/gpuikit"
-# The diag download of earlier releases.
+# Clean up the old diag download directory from earlier releases.
 rm -rf "$third_party/gpuikit-diag"

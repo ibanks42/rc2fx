@@ -1,24 +1,11 @@
 package state
 
-// The parsing half of the dev page switch (dev_page.go navigates).
-// `RC2FX_DEV_PAGE`: open the app on a chosen page, for development and
-// screenshots. Unset, the app opens as usual.
+// Parsing for RC2FX_DEV_PAGE, which opens the app on a specific page for
+// development and screenshots without modifying settings.
 //
-// Values: `home`, `settings`, `diagnostics`, `installer`, `repair`, or
-// `channel:<name or id>[:<effect>]`, where the effect is one of `highpass`,
-// `suppression`, `eq`, `compressor`, `gain` or `limiter`. Names match
-// case-insensitively, e.g. `channel:mic 1:suppression`.
-//
-// It only navigates: it never changes settings or sends anything to the
-// mixer beyond what opening that page normally does. (openDevPage, in
-// dev_page.go, opens it.)
-//
-// Development builds (`-tags rc2fxdev`) also take `flow:<state>`: one state
-// of the guided flows, drawn from made-up data with no mixer, helper or
-// network, for comparing with the mock-up (flow_fixtures_on.go lists them,
-// e.g. `flow:B4`). Other builds refuse it.
-//
-// This file does not import gk: its functions are tested with plain `go test`.
+// Supported values: home, settings, diagnostics, installer, repair,
+// channel:<name or id>[:<effect>] (highpass, suppression, eq, compressor,
+// gain, limiter), and flow:<state> (dev builds only).
 
 import (
 	"fmt"
@@ -28,7 +15,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// DevPageKind is DevPage's variant.
 type DevPageKind int
 
 const (
@@ -38,20 +24,19 @@ const (
 	DevPageInstaller
 	DevPageRepair
 	DevPageChannel
-	// DevPageFlow: Name is a guided-flow state (development builds only).
+	// DevPageFlow renders a synthetic guided-flow state (dev builds only).
 	DevPageFlow
 )
 
-// DevPage is the page RC2FX_DEV_PAGE asks for. Name and Effect are for
-// DevPageChannel (Name also for DevPageFlow); an empty Effect is none.
+// DevPage is the parsed RC2FX_DEV_PAGE target. Name applies to DevPageChannel
+// and DevPageFlow; Effect is optional for DevPageChannel.
 type DevPage struct {
 	Kind   DevPageKind
 	Name   string
 	Effect core.Effect
 }
 
-// DevPageFromEnv is the page RC2FX_DEV_PAGE asks for; nil when it is unset
-// or does not parse (which is reported on stderr).
+// DevPageFromEnv reads and parses RC2FX_DEV_PAGE, returning nil if unset or invalid.
 func DevPageFromEnv(allowFlows bool) *DevPage {
 	value, ok := os.LookupEnv("RC2FX_DEV_PAGE")
 	if !ok {
@@ -65,16 +50,14 @@ func DevPageFromEnv(allowFlows bool) *DevPage {
 	return &page
 }
 
-// needsMixer: channels need the mixer's state; the other pages can open at
-// once.
+// NeedsMixer reports whether opening the page requires an active mixer connection.
 func (p DevPage) NeedsMixer() bool {
 	return p.Kind == DevPageChannel || p.Kind == DevPageHome
 }
 
-// parseDevPage parses an RC2FX_DEV_PAGE value.
+// ParseDevPage parses an RC2FX_DEV_PAGE value.
 func ParseDevPage(value string, allowFlows bool) (DevPage, error) {
 	value = strings.TrimSpace(value)
-	// At most three parts: page, channel, effect.
 	parts := strings.SplitN(value, ":", 3)
 	page := asciiLower(strings.TrimSpace(parts[0]))
 	var out DevPage
@@ -139,8 +122,8 @@ func ParseDevPage(value string, allowFlows bool) (DevPage, error) {
 	return out, nil
 }
 
-// findChannel is the channel whose name or id matches, ignoring (ASCII) case.
-// names holds [id, name] pairs.
+// FindChannel returns the index of the first [id, name] entry matching wanted
+// (ASCII case-insensitive).
 func FindChannel(names [][2]string, wanted string) (int, bool) {
 	for i, n := range names {
 		if asciiEqualFold(n[0], wanted) || asciiEqualFold(n[1], wanted) {
@@ -150,7 +133,6 @@ func FindChannel(names [][2]string, wanted string) (int, bool) {
 	return 0, false
 }
 
-// asciiEqualFold compares a and b ignoring the case of ASCII letters only.
 func asciiEqualFold(a, b string) bool {
 	if len(a) != len(b) {
 		return false
@@ -170,7 +152,6 @@ func asciiEqualFold(a, b string) bool {
 	return true
 }
 
-// asciiLower lowercases ASCII letters only.
 func asciiLower(s string) string {
 	b := []byte(s)
 	for i, c := range b {

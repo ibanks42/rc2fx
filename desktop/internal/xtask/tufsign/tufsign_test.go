@@ -34,8 +34,7 @@ func TestCanonicalJSONIsOLPCs(t *testing.T) {
 	}
 }
 
-// tough's own round-trip cases (#950): every precision chrono could write
-// comes back unchanged.
+// Round-trip cases from tough #950 covering every fractional precision.
 func TestExpiresKeepsToughsPrecision(t *testing.T) {
 	for _, text := range []string{
 		"2026-07-13T18:08:28Z",
@@ -60,8 +59,7 @@ func TestExpiresKeepsToughsPrecision(t *testing.T) {
 	}
 }
 
-// The production root, written by tough with RSA-3072 keys: its key IDs,
-// canonical form and RSA-PSS signature check out here too.
+// Verify the committed production root (RSA-3072 / RSA-PSS) end-to-end.
 func TestTheProductionRootVerifies(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(task.Root(), "config", "mixer-update-root.json"))
 	if err != nil {
@@ -82,7 +80,7 @@ func TestTheProductionRootVerifies(t *testing.T) {
 			t.Errorf("%s: %s %s", id, key.Type, key.Scheme)
 		}
 	}
-	// A changed byte in the signed part breaks the signature.
+	// Flipping any signed byte must invalidate the signature.
 	tampered := strings.Replace(string(data), `"consistent_snapshot": false`, `"consistent_snapshot": true`, 1)
 	if tampered == string(data) {
 		t.Fatal("no field to tamper with")

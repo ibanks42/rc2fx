@@ -3,8 +3,8 @@ use serde::Deserializer;
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use std::collections::HashSet;
 
-/// Validate without retaining scalar/array values. Object keys remain live only
-/// for the enclosing object so escaped duplicate spellings are still rejected.
+/// Validates JSON limits and duplicate keys without retaining values.
+/// Keys are tracked per object so escaped duplicates are still caught.
 pub fn validate(text: &str, maximum_bytes: usize, maximum_nodes: usize) -> Result<()> {
     if text.len() > maximum_bytes {
         return Err(CoreError("JSON file is too large".into()));

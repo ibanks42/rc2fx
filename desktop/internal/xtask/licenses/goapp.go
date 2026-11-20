@@ -1,10 +1,5 @@
 package licenses
 
-// The desktop app is Go on the gpuikit library, so its package also carries
-// the notices of what the Rust crates do not cover: the Go standard library,
-// every Go module linked into cmd/rc2fx, and everything inside libgpuikit
-// (its own THIRD_PARTY.md and license texts).
-
 import (
 	"bytes"
 	"os"
@@ -17,17 +12,16 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// mainModule is the desktop module; its own license is RC2FX's.
-const mainModule = "github.com/ibanks42/rc2fx/desktop"
+const (
+	// Covered by RC2FX's own license.
+	mainModule = "github.com/ibanks42/rc2fx/desktop"
+	// Covered by libgpuikit's THIRD_PARTY.md.
+	gpuikitModule = "gpuikit.dev"
+)
 
-// gpuikitModule is the bindings, part of the gpuikit download whose notices
-// come from its THIRD_PARTY.md.
-const gpuikitModule = "gpuikit.dev"
-
-// GoApp is the Go app's notices for GOOS goos and GOARCH goarch: the Go
-// standard library, the modules linked into cmd/rc2fx with the build tags
-// tags, and libgpuikit's notices from the gpuikit download in
-// desktop/third_party/gpuikit.
+// GoApp collects notices for the Go desktop app for the given target and build
+// tags: the Go stdlib, vendored e2fsprogs, linked Go modules, and libgpuikit
+// under desktop/third_party/gpuikit.
 func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 	desktop := filepath.Join(root, "desktop")
 	goEnv := func(args ...string) *exec.Cmd {
@@ -46,8 +40,7 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 		return nil, task.Errorf("%s: %s", filepath.Join(goroot, "LICENSE"), task.IOError(err))
 	}
 	sections := []Section{{"Go standard library — BSD-3-Clause", string(std)}}
-	// libext2fs and libcom_err, compiled into the app from the vendored
-	// e2fsprogs sources (desktop/ext2fs) for the mixer storage repair.
+	// Vendored e2fsprogs (libext2fs, libcom_err) in desktop/ext2fs for mixer storage repair.
 	e2fsprogs, err := os.ReadFile(filepath.Join(root, "desktop", "ext2fs", "e2fsprogs", "NOTICE"))
 	if err != nil {
 		return nil, task.Errorf("%s: %s", filepath.Join(root, "desktop", "ext2fs", "e2fsprogs", "NOTICE"), task.IOError(err))
@@ -112,7 +105,6 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 	return append(sections, gpuikit...), nil
 }
 
-// licenseFiles is a module's license and notice files, by name.
 func licenseFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -135,9 +127,8 @@ func licenseFiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-// Gpuikit is libgpuikit's notices from an unpacked gpuikit download: its
-// THIRD_PARTY.md, then every license text it ships (licences/texts/NAME-
-// VERSION/FILE), byte-identical texts merged with the crates that use them.
+// Gpuikit reads THIRD_PARTY.md and all license texts under licences/texts/
+// from an unpacked gpuikit download, deduplicating identical texts.
 func Gpuikit(dir string) ([]Section, error) {
 	listing, err := os.ReadFile(filepath.Join(dir, "THIRD_PARTY.md"))
 	if err != nil {

@@ -126,9 +126,8 @@ fn real_worker_is_off_callback_and_joins_complete_frames() {
     // Deliberately paced functional waits, never a host deadline admission.
 }
 
-/// The model's whole per-frame path, which is the worker's (`process`, the
-/// staged preparation steps after it, and a reset), allocates nothing once
-/// the model is built, for both embedded models.
+// Verify `process`, `prepare_step`, and `reset` are allocation-free for both
+// embedded models once constructed.
 #[test]
 fn the_model_allocates_nothing_per_frame() {
     for lookahead in [0, 1] {
@@ -152,11 +151,8 @@ fn the_model_allocates_nothing_per_frame() {
     }
 }
 
-/// `Endpoint::process_block` on the real worker and model, in device-period
-/// blocks that never line up with the model's frame: the exact dry/wet
-/// alignment of the per-sample test above with a wet that moves at every
-/// sample, each sample's voice score, and no allocation on the calling
-/// thread.
+// Check `Endpoint::process_block` on the real worker in 112-sample blocks:
+// exact dry/wet alignment, per-sample voice scores, and zero allocations.
 #[test]
 fn real_worker_blocks_align_dry_and_wet_and_allocate_nothing() {
     const PERIOD: usize = 112;
@@ -241,12 +237,8 @@ impl rc2fx_dsp::Suppression for PerSample {
     }
 }
 
-/// `Dsp` on the real worker and model, as the mixer's microphone path runs
-/// it: one state reaches the endpoint's block form, the other its
-/// per-sample form. With every result published before the block that
-/// plays it, both must give the same output and meters bit for bit, the
-/// model's voice score must reach the meter, and neither may allocate on
-/// the calling thread.
+// End-to-end check of `Dsp` with the real worker: block vs per-sample paths
+// produce bit-identical audio/meters and allocate nothing after block 0.
 #[test]
 fn dsp_on_the_real_worker_matches_its_per_sample_form_and_allocates_nothing() {
     const PERIOD: usize = 112;

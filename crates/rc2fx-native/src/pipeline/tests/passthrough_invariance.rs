@@ -1,33 +1,25 @@
-//! The invariant: enabling the microphone's suppression must not delay
-//! unrelated channels.
+//! Regression tests ensuring mic suppression never delays or alters unrelated
+//! `Passthrough` inputs.
 //!
-//! A Passthrough input is never processed by anything, so whatever happens on
-//! the microphone side — suppression on or off, its worker late, its block
-//! never requested, its result missing, the helper busy — the mixer must get
-//! its own current block back: the same pointer it passed, the samples it just
-//! wrote, and no reported latency of its own. Nothing here assumes a global
-//! delay: the microphone path is a real target with real suppression (and a
-//! real worker this untimed test never waits for), observed through the same
-//! callbacks the mixer uses.
+//! Regardless of what happens on the mic path (suppression toggled, worker
+//! late, mic unrequested, callback failed, helper busy), a passthrough input
+//! must always return the caller's own buffer pointer with its current samples
+//! and report zero added latency.
 use super::*;
 
-/// How the microphone side is treated this frame, to show the unrelated path
-/// does not depend on it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Stress {
-    /// Both sources requested; the mixer's callback succeeds.
+    /// Normal callback: both sources requested and callback succeeds.
     None,
-    /// The mixer never requests the microphone's buffer.
+    /// Mixer skips requesting the mic buffer.
     MicSilent,
-    /// The mixer's own callback reports failure.
+    /// Mixer callback reports failure.
     Failed,
-    /// The helper is neither idle nor queued when the callback begins, so this
-    /// frame's handoff is refused: the microphone's result cannot arrive.
+    /// Helper is busy at `begin()`, so the frame handoff is refused.
     HelperBusy,
 }
 
-/// mic-1 (processed, suppression `suppressed`) and a stereo Passthrough input
-/// standing in for a USB input heard as it arrives.
+/// Processed mic (`in_1`) plus a stereo passthrough USB input (`in_2`/`in_3`).
 fn plan(suppressed: bool) -> Plan {
     let mut mic = Target::new("mic-1", "Mic 1", TargetKind::Mic, 1);
     mic.limiter.enabled = false;
@@ -66,8 +58,8 @@ fn plan(suppressed: bool) -> Plan {
         ],
     }
 }
-/// in_1: microphone. in_2, in_3: the passthrough input's two channels (the
-/// third only has to be its own live buffer, so one of the test's serves).
+/// `in_1` is the mic; `in_2` and `in_3` are the passthrough stereo pair
+/// (borrowing `output(0)` as a third distinct live buffer).
 fn build(plan: &Plan, buffers: &Buffers) -> (Pipeline, Vec<parameters::Control>) {
     let mut registry = Registry::default();
     assert!(registry.register(1, buffers.input(0) as usize, b"in_1", 1));
@@ -75,19 +67,15 @@ fn build(plan: &Plan, buffers: &Buffers) -> (Pipeline, Vec<parameters::Control>)
     assert!(registry.register(1, buffers.output(0) as usize, b"in_3", 1));
     Pipeline::new(plan, &registry, 1).unwrap()
 }
-/// A different block for every frame and channel, so a stale block or a stale
-/// pointer cannot pass for the current one.
+/// Unique per-frame, per-channel sample value so stale blocks can't match.
 fn value(index: usize, channel: usize) -> f32 {
     let x = (index as u32)
         .wrapping_mul(0x9e37_79b9)
         .wrapping_add((channel as u32 + 3).wrapping_mul(0x85eb_ca6b));
     ((x >> 8) & 0xffff) as f32 / 65_535.0 - 0.5
 }
-/// What the mixer saw of the passthrough path this frame.
 struct Seen {
-    /// Read back through the pointer the path returned, inside the callback.
     before: [[f32; FRAMES]; 2],
-    /// Read back through the same pointers after the callback returned.
     after: [[f32; FRAMES]; 2],
 }
 fn read_back(pointers: [*mut f32; 2]) -> [[f32; FRAMES]; 2] {
@@ -97,8 +85,6 @@ fn read_back(pointers: [*mut f32; 2]) -> [[f32; FRAMES]; 2] {
             .unwrap()
     })
 }
-/// One callback: the microphone's block, the passthrough path's own current
-/// block, the buffer requests, and the mixer's own processing.
 fn frame(
     pipeline: &Pipeline,
     mic: *mut f32,
@@ -156,17 +142,13 @@ fn assert_current(seen: &Seen, index: usize, stress: Stress) {
     }
 }
 
-/// The regression: suppression on the microphone, the helper's state and the
-/// microphone's own frame cannot change one sample of a Passthrough input.
 #[test]
 fn mic_suppression_does_not_delay_a_passthrough_input() {
-    // Busy-helper frames record probe events; event-counting tests must not
-    // see them.
+    // Busy-helper frames emit probe events; serialize with event-counting tests.
     let _events = crate::probe::EVENT_TESTS
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    // A pattern coprime with the meter stride (8), so meter reads of the
-    // passthrough path do not always coincide with the same microphone state.
+    // Period 5 is coprime with METER_STRIDE (8) so meter reads hit every stress state.
     let stress_at = |index: usize| match index % 5 {
         1 => Stress::MicSilent,
         2 => Stress::Failed,
@@ -174,8 +156,6 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
         _ => Stress::None,
     };
     let mut arms = Vec::new();
-    // Each with the bench gauges off and on: they only measure, so they are
-    // one more thing that must not move a sample of the unrelated path.
     for (suppressed, gauged) in [(false, false), (true, false), (false, true), (true, true)] {
         let plan = plan(suppressed);
         let buffers = Buffers::new();
@@ -184,17 +164,12 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
         let mic = buffers.input(0);
         let passthrough = [buffers.input(1), buffers.output(0)];
         let mut seen = Vec::new();
-        // Long enough for several telemetry windows, including frames on
-        // which the microphone could not be processed at all.
         for index in 0..96 {
             let stress = stress_at(index);
             let frame = frame(&pipeline, mic, passthrough, index, stress);
             assert_current(&frame, index, stress);
             seen.push(frame);
         }
-        // Nothing on the microphone's side moved the passthrough path: it
-        // processed nothing, skipped nothing, and is reported with no
-        // latency of its own.
         let counters = pipeline.counters();
         assert_eq!(counters.skipped_outputs, 0);
         assert_eq!(
@@ -202,8 +177,7 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
             0,
             "suppressed {suppressed}: the passthrough path reports no added latency"
         );
-        // With suppression on, the microphone's own path does carry its
-        // suppression latency: the fixture really is suppressing.
+        // Sanity check that suppression is actually active on the mic path.
         if suppressed {
             let meter = controls[0].status().unwrap().meter.unwrap();
             assert!(
@@ -211,16 +185,12 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
                 "suppression enabled but the microphone reports no latency"
             );
         }
-        // Without suppression nothing on the microphone's side faults; with
-        // it, a worker's own late or missing result is not the passthrough
-        // path's business and is not asserted here.
         if !suppressed {
             assert_eq!(counters.faults, 0);
         }
         arms.push(((suppressed, gauged), seen));
     }
-    // Bit for bit, the unrelated path saw the same thing in every arm: the same
-    // block, through the same pointer, before and after the callback.
+    // Every arm must produce bit-identical passthrough samples before and after `end()`.
     let (_, baseline) = &arms[0];
     for ((suppressed, gauged), seen) in &arms[1..] {
         for (index, (frame, baseline)) in seen.iter().zip(baseline).enumerate() {
@@ -246,14 +216,10 @@ fn mic_suppression_does_not_delay_a_passthrough_input() {
     }
 }
 
-/// A run of frames on which the microphone's result can never arrive: the
-/// helper is never handed the frame and the microphone's block is never
-/// requested. The passthrough input stays current throughout, and once the
-/// helper runs again the path is still reported with no latency.
+/// Even when the helper is busy for a sustained stretch and mic results never
+/// arrive, the passthrough input stays current and keeps reporting zero latency.
 #[test]
 fn a_missing_mic_result_leaves_a_passthrough_input_current() {
-    // Busy-helper frames record probe events; event-counting tests must not
-    // see them.
     let _events = crate::probe::EVENT_TESTS
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
@@ -266,8 +232,7 @@ fn a_missing_mic_result_leaves_a_passthrough_input_current() {
         let frame = frame(&pipeline, mic, passthrough, index, Stress::HelperBusy);
         assert_current(&frame, index, Stress::HelperBusy);
     }
-    // The helper runs again: the passthrough path's own meter arrives, still
-    // with no latency of its own.
+    // Let the helper run again so the passthrough meter window publishes.
     for index in 24..72 {
         let frame = frame(&pipeline, mic, passthrough, index, Stress::None);
         assert_current(&frame, index, Stress::None);
@@ -277,8 +242,6 @@ fn a_missing_mic_result_leaves_a_passthrough_input_current() {
         controls[1].status().unwrap().meter.unwrap().latency_samples,
         0
     );
-    // The passthrough path has no helper work of its own beyond metering: its
-    // reader stays with the helper and is never processed.
     let front = unsafe { &*pipeline.front.get() };
     let handoff = unsafe { &*pipeline.handoff.get() };
     assert_eq!(front.ports[1].owner, Owner::Helper);

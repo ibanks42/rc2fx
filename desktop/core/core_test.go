@@ -8,12 +8,9 @@ import (
 	"testing"
 )
 
-// The settings model and device state: wire round trips and defaults, strict
-// validation, suppression latency and the voice gate, meters and diagnostics,
-// EQ coefficients, response curves and EasyEffects interchange, and the
-// editor session (restarts, conflicts, late replies). Rust's
-// crates/rc2fx-core/tests/core.rs checks the mixer's side of the model; the
-// curves, interchange and session are Go only.
+// Tests for the config model, wire round-trips, validation, EQ/gate curves,
+// EasyEffects interchange, and editor session state. The Rust side of the
+// schema is tested in crates/rc2fx-core/tests/core.rs.
 
 func coreState(revision uint64) DeviceState {
 	selected := []string{"mic-1", "usb-main", "send-chat"}
@@ -65,13 +62,11 @@ func TestOnlyANewConnectionForgetsTheObservedEngineGeneration(t *testing.T) {
 	session := DefaultSession()
 	receive(t, &session, newer)
 	check(t, receive(t, &session, old.Clone()) == RemoteUpdateStale)
-	// A deliberate new connection can target a different mixer with its
-	// own generation sequence.
+	// Reconnecting may hit a different mixer with its own generation counter.
 	session.Disconnect()
 	check(t, receive(t, &session, old) != RemoteUpdateStale)
 }
 
-// must2 keeps only the error of a (value, error) pair.
 func must2[T any](_ T, err error) error { return err }
 
 func TestAppliedRequiresAllHardwareChannelsRouted(t *testing.T) {
@@ -294,8 +289,8 @@ func TestPerformanceReportsHelperCountersAndAcceptsPayloadsWithoutThem(t *testin
 	check(t, strings.Contains(text, `"callbackRecentMaxNs":180`) && strings.Contains(text, `"workerRecentMaxNs":900`), text)
 	back := must(FromJSON[Meter](text))
 	check(t, deepEqual(back, meter))
-	// A mixer that predates the fields sends none: they are absent rather than
-	// zero, so "not reported" stays distinguishable from "none".
+	// Older mixers omit these fields; keep them nil rather than 0 so
+	// "unreported" stays distinct from zero.
 	old := toValue(t, meter)
 	object := old.Pointer("/targets/0/performance")
 	for _, key := range []string{"helperLate", "helperStalls", "callbackRecentMaxNs", "workerRecentMaxNs"} {

@@ -377,10 +377,7 @@ pub(crate) fn context_cycle_start(owner: usize) -> u64 {
         .load(Ordering::Relaxed)
 }
 
-/// The engine-wide numbers every control reply carries: JACK xrun
-/// notifications and the helper's late finishes and busy callbacks. All are
-/// atomics the audio path already writes; none is sampled here.
-/// The engine event ring's newest entries, mapped to the control types.
+/// Maps the newest entries from the engine event ring to control wire types.
 fn engine_events() -> Vec<rc2fx_native_control::NativeEvent> {
     probe::recent_events()
         .into_iter()
@@ -1080,13 +1077,8 @@ fn record_gap(gap: u64) {
         probe::record(probe::Kind::Gap, gap);
     }
 }
-/// The mixer's `jack_port_get_buffer`, on every thread that fetches a buffer:
-/// about 68 times a cycle in the wrapped callback and 40 on the USB client
-/// threads. It writes nothing shared. Inside a callback frame it adds to the
-/// thread's own count; outside one it counts only while the bench gauges are
-/// on.
-/// One buffer lookup inside a callback frame: the cache may answer without
-/// calling libjack, and a miss records what the real function returned.
+/// Cached `jack_port_get_buffer` lookup inside a callback frame; misses fall
+/// through to `get` and populate the cache.
 ///
 /// # Safety
 /// `port` and `frames` are the caller's `jack_port_get_buffer` arguments and

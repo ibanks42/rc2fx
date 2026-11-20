@@ -1,36 +1,19 @@
-//! Installing a verified mixer bundle in place, and getting back to the
-//! previous one when that does not work.
+//! Atomic in-place bundle installation and rollback under `/opt`.
 //!
-//! The layout is `/opt/rc2fx` (the live bundle, with `data/` and `logs/`
-//! inside it), `/opt/.rc2fx-previous` (the last known-good bundle's files,
-//! hard-linked, so making it costs no space; once the live files are replaced
-//! it holds the old release's, until the commit removes it) and `/opt/.rc2fx-update-pending` (an
-//! update that has not been committed yet). The marker is this updater's own:
-//! the developer install (`install.sh`) keeps `/opt/.rc2fx-install-pending`
-//! for its transaction, and a launcher must never mistake one for the other. Saved settings are never moved or
-//! replaced: only the files in [`PAYLOAD_NAMES`] change.
+//! Layout:
+//! - `/opt/rc2fx`: live bundle (`data/` and `logs/` are never moved or replaced)
+//! - `/opt/.rc2fx-previous`: hard-linked snapshot of the last known-good files
+//! - `/opt/.rc2fx-update-pending`: uncommitted update marker (distinct from
+//!   `install.sh`'s `/opt/.rc2fx-install-pending`)
 //!
-//! The order is chosen so that a power cut at any point leaves something
-//! launchable:
-//!
-//! 1. The bundle is staged under `/opt` and checked again from disk.
-//! 2. `.rc2fx-previous` is built from the live files. Nothing has changed yet.
-//! 3. The pending marker is written and flushed. From here the launchers
-//!    prefer `.rc2fx-previous` unless an update driver is alive (see
-//!    `mixer/scripts/rc2fx-shim.sh`).
-//! 4. Each payload file is renamed over the live one, then the directory is
-//!    flushed, then the shims are rewritten.
-//! 5. Only after the new controller reports itself and audio advances does the
-//!    driver remove the pending marker (the commit). A boot that finds the
-//!    marker instead restores the previous files before serving.
-//!
-//! The steps are the ones `mixer/scripts/install.sh` performs for a full flash,
-//! ported into Rust rather than running the payload's own `install.sh`: that
-//! script expects the flash upload layout and restarts audio from inside the
-//! installing process, while this path must keep `/opt/rc2fx/data` in place and
-//! hand the restart to something that survives `rc2fxd` being replaced. The
-//! payload still carries `install.sh`, and the full-flash recovery path uses
-//! it.
+//! Order of operations (safe across a power cut at any step):
+//! 1. Stage under `/opt` and re-verify from disk.
+//! 2. Hard-link live files into `.rc2fx-previous` (live bundle untouched).
+//! 3. Write and sync `.rc2fx-update-pending`; launchers now prefer
+//!    `.rc2fx-previous` unless an update driver is alive (`rc2fx-shim.sh`).
+//! 4. Rename payload files over `/opt/rc2fx`, sync the dir, rewrite shims.
+//! 5. Detached driver removes the pending marker only after the new controller
+//!    and audio come up; otherwise the next boot rolls back before serving.
 
 use sha2::{Digest, Sha256};
 use std::{

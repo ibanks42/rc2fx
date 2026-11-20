@@ -325,12 +325,8 @@ const ZERO_TIMING: rc2fx_native_control::Timing = rc2fx_native_control::Timing {
     histogram: [0; 8],
 };
 
-/// Every retired worker's wall, CPU and turnaround, added up. A worker's own
-/// counters start at zero, so without this the app's view would jump back on
-/// every pipeline rebuild (and its fault counters would treat that as a new
-/// baseline rather than a fault, but the totals would be useless). Each worker
-/// is archived exactly once, so nothing is counted twice; the live worker is
-/// added on top when a meter is built.
+/// Accumulated wall, CPU, and turnaround timings of retired workers.
+/// Archived once per worker so totals stay monotonic across pipeline rebuilds.
 static RETIRED_TIMINGS: Mutex<[rc2fx_native_control::Timing; 3]> = Mutex::new([ZERO_TIMING; 3]);
 
 fn merge_into(slot: &mut rc2fx_native_control::Timing, add: rc2fx_native_control::Timing) {
@@ -702,22 +698,16 @@ impl Control {
     pub fn prepare(&mut self, target: &Target, revision: u64) -> Result<Staged, Error> {
         self.prepare_mode(target, revision, PathMode::Processed)
     }
-    /// Starts the hand-off publishing `staged` needs, without waiting for it:
+    /// Starts the fade hand-off required to publish `staged` without waiting.
     ///
-    /// - A new runtime in place of the running one (a reset): the running
-    ///   one fades to silence; the new one starts silent for its delay, then
-    ///   fades in (`Start::Silent`).
-    /// - Processing off, on an aligned path (`PassFade::aligned`) whose
-    ///   processor has no delay: it fades to its dry signal, which is the
-    ///   unprocessed audio. Otherwise it fades to silence and the unprocessed
-    ///   audio then fades in from silence (`RAW_RISE`).
-    /// - Processing on: on an aligned path with a processor without a delay,
-    ///   nothing to wait for (the processor starts from its dry signal).
-    ///   Otherwise the unprocessed audio fades to silence first
-    ///   (`RAW_MUTE`), and the processor starts silent.
+    /// - Reset (old runtime -> new runtime): old fades to silence; new starts
+    ///   silent for its delay, then fades in (`Start::Silent`).
+    /// - Processing off: zero-delay aligned paths fade to dry; others fade to
+    ///   silence and raw audio fades in (`RAW_RISE`).
+    /// - Processing on: zero-delay aligned paths need no wait (start from dry);
+    ///   others mute raw audio first (`RAW_MUTE`) and start silent.
     ///
-    /// The version lock is held only to read the current snapshot. Wait on
-    /// the result with every lock released, then pass it to `reserve_after`.
+    /// Wait on the returned handle with all locks dropped, then call `reserve_after`.
     pub fn hand_off(&self, staged: &Staged) -> Result<HandingOff, Error> {
         if !Arc::ptr_eq(&self.shared, &staged.shared) {
             return Err(Error::WrongTarget);

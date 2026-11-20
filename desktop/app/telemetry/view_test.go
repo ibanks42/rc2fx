@@ -9,8 +9,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// What the Telemetry section says: its status, checks and figures.
-
 func viewEngine() core.EngineStatus {
 	return core.EngineStatus{
 		Generation:      1,

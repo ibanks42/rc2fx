@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""Host-only tests of rc2fx.sh's JACK error recorder (jack_recorder and the
-jackd replacement it uses, bb_replace_jack).
+"""Host-side tests for rc2fx.sh's JACK error recorder (jack_recorder / bb_replace_jack).
 
-python3 mixer/scripts/tests/recorder_launcher.py
+  python3 mixer/scripts/tests/recorder_launcher.py
 
-Runs the script's real functions against a fake /proc, cpuset and service in
-a temporary directory. The original jackd is a fake process entry; the
-replacement (and the fallback) is a real child process, a fake jackd that
-writes its own /proc entries the way a JACK server would look: threads in the
-root cpuset, a FIFO 51 driver thread, PCM devices open, the preload mapped
-only when it was given. Thread moves update those entries through the
-script's bb_move_task/bb_set_cpus seams. No real audio, scheduling or /run
-writes.
+Runs the real shell functions against a fake /proc, cpuset, and callme-t service
+in a temp directory. The replacement (and fallback) is a real child process that
+populates its own fake /proc entries; thread moves go through bb_move_task and
+bb_set_cpus stubs.
 """
 import hashlib
 import os
@@ -187,7 +182,7 @@ class Fixture:
         if mode == 'rtprio':
             threads[3] = (3, '/audio', '1-3', 1, 60)
         if mode == 'startup':
-            # A freshly started server: only the main thread moved to /audio.
+            # Freshly started jackd: only the main thread has moved to /audio.
             threads = [(0, '/audio', '1-3', 0, 0), (1, '/', '0-3', 0, 0), (2, '/', '0-3', 1, 51), (3, '/', '0-3', 0, 0)]
         for index, cpuset, cpus, policy, priority in threads:
             tid = tid_of(ORIGINAL, index)
@@ -306,7 +301,7 @@ class ReplacementTests(unittest.TestCase):
         self.assert_untouched(f)
         self.assertEqual(f.lines('callme'), ['stop', 'start'])
         self.assertIn('roles with two placements: thread|jackd|0|0', f.log())
-        # The evidence of the refusal is kept; no ring directory is made.
+        # Refusal inventories should still be written, with no ring dir created.
         self.assertIn('thread|jackd|0|0|0|/|0-3', (f.diag / 'preflight-jack.inventory').read_text())
         self.assertIn('thread|jackd|0|0|0|/|0-3', (f.diag / 'original-jack.inventory').read_text())
         self.assertEqual(list(f.diag.glob('jackerr.*')), [])
@@ -331,10 +326,10 @@ class ReplacementTests(unittest.TestCase):
         self.assertEqual(int(pid), server)
         self.assertEqual(started, (f.proc / pid / 'stat').read_text().split()[21], 'the birth token')
         placement = f.lines('placement')
-        # Started like restartJack: from the root cpuset, all CPUs, ordinary policy.
+        # Launched like restartJack (root cpuset, all CPUs, SCHED_OTHER), then
+        # each thread moved to match its original role.
         self.assertIn('taskset -c 0-3 chrt -o 0 env -i', ' '.join(placement[:2]))
         self.assertIn(str(server), (f.cpuset / 'tasks').read_text().split(), 'launched from the root cpuset')
-        # Then every thread to its role's placement, and nothing else.
         moves = [line for line in placement if line.startswith('move ')]
         self.assertEqual(sorted(moves), sorted(f'move {tid_of(server, i)} /audio' for i in range(4)))
         inventory = (f.diag / 'original-jack.inventory').read_text()
@@ -345,8 +340,8 @@ class ReplacementTests(unittest.TestCase):
         self.assertIn('effective 27 1', (f.diag / 'after-jack.irqs').read_text())
 
     def test_a_freshly_started_server_is_matched_role_by_role(self):
-        # As on the device at mixer start: main in /audio 1-3, the FIFO 51
-        # driver and the other thread(s) still in the root cpuset.
+        # Matches device startup where main is in /audio (1-3) and the other
+        # threads are still in the root cpuset.
         f = self.fixture('startup')
         self.assertEqual(f.run(), 0, f.log())
         (server,) = f.servers()
@@ -372,7 +367,7 @@ class ReplacementTests(unittest.TestCase):
                 self.assertEqual(f.lines('callme'), ['stop', 'start'])
 
     def test_a_server_whose_threads_do_not_match_is_not_kept(self):
-        # A thread at another real-time priority is another role: never ready.
+        # A thread with a different RT priority changes the role key, so it fails.
         f = self.fixture('placement')
         self.assertEqual(f.run(), 1)
         self.assertTrue((f.diag / 'failed').exists())
@@ -418,7 +413,7 @@ class ReplacementTests(unittest.TestCase):
 
 
 class RecorderTests(unittest.TestCase):
-    """The persistent recorder: the bundle's own library, no manual marker."""
+    """Tests for jack_recorder's persistent bundled recorder lifecycle."""
 
     def fixture(self, mode='success', listed=('librc2fx_jackerr.so', 'rc2fx_jackerr_snapshot'),
                 files=('librc2fx_jackerr.so', 'rc2fx_jackerr_snapshot'), **overrides):
@@ -441,7 +436,7 @@ class RecorderTests(unittest.TestCase):
         return f
 
     def bundle_ok(self, f):
-        """What launch() checks first: the whole bundle against SHA256SUMS."""
+        """Mirror launch()'s top-level SHA256SUMS check."""
         return subprocess.run(['sha256sum', '-c', '--quiet', 'SHA256SUMS'], cwd=f.home,
                               capture_output=True).returncode == 0
 
@@ -503,8 +498,7 @@ class RecorderTests(unittest.TestCase):
                 self.assert_untouched(f)
                 self.assertEqual(self.status(f), 'corrupt')
                 self.assertEqual(self.attempts(f), [])
-        # A library changed after packaging: launch() itself goes stock, and
-        # the recorder refuses on its own as well.
+        # Tampered library fails both launch()'s check and jack_recorder's own.
         f = self.fixture()
         (f.home / 'librc2fx_jackerr.so').write_bytes(b'tampered')
         self.assertFalse(self.bundle_ok(f), 'launch() would start the stock mixer')
@@ -553,7 +547,7 @@ class RecorderTests(unittest.TestCase):
         self.assertNotIn('LD_PRELOAD', f.server_env(plain))
         self.assertIn('Plain jackd restored', f.log())
         self.assertEqual(self.status(f), 'failed')
-        # The next RC2FX start of this boot leaves the plain server alone.
+        # Subsequent starts in the same boot shouldn't retry.
         self.assertNotEqual(f.run(command='jack_recorder'), 0)
         self.assertEqual(f.servers(), [logger, plain])
         self.assertEqual(self.attempts(f), [attempt], 'no second attempt')
@@ -561,7 +555,7 @@ class RecorderTests(unittest.TestCase):
         os.kill(plain, 0)
 
     def test_every_attempt_keeps_its_own_evidence(self):
-        # A server the recorder refuses after inspecting it, at two starts.
+        # Two consecutive refusals should each keep their own attempt directory.
         f = self.fixture('ambiguous')
         self.assertNotEqual(f.run(command='jack_recorder'), 0)
         (first,) = self.attempts(f)
@@ -579,19 +573,19 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(f.run(command='jack_recorder'), 0, f.log())
         (server,) = f.servers()
         (attempt,) = self.attempts(f)
-        # A mixer restart without a JACK restart: nothing stopped or started.
+        # Re-running while the verified server is still up should be a no-op.
         self.assertEqual(f.run(command='jack_recorder'), 0, f.log())
         self.assertEqual(f.servers(), [server])
         self.assertEqual(self.attempts(f), [attempt])
         self.assertEqual(f.lines('kills'), [f'-TERM {ORIGINAL}'])
         self.assertIn(f'JACK recorder active: pid {server}', f.log())
-        # Another generation of that pid (start time) is not the recorder's.
+        # Mismatched start time (PID reuse) downgrades to present-unverified.
         pointer = (f.recorder / 'active').read_text().split()
         (f.recorder / 'active').write_text(f'{pointer[0]} {pointer[1]} 1\n')
         self.assertNotEqual(f.run(command='jack_recorder'), 0)
         self.assertEqual(self.status(f), 'present-unverified')
         (f.recorder / 'active').write_text(' '.join(pointer) + '\n')
-        # Without its readiness evidence the same server is only "present".
+        # Missing ready.snapshot also downgrades to present-unverified.
         (attempt / 'ready.snapshot').unlink()
         self.assertNotEqual(f.run(command='jack_recorder'), 0)
         self.assertEqual(f.servers(), [server])
@@ -607,7 +601,7 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(self.status(f), 'present-unverified')
 
     def test_too_much_evidence_starts_no_recorder_and_deletes_nothing(self):
-        # Every byte under the root counts, logs and snapshots included.
+        # All bytes under recorder_dir count toward the admission limit.
         f = self.fixture(recorder_evidence_limit=1000)
         f.recorder.mkdir(mode=0o700)
         old = f.recorder / 'run.earlier'
@@ -625,7 +619,7 @@ class RecorderTests(unittest.TestCase):
     def test_status_reports_the_recorder_state(self):
         f = self.fixture()
         self.assertEqual(f.run(command='jack_recorder'), 0, f.log())
-        # The real status, with the mixer stopped and the GUI's line stubbed.
+        # Run the real status() with supervisor and gui_status stubbed out.
         status = 'status() {' + SCRIPT.split('\nstatus() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
         self.assertEqual(f.run(command='boot=$TEST_LOG/boot run=$TEST_LOG/run\n'
                                'supervisor() { return 1; }\ngui_status() { :; }\n' + status + 'status'), 0)
@@ -634,7 +628,7 @@ class RecorderTests(unittest.TestCase):
 
 
 class LaunchOrderTests(unittest.TestCase):
-    """Where launch() reaches the recorder (static: launch needs a device)."""
+    """Static check that launch() runs all stock fallbacks before jack_recorder."""
 
     def test_stock_starts_and_first_boot_exit_before_the_recorder(self):
         body = SCRIPT.split('\nlaunch() {\n', 1)[1].split('\n}\n', 1)[0]

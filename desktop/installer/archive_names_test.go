@@ -1,6 +1,6 @@
 package installer
 
-// The flashing library's tar names the tests here build fixtures with.
+// Re-exports from desktop/rodecaster/archive for building tar test fixtures.
 
 import "github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 

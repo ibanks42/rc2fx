@@ -1,34 +1,25 @@
 // Package autofix grows partition 1 of a stock RØDECaster without storage
-// mode, through RØDE's own USB update. The mixer is flashed with RØDE's
-// archive for the version it already runs plus the carrier script, which
-// fixes the partition table on the mixer and leaves a marker on the update
-// drive; the marker is read back, and RØDE's plain archive is flashed again
-// so the mixer ends on a stock system whose freshly formatted slot has 4 KB
-// blocks.
+// mode, using RØDE's own USB update flow. It flashes RØDE's archive for the
+// mixer's current firmware version bundled with a carrier script that grows
+// the partition table and leaves a result marker; once the marker is read
+// back, it flashes RØDE's plain archive (or Options.FinalDir) so the mixer
+// ends on a stock system whose freshly formatted slot uses 4 KB blocks.
 //
-// Where the platform can see the mixer's USB disk in normal mode
-// (flash.CanReport), the script is also asked to offer its marker there
-// (carrier.Options.USBReport). While waiting for the mixer after the carrier
-// flash, Run then reads the marker from that disk as soon as it appears,
-// writes carrier.AckName onto it and ejects it, which tells the script to
-// finish, and goes straight on to the last flash: no settle wait and no
-// update-mode read. A disk that vanishes before it is read, or that could
-// not be acknowledged, is looked for again (the script offers it again);
-// a run that never completes the acknowledgement waits long enough for the
-// script to give up on the disk and write the marker to the update drive,
-// and reads it there as before (reportSettle).
+// On platforms that can see the mixer's USB disk in normal mode
+// (flash.CanReport), the script offers its marker there (USBReport). Run reads
+// the marker as soon as it appears, writes carrier.AckName, and ejects the
+// disk so the script finishes immediately and Run can proceed to the final
+// flash without a settle wait or update-mode read. If the disk vanishes or
+// cannot be acknowledged, Run retries (the script re-offers it) or waits
+// reportSettle for the script to fall back to writing the marker on the update
+// drive.
 //
-// An installer can have the last flash carry its own firmware instead of
-// RØDE's plain archive (Options.FinalDir), so a mixer that is getting new
-// firmware anyway is updated twice rather than three times.
+// If the mixer already has the fix and acknowledges over USB with no FinalDir
+// specified, Run skips the final flash since the mixer is already on stock
+// firmware with a 4 KB slot and the script has removed itself.
 //
-// A mixer that already had the fix, reported and acknowledged over USB, is
-// left as it is when no FinalDir is given: it already runs RØDE's plain
-// firmware on a 4 KB slot, the script has removed itself, and a second
-// flash would change nothing.
-//
-// Run works on a platform.Platform and has no UI, so it is tested against a
-// simulated mixer and any front end can drive it.
+// Run operates on a platform.Platform with no UI so it can be tested against a
+// simulated mixer and driven by any frontend.
 package autofix
 
 import (

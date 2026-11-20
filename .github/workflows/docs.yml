@@ -1,6 +1,6 @@
 name: Docs
 
-# Builds only the documentation site; never the app, the mixer runtime or a release.
+# Builds and deploys the docs site only.
 on:
   workflow_dispatch:
     inputs:
@@ -23,8 +23,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Keep the build and deployment in one job: retrying a failed deployment
-    # must resolve the source and rebuild, not reuse a stale Pages artifact.
+    # Keep build and deploy in one job so retrying a failed deploy re-resolves
+    # the source and rebuilds instead of reusing a stale Pages artifact.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

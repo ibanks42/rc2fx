@@ -105,17 +105,11 @@ fn take<const N: usize>(bytes: &[u8], offset: &mut usize) -> [u8; N] {
     result
 }
 
-/// The frames, from the start of the run, where the output may differ from
-/// the oracle. The oracle's compressor and limiter go off at block 130 and
-/// back on at block 140 at once; this DSP fades a switched stage over
-/// `STAGE_FADE_SAMPLES` (480) instead, so it does not click. Block 130
-/// (frame 31159, 480 frames) is the fade-out, which runs on copies of the
-/// detectors: blocks 131 to 139 then match again, which shows the stages kept
-/// their history while off. The fade-in starts at block 140 (frame 33580).
-/// The compressor matches again when it ends, 480 frames later; the limiter,
-/// whose input the compressor's fade changed, keeps a different gain until
-/// a full-scale input sample (frame 34405, the next multiple of 983) pulls
-/// both gains down to the same value. Every other frame matches bit for bit.
+// Frame ranges allowed to diverge from the frozen oracle because compressor and
+// limiter now fade over `STAGE_FADE_SAMPLES` (480) instead of hard-cutting at
+// blocks 130 (fade-out, frames 31159..31639) and 140 (fade-in, starting at
+// 33580; the limiter gain realigns on the next full-scale hit at frame 34405).
+// All other frames must match bit-for-bit.
 const SWITCH_FADES: [std::ops::Range<u32>; 2] = [31_159..31_639, 33_580..34_406];
 
 #[test]

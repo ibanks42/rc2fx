@@ -1,4 +1,5 @@
-//! The store-only coordinator: bounded admission and shutdown.
+//! Integration tests for bounded command admission and shutdown drain on the
+//! store-only coordinator.
 use rc2fx_core::{Config, ConfigUpdate};
 use rc2fx_device::{
     controller::Controller,

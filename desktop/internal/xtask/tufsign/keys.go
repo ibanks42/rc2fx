@@ -21,7 +21,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// Key types and schemes, as tough names them.
 const (
 	KeyTypeRSA      = "rsa"
 	KeyTypeEd25519  = "ed25519"
@@ -33,24 +32,17 @@ const (
 	SchemeECDSA   = "ecdsa-sha2-nistp256"
 )
 
-// Key is a public TUF key as a document carries it.
+// Key represents a TUF public key from metadata.
 type Key struct {
-	// Value is the key's JSON as written; its canonical form is hashed for
-	// the key ID.
-	Value  core.Value
-	Type   string
-	Scheme string
-	// material is the decoded public key: an RSA key's PKCS #1
-	// RSAPublicKey, an Ed25519 key's 32 bytes, an ECDSA key's point. Two
-	// keys are equal when their type, scheme and material are (tough's
-	// derived equality, Decoded comparing bytes).
-	material []byte
+	Value    core.Value // original JSON object; hashed canonically for the key ID
+	Type     string
+	Scheme   string
+	material []byte // decoded key bytes (PKCS #1 RSA, 32-byte Ed25519, or EC point)
 	public   crypto.PublicKey
-	// extra: the key or its keyval has fields tough keeps in `_extra`.
-	extra bool
+	extra    bool // true if the key or keyval carried unknown _extra fields
 }
 
-// ID is the key ID: the SHA-256 of the key's canonical JSON, in hex.
+// ID returns the lowercase hex SHA-256 of the key's canonical JSON.
 func (k Key) ID() (string, error) {
 	data, err := Canonical(k.Value)
 	if err != nil {
@@ -60,8 +52,8 @@ func (k Key) ID() (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// equal is tough's Key equality: same variant, scheme, decoded public key
-// and extra fields (a signing key's are always empty).
+// equal matches tough's derived Key equality (type, scheme, decoded bytes, and
+// no extra fields).
 func (k Key) equal(o Key) bool {
 	return k.variant() == o.variant() && k.Scheme == o.Scheme && bytes.Equal(k.material, o.material) &&
 		!k.extra && !o.extra
@@ -69,7 +61,6 @@ func (k Key) equal(o Key) bool {
 
 func (k Key) variant() string { return k.Type }
 
-// keyValue is a key as tough serializes it: keytype, keyval, scheme.
 func keyValue(keyType, public, scheme string) core.Value {
 	return core.ObjectValue(
 		core.Member{Key: "keytype", Value: core.StringValue(keyType)},
@@ -78,7 +69,6 @@ func keyValue(keyType, public, scheme string) core.Value {
 	)
 }
 
-// parseKey reads a key object as tough's Key deserializes it.
 func parseKey(value core.Value) (Key, error) {
 	members, ok := value.AsObject()
 	if !ok {
@@ -189,8 +179,8 @@ func decodeSPKI(text string) (crypto.PublicKey, error) {
 	return pub, nil
 }
 
-// verify is tough's Key::verify: RSA-PSS/SHA-256 for 2048 to 8192-bit
-// keys, Ed25519, or ECDSA P-256/SHA-256 with an ASN.1 signature.
+// verify checks a TUF signature (RSA-PSS/SHA-256 2048–8192 bit, Ed25519, or
+// ECDSA P-256 ASN.1).
 func (k Key) verify(message, signature []byte) bool {
 	digest := sha256.Sum256(message)
 	switch pub := k.public.(type) {
@@ -207,12 +197,9 @@ func (k Key) verify(message, signature []byte) bool {
 	return false
 }
 
-// Signer is a private key: tough's Sign.
+// Signer signs canonical TUF role payloads.
 type Signer interface {
-	// Key is the public key as tough's tuf_key makes it.
 	Key() Key
-	// Sign signs message: RSA-PSS with a SHA-256-long salt, Ed25519, or
-	// ECDSA with an ASN.1 signature.
 	Sign(message []byte) ([]byte, error)
 }
 
@@ -259,19 +246,16 @@ func mustKey(value core.Value) Key {
 	return key
 }
 
-// publicPEM is tough's spki::encode: a PUBLIC KEY PEM with LF line endings,
-// trimmed.
 func publicPEM(der []byte) string {
 	return strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})))
 }
 
-// PrivatePEM is a PKCS #8 document as `-----BEGIN PRIVATE KEY-----` PEM,
-// 64-column base64, as mixer-keys writes it.
+// PrivatePEM wraps a PKCS #8 DER private key in a PEM block.
 func PrivatePEM(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
 
-// LoadKey is tough's LocalKeySource::as_sign.
+// LoadKey reads and parses a private key file.
 func LoadKey(path string) (Signer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -280,9 +264,9 @@ func LoadKey(path string) (Signer, error) {
 	return ParseKeyPair(data)
 }
 
-// ParseKeyPair is tough's parse_keypair: an Ed25519 or ECDSA P-256 PKCS #8
-// document (DER), or PEM: `PRIVATE KEY` holding an RSA PKCS #8 key, or `RSA
-// PRIVATE KEY` holding a PKCS #1 one.
+// ParseKeyPair accepts raw PKCS #8 DER (Ed25519 or ECDSA P-256) or PEM
+// (PRIVATE KEY for RSA PKCS #8, RSA PRIVATE KEY for RSA PKCS #1), matching
+// tough's parse_keypair.
 func ParseKeyPair(data []byte) (Signer, error) {
 	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil {
 		switch k := key.(type) {
@@ -323,8 +307,7 @@ func ParseKeyPair(data []byte) (Signer, error) {
 	return nil, unrecognized
 }
 
-// rsaRejected is why aws-lc-rs refuses an RSA signing key: sizes outside
-// 2048 to 8192 bits.
+// rsaRejected enforces aws-lc-rs's 2048–8192 bit RSA key size bounds.
 func rsaRejected(key *rsa.PrivateKey) string {
 	switch bits := key.N.BitLen(); {
 	case bits < 2048:
@@ -335,7 +318,7 @@ func rsaRejected(key *rsa.PrivateKey) string {
 	return ""
 }
 
-// GenerateRSA3072 is a new RSA-3072 key as PKCS #8 DER.
+// GenerateRSA3072 generates a fresh RSA-3072 key encoded as PKCS #8 DER.
 func GenerateRSA3072() ([]byte, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {

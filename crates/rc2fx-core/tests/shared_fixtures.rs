@@ -1,18 +1,17 @@
-//! The shared accept and reject fixtures in `fixtures/core`. The desktop's Go
-//! port (`desktop/core/shared_fixtures_test.go`) reads the same files. Each
-//! side checks its own direction: the mixer must write accepted values back
-//! byte for byte as the `canonical` (compact) and `pretty` files hold them,
-//! and must accept and reject alike the documents it reads itself. Documents
-//! only the desktop reads (device state, versions, SSH status, meters,
-//! diagnostics events and preset lists) are checked here for the encoding
-//! only; their reject cases are the desktop's. A rejected case that names an
-//! `error` must fail with exactly that message.
+//! Shared accept/reject fixtures in `fixtures/core` (also run by the Go desktop
+//! port in `desktop/core/shared_fixtures_test.go`).
+//!
+//! Each side validates its own direction: here we check that accepted documents
+//! round-trip byte-for-byte against `canonical`/`pretty` snapshots, and that
+//! mixer-read documents reject invalid inputs with the exact expected `error`
+//! message. Desktop-only response types (`WRITTEN_ONLY`) are checked for
+//! encoding only; their rejection cases live in the Go tests.
 use rc2fx_core::{
     Config, ConfigUpdate, CoreError, DeviceState, DeviceVersions, DiagnosticsEvents, Meter,
     MixerRelease, PresetSummary, SshStatus, StockInventory, from_json,
 };
 
-/// The kinds of document only the desktop reads. The mixer writes them.
+/// Document types written by the mixer and only parsed by the desktop app.
 const WRITTEN_ONLY: [&str; 6] = [
     "deviceState",
     "deviceVersions",
@@ -43,7 +42,6 @@ fn written<T: serde::Serialize>(value: &T) -> (String, String) {
     )
 }
 
-/// How the mixer reads each kind of document, and what it writes back.
 fn decode(kind: &str, data: &[u8]) -> Result<(String, String), String> {
     if kind == "mixerRelease" {
         return MixerRelease::parse(data)

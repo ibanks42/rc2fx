@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// Supported EasyEffects IIR EQ interchange. This is data conversion only.
+// EasyEffects IIR EQ preset import and export.
 
-// MaxFileBytes is the largest EQ preset file read (easyeffects and APO).
+// MaxFileBytes is the size limit for EQ preset files (EasyEffects and APO).
 const MaxFileBytes = 4 * 1024 * 1024
 
 var easyEffectsFrequencies = [32]float64{
@@ -50,16 +50,11 @@ type CandidateSummary struct {
 type ImportResultKind uint8
 
 const (
-	// ImportResultReady: EQ, Source and OtherEffects are set.
-	ImportResultReady ImportResultKind = iota
-	// ImportResultChooseEqualizer: Candidates is set.
-	ImportResultChooseEqualizer
-	// ImportResultChooseChannel: Source is set.
-	ImportResultChooseChannel
+	ImportResultReady           ImportResultKind = iota // EQ, Source, OtherEffects set
+	ImportResultChooseEqualizer                         // Candidates set
+	ImportResultChooseChannel                           // Source set
 )
 
-// ImportResult is an import's outcome; Kind says which fields mean
-// something.
 type ImportResult struct {
 	Kind         ImportResultKind
 	EQ           EQSettings
@@ -198,9 +193,8 @@ func readBand(value Value, index int) (Band, error) {
 	default:
 		return Band{}, CoreError("Unsupported filter model: " + modeName)
 	}
-	// `slope` and `width` are accepted and ignored: RC2FX processes every band
-	// as one filter section and none of its filters use a width, so a slope
-	// above x1 sounds gentler here than in EasyEffects.
+	// slope and width are accepted and ignored: RC2FX runs one biquad section
+	// per band and has no width parameter.
 	mute, err := easyBool(members, "mute", false)
 	if err != nil {
 		return Band{}, err
@@ -466,8 +460,9 @@ func stripPadding(bands []Band) []Band {
 	return bands
 }
 
-// ImportEasyEffects reads an EasyEffects preset's equalizers: one ready to
-// use, or the choice the user must make.
+// ImportEasyEffects parses an EasyEffects preset and returns either a ready
+// EQSettings or a disambiguation prompt when multiple equalizers or differing
+// stereo channels exist.
 func ImportEasyEffects(text string, options ImportOptions) (ImportResult, error) {
 	candidates, otherEffects, err := readCandidates(text)
 	if err != nil {
@@ -588,9 +583,8 @@ func exportBand(band Band) Value {
 	)
 }
 
-// ExportEasyEffects is an EasyEffects preset holding one IIR equalizer,
-// pretty-printed with a final newline. Keys are written in the order they
-// are listed here, the order earlier versions of the app wrote.
+// ExportEasyEffects formats eq as a pretty-printed EasyEffects IIR preset.
+// Key order is preserved to match earlier app versions.
 func ExportEasyEffects(eq EQSettings, pipeline Pipeline) (string, error) {
 	if err := eq.Validate(eq.responseChannels()); err != nil {
 		return "", err

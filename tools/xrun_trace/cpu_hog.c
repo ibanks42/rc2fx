@@ -1,4 +1,4 @@
-/* Bounded, explicitly invoked diagnostic fault injection. Never in runtime. */
+/* Bounded diagnostic CPU hog for fault-injection self-tests (not shipped in runtime). */
 #define _GNU_SOURCE
 #include <sched.h>
 #include <fcntl.h>
@@ -26,11 +26,11 @@ int main(int argc, char **argv) {
         if (fd < 0) return 3;
         char pid[32]; int size = snprintf(pid, sizeof pid, "%ld\n", (long)getpid());
         if (write(fd, pid, size) != size || close(fd)) return 3;
-        /* Make the injector's switch-out/in visible before taking FIFO80. */
+        /* Let the switch-out/in show up in ftrace before raising priority to FIFO 80. */
         struct timespec pause = {.tv_nsec = 1000000};
         if (nanosleep(&pause, NULL)) return 3;
     }
-    alarm(1); /* Independent upper bound even if the diagnostic loop misbehaves. */
+    alarm(1); /* Hard 1 s upper bound in case the busy loop stalls. */
     struct sched_param priority = {.sched_priority = 80};
     if (sched_setscheduler(0, SCHED_FIFO, &priority)) return 3;
     long long began = ns(), now;

@@ -1,7 +1,6 @@
 package state
 
-// The view preferences file and the connection screen's decisions. This file
-// does not import gk: its functions are tested with plain `go test`.
+// Persisted view preferences (view.json) and connection-screen classifiers.
 
 import (
 	"errors"
@@ -44,8 +43,6 @@ func preferencesDir() (string, bool) {
 	return filepath.Join(base, "RC2FX"), true
 }
 
-// viewPath is the view preferences file: what the channel list shows and
-// whether the Telemetry section is on.
 func viewPath() (string, bool) {
 	dir, ok := preferencesDir()
 	if !ok {
@@ -54,8 +51,6 @@ func viewPath() (string, bool) {
 	return filepath.Join(dir, "view.json"), true
 }
 
-// viewPrefs is the file's top-level object. json writes its keys sorted,
-// as the file has always been written.
 type viewPrefs map[string]core.Value
 
 func rememberedView() viewPrefs {
@@ -66,9 +61,8 @@ func rememberedView() viewPrefs {
 	return readView(path)
 }
 
-// readView reads the view preferences. An empty path, or anything
-// unreadable, over 4096 bytes, not strict JSON or not an object, is an empty
-// view.
+// readView parses view.json, returning an empty map on missing, oversized
+// (>4096 bytes), or malformed input.
 func readView(path string) viewPrefs {
 	view := viewPrefs{}
 	if path == "" {
@@ -92,7 +86,7 @@ func readView(path string) viewPrefs {
 	return view
 }
 
-// json is the object as compact JSON, keys in sorted order.
+// json serializes viewPrefs as compact JSON with sorted keys.
 func (v viewPrefs) json() string {
 	keys := make([]string, 0, len(v))
 	for k := range v {
@@ -115,7 +109,6 @@ func (v viewPrefs) boolean(key string) bool {
 	return ok && b
 }
 
-// rememberView saves one view preference, keeping the others.
 func rememberView(key string, value core.Value) {
 	view := rememberedView()
 	view[key] = value
@@ -126,16 +119,14 @@ func rememberView(key string, value core.Value) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
 		return
 	}
-	// A preference that fails to save only costs the choice next time.
 	_ = edit.WriteExport(path, view.json())
 }
 
-// rememberedTelemetry is whether the Telemetry section was last on.
 func RememberedTelemetry() bool { return rememberedView().boolean("showTelemetry") }
 
 func RememberTelemetry(on bool) { rememberView("showTelemetry", core.BoolValue(on)) }
 
-// rememberedAppearance is the appearance last chosen; Dusk when none was.
+// RememberedAppearance returns the saved theme appearance, defaulting to Dusk.
 func RememberedAppearance() theme.Appearance {
 	if value, ok := rememberedView()["appearance"]; ok {
 		if key, ok := value.AsString(); ok {
@@ -153,8 +144,8 @@ func RememberedDuo() bool { return duoEnabled(rememberedView()) }
 
 func duoEnabled(view viewPrefs) bool { return view.boolean("experimentalDuoFlash") }
 
-// rememberDuo reports a failed save, unlike view-only preferences, rather than
-// implying that the experimental opt-in will survive restarting the app.
+// RememberDuo persists the experimental Duo opt-in and returns any write error
+// so the caller doesn't silently imply the choice will survive a restart.
 func RememberDuo(allow bool) error {
 	path, ok := viewPath()
 	if !ok {
@@ -165,25 +156,18 @@ func RememberDuo(allow bool) error {
 
 func saveDuo(path string, allow bool) error { return saveFlag(path, "experimentalDuoFlash", allow) }
 
-// rememberedFirstChannelHint is whether the first channel's hint was
-// dismissed or completed: it then never shows again.
 func RememberedFirstChannelHint() bool { return rememberedView().boolean("firstChannelHintDone") }
 
-// rememberFirstChannelHint records that the hint is done. A failed save
-// only means it may show once more after a restart.
 func RememberFirstChannelHint() {
 	if path, ok := viewPath(); ok {
 		_ = saveFlag(path, "firstChannelHintDone", true)
 	}
 }
 
-// rememberedDeveloper is whether Developer mode was left on. It only shows
-// developer controls in Settings; it grants nothing by itself.
 func RememberedDeveloper() bool { return developerEnabled(rememberedView()) }
 
 func developerEnabled(view viewPrefs) bool { return view.boolean("developerMode") }
 
-// rememberDeveloper reports a failed save, like the Duo opt-in.
 func RememberDeveloper(on bool) error {
 	path, ok := viewPath()
 	if !ok {
@@ -205,19 +189,16 @@ func saveFlag(path, key string, on bool) error {
 	return edit.WriteExport(path, view.json())
 }
 
-// USBUndo is how to remove the rule again, as the screen shows and copies it.
 const USBUndo = "sudo rm " + helper.USBRulePath
 
-// usbPermission is whether Linux refused the app the mixer's USB 1 control
-// interface: the one failure the udev rule fixes (helper.USBPermission).
+// USBPermission reports whether lastResult is a Linux USB permission denial
+// fixable by installing the udev rule.
 func USBPermission(lastResult string) bool {
 	return strings.HasPrefix(lastResult, helper.USBPermission)
 }
 
-// mixerFound: this exact discovery failure is emitted only after finding one
-// supported mixer without the RC2FX interface (control's controlInterface).
-// Do not infer "found" from arbitrary failures/timeouts or a substring of an
-// error.
+// MixerFound matches only the exact discovery message emitted when a supported
+// mixer is attached without RC2FX running (do not match arbitrary errors).
 func MixerFound(lastResult string) bool {
 	return lastResult == "The mixer is connected, but RC2FX isn't running on it"
 }

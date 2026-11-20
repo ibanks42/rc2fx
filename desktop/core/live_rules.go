@@ -1,11 +1,10 @@
 package core
 
-// LiveNeedsSave reports whether moving the running audio from running to
-// candidate needs the engine restarted, which a live edit cannot do: a
-// channel's kind or channel count, suppression switched on or off, its
-// lookahead, or the effect order while suppression runs. The mixer decides
-// (PUT api/v1/live answers 422 liveRequiresSave); this lets the app
-// save such a change straight away, after asking, instead of sending it live.
+// LiveNeedsSave reports whether transitioning from running to candidate
+// requires an engine restart (changing target kind/channels, toggling
+// suppression, changing lookahead, or reordering effects while suppression is
+// on). The mixer enforces this authoritatively (422 liveRequiresSave), but
+// checking here lets the app prompt and save directly.
 func LiveNeedsSave(running, candidate []Target) bool {
 	byID := make(map[string]*Target, len(running))
 	for i := range running {

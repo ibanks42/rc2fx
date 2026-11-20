@@ -1,6 +1,6 @@
-//! Deltas the desktop's Go encoder (desktop/delta) wrote must decode with
-//! this decoder, which the mixer runs, and corrupt deltas must be refused
-//! with the same messages. See fixtures/delta/README.md.
+//! Verifies that deltas written by the Go desktop encoder (`desktop/delta`)
+//! decode identically here, and corrupt deltas fail with matching errors.
+//! See `fixtures/delta/README.md`.
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,

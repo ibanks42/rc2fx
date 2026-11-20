@@ -94,13 +94,10 @@ impl transactions::Endpoints for LiveEndpoints {
         transaction: &rc2fx_native_control::Transaction,
         staged: &mut Option<parameters::Staged>,
     ) -> Result<(), rc2fx_native_control::ErrorCode> {
-        // A publication that replaces processing first fades the running
-        // audio out (`Control::hand_off`), about 10 ms of callbacks. That
-        // wait holds no lock: the registry and parameter locks are taken to
-        // start it and again to publish, so port registration, close, the
-        // report and status reads are never held up by it. A path closed
-        // meanwhile is simply gone at the second step; the hand-off's own
-        // references then release the old runtime here, on control.
+        // Publications that replace processing first fade the running audio out
+        // (~10 ms of callbacks) without holding registry or parameter locks, so
+        // port lifecycle and status reads never stall. If the path closes
+        // meanwhile, `handing` releases the old runtime on the control thread.
         let handing =
             with_parameter_control(transaction.context, &transaction.target_id, |control| {
                 let staged = staged

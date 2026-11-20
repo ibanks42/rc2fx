@@ -1,14 +1,8 @@
-// Package packaging is `package`: the self-contained desktop app and legal
-// notices. Release executables download the mixer payload; packaging checks
-// the executable's payload mode, including for --skip-build. Every platform
-// is packaged by Velopack (see velopack.go): an AppImage on Linux, an
-// installer and a portable zip on Windows and macOS, and the update package
-// and feed the app updates itself from.
-//
-// The app is the Go one (desktop/cmd/rc2fx, cgo against the gpuikit
-// static library, which is linked into it), shipped on Windows with
-// Velopack's velopack_libc.dll beside it. The macOS app is universal (arm64 and x86_64 in one
-// executable), so its packages are named rc2fx-macos-universal.
+// Package packaging builds the self-contained desktop app and legal notices
+// for release via Velopack (AppImage on Linux, installer + portable zip on
+// Windows and macOS, plus update packages and feeds). Release executables
+// download the mixer payload unless built with --embedded; packaging verifies
+// the executable's payload mode even with --skip-build.
 package packaging
 
 import (

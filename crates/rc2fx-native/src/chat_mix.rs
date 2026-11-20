@@ -1,8 +1,8 @@
-//! Hash-qualified microphone-stem capture inside RØDE's own Chat routing.
+//! Microphone-stem capture inside RØDE's Chat routing for qualified firmware hashes.
 //!
-//! Read the already processed per-fader buffers; mirror only the linear sums,
-//! mix-minus subtraction and gain ramps. Never change a vendor object, replay a
-//! vendor processor, infer a pad waveform, or feed the completed mix to a model.
+//! Reads the already-processed per-fader buffers and mirrors only the linear
+//! sums, mix-minus subtractions, and gain ramps. Never mutates vendor objects
+//! or replays vendor DSP.
 #![cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
 use crate::pipeline::FRAMES;
 use std::{
@@ -32,8 +32,8 @@ thread_local! {
     static MIXER: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Owned by the callback's Chat Port. All arrays are allocated with the pipeline,
-/// not while capturing. A capture is usable only in the frame that armed it.
+/// Per-frame capture state owned by the Chat port. Pre-allocated with the
+/// pipeline so hooks do no allocation; valid only for the frame that armed it.
 pub struct Capture {
     wanted: [usize; 2],
     stream: Option<Stereo>,
@@ -52,8 +52,8 @@ impl Capture {
         }
     }
     /// # Safety
-    /// Keep this capture at a fixed address until disarm, on this callback
-    /// thread. Pipeline owns it in a Box and brackets the vendor call.
+    /// `self` must remain pinned at the same address on this thread until
+    /// `disarm()` is called. `Pipeline` keeps it boxed and brackets the vendor call.
     pub unsafe fn arm(&mut self, wanted: [usize; 2]) {
         self.wanted = wanted;
         self.stream = None;
@@ -84,10 +84,9 @@ fn root() -> Option<usize> {
     MIXER.try_with(Cell::get).ok().filter(|p| *p != 0)
 }
 
-// All memory access below is confined to a synchronous, pinned vendor call.
-// Its objects/buffers have the same lifetime as the original function's own
-// reads. Shape checks are defense in depth, not permission to read arbitrary
-// addresses. Do not call these with user-provided pointers.
+// Raw reads below only run synchronously inside a pinned vendor call, where the
+// vendor objects and buffers are live for the duration of the call. Alignment
+// and bounds checks are defense in depth; never pass untrusted pointers here.
 unsafe fn u32_at(address: usize) -> u32 {
     unsafe { (address as *const u32).read_unaligned() }
 }
@@ -120,13 +119,13 @@ unsafe fn channels(buffer: usize) -> Option<[usize; 2]> {
     let table = unsafe { pointer(buffer + 16) }?;
     let left = unsafe { pointer(table) }?;
     let right = unsafe { pointer(table + 8) }?;
-    // Read-only mono sources may alias L/R. The actual output pointer pair is
-    // separately matched to the non-overlapping JACK buffers resolved by Port.
+    // Mono read-only sources can alias L/R; the output pair is matched
+    // separately against the non-overlapping JACK buffers in `Port`.
     Some([left, right])
 }
 unsafe fn audio(buffer: usize) -> Option<Stereo> {
-    // JUCE may leave a cleared/unused buffer without allocated channel data.
-    // The original sum tests this flag before reading its table, too.
+    // JUCE marks cleared/unused buffers at +0x120 without allocating channel
+    // pointers, and the vendor sum checks this flag before reading the table.
     if unsafe { u8_at(buffer + 0x120) } != 0 {
         return Some(ZERO);
     }
@@ -148,14 +147,14 @@ unsafe fn strip_source(strip: usize) -> Option<bool> {
     if let Some(input) = unsafe { pointer(strip + 0x460) } {
         Some(microphone(unsafe { u32_at(input + 0xe4) }))
     } else if unsafe { u32_at(strip + 0x658) } == 0 || unsafe { u32_at(strip + 0x848) } == 0 {
-        // An unassigned, muted strip contributes zero without a source object.
+        // Unassigned or muted strip has no source object and contributes silence.
         Some(false)
     } else {
         None
     }
 }
-/// Match identities, not signal contents. Pads/USB/Bluetooth cannot be mistaken
-/// for microphones even when playing speech or the same samples as a mic.
+/// Identifies whether `buffer` belongs to a microphone strip by object identity
+/// (never by signal content, so pads/USB/Bluetooth aren't misclassified).
 unsafe fn classify(mix: usize, buffer: usize) -> Option<bool> {
     for i in 0..9 {
         let strip = unsafe { pointer(mix + 0x148 + i * 8) }?;
@@ -286,8 +285,8 @@ unsafe fn solo_voice(snapshot: [Solo; 9]) -> Option<Stereo> {
     }
     Some(result)
 }
-/// Mirror SummingMix::Process's contribution gains BEFORE its original call
-/// advances ramp state. The original alone emits property notifications.
+/// Mirrors `SummingMix::Process` gains before the original call advances its
+/// ramp state.
 unsafe fn sum_voice(
     object: usize,
     mut source: impl FnMut(usize) -> Option<Stereo>,
@@ -367,7 +366,7 @@ unsafe fn chat_voice(capture: &Capture, mixer: usize, object: usize) -> Option<S
             None
         })
     }?;
-    // MixMinusStereo's complete-output mute and gain follow its sum.
+    // Apply MixMinusStereo's post-sum output mute and gain ramp.
     if (unsafe { u8_at(object + 0x502) } != 0 && unsafe { u8_at(object + 0x501) } == 0)
         || unsafe { u32_at(object + 0x268) } == 0
     {
@@ -402,9 +401,8 @@ unsafe fn chat_voice(capture: &Capture, mixer: usize, object: usize) -> Option<S
     Some(result)
 }
 
-// Unlike the JACK-facing callback, Mixer::Process has its frame count in w4.
-// The pinned parent stores w4 at sp+0x1b4, later captured by its queued job.
-// Its separate w5 parameter must be forwarded unchanged, not used as a size.
+// `Mixer::Process` takes the frame count in w4 (saved at sp+0x1b4 for its
+// queued job). Forward w5 untouched; it is not a buffer size.
 type MixerFn = unsafe extern "C-unwind" fn(usize, usize, i32, usize, i32, u32, i64, i64);
 type StreamFn = unsafe extern "C-unwind" fn(usize, i32);
 type SumFn = unsafe extern "C-unwind" fn(usize, usize);
@@ -450,7 +448,7 @@ unsafe extern "C-unwind" fn stream_hook(object: usize, frames: i32) {
     if let Some((_, capture)) = wanted {
         let stream = unsafe { mix_voice(object) };
         let solo = snapshot.and_then(|v| unsafe { solo_voice(v) });
-        // Never hold a Rust reference across a vendor call (which may invoke another hook).
+        // Don't hold a Rust reference across the vendor call since it can re-enter hooks.
         let capture = unsafe { &mut *capture };
         capture.stream = stream;
         capture.solo = solo;
@@ -534,9 +532,8 @@ pub fn install(base: usize, profile: &rc2fx_firmware::Profile) -> Result<(), Str
     {
         return Err("Chat voice hooks require pre-thread initialization".into());
     }
-    // select_firmware verified the complete image. Also refuse any changed live
-    // prologue before patching the first site. All displaced instructions are
-    // PC-independent, established by the offline two-image audit.
+    // Verify all four live prologues before patching anything. The displaced
+    // instructions are PC-independent across both qualified images.
     for (offset, words) in sites.iter().zip(PROLOGUES) {
         let expected: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
         let address = base

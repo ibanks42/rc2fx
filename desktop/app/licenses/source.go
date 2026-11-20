@@ -1,8 +1,5 @@
 package licenses
 
-// Which license text a build embeds. Used by the generator (gen.go); tested
-// here.
-
 import (
 	"errors"
 	"fmt"
@@ -10,12 +7,11 @@ import (
 	"unicode/utf8"
 )
 
-// Placeholder is embedded when a development build is given no license file.
-// It says so plainly rather than looking like the full notices.
+// Placeholder is embedded in development builds when no license bundle is provided.
 const Placeholder = `{"schemaVersion":1,"sections":[{"title":"Licenses not bundled in this development build","text":"This development build does not include the license notices. Released builds show the full RC2FX license and every third-party notice here."}]}`
 
-// Resolve is the JSON to embed. A release build (release) must be given a
-// valid file; a development build without one (path "") gets Placeholder.
+// Resolve returns the license JSON to embed. Release builds require a valid
+// file at path; dev builds with an empty path fall back to Placeholder.
 func Resolve(release bool, path string) (string, error) {
 	if path == "" {
 		if release {

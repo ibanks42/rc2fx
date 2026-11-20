@@ -15,7 +15,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// testRelease is a downloaded release: two assets and their SHA256SUMS.
 func testRelease(t *testing.T, dir string) string {
 	t.Helper()
 	assets := filepath.Join(dir, "assets")

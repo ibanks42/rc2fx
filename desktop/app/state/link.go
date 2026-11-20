@@ -2,53 +2,37 @@ package state
 
 import "time"
 
-// What the app is doing about its connection to the mixer: the app's side of
-// the connection lifecycle. What the transport observes (session.Connected,
-// streamConnected, streamError) is kept apart, as observations.
+// App-side connection intent, kept separate from observed transport state
+// (session.Connected, streamConnected, streamError).
 
-// linkPhase is the app's intent for the connection.
 type linkPhase uint8
 
 const (
-	// linkOff: not trying to connect. Before the first Connect, and after
-	// Disconnect.
 	linkOff linkPhase = iota
-	// linkConnecting: a connect command is out and has not been answered.
 	linkConnecting
-	// linkOn: connecting is wanted and nothing is out or scheduled: the
-	// mixer answered (connected), or the connect command could not be sent.
 	linkOn
-	// linkRetry: connecting is wanted and failed; the next attempt starts
-	// at linkIntent.retryAt.
 	linkRetry
-	// linkPausedForFlash: the connection was dropped while the installer
-	// flashes the mixer; once the flash is over the app looks for the mixer
-	// again at once.
 	linkPausedForFlash
 )
 
-// retryWait is how long after a failed attempt the next one starts.
 const retryWait = 3 * time.Second
 
-// linkIntent is the connection intent, with the time of the next attempt
-// while one is scheduled. The zero value is linkOff.
+// LinkIntent tracks whether the app wants to connect and when to retry next.
+// The zero value is linkOff.
 type LinkIntent struct {
-	phase linkPhase
-	// retryAt is when linkRetry tries again; zero in every other phase.
+	phase   linkPhase
 	retryAt time.Time
 }
 
-// auto is whether the app keeps trying to connect (the connection screen's
-// "Listening…" rather than "Disconnected").
+// Auto reports whether the app is actively maintaining or retrying a connection.
 func (l LinkIntent) Auto() bool {
 	return l.phase == linkConnecting || l.phase == linkOn || l.phase == linkRetry
 }
 
-// connecting is whether a connect command is out.
+// Connecting reports whether a connect command is currently in flight.
 func (l LinkIntent) Connecting() bool { return l.phase == linkConnecting }
 
-// begin starts an attempt, canceling any scheduled one; sent is whether the
-// connect command went out.
+// Begin starts a connection attempt and cancels any scheduled retry.
 func (l *LinkIntent) Begin(sent bool) {
 	*l = LinkIntent{phase: linkOn}
 	if sent {
@@ -56,24 +40,23 @@ func (l *LinkIntent) Begin(sent bool) {
 	}
 }
 
-// stop is Disconnect: no more attempts. A pause for a flash stays, so the
-// app still looks for the mixer once the flash is over.
+// Stop disables auto-reconnect unless paused for an active flash (which must
+// still resume afterward).
 func (l *LinkIntent) Stop() {
 	if l.phase != linkPausedForFlash {
 		*l = LinkIntent{}
 	}
 }
 
-// connected notes that the mixer answered the connect command.
+// Connected records that the mixer answered a connect attempt.
 func (l *LinkIntent) Connected() {
 	if l.phase == linkConnecting || l.phase == linkRetry {
 		*l = LinkIntent{phase: linkOn}
 	}
 }
 
-// failed notes a failure event at now. Any connect command out is over;
-// while the app wants a connection and has none, it tries again after
-// retryWait.
+// Failed records a transport failure, scheduling a retry if disconnected and
+// auto-reconnect is active.
 func (l *LinkIntent) Failed(connected bool, now time.Time) {
 	switch {
 	case l.Auto() && !connected:
@@ -83,11 +66,10 @@ func (l *LinkIntent) Failed(connected bool, now time.Time) {
 	}
 }
 
-// pauseForFlash drops the intent to connect until flashDone.
+// PauseForFlash suspends reconnect attempts until FlashDone is called.
 func (l *LinkIntent) PauseForFlash() { *l = LinkIntent{phase: linkPausedForFlash} }
 
-// flashDone ends a pause for a flash: the next attempt starts at now. It
-// reports whether there was a pause to end.
+// FlashDone ends a flash pause and schedules an immediate reconnect attempt.
 func (l *LinkIntent) FlashDone(now time.Time) bool {
 	if l.phase != linkPausedForFlash {
 		return false
@@ -96,8 +78,7 @@ func (l *LinkIntent) FlashDone(now time.Time) bool {
 	return true
 }
 
-// due is whether a scheduled attempt should start at now, with the session
-// connected or not.
+// Due reports whether a scheduled retry should run at now.
 func (l LinkIntent) Due(connected bool, now time.Time) bool {
 	return l.phase == linkRetry && !connected && !now.Before(l.retryAt)
 }

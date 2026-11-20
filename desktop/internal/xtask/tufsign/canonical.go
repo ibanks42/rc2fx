@@ -1,22 +1,16 @@
-// Package tufsign signs TUF metadata exactly as the tough 0.24 crate does,
-// so the mixer's sigstore-tuf client and the desktop's verifier accept what
-// it writes:
+// Package tufsign produces TUF metadata matching the tough 0.24 Rust crate so
+// both the mixer's sigstore-tuf client and the desktop verifier accept it.
 //
-//   - roles are signed over OLPC canonical JSON of their `signed` object
-//     (keys sorted by their bytes, only `"` and `\` escaped, no floats);
-//   - files are serde_json's pretty form (two-space indentation) and a final
-//     newline, in tough's field order;
-//   - `expires` has 0, 3, 6 or 9 fractional digits, the fewest that are
-//     exact (tough's serialize_timestamp);
-//   - keys are tough's: RSA as SubjectPublicKeyInfo PEM with RSA-PSS/SHA-256,
-//     Ed25519 as hex, ECDSA P-256 as PEM; a key ID is the SHA-256 of the
-//     key's canonical JSON;
-//   - a repository is `N.root.json` (the root file as given),
-//     `targets.json`, `snapshot.json` and `timestamp.json`, with snapshot and
-//     timestamp pins of version, length and SHA-256.
-//
-// Documents are core.Value trees, so fields tough keeps but does not know
-// (its `_extra`) survive a renewal.
+// Wire details kept compatible with tough:
+//   - Signatures cover OLPC canonical JSON of `signed` (byte-sorted keys, only
+//     `"` and `\` escaped, integers only).
+//   - Files are 2-space pretty-printed JSON with a trailing newline and
+//     tough's field ordering.
+//   - `expires` uses 0, 3, 6, or 9 fractional digits (shortest exact group).
+//   - RSA keys use SPKI PEM + RSA-PSS/SHA-256, Ed25519 uses hex, ECDSA P-256
+//     uses PEM; key IDs are SHA-256 of canonical key JSON.
+//   - Documents are kept as core.Value trees so unknown `_extra` fields survive
+//     renewals.
 package tufsign
 
 import (
@@ -27,9 +21,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// Canonical is value as OLPC canonical JSON (olpc-cjson, which tough uses):
-// object members sorted by their encoded keys, strings with only `"` and `\`
-// escaped and every other character as is, integers only.
+// Canonical encodes value as OLPC canonical JSON (olpc-cjson): object keys
+// sorted by encoded bytes, only `"` and `\` escaped, and no floats.
 func Canonical(value core.Value) ([]byte, error) {
 	return appendCanonical(nil, value)
 }
@@ -107,8 +100,7 @@ func appendCanonicalString(dst []byte, text string) []byte {
 	return append(dst, '"')
 }
 
-// Pretty is serde_json's to_vec_pretty and the newline tough adds: the bytes
-// of a metadata file.
+// Pretty formats value as 2-space indented JSON with a trailing newline.
 func Pretty(value core.Value) []byte {
 	return append([]byte(value.Pretty()), '\n')
 }

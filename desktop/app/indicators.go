@@ -1,29 +1,13 @@
 package app
 
-// Home's and the editor's animated level indicators, the glowing lines and
-// the overview's bars.
+// Animated level indicators (editor live lines and overview bars).
 //
-// Why there is no overlay: GPUI renders the window root on every frame, and
-// notifying a view also dirties its ancestors, so animating inside the app
-// would re-render the whole app on every frame. In the binding a
-// view marked with gk.Notify is described alone, its parent kept: so each
-// indicator is its own gk.View, embedded where it is shown, and
-// one shared gk.Every redraws only the indicators whose picture would
-// change (levels.Slots.Unchanged). The decisions about when to draw live
-// in app/levels.
-//
-// Who draws an indicator (never both, never neither): Home, the sidebar and
-// the editor ask for one with indicator or levelBar; it is that indicator's
-// view, or, until the poll has made the view (and for a second request of
-// the same indicator in one render), the same drawing made in place, still.
-//
-// When: the ticker runs at 60 Hz, 30 Hz while the window is not focused,
-// only while some indicator on screen can animate (levels.Tick: a fresh
-// reading, on Home or an editor, without reduced motion, animation on).
-// Window visibility is not readable in Go, so a minimized window keeps
-// ticking at 30 Hz. Indicators that do not animate (no fresh reading,
-// reduced motion, Settings, RC2FX_ANIMATED_LINE=0) are drawn still, and the
-// app's 50 ms poll redraws one when its level or freshness changes.
+// Each indicator owns its own gk.View so gk.Notify only re-renders that view
+// instead of dirtying the whole app tree every frame. A single shared gk.Every
+// timer drives redraws at 60 Hz (30 Hz unfocused; minimized windows can't be
+// detected from Go so they also tick at 30 Hz), skipping indicators whose
+// rendered output hasn't changed. Static indicators (stale audio, reduced
+// motion, or animation disabled) are updated on the 50 ms app poll instead.
 
 import (
 	"slices"
@@ -35,63 +19,50 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/levels"
 )
 
-// lineSource is what an indicator shows: one path's reported output peak,
-// its only kind.
 type lineSource struct{ path string }
 
-// linePath is the source for the path with this id.
 func linePath(id string) lineSource { return lineSource{path: id} }
 
-// indicatorKey is one indicator: what it shows and how.
 type indicatorKey struct {
 	id    string
 	shape levels.Shape
 }
 
-// indicatorView is one indicator's view and what it last drew.
 type indicatorView struct {
 	key  indicatorKey
 	view gk.View
-	// embedded is the app render (App.renderGeneration) that last placed it:
-	// it is on screen while that is the latest render.
+	// App.renderGeneration that last embedded this view.
 	embedded uint64
-	// What the view drew last; drawn is false until it has drawn.
-	drawn   bool
-	fresh   bool
-	animate bool
-	level   *float32
-	// size is a line's bounds as last laid out (measured false until then).
+	drawn    bool
+	fresh    bool
+	animate  bool
+	level    *float32
 	size     gk.GpuiSize
 	measured bool
 }
 
-// LineSlots is the indicators' state in App (App.lineSlots): every
-// indicator's view, the ones asked for before their
-// view existed, the animation's clock and the shared ticker. Views are
-// kept for the app's life: at most one per path and shape (a line in two
-// styles, a bar in two directions).
+// LineSlots holds indicator views (retained for the app's lifetime, at most
+// one per path and shape), pending creation requests, and the shared ticker.
 type LineSlots struct {
 	views map[indicatorKey]*indicatorView
-	// wanted were drawn in place for want of a view; the poll makes theirs.
-	wanted []indicatorKey
-	// epoch is the animation's clock: shapes move with time since it.
+	// Keys drawn inline because their view hasn't been created yet.
+	wanted  []indicatorKey
 	epoch   time.Time
 	ticker  gk.Timer
 	ticking bool
 	period  time.Duration
-	// inlineBars is the app render, plus one, that drew a bar in place (0
-	// for none yet): barsAnimate.
+	// renderGeneration+1 of the last render that drew a bar inline (0 = none).
 	inlineBars uint64
 	signature  *signature
 }
 
-// canAnimate is whether an indicator with a fresh reading moves now.
 func (a *App) canAnimate() bool {
 	return levels.Enabled() && a.animatedPage() && !a.reducedMotion
 }
 
-// embed is the indicator's view for this render, or ok false when it has
-// none yet (the poll makes it) or was placed already in this render.
+// embed returns the indicator's child view for this render, or false if the
+// view doesn't exist yet (queued for creation) or was already embedded once
+// in this render pass.
 func (a *App) embed(key indicatorKey) (gk.Element, bool) {
 	slots := &a.lineSlots
 	v := slots.views[key]
@@ -108,9 +79,6 @@ func (a *App) embed(key indicatorKey) (gk.Element, bool) {
 	return gk.Div(s.SizeFull).ChildView(v.view), true
 }
 
-// indicatorNow is what an indicator shows now: its level (a line's is 0
-// without a fresh reading, a bar's nil), whether it has a fresh reading, and
-// whether it moves.
 func (a *App) indicatorNow(key indicatorKey, now time.Time) (level *float32, fresh, animate bool) {
 	if key.shape.IsBar {
 		level = a.overviewLevel(key.id)
@@ -127,15 +95,12 @@ func (a *App) indicatorNow(key indicatorKey, now time.Time) (level *float32, fre
 	return level, fresh, fresh && a.canAnimate()
 }
 
-// newIndicatorView makes an indicator's view (in a handler: the poll).
 func (a *App) newIndicatorView(key indicatorKey) *indicatorView {
 	v := &indicatorView{key: key}
 	v.view = gk.NewView(nil, func(cx *gk.Cx) gk.Element { return a.drawIndicator(v) })
 	return v
 }
 
-// drawIndicator is an indicator view's function: the overlay's paint for
-// one claim, or Home's still drawing, from the app's state now.
 func (a *App) drawIndicator(v *indicatorView) gk.Element {
 	now := time.Now()
 	level, fresh, animate := a.indicatorNow(v.key, now)
@@ -153,8 +118,7 @@ func (a *App) drawIndicator(v *indicatorView) gk.Element {
 	}
 	return gk.Div(s.SizeFull).
 		OnChildrenPrepainted(func(cx *gk.Cx, bounds []gk.Bounds) {
-			// The plot fills this div: its bounds are the line's. Stored only
-			// when they change, or every frame would redraw the line.
+			// Only notify when bounds actually change to avoid a redraw loop.
 			if len(bounds) == 0 || v.measured && bounds[0].Size == v.size {
 				gk.Quiet(cx)
 				return
@@ -164,7 +128,6 @@ func (a *App) drawIndicator(v *indicatorView) gk.Element {
 		Child(livePlot(v.size.Width, v.size.Height, phase, *level, state, v.key.shape.Line))
 }
 
-// indicatorChanged is whether redrawing the indicator would change its picture.
 func (a *App) indicatorChanged(v *indicatorView, now time.Time) bool {
 	if !v.drawn {
 		return false
@@ -181,13 +144,10 @@ func (a *App) indicatorChanged(v *indicatorView, now time.Time) bool {
 	return !levels.StillUnchanged(claim, v.level, level)
 }
 
-// onScreen is whether the latest app render placed the indicator.
 func (a *App) onScreen(v *indicatorView) bool {
 	return v.embedded != 0 && v.embedded == a.renderGeneration
 }
 
-// redrawIndicators marks every indicator on screen whose picture would
-// change.
 func (a *App) redrawIndicators(cx *gk.Cx, now time.Time) {
 	for _, v := range a.lineSlots.views {
 		if a.onScreen(v) && a.indicatorChanged(v, now) {
@@ -196,9 +156,8 @@ func (a *App) redrawIndicators(cx *gk.Cx, now time.Time) {
 	}
 }
 
-// pollIndicators runs on the app's 50 ms poll: it makes the views asked
-// for, starts, retimes or stops the shared ticker, redraws still
-// indicators that changed, and runs the opening screens' signature.
+// pollIndicators creates newly requested views, manages the animation ticker,
+// and updates static indicators on the 50 ms app poll.
 func (a *App) pollIndicators(cx *gk.Cx) {
 	slots := &a.lineSlots
 	now := time.Now()
@@ -215,7 +174,7 @@ func (a *App) pollIndicators(cx *gk.Cx) {
 			}
 		}
 		slots.wanted = slots.wanted[:0]
-		// Render again so the views replace the indicators drawn in place.
+		// Re-render so the new views replace the inline fallbacks.
 		a.notify(cx)
 	}
 	animating := 0
@@ -232,15 +191,12 @@ func (a *App) pollIndicators(cx *gk.Cx) {
 		active = gk.GetWindowInfo(cx, a.window).Active
 	}
 	period, run := levels.Tick(animating, a.reducedMotion, active)
-	// The timer counts whole milliseconds.
 	period = period.Round(time.Millisecond)
 	if slots.ticking && (!run || period != slots.period) {
 		gk.Release(cx, slots.ticker)
 		slots.ticking = false
 	}
 	if run && !slots.ticking {
-		// One frame per tick (a target, not a measured frame rate); a late
-		// tick is not made up.
 		slots.ticker = gk.Every(cx, period, func(cx *gk.Cx) {
 			gk.Quiet(cx)
 			a.redrawIndicators(cx, time.Now())
@@ -253,10 +209,8 @@ func (a *App) pollIndicators(cx *gk.Cx) {
 	a.pollSignature(cx)
 }
 
-// barsAnimate is whether the overview's bars redraw
-// themselves, so a reading needs no redraw of the app. In Go every bar with
-// a view does, moving or still; only a bar drawn in place (before the poll
-// made its view) needs the app redrawn.
+// barsAnimate reports whether all overview bars are backed by their own views
+// (meaning meter updates don't need to trigger a full app re-render).
 func (a *App) barsAnimate() bool {
 	return a.lineSlots.inlineBars != a.renderGeneration+1
 }

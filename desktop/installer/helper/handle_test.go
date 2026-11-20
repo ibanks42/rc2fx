@@ -10,7 +10,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// stubEnv names what this test binary does when started as a stub helper.
 const stubEnv = "RC2FX_HELPER_STUB"
 
 func TestMain(m *testing.M) {
@@ -18,8 +17,7 @@ func TestMain(m *testing.M) {
 	case "":
 		os.Exit(m.Run())
 	case "refused":
-		// pkexec when the password prompt is dismissed: exits 126 without
-		// reading its input.
+		// Simulates pkexec when the user dismisses the auth prompt.
 		os.Exit(126)
 	case "crashed":
 		os.Exit(1)

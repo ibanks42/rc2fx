@@ -1,9 +1,7 @@
 package app
 
-// Checking GitHub for a newer desktop app. The check only
-// notifies. Copies Velopack installed download and install an update when
-// the user asks (selfupdate_glue.go); other copies link to the release page.
-// The logic is app/updates; this starts the checks and draws the links.
+// Background update checks and release links. Velopack-installed builds handle
+// self-updates in selfupdate_glue.go; other builds link to the release page.
 
 import (
 	"fmt"
@@ -17,15 +15,13 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// AppUpdate is the last update check (updates.AppUpdate), with the changes
-// dialog the Versions section opens (kit state, made once in a handler).
+// AppUpdate tracks the latest update check along with the changes dialog state.
 type AppUpdate struct {
 	updates.AppUpdate
 	changes changesDialog
 }
 
-// link is a ghost button opening url, nil (ok false) unless updates.SafeURL
-// allows it.
+// link returns an external-link ghost button if updates.SafeURL permits url.
 func link(id gk.ID, label, url string) (gk.ButtonEl, bool) {
 	url, ok := updates.SafeURL(url)
 	if !ok {
@@ -35,16 +31,12 @@ func link(id gk.ID, label, url string) (gk.ButtonEl, bool) {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { gk.OpenURL(cx, url) }), true
 }
 
-// rodeAnswer is one model's RØDE releases, nil when its manifest could not
-// be read.
 type rodeAnswer struct {
 	model    firmware.Model
 	releases []installer.Release
 	ok       bool
 }
 
-// checkAppUpdate checks in the background; the UI never waits on the
-// network.
 func (a *App) checkAppUpdate(cx *gk.Cx, manual bool) {
 	if a.appUpdate.Checking {
 		return
@@ -54,13 +46,12 @@ func (a *App) checkAppUpdate(cx *gk.Cx, manual bool) {
 	gk.Go(cx, func() appupdate.UpdateSnapshot { return appupdate.CheckForUpdates(model.AppVersion) },
 		func(cx *gk.Cx, result appupdate.UpdateSnapshot) {
 			if result.App != nil && result.App.Kind == appupdate.UpdateAvailable {
-				// Settings has the link; this makes sure it is seen.
 				gk.PushNotification(cx, fmt.Sprintf("RC2FX %s is available. See Settings > Versions.", result.App.Version))
 			}
 			a.appUpdate.Finish(result, manual)
 			a.notify(cx)
 		})
-	// RØDE's own lists, so Versions can say when RØDE is ahead of RC2FX.
+	// Fetch RØDE's release feeds so the Versions view can flag when RØDE is ahead.
 	gk.Go(cx, func() []rodeAnswer {
 		answers := make([]rodeAnswer, 0, len(firmware.ModelAll))
 		for _, m := range firmware.ModelAll {
@@ -76,7 +67,7 @@ func (a *App) checkAppUpdate(cx *gk.Cx, manual bool) {
 		}
 		a.notify(cx)
 	})
-	// Separate, so a slow download host never holds up the app's answer.
+	// Run separately so a slow download host does not delay the app update result.
 	gk.Go(cx, func() *[]installer.MixerOffer {
 		work, _ := workDirectory()
 		if offers, ok := updates.SignedMixers(work); ok {

@@ -207,8 +207,8 @@ fn device_model() -> Result<rc2fx_firmware::Model, String> {
 }
 
 static STOP: AtomicBool = AtomicBool::new(false);
-/// The eventfd the signal handler writes to, or -1 before it exists. It stays
-/// open until the process exits, because the handler can run at any time.
+/// Eventfd written by the signal handler (-1 before init). Kept open until
+/// process exit because the handler can fire at any time.
 static STOP_FD: AtomicI32 = AtomicI32::new(-1);
 extern "C" fn stop_signal(_: libc::c_int) {
     STOP.store(true, Ordering::Relaxed);
@@ -238,13 +238,10 @@ fn signals() -> io::Result<()> {
     }
     Ok(())
 }
-/// SIGINT and SIGTERM, as something the executor can wait for. The handler
-/// writes to an eventfd, so the executor sleeps until a signal arrives and has
-/// no timer that polls a flag.
+/// Async wait handle for SIGINT/SIGTERM backed by an eventfd (no polling timer).
 struct Stop(std::os::fd::RawFd);
 impl Stop {
-    /// Creates the eventfd and then installs the handlers, in that order, so
-    /// no signal finds a handler without it.
+    /// Creates the eventfd before installing handlers so no signal fires without it.
     fn install() -> io::Result<Self> {
         let mut fd = STOP_FD.load(Ordering::Relaxed);
         if fd < 0 {
@@ -258,9 +255,7 @@ impl Stop {
         signals()?;
         Ok(Self(fd))
     }
-    /// Returns once a stop signal has arrived. The eventfd stays readable
-    /// after a signal, so one that arrived before this is first polled, or
-    /// before the executor existed, is still seen.
+    /// Resolves once a stop signal has arrived (even if it arrived before polling).
     async fn wait(&self) {
         use tokio::io::{Interest, unix::AsyncFd};
         if STOP.load(Ordering::Relaxed) {
@@ -274,7 +269,7 @@ impl Stop {
         {
             return;
         }
-        // The reactor refused the descriptor: poll the flag as before.
+        // Reactor rejected the fd; fall back to polling the atomic flag.
         while !STOP.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -288,9 +283,8 @@ impl Stop {
         unsafe { libc::write(self.0, one.as_ptr().cast(), one.len()) };
     }
 }
-/// Wakes `Stop` if the thread that holds it panics. A panic on the control
-/// thread then ends the daemon, and the join reports it as an error, so the
-/// supervisor sees a failed exit instead of a daemon serving stale state.
+/// Wakes `Stop` on drop if the holding thread panics, so a control-thread panic
+/// brings down the daemon with a non-zero exit instead of serving stale state.
 struct StopOnPanic<'stop>(&'stop Stop);
 impl Drop for StopOnPanic<'_> {
     fn drop(&mut self) {
@@ -328,8 +322,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
         Command::Start(args) => args,
     };
     let model = device_model()?;
-    // Reported versions never stop the controller: what cannot be read stays
-    // unknown, and the log says why.
+    // Version probe failures are non-fatal; unreadable fields stay unknown and get logged.
     let (mut versions, problems) = rc2fx_device::versions::read(
         args.release.as_deref(),
         args.firmware_catalog.as_deref(),
@@ -339,10 +332,9 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
     for problem in problems {
         eprintln!("{problem}");
     }
-    // In-place updates install into /opt/rc2fx and are offered only when this
-    // controller runs from that bundle, not from a RAM build. A start from the
-    // rollback copy (the shims choose it while an update has not committed)
-    // still recovers and reports that update, but offers no new one.
+    // Only offer in-place updates when running from /opt/rc2fx (not a RAM build).
+    // Running from the rollback copy still recovers and reports the failed update
+    // but refuses new ones.
     let paths = rc2fx_device::mixer_update::install::Paths::mixer();
     let started_from = args
         .release
@@ -367,21 +359,19 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
         versions.in_place_updates = Some(rc2fx_device::mixer_update::IN_PLACE_UPDATES);
     }
     if let Some(update) = &mixer_update {
-        // Before serving: an update interrupted by a power cut is undone (or
-        // its absence recorded) while nothing else is changing /opt.
+        // Recover any power-cut-interrupted update before serving requests.
         update.recover();
         update.note_started();
     }
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    // New storage starts from the model's defaults, as `plan` does, so the
-    // settings it stores match the plan the launcher already used.
+    // Seed new storage with the same model defaults `plan` uses.
     let store = Store::open(&args.data, rc2fx_device::catalog::default_config(model))?;
     rc2fx_device::native_plan::plan_for_model(store.config(), model)?;
     let native = Runtime::connect(&args.socket, store.config(), Duration::from_secs(2))?;
-    // The library can predate this daemon (RØDE's process keeps an old one
-    // loaded until it restarts). Report the protocol it actually speaks.
+    // The mixer process may still hold an older native library until restart;
+    // report the protocol version it actually speaks.
     rc2fx_device::versions::note_native_protocol(&mut versions, native.protocol());
     let (handle, owner) = Coordinator::new_native(Controller::new(store), native)?;
     let stop = Stop::install()?;
@@ -445,8 +435,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
                 () = &mut show_watch => unreachable!("show watcher never ends the controller"),
                 () = stop.wait() => Ok(()),
             };
-            // Close admission, then drain: commands already accepted still
-            // complete even though their replies can no longer be sent.
+            // Close admission and drain already-accepted commands even if replies can't be sent.
             handle.close();
             if let Err(error) = handle.shutdown().await
                 && outcome.is_ok()

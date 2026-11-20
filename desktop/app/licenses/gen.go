@@ -1,10 +1,7 @@
 //go:build ignore
 
-// gen writes licenses.json, the bundle the licenses package embeds:
-// RC2FX_LICENSES_JSON names the generated file,
-// and with RC2FX_RELEASE_BUILD=1 a valid one is required. Without one, a
-// development build embeds the placeholder.
-//
+// Writes licenses.json for go:embed. Reads RC2FX_LICENSES_JSON (required when
+// RC2FX_RELEASE_BUILD=1) or falls back to the dev placeholder.
 // Run with `go generate ./app/licenses` from desktop/.
 package main
 

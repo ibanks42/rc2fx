@@ -1,8 +1,5 @@
 package edit
 
-// The parameters the editor's controls set, how each shows its
-// value, and the lookahead figures.
-
 import (
 	"fmt"
 	"math"
@@ -12,7 +9,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// Parameter is one value a control sets.
+// Parameter identifies an editable DSP control.
 type Parameter int
 
 const (
@@ -39,15 +36,14 @@ const (
 	ParameterQ
 )
 
-// Description is a parameter's label, unit, range, step and whether its
-// slider is logarithmic.
+// Description holds UI metadata for a Parameter.
 type Description struct {
 	Label, Unit    string
 	Min, Max, Step float64
 	Log            bool
 }
 
-// Describe is the parameter's label, unit, range, step and scale.
+// Describe returns the label, unit, bounds, step size, and slider scale for p.
 func (p Parameter) Describe() Description {
 	d := func(label, unit string, min, max, step float64, log bool) Description {
 		return Description{label, unit, min, max, step, log}
@@ -98,7 +94,7 @@ func (p Parameter) Describe() Description {
 	}
 }
 
-// Decimals is the decimal places that show a value to step.
+// Decimals returns the number of decimal places needed to display step.
 func Decimals(step float64) int {
 	switch {
 	case step >= 1.:
@@ -112,14 +108,12 @@ func Decimals(step float64) int {
 	}
 }
 
-// Format is `format!("{value:.decimals$}")`, a value as its text field holds
-// it.
+// Format formats value with fixed decimal places for text fields.
 func Format(value float64, decimals int) string {
 	return strconv.FormatFloat(value, 'f', decimals, 64)
 }
 
-// Fraction is where value sits along a slider
-// from min to max, 0 to 1, on its scale.
+// Fraction maps value into [0, 1] along a linear or logarithmic slider range.
 func Fraction(value, min, max float64, log bool) float32 {
 	value = math.Min(math.Max(value, min), max)
 	var span float64
@@ -134,7 +128,7 @@ func Fraction(value, min, max float64, log bool) float32 {
 	return float32(span)
 }
 
-// Hz is a frequency as the editor shows it: "80 Hz", "3.5 kHz", "12.5 kHz".
+// Hz formats a frequency for display (e.g. "80 Hz", "3.5 kHz", "12.5 kHz").
 func Hz(value float64) string {
 	if value >= 1000. {
 		k := value / 1000.
@@ -149,7 +143,7 @@ func Hz(value float64) string {
 	return fmt.Sprintf("%.0f Hz", value)
 }
 
-// Display is a value with its unit, the way the editor shows it.
+// Display formats value with its unit and a typographic minus sign.
 func (p Parameter) Display(value float64) string {
 	desc := p.Describe()
 	var text string
@@ -178,9 +172,8 @@ func (p Parameter) Display(value float64) string {
 	return strings.ReplaceAll(text, "-", "\u2212")
 }
 
-// DefaultValue is what a new channel or band starts with (the core's own
-// defaults). The gate's separate settings return to what its strength
-// stands for.
+// DefaultValue returns the reset value for p on target. Individual gate
+// parameters reset to the shape derived from the target's current gate strength.
 func (p Parameter) DefaultValue(target *core.Target) float64 {
 	fresh := core.NewTarget("default", "default", target.Kind, target.Channels)
 	band := core.NewBand("default")
@@ -231,7 +224,6 @@ func (p Parameter) DefaultValue(target *core.Target) float64 {
 	}
 }
 
-// bandAt is target's band index on channel, nil when there is none.
 func bandAt(target *core.Target, channel core.Channel, band int) *core.Band {
 	bands := target.EQ.ChannelMut(channel)
 	if band < 0 || band >= len(*bands) {
@@ -240,8 +232,7 @@ func bandAt(target *core.Target, channel core.Channel, band int) *core.Band {
 	return &(*bands)[band]
 }
 
-// Get is the parameter's value in target (band index band on channel for
-// the band's own settings).
+// Get reads the parameter's current value from target (using channel and band for EQ band params).
 func (p Parameter) Get(target *core.Target, channel core.Channel, band int) float64 {
 	switch p {
 	case ParameterCutoff:
@@ -302,8 +293,7 @@ func (p Parameter) Get(target *core.Target, channel core.Channel, band int) floa
 	}
 }
 
-// Set sets the parameter in target; a band setting with no such band does
-// nothing.
+// Set writes value into target; out-of-range EQ band indices are ignored.
 func (p Parameter) Set(target *core.Target, channel core.Channel, band int, value float64) {
 	switch p {
 	case ParameterCutoff:
@@ -357,16 +347,15 @@ func (p Parameter) Set(target *core.Target, channel core.Channel, band int, valu
 	}
 }
 
-// ParseValue reads a typed value as a decimal float (inf and nan parse;
-// the editor refuses them). Go's ParseFloat also takes hexadecimal floats and
-// digit underscores, which are refused here.
+// ParseValue parses a decimal float from text, rejecting Go's hex float and
+// digit-underscore syntax. Callers are responsible for rejecting non-finite values.
 func ParseValue(text string) (float64, bool) {
 	if strings.ContainsAny(text, "xX_") {
 		return 0, false
 	}
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
-		// Out of range gives ±inf, which the caller refuses as not finite.
+		// Overflow returns ±Inf, which the caller rejects as non-finite.
 		if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
 			return value, true
 		}
@@ -375,9 +364,7 @@ func ParseValue(text string) (float64, bool) {
 	return value, true
 }
 
-// Parameters is which controls an effect's editor shows, in order.
-// advancedGate is the target's custom voice gate, and
-// hasBands whether the channel's EQ has any band.
+// Parameters returns the ordered list of controls shown for effect.
 func Parameters(effect core.Effect, advancedGate, hasBands bool) []Parameter {
 	switch effect {
 	case core.EffectHighpass:
@@ -402,17 +389,15 @@ func Parameters(effect core.Effect, advancedGate, hasBands bool) []Parameter {
 	}
 }
 
-// Reported is the mixer's own report for one path: the latency it reports
-// there and the lookahead it runs there. Either is nil while the app has no
-// fresh report (offline, or nothing applied yet).
+// Reported holds the mixer's reported latency and active lookahead for a path.
+// Either field is nil when no live report is available.
 type Reported struct {
 	LatencySamples *uint32
 	LiveLookahead  *uint8
 }
 
-// AfterApplying is what the mixer would report for choice: its reported
-// figure moved by whole hops when the choice differs from the live one, so
-// a draft is shown as the exact latency it would bring.
+// AfterApplying projects the latency in samples for choice by shifting the
+// mixer's reported latency by the hop difference from the active lookahead.
 func (r Reported) AfterApplying(choice uint8) (uint32, bool) {
 	if r.LiveLookahead == nil || r.LatencySamples == nil {
 		return 0, false
@@ -421,17 +406,13 @@ func (r Reported) AfterApplying(choice uint8) (uint32, bool) {
 	return uint32(max(int64(*r.LatencySamples)+steps*int64(core.DFNHopSamples), 0)), true
 }
 
-// Relative is a choice's cost against reference (what the mixer runs, or
-// the draft while it has no report), in samples: +240 for one hop more,
-// −240 for one less.
+// Relative returns the sample delta between choice and reference (±240 per hop).
 func (r Reported) Relative(choice, reference uint8) int32 {
 	return int32(int64(choice)-int64(reference)) * int32(core.DFNHopSamples)
 }
 
-// LookaheadFigure is the figure beside the lookahead choices: the mixer's
-// reported latency, and what it would be once a different draft is applied.
-// Empty when there is no report to state (the cards show the relative cost
-// then).
+// LookaheadFigure formats the absolute latency figure next to the lookahead
+// selector, or "" when no live report is available.
 func LookaheadFigure(reported Reported, draft uint8) string {
 	after, ok := reported.AfterApplying(draft)
 	if !ok {
@@ -444,9 +425,8 @@ func LookaheadFigure(reported Reported, draft uint8) string {
 	return fmt.Sprintf("%.1f ms after applying", ms)
 }
 
-// LookaheadCost is a card's cost line: "now" for the reference choice,
-// "+5.0 ms" or "−5.0 ms" for the other, and empty while neither a report
-// nor a draft says which way.
+// LookaheadCost formats the relative latency label for a lookahead card
+// ("now", "+5.0 ms", or "−5.0 ms") against the live setting or draft.
 func LookaheadCost(reported Reported, choice, draft uint8) string {
 	reference := draft
 	if reported.LiveLookahead != nil {
@@ -460,8 +440,7 @@ func LookaheadCost(reported Reported, choice, draft uint8) string {
 	return strings.ReplaceAll(fmt.Sprintf("%+.1f ms", ms), "-", "\u2212")
 }
 
-// CompressorOut is the compressor's static curve: the output level for an
-// input level db, both in dBFS.
+// CompressorOut evaluates the compressor's static transfer curve in dBFS.
 func CompressorOut(compressor core.Compressor, db float64) float64 {
 	threshold, ratio, makeup := compressor.Threshold, math.Max(compressor.Ratio, 1.), compressor.Makeup
 	out := db
@@ -471,8 +450,7 @@ func CompressorOut(compressor core.Compressor, db float64) float64 {
 	return math.Min(out+makeup, 0.)
 }
 
-// LiveInputDB is the reported input peak as a level on the curve, -60 to 0
-// dBFS.
+// LiveInputDB converts a linear peak value into a clamped [-60, 0] dBFS level.
 func LiveInputDB(peak float64) float64 {
 	return math.Min(math.Max(20.*math.Log10(math.Max(peak, 1e-9)), -60.), 0.)
 }

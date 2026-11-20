@@ -1,7 +1,5 @@
 package installflow
 
-// What the helper is sent and holds, and when the page asks for access.
-
 import (
 	"testing"
 

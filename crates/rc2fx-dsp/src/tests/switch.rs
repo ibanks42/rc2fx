@@ -1,13 +1,8 @@
-//! Live changes to the highpass, compressor and limiter while a steady tone
-//! or a constant goes through. A click is a step from one sample to the next
-//! that the settled audio never takes, so each test asserts that no step
-//! after the first change is larger than the largest settled step (times a
-//! small margin, plus a floor for a constant, whose settled steps are 0), and
-//! that the output ends where a processor that had the final settings all
-//! along ends.
+//! Click-freedom tests for live highpass, compressor, limiter, and order edits.
 //!
-//! Each of these changes used to be a step: the stage was added or removed,
-//! or its gain curve moved, between one block and the next.
+//! Asserts that no sample-to-sample step after a live change exceeds the
+//! settled max step (plus a small margin, or a floor for DC input) and that
+//! the tail converges to a processor initialized with the final settings.
 use super::super::*;
 
 /// The mixer's period: settings change between blocks of this length.

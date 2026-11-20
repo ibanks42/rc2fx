@@ -1,20 +1,14 @@
-/* Take an immutable snapshot of a live RC2FX jackd error ring, on the device.
+/* Snapshot a live RC2FX jackd error ring on the device:
+ *   rc2fx_jackerr_snapshot RING_OR_DIRECTORY OUT
  *
- *     rc2fx_jackerr_snapshot RING_OR_DIRECTORY OUT
+ * Accepts a ring file or a directory (picks newest ring-<pid>-<created>.ring).
+ * Reads slots read-only via their seqlock (counting unpublished, overwritten,
+ * or torn slots instead of copying them) and atomically renames OUT.partial
+ * to OUT. Decode with `./xtask mixer xruns` or tests/jackerr_ring.py.
  *
- * RING_OR_DIRECTORY is a ring file, or a directory whose newest
- * ring-<pid>-<created>.ring is taken. Each slot is read with its sequence
- * lock (acquire, atomic data loads, fence, recheck); a slot not holding a
- * complete record for its index is counted (unpublished or dropped,
- * overwritten by a later lap, or changed while read), never copied. OUT is
- * written whole (OUT.partial, then rename). Read-only on the ring; never
- * writes to it. Decode OUT with `./xtask mixer xruns` (or tests/jackerr_ring.py).
- *
- * OUT: "RC2FXJS1", u32 version 1, u32 record size 96, the ring header's
- * fields as read (pid, created, claimed, dropped, unknown, calls), the
- * snapshot time (0 when the clock could not be read), first index, end index, and counts (stable, unpublished,
- * overwritten, torn), then each stable record as 96 bytes (its seq field
- * holding its index).
+ * Output format: 128-byte header ("RC2FXJS1", version 1, record_size 96, ring
+ * counters, snapshot_ns or 0 on clock error, window indices, slot counts)
+ * followed by `stable` 96-byte records (seq replaced by record index).
  */
 #define _GNU_SOURCE
 #include "rc2fx_jackerr.h"

@@ -2,14 +2,14 @@
 
 package ext2fs
 
-// Without cgo there is no libext2fs: everything reports that.
+// Stub implementation used when built without cgo.
 
 var unavailable = invalid("this build has no libext2fs (built without cgo)")
 
-// Filesystem is an open ext4 filesystem; none can be opened in this build.
+// Filesystem is a stub when built without cgo.
 type Filesystem struct{}
 
-// Open reports that this build has no libext2fs.
+// Open always fails when built without cgo.
 func Open(device string, offset uint64, writable bool) (*Filesystem, error) {
 	return nil, unavailable
 }

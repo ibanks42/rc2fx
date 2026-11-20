@@ -1,8 +1,7 @@
-"""Host tests of gui_pacing.c: python3 mixer/gui/test_gui_pacing.py
+"""Host tests for gui_pacing.c (python3 mixer/gui/test_gui_pacing.py).
 
-Builds the module with -DRC2FX_PACING_TEST (sites matched by symbol name in
-gui_pacing_test.cpp instead of the pinned GUI offsets; no executable hash) and
-runs the test program under LD_AUDIT. No device.
+Compiles the module with -DRC2FX_PACING_TEST (matching sites by symbol name
+in gui_pacing_test.cpp instead of pinned offsets) and runs it under LD_AUDIT.
 """
 import os
 import platform
@@ -79,8 +78,7 @@ def passes(stdout):
 
 
 def stats_lines(stats):
-    """The stats lines (start, first-pass, stats, exit), without the "dirty-"
-    paint totals that follow each of them outside quiet mode."""
+    """Return stats lines (start, first-pass, stats, exit), excluding dirty-* totals."""
     return [x for x in stats if x[0] != 'sha-ok' and not x[0].startswith('dirty-')]
 
 
@@ -485,8 +483,7 @@ def family():
 
 
 class RotationTests(unittest.TestCase):
-    """gui_pacing.c's log rotation: a full log becomes <log>.1, a fresh one
-    starts, one thread rotates at a time and the others drop their line."""
+    """Verify log rotation: full logs rotate to <log>.1 under single-rotator concurrency."""
 
     @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
     def test_a_full_log_rotates_and_every_line_survives(self):
@@ -538,11 +535,8 @@ class RotationTests(unittest.TestCase):
 
     @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
     def test_a_rotation_never_hands_its_descriptor_to_the_gui(self):
-        # The rotation must not close the live log descriptor: another thread
-        # of the GUI that opens a file in that window would get the number and
-        # the next log line would land in its file. So a third thread opens,
-        # appends to and closes a file of its own throughout the run, and that
-        # file must hold nothing but its own lines.
+        # Rotation must not close log_fd while other GUI threads open files, or
+        # the fd number could be reused and receive an in-flight log write.
         canary = Path(BUILD.name) / 'canary'
         out, _ = run('observe', 'race', '400',
                      extra={'RC2FX_GUI_PACING_TEST_LOG_CAP': '900', 'RC2FX_TEST_CANARY': str(canary)})
@@ -555,11 +549,8 @@ class RotationTests(unittest.TestCase):
 
 
     def test_the_rotation_never_closes_the_live_descriptor(self):
-        # The runtime test above cannot force the few-instruction window in
-        # which an old implementation's stale descriptor would hit the file
-        # the GUI opened (verified: it passes on that implementation), so pin
-        # the invariant in the source: the new log is opened aside and dup3'd
-        # over the live number, which is then never closed.
+        # Pin the dup3-over-live-fd invariant in source since the race window is
+        # too narrow to trigger reliably at runtime.
         source = (HERE / 'gui_pacing.c').read_text()
         body = source[source.index('static void rotate_log(void) {'):]
         body = body[:body.index('\n}\n')]
@@ -570,10 +561,7 @@ class RotationTests(unittest.TestCase):
 
 
 class RotateTests(unittest.TestCase):
-    """rotate/rotate.c against its scalar reference. On an aarch64 host this
-    runs the NEON path; elsewhere both sides are the scalar code, and
-    ProductionPlanTests runs the NEON path under qemu-aarch64 when zig and
-    qemu are installed."""
+    """Test rotate/rotate.c against its scalar reference (NEON runs on aarch64 or under qemu)."""
 
     def test_rotation_matches_the_scalar_reference_whole_and_in_strips(self):
         program = Path(BUILD.name) / 'test_rotate'
@@ -585,9 +573,7 @@ class RotateTests(unittest.TestCase):
 
 
 class CpuPathTests(unittest.TestCase):
-    """Fixed CPU rotation of large redraws; small damage still uses GE2D. The
-    host build takes the CPU path only with RC2FX_TEST_CPU_ROTATE, so the same
-    module run without it is the GE2D reference the CPU path is compared with."""
+    """CPU rotation for large redraws vs GE2D for small damage (gated by RC2FX_TEST_CPU_ROTATE on host)."""
     @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
     def test_failed_medium_token_refreshes_damage_on_reuse(self):
         for direction in ('cw', 'ccw'):
@@ -853,11 +839,8 @@ A64 = ['-target', 'aarch64-linux-musl', '-mcpu=cortex_a53', '-O2', '-static']
 
 
 class ProductionPlanTests(unittest.TestCase):
-    """gui_partial.c as the mixer builds it, driven by partial_plan_test.c: no
-    RC2FX_PACING_TEST, so the CPU rule is always on. The program checks every
-    destination against the rotated source after every conversion and exits
-    non-zero on a difference. It needs no paint stand-ins, so it runs on any
-    Linux host, and under qemu-aarch64 with the NEON rotation."""
+    """Test gui_partial.c built without RC2FX_PACING_TEST via partial_plan_test.c
+    (CPU path always enabled; also runs NEON under qemu-aarch64 when available)."""
 
     WARN = ['-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function']
     BUILDS = {'plan3': []}
@@ -1247,10 +1230,8 @@ QUIET_EXIT = dict(AT_EXIT, RC2FX_GUI_PACING_QUIET='1')
 
 @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
 class CounterTests(unittest.TestCase):
-    """The plan-shape and size fields at the end of the counters line, in
-    quiet mode as the mixer runs. RC2FX_TEST_COUNTERS_AT_EXIT adds one more
-    counters line when the program exits, so the totals cover every
-    conversion and can be compared with the fake GE2D's own totals."""
+    """Verify counters-line fields in quiet mode; RC2FX_TEST_COUNTERS_AT_EXIT
+    emits a final line on exit for exact comparison against fake GE2D totals."""
 
     def last(self, lines):
         counters = [f for k, f in lines if k == 'counters']
@@ -1483,10 +1464,7 @@ def plan_run(build, *args, runner=()):
 
 
 class ProductionCounterTests(unittest.TestCase):
-    """The counters line of gui_partial.c as the mixer builds it (the CPU rule
-    always on), from partial_plan_test.c, which prints the line after its last
-    conversion and keeps its own tallies of the paths and of the stand-in
-    GE2D's jobs and pixels."""
+    """Verify counters-line totals from partial_plan_test.c with the CPU path always enabled."""
 
     # The fields that hold a clock reading, a duration or the process id.
     TIMED = {'pid', 't', 'ge2d_us', 'cpu_us', 'cpu_max_us', 'cpu_full_us', 'cpu_medium_us', 'cpu_stage_us',

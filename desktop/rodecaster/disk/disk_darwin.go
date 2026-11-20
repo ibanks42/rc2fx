@@ -1,8 +1,7 @@
 package disk
 
-// macOS: the I/O registry (through Apple's ioreg) ties a whole disk to the
-// mixer's USB device; diskutil unmounts its volumes; the raw device node
-// /dev/rdiskN carries the I/O.
+// macOS raw disk access: ioreg maps USB devices to BSD whole-disk names,
+// diskutil unmounts their volumes, and I/O goes through /dev/rdiskN.
 
 import (
 	"errors"
@@ -48,7 +47,7 @@ func open(info Info, write bool) (Disk, error) {
 	if !ok || !macWholeName(name) {
 		return nil, fmt.Errorf("%q is not a whole disk on this Mac", info.Path)
 	}
-	// Disk numbers are reused: make sure this one is still the mixer.
+	// Re-verify the disk number still belongs to the mixer since BSD names get reused.
 	if err := macStillMixer(info); err != nil {
 		return nil, err
 	}
@@ -58,18 +57,15 @@ func open(info Info, write bool) (Disk, error) {
 	}
 	flags |= unix.O_CLOEXEC
 
-	// Check the rights before unmounting anything, so a run without them
-	// leaves the user's volumes alone. The kernel checks permission before
-	// the disk driver sees the open, so EBUSY here (volumes still mounted)
-	// means the rights are there.
+	// Probe permissions before unmounting so an unprivileged call doesn't
+	// disturb mounted volumes. The kernel checks permissions before IOKit
+	// returns EBUSY for mounted slices, so EBUSY here confirms we have access.
 	if fd, err := unix.Open(info.Path, flags, 0); err == nil {
 		unix.Close(fd)
 	} else if !errors.Is(err, unix.EBUSY) {
 		return nil, macOpenError(info.Path, err)
 	}
 
-	// unmountDisk unmounts only this disk's volumes. With nothing mounted it
-	// succeeds as well.
 	if out, err := exec.Command(macDiskutil, "unmountDisk", "/dev/"+name).CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
 		lower := strings.ToLower(msg)
@@ -81,10 +77,9 @@ func open(info Info, write bool) (Disk, error) {
 		}
 	}
 
-	// No O_EXLOCK: devfs implements no advisory locks, so open(2) with it
-	// fails (ENOTSUP) on a device node. Exclusion comes from IOKit instead:
-	// a writable open of a whole disk is refused (EBUSY) while any of its
-	// volumes is mounted or another writer has it open.
+	// Don't pass O_EXLOCK; devfs doesn't support advisory locks and returns
+	// ENOTSUP. IOKit already enforces exclusivity by returning EBUSY on a
+	// writable open while any slice is mounted or another writer holds it.
 	fd, err := unix.Open(info.Path, flags, 0)
 	if err != nil {
 		return nil, macOpenError(info.Path, err)
@@ -97,8 +92,6 @@ func open(info Info, write bool) (Disk, error) {
 	return d, nil
 }
 
-// macStillMixer asks the registry again whether info.Path is a mixer of
-// the same size.
 func macStillMixer(info Info) error {
 	found, err := find()
 	if err != nil {
@@ -131,11 +124,8 @@ type macRawDisk struct {
 	path    string
 }
 
-// checkGeometry confirms that the opened device has 512-byte blocks and
-// the size the registry reported.
 func (d *macRawDisk) checkGeometry() error {
-	// The kernel writes a uint32 into the int; macOS is little-endian on
-	// every CPU it runs on, so the value lands in the low bytes.
+	// DKIOCGETBLOCKSIZE writes a uint32 into the int; all macOS targets are little-endian.
 	block, err := unix.IoctlGetInt(d.fd, macDKIOCGetBlockSize)
 	if err != nil {
 		return fmt.Errorf("could not read the block size of %s: %w", d.path, err)
@@ -155,8 +145,6 @@ func (d *macRawDisk) checkGeometry() error {
 
 func (d *macRawDisk) Sectors() uint64 { return d.sectors }
 
-// span checks that I/O is whole sectors at a sector offset and returns how
-// much of it lies on the disk.
 func (d *macRawDisk) span(n int, off int64) (int, error) {
 	if d.fd < 0 {
 		return 0, os.ErrClosed
@@ -228,9 +216,8 @@ func (d *macRawDisk) WriteAt(p []byte, off int64) (int, error) {
 	return done, nil
 }
 
-// Sync: the raw device keeps no cache on this side, so a write has reached
-// the device's driver when Pwrite returns; fsync covers the vnode, and
-// DKIOCSYNCHRONIZECACHE asks the device to commit its own write cache.
+// Sync flushes the vnode and asks the device to commit its write cache
+// (/dev/rdiskN is unbuffered on the host side).
 func (d *macRawDisk) Sync() error {
 	if d.fd < 0 {
 		return os.ErrClosed
@@ -241,8 +228,7 @@ func (d *macRawDisk) Sync() error {
 	if err := unix.Fsync(d.fd); err != nil {
 		return fmt.Errorf("flushing %s: %w", d.path, err)
 	}
-	// Devices without a cache command answer "not supported": nothing is
-	// held back in that case.
+	// Devices without a write cache return ENOTSUP/ENOTTY, which is fine.
 	if err := unix.IoctlSetInt(d.fd, macDKIOCSynchronizeCache, 0); err != nil &&
 		!errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.ENOTTY) {
 		return fmt.Errorf("flushing the device cache of %s: %w", d.path, err)
@@ -250,8 +236,7 @@ func (d *macRawDisk) Sync() error {
 	return nil
 }
 
-// Close does not remount: the volumes come back when the mixer restarts or
-// is plugged in again.
+// Close releases the fd without remounting; volumes come back on replug or reboot.
 func (d *macRawDisk) Close() error {
 	if d.fd < 0 {
 		return nil

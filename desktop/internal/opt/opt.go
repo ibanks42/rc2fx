@@ -1,8 +1,7 @@
-// Package opt holds the helpers for optional values, which the desktop code
-// keeps as pointers that may be nil.
+// Package opt provides helpers for optional pointer values.
 package opt
 
-// Equal is whether a and b are both nil, or both set to equal values.
+// Equal reports whether a and b are both nil or point to equal values.
 func Equal[T comparable](a, b *T) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -10,8 +9,7 @@ func Equal[T comparable](a, b *T) bool {
 	return *a == *b
 }
 
-// Clone is a new pointer to a copy of *p, or nil when p is nil. The copy is
-// shallow: slices and maps inside T are shared.
+// Clone returns a shallow copy of *p, or nil if p is nil.
 func Clone[T any](p *T) *T {
 	if p == nil {
 		return nil

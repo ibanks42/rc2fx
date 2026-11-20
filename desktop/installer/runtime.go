@@ -1,7 +1,6 @@
 package installer
 
-// The RC2FX runtime bundle, the files it adds to the image, settings
-// backups and readiness.
+// RC2FX runtime bundle assembly, settings backups, and mixer readiness checks.
 
 import (
 	"fmt"
@@ -17,15 +16,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// PayloadNames are the payload's files, in the order an embedded envelope
-// carries them.
 var PayloadNames = embed.PayloadNames
 
-// Bundle is a payload as name → bytes.
 type Bundle = map[string][]byte
 
-// BundleFiles reads the runtime bundle from `runtime/` (a release folder)
-// or `target/mixer` (a source checkout), with scripts from `mixer/scripts`.
 func BundleFiles(root string) (Bundle, error) {
 	files, err := embed.Read(root, false)
 	if err != nil {
@@ -38,7 +32,6 @@ func BundleFiles(root string) (Bundle, error) {
 	return out, nil
 }
 
-// digest is what a prepared firmware records as its RC2FX runtime.
 func digest(files Bundle) string {
 	var manifest strings.Builder
 	for _, n := range PayloadNames {
@@ -47,7 +40,6 @@ func digest(files Bundle) string {
 	return archive.Sum([]byte(manifest.String()))
 }
 
-// view is the payload's files in pinned order, for the shared checks.
 func view(files Bundle) embed.Files {
 	out := make(embed.Files, 0, len(PayloadNames))
 	for _, n := range PayloadNames {
@@ -56,8 +48,6 @@ func view(files Bundle) embed.Files {
 	return out
 }
 
-// catalogOf is the catalog this payload supports, after the shared payload
-// checks.
 func catalogOf(files Bundle) (*Catalog, error) {
 	if err := embed.Validate(view(files)); err != nil {
 		return nil, Error(err.Error())
@@ -69,7 +59,6 @@ func catalogOf(files Bundle) (*Catalog, error) {
 	return &catalog, nil
 }
 
-// profileOf is the runtime profile the mixer's state is judged against.
 func profileOf(files Bundle) RuntimeProfile {
 	var catalog Catalog
 	if sjson.Unmarshal(files["firmware-profiles.json"], &catalog) != nil {
@@ -86,7 +75,6 @@ func profileOf(files Bundle) RuntimeProfile {
 	return RuntimeProfile{}
 }
 
-// service is whether RC2FX's state says this payload's runtime is ready.
 func service(files Bundle, state []byte) Service {
 	profile := profileOf(files)
 	if why := readinessError(state, &profile); why != "" {
@@ -95,10 +83,8 @@ func service(files Bundle, state []byte) Service {
 	return Service{Kind: ServiceReady}
 }
 
-// imageEntries is what RC2FX adds to the root filesystem: the same layout
-// `install.sh` creates on a running mixer, with autostart, and optional
-// saved settings. Returns the entries and the runtime digest (recorded as
-// bundle.sha256).
+// imageEntries builds the rootfs entries added to official firmware (matching
+// install.sh's on-device layout), returning the entries and bundle digest.
 func imageEntries(files Bundle, profile *Profile, settings []byte) ([]archive.Entry, string, error) {
 	c, err := catalogOf(files)
 	if err != nil {
@@ -166,21 +152,15 @@ func imageEntries(files Bundle, profile *Profile, settings []byte) ([]archive.En
 	if settings != nil {
 		entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "opt/rc2fx/data/state.json", Mode: 0o600, Data: settings})
 	}
-	// RØDE's launcher starts the mixer by name with /usr/sbin ahead of
-	// /usr/bin, so this runs in its place and execs the stock executable with
-	// RC2FX injected from the first mixer start of every boot.
+	// RØDE's launcher resolves rc_audio_mixer and rc_gui_juce via PATH with
+	// /usr/sbin ahead of /usr/bin, so these shims intercept startup cleanly.
 	entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "usr/sbin/rc_audio_mixer", Mode: 0o755, Data: files["rc2fx-shim.sh"]})
-	// The same for RØDE's display loop, which starts rc_gui_juce by name with
-	// /usr/sbin first: the GUI shim hands over to `rc2fx.sh gui-launch`,
-	// which always execs the stock GUI, with the partial-conversion module
-	// only when every check passes.
 	entries = append(entries, archive.Entry{Kind: archive.EntryFile, Path: "usr/sbin/rc_gui_juce", Mode: 0o755, Data: files["rc2fx-gui-shim.sh"]})
 	return entries, d, nil
 }
 
-// backupSettings is the settings file a backup saved, unchanged since. The
-// record is the desktop user's to edit, so its path must name a file
-// directly in work.
+// backupSettings reads and verifies a backed-up settings file. The path must
+// stay directly inside work because installer.json is user-writable.
 func backupSettings(work string, b *BackupRecord) ([]byte, error) {
 	path := b.File
 	if filepath.Dir(path) != filepath.Clean(work) || filepath.Base(path) == "" || strings.HasSuffix(path, string(filepath.Separator)) ||
@@ -219,8 +199,6 @@ func checkSettings(data []byte) error {
 	return nil
 }
 
-// saveSettings keeps RC2FX's settings file, read over USB by the app, for
-// the mixer serial.
 func (e *Engine) saveSettings(serial, settings string) (*BackupRecord, error) {
 	if serial == "" {
 		return nil, Error("connect the mixer so its settings can be matched to it")

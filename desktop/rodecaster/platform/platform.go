@@ -1,5 +1,5 @@
-// Package platform is operating-system USB access: HID control interfaces
-// and update volumes.
+// Package platform abstracts OS-level USB HID and mass-storage access for
+// RØDECaster mixers.
 package platform
 
 import (
@@ -11,26 +11,20 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
-// HID is one HID top-level collection of a RØDE device.
+// HID describes a RØDE HID top-level collection.
 type HID struct {
-	Path   string `json:"path"`
-	Serial string `json:"serial"`
-	PID    uint16 `json:"pid"`
-	// Usage is the HID usage page of the top-level collection.
-	Usage  uint16 `json:"usage"`
-	Input  int    `json:"input"`
-	Output int    `json:"output"`
-	// Control: the descriptor declares the application's control reports
-	// (see SetControlProbe), so its USB layout is live on the mixer.
-	Control bool `json:"control"`
-	// Release is the USB device release number (`bcdDevice`). RØDE sets it
-	// from the installed firmware version: 1.7.7 is `0x0177`.
-	Release uint16 `json:"release"`
+	Path    string `json:"path"`
+	Serial  string `json:"serial"`
+	PID     uint16 `json:"pid"`
+	Usage   uint16 `json:"usage"` // HID usage page
+	Input   int    `json:"input"`
+	Output  int    `json:"output"`
+	Control bool   `json:"control"` // true when SetControlProbe matched custom control reports
+	Release uint16 `json:"release"` // USB bcdDevice (e.g. 0x0177 for firmware 1.7.7)
 }
 
-// ControlProbe recognizes an application's own HID control reports, which
-// fill HID.Control. Descriptor reads a HID report descriptor (Linux and
-// macOS); OutputID and InputID are the report IDs Windows looks for.
+// ControlProbe detects application-specific HID control reports for HID.Control.
+// Linux/macOS inspect the raw report descriptor; Windows checks OutputID/InputID.
 type ControlProbe struct {
 	Descriptor func(descriptor []byte) bool
 	OutputID   byte
@@ -43,8 +37,7 @@ var probe struct {
 	value ControlProbe
 }
 
-// SetControlProbe registers the application's control-report probe. Without
-// one, HID.Control is always false.
+// SetControlProbe registers the probe used to populate HID.Control.
 func SetControlProbe(p ControlProbe) {
 	probe.Lock()
 	defer probe.Unlock()
@@ -57,14 +50,11 @@ func controlProbe() (ControlProbe, bool) {
 	return probe.value, probe.set
 }
 
-// declaresControl is whether descriptor declares the registered control
-// reports.
 func declaresControl(descriptor []byte) bool {
 	p, ok := controlProbe()
 	return ok && p.Descriptor != nil && p.Descriptor(descriptor)
 }
 
-// Volume is a mass-storage volume.
 type Volume struct {
 	Path   string `json:"path"`
 	Device string `json:"device"`
@@ -74,19 +64,20 @@ type Volume struct {
 	Free   uint64 `json:"free"`
 }
 
-// Reports is an open HID report channel. Close it when done.
+// Reports is an open HID report channel.
 type Reports interface {
 	Write(report []byte, timeout time.Duration) (int, error)
 	Read(buf []byte, timeout time.Duration) (int, error)
 	Close() error
 }
 
-// Platform is the operating system's USB access.
+// Platform provides OS-specific USB HID and update-volume operations.
 type Platform interface {
 	Inventory() ([]HID, error)
 	Open(hid *HID) (Reports, error)
-	// OpenControl: ordinary HID control does not require update-volume
-	// administration. Platforms without that distinction return Open.
+	// OpenControl opens a HID channel for normal control traffic without
+	// requiring update-volume privileges (aliases Open on platforms without
+	// that split).
 	OpenControl(hid *HID) (Reports, error)
 	Volumes() ([]Volume, error)
 	Mount(volume Volume) (Volume, error)
@@ -94,41 +85,27 @@ type Platform interface {
 	Eject(volume *Volume) error
 }
 
-// ReportDisks is implemented by platforms that can see a mixer's USB disk
-// in normal mode, where the storage fix's script offers its result
-// (rodecaster/carrier). Eject and MediaPresent work on these disks too.
-// Platforms without it read that result from the update drive only.
+// ReportDisks is an optional Platform extension for OSes that can inspect the
+// mixer's normal-mode USB mass-storage LUN (used by the carrier script to
+// report results without entering update mode). Eject and MediaPresent also
+// accept volumes returned by ReportDisks.
 type ReportDisks interface {
-	// ReportDisks lists the normal-mode USB disks of RØDE mixers that hold
-	// a medium smaller than any update drive.
 	ReportDisks() ([]Volume, error)
-	// ReadReport reads at most limit bytes of the regular file name in the
-	// root of report disk v, mounting it read-only for the read when
-	// nothing has it mounted.
 	ReadReport(v Volume, name string, limit int64) ([]byte, error)
-	// WriteReport writes data as the regular file name in the root of
-	// report disk v and flushes it to the disk: where the disk is already
-	// mounted, or through a private read-write mount that is removed again.
-	// It refuses a disk that is no longer the mixer's disk v names.
 	WriteReport(v Volume, name string, data []byte) error
 }
 
-// USBPermission is the start of the error the app gets when Linux refuses
-// it the mixer's USB 1 control interface (no udev rule). The app offers to
-// install the helper's USB rule when it sees exactly this.
+// USBPermission prefixes Linux hidraw permission errors so the desktop UI knows
+// when to offer installing its udev rule.
 const USBPermission = "USB permission required"
 
 const (
-	// minDiskBytes: below this the mass-storage function has no real update
-	// drive behind it.
-	minDiskBytes = 64 << 20
+	minDiskBytes = 64 << 20 // below this there is no real update drive behind the LUN
 	diskBytes    = 560_000 * 512
 )
 
-// UpdateSize is whether size could be an update drive.
 func UpdateSize(size uint64) bool { return size >= minDiskBytes && size <= diskBytes }
 
-// IsUpdatePID is whether pid is any model's USB update mode.
 func IsUpdatePID(pid uint16) bool {
 	for _, m := range model.All {
 		if m.UpdatePID() == pid {
@@ -138,8 +115,8 @@ func IsUpdatePID(pid uint16) bool {
 	return false
 }
 
-// VendorUsage is whether a HID report descriptor declares a vendor-page
-// (0xff00) application collection. Parsing never sends data to the device.
+// VendorUsage parses a HID report descriptor and reports whether it declares a
+// vendor-defined (0xff00) collection.
 func VendorUsage(descriptor []byte) bool {
 	var page uint32
 	var stack []uint32
@@ -189,8 +166,7 @@ func VendorUsage(descriptor []byte) bool {
 	return false
 }
 
-// Bounded counts bytes written to an inner writer, rejecting anything past
-// a limit.
+// Bounded wraps an io.Writer and fails once Remaining bytes are exceeded.
 type Bounded struct {
 	Inner     io.Writer
 	Remaining uint64
@@ -205,7 +181,6 @@ func (b *Bounded) Write(buf []byte) (int, error) {
 	return n, err
 }
 
-// errorf is an error with the user-facing text.
 type platformError string
 
 func (e platformError) Error() string { return string(e) }

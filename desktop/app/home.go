@@ -1,8 +1,5 @@
 package app
 
-// Home, a calm overview of the processed channels, one click from
-// each channel's editor.
-
 import (
 	"cmp"
 	"fmt"
@@ -20,8 +17,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// processedIndexes is indexes into the draft of the paths the mixer
-// processes, in draft order.
+// processedIndexes returns draft indices of paths currently processed by the mixer.
 func (a *App) processedIndexes() []int {
 	state := a.session.Saved
 	if state == nil {
@@ -36,12 +32,10 @@ func (a *App) processedIndexes() []int {
 	return indexes
 }
 
-// homeHeadline is the headline and the sentence under it. Connection,
-// path-change, restart, engine and routing states come from the status
-// line's shared derivation (systemStatus, routingStatus), in its order. "All
-// clear" needs every processed path to report fresh audio: a path that is
-// missing from the meters counts as not fresh. A warning outranks missing
-// audio.
+// homeHeadline returns the overview headline and subtext. System and routing
+// states take precedence (matching the status line). "All clear" requires a
+// fresh meter reading for every processed path, and audio warnings outrank
+// missing audio.
 func (a *App) homeHeadline(processed []int) (string, string) {
 	if label, _, ok := a.systemStatus(); ok {
 		detail := ""
@@ -84,10 +78,8 @@ func (a *App) homeHeadline(processed []int) (string, string) {
 	return "All clear.", fmt.Sprintf("RC2FX is processing %d channel%s.", len(processed), plural(len(processed)))
 }
 
-// homeKey is what Home shows that can change with time alone: the headline,
-// each processed path's freshness and each reported path's, for the
-// overview's bars. The poll compares it every tick, so Home goes stale on its
-// own when meters stop arriving (see poll).
+// homeKey captures the time-dependent parts of the Home view (headline and
+// meter freshness) so the poll loop can detect when meters go stale.
 func (a *App) homeKey() HomeKey {
 	processed := a.processedIndexes()
 	headline, detail := a.homeHeadline(processed)
@@ -107,15 +99,13 @@ func (a *App) homeKey() HomeKey {
 	return HomeKey{V0: headline, V1: detail, V2: fresh}
 }
 
-// animatedPage is whether a page with live lines is on screen: Home or a
-// channel's editor. Indicators move only then; Settings and the installer
-// draw no animated lines.
+// animatedPage reports whether a page containing live level indicators is visible.
 func (a *App) animatedPage() bool {
 	return a.session.Connected && a.nav.BasePageInFront() && a.installer == nil
 }
 
-// levelBar is one overview bar: its view (indicators.go), or drawn still
-// here until the view exists.
+// levelBar embeds the indicator view for an overview bar, falling back to a
+// static draw until the poll loop creates the view.
 func (a *App) levelBar(targetID string, bar levels.Bar) gk.Element {
 	if el, ok := a.embed(indicatorKey{targetID, levels.BarShape(bar)}); ok {
 		return el
@@ -124,12 +114,9 @@ func (a *App) levelBar(targetID string, bar levels.Bar) gk.Element {
 	return levelBarFill(bar, a.overviewLevel(targetID))
 }
 
-// indicator is one level indicator: its view, which animates while it can
-// (indicators.go), or, until the view exists, drawn still here (never
-// both). The still drawing in place has no measured size, so it shows
-// nothing for the one poll (50 ms) it takes to make the view. fresh is the
-// caller's freshMeterFor reading; the view reads it again each time it
-// draws, so it stays current between app renders.
+// indicator embeds the animated indicator view for source, or draws a static
+// fallback until the view exists (never both). The inline fallback has no
+// measured size, so it is blank for the ~50 ms until the poll creates the view.
 func (a *App) indicator(source lineSource, fresh bool, style LineStyle) gk.Element {
 	if el, ok := a.embed(indicatorKey{source.path, levels.LineShape(style)}); ok {
 		return el
@@ -141,7 +128,6 @@ func (a *App) indicator(source lineSource, fresh bool, style LineStyle) gk.Eleme
 	return livePlot(0, 0, 0, lvl, state, style)
 }
 
-// openChannel leaves Home for one channel's editor.
 func (a *App) openChannel(cx *gk.Cx, index int) {
 	a.inputs.selected = nil
 	a.selected = index
@@ -154,8 +140,7 @@ func (a *App) openChannel(cx *gk.Cx, index int) {
 	a.notify(cx)
 }
 
-// overviewLevel is a channel's level for the overview, 0..1, or nil without
-// a fresh reading.
+// overviewLevel returns a channel's meter level in [0, 1], or nil if stale.
 func (a *App) overviewLevel(targetID string) *float32 {
 	if meter, _ := a.freshMeterFor(targetID); meter == nil {
 		return nil
@@ -164,8 +149,8 @@ func (a *App) overviewLevel(targetID string) *float32 {
 	return &l
 }
 
-// overviewChip is what the overview says under a channel: its effects when
-// processed.
+// overviewChip returns the summary label shown below a channel card and whether
+// the channel is processed.
 func (a *App) overviewChip(targetID string) (string, bool) {
 	i := slices.IndexFunc(a.session.Draft, func(t core.Target) bool { return t.ID == targetID })
 	if i < 0 {
@@ -190,7 +175,6 @@ func (a *App) overviewChip(targetID string) (string, bool) {
 	return strings.Join(on, " · "), true
 }
 
-// openSource opens a show source from the overview, as the sidebar does.
 func (a *App) openSource(cx *gk.Cx, sourceID string) {
 	var target string
 	found := false
@@ -210,8 +194,6 @@ func (a *App) openSource(cx *gk.Cx, sourceID string) {
 	a.notify(cx)
 }
 
-// homePage is the overview: a strip per fader in the current show with its
-// live level, then the headphones and outputs. Any of them opens its editor.
 func (a *App) homePage(cx *gk.Cx) gk.Element {
 	processed := a.processedIndexes()
 	headline, detail := a.homeHeadline(processed)
@@ -246,8 +228,8 @@ func (a *App) homePage(cx *gk.Cx) gk.Element {
 			ID(gk.Key("strip", int(source.SourceID))).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openSource(cx, id) }))
 	}
-	// A processed input with no fader in this show (taken out of the show,
-	// or never on one) gets its own row, so it never silently vanishes.
+	// Show processed inputs that aren't assigned to any fader in this show so
+	// they don't silently disappear from the overview.
 	onFaders := make([]string, 0, len(faders))
 	for _, src := range faders {
 		onFaders = append(onFaders, src.TargetID)
@@ -286,14 +268,11 @@ func (a *App) homePage(cx *gk.Cx) gk.Element {
 	return page.Child(sectionLabel("HEADPHONES AND OUTPUTS")).Child(outputs)
 }
 
-// sectionLabel is a small heading between the overview's groups.
 func sectionLabel(text string) gk.DivEl {
 	return gk.Div(s.FontSemibold).Mt(px(SectionGap)).Mb(px(10)).TextSize(px(11)).TextColor(rgb(Faint)).
 		Child(txt(text))
 }
 
-// overviewCard is a clickable overview card; processed ones get a tinted
-// border. The caller gives it its id.
 func overviewCard(processed bool) gk.DivEl {
 	border := surface().Line
 	if processed {
@@ -304,8 +283,6 @@ func overviewCard(processed bool) gk.DivEl {
 		Hover(hover().Bg(rgb(surface().Raised)).BorderColor(rgb(surface().LineStrong)))
 }
 
-// cardName is a channel name on the overview, with a dot when it's
-// processed.
 func cardName(name string, processed bool) gk.DivEl {
 	d := gk.HFlex(s.ItemsCenter, s.MaxWFull, s.MinW0, s.FontMedium).Gap(px(6)).TextSize(px(13.5))
 	if processed {
@@ -314,7 +291,6 @@ func cardName(name string, processed bool) gk.DivEl {
 	return d.Child(gk.Div(s.MinW0, s.Truncate).Child(txt(name)))
 }
 
-// chipLabel is "Off", or the effects a processed channel runs.
 func chipLabel(text string, processed bool) gk.DivEl {
 	d := gk.Div(s.MaxWFull, s.Truncate, s.RoundedFull).Px(px(9)).Py(px(1)).TextSize(px(11))
 	if processed {
@@ -325,14 +301,12 @@ func chipLabel(text string, processed bool) gk.DivEl {
 	return d.Child(txt(text))
 }
 
-// verticalMeter is a fader's level: a tall track around its bar.
 func verticalMeter(bar gk.Element) gk.DivEl {
 	return gk.Div(s.Relative, s.OverflowHidden).W(px(10)).H(px(MeterHeight)).Rounded(px(6)).
 		Bg(rgb(surface().Sunken)).Child(bar)
 }
 
-// horizontalMeter is an output's level: a short track around its bar.
-// Relative so the bar's fill is placed in it; that changes no layout.
+// horizontalMeter uses Relative so the bar fill can position inside it.
 func horizontalMeter(bar gk.Element) gk.DivEl {
 	return gk.Div(s.Flex1, s.Relative, s.OverflowHidden).MinW(px(40)).H(px(6)).Rounded(px(4)).
 		Bg(rgb(surface().Sunken)).Child(bar)

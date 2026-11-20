@@ -10,9 +10,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// What Developer mode says for each SSH status, the login command and its
-// address, and which stale replies are ignored.
-
 func status(managed bool, unmanaged uint32, running *bool) core.SSHStatus {
 	s := core.SSHStatus{UnmanagedKeys: unmanaged, HostKeys: []string{}, ServerRunning: running}
 	if managed {

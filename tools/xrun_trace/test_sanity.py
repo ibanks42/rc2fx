@@ -1,4 +1,4 @@
-"""Public attribution must refuse plausible-looking but distorted kernel time."""
+"""Verify analyze() rejects distorted or undersampled kernel timestamps."""
 import unittest
 from analyze import analyze
 

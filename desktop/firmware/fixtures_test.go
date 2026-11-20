@@ -157,8 +157,6 @@ func TestSharedSelectFixtures(t *testing.T) {
 		var profile *Profile
 		switch c.Op {
 		case "select":
-			// The image verification every selection ends with, as Rust
-			// checks it.
 			if len(catalog.Profiles) != 1 {
 				t.Fatalf("%s: a select catalog has one profile", c.Catalog)
 			}
@@ -186,8 +184,7 @@ func TestSharedSelectFixtures(t *testing.T) {
 	}
 }
 
-// selectForModel is the mixer's Rust Catalog::select_for_model_with: the
-// opt-in admits only the named model's own profile and route layout.
+// Mirrors Rust's Catalog::select_for_model_with for the shared fixtures.
 func (c *Catalog) selectForModel(model Model, image []byte, experimentalDuo bool) (*Profile, error) {
 	if err := model.RequireRuntimeWith(experimentalDuo); err != nil {
 		return nil, err

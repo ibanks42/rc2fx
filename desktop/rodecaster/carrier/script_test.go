@@ -15,11 +15,11 @@ import (
 	"time"
 )
 
-// These tests run the real script with bash against a fake mixer: every
-// device, mount and U-Boot tool is a stub on PATH backed by files under
-// t.TempDir(). The fake disk is a sparse file whose sector 0 holds a real MBR,
-// and the fake sfdisk reads and writes that MBR, so a restore really puts the
-// table back. Nothing needs root.
+// These tests execute the real rcfix.sh under bash against a stubbed mixer
+// environment in t.TempDir(). All system tools (sfdisk, mount, fw_setenv, etc.)
+// are PATH stubs backed by regular files, and the fake eMMC is a sparse file
+// with a real MBR in sector 0 so restores can be verified byte-for-byte without
+// root.
 
 const (
 	diskSectors = 1202176 // just past the gap partition 1 grows into
@@ -28,8 +28,7 @@ const (
 
 var factoryEntry1 = []byte{0x00, 0x00, 0x01, 0x40, 0x83, 0x03, 0xe0, 0xff, 0x00, 0x20, 0x00, 0x00, 0x62, 0xdc, 0x0f, 0x00}
 
-// mbr is a Pro II's sector 0 with partition 1 at p1 sectors and partition 2
-// starting at p2start.
+// mbr builds a Pro II sector 0 with the given partition 1 size and partition 2 start.
 func mbr(p1, p2start uint32) []byte {
 	b := make([]byte, 512)
 	for i := range 440 {
@@ -148,9 +147,7 @@ rm -rf "$FAKE_ACKFS" && mkdir "$FAKE_ACKFS"
 }
 
 type rig struct {
-	// hostDelay: how long the fake computer waits after seeing the report
-	// disk before it acts on it.
-	hostDelay                         time.Duration
+	hostDelay                         time.Duration // delay before the fake host acts on a report disk
 	t                                 *testing.T
 	dir, fake, root, p2, imgfs, ackfs string
 	disk, image                       string
@@ -162,8 +159,7 @@ type rig struct {
 
 func newRig(t *testing.T, sector0 []byte) *rig {
 	t.Helper()
-	// The script runs on the mixer's Linux and uses its tools' options
-	// (stat -c, for one), which macOS's tools do not take.
+	// The script uses GNU/Linux coreutils flags (e.g. stat -c).
 	if runtime.GOOS != "linux" {
 		t.Skip("the script needs Linux's tools")
 	}
@@ -385,8 +381,7 @@ func (r *rig) wroteTable() bool {
 	return strings.Contains(r.calls(), "sfdisk --no-reread") || strings.Contains(r.calls(), "resizepart")
 }
 
-// envSet is the environment's lines in sorted order: restoring a variable
-// moves it to the end of the fake file.
+// envSet sorts env lines so variable order doesn't matter after save/restore.
 func envSet(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	sort.Strings(lines)
@@ -732,8 +727,7 @@ func TestScriptMarkerIsWrittenAfterWipe(t *testing.T) {
 	}
 }
 
-// rebooted is whether the reboot command itself was run (fw_setenv
-// reboot_pwr_button_bypass is not that).
+// rebooted checks for an actual `reboot` call (ignoring fw_setenv reboot_pwr_button_bypass).
 func (r *rig) rebooted() bool {
 	for _, line := range strings.Split(r.calls(), "\n") {
 		if line == "reboot" || strings.HasPrefix(line, "reboot ") {
@@ -743,7 +737,7 @@ func (r *rig) rebooted() bool {
 	return false
 }
 
-// ---- The USB report ----
+// ---- USB report tests ----
 
 func (r *rig) gadgetDir() string { return filepath.Join(r.fake, "gadget") }
 func (r *rig) ackImage() string  { return filepath.Join(r.dir, "run", "rcfix-ack.img") }
@@ -751,8 +745,7 @@ func (r *rig) lun() string {
 	return filepath.Join(r.gadgetDir(), "functions", "mass_storage.usb0", "lun.0")
 }
 
-// gadget makes RØDE's normal-mode gadget as configfs shows it: bound to
-// udc ("" for unbound), its disk slot empty and writable.
+// gadget populates a fake configfs mass_storage gadget bound to udc ("" for unbound).
 func (r *rig) gadget(udc string) {
 	write(r.t, filepath.Join(r.gadgetDir(), "UDC"), udc+"\n", 0o644)
 	write(r.t, filepath.Join(r.lun(), "file"), "\n", 0o644)
@@ -767,8 +760,6 @@ func (r *rig) lunAttr(name string) string {
 	return strings.TrimSuffix(string(b), "\n")
 }
 
-// hostSeen is what the host saw of the script's disk, one entry per
-// attach.
 type hostSeen struct {
 	attaches int
 	markers  []string
@@ -776,13 +767,11 @@ type hostSeen struct {
 	at       []time.Time
 }
 
-// host plays the computer on the other end of the disk slot while the
-// script runs. Each time the script attaches its disk, the host reads the
-// marker from it and does the next of acts: "ack" writes the app's
-// acknowledgement onto the disk and ejects it, "empty" empties the slot
-// without one (as something on the mixer does), "take" puts RØDE's image in
-// the slot, and "" (or no act left) leaves the disk where it is. It returns
-// a function that stops it and gives what it saw.
+// host simulates the USB host watching the configfs LUN while the script runs.
+// On each attach it records the marker and performs the next action in acts:
+// "ack" (write RCFIX.ACK and eject), "empty" (clear LUN without ack),
+// "take" (replace LUN with RØDE's image), "ack-take" (ack then immediately
+// swap in RØDE's image), or "" (leave attached). Returns a stop function.
 func (r *rig) host(acts ...string) func() hostSeen {
 	stop, done := make(chan struct{}), make(chan struct{})
 	var seen hostSeen

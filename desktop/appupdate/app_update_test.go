@@ -11,10 +11,8 @@ import (
 	"time"
 )
 
-// The tests talk to a local server.
 func init() { allowPlainHTTP = true }
 
-// checkAt is the check, with no feed to read.
 func checkAt(latestURL, listURL, current string) UpdateCheck {
 	return *snapshotAt(latestURL, listURL, "http://127.0.0.1:9/no-feed", current).App
 }
@@ -200,7 +198,6 @@ type row struct {
 
 func some(s string) *string { return &s }
 
-// feedText is (app, mixer) rows, then (mixer, notes) rows, as a feed.
 func feedText(apps, mixers []row) string {
 	quoted := func(v *string) string {
 		if v == nil {
@@ -227,13 +224,11 @@ func historyOf(t *testing.T, body, latest string) *history {
 	return h
 }
 
-// snapshotOf is a snapshot whose latest published app is latest.
 func snapshotOf(t *testing.T, body, latest string) UpdateSnapshot {
 	h := historyOf(t, body, latest)
 	return UpdateSnapshot{App: &UpdateCheck{Kind: UpdateUpToDate, Latest: latest}, latestMixer: h.publishedMixer(latest), history: h}
 }
 
-// fullFeed is apps 1.0.0 to 1.3.0, the mixer changing at 1.1.0 and 1.3.0.
 func fullFeed() string {
 	return feedText(
 		[]row{{"1.3.0", some("1.2.0")}, {"1.2.0", some("1.1.0")}, {"1.1.0", some("1.1.0")}, {"1.0.0", some("1.0.0")}},
@@ -498,7 +493,6 @@ func TestWithoutACheckOnlyLocalVersionsAreCompared(t *testing.T) {
 	}
 }
 
-// serve serves one canned HTTP reply on a local port.
 func serve(t *testing.T, status, headers, body string) string {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	must(t, err)

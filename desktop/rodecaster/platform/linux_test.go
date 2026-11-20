@@ -46,9 +46,7 @@ func TestMediaAbsenceRequiresExplicitSense(t *testing.T) {
 	}
 }
 
-// The acknowledgement goes only onto the mixer's disk the volume names: a
-// device that is not (or is no longer) a RØDE disk is refused before
-// anything is mounted or written, as are names outside the disk's root.
+// Verify WriteReport rejects non-mixer devices and path traversal names before mounting.
 func TestWriteReportRefusesAnotherDisk(t *testing.T) {
 	h := host{}
 	for _, v := range []Volume{

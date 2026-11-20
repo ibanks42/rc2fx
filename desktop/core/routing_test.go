@@ -2,9 +2,8 @@ package core
 
 import "testing"
 
-// Processing on and off: which routing requests the editor sends and how
-// their acknowledgements apply. crates/rc2fx-core/tests/routing.rs keeps the
-// state checks the mixer's model still has.
+// Global processing enable/disable tests; Rust-side state checks live in
+// crates/rc2fx-core/tests/routing.rs.
 
 func routingState(enabled bool) DeviceState {
 	config := DefaultConfig()

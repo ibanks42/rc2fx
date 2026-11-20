@@ -1,16 +1,9 @@
-//! The audit's live processing counters (`pipeline::processing_counters`).
-//!
-//! These tests pin the live counters to their increment sites, checked against
-//! the per-pipeline `Counters` (`Pipeline::counters`, test only, waits for the
-//! helper): one increment per actual block or event, faults kept apart from
-//! successes, incomplete frames apart from both, startup warm-up not
-//! misreported as a failure, and reading the per-pipeline counters adding
-//! nothing.
+//! Tests for the process-global processing counters (`pipeline::processing_counters`),
+//! cross-checked against each pipeline's local `Counters`.
 use super::*;
 use std::sync::{Mutex, atomic::Ordering::Relaxed};
 
-/// The counters are process-global, so these tests take turns: an exact window
-/// is only meaningful when no other one of them is running.
+/// Serializes tests that measure exact deltas on the process-global counters.
 static COUNTER_TESTS: Mutex<()> = Mutex::new(());
 fn exclusive() -> std::sync::MutexGuard<'static, ()> {
     COUNTER_TESTS
@@ -18,7 +11,6 @@ fn exclusive() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poison| poison.into_inner())
 }
 
-/// The four live counters, as one comparable value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Live {
     input: u64,
@@ -42,15 +34,12 @@ fn delta(before: Live, after: Live) -> Live {
         skipped: after.skipped - before.skipped,
     }
 }
-/// The counters both sides own moved identically: other tests' pipelines
-/// only ever inflate the live side, never this pipeline's own counters.
 fn agrees(live: &Live, counters: &Counters) -> bool {
     live.input == counters.input_blocks
         && live.output == counters.output_blocks
         && live.faults == counters.faults
         && live.skipped == counters.skipped_outputs
 }
-/// A mono source and one stereo hardware output (the C tests' fixture).
 fn hardware_plan(mode: PathMode) -> Plan {
     let mut source = Target::new("source", "source", TargetKind::Mic, 1);
     source.limiter.enabled = false;
@@ -107,8 +96,6 @@ fn build(plan: &Plan, buffers: &Buffers) -> (Pipeline, Vec<parameters::Control>)
     }
     Pipeline::new(plan, &registry, 1).unwrap()
 }
-/// One callback with both channels requested, the mixer's own processing in the
-/// output buffers, and `Pipeline::counters` read afterwards.
 fn block(pipeline: &Pipeline, buffers: &Buffers) -> Counters {
     unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
     let raw = buffers.input(0);
@@ -125,13 +112,12 @@ fn block(pipeline: &Pipeline, buffers: &Buffers) -> Counters {
     }
     unsafe { pipeline.end(FRAMES, true) };
     pipeline.settle();
-    // Reading the per-pipeline counters must not touch the live mirrors.
+    // Reading per-pipeline counters must not touch the live globals.
     pipeline.counters()
 }
 
-/// Run `script` on a fresh pipeline, retrying until no other context's events
-/// fall inside the same window (they only inflate the live side). Under a
-/// pathological schedule the caller reports the impasse instead of failing.
+/// Runs `script` on a fresh pipeline, retrying if concurrent tests outside
+/// `COUNTER_TESTS` bumped the process-global counters during the window.
 fn measured<F>(make: impl Fn() -> Plan, script: F) -> Option<(Live, Counters)>
 where
     F: Fn(&Pipeline, &Buffers),
@@ -159,10 +145,6 @@ where
     None
 }
 
-/// Positive: one increment per processed block, on both sides of the pipe, with
-/// reading the per-pipeline counters adding nothing (it happens after every
-/// frame here).
-/// The callback processes every output frame it is handed, from the first one.
 #[test]
 fn live_counters_track_each_processed_block_once() {
     let _exclusive = exclusive();
@@ -175,7 +157,6 @@ fn live_counters_track_each_processed_block_once() {
         },
     )
     .expect("the live counters must agree with a pipeline's own counters");
-    // One processed block per frame on each side, the first frame included.
     assert_eq!((live.input, live.output), (5, 5));
     assert_eq!(
         (counters.input_blocks, counters.output_blocks),
@@ -185,9 +166,6 @@ fn live_counters_track_each_processed_block_once() {
     assert_eq!((live.faults, live.skipped), (0, 0));
 }
 
-/// Negative: a plan whose DSP cannot process at all (a Chat voice without its
-/// captured stem) counts a fault, latched once for the path, and no processed
-/// block.
 #[test]
 fn an_unprocessable_plan_counts_faults_not_blocks() {
     let _exclusive = exclusive();
@@ -216,8 +194,6 @@ fn an_unprocessable_plan_counts_faults_not_blocks() {
     assert_eq!((live.output, counters.output_blocks), (0, 0));
 }
 
-/// Negative: an incomplete stereo output is counted as skipped, not as a
-/// processed block and not as a fault.
 #[test]
 fn an_incomplete_output_is_counted_skipped_not_processed() {
     let _exclusive = exclusive();
@@ -227,7 +203,7 @@ fn an_incomplete_output_is_counted_skipped_not_processed() {
             unsafe { pipeline.begin(FRAMES, test_buffer, 0) };
             let raw = buffers.input(0);
             pipeline.buffer(raw as usize, FRAMES, raw.cast());
-            // Only one of the two output channels is requested.
+            // Request only the left output channel.
             let left = buffers.output(0);
             pipeline.buffer(left as usize, FRAMES, left.cast());
             unsafe { pipeline.end(FRAMES, true) };
@@ -239,8 +215,6 @@ fn an_incomplete_output_is_counted_skipped_not_processed() {
     assert_eq!((live.output, live.faults), (0, 0));
 }
 
-/// A meter-only hardware output never counts as a processed block, whatever the
-/// meter and count records it does produce.
 #[test]
 fn a_meter_only_output_is_not_a_processed_block() {
     let _exclusive = exclusive();
@@ -255,12 +229,9 @@ fn a_meter_only_output_is_not_a_processed_block() {
     .expect("the live counters must agree with a pipeline's own counters");
     assert_eq!((live.output, counters.output_blocks), (0, 0));
     assert_eq!((live.faults, live.skipped), (0, 0));
-    // Only the source is processed.
     assert_eq!((live.input, counters.input_blocks), (8, 8));
 }
 
-/// The report exposes the live view under its own name, including retired
-/// pipelines.
 #[test]
 fn the_audit_report_exposes_live_processing_counters() {
     let _exclusive = exclusive();

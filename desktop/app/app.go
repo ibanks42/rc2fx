@@ -1,7 +1,5 @@
-// Package app is the RC2FX desktop app's UI on gpuikit.dev/gk. It was ported
-// from the Rust app (crates/rc2fx-app, removed in 89296ea); one Go file per
-// screen or part of one. The non-drawing parts live in the subpackages
-// without gk (model, installflow, licenses, ...).
+// Package app implements the RC2FX desktop UI on gpuikit.dev/gk.
+// Non-UI logic lives in cgo-free subpackages (model, installflow, state, theme, ...).
 package app
 
 import (
@@ -23,7 +21,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// Backend is the USB link to the mixer, or why there isn't one.
+// Backend wraps the USB transport to the mixer, or records why it is unavailable.
 type Backend struct {
 	live        *transport.Transport
 	unavailable string
@@ -51,8 +49,8 @@ func (b *Backend) tryRecv() (transport.Event, bool) {
 	return b.live.TryRecv()
 }
 
-// HomeKey is what Home last drew that can change with time alone: the
-// headline, its detail and the freshness flags (see homeKey).
+// HomeKey snapshots the time-dependent Home state (headline, detail, and meter
+// freshness) so the poll loop can detect when meters go stale.
 type HomeKey struct {
 	V0, V1 string
 	V2     []bool
@@ -118,8 +116,8 @@ type confirmUI struct {
 	bandPreviews  []gk.View
 }
 
-// App is Rc2FxApp: session, navigation, live editing, installer coordination,
-// and UI handles grouped by domain.
+// App holds the desktop UI state: session, navigation, live editing, installer
+// coordination, and window handles.
 type App struct {
 	session              core.Session
 	transport            Backend
@@ -202,8 +200,8 @@ type App struct {
 	confirmUI
 }
 
-// newApp is the half of the app's setup that needs no window; init is the
-// rest.
+// newApp initializes the window-independent portion of App; init finishes setup
+// once the root view mounts.
 func newApp() *App {
 	backend, message := newBackend()
 	log := gk.NewModel(newEventLog())
@@ -228,12 +226,11 @@ func newApp() *App {
 	return a
 }
 
-// init is the rest of the app's setup: kit state, focus, the first
-// connection, the background checks and the 50 ms poll. It runs when the
-// window first shows the root view.
+// init sets up kit handles, focus, initial connection, update checks, and the
+// 50 ms poll loop when the window first mounts the root view.
 func (a *App) init(cx *gk.Cx) {
-	// The theme registry needs a window, so the themes load here, before
-	// the first frame, rather than in gk.Run's start function.
+	// The theme registry requires an open window, so load themes here rather
+	// than in gk.Run's startup callback.
 	gk.ThemeChange(cx, gk.ThemeModeDark)
 	loadThemes(cx)
 	setAppearance(cx, rememberedAppearance())
@@ -253,36 +250,31 @@ func (a *App) init(cx *gk.Cx) {
 	}
 	gk.Focus(cx, a.focus)
 	if a.devPage != nil && a.devPage.Kind == DevPageFlow {
-		// A made-up page to look at: no mixer, no helper, no network.
+		// Fixture page: skip mixer, helper, and network startup.
 		a.openDevPage(cx)
 	} else {
 		a.connect(cx)
-		// Notification only, in the background; a failure here stays quiet.
 		a.checkAppUpdate(cx, false)
 		a.startSelfUpdate(cx)
 		a.openDevPage(cx)
 	}
-	// The menu bar's Quit (Cmd+Q) asks the same as the close button.
-	// Deferred: a menu or key action arrives while GPUI has the key window
-	// checked out, so updating it from inside the handler fails and the quit
-	// would be dropped.
+	// Defer Cmd+Q via gk.Post: menu actions fire while GPUI has the key window
+	// checked out, so updating it inline would fail and drop the quit.
 	if runtime.GOOS == "darwin" {
 		quit := gk.Shortcut(cx, "cmd-q", func(cx *gk.Cx) {
 			gk.Post(a.quitFromMain)
 		})
-		// macOS shows this under the app's name in the menu bar.
 		gk.SetMenus(cx, gk.Menu{Name: "RC2FX", Items: []gk.MenuItem{gk.MenuAction{Name: "Quit", Action: quit}}})
 	}
-	// A timer made in init redraws the root view after each tick; poll opts
-	// out (gk.Quiet) and redraws only when it calls a.notify.
+	// Timers created in init trigger a root redraw by default; poll calls
+	// gk.Quiet and explicitly notifies only when state changes.
 	gk.Every(cx, 50*time.Millisecond, a.poll)
 }
 
-// notify is cx.notify() on the app's view.
 func (a *App) notify(cx *gk.Cx) { gk.Notify(cx, a.root) }
 
-// confirmClose is whether the main window may close: no file dialog open,
-// and no edits or writes in flight unless the user discards them.
+// confirmClose checks whether the main window can close immediately, or opens
+// a confirmation dialog if there are unsaved edits or writes in flight.
 func (a *App) confirmClose(cx *gk.Cx) bool {
 	if a.fileBusy {
 		a.message = "Finish or cancel the file dialog before closing."
@@ -297,8 +289,6 @@ func (a *App) confirmClose(cx *gk.Cx) bool {
 		return true
 	}
 	if a.confirmOpen != nil {
-		// "Close without saving?" is already asked, or another question
-		// is open: answer that first.
 		return false
 	}
 	detail := "Your local edits have not been saved to the mixer."
@@ -313,11 +303,10 @@ func (a *App) confirmClose(cx *gk.Cx) bool {
 		Action: "Discard and close",
 	}, func(cx *gk.Cx) {
 		discarded = true
-		// Quit with the window still open: see requestQuit.
+		// Quit with the window still open; see requestQuit.
 		gk.Quit(cx)
 	}, func(cx *gk.Cx) {
-		// Only when canceled: "Discard and close" sets discarded before
-		// this runs, and its quit must still apply a requested update.
+		// Only cancel a pending update restart if the user chose "Keep editing".
 		if !discarded {
 			a.selfUpdate.CancelRestart()
 		}
@@ -326,7 +315,6 @@ func (a *App) confirmClose(cx *gk.Cx) bool {
 	return false
 }
 
-// target is the selected channel's draft.
 func (a *App) target() *core.Target {
 	return &a.session.Draft[max(0, min(a.selected, len(a.session.Draft)-1))]
 }
@@ -339,8 +327,6 @@ func (a *App) command(command transport.Command) bool {
 	return true
 }
 
-// connect connects to the mixer on USB 1. Until connected, or until
-// Disconnect, the app keeps trying every few seconds.
 func (a *App) connect(cx *gk.Cx) { a.beginConnection(cx, false) }
 
 func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
@@ -420,9 +406,7 @@ func (a *App) apply(cx *gk.Cx) {
 		a.pending = &pending
 		saveLogf("apply sent: expected revision %d", pending.Request.ExpectedRevision)
 		saveLogTargets("  apply targets", pending.Request.Targets)
-		// Not over an outcome the user has not seen yet, nor over a failed
-		// save tried again: that stays the message, and is not toasted
-		// again at every retry.
+		// Avoid overwriting an unseen outcome message or a retrying save error.
 		if a.live.SaveError() == "" && (a.message == a.toasted || progressMessage(a.message)) {
 			a.message = "Saving settings to mixer…"
 		}
@@ -430,15 +414,11 @@ func (a *App) apply(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// saveFailed notes a save that failed for reason: it is not tried again
-// until its backoff passes (Live.SaveFailed), and the reason is shown.
 func (a *App) saveFailed(reason string) {
 	a.live.SaveFailed(reason, time.Now())
 	a.message = saveFailedMessage(reason)
 }
 
-// savedGeneration is the saved state's engine generation, ok false without
-// one.
 func savedGeneration(saved *core.DeviceState) (uint64, bool) {
 	if saved == nil {
 		return 0, false
@@ -492,9 +472,8 @@ func (a *App) receive(cx *gk.Cx, value json.RawMessage, acknowledged, snapshot b
 		case core.RemoteUpdateStale:
 			return
 		case core.RemoteUpdateConflict:
-			// settleConflict puts the edits on top of the new settings and
-			// the next autosave saves them; edits that no longer fit show
-			// the conflict card instead.
+			// settleConflict rebases edits onto the new state (or shows the
+			// conflict card if they no longer fit).
 			a.message = mixerChangedElsewhere
 		case core.RemoteUpdateLoaded:
 			a.message = "Mixer settings loaded"
@@ -521,8 +500,6 @@ func (a *App) receive(cx *gk.Cx, value json.RawMessage, acknowledged, snapshot b
 	}
 }
 
-// meterTargets is the meter's (path id, output peak) pairs, for
-// LevelHistories.Receive.
 func meterTargets(meter *core.Meter) func(yield func(string, float64) bool) {
 	return func(yield func(string, float64) bool) {
 		for _, t := range meter.Targets {
@@ -562,7 +539,7 @@ func (a *App) poll(cx *gk.Cx) {
 		if event.Generation != a.generation {
 			continue
 		}
-		// A reading alone redraws only what shows it (see below).
+		// Meter updates only redraw the views that display them (handled below).
 		if _, isMeter := event.Kind.(transport.EventKindMeter); !isMeter {
 			changed = true
 		}
@@ -578,8 +555,6 @@ func (a *App) poll(cx *gk.Cx) {
 		case transport.EventKindRouting:
 			a.routingReply(k.State, k.Err)
 		case transport.EventKindVersion:
-			// A failed read leaves the versions unknown; it is not an error
-			// worth interrupting the user for.
 			if k.Err != nil {
 				a.deviceVersions = nil
 			} else {
@@ -592,14 +567,13 @@ func (a *App) poll(cx *gk.Cx) {
 		case transport.EventKindImageCheck:
 			a.installerImageCheck(cx, k.Check, k.Err)
 		case transport.EventKindMixerUpdateLast:
-			// A failed read is asked again on the next poll.
 			if k.Err == nil {
 				a.inPlaceOutcome(k.Last)
 			}
 		case transport.EventKindConnected:
 			a.link.Connected()
 			a.message = ""
-			// Edits carry over to the same mixer, not to another one.
+			// Only preserve unsaved drafts when reconnecting to the same mixer.
 			if a.connectedMixer == nil || *a.connectedMixer != k.Mixer {
 				var draft []core.Target
 				keepDraft := a.session.Dirty()
@@ -624,7 +598,7 @@ func (a *App) poll(cx *gk.Cx) {
 			a.connectedMixer = &mixer
 			a.receive(cx, k.State, false, false)
 			a.openDevPage(cx)
-			// Versions change only across a restart: read once per connection.
+			// Versions only change across a mixer restart, so read once per connection.
 			a.command(transport.CommandVersion{Generation: a.generation})
 			if a.nav.Settings() {
 				a.listPresets()
@@ -696,12 +670,11 @@ func (a *App) poll(cx *gk.Cx) {
 				a.levels.Clear()
 				a.engineSeen = nil
 			}
-		// Only this app writes the mixer's settings, so a refused save
-		// means our revision was behind our own last change: read the
-		// current settings, keep the edits, save again.
 		case transport.EventKindLiveApplied:
 			a.liveReply(cx, k)
 		case transport.EventKindConflict:
+			// This app is the sole writer over USB 1, so a revision conflict means
+			// we lagged behind our own write; refresh, rebase, and resave.
 			saveLogf("save refused as a conflict; refreshing")
 			a.pending = nil
 			a.session.Conflict = true
@@ -731,15 +704,13 @@ func (a *App) poll(cx *gk.Cx) {
 	changed = a.pollRepair() || changed
 	a.pollFirstLook(cx)
 	a.autostartInstaller(cx)
-	// A gk view function may not write kit state, so the installer's
-	// selects are synced here, on the 50 ms tick, rather than in render.
+	// Sync installer selects here because gk view functions cannot mutate kit state.
 	a.syncInstallerSelects(cx)
 	if a.session.Saved != nil && a.session.Saved.Selection.Status == core.SelectionPhaseIdle {
 		a.selectionAsked = false
 	}
-	// While the mixer is being flashed its controls and their errors mean
-	// nothing: hand the window to the installer. Once flashed, look for the
-	// mixer again; reconnecting is how the installer sees RC2FX back.
+	// Disconnect while flashing so mixer errors don't interfere; resume
+	// auto-reconnect once flashing finishes so the installer detects RC2FX returning.
 	if a.installerFlashing() {
 		if a.session.Connected || a.link.Auto() {
 			a.disconnect(cx)
@@ -747,24 +718,20 @@ func (a *App) poll(cx *gk.Cx) {
 			a.link.PauseForFlash()
 		}
 	} else if a.link.FlashDone(time.Now()) {
-		// The pre-flash connection result belongs to an earlier device
-		// state. Start a new observation after the expected USB transition.
+		// Clear pre-flash status before observing the post-flash USB transition.
 		a.message = ""
 	}
 	a.refreshInputs()
 	a.eventsTick(cx)
-	// Freshness and warnings expire with time, not events: when meters stop
-	// while the connection stays up, nothing else would redraw Home.
-	// Compared on this existing 50 ms tick; no extra frames are scheduled,
-	// and a redraw happens only when what Home shows changes.
+	// Poll Home's time-dependent state so stale meters trigger a redraw even
+	// when no new transport events arrive.
 	var homeKey *HomeKey
 	if a.session.Connected && a.nav.Home() {
 		k := a.homeKey()
 		homeKey = &k
 	}
-	// A reading redraws the app unless the overview is in front and the
-	// overlay is already drawing its bars every frame. Each such redraw is a
-	// whole extra frame, on top of the overlay's.
+	// Skip full-app redraws for meter packets when Home is visible and all
+	// overview bars are already updating in their own views.
 	overview := homeKey != nil && a.nav.BasePageInFront() && a.installer == nil
 	isFresh := fresh != nil
 	if changed || isFresh != a.wasFresh || !homeKeyEqual(homeKey, a.lastHomeKey) ||
@@ -774,16 +741,12 @@ func (a *App) poll(cx *gk.Cx) {
 	a.toastMessage(cx)
 	a.wasFresh = isFresh
 	a.lastHomeKey = homeKey
-	// The live indicators' views and ticker, and the signature's
-	// (indicators.go: each indicator is its own view).
 	a.pollIndicators(cx)
 	if a.link.Due(a.session.Connected, time.Now()) {
 		a.beginConnection(cx, true)
 	}
 }
 
-// freshMeter is the selected path's fresh reading and whether it is
-// synthetic; nil when there is none.
 func (a *App) freshMeter() (*core.TargetMeter, bool) { return a.freshMeterFor(a.target().ID) }
 
 func (a *App) freshMeterFor(targetID string) (*core.TargetMeter, bool) {
@@ -793,10 +756,8 @@ func (a *App) freshMeterFor(targetID string) (*core.TargetMeter, bool) {
 	return telemetry.FreshMeter(a.session.Saved, a.meter, a.meterProgress, targetID, a.engineSeen, time.Now())
 }
 
-// reportedLookahead is what the mixer reports for the selected path: the
-// latency it reports there, and the lookahead it runs there. Both nil while
-// offline or before anything is applied, so the editor states relative costs
-// only.
+// reportedLookahead returns the mixer's reported latency and live lookahead
+// for the selected path (nil fields while offline or before apply).
 func (a *App) reportedLookahead() Reported {
 	id := a.target().ID
 	var reported Reported
@@ -816,8 +777,8 @@ func (a *App) reportedLookahead() Reported {
 	return reported
 }
 
-// systemStatus is the connection, path-change, restart and engine states
-// that outrank everything else, shared by the status line and Home.
+// systemStatus returns high-priority connection, transition, or engine states
+// shared by the status bar and Home headline.
 func (a *App) systemStatus() (string, uint32, bool) {
 	switch {
 	case a.link.Connecting():
@@ -841,8 +802,8 @@ func (a *App) systemStatus() (string, uint32, bool) {
 	return "", 0, false
 }
 
-// routingStatus is audio routing that isn't active, where the engine has
-// processing controls. Shared by the status line and Home.
+// routingStatus returns non-active audio routing states for engines with
+// processing controls, shared by the status bar and Home.
 func (a *App) routingStatus() (string, uint32, bool) {
 	state := a.session.Saved
 	if state == nil || !state.Engine.Mode.HasProcessingControls() {
@@ -871,8 +832,7 @@ func (a *App) status() (string, uint32) {
 	switch {
 	case a.session.Conflict:
 		return "Reload needed", Warn
-	// Edits save themselves (live.go), so saving is routine, not a warning;
-	// the rail shows it.
+	// Autosave is routine, so keep it muted rather than warning.
 	case a.pending != nil || a.presets.writing():
 		return "Saving", Muted
 	case a.session.AnyDirty():
@@ -924,18 +884,13 @@ func (a *App) audioWarningFor(targetID string) (telemetry.Warning, bool) {
 	return progress.WarningFor(time.Now(), suppressionActive)
 }
 
-// settleConflict puts local edits back on top of the mixer's current
-// settings when the revision moved under them. Only this app writes the
-// mixer's settings (over USB 1), so that move is always one of our own
-// changes and never a choice for the user. A refused save is sent again
-// once.
+// settleConflict rebases local edits onto the latest mixer state after a
+// revision conflict and retries the refused save once.
 func (a *App) settleConflict(cx *gk.Cx) {
 	if a.pending != nil || a.presets.writing() {
 		return
 	}
 	if err := a.session.RebaseEdits(); err != nil {
-		// The edits no longer fit the mixer's channels: the notice below
-		// offers the one way on.
 		saveLogf("rebase failed: %s", err)
 		a.resave = false
 		a.message = err.Error()
@@ -948,10 +903,7 @@ func (a *App) settleConflict(cx *gk.Cx) {
 	}
 }
 
-// toastMessage shows a new outcome in message (an error, a saved file, a
-// loaded preset) as a toast. The footer no longer carries it; progress steps
-// ("Saving…", "… waiting for …") aren't worth interrupting for. Before a
-// connection the connection screen shows message itself.
+// toastMessage posts non-progress status messages as notifications once connected.
 func (a *App) toastMessage(cx *gk.Cx) {
 	if a.message == a.toasted {
 		return
@@ -962,14 +914,11 @@ func (a *App) toastMessage(cx *gk.Cx) {
 	}
 }
 
-// openOverview is the overview of every channel, from the sidebar or Esc.
 func (a *App) openOverview(cx *gk.Cx) {
 	a.nav.ShowHome()
 	a.notify(cx)
 }
 
-// quitFromMain is requestQuit on the main window; it quits
-// outright if it is already gone.
 func (a *App) quitFromMain(cx *gk.Cx) {
 	if slices.Contains(gk.Windows(cx), a.window) {
 		a.requestQuit(cx)
@@ -978,21 +927,16 @@ func (a *App) quitFromMain(cx *gk.Cx) {
 	gk.Quit(cx)
 }
 
-// requestQuit quits once the main window's close checks pass (busy file
-// dialog, unsaved edits); when they ask first, their prompt quits on its own.
-//
-// It quits through gk.Quit and leaves the window to the shutdown instead of
-// closing it here. Removing it first released the NSWindow a run-loop turn
-// before `terminate:` ran, and AppKit's Touch Bar bookkeeping then threw on
-// the released window during the display flush in between ("RC2FX quit
-// unexpectedly").
+// requestQuit runs close checks and quits via gk.Quit, leaving window teardown
+// to shutdown. Closing the window first releases the NSWindow one run-loop turn
+// before terminate:, causing AppKit Touch Bar bookkeeping to crash during the
+// intermediate display flush.
 func (a *App) requestQuit(cx *gk.Cx) {
 	if a.confirmClose(cx) {
 		gk.Quit(cx)
 	}
 }
 
-// windowTitle is the main window's title.
 func windowTitle() string {
 	if mockMixer {
 		return "RC2FX (mock mixer)"
@@ -1000,9 +944,8 @@ func windowTitle() string {
 	return "RC2FX"
 }
 
-// Run is the native application's GUI entry point. Headless privileged
-// helper modes (--install-usb-rule, --installer-helper) are dispatched in
-// cmd/rc2fx before entering app.Run.
+// Run is the native GUI entry point. Headless privileged helper modes
+// (--install-usb-rule, --installer-helper) are dispatched in cmd/rc2fx first.
 func Run() {
 	if previewMode(os.Args) {
 		return
@@ -1011,8 +954,6 @@ func Run() {
 	gk.Run(func(cx *gk.Cx) {
 		gk.QuitOnLastWindow(cx, true)
 		a.root = gk.NewView(a.init, a.view)
-		// Each of Home's animated indicators is its own view
-		// (indicators.go), so the window holds the app directly.
 		a.window = gk.OpenWindowWith(cx, windowIdentity(gk.WindowConfig{
 			Width:     Window[0],
 			Height:    Window[1],
@@ -1020,11 +961,9 @@ func Run() {
 			MinHeight: WindowMin[1],
 			Title:     windowTitle(),
 		}), a.root)
-		// A confirmed "Restart to update" hands over to the updater as RC2FX
-		// quits, whichever prompt ends up quitting.
+		// Hand off any confirmed "Restart to update" to the updater on exit.
 		gk.OnAppQuit(cx, func(*gk.Cx) { a.selfUpdate.LaunchOnQuit() })
-		// The close button (and Alt-F4, Cmd-W) asks as Quit does; the quit
-		// itself comes from requestQuit or the prompt it opens.
+		// Intercept window close (close button, Alt+F4, Cmd+W) so close checks run.
 		gk.OnWindowShouldClose(cx, a.window, func(cx *gk.Cx) bool {
 			a.requestQuit(cx)
 			return false

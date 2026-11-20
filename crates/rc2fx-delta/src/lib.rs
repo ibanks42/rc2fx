@@ -1,21 +1,17 @@
-//! Delta encoding for an in-place mixer payload upload.
+//! Delta encoding for in-place mixer payload uploads.
 //!
-//! The signed envelope (`RC2FX-EMBEDDED-PAYLOAD 1`) is still the authority:
-//! this crate only carries it more cheaply over a slow USB link. Each file is
-//! sent whole (zstd), unchanged (copy), or as a zstd patch against the copy
-//! installed on the mixer. Decoding rebuilds the exact envelope and checks
-//! every file against the manifest inside it; the mixer then verifies the
-//! rebuilt envelope against the signed target exactly as it did before.
+//! The signed `RC2FX-EMBEDDED-PAYLOAD 1` envelope remains the source of truth;
+//! this crate only shrinks transfers over USB. Each file is sent whole (zstd),
+//! copied from disk if unchanged, or patched with zstd against the installed
+//! copy. Decoding reconstructs the exact envelope and verifies every file
+//! against its manifest before the mixer checks the signature.
 //!
-//! The mixer has no compiler for zstd's advanced parameters in the high-level
-//! API, so the encoder and decoder drive `zstd_safe` directly: the encoder
-//! needs a reference prefix (`zstd --patch-from`) plus long-distance matching,
-//! and the decoder needs a fixed window bound.
+//! Uses `zstd_safe` directly because the high-level API does not expose
+//! reference prefixes (`--patch-from`), long-distance matching, or a fixed
+//! decoder window bound.
 //!
-//! The mixer only decodes; the desktop app encodes in Go (`desktop/delta`).
-//! This crate's own encoder exists for tests that need a delta of an envelope
-//! they build at run time (rc2fx-device's upload tests), so it is behind the
-//! non-default `encode` feature and not linked into rc2fxd.
+//! Production encoding lives in Go (`desktop/delta`); the Rust encoder is gated
+//! behind the `encode` feature for tests and not linked into `rc2fxd`.
 
 use sha2::{Digest, Sha256};
 #[cfg(any(test, feature = "encode"))]
@@ -28,16 +24,15 @@ use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer};
 pub const MAGIC: &str = "RC2FX-DELTA 1\n";
 pub const ENVELOPE_MAGIC: &str = "RC2FX-EMBEDDED-PAYLOAD 1\n";
 const MAX_LINE: usize = 512;
-/// The head is the envelope header and its manifest, not any file bytes.
+/// Max size of the envelope header + manifest (excluding file payloads).
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_ENTRIES: usize = 256;
-/// The decoder refuses a frame that needs a larger window than this, so a
-/// hostile delta cannot make it allocate wildly.
+/// Cap decoder window allocation against hostile deltas.
 const WINDOW_LOG_MAX: u32 = 25;
-/// A compressed frame may be slightly larger than the bytes it replaces.
+/// Slack for compressed frames that slightly exceed uncompressed size.
 const OP_OVERHEAD: u64 = 1 << 20;
 
-/// One file in the envelope's manifest.
+/// Single file entry from the envelope manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub name: String,
@@ -45,9 +40,10 @@ pub struct Entry {
     pub size: u64,
 }
 
-/// Parse an envelope's head: the three header lines and the manifest. The
-/// manifest has no fixed file count, so it ends when the manifest bytes plus
-/// every declared size fill the envelope's declared body length.
+/// Parses the envelope header and manifest.
+///
+/// The manifest has no explicit entry count; it ends once the manifest bytes
+/// plus all declared file sizes equal the envelope's declared body length.
 pub fn envelope_entries(envelope: &[u8]) -> Result<(usize, Vec<Entry>), String> {
     let magic = envelope
         .get(..ENVELOPE_MAGIC.len())
@@ -123,12 +119,11 @@ pub fn envelope_entries(envelope: &[u8]) -> Result<(usize, Vec<Entry>), String> 
     }
 }
 
-/// Encode the signed `envelope` as a delta.
+/// Encodes a signed `envelope` as a delta.
 ///
-/// `installed` maps each file the mixer has to its SHA-256. `bases` maps a
-/// file name to bytes the app holds; they are used as a patch prefix only when
-/// they still hash to what the mixer reports, otherwise the app's copy is
-/// stale and the file is sent whole.
+/// `installed` maps mixer filenames to their SHA-256 digests. `bases` holds
+/// local copies used as patch prefixes only if they match `installed`; stale
+/// bases fall back to sending the file whole.
 #[cfg(any(test, feature = "encode"))]
 pub fn encode(
     envelope: &[u8],
@@ -186,11 +181,10 @@ pub fn encode(
     Ok(out)
 }
 
-/// Rebuild the envelope from `delta` into `out`.
+/// Reconstructs the envelope from `delta` into `out`, returning bytes written.
 ///
-/// `installed(name)` returns the bytes of the file currently on the mixer. It
-/// is used for copies and as the patch prefix, and must match the manifest (a
-/// copy) or the patch's base hash. Returns the envelope bytes written.
+/// `installed(name)` loads the mixer's current copy for `copy` ops and patch
+/// prefixes; its digest must match the manifest or patch base hash.
 pub fn decode(
     delta: &mut impl Read,
     installed: &mut dyn FnMut(&str) -> io::Result<Vec<u8>>,
@@ -324,8 +318,7 @@ fn parse_op(line: &str, name: &str, op_limit: u64) -> Result<(Option<String>, us
     Ok((base, len))
 }
 
-/// Decompress one file, checking its exact size and digest as the bytes go to
-/// `out`. `written` is the envelope length so far.
+/// Decompresses one file into `out`, verifying exact size and SHA-256 on the fly.
 fn decompress(
     data: &[u8],
     prefix: Option<&[u8]>,
@@ -419,8 +412,7 @@ fn compress(
             .set_parameter(CParameter::EnableLongDistanceMatching(true))
             .map_err(zstd_error)?;
     }
-    // The prefix is single-use and is registered before the frame starts; the
-    // pledged size goes last so it survives the prefix's session reset.
+    // Prefix is single-use and resets session state, so set pledged size after it.
     if let Some(prefix) = prefix {
         context.ref_prefix(prefix).map_err(zstd_error)?;
     }
@@ -432,8 +424,7 @@ fn compress(
     Ok(out)
 }
 
-/// The window a patch needs to reach from the start of the base to the end of
-/// the new file. Plain compression only has to reach its own start.
+/// Window log covering the patch base + target (or just target for plain zstd).
 #[cfg(any(test, feature = "encode"))]
 fn window_log(bytes: u64) -> u32 {
     let needed = if bytes <= 1 {
@@ -636,9 +627,8 @@ mod tests {
         }
     }
 
-    // The decoder's refusals are pinned by the shared fixtures in
-    // fixtures/delta/reject, which both this decoder and the Go one read
-    // (tests/shared_fixtures.rs); this covers the envelope's own head.
+    // Decoder rejection cases live in fixtures/delta/reject (shared with Go via
+    // tests/shared_fixtures.rs); this test covers envelope header parsing.
     #[test]
     fn malformed_envelope_heads_are_refused() {
         for bad in [
@@ -653,7 +643,7 @@ mod tests {
                 String::from_utf8_lossy(&bad)
             );
         }
-        // A manifest with a path, a duplicate name or a non-numeric size.
+        // Invalid manifest lines: path traversal, ".", non-numeric size, duplicate name.
         for line in [
             format!("{}  1  ../escape\n", "a".repeat(64)),
             format!("{}  1  .\n", "a".repeat(64)),

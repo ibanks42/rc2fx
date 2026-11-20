@@ -41,17 +41,17 @@ type Evidence struct {
 type Report struct {
 	// Command is "check", "fix", "restore" or "recover".
 	Command string `json:"command"`
-	// OK is false when the command failed; Error then always says why, in
-	// words for the person. Code is a stable word for programs: "no-mixer",
-	// "several-mixers", "permission", "unsupported", "unrecognized",
-	// "damaged" (fix or restore on a damaged table: `recover` is the
-	// command for it), "not-a-mixer" (sector 0 is not a known table and the
-	// disk does not show the evidence of a RØDECaster; Evidence says what
-	// was missing), "changed" (the disk is not what --expect named),
-	// "not-empty" (the space partition 1 would grow into holds data),
-	// "read-failed" (reading the mixer's storage failed), "write-failed",
-	// "verify-failed", "bad-backup", "clear-failed" (restore put the table
-	// back but could not clear the space after partition 1), "internal".
+	// OK is false when the command failed; Error then explains why in plain text.
+	// Code is a machine-readable failure code:
+	//   - "no-mixer", "several-mixers", "permission", "unsupported"
+	//   - "unrecognized": unknown partition layout
+	//   - "damaged": damaged table; use `recover`
+	//   - "not-a-mixer": unknown sector 0 with no RØDECaster evidence on disk
+	//   - "changed": sector 0 does not match --expect
+	//   - "not-empty": space after partition 1 contains non-zero data
+	//   - "read-failed", "write-failed", "verify-failed", "bad-backup"
+	//   - "clear-failed": restore wrote the table back but could not zero the grow range
+	//   - "internal"
 	OK    bool   `json:"ok"`
 	Code  string `json:"code,omitempty"`
 	Error string `json:"error,omitempty"`

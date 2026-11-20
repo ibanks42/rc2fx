@@ -1,5 +1,4 @@
-/* Read-only probe of the ACTUAL local touchscreen controller endpoint.
- * Shares the UI client's real framing and decoder; never submits a mutation. */
+/* Read-only probe for the local touchscreen controller socket (reuses control.c framing). */
 #include "control.c"
 #include <inttypes.h>
 #include <stdlib.h>

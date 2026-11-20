@@ -1,4 +1,4 @@
-"""Publish an already signed mixer release; make it discoverable only afterward."""
+"""Publish a signed mixer release, then update discovery metadata on `mixer-metadata`."""
 import hashlib
 import json
 import os
@@ -10,7 +10,7 @@ import tempfile
 import time
 import urllib.request
 
-# Discovery metadata changes, so it lives on a branch; releases are immutable.
+# Discovery metadata is mutable so it lives on its own branch while releases stay immutable.
 BRANCH = "mixer-metadata"
 REMOTE = "https://github.com/ibanks42/rc2fx.git"
 RAW_URL = f"https://raw.githubusercontent.com/ibanks42/rc2fx/{BRANCH}/"
@@ -22,7 +22,7 @@ README = """# RC2FX mixer update metadata
 Signed TUF metadata for RC2FX mixer updates, read by the desktop app. This branch
 is written only by the release tooling; see docs/developer/mixer-releases.md on main.
 """
-# Longer than raw.githubusercontent.com's five-minute cache.
+# Exceeds raw.githubusercontent.com's 5-minute CDN cache TTL.
 SERVED_WAIT = 420
 SERVED_POLL = 15
 
@@ -32,7 +32,7 @@ def gh(*args):
 
 
 def git(*args, cwd=None):
-    # gh supplies the credential, so a token never appears in a URL or argument.
+    # Use gh as credential helper so tokens never appear in URLs or argv.
     helper = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
     return subprocess.check_output(["git", *helper, *map(str, args)], text=True, cwd=cwd)
 
@@ -73,7 +73,7 @@ def package_targets(package, metadata):
 
 
 class Branch:
-    """A checkout of the discovery metadata branch in `path`; `tip` is None until it exists."""
+    """Checkout of the discovery metadata branch at `path` (`tip` is None if absent)."""
 
     def __init__(self, path, tip):
         self.path, self.tip = path, tip
@@ -96,7 +96,7 @@ def fetch_branch(path):
 
 
 def require_newer(branch, metadata, names):
-    """Refuse a stale signing artifact: it must not roll discovery back."""
+    """Ensure new metadata versions strictly increase over the current branch."""
     if branch.tip is None:
         return
     for name in names:
@@ -112,7 +112,7 @@ def read_raw(name):
 
 
 def verify_served(files):
-    """raw.githubusercontent.com caches each file for minutes; wait for the push to appear."""
+    """Poll raw.githubusercontent.com until all pushed files are served (CDN caches for ~5m)."""
     deadline = time.monotonic() + SERVED_WAIT
     waiting = list(files)
     while True:
@@ -134,7 +134,7 @@ def verify_served(files):
 
 
 def update_branch(branch, files, message):
-    """One commit, so the branch never holds a partial set; a concurrent writer fails the push."""
+    """Commit all metadata files atomically and push with --force-with-lease."""
     for file in files:
         shutil.copyfile(file, branch.path / file.name)
     readme = branch.path / "README.md"
@@ -152,8 +152,7 @@ def signed_json(metadata):
 
 
 def publish_discovery(metadata, version):
-    # Fetch again: payload publication takes minutes, and only a fresh tip can
-    # tell a renewal that ran meanwhile from a stale artifact.
+    # Re-fetch after uploading the payload in case a scheduled renewal ran concurrently.
     with tempfile.TemporaryDirectory() as temporary:
         branch = fetch_branch(Path(temporary))
         require_newer(branch, metadata, SIGNED_ROLES)
@@ -162,11 +161,10 @@ def publish_discovery(metadata, version):
 
 def publish(package, metadata):
     tag, version, files = package_targets(package, metadata)
-    # Check before creating a payload release: it can't be replaced afterward.
+    # Check before creating the release since published releases are immutable.
     with tempfile.TemporaryDirectory() as temporary:
         require_newer(fetch_branch(Path(temporary)), metadata, SIGNED_ROLES)
-    # A new version is required for any correction. Existing releases are not
-    # silently overwritten, even when they are still drafts.
+    # Never overwrite an existing release (even a draft); fixes require a new version.
     gh("release", "create", tag, "--draft", "--latest=false", "--target", os.environ["RELEASE_COMMIT"],
        "--title", f"RC2FX mixer {version}", "--notes", f"RC2FX mixer software {version}. Install through the RC2FX desktop app's USB firmware installer.")
     gh("release", "upload", tag, *files, package / "SHA256SUMS")
@@ -179,7 +177,7 @@ def publish(package, metadata):
 
 
 def resume(package, metadata):
-    """Finish a publication that stopped after its payload release was published."""
+    """Resume metadata publication after the payload release was already published."""
     tag, version, files = package_targets(package, metadata)
     release = state(tag)
     if release["isDraft"] or release["tagName"] != tag:
@@ -189,7 +187,7 @@ def resume(package, metadata):
 
 
 def reauthorize(package, metadata):
-    """Extend target authorization without changing any published target bytes."""
+    """Re-sign target authorization without changing any published target bytes."""
     tag, version, files = package_targets(package, metadata)
     release = state(tag)
     if release["isDraft"] or release["tagName"] != tag:
@@ -204,13 +202,12 @@ def reauthorize(package, metadata):
         if new["targets"] != old["targets"]:
             raise ValueError("Reauthorization cannot change target identities, pins or compatibility")
         verify_upload(tag, files)
-        # Only authorization changes. In particular, never overwrite a payload,
-        # catalog, notice or root during this operation.
+        # Only update the signed role files (leave roots/payloads untouched).
         update_branch(branch, [metadata / name for name in SIGNED_ROLES], f"Reauthorize mixer {version}")
 
 
 def refresh(metadata):
-    """Publish renewed snapshot/timestamp only; never change targets or assets."""
+    """Push renewed snapshot and timestamp metadata without changing targets."""
     with tempfile.TemporaryDirectory() as temporary:
         branch = fetch_branch(Path(temporary))
         if branch.tip is None:

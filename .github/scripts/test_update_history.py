@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tests for update_history.py: python3 .github/scripts/test_update_history.py."""
+"""Offline tests for update_history.py."""
 
 import importlib.util
 import io

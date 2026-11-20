@@ -1,9 +1,9 @@
-// Package usbproto holds RC2FX control messages carried directly by the
-// existing vendor HID reports. Stop-and-wait framing: no unsolicited writes,
-// no automatic mutation replay.
+// Package usbproto implements RC2FX's control framing over vendor HID reports.
+// Framing is stop-and-wait with no unsolicited writes or automatic mutation
+// replay.
 //
-// Port of crates/rc2fx-usb; the mixer keeps the Rust crate. Both read the
-// shared fixtures in fixtures/usb.
+// This is a Go port of crates/rc2fx-usb (still used on the mixer); both sides
+// share test fixtures under fixtures/usb.
 package usbproto
 
 import (
@@ -22,36 +22,26 @@ const (
 	Header     = 32
 	Payload    = ReportSize - Header
 	OutputID   = 5
-	// RC2FX declares these IDs inside RODE's one top-level collection (usage
-	// page ff00), whose own reports are 1-4. Every reader of that collection
-	// receives input report 6 and must ignore it; RODE's software reads by
-	// report ID.
-	InputID    = 6
-	MaxRequest = 512*1024 + 1024
-	MaxReply   = 8*1024*1024 + 1024
-	// MaxEventBytes is the largest event a mixer publishes.
+	// RC2FX adds report IDs 5 and 6 to RODE's top-level collection (usage page
+	// ff00, which uses reports 1-4). Any reader on that collection will see
+	// input report 6 and must ignore it; RODE's own software filters by ID.
+	InputID       = 6
+	MaxRequest    = 512*1024 + 1024
+	MaxReply      = 8*1024*1024 + 1024
 	MaxEventBytes = 512 * 1024
-	// MaxEventReply is the largest reply to an event poll: one event and its
-	// envelope.
-	MaxEventReply = MaxEventBytes + 1024
-	// Magic marks an RC2FX report after its report ID.
-	Magic = "\xffRC2FX\x00"
-	// Hello3 is the hello data protocol 3 clients send, and the hello
-	// acknowledgement they expect.
-	Hello3 = "RC2FX USB 3"
-	// Hello4 is the hello data a protocol 4 client sends; the mixer's
-	// acknowledgement names the window it sized for this link.
+	MaxEventReply = MaxEventBytes + 1024 // event payload plus envelope
+	Magic         = "\xffRC2FX\x00"
+	Hello3        = "RC2FX USB 3"
+	// Hello4 is sent by protocol 4 clients; the mixer replies with "RC2FX USB 4 <window>".
 	Hello4 = "RC2FX USB 4"
-	// MaxWindow is the server's own bound on how many reports a client may
-	// keep in flight. The native hook forwards reports with a non-blocking
-	// datagram send, so a queue longer than the kernel's `max_dgram_qlen`
-	// would silently drop one.
+	// MaxWindow caps how many reports a client may keep in flight. The mixer's
+	// native hook forwards reports via non-blocking datagram sends, so exceeding
+	// the kernel's max_dgram_qlen would silently drop frames.
 	MaxWindow = 32
 )
 
-// Hello4Window returns the window in a protocol 4 hello acknowledgement
-// (`RC2FX USB 4 <window>`). Anything else is not one, including a bare
-// `RC2FX USB 4`.
+// Hello4Window parses the window size from a protocol 4 hello ack
+// ("RC2FX USB 4 <window>"). A bare "RC2FX USB 4" returns false.
 func Hello4Window(data []byte) (int, bool) {
 	digits, ok := bytes.CutPrefix(data, []byte("RC2FX USB 4 "))
 	if !ok || len(digits) == 0 {
@@ -69,7 +59,7 @@ func Hello4Window(data []byte) (int, bool) {
 	return int(window), true
 }
 
-// Kind is a frame's message kind.
+// Kind identifies a frame's message type.
 type Kind uint8
 
 const (
@@ -99,7 +89,7 @@ func (k Kind) String() string {
 	return "Kind(" + strconv.Itoa(int(k)) + ")"
 }
 
-// Frame is one decoded report. Data aliases the report it was decoded from.
+// Frame is a decoded HID report. Data aliases the underlying report buffer.
 type Frame struct {
 	Kind    Kind
 	Session uint64
@@ -109,16 +99,15 @@ type Frame struct {
 	Data    []byte
 }
 
-// Marked reports whether bytes is an RC2FX report with the given ID.
-// Recognition deliberately precedes validation: malformed RC2FX packets must
-// never be forwarded into RODE's command parser.
+// Marked reports whether bytes carries the RC2FX magic for the given report ID.
+// This check intentionally runs before full validation so malformed RC2FX
+// packets are never passed through to RODE's command parser.
 func Marked(bytes []byte, report uint8) bool {
 	return len(bytes) >= 8 && bytes[0] == report && string(bytes[1:8]) == Magic
 }
 
-// DeclaresControl reports whether a HID report descriptor declares RC2FX's
-// output and input reports, that is, whether RC2FX's USB layout is live.
-// Parsing sends nothing.
+// DeclaresControl inspects a HID report descriptor to check whether RC2FX's
+// input and output report IDs are declared (purely passive, sends nothing).
 func DeclaresControl(descriptor []byte) bool {
 	var report uint32
 	var stack []uint32
@@ -191,8 +180,8 @@ func DecodeFrame(bytes []byte, report uint8) (Frame, bool) {
 	}, true
 }
 
-// Encode encodes f as a report with the given ID. It panics when the data
-// does not fit one report or the offset or total does not fit 32 bits.
+// Encode serializes f into a fixed-size HID report. Panics if Data exceeds
+// Payload or if Offset/Total don't fit in uint32.
 func (f *Frame) Encode(report uint8) [ReportSize]byte {
 	if len(f.Data) > Payload || f.Offset < 0 || uint64(f.Offset) > math.MaxUint32 ||
 		f.Total < 0 || uint64(f.Total) > math.MaxUint32 {
@@ -217,13 +206,13 @@ var (
 	errDecodedTooLarge = errors.New("Decoded USB message too large")
 	errInvalidZ        = errors.New("Invalid compressed USB message")
 	errEncoding        = errors.New("Invalid USB message encoding")
-	// The Rust side reports a corrupt zlib stream with flate2's message.
+	// Matches flate2's error message on the Rust side.
 	errInflate = errors.New("deflate decompression error")
 )
 
-// Pack compresses a complete JSON message, off the audio thread. Explicit
-// decoded size and bounded decompression reject bombs, truncation and
-// trailing data.
+// Pack encodes a JSON message, compressing with zlib when that saves space.
+// Unpack enforces the declared decoded size to reject zip bombs, truncation,
+// and trailing bytes.
 func Pack(json []byte, limit int) ([]byte, error) {
 	if len(json) > limit || uint64(len(json)) > math.MaxUint32 {
 		return nil, errTooLarge
@@ -256,8 +245,8 @@ func Pack(json []byte, limit int) ([]byte, error) {
 	return encoded, nil
 }
 
-// Unpack reverses Pack, refusing anything over limit before or after
-// decompression.
+// Unpack decodes a message produced by Pack, rejecting inputs whose compressed
+// or uncompressed size exceeds limit.
 func Unpack(encoded []byte, limit int) ([]byte, error) {
 	if len(encoded) > limit {
 		return nil, errTooLarge
@@ -275,17 +264,16 @@ func Unpack(encoded []byte, limit int) ([]byte, error) {
 	return nil, errEncoding
 }
 
-// inflate decodes exactly one zlib stream of exactly size bytes that fills
-// stream. A bytes.Reader is a flate.Reader, so neither zlib nor flate reads
-// past the stream's checksum and the remainder is exactly the trailing data.
+// inflate decompresses a single zlib stream and verifies it produces exactly
+// size bytes with no trailing data. Because bytes.Reader implements
+// flate.Reader, zlib won't over-read past the Adler-32 checksum.
 func inflate(stream []byte, size int) ([]byte, error) {
 	input := bytes.NewReader(stream)
 	reader, err := zlib.NewReader(input)
 	if err != nil {
 		return nil, inflateError(err)
 	}
-	// One byte beyond the declared size proves the declaration a lie without
-	// inflating the rest.
+	// Read up to size+1 bytes so an understated size header is caught immediately.
 	decoded := make([]byte, 0, size+1)
 	limited := io.LimitReader(reader, int64(size)+1)
 	for {
@@ -304,8 +292,7 @@ func inflate(stream []byte, size int) ([]byte, error) {
 	if len(decoded) != size || input.Len() != 0 {
 		return nil, errInvalidZ
 	}
-	// The limit was not reached, so the stream itself ended: zlib returned EOF
-	// only after verifying its checksum.
+	// Reaching EOF before the limit means zlib verified the checksum.
 	return decoded, nil
 }
 
@@ -321,9 +308,9 @@ func inflateError(err error) error {
 	return err
 }
 
-// Assembly is exactly ordered assembly. A duplicate, gap, new ID, or
-// inconsistent total invalidates the in-flight message; callers never
-// execute partial requests. The zero value is ready to use.
+// Assembly reassembles strictly ordered fragments into a complete message. Any
+// gap, duplicate, request ID change, or mismatched total resets the buffer so
+// partial messages are never returned. The zero value is ready to use.
 type Assembly struct {
 	bytes   []byte
 	total   int
@@ -332,8 +319,8 @@ type Assembly struct {
 
 var errFragments = errors.New("Invalid USB fragment sequence")
 
-// Push adds one fragment. It returns the whole message once the last
-// fragment arrives, and nil before that.
+// Push appends a fragment and returns the completed message once the final
+// fragment arrives (or nil while more fragments are pending).
 func (a *Assembly) Push(frame *Frame, limit int) ([]byte, error) {
 	end := frame.Offset + len(frame.Data)
 	if frame.Total == 0 ||

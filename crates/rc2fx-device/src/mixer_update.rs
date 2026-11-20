@@ -1,21 +1,14 @@
-//! Installing a signed RC2FX release on a running mixer, over USB 1, without
-//! flashing RØDE's firmware.
+//! Signed in-place RC2FX updates over USB 1 without reflashing stock firmware.
 //!
-//! The desktop sends the release's TUF role documents and the payload bytes;
-//! this module verifies both against the trust root compiled into `rc2fxd`
-//! (the same one the desktop uses), swaps the bundle in `/opt/rc2fx` in place
-//! with a rollback copy, and hands the restart and commit to a detached
-//! `rc2fx.sh update-commit` step that survives this controller being replaced.
-//! `GET api/v1/update/last` reports how it ended after the app reconnects.
+//! Verifies TUF role metadata and payload bytes against the compiled-in trust
+//! root, swaps `/opt/rc2fx` in place with a rollback copy, and hands restart
+//! and commit off to a detached `rc2fx.sh update-commit` process. After
+//! reconnect, `GET api/v1/update/last` reports the outcome.
 //!
-//! A full flash is still required for a first install and for any RØDE
-//! firmware change; this path never touches the stock files and never runs
-//! anything from the payload before the signature, size, hash, firmware
-//! profile and version checks have passed.
-//!
-//! The upload may also be a `delta-1` encoding (see `rc2fx-delta`): the mixer
-//! rebuilds the signed envelope from the files it already has, then verifies
-//! and installs that exactly as it does a whole one.
+//! First installs and stock firmware changes still require a full flash. Nothing
+//! from an uploaded payload executes until signature, size, digest, firmware
+//! profile, and version checks pass. `delta-1` uploads (`rc2fx-delta`) are
+//! reconstructed into the signed envelope first, then verified identically.
 
 pub mod install;
 pub mod payload;

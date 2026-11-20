@@ -1,14 +1,13 @@
 package installer
 
-// The record that ties a prepared RC2FX image to the helper that built it.
+// Anchors prepared firmware images to the privileged helper that built them.
 //
-// The cache folder belongs to the desktop user, so `installer.json` and
-// `archive.tar.gz` can be rewritten together while the root helper runs. The
-// privileged helper therefore builds the image itself, keeps its own copy of
-// what it prepared in a root-owned folder and refuses anything else. Stock
-// images the catalog pins are checked against those pins; other stock images
-// RØDE lists are recorded like RC2FX images. Without a privileged helper
-// there is no boundary to defend and nothing is recorded.
+// Because the cache directory is owned by the desktop user, installer.json and
+// archive.tar.gz could be tampered with together while the root helper runs.
+// The helper therefore records its own hashes in a root-owned directory and
+// refuses any image that doesn't match. Pinned stock images are verified
+// against the catalog; other RØDE stock images are anchored like RC2FX images.
+// Unprivileged runs skip anchoring since there is no privilege boundary.
 
 import (
 	"errors"
@@ -21,13 +20,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// anchorDirectory finds the helper's root-owned folder for the records. The
-// package's tests replace it: run as root, as CI's containers do, they
-// would otherwise read, and create, the real /var/lib/rc2fx/prepared.
+// Overridden in tests so root CI containers don't touch /var/lib/rc2fx/prepared.
 var anchorDirectory = helperDirectory
 
-// anchorFile is where the record for this cache folder lives; empty when
-// unprivileged.
+// anchorFile returns the root-owned anchor path for this cache dir, or "" when unprivileged.
 func (e *Engine) anchorFile() (string, error) {
 	var dir string
 	if e.anchorDir != nil {
@@ -45,14 +41,12 @@ func (e *Engine) anchorFile() (string, error) {
 	return filepath.Join(dir, archive.Sum([]byte(e.Work))), nil
 }
 
-// anchorPrepared records prepared, whose hashes this process computed while
-// building it.
 func (e *Engine) anchorPrepared(prepared *Prepared) error {
 	path, err := e.anchorFile()
 	if err != nil || path == "" {
 		return err
 	}
-	// Not atomicFile: that gives the file to the desktop user.
+	// Don't use atomicFile here; it chowns to the desktop user.
 	part := strings.TrimSuffix(path, filepath.Ext(path)) + ".part"
 	data, err := sjson.Marshal(prepared)
 	if err != nil {
@@ -64,7 +58,6 @@ func (e *Engine) anchorPrepared(prepared *Prepared) error {
 	return os.Rename(part, path)
 }
 
-// checkAnchor refuses a prepared image that this helper did not record.
 func (e *Engine) checkAnchor(prepared *Prepared) error {
 	path, err := e.anchorFile()
 	if err != nil || path == "" {

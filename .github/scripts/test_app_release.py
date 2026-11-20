@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tests for publish_app.py: a fake replaces `gh`, and a local bare
-repository stands in for GitHub's metadata branch."""
+"""Offline tests for publish_app.py using a fake `gh` and a local bare git remote."""
 
 import hashlib
 import importlib.util
@@ -30,7 +29,7 @@ def assets(version):
 
 
 class FakeGh:
-    """Published releases by tag, with GitHub's digests computed on upload."""
+    """In-memory stand-in for GitHub releases with SHA-256 digests computed on upload."""
 
     def __init__(self):
         self.releases = {}
@@ -107,8 +106,7 @@ class Publication(unittest.TestCase):
         return directory, message
 
     def sign(self, tag, directory, version=None, roots=None):
-        """What `./xtask app-sign` writes, without real signatures:
-        publish_app trusts the signer for those, and the app checks them."""
+        """Write stub metadata matching `./xtask app-sign` output (without real signatures)."""
         self.sequence += 1
         version = version or tag[1:]
         out = self.temp / f"signed-{self.sequence}"
@@ -127,7 +125,7 @@ class Publication(unittest.TestCase):
         return out
 
     def release(self, version):
-        """Publish, prepare, sign and publish metadata for app VERSION."""
+        """Create, prepare, sign, and publish metadata for app VERSION."""
         tag = f"v{version}"
         self.gh.add(tag, assets(version))
         directory, _ = self.prepare(tag)
@@ -152,7 +150,7 @@ class Publication(unittest.TestCase):
         again, message = self.prepare("v1.2.3", "again")
         self.assertIn("already signed", message)
         self.assertIn("sign=false", self.outputs.read_text())
-        # A publish that lost a race to an identical one is done, not an error.
+        # Racing an identical publish should succeed as a no-op.
         self.assertIn("already signed", app.publish("v1.2.3", again, self.sign("v1.2.3", again)))
         self.assertEqual(self.commits(), ["Sign app 1.2.3"])
 
@@ -168,7 +166,7 @@ class Publication(unittest.TestCase):
         self.gh.add("v1.2.9", assets("1.2.9"))
         with self.assertRaisesRegex(app.Refused, "roll back"):
             self.prepare("v1.2.9")
-        # Signed anyway, it is still refused at publication.
+        # Publish should also reject it even if prepare was bypassed.
         directory = self.temp / "old"
         app.download_release(self.gh, "v1.2.9", directory)
         with self.assertRaisesRegex(app.Refused, "roll back"):
@@ -263,8 +261,7 @@ class Publication(unittest.TestCase):
         self.assertEqual(self.commits(), [])
 
     def built(self, files, name="built"):
-        """The release run's artifacts: its Linux and Windows packages with the
-        SHA256SUMS written before macOS, and the macOS packages."""
+        """Stage fake build artifacts (release-assets with pre-macOS SHA256SUMS, plus macos-package)."""
         assets, macos = self.temp / name / "release-assets", self.temp / name / "macos-package"
         for directory in (assets, macos):
             directory.mkdir(parents=True)
@@ -302,7 +299,7 @@ class Publication(unittest.TestCase):
         self.gh.add("v1.2.3", assets("1.2.3"))
         directory, _ = self.prepare("v1.2.3", "unix-time")
         signed = self.sign("v1.2.3", directory)
-        # What `date -u +%s` gave when mixer 0.1.2 was signed.
+        # Unix timestamp in the range used by mixer metadata.
         for name in app.SIGNED_ROLES:
             document = json.loads((signed / name).read_text())
             document["signed"]["version"] = 1794082929

@@ -1,22 +1,15 @@
 package release
 
-// The shared fixture fixtures/xtask: TUF metadata written by this signer,
-// which the mixer's Rust verifier (crates/rc2fx-device/tests/
-// xtask_tuf_fixtures.rs, sigstore-tuf) must accept. Two repositories sign
-// the same packaged release (targets/mixer-v1.2.3):
+// Maintains fixtures/xtask, which the Rust TUF verifier tests against
+// (crates/rc2fx-device/tests/xtask_tuf_fixtures.rs). Both repositories sign
+// targets/mixer-v1.2.3 with metadata/ (seq 1) and refreshed/ (seq 2):
+//   - ed25519/: deterministic keys/expiries; re-signed on every test run to
+//     catch serialization drift
+//   - rsa/: production RSA-3072 / RSA-PSS keys from mixer-keys (randomized sigs)
 //
-//   - ed25519/: fixed keys and expiries, so the signer's output is
-//     byte-for-byte reproducible; this test re-signs it and compares, which
-//     catches any drift in what the Go signer writes;
-//   - rsa/: a root made by mixer-keys (RSA-3072, RSA-PSS/SHA-256, the
-//     production key type), whose signatures are randomized.
-//
-// Each has metadata/ (mixer-sign, sequence 1) and refreshed/ (mixer-refresh,
-// sequence 2). Regenerate with
+// Regenerate from desktop/ with:
 //
 //	RC2FX_WRITE_XTASK_FIXTURES=1 go test ./internal/xtask/release -run TestXtaskFixtures
-//
-// from desktop/, then run the Rust test.
 
 import (
 	"bytes"
@@ -43,8 +36,7 @@ const (
 	ed25519Renewal = "2097-06-01T00:00:00Z"
 )
 
-// fixtureKeys writes the fixed Ed25519 keys (seeded from their role names;
-// test-only, never trusted anywhere) as ROLE.pk8 in dir.
+// fixtureKeys writes deterministic test-only Ed25519 keys seeded by role name.
 func fixtureKeys(t *testing.T, dir string) map[string]tufsign.Signer {
 	t.Helper()
 	signers := map[string]tufsign.Signer{}
@@ -65,8 +57,6 @@ func fixtureKeys(t *testing.T, dir string) map[string]tufsign.Signer {
 	return signers
 }
 
-// signEd25519 writes the ed25519 repository for the release in targets to
-// out: root.json, metadata/ and refreshed/.
 func signEd25519(t *testing.T, targets, out string) {
 	t.Helper()
 	keys := t.TempDir()
@@ -103,8 +93,6 @@ func signEd25519(t *testing.T, targets, out string) {
 	}
 }
 
-// signRSA writes the rsa repository: a mixer-keys root, then mixer-sign
-// and mixer-refresh with its PEM keys.
 func signRSA(t *testing.T, targets, out string) {
 	t.Helper()
 	keys := filepath.Join(t.TempDir(), "keys")
@@ -148,7 +136,6 @@ func writeFixtures(t *testing.T) {
 	signRSA(t, dir, filepath.Join(dir, "rsa"))
 }
 
-// loadFixture verifies one repository of the fixture as the client does.
 func loadFixture(t *testing.T, repo, metadata string, now time.Time) *loadedRepository {
 	t.Helper()
 	dir := fixtureDir()
@@ -175,8 +162,7 @@ func TestXtaskFixtures(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "ed25519", "metadata", "targets.json")); err != nil {
 		t.Fatalf("fixtures/xtask is not generated yet: run RC2FX_WRITE_XTASK_FIXTURES=1 go test ./internal/xtask/release -run TestXtaskFixtures (%v)", err)
 	}
-	// The Ed25519 repository is reproducible: signing the committed release
-	// again writes exactly the committed files.
+	// Re-signing the committed release with the fixed Ed25519 keys must match byte-for-byte.
 	again := t.TempDir()
 	signEd25519(t, dir, again)
 	for _, name := range []string{
@@ -195,8 +181,8 @@ func TestXtaskFixtures(t *testing.T) {
 		if want := map[string]uint64{"metadata": 1, "refreshed": 2}[metadata]; loaded.Timestamp.Version != want || loaded.Targets.Version != 1 {
 			t.Fatalf("ed25519/%s: timestamp %d targets %d", metadata, loaded.Timestamp.Version, loaded.Targets.Version)
 		}
-		// The mixer checks no expiry (it has no trusted clock); the RSA
-		// repository's discovery metadata expires a week after it was made.
+		// Use epoch 0 for the committed RSA fixture since its discovery metadata
+		// only lives for a week after generation.
 		loadFixture(t, "rsa", metadata, time.Unix(0, 0))
 	}
 	if !bytes.Equal(mustRead(t, filepath.Join(dir, "ed25519", "metadata", "targets.json")),

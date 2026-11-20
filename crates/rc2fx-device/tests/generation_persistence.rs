@@ -1,7 +1,7 @@
-//! Durable lifecycle tokens across a daemon replacement. A client orders the
-//! states it receives by generation, then by settings revision, so a restarted
-//! daemon must publish a newer generation with the saved settings unchanged.
-//! These tests do not claim that a reserved token proves audio recovery.
+//! Tests for durable engine generation tokens across daemon restarts.
+//! Clients order state updates by `(generation, revision)`, so a reopened
+//! controller must publish a strictly newer generation while keeping saved
+//! settings unchanged.
 use rc2fx_core::{Config, ConfigUpdate};
 use rc2fx_device::{
     controller::Controller,
@@ -50,11 +50,7 @@ fn a_reopened_controller_publishes_a_newer_generation_with_the_same_settings() {
     assert_eq!(reopened.reserve_generation().unwrap(), 2);
     assert_eq!(reopened.config(), &saved);
     let current = Controller::new(reopened).state();
-    // Newer than anything the old daemon published, so a client never takes
-    // an old state, even one with a higher settings revision, for current.
     assert_eq!(current.engine.generation, 2);
-    // The settings and their revision are unchanged, so a client keeps its
-    // unsaved edits: there is nothing new to reconcile them with.
     assert_eq!(current.config, old.config);
     assert_eq!(current.config, saved);
 }
@@ -65,17 +61,13 @@ fn unpublished_reservation_is_never_reused_after_reopen() {
     let mut store = Store::open(temporary.path(), initial()).unwrap();
     assert_eq!(store.reserve_generation().unwrap(), 1);
     let visible = Controller::new(store).state();
-    // The temporary controller above drops its Store after producing an owned
-    // snapshot; a killed process need not have published every durable token.
     assert_eq!(visible.engine.generation, 1);
     let mut store = Store::open(temporary.path(), initial()).unwrap();
     assert_eq!(store.reserve_generation().unwrap(), 2);
-    drop(store); // No reply or event for token 2.
+    drop(store); // Token 2 was never published.
     let mut store = Store::open(temporary.path(), initial()).unwrap();
     assert_eq!(store.reserve_generation().unwrap(), 3);
     let current = Controller::new(store).state();
-    // Past the unpublished token too: a state a killed daemon may have sent
-    // under it is older than the current one.
     assert_eq!(current.engine.generation, 3);
     assert_eq!(current.config, visible.config);
     assert_eq!(disk_generation(temporary.path()), 3);

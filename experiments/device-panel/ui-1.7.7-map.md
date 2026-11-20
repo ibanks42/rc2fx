@@ -1,48 +1,23 @@
 # GUI 1.7.7 frame and input map (offline)
 
-This is the offline investigation that preceded the
-[device panel](README.md). It maps the frame and input paths of RØDE's GUI
-program in the 1.7.7 beta (called UI-B here) and records what a shim could
-and could not safely do at the time. Some of its open questions were later
-addressed by the panel implementation. The text below describes the state at
-the time of the investigation.
+This offline reverse-engineering note preceded the [device panel](README.md). It maps the frame and touch-input paths of RØDE's 1.7.7 beta GUI binary (referred to as UI-B here) and documents what a C-import shim could and couldn't safely do at the time. Several open questions listed here were later solved in the panel implementation; the write-up below reflects what was known during the initial audit.
 
 ## Summary
 
-A C-import shim looked feasible, but the evidence was not enough to run one
-on a device.
+A C-import shim looked viable on paper, though offline evidence alone wasn't enough to run it on hardware:
 
-- The best place to modify the source buffer is just before
-  `ioctl(VIDIOC_QBUF)` at `0x7d0634`. `drmModeAtomicCommit` is too late, as on
-  its own it does not identify a writable CPU buffer.
-- The matching place to restore the source is after a successful output
-  `VIDIOC_DQBUF` at `0x7d081c` and before the repaint mutex is unlocked at
-  `0x7d09e0`.
-- Neither DMA completion and cache coherency nor safe recovery from failures
-  had been shown.
-- There is one persistent MMAP paint source, two alternating scanout
-  destinations, and no spare buffer or copy path. Because the vendor repaints
-  partial regions, any overlay left in the source would ghost, so restoring the
-  source is a hard requirement.
+- The cleanest hook point for modifying the source buffer is right before `ioctl(VIDIOC_QBUF)` at `0x7d0634`. `drmModeAtomicCommit` is too late and doesn't expose a writable CPU buffer on its own.
+- The matching restore point is after a successful OUTPUT `VIDIOC_DQBUF` at `0x7d081c` and before unlocking the repaint mutex at `0x7d09e0`.
+- DMA completion, cache coherency, and safe failure recovery were still unproven offline.
+- The GUI uses a single persistent MMAP paint source and two alternating scanout destinations, with no spare buffer or copy path. Because JUCE repaints dirty regions incrementally, leaving overlay pixels in the source causes ghosting, so restoring the source is mandatory.
 
-Input could be filtered around the GUI's existing imported `read`. A second
-evdev reader would not work. The filter has to claim a contact before stock
-code sees any part of it, and then suppress the whole gesture. The stock
-callback acts before a complete `SYN_REPORT` frame arrives, so passing records
-through one at a time is a different behavior from the host prototype's
-complete-contact gate.
+Touch input could be intercepted around the GUI's imported `read` (opening a second evdev reader won't work). Any filter has to claim a contact before stock code sees any of its events and suppress the entire gesture. Since the stock callback dispatches before a full `SYN_REPORT` frame arrives, passing single records through behaves differently from the host prototype's complete-contact gate.
 
-The investigation read `AGENTS.md` and `rodecaster-on-device-ui.md`, but every
-address below was derived fresh from UI-B bytes, relocations, RTTI, unwind
-FDEs, and verified PLT/GOT pairs. There was no device access, firmware
-execution or emulation, SSH, launch, flash, GUI or audio restart, or change to
-existing sources. Only the investigation's own three audit files were
-written. No JUCE objects were constructed and no live adapter was built. The
-main report was left unchanged.
+Although `AGENTS.md` and `rodecaster-on-device-ui.md` were consulted for context, every address below was derived directly from UI-B's bytes, relocations, RTTI, unwind FDEs, and verified PLT/GOT entries. Nothing touched a device, emulated firmware, ran SSH, or modified existing sources; only the three audit files were written, and no JUCE objects or live adapters were built.
 
 ## Reproducing
 
-From the repository root, with Python 3.11 or newer:
+From the repo root with Python 3.11+:
 
 ```sh
 .deps/duo-investigation/audit-env/bin/python -B -c \
@@ -54,57 +29,34 @@ From the repository root, with Python 3.11 or newer:
   .deps/downloads/rodecaster-pro-ii-1.7.7-beta-os.tar.gz --out /tmp/ui-b-audit.json
 ```
 
-It was tested with Capstone 5.0.7 and pyelftools 0.33.
-`tools/firmware_audit/requirements.txt` pins Capstone 5.0.9, pyelftools 0.33,
-and Unicorn 2.1.4. This audit does not use Unicorn. Nothing had to be
-installed, and no mixer `Image` was reused or modified.
+Tested with Capstone 5.0.7 and pyelftools 0.33 (`tools/firmware_audit/requirements.txt` pins Capstone 5.0.9, pyelftools 0.33, and Unicorn 2.1.4, though this audit doesn't use Unicorn). No extra packages were installed and no mixer `Image` was touched.
 
-The auditor:
+What the auditor does:
 
-- reads archive members into memory,
-- refuses any GUI whose SHA-256 is not
-  `aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca`, before
-  any parsing or disassembly,
-- checks the ELF architecture,
-- verifies each AArch64 PLT stub against its `R_AARCH64_JUMP_SLOT` GOT
-  relocation,
-- finds functions through `.eh_frame`.
+- reads archive members directly in memory,
+- rejects any GUI binary whose SHA-256 isn't `aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca` before parsing or disassembling anything,
+- checks ELF architecture,
+- cross-checks every AArch64 PLT stub against its `R_AARCH64_JUMP_SLOT` GOT relocation,
+- locates function boundaries via `.eh_frame`.
 
-It writes deterministic JSON: tool versions, archive and member identity,
-RTTI and vtables, imports and types, every imported call site in the selected
-functions, direct edges, function SHA-256s, and the disassembly ranges that
-carry the key bytes. Analyst labels for ranges and UAPI interpretations are
-kept apart from the observations. The auditor is not a hook installer or a
-general GUI analyzer.
+It outputs deterministic JSON containing tool versions, archive/member metadata, RTTI and vtables, imports, every imported call site inside the selected functions, direct call edges, function SHA-256 hashes, and disassembly snippets, keeping analyst labels separate from raw observations. It's strictly an offline auditor, not a hook installer or general analyzer.
 
-The checked file is `/usr/bin/rc_gui_juce`: 19,761,224 bytes, ELF64 LE
-AArch64 PIE, entry `0x400f40`, from the archive with SHA-256
-`29028734fb2fcc26433bd9f519004c58526c195392ad704826df2fc2909fe57e`. All
-addresses are ELF virtual addresses. Live pointers add a load bias, since the
-file is `ET_DYN`. File offsets of writable RTTI and vtables are recorded
-separately. No offsets were translated from UI-A. `/etc/rotation` in this
-archive contains `270\n`.
+Target binary: `/usr/bin/rc_gui_juce` (19,761,224 bytes, ELF64 LE AArch64 PIE, entry `0x400f40`), from archive SHA-256 `29028734fb2fcc26433bd9f519004c58526c195392ad704826df2fc2909fe57e`. All addresses below are ELF virtual addresses (live pointers add the PIE load bias). File offsets for writable RTTI/vtables are tracked separately, and no offsets were ported over from UI-A. `/etc/rotation` in this archive is `270\n`.
 
-Verification passed on all of these:
+Sanity checks verified:
 
-- regeneration is deterministic,
-- all 14 function digests match,
-- 26 snippets are rebuilt exactly from their instruction bytes,
+- output is deterministic across runs,
+- all 14 function hashes match,
+- all 26 snippets round-trip cleanly from their instruction bytes,
 - all 36 instructions transcribed below match the ELF,
-- the UI-A archive is refused with exit code 2,
-- an existing `--out` file is left unchanged.
+- the UI-A archive is rejected with exit code 2,
+- an existing `--out` file is never overwritten.
 
-No vendor instructions were executed.
-
-The evidence file is
-[`docs/firmware-audits/rodecaster-pro-ii-ui-1.7.7.json`](../../docs/firmware-audits/rodecaster-pro-ii-ui-1.7.7.json).
-Its `functions`, `snippets`, `boundary_annotations`, `rtti`, `imports`, and
-`imported_calls_in_selected_functions` fields are the machine-readable
-sources for the citations below.
+No vendor code was executed. Machine-readable evidence lives in [`docs/firmware-audits/rodecaster-pro-ii-ui-1.7.7.json`](../../docs/firmware-audits/rodecaster-pro-ii-ui-1.7.7.json) under `functions`, `snippets`, `boundary_annotations`, `rtti`, `imports`, and `imported_calls_in_selected_functions`.
 
 ## RTTI, relocation, and unwind anchors
 
-Typeinfo and vtable RTTI-reference slots (all virtual addresses):
+Typeinfo and vtable RTTI-reference slots (virtual addresses):
 
 | RTTI name suffix | Typeinfo | Name bytes | Vtable RTTI slot | Following function targets |
 | --- | --- | --- | --- | --- |
@@ -113,19 +65,11 @@ Typeinfo and vtable RTTI-reference slots (all virtual addresses):
 | `RodecasterDRMThreadE` | `0x12e0560` | `0xb3f328` | `0x12b21b0` | `0x758d90`, `0x758de0`, **`0x7d08a0`** |
 | `RodecasterWindowSystemE` | `0x12e1fa8` | `0xb423e8` | `0x12b7e70` | `0x7d0cc0`, `0x7d0d40` |
 
-The typeinfo objects carry named `__cxxabiv1` type-info vtable relocations.
-Their name pointers and the listed vtable pointers are relative relocations.
-Reading the first two targets as destructor variants and the third as the
-`run` or timer callback is an inference from Itanium C++ conventions and from
-the function bodies. The method names were not recovered.
+Typeinfo objects have named `__cxxabiv1` vtable relocations, while their name and vtable pointers use relative relocations. Treating the first two slots as destructors and the third as `run` or a timer callback follows Itanium C++ ABI conventions and the disassembled bodies (exact method names are stripped).
 
-The WindowSystem accessor and lazy constructor, found separately, is
-`0x92e030`. It installs vptr `0x12b7e78` at `0x92e100`. The RTTI for
-`V4L2PixelData` (`0x12e1fd8`) and `V4L2ImageType` (`0x12e2000`) ties the
-bitmap helper `0x7cf020` and the image allocator `0x7d0480` to the same
-initialization chain.
+Separately, `0x92e030` is the `WindowSystem` accessor/lazy constructor, writing vptr `0x12b7e78` at `0x92e100`. RTTI for `V4L2PixelData` (`0x12e1fd8`) and `V4L2ImageType` (`0x12e2000`) ties bitmap helper `0x7cf020` and image allocator `0x7d0480` into the same init path.
 
-Whole-function identity checks (end address exclusive):
+Whole-function digests (end address exclusive):
 
 | Function VA range | SHA-256 |
 | --- | --- |
@@ -136,77 +80,29 @@ Whole-function identity checks (end address exclusive):
 | `0x7d0560–0x7d089c` conversion | `d095d02c113414c214210285f82a24d15929c4af22088083a5af9bc1f5ad5855` |
 | `0x7d7710–0x7d78f0` DRM allocation | `da30acda0d63b9967885c605e8c7691b083901a84b8cb87f5da919553241579a` |
 
-These digests identify function bytes. They do not mark approved patch sites.
-The binary uses PAC and BTI. The JSON includes the four bytes and SHA-256 of
-each imported branch, and the bytes and digest of each whole snippet.
+These hashes fingerprint the function bytes (they aren't a list of patch sites). The binary uses PAC and BTI; the JSON also records the 4-byte instruction and SHA-256 for every imported branch and snippet.
 
 ## Frame path
 
 ### Allocation and formats
 
-These are the requests the code makes. The values the driver returns at run
-time could not be observed offline.
+These reflect what the binary requests; actual driver return values couldn't be seen offline.
 
-1. Window initialization opens `/dev/dri/card0` at `0x92e170`, negotiates the
-   atomic capability at `0x92e1cc`, and copies the connector mode's width and
-   height into backend globals at `0x92e398` (the mode structure is loaded at
-   `+4` and `+0xe`). It writes `0x34325258` (`XR24`) at `0x92e74c` and then
-   calls the dumb-buffer allocator `0x7d7710` twice, at `0x92e7a4` and
-   `0x92e7b4`, for the descriptors `0x12ec5b8` and `0x12ec5e0`, which are
-   0x28 bytes apart. This initialization allocates no third or spare buffer.
-2. The allocator calls `drmIoctl` for CREATE_DUMB `0xc02064b2` at `0x7d7770`
-   and MAP_DUMB `0xc01064b3` at `0x7d77a0`, then `mmap` at `0x7d77c4` with
-   protection 3, flags 1, and the returned size and offset. It requests 32
-   bits per pixel. `drmModeAddFB2` at `0x7d7810` gets the mode dimensions,
-   XR24, the returned handle and pitch, and zero offsets and flags. The pitch
-   is taken from the driver and may differ from width×4. PRIME_HANDLE_TO_FD
-   `0xc00c642d` at `0x7d7834` exports the handle with flags 0. The code stores
-   the CPU mapping at descriptor `+0x18`, the FB ID at `+0x20`, and the export
-   FD at `+0x24`. These are observed accesses. They are not a proposed C
-   struct.
-3. Peer construction at `0x7dc9d4–0x7dc9ec` calls the V4L2 initializer
-   `0x7cfca0` with 1280×720, rotation 270, and a clear-source flag of 1. The
-   initializer opens `/dev/video0` at `0x7cfcec`, queries capabilities at
-   `0x7cfd18`, sends control ID `0x00980922` at `0x7cfd4c`, and sets the
-   format BA24 (`0x34324142`) for OUTPUT at `0x7cfdfc` and CAPTURE at
-   `0x7cff00`. That is the 90/270 branch. The non-swapped branch is at
-   `0x7d02d4`. The requested OUTPUT stride is width×4 and is checked. The
-   CAPTURE dimensions are swapped for 90 and 270.
-4. Decoded through the UAPI headers, the rotation control is
-   `V4L2_CID_ROTATE`. BA24 is `V4L2_PIX_FMT_ARGB32` and DRM XR24 is
-   `DRM_FORMAT_XRGB8888`. The two naming schemes differ, so the host
-   prototype's synthetic XR24 bytes cannot be used for this V4L2 source
-   without checking channel order and alpha. On success, initialization checks
-   the dimensions, format, and stride the driver returns.
-5. One OUTPUT buffer is requested. Rodata `0xb411d0` holds count 1 and type 2,
-   and `VIDIOC_REQBUFS` at `0x7cff88` uses memory type 1 (MMAP). The CAPTURE
-   request at `0x7cffd4` uses count 1, type 1, and memory type 4 (DMABUF).
-   OUTPUT QUERYBUF at `0x7d0028` gets the size and offset, and `mmap` at
-   `0x7d0048` produces the persistent source pointer, returned at `0x7d0074`.
-   The bitmap helper `0x7cf020` computes
-   `base + y*stride + x*pixelStride` from loads at pixel-data `+0x38`, `+0x40`,
-   and `+0x44`.
+1. Window init opens `/dev/dri/card0` (`0x92e170`), negotiates atomic mode-setting (`0x92e1cc`), and copies the connector mode's width/height into globals at `0x92e398` (loaded from mode `+4` and `+0xe`). It writes `0x34325258` (`XR24`) at `0x92e74c` and calls dumb-buffer allocator `0x7d7710` twice (`0x92e7a4`, `0x92e7b4`) for descriptors `0x12ec5b8` and `0x12ec5e0` (0x28 bytes apart). No third buffer is allocated.
+2. The allocator calls `drmIoctl` for `CREATE_DUMB` (`0xc02064b2` at `0x7d7770`) and `MAP_DUMB` (`0xc01064b3` at `0x7d77a0`), then `mmap`s it (`0x7d77c4`, prot 3, flags 1) at 32 bpp. `drmModeAddFB2` (`0x7d7810`) registers the framebuffer with mode dimensions, `XR24`, handle, driver-returned pitch (which may differ from `width*4`), and zero offsets/flags. `PRIME_HANDLE_TO_FD` (`0xc00c642d` at `0x7d7834`, flags 0) exports the handle. Observed descriptor offsets: CPU mapping at `+0x18`, FB ID at `+0x20`, export FD at `+0x24`.
+3. Peer construction (`0x7dc9d4–0x7dc9ec`) calls V4L2 init `0x7cfca0` with 1280×720, rotation 270, and clear-source = 1. It opens `/dev/video0` (`0x7cfcec`), queries capabilities (`0x7cfd18`), sets control `0x00980922` (`0x7cfd4c`), and configures `BA24` (`0x34324142`) on both OUTPUT (`0x7cfdfc`) and CAPTURE (`0x7cff00`) in the 90/270 branch (non-swapped branch at `0x7d02d4`). OUTPUT stride is checked against `width*4`, and CAPTURE dimensions are swapped for 90/270.
+4. Cross-checking Linux UAPI headers: control `0x00980922` is `V4L2_CID_ROTATE`, `BA24` is `V4L2_PIX_FMT_ARGB32`, and DRM `XR24` is `DRM_FORMAT_XRGB8888`. Because V4L2 and DRM pixel format naming don't match 1:1, the host prototype's synthetic XR24 pixels can't be assumed valid for this V4L2 source without verifying channel order and alpha. Init verifies the driver-returned dimensions, format, and stride.
+5. One OUTPUT buffer is requested (`0xb411d0` holds count 1, type 2; `VIDIOC_REQBUFS` at `0x7cff88` uses memory type 1 / `MMAP`), and one CAPTURE buffer (`0x7cffd4`: count 1, type 1, memory type 4 / `DMABUF`). OUTPUT `QUERYBUF` (`0x7d0028`) + `mmap` (`0x7d0048`) yields the persistent source pointer returned at `0x7d0074`. Bitmap helper `0x7cf020` indexes `base + y*stride + x*pixelStride` from pixel-data offsets `+0x38`, `+0x40`, and `+0x44`.
 
 ### Paint, convert, commit, and reuse
 
-The repaint callback `0x7cf5d0` walks a list of 16-byte rectangles and paints
-only when the list is non-empty and the size is positive. It locks the
-manager at `+0x1e0` at `0x7cf7ac`, calls the indirect renderer at `0x7cf808`
-and another paint helper at `0x7cf814`, unlocks at `0x7cf81c`, and notifies at
-`0x7cf824`. This is dirty-region rendering. It gives no guarantee that the
-source holds a freshly cleared full frame.
+Repaint callback `0x7cf5d0` iterates a list of 16-byte dirty rects and skips painting if the list is empty or zero-sized. It locks the manager mutex at `+0x1e0` (`0x7cf7ac`), invokes the indirect renderer (`0x7cf808`) and a second paint helper (`0x7cf814`), unlocks (`0x7cf81c`), and signals (`0x7cf824`). Because this is incremental dirty-region rendering, the source buffer isn't cleared before each frame.
 
-The constructor installs the DRM-thread vptr at manager `+0x50`
-(`0x7dc944`). In this construction, the DRM-thread mutex at `+0x190` and the
-repaint mutex at `+0x1e0` are therefore the same mutex.
+The constructor installs the DRM-thread vptr at manager `+0x50` (`0x7dc944`), meaning the DRM-thread mutex at `+0x190` and the repaint mutex at `+0x1e0` are the exact same mutex.
 
-The frame loop `0x7d08a0` waits, then drains the previous DRM event if there
-was a previous atomic request. It loads the current destination from the
-global `0x12ec610`, locks the same mutex at `0x7d09d0`, passes destination
-`+0x24` (the export FD) at `0x7d09d4`, and calls the conversion helper
-`0x7d0560` at `0x7d09d8`.
+Frame loop `0x7d08a0` waits, drains the prior DRM event if an atomic commit was pending, loads the active destination from `0x12ec610`, locks that shared mutex (`0x7d09d0`), passes destination `+0x24` (export FD) at `0x7d09d4`, and calls conversion helper `0x7d0560` (`0x7d09d8`).
 
-The key imported-call instructions (hex bytes as observed in the file):
+Key imported calls inside conversion and unlock:
 
 ```text
 7d05b0 e4a300b9 str w4, [sp,#0xa0]   ; supplied destination FD -> capture buffer+0x40
@@ -222,21 +118,9 @@ The key imported-call instructions (hex bytes as observed in the file):
 7d09e0 d8cbe497 bl  0x103940          ; pthread_mutex_unlock after conversion helper returns
 ```
 
-At `0x7d0634` the source has not been queued yet, so a wrapper could track its
-MMAP identity and wrap that single original call. After a successful source
-dequeue, a wrapper could restore a saved region before the vendor repaints
-it. That points to a bounded experiment: save, patch, convert, restore. It
-does not mean writing to the source was safe at this stage.
+At `0x7d0634` the source buffer isn't queued yet, so a wrapper could save a region, overlay onto it, let conversion run, and restore it after a successful OUTPUT `DQBUF`, before JUCE can repaint. Note that vendor code skips checking `DQBUF` return values on the normal path after `select` reports ready, and timeout/error branches can return without dequeuing both buffers (while the caller still unlocks the mutex), so restoring blindly on error paths would race DMA.
 
-The vendor code does not check dequeue return codes on the normal path where
-`select` reports ready. The timeout and error paths can return without both
-dequeues, and restoring in those cases could race the DMA. The caller unlocks
-the mutex even when the helper exits through one of those errors.
-
-After conversion, the frame loop allocates an atomic request and sets `FB_ID`
-from destination `+0x20`. It builds `CRTC_ID`, `SRC_X/Y/W/H` (16.16
-dimensions), `CRTC_X/Y/W/H`, and the initial mode and active properties
-through the helpers `0x93ce40` and `0x93cf40`. The commit and wait sequence:
+After conversion, the loop builds a DRM atomic request setting `FB_ID` (from destination `+0x20`), `CRTC_ID`, `SRC_X/Y/W/H` (16.16 fixed-point), `CRTC_X/Y/W/H`, and initial mode/active properties via `0x93ce40` and `0x93cf40`:
 
 ```text
 7d0a24 38008052 mov w24,#1
@@ -250,62 +134,23 @@ through the helpers `0x93ce40` and `0x93cf40`. The commit and wait sequence:
 7d09c4 77cae497 bl 0x1033a0           ; drmModeAtomicFree
 ```
 
-The flags are `PAGE_FLIP_EVENT` (1), plus `ALLOW_MODESET` (0x400) on the
-first modeset. `NONBLOCK` (0x200) is not set. The callback registered at
-`0x92e75c` is `0x7cf230`, which is only `bti c; ret`
-(`5f2403d5c0035fd6`). So the loop waits for and handles events, but the
-callback does no per-buffer completion accounting. After the commit the two
-destination pointers are swapped through the globals `0x12ec608` and
-`0x12ec610`. On the first pass the fallback picks the second descriptor.
+Flags are `PAGE_FLIP_EVENT` (`1`), plus `ALLOW_MODESET` (`0x400`) on the first pass (`NONBLOCK` / `0x200` is unused). The page-flip callback registered at `0x92e75c` is `0x7cf230`, which is just `bti c; ret` (`5f2403d5c0035fd6`), so the loop waits for events but does no per-buffer completion tracking. After commit, globals `0x12ec608` and `0x12ec610` swap the two destination pointers (falling back to the second descriptor on pass one).
 
 ### Presentation and input gating
 
-Input quarantine has to last until the frame is actually presented. Commit
-submission or return is too early. This chain passes commit user data 0 and
-a page-flip callback that does nothing. The `select` and `drmHandleEvent`
-calls show that the loop waits for an event, but there is no frame-tagged
-acknowledgement, and nothing linked a panel generation to its completed
-presentation.
+Input quarantine can't lift when `drmModeAtomicCommit` returns; it has to wait until the frame is actually presented. Stock code passes `0` as commit user data and uses a no-op flip handler, so nothing tied a panel generation to its completed flip.
 
-Evdev records already buffered across that acknowledgement also need a
-contact snapshot or ordering barrier. Opening input as soon as a commit
-function returns is not enough. The mapped input callback uses event type,
-code, and value, and does not use the record's timeval as a
-presentation-generation boundary. Closing the panel likewise needs the display
-retired and whole contacts drained before stock resumes.
+Buffered evdev events crossing that flip boundary also need a contact snapshot or ordering barrier; the stock input callback only looks at event type, code, and value and ignores timestamps. Closing the panel has the mirror requirement: retire the overlay and drain active contacts before handing touch back to stock.
 
 ### Scanout ownership
 
-An atomic commit does not give safe ownership of a writable scanout buffer.
-The request holds IDs and properties with no CPU pointers, and conversion has
-already happened by then. A shim would need to associate mapping, FB, and
-export FD, and prove completion and coherency.
-
-The source is persistent and partly repainted, so patching it and leaving the
-panel there risks ghosts after close. Writing only to a destination might
-keep the source clean, but it had not been shown that each later conversion
-fully overwrites the destination, because driver crop, format, completion,
-and error behavior were unknown. Both destinations are already part of
-scanout reuse, so neither is a spare. The bounded chain contains no full-frame
-copy and no callback that restores before the vendor writes. The window after
-a successful output dequeue was the best candidate for restoring the source,
-but it did not settle the requirement.
+An atomic commit request only carries IDs and properties (no CPU pointers), and hardware conversion has already finished by then. Writing directly to a scanout destination would avoid dirtying the source, except both destinations are actively reused for scanout (no spare exists) and offline analysis couldn't prove every subsequent conversion completely overwrites the destination. Restoring the persistent source after a successful OUTPUT `DQBUF` looked like the cleanest option, though still needing proof on error paths and DMA coherency.
 
 ## Input path
 
-Window initialization opens `/dev/input/event0` at `0x92e150`, stores the FD
-at WindowSystem `+8` with flags `0x902`, then sets flags `0x2800` through
-`fcntl` at `0x92e160`. Peer construction separately opens
-`/dev/input/event1` at `0x7dcbec` and stores it at `+0xc`. That device is
-used to upload and write haptics. A filter must leave other evdev FDs alone
-and must not treat event1 as the touchscreen.
+Window init opens `/dev/input/event0` (`0x92e150`), stores the FD at `WindowSystem+8` (flags `0x902`), and sets `0x2800` via `fcntl` (`0x92e160`). Peer construction opens `/dev/input/event1` (`0x7dcbec`, stored at `+0xc`) for haptics, so any touchscreen filter must leave `event1` and other FDs alone.
 
-The `RcInputThread` target `0x7cf9f0` loads `+8`, waits in `select` at
-`0x7cfac8` (timeout constant `{0,500000}` at `0xb423c0`), then builds the
-closure invoker `0x7e06d0` and calls the local dispatch helper `0x890e80` at
-`0x7cfb4c`. A later local wait uses 1000 at `0x7cfb6c`. That this is
-scheduled on the message thread is an inference from the closure and JUCE
-context. There is no recovered public ABI for it.
+`RcInputThread` (`0x7cf9f0`) reads `+8`, waits in `select` (`0x7cfac8`, timeout `{0, 500000}` at `0xb423c0`), builds closure invoker `0x7e06d0`, and posts it via local dispatcher `0x890e80` (`0x7cfb4c`), followed by a local wait of 1000 (`0x7cfb6c`). That looks like a JUCE message-thread dispatch, though there's no recovered public ABI for it.
 
 ```text
 7e0750 a00a40b9 ldr w0,[x21,#8]       ; same WindowSystem FD
@@ -326,49 +171,21 @@ context. There is no recovered public ABI for it.
 7e0a3c 19900494 bl 0x904aa0           ; alternate stock dispatch
 ```
 
-A second `read` at `0x7e07cc` also asks for 24 bytes. The loops read one
-record at a time. The record matches the AArch64 Linux `input_event` layout:
-two 64-bit timeval words, then u16, u16, and s32. It is unrelated to any JUCE
-layout. The code checks only that the read length is positive and does not
-require exactly 24, so a wrapper must not return made-up short records.
+A second `read` at `0x7e07cc` also reads 24 bytes: standard AArch64 Linux `struct input_event` (two 64-bit timeval words, `u16`, `u16`, `s32`). The loop only checks `ret > 0`, not `ret == 24`, so a shim must never synthesize partial records.
 
-EV_KEY handling recognizes `0x110` and `0x14a` (BTN_LEFT and BTN_TOUCH).
-Release eventually calls the stock helper `0x904450` at `0x7e0938`. EV_REL is
-logged. Other event types, EV_SYN included, go back to the read loop in this
-function. Dispatch can happen once enough X, Y, and key state has arrived,
-before `SYN_REPORT`.
+`EV_KEY` handles `0x110` (`BTN_LEFT`) and `0x14a` (`BTN_TOUCH`), releasing through `0x904450` at `0x7e0938`. `EV_REL` is logged, and other types (including `EV_SYN`) simply loop back to `read`. Stock dispatch can fire as soon as X, Y, and key state are populated, even before `SYN_REPORT`.
 
-The stored coordinates come out in reversed order, roughly
-`logical=(rawY,720-rawX)` on the fixed initial-dimensions path. Bounds are
-compared against 1279 and 719 at `0x7e0804–0x7e0808`. The subtraction uses
-720, while the bound is 719. This is an observation only. It is neither a
-calibration nor evidence of behavior at the screen edges. The callback does not implement MT
-slots, tracking IDs, or `SYN_DROPPED` recovery, so it is not a complete
-multitouch protocol.
+Coordinates are swapped and inverted to roughly `logical = (rawY, 720 - rawX)` on the default path, with bounds checked against 1279 and 719 at `0x7e0804–0x7e0808` (note the 720 vs. 719 asymmetry, observed in code and not calibrated on hardware). There's no handling for MT slots, tracking IDs, or `SYN_DROPPED`.
 
 ### Filtering
 
-The imported `read` can serve as an observation and filter point for one
-original stock read, provided it is scoped to the exact GUI identity, the FD
-identity and lifetime, the call site, and the owning thread and closure.
-Reading a second FD or stream would neither suppress stock input nor settle
-ownership. Reading extra records from the same FD would take input away from
-stock.
+Wrapping imported `read` works as an observation/filter hook if scoped tightly to the verified GUI binary, touchscreen FD lifetime, call site, and owning thread/closure. Opening a second FD won't suppress stock input, and draining extra records from the shared FD would steal them from stock.
 
-Ownership of a whole contact has to be decided before its first visible
-button or axis record is returned to stock. It must then be kept across reads
-and frames, and drained through the release on close or error. That may need
-buffering that preserves readiness, `errno`/`EAGAIN`, and the closure's wake
-handshake. Returning zero or `EAGAIN` carelessly, or treating `select`
-readiness as a complete gesture, would break it. The investigation produced
-no raw cancellation encoding and no ready-made adapter.
+Whole-contact ownership has to be decided before the first visible button or axis record leaks to stock, held across reads/frames, and drained through release on close or error. Doing that cleanly requires buffering that preserves `select` readiness, `errno`/`EAGAIN`, and the closure's wake handshake; sloppy `0`/`EAGAIN` returns or assuming `select` means a complete gesture will break it.
 
 ## Imported C functions and type limits
 
-All of the following are undefined `STT_FUNC`, `STB_GLOBAL` dynamic symbols,
-reached through verified PLT/GOT `R_AARCH64_JUMP_SLOT` relocations. These are
-symbol categories. No C prototypes or debug types were recovered, and the
-interpretations above come from the public Linux and libdrm APIs.
+All symbols below are undefined `STT_FUNC` / `STB_GLOBAL` imports reached through verified `R_AARCH64_JUMP_SLOT` PLT/GOT entries (no debug types or C headers are present in the binary; signatures come from Linux/libdrm APIs):
 
 | Import | PLT | Relevant sites |
 | --- | --- | --- |
@@ -381,60 +198,32 @@ interpretations above come from the public Linux and libdrm APIs.
 | `drmModeAtomicCommit` | `0x104230` | `0x7d0ae4` |
 | `drmHandleEvent` | `0x103300` | `0x7d0c24` |
 
-The JSON lists every relevant DRM discovery, property, and free call, with GOT
-addresses, request immediates, relocation kinds, instruction bytes, and
-function digests. The binary has no defined dynamic function exports and no
-`.symtab`, so a preload cannot replace local direct JUCE calls by naming a C++
-symbol.
+The JSON file records every relevant DRM discovery/property/free call along with GOT addresses, request immediates, relocation kinds, instruction bytes, and function digests. Because the binary has no `.symtab` and exports no dynamic functions, `LD_PRELOAD` can't override internal JUCE C++ calls by symbol name.
 
-The UAPI interpretations were cross-checked against the host's headers:
-`/usr/include/linux/{videodev2.h,v4l2-controls.h,input-event-codes.h}` and
-`/usr/include/drm/{drm_mode.h,drm_fourcc.h}`. That covers the QBUF and DQBUF
-request numbers and `v4l2_buffer` fields, OUTPUT=2 and CAPTURE=1, MMAP=1 and
-DMABUF=4, BA24/ARGB32, ROTATE=`0x00980922`, DRM XR24/XRGB8888, and the atomic
-flags. These stable constants explain the bytes. They do not identify the
-vendor's kernel implementation or show how it handles DMA and caches.
+UAPI constants were verified against `/usr/include/linux/{videodev2.h,v4l2-controls.h,input-event-codes.h}` and `/usr/include/drm/{drm_mode.h,drm_fourcc.h}` (covering `QBUF`/`DQBUF`, `v4l2_buffer`, `OUTPUT=2`, `CAPTURE=1`, `MMAP=1`, `DMABUF=4`, `BA24`/`ARGB32`, `ROTATE=0x00980922`, `XR24`/`XRGB8888`, and atomic flags). Those explain the userspace requests, though they don't reveal vendor kernel DMA or cache behavior.
 
 ## Next steps and open requirements
 
-At the time, the plan was not to connect this directly to the host
-prototype (`tools/ui_probe/prototype.c`, since removed from the tree). That
-prototype required a CPU-exclusive, fresh, full XR24 frame at rotation 0. A
-persistent, dirty-painted, rotated BA24 V4L2 source does not meet that, and it
-had not been established for the two reused DRM targets either. The
-prototype's whole-contact gate also had no adapter for raw evdev
-cancellation. The separate host harness for the panel and input ownership was
-meant to stay hardware-free and was not duplicated here.
+At this stage, wiring directly into the old host prototype (`tools/ui_probe/prototype.c`, since removed) wasn't on the table: it assumed a fresh, CPU-exclusive, unrotated XR24 frame, which doesn't match a persistent, dirty-painted, rotated BA24 V4L2 source (or the two reused DRM destinations), and it lacked a raw evdev cancellation adapter.
 
-The proposed next step was a small offline experiment on lifted functions.
-A broader reverse-engineering pass over the UI, menus, or IPC was not needed.
-It would run only the mapped bitmap, repaint, and conversion control flow in
-host Unicorn, against synthetic memory and mocked imports, and would:
+The planned next step was a small offline Unicorn harness exercising only the lifted bitmap, repaint, and conversion functions against synthetic memory and mocked imports to test:
 
-- track one source and two destinations, and every source write,
-- save before QBUF and restore after a successful DQBUF,
-- cover pointer reuse, errors and timeouts, and the repaint locks,
-- model completion events separately from commit submission,
-- model queued input that crosses a presentation acknowledgement, and work
-  out what frame and contact snapshot would be needed before releasing
-  quarantine.
+- tracking one source, two destinations, and every source write,
+- saving before `QBUF` and restoring after a successful `DQBUF`,
+- pointer reuse, errors/timeouts, and repaint lock behavior,
+- separating flip completion events from commit submission,
+- modeling buffered touch input crossing a presentation ack to pin down the quarantine release barrier.
 
-It would use the byte- and digest-qualified functions from the evidence file.
-It would test control flow and the mechanics of ghost-free restoration with
-no real DRM or evdev I/O. It would not settle real driver coherency and would
-not authorize injecting anything on hardware.
+Using the digest-verified functions from the audit JSON, that would validate control flow and ghost-free restoration without real DRM/evdev I/O (though still without proving real kernel coherency or authorizing hardware injection).
 
-Requirements for a device shim that were still open:
+Open requirements remaining before running a shim on hardware:
 
-- a demonstrated DMA completion, cache, and fence contract,
-- the pitch, channel order, alpha, and rotation the driver actually accepts,
-- restore and copy ownership through failed queue, dequeue, select, and commit
-  paths,
-- complete raw contact ownership and cancellation with no tap-through, FD
-  reuse, and wake and `errno` semantics,
-- associating each frame with its presentation acknowledgement, and
-  snapshotting and ordering buffered input,
+- verified DMA completion, cache coherency, and fence semantics,
+- actual pitch, channel order, alpha, and rotation accepted by the driver,
+- sound restore/copy ownership across failed `QBUF`, `DQBUF`, `select`, and commit paths,
+- complete raw contact ownership and cancellation with no tap-through, plus FD reuse, wake, and `errno` handling,
+- tying each frame to its presentation ack and ordering buffered input against it,
 - bounded latency,
-- separately approved launch and recovery integration.
+- separately reviewed launch and recovery integration.
 
-Having an atomic commit and two mmap pointers meets none of these.
+Just having an atomic commit hook and two `mmap` pointers doesn't satisfy any of those on its own.

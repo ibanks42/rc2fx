@@ -1,11 +1,8 @@
 # rc2fx-suppression
 
-The noise suppression worker. It contains the audio-frame adapter, startup
-preparation, the worker lifecycle, bounded queues, dry/wet alignment, and
-telemetry, and it implements `rc2fx_dsp::Suppression`.
+The noise suppression worker crate. It implements `rc2fx_dsp::Suppression` and handles audio-frame adaptation, startup warm-up, worker lifecycle, bounded queues, dry/wet alignment, and telemetry.
 
-`VendorModel` runs DeepFilterNet3 from `rc2fx-dfn`. It is plain Rust and
-included in every build.
+`VendorModel` wraps DeepFilterNet3 from `rc2fx-dfn`. It is pure Rust and compiled into every build.
 
 ## Models and delay
 
@@ -14,107 +11,53 @@ included in every build.
 | DeepFilterNet3, lookahead 0 | worker | 240 | 120 | 320 | 680 (14.2 ms) |
 | DeepFilterNet3, lookahead 1 | worker | 240 | 360 | 320 | 920 (19.2 ms) |
 
-`Endpoint::new` takes the geometry from the algorithm's admitted geometry in
-`rc2fx-core`. Every endpoint runs its model on the threaded `Worker`.
+`Endpoint::new` pulls its geometry from the admitted geometry in `rc2fx-core`, and every endpoint runs inference on the threaded `Worker`.
 
-The worker allowance is a whole number of 112-sample device periods, sized
-from the model's worst frame time measured on the mixer. A result that misses
-it plays dry until it arrives. The mixer's own period is unchanged.
-`deep_filter_from_weights`, which loads a candidate model for benchmarking,
-builds a zero-lead geometry.
+The worker allowance is an integer multiple of the 112-sample device period, sized from the model's worst-case frame time on hardware. If a frame misses its deadline, the callback plays dry audio until the result shows up; the mixer's period stays untouched. `deep_filter_from_weights`, used for benchmarking candidate models, sets up a zero-lead geometry.
 
 ## Threaded worker
 
-Construct `Worker` on the control thread, keep its `Telemetry`, and move its
-box into `Dsp`. The audio callback has mutable access to that DSP and only
-does bounded frame copies, atomic operations, and mixing. Each model and its
-recurrent history belong to one worker. The 8-slot queues have a single
-producer endpoint and a single consumer endpoint, neither cloneable, and
-acquire/release indices pass ownership of each slot.
+Build `Worker` on the control thread, hang onto its `Telemetry`, and move its boxed endpoint into `Dsp`. The audio callback gets mutable access to that `Dsp` and only performs bounded copies, atomics, and mixing. Each model instance and its recurrent state belong exclusively to one worker. The 8-slot SPSC queues expose non-cloneable producer and consumer ends, passing slot ownership via acquire/release indices.
 
-The model is created and prepared before the worker is published. Any
-per-thread or one-time setup runs on the new worker thread before it reports
-ready, so it doesn't land on the first live frame.
+Model initialization and warm-up finish on the worker thread before it signals ready, keeping one-time setup off the first live audio frame.
 
-A gap in the frame sequence recreates the model on the worker and invalidates
-the next `ceil(intrinsic / frame)` results, three frames for DeepFilterNet3. Recovery doesn't repeat the warm-up.
+If a gap occurs in the frame sequence, the worker rebuilds the model and invalidates the next `ceil(intrinsic / frame)` outputs (three frames for DeepFilterNet3) without re-running startup warm-up.
 
 ### Thread placement
 
-CPU masks and scheduling priorities are constructor options. On Linux the new
-thread applies and verifies them before it is published. Requested CPUs must
-be a subset of the creator's mask. Options that aren't set are inherited from
-the creator, so priority is raised only on request. An explicit priority
-requests SCHED_RR 1–20. An explicit nice value requests SCHED_OTHER at that
-value. The two are mutually exclusive.
+CPU affinity masks and scheduling priorities are passed at construction. On Linux, the new worker thread applies and verifies them before reporting ready. Requested CPUs must be a subset of the creator's mask; unset options are inherited, so priority is only bumped when explicitly asked for. An explicit priority sets `SCHED_RR` 1–20, while an explicit nice value sets `SCHED_OTHER` at that niceness. The two are mutually exclusive.
 
-`PRODUCTION_WORKER` (RR 5 on CPU 0) is the mixer policy used by the service
-and by the native plan defaults. Its doc comment records the measurements
-behind it.
+`PRODUCTION_WORKER` (`SCHED_RR` 5 on CPU 0) is the mixer policy used by both the service and the native launch plan defaults. Its doc comment has the benchmark numbers behind that choice.
 
 ### Shutdown
 
-Once the callback has stopped, call `finish` from control code, or retire the
-DSP from the control side.
+After the audio callback has stopped, call `finish` from the control thread or retire the DSP from the control side.
 
-- An explicit `finish` can drain complete admitted frames. It returns the
-  joined accounting, including the unprocessed partial tail. Failures and
-  output queue overflows are reported.
-- The first `finish` closes queue submission permanently, even if it times out.
-- After a timeout the caller keeps the worker object and handle. It can
-  observe and retry, but must not start a replacement.
-- If no explicit retirement has started, `Drop` on the control side requests
-  cancellation and waits up to two seconds for the thread before detaching it.
-  A thread that is still running keeps its own `Arc` queues and model, so its
-  memory stays valid.
+- Calling `finish` can drain any complete admitted frames and returns the joined accounting, including the unprocessed partial tail, failures, and output-queue overflows.
+- The first `finish` call permanently closes queue submission, even if it times out.
+- After a timeout, keep the worker object and handle. You can inspect status and retry joining, but never spin up a replacement.
+- If nothing initiated retirement explicitly, `Drop` on the control side requests cancellation and waits up to two seconds before detaching the thread. A still-running worker retains its own `Arc` handles to the queues and model so its memory stays valid.
 
-`Telemetry::termination()` must be `Joined` before the service treats
-retirement as complete. `TimedOut` stays unresolved even if the thread exits
-later, and `StartupTerminationUnresolved` also blocks a replacement. Rust can't
-safely kill a single inference thread, so a model call that never returns
-needs an OS-level process supervisor.
+Don't consider retirement done until `Telemetry::termination()` returns `Joined`. `TimedOut` remains unresolved even if the thread eventually exits, and `StartupTerminationUnresolved` also blocks starting a replacement. Since Rust has no safe way to kill a stuck inference thread, a hung model call has to be handled by an OS-level process supervisor.
 
-`Dsp::drain_suppression` reaches the worker's drain path through the shared
-provider trait after callbacks have returned. The first stop mode is kept.
-Later calls to `finish`, retries, and `Drop` don't change it.
+`Dsp::drain_suppression` invokes the worker's drain path through the shared provider trait once callbacks have returned. Whichever stop mode was chosen first sticks; later `finish` calls, retries, and `Drop` won't alter it.
 
-`Telemetry::terminal()` returns the first joined `Terminal`, which is
-immutable, or `None` before the join. Its `retirement_timed_out` field stays
-true after a late join, so a missed deadline is still recorded once the
-thread's resources can be released. Live snapshots and
-`termination() == Joined` on their own don't prove the drained frame counts.
+`Telemetry::terminal()` returns `None` until the thread is joined, after which it returns the immutable `Terminal` record. Its `retirement_timed_out` flag remains true even after a late join so missed deadlines stay visible once resources can be freed. Keep in mind that live snapshots and `termination() == Joined` alone don't guarantee drained frame counts.
 
-An already finished worker can be joined with a zero wait. After any wait,
-completion has to be observed strictly before the deadline. A late wakeup of
-the control thread can't certify that the worker finished in time.
+An already-exited worker joins immediately with zero wait. When waiting, completion must be observed strictly before the deadline; a late wakeup on the control thread doesn't count as finishing in time.
 
 ## Audio handling
 
-When a result is missing, stale, invalidated by recovery, nonfinite, or failed,
-the callback outputs the dry audio with the same delay. A worker result that
-arrives after its frame has started is used for the rest of that frame. It is
-counted both as a late result and as a missed deadline. Turning wet
-processing off keeps the model history and the delay.
+Whenever a result is missing, stale, invalidated by recovery, nonfinite, or errored, the callback substitutes dry audio at the exact same delay. If a worker result shows up partway through its frame, it's used for the remainder of that frame and counted as both a late result and a missed deadline. Disabling wet processing leaves both model history and latency intact.
 
-Normalization clamps finite input to ±1 and uses the vendor's 32768 scale.
-Offline, a whole frame is validated before any model or output state changes,
-and frames with the wrong length or nonfinite samples are rejected. In the
-callback, nonfinite input is replaced with zero.
+Normalization clamps finite samples to ±1 and applies the vendor's 32768 scaling. Offline, entire frames are validated before touching model or output state, rejecting wrong lengths or nonfinite samples. Inside the audio callback, nonfinite inputs are simply zeroed out.
 
 ## Measurements
 
-Worker CPU time uses `CLOCK_THREAD_CPUTIME_ID` and wall time uses
-`CLOCK_MONOTONIC`. Histograms are relative to the frame's compute budget.
-`allowance_overruns` separately compares wall time with the shorter playback
-allowance. A good mean or a zero overrun count doesn't qualify the queue,
-wakeup, or callback deadlines.
+Worker CPU time comes from `CLOCK_THREAD_CPUTIME_ID` and wall time from `CLOCK_MONOTONIC`. Histograms are bucketed against the frame's compute budget, while `allowance_overruns` compares wall time against the tighter playback allowance. A healthy mean or zero overrun count alone doesn't prove queue, wakeup, or callback deadlines are being met.
 
-Each live snapshot is atomic on its own. Joined snapshots are taken after the
-worker has stopped.
+Individual live snapshots are atomic; joined snapshots are captured after the worker exits.
 
 ## Tests
 
-`cargo test -p rc2fx-suppression` runs on Linux, which the crate builds for
-only. The tests cover model state and reset, dry/wet sample alignment, zero
-allocations on the callback thread, fixed queue capacity and wraparound, stale
-and late results, timeouts, and partial final frames.
+`cargo test -p rc2fx-suppression` runs on Linux (the only platform this crate builds for). Tests cover model state and resets, dry/wet alignment, zero callback allocations, fixed queue capacity and wraparound, stale/late results, timeouts, and partial final frames.

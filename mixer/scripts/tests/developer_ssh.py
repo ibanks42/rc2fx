@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Tests for `rc2fx.sh developer-ssh` with a fake root: RC2FX_SSH_DIR,
-RC2FX_SSH_HOST_DIR and RC2FX_FIRST_BOOT point into a temporary directory.
-Nothing outside it is read or written."""
+"""Tests for `rc2fx.sh developer-ssh` using temporary RC2FX_SSH_DIR,
+RC2FX_SSH_HOST_DIR, and RC2FX_FIRST_BOOT paths."""
 
 import os
 import shutil
@@ -89,7 +88,7 @@ class DeveloperSsh(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.keys.stat().st_mode), 0o600)
         self.assertIn(f"managed {KEY}", out.stdout)
         self.assertIn("unmanaged 1", out.stdout)
-        # Enabling again replaces the managed line rather than adding another.
+        # Re-enabling updates the existing managed line in place.
         again = self.run_ssh("enable", stdin=KEY + "\n")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(self.lines().count(f"{KEY} {MARK}"), 1)
@@ -184,7 +183,7 @@ class DeveloperSsh(unittest.TestCase):
             self.keys.read_bytes(),
             f"{OTHER}\r\n  \n# c\nlast-line-without-newline".encode(),
         )
-        # Enabling adds the one newline needed before the managed line.
+        # Appending a managed line inserts a separating newline first.
         out = self.run_ssh("enable", stdin=KEY)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(
@@ -232,7 +231,7 @@ class DeveloperSsh(unittest.TestCase):
         try:
             self.assertEqual(self.run_ssh("enable", stdin=KEY).returncode, 3)
             self.assertFalse(self.keys.exists())
-            home.chmod(0o1777)  # sticky but not root's: still refused
+            home.chmod(0o1777)  # sticky, but not owned by root
             self.assertEqual(self.run_ssh("status").returncode, 3)
         finally:
             home.chmod(0o755)

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// The connection screen's decisions and the view preferences file.
-
 func TestOnlyARefusedOpenOffersTheUSBRule(t *testing.T) {
 	if !USBPermission("USB permission required: Permission denied (os error 13)") {
 		t.Fatal("a refused open does not offer the rule")

@@ -1,12 +1,10 @@
-//! Test-only memory-traffic accounting: the bytes each stage of one `process`
-//! call reads and writes, by class, as the mixer's AArch64 int8 kernels lay
-//! them out (on any host). Compiled only into tests; production builds have
-//! no trace of it. Counting is off unless the calling thread turns it on.
+//! Test-only memory-traffic accounting for `process`, modeling the AArch64 int8
+//! kernel access patterns on any host. Off by default per thread and stripped
+//! from production builds.
 //!
-//! `total` is every byte a kernel loads or stores, re-reads included (most hit
-//! L1). `unique` counts each buffer once per call, charged to the first stage
-//! that touches it: with no reuse across calls (the int8 weights are larger
-//! than the shared L2), that is the most a call can need from DRAM.
+//! `total` counts every load/store byte including re-reads (most of which hit
+//! L1). `unique` counts each buffer once per call at the first stage that
+//! touches it, giving an upper bound on DRAM traffic when weights exceed L2.
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -31,15 +29,15 @@ pub(crate) const NAMES: [&str; STAGES] = [
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Class {
-    /// int8 weights.
+    /// Quantized int8 weights.
     Q8,
-    /// The f32 scales of the int8 weights.
+    /// Per-row f32 scales for `Q8` weights.
     Scale,
-    /// Small f32 parameters: conv taps, norms, biases.
+    /// Small f32 parameters (conv taps, norms, biases).
     Param,
-    /// Activations and scratch.
+    /// Activations and scratch buffers.
     Act,
-    /// State kept across calls: GRU hidden states, feature and spectrum history.
+    /// Persistent state across hops (GRU hidden states, feature/spectrum history).
     State,
 }
 pub(crate) const CLASSES: [Class; 5] = [
@@ -50,8 +48,7 @@ pub(crate) const CLASSES: [Class; 5] = [
     Class::State,
 ];
 
-/// One access in program order, for the cache model: buffer, bytes from
-/// its start, store or load.
+/// Single memory access recorded in program order for the cache simulator.
 #[derive(Clone, Copy)]
 pub(crate) struct Access {
     pub(crate) key: (Class, usize),
@@ -69,7 +66,7 @@ struct Counts {
     calls: u64,
     total: [[u64; 5]; STAGES],
     unique: [[u64; 5]; STAGES],
-    /// This call's buffers: (class, address) -> largest span counted.
+    /// Largest span touched per `(class, address)` in the current call.
     seen: HashMap<(Class, usize), u64>,
     trace: Vec<Access>,
 }
@@ -80,7 +77,6 @@ fn index(class: Class) -> usize {
     CLASSES.iter().position(|&c| c == class).unwrap()
 }
 
-/// Turns counting on for this thread and clears it.
 pub(crate) fn enable() {
     COUNTS.with(|c| {
         *c.borrow_mut() = Counts {
@@ -90,12 +86,10 @@ pub(crate) fn enable() {
     });
 }
 
-/// Turns counting off for this thread and drops what was counted.
 pub(crate) fn disable() {
     COUNTS.with(|c| *c.borrow_mut() = Counts::default());
 }
 
-/// A new `process` call: uniqueness restarts.
 pub(crate) fn start() {
     COUNTS.with(|c| {
         let mut c = c.borrow_mut();
@@ -107,7 +101,6 @@ pub(crate) fn start() {
     });
 }
 
-/// `profile::mark(stage)` closed `stage`; what follows belongs to the next.
 pub(crate) fn mark(stage: usize) {
     COUNTS.with(|c| {
         let mut c = c.borrow_mut();
@@ -117,12 +110,10 @@ pub(crate) fn mark(stage: usize) {
     });
 }
 
-/// Loads of `bytes` at `at`, `times` times over.
 pub(crate) fn touch_n<T: ?Sized>(class: Class, at: *const T, bytes: usize, times: usize) {
     access(class, at, bytes, times, false);
 }
 
-/// Stores of `bytes` at `at`, `times` times over.
 pub(crate) fn store_n<T: ?Sized>(class: Class, at: *const T, bytes: usize, times: usize) {
     access(class, at, bytes, times, true);
 }
@@ -161,22 +152,18 @@ pub(crate) fn touch<T: ?Sized>(class: Class, at: *const T, bytes: usize) {
     touch_n(class, at, bytes, 1);
 }
 
-/// A slice's bytes, once.
 pub(crate) fn slice<T>(class: Class, s: &[T]) {
     touch(class, s.as_ptr(), std::mem::size_of_val(s));
 }
 
-/// The accesses since `enable`, in order.
 pub(crate) fn trace() -> Vec<Access> {
     COUNTS.with(|c| c.borrow().trace.clone())
 }
 
-/// DRAM traffic of `trace` through one write-back, write-allocate LRU cache
-/// of `size` bytes, `ways`-way, 64-byte lines. Each buffer gets its own
-/// address range (the largest span it was touched with), in first-touch
-/// order. Returns per-call means over calls `from..`: line fills (reads from
-/// DRAM) and write-backs, in bytes, [stage][class], each charged to the
-/// stage that caused it.
+/// Simulates DRAM fills and write-backs for `trace` on a `size`-byte,
+/// `ways`-way, 64-byte-line write-back/write-allocate LRU cache. Returns
+/// per-call mean `(fills, writebacks)` in bytes (`[stage][class]`) over calls
+/// `from..`.
 pub(crate) fn simulate(
     trace: &[Access],
     size: usize,
@@ -186,7 +173,7 @@ pub(crate) fn simulate(
     simulate_with(trace, size, ways, from, false)
 }
 
-/// `simulate`, evicting a pseudo-random way instead of the least recent.
+/// Like [`simulate`], using pseudo-random eviction instead of LRU.
 pub(crate) fn simulate_random(
     trace: &[Access],
     size: usize,
@@ -206,10 +193,9 @@ fn simulate_with(
     simulate_shared(trace, size, ways, from, random, 0)
 }
 
-/// `simulate_with`, with another thread's `foreign` bytes (its own fixed
-/// lines, stored to) passing through the cache before each call: the
-/// mixer's callback and the other threads sharing the L2. Their own fills
-/// and write-backs are not counted; the model's refills they cause are.
+/// Like `simulate_with`, injecting `foreign` bytes of dirty lines before each
+/// call to model other threads (e.g. the audio callback) sharing L2. Foreign
+/// traffic itself is not counted, only the model refills it triggers.
 pub(crate) fn simulate_shared(
     trace: &[Access],
     size: usize,
@@ -221,11 +207,10 @@ pub(crate) fn simulate_shared(
     simulate_layout(trace, size, ways, from, random, foreign, false)
 }
 
-/// `simulate_shared`; with `packed`, buffers sit back to back at 64-byte
-/// alignment (as malloc packs small vectors) and each 4 KiB page maps to a
-/// pseudo-random physical page, as the physically indexed L2 sees them.
-/// Otherwise each buffer starts a page of its own and addresses are
-/// physical as laid out.
+/// Like [`simulate_shared`]; when `packed` is true, buffers are packed at
+/// 64-byte alignment and 4 KiB pages are hashed to pseudo-random physical
+/// pages to approximate a physically indexed L2. Otherwise each buffer gets
+/// its own 4 KiB page.
 pub(crate) fn simulate_layout(
     trace: &[Access],
     size: usize,
@@ -340,7 +325,7 @@ pub(crate) fn simulate_layout(
     (mean(fills), mean(backs))
 }
 
-/// Per-call means since `enable`: (calls, total, unique), [stage][class] bytes.
+/// Returns `(calls, total_bytes, unique_bytes)` per-call means by `[stage][class]`.
 pub(crate) fn report() -> (u64, [[f64; 5]; STAGES], [[f64; 5]; STAGES]) {
     COUNTS.with(|c| {
         let c = c.borrow();
@@ -354,8 +339,8 @@ pub(crate) fn report() -> (u64, [[f64; 5]; STAGES], [[f64; 5]; STAGES]) {
 mod tests {
     use super::*;
 
-    /// The per-call byte budget of the embedded model, by stage and class.
-    /// `cargo test -p rc2fx-dfn --release -- --ignored --nocapture per_call_traffic`.
+    // Print per-call byte breakdown for the embedded model:
+    // `cargo test -p rc2fx-dfn --release -- --ignored --nocapture per_call_traffic`
     #[test]
     #[ignore]
     fn per_call_traffic() {
@@ -418,9 +403,8 @@ mod tests {
             sum_u.iter().sum::<f64>() / hops
         );
         assert!(sum_u[0] > 0.);
-        // The cache model over the last 150 calls (the first 50 warm it).
+        // Simulate L2 traffic over the last 150 calls (first 50 warm up the cache).
         let trace = trace();
-        // The largest non-weight buffers: span, first stage, accesses per call.
         let mut per: HashMap<(Class, usize), (usize, u8, u64, u64)> = HashMap::new();
         for a in trace.iter().filter(|a| a.call == 100) {
             let e = per.entry(a.key).or_insert((0, a.stage, 0, 0));
@@ -482,11 +466,8 @@ mod tests {
             }
         }
     }
-    /// Per-hop traffic of every candidate weights file in `RC2FX_SWEEP_DIR`,
-    /// as CSV lines:
-    /// `cand,<name>,us_per_hop,unique bytes per class...` then one `sim,` line
-    /// per cache size, policy and foreign working set, bytes per hop.
-    /// `cargo test -p rc2fx-dfn --release -- --ignored --nocapture sweep_traffic`
+    // CSV traffic sweep over every `.bin` weights file in `RC2FX_SWEEP_DIR`:
+    // `cargo test -p rc2fx-dfn --release -- --ignored --nocapture sweep_traffic`
     #[test]
     #[ignore]
     fn sweep_traffic() {
@@ -550,7 +531,6 @@ mod tests {
                     .join(",")
             );
             let trace = trace();
-            // The largest non-weight buffers of one call: class, first stage, span.
             let mut spans: HashMap<(Class, usize), (usize, u8)> = HashMap::new();
             for a in trace.iter().filter(|a| a.call == 100) {
                 let e = spans.entry(a.key).or_insert((0, a.stage));
@@ -565,7 +545,7 @@ mod tests {
             for (span, class, stage) in rows.iter().take(10) {
                 println!("buf,{name},{class:?},{},{span}", NAMES[*stage as usize]);
             }
-            // Without the weights: what activations, state and params need alone.
+            // Non-weight working set only (activations, state, small params).
             let rest: Vec<Access> = trace
                 .iter()
                 .filter(|a| !matches!(a.key.0, Class::Q8 | Class::Scale))

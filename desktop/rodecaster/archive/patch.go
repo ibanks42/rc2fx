@@ -1,8 +1,5 @@
 package archive
 
-// The local patch of a RØDE firmware archive: a verbatim copy with entries
-// added.
-
 import (
 	"bytes"
 	"compress/gzip"
@@ -18,7 +15,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
-// EntryKind is a directory, a file or a symbolic link.
 type EntryKind int
 
 const (
@@ -27,89 +23,69 @@ const (
 	EntryLink
 )
 
-// Entry is a file, directory or symbolic link to add to the firmware image.
+// Entry describes a file, directory, or symlink to append to a firmware image.
 type Entry struct {
-	Kind EntryKind
-	Path string
-	Mode uint32
-	Data []byte
-	// Target is a link's target, as stored; only for EntryLink.
-	Target string
+	Kind   EntryKind
+	Path   string
+	Mode   uint32
+	Data   []byte
+	Target string // symlink target; only used with EntryLink
 }
 
-// Normalized is a member name without a leading `./` or a trailing slash.
+// Normalized strips a leading "./" and trailing "/" from a tar member path.
 func Normalized(name string) string {
 	name = strings.TrimPrefix(name, "./")
 	return strings.TrimSuffix(name, "/")
 }
 
 const (
-	// MaxMixerMember is the largest mixer executable read into memory.
 	MaxMixerMember = 64 << 20
-	// MaxSmallMember is the largest launcher, configuration file or tar
-	// metadata record.
 	MaxSmallMember = 1 << 20
 )
 
-// RØDE's members that identify the firmware: the board's hostname, and the
-// mixer executable and its launcher, whose hashes Patch returns.
+// Key members used to verify the firmware rootfs and record its hashes.
 const (
 	hostnameMember = "etc/hostname"
 	mixerMember    = "usr/bin/rc_audio_mixer"
 	launcherMember = "usr/bin/audio-start.sh"
 )
 
-// Patched is what Patch built.
+// Patched holds the digests recorded while building a patched firmware archive.
 type Patched struct {
-	// Mixer and Launcher are the SHA-256 of the mixer executable and its
-	// launcher.
 	Mixer, Launcher string
-	// ArchiveSHA and ArchiveMD5 are the SHA-256 and MD5 of the bytes
-	// written. They come from the write itself, so another process changing
-	// the cache folder cannot alter them.
+	// Computed directly from the output stream as it is written so concurrent
+	// changes in the cache directory can't skew the digests.
 	ArchiveSHA, ArchiveMD5 string
 }
 
-// Copied is one member Patch copied, as PatchOptions.Member sees it.
+// Copied describes a tar member observed during Patch.
 type Copied struct {
-	// Name is the member's normalized name.
-	Name   string
+	Name   string // normalized member path
 	Header Header
 	Size   uint64
-	// Data is the member's data when Patch read it whole (etc/hostname and
-	// the PatchOptions.Read members), else nil.
-	Data []byte
-	// SHA256 is the hex SHA-256 of the member's data.
+	Data   []byte // populated only for etc/hostname and PatchOptions.Read members
 	SHA256 string
 }
 
-// PatchOptions is what a caller adds to Patch.
 type PatchOptions struct {
-	Model model.Model
-	// Extra is added after the source's members, under `opt`.
-	Extra []Entry
-	// SourceSHA, when set, is the SHA-256 the bytes read from the source
-	// must have.
-	SourceSHA *string
-	// Read names members, besides RØDE's own, that must each appear once as
-	// a regular member and are read whole (at most MaxSmallMember) and handed
-	// to Member with their data.
+	Model     model.Model
+	Extra     []Entry // appended after the original members, under opt/
+	SourceSHA *string // if set, the bytes read from src must match this SHA-256
+	// Read lists extra members to buffer in full (up to MaxSmallMember) and
+	// pass to Member with Data populated. Each must appear once as a regular file.
 	Read []string
-	// Member sees every member except tar metadata records, in order. An
-	// error stops the patch.
+	// Member is called for every non-metadata tar entry in order.
 	Member func(Copied) error
-	// Finish runs when there are extras, after they are written; add
-	// appends one more entry.
+	// Finish runs after Extra entries are written, allowing one last round of
+	// generated entries to be appended.
 	Finish func(add func(Entry) error) error
-	// Verify runs once the archive is written; false means the source is not
-	// the expected rootfs.
+	// Verify runs once the archive is written; returning false rejects the image.
 	Verify func() bool
 }
 
-// Patch writes a copy of src to dst with o.Extra added. Every record,
-// including long-name and PAX records, is copied verbatim. With
-// o.SourceSHA, the bytes actually read from src must have that SHA-256: a
-// check of the path before this call says nothing about what is read here.
+// Patch copies src to dst with o.Extra appended, preserving all tar headers
+// (including GNU long-name and PAX records) verbatim. When o.SourceSHA is set,
+// the hash is verified against the exact bytes streamed from src.
 func Patch(src, dst string, o PatchOptions) (*Patched, error) {
 	extra := o.Extra
 	important := append([]string{hostnameMember, mixerMember, launcherMember}, o.Read...)
@@ -293,18 +269,15 @@ func Patch(src, dst string, o PatchOptions) (*Patched, error) {
 	}, nil
 }
 
-// TrimASCII trims ASCII whitespace from both ends.
 func TrimASCII(data []byte) []byte {
 	return bytes.Trim(data, " \t\n\r\f")
 }
 
-// AppendEntry appends one root-owned entry in the image's `./path` style.
+// AppendEntry writes one root-owned entry using RØDE's "./path" convention.
 func AppendEntry(builder *Writer, entry Entry) error {
 	return appendEntry(builder, entry)
 }
 
-// appendEntry appends one root-owned entry in the image's `./path` style.
-// A link is written as RØDE's own are: a symlink member with no data.
 func appendEntry(builder *Writer, entry Entry) error {
 	path := "./" + entry.Path
 	kind, size, link := byte(TypeRegular), uint64(len(entry.Data)), ""
@@ -329,7 +302,6 @@ func appendEntry(builder *Writer, entry Entry) error {
 	return builder.Append(header, data)
 }
 
-// nowUnix is the current Unix time, or 0 before 1970.
 func nowUnix() uint64 {
 	now := time.Now().Unix()
 	if now < 0 {

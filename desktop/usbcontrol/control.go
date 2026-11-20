@@ -1,7 +1,6 @@
-// Package usbcontrol is RC2FX control over USB 1: requests and replies framed
-// into RC2FX's reports in the mixer's vendor HID collection (see
-// docs/reference/usb-control.md). Blocking; one client owns the mixer's
-// session at a time.
+// Package usbcontrol implements RC2FX control over USB 1 by framing requests
+// and replies into vendor HID reports (see docs/reference/usb-control.md).
+// Calls are blocking and one client owns the mixer session at a time.
 package usbcontrol
 
 import (

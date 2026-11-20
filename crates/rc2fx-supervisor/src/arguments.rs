@@ -1,4 +1,4 @@
-//! The command line `rc2fx.sh launch` starts the supervisor with.
+//! CLI argument parsing for `rc2fx.sh launch`.
 use crate::supervisor::{Options, READY_SECONDS};
 use std::{ffi::OsString, path::PathBuf};
 
@@ -7,7 +7,7 @@ pub const USAGE: &str = "rc2fx-supervisor --mixer PID --mixer-start TICKS --scri
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    /// Also how `launch` proves this binary runs, before it commits to RC2FX.
+    /// Also used by `launch` to verify the binary runs before committing to RC2FX.
     Version,
     Supervise(Options),
 }

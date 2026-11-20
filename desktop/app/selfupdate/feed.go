@@ -16,32 +16,23 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
-// SignedFeed is the release feed, checking each package against its signed
-// release as it downloads, before Velopack renames it into place. A later
-// check is too late on Windows: right after that rename Velopack replaces
-// its own updater with the one in the package. Delta packages are left out
-// of the feed, so only whole, signed release assets are ever fetched.
-//
-// Velopack calls it through its custom update source (vpkc), on its own
-// threads: ReleaseFeed for check_for_updates, DownloadReleaseEntry for
-// download_updates. It does what Velopack's own HttpSource does, in Go: the
-// C library has no way to wrap its own HTTP source.
+// SignedFeed is a custom Velopack update source that filters out delta
+// packages and verifies each full package against signed release metadata
+// before Velopack renames it into place. Verifying earlier is required on
+// Windows because Velopack replaces its own updater immediately after rename.
 type SignedFeed struct {
 	url    string
 	checks *Checks
 	verify Verify
 	client *http.Client
 
-	mu sync.Mutex
-	// progress is the running download's, for the Verifying marker.
+	mu       sync.Mutex
 	progress *Progress
-	// failure is why the last feed or download request failed, which the C
-	// library reports only as "the callback failed".
+	// Captures the real feed/download error since the C library only reports
+	// a generic callback failure.
 	failure *Error
 }
 
-// NewSignedFeed is the signed feed at Feed, checking packages with the
-// installer's update package verification.
 func NewSignedFeed(checks *Checks) *SignedFeed {
 	return &SignedFeed{url: Feed, checks: checks, verify: appupdate.VerifyUpdatePackage, client: http.DefaultClient}
 }
@@ -52,8 +43,6 @@ func (f *SignedFeed) setFailure(err *Error) {
 	f.mu.Unlock()
 }
 
-// takeFailure is why the last request failed, forgetting it; nil if it did
-// not.
 func (f *SignedFeed) takeFailure() *Error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -68,7 +57,6 @@ func (f *SignedFeed) setProgress(p *Progress) {
 	f.mu.Unlock()
 }
 
-// join is HttpSource's `Url::parse(url + "/").join(name)`.
 func (f *SignedFeed) join(name string) (string, error) {
 	base, err := url.Parse(strings.TrimRight(f.url, "/") + "/")
 	if err != nil {
@@ -81,8 +69,6 @@ func (f *SignedFeed) join(name string) (string, error) {
 	return base.ResolveReference(ref).String(), nil
 }
 
-// networkError is velopack::Error::Network, for a request that failed or a
-// status ureq treats as an error.
 func networkError(err error) *Error {
 	return &Error{Kind: ErrNetwork, Text: "Network error: " + err.Error()}
 }
@@ -99,16 +85,12 @@ func (f *SignedFeed) get(address string) (*http.Response, *Error) {
 	return response, nil
 }
 
-// assetFeed is VelopackAssetFeed. Velopack reads it leniently (keys in any
-// case, missing fields empty, unknown fields ignored), as encoding/json
-// does.
 type assetFeed struct {
 	Assets []Asset `json:"Assets"`
 }
 
-// FilterFeed reads a release feed and returns it with only FullPackages,
-// written back with Velopack's own field names, so Velopack reads exactly
-// the assets checked here.
+// FilterFeed strips delta and foreign-platform entries from a Velopack release
+// feed and re-encodes it using Velopack's JSON field names.
 func FilterFeed(raw []byte) ([]byte, error) {
 	var feed assetFeed
 	if err := json.Unmarshal(raw, &feed); err != nil {
@@ -121,10 +103,7 @@ func FilterFeed(raw []byte) ([]byte, error) {
 	return json.Marshal(feed)
 }
 
-// ReleaseFeed is get_release_feed: GET `{Feed}/{releasesName}`
-// (`releases.{channel}.json`), then FullPackages. (Velopack's HttpSource
-// also sent localVersion, id and stagingId as a query, which GitHub's
-// release downloads ignore; the C source is not given them.)
+// ReleaseFeed fetches and filters releases.{channel}.json for Velopack.
 func (f *SignedFeed) ReleaseFeed(releasesName string) ([]byte, error) {
 	err := f.releaseFeed(releasesName)
 	if err.err != nil {
@@ -161,10 +140,8 @@ func (f *SignedFeed) releaseFeed(releasesName string) feedResult {
 	return feedResult{feed: filtered}
 }
 
-// DownloadReleaseEntry is download_release_entry: download asset to
-// localFile (Velopack's `.partial` file) as HttpSource did, reporting 0 to
-// 100 through report, then check it against the signed release before
-// Velopack may rename it into place. A failure stops Velopack.
+// DownloadReleaseEntry downloads asset to Velopack's temporary localFile,
+// reports progress 0..100, and verifies the signed release before returning.
 func (f *SignedFeed) DownloadReleaseEntry(asset Asset, localFile string, report func(int16)) error {
 	if err := f.download(asset, localFile, report); err != nil {
 		f.setFailure(err)
@@ -181,10 +158,9 @@ func (f *SignedFeed) DownloadReleaseEntry(asset Asset, localFile string, report 
 	f.checks.Record(asset, result)
 	if result != nil && !result.Rejected {
 		if name, ok := PackageName(asset.FileName); ok {
-			// Kept under its final name to check again without a download.
-			// The error below still stops Velopack, so on Windows it never
-			// takes its updater from an unchecked package; a package already
-			// in place is only checked, never unpacked, by the next attempt.
+			// Keep the unverified file under its final name so a retry can
+			// re-verify without re-downloading. Returning the error still aborts
+			// Velopack, so it won't unpack an unverified updater on Windows.
 			os.Rename(localFile, filepath.Join(filepath.Dir(localFile), name))
 		}
 	}
@@ -194,8 +170,6 @@ func (f *SignedFeed) DownloadReleaseEntry(asset Asset, localFile string, report 
 	return nil
 }
 
-// download is velopack's download_url_to_file: progress in steps of 5 %,
-// only when the length is known.
 func (f *SignedFeed) download(asset Asset, localFile string, report func(int16)) *Error {
 	address, err := f.join(asset.FileName)
 	if err != nil {
@@ -228,7 +202,7 @@ func (f *SignedFeed) download(asset Asset, localFile string, report func(int16))
 			}
 			downloaded += uint64(n)
 			if known {
-				// floor to nearest 5% to reduce message spam
+				// Report in 5% increments to avoid flooding progress updates.
 				step := int16(float64(downloaded)/float64(total)*20) * 5
 				if step > last {
 					last = step
@@ -249,10 +223,9 @@ func (f *SignedFeed) download(asset Asset, localFile string, report func(int16))
 	return nil
 }
 
-// Progress is the download's progress channel: the latest value sent, and
-// whether the download has ended (its sender dropped). Once Verifying is
-// sent, later percentages are ignored: the C library sends 100 after the
-// source returns.
+// Progress relays download percentages and the Verifying sentinel from the
+// background download goroutine to the UI tick loop. Once Verifying is sent,
+// subsequent percentage reports (e.g. Velopack's trailing 100%) are ignored.
 type Progress struct {
 	mu        sync.Mutex
 	latest    int16
@@ -263,10 +236,8 @@ type Progress struct {
 	fetching  bool
 }
 
-// NewProgress is an empty progress channel.
 func NewProgress() *Progress { return &Progress{} }
 
-// Send is one progress value: 0 to 100, or Verifying.
 func (p *Progress) Send(value int16) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -291,9 +262,6 @@ func (p *Progress) setVersion(version string) {
 	p.mu.Unlock()
 }
 
-// drain reads the channel without waiting: the latest value since the last
-// drain (has false for none), the version being fetched for Verifying, and
-// whether the download has ended.
 func (p *Progress) drain() (latest int16, has bool, version string, fetching, ended bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

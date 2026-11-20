@@ -1,8 +1,5 @@
 package app
 
-// The settings page: connection, presets, files and
-// diagnostics.
-
 import (
 	"strings"
 
@@ -10,12 +7,8 @@ import (
 	"gpuikit.dev/gk/s"
 )
 
-// settingsColumn is the width of the settings page's centered column.
 const settingsColumn float32 = 760
 
-// settingsSection is a titled group of rows: a small
-// uppercase heading, optional controls beside it (nil for none), then the
-// rows.
 func settingsSection(title string, aside gk.Element, body gk.DivEl) gk.DivEl {
 	head := gk.HFlex(s.ItemsCenter, s.JustifyBetween).MinH(px(28)).Mb(px(6)).
 		Child(gk.Div(s.FontSemibold).TextSize(px(12)).TextColor(rgb(Faint)).Child(txt(strings.ToUpper(title))))
@@ -27,8 +20,6 @@ func settingsSection(title string, aside gk.Element, body gk.DivEl) gk.DivEl {
 	return gk.VFlex().Child(head).Child(body.Style(s.VFlex))
 }
 
-// row is one row of a section: what it is on the left, its controls on the
-// right.
 func row(label, controls gk.Element) gk.DivEl {
 	return gk.HFlex(s.ItemsCenter, s.BorderB1).Gap(px(24)).MinH(px(56)).Py(px(16)).
 		BorderColor(rgb(surface().Line)).
@@ -36,7 +27,6 @@ func row(label, controls gk.Element) gk.DivEl {
 		Child(gk.Div(s.FlexShrink0).Child(controls))
 }
 
-// labeled is a row's title and the sentence under it.
 func labeled(title, detail string) gk.DivEl {
 	d := gk.VFlex().Gap(px(3)).Child(txt(title))
 	if detail != "" {
@@ -46,15 +36,13 @@ func labeled(title, detail string) gk.DivEl {
 	return d
 }
 
-// ghost is a secondary action: an outlined pill.
 func ghost(id gk.ID, label string) gk.ButtonEl {
 	return gk.Button(id).Ghost().H(px(38)).Px(px(16)).Rounded(float32(19)).Style(s.Border1).
 		BorderColor(rgb(surface().LineStrong)).Label(label)
 }
 
-// setSettingsOpen brings Settings to the front on its main page, loading
-// what it lists when it was not in front, or closes whatever is over the
-// base page.
+// setSettingsOpen opens Settings (refreshing presets and SSH status on entry)
+// or closes the active overlay.
 func (a *App) setSettingsOpen(open bool) {
 	if !open {
 		a.nav.CloseOverlay()
@@ -88,8 +76,7 @@ func (a *App) mixerSection(cx *gk.Cx) gk.DivEl {
 	return settingsSection("Mixer", nil, rows)
 }
 
-// showDiagnostics switches between Settings and its Diagnostics page. They
-// share one scroll position, so each starts at its top.
+// showDiagnostics toggles the Diagnostics subpage and resets the shared scroll container.
 func (a *App) showDiagnostics(cx *gk.Cx, open bool) {
 	a.nav.SetDiagnostics(open)
 	a.contentScroll.SetOffset(cx, gk.GpuiPoint{})
@@ -114,8 +101,6 @@ func (a *App) filesSection(cx *gk.Cx) gk.DivEl {
 			Style(s.BorderB0)))
 }
 
-// appearanceSection is this app's colors: a preference of this computer,
-// not the mixer's.
 func (a *App) appearanceSection(cx *gk.Cx) gk.DivEl {
 	current := appearance()
 	choices := gk.HFlex(s.Gap2)
@@ -131,7 +116,7 @@ func (a *App) appearanceSection(cx *gk.Cx) gk.DivEl {
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				setAppearance(cx, ap)
 				rememberAppearance(ap)
-				// The events window draws with the same colors.
+				// Refresh all windows so the events window picks up the new theme too.
 				gk.Refresh(cx)
 			}))
 	}
@@ -157,8 +142,6 @@ func (a *App) diagnosticsTools(cx *gk.Cx) gk.DivEl {
 			Style(s.BorderB0)))
 }
 
-// diagnosticsEntry is one quiet row at the foot of Settings; troubleshooting
-// lives behind it.
 func (a *App) diagnosticsEntry(cx *gk.Cx) gk.DivEl {
 	return settingsSection("Diagnostics", nil, gk.Div().Child(row(labeled("Diagnostics", ""),
 		ghost("open-diagnostics", "Open").OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {

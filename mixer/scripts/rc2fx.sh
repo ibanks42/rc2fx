@@ -23,24 +23,17 @@
 #   rc2fx.sh image-check              check RØDE's files against the image the
 #                                    installer flashed; started by launch
 #
-# developer-ssh adds or removes one marked line in root's authorized_keys.
-# arm-power-recovery explicitly sets the bootloader's one-shot power flag.
-# Start-up never sets it. The developer commands do, before they change or run
-# anything here: ./xtask and tools/xrun_trace from the host. Each refuses to go
-# on if it cannot.
-# image-check restores a damaged RØDE file only with a byte-identical copy
-# from the other root partition. Other commands do not change firmware or
-# stock files.
-# The launcher (audio-start.sh) runs `rc_audio_mixer` by name with /usr/sbin ahead of /usr/bin, so the shim
-# installed as /usr/sbin/rc_audio_mixer runs `launch` as the launcher's own
-# child and execs the stock executable, injected unless this boot has fallen
-# back to stock. Every start and stop is one of the launcher's own mixer
-# restarts: it restarts JACK and the screen UI exactly as it does after a
-# stock crash.
+# developer-ssh toggles one marked line in root's authorized_keys.
+# arm-power-recovery sets the bootloader's one-shot power flag (never called at
+# startup; developer tools arm and verify it before running).
+# image-check repairs damaged RØDE files only from a hash-matched copy on the
+# other root partition.
+# /usr/sbin/rc_audio_mixer shadows /usr/bin/rc_audio_mixer in audio-start.sh so
+# `launch` runs as the launcher's child and execs the stock binary (injected
+# unless this boot fell back to stock).
 set -euo pipefail
-# GitHub release packages rewrite this line to `release` (`./xtask package` with
-# RC2FX_RELEASE_BUILD=1); development builds default to verbose GUI
-# diagnostics, releases to quiet ones.
+# Rewritten to `release` by `./xtask package` when RC2FX_RELEASE_BUILD=1
+# (dev builds use verbose GUI diagnostics; releases use quiet mode).
 rc2fx_build=development
 # A detached copy of this script (rc2fx.sh update-commit) names the bundle it
 # acts on; every other caller runs the bundle it is stored in.
@@ -86,21 +79,15 @@ supervisor() { local pid; pid=$(cat "$run/supervisor.pid" 2>/dev/null) && alive 
 # The bundle the shim starts next: a build in RAM wins over the installed one.
 bundle_home() { local d; for d in /run/rc2fx-dev /opt/rc2fx; do test -f "$d/rc2fx.sh" && { printf '%s\n' "$d"; return 0; }; done; return 1; }
 
-# Keep RODE's descriptor byte-for-byte up to its final End Collection and
-# declare RC2FX's output report 5 and input report 6 inside that one
-# collection, under RODE's global items. Windows lists each top-level
-# collection as its own HID device, and RODE's Virtual Device Driver opens
-# whichever HID device on the mixer Windows lists first, so a second collection
-# can hide the mixer from it. RODE's software does not use IDs 5 and 6. The USB
-# controller has no free IN endpoint for a separate interface. Stage only in
-# /run. The stock script, audio layout, endpoints and boot files stay
-# unchanged. The native system hook substitutes this copy at normal start.
-# The kernel caps real-time threads at 950 of every 1000 ms per core and, when
-# a core crosses it, suspends every real-time thread there for the rest of the
-# second, the USB gadget's interrupt thread on CPU 0 included: three times
-# (2026-10-30) that left USB 1 dead until a reboot. The suppression worker
-# runs below every RØDE real-time thread, so, as real-time audio systems do,
-# RC2FX lifts the cap for the mixer's lifetime. Stock restores the default.
+# Keep RODE's HID descriptor intact up to its final End Collection and add
+# RC2FX output report 5 / input report 6 inside that same collection. A second
+# top-level collection shows up as a separate HID device on Windows and can
+# break RODE's Virtual Device Driver; the USB controller also has no spare IN
+# endpoint. Staged in /run only and substituted by the native hook.
+#
+# Lift RT throttling while RC2FX runs (restored on exit): hitting the 950 ms/s
+# kernel cap previously stalled CPU 0's USB gadget IRQ thread and wedged USB 1
+# until reboot. The suppression worker runs below all RØDE RT threads.
 rt_throttle=/proc/sys/kernel/sched_rt_runtime_us
 rt_throttle_default=950000
 relax_rt_throttle() {
@@ -158,15 +145,10 @@ usb_quiesce() {
   return 1
 }
 
-# The vendor's HID thread opens an existing /dev/hidg0 before startup replaces
-# the gadget. Its open lacks O_CLOEXEC, so the teardown shell can inherit that
-# handle and close it AFTER the old kernel character device has been freed.
-# This firmware's driver does not pin that allocation for open descriptors.
-# Retire only the devtmpfs name before a full mixer restart. Existing handles
-# keep working until their owners exit; vendor gadget setup creates a fresh
-# name. Never remove the gadget or its descriptors while a process holds it.
-# The mixer's short-lived `sh -c` children inherit the handle too; wait for
-# those to exit rather than refuse on the instant one happens to be running.
+# Vendor's HID thread opens /dev/hidg0 without O_CLOEXEC, so teardown shells
+# can inherit the fd and close it after the kernel frees the old cdev. Unlink
+# the devtmpfs node before a full mixer restart (waiting briefly for transient
+# `sh -c` children); existing fds keep working and gadget setup recreates it.
 retire_usb_node() {
   test -e /dev/hidg0 || return 0
   if test -L /dev/hidg0 || ! test -c /dev/hidg0; then
@@ -294,21 +276,11 @@ wait_for_launch() {
 }
 
 # ---- JACK error recorder ----------------------------------------------------
-# At each RC2FX mixer start the launch below replaces the running jackd once,
-# inside the mixer launch seam where audio is already restarting: same
-# executable, argv and environment, plus LD_PRELOAD of the bundle's
-# checksummed librc2fx_jackerr.so. The replacement starts the way
-# audio-start.sh's restartJack starts jackd (from the root cpuset, not
-# pinned), and then each of its threads gets the cpuset
-# and CPUs its role had in the old server's inventory; it must then match that
-# inventory exactly, have the same PCM devices open and leave the audio IRQs
-# as they were. A server whose threads a stock start would not reproduce
-# (policy, priority, nice) is left alone. Any failure after the stop starts a
-# plain jackd the same way, verified the same way, and marks the attempt
-# failed. The next ordinary
-# mixer restart (the vendor loop's restartJack) brings back stock jackd.
-# Never rerun audio-start.sh: its top level can flash controllers and change
-# boot settings. Nothing under /usr, no mount, no vendor file changes.
+# Replaces jackd once per RC2FX mixer start (inside the launch seam where audio
+# is already restarting) with the same argv/env plus LD_PRELOAD of checksummed
+# librc2fx_jackerr.so. Restores exact thread cpusets, CPU affinities, PCM fds,
+# and audio IRQs; falls back to plain jackd on any mismatch. Never reruns
+# audio-start.sh (its top level can flash controllers or touch boot settings).
 blackbox_proc=/proc
 blackbox_cpuset=/sys/fs/cgroup/cpuset
 blackbox_jackd=/usr/bin/jackd
@@ -317,14 +289,9 @@ blackbox_owner=0
 # The audio controller's IRQs: recorded before the replacement; if a JACK
 # start moved them they are put back exactly, or the server is not kept.
 blackbox_irqs='24 27'
-# The persistent recorder: the bundle's own librc2fx_jackerr.so, preloaded
-# into jackd at every RC2FX mixer start (the boot's first included) unless
-# $recorder_off exists. Its rings and logs live in RAM in $recorder_dir; it
-# never deletes evidence. recorder_evidence_limit is an admission check only:
-# past that many bytes under the root a start does not replace jackd. It is
-# not a runtime cap: a running server's ring is fixed in size, but its stdout
-# (jackd.log) can still grow, and nothing here rotates, truncates or limits
-# it while the real-time server runs.
+# Preloaded into jackd at every RC2FX start unless $recorder_off exists.
+# Evidence stays in RAM under $recorder_dir and is never deleted;
+# recorder_evidence_limit is an admission check only, not a runtime log cap.
 recorder_dir=/run/rc2fx-recorder
 recorder_off=$data/jack-recorder-off
 recorder_evidence_limit=8388608
@@ -1030,15 +997,10 @@ gui_starts() {
   printf '%s\n' "${#kept[@]}"
 }
 
-# display-start.sh starts the GUI as soon as `pidof rc_audio_mixer` succeeds,
-# but an RC2FX mixer needs about 9 s to open its control socket. A GUI started
-# that early misses its meter setup (device 2026-11-01: a stereo channel showed
-# only its left bar, and no master L/R, until the next GUI restart, while the
-# launch state was identical). So wait until the mixer reports callbacks, but
-# only when RC2FX audio is in charge this boot, and never longer than 30 s
-# (RC2FX_GUI_WAIT_MAX, for tests).
-# Never fails: audit.json may not exist yet when the socket does, and this
-# runs under set -e -o pipefail.
+# display-start.sh launches the GUI as soon as `pidof rc_audio_mixer` succeeds,
+# before an RC2FX mixer opens its control socket (~9 s). Starting that early
+# breaks meter setup, so wait up to 30 s (RC2FX_GUI_WAIT_MAX) for callbacks
+# to advance when RC2FX audio is active. Never fails under set -eo pipefail.
 audit_callbacks() {
   { grep -o '"callbacks":[0-9]*' "$run/audit.json" 2>/dev/null || true; } | head -n 1 | tr -dc 0-9
   return 0
@@ -1199,15 +1161,10 @@ gui_status() {
   return 0
 }
 
-# Developer SSH access without reflashing. RØDE's sshd already runs with
-# key-only root login and an empty authorized_keys; this adds or removes ONE
-# line, marked with $ssh_marker, and keeps every other byte of the file. A
-# missing final newline is kept too, except that one is added before a new
-# managed line. Removing the line stops new logins; it does not end sessions
-# already open, and sshd is never restarted. `status` changes nothing. rc2fxd
-# validates the key first and serializes calls; every check is repeated here.
-# Exit status: 0 ok, 2 bad input, 3 unsafe path, 4 first boot after an update,
-# 1 anything else.
+# Developer SSH access without reflashing. Manages a single line marked with
+# $ssh_marker in root's authorized_keys while preserving all other bytes; never
+# restarts sshd or drops open sessions. All checks from rc2fxd are repeated.
+# Exit codes: 0 ok, 2 bad input, 3 unsafe path, 4 first boot, 1 other error.
 ssh_dir=${RC2FX_SSH_DIR:-/home/root/.ssh}
 ssh_host_dir=${RC2FX_SSH_HOST_DIR:-/etc/ssh}
 ssh_first_boot=${RC2FX_FIRST_BOOT:-/usr/bin/first-boot}
@@ -1363,16 +1320,13 @@ arm_power_recovery() {
 }
 
 # ---- flash evidence ----------------------------------------------------------
-# Flashes have left a few of RØDE's files damaged on the new root (one was all
-# NUL at its right size). To learn where that happens, a flash is checked twice
-# and the evidence kept on the settings partition, which survives the reboots:
-# - flash-verify runs right after RØDE's /usr/bin/rode-update.sh, before RØDE
-#   reboots: it syncs, drops the page cache so the reads come from the eMMC,
-#   and checks the new partition against its image.sha256;
-# - the image check copies each damaged file before it repairs it.
-# rode-update.sh is wrapped for this boot only, by a bind mount over it: RØDE's
-# file is not changed, its script runs unchanged with the same arguments, and
-# its exit status is returned. Nothing here can fail or stop an update.
+# Flashes occasionally leave RØDE files damaged (e.g. zero-filled) on the new
+# root. We check twice and save evidence on the persistent settings partition:
+# - flash-verify (via a per-boot bind mount over rode-update.sh): syncs, drops
+#   caches, verifies the new partition against image.sha256, and re-extracts
+#   damaged files from the archive before RØDE reboots.
+# - image-check at boot: archives any damaged files before repairing them.
+# Never blocks or alters rode-update.sh's exit status.
 evidence_root=${RC2FX_EVIDENCE_ROOT:-/Application/update-staging/rc2fx-flash}
 rode_update=${RC2FX_RODE_UPDATE:-/usr/bin/rode-update.sh}
 update_partition=${RC2FX_UPDATE_PARTITION:-/Application/update-partition}
@@ -1519,15 +1473,9 @@ flash_verify() {
 # ---- end of flash evidence ----------------------------------------------------
 
 # ---- image check -------------------------------------------------------------
-# The installer lists RØDE's files in the image with their SHA-256
-# (image.sha256, next to this script). A flash once left one of RØDE's boot
-# scripts zero-filled on the new root: the mixer then ran without its
-# settings partition and lost its setup at every start. `launch` starts this
-# check once per boot, in the background, until it has passed for the image.
-# A damaged file is restored from the other root partition only when that
-# copy has exactly the hash the image lists; nothing else is ever written.
-# The outcome is `$data/image-check`, which rc2fxd serves as
-# `GET api/v1/image-check`.
+# Verifies RØDE's files against image.sha256 once per boot in the background
+# until clean. Repairs damaged files only from a hash-matched copy on the other
+# root partition. Writes $data/image-check (served at GET api/v1/image-check).
 image_manifest=${RC2FX_IMAGE_MANIFEST:-$home/image.sha256}
 image_root=${RC2FX_IMAGE_ROOT:-/}
 image_result=$data/image-check
@@ -1653,15 +1601,11 @@ image_check() {
 # ---- end of the image check --------------------------------------------------
 
 # ---- signed in-place updates ------------------------------------------------
-# rc2fxd verifies and swaps a signed release (docs/developer/mixer-releases.md)
-# and then starts a copy of this script as `update-commit ID`, detached, so the
-# restart it causes does not end the transaction. This script only restarts,
-# checks readiness and commits or rolls back; every byte it runs was verified
-# first. The request file is key=value lines written by rc2fxd:
+# rc2fxd verifies/swaps a signed release and spawns a detached `update-commit ID`
+# so the restart doesn't kill the driver. Request file key=value fields:
 #   mode=commit|rollback  target=VERSION  from=VERSION  deadline=SECONDS
-#   gui=0|1  (the GUI shim changed and only applies after the next boot)
-#   restart=controller|mixer  (controller: only files the mixer process does
-#     not hold changed, so restarting the controller alone applies the update)
+#   gui=0|1  (GUI shim changed; takes effect next boot)
+#   restart=controller|mixer  (controller: reload rc2fxd only, keeping audio up)
 update_dir=/run/rc2fx-update
 
 # One record for `GET api/v1/update/last`, in the same key=value form rc2fxd

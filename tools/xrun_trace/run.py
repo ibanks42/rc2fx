@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Explicit opt-in xrun flight recording; connection uses the mixer env vars.
+"""Opt-in xrun flight recorder CLI (connects via RC2FX_MIXER_* env vars).
 
-Every action except status first arms the mixer's one-shot power recovery and
-refuses to run if it cannot. The action `arm` arms the trace, a different thing.
+Every action except `status` arms one-shot power recovery first and aborts if
+that fails (`arm` arms the ftrace capture itself).
 """
 import argparse
 import hashlib
@@ -43,7 +43,7 @@ def remote(action,*args):
     return ssh(shlex.join(['bash','-s','--','xrun-trace',action,*map(str,args)]),(ROOT/'tools/xrun_trace/xrun-trace.sh').read_bytes(),timeout=240 if action=='collect' else 60)
 
 def arm_power_recovery(action):
-    """Arm, check, then run: set the bootloader's one-shot power-on flag with this checkout's rc2fx.sh, read it back, and raise unless it is 1."""
+    """Set the bootloader one-shot power-on flag via rc2fx.sh and verify it reads back as 1."""
     try:
         ssh(shlex.join(['bash','-s','--','arm-power-recovery']),(ROOT/'mixer/scripts/rc2fx.sh').read_bytes())
         value=ssh('fw_printenv -n reboot_pwr_button_bypass').decode(errors='replace').strip()

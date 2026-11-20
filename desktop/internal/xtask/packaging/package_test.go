@@ -28,8 +28,8 @@ func put(t *testing.T, root, name string, data []byte) {
 
 func sha(data []byte) string { return task.Sha256(data) }
 
-// fixture is a checkout with a mixer build and the scripts, and an
-// executable that embeds its payload.
+// fixture creates a temp checkout with a fake mixer build, scripts, and a
+// synthetic executable embedding that payload.
 func fixture(t *testing.T) (string, []byte) {
 	t.Helper()
 	root := t.TempDir()
@@ -64,9 +64,8 @@ func fixture(t *testing.T) (string, []byte) {
 	return root, syntheticExecutable(t, root, false)
 }
 
-// syntheticExecutable: a synthetic executable container exercises
-// packaging, not GUI execution. The installer also tests a real standalone
-// non-GUI executable separately.
+// syntheticExecutable builds a dummy binary wrapping the expected embedded
+// payload so packaging tests don't need a full GUI build.
 func syntheticExecutable(t *testing.T, root string, release bool) []byte {
 	t.Helper()
 	envelope, err := embed.Expected(root, release)
@@ -172,7 +171,7 @@ func TestPackageHasSelfContainedExecutableAndLicenses(t *testing.T) {
 	if string(files["licenses/LICENSE-MIT"].Data) != "MIT terms" {
 		t.Fatal("license text")
 	}
-	// Installer inputs are embedded in the executable, never shipped beside it.
+	// Installer inputs must stay embedded, never shipped as sidecar files.
 	for _, forbidden := range []string{"config/", "crates/", "docs/", "experiments/", "runtime/", "xtask/", "mixer/", "desktop/", "README"} {
 		for name := range files {
 			if strings.HasPrefix(name, forbidden) {
@@ -208,7 +207,7 @@ func TestPackageHasSelfContainedExecutableAndLicenses(t *testing.T) {
 	if err := found.RequireMatches(envelope); err != nil {
 		t.Fatal(err)
 	}
-	// A missing source payload is refused, not silently packaged stale.
+	// Missing source payload files must fail rather than reusing a stale binary.
 	if err := os.Remove(filepath.Join(root, "target", "mixer", "rc2fxd")); err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +232,7 @@ func TestPlatformNames(t *testing.T) {
 	}
 }
 
-// A test binary is a Go build without the velopack tag: packages refuse it.
+// The test binary itself lacks -tags velopack, so checkGoBuild must reject it.
 func TestPackagesRefuseGoBuildsWithoutVelopack(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
@@ -243,8 +242,6 @@ func TestPackagesRefuseGoBuildsWithoutVelopack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Without -tags velopack it is refused for that, with a refused tag for
-	// the tag.
 	if err := checkGoBuild(data); err == nil || !strings.Contains(err.Error(), "-tags") {
 		t.Fatalf("%v", err)
 	}
@@ -263,7 +260,7 @@ func TestTheAppShipsOnlyVelopackOnWindowsBesideIt(t *testing.T) {
 			t.Errorf("%s: %s", goos, got)
 		}
 	}
-	// The manifest is package gk's, so the script has none (type 24).
+	// Resource script must omit type-24 manifest because package gk embeds its own.
 	script := resourceScript(`C:\r\rc2fx.ico`, "1.2.3")
 	if !strings.Contains(script, "FILEVERSION 1,2,3,0") || !strings.Contains(script, `1 ICON "C:\\r\\rc2fx.ico"`) ||
 		strings.Contains(script, "1 24 ") ||

@@ -1,6 +1,5 @@
-// Package fixture builds the inputs of the delta fixtures. Large's recipe is
-// repeated in crates/rc2fx-delta/tests/shared_fixtures.rs; change both or
-// neither.
+// Package fixture generates test inputs for the delta fixtures. Large() is
+// duplicated in crates/rc2fx-delta/tests/shared_fixtures.rs; keep both in sync.
 package fixture
 
 import (
@@ -10,20 +9,17 @@ import (
 	"fmt"
 )
 
-// File is one payload file.
 type File struct {
 	Name string
 	Data []byte
 }
 
-// Sum is a lowercase hex SHA-256.
 func Sum(data []byte) string {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
 }
 
-// Envelope is an `RC2FX-EMBEDDED-PAYLOAD 1` envelope holding files, as the
-// signed payload lays them out.
+// Envelope builds an RC2FX-EMBEDDED-PAYLOAD 1 envelope from files.
 func Envelope(files []File) []byte {
 	var body []byte
 	for _, f := range files {
@@ -38,8 +34,8 @@ func Envelope(files []File) []byte {
 	return append(out, body...)
 }
 
-// Sample is the Rust tests' sample: a file the mixer already has, an old
-// and a new build of one file, and a compressible file.
+// Sample returns the standard test inputs shared with the Rust tests: an
+// unchanged file, an old/new pair for patching, and a compressible file.
 func Sample() (shared, old, updated, gui []byte) {
 	shared = bytes.Repeat([]byte("a file the mixer already has\n"), 20)
 	old = bytes.Repeat([]byte("the previous rc2fxd build\n"), 200)
@@ -50,8 +46,8 @@ func Sample() (shared, old, updated, gui []byte) {
 	return
 }
 
-// Random is n bytes of xorshift64 (13, 7, 17) from seed: each byte is the
-// low byte of the state after one step.
+// Random generates n deterministic pseudo-random bytes using xorshift64
+// (13, 7, 17).
 func Random(seed uint64, n int) []byte {
 	out := make([]byte, n)
 	x := seed
@@ -64,8 +60,7 @@ func Random(seed uint64, n int) []byte {
 	return out
 }
 
-// Text is n bytes of words picked by Random(seed), compressible like a
-// binary's string table.
+// Text generates n bytes of compressible pseudo-random text.
 func Text(seed uint64, n int) []byte {
 	words := []string{"mixer ", "route ", "input ", "gain ", "level ", "rc2fx ", "\n", "0x7f ", "fader "}
 	picks := Random(seed, n)
@@ -76,10 +71,9 @@ func Text(seed uint64, n int) []byte {
 	return out[:n]
 }
 
-// Large is the large-patch case: a 1.2 MB installed rc2fxd and a new one
-// with 1000 bytes in front, a byte flipped every 100 kB and 10 kB of new
-// tail, so the patch's matches reach about 1.2 MB back into the prefix and
-// need a 4 MiB window. A 4 kB file is unchanged.
+// Large constructs a 1.2 MB patch fixture whose matches reach ~1.2 MB back
+// into the prefix (requiring a 4 MiB window), paired with an unchanged 4 KB
+// file.
 func Large() (envelope []byte, installed map[string][]byte) {
 	base := Random(0x9e3779b97f4a7c15, 1_200_000)
 	updated := Random(2, 1000)

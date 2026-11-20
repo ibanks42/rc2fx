@@ -1,40 +1,30 @@
 #!/usr/bin/env python3
-"""Sign a published app release into the app update metadata, or renew it.
+"""Sign a published app release into the `app-metadata` TUF branch, or renew it.
 
-App releases have a TUF repository of their own, beside the mixer's: the same
-root and release keys, but metadata on the orphan branch `app-metadata`, read
-by the app from raw.githubusercontent.com. Every asset of the latest release
-except SHA256SUMS is a target `vVERSION/ASSET`. The app checks a downloaded
-update package against it before applying it.
+App updates use their own orphan branch (`app-metadata`) served via
+raw.githubusercontent.com, sharing the mixer's TUF root and release keys. Every
+release asset except SHA256SUMS is recorded as target `vVERSION/ASSET`.
 
   prepare --tag TAG --dir DIR [--built DIR]...
-      Download every asset of the published release TAG into the new
-      directory DIR and check each against GitHub's digest and the release's
-      SHA256SUMS, which must list exactly the other assets. With --built (the
-      packages the release run built), the release must hold exactly those
-      files, byte for byte, apart from SHA256SUMS, which is rewritten once
-      the macOS packages are added. Then decide against the branch: an
-      older release than the one already signed is refused; the same release
-      with the same assets is already done; the same release with different
-      assets is refused. Writes `version` and
-      `sign` (true or false) to GITHUB_OUTPUT when it is set.
+      Download all assets of TAG into DIR and verify them against GitHub's
+      digests and SHA256SUMS. With --built, also require the release assets to
+      match the build outputs byte for byte (excluding SHA256SUMS). Checks the
+      current branch to skip already-signed identical assets and refuse
+      downgrades or conflicting re-signs. Writes `version` and `sign` to
+      GITHUB_OUTPUT when set.
 
   publish --tag TAG DIR METADATA
-      Check the signed METADATA describes exactly the assets in DIR, then
-      add it to the branch in one commit, built on the tip it read
-      (--force-with-lease), and wait for it to be served.
+      Verify METADATA matches DIR, push it in a single commit using
+      --force-with-lease, and wait until raw.githubusercontent.com serves it.
 
   refresh METADATA
-      Publish renewed snapshot and timestamp metadata; targets must be the
-      ones already on the branch.
+      Push renewed snapshot and timestamp metadata without changing targets.
 
-Metadata versions only need to increase, and they stay below every mixer
-metadata version (Unix times): the workflows use the Unix time less 10^9.
-The two repositories share their root and keys, so app metadata replayed at
-the mixer's URL then reads to a mixer client as a rollback, and is refused.
+App metadata versions use `unix_time - 1e9`, keeping them strictly below mixer
+metadata versions (raw Unix timestamps) so app metadata can't be replayed at the
+mixer metadata URL.
 
-Needs `gh` with GH_TOKEN, and GH_REPO (or GITHUB_REPOSITORY). Every refusal
-exits 1.
+Requires `gh` with GH_TOKEN and GH_REPO (or GITHUB_REPOSITORY). Exits 1 on refusal.
 """
 
 import argparse
@@ -64,12 +54,10 @@ downloaded update before applying it. This branch is written only by the release
 tooling; see docs/developer/releases.md on main.
 """
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
-# One path segment, the same in a target name and on disk.
 PLAIN = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]*")
-# Mixer metadata versions are Unix times from 2026 on; every app metadata
-# version must stay below them all.
+# Mixer metadata versions are Unix timestamps (>= 2026); keep app versions below them.
 MIXER_VERSIONS_FROM = 1_700_000_000
-# Longer than raw.githubusercontent.com's five-minute cache.
+# Exceeds raw.githubusercontent.com's 5-minute CDN cache TTL.
 SERVED_WAIT = 420
 SERVED_POLL = 15
 
@@ -84,13 +72,13 @@ def require(condition, message):
 
 
 class Gh:
-    """The GitHub operations used here. Tests replace it with a fake."""
+    """Minimal GitHub CLI wrapper (replaced by a fake in tests)."""
 
     def __init__(self, repo):
         self.repo = repo
 
     def release(self, tag):
-        """The published release for TAG, or None. Drafts are not found by tag."""
+        """Return the published release for TAG, or None (drafts aren't returned by tag)."""
         result = subprocess.run(["gh", "api", f"repos/{self.repo}/releases/tags/{tag}"],
                                 capture_output=True, text=True)
         if result.returncode != 0:
@@ -110,7 +98,7 @@ class Gh:
 
 
 def git(*args, cwd=None):
-    # gh supplies the credential, so a token never appears in a URL or argument.
+    # Use gh as credential helper so tokens never appear in URLs or argv.
     helper = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
     return subprocess.check_output(["git", *helper, *map(str, args)], text=True, cwd=cwd)
 
@@ -134,7 +122,7 @@ def sha256_file(path):
 
 
 def parse_sums(text):
-    """{name: sha256} from SHA256SUMS; a malformed or repeated line is refused."""
+    """Parse SHA256SUMS into {name: sha256}, rejecting malformed or duplicate entries."""
     sums = {}
     for line in text.splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
@@ -146,8 +134,7 @@ def parse_sums(text):
 
 
 def asset_files(directory):
-    """{name: (length, sha256)} for the assets in DIRECTORY, checked against its
-    SHA256SUMS, which must list exactly the other files."""
+    """Verify all files in DIRECTORY against SHA256SUMS and return {name: (size, sha256)}."""
     directory = Path(directory)
     sums = parse_sums((directory / SUMS).read_text())
     files = {}
@@ -166,8 +153,7 @@ def asset_files(directory):
 
 
 def download_release(gh, tag, directory):
-    """Every asset of the published release TAG, each checked against GitHub's
-    digest and size, into the new directory DIRECTORY."""
+    """Download all assets of TAG into DIRECTORY, verifying sizes and GitHub SHA-256 digests."""
     release = gh.release(tag)
     require(release is not None, f"release {tag} is not published")
     require(release.get("tag_name") == tag, f"release {tag} carries tag {release.get('tag_name')!r}")
@@ -193,9 +179,7 @@ def download_release(gh, tag, directory):
 
 
 def require_built(downloaded, built_dirs):
-    """The release holds exactly the files this run built, byte for byte, so
-    nothing replaced on the release since is signed. SHA256SUMS differs: the
-    release's is rewritten once the macOS packages are added."""
+    """Ensure downloaded release assets match the run's build outputs byte for byte (excluding SHA256SUMS)."""
     built = {}
     for directory in map(Path, built_dirs):
         for path in sorted(directory.iterdir()):
@@ -220,14 +204,14 @@ def expected_targets(version, files):
 
 
 def signed_targets(targets_json):
-    """{name: (length, sha256, version)} from a targets.json document."""
+    """Parse targets.json into {name: (length, sha256, version)}."""
     targets = json.loads(targets_json)["signed"]["targets"]
     return {name: (t["length"], t["hashes"]["sha256"], t.get("custom", {}).get("version"))
             for name, t in targets.items()}
 
 
 def published_version(targets):
-    """The one app version the signed targets describe."""
+    """Return the single app version referenced by all signed targets."""
     versions = {version for _, _, version in targets.values()}
     require(len(versions) == 1, f"published metadata describes versions {sorted(map(str, versions))}")
     version = versions.pop()
@@ -237,7 +221,7 @@ def published_version(targets):
 
 
 class Branch:
-    """A checkout of the metadata branch in `path`; `tip` is None until it exists."""
+    """Checkout of the metadata branch at `path` (`tip` is None if the branch doesn't exist yet)."""
 
     def __init__(self, path, tip):
         self.path, self.tip = path, tip
@@ -246,7 +230,7 @@ class Branch:
         return json.loads((self.path / name).read_text())["signed"]["version"]
 
     def targets(self):
-        """Signed targets on the branch, or None before the first release."""
+        """Return signed targets from the branch, or None before the first release."""
         path = self.path / "targets.json"
         return signed_targets(path.read_text()) if self.tip and path.exists() else None
 
@@ -265,8 +249,8 @@ def fetch_branch(path):
 
 
 def decide(branch, version, expected):
-    """True to sign VERSION, False when the branch already holds exactly it.
-    Refuses an older release, and new bytes for one already signed."""
+    """Return True if VERSION should be signed, False if already signed identically.
+    Refuses rollbacks and conflicting assets for the same version."""
     current = branch.targets()
     if current is None:
         return True
@@ -281,8 +265,7 @@ def decide(branch, version, expected):
 
 
 def require_newer(branch, metadata, names):
-    """Refuse a stale signing run: it must not roll discovery back, nor reach
-    the mixer's version numbers."""
+    """Ensure new metadata versions strictly increase and stay below mixer versions."""
     for name in names:
         new = json.loads((metadata / name).read_text())["signed"]["version"]
         require(isinstance(new, int) and 0 < new < MIXER_VERSIONS_FROM,
@@ -298,7 +281,7 @@ def read_raw(name):
 
 
 def verify_served(files):
-    """raw.githubusercontent.com caches each file for minutes; wait for the push to appear."""
+    """Poll raw.githubusercontent.com until all pushed files are served (CDN caches for ~5m)."""
     deadline = time.monotonic() + SERVED_WAIT
     waiting = list(files)
     while True:
@@ -320,7 +303,7 @@ def verify_served(files):
 
 
 def update_branch(branch, files, message):
-    """One commit, so the branch never holds a partial set; a concurrent writer fails the push."""
+    """Commit all metadata files atomically and push with --force-with-lease."""
     for file in files:
         shutil.copyfile(file, branch.path / file.name)
     readme = branch.path / "README.md"
@@ -364,14 +347,13 @@ def publish(tag, directory, metadata):
     require(all(re.fullmatch(r"[1-9][0-9]*\.root\.json", p.name) for p in roots),
             "unexpected root file name")
     require(set(metadata.iterdir()) == set(roles) | set(roots), "unexpected file in signed metadata")
-    # Fetched again just before writing: another release may have been signed
-    # since prepare.
+    # Re-fetch right before pushing in case another release was signed since prepare.
     with tempfile.TemporaryDirectory() as temporary:
         branch = fetch_branch(Path(temporary))
         if not decide(branch, version, expected):
             return f"App {version} is already signed with these assets\n"
         require_newer(branch, metadata, SIGNED_ROLES)
-        # Clients follow numbered roots in order; a published one never changes.
+        # Numbered roots are immutable once published.
         for root in roots:
             old = branch.path / root.name
             require(not old.exists() or old.read_bytes() == root.read_bytes(),

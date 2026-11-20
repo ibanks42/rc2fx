@@ -1,8 +1,5 @@
 package app
 
-// Opening a settings file into the draft and saving the
-// draft as one. The file logic is in edit/files.go.
-
 import (
 	"fmt"
 
@@ -30,8 +27,8 @@ func (a *App) installDraft(cx *gk.Cx, snapshot edit.DraftSnapshot, targets []cor
 	a.notify(cx)
 }
 
-// openDraft asks for a settings file and puts it in the draft, asking first
-// when that would replace unsaved edits.
+// openDraft prompts for a settings file and loads it into the draft, confirming
+// first if there are unsaved edits.
 func (a *App) openDraft(cx *gk.Cx) {
 	if a.fileBusy || a.pending != nil || a.presets.writing() || a.link.Connecting() || a.transitionBusy() {
 		return
@@ -103,7 +100,6 @@ func (a *App) openDraft(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// confirmReplaceDraft asks before a settings file replaces unsaved edits.
 func (a *App) confirmReplaceDraft(cx *gk.Cx, snapshot edit.DraftSnapshot, targets []core.Target,
 	selectedTargets []string, name string) {
 	detail := fmt.Sprintf("Open %s with %d chains. This doesn't change the mixer's saved settings.", name, len(targets))
@@ -122,13 +118,11 @@ func (a *App) confirmReplaceDraft(cx *gk.Cx, snapshot edit.DraftSnapshot, target
 			a.notify(cx)
 		}
 	}) {
-		// Another question is open: the file is not opened.
 		a.fileBusy = false
 		a.message = "Answer the open question first, then open the file again."
 	}
 }
 
-// saveDraft writes the draft as a settings file the user names.
 func (a *App) saveDraft(cx *gk.Cx) {
 	if a.fileBusy {
 		return

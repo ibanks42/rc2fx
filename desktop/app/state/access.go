@@ -7,7 +7,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 )
 
-// AccessOf is the access a grant outcome (or a lost helper) leaves.
+// AccessOf maps a privilege grant error (or nil) to an installflow.Access state.
 func AccessOf(err error) installflow.Access {
 	switch {
 	case err == nil:

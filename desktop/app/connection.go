@@ -1,10 +1,6 @@
 package app
 
-// The first screen, shown until the app is connected to RC2FX: it names the
-// state the mixer is in, from what the app can see on USB without RC2FX
-// (installflow.FirstOf decides), and offers the one thing to do there. Also
-// the Linux USB permission screen and its Copy buttons. The preferences file
-// and the connection messages' meanings are in prefs.go.
+// Pre-connection screen and Linux USB udev permission prompt.
 
 import (
 	"fmt"
@@ -25,34 +21,27 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
 
-// USBRuleKind is the USB permission screen's request state.
 type USBRuleKind int
 
 const (
 	USBRuleIdle USBRuleKind = iota
-	// USBRuleAsking: the system's password prompt is open.
 	USBRuleAsking
-	// USBRuleFailed: refused or failed; Error is the reason, in words.
 	USBRuleFailed
 )
 
-// USBRule is the Linux USB permission screen's request: its state and the
-// error from a failed attempt.
 type USBRule struct {
 	Kind  USBRuleKind
 	Error string
 }
 
-// codeBox is a sunken box for exact text, such as a command.
 func codeBox(mono string) gk.DivEl {
 	return gk.Div(s.Relative, s.Border1).Px(px(6)).Py(px(4)).Rounded(px(10)).
 		Bg(rgb(surface().Sunken)).BorderColor(rgb(surface().Line)).FontFamily(mono).
 		TextSize(px(12)).TextColor(rgb(Muted))
 }
 
-// firstLook is what the app last saw of the mixer before connecting.
-// usbOK is false when this system could not list USB devices, so only the
-// connection's own messages say anything.
+// firstLook caches the latest pre-connection USB probe. When usbOK is false
+// (USB enumeration unavailable), the screen falls back to connection messages.
 type firstLook struct {
 	seen  installflow.Sighting
 	usbOK bool
@@ -63,13 +52,10 @@ func sameLook(a, b firstLook) bool {
 		a.seen.Flashed == b.seen.Flashed && reflect.DeepEqual(a.seen.USB, b.seen.USB)
 }
 
-// firstLookEvery is how often the first screen looks at USB.
 const firstLookEvery = 2 * time.Second
 
-// lookAtMixer is what the app can see of the mixer without RC2FX: the
-// mixers on USB and their mode, whether RC2FX's control reports are live on
-// the one in normal mode, whether a mixer's storage shows as a disk, and
-// whether this app sent a flash in the last few minutes. It only reads.
+// lookAtMixer performs a read-only probe of USB mixers, recovery disks, and
+// recent flash history for the pre-connection screen.
 func lookAtMixer(work string, settled *uint64) firstLook {
 	var look firstLook
 	usbcontrol.RegisterControlProbe()
@@ -99,11 +85,8 @@ func lookAtMixer(work string, settled *uint64) firstLook {
 	return look
 }
 
-// pollFirstLook looks at USB every few seconds while the first screen is
-// up, on a worker so the window never waits on it.
 func (a *App) pollFirstLook(cx *gk.Cx) {
-	// A look from before a connection would be stale by the time the first
-	// screen comes back.
+	// Drop any pre-connection probe once connected so it won't look stale on disconnect.
 	if a.session.Connected && !a.flowFixture {
 		a.look = nil
 	}
@@ -132,9 +115,6 @@ func cloneUint64(v *uint64) *uint64 {
 	return &c
 }
 
-// firstSighting is what the first screen goes by: the last look at USB,
-// or, where this system can't list USB devices, the connection's own
-// messages.
 func (a *App) firstSighting() installflow.Sighting {
 	if a.look != nil && a.look.usbOK {
 		return a.look.seen
@@ -152,13 +132,10 @@ func (a *App) firstSighting() installflow.Sighting {
 	return seen
 }
 
-// firstState is the state the first screen names now.
 func (a *App) firstState() installflow.First {
 	return installflow.FirstOf(a.firstSighting())
 }
 
-// hero is one state of the first screen: the headline in two lines, a
-// sentence under it, what can be done, and a status line in the corner.
 type hero struct {
 	first, second string
 	lead          string
@@ -167,8 +144,7 @@ type hero struct {
 	status        string
 }
 
-// Hero sizes, from the approved mock-up. The lead and the actions keep
-// their height whatever they hold, so nothing moves between states.
+// Fixed vertical heights keep the hero layout from jumping across states.
 const (
 	heroSignatureHeight float32 = 200
 	heroLeadHeight      float32 = 70
@@ -201,13 +177,11 @@ func (a *App) connectionScreen(cx *gk.Cx) gk.Element {
 		Child(status)
 }
 
-// heroButton is the first screen's main button.
 func heroButton(id gk.ID, label string) gk.ButtonEl {
 	return gk.Button(id).Primary().Large().H(px(LargeButtonHeight)).Px(px(28)).FontSemibold().
 		Rounded(float32(26)).Label(label)
 }
 
-// heroFacts is the three short facts under Install RC2FX.
 func heroFacts() gk.DivEl {
 	fact := func(text string) gk.DivEl {
 		return gk.HFlex(s.ItemsCenter).Gap(px(8)).
@@ -226,7 +200,6 @@ func heroSpinner(text string) gk.DivEl {
 		Child(txt(text))
 }
 
-// firstHero is the first screen for the state the app sees now.
 func (a *App) firstHero() hero {
 	if !a.link.Auto() {
 		return hero{
@@ -256,8 +229,7 @@ func (a *App) firstHero() hero {
 				Child(heroButton("open-installer", "Install RC2FX").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskInstall) })).
 				Child(heroFacts()).
-				// The storage fix alone is for the Pro II only (autofix.ProOnly),
-				// which is what this state is.
+				// Standalone storage fix is Pro II only, which matches FirstFound.
 				Child(gk.Button("open-fix").Ghost().Label("Not installing RC2FX? Fix the update bug only").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openFix(cx) })),
 			dot: Accent, status: status,
@@ -274,9 +246,7 @@ func (a *App) firstHero() hero {
 			dot: Accent, status: label + " · RC2FX not running",
 		}
 	case installflow.FirstFinishing:
-		// The app sees no mixer, a few minutes after it sent a flash: the
-		// mixer is restarting. What was flashed may be RØDE's firmware, so
-		// nothing here promises RC2FX.
+		// Keep wording neutral because the flash may have been stock firmware.
 		return hero{
 			first: "Your mixer is", second: "finishing an update.",
 			lead: "It restarts while it installs the update, which can take a few minutes. Keep it switched on and connected.",
@@ -321,7 +291,6 @@ func (a *App) firstHero() hero {
 					Action: "Close",
 				}, func(*gk.Cx) {}, func(*gk.Cx) {})
 			})
-		// Repair mixer only where this system can do it.
 		if !installer.RepairSupported {
 			return hero{
 				first: "Your mixer is in", second: "storage mode.",
@@ -355,8 +324,6 @@ func (a *App) firstHero() hero {
 	}
 }
 
-// copyButton is a small Copy button that says Copied for a moment after a
-// click.
 func (a *App) copyButton(id string, copied string, cx *gk.Cx) gk.StatefulDivEl {
 	done := a.copied == id
 	color, label := Muted, "Copy"
@@ -381,9 +348,6 @@ func (a *App) copyButton(id string, copied string, cx *gk.Cx) gk.StatefulDivEl {
 		})
 }
 
-// usbAccessScreen is Linux without the udev rule: what RC2FX needs, exactly
-// what it will add (the file, shown byte for byte), and how to undo it,
-// before the system's own password prompt.
 func (a *App) usbAccessScreen(cx *gk.Cx) gk.Element {
 	mono := gk.KitTheme(cx).MonoFontFamily(cx)
 	asking := a.usbRule.Kind == USBRuleAsking
@@ -391,12 +355,8 @@ func (a *App) usbAccessScreen(cx *gk.Cx) gk.Element {
 	point := func(t string) gk.DivEl {
 		return gk.HFlex(s.ItemsStart, s.Gap3).
 			Child(gk.Div(s.FlexShrink0, s.RoundedFull).Mt(px(8)).Size(px(5)).Bg(rgb(Faint))).
-			// MinW0 lets a long line shrink to the card and wrap.
 			Child(gk.Div(s.Flex1, s.MinW0).Child(txt(t)))
 	}
-	// Exact text in a read-only box (select it or copy it), with a Copy
-	// button pinned to the box's corner, outside what scrolls. Copy puts the
-	// constant on the clipboard, never the field's contents.
 	chevron := gk.IconChevronRight
 	if open {
 		chevron = gk.IconChevronDown
@@ -456,8 +416,6 @@ func (a *App) usbAccessScreen(cx *gk.Cx) gk.Element {
 			Child(card))
 }
 
-// allowUSB installs the udev rule through the system's password prompt, then
-// connects.
 func (a *App) allowUSB(cx *gk.Cx) {
 	if a.usbRule.Kind == USBRuleAsking {
 		return

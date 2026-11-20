@@ -2,9 +2,9 @@
 
 package ext2fs
 
-// Real ext4 images made by mkfs.ext4 with the features of a Pro II's root
-// partitions, checked afterwards by e2fsck -fn. Skipped where e2fsprogs'
-// tools are missing; CI's Ubuntu has them.
+// Tests run against real ext4 images created with mkfs.ext4 matching a Pro II
+// root partition's feature set, verified afterward with e2fsck -fn. Skipped if
+// e2fsprogs tools aren't installed.
 
 import (
 	"bytes"
@@ -34,7 +34,6 @@ type image struct {
 	debugfs string
 }
 
-// newImage is a Pro II root's features on a small image, with a few files.
 func newImage(t *testing.T, block int) *image {
 	t.Helper()
 	mkfs, e2fsck, debugfs := tool("mkfs.ext4"), tool("e2fsck"), tool("debugfs")
@@ -132,7 +131,7 @@ func TestAFileIsFoundReadAndRestoredInPlace(t *testing.T) {
 			if !bytes.Equal(read(t, fs, entry), script) {
 				t.Fatal("script contents")
 			}
-			// What the flash left: the right size, all zeros.
+			// Simulate an interrupted flash that left the file zero-filled.
 			must(t, fs.Overwrite(entry, make([]byte, len(script))))
 			must(t, fs.Close())
 			image.clean(t)
@@ -150,7 +149,6 @@ func TestAFileIsFoundReadAndRestoredInPlace(t *testing.T) {
 			if !bytes.Equal(read(t, fs, entry), script) {
 				t.Fatalf("block size %d", block)
 			}
-			// A file spanning many blocks reads back whole.
 			big := lookup(t, fs, "usr/bin/big")
 			if n := len(read(t, fs, big)); n != 300_000 {
 				t.Fatalf("big file read %d bytes", n)
@@ -160,8 +158,8 @@ func TestAFileIsFoundReadAndRestoredInPlace(t *testing.T) {
 }
 
 func TestPreallocatedBlocksThatWereNeverWrittenAreFilled(t *testing.T) {
-	// fallocate leaves extents marked unwritten, which read as zeros: one
-	// way a file can come out of an interrupted write.
+	// fallocate leaves unwritten extents that read back as zeros, which can
+	// also happen after an interrupted write.
 	image := newImage(t, 1024)
 	image.debugfsRun(t, "write /dev/null usr/bin/prealloc")
 	image.debugfsRun(t, "fallocate usr/bin/prealloc 0 7")

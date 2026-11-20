@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Exercise the script's PID/start-time checks without touching real processes.
+"""Tests for rc2fx.sh's start_time() and alive() helpers against fake /proc entries.
 
-The supervisor's own checks are tested in crates/rc2fx-supervisor.
+Supervisor-side process checks are tested in crates/rc2fx-supervisor.
 """
 import subprocess
 import tempfile

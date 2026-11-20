@@ -1,6 +1,5 @@
-// Command xtask is the project's tasks that work the same on Windows, Linux
-// and macOS. Run through `just`, or directly as `./xtask <command>` from the
-// repository root (the launcher runs this with `go run`).
+// Command xtask implements cross-platform project tasks, invoked via `just` or
+// `./xtask <command>` from the repo root.
 package main
 
 import (
@@ -65,8 +64,7 @@ bench and every mixer action except status, logs and api first arm the mixer's
 one-shot power recovery over SSH and refuse to run if they cannot
 (docs/developer/mixer-workflow.md). api uses USB 1 only and does not arm.`
 
-// cwdVariable is the directory the launcher was called from; relative paths
-// in the arguments are relative to it.
+// Launcher working directory so relative path arguments resolve as expected.
 const cwdVariable = "RC2FX_XTASK_CWD"
 
 func main() {

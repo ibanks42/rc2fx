@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Host-only tests of rc2fx.sh image-check (no mixer).
-
-python3 -I mixer/scripts/tests/image_check.py
-
-Runs the real script with the image root, the other root partition, the
-manifest and the data folder all in a temporary directory.
-"""
+"""Host tests for `rc2fx.sh image-check` and `flash-verify` using temp directories."""
 import hashlib
 import os
 import subprocess

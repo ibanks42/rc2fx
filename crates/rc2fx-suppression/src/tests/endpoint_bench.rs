@@ -1,17 +1,13 @@
-//! The callback endpoint against its original per-sample form, and its host
-//! cost.
+//! Endpoint differential tests and host-side microbenchmark (x86 host only,
+//! not Cortex-A53). Runs without a worker thread: a synchronous fake model
+//! services queues between blocks so scheduling doesn't add noise.
 //!
-//! The endpoint fixture has no OS worker thread. A fake model on the same
-//! thread services the input queue between blocks and publishes each frame
-//! immediately (scaled by 0.5, voice 0.75), so neither DFN timing nor
-//! scheduling enters. Timings are host x86, NOT A53.
+//! `reference_sample` is the original division-based `Worker::process_sample`;
+//! both `process_sample` and `process_block` must match it bit-for-bit.
 //!
-//! `reference_sample` is `Worker::process_sample` as it was before the
-//! output phase and frame became counters: it divides the sample count for
-//! both at every sample. `Worker::process_sample` and `Worker::process_block`
-//! must reproduce it bit for bit: outputs, voices, state and counters.
-//!
-//!     cargo test --release -p rc2fx-suppression endpoint_bench -- --include-ignored --nocapture
+//! ```text
+//! cargo test --release -p rc2fx-suppression endpoint_bench -- --include-ignored --nocapture
+//! ```
 use super::*;
 use std::hint::black_box;
 
@@ -46,10 +42,9 @@ fn serve(input: &mut Consumer, output: &mut Producer, nan_at: Option<u64>) {
     }
 }
 
-/// `Worker::process_sample` as first written, kept as the reference: the
-/// output phase and the due frame come from a modulo and a division of the
-/// sample count at every sample. It neither reads nor advances the counters
-/// that replaced them, so a worker must be driven by this alone.
+// Original `Worker::process_sample` using per-sample division/modulo instead of
+// running counters. Must not be mixed with `process_sample`/`process_block` on
+// the same `Worker` instance since it doesn't update `out_phase`/`due`.
 fn reference_sample(w: &mut Worker, input: f32, wet: f32) -> f32 {
     let input = if input.is_finite() { input } else { 0. };
     let dry = w.dry[w.dry_position];
@@ -283,11 +278,8 @@ fn run(
     (outs, voices, state)
 }
 
-/// `Worker::process_sample` (counters in place of the division) and
-/// `Worker::process_block`, alone and mixed, against `reference_sample`:
-/// every output bit, every voice, and the endpoint's state and counters, over
-/// block sizes, geometries, service patterns (results on time, late, stale,
-/// never) and input and failure scenarios.
+// Compare `process_sample`, `process_block`, and mixed calls against
+// `reference_sample` across geometries, block sizes, and fault scenarios.
 #[test]
 fn endpoint_paths_match_the_reference_bit_for_bit() {
     let mut rng = Rng(99);
@@ -557,14 +549,8 @@ fn run_scheduled(
     )
 }
 
-/// The three paths against `reference_sample` with results arriving at any
-/// sample, not only between blocks, and exactly around each deadline: the
-/// last sample at which a result is on time, the first at which it is late,
-/// the last at which a late result still plays and the first at which it is
-/// stale. Over geometries whose output frames start on, next to and away
-/// from the sample that completes an input frame, other frame lengths (down
-/// to one sample, up to the queue's largest), the longest dry delay, and
-/// blocks from one sample to several frames that never align with a frame.
+// Test exact deadline boundaries (on-time, first late sample, last late sample,
+// first stale sample) with publications arriving mid-block across geometries.
 #[test]
 fn endpoint_paths_match_the_reference_around_every_deadline() {
     let mut rng = Rng(77);

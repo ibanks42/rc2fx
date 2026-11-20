@@ -166,16 +166,11 @@ fn process_resources_for(pid: u32) -> ProcessResources {
         message: short(&error.to_string()),
     })
 }
-/// When the process that runs the engine started, on the same clock the
-/// diagnostics events are stamped with.
+/// Engine process start time on the diagnostics event clock (`CLOCK_MONOTONIC`).
 ///
 /// `/proc/<pid>/stat` field 22 (`starttime`) counts `_SC_CLK_TCK` ticks since
-/// boot, which the kernel measures against boot time and therefore includes
-/// suspend. This device never suspends, so `CLOCK_MONOTONIC` tracks boot time
-/// and the ticks convert directly onto the `CLOCK_MONOTONIC` the engine's own
-/// event times use (see `crate::diagnostics_log::monotonic_ns`). If the event
-/// clock ever became `CLOCK_BOOTTIME`, this arithmetic is still the matching
-/// one; only the daemon's "now" would need the matching `clock_gettime`.
+/// boot. Because this device never suspends, `CLOCK_MONOTONIC` tracks boot time
+/// directly and converts onto the same clock as `diagnostics_log::monotonic_ns`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProcessStart {
     pub pid: u32,

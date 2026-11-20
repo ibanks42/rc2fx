@@ -1,7 +1,6 @@
 package app
 
-// The diagnostics file export, the events window's polling
-// and reset, and the Telemetry section's header controls.
+// Diagnostics JSON export, event log polling, and telemetry reset controls.
 
 import (
 	"encoding/json"
@@ -32,8 +31,7 @@ func (a *App) requestDiagnostics(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// prettyReport is the report the mixer sent, indented two spaces (core's
-// Value keeps the mixer's key order and number formatting).
+// prettyReport formats the raw report via core.Value to preserve the mixer's key order.
 func prettyReport(report json.RawMessage) (string, error) {
 	value, err := core.ParseJSONBytes(report, max(len(report), 1), math.MaxInt)
 	if err != nil {
@@ -91,27 +89,22 @@ func (a *App) saveDiagnostics(cx *gk.Cx, report json.RawMessage, err error) {
 	})
 }
 
-// openEvents opens the Diagnostic events window, or brings it forward.
 func (a *App) openEvents(cx *gk.Cx) {
 	reopened := a.eventsWindow != nil
 	a.eventsWindow = openEventsWindow(cx, a.eventsWindow, a.eventLog, a, func(cx *gk.Cx) {
-		// Closed by the user: stop reading.
 		a.eventsWindow = nil
 		a.eventsPending = false
 	})
 	if !reopened {
-		// A fresh window reads from the start of what the mixer keeps.
+		// Start from the beginning of the mixer's ring buffer when opening a fresh window.
 		a.eventLog.Update(cx, func(log *EventLog) { log.Clear() })
 		a.eventsPolled = nil
 	}
 }
 
-// telemetryAside is the Telemetry section's header controls: when its
-// counters start, the events window and the reset.
 func (a *App) telemetryAside(cx *gk.Cx) gk.DivEl {
 	connected := a.session.Connected && a.streamConnected
-	// Peek: read the log without observing it; the main view redraws on its
-	// own changes.
+	// Peek avoids subscribing the main view to every event log update.
 	log := a.eventLog.Peek()
 	setConfirm := func(value bool) func(cx *gk.Cx) {
 		return func(cx *gk.Cx) {
@@ -131,7 +124,6 @@ func (a *App) telemetryAside(cx *gk.Cx) gk.DivEl {
 		connected && !a.resetPending, setConfirm(true), setConfirm(false), a.resetDiagnostics))
 }
 
-// resetDiagnostics asks the mixer to restart its counters and event history.
 func (a *App) resetDiagnostics(cx *gk.Cx) {
 	a.confirmReset = false
 	a.eventLog.Update(cx, func(log *EventLog) { log.ConfirmReset = false })
@@ -153,7 +145,7 @@ func (a *App) resetReply(cx *gk.Cx, report json.RawMessage, err error) {
 	a.message = "Mixer diagnostics reset"
 	now := time.Now()
 	a.eventLog.Update(cx, func(log *EventLog) { log.Since = &now })
-	// Read the reset entry, and whatever followed it, straight away.
+	// Poll immediately to pick up the reset marker and any subsequent events.
 	a.eventsPolled = nil
 	a.receive(cx, report, false, false)
 }
@@ -173,7 +165,6 @@ func (a *App) eventsReply(cx *gk.Cx, events core.DiagnosticsEvents, err error) {
 		}
 		log.Error = ""
 		if events.More {
-			// Catch up without waiting for the next interval.
 			a.eventsPolled = nil
 		}
 		log.ReceivePage(events, received, func(id string) string {
@@ -192,9 +183,8 @@ func (a *App) eventsReply(cx *gk.Cx, events core.DiagnosticsEvents, err error) {
 	}
 }
 
-// eventsTick is called from the main poll: it keeps the events window's
-// view of the connection current and, while it is open, reads new events.
-// (A closed window is noticed by openEvents' close handler, not here.)
+// eventsTick runs on the main poll loop to sync connection/epoch state to the
+// events window and fetch new event pages while open.
 func (a *App) eventsTick(cx *gk.Cx) {
 	connected := a.session.Connected && a.streamConnected
 	var periodNs *uint64
@@ -215,9 +205,7 @@ func (a *App) eventsTick(cx *gk.Cx) {
 		a.eventLog.Update(cx, func(log *EventLog) {
 			log.Connected = connected
 			if epoch != nil && *epoch != log.Epoch {
-				// A reset this app did not just make or read about (another
-				// client's) restarts the counters at a time the app does not
-				// know.
+				// If another client reset the diagnostics epoch, clear our local reset timestamp.
 				if log.Since == nil || time.Since(*log.Since) > 5*time.Second {
 					log.Since = nil
 				}
@@ -225,8 +213,7 @@ func (a *App) eventsTick(cx *gk.Cx) {
 			}
 		})
 	}
-	// Telemetry reads the log once, to place faults from before this app
-	// connected.
+	// Telemetry also does a one-time fetch to attribute pre-connection faults.
 	startup := a.telemetryOpen && a.startup.WantsEvents()
 	if (a.eventsWindow == nil && !startup) || !connected || a.eventsPending ||
 		(a.eventsPolled != nil && time.Since(*a.eventsPolled) < telemetry.Poll) {
@@ -241,8 +228,6 @@ func (a *App) eventsTick(cx *gk.Cx) {
 	a.eventsPending = a.command(transport.CommandDiagnosticsEvents{Generation: a.generation, After: after})
 }
 
-// resetEvents: a new connection or none: forget the old mixer's events and
-// any request whose reply will never arrive.
 func (a *App) resetEvents(cx *gk.Cx) {
 	a.eventsPending = false
 	a.eventsPolled = nil

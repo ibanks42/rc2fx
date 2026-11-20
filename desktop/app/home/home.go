@@ -1,6 +1,5 @@
-// Package home is the pure parts of Home and of the opening screens, without
-// gk: which channels the overview lists
-// outside the show, and the Dusk halo's pixels.
+// Package home contains the non-rendering logic for the Home overview and
+// opening screens (off-fader channel visibility and Dusk halo pixel generation).
 package home
 
 import (
@@ -8,15 +7,14 @@ import (
 	"slices"
 )
 
-// ProcessedOffFaders is whether an input gets the overview's "not in this
-// show" card: it is processed and no fader strip shows it. Removing a source
-// from the show never hides a channel RC2FX still processes.
+// ProcessedOffFaders reports whether a processed input should appear in the
+// overview's "not in this show" section so removing a source from the show
+// never hides active RC2FX processing.
 func ProcessedOffFaders(targetID string, processed bool, onFaders []string) bool {
 	return processed && !slices.Contains(onFaders, targetID)
 }
 
-// The halo's design: two soft glows (blue left, violet right) around an
-// invisible pill, at this window size.
+// Halo geometry and colors (blue left, violet right) sized to the design window.
 var (
 	HaloWindow = [2]float32{1320, 860}
 	haloGlows  = [2]struct {
@@ -28,18 +26,16 @@ var (
 const (
 	HaloOpacity float32 = 0.065
 	haloBlur    float32 = 220
-	// HaloCell is window pixels per image pixel. A blur this wide has no fine
-	// detail.
+	// Window pixels per halo pixel; the wide blur needs no finer resolution.
 	HaloCell float32 = 8
 )
 
-// HaloSize is the halo image's size in pixels.
+// HaloSize returns the halo texture dimensions in pixels.
 func HaloSize() (width, height int) {
 	return int(math.Ceil(float64(HaloWindow[0] / HaloCell))), int(math.Ceil(float64(HaloWindow[1] / HaloCell)))
 }
 
-// haloGlow is a glow in the halo image: the pill, offset and blurred, as
-// coverage from 0 to 1 for each image pixel.
+// haloGlow rasterizes and blurs a single offset pill glow, returning [0, 1] coverage per pixel.
 func haloGlow(offset float32, width, height int) []float32 {
 	windowWidth, windowHeight := HaloWindow[0], HaloWindow[1]
 	left, right := 0.22*windowWidth+offset, 0.78*windowWidth+offset
@@ -65,8 +61,7 @@ func haloGlow(offset float32, width, height int) []float32 {
 	for _, w := range kernel {
 		total += w
 	}
-	// One axis at a time: blurring in x then y is the same as blurring in
-	// both.
+	// Separable Gaussian blur: horizontal pass then vertical pass.
 	blur := func(source []float32, length int, at func(line, position int) int) []float32 {
 		blurred := make([]float32, len(source))
 		for line := 0; line < len(source)/length; line++ {
@@ -91,8 +86,7 @@ func haloGlow(offset float32, width, height int) []float32 {
 	return blur(rows, height, func(column, y int) int { return y*width + column })
 }
 
-// HaloPixels is the halo's pixels, BGRA with straight alpha: the left glow
-// under the right.
+// HaloPixels renders the composited halo as straight-alpha BGRA bytes.
 func HaloPixels(width, height int) []byte {
 	color := func(value uint32) [3]float32 {
 		return [3]float32{float32(value >> 16 & 0xff), float32(value >> 8 & 0xff), float32(value & 0xff)}
@@ -113,10 +107,8 @@ func HaloPixels(width, height int) []byte {
 	return pixels
 }
 
-// epsilon32 is float32's machine epsilon, 2^-23.
 const epsilon32 = 1.1920929e-07
 
-// toU8 is v rounded half away from zero, saturating at 0 and 255.
 func toU8(v float32) byte {
 	r := math.Round(float64(v))
 	switch {

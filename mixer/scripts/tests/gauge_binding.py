@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Host-only proof of what the bench gauges bind, through the real loader.
+"""Host test verifying LD_AUDIT bench-gauge symbol binding against stub libraries.
 
-cargo build --locked -p rc2fx-native
-python3 mixer/scripts/tests/gauge_binding.py
-
-Without gcc or that build it skips, unless RC2FX_REQUIRE_NATIVE=1 (CI's
-linux job) makes it fail instead.
-
-Stub libasound, libsamplerate and libjack report who called them. A wrapper
-shows up as a call from the audit library instead of from the program.
+Build first: cargo build --locked -p rc2fx-native
+Run:         python3 mixer/scripts/tests/gauge_binding.py
+Set RC2FX_REQUIRE_NATIVE=1 to fail instead of skipping when the library is missing.
 """
 import os
 import shutil

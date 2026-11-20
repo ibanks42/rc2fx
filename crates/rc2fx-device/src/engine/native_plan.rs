@@ -6,12 +6,9 @@ use rc2fx_core::Config;
 use rc2fx_firmware::Model;
 use serde_json::{Value, json};
 
-/// The plan for `config` on `model`. Binding is fixed for the life of the
-/// mixer process, so every catalog path is bound: selected paths are processed
-/// and the rest pass audio through untouched until enabled. The plan has no
-/// worker block (the library refuses one): the library always applies its
-/// production suppression policy (`PRODUCTION_WORKER`: SCHED_RR 5, pinned to
-/// CPU 0).
+/// Builds the launch plan for `config` on `model`. Every catalog path is bound
+/// at startup (selected paths processed, others passthrough). Omits any worker
+/// block so the library applies `PRODUCTION_WORKER` (SCHED_RR 5, CPU 0).
 pub fn plan_for_model(config: &Config, model: Model) -> Result<Value, String> {
     let catalog = physical_paths_for(model);
     if (model == Model::Duo

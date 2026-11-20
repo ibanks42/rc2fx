@@ -1,37 +1,30 @@
-//! Runs one suppression model over a recording the way the mixer's worker
-//! would: one frame at a time, paced to real time, on the production worker
-//! policy (SCHED_RR priority 5 on CPU 0). Writes the denoised audio, aligned
-//! to the input, and prints a JSON timing summary on stdout.
+//! Benchmarks a suppression model over a WAV recording under the same framing
+//! and scheduling as the mixer worker (`SCHED_RR` priority 5 on CPU 0). Writes
+//! delay-aligned denoised audio to `OUTPUT.wav` and prints a JSON timing
+//! summary to stdout.
 //!
-//!     rc2fx-bench MODEL INPUT.wav OUTPUT.wav [--unpaced] [--policy production|inherited]
-//!                 [--cpus LIST] [--priority N] [--weights FILE] [--pause-us N] [--spin]
-//!                 [--kernel tiled|rows|compare]
+//! ```text
+//! rc2fx-bench MODEL INPUT.wav OUTPUT.wav [--unpaced] [--policy production|inherited]
+//!             [--cpus LIST] [--priority N] [--weights FILE] [--pause-us N] [--spin]
+//!             [--kernel tiled|rows|compare]
+//! ```
 //!
-//! MODEL is deepfilternet3-h128, or
-//! deepfilternet3-custom with `--weights`, a DeepFilterNet weights file in the
-//! engine's format whose framing the model defines. `--cpus` (for example 0 or
-//! 1-3) and `--priority` (SCHED_RR 1-99) replace the production policy's
-//! placement, to measure the model where the mixer could run it.
+//! `MODEL` is `deepfilternet3-h128` or `deepfilternet3-custom` (with `--weights`).
+//! `--cpus` (e.g. `0` or `1-3`) and `--priority` (`SCHED_RR` 1–99) override the
+//! default worker placement.
 //!
-//! `--kernel` chooses the int8 matrix kernel of the GRUs, which this binary
-//! alone can do (`rc2fx-dfn`'s `bench-kernels` feature). `tiled` is the
-//! production kernel and the default. `rows` is the row-major kernel it
-//! replaced. `compare` runs the recording four times, rows, tiled, tiled,
-//! rows, so that a drift in the mixer's load falls on both alike; it reports
-//! the time per frame of each kernel under `kernels`, fails unless every
-//! pass produced the same samples bit for bit, and also times each kernel
-//! alone on one cache-resident matrix. The summary's own `cpu` and `wall`
-//! are then the tiled kernel's. The two kernels compute the same bits; only
-//! their speed on the mixer is in question. Because the run shares the
-//! mixer with the live engine, `compare` first prints to stderr how long it
-//! will take and under which scheduling, and it sleeps for two seconds
-//! after the resident timing and between passes.
+//! `--kernel` selects the GRU int8 matrix kernel (`rc2fx-dfn`'s `bench-kernels`
+//! feature): `tiled` (default, production), `rows` (the older row-major kernel),
+//! or `compare`. Compare mode runs four passes (`rows`, `tiled`, `tiled`, `rows`)
+//! to cancel out load drift, sleeps 2 s between passes so the live engine isn't
+//! starved, verifies bit-identical output across all passes, and also benchmarks
+//! a single cache-resident matrix multiply for each kernel. Top-level `cpu` and
+//! `wall` in the JSON report come from the `tiled` kernel.
 use rc2fx_suppression::{VendorModel, bench_kernels};
 use std::time::Instant;
 
 const SAMPLE_RATE: u32 = 48_000;
-/// How long a `--kernel compare` run sleeps between its parts, so that the
-/// live engine has the core to itself between them.
+/// Pause between `--kernel compare` phases so the live engine gets the core back.
 const COMPARE_REST: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn main() {
@@ -47,28 +40,23 @@ struct Options {
     output: String,
     paced: bool,
     policy: Option<Policy>,
-    /// DeepFilterNet3's pause between layers in microseconds; `None` keeps the
-    /// production value, 0 removes the pause.
+    /// Optional inter-layer pause in microseconds (`None` = production default, `Some(0)` = disabled).
     pause_us: Option<u64>,
-    /// Spin instead of sleep for the pause.
     spin: bool,
     kernel: Kernel,
 }
-/// `--kernel`: the GRUs' int8 matrix kernel, or both in turn.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kernel {
     Tiled,
     Rows,
     Compare,
 }
-/// Scheduling applied to this thread before the model is built.
 #[derive(PartialEq, Eq)]
 struct Policy {
     cpus: Vec<usize>,
     priority: i32,
 }
-/// The production suppression worker policy (`PRODUCTION_WORKER`): SCHED_RR
-/// priority 5 on CPU 0.
+/// Matches the production suppression worker (`SCHED_RR` 5 on CPU 0).
 fn production() -> Policy {
     Policy {
         cpus: vec![0],
@@ -197,7 +185,7 @@ fn read_mono(path: &str) -> Result<Vec<f32>, String> {
         }
     }
     .map_err(|e| format!("{path}: {e}"))?;
-    // A stereo recording of one microphone: keep the first channel.
+    // Take channel 0 if the input WAV is multi-channel.
     Ok(samples.into_iter().step_by(channels).collect())
 }
 
@@ -288,11 +276,10 @@ fn summary(mut values: Vec<u64>) -> serde_json::Value {
     })
 }
 
-/// Lag (in samples) that best lines the output up with the input, as a check
-/// on the declared delay.
+/// Cross-correlation lag (in samples) between `input` and `output` to sanity-check
+/// the model's declared intrinsic delay.
 fn measured_lag(input: &[f32], output: &[f32]) -> usize {
-    // One second from one second in: past any silent lead-in, and cheap enough
-    // not to disturb the mixer (the model delays less than 2048 samples).
+    // Correlate a 1 s window starting 1 s in (past any silent lead-in; model delay < 2048).
     let start = (SAMPLE_RATE as usize).min(input.len() / 2);
     let window =
         (SAMPLE_RATE as usize).min(input.len().min(output.len()).saturating_sub(start + 2048));
@@ -308,7 +295,6 @@ fn measured_lag(input: &[f32], output: &[f32]) -> usize {
         .unwrap_or(0)
 }
 
-/// One timed pass of the recording through a newly built model.
 struct Pass {
     row_major: bool,
     startup_ms: f64,
@@ -322,8 +308,6 @@ struct Pass {
     end_unix_ms: u64,
 }
 
-/// Builds the model and runs `input` through it one frame at a time with
-/// the row-major int8 kernel (`row_major`) or the tiled one.
 fn pass(
     options: &Options,
     weights: Option<&[u8]>,
@@ -397,9 +381,7 @@ fn kernel_name(row_major: bool) -> &'static str {
     if row_major { "rows" } else { "tiled" }
 }
 
-/// One kernel's passes of a `--kernel compare` run: every frame of all of
-/// them together, and each pass on its own with the mixer-clock window it
-/// ran in.
+/// Aggregates all passes for one kernel along with per-pass timings and timestamps.
 fn kernel_report(passes: &[Pass], row_major: bool) -> serde_json::Value {
     let mine = || passes.iter().filter(move |p| p.row_major == row_major);
     let all = |pick: fn(&Pass) -> &Vec<u64>| -> Vec<u64> {
@@ -439,7 +421,7 @@ fn run() -> Result<(), String> {
         Some(path) => Some(std::fs::read(path).map_err(|e| format!("{path}: {e}"))?),
         None => None,
     };
-    // Rows, tiled, tiled, rows: each kernel has one early and one late pass.
+    // ABBA order so each kernel gets one early and one late pass.
     let order: &[bool] = match options.kernel {
         Kernel::Tiled => &[false],
         Kernel::Rows => &[true],
@@ -447,9 +429,8 @@ fn run() -> Result<(), String> {
     };
     let compare = options.kernel == Kernel::Compare;
     if compare {
-        // The passes and one rest after the resident timing and after every
-        // pass but the last. A paced pass lasts as long as the recording; an
-        // unpaced one is shorter wherever the model keeps up with real time.
+        // Rough wall-clock estimate (passes + rest intervals). Unpaced passes
+        // finish faster whenever the model beats real time.
         let seconds = input.len() as f64 / f64::from(SAMPLE_RATE);
         let total = order.len() as f64 * (seconds + COMPARE_REST.as_secs_f64());
         let scheduling = if options.policy == Some(production()) {
@@ -471,8 +452,7 @@ fn run() -> Result<(), String> {
             COMPARE_REST.as_secs(),
         );
     }
-    // Each kernel alone on one cache-resident 384 x 128 matrix, under the
-    // same scheduling as the passes.
+    // Microbenchmark each kernel on a cache-resident 384x128 matrix under the same scheduling.
     let resident = compare.then(|| {
         let [rows, tiled] = bench_kernels::resident_product_ns(2_000);
         serde_json::json!({ "rows": rows, "tiled": tiled })
@@ -480,18 +460,18 @@ fn run() -> Result<(), String> {
     let mut passes = Vec::with_capacity(order.len());
     for &row_major in order {
         if compare {
-            // Asleep, not spinning: the core goes back to the live engine.
+            // Sleep so the live audio engine gets the core back between passes.
             std::thread::sleep(COMPARE_REST);
         }
         passes.push(pass(&options, weights.as_deref(), &input, row_major)?);
     }
     bench_kernels::set_row_major_q8(false);
-    // Back to normal scheduling before the untimed checks.
+    // Drop RT priority before doing untimed post-processing and I/O.
     if options.policy.as_ref().is_some_and(|p| p.priority != 0) {
         let param = libc::sched_param { sched_priority: 0 };
         unsafe { libc::sched_setscheduler(0, libc::SCHED_OTHER, &param) };
     }
-    // The summary's own figures are the production kernel's when it ran.
+    // Report the tiled (production) kernel in top-level summary fields when it ran.
     let main = passes.iter().find(|p| !p.row_major).unwrap_or(&passes[0]);
     let identical = passes.iter().all(|p| {
         p.output.len() == main.output.len()
@@ -527,10 +507,9 @@ fn run() -> Result<(), String> {
         "wall": summary(main.wall.clone()),
         "realtimeFactor": cpu_mean / frame_ns as f64,
         "lateFrames": main.late,
-        // With both kernels' weights in memory, about 480 KiB more than the
-        // service holds.
+        // Holding both kernels' weights adds ~480 KiB RSS over the production service.
         "peakRssKiB": usage.ru_maxrss,
-        // Mixer clock, so the controller's per-second history can be lined up.
+        // Mixer wall clock, for aligning against the controller's per-second history.
         "startUnixMs": passes[0].start_unix_ms,
         "endUnixMs": passes[passes.len() - 1].end_unix_ms,
     });

@@ -5,41 +5,32 @@ import (
 	"unicode/utf8"
 )
 
-// The mixer's diagnostics event list: a bounded, sequenced log of what went
-// wrong and when, and the paged reply a client reads it with.
+// Diagnostics event log types for the mixer's bounded, sequenced event ring.
 //
-// Entries are made off the audio path by rc2fxd (see the device crate): it
-// turns the engine's own event ring, each worker's miss and late histories,
-// and the counter increases it can only see as totals, into these. Timestamps
-// are the mixer's CLOCK_MONOTONIC nanoseconds; a client maps them to host time
-// through `nowNs` at receipt (the mixer's wall clock is not reliable).
+// Events are synthesized off the audio path by rc2fxd. Timestamps are in the
+// mixer's CLOCK_MONOTONIC nanoseconds; clients map them to host time using
+// NowNs at receipt because the mixer's wall clock is unreliable.
 
-// EventsPage is the longest page a client can ask for. Chosen so a full reply
-// stays well inside the USB control transport's frame limit.
+// EventsPage is the max events per page, sized to fit inside the USB control
+// transport frame limit.
 const EventsPage = 256
 
-// DiagnosticsEvent is one entry. `seq` increases by one per entry, never
-// repeats, and survives a diagnostics reset (which adds a `reset` entry
-// rather than restarting).
+// DiagnosticsEvent is one log entry. Seq increments monotonically and does not
+// reset on diagnostics clear (which appends a reset event instead).
 type DiagnosticsEvent struct {
-	Seq  uint64          `json:"seq"`
-	Kind DiagnosticsKind `json:"kind"`
-	// The path it concerns; absent for engine-wide events.
-	Path *string `json:"path,omitempty"`
-	// The mixer's CLOCK_MONOTONIC nanoseconds.
-	AtNs uint64 `json:"atNs"`
-	// A short sentence for the window, already phrased for a person.
-	Message string `json:"message"`
-	// What the kind measured, when it measured something.
-	Details EventDetails `json:"details,omitempty,default"`
+	Seq     uint64          `json:"seq"`
+	Kind    DiagnosticsKind `json:"kind"`
+	Path    *string         `json:"path,omitempty"` // nil for engine-wide events
+	AtNs    uint64          `json:"atNs"`           // mixer CLOCK_MONOTONIC ns
+	Message string          `json:"message"`
+	Details EventDetails    `json:"details,omitempty,default"`
 }
 
-// MaxEventMessage is the longest event sentence a client keeps.
+// MaxEventMessage is the byte cap for sanitized event messages.
 const MaxEventMessage = 512
 
-// ForDisplay is this event as it is safe to show: the sentence cut to
-// MaxEventMessage bytes with control characters removed. False if `path` is
-// not an id, which no mixer sends.
+// ForDisplay strips control and bidi characters, truncates Message to
+// MaxEventMessage bytes, and returns false if Path is not a valid target ID.
 func (e DiagnosticsEvent) ForDisplay() (DiagnosticsEvent, bool) {
 	if e.Path != nil && !ValidID(*e.Path) {
 		return DiagnosticsEvent{}, false
@@ -58,53 +49,31 @@ func (e DiagnosticsEvent) ForDisplay() (DiagnosticsEvent, bool) {
 	return e, true
 }
 
-// DiagnosticsKind is what happened, in a closed set: the window can label
-// each kind without guessing, and a newer mixer's addition arrives as
-// `other`. Serde `rename_all = "camelCase"`.
+// DiagnosticsKind classifies a diagnostics event (camelCase on the wire).
+// Unknown values from newer mixers decode as DiagnosticsKindOther.
 type DiagnosticsKind string
 
 const (
-	// A JACK xrun notification (the engine was late somewhere).
-	DiagnosticsKindXrun DiagnosticsKind = "xrun"
-	// A callback found the helper still busy with the previous frame.
-	DiagnosticsKindHelperBusy DiagnosticsKind = "helperBusy"
-	// A callback gave up waiting for the helper and passed its frame through.
-	DiagnosticsKindHelperStall DiagnosticsKind = "helperStall"
-	// The helper finished after its frame's cycle had ended.
-	DiagnosticsKindHelperLateFinish DiagnosticsKind = "helperLateFinish"
-	// The callback ended this late into its cycle.
-	DiagnosticsKindLateEnd DiagnosticsKind = "lateEnd"
-	// The callback took longer than a period.
-	DiagnosticsKindOverrun DiagnosticsKind = "overrun"
-	// The callback started this late into its cycle.
-	DiagnosticsKindLateStart DiagnosticsKind = "lateStart"
-	// Consecutive callbacks were further apart than a period and a half.
-	DiagnosticsKindGap DiagnosticsKind = "gap"
-	// The estimated cycle start jumped by more than a period and a half.
-	DiagnosticsKindCycleSkip DiagnosticsKind = "cycleSkip"
-	// A vendor job finished after the next callback had started.
-	DiagnosticsKindVendorJobLate DiagnosticsKind = "vendorJobLate"
-	// The mixer rebuilt its USB gadget (a USB mode change).
-	DiagnosticsKindUSBGadget DiagnosticsKind = "usbGadget"
-	// The suppression worker missed a frame's deadline: the listener heard
-	// the delayed original for that frame.
-	DiagnosticsKindMissedDeadline DiagnosticsKind = "missedDeadline"
-	// A worker result arrived after its deadline (still used, but late).
-	DiagnosticsKindLateFrame DiagnosticsKind = "lateFrame"
-	// Stale suppression results, counted between two readings.
-	DiagnosticsKindStaleResults DiagnosticsKind = "staleResults"
-	// Dropped input frames, counted between two readings.
-	DiagnosticsKindInputDrops DiagnosticsKind = "inputDrops"
-	// Dropped output frames, counted between two readings.
-	DiagnosticsKindOutputDrops DiagnosticsKind = "outputDrops"
-	// Clipped samples, counted between two readings.
-	DiagnosticsKindClipped DiagnosticsKind = "clipped"
-	// Events that fell out of the engine's ring before they could be read.
-	DiagnosticsKindLost DiagnosticsKind = "lost"
-	// The user reset diagnostics; the counters the window shows restart here.
-	DiagnosticsKindReset DiagnosticsKind = "reset"
-	// A kind this build does not know (a newer mixer).
-	DiagnosticsKindOther DiagnosticsKind = "other"
+	DiagnosticsKindXrun             DiagnosticsKind = "xrun"
+	DiagnosticsKindHelperBusy       DiagnosticsKind = "helperBusy"       // helper still busy with previous frame
+	DiagnosticsKindHelperStall      DiagnosticsKind = "helperStall"      // callback bypassed helper after timeout
+	DiagnosticsKindHelperLateFinish DiagnosticsKind = "helperLateFinish" // helper finished past its cycle
+	DiagnosticsKindLateEnd          DiagnosticsKind = "lateEnd"
+	DiagnosticsKindOverrun          DiagnosticsKind = "overrun" // callback exceeded one period
+	DiagnosticsKindLateStart        DiagnosticsKind = "lateStart"
+	DiagnosticsKindGap              DiagnosticsKind = "gap"           // > 1.5 periods between callbacks
+	DiagnosticsKindCycleSkip        DiagnosticsKind = "cycleSkip"     // estimated cycle start jumped > 1.5 periods
+	DiagnosticsKindVendorJobLate    DiagnosticsKind = "vendorJobLate" // vendor job finished after next callback started
+	DiagnosticsKindUSBGadget        DiagnosticsKind = "usbGadget"     // USB mode change rebuilt gadget
+	DiagnosticsKindMissedDeadline   DiagnosticsKind = "missedDeadline"
+	DiagnosticsKindLateFrame        DiagnosticsKind = "lateFrame" // arrived late, still used
+	DiagnosticsKindStaleResults     DiagnosticsKind = "staleResults"
+	DiagnosticsKindInputDrops       DiagnosticsKind = "inputDrops"
+	DiagnosticsKindOutputDrops      DiagnosticsKind = "outputDrops"
+	DiagnosticsKindClipped          DiagnosticsKind = "clipped"
+	DiagnosticsKindLost             DiagnosticsKind = "lost" // evicted from engine ring before read
+	DiagnosticsKindReset            DiagnosticsKind = "reset"
+	DiagnosticsKindOther            DiagnosticsKind = "other"
 )
 
 var diagnosticsKinds = []DiagnosticsKind{
@@ -124,16 +93,11 @@ func (k *DiagnosticsKind) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// EventDetails is the numbers a kind carries. Every field is optional: an
-// xrun has no delta, a counter increase has no duration.
+// EventDetails holds optional per-event measurements.
 type EventDetails struct {
-	// What the kind measured: a cycle position, a gap, a turnaround.
-	ValueNs *uint64 `json:"valueNs,omitempty"`
-	// jackd's xrun delay in microseconds, when it reported one.
-	DelayedUs *uint64 `json:"delayedUs,omitempty"`
-	// How much a counted figure rose (drops, clipped samples, lost events).
-	Delta *uint64 `json:"delta,omitempty"`
-	// The interval the delta accumulated over, from the previous reading.
+	ValueNs    *uint64 `json:"valueNs,omitempty"`
+	DelayedUs  *uint64 `json:"delayedUs,omitempty"` // jackd xrun delay
+	Delta      *uint64 `json:"delta,omitempty"`     // counter increase since last reading
 	IntervalNs *uint64 `json:"intervalNs,omitempty"`
 }
 
@@ -141,18 +105,11 @@ func (d EventDetails) IsEmpty() bool {
 	return d.ValueNs == nil && d.DelayedUs == nil && d.Delta == nil && d.IntervalNs == nil
 }
 
-// DiagnosticsEvents is one page of the log.
+// DiagnosticsEvents is one page of the diagnostics log.
 type DiagnosticsEvents struct {
-	// The mixer's CLOCK_MONOTONIC at the moment of the reply: a client adds
-	// (local receive time − this) to each `atNs`.
-	NowNs uint64 `json:"nowNs"`
-	// The sequence number the next entry will take, i.e. what to pass as
-	// `after` to continue reading.
-	NextSeq uint64 `json:"nextSeq"`
-	// Entries that fell out of the bounded log after `after` and can no
-	// longer be read. Zero when the client kept up.
-	Lost uint64 `json:"lost"`
-	// More entries are waiting: ask again with `after = nextSeq`.
-	More   bool               `json:"more"`
-	Events []DiagnosticsEvent `json:"events"`
+	NowNs   uint64             `json:"nowNs"`   // mixer CLOCK_MONOTONIC at reply time
+	NextSeq uint64             `json:"nextSeq"` // pass as `after` for the next page
+	Lost    uint64             `json:"lost"`    // entries evicted after `after`
+	More    bool               `json:"more"`
+	Events  []DiagnosticsEvent `json:"events"`
 }

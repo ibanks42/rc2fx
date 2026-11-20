@@ -1,9 +1,6 @@
 package app
 
-// The EQ graph: the response, its bands as numbered points, and the grid.
-// Drag a point; scroll on it for Q; double-click empty space to add a band.
-// The axis math and the curve cache are in edit/graph.go; the
-// canvas's paths are a gk.Plot.
+// Interactive EQ frequency response graph (axis math and curve caching live in edit/graph.go).
 
 import (
 	"fmt"
@@ -16,17 +13,12 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// EqCurve is the graph's cached response (edit.EQCurve).
 type EqCurve = edit.EQCurve
 
-// eqCurveDB is the selected EQ's response in dB at
-// evenly spaced points across the log frequency axis, cached.
 func (a *App) eqCurveDB() []float64 {
 	return edit.Curve(&a.eqCurve, a.target().EQ, a.channel)
 }
 
-// moveBand moves the selected band to a point on the graph: frequency
-// across, and gain up and down for the types that have one.
 func (a *App) moveBand(cx *gk.Cx, position [2]float32) {
 	frequency, gain, ok := a.graphPoint(position)
 	if !ok {
@@ -46,15 +38,13 @@ func (a *App) moveBand(cx *gk.Cx, position [2]float32) {
 	a.notify(cx)
 }
 
-// graphPoint is the frequency and gain at a window position over the graph.
 func (a *App) graphPoint(position [2]float32) (frequency, gain float64, ok bool) {
 	b := a.graphBounds
 	return edit.GraphPoint(b.Origin.X, b.Origin.Y, b.Size.Width, b.Size.Height, position[0], position[1])
 }
 
-// eqPlot is the graph's canvas: the grid, the response's area and its
-// line, in pixels inside a plot of width × tall (the graph's bounds at the
-// last prepaint, so the first frame after a resize draws at the old size).
+// eqPlot renders the grid, filled curve area, and stroke using the bounds
+// captured on the previous prepaint pass.
 func (a *App) eqPlot(curve []float64, width, tall float32) gk.Element {
 	if width <= 0 || tall <= 0 {
 		return gk.Plot()
@@ -77,8 +67,7 @@ func (a *App) eqPlot(curve []float64, width, tall float32) gk.Element {
 	for i, db := range curve {
 		points[i] = at(float64(i)/last, edit.Height(db))
 	}
-	// The response's area runs from the 0 dB line at the left, along the
-	// curve, back to the 0 dB line at the right.
+	// Close the filled area along the 0 dB centerline.
 	area := make([][2]float32, 0, len(points)+2)
 	area = append(area, at(0, 0.5))
 	area = append(area, points...)
@@ -89,9 +78,6 @@ func (a *App) eqPlot(curve []float64, width, tall float32) gk.Element {
 	return gk.Plot(parts...)
 }
 
-// eqGraph is the response, its bands as numbered points, and the grid,
-// filling its parent. Drag a point; scroll on it for Q; click it to open
-// its popover; double-click empty space to add a band.
 func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 	curve := a.eqCurveDB()
 	label := func(text string) gk.DivEl {
@@ -99,8 +85,7 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 	}
 	area := gk.Div(s.Relative, s.SizeFull, s.Border1, s.CursorCrosshair).Rounded(px(14)).
 		BorderColor(rgb(surface().Line)).Bg(gk.HSLA(0.62, 0.4, 0.03, 0.35)).
-		// The canvas's prepaint: the graph's bounds, which the mouse handlers
-		// and the next draw read. Its first child is the canvas.
+		// Capture the canvas's painted bounds (first child) for hit-testing and next frame's plot.
 		OnChildrenPrepainted(func(cx *gk.Cx, children []gk.Bounds) {
 			if len(children) == 0 || children[0] == a.graphBounds {
 				gk.Quiet(cx)
@@ -124,7 +109,7 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 	}
 	graph := area.ID("eq-plot").
 		OnMouseDown(gk.MouseButtonLeft, func(cx *gk.Cx, e gk.MouseEvent) {
-			// Points stop their own presses, so this is empty space.
+			// Band points stop propagation, so events reaching here hit empty canvas.
 			if e.ClickCount == 2 && len(a.target().EQ.Channel(a.channel)) < core.MaxBands {
 				if frequency, gain, ok := a.graphPoint(e.Position); ok {
 					a.addBand(cx, &[2]float64{frequency, gain})
@@ -135,7 +120,6 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 		}).
 		OnMouseMove(func(cx *gk.Cx, e gk.MouseEvent) {
 			switch {
-			// A move event's Button is the pressed button (ButtonNone for none).
 			case a.draggingBand && e.Button == gk.ButtonLeft:
 				a.moveBand(cx, e.Position)
 			case a.draggingBand:
@@ -146,8 +130,7 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 			}
 		}).
 		OnMouseUp(gk.MouseButtonLeft, func(cx *gk.Cx, _ gk.MouseEvent) {
-			// A press on a point that never moved is a click: open its
-			// popover.
+			// Treat a press-and-release without movement as a click to open the popover.
 			if a.draggingBand && !a.dragMoved {
 				a.draggingBand = false
 				a.openBandPopover(cx, a.band)
@@ -232,8 +215,7 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 					Child(txt(fmt.Sprintf("%s · Q %s", readout, edit.ParameterQ.Display(band.Q))))))
 		}
 	}
-	// The popover is beside the graph's area, not in it, so presses in it
-	// never reach the area's handlers (double-click to add a band).
+	// Mount the popover as a sibling of graph so clicks inside it don't bubble to the canvas.
 	wrap := gk.Div(s.Relative, s.SizeFull).Child(graph)
 	if index, ok := a.popoverIndex(); ok {
 		band := a.target().EQ.Channel(a.channel)[index]
@@ -242,8 +224,7 @@ func (a *App) eqGraph(cx *gk.Cx) gk.Element {
 			gain = band.Gain
 		}
 		x := float32(edit.FrequencyX(band.Frequency))
-		// Beside the point, on the side with more room; at the top or the
-		// bottom, away from the point's height.
+		// Place the popover on whichever side/corner has more room away from the band point.
 		panel := gk.Div(s.Absolute).Left(gk.Relative(x))
 		if x < 0.55 {
 			panel = panel.Ml(px(26))

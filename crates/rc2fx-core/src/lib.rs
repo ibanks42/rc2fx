@@ -1,5 +1,4 @@
-//! Pure device configuration and control API types. No audio, network or GUI
-//! runtime.
+//! Pure device configuration and control API types (no audio, network, or GUI runtime).
 pub mod diagnostics;
 pub mod eq;
 pub mod image_check;
@@ -37,15 +36,16 @@ impl From<serde_json::Error> for CoreError {
 }
 pub type Result<T> = std::result::Result<T, CoreError>;
 
-/// Rejects duplicate keys at every depth, oversized input and excessive nesting.
+/// Rejects duplicate keys at any depth, oversized inputs, and excessive nesting.
 pub fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
     from_json_limited(text, 512 * 1024, 200_000)
 }
 
-/// Strict parsing with explicit storage bounds. A bounded validation pass keeps
-/// only the current object keys, then deserializes the typed result directly;
-/// large saved states do not require a second, untyped JSON tree. Callers
-/// should retain `from_json` and its default limits.
+/// Strict JSON parsing with explicit byte and node limits.
+///
+/// Validates structure in a streaming pass (retaining only the current object's
+/// keys) before deserializing directly into `T`, avoiding a second untyped tree.
+/// Most callers should use `from_json`.
 pub fn from_json_limited<T: serde::de::DeserializeOwned>(
     text: &str,
     maximum_bytes: usize,

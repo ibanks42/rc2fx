@@ -1,34 +1,22 @@
 package core
 
-// The mixer's check of the files a flash unpacked (`rc2fx.sh image-check`),
-// as `GET api/v1/image-check` reports it.
+// Image check report returned by GET api/v1/image-check.
 //
-// The installer lists RØDE's files with their SHA-256 in the image. On the
-// first boots the launcher compares the root against that list, restores a
-// damaged file from the other root partition when that copy is identical,
-// and records the outcome as `key=value` lines in `/opt/rc2fx/data/image-check`.
-// The mixer turns that record into the report (Rust ImageCheck::from_record);
-// the desktop only reads the report.
+// During flashing, the installer writes a SHA-256 list of RØDE's files into
+// the image. On first boot, rc2fx.sh compares the rootfs against that list,
+// repairs damaged files from the alternate root partition when possible, and
+// writes key=value results to /opt/rc2fx/data/image-check. The desktop only
+// reads the parsed report.
 
-// ImageStatus is serde `rename_all = "camelCase"`. The zero value is
-// ImageStatusNone, ImageCheck's default.
+// ImageStatus uses serde camelCase; zero value is ImageStatusNone.
 type ImageStatus int
 
 const (
-	// ImageStatusNone: the image has no file list (a mixer installed before
-	// the check, or after an in-place update): there is nothing to check.
-	ImageStatusNone ImageStatus = iota
-	// ImageStatusPending: the list is there and the check has not finished
-	// yet.
-	ImageStatusPending
-	// ImageStatusOk: every listed file matches.
-	ImageStatusOk
-	// ImageStatusRepaired: damaged files were restored; RØDE's boot already
-	// used the damaged copies, so the mixer needs a restart.
-	ImageStatusRepaired
-	// ImageStatusDamaged: at least one listed file is damaged and could not
-	// be restored.
-	ImageStatusDamaged
+	ImageStatusNone     ImageStatus = iota // no file list in image (pre-check install or in-place update)
+	ImageStatusPending                     // check hasn't finished yet
+	ImageStatusOk                          // all listed files match
+	ImageStatusRepaired                    // damaged files restored; reboot needed so RØDE loads them
+	ImageStatusDamaged                     // at least one file is damaged and couldn't be restored
 )
 
 var imageStatusNames = []string{"none", "pending", "ok", "repaired", "damaged"}
@@ -53,16 +41,13 @@ func (s *ImageStatus) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// ImageCheck is serde `rename_all = "camelCase", default`, without
-// deny_unknown_fields: an older app reading a newer field set still parses.
+// ImageCheck allows unknown fields for forward compatibility with newer mixers.
 type ImageCheck struct {
 	Status   ImageStatus `json:"status,default"`
 	Checked  *string     `json:"checked,omitempty"`
 	Repaired []string    `json:"repaired,default"`
 	Damaged  []string    `json:"damaged,default"`
-	// Unlisted is the files beyond the first 32 in either list.
-	Unlisted uint `json:"unlisted,default"`
+	Unlisted uint        `json:"unlisted,default"` // count beyond the first 32 in either list
 }
 
-// AllowUnknownJSONFields: ImageCheck has no deny_unknown_fields.
 func (ImageCheck) AllowUnknownJSONFields() {}

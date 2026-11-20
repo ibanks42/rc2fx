@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# RC2FX_INSTALL_ROOT: a fake root for the tests (mixer/scripts/tests/install.py).
+# Override root for tests (see mixer/scripts/tests/install.py).
 root=${RC2FX_INSTALL_ROOT:-}
 up=$root/run/rc2fx-upload
 opt=$root/opt
@@ -9,15 +9,14 @@ shim=$root/usr/sbin/rc_audio_mixer
 gui_shim=$root/usr/sbin/rc_gui_juce
 previous=$opt/.rc2fx-previous
 pending=$opt/.rc2fx-install-pending
-# PayloadNames in desktop/installer/embed/format.go, which owns the list; its
-# lists_test.go fails when this copy (or the chmod 700 list below) differs.
+# Keep in sync with PayloadNames in desktop/installer/embed/format.go
+# (lists_test.go checks both this list and the chmod 700 list below).
 files="librc2fx_native.so rc2fxd rc2fx-supervisor rc2fx-firmware firmware-profiles.json librc2fx_gui.so
  librc2fx_jackerr.so rc2fx_jackerr_snapshot mixer-release.json
  SHA256SUMS rc2fx.sh rc2fx-shim.sh rc2fx-gui-shim.sh install.sh"
-# One rollback is kept, .rc2fx-previous. Earlier installs moved every older
-# one to a .rc2fx-retained.* copy and never deleted it, until they filled the
-# root filesystem; of those, only the original install from before the GUI
-# shim is kept. A copy holding saved settings (data/) is never deleted.
+# Keep only .rc2fx-previous for rollback. Older installers archived every
+# previous copy under .rc2fx-retained.* and eventually filled rootfs; prune
+# those, sparing the oldest pre-GUI-shim install and anything with a data/ dir.
 pre_gui() { ! grep -qF '  gui-launch) ' "$1/rc2fx.sh" 2>/dev/null; }
 installed_at() { if test -f "$1/rc2fx.sh"; then echo "$1/rc2fx.sh"; else echo "$1"; fi; }
 original() {
@@ -38,9 +37,8 @@ prune_retained() {
   rm -rf "$dir"
  done
 }
-# The rollback is needed only until the install commits; nothing starts it
-# once the pending marker is gone. It goes then, unless it is the original
-# install (from before the GUI shim, none older retained) or holds settings.
+# Once the pending marker is cleared, nothing launches .rc2fx-previous. Drop it
+# unless it holds saved settings or is the only pre-GUI-shim copy we have.
 retire_previous() {
  test -d "$previous" && ! test -L "$previous" || return 0
  if test -e "$previous/data" || { pre_gui "$previous" && test -z "$(original)"; }; then
@@ -91,8 +89,8 @@ for name in $files; do
  test -f "$up/$name" && ! test -L "$up/$name"
  bytes=$((bytes + $(wc -c < "$up/$name")))
 done
-# The stage and headroom. The runtime it replaces is moved, not copied, to
-# become the rollback, so it needs no more room.
+# Check space for the staged bundle plus 16 MiB headroom (the existing runtime
+# is renamed to .rc2fx-previous, not copied).
 bundle=$(( (bytes + 1023) / 1024 ))
 headroom=16384
 free=$(df -Pk "$opt" | awk 'NR == 2 {print $4}')
@@ -110,42 +108,38 @@ chmod 700 "$stage/rc2fxd" "$stage/rc2fx-supervisor" "$stage/rc2fx-firmware" "$st
  "$stage/rc2fx-shim.sh" "$stage/rc2fx-gui-shim.sh" "$stage/install.sh"
 (cd "$stage" && sha256sum -c SHA256SUMS >/dev/null)
 "$stage/rc2fx-firmware" check-device "$stage/firmware-profiles.json" "$root/usr/bin/rc_audio_mixer" "$root/usr/bin/audio-start.sh" >/dev/null
-# Retain the known-good runtime and whether it started at boot. A running
-# RC2FX keeps running from the moved directory until the one restart below.
+# Remember whether the current install had autostart enabled. A running RC2FX
+# stays alive out of the moved directory until we restart it below.
 if test -d "$home" && test -x "$shim"; then touch "$home/.installer-autostart"; fi
-# The stage is verified: an older rollback goes (one an earlier install left
-# uncommitted, or one from before commits retired it).
+# Stage is verified, so we can safely retire any leftover .rc2fx-previous.
 retire_previous
 if test -d "$home"; then mv "$home" "$previous"; fi
 mv "$stage" "$home"
 touch "$pending"
-# The verified copy is in place and the rollback is $previous, so the upload
-# is no longer needed. /run is RAM: it would otherwise hold the whole bundle
-# until the next install or boot.
+# Free the uploaded bundle from /run (tmpfs) now that the new copy and rollback
+# are on disk.
 rm -rf "$up"
 trap 'code=$?; if test "$code" -ne 0; then rollback || echo "Rollback needs attention" >&2; fi; exit "$code"' EXIT
 for name in data logs; do test ! -d "$previous/$name" || mv "$previous/$name" "$home/$name"; done
 mkdir -p -m 700 "$home/logs"
-# The launcher starts the mixer by name with /usr/sbin ahead of /usr/bin,
-# and display-start.sh asks for the GUI the same way, so the GUI shim is
-# installed here too. It takes effect at the NEXT BOOT, not at the audio
-# restart below: /bin/sh is bash, and the display loop that is already
-# running has hashed /usr/bin/rc_gui_juce, so it never looks in /usr/sbin
-# again. The module's own checks fall back to the stock GUI.
+# Both audio-start.sh and display-start.sh invoke binaries by bare name with
+# /usr/sbin ahead of /usr/bin. The GUI shim won't take effect until the next
+# boot because the running display-start.sh shell (bash) already hashed
+# /usr/bin/rc_gui_juce.
 cp "$home/rc2fx-shim.sh" "$shim"
 chmod 755 "$shim"
 cp "$home/rc2fx-gui-shim.sh" "$gui_shim"
 chmod 755 "$gui_shim"
-# Boot integration of earlier RC2FX runtimes.
+# Clean up init scripts from older RC2FX releases.
 rm -f "$root/etc/rc5.d/S99rc2fx" "$root/etc/init.d/rc2fx"
-# A build run from RAM would win over the install until the next boot.
+# Clear any RAM dev build so it doesn't shadow the newly installed bundle.
 rm -rf "$root/run/rc2fx-dev"
 sync
 status=0
 /bin/bash "$home/rc2fx.sh" restart --wait 240 || status=$?
 if test "$status" -eq 3; then
- # A launcher from before the shim existed starts stock until a power cycle;
- # readiness cannot be checked before it, so this install stands.
+ # Existing audio-start.sh already hashed /usr/bin/rc_audio_mixer and won't
+ # pick up the new shim until a reboot; commit the install as-is.
  rm -f "$pending"
  echo 'Installed; RC2FX starts with the mixer at the next power-on'
  exit 0

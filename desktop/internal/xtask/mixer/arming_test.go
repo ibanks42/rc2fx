@@ -2,10 +2,8 @@
 
 package mixer
 
-// Arm, check, then run, against a stand-in for ssh and the mixer: every
-// command that changes or runs something on the mixer arms power recovery
-// and verifies it before it sends anything else, and sends nothing else when
-// that fails. An error is what main turns into a non-zero exit.
+// Tests that every mutating mixer command arms and verifies power recovery
+// before sending any other remote command, and aborts cleanly if arming fails.
 
 import (
 	"fmt"
@@ -20,9 +18,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// fakeSSH logs each remote command and each use of the flag to `events`. It
-// runs the rc2fx.sh it is sent, for arm-power-recovery only, against the
-// file `flag`, and nothing else it is given. Files beside it make it fail.
+// fakeSSH logs each remote command and fw_* call to `events`. It only actually
+// executes `rc2fx.sh arm-power-recovery` against the local `flag` file; marker
+// files in the same directory inject failure modes.
 const fakeSSH = `fake=$(dirname "$0"); remote=${!#}
 echo "ssh $remote" >> "$fake/events"
 test ! -e "$fake/unreachable" || { echo 'ssh: connection timed out' >&2; exit 255; }
@@ -36,8 +34,7 @@ case "$remote" in
 esac
 `
 
-// armed is a successful arming from a flag of 0: the script reads, writes
-// and verifies, then the host reads the flag back.
+// Expected event trace for a clean arm-and-verify starting from flag=0.
 var armedEvents = []string{
 	"ssh /bin/bash -s -- arm-power-recovery",
 	"fw_printenv -n reboot_pwr_button_bypass",
@@ -46,8 +43,8 @@ var armedEvents = []string{
 	"ssh fw_printenv -n reboot_pwr_button_bypass",
 }
 
-// armingCommands is every arming command, and the first thing it sends once
-// armed.
+// Each command that must arm recovery, paired with the first remote command it
+// sends once armed.
 var armingCommands = []struct {
 	command []string
 	first   string
@@ -63,14 +60,14 @@ var armingCommands = []struct {
 	{[]string{"bench"}, "ssh set -e; rm -rf /run/rc2fx-bench;"},
 }
 
-// fake is a stand-in mixer with its flag at 0, in a directory that also
-// serves as target/mixer and target/bench.
+// fake holds a temporary directory acting as both the mock mixer and
+// target/mixer (or target/bench), starting with flag=0.
 type fake struct {
 	t   *testing.T
 	dir string
 }
 
-// newFake: marker is a file the stand-in looks for, holding content.
+// newFake creates a fake mixer directory and writes an optional failure marker file.
 func newFake(t *testing.T, marker, content string) *fake {
 	t.Helper()
 	dir := t.TempDir()
@@ -110,8 +107,8 @@ func newFake(t *testing.T, marker, content string) *fake {
 	return &fake{t, dir}
 }
 
-// run runs a command as ./xtask would. The stand-in goes through bash,
-// never as a program just written while another test forks.
+// Run the fake SSH script via bash to avoid ETXTBSY races when parallel tests
+// exec freshly written scripts.
 func (f *fake) run(command []string) error {
 	mixer := &Mixer{host: "root@fake", options: []string{filepath.Join(f.dir, "ssh")}, program: "bash"}
 	if len(command) == 1 && command[0] == "bench" {
@@ -131,7 +128,7 @@ func (f *fake) events() []string {
 func TestEveryArmingCommandArmsAndVerifiesBeforeItSendsAnythingElse(t *testing.T) {
 	for _, c := range armingCommands {
 		f := newFake(t, "no-marker", "")
-		// xruns and bench fail afterwards: the stand-in returns no results.
+		// xruns and bench fail after arming because the fake doesn't return data.
 		_ = f.run(c.command)
 		events := f.events()
 		if !(len(events) > 5 && slices.Equal(events[:5], armedEvents) && strings.HasPrefix(events[5], c.first)) {

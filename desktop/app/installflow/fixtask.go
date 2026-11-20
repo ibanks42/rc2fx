@@ -1,24 +1,22 @@
 package installflow
 
-// "Fix RØDE's update bug" on its own, for a mixer that stays on RØDE's
-// firmware: the steps it shows, how far a run is among them, its ending,
-// whether Try again can help, and whether the mixer may be unplugged. One
-// request does the whole fix (installer.RequestStorageFix, without Final),
-// so the page follows its progress. Package app draws it (fix_task.go).
+// Standalone "Fix RØDE's update bug" flow for mixers staying on RØDE's
+// firmware. A single RequestStorageFix (with Final=false) drives the whole
+// operation; this type tracks progress, step state, retry eligibility, and
+// unplug safety for app/fix_task.go.
 
 import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/autofix"
 )
 
-// The fix task's steps.
 const (
 	FixStepBefore = iota
 	FixStepGet
 	FixStepFix
 	FixStepReinstall
 	FixStepCheck
-	// FixStepCount is the number of steps, and the step of a finished run.
+	// FixStepCount is the number of steps, and also the step index once finished.
 	FixStepCount
 )
 
@@ -30,47 +28,38 @@ var fixSteps = [FixStepCount]string{
 	"Check and finish",
 }
 
-// FixKind is how far the fix task is.
 type FixKind int
 
 const (
 	FixBefore FixKind = iota
-	// FixRunning: the request is in flight.
 	FixRunning
-	// FixEnded: the request returned; Reply or Error says how.
 	FixEnded
 )
 
-// Fix is the fix task's state.
+// Fix holds the state of a standalone storage-fix run.
 type Fix struct {
 	Kind FixKind
-	// Event is the run's newest progress; kept after it ends, for where it
-	// stopped.
+	// Event is the latest progress event, kept after completion to show where it stopped.
 	Event *installer.Progress
-	// Touched: the run got as far as telling the mixer to switch to update
-	// mode, so it may not be as it was.
+	// Touched is set once the mixer has been told to enter update mode.
 	Touched bool
-	// Reply is what the run did, once it ended without an engine error.
+	// Reply is populated when the request completes without an engine-level error.
 	Reply *installer.StorageFix
-	// Error is why the request failed (the engine, not the fix).
+	// Error holds an engine/transport error when the request itself failed.
 	Error string
-	// Canceling: Stop asked the run to stop before it touched the mixer.
+	// Canceling is true after Cancel was requested before the mixer was touched.
 	Canceling bool
 }
 
-// NewFix is the task before it starts.
 func NewFix() *Fix { return &Fix{Kind: FixBefore} }
 
-// Busy: the fix's request is in flight.
 func (f *Fix) Busy() bool { return f.Kind == FixRunning }
 
-// IsStorageFix reports the fix's request.
 func IsStorageFix(request installer.Request) bool {
 	return request.Kind == installer.RequestStorageFix
 }
 
-// Start is the request that runs the fix, false when it can't start now:
-// only before a run or after one that Try again can help (CanRetry).
+// Start begins a fix run if idle or after a retryable ending.
 func (f *Fix) Start(normal bool) (installer.Request, bool) {
 	if f.Kind == FixRunning || (f.Kind == FixEnded && !f.CanRetry(normal)) {
 		return installer.Request{}, false
@@ -79,12 +68,11 @@ func (f *Fix) Start(normal bool) (installer.Request, bool) {
 	return installer.Request{Kind: installer.RequestStorageFix}, true
 }
 
-// NotSent: the runner did not take the request.
+// NotSent handles the runner refusing to accept the request.
 func (f *Fix) NotSent() {
 	*f = Fix{Kind: FixEnded, Error: "The app's installer stopped unexpectedly. Close this page and open it again."}
 }
 
-// Progress hands over the run's newest progress.
 func (f *Fix) Progress(p installer.Progress) {
 	if f.Kind != FixRunning {
 		return
@@ -96,13 +84,11 @@ func (f *Fix) Progress(p installer.Progress) {
 	f.Touched = f.Touched || FixTouching(&p)
 }
 
-// CanStop reports that Stop can stop the run now: before it touches the
-// mixer.
+// CanStop reports whether the run can still be canceled (only before touching the mixer).
 func (f *Fix) CanStop() bool {
 	return f.Kind == FixRunning && !f.Touched && !f.Canceling
 }
 
-// Cancel asks the run to stop; false once it has touched the mixer.
 func (f *Fix) Cancel() bool {
 	if !f.CanStop() {
 		return false
@@ -111,8 +97,8 @@ func (f *Fix) Cancel() bool {
 	return true
 }
 
-// Outcome is the finished request. A run stopped by Stop goes back to
-// before it started.
+// Outcome records the completed request. A user-requested cancel resets back
+// to FixBefore.
 func (f *Fix) Outcome(reply installer.Reply, err error) {
 	if f.Kind != FixRunning {
 		return
@@ -133,31 +119,24 @@ func (f *Fix) Outcome(reply installer.Reply, err error) {
 	}
 }
 
-// FixEnding is how a fix run ended.
 type FixEnding int
 
 const (
-	// FixEndingNone: it hasn't ended.
 	FixEndingNone FixEnding = iota
-	// FixEndingFixed: the storage was fixed and RØDE's firmware is back on
-	// it (G3).
 	FixEndingFixed
-	// FixEndingAlready: the mixer already had the fix (G4).
 	FixEndingAlready
-	// FixEndingUnrecognized: the storage is not laid out the way the app
-	// expects; nothing was changed and there is nothing to retry.
+	// FixEndingUnrecognized means the partition layout did not match expectations,
+	// so nothing was changed and retrying won't help.
 	FixEndingUnrecognized
-	// FixEndingNotApplied: the script could not finish, or reported nothing;
-	// RØDE's firmware was installed again.
+	// FixEndingNotApplied means the fix script failed or didn't report back, and
+	// stock firmware was reinstalled.
 	FixEndingNotApplied
-	// FixEndingRefused: the run would not start (Reply.Error says why);
-	// starting again gives the same answer.
+	// FixEndingRefused means the fix refused to start (see Reply.Error).
 	FixEndingRefused
-	// FixEndingStopped: the run stopped part way (Reply.Error or Error).
+	// FixEndingStopped means the run aborted partway through.
 	FixEndingStopped
 )
 
-// Ending is how the run ended.
 func (f *Fix) Ending() FixEnding {
 	if f.Kind != FixEnded {
 		return FixEndingNone
@@ -180,10 +159,9 @@ func (f *Fix) Ending() FixEnding {
 	return FixEndingNotApplied
 }
 
-// CanRetry reports that Try again can help: the script couldn't finish or
-// report, or the run stopped part way and the mixer is back alone in
-// normal mode (normal), which a new run needs. Never after a refusal or an
-// unrecognized layout, which give the same answer again.
+// CanRetry reports whether retrying makes sense. Refusals and unrecognized
+// layouts are permanent; other failures can retry once a single mixer is back
+// in normal mode.
 func (f *Fix) CanRetry(normal bool) bool {
 	switch f.Ending() {
 	case FixEndingNotApplied:
@@ -194,17 +172,14 @@ func (f *Fix) CanRetry(normal bool) bool {
 	return false
 }
 
-// SavedCopy reports that the run saved a copy of what it changed on this
-// computer.
+// SavedCopy reports whether the run saved a local backup of what it modified.
 func (f *Fix) SavedCopy() bool {
 	return f.Reply != nil && f.Reply.Backup != ""
 }
 
-// FixSeen is what the app sees of the mixer on USB now, for the fix task.
 type FixSeen int
 
 const (
-	// FixSeenUnknown: no answer from USB yet.
 	FixSeenUnknown FixSeen = iota
 	FixSeenNone
 	FixSeenTwo
@@ -212,7 +187,6 @@ const (
 	FixSeenNormal
 )
 
-// FixSeenOf is what the model's last look at USB found.
 func FixSeenOf(m *Model) FixSeen {
 	switch usb := m.USB(); {
 	case m.Status == nil:
@@ -227,9 +201,8 @@ func FixSeenOf(m *Model) FixSeen {
 	return FixSeenNormal
 }
 
-// Step is the step the run is at: FixStepBefore before it, FixStepCount
-// once it ended with RØDE's firmware back, else the step it is on or
-// stopped at.
+// Step returns the current sidebar step index (FixStepCount once completed
+// with RØDE's firmware reinstalled).
 func (f *Fix) Step() int {
 	switch f.Ending() {
 	case FixEndingNone:
@@ -251,9 +224,8 @@ func (f *Fix) Step() int {
 	case e == nil, stage == autofix.StageFind, stage == autofix.StageDownload,
 		stage == autofix.StageInspect, stage == autofix.StageBuild:
 		return FixStepGet
-	// Check and finish once the mixer is back from the second update (the
-	// wait's settle has begun); while it installs and restarts, it is
-	// still Reinstall.
+	// Move to Check and finish once the mixer is back from the second flash
+	// and the settle countdown has started.
 	case pass == 2 && stage == autofix.StageWait && e.Total > 0, stage == autofix.StageFinish:
 		return FixStepCheck
 	case pass == 2:
@@ -262,9 +234,9 @@ func (f *Fix) Step() int {
 	return FixStepFix
 }
 
-// Steps is the sidebar. A run that ended without fixing marks Fix the
-// storage failed and the steps after it done, since RØDE's firmware was
-// put back; one that stopped marks where it stopped.
+// Steps builds the sidebar step list. When the fix itself failed or was
+// unrecognized but stock firmware was still put back, FixStepFix is marked
+// failed while later steps are marked done.
 func (f *Fix) Steps() []TaskStep {
 	at := f.Step()
 	ending := f.Ending()
@@ -291,9 +263,9 @@ func (f *Fix) Steps() []TaskStep {
 	return steps
 }
 
-// Unplug says whether the mixer may be unplugged: yes before the run
-// touches it, and once it ended with the mixer back; no from the first
-// update-mode command until then. seen is what the app sees on USB now.
+// Unplug reports whether it is safe to disconnect the mixer. It stays unsafe
+// from the first update-mode command until the run finishes or the mixer is
+// observed back in normal mode.
 func (f *Fix) Unplug(seen FixSeen) Unplug {
 	switch {
 	case f.Kind == FixBefore:
@@ -305,7 +277,7 @@ func (f *Fix) Unplug(seen FixSeen) Unplug {
 	}
 	switch f.Ending() {
 	case FixEndingFixed, FixEndingAlready, FixEndingUnrecognized, FixEndingNotApplied:
-		// The run ended only once the mixer had been back for a while.
+		// These endings only occur after the mixer has come back and settled.
 		return Unplug{Kind: UnplugYes}
 	}
 	if !f.Touched && f.Reply != nil {

@@ -5,11 +5,8 @@ import (
 	"slices"
 )
 
-// Desired settings, local edits and observed applied state are kept separate.
-
 const maxUint64 = math.MaxUint64
 
-// optU64 is a uint64 that may be absent (ok false).
 type optU64 struct {
 	value uint64
 	ok    bool
@@ -17,10 +14,8 @@ type optU64 struct {
 
 func someU64(value uint64) optU64 { return optU64{value: value, ok: true} }
 
-// is: Some(value) == Some(other).
 func (o optU64) is(other uint64) bool { return o.ok && o.value == other }
 
-// checkedAddOne is value.checked_add(1).
 func checkedAddOne(value uint64) optU64 {
 	if value == maxUint64 {
 		return optU64{}
@@ -28,7 +23,6 @@ func checkedAddOne(value uint64) optU64 {
 	return someU64(value + 1)
 }
 
-// EngineMode is serde `rename_all = "lowercase"`.
 type EngineMode string
 
 const (
@@ -46,7 +40,6 @@ func (m EngineMode) HasProcessingControls() bool {
 	return m == EngineModeNative
 }
 
-// EnginePhase is serde `rename_all = "lowercase"`.
 type EnginePhase string
 
 const (
@@ -82,9 +75,8 @@ func (e EngineStatus) Validate() error {
 	return nil
 }
 
-// RoutingRequest is the global processing enable/disable. Generation checks
-// distinguish this from per-channel effect bypass and reject requests from a
-// retired audio owner.
+// RoutingRequest toggles global processing. ExpectedGeneration rejects
+// requests sent against a retired audio owner.
 type RoutingRequest struct {
 	Enabled            bool   `json:"enabled"`
 	ExpectedRevision   uint64 `json:"expectedRevision"`
@@ -140,7 +132,6 @@ type DeviceState struct {
 	Selection SelectionStatus `json:"selection"`
 }
 
-// RoutingPhase is serde `rename_all = "lowercase"`.
 type RoutingPhase string
 
 const (
@@ -189,11 +180,9 @@ type TargetMeter struct {
 	OutputPeak    float64 `json:"outputPeak"`
 	RMS           float64 `json:"rms"`
 	GainReduction float64 `json:"gainReduction"`
-	// Highest suppression-model voice score in the window, 0 to 1 (0 without
-	// suppression).
+	// Peak suppression voice score in the window [0, 1] (0 when suppression is off).
 	Voice float64 `json:"voice"`
-	// How far open the voice gate was at its most open in the window, 0
-	// (fully closed) to 1. 1 while the gate is off; 0 without suppression.
+	// Peak gate openness in the window [0, 1] (1 when gate is off, 0 without suppression).
 	GateOpen          float64      `json:"gateOpen"`
 	Clipped           uint64       `json:"clipped"`
 	Spectrum          []float64    `json:"spectrum"`
@@ -218,54 +207,41 @@ type Timing struct {
 	Histogram   [8]uint64 `json:"histogram"`
 }
 
-// Performance accepts unknown fields: a newer mixer may report more.
+// Performance allows unknown fields for forward compatibility with newer mixers.
 type Performance struct {
 	CallbackBudgetNs uint64 `json:"callbackBudgetNs"`
 	WorkerBudgetNs   uint64 `json:"workerBudgetNs"`
 	Xruns            uint64 `json:"xruns"`
-	// `calls == 0` means callback timing was not sampled in this build, not
-	// that callbacks take no time.
+	// Calls == 0 means timing wasn't sampled, not zero duration.
 	Callback Timing `json:"callback"`
-	// The suppression worker's wall and CPU time; zeros when the path has no
-	// worker. Cumulative for the engine generation, across worker rebuilds.
+	// Cumulative over the engine generation across worker rebuilds.
 	WorkerWall Timing `json:"workerWall"`
 	WorkerCPU  Timing `json:"workerCpu"`
-	// Helper routines that finished after their frame's cycle had ended, and
-	// callbacks that found the helper still busy. Absent from a mixer that
-	// predates them (and from the JACK path).
+	// Nil on older mixers and on the JACK path.
 	HelperLate   *uint64 `json:"helperLate,omitempty"`
 	HelperStalls *uint64 `json:"helperStalls,omitempty"`
-	// Slowest audio callback, and slowest suppression worker turnaround
-	// (wall time), within roughly the last 10 s of audio. Absent from a
-	// mixer that predates them, or before any timing in the window.
+	// Slowest callback and worker turnaround over roughly the last 10 s.
 	CallbackRecentMaxNs *uint64 `json:"callbackRecentMaxNs,omitempty"`
 	WorkerRecentMaxNs   *uint64 `json:"workerRecentMaxNs,omitempty"`
 }
 
 func (Performance) AllowUnknownJSONFields() {}
 
-// Meter accepts unknown fields: a newer mixer may report more.
+// Meter allows unknown fields for forward compatibility with newer mixers.
 type Meter struct {
 	MessageType MeterType `json:"type"`
 	Revision    uint64    `json:"revision"`
 	Generation  uint64    `json:"generation"`
 	Synthetic   bool      `json:"synthetic"`
-	// Bumped by each diagnostics reset. The counters below are relative to
-	// that reset, so a reader rebaselines its fault tracking when this
-	// changes. 0 means "never reset" (and is what an older mixer sends).
+	// Incremented on diagnostics reset so clients rebaseline fault counters (0 on older mixers).
 	DiagnosticsEpoch uint64 `json:"diagnosticsEpoch,default"`
-	// How long this engine generation has been running when the reading
-	// was made, on the daemon's monotonic clock: from the start of the audio
-	// process that runs the engine (the mixer's own process), or from the
-	// moment it was first reported Running when that start cannot be read.
-	// Lets a reader place the startup window. Absent from older mixers.
+	// Engine generation uptime on the daemon's monotonic clock (nil on older mixers).
 	RunningForNs *uint64       `json:"runningForNs,omitempty"`
 	Targets      []TargetMeter `json:"targets"`
 }
 
 func (Meter) AllowUnknownJSONFields() {}
 
-// MeterType is serde `rename_all = "lowercase"`.
 type MeterType string
 
 const MeterTypeMeter MeterType = "meter"
@@ -291,9 +267,8 @@ func (d DeviceState) nativeControlsReady() bool {
 		d.Routing.Recovered == 0
 }
 
-// CanEnableProcessing: eligibility is a device claim following complete
-// stock-only recovery. An offline engine produces no meters; stale meters
-// cannot prove readiness. Only the native engine takes processing controls.
+// CanEnableProcessing reports whether the native engine is bypassed and ready
+// to enable processing.
 func (d DeviceState) CanEnableProcessing() bool {
 	return d.nativeControlsReady() &&
 		d.Routing.Status == RoutingPhaseBypassed &&
@@ -310,7 +285,6 @@ func (d DeviceState) CanDisableProcessing() bool {
 				len(d.Selection.PendingTargetIDs) == 0))
 }
 
-// DeviceStateFromJSON is strict current-schema parsing.
 func DeviceStateFromJSON(text string) (DeviceState, error) {
 	state, err := FromJSON[DeviceState](text)
 	if err != nil {
@@ -370,14 +344,12 @@ func (d DeviceState) IsApplied() bool {
 				d.Routing.Channels == d.Config.SelectedChannels()))
 }
 
-// Clone is a deep copy.
 func (d DeviceState) Clone() DeviceState {
 	d.Config = d.Config.Clone()
 	d.Selection = d.Selection.Clone()
 	return d
 }
 
-// Equal compares field by field (deepEqual).
 func (d DeviceState) Equal(other DeviceState) bool { return deepEqual(d, other) }
 
 func (m TargetMeter) Validate() error {
@@ -406,8 +378,7 @@ func (m TargetMeter) Validate() error {
 	return nil
 }
 
-// PendingApply is a request snapshot: it prevents a late save response from
-// deleting newer edits.
+// PendingApply snapshots an in-flight save so a late reply won't clobber newer edits.
 type PendingApply struct {
 	Request         ConfigUpdate
 	selectedTargets []string
@@ -436,8 +407,8 @@ func (r RemoteUpdate) String() string {
 	return "RemoteUpdate(?)"
 }
 
-// Session is the editor's view of one mixer. Methods that take a
-// DeviceState take ownership of it: do not change its slices afterwards.
+// Session tracks the editor's view of one mixer. Methods taking a DeviceState
+// assume ownership of its slices.
 type Session struct {
 	Saved                    *DeviceState
 	Draft                    []Target
@@ -448,8 +419,6 @@ type Session struct {
 	observedEngineGeneration optU64
 }
 
-// DefaultSession is a session with no mixer read yet, the default
-// catalog as the draft.
 func DefaultSession() Session {
 	defaults := DefaultConfig()
 	return Session{
@@ -483,24 +452,19 @@ func (s *Session) Disconnect() {
 	s.resetEngineObservation()
 }
 
-// resetEngineObservation: a deliberate new connection may address a
-// different device sequence.
 func (s *Session) resetEngineObservation() { s.observedEngineGeneration = optU64{} }
 
-// observedNewer: the observed generation is Some(g) with generation < g.
 func (s *Session) observedNewer(generation uint64) bool {
 	return s.observedEngineGeneration.ok && generation < s.observedEngineGeneration.value
 }
 
-// unobservedOrOlder: observed generation is None or older than generation.
 func (s *Session) unobservedOrOlder(generation uint64) bool {
 	return !s.observedEngineGeneration.ok || s.observedEngineGeneration.value < generation
 }
 
-// ReceiveRuntime observes the live portion of our pending settings write's
-// stream echo. The caller identifies the exact request/revision; the
-// request's reply will acknowledge its settings. Keep all saved settings and
-// local drafts here.
+// ReceiveRuntime updates only the live runtime fields from a stream echo of
+// our own in-flight settings write, leaving saved settings and local drafts
+// untouched until the write reply arrives.
 func (s *Session) ReceiveRuntime(state DeviceState) (RemoteUpdate, error) {
 	if err := state.Validate(); err != nil {
 		return 0, err
@@ -566,8 +530,7 @@ func (s *Session) Receive(state DeviceState) (RemoteUpdate, error) {
 		s.baseRevision = someU64(revision)
 		s.Conflict = false
 	} else if changed && topologyOnly {
-		// Selection commits preserve all effects. Rebase local effect
-		// edits without treating that topology-only revision as a conflict.
+		// Selection commits leave effect settings intact, so rebase silently.
 		s.baseRevision = someU64(revision)
 	}
 	s.Saved = &state
@@ -578,15 +541,12 @@ func (s *Session) Receive(state DeviceState) (RemoteUpdate, error) {
 	return RemoteUpdateUnchanged, nil
 }
 
-// ReceiveSnapshot: a request's snapshot can predate a later stream event at
-// the same engine generation. Call only while the stream's runtime
-// observation is fresh.
+// ReceiveSnapshot applies a request snapshot without letting it overwrite newer
+// runtime state already received from the stream at the same engine generation.
 func (s *Session) ReceiveSnapshot(state DeviceState) (RemoteUpdate, error) {
 	if saved := s.Saved; saved != nil && s.observedEngineGeneration.is(state.Engine.Generation) {
 		state.Engine = saved.Engine
 		state.Routing = saved.Routing
-		// Do not let an older same-generation reply regress a
-		// completed selection after its streamed state has committed.
 		if state.Config.Revision == saved.Config.Revision {
 			state.Selection = saved.Selection.Clone()
 		}
@@ -740,13 +700,9 @@ func (s *Session) AcknowledgeRouting(pending PendingRouting, state DeviceState) 
 	return nil
 }
 
-// Acknowledge: only call with the successful response belonging to this
-// request. The response's targets are what the mixer stored for this save,
-// and they are taken as they are: the mixer refuses a save whose expected
-// revision is not current, so no other write can be in this response, but
-// the stored values may differ from the request's (a mixer before 0.2.2
-// parses some numbers one unit in the last place off). Edits made since the
-// request was sent are kept.
+// Acknowledge applies the response for pending. Stored targets are accepted as
+// returned (older mixers before 0.2.2 may round floats by 1 ULP), while any
+// local edits made after pending was sent are preserved.
 func (s *Session) Acknowledge(pending PendingApply, state DeviceState) error {
 	if err := state.Validate(); err != nil {
 		return err
@@ -762,8 +718,6 @@ func (s *Session) Acknowledge(pending PendingApply, state DeviceState) error {
 	if TargetsEqual(s.Draft, pending.Request.Targets) {
 		s.Draft = CloneTargets(state.Config.Targets)
 	}
-	// The device-wide screen setting is not a per-target edit: the
-	// acknowledged state is what the mixer now runs.
 	s.baseRevision = someU64(state.Config.Revision)
 	s.observedEngineGeneration = someU64(state.Engine.Generation)
 	s.Saved = &state
@@ -772,8 +726,8 @@ func (s *Session) Acknowledge(pending PendingApply, state DeviceState) error {
 	return nil
 }
 
-// AcknowledgePreset accepts a preset response while preserving edits made
-// during the request.
+// AcknowledgePreset applies a preset load response, flagging a conflict if the
+// user edited Draft while the request was in flight.
 func (s *Session) AcknowledgePreset(expectedRevision uint64, originalDraft []Target, state DeviceState) error {
 	if err := state.Validate(); err != nil {
 		return err
@@ -792,17 +746,13 @@ func (s *Session) AcknowledgePreset(expectedRevision uint64, originalDraft []Tar
 	s.observedEngineGeneration = someU64(state.Engine.Generation)
 	s.Saved = &state
 	s.Connected = true
-	// A preset can replace every target. Keep edits made during the request
-	// but require an explicit choice before overwriting its result.
 	s.Conflict = edited
 	return nil
 }
 
-// preserveObservedRuntime: a successful effects write confirms its settings,
-// not current audio. The ordered stream may already have reported failure,
-// recovery or a new generation after the server captured this reply. Call
-// only after validating the response and its unchanged processing-path
-// selection.
+// Keep already-observed stream runtime state so a save reply can't roll back
+// a newer engine failure, recovery, or generation. Call only after validating
+// state and confirming selection is unchanged.
 func (s *Session) preserveObservedRuntime(state *DeviceState) {
 	if saved := s.Saved; saved != nil &&
 		s.observedEngineGeneration.ok && s.observedEngineGeneration.value >= state.Engine.Generation {
@@ -812,8 +762,7 @@ func (s *Session) preserveObservedRuntime(state *DeviceState) {
 	}
 }
 
-// RebaseEdits is a deliberate user choice: keep local edits against the
-// latest revision.
+// RebaseEdits clears a conflict by rebasing local edits onto the latest saved revision.
 func (s *Session) RebaseEdits() error {
 	if s.Saved == nil {
 		return CoreError("No device state is available")

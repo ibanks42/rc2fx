@@ -1,6 +1,6 @@
-//! A narrow read hook on the vendor-owned HID descriptor. No second reader,
-//! blocking IPC, allocation, or control parsing on ordinary/vendor reads; only
-//! a stream of RC2FX's own reports holds the vendor's HID thread, briefly.
+//! Intercepts vendor USB gadget control (`system`/`open`) and `/dev/hidg0`
+//! reads so RC2FX HID reports route to `rc2fxd` and mixer restarts keep the
+//! existing USB gadget bound without dropping host audio streams.
 use libc::{c_int, c_void, size_t, ssize_t};
 use std::{
     ffi::CStr,
@@ -19,9 +19,8 @@ pub static OPEN: AtomicUsize = AtomicUsize::new(0);
 static BRIDGE: OnceLock<(UnixDatagram, std::path::PathBuf)> = OnceLock::new();
 static MARKED: AtomicUsize = AtomicUsize::new(0);
 static GADGET: Mutex<Gadget> = Mutex::new(Gadget::new());
-/// Mirrors `Gadget::keeping` for the open hook, which takes no lock.
+/// Lock-free mirrors of `Gadget::{keeping, starting}` for the `open` hook.
 static KEEPING: AtomicBool = AtomicBool::new(false);
-/// Mirrors `Gadget::starting`: the startup gadget sequence has not completed.
 static STARTING: AtomicBool = AtomicBool::new(true);
 static LOADED: OnceLock<Instant> = OnceLock::new();
 
@@ -32,24 +31,19 @@ const HID_NODE: &str = "/dev/hidg0";
 const UNBIND: &[u8] = b"echo \"\" > /sys/kernel/config/usb_gadget/g124/UDC";
 const STOP: &[u8] = b"/etc/init.d/uac2_gadget.sh stop ";
 const START: &[u8] = b"/etc/init.d/uac2_gadget.sh start ";
-/// How long after load the mixer's own startup gadget sequence may begin.
+/// Window after process load during which a gadget teardown is treated as startup.
 const STARTUP_WINDOW: Duration = Duration::from_secs(120);
 
-/// The vendor's gadget control as this process has seen it. The inspected
-/// 1.7.7 mixer unbinds the gadget (`echo "" > UDC`), runs the vendor script's
-/// stop and start, writes the controller name into the UDC file and, when
-/// that does not read back, resets the USB controller drivers through their
-/// sysfs bind files; the same sequence serves startup, a USB mode change and
-/// update mode. A restarted RC2FX mixer finds the gadget still bound with
-/// RC2FX's descriptor, so its startup sequence is made a no-op: the host never
-/// sees a disconnect, its audio streams and RODE's virtual devices survive,
-/// and no teardown races live transfers. The next teardown request after
-/// startup (a mode change) runs for real.
+/// Tracks the vendor's USB gadget teardown/rebuild sequence.
+///
+/// On startup, USB mode switches, and update mode, the 1.7.7 mixer unbinds UDC,
+/// runs `uac2_gadget.sh stop`/`start`, writes the UDC name back, and resets USB
+/// platform drivers if readback fails. When RC2FX restarts the mixer over an
+/// already-bound RC2FX gadget, we turn that startup sequence into a no-op so
+/// the host never sees a USB disconnect. Subsequent teardowns (e.g. mode
+/// switches) execute normally.
 struct Gadget {
-    /// The startup stop/start has not completed yet.
     starting: bool,
-    /// This startup keeps the bound gadget; vendor rebuild steps are no-ops
-    /// until the next teardown request.
     keeping: bool,
     stop_failed: bool,
 }
@@ -64,17 +58,14 @@ impl Gadget {
     }
 }
 
-/// The bound gadget, read when the vendor asks to tear it down.
+/// Snapshot of the currently bound gadget in configfs.
 #[derive(Debug, Default, PartialEq)]
 struct Live {
-    /// Bound to the controller with RC2FX's staged descriptor.
+    /// True if bound to `UDC_NAME` with our staged report descriptor and a live `/dev/hidg0`.
     ready: bool,
-    /// Its idProduct as sysfs prints it.
     product: Option<String>,
 }
 
-/// `node` is the HID character device the kept gadget must still offer; a
-/// retired name needs a rebuild to come back.
 fn live(dir: &Path, staged: &Path, node: &Path) -> Live {
     use std::os::unix::fs::FileTypeExt;
     let read = |name: &str| std::fs::read(dir.join(name)).ok();
@@ -135,8 +126,8 @@ fn gadget_command(command: &[u8]) -> Option<&'static CStr> {
         b"/etc/init.d/uac2_gadget.sh start extendmulti" => {
             Some(c"/bin/bash /run/rc2fx/usb-gadget.sh start extendmulti")
         }
-        // These modes keep their stock layout, but must still respect a refused
-        // preceding stop. The vendor caller does not inspect system's status.
+        // Stock layouts, but routed through our state machine so a failed stop
+        // still blocks them (the vendor caller ignores system()'s exit status).
         b"/etc/init.d/uac2_gadget.sh start syncmode" => {
             Some(c"/etc/init.d/uac2_gadget.sh start syncmode")
         }
@@ -147,18 +138,16 @@ fn gadget_command(command: &[u8]) -> Option<&'static CStr> {
     }
 }
 
-/// The staged stop for `mode`; the vendor's stop tears down every function
-/// whatever the mode, so an unlisted mode uses the stereo one.
+/// Returns the staged stop script for `mode` (falling back to stereo since the
+/// vendor stop tears down all functions regardless of mode).
 fn stop_command(mode: &[u8]) -> &'static CStr {
     let mut command = STOP.to_vec();
     command.extend_from_slice(mode);
     gadget_command(&command).unwrap_or(c"/bin/bash /run/rc2fx/usb-stop.sh stop stereo")
 }
 
-/// Runs a vendor gadget command, or keeps the bound gadget instead. Returns
-/// the wait status and whether the command was made a no-op; `None` for a
-/// command that is not gadget control. `startup_window` is whether this
-/// process is young enough for the command to be its startup sequence.
+/// Intercepts a vendor gadget command, returning `Some((wait_status, kept))` or
+/// `None` if `command` isn't gadget control.
 fn run_gadget_for_model(
     state: &mut Gadget,
     startup_window: bool,
@@ -195,7 +184,7 @@ fn run_gadget_for_model(
         if expected.is_some() && live().product.as_deref() == expected {
             return Some((0, true));
         }
-        // The saved USB mode changed between mixers: rebuild after all.
+        // USB mode changed since the gadget was bound; tear down and rebuild.
         state.keeping = false;
         let status = original(stop_command(mode));
         state.stop_failed = status != 0;
@@ -204,8 +193,7 @@ fn run_gadget_for_model(
         }
     }
     if state.stop_failed {
-        // system() returns a wait status, not an exit code. No vendor script is
-        // called here: a rebuild must not follow a refused quiescence check.
+        // Return wait status (exit code 1) without invoking the start script.
         return Some((1 << 8, false));
     }
     Some((original(replacement), false))
@@ -240,9 +228,7 @@ pub unsafe extern "C" fn system(command: *const libc::c_char) -> c_int {
         let command = unsafe { CStr::from_ptr(command) };
         let bytes = command.to_bytes();
         if bytes == UNBIND || gadget_command(bytes).is_some() {
-            // Serialize stop/start execution, including the failure latch. This
-            // is a vendor control path; the audio callback never takes this
-            // mutex.
+            // Control-only mutex; the audio callback never calls system().
             let mut state = GADGET.lock().unwrap_or_else(|e| e.into_inner());
             let startup_window = LOADED.get().is_some_and(|t| t.elapsed() < STARTUP_WINDOW);
             let result = run_gadget_for_model(
@@ -280,7 +266,7 @@ pub unsafe extern "C" fn system(command: *const libc::c_char) -> c_int {
     unsafe { original(command) }
 }
 
-/// Sysfs files the vendor writes to bind, reset or re-role the USB controller.
+/// Sysfs control files the vendor writes to bind, reset, or re-role the USB controller.
 fn diverted(path: &[u8]) -> bool {
     path == b"/sys/kernel/config/usb_gadget/g124/UDC"
         || path == b"/sys/class/usb_role/ffe09080.usb-role-switch/role"
@@ -288,10 +274,9 @@ fn diverted(path: &[u8]) -> bool {
             && (path.ends_with(b"/bind") || path.ends_with(b"/unbind")))
 }
 
-/// While the bound gadget is kept, the vendor's controller bind, reset and
-/// role writes go to /dev/null; its reads (the UDC read-back) see the real
-/// files. `open` is variadic in libc; on AArch64 Linux the optional mode
-/// arrives in the third argument register either way.
+/// Diverts vendor USB controller writes to `/dev/null` while keeping the bound
+/// gadget (reads still hit sysfs). On AArch64 Linux the variadic `mode` arg
+/// arrives in the 3rd register regardless.
 pub unsafe extern "C" fn open(
     path: *const libc::c_char,
     flags: c_int,
@@ -302,11 +287,10 @@ pub unsafe extern "C" fn open(
     if path.is_null() {
         return unsafe { original(path, flags, mode) };
     }
-    // At boot the HID node does not exist until the mixer has built its
-    // gadget, so the vendor's HID thread first opens it afterwards. A mixer
-    // restarted over a kept gadget finds the node at once, and a mixer that
-    // receives host reports before it has finished starting crashes (signal
-    // 11, observed 2026-10-26). Refuse the early open as boot would.
+    // On a cold boot `/dev/hidg0` doesn't exist until the mixer creates the
+    // gadget. On a restart over a kept gadget it already exists, and opening it
+    // before startup finishes can segfault if host reports arrive early
+    // (observed 2026-10-26). Return ENOENT until startup completes.
     if unsafe { CStr::from_ptr(path) }.to_bytes() == HID_NODE.as_bytes()
         && STARTING.load(Ordering::Acquire)
         && LOADED.get().is_some_and(|t| t.elapsed() < STARTUP_WINDOW)
@@ -335,8 +319,7 @@ pub unsafe extern "C" fn open(
 }
 
 pub fn initialize() {
-    // Only a hash-qualified mixer process may claim reports. Inherited helper
-    // environments and unsupported firmware must retain stock behavior.
+    // Only hook HID traffic in a hash-qualified mixer process.
     if super::FIRMWARE_PROFILE.get().is_none() {
         return;
     }
@@ -356,25 +339,17 @@ pub fn initialize() {
     }
 }
 
-/// The vendor's HID loop drains what a zero-timeout select finds ready, then
-/// sleeps 10 ms. Handed an empty read after each RC2FX report, it slept
-/// between the reports of a stream, so every window of a transfer waited a
-/// tick. While RC2FX's reports keep arriving, the hook takes the next one
-/// itself, waiting at most `STREAM_IDLE_MS` for it. A report of RØDE's ends
-/// the wait and goes to the vendor as the result of its read, as it would
-/// have; the whole stream is bounded by `STREAM_BUDGET`.
+/// The vendor HID loop polls with a 10 ms sleep between batches. To avoid
+/// stalling multi-report RC2FX transfers on that 10 ms tick, we briefly drain
+/// consecutive RC2FX reports inside `read()` (up to `STREAM_IDLE_MS` per report
+/// and `STREAM_BUDGET` total), returning immediately if a vendor report arrives.
 const STREAM_IDLE_MS: c_int = 3;
 const STREAM_BUDGET: Duration = Duration::from_millis(50);
-/// How long a full local queue may hold this thread before a report is
-/// dropped: `rc2fxd` falling briefly behind no longer costs a transfer.
+/// Max wait when `rc2fxd`'s datagram socket buffer is temporarily full.
 const DELIVERY_WAIT: Duration = Duration::from_millis(10);
 
-/// What a read on the vendor's descriptor turned out to be.
 enum Taken {
-    /// Not RC2FX's: the vendor gets the read's result unchanged.
     Vendor,
-    /// An RC2FX report, delivered to `rc2fxd` (or dropped while the node is
-    /// being retired).
     Ours,
 }
 
@@ -407,13 +382,12 @@ pub unsafe extern "C" fn read(fd: c_int, buffer: *mut c_void, count: size_t) -> 
             (Taken::Ours, false) => break,
         }
     }
-    // The inspected vendor loop returns to select() for read <= 0. Returning
-    // zero consumes this stream without fabricating errno in its libc.
+    // The vendor loop returns to select() when read() returns <= 0.
     0
 }
 
-/// Classify the read result `n` in `buffer`, delivering an RC2FX report.
-/// The flag is false when the node is being retired, which ends a stream.
+/// Inspects `buffer[..n]`, forwarding RC2FX reports to `rc2fxd`.
+/// The bool is false if `/dev/hidg0` has been unlinked/retired.
 unsafe fn take(
     fd: c_int,
     buffer: *mut c_void,
@@ -429,8 +403,7 @@ unsafe fn take(
         return (Taken::Vendor, true);
     }
     let first = MARKED.fetch_add(1, Ordering::Relaxed) < 3;
-    // Resolve the actual descriptor each time a marked packet arrives. No stale
-    // cached fd can swallow a later file/socket read after close/reopen.
+    // Resolve fd -> path each time so a closed/reused fd can't get hijacked.
     let fd_path = format!("/proc/self/fd/{fd}\0");
     let mut target = [0u8; 32];
     let length = unsafe {
@@ -450,9 +423,8 @@ unsafe fn take(
         }
         return (Taken::Vendor, true);
     }
-    // The launcher retires the old devtmpfs name before a mixer restart. Keep
-    // consuming our marked traffic during that handoff, but do not deliver a
-    // request whose reply would need a different/new gadget descriptor.
+    // Consume marked packets on a retired `/dev/hidg0` during restart handoff,
+    // but don't forward them to `rc2fxd`.
     if retired {
         return (Taken::Ours, false);
     }
@@ -461,8 +433,6 @@ unsafe fn take(
         eprintln!("RC2FX USB received report: bytes={n}");
     }
     if let Some(bytes) = rc2fx_usb::canonical_output(bytes) {
-        // An absent daemon, or one still behind after `DELIVERY_WAIT`, means a
-        // host timeout, never stock parsing.
         let result = deliver(socket, path, bytes);
         if first {
             eprintln!(
@@ -479,7 +449,6 @@ unsafe fn take(
     (Taken::Ours, true)
 }
 
-/// Send one report to `rc2fxd`, waiting out a full queue for a little while.
 fn deliver(socket: &UnixDatagram, path: &Path, bytes: &[u8]) -> std::io::Result<usize> {
     let deadline = Instant::now() + DELIVERY_WAIT;
     loop {

@@ -94,8 +94,7 @@ func (m *Model) advance() *installer.Request {
 			})
 		case StepUSBMode:
 			usb := m.USB()
-			// The storage fix flashes the run's firmware itself, last; it
-			// needs the mixer in normal mode, as here.
+			// Run the storage fix from normal mode; it flashes the final firmware itself.
 			if fix := run.Fix; fix != nil && fix.Reply == nil && fix.Error == "" &&
 				len(usb) == 1 && !usb[0].UpdateMode {
 				run.Committed = true
@@ -117,16 +116,13 @@ func (m *Model) advance() *installer.Request {
 			}
 		case StepFlash:
 			one := m.usbOne(true)
-			// The storage fix is still due (it stopped short of an unsafe
-			// flash): a normal flash would format the slot it found too
-			// small, so the mixer has to leave update mode first, and the
-			// fix then runs again from normal mode.
+			// Do not flash normally if the storage fix is still pending; wait
+			// for the mixer to leave update mode so the fix can rerun from normal mode.
 			if fix := run.Fix; fix != nil && fix.Reply == nil && fix.Error == "" {
 				if one != nil {
 					return m.waitFor("The mixer is still in USB update mode from the storage fix. Once it is back on, the fix runs again.", true)
 				}
 				if m.usbOne(false) != nil {
-					// Back in normal mode: the fix runs from the step before.
 					run.Index = slices.Index(Steps[:], StepUSBMode)
 					run.resume()
 					continue
@@ -169,8 +165,6 @@ func (m *Model) advance() *installer.Request {
 	}
 }
 
-// fileCount is how many files a check names, with the ones it left out.
-// Pages say how many, never which: file names mean nothing to the reader.
 func fileCount(check *core.ImageCheck, names []string) string {
 	n := len(names) + int(check.Unlisted)
 	if n == 1 {
@@ -179,8 +173,6 @@ func fileCount(check *core.ImageCheck, names []string) string {
 	return fmt.Sprintf("%d of RØDE's files", n)
 }
 
-// repairedMessage: RØDE's boot already ran with the damaged copies, so only
-// a restart brings the mixer up as RØDE intends.
 func repairedMessage(check *core.ImageCheck) string {
 	return fmt.Sprintf("The update damaged %s on the mixer, and RC2FX restored them from the mixer's previous system. "+
 		"The mixer needs to be switched off and on once so it starts with the restored files.",
@@ -193,8 +185,6 @@ func damagedMessage(check *core.ImageCheck) string {
 		fileCount(check, check.Damaged))
 }
 
-// usbModeSent reports whether the USB-mode command was sent in the last two
-// minutes.
 func (m *Model) usbModeSent() bool {
 	if m.Status == nil {
 		return false
@@ -203,9 +193,8 @@ func (m *Model) usbModeSent() bool {
 	return c != nil && c.Command == "usb-mode" && num.SatSub(nowUnix(), c.AtUnix) < 120
 }
 
-// Tick polls: often while a run waits for the mixer or has failed (a failed
-// page says what the mixer is doing now, and Try again starts from that),
-// slowly otherwise so the page follows USB and network changes.
+// Tick returns a background probe request when due (every 3s while waiting or
+// failed, every 10s when idle).
 func (m *Model) Tick(now time.Time) *installer.Request {
 	if m.Busy() || m.polling() {
 		return nil
@@ -225,16 +214,12 @@ func (m *Model) Tick(now time.Time) *installer.Request {
 	return m.refresh()
 }
 
-// Finish applies a finished request: its reply, or the error it failed with
-// (whose text is shown). Returns the next request, if any.
+// Finish processes a completed request and returns the next request to send, if any.
 func (m *Model) Finish(request installer.Request, reply installer.Reply, err error) *installer.Request {
 	background := len(m.queue) > 0 && m.queue[0].background
 	next := m.finish(request, reply, err)
-	// A run's own reply asks for a refresh, which is held back while a
-	// background check is queued (refresh). When that check is the last
-	// thing in flight, its answer has to carry the run on: Tick polls only
-	// a run that waits (or failed), so nothing else would. A waiting run is
-	// left to Tick's pace.
+	// If a background check was the last queued request while a run is actively
+	// advancing, kick off a refresh now since Tick only polls waiting/failed runs.
 	if next == nil && background && m.Run != nil && m.Run.status.Kind == RunGoing && !m.Busy() && !m.polling() {
 		return m.refresh()
 	}
@@ -464,10 +449,8 @@ func (m *Model) receiveStatus(status installer.Status) *installer.Request {
 			*slot = &Choice{Channel: p.Channel, Version: p.Version}
 		}
 	}
-	// Opened during an update: wait for what was flashed. Only on opening,
-	// so a finished update never comes back, and only while the app sees no
-	// mixer in normal mode (recentlyFlashed): one there has nothing left to
-	// wait for.
+	// If opened while a recent flash is still completing, resume waiting for it
+	// (only on the first status reply, and only while no normal-mode mixer is seen).
 	if first && m.Run == nil && m.recentlyFlashed() {
 		if p := m.Prepared(); p != nil {
 			m.Stock = p.Stock
@@ -484,8 +467,6 @@ func (m *Model) receiveStatus(status installer.Status) *installer.Request {
 		}
 	}
 	if m.Run != nil {
-		// Opened during an update: RC2FX's readiness is judged against the
-		// catalog, which this process may not have.
 		if next := m.advance(); next != nil {
 			return next
 		}
@@ -497,18 +478,9 @@ func (m *Model) receiveStatus(status installer.Status) *installer.Request {
 	return m.nextCheck()
 }
 
-// nextCheck is the first catalog check still to do, in order: RC2FX's
-// firmware, its mixer software, then RØDE's stock firmware. The checks run one
-// at a time: while one is under way, nothing else starts, and its reply calls
-// nextCheck again. A check that is done or failed is passed over instead of
-// ending the chain, so a list forgotten after a model change or the Duo switch
-// is fetched again even when the lists before it are still current.
-//
-// The firmware list depends on the mixer's model, so it waits while USB
-// can't be read. Mixer software is looked for once RC2FX's catalog listed
-// firmware, or while USB can't be read; a failed catalog check doesn't also
-// try it (a reply to the catalog check does, whatever it lists). Stock
-// firmware is RØDE's and is always looked for.
+// nextCheck advances the startup catalog checks in order: RC2FX firmware
+// (skipped while USB enumeration is failing), signed mixer releases, then
+// RØDE stock firmware. Checks run one at a time.
 func (m *Model) nextCheck() *installer.Request {
 	usbFailed := m.Status != nil && m.Status.USBError != nil
 	if !usbFailed {
@@ -530,8 +502,6 @@ func (m *Model) nextCheck() *installer.Request {
 	return m.checkStock()
 }
 
-// defaultChoice is stable when RC2FX supports it, else the first supported
-// release.
 func defaultChoice(releases []installer.Release) *Choice {
 	pick := slices.IndexFunc(releases, func(r installer.Release) bool {
 		return r.Supported && r.Channel == "stable"

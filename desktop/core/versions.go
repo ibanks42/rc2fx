@@ -7,40 +7,28 @@ import (
 	"unicode/utf8"
 )
 
-// Release identities: the RC2FX mixer runtime's own version, kept apart from
-// the desktop app's version and from RØDE's firmware version.
-//
-// The mixer runtime ships `mixer-release.json` (see `config/`), installed as
-// `/opt/rc2fx/mixer-release.json`. The device reports what it actually has
-// installed through `GET api/v1/version` as DeviceVersions. A runtime that
-// predates the endpoint answers 404, and its versions stay unknown.
+// Mixer runtime release metadata (distinct from both the desktop app version
+// and RØDE's stock firmware version). The mixer ships /opt/rc2fx/mixer-release.json
+// and exposes GET api/v1/version; older runtimes return 404.
 
-// MixerProtocolVersion is the control protocol this build speaks over USB 1.
-// Bump it when a desktop app built against an older protocol could no longer
-// drive the mixer.
+// MixerProtocolVersion is the USB 1 control protocol version. Bump only on
+// breaking changes.
 const MixerProtocolVersion uint32 = 1
 
-// MixerReleaseSchema is the only `mixer-release.json` schema this build
-// reads.
-const MixerReleaseSchema uint32 = 1
+const (
+	MixerReleaseSchema uint32 = 1
+	maxReleaseBytes           = 4 * 1024
+	maxVersionText            = 128 // firmware profile IDs can be up to 96 bytes
+)
 
-// maxReleaseBytes is the largest manifest accepted, far above any real one.
-const maxReleaseBytes = 4 * 1024
-
-// maxVersionText: a firmware profile id may be up to 96 bytes; versions are
-// far shorter.
-const maxVersionText = 128
-
-// MixerRelease is `mixer-release.json`: the RC2FX mixer runtime's release
-// identity.
+// MixerRelease models mixer-release.json.
 type MixerRelease struct {
 	SchemaVersion   uint32 `json:"schemaVersion"`
 	Version         string `json:"version"`
 	ProtocolVersion uint32 `json:"protocolVersion"`
 }
 
-// ParseMixerRelease parses and checks a manifest: strict JSON, schema 1, a
-// dotted numeric version and a non-zero protocol.
+// ParseMixerRelease strictly parses and validates a mixer-release.json file.
 func ParseMixerRelease(data []byte) (MixerRelease, error) {
 	if !utf8.Valid(data) {
 		return MixerRelease{}, CoreError("mixer-release.json is not UTF-8")
@@ -63,32 +51,21 @@ func ParseMixerRelease(data []byte) (MixerRelease, error) {
 	return release, nil
 }
 
-// DeviceVersions is what the mixer reports from `GET api/v1/version`. Every
-// field is optional: a field the runtime cannot establish is absent, never
-// guessed. Unknown fields are accepted so an older app can read a newer
-// mixer.
+// DeviceVersions is returned by GET api/v1/version. All fields are optional
+// and unknown fields are accepted for forward compatibility.
 type DeviceVersions struct {
-	// The installed RC2FX mixer release version.
-	Runtime *string `json:"runtime,omitempty"`
-	// The installed runtime's control protocol version.
-	Protocol *uint32 `json:"protocol,omitempty"`
-	// The native library's control protocol, when older than this daemon's.
-	NativeProtocol *uint32 `json:"nativeProtocol,omitempty"`
-	// RØDE's firmware version, from the profile the launcher validated.
-	Firmware *string `json:"firmware,omitempty"`
-	// The validated firmware profile's id.
+	Runtime         *string `json:"runtime,omitempty"`
+	Protocol        *uint32 `json:"protocol,omitempty"`
+	NativeProtocol  *uint32 `json:"nativeProtocol,omitempty"` // set when native lib protocol is older than daemon's
+	Firmware        *string `json:"firmware,omitempty"`
 	FirmwareProfile *string `json:"firmwareProfile,omitempty"`
-	// Set when this controller installs signed RC2FX releases in place over
-	// USB 1 (see `docs/developer/mixer-releases.md`); absent when it cannot.
-	// 1 takes whole uploads; 2 also lists its installed files and takes delta
-	// uploads. Any value above zero installs in place.
+	// InPlaceUpdates is non-nil when the mixer supports USB 1 in-place updates:
+	// 1 = full uploads only, 2 = also supports delta uploads.
 	InPlaceUpdates *uint32 `json:"inPlaceUpdates,omitempty"`
 }
 
 func (DeviceVersions) AllowUnknownJSONFields() {}
 
-// Validate refuses text no real version has: these fields are shown as they
-// arrive.
 func (d DeviceVersions) Validate() error {
 	for _, text := range []*string{d.Runtime, d.Firmware, d.FirmwareProfile} {
 		if text != nil && !ValidDisplayText(*text, maxVersionText) {
@@ -122,10 +99,8 @@ func parseVersion(text string) ([]uint64, bool) {
 	return values, true
 }
 
-// CompareVersions compares dotted numeric versions (`1.7.7`, `0.1`). Missing
-// trailing parts count as zero, so `1.7` equals `1.7.0`. Anything else,
-// including pre-release suffixes, is not comparable and gives false. The
-// order is -1, 0 or 1, as cmp.Compare.
+// CompareVersions compares dotted numeric versions (e.g. "1.7" == "1.7.0"),
+// returning (-1/0/1, true) or (0, false) for non-numeric/pre-release strings.
 func CompareVersions(a, b string) (int, bool) {
 	left, ok := parseVersion(a)
 	if !ok {

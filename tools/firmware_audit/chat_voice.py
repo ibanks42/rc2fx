@@ -1,8 +1,8 @@
-"""Offline Chat stem oracle: execute the pinned vendor mix functions in Unicorn.
+"""Offline Chat stem oracle using Unicorn to run the pinned vendor mix functions.
 
-Two independent machines run identical routing, once with all sources and once
-with pads/playback zeroed at their sources. Production never replays the vendor
-processors. The resulting microphone-only reference tests the Rust capture.
+Runs two machines with identical routing (one with all sources active, one with
+pads and playback zeroed) to generate a mic-only reference for testing the Rust
+capture path.
 """
 from __future__ import annotations
 import argparse
@@ -51,7 +51,7 @@ class Fixture:
         self.output=self.m.allocate(0x128);self.buffer(self.output,[0.,0.])
         self.m.words(self.chat+0x278,self.root+0xc6f28)
         self.m.words(self.chat+0x280,self.stream+0x190)
-        self.m.words(self.chat+0x298,self.strips[2]+0x338) # USB Chat return, never a microphone
+        self.m.words(self.chat+0x298,self.strips[2]+0x338) # USB Chat return (not a microphone)
         self.m.words(self.chat+0x290,self.strips[2]+0x338)
         self.word(self.chat+0x268,recipe['outputState'])
         self.floats(self.chat+0x23c,recipe['outputGain'][0],recipe['outputGain'][1])
@@ -120,8 +120,7 @@ class Fixture:
             self.m.words(entry+0xd0,buffer);self.word(entry+0x1e8,state)
             self.word(entry+0xcc,0 if target==0. else 2)
             self.floats(entry+0x1bc,target,current);self.floats(entry+0xe0,a,b)
-            # No observers in the fixture. Block signal callbacks; arithmetic and
-            # the vendor's transition/state updates still run normally.
+            # Suppress observer callbacks in the fixture while letting gain/state transitions run.
             self.byte(entry+0xc0,1);self.byte(entry+0x90,1)
         self.vector(obj,entries)
     def call(self,address,*args):
@@ -170,15 +169,14 @@ def main():
     images=[Image(args.baseline),Image(args.candidate)]
     for image in images:
         assert image.sha256 in PINS
-        # The queued job's captured frame-count local is sp+0x1b4. Pin its
-        # incoming register, not just argument preservation through a detour.
+        # Verify the incoming register (w4) stored to the queued job's frame-count local at sp+0x1b4.
         mixer=PINS[image.sha256][0]
         store=next(i for i in image.instructions(mixer) if i.address==mixer+0x1c)
         assert store.mnemonic=='str'
         assert image.disassembler.reg_name(store.operands[0].reg)=='w4'
         assert image.disassembler.reg_name(store.operands[1].mem.base)=='sp'
         assert store.operands[1].mem.disp==0x1b4
-    # Full relocated instruction comparison, not just 16-byte signatures.
+    # Verify full relocation-normalized function equivalence, not just 16-byte prefixes.
     for old,new in zip(PINS[images[0].sha256],PINS[images[1].sha256]):
         assert counterpart(images[1],images[0],new)==old,(hex(old),hex(new))
     corpus=[]

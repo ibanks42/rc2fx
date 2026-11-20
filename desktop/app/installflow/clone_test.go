@@ -2,9 +2,8 @@ package installflow
 
 import "reflect"
 
-// deepCopy copies a test value deeply: slices, maps and pointers are copied,
-// not shared, so changing the copy leaves the original alone.
-// Unexported fields are copied shallowly.
+// deepCopy clones v for tests so mutations to slices, maps, or pointers don't
+// leak back into the original. Unexported struct fields are copied shallowly.
 func deepCopy[T any](v T) T {
 	var out T
 	copyValue(reflect.ValueOf(&out).Elem(), reflect.ValueOf(&v).Elem())

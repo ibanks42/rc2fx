@@ -8,16 +8,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// VelopackLocator is only given on Linux; elsewhere Velopack's own choice is
-// already private to the user.
+// VelopackLocator is unused on Windows because Velopack's default packages
+// path is already per-user.
 func VelopackLocator() (LocatorConfig, bool) { return LocatorConfig{}, false }
 
-// PackagesDir is where Velopack keeps this copy's packages:
-// auto_locate_app_manifest(FromCurrentExe).get_packages_dir() of velopack
-// 1.3.39 on Windows, which the C library does not offer. The install root
-// is the folder with Update.exe beside or above `current\`; its `packages`
-// folder when the root is writable, else %LocalAppData%\<id>\packages.
-// ok is false when Velopack did not install this copy.
+// PackagesDir mirrors Velopack 1.3.39's Windows locator (not exposed by
+// velopack_libc): <root>\packages if the install root is writable, otherwise
+// %LocalAppData%\<id>\packages.
 func PackagesDir() (string, bool) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -41,14 +38,14 @@ func PackagesDir() (string, bool) {
 	}
 	appData, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, 0)
 	if err != nil {
-		// Velopack keeps root\packages then, and says updates may not work.
+		// Fall back to root\packages, matching Velopack's behavior.
 		return filepath.Join(root, "packages"), true
 	}
 	return filepath.Join(appData, m.ID, "packages"), true
 }
 
-// writable is velopack's misc::is_directory_writable: a test file that
-// deletes itself on close.
+// writable checks write access by creating a self-deleting probe file, matching
+// Velopack's is_directory_writable.
 func writable(dir string) bool {
 	name, err := windows.UTF16PtrFromString(filepath.Join(dir, ".velopack_dir_test"))
 	if err != nil {
@@ -64,5 +61,4 @@ func writable(dir string) bool {
 	return true
 }
 
-// EnsurePrivate is a Linux check; elsewhere the folder is the user's own.
 func EnsurePrivate(dir string) error { return nil }

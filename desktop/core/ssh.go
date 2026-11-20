@@ -9,49 +9,34 @@ import (
 	"unicode"
 )
 
-// Developer SSH access managed over USB 1 without reflashing.
+// Managed developer SSH access over USB 1 (no reflashing required).
 //
-// RØDE's firmware runs OpenSSH with key-only root login and an empty
-// `authorized_keys`. RC2FX can add one key of its own to that file, marked as
-// RC2FX's, and remove it again; every other key is reported and left alone.
-// Removing the key stops new logins; it does not end sessions already open.
+// RØDE's firmware runs OpenSSH with key-only root login. RC2FX adds/removes a
+// single tagged key in authorized_keys and leaves any other keys untouched.
+// Removing the key blocks new logins without killing active sessions.
 
-// MaxSSHPublicKey is the longest public key line accepted, far above an
-// Ed25519 key's length.
 const MaxSSHPublicKey = 512
 
-// SSHStatus is what the mixer reports about SSH access. `managed`,
-// `unmanagedKeys` and `hostKeys` are required, so a malformed reply is an
-// error rather than a confident "off"; unknown extra fields are accepted.
+// SSHStatus is returned by GET/PUT api/v1/ssh. Core fields are required so
+// malformed replies fail loudly; unknown extra fields are allowed.
 type SSHStatus struct {
-	// The RC2FX-managed key is installed.
-	Managed bool `json:"managed"`
-	// `SHA256:…` of the managed key, when installed.
-	ManagedFingerprint *string `json:"managedFingerprint,omitempty"`
-	// Other `authorized_keys` lines, such as a key built into an earlier
-	// flash. RC2FX never changes them.
-	UnmanagedKeys uint32 `json:"unmanagedKeys"`
-	// The mixer's SSH server public host keys, for pinning.
-	HostKeys []string `json:"hostKeys"`
-	// Whether the SSH server was seen running; nil if that could not be
-	// determined.
-	ServerRunning *bool   `json:"serverRunning,omitempty"`
-	Detail        *string `json:"detail,omitempty"`
+	Managed            bool     `json:"managed"`
+	ManagedFingerprint *string  `json:"managedFingerprint,omitempty"` // "SHA256:..." when installed
+	UnmanagedKeys      uint32   `json:"unmanagedKeys"`                // other authorized_keys entries left untouched
+	HostKeys           []string `json:"hostKeys"`                     // server public host keys for pinning
+	ServerRunning      *bool    `json:"serverRunning,omitempty"`      // nil if indeterminate
+	Detail             *string  `json:"detail,omitempty"`
 }
 
 func (SSHStatus) AllowUnknownJSONFields() {}
 
-// The most host keys a reply may list; a server has one per key type.
-const maxHostKeys = 16
+const (
+	maxHostKeys    = 16
+	maxHostKey     = 2048
+	maxFingerprint = 128
+)
 
-// The longest host key line, above a 4096-bit RSA key's.
-const maxHostKey = 2048
-
-// `SHA256:` and 43 characters of base64, with room for a longer hash.
-const maxFingerprint = 128
-
-// Validate refuses text the mixer's SSH server could not have produced:
-// these fields are shown as they arrive, and host keys are pinned.
+// Validate rejects malformed or unsafe text before display or host-key pinning.
 func (s SSHStatus) Validate() error {
 	invalid := len(s.HostKeys) > maxHostKeys
 	for _, key := range s.HostKeys {
@@ -146,8 +131,8 @@ func (k Ed25519PublicKey) Fingerprint() string {
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:])
 }
 
-// decodeBase64 is padded standard base64 that, like the mixer's, does not check
-// the unused low bits of the last group.
+// decodeBase64 decodes padded standard base64 without checking unused trailing
+// bits, matching the mixer's decoder.
 func decodeBase64(text string) ([]byte, bool) {
 	value := func(c byte) (uint32, bool) {
 		switch {

@@ -36,10 +36,8 @@ def current_app_version(root=Path(".")):
     return version
 
 
-# The Go desktop's copy of the app version (installer.AppVersion, which
-# packages are named with and the app reports; package model refers to it
-# rather than keeping a copy). The mock mixer's runtime version tracks
-# config/mixer-release.json separately.
+# Go desktop version constant kept in sync with config/app-release.json.
+# The mock mixer tracks config/mixer-release.json separately.
 GO_VERSIONS = {
     Path("desktop/installer/installer.go"): "const AppVersion",
 }
@@ -94,8 +92,7 @@ def prepare(bump):
     subprocess.run(cliff + history + ["--tag", tag, "--strip", "all", "--output", str(notes)], check=True)
     if not notes.read_text().strip():
         raise ValueError("Release notes are empty")
-    # Release packages never bundle the mixer software; the firmware installer
-    # downloads it.
+    # Release packages don't bundle the mixer software; the firmware installer downloads it.
     with notes.open("a") as output:
         output.write("\nMixer software is downloaded separately by the firmware installer.\n")
     changelog = Path("CHANGELOG.md")
@@ -117,7 +114,7 @@ def prepare(bump):
 
 def commit():
     if os.environ.get("ACT"):
-        # act copies the host index and any locks; use a container-only index.
+        # act copies the host index and lock files; use an isolated index in the container.
         os.environ["GIT_INDEX_FILE"] = str((OUTPUT / "git-index").resolve())
         git("read-tree", "HEAD")
     plan = json.loads((OUTPUT / "plan.json").read_text())

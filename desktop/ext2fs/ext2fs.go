@@ -8,8 +8,8 @@ package ext2fs
 
 #include <stdlib.h>
 
-// shim/shim.c, with plain C types only, so this side never depends on
-// libext2fs's structure layouts. errcode_t is long; ext2_ino_t is 32 bits.
+// Declarations from shim/shim.c using plain C types to avoid depending on
+// libext2fs struct layouts. errcode_t is long; ext2_ino_t is 32-bit.
 long rc2fx_ext2fs_open(const char *device, unsigned long long offset, int writable, void **fs);
 int rc2fx_ext2fs_needs_recovery(void *fs);
 long rc2fx_ext2fs_close(void *fs);
@@ -29,29 +29,29 @@ import (
 	"unsafe"
 )
 
-// opening serializes Open: the shim adds libext2fs's error table on the
-// first open, which is not safe to race.
+// opening serializes Open calls because the C shim registers libext2fs's error
+// table on first open, which isn't thread-safe.
 var opening sync.Mutex
 
 func check(code C.long) error {
 	if code == 0 {
 		return nil
 	}
-	// error_message returns a static or thread-local NUL-terminated string
-	// for any code. `long` is 64 bits on Linux and macOS, 32 on Windows.
+	// error_message returns a static or thread-local NUL-terminated string.
+	// C long is 64-bit on Linux/macOS and 32-bit on Windows.
 	return &Error{Code: int64(code), Message: C.GoString(C.rc2fx_ext2fs_error(code))}
 }
 
-// Filesystem is an open ext4 filesystem. Close flushes what was written; a
-// Filesystem dropped without Close is still closed by the garbage
-// collector, ignoring errors. It is not safe for concurrent use.
+// Filesystem represents an open ext4 filesystem. Callers should call Close to
+// flush writes; a finalizer closes leaked handles as a fallback. Not safe for
+// concurrent use.
 type Filesystem struct {
 	fs       unsafe.Pointer
 	writable bool
 }
 
-// Open opens the filesystem that starts offset bytes into device (a disk
-// device or an image file). Read-only unless writable.
+// Open opens the ext4 filesystem starting at byte offset inside device (a block
+// device or image file). It opens read-only unless writable is true.
 func Open(device string, offset uint64, writable bool) (*Filesystem, error) {
 	if strings.IndexByte(device, 0) >= 0 {
 		return nil, invalid("invalid device path")
@@ -81,9 +81,8 @@ func (f *Filesystem) handle() (unsafe.Pointer, error) {
 	return f.fs, nil
 }
 
-// NeedsRecovery is whether the journal holds changes not yet replayed: the
-// filesystem was not shut down cleanly, and what libext2fs reads may be out
-// of date.
+// NeedsRecovery reports whether the journal has unreplayed transactions
+// (meaning the filesystem wasn't unmounted cleanly and reads may be stale).
 func (f *Filesystem) NeedsRecovery() bool {
 	fs, err := f.handle()
 	if err != nil {
@@ -93,8 +92,8 @@ func (f *Filesystem) NeedsRecovery() bool {
 	return C.rc2fx_ext2fs_needs_recovery(fs) != 0
 }
 
-// Lookup looks up a path relative to the filesystem's root; nil when it
-// doesn't exist. A final symlink is not followed.
+// Lookup resolves path relative to the filesystem root, returning nil if it
+// does not exist. A trailing symlink is not followed.
 func (f *Filesystem) Lookup(path string) (*Entry, error) {
 	fs, err := f.handle()
 	if err != nil {
@@ -121,7 +120,7 @@ func (f *Filesystem) Lookup(path string) (*Entry, error) {
 	return &Entry{Inode: uint32(inode), Regular: regular != 0, Size: uint64(size)}, nil
 }
 
-// Read is the contents of a regular file.
+// Read returns the full contents of a regular file.
 func (f *Filesystem) Read(entry Entry) ([]byte, error) {
 	fs, err := f.handle()
 	if err != nil {
@@ -135,7 +134,6 @@ func (f *Filesystem) Read(entry Entry) ([]byte, error) {
 		return nil, invalid("file too large")
 	}
 	data := make([]byte, int(entry.Size))
-	// The buffer holds exactly entry.Size bytes.
 	code := C.rc2fx_ext2fs_read(fs, C.uint(entry.Inode), (*C.uchar)(unsafe.SliceData(data)), C.ulonglong(entry.Size))
 	if err := check(code); err != nil {
 		return nil, err
@@ -143,8 +141,8 @@ func (f *Filesystem) Read(entry Entry) ([]byte, error) {
 	return data, nil
 }
 
-// Overwrite replaces a regular file's contents with data, which must be
-// exactly as long as the file. Nothing else about the file changes.
+// Overwrite replaces a regular file's contents in place. len(data) must match
+// entry.Size exactly; metadata and file size are left untouched.
 func (f *Filesystem) Overwrite(entry Entry, data []byte) error {
 	fs, err := f.handle()
 	if err != nil {
@@ -161,7 +159,8 @@ func (f *Filesystem) Overwrite(entry Entry, data []byte) error {
 	return check(code)
 }
 
-// Close flushes everything written and closes. Later calls do nothing.
+// Close flushes pending writes and releases the handle. Subsequent calls are
+// no-ops.
 func (f *Filesystem) Close() error {
 	if f == nil || f.fs == nil {
 		return nil
@@ -169,6 +168,5 @@ func (f *Filesystem) Close() error {
 	fs := f.fs
 	f.fs = nil
 	runtime.SetFinalizer(f, nil)
-	// The handle is closed once, here.
 	return check(C.rc2fx_ext2fs_close(fs))
 }

@@ -19,15 +19,11 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// authorizedLine is the canonical `authorized_keys` line for a key:
-// algorithm and base64, no comment. This is the exact text written into the
-// patched firmware.
 func authorizedLine(key ssh.PublicKey) []byte {
 	return ssh.MarshalAuthorizedKey(key)
 }
 
-// singleKey parses text holding exactly one plain public key line (no
-// options).
+// singleKey parses exactly one plain public key line (no options or extra keys).
 func singleKey(text []byte) ssh.PublicKey {
 	if len(text) > 20000 || !utf8.Valid(text) {
 		return nil
@@ -64,8 +60,8 @@ func expandHome(value string) (string, error) {
 	return value, nil
 }
 
-// privatePublicKey is the public half of an OpenSSH private key, which may
-// be encrypted: its public key is readable without the passphrase.
+// privatePublicKey extracts the public key from an OpenSSH private key,
+// including passphrase-encrypted keys (whose public half is unencrypted).
 func privatePublicKey(text []byte) (ssh.PublicKey, error) {
 	key, err := ssh.ParseRawPrivateKey(text)
 	var missing *ssh.PassphraseMissingError
@@ -82,9 +78,8 @@ func privatePublicKey(text []byte) (ssh.PublicKey, error) {
 	return signer.PublicKey(), nil
 }
 
-// ensureKey returns the private key path and its canonical public line,
-// creating an Ed25519 pair when neither half exists. Existing keys are only
-// validated.
+// ensureKey validates an existing key pair or generates a new Ed25519 pair if
+// neither half exists, returning the private key path and authorized_keys line.
 func ensureKey(value string) (string, []byte, error) {
 	if value == "" {
 		return "", nil, Error("missing SSH key path")
@@ -150,7 +145,7 @@ func ensureKey(value string) (string, []byte, error) {
 	return private, authorizedLine(parsed), nil
 }
 
-// SSHKeyPath is where the desktop app's developer SSH key lives.
+// SSHKeyPath returns the path to the developer SSH private key.
 func SSHKeyPath() (string, error) {
 	path := DefaultKey()
 	if !filepath.IsAbs(path) {
@@ -159,10 +154,8 @@ func SSHKeyPath() (string, error) {
 	return path, nil
 }
 
-// SSHPublicKey is the desktop app's developer SSH public key as one
-// `authorized_keys` line (`ssh-ed25519 BASE64`), creating the Ed25519 key
-// pair at SSHKeyPath if neither half exists. The private key never leaves
-// this computer.
+// SSHPublicKey returns the developer Ed25519 public key line, generating the
+// key pair at SSHKeyPath if neither half exists.
 func SSHPublicKey() (string, error) {
 	path, err := SSHKeyPath()
 	if err != nil {
@@ -179,16 +172,13 @@ func SSHPublicKey() (string, error) {
 	return key.AsStr(), nil
 }
 
-// PinnedHost is where a mixer's SSH host keys are pinned, for
-// `ssh -o UserKnownHostsFile=<known_hosts> -o HostKeyAlias=<alias>`.
+// PinnedHost holds the HostKeyAlias and UserKnownHostsFile path for a mixer.
 type PinnedHost struct {
-	// Alias is `rc2fx-` and twelve hex digits from the mixer's serial:
-	// stable across network addresses.
-	Alias      string
+	Alias      string // "rc2fx-" + 12 hex chars of serial SHA-256
 	KnownHosts string
 }
 
-// MixerHostAlias is the `HostKeyAlias` for the mixer with this USB serial.
+// MixerHostAlias returns the stable SSH HostKeyAlias derived from serial.
 func MixerHostAlias(serial string) (string, error) {
 	if strings.TrimSpace(serial) == "" {
 		return "", Error("connect the mixer so its SSH identity can be matched to it")
@@ -196,9 +186,8 @@ func MixerHostAlias(serial string) (string, error) {
 	return "rc2fx-" + archive.Sum([]byte(serial))[:12], nil
 }
 
-// PinMixerHostKeys pins hostKeys (public host key lines the mixer reported
-// over USB 1) for the mixer serial in the installer cache's `known_hosts`.
-// Only that mixer's alias lines are replaced; every other line is kept.
+// PinMixerHostKeys replaces this mixer's alias entries in known_hosts with the
+// Ed25519 host keys reported over USB 1, preserving all other lines.
 func PinMixerHostKeys(serial string, hostKeys []string) (*PinnedHost, error) {
 	work, ok := DefaultWork()
 	if !ok {
@@ -207,12 +196,8 @@ func PinMixerHostKeys(serial string, hostKeys []string) (*PinnedHost, error) {
 	return pinHostKeysIn(work, serial, hostKeys)
 }
 
-// maxHostKeys is at most how many host keys are read from one report.
 const maxHostKeys = 16
 
-// knownHosts: one writer of the cache's `known_hosts` at a time in this
-// process, so overlapping pins for different mixers cannot drop each
-// other's lines.
 var knownHosts sync.Mutex
 
 func isASCIISpace(b byte) bool {
@@ -227,15 +212,12 @@ func pinHostKeysIn(work, serial string, hostKeys []string) (*PinnedHost, error) 
 	if len(hostKeys) > maxHostKeys {
 		return nil, Error("the mixer reported too many SSH host keys")
 	}
-	// Only Ed25519 host keys are pinned, each parsed in full. OpenSSH prefers
-	// the key types known for a host, so the mixer's other types are not
-	// needed; a report without a valid Ed25519 key changes nothing.
+	// Only pin Ed25519 keys; OpenSSH prefers known key types for the host.
 	var lines []string
 	for _, key := range hostKeys {
 		if !strings.HasPrefix(key, "ssh-ed25519 ") {
 			continue
 		}
-		// The report carries `type key` only, so anything more is malformed.
 		if len(strings.Split(key, " ")) != 2 {
 			return nil, Error("the mixer reported a malformed SSH host key")
 		}

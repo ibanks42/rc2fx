@@ -1,27 +1,16 @@
 #!/usr/bin/env bash
-# fetch-velopack.sh [GOOS-GOARCH...]: Velopack's C library for builds with the
-# `velopack` tag (desktop/app/selfupdate/vpkc). Fetches velopack_libc at
-# exactly the version vpk packs with (.github/scripts/setup-vpk.sh), checks
-# the zip against a pinned SHA-256 and lays it out in
-# desktop/third_party/velopack (gitignored):
+# fetch-velopack.sh [GOOS-GOARCH...]
 #
+# Fetch velopack_libc at the version/SHA-256 pinned in config/velopack.json
+# and stage it under desktop/third_party/velopack (gitignored):
 #   include/Velopack.h
-#   linux-amd64/libvelopack_libc.a     (and linux-arm64)
-#   darwin-arm64/libvelopack_libc.a    and darwin-amd64/libvelopack_libc.a:
-#                                      target darwin-universal fetches both,
-#                                      one per slice of the universal app
-#   windows-amd64/velopack_libc.dll    ship beside rc2fx.exe
-#   windows-amd64/velopack_libc.def    its exports, from Velopack.h
-#   windows-amd64/libvelopack_libc.dll.a  MinGW import library, when dlltool
-#                                      or llvm-dlltool is found (otherwise
-#                                      GNU ld links the DLL itself)
+#   <linux-amd64|linux-arm64|darwin-arm64|darwin-amd64>/libvelopack_libc.a
+#   windows-amd64/velopack_libc.dll, .def, and libvelopack_libc.dll.a (when dlltool is available)
 #
-# The Windows DLL is MSVC-built; cgo links it from MinGW through its plain C
-# exports only, so the two C runtimes never meet. On macOS each slice links
-# its architecture's static library; the zip's universal
-# velopack_libc_osx.dylib is not used, since its install name is a path on
-# Velopack's build machine. Targets default to this machine's `go env GOOS
-# GOARCH`, except that macOS always gets darwin-universal.
+# Windows links the MSVC DLL from MinGW via its C exports only so the two C
+# runtimes stay isolated. macOS links per-arch static libs instead of the
+# universal dylib (whose install name points to Velopack's build machine).
+# Defaults to host GOOS-GOARCH, or darwin-universal on macOS.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -80,7 +69,7 @@ for target in "${expanded[@]}"; do
     mkdir -p "$out/$target"
     case $target in
         windows-*)
-            # The import library the zip carries names velopack_libc.dll.
+            # Rename to match the LIBRARY name in the zip's import library.
             cp "$tmp/x/$src" "$out/$target/velopack_libc.dll"
             {
                 printf 'LIBRARY velopack_libc.dll\nEXPORTS\n'

@@ -1,16 +1,15 @@
-// Package delta is delta encoding for an in-place mixer payload upload.
+// Package delta implements delta encoding for in-place mixer payload uploads.
 //
-// The signed envelope (`RC2FX-EMBEDDED-PAYLOAD 1`) is still the authority:
-// this package only carries it more cheaply over a slow USB link. Each file
-// is sent whole (zstd), unchanged (copy), or as a zstd patch against the copy
-// installed on the mixer. Decoding rebuilds the exact envelope and checks
-// every file against the manifest inside it; the mixer then verifies the
-// rebuilt envelope against the signed target exactly as it did before.
+// The signed RC2FX-EMBEDDED-PAYLOAD 1 envelope remains the source of truth;
+// delta encoding just reduces transfer size over USB. Each file is sent whole
+// (zstd), skipped (copy), or patched against the mixer's installed copy via
+// zstd raw prefix matching. On the mixer, decoding reconstructs the exact
+// envelope bytes and verifies every file against the manifest before normal
+// signature verification runs.
 //
-// Port of crates/rc2fx-delta. The mixer keeps the Rust decoder, which drives
-// the C zstd library with a raw reference prefix (`zstd --patch-from`) and a
-// window bound of 2^25; Decode here is its twin for tests. What the encoder
-// writes is pinned by fixtures/delta, which the Rust decoder reads too.
+// Port of crates/rc2fx-delta. The mixer runs the Rust decoder (libzstd with
+// --patch-from semantics and a 2^25 window cap), while Decode here mirrors it
+// for tests. Wire compatibility is pinned by shared fixtures in fixtures/delta.
 package delta
 
 import (
@@ -32,27 +31,25 @@ const (
 	Magic         = "RC2FX-DELTA 1\n"
 	envelopeMagic = "RC2FX-EMBEDDED-PAYLOAD 1\n"
 	maxLine       = 512
-	// The head is the envelope header and its manifest, not any file bytes.
-	maxHead    = 64 * 1024
-	maxEntries = 256
-	// The decoder refuses a frame that needs a larger window than this, so a
-	// hostile delta cannot make it allocate wildly.
+	maxHead       = 64 * 1024 // envelope header + manifest only
+	maxEntries    = 256
+	// Cap decoder window at 32 MiB to bound memory allocation on untrusted input.
 	windowLogMax = 25
-	// A compressed frame may be slightly larger than the bytes it replaces.
+	// Allow compressed frames to slightly exceed the uncompressed envelope size.
 	opOverhead = 1 << 20
 )
 
-// Entry is one file in the envelope's manifest.
+// Entry describes one file in an envelope manifest.
 type Entry struct {
 	Name   string
 	SHA256 string
 	Size   uint64
 }
 
-// EnvelopeEntries parses an envelope's head: the three header lines and the
-// manifest. It returns the head's length and the manifest. The manifest has
-// no fixed file count, so it ends when the manifest bytes plus every
-// declared size fill the envelope's declared body length.
+// EnvelopeEntries parses an envelope's header and manifest, returning the byte
+// length of the head and its entries. Because the manifest has no explicit
+// entry count, parsing stops once the manifest bytes plus summed file sizes
+// reach the declared body length.
 func EnvelopeEntries(envelope []byte) (int, []Entry, error) {
 	if len(envelope) < len(envelopeMagic) {
 		return 0, nil, errors.New("the envelope header is truncated")
@@ -88,7 +85,7 @@ func EnvelopeEntries(envelope []byte) (int, []Entry, error) {
 	var entries []Entry
 	var sizes uint64
 	for {
-		// A payload with no files is still a complete manifest.
+		// An empty payload is still valid.
 		if saturatingAdd(uint64(cursor-body), sizes) == length {
 			return cursor, entries, nil
 		}
@@ -141,12 +138,12 @@ func EnvelopeEntries(envelope []byte) (int, []Entry, error) {
 	}
 }
 
-// Encode encodes the signed envelope as a delta.
+// Encode builds a delta stream for envelope.
 //
-// installed maps each file the mixer has to its SHA-256. bases maps a file
-// name to bytes the app holds; they are used as a patch prefix only when they
-// still hash to what the mixer reports, otherwise the app's copy is stale and
-// the file is sent whole. level is a zstd level (1-22); the app uses 19.
+// installed maps installed filenames on the mixer to their SHA-256 hex digests.
+// bases holds local copies the app can patch against; a base is only used if
+// its SHA-256 matches installed[name], otherwise the file is sent whole. level
+// is a zstd compression level (1-22; the app uses 19).
 func Encode(envelope []byte, installed map[string]string, bases map[string][]byte, level int) ([]byte, error) {
 	head, entries, err := EnvelopeEntries(envelope)
 	if err != nil {
@@ -202,18 +199,14 @@ func Encode(envelope []byte, installed map[string]string, bases map[string][]byt
 	return out, nil
 }
 
-// compress writes one zstd frame the mixer's decoder accepts: no dictionary
-// ID (the C decoder refuses a frame naming a dictionary when it only holds a
-// raw prefix), a window no larger than 2^window (the C decoder's bound is
-// 2^25), the content size in the header, no checksum (the manifest's SHA-256
-// covers the bytes), and a real frame even for an empty file (the delta
-// refuses a zero compressed length).
+// compress emits a single zstd frame compatible with the mixer's C decoder: no
+// dictionary ID (libzstd rejects a dict ID when given a raw prefix), window
+// bounded to 2^window (<= 2^25), no content checksum (covered by the manifest
+// SHA-256), and a valid frame even for empty inputs.
 //
-// With a prefix, the frame is a patch against it, like `zstd --patch-from`:
-// the prefix is history before the frame's first byte, so every match into
-// it is an offset within the window. The window covers the prefix and the
-// new file, because the C streaming decoder keeps the prefix reachable only
-// until its own window buffer wraps.
+// When prefix is non-empty, it acts as raw history before the frame (matching
+// `zstd --patch-from`). The window must span both prefix and data so the C
+// streaming decoder doesn't evict the prefix before finishing.
 func compress(data, prefix []byte, level, window int) ([]byte, error) {
 	options := []zstd.EOption{
 		zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(level)),
@@ -221,12 +214,9 @@ func compress(data, prefix []byte, level, window int) ([]byte, error) {
 		zstd.WithEncoderConcurrency(1),
 		zstd.WithEncoderCRC(false),
 		zstd.WithZeroFrames(true),
-		// The C encoder's rule (ZSTD_writeFrameHeader): a single segment
-		// whenever the window covers the content, so the frame header has
-		// the shape the Rust encoder writes.
+		// Match libzstd's ZSTD_writeFrameHeader rule for single-segment frames.
 		zstd.WithSingleSegment(len(data) <= 1<<window),
 	}
-	// An empty prefix is no prefix, for the C decoder as here.
 	if len(prefix) > 0 {
 		options = append(options, zstd.WithEncoderDictRaw(0, prefix))
 	}
@@ -238,9 +228,8 @@ func compress(data, prefix []byte, level, window int) ([]byte, error) {
 	return encoder.EncodeAll(data, make([]byte, 0, len(data)/2+64)), nil
 }
 
-// windowLog is the window a patch needs to reach from the start of the base
-// to the end of the new file. Plain compression only has to reach its own
-// start.
+// windowLog returns the zstd window log needed to span n bytes (clamped to
+// [20, windowLogMax]).
 func windowLog(n uint64) int {
 	needed := 0
 	if n > 1 {
@@ -283,8 +272,7 @@ func lineAt(b []byte, start int) (string, int, error) {
 	return "", 0, errors.New("an envelope header line is too long")
 }
 
-// parseU64 parses as Rust's u64 FromStr does: an optional leading '+', then
-// one or more ASCII digits, no overflow.
+// parseU64 matches Rust's u64::from_str (optional leading '+', ASCII digits).
 func parseU64(text string) (uint64, bool) {
 	digits := strings.TrimPrefix(text, "+")
 	if digits == "" {
@@ -328,8 +316,7 @@ func sum(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// rustDebug quotes s as Rust's `{:?}` does for ASCII text, which is all an
-// envelope header may hold.
+// rustDebug formats ASCII text like Rust's {:?} Debug formatter.
 func rustDebug(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')

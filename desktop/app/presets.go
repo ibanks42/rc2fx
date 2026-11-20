@@ -1,7 +1,6 @@
 package app
 
-// Presets saved on the mixer: save the current settings, then
-// load or delete each one.
+// On-device preset library management (list, save, load, delete).
 
 import (
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// presetPendingKind is which preset request is out.
 type presetPendingKind int
 
 const (
@@ -26,15 +24,12 @@ const (
 	presetPendingDelete
 )
 
-// presetPending is the preset request that is out; revision and original
-// belong to a load.
 type presetPending struct {
 	kind     presetPendingKind
-	revision uint64
-	original []core.Target
+	revision uint64        // used by presetPendingLoad
+	original []core.Target // used by presetPendingLoad
 }
 
-// PresetLibrary is the preset list and the request that is out.
 type PresetLibrary struct {
 	items         []core.PresetSummary
 	name          gk.InputState
@@ -42,7 +37,6 @@ type PresetLibrary struct {
 	confirmDelete *string
 }
 
-// newPresetLibrary is an empty library with its name input (call in init).
 func newPresetLibrary(cx *gk.Cx) PresetLibrary {
 	return PresetLibrary{name: gk.NewInputState(cx).Placeholder("Preset name").Build()}
 }
@@ -132,8 +126,6 @@ func (a *App) deletePreset(cx *gk.Cx, id string) {
 	a.notify(cx)
 }
 
-// refreshAfterPreset asks for the mixer's settings after a preset reply
-// that leaves them uncertain.
 func (a *App) refreshAfterPreset() {
 	a.awaitingRefresh = a.command(transport.CommandRefresh{Generation: a.generation}) || a.awaitingRefresh
 }
@@ -202,8 +194,7 @@ func (a *App) presetReply(cx *gk.Cx, reply transport.PresetReply, err *transport
 			default:
 				a.message = "Preset saved to mixer • waiting for applied telemetry"
 			}
-			// A stream event can precede the request's reply, including a
-			// later controller's write. Refresh after resolving our snapshot.
+			// Refresh after acknowledging since a concurrent stream event may have arrived first.
 			a.refreshAfterPreset()
 		default:
 			unexpected = true
@@ -221,8 +212,6 @@ func (a *App) presetReply(cx *gk.Cx, reply transport.PresetReply, err *transport
 	}
 }
 
-// presetPanel is the presets saved on the mixer: save the current settings,
-// then load or delete each one.
 func (a *App) presetPanel(cx *gk.Cx) gk.Element {
 	ready := a.presetsReady()
 	canSnapshot := ready && !a.session.Dirty() && !a.session.Conflict

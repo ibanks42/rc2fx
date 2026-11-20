@@ -1,10 +1,6 @@
-"""Host-only tests: python3 -m unittest discover -s mixer/jackerr/tests -p 'test_jackerr.py'.
+"""Host tests for rc2fx_jackerr.c and rc2fx_jackerr_snapshot.c.
 
-Builds the jackd error recorder (with its test hooks), its on-device snapshot
-reader and a harness with the host C compiler. The harness reaches
-jack_error() through a stand-in vendor library whose own jack_error() is a
-no-op, and gets the recorder by LD_PRELOAD, the way jackd would. Every ring is
-read through the snapshot reader, as on the device.
+Run with: python3 -m unittest discover -s mixer/jackerr/tests -p 'test_jackerr.py'
 """
 import os
 import shutil

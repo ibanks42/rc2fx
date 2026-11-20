@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// Shaped like `ioreg -r -c IOUSBHostDevice -l -a`: the mixer's gadget with
-// its interface and mass-storage nub repeating the IDs, a whole disk with a
-// partition below it; an ordinary USB stick; and a second mixer whose disk
-// has not appeared yet.
+// Fixture modeled on `ioreg -r -c IOUSBHostDevice -l -a`: one mixer with a
+// whole disk and partition, an unrelated USB drive, and a second mixer whose
+// disk hasn't enumerated yet.
 const macFixture = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -95,8 +94,6 @@ func TestMacFindsOnlyTheMixersWholeDisk(t *testing.T) {
 	}
 }
 
-// A disk below another vendor's device that is itself below a node that
-// carries the mixer's IDs is not the mixer's.
 func TestMacNearestUSBDeviceDecides(t *testing.T) {
 	tree := []any{map[string]any{
 		"idVendor": uint64(USBVendor), "idProduct": uint64(USBProduct),

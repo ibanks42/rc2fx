@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
-"""Write the license report for Velopack's bundled programs.
+"""Generate the license report for Velopack's bundled helper binaries.
 
-The Windows and macOS packages include Velopack's launcher, updater and
-installer, and the AppImage its updater (UpdateNix), all built by Velopack
-from its own Rust workspace. Their dependencies' notices must ship with RC2FX
-like the app's own, so this runs cargo-about on that workspace at the pinned
-tag, for the targets Velopack builds them for (Windows, macOS, and the static
-musl Linux build UpdateNix comes from), under the licenses RC2FX's about.toml
-accepts plus VELOPACK_ACCEPTED, and keeps only what the license document
-uses: each license's name, text and the crates using it.
+Runs cargo-about against Velopack's Rust workspace at the pinned tag for the
+shipped targets (Windows, macOS arm64/x86_64, and static Linux musl for
+UpdateNix) and writes `licenses/velopack-VERSION.json`.
 
-  velopack-licenses.py VERSION
-      Writes licenses/velopack-VERSION.json. Needs git, cargo and
-      cargo-about. Run it whenever VPKVersion in
-      desktop/internal/xtask/licenses/licenses.go (with setup-vpk.sh and
-      desktop/scripts/fetch-velopack.sh) changes.
+Usage: velopack-licenses.py VERSION
+
+Requires git, cargo, and cargo-about. Re-run whenever VPKVersion in
+desktop/internal/xtask/licenses/licenses.go (plus setup-vpk.sh and
+desktop/scripts/fetch-velopack.sh) is bumped.
 """
 
 import json
@@ -26,13 +21,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Licenses accepted for Velopack's report only, beyond about.toml's (which
-# covers the mixer's Rust): the list about.toml held while the desktop app
-# was Rust and shared it.
+# Extra licenses allowed for Velopack's Rust deps beyond root about.toml.
 VELOPACK_ACCEPTED = [
     "MPL-2.0",
-    # webpki-roots: Mozilla's root certificates, which Velopack's updater
-    # trusts for its downloads. A permissive data license.
+    # webpki-roots (Mozilla root certs used by Velopack's updater).
     "CDLA-Permissive-2.0",
 ]
 
@@ -52,9 +44,7 @@ def main():
         )
         config = Path(work) / "about.toml"
         config.write_text(
-            # Velopack's CI builds UpdateNix for musl, not glibc. The macOS
-            # app is universal: UpdateMac and velopack_libc ship for both
-            # architectures.
+            # UpdateNix is built against musl; macOS ships universal (arm64 + x86_64).
             'targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin", '
             '"x86_64-unknown-linux-musl"]\n'
             "ignore-build-dependencies = true\n"

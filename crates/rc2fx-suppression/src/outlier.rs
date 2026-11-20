@@ -1,9 +1,6 @@
-//! The worker's slowest and latest slow frames and the endpoint's latest
-//! missed and late deadlines, for placing an outlier in a measurement window,
-//! plus the endpoint's first missed and late deadlines in order.
-//! Each record has exactly one writer and is a sequence lock over atomic
-//! words: no allocation, no lock, and a reader that gives up after a few
-//! tries rather than wait for a writer.
+//! Lock-free outlier and deadline-event recording for the worker and callback
+//! endpoint. Uses single-writer atomic seqlocks (`Slot`) so readers never block
+//! writers (bailing out as `Recorded::Busy` after a few retries).
 use std::sync::atomic::{AtomicU64, Ordering, fence};
 
 /// One frame through the worker. Times are CLOCK_MONOTONIC (wall) or the
@@ -160,9 +157,8 @@ impl WorkerOutliers {
 }
 /// Events each history keeps.
 pub const HISTORY: usize = 64;
-/// The first HISTORY events of one kind, in order and never overwritten;
-/// later ones are only counted. One writer; a record is published (its index
-/// + 1) after its words, and the total after that.
+/// First `HISTORY` events of one kind in order (later events are only counted).
+/// Single-writer; each entry publishes `index + 1` after its payload, then bumps `total`.
 pub(crate) struct History {
     total: AtomicU64,
     published: [AtomicU64; HISTORY],

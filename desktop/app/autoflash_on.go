@@ -2,20 +2,16 @@
 
 package app
 
-// The flash autopilot, development builds only (packaging refuses rc2fxdev):
-// with RC2FX_DEV_AUTOFLASH=<result file>, the app opens Install RC2FX, grants
-// access, picks the RC2FX built into it and starts the run exactly as Before
-// you start's button does, so a flash can be repeated unattended through the
-// app's own flow. It writes one line to the result file and quits when the
-// run ends: "ok", "failed: <why>", "repaired: <files>", "damaged: <files>"
-// or "timeout". A finished run's result page is dismissed as Done does.
-// installer/helper starts its helper with `sudo -n` in these builds when
-// RC2FX_DEV_HELPER_SUDO=1, since nobody is there for pkexec's prompt.
+// Dev-only unattended flash runner (packaging rejects rc2fxdev builds).
+// When RC2FX_DEV_AUTOFLASH=<path> is set, this drives the real Install RC2FX UI
+// end-to-end using the bundled firmware, writes a single-line result ("ok",
+// "failed: <why>", "repaired: <files>", "damaged: <files>", or "timeout") to
+// <path>, and exits. Pair with RC2FX_DEV_HELPER_SUDO=1 so the helper uses
+// `sudo -n` instead of prompting via pkexec.
 //
-// RC2FX_DEV_AUTOFLASH_FIX chooses whether the run fixes the mixer's storage
-// first: "off" never, "on" always (also on a mixer running RC2FX), unset as
-// Install decides (only where RC2FX isn't running). The fix's outcome goes
-// to stderr; the result line stays as above.
+// RC2FX_DEV_AUTOFLASH_FIX controls the pre-flash storage fix: "off" skips it,
+// "on" forces it even on a mixer already running RC2FX, and unset lets the
+// installer decide. The fix output goes to stderr.
 
 import (
 	"fmt"
@@ -30,15 +26,12 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// autoFlashTimeout bounds one run, from start to its end;
-// autoFlashStartLimit bounds the wait for a run to be able to start.
 const (
 	autoFlashTimeout    = 25 * time.Minute
 	autoFlashStartLimit = 5 * time.Minute
 	autoFlashSSHWait    = 4 * time.Minute
 )
 
-// autoFlashBlocked says what kept a run from starting.
 func autoFlashBlocked(a *App) string {
 	i := a.installer
 	switch {
@@ -66,19 +59,16 @@ var autoFlash struct {
 	asks                  int
 	askedAt               time.Time
 	launched, startedAt   time.Time
-	// The run's outcome, then developer SSH is enabled before quitting so
-	// the mixer can be examined (a flash leaves it off).
+	// Re-enable developer SSH after flashing (flashing resets it) before exiting.
 	outcome   string
 	outcomeAt time.Time
 	sshSent   bool
 	sshSentAt time.Time
-	// traced is the last progress line written to stderr.
-	traced string
+	traced    string
 }
 
-// autoFlashTrace writes each new step of the run to stderr with the time,
-// so a run's timing can be read afterwards. Byte counts and seconds are left
-// out, so a step is one line.
+// autoFlashTrace logs phase transitions to stderr with timestamps, omitting
+// byte counts and timers so each step produces a single line.
 func autoFlashTrace(a *App) {
 	i := a.installer
 	if i == nil || i.progress == nil {
@@ -92,7 +82,6 @@ func autoFlashTrace(a *App) {
 	}
 }
 
-// autoFlashPoll runs on the app's poll.
 func (a *App) autoFlashPoll(cx *gk.Cx) {
 	result := os.Getenv("RC2FX_DEV_AUTOFLASH")
 	if result == "" || autoFlash.done {
@@ -101,13 +90,11 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 	autoFlashTrace(a)
 	if autoFlash.launched.IsZero() {
 		autoFlash.launched = time.Now()
-		// RC2FX_DEV_AUTOFLASH_SSH_ONLY: no flash, only turn developer SSH on
-		// (after a run that ended before the mixer was back).
+		// Skip flashing and just re-enable developer SSH (useful if a prior run exited before reboot).
 		if os.Getenv("RC2FX_DEV_AUTOFLASH_SSH_ONLY") == "1" {
 			autoFlash.outcome = "ssh only"
 		}
 	}
-	// A run that cannot start in this long won't: say why and stop.
 	if !autoFlash.started && autoFlash.outcome == "" && time.Since(autoFlash.launched) > autoFlashStartLimit {
 		autoFlash.outcome = "not started: " + autoFlashBlocked(a)
 	}
@@ -118,16 +105,15 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 		a.autoFlashFinish(cx, result)
 		return
 	}
-	// RC2FX_DEV_AUTOFLASH_TASK=fix runs the storage fix on its own instead
-	// of an install (mixer on RØDE's firmware).
+	// Run the standalone storage fix flow instead of a full install.
 	if os.Getenv("RC2FX_DEV_AUTOFLASH_TASK") == "fix" {
 		a.autoFixPoll(cx)
 		return
 	}
 	i := a.installer
 	if i == nil {
-		// Without RC2FX running (a stock mixer) the app never connects; the
-		// installer is then the first screen's way in.
+		// A stock mixer won't connect over the RC2FX protocol, so fall back to opening
+		// the installer after a short wait.
 		if !autoFlash.opened && (a.session.Connected || time.Since(autoFlash.launched) > 30*time.Second) {
 			autoFlash.opened = true
 			a.openTask(cx, taskInstall)
@@ -136,17 +122,15 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 	}
 	m := i.model
 	if !autoFlash.started {
-		// Opened just after a flash, the task picks that run up and may show
-		// its result; Done closes it, and the next poll opens a fresh one.
+		// If the task picked up a previous finished run, dismiss it so the next poll starts clean.
 		if m.Finished() && !i.busy() {
 			a.closeTask(cx, false)
 			autoFlash.opened = false
 			return
 		}
 		if !i.access.AllowsFlashing() {
-			// As a person does: ask once the page has settled. The page's
-			// own background requests hold the installer lock, and the
-			// helper's first request would find it taken.
+			// Wait for initial background requests to release the installer lock before
+			// starting the helper.
 			if i.busy() || i.access.Kind == installflow.AccessAsking ||
 				time.Since(autoFlash.askedAt) < 10*time.Second {
 				return
@@ -190,7 +174,6 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 		if last := m.LastRun(); last != nil && last.Fix != nil {
 			fmt.Fprintf(os.Stderr, "autoflash: storage fix %+v (error %q)\n", last.Fix.Reply, last.Fix.Error)
 		}
-		// The result page stays until dismissed; dismiss it as Done does.
 		a.closeTask(cx, true)
 	case m.ImageCheckResult() != nil && m.ImageCheckResult().Status == core.ImageStatusRepaired:
 		autoFlash.outcome = "repaired: " + strings.Join(m.ImageCheckResult().Repaired, " ")
@@ -201,8 +184,8 @@ func (a *App) autoFlashPoll(cx *gk.Cx) {
 	}
 }
 
-// autoFlashFinish turns developer SSH on (as the Developer page's switch
-// does) while the mixer is connected, then records the outcome and quits.
+// autoFlashFinish re-enables developer SSH once the mixer reconnects, writes the
+// result file, and quits the app.
 func (a *App) autoFlashFinish(cx *gk.Cx, result string) {
 	if !autoFlash.sshSent && a.session.Connected && !a.ssh.Change.Busy() {
 		if key, err := installer.SSHPublicKey(); err == nil {
@@ -212,8 +195,7 @@ func (a *App) autoFlashFinish(cx *gk.Cx, result string) {
 		}
 	}
 	waiting := autoFlash.sshSent && a.ssh.Change.Sent() && time.Since(autoFlash.sshSentAt) < 30*time.Second
-	// The mixer may still be restarting when the run ends; give it a few
-	// minutes to connect so SSH can be turned on.
+	// Give the mixer time to finish rebooting and reconnect so we can turn SSH back on.
 	if waiting || (!autoFlash.sshSent && time.Since(autoFlash.outcomeAt) < autoFlashSSHWait) {
 		return
 	}
@@ -223,8 +205,6 @@ func (a *App) autoFlashFinish(cx *gk.Cx, result string) {
 	gk.Quit(cx)
 }
 
-// autoFixPoll drives the fix-only task as a person would: open it from the
-// first screen, grant access, start, and record how it ended.
 func (a *App) autoFixPoll(cx *gk.Cx) {
 	i := a.installer
 	if i == nil || i.fix == nil {
@@ -261,7 +241,7 @@ func (a *App) autoFixPoll(cx *gk.Cx) {
 		if f.Reply != nil {
 			fmt.Fprintf(os.Stderr, "autoflash: storage fix %+v\n", *f.Reply)
 		}
-		// No SSH on RØDE's firmware: finish without it.
+		// Stock RØDE firmware doesn't have SSH, so skip waiting for it.
 		autoFlash.sshSent = true
 		a.closeTask(cx, false)
 	case time.Since(autoFlash.startedAt) > autoFlashTimeout:

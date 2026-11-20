@@ -1,38 +1,31 @@
-//! Where the callback and the helper threads run: the callback samples its
-//! own placement, and the helper takes one derived from it.
+//! CPU affinity and RT scheduling placement for the callback and helper threads.
 use super::helper::Shared;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 
-/// The mixer's audio cores (docs/reference/hardware.md). The helper runs on those the
-/// callback is not pinned to, one real-time priority below it: RØDE's own
-/// real-time threads there are short, so the helper is rarely kept waiting,
-/// and it never competes with the callback for its core.
+/// Audio CPU mask (CPUs 1–3; CPU 0 is reserved for the suppression worker).
+/// The helper runs on whichever audio cores the callback isn't pinned to, at
+/// one RT priority below the callback.
 pub(super) const AUDIO_CPUS: u64 = 0b1110;
-/// Callbacks between re-reads of the callback thread's placement. RØDE pins
-/// and reprioritizes that thread after its first callbacks have run.
+/// Steady-state interval (in callbacks) between re-reading callback placement.
 pub(super) const PLACE_EVERY: u32 = 2048;
-/// Until the callback is real-time on its own cores and the helper has taken
-/// the placement derived from it, re-read every this many callbacks instead
-/// (150 ms), for at most PLACE_FAST_UNTIL callbacks (19 s).
+/// Fast polling interval (~150 ms) during startup while RØDE finishes pinning
+/// and reprioritizing the callback thread, capped at `PLACE_FAST_UNTIL` (~19 s).
 pub(super) const PLACE_FAST_EVERY: u32 = 64;
 pub(super) const PLACE_FAST_UNTIL: u32 = 8192;
-/// When the callback samples its placement (see Helper::place).
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(super) struct Sampler {
     pub(super) settled: bool,
-    /// The first boundary not yet sampled: its callback had no handoff.
+    /// Pending sample cycle if the boundary callback had no handoff.
     pub(super) pending: Option<u32>,
 }
 impl Sampler {
-    /// Every callback: note a boundary, with or without a handoff. Later
-    /// boundaries before the sample do not replace the first.
+    /// Marks a sample boundary on any callback without overwriting an earlier pending one.
     pub(super) fn mark(&mut self, cycle: u32) {
         if self.pending.is_none() && self.due(cycle) {
             self.pending = Some(cycle);
         }
     }
-    /// With a handoff: whether to sample now (the boundary's own callback
-    /// or the first one after it that hands off), and if so whether late.
+    /// Consumes a pending sample on a handoff callback, returning whether it was deferred.
     pub(super) fn take(&mut self, cycle: u32) -> Option<bool> {
         let deferred = self.pending.take()? != cycle;
         if deferred {
@@ -48,9 +41,8 @@ impl Sampler {
         };
         cycle.is_multiple_of(every)
     }
-    /// After a sample: settled once the callback is real-time, leaves the
-    /// helper some audio core of its own, and the helper has applied the
-    /// placement of the latest generation.
+    /// Marks placement settled once the callback is RT, leaves at least one
+    /// audio core for the helper, and the helper has applied that generation.
     pub(super) fn observe(&mut self, policy: i32, cpus: u64, generation: u64, applied: u64) {
         let realtime = matches!(policy, libc::SCHED_FIFO | libc::SCHED_RR);
         let separate = AUDIO_CPUS & !cpus != 0;
@@ -59,32 +51,26 @@ impl Sampler {
         }
     }
 }
-/// The first placement changes since load, across pipelines, for the report:
-/// what the callback sampled, and what the helper then requested and got.
-/// Each record is claimed once and never reused.
+/// First `PLACEMENT_HISTORY` placement transitions recorded for diagnostics (write-once slots).
 pub(super) const PLACEMENT_HISTORY: usize = 16;
 pub(super) static PLACEMENT_NEXT: AtomicUsize = AtomicUsize::new(0);
-/// Pipelines created, to tell their records apart.
 pub(super) static PIPELINE_IDS: AtomicU64 = AtomicU64::new(0);
 pub(super) struct PlacementRecord {
-    /// Written last by the callback: the generation, 0 for an empty slot.
+    /// Published last by the callback (0 = empty slot).
     pub(super) generation: AtomicU64,
     pub(super) pipeline: AtomicU64,
     pub(super) cycle: AtomicU64,
-    /// Sampled after its boundary, whose callback had no handoff.
     pub(super) deferred: AtomicBool,
     pub(super) at_ns: AtomicU64,
     pub(super) cpus: AtomicU64,
     pub(super) policy: AtomicI64,
     pub(super) priority: AtomicI64,
-    /// Written by the helper when it applies this generation: what it
-    /// requested, then its actual mask, policy and priority read back.
     pub(super) applied_at_ns: AtomicU64,
     pub(super) requested_cpus: AtomicU64,
     pub(super) applied_cpus: AtomicU64,
     pub(super) applied_policy: AtomicI64,
     pub(super) applied_priority: AtomicI64,
-    /// sched_setaffinity and pthread_setschedparam results (0 is success).
+    /// Return values of `sched_setaffinity` / `pthread_setschedparam` (0 = ok).
     pub(super) affinity_result: AtomicI64,
     pub(super) sched_result: AtomicI64,
 }
@@ -107,12 +93,10 @@ pub(super) static PLACEMENTS: [PlacementRecord; PLACEMENT_HISTORY] = [const {
         sched_result: AtomicI64::new(i64::MIN),
     }
 }; PLACEMENT_HISTORY];
-/// Placement samples taken, and the cycle at which sampling settled (0: not).
 pub(super) static PLACEMENT_SAMPLES: AtomicU64 = AtomicU64::new(0);
 static PLACEMENT_DEFERRED: AtomicU64 = AtomicU64::new(0);
 pub(super) static PLACEMENT_SETTLED_CYCLE: AtomicU64 = AtomicU64::new(0);
-/// Callback and helper thread placement, for the report: [tid, cpu, policy,
-/// priority] each, from the pipeline that last sampled them.
+/// Latest `[tid, cpu, policy, priority]` sampled for callback and helper threads.
 pub(super) static CALLBACK_PLACEMENT: [AtomicI64; 4] = [const { AtomicI64::new(-1) }; 4];
 pub(super) static HELPER_PLACEMENT: [AtomicI64; 4] = [const { AtomicI64::new(-1) }; 4];
 pub fn placement() -> serde_json::Value {
@@ -160,16 +144,12 @@ pub(super) fn store_placement(target: &[AtomicI64; 4]) {
         slot.store(value, Ordering::Relaxed);
     }
 }
-/// Best effort: unprivileged hosts (tests) keep ordinary scheduling.
-/// The helper's cores for a callback on `callback`: the audio cores the
-/// callback is not on, else (callback not pinned yet, or on every audio core,
-/// or its mask unknown) all of them. Never CPU 0, the suppression worker's.
+/// Picks the audio cores not used by `callback` (falling back to all audio
+/// cores, never CPU 0 which belongs to the suppression worker).
 pub(super) fn helper_mask(callback: u64) -> u64 {
     let mask = AUDIO_CPUS & !callback;
     if mask == 0 { AUDIO_CPUS } else { mask }
 }
-/// What the helper requested and then actually had, and the two calls'
-/// results (0 is success).
 pub(super) struct Taken {
     pub(super) requested_cpus: u64,
     pub(super) cpus: u64,
@@ -178,7 +158,7 @@ pub(super) struct Taken {
     pub(super) affinity: i32,
     pub(super) sched: i32,
 }
-/// This thread's affinity mask, policy and priority (0, -1, -1 if unreadable).
+/// Returns `(cpu_mask, policy, priority)` for the calling thread, or `(mask, -1, -1)` on error.
 pub(super) fn current_placement() -> (u64, i32, i32) {
     unsafe {
         let mut cpus: libc::cpu_set_t = std::mem::zeroed();

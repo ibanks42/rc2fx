@@ -148,11 +148,9 @@ func mustHex(t *testing.T, text string) []byte {
 	return b
 }
 
-// The Rust structs are (de)serialized by serde; these pin the same shape.
 func TestRequestAndReplyJSONMatchSerde(t *testing.T) {
 	request := Request{Method: "PUT", Path: "api/v1/x</> \x01", Body: json.RawMessage(`{ "a" : [1, 2] }`)}
-	// json.Marshal would HTML-escape the result; the bytes the mixer reads
-	// come from MarshalJSON itself.
+	// Call MarshalJSON directly since json.Marshal HTML-escapes the output.
 	got, err := request.MarshalJSON()
 	if err != nil {
 		t.Fatal(err)

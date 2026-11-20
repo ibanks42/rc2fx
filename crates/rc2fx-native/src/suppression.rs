@@ -1,5 +1,5 @@
-//! Control-side provider ownership and exact retirement evidence. The existing
-//! Rust worker is the callback endpoint; inference never runs in this module.
+//! Control-side ownership and retirement tracking for DSP runtimes and noise
+//! suppression workers. Inference runs on the `rc2fx-suppression` worker thread.
 use rc2fx_dsp::Suppression;
 use rc2fx_suppression::{Endpoint, Telemetry, Termination, WorkerOptions};
 use serde::Serialize;
@@ -10,8 +10,9 @@ use std::{
     time::Duration,
 };
 
-/// Shared by the fixed bound slots in one pipeline. A staged replacement may
-/// coexist with its own slot, but cannot admit a second microphone target.
+/// Enforces that only one target in a pipeline uses noise suppression at a time.
+/// Refcounted so a staged replacement for the same target can overlap briefly
+/// with the active runtime.
 #[derive(Clone, Default)]
 pub struct Admission(Arc<Mutex<Option<(String, usize)>>>);
 pub(super) struct Claim(Admission);
@@ -43,18 +44,18 @@ impl Drop for Claim {
         }
     }
 }
-/// Control owns this allocation. The path's Reader may mutate the processor
-/// only while its immutable descriptor is held for a frame: from the callback,
-/// or from the pipeline's helper while the callback has handed that frame off.
+/// Owns a path's DSP processor and optional denoiser worker.
+///
+/// Allocated and retired on the control thread; the audio callback (or helper
+/// thread during a handed-off frame) has exclusive mutable access to `state`
+/// while holding the descriptor.
 pub struct Runtime {
     state: UnsafeCell<Processor>,
-    /// The hand-off control asks of the callback (`HANDOFF_*`), and the
-    /// callback's answer that the output has faded out. The callback reads
-    /// and writes these around each block; control polls `handed_off`.
+    /// Requested hand-off mode (`HANDOFF_*`) from control, and completion flag
+    /// set by the audio thread once the fade-out finishes.
     handoff: AtomicU8,
     handed_off: AtomicBool,
-    /// The processor's delay, fixed at construction: control reads it here,
-    /// never through the processor the callback owns.
+    /// Fixed at construction so control can query latency without touching `state`.
     latency: usize,
     worker: Option<Record>,
     epoch: u64,
@@ -62,8 +63,8 @@ pub struct Runtime {
     #[cfg(test)]
     retirement_blocked: std::sync::atomic::AtomicBool,
 }
-// No control code touches State until the reader releases a newer descriptor.
-// Telemetry uses its existing atomic/SPSC ownership independently of State.
+// SAFETY: Control never accesses `state` until the audio reader drops all
+// references to this descriptor; telemetry uses independent atomics/SPSC rings.
 unsafe impl Send for Runtime {}
 unsafe impl Sync for Runtime {}
 enum Processor {
@@ -73,17 +74,14 @@ enum Processor {
 const HANDOFF_NONE: u8 = 0;
 const HANDOFF_SILENCE: u8 = 1;
 const HANDOFF_DRY: u8 = 2;
-/// How a new runtime's output begins.
+/// Initial output envelope when a new runtime takes over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Start {
-    /// At once: the path's first runtime.
+    /// Start immediately (first runtime on this path).
     Playing,
-    /// Silent until its delay has passed, then fading in: it replaces a
-    /// runtime that has faded out.
+    /// Hold silence for the runtime's latency, then fade in (replacing a faded-out runtime).
     Silent,
-    /// Taking over from the unprocessed path where both play the same
-    /// sample at the same time (a callback-owned path): from the dry signal
-    /// when it has no delay, otherwise as `Silent`.
+    /// Replacing passthrough: crossfade from dry if zero-latency, otherwise `Silent`.
     AfterPassthrough,
 }
 impl Runtime {
@@ -125,7 +123,7 @@ impl Runtime {
             Processor::Ordinary(dsp) => dsp.latency_samples(),
             Processor::Chat(dsp) => dsp.latency_samples(),
         };
-        // Not yet published: control still owns the processor outright.
+        // Safe to configure directly before publishing to the audio thread.
         match (&mut dsp, start) {
             (_, Start::Playing) => {}
             (Processor::Ordinary(dsp), Start::AfterPassthrough) if dsp.latency_samples() == 0 => {
@@ -152,11 +150,9 @@ impl Runtime {
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
-    /// Control: asks the callback to fade this runtime's output out (`Some`)
-    /// or back in (`None`). Never waits.
+    /// Requests the audio thread to fade out (`Some`) or resume (`None`). Non-blocking.
     pub fn request_hand_off(&self, to: Option<rc2fx_dsp::HandOff>) {
         if to.is_some() {
-            // Answered afresh by the next block that sees the request.
             self.handed_off.store(false, Ordering::Release);
         }
         let value = match to {
@@ -166,17 +162,13 @@ impl Runtime {
         };
         self.handoff.store(value, Ordering::Release);
     }
-    /// The processor's delay in samples (its `latency_samples`).
     pub fn latency_samples(&self) -> usize {
         self.latency
     }
-    /// Control: whether a block has finished the requested fade-out.
+    /// True once the audio thread has completed the requested fade-out.
     pub fn handed_off(&self) -> bool {
         self.handed_off.load(Ordering::Acquire)
     }
-    /// Callback, around one block: passes the requested hand-off to the
-    /// processor, runs `block`, and answers whether the fade-out is done.
-    /// Two atomic loads, and a store only when the answer changes.
     #[inline]
     fn handing_off<T>(&self, dsp: &mut Processor, block: impl FnOnce(&mut Processor) -> T) -> T {
         let to = match self.handoff.load(Ordering::Acquire) {
@@ -202,8 +194,8 @@ impl Runtime {
     pub fn worker(&self) -> Option<&Record> {
         self.worker.as_ref()
     }
-    /// Only control, after all callback descriptor loans have ended. A timeout
-    /// retains the entire runtime in its bounded quarantine slot for retry.
+    /// Control-only, called after all audio descriptor loans have ended.
+    /// Returns false on drain timeout so the runtime stays in quarantine for retry.
     pub fn retire(&self) -> bool {
         #[cfg(test)]
         if self.retirement_blocked.load(Ordering::Relaxed) {
@@ -254,11 +246,10 @@ impl Runtime {
             Processor::Ordinary(_) => Err(rc2fx_dsp::DspError::MissingChatStem),
         })
     }
-    /// Asks for both ends of the processor (see prefetch.rs). Reads only
-    /// which processor this is, which construction fixed.
+    /// Prefetches the hot ends of the processor (see `prefetch.rs`).
     ///
     /// # Safety
-    /// As `latency`: the caller holds this runtime's descriptor for a frame.
+    /// Caller must hold this runtime's descriptor for the current frame.
     pub unsafe fn warm(&self) {
         match unsafe { &*self.state.get() } {
             Processor::Ordinary(dsp) => super::prefetch::ends(&raw const **dsp, true),
@@ -274,8 +265,8 @@ impl Runtime {
 }
 impl Drop for Runtime {
     fn drop(&mut self) {
-        // Final teardown cannot unload code under an unresolved worker. Normal
-        // retirement retains unresolved runtimes instead of reaching Drop.
+        // Abort if a worker thread still hasn't joined so we never unload the
+        // audit library underneath a live thread.
         if !self.retire() {
             std::process::abort();
         }
@@ -322,8 +313,8 @@ static OUTPUT_DROPS: AtomicU64 = AtomicU64::new(0);
 static FAILED: AtomicU64 = AtomicU64::new(0);
 static DELAY: AtomicU64 = AtomicU64::new(0);
 
-/// Declare after its DSP owner so that provider retirement precedes this check.
-/// An unresolved worker must never survive unloading its owning audit library.
+/// Must be declared after the DSP owner in `Runtime` so the provider drains and
+/// joins before this drop check runs.
 pub struct Record(Telemetry, rc2fx_suppression::Geometry);
 impl Record {
     pub fn telemetry(&self) -> Telemetry {
@@ -336,8 +327,6 @@ impl Record {
 impl Drop for Record {
     fn drop(&mut self) {
         if self.0.termination() != Termination::Joined {
-            // Research process only. A qualified independent stock-launch
-            // recovery owner is mandatory before any physical native trial.
             std::process::abort();
         }
         let Some(terminal) = self.0.terminal() else {
@@ -398,9 +387,7 @@ pub fn stats() -> Stats {
     }
 }
 
-/// Non-RT report only. These are individually atomic observations, not a
-/// coherent transaction. The CPU sum covers process and preparation windows,
-/// not every instruction executed by the worker thread.
+/// Formats worker preparation metrics for non-RT status reports.
 pub fn preparation_report(value: rc2fx_suppression::Preparation) -> serde_json::Value {
     use crate::parameters::worker_timing;
     serde_json::json!({

@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// Which messages are progress steps and which are outcomes.
 func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
 	for _, step := range []string{
 		"Saving settings to mixer…",
@@ -35,8 +34,6 @@ func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
 	}
 }
 
-// A failed save is an outcome, so it is toasted whatever its reason says,
-// and says it failed.
 func TestAFailedSaveIsToasted(t *testing.T) {
 	for _, reason := range []string{"", "HTTP 500: config write failed", "timed out waiting for the mixer…"} {
 		message := SaveFailedMessage(reason)
@@ -49,8 +46,7 @@ func TestAFailedSaveIsToasted(t *testing.T) {
 	}
 }
 
-// Settings save on their own once edits stop: no text in the app may send the
-// user to the "Save to mixer" button, which is gone.
+// Guard against stale copy referencing the removed manual save button.
 func TestNoTextPointsToTheRemovedSaveButton(t *testing.T) {
 	err := filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

@@ -1,16 +1,10 @@
 package app
 
-// The installer page: install or update RC2FX on a RØDECaster Pro II.
+// Installer page state and request coordination.
 //
-// Requests run one at a time on a goroutine that owns the installer engine.
-// On Linux without root, switching to USB update mode and flashing run in a
-// helper started through pkexec, because raw USB, mounting and ejection need
-// it. It starts only when the person presses the button that starts the run
-// (or tries it again), which then asks for the password.
-//
-// The plan itself is app/installflow; the page's own decisions (access, what
-// the helper runs and holds) are in installflow/page.go, and the signature's
-// math in installflow/signature.go.
+// Requests execute serially on a background goroutine that owns the installer
+// engine. On Linux without root, USB update mode and flashing delegate to a
+// pkexec helper started only when the user initiates or retries a run.
 
 import (
 	"bytes"
@@ -33,82 +27,52 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/transport"
 )
 
-// Installer is the guided task's model and the runner that carries out its
-// requests, with what the page itself keeps.
+// Installer holds the active guided-task model, background runner, and page UI state.
 type Installer struct {
-	model  *installflow.Model
-	runner *installerRunner
-	// kind is the task it was opened for.
-	kind taskKind
-	// engine is the engine state readiness was last judged from.
-	engine   *string
-	progress *installer.Progress
-	// controlsScroll is the task body's scroll position.
+	model          *installflow.Model
+	runner         *installerRunner
+	kind           taskKind
+	engine         *string
+	progress       *installer.Progress
 	controlsScroll gk.ScrollHandle
 	access         installflow.Access
-	// Before you start's version menus, made on first sync and kept in step
-	// with the model there.
 	firmwareSelect *picker[installflow.Choice]
 	mixerSelect    *picker[installflow.MixerSource]
-	// versionsOpen: Before you start's "Choose versions" is open.
-	versionsOpen bool
-	// startOnGrant and retryOnGrant: the button that asked for
-	// administrator access starts the run, or tries again, once it is
-	// granted.
+	versionsOpen   bool
+	// Pending actions to trigger automatically once admin access is granted.
 	startOnGrant, retryOnGrant bool
-	// closeOnStop: Stop asked a request in flight to stop; the task closes
-	// once it has.
+	// Close the task once an in-flight cancelable request finishes.
 	closeOnStop bool
-	// stage is the stage on screen and stageSince when it began, for the
-	// time so far.
+	// Stage and wait-line timers for elapsed-time display.
 	stage      installflow.Stage
 	stageSince time.Time
-	// waitLine is the storage fix's waiting line on screen (fixWaitLine)
-	// and waitSince when it began, for that wait's own time so far.
-	waitLine  string
-	waitSince time.Time
-	// pausedAt is the time so far when the mixer was asked to be switched
-	// off and on; zero otherwise.
-	pausedAt time.Duration
-	// keptWaiting and waitHelp are the taking-longer panel's Keep waiting
-	// and What can I do?, for the current stage.
+	waitLine   string
+	waitSince  time.Time
+	// Non-zero while paused waiting for a manual mixer power cycle.
+	pausedAt              time.Duration
 	keptWaiting, waitHelp bool
-	// mic is the input picked on the finished page.
-	mic int
-	// shown is the second the time so far was last drawn at.
-	shown int64
-	// preferFlash: the user chose the full flash over an available in-place
-	// update.
-	preferFlash bool
-	// imageCheckAsked is when the mixer's image check was last asked for;
-	// zero for never.
+	mic                   int
+	shown                 int64
+	// User opted for a full flash instead of an available in-place update.
+	preferFlash     bool
 	imageCheckAsked time.Time
-	// repair is the Repair mixer page, when it is the one open.
-	repair *installflow.Repair
-	// fix is the storage fix on its own, when it is the task open;
-	// fixOnGrant starts it once administrator access is granted, and
-	// fixStep is its step on screen, for the time so far.
-	fix        *installflow.Fix
-	fixOnGrant bool
-	fixStep    int
-	// inPlaceFrom is the RC2FX version the mixer ran when an in-place
-	// update started, for the page that says it went back to it;
-	// inPlaceKind is its stage on screen, for the time so far.
+	repair          *installflow.Repair
+	fix             *installflow.Fix
+	fixOnGrant      bool
+	fixStep         int
+	// Original RC2FX version before an in-place update, for rollback messaging.
 	inPlaceFrom string
 	inPlaceKind installflow.InPlaceKind
-	// fixture: a development page drawn from made-up state
-	// (flow_fixtures_on.go). It never sends a request.
+	// Dev-only synthetic fixture; never sends real requests.
 	fixture bool
 }
 
-// taskKind is the guided task the installer was opened for.
 type taskKind int
 
 const (
 	taskInstall taskKind = iota
 	taskUpdate
 	taskRemove
-	// taskFix is the storage fix on its own (Installer.fix).
 	taskFix
 )
 
@@ -116,7 +80,6 @@ func (i *Installer) busy() bool {
 	return i.model.Busy() || (i.repair != nil && i.repair.Busy()) || (i.fix != nil && i.fix.Busy())
 }
 
-// send runs request, if any (nil for none).
 func (i *Installer) send(request *installer.Request) {
 	if request == nil || i.fixture {
 		return
@@ -131,8 +94,6 @@ func (i *Installer) send(request *installer.Request) {
 	}
 }
 
-// release stops the page's runner and hands its kit state to free (App.retire:
-// released once no view shows it any more).
 func (i *Installer) release(free func(...any)) {
 	i.runner.close()
 	i.firmwareSelect.release(free)
@@ -140,7 +101,6 @@ func (i *Installer) release(free func(...any)) {
 	free(i.controlsScroll)
 }
 
-// workDirectory is the installer's folder for downloads and backups.
 func workDirectory() (string, bool) {
 	if path, ok := os.LookupEnv("RC2FX_INSTALLER_WORK"); ok {
 		if filepath.IsAbs(path) {
@@ -155,25 +115,17 @@ func workDirectory() (string, bool) {
 	return installer.DefaultWork()
 }
 
-// installerAutostartWait is how long a task started from elsewhere (Home's
-// Install update, the first screen's Continue the install) waits for the
-// installer to find the mixer and be ready, before leaving the page to the
-// person.
+// Maximum time to wait for mixer/release readiness when a task was auto-started
+// from a notice or the connection screen.
 const installerAutostartWait = 60 * time.Second
 
-// imageCheckEvery is how often to ask for the mixer's image check while it
-// runs.
 const imageCheckEvery = 3 * time.Second
 
-// openTask opens the guided task for kind in front of everything else, where
-// it stays until Done, Stop, Not now or Close. A task already open stays as
-// it is.
 func (a *App) openTask(cx *gk.Cx, kind taskKind) {
 	if a.installer != nil {
 		return
 	}
-	// The installer finds mixers on USB by itself, so it would act on a
-	// real one while the rest of this build shows the simulated one.
+	// Prevent the real USB installer from acting on hardware during mock-mixer runs.
 	if mockMixer {
 		a.message = "The installer is off while using the mock mixer."
 		a.notify(cx)
@@ -185,7 +137,6 @@ func (a *App) openTask(cx *gk.Cx, kind taskKind) {
 		a.notify(cx)
 		return
 	}
-	// The key the engine builds in, as it chooses it.
 	access := installflow.Access{Kind: installflow.AccessNotNeeded}
 	if helper.Needed() {
 		access = installflow.Access{Kind: installflow.AccessNeeded}
@@ -199,8 +150,6 @@ func (a *App) openTask(cx *gk.Cx, kind taskKind) {
 		stageSince:     time.Now(),
 	}
 	i.model.Privileged = i.access.AllowsFlashing()
-	// This app runs the storage fix's request, so its installs may fix the
-	// mixer's storage first.
 	i.model.FixPolicy = installflow.FixAuto
 	i.model.Bundled = opt.Clone(a.bundledMixerSoftware)
 	i.model.SettledFlash = a.settledFlash
@@ -213,9 +162,6 @@ func (a *App) openTask(cx *gk.Cx, kind taskKind) {
 	a.notify(cx)
 }
 
-// grantInstallerAccess asks the system for administrator access: this is
-// what opens its password prompt, and only when the person presses a button
-// that needs it.
 func (a *App) grantInstallerAccess(cx *gk.Cx) {
 	i := a.installer
 	if i == nil {
@@ -228,8 +174,6 @@ func (a *App) grantInstallerAccess(cx *gk.Cx) {
 	}
 }
 
-// closeTask closes the guided task, unless a request is in flight. After a
-// finished task with the mixer connected the overview comes next.
 func (a *App) closeTask(cx *gk.Cx, overview bool) {
 	if a.installer != nil && a.installer.busy() {
 		return
@@ -241,8 +185,6 @@ func (a *App) closeTask(cx *gk.Cx, overview bool) {
 	a.notify(cx)
 }
 
-// discardInstaller drops the installer, keeping only which flash has
-// finished. It takes cx to free the installer's menus.
 func (a *App) discardInstaller(cx *gk.Cx) {
 	if i := a.installer; i != nil {
 		a.installer = nil
@@ -254,7 +196,6 @@ func (a *App) discardInstaller(cx *gk.Cx) {
 	}
 }
 
-// installerEvent runs a model event, then sends any request it makes.
 func (a *App) installerEvent(cx *gk.Cx, event func(m *installflow.Model) *installer.Request) {
 	i := a.installer
 	if i == nil {
@@ -265,21 +206,14 @@ func (a *App) installerEvent(cx *gk.Cx, event func(m *installflow.Model) *instal
 	a.notify(cx)
 }
 
-// installerSettingsRead passes the mixer's settings read (or its error) to
-// the installer's model.
 func (a *App) installerSettingsRead(cx *gk.Cx, settings string, err error) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.SettingsRead(settings, err) })
 }
 
-// installerImageCheck hands the mixer's image check to the model. A failed
-// read is asked again on the next poll.
 func (a *App) installerImageCheck(cx *gk.Cx, check *core.ImageCheck, err error) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.ImageCheckRead(check, err) })
 }
 
-// startTask starts the run. Where administrator access is missing the
-// button asks for it first (the system's password prompt), and the run
-// starts once it is granted.
 func (a *App) startTask(cx *gk.Cx) {
 	i := a.installer
 	if i == nil || i.busy() {
@@ -295,8 +229,6 @@ func (a *App) startTask(cx *gk.Cx) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.Start() })
 }
 
-// retryTask tries a failed run again from the step the mixer's state calls
-// for now, asking for administrator access first where it ended.
 func (a *App) retryTask(cx *gk.Cx) {
 	i := a.installer
 	if i == nil || i.busy() {
@@ -310,17 +242,12 @@ func (a *App) retryTask(cx *gk.Cx) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.Retry() })
 }
 
-// stopTask is the footer's Stop: it cancels a run that hasn't touched the
-// mixer, ends a failed one or one whose wait is taking longer than usual,
-// and closes the task.
 func (a *App) stopTask(cx *gk.Cx) {
 	i := a.installer
 	if i == nil {
 		return
 	}
 	if f := i.fix; f != nil && f.Busy() {
-		// Only before the fix touches the mixer; it goes back to Before you
-		// start when it has stopped, and the task closes.
 		if f.Cancel() {
 			i.runner.stopDownload()
 			i.closeOnStop = true
@@ -335,7 +262,6 @@ func (a *App) stopTask(cx *gk.Cx) {
 		m.Stop()
 	case m.CanCancel():
 		if m.Cancel() {
-			// A request is in flight: the run ends when it returns.
 			i.runner.stopDownload()
 			i.closeOnStop = true
 			a.notify(cx)
@@ -349,8 +275,6 @@ func (a *App) stopTask(cx *gk.Cx) {
 	a.closeTask(cx, false)
 }
 
-// engineState is what poll judges RC2FX's readiness from:
-// `{"engine": s.engine, "config": {"revision": s.config.revision}}`.
 func engineState(saved *core.DeviceState) (string, bool) {
 	type config struct {
 		Revision uint64 `json:"revision"`
@@ -365,23 +289,19 @@ func engineState(saved *core.DeviceState) (string, bool) {
 	return string(body), true
 }
 
-// installerConnectionChanged: the connection's generation changed, so a
-// settings read sent on the old one is never answered; ask it again. An
-// in-place upload on the old connection was canceled with it and fails.
+// installerConnectionChanged notifies the model that the transport generation
+// changed so any in-flight settings read or in-place upload is invalidated.
 func (a *App) installerConnectionChanged() {
 	if a.installer != nil {
 		a.installer.model.ConnectionChanged()
 	}
 }
 
-// pollInstaller collects finished requests, polls and progress. Returns
-// whether to redraw.
 func (a *App) pollInstaller(cx *gk.Cx) bool {
 	i := a.installer
 	if i == nil || i.fixture {
 		return false
 	}
-	// RC2FX's readiness, as this app's USB connection sees it.
 	sameMixer := i.model.IsSessionMixer(a.connectedMixer)
 	var engine *string
 	if a.session.Saved != nil && a.session.Connected && a.streamConnected && sameMixer {
@@ -394,9 +314,8 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 		mixer = opt.Clone(a.deviceVersions.Runtime)
 		fw = opt.Clone(a.deviceVersions.Firmware)
 	}
-	// RC2FX names the exact firmware profile it runs on; without RC2FX, the
-	// mixer's USB device information still says which RØDE firmware it has,
-	// so replacing newer firmware is never silent.
+	// Fall back to USB descriptor firmware version when RC2FX isn't running so
+	// downgrades are still caught.
 	if fw == nil {
 		if v, ok := i.model.USBFirmware(); ok {
 			fw = &v
@@ -417,8 +336,6 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 		i.engine = engine
 		changed = true
 	}
-	// After a flash, RC2FX checks RØDE's files in the background; ask how it
-	// went until it has an answer worth acting on.
 	if i.model.WantsImageCheck() &&
 		(i.imageCheckAsked.IsZero() || time.Since(i.imageCheckAsked) >= imageCheckEvery) {
 		i.imageCheckAsked = time.Now()
@@ -468,7 +385,7 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 			}
 		}
 		if installflow.ChangesCatalog(o.request) {
-			// Judge readiness again on the next poll.
+			// Force readiness re-evaluation on the next poll.
 			i.engine = nil
 		}
 		next := i.model.Finish(o.request, o.reply, o.err)
@@ -483,7 +400,6 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 		if !opt.Equal(progress, i.progress) {
 			i.progress = progress
 			changed = true
-			// The storage fix's steps come as progress.
 			if progress != nil {
 				if i.fix != nil {
 					i.fix.Progress(*progress)
@@ -493,7 +409,7 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 		}
 	}
 	if i.closeOnStop && i.model.Run == nil && !i.busy() {
-		// A fix that got past the point where it stops stays on screen.
+		// Keep a standalone fix on screen if it already passed the cancel point.
 		if i.fix != nil && i.fix.Kind != installflow.FixBefore {
 			i.closeOnStop = false
 			return true
@@ -504,8 +420,6 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 	return a.trackStage(i) || a.driveInPlaceUpdate() || changed
 }
 
-// trackStage follows the stage on screen, for the time so far and the
-// taking-longer panel, and redraws once a second while a run goes on.
 func (a *App) trackStage(i *Installer) bool {
 	now := time.Now()
 	changed := false
@@ -514,7 +428,6 @@ func (a *App) trackStage(i *Installer) bool {
 			i.fixStep, i.stageSince = step, now
 			changed = true
 		}
-		// The page's time so far counts from when its current line began.
 		if line := fixDetailLine(f.Event); line != i.waitLine {
 			i.waitLine, i.waitSince = line, now
 		}
@@ -532,8 +445,7 @@ func (a *App) trackStage(i *Installer) bool {
 		i.shown = now.Unix()
 		changed = true
 	}
-	// The time so far stops where it was when the mixer has to be switched
-	// off and on, and starts again once it is back.
+	// Pause the elapsed timer during a manual power-cycle prompt.
 	power := i.model.PowerCycle()
 	switch {
 	case power && i.pausedAt == 0:
@@ -561,9 +473,6 @@ func (a *App) trackStage(i *Installer) bool {
 	return changed
 }
 
-// installMixerUpdate is a notice's Install update: open Update RC2FX on
-// RC2FX (not stock) firmware and start it as soon as it can: in place when
-// the mixer can install the update itself, otherwise the flash.
 func (a *App) installMixerUpdate(cx *gk.Cx) {
 	a.openTask(cx, taskUpdate)
 	if i := a.installer; i != nil {
@@ -574,10 +483,6 @@ func (a *App) installMixerUpdate(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// continueInstall is the first screen's Continue the install, for a mixer
-// waiting in update mode: open Install RC2FX and start as soon as it can.
-// Before you start stays on screen until then, and for the person to press
-// if it can't start by itself.
 func (a *App) continueInstall(cx *gk.Cx) {
 	a.openTask(cx, taskInstall)
 	if a.installer != nil {
@@ -587,9 +492,6 @@ func (a *App) continueInstall(cx *gk.Cx) {
 	a.notify(cx)
 }
 
-// mixerUpdateNotice is shown on Home when the mixer reports that part of its
-// RC2FX software is older than the rest. The fix is installing the current
-// mixer software, so the notice starts that.
 func (a *App) mixerUpdateNotice(cx *gk.Cx) (gk.DivEl, bool) {
 	if a.deviceVersions == nil || a.deviceVersions.NativeProtocol == nil {
 		return gk.DivEl{}, false
@@ -614,8 +516,6 @@ func (a *App) mixerUpdateNotice(cx *gk.Cx) (gk.DivEl, bool) {
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.installMixerUpdate(cx) }))), true
 }
 
-// inPlaceSupport is what the connected mixer says about in-place updates,
-// when the installer and the app's connection see the same mixer.
 func (a *App) inPlaceSupport() installflow.InPlaceSupport {
 	sameMixer := a.installer != nil && a.installer.model.IsSessionMixer(a.connectedMixer)
 	if !sameMixer || a.deviceVersions == nil {
@@ -628,8 +528,6 @@ func (a *App) inPlaceSupport() installflow.InPlaceSupport {
 	}
 }
 
-// inPlaceOffer is the signed release an in-place update would install now,
-// if any.
 func (a *App) inPlaceOffer() *installer.MixerOffer {
 	if a.installer == nil {
 		return nil
@@ -642,9 +540,6 @@ func (a *App) inPlaceOffer() *installer.MixerOffer {
 	return &c
 }
 
-// startInPlaceUpdate installs the newer signed RC2FX release without a
-// flash: download and verify it here, then send it to the mixer, which
-// verifies it again.
 func (a *App) startInPlaceUpdate(cx *gk.Cx) {
 	offer := a.inPlaceOffer()
 	if offer == nil {
@@ -664,8 +559,8 @@ func (a *App) startInPlaceUpdate(cx *gk.Cx) {
 	a.installerEvent(cx, func(m *installflow.Model) *installer.Request { return m.StartInPlace(*offer, p) })
 }
 
-// inPlaceStart is the body of the mixer's `POST api/v1/update`, keys in the
-// order version, size, sha256, metadata.
+// inPlaceStart marshals the POST api/v1/update request body with deterministic
+// field order (version, size, sha256, metadata).
 func inPlaceStart(bundle installer.InPlaceBundle) (json.RawMessage, error) {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -679,9 +574,6 @@ func inPlaceStart(bundle installer.InPlaceBundle) (json.RawMessage, error) {
 	return json.RawMessage(bytes.TrimSuffix(b.Bytes(), []byte("\n"))), err
 }
 
-// driveInPlaceUpdate moves an in-place update along: sends a verified
-// release to the mixer, and while it installs asks how it ended. True when
-// it changed. What the mixer says is the model's to judge.
 func (a *App) driveInPlaceUpdate() bool {
 	generation := a.generation
 	i := a.installer
@@ -689,8 +581,8 @@ func (a *App) driveInPlaceUpdate() bool {
 		return false
 	}
 	if bundle, ok := i.model.TakeInPlaceBundle(); ok {
-		// What update/last says before this update: the transport runs
-		// commands in order, so the reply predates the install.
+		// Snapshot update/last before uploading; transport commands run in order,
+		// so this reply is guaranteed to predate the new install.
 		if !a.command(transport.CommandMixerUpdateLast{Generation: generation}) {
 			a.message = ""
 		}
@@ -720,7 +612,6 @@ func (a *App) driveInPlaceUpdate() bool {
 	return changed
 }
 
-// inPlaceEvent is the transport's report on an in-place update.
 func (a *App) inPlaceEvent(event transport.MixerUpdateEvent) {
 	i := a.installer
 	if i == nil {
@@ -736,18 +627,12 @@ func (a *App) inPlaceEvent(event transport.MixerUpdateEvent) {
 	}
 }
 
-// inPlaceOutcome is the mixer's record of its last in-place update (JSON
-// null is None); once it ends the update, read the versions the mixer now
-// runs.
 func (a *App) inPlaceOutcome(record json.RawMessage) {
 	if i := a.installer; i != nil && i.model.InPlaceOutcome(record) {
 		a.command(transport.CommandVersion{Generation: a.generation})
 	}
 }
 
-// autostartInstaller starts a task opened by Install update or Continue
-// the install once it has found the mixer and a release; gives up quietly
-// at the deadline, leaving Before you start to say what is missing.
 func (a *App) autostartInstaller(cx *gk.Cx) {
 	if a.installerAutostart == nil {
 		return
@@ -771,9 +656,8 @@ func (a *App) autostartInstaller(cx *gk.Cx) {
 	}
 }
 
-// installerFlashing reports a run that has switched the mixer to USB update
-// mode and not yet finished flashing it: the mixer cannot run RC2FX
-// meanwhile.
+// installerFlashing reports whether a run has entered USB update mode and has
+// not finished flashing yet.
 func (a *App) installerFlashing() bool {
 	if a.installer == nil || a.installer.fixture || a.installer.model.Run == nil {
 		return false
@@ -782,9 +666,8 @@ func (a *App) installerFlashing() bool {
 	return r.Committed && !r.Flashed
 }
 
-// installerRestartBlocker is why RC2FX should not restart to apply an app
-// update: the installer has a run going, even between steps, or the mixer
-// may still be updating after a flash. ok false for None.
+// installerRestartBlocker returns a reason if an app self-update restart should
+// wait for the installer or a recently flashed mixer.
 func (a *App) installerRestartBlocker() (string, bool) {
 	i := a.installer
 	if i == nil {
@@ -799,8 +682,6 @@ func (a *App) installerRestartBlocker() (string, bool) {
 	return "", false
 }
 
-// confirmCloseInstaller is the installer's part of the window-close
-// decision. Closing is only held back while a step is running.
 func (a *App) confirmCloseInstaller(cx *gk.Cx) (verdict, ok bool) {
 	if a.installer == nil || !a.installer.busy() {
 		return false, false
@@ -813,8 +694,6 @@ func (a *App) confirmCloseInstaller(cx *gk.Cx) (verdict, ok bool) {
 	return false, true
 }
 
-// inPlaceShown reports that the page is about an in-place update rather
-// than a flash.
 func (a *App) inPlaceShown(i *Installer) bool {
 	return i.model.InPlace().Kind != installflow.InPlaceIdle ||
 		(!i.preferFlash && a.inPlaceOffer() != nil)
@@ -830,9 +709,8 @@ func mixerSourceKey(source installflow.MixerSource) string {
 	return fmt.Sprintf("signed\x00%s\x00%s\x00%d\x00%s", o.Target, o.SHA256, o.Length, o.Metadata.Version)
 }
 
-// syncInstallerSelects brings Before you start's version menus in step with
-// the model: their items, what is chosen, and the menus themselves on first
-// use. A gk view may not write kit state, so poll runs it.
+// syncInstallerSelects reconciles the version pickers with the model (called
+// from poll because gk view functions cannot mutate kit state).
 func (a *App) syncInstallerSelects(cx *gk.Cx) {
 	i := a.installer
 	if i == nil {
@@ -853,7 +731,6 @@ func (a *App) syncInstallerSelects(cx *gk.Cx) {
 		mixers = append(mixers, pickerItem[installflow.MixerSource]{
 			title: item.Name, short: item.Source.Version(), value: item.Source})
 	}
-	// The page may have drawn before its menus existed: draw it again.
 	created := i.firmwareSelect == nil || i.mixerSelect == nil
 	if i.firmwareSelect == nil {
 		i.firmwareSelect = newPicker(a, cx, choiceKey, func(m *installflow.Model, c installflow.Choice) {

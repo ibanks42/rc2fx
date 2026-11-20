@@ -103,11 +103,10 @@ func TestParseMarker(t *testing.T) {
 	}
 }
 
-// A marker cut anywhere (the 1 KB-block damage, or a copy interrupted) is
-// never taken as complete, whether the tail is gone or zero-filled.
+// Truncating or zero-filling the tail at any byte offset must be rejected.
 func TestParseMarkerTruncated(t *testing.T) {
 	full := fixedMarker
-	// The last point that still parses is the full text minus its newline.
+	// Everything short of the final newline is incomplete.
 	for cut := 0; cut < len(full)-1; cut++ {
 		if _, err := ParseMarker(full[:cut]); err == nil {
 			t.Fatalf("cut at %d parsed", cut)

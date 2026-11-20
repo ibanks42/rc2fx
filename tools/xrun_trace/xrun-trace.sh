@@ -3,10 +3,9 @@
 # Kept out of production mixer/scripts/rc2fx.sh so mixers do not ship ftrace tooling.
 set -euo pipefail
 
-# Opt-in flight recorder with exclusive ownership of an otherwise idle tracer.
-# This device kernel routes uprobe traceoff to the global tracing buffer even
-# when attached to an instance. Use the global buffer and restore its settings.
-# No files or syscalls are added to an audio callback.
+# Uses the global ftrace buffer (restoring its settings on clear) because this
+# kernel routes uprobe traceoff to the global buffer even on instances. Adds no
+# files or syscalls to audio callbacks.
 xrun_trace() {
   local base=/sys/kernel/debug/tracing
   local dir=/run/rc2fx-xrun-trace action=${1:-} pid jack started lib offset sha token tid main_tid gui f filter profile
@@ -135,9 +134,9 @@ xrun_trace() {
       for f in sched/sched_switch sched/sched_waking sched/sched_wakeup sched/sched_wakeup_new; do
         echo 1 > "$base/events/$f/enable"
       done
-      # Keep syscall probes on the deadline path. GUI and vendor pool threads
-      # remain visible as scheduler competitors/wakers, without tracing every
-      # syscall they execute. This bounds observer overhead on the audio CPUs.
+      # Limit syscall tracing to the deadline path (callback, jackd, callme-t)
+      # to bound overhead on audio CPUs while keeping GUI/pool threads visible
+      # in scheduler events.
       filter="common_pid == $tid"
       for f in /proc/"$jack"/task/*; do filter="$filter || common_pid == ${f##*/}"; done
       for gui in $(pgrep -x callme-t); do

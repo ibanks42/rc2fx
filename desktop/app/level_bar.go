@@ -1,10 +1,5 @@
 package app
 
-// The overview's level bars. A bar is a div inside its track, filled to
-// levels.FillFraction: a fader's from the bottom, an output's from the
-// left, the levels.Stub pixels without a fresh reading. When it is redrawn is
-// indicators.go's.
-
 import (
 	"gpuikit.dev/gk"
 	"gpuikit.dev/gk/s"
@@ -12,16 +7,15 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/levels"
 )
 
-// levelBarFill is the bar in its track, which it fills
-// (the track must be relative, as both meters are). level is 0 to 1, or nil
-// without a fresh reading.
+// levelBarFill renders the filled portion of an overview meter bar.
+// level is in [0, 1], or nil when no fresh reading is available.
 func levelBarFill(bar levels.Bar, level *float32) gk.Element {
 	fill := gk.Div().Rounded(px(bar.Radius()))
 	switch {
 	case level == nil:
 		fill = fill.Bg(rgb(Dim))
 	case bar == levels.BarVertical:
-		// From the bottom up (0° points up).
+		// 0° points upward.
 		fill = fill.Bg(gk.NewLinearGradient(0, gk.NewLinearColorStop(rgb(Accent), 0), gk.NewLinearColorStop(rgb(Violet), 1)))
 	default:
 		fill = fill.Bg(gradient())

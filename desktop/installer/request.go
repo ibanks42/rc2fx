@@ -6,57 +6,34 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// RequestKind names a Request variant.
 type RequestKind int
 
 const (
-	// RequestAllowExperimentalDuo is session policy, sent explicitly by the
-	// desktop's saved preference (Allow).
 	RequestAllowExperimentalDuo RequestKind = iota
 	RequestProbe
 	RequestReleases
-	// RequestStockReleases is the stock firmware RØDE publishes for the
-	// connected model.
 	RequestStockReleases
-	// RequestMixerReleases discovers authenticated mixer releases. It does
-	// not select or install one.
 	RequestMixerReleases
-	// RequestSelectMixer independently authenticates the exact offer
-	// reviewed by the user (Offer, FirmwareProfile).
+	// RequestSelectMixer independently authenticates the user-selected Offer
+	// against TUF metadata for FirmwareProfile.
 	RequestSelectMixer
-	// RequestSelectBundledMixer explicitly selects the optional compiled-in
-	// payload. No network fallback.
+	// RequestSelectBundledMixer selects the compiled-in payload with no network fallback.
 	RequestSelectBundledMixer
-	// RequestInPlaceBundle downloads and verifies the signed Offer for an
-	// in-place update of a mixer running FirmwareProfile, and reads the
-	// release's metadata as published. Needs no administrator access and
-	// touches no mixer. Installed is the RC2FX version the mixer runs, whose
-	// signed payload the update is diffed against.
+	// RequestInPlaceBundle stages a verified Offer and raw TUF metadata for an
+	// in-place update (optional Installed version enables delta upload).
 	RequestInPlaceBundle
-	// RequestSaveSettings keeps Settings (RC2FX's settings file, read over
-	// USB by the app) for the mixer Serial.
 	RequestSaveSettings
-	// RequestPrepare builds firmware with RC2FX and the newest settings saved
-	// for Serial, or with Stock, stages the release unchanged.
 	RequestPrepare
 	RequestEnterUSBMode
-	// RequestVerify checks the prepared firmware in the work folder against
-	// this engine's payload and its checksum files, without touching the
-	// mixer.
 	RequestVerify
 	RequestFlash
-	// RequestRepairInspect looks over a mixer whose bootloader shows its
-	// whole eMMC as a USB disk (see repair_linux.go). Reads only.
+	// RequestRepairInspect reads a mixer's eMMC in bootloader mass-storage mode.
 	RequestRepairInspect
-	// RequestRepair backs up the settings partition to the work folder, then
-	// restores Files, which a RequestRepairInspect found damaged and
-	// repairable. The helper checks each again before writing it.
+	// RequestRepair backs up settings and restores Files after re-verifying each.
 	RequestRepair
-	// RequestStorageFix grows the mixer's first system slot through RØDE's
-	// own USB update (rodecaster/autofix), so later updates format it with
-	// 4 KB blocks. With Final the last of its flashes is the prepared
-	// firmware instead of RØDE's plain archive. Needs the same access as a
-	// flash; reports its steps as progress (StorageFixPhase).
+	// RequestStorageFix grows slot 1 via RØDE's USB update (rodecaster/autofix)
+	// so future updates format with 4 KB blocks. With Final, the last flash uses
+	// the prepared firmware instead of plain stock.
 	RequestStorageFix
 )
 
@@ -79,8 +56,7 @@ var requestNames = map[RequestKind]string{
 	RequestStorageFix:           "StorageFix",
 }
 
-// Request is what the app asks the engine (or its helper) to do. Only the
-// fields of its Kind are used.
+// Request is an IPC command to Engine or the privileged helper.
 type Request struct {
 	Kind            RequestKind
 	Allow           bool
@@ -94,36 +70,26 @@ type Request struct {
 	Stock           bool
 	Files           []RepairTarget
 	Final           bool
-	// FixDebug asks the storage fix's script for its debug log on the
-	// mixer. Only development builds of the app set it, and only
-	// development builds of the engine act on it.
+	// FixDebug enables the storage-fix script's on-mixer debug log (rc2fxdev builds only).
 	FixDebug bool
 }
 
-// RepairTarget is a file to restore: system partition 1 or 2, and its path
-// there.
 type RepairTarget struct {
-	Root uint8  `json:"root"`
+	Root uint8  `json:"root"` // 1 or 2
 	Path string `json:"path"`
 }
 
-// RepairFindings is what RequestRepairInspect found.
 type RepairFindings struct {
-	// Refused is why nothing can be repaired from here, if so; the rest is
-	// then empty.
-	Refused  *string `json:"refused"`
-	Hostname string  `json:"hostname"`
-	// SettingsOK: the settings partition's FAT looks sound.
+	Refused    *string        `json:"refused"`
+	Hostname   string         `json:"hostname"`
 	SettingsOK bool           `json:"settings_ok"`
 	Roots      []RootFindings `json:"roots"`
 }
 
-// Repairable is the number of files a repair would restore.
 func (f *RepairFindings) Repairable() int {
 	return len(f.Targets())
 }
 
-// Targets is what to ask RequestRepair to restore.
 func (f *RepairFindings) Targets() []RepairTarget {
 	targets := []RepairTarget{}
 	for _, r := range f.Roots {
@@ -136,31 +102,21 @@ func (f *RepairFindings) Targets() []RepairTarget {
 	return targets
 }
 
-// RootFindings is one of the mixer's two system partitions.
 type RootFindings struct {
-	// Index is 1 or 2.
-	Index uint8 `json:"index"`
-	// Reference is what its files were compared with: the image's own list,
-	// the image saved on this computer, or nothing.
-	Reference string `json:"reference"`
-	// Unclean: the partition was not shut down cleanly; nothing is written
-	// to it.
-	Unclean bool          `json:"unclean"`
-	Damaged []DamagedFile `json:"damaged"`
+	Index     uint8         `json:"index"` // 1 or 2
+	Reference string        `json:"reference"`
+	Unclean   bool          `json:"unclean"`
+	Damaged   []DamagedFile `json:"damaged"`
 }
 
 type DamagedFile struct {
-	Path string `json:"path"`
-	// Why it can't be restored from here; nil when it can.
-	Why *string `json:"why"`
+	Path string  `json:"path"`
+	Why  *string `json:"why"` // nil when repairable
 }
 
-// RepairResult is what RequestRepair did.
 type RepairResult struct {
-	// Backup is the settings partition backup on this computer.
-	Backup   string   `json:"backup"`
-	Repaired []string `json:"repaired"`
-	// NotRepaired is the files left as they were, with the reason.
+	Backup      string      `json:"backup"`
+	Repaired    []string    `json:"repaired"`
 	NotRepaired [][2]string `json:"not_repaired"`
 }
 
@@ -200,7 +156,6 @@ type serialBody struct {
 	Serial string `json:"serial"`
 }
 
-// MarshalJSON writes serde's externally tagged form.
 func (r Request) MarshalJSON() ([]byte, error) {
 	name, ok := requestNames[r.Kind]
 	if !ok {
@@ -237,7 +192,6 @@ func (r Request) MarshalJSON() ([]byte, error) {
 	return sjson.String(name), nil
 }
 
-// UnmarshalJSON reads serde's externally tagged form.
 func (r *Request) UnmarshalJSON(data []byte) error {
 	variant, payload, err := sjson.Tagged(data)
 	if err != nil {
@@ -298,7 +252,6 @@ func (r *Request) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ReplyKind names a Reply variant.
 type ReplyKind int
 
 const (
@@ -331,8 +284,6 @@ var replyNames = map[ReplyKind]string{
 	ReplyDone:           "Done",
 }
 
-// Reply is a request's result. Only the field of its Kind is set:
-// Releases for both release kinds, Offers for mixer releases.
 type Reply struct {
 	Kind          ReplyKind
 	Status        *Status
@@ -347,7 +298,6 @@ type Reply struct {
 	StorageFix    *StorageFix
 }
 
-// MarshalJSON writes serde's externally tagged form.
 func (r Reply) MarshalJSON() ([]byte, error) {
 	name, ok := replyNames[r.Kind]
 	if !ok {
@@ -378,7 +328,6 @@ func (r Reply) MarshalJSON() ([]byte, error) {
 	return sjson.String(name), nil
 }
 
-// UnmarshalJSON reads serde's externally tagged form.
 func (r *Reply) UnmarshalJSON(data []byte) error {
 	variant, payload, err := sjson.Tagged(data)
 	if err != nil {

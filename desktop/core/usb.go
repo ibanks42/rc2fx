@@ -1,8 +1,5 @@
 package core
 
-// Observed USB link state, independent of saved effects and DSP progress.
-
-// USBLinkState is serde `rename_all = "camelCase"`.
 type USBLinkState string
 
 const (

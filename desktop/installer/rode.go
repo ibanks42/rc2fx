@@ -1,6 +1,6 @@
 package installer
 
-// Official RØDE releases, verified downloads and the local firmware patch.
+// Official RØDE release discovery, verified downloads, and local archive patching.
 
 import (
 	"bytes"
@@ -21,8 +21,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// Catalog, Profile, RuntimeProfile and JobLifetime are the firmware
-// catalog's shape.
 type (
 	Catalog        = embed.Catalog
 	Profile        = embed.Profile
@@ -59,12 +57,9 @@ func locationForModel(model firmware.Model, value, suffix, version string) (stri
 	return rode.Location(model.Hardware(), value, suffix, version)
 }
 
-// patchArchiveForModel writes a copy of src to dst with extra added (see
-// archive.Patch). What RC2FX's image needs beyond RØDE's archive is checked
-// here: root's authorized_keys must be as empty as RØDE ships it and SSH
-// must allow root's key; an image with RC2FX gets the manifest the mixer
-// checks on its first boots and must fit the root once unpacked
-// (image_check.go).
+// patchArchiveForModel patches src into dst with extra entries (see archive.Patch),
+// verifying stock SSH invariants, writing the on-device file manifest, and
+// checking unpacked root filesystem size.
 func patchArchiveForModel(model firmware.Model, src, dst string, extra []archive.Entry, sourceSha *string) (*archive.Patched, error) {
 	keyOK, sshOK := false, false
 	var manifest strings.Builder
@@ -140,8 +135,6 @@ func (e *Engine) releases() ([]Release, error) {
 	return e.InspectReleases(e.model)
 }
 
-// stockReleases is the stock firmware RØDE publishes for this model, from
-// RØDE's manifest for it.
 func (e *Engine) stockReleases() ([]Release, error) {
 	if err := e.model.RequireRuntimeWith(e.allowExperimentalDuo); err != nil {
 		return nil, Error(err.Error())
@@ -153,9 +146,7 @@ func (e *Engine) stockReleases() ([]Release, error) {
 	return releasesFromManifest(e.model, data)
 }
 
-// InspectReleases is read-only discovery, including experimental models. A
-// supported experimental profile still requires the separate session
-// opt-in.
+// InspectReleases returns qualified catalog releases for model (read-only).
 func (e *Engine) InspectReleases(model firmware.Model) ([]Release, error) {
 	catalog, err := e.catalog()
 	if err != nil {
@@ -164,9 +155,7 @@ func (e *Engine) InspectReleases(model firmware.Model) ([]Release, error) {
 	return releasesFromCatalog(model, catalog)
 }
 
-// RodeReleases is the firmware RØDE publishes for model, from its manifest,
-// newest first. It needs no engine or installer folder, so the app can ask
-// while it checks for its own updates.
+// RodeReleases fetches RØDE's published stock releases for model, newest first.
 func RodeReleases(model firmware.Model) ([]Release, error) {
 	stock, err := rode.Releases(rode.HTTPClient(), model.Hardware(), manifestCodec)
 	if err != nil {
@@ -175,11 +164,8 @@ func RodeReleases(model firmware.Model) ([]Release, error) {
 	return fromRode(model, stock), nil
 }
 
-// manifestCodec reads RØDE's manifest as serde_json does.
 var manifestCodec = rode.Codec{Marshal: sjson.Marshal, Unmarshal: sjson.Unmarshal}
 
-// releasesFromManifest is the stock releases in RØDE's manifest for model,
-// newest first (see rode.ReleasesFromManifest).
 func releasesFromManifest(model firmware.Model, data []byte) ([]Release, error) {
 	stock, err := rode.ReleasesFromManifest(model.Hardware(), data, manifestCodec)
 	if err != nil {
@@ -188,7 +174,6 @@ func releasesFromManifest(model firmware.Model, data []byte) ([]Release, error) 
 	return fromRode(model, stock), nil
 }
 
-// fromRode is RØDE's releases as releases the app offers.
 func fromRode(model firmware.Model, stock []rode.Release) []Release {
 	all := []Release{}
 	for _, r := range stock {
@@ -204,8 +189,6 @@ func fromRode(model firmware.Model, stock []rode.Release) []Release {
 	return all
 }
 
-// releasesFromCatalog: the signed, qualified catalog decides which firmware
-// RC2FX is built into. Stock firmware comes from RØDE's manifest instead.
 func releasesFromCatalog(model firmware.Model, c *Catalog) ([]Release, error) {
 	all := []Release{}
 	for i := range c.Profiles {
@@ -239,9 +222,8 @@ func releasesFromCatalog(model firmware.Model, c *Catalog) ([]Release, error) {
 	return all, nil
 }
 
-// download fetches an official release to dest, checking RØDE's MD5 and,
-// when the catalog pins one, its SHA-256. A matching file is kept. Only
-// stock firmware RØDE lists but the catalog doesn't goes without a SHA-256.
+// download fetches a release to dest, verifying MD5 and (if pinned) SHA-256.
+// Existing matching files are reused without a network request.
 func (e *Engine) download(value, dest string, sha *string, md string) error {
 	return rode.DownloadFile(rode.Download{
 		Client: e.client,
@@ -276,9 +258,6 @@ func (e *Engine) profile(id string) (*Profile, error) {
 	return nil, errorf("firmware profile %s is not supported", id)
 }
 
-// imageFor is what the image for profile adds: the runtime, autostart and
-// the newest settings saved for serial. Returns the entries, the runtime
-// digest and the settings digest (empty without settings).
 func (e *Engine) imageFor(profile *Profile, serial string) ([]archive.Entry, string, string, error) {
 	bundle, err := e.source.bundle()
 	if err != nil {
@@ -305,9 +284,8 @@ func (e *Engine) imageFor(profile *Profile, serial string) ([]archive.Entry, str
 	return entries, runtime, digest, nil
 }
 
-// prepare downloads and verifies the selected release, then builds firmware
-// with RC2FX's runtime, autostart and the newest settings saved for serial.
-// A matching earlier preparation is reused after verification.
+// prepare downloads, verifies, and patches the selected release with RC2FX
+// and the latest backed-up settings for serial, reusing a verified cache match.
 func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared, error) {
 	if err := e.model.RequireRuntimeWith(e.allowExperimentalDuo); err != nil {
 		return nil, Error(err.Error())
@@ -425,10 +403,7 @@ func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared
 	return prepared, nil
 }
 
-// prepareStock downloads and verifies a release and stages it unchanged:
-// stock RØDE firmware, without RC2FX, its key or settings. Only releases
-// RØDE lists are offered. RØDE's MD5 checks each one, and the catalog's
-// SHA-256 too when it pins that version. The helper records what it staged.
+// prepareStock downloads, verifies, and stages an unmodified RØDE release.
 func (e *Engine) prepareStock(channel, version string) (*Prepared, error) {
 	saved, err := e.load()
 	if err != nil {
@@ -495,7 +470,7 @@ func (e *Engine) prepareStock(channel, version string) (*Prepared, error) {
 	if err := archive.CopyWithProgress(src, part, e.reporter("verify", "Staging the stock firmware")); err != nil {
 		return nil, err
 	}
-	// The copy is the helper's until now, and the cache must stay the user's.
+	// Ensure cache files stay owned by the desktop user when run via the root helper.
 	if err := chownToInvoker(part); err != nil {
 		return nil, err
 	}
@@ -555,17 +530,14 @@ func isHexText(text string) bool {
 	return true
 }
 
-// verifyPrepared checks the prepared archive and its checksum file, and for
-// RC2FX firmware that its runtime is this installer's, before any USB
-// command.
+// verifyPrepared checks the staged archive, checksums, helper anchor, and
+// runtime digest before any USB command is sent.
 func (e *Engine) verifyPrepared(p *Prepared) error {
-	// Missing is the legacy Pro II cache format, never automatic detection.
 	model := p.ModelOr(firmware.ModelProIi)
 	if err := model.RequireRuntimeWith(e.allowExperimentalDuo); err != nil {
 		return Error(err.Error())
 	}
-	// Stock firmware RØDE lists without a catalog pin is checked against what
-	// the helper recorded when it staged it.
+	// Unpinned stock releases rely on the helper's root-owned anchor.
 	var pinned *Profile
 	if p.Stock && p.Profile == "" {
 		if err := e.checkAnchor(p); err != nil {

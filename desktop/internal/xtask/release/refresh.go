@@ -27,8 +27,8 @@ func asTask(err error) error {
 	return task.Error(err.Error())
 }
 
-// Refresh is `mixer-refresh`: renew timestamp/snapshot signatures without
-// access to a targets signing key.
+// Refresh implements `xtask mixer-refresh` (and `app-refresh`), renewing
+// snapshot and timestamp metadata without needing the targets key.
 func Refresh(args []string) error {
 	if len(args) != 7 {
 		return task.Error(mixerRefreshUsage)
@@ -82,8 +82,8 @@ func Refresh(args []string) error {
 	if err := root.VerifyRole(timestamp); err != nil {
 		return asTask(err)
 	}
-	// Verify the old chain as well as individual signatures; do not splice
-	// targets from one approved snapshot into another.
+	// Verify the existing hash chain as well as signatures so we can't splice
+	// targets from another snapshot.
 	snapshotMeta, _ := tufsign.Meta(snapshot)
 	timestampMeta, _ := tufsign.Meta(timestamp)
 	if err := checkPin(snapshotMeta, "targets.json", targetsBytes, targetsDoc.Version); err != nil {
@@ -185,8 +185,6 @@ func Refresh(args []string) error {
 	return nil
 }
 
-// checkPin requires the role file data, at version, to be the one meta
-// pins under name: the same version, length and SHA-256.
 func checkPin(meta map[string]tufsign.Metafile, name string, data []byte, version uint64) error {
 	pin, ok := meta[name]
 	if !ok {
@@ -204,13 +202,11 @@ func sha256Bytes(data []byte) []byte {
 	return sum[:]
 }
 
-// exists is whether something is there, following links.
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// outputParent is `out.parent().filter(|p| !p.is_empty()).unwrap_or(".")`.
 func outputParent(output string) string {
 	return filepath.Dir(output)
 }

@@ -10,8 +10,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// The repair page's logic, which is kept out of the view.
-
 func marks(steps []TaskStep) []Mark {
 	out := make([]Mark, len(steps))
 	for i, s := range steps {

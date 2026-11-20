@@ -1,12 +1,8 @@
 package telemetry
 
-// What the Diagnostics page's TELEMETRY section says, without drawing. It
-// answers whether RC2FX is keeping up, in words a person reads at a glance:
-// a status, four yes/no checks, then one line per
-// processed channel, and the raw figures behind them. Only audible problems
-// are flagged, and only while they are recent: older ones become history,
-// and the mixer starting is left out. Built from a plain Snapshot so it reads
-// the same with preview data.
+// View model for the Diagnostics -> Telemetry section: headline status, four
+// pass/warn checks, per-channel rows, and raw technical facts. Only recent
+// audible problems trigger warnings; older issues degrade to quiet history.
 
 import (
 	"cmp"
@@ -20,46 +16,35 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-// Snapshot is everything the section shows, read from the app at render
-// time.
+// Snapshot captures the app state needed to render the Telemetry section.
 type Snapshot struct {
-	// Engine and Routing are the mixer's engine and routing state, once
-	// known (HasEngine).
 	HasEngine bool
 	Engine    core.EngineStatus
 	Routing   core.RoutingStatus
-	// Notice is why no path has fresh meters, when none has; "" for none.
+	// Reason shown when no path has fresh meters.
 	Notice    string
 	Synthetic bool
-	// Epoch is the meters' diagnostics epoch: above 0 after a reset.
-	Epoch uint64
-	Paths []PathView
-	// Xruns is dropouts in the last minute, and when the last one was.
-	Xruns Recent
-	// Now is now, for "20 min ago".
-	Now time.Time
-	// Idle is processed paths whose source sends no audio right now.
-	Idle []string
-	// Details: Technical details is open.
+	Epoch     uint64
+	Paths     []PathView
+	Xruns     Recent
+	Now       time.Time
+	// Processed paths whose source is currently silent/idle.
+	Idle    []string
 	Details bool
 }
 
-// PathView is one processed path in the snapshot.
+// PathView pairs a channel's display info with its current meter and recent faults.
 type PathView struct {
-	Name string
-	// Channels is 1 for mono, 2 for stereo; 0 when the saved settings don't
-	// say.
-	Channels uint8
+	Name     string
+	Channels uint8 // 1 mono, 2 stereo, 0 unknown
 	Meter    core.TargetMeter
-	// Recent is its audible faults in the last minute, and when each was last
-	// seen.
-	Recent PathRecent
+	Recent   PathRecent
 }
 
-// DBFS is a peak level in dBFS, floored at −120.
+// DBFS converts a linear peak to dBFS, floored at -120 dBFS.
 func DBFS(peak float64) float64 { return 20.0 * math.Log10(num.Max(peak, 1e-6)) }
 
-// DBValue is a level for a column already headed dB: "-14.9", or "silent".
+// DBValue formats a peak for a dB column (e.g. "-14.9" or "silent").
 func DBValue(peak float64) string {
 	if peak <= 1e-6 {
 		return "silent"
@@ -67,14 +52,13 @@ func DBValue(peak float64) string {
 	return fmt.Sprintf("%.1f", DBFS(peak))
 }
 
-// LevelWidth is a level bar's fill from −60 to 0 dBFS, and whether it is at
-// or over full scale (red).
+// LevelWidth maps a peak over [-60, 0] dBFS to a [0, 1] bar fill and reports
+// whether the signal is at or above 0 dBFS.
 func LevelWidth(peak float64) (width float32, over bool) {
 	db := DBFS(peak)
 	return float32(math.Min(math.Max((db+60.)/60., 0.), 1.)), db >= 0.
 }
 
-// msBare is milliseconds without a unit, for figures that share one: "0.72".
 func msBare(ns uint64) string { return fmt.Sprintf("%.2f", float64(ns)/1_000_000.) }
 
 func msUnit(ns uint64) string { return msBare(ns) + " ms" }
@@ -86,12 +70,11 @@ func meanNs(timing *core.Timing) uint64 {
 	return timing.TotalNs / timing.Calls
 }
 
-// share is the average share of a budget used: 0.31 for 31 %.
 func share(timing *core.Timing, budgetNs uint64) float64 {
 	return float64(meanNs(timing)) / float64(max(budgetNs, 1))
 }
 
-// Grouped is 1234567 as "1,234,567".
+// Grouped formats value with comma thousands separators (e.g. "1,234,567").
 func Grouped(value uint64) string {
 	digits := strconv.FormatUint(value, 10)
 	var out strings.Builder
@@ -104,8 +87,7 @@ func Grouped(value uint64) string {
 	return out.String()
 }
 
-// Duration is audio time from a frame count: "43 s", "25 min 43 s",
-// "2 h 05 min".
+// Duration formats processed audio frames as "43 s", "25 min 43 s", or "2 h 05 min".
 func Duration(frames uint64, sampleRate uint32) string {
 	seconds := frames / uint64(max(sampleRate, 1))
 	switch {
@@ -117,7 +99,6 @@ func Duration(frames uint64, sampleRate uint32) string {
 	return fmt.Sprintf("%d h %02d min", seconds/3600, seconds/60%60)
 }
 
-// plural is "1 stall", "3 stalls".
 func plural(count uint64, one, many string) string {
 	if count == 1 {
 		return Grouped(count) + " " + one
@@ -125,7 +106,7 @@ func plural(count uint64, one, many string) string {
 	return Grouped(count) + " " + many
 }
 
-// PhaseLabel is the engine phase as a badge says it.
+// PhaseLabel returns the badge text for an engine phase.
 func PhaseLabel(phase core.EnginePhase) string {
 	switch phase {
 	case core.EnginePhaseStarting:
@@ -140,7 +121,7 @@ func PhaseLabel(phase core.EnginePhase) string {
 	return "Engine error"
 }
 
-// RoutingLabel is the routing phase as a badge says it.
+// RoutingLabel returns the badge text for a routing phase.
 func RoutingLabel(phase core.RoutingPhase) string {
 	switch phase {
 	case core.RoutingPhaseUnmanaged:
@@ -157,28 +138,25 @@ func RoutingLabel(phase core.RoutingPhase) string {
 	return "Routing needs attention"
 }
 
-// StatusKind is what the status badge says.
+// StatusKind classifies the headline telemetry status badge.
 type StatusKind int
 
 const (
 	StatusHealthy StatusKind = iota
-	// StatusRecent is something audible in the last minute, named: "3
-	// dropouts just now".
+	// Recent audible issue within the last minute.
 	StatusRecent
-	// StatusFailed: a channel's noise suppression failed; it stays off until
-	// a restart.
+	// A channel's noise suppression worker failed and stays off until restart.
 	StatusFailed
-	// StatusStopped: RC2FX's processing has stopped.
 	StatusStopped
 )
 
-// Status is the status badge: a kind and, for Recent and Failed, what.
+// Status is the headline status badge; What holds the detail text for Recent and Failed.
 type Status struct {
 	Kind StatusKind
 	What string
 }
 
-// Label is the badge's text.
+// Label returns the display text for s.
 func (s Status) Label() string {
 	switch s.Kind {
 	case StatusHealthy:
@@ -189,7 +167,7 @@ func (s Status) Label() string {
 	return s.What
 }
 
-// Tone is a color as the app picks it: Accent, Warn, Danger or Faint.
+// Tone selects a semantic UI color.
 type Tone int
 
 const (
@@ -199,7 +177,7 @@ const (
 	ToneFaint
 )
 
-// Tone is the badge's color.
+// Tone returns the badge color for s.
 func (s Status) Tone() Tone {
 	switch s.Kind {
 	case StatusHealthy:
@@ -210,7 +188,6 @@ func (s Status) Tone() Tone {
 	return ToneDanger
 }
 
-// where is "Mic 4", or "2 channels" when there are several.
 func where(names []string) string {
 	if len(names) == 1 {
 		return names[0]
@@ -218,8 +195,6 @@ func where(names []string) string {
 	return fmt.Sprintf("%d channels", len(names))
 }
 
-// sharedOf: the audio callback, xruns and helper are shared by every path:
-// one report.
 func sharedOf(paths []PathView) *core.Performance {
 	for i := range paths {
 		if p := paths[i].Meter.Performance; p != nil {
@@ -229,7 +204,7 @@ func sharedOf(paths []PathView) *core.Performance {
 	return nil
 }
 
-// helperOf is the native helper's (late, stalls); JACK has none.
+// helperOf returns the native helper's (late, stalls) counts, or ok=false on JACK.
 func helperOf(paths []PathView) (late, stalls uint64, ok bool) {
 	for i := range paths {
 		p := paths[i].Meter.Performance
@@ -247,7 +222,6 @@ func helperOf(paths []PathView) (late, stalls uint64, ok bool) {
 	return 0, 0, false
 }
 
-// workersOf is the paths whose suppression worker ran.
 func workersOf(paths []PathView) []*PathView {
 	var out []*PathView
 	for i := range paths {
@@ -258,8 +232,7 @@ func workersOf(paths []PathView) []*PathView {
 	return out
 }
 
-// busiest is the worker using the most of its budget on average (the last of
-// equals).
+// busiest returns the worker using the highest average share of its budget (ties go to the last).
 func busiest(workers []*PathView) *core.Performance {
 	var best *core.Performance
 	for _, w := range workers {
@@ -274,7 +247,7 @@ func busiest(workers []*PathView) *core.Performance {
 	return best
 }
 
-// When is clock time and age: "22:34 (20 min ago)".
+// When formats a timestamp with its relative age (e.g. "22:34 (20 min ago)").
 func When(at, now time.Time) string {
 	return fmt.Sprintf("%s (%s)", at.Local().Format("15:04"), Ago(at, now))
 }
@@ -289,9 +262,9 @@ func latest(times ...*time.Time) *time.Time {
 	return out
 }
 
-// Issues is what a path's Issues cell says: audible problems in the last
-// minute (recent, a warning), else when the last one was (quiet), else
-// nothing (ok false).
+// Issues formats a channel row's Issues cell: active/recent audible problems
+// (recent=true), quiet timestamp of the last older issue (recent=false), or
+// ok=false if none.
 func Issues(path *PathView, now time.Time) (text string, recent, ok bool) {
 	if path.Meter.WorkerFailed {
 		return "Suppression failed", true, true
@@ -315,9 +288,8 @@ func Issues(path *PathView, now time.Time) (text string, recent, ok bool) {
 	return "", false, false
 }
 
-// StatusOf is Stopped when processing isn't running; otherwise the most
-// audible recent problem, by name. Old problems and inaudible counters don't
-// count.
+// StatusOf computes the headline status badge, prioritizing stopped processing,
+// worker failures, and recent audible faults over healthy state.
 func StatusOf(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *Snapshot) Status {
 	running := engine.Status == core.EnginePhaseRunning && engine.AudioAdvancing
 	if !running || routing.Status == core.RoutingPhaseError {
@@ -354,7 +326,7 @@ func StatusOf(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *
 	return Status{Kind: StatusHealthy}
 }
 
-// CheckState is a check's answer.
+// CheckState is the status of one telemetry health check.
 type CheckState int
 
 const (
@@ -363,7 +335,7 @@ const (
 	CheckOff
 )
 
-// Tone is the check's dot color.
+// Tone returns the indicator dot color for c.
 func (c CheckState) Tone() Tone {
 	switch c {
 	case CheckOK:
@@ -374,9 +346,8 @@ func (c CheckState) Tone() Tone {
 	return ToneFaint
 }
 
-// Check is one yes/no question and its answer: "31 % load", then what went
-// wrong in the last minute (Problem, a warning), or when it last did
-// (History, quiet). "" is none.
+// Check represents one telemetry health check row, with optional recent Problem
+// warning or quiet History note.
 type Check struct {
 	Label   string
 	Answer  string
@@ -387,7 +358,6 @@ type Check struct {
 
 func checkOK(label, answer string) Check { return Check{Label: label, Answer: answer, State: CheckOK} }
 
-// checkNew warns while problems is not empty.
 func checkNew(label, answer string, problems []string) Check {
 	c := checkOK(label, answer)
 	if len(problems) > 0 {
@@ -403,7 +373,6 @@ func checkOff(label, answer string) Check {
 	return c
 }
 
-// last notes when the problem last happened, unless it is happening now.
 func (c Check) last(at *time.Time, now time.Time) Check {
 	if c.Problem == "" && at != nil {
 		c.History = "last " + When(*at, now)
@@ -415,8 +384,7 @@ func loadLabel(timing *core.Timing, budgetNs uint64) string {
 	return fmt.Sprintf("%.0f %% load", share(timing, budgetNs)*100.)
 }
 
-// Checks is the four checks, always in this order so the layout never
-// moves. Only audible problems warn, and only while recent.
+// Checks builds the four fixed-order health checks; only recent audible faults warn.
 func Checks(snapshot *Snapshot) [4]Check {
 	const (
 		audioLabel       = "Audio keeping up"
@@ -467,7 +435,7 @@ func Checks(snapshot *Snapshot) [4]Check {
 	} else {
 		suppression = checkOff(suppressionLabel, "Not running")
 	}
-	// Late helper work is not audible on its own: shown, never a warning.
+	// Late helper work isn't directly audible, so display it without warning.
 	var helper Check
 	if late, _, ok := helperOf(paths); ok {
 		helper = checkOK(helperLabel, Grouped(late)+" late")
@@ -477,20 +445,18 @@ func Checks(snapshot *Snapshot) [4]Check {
 	return [4]Check{audio, dropouts, suppression, helper}
 }
 
-// Badge is one of the row of status badges after the status itself: an
-// optional quiet name, then its value in a tone (ToneText is plain text).
+// Badge is a secondary pill shown beside the headline status.
 type Badge struct {
 	Name string
 	Text string
 	Tone Tone
 }
 
-// ToneText is a badge's plain text color.
+// ToneText renders a badge using the default foreground text color.
 const ToneText Tone = 100
 
-// Badges is the badges after the status, in order: the engine phase when
-// not running, routing when not active, how long audio has run, the format,
-// and Simulated.
+// Badges builds the secondary status badges (engine/routing state when abnormal,
+// uptime, audio format, and simulated flag).
 func Badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *Snapshot) []Badge {
 	var out []Badge
 	if engine.Status != core.EnginePhaseRunning {
@@ -525,7 +491,7 @@ func Badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *Sn
 	return out
 }
 
-// FormatLabel is "Mono", "Stereo", or "4 ch"; "" when unknown.
+// FormatLabel formats a channel count as "Mono", "Stereo", "N ch", or "" if unknown.
 func FormatLabel(channels uint8) string {
 	switch channels {
 	case 0:
@@ -538,7 +504,7 @@ func FormatLabel(channels uint8) string {
 	return fmt.Sprintf("%d ch", channels)
 }
 
-// Delay is a path's reported delay, "24.7 ms"; "" when it reports none.
+// Delay formats a path's latency in milliseconds, or "" when unreported.
 func Delay(meter *core.TargetMeter, sampleRate uint32) string {
 	if meter.LatencySamples == 0 {
 		return ""
@@ -546,18 +512,17 @@ func Delay(meter *core.TargetMeter, sampleRate uint32) string {
 	return fmt.Sprintf("%.1f ms", float64(meter.LatencySamples)*1000./float64(max(sampleRate, 1)))
 }
 
-// Fact is one technical figure: its name, value, and what it means.
+// Fact is one labeled metric and its explanation in the Technical details drawer.
 type Fact struct {
 	Label string
 	Value string
 	Help  string
 }
 
-// NotReported is a figure the mixer did not send.
+// NotReported is displayed when the mixer omitted a metric.
 const NotReported = "Not reported"
 
-// Facts is every figure behind the checks, raw. Startup faults are already
-// left out.
+// Facts builds the raw technical metrics backing the health checks.
 func Facts(engine *core.EngineStatus, paths []PathView) []Fact {
 	pair := func(a, b uint64) string { return Grouped(a) + " · " + Grouped(b) }
 	recent := func(ns *uint64) string {
@@ -665,13 +630,13 @@ func Facts(engine *core.EngineStatus, paths []PathView) []Fact {
 	}
 }
 
-// FactColumns splits the facts in two columns, reading down the left first.
+// FactColumns splits facts into two columns, filling the left column first.
 func FactColumns(facts []Fact) (left, right []Fact) {
 	half := (len(facts) + 1) / 2
 	return facts[:half], facts[half:]
 }
 
-// Notice texts for a snapshot without paths.
+// Empty-state notices shown when no paths have fresh meters.
 const (
 	NoticeOffline     = "Connect to the mixer to see its telemetry."
 	NoticeWaiting     = "Waiting for the mixer's state."
@@ -680,5 +645,5 @@ const (
 	NoticeNoFresh     = "No processed channel has fresh audio telemetry yet."
 )
 
-// IdleLine is the line naming processed paths with no audio now.
+// IdleLine formats the list of processed paths with no active audio.
 func IdleLine(idle []string) string { return "No audio right now: " + strings.Join(idle, ", ") }

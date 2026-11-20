@@ -14,8 +14,7 @@ concurrency:
 
 jobs:
   renew:
-    # The emergency stop: set the variable to false if a signing key leaks
-    # (docs/developer/mixer-releases.md).
+    # Kill switch in case a signing key is compromised (see docs/developer/mixer-releases.md).
     if: vars.MIXER_UPDATES_ENABLED == 'true'
     runs-on: ubuntu-24.04
     environment: mixer-renewal
@@ -29,8 +28,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      # No build cache where release keys are in reach: the tool is built
-      # from this checkout and go.sum alone.
+      # Disable build cache in jobs with signing key access; build from checkout + go.sum only.
       - uses: actions/setup-go@v6.0.0
         with:
           go-version-file: desktop/go.mod

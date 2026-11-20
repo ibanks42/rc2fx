@@ -1,108 +1,76 @@
 # Controller API and settings
 
-`rc2fxd` serves the desktop app over USB 1. A request is a method, an
-`api/v1/...` path, and an optional JSON body of at most 512 KiB, framed into
-the RC2FX HID reports described in [USB control](usb-control.md). A reply is
-a status code and a JSON body. `rc2fxd` has no network listener.
+`rc2fxd` serves the desktop app over USB 1. Every request carries a method, an `api/v1/...` path, and an optional JSON body up to 512 KiB, framed inside the RC2FX HID reports documented in [USB control](usb-control.md). Replies come back as a status code and a JSON body. There's no network listener.
 
-`go -C desktop run ./cmd/usb-probe` exercises the API from a
-computer connected to USB 1. `./xtask mixer api METHOD PATH [BODY|@file]`
-sends a single request.
+You can poke the API from any computer plugged into USB 1 with `go -C desktop run ./cmd/usb-probe`, or fire off a single request using `./xtask mixer api METHOD PATH [BODY|@file]`.
 
 | Method and path | Body | Result |
 | --- | --- | --- |
 | `GET /api/v1/state` | | Saved settings, revision, engine and selection status |
-| `GET /api/v1/events` | | The next `state`, `meter`, or `usb` event as `{"event", "data"}`, or `null` after 50 ms |
+| `GET /api/v1/events` | | Next `state`, `meter`, or `usb` event as `{"event", "data"}`, or `null` after 50 ms |
 | `GET /api/v1/inputs` | | The show's input names and order, read from the stock show file |
-| `GET /api/v1/version` | | The installed RC2FX mixer software and RØDE firmware versions; see [Versions](#versions) |
+| `GET /api/v1/version` | | Installed RC2FX mixer software and RØDE firmware versions; see [Versions](#versions) |
 | `GET /api/v1/ssh` | | Developer SSH access status; USB 1 only, see [Developer SSH](#developer-ssh) |
 | `PUT /api/v1/ssh` | `{"enabled", "publicKey"}` | Add or remove RC2FX's developer SSH key; USB 1 only |
-| `POST /api/v1/update` | `{"version", "size", "sha256", "metadata": {"root", "timestamp", "snapshot", "targets"}, "encoding", "uploadSize"}` | Start a signed in-place update, or a delta upload; USB 1 only, see [In-place updates](#in-place-updates) |
-| `PUT /api/v1/update/{id}` | `{"offset", "data"}` | Append a base64 chunk to the upload; 409 carries `expectedOffset` |
+| `POST /api/v1/update` | `{"version", "size", "sha256", "metadata": {"root", "timestamp", "snapshot", "targets"}, "encoding", "uploadSize"}` | Start a signed in-place update or delta upload; USB 1 only, see [In-place updates](#in-place-updates) |
+| `PUT /api/v1/update/{id}` | `{"offset", "data"}` | Append a base64 chunk to the upload; 409 returns `expectedOffset` |
 | `POST /api/v1/update/{id}/install` | | Verify and install the upload, then restart and commit or roll back |
-| `GET /api/v1/update/{id}` | | The session's state, progress, and error, if any |
-| `DELETE /api/v1/update/{id}` | | Abort the session and delete its upload |
-| `GET /api/v1/update/last` | | The last in-place update's outcome, or `{}` |
-| `GET /api/v1/update/installed` | | The running release and the SHA-256 of each installed payload file |
-| `GET /api/v1/image-check` | | The mixer's check of the files the last flash unpacked; USB 1 only, see [Image check](#image-check) |
+| `GET /api/v1/update/{id}` | | Session state, progress, and any error |
+| `DELETE /api/v1/update/{id}` | | Abort the session and drop its upload |
+| `GET /api/v1/update/last` | | Outcome of the last in-place update, or `{}` |
+| `GET /api/v1/update/installed` | | Running release and SHA-256 of each installed payload file |
+| `GET /api/v1/image-check` | | On-device integrity check of the last flash; USB 1 only, see [Image check](#image-check) |
 | `GET /api/v1/diagnostics` | | State plus bounded telemetry history (callback timing, worker counters) |
-| `GET /api/v1/diagnostics/events?after=SEQ` | | The diagnostic event log after sequence number `SEQ`, up to 256 events per page |
-| `POST /api/v1/diagnostics/reset` | | Reset the telemetry baselines and clear the event log |
-| `GET /api/v1/settings` | | The saved settings file (`state.json`: effects and presets), exactly as stored |
+| `GET /api/v1/diagnostics/events?after=SEQ` | | Diagnostic event log after sequence number `SEQ`, up to 256 events per page |
+| `POST /api/v1/diagnostics/reset` | | Reset telemetry baselines and clear the event log |
+| `GET /api/v1/settings` | | Raw saved settings file (`state.json`: effects and presets) as stored on disk |
 | `PUT /api/v1/config` | `{"expectedRevision", "targets": [...]}` | Save and apply effect settings |
-| `PUT /api/v1/live` | `{"expectedRevision", "targets": [...]}` | Play effect settings at once and save them later; see [Live editing](#live-editing) |
-| `PUT /api/v1/selection` | `{"expectedRevision", "expectedGeneration", "targetIds": [...]}` | Choose which paths are processed |
-| `PUT /api/v1/routing` | `{"enabled", "expectedRevision", "expectedGeneration"}` | Turn all RC2FX processing off or back on |
-| `POST /api/v1/engine/restart` | `{"expectedRevision", "expectedGeneration"}` | Restart a failed engine |
+| `PUT /api/v1/live` | `{"expectedRevision", "targets": [...]}` | Apply effect settings to live audio immediately without saving yet; see [Live editing](#live-editing) |
+| `PUT /api/v1/selection` | `{"expectedRevision", "expectedGeneration", "targetIds": [...]}` | Pick which paths get processed |
+| `PUT /api/v1/routing` | `{"enabled", "expectedRevision", "expectedGeneration"}` | Toggle all RC2FX processing off or back on |
+| `POST /api/v1/engine/restart` | `{"expectedRevision", "expectedGeneration"}` | Restart a failed audio engine |
 | `GET /api/v1/presets` | | `{"presets": [...]}` |
-| `POST /api/v1/presets` | `{"name", "expectedRevision"}` | Save the current settings as a preset |
+| `POST /api/v1/presets` | `{"name", "expectedRevision"}` | Save current settings as a preset |
 | `POST /api/v1/presets/{id}/apply` | `{"expectedRevision"}` | Load a preset |
 | `DELETE /api/v1/presets/{id}` | | Delete a preset |
 
-Every write includes the revision it was based on. If the revision or engine
-generation is stale, the write is refused with 409. Errors are
-`{"error": "message"}` with one of these statuses:
+All writes carry the revision they were built against; a stale revision or engine generation gets rejected with `409`. Errors return `{"error": "message"}` with one of these status codes:
 
 | Status | Meaning |
 | --- | --- |
 | 400 | Invalid settings |
 | 404 | Unknown preset |
 | 409 | Revision or generation conflict |
-| 422 | A change the running audio can't make in place (see [Live editing](#live-editing)) |
+| 422 | Change can't be applied in place to running audio (see [Live editing](#live-editing)) |
 | 503 | Engine busy or stopped |
 
-The in-place update endpoints add 507 when RAM or disk is too full, and use
-409 for an upload that conflicts with the session (see
-[In-place updates](#in-place-updates)).
+In-place update endpoints also use `507` when RAM or disk is too full, and `409` for upload/session conflicts (see [In-place updates](#in-place-updates)).
 
 ## Live editing
 
-`PUT /api/v1/live` takes the same body as `PUT /api/v1/config` and puts the
-settings on the running audio at once. What plays is what the user keeps: the
-app sends a control's value while it moves and saves with `PUT /api/v1/config`
-once edits stop. Undo, redo, and revert are live edits too, of earlier
-settings; nothing is ever rolled back on its own. A live edit stores nothing,
-keeps the revision, and sends no state event. It answers
-`{"accepted": true, "baseRevision": N}`, where `N` is the saved revision,
-unchanged.
+`PUT /api/v1/live` accepts the same payload as `PUT /api/v1/config` and pushes the parameters straight onto the running audio. What you hear is what you keep: while you drag a slider, the app streams live edits, then commits with `PUT /api/v1/config` once you stop. Undo, redo, and revert are just live edits back to earlier settings; nothing ever rolls back automatically. A live edit doesn't touch disk, doesn't bump the revision, and emits no state event. It replies with `{"accepted": true, "baseRevision": N}`, where `N` is the unchanged saved revision.
 
 | Status | Meaning |
 | --- | --- |
-| 400 | Invalid settings, as for a save |
-| 404 | This engine can't edit live (JACK or simulation); save instead |
-| 409 | `expectedRevision` is not the saved revision |
-| 422 | `liveRequiresSave: ...`: the change would rebuild processing (a target's kind or channel count, noise suppression switched on or off, its lookahead, or the effect order while it runs); save instead |
-| 503 | The engine isn't running, or is still applying the last change; try again shortly |
+| 400 | Invalid settings (same validation as a save) |
+| 404 | This engine doesn't support live edits (JACK or simulation); use `PUT /api/v1/config` |
+| 409 | `expectedRevision` doesn't match the saved revision |
+| 422 | `liveRequiresSave: ...`: the change would rebuild the pipeline (target kind or channel count, toggling noise suppression on/off, changing its lookahead, or reordering effects while suppression is running); save instead |
+| 503 | Engine isn't running, or is still applying the previous change; retry shortly |
 
-A 422 compares with what plays now: the last live edit, or else the saved
-settings. Saving exactly what live edits play changes no audio: the engine
-stays Running, routing stays as it is, and the engine's applied revision is
-the new one at once. Any save, routing, or selection change replaces live
-edits with what it saves.
+`422` checks compare against what's currently playing (the last live edit, or the saved settings if none). Saving the exact settings that live edits are already playing doesn't disturb audio at all: the engine stays Running, routing doesn't budge, and the applied revision immediately moves to the new one. Any save, routing toggle, or selection change replaces pending live edits with what it saves.
 
-`rc2fxd` saves live edits itself when the app leaves them unsaved: once
-nobody has been subscribed to `GET /api/v1/events` for two seconds, and when
-`rc2fxd` stops. That save is like the app's own (the revision goes up by one
-and a state event is sent) and changes no audio. If the settings can't be
-stored, the saved ones go back on the audio instead. If `rc2fxd` dies before
-it can save, its next start puts the saved settings back on the audio; it
-refuses to start if that would mean rebuilding processing.
+If the app disconnects and leaves live edits unsaved, `rc2fxd` persists them itself: either two seconds after the last `GET /api/v1/events` subscriber drops off, or when `rc2fxd` shuts down. That auto-save works just like a normal save (bumps the revision, emits a state event) without interrupting audio. If writing to disk fails, it puts the last saved settings back on the audio instead. If `rc2fxd` crashes before it can flush, the next startup restores the saved settings onto the audio, or refuses to start if doing so would require rebuilding the pipeline.
 
 ## Trust boundary
 
-The computer on USB 1 is trusted to act on the mixer. Anything that can talk
-to RC2FX's control reports can change settings and restart audio, and
-`PUT /api/v1/ssh` gives its key root SSH access. There is no separate login:
-physical access to USB 1 is the authorization.
+Anything plugged into USB 1 is trusted to control the mixer. Any process that can talk to RC2FX's HID reports can edit settings, restart audio, and use `PUT /api/v1/ssh` to grant itself root SSH access. There's no separate login; physical access to USB 1 is the auth boundary.
 
-The mixer isn't trusted by the desktop for anything beyond what it shows. The
-app and installer treat every reply as untrusted data: JSON is parsed with
-duplicate-key, depth, and size limits, text is checked before it is displayed,
-and a reply can't change what the installer flashes.
+The reverse isn't true: the desktop app doesn't trust the mixer beyond what it displays. Both the app and installer parse every reply as untrusted data, enforcing duplicate-key, depth, and size limits on JSON, sanitizing text before rendering it, and never letting a mixer reply dictate what the installer flashes.
 
 ## Versions
 
-`GET /api/v1/version` returns what the mixer has installed:
+`GET /api/v1/version` reports what's installed on the mixer:
 
 ```json
 {"runtime": "1.0.0", "protocol": 1, "firmware": "1.7.7", "firmwareProfile": "rodecaster-pro-ii-1.7.7"}
@@ -110,36 +78,21 @@ and a reply can't change what the installer flashes.
 
 | Field | Source |
 | --- | --- |
-| `runtime`, `protocol` | `version` and `protocolVersion` of the installed `/opt/rc2fx/mixer-release.json` |
-| `firmware`, `firmwareProfile` | The firmware profile the launcher selected after `rc2fx-firmware check-device` verified the stock mixer, looked up in the installed catalog for the mixer's own model |
-| `inPlaceUpdates` | `2` when this controller installs signed releases in place over USB 1 and accepts delta uploads; `1` for the earlier in-place-only release. Absent when neither is available. Clients treat any value above zero as in-place capable. |
+| `runtime`, `protocol` | `version` and `protocolVersion` from `/opt/rc2fx/mixer-release.json` |
+| `firmware`, `firmwareProfile` | Firmware profile selected by the launcher after `rc2fx-firmware check-device` verified the stock mixer, looked up in the installed catalog for this model |
+| `inPlaceUpdates` | `2` when the controller supports signed in-place updates over USB 1 plus delta uploads; `1` for earlier in-place-only builds; omitted if unsupported. Clients should treat any value `> 0` as in-place capable. |
 
-`rc2fxd` reads these once at startup, from `--release`, `--firmware-catalog`,
-and `--firmware-profile`, which `rc2fx.sh` passes. A field it can't read or
-check is omitted, never guessed, and `rc2fx.sh`'s controller log says why. A
-mixer with nothing known returns `{}`. RC2FX mixer software from before this
-endpoint returns 404; the app shows those versions as **Unknown**.
+`rc2fxd` loads these once at startup from `--release`, `--firmware-catalog`, and `--firmware-profile` (passed by `rc2fx.sh`). Any field it can't read or verify is simply omitted (never guessed), with the reason logged in `rc2fx.sh`'s controller log. If nothing can be read, it returns `{}`. Older builds without this endpoint answer `404`, and the app displays those versions as **Unknown**.
 
-The versions are not part of `GET /api/v1/state` or its events, so the state's
-strict schema is unchanged. They can't change without a restart, so the app
-reads them again after each reconnect. Clients should ignore fields they
-don't know.
+Version info is kept out of `GET /api/v1/state` and state events so the strict state schema doesn't have to change. Since versions can't change without a restart, the app re-fetches them on every reconnect. Clients should ignore unknown fields.
 
 ## In-place updates
 
-A signed RC2FX release can be installed without flashing RØDE's firmware when
-that firmware stays the same. The app sends the release's signed metadata and
-its payload over USB 1; the mixer verifies them itself, swaps `/opt/rc2fx` in
-place with a rollback copy, and restarts only RØDE's audio engine and
-`rc2fxd`. A first install and any RØDE firmware change still need a full
-flash. The design is in
-[signed mixer releases](../developer/mixer-releases.md#in-place-updates).
+When RØDE's firmware stays the same, you can update RC2FX itself without doing a full firmware flash. The desktop app pushes the signed release metadata and payload over USB 1; the mixer verifies everything on-device, swaps `/opt/rc2fx` in place while keeping a rollback copy, and restarts only RØDE's audio engine and `rc2fxd`. First installs and RØDE firmware upgrades still require a full flash. See [signed mixer releases](../developer/mixer-releases.md#in-place-updates) for the full design.
 
-These endpoints exist only on USB 1, and only when the controller runs from
-the installed `/opt/rc2fx`; the touchscreen socket and a RAM run answer 404.
-`GET /api/v1/version` reports `inPlaceUpdates` when they are available.
+These endpoints are only exposed over USB 1 and only when running from an installed `/opt/rc2fx`; the touchscreen socket and RAM runs return `404`. Check `inPlaceUpdates` in `GET /api/v1/version` to see if they're available.
 
-`POST /api/v1/update` takes:
+`POST /api/v1/update` expects:
 
 ```json
 {"version": "0.2.0", "size": 11534336, "sha256": "…64 hex…",
@@ -147,36 +100,23 @@ the installed `/opt/rc2fx`; the touchscreen socket and a RAM run answer 404.
  "metadata": {"root": ["…1.root.json…"], "timestamp": "…", "snapshot": "…", "targets": "…"}}
 ```
 
-`version`, `size`, and `sha256` name the RC2FX release; the metadata are the
-TUF role documents the app downloaded, each sent as a string holding the
-file's exact text: the snapshot and timestamp sign the bytes of the files
-they list, so reformatted JSON would not verify. `root` is an array of root
-documents, oldest first: one, or the chain that follows a key rotation.
-`allowDowngrade` is optional and defaults to false: a release older than the
-installed one is refused unless the app asks for it explicitly and the target
-is signed. Starting a session replaces one that isn't installing yet (an
-upload the app abandoned), freeing its upload; while an update is installing,
-a new start is `409`. The reply is `201` with the session:
+`version`, `size`, and `sha256` identify the RC2FX release. `metadata` holds the TUF role documents the app downloaded, each sent as a raw string with the file's exact bytes. Snapshot and timestamp sign those exact bytes, so re-serializing JSON would break verification. `root` is an ordered array of root documents (oldest first), either a single root or a key-rotation chain. `allowDowngrade` is optional and defaults to `false`; older versions are rejected unless explicitly requested and properly signed. Starting a new session replaces any existing session that hasn't started installing yet (e.g., an abandoned upload) and frees its temp file; if an install is already underway, it returns `409`. Success returns `201` with the new session:
 
 ```json
 {"id": "0123456789abcdef", "state": "accepting", "version": "0.2.0",
  "size": 11534336, "received": 0}
 ```
 
-`GET /api/v1/update/installed` reports what the mixer has, which is what the
-app diffs a release against:
+`GET /api/v1/update/installed` lists what's currently on the mixer so the app can compute a delta against it:
 
 ```json
 {"version": "0.1.5",
  "files": {"librc2fx_native.so": "…64 hex…", "rc2fxd": "…64 hex…", "…": "…"}}
 ```
 
-`files` lists each payload file that is a regular file in `/opt/rc2fx`; a
-missing or non-regular file is absent. The app sends those files whole. The
-endpoint is `404` when the running release is unknown.
+`files` includes every regular payload file in `/opt/rc2fx` (missing or non-regular files are omitted, so the app sends them whole). Returns `404` if the running release is unknown.
 
-The upload can instead be a delta (`encoding: "delta-1"`), with `uploadSize`
-naming its length:
+To send a delta instead of a full archive, set `encoding: "delta-1"` and include `uploadSize`:
 
 ```json
 {"version": "0.2.0", "size": 11534336, "sha256": "…64 hex…",
@@ -184,33 +124,15 @@ naming its length:
  "metadata": {"root": ["…"], "timestamp": "…", "snapshot": "…", "targets": "…"}}
 ```
 
-`size`, `sha256`, and the metadata still name the signed envelope; `size` is
-what the delta rebuilds to. `uploadSize` is required with `encoding` and
-refused without it, and must be 1..67108864 bytes. `received`, completeness, and
-every chunk are then measured in delta bytes, and session replies also carry
-`"encoding"` and `"uploadSize"`. Unknown encodings are `400`. On install the
-mixer rebuilds the envelope from the live files, then runs exactly the same
-verification and install as for a plain upload; a delta that does not rebuild
-into the signed envelope is refused and the session is `failed`. See
-[delta uploads](../developer/mixer-releases.md#delta-uploads).
+`size`, `sha256`, and `metadata` still describe the full signed envelope that the delta rebuilds to. `uploadSize` is required whenever `encoding` is set (and rejected if `encoding` is absent), bounded to `1..67108864` bytes. With delta encoding active, `received`, completion checks, and chunks all count delta bytes, and session responses include `"encoding"` and `"uploadSize"`. Unknown encodings return `400`. At install time, the mixer reconstructs the full envelope from the live files and runs the exact same verification and swap path as a full upload; if the rebuilt envelope doesn't match the signed target, the session is marked `failed`. See [delta uploads](../developer/mixer-releases.md#delta-uploads).
 
-`PUT /api/v1/update/{id}` carries `{"offset": N, "data": "<base64>"}` with at
-most 256 KiB of raw bytes per request. It appends at `offset`, which must be
-where the upload has reached. A chunk the mixer already holds is accepted
-again, also after the final chunk has made the session `complete`, so a lost
-reply is recovered by resending it. Any other offset is
-`409` with the position to resume at:
+`PUT /api/v1/update/{id}` takes `{"offset": N, "data": "<base64>"}` with up to 256 KiB of raw bytes per call, appending at the current `offset`. Resending a chunk the mixer already has is accepted idempotently (even after the final chunk moves the session to `complete`), so a lost reply is easy to recover from. Any other offset fails with `409` and tells you where to resume:
 
 ```json
 {"error": "The upload does not continue at offset 131072", "expectedOffset": 131072}
 ```
 
-`POST /api/v1/update/{id}/install` verifies the upload (signature chain,
-release identity, size, hash, firmware profile, and version) and answers
-`200` with the current state, normally `"state": "installing"`, once it is
-accepted. The install, the swap, and the restart then run on their own; a
-repeated request returns the current state instead of starting a second one.
-`GET /api/v1/update/{id}` reports it:
+`POST /api/v1/update/{id}/install` validates the upload (signature chain, release identity, size, hash, firmware profile, and version) and replies `200` with the session state (normally `"state": "installing"`) once accepted. Staging, swapping, and restarting then proceed asynchronously; calling `install` again just returns the current state. Poll `GET /api/v1/update/{id}` for progress:
 
 ```json
 {"id": "0123456789abcdef", "state": "restarting", "version": "0.2.0",
@@ -219,57 +141,42 @@ repeated request returns the current state instead of starting a second one.
 
 | State | Meaning |
 | --- | --- |
-| `accepting` | The session is open and the upload is incomplete |
-| `complete` | Every byte is uploaded; install can start |
-| `installing` | Verified; files are being staged and swapped in |
-| `restarting` | The mixer is being restarted into the new release |
-| `failed` | Refused or failed; `error` says why, and the upload is kept for another `install` or a `DELETE` |
+| `accepting` | Session is open, still receiving bytes |
+| `complete` | All bytes received; ready for `install` |
+| `installing` | Verified; staging files and swapping `/opt/rc2fx` |
+| `restarting` | Restarting into the new release |
+| `failed` | Rejected or failed; `error` explains why, and the upload stays around for another `install` attempt or `DELETE` |
 
-The session lives in RAM, so the restart that installs the release ends it.
-The app reconnects and reads `GET /api/v1/update/last` for the outcome:
+Because the session lives in RAM, the restart clears it. Once the app reconnects, it checks `GET /api/v1/update/last` for the result:
 
 ```json
 {"outcome": "committed", "from": "0.1.5", "to": "0.2.0",
  "guiShimNeedsReboot": false}
 ```
 
-`outcome` is `committed` or `rolledBack`; `reason` explains a rollback. The
-GUI shim only takes effect at the next boot, which
-`guiShimNeedsReboot` records. A mixer that has never run an in-place update
-answers `{}`. Accepting an install (`installing`) removes the previous
-record, so until the new update records its own outcome the endpoint also
-answers `{}`; a record never describes an earlier attempt at the same
-version. `DELETE /api/v1/update/{id}` aborts a session that is not
-installing and deletes its upload; `409` refuses one that is.
+`outcome` is either `committed` or `rolledBack` (with a `reason` field on rollback). `guiShimNeedsReboot` flags whether the GUI shim changed and won't take effect until the next full reboot. A mixer that's never run an in-place update returns `{}`. Entering `installing` wipes any previous record, so you'll also get `{}` until the new update writes its outcome. You'll never accidentally read a stale result from an earlier attempt at the same version. `DELETE /api/v1/update/{id}` cancels an open session and deletes its upload (`409` if it's already installing).
 
 | Status | Meaning |
 | --- | --- |
 | 400 | Malformed request, version, or hash |
-| 404 | Unknown session, or the endpoint is not available here |
-| 409 | Another update or a pending install, an incomplete upload, an install already running, a refused delta, or a refused release |
-| 507 | Not enough RAM in `/run` or space on `/opt` |
-| 500 | The mixer could not stage, read, or restart |
+| 404 | Unknown session, or endpoint unavailable here |
+| 409 | Another update or pending install, incomplete upload, install already running, rejected delta, or rejected release |
+| 507 | Not enough RAM in `/run` or free space on `/opt` |
+| 500 | Mixer failed to stage, read, or restart |
 
 ## Image check
 
-`GET /api/v1/image-check` reports the launcher's check of RØDE's files
-against the list the installer put in the image (see
-[Installer internals](installer.md#image-check)):
+`GET /api/v1/image-check` returns the launcher's verification of RØDE's files against the manifest baked into the image by the installer (see [Installer internals](installer.md#image-check)):
 
 ```json
 {"status": "repaired", "checked": "2026-11-15T22:10:00Z", "repaired": ["usr/bin/rode-init-update-env.sh"]}
 ```
 
-`status` is `none` (nothing to check), `pending`, `ok`, `repaired` (restart
-the mixer), or `damaged`. `repaired` and `damaged` list up to 32 paths each;
-`unlisted` counts the rest. Mixer software from before the check answers 404.
+`status` is one of `none` (nothing to check), `pending`, `ok`, `repaired` (reboot the mixer), or `damaged`. `repaired` and `damaged` each list up to 32 paths, with `unlisted` counting any overflow. Older mixer software without this check returns `404`.
 
 ## Developer SSH
-`GET /api/v1/ssh` and `PUT /api/v1/ssh` exist only on USB 1. The touchscreen
-socket answers them with 404, as does `rc2fxd` from before them. `rc2fxd` runs
-`rc2fx.sh developer-ssh`, which owns the behavior, off its async executor,
-one call at a time, with a ten-second limit for the script and everything it
-starts, and with bounded input and output.
+
+`GET /api/v1/ssh` and `PUT /api/v1/ssh` are USB 1 only; the touchscreen socket and older `rc2fxd` builds answer `404`. `rc2fxd` delegates the work to `rc2fx.sh developer-ssh` off its async executor, serialized one call at a time with bounded I/O and a 10-second timeout covering the script and any child processes.
 
 ```json
 {"managed": true, "managedFingerprint": "SHA256:…", "unmanagedKeys": 1,
@@ -278,58 +185,33 @@ starts, and with bounded input and output.
 
 | Field | Meaning |
 | --- | --- |
-| `managed`, `managedFingerprint` | RC2FX's key is in root's `authorized_keys`, and its fingerprint |
-| `unmanagedKeys` | Other key lines in that file. RC2FX never changes them. |
-| `hostKeys` | The SSH server's public host keys, for pinning |
+| `managed`, `managedFingerprint` | Whether RC2FX's key is in root's `authorized_keys`, plus its fingerprint |
+| `unmanagedKeys` | Count of other key lines in that file (RC2FX never touches them) |
+| `hostKeys` | SSH server's public host keys, for host-key pinning |
 | `serverRunning` | Whether `sshd` was seen running; omitted if unknown |
 
-`managed`, `unmanagedKeys`, and `hostKeys` are always present; a reply without
-them is malformed, not "off". Unknown fields should be ignored.
+`managed`, `unmanagedKeys`, and `hostKeys` are always present; a reply missing any of them is malformed, not "disabled". Ignore unknown fields.
 
-`PUT` takes `{"enabled": true, "publicKey": "ssh-ed25519 …"}` or
-`{"enabled": false}` and returns the new status. Only one plain `ssh-ed25519`
-key is accepted, without options; a comment is dropped. Enabling writes it
-as one line marked `rc2fx-managed-developer-key`, replacing an earlier
-managed line. Disabling removes only that line, which stops new logins but
-doesn't end open sessions. Every other byte of `authorized_keys` is kept, the
-file is replaced atomically, and `sshd` is never restarted.
+`PUT` accepts `{"enabled": true, "publicKey": "ssh-ed25519 …"}` or `{"enabled": false}` and returns the updated status. Only a single plain `ssh-ed25519` key with no key options is allowed (any trailing comment is stripped). Enabling writes it as one line tagged `rc2fx-managed-developer-key`, replacing any previous managed line. Disabling deletes only that line, blocking new logins without killing active sessions. Every other byte of `authorized_keys` stays intact, writes are atomic, and `sshd` is never restarted.
 
 | Status | Meaning |
 | --- | --- |
 | 400 | Invalid request or key |
-| 404 | Not available here (touchscreen socket or older `rc2fxd`) |
-| 409 | First boot after an update, another SSH change in progress, or `~/.ssh` unsafe to change |
-| 500 | The script failed, timed out, or reported something unreadable |
+| 404 | Unavailable here (touchscreen socket or older `rc2fxd`) |
+| 409 | First boot after an update, another SSH change in flight, or `~/.ssh` isn't safe to modify |
+| 500 | Script failed, timed out, or returned unreadable output |
 
 ## On-device touchscreen control (in development)
 
-`rc2fxd --ui-socket /run/rc2fx/ui.sock` serves the hardware panel over a
-local Unix stream socket. The socket is mode 0600, accepts only peers with
-the same UID, and allows four clients at most. The mixer supervisor enables
-it only when the controller advertises the option. Older controllers are
-USB-only. The socket does not add a TCP listener or change the USB 1
-transport.
+`rc2fxd --ui-socket /run/rc2fx/ui.sock` serves the hardware touchscreen panel over a local Unix stream socket (`0600`, same-UID peers only, max 4 clients). The mixer supervisor only turns it on if the controller advertises the flag; older controllers stay USB-only. It doesn't open a TCP port or change anything about USB 1.
 
-The protocol is compact and versioned, and is documented in
-`crates/rc2fx-device/src/ui_control.rs`. It provides state and preset
-summaries, applying presets, and turning processing on and off. These go
-through the same API and coordinator as USB requests, so writes keep the
-revision and generation checks and the same save and publish behavior.
-There is one settings store, and the panel has no direct path to the DSP.
-Eligibility distinguishes presets, ON, and an explicit OFF during a fault. A
-lost reply to a write does not allow the write to be replayed.
+The wire protocol is compact, versioned, and documented in `crates/rc2fx-device/src/control/ui_control.rs`. It exposes state and preset summaries, preset apply, and toggling processing on or off. All actions route through the exact same API and coordinator as USB requests, keeping revision/generation checks and save/publish behavior identical. There's only one settings store, and the panel never talks to the DSP directly. Eligibility separates presets, ON, and an explicit OFF during a fault, and a dropped reply never allows a write to be replayed.
 
-The panel is an unfinished experiment. It and the steps to run it from RAM
-are described in [experiments/device-panel](../../experiments/device-panel/README.md).
-Opening or closing the panel changes no settings. Apply and the processing
-buttons act only when touched.
+The panel is still an unfinished experiment; see [experiments/device-panel](../../experiments/device-panel/README.md) for details and how to run it from RAM. Just opening or closing the panel won't change any settings; Apply and the processing toggles only fire when tapped.
 
 ## Settings
 
-Saved settings use schema version 9. Settings in any other schema are
-rejected, not upgraded: the controller refuses a saved state it cannot read
-and leaves the file as it is. The desktop app and the mixer runtime must use
-the same schema, so update them together.
+Saved settings use schema version 9. Any other schema version is rejected instead of migrated: the controller refuses to load an unreadable state and leaves the file untouched on disk. Since the desktop app and mixer runtime must speak the same schema, update them together.
 
 ```json
 {
@@ -364,75 +246,43 @@ the same schema, so update them together.
 
 ### Targets
 
-- `kind` is `mic`, `playback`, or `output`. `channels` is 1 or 2.
-- IDs use lowercase letters, digits, and hyphens, up to 48 characters.
-- `order` is a permutation of all six stages. A disabled stage keeps its
-  position.
-- Each channel has 0–32 EQ bands. On a stereo target, `rightBands` gives the
-  right channel its own bands. Without it, both channels share `bands`. The
-  EQ fields and EasyEffects conversion are described in
-  [EQ format](eq-format.md).
+- `kind` is `mic`, `playback`, or `output`; `channels` is `1` or `2`.
+- IDs are lowercase letters, digits, and hyphens, up to 48 characters.
+- `order` must be a permutation of all six stages. Disabled stages stay in place.
+- Each channel supports 0–32 EQ bands. On stereo targets, `rightBands` gives the right channel its own bands; omit it to share `bands` across both channels. See [EQ format](eq-format.md) for the band fields and EasyEffects conversion.
 
 ### Suppression
 
-- Suppression can be enabled on one target at a time: a mono microphone or
-  the Chat voice mix (`send-chat`, or `duo-send-chat` on a Duo). The limit
-  covers all saved targets, including bypassed and deselected ones. To move
-  it, disable and apply the old target first. Other outputs and playback
-  inputs reject suppression.
-- Suppression always uses DeepFilterNet3; settings name no model. `wet`
-  blends the result with the dry signal.
-- `lookahead` is 0 or 1. A value of 1 adds one 240-sample hop of delay. If
-  omitted it is 0.
-- On Chat, one mono denoiser processes the microphone contribution, captured
-  from the qualified vendor mixing path. Pads and playback skip suppression
-  and the voice gate, stay stereo, and get the same delay. Other output
-  effects run on the recombined stereo signal. Suppression on Chat runs
-  before that sum regardless of its position in `order`, and the other
-  stages keep their relative order. If the microphone stem is missing or
-  invalid, it is an error and the finished Chat mix is not denoised. See
-  [Chat Mix Out](suppression.md#chat-mix-out).
+- Only one target can have suppression enabled at a time: either a mono microphone or Chat Mix Out (`send-chat`, or `duo-send-chat` on a Duo). This check spans all saved targets, including bypassed and deselected ones. Disable and apply the old target before enabling a new one. Other outputs and playback inputs reject suppression.
+- Suppression always runs DeepFilterNet3, so there's no model field in settings. `wet` blends the denoised signal with the dry signal.
+- `lookahead` is `0` or `1` (defaults to `0` if omitted); `1` adds one 240-sample hop of delay.
+- On Chat, a single mono denoiser processes just the microphone contribution tapped from the qualified vendor mixing path. Pads and playback bypass suppression and the voice gate, stay stereo, and get matched delay, then the remaining output effects run on the recombined stereo mix. Because of that, suppression on Chat always runs before the sum no matter where it appears in `order`, while the other stages keep their relative order. If the microphone stem is missing or invalid, it's treated as an error and the finished Chat mix isn't denoised. See [Chat Mix Out](suppression.md#chat-mix-out).
 
 ### Voice gate
 
-`gate` turns the microphone down while the suppression model hears no voice.
-It works only while suppression is on. The voice score and the open, hold,
-and close behavior are described in
-[Voice gate](suppression.md#voice-gate). A gate with zero reduction is off.
+`gate` attenuates the mic when the suppression model doesn't hear a voice. It's only active while suppression is enabled, and a gate with `0` reduction is effectively off. See [Voice gate](suppression.md#voice-gate) for how the voice score and open/hold/close timing work.
 
-When `advanced` is false, `strength` (0 off to 1 strict) sets threshold,
-reduction, attack, hold, and release, and the stored advanced values are kept
-but unused. When the user switches advanced on, the app fills the advanced
-values from the current strength.
+When `advanced` is `false`, `strength` (0 off to 1 strict) derives `threshold`, `reduction`, `attack`, `hold`, and `release`; the stored advanced fields are preserved on disk but ignored. Flipping `advanced` to `true` in the app seeds those fields from the current `strength`.
 
-Meter events report two values per target. `voice` is the highest voice
-score in the window. `gateOpen` is how far open the gate was at its most
-open, from 0 (closed) to 1 (open, or gate off). Both are 0 when suppression
-is off.
+Meter events report two values per target: `voice` (the peak voice score in the window) and `gateOpen` (how far open the gate got at its peak, from `0` closed to `1` open or off). Both read `0` when suppression is disabled.
 
 ### Selection
 
-`selectedTargets` lists the paths that are processed. Deselected paths keep
-their settings.
+`selectedTargets` lists which paths are actively processed. Deselecting a path keeps its saved settings intact.
 
-When stock-show discovery is configured, a watcher in the daemon disables
-selected input paths that are no longer assigned in the confirmed show. It
-uses the same revision- and generation-checked selection transaction as the
-app, and runs without the desktop app. Rules:
+When stock-show discovery is active, a daemon watcher automatically deselects input paths that are no longer assigned in the confirmed show. It runs independently of the desktop app using the same revision- and generation-checked selection transaction:
 
-- Two consecutive complete assignment reads are needed before the watcher
-  acts. Failed or partial reads cause no change.
-- Moving a source to another fader keeps its physical path.
+- Requires two consecutive complete assignment reads before acting; failed or partial reads do nothing.
+- Moving a source to a different fader keeps its physical path selected.
 - Linked mics keep both underlying mono paths.
-- Outputs are unaffected.
-- A source that returns is not re-enabled automatically.
+- Outputs aren't touched.
+- If a source comes back later, it isn't automatically re-enabled.
 
-`GET /inputs` is read-only.
+`GET /inputs` is strictly read-only.
 
 ### Other fields
 
-The retired `screenConversion` setting and suppression `algorithm` field are
-unknown fields in schema 9.
+The retired `screenConversion` setting and suppression `algorithm` field are rejected as unknown fields in schema 9.
 
 Unknown, duplicate, missing, or out-of-range fields fail validation.
 

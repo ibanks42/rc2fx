@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tests for macos_release.py: an in-memory fake replaces `gh`."""
+"""Offline tests for macos_release.py using an in-memory fake for `gh`."""
 
 import hashlib
 import importlib.util
@@ -49,7 +49,7 @@ APP_FILES = {
 
 
 def mac_zip(app=True, data=b""):
-    """Velopack's portable zip: the app bundle at the root."""
+    """Build a fake Velopack portable zip containing RC2FX.app at the root."""
     if not app:
         return raw_zip([("rc2fx", b"binary")])
     return raw_zip([(n, d + data) for n, d in APP_FILES.items()])
@@ -69,7 +69,7 @@ def mac_nupkg(data=b"", nuspec="io.github.ibanks42.rc2fx.nuspec"):
 
 MAC = "rc2fx-macos-universal.zip"
 PKG = "rc2fx-macos-universal.pkg"
-# The earlier, arm64-only releases' names, published as copies.
+# Legacy arm64 filenames kept as copies of the universal packages.
 MAC_ALIAS = "rc2fx-macos-arm64.zip"
 PKG_ALIAS = "rc2fx-macos-arm64.pkg"
 NUPKG = f"io.github.ibanks42.rc2fx-{VERSION}-osx-full.nupkg"
@@ -87,13 +87,12 @@ def feed_asset(nupkg=None, **changes):
 
 
 def mac_feed(nupkg=None, assets=None):
-    """The feed vpk writes for the update package."""
+    """Build a fake vpk releases.osx.json feed."""
     return json.dumps({"Assets": assets if assets is not None else [feed_asset(nupkg)]}).encode()
 
 
 def mac_files(**overrides):
-    """The six macOS packages by name, OVERRIDES given by name. The aliases
-    copy the zip and installer unless overridden."""
+    """Return the six macOS package files, defaulting legacy aliases to copies of the universal ones."""
     files = {MAC: mac_zip(), PKG: mac_pkg(), NUPKG: mac_nupkg()}
     files.update(overrides)
     files.setdefault(MAC_ALIAS, files[MAC])
@@ -103,12 +102,11 @@ def mac_files(**overrides):
 
 
 def other(tag, draft=False, prerelease=False):
-    """Another release in the repository."""
     return {"id": 1, "tag_name": tag, "draft": draft, "prerelease": prerelease, "assets": []}
 
 
 class FakeGh:
-    """An in-memory repository. `ops` records every mutating call in order."""
+    """In-memory GitHub release fake that records mutating calls in `ops`."""
 
     def __init__(self):
         self.repo = REPO
@@ -181,7 +179,7 @@ class FakeGh:
         del self.assets[asset_id]
 
     def _patch(self, tag):
-        # GitHub: a PATCH on a draft without tag_name untags the draft.
+        # Mirror GitHub's behavior where PATCHing a draft without tag_name clears its tag.
         if self.draft and tag is None:
             self.tag_name = "untagged-0123456789abcdef"
 
@@ -227,7 +225,6 @@ class Assets(unittest.TestCase):
         expected = mr.expected_assets(VERSION)
         self.assertEqual(len(expected), 14)
         self.assertIn(SETUP, expected)
-        # Published names have no version: releases/latest/download links them.
         self.assertIn("rc2fx-linux-x64.AppImage", expected)
         self.assertIn("rc2fx-windows-x64.zip", expected)
         self.assertIn(f"io.github.ibanks42.rc2fx-{VERSION}-linux-full.nupkg", expected)
@@ -236,7 +233,6 @@ class Assets(unittest.TestCase):
         self.assertIn("releases.win.json", expected)
         self.assertEqual(mr.mac_names(VERSION), MACOS)
         self.assertLessEqual(set(MACOS), expected)
-        # The links earlier releases published keep working.
         self.assertIn("rc2fx-macos-arm64.pkg", expected)
         self.assertIn("rc2fx-macos-arm64.zip", expected)
         self.assertEqual(mr.LEGACY_ALIASES, {MAC_ALIAS: MAC, PKG_ALIAS: PKG})
@@ -245,8 +241,7 @@ class Assets(unittest.TestCase):
 
 class Publish(InTemp):
     def package(self, data=None, leave_out=(), **overrides):
-        """The macOS package directory; DATA replaces the zip, OVERRIDES any
-        file by its variable name (pkg, nupkg, feed)."""
+        """Stage a fake macOS package directory with optional per-file overrides."""
         names = {"pkg": PKG, "nupkg": NUPKG, "feed": FEED, "mac_alias": MAC_ALIAS, "pkg_alias": PKG_ALIAS}
         files = mac_files(**{names[k]: v for k, v in overrides.items()},
                           **({MAC: data} if data is not None else {}))
@@ -274,7 +269,7 @@ class Publish(InTemp):
         self.assertFalse(gh.draft)
 
     def test_a_draft_behind_a_published_release_is_refused_before_any_change(self):
-        # Compared as numbers: v0.10.0 is newer than v0.2.0, v0.1.9 is not.
+        # Ensure numeric semver comparison (v0.10.0 > v0.2.0 > v0.1.9).
         for tag in ("v0.2.1", "v0.3.0", "v0.10.0", "v1.0.0"):
             gh = FakeGh()
             gh.others = [other("v0.1.0"), other(tag)]
@@ -510,7 +505,7 @@ class Publish(InTemp):
         self.refused("not an object", feed=mac_feed(assets=["x"]))
         for feed in [b"not json", b"\xff\xfe"]:
             self.refused("not JSON", feed=feed)
-        # The digest is compared without regard to case.
+        # Digest comparison should be case-insensitive.
         lower = mac_feed(assets=[feed_asset(SHA256=sha(mac_nupkg()))])
         mr.publish(FakeGh(), TAG, SOURCE, self.package(feed=lower))
 
@@ -519,7 +514,6 @@ class Publish(InTemp):
         self.refused(f"{PKG_ALIAS} is not the same file as {PKG}", pkg_alias=mac_pkg(b"arm64 build"))
 
     def test_a_feed_for_another_update_package_is_refused(self):
-        # A sound feed and package, but the feed's digest is another build's.
         self.refused("does not describe", nupkg=mac_nupkg(b"another build"), feed=mac_feed())
 
     def test_symlinked_packages_are_refused(self):
@@ -588,8 +582,7 @@ class Publish(InTemp):
         mr.publish(FakeGh(), TAG, SOURCE, self.package(raw_zip([("RC2FX.app/", b"")] + app)))
 
     def test_sequestered_apple_double_entries_of_the_app_are_accepted(self):
-        # What `ditto -c -k --rsrc --keepParent --sequesterRsrc` writes for
-        # files that carry extended attributes.
+        # AppleDouble entries produced by `ditto -c -k --rsrc --keepParent --sequesterRsrc`.
         sequestered = [("__MACOSX/", b""), ("__MACOSX/._RC2FX.app", b"\0\x05\x16\x07"),
                        ("__MACOSX/RC2FX.app/", b""),
                        ("__MACOSX/RC2FX.app/Contents/", b""),
@@ -598,7 +591,7 @@ class Publish(InTemp):
         gh = FakeGh()
         mr.publish(gh, TAG, SOURCE, self.package(raw_zip([*APP_FILES.items(), *sequestered])))
         self.assertEqual(gh.ops[-1], ("publish", 99))
-        # The sequestered copies do not stand in for the app's own files.
+        # Sequestered entries must not satisfy required app bundle members.
         gh = FakeGh()
         entries = [(n, d) for n, d in APP_FILES.items() if not n.endswith("UpdateMac")]
         entries.append(("__MACOSX/RC2FX.app/Contents/MacOS/UpdateMac", b"updater"))
@@ -633,8 +626,7 @@ class Publish(InTemp):
 
 
 class Adapter(unittest.TestCase):
-    """The real Gh class against a mocked subprocess.run, with the shapes the
-    gh CLI actually returns."""
+    """Tests for the real Gh wrapper against a mocked subprocess.run."""
 
     def setUp(self):
         self.calls = []

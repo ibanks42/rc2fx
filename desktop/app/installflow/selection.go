@@ -11,13 +11,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 )
 
-// Choose picks the firmware release at index of Releases. A run, even a
-// failed one, keeps the release it started with.
 func (m *Model) Choose(index int) {
 	if m.Run != nil || m.Busy() {
 		return
 	}
-	// Both modes are restricted to this build's qualified catalog.
 	if index >= 0 && index < len(m.Releases) && m.Releases[index].Supported {
 		r := m.Releases[index]
 		m.Choice = &Choice{Channel: r.Channel, Version: r.Version}
@@ -25,7 +22,6 @@ func (m *Model) Choose(index int) {
 	m.settleMixer()
 }
 
-// ChooseStock picks the stock release at index of StockReleases.
 func (m *Model) ChooseStock(index int) {
 	if m.Run != nil || m.Busy() {
 		return
@@ -36,15 +32,12 @@ func (m *Model) ChooseStock(index int) {
 	}
 }
 
-// Chosen is the release a run flashes: RC2FX's choice, or the stock one.
 func (m *Model) Chosen() *Choice {
 	if m.Stock {
 		return m.StockChoice
 	}
 	return m.Choice
 }
-
-// ---- Stock firmware -----------------------------------------------------------
 
 func (m *Model) checkStock() *installer.Request {
 	if m.StockCheck.Kind != StockCheckUnchecked {
@@ -54,7 +47,6 @@ func (m *Model) checkStock() *installer.Request {
 	return m.quiet(installer.Request{Kind: installer.RequestStockReleases})
 }
 
-// RecheckStock checks RØDE's list again after a failed or canceled check.
 func (m *Model) RecheckStock() *installer.Request {
 	if m.StockCheck.Kind != StockCheckFailed || m.Busy() {
 		return nil
@@ -63,16 +55,12 @@ func (m *Model) RecheckStock() *installer.Request {
 	return m.checkStock()
 }
 
-// forgetStock: the mixer changed: its stock firmware is another list.
 func (m *Model) forgetStock() {
 	m.StockReleases = nil
 	m.StockChoice = nil
 	m.StockCheck = StockCheck{Kind: StockCheckUnchecked}
 }
 
-// ---- Mixer software -----------------------------------------------------------
-
-// firmwareProfile is the catalog profile of the firmware release choice.
 func (m *Model) firmwareProfile(choice *Choice) (string, bool) {
 	if choice == nil {
 		return "", false
@@ -85,8 +73,8 @@ func (m *Model) firmwareProfile(choice *Choice) (string, bool) {
 	return "", false
 }
 
-// MixerOptions is what can go with the chosen firmware: signed offers for
-// this app, newest first, then the copy built into this app.
+// MixerOptions returns compatible signed mixer offers (newest first) followed
+// by the bundled copy, if any.
 func (m *Model) MixerOptions() []MixerSource {
 	var options []MixerSource
 	if profile, ok := m.firmwareProfile(m.Choice); m.Offers.Kind == OffersReady && ok {
@@ -102,8 +90,6 @@ func (m *Model) MixerOptions() []MixerSource {
 	return options
 }
 
-// MixerMenu is the menu: each option, its name, and whether it is the
-// choice.
 func (m *Model) MixerMenu() []MixerMenuItem {
 	var menu []MixerMenuItem
 	for _, source := range m.MixerOptions() {
@@ -120,14 +106,13 @@ func (m *Model) MixerMenu() []MixerMenuItem {
 	return menu
 }
 
-// MixerChange is how source relates to what the mixer runs.
 func (m *Model) MixerChange(source MixerSource) MixerChange {
 	return change(m.Installed, source.Version())
 }
 
-// settleMixer keeps a choice that still applies. Otherwise use the newest
-// signed offer that doesn't go backwards, or nothing, which leaves the choice
-// to the user: a downgrade or the bundled copy is never picked for them.
+// settleMixer preserves an explicit user selection if still valid; otherwise
+// picks the newest non-downgrade signed offer (never auto-selecting a downgrade
+// or the bundled fallback).
 func (m *Model) settleMixer() {
 	if m.Run != nil || m.Offers.Kind == OffersUnchecked || m.Offers.Kind == OffersChecking {
 		return
@@ -146,10 +131,8 @@ func (m *Model) settleMixer() {
 	}
 }
 
-// InPlaceOffer is the signed release an in-place update would install, when
-// one can: the mixer runs RC2FX that installs in place, the release is newer
-// than what it runs and supports the RØDE firmware it already has. Firmware
-// changes always need a flash, so this never changes firmware.
+// InPlaceOffer returns the signed offer if the connected mixer supports
+// in-place updates and the offer is an upgrade for its current firmware profile.
 func (m *Model) InPlaceOffer(support InPlaceSupport) *installer.MixerOffer {
 	if support.Profile == nil {
 		return nil
@@ -168,8 +151,6 @@ func (m *Model) InPlaceOffer(support InPlaceSupport) *installer.MixerOffer {
 	return nil
 }
 
-// StartInPlace starts an in-place update with offer: download and verify it
-// here, then InPlaceReady hands it to the app to send.
 func (m *Model) StartInPlace(offer installer.MixerOffer, profile string) *installer.Request {
 	if m.Busy() || m.inPlace.Active() || m.Run != nil {
 		return nil
@@ -188,13 +169,9 @@ func (m *Model) StartInPlace(offer installer.MixerOffer, profile string) *instal
 	})
 }
 
-// TakeInPlaceBundle is the verified release, once, for the app to send to
-// the mixer. The app first asks for the mixer's update/last record, which
-// InPlaceOutcome keeps as the one from before this update, then sends the
-// release, reporting a failure to send with InPlaceSendFailed and what the
-// mixer says with InPlaceProgress, InPlaceAccepted and InPlaceRefused.
+// TakeInPlaceBundle pops the verified bundle once for upload and transitions
+// the in-place state to InPlaceUploading.
 func (m *Model) TakeInPlaceBundle() (installer.InPlaceBundle, bool) {
-	// Asked on every poll: anything but Ready stays exactly as it is.
 	if m.inPlace.Kind != InPlaceReady {
 		return installer.InPlaceBundle{}, false
 	}
@@ -209,7 +186,6 @@ func (m *Model) TakeInPlaceBundle() (installer.InPlaceBundle, bool) {
 	return bundle, true
 }
 
-// ChooseMixer picks the mixer software to install.
 func (m *Model) ChooseMixer(source MixerSource) {
 	if m.Run == nil && !m.Busy() && containsSource(m.MixerOptions(), source) {
 		m.Mixer = &source
@@ -217,8 +193,6 @@ func (m *Model) ChooseMixer(source MixerSource) {
 	}
 }
 
-// SetInstalled sets the versions this mixer reports; nil for what it did not
-// report.
 func (m *Model) SetInstalled(mixer, firmware *string) {
 	if !opt.Equal(m.Installed, mixer) || !opt.Equal(m.InstalledFirmware, firmware) {
 		m.Installed = mixer
@@ -235,7 +209,6 @@ func (m *Model) checkMixers() *installer.Request {
 	return m.quiet(installer.Request{Kind: installer.RequestMixerReleases})
 }
 
-// RecheckMixers checks again after a failed or canceled check.
 func (m *Model) RecheckMixers() *installer.Request {
 	if m.Offers.Kind != OffersFailed {
 		return nil
@@ -244,8 +217,6 @@ func (m *Model) RecheckMixers() *installer.Request {
 	return m.checkMixers()
 }
 
-// FirmwareNote is firmware that is qualified but held back until the app is
-// updated.
 func (m *Model) FirmwareNote() (string, bool) {
 	if len(m.NeedsApp) == 0 {
 		return "", false
@@ -255,8 +226,6 @@ func (m *Model) FirmwareNote() (string, bool) {
 		release.Version, release.MinimumAppVersion), true
 }
 
-// MixerNote is why the page has no mixer software to offer, or what the user
-// should know about the choices it has.
 func (m *Model) MixerNote() (string, bool) {
 	fallback := ""
 	if m.Bundled != nil {
@@ -289,8 +258,6 @@ func (m *Model) MixerNote() (string, bool) {
 			}
 			return "Choose the mixer software to install.", true
 		}
-		// The newest option; with incomparable versions counted equal, the
-		// later of equal versions wins.
 		var newest *string
 		for _, source := range options {
 			version := source.Version()
@@ -312,8 +279,7 @@ func (m *Model) MixerNote() (string, bool) {
 	}
 }
 
-// WarningsFor is what the confirmation must say before this replaces
-// something newer, or something the mixer didn't report.
+// WarningsFor returns downgrade or unknown-version warnings for the current selection.
 func (m *Model) WarningsFor(stock bool) []string {
 	var warnings []string
 	if m.Mixer != nil && !stock {
@@ -326,9 +292,7 @@ func (m *Model) WarningsFor(stock bool) []string {
 					*m.Installed, version))
 			}
 		case MixerChangeUnknown:
-			// The newest version on offer can't be older than a released
-			// one the mixer might have, so only an older choice is worth a
-			// word.
+			// Only warn when an older-than-latest version is selected.
 			if m.newestMixer(*m.Mixer) {
 				break
 			}
@@ -350,7 +314,6 @@ func (m *Model) WarningsFor(stock bool) []string {
 	return warnings
 }
 
-// newestMixer reports that no option is newer than source.
 func (m *Model) newestMixer(source MixerSource) bool {
 	for _, other := range m.MixerOptions() {
 		if c, ok := core.CompareVersions(source.Version(), other.Version()); !ok || c < 0 {
@@ -360,10 +323,8 @@ func (m *Model) newestMixer(source MixerSource) bool {
 	return true
 }
 
-// SetStock chooses between firmware with RC2FX and unchanged RØDE firmware,
-// keeping the version choice valid for the mode. A run going on keeps its
-// mode. A failed run is stopped first (as Stop does), so choosing a mode,
-// which the Home notice's Install update does, starts over from the page.
+// SetStock switches between RC2FX and stock firmware modes. Stops a failed run
+// first so callers like the Home update notice reset cleanly.
 func (m *Model) SetStock(stock bool) {
 	if m.Running() || m.Busy() {
 		return
@@ -382,9 +343,6 @@ func (m *Model) SetStock(stock bool) {
 	m.settleMixer()
 }
 
-// ReleasesFor is the releases the firmware menu offers, with their index in
-// Releases. Stock and RC2FX installs offer the same: only qualified catalog
-// releases.
 func (m *Model) ReleasesFor() iter.Seq2[int, installer.Release] {
 	return func(yield func(int, installer.Release) bool) {
 		for i, r := range m.Releases {
@@ -395,9 +353,6 @@ func (m *Model) ReleasesFor() iter.Seq2[int, installer.Release] {
 	}
 }
 
-// ChoiceFor is the release an install would use, in either mode: the
-// current choice when it is supported, as SetStock keeps it, else the
-// default.
 func (m *Model) ChoiceFor() *Choice {
 	if m.supportedChoice(m.Choice) {
 		choice := *m.Choice
@@ -406,7 +361,6 @@ func (m *Model) ChoiceFor() *Choice {
 	return defaultChoice(m.Releases)
 }
 
-// Select picks the mode and release together, as the firmware menu does.
 func (m *Model) Select(stock bool, index int) {
 	m.SetStock(stock)
 	m.Choose(index)

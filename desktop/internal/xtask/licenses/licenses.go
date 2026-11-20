@@ -1,6 +1,6 @@
-// Package licenses builds the one notice document that feeds the app's
-// embedded license dialog (desktop/app/licenses), the Linux package's HTML
-// and a standalone mixer release's THIRD-PARTY-NOTICES.html.
+// Package licenses builds the unified notice document used by the app's
+// embedded license dialog (desktop/app/licenses), the Linux package HTML,
+// and standalone mixer releases (THIRD-PARTY-NOTICES.html).
 package licenses
 
 import (
@@ -166,8 +166,8 @@ func ReadBase(path string) ([]Section, error) {
 	return out, nil
 }
 
-// Generate is the notice document: the base notices (read from
-// RC2FX_BASE_LICENSES when set, or built via GenerateBase), then extra.
+// Generate builds the notice document from the base notices (loaded from
+// RC2FX_BASE_LICENSES when set, otherwise generated via GenerateBase) plus extra.
 func Generate(root string, extra []Section) (*Document, error) {
 	var (
 		base []Section
@@ -313,8 +313,7 @@ func decodeEntity(entity string) (rune, bool) {
 	return rune(value), true
 }
 
-// Groups is notices by license name, then by exact text, with the
-// components that use each.
+// Groups maps license name -> exact notice text -> set of using components.
 type Groups map[string]map[string]map[string]bool
 
 // add records that user uses notice text under license name.
@@ -334,8 +333,8 @@ func (g Groups) add(name, text, user string) {
 	}
 }
 
-// Sections is one section per license name, in name order, titled prefix +
-// name: each distinct text with the sorted components that use it.
+// Sections returns one sorted section per license name (titled prefix + name),
+// listing each distinct notice text with its sorted list of components.
 func (g Groups) Sections(prefix string) []Section {
 	var out []Section
 	for _, name := range sortedKeys(g) {

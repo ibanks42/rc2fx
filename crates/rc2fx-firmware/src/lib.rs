@@ -234,8 +234,8 @@ impl Catalog {
             })
     }
 
-    /// Runtime admission needs a board identity, not just an executable: the
-    /// Pro II and Duo ship the same one. The opt-in admits only the named
+    /// Runtime admission requires board identity, not just the executable hash,
+    /// since Pro II and Duo ship the same binary. Opting in admits only that
     /// model's own profile and route layout.
     pub fn select_for_model_with(
         &self,
@@ -312,8 +312,8 @@ impl Profile {
     }
 }
 
-/// Resolve a virtual address through executable ELF PT_LOAD segments, never
-/// assume that the file offset happens to equal the executable-relative offset.
+/// Resolves a virtual address through executable `PT_LOAD` segments instead of
+/// assuming file offsets match virtual addresses.
 fn image_bytes(image: &[u8], address: usize) -> Result<&[u8]> {
     let read = |offset: usize, size: usize| {
         image

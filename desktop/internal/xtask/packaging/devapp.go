@@ -142,11 +142,9 @@ func RunApp(args []string) error {
 	return task.Run(exec.Command(exe, appArgs...))
 }
 
-// appLinkFlags adds to ldflags and CGO_LDFLAGS what every build of the app
-// links with on goos: the gpuikit static library from libDir, of which the C
-// linker keeps only the component families the app calls into (package gk
-// names the library and the system libraries it needs; the C linker drops
-// what nothing uses only when told to, and Go lets no package ask for that).
+// appLinkFlags extends ldflags and CGO_LDFLAGS with the gpuikit static library
+// and dead-code stripping flags so the C linker only keeps component families
+// the app references (Go does not allow packages to request dead-stripping).
 func appLinkFlags(goos, libDir, ldflags string) (string, string) {
 	cgoLDFlags := "-L" + libDir
 	if ldflags != "" {

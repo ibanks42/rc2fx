@@ -11,24 +11,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// How often the engine is read while a client is subscribed or the engine is
-/// unsettled. The controller's loop wakes exactly at this deadline, so this is
-/// also the meter rate: nine a second. It was the same when a 100 ms interval
-/// was rounded up to the loop's former 20 ms tick.
+/// Poll cadence while a client is subscribed or the engine is settling (~9 Hz).
 const POLL_INTERVAL: Duration = Duration::from_millis(110);
-/// The pause between tries while the library answers Busy.
+/// Retry delay while the native library responds with Busy.
 const BUSY_PAUSE: Duration = Duration::from_millis(100);
-/// The longest the engine goes unread: just under the diagnostics history's
-/// one-second cadence, so every history sample has a fresh meter window.
+/// Max idle poll gap, kept under the 1 s diagnostics history cadence.
 const IDLE_POLL_LIMIT: Duration = Duration::from_millis(900);
-/// Room kept in a path's meter ring at the idle interval, so that a late read
-/// (a settings save runs on the same thread) drops no window.
+/// Headroom left in the native meter ring at idle so a slow save doesn't drop windows.
 const RING_SLACK: Duration = Duration::from_millis(150);
-/// The interval with nobody watching the meters and every path behaving. Any
-/// path that stops advancing returns polling to POLL_INTERVAL, so a stall is
-/// reported at most about one idle interval later than with a client attached.
-/// It follows the depth of the native meter ring: 250 ms for the 400 ms that
-/// eight windows hold, and IDLE_POLL_LIMIT once the ring is deep enough.
+/// Idle poll cadence when unwatched and healthy; drops back to `POLL_INTERVAL`
+/// if any processed path stops advancing. Derived from `METER_RING_WINDOWS`.
 const IDLE_POLL_INTERVAL: Duration = idle_poll_interval(METER_RING_WINDOWS);
 const fn idle_poll_interval(ring_windows: usize) -> Duration {
     // A window is never shorter than its frame count at 48 kHz.
@@ -387,14 +379,9 @@ impl Runtime {
         }
         Ok(runtime)
     }
-    /// Puts the saved settings back on paths that play unsaved live edits
-    /// (see `connect`), through the same Prepare and Commit as a save: a
-    /// parameter swap at the callback boundary, with the native revision a
-    /// save would use. A live edit never rebuilds processing, so a path that
-    /// would need one (the library answers RequiresReset) fails the connection
-    /// as any other mismatch does. A busy library is waited out as a save
-    /// waits (`prepare_retrying`). Unacknowledged commits stay pending, and
-    /// the first reads keep the engine Starting until the callback has them.
+    /// Restores saved settings on paths left playing unsaved live edits (e.g.
+    /// after a daemon crash), using normal Prepare/Commit. Refuses any path
+    /// that would require a processing reset.
     fn restore_saved(&mut self, config: &Config, stale: &[String]) -> Result<(), Error> {
         eprintln!(
             "Native paths {} play settings that were never saved (live edits left by an \
@@ -508,15 +495,9 @@ impl Runtime {
     pub(crate) fn live_editing(&self) -> bool {
         self.live.is_some()
     }
-    /// Plays `candidate` (the saved settings with other effect values, same
-    /// revision and selection) at once, without saving it yet. Each changed
-    /// path gets the same Prepare and Commit a save gives it, so the callback
-    /// swaps the parameters exactly as it does for a save; the caller has
-    /// already refused anything that would rebuild processing, and the library
-    /// refuses it too. Nothing waits here: a library still busy with the last
-    /// change answers Busy at once, and the app sends its newest settings again
-    /// shortly. Unlike a save this does not make the engine unwritable or
-    /// hurry the next read, so a live edit never shows as an unsettled engine.
+    /// Pushes `candidate` (parameter-only changes, same revision/selection) to
+    /// the running engine without saving. Does not retry Busy and does not mark
+    /// the engine unsettled or unwritable.
     pub(crate) fn live(&mut self, candidate: &Config, saved: &Config) -> Result<(), Error> {
         if !self.can_save_or_enable() {
             return Err(Error::NativeBusy);

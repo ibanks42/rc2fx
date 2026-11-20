@@ -1,7 +1,6 @@
-// Command uitest runs the app's offscreen UI tests: one mode per run, chosen
-// by RC2FX_UITEST, under the diag library. It prints
-// `PASS name` or `FAIL name: why` and exits 0 or 1. uitest_test.go builds
-// and runs it.
+// Command uitest runs one offscreen UI test mode selected by RC2FX_UITEST
+// against the diagnostic gpuikit library, printing PASS/FAIL and exiting 0 or 1.
+// Invoked by uitest_test.go.
 package main
 
 import (

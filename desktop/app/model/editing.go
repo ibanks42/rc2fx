@@ -6,8 +6,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// ActiveChannel is the channel edits go to: channel when target has an
-// independent right EQ, else the left one.
+// ActiveChannel returns channel when target uses split stereo EQ, or ChannelLeft otherwise.
 func ActiveChannel(target *core.Target, channel core.Channel) core.Channel {
 	if target.Channels == 2 && target.EQ.RightBands != nil {
 		return channel
@@ -15,8 +14,7 @@ func ActiveChannel(target *core.Target, channel core.Channel) core.Channel {
 	return core.ChannelLeft
 }
 
-// Split gives a stereo target an independent right EQ, starting as a copy of
-// the left.
+// Split enables independent left/right EQ on a stereo target by cloning the left bands.
 func Split(target *core.Target) {
 	if target.Channels == 2 && target.EQ.RightBands == nil {
 		right := slices.Clone(target.EQ.Bands)
@@ -24,7 +22,7 @@ func Split(target *core.Target) {
 	}
 }
 
-// Link makes both channels share one EQ, keeping keep's bands.
+// Link collapses a split EQ back into a shared one, keeping keep's bands.
 func Link(target *core.Target, keep core.Channel) {
 	if keep == core.ChannelRight && target.EQ.RightBands != nil {
 		target.EQ.Bands = *target.EQ.RightBands
@@ -32,8 +30,8 @@ func Link(target *core.Target, keep core.Channel) {
 	target.EQ.RightBands = nil
 }
 
-// PlaceBand moves the band at from to to, shifting the bands between, as
-// dropping one band chip on another does; returns where it landed.
+// PlaceBand moves the band at index from to index to, shifting intermediate bands,
+// and returns the resulting index.
 func PlaceBand(eq *core.EQSettings, channel core.Channel, from, to int) int {
 	bands := eq.ChannelMut(channel)
 	if from < 0 || to < 0 || from >= len(*bands) || to >= len(*bands) {
@@ -45,9 +43,8 @@ func PlaceBand(eq *core.EQSettings, channel core.Channel, from, to int) int {
 	return to
 }
 
-// PlaceEffect moves effect to where onto is in the visible chain, shifting
-// the stages between them, as dropping one stage card on another does.
-// Stages this target cannot use keep their places.
+// PlaceEffect reorders effect to onto's position among the target's visible
+// stages, leaving unsupported/hidden stages in their existing slots.
 func PlaceEffect(target *core.Target, effect, onto core.Effect) {
 	if target.IsChatOutput() && (effect == core.EffectSuppression || onto == core.EffectSuppression) {
 		return
@@ -75,9 +72,8 @@ func PlaceEffect(target *core.Target, effect, onto core.Effect) {
 	}
 }
 
-// SuppressionBlocker keeps the single enabled destination invariant in the
-// draft as well as the controller: the target other than id, in targets and
-// then saved (nil when there is none), that has suppression enabled.
+// SuppressionBlocker returns another target (in draft targets, then saved) that
+// currently owns voice suppression, enforcing the single-destination limit.
 func SuppressionBlocker(targets, saved []core.Target, id string) *core.Target {
 	for _, list := range [][]core.Target{targets, saved} {
 		for i := range list {
@@ -89,9 +85,8 @@ func SuppressionBlocker(targets, saved []core.Target, id string) *core.Target {
 	return nil
 }
 
-// ReleaseSuppression explicitly releases a saved or hidden owner's slot in
-// the local draft only. The saved owner still blocks a new enable until this
-// edit is applied.
+// ReleaseSuppression disables suppression for ownerID in the local draft.
+// Until applied, the saved state still blocks enabling suppression elsewhere.
 func ReleaseSuppression(targets []core.Target, ownerID string) bool {
 	for i := range targets {
 		if targets[i].ID == ownerID {
@@ -103,8 +98,8 @@ func ReleaseSuppression(targets []core.Target, ownerID string) bool {
 	return false
 }
 
-// EnableEffect turns effect on or off for targets[selected]; false when it
-// may not be changed. saved is nil when nothing is saved.
+// EnableEffect toggles effect on targets[selected], returning false if the
+// change violates suppression ownership or target capabilities.
 func EnableEffect(targets, saved []core.Target, selected int, effect core.Effect, enabled bool) bool {
 	if selected < 0 || selected >= len(targets) {
 		return false

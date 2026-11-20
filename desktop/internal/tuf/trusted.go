@@ -1,20 +1,19 @@
-// Package tuf is the TUF client the installer's two signed repositories
-// (mixer releases and app releases) use. Metadata parsing is go-tuf's;
-// signatures are checked over the canonical form of the bytes as published
-// (see verify.go), and the refresh workflow, its rollback floors, its cache
-// layout and its expiry rules are those of sigstore-tuf, the client the mixer
-// uses, so both sides accept exactly the same repositories:
+// Package tuf implements the TUF client used by the installer's signed
+// repositories (mixer releases and app releases). Metadata parsing uses go-tuf,
+// while signature verification runs over the canonical form of the published
+// bytes (see verify.go). Refresh rules, rollback floors, cache layout, and
+// expiry semantics match sigstore-tuf (used by the mixer) so both sides accept
+// the same repositories:
 //
-//   - root chain: `N.root.json` from the trusted root's version + 1, each
-//     signed by the previous root and by itself, at most 32 rotations;
-//   - `timestamp.json` (never version-prefixed), then `snapshot.json` and
-//     `targets.json` (`V.snapshot.json`/`V.targets.json` with consistent
-//     snapshots), each pinned by the role before it by version, length and
-//     hashes;
-//   - metadata is expired when its `expires` is before now;
-//   - verified files are written through to a store (`root.json`,
-//     `root_history/N.root.json`, `timestamp.json`, `snapshot.json`,
-//     `targets.json`) whose versions are the next run's floors.
+//   - Root chain: N.root.json starting from trusted version + 1, each signed by
+//     both the previous and new root, up to 32 rotations.
+//   - timestamp.json (never version-prefixed), then snapshot.json and
+//     targets.json (version-prefixed when consistent snapshots are enabled),
+//     each pinned by the preceding role via version, length, and hashes.
+//   - Metadata is expired when its expires timestamp is before now.
+//   - Verified files are persisted to a store (root.json,
+//     root_history/N.root.json, timestamp.json, snapshot.json, targets.json)
+//     and act as rollback floors on subsequent runs.
 package tuf
 
 import (

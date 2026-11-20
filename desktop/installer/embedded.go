@@ -1,14 +1,8 @@
 package installer
 
-// The installer payload this binary was built with, and where a payload
-// comes from: the executable itself (the desktop app) or a folder (developer
-// tools and tests).
-//
-// The desktop app embeds the payload at build time (the `embedded` build
-// tag; cmd/stage-payload checks it with exactly the rules a folder's payload
-// passes) so installing needs no runtime, catalog or script files beside it.
-// See package embed for the payload's layout and the envelope a binary
-// carries.
+// Embedded and folder-backed installer payload loading.
+// Desktop builds compiled with `-tags embedded` carry the staged payload
+// directly in the binary (see package embed).
 
 import (
 	"bytes"
@@ -24,30 +18,20 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// Envelope is one verified embedded payload.
 type Envelope = embed.Envelope
 
-// Identity is the payload this build embeds.
+// Identity summarizes an installer payload's build metadata and pinned hashes.
 type Identity struct {
-	_ struct{} `serde:"default"`
-	// Kind is `embedded` or `folder`.
-	Kind string `json:"kind"`
-	// Build is what `rc2fx.sh` in this payload says: `release` or
-	// `development`.
-	Build string `json:"build"`
-	// Catalog is the SHA-256 of the payload's `firmware-profiles.json`.
-	Catalog string `json:"catalog"`
-	// Release is the RC2FX mixer release version from the payload's
-	// `mixer-release.json`.
-	Release string `json:"release"`
-	// Runtime is the digest the prepared firmware records as its RC2FX
-	// runtime.
+	_        struct{}     `serde:"default"`
+	Kind     string       `json:"kind"`    // "embedded" or "folder"
+	Build    string       `json:"build"`   // "release" or "development"
+	Catalog  string       `json:"catalog"` // SHA-256 of firmware-profiles.json
+	Release  string       `json:"release"` // version from mixer-release.json
 	Runtime  string       `json:"runtime"`
 	Files    []FilePin    `json:"files"`
 	Profiles []ProfilePin `json:"profiles"`
 }
 
-// FilePin is one payload file.
 type FilePin struct {
 	_      struct{} `serde:"default"`
 	Name   string   `json:"name"`
@@ -55,7 +39,6 @@ type FilePin struct {
 	Size   uint64   `json:"size"`
 }
 
-// ProfilePin is one firmware profile the payload's catalog pins.
 type ProfilePin struct {
 	_              struct{} `serde:"default"`
 	ID             string   `json:"id"`
@@ -90,9 +73,7 @@ func loadPayload() (*loadedPayload, string) {
 	if !embed.Present {
 		return nil, embed.Missing
 	}
-	// The blob is checked when it is used, not only when it was staged: the
-	// envelope's framing, every file's checksum, SHA256SUMS, the ARM64 ELFs,
-	// the catalog and the build line.
+	// Re-verify the embedded envelope at runtime, not just at stage time.
 	envelope, err := embed.Find(embed.Blob())
 	if err != nil {
 		return nil, err.Error()
@@ -157,7 +138,6 @@ func identityOf(kind string, bundle Bundle) (Identity, error) {
 	return identity, nil
 }
 
-// embeddedBundle is the embedded payload as a bundle the runtime checks.
 func embeddedBundle() (Bundle, error) {
 	p, err := payload()
 	if err != nil {
@@ -177,9 +157,8 @@ func catalogBytes() ([]byte, error) {
 	return defaultCatalogCache.Bytes()
 }
 
-// EmbeddedService is whether RC2FX's state (as the app's USB connection
-// reads it) says this payload's runtime is ready, the way the app asks
-// about a folder's payload.
+// EmbeddedService checks mixer state JSON against the bundled (or downloaded)
+// runtime profile to report whether the RC2FX service is ready.
 func EmbeddedService(state []byte) Service {
 	if !embed.Present {
 		catalog, err := Source{Kind: SourceDownload}.catalog()
@@ -200,15 +179,12 @@ func EmbeddedService(state []byte) Service {
 	}
 	p, err := payload()
 	if err != nil {
-		// Fail closed: a payload that cannot be read says why the runtime is
-		// not ready. It never passes as ready by judging against an empty
-		// profile.
+		// Fail closed if the embedded payload cannot be loaded.
 		return Service{Kind: ServiceStarting, Detail: err.Error()}
 	}
 	return service(p.bundle, state)
 }
 
-// EmbeddedIdentity is the identity of the payload this binary serves.
 func EmbeddedIdentity() (Identity, error) {
 	p, err := payload()
 	if err != nil {
@@ -232,8 +208,8 @@ func releaseOf(bundle Bundle) (core.MixerRelease, error) {
 	return release, nil
 }
 
-// BundledRelease is the RC2FX mixer release this binary bundles. An error
-// when the build embeds no payload.
+// BundledRelease returns the mixer release embedded in this binary, or an error
+// for download-only builds.
 func BundledRelease() (core.MixerRelease, error) {
 	p, err := payload()
 	if err != nil {
@@ -242,11 +218,8 @@ func BundledRelease() (core.MixerRelease, error) {
 	return releaseOf(p.bundle)
 }
 
-// NewestSupportedFirmware is the newest RØDE firmware version the bundled
-// catalog supports for the same mixer model as firmwareProfile (the
-// `firmwareProfile` the device reports), compared numerically. False when
-// the build embeds no payload, the profile is not in the bundled catalog, or
-// nothing is supported for that model.
+// NewestSupportedFirmware returns the highest supported RØDE firmware version
+// in the catalog for the same mixer model as firmwareProfile.
 func NewestSupportedFirmware(firmwareProfile string) (string, bool) {
 	source := Source{Kind: SourceDownload}
 	if embed.Present {
@@ -277,7 +250,7 @@ func newestSupported(catalog *Catalog, firmwareProfile string) (string, bool) {
 		if p.Model != model || !supported(p) || !appSupports(p, AppVersion) || !comparable(p.Version) {
 			continue
 		}
-		// max_by keeps the last of equal maxima.
+		// Keep the last entry on ties (matching Rust's max_by).
 		if order, _ := core.CompareVersions(p.Version, newest); newest == "" || order >= 0 {
 			newest = p.Version
 		}
@@ -285,25 +258,16 @@ func newestSupported(catalog *Catalog, firmwareProfile string) (string, bool) {
 	return newest, newest != ""
 }
 
-// SourceKind is where an installer's payload and catalog come from.
 type SourceKind int
 
 const (
-	// SourceDownload is the download-only desktop before a signed payload
-	// has been selected.
-	SourceDownload SourceKind = iota
-	// SourceFolder is a release folder or a source checkout: `runtime/` (or
-	// `target/mixer`), `mixer/scripts` and `config/`. Developer tools and tests
-	// only.
-	SourceFolder
-	// SourceEmbedded is the payload compiled into this executable.
-	SourceEmbedded
-	// SourceVerified is an authenticated remote payload, held in memory
-	// throughout preparation.
-	SourceVerified
+	SourceDownload SourceKind = iota // download-only build before a signed payload is chosen
+	SourceFolder                     // checkout or release folder (dev tools and tests)
+	SourceEmbedded                   // payload compiled into this binary
+	SourceVerified                   // TUF-verified remote payload held in memory
 )
 
-// Source is where an installer's payload and catalog come from.
+// Source identifies where the installer gets its payload and firmware catalog.
 type Source struct {
 	Kind     SourceKind
 	Root     string
@@ -353,7 +317,6 @@ func (s Source) catalogFrom(cache *CatalogCache) (*Catalog, error) {
 func (s Source) service(state []byte) Service {
 	bundle, err := s.bundle()
 	if err != nil {
-		// Fail closed, as the embedded payload does.
 		return Service{Kind: ServiceStarting, Detail: err.Error()}
 	}
 	return service(bundle, state)
@@ -367,10 +330,8 @@ func catalogFromDisk(root string) (*Catalog, error) {
 	return parseCatalog(data)
 }
 
-// parseCatalog is what a valid catalog is, for every source: the strict
-// rules the mixer's own firmware tool applies, and versions the installer
-// can compare. Nothing may reach the installer through a looser reading of
-// the same file.
+// parseCatalog applies the same strict validation as firmware.ParseCatalog
+// and checks that all profile versions are comparable.
 func parseCatalog(data []byte) (*Catalog, error) {
 	if !utf8.Valid(data) {
 		return nil, Error("invalid utf-8 sequence")

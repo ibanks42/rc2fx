@@ -34,8 +34,7 @@ from .duo_routes import Machine, call_at, counterpart, source_table
 from unicorn import arm64_const as regs
 
 FRAMES = 112
-# Analyst roles per mixer executable hash (ELF virtual addresses). The
-# relocation-normalized comparison in `cross_check` ties the two sets together.
+# Per-binary ELF addresses; cross_check() verifies relocation-normalized equivalence.
 ROLES = {
     "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c": {  # 1.7.6
         "callbackBridge": 0x370A70, "portEvents": 0x3716E0,
@@ -46,8 +45,7 @@ ROLES = {
         "sourceChange": 0x40CFD0, "activeMask": 0x61D900,
     },
 }
-# Offsets inside Mixer::Process (identical in both releases; `cross_check`
-# proves the whole function relocation-equivalent).
+# Offsets within Mixer::Process (identical across both releases).
 INPUT_GATHER = (0x270, 0xB94)
 OUTPUT_GATHER = (0x12D4, 0x14CC)
 OUTPUT_DISPATCH = (0x1BA4, 0x1A68)
@@ -296,7 +294,7 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
 
     def recorder(index):
         def record():
-            # Wrapper objects are reused on the stack: resolve the buffers now.
+            # Wrapper objects are stack-reused, so resolve their buffer pointers immediately.
             calls.append((members[m.register(0)], index, wrappers.get(m.register(1)), m.register(2)))
         return record
 
@@ -324,8 +322,7 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
     m.register(26, m.stack + 0x808)
     m.register(3, FRAMES)  # loaded at Process+0x16e8 before this branch
     if flags["rawStripCopyMode"]:
-        # Actual raw-mode branch copies the nine strips' source buffers. The
-        # first strip pair uses out_15/16; the other eight use out_27..42.
+        # Raw-strip mode copies the nine strips' source buffers (first pair -> out_15/16, rest -> out_27..42).
         stream = m.allocate(0x480)
         m.words(m.mixer + MIXER + 0x1FB0, stream)
         for index in range(9):
@@ -352,8 +349,7 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
             other.append({"member": hex(member), "vtableIndex": index})
     expected = dict(EXPECTED_DISPATCH)
     if flags["rawStripCopyMode"]:
-        # Raw strips replace Main send; Chat's synchronous Process call is
-        # skipped here too (its mix-minus preparation is separately gated).
+        # Raw-strip mode skips both the Main send and Chat's synchronous Process call.
         del expected[0x2080]
         del expected[0x2088]
         assert 0x2080 not in dispatch and 0x2088 not in dispatch

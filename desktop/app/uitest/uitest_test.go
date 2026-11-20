@@ -1,12 +1,9 @@
 package main
 
-// Builds the uitest program and runs each mode offscreen with the diag
-// library: `go test ./app/uitest` from desktop/, with RC2FX_GPUIKIT_DIAG set
-// to a folder holding the diagnostic build of libgpuikit_static.a (and
-// libgpuikit_sys.so on Linux), which the app links instead of the download's.
-// The downloads ship no diagnostic library: build it from the bindings
-// repository (`make lib`, its lib/diag). Skipped without it. RC2FX_UITEST_SHOTS keeps the screenshots (default: a test
-// temp folder); they are checked by eye once and kept per library hash.
+// Runs offscreen UI tests via `go test ./app/uitest` from desktop/.
+// Requires RC2FX_GPUIKIT_DIAG pointing to a diagnostic build of libgpuikit
+// (built via `make lib` in the bindings repo); skipped otherwise.
+// Set RC2FX_UITEST_SHOTS to keep rendered screenshots instead of using a temp dir.
 
 import (
 	"os"

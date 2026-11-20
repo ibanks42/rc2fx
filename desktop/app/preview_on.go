@@ -2,11 +2,8 @@
 
 package app
 
-// The debug-only previews of the Telemetry section and the events window:
-// `rc2fx --telemetry-preview [old|events]` shows the Telemetry section, or
-// the events window, alone, filled with made-up data, for looking at the
-// layout. They open no connection of any kind. They are built only with
-// `-tags rc2fxdev` (dev_off.go is the release side).
+// Dev-only layout previews (`rc2fx --telemetry-preview [old|events]`) populated
+// with synthetic data and no mixer connection. Built only with `-tags rc2fxdev`.
 
 import (
 	"time"
@@ -19,11 +16,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// telemetryPreviewFlag is the argument that opens the telemetry preview.
 const telemetryPreviewFlag = "--telemetry-preview"
 
-// previewMode is Run's debug-only preview branch: it reports whether
-// args asked for a preview, and runs it.
+// previewMode checks whether args request a telemetry preview and runs it.
 func previewMode(args []string) bool {
 	if len(args) < 2 || args[1] != telemetryPreviewFlag {
 		return false
@@ -40,15 +35,12 @@ func previewMode(args []string) bool {
 	return true
 }
 
-// previewTheme is the previews' start: dark, with the app's theme applied.
 func previewTheme(cx *gk.Cx) {
 	gk.QuitOnLastWindow(cx, true)
 	gk.ThemeChange(cx, gk.ThemeModeDark)
 	loadThemes(cx)
 	applyTheme(cx)
 }
-
-// --- Telemetry section preview ---------------------------------------------------------------
 
 func previewPath(id string, latency uint32, worker bool) core.TargetMeter {
 	timing := func(calls, meanNs, maxNs, overruns uint64) core.Timing {
@@ -146,7 +138,6 @@ func (p *telemetryPreview) view(cx *gk.Cx) gk.Element {
 	}
 	noop := func(*gk.Cx) {}
 	snapshot := previewSnapshot(p.reported, p.details)
-	// The real header's look; nothing here acts.
 	aside := gk.HFlex(s.ItemsCenter, s.Gap3).
 		Child(gk.Div(s.TextXs).TextColor(rgb(Faint)).Child(txt("Live · " + telemetry.SinceLabel(since, epoch)))).
 		Child(gk.Button("show-events").Outline().Small().Icon(gk.IconExternalLink).Label("Events")).
@@ -162,15 +153,13 @@ func (p *telemetryPreview) view(cx *gk.Cx) gk.Element {
 func runTelemetryPreview(reported bool) {
 	p := &telemetryPreview{reported: reported}
 	gk.Run(func(cx *gk.Cx) {
-		// The theme needs a window: it is applied in the view's init.
+		// Theme initialization requires an open window, so apply it in the view init.
 		w := gk.OpenWindowWith(cx, windowIdentity(gk.WindowConfig{
 			Width: 900, Height: 1400, Title: "RC2FX telemetry preview",
 		}), gk.NewView(previewTheme, p.view))
 		gk.ActivateWindow(cx, w)
 	})
 }
-
-// --- events window preview -------------------------------------------------------------------
 
 func previewLog() EventLog {
 	const S uint64 = 1_000_000_000
@@ -224,7 +213,7 @@ func runEventsPreview() {
 	log := gk.NewModel(previewLog())
 	gk.Run(func(cx *gk.Cx) {
 		w := openEventsWindow(cx, nil, &log, nil, nil)
-		previewTheme(cx) // after the window: the theme needs one
+		previewTheme(cx) // Must run after a window is open.
 		gk.ActivateWindow(cx, *w)
 	})
 }

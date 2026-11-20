@@ -33,8 +33,6 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// appFixture is a test-only root and key, with metadata written under
-// dir/metadata and the signed asset under dir.
 type appFixture struct {
 	t    *testing.T
 	dir  string
@@ -48,8 +46,6 @@ func newAppFixture(t *testing.T) *appFixture {
 	return &appFixture{t: t, dir: dir, repo: repo}
 }
 
-// signWith signs the package as target name with version in its custom
-// field, at the given targets, snapshot and timestamp versions.
 func (f *appFixture) signWith(name, version string, versions [3]int64, expires string) {
 	f.repo.Sign([]tuftest.Target{{Name: name, File: filepath.Join(f.dir, testPackage), Custom: map[string]any{"version": version}}}, versions, expires)
 }
@@ -58,8 +54,7 @@ func (f *appFixture) sign(versions [3]int64) {
 	f.signWith("v1.2.3/"+testPackage, "1.2.3", versions, "2099-01-01T00:00:00Z")
 }
 
-// download is the package as the app downloaded it, in its own file so a
-// rejected copy can be removed.
+// Separate file from the repo target so rejected downloads can be deleted.
 func (f *appFixture) download(data []byte) string {
 	path := filepath.Join(f.dir, "downloaded.nupkg")
 	put(f.t, path, data)
@@ -70,8 +65,6 @@ func (f *appFixture) verify(version, asset, file string) *VerifyError {
 	return verifyAppPackage(f.repo.Trusted, tuf.Folders{Metadata: filepath.Join(f.dir, "metadata"), Targets: f.dir}, version, asset, file)
 }
 
-// signedApp is a fixture with version 1.2.3's package signed at metadata
-// version 2.
 func signedApp(t *testing.T) *appFixture {
 	f := newAppFixture(t)
 	f.sign([3]int64{2, 2, 2})
@@ -157,8 +150,7 @@ func TestMetadataSignedByAKeyOutsideTheRootIsRejected(t *testing.T) {
 	if err := f.verify("1.2.3", testPackage, file); err != nil {
 		t.Fatal(err)
 	}
-	// A repository of its own, with newer versions and the same package,
-	// signed by a key the trusted root does not name.
+	// Swap in newer metadata signed by an untrusted key.
 	impostor := newAppFixture(t)
 	impostor.sign([3]int64{3, 3, 3})
 	for _, role := range []string{"targets.json", "snapshot.json", "timestamp.json"} {
@@ -204,8 +196,7 @@ func TestOlderRolesMixedIntoNewerMetadataAreRefused(t *testing.T) {
 	if err := check(); err != nil {
 		t.Fatal(err)
 	}
-	// The timestamp and snapshot one load fetches name the versions of the
-	// roles after them, so an older role is refused within that load.
+	// Timestamp and snapshot pin downstream role versions within a single load.
 	put(t, filepath.Join(meta, "targets.json"), oldTargets)
 	if err := check(); err == nil || err.Rejected {
 		t.Fatalf("%+v", err)
@@ -226,8 +217,7 @@ func TestEveryCheckStartsFreshAndLeavesNoState(t *testing.T) {
 	if err := check(); err != nil {
 		t.Fatal(err)
 	}
-	// Nothing seen before holds a later check back: a replay at this address
-	// cannot freeze app updates (see the package comment).
+	// Stateless checks accept lower metadata versions (see package comment).
 	f.sign([3]int64{4, 4, 4})
 	if err := check(); err != nil {
 		t.Fatal(err)

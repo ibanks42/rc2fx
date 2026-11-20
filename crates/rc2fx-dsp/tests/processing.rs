@@ -546,13 +546,9 @@ fn ordered_gain_and_limiter_change_audio_as_configured() {
     assert!(y.iter().all(|v| (*v - ceiling).abs() < 1e-7));
 }
 
-/// A switched-off compressor or limiter fades out over
-/// `STAGE_FADE_SAMPLES`, then passes audio through bit for bit and keeps the
-/// detector history it had when it was switched off. Switched back on, it
-/// fades in from that history, and once the fade is over it is exactly the
-/// stage that was never switched off. A highpass switched back on starts at
-/// rest instead (its old history would ring out), and settles on the
-/// uninterrupted filter's output.
+// Verify that disabling a stage fades out over `STAGE_FADE_SAMPLES`, passes
+// audio bit-exact once off, and restores detector history on re-enable
+// (highpass resets its biquad state on re-enable so stale history doesn't ring).
 #[test]
 fn disabled_stages_fade_out_keep_history_and_fade_back_in() {
     let fade = rc2fx_dsp::STAGE_FADE_SAMPLES as usize;

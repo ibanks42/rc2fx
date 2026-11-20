@@ -19,11 +19,9 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-/// The versions this controller reports. `release` is the installed
-/// `mixer-release.json`; `profile` is the id the launcher selected after
-/// `rc2fx-firmware check-device` verified the stock mixer against `catalog`.
-/// A profile for another model is not reported. Anything that cannot be read
-/// or checked stays unknown, and the reason is returned for the log.
+/// Reads `mixer-release.json` and the launcher-validated stock firmware profile.
+/// Profiles for a different model are ignored; unreadable files stay unknown
+/// with their errors returned for logging.
 pub fn read(
     release: Option<&Path>,
     catalog: Option<&Path>,

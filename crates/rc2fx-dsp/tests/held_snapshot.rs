@@ -1,8 +1,7 @@
-//! A `Dsp` that is handed the same `Prepared` block after block skips its
-//! per-block preparation. These tests run one state that way and a second
-//! state that gets a newly built `Prepared` of the same settings for every
-//! block, which is never skipped, and compare output and meters bit for bit.
-//! `RC2FX_DSP_HELD_BLOCKS` sets the number of blocks per run.
+//! Verifies that reusing the same `Prepared` across blocks (which skips
+//! per-block `begin_block` work via `serial`) matches rebuilding a fresh
+//! `Prepared` every block bit-for-bit. Override block count via
+//! `RC2FX_DSP_HELD_BLOCKS`.
 use rc2fx_core::{Band, BandType, SuppressionGeometry, Target, TargetKind, VoiceGate};
 use rc2fx_dsp::{Chat, Dsp, Meter, Prepared, RetirementError, Suppression};
 

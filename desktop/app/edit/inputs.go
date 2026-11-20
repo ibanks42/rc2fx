@@ -1,8 +1,5 @@
 package edit
 
-// The show inputs cache, the selection's changed paths and the restart
-// candidate.
-
 import (
 	"fmt"
 	"slices"
@@ -10,21 +7,20 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// SmartPadsSource is the show source id of SMART Pads, which RC2FX lists
-// nowhere: the RØDECaster mixes it internally.
+// SmartPadsSource is the mixer source ID for SMART Pads, which is mixed
+// internally on the RØDECaster and always hidden in RC2FX.
 const SmartPadsSource = 11
 
-// InventoryCache is the part of the show inputs that a show refresh
-// updates: the last confirmed inventory, the last refresh's failure, and
-// whether a refresh is out.
+// InventoryCache holds the last confirmed show inventory, any refresh error,
+// and whether a refresh is currently in flight.
 type InventoryCache struct {
 	Inventory *core.StockInventory
 	Error     *string
 	Pending   bool
 }
 
-// VisibleSources is the inventory's sources the app lists. Filtered on
-// every access, including inventory cached before this UI policy.
+// VisibleSources returns the inventory sources shown in the UI, filtering out
+// SMART Pads even for previously cached inventories.
 func (c *InventoryCache) VisibleSources() []*core.StockSource {
 	if c.Inventory == nil {
 		return nil
@@ -38,7 +34,7 @@ func (c *InventoryCache) VisibleSources() []*core.StockSource {
 	return sources
 }
 
-// Receive takes a refresh's result; true when it replaced the inventory.
+// Receive applies a show refresh result and returns true if the cached inventory was updated.
 func (c *InventoryCache) Receive(inventory core.StockInventory, err error) bool {
 	c.Pending = false
 	if err == nil && inventory.Available {
@@ -51,12 +47,11 @@ func (c *InventoryCache) Receive(inventory core.StockInventory, err error) bool 
 		message = err.Error()
 	}
 	c.Error = &message
-	// Preserve the last confirmed names/selection, with an explicit stale
-	// label. A failed read does not prove assignments changed.
+	// Keep the last confirmed inventory on error; a failed read doesn't mean assignments changed.
 	return false
 }
 
-// AssignmentLabel is where a source sits: its fader, or that it has none.
+// AssignmentLabel formats a source's fader assignment for display.
 func AssignmentLabel(source *core.StockSource) string {
 	if source.Fader == nil {
 		return "Not assigned to a fader"
@@ -64,8 +59,8 @@ func AssignmentLabel(source *core.StockSource) string {
 	return fmt.Sprintf("Fader %d", *source.Fader)
 }
 
-// SourceDetail is a source's line in the channel list: its fader, then note
-// ("" for none) when the source has an RC2FX path.
+// SourceDetail formats a source's subtitle line in the channel list, appending
+// note when the source is mapped to an RC2FX target.
 func SourceDetail(source *core.StockSource, note string) string {
 	fader := "Unassigned"
 	if source.Fader != nil {
@@ -77,8 +72,8 @@ func SourceDetail(source *core.StockSource, note string) string {
 	return fader
 }
 
-// ChangedPaths is the paths in saved and not in draft, then those in draft
-// and not in saved.
+// ChangedPaths returns the symmetric difference between saved and draft
+// (removed paths first, then added paths).
 func ChangedPaths(saved, draft []string) []string {
 	var changed []string
 	for _, id := range saved {

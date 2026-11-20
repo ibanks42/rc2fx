@@ -8,10 +8,8 @@ import (
 	"testing"
 )
 
-// The payload's file lists are kept in fixtures/payload/lists.json, which
-// the Rust in-place updater (crates/rc2fx-device/src/mixer_update/install.rs)
-// checks its own copy against too. A file added to one side and not the
-// other fails both tests.
+// Keep Go payload file lists in sync with fixtures/payload/lists.json
+// (also checked by crates/rc2fx-device/src/mixer_update/install.rs).
 func TestPayloadListsMatchTheSharedFixture(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "fixtures", "payload", "lists.json"))
 	if err != nil {

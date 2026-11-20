@@ -6,13 +6,11 @@ import (
 	"sync"
 )
 
-// licenses.json is what this build shows. The copy in the repository is
-// Placeholder, for development builds (xtask packaging refuses an
-// executable that still carries it); release packaging substitutes the
-// generated notices at build time with `go build -overlay`, leaving the
-// tracked placeholder file untouched on disk. Manual regeneration via
-// `go generate ./app/licenses` (with RC2FX_RELEASE_BUILD=1 and
-// RC2FX_LICENSES_JSON) remains supported by gen.go.
+// licenses.json in the repo is a dev-only placeholder (xtask packaging rejects
+// binaries that still contain it). Release builds swap in generated notices via
+// `go build -overlay`, leaving the tracked file untouched. Manual regeneration
+// via `go generate ./app/licenses` (with RC2FX_RELEASE_BUILD=1 and
+// RC2FX_LICENSES_JSON) is also supported by gen.go.
 //
 //go:generate go run gen.go
 
@@ -30,9 +28,8 @@ var sections = sync.OnceValue(func() []Section {
 	return parsed
 })
 
-// Sections is the embedded sections, parsed once. The generator already
-// refused an invalid file, so a failure here means a broken build; say so
-// instead of panicking.
+// Sections returns the parsed license sections, falling back to an error entry
+// rather than panicking if the embedded JSON is malformed.
 func Sections() []Section {
 	return sections()
 }

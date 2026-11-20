@@ -11,10 +11,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
 )
 
-// The release metadata the Go xtask signs (fixtures/xtask) must pass the
-// app's own verifier, not only the mixer's (crates/rc2fx-device/tests/
-// xtask_tuf_fixtures.rs): the app checks the same repository before it
-// offers an in-place update.
+// Verify that TUF repositories signed by Go xtask (fixtures/xtask) pass the
+// desktop verifier as well as the mixer's (crates/rc2fx-device/tests/xtask_tuf_fixtures.rs).
 func TestTheAppAcceptsEveryRepositoryTheGoSignerWrote(t *testing.T) {
 	fixtures := filepath.Join("..", "..", "fixtures", "xtask")
 	targets := filepath.Join(fixtures, "targets")

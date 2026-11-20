@@ -1,4 +1,4 @@
 //go:build cgo
 
-/* RC2FX's calls into libext2fs (shim/shim.c), its own translation unit. */
+/* Separate translation unit for the RC2FX libext2fs shim. */
 #include "shim/shim.c"

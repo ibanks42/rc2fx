@@ -30,8 +30,6 @@ func mustMarshal(t *testing.T, v any) json.RawMessage {
 	return body
 }
 
-// connectedMixer is a mixer and the app's own session model, connected the
-// way the app is.
 func connectedMixer(t *testing.T) (*mockMixer, *core.Session, time.Time) {
 	t.Helper()
 	now := time.Now()
@@ -44,7 +42,6 @@ func connectedMixer(t *testing.T) (*mockMixer, *core.Session, time.Time) {
 	return m, &session, now
 }
 
-// readState reads state through the app's strict parser.
 func readState(t *testing.T, m *mockMixer, now time.Time) core.DeviceState {
 	t.Helper()
 	reply := m.handle(mockRequest("GET", "api/v1/state", nil), now)
@@ -73,7 +70,6 @@ func settled(t *testing.T, m *mockMixer, now time.Time) (core.DeviceState, time.
 	return readState(t, m, later), later
 }
 
-// nextMeter polls until a meter arrives, as the app's event stream does.
 func nextMeter(t *testing.T, m *mockMixer, now time.Time) (core.Meter, time.Time) {
 	t.Helper()
 	for range 100 {
@@ -117,8 +113,8 @@ func assertMeterAccepted(t *testing.T, meter *core.Meter, state *core.DeviceStat
 	}
 }
 
-// The whole way through Transport, as the app sends it. The only test using
-// the shared mixer; the others each build their own.
+// Exercises the full Transport stack against the shared mock mixer; all other
+// tests in this file instantiate isolated mockMixer instances.
 func TestASaveGoesThroughTheTransportAndComesBackAsMeters(t *testing.T) {
 	transport, err := New()
 	if err != nil {

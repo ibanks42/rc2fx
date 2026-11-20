@@ -1,49 +1,36 @@
 package installflow
 
-// The installer page's own decisions: administrator access, which requests
-// the privileged helper runs, and which mixer software the engine and the
-// helper each hold. Nothing here draws, so it tests with plain go test;
-// package app runs the page with it.
-
 import (
 	"reflect"
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// AccessKind is administrator access for the steps that need it: on Linux
-// without root, switching the mixer to USB update mode and flashing it run
-// in a helper started through pkexec. The page asks for it when the user
-// presses the button that starts (or tries again); everything else runs in
-// this process.
+// AccessKind tracks privilege elevation for flashing. On Linux without root,
+// switching to USB update mode and flashing run inside a pkexec helper;
+// everything else runs in-process.
 type AccessKind int
 
 const (
-	// AccessNotNeeded: this system lets the app do everything itself.
 	AccessNotNeeded AccessKind = iota
 	AccessNeeded
-	// AccessAsking: the system's password prompt is open.
-	AccessAsking
+	AccessAsking // OS password prompt is open
 	AccessGranted
-	// AccessRefused: the last attempt failed or was dismissed; Why says why.
-	AccessRefused
+	AccessRefused // last elevation attempt failed or was dismissed (see Why)
 )
 
-// Access is administrator access. Why is set for
-// AccessRefused only.
+// Access pairs AccessKind with an optional failure reason for AccessRefused.
 type Access struct {
 	Kind AccessKind
 	Why  string
 }
 
-// AllowsFlashing reports access that lets this computer flash the mixer.
 func (a Access) AllowsFlashing() bool {
 	return a.Kind == AccessNotNeeded || a.Kind == AccessGranted
 }
 
-// Privileged reports requests that need administrator access where Access
-// applies. The helper flashes only what it prepared, so it does the
-// preparing too.
+// Privileged reports whether request must run in the elevated helper. Prepare
+// is included because the helper will only flash images it prepared itself.
 func Privileged(request installer.Request) bool {
 	switch request.Kind {
 	case installer.RequestPrepare, installer.RequestEnterUSBMode, installer.RequestFlash,
@@ -53,7 +40,7 @@ func Privileged(request installer.Request) bool {
 	return false
 }
 
-// IsSelection reports a request that chooses the mixer software to install.
+// IsSelection reports whether request selects the mixer software to install.
 func IsSelection(request installer.Request) bool {
 	switch request.Kind {
 	case installer.RequestSelectMixer, installer.RequestSelectBundledMixer:
@@ -62,9 +49,8 @@ func IsSelection(request installer.Request) bool {
 	return false
 }
 
-// ChangesCatalog reports a request that can change the catalog RC2FX's
-// readiness is judged against, which the mixer's own state says nothing
-// about.
+// ChangesCatalog reports whether request can update the catalog that RC2FX
+// readiness is evaluated against.
 func ChangesCatalog(request installer.Request) bool {
 	if IsSelection(request) {
 		return true
@@ -76,21 +62,19 @@ func ChangesCatalog(request installer.Request) bool {
 	return false
 }
 
-// sameRequest is whether a and b are the same request, or both nil. Requests
-// hold pointers to offers and slices, so it compares what they point to.
 func sameRequest(a, b *installer.Request) bool { return reflect.DeepEqual(a, b) }
 
-// Selection is which mixer software the engine and the helper each hold.
-// The helper verifies the payload itself, so it gets the same request rather
-// than a path or anything else from this process, and a restarted helper
-// holds nothing until it is sent again. nil for none.
+// Selection tracks which mixer software the local engine and the privileged
+// helper have selected. The helper verifies payloads on its own, so it
+// receives the same selection request (and needs it re-sent after a restart).
 type Selection struct {
 	Wanted *installer.Request
 	Helper *installer.Request
 }
 
-// EngineAnswered: the engine answered request. A failed selection leaves it
-// with nothing selected, which the helper must not outlive.
+// EngineAnswered updates the wanted selection after the local engine handles
+// a selection request. A failed selection clears it so the helper doesn't keep
+// stale state.
 func (s *Selection) EngineAnswered(request installer.Request, selected bool) {
 	if selected {
 		s.Wanted = &request
@@ -99,11 +83,11 @@ func (s *Selection) EngineAnswered(request installer.Request, selected bool) {
 	}
 }
 
-// Clear: stock firmware needs no mixer software, so a helper that lost its
-// selection must not have to download one.
+// Clear drops the wanted selection (stock firmware needs no mixer software).
 func (s *Selection) Clear() { s.Wanted = nil }
 
-// Pending is what the helper must be sent before it acts; nil for nothing.
+// Pending returns the selection request the helper still needs, or nil if it
+// is already in sync.
 func (s *Selection) Pending() *installer.Request {
 	if s.Wanted == nil || sameRequest(s.Wanted, s.Helper) {
 		return nil
@@ -111,32 +95,22 @@ func (s *Selection) Pending() *installer.Request {
 	return s.Wanted
 }
 
-// HelperAnswered: the helper now holds what the engine selected.
 func (s *Selection) HelperAnswered() { s.Helper = s.Wanted }
 
-// HelperCleared: the helper holds nothing: it restarted, or it was sent a
-// selection, which clears what it had until that selection succeeds.
+// HelperCleared forgets the helper's selection after a restart or before
+// sending a new selection request.
 func (s *Selection) HelperCleared() { s.Helper = nil }
 
-// RecentlyFlashed reports that the last USB command was a flash in the last
-// few minutes, so the mixer may still be updating (the app's restart
-// blocker reads it).
+// RecentlyFlashed reports whether a flash was sent recently and the mixer may
+// still be updating (used by the app's restart blocker).
 func (m *Model) RecentlyFlashed() bool { return m.recentlyFlashed() }
 
-// The requests and replies the page's runner makes or reads itself, so the
-// Request and Reply forms are spelled out only in this package.
-
-// ProbeRequest is a RequestProbe, which a newly started helper answers to
-// show it is up.
 func ProbeRequest() installer.Request { return installer.Request{Kind: installer.RequestProbe} }
 
-// AllowDuoRequest is a RequestAllowExperimentalDuo with Allow set to allow.
 func AllowDuoRequest(allow bool) installer.Request {
 	return installer.Request{Kind: installer.RequestAllowExperimentalDuo, Allow: allow}
 }
 
-// AllowDuoOf is the setting an AllowExperimentalDuo request carries; ok
-// false for any other request.
 func AllowDuoOf(request installer.Request) (allow, ok bool) {
 	if request.Kind != installer.RequestAllowExperimentalDuo {
 		return false, false
@@ -144,13 +118,10 @@ func AllowDuoOf(request installer.Request) (allow, ok bool) {
 	return request.Allow, true
 }
 
-// IsStockPrepare reports a RequestPrepare for stock firmware.
 func IsStockPrepare(request installer.Request) bool {
 	return request.Kind == installer.RequestPrepare && request.Stock
 }
 
-// MixerReleaseOffers is what a ReplyMixerReleases found; ok false for any
-// other reply.
 func MixerReleaseOffers(reply installer.Reply) ([]installer.MixerOffer, bool) {
 	if reply.Kind != installer.ReplyMixerReleases {
 		return nil, false

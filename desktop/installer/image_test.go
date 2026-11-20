@@ -146,8 +146,6 @@ func TestUTCFormatsRFC3339(t *testing.T) {
 	}
 }
 
-// appendData adds a file under a test header: the path goes into the
-// header, or into a GNU long-name record before it.
 func appendData(t *testing.T, w *tarWriter, base *tarHeader, path string, data []byte) {
 	t.Helper()
 	h := *base
@@ -333,8 +331,7 @@ func realEnv(t *testing.T, name string) string {
 	return value
 }
 
-// Offline only; needs RC2FX_DUO_ARCHIVE and RC2FX_REAL_ROOT with a freshly
-// built runtime.
+// Offline test requiring RC2FX_DUO_ARCHIVE and RC2FX_REAL_ROOT.
 func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testing.T) {
 	source := realEnv(t, "RC2FX_DUO_ARCHIVE")
 	root := realEnv(t, "RC2FX_REAL_ROOT")
@@ -416,9 +413,6 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 	}
 }
 
-// Builds a real image: the cached RØDE archive with this checkout's runtime
-// and the newest saved settings for RC2FX_REAL_SERIAL. Writes only to a
-// temporary directory.
 func TestRealImageBuildsWithinTheUpdateDrive(t *testing.T) {
 	work := realEnv(t, "RC2FX_REAL_WORK")
 	root := realEnv(t, "RC2FX_REAL_ROOT")
@@ -456,8 +450,6 @@ func TestRealImageBuildsWithinTheUpdateDrive(t *testing.T) {
 	t.Logf("image %d bytes, runtime %s, %d entries added", info.Size(), digest, len(entries))
 }
 
-// Reads the release choices from a real local payload, without network
-// access.
 func TestRealPayloadReleases(t *testing.T) {
 	root := realEnv(t, "RC2FX_REAL_ROOT")
 	engine := WithPlatform(root, t.TempDir(), fakePlatform{mu: new(sync.Mutex), f: &fake{}})
@@ -473,14 +465,10 @@ func TestRealPayloadReleases(t *testing.T) {
 	}
 }
 
-// Probes the host's USB. Read-only: no report channel is opened.
-// stockImage is a minimal stock root filesystem with the members the patch
-// checks.
 func stockImage(t *testing.T, path string) {
 	testTar(t, path, patchableMembers(t, true))
 }
 
-// patchableMembers is a minimal image that patchArchive accepts.
 func patchableMembers(t *testing.T, dotted bool) []tarItem {
 	prefix := ""
 	if dotted {
@@ -552,8 +540,7 @@ func TestAnRC2FXImageListsRodesFilesForTheMixerToCheck(t *testing.T) {
 	} {
 		fmt.Fprintf(&want, "%s  %s\n", archive.Sum(m.data), m.name)
 	}
-	// RØDE's files in image order; authorized_keys, which the mixer may
-	// change, and RC2FX's own files are left out.
+	// RØDE files in archive order; excludes authorized_keys and RC2FX's own files.
 	if got := manifest(dst); got == nil || *got != want.String() {
 		t.Fatalf("manifest %v, want %q", got, want.String())
 	}

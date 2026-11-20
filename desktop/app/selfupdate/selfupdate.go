@@ -1,25 +1,12 @@
-// Package selfupdate updates RC2FX in place, through Velopack, when Velopack
-// installed it: the Windows Setup.exe, the macOS Setup.pkg, their portable
-// zips, or the Linux AppImage. Other copies (development builds, builds from
-// source) only link to the release page. It is the non-UI half of
-// self-update; the buttons are in package app
-// (selfupdate_glue.go) and Velopack's C library is behind Manager (package
-// selfupdate/vpkc, built with the `velopack` tag).
+// Package selfupdate manages in-place desktop updates via Velopack (Windows
+// installer, macOS pkg, portable zips, and Linux AppImage). Dev and source
+// builds fall back to linking to the GitHub release page.
 //
-// Nothing happens on its own. The update check says a version exists; the
-// user downloads it, then chooses "Restart to update". That restart is held
-// back while the installer has a run going or the mixer may still be
-// updating, and it still asks about unsaved edits like any other quit. The
-// Velopack updater starts as RC2FX quits and waits for it to exit.
-//
-// Updates come from the latest GitHub release: its `releases.{channel}.json`
-// names the package and its SHA-256, which Velopack checks after download.
-// That feed is not signed, so a package is also checked against the signed
-// app release metadata (appupdate.VerifyUpdatePackage) as it downloads,
-// before Velopack moves it into place, and again when one is found at
-// startup. Only full packages are taken from the feed.
-//
-// Nothing here imports gpuikit.dev or cgo: it tests with plain `go test`.
+// Updates are strictly user-initiated: after downloading, the user triggers
+// "Restart to update" when no installer task is active. Because the Velopack
+// release feed itself is unsigned, every full package is verified against
+// signed release metadata (appupdate.VerifyUpdatePackage) before Velopack
+// moves it into place, and again if found pending at startup.
 package selfupdate
 
 import (
@@ -34,79 +21,54 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
-// Feed is the assets of the release GitHub marks latest; only app releases
-// are.
 const Feed = "https://github.com/ibanks42/rc2fx/releases/latest/download"
 
-// Verifying is sent on the download's progress once the bytes are in and
-// the signed check starts. Velopack sends only 0 to 100 there.
+// Verifying is a sentinel progress value emitted once download finishes and
+// signature verification begins (Velopack only sends 0..100).
 const Verifying int16 = -32768
 
-// PackID is Velopack's package id for RC2FX, as `vpk pack --packId` sets it.
 const PackID = "io.github.ibanks42.rc2fx"
 
-// StateKind names a State variant.
 type StateKind int
 
 const (
-	// StateIdle: waiting for the user to ask.
 	StateIdle StateKind = iota
-	// StateDownloading: Percent downloaded.
 	StateDownloading
-	// StateVerifying: downloaded; Version is being checked against its
-	// signed release.
 	StateVerifying
-	// StateReady: Version is downloaded and checked; applied when RC2FX
-	// restarts.
 	StateReady
-	// StateFailed: the last attempt failed (Message); the user may try
-	// again.
 	StateFailed
 )
 
-// State is where an in-place update stands. Only the fields of its Kind are
-// set, so two states compare with ==.
+// State represents the current self-update status. Only fields relevant to
+// Kind are populated so values are directly comparable with ==.
 type State struct {
-	Kind    StateKind
-	Percent uint8
-	Version string
-	Message string
-	// Asset, when HasAsset: for StateReady, the checked package to apply on
-	// restart; for StateFailed, the package kept because no check could be
-	// made, which trying again only checks. A Ready state without one (a
-	// preview) has nothing to apply.
+	Kind     StateKind
+	Percent  uint8
+	Version  string
+	Message  string
 	Asset    Asset
 	HasAsset bool
 }
 
-// Idle is no update under way.
 func Idle() State { return State{Kind: StateIdle} }
 
-// Downloading is a download percent of the way through.
 func Downloading(percent uint8) State { return State{Kind: StateDownloading, Percent: percent} }
 
-// VerifyingState is a downloaded version being checked.
 func VerifyingState(version string) State { return State{Kind: StateVerifying, Version: version} }
 
-// Ready is a ready update with nothing to apply, as a preview shows it.
 func Ready(version string) State { return State{Kind: StateReady, Version: version} }
 
-// ReadyToApply is asset ready, checked and applied on restart.
 func ReadyToApply(asset Asset) State {
 	return State{Kind: StateReady, Version: asset.Version, Asset: asset, HasAsset: true}
 }
 
-// Failed is an update that failed with message.
 func Failed(message string) State { return State{Kind: StateFailed, Message: message} }
 
-// FailedKept is a failure with asset kept to check again, because no
-// check could be made.
 func FailedKept(message string, asset Asset) State {
 	return State{Kind: StateFailed, Message: message, Asset: asset, HasAsset: true}
 }
 
-// Asset is a Velopack asset (VelopackAsset): a package in the feed or on
-// disk. The JSON names are Velopack's.
+// Asset matches Velopack's VelopackAsset JSON schema.
 type Asset struct {
 	PackageID     string `json:"PackageId"`
 	Version       string `json:"Version"`
@@ -119,7 +81,6 @@ type Asset struct {
 	NotesHTML     string `json:"NotesHtml"`
 }
 
-// UpdateCheckKind is Velopack's UpdateCheck.
 type UpdateCheckKind int
 
 const (
@@ -128,44 +89,28 @@ const (
 	RemoteIsEmpty
 )
 
-// Update is an available update (Velopack's UpdateInfo), kept by the
-// Manager that found it until Release.
+// Update wraps a Velopack UpdateInfo handle that must be freed via Release.
 type Update interface {
-	// TargetFullRelease is the package the update installs.
 	TargetFullRelease() Asset
-	// Release frees it; it must not be used afterwards.
 	Release()
 }
 
-// Manager is Velopack's UpdateManager for this copy.
+// Manager abstracts Velopack's UpdateManager for this installation.
 type Manager interface {
-	// UpdatePendingRestart is a package downloaded earlier and not yet
-	// applied (get_update_pending_restart).
 	UpdatePendingRestart() (Asset, bool)
-	// CheckForUpdates asks the feed. The Update is set only for
-	// UpdateAvailable.
 	CheckForUpdates() (UpdateCheckKind, Update, error)
-	// DownloadUpdates fetches the update into the packages folder, through
-	// the SignedFeed, reporting progress 0 to 100. Blocking.
 	DownloadUpdates(update Update, progress func(int16)) error
-	// WaitExitThenApplyUpdates starts the updater, which waits for this
-	// process to exit (up to 60 s), applies asset and restarts RC2FX.
 	WaitExitThenApplyUpdates(asset Asset, silent, restart bool, args []string) error
 }
 
-// ErrorKind is the part of velopack::Error that failure() tells apart.
 type ErrorKind int
 
 const (
-	// ErrNetwork is velopack::Error::Network.
 	ErrNetwork ErrorKind = iota
-	// ErrMismatch is ChecksumInvalid or SizeInvalid.
 	ErrMismatch
-	// ErrOther is anything else; Text is its message.
 	ErrOther
 )
 
-// Error is a Velopack or download failure.
 type Error struct {
 	Kind ErrorKind
 	Text string
@@ -173,10 +118,8 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Text }
 
-// LibraryError reads the last error velopack_libc reported. The C library
-// gives text, not error kinds: its Display of ChecksumInvalid and
-// SizeInvalid, and of Network, start with fixed words (velopack 1.3.39's
-// lib.rs), and anything after the first line is the cause chain.
+// LibraryError classifies an error string from velopack_libc by its first line,
+// matching the Display prefixes in velopack 1.3.39.
 func LibraryError(text string) *Error {
 	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
 	line = strings.TrimSpace(line)
@@ -192,7 +135,6 @@ func LibraryError(text string) *Error {
 	return &Error{Kind: ErrOther, Text: line}
 }
 
-// Failure is what the user sees for a failed download.
 func Failure(err *Error) string {
 	switch err.Kind {
 	case ErrNetwork:
@@ -203,30 +145,24 @@ func Failure(err *Error) string {
 	return fmt.Sprintf("The update could not be downloaded (%s).", err.Text)
 }
 
-// Checked is how the feed's check of one download went.
 type Checked struct {
 	Version  string
 	FileName string
-	// Err is nil when the package passed.
-	Err *appupdate.VerifyError
+	Err      *appupdate.VerifyError
 }
 
-// Checks is the package the feed last checked as it downloaded, shared with
-// it.
+// Checks passes the feed's inline verification result back to the download caller.
 type Checks struct {
 	mu   sync.Mutex
 	last *Checked
 }
 
-// Record keeps the outcome of checking asset.
 func (c *Checks) Record(asset Asset, result *appupdate.VerifyError) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.last = &Checked{Version: asset.Version, FileName: asset.FileName, Err: result}
 }
 
-// Take is how the feed's check of asset went, if it made one, forgetting
-// it. found is false when it made none (or checked another package).
 func (c *Checks) Take(asset Asset) (result *appupdate.VerifyError, found bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -238,12 +174,10 @@ func (c *Checks) Take(asset Asset) (result *appupdate.VerifyError, found bool) {
 	return checked.Err, true
 }
 
-// goos is the platform the name rules below follow.
 var goos = runtime.GOOS
 
-// PackageName is the file name Velopack stores fileName under in the
-// packages folder, which is also the release asset's name. ok is false when
-// Velopack would have to change it, so the two could differ.
+// PackageName returns the base filename Velopack stores in the packages folder,
+// or ok=false if Velopack would sanitize/alter characters in it.
 func PackageName(fileName string) (string, bool) {
 	windows := goos == "windows"
 	name := fileName
@@ -262,8 +196,6 @@ func PackageName(fileName string) (string, bool) {
 	return name, true
 }
 
-// channel is the part of vpk's package name for this platform (the default
-// Windows channel's name has no channel).
 func channel() string {
 	switch goos {
 	case "windows":
@@ -274,17 +206,14 @@ func channel() string {
 	return "-linux"
 }
 
-// IsOwnPackage reports whether fileName is exactly this platform's full
-// package of version, as vpk names it.
+// IsOwnPackage reports whether fileName matches this platform's full nupkg name.
 func IsOwnPackage(version, fileName string) bool {
 	name, ok := PackageName(fileName)
 	return ok && name == fmt.Sprintf("%s-%s%s-full.nupkg", PackID, version, channel())
 }
 
-// FullPackages is the feed without delta packages and without other
-// platforms' packages: with no deltas Velopack always fetches the whole
-// package, which is what the release signs, and every platform's package is
-// signed alike, so only its name ties a package to this platform.
+// FullPackages keeps only full packages for the current platform so Velopack
+// never fetches unsigned deltas or another platform's asset.
 func FullPackages(assets []Asset) []Asset {
 	kept := assets[:0:0]
 	for _, asset := range assets {
@@ -295,12 +224,8 @@ func FullPackages(assets []Asset) []Asset {
 	return kept
 }
 
-// Verify is appupdate.VerifyUpdatePackage's signature: version, asset name,
-// file. A failure is a *appupdate.VerifyError.
 type Verify func(version, asset, file string) error
 
-// asVerifyError is err as the verifier's error; anything else could not be
-// checked.
 func asVerifyError(err error) *appupdate.VerifyError {
 	if err == nil {
 		return nil
@@ -316,10 +241,9 @@ func rejected(message string) *appupdate.VerifyError {
 	return &appupdate.VerifyError{Rejected: true, Message: message}
 }
 
-// VerifyFile checks file, the download of asset, against its signed release
-// before it may be applied. A package the release rejects is removed, so nothing can apply it
-// unchecked later. One that could not be checked (offline, say) is kept: it
-// may be good, and checking again needs no download.
+// VerifyFile checks file against its signed release. Rejected packages are
+// deleted immediately; transient verification errors leave the file on disk so
+// the user can retry verification without re-downloading.
 func VerifyFile(asset Asset, file string, verify Verify) *appupdate.VerifyError {
 	own := IsOwnPackage(asset.Version, asset.FileName)
 	name, named := PackageName(asset.FileName)
@@ -336,7 +260,6 @@ func VerifyFile(asset Asset, file string, verify Verify) *appupdate.VerifyError 
 	return result
 }
 
-// VerifyPackage is VerifyFile for a package in the packages folder.
 func VerifyPackage(packages string, asset Asset, verify Verify) *appupdate.VerifyError {
 	name, ok := PackageName(asset.FileName)
 	if !ok {
@@ -345,15 +268,10 @@ func VerifyPackage(packages string, asset Asset, verify Verify) *appupdate.Verif
 	return VerifyFile(asset, filepath.Join(packages, name), verify)
 }
 
-// Outcome is what a finished check leaves: Ready with the package when it
-// passed, Failed keeping it when no check could be made, else Failed.
 type Outcome struct {
 	State State
 }
 
-// CheckedOutcome is where a downloaded package's check leaves the update:
-// ready to apply when it passed, failed but kept when the check could not
-// be made, and failed when the package was rejected.
 func CheckedOutcome(asset Asset, result *appupdate.VerifyError) Outcome {
 	switch {
 	case result == nil:

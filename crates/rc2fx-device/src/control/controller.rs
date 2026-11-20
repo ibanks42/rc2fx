@@ -41,13 +41,11 @@ enum RunningAnchor {
     FirstReport(std::time::Instant),
 }
 
-/// Why moving the running audio from `running` to `candidate` needs a save
-/// rather than a live edit, or None when a live edit can play it. A live edit
-/// may only hand a path new parameters; it never rebuilds processing. The rule is
-/// the native library's own (`rc2fx_dsp::Prepared::requires_reset`, which
-/// covers noise suppression switched on or off, its lookahead, and the effect
-/// order around it), plus a changed kind, channel count or target set. The
-/// app predicts the same thing before it asks.
+/// Returns why transitioning from `running` to `candidate` requires a full save
+/// instead of a live edit, or `None` if a live edit suffices.
+///
+/// Mirrors `rc2fx_dsp::Prepared::requires_reset` (suppression toggle, lookahead,
+/// and effect order around suppression) plus target set, kind, or channel changes.
 pub(crate) fn live_needs_save(
     running: &[rc2fx_core::Target],
     candidate: &[rc2fx_core::Target],
@@ -214,12 +212,8 @@ impl Controller {
             && self.engine.applied_revision != 0
             && self.durability_fault().is_none()
     }
-    /// `PUT api/v1/live` on the native engine: the settings go on the
-    /// running audio at once and stay there; they are what the user has.
-    /// Nothing is stored yet, the revision stays, no state is published, and
-    /// the engine stays Running. The app saves them once edits stop, or the
-    /// daemon does (`keep_live`). Answers with the saved revision the edit was
-    /// based on.
+    /// Applies `PUT api/v1/live` directly to the running native engine without
+    /// saving, bumping revision, or publishing state. Returns the base revision.
     pub(crate) fn live_native(
         &mut self,
         update: ConfigUpdate,
@@ -249,15 +243,12 @@ impl Controller {
         runtime.live(&candidate, saved)?;
         Ok(revision)
     }
-    /// Saves what live edits play, for an app that went away without saving
-    /// them or a daemon that stops (`last`): the user keeps what they hear.
-    /// Nothing reaches the audio, which already plays it, so the engine stays
-    /// Running and routed and the new revision is applied at once; the new
-    /// state is published as for any save. When the save itself fails (a
-    /// store or durability fault), and on the `last` try whatever failed, the
-    /// saved settings go back on the audio instead, so the audio and the
-    /// store agree. A library that is not ready otherwise leaves the edits
-    /// playing for the next try. Ok(None) when there was nothing to keep.
+    /// Persists active live edits when the app disconnects or the daemon stops (`last`).
+    ///
+    /// Audio is already playing these settings, so nothing is republished and the
+    /// engine stays Running. On a store/durability failure (or any failure when `last`
+    /// is true), rolls audio back to the saved settings so store and audio agree.
+    /// Returns `Ok(None)` if no live edits are pending.
     pub(crate) fn keep_live(
         &mut self,
         runtime: &mut crate::native_backend::Runtime,
@@ -499,13 +490,8 @@ impl Controller {
         controller
     }
 
-    /// Records the first Running report for `generation`, from the native
-    /// progress poll on the manager thread. A later report for
-    /// the same generation keeps the original anchor, so an engine that
-    /// stalls and recovers does not appear to restart. When the daemon knows
-    /// when the audio process started, that is the anchor and the age covers
-    /// everything since; otherwise the earliest trustworthy point is this
-    /// first Running report.
+    /// Records the first Running report for `generation` so stalls/recoveries
+    /// do not reset engine age. Prefers the audio process start time when known.
     fn note_running(&mut self, generation: u64) {
         if self
             .running_since
@@ -518,11 +504,8 @@ impl Controller {
             self.running_since = Some((generation, anchor));
         }
     }
-    /// Adopts the start of the audio process that runs the engine. Called on
-    /// the control thread with the identity captured there; `None` (an
-    /// unreadable `/proc/<pid>/stat`) leaves the first-Running fallback. A
-    /// restarted process replaces the anchor for the current generation, so
-    /// its age starts from its own start, not the old process's.
+    /// Adopts the audio process start time; `None` falls back to first-Running.
+    /// A restarted process replaces the anchor for the current generation.
     fn note_process_start(&mut self, start: Option<ProcessStart>) {
         self.process_start = start;
         if let (Some((generation, RunningAnchor::Process(current))), Some(start)) =
@@ -532,11 +515,8 @@ impl Controller {
             self.running_since = Some((generation, RunningAnchor::Process(start)));
         }
     }
-    /// How long `generation` has been running on the diagnostics clock, from
-    /// the audio process's start when known, or its first Running report
-    /// otherwise. `None` until it runs, and for any generation other than the
-    /// one recorded. A diagnostics reset never touches it: this is the
-    /// engine's age, not the counters'.
+    /// Elapsed nanoseconds for `generation` on the diagnostics clock (unaffected
+    /// by diagnostics resets). Returns `None` until running or for other generations.
     pub(crate) fn running_for_ns(&self, generation: u64) -> Option<u64> {
         let (running, anchor) = self.running_since?;
         if running != generation {

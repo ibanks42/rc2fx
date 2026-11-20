@@ -1,8 +1,5 @@
 package app
 
-// RC2FX_DEV_PAGE, the navigating half: opening the chosen page (the parsing
-// is in devpage.go).
-
 import (
 	"fmt"
 	"os"
@@ -10,8 +7,8 @@ import (
 	"gpuikit.dev/gk"
 )
 
-// openDevPage opens the requested page, once. Pages that need the mixer wait
-// for its first state.
+// openDevPage navigates once to the page requested via RC2FX_DEV_PAGE.
+// Pages that depend on mixer state wait until the first connection succeeds.
 func (a *App) openDevPage(cx *gk.Cx) {
 	if a.devPage == nil {
 		return

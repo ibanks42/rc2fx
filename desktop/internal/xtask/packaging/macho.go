@@ -1,11 +1,10 @@
 package packaging
 
-// Checks on the universal macOS app, in Go so they run, and are tested, on
-// any machine (lipo and otool exist only on macOS): every Mach-O file the
-// app ships holds an arm64 and an x86_64 slice, each built for macOS and for
-// no newer macOS than the bundle's LSMinimumSystemVersion, and loads its
-// libraries only from the system or from beside the executable. The
-// installer must offer itself to both kinds of Mac.
+// Pure-Go verification of universal macOS binaries, bundles, portable zips,
+// and installer .pkg archives (so tests run on non-macOS hosts without lipo or
+// otool). Checks that every Mach-O contains arm64 + x86_64 slices targeting
+// macOS <= LSMinimumSystemVersion, loads only system or co-located libraries,
+// and that the .pkg advertises both architectures.
 
 import (
 	"archive/zip"
@@ -29,22 +28,16 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// macOSMinimum is the oldest macOS the app runs on, which is Go's: Go 1.27
-// requires macOS 13 Ventura (its linker's default minimum). It is the
-// bundle's LSMinimumSystemVersion, every slice is compiled and linked for it
-// (-mmacosx-version-min), and no file the app ships may need a newer one.
-// Raise it with the Go toolchain, never lower it below Go's.
+// macOSMinimum matches Go 1.27's minimum supported macOS (13 Ventura). Used
+// for LSMinimumSystemVersion, -mmacosx-version-min, and Mach-O verification.
+// Bump alongside the Go toolchain, never lower.
 const macOSMinimum = "13.0"
 
-// universalArches is the slices every shipped Mach-O file holds, by lipo's
-// names, sorted.
-var universalArches = []string{"arm64", "x86_64"}
+var (
+	universalArches = []string{"arm64", "x86_64"}
+	darwinGoArches  = []string{"arm64", "amd64"}
+)
 
-// darwinGoArches is the GOARCH of each slice of the macOS app, which is
-// built once per architecture and joined by lipo.
-var darwinGoArches = []string{"arm64", "amd64"}
-
-// clangArch is clang's -arch name for a GOARCH.
 func clangArch(goarch string) string {
 	if goarch == "amd64" {
 		return "x86_64"
@@ -52,7 +45,7 @@ func clangArch(goarch string) string {
 	return goarch
 }
 
-// Load commands the checks read (mach-o/loader.h).
+// Mach-O load command constants from <mach-o/loader.h>.
 const (
 	lcLoadDylib       = 0xc
 	lcIDDylib         = 0xd
@@ -67,20 +60,17 @@ const (
 	platformMacOS     = 1
 )
 
-// machoSlice is one architecture of a Mach-O file.
 type machoSlice struct {
-	arch string // lipo's name: arm64, x86_64
-	// minOS is the oldest macOS it runs on (X.Y.Z as 0xXXXXYYZZ), 0 when it
-	// names none; platform is LC_BUILD_VERSION's platform (macOS is 1).
-	minOS, platform uint32
-	dylib           bool     // MH_DYLIB
-	install         string   // LC_ID_DYLIB
-	loads           []string // the libraries it loads
-	rpaths          []string
-	data            []byte
+	arch     string // arm64 or x86_64
+	minOS    uint32 // 0xXXXXYYZZ, or 0 if absent
+	platform uint32 // LC_BUILD_VERSION platform (1 = macOS)
+	dylib    bool
+	install  string // LC_ID_DYLIB
+	loads    []string
+	rpaths   []string
+	data     []byte
 }
 
-// isMachO: data starts like a Mach-O file, thin or fat.
 func isMachO(data []byte) bool {
 	if len(data) < 4 {
 		return false
@@ -102,8 +92,7 @@ func lipoName(cpu macho.Cpu) string {
 	return cpu.String()
 }
 
-// loadString is the NUL-terminated string a load command points at with
-// the 32-bit offset at raw[at:].
+// loadString reads a NUL-terminated string referenced by the uint32 offset at raw[at:].
 func loadString(order binary.ByteOrder, raw []byte, at int) (string, error) {
 	if len(raw) < at+4 {
 		return "", errors.New("load command too short")
@@ -119,7 +108,6 @@ func loadString(order binary.ByteOrder, raw []byte, at int) (string, error) {
 	return string(text), nil
 }
 
-// readSlice reads one thin Mach-O file.
 func readSlice(data []byte) (machoSlice, error) {
 	f, err := macho.NewFile(bytes.NewReader(data))
 	if err != nil {
@@ -162,8 +150,6 @@ func readSlice(data []byte) (machoSlice, error) {
 	return s, nil
 }
 
-// machoSlices is every architecture in a Mach-O file, and whether it is a
-// fat (universal) file.
 func machoSlices(data []byte) ([]machoSlice, bool, error) {
 	if len(data) >= 4 && binary.BigEndian.Uint32(data) == macho.MagicFat {
 		fat, err := macho.NewFatFile(bytes.NewReader(data))
@@ -191,7 +177,7 @@ func machoSlices(data []byte) ([]machoSlice, bool, error) {
 	return []machoSlice{s}, false, nil
 }
 
-// parseOSVersion is "X[.Y[.Z]]" as Mach-O encodes it, 0xXXXXYYZZ.
+// parseOSVersion encodes "X[.Y[.Z]]" into Mach-O's 0xXXXXYYZZ format.
 func parseOSVersion(text string) (uint32, bool) {
 	parts := strings.Split(text, ".")
 	if len(parts) == 0 || len(parts) > 3 {
@@ -218,9 +204,8 @@ func formatOSVersion(v uint32) string {
 	return text
 }
 
-// checkUniversal: data, the file name, is a universal Mach-O with exactly
-// an arm64 and an x86_64 slice, each for macOS and needing no newer macOS
-// than minimum. It returns the slices.
+// checkUniversal verifies that data is a fat Mach-O with arm64 and x86_64
+// slices, both targeting macOS with minOS <= minimum.
 func checkUniversal(name string, data []byte, minimum string) ([]machoSlice, error) {
 	limit, ok := parseOSVersion(minimum)
 	if !ok {
@@ -253,16 +238,12 @@ func checkUniversal(name string, data []byte, minimum string) ([]machoSlice, err
 	return found, nil
 }
 
-// systemLibrary: a library macOS itself provides.
 func systemLibrary(name string) bool {
 	return strings.HasPrefix(name, "/usr/lib/") || strings.HasPrefix(name, "/System/Library/")
 }
 
-// checkMacBundle checks the app bundle's files (paths under RC2FX.app/):
-// LSMinimumSystemVersion is macOSMinimum, every Mach-O file in it is
-// universal and fits that minimum, and every library one loads is the
-// system's or one beside the executable (found through an @executable_path
-// run path).
+// checkMacBundle validates RC2FX.app's Info.plist, universal Mach-O binaries,
+// minimum OS version, and dynamic library load paths.
 func checkMacBundle(files Files) error {
 	contents := app + "/Contents/"
 	info, ok := files[contents+"Info.plist"]
@@ -322,8 +303,8 @@ func checkMacBundle(files Files) error {
 	return nil
 }
 
-// checkPortableZip checks the bundle in vpk's portable zip, which has
-// Velopack's updater in it too.
+// checkPortableZip validates the .app bundle inside vpk's portable zip,
+// including Velopack's UpdateMac binary.
 func checkPortableZip(name string, data []byte) error {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -357,7 +338,6 @@ func checkPortableZip(name string, data []byte) error {
 	return nil
 }
 
-// xarFile is a file in a xar archive's table of contents.
 type xarFile struct {
 	Name string `xml:"name"`
 	Data *struct {
@@ -370,8 +350,7 @@ type xarFile struct {
 	} `xml:"data"`
 }
 
-// xarMember is the top-level file name of a xar archive (an installer
-// package), decoded; at most limit bytes.
+// xarMember extracts a single top-level file from a xar archive (.pkg).
 func xarMember(data []byte, name string, limit uint64) ([]byte, error) {
 	if len(data) < 28 || string(data[:4]) != "xar!" {
 		return nil, errors.New("not a xar archive")
@@ -412,7 +391,7 @@ func xarMember(data []byte, name string, limit uint64) ([]byte, error) {
 		case "application/octet-stream", "":
 			r = bytes.NewReader(stored)
 		case "application/x-gzip":
-			// xar's "gzip" is zlib; accept a real gzip stream too.
+			// xar uses zlib under the "application/x-gzip" label; fall back to gzip just in case.
 			if z, err := zlib.NewReader(bytes.NewReader(stored)); err == nil {
 				r = z
 			} else if g, err := gzip.NewReader(bytes.NewReader(stored)); err == nil {
@@ -432,10 +411,9 @@ func xarMember(data []byte, name string, limit uint64) ([]byte, error) {
 	return nil, fmt.Errorf("no %s", name)
 }
 
-// checkInstaller: the installer package (a product archive) installs on
-// both kinds of Mac. Without arm64 in its hostArchitectures, macOS asks
-// Apple silicon owners to install Rosetta first; without x86_64 Intel Macs
-// refuse it.
+// checkInstaller ensures the .pkg Distribution advertises both arm64 and
+// x86_64 in hostArchitectures (otherwise Apple Silicon prompts for Rosetta or
+// Intel Macs reject it).
 func checkInstaller(name string, data []byte) error {
 	distribution, err := xarMember(data, "Distribution", 1<<20)
 	if err != nil {

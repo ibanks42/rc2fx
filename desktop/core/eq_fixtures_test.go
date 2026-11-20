@@ -1,11 +1,8 @@
 package core
 
-// Shared EQ biquad fixture tests (fixtures/eq/biquads.json).
-// Rust checks the same file in crates/rc2fx-core/tests/eq_fixtures.rs.
-//
-// Go's math.Pow/Sin/Cos are not glibc's libm, so derived biquad coefficients
-// may land a few ULPs from the mixer's; the tolerance below catches any
-// formula or sign drift while permitting standard libm rounding differences.
+// Shared EQ biquad fixture tests (fixtures/eq/biquads.json), mirrored in
+// crates/rc2fx-core/tests/eq_fixtures.rs. Small ULP tolerances allow for
+// Go math vs glibc libm rounding differences.
 
 import (
 	"encoding/json"

@@ -11,10 +11,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// The event log: counting, groups, paging, resets, wording and host times.
-
-// page is a page as the mixer would send it, decoded the way the transport
-// decodes one (strictly), with room for the hostile case's megabyte.
+// Decodes a synthetic diagnostics page through the strict transport parser,
+// with a raised limit for the 1 MiB hostile-event test case.
 func page(t *testing.T, lost uint64, events any) core.DiagnosticsEvents {
 	t.Helper()
 	text, err := json.Marshal(map[string]any{

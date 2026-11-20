@@ -12,7 +12,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
-// Role names (tough's RoleType, kebab-case).
 const (
 	RoleRoot      = "root"
 	RoleTargets   = "targets"
@@ -20,7 +19,7 @@ const (
 	RoleTimestamp = "timestamp"
 )
 
-// RoleDebug is a role as Rust's `{:?}` prints tough's RoleType.
+// RoleDebug formats role like Rust's Debug for tough's RoleType.
 func RoleDebug(role string) string {
 	switch role {
 	case RoleRoot:
@@ -35,22 +34,19 @@ func RoleDebug(role string) string {
 	return role
 }
 
-// SpecVersion is the spec_version tough writes.
 const SpecVersion = "1.0.0"
 
-// Limits on a metadata file: far above any RC2FX repository.
 const (
 	maxDocumentBytes = 64 << 20
 	maxDocumentNodes = 4_000_000
 )
 
-// Signature is one signature of a document.
 type Signature struct {
 	KeyID string // lowercase hex
 	Sig   []byte
 }
 
-// Document is a parsed `Signed<T>` file.
+// Document is a parsed signed TUF metadata file.
 type Document struct {
 	Role        string
 	Signed      core.Value
@@ -60,45 +56,36 @@ type Document struct {
 	Expires     time.Time
 }
 
-// RoleKeys is a role's keys in a root.
 type RoleKeys struct {
-	KeyIDs    []string // lowercase hex, as listed
+	KeyIDs    []string // lowercase hex, in document order
 	Threshold uint64
 }
 
-// Root is a parsed root document.
 type Root struct {
 	*Document
 	ConsistentSnapshot bool
-	// Keys by lowercase hex ID; KeyOrder is the IDs in document order.
-	Keys     map[string]Key
-	KeyOrder []string
-	Roles    map[string]RoleKeys
+	Keys               map[string]Key // keyed by lowercase hex ID
+	KeyOrder           []string
+	Roles              map[string]RoleKeys
 }
 
-// Metafile is a snapshot or timestamp entry.
 type Metafile struct {
-	Length *uint64
-	SHA256 []byte // nil when the entry has no hashes
-	// HasHashes: the entry has a `hashes` object.
+	Length    *uint64
+	SHA256    []byte // nil when hashes are absent
 	HasHashes bool
 	Version   uint64
 }
 
-// Targets is a parsed targets document's top-level facts.
 type Targets struct {
 	*Document
-	// Entries by target name.
-	Entries map[string]TargetEntry
-	// DelegatedRoles is the number of delegated roles.
+	Entries        map[string]TargetEntry
 	DelegatedRoles int
 }
 
-// TargetEntry is one signed target.
 type TargetEntry struct {
 	Length uint64
 	SHA256 []byte
-	Custom core.Value // an object; empty when the target has none
+	Custom core.Value // empty object when absent
 }
 
 func parseValue(data []byte) (core.Value, error) {
@@ -148,7 +135,6 @@ func hexField(v core.Value, key string) ([]byte, string, error) {
 	return raw, hex.EncodeToString(raw), nil
 }
 
-// parseDocument reads a `Signed<T>` file of role role.
 func parseDocument(data []byte, role string) (*Document, error) {
 	value, err := parseValue(data)
 	if err != nil {
@@ -221,8 +207,8 @@ func signedFrom(signed core.Value, role string) (*Document, error) {
 	return &Document{Role: role, Signed: signed.Clone(), SpecVersion: spec, Version: version, Expires: expires}, nil
 }
 
-// ParseRoot reads a root file as tough's `Signed<Root>` deserializes it:
-// every key's ID must match its contents, and roles are tough's role types.
+// ParseRoot parses a signed root.json and verifies that each key ID matches
+// its canonical key hash.
 func ParseRoot(data []byte) (*Root, error) {
 	value, err := parseValue(data)
 	if err != nil {
@@ -235,7 +221,7 @@ func ParseRoot(data []byte) (*Root, error) {
 	return rootFrom(doc)
 }
 
-// RootFromSigned is an unsigned root role object as a Root, for signing it.
+// RootFromSigned wraps an unsigned root object so it can be signed.
 func RootFromSigned(signed core.Value) (*Root, error) {
 	doc, err := signedFrom(signed, RoleRoot)
 	if err != nil {
@@ -329,7 +315,7 @@ func rootFrom(doc *Document) (*Root, error) {
 	return root, nil
 }
 
-// ParseRole reads a targets, snapshot or timestamp file.
+// ParseRole parses a targets, snapshot, or timestamp metadata file.
 func ParseRole(data []byte, role string) (*Document, error) {
 	doc, err := parseDocument(data, role)
 	if err != nil {
@@ -348,7 +334,7 @@ func ParseRole(data []byte, role string) (*Document, error) {
 	return doc, nil
 }
 
-// Meta is a snapshot's or timestamp's `meta`, by file name.
+// Meta extracts the `meta` map from a snapshot or timestamp document.
 func Meta(doc *Document) (map[string]Metafile, error) {
 	meta, ok := doc.Signed.Get("meta")
 	if !ok {
@@ -389,7 +375,7 @@ func Meta(doc *Document) (map[string]Metafile, error) {
 	return out, nil
 }
 
-// TargetsOf reads a targets document's targets and delegations.
+// TargetsOf extracts targets and delegation counts from a targets document.
 func TargetsOf(doc *Document) (*Targets, error) {
 	out := &Targets{Document: doc, Entries: map[string]TargetEntry{}}
 	targets, ok := doc.Signed.Get("targets")
@@ -460,9 +446,9 @@ func TargetsOf(doc *Document) (*Targets, error) {
 	return out, nil
 }
 
-// toughForm is signed as tough re-serializes it after parsing, which is
-// what it verifies signatures over: `expires` in serialize_timestamp's
-// precision, a target's empty `custom` and a null `delegations` left out.
+// toughForm normalizes signed the way tough re-serializes it before verifying
+// signatures (normalizing `expires` precision and dropping empty `custom` or
+// null `delegations`).
 func toughForm(role string, signed core.Value) core.Value {
 	out := signed.Clone()
 	if text, ok := out.Get("expires"); ok {
@@ -490,8 +476,8 @@ func toughForm(role string, signed core.Value) core.Value {
 	return out
 }
 
-// VerifyRole is tough's Root::verify_role: enough distinct, valid
-// signatures from the role's keys over the canonical form of doc.
+// VerifyRole checks that doc meets its role's signature threshold over
+// canonicalized metadata.
 func (r *Root) VerifyRole(doc *Document) error {
 	roleKeys, ok := r.Roles[doc.Role]
 	if !ok {
@@ -521,8 +507,7 @@ func (r *Root) VerifyRole(doc *Document) error {
 	return nil
 }
 
-// KeyIDOf is the ID of the root key that is signer's public key (tough's
-// Root::key_id), and whether there is one.
+// KeyIDOf looks up signer's matching key ID in the root.
 func (r *Root) KeyIDOf(signer Signer) (string, bool) {
 	key := signer.Key()
 	for _, id := range r.KeyOrder {
@@ -533,18 +518,17 @@ func (r *Root) KeyIDOf(signer Signer) (string, bool) {
 	return "", false
 }
 
-// RoleHas reports whether role lists key ID id.
+// RoleHas reports whether role authorizes key ID id.
 func (r *Root) RoleHas(role, id string) bool {
 	keys, ok := r.Roles[role]
 	return ok && slices.Contains(keys.KeyIDs, id)
 }
 
-// SignerID is the key ID of signer's public key as tough computes it
-// (`tuf_key().key_id()`).
+// SignerID returns the canonical key ID of signer's public key.
 func SignerID(signer Signer) (string, error) { return signer.Key().ID() }
 
-// Sign is tough's SignedRole::new: signed (a role object) signed by every
-// one of signers that root lists for role, as the file's bytes.
+// Sign signs signed with every matching signer authorized for role and returns
+// the pretty-printed metadata file bytes.
 func (r *Root) Sign(role string, signed core.Value, signers []Signer) ([]byte, error) {
 	keys := map[string]Signer{}
 	for _, signer := range signers {
@@ -590,8 +574,8 @@ func (r *Root) Sign(role string, signed core.Value, signers []Signer) ([]byte, e
 	)), nil
 }
 
-// CheckStable is RepositoryEditor::new's check that every role can meet its
-// threshold (tough's message, arguments in its order).
+// CheckStable verifies that every role has at least threshold keys (error
+// wording matches tough's RepositoryEditor::new).
 func (r *Root) CheckStable() error {
 	for _, role := range sortedRoles(r.Roles) {
 		keys := r.Roles[role]
@@ -611,8 +595,7 @@ func sortedRoles(roles map[string]RoleKeys) []string {
 	return out
 }
 
-// MetafileValue is a snapshot or timestamp pin as tough writes it: length,
-// hashes, version.
+// MetafileValue builds a snapshot/timestamp meta entry in tough's field order.
 func MetafileValue(length uint64, sha256 []byte, version uint64) core.Value {
 	return core.ObjectValue(
 		core.Member{Key: "length", Value: core.U64Value(length)},
@@ -621,8 +604,7 @@ func MetafileValue(length uint64, sha256 []byte, version uint64) core.Value {
 	)
 }
 
-// RoleValue starts a role object as tough orders it: _type, spec_version,
-// version, expires.
+// RoleValue creates the base fields of a role object in tough's field order.
 func RoleValue(role string, version uint64, expires time.Time) core.Value {
 	return core.ObjectValue(
 		core.Member{Key: "_type", Value: core.StringValue(role)},
@@ -632,9 +614,8 @@ func RoleValue(role string, version uint64, expires time.Time) core.Value {
 	)
 }
 
-// Renewed is a parsed snapshot or timestamp role object re-serialized as
-// tough would after changing its version and expiry: the known fields in
-// tough's order, then the fields it keeps without knowing them.
+// Renewed rebuilds a snapshot or timestamp role with updated version, expiry,
+// and meta while preserving any unknown extra fields.
 func Renewed(signed core.Value, version uint64, expires time.Time, meta core.Value) core.Value {
 	role, _ := stringField(signed, "_type")
 	spec, _ := stringField(signed, "spec_version")
@@ -656,9 +637,8 @@ func Renewed(signed core.Value, version uint64, expires time.Time, meta core.Val
 	return out
 }
 
-// ToughMeta is a parsed `meta` map re-serialized as tough's Metafile
-// writes each entry: length (when present), hashes (sha256 first), version,
-// then unknown fields.
+// ToughMeta normalizes a `meta` object into tough's field order (length,
+// hashes with sha256 first, version, then any unknown fields).
 func ToughMeta(meta core.Value) core.Value {
 	out := core.ObjectValue()
 	members, _ := meta.AsObject()

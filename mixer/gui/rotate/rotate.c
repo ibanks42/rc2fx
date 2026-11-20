@@ -1,20 +1,15 @@
-/* 90° rotation of 32-bit pixels (BA24/ARGB32 → XR24 is a plain 32-bit copy:
- * the GE2D driver maps both to BGRA8888 byte order) for a rectangle of the
- * source, written straight to the rotated destination.
+/* 90-degree rotation of 32-bit pixels (BA24/ARGB32 -> XR24 is a plain 32-bit
+ * copy; GE2D maps both to BGRA8888) for a source rectangle.
  *
- * Source: sw × sh pixels, `sstride` bytes per row. Destination: sh × sw
- * pixels (rotated), `dstride` bytes per row.
- *   ROT_CW:  dst(row x,          col sh-1-y) = src(x, y)
- *   ROT_CCW: dst(row sw-1-x,     col y)      = src(x, y)
- * Which of the two the GUI's GE2D setup (V4L2_CID_ROTATE 270) produces must
- * be checked against a GE2D frame; the mainline driver's flip choice for
- * 90/270 changed between v5.11 and v5.15.
+ * Source: sw x sh (sstride bytes/row). Destination: sh x sw (dstride bytes/row).
+ *   ROT_CW:  dst(row x,      col sh-1-y) = src(x, y)
+ *   ROT_CCW: dst(row sw-1-x, col y)      = src(x, y)
+ * Orientation for V4L2_CID_ROTATE 270 must be verified against a GE2D frame
+ * (mainline changed 90/270 flip polarity between v5.11 and v5.15).
  *
- * NEON path: 16 source rows × 4 columns per step, i.e. four 4×4 transposes
- * (trn1/trn2 on .4s then .2d). Each step reads 16 B from each of 16 source
- * rows and writes four 64-byte destination runs, the access pattern that
- * write-combining (Normal non-cacheable) destination memory merges best.
- * Edges that are not multiples of 4/16 fall back to scalar.
+ * NEON path processes 16 source rows x 4 columns via four 4x4 transposes,
+ * producing four 64-byte contiguous writes for write-combining destination
+ * memory. Non-multiple edges fall back to scalar.
  */
 #include "rotate.h"
 

@@ -66,8 +66,6 @@ func sameSource(a, b *MixerSource) bool {
 	return a.Equal(*b)
 }
 
-// selected: the engine verified the selection; the plan goes on to the next
-// step.
 func selected(t *testing.T, m *Model, request *installer.Request) *installer.Request {
 	t.Helper()
 	if !isRequest(request, installer.RequestSelectMixer) && !isRequest(request, installer.RequestSelectBundledMixer) {
@@ -80,8 +78,6 @@ func selected(t *testing.T, m *Model, request *installer.Request) *installer.Req
 	return report(t, m, refresh, seen)
 }
 
-// Seen is what the installer sees over USB, and RC2FX as the app's
-// connection sees it.
 type Seen struct {
 	status  installer.Status
 	service *installer.Service
@@ -122,7 +118,6 @@ func gv1(updateMode bool) []usbSeen {
 	return []usbSeen{{"GV1", updateMode}}
 }
 
-// absent: the app is not connected to RC2FX.
 func absent() *installer.Service {
 	return nil
 }
@@ -165,7 +160,6 @@ func report(t *testing.T, m *Model, request *installer.Request, s Seen) *install
 	return answer(t, m, request, installer.Reply{Kind: installer.ReplyStatus, Status: new(s.status)})
 }
 
-// readSettings: the app reads the settings the plan asked for.
 func readSettings(t *testing.T, m *Model) *installer.Request {
 	t.Helper()
 	if !m.TakeSettingsRequest() {
@@ -1035,15 +1029,12 @@ func TestAFinishedUpdateStaysFinishedAndTheNextPlanIsFresh(t *testing.T) {
 	wantState(t, m, StepFlash, StepStatePending)
 }
 
-// afterStockFlash is a status as it is just after flashing stock firmware.
 func afterStockFlash(usb []usbSeen) Seen {
 	s := status(usb, absent(), true, false)
 	s.status.Saved.Prepared.Stock = true
 	return recentFlash(s)
 }
 
-// reopen opens a new installer on s, as opening the installer does, with
-// the firmware check already answered.
 func reopen(t *testing.T, settledFlash *uint64, s Seen) *Model {
 	t.Helper()
 	m := setUp(status(nil, absent(), false, false))
@@ -1837,7 +1828,6 @@ func TestReleasesDefaultToStableAndPreparedFirmwareWins(t *testing.T) {
 	}
 }
 
-// flashedAgo is s with a flash sent secs seconds ago as the last command.
 func flashedAgo(s Seen, secs uint64) Seen {
 	s.status.Saved.Commands = append(s.status.Saved.Commands, installer.CommandRecord{
 		Command: "flash",

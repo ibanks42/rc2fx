@@ -1,11 +1,9 @@
 package theme
 
-// This file does not import gk: its functions are tested with plain `go test`.
-
 import "sync/atomic"
 
-// Surface is the window's surfaces for one appearance. Text, accent and
-// problem colors are shared (colors.go).
+// Surface defines the background and border colors for one appearance.
+// Shared text, accent, and status colors live in colors.go.
 type Surface struct {
 	Bg          uint32
 	Sunken      uint32
@@ -17,22 +15,17 @@ type Surface struct {
 	LineStrong  uint32
 }
 
-// Appearance is the app's color scheme, chosen in Settings.
 type Appearance int
 
 const (
-	// AppearanceDusk is deep blue-gray, the default.
 	AppearanceDusk Appearance = iota
-	// AppearanceGraphite is neutral dark gray.
 	AppearanceGraphite
-	// AppearanceBlack is near black.
 	AppearanceBlack
 )
 
-// AppearanceAll is every appearance, in menu order.
 var AppearanceAll = [3]Appearance{AppearanceDusk, AppearanceGraphite, AppearanceBlack}
 
-// Key is the appearance's name in view.json.
+// Key returns the identifier stored in view.json.
 func (a Appearance) Key() string {
 	switch a {
 	case AppearanceGraphite:
@@ -53,7 +46,6 @@ func (a Appearance) Label() string {
 	return "Dusk"
 }
 
-// AppearanceFromKey is the appearance whose Key is key; false for none.
 func AppearanceFromKey(key string) (Appearance, bool) {
 	for _, a := range AppearanceAll {
 		if a.Key() == key {
@@ -106,8 +98,7 @@ var black = Surface{
 	LineStrong:  0x22262e,
 }
 
-// currentAppearance is the current appearance, as an index into
-// AppearanceAll. Read on every render, written only by setAppearance.
+// Index into AppearanceAll; read on every render, updated by StoreAppearance.
 var currentAppearance atomic.Uint32
 
 func CurrentAppearance() Appearance {
@@ -115,11 +106,8 @@ func CurrentAppearance() Appearance {
 	return AppearanceAll[min(i, len(AppearanceAll)-1)]
 }
 
-// surface is the current appearance's surfaces.
 func CurrentSurface() *Surface { return CurrentAppearance().surface() }
 
-// storeAppearance is the state half of changing the appearance (the theme
-// half is setAppearance in desk.go).
 func StoreAppearance(a Appearance) {
 	i := 0
 	for j, x := range AppearanceAll {

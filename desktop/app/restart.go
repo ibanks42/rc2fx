@@ -1,6 +1,6 @@
 package app
 
-// The panel shown while processing changes state.
+// Status banner shown while the mixer's audio processing is transitioning state.
 
 import (
 	"gpuikit.dev/gk"
@@ -22,7 +22,6 @@ func (a *App) processingTransitionLabel() string {
 	return "Restarting processing"
 }
 
-// restartBusy is whether the mixer reports processing changing state.
 func (a *App) restartBusy() bool {
 	return a.session.Saved != nil && a.session.Saved.ProcessingTransitionPending()
 }

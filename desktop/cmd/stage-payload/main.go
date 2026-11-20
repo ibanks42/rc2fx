@@ -1,12 +1,7 @@
-// Command stage-payload checks the installer payload in a source checkout or
-// a release folder and writes the envelope the `embedded` build tag compiles
-// in, at installer/embed/payload/rc2fx-payload.bin.
-//
-// It checks every file's checksum, the
-// SHA256SUMS manifest, the ARM64 ELFs, the catalog and the single
-// `rc2fx_build=` line. A missing or corrupt payload is an error, so a desktop
-// build never silently loses its installer. RC2FX_RELEASE_BUILD=1 applies the
-// release build line.
+// Command stage-payload validates the installer payload in a checkout or
+// release folder and writes the envelope compiled in by `-tags embedded`
+// (installer/embed/payload/rc2fx-payload.bin). Set RC2FX_RELEASE_BUILD=1 to
+// use the release build line.
 package main
 
 import (
@@ -29,8 +24,7 @@ func main() {
 		fail(err.Error())
 	}
 	envelope := embed.Wrap(embed.Body(files))
-	// Prove the envelope this build embeds reads back as exactly one payload
-	// before compiling it in.
+	// Round-trip check before writing out the embedded blob.
 	found, err := embed.Find(envelope)
 	if err != nil {
 		fail(err.Error())
@@ -46,8 +40,6 @@ func main() {
 	}
 }
 
-// A missing or damaged payload is fatal: the desktop app embeds its
-// installer, so there is no runtime fallback to files beside it.
 func fail(why string) {
 	fmt.Fprintf(os.Stderr, "\n\ncannot embed the installer payload: %s\n\n"+
 		"The desktop app installs RC2FX from this payload, so it must be present\n"+

@@ -1,10 +1,7 @@
 package app
 
-// The Diagnostic events window: the mixer's recent audio events,
-// newest first, in a window of its own. The main window owns the connection
-// and the event log; this window only shows the log and asks for a reset.
-// The log itself, its groups and the wording of each row are in
-// app/telemetry (events.go).
+// Separate window displaying the mixer's recent diagnostic audio events.
+// The main window owns the connection and EventLog; this window just renders it.
 
 import (
 	"fmt"
@@ -19,15 +16,10 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// EventLog is the mixer's recent events (telemetry.EventLog), shared with
-// the events window through a
-// gk.Model (App.eventLog).
 type EventLog = telemetry.EventLog
 
-// newEventLog is an empty event log (telemetry.NewEventLog).
 func newEventLog() EventLog { return telemetry.NewEventLog() }
 
-// kindColor is the color of a kind's chip.
 func kindColor(kind core.DiagnosticsKind) uint32 {
 	switch telemetry.KindToneOf(kind) {
 	case telemetry.KindToneDanger:
@@ -48,8 +40,6 @@ func kindChip(kind core.DiagnosticsKind) gk.DivEl {
 		Child(txt(telemetry.KindLabel(kind)))
 }
 
-// resetControl is the reset control: a button, then a confirmation in its
-// place.
 func resetControl(id, label string, confirming, connected bool, ask, cancel, reset func(cx *gk.Cx)) gk.DivEl {
 	if confirming {
 		return gk.HFlex(s.ItemsCenter, s.Gap2).
@@ -63,18 +53,15 @@ func resetControl(id, label string, confirming, connected bool, ask, cancel, res
 		Disabled(!connected).OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { ask(cx) }))
 }
 
-// eventsView is the events window's view.
 type eventsView struct {
-	log *gk.Model[EventLog]
-	// app is the main window's app, which sends the reset; nil in the
-	// preview.
-	app   *App
+	log   *gk.Model[EventLog]
+	app   *App // nil in preview builds
 	view  gk.View
 	ticks gk.Timer
 }
 
-// init starts the clock: "12 s ago" moves on even when nothing new arrives.
 func (v *eventsView) init(cx *gk.Cx) {
+	// Tick every second so relative timestamps ("12 s ago") stay fresh.
 	v.ticks = gk.Every(cx, time.Second, func(cx *gk.Cx) { gk.Notify(cx, v.view) })
 }
 
@@ -228,8 +215,7 @@ func (v *eventsView) render(cx *gk.Cx) gk.Element {
 		Child(page.Child(v.table(&log, mono)))
 }
 
-// openEventsWindow opens the events window, or brings it
-// forward when it is open already. closed runs once the window has closed.
+// openEventsWindow opens the diagnostic events window or focuses it if already open.
 func openEventsWindow(cx *gk.Cx, existing *gk.Window, log *gk.Model[EventLog], app *App,
 	closed func(cx *gk.Cx)) *gk.Window {
 	if existing != nil && slices.Contains(gk.Windows(cx), *existing) {

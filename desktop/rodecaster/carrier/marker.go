@@ -9,45 +9,30 @@ import (
 	"strings"
 )
 
-// Result is what the script did.
+// Result is the outcome recorded by the carrier script.
 type Result string
 
 const (
-	// ResultFixed: the script grew partition 1.
-	ResultFixed Result = "fixed"
-	// ResultAlreadyFixed: partition 1 already had the grown size.
+	ResultFixed        Result = "fixed"
 	ResultAlreadyFixed Result = "already-fixed"
-	// ResultUnrecognized: the table is not RØDE's factory layout; nothing
-	// was written.
 	ResultUnrecognized Result = "unrecognized"
-	// ResultFailed: the script could not finish; Reason says why.
-	ResultFailed Result = "failed"
+	ResultFailed       Result = "failed"
 )
 
-// Marker is the parsed RCFIX.TXT.
+// Marker is the parsed contents of RCFIX.TXT.
 type Marker struct {
-	Result Result
-	// Slot is the system slot running when the marker was written: 1 or
-	// 2, or 0 when the script could not tell from the kernel command line.
-	Slot int
-	// Hopped is true when the script first moved from slot 1 to slot 2.
-	Hopped bool
-	// P1Sectors is partition 1's size in the table when the marker was
-	// written; 0 when the table could not be read.
-	P1Sectors uint32
-	// Table holds the partition lines of `sfdisk -d` as written.
-	Table []string
-	// Reason says why for unrecognized and failed.
-	Reason string
-	// Sector0Before is sector 0 as saved before a resize was attempted;
-	// nil when none was.
-	Sector0Before []byte
-	// Script is the script's version string.
-	Script string
+	Result        Result
+	Slot          int      // active root slot (1 or 2; 0 if unknown from /proc/cmdline)
+	Hopped        bool     // true if the script hopped from slot 1 to slot 2 first
+	P1Sectors     uint32   // partition 1 size in sectors when written (0 if unreadable)
+	Table         []string // partition lines from `sfdisk -d`
+	Reason        string   // populated for ResultUnrecognized and ResultFailed
+	Sector0Before []byte   // 512-byte MBR backup taken before resizing, if any
+	Script        string   // carrier script version
 }
 
 const (
-	maxMarkerRaw = 1 << 20 // whole file, padding included
+	maxMarkerRaw = 1 << 20 // including trailing padding
 	maxMarker    = 16 << 10
 )
 
@@ -56,9 +41,9 @@ var markerKeys = map[string]bool{
 	"table": true, "reason": true, "sector0_before": true, "script": true,
 }
 
-// ParseMarker parses RCFIX.TXT strictly: first line rcfix=1, last line
-// end=1, only known keys, each at most once. It tolerates CRLF line endings
-// and trailing NULs or blank padding.
+// ParseMarker strictly parses RCFIX.TXT (must start with rcfix=1, end with
+// end=1, and contain only known non-duplicate keys). CRLF line endings and
+// trailing NUL/whitespace padding are allowed.
 func ParseMarker(data []byte) (Marker, error) {
 	var m Marker
 	if len(data) > maxMarkerRaw {

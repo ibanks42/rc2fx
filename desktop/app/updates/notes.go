@@ -1,9 +1,5 @@
 package updates
 
-// The Versions section's changelog: notes come from the network, so they are
-// treated as untrusted: raw HTML and image syntax are escaped, images never
-// load, and links open only when SafeURL allows them.
-
 import (
 	"fmt"
 	"strings"
@@ -13,9 +9,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/appupdate"
 )
 
-// EntryHeading is one version's heading, marking notes this app cannot
-// install: entries newer than available (nil for none) need an app update
-// first.
+// EntryHeading formats a changelog entry title, flagging versions newer than
+// available as requiring an app update first.
 func EntryHeading(prefix string, entry appupdate.ReleaseNotes, available *string) string {
 	if available != nil {
 		if order, ok := model.Compare(entry.Version, *available); ok && order > 0 {
@@ -25,10 +20,9 @@ func EntryHeading(prefix string, entry appupdate.ReleaseNotes, available *string
 	return fmt.Sprintf("%s %s", prefix, entry.Version)
 }
 
-// SafeMarkdown escapes what could reach the renderer as raw HTML or as an
-// image. Text in fenced blocks and code spans is literal already, so it
-// stays as written. A misjudged fence only leaves a tag to the renderer,
-// which still loads no images and opens no unapproved links.
+// SafeMarkdown escapes raw HTML tags and markdown image syntax outside code
+// spans and fenced code blocks so untrusted release notes cannot inject HTML
+// or trigger remote image loads.
 func SafeMarkdown(notes string) string {
 	var out strings.Builder
 	out.Grow(len(notes))
@@ -64,8 +58,6 @@ func SafeMarkdown(notes string) string {
 	return out.String()
 }
 
-// splitInclusive splits s after each '\n', keeping it; no empty part at
-// the end.
 func splitInclusive(s string) []string {
 	var lines []string
 	for s != "" {

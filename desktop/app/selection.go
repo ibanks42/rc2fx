@@ -1,7 +1,6 @@
 package app
 
-// Which paths the mixer processes, switched one at a time
-// from a channel's header or all at once from a settings file's selection.
+// Per-channel and bulk processing-path selection on the mixer.
 
 import (
 	"slices"
@@ -77,18 +76,14 @@ func (a *App) selectionReply(state core.DeviceState, err error) {
 	a.command(transport.CommandRefresh{Generation: a.generation})
 }
 
-// selectionFailed is whether a path change this app asked for failed.
 func (a *App) selectionFailed() bool {
 	return a.selectionAsked && a.session.Saved != nil && a.session.Saved.Selection.Status == core.SelectionPhaseError
 }
 
-// processed is whether processing is enabled for this path on the mixer.
 func (a *App) processed(id string) bool {
 	return a.session.Saved != nil && a.session.Saved.Config.IsSelected(id)
 }
 
-// pathNote is what is wrong with a processed path, if anything. Unprocessed
-// paths need no note: they are drawn differently.
 func (a *App) pathNote(id string) (string, bool) {
 	if a.session.Connected && !a.streamConnected {
 		return "Unconfirmed", true
@@ -110,7 +105,6 @@ func (a *App) pathNote(id string) (string, bool) {
 	}
 }
 
-// canSwitchPath is whether this path's processing can be switched now.
 func (a *App) canSwitchPath(id string) bool {
 	state := a.session.Saved
 	return state != nil && state.Selection.Allowed && slices.Contains(state.Selection.QualifiedTargetIDs, id) &&
@@ -118,9 +112,6 @@ func (a *App) canSwitchPath(id string) bool {
 		a.pending == nil && a.routingPending == nil && !a.presets.writing() && !a.fileBusy && !a.session.Conflict
 }
 
-// switchPath turns processing for one path on or off on the mixer right
-// away. Other paths keep what the mixer has; effect edits stay in the
-// draft.
 func (a *App) switchPath(cx *gk.Cx, id string, on bool) {
 	if !a.canSwitchPath(id) {
 		return
@@ -143,8 +134,6 @@ func (a *App) switchPath(cx *gk.Cx, id string, on bool) {
 	a.changeSelection(cx)
 }
 
-// selectionNotice is shown when the path selection needs a decision: a
-// settings file asked for other paths, or the last change failed.
 func (a *App) selectionNotice(cx *gk.Cx) (gk.DivEl, bool) {
 	state := a.session.Saved
 	if state == nil {

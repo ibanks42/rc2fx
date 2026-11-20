@@ -11,33 +11,26 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 )
 
-// pickerItem is one entry of a version menu: its line
-// in the menu, the shorter text the closed menu shows, and what choosing it
-// picks.
 type pickerItem[V any] struct {
 	title, short string
 	value        V
 }
 
-// picker is a select menu whose items and choice come from the installer's
-// model. The model stays the source of truth: choosing sends
-// the pick to it, and each sync brings the menu back in step with it. The
-// kit's items carry key(value) as their value.
+// picker wraps a gk.Select whose options and selection are driven by the
+// installer model. User confirmations are forwarded to the model and sync
+// reconciles the widget back to model state.
 type picker[V any] struct {
-	state  gk.SelectState
-	source gk.RowSource
-	sub    gk.Subscription
-	key    func(V) string
-	items  []pickerItem[V]
-	// keys is what the menu was last given (title and key per item), and
-	// selected the key last chosen (nil: none).
+	state    gk.SelectState
+	source   gk.RowSource
+	sub      gk.Subscription
+	key      func(V) string
+	items    []pickerItem[V]
 	keys     []string
 	selected *string
 }
 
 func newPicker[V any](a *App, cx *gk.Cx, key func(V) string, pick func(m *installflow.Model, v V)) *picker[V] {
 	p := &picker[V]{key: key}
-	// A menu line with room above and below, so entries don't crowd.
 	p.source = gk.NewSearchSource(cx, nil, gk.SearchRow(func(cx *gk.Cx, at gk.RowAt) gk.Element {
 		if at.Row < 0 || at.Row >= len(p.items) {
 			return gk.Div()
@@ -109,10 +102,8 @@ func (p *picker[V]) release(free func(...any)) {
 	free(p.sub, p.state, p.source)
 }
 
-// pickerSelect is a version menu, or nothing before its first sync. A
-// select fills its parent and draws nothing in a parent without a definite
-// width, so it sits in a box of its own width; its menu matches it.
-// versionSelectWidth fits the longest version name with its channel.
+// Fixed width so gk.Select has a definite container width (otherwise it
+// collapses to zero) while fitting the longest version+channel label.
 const versionSelectWidth = 260
 
 func pickerSelect[V any](p *picker[V], id string, disabled bool) gk.Element {

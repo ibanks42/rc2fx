@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the ACTUAL device GUI audit library. Does not upload or restart anything.
+# Cross-build the experimental device-panel LD_AUDIT library (build only; no upload/restart).
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 out="$root/target/device-ui"

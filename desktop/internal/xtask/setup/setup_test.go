@@ -39,9 +39,6 @@ func TestMixerBuildRefusesToReplaceAPromotedBundleLink(t *testing.T) {
 	}
 }
 
-// The mixer build makes exactly the pinned payload files, with a built ELF
-// for exactly the payload's binaries; a file added to the payload but not to
-// the build (or the other way round) fails here, without zig.
 func TestTheMixerBuildMakesExactlyThePinnedPayloadFiles(t *testing.T) {
 	sources := func() map[string]payloadSource {
 		return payloadSources("release", "gui", [2]string{"recorder", "snapshot"}, nil, nil)

@@ -1,9 +1,6 @@
 package app
 
-// The license dialog's rendering tests as offscreen runs: each mode runs a
-// small window under a gk-meter script with
-// the diag library, checks inside the app and prints `PASS name` or
-// `FAIL name: why`. desktop/app/uitest is the program and its test.
+// Headless UI tests for the licenses dialog, driven by desktop/app/uitest.
 
 import (
 	"fmt"
@@ -17,8 +14,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/licenses"
 )
 
-// UITestModes are the modes RunUITest knows, and the name each reports (that
-// of the test it was ported from).
+// UITestModes maps CLI mode flags to test names for RunUITest.
 var UITestModes = map[string]string{
 	"licenses-markup":  "license_words_and_markup_characters_survive_rich_text_rendering",
 	"licenses-long":    "long_notices_keep_a_bounded_viewport_and_copy_the_entire_text",
@@ -26,7 +22,6 @@ var UITestModes = map[string]string{
 	"licenses-measure": "measure_license_redraws (ignored in the Rust: a measurement)",
 }
 
-// uitest is one run: its name, and whether every check passed.
 type uitest struct {
 	name   string
 	failed bool
@@ -51,7 +46,6 @@ func normalize(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-// sameText is assert_same_text: line by line, then the length.
 func (t *uitest) sameText(what, actual, expected string) {
 	actual = strings.TrimRight(actual, " \t\r\n")
 	expected = strings.TrimRight(expected, " \t\r\n")
@@ -67,8 +61,7 @@ func (t *uitest) sameText(what, actual, expected string) {
 	}
 }
 
-// RunUITest runs mode offscreen and reports whether it passed. It needs the
-// diag library and must be called from main.
+// RunUITest executes a headless UI test mode. Must be called from main with the diag library.
 func RunUITest(mode string) bool {
 	t := &uitest{name: UITestModes[mode]}
 	if t.name == "" {
@@ -87,7 +80,7 @@ func RunUITest(mode string) bool {
 	case "licenses-measure":
 		script, start = t.measure()
 	}
-	// The theme needs a window: each mode's root view sets it in its init.
+	// Theme setup requires an active window, so each mode applies it in its root view init.
 	gk.RunHeadless(script, start)
 	if !t.failed {
 		fmt.Printf("PASS %s\n", t.name)
@@ -95,7 +88,6 @@ func RunUITest(mode string) bool {
 	return !t.failed
 }
 
-// noticeRoot is a 640 px column with one notice box.
 func noticeRoot(cx *gk.Cx, text string, frame func(cx *gk.Cx, state gk.TextViewState)) {
 	var state gk.TextViewState
 	var theme gk.BaseTheme
@@ -140,9 +132,7 @@ func (t *uitest) long() (string, func(cx *gk.Cx)) {
 	if shots == "" {
 		shots = os.TempDir()
 	}
-	// gk has no ListState reads, so the list's viewport (bounded, the last
-	// row below it, then revealed by scrolling) is shown by a shot before
-	// and after scrolling to the end, checked by eye.
+	// gk doesn't expose ListState scroll metrics, so capture before/after screenshots for visual inspection.
 	script := "size 700 420\nframe\nframe\n" +
 		"shot " + shots + "/licenses-long-top.png\n" +
 		"scroll 320 200 -10000000\nframe\nframe\n" +

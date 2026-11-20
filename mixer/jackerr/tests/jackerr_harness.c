@@ -1,14 +1,7 @@
-/* Host test harness for rc2fx_jackerr.c (built with -DRC2FX_JACKERR_TESTING):
- * calls jack_error() the way the vendor's libjackserver and jack_alsa.so do.
- *   formats       one call per known format, plus edge cases
- *   threads N     N threads x 2000 not-finished calls
- *   vendor        the stand-in vendor library calls its own jack_error()
- *   stall         a writer stalled in a slot: a later lap must drop, not overwrite
- *   newer         a reservation older than the slot's record must drop
- *   errno         jack_error() must leave errno unchanged (exit 1 if not)
- *   clockfail     a failed clock read is flagged, the record kept
- *   live MS       2 writers for MS milliseconds (for a concurrent snapshot)
- * The test hooks are found with dlsym, so a production library is usable too. */
+/* Host test harness for rc2fx_jackerr.c (-DRC2FX_JACKERR_TESTING).
+ * Modes: formats, threads N, vendor, stall, newer, errno, clockfail, live MS.
+ * Test hooks are resolved via dlsym so the harness also works against a
+ * production build. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>

@@ -1,8 +1,6 @@
-// Package edit is the channel editor's logic that does not draw: the EQ
-// graph's axis math and curve cache, the editor's parameters and lookahead
-// figures, the EQ band helpers, the show inputs cache, the selection's changed
-// paths, the restart candidate, and EQ and settings file handling. It does
-// not import gk, so it tests with plain `go test`; package app draws with it.
+// Package edit holds the non-rendering channel editor logic: EQ graph math and
+// curve caching, parameter metadata, lookahead figures, show input caching, and
+// preset/settings file I/O. Kept free of gk imports so it tests with plain `go test`.
 package edit
 
 import (
@@ -13,44 +11,41 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// The graph's frequency axis, in Hz.
+// Frequency axis bounds in Hz.
 const (
 	FMin = 10.
 	FMax = 24000.
 )
 
-// DB is the graph's range above and below 0 dB; bands beyond it sit at the
-// edge.
+// DB is the visible +/- gain range on the EQ graph; larger gains clamp to the edge.
 const DB = 18.
 
-// FrequencyX is where frequency sits across the graph, 0 to 1 (log axis).
+// FrequencyX maps a frequency in Hz to a normalized [0, 1] log-scale x coordinate.
 func FrequencyX(frequency float64) float64 {
 	return math.Log(frequency/FMin) / math.Log(FMax/FMin)
 }
 
-// XFrequency is the frequency at x across the graph (clamped to 0..1).
+// XFrequency maps a normalized [0, 1] x coordinate back to Hz, clamping x first.
 func XFrequency(x float64) float64 {
 	return FMin * math.Pow(FMax/FMin, math.Min(math.Max(x, 0), 1))
 }
 
-// CurvePoints is how many points the response is drawn with.
+// CurvePoints is the number of samples along the EQ response curve.
 const CurvePoints = 241
 
-// GridHz is the grid lines and labels across the frequency axis.
+// GridHz lists the vertical frequency grid lines in Hz.
 var GridHz = [10]float64{20., 50., 100., 200., 500., 1000., 2000., 5000., 10000., 20000.}
 
-// GridDB is the grid lines and labels up and down (0 dB is drawn apart).
+// GridDB lists the horizontal gain grid lines in dB (0 dB is drawn separately).
 var GridDB = [4]float64{12., 6., -6., -12.}
 
-// Height is where gain sits down the graph, 0 (top) to 1 (bottom); gains
-// beyond DB sit at the edge.
+// Height maps a gain in dB to a normalized [0, 1] y coordinate (0 at top, 1 at bottom).
 func Height(gain float64) float64 {
 	return 0.5 - math.Min(math.Max(gain, -DB), DB)/(2.*DB)
 }
 
-// GraphPoint is the frequency (whole hertz) and gain (tenths of a dB) at a
-// window position over the graph whose bounds are origin (x, y) and size
-// (width, height); ok is false while the graph has no size.
+// GraphPoint converts a window coordinate inside the EQ graph bounds into
+// whole-Hz frequency and tenth-dB gain. Returns ok=false if the graph has zero size.
 func GraphPoint(originX, originY, width, height, x, y float32) (frequency, gain float64, ok bool) {
 	w, h := float64(width), float64(height)
 	if w <= 0 || h <= 0 {
@@ -62,7 +57,7 @@ func GraphPoint(originX, originY, width, height, x, y float32) (frequency, gain 
 	return math.Round(XFrequency(fx)), math.Round(g*10.) / 10., true
 }
 
-// GridLabel is a frequency grid line's label: "20", "500", "1k", "20k".
+// GridLabel formats a frequency grid label (e.g. "20", "500", "1k", "20k").
 func GridLabel(frequency float64) string {
 	if frequency >= 1000. {
 		return rustFloat(frequency/1000.) + "k"
@@ -70,29 +65,26 @@ func GridLabel(frequency float64) string {
 	return rustFloat(frequency)
 }
 
-// rustFloat writes a whole number or a short decimal (the grid's values)
-// with no trailing ".0".
+// rustFloat formats grid values without a trailing ".0".
 func rustFloat(v float64) string {
 	return fmt.Sprint(v)
 }
 
-// DBLabel is a gain grid line's label: "+12", "−6".
+// DBLabel formats a gain grid label using a typographic minus sign (e.g. "+12", "−6").
 func DBLabel(db float64) string {
 	return strings.ReplaceAll(fmt.Sprintf("%+.0f", db), "-", "\u2212")
 }
 
-// EQCurve is the selected EQ's response on the graph
-// axis, kept until the EQ changes. Meter updates and hovering redraw the
-// window often; the curve rarely moves.
+// EQCurve caches the computed EQ response so frequent meter/hover redraws don't
+// recompute it when settings haven't changed.
 type EQCurve struct {
 	eq      core.EQSettings
 	channel core.Channel
 	db      []float64
 }
 
-// Curve is the response in dB at CurvePoints evenly spaced points across
-// the log frequency axis, from the cache when eq and channel are the ones
-// it holds (cache may be nil, and is replaced when it does not match).
+// Curve returns CurvePoints response values in dB across the log frequency axis,
+// reusing and updating *cache when eq and channel match.
 func Curve(cache **EQCurve, eq core.EQSettings, channel core.Channel) []float64 {
 	if c := *cache; c != nil && c.channel == channel && c.eq.Equal(eq) {
 		return c.db

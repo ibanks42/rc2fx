@@ -2,10 +2,9 @@ package core
 
 import "reflect"
 
-// deepEqual is Rust's derived PartialEq for the schema types: field by field,
-// floats with == (NaN differs from itself, -0 equals 0), a nil slice equal to
-// an empty one (Rust has no nil Vec), pointers by what they point to (an
-// Option), and Values by Value.Equal.
+// deepEqual mirrors Rust's derived PartialEq: field-by-field comparison with
+// IEEE float equality (NaN != NaN, -0 == 0), nil slices equal to empty slices,
+// pointer dereferencing, and Value.Equal for JSON Values.
 func deepEqual(a, b any) bool {
 	return equalValues(reflect.ValueOf(a), reflect.ValueOf(b))
 }

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Verified Linux build tools; the workflow caches only this tool directory.
-# The AppImage itself is made by vpk (setup-vpk.sh), which brings its own
-# AppImage runtime and needs mksquashfs (squashfs-tools) on the PATH.
+# Download and SHA-256 verify Linux release build tools (zig or linuxdeploy/patchelf).
+# AppImage assembly itself is handled by vpk (setup-vpk.sh), which expects mksquashfs on PATH.
 set -euo pipefail
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]]
 base=${RC2FX_TOOLS_DIR:-$HOME/.cache/rc2fx-release-tools}

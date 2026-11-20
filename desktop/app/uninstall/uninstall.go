@@ -1,13 +1,11 @@
-// Package uninstall is what uninstalling RC2FX on Windows offers to remove:
-// the data RC2FX keeps for this user
-// (downloaded firmware, backups of the mixer's RC2FX settings, the
-// installer's journal and known_hosts, preferences) and the SSH key pair it
-// made for the mixer's developer option.
+// Package uninstall handles optional user-data cleanup during Windows
+// uninstalls (downloaded firmware, settings backups, preferences, installer
+// state, and the developer SSH key pair).
 //
-// Velopack runs OfferCleanup just before it removes the app, and stops it
-// after 60 seconds (Update.exe's limit for this hook). The question defaults
-// to keeping everything, so a silent or unattended uninstall keeps it too. A
-// folder set with RC2FX_INSTALLER_WORK is the user's own and never removed.
+// Velopack invokes OfferCleanup right before removing the app, with a 60s
+// timeout enforced by Update.exe. The prompt defaults to "No" so unattended
+// uninstalls leave user data intact. Custom RC2FX_INSTALLER_WORK directories
+// are never deleted.
 package uninstall
 
 import (
@@ -19,7 +17,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// targets is everything to remove, if present.
 func targets() []string {
 	var targets []string
 	if work, ok := installer.DefaultWork(); ok {
@@ -33,8 +30,6 @@ func targets() []string {
 	return targets
 }
 
-// remove deletes path, a folder with everything in it or a file; one that
-// is already gone counts as removed.
 func remove(path string) error {
 	var err error
 	if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {

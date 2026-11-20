@@ -1,4 +1,5 @@
-//! Opt-in audit-namespace receiver. No audio buffer or Rust pointer crosses IPC.
+//! Unix datagram control server running inside the audit namespace.
+//! No audio buffers or raw pointers cross IPC.
 use rc2fx_core::Target;
 use rc2fx_native_control::{
     ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode,
@@ -23,19 +24,18 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-/// Where the control receiver's gate on DSP stands. Only `Admission` moves
-/// it, and only forward: Standalone to Required to Active to Stopped, or
-/// Required straight to Stopped.
+/// Monotonic state machine gating DSP execution behind the control server:
+/// `Standalone -> Required -> Active -> Stopped` (or `Required -> Stopped`).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Gate {
-    /// No receiver was requested: research mode, DSP always admitted.
+    /// No control socket configured (standalone/research mode); DSP runs immediately.
     Standalone = 0,
-    /// A receiver was requested and is not ready yet: DSP is held off.
+    /// Control socket required, waiting for server startup; DSP held off.
     Required = 1,
-    /// The requested receiver is ready: DSP is admitted.
+    /// Control server is live; DSP admitted.
     Active = 2,
-    /// The receiver stopped or failed to start: DSP stays off for good.
+    /// Control server stopped or failed; DSP permanently disabled.
     Stopped = 3,
 }
 impl Gate {
@@ -43,7 +43,6 @@ impl Gate {
     const REQUIRED: u8 = Self::Required as u8;
     const ACTIVE: u8 = Self::Active as u8;
     const STOPPED: u8 = Self::Stopped as u8;
-    /// Total: any value `Admission` never writes reads as Stopped.
     const fn from_u8(value: u8) -> Self {
         match value {
             Self::STANDALONE => Self::Standalone,
@@ -53,8 +52,8 @@ impl Gate {
         }
     }
 }
-/// One callback-side atomic check. Standalone is the explicit research mode;
-/// required receivers must become ready before DSP is admitted.
+/// Lock-free gate checked on every audio callback to ensure DSP only runs
+/// while the control server is active (when required).
 pub struct Admission {
     state: AtomicU8,
     skipped: AtomicU64,
@@ -66,9 +65,7 @@ impl Admission {
             skipped: AtomicU64::new(0),
         }
     }
-    /// Holds DSP off until a receiver activates. Only a standalone gate
-    /// moves: a required or active one stays as it is, and a stopped one
-    /// can never be armed again.
+    /// Transitions `Standalone -> Required`; no-op once active or stopped.
     pub fn require(&self) {
         let _ = self.state.compare_exchange(
             Gate::STANDALONE,
@@ -138,13 +135,10 @@ pub trait Backend: Send + 'static {
     fn cancel(&mut self, transaction: &Transaction) -> Result<(), ErrorCode>;
 }
 
-/// The first protocol version whose replies carry the two recent maxima
-/// (`ContextStatus::recent_callback_wall_ns` and
-/// `TargetStatus::worker_recent_max_ns`). Both are skipped when none, so a
-/// reply to an older peer leaves them out by clearing them.
+/// First protocol version that supports `recent_callback_wall_ns` and
+/// `worker_recent_max_ns` on inventory replies.
 const RECENT_MAXIMA_VERSION: u32 = 7;
 
-/// Clears the reply fields a peer at `version` cannot decode.
 fn omit_fields_unknown_to(version: u32, reply: &mut Reply) {
     if version >= RECENT_MAXIMA_VERSION {
         return;
@@ -160,9 +154,7 @@ fn omit_fields_unknown_to(version: u32, reply: &mut Reply) {
 }
 
 fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> Response {
-    // Answer in the peer's own version, so an older peer reads a reply shaped
-    // for what it knows. Only the supported range is spoken; anything else is
-    // refused at this build's version.
+    // Reply at the peer's negotiated version if supported, otherwise reject at ours.
     let supported = (MIN_VERSION..=VERSION).contains(&request.version);
     let result = if !supported {
         Err(ErrorCode::UnsupportedVersion)
@@ -179,8 +171,7 @@ fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> 
             Operation::Inventory => backend
                 .inventory()
                 .map(|contexts| Reply::Inventory { contexts }),
-            // Still in the protocol for compatibility, but no client sends
-            // it: the inventory carries every target's status.
+            // Deprecated; use `Operation::Inventory` instead.
             Operation::Status { .. } => Err(ErrorCode::InvalidParameters),
             Operation::Prepare {
                 transaction,
@@ -193,7 +184,6 @@ fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> 
                 } else if !transaction.valid()
                     || transaction.target_id != target.id
                     || target.validate().is_err()
-                    // A peer that negotiated an older version cannot mean it.
                     || (reset != ResetPolicy::Allow
                         && request.version < RESET_POLICY_VERSION)
                 {
@@ -267,7 +257,7 @@ fn bind(path: &Path) -> io::Result<(UnixDatagram, SocketFile)> {
             "socket parent must be an existing private directory",
         ));
     }
-    // bind refuses an existing entry. Never unlink an old or unrelated socket.
+    // `bind` fails if `path` already exists; never unlink an existing socket.
     let socket = UnixDatagram::bind(path)?;
     let metadata = fs::symlink_metadata(path)?;
     let owned = SocketFile {
@@ -330,7 +320,7 @@ impl Server {
             .spawn(move || {
                 let _owned = owned;
                 let _admission = admission;
-                // Do not inherit an elevated policy from a vendor control caller.
+                // Drop any elevated scheduling policy inherited from the caller.
                 let policy = libc::sched_param { sched_priority: 0 };
                 if unsafe {
                     libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_OTHER, &policy)
@@ -357,7 +347,7 @@ impl Server {
                             revents: 0,
                         },
                     ];
-                    // No timeout polling: no periodic wakeups while the app is closed.
+                    // Block indefinitely so the server doesn't wake up while idle.
                     let ready = unsafe { libc::poll(poll.as_mut_ptr(), 2, -1) };
                     if ready < 0 {
                         if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
@@ -415,8 +405,8 @@ impl Server {
             gate,
         })
     }
-    /// Control only. Keeps the handle on timeout; the caller must not unload a
-    /// module with its receiver still executing. No callback ever joins this task.
+    /// Control-only shutdown. Retains the join handle on timeout so callers
+    /// know the server thread is still running.
     pub fn shutdown(&mut self) -> bool {
         if let Some(gate) = self.gate {
             gate.stop();
@@ -928,8 +918,6 @@ mod tests {
         assert!(server.shutdown());
         assert_eq!(server.status().received, 1); // Hello only.
     }
-    /// A reply to a version 6 peer is a version 6 reply: the two fields 7 added
-    /// are absent from its JSON. The same reply at 7 carries them.
     #[test]
     fn older_peers_are_answered_at_their_version_without_the_fields_they_lack() {
         let current = session(&"a".repeat(32));
@@ -957,8 +945,6 @@ mod tests {
             assert_eq!(json.contains("7000"), newer, "{json}");
         }
     }
-    /// Only the supported range is spoken: 5 (below `MIN_VERSION`) and 8
-    /// (above `VERSION`) are refused at this build's version.
     #[test]
     fn only_the_supported_protocol_range_is_answered() {
         let current = session(&"a".repeat(32));
@@ -997,10 +983,6 @@ mod tests {
             assert_eq!(response.version, version);
         }
     }
-    /// A library that speaks only version 6, as the released mixer has. It
-    /// refuses this build's newer version and answers at its own; the client
-    /// re-hellos there and keeps it, and the v6 replies decode without the
-    /// fields 7 added.
     #[test]
     fn client_negotiates_down_to_a_library_that_speaks_only_v6() {
         let folder = Folder::new();
@@ -1083,8 +1065,6 @@ mod tests {
         );
         fs::remove_file(path).unwrap();
     }
-    /// Today's behavior for a library that answers above this build's
-    /// version: the connection fails instead of speaking it.
     #[test]
     fn a_library_newer_than_this_daemon_fails_the_connection() {
         let folder = Folder::new();

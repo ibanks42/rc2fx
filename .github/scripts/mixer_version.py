@@ -1,14 +1,11 @@
-"""The next mixer release version, for the Mixer release workflow.
+"""Compute and apply the next mixer release version for the Mixer release workflow.
 
-python3 .github/scripts/mixer_version.py --bump patch|minor|major
+Usage: python3 .github/scripts/mixer_version.py --bump patch|minor|major
 
-The bump applies to the newest published mixer release (the highest
-`mixer-vX.Y.Z` tag), and the result is written to config/mixer-release.json.
-A checked-in version that already equals the result is kept, so a manual
-bump and the workflow's choice agree; any other checked-in version is
-refused, because then the choice and the checkout disagree. With no mixer
-release yet, the checked-in version is published unchanged. Writes
-`version=` and `changed=` to $GITHUB_OUTPUT when set.
+Bumps the highest existing `mixer-vX.Y.Z` tag and updates config/mixer-release.json.
+If config/mixer-release.json already matches the target version (e.g. bumped manually),
+it is kept; any other mismatch is rejected. If no mixer tags exist yet, the checked-in
+version is used as-is. Writes `version=` and `changed=` to $GITHUB_OUTPUT if set.
 """
 import argparse
 import json
@@ -43,7 +40,7 @@ def latest(tags):
 
 
 def next_version(checked_in, published, bump):
-    """The version to release, and whether the manifest must change."""
+    """Return (target_version, needs_manifest_update)."""
     if published is None:
         return checked_in, False
     target = bumped(published, bump)

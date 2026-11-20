@@ -7,33 +7,25 @@ import (
 	"time"
 )
 
-// The in-place update after the verified release is with the app: the app
-// sends it to the mixer and hands over what the mixer says; these methods
-// decide what that means. Each only acts in the stage it belongs to, so a
-// late or repeated message changes nothing.
+// In-place update state transitions after a verified bundle is handed to the
+// app. Each method only acts in its expected stage, so late or duplicate
+// callbacks are ignored.
 
 const (
-	// inPlaceAskEvery is how often the mixer is asked how the update ended
-	// while it installs.
 	inPlaceAskEvery = 3 * time.Second
-	// inPlaceGiveUp is how long the mixer may take to say how the update
-	// ended.
-	inPlaceGiveUp = 6 * time.Minute
+	inPlaceGiveUp   = 6 * time.Minute
 )
 
-// InPlace is where the in-place update stands.
 func (m *Model) InPlace() InPlace {
 	return m.inPlace
 }
 
-// ShowInPlace sets where the in-place update stands, for pages made from
-// made-up state (the app's flow fixtures).
+// ShowInPlace overrides the in-place state for UI fixtures.
 func (m *Model) ShowInPlace(p InPlace) {
 	m.inPlace = p
 }
 
-// InPlaceSendFailed: the app could not send the release it took with
-// TakeInPlaceBundle to the mixer, for why.
+// InPlaceSendFailed records a transport error while uploading the bundle.
 func (m *Model) InPlaceSendFailed(why string) {
 	if m.inPlace.Kind != InPlaceUploading {
 		return
@@ -42,7 +34,6 @@ func (m *Model) InPlaceSendFailed(why string) {
 		Error: fmt.Sprintf("Couldn't reach the mixer. Nothing changed on it. %s", why)}
 }
 
-// InPlaceProgress: sent of total bytes are with the mixer.
 func (m *Model) InPlaceProgress(sent, total uint64) {
 	if m.inPlace.Kind != InPlaceUploading {
 		return
@@ -50,8 +41,8 @@ func (m *Model) InPlaceProgress(sent, total uint64) {
 	m.inPlace = InPlace{Kind: InPlaceUploading, Version: m.inPlace.Version, Sent: sent, Total: total}
 }
 
-// InPlaceAccepted: the mixer accepted the release at now and installs it,
-// restarting its audio. It is asked how that ended from now on (InPlaceTick).
+// InPlaceAccepted marks the upload accepted by the mixer and starts polling
+// for the install outcome via InPlaceTick.
 func (m *Model) InPlaceAccepted(now time.Time) {
 	if m.inPlace.Kind != InPlaceUploading {
 		return
@@ -60,7 +51,7 @@ func (m *Model) InPlaceAccepted(now time.Time) {
 	m.inPlace = InPlace{Kind: InPlaceInstalling, Version: m.inPlace.Version, Since: now}
 }
 
-// InPlaceRefused: the mixer did not accept the release, saying message.
+// InPlaceRefused records that the mixer rejected the uploaded bundle.
 func (m *Model) InPlaceRefused(message string) {
 	if m.inPlace.Kind != InPlaceUploading {
 		return
@@ -69,10 +60,9 @@ func (m *Model) InPlaceRefused(message string) {
 		Error: fmt.Sprintf("The mixer didn't accept the update. Nothing changed on it. %s", message)}
 }
 
-// InPlaceTick is the poll while the mixer installs: ask is true when the
-// app should ask the mixer how the update ended (`GET api/v1/update/last`,
-// answered through InPlaceOutcome), which needs its connection; changed is
-// true when the update gave up waiting.
+// InPlaceTick drives polling while the mixer is installing. ask is true when
+// the caller should query GET api/v1/update/last and pass the result to
+// InPlaceOutcome; changed is true if the wait timed out.
 func (m *Model) InPlaceTick(now time.Time, connected bool) (ask, changed bool) {
 	if m.inPlace.Kind != InPlaceInstalling {
 		return false, false
@@ -90,17 +80,17 @@ func (m *Model) InPlaceTick(now time.Time, connected bool) (ask, changed bool) {
 	return false, false
 }
 
-// InPlaceDismiss goes back to no in-place update once one has ended.
+// InPlaceDismiss resets a finished or failed in-place update back to idle.
 func (m *Model) InPlaceDismiss() {
 	if !m.inPlace.Active() {
 		m.inPlace = InPlace{Kind: InPlaceIdle}
 	}
 }
 
-// InPlaceOutcome hands over the mixer's record of its last in-place update
-// (JSON null is None). Only the outcome of the update in progress counts;
-// anything else is an older record. True when it ended the update, so the
-// app should read the versions the mixer now runs.
+// InPlaceOutcome processes the mixer's GET api/v1/update/last response. While
+// uploading it records the pre-update baseline; while installing it ignores
+// stale or unrelated records and returns true once the active update completes
+// so the caller can refresh reported versions.
 func (m *Model) InPlaceOutcome(record json.RawMessage) bool {
 	switch m.inPlace.Kind {
 	case InPlaceUploading:
@@ -144,12 +134,10 @@ func (m *Model) InPlaceOutcome(record json.RawMessage) bool {
 	return true
 }
 
-// inPlaceBaseline is the mixer's update/last record as it was just before
-// an in-place update was sent. Mixer software that does not clear the record
-// when it accepts an install keeps reporting it while the new update runs,
-// and it can name the same version (a retry after a rollback), so the same
-// record is not taken as the new outcome until the record has been seen to
-// change.
+// inPlaceBaseline tracks the update/last record read right before uploading.
+// Older mixer builds don't clear that record when starting a new install, and
+// a retry after a rollback targets the same version, so we ignore matching
+// records until we see the value change at least once.
 type inPlaceBaseline struct {
 	read    bool
 	record  map[string]any
@@ -164,14 +152,12 @@ func decodeRecord(record json.RawMessage) map[string]any {
 	return fields
 }
 
-// capture keeps the first record read before the update, if none was kept.
 func (b *inPlaceBaseline) capture(record json.RawMessage) {
 	if !b.read {
 		b.read, b.record = true, decodeRecord(record)
 	}
 }
 
-// stale reports that record is still the one from before the update.
 func (b *inPlaceBaseline) stale(record json.RawMessage) bool {
 	if !b.read || b.changed {
 		return false

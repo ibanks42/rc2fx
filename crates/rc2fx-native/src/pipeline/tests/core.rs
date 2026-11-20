@@ -15,7 +15,7 @@ mod processing_counters;
 #[path = "skipped_paths.rs"]
 mod skipped_paths;
 
-/// The unprocessed-path meter as it was: one flattened iterator.
+/// Reference implementation of the unprocessed-path meter using a flat iterator.
 fn flattened_meter(buffers: [&[f32]; 2]) -> rc2fx_dsp::Meter {
     let mut meter = rc2fx_dsp::Meter::default();
     for sample in buffers.into_iter().flatten().copied() {
@@ -42,10 +42,6 @@ fn meter_bits(meter: rc2fx_dsp::Meter) -> [u64; 8] {
         meter.clipped,
     ]
 }
-/// The meter shown for unprocessed paths is the same value bit for bit:
-/// over random samples of every scale, NaNs, infinities, denormals,
-/// signed zeros, full scale and just beside it, huge values and silence,
-/// mono and stereo, and every length up to a block.
 #[test]
 fn the_unprocessed_meter_is_bit_identical_to_the_flattened_loop() {
     let special = [
@@ -141,8 +137,6 @@ fn the_unprocessed_meter_is_bit_identical_to_the_flattened_loop() {
     assert!(loud.sum_squares > 0.0);
 }
 
-/// The fine histogram's bins are microsecond powers of two, inclusive at
-/// the top of each, with the count, total and longest alongside.
 #[test]
 fn the_fine_gauge_bins_by_microseconds() {
     let gauge = Fine::new();
@@ -543,8 +537,8 @@ fn live_parameters_preserve_filter_tail_and_native_failure_does_not_apply() {
             [&mut expected, &mut []],
         )
         .unwrap();
-    // The mixer hears a processed source one frame later; its hardware
-    // output is processed in the same callback.
+    // Helper-processed sources reach the mixer one frame later; hardware outputs
+    // are processed in place on the same callback.
     block(&mut pipeline, &buffers, true);
     block(&mut pipeline, &buffers, true);
     assert!(expected.iter().any(|value| value.abs() > 1e-6));
@@ -582,8 +576,6 @@ fn output_settings_are_not_acknowledged_when_native_callback_skips_output() {
     controls[1].publish(&plan.paths[1].target, 3).unwrap();
 }
 
-/// A frame where the mixer asked for only one of two output channels is
-/// neither processed nor rewritten, and is not a fault.
 #[test]
 fn a_stereo_output_never_processes_only_one_observed_channel() {
     let plan = plan_with_source_and_output(false);
@@ -618,8 +610,8 @@ fn a_missing_monitor_port_is_not_replaced_by_the_next_registered_output() {
     assert!(Pipeline::new(&plan, &registry, 1).is_err());
 }
 
-/// One source path (mono mic or stereo playback) on in_1/in_2, EQ input
-/// gain 0.5, optionally a 120 Hz high-pass (stateful).
+/// Single source path (mono mic or stereo playback) on `in_1`/`in_2` with
+/// 0.5x EQ gain and optional 120 Hz high-pass.
 fn source_plan(channels: u8, highpass: bool, mode: PathMode) -> Plan {
     let kind = if channels == 1 {
         TargetKind::Mic
@@ -663,8 +655,7 @@ fn pipeline_owned(plan: &Plan, buffers: &Buffers) -> (Pipeline, Vec<parameters::
     }
     Pipeline::new(plan, &registry, 1).unwrap()
 }
-/// One callback in which the mixer requests the source channels in
-/// `order` (repeats allowed) and copies what each request returned.
+/// Runs one callback requesting source channels in `order` (duplicates allowed).
 fn source_block(
     pipeline: &Pipeline,
     buffers: &Buffers,
@@ -685,7 +676,6 @@ fn source_block(
     pipeline.settle();
     seen
 }
-/// One callback as `source_block`, without waiting for the helper.
 fn source_block_unsettled(
     pipeline: &Pipeline,
     buffers: &Buffers,
@@ -700,8 +690,6 @@ fn source_block_unsettled(
     unsafe { pipeline.end(FRAMES, native_success) };
 }
 
-/// The helper-owned source adds one frame; the callback-owned hardware
-/// output, processed in place before the callback returns, adds none.
 #[test]
 fn only_the_helper_owned_source_adds_a_frame() {
     let plan = plan_with_source_and_output(false);
@@ -722,8 +710,7 @@ fn only_the_helper_owned_source_adds_a_frame() {
         ));
     }
     let (mut pipeline, _controls) = Pipeline::new(&plan, &registry, 1).unwrap();
-    // Source 0.25 x 0.5, mixer x 2, output x 0.5: 0.125 once both
-    // stages have been applied.
+    // 0.25 * 0.5 (source EQ) * 2.0 (mixer) * 0.5 (output EQ) = 0.125.
     let mut first = None;
     for frame in 0..4 {
         block(&mut pipeline, &buffers, true);
@@ -736,9 +723,8 @@ fn only_the_helper_owned_source_adds_a_frame() {
     assert_eq!(pipeline.counters().faults, 0);
 }
 
-/// The mixer may keep every pointer a callback's requests returned and
-/// read them all afterwards, until the callback returns: later and
-/// repeated requests never move or rewrite what an earlier one got.
+/// Returned source pointers must stay valid and unmodified through `end()`,
+/// even when the mixer calls `buffer()` multiple times in any channel order.
 #[test]
 fn every_returned_source_pointer_stays_valid_through_the_callback() {
     let plan = source_plan(2, true, PathMode::Processed);
@@ -817,15 +803,15 @@ fn a_processed_frame_the_mixer_failed_is_counted_apart() {
     }
     let before = here::sources().since(start);
     controls[0].publish(&plan.paths[0].target, 2).unwrap();
-    // Processed audio delivered, but the mixer's callback failed.
+    // Processed audio was served, but the mixer callback failed.
     source_block(&pipeline, &buffers, &[0, 1], false);
-    // Processed audio delivered for one channel; the other never asked.
+    // Only channel 0 requested; channel 1 skipped.
     source_block(&pipeline, &buffers, &[0], true);
     let after = here::sources().since(start);
     assert_eq!(after.processed, before.processed);
     assert_eq!(after.raw_invalid, before.raw_invalid);
-    // The helper is handed only completed frames: the failed one
-    // still delivered last frame's result, but the next has none.
+    // Only completed frames are handed to the helper: the failed callback still
+    // served the previous frame's result, leaving nothing ready for the next.
     assert_eq!(
         after.processed_unacknowledged,
         before.processed_unacknowledged + 1
@@ -837,18 +823,17 @@ fn a_processed_frame_the_mixer_failed_is_counted_apart() {
     source_block(&pipeline, &buffers, &[0, 1], true);
     assert_eq!(controls[0].status().unwrap().applied, 2);
     let last = here::sources().since(start);
-    // Its previous frame was incomplete, so not handed off either.
+    // Previous frame was incomplete, so it wasn't handed off either.
     assert_eq!(last.processed, before.processed);
     assert_eq!(last.raw_no_handoff, after.raw_no_handoff + 1);
 }
 
 #[test]
 fn the_helper_never_shares_the_suppression_workers_core() {
-    // Pinned callback: the other audio cores.
+    // Pinned callback -> remaining audio cores.
     assert_eq!(helper_mask(0b0100), 0b1010);
-    // Before RØDE pins the callback (every core), or with no mask known,
-    // the helper still keeps to the audio cores, never CPU 0, where the
-    // suppression worker runs (rc2fx_suppression::PRODUCTION_WORKER).
+    // Before RØDE pins the callback (or when unknown), keep the helper on audio
+    // cores and off CPU 0 where `rc2fx_suppression::PRODUCTION_WORKER` runs.
     for callback in [0b1111, 0b1110, 0] {
         let mask = helper_mask(callback);
         assert_ne!(mask, 0, "callback {callback:#b}");
@@ -869,35 +854,32 @@ fn placement_is_sampled_fast_until_settled_then_at_the_steady_cadence() {
             .filter(|&cycle| sampler.due(cycle))
             .collect::<Vec<_>>()
     };
-    // Startup: every 64 callbacks.
     assert_eq!(&samples(&sampler, 1..300), &[64, 128, 192, 256]);
-    // Real-time but not yet pinned (every core): not settled.
+    // RT but not pinned yet -> not settled.
     sampler.observe(rr, 0b1111, 1, 1);
     assert!(!sampler.settled);
-    // Pinned and real-time, but the helper has not applied it yet.
+    // Pinned + RT, but helper hasn't applied the generation yet.
     sampler.observe(rr, 0b0100, 2, 1);
     assert!(!sampler.settled);
-    // Ordinary policy: not settled.
+    // Non-RT policy -> not settled.
     sampler.observe(libc::SCHED_OTHER, 0b0100, 2, 2);
     assert!(!sampler.settled);
-    // A promotion at callback 100 is seen at 128, not 2048.
+    // A promotion at cycle 100 should be picked up at 128 rather than waiting for 2048.
     let promoted = 100;
     let seen = (promoted..).find(|&cycle| sampler.due(cycle)).unwrap();
     assert!(seen - promoted <= PLACE_FAST_EVERY, "seen at {seen}");
     sampler.observe(rr, 0b0100, 2, 2);
     assert!(sampler.settled);
-    // Settled: the steady cadence, unchanged.
     assert_eq!(&samples(&sampler, 1..8193), &[2048, 4096, 6144, 8192]);
-    // Never settled: fast only until PLACE_FAST_UNTIL, then steady.
+    // If never settled, fall back to steady cadence after PLACE_FAST_UNTIL.
     let unsettled = Sampler::default();
     assert!(unsettled.due(PLACE_FAST_UNTIL - PLACE_FAST_EVERY));
     assert!(!unsettled.due(PLACE_FAST_UNTIL + PLACE_FAST_EVERY));
     assert!(unsettled.due(4 * PLACE_EVERY));
 }
 
-/// A placement boundary whose callback finds the helper busy has no
-/// handoff to sample with; the sample is taken at the next handoff, not
-/// a whole interval later.
+/// If the helper is busy on a placement sample boundary, defer the sample to
+/// the next handoff instead of waiting another full interval.
 #[test]
 fn a_placement_boundary_without_a_handoff_is_sampled_at_the_next_one() {
     let _events = super::super::probe::EVENT_TESTS
@@ -912,14 +894,13 @@ fn a_placement_boundary_without_a_handoff_is_sampled_at_the_next_one() {
         source_block(&pipeline, &buffers, &[0], true);
     }
     assert_eq!(shared.generation.load(Ordering::Acquire), 0);
-    // Callback 64: neither idle nor queued, so the helper stays parked
-    // and the callback gives up waiting for it.
+    // Force helper busy on cycle 64 so the handoff is skipped.
     shared.state.store(QUEUED + 1, Ordering::Release);
     source_block_unsettled(&pipeline, &buffers, &[0], true);
     assert_eq!(unsafe { &*pipeline.front.get() }.cycle, PLACE_FAST_EVERY);
     assert_eq!(shared.generation.load(Ordering::Acquire), 0);
     shared.state.store(IDLE, Ordering::Release);
-    // Callback 65 hands off and takes the deferred sample.
+    // Cycle 65 hands off and picks up the deferred sample.
     source_block(&pipeline, &buffers, &[0], true);
     let generation = shared.generation.load(Ordering::Acquire);
     assert!(
@@ -930,7 +911,6 @@ fn a_placement_boundary_without_a_handoff_is_sampled_at_the_next_one() {
     assert_eq!(shared.applied.load(Ordering::Acquire), generation);
     let sampler = unsafe { &*pipeline.front.get() }.sampler;
     assert_eq!(sampler.pending, None);
-    // Other tests' pipelines may defer samples too.
     assert!(
         placement()["deferred"].as_u64().unwrap() > deferrals,
         "the deferral is counted"
@@ -944,7 +924,6 @@ fn a_missed_boundary_stays_pending_until_sampled_and_counts_once() {
         sampler.mark(cycle);
         assert_eq!(sampler.pending, None);
     }
-    // Boundary 64 and the callbacks after it without a handoff.
     for cycle in 64..70 {
         sampler.mark(cycle);
         assert_eq!(sampler.pending, Some(64));
@@ -952,11 +931,10 @@ fn a_missed_boundary_stays_pending_until_sampled_and_counts_once() {
     assert_eq!(sampler.take(70), Some(true));
     assert_eq!(sampler.pending, None);
     assert_eq!(sampler.take(71), None);
-    // On time: taken at the boundary, not a deferral.
+    // Sampled right on the boundary -> not deferred.
     sampler.mark(128);
     assert_eq!(sampler.take(128), Some(false));
-    // Missed through the next boundary: still the first boundary's
-    // sample, deferred, counted once.
+    // Missing across two boundaries still coalesces into one deferred sample.
     sampler.mark(192);
     for cycle in 193..256 {
         sampler.mark(cycle);
@@ -964,14 +942,12 @@ fn a_missed_boundary_stays_pending_until_sampled_and_counts_once() {
     sampler.mark(256);
     assert_eq!(sampler.take(256), Some(true));
     assert_eq!(sampler.take(257), None);
-    // The callback counter wraps onto a boundary.
+    // Counter wrap onto boundary 0.
     sampler.mark(u32::MAX);
     sampler.mark(0);
     assert_eq!(sampler.take(1), Some(true));
 }
 
-/// Runs a pipeline past its first fast placement sample; the report's
-/// history shows what the callback had and what the helper then got.
 #[test]
 fn placement_changes_are_recorded_with_actual_masks() {
     let plan = source_plan(1, false, PathMode::Processed);
@@ -1081,9 +1057,8 @@ fn an_unrequested_source_frame_is_counted_and_not_acknowledged() {
     assert_eq!(controls[0].status().unwrap().applied, 2);
 }
 
-/// The mic to headphones path of the Pro II profile: DeepFilterNet3's
-/// 240-sample frame, 120 intrinsic, the 320 lead and the helper's period,
-/// 792 samples (16.5 ms).
+/// Pro II mic-to-headphones latency: DeepFilterNet3 240-sample frame + 120
+/// intrinsic + 320 lead + 112 helper period = 792 samples (16.5 ms).
 #[test]
 fn a_deepfilternet_mic_reports_the_profile_latency() {
     let mut plan = source_plan(1, false, PathMode::Processed);
@@ -1100,10 +1075,8 @@ fn a_deepfilternet_mic_reports_the_profile_latency() {
     assert_eq!(pipeline.counters().faults, 0);
 }
 
-/// DeepFilterNet3's lookahead is a live setting: a transaction that
-/// changes it replaces only that path's suppression worker (the old
-/// runtime is admitted out and a new one published), the callback does no
-/// memory work meanwhile, and the reported latency follows by one hop.
+/// Changing DeepFilterNet3 lookahead rebuilds only that path's suppression
+/// worker without allocating in the callback and shifts latency by one hop.
 #[test]
 fn a_live_lookahead_switch_rebuilds_the_worker_and_moves_the_latency_by_one_hop() {
     let start = here::sources();
@@ -1127,15 +1100,11 @@ fn a_live_lookahead_switch_rebuilds_the_worker_and_moves_the_latency_by_one_hop(
         controls[0].status().unwrap().meter.unwrap().latency_samples
     };
     assert_eq!(latency(&mut controls), base + helper);
-    // Every switch is a live transaction on this path alone, and the
-    // callbacks either side of it do no memory work (the transaction
-    // itself is control work and may allocate).
     let memory = [
         CALLBACK_ALLOCATIONS.load(Ordering::Relaxed),
         CALLBACK_FREES.load(Ordering::Relaxed),
         CALLBACK_REALLOCATIONS.load(Ordering::Relaxed),
     ];
-    // Revisions must climb past the one the plan was built with.
     let first = controls[0].status().unwrap().applied + 1;
     let mut previous_epoch = controls[0].status().unwrap().runtime_epoch;
     for (revision, lookahead, expected) in [
@@ -1232,9 +1201,7 @@ fn a_suppressed_mic_reports_its_dsp_delay_and_the_helper_frame() {
     let outliers = controls[0].worker_outliers().unwrap();
     assert_eq!(outliers["worst"]["state"], "stable");
     assert!(outliers["worst"]["turnaroundNs"].as_u64().unwrap() > 0);
-    // Cumulative turnaround counts above 5.5, 6.0, 6.5 and 7.0 ms,
-    // alongside the worst; each threshold counts at most its
-    // predecessor, and the worst must exceed the top one it counts.
+    // Cumulative turnaround counts must be monotonically non-increasing across thresholds.
     let above = &outliers["turnaroundsAboveMs"];
     let counts: Vec<u64> = ["5.5", "6.0", "6.5", "7.0"]
         .iter()
@@ -1412,8 +1379,6 @@ fn the_meter_stagger_survives_the_cycle_counter_wrapping() {
     }
 }
 
-/// Fills the mono source with `x`; one settled callback; what the mixer
-/// read (every sample equal).
 fn source_owner(pipeline: &Pipeline) -> Owner {
     unsafe { &*pipeline.front.get() }.ports[0].owner
 }
@@ -1423,7 +1388,6 @@ fn commit_mode(control: &mut parameters::Control, plan: &Plan, revision: u64, mo
         .unwrap();
     control.reserve(staged).unwrap().commit();
 }
-/// The source plan's EQ halves the input.
 fn processed(x: f32) -> f32 {
     0.5 * x
 }
@@ -1431,8 +1395,6 @@ fn close(a: f32, b: f32) -> bool {
     (a - b).abs() < 1e-6
 }
 
-/// Sources stay with the helper: it processes the source one frame later,
-/// before and after a live change.
 #[test]
 fn a_helper_source_keeps_its_owner_across_live_mode_changes() {
     let plan = source_plan(1, false, PathMode::Passthrough);
@@ -1453,13 +1415,9 @@ fn a_helper_source_keeps_its_owner_across_live_mode_changes() {
         let port = &unsafe { &*pipeline.front.get() }.ports[0];
         assert!(port.reader.is_none());
     }
-    // Adopted under frame 5; frame 6 has no processed frame yet, then
-    // each frame gets the previous one processed. With no callbacks
-    // during the commit (this test commits between them), the
-    // unprocessed audio starts fading only at frame 5, and frame 6 stays
-    // silent; the new runtime fades in from silence over the next frames.
-    // (`a_helper_source_switch_dips_without_a_step` runs the fade
-    // between callbacks, as the mixer does.)
+    // Because we committed between callbacks without a fade hand-off, frame 6
+    // has no processed block yet (stays silent), then the new runtime fades in
+    // from silence over `STAGE_FADE_SAMPLES`.
     assert!(out[6].1.iter().all(|value| *value == 0.0));
     let fading = (rc2fx_dsp::STAGE_FADE_SAMPLES as usize).div_ceil(FRAMES);
     for k in 7..20 {
@@ -1478,9 +1436,8 @@ fn a_helper_source_keeps_its_owner_across_live_mode_changes() {
     assert_eq!(pipeline.counters().faults, 0);
 }
 
-/// Switches a helper-owned source's mode the way the mixer sees it: the
-/// hand-off starts, callbacks run until it is done (or for at most
-/// `limit` frames), then the publication commits. Returns the frames.
+/// Runs a mode switch with a live fade hand-off, pumping callbacks via `frame`
+/// until the hand-off completes, then commits. Returns the callback count.
 fn switch_between_callbacks(
     control: &mut parameters::Control,
     plan: &Plan,
@@ -1501,9 +1458,6 @@ fn switch_between_callbacks(
     control.reserve_after(staged, handing).unwrap().commit();
     frames
 }
-/// A constant through a helper-owned source switched to Processed and
-/// back, with fades between callbacks: returns every sample the mixer
-/// read.
 fn source_switches(plan: &Plan, level: f32) -> Vec<f32> {
     let buffers = Buffers::new();
     let (pipeline, mut controls) = pipeline_owned(plan, &buffers);
@@ -1536,34 +1490,26 @@ fn largest_step(samples: &[f32]) -> f32 {
         .fold(0.0, f32::max)
 }
 
-/// A helper-owned source plays its processor's output one frame later than
-/// its unprocessed audio, so neither can take over from the other sample
-/// for sample. Switching its processing on fades the unprocessed audio
-/// out first, and the processor in after; switching it off fades the
-/// processor out first, and the unprocessed audio in after: a short dip,
-/// never a step, and never a repeated frame.
+/// Because a helper-owned source is delayed by one frame when processed,
+/// toggling processing fades out to silence before fading the other path in,
+/// producing a brief dip without a step discontinuity.
 #[test]
 fn a_helper_source_switch_dips_without_a_step() {
     let plan = source_plan(1, false, PathMode::Passthrough);
     let seen = source_switches(&plan, 0.2);
     let step = largest_step(&seen);
     assert!(step < 2e-3, "a step of {step}; a cut is at least 0.1");
-    // Unprocessed, processed (the EQ halves it), unprocessed again, each
-    // reached exactly, with silence between.
     assert_eq!(seen[0], 0.2);
     assert!(seen.contains(&0.0));
     assert!(seen.iter().any(|v| close(*v, processed(0.2))));
     assert_eq!(*seen.last().unwrap(), 0.2);
 }
 
-/// With suppression on, the processor's output is also delayed by its
-/// model: switching processing on or off dips the same way, the
-/// processor fading in once its delay holds real audio.
 #[test]
 fn a_suppressed_source_switch_dips_without_a_step() {
     let mut plan = source_plan(1, false, PathMode::Passthrough);
     plan.paths[0].target.suppression.enabled = true;
-    // The model's dry signal, so the processed level is known.
+    // Dry signal only so the steady-state processed level is predictable.
     plan.paths[0].target.suppression.wet = 0.0;
     let seen = source_switches(&plan, 0.2);
     let step = largest_step(&seen);
@@ -1572,8 +1518,6 @@ fn a_suppressed_source_switch_dips_without_a_step() {
     assert_eq!(*seen.last().unwrap(), 0.2);
 }
 
-/// A suppressed mic switched live to Processed reports its DSP delay plus
-/// the helper frame, as a mic planned Processed does.
 #[test]
 fn a_suppressed_mic_switched_live_reports_the_helper_frame() {
     let mut plan = source_plan(1, false, PathMode::Passthrough);

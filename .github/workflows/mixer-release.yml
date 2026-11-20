@@ -29,14 +29,13 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # The payload carries config/mixer-release.json, so the version is set
-      # before the build; sign-and-publish commits the same change to main.
+      # Bump config/mixer-release.json before building so the payload embeds it;
+      # sign-and-publish commits the same bump to main.
       - name: Set the mixer version
         env:
           BUMP: ${{ inputs.bump }}
         run: python3 .github/scripts/mixer_version.py --bump "$BUMP"
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
-      # ./xtask is Go; the mixer it builds is Rust.
       - uses: actions/setup-go@v6.0.0
         with:
           go-version-file: desktop/go.mod
@@ -52,11 +51,10 @@ jobs:
           rustup component add rust-docs
           python3 .github/scripts/test_publish_mixer.py
           (cd desktop && CGO_ENABLED=0 go test ./internal/xtask/...)
-          # With cgo, as the app builds it: the storage repair links libext2fs.
+          # Run installer tests with cgo enabled since storage repair links libext2fs.
           (cd desktop && go test ./installer/...)
           ./xtask mixer-build
-          # The Rust cache restores target/ from the previous run, and the
-          # packager refuses to write into an existing directory.
+          # Clear any cached target/mixer-release since mixer-package expects a fresh directory.
           rm -rf target/mixer-release
           ./xtask mixer-package target/mixer-release
       - uses: actions/upload-artifact@v7.0.2
@@ -69,8 +67,7 @@ jobs:
   sign-and-publish:
     needs: build
     runs-on: ubuntu-24.04
-    # Configure required reviewers and main-only deployment before use. Only
-    # release-role keys belong here; root keys must remain offline.
+    # Requires reviewers and main-only deployment; keep root keys offline.
     environment: mixer-signing
     permissions:
       contents: write
@@ -84,15 +81,12 @@ jobs:
         env:
           BUMP: ${{ inputs.bump }}
         run: python3 .github/scripts/mixer_version.py --bump "$BUMP"
-      # No build cache where release keys are in reach: the tool is built
-      # from this checkout and go.sum alone.
+      # Disable build cache in jobs with signing key access; build from checkout + go.sum only.
       - uses: actions/setup-go@v6.0.0
         with:
           go-version-file: desktop/go.mod
           cache: false
       - name: Remove stale release outputs
-        # The signer refuses an existing metadata directory, and a stale
-        # payload directory must not be merged with the downloaded one.
         run: rm -rf target/mixer-release target/mixer-metadata
       - uses: actions/download-artifact@v8.0.2
         with:
@@ -116,16 +110,14 @@ jobs:
           sequence=$(date -u +%s)
           expires=$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)
           RC2FX_XTASK_ROOT="$GITHUB_WORKSPACE" "$RUNNER_TEMP/rc2fx-xtask" mixer-sign config/mixer-update-root.json target/mixer-release target/mixer-metadata "$sequence" "$expires" "$keydir/targets.pem" "$keydir/snapshot.pem" "$keydir/timestamp.pem"
-      # Public signed files: if publication stops after the payload, --resume
-      # needs these, because a published release can't be published again.
+      # Keep signed metadata as an artifact so `publish_mixer.py --resume` can recover if publishing fails partway.
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: signed-mixer-metadata
           path: target/mixer-metadata/
           if-no-files-found: error
           retention-days: 7
-      # As the app's Release does: the version goes to main only if main is
-      # still the commit this run built, and the release is tagged there.
+      # Push the version bump only if main hasn't moved since the build started.
       - name: Commit the mixer version to main
         id: commit
         env:

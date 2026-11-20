@@ -1,28 +1,16 @@
-//! Diagnostics baselines and the event log, held by rc2fxd.
+//! Off-audio diagnostics baselines and event ring held by `rc2fxd`.
 //!
-//! Two jobs, both off the audio path (they run where the control side already
-//! reads the engine: nine times a second while a client is subscribed, and at
-//! the idle interval otherwise):
+//! * **Baselines:** Cumulative counters shown in the UI are reported relative
+//!   to the last diagnostics reset (or the first engine reading before any reset)
+//!   by subtracting a saved snapshot, never by mutating audio-thread counters.
+//!   Lifetime maxima cannot be decomposed, so after a reset a max is only
+//!   reported once it exceeds the pre-reset peak (0 otherwise). Each reset bumps
+//!   `Meter::diagnostics_epoch` so clients rebaseline cleanly.
 //!
-//! * **Baselines.** Every cumulative figure the app shows is reported relative
-//!   to the last diagnostics reset, never by writing to a counter the callback,
-//!   helper or worker owns: this module keeps the reading taken at the reset
-//!   and subtracts it. With no reset yet, the baseline is the engine's first
-//!   reading. A lifetime maximum cannot be decomposed, so after a reset a
-//!   maximum is reported only while it exceeds the pre-reset one; 0 then means
-//!   "no sample since the reset has beaten the old maximum", not "instant".
-//!   Until a reset the lifetime maximum is shown as it is, because nothing was
-//!   cleared and the worst sample often comes before the first reading. Each
-//!   reset bumps `Meter::diagnostics_epoch`, so the app rebaselines its own
-//!   fault tracking on the epoch instead of seeing a decrease.
-//!
-//! * **Events.** A bounded ring (2048) with a monotonic sequence number, built
-//!   from the engine's own event ring, each worker's miss and late histories,
-//!   and the counter increases this module can only see as totals. A gap in the
-//!   engine's sequence numbers becomes one `lost` entry, and events past a
-//!   worker's kept history become one counted entry per reading, so the list
-//!   never silently misses anything; a client that fell behind the ring is
-//!   told how many entries it missed.
+//! * **Events:** Bounded 2048-entry ring with monotonic sequence numbers built
+//!   from the engine ring, per-worker miss/late histories, and counter deltas.
+//!   Engine sequence gaps become a `lost` entry; worker overflows beyond kept
+//!   history become a counted entry per reading.
 
 use rc2fx_core::{
     DiagnosticsEvent, DiagnosticsEvents, DiagnosticsKind, EVENTS_PAGE, EventDetails, Meter, Timing,
@@ -498,10 +486,8 @@ impl DiagnosticsLog {
         } else {
             (DiagnosticsKind::LateFrame, "late frames")
         };
-        // A record's position in the list is its ordinal in the ring only
-        // when every kept record is readable. One still being written (the
-        // total is published last, so this is not expected) leaves the
-        // ordinals unknown: wait for the next reading.
+        // Wait for the next reading if a record is still being published so
+        // list indices reliably match ring ordinals.
         let kept = history.total.saturating_sub(history.lost);
         if history.events.len() as u64 >= kept {
             for record in history.events.iter().skip(read.listed as usize) {

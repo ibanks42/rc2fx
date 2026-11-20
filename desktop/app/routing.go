@@ -1,7 +1,6 @@
 package app
 
-// RC2FX's processing on the mixer, on or off for every
-// processed channel at once (Settings' Processing row).
+// Global RC2FX processing toggle in Settings.
 
 import (
 	"gpuikit.dev/gk"
@@ -21,8 +20,7 @@ func (a *App) routingReady(enabled bool) bool {
 	}
 	if enabled {
 		return saved.CanEnableProcessing() &&
-			// Stopped DSP has no meters. A live event connection and the
-			// service's explicit recovery eligibility gate this request.
+			// Stopped DSP emits no meters; rely on a live stream and recovery eligibility instead.
 			a.engineSeen != nil &&
 			!a.session.Dirty() && !a.session.Conflict && a.pending == nil && !a.presets.writing() && !a.fileBusy
 	}
@@ -71,9 +69,6 @@ func (a *App) routingReply(state core.DeviceState, err error) {
 	a.command(transport.CommandRefresh{Generation: a.generation})
 }
 
-// processingRow is Settings' Processing row: RC2FX's processing on the
-// mixer, on or off for every processed channel at once. ok false when the
-// mixer has no processing controls.
 func (a *App) processingRow(cx *gk.Cx) (gk.DivEl, bool) {
 	saved := a.session.Saved
 	if saved == nil || !saved.Engine.Mode.HasProcessingControls() {
@@ -123,7 +118,7 @@ func (a *App) processingRow(cx *gk.Cx) (gk.DivEl, bool) {
 	case phase == core.RoutingPhaseError || phase == core.RoutingPhaseUnmanaged:
 		hint += " " + saved.Routing.Message
 	}
-	// The switch says on or off; only other states get words.
+	// Only show status text for non-steady states; the switch already conveys on/off.
 	steady := a.streamConnected && (label == "Enabled" || label == "Disabled · stock audio")
 	sw := toggle("rc2fx-processing", enabled, false, !ready)
 	if ready {

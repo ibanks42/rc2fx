@@ -1,36 +1,22 @@
-//! TUF verification of an in-place update, on the mixer, with the same signed
-//! metadata and the same trust root the desktop app uses (the desktop
-//! verifies with go-tuf).
+//! TUF verification for in-place mixer updates using the same embedded trust
+//! root and role metadata (`root`, `timestamp`, `snapshot`, `targets`) as the
+//! desktop app. Everything is verified in memory before anything is staged.
 //!
-//! The desktop sends the role documents it downloaded (`root`, `timestamp`,
-//! `snapshot`, `targets`); the mixer has its own embedded trusted root and
-//! verifies the chain from that, so a compromised app or a hostile computer
-//! on USB 1 cannot authorize a release. Key rotation works when the app sends
-//! the intermediate roots as well (see `docs/developer/mixer-releases.md`).
-//! Everything is checked in memory; nothing is written.
-//!
-//! The mixer has no trusted clock, so metadata expiry is not enforced here:
-//! every role is checked as of [`NO_CLOCK`], before any metadata expires. The
-//! mixer cannot tell a stale timestamp from a fresh one, and refusing
-//! everything on an unset clock would make the feature unusable. Instead, the
-//! highest verified versions are persisted beside the settings and an older
-//! metadata set or release is refused: replays are blocked by the recorder,
-//! not the calendar. The desktop still enforces expiry before it offers
-//! anything.
+//! Because the mixer has no trusted RTC, expiry checks run against [`NO_CLOCK`]
+//! (Unix epoch) and replay/downgrade protection is enforced by persisting the
+//! highest verified metadata versions beside the saved settings. The desktop
+//! app still enforces metadata expiry before offering an update.
 
 use super::install::{StoredState, sum};
 use serde::{Deserialize, Serialize};
 use sigstore_tuf::{Root, TrustedMetadataSet};
 use std::{collections::HashSet, fs, path::Path};
 
-/// The time every expiry is checked against: the Unix epoch, which no signed
-/// expiry precedes. See the module comment.
+/// Fixed epoch timestamp used for TUF expiry checks (mixer has no trusted RTC).
 const NO_CLOCK: jiff::Timestamp = jiff::Timestamp::UNIX_EPOCH;
-/// The most root documents one request may carry.
 const MAX_ROOTS: usize = 8;
 
-/// The trust anchor compiled into this controller. The same file the desktop
-/// embeds; a release's metadata must chain to it.
+/// Embedded TUF root shared with the desktop app.
 pub const TRUSTED_ROOT: &[u8] = include_bytes!("../../../../config/mixer-update-root.json");
 
 /// The compatibility claims the publisher signs for one mixer release. Kept
@@ -214,9 +200,7 @@ pub fn verify(
     let targets = signed_targets.version;
     let snapshot = snapshot.version;
     let timestamp = timestamp.version;
-    // The exact signed file, as verified: re-serializing the parsed role is
-    // not stable (its maps have no fixed order), so the same release would
-    // look changed on its second check.
+    // Hash the exact raw targets bytes; re-serializing parsed JSON isn't deterministic.
     let targets_digest = sum(metadata.targets.as_bytes());
     if root < prior.root_version
         || targets < prior.targets_version
@@ -327,10 +311,8 @@ fn root_chain(metadata: &MetadataInput) -> Result<Vec<(u64, &str)>, String> {
     Ok(seen)
 }
 
-/// Refuse a root that lists one key under two IDs for a role. The library
-/// counts signatures by key ID, so such a root could meet a threshold of two
-/// with a single key. RC2FX's roles need one signature each today; this keeps
-/// a future threshold honest.
+/// Rejects any root that lists the same public key under multiple key IDs for
+/// a role (prevents a single key from satisfying a threshold > 1).
 fn distinct_keys(root: &Root) -> Result<(), String> {
     for (role, keys) in &root.roles {
         let mut material = HashSet::new();

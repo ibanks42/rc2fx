@@ -1,19 +1,14 @@
 package packaging
 
-// Building the Go desktop app for packaging (cargo build -p rc2fx-app
-// before): cgo against the gpuikit static library in
-// desktop/third_party/gpuikit, which links into the executable with only the
-// component families the app uses, Velopack's C library (`velopack` tag,
-// desktop/third_party/velopack), the generated license notices compiled in
-// through `go generate ./app/licenses`, and with --embedded the mixer payload
-// staged by cmd/stage-payload (`embedded` tag). The
-// executable, and on Windows velopack_libc.dll beside it, land in
-// target/[TRIPLE/]release.
+// Build the Go desktop app for packaging: links via cgo against the gpuikit
+// static library (desktop/third_party/gpuikit) and Velopack's C library
+// (`velopack` tag, desktop/third_party/velopack), embeds generated license
+// notices via a Go -overlay, and with --embedded includes the mixer payload
+// staged by cmd/stage-payload. Outputs land in target/[TRIPLE/]release (with
+// velopack_libc.dll beside the executable on Windows).
 //
-// The macOS app is universal: built once for arm64 and once for amd64, each
-// compiled and linked for macOSMinimum against the universal gpuikit static
-// library and that architecture's static velopack_libc, then joined by `lipo
-// -create` (RC2FX_LIPO, or lipo on the PATH) into one executable.
+// macOS builds are universal: arm64 and amd64 are built separately against
+// macOSMinimum and merged with `lipo -create` (RC2FX_LIPO or lipo on PATH).
 
 import (
 	"bytes"

@@ -14,22 +14,17 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Decode rebuilds the envelope from delta into out. It is the Go twin of
-// the mixer's Rust decoder, for tests; the app itself only encodes, and the
-// linker leaves Decode out of the app. It lives outside a _test file because
-// internal/genfixtures needs it too: the generator decodes every case before
-// writing it, so an accept case that does not round trip, or a reject case
-// whose recorded error is wrong, never reaches fixtures/delta. It shares the
-// line and number parsers with Encode, which is why it is not a separate
-// package.
+// Decode reconstructs the payload envelope from delta into out, returning the
+// number of envelope bytes written.
 //
-// installed(name) returns the bytes of the file currently on the mixer. It is
-// used for copies and as the patch prefix, and must match the manifest (a
-// copy) or the patch's base hash. Returns the envelope bytes written.
+// This mirrors the mixer's Rust decoder for tests and internal/genfixtures
+// (which validates every generated fixture before writing it to disk). The
+// desktop app itself only calls Encode, so the linker strips Decode from app
+// binaries.
 //
-// Messages match the Rust decoder's, except for errors the zstd library
-// itself reports, which name the Go library's error instead of a C error
-// code, and I/O errors, which carry Go's wording.
+// installed(name) returns the currently installed bytes of a file on the mixer,
+// used for copy ops and patch prefixes. Error messages match the Rust decoder
+// except for zstd library and I/O errors.
 func Decode(delta io.Reader, installed func(name string) ([]byte, error), out io.Writer, maxEnvelope uint64) (uint64, error) {
 	magic := make([]byte, len(Magic))
 	if err := readExact(delta, magic, "the delta header"); err != nil {
@@ -137,8 +132,8 @@ func Decode(delta io.Reader, installed func(name string) ([]byte, error), out io
 	return written, nil
 }
 
-// parseOp reads a `zstd <len>` or `patch <hash> <len>` line. The base hash
-// is empty for `zstd`.
+// parseOp parses a `zstd <len>` or `patch <hash> <len>` op line, returning an
+// empty base hash for `zstd`.
 func parseOp(line, name string, opLimit uint64) (string, int, error) {
 	parts := strings.Split(line, " ")
 	next := func() (string, bool) {
@@ -181,14 +176,14 @@ func parseOp(line, name string, opLimit uint64) (string, int, error) {
 	return base, int(n), nil
 }
 
-// decompress decodes one file, checking its exact size and digest as the
-// bytes go to out. written is the envelope length so far.
+// decompress decodes one file into out, verifying its exact byte length and
+// SHA-256 against the manifest entry.
 func decompress(data, prefix []byte, entry *Entry, out io.Writer, written *uint64, maxEnvelope uint64) error {
 	if entry.Size > maxEnvelope-min(*written, maxEnvelope) {
 		return fmt.Errorf("%s would take the envelope over the %d-byte limit", entry.Name, maxEnvelope)
 	}
-	// The C decoder stops at the end of the first frame; anything after it
-	// is trailing data, and a frame that runs out of input is truncated.
+	// Match the C decoder's single-frame boundary check: reject truncated
+	// frames and any trailing bytes after the first frame.
 	frameLen, err := frameLength(data)
 	switch {
 	case errors.Is(err, errTruncated):
@@ -249,8 +244,8 @@ func decompress(data, prefix []byte, entry *Entry, out io.Writer, written *uint6
 
 var errTruncated = errors.New("truncated")
 
-// frameLength walks one zstd frame's header and block headers and returns
-// its length. A skippable frame is refused: the delta writes none.
+// frameLength scans a single zstd frame header and its blocks to determine the
+// frame's byte length. Skippable frames are rejected.
 func frameLength(data []byte) (int, error) {
 	const frameMagic = 0xfd2fb528
 	if len(data) < 5 {
@@ -311,8 +306,8 @@ func frameLength(data []byte) (int, error) {
 	return at, nil
 }
 
-// opLine reads one `\n`-terminated operation line from the delta stream,
-// a byte at a time so nothing after it is consumed.
+// opLine reads one newline-terminated op line one byte at a time so it doesn't
+// over-read into the following binary frame.
 func opLine(r io.Reader) (string, error) {
 	var line []byte
 	var b [1]byte
@@ -342,7 +337,7 @@ func opLine(r io.Reader) (string, error) {
 func readExact(r io.Reader, b []byte, what string) error {
 	if _, err := io.ReadFull(r, b); err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			// Rust's read_exact words a short read this way.
+			// Match Rust's read_exact EOF wording.
 			return fmt.Errorf("%s could not be read: failed to fill whole buffer", what)
 		}
 		return fmt.Errorf("%s could not be read: %v", what, err)

@@ -1,8 +1,7 @@
 package app
 
-// The selected stage's editor: its heading and switch, a value
-// and slider per parameter, the noise suppression page and what the mixer
-// reports beside them. The parameters and figures are in edit/parameter.go.
+// Stage parameter editors (sliders, inline numeric inputs, suppression controls,
+// and per-stage live readouts). Parameter metadata lives in edit/parameter.go.
 
 import (
 	"fmt"
@@ -16,11 +15,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// Parameter is a control an effect's editor shows (edit.Parameter).
 type Parameter = edit.Parameter
 
-// Reported is what the mixer reports for the selected
-// path (reportedLookahead in app.go makes one).
 type Reported struct {
 	latencySamples *uint32
 	liveLookahead  *uint8
@@ -30,8 +26,6 @@ func (r Reported) edit() edit.Reported {
 	return edit.Reported{LatencySamples: r.latencySamples, LiveLookahead: r.liveLookahead}
 }
 
-// ParameterEditor is one control's kit state: its text field and slider,
-// made by rebuildEditors and released by the next.
 type ParameterEditor struct {
 	parameter Parameter
 	label     string
@@ -39,26 +33,20 @@ type ParameterEditor struct {
 	slider    gk.SliderState
 	min, max  float64
 	log       bool
-	// decimals is the decimal places its step needs.
-	decimals int
+	decimals  int
 }
 
-// fraction is where value sits along this editor's slider, 0 to 1, on its
-// scale.
 func (e *ParameterEditor) fraction(value float64) float32 {
 	return edit.Fraction(value, e.min, e.max, e.log)
 }
 
-// rebuildEditors makes the selected stage's controls again: after the
-// channel, the stage, the band or what they show changed.
 func (a *App) rebuildEditors(cx *gk.Cx) {
 	a.editorEpoch++
 	epoch := a.editorEpoch
 	a.draggingBand = false
 	a.editingValue = nil
 	a.channel = model.ActiveChannel(a.target(), a.channel)
-	// The old editors' views are given back, but only once the view has
-	// been described without them (retire).
+	// Defer releasing old widgets until a subsequent frame no longer references them.
 	for _, editor := range a.editors {
 		a.retire(editor.input, editor.slider)
 	}
@@ -92,7 +80,6 @@ func (a *App) rebuildEditors(cx *gk.Cx) {
 				return
 			}
 			switch e.(type) {
-			// Typing ends with Enter or leaving the field.
 			case gk.InputEventBlur, gk.InputEventPressEnter:
 				a.editingValue = nil
 				a.notify(cx)
@@ -144,7 +131,6 @@ func (a *App) rebuildEditors(cx *gk.Cx) {
 	a.rebuildBandPreviews(cx)
 }
 
-// syncEditorValues puts the target's current values in every control.
 func (a *App) syncEditorValues(cx *gk.Cx) {
 	for _, editor := range a.editors {
 		value := editor.parameter.Get(a.target(), a.channel, a.band)
@@ -154,9 +140,6 @@ func (a *App) syncEditorValues(cx *gk.Cx) {
 	a.notifyBandPreview(cx, a.band)
 }
 
-// renderEditor is the selected stage: its heading and switch, its
-// controls, and what the mixer reports beside them. The EQ lays out its own
-// page.
 func (a *App) renderEditor(cx *gk.Cx) gk.Element {
 	effect := a.effect
 	if effect == core.EffectEQ {
@@ -182,8 +165,6 @@ func (a *App) renderEditor(cx *gk.Cx) gk.Element {
 		controls = controls.Child(hint)
 	}
 	controls = controls.Child(a.stageHead(effect, cx)).Child(body)
-	// The rail has the channel's levels; only what is particular to a stage
-	// stays beside it, or under it in a narrow window.
 	f, ok := a.stageFacts(effect)
 	switch {
 	case !ok:
@@ -194,10 +175,8 @@ func (a *App) renderEditor(cx *gk.Cx) gk.Element {
 	return gk.HFlex(s.ItemsStart).Gap(px(40)).Child(controls).Child(f)
 }
 
-// firstChannelHint is the one line the channel opened from a finished
-// install shows above its suppression switch: what to do, then, once
-// suppression is on, what to listen for. Dismissed or completed, it never
-// shows again.
+// firstChannelHint shows a one-time onboarding banner on the channel opened
+// right after installing RC2FX, guiding the user to try noise suppression.
 func (a *App) firstChannelHint() (gk.DivEl, bool) {
 	if a.firstHintDone || a.firstHintTarget == "" || a.effect != core.EffectSuppression ||
 		a.target().ID != a.firstHintTarget {
@@ -222,9 +201,6 @@ func (a *App) firstChannelHint() (gk.DivEl, bool) {
 			})), true
 }
 
-// noteFirstChannelHint records the hint as completed once suppression is
-// on for its channel: it shows its second line until dismissed or left,
-// and never again after.
 func (a *App) noteFirstChannelHint() {
 	if a.firstHintDone || a.firstHintSaved || a.firstHintTarget == "" {
 		return
@@ -238,12 +214,8 @@ func (a *App) noteFirstChannelHint() {
 	}
 }
 
-// narrow is whether the page is too narrow for a channel's editor to keep
-// its columns side by side.
 func (a *App) narrow() bool { return a.pageWidth > 0 && a.pageWidth < NarrowEditor }
 
-// savedTargets is the saved settings' channels while connected, nil
-// otherwise: what editing's suppression slot checks read.
 func (a *App) savedTargets() []core.Target {
 	if a.session.Saved == nil || !a.session.Connected {
 		return nil
@@ -251,11 +223,8 @@ func (a *App) savedTargets() []core.Target {
 	return a.session.Saved.Config.Targets
 }
 
-// suppressionBlocker is the other channel holding the one suppression slot
-// this one needs, if any.
 func (a *App) suppressionBlocker() *core.Target { return a.suppressionBlockerFor(a.effect) }
 
-// suppressionBlockerFor is suppressionBlocker for effect's switch.
 func (a *App) suppressionBlockerFor(effect core.Effect) *core.Target {
 	target := a.target()
 	if effect != core.EffectSuppression || target.Suppression.Enabled {
@@ -264,7 +233,6 @@ func (a *App) suppressionBlockerFor(effect core.Effect) *core.Target {
 	return model.SuppressionBlocker(a.session.Draft, a.savedTargets(), target.ID)
 }
 
-// stageHead is a stage's title and switch, then one line on what it does.
 func (a *App) stageHead(effect core.Effect, cx *gk.Cx) gk.DivEl {
 	target := a.target()
 	on := target.EffectEnabled(effect)
@@ -306,8 +274,6 @@ func (a *App) stageHead(effect core.Effect, cx *gk.Cx) gk.DivEl {
 		}
 		disabled := !a.session.Connected || a.pending != nil || a.routingPending != nil || a.presets.busy() ||
 			a.transitionBusy()
-		// Edits save on their own once they stop: the slot is free as soon
-		// as turning suppression off on the other channel is saved.
 		line := fmt.Sprintf("%s holds the suppression slot until turning its suppression off is saved. Enable it here after that.",
 			a.targetName(blocker))
 		if needsRelease {
@@ -337,7 +303,6 @@ func (a *App) stageHead(effect core.Effect, cx *gk.Cx) gk.DivEl {
 		Child(about)
 }
 
-// controls is the controls keep accepts, columns to a row.
 func (a *App) controls(keep func(Parameter) bool, columns int, off bool, cx *gk.Cx) gk.DivEl {
 	var items []gk.Element
 	for i := range a.editors {
@@ -348,7 +313,6 @@ func (a *App) controls(keep func(Parameter) bool, columns int, off bool, cx *gk.
 	return grid(columns, items)
 }
 
-// editorFor is the control of parameter, nil when the stage has none.
 func (a *App) editorFor(parameter Parameter) *ParameterEditor {
 	for i := range a.editors {
 		if a.editors[i].parameter == parameter {
@@ -358,9 +322,6 @@ func (a *App) editorFor(parameter Parameter) *ParameterEditor {
 	return nil
 }
 
-// control is one control: its name, its value (click to type), and a thin
-// slider with the default marked. Double-clicking the slider restores the
-// default.
 func (a *App) control(editor *ParameterEditor, off bool, cx *gk.Cx) gk.DivEl {
 	parameter := editor.parameter
 	value := parameter.Get(a.target(), a.channel, a.band)
@@ -395,7 +356,7 @@ func (a *App) control(editor *ParameterEditor, off bool, cx *gk.Cx) gk.DivEl {
 			Child(sliderTrack(fraction, def, off)).
 			Child(gk.Slider(editor.slider).AccessibilityLabel(editor.label).Bg(gk.HSLA(0, 0, 0, 0)).
 				TextColor(rgb(thumb))).
-			// Read in the capture phase: the slider owns the press.
+			// Intercept in capture phase since the underlying slider consumes mouse events.
 			CaptureAnyMouseUp(func(cx *gk.Cx, e gk.MouseEvent) {
 				if e.Button == gk.ButtonLeft && e.ClickCount == 2 {
 					a.resetValue(cx, parameter)
@@ -406,7 +367,6 @@ func (a *App) control(editor *ParameterEditor, off bool, cx *gk.Cx) gk.DivEl {
 			ID(gk.Key("slider", int(parameter))))
 }
 
-// editValue turns a value into a text field, with its number selected.
 func (a *App) editValue(cx *gk.Cx, parameter Parameter) {
 	editor := a.editorFor(parameter)
 	if editor == nil {
@@ -421,8 +381,6 @@ func (a *App) editValue(cx *gk.Cx, parameter Parameter) {
 	a.notify(cx)
 }
 
-// resetValue restores a control's default (the core's defaults for a new
-// channel or band).
 func (a *App) resetValue(cx *gk.Cx, parameter Parameter) {
 	value := parameter.DefaultValue(a.target())
 	parameter.Set(a.target(), a.channel, a.band, value)
@@ -430,8 +388,6 @@ func (a *App) resetValue(cx *gk.Cx, parameter Parameter) {
 	a.notify(cx)
 }
 
-// suppressionControls is noise suppression: the model, its lookahead and
-// blend, then the voice gate, as one slider or its separate settings.
 func (a *App) suppressionControls(cx *gk.Cx) gk.Element {
 	target := a.target()
 	off := !target.Suppression.Enabled
@@ -503,10 +459,6 @@ func (a *App) suppressionControls(cx *gk.Cx) gk.Element {
 	return page
 }
 
-// stageFacts is what the mixer reports that is particular to a stage,
-// beside it: the compressor's gain reduction and curve, and suppression's
-// voice, gate and delay. The channel's levels are in the rail; ok is false
-// for the stages with nothing more.
 func (a *App) stageFacts(effect core.Effect) (gk.DivEl, bool) {
 	m, synthetic := a.freshMeter()
 	live := m != nil
@@ -552,10 +504,8 @@ func (a *App) stageFacts(effect core.Effect) (gk.DivEl, bool) {
 	return gk.DivEl{}, false
 }
 
-// sliderTrack is the slider's track, its gradient fill up to the value and
-// a tick at the default, as divs under the
-// toolkit slider, whose own track is clear. The control is 24 px tall, so
-// the 4 px bars sit 10 px down and the 12 px tick 6 px down.
+// sliderTrack paints the custom track, gradient fill, and default-value tick
+// behind the transparent gk.Slider (24px tall, 4px bar at y=10, 12px tick at y=6).
 func sliderTrack(fraction, def float32, off bool) gk.Element {
 	bar := func() gk.DivEl {
 		return gk.Div(s.Absolute, s.Left0).Top(px(10)).H(px(4)).Rounded(px(2))
@@ -573,8 +523,6 @@ func sliderTrack(fraction, def float32, off bool) gk.Element {
 		Child(fill)
 }
 
-// compressorCurve is the compressor's static curve, calculated from its
-// settings, with the reported input level (nil for none) marked on it.
 func compressorCurve(compressor core.Compressor, inputPeak *float64) gk.Element {
 	threshold := compressor.Threshold
 	const size, margin float32 = 220, 24
@@ -620,16 +568,12 @@ func compressorCurve(compressor core.Compressor, inputPeak *float64) gk.Element 
 	return gk.VFlex(s.Gap2).Mt(px(6)).Child(box)
 }
 
-// retire queues kit state for release. A view may still show it in the frame
-// being built, and releasing state a view shows stops the app, so it is
-// given back two polls later (releaseRetired), after the view that showed it
-// has been redrawn without it.
+// retire defers releasing gk handles by two poll ticks so we never drop state
+// that is still referenced by a frame in flight (which crashes gpui).
 func (a *App) retire(handles ...any) {
 	a.retired = append(a.retired, handles...)
 }
 
-// releaseRetired runs once per poll: it releases what was retired two polls
-// ago and moves the newer ones a step on.
 func (a *App) releaseRetired(cx *gk.Cx) {
 	for _, h := range a.retiring {
 		gk.Release(cx, h)

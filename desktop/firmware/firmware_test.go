@@ -40,7 +40,6 @@ func toJSON(t *testing.T, c *Catalog) string {
 	return string(text)
 }
 
-// clone is a deep copy of c, through JSON.
 func clone(t *testing.T, c *Catalog) *Catalog {
 	t.Helper()
 	var out Catalog
@@ -131,8 +130,8 @@ func TestCatalogRejectsUnknownABIsDuplicateIdentitiesAndUnsafeTrampolines(t *tes
 	}
 }
 
-// testImage is the default catalog's first profile, with its sites moved
-// into a small AArch64 ELF image.
+// testImage builds a minimal AArch64 ELF image populated with the first
+// default profile's hook site bytes.
 func testImage(t *testing.T) (*Catalog, []byte) {
 	t.Helper()
 	catalog := mustParse(t, defaultCatalog(t))
@@ -249,7 +248,6 @@ func TestKnownButUnqualifiedAndNonExecutableSitesAreRefused(t *testing.T) {
 	errorContains(t, catalog.Profiles[0].VerifyImage(image), "outside executable")
 }
 
-// Go-only: the strict reading serde gives the Rust structs.
 func TestCatalogJSONIsReadAsStrictlyAsSerde(t *testing.T) {
 	text := defaultCatalog(t)
 	mustParse(t, text)

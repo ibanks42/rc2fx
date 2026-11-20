@@ -94,7 +94,6 @@ func TestTheThemeCarriesEveryAppearance(t *testing.T) {
 	}
 }
 
-// rc2fxKey is whether apply_theme sets key.
 func rc2fxKey(key string) bool {
 	for _, k := range []string{
 		"background", "foreground", "border", "input.border", "muted.background", "muted.foreground",

@@ -1,4 +1,4 @@
-"""Tests for mixer_version.py: python3 .github/scripts/test_mixer_version.py"""
+"""Unit tests for mixer_version.py."""
 import json
 import subprocess
 import sys

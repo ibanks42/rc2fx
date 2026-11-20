@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// installSh is mixer/scripts/install.sh, which keeps its own copy of the
-// payload's file list: it runs under the mixer's /bin/sh and cannot read
-// this package.
+// mixer/scripts/install.sh runs under the mixer's /bin/sh and maintains its
+// own copy of the payload file list.
 func installSh(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "mixer", "scripts", "install.sh"))
@@ -21,9 +20,6 @@ func installSh(t *testing.T) string {
 	return string(data)
 }
 
-// The developer install copies, sizes and stages exactly PayloadNames, in
-// the same order; a file added to the payload but not to install.sh would
-// be left out of a full-flash or `./xtask mixer install` bundle.
 func TestInstallShCopiesExactlyThePayload(t *testing.T) {
 	text := installSh(t)
 	_, rest, ok := strings.Cut(text, "\nfiles=\"")
@@ -39,8 +35,7 @@ func TestInstallShCopiesExactlyThePayload(t *testing.T) {
 	}
 }
 
-// install.sh makes exactly the payload's executables and scripts runnable:
-// the binaries that are not shared libraries, and every script.
+// install.sh should chmod 700 all scripts and non-.so binaries.
 func TestInstallShMakesExactlyThePayloadsExecutablesRunnable(t *testing.T) {
 	text := installSh(t)
 	_, rest, ok := strings.Cut(text, "\nchmod 700 \"$stage/")

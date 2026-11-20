@@ -1,42 +1,33 @@
-//! The table that finds the path and channel of a buffer the mixer asks for.
+//! Open-addressed lookup table mapping native JACK port handles to `(path, channel)`.
 use super::Port;
 
 #[derive(Clone, Copy)]
 pub(super) struct PinEntry {
-    /// 0: an empty entry.
+    /// 0 marks an empty slot.
     pub(super) pointer: usize,
     pub(super) path: u32,
     pub(super) channel: u32,
 }
-/// How a table turns a port handle into its first entry: drop `drop` low
-/// bits, multiply, and take the index from bit `shift` of the product up.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct PinHash {
     pub(super) drop: u32,
     pub(super) shift: u32,
 }
 impl PinHash {
-    /// What construction tries, keeping the first of those that cost least.
-    ///
-    /// JACK2 port handles are small consecutive port indices, not addresses.
-    /// The first two hash the whole word, which spreads consecutive indices;
-    /// they differ in which product bits they use, and so in which strides of
-    /// aligned addresses they spread well. The last drops the low four bits
-    /// first: the hash this table always had. It suits aligned allocations,
-    /// and starts sixteen consecutive indices on one entry.
+    /// Candidate Fibonacci hashes evaluated at construction; we keep whichever
+    /// yields the fewest total probe steps for the client's actual port handles.
+    /// JACK2 port handles are small consecutive integers, so `drop: 0` hashes
+    /// spread them cleanly, while `drop: 4` works well for aligned pointers.
     pub(super) const CANDIDATES: [Self; 3] = [
         Self { drop: 0, shift: 32 },
         Self { drop: 0, shift: 48 },
         Self { drop: 4, shift: 20 },
     ];
 }
-/// Which path and channel a native port belongs to: an open-addressed table,
-/// built at construction and at most half full, so a search always ends. The
-/// mixer asks this for every buffer it fetches, most of them unbound.
+/// Open-addressed table (load factor <= 0.5) queried on every intercepted
+/// `jack_port_get_buffer` call, most of which miss because the port isn't bound.
 pub(super) struct PinLookup {
     pub(super) entries: Box<[PinEntry]>,
-    /// Chosen at construction for the handles this client really has. Any
-    /// choice finds the same pins; they differ only in entries read.
     pub(super) hash: PinHash,
 }
 impl PinLookup {
@@ -57,8 +48,6 @@ impl PinLookup {
             .collect();
         Self::with_pins(&pins)
     }
-    /// Control work: builds the table once per candidate hash and keeps the
-    /// cheapest to search.
     pub(super) fn with_pins(pins: &[PinEntry]) -> Self {
         PinHash::CANDIDATES
             .into_iter()
@@ -82,9 +71,7 @@ impl PinLookup {
         }
         table
     }
-    /// The entries a search reads before it reaches an empty one, summed over
-    /// every entry it could start at: what the table costs to search, for
-    /// bound and unbound handles alike.
+    /// Total probe length to reach an empty slot summed over every starting bucket.
     pub(super) fn cost(&self) -> usize {
         (0..self.entries.len())
             .map(|start| {

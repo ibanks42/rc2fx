@@ -68,10 +68,8 @@ impl EqShape {
         s
     }
 }
-/// `safe(sample * gain, limit)` for every sample, bit for bit. A gain of
-/// exactly 1 leaves a finite sample unchanged, and `clamp` turns every
-/// infinity and NaN into what `safe` returns for it either way, so that
-/// multiply is skipped.
+/// Bit-exact equivalent of `safe(sample * gain, limit)` over a slice. Skips the
+/// multiply when `gain == 1.0` since `clamp` already handles infinities/NaNs.
 #[inline(always)]
 fn scale(samples: &mut [f64], gain: &Ramp, limit: f64, m: &mut Meter) {
     if !gain.is_one() {
@@ -148,9 +146,8 @@ impl EqBank {
     pub fn update_targets(&mut self, p: &Prepared) {
         self.input_target = p.eq_input_gain;
         self.output_target = p.eq_output_gain;
-        // Disabled banks do not read coefficients. Re-enabling changes shape
-        // and constructs a bank from the complete new Prepared value, so keep
-        // gain smoothing but avoid copying every saved inactive band per block.
+        // Disabled banks never read coefficients; re-enabling changes shape and
+        // rebuilds the bank, so skip copying inactive bands each block.
         if !self.shape.on {
             return;
         }
@@ -159,8 +156,6 @@ impl EqBank {
             self.target[ch][..count].copy_from_slice(&p.eq[ch][..count]);
         }
     }
-    /// Whether any filter this bank runs on `ch` is smoothing its
-    /// coefficients. A disabled bank runs none.
     pub fn is_smoothing(&self, ch: usize) -> bool {
         self.shape.on
             && (0..self.shape.count[ch])
@@ -177,7 +172,6 @@ impl EqBank {
             }
         }
     }
-    /// `process` for `n` samples of each channel, band by band.
     pub fn process_block(
         &mut self,
         x: &mut [[f64; BLOCK]; 2],
@@ -223,10 +217,8 @@ impl EqBank {
     pub fn is_on(&self) -> bool {
         self.shape.on
     }
-    /// The gains, every filter, every coefficient target, the active bands
-    /// and the size of the shape as bits, for comparing two processing paths.
-    /// It covers everything `Dsp::begin_block` can write to a bank except the
-    /// band identities in the shape, which `EqShape::same_as` compares.
+    /// Serializes gains, filter states, targets, active flags, and shape counts
+    /// as raw bits for differential tests (band IDs are checked via `EqShape::same_as`).
     #[cfg(test)]
     pub fn bits(&self) -> Vec<u64> {
         [
@@ -256,9 +248,7 @@ impl EqBank {
         ])
         .collect()
     }
-    /// How many of the filters this bank runs on `ch` have stopped short of
-    /// their target: `begin` found them not smoothing, yet their coefficients
-    /// are not the target's.
+    /// Count of active filters on `ch` that stopped smoothing before reaching their target.
     #[cfg(test)]
     pub fn stalled(&self, ch: usize) -> usize {
         if !self.shape.on {

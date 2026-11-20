@@ -2,7 +2,6 @@ package state
 
 import "testing"
 
-// navigationFacts is every question the views ask of a navigation.
 type navigationFacts struct {
 	home, homeInFront, channelInFront, baseInFront, settings, diagnostics bool
 }

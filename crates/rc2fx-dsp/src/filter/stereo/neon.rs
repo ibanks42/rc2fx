@@ -1,31 +1,19 @@
-//! AArch64 NEON chain: the two channels in the two lanes of one `f64x2`.
+//! AArch64 NEON stereo biquad chain, packing `[left, right]` into `float64x2_t`.
 //!
-//! A band's coefficients and state are stored as `[left, right]` pairs
-//! (`Hot`), so each is one vector load, and the state one vector store. The
-//! coefficients are the same bits in both lanes (checked by the caller); each
-//! channel's state and peak live in its own lane. The arithmetic is the same
-//! operation sequence as the scalar `step` — `vmul`/`vadd`/`vsub` only, never
-//! `vfma`, and no reassociation — so results are bit-identical to the
-//! per-channel path. With the `eq-fma` feature both fuse the same products
-//! (`vfma`/`vfms` here, `f64::mul_add` there) and still agree bit for bit.
-//! `vcalt`/`vbsl` flush a state below `1e-25` to `+0`: `vcalt` compares the
-//! magnitudes in one instruction (FACGT), which is `abs(next) < 1e-25` exactly,
-//! false for a NaN included. `vmaxnm` matches `f64::max` (maxNum) for the peak.
+//! Each band's coefficients and state live as `[left, right]` pairs in `Hot`,
+//! so loads and stores are single vector ops. Both lanes share identical
+//! coefficients (verified by the caller) while keeping independent state/peak.
+//! Arithmetic matches scalar `step` exactly (no FMA or reassociation unless
+//! `eq-fma` enables it on both paths), `vcalt`/`vbsl` implement `|next| < 1e-25`
+//! denormal flushing (including false for NaN), and `vmaxnm` matches `f64::max`.
 //!
-//! The samples arrive interleaved, both channels of a sample side by side, so
-//! each sample is one vector load and one vector store.
-//!
-//! NEON is part of the AArch64 baseline, so this module needs no
-//! `target_feature` and no runtime detection. Every index used here is bounded
-//! by the caller's eligibility checks (`order.len() <= MAX_BANDS`) and by the
-//! length of the frame slice.
+//! Samples are interleaved `[left, right]` before entering `chain` so each
+//! frame is one vector load/store. NEON is baseline on AArch64.
 use super::*;
 use core::arch::aarch64::*;
 
-/// `step`'s zero-flush threshold, the same literal the scalar path uses.
 const TINY: f64 = 1e-25;
 
-/// One band's coefficients, the same in both lanes.
 #[derive(Clone, Copy)]
 struct Shared {
     b0: float64x2_t,
@@ -43,24 +31,21 @@ impl Shared {
     }
 }
 
-/// A stored `[left, right]` pair as a vector, lane 0 left.
 #[inline(always)]
 fn load(pair: &[f64; 2]) -> float64x2_t {
-    // SAFETY: `pair` is two adjacent `f64`.
+    // SAFETY: `pair` is two contiguous `f64`s.
     unsafe { vld1q_f64(pair.as_ptr()) }
 }
 
-/// Writes both lanes back to a stored pair.
 #[inline(always)]
 fn save(pair: &mut [f64; 2], v: float64x2_t) {
-    // SAFETY: `pair` is two adjacent `f64`.
+    // SAFETY: `pair` is two contiguous `f64`s.
     unsafe { vst1q_f64(pair.as_mut_ptr(), v) }
 }
 
-/// `[left, right]` from the two channels' scalars, lane 0 left.
 #[inline(always)]
 fn pack(left: f64, right: f64) -> float64x2_t {
-    // SAFETY: baseline NEON; register operations only.
+    // SAFETY: baseline NEON register ops.
     unsafe { vcombine_f64(vdup_n_f64(left), vdup_n_f64(right)) }
 }
 
@@ -76,24 +61,20 @@ fn lane1(v: float64x2_t) -> f64 {
     unsafe { vgetq_lane_f64::<1>(v) }
 }
 
-/// Both channels of one sample, left first.
 pub(super) type Frame = [f64; 2];
 
-/// The two channels' samples at `t`.
 #[inline(always)]
 fn input(x: &[Frame], t: usize) -> float64x2_t {
-    // SAFETY: `x[t]` is two adjacent `f64`, and the index is checked.
+    // SAFETY: `x[t]` is bounds-checked and holds two contiguous `f64`s.
     unsafe { vld1q_f64(x[t].as_ptr()) }
 }
 
-/// Writes both lanes back to sample `t`.
 #[inline(always)]
 fn store(x: &mut [Frame], t: usize, v: float64x2_t) {
-    // SAFETY: `x[t]` is two adjacent `f64`, and the index is checked.
+    // SAFETY: `x[t]` is bounds-checked and holds two contiguous `f64`s.
     unsafe { vst1q_f64(x[t].as_mut_ptr(), v) }
 }
 
-/// The scalar `step` on both lanes at once.
 #[inline(always)]
 fn step(
     c: &Shared,
@@ -102,9 +83,7 @@ fn step(
     input: float64x2_t,
     peak: &mut float64x2_t,
 ) -> float64x2_t {
-    // SAFETY: baseline NEON; register operations only. The expression order
-    // matches the scalar `step` exactly, and it fuses what `step` fuses:
-    // nothing, or with `eq-fma` the same products.
+    // SAFETY: baseline NEON register ops; matches scalar `step` op-for-op.
     unsafe {
         let (raw, next1, next2);
         if cfg!(feature = "eq-fma") {

@@ -1,9 +1,9 @@
 package release
 
-// Sign app release metadata: a TUF repository of its own, beside the
-// mixer's, with the same root and release keys. Every asset of one published
-// app release becomes a target `v{VERSION}/{ASSET}`, so the app can check a
-// downloaded update package before applying it.
+// Signs desktop app release metadata in a separate TUF repository alongside
+// the mixer's (sharing the same root and release keys). Each published release
+// asset is recorded as target `v{VERSION}/{ASSET}` so the app can verify
+// downloaded updates before applying them.
 
 import (
 	"fmt"
@@ -20,8 +20,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
 
-// sums covers the other assets; it is how they are checked, not something
-// the app downloads.
+// SHA256SUMS verifies the other release assets and is not itself signed as a target.
 const sums = "SHA256SUMS"
 
 const (
@@ -29,10 +28,8 @@ const (
 	appRefreshUsage = "usage: ./xtask app-refresh ROOT METADATA OUT SEQUENCE EXPIRES SNAPSHOT_KEY TIMESTAMP_KEY"
 )
 
-// AppSign is `app-sign`: sign every asset in ASSETS, a downloaded copy of
-// the published release VERSION. Its SHA256SUMS must list exactly the other
-// files, with their hashes, so nothing is signed that the release did not
-// publish.
+// AppSign implements `xtask app-sign`, verifying every file in ASSETS against
+// SHA256SUMS and signing them into OUT.
 func AppSign(args []string) error {
 	if len(args) != 9 {
 		return task.Error(appSignUsage)
@@ -69,8 +66,8 @@ func AppSign(args []string) error {
 	if root.ConsistentSnapshot {
 		return task.Error("GitHub release target paths require consistent_snapshot=false")
 	}
-	// As for mixer releases: targets stay authorized for as long as the
-	// root trusts their key, and only discovery metadata needs renewal.
+	// Same policy as mixer releases: targets expire with the root, and only
+	// snapshot/timestamp get renewed periodically.
 	targetsExpires := root.Expires
 	if !expires.Before(targetsExpires) {
 		return task.Error("discovery metadata must expire before the targets and root")
@@ -114,9 +111,8 @@ func AppSign(args []string) error {
 	return nil
 }
 
-// AppRefresh is `app-refresh`: renew app snapshot and timestamp metadata.
-// The mixer's renewal checks nothing specific to the mixer, so the same code
-// serves both repositories.
+// AppRefresh implements `xtask app-refresh`, delegating to the shared
+// snapshot/timestamp renewal flow.
 func AppRefresh(args []string) error {
 	if len(args) != 7 {
 		return task.Error(appRefreshUsage)
@@ -124,7 +120,6 @@ func AppRefresh(args []string) error {
 	return Refresh(args)
 }
 
-// stable is a stable `MAJOR.MINOR.PATCH`, as app tags are.
 func stable(version string) bool {
 	parts := strings.Split(version, ".")
 	if len(parts) != 3 {
@@ -143,8 +138,7 @@ func stable(version string) bool {
 	return true
 }
 
-// plain is a name that stays one path segment, both in a target name and on
-// disk.
+// plain reports whether name is a safe single path segment (no leading dot or separators).
 func plain(name string) bool {
 	if name == "" || name[0] == '.' {
 		return false
@@ -168,8 +162,6 @@ func isHex(text string) bool {
 	return true
 }
 
-// lines splits at '\n', drops a '\r' before it, and gives no empty line
-// after a final '\n'.
 func lines(text string) []string {
 	var out []string
 	for text != "" {
@@ -186,8 +178,8 @@ func lines(text string) []string {
 	return out
 }
 
-// checkedAssets is the assets in dir by name (and the names in order), each
-// one checked against SHA256SUMS, which must list exactly them.
+// checkedAssets validates that dir's files match SHA256SUMS 1-to-1 and returns
+// their paths and sorted names.
 func checkedAssets(dir string) (map[string]string, []string, error) {
 	sumsPath := filepath.Join(dir, sums)
 	data, err := os.ReadFile(sumsPath)
@@ -224,7 +216,7 @@ func checkedAssets(dir string) (map[string]string, []string, error) {
 		if name == sums {
 			continue
 		}
-		// Not followed: a link could sign bytes from outside the release.
+		// Refuse symlinks so we never sign files outside the release directory.
 		if !entry.Type().IsRegular() {
 			return nil, nil, task.Errorf("%s is not a regular file", name)
 		}

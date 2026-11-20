@@ -1,38 +1,18 @@
 # DeepFilterNet3 weights
 
-Two DeepFilterNet3 exports are embedded in the engine at build time:
-`weights.bin` here (LA0, lookahead 0) and the export in [`la1/`](la1/README.md)
-(lookahead 1). `DeepFilter::for_lookahead` loads one of them. The per-path
-saved setting `Suppression.lookahead` selects which, and defaults to 0.
+Two DeepFilterNet3 exports are compiled right into the engine: `weights.bin` in this directory (LA0, lookahead 0) and the lookahead-1 export in [`la1/`](la1/README.md). `DeepFilter::for_lookahead` picks between them based on the per-path `Suppression.lookahead` setting, which defaults to 0.
 
 ## Model
 
-DeepFilterNet3 with the GRUs narrowed to 128 units
-(`emb_hidden_dim = df_hidden_dim = 128`, `nb_df = 64`, 601,660 parameters).
-RC2FX retrained it on DNS-4 speech and noise, VCTK, room impulse responses,
-and mouse-click and keyboard recordings (Freesound, FSD50K, ESC-50, AudioSet,
-three Zenodo keystroke datasets, and the project author's own recordings), with
-the click and keyboard recordings weighted to a quarter of the noise. The
-training kit is kept outside this repository. The weights are released under
-MIT; [PROVENANCE.md](PROVENANCE.md#training-data) credits every training
-dataset and notes the licenses that still apply to them.
+This is DeepFilterNet3 with its GRUs narrowed to 128 units (`emb_hidden_dim = df_hidden_dim = 128`, `nb_df = 64`, 601,660 parameters). RC2FX retrained it on DNS-4 speech and noise, VCTK, room impulse responses, and mouse-click/keyboard recordings (Freesound, FSD50K, ESC-50, AudioSet, three Zenodo keystroke datasets, and the author's own recordings), weighting clicks and keystrokes at a quarter of the noise mix. The training kit lives outside this repo. The weights are released under MIT; see [PROVENANCE.md](PROVENANCE.md#training-data) for full dataset credits and upstream license notes.
 
-The weights here are the best checkpoint by validation loss from run
-`a960s360d64-la0-b20` (epoch 120, 0.997914731502533). They were exported
-without retraining or changing the lookahead. `config.ini` is the exact run
-configuration. [PROVENANCE.md](PROVENANCE.md) has the hashes and the commands
-used to generate the reference. The previous LA1 weights, reference, and
-configuration are kept in `la1/`, and the reference tests still cover them.
+`weights.bin` here is the best validation-loss checkpoint from run `a960s360d64-la0-b20` (epoch 120, loss 0.997914731502533), exported directly without retraining or changing the lookahead. `config.ini` holds the exact run configuration, and [PROVENANCE.md](PROVENANCE.md) records the hashes and commands used to build the reference. The older LA1 weights, reference, and config live in `la1/` and are still covered by the reference tests.
 
 ## File format
 
-`weights.bin` contains every float tensor of the model's PyTorch state dict,
-in the format `Tensors::parse` reads (`src/net.rs`): a little-endian u32
-tensor count, then for each tensor a u32 name length, the name, a u32 rank,
-u32 dims, and f32 data.
+`weights.bin` packs every float tensor from the PyTorch state dict in the binary layout `Tensors::parse` expects (`src/net.rs`): a little-endian `u32` tensor count, followed for each tensor by a `u32` name length, the UTF-8 name, a `u32` rank, `u32` dimensions, and raw `f32` values.
 
-Four framing tensors follow the state dict and are required. Each has rank 1
-and one integral f32 value:
+Four rank-1 framing tensors (each holding a single integral `f32`) must follow the state dict:
 
 | Tensor | Model parameter |
 | --- | --- |
@@ -41,78 +21,45 @@ and one integral f32 value:
 | `rc2fx.hop_size` | `hop_size` |
 | `rc2fx.lookahead` | `df_lookahead`, which must equal `conv_lookahead` |
 
-A file without these tensors is rejected. The engine takes its STFT framing
-from them. The FFT size, which must be even, is the analysis window. The last
-`synthesis_size` samples of it, between one and two hops, are resynthesized at
-the hop. The lookahead must be less than the deep-filter order. The output
-lags by `synthesis_size - hop_size` plus the lookahead. `src/dsp.rs` describes
-the window pair.
+Files missing any of these four tensors are rejected. The engine derives its STFT framing directly from them: the even-sized FFT is the analysis window, and its last `synthesis_size` samples (between one and two hops) are resynthesized at each hop. Lookahead has to be less than the deep-filter order, and total algorithmic lag is `synthesis_size - hop_size` plus the lookahead. See `src/dsp.rs` for the window pair details.
 
-Band counts come from the layer shapes: `nb_erb` from `enc.emb_gru.linear_in`
-and `nb_df` from `enc.df_fc_emb`. This lets the same build load, for example,
-a 480-point, 240-hop, lookahead-0 model or an asymmetric 960 / 360 / 240 one.
-The file here is 960 / 360 / 240 / 0 (FFT, synthesis, hop, lookahead).
+Band counts are inferred from layer shapes (`nb_erb` from `enc.emb_gru.linear_in`, `nb_df` from `enc.df_fc_emb`). That lets the same engine build load different framings, such as a symmetric 480/240 lookahead-0 model or an asymmetric 960/360/240 one. The export here is 960 / 360 / 240 / 0 (FFT, synthesis, hop, lookahead).
 
-The engine's frame (`DeepFilter::frame`) is one hop, 240 samples. After a
-frame's result is published, the worker computes the next frame's GRU
-recurrent products in small steps (`DeepFilter::set_gru_prep`). The output is
-the same as without this step.
+Each engine frame (`DeepFilter::frame`) is one 240-sample hop. Once a frame's output is published, the worker precomputes the next frame's GRU recurrent products in small slices (`DeepFilter::set_gru_prep`), producing identical output while spreading the work out.
 
 ## Delay
 
-The suppression delay is 240 (frame) + 120 (synthesis overlap) + 320 (worker
-lead) = 680 samples, 14.17 ms at 48 kHz. On a processed microphone the native
-helper adds 112 samples, for 792 samples (16.5 ms). The 960-point analysis
-window and the five causal DF taps add no delay.
+Total suppression delay is 240 (frame) + 120 (synthesis overlap) + 320 (worker lead) = 680 samples, or 14.17 ms at 48 kHz. On a processed microphone the native helper adds another 112 samples, bringing it to 792 samples (16.5 ms). Neither the 960-point analysis window nor the five causal DF taps add extra latency.
 
 ## Precision
 
-The engine quantizes the weights to int8 when it loads them, with one scale
-per row. The mixer's four cores share one L2 cache, and streaming 1.2 MB of
-f16 weights every 5 ms hop made JACK drop buffers. int8 halves that traffic
-and removed nearly all of the drops. `PRODUCTION_WORKER` in
-`rc2fx-suppression` has the measurements.
+Weights are quantized to `int8` at load time with one scale per row. Because the mixer's four cores share a single L2 cache, streaming 1.2 MB of `f16` weights every 5 ms hop caused JACK buffer drops. Switching to `int8` cut that memory traffic in half and eliminated nearly all of the drops. See `PRODUCTION_WORKER` in `rc2fx-suppression` for the measurements.
 
 ## reference.wav
 
-`reference.wav` is the output of DeepFilterNet's own runtime (libDF with
-tract, every stage forced on) for the test signal in `src/tests.rs`, using the
-same LA0 epoch-120 weights exported to ONNX. `matches_deepfilternet_reference`
-compares the engine with it, and `preserved_la1_matches_its_own_reference`
-does the same for LA1.
+`reference.wav` was generated by DeepFilterNet's own runtime (libDF with tract, all stages forced on) using the test signal in `src/tests.rs` and the same LA0 epoch-120 weights exported to ONNX. `matches_deepfilternet_reference` checks our engine against it, and `preserved_la1_matches_its_own_reference` does the same for LA1.
 
-The engine's output differs from the reference because of weight precision and
-a polynomial exp. LA0 measures −47.6 dB with the int8 weights (under 81 LSB),
-on the host and on AArch64 under QEMU. LA1 measures −45.4 dB. The test limit is
-128 LSB. These figures measure agreement with the reference implementation.
-They don't measure how well the model removes noise.
+Small differences from the reference come from `int8` weight quantization and our polynomial `exp` approximation. LA0 comes in at −47.6 dB (under 81 LSB) on both the host and AArch64 under QEMU, and LA1 at −45.4 dB, comfortably inside the 128 LSB test threshold. Keep in mind these numbers only check parity with the reference runtime, not perceptual noise-removal quality.
 
 To regenerate the reference:
 
-1. Write the test input:
+1. Dump the test input:
 
    ```sh
    RC2FX_DFN_INPUT=input.wav cargo test -p rc2fx-dfn write_reference_input -- --ignored
    ```
 
-2. Run `input.wav` through libDF's `DfTract` with the model's ONNX export and
-   `RuntimeParams::default_with_ch(1).with_thresholds(-100., 100., 100.)`,
-   writing 16-bit PCM. The training kit's `dfref` tool does this:
-   `dfref MODEL_onnx.tar.gz input.wav reference.wav`. `handoff.sh` runs it.
+2. Run `input.wav` through libDF's `DfTract` using the model's ONNX export and `RuntimeParams::default_with_ch(1).with_thresholds(-100., 100., 100.)`, writing 16-bit PCM. The training kit's `dfref` tool wraps this (`dfref MODEL_onnx.tar.gz input.wav reference.wav`), and `handoff.sh` invokes it automatically.
 
-For an asymmetric framing, build `dfref` against the patched libDF
-(`~/dfn/src/libDF`) and pass it as `DFREF=`. Unpatched libDF 0.5.6 ignores
-`synthesis_size` and writes a symmetric reference.
+For asymmetric framings, build `dfref` against the patched libDF (`~/dfn/src/libDF`) and pass it via `DFREF=`. Upstream libDF 0.5.6 ignores `synthesis_size` and writes a symmetric reference instead.
 
 ## Replacing the weights
 
-The training kit's `export/handoff.sh` takes the run's best checkpoint and:
+Running `export/handoff.sh` in the training kit takes a run's best checkpoint and:
 
-1. writes `weights.bin` through `to_engine.py`, with every float tensor of
-   `model.state_dict()` and the framing tensors from the run's config,
+1. writes `weights.bin` via `to_engine.py`, including every float tensor in `model.state_dict()` plus the framing tensors from the run config,
 2. exports the model to ONNX,
-3. regenerates `reference.wav` from the ONNX export,
-4. copies both files here.
+3. regenerates `reference.wav` from that ONNX export, and
+4. copies both files into this directory.
 
-Then run `cargo test -p rc2fx-dfn`. If the per-frame time changed, review the
-worker lead (320 samples) in `Suppression::admitted_geometry` in `rc2fx-core`.
+Afterward, run `cargo test -p rc2fx-dfn`. If per-frame inference time changed, revisit the 320-sample worker lead in `Suppression::admitted_geometry` in `rc2fx-core`.

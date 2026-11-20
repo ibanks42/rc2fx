@@ -95,7 +95,7 @@ func TestTheFeedMustDescribeExactlyThisPackage(t *testing.T) {
 }
 
 func TestUnsignedMacOSBuildsAreStillSealedAdHoc(t *testing.T) {
-	// Only when no Apple setting is present in this test's environment.
+	// Skip if macOS signing env vars are configured on this machine.
 	for _, name := range []string{"RC2FX_MACOS_IDENTITY", "RC2FX_MACOS_INSTALLER_IDENTITY", "RC2FX_NOTARY_PROFILE", "RC2FX_MACOS_KEYCHAIN"} {
 		if _, ok := setting(name); ok {
 			return

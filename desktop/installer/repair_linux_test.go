@@ -2,10 +2,8 @@
 
 package installer
 
-// A small fake mixer disk built from real parts: an MBR with RØDE's four
-// partitions, two ext4 roots made by mkfs.ext4 with a Pro II's features, and
-// a FAT settings partition made by mkfs.vfat. Skipped where those tools are
-// missing; CI's Ubuntu has them.
+// Synthetic mixer disk tests using real mkfs.ext4 and mkfs.vfat images.
+// Skipped when those tools are unavailable.
 
 import (
 	"bytes"
@@ -27,7 +25,7 @@ var repairScript = []byte("#!/bin/sh\nmount -t vfat /dev/mmcblk1p3 /Application/
 
 const mib = 1 << 20
 
-// repairParts is the partition starts and sizes in MiB.
+// Partition (start, length) pairs in MiB.
 var repairParts = [4][2]uint64{{1, 8}, {9, 8}, {17, 34}, {51, 1}}
 
 func systemTool(name string) string {
@@ -149,7 +147,6 @@ func (d *fakeDiskImage) root(index int, writable bool) *ext2fs.Filesystem {
 	return fs
 }
 
-// zero is what the bad flash did: the right size, no contents.
 func (d *fakeDiskImage) zero(index int, path string) {
 	fs := d.root(index, true)
 	entry, err := fs.Lookup(path)
@@ -158,7 +155,6 @@ func (d *fakeDiskImage) zero(index int, path string) {
 	must(d.t, fs.Close())
 }
 
-// zeroFrom zeroes a file from byte keep on, keeping its size.
 func (d *fakeDiskImage) zeroFrom(index int, path string, keep int) {
 	data := d.contents(index, path)
 	clear(data[keep:])
@@ -169,8 +165,6 @@ func (d *fakeDiskImage) zeroFrom(index int, path string, keep int) {
 	must(d.t, fs.Close())
 }
 
-// saveFlashedImage saves the image that was flashed on this computer: the
-// same RC2FX checksums and an intact script.
 func (d *fakeDiskImage) saveFlashedImage() {
 	t := d.t
 	archive := filepath.Join(d.dir, "work/archive.tar.gz")
@@ -199,7 +193,6 @@ func (d *fakeDiskImage) contents(index int, path string) []byte {
 	return data
 }
 
-// clean runs e2fsck -fn on one root, copied out of the disk.
 func (d *fakeDiskImage) clean(index int) {
 	e2fsck := systemTool("e2fsck")
 	if e2fsck == "" {
@@ -219,7 +212,6 @@ func target(root uint8, path string) RepairTarget {
 	return RepairTarget{Root: root, Path: path}
 }
 
-// fakeDisk is a Platform whose recovery disk is an image file.
 type fakeDisk struct{ path string }
 
 func (fakeDisk) Inventory() ([]HID, error)          { return nil, nil }
@@ -486,7 +478,6 @@ func TestADamagedFileListIsNotUsed(t *testing.T) {
 	}
 }
 
-// damagedList is the finding for a root's own damaged file list, if any.
 func damagedList(root RootFindings) *DamagedFile {
 	for i, file := range root.Damaged {
 		if file.Path == manifestMember {

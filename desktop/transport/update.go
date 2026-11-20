@@ -55,13 +55,11 @@ func encodeBase64(b []byte) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
-// delta is what changed between the mixer's installed files and envelope,
-// when the mixer accepts it that way (`inPlaceUpdates` 2): unchanged files
-// are copied on the mixer, changed ones patched against base (the signed
-// release it runs) where that holds the installed file, and the rest sent
-// compressed. The mixer rebuilds the release and checks it against the
-// signature as if it had been sent whole. Nil without an error: a mixer that
-// takes only whole releases.
+// delta computes a delta update against the mixer's installed files when the
+// mixer supports `inPlaceUpdates` v2: unchanged files are copied on-device,
+// changed files are patched against base (when available), and the rest are
+// sent compressed. The mixer reconstructs and verifies the full signed release.
+// Returns (nil, nil) if the mixer only accepts whole releases (404).
 func (d device) delta(ctx context.Context, envelope []byte, base *string) ([]byte, *requestError) {
 	value, failed := d.request(ctx, "GET", "api/v1/update/installed", nil)
 	switch {

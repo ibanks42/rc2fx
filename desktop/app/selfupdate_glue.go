@@ -1,12 +1,8 @@
 package app
 
-// Self-update, the background-task glue: the state lives in app/selfupdate
-// (with Velopack behind app/selfupdate/vpkc); these start its background work
-// and hand results back to the UI (which versions_dialog.go draws). Nothing
-// happens on its own: the user downloads, then chooses "Restart to update",
-// which is held back while the installer has a run going or the mixer may
-// still be updating (installerRestartBlocker), and still asks about unsaved
-// edits like any other quit.
+// Background-task wiring between the UI and app/selfupdate. Updates never apply
+// automatically: the user initiates download and restart, and restarts are
+// blocked while an installer task is active or unsaved edits need confirmation.
 
 import (
 	"time"
@@ -17,20 +13,15 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate/vpkc"
 )
 
-// newSelfUpdate is the app's updater: Velopack's manager when Velopack
-// installed this copy (and this build has it), else a copy that only links
-// to the release page.
 func newSelfUpdate() selfupdate.SelfUpdate { return selfupdate.New(vpkc.Open) }
 
-// startSelfUpdate checks, at startup, a package an earlier run downloaded.
+// startSelfUpdate verifies any update package left over from a previous run.
 func (a *App) startSelfUpdate(cx *gk.Cx) {
 	if asset, ok := a.selfUpdate.TakePending(); ok {
 		a.checkUpdatePackage(cx, asset)
 	}
 }
 
-// checkUpdatePackage checks a downloaded package in the background; it
-// becomes ready only if it is the signed release.
 func (a *App) checkUpdatePackage(cx *gk.Cx, asset selfupdate.Asset) {
 	check, ok := a.selfUpdate.BeginCheck(asset)
 	if !ok {
@@ -43,9 +34,8 @@ func (a *App) checkUpdatePackage(cx *gk.Cx, asset selfupdate.Asset) {
 	})
 }
 
-// downloadAppUpdate is download_app_update: download the newest release in
-// the background, reporting progress; the feed checks it as it arrives. A
-// kept package that could not be checked is only checked again.
+// downloadAppUpdate downloads the latest release in the background with
+// periodic progress updates, or re-verifies a previously downloaded package.
 func (a *App) downloadAppUpdate(cx *gk.Cx) {
 	kind, asset := a.selfUpdate.Start()
 	switch kind {
@@ -60,7 +50,6 @@ func (a *App) downloadAppUpdate(cx *gk.Cx) {
 	}
 	a.notify(cx)
 	progress := selfupdate.NewProgress()
-	// Progress until the download ends.
 	var tick gk.Timer
 	tick = gk.Every(cx, 200*time.Millisecond, func(cx *gk.Cx) {
 		changed, ended := a.selfUpdate.Advance(progress)
@@ -81,8 +70,6 @@ func (a *App) downloadAppUpdate(cx *gk.Cx) {
 	})
 }
 
-// restartToUpdate quits and applies the downloaded update, once nothing
-// holds it back. Unsaved edits are asked about as for any quit.
 func (a *App) restartToUpdate(cx *gk.Cx) {
 	_, blocked := a.installerRestartBlocker()
 	switch a.selfUpdate.Restart(blocked) {
@@ -97,8 +84,8 @@ func (a *App) quitForUpdate(cx *gk.Cx) {
 	if a.confirmClose(cx) {
 		gk.Quit(cx)
 	} else if !a.closingPrompt() {
-		// Refused outright (a file dialog is open): no later quit may
-		// restart unasked. An open prompt clears it on cancel.
+		// Close was refused outright (e.g. a file dialog is open), so clear the
+		// pending restart flag so a later normal quit doesn't apply the update.
 		a.selfUpdate.CancelRestart()
 	}
 }

@@ -1,10 +1,7 @@
-//! Sliding worst-case timing over the engine's recent telemetry windows.
+//! Sliding 10-second peak tracker over recent engine telemetry windows.
 //!
-//! An engine window carries a peak, not every sample. Only control threads
-//! call this module: it keeps the peaks young enough to describe the last
-//! [`WINDOW`] and lets the rest fall out, so an engine-startup spike cannot
-//! outlive its ten seconds. An empty ring means nothing was timed there, never
-//! that the cost was zero.
+//! Control-thread only. Keeps peaks within [`WINDOW`] so startup spikes age out.
+//! An empty ring means nothing was timed, not zero cost.
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
@@ -26,11 +23,8 @@ pub struct RecentMax {
 }
 
 impl RecentMax {
-    /// Adds one window's peak. `None` is a window in which nothing was timed;
-    /// it still ages the others out. A peak no larger than a later one can
-    /// never be the maximum again while that one is inside the window, so it
-    /// is dropped at once. A zero peak is a failed measurement, not a free
-    /// window, and is treated as `None`.
+    /// Records a window peak (`None` or 0 still ages out expired entries).
+    /// Drops any older peak that is <= the new one since it can never win again.
     pub fn observe(&mut self, peak: Option<u64>, now: Instant) {
         while self
             .peaks

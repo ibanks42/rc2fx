@@ -1,10 +1,7 @@
-# RC2FX tasks. They behave the same on Windows, Linux and macOS: the work lives
-# in the Go tool in desktop/cmd/xtask, which ./xtask runs (`./xtask help`).
+# RC2FX build and dev tasks (implemented in desktop/cmd/xtask; see `./xtask help`).
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
-# PowerShell cannot run the POSIX sh launcher, so on Windows the recipes run
-# the tool as ./xtask does: without cgo, from desktop/, with the repository
-# root and the directory paths are relative to (recipes run at the root).
+# PowerShell can't run the POSIX sh launcher, so invoke xtask directly via `go run` without cgo.
 xtask := if os_family() == "windows" { "$env:CGO_ENABLED='0'; $env:RC2FX_XTASK_ROOT=$PWD.Path; $env:RC2FX_XTASK_CWD=$PWD.Path; go -C desktop run ./cmd/xtask" } else { "./xtask" }
 
 # List the recipes

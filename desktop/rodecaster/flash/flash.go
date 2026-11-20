@@ -1,6 +1,6 @@
-// Package flash is the USB update of a RØDECaster: finding the mixer's HID
-// control interface, the mode commands, staging firmware on its update
-// drive, safe ejection and the flash command.
+// Package flash implements RØDECaster USB firmware updates: HID discovery,
+// update-mode switching, staging and verifying update files, safe ejection,
+// and triggering the flash command.
 package flash
 
 import (
@@ -18,22 +18,20 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
-// UpdateFiles is what the update drive takes, in the order it is staged.
+// UpdateFiles are the files staged onto the update drive, in copy order.
 var UpdateFiles = [2]string{"archive.tar.gz", "archive.md5"}
 
-// Mixer is one mixer's control interface.
+// Mixer describes a detected RØDECaster control interface.
 type Mixer struct {
 	Model      model.Model
 	Serial     string
 	UpdateMode bool
-	// Firmware is the RØDE firmware this mixer runs, from its USB release
-	// number. Nil in update mode, where the number may not be the installed
-	// firmware's.
+	// Parsed from USB bcdDevice in normal mode; nil in update mode where the
+	// release number doesn't necessarily reflect the installed OS.
 	Firmware *string
 }
 
-// Allowed refuses a model the caller does not let the library command.
-// Nil allows every model.
+// Allowed filters which mixer models may be commanded (nil allows all).
 type Allowed func(model.Model) error
 
 func (a Allowed) check(m model.Model) error {
@@ -43,10 +41,8 @@ func (a Allowed) check(m model.Model) error {
 	return a(m)
 }
 
-// Refuse is the first refusal of allowed for a recognized mixer among
-// items (with serial, when given). Inventory is already restricted to RØDE
-// by the platform; recognition must not broaden the list of devices to
-// which commands can be sent.
+// Refuse returns the first error from allowed for any recognized mixer in items
+// (filtered to serial if non-empty).
 func Refuse(items []platform.HID, serial string, allowed Allowed) error {
 	for _, h := range items {
 		if h.Usage != 0xff00 || (serial != "" && h.Serial != serial) {
@@ -61,13 +57,13 @@ func Refuse(items []platform.HID, serial string, allowed Allowed) error {
 	return nil
 }
 
-// Control is whether h is a mixer's control interface.
+// Control reports whether h is a RØDECaster HID control interface.
 func Control(h *platform.HID) bool {
 	_, ok := model.FromUSB(model.VendorID, h.PID)
 	return h.Usage == 0xff00 && h.Serial != "" && ok
 }
 
-// Mixers is the control interfaces, one per mixer.
+// Mixers extracts one Mixer entry per control interface in items.
 func Mixers(items []platform.HID) []Mixer {
 	out := []Mixer{}
 	for i := range items {
@@ -88,10 +84,8 @@ func Mixers(items []platform.HID) []Mixer {
 	return out
 }
 
-// FirmwareVersion is a RØDE firmware version from a USB release number.
-// RØDE's gadget script writes the version with its dots removed as hex
-// (`1.7.7` → `0x0177`), so only versions with single-digit parts can be
-// read back; anything else is unknown rather than guessed.
+// FirmwareVersion decodes RØDE's USB bcdDevice format, which strips dots as
+// hex digits (e.g. "1.7.7" -> 0x0177). Only 3-digit BCD values are decoded.
 func FirmwareVersion(release uint16) (string, bool) {
 	digits := fmt.Sprintf("%x", release)
 	if len(digits) != 3 {
@@ -105,8 +99,7 @@ func FirmwareVersion(release uint16) (string, bool) {
 	return string(digits[0]) + "." + string(digits[1]) + "." + string(digits[2]), true
 }
 
-// SelectHID is the one control interface of a m mixer in normal or update
-// mode (with serial, when given). Every recognized mixer must be allowed.
+// SelectHID finds the unique control interface matching m, mode, and optional serial.
 func SelectHID(items []platform.HID, m model.Model, update bool, serial string, allowed Allowed) (platform.HID, error) {
 	if err := Refuse(items, "", allowed); err != nil {
 		return platform.HID{}, err
@@ -146,10 +139,9 @@ func SelectHID(items []platform.HID, m model.Model, update bool, serial string, 
 	return platform.HID{}, errors.New("more than one RØDECaster is connected; connect only one")
 }
 
-// placeholderSerial: RØDE's USB setup reports its serial from a file on the
-// settings partition and falls back to a placeholder (`RD0000000`, or the
-// model letters and zeros) when the file is missing: the partition did not
-// mount. That partition also holds the update drive, so a flash cannot help.
+// RØDE's USB gadget reads the serial from the settings partition and falls back
+// to a placeholder like "RD0000000" if that partition failed to mount. Since
+// the update drive lives on the same partition, flashing won't work either.
 func placeholderSerial(serial string) bool {
 	if len(serial) < 3 {
 		return false
@@ -175,12 +167,11 @@ func RequireRealSerial(serial string) error {
 	return nil
 }
 
-// Record logs a command before it is sent. It returns the function that
-// logs the command's result.
+// Record is called before sending a HID command and returns a hook to record its outcome.
 type Record func(name, serial string) (finish func(result error) error, err error)
 
-// Command sends one HID command letter, logging it first through record
-// (when set). A missing ACK leaves the result unknown; nothing is retried.
+// Command sends a single HID control letter and waits for the 'A' ack.
+// Never retries on missing ack since the mixer may have already acted on it.
 func Command(p platform.Platform, h *platform.HID, letter byte, name string, record Record) error {
 	d, err := p.Open(h)
 	if err != nil {
@@ -230,19 +221,12 @@ func Command(p platform.Platform, h *platform.HID, letter byte, name string, rec
 	return result
 }
 
-// Options is how a caller takes part in a USB update.
 type Options struct {
-	// Allowed refuses models the caller does not support.
-	Allowed Allowed
-	// Record logs each command (see Command).
-	Record Record
-	// Step reports the start of a step.
-	Step func(phase, detail string)
-	// Progress is a byte-progress callback for one phase.
+	Allowed  Allowed
+	Record   Record
+	Step     func(phase, detail string)
 	Progress func(phase, detail string) func(completed, total uint64)
-	// Cancel, when set, is checked before each file is staged and before
-	// the drive is ejected; an error stops the update with that error.
-	Cancel func() error
+	Cancel   func() error // checked before staging each file and before eject
 }
 
 func (o *Options) step(phase, detail string) {
@@ -290,11 +274,9 @@ func EnterUpdateMode(p platform.Platform, m model.Model, serial string, o Option
 	return Command(p, &h, 'M', "usb-mode", o.Record)
 }
 
-// UpdateSize is whether size could be an update drive. RØDE's engine builds
-// the drive with `dd count=560000` on its staging partition, so that size
-// is a ceiling and some mixers have a smaller drive (224 MB has been seen).
-// The USB serial identifies the drive; a drive too small for the firmware is
-// refused by Flash, with a reason, rather than waited on here.
+// UpdateSize reports whether size is within the expected bounds of an update
+// drive. RØDE creates the image with `dd count=560000`, though some mixers
+// expose smaller drives (down to ~224 MB); Flash checks exact space via Fits.
 func UpdateSize(size uint64) bool { return platform.UpdateSize(size) }
 
 func validVolume(v *platform.Volume) error {
@@ -344,17 +326,14 @@ func UpdateDrive(p platform.Platform, serial string) (platform.Volume, error) {
 	return v, nil
 }
 
-// CanReport is whether p can see a mixer's USB disk in normal mode
-// (platform.ReportDisks), where the storage fix's script can offer its
-// result.
+// CanReport reports whether p supports reading normal-mode USB report disks.
 func CanReport(p platform.Platform) bool {
 	_, ok := p.(platform.ReportDisks)
 	return ok
 }
 
-// ReportDisk is the normal-mode USB disk of the mixer with serial while it
-// holds a medium. ok is false when there is none, or p cannot see such
-// disks. Eject and MediaPresent work on it.
+// ReportDisk returns the normal-mode USB report disk for serial, if mounted
+// with media present.
 func ReportDisk(p platform.Platform, serial string) (platform.Volume, bool, error) {
 	rd, ok := p.(platform.ReportDisks)
 	if !ok || serial == "" {

@@ -1,10 +1,7 @@
 package app
 
-// The level indicator, the design's live line. Its height
-// follows a path's reported output level (peak-meter ballistics,
-// LevelHistory.Display); its shape is decorative, not an audio waveform, and
-// the UI says so. This file only draws: when it moves is indicators.go's,
-// the geometry is app/levels (LinePoints).
+// Live level line rendering. Amplitude tracks the path's peak meter; the wave
+// shape is decorative rather than an audio waveform.
 
 import (
 	"time"
@@ -15,11 +12,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 )
 
-// LineStyle is the sizes of one indicator (levels.LineStyle).
 type LineStyle = levels.LineStyle
 
-// levelOf is level_of: the displayed level of history at now, 0 to 1 on the
-// meter scale.
 func levelOf(history *model.LevelHistory, now time.Time) float32 {
 	if history == nil {
 		return 0
@@ -27,10 +21,9 @@ func levelOf(history *model.LevelHistory, now time.Time) float32 {
 	return history.Display(now, level)
 }
 
-// livePlot is paint_line: the indicator drawn in an element of width ×
-// height (its bounds' size). phase (seconds) moves the decorative shape;
-// level scales its height. The plot fills its parent whether or not it
-// draws, so the layout never depends on it.
+// livePlot draws the decorative level line for the given bounds, animation
+// phase (seconds), and level. Always returns a plot element so layout does not
+// depend on whether points are available.
 func livePlot(width, height, phase, lvl float32, state levels.LineState, style LineStyle) gk.Element {
 	points, ok := levels.LinePoints(width, height, phase, lvl, state, style)
 	if !ok {
@@ -43,7 +36,6 @@ func livePlot(width, height, phase, lvl float32, state levels.LineState, style L
 	var parts []gk.PlotPart
 	switch state {
 	case levels.LineStateLive:
-		// The RC2FX gradient at alpha.
 		faded := func(alpha float32) gk.Fill {
 			return gk.NewLinearGradient(90,
 				gk.NewLinearColorStop(rgbAlpha(Accent, alpha), 0),

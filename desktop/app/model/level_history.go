@@ -1,12 +1,8 @@
 package model
 
-// Recent output peaks per processed path, for the level indicator.
-//
-// Each reading is one meter event's output peak (measured after the path's
-// processing), at the time this app received it. Meter events carry no
-// timestamp of their own, so times are approximate: they include transport
-// delay, and readings the device delayed or reordered can't be detected.
-// What redraws an idle Home when readings stop is the app's poll (App.poll).
+// Recent post-processing output peaks per path for smoothed level meters.
+// Meter events carry no device timestamp, so arrival times are approximate
+// (including transport jitter). App.poll drives redraws when readings stop.
 
 import (
 	"iter"
@@ -16,24 +12,15 @@ import (
 )
 
 const (
-	// levelKeep is how long a reading can still affect the displayed level:
-	// by then a reading has been replaced, whichever way the level was
-	// moving.
-	levelKeep = time.Second
-	// levelCapacity bounds readings per path, whatever the event rate.
+	// Retention window for past readings; older samples no longer affect the curve.
+	levelKeep     = time.Second
 	levelCapacity = 300
-	// levelRise and levelFall are how quickly the displayed level closes on
-	// the latest reading, as the time to cover about two thirds of the
-	// distance. Readings arrive a few times a second, so the level eases
-	// between them instead of stepping. A peak still shows almost at once; a
-	// level that stops is gone in about half a second.
+	// Exponential smoothing time constants (attack / release) so sparse meter
+	// updates ease smoothly without feeling sluggish on peaks.
 	levelRise = 40 * time.Millisecond
 	levelFall = 120 * time.Millisecond
-	// levelGap: readings further apart than this belong to different
-	// segments: the displayed level uses only the latest segment, so a
-	// reading from before a gap (telemetry stale, then back) never shows
-	// after it. The same 1 s after which a path stops counting as fresh
-	// (telemetry.Progress.Fresh).
+	// Gaps longer than 1 s start a fresh segment (matching telemetry.Progress.Fresh)
+	// so stale readings from before a dropout never bleed into new ones.
 	levelGap = time.Second
 )
 
@@ -42,22 +29,20 @@ type levelPoint struct {
 	peak float32
 }
 
-// LevelHistory is one path's recent readings, oldest first.
+// LevelHistory stores recent peak readings for one path in chronological order.
 type LevelHistory struct {
 	points []levelPoint
 }
 
-// Scale maps a peak amplitude to a 0..1 position on the display's meter.
+// Scale maps a linear peak amplitude to a [0, 1] meter position.
 type Scale func(peak float64) float32
 
-// sinceSaturating is a - b, or zero when b is later.
 func sinceSaturating(a, b time.Time) time.Duration {
 	return max(a.Sub(b), 0)
 }
 
-// Push records a reading.
+// Push appends a reading, dropping non-finite or out-of-order samples.
 func (h *LevelHistory) Push(at time.Time, peak float64) {
-	// Out-of-order or invalid readings are dropped, never reordered.
 	if math.IsNaN(peak) || math.IsInf(peak, 0) {
 		return
 	}
@@ -75,13 +60,9 @@ func (h *LevelHistory) Push(at time.Time, peak float64) {
 	}
 }
 
-// Display is the displayed level at now, 0 to 1 on the display's meter scale
-// (scale, desk's level): it closes on each reading in turn (levelRise,
-// levelFall), starting from nothing. Display smoothing, computed from the
-// readings' times so it doesn't depend on how often it's drawn. Only the
-// latest segment counts: walking back from the newest reading, it stops at
-// the first gap longer than levelGap, and nothing counts if the newest
-// reading is itself older than levelGap.
+// Display evaluates the smoothed [0, 1] meter level at now. Because smoothing
+// is integrated directly from sample timestamps, the result is independent of
+// frame rate. Only samples after the most recent gap (> levelGap) contribute.
 func (h *LevelHistory) Display(now time.Time, scale Scale) float32 {
 	first := len(h.points)
 	later := now
@@ -115,7 +96,6 @@ func (h *LevelHistory) Display(now time.Time, scale Scale) float32 {
 	return approach(level, target, sinceSaturating(now, since))
 }
 
-// approach is where level is after closing on target for elapsed.
 func approach(level, target float32, elapsed time.Duration) float32 {
 	constant := levelFall
 	if target > level {
@@ -125,14 +105,13 @@ func approach(level, target float32, elapsed time.Duration) float32 {
 	return target + (level-target)*float32(math.Exp(float64(exponent)))
 }
 
-// LevelHistories is every reported path's readings, keyed by target id.
+// LevelHistories tracks LevelHistory instances keyed by target ID.
 type LevelHistories struct {
 	paths map[string]*LevelHistory
 }
 
-// Receive records one accepted meter event: each path's id and output peak.
-// Paths the event no longer reports are dropped, so a path that returns
-// starts over.
+// Receive records one meter event and drops any paths no longer reported so
+// they start clean if they reappear.
 func (l *LevelHistories) Receive(at time.Time, paths iter.Seq2[string, float64]) {
 	if l.paths == nil {
 		l.paths = make(map[string]*LevelHistory)
@@ -154,12 +133,12 @@ func (l *LevelHistories) Receive(at time.Time, paths iter.Seq2[string, float64])
 	}
 }
 
-// Clear forgets everything: a new connection, engine or source.
+// Clear drops all stored histories (e.g. on reconnect or engine change).
 func (l *LevelHistories) Clear() {
 	clear(l.paths)
 }
 
-// Get is a path's readings, or nil.
+// Get returns the history for id, or nil.
 func (l *LevelHistories) Get(id string) *LevelHistory {
 	return l.paths[id]
 }

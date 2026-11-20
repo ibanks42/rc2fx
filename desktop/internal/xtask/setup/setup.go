@@ -1,7 +1,7 @@
-// Package setup is one-time setup and the mixer cross-build. The mixer build
-// uses zig as the C compiler and linker (through cargo-zigbuild), so it runs
-// natively on any host OS and links against the mixer's glibc 2.35 without a
-// sysroot.
+// Package setup handles one-time toolchain setup and the mixer cross-build.
+// It uses zig as the C compiler and linker (via cargo-zigbuild) so the build
+// runs natively on any host OS and links against the mixer's glibc 2.35
+// without a separate sysroot.
 package setup
 
 import (

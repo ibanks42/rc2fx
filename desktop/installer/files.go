@@ -1,6 +1,6 @@
 package installer
 
-// Private local files: journals, keys, downloads and backups.
+// Helpers for private local files (journals, keys, downloads, backups).
 
 import (
 	"errors"
@@ -17,7 +17,6 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// privateDirs creates dir and its missing parents, private to this user.
 func privateDirs(dir string) error {
 	info, err := os.Stat(dir)
 	switch {
@@ -47,8 +46,6 @@ func privateDirs(dir string) error {
 	return archive.LocalOwner(file)
 }
 
-// openLocalFile creates the file privately if missing, otherwise opens the
-// existing one.
 func openLocalFile(path string, appendMode bool) (*os.File, error) {
 	flags := os.O_WRONLY
 	if appendMode {
@@ -75,8 +72,6 @@ func openLocalFile(path string, appendMode bool) (*os.File, error) {
 	return archive.OwnedByInvoker(file)
 }
 
-// exclusiveFile creates a new file exclusively; it refuses to replace an
-// existing one.
 func exclusiveFile(path string, data []byte) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -92,7 +87,6 @@ func exclusiveFile(path string, data []byte) error {
 	return file.Sync()
 }
 
-// readLimited reads at most limit bytes of r.
 func readLimited(r io.Reader, limit int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, limit))
 }

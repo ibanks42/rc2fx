@@ -35,7 +35,7 @@ class Publication(unittest.TestCase):
             (self.metadata / name).write_text(json.dumps({"signed": {"version": 2}}))
         self.calls = []
         self.releases = {}
-        # Real git against a local bare repository stands in for GitHub's branch.
+        # Use a local bare git repo to stand in for GitHub's metadata branch.
         self.remote = Path(self.temp.name, "remote.git")
         subprocess.check_call(["git", "init", "-q", "--bare", self.remote])
         self.stale_reads = 0

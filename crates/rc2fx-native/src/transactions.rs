@@ -1,4 +1,4 @@
-//! Bounded control-side staging. No Store, audio work, timers or callback locks.
+//! Bounded control-side transaction staging (prepare / commit / cancel).
 use crate::parameters;
 use rc2fx_core::Target;
 use rc2fx_native_control::{ErrorCode, PathMode, ResetPolicy, TargetStatus, Transaction};
@@ -15,7 +15,7 @@ pub trait Endpoints {
         mode: PathMode,
         reset: ResetPolicy,
     ) -> Result<parameters::Staged, ErrorCode>;
-    /// Leave the slot intact on lifecycle contention before taking ownership.
+    /// Must leave `staged` intact if committing fails due to contention.
     fn commit(
         &mut self,
         transaction: &Transaction,
@@ -39,7 +39,8 @@ pub struct Manager {
     completed: Vec<Completed>,
 }
 impl Manager {
-    /// Request-driven expiry: no periodic wakeups when a controller disappears.
+    /// Expires stale staged transactions lazily on incoming requests so we
+    /// don't need a background timer.
     pub fn reap(&mut self, now: Instant) {
         self.pending.retain(|pending| pending.expires > now);
     }
@@ -84,7 +85,7 @@ impl Manager {
             .find(|pending| pending.transaction.id == transaction.id)
         {
             return if pending.transaction == *transaction && pending.fingerprint == fingerprint {
-                // A retransmission never extends a lease or allocates another snapshot.
+                // Idempotent retry: don't extend the lease or allocate again.
                 endpoints.status(transaction).map(|_| ())
             } else {
                 Err(ErrorCode::InvalidParameters)
@@ -154,7 +155,7 @@ impl Manager {
             return Err(error);
         }
         let pending = self.pending.swap_remove(index);
-        // Keep only the latest receipt for a path, plus a bounded recent cache.
+        // Keep only the latest completed receipt per path within the bounded cache.
         self.completed.retain(|completed| {
             (
                 completed.transaction.context,

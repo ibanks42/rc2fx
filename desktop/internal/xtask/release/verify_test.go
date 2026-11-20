@@ -13,12 +13,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
 
-// The tests' own verifier of the repositories the release commands write:
-// tough's RepositoryLoader::load for local folders. The app verifies with
-// installer/internal/tuf; this one is independent of both it and the
-// signing code.
+// Independent test-only TUF verifier for local metadata directories
+// (separate from both tufsign and internal/tuf).
 
-// loadedRepository is a repository verified by loadRepository.
 type loadedRepository struct {
 	Root      *tufsign.Root
 	Timestamp *tufsign.Document
@@ -27,12 +24,8 @@ type loadedRepository struct {
 	targets   string
 }
 
-// loadRepository verifies the repository in metadata, from the trusted
-// root file trusted, as of now: the root chain (`N.root.json` from the
-// trusted version + 1, each signed by the previous root and itself), then
-// timestamp, snapshot and targets, each signed by its role, pinned by the
-// role above it (version, length, SHA-256) and unexpired. Targets are read
-// from targets/NAME.
+// loadRepository verifies the root chain (N.root.json), timestamp, snapshot,
+// and targets in metadata against trusted as of now.
 func loadRepository(trusted []byte, metadata, targets string, now time.Time) (*loadedRepository, error) {
 	root, err := tufsign.ParseRoot(trusted)
 	if err != nil {
@@ -149,8 +142,6 @@ func loadRepository(trusted []byte, metadata, targets string, now time.Time) (*l
 	return &loadedRepository{Root: root, Timestamp: timestamp, Snapshot: snapshot, Targets: parsed, targets: targets}, nil
 }
 
-// checkMetaPin checks data against a snapshot or timestamp entry: its
-// length and SHA-256, when the entry gives them.
 func checkMetaPin(pin tufsign.Metafile, data []byte) error {
 	if pin.Length != nil && *pin.Length != uint64(len(data)) {
 		return errors.New("metadata length differs from its pin")
@@ -164,7 +155,6 @@ func checkMetaPin(pin tufsign.Metafile, data []byte) error {
 	return nil
 }
 
-// ReadTarget reads target name and checks its signed length and SHA-256.
 func (l *loadedRepository) ReadTarget(name string) ([]byte, error) {
 	entry, ok := l.Targets.Entries[name]
 	if !ok {

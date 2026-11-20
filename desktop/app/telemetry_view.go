@@ -1,14 +1,8 @@
 package app
 
-// The Diagnostics page's TELEMETRY section, shown when
-// Show telemetry is on. It answers whether RC2FX is keeping up, in words a
-// person reads at a glance: a row of status badges, four yes/no checks, then
-// one line per processed channel. Technical details opens the raw figures,
-// each with an explanation. Only audible problems are flagged, and only while
-// they are recent: older ones become history, and the mixer starting is left
-// out. Built from a plain snapshot so it renders the same with preview data.
-// What it says (statuses, checks, figures) is in app/telemetry (view.go);
-// this file draws it.
+// Telemetry section inside Settings > Diagnostics. Renders from a plain
+// TelemetrySnapshot so both live data and the debug preview share one view.
+// Health checks and formatting live in app/telemetry.
 
 import (
 	"time"
@@ -20,10 +14,8 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 )
 
-// TelemetrySnapshot is the figures the TELEMETRY section shows.
 type TelemetrySnapshot = telemetry.Snapshot
 
-// toneColor is a telemetry tone's color.
 func toneColor(t telemetry.Tone) uint32 {
 	switch t {
 	case telemetry.ToneAccent:
@@ -38,12 +30,10 @@ func toneColor(t telemetry.Tone) uint32 {
 	return Text
 }
 
-// telemetryValue is a figure's text in its color.
 func telemetryValue(text string, color uint32) gk.DivEl {
 	return gk.Div(s.FlexShrink0, s.TextSm).TextColor(rgb(color)).Child(txt(text))
 }
 
-// telemetryDot is a plain status dot (ui.go's dot is the gradient one).
 func telemetryDot(color uint32) gk.DivEl {
 	return gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(8)).Bg(rgb(color))
 }
@@ -71,8 +61,6 @@ func checkRow(check telemetry.Check, first bool) gk.DivEl {
 		Child(answer)
 }
 
-// badge is a small rounded badge: a quiet name ("" for none), then its
-// value.
 func badge(name, text string, color uint32) gk.TagEl {
 	row := gk.HFlex(s.ItemsCenter, s.Gap1, s.TextXs)
 	if name != "" {
@@ -82,8 +70,6 @@ func badge(name, text string, color uint32) gk.TagEl {
 		Child(row.Child(gk.Div(s.FontSemibold).TextColor(rgb(color)).Child(txt(text))))
 }
 
-// badges is the status, how long audio has run, the format, and anything
-// unusual.
 func badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *TelemetrySnapshot) gk.DivEl {
 	status := telemetry.StatusOf(engine, routing, snapshot)
 	color := toneColor(status.Tone())
@@ -98,8 +84,6 @@ func badges(engine *core.EngineStatus, routing *core.RoutingStatus, snapshot *Te
 	return row
 }
 
-// Column widths of the channel table: name, delay, issues; the two meters
-// share what is left.
 const (
 	nameWidth   float32 = 170
 	delayWidth  float32 = 64
@@ -110,8 +94,6 @@ func headerCell(text string) gk.DivEl {
 	return gk.Div(s.TextXs).TextColor(rgb(Faint)).Child(txt(text))
 }
 
-// telemetryLevel is a level bar from −60 to 0 dBFS, red at or over full
-// scale, and its value. (colors.go's level is the overview's meter scale.)
 func telemetryLevel(peak float64, mono string) gk.DivEl {
 	width, over := telemetry.LevelWidth(peak)
 	color, valueColor := Accent, Text
@@ -169,8 +151,6 @@ func channelTable(snapshot *TelemetrySnapshot, sampleRate uint32, mono string) g
 	return table
 }
 
-// factRow is one figure; hovering anywhere on the row explains it, so no
-// icon has to follow labels of different lengths.
 func factRow(fact telemetry.Fact, mono string) gk.Element {
 	row := gk.HFlex(s.ItemsCenter, s.JustifyBetween, s.Gap3, s.Px2, s.Py1, s.RoundedMd).
 		Hover(hover().Bg(rgb(surface().Raised))).
@@ -181,7 +161,6 @@ func factRow(fact telemetry.Fact, mono string) gk.Element {
 		Tooltip(gk.NewKitTooltipElement(gk.Div(s.Py1).W(px(InfoWidth)).Child(txt(fact.Help))))
 }
 
-// factGrid is the facts in two columns, reading down the left first.
 func factGrid(facts []telemetry.Fact, mono string) gk.DivEl {
 	leftFacts, rightFacts := telemetry.FactColumns(facts)
 	left := gk.VFlex(s.Flex1, s.MinW0)
@@ -195,8 +174,6 @@ func factGrid(facts []telemetry.Fact, mono string) gk.DivEl {
 	return gk.HFlex(s.ItemsStart, s.Gap6).Child(left).Child(right)
 }
 
-// telemetrySection is the TELEMETRY section; aside holds its header
-// controls and toggle opens or closes Technical details.
 func telemetrySection(snapshot *TelemetrySnapshot, mono string, aside gk.DivEl, toggle gk.Element) gk.DivEl {
 	sampleRate := uint32(48_000)
 	if snapshot.HasEngine {
@@ -230,7 +207,6 @@ func telemetrySection(snapshot *TelemetrySnapshot, mono string, aside gk.DivEl, 
 	return settingsSection("TELEMETRY", aside, body.Child(closing))
 }
 
-// telemetrySnapshot is everything the section shows, read from the app now.
 func (a *App) telemetrySnapshot() TelemetrySnapshot {
 	snapshot := TelemetrySnapshot{Now: time.Now(), Details: a.telemetryDetails}
 	if !a.session.Connected {
@@ -271,7 +247,7 @@ func (a *App) telemetrySnapshot() TelemetrySnapshot {
 		}
 		return 0
 	}
-	// Stock passthrough paths carry untouched audio: only processed ones.
+	// Skip stock passthrough paths; only show RC2FX-processed channels.
 	if a.meter != nil {
 		for i := range a.meter.Targets {
 			id := a.meter.Targets[i].ID
