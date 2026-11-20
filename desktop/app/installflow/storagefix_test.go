@@ -386,3 +386,29 @@ func TestTheWaitForTheFixsResult(t *testing.T) {
 		t.Error("no event is confirming")
 	}
 }
+
+// A fix that stopped because the slot a flash would format is still too
+// small for 4 KB blocks fails the run, and trying again never flashes that
+// slot: not while the mixer still waits in update mode, and once it is back
+// in normal mode the fix runs again.
+func TestAnUnsafeFixStopIsRetriedAsTheFixNeverAFlash(t *testing.T) {
+	m, fix := startedFix(t)
+	why := "The storage fix could not finish on the mixer (the space partition 1 would grow into is not empty). The app stopped there: the next update would have gone onto storage that RØDE's update bug can damage (system slot 1 is still its original size). Nothing more was sent to the mixer. It is waiting in USB update mode: switch it off and on, and it starts again as it was."
+	reply := installer.StorageFix{Outcome: "failed", Touched: true, Unsafe: true, Error: why, Flashes: 1}
+	refresh := answer(t, m, fix, installer.Reply{Kind: installer.ReplyStorageFix, StorageFix: &reply})
+	if got := failedRun(t, m); got != why {
+		t.Fatalf("failure %q", got)
+	}
+	report(t, m, refresh, status(gv1(true), absent(), true, true))
+	if m.FixStopped() || !m.FixUnsafe() || !strings.Contains(m.FailureTitle(), "wasn’t installed") {
+		t.Fatalf("stopped %v unsafe %v title %q", m.FixStopped(), m.FixUnsafe(), m.FailureTitle())
+	}
+	// Still in update mode: nothing is flashed.
+	poll := m.Retry()
+	if next := report(t, m, poll, status(gv1(true), absent(), true, true)); next != nil && next.Kind == installer.RequestFlash {
+		t.Fatalf("flashed the unsafe slot: %+v", next)
+	}
+	// Switched off and on: back in normal mode, the fix runs again.
+	next := report(t, m, m.refresh(), status(gv1(false), absent(), true, false))
+	wantRequest(t, next, installer.Request{Kind: installer.RequestStorageFix, Final: true}, "the fix again")
+}

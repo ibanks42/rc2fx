@@ -572,17 +572,101 @@ func TestNeverAMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := h.run()
+	// Without a result nobody knows which slot the last flash would format,
+	// so it is not sent: the mixer is left in update mode, to be switched
+	// off and on.
+	var stopped *NotApplied
+	if !errors.As(err, &stopped) || !strings.Contains(err.Error(), "switch it off and on") {
+		t.Fatalf("error %v", err)
+	}
+	if res.Outcome != OutcomeUnconfirmed || res.Marker != nil || res.Flashes != carrierAttempts || res.MarkerProblem == "" {
+		t.Fatalf("result %+v", res)
+	}
+	for i, f := range h.mixer.flashes {
+		if !f.carrier {
+			t.Errorf("flash %d is not the carrier: %+v", i, f)
+		}
+	}
+	h.checkSafety(t)
+}
+
+// factoryMarker is a result on RØDE's factory table from slot.
+func factoryMarker(result string, slot int) string {
+	factory := "/dev/mmcblk1p1 : start=        8192, size=     1039458, type=83|" +
+		"/dev/mmcblk1p2 : start=     2000896, size=     1193984, type=83|" +
+		"/dev/mmcblk1p3 : start=     3223552, size=     1710080, type=83|" +
+		"/dev/mmcblk1p4 : start=     4941824, size=    10328064, type=83"
+	return fmt.Sprintf("rcfix=1\nresult=%s\nslot=%d\nhopped=1\np1_sectors=1039458\ntable=%s\nreason=the space partition 1 would grow into is not empty\nscript=1\nend=1\n", result, slot, factory)
+}
+
+// A fix that did not finish while the mixer runs slot 2 leaves slot 1 at
+// its original size, where the last flash would get 1 KB blocks: it is not
+// sent, with or without final firmware.
+func TestAnUnfixedSlotIsNeverFlashed(t *testing.T) {
+	for _, final := range []bool{false, true} {
+		t.Run(fmt.Sprint("final=", final), func(t *testing.T) {
+			h := newHarness(t, firmware{})
+			h.mixer.marker = func(int) string { return factoryMarker("failed", 2) }
+			if final {
+				h.opts.FinalDir, h.opts.FinalMD5 = finalDir(t, firmware{})
+			}
+			res, err := h.run()
+			var stopped *NotApplied
+			if !errors.As(err, &stopped) {
+				t.Fatalf("error %v", err)
+			}
+			for _, want := range []string{"would grow into is not empty", "system slot 1 is still its original size", "Nothing more was sent"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q lacks %q", err, want)
+				}
+			}
+			if res.Outcome != OutcomeFailed || res.Flashes != 1 || len(h.mixer.flashes) != 1 || !h.mixer.flashes[0].carrier {
+				t.Fatalf("result %+v, flashes %+v", res, h.mixer.flashes)
+			}
+			h.checkSafety(t)
+		})
+	}
+}
+
+// From slot 1 the last flash formats slot 2, which is large enough on the
+// factory table, so it goes ahead even though the fix did not finish.
+func TestAnUnfinishedFixFromSlotOneStillFlashesSlotTwo(t *testing.T) {
+	h := newHarness(t, firmware{})
+	h.mixer.marker = func(int) string { return factoryMarker("failed", 1) }
+	res, err := h.run()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Outcome != OutcomeUnconfirmed || res.Marker != nil || res.Flashes != MaxFlashes || res.MarkerProblem == "" {
+	if res.Outcome != OutcomeFailed || res.Flashes != 2 {
 		t.Fatalf("result %+v", res)
 	}
-	f := h.mixer.flashes
-	if len(f) != 4 || f[3].carrier || f[3].md5 != h.server.md5 {
+	if f := h.mixer.flashes; len(f) != 2 || f[1].carrier {
 		t.Errorf("flashes %+v", f)
 	}
-	h.checkSafety(t)
+}
+
+func TestLastFlashSafe(t *testing.T) {
+	for _, tc := range []struct {
+		marker string
+		ok     bool
+	}{
+		{fixedMarker, true},
+		{factoryMarker("failed", 1), true},
+		{factoryMarker("failed", 2), false},
+		{factoryMarker("unrecognized", 2), false},
+		{strings.Replace(factoryMarker("failed", 1), "slot=1", "slot=0", 1), false},
+	} {
+		m, err := carrier.ParseMarker([]byte(tc.marker))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, why := lastFlashSafe(&m); ok != tc.ok || ok != (why == "") {
+			t.Errorf("%q: %v %q", tc.marker, ok, why)
+		}
+	}
+	if ok, _ := lastFlashSafe(nil); ok {
+		t.Error("no marker was safe")
+	}
 }
 
 func TestUnparsableMarkerRetries(t *testing.T) {
@@ -855,7 +939,7 @@ func finalDir(t *testing.T, fw firmware) (string, string) {
 
 func TestFinalFirmwareIsFlashedLast(t *testing.T) {
 	added := firmware{add: []archive.Entry{{Kind: archive.EntryFile, Path: "usr/bin/rc2fx", Mode: 0o755, Data: []byte("rc2fx")}}}
-	for name, marker := range map[string]string{"fixed": fixedMarker, "unrecognized": unknownMarker, "never": ""} {
+	for name, marker := range map[string]string{"fixed": fixedMarker, "unrecognized": unknownMarker} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, firmware{})
 			h.mixer.marker = func(int) string { return marker }

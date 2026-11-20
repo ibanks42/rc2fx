@@ -271,6 +271,9 @@ func (m *Model) FailureTitle() string {
 	if run == nil || run.status.Kind != RunFailed || run.Index < 0 || run.Index >= len(Steps) {
 		return ""
 	}
+	if m.FixUnsafe() {
+		return "The storage fix didn’t finish, so RC2FX wasn’t installed"
+	}
 	switch Steps[run.Index] {
 	case StepBackup:
 		return "Couldn’t save your settings"

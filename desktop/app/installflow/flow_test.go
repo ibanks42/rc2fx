@@ -440,7 +440,7 @@ func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 	// Restored files need a restart, which clears the answer until RC2FX
 	// is back and checks again.
 	m.ImageCheckRead(check(core.ImageStatusRepaired), nil)
-	if w := wantState(t, m, StepStart, StepStateWaiting); !strings.Contains(w.Detail, "Turn the mixer off and on again") ||
+	if w := wantState(t, m, StepStart, StepStateWaiting); !strings.Contains(w.Detail, "switched off and on once") ||
 		!strings.Contains(w.Detail, "1 of RØDE's files") || strings.Contains(w.Detail, "rode-init-update-env.sh") {
 		t.Fatalf("waiting %q", w.Detail)
 	}
@@ -1888,5 +1888,31 @@ func TestMayBeUpdating(t *testing.T) {
 	}
 	if MayBeUpdating(true, normal, false) || MayBeUpdating(true, nil, true) {
 		t.Error("a mixer in normal mode, or RC2FX answering")
+	}
+}
+
+// The settings save can finish while a background check (the stock
+// firmware list) is still queued: its own refresh is held back then, and
+// the check's answer must carry the run on. Seen on a Mac on 2026-11-20:
+// the run stayed at "Save your settings" with nothing in flight.
+func TestABackgroundCheckFinishingAfterTheBackupCarriesTheRunOn(t *testing.T) {
+	m := setUp(status(gv1(false), ready(), false, false))
+	m.StockCheck = StockCheck{}
+	if m.Start() != nil {
+		t.Fatal("the app reads the settings first")
+	}
+	backup := readSettings(t, m)
+	stock := m.checkStock()
+	if stock == nil || stock.Kind != installer.RequestStockReleases || !m.polling() {
+		t.Fatalf("stock check %+v polling %v", stock, m.polling())
+	}
+	if next := answer(t, m, backup, installer.Reply{Kind: installer.ReplyBackup}); next != nil {
+		t.Fatalf("a background check is still queued, yet %+v", next)
+	}
+	next := answer(t, m, stock, installer.Reply{Kind: installer.ReplyStockReleases, Releases: deepCopy(m.Releases)})
+	wantRequest(t, next, installer.Request{Kind: installer.RequestProbe}, "the run goes on")
+	sel := report(t, m, next, status(gv1(false), ready(), false, false))
+	if sel == nil || sel.Kind != installer.RequestSelectMixer {
+		t.Fatalf("after the probe %+v", sel)
 	}
 }

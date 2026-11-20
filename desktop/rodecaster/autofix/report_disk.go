@@ -273,6 +273,25 @@ func summary(res *Result, final bool) string {
 	return fmt.Sprintf("The fix did not report a result after %d attempts%s, so whether it ran is not known. %s and nothing harmful was done. Try again later; if it keeps happening, the mixer can be checked in storage mode.", carrierAttempts, why, capital(again))
 }
 
+// notApplied is what the fix reported, for a run that stops before its last
+// flash (lastFlashSafe).
+func notApplied(res *Result) string {
+	m := res.Marker
+	switch {
+	case m == nil:
+		why := ""
+		if res.MarkerProblem != "" {
+			why = " (" + res.MarkerProblem + ")"
+		}
+		return fmt.Sprintf("The fix did not report a result after %d attempts%s.", carrierAttempts, why)
+	case res.Outcome == OutcomeUnrecognized:
+		return fmt.Sprintf("The mixer's storage is not laid out the way this fix expects (%s), so it was not changed.", m.Reason)
+	case res.Outcome == OutcomeFailed:
+		return fmt.Sprintf("The storage fix could not finish on the mixer (%s).", m.Reason)
+	}
+	return "The storage fix did not leave the mixer with the safe layout."
+}
+
 func capital(s string) string {
 	if s == "" || s[0] < 'a' || s[0] > 'z' {
 		return s

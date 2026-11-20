@@ -298,6 +298,13 @@ func (a *App) runningPage(i *Installer, t *guidedTask) {
 			Child(spinnerLine(fetchLine(m, i.progress))).
 			Child(soFar)
 	case installflow.StageUpdate:
+		if m.PowerCycle() {
+			// The storage fix stopped short and the mixer still waits in
+			// update mode: it has to be switched off and on before anything
+			// else happens.
+			body = body.Child(powerCycleBody(i))
+			break
+		}
 		body = body.Child(taskHeading("Update the mixer")).
 			Child(prose(versionLine(m), Muted))
 		if m.FixRunning() {
@@ -411,11 +418,17 @@ func updatePanel(m *installflow.Model, p *installer.Progress) gk.DivEl {
 }
 
 // powerCycleBody is the request to switch the mixer off and on: the run
-// waits for it, its time stops, and it goes on by itself.
+// waits for it, its time stops, and it goes on by itself. The run's status
+// says why it is needed.
 func powerCycleBody(i *Installer) gk.DivEl {
-	return gk.VFlex(s.WFull).Gap(px(16)).
-		Child(taskHeading("Almost done. Turn the mixer off and on again.")).
-		Child(prose("The new firmware is written. The mixer needs to be switched off and on once to finish.", Muted)).
+	flashed := i.model.Run.Flashed
+	heading := "Turn the mixer off and on again"
+	if flashed {
+		heading = "Almost done. Turn the mixer off and on again."
+	}
+	body := gk.VFlex(s.WFull).Gap(px(16)).
+		Child(taskHeading(heading)).
+		Child(prose(i.model.Run.Status().Why, Muted)).
 		Child(taskPanel().
 			Child(numbered(
 				"Switch the mixer off with its power button, or unplug its power cable.",
@@ -423,8 +436,12 @@ func powerCycleBody(i *Installer) gk.DivEl {
 				"Leave the USB cable connected.")).
 			Child(gk.HFlex(s.ItemsCenter, s.Gap3, s.BorderT1).Mt(px(14)).Pt(px(12)).BorderColor(rgb(surface().Line)).
 				Child(gk.Div(s.Flex1, s.MinW0).Child(spinnerLine("Waiting for the mixer to come back. The app continues by itself."))).
-				Child(prose("Timer paused at "+installflow.Elapsed(i.pausedAt), Faint)))).
-		Child(prose("If the mixer asks for its initial setup after it starts, don’t redo it: this restart brings it back.", Faint))
+				Child(prose("Timer paused at "+installflow.Elapsed(i.pausedAt), Faint))))
+	if flashed {
+		// After files were restored: the restart brings the setup back.
+		body = body.Child(prose("If the mixer asks for its initial setup after it starts, don’t redo it: this restart brings it back.", Faint))
+	}
+	return body
 }
 
 // longerPanel is a wait that has had no answer for a while: it says so,
@@ -494,11 +511,14 @@ func (a *App) failedPage(i *Installer, t *guidedTask) {
 	}
 	body = body.Child(seen)
 	if from, ok := m.RetryStage(); ok {
-		if installflow.StageOf(installflow.Steps[run.Index]) == installflow.StageUpdate && !run.Flashed && !accessEnded {
+		if installflow.StageOf(installflow.Steps[run.Index]) == installflow.StageUpdate && !run.Flashed && !accessEnded && !m.FixUnsafe() {
 			body = body.Child(prose("Check that the cable is firmly in USB 1 before trying again.", Faint))
 		}
 		if m.FixStopped() {
 			body = body.Child(prose("“Try again” installs RC2FX without the storage fix. The fix can be tried again later from the first screen.", Faint))
+		}
+		if m.FixUnsafe() {
+			body = body.Child(prose("“Try again” runs the storage fix again. RC2FX is installed only once the mixer has the safe layout.", Faint))
 		}
 		title := installflow.StageTitle(from, m.Stock)
 		if accessEnded {

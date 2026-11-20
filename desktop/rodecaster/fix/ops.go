@@ -267,8 +267,40 @@ func Restore(d disk.Disk, backupPath string) report.Report {
 		rep.Code, rep.Error = code, msg
 		return rep
 	}
-	rep.OK, rep.Changed, rep.After = true, true, parse(after)
+	rep.Changed, rep.After = true, parse(after)
+	if code, msg := clearGrowRange(d, bd.Layout); code != "" {
+		rep.Code, rep.Error = code, msg
+		return rep
+	}
+	rep.OK = true
 	return rep
+}
+
+// clearGrowRange zeroes the space partition 1 grows into, once the factory
+// table is back and nothing uses it. The grown filesystem's data stays
+// there otherwise, and Fix (and the carrier script) refuse a space that is
+// not empty, so the mixer could never be fixed again. It is checked after.
+func clearGrowRange(d disk.Disk, l *Layout) (code, msg string) {
+	from, to := growRange(l)
+	zero := make([]byte, chunk)
+	for s := from; s < to; {
+		n := min(uint64(chunk/disk.SectorSize), to-s)
+		b := zero[:n*disk.SectorSize]
+		if w, err := d.WriteAt(b, int64(s*disk.SectorSize)); err != nil || w != len(b) {
+			if err == nil {
+				err = io.ErrShortWrite
+			}
+			return "clear-failed", fmt.Sprintf("The partition table is back as it was, but clearing the space after partition 1 (sectors %d to %d) failed (%v). The fix will not run until it is clear; run restore again.", from, to-1, err)
+		}
+		s += n
+	}
+	if err := d.Sync(); err != nil {
+		return "clear-failed", fmt.Sprintf("The partition table is back as it was, but clearing the space after partition 1 failed (%v). The fix will not run until it is clear; run restore again.", err)
+	}
+	if code, msg := checkEmpty(d, l); code != "" {
+		return "clear-failed", "The partition table is back as it was, but the space after partition 1 did not read back empty: " + msg + " Run restore again."
+	}
+	return "", ""
 }
 
 // RecoverOptions are what Recover takes.

@@ -681,6 +681,11 @@ func (m *Model) replan() {
 	run := m.Run
 	run.retry()
 	m.settingsRead = SettingsReadIdle
+	// A fix that stopped short of an unsafe flash is run again, never
+	// replaced by a normal flash onto that slot.
+	if run.Fix != nil && run.Fix.Reply != nil && run.Fix.Reply.Unsafe {
+		run.Fix = &RunFix{}
+	}
 	// Damaged files have no copy to restore them from on the mixer: only
 	// sending the firmware again fixes them.
 	if m.damaged() {

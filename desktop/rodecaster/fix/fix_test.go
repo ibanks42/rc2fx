@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/disk"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/report"
 )
 
@@ -411,5 +412,27 @@ func TestFixThenRestoreRoundTrip(t *testing.T) {
 	}
 	if !f.equal(old) {
 		t.Fatal("round trip changed sector 0")
+	}
+}
+
+// Restore clears the space partition 1 grew into, so the grown
+// filesystem's data does not stay behind it: Fix (and the carrier script)
+// refuse a space that is not empty, and the mixer could never be fixed
+// again.
+func TestRestoreClearsTheGrowRange(t *testing.T) {
+	f := newFake(fixedTable())
+	from, to := growRange(&layouts[0])
+	for _, s := range []uint64{from, from + 64, to - 1} {
+		f.put(int64(s), bytes.Repeat([]byte{0xa5}, disk.SectorSize))
+	}
+	rep := Restore(f, writeFile(t, factory()))
+	if !rep.OK || !rep.Changed {
+		t.Fatalf("restore: %+v", rep)
+	}
+	if code, msg := checkEmpty(f, &layouts[0]); code != "" {
+		t.Fatalf("not cleared: %s", msg)
+	}
+	if rep := Fix(f, Options{BackupDir: t.TempDir()}); !rep.OK {
+		t.Fatalf("fix after restore: %+v", rep)
 	}
 }

@@ -161,5 +161,16 @@ func (m *Model) FixStopped() bool {
 	if run == nil || run.status.Kind != RunFailed || run.Fix == nil {
 		return false
 	}
+	if run.Fix.Reply != nil && run.Fix.Reply.Unsafe {
+		return false
+	}
 	return run.Fix.Error != "" || (run.Fix.Reply != nil && run.Fix.Reply.Touched && !run.Fix.Reply.FinalSent)
+}
+
+// FixUnsafe reports a failed run whose storage fix stopped because the slot
+// a flash would format is still too small for 4 KB blocks; trying again
+// runs the fix again.
+func (m *Model) FixUnsafe() bool {
+	run := m.Run
+	return run != nil && run.status.Kind == RunFailed && run.Fix != nil && run.Fix.Reply != nil && run.Fix.Reply.Unsafe
 }

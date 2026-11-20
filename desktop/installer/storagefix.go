@@ -54,6 +54,11 @@ type StorageFix struct {
 	// FinalSent: the mixer accepted the last flash (RØDE's plain archive,
 	// or the prepared firmware with Final) and is installing it.
 	FinalSent bool `json:"final_sent"`
+	// Unsafe: the fix did not leave the slot the last flash would format
+	// large enough for 4 KB blocks, so nothing more was sent
+	// (autofix.NotApplied). Error says why and what to do; installing
+	// anyway would format that slot with 1 KB blocks.
+	Unsafe bool `json:"unsafe"`
 }
 
 // storageFixWork and storageFixBackups are the fix's folders in the work
@@ -146,7 +151,8 @@ func (e *Engine) storageFix(final, debug bool) (*StorageFix, error) {
 			return nil, Error(Canceled)
 		}
 		var refusal *autofix.Refusal
-		out.Error, out.Refused = err.Error(), errors.As(err, &refusal)
+		var unsafe *autofix.NotApplied
+		out.Error, out.Refused, out.Unsafe = err.Error(), errors.As(err, &refusal), errors.As(err, &unsafe)
 	}
 	return out, nil
 }

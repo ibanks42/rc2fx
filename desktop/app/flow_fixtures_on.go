@@ -16,6 +16,7 @@ package app
 //	B3Lh taking longer, "What can I do?" open
 //	B4 failed while sending   B4b failed downloading  B4c access ended
 //	B5 power cycle            B6 done
+//	B4u the fix stopped short of an unsafe update     B5u its retry, still in update mode
 //	D1 remove: before         D2 remove: updating     D3 remove: done
 //	B2F install, first of the fix's two updates       B6F done, storage fixed
 //	G1 fix only: before       G2 fix only: running    G3 fixed
@@ -199,12 +200,28 @@ var taskFixtures = map[string]func(a *App, cx *gk.Cx) *Installer{
 	"B5": func(a *App, cx *gk.Cx) *Installer {
 		m := fixtureModel(false)
 		m.Run = fixtureRun(m, 5)
-		m.Run.ShowStatus(installflow.RunStatus{Kind: installflow.RunWaiting, Why: "Turn the mixer off and on again.", Since: fixtureAgo(30 * time.Second), PowerCycle: true})
+		m.Run.ShowStatus(installflow.RunStatus{Kind: installflow.RunWaiting, Why: "The update damaged 3 files on the mixer, and RC2FX restored them from the mixer's previous system. The mixer needs to be switched off and on once so it starts with the restored files.", Since: fixtureAgo(30 * time.Second), PowerCycle: true})
 		m.SetService(&installer.Service{Kind: installer.ServiceReady})
 		m.ShowImageCheck(core.ImageCheck{Status: core.ImageStatusRepaired, Repaired: []string{"a", "b"}})
 		i := a.fixtureInstaller(cx, taskInstall, m)
 		fixtureSince(i, 4*time.Minute+42*time.Second)
 		i.pausedAt = 4*time.Minute + 12*time.Second
+		return i
+	},
+	"B4u": func(a *App, cx *gk.Cx) *Installer {
+		i := failed(a, cx, 4, fixtureUnsafe)
+		i.model.Run.Committed = true
+		i.model.Run.Fix = &installflow.RunFix{Reply: &installer.StorageFix{Outcome: string(autofix.OutcomeFailed), Touched: true, Unsafe: true, Flashes: 1, Error: fixtureUnsafe}}
+		return i
+	},
+	"B5u": func(a *App, cx *gk.Cx) *Installer {
+		m := fixtureModel(false)
+		m.Run = fixtureRun(m, 3)
+		m.Run.Flashed = false
+		m.Run.Fix = &installflow.RunFix{}
+		m.Run.ShowStatus(installflow.RunStatus{Kind: installflow.RunWaiting, Why: "The mixer is still in USB update mode from the storage fix. Once it is back on, the fix runs again.", Since: fixtureAgo(20 * time.Second), PowerCycle: true})
+		i := a.fixtureInstaller(cx, taskInstall, m)
+		fixtureSince(i, 20*time.Second)
 		return i
 	},
 	"B6": func(a *App, cx *gk.Cx) *Installer { return finished(a, cx, false) },
@@ -401,6 +418,10 @@ func waiting(a *App, cx *gk.Cx, d time.Duration, help bool) *Installer {
 	i.waitHelp = help
 	return i
 }
+
+// fixtureUnsafe is autofix's words for a fix that stopped short of an
+// update onto a slot too small for 4 KB blocks.
+const fixtureUnsafe = "The storage fix could not finish on the mixer (the space partition 1 would grow into is not empty). The app stopped there: the next update would have gone onto storage that RØDE's update bug can damage (system slot 1 is still its original size). Nothing more was sent to the mixer. It is waiting in USB update mode: switch it off and on, and it starts again as it was."
 
 func failed(a *App, cx *gk.Cx, index int, why string) *Installer {
 	m := fixtureModel(false)

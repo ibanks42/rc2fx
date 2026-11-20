@@ -503,10 +503,28 @@ func (r *run) run() (Result, error) {
 	}
 	res.Summary = summary(&res, final)
 
+	// The last flash goes onto the slot the mixer is not running. RØDE's
+	// updater formats it without a block size, so it gets 4 KB blocks only
+	// when it is at least 512 MiB: after the fix, or slot 2 on any factory
+	// table. On anything else (the fix did not finish and the mixer runs
+	// slot 2, or the script could not say) the flash could be damaged as
+	// it lands, so nothing more is sent. In update mode a power cycle
+	// brings the mixer back on the system it was running, unchanged.
+	if ok, why := lastFlashSafe(marker); !ok {
+		res.Flashes = r.flashes
+		r.current = nil
+		stop := fmt.Sprintf("The app stopped there: the next update would have gone onto storage that RØDE's update bug can damage (%s). Nothing more was sent to the mixer.", why)
+		if r.updateMode {
+			stop += " It is waiting in USB update mode: switch it off and on, and it starts again as it was."
+		}
+		res.Summary = notApplied(&res) + " " + stop
+		return res, &NotApplied{Summary: res.Summary}
+	}
+
 	// The mixer is in update mode after the marker read, or in normal mode
 	// after the USB report. RØDE's plain archive (or the final firmware)
-	// goes onto the slot that was just fixed, and is the clean way out of
-	// update mode whatever the script said.
+	// goes onto the slot that is now safe to format, and is the clean way
+	// out of update mode.
 	last, lastMD5, step := plain, plainMD5, "putting RØDE's own firmware back"
 	if final {
 		last, lastMD5, step = r.o.FinalDir, r.o.FinalMD5, "installing the new firmware"

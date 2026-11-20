@@ -50,7 +50,8 @@ type Report struct {
 	// was missing), "changed" (the disk is not what --expect named),
 	// "not-empty" (the space partition 1 would grow into holds data),
 	// "read-failed" (reading the mixer's storage failed), "write-failed",
-	// "verify-failed", "bad-backup", "internal".
+	// "verify-failed", "bad-backup", "clear-failed" (restore put the table
+	// back but could not clear the space after partition 1), "internal".
 	OK    bool   `json:"ok"`
 	Code  string `json:"code,omitempty"`
 	Error string `json:"error,omitempty"`

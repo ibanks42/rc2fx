@@ -117,6 +117,21 @@ func (m *Model) advance() *installer.Request {
 			}
 		case StepFlash:
 			one := m.usbOne(true)
+			// The storage fix is still due (it stopped short of an unsafe
+			// flash): a normal flash would format the slot it found too
+			// small, so the mixer has to leave update mode first, and the
+			// fix then runs again from normal mode.
+			if fix := run.Fix; fix != nil && fix.Reply == nil && fix.Error == "" {
+				if one != nil {
+					return m.waitFor("The mixer is still in USB update mode from the storage fix. Once it is back on, the fix runs again.", true)
+				}
+				if m.usbOne(false) != nil {
+					// Back in normal mode: the fix runs from the step before.
+					run.Index = slices.Index(Steps[:], StepUSBMode)
+					run.resume()
+					continue
+				}
+			}
 			switch {
 			case one != nil && m.Status != nil && m.Status.UpdateDrive:
 				serial := one.Serial
@@ -168,7 +183,7 @@ func fileCount(check *core.ImageCheck, names []string) string {
 // a restart brings the mixer up as RØDE intends.
 func repairedMessage(check *core.ImageCheck) string {
 	return fmt.Sprintf("The update damaged %s on the mixer, and RC2FX restored them from the mixer's previous system. "+
-		"Turn the mixer off and on again to finish. If the mixer asks for its initial setup, don't redo it: the restart brings it back.",
+		"The mixer needs to be switched off and on once so it starts with the restored files.",
 		fileCount(check, check.Repaired))
 }
 
@@ -213,6 +228,20 @@ func (m *Model) Tick(now time.Time) *installer.Request {
 // Finish applies a finished request: its reply, or the error it failed with
 // (whose text is shown). Returns the next request, if any.
 func (m *Model) Finish(request installer.Request, reply installer.Reply, err error) *installer.Request {
+	background := len(m.queue) > 0 && m.queue[0].background
+	next := m.finish(request, reply, err)
+	// A run's own reply asks for a refresh, which is held back while a
+	// background check is queued (refresh). When that check is the last
+	// thing in flight, its answer has to carry the run on: Tick polls only
+	// a run that waits (or failed), so nothing else would. A waiting run is
+	// left to Tick's pace.
+	if next == nil && background && m.Run != nil && m.Run.status.Kind == RunGoing && !m.Busy() && !m.polling() {
+		return m.refresh()
+	}
+	return next
+}
+
+func (m *Model) finish(request installer.Request, reply installer.Reply, err error) *installer.Request {
 	background := false
 	if len(m.queue) > 0 {
 		background = m.queue[0].background
@@ -327,6 +356,11 @@ func (m *Model) Finish(request installer.Request, reply installer.Reply, err err
 			case fix.FinalSent:
 				// The run's firmware is going onto the fixed slot.
 				run.Flashed = true
+			case fix.Unsafe:
+				// The slot a flash would format is still too small for 4 KB
+				// blocks: no flash now, and trying again runs the fix again
+				// (replan).
+				m.fail(fix.Error)
 			case fix.Touched:
 				// Stopped part way: what is left follows the mixer's state,
 				// and trying again installs with a normal flash.
