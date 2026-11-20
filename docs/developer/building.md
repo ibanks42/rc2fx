@@ -61,7 +61,7 @@ just test-mixer    # mixer-side tests (Linux, with python3 and a C compiler)
 
 `just app` needs no mixer cross-build: the app downloads signed mixer
 releases. It runs `./xtask app`, which builds a development build (the Go
-build tags `rc2fxdebug` and `rc2fxdev`, the counterpart of a Rust debug build)
+build tag `rc2fxdev`, the counterpart of a Rust debug build)
 into `target/debug`, then starts it.
 
 Every build of the app passes the C linker one flag that drops the gpuikit
@@ -79,7 +79,7 @@ so repeat runs are quick.
 
 An embedded build (the Go build tag `embedded`) embeds that runtime, the
 firmware catalog, the mixer release manifest, and the installer scripts in the
-executable. Before the build, `desktop/installer/embed/cmd/stage-payload`
+executable. Before the build, `desktop/cmd/stage-payload`
 collects them into `desktop/installer/embed/payload`, and fails if any of them
 is missing or corrupt. `target/mixer` carries a copy of
 `config/mixer-release.json`, and the build fails if the two differ, so run

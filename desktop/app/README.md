@@ -200,6 +200,6 @@ On the Diagnostics page:
   with **Show events…** and **Reset diagnostics…**.
 - **Export diagnostics…** saves the mixer's diagnostics to a file.
 
-In builds with the `rc2fxdebug` tag (development builds, as `just app` makes),
+In builds with the `rc2fxdev` tag (development builds, as `just app` makes),
 `rc2fx --telemetry-preview [old|events]` shows the telemetry section or the
 events window with made-up data and no connection.

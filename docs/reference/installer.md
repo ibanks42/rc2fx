@@ -24,7 +24,7 @@ executable or in the working directory. Developer tools and tests can pass a
 folder explicitly.
 
 Before an embedded build (the `embedded` build tag),
-`desktop/installer/embed/cmd/stage-payload` checks the payload checksums,
+`desktop/cmd/stage-payload` checks the payload checksums,
 checks that the binaries are ARM64, and checks that the runtime matches the
 catalog. Missing
 or corrupt inputs fail the build. Official RØDE firmware is downloaded and
@@ -238,10 +238,8 @@ only when signing is configured; see [Signing](../developer/releases.md#signing)
 
 ## Test status
 
-The installer has flashed a real Pro II from Windows, and RC2FX came up
-afterwards with its settings applied. Flashing from Linux and macOS has not
-been tried on hardware, and the macOS backend has not yet been built on a
-Mac.
+The installer has flashed a real Pro II from Windows, Linux, and macOS, and
+RC2FX came up afterwards with its settings applied. No Duo has been flashed.
 
 The automated tests cover image patching, the added files, runtime
 integrity, settings backups, key generation, the command log, HID write

@@ -125,7 +125,7 @@ versions in its confirmation dialog. Older versions require an explicit downgrad
 confirmation; an unknown installed version is identified before proceeding.
 
 Nothing is flashed automatically. Open the installer from **Settings ›
-Versions** or **Settings › Mixer › Open installer**, choose the versions, and confirm.
+Versions** or **Settings › Mixer › Update RC2FX**, choose the versions, and confirm.
 Downloading a new desktop app does not change the mixer. See
 [Installing RC2FX](installing.md).
 

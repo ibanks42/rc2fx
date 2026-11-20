@@ -45,7 +45,7 @@ Or, from `desktop/`, the raw Go commands:
 go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')   # no cgo or gpuikit needed
 go test -tags mockmixer ./transport/...
 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" \
-  go build -tags rc2fxdebug,rc2fxdev -ldflags=-extldflags=-Wl,--gc-sections -o bin/rc2fx ./cmd/rc2fx
+  go build -tags rc2fxdev -ldflags=-extldflags=-Wl,--gc-sections -o bin/rc2fx ./cmd/rc2fx
 ```
 
 The `-ldflags` part drops the gpuikit component families the app does not
@@ -57,9 +57,9 @@ use; on macOS it is `-Wl,-dead_strip`, and on Windows it needs LLVM's linker
 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go build -o bin/rc2fx ./cmd/rc2fx
 ```
 
-Build tags: `rc2fxdebug` and `rc2fxdev` make a development build,
+Build tags: `rc2fxdev` makes a development build,
 `mockmixer` swaps USB 1 for a simulated mixer, and `embedded` compiles in the
-mixer payload, which `go run ./installer/embed/cmd/stage-payload -root ..`
+mixer payload, which `go run ./cmd/stage-payload -root ..`
 stages from `target/mixer` first (`./xtask app --embedded` does both).
 
 Self-update links Velopack's C library only with the `velopack` build tag.

@@ -10,7 +10,7 @@ started manually.
 
 | Version | Where it lives | Released as |
 | --- | --- | --- |
-| Desktop app | `[workspace.package] version` in `Cargo.toml`, with its Go copy `AppVersion` in `desktop/installer/installer.go`, which release preparation bumps with it | `vX.Y.Z`, with the app packages |
+| Desktop app | `config/app-release.json`, with its Go copy `AppVersion` in `desktop/installer/installer.go`, which release preparation bumps with it | `vX.Y.Z`, with the app packages |
 | RC2FX mixer runtime | `config/mixer-release.json` | `mixer-vX.Y.Z`, with a signed standalone payload |
 | RØDE firmware | the versions pinned in `config/firmware-profiles.json` | RØDE's own releases; RC2FX publishes nothing |
 
@@ -89,10 +89,10 @@ A dry run doesn't push or publish anything.
 
 ### Desktop app
 
-The current version is `[workspace.package] version` in `Cargo.toml`.
+The current version is in `config/app-release.json`.
 
 Each release increases the version. The bump is applied to the tag matching
-the version in `Cargo.toml`. That tag must exist, be in `main`'s history, and
+the version in `config/app-release.json`. That tag must exist, be in `main`'s history, and
 have commits after it.
 
 The run stops before building if these conditions aren't met, if the new tag

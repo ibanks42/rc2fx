@@ -60,7 +60,7 @@ app, its validation, and its `api/v1` requests are the real ones.
 system. gpuikit is linked into it, so it needs nothing beside it.
 
 `./xtask app` refuses `--mock` with `--release`, and packaging refuses an
-executable built with the `mockmixer`, `rc2fxdev`, or `rc2fxdebug` tag. `RC2FX_DEV_PAGE` works with
+executable built with the `mockmixer` or `rc2fxdev` tag. `RC2FX_DEV_PAGE` works with
 it, for example `RC2FX_DEV_PAGE=channel:mic\ 4:eq just app-mock`.
 
 ## On the mixer over SSH

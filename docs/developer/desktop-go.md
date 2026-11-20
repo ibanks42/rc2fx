@@ -29,12 +29,16 @@ on the mixer are in `mixer/scripts`.
 ## Shared fixtures
 
 Anything both sides must agree on (configuration JSON, presets, the USB
-framing, delta payloads, release metadata, the image check list) has accept
-and reject cases in `fixtures/` at the repository root. A Go test and a Rust
-test read the same files: the Rust side in `crates/*/tests/shared_fixtures.rs`,
-`crates/rc2fx-core/tests/image_check_fixtures.rs`, and
-`crates/rc2fx-device/tests/xtask_tuf_fixtures.rs`, the Go side in the matching
-package's tests. Each side checks its own direction: Rust checks what the mixer
+framing, delta payloads, release metadata, the image check list, the
+payload's file lists, the gate's shape) has cases in `fixtures/` at the
+repository root. A Go test and a Rust test read the same files: the Rust side
+in `crates/*/tests/shared_fixtures.rs`,
+`crates/rc2fx-core/tests/image_check_fixtures.rs`,
+`crates/rc2fx-core/tests/gate_fixtures.rs`,
+`crates/rc2fx-device/tests/xtask_tuf_fixtures.rs`, and the payload list test in
+`crates/rc2fx-device/src/mixer_update/tests.rs`, the Go side in the matching
+package's tests. The gate's shape is exact except where a value takes a power:
+Go's `math.Pow` is not glibc's `pow`, so those may be up to two ulps apart. Each side checks its own direction: Rust checks what the mixer
 writes and the verdicts on what it reads, and Go does the same for the
 desktop, so a case only the other side reads is left to that side. When you
 change shared behavior, change both copies and add the case to `fixtures/`, so
@@ -104,15 +108,14 @@ GOOS=darwin CGO_ENABLED=0 go vet $nocgo
 
 | Tag | Effect | In the Rust app (removed in 89296ea) |
 | --- | --- | --- |
-| `rc2fxdebug` | The telemetry preview (`rc2fx --telemetry-preview`) | `debug_assertions` |
-| `rc2fxdev` | Mixer releases from a local folder (`RC2FX_DEV_MIXER_REPOSITORY`) | a debug build |
+| `rc2fxdev` | Development builds: mixer releases from a local folder (`RC2FX_DEV_MIXER_REPOSITORY`), the telemetry preview (`rc2fx --telemetry-preview`), the flash autopilot, flow fixtures, and the storage fix's debug log | a debug build (`debug_assertions`) |
 | `mockmixer` | The simulated mixer in place of USB 1 | the `mock-mixer` feature |
-| `embedded` | The mixer payload staged by `installer/embed/cmd/stage-payload`, compiled in | the `embedded` feature |
+| `embedded` | The mixer payload staged by `cmd/stage-payload`, compiled in | the `embedded` feature |
 | `velopack` | Self-update through Velopack's C library. Without it the app cannot update itself, ignores Velopack's install hooks, and accepts `RC2FX_DEV_UPDATE`. | always on |
 
-`./xtask app` builds with `rc2fxdebug,rc2fxdev` unless given `--release`, and
+`./xtask app` builds with `rc2fxdev` unless given `--release`, and
 packaging builds with `velopack` (and `embedded` with `--embedded`) and refuses
-an executable built with `mockmixer`, `rc2fxdev`, or `rc2fxdebug`.
+an executable built with `mockmixer` or `rc2fxdev`.
 
 ## Tests
 

@@ -15,18 +15,15 @@ differ.
 
 ## Enabling it
 
-When the installer is idle, it shows an **Allow experimental Duo flashing**
-switch above Developer options. The setting is stored as
-`experimentalDuoFlash` in the app's `view.json`. It defaults to off, and a
-missing or malformed value is treated as off
-(`desktop/app/prefs.go`).
+With a Duo connected, the first-run screen and the install task show a
+**RC2FX is untested on the Duo. Install anyway.** switch, and the install
+button waits for it. The setting is stored as `experimentalDuoFlash` in the
+app's `view.json`. It defaults to off, and a missing or malformed value is
+treated as off (`desktop/app/state/prefs.go`). The switch
+cannot be changed while a run is in progress.
 
 With the switch on and a Duo connected:
 
-- Each run, and each retry before the flash step, shows `DuoWarning`
-  (`desktop/installer/installer.go`) and asks for **Flash Duo at my own
-  risk**. The confirmation is canceled if the model, serial, or release
-  changes while the question is open.
 - For RC2FX, the installer offers only the two pinned official Duo archives,
   1.7.7 and 1.7.6. Stock firmware comes from RØDE's Duo manifest,
   `rcp2-mini-manifest.json`. It never offers Pro II images for a Duo.
@@ -172,7 +169,7 @@ To check an official archive without extracting it:
 
 ```sh
 for v in 1.7.6 1.7.7; do
-  go -C desktop run ./installer/cmd/inspect-firmware \
+  go -C desktop run ./cmd/inspect-firmware \
     rodecaster-duo "$PWD/.deps/duo-investigation/duo-$v-os.tar.gz"
 done
 ```

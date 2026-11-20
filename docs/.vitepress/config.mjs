@@ -106,6 +106,7 @@ export default defineConfig({
           { text: 'Architecture', link: '/developer/architecture' },
           { text: 'The desktop app in Go', link: '/developer/desktop-go' },
           { text: 'Releases', link: '/developer/releases' },
+          { text: 'Signed mixer releases', link: '/developer/mixer-releases' },
           { text: 'Update history', link: '/developer/update-history' },
         ],
       },

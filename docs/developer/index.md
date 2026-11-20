@@ -77,6 +77,8 @@ mixer side is Rust; the desktop app is the Go module in `desktop/`.
 - [The desktop app in Go](desktop-go.md): the Go packages, naming, strict
   JSON, and the fixtures shared with the Rust crates.
 - [Releases](releases.md): cutting a release.
+- [Signed mixer releases](mixer-releases.md): mixer releases published apart
+  from the app, compatibility declarations, and in-place updates.
 - [Update histories and the feed](update-history.md): the generated app and
   mixer histories and `updates.json`.
 

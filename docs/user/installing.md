@@ -7,7 +7,7 @@ on. Installing, updating, and repairing all use the same process.
 
 When the app finds a mixer without RC2FX, it offers **Install RC2FX**. On a
 mixer that already runs RC2FX, open the installer from **Settings › Mixer ›
-Open installer**.
+Update RC2FX**.
 
 ## Before you start
 
@@ -84,18 +84,17 @@ RC2FX can be flashed onto a RØDECaster Duo, but it has not been tested on a
 real Duo. Flashing or recovery could fail and leave the mixer unusable, and
 the audio could be wrong or loud. Only try it if you accept that risk.
 
-Duo flashing is off by default. To enable it, turn on **Allow experimental
-Duo flashing** in the installer. The app remembers this setting on the
-computer. Every Duo flash still shows a warning and asks you to confirm with
-**Flash Duo at my own risk**.
+Duo flashing is off by default. With a Duo connected, turn on **RC2FX is
+untested on the Duo. Install anyway.** on the first-run screen or install task.
+The app remembers this setting on the computer.
 
 - The installer offers only official Duo firmware (1.7.6 and 1.7.7) for a
   Duo.
 - Back up your RØDE show and unplug headphones and speakers before flashing.
 - Leave the mixer alone after the flash while it updates and restarts.
 - Turning the setting off blocks future Duo flashes but leaves RC2FX on a Duo
-  that already has it. To remove it, use **Flash stock firmware…** with
-  the setting still on.
+  that already has it. To remove it, use **Remove RC2FX** under **Settings ›
+  Mixer** with the setting still on.
 
 The [Duo reference](../reference/duo.md) lists the channels RC2FX supports on
 a Duo.
@@ -121,6 +120,5 @@ folder:
 
 ## Testing status
 
-The installer has flashed a real Pro II from Windows and macOS, and RC2FX
-started afterwards with its settings on Windows. Flashing from Linux has not
-been tested on hardware, and no Duo has been flashed.
+The installer has flashed a real Pro II from Windows, Linux, and macOS, and
+RC2FX started afterwards with its settings. No Duo has been flashed.
