@@ -59,7 +59,23 @@ fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
 
 impl Rig {
     fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = {
+            let d = tempfile::tempdir().unwrap();
+            if d.path()
+                .join("run/control.sock")
+                .as_os_str()
+                .as_encoded_bytes()
+                .len()
+                <= 103
+            {
+                d
+            } else {
+                tempfile::Builder::new()
+                    .prefix("rc2fx-")
+                    .tempdir_in("/tmp")
+                    .unwrap()
+            }
+        };
         let root = dir.path().to_owned();
         fs::create_dir(root.join("run")).unwrap();
         let script = SCRIPT.replace("ROOT", &root.display().to_string());

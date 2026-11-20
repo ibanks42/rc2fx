@@ -3,11 +3,11 @@
 package helper
 
 import (
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -137,11 +137,12 @@ func TestEscapingSymlinksAndSpecialFilesAreRejected(t *testing.T) {
 		t.Fatal("an escaping link")
 	}
 	os.Remove(filepath.Join(root, "usr/lib/escape"))
-	socket, err := net.Listen("unix", filepath.Join(root, "socket"))
-	if err != nil {
+	// Create the socket inode with mknod(2) rather than net.Listen so the
+	// test is not bound by Linux's 108-byte sockaddr_un.sun_path limit under
+	// long TMPDIR paths. Unprivileged S_IFSOCK creation is permitted on Linux.
+	if err := syscall.Mknod(filepath.Join(root, "socket"), syscall.S_IFSOCK|0o600, 0); err != nil {
 		t.Fatal(err)
 	}
-	defer socket.Close()
 	if _, guard, err := prepare(exe, &root); err == nil {
 		guard.Remove()
 		t.Fatal("a socket")

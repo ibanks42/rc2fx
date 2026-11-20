@@ -68,11 +68,20 @@ mod tests {
     impl Peer {
         fn new(steps: Vec<Step>) -> Self {
             let session = Session::local().unwrap();
-            let directory = std::env::temp_dir().join(format!(
-                "rc2fx-control-save-{}-{}",
-                std::process::id(),
-                session.nonce
-            ));
+            let name = format!("rc2fx-save-{}-{}", std::process::id(), &session.nonce[..12]);
+            let base = std::env::temp_dir();
+            let directory = if base
+                .join(&name)
+                .join("s")
+                .as_os_str()
+                .as_encoded_bytes()
+                .len()
+                <= 103
+            {
+                base.join(&name)
+            } else {
+                std::path::Path::new("/tmp").join(&name)
+            };
             fs::DirBuilder::new()
                 .mode(0o700)
                 .create(&directory)

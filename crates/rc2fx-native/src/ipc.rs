@@ -761,11 +761,21 @@ mod tests {
     struct Folder(PathBuf);
     impl Folder {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "rc2fx-native-ipc-{}-{}",
-                std::process::id(),
-                Session::local().unwrap().nonce
-            ));
+            let nonce = Session::local().unwrap().nonce;
+            let name = format!("rc2fx-ipc-{}-{}", std::process::id(), &nonce[..12]);
+            let base = std::env::temp_dir();
+            let path = if base
+                .join(&name)
+                .join("control.sock")
+                .as_os_str()
+                .as_encoded_bytes()
+                .len()
+                <= 103
+            {
+                base.join(&name)
+            } else {
+                std::path::Path::new("/tmp").join(&name)
+            };
             fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
             Self(path)
         }

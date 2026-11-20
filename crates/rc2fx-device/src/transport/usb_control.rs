@@ -1197,7 +1197,7 @@ mod socket_file_tests {
 
     #[test]
     fn only_the_socket_this_daemon_bound_is_removed() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::socket_tempdir("usb.sock");
         let path = dir.path().join("usb.sock");
 
         let socket = UnixDatagram::bind(&path).unwrap();

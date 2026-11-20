@@ -139,7 +139,7 @@ struct Peer {
 }
 impl Peer {
     fn new(config: &Config) -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::socket_tempdir("control.sock");
         let socket = UnixDatagram::bind(directory.path().join("control.sock")).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_millis(100)))

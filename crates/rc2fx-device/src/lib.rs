@@ -20,3 +20,17 @@ pub(crate) use storage::persistence;
 pub use storage::store;
 pub(crate) use transport::usb;
 pub use transport::usb_control;
+
+#[cfg(test)]
+pub(crate) fn socket_tempdir(leaf: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    // Linux sockaddr_un.sun_path holds at most 108 bytes including NUL,
+    // and rc2fx-native enforces <= 103 bytes.
+    if dir.path().join(leaf).as_os_str().as_encoded_bytes().len() <= 103 {
+        return dir;
+    }
+    tempfile::Builder::new()
+        .prefix("rc2fx-")
+        .tempdir_in("/tmp")
+        .unwrap()
+}

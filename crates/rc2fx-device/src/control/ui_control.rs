@@ -379,7 +379,7 @@ mod tests {
     }
     #[tokio::test]
     async fn actual_socket_shares_owner_and_revision_conflicts() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::socket_tempdir("delayed.sock");
         let data = directory.path().join("data");
         let socket = directory.path().join("ui.sock");
         let (handle, owner) = Coordinator::new(Controller::new(
@@ -469,7 +469,7 @@ mod tests {
     #[ignore = "exercises out-of-tree experiments/device-panel/client_test.c"]
     async fn actual_c_client_presets_conflicts_and_delayed_mutation_reply() {
         use std::io::{Read, Write};
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::socket_tempdir("delayed.sock");
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
