@@ -650,7 +650,9 @@ EXPORT void la_preinit(uintptr_t *cookie) {
         char refused[96];
         int n = snprintf(refused, sizeof refused, "RC2FX GUI pacing: pid %d executable not admitted; inactive\n",
                          (int)getpid());
-        if (n > 0 && (size_t)n < sizeof refused) (void)write(STDERR_FILENO, refused, (size_t)n);
+        if (n > 0 && (size_t)n < sizeof refused && write(STDERR_FILENO, refused, (size_t)n) < 0) {
+            /* Best effort: with stderr gone there is nobody left to tell. */
+        }
         return;
     }
 #endif
@@ -663,7 +665,9 @@ EXPORT void la_preinit(uintptr_t *cookie) {
         char refused[96];
         int n = snprintf(refused, sizeof refused, "RC2FX GUI pacing: pid %d GUI errno unresolved; inactive\n",
                          (int)getpid());
-        if (n > 0 && (size_t)n < sizeof refused) (void)write(STDERR_FILENO, refused, (size_t)n);
+        if (n > 0 && (size_t)n < sizeof refused && write(STDERR_FILENO, refused, (size_t)n) < 0) {
+            /* Best effort: with stderr gone there is nobody left to tell. */
+        }
         return;
     }
     memcpy(&vendor_errno, &errno_symbol, sizeof vendor_errno);

@@ -2,10 +2,12 @@
 """Writes fixtures/gate/shapes.json: GateShape::for_strength at a spread of
 strengths, each field as its IEEE 754 bits in hex, so the Rust crate
 (crates/rc2fx-core/tests/gate_fixtures.rs) and the desktop's Go
-(desktop/core/gate_fixtures_test.go) are held to the same values bit for bit.
+(desktop/core/gate_fixtures_test.go) are held to the same values.
 
 Python's math.pow and math.log2 are glibc's, as Rust's powf and log2 are on
-Linux. Run it from anywhere; it rewrites the file next to it.
+Linux. glibc versions can differ in pow's last bit, so both tests allow two
+ulps on the fields that take a power; the rest must match exactly. Run it from
+anywhere; it rewrites the file next to it.
 """
 import json
 import math

@@ -2,7 +2,7 @@ package core
 
 // The shared gate shapes in fixtures/gate. The Rust crate
 // (crates/rc2fx-core/tests/gate_fixtures.rs) checks GateShape::for_strength
-// against the same file bit for bit. fixtures/gate/generate.py writes it.
+// against the same file. fixtures/gate/generate.py writes it.
 //
 // Go's math.Pow is not glibc's pow: the two fields that take a power
 // (reduction and release) may land up to two ulps from the mixer's. Every other
