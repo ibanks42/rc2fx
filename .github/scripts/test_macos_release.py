@@ -37,7 +37,7 @@ def raw_zip(entries):
     raw = io.BytesIO()
     with zipfile.ZipFile(raw, "w") as package:
         for name, data in entries:
-            package.writestr(name, data)
+            package.writestr(zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0)), data)
     return raw.getvalue()
 
 
