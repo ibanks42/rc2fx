@@ -17,7 +17,7 @@ func equalValues(a, b reflect.Value) bool {
 	if a.Type() != b.Type() {
 		return false
 	}
-	if a.Type() == valueType && a.CanInterface() && b.CanInterface() {
+	if a.Type() == reflect.TypeFor[Value]() && a.CanInterface() && b.CanInterface() {
 		return a.Interface().(Value).Equal(b.Interface().(Value))
 	}
 	switch a.Kind() {

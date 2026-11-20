@@ -1,7 +1,9 @@
-package core
+package sjson
 
 import (
+	"bytes"
 	"encoding"
+	"encoding/json"
 	"reflect"
 	"strconv"
 	"strings"
@@ -25,7 +27,7 @@ import (
 //   - a type whose pointer implements encoding.TextUnmarshaler is read from a
 //     JSON string (the enums use this to reject unknown variants);
 //   - a type whose pointer implements StrictUnmarshaler decodes itself;
-//   - Value fields take any JSON.
+//   - Tree fields take any JSON.
 //
 // The `omitempty` option affects encoding only: the field is left out when it
 // is a nil pointer, its zero value, or has an IsEmpty() method returning true
@@ -33,7 +35,7 @@ import (
 
 // StrictUnmarshaler lets a type decode itself from a strictly parsed tree.
 type StrictUnmarshaler interface {
-	UnmarshalStrictJSON(Value) error
+	UnmarshalStrictJSON(Tree) error
 }
 
 // UnknownJSONFieldsAllowed marks a struct whose unknown fields are ignored
@@ -54,7 +56,7 @@ func DecodeStrictLimited(data []byte, maximumBytes, maximumNodes int, out any) e
 	if err != nil {
 		return err
 	}
-	return DecodeValue(tree, out)
+	return DecodeTree(tree, out)
 }
 
 // FromJSON is rc2fx_core::from_json: rejects duplicate keys at every depth,
@@ -72,7 +74,7 @@ func FromJSONLimited[T any](text string, maximumBytes, maximumNodes int) (T, err
 	if err != nil {
 		return out, err
 	}
-	err = DecodeValue(tree, &out)
+	err = DecodeTree(tree, &out)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -80,30 +82,46 @@ func FromJSONLimited[T any](text string, maximumBytes, maximumNodes int) (T, err
 	return out, nil
 }
 
-// DecodeValue is serde_json::from_value with the strict rules above.
-func DecodeValue(tree Value, out any) error {
+// DecodeTree is serde_json::from_value with the strict rules above.
+func DecodeTree(tree Tree, out any) error {
 	target := reflect.ValueOf(out)
 	if target.Kind() != reflect.Pointer || target.IsNil() {
-		return CoreError("JSON decode target must be a non-nil pointer")
+		return Error("JSON decode target must be a non-nil pointer")
 	}
-	return decodeInto(tree, target.Elem())
+	return decodeInto(tree, target.Elem(), true)
 }
 
 var (
-	valueType             = reflect.TypeFor[Value]()
+	treeType              = reflect.TypeFor[Tree]()
 	strictUnmarshalerType = reflect.TypeFor[StrictUnmarshaler]()
+	jsonUnmarshalerType   = reflect.TypeFor[json.Unmarshaler]()
 	textUnmarshalerType   = reflect.TypeFor[encoding.TextUnmarshaler]()
 	allowUnknownType      = reflect.TypeFor[UnknownJSONFieldsAllowed]()
 )
 
-func decodeInto(tree Value, target reflect.Value) error {
+func decodeInto(tree Tree, target reflect.Value, strictMode bool) error {
 	t := target.Type()
-	if t == valueType {
+	if t == treeType {
 		target.Set(reflect.ValueOf(tree))
+		return nil
+	}
+	if t == rawMessageType {
+		if len(tree.raw) > 0 {
+			target.SetBytes(bytes.Clone(tree.raw))
+		} else {
+			target.SetBytes(appendTreeJSON(nil, tree, nil))
+		}
 		return nil
 	}
 	if reflect.PointerTo(t).Implements(strictUnmarshalerType) {
 		return target.Addr().Interface().(StrictUnmarshaler).UnmarshalStrictJSON(tree)
+	}
+	if !strictMode && target.CanAddr() && reflect.PointerTo(t).Implements(jsonUnmarshalerType) {
+		raw := tree.raw
+		if len(raw) == 0 {
+			raw = appendTreeJSON(nil, tree, nil)
+		}
+		return target.Addr().Interface().(json.Unmarshaler).UnmarshalJSON(raw)
 	}
 	if t.Kind() != reflect.Pointer && reflect.PointerTo(t).Implements(textUnmarshalerType) {
 		text, ok := tree.AsString()
@@ -114,12 +132,12 @@ func decodeInto(tree Value, target reflect.Value) error {
 	}
 	switch t.Kind() {
 	case reflect.Pointer:
-		if tree.kind == ValueNull {
+		if tree.kind == KindNull {
 			target.SetZero()
 			return nil
 		}
 		fresh := reflect.New(t.Elem())
-		if err := decodeInto(tree, fresh.Elem()); err != nil {
+		if err := decodeInto(tree, fresh.Elem(), strictMode); err != nil {
 			return err
 		}
 		target.Set(fresh)
@@ -128,7 +146,16 @@ func decodeInto(tree Value, target reflect.Value) error {
 		if t.NumMethod() != 0 {
 			break
 		}
-		target.Set(reflect.ValueOf(tree))
+		if strictMode {
+			target.Set(reflect.ValueOf(tree))
+		} else {
+			g := toGeneric(tree)
+			if g == nil {
+				target.SetZero()
+			} else {
+				target.Set(reflect.ValueOf(g))
+			}
+		}
 		return nil
 	case reflect.Bool:
 		value, ok := tree.AsBool()
@@ -149,7 +176,7 @@ func decodeInto(tree Value, target reflect.Value) error {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return decodeUnsigned(tree, target)
 	case reflect.Float32, reflect.Float64:
-		if tree.kind != ValueNumber {
+		if tree.kind != KindNumber {
 			return invalidType(tree, rustTypeName(t))
 		}
 		target.SetFloat(tree.number.AsF64())
@@ -161,7 +188,7 @@ func decodeInto(tree Value, target reflect.Value) error {
 		}
 		slice := reflect.MakeSlice(t, len(items), len(items))
 		for i, item := range items {
-			if err := decodeInto(item, slice.Index(i)); err != nil {
+			if err := decodeInto(item, slice.Index(i), strictMode); err != nil {
 				return err
 			}
 		}
@@ -173,13 +200,13 @@ func decodeInto(tree Value, target reflect.Value) error {
 			return invalidType(tree, "an array of length "+strconv.Itoa(t.Len()))
 		}
 		if len(items) < t.Len() {
-			return CoreError("invalid length " + strconv.Itoa(len(items)) + ", expected an array of length " + strconv.Itoa(t.Len()))
+			return Error("invalid length " + strconv.Itoa(len(items)) + ", expected an array of length " + strconv.Itoa(t.Len()))
 		}
 		if len(items) > t.Len() {
-			return CoreError("invalid length " + strconv.Itoa(len(items)) + ", expected fewer elements in array")
+			return Error("invalid length " + strconv.Itoa(len(items)) + ", expected fewer elements in array")
 		}
 		for i, item := range items {
-			if err := decodeInto(item, target.Index(i)); err != nil {
+			if err := decodeInto(item, target.Index(i), strictMode); err != nil {
 				return err
 			}
 		}
@@ -195,7 +222,7 @@ func decodeInto(tree Value, target reflect.Value) error {
 		mapping := reflect.MakeMapWithSize(t, len(members))
 		for _, member := range members {
 			item := reflect.New(t.Elem()).Elem()
-			if err := decodeInto(member.Value, item); err != nil {
+			if err := decodeInto(member.Value, item, strictMode); err != nil {
 				return err
 			}
 			key := reflect.New(t.Key()).Elem()
@@ -205,14 +232,14 @@ func decodeInto(tree Value, target reflect.Value) error {
 		target.Set(mapping)
 		return nil
 	case reflect.Struct:
-		return decodeStruct(tree, target)
+		return decodeStruct(tree, target, strictMode)
 	}
-	return CoreError("JSON cannot be decoded into " + t.String())
+	return Error("JSON cannot be decoded into " + t.String())
 }
 
-func decodeSigned(tree Value, target reflect.Value) error {
+func decodeSigned(tree Tree, target reflect.Value) error {
 	t := target.Type()
-	if tree.kind != ValueNumber {
+	if tree.kind != KindNumber {
 		return invalidType(tree, rustTypeName(t))
 	}
 	bits := t.Bits()
@@ -235,9 +262,9 @@ func decodeSigned(tree Value, target reflect.Value) error {
 	return nil
 }
 
-func decodeUnsigned(tree Value, target reflect.Value) error {
+func decodeUnsigned(tree Tree, target reflect.Value) error {
 	t := target.Type()
-	if tree.kind != ValueNumber {
+	if tree.kind != KindNumber {
 		return invalidType(tree, rustTypeName(t))
 	}
 	switch tree.number.kind {
@@ -268,6 +295,8 @@ type structInfo struct {
 	fields       []fieldInfo
 	byName       map[string]int
 	allowUnknown bool
+	denyUnknown  bool
+	defaults     bool
 }
 
 var structInfos sync.Map // reflect.Type -> *structInfo
@@ -283,6 +312,17 @@ func structInfoFor(t reflect.Type) *structInfo {
 	}
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		if field.Name == "_" {
+			for option := range strings.SplitSeq(field.Tag.Get("serde"), ",") {
+				switch option {
+				case "default":
+					info.defaults = true
+				case "deny_unknown_fields":
+					info.denyUnknown = true
+				}
+			}
+			continue
+		}
 		if !field.IsExported() {
 			continue
 		}
@@ -312,7 +352,7 @@ func structInfoFor(t reflect.Type) *structInfo {
 	return actual.(*structInfo)
 }
 
-func decodeStruct(tree Value, target reflect.Value) error {
+func decodeStruct(tree Tree, target reflect.Value, strictMode bool) error {
 	t := target.Type()
 	info := structInfoFor(t)
 	members, ok := tree.AsObject()
@@ -326,19 +366,23 @@ func decodeStruct(tree Value, target reflect.Value) error {
 	} else {
 		seen = make([]bool, len(info.fields))
 	}
+	deny := info.denyUnknown || (strictMode && !info.allowUnknown)
 	for _, member := range members {
 		index, known := info.byName[member.Key]
 		if !known {
-			if info.allowUnknown {
+			if !deny {
 				continue
 			}
 			return unknownField(member.Key, info)
 		}
+		if seen[index] {
+			return Error("duplicate field `" + member.Key + "`")
+		}
 		field := info.fields[index]
-		if field.nonNull && member.Value.kind == ValueNull {
+		if field.nonNull && member.Value.kind == KindNull {
 			return invalidType(member.Value, "a sequence")
 		}
-		if err := decodeInto(member.Value, target.Field(field.index)); err != nil {
+		if err := decodeInto(member.Value, target.Field(field.index), strictMode); err != nil {
 			return err
 		}
 		seen[index] = true
@@ -347,8 +391,8 @@ func decodeStruct(tree Value, target reflect.Value) error {
 		if seen[index] {
 			continue
 		}
-		if !field.optional {
-			return CoreError("missing field `" + field.name + "`")
+		if !field.optional && !info.defaults {
+			return Error("missing field `" + field.name + "`")
 		}
 		target.Field(field.index).SetZero()
 	}
@@ -373,40 +417,40 @@ func unknownField(name string, info *structInfo) error {
 			message += "`" + field.name + "`"
 		}
 	}
-	return CoreError(message)
+	return Error(message)
 }
 
 // unexpected is serde's description of the value that did not fit.
-func unexpected(tree Value) string {
+func unexpected(tree Tree) string {
 	switch tree.kind {
-	case ValueNull:
+	case KindNull:
 		return "null"
-	case ValueBool:
+	case KindBool:
 		if tree.boolean {
 			return "boolean `true`"
 		}
 		return "boolean `false`"
-	case ValueNumber:
+	case KindNumber:
 		switch tree.number.kind {
 		case numberF64:
 			return "floating point `" + tree.number.String() + "`"
 		default:
 			return "integer `" + tree.number.String() + "`"
 		}
-	case ValueString:
+	case KindString:
 		return "string " + strconv.Quote(tree.text)
-	case ValueArray:
+	case KindArray:
 		return "sequence"
 	}
 	return "map"
 }
 
-func invalidType(tree Value, expected string) error {
-	return CoreError("invalid type: " + unexpected(tree) + ", expected " + expected)
+func invalidType(tree Tree, expected string) error {
+	return Error("invalid type: " + unexpected(tree) + ", expected " + expected)
 }
 
-func invalidValue(tree Value, expected string) error {
-	return CoreError("invalid value: " + unexpected(tree) + ", expected " + expected)
+func invalidValue(tree Tree, expected string) error {
+	return Error("invalid value: " + unexpected(tree) + ", expected " + expected)
 }
 
 func rustTypeName(t reflect.Type) string {
@@ -463,5 +507,5 @@ func enumUnmarshal[T ~string](target *T, text []byte, variants []T) error {
 			message += "`" + string(variant) + "`"
 		}
 	}
-	return CoreError(message)
+	return Error(message)
 }

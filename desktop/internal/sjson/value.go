@@ -1,4 +1,4 @@
-package core
+package sjson
 
 import (
 	"math"
@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-// ValueKind is the type of a JSON Value.
-type ValueKind uint8
+// Kind is the type of a JSON Tree.
+type Kind uint8
 
 const (
-	ValueNull ValueKind = iota
-	ValueBool
-	ValueNumber
-	ValueString
-	ValueArray
-	ValueObject
+	KindNull Kind = iota
+	KindBool
+	KindNumber
+	KindString
+	KindArray
+	KindObject
 )
 
 type numberKind uint8
@@ -85,58 +85,68 @@ func (n Number) appendJSON(dst []byte) []byte {
 // Member is one entry of a JSON object, in document order.
 type Member struct {
 	Key   string
-	Value Value
+	Value Tree
 }
 
-// Value is an untyped JSON tree, the port of serde_json::Value. Objects keep
+// Error is a strict JSON parse, decode, or encode failure.
+type Error string
+
+func (e Error) Error() string { return string(e) }
+
+// Tree is an untyped JSON tree, the port of serde_json::Value. Objects keep
 // their members in document (insertion) order; the strict parser never
-// produces duplicate keys. The zero Value is null.
-type Value struct {
-	kind    ValueKind
+// produces duplicate keys. The zero Tree is null.
+type Tree struct {
+	kind    Kind
 	boolean bool
 	number  Number
 	text    string
-	items   []Value
+	items   []Tree
 	members []Member
+	raw     []byte
 }
 
-// NullValue is JSON null.
-func NullValue() Value { return Value{} }
+// Raw returns the original JSON slice this node was parsed from, or nil for
+// programmatically constructed trees.
+func (v Tree) Raw() []byte { return v.raw }
 
-// BoolValue is true or false.
-func BoolValue(value bool) Value { return Value{kind: ValueBool, boolean: value} }
+// NullTree is JSON null.
+func NullTree() Tree { return Tree{} }
 
-// StringValue is a JSON string.
-func StringValue(value string) Value { return Value{kind: ValueString, text: value} }
+// BoolTree is true or false.
+func BoolTree(value bool) Tree { return Tree{kind: KindBool, boolean: value} }
 
-// NumberValue wraps a Number.
-func NumberValue(value Number) Value { return Value{kind: ValueNumber, number: value} }
+// StringTree is a JSON string.
+func StringTree(value string) Tree { return Tree{kind: KindString, text: value} }
 
-// U64Value is a non-negative integer.
-func U64Value(value uint64) Value { return NumberValue(NumberFromU64(value)) }
+// NumberTree wraps a Number.
+func NumberTree(value Number) Tree { return Tree{kind: KindNumber, number: value} }
 
-// F64Value is a float; NaN and infinities become null, as in serde_json's
+// U64Tree is a non-negative integer.
+func U64Tree(value uint64) Tree { return NumberTree(NumberFromU64(value)) }
+
+// F64Tree is a float; NaN and infinities become null, as in serde_json's
 // `json!`.
-func F64Value(value float64) Value {
+func F64Tree(value float64) Tree {
 	n, ok := NumberFromF64(value)
 	if !ok {
-		return NullValue()
+		return NullTree()
 	}
-	return NumberValue(n)
+	return NumberTree(n)
 }
 
-// ArrayValue is a JSON array of the items given.
-func ArrayValue(items ...Value) Value {
+// ArrayTree is a JSON array of the items given.
+func ArrayTree(items ...Tree) Tree {
 	if items == nil {
-		items = []Value{}
+		items = []Tree{}
 	}
-	return Value{kind: ValueArray, items: items}
+	return Tree{kind: KindArray, items: items}
 }
 
-// ObjectValue is a JSON object of the members given, in order. Later
+// ObjectTree is a JSON object of the members given, in order. Later
 // duplicates replace earlier ones.
-func ObjectValue(members ...Member) Value {
-	object := Value{kind: ValueObject, members: []Member{}}
+func ObjectTree(members ...Member) Tree {
+	object := Tree{kind: KindObject, members: []Member{}}
 	for _, member := range members {
 		object.Set(member.Key, member.Value)
 	}
@@ -144,34 +154,34 @@ func ObjectValue(members ...Member) Value {
 }
 
 // Kind is the type of the value.
-func (v Value) Kind() ValueKind { return v.kind }
+func (v Tree) Kind() Kind { return v.kind }
 
 // IsNull reports JSON null.
-func (v Value) IsNull() bool { return v.kind == ValueNull }
+func (v Tree) IsNull() bool { return v.kind == KindNull }
 
 // IsString reports a JSON string.
-func (v Value) IsString() bool { return v.kind == ValueString }
+func (v Tree) IsString() bool { return v.kind == KindString }
 
 // AsBool is the boolean, if the value is one.
-func (v Value) AsBool() (bool, bool) { return v.boolean, v.kind == ValueBool }
+func (v Tree) AsBool() (bool, bool) { return v.boolean, v.kind == KindBool }
 
 // AsString is the string, if the value is one.
-func (v Value) AsString() (string, bool) { return v.text, v.kind == ValueString }
+func (v Tree) AsString() (string, bool) { return v.text, v.kind == KindString }
 
 // AsNumber is the number, if the value is one.
-func (v Value) AsNumber() (Number, bool) { return v.number, v.kind == ValueNumber }
+func (v Tree) AsNumber() (Number, bool) { return v.number, v.kind == KindNumber }
 
 // AsF64 is serde_json's as_f64: any number.
-func (v Value) AsF64() (float64, bool) {
-	if v.kind != ValueNumber {
+func (v Tree) AsF64() (float64, bool) {
+	if v.kind != KindNumber {
 		return 0, false
 	}
 	return v.number.AsF64(), true
 }
 
 // AsU64 is serde_json's as_u64: a non-negative integer.
-func (v Value) AsU64() (uint64, bool) {
-	if v.kind != ValueNumber {
+func (v Tree) AsU64() (uint64, bool) {
+	if v.kind != KindNumber {
 		return 0, false
 	}
 	return v.number.AsU64()
@@ -179,25 +189,25 @@ func (v Value) AsU64() (uint64, bool) {
 
 // AsArray is the array's items, if the value is an array. The slice aliases
 // the value.
-func (v Value) AsArray() ([]Value, bool) { return v.items, v.kind == ValueArray }
+func (v Tree) AsArray() ([]Tree, bool) { return v.items, v.kind == KindArray }
 
 // AsObject is the object's members in order, if the value is an object. The
 // slice aliases the value.
-func (v Value) AsObject() ([]Member, bool) { return v.members, v.kind == ValueObject }
+func (v Tree) AsObject() ([]Member, bool) { return v.members, v.kind == KindObject }
 
 // Len is the number of array items or object members, else 0.
-func (v Value) Len() int {
+func (v Tree) Len() int {
 	switch v.kind {
-	case ValueArray:
+	case KindArray:
 		return len(v.items)
-	case ValueObject:
+	case KindObject:
 		return len(v.members)
 	}
 	return 0
 }
 
 // Keys lists an object's keys in order.
-func (v Value) Keys() []string {
+func (v Tree) Keys() []string {
 	keys := make([]string, 0, len(v.members))
 	for _, member := range v.members {
 		keys = append(keys, member.Key)
@@ -206,29 +216,29 @@ func (v Value) Keys() []string {
 }
 
 // Get is an object member.
-func (v Value) Get(key string) (Value, bool) {
-	if v.kind != ValueObject {
-		return Value{}, false
+func (v Tree) Get(key string) (Tree, bool) {
+	if v.kind != KindObject {
+		return Tree{}, false
 	}
 	for _, member := range v.members {
 		if member.Key == key {
 			return member.Value, true
 		}
 	}
-	return Value{}, false
+	return Tree{}, false
 }
 
 // Index is an array item.
-func (v Value) Index(index int) (Value, bool) {
-	if v.kind != ValueArray || index < 0 || index >= len(v.items) {
-		return Value{}, false
+func (v Tree) Index(index int) (Tree, bool) {
+	if v.kind != KindArray || index < 0 || index >= len(v.items) {
+		return Tree{}, false
 	}
 	return v.items[index], true
 }
 
 // GetMut is a pointer to an object member, nil if absent.
-func (v *Value) GetMut(key string) *Value {
-	if v.kind != ValueObject {
+func (v *Tree) GetMut(key string) *Tree {
+	if v.kind != KindObject {
 		return nil
 	}
 	for i := range v.members {
@@ -240,8 +250,8 @@ func (v *Value) GetMut(key string) *Value {
 }
 
 // IndexMut is a pointer to an array item, nil if absent.
-func (v *Value) IndexMut(index int) *Value {
-	if v.kind != ValueArray || index < 0 || index >= len(v.items) {
+func (v *Tree) IndexMut(index int) *Tree {
+	if v.kind != KindArray || index < 0 || index >= len(v.items) {
 		return nil
 	}
 	return &v.items[index]
@@ -249,12 +259,12 @@ func (v *Value) IndexMut(index int) *Value {
 
 // Set replaces an object member in place or appends it. Null becomes an
 // empty object first, as with serde_json's IndexMut; any other kind panics.
-func (v *Value) Set(key string, value Value) {
-	if v.kind == ValueNull {
-		*v = Value{kind: ValueObject, members: []Member{}}
+func (v *Tree) Set(key string, value Tree) {
+	if v.kind == KindNull {
+		*v = Tree{kind: KindObject, members: []Member{}}
 	}
-	if v.kind != ValueObject {
-		panic("core.Value.Set on a JSON value that is not an object")
+	if v.kind != KindObject {
+		panic("sjson.Tree.Set on a JSON value that is not an object")
 	}
 	for i := range v.members {
 		if v.members[i].Key == key {
@@ -266,9 +276,9 @@ func (v *Value) Set(key string, value Value) {
 }
 
 // Remove deletes an object member, keeping the others in order.
-func (v *Value) Remove(key string) (Value, bool) {
-	if v.kind != ValueObject {
-		return Value{}, false
+func (v *Tree) Remove(key string) (Tree, bool) {
+	if v.kind != KindObject {
+		return Tree{}, false
 	}
 	for i := range v.members {
 		if v.members[i].Key == key {
@@ -277,13 +287,13 @@ func (v *Value) Remove(key string) (Value, bool) {
 			return removed, true
 		}
 	}
-	return Value{}, false
+	return Tree{}, false
 }
 
 // Push appends an array item. Any other kind panics.
-func (v *Value) Push(value Value) {
-	if v.kind != ValueArray {
-		panic("core.Value.Push on a JSON value that is not an array")
+func (v *Tree) Push(value Tree) {
+	if v.kind != KindArray {
+		panic("sjson.Tree.Push on a JSON value that is not an array")
 	}
 	v.items = append(v.items, value)
 }
@@ -291,7 +301,7 @@ func (v *Value) Push(value Value) {
 // Pointer resolves an RFC 6901 JSON pointer ("" is the value itself,
 // "/a/0/b~1c" walks object keys and array indices), the port of serde_json's
 // pointer_mut. Nil if the path does not exist. The result aliases v.
-func (v *Value) Pointer(pointer string) *Value {
+func (v *Tree) Pointer(pointer string) *Tree {
 	if pointer == "" {
 		return v
 	}
@@ -302,9 +312,9 @@ func (v *Value) Pointer(pointer string) *Value {
 	for _, token := range strings.Split(pointer[1:], "/") {
 		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
 		switch target.kind {
-		case ValueObject:
+		case KindObject:
 			target = target.GetMut(token)
-		case ValueArray:
+		case KindArray:
 			index, ok := pointerIndex(token)
 			if !ok {
 				return nil
@@ -332,15 +342,15 @@ func pointerIndex(token string) (int, bool) {
 }
 
 // Clone is a deep copy.
-func (v Value) Clone() Value {
+func (v Tree) Clone() Tree {
 	switch v.kind {
-	case ValueArray:
-		items := make([]Value, len(v.items))
+	case KindArray:
+		items := make([]Tree, len(v.items))
 		for i, item := range v.items {
 			items[i] = item.Clone()
 		}
 		v.items = items
-	case ValueObject:
+	case KindObject:
 		members := make([]Member, len(v.members))
 		for i, member := range v.members {
 			members[i] = Member{Key: member.Key, Value: member.Value.Clone()}
@@ -350,18 +360,18 @@ func (v Value) Clone() Value {
 	return v
 }
 
-// Equal is serde_json's Value equality: object member order does not
+// Equal is serde_json's Tree equality: object member order does not
 // matter, number kinds do (1 is not 1.0).
-func (v Value) Equal(other Value) bool {
+func (v Tree) Equal(other Tree) bool {
 	if v.kind != other.kind {
 		return false
 	}
 	switch v.kind {
-	case ValueNull:
+	case KindNull:
 		return true
-	case ValueBool:
+	case KindBool:
 		return v.boolean == other.boolean
-	case ValueNumber:
+	case KindNumber:
 		if v.number.kind != other.number.kind {
 			return false
 		}
@@ -369,9 +379,9 @@ func (v Value) Equal(other Value) bool {
 			return math.Float64frombits(v.number.bits) == math.Float64frombits(other.number.bits)
 		}
 		return v.number.bits == other.number.bits
-	case ValueString:
+	case KindString:
 		return v.text == other.text
-	case ValueArray:
+	case KindArray:
 		if len(v.items) != len(other.items) {
 			return false
 		}
@@ -381,7 +391,7 @@ func (v Value) Equal(other Value) bool {
 			}
 		}
 		return true
-	case ValueObject:
+	case KindObject:
 		if len(v.members) != len(other.members) {
 			return false
 		}
@@ -397,9 +407,9 @@ func (v Value) Equal(other Value) bool {
 }
 
 // String is the compact JSON text, serde_json's Display / to_string.
-func (v Value) String() string { return string(appendValueJSON(nil, v, nil)) }
+func (v Tree) String() string { return string(appendTreeJSON(nil, v, nil)) }
 
 // Pretty is serde_json's to_string_pretty: two-space indentation.
-func (v Value) Pretty() string {
-	return string(appendValueJSON(nil, v, &indenter{}))
+func (v Tree) Pretty() string {
+	return string(appendTreeJSON(nil, v, &indenter{}))
 }

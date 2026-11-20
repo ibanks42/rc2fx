@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 // anchorDirectory finds the helper's root-owned folder for the records. The

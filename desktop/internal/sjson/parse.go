@@ -1,4 +1,4 @@
-package core
+package sjson
 
 import (
 	"math"
@@ -24,7 +24,7 @@ const (
 )
 
 // ParseJSON parses with from_json's default limits.
-func ParseJSON(text string) (Value, error) {
+func ParseJSON(text string) (Tree, error) {
 	return ParseJSONLimited(text, DefaultMaxJSONBytes, DefaultMaxJSONNodes)
 }
 
@@ -32,42 +32,57 @@ func ParseJSON(text string) (Value, error) {
 // (rc2fx_core::strict_json::parse_with_limits), plus duplicate keys rejected
 // at every depth, at most maximumBytes of input, at most maximumNodes values
 // and nesting no deeper than MaxJSONDepth.
-func ParseJSONLimited(text string, maximumBytes, maximumNodes int) (Value, error) {
+func ParseJSONLimited(text string, maximumBytes, maximumNodes int) (Tree, error) {
 	return parseStrict([]byte(text), maximumBytes, maximumNodes)
 }
 
 // ParseJSONBytes is ParseJSONLimited for bytes; input that is not UTF-8 is
 // rejected.
-func ParseJSONBytes(data []byte, maximumBytes, maximumNodes int) (Value, error) {
+func ParseJSONBytes(data []byte, maximumBytes, maximumNodes int) (Tree, error) {
 	return parseStrict(data, maximumBytes, maximumNodes)
 }
 
-func parseStrict(data []byte, maximumBytes, maximumNodes int) (Value, error) {
-	return parseWithDepth(data, maximumBytes, maximumNodes, MaxJSONDepth)
+// SerdeRecursionLimit is serde_json's default nesting bound.
+const SerdeRecursionLimit = 128
+
+func parseStrict(data []byte, maximumBytes, maximumNodes int) (Tree, error) {
+	return parseWithOptions(data, maximumBytes, maximumNodes, MaxJSONDepth, false, errJSONTooDeep)
 }
 
-func parseWithDepth(data []byte, maximumBytes, maximumNodes, maximumDepth int) (Value, error) {
+func parseSerde(data []byte) (Tree, error) {
+	return parseWithOptions(data, math.MaxInt, math.MaxInt, SerdeRecursionLimit-1, true, "recursion limit exceeded")
+}
+
+func parseWithOptions(data []byte, maximumBytes, maximumNodes, maximumDepth int, allowDupKeys bool, depthErr string) (Tree, error) {
 	if len(data) > maximumBytes {
-		return Value{}, CoreError(errJSONTooLarge)
+		return Tree{}, Error(errJSONTooLarge)
 	}
-	p := parser{data: data, maxNodes: maximumNodes, maxDepth: maximumDepth}
+	p := parser{
+		data:         data,
+		maxNodes:     maximumNodes,
+		maxDepth:     maximumDepth,
+		allowDupKeys: allowDupKeys,
+		depthErr:     depthErr,
+	}
 	value, err := p.value(0)
 	if err != nil {
-		return Value{}, err
+		return Tree{}, err
 	}
 	p.skipSpace()
 	if p.pos < len(p.data) {
-		return Value{}, p.fail("trailing characters")
+		return Tree{}, p.fail("trailing characters")
 	}
 	return value, nil
 }
 
 type parser struct {
-	data     []byte
-	pos      int
-	nodes    int
-	maxNodes int
-	maxDepth int
+	data         []byte
+	pos          int
+	nodes        int
+	maxNodes     int
+	maxDepth     int
+	allowDupKeys bool
+	depthErr     string
 }
 
 // fail adds serde_json's position suffix: 1-based line, and the column of
@@ -89,7 +104,7 @@ func (p *parser) fail(message string) error {
 	if p.pos < len(p.data) {
 		column++
 	}
-	return CoreError(message + " at line " + strconv.Itoa(line) + " column " + strconv.Itoa(column))
+	return Error(message + " at line " + strconv.Itoa(line) + " column " + strconv.Itoa(column))
 }
 
 func (p *parser) skipSpace() {
@@ -103,43 +118,52 @@ func (p *parser) skipSpace() {
 	}
 }
 
-func (p *parser) value(depth int) (Value, error) {
+func (p *parser) value(depth int) (Tree, error) {
 	p.nodes++
 	if depth > p.maxDepth || p.nodes > p.maxNodes {
-		return Value{}, p.fail(errJSONTooDeep)
+		return Tree{}, p.fail(p.depthErr)
 	}
 	p.skipSpace()
 	if p.pos >= len(p.data) {
-		return Value{}, p.fail("EOF while parsing a value")
+		return Tree{}, p.fail("EOF while parsing a value")
 	}
+	start := p.pos
+	var out Tree
+	var err error
 	switch c := p.data[p.pos]; {
 	case c == 'n':
-		return Value{}, p.literal("null")
+		err = p.literal("null")
 	case c == 't':
-		return BoolValue(true), p.literal("true")
+		out, err = BoolTree(true), p.literal("true")
 	case c == 'f':
-		return BoolValue(false), p.literal("false")
+		out, err = BoolTree(false), p.literal("false")
 	case c == '"':
 		p.pos++
-		text, err := p.stringBody()
-		if err != nil {
-			return Value{}, err
+		var text string
+		text, err = p.stringBody()
+		if err == nil {
+			out = StringTree(text)
 		}
-		return StringValue(text), nil
 	case c == '-' || (c >= '0' && c <= '9'):
-		number, err := p.number()
-		if err != nil {
-			return Value{}, err
+		var number Number
+		number, err = p.number()
+		if err == nil {
+			out = NumberTree(number)
 		}
-		return NumberValue(number), nil
 	case c == '[':
 		p.pos++
-		return p.array(depth)
+		out, err = p.array(depth)
 	case c == '{':
 		p.pos++
-		return p.object(depth)
+		out, err = p.object(depth)
+	default:
+		return Tree{}, p.fail("expected value")
 	}
-	return Value{}, p.fail("expected value")
+	if err != nil {
+		return Tree{}, err
+	}
+	out.raw = p.data[start:p.pos]
+	return out, nil
 }
 
 func (p *parser) literal(word string) error {
@@ -158,45 +182,45 @@ func (p *parser) literal(word string) error {
 	return nil
 }
 
-func (p *parser) array(depth int) (Value, error) {
-	items := []Value{}
+func (p *parser) array(depth int) (Tree, error) {
+	items := []Tree{}
 	p.skipSpace()
 	if p.pos < len(p.data) && p.data[p.pos] == ']' {
 		p.pos++
-		return Value{kind: ValueArray, items: items}, nil
+		return Tree{kind: KindArray, items: items}, nil
 	}
 	for {
 		item, err := p.value(depth + 1)
 		if err != nil {
-			return Value{}, err
+			return Tree{}, err
 		}
 		items = append(items, item)
 		p.skipSpace()
 		if p.pos >= len(p.data) {
-			return Value{}, p.fail("EOF while parsing a list")
+			return Tree{}, p.fail("EOF while parsing a list")
 		}
 		switch p.data[p.pos] {
 		case ',':
 			p.pos++
 			p.skipSpace()
 			if p.pos < len(p.data) && p.data[p.pos] == ']' {
-				return Value{}, p.fail("trailing comma")
+				return Tree{}, p.fail("trailing comma")
 			}
 		case ']':
 			p.pos++
-			return Value{kind: ValueArray, items: items}, nil
+			return Tree{kind: KindArray, items: items}, nil
 		default:
-			return Value{}, p.fail("expected `,` or `]`")
+			return Tree{}, p.fail("expected `,` or `]`")
 		}
 	}
 }
 
-func (p *parser) object(depth int) (Value, error) {
+func (p *parser) object(depth int) (Tree, error) {
 	members := []Member{}
 	p.skipSpace()
 	if p.pos < len(p.data) && p.data[p.pos] == '}' {
 		p.pos++
-		return Value{kind: ValueObject, members: members}, nil
+		return Tree{kind: KindObject, members: members}, nil
 	}
 	// Keys stay live only for this object, so escaped duplicate spellings
 	// ("x" and "x") are still caught.
@@ -204,65 +228,67 @@ func (p *parser) object(depth int) (Value, error) {
 	for {
 		p.skipSpace()
 		if p.pos >= len(p.data) {
-			return Value{}, p.fail("EOF while parsing an object")
+			return Tree{}, p.fail("EOF while parsing an object")
 		}
 		if p.data[p.pos] != '"' {
 			if p.data[p.pos] == '}' {
-				return Value{}, p.fail("trailing comma")
+				return Tree{}, p.fail("trailing comma")
 			}
-			return Value{}, p.fail("key must be a string")
+			return Tree{}, p.fail("key must be a string")
 		}
 		p.pos++
 		key, err := p.stringBody()
 		if err != nil {
-			return Value{}, err
+			return Tree{}, err
 		}
-		duplicate := false
-		if len(members) < 8 && seen == nil {
-			for _, member := range members {
-				if member.Key == key {
-					duplicate = true
-					break
-				}
-			}
-		} else {
-			if seen == nil {
-				seen = make(map[string]struct{}, 16)
+		if !p.allowDupKeys {
+			duplicate := false
+			if len(members) < 8 && seen == nil {
 				for _, member := range members {
-					seen[member.Key] = struct{}{}
+					if member.Key == key {
+						duplicate = true
+						break
+					}
 				}
+			} else {
+				if seen == nil {
+					seen = make(map[string]struct{}, 16)
+					for _, member := range members {
+						seen[member.Key] = struct{}{}
+					}
+				}
+				_, duplicate = seen[key]
+				seen[key] = struct{}{}
 			}
-			_, duplicate = seen[key]
-			seen[key] = struct{}{}
-		}
-		if duplicate {
-			return Value{}, p.fail("Duplicate JSON key: " + key)
+			if duplicate {
+				return Tree{}, p.fail("Duplicate JSON key: " + key)
+			}
 		}
 		p.skipSpace()
 		if p.pos >= len(p.data) {
-			return Value{}, p.fail("EOF while parsing an object")
+			return Tree{}, p.fail("EOF while parsing an object")
 		}
 		if p.data[p.pos] != ':' {
-			return Value{}, p.fail("expected `:`")
+			return Tree{}, p.fail("expected `:`")
 		}
 		p.pos++
 		item, err := p.value(depth + 1)
 		if err != nil {
-			return Value{}, err
+			return Tree{}, err
 		}
 		members = append(members, Member{Key: key, Value: item})
 		p.skipSpace()
 		if p.pos >= len(p.data) {
-			return Value{}, p.fail("EOF while parsing an object")
+			return Tree{}, p.fail("EOF while parsing an object")
 		}
 		switch p.data[p.pos] {
 		case ',':
 			p.pos++
 		case '}':
 			p.pos++
-			return Value{kind: ValueObject, members: members}, nil
+			return Tree{kind: KindObject, members: members}, nil
 		default:
-			return Value{}, p.fail("expected `,` or `}`")
+			return Tree{}, p.fail("expected `,` or `}`")
 		}
 	}
 }
@@ -400,7 +426,7 @@ func (p *parser) unicodeEscape() (rune, error) {
 		if p.pos >= len(p.data) {
 			return 0, p.fail("EOF while parsing a string")
 		}
-		return 0, p.fail("unexpected end of hex escape")
+		return 0, p.fail("lone leading surrogate in hex escape")
 	}
 	p.pos += 2
 	second, err := p.hex4()

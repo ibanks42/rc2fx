@@ -1,4 +1,4 @@
-package core
+package sjson
 
 import (
 	"bytes"
@@ -36,8 +36,26 @@ func (in *indenter) newline(dst []byte) []byte {
 	return dst
 }
 
+// String writes a JSON string with serde_json's escaping.
+func String(s string) []byte {
+	return appendJSONString(nil, s)
+}
+
+// AppendString appends s as a JSON string with serde_json's escaping.
+func AppendString(dst []byte, s string) []byte {
+	return appendJSONString(dst, s)
+}
+
+// Marshal writes v as serde_json::to_vec does.
+func Marshal(v any) ([]byte, error) { return Encode(v) }
+
+// MarshalPretty writes v as serde_json::to_vec_pretty does.
+func MarshalPretty(v any) ([]byte, error) { return EncodePretty(v) }
+
 var (
 	rawMessageType    = reflect.TypeFor[json.RawMessage]()
+	jsonNumberType    = reflect.TypeFor[json.Number]()
+	jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
 	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
 	emptyCheckerType  = reflect.TypeFor[interface{ IsEmpty() bool }]()
 )
@@ -47,8 +65,8 @@ func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error
 		return append(dst, "null"...), nil
 	}
 	t := value.Type()
-	if t == valueType {
-		return appendValueJSON(dst, value.Interface().(Value), pretty), nil
+	if t == treeType {
+		return appendTreeJSON(dst, value.Interface().(Tree), pretty), nil
 	}
 	if t == rawMessageType {
 		// Already JSON, as a serde_json Value inside a typed struct: written
@@ -58,17 +76,41 @@ func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error
 			return append(dst, "null"...), nil
 		}
 		if pretty != nil {
-			tree, err := ParseJSONBytes(raw, len(raw), math.MaxInt)
+			tree, err := parseSerde(raw)
 			if err != nil {
 				return dst, err
 			}
-			return appendValueJSON(dst, tree, pretty), nil
+			return appendTreeJSON(dst, tree, pretty), nil
 		}
 		var buf bytes.Buffer
 		if err := json.Compact(&buf, raw); err != nil {
 			return dst, err
 		}
 		return append(dst, buf.Bytes()...), nil
+	}
+	if t == jsonNumberType {
+		return append(dst, value.String()...), nil
+	}
+	if t.Implements(jsonMarshalerType) && !(t.Kind() == reflect.Pointer && value.IsNil()) {
+		data, err := value.Interface().(json.Marshaler).MarshalJSON()
+		if err != nil {
+			return dst, err
+		}
+		if pretty != nil {
+			tree, err := parseSerde(data)
+			if err != nil {
+				return dst, err
+			}
+			return appendTreeJSON(dst, tree, pretty), nil
+		}
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, data); err != nil {
+			return dst, err
+		}
+		return append(dst, buf.Bytes()...), nil
+	}
+	if t.Kind() != reflect.Pointer && value.CanAddr() && value.Addr().Type().Implements(jsonMarshalerType) {
+		return appendAny(dst, value.Addr(), pretty)
 	}
 	if t.Kind() != reflect.String && t.Kind() != reflect.Pointer && t.Implements(textMarshalerType) {
 		text, err := value.Interface().(encoding.TextMarshaler).MarshalText()
@@ -184,7 +226,7 @@ func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error
 		}
 		return append(dst, '}'), nil
 	}
-	return dst, CoreError("JSON cannot encode " + t.String())
+	return dst, Error("JSON cannot encode " + t.String())
 }
 
 func beginMember(dst []byte, index int, key string, pretty *indenter) []byte {
@@ -211,17 +253,17 @@ func isEmptyField(value reflect.Value) bool {
 	return value.IsZero()
 }
 
-func appendValueJSON(dst []byte, value Value, pretty *indenter) []byte {
+func appendTreeJSON(dst []byte, value Tree, pretty *indenter) []byte {
 	switch value.kind {
-	case ValueNull:
+	case KindNull:
 		return append(dst, "null"...)
-	case ValueBool:
+	case KindBool:
 		return strconv.AppendBool(dst, value.boolean)
-	case ValueNumber:
+	case KindNumber:
 		return value.number.appendJSON(dst)
-	case ValueString:
+	case KindString:
 		return appendJSONString(dst, value.text)
-	case ValueArray:
+	case KindArray:
 		if len(value.items) == 0 {
 			return append(dst, "[]"...)
 		}
@@ -236,7 +278,7 @@ func appendValueJSON(dst []byte, value Value, pretty *indenter) []byte {
 			if pretty != nil {
 				dst = pretty.newline(dst)
 			}
-			dst = appendValueJSON(dst, item, pretty)
+			dst = appendTreeJSON(dst, item, pretty)
 		}
 		if pretty != nil {
 			pretty.depth--
@@ -253,7 +295,7 @@ func appendValueJSON(dst []byte, value Value, pretty *indenter) []byte {
 	}
 	for i, member := range value.members {
 		dst = beginMember(dst, i, member.Key, pretty)
-		dst = appendValueJSON(dst, member.Value, pretty)
+		dst = appendTreeJSON(dst, member.Value, pretty)
 	}
 	if pretty != nil {
 		pretty.depth--

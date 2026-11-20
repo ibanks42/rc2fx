@@ -16,8 +16,8 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/installer/platform"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 

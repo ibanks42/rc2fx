@@ -40,7 +40,7 @@ func toValue(t *testing.T, v any) Value {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := parseWithDepth(data, math.MaxInt, math.MaxInt, math.MaxInt)
+	value, err := ParseJSONBytes(data, math.MaxInt, math.MaxInt)
 	if err != nil {
 		t.Fatal(err)
 	}

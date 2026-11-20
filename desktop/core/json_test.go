@@ -34,7 +34,7 @@ func TestFloatsAreWrittenAsSerdeJSONWritesThem(t *testing.T) {
 		{math.NaN(), "null"},
 		{math.Inf(1), "null"},
 	} {
-		got := string(appendJSONFloat(nil, c.value, 64))
+		got := string(must(Encode(c.value)))
 		check(t, got == c.want, c.value, got, c.want)
 	}
 }

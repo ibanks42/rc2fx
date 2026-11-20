@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"math"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 // Untyped JSON is a json.RawMessage, its keys in the order they came. These
@@ -15,8 +15,7 @@ import (
 // and compact output escaped as the mixer's serde_json escapes it.
 
 // marshal encodes a typed value: core.Encode writes field order, floats and
-// escapes as the mixer's serde_json does. Never pass it a
-// json.RawMessage, which it would write as an array of bytes.
+// escapes as the mixer's serde_json does (including json.RawMessage values).
 func marshal(v any) (json.RawMessage, error) {
 	return core.Encode(v)
 }
@@ -30,33 +29,7 @@ func decode(value json.RawMessage, out any) error {
 
 // jsonString is s as a JSON string, escaped as serde_json escapes it.
 func jsonString(s string) json.RawMessage {
-	const hex = "0123456789abcdef"
-	out := make([]byte, 0, len(s)+2)
-	out = append(out, '"')
-	for _, r := range s {
-		switch {
-		case r == '"':
-			out = append(out, '\\', '"')
-		case r == '\\':
-			out = append(out, '\\', '\\')
-		case r == '\b':
-			out = append(out, '\\', 'b')
-		case r == '\f':
-			out = append(out, '\\', 'f')
-		case r == '\n':
-			out = append(out, '\\', 'n')
-		case r == '\r':
-			out = append(out, '\\', 'r')
-		case r == '\t':
-			out = append(out, '\\', 't')
-		case r < 0x20:
-			out = append(out, '\\', 'u', '0', '0', hex[r>>4], hex[r&0xf])
-		default:
-			// Invalid UTF-8 is written as U+FFFD.
-			out = utf8.AppendRune(out, r)
-		}
-	}
-	return append(out, '"')
+	return sjson.String(s)
 }
 
 func jsonUint(n uint64) json.RawMessage {

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 const volumeTotal = 283_189_248

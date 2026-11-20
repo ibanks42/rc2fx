@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 func TestDuoIsRecognizedButNeverOpenedOrFlashedWithoutOptIn(t *testing.T) {

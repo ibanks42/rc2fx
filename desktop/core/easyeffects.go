@@ -345,7 +345,7 @@ func readEqualizer(value Value) (easyEqualizer, error) {
 func bandsEqual(a, b []Band) bool { return deepEqual(a, b) }
 
 func readCandidates(text string) ([]easyCandidate, int, error) {
-	rootValue, err := parseStrict([]byte(strings.TrimPrefix(text, "\ufeff")), MaxFileBytes, DefaultMaxJSONNodes)
+	rootValue, err := ParseJSONBytes([]byte(strings.TrimPrefix(text, "\ufeff")), MaxFileBytes, DefaultMaxJSONNodes)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -578,13 +578,13 @@ func exportBand(band Band) Value {
 		mode = "APO (DR)"
 	}
 	return ObjectValue(
-		Member{"type", StringValue(easyTypeName(band.BandType))},
-		Member{"mode", StringValue(mode)},
-		Member{"solo", BoolValue(band.Solo)},
-		Member{"mute", BoolValue(!band.Enabled)},
-		Member{"gain", F64Value(band.Gain)},
-		Member{"frequency", F64Value(band.Frequency)},
-		Member{"q", F64Value(band.Q)},
+		Member{Key: "type", Value: StringValue(easyTypeName(band.BandType))},
+		Member{Key: "mode", Value: StringValue(mode)},
+		Member{Key: "solo", Value: BoolValue(band.Solo)},
+		Member{Key: "mute", Value: BoolValue(!band.Enabled)},
+		Member{Key: "gain", Value: F64Value(band.Gain)},
+		Member{Key: "frequency", Value: F64Value(band.Frequency)},
+		Member{Key: "q", Value: F64Value(band.Q)},
 	)
 }
 
@@ -613,23 +613,23 @@ func ExportEasyEffects(eq EQSettings, pipeline Pipeline) (string, error) {
 		return object
 	}
 	equalizer := ObjectValue(
-		Member{"bypass", BoolValue(!eq.Enabled)},
-		Member{"input-gain", F64Value(eq.InputGainDB)},
-		Member{"output-gain", F64Value(eq.OutputGainDB)},
-		Member{"mode", StringValue("IIR")},
-		Member{"decramp", StringValue("Off")},
-		Member{"split-channels", BoolValue(eq.RightBands != nil)},
-		Member{"balance", U64Value(0)},
-		Member{"pitch-left", U64Value(0)},
-		Member{"pitch-right", U64Value(0)},
-		Member{"num-bands", U64Value(uint64(count))},
-		Member{"left", channel(eq.Bands)},
-		Member{"right", channel(right)},
+		Member{Key: "bypass", Value: BoolValue(!eq.Enabled)},
+		Member{Key: "input-gain", Value: F64Value(eq.InputGainDB)},
+		Member{Key: "output-gain", Value: F64Value(eq.OutputGainDB)},
+		Member{Key: "mode", Value: StringValue("IIR")},
+		Member{Key: "decramp", Value: StringValue("Off")},
+		Member{Key: "split-channels", Value: BoolValue(eq.RightBands != nil)},
+		Member{Key: "balance", Value: U64Value(0)},
+		Member{Key: "pitch-left", Value: U64Value(0)},
+		Member{Key: "pitch-right", Value: U64Value(0)},
+		Member{Key: "num-bands", Value: U64Value(uint64(count))},
+		Member{Key: "left", Value: channel(eq.Bands)},
+		Member{Key: "right", Value: channel(right)},
 	)
-	value := ObjectValue(Member{pipeline.AsStr(), ObjectValue(
-		Member{"blocklist", ArrayValue()},
-		Member{"plugins_order", ArrayValue(StringValue("equalizer#0"))},
-		Member{"equalizer#0", equalizer},
+	value := ObjectValue(Member{Key: pipeline.AsStr(), Value: ObjectValue(
+		Member{Key: "blocklist", Value: ArrayValue()},
+		Member{Key: "plugins_order", Value: ArrayValue(StringValue("equalizer#0"))},
+		Member{Key: "equalizer#0", Value: equalizer},
 	)})
 	return value.Pretty() + "\n", nil
 }

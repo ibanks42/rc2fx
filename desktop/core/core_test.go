@@ -116,9 +116,9 @@ func TestRemovedSuppressionOptionsAreRejectedAtEveryConfigEntry(t *testing.T) {
 	fails(t, must2(ConfigFromJSON(obsolete.String())))
 	targets, _ := config.Get("targets")
 	update := ObjectValue(
-		Member{"expectedRevision", U64Value(1)},
-		Member{"targets", targets},
-		Member{"screenConversion", StringValue("retired")},
+		Member{Key: "expectedRevision", Value: U64Value(1)},
+		Member{Key: "targets", Value: targets},
+		Member{Key: "screenConversion", Value: StringValue("retired")},
 	)
 	fails(t, must2(FromJSON[ConfigUpdate](update.String())))
 	for _, field := range []string{"algorithm", "strength"} {
@@ -126,7 +126,7 @@ func TestRemovedSuppressionOptionsAreRejectedAtEveryConfigEntry(t *testing.T) {
 		invalid.Pointer("/targets/0/suppression").Set(field, StringValue("retired"))
 		fails(t, must2(ConfigFromJSON(invalid.String())), field)
 		targets, _ := invalid.Get("targets")
-		update := ObjectValue(Member{"expectedRevision", U64Value(1)}, Member{"targets", targets})
+		update := ObjectValue(Member{Key: "expectedRevision", Value: U64Value(1)}, Member{Key: "targets", Value: targets})
 		fails(t, must2(FromJSON[ConfigUpdate](update.String())), field)
 	}
 }
@@ -197,12 +197,14 @@ func TestEasyEffectsWidthAndSlopeAreIgnoredOnImportAndNotExported(t *testing.T) 
 				value.Set("slope", StringValue("x4"))
 				value.Set("width", F64Value(11.0))
 			}
-			for i := range value.members {
-				setEverywhere(&value.members[i].Value)
+			members, _ := value.AsObject()
+			for i := range members {
+				setEverywhere(&members[i].Value)
 			}
 		case ValueArray:
-			for i := range value.items {
-				setEverywhere(&value.items[i])
+			items, _ := value.AsArray()
+			for i := range items {
+				setEverywhere(&items[i])
 			}
 		}
 	}

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 // PayloadNames are the runtime, catalog and scripts the installer adds to

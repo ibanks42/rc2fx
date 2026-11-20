@@ -13,7 +13,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 // PayloadNames are the payload's files, in the order an embedded envelope

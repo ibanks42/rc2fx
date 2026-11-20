@@ -27,7 +27,7 @@ import (
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
-	"github.com/ibanks42/rc2fx/desktop/installer/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 type signature struct {
