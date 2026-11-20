@@ -1660,13 +1660,8 @@ fn a_helper_that_starts_by_itself_returns_the_same_audio() {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Nap {
-    Timed {
-        published: u64,
-        until: u64,
-    },
-    Park {
-        published: u64,
-    },
+    Timed { published: u64, until: u64 },
+    Park { published: u64 },
 }
 /// Event injected when a scripted sleep returns.
 #[derive(Clone, Copy, Debug)]

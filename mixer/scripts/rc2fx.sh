@@ -997,7 +997,7 @@ gui_starts() {
   printf '%s\n' "${#kept[@]}"
 }
 
-# display-start.sh launches the GUI as soon as `pidof rc_audio_mixer` succeeds,
+# display-start.sh starts the GUI as soon as `pidof rc_audio_mixer` succeeds,
 # before an RC2FX mixer opens its control socket (~9 s). Starting that early
 # breaks meter setup, so wait up to 30 s (RC2FX_GUI_WAIT_MAX) for callbacks
 # to advance when RC2FX audio is active. Never fails under set -eo pipefail.

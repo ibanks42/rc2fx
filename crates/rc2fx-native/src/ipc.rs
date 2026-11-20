@@ -184,8 +184,7 @@ fn dispatch(session: &Session, request: Request, backend: &mut impl Backend) -> 
                 } else if !transaction.valid()
                     || transaction.target_id != target.id
                     || target.validate().is_err()
-                    || (reset != ResetPolicy::Allow
-                        && request.version < RESET_POLICY_VERSION)
+                    || (reset != ResetPolicy::Allow && request.version < RESET_POLICY_VERSION)
                 {
                     Err(ErrorCode::InvalidParameters)
                 } else {
