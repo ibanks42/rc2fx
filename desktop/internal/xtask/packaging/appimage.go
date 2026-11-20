@@ -392,6 +392,12 @@ func deploy(appdir, arch string, t tools) error {
 		"--executable", filepath.Join(appdir, "usr/bin/rc2fx"),
 		"--desktop-file", filepath.Join(appdir, "usr/share/applications/rc2fx.desktop"),
 		"--icon-file", filepath.Join(appdir, "usr/share/icons/hicolor/scalable/apps/rc2fx.svg"),
+		// gpuikit links libfreetype.so.6, which linuxdeploy leaves to the
+		// host, but it still bundles freetype's own dependencies from the
+		// build host (AlmaLinux 8: libpng16 and libbz2). The host's freetype
+		// loads its own, so bundled copies only risk a mismatch.
+		"--exclude-library", "libpng16.so*",
+		"--exclude-library", "libbz2.so*",
 	)
 	command.Dir = filepath.Dir(appdir)
 	command.Env = append(os.Environ(), "ARCH="+machine, "APPIMAGE_EXTRACT_AND_RUN=1", "NO_STRIP=1", "PATCHELF="+t.patchelf)

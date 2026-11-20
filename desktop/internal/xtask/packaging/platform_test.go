@@ -64,7 +64,7 @@ func TestPublishedNamesFollowTheProjectAndTheFeedKeepsVpkNames(t *testing.T) {
 		macos[2].publishAs != "io.github.ibanks42.rc2fx-1.2.3-osx-full.nupkg" || macos[3].publishAs != "releases.osx.json" {
 		t.Fatalf("%v", macos)
 	}
-	if r := testTarget("macos", "universal").runtime(); r != "osx" {
+	if r := testTarget("macos", "universal").runtime(); r != "osx-arm64" {
 		t.Fatal(r)
 	}
 	linux := testTarget("linux", "x64").outputs()
@@ -293,7 +293,8 @@ func TestDeployKeepsThePayloadAndTheAppDirTheHelperNeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, arg := range []string{"--appdir", "--executable", "--desktop-file", "--icon-file"} {
+	for _, arg := range []string{"--appdir", "--executable", "--desktop-file", "--icon-file",
+		"--exclude-library libpng16.so*", "--exclude-library libbz2.so*"} {
 		if !strings.Contains(string(args), arg) {
 			t.Errorf("%s missing from %q", arg, args)
 		}
