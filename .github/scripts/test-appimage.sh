@@ -23,10 +23,10 @@ if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq
     apt-get install -y --no-install-recommends \
         binutils file desktop-file-utils \
-        libxcb1 libfontconfig1 libwayland-client0 libvulkan1
+        libxcb1 libfontconfig1 libfreetype6 libwayland-client0 libvulkan1
 elif command -v dnf >/dev/null 2>&1; then
     dnf install -y binutils file desktop-file-utils \
-        libxcb fontconfig libwayland-client vulkan-loader
+        libxcb fontconfig freetype libwayland-client vulkan-loader
 else
     echo 'no apt-get or dnf in the AppImage check container' >&2
     exit 1
@@ -90,7 +90,9 @@ fi
 say "dynamic libraries and the embedded mixer envelope"
 # Allow only core host libraries (not xkb, which must be bundled).
 # libresolv comes from Go's cgo net package; libutil comes from velopack_libc.
-baseline='libc.so.6 libm.so.6 libgcc_s.so.1 libxcb.so.1 libfontconfig.so.1 libwayland-client.so.0 libvulkan.so.1 libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2 libutil.so.1 ld-linux-x86-64.so.2'
+# libfreetype.so.6 is linked by gpuikit; linuxdeploy does not bundle it because
+# every desktop Linux system provides it, so the AppImage uses the host's copy.
+baseline='libc.so.6 libm.so.6 libgcc_s.so.1 libxcb.so.1 libfontconfig.so.1 libfreetype.so.6 libwayland-client.so.0 libvulkan.so.1 libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2 libutil.so.1 ld-linux-x86-64.so.2'
 needed=$(readelf -d "$root/usr/bin/rc2fx" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
 for library in $needed; do
     if [ -e "$root/usr/lib/$library" ] || [ -L "$root/usr/lib/$library" ]; then
