@@ -1542,6 +1542,9 @@ image_check_start() {
   digest=$(sha256sum < "$image_manifest" | cut -d' ' -f1)
   grep -qx "manifest=$digest" "$image_result" 2> /dev/null \
     && grep -qx 'status=ok' "$image_result" && return 0
+  # Set aside before rc2fxd starts, so the app never reads an earlier
+  # result while this boot's check runs (see image_check).
+  mv -f "$image_result" "$image_result.previous" 2> /dev/null || true
   # The log stays in RAM: a damaged image can leave the root full, and the
   # check must not stop at its first message.
   setsid nohup /bin/bash "$home/rc2fx.sh" image-check < /dev/null >> "$boot/image-check.log" 2>&1 &
@@ -1565,6 +1568,12 @@ image_check() {
   flock -n 8 || { echo 'another image check is running'; return 0; }
   local digest started failed=() repaired=() damaged=() line name want other source tmp status
   digest=$(sha256sum < "$image_manifest" | cut -d' ' -f1)
+  # A result from an earlier boot or flash must not answer for this one: the
+  # manifest lists only RØDE's files, so a reflash of the same RØDE version
+  # has the same digest, and an old "repaired" would ask for a restart this
+  # flash never needed. Until this check records its own result the API
+  # answers pending. The old record stays beside it for diagnosis.
+  mv -f "$image_result" "$image_result.previous" 2> /dev/null || true
   started=$(stamp)
   # The real root's files, not what is mounted over them: this boot's flash
   # watch binds a wrapper over rode-update.sh, which must neither read as

@@ -66,6 +66,17 @@ class ImageCheck(unittest.TestCase):
         self.assertIn(f'manifest={sha(self.manifest.read_bytes())}', record)
         self.assertFalse(any(r.startswith(('repaired=', 'damaged=')) for r in record))
 
+    def test_an_earlier_result_for_the_same_image_is_set_aside_first(self):
+        # A reflash of the same RØDE version has the same manifest, so an
+        # old "repaired" would otherwise answer for the new flash.
+        digest = sha(self.manifest.read_bytes())
+        stale = f'schema=1\nstatus=repaired\nmanifest={digest}\nrepaired=etc/hostname\n'
+        (self.data / 'image-check').write_text(stale)
+        record, _ = self.run_check()
+        self.assertIn('status=ok', record)
+        self.assertFalse(any(r.startswith('repaired=') for r in record))
+        self.assertEqual((self.data / 'image-check.previous').read_text(), stale)
+
     def test_a_zero_filled_file_is_restored_in_place_from_the_other_root(self):
         name = 'usr/bin/rode-init-update-env.sh'
         target = self.root / name
