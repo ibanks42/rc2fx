@@ -30,13 +30,11 @@ import (
 // envelope. The order is pinned: the checksummed files first, then the
 // manifest itself.
 //
-// This file owns the payload's lists; the xtask mixer build and upload read
-// them from here. Two copies are kept by hand and checked by tests:
-// mixer/scripts/install.sh (lists_test.go) and the Rust in-place updater's
-// crates/rc2fx-device/src/mixer_update/install.rs (the
-// the_payload_lists_match_the_desktop_installers test in
-// mixer_update/tests.rs parses these declarations, so keep each a plain
-// `var Name = [N]string{...}`).
+// The xtask mixer build and upload read the payload's lists from here. The
+// shared copy is fixtures/payload/lists.json: this package's
+// lists_fixture_test.go and the Rust in-place updater's
+// crates/rc2fx-device/src/mixer_update/install.rs check theirs against it,
+// and lists_test.go checks mixer/scripts/install.sh against these.
 var PayloadNames = [14]string{
 	"librc2fx_native.so",
 	"rc2fxd",

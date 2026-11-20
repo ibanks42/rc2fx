@@ -227,7 +227,9 @@ const log2OnePointFive = 0.58496250072115618145373894394781650876
 func GateShapeForStrength(strength float64) GateShape {
 	s := num.Clamp(strength, 0.0, 1.0)
 	// The explicit float64 conversions keep Go from fusing a multiply-add,
-	// so results match the mixer's bit for bit on every architecture.
+	// so the threshold and hold match the mixer's bit for bit on every
+	// architecture. math.Pow is not glibc's pow, so the reduction and release
+	// can be up to two ulps from the mixer's (fixtures/gate).
 	linear := func(gentle, strict float64) float64 { return gentle + float64((strict-gentle)*s) }
 	geometric := func(gentle, strict float64) float64 { return float64(gentle * math.Pow(strict/gentle, s)) }
 	return newGateShape(

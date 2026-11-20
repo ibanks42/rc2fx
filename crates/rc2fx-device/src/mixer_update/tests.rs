@@ -1453,32 +1453,23 @@ fn the_image_check_follows_the_launchers_record_for_this_image() {
     assert_eq!(check.damaged, ["etc/hostname"]);
 }
 
-/// The desktop's payload format, which owns the file lists `install` keeps
-/// copies of.
-const FORMAT_GO: &str = include_str!("../../../../desktop/installer/embed/format.go");
-
-/// The names in format.go's `var <name> = [N]string{ ... }`.
-fn go_list(name: &str) -> Vec<&'static str> {
-    let start = format!("\nvar {name} = [");
-    let at = FORMAT_GO
-        .find(&start)
-        .unwrap_or_else(|| panic!("format.go has no {name}"));
-    let body = &FORMAT_GO[at + start.len()..];
-    let open = body.find('{').unwrap();
-    let close = body.find('}').unwrap();
-    body[open + 1..close]
-        .split(',')
-        .map(|entry| entry.trim().trim_matches('"'))
-        .filter(|entry| !entry.is_empty())
-        .collect()
+/// The payload's file lists, shared with the desktop's
+/// `desktop/installer/embed/format.go`, which checks its copy against the
+/// same file.
+fn shared_list(name: &str) -> Vec<String> {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payload/lists.json");
+    let lists: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    serde_json::from_value(lists[name].clone())
+        .unwrap_or_else(|e| panic!("fixtures/payload/lists.json {name}: {e}"))
 }
 
 #[test]
-fn the_payload_lists_match_the_desktop_installers() {
-    assert_eq!(install::PAYLOAD_NAMES[..], go_list("PayloadNames")[..]);
-    assert_eq!(install::PINNED[..], go_list("Pinned")[..]);
-    assert_eq!(install::BINARIES[..], go_list("Binaries")[..]);
-    assert_eq!(install::SCRIPTS[..], go_list("Scripts")[..]);
+fn the_payload_lists_match_the_shared_fixture() {
+    assert_eq!(install::PAYLOAD_NAMES[..], shared_list("payloadNames")[..]);
+    assert_eq!(install::PINNED[..], shared_list("pinned")[..]);
+    assert_eq!(install::BINARIES[..], shared_list("binaries")[..]);
+    assert_eq!(install::SCRIPTS[..], shared_list("scripts")[..]);
 }
 
 /// Only a failed or restarting session reports an error, and a restart
