@@ -90,7 +90,7 @@ mod tests {
     use super::*;
     use rc2fx_firmware::Model;
 
-    const CATALOG: &str = include_str!("../../../config/firmware-profiles.json");
+    const CATALOG: &str = include_str!("../../../../config/firmware-profiles.json");
 
     fn first_pro_ii() -> rc2fx_firmware::Profile {
         rc2fx_firmware::Catalog::parse(CATALOG)
