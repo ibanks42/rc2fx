@@ -1,6 +1,10 @@
 package installer
 
 import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -179,5 +183,27 @@ func TestPayloadModeNamesTheBuild(t *testing.T) {
 	}
 	if PayloadMode() != want {
 		t.Fatal(PayloadMode())
+	}
+}
+
+// The packager refuses an executable without the marker, so it has to
+// survive compiling and linking with the release flags.
+func TestPayloadModeSurvivesLinking(t *testing.T) {
+	if testing.Short() {
+		t.Skip("links a program")
+	}
+	exe := filepath.Join(t.TempDir(), "keepmode")
+	args := []string{"build", "-trimpath", "-ldflags=-s -w", "-o", exe}
+	if embed.Present {
+		args = append(args, "-tags", "embedded")
+	}
+	command := exec.Command("go", append(args, "./testdata/keepmode")...)
+	if out, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	data, err := os.ReadFile(exe)
+	must(t, err)
+	if !bytes.Contains(data, []byte(PayloadMode())) {
+		t.Fatalf("the linked program lacks %q", PayloadMode())
 	}
 }

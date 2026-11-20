@@ -25,8 +25,8 @@ func main() {
 	// Velopack hooks must run first; they handle install/update/uninstall args
 	// and exit before GUI startup.
 	runVelopackHooks()
-	// Prevent the linker from stripping the payload-mode marker.
-	_ = installer.PayloadMode()
+	// Keep the payload-mode marker that packaging checks for.
+	installer.KeepPayloadMode()
 	usbcontrol.RegisterControlProbe()
 
 	// Headless privileged helper modes invoked via pkexec.

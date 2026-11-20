@@ -41,10 +41,17 @@ type (
 
 var payloadMarker = payloadModeText
 
-// PayloadMode returns the build's payload-mode marker for host package checks.
-// Called once from main so the linker retains the symbol.
+// PayloadMode returns the build's payload-mode marker.
 func PayloadMode() string {
 	return payloadMarker
+}
+
+// KeepPayloadMode keeps the payload-mode marker in the executable, where
+// `./xtask package` looks for it. Call it once from main. A discarded call
+// such as `_ = PayloadMode()` is inlined and removed by the compiler, and the
+// linker then drops the marker.
+func KeepPayloadMode() {
+	runtime.KeepAlive(payloadMarker)
 }
 
 const (
