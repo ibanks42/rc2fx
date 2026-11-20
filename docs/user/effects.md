@@ -18,7 +18,7 @@ Available on microphones and Chat Mix Out. See
 
 ## EQ
 
-![A 10-band EQ on Headphones 1](/screenshots/headphones-eq.png)
+![A 15-band EQ on Headphones 1](/screenshots/headphones-eq.png)
 
 The parametric EQ supports up to 32 bands. Drag points directly on the curve,
 scroll over a point to change its Q, or double-click to add a band. You can
