@@ -1,6 +1,7 @@
 package sjson
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -78,5 +79,43 @@ func TestTaggedEnums(t *testing.T) {
 	}
 	if _, _, err := Tagged([]byte(`{"A":1,"B":2}`)); err == nil {
 		t.Fatal("two variants")
+	}
+}
+
+func TestLastKeyWinsKeepsOneMemberPerKey(t *testing.T) {
+	// The shape cargo-about writes: "doctest" twice in each target.
+	text := `{"targets":[{"name":"a","doctest":false,"doctest":true}],"x":1,"x":2}`
+	if _, err := ParseJSONBytes([]byte(text), DefaultMaxJSONBytes, DefaultMaxJSONNodes); err == nil ||
+		!strings.HasPrefix(err.Error(), "Duplicate JSON key: doctest") {
+		t.Fatalf("strict parse: %v", err)
+	}
+	tree, err := ParseJSONBytesLastKeyWins([]byte(text), DefaultMaxJSONBytes, DefaultMaxJSONNodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x, _ := tree.Get("x"); x.String() != "2" || len(tree.members) != 2 {
+		t.Fatalf("top level: %s", tree.String())
+	}
+	targets, _ := tree.Get("targets")
+	target, _ := targets.Index(0)
+	if d, _ := target.Get("doctest"); d.String() != "true" || len(target.members) != 2 {
+		t.Fatalf("target: %s", target.String())
+	}
+
+	// Past eight keys the lookup switches to a map; the result is the same.
+	var b strings.Builder
+	b.WriteString("{")
+	for i := range 12 {
+		fmt.Fprintf(&b, `"k%d":%d,`, i, i)
+	}
+	b.WriteString(`"k3":"late","k11":"last"}`)
+	tree, err = ParseJSONBytesLastKeyWins([]byte(b.String()), DefaultMaxJSONBytes, DefaultMaxJSONNodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k3, _ := tree.Get("k3")
+	k11, _ := tree.Get("k11")
+	if len(tree.members) != 12 || k3.String() != `"late"` || k11.String() != `"last"` || tree.members[3].Key != "k3" {
+		t.Fatalf("wide object: %s", tree.String())
 	}
 }

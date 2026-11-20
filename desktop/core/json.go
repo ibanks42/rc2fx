@@ -69,6 +69,13 @@ func ParseJSONBytes(data []byte, maximumBytes, maximumNodes int) (Value, error) 
 	return v, wrapJSONError(err)
 }
 
+// ParseJSONBytesLastKeyWins is ParseJSONBytes for tool output that repeats
+// keys: a repeated key replaces the earlier value.
+func ParseJSONBytesLastKeyWins(data []byte, maximumBytes, maximumNodes int) (Value, error) {
+	v, err := sjson.ParseJSONBytesLastKeyWins(data, maximumBytes, maximumNodes)
+	return v, wrapJSONError(err)
+}
+
 func DecodeStrict(data []byte, out any) error {
 	return wrapJSONError(sjson.DecodeStrict(data, out))
 }

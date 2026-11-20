@@ -113,7 +113,10 @@ func GenerateBase(root string) ([]Section, error) {
 		if !command.ProcessState.Success() {
 			return nil, task.Errorf("cargo-about failed for %s: %s", manifest, strings.ToValidUTF8(stderr.String(), "�"))
 		}
-		report, err := core.ParseJSONBytes(stdout.Bytes(), maxReportBytes, maxReportNodes)
+		// cargo-about (0.8.4 through at least 0.9.3) writes each crate
+		// target's "doctest" key twice, so take the last value as
+		// serde_json does.
+		report, err := core.ParseJSONBytesLastKeyWins(stdout.Bytes(), maxReportBytes, maxReportNodes)
 		if err != nil {
 			return nil, task.Error(err.Error())
 		}

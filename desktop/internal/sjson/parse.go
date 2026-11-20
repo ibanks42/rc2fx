@@ -40,6 +40,19 @@ func ParseJSONBytes(data []byte, maximumBytes, maximumNodes int) (Tree, error) {
 	return parseStrict(data, maximumBytes, maximumNodes)
 }
 
+// ParseJSONBytesLastKeyWins is like ParseJSONBytes, except that a key repeated
+// in one object replaces the earlier value, as in serde_json's Value. It is for
+// output from tools that repeat keys, such as cargo-about's report, which
+// writes each target's "doctest" twice; input RC2FX owns stays strict.
+func ParseJSONBytesLastKeyWins(data []byte, maximumBytes, maximumNodes int) (Tree, error) {
+	return parse(data, maximumBytes, parser{
+		maxNodes:    maximumNodes,
+		maxDepth:    MaxJSONDepth,
+		lastKeyWins: true,
+		depthErr:    errJSONTooDeep,
+	})
+}
+
 // SerdeRecursionLimit is serde_json's default nesting limit.
 const SerdeRecursionLimit = 128
 
@@ -52,16 +65,19 @@ func parseSerde(data []byte) (Tree, error) {
 }
 
 func parseWithOptions(data []byte, maximumBytes, maximumNodes, maximumDepth int, allowDupKeys bool, depthErr string) (Tree, error) {
-	if len(data) > maximumBytes {
-		return Tree{}, Error(errJSONTooLarge)
-	}
-	p := parser{
-		data:         data,
+	return parse(data, maximumBytes, parser{
 		maxNodes:     maximumNodes,
 		maxDepth:     maximumDepth,
 		allowDupKeys: allowDupKeys,
 		depthErr:     depthErr,
+	})
+}
+
+func parse(data []byte, maximumBytes int, p parser) (Tree, error) {
+	if len(data) > maximumBytes {
+		return Tree{}, Error(errJSONTooLarge)
 	}
+	p.data = data
 	value, err := p.value(0)
 	if err != nil {
 		return Tree{}, err
@@ -80,7 +96,10 @@ type parser struct {
 	maxNodes     int
 	maxDepth     int
 	allowDupKeys bool
-	depthErr     string
+	// lastKeyWins keeps one member per key: a repeated key replaces the
+	// earlier member's value.
+	lastKeyWins bool
+	depthErr    string
 }
 
 // fail adds serde_json's position suffix: 1-based line, and the column of
@@ -222,6 +241,8 @@ func (p *parser) object(depth int) (Tree, error) {
 	}
 	// Track decoded keys for this object so escaped duplicates are caught.
 	var seen map[string]struct{}
+	// With lastKeyWins: each key's member, once the object has grown.
+	var index map[string]int
 	for {
 		p.skipSpace()
 		if p.pos >= len(p.data) {
@@ -238,7 +259,29 @@ func (p *parser) object(depth int) (Tree, error) {
 		if err != nil {
 			return Tree{}, err
 		}
-		if !p.allowDupKeys {
+		replace := -1
+		if p.lastKeyWins {
+			if len(members) < 8 && index == nil {
+				for i := range members {
+					if members[i].Key == key {
+						replace = i
+						break
+					}
+				}
+			} else {
+				if index == nil {
+					index = make(map[string]int, 16)
+					for i, member := range members {
+						index[member.Key] = i
+					}
+				}
+				if i, ok := index[key]; ok {
+					replace = i
+				} else {
+					index[key] = len(members)
+				}
+			}
+		} else if !p.allowDupKeys {
 			duplicate := false
 			if len(members) < 8 && seen == nil {
 				for _, member := range members {
@@ -273,7 +316,11 @@ func (p *parser) object(depth int) (Tree, error) {
 		if err != nil {
 			return Tree{}, err
 		}
-		members = append(members, Member{Key: key, Value: item})
+		if replace >= 0 {
+			members[replace].Value = item
+		} else {
+			members = append(members, Member{Key: key, Value: item})
+		}
 		p.skipSpace()
 		if p.pos >= len(p.data) {
 			return Tree{}, p.fail("EOF while parsing an object")
