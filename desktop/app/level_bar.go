@@ -3,7 +3,7 @@ package app
 // The overview's level bars. A bar is a div inside its track, filled to
 // levels.FillFraction: a fader's from the bottom, an output's from the
 // left, the levels.Stub pixels without a fresh reading. When it is redrawn is
-// line_overlay.go's.
+// indicators.go's.
 
 import (
 	"gpuikit.dev/gk"

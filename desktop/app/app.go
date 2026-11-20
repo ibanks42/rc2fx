@@ -65,181 +65,141 @@ func homeKeyEqual(a, b *HomeKey) bool {
 	return a.V0 == b.V0 && a.V1 == b.V1 && slices.Equal(a.V2, b.V2)
 }
 
-// App is Rc2FxApp: every field of it, including the ones other work
-// packages use, then the Go-only handles at the end.
-type App struct {
-	session   core.Session
-	transport Backend
-	// generation tags commands; events of an older generation are dropped.
-	generation uint64
-	// connectedMixer is the USB serial of the mixer the session belongs to.
-	connectedMixer *string
-	// deviceVersions is what the connected mixer reported; nil is unknown.
-	deviceVersions *core.DeviceVersions
-	appUpdate      AppUpdate
-	selfUpdate     selfupdate.SelfUpdate
-	// developerMode shows developer controls in Settings; grants nothing by
-	// itself.
-	developerMode bool
-	// devPage is the page RC2FX_DEV_PAGE asked for, until it has been opened.
-	devPage *DevPage
-	ssh     SSH
-	// sshAddress is the address typed for the login command. Kept for this
-	// run of the app, across reconnects; the pinned host key rejects a wrong
-	// mixer.
-	sshAddress gk.InputState
-	// bundledMixerSoftware is the RC2FX mixer software this app installs,
-	// read at start.
-	bundledMixerSoftware *string
-	selected             int
-	inputs               ShowInputs
-	effect               core.Effect
-	band                 int
-	channel              core.Channel
-	editorEpoch          uint64
-	// importDraft is the EQ import under review, nil for none.
-	importDraft *ImportDraft
-	importError *string
-	fileBusy    bool
-	editors     []ParameterEditor
-	// editingValue is the control whose value is being typed, if any.
-	editingValue *Parameter
-	// resave: a save was refused for an older revision; it is sent again once
-	// the mixer's current settings arrive (settleConflict).
-	resave bool
-	// awaitingRefresh: waiting for the refresh that follows a refused save.
-	awaitingRefresh bool
-	// nav is the page in front: Home or a channel, and Settings, its
-	// Diagnostics page or the installer over it (navigation.go).
-	nav navigation
-	// contentScroll is the main column's scroll position, shared by the
-	// pages shown in it.
-	contentScroll gk.ScrollHandle
-	// usbRule is the Linux USB permission screen's request (connection.go).
-	usbRule USBRule
-	// usbRuleOpen is its "Show the exact file" disclosure.
+// usbRuleUI groups the Linux USB permission screen's transient UI state.
+type usbRuleUI struct {
+	usbRule     USBRule
 	usbRuleOpen bool
-	// copied is which Copy button just copied, briefly; "" for none.
-	copied string
-	// usbRuleText and usbUndoText are its read-only boxes: the rule's exact
-	// text, and the undo command.
-	usbRuleText   gk.TextareaState
-	usbUndoText   gk.InputState
-	subscriptions []gk.Subscription
-	// retired and retiring hold kit state waiting to be released (editor.go
-	// retire): retired this poll, retiring the poll before.
-	retired, retiring []any
-	pending           *core.PendingApply
-	routingPending    *core.PendingRouting
-	selectionPending  *core.PendingSelection
-	// selectionAsked: this app asked for the current path change, so its
-	// failure is ours to report. A failure the mixer reports on its own
-	// (while shutting down for an update, say) is not.
-	selectionAsked bool
-	// installerAutostart is set by a notice's Install update or the first
-	// screen's Continue the install: start the task as soon as it can, until
-	// this deadline.
-	installerAutostart *time.Time
-	// settledFlash is the last flash this run of the app saw finish; it
-	// outlives the guided task (installflow's Model.SettledFlash).
-	settledFlash *uint64
-	// allowDuo is the remembered opt-in to install on an (untested) Duo.
-	allowDuo bool
-	// firstHintTarget is the channel the finished install opened, whose
-	// suppression page shows the first-channel hint; "" for none.
-	// firstHintDone: dismissed or completed, on this computer.
+	copied      string
+	usbRuleText gk.TextareaState
+	usbUndoText gk.InputState
+}
+
+// firstHintUI groups the post-install first-channel onboarding hint state.
+type firstHintUI struct {
 	firstHintTarget string
 	firstHintDone   bool
-	// firstHintSaved: the hint was recorded as done on this computer.
-	firstHintSaved bool
-	// look is what the first screen last saw on USB (nil before it looked),
-	// looking whether a look is under way, and lookedAt when the last ended.
+	firstHintSaved  bool
+}
+
+// lookUI groups the first-screen periodic USB sighting state.
+type lookUI struct {
 	look     *firstLook
 	looking  bool
 	lookedAt time.Time
-	// flowFixture: RC2FX_DEV_PAGE opened a guided-flow page from made-up
-	// state (development builds): nothing connects, looks or downloads.
-	flowFixture   bool
-	telemetryOpen bool
-	// telemetryDetails: Telemetry shows every figure, not just the summary.
-	telemetryDetails bool
-	// confirmReset: the Telemetry section's reset is waiting for confirmation.
-	confirmReset bool
-	// eventLog is the mixer's recent events, shown by the events window
-	// (a gk.Model: both windows read it).
-	eventLog     *gk.Model[EventLog]
-	eventsWindow *gk.Window
-	// eventsPolled is when the open events window last asked for events, and
-	// eventsPending whether that request is still out.
+}
+
+// telemetryUI groups Settings' Diagnostics / Telemetry / Events window state.
+type telemetryUI struct {
+	telemetryOpen      bool
+	telemetryDetails   bool
+	confirmReset       bool
+	eventLog           *gk.Model[EventLog]
+	eventsWindow       *gk.Window
 	eventsPolled       *time.Time
 	eventsPending      bool
 	resetPending       bool
 	diagnosticsPending bool
+}
+
+// eqGraphUI groups interactive EQ graph drag & popover state.
+type eqGraphUI struct {
+	graphBounds  gk.Bounds
+	eqCurve      *EqCurve
+	draggingBand bool
+	dragMoved    bool
+	bandPopover  *popoverBand
+}
+
+// confirmUI groups the modal confirm dialog and drag-preview caches.
+type confirmUI struct {
+	confirmDialog gk.Built[gk.DialogEl]
+	confirmOpen   *confirmState
+	stagePreviews map[core.Effect]gk.View
+	bandPreviews  []gk.View
+}
+
+// App is Rc2FxApp: session, navigation, live editing, installer coordination,
+// and UI handles grouped by domain.
+type App struct {
+	session              core.Session
+	transport            Backend
+	generation           uint64
+	connectedMixer       *string
+	deviceVersions       *core.DeviceVersions
+	appUpdate            AppUpdate
+	selfUpdate           selfupdate.SelfUpdate
+	developerMode        bool
+	devPage              *DevPage
+	ssh                  SSH
+	sshAddress           gk.InputState
+	bundledMixerSoftware *string
+
+	// Channel editor selection and import state.
+	selected        int
+	inputs          ShowInputs
+	effect          core.Effect
+	band            int
+	channel         core.Channel
+	editorEpoch     uint64
+	importDraft     *ImportDraft
+	importError     *string
+	fileBusy        bool
+	editors         []ParameterEditor
+	editingValue    *Parameter
+	resave          bool
+	awaitingRefresh bool
+
+	// Navigation and scrolling.
+	nav           navigation
+	contentScroll gk.ScrollHandle
+
+	// Pending mixer mutations and installer coordination.
+	subscriptions      []gk.Subscription
+	retired, retiring  []any
+	pending            *core.PendingApply
+	routingPending     *core.PendingRouting
+	selectionPending   *core.PendingSelection
+	selectionAsked     bool
+	installerAutostart *time.Time
+	settledFlash       *uint64
+	allowDuo           bool
+	flowFixture        bool
 	presets            PresetLibrary
-	// link is what the app is doing about the connection: off, connecting,
-	// on, retrying at a time, or paused for a flash (link.go).
-	link            linkIntent
-	streamConnected bool
-	streamError     *string
-	usb             model.USBObservation
-	message         string
-	meter           *core.Meter
-	meterProgress   map[string]*telemetry.Progress
-	// levels is recent output peaks per processed path, for the live line.
-	levels model.LevelHistories
-	// startup is what the mixer counted while starting, kept out of telemetry.
-	startup telemetry.StartupWindow
-	// recentFaults is audible faults in the last minute, and when each last
-	// happened.
-	recentFaults telemetry.RecentFaults
-	// renderGeneration counts this view's renders; Home's line slot is
-	// claimed per render (line_overlay.go).
+	installer          *Installer
+
+	// Connection lifecycle, metering, and live editing.
+	link                linkIntent
+	streamConnected     bool
+	streamError         *string
+	usb                 model.USBObservation
+	message             string
+	meter               *core.Meter
+	meterProgress       map[string]*telemetry.Progress
+	levels              model.LevelHistories
+	startup             telemetry.StartupWindow
+	recentFaults        telemetry.RecentFaults
 	renderGeneration    uint64
 	lineSlots           LineSlots
 	onboardingSignature gk.View
-	// reducedMotion is the cached system policy, from GPUI/Base's platform
-	// motion integration. This is not an RC2FX preference; old persisted
-	// values are ignored.
 	reducedMotion       bool
 	systemMotionChecked time.Time
 	engineSeen          *time.Time
-	graphBounds         gk.Bounds
-	eqCurve             *EqCurve
-	draggingBand        bool
-	// dragMoved is whether the point being pressed has moved: a press
-	// that never moves is a click, which opens the band's popover.
-	dragMoved bool
-	// bandPopover is the band whose editor is open over the graph, nil for
-	// none. It names the channel and band, so it closes by itself when
-	// either changes.
-	bandPopover *popoverBand
-	// live is live editing: edits on the running audio, saving once edits
-	// stop, undo and checkpoints (live.go).
-	live model.Live
-	// pageWidth is the page's content width at the last prepaint (0 before
-	// the first); narrow() reads it.
-	pageWidth float32
-	wasFresh  bool
-	// lastHomeKey is the HomeKey of Home's last render (not homeKey: Go
-	// cannot have a field and the homeKey method of one name).
-	lastHomeKey *HomeKey
-	installer   *Installer
-	// focus keeps keyboard focus in the window so Esc returns to the overview.
-	focus gk.FocusHandle
-	// toasted is the last message considered for a toast (toastMessage).
-	toasted string
+	live                model.Live
+	pageWidth           float32
+	wasFresh            bool
+	lastHomeKey         *HomeKey
+	focus               gk.FocusHandle
+	toasted             string
 
-	// Go only.
-	root          gk.View
-	window        gk.Window
-	confirmDialog gk.Built[gk.DialogEl]
-	confirmOpen   *confirmState
-	// stagePreviews are the flow lane's drag previews (DraggedStage), one
-	// view per effect, made once.
-	stagePreviews map[core.Effect]gk.View
-	// bandPreviews are the band chips' drag previews (DraggedBand), one view
-	// per possible band, made by the first rebuildEditors (eq_controls.go).
-	bandPreviews []gk.View
+	// Window handles and domain-grouped UI sub-states.
+	root   gk.View
+	window gk.Window
+	usbRuleUI
+	firstHintUI
+	lookUI
+	telemetryUI
+	eqGraphUI
+	confirmUI
 }
 
 // newApp is the half of the app's setup that needs no window; init is the
@@ -253,15 +213,14 @@ func newApp() *App {
 		selfUpdate:          newSelfUpdate(),
 		developerMode:       rememberedDeveloper(),
 		allowDuo:            rememberedDuo(),
-		firstHintDone:       rememberedFirstChannelHint(),
 		devPage:             DevPageFromEnv(),
 		effect:              core.EffectSuppression,
 		channel:             core.ChannelLeft,
-		telemetryOpen:       rememberedTelemetry(),
-		eventLog:            &log,
 		message:             message,
 		meterProgress:       map[string]*telemetry.Progress{},
 		systemMotionChecked: time.Now(),
+		firstHintUI:         firstHintUI{firstHintDone: rememberedFirstChannelHint()},
+		telemetryUI:         telemetryUI{telemetryOpen: rememberedTelemetry(), eventLog: &log},
 	}
 	if v, ok := model.BundledMixerSoftware(); ok {
 		a.bundledMixerSoftware = &v
@@ -387,7 +346,7 @@ func (a *App) connect(cx *gk.Cx) { a.beginConnection(cx, false) }
 func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 	// Only the scheduled retry path may retain a previous observation.
 	// An explicit connection starts a new lineage, even with a timer pending.
-	a.nav.homeBehind()
+	a.nav.HomeBehind()
 	a.generation++
 	a.installerConnectionChanged()
 	a.diagnosticsPending = false
@@ -412,7 +371,7 @@ func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 	a.streamConnected = false
 	a.streamError = nil
 	sent := a.command(transport.CommandConnect{Generation: a.generation})
-	a.link.begin(sent)
+	a.link.Begin(sent)
 	if sent && !backgroundRetry {
 		a.message = ""
 	}
@@ -422,7 +381,7 @@ func (a *App) beginConnection(cx *gk.Cx, backgroundRetry bool) {
 func (a *App) disconnect(cx *gk.Cx) {
 	a.diagnosticsPending = false
 	a.resetEvents(cx)
-	a.link.stop()
+	a.link.Stop()
 	a.generation++
 	a.installerConnectionChanged()
 	a.command(transport.CommandDisconnect{Generation: a.generation})
@@ -638,7 +597,7 @@ func (a *App) poll(cx *gk.Cx) {
 				a.inPlaceOutcome(k.Last)
 			}
 		case transport.EventKindConnected:
-			a.link.connected()
+			a.link.Connected()
 			a.message = ""
 			// Edits carry over to the same mixer, not to another one.
 			if a.connectedMixer == nil || *a.connectedMixer != k.Mixer {
@@ -667,7 +626,7 @@ func (a *App) poll(cx *gk.Cx) {
 			a.openDevPage(cx)
 			// Versions change only across a restart: read once per connection.
 			a.command(transport.CommandVersion{Generation: a.generation})
-			if a.nav.settings() {
+			if a.nav.Settings() {
 				a.listPresets()
 			}
 		case transport.EventKindPreset:
@@ -756,7 +715,7 @@ func (a *App) poll(cx *gk.Cx) {
 			} else {
 				a.message = k.Message
 			}
-			a.link.failed(a.session.Connected, time.Now())
+			a.link.Failed(a.session.Connected, time.Now())
 		}
 	}
 	if a.session.Conflict && !a.awaitingRefresh {
@@ -782,12 +741,12 @@ func (a *App) poll(cx *gk.Cx) {
 	// nothing: hand the window to the installer. Once flashed, look for the
 	// mixer again; reconnecting is how the installer sees RC2FX back.
 	if a.installerFlashing() {
-		if a.session.Connected || a.link.auto() {
+		if a.session.Connected || a.link.Auto() {
 			a.disconnect(cx)
 			a.message = "The mixer is updating."
-			a.link.pauseForFlash()
+			a.link.PauseForFlash()
 		}
-	} else if a.link.flashDone(time.Now()) {
+	} else if a.link.FlashDone(time.Now()) {
 		// The pre-flash connection result belongs to an earlier device
 		// state. Start a new observation after the expected USB transition.
 		a.message = ""
@@ -799,14 +758,14 @@ func (a *App) poll(cx *gk.Cx) {
 	// Compared on this existing 50 ms tick; no extra frames are scheduled,
 	// and a redraw happens only when what Home shows changes.
 	var homeKey *HomeKey
-	if a.session.Connected && a.nav.home() {
+	if a.session.Connected && a.nav.Home() {
 		k := a.homeKey()
 		homeKey = &k
 	}
 	// A reading redraws the app unless the overview is in front and the
 	// overlay is already drawing its bars every frame. Each such redraw is a
 	// whole extra frame, on top of the overlay's.
-	overview := homeKey != nil && a.nav.basePageInFront() && a.installer == nil
+	overview := homeKey != nil && a.nav.BasePageInFront() && a.installer == nil
 	isFresh := fresh != nil
 	if changed || isFresh != a.wasFresh || !homeKeyEqual(homeKey, a.lastHomeKey) ||
 		(meterArrived && !(overview && a.barsAnimate())) {
@@ -816,9 +775,9 @@ func (a *App) poll(cx *gk.Cx) {
 	a.wasFresh = isFresh
 	a.lastHomeKey = homeKey
 	// The live indicators' views and ticker, and the signature's
-	// (line_overlay.go: each indicator is its own view).
+	// (indicators.go: each indicator is its own view).
 	a.pollIndicators(cx)
-	if a.link.due(a.session.Connected, time.Now()) {
+	if a.link.Due(a.session.Connected, time.Now()) {
 		a.beginConnection(cx, true)
 	}
 }
@@ -861,7 +820,7 @@ func (a *App) reportedLookahead() Reported {
 // that outrank everything else, shared by the status line and Home.
 func (a *App) systemStatus() (string, uint32, bool) {
 	switch {
-	case a.link.connecting():
+	case a.link.Connecting():
 		return "Connecting", Warn, true
 	case !a.session.Connected:
 		return "Offline draft", Muted, true
@@ -1005,7 +964,7 @@ func (a *App) toastMessage(cx *gk.Cx) {
 
 // openOverview is the overview of every channel, from the sidebar or Esc.
 func (a *App) openOverview(cx *gk.Cx) {
-	a.nav.showHome()
+	a.nav.ShowHome()
 	a.notify(cx)
 }
 
@@ -1041,31 +1000,11 @@ func windowTitle() string {
 	return "RC2FX"
 }
 
-// Run is the native application's entry point: the helper modes
-// the installer starts this executable in, then the window.
+// Run is the native application's GUI entry point. Headless privileged
+// helper modes (--install-usb-rule, --installer-helper) are dispatched in
+// cmd/rc2fx before entering app.Run.
 func Run() {
-	args := os.Args
-	if len(args) > 1 && args[1] == helper.USBRuleFlag {
-		// Started through pkexec by the USB permission screen: write the
-		// embedded rule, reload udev, exit. No window, no other input.
-		if err := helper.InstallUSBRule(); err != nil {
-			fmt.Fprintf(os.Stderr, "rc2fx: %s\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-	if len(args) > 1 && args[1] == helper.Flag {
-		// The privileged installer process: no window, JSON lines on stdio.
-		if len(args) < 4 {
-			os.Exit(2)
-		}
-		if err := helper.Serve(args[2], args[3]); err != nil {
-			fmt.Fprintf(os.Stderr, "rc2fx installer helper: %s\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-	if previewMode(args) {
+	if previewMode(os.Args) {
 		return
 	}
 	a := newApp()
@@ -1073,7 +1012,7 @@ func Run() {
 		gk.QuitOnLastWindow(cx, true)
 		a.root = gk.NewView(a.init, a.view)
 		// Each of Home's animated indicators is its own view
-		// (line_overlay.go), so the window holds the app directly.
+		// (indicators.go), so the window holds the app directly.
 		a.window = gk.OpenWindowWith(cx, windowIdentity(gk.WindowConfig{
 			Width:     Window[0],
 			Height:    Window[1],

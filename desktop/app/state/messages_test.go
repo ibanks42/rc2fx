@@ -1,4 +1,4 @@
-package app
+package state
 
 import (
 	"io/fs"
@@ -18,7 +18,7 @@ func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
 		"Loading preset on the mixer…",
 		"Collecting mixer diagnostics…",
 	} {
-		if !progressMessage(step) {
+		if !ProgressMessage(step) {
 			t.Errorf("%s", step)
 		}
 	}
@@ -27,9 +27,9 @@ func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
 		"Saved settings file to /tmp/a.json",
 		"Preset ‘Podcast’ saved on the mixer",
 		"Enter a preset name of 1–128 bytes.",
-		mixerChangedElsewhere,
+		MixerChangedElsewhere,
 	} {
-		if progressMessage(outcome) {
+		if ProgressMessage(outcome) {
 			t.Errorf("%s", outcome)
 		}
 	}
@@ -39,12 +39,12 @@ func TestProgressStepsAreNotToastedButOutcomesAre(t *testing.T) {
 // and says it failed.
 func TestAFailedSaveIsToasted(t *testing.T) {
 	for _, reason := range []string{"", "HTTP 500: config write failed", "timed out waiting for the mixer…"} {
-		message := saveFailedMessage(reason)
-		if progressMessage(message) {
+		message := SaveFailedMessage(reason)
+		if ProgressMessage(message) {
 			t.Errorf("%q reads as progress", message)
 		}
 		if reason != "" && message != "Couldn't save: "+reason {
-			t.Errorf("saveFailedMessage(%q) = %q", reason, message)
+			t.Errorf("SaveFailedMessage(%q) = %q", reason, message)
 		}
 	}
 }
@@ -52,7 +52,7 @@ func TestAFailedSaveIsToasted(t *testing.T) {
 // Settings save on their own once edits stop: no text in the app may send the
 // user to the "Save to mixer" button, which is gone.
 func TestNoTextPointsToTheRemovedSaveButton(t *testing.T) {
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

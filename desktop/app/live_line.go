@@ -3,7 +3,7 @@ package app
 // The level indicator, the design's live line. Its height
 // follows a path's reported output level (peak-meter ballistics,
 // LevelHistory.Display); its shape is decorative, not an audio waveform, and
-// the UI says so. This file only draws: when it moves is line_overlay.go's,
+// the UI says so. This file only draws: when it moves is indicators.go's,
 // the geometry is app/levels (LinePoints).
 
 import (

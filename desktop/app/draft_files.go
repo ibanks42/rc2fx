@@ -33,7 +33,7 @@ func (a *App) installDraft(cx *gk.Cx, snapshot edit.DraftSnapshot, targets []cor
 // openDraft asks for a settings file and puts it in the draft, asking first
 // when that would replace unsaved edits.
 func (a *App) openDraft(cx *gk.Cx) {
-	if a.fileBusy || a.pending != nil || a.presets.writing() || a.link.connecting() || a.transitionBusy() {
+	if a.fileBusy || a.pending != nil || a.presets.writing() || a.link.Connecting() || a.transitionBusy() {
 		return
 	}
 	snapshot := edit.CaptureDraft(&a.session, a.generation)

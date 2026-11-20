@@ -60,7 +60,7 @@ func fail(why string) {
 		"  do not run a generic rebuild: `./xtask mixer install` deploys the\n"+
 		"  staged bundle, and the build refuses to replace the link.\n"+
 		"In a release folder the same files are runtime/ and mixer/scripts.\n"+
-		"Then run `go run ./installer/embed/cmd/stage-payload` in desktop/ and\n"+
+		"Then run `go run ./cmd/stage-payload` in desktop/ and\n"+
 		"build with `-tags embedded`.\n", why)
 	os.Exit(1)
 }

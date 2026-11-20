@@ -1,7 +1,7 @@
 // Command inspect-firmware is a read-only audit of an official firmware
 // archive; it needs no device or extracted root filesystem.
 //
-//	go -C desktop run ./installer/cmd/inspect-firmware MODEL OS.tar.gz [CATALOG]
+//	go -C desktop run ./cmd/inspect-firmware MODEL OS.tar.gz [CATALOG]
 //
 // It checks the archive against CATALOG, by default the checkout's
 // config/firmware-profiles.json: the catalog an embedded build compiles in,
@@ -22,13 +22,13 @@ import (
 )
 
 // defaultCatalog is config/firmware-profiles.json in the checkout this file
-// is in (desktop/installer/cmd/inspect-firmware/main.go).
+// is in (desktop/cmd/inspect-firmware/main.go).
 func defaultCatalog() (string, error) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok || !filepath.IsAbs(file) {
 		return "", errors.New("cannot find the checkout; pass the catalog path")
 	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file)))))
+	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file))))
 	return filepath.Join(root, "config", "firmware-profiles.json"), nil
 }
 

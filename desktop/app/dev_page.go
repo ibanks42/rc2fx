@@ -16,7 +16,7 @@ func (a *App) openDevPage(cx *gk.Cx) {
 	if a.devPage == nil {
 		return
 	}
-	if a.devPage.needsMixer() && !a.session.Connected {
+	if a.devPage.NeedsMixer() && !a.session.Connected {
 		return
 	}
 	page := *a.devPage
@@ -28,7 +28,7 @@ func (a *App) openDevPage(cx *gk.Cx) {
 		a.setSettingsOpen(true)
 	case DevPageDiagnostics:
 		a.setSettingsOpen(true)
-		a.nav.setDiagnostics(true)
+		a.nav.SetDiagnostics(true)
 	case DevPageInstaller:
 		a.openTask(cx, taskInstall)
 	case DevPageRepair:

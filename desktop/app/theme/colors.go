@@ -1,4 +1,4 @@
-package app
+package theme
 
 // This file does not import gk: its functions are tested with plain `go test`.
 
@@ -33,7 +33,7 @@ const (
 
 // hslaOf is gpui's `Hsla::from(rgba(hex))`: the same f32 arithmetic, so the
 // colors match what gpui computes for the same hex. hex is 0xRRGGBBAA.
-func hslaOf(hex uint32) [4]float32 {
+func HslaOf(hex uint32) [4]float32 {
 	r := float32(hex>>24&0xff) / 255
 	g := float32(hex>>16&0xff) / 255
 	b := float32(hex>>8&0xff) / 255
@@ -77,7 +77,7 @@ func remEuclid(x, m float32) float32 {
 
 // mixHex blends two 0xRRGGBB colors, t from 0 (from) to 1 (to), rounding
 // each channel half away from zero (roundF32).
-func mixHex(from, to uint32, t float32) uint32 {
+func MixHex(from, to uint32, t float32) uint32 {
 	mix := func(shift uint32) uint32 {
 		a := float32(from >> shift & 0xff)
 		b := float32(to >> shift & 0xff)
@@ -91,20 +91,20 @@ func roundF32(v float32) float32 { return float32(math.Round(float64(v))) }
 
 // bandColor is a band's color: eight steps from RC2FX cyan to violet,
 // repeating. Amber and red stay reserved for problems.
-func bandColor(index int) uint32 {
+func BandColor(index int) uint32 {
 	t := float32(index%8) / 7
-	return mixHex(Accent, Violet, t)
+	return MixHex(Accent, Violet, t)
 }
 
 // level is peak amplitude as a 0..1 meter position over a 60 dB range.
-func level(peak float64) float32 {
+func Level(peak float64) float32 {
 	v := (20*math.Log10(num.Max(peak, 1e-6)) + 60) / 60
 	return float32(num.Clamp(v, 0, 1))
 }
 
 // formatHz is a frequency as text: Hz below 1 kHz, kHz with one decimal
 // from there.
-func formatHz(frequency float64) string {
+func FormatHz(frequency float64) string {
 	if frequency >= 1000 {
 		return fmt.Sprintf("%.1f kHz", frequency/1000)
 	}
@@ -112,7 +112,7 @@ func formatHz(frequency float64) string {
 }
 
 // dbfs is a reported peak as dBFS text.
-func dbfs(peak float64) string {
+func DBFS(peak float64) string {
 	db := 20 * math.Log10(num.Max(peak, 1e-9))
 	if db <= -60 {
 		return "below −60 dBFS"

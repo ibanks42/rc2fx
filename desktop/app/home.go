@@ -111,10 +111,10 @@ func (a *App) homeKey() HomeKey {
 // channel's editor. Indicators move only then; Settings and the installer
 // draw no animated lines.
 func (a *App) animatedPage() bool {
-	return a.session.Connected && a.nav.basePageInFront() && a.installer == nil
+	return a.session.Connected && a.nav.BasePageInFront() && a.installer == nil
 }
 
-// levelBar is one overview bar: its view (line_overlay.go), or drawn still
+// levelBar is one overview bar: its view (indicators.go), or drawn still
 // here until the view exists.
 func (a *App) levelBar(targetID string, bar levels.Bar) gk.Element {
 	if el, ok := a.embed(indicatorKey{targetID, levels.BarShape(bar)}); ok {
@@ -125,7 +125,7 @@ func (a *App) levelBar(targetID string, bar levels.Bar) gk.Element {
 }
 
 // indicator is one level indicator: its view, which animates while it can
-// (line_overlay.go), or, until the view exists, drawn still here (never
+// (indicators.go), or, until the view exists, drawn still here (never
 // both). The still drawing in place has no measured size, so it shows
 // nothing for the one poll (50 ms) it takes to make the view. fresh is the
 // caller's freshMeterFor reading; the view reads it again each time it
@@ -149,7 +149,7 @@ func (a *App) openChannel(cx *gk.Cx, index int) {
 	a.channel = core.ChannelLeft
 	a.importDraft = nil
 	a.importError = nil
-	a.nav.showChannel()
+	a.nav.ShowChannel()
 	a.rebuildEditors(cx)
 	a.notify(cx)
 }

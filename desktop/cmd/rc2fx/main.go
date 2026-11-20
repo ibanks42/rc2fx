@@ -6,9 +6,12 @@ package main
 
 import (
 	_ "embed"
+	"fmt"
+	"os"
 
 	"github.com/ibanks42/rc2fx/desktop/app"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
 
@@ -28,6 +31,30 @@ func main() {
 	// linker does not drop it.
 	_ = installer.PayloadMode()
 	usbcontrol.RegisterControlProbe()
+
+	// Headless privileged helper modes started through pkexec: no GUI window.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case helper.USBRuleFlag:
+			// Write the embedded udev rule, reload udev, exit. No other input.
+			if err := helper.InstallUSBRule(); err != nil {
+				fmt.Fprintf(os.Stderr, "rc2fx: %s\n", err)
+				os.Exit(1)
+			}
+			return
+		case helper.Flag:
+			// Long-lived privileged installer process: JSON lines on stdio.
+			if len(os.Args) < 4 {
+				os.Exit(2)
+			}
+			if err := helper.Serve(os.Args[2], os.Args[3]); err != nil {
+				fmt.Fprintf(os.Stderr, "rc2fx installer helper: %s\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	app.SetWindowIcon(icon)
 	app.Run()
 }

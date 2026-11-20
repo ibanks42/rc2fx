@@ -1,4 +1,4 @@
-package app
+package state
 
 // The view preferences file and the connection screen's decisions. This file
 // does not import gk: its functions are tested with plain `go test`.
@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/app/edit"
+	"github.com/ibanks42/rc2fx/desktop/app/theme"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 )
@@ -130,31 +131,31 @@ func rememberView(key string, value core.Value) {
 }
 
 // rememberedTelemetry is whether the Telemetry section was last on.
-func rememberedTelemetry() bool { return rememberedView().boolean("showTelemetry") }
+func RememberedTelemetry() bool { return rememberedView().boolean("showTelemetry") }
 
-func rememberTelemetry(on bool) { rememberView("showTelemetry", core.BoolValue(on)) }
+func RememberTelemetry(on bool) { rememberView("showTelemetry", core.BoolValue(on)) }
 
 // rememberedAppearance is the appearance last chosen; Dusk when none was.
-func rememberedAppearance() Appearance {
+func RememberedAppearance() theme.Appearance {
 	if value, ok := rememberedView()["appearance"]; ok {
 		if key, ok := value.AsString(); ok {
-			if a, ok := AppearanceFromKey(key); ok {
+			if a, ok := theme.AppearanceFromKey(key); ok {
 				return a
 			}
 		}
 	}
-	return AppearanceDusk
+	return theme.AppearanceDusk
 }
 
-func rememberAppearance(a Appearance) { rememberView("appearance", core.StringValue(a.Key())) }
+func RememberAppearance(a theme.Appearance) { rememberView("appearance", core.StringValue(a.Key())) }
 
-func rememberedDuo() bool { return duoEnabled(rememberedView()) }
+func RememberedDuo() bool { return duoEnabled(rememberedView()) }
 
 func duoEnabled(view viewPrefs) bool { return view.boolean("experimentalDuoFlash") }
 
 // rememberDuo reports a failed save, unlike view-only preferences, rather than
 // implying that the experimental opt-in will survive restarting the app.
-func rememberDuo(allow bool) error {
+func RememberDuo(allow bool) error {
 	path, ok := viewPath()
 	if !ok {
 		return errors.New("No application settings folder")
@@ -166,11 +167,11 @@ func saveDuo(path string, allow bool) error { return saveFlag(path, "experimenta
 
 // rememberedFirstChannelHint is whether the first channel's hint was
 // dismissed or completed: it then never shows again.
-func rememberedFirstChannelHint() bool { return rememberedView().boolean("firstChannelHintDone") }
+func RememberedFirstChannelHint() bool { return rememberedView().boolean("firstChannelHintDone") }
 
 // rememberFirstChannelHint records that the hint is done. A failed save
 // only means it may show once more after a restart.
-func rememberFirstChannelHint() {
+func RememberFirstChannelHint() {
 	if path, ok := viewPath(); ok {
 		_ = saveFlag(path, "firstChannelHintDone", true)
 	}
@@ -178,12 +179,12 @@ func rememberFirstChannelHint() {
 
 // rememberedDeveloper is whether Developer mode was left on. It only shows
 // developer controls in Settings; it grants nothing by itself.
-func rememberedDeveloper() bool { return developerEnabled(rememberedView()) }
+func RememberedDeveloper() bool { return developerEnabled(rememberedView()) }
 
 func developerEnabled(view viewPrefs) bool { return view.boolean("developerMode") }
 
 // rememberDeveloper reports a failed save, like the Duo opt-in.
-func rememberDeveloper(on bool) error {
+func RememberDeveloper(on bool) error {
 	path, ok := viewPath()
 	if !ok {
 		return errors.New("No application settings folder")
@@ -209,7 +210,7 @@ const USBUndo = "sudo rm " + helper.USBRulePath
 
 // usbPermission is whether Linux refused the app the mixer's USB 1 control
 // interface: the one failure the udev rule fixes (helper.USBPermission).
-func usbPermission(lastResult string) bool {
+func USBPermission(lastResult string) bool {
 	return strings.HasPrefix(lastResult, helper.USBPermission)
 }
 
@@ -217,6 +218,6 @@ func usbPermission(lastResult string) bool {
 // supported mixer without the RC2FX interface (control's controlInterface).
 // Do not infer "found" from arbitrary failures/timeouts or a substring of an
 // error.
-func mixerFound(lastResult string) bool {
+func MixerFound(lastResult string) bool {
 	return lastResult == "The mixer is connected, but RC2FX isn't running on it"
 }

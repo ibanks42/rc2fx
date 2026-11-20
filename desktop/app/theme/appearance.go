@@ -1,4 +1,4 @@
-package app
+package theme
 
 // This file does not import gk: its functions are tested with plain `go test`.
 
@@ -110,17 +110,17 @@ var black = Surface{
 // AppearanceAll. Read on every render, written only by setAppearance.
 var currentAppearance atomic.Uint32
 
-func appearance() Appearance {
+func CurrentAppearance() Appearance {
 	i := int(currentAppearance.Load())
 	return AppearanceAll[min(i, len(AppearanceAll)-1)]
 }
 
 // surface is the current appearance's surfaces.
-func surface() *Surface { return appearance().surface() }
+func CurrentSurface() *Surface { return CurrentAppearance().surface() }
 
 // storeAppearance is the state half of changing the appearance (the theme
 // half is setAppearance in desk.go).
-func storeAppearance(a Appearance) {
+func StoreAppearance(a Appearance) {
 	i := 0
 	for j, x := range AppearanceAll {
 		if x == a {

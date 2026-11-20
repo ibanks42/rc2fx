@@ -1,4 +1,4 @@
-package app
+package state
 
 import "time"
 
@@ -32,7 +32,7 @@ const retryWait = 3 * time.Second
 
 // linkIntent is the connection intent, with the time of the next attempt
 // while one is scheduled. The zero value is linkOff.
-type linkIntent struct {
+type LinkIntent struct {
 	phase linkPhase
 	// retryAt is when linkRetry tries again; zero in every other phase.
 	retryAt time.Time
@@ -40,17 +40,17 @@ type linkIntent struct {
 
 // auto is whether the app keeps trying to connect (the connection screen's
 // "Listening…" rather than "Disconnected").
-func (l linkIntent) auto() bool {
+func (l LinkIntent) Auto() bool {
 	return l.phase == linkConnecting || l.phase == linkOn || l.phase == linkRetry
 }
 
 // connecting is whether a connect command is out.
-func (l linkIntent) connecting() bool { return l.phase == linkConnecting }
+func (l LinkIntent) Connecting() bool { return l.phase == linkConnecting }
 
 // begin starts an attempt, canceling any scheduled one; sent is whether the
 // connect command went out.
-func (l *linkIntent) begin(sent bool) {
-	*l = linkIntent{phase: linkOn}
+func (l *LinkIntent) Begin(sent bool) {
+	*l = LinkIntent{phase: linkOn}
 	if sent {
 		l.phase = linkConnecting
 	}
@@ -58,46 +58,46 @@ func (l *linkIntent) begin(sent bool) {
 
 // stop is Disconnect: no more attempts. A pause for a flash stays, so the
 // app still looks for the mixer once the flash is over.
-func (l *linkIntent) stop() {
+func (l *LinkIntent) Stop() {
 	if l.phase != linkPausedForFlash {
-		*l = linkIntent{}
+		*l = LinkIntent{}
 	}
 }
 
 // connected notes that the mixer answered the connect command.
-func (l *linkIntent) connected() {
+func (l *LinkIntent) Connected() {
 	if l.phase == linkConnecting || l.phase == linkRetry {
-		*l = linkIntent{phase: linkOn}
+		*l = LinkIntent{phase: linkOn}
 	}
 }
 
 // failed notes a failure event at now. Any connect command out is over;
 // while the app wants a connection and has none, it tries again after
 // retryWait.
-func (l *linkIntent) failed(connected bool, now time.Time) {
+func (l *LinkIntent) Failed(connected bool, now time.Time) {
 	switch {
-	case l.auto() && !connected:
-		*l = linkIntent{phase: linkRetry, retryAt: now.Add(retryWait)}
+	case l.Auto() && !connected:
+		*l = LinkIntent{phase: linkRetry, retryAt: now.Add(retryWait)}
 	case l.phase == linkConnecting:
-		*l = linkIntent{phase: linkOn}
+		*l = LinkIntent{phase: linkOn}
 	}
 }
 
 // pauseForFlash drops the intent to connect until flashDone.
-func (l *linkIntent) pauseForFlash() { *l = linkIntent{phase: linkPausedForFlash} }
+func (l *LinkIntent) PauseForFlash() { *l = LinkIntent{phase: linkPausedForFlash} }
 
 // flashDone ends a pause for a flash: the next attempt starts at now. It
 // reports whether there was a pause to end.
-func (l *linkIntent) flashDone(now time.Time) bool {
+func (l *LinkIntent) FlashDone(now time.Time) bool {
 	if l.phase != linkPausedForFlash {
 		return false
 	}
-	*l = linkIntent{phase: linkRetry, retryAt: now}
+	*l = LinkIntent{phase: linkRetry, retryAt: now}
 	return true
 }
 
 // due is whether a scheduled attempt should start at now, with the session
 // connected or not.
-func (l linkIntent) due(connected bool, now time.Time) bool {
+func (l LinkIntent) Due(connected bool, now time.Time) bool {
 	return l.phase == linkRetry && !connected && !now.Before(l.retryAt)
 }

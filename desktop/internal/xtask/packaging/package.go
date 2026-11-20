@@ -239,7 +239,7 @@ func checkGoBuild(executable []byte) error {
 			tags = strings.Split(s.Value, ",")
 		}
 	}
-	for _, refused := range []string{"mockmixer", "rc2fxdev", "rc2fxdebug"} {
+	for _, refused := range []string{"mockmixer", "rc2fxdev"} {
 		if slices.Contains(tags, refused) {
 			return task.Errorf("the executable was built with -tags %s; packages never ship it: rebuild with ./xtask package", refused)
 		}

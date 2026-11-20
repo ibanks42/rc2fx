@@ -57,10 +57,10 @@ func ghost(id gk.ID, label string) gk.ButtonEl {
 // base page.
 func (a *App) setSettingsOpen(open bool) {
 	if !open {
-		a.nav.closeOverlay()
+		a.nav.CloseOverlay()
 		return
 	}
-	if a.nav.showSettings() {
+	if a.nav.ShowSettings() {
 		a.listPresets()
 		a.readSSH()
 	}
@@ -73,7 +73,7 @@ func (a *App) mixerSection(cx *gk.Cx) gk.DivEl {
 	}
 	rows := gk.Div().
 		Child(row(labeled("RØDECaster", connected),
-			ghost("disconnect", "Disconnect").Disabled(!a.session.Connected && !a.link.connecting()).
+			ghost("disconnect", "Disconnect").Disabled(!a.session.Connected && !a.link.Connecting()).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.disconnect(cx) }))).
 		Child(row(labeled("RC2FX on this mixer",
 			"Update RC2FX to a newer version, or remove it and put RØDE’s stock firmware back. Your settings are saved first."),
@@ -91,7 +91,7 @@ func (a *App) mixerSection(cx *gk.Cx) gk.DivEl {
 // showDiagnostics switches between Settings and its Diagnostics page. They
 // share one scroll position, so each starts at its top.
 func (a *App) showDiagnostics(cx *gk.Cx, open bool) {
-	a.nav.setDiagnostics(open)
+	a.nav.SetDiagnostics(open)
 	a.contentScroll.SetOffset(cx, gk.GpuiPoint{})
 }
 
@@ -107,7 +107,7 @@ func (a *App) filesSection(cx *gk.Cx) gk.DivEl {
 		row(labeled("Settings file", "Open a settings file into your draft, or save this draft to share or keep."),
 			gk.HFlex(s.Gap2).
 				Child(ghost("open-settings-file", "Open…").
-					Disabled(a.fileBusy || a.pending != nil || a.presets.writing() || a.link.connecting() || a.transitionBusy()).
+					Disabled(a.fileBusy || a.pending != nil || a.presets.writing() || a.link.Connecting() || a.transitionBusy()).
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openDraft(cx) })).
 				Child(ghost("save-settings-file", "Save…").Disabled(a.fileBusy).
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.saveDraft(cx) }))).
@@ -193,7 +193,7 @@ func (a *App) diagnosticsPage(cx *gk.Cx) gk.DivEl {
 }
 
 func (a *App) settingsPage(cx *gk.Cx) gk.Element {
-	if a.nav.diagnostics() {
+	if a.nav.Diagnostics() {
 		return a.diagnosticsPage(cx)
 	}
 	return gk.VFlex(s.WFull, s.MxAuto, s.Pb6).Gap(px(40)).MaxW(px(settingsColumn)).Pt(px(18)).

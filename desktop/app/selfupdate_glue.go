@@ -1,11 +1,12 @@
 package app
 
-// Self-update, the drawing half: the state lives in app/selfupdate (with
-// Velopack behind app/selfupdate/vpkc); these start its background work and
-// show its results. Nothing happens on its own: the user downloads, then
-// chooses "Restart to update", which is held back while the installer has a
-// run going or the mixer may still be updating (installerRestartBlocker),
-// and still asks about unsaved edits like any other quit.
+// Self-update, the background-task glue: the state lives in app/selfupdate
+// (with Velopack behind app/selfupdate/vpkc); these start its background work
+// and hand results back to the UI (which versions_dialog.go draws). Nothing
+// happens on its own: the user downloads, then chooses "Restart to update",
+// which is held back while the installer has a run going or the mixer may
+// still be updating (installerRestartBlocker), and still asks about unsaved
+// edits like any other quit.
 
 import (
 	"time"

@@ -1,4 +1,4 @@
-package app
+package theme
 
 // This file does not import gk: its functions are tested with plain `go test`.
 
@@ -22,10 +22,10 @@ import (
 const themeSetName = "RC2FX"
 
 // themeName is the registry name of an appearance's theme.
-func themeName(a Appearance) string { return "RC2FX " + a.Label() }
+func Name(a Appearance) string { return "RC2FX " + a.Label() }
 
 // hexColor is a 0xRRGGBB color in the theme file's "#rrggbb" form.
-func hexColor(c uint32) string { return fmt.Sprintf("#%06x", c&0xffffff) }
+func HexColor(c uint32) string { return fmt.Sprintf("#%06x", c&0xffffff) }
 
 // themeColors is applyTheme's colors for one appearance, by the
 // kit's theme-file keys (gpui-component src/theme/schema.rs
@@ -36,7 +36,7 @@ func themeColors(a Appearance) map[string]string {
 	for k, v := range kitDefaultDarkColors {
 		colors[k] = v
 	}
-	set := func(key string, c uint32) { colors[key] = hexColor(c) }
+	set := func(key string, c uint32) { colors[key] = HexColor(c) }
 	set("background", sf.Bg)
 	set("foreground", Text)
 	set("border", sf.Line)
@@ -87,14 +87,14 @@ type themeFile struct {
 }
 
 // themeSetJSON is the kit theme file holding one theme per appearance.
-func themeSetJSON() string {
+func SetJSON() string {
 	set := struct {
 		Name   string      `json:"name"`
 		Themes []themeFile `json:"themes"`
 	}{Name: themeSetName}
 	for _, a := range AppearanceAll {
 		set.Themes = append(set.Themes, themeFile{
-			Name:     themeName(a),
+			Name:     Name(a),
 			Mode:     "dark",
 			FontSize: RootText,
 			Radius:   8,

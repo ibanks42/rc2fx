@@ -1,4 +1,4 @@
-package app
+package theme
 
 // The desk's helpers that do not draw: effect names, signal order and stage
 // summaries. This file does not import gk: its
@@ -12,7 +12,7 @@ import (
 )
 
 // shortEffect is a short effect name for the channel list.
-func shortEffect(effect core.Effect) string {
+func ShortEffect(effect core.Effect) string {
 	switch effect {
 	case core.EffectHighpass:
 		return "HPF"
@@ -32,7 +32,7 @@ func shortEffect(effect core.Effect) string {
 
 // effectIndex is `effect as usize`: the effect's place in core.EffectAll, for
 // element ids.
-func effectIndex(effect core.Effect) int {
+func EffectIndex(effect core.Effect) int {
 	if i := slices.Index(core.EffectAll[:], effect); i >= 0 {
 		return i
 	}
@@ -41,7 +41,7 @@ func effectIndex(effect core.Effect) int {
 
 // visibleEffects is the effects in signal order, without suppression on
 // targets that cannot use it.
-func visibleEffects(target *core.Target) []core.Effect {
+func VisibleEffects(target *core.Target) []core.Effect {
 	effects := make([]core.Effect, 0, len(target.Order)+1)
 	for _, effect := range target.Order {
 		if target.SupportsSuppression() || effect != core.EffectSuppression {
@@ -57,7 +57,7 @@ func visibleEffects(target *core.Target) []core.Effect {
 }
 
 // stageSummary is a stage's key value in the flow lane.
-func stageSummary(target *core.Target, effect core.Effect, channel core.Channel) string {
+func StageSummary(target *core.Target, effect core.Effect, channel core.Channel) string {
 	switch effect {
 	case core.EffectSuppression:
 		gate := ""
@@ -68,7 +68,7 @@ func stageSummary(target *core.Target, effect core.Effect, channel core.Channel)
 	case core.EffectGain:
 		return fmt.Sprintf("%+.2f dB", target.Gain.DB)
 	case core.EffectHighpass:
-		return formatHz(target.Highpass.Frequency)
+		return FormatHz(target.Highpass.Frequency)
 	case core.EffectEQ:
 		count := len(target.EQ.Channel(channel))
 		plural := "s"

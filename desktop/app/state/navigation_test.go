@@ -1,4 +1,4 @@
-package app
+package state
 
 import "testing"
 
@@ -7,13 +7,13 @@ type navigationFacts struct {
 	home, homeInFront, channelInFront, baseInFront, settings, diagnostics bool
 }
 
-func factsOf(n navigation) navigationFacts {
-	return navigationFacts{n.home(), n.homeInFront(), n.channelInFront(), n.basePageInFront(),
-		n.settings(), n.diagnostics()}
+func factsOf(n Navigation) navigationFacts {
+	return navigationFacts{n.Home(), n.HomeInFront(), n.ChannelInFront(), n.BasePageInFront(),
+		n.Settings(), n.Diagnostics()}
 }
 
 func TestTheAppStartsOnHome(t *testing.T) {
-	var n navigation
+	var n Navigation
 	want := navigationFacts{home: true, homeInFront: true, baseInFront: true}
 	if got := factsOf(n); got != want {
 		t.Fatalf("start %+v, want %+v", got, want)
@@ -23,7 +23,7 @@ func TestTheAppStartsOnHome(t *testing.T) {
 func TestOnePageIsInFront(t *testing.T) {
 	for _, base := range []basePage{pageHome, pageChannel} {
 		for _, over := range []overlay{overlayNone, overlaySettings, overlayDiagnostics} {
-			f := factsOf(navigation{base, over})
+			f := factsOf(Navigation{base, over})
 			front := 0
 			for _, shown := range []bool{f.homeInFront, f.channelInFront, f.settings} {
 				if shown {
@@ -44,54 +44,54 @@ func TestOnePageIsInFront(t *testing.T) {
 }
 
 func TestSettingsAndDiagnostics(t *testing.T) {
-	n := navigation{base: pageChannel}
-	if !n.showSettings() {
+	n := Navigation{base: pageChannel}
+	if !n.ShowSettings() {
 		t.Fatal("opening Settings was not reported")
 	}
-	n.setDiagnostics(true)
-	if !n.diagnostics() || !n.settings() {
+	n.SetDiagnostics(true)
+	if !n.Diagnostics() || !n.Settings() {
 		t.Fatalf("Diagnostics not shown: %+v", factsOf(n))
 	}
 	// Settings again, from Diagnostics: its main page, not a new opening.
-	if n.showSettings() {
+	if n.ShowSettings() {
 		t.Fatal("Settings reported as newly opened")
 	}
-	if n.diagnostics() {
+	if n.Diagnostics() {
 		t.Fatal("Diagnostics stayed in front")
 	}
-	n.closeOverlay()
-	if !n.channelInFront() {
+	n.CloseOverlay()
+	if !n.ChannelInFront() {
 		t.Fatalf("closing did not show the channel again: %+v", factsOf(n))
 	}
 }
 
 func TestDiagnosticsOnlyFromSettings(t *testing.T) {
-	var n navigation
-	n.setDiagnostics(true)
-	if n.diagnostics() || !n.homeInFront() {
+	var n Navigation
+	n.SetDiagnostics(true)
+	if n.Diagnostics() || !n.HomeInFront() {
 		t.Fatalf("Diagnostics opened without Settings: %+v", factsOf(n))
 	}
 }
 
 func TestTheBasePageStaysUnderOverlays(t *testing.T) {
-	var n navigation
-	n.showChannel()
-	n.showSettings()
-	if n.home() || n.channelInFront() {
+	var n Navigation
+	n.ShowChannel()
+	n.ShowSettings()
+	if n.Home() || n.ChannelInFront() {
 		t.Fatalf("channel under Settings: %+v", factsOf(n))
 	}
 	// A new connection puts Home behind Settings without closing it.
-	n.homeBehind()
-	if !n.home() || !n.settings() || n.homeInFront() {
+	n.HomeBehind()
+	if !n.Home() || !n.Settings() || n.HomeInFront() {
 		t.Fatalf("Home behind Settings: %+v", factsOf(n))
 	}
-	n.showChannel()
-	if !n.channelInFront() {
+	n.ShowChannel()
+	if !n.ChannelInFront() {
 		t.Fatalf("opening a channel: %+v", factsOf(n))
 	}
-	n.showSettings()
-	n.showHome()
-	if !n.homeInFront() {
+	n.ShowSettings()
+	n.ShowHome()
+	if !n.HomeInFront() {
 		t.Fatalf("the overview from Settings: %+v", factsOf(n))
 	}
 }

@@ -49,9 +49,6 @@ type (
 	Platform = platform.Platform
 )
 
-// DuoWarning is shown before anything is done for a Duo.
-const DuoWarning = "RØDECaster Duo support is experimental and has NOT been tested on hardware. Flashing, recovery and audio routing may fail, cause loud or incorrect audio, or leave the mixer unusable. Back up your RØDE show, disconnect speakers and headphones before testing, and proceed entirely at your own risk. Only Duo firmware is allowed; never flash Pro II firmware onto a Duo."
-
 // payloadMarker keeps the build identity in the executable's data.
 var payloadMarker = payloadModeText
 

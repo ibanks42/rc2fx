@@ -20,7 +20,7 @@ import (
 // channelNav is the channel list: processed channels first, each with its
 // live line and effects; then the rest by kind; and the filter at the foot.
 func (a *App) channelNav(cx *gk.Cx) gk.Element {
-	editing := a.nav.channelInFront()
+	editing := a.nav.ChannelInFront()
 	sources := a.showSources()
 	sourceOf := func(id string) *core.StockSource {
 		for _, src := range sources {
@@ -75,7 +75,7 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 					a.channel = core.ChannelLeft
 					a.importDraft = nil
 					a.importError = nil
-					a.nav.showChannel()
+					a.nav.ShowChannel()
 					a.rebuildEditors(cx)
 					a.notify(cx)
 				}))
@@ -108,8 +108,8 @@ func (a *App) channelNav(cx *gk.Cx) gk.Element {
 		list = list.Child(gk.Div(s.Pt2).Px(px(12)).TextSize(px(12)).TextColor(rgb(Faint)).
 			Child(txt("Loading show inputs…")))
 	}
-	overview := a.nav.homeInFront()
-	settings := a.nav.settings()
+	overview := a.nav.HomeInFront()
+	settings := a.nav.Settings()
 	return gk.VFlex(s.FlexShrink0, s.HFull, s.BorderR1).W(px(SidebarWidth)).
 		BorderColor(rgb(surface().Line)).
 		Child(gk.Div().Px(px(12)).Pt(px(14)).
@@ -325,7 +325,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	target := a.target().Clone()
 	// A channel's editor fills the window to its foot; the other pages keep
 	// some room below their last section.
-	editorPage := a.nav.channelInFront() && a.unprocessedSource() == nil
+	editorPage := a.nav.ChannelInFront() && a.unprocessedSource() == nil
 	bottom := PageBottom
 	if editorPage {
 		bottom = EditorBottom
@@ -348,9 +348,9 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	}
 	var rail gk.Element
 	switch {
-	case a.nav.settings():
+	case a.nav.Settings():
 		content = content.Child(a.settingsPage(cx))
-	case a.nav.home():
+	case a.nav.Home():
 		content = content.Child(a.homePage(cx))
 	default:
 		if source := a.unprocessedSource(); source != nil {
@@ -382,7 +382,7 @@ func (a *App) renderPage(cx *gk.Cx) gk.Element {
 	root := gk.VFlex(s.SizeFull).FontFamily("Inter").Bg(rgb(surface().Bg)).TextColor(rgb(Text)).
 		TrackFocus(a.focus).
 		OnKeyDown(func(cx *gk.Cx, e gk.KeyEvent) {
-			away := !a.nav.homeInFront()
+			away := !a.nav.HomeInFront()
 			// Ctrl+Z / Ctrl+Shift+Z (Cmd on macOS) undo and redo edits,
 			// except while a text field has the keys.
 			if e.Key == "z" && e.Modifiers&(gk.ModControl|gk.ModPlatform) != 0 && a.editingValue == nil {

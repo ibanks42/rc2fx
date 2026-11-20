@@ -6,7 +6,7 @@ package packaging
 // without the `velopack` tag does not update itself, and the checkout's
 // placeholder notices are compiled in.
 //
-//	(default)    development build (-tags rc2fxdebug,rc2fxdev) in
+//	(default)    development build (-tags rc2fxdev) in
 //	             target/debug
 //	--release    release build (-trimpath -ldflags="-s -w") in target/release
 //	--mock       the simulated mixer (-tags mockmixer); a development build
@@ -67,7 +67,7 @@ func RunApp(args []string) error {
 		return command
 	}
 	if embedded {
-		if err := task.Run(host("run", "./installer/embed/cmd/stage-payload", "-root", root)); err != nil {
+		if err := task.Run(host("run", "./cmd/stage-payload", "-root", root)); err != nil {
 			return err
 		}
 	}
@@ -91,11 +91,11 @@ func RunApp(args []string) error {
 		ldflags = "-s -w"
 	case mock:
 		out = filepath.Join(root, "target", "mock")
-		tags = append(tags, "mockmixer", "rc2fxdebug", "rc2fxdev")
+		tags = append(tags, "mockmixer", "rc2fxdev")
 		flags = append(flags, "-trimpath")
 		ldflags = "-s -w"
 	default:
-		tags = append(tags, "rc2fxdebug", "rc2fxdev")
+		tags = append(tags, "rc2fxdev")
 	}
 	if embedded {
 		tags = append(tags, "embedded")

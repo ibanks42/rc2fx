@@ -1,4 +1,4 @@
-//go:build rc2fxdebug
+//go:build rc2fxdev
 
 package app
 
@@ -6,7 +6,7 @@ package app
 // `rc2fx --telemetry-preview [old|events]` shows the Telemetry section, or
 // the events window, alone, filled with made-up data, for looking at the
 // layout. They open no connection of any kind. They are built only with
-// `-tags rc2fxdebug` (preview_off.go is the release side).
+// `-tags rc2fxdev` (dev_off.go is the release side).
 
 import (
 	"time"

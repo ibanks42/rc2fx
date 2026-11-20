@@ -1,4 +1,4 @@
-package app
+package theme
 
 // This file does not import gk.
 
@@ -54,4 +54,4 @@ const (
 
 // appID is the window's identity: the desktop entry's StartupWMClass and Icon
 // (desktop/packaging/rc2fx.desktop); windowIdentity applies it.
-const appID = "rc2fx"
+const AppID = "rc2fx"

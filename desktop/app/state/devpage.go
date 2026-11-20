@@ -1,4 +1,4 @@
-package app
+package state
 
 // The parsing half of the dev page switch (dev_page.go navigates).
 // `RC2FX_DEV_PAGE`: open the app on a chosen page, for development and
@@ -52,12 +52,12 @@ type DevPage struct {
 
 // DevPageFromEnv is the page RC2FX_DEV_PAGE asks for; nil when it is unset
 // or does not parse (which is reported on stderr).
-func DevPageFromEnv() *DevPage {
+func DevPageFromEnv(allowFlows bool) *DevPage {
 	value, ok := os.LookupEnv("RC2FX_DEV_PAGE")
 	if !ok {
 		return nil
 	}
-	page, err := parseDevPage(value)
+	page, err := ParseDevPage(value, allowFlows)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "RC2FX_DEV_PAGE ignored: %s\n", err)
 		return nil
@@ -67,12 +67,12 @@ func DevPageFromEnv() *DevPage {
 
 // needsMixer: channels need the mixer's state; the other pages can open at
 // once.
-func (p DevPage) needsMixer() bool {
+func (p DevPage) NeedsMixer() bool {
 	return p.Kind == DevPageChannel || p.Kind == DevPageHome
 }
 
 // parseDevPage parses an RC2FX_DEV_PAGE value.
-func parseDevPage(value string) (DevPage, error) {
+func ParseDevPage(value string, allowFlows bool) (DevPage, error) {
 	value = strings.TrimSpace(value)
 	// At most three parts: page, channel, effect.
 	parts := strings.SplitN(value, ":", 3)
@@ -95,7 +95,7 @@ func parseDevPage(value string) (DevPage, error) {
 			name = strings.TrimSpace(strings.Join(parts[1:], ":"))
 		}
 		switch {
-		case !devFlows:
+		case !allowFlows:
 			return DevPage{}, fmt.Errorf("`flow:` pages are in development builds only")
 		case name == "":
 			return DevPage{}, fmt.Errorf("`flow:` needs a state, such as `flow:B4`")
@@ -141,7 +141,7 @@ func parseDevPage(value string) (DevPage, error) {
 
 // findChannel is the channel whose name or id matches, ignoring (ASCII) case.
 // names holds [id, name] pairs.
-func findChannel(names [][2]string, wanted string) (int, bool) {
+func FindChannel(names [][2]string, wanted string) (int, bool) {
 	for i, n := range names {
 		if asciiEqualFold(n[0], wanted) || asciiEqualFold(n[1], wanted) {
 			return i, true

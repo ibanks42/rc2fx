@@ -425,7 +425,8 @@ func finished(a *App, cx *gk.Cx, stock bool) *Installer {
 // openFlowFixture opens the flow state id from made-up data.
 func (a *App) openFlowFixture(cx *gk.Cx, id string) {
 	a.flowFixture = true
-	a.link = linkIntent{phase: linkOn}
+	a.link = linkIntent{}
+	a.link.Begin(false)
 	if id == "Aoff" {
 		a.link = linkIntent{}
 		a.notify(cx)

@@ -1,4 +1,4 @@
-package app
+package state
 
 // This file does not import gk: its functions are tested with plain `go test`.
 
@@ -6,8 +6,8 @@ import "strings"
 
 // progressMessage is whether message reports a step still under way rather
 // than an outcome.
-func progressMessage(message string) bool {
-	if strings.HasPrefix(message, saveFailedPrefix) {
+func ProgressMessage(message string) bool {
+	if strings.HasPrefix(message, SaveFailedPrefix) {
 		// A failed save is an outcome whatever its reason says.
 		return false
 	}
@@ -15,18 +15,18 @@ func progressMessage(message string) bool {
 		strings.HasPrefix(message, "Requesting")
 }
 
-// mixerChangedElsewhere is what the app says when the mixer's settings
+// MixerChangedElsewhere is what the app says when the mixer's settings
 // changed while it held unsaved edits. The edits are kept, put on top of the
 // new settings and saved like any other edit.
-const mixerChangedElsewhere = "Mixer settings changed elsewhere. Your edits were kept and are saved on top of them."
+const MixerChangedElsewhere = "Mixer settings changed elsewhere. Your edits were kept and are saved on top of them."
 
-// saveFailedPrefix starts every saveFailedMessage.
-const saveFailedPrefix = "Couldn't save"
+// SaveFailedPrefix starts every saveFailedMessage.
+const SaveFailedPrefix = "Couldn't save"
 
 // saveFailedMessage is what a failed save of the settings says.
-func saveFailedMessage(reason string) string {
+func SaveFailedMessage(reason string) string {
 	if reason == "" {
-		return saveFailedPrefix + " the settings to the mixer."
+		return SaveFailedPrefix + " the settings to the mixer."
 	}
-	return saveFailedPrefix + ": " + reason
+	return SaveFailedPrefix + ": " + reason
 }

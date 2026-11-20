@@ -2,7 +2,7 @@ package app
 
 // Checking GitHub for a newer desktop app. The check only
 // notifies. Copies Velopack installed download and install an update when
-// the user asks (selfupdate_view.go); other copies link to the release page.
+// the user asks (selfupdate_glue.go); other copies link to the release page.
 // The logic is app/updates; this starts the checks and draws the links.
 
 import (

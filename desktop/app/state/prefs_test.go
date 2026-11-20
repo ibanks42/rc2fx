@@ -1,4 +1,4 @@
-package app
+package state
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 // The connection screen's decisions and the view preferences file.
 
 func TestOnlyARefusedOpenOffersTheUSBRule(t *testing.T) {
-	if !usbPermission("USB permission required: Permission denied (os error 13)") {
+	if !USBPermission("USB permission required: Permission denied (os error 13)") {
 		t.Fatal("a refused open does not offer the rule")
 	}
 	for _, other := range []string{
@@ -17,14 +17,14 @@ func TestOnlyARefusedOpenOffersTheUSBRule(t *testing.T) {
 		"Couldn't open the mixer's USB control: No such file or directory (os error 2)",
 		"The mixer is connected, but RC2FX isn't running on it",
 	} {
-		if usbPermission(other) {
+		if USBPermission(other) {
 			t.Errorf("offered the rule for %q", other)
 		}
 	}
 }
 
 func TestFoundCopyRequiresTheSpecificDeviceDiscoveryOutcome(t *testing.T) {
-	if !mixerFound("The mixer is connected, but RC2FX isn't running on it") {
+	if !MixerFound("The mixer is connected, but RC2FX isn't running on it") {
 		t.Fatal("the discovery outcome is not found")
 	}
 	for _, other := range []string{
@@ -33,7 +33,7 @@ func TestFoundCopyRequiresTheSpecificDeviceDiscoveryOutcome(t *testing.T) {
 		"No RØDECaster Pro II connected",
 		"More than one RØDECaster Pro II is connected; connect only one",
 	} {
-		if mixerFound(other) {
+		if MixerFound(other) {
 			t.Errorf("found for %q", other)
 		}
 	}

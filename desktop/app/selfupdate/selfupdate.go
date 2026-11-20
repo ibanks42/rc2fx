@@ -3,7 +3,7 @@
 // zips, or the Linux AppImage. Other copies (development builds, builds from
 // source) only link to the release page. It is the non-UI half of
 // self-update; the buttons are in package app
-// (selfupdate_view.go) and Velopack's C library is behind Manager (package
+// (selfupdate_glue.go) and Velopack's C library is behind Manager (package
 // selfupdate/vpkc, built with the `velopack` tag).
 //
 // Nothing happens on its own. The update check says a version exists; the
