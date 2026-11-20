@@ -53,76 +53,13 @@ func routingAcknowledgement(saved DeviceState, enabled bool) DeviceState {
 	return ack
 }
 
-func TestResumeRequiresExplicitCompleteRetirementNotLiveOrStaleMeters(t *testing.T) {
-	ready := routingState(false)
-	ok(t, ready.Validate())
-	check(t, ready.CanEnableProcessing())
-	check(t, !ready.CanDisableProcessing())
-	mutations := []func(*DeviceState){
-		func(s *DeviceState) { s.Engine.RestartAllowed = false },
-		func(s *DeviceState) { s.Engine.Status = EnginePhaseRunning },
-		func(s *DeviceState) { s.Engine.Status = EnginePhaseError },
-		func(s *DeviceState) { s.Engine.Mode = EngineModeSimulation },
-		func(s *DeviceState) { s.Engine.AudioAdvancing = true },
-		func(s *DeviceState) { s.Engine.Generation = 9_007_199_254_740_991 },
-		func(s *DeviceState) { s.Routing.Status = RoutingPhaseError },
-		func(s *DeviceState) { s.Routing.Channels = 2 },
-		func(s *DeviceState) { s.Routing.Recovered = 2 },
-		func(s *DeviceState) { s.Selection.ActiveTargetIDs = append(s.Selection.ActiveTargetIDs, "usb-main") },
-		func(s *DeviceState) { s.Selection.PendingTargetIDs = append(s.Selection.PendingTargetIDs, "usb-main") },
-		func(s *DeviceState) { s.Selection.Status = SelectionPhaseChanging },
-		func(s *DeviceState) { s.Config.SelectedTargets = s.Config.SelectedTargets[:0] },
-	}
-	for i, mutate := range mutations {
-		changed := ready.Clone()
-		mutate(&changed)
-		check(t, !changed.CanEnableProcessing(), i, changed)
-	}
-	check(t, routingState(true).CanDisableProcessing())
-}
-
-func TestRoutingAcknowledgementIsBoundToGenerationSettingsAndDirection(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		saved := routingState(!enabled)
-		session := DefaultSession()
-		receive(t, &session, saved.Clone())
-		pending := must(session.BeginRouting(enabled))
-		check(t, pending.Request.ExpectedGeneration == 9)
-		ack := routingAcknowledgement(saved, enabled)
-		ok(t, pending.ValidateAcknowledgement(ack))
-		mutations := []func(*DeviceState){
-			func(s *DeviceState) { s.Engine.Generation-- },
-			func(s *DeviceState) { s.Config.Revision++ },
-			func(s *DeviceState) { s.Config.Targets[0].Gain.DB = -4. },
-			func(s *DeviceState) { s.Engine.Status = EnginePhaseRunning },
-			func(s *DeviceState) { s.Engine.RestartAllowed = true },
-			func(s *DeviceState) { s.Engine.AudioAdvancing = true },
-			func(s *DeviceState) { s.Engine.AppliedRevision = 1 },
-			func(s *DeviceState) { s.Routing.Status = RoutingPhaseActive },
-			func(s *DeviceState) { s.Selection.PendingTargetIDs = append(s.Selection.PendingTargetIDs, "usb-main") },
-		}
-		for i, mutate := range mutations {
-			wrong := ack.Clone()
-			mutate(&wrong)
-			fails(t, pending.ValidateAcknowledgement(wrong), enabled, i)
-		}
-		completed := routingState(enabled)
-		completed.Engine.Generation = 10
-		receive(t, &session, completed.Clone())
-		session.Draft[0].Gain.DB = -7.
-		ok(t, session.AcknowledgeRouting(pending, ack))
-		check(t, session.Saved.Equal(completed))
-		check(t, session.Draft[0].Gain.DB == -7.)
-	}
-}
-
 func TestDisconnectedAndDirtyEnableRequestsAreNotSent(t *testing.T) {
 	session := DefaultSession()
 	fails(t, must2(session.BeginRouting(true)))
-	receive(t, &session, routingState(false))
+	receive(t, &session, nativeState(false))
 	session.Draft[0].Gain.DB = -5.
 	fails(t, must2(session.BeginRouting(true)))
-	receive(t, &session, routingState(true))
+	receive(t, &session, nativeState(true))
 	// Disabling must remain possible even when the local effects draft is dirty.
 	ok(t, must2(session.BeginRouting(false)))
 	session.Disconnect()

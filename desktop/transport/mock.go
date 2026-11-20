@@ -51,8 +51,8 @@ const mockFirmware = "1.7.7"
 
 const mockFirmwareProfile = "rodecaster-pro-ii-1.7.7"
 
-// mockRuntime stands for the Rust crate's CARGO_PKG_VERSION, which the mock
-// reports as the runtime's version.
+// mockRuntime is the mixer runtime version the simulated mixer reports
+// (tracking config/mixer-release.json, independent of the desktop app version).
 const mockRuntime = "0.2.1"
 
 type showFader struct {

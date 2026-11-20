@@ -33,16 +33,6 @@ impl Effect {
         Self::Gain,
         Self::Limiter,
     ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Highpass => "High-pass",
-            Self::Suppression => "Noise suppression",
-            Self::Eq => "Equalizer",
-            Self::Compressor => "Compressor",
-            Self::Gain => "Gain",
-            Self::Limiter => "Limiter",
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -65,17 +55,6 @@ impl BandType {
         Self::HighPass,
         Self::Notch,
     ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Off => "Off",
-            Self::Bell => "Bell",
-            Self::LowShelf => "Low shelf",
-            Self::HighShelf => "High shelf",
-            Self::LowPass => "Low-pass",
-            Self::HighPass => "High-pass",
-            Self::Notch => "Notch",
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

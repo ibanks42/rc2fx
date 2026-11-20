@@ -118,7 +118,10 @@ var diagnosticsKinds = []DiagnosticsKind{
 }
 
 func (k *DiagnosticsKind) UnmarshalText(text []byte) error {
-	return enumUnmarshal(k, text, diagnosticsKinds)
+	if err := enumUnmarshal(k, text, diagnosticsKinds); err != nil {
+		*k = DiagnosticsKindOther
+	}
+	return nil
 }
 
 // EventDetails is the numbers a kind carries. Every field is optional: an

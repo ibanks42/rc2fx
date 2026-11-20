@@ -49,7 +49,6 @@ class ReleaseTests(unittest.TestCase):
     def put_go_desktop(self, version="0.1.0"):
         self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
         self.put("desktop/installer/installer.go", f'package installer\n\nconst AppVersion = "{version}"\n')
-        self.put("desktop/transport/mock.go", f'package transport\n\nconst mockRuntime = "{version}"\n')
 
     def test_go_desktop_release_downloads_mixer_and_bumps_the_go_versions(self):
         self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":1}')
@@ -63,7 +62,7 @@ class ReleaseTests(unittest.TestCase):
         notes = (self.root / "target/release-input/release-notes.md").read_text()
         self.assertIn("Mixer software is downloaded separately", notes)
         self.assertNotIn("Bundled RC2FX", notes)
-        go_files = ["desktop/installer/installer.go", "desktop/transport/mock.go"]
+        go_files = ["desktop/installer/installer.go"]
         for name in go_files:
             self.assertIn('= "0.1.1"\n', (self.root / name).read_text(), name)
         plan = json.loads((self.root / "target/release-input/plan.json").read_text())
@@ -78,12 +77,24 @@ class ReleaseTests(unittest.TestCase):
 
     def test_go_version_that_differs_from_the_workspace_is_refused(self):
         self.git("tag", "v0.1.0")
-        self.put("desktop/transport/mock.go", 'package transport\n\nconst mockRuntime = "0.0.9"\n')
+        self.put("desktop/installer/installer.go", 'package installer\n\nconst AppVersion = "0.0.9"\n')
         self.git("add", ".")
         self.git("commit", "-m", "feat: go desktop")
         result = self.prepare(check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("mockRuntime differs from workspace version", result.stderr)
+        self.assertIn("AppVersion differs from workspace version", result.stderr)
+
+    def test_real_repository_go_versions_match_workspace(self):
+        import re
+        import sys
+        sys.path.insert(0, str(ROOT / ".github/scripts"))
+        import release
+        current = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+        for rel, declaration in release.GO_VERSIONS.items():
+            text = (ROOT / rel).read_text()
+            found = re.findall(rf'^({re.escape(declaration)} = )"([^"\n]*)"$', text, flags=re.M)
+            self.assertEqual(len(found), 1, f"{rel}: {declaration}")
+            self.assertEqual(found[0][1], current, f"{rel}: {declaration} != {current}")
 
     def test_existing_tag_and_changelog(self):
         self.git("tag", "v0.1.0")

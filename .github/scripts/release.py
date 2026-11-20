@@ -27,13 +27,12 @@ def version_tuple(version):
     return tuple(map(int, version.split(".")))
 
 
-# The Go desktop's copies of the workspace version: the app version
-# (installer.AppVersion, which packages are named with and the app reports;
-# package model refers to it rather than keeping a copy) and the mock
-# mixer's runtime version.
+# The Go desktop's copy of the app version (installer.AppVersion, which
+# packages are named with and the app reports; package model refers to it
+# rather than keeping a copy). The mock mixer's runtime version tracks
+# config/mixer-release.json separately.
 GO_VERSIONS = {
     Path("desktop/installer/installer.go"): "const AppVersion",
-    Path("desktop/transport/mock.go"): "const mockRuntime",
 }
 
 

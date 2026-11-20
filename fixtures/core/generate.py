@@ -616,8 +616,14 @@ page_in["events"][2]["details"] = {}
 case("diagnostics page", "diagnosticsEvents", "diagnostics/page.json", ser(page_in), True,
      "a null path and empty details are left out when written",
      canonical=("diagnostics/page.canonical.json", ser(PAGE)))
+unknown_kind = copy.deepcopy(PAGE)
+unknown_kind["events"][0]["kind"] = "newKind"
+unknown_kind_canon = copy.deepcopy(PAGE)
+unknown_kind_canon["events"][0]["kind"] = "other"
+case("diagnostics page, unknown-kind", "diagnosticsEvents", "diagnostics/unknown-kind.json", ser(unknown_kind), True,
+     "a newer mixer's unknown event kind arrives as other",
+     canonical=("diagnostics/unknown-kind.canonical.json", ser(unknown_kind_canon)))
 for name, fn, why in [
-    ("unknown-kind", lambda p: p["events"][0].update(kind="newKind"), "unknown enum variant"),
     ("details-unknown-field", lambda p: p["events"][0]["details"].update(extra=1), "deny_unknown_fields"),
     ("page-unknown-field", lambda p: p.update(extra=1), "deny_unknown_fields"),
 ]:

@@ -36,7 +36,7 @@ desktop:
 desktop-mock:
     {{ xtask }} app --mock --build-only
 
-# Build the desktop app and its packages into target/package (needs the gpuikit download and Velopack's C library; Windows and macOS need vpk)
+# Build the desktop app and its packages into target/package (needs the gpuikit download, Velopack's C library, and vpk)
 package:
     {{ xtask }} package
 
@@ -98,7 +98,7 @@ mixer-disable:
 
 # Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and, on Linux, the Rust workspace
 [unix]
-test: mixer-build
+test:
     cd desktop && test -z "$(gofmt -l $(go list -e -f '{{ "{{" }}.Dir{{ "}}" }}' ./...))"
     cd desktop && CGO_ENABLED=0 go vet $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$')
     cd desktop && if [ -e third_party/gpuikit ]; then CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go test ./...; else go test $(go list ./... | grep -v -e '/app$' -e '/app/uitest$' -e '/cmd/rc2fx$'); fi
@@ -115,7 +115,7 @@ test-rust:
 
 # Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked). The Rust crates build for Linux only.
 [windows]
-test: mixer-build
+test:
     $ui = '/app$|/app/uitest$|/cmd/rc2fx$'; $all = go -C desktop list ./...; $nocgo = $all | Where-Object { $_ -notmatch $ui }; $pkgs = if (Test-Path desktop/third_party/gpuikit) { $all } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/gpuikit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/gpuikit/lib).Path)" }; go -C desktop test $pkgs; if (-not $?) { exit 1 }
     go -C desktop test -tags mockmixer ./transport/...
 
@@ -136,7 +136,7 @@ test-mixer:
 bench-build:
     {{ xtask }} bench-build
 
-# Time every suppression model on the mixer over a 48 kHz recording and fetch the denoised audio
+# Time the suppression model on the mixer over a 48 kHz recording and fetch the denoised audio
 bench recording *flags: bench-build
     {{ xtask }} bench {{ recording }} {{ flags }}
 

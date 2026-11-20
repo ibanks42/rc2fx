@@ -79,6 +79,7 @@ pub enum DiagnosticsKind {
     /// The user reset diagnostics; the counters the window shows restart here.
     Reset,
     /// A kind this build does not know (a newer mixer).
+    #[serde(other)]
     Other,
 }
 

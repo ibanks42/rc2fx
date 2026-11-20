@@ -43,7 +43,7 @@ var engineModes = []EngineMode{EngineModeSimulation, EngineModeJack, EngineModeN
 func (m *EngineMode) UnmarshalText(text []byte) error { return enumUnmarshal(m, text, engineModes) }
 
 func (m EngineMode) HasProcessingControls() bool {
-	return m == EngineModeJack || m == EngineModeNative
+	return m == EngineModeNative
 }
 
 // EnginePhase is serde `rename_all = "lowercase"`.
@@ -293,42 +293,21 @@ func (d DeviceState) nativeControlsReady() bool {
 
 // CanEnableProcessing: eligibility is a device claim following complete
 // stock-only recovery. An offline engine produces no meters; stale meters
-// cannot prove readiness.
+// cannot prove readiness. Only the native engine takes processing controls.
 func (d DeviceState) CanEnableProcessing() bool {
-	if d.Engine.Mode == EngineModeNative {
-		return d.nativeControlsReady() &&
-			d.Routing.Status == RoutingPhaseBypassed &&
-			d.Routing.Channels == 0 &&
-			len(d.Selection.ActiveTargetIDs) == 0
-	}
-	return d.Engine.Mode == EngineModeJack &&
-		d.Engine.Status == EnginePhaseOffline &&
-		d.Engine.RestartAllowed &&
-		d.Engine.Generation < 9_007_199_254_740_991 &&
-		!d.Engine.AudioAdvancing &&
+	return d.nativeControlsReady() &&
 		d.Routing.Status == RoutingPhaseBypassed &&
 		d.Routing.Channels == 0 &&
-		d.Routing.Recovered == 0 &&
-		len(d.Config.SelectedTargets) != 0 &&
-		d.Selection.Status == SelectionPhaseIdle &&
-		len(d.Selection.ActiveTargetIDs) == 0 &&
-		len(d.Selection.PendingTargetIDs) == 0
+		len(d.Selection.ActiveTargetIDs) == 0
 }
 
 func (d DeviceState) CanDisableProcessing() bool {
-	if d.Engine.Mode == EngineModeNative {
-		return (d.nativeControlsReady() && d.Routing.Status == RoutingPhaseActive) ||
+	return d.Engine.Mode == EngineModeNative &&
+		((d.nativeControlsReady() && d.Routing.Status == RoutingPhaseActive) ||
 			(d.Engine.Status == EnginePhaseError &&
 				d.Routing.Status == RoutingPhaseError &&
 				d.Selection.Status != SelectionPhaseChanging &&
-				len(d.Selection.PendingTargetIDs) == 0)
-	}
-	return d.Engine.Mode == EngineModeJack &&
-		d.Engine.Generation < 9_007_199_254_740_991 &&
-		d.Engine.Status == EnginePhaseRunning &&
-		d.Routing.Status == RoutingPhaseActive &&
-		d.Selection.Status == SelectionPhaseIdle &&
-		len(d.Selection.PendingTargetIDs) == 0
+				len(d.Selection.PendingTargetIDs) == 0))
 }
 
 // DeviceStateFromJSON is strict current-schema parsing.
