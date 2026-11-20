@@ -79,14 +79,17 @@ class Tests(unittest.TestCase):
     def test_the_controller_always_gets_its_sockets_and_developer_ssh(self):
         self.assertEqual(self.arguments(''), [
             '--data', '/d', '--native-socket', '/r/control.sock', '--usb-socket', '/r/usb.sock',
-            '--ui-socket', '/r/ui.sock', '--developer-ssh', f'{self.root}/rc2fx.sh'])
+            '--developer-ssh', f'{self.root}/rc2fx.sh'])
+        self.assertEqual(self.arguments('RC2FX_UI_SOCKET=1'), [
+            '--data', '/d', '--native-socket', '/r/control.sock', '--usb-socket', '/r/usb.sock',
+            '--developer-ssh', f'{self.root}/rc2fx.sh', '--ui-socket', '/r/ui.sock'])
 
     def test_optional_controller_arguments_follow_what_exists(self):
         (self.root / 'mixer-release.json').write_text('{}')
         show = self.root / 'show'
         show.write_text('{}')
         args = self.arguments(f'show={show}\nprofile_id=p1')
-        self.assertEqual(args[10:], [
+        self.assertEqual(args[8:], [
             '--stock-config', str(show), '--release', f'{self.root}/mixer-release.json',
             '--firmware-catalog', f'{self.root}/firmware-profiles.json', '--firmware-profile', 'p1'])
 

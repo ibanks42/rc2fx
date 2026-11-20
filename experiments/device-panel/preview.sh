@@ -23,7 +23,7 @@ setting() {
   fi
   printf '%s' "$value"
 }
-ip=$(setting ip); user=$(setting user); key=$(setting key); known=$(setting known_hosts)
+ip=$(setting ip); user=$(setting user); key=$(setting key); known=$(setting known_hosts); alias=$(setting host_key_alias)
 test -n "$ip" || { echo 'Set RC2FX_MIXER_IP or .rc2fx-mixer.conf' >&2; exit 2; }
 [[ "$ip" != -* && "$ip" != *[[:space:]]* ]] || exit 2
 user=${user:-root}
@@ -36,6 +36,9 @@ fi
 if [[ -n "$known" ]]; then
   test -f "$known" || { echo 'Known-hosts file missing; set RC2FX_MIXER_KNOWN_HOSTS' >&2; exit 2; }
   options+=(-o "UserKnownHostsFile=$known")
+fi
+if [[ -n "$alias" ]]; then
+  options+=(-o "HostKeyAlias=$alias")
 fi
 host="$user@$ip"
 # Arm, check, then run: without the one-shot flag a hung mixer stays off after
@@ -56,7 +59,7 @@ stage=$(ssh "${options[@]}" "$host" 'set -e
   printf "%s  %s\n" aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca /usr/bin/rc_gui_juce | sha256sum -c - >/dev/null
   umask 077; mktemp -d /run/rc2fx-ui-upload.XXXXXX')
 [[ "$stage" =~ ^/run/rc2fx-ui-upload\.[a-zA-Z0-9]+$ ]] || { echo 'Unexpected RAM staging path' >&2; exit 1; }
-tar -C "$root/target/device-ui" -cf - librc2fx_ui.so rc2fx-ui-status rc2fx.sh SHA256SUMS \
+tar -C "$root/target/device-ui" -cf - librc2fx_ui.so rc2fx-ui-status ui.sh SHA256SUMS \
   | ssh "${options[@]}" "$host" "set -e; tar -xf - -C '$stage'; cd '$stage'; sha256sum -c SHA256SUMS"
 ssh "${options[@]}" "$host" "'$stage/rc2fx-ui-status'" \
   || echo 'Touchscreen controller not ready; the panel will show offline and refuse setting changes' >&2
@@ -64,13 +67,13 @@ ssh "${options[@]}" "$host" "'$stage/rc2fx-ui-status'" \
 # Bounded trials end automatically; a kept RAM session has its own watchdog.
 if [[ "$keep" == 1 ]]; then
   pid=$(ssh "${options[@]}" "$host" \
-    "setsid /bin/bash '$stage/rc2fx.sh' ui-run --restart-gui '$stage/librc2fx_ui.so' < /dev/null > '$stage/session.log' 2>&1 & echo \$!")
+    "setsid /bin/bash '$stage/ui.sh' ui-run --restart-gui '$stage/librc2fx_ui.so' < /dev/null > '$stage/session.log' 2>&1 & echo \$!")
   [[ "$pid" =~ ^[0-9]+$ ]] || exit 1
   printf 'RAM UI supervisor PID %s; startup log %s/session.log\n' "$pid" "$stage"
   printf 'To restore stock UI: '
-  printf '%q ' ssh "${options[@]}" "$host" "/bin/bash '$stage/rc2fx.sh' ui-stop"
+  printf '%q ' ssh "${options[@]}" "$host" "/bin/bash '$stage/ui.sh' ui-stop"
   printf '\n'
 else
   ssh "${options[@]}" "$host" \
-    "/bin/bash '$stage/rc2fx.sh' ui-preview --restart-gui '$stage/librc2fx_ui.so' '$seconds'"
+    "/bin/bash '$stage/ui.sh' ui-preview --restart-gui '$stage/librc2fx_ui.so' '$seconds'"
 fi

@@ -44,15 +44,16 @@ fw_setenv() {{ test "$*" = 'reboot_pwr_button_bypass 1' || return 9;
 
 class DeveloperOnlyCallers(unittest.TestCase):
     """The GUI experiments arm before anything else and stop if they cannot; start-up never arms."""
-    def test_only_the_command_and_ui_preview_arm(self):
+    def test_only_the_command_arms_in_rc2fx_sh(self):
         calls = [line.strip() for line in SCRIPT.splitlines() if line.strip().startswith(('arm_power_recovery', 'arm-power'))]
-        self.assertEqual(calls, ['arm_power_recovery \\', 'arm_power_recovery() {', 'arm-power-recovery) arm_power_recovery ;;'])
+        self.assertEqual(calls, ['arm_power_recovery() {', 'arm-power-recovery) arm_power_recovery ;;'])
 
     def ui_preview(self, arm):
+        ui_script = (REPO / 'experiments/device-panel/ui.sh').read_text()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             (root / 'ui.so').touch()
-            body = SCRIPT.split('\nui_preview() {', 1)[1].split('\n}\n', 1)[0].replace('in /run/*)', f'in {root}/*)')
+            body = ui_script.split('\nui_preview() {', 1)[1].split('\n}\n', 1)[0].replace('in /run/*)', f'in {root}/*)')
             stubs = f'id() {{ echo 0; }}\narm_power_recovery() {{ echo armed; {arm}; }}\nui_preview() {{{body}\n}}\n'
             return subprocess.run(['bash', '-c', stubs + f"ui_preview --restart-gui '{root}/ui.so' 10"], capture_output=True, text=True)
 

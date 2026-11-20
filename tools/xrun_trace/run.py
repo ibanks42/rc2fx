@@ -40,7 +40,7 @@ def ssh(command, data=None, timeout=60):
     return gzip.decompress(p.stdout) if compressed else p.stdout
 
 def remote(action,*args):
-    return ssh(shlex.join(['bash','-s','--','xrun-trace',action,*map(str,args)]),(ROOT/'mixer/scripts/rc2fx.sh').read_bytes(),timeout=240 if action=='collect' else 60)
+    return ssh(shlex.join(['bash','-s','--','xrun-trace',action,*map(str,args)]),(ROOT/'tools/xrun_trace/xrun-trace.sh').read_bytes(),timeout=240 if action=='collect' else 60)
 
 def arm_power_recovery(action):
     """Arm, check, then run: set the bootloader's one-shot power-on flag with this checkout's rc2fx.sh, read it back, and raise unless it is 1."""
