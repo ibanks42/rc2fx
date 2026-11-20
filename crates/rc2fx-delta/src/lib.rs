@@ -26,7 +26,7 @@ use zstd::zstd_safe::{CCtx, CParameter};
 use zstd::zstd_safe::{DCtx, DParameter, InBuffer, OutBuffer};
 
 pub const MAGIC: &str = "RC2FX-DELTA 1\n";
-const ENVELOPE_MAGIC: &str = "RC2FX-EMBEDDED-PAYLOAD 1\n";
+pub const ENVELOPE_MAGIC: &str = "RC2FX-EMBEDDED-PAYLOAD 1\n";
 const MAX_LINE: usize = 512;
 /// The head is the envelope header and its manifest, not any file bytes.
 const MAX_HEAD: usize = 64 * 1024;

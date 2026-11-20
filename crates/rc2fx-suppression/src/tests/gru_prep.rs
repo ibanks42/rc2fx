@@ -1,6 +1,6 @@
 //! The worker's staged preparation after each published frame: when it runs,
 //! when it stops, and that it never changes a result.
-use super::*;
+use super::super::*;
 use std::{
     cell::Cell,
     sync::{Mutex, mpsc},

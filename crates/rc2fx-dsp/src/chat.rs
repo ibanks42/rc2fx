@@ -238,8 +238,8 @@ impl Chat {
     /// Everything `process` leaves behind, as bits.
     #[cfg(test)]
     pub(crate) fn state_bits(&self) -> Vec<u64> {
-        let mut bits = crate::block_tests::state(&self.voice);
-        bits.extend(crate::block_tests::state(&self.output));
+        let mut bits = crate::tests::block::state(&self.voice);
+        bits.extend(crate::tests::block::state(&self.output));
         bits.push(self.voice.gate_open.to_bits());
         bits.extend(self.voice.gate_open_for);
         bits.push(self.position as u64);

@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 
 fn target(channels: u8, bypass: bool) -> Target {
     let mut target = Target::new("identity", "Identity", TargetKind::Playback, channels);

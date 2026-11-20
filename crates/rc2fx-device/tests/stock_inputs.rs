@@ -81,6 +81,7 @@ fn duo_has_seven_faders_and_a_headset_source_without_pro_ii_aliases() {
         &file,
         &config,
         rc2fx_device::catalog::physical_catalog_for(Model::Duo),
+        Model::Duo,
     );
     assert!(inventory.available);
     assert_eq!(
@@ -172,7 +173,7 @@ fn virtual_sources_bind_only_their_exact_model_specific_stereo_ports() {
         std::fs::write(&file, fixture_with_sources(&ids, &[11, 12, 13, 14, 15])).unwrap();
         let config = rc2fx_device::catalog::default_config(model);
         let catalog = rc2fx_device::catalog::physical_catalog_for(model);
-        let inventory = read(&file, &config, catalog);
+        let inventory = read(&file, &config, catalog, model);
         assert!(inventory.available);
         let prefix = if model == Model::Duo { "duo-" } else { "" };
         for (source, suffix) in [(12, "game"), (13, "music"), (14, "a"), (15, "b")] {
@@ -195,7 +196,7 @@ fn virtual_sources_bind_only_their_exact_model_specific_stereo_ports() {
         );
         let mut missing = catalog.to_vec();
         missing.retain(|(_, ports)| ports[1] != "JUCEJack:in_14");
-        let inventory = read(&file, &config, &missing);
+        let inventory = read(&file, &config, &missing, model);
         assert!(
             inventory
                 .inputs
@@ -211,7 +212,7 @@ fn virtual_sources_bind_only_their_exact_model_specific_stereo_ports() {
             fixture_with_sources(&vec![-1; ids.len()], &[12, 13, 14, 15]),
         )
         .unwrap();
-        let unassigned = read(&file, &config, catalog);
+        let unassigned = read(&file, &config, catalog, model);
         assert_eq!(unassigned.inputs.len(), 4);
         assert!(
             unassigned
@@ -405,7 +406,7 @@ fn wireless_and_callme_names_preserve_assigned_faders_without_processing_binding
     let before = serde_json::to_vec(&config).unwrap();
     std::fs::write(&path, &data).unwrap();
     // Actual read/binding projection still leaves all these sources unbound.
-    let readback = read(&path, &config, &CATALOG);
+    let readback = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(readback.available);
     assert!(
         readback
@@ -459,30 +460,30 @@ fn reads_are_fresh_and_only_complete_qualified_physical_pairs_bind() {
     let path = dir.path().join("show.bin");
     let config = Config::default();
     let before = serde_json::to_vec(&config).unwrap();
-    assert!(!read(&path, &config, &CATALOG).available);
+    assert!(!read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi).available);
     let data = fixture(&IDS);
     std::fs::write(&path, &data).unwrap();
-    let result = read(&path, &config, &CATALOG);
+    let result = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(result.available);
     assert_eq!(result.inputs[0].target_id, "mic-1");
     assert_eq!(result.inputs[1].target_id, "usb-main");
     assert!(result.inputs[2..].iter().all(|s| s.target_id.is_empty()));
     assert!(
-        read(&path, &config, &CATALOG[..2]).inputs[1]
+        read(&path, &config, &CATALOG[..2], rc2fx_firmware::Model::ProIi).inputs[1]
             .target_id
             .is_empty()
     );
     let mut reversed = CATALOG;
     reversed.swap(1, 2);
     assert!(
-        read(&path, &config, &reversed).inputs[1]
+        read(&path, &config, &reversed, rc2fx_firmware::Model::ProIi).inputs[1]
             .target_id
             .is_empty()
     );
     let mut duplicate = CATALOG.to_vec();
     duplicate.push(CATALOG[0]);
     assert!(
-        read(&path, &config, &duplicate).inputs[0]
+        read(&path, &config, &duplicate, rc2fx_firmware::Model::ProIi).inputs[0]
             .target_id
             .is_empty()
     );
@@ -494,14 +495,14 @@ fn reads_are_fresh_and_only_complete_qualified_physical_pairs_bind() {
         .unwrap()
         .kind = rc2fx_core::TargetKind::Output;
     assert!(
-        read(&path, &wrong_kind, &CATALOG).inputs[1]
+        read(&path, &wrong_kind, &CATALOG, rc2fx_firmware::Model::ProIi).inputs[1]
             .target_id
             .is_empty()
     );
     assert_eq!(std::fs::read(&path).unwrap(), data);
     assert_eq!(serde_json::to_vec(&config).unwrap(), before);
     std::fs::write(&path, b"partial save").unwrap();
-    let missing = read(&path, &config, &CATALOG);
+    let missing = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(!missing.available);
     assert!(missing.inputs.is_empty());
     assert!(missing.revision.is_empty());
@@ -539,7 +540,7 @@ fn mic4_effects_stay_on_combo4_when_its_fader_moves_or_is_replaced() {
         fixture_with_sources(&[7, 3, -1, -1, -1, -1, -1, -1, -1], &[7, 3]),
     )
     .unwrap();
-    let moved = read(&path, &config, &CATALOG);
+    let moved = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(moved.available, "{}", moved.message);
     let mic4 = moved.inputs.iter().find(|s| s.source_id == 3).unwrap();
     assert_eq!(mic4.fader, Some(2));
@@ -556,7 +557,7 @@ fn mic4_effects_stay_on_combo4_when_its_fader_moves_or_is_replaced() {
         fixture_with_sources(&[7, -1, -1, -1, -1, -1, -1, -1, -1], &[7, 3]),
     )
     .unwrap();
-    let replaced = read(&path, &config, &CATALOG);
+    let replaced = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(replaced.available, "{}", replaced.message);
     let mic4 = replaced.inputs.iter().find(|s| s.source_id == 3).unwrap();
     assert_eq!(mic4.fader, None);
@@ -581,7 +582,7 @@ fn removing_mic4_source_keeps_selected_effects_and_never_moves_them() {
         fixture_with_sources(&[7, -1, -1, -1, -1, -1, -1, -1, -1], &[7]),
     )
     .unwrap();
-    let removed = read(&path, &config, &CATALOG);
+    let removed = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(removed.available, "{}", removed.message);
     assert!(removed.inputs.iter().all(|s| s.source_id != 3));
     assert!(removed.inputs.iter().all(|s| s.target_id != "mic-1"));
@@ -598,13 +599,13 @@ fn removing_mic4_source_keeps_selected_effects_and_never_moves_them() {
 
     // Incomplete and missing reads do not change the selected effects either.
     std::fs::write(&path, b"partial save").unwrap();
-    let partial = read(&path, &config, &CATALOG);
+    let partial = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(!partial.available);
     assert!(partial.inputs.is_empty());
     assert_eq!(serde_json::to_vec(&config).unwrap(), before);
 
     std::fs::remove_file(&path).unwrap();
-    let missing = read(&path, &config, &CATALOG);
+    let missing = read(&path, &config, &CATALOG, rc2fx_firmware::Model::ProIi);
     assert!(!missing.available);
     assert!(missing.inputs.is_empty());
     assert_eq!(serde_json::to_vec(&config).unwrap(), before);
@@ -618,10 +619,26 @@ fn special_files_and_symlinks_do_not_block_or_read_another_file() {
     std::fs::write(&target, fixture(&IDS)).unwrap();
     let link = dir.path().join("link");
     symlink(&target, &link).unwrap();
-    assert!(!read(&link, &Config::default(), &CATALOG).available);
+    assert!(
+        !read(
+            &link,
+            &Config::default(),
+            &CATALOG,
+            rc2fx_firmware::Model::ProIi
+        )
+        .available
+    );
     let fifo = dir.path().join("fifo");
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-    assert!(!read(&fifo, &Config::default(), &CATALOG).available);
+    assert!(
+        !read(
+            &fifo,
+            &Config::default(),
+            &CATALOG,
+            rc2fx_firmware::Model::ProIi
+        )
+        .available
+    );
 }

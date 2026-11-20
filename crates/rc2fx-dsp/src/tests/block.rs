@@ -6,7 +6,7 @@
 //! through `Dsp::process` or `Dsp::process_in_place` and through that
 //! reference, and compares the output samples, all eight meter fields and the
 //! whole processing state as bits.
-use super::*;
+use super::super::*;
 
 pub(crate) struct Rng(pub u64);
 impl Rng {
@@ -94,7 +94,7 @@ impl Suppression for Voice {
 }
 
 /// Everything `block` and `frame` leave behind, as bits.
-pub(super) fn state(dsp: &Dsp) -> Vec<u64> {
+pub(crate) fn state(dsp: &Dsp) -> Vec<u64> {
     let mut bits = vec![
         dsp.gain.to_bits(),
         dsp.wet.to_bits(),

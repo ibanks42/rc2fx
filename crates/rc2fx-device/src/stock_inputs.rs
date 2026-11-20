@@ -31,13 +31,12 @@ pub fn unavailable(message: &str) -> StockInventory {
 
 /// The path is fixed by local startup configuration, never a request argument.
 /// Each call reads anew; a partial save cannot leave a cached layout on screen.
-pub fn read(path: &Path, config: &Config, catalog: &[CatalogChannel<'_>]) -> StockInventory {
-    // The board-checked daemon supplies this catalog, not the saved show.
-    let model = if catalog.iter().any(|(id, _)| id.starts_with("duo-")) {
-        rc2fx_firmware::Model::Duo
-    } else {
-        rc2fx_firmware::Model::ProIi
-    };
+pub fn read(
+    path: &Path,
+    config: &Config,
+    catalog: &[CatalogChannel<'_>],
+    model: rc2fx_firmware::Model,
+) -> StockInventory {
     let result = (|| -> io::Result<_> {
         let mut options = OpenOptions::new();
         options.read(true);

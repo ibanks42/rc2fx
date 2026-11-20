@@ -39,10 +39,7 @@ pub type Result<T> = std::result::Result<T, CoreError>;
 
 /// Rejects duplicate keys at every depth, oversized input and excessive nesting.
 pub fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
-    Ok(serde_json::from_value(strict_json::parse(
-        text,
-        512 * 1024,
-    )?)?)
+    from_json_limited(text, 512 * 1024, 200_000)
 }
 
 /// Strict parsing with explicit storage bounds. A bounded validation pass keeps

@@ -8,7 +8,7 @@
 //!
 //! Each of these changes used to be a step: the stage was added or removed,
 //! or its gain curve moved, between one block and the next.
-use super::*;
+use super::super::*;
 
 /// The mixer's period: settings change between blocks of this length.
 const PERIOD: usize = 112;

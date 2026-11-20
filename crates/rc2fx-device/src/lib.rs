@@ -16,6 +16,7 @@ pub mod mixer_update;
 pub mod native_backend;
 pub mod native_plan;
 mod persistence;
+mod proc_stat;
 pub mod recent;
 pub mod show_watch;
 pub mod stock_inputs;

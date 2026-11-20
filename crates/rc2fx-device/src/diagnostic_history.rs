@@ -269,17 +269,8 @@ impl NativeProcess {
 }
 fn parse_process(bytes: &[u8], pid: u32, hz: u64, page: u64) -> io::Result<ProcessResources> {
     let invalid = || io::Error::other("invalid process stat");
-    let text = std::str::from_utf8(bytes).map_err(|_| invalid())?;
-    let open = text.find('(').ok_or_else(invalid)?;
-    let close = text
-        .rfind(')')
-        .filter(|close| *close > open)
-        .ok_or_else(invalid)?;
-    if text[..open].trim().parse::<u32>().map_err(|_| invalid())? != pid || hz == 0 || page == 0 {
-        return Err(invalid());
-    }
-    let fields: Vec<_> = text[close + 1..].split_whitespace().collect();
-    if fields.len() < 22 {
+    let (parsed_pid, fields) = crate::proc_stat::split_stat(bytes)?;
+    if parsed_pid != pid || hz == 0 || page == 0 || fields.len() < 22 {
         return Err(invalid());
     }
     let number = |index: usize| fields[index].parse::<u64>().map_err(|_| invalid());
@@ -317,12 +308,10 @@ struct Counters {
     worker_failed: bool,
     performance: Option<Performance>,
 }
-enum PendingTelemetry {
-    Native {
-        at: Stamp,
-        meter: Meter,
-        contexts: Vec<rc2fx_native_control::ContextStatus>,
-    },
+struct PendingTelemetry {
+    at: Stamp,
+    meter: Meter,
+    contexts: Vec<rc2fx_native_control::ContextStatus>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -636,13 +625,13 @@ impl History {
             }
         }
         if self.accept_meter(&meter) {
-            if matches!(self.pending, Some(PendingTelemetry::Native { .. })) {
+            if self.pending.is_some() {
                 self.retention.replaced_pending_native_windows = self
                     .retention
                     .replaced_pending_native_windows
                     .saturating_add(1);
             }
-            self.pending = Some(PendingTelemetry::Native {
+            self.pending = Some(PendingTelemetry {
                 at: self.stamp(Instant::now()),
                 meter,
                 contexts: native,
@@ -858,7 +847,7 @@ impl History {
     }
     fn materialize_pending(&mut self) -> Option<Arc<[u8]>> {
         match self.pending.take() {
-            Some(PendingTelemetry::Native {
+            Some(PendingTelemetry {
                 at,
                 meter,
                 contexts,

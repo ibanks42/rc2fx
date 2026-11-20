@@ -17,19 +17,58 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long an event poll waits for the next event.
 const EVENT_WAIT: Duration = Duration::from_millis(50);
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Options {
+    /// Hardware model the controller is serving (checked at startup).
+    pub model: rc2fx_firmware::Model,
     /// Read-only local startup setting; inaccessible through API writes.
     pub stock_config: Option<PathBuf>,
     pub catalog: Vec<crate::stock_inputs::CatalogChannel<'static>>,
     /// What `GET api/v1/version` reports, read once at startup.
     pub versions: rc2fx_core::DeviceVersions,
+    /// Installed bundle directory containing `image.sha256` and `data/image-check`.
+    /// Set only for the USB 1 server; `api/v1/image-check` answers 404 elsewhere.
+    pub image_check_dir: Option<PathBuf>,
     /// Developer SSH access. Set only for the USB 1 server; the touchscreen
     /// socket never has it, so `api/v1/ssh` answers 404 there.
     pub developer_ssh: Option<Arc<crate::developer_ssh::DeveloperSsh>>,
     /// Signed in-place updates. Set only for the USB 1 server, for the same
     /// reason: `api/v1/update` answers 404 everywhere else.
     pub mixer_update: Option<Arc<crate::mixer_update::MixerUpdate>>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            model: rc2fx_firmware::Model::ProIi,
+            stock_config: None,
+            catalog: Vec::new(),
+            versions: rc2fx_core::DeviceVersions::default(),
+            image_check_dir: None,
+            developer_ssh: None,
+            mixer_update: None,
+        }
+    }
+}
+
+/// Read the launcher's check of the flashed image (`rc2fx.sh image-check`)
+/// from an installed bundle directory.
+pub fn image_check(bundle: &std::path::Path) -> rc2fx_core::ImageCheck {
+    use std::io::Read;
+    let read = |path: PathBuf, limit: u64| -> Option<Vec<u8>> {
+        let mut data = Vec::new();
+        std::fs::File::open(path)
+            .ok()?
+            .take(limit)
+            .read_to_end(&mut data)
+            .ok()?;
+        Some(data)
+    };
+    let digest = read(bundle.join("image.sha256"), 16 << 20)
+        .map(|data| crate::mixer_update::install::sum(&data));
+    let record = read(bundle.join("data/image-check"), 64 * 1024)
+        .map(|data| String::from_utf8_lossy(&data).into_owned());
+    rc2fx_core::ImageCheck::from_record(record.as_deref(), digest.as_deref())
 }
 
 /// A response body, carried as validated JSON text rather than a `Value`
@@ -257,8 +296,8 @@ impl Api {
                 None => error(404, "In-place updates are not available here"),
             },
             // The launcher's check of the files the last flash unpacked.
-            ("GET", "api/v1/image-check") => match &self.options.mixer_update {
-                Some(update) => reply(200, &update.image_check()),
+            ("GET", "api/v1/image-check") => match &self.options.image_check_dir {
+                Some(bundle) => reply(200, &image_check(bundle)),
                 None => error(404, "The image check is not available here"),
             },
             // What the app diffs a signed release against for a delta upload.
@@ -511,7 +550,7 @@ impl Api {
         };
         let options = self.options.clone();
         read_inventory(deadline, permit, move || {
-            crate::stock_inputs::read(&path, &config, &options.catalog)
+            crate::stock_inputs::read(&path, &config, &options.catalog, options.model)
         })
         .await
     }

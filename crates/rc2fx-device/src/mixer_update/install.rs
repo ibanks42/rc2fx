@@ -704,13 +704,7 @@ pub fn driver_alive(paths: &Paths) -> bool {
     {
         return false;
     }
-    process_start(pid).as_deref() == Some(started)
-}
-
-fn process_start(pid: u32) -> Option<String> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(19).map(str::to_owned)
+    crate::proc_stat::process_start(pid).as_deref() == Some(started)
 }
 
 /// Every payload file in `dir` is present, regular and matches the manifest.

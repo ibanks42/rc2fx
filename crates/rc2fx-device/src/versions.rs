@@ -92,19 +92,6 @@ mod tests {
 
     const CATALOG: &str = include_str!("../../../config/firmware-profiles.json");
 
-    struct Dir(std::path::PathBuf);
-    impl Drop for Dir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    fn dir(name: &str) -> Dir {
-        let path =
-            std::env::temp_dir().join(format!("rc2fx-versions-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        Dir(path)
-    }
     fn first_pro_ii() -> rc2fx_firmware::Profile {
         rc2fx_firmware::Catalog::parse(CATALOG)
             .unwrap()
@@ -116,9 +103,9 @@ mod tests {
 
     #[test]
     fn reports_the_installed_release_and_the_validated_profile() {
-        let d = dir("ok");
-        let release = d.0.join("mixer-release.json");
-        let catalog = d.0.join("firmware-profiles.json");
+        let d = tempfile::tempdir().unwrap();
+        let release = d.path().join("mixer-release.json");
+        let catalog = d.path().join("firmware-profiles.json");
         std::fs::write(
             &release,
             br#"{"schemaVersion":1,"version":"0.3.1","protocolVersion":1}"#,
@@ -141,9 +128,9 @@ mod tests {
 
     #[test]
     fn an_older_install_without_a_manifest_stays_unknown() {
-        let d = dir("old");
+        let d = tempfile::tempdir().unwrap();
         let (v, problems) = read(
-            Some(&d.0.join("mixer-release.json")),
+            Some(&d.path().join("mixer-release.json")),
             None,
             None,
             Model::ProIi,
@@ -179,9 +166,9 @@ mod tests {
 
     #[test]
     fn an_invalid_manifest_or_unknown_profile_is_never_guessed() {
-        let d = dir("bad");
-        let release = d.0.join("mixer-release.json");
-        let catalog = d.0.join("firmware-profiles.json");
+        let d = tempfile::tempdir().unwrap();
+        let release = d.path().join("mixer-release.json");
+        let catalog = d.path().join("firmware-profiles.json");
         std::fs::write(
             &release,
             br#"{"schemaVersion":2,"version":"9.9.9","protocolVersion":1}"#,

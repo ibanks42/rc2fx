@@ -377,13 +377,6 @@ fn invalid(error: rc2fx_core::CoreError) -> StoreError {
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= 128
 }
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 48
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
 fn validate_disk(disk: &DiskState) -> Result<()> {
     if disk.engine_generation > MAX_REVISION {
         return Err(StoreError::Invalid(
@@ -401,7 +394,10 @@ fn validate_disk(disk: &DiskState) -> Result<()> {
     }
     let mut seen = HashSet::new();
     for preset in &disk.presets {
-        if !valid_id(&preset.id) || !seen.insert(&preset.id) || !valid_name(&preset.name) {
+        if !rc2fx_core::valid_id(&preset.id)
+            || !seen.insert(&preset.id)
+            || !valid_name(&preset.name)
+        {
             return Err(StoreError::Invalid("invalid or duplicate preset".into()));
         }
         Config {
@@ -417,5 +413,4 @@ fn validate_disk(disk: &DiskState) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "../tests/support/store_faults.rs"]
 mod faults;

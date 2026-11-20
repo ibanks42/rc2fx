@@ -8,8 +8,8 @@
 //! `process_sample` and `voice` for each sample. Output samples, all eight
 //! meter fields, the whole processing state with the gate, and what each
 //! provider was handed and left behind must be the same in all three.
-use super::block_tests::{Rng, adversarial, bands, edit, meter_bits, reference_block, state};
-use super::*;
+use super::super::*;
+use super::block::{Rng, adversarial, bands, edit, meter_bits, reference_block, state};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering::Relaxed},

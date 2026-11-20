@@ -117,7 +117,7 @@ fn encode_base64_unpadded(bytes: &[u8]) -> String {
     out
 }
 
-fn decode_base64(text: &str) -> Option<Vec<u8>> {
+pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
     let value = |c: u8| -> Option<u32> {
         Some(match c {
             b'A'..=b'Z' => c - b'A',

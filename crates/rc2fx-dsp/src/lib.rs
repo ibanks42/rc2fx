@@ -1869,10 +1869,4 @@ fn suppress(
 }
 
 #[cfg(test)]
-mod block_tests;
-#[cfg(test)]
-mod identity_tests;
-#[cfg(test)]
-mod provider_block_tests;
-#[cfg(test)]
-mod switch_tests;
+mod tests;

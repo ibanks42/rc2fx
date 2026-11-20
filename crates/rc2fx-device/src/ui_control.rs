@@ -466,6 +466,7 @@ mod tests {
     /// Cross-language regression: the ACTUAL C serializer/decoder talks to
     /// this real controller, not a parallel model of the wire protocol.
     #[tokio::test]
+    #[ignore = "exercises out-of-tree experiments/device-panel/client_test.c"]
     async fn actual_c_client_presets_conflicts_and_delayed_mutation_reply() {
         use std::io::{Read, Write};
         let directory = tempfile::tempdir().unwrap();

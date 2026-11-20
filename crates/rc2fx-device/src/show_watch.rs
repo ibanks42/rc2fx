@@ -198,6 +198,7 @@ pub async fn run(
     handle: Handle,
     path: PathBuf,
     catalog: Vec<stock_inputs::CatalogChannel<'static>>,
+    model: rc2fx_firmware::Model,
 ) {
     let mut watcher = Watch::default();
     let mut unchanged = Some(UnchangedShow::default());
@@ -216,7 +217,7 @@ pub async fn run(
             if let Some(assignment) = show.reusable(before.as_ref(), config.revision) {
                 return (Some(assignment), show);
             }
-            let inventory = stock_inputs::read(&read_path, &config, &read_catalog);
+            let inventory = stock_inputs::read(&read_path, &config, &read_catalog, model);
             let assignment: Option<HashSet<String>> =
                 if !inventory.available || inventory.validate().is_err() {
                     None

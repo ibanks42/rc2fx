@@ -11,7 +11,7 @@ use super::install::{BINARIES, PAYLOAD_NAMES, PINNED, sum};
 use sha2::Digest;
 use std::io::{self, Read};
 
-pub const MAGIC: &str = "RC2FX-EMBEDDED-PAYLOAD 1\n";
+pub const MAGIC: &str = rc2fx_delta::ENVELOPE_MAGIC;
 /// The envelope's sanity limit: the payload is about 11 MiB.
 pub const MAX_BODY: u64 = 256 << 20;
 const MAX_HEADER_LINE: u64 = 512;

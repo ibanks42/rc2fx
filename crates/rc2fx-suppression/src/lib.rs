@@ -1158,7 +1158,4 @@ fn prepare(
 }
 
 #[cfg(test)]
-#[path = "tests/gru_prep.rs"]
-mod gru_prep_tests;
-#[cfg(test)]
 mod tests;

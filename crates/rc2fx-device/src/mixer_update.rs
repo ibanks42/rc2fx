@@ -913,24 +913,6 @@ impl MixerUpdate {
     /// Missing or non-regular files are simply absent: the app then sends them
     /// whole. A running version the launcher could not read has nothing to
     /// diff, so the endpoint is unavailable rather than guessed.
-    /// The launcher's check of the flashed image (`rc2fx.sh image-check`).
-    pub fn image_check(&self) -> rc2fx_core::ImageCheck {
-        let bundle = self.paths.bundle();
-        let read = |path: PathBuf, limit: u64| -> Option<Vec<u8>> {
-            let mut data = Vec::new();
-            fs::File::open(path)
-                .ok()?
-                .take(limit)
-                .read_to_end(&mut data)
-                .ok()?;
-            Some(data)
-        };
-        let digest = read(bundle.join("image.sha256"), 16 << 20).map(|data| install::sum(&data));
-        let record = read(bundle.join("data/image-check"), 64 * 1024)
-            .map(|data| String::from_utf8_lossy(&data).into_owned());
-        rc2fx_core::ImageCheck::from_record(record.as_deref(), digest.as_deref())
-    }
-
     pub fn installed(&self) -> Result<Installed, UpdateError> {
         let version = self.running.clone().ok_or_else(|| {
             UpdateError::Unavailable("the running RC2FX version is unknown".into())
@@ -1167,50 +1149,7 @@ fn uptime_nanos() -> u64 {
 
 /// Strict standard base64, padding required. Returns `None` for anything else.
 fn decode_base64(text: &str) -> Option<Vec<u8>> {
-    let bytes = text.as_bytes();
-    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
-        return None;
-    }
-    let value = |b: u8| -> Option<u32> {
-        Some(match b {
-            b'A'..=b'Z' => u32::from(b - b'A'),
-            b'a'..=b'z' => u32::from(b - b'a') + 26,
-            b'0'..=b'9' => u32::from(b - b'0') + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        })
-    };
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    let chunks = bytes.len() / 4;
-    for index in 0..chunks {
-        let block = &bytes[index * 4..index * 4 + 4];
-        let padding = block.iter().rev().take_while(|b| **b == b'=').count();
-        if padding > 2 || (padding > 0 && index + 1 != chunks) {
-            return None;
-        }
-        let mut combined = 0u32;
-        for (position, byte) in block.iter().enumerate() {
-            let value = if position >= 4 - padding {
-                // Padding is only ever at the very end of the last block.
-                if *byte != b'=' {
-                    return None;
-                }
-                0
-            } else {
-                value(*byte)?
-            };
-            combined = combined << 6 | value;
-        }
-        out.push((combined >> 16) as u8);
-        if padding < 2 {
-            out.push((combined >> 8) as u8);
-        }
-        if padding < 1 {
-            out.push(combined as u8);
-        }
-    }
-    Some(out)
+    rc2fx_core::ssh::decode_base64(text)
 }
 
 /// The decoder's inverse, for the tests only.
