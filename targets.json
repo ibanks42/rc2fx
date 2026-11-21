@@ -2,133 +2,133 @@
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 795235919,
+    "version": 795240092,
     "expires": "2029-11-04T15:48:28.583715004Z",
     "targets": {
-      "v0.2.0/io.github.ibanks42.rc2fx-0.2.0-full.nupkg": {
-        "length": 30574678,
+      "v0.2.1/io.github.ibanks42.rc2fx-0.2.1-full.nupkg": {
+        "length": 30587376,
         "hashes": {
-          "sha256": "2dd8a3bc967133f60e48255110ba1b98cce466d20b89774f23547e75d8099f2e"
+          "sha256": "4046335b65a58125d2604b0f3d7ede44f3db90c67fdf8518ee10de02dd0fd186"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/io.github.ibanks42.rc2fx-0.2.0-linux-full.nupkg": {
-        "length": 55801042,
+      "v0.2.1/io.github.ibanks42.rc2fx-0.2.1-linux-full.nupkg": {
+        "length": 55790671,
         "hashes": {
-          "sha256": "fcfd136fb34a40016a7f54e8a249d7623eef013b6f369987ab67e573534bcdf8"
+          "sha256": "30db3bc8a4885390cf84bb3e06bcabce254b9ec7257d1112eaf5b39e416b3853"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/io.github.ibanks42.rc2fx-0.2.0-osx-full.nupkg": {
-        "length": 45994059,
+      "v0.2.1/io.github.ibanks42.rc2fx-0.2.1-osx-full.nupkg": {
+        "length": 46002957,
         "hashes": {
-          "sha256": "560c5d80f08958e9af1039343c551dc60a1385160160379a5c3107c6e1a5274f"
+          "sha256": "733bc283fc856cf917083fca80a1a7746c787ec6cca94976b9495a770d36095d"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-0.2.0-appimage-runtime-sources.tar.gz": {
+      "v0.2.1/rc2fx-0.2.1-appimage-runtime-sources.tar.gz": {
         "length": 10922294,
         "hashes": {
           "sha256": "eb8c6e9673d744e3eb6277af416211d4786dbe7b8aae5efeea7bbf2381c320fc"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-linux-x64.AppImage": {
-        "length": 56457720,
+      "v0.2.1/rc2fx-linux-x64.AppImage": {
+        "length": 56445432,
         "hashes": {
-          "sha256": "e19d8d12b7454ffae740f8599ceaa615a3f9ef4297ceb80ffd0536edec1bb0bb"
+          "sha256": "18c71b2140cc08d8415ad88a2984cee6e7171c8472e0e0c744e8e1a4fe1225d9"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-macos-arm64.pkg": {
-        "length": 44448728,
+      "v0.2.1/rc2fx-macos-arm64.pkg": {
+        "length": 44473640,
         "hashes": {
-          "sha256": "7c8f5228d44d9cf1db9e35b5f35330024c341706b36b91d7e35624c1aac25e20"
+          "sha256": "fbb4f794a146b662cbc3ade18042b013e514af4c6263952e42db8c299b157eae"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-macos-arm64.zip": {
-        "length": 44429292,
+      "v0.2.1/rc2fx-macos-arm64.zip": {
+        "length": 44448657,
         "hashes": {
-          "sha256": "1025acf6b57f70d8526a11dd540330412a2719cb413a815cd67c8a786bc65663"
+          "sha256": "4b6db71e085b6a030cef3ba7664ada33f8e932f8bdd7369ef41a523a23e45e5e"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-macos-universal.pkg": {
-        "length": 44448728,
+      "v0.2.1/rc2fx-macos-universal.pkg": {
+        "length": 44473640,
         "hashes": {
-          "sha256": "7c8f5228d44d9cf1db9e35b5f35330024c341706b36b91d7e35624c1aac25e20"
+          "sha256": "fbb4f794a146b662cbc3ade18042b013e514af4c6263952e42db8c299b157eae"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-macos-universal.zip": {
-        "length": 44429292,
+      "v0.2.1/rc2fx-macos-universal.zip": {
+        "length": 44448657,
         "hashes": {
-          "sha256": "1025acf6b57f70d8526a11dd540330412a2719cb413a815cd67c8a786bc65663"
+          "sha256": "4b6db71e085b6a030cef3ba7664ada33f8e932f8bdd7369ef41a523a23e45e5e"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-windows-x64-setup.exe": {
-        "length": 39056982,
+      "v0.2.1/rc2fx-windows-x64-setup.exe": {
+        "length": 39069680,
         "hashes": {
-          "sha256": "bd5777a45b4d8d4184301a7e905f90e9dce70dc1647782c6496a6804803381dd"
+          "sha256": "8b46d4be57d89cfbbf45ca69c752106b09878233f1e0f51b001e5b3b228a463d"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/rc2fx-windows-x64.zip": {
-        "length": 30563122,
+      "v0.2.1/rc2fx-windows-x64.zip": {
+        "length": 30575820,
         "hashes": {
-          "sha256": "4b592063b4d43934bc960dc48e27a3de05d7bca118333fdcde74da63d1972e34"
+          "sha256": "7ddda096f64e079a36f8060113de5176acc766a4e1c17aa1154d66c4e422ef2c"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/releases.linux.json": {
+      "v0.2.1/releases.linux.json": {
         "length": 288,
         "hashes": {
-          "sha256": "64c39dedba92a28011b5608943984768691914cf4753d01736efa48b8e081d72"
+          "sha256": "bbee3f0eafa3945ed498f3ef5498077f1a339c59e01e650c56c9c63ed212fc93"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/releases.osx.json": {
+      "v0.2.1/releases.osx.json": {
         "length": 286,
         "hashes": {
-          "sha256": "373a990750e5b01e8c412fa5b5f2e790ad6004654a6aaece1cd2fe1c4b8f25d4"
+          "sha256": "67ca2e7b1e78c6133efdaf8c0f8db7441d64c2e9358300cfa2eec9d71d48b7ed"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       },
-      "v0.2.0/releases.win.json": {
+      "v0.2.1/releases.win.json": {
         "length": 282,
         "hashes": {
-          "sha256": "fb028be0f9fe382aca9ca7697f78f8207009d98a63f5b40213acda3328057692"
+          "sha256": "df704476750f667166ed6754d9d7a64d367c934d61dc748877bc93eec4092b94"
         },
         "custom": {
-          "version": "0.2.0"
+          "version": "0.2.1"
         }
       }
     },
@@ -140,7 +140,7 @@
   "signatures": [
     {
       "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
-      "sig": "bf925191a6bc422843761bb1be960447aea41d0926e39c7336b4cbda41777aa1bed1d8343c23bfd120442099da62ac5944b3a1bba04b7492dccaaaea57398fab888be641701aa51f9548cb7f88f0d9c903303a404e2c8c3814ef1b6c53de3f8eb0d3e1b459cd0266b41d825f07b8166359fdb40b8cef7126f071e37a3a1a06fb39e45c8dd432033cf12b2b38b99b3e39f58110814c059eb3ee0bd0816c9631b4caf899afc8c17d6d1487def0cfe9b9dc261a38c59495ec75cd465429bae79be913ba1c4154aefbe14ee0fc76844e7de1728c3ec61b3caf31674103ec0b8c56c340f5739c50e21c57283b127c3a4eccdf0a50200d9f0c6b422b5d8e503af3a4193f66c68946584147f5e743f1071f2a4e61824b73f9deff032ab4a214803523cd69aedd21f6248a8bb0e2638df7047424ac9ffdc2213a5c4af151cfdbaf3a2e6d95b451c744071b8717bd724a4ab6ecf22819ff07850a35ce8567e5b2b555a777b7c2e9799431730d85ca1cf29d028e2c4598fc4822734e74fd41ac5c62f0688f"
+      "sig": "a4246c1da43da39fd31d0727a8bf011793b1869769ea4e32d4128a58617d2ebdf941664c5213111447215e9a903b93837643b45dbbf3400d6b47bf3e14a6f463fa0fb90777dff29a19fb8bf034f33ee9c71d17f9006d4fee002bbc2a790d4e69ed6c4d94bb4fec1e58aa217f2e7421a1e8f173be60a230653a2d011f48ad8a81ce902d9fd3771e61c9f112eb7dba8394d2ab547ccb741c68f4d87ac1ea2ac32cdaf27d3bcc4acf5f7d9f05e2e259438574dfffd4346d7010aafcbedcd2a3b118823f82ef9fc8afaa858fc503d3c6d73eb6d02a3e46156e238735b48aee779adc130c98a4b537ff0bfe1d478c846d07625c89f2c375ea722d149f104a541e076bd1f0280233b0ca2606a6f0f55fcb6cf1e8ab01f1fe4a4ff45fe54d23f0d218fb4601d612adf0bf2827f90735ed1b647ae57cede55a44d490720a4a8809b69b9f3b60b2d95034eace5ac6d913bcb10ff2e9a030f53c6b789f4895ebd8c1baf0b677e1003917d2509eaff1cded16070459086bc2bdcfcd39c694aff8c1cea0f8bd"
     }
   ]
 }
