@@ -123,7 +123,8 @@ jobs:
           path: target/mixer-metadata/
           if-no-files-found: error
           retention-days: 7
-      # Push the version bump only if main hasn't moved since the build started.
+      # Push the version bump. If main moved during the build only by an app
+      # version commit, rebase on top of it; any other change stops the release.
       - name: Commit the mixer version to main
         id: commit
         env:
@@ -140,13 +141,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit --only -m "chore(mixer-release): $VERSION" -- config/mixer-release.json
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch -q "$remote" main
-          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA" || {
-            echo 'main changed during the build. Start a new mixer release run.'
-            exit 1
-          }
-          git push -q "$remote" HEAD:refs/heads/main
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/land_release.py --kind mixer --source "$SOURCE_SHA" --remote "$remote"
       - name: Verify uploads and publish payload before discovery metadata
         env:
           GH_TOKEN: ${{ github.token }}

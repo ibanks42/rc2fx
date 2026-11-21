@@ -394,13 +394,9 @@ jobs:
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
-        run: |
-          git fetch origin main
-          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA" || {
-            echo 'main changed during the build. Start a new release run.'
-            exit 1
-          }
-          git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
+        # Rebase over a mixer version commit that landed during the build; any
+        # other change to main stops the release.
+        run: python3 .github/scripts/land_release.py --kind app --source "$SOURCE_SHA" --tag "$TAG"
       - name: Create draft release and upload Linux and Windows packages
         if: ${{ !inputs.dry-run }}
         env:

@@ -126,6 +126,7 @@ class FakeGh:
         self.publish_by_hand_after = None  # publish the draft after N writes
         self.others = []  # other releases in the list
         self.release_after = None  # (N, release): it appears after N writes
+        self.compare = {}  # path -> compare API reply
         self.ops = []
 
     # Reads
@@ -151,7 +152,7 @@ class FakeGh:
     def api(self, path):
         if path == f"commits/{TAG}":
             return self.commit if self.exists else None
-        return None
+        return self.compare.get(path)
 
     def asset_bytes(self, asset_id):
         return self.assets[asset_id]
@@ -267,6 +268,34 @@ class Publish(InTemp):
         self.assertEqual(sums, complete_sums(gh))
         self.assertEqual(gh.assets["SHA256SUMS"].decode(), complete_sums(gh))
         self.assertFalse(gh.draft)
+
+    def landed_on_mixer_commit(self, gh, subject, files, status="ahead"):
+        mixer = "d" * 40
+        gh.commit["parents"] = [{"sha": mixer}]
+        gh.compare[f"compare/{SOURCE}...{mixer}"] = {
+            "status": status, "total_commits": 1,
+            "commits": [{"sha": mixer, "commit": {"message": subject + "\n"}}],
+            "files": [{"filename": name} for name in files],
+        }
+
+    def test_a_release_commit_moved_over_a_mixer_version_commit_is_published(self):
+        gh = FakeGh()
+        self.landed_on_mixer_commit(gh, "chore(mixer-release): 0.2.2", ["config/mixer-release.json"])
+        mr.publish(gh, TAG, SOURCE, self.package())
+        self.assertEqual(gh.ops[-1], ("publish", 99))
+
+    def test_a_release_commit_over_anything_else_is_refused(self):
+        for subject, files, status in (
+            ("fix: something", ["config/mixer-release.json"], "ahead"),
+            ("chore(mixer-release): 0.2.2", ["config/mixer-release.json", "src.rs"], "ahead"),
+            ("chore(mixer-release): 0.2.2", ["config/mixer-release.json"], "diverged"),
+        ):
+            gh = FakeGh()
+            self.landed_on_mixer_commit(gh, subject, files, status)
+            with self.assertRaisesRegex(mr.Refused, "not on top of", msg=subject):
+                mr.publish(gh, TAG, SOURCE, self.package())
+            self.assertTrue(gh.draft)
+            self.assertNotIn("publish", [op for op, _ in gh.ops])
 
     def test_a_draft_behind_a_published_release_is_refused_before_any_change(self):
         # Ensure numeric semver comparison (v0.10.0 > v0.2.0 > v0.1.9).

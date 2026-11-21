@@ -27,6 +27,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+import land_release
+
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 PENDING = re.compile(
     r"\n*<!-- rc2fx:macos-pending -->\n.*?\n<!-- /rc2fx:macos-pending -->\n*", re.S
@@ -144,7 +146,12 @@ def refuse_if_behind(gh, tag):
 
 
 def check_tag(gh, tag, source):
-    """Verify TAG points to SOURCE or the chore(release) commit directly on top of it."""
+    """Verify TAG points to SOURCE or to the chore(release) commit on top of it.
+
+    land_release.py may have moved the release commit on top of mixer version
+    commits that landed during the build; those are the only commits allowed
+    between SOURCE and the release commit.
+    """
     commit = gh.api(f"commits/{tag}")
     require(commit is not None, f"tag {tag} has no commit")
     # Initial releases don't create a version-bump commit.
@@ -154,7 +161,19 @@ def check_tag(gh, tag, source):
     require(message.split("\n", 1)[0] == f"chore(release): {tag}",
             f"tag {tag} is not on the release commit")
     parents = [p.get("sha") for p in commit.get("parents", [])]
-    require(parents == [source], f"release commit for {tag} is not on top of {source}")
+    on_top = f"release commit for {tag} is not on top of {source}"
+    require(len(parents) == 1, on_top)
+    if parents[0] == source:
+        return
+    between = gh.api(f"compare/{source}...{parents[0]}")
+    require(between is not None and between.get("status") == "ahead", on_top)
+    commits = between.get("commits") or []
+    require(len(commits) == between.get("total_commits"), on_top)
+    files = [f.get("filename") for f in between.get("files") or []]
+    for landed in commits:
+        subject = ((landed.get("commit") or {}).get("message") or "").split("\n", 1)[0]
+        problem = land_release.foreign_commit_problem("app", subject, files)
+        require(problem is None, f"{on_top}: {landed.get('sha', '')[:12]} {problem}")
 
 
 PACK_ID = "io.github.ibanks42.rc2fx"
