@@ -182,6 +182,7 @@ class HistoryTests(unittest.TestCase):
         newer, older = mixer["releases"]
         self.assertIsNone(newer["notesMarkdown"])
         self.assertEqual(newer["firstAppVersion"], "1.2.0")
+        self.assertFalse(newer["standalone"])
         self.assertEqual(newer["date"], "2026-11-03")
         self.assertEqual(older["notesMarkdown"], "- First published mixer software.")
         self.assertEqual(older["firstAppVersion"], "1.0.0")
@@ -366,6 +367,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(mixer["latest"], "1.0.0")
         self.assertTrue(mixer["historyComplete"])
         self.assertIsNone(mixer["releases"][0]["firstAppVersion"])
+        self.assertTrue(mixer["releases"][0]["standalone"])
         self.assertIn("First published mixer software", bundle.mixer_page)
         self.assertIn("releases/tag/mixer-v1.0.0", bundle.mixer_page)
 
@@ -401,6 +403,7 @@ class HistoryTests(unittest.TestCase):
         entries = bundle.feed["mixer"]["releases"]
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["firstAppVersion"], "1.0.0")
+        self.assertTrue(entries[0]["standalone"])
         self.assertEqual(entries[0]["date"], "2026-11-04")
 
     def test_a_tag_without_the_manifest_is_unknown_not_missing(self):

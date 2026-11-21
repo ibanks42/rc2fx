@@ -22,7 +22,7 @@ app.
 Release notes and checksums are on the
 [latest release](https://github.com/ibanks42/rc2fx/releases/latest) page. Once
 you have the app, follow
-[Getting started](https://ibanks42.github.io/rc2fx/user/getting-started).
+[Getting started](https://rc2fx.ibanks.dev/user/getting-started).
 
 ## Features
 

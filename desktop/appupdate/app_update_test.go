@@ -614,8 +614,81 @@ func TestEveryEndpointAndLinkIsOnTheOfficialRepository(t *testing.T) {
 	if !strings.HasPrefix(releaseURL("1.2.3"), AppReleasesURL+"/tag/") {
 		t.Fatal("release URL")
 	}
-	site := "https://ibanks42.github.io/rc2fx"
+	site := "https://rc2fx.ibanks.dev"
 	if UpdateFeedURL != site+"/updates.json" || AppHistoryURL != site+"/updates/app" || MixerHistoryURL != site+"/updates/mixer" {
 		t.Fatal("site URLs")
+	}
+}
+
+// Current apps bundle no mixer software; mixer-v releases are listed on their own.
+func standaloneFeed() string {
+	body := feedText(
+		[]row{{"2.0.0", nil}, {"1.3.0", some("1.2.0")}},
+		[]row{{"2.2.0", some("Notes ahead of any release")}, {"2.1.0", some("Mixer standalone")}, {"2.0.1", nil}, {"1.2.0", some("Mixer two")}},
+	)
+	body = strings.Replace(body, `"mixerVersion":null`, `"mixerVersion":null,"downloadsMixer":true`, 1)
+	for _, v := range []string{"2.1.0", "2.0.1"} {
+		body = strings.Replace(body, `{"version":"`+v+`","date":null`, `{"version":"`+v+`","date":null,"standalone":true`, 1)
+	}
+	return body
+}
+
+func TestTheLatestMixerCanBeAStandaloneRelease(t *testing.T) {
+	snap := snapshotOf(t, standaloneFeed(), "2.0.0")
+	if !reflect.DeepEqual(snap.latestMixer, &PublishedMixer{Version: "2.1.0"}) {
+		t.Fatalf("%+v", snap.latestMixer)
+	}
+	// A bundled version newer than every standalone release still wins.
+	bundled := strings.Replace(feedText([]row{{"1.3.0", some("3.0.0")}}, []row{{"2.1.0", nil}}),
+		`"date":null`, `"date":null,"standalone":true`, 1)
+	if got := snapshotOf(t, bundled, "1.3.0").latestMixer; got == nil || got.Version != "3.0.0" || got.AppVersion != "1.3.0" {
+		t.Fatalf("%+v", got)
+	}
+	// A stale feed still says nothing.
+	if snapshotOf(t, standaloneFeed(), "2.1.0").latestMixer != nil {
+		t.Fatal("stale feed")
+	}
+}
+
+func TestStandaloneMixerStatesNeverAskForAnAppUpdate(t *testing.T) {
+	snap := snapshotOf(t, standaloneFeed(), "2.0.0")
+	for _, c := range []struct {
+		installed string
+		available *string
+		state     MixerUpdateState
+	}{
+		{"2.1.0", some("2.1.0"), MixerUpdateState{Kind: MixerCurrent}},
+		{"2.1.0", nil, MixerUpdateState{Kind: MixerCurrent}},
+		{"2.2.0", some("2.2.0"), MixerUpdateState{Kind: MixerCurrent}},
+		{"2.2.0", nil, MixerUpdateState{Kind: MixerNewer}},
+		{"2.0.1", some("2.1.0"), MixerUpdateState{Kind: MixerBundled, Version: "2.1.0"}},
+		{"2.0.1", some("2.0.1"), MixerUpdateState{Kind: MixerPublished, Latest: "2.1.0"}},
+		{"2.0.1", nil, MixerUpdateState{Kind: MixerPublished, Latest: "2.1.0"}},
+		{"1.2.0", some("2.0.1"), MixerUpdateState{Kind: MixerBundled, Version: "2.0.1"}},
+	} {
+		installed := c.installed
+		if got := snap.MixerUpdate(&installed, c.available).State; got != c.state {
+			t.Fatalf("%s %v: %+v", c.installed, c.available, got)
+		}
+	}
+}
+
+func TestStandaloneMixerNotesLinkToTheirOwnRelease(t *testing.T) {
+	installed := "1.2.0"
+	update := snapshotOf(t, standaloneFeed(), "2.0.0").MixerUpdate(&installed, some("2.1.0"))
+	log := update.Changelog
+	if !slices.Equal(versionsOf(log), []string{"2.1.0", "2.0.1"}) {
+		t.Fatalf("%v", versionsOf(log))
+	}
+	if log.Entries[0].URL != AppReleasesURL+"/tag/mixer-v2.1.0" || log.Entries[0].Notes != "Mixer standalone" {
+		t.Fatalf("%+v", log.Entries[0])
+	}
+	// 2.0.1 has no notes.
+	if log.Status.Kind != ChangelogPartial {
+		t.Fatalf("%+v", log.Status)
+	}
+	installed = "2.0.1"
+	if got := snapshotOf(t, standaloneFeed(), "2.0.0").MixerUpdate(&installed, some("2.1.0")).Changelog; got.Status.Kind != ChangelogComplete {
+		t.Fatalf("%+v", got.Status)
 	}
 }

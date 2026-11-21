@@ -96,6 +96,8 @@ class MixerRelease:
     date: str | None
     notes: str | None
     first_app_version: str | None
+    # Published as its own mixer-v release, which apps download.
+    standalone: bool = False
 
     def feed_entry(self):
         return {
@@ -103,6 +105,7 @@ class MixerRelease:
             "date": self.date,
             "notesMarkdown": self.notes,
             "firstAppVersion": self.first_app_version,
+            "standalone": self.standalone,
         }
 
 
@@ -445,7 +448,9 @@ def build_bundle(root, published, mappings=None):
                 own, folded, "mixer ", "docs/updates/source/mixer-notes.md"
             )
         date = min(release.date for release in (first, independent) if release is not None)
-        mixers.append(MixerRelease(version, date, notes, first.version if first else None))
+        mixers.append(MixerRelease(
+            version, date, notes, first.version if first else None, independent is not None
+        ))
 
     for version in mixer_notes:
         if version not in shipped_ascending and version not in folded_mixer_versions:

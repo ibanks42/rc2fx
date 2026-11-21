@@ -340,7 +340,7 @@ func mixerStatus(s Summary, mixer appupdate.MixerUpdateState, signedKnown bool) 
 			return update, true
 		}
 	default:
-		// Current or Unknown.
+		// Current, Unknown, or Published: signed metadata decides what's installable.
 		if tooOld {
 			return statusTone{"Too old", ToneBad}, false
 		}
@@ -486,6 +486,11 @@ func OverviewOf(i *Inputs, app AppStanding, mixer appupdate.MixerUpdateState) Ov
 		details = append(details, fmt.Sprintf(
 			"Mixer software %s needs RC2FX %s or newer. Update the app first.",
 			i.NeedsApp.Version, i.NeedsApp.MinimumApp))
+	}
+	if mixer.Kind == appupdate.MixerPublished && i.SignedKnown && i.NeedsApp == nil {
+		details = append(details, fmt.Sprintf(
+			"Mixer software %s is published but isn't ready to install yet. Check again later.",
+			mixer.Latest))
 	}
 	connected := i.InstalledRuntime != nil || i.InstalledFirmware != nil
 	if mixer.Kind == appupdate.MixerUnknown && connected && len(details) == 0 {

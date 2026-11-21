@@ -4,13 +4,15 @@ package appupdate
 
 // Release checks use unauthenticated HTTPS only. GitHub's latest release is the
 // authority for what is published; the docs site's update feed provides release
-// notes and the mixer version bundled by each app release. If the feed is
+// notes, the mixer version bundled by each older app release, and the
+// standalone mixer releases that current apps download. If the feed is
 // unavailable, app notes fall back to GitHub's release list and the published
 // mixer version stays unknown.
 //
-// Only stable `vMAJOR.MINOR.PATCH` app releases are accepted (drafts,
-// prereleases, and legacy `mixer-v` tags are rejected). Feed entries newer than
-// GitHub's latest release are ignored; lower entries are trusted as generated
+// Only stable `vMAJOR.MINOR.PATCH` app releases are accepted from GitHub's
+// latest-release API (drafts, prereleases, and `mixer-v` tags are rejected as
+// app releases). App feed entries newer than GitHub's latest release are
+// ignored; older entries and standalone mixer entries are trusted as generated
 // from GitHub's release list. Results are informational only and do not govern
 // what the installer can flash.
 
@@ -32,12 +34,15 @@ import (
 
 // Always point at the official repo even in fork builds.
 const (
-	AppReleasesURL  = "https://github.com/ibanks42/rc2fx/releases"
-	latestAPI       = "https://api.github.com/repos/ibanks42/rc2fx/releases/latest"
-	listAPI         = "https://api.github.com/repos/ibanks42/rc2fx/releases"
-	UpdateFeedURL   = "https://ibanks42.github.io/rc2fx/updates.json"
-	AppHistoryURL   = "https://ibanks42.github.io/rc2fx/updates/app"
-	MixerHistoryURL = "https://ibanks42.github.io/rc2fx/updates/mixer"
+	AppReleasesURL = "https://github.com/ibanks42/rc2fx/releases"
+	latestAPI      = "https://api.github.com/repos/ibanks42/rc2fx/releases/latest"
+	listAPI        = "https://api.github.com/repos/ibanks42/rc2fx/releases"
+	// The docs site's custom domain. The github.io address redirects here, and
+	// update checks never follow redirects.
+	docsSite        = "https://rc2fx.ibanks.dev"
+	UpdateFeedURL   = docsSite + "/updates.json"
+	AppHistoryURL   = docsSite + "/updates/app"
+	MixerHistoryURL = docsSite + "/updates/mixer"
 
 	// Breaking feed schema changes get a new URL; unknown fields are ignored.
 	feedSchema      = 1
@@ -140,10 +145,13 @@ type UpdateSnapshot struct {
 	historyError UpdateError
 }
 
-// PublishedMixer describes the mixer runtime bundled by the latest app release.
+// PublishedMixer describes the newest published mixer software: either the
+// version bundled by the latest app release, or a standalone mixer release.
 type PublishedMixer struct {
-	Version    string
-	Protocol   *uint32
+	Version  string
+	Protocol *uint32
+	// AppVersion is the app release that bundles Version, or "" for a
+	// standalone release that apps download.
 	AppVersion string
 }
 
@@ -168,10 +176,13 @@ const (
 	MixerBundledThenApp
 	// MixerAppUpdateRequired means only a newer app release has a newer mixer.
 	MixerAppUpdateRequired
+	// MixerPublished means a newer standalone mixer release is published, but
+	// signed metadata hasn't offered it to this app yet.
+	MixerPublished
 )
 
 // MixerUpdateState is informational only; installer eligibility is determined
-// solely from the bundled payload and target firmware.
+// solely from signed offers, any bundled payload, and the target firmware.
 type MixerUpdateState struct {
 	Kind       MixerUpdateStateKind
 	Version    string
@@ -211,8 +222,15 @@ func (s UpdateSnapshot) MixerUpdate(installed, bundled *string) MixerUpdate {
 	offeredBundled := hasBundled && isNewer(b, inst)
 	latest := s.latestMixer
 	offeredLatest := latest != nil && isNewer(latest.Version, inst)
+	standalone := latest != nil && latest.AppVersion == ""
 	var state MixerUpdateState
 	switch {
+	case offeredLatest && standalone && !offeredBundled:
+		state = MixerUpdateState{Kind: MixerPublished, Latest: latest.Version}
+	case offeredLatest && standalone:
+		// Installable now; a newer standalone release, if any, comes through
+		// signed metadata rather than a newer app.
+		state = MixerUpdateState{Kind: MixerBundled, Version: b}
 	case !offeredBundled && !offeredLatest:
 		switch {
 		case latest == nil:
@@ -334,6 +352,8 @@ type feedList[T any] struct {
 type feedMixer struct {
 	Version       string  `json:"version"`
 	NotesMarkdown *string `json:"notesMarkdown,default"`
+	// Standalone marks a published mixer-v release that apps download.
+	Standalone bool `json:"standalone,default"`
 }
 
 type feedApp struct {
@@ -341,6 +361,8 @@ type feedApp struct {
 	NotesMarkdown   *string `json:"notesMarkdown,default"`
 	MixerVersion    *string `json:"mixerVersion,default"`
 	ProtocolVersion *uint32 `json:"protocolVersion,default"`
+	// DownloadsMixer means the app bundles no mixer software.
+	DownloadsMixer bool `json:"downloadsMixer,default"`
 }
 
 type feed struct {
@@ -352,15 +374,17 @@ type feed struct {
 // history is the validated feed filtered down to published releases.
 type history struct {
 	apps   []feedApp    // <= latest published release, newest first
-	mixers []mixerEntry // unique mixer versions bundled by apps, newest first
+	mixers []mixerEntry // unique bundled and standalone mixer versions, newest first
 	// stale is true when the latest published release is missing from the feed.
 	stale bool
 }
 
 type mixerEntry struct {
 	version  string
-	firstApp string // first app release that bundled this mixer version
+	firstApp string // first app release that bundled this mixer version, if any
 	notes    *string
+	// standalone is true for a published mixer-v release.
+	standalone bool
 }
 
 func parseHistory(r *reply, latest string) (*history, *UpdateError) {
@@ -436,16 +460,47 @@ func parseHistory(r *reply, latest string) (*history, *UpdateError) {
 		}
 		mixers = append(mixers, mixerEntry{version: version, firstApp: app.Version, notes: notes})
 	}
+	for _, m := range listed {
+		if !m.Standalone {
+			continue
+		}
+		same := func(e mixerEntry) bool {
+			order, ok := core.CompareVersions(e.version, m.Version)
+			return ok && order == 0
+		}
+		if i := slices.IndexFunc(mixers, same); i >= 0 {
+			mixers[i].standalone = true
+			continue
+		}
+		var notes *string
+		if n := m.NotesMarkdown; n != nil && strings.TrimSpace(*n) != "" {
+			text := *n
+			notes = &text
+		}
+		mixers = append(mixers, mixerEntry{version: m.Version, notes: notes, standalone: true})
+	}
 	slices.SortStableFunc(mixers, func(a, b mixerEntry) int { return newestFirst(a.version, b.version) })
 	return &history{apps: apps, mixers: mixers, stale: stale}, nil
 }
 
+// publishedMixer returns the newer of the mixer bundled by the latest app
+// release and the newest standalone mixer release. A feed that hasn't caught
+// up with the latest app release says nothing.
 func (h *history) publishedMixer(latest string) *PublishedMixer {
-	if len(h.apps) == 0 || h.apps[0].Version != latest || h.apps[0].MixerVersion == nil {
+	if h.stale {
 		return nil
 	}
-	app := h.apps[0]
-	return &PublishedMixer{Version: *app.MixerVersion, Protocol: app.ProtocolVersion, AppVersion: app.Version}
+	var newest *PublishedMixer
+	if app := h.apps[0]; app.MixerVersion != nil {
+		newest = &PublishedMixer{Version: *app.MixerVersion, Protocol: app.ProtocolVersion, AppVersion: app.Version}
+	}
+	// h.mixers is newest first.
+	if i := slices.IndexFunc(h.mixers, func(m mixerEntry) bool { return m.standalone }); i >= 0 {
+		if m := h.mixers[i]; newest == nil || isNewer(m.version, newest.Version) {
+			newest = &PublishedMixer{Version: m.version}
+		}
+	}
+	return newest
 }
 
 func deref(s *string) string {
@@ -479,8 +534,8 @@ func (h *history) appChangelog(current, offered string) Changelog {
 }
 
 // mixerChangelog is marked complete only when the feed is fresh, every listed
-// app maps a mixer version, both endpoints are present, and all intermediate
-// entries have notes.
+// app either maps a bundled mixer version or downloads mixer software, both
+// endpoints are present, and all intermediate entries have notes.
 func (h *history) mixerChangelog(installed, offered string) Changelog {
 	var inFeed []mixerEntry
 	for _, m := range h.mixers {
@@ -492,8 +547,11 @@ func (h *history) mixerChangelog(installed, offered string) Changelog {
 		order, ok := core.CompareVersions(a, b)
 		return ok && order == 0
 	}
+	// An app row that neither names its bundled mixer nor downloads one could
+	// hide a mixer release.
+	unmapped := func(a feedApp) bool { return a.MixerVersion == nil && !a.DownloadsMixer }
 	complete := !h.stale &&
-		!slices.ContainsFunc(h.apps, func(a feedApp) bool { return a.MixerVersion == nil }) &&
+		!slices.ContainsFunc(h.apps, unmapped) &&
 		slices.ContainsFunc(h.mixers, func(m mixerEntry) bool { return same(m.version, installed) }) &&
 		slices.ContainsFunc(inFeed, func(m mixerEntry) bool { return same(m.version, offered) })
 	entries := []ReleaseNotes{}
@@ -501,7 +559,12 @@ func (h *history) mixerChangelog(installed, offered string) Changelog {
 		if m.notes == nil {
 			complete = false
 		}
-		entries = append(entries, notesEntry(m.version, m.firstApp, deref(m.notes)))
+		url := releaseURL(m.firstApp)
+		if m.firstApp == "" {
+			url = mixerReleaseURL(m.version)
+		}
+		notes, truncated := cutNotes(deref(m.notes))
+		entries = append(entries, ReleaseNotes{Version: m.version, URL: url, Notes: notes, Truncated: truncated})
 	}
 	status := ChangelogStatus{Kind: ChangelogPartial}
 	if complete {
@@ -655,6 +718,10 @@ func evaluate(current string, r *reply) UpdateCheck {
 
 func releaseURL(version string) string {
 	return AppReleasesURL + "/tag/v" + version
+}
+
+func mixerReleaseURL(version string) string {
+	return AppReleasesURL + "/tag/mixer-v" + version
 }
 
 // cutNotes truncates text to at most maxNotes bytes on a UTF-8 boundary.

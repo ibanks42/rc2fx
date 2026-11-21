@@ -610,3 +610,19 @@ func TestAllCurrentIsUpToDate(t *testing.T) {
 		t.Fatalf("details %q", o.Details)
 	}
 }
+
+func TestAPublishedMixerThatIsNotInstallableYetIsSaid(t *testing.T) {
+	i := inputs(new("0.3.0"), new("1.8.0"))
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerPublished, Latest: "0.4.0"})
+	if got := line(t, o, PartMixer).Status; got != "Up to date" {
+		t.Fatalf("status %q", got)
+	}
+	if !anyDetail(o, contains("0.4.0 is published")) {
+		t.Fatalf("details %q", o.Details)
+	}
+	i.NeedsApp = &AppNeed{Version: "0.4.0", MinimumApp: "0.4.0"}
+	o = OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerPublished, Latest: "0.4.0"})
+	if anyDetail(o, contains("is published")) {
+		t.Fatalf("details %q", o.Details)
+	}
+}
