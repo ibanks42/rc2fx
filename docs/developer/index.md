@@ -107,7 +107,7 @@ apply everywhere:
 
 ```sh
 just docs         # build into target/docs
-just docs-serve   # serve on http://localhost:5173/rc2fx/ and rebuild on change
+just docs-serve   # serve on http://localhost:5173/ and rebuild on change
 ```
 
 Both commands require [Node.js](https://nodejs.org/). The site uses
@@ -115,9 +115,9 @@ Both commands require [Node.js](https://nodejs.org/). The site uses
 (which also defines the sidebar). It reads `docs/` in place, and each crate or
 package page includes that crate's or package's `README.md`. Links pointing
 outside `docs/` open on GitHub. The **Docs** workflow builds and deploys the
-site after a release is published (from that release's tag) or when triggered
-manually from `main`; normal pushes don't deploy it. Update histories and
-`updates.json` are generated during the build (see
-[Update histories and the feed](update-history.md)). User docs live in
+site to `https://rc2fx.ibanks.dev` after a release is published (from that
+release's tag) or when triggered manually from `main`; normal pushes don't
+deploy it. Update histories and `updates.json` are generated during the build
+(see [Update histories and the feed](update-history.md)). User docs live in
 `docs/user/`, developer docs in `docs/developer/`, and technical reference
 pages in `docs/reference/`.

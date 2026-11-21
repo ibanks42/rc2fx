@@ -125,9 +125,13 @@ once the first signed release and its metadata are live.
    the entire payload and catalog, then signs the TUF `targets`, `snapshot`,
    and `timestamp` metadata.
 4. If the version changed, the job commits `config/mixer-release.json` to
-   `main` as `chore(mixer-release): VERSION`, provided `main` is still at the
-   commit the run built (if `main` moved, kick off a new run), and tags the
-   release at that commit.
+   `main` as `chore(mixer-release): VERSION` and pushes it via
+   `.github/scripts/land_release.py`. If `main` moved during the build only by
+   an app version commit (`chore(release): v...` touching only `CHANGELOG.md`,
+   `config/app-release.json`, and `desktop/installer/installer.go`),
+   `land_release.py` rebases the mixer version commit on top of it; any other
+   change stops the run so you can start a new one. The release tag points at
+   that landed commit.
 5. Publishing creates a draft `mixer-vVERSION` release, uploads the assets,
    downloads them back to verify every byte, and publishes the payload first.
    Only after that does it push a single commit with all metadata files to the

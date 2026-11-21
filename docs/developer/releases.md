@@ -24,38 +24,44 @@ signing, publishing, and renewal, and
 [Versions and updates](../user/getting-started.md#versions-and-updates) for the
 user-facing behavior.
 
-For desktop app updates, `installer.CheckForUpdates`
-(`desktop/installer/app_update.go`) queries GitHub's `releases/latest` API for
-this repository and, when a newer version is available, pages through the
-release list to gather notes since the installed version. It only accepts
-published, stable `vMAJOR.MINOR.PATCH` tags, constructs release page links from
-the validated tag, and never downloads binaries on its own. Because the
-repository URL is hardcoded in that file's constants, builds from forks still
-check the official releases.
+For desktop app updates, `appupdate.CheckForUpdates`
+(`desktop/appupdate/app_update.go`) queries GitHub's `releases/latest` API for
+this repository and reads release notes and standalone mixer entries from
+`https://rc2fx.ibanks.dev/updates.json` (falling back to GitHub's release list
+for app notes if the feed is unavailable). It only accepts published, stable
+`vMAJOR.MINOR.PATCH` tags, constructs release page links from the validated
+tag, and never downloads binaries on its own. Because the repository and feed
+URLs are hardcoded in that file's constants, builds from forks still check the
+official releases.
 
 Copies managed by Velopack (the Windows and macOS installers, portable zips,
 and the Linux AppImage) can also self-update in place. `desktop/app/selfupdate`
 calls Velopack's C library (`desktop/app/selfupdate/vpkc`) to fetch
 `releases.win.json`, `releases.osx.json`, or `releases.linux.json` from
 `releases/latest/download`, downloads the referenced package when the user
-clicks **Download update**, and lets Velopack check the feed's SHA-256. Because
-the feed itself is unsigned, the app also verifies the package against signed
-app release metadata (see [Signed app updates](#signed-app-updates)). Its
-custom update source (`SignedFeed`) runs that verification as the download
-completes, before Velopack renames the `.partial` file into place. (On Windows,
-Velopack replaces its own updater with the package's copy right after that
-rename, so checking any later would be too late.) The feed only serves full
-packages, never deltas, since the release signs whole packages. Any package
-already on disk (which Velopack won't redownload) or left over from a previous
-session is re-verified before **Restart to update** appears. If the signed
-metadata rejects a package, it is deleted. If verification can't run (for
-instance, offline or metadata unreachable), an already-downloaded package is
-kept and the button switches to **Check again** so the user can retry without
-redownloading. Updates are only applied when the user clicks **Restart to
-update**, never silently on next launch, and restarting is blocked while the
-installer is running or the mixer may still be finishing a flash. On Linux, the
-AppImage stores downloaded packages in
-`$XDG_CACHE_HOME/rc2fx/velopack-packages` (or
+clicks **Update app**, and lets Velopack check the feed's SHA-256. Because the
+feed itself is unsigned, the app also verifies the package against signed app
+release metadata (see [Signed app updates](#signed-app-updates)). Its custom
+update source (`SignedFeed`) runs that verification as the download completes,
+before Velopack renames the `.partial` file into place. (On Windows, Velopack
+replaces its own updater with the package's copy right after that rename, so
+checking any later would be too late.) The feed only serves full packages,
+never deltas, since the release signs whole packages.
+
+Once verification succeeds, RC2FX restarts on its own to apply the update as
+soon as nothing holds the restart back (an active installer task, a mixer still
+finishing a flash, unsaved edits, or a change still reaching the mixer). While
+held back, or for a package left over from a previous session (re-verified at
+startup), **Restart to update** appears so the user can trigger the restart
+when ready. Updates never apply silently on a normal quit or next launch. If
+the signed metadata rejects a package, it is deleted. If verification can't run
+(for instance, offline or metadata unreachable), an already-downloaded package
+is kept and the button switches to **Check again** so the user can retry
+without redownloading. On exit, the app hands its active USB session to the
+restarted process via Velopack's restart arguments so it reconnects without
+waiting out the mixer's lockout (see
+[USB control](../reference/usb-control.md#reliability)). On Linux, the AppImage
+stores downloaded packages in `$XDG_CACHE_HOME/rc2fx/velopack-packages` (or
 `~/.cache/rc2fx/velopack-packages`), created with mode `0700`, instead of
 Velopack's shared `/var/tmp` default where another local user could swap a
 package between verification and install.
@@ -321,29 +327,34 @@ becomes public until every package is verified.
    shared libraries, metadata, permissions, payload mode, and a headless smoke
    test (desktop sessions, FUSE mounts, and USB access aren't exercised here).
 3. **release** (Ubuntu) validates the Linux and Windows artifacts, generates
-   their checksums, creates and pushes the release commit and tag
-   (`release.py commit`), and opens a draft GitHub release containing those
-   packages plus a temporary macOS-pending notice in the notes. It enforces
-   strict asset checks: on Linux, the AppImage must begin with a type 2 header,
-   the `.nupkg` must contain that exact AppImage, and `releases.linux.json`
-   must reference this version's package with its real SHA-256; on Windows,
-   `-setup.exe` must begin with `MZ`, the zip must contain `RC2FX.exe`,
-   `Update.exe`, and `current/rc2fx.exe`, the `.nupkg` must contain
-   `lib/app/rc2fx.exe`, and `releases.win.json` must list this version's
-   package and actual SHA-256. If `main` advanced while the workflow was
-   running, this job aborts without pushing; kick off a new run.
+   their checksums, creates the release commit and tag (`release.py commit`),
+   pushes them with `.github/scripts/land_release.py`, and opens a draft GitHub
+   release containing those packages plus a temporary macOS-pending notice in
+   the notes. It enforces strict asset checks: on Linux, the AppImage must begin
+   with a type 2 header, the `.nupkg` must contain that exact AppImage, and
+   `releases.linux.json` must reference this version's package with its real
+   SHA-256; on Windows, `-setup.exe` must begin with `MZ`, the zip must contain
+   `RC2FX.exe`, `Update.exe`, and `current/rc2fx.exe`, the `.nupkg` must
+   contain `lib/app/rc2fx.exe`, and `releases.win.json` must list this
+   version's package and actual SHA-256. If `main` advanced during the build
+   only by a mixer version commit (`chore(mixer-release): ...` touching only
+   `config/mixer-release.json`), `land_release.py` rebases the release commit
+   on top of it and moves the tag; any other change to `main` aborts without
+   pushing so you can start a new run.
 4. **publish** (Ubuntu) waits for both **release** and **macos**, then runs
-   `.github/scripts/macos_release.py publish`: it verifies the macOS files,
-   uploads them to the draft, rebuilds `SHA256SUMS` from the draft's actual
-   assets, strips the pending notice, re-verifies the complete draft, and
-   publishes it as latest as its final step. It re-reads the release before
-   every mutation. Any upload error, digest mismatch, or missing/extra asset
-   leaves the draft unpublished, and it never overwrites a different macOS
-   asset already on the draft. Re-running it on an already-published release
-   merely verifies completeness and makes no changes. Publish jobs are
-   serialized, and an older draft cannot replace a newer stable release as
-   latest. Once published, a final step dispatches **Docs** with
-   `source=latest-release` to build the docs site from the new release tag.
+   `.github/scripts/macos_release.py publish`: it checks the release tag
+   (allowing mixer version commits between the build source and the rebased
+   release commit), verifies the macOS files, uploads them to the draft,
+   rebuilds `SHA256SUMS` from the draft's actual assets, strips the pending
+   notice, re-verifies the complete draft, and publishes it as latest as its
+   final step. It re-reads the release before every mutation. Any upload error,
+   digest mismatch, or missing/extra asset leaves the draft unpublished, and it
+   never overwrites a different macOS asset already on the draft. Re-running it
+   on an already-published release merely verifies completeness and makes no
+   changes. Publish jobs are serialized, and an older draft cannot replace a
+   newer stable release as latest. Once published, a final step dispatches
+   **Docs** with `source=latest-release` to build the docs site from the new
+   release tag.
 5. **app-metadata** invokes **Sign app release metadata** after **publish**
    succeeds, signing the release for in-app updates (see
    [Signed app updates](#signed-app-updates)). It passes
@@ -623,6 +634,7 @@ All release scripts have offline test suites that **Check** runs in CI:
 ```bash
 python3 .github/scripts/test_release.py          # versioning; needs git-cliff 2.14.1
 python3 .github/scripts/test_macos_release.py    # finishing and publishing the draft
+python3 .github/scripts/test_land_release.py     # landing release commits and tags on main
 python3 .github/scripts/test_app_release.py      # signing app releases for in-app updates
 python3 .github/scripts/test_docs_source.py
 python3 .github/scripts/test_update_history.py

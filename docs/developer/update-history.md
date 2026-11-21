@@ -1,14 +1,15 @@
 # Update histories and the feed
 
-The docs site publishes release histories for both versioned halves of RC2FX,
-plus a JSON feed the desktop app consumes:
+The docs site at `https://rc2fx.ibanks.dev` publishes release histories for
+both versioned halves of RC2FX, plus a JSON feed the desktop app consumes:
 
 - `/updates/app`: every published desktop app release and its release notes.
 - `/updates/mixer`: published standalone mixer releases along with historical
   app-bundled versions.
-- `/updates.json`: the same release-note history in JSON. Installation itself
-  is still authorized by signed TUF metadata (see
-  [Mixer releases](mixer-releases.md)).
+- `/updates.json` (`https://rc2fx.ibanks.dev/updates.json`): the same
+  release-note history in JSON. The app fetches the custom domain directly
+  because update checks never follow redirects. Installation itself is still
+  authorized by signed TUF metadata (see [Mixer releases](mixer-releases.md)).
 
 `.github/scripts/update_history.py` generates all three during the docs build.
 None of them are checked into git, so they can't go stale between edits.
@@ -146,7 +147,8 @@ clean up.
         "version": "1.0.0",
         "date": "2026-11-04",
         "notesMarkdown": "- ...",
-        "firstAppVersion": "1.0.0"
+        "firstAppVersion": "1.0.0",
+        "standalone": false
       }
     ]
   }
@@ -169,6 +171,10 @@ clean up.
 - `firstAppVersion` is the earliest published app release that bundled that
   mixer version, or `null` for standalone mixer releases that were never
   bundled.
+- `standalone` is `true` when that mixer version was published as its own
+  `mixer-v` release. The desktop app treats the newest standalone release as
+  the latest published mixer software and links its notes to that `mixer-v`
+  release page when it wasn't bundled in an earlier app.
 - `downloadsMixer` is `true` for download-only app releases. Older entries
   without this field keep their original bundled-version meaning.
 - Adding new fields doesn't require bumping `schemaVersion` since the app

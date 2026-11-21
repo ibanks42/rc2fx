@@ -100,7 +100,9 @@ mixer without updating the desktop app. The app checks signed release metadata
 from GitHub and only shows mixer versions and RØDE firmware profiles that are
 compatible with your app and mixer. If a newer mixer release or firmware
 requires a newer desktop app, the app tells you which version you need and
-asks you to update the app first.
+asks you to update the app first. If a new mixer release was just published and
+its signed metadata isn't ready yet, **Settings › Versions** lets you know so
+you can check again later.
 
 Nothing is ever flashed automatically. To install or update the mixer, open the
 installer from **Settings › Versions** or **Settings › Mixer › Update RC2FX**,
@@ -117,34 +119,41 @@ startup the check fails quietly.
 
 When a new version is out, you can read the full changelog right in the app,
 or browse the full histories online at
-[App release history](https://ibanks42.github.io/rc2fx/updates/app) and
-[Mixer software history](https://ibanks42.github.io/rc2fx/updates/mixer).
+[App release history](https://rc2fx.ibanks.dev/updates/app) and
+[Mixer software history](https://rc2fx.ibanks.dev/updates/mixer).
 
 The check only notifies you; nothing downloads or installs until you start it:
 
-- **Installed app, portable zip, or AppImage:** Click **Download update** in
-  **Settings › Versions**. Once downloaded, the app verifies the package's
-  checksum and cryptographic signature before staging it. If the check fails or
-  your connection drops, the download is discarded and you can click **Download
-  update** to try again. (If RC2FX says the update hasn't been signed yet, wait
-  a bit and try again; releases are signed shortly after publishing.) When it's
-  ready, click **Restart to update** to close the app, install the new version,
-  and relaunch. On Linux, this replaces your AppImage file in place under the
+- **Installed app, portable zip, or AppImage:** Click **Update app** in
+  **Settings › Versions**. RC2FX downloads the package, verifies its checksum
+  and cryptographic signature, and then restarts on its own to install the new
+  version and relaunch. Your mixer's audio isn't affected while the app updates
+  or restarts. On Linux, this replaces your AppImage file in place under the
   same name.
 
-  If you download an update and close the app without restarting into it, RC2FX
-  re-verifies the downloaded package the next time you launch. If you're
-  offline and it can't verify, it keeps the download and shows **Check again**
-  so you can retry later without redownloading.
+  If the check fails or your connection drops, the download is discarded and
+  you can click **Update app** to try again. (If RC2FX says the update hasn't
+  been signed yet, wait a bit and try again; releases are signed shortly after
+  publishing.)
+
+  If something is holding the restart back when the download finishes (an
+  active installer task, the mixer finishing a flash, unsaved edits, or a
+  change still reaching the mixer), RC2FX waits until it clears and shows
+  **Restart to update** in the meantime. **Restart to update** stays disabled
+  while the installer is busy so an update never interrupts a flash, and checks
+  for unsaved edits if you click it.
+
+  If you close the app while a verified update is waiting, RC2FX re-verifies
+  the downloaded package the next time you launch and offers **Restart to
+  update** instead of installing it silently. If you're offline and it can't
+  verify, it keeps the download and shows **Check again** so you can retry
+  later without redownloading.
 - **Builds from source:** Click **Download** to open the GitHub release page
   and update manually.
 
-**Restart to update** checks for unsaved edits before closing, and stays
-disabled while the installer is busy (including while waiting for the mixer to
-reboot after a flash) so an update never interrupts a flash. On macOS, if you
-installed RC2FX for all users in `/Applications`, macOS will ask for an
-administrator password to replace the app. If you cancel that prompt, the
-current version simply starts back up.
+On macOS, if you installed RC2FX for all users in `/Applications`, macOS will
+ask for an administrator password to replace the app. If you cancel that
+prompt, the current version simply starts back up.
 
 ## Linux
 

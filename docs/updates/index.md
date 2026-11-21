@@ -17,8 +17,8 @@ the mixer reports against the signed mixer releases it can install; each
 release specifies the oldest desktop app version that can install it.
 
 The same information is exposed as a JSON feed at
-[`/updates.json`](/updates.json) for update checks. Only published releases
-appear in the feed.
+[`https://rc2fx.ibanks.dev/updates.json`](/updates.json) for update checks.
+Only published releases appear in the feed.
 
 RØDE firmware versions are published by RØDE and aren't tracked in these
 histories. See [Firmware support](../reference/firmware.md) for the versions
