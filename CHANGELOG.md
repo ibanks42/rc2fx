@@ -2,6 +2,28 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.2.1] - 2026-11-21
+
+### Features
+
+- *(app)* Restart into app updates on their own and reconnect at once
+
+### Bug fixes
+
+- *(updates)* Read the update feed from the docs domain and count standalone mixer releases
+
+### Documentation
+
+- Describe the update feed, release landing, and one-click app updates
+
+### Maintenance
+
+- *(release)* Let app and mixer releases land on each other's version commit
+
+### Other
+
+- Update image captions in README.md
+
 ## [0.2.0] - 2026-11-21
 
 ### Features
