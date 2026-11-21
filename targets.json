@@ -2,115 +2,133 @@
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 794797487,
+    "version": 795235919,
     "expires": "2029-11-04T15:48:28.583715004Z",
     "targets": {
-      "v0.1.7/releases.linux.json": {
-        "length": 288,
+      "v0.2.0/io.github.ibanks42.rc2fx-0.2.0-full.nupkg": {
+        "length": 30574678,
         "hashes": {
-          "sha256": "8dad210d6127d1658d5aabba789f4549f38d8f2ef6fa8fa50fba12aa4d39a6da"
+          "sha256": "2dd8a3bc967133f60e48255110ba1b98cce466d20b89774f23547e75d8099f2e"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/releases.osx.json": {
-        "length": 286,
+      "v0.2.0/io.github.ibanks42.rc2fx-0.2.0-linux-full.nupkg": {
+        "length": 55801042,
         "hashes": {
-          "sha256": "cb485fb5e4ab765326c212aa934f0ff1433fc5727caf186d9d5d60de7a7c9bae"
+          "sha256": "fcfd136fb34a40016a7f54e8a249d7623eef013b6f369987ab67e573534bcdf8"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/rc2fx-windows-x64.zip": {
-        "length": 18340058,
+      "v0.2.0/io.github.ibanks42.rc2fx-0.2.0-osx-full.nupkg": {
+        "length": 45994059,
         "hashes": {
-          "sha256": "bf5626bea5eb1c329e3e9973763ed6e3771d2e58ac70fb30dbf5cec98d9db9d0"
+          "sha256": "560c5d80f08958e9af1039343c551dc60a1385160160379a5c3107c6e1a5274f"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/rc2fx-windows-x64-setup.exe": {
-        "length": 26833915,
-        "hashes": {
-          "sha256": "41b90daa382da2cdcb600ceb9730e057b1b9c7ab34443ce336602aac4e8424e8"
-        },
-        "custom": {
-          "version": "0.1.7"
-        }
-      },
-      "v0.1.7/rc2fx-macos-arm64.pkg": {
-        "length": 17642167,
-        "hashes": {
-          "sha256": "183b1a12e6ebd7fd4a224ff5a952142e50d5580ab1900cbee29ea705f4a668f7"
-        },
-        "custom": {
-          "version": "0.1.7"
-        }
-      },
-      "v0.1.7/rc2fx-0.1.7-appimage-runtime-sources.tar.gz": {
+      "v0.2.0/rc2fx-0.2.0-appimage-runtime-sources.tar.gz": {
         "length": 10922294,
         "hashes": {
-          "sha256": "1be7eece1013a9378f09a0729a44c231c29ddb74263de03de0c28bd3b30f0f58"
+          "sha256": "eb8c6e9673d744e3eb6277af416211d4786dbe7b8aae5efeea7bbf2381c320fc"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/rc2fx-macos-arm64.zip": {
-        "length": 17625696,
+      "v0.2.0/rc2fx-linux-x64.AppImage": {
+        "length": 56457720,
         "hashes": {
-          "sha256": "6dd39190a4597e27fa4bcbfe70d39cc8e6b1905e54757744f3210e82a45ed850"
+          "sha256": "e19d8d12b7454ffae740f8599ceaa615a3f9ef4297ceb80ffd0536edec1bb0bb"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/io.github.ibanks42.rc2fx-0.1.7-osx-full.nupkg": {
-        "length": 18361314,
+      "v0.2.0/rc2fx-macos-arm64.pkg": {
+        "length": 44448728,
         "hashes": {
-          "sha256": "ed8c6d79afdc48b458b842a412101a02f0d841abf686cb0f445b526ed1166b4b"
+          "sha256": "7c8f5228d44d9cf1db9e35b5f35330024c341706b36b91d7e35624c1aac25e20"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/rc2fx-linux-x64.AppImage": {
-        "length": 29403640,
+      "v0.2.0/rc2fx-macos-arm64.zip": {
+        "length": 44429292,
         "hashes": {
-          "sha256": "6e66455f9155e11a9751c229f4d9475510eb7afa4a336f7774c6ac37863fc243"
+          "sha256": "1025acf6b57f70d8526a11dd540330412a2719cb413a815cd67c8a786bc65663"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/io.github.ibanks42.rc2fx-0.1.7-linux-full.nupkg": {
-        "length": 28789375,
+      "v0.2.0/rc2fx-macos-universal.pkg": {
+        "length": 44448728,
         "hashes": {
-          "sha256": "eaf6eee9c9fb48bce313d1acf07a7160ea84ce5cb215f0a377c0a798ce2c1ac0"
+          "sha256": "7c8f5228d44d9cf1db9e35b5f35330024c341706b36b91d7e35624c1aac25e20"
         },
         "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       },
-      "v0.1.7/releases.win.json": {
+      "v0.2.0/rc2fx-macos-universal.zip": {
+        "length": 44429292,
+        "hashes": {
+          "sha256": "1025acf6b57f70d8526a11dd540330412a2719cb413a815cd67c8a786bc65663"
+        },
+        "custom": {
+          "version": "0.2.0"
+        }
+      },
+      "v0.2.0/rc2fx-windows-x64-setup.exe": {
+        "length": 39056982,
+        "hashes": {
+          "sha256": "bd5777a45b4d8d4184301a7e905f90e9dce70dc1647782c6496a6804803381dd"
+        },
+        "custom": {
+          "version": "0.2.0"
+        }
+      },
+      "v0.2.0/rc2fx-windows-x64.zip": {
+        "length": 30563122,
+        "hashes": {
+          "sha256": "4b592063b4d43934bc960dc48e27a3de05d7bca118333fdcde74da63d1972e34"
+        },
+        "custom": {
+          "version": "0.2.0"
+        }
+      },
+      "v0.2.0/releases.linux.json": {
+        "length": 288,
+        "hashes": {
+          "sha256": "64c39dedba92a28011b5608943984768691914cf4753d01736efa48b8e081d72"
+        },
+        "custom": {
+          "version": "0.2.0"
+        }
+      },
+      "v0.2.0/releases.osx.json": {
+        "length": 286,
+        "hashes": {
+          "sha256": "373a990750e5b01e8c412fa5b5f2e790ad6004654a6aaece1cd2fe1c4b8f25d4"
+        },
+        "custom": {
+          "version": "0.2.0"
+        }
+      },
+      "v0.2.0/releases.win.json": {
         "length": 282,
         "hashes": {
-          "sha256": "4180c0ded6c8223f11091ff84ac694859f2b9c2e631436fa254e66f56687549d"
+          "sha256": "fb028be0f9fe382aca9ca7697f78f8207009d98a63f5b40213acda3328057692"
         },
         "custom": {
-          "version": "0.1.7"
-        }
-      },
-      "v0.1.7/io.github.ibanks42.rc2fx-0.1.7-full.nupkg": {
-        "length": 18351611,
-        "hashes": {
-          "sha256": "a181547fa2c354d04110cc83eca4ac02d5d78659bfa0e3f0dfc91067f2fe7c8d"
-        },
-        "custom": {
-          "version": "0.1.7"
+          "version": "0.2.0"
         }
       }
     },
@@ -122,7 +140,7 @@
   "signatures": [
     {
       "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
-      "sig": "0f372432e139934fe5fa5994fe9658c7f1dca6a5e5128595cdfb31dd3d6115f58c34ac99de2f9821bc873789c985dda452ddef63999c1068d2866fc4d7dfde460bc934a52c282d6f13097186400e0f49a5934b167882d981ef807f0e60a977c6ab487f84b95d00eb32ffc5df8e1ad7f74074a33a997289317daf969098dd0d8c8c872137100b70661a4596ccda35789802b2bd0e9141e867618288d04c61e933fb51787c1a8e5cc5f724917675f54bfae86b76b46f4b03e1efa58a0ef66eb60dd0548e45692e3d179321d73f801d64cbaa40b22175f5fa975edfc5f8c0bb9fe90891c7efc3b566320b4e882be9a6a263bee2d916a3d2592ec7483180b8d98093653207db2c4e24a0738f03e58ae9179628a356111eac59210b015795ddabc213f8ab086239272f492292937e096f2e41ff554558d47a03d3def0183e9352aed4e5d34db645221e1a35388dd256d4dac8772db7017651c980da2eaba918f9e6419749a9a11c47d6e914c84fa83d049033278758f9ac9b642bf379cfb1438a5ed0"
+      "sig": "bf925191a6bc422843761bb1be960447aea41d0926e39c7336b4cbda41777aa1bed1d8343c23bfd120442099da62ac5944b3a1bba04b7492dccaaaea57398fab888be641701aa51f9548cb7f88f0d9c903303a404e2c8c3814ef1b6c53de3f8eb0d3e1b459cd0266b41d825f07b8166359fdb40b8cef7126f071e37a3a1a06fb39e45c8dd432033cf12b2b38b99b3e39f58110814c059eb3ee0bd0816c9631b4caf899afc8c17d6d1487def0cfe9b9dc261a38c59495ec75cd465429bae79be913ba1c4154aefbe14ee0fc76844e7de1728c3ec61b3caf31674103ec0b8c56c340f5739c50e21c57283b127c3a4eccdf0a50200d9f0c6b422b5d8e503af3a4193f66c68946584147f5e743f1071f2a4e61824b73f9deff032ab4a214803523cd69aedd21f6248a8bb0e2638df7047424ac9ffdc2213a5c4af151cfdbaf3a2e6d95b451c744071b8717bd724a4ab6ecf22819ff07850a35ce8567e5b2b555a777b7c2e9799431730d85ca1cf29d028e2c4598fc4822734e74fd41ac5c62f0688f"
     }
   ]
 }
