@@ -2,42 +2,42 @@
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 1794798782,
+    "version": 1795239089,
     "expires": "2029-11-04T15:48:28.583715004Z",
     "targets": {
-      "mixer-v0.2.1/firmware-profiles.json": {
-        "length": 6698,
+      "mixer-v0.2.2/rc2fx-mixer-0.2.2.payload": {
+        "length": 13850461,
         "hashes": {
-          "sha256": "a2e9c1c1b5234bfba8e312e4bf67577ea9f2972a213839dc5afc8dd942343082"
-        },
-        "custom": {
-          "rc2fxCatalog": "0.2.1"
-        }
-      },
-      "mixer-v0.2.1/THIRD-PARTY-NOTICES.html": {
-        "length": 2009965,
-        "hashes": {
-          "sha256": "5e2c187772735864ac3399df909c70668708266b55793da0ebe0d5252135be3f"
-        }
-      },
-      "mixer-v0.2.1/rc2fx-mixer-0.2.1.payload": {
-        "length": 14023656,
-        "hashes": {
-          "sha256": "fcb733e4bc75ebe5e119a7716c1e48b542be8fe617f3dabcba36362e8a1a3b6e"
+          "sha256": "d4ed615e49612070cf49def71b993511f7caf05e3c7a434f6659ae59def6fb09"
         },
         "custom": {
           "rc2fxMixer": {
+            "version": "0.2.2",
+            "payloadFormat": 1,
+            "protocolVersion": 1,
+            "minimumAppVersion": "0.1.1",
             "firmwareProfiles": [
               "rodecaster-pro-ii-1.7.6",
               "rodecaster-pro-ii-1.7.7",
               "rodecaster-duo-1.7.6",
               "rodecaster-duo-1.7.7"
-            ],
-            "minimumAppVersion": "0.1.1",
-            "payloadFormat": 1,
-            "protocolVersion": 1,
-            "version": "0.2.1"
+            ]
           }
+        }
+      },
+      "mixer-v0.2.2/THIRD-PARTY-NOTICES.html": {
+        "length": 1775408,
+        "hashes": {
+          "sha256": "6e66c0a9ac3e6ff6b9d238b152ef2f2ecd603707424eb133a898b68f4dbbbcd0"
+        }
+      },
+      "mixer-v0.2.2/firmware-profiles.json": {
+        "length": 6698,
+        "hashes": {
+          "sha256": "a2e9c1c1b5234bfba8e312e4bf67577ea9f2972a213839dc5afc8dd942343082"
+        },
+        "custom": {
+          "rc2fxCatalog": "0.2.2"
         }
       }
     },
@@ -49,7 +49,7 @@
   "signatures": [
     {
       "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
-      "sig": "432081d220c2108a6eb4fd77f531b6a5cc4dd3bab393cf5c834b5cc1ee51114a86080d10e9f88c63aa0ab6bd87e5bb6ac0f5f0838b55e24f2b0fa09e5a0257c2075fdee658511c0d22407874d97b93920adf6814e2d34b2b5b511e9c01e8b662786ff09ac0d0badae30c9a1630471c32dd53272cb42bf69a4374c020c48053c592d7d2331c7d354517a3dea196b0e321e6cac75c1c0ef13616757ccd7742be7dce76b52e139d168bb446df7a46b252eaf9c535570bb996cdeff1de4143f6350987bd1f5b234e690d23391858ed083e1e884c7f44ef3c2deebaa5a70a4c990de1b1184a6fa08fcc3c4383c1cfe7c15c931da9d5827749bb09ec99063e633d231001df6d18a7622f32d490360169d1cc263ed5ab5d0a588951132d0a44679fe8f274bdb3932298b73a8f726ae36252993d91136b142a9590e35e3d035cc29a78089fdaa1fd32e7b48db30afe7e1e0f2bc285231c56c134d076cb526c98f45b5b091b59ef5bb061ff25d375ac212d297c58ad4117395c810d6eda45588ee17236a5"
+      "sig": "65903a6ed85c6c6ba0c54975d27e502d50c2091771b89ab224cdbdef9c2dde4216cbf7789a478f8b7ac1e40bb47ea707751d26d6b0052e4e397d673955c59f029f9cfd4ea5f83535d7b27f3cf51ecc0e82068e0d614cac5c01d8ef7631d5dd632ba86f220771ca9849872ee9575011d2e8dfc79c85d4abeee6ab8c0e19f842bd9da734533c9adfe3f2e3005ce5d1110a73f79a9a6b05101998433fe3b73db93391409a773564ca42fb2b423b37dd5bfaf0dc9c1f48348665533ebaf7192a40450f81d02b4fb714f61cf288ba04f1457dcc861781311cf2a199bf8e23888cf646f6073a5687a5f58bbfdaf309617334618636730c3f6139c53e4bbf18d9d3b8dc043d1fbe2bdc13e77767c3dea45448bcd672f94c8bd4e9fe739269b7b8c1cf1364e1075f838c84b0512b128404cd188df098f95c40032c5c5dee42b0edd3edd6dbc5c6cd0f1cd86b800a443edc1c3a406fa8dccc29afb3ee58f0fd1325fe06e31e7bf18ab4ea35b432491b2bbd497606660c7ff456c40b81bf3c185ce74f612c"
     }
   ]
 }
