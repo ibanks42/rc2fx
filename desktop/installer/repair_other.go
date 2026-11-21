@@ -2,7 +2,7 @@
 
 package installer
 
-// Host-side eMMC repair requires libext2fs and is currently Linux-only.
+// Host-side eMMC repair is currently Linux-only.
 
 const RepairSupported = false
 

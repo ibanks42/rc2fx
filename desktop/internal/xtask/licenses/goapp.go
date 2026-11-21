@@ -20,8 +20,8 @@ const (
 )
 
 // GoApp collects notices for the Go desktop app for the given target and build
-// tags: the Go stdlib, vendored e2fsprogs, linked Go modules, and libgpuikit
-// under desktop/third_party/gpuikit.
+// tags: the Go stdlib, linked Go modules, and libgpuikit under
+// desktop/third_party/gpuikit.
 func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 	desktop := filepath.Join(root, "desktop")
 	goEnv := func(args ...string) *exec.Cmd {
@@ -39,13 +39,7 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 	if err != nil {
 		return nil, task.Errorf("%s: %s", filepath.Join(goroot, "LICENSE"), task.IOError(err))
 	}
-	sections := []Section{{"Go standard library — BSD-3-Clause", string(std)}}
-	// Vendored e2fsprogs (libext2fs, libcom_err) in desktop/ext2fs for mixer storage repair.
-	e2fsprogs, err := os.ReadFile(filepath.Join(root, "desktop", "ext2fs", "e2fsprogs", "NOTICE"))
-	if err != nil {
-		return nil, task.Errorf("%s: %s", filepath.Join(root, "desktop", "ext2fs", "e2fsprogs", "NOTICE"), task.IOError(err))
-	}
-	sections = append(sections, Section{"e2fsprogs (libext2fs, libcom_err) — LGPL-2.0 / MIT-style", string(e2fsprogs)})
+	sections := []Section{{"Go standard library (BSD-3-Clause)", string(std)}}
 
 	args := []string{"list", "-deps", "-f", "{{with .Module}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}"}
 	if len(tags) > 0 {
@@ -96,7 +90,7 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 			groups.add("Go modules", string(text), user)
 		}
 	}
-	sections = append(sections, groups.Sections("Dependencies — ")...)
+	sections = append(sections, groups.Sections("Dependencies: ")...)
 
 	gpuikit, err := Gpuikit(filepath.Join(desktop, "third_party", "gpuikit"))
 	if err != nil {
@@ -138,7 +132,7 @@ func Gpuikit(dir string) ([]Section, error) {
 	if !utf8.Valid(listing) {
 		return nil, task.Errorf("%s: stream did not contain valid UTF-8", filepath.Join(dir, "THIRD_PARTY.md"))
 	}
-	sections := []Section{{"GPUI-kit library (libgpuikit) — third-party software", string(listing)}}
+	sections := []Section{{"GPUI-kit library (libgpuikit): third-party software", string(listing)}}
 	texts := filepath.Join(dir, "licences", "texts")
 	crates, err := os.ReadDir(texts)
 	if err != nil {
@@ -174,7 +168,7 @@ func Gpuikit(dir string) ([]Section, error) {
 	if len(groups) == 0 {
 		return nil, task.Errorf("%s holds no license texts", texts)
 	}
-	return append(sections, groups.Sections("GPUI-kit library — ")...), nil
+	return append(sections, groups.Sections("GPUI-kit library: ")...), nil
 }
 
 func commandError(err error) string {

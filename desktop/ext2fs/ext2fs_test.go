@@ -1,4 +1,4 @@
-//go:build linux && cgo
+//go:build linux
 
 package ext2fs
 
@@ -8,11 +8,13 @@ package ext2fs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -34,7 +36,7 @@ type image struct {
 	debugfs string
 }
 
-func newImage(t *testing.T, block int) *image {
+func newImageWithOpts(t *testing.T, block int, size string, features string, populate func(tree string)) *image {
 	t.Helper()
 	mkfs, e2fsck, debugfs := tool("mkfs.ext4"), tool("e2fsck"), tool("debugfs")
 	if mkfs == "" || e2fsck == "" || debugfs == "" {
@@ -48,14 +50,24 @@ func newImage(t *testing.T, block int) *image {
 	must(t, os.WriteFile(filepath.Join(tree, "etc/hostname"), []byte("rodecaster-pro-ii\n"), 0o644))
 	must(t, os.WriteFile(filepath.Join(tree, "usr/bin/big"), bigData(), 0o644))
 	must(t, os.Symlink("big", filepath.Join(tree, "usr/bin/link")))
+	if populate != nil {
+		populate(tree)
+	}
 	path := filepath.Join(dir, "root.img")
 	out, err := exec.Command(mkfs, "-F", "-q", "-t", "ext4", "-b", strconv.Itoa(block), "-I", "256",
-		"-O", "metadata_csum,64bit,extent,flex_bg,huge_file,dir_nlink,extra_isize,^inline_data,^orphan_file,^metadata_csum_seed",
-		"-d", tree, path, "8M").CombinedOutput()
+		"-O", features,
+		"-d", tree, path, size).CombinedOutput()
 	if err != nil {
 		t.Fatalf("mkfs.ext4: %v\n%s", err, out)
 	}
 	return &image{path: path, e2fsck: e2fsck, debugfs: debugfs}
+}
+
+func newImage(t *testing.T, block int) *image {
+	t.Helper()
+	return newImageWithOpts(t, block, "8M",
+		"metadata_csum,64bit,extent,flex_bg,huge_file,dir_nlink,extra_isize,^inline_data,^orphan_file,^metadata_csum_seed",
+		nil)
 }
 
 func bigData() []byte {
@@ -78,6 +90,15 @@ func (i *image) debugfsRun(t *testing.T, request string) {
 	t.Helper()
 	if out, err := exec.Command(i.debugfs, "-w", "-R", request, i.path).CombinedOutput(); err != nil {
 		t.Fatalf("debugfs %s: %v\n%s", request, err, out)
+	}
+}
+
+func (i *image) debugfsScript(t *testing.T, commands []string) {
+	t.Helper()
+	cmdFile := filepath.Join(filepath.Dir(i.path), "debugfs.cmds")
+	must(t, os.WriteFile(cmdFile, []byte(strings.Join(commands, "\n")+"\n"), 0o600))
+	if out, err := exec.Command(i.debugfs, "-w", "-f", cmdFile, i.path).CombinedOutput(); err != nil {
+		t.Fatalf("debugfs -f: %v\n%s", err, out)
 	}
 }
 
@@ -113,6 +134,14 @@ func read(t *testing.T, fs *Filesystem, entry Entry) []byte {
 		t.Fatalf("read inode %d: %v", entry.Inode, err)
 	}
 	return data
+}
+
+func patternBytes(n int, mul uint32) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte((uint32(i)*mul + 17) % 251)
+	}
+	return b
 }
 
 func TestAFileIsFoundReadAndRestoredInPlace(t *testing.T) {
@@ -241,5 +270,374 @@ func TestAnUnreplayedJournalIsReported(t *testing.T) {
 	defer fs.Close()
 	if !fs.NeedsRecovery() {
 		t.Fatal("needs_recovery is reported")
+	}
+}
+
+func TestMultiLevelExtentTreeReadAndOverwrite(t *testing.T) {
+	for _, tc := range []struct {
+		block    int
+		runs     int
+		runBlks  int
+		minDepth uint16
+	}{
+		{block: 1024, runs: 8, runBlks: 2, minDepth: 1},
+		{block: 4096, runs: 8, runBlks: 2, minDepth: 1},
+		{block: 1024, runs: 350, runBlks: 1, minDepth: 2},
+	} {
+		name := fmt.Sprintf("%dB_depth%d", tc.block, tc.minDepth)
+		t.Run(name, func(t *testing.T) {
+			image := newImage(t, tc.block)
+			cmds := []string{
+				"write /dev/null usr/bin/frag",
+				"write /dev/null usr/bin/spacer",
+			}
+			for r := 0; r < tc.runs; r++ {
+				start := r * tc.runBlks
+				end := start + tc.runBlks - 1
+				cmds = append(cmds,
+					fmt.Sprintf("fallocate usr/bin/frag %d %d", start, end),
+					fmt.Sprintf("fallocate usr/bin/spacer %d %d", start, end),
+				)
+			}
+			size := tc.runs * tc.runBlks * tc.block
+			cmds = append(cmds, fmt.Sprintf("sif usr/bin/frag size %d", size))
+			image.debugfsScript(t, cmds)
+			image.clean(t)
+
+			fs := open(t, image.path, 0, true)
+			entry := lookup(t, fs, "usr/bin/frag")
+			in, err := fs.readInode(entry.Inode)
+			must(t, err)
+			depth := binary.LittleEndian.Uint16(in.raw[inodeInlineBlocksOffset+6 : inodeInlineBlocksOffset+8])
+			if depth < tc.minDepth {
+				t.Fatalf("expected extent depth >= %d, got %d", tc.minDepth, depth)
+			}
+			extents, err := fs.collectExtents(in)
+			must(t, err)
+			if len(extents) < tc.runs {
+				t.Fatalf("expected >= %d fragmented extents, got %d", tc.runs, len(extents))
+			}
+
+			if !bytes.Equal(read(t, fs, entry), make([]byte, size)) {
+				t.Fatal("unwritten fragmented extents should read as zeros")
+			}
+
+			first := patternBytes(size, 19)
+			must(t, fs.Overwrite(entry, first))
+			must(t, fs.Close())
+			image.clean(t)
+
+			fs = open(t, image.path, 0, true)
+			entry = lookup(t, fs, "usr/bin/frag")
+			if !bytes.Equal(read(t, fs, entry), first) {
+				t.Fatal("first overwrite did not persist")
+			}
+
+			// Overwrite again now that extents in external leaf blocks are initialized.
+			second := patternBytes(size, 37)
+			must(t, fs.Overwrite(entry, second))
+			must(t, fs.Close())
+			image.clean(t)
+
+			fs = open(t, image.path, 0, false)
+			defer fs.Close()
+			entry = lookup(t, fs, "usr/bin/frag")
+			if !bytes.Equal(read(t, fs, entry), second) {
+				t.Fatal("second overwrite did not persist")
+			}
+		})
+	}
+}
+
+func TestInodeAndExtentChecksumParityAndCorruptionDetection(t *testing.T) {
+	for _, features := range []string{
+		"metadata_csum,64bit,extent,flex_bg,huge_file,dir_nlink,extra_isize,^inline_data,^orphan_file,^metadata_csum_seed",
+		"metadata_csum,64bit,extent,flex_bg,huge_file,dir_nlink,extra_isize,^inline_data,^orphan_file,metadata_csum_seed",
+	} {
+		image := newImageWithOpts(t, 1024, "8M", features, nil)
+		cmds := []string{
+			"write /dev/null usr/bin/extcsum",
+			"write /dev/null usr/bin/spacer",
+		}
+		for r := 0; r < 6; r++ {
+			cmds = append(cmds,
+				fmt.Sprintf("fallocate usr/bin/extcsum %d %d", r, r),
+				fmt.Sprintf("fallocate usr/bin/spacer %d %d", r, r),
+			)
+		}
+		cmds = append(cmds, fmt.Sprintf("sif usr/bin/extcsum size %d", 6*1024))
+		image.debugfsScript(t, cmds)
+		image.clean(t)
+
+		fs := open(t, image.path, 0, false)
+		entry := lookup(t, fs, "usr/bin/extcsum")
+		in, err := fs.readInode(entry.Inode)
+		must(t, err)
+		extents, err := fs.collectExtents(in)
+		must(t, err)
+		if len(extents) == 0 || extents[0].leafBlock == 0 {
+			t.Fatalf("expected external extent leaf block, got %+v", extents)
+		}
+		inodeBlk, inodeOff, err := fs.inodeLocation(entry.Inode)
+		must(t, err)
+		leafBlk := extents[0].leafBlock
+		must(t, fs.Close())
+
+		orig, err := os.ReadFile(image.path)
+		must(t, err)
+
+		// 1. Corrupt superblock.
+		badSB := append([]byte(nil), orig...)
+		badSB[1024+0x10] ^= 0x01
+		badSBPath := filepath.Join(t.TempDir(), "bad_sb.img")
+		must(t, os.WriteFile(badSBPath, badSB, 0o600))
+		if badFS, err := Open(badSBPath, 0, false); err == nil {
+			badFS.Close()
+			t.Fatal("expected superblock checksum failure")
+		}
+
+		// 2. Corrupt inode bytes.
+		badIno := append([]byte(nil), orig...)
+		badIno[int(inodeBlk)*1024+int(inodeOff)+0x10] ^= 0x01
+		badInoPath := filepath.Join(t.TempDir(), "bad_ino.img")
+		must(t, os.WriteFile(badInoPath, badIno, 0o600))
+		badInoFS := open(t, badInoPath, 0, false)
+		if _, err := badInoFS.Lookup("usr/bin/extcsum"); err == nil {
+			badInoFS.Close()
+			t.Fatal("expected inode checksum failure on lookup")
+		}
+		must(t, badInoFS.Close())
+
+		// 3. Corrupt external extent leaf block.
+		badExt := append([]byte(nil), orig...)
+		badExt[int(leafBlk)*1024+12] ^= 0x01
+		badExtPath := filepath.Join(t.TempDir(), "bad_ext.img")
+		must(t, os.WriteFile(badExtPath, badExt, 0o600))
+		badExtFS := open(t, badExtPath, 0, false)
+		if _, err := badExtFS.Read(entry); err == nil {
+			badExtFS.Close()
+			t.Fatal("expected extent block checksum failure on read")
+		}
+		must(t, badExtFS.Close())
+	}
+}
+
+func (i *image) optimizeDirs(t *testing.T) {
+	t.Helper()
+	cmd := exec.Command(i.e2fsck, "-f", "-D", "-y", i.path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() > 1 {
+			t.Fatalf("e2fsck -fDy: %v\n%s", err, out)
+		}
+	}
+}
+
+func TestHTreeDirectoryAndIntermediateSymlinks(t *testing.T) {
+	for _, block := range []int{1024, 4096} {
+		t.Run(fmt.Sprint(block), func(t *testing.T) {
+			image := newImageWithOpts(t, block, "8M",
+				"dir_index,metadata_csum,64bit,extent,flex_bg,huge_file,dir_nlink,extra_isize,^inline_data,^orphan_file,^metadata_csum_seed",
+				func(tree string) {
+					manyDir := filepath.Join(tree, "usr/share/many")
+					must(t, os.MkdirAll(manyDir, 0o755))
+					for i := 0; i < 320; i++ {
+						name := fmt.Sprintf("entry-%03d-long-name-to-trigger-htree", i)
+						must(t, os.WriteFile(filepath.Join(manyDir, name), []byte(name+"\n"), 0o644))
+					}
+					must(t, os.MkdirAll(filepath.Join(tree, "usr/lib"), 0o755))
+					must(t, os.Symlink("usr/bin", filepath.Join(tree, "dirlink")))
+					must(t, os.Symlink("../bin", filepath.Join(tree, "usr/lib/dirsym")))
+					must(t, os.Symlink("/etc/hostname", filepath.Join(tree, "usr/lib/abslink")))
+				})
+			image.optimizeDirs(t)
+			image.clean(t)
+
+			fs := open(t, image.path, 0, false)
+			defer fs.Close()
+
+			manyEntry := lookup(t, fs, "usr/share/many")
+			manyIn, err := fs.readInode(manyEntry.Inode)
+			must(t, err)
+			if manyIn.flags&0x1000 == 0 {
+				t.Fatalf("expected HTree EXT2_INDEX_FL on directory inode, flags=0x%08x", manyIn.flags)
+			}
+
+			for _, idx := range []int{0, 159, 319} {
+				name := fmt.Sprintf("entry-%03d-long-name-to-trigger-htree", idx)
+				e := lookup(t, fs, "usr/share/many/"+name)
+				if got := string(read(t, fs, e)); got != name+"\n" {
+					t.Fatalf("got %q, want %q", got, name+"\n")
+				}
+			}
+			if missing, err := fs.Lookup("usr/share/many/entry-999-missing"); err != nil || missing != nil {
+				t.Fatalf("expected nil, nil for missing entry; got %v, %v", missing, err)
+			}
+
+			// Intermediate symlinks (top-level and relative) are followed, trailing ones are not.
+			viaTop := lookup(t, fs, "dirlink/rode-init-update-env.sh")
+			if !viaTop.Regular || !bytes.Equal(read(t, fs, viaTop), script) {
+				t.Fatal("failed to resolve via intermediate symlink")
+			}
+			viaRel := lookup(t, fs, "usr/lib/dirsym/rode-init-update-env.sh")
+			if !viaRel.Regular || !bytes.Equal(read(t, fs, viaRel), script) {
+				t.Fatal("failed to resolve via relative intermediate symlink")
+			}
+			trailingAbs := lookup(t, fs, "usr/lib/abslink")
+			if trailingAbs.Regular {
+				t.Fatal("trailing absolute symlink must not be followed")
+			}
+			if trailingTop, err := fs.Lookup("dirlink"); err != nil || trailingTop == nil || trailingTop.Regular {
+				t.Fatalf("trailing dirlink must not be followed: %+v, %v", trailingTop, err)
+			}
+			if sub, err := fs.Lookup("usr/lib/abslink/sub"); err == nil {
+				t.Fatalf("expected error traversing through symlink to regular file, got %+v", sub)
+			}
+		})
+	}
+}
+
+func TestNonExtentIndirectAndDoubleIndirectBlocks(t *testing.T) {
+	image := newImageWithOpts(t, 1024, "8M",
+		"^extent,^64bit,^metadata_csum,flex_bg,huge_file,dir_nlink,extra_isize,^inline_data,^orphan_file",
+		nil)
+	fs := open(t, image.path, 0, true)
+	entry := lookup(t, fs, "usr/bin/big")
+	in, err := fs.readInode(entry.Inode)
+	must(t, err)
+	if in.flags&inodeExtentsFl != 0 {
+		t.Fatalf("expected non-extent inode, flags=0x%08x", in.flags)
+	}
+	if !bytes.Equal(read(t, fs, entry), bigData()) {
+		t.Fatal("initial indirect read mismatch")
+	}
+
+	replacement := patternBytes(len(bigData()), 29)
+	must(t, fs.Overwrite(entry, replacement))
+	must(t, fs.Close())
+	image.clean(t)
+
+	fs = open(t, image.path, 0, false)
+	defer fs.Close()
+	entry = lookup(t, fs, "usr/bin/big")
+	if !bytes.Equal(read(t, fs, entry), replacement) {
+		t.Fatal("indirect overwrite mismatch")
+	}
+}
+
+func TestSparseHoleOverwriteIsRefusedWithoutCorruptingData(t *testing.T) {
+	image := newImage(t, 1024)
+	payloadFile := filepath.Join(t.TempDir(), "head.bin")
+	head := patternBytes(2048, 11)
+	must(t, os.WriteFile(payloadFile, head, 0o600))
+	image.debugfsScript(t, []string{
+		fmt.Sprintf("write %s usr/bin/sparse", payloadFile),
+		"fallocate usr/bin/sparse 4 5",
+		"sif usr/bin/sparse size 6144",
+	})
+	image.clean(t)
+
+	fs := open(t, image.path, 0, true)
+	entry := lookup(t, fs, "usr/bin/sparse")
+	got := read(t, fs, entry)
+	want := append(append([]byte(nil), head...), make([]byte, 4096)...)
+	if !bytes.Equal(got, want) {
+		t.Fatal("sparse hole did not read as zeros")
+	}
+	if err := fs.Overwrite(entry, patternBytes(6144, 23)); err == nil {
+		t.Fatal("expected Overwrite to refuse sparse hole")
+	}
+	must(t, fs.Close())
+	image.clean(t)
+
+	fs = open(t, image.path, 0, false)
+	defer fs.Close()
+	if !bytes.Equal(read(t, fs, entry), want) {
+		t.Fatal("sparse file contents changed after refused Overwrite")
+	}
+}
+
+func TestPreallocatedExtentStraddlingEOF(t *testing.T) {
+	image := newImage(t, 1024)
+	image.debugfsScript(t, []string{
+		"write /dev/null usr/bin/straddle",
+		"fallocate usr/bin/straddle 0 9",
+		"sif usr/bin/straddle size 5000",
+	})
+	image.clean(t)
+
+	fs := open(t, image.path, 0, true)
+	entry := lookup(t, fs, "usr/bin/straddle")
+	if !bytes.Equal(read(t, fs, entry), make([]byte, 5000)) {
+		t.Fatal("straddling preallocated file should read as zeros")
+	}
+	want := patternBytes(5000, 41)
+	must(t, fs.Overwrite(entry, want))
+	must(t, fs.Close())
+	image.clean(t)
+
+	fs = open(t, image.path, 0, false)
+	defer fs.Close()
+	entry = lookup(t, fs, "usr/bin/straddle")
+	if !bytes.Equal(read(t, fs, entry), want) {
+		t.Fatal("straddling overwrite did not persist")
+	}
+	in, err := fs.readInode(entry.Inode)
+	must(t, err)
+	extents, err := fs.collectExtents(in)
+	must(t, err)
+	if len(extents) != 2 || extents[0].unwritten || extents[0].length != 5 || !extents[1].unwritten || extents[1].length != 5 {
+		t.Fatalf("expected [0..5 init, 5..10 uninit], got %+v", extents)
+	}
+}
+
+func TestUnsupportedIncompatFeaturesRejected(t *testing.T) {
+	for _, feat := range []string{"inline_data", "encrypt"} {
+		t.Run(feat, func(t *testing.T) {
+			image := newImageWithOpts(t, 4096, "8M",
+				"metadata_csum,64bit,extent,flex_bg,huge_file,dir_nlink,extra_isize,"+feat,
+				nil)
+			if fs, err := Open(image.path, 0, false); err == nil {
+				fs.Close()
+				t.Fatalf("expected Open to reject feature %s", feat)
+			}
+		})
+	}
+}
+
+func TestNilAndClosedFilesystemSafety(t *testing.T) {
+	var nilFS *Filesystem
+	if nilFS.NeedsRecovery() {
+		t.Fatal("nil NeedsRecovery should be false")
+	}
+	if err := nilFS.Close(); err != nil {
+		t.Fatalf("nil Close: %v", err)
+	}
+	if _, err := nilFS.Lookup("etc/hostname"); err == nil {
+		t.Fatal("nil Lookup should error")
+	}
+	if _, err := nilFS.Read(Entry{Inode: 2, Regular: true, Size: 1}); err == nil {
+		t.Fatal("nil Read should error")
+	}
+	if err := nilFS.Overwrite(Entry{Inode: 2, Regular: true, Size: 1}, []byte{0}); err == nil {
+		t.Fatal("nil Overwrite should error")
+	}
+
+	image := newImage(t, 1024)
+	fs := open(t, image.path, 0, true)
+	entry := lookup(t, fs, "etc/hostname")
+	must(t, fs.Close())
+	must(t, fs.Close())
+	if fs.NeedsRecovery() {
+		t.Fatal("closed NeedsRecovery should be false")
+	}
+	if _, err := fs.Lookup("etc/hostname"); err == nil {
+		t.Fatal("closed Lookup should error")
+	}
+	if _, err := fs.Read(entry); err == nil {
+		t.Fatal("closed Read should error")
+	}
+	if err := fs.Overwrite(entry, make([]byte, entry.Size)); err == nil {
+		t.Fatal("closed Overwrite should error")
 	}
 }

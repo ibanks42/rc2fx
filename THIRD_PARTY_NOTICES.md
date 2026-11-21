@@ -84,17 +84,6 @@ and in the app's license notices. `UpdateNix` is Velopack's static musl
 build, so it also includes musl (MIT License), whose text the AppImage's
 license notices carry.
 
-## e2fsprogs (libext2fs and libcom_err)
-
-Repair mixer, in the desktop app on Linux, uses libext2fs and libcom_err from
-[e2fsprogs](https://e2fsprogs.sourceforge.net/) 1.47.4, built from the sources
-vendored in `desktop/ext2fs/e2fsprogs` and linked statically into the
-app through cgo. libext2fs is licensed under the GNU Library General Public License,
-version 2; libcom_err under an MIT-style license (its source file headers).
-The full texts and the notice are in `desktop/ext2fs/e2fsprogs/NOTICE`.
-The rest of RC2FX's source is public, so the app can be rebuilt with a
-modified libext2fs, as the LGPL requires.
-
 ## AppImage runtime
 
 The Linux AppImage starts with the

@@ -262,7 +262,7 @@ func licenseSections(root string) ([]licenses.Section, error) {
 		if strings.TrimSpace(string(text)) == "" {
 			return nil, task.Errorf("empty copyright file for %s", entry.name)
 		}
-		sections = append(sections, licenses.Section{Title: "AppImage library — " + entry.name, Text: string(text)})
+		sections = append(sections, licenses.Section{Title: "AppImage library: " + entry.name, Text: string(text)})
 	}
 	document, err := readNotices(root)
 	if err != nil {

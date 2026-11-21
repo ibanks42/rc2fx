@@ -78,10 +78,10 @@ func readText(root, path string) (string, error) {
 func GenerateBase(root string) ([]Section, error) {
 	var sections []Section
 	for _, fixed := range []struct{ title, path string }{
-		{"RC2FX and trained weights — MIT", "LICENSE-MIT"},
-		{"DeepFilterNet — MIT", "crates/rc2fx-dfn/LICENSE-DEEPFILTERNET"},
-		{"Lucide and Feather icons — ISC / MIT", "licenses/LICENSE-LUCIDE"},
-		{"Velopack — MIT", "licenses/LICENSE-VELOPACK"},
+		{"RC2FX and trained weights (MIT)", "LICENSE-MIT"},
+		{"DeepFilterNet (MIT)", "crates/rc2fx-dfn/LICENSE-DEEPFILTERNET"},
+		{"Lucide and Feather icons (ISC / MIT)", "licenses/LICENSE-LUCIDE"},
+		{"Velopack (MIT)", "licenses/LICENSE-VELOPACK"},
 		{"Third-party notices", "THIRD_PARTY_NOTICES.md"},
 		{"Trained on", "licenses/TRAINING-CREDITS.txt"},
 	} {
@@ -143,7 +143,7 @@ func GenerateBase(root string) ([]Section, error) {
 	if err := MergeReport(groups, report); err != nil {
 		return nil, err
 	}
-	sections = append(sections, groups.Sections("Dependencies — ")...)
+	sections = append(sections, groups.Sections("Dependencies: ")...)
 	return sections, nil
 }
 
