@@ -312,24 +312,26 @@ func (a *App) updateButton(state selfupdate.State) (gk.ButtonEl, string) {
 	switch state.Kind {
 	case selfupdate.StateDownloading:
 		return button.Label(fmt.Sprintf("Downloading %d%%", state.Percent)).Icon(gk.IconLoaderCircle).Disabled(true),
-			"You can keep working while it downloads."
+			"RC2FX restarts when the download is done."
 	case selfupdate.StateVerifying:
 		return button.Label("Checking update").Icon(gk.IconLoaderCircle).Disabled(true),
 			fmt.Sprintf("Checking RC2FX %s against its signed release.", state.Version)
 	case selfupdate.StateReady:
 		reason, blocked := a.installerRestartBlocker()
-		note := fmt.Sprintf("RC2FX %s is downloaded. RC2FX restarts to install it.", state.Version)
-		if blocked {
-			note = fmt.Sprintf("RC2FX %s is downloaded. %s", state.Version, reason)
+		note := fmt.Sprintf("RC2FX %s is ready. Restart to finish updating.", state.Version)
+		if waiting, held := a.updateRestartBlocker(); a.restartWhenReady && held {
+			note = fmt.Sprintf("RC2FX %s is ready. %s", state.Version, waiting)
+		} else if blocked {
+			note = fmt.Sprintf("RC2FX %s is ready. %s", state.Version, reason)
 		}
 		return button.Label("Restart to update").Icon(gk.IconRefreshCw).Disabled(blocked).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.restartToUpdate(cx) }), note
 	}
-	note := "It downloads in the background. RC2FX restarts only when you choose."
+	note := "RC2FX downloads it and restarts on its own. Your mixer’s audio isn’t affected."
 	if state.Kind == selfupdate.StateFailed {
 		note = state.Message
 	}
-	label, icon := "Download update", gk.IconArrowDown
+	label, icon := "Update app", gk.IconArrowDown
 	if a.selfUpdate.Retrying() {
 		label, icon = "Check again", gk.IconRefreshCw
 	}

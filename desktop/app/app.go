@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 	"time"
 
 	"gpuikit.dev/gk"
@@ -19,6 +20,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
 	"github.com/ibanks42/rc2fx/desktop/transport"
+	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
 
 // Backend wraps the USB transport to the mixer, or records why it is unavailable.
@@ -119,6 +121,16 @@ type confirmUI struct {
 // App holds the desktop UI state: session, navigation, live editing, installer
 // coordination, and window handles.
 type App struct {
+	// resumedSession is true when this process received a USB session from the
+	// app it replaced during an update restart.
+	resumedSession bool
+	// restartWhenReady records that the user started an app update, so RC2FX
+	// restarts into it once verified and unblocked (see autoRestart).
+	restartWhenReady bool
+	// quietUntil holds back the connection screen while the first connect
+	// runs, so a launch doesn't flash "Connecting" (see launchQuiet).
+	launched, quietUntil time.Time
+	wasQuiet             bool
 	session              core.Session
 	transport            Backend
 	generation           uint64
@@ -252,6 +264,11 @@ func (a *App) init(cx *gk.Cx) {
 		// Fixture page: skip mixer, helper, and network startup.
 		a.openDevPage(cx)
 	} else {
+		a.launched = time.Now()
+		a.quietUntil = a.launched.Add(launchQuiet)
+		if a.resumedSession {
+			a.quietUntil = a.launched.Add(usbLockout)
+		}
 		a.connect(cx)
 		a.checkAppUpdate(cx, false)
 		a.startSelfUpdate(cx)
@@ -687,7 +704,9 @@ func (a *App) poll(cx *gk.Cx) {
 			} else {
 				a.message = k.Message
 			}
-			a.link.Failed(a.session.Connected, time.Now())
+			now := time.Now()
+			a.link.Failed(a.session.Connected, now)
+			a.launchFailure(k.Message, now)
 		}
 	}
 	if a.session.Conflict && !a.awaitingRefresh {
@@ -741,6 +760,11 @@ func (a *App) poll(cx *gk.Cx) {
 	a.wasFresh = isFresh
 	a.lastHomeKey = homeKey
 	a.pollIndicators(cx)
+	a.autoRestart(cx)
+	if quiet := a.launchQuiet(); quiet != a.wasQuiet {
+		a.wasQuiet = quiet
+		a.notify(cx)
+	}
 	if a.link.Due(a.session.Connected, time.Now()) {
 		a.beginConnection(cx, true)
 	}
@@ -949,7 +973,9 @@ func Run() {
 	if previewMode(os.Args) {
 		return
 	}
+	resumed := resumeUSBSession(os.Args[1:])
 	a := newApp()
+	a.resumedSession = resumed
 	gk.Run(func(cx *gk.Cx) {
 		gk.QuitOnLastWindow(cx, true)
 		a.root = gk.NewView(a.init, a.view)
@@ -960,8 +986,15 @@ func Run() {
 			MinHeight: WindowMin[1],
 			Title:     windowTitle(),
 		}), a.root)
-		// Hand off any confirmed "Restart to update" to the updater on exit.
-		gk.OnAppQuit(cx, func(*gk.Cx) { a.selfUpdate.LaunchOnQuit() })
+		// Hand off any pending update restart to the updater on exit, passing
+		// this process's USB session so the restarted app connects at once.
+		gk.OnAppQuit(cx, func(*gk.Cx) {
+			var args []string
+			if token, ok := usbcontrol.HandoffToken(); ok {
+				args = []string{usbSessionFlag + token}
+			}
+			a.selfUpdate.LaunchOnQuit(args)
+		})
 		// Intercept window close (close button, Alt+F4, Cmd+W) so close checks run.
 		gk.OnWindowShouldClose(cx, a.window, func(cx *gk.Cx) bool {
 			a.requestQuit(cx)
@@ -969,4 +1002,46 @@ func Run() {
 		})
 		gk.ActivateWindow(cx, a.window)
 	})
+}
+
+// usbSessionFlag carries the USB session from an app that restarted to update.
+const usbSessionFlag = "--usb-session="
+
+func resumeUSBSession(args []string) bool {
+	for _, arg := range args {
+		if token, ok := strings.CutPrefix(arg, usbSessionFlag); ok {
+			return usbcontrol.ResumeFrom(token)
+		}
+	}
+	return false
+}
+
+const (
+	// launchQuiet hides the connection screen while the initial connect runs;
+	// a normal connect finishes in a fraction of it.
+	launchQuiet = 1500 * time.Millisecond
+	// usbLockout covers the mixer's 5 s USB session lockout plus retry margin.
+	usbLockout = 6 * time.Second
+	// lockoutRetry is how often launch retries while the mixer reports USB is in use.
+	lockoutRetry = 400 * time.Millisecond
+)
+
+// launchQuiet reports whether the connection screen is still held back.
+func (a *App) launchQuiet() bool {
+	return a.link.Auto() && !a.session.Connected && time.Now().Before(a.quietUntil)
+}
+
+// launchFailure keeps the connection screen hidden through the mixer's USB
+// lockout and schedules a quick retry, or reveals it immediately on any other
+// failure.
+func (a *App) launchFailure(message string, now time.Time) {
+	if !now.Before(a.quietUntil) {
+		return
+	}
+	if strings.HasPrefix(message, "USB is in use") && now.Before(a.launched.Add(usbLockout)) {
+		a.quietUntil = a.launched.Add(usbLockout)
+		a.link.RetrySoon(now, lockoutRetry)
+		return
+	}
+	a.quietUntil = time.Time{}
 }

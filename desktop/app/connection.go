@@ -152,6 +152,10 @@ const (
 )
 
 func (a *App) connectionScreen(cx *gk.Cx) gk.Element {
+	if a.launchQuiet() {
+		// Just the backdrop: the mixer usually answers before this ends.
+		return gk.VFlex(s.SizeFull, s.Relative).Bg(background()).Child(backdrop())
+	}
 	if a.link.Auto() && runtime.GOOS == "linux" && usbPermission(a.message) {
 		return a.usbAccessScreen(cx)
 	}

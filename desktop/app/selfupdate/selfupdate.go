@@ -2,8 +2,9 @@
 // installer, macOS pkg, portable zips, and Linux AppImage). Dev and source
 // builds fall back to linking to the GitHub release page.
 //
-// Updates are strictly user-initiated: after downloading, the user triggers
-// "Restart to update" when no installer task is active. Because the Velopack
+// Updates never start or apply unasked: the user starts the update, and the
+// app restarts on its own once the package is verified and nothing holds it
+// back (a normal quit never applies a staged package). Because the Velopack
 // release feed itself is unsigned, every full package is verified against
 // signed release metadata (appupdate.VerifyUpdatePackage) before Velopack
 // moves it into place, and again if found pending at startup.

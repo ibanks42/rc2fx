@@ -1,8 +1,9 @@
 package app
 
 // Background-task wiring between the UI and app/selfupdate. Updates never apply
-// automatically: the user initiates download and restart, and restarts are
-// blocked while an installer task is active or unsaved edits need confirmation.
+// unasked: the user starts the download, and RC2FX then restarts on its own
+// once the package is verified and nothing holds the restart back (an
+// installer task, unsaved edits, or a change still reaching the mixer).
 
 import (
 	"time"
@@ -35,8 +36,10 @@ func (a *App) checkUpdatePackage(cx *gk.Cx, asset selfupdate.Asset) {
 }
 
 // downloadAppUpdate downloads the latest release in the background with
-// periodic progress updates, or re-verifies a previously downloaded package.
+// periodic progress updates, or re-verifies a previously downloaded package,
+// and schedules an automatic restart once ready.
 func (a *App) downloadAppUpdate(cx *gk.Cx) {
+	a.restartWhenReady = true
 	kind, asset := a.selfUpdate.Start()
 	switch kind {
 	case selfupdate.StartNothing:
@@ -68,6 +71,34 @@ func (a *App) downloadAppUpdate(cx *gk.Cx) {
 		}
 		a.notify(cx)
 	})
+}
+
+// updateRestartBlocker says what an automatic restart is waiting for.
+func (a *App) updateRestartBlocker() (string, bool) {
+	if reason, blocked := a.installerRestartBlocker(); blocked {
+		return reason, true
+	}
+	switch {
+	case a.session.AnyDirty():
+		return "RC2FX restarts once your edits are saved or discarded.", true
+	case a.fileBusy || a.confirmOpen != nil || a.pending != nil || a.presets.writing() ||
+		a.routingPending != nil || a.transitionBusy():
+		return "RC2FX restarts in a moment.", true
+	}
+	return "", false
+}
+
+// autoRestart restarts into a verified update the user asked for, as soon as
+// nothing holds it back. Called from poll.
+func (a *App) autoRestart(cx *gk.Cx) {
+	if !a.restartWhenReady || a.selfUpdate.State().Kind != selfupdate.StateReady {
+		return
+	}
+	if _, held := a.updateRestartBlocker(); held {
+		return
+	}
+	a.restartWhenReady = false
+	a.restartToUpdate(cx)
 }
 
 func (a *App) restartToUpdate(cx *gk.Cx) {

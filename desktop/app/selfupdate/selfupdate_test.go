@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -275,6 +276,7 @@ type fakeManager struct {
 	target   Asset
 	download func(progress func(int16)) error
 	applied  []Asset
+	args     []string
 }
 
 type fakeUpdate struct{ target Asset }
@@ -292,8 +294,9 @@ func (m *fakeManager) CheckForUpdates() (UpdateCheckKind, Update, error) {
 func (m *fakeManager) DownloadUpdates(_ Update, progress func(int16)) error {
 	return m.download(progress)
 }
-func (m *fakeManager) WaitExitThenApplyUpdates(a Asset, _, _ bool, _ []string) error {
+func (m *fakeManager) WaitExitThenApplyUpdates(a Asset, _, _ bool, args []string) error {
 	m.applied = append(m.applied, a)
+	m.args = args
 	return nil
 }
 
@@ -326,7 +329,7 @@ func TestADownloadThatPassesIsReadyAndAppliedOnlyOnARestart(t *testing.T) {
 	if _, check := u.FinishDownload(result); check || u.State() != ReadyToApply(pkg) {
 		t.Fatalf("finish %+v", u.State())
 	}
-	u.LaunchOnQuit()
+	u.LaunchOnQuit(nil)
 	if len(m.applied) != 0 {
 		t.Fatal("applied without a restart")
 	}
@@ -337,15 +340,15 @@ func TestADownloadThatPassesIsReadyAndAppliedOnlyOnARestart(t *testing.T) {
 		t.Fatal("no restart")
 	}
 	u.CancelRestart()
-	u.LaunchOnQuit()
+	u.LaunchOnQuit(nil)
 	if len(m.applied) != 0 {
 		t.Fatal("applied after a canceled restart")
 	}
 	u.Restart(false)
-	u.LaunchOnQuit()
-	u.LaunchOnQuit()
-	if len(m.applied) != 1 {
-		t.Fatalf("applied %d times", len(m.applied))
+	u.LaunchOnQuit([]string{"--usb-session=x"})
+	u.LaunchOnQuit(nil)
+	if len(m.applied) != 1 || !slices.Equal(m.args, []string{"--usb-session=x"}) {
+		t.Fatalf("applied %d times with %q", len(m.applied), m.args)
 	}
 }
 

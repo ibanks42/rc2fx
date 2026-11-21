@@ -141,14 +141,14 @@ func (u *SelfUpdate) OnDisk(asset Asset) bool {
 }
 
 // LaunchOnQuit starts the Velopack updater on process exit if a restart was
-// confirmed. Subsequent calls are no-ops.
-func (u *SelfUpdate) LaunchOnQuit() {
+// queued, passing args to the relaunched app. Subsequent calls are no-ops.
+func (u *SelfUpdate) LaunchOnQuit(args []string) {
 	asset := u.applyOnQuit
 	u.applyOnQuit = nil
 	if u.manager == nil || asset == nil {
 		return
 	}
-	if err := u.manager.WaitExitThenApplyUpdates(*asset, false, true, nil); err != nil {
+	if err := u.manager.WaitExitThenApplyUpdates(*asset, false, true, args); err != nil {
 		fmt.Fprintf(os.Stderr, "RC2FX could not start the updater: %s\n", err)
 	}
 }

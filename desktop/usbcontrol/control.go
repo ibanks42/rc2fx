@@ -85,10 +85,10 @@ type textError string
 
 func (e textError) Error() string { return string(e) }
 
-// Client is a session with one mixer. Its nonce and request numbers last
-// for the client's life, so reopening after a lost handle continues the
-// same session on the mixer instead of waiting out another client's
-// lockout.
+// Client is a session with one mixer. Its nonce and request numbers last for
+// the client's life, and can be handed off across an app restart (see
+// handoff.go), so reopening or restarting continues the same session instead
+// of waiting out the mixer's lockout.
 type Client struct {
 	reports  platform.Reports
 	serial   string
@@ -101,6 +101,9 @@ type Client struct {
 	window      int
 	reportWait  time.Duration
 	executeWait time.Duration
+	// resume continues a previous process's session if connect finds the same
+	// mixer (see handoff.go).
+	resume *sessionToken
 }
 
 // Open opens the one connected mixer's RC2FX control.
@@ -114,6 +117,7 @@ func Open() (*Client, error) {
 		window:      1,
 		reportWait:  reportWait,
 		executeWait: executeWait,
+		resume:      takeResume(),
 	}
 	if err := c.connect(nil); err != nil {
 		return nil, err
@@ -165,6 +169,12 @@ func (c *Client) connect(expected *string) error {
 	if runtime.GOOS == "windows" && (hid.Input != usbproto.ReportSize || hid.Output != usbproto.ReportSize) {
 		return textError("The mixer's HID report layout is not supported")
 	}
+	if r := c.resume; r != nil {
+		c.resume = nil
+		if r.serial == hid.Serial {
+			c.nonce, c.sequence = r.nonce, r.sequence
+		}
+	}
 	reports, err := host.OpenControl(hid)
 	if err != nil {
 		return err
@@ -176,7 +186,11 @@ func (c *Client) connect(expected *string) error {
 	} else {
 		c.model = nil
 	}
-	return c.negotiate()
+	if err := c.negotiate(); err != nil {
+		return err
+	}
+	c.remember()
+	return nil
 }
 
 // negotiate tries protocol 4 first; a mixer that only speaks 3 refuses the
@@ -247,6 +261,7 @@ func (c *Client) Request(request *Request) (*Reply, error) {
 		return nil, &Failure{NotSent, "USB session exhausted; reconnect"}
 	}
 	c.sequence++
+	c.remember()
 	limit := usbproto.MaxReply
 	if request.Path == eventsPath {
 		limit = usbproto.MaxEventReply

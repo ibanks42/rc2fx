@@ -66,6 +66,13 @@ func (l *LinkIntent) Failed(connected bool, now time.Time) {
 	}
 }
 
+// RetrySoon brings a scheduled retry forward to at most wait from now.
+func (l *LinkIntent) RetrySoon(now time.Time, wait time.Duration) {
+	if at := now.Add(wait); l.phase == linkRetry && at.Before(l.retryAt) {
+		l.retryAt = at
+	}
+}
+
 // PauseForFlash suspends reconnect attempts until FlashDone is called.
 func (l *LinkIntent) PauseForFlash() { *l = LinkIntent{phase: linkPausedForFlash} }
 
