@@ -8,7 +8,8 @@ processed sound. You configure it from a desktop app on Windows, macOS, or
 Linux over USB, and your settings stay on the mixer even after you close the
 app.
 
-![The RC2FX app with noise suppression on a microphone channel](docs/public/screenshots/mic-noise-suppression.png)
+![RC2FX app with noise suppression on a microphone channel](docs/public/screenshots/mic-noise-suppression.png)
+![RC2FX app with parametric EQ on a headphone channel](docs/public/screenshots/headphones-eq.png)
 
 ## Download
 
