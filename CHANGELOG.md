@@ -2,6 +2,12 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.2.2] - 2026-11-21
+
+### Features
+
+- *(updates)* Update only from Versions, open in-place updates directly, and copy them through a USB drive
+
 ## [0.2.1] - 2026-11-21
 
 ### Features
