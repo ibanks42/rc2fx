@@ -15,9 +15,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/installer"
 )
 
-// Placeholder URL; replace with the real write-up before release.
-const rodeUpdateBugURL = "https://example.com/rodecaster-update-bug"
-
 func (a *App) taskScreen(cx *gk.Cx) gk.Element {
 	i := a.installer
 	if i.repair != nil {
@@ -103,11 +100,9 @@ func (a *App) beforePage(i *Installer, t *guidedTask) {
 			bullet(txt("Needs an internet connection: the app downloads the firmware from RØDE.")),
 		))
 	} else {
-		// Only advertise the storage fix when the model will actually run it.
-		fix := m.WantsStorageFix()
 		audio := "The mixer’s audio is off while it updates, about 3 minutes."
-		if fix {
-			audio = "The mixer’s audio is off while it updates: about 3 minutes, or about 10 the first time, because of the storage fix below."
+		if m.WantsStorageFix() {
+			audio = "The mixer’s audio is off while it updates: about 10 minutes, because of the partition fix you switched on below."
 		}
 		points := []gk.Element{
 			bullet(txt("RØDE’s firmware is reinstalled on your mixer, with RC2FX added to it.")),
@@ -115,11 +110,6 @@ func (a *App) beforePage(i *Installer, t *guidedTask) {
 			bullet(txt("The mixer restarts by itself during the install.")),
 			bullet(txt("Your mixer’s settings are saved first and put back afterwards.")),
 			bullet(txt("You can undo it later with “Remove RC2FX”, which puts RØDE’s stock firmware back.")),
-		}
-		if fix {
-			points = append(points, bullet(txt("The install also fixes a bug in RØDE’s firmware that can damage files during updates."),
-				gk.Link("task-update-bug").Child(txt("What is this?")).
-					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.explainUpdateBug(cx, true) })))
 		}
 		body = body.Child(bullets(points...))
 	}
@@ -130,7 +120,11 @@ func (a *App) beforePage(i *Installer, t *guidedTask) {
 		body = body.Child(a.duoOptIn("task-allow-duo"))
 	}
 	if !m.Stock {
-		body = body.Child(a.versionsDisclosure(i))
+		bottom := gk.VFlex(s.WFull).Gap(px(10)).Child(a.versionsDisclosure(i))
+		if m.StorageFixOffered() {
+			bottom = bottom.Child(a.storageFixOptIn(i))
+		}
+		t.bottom = bottom
 	}
 	if why := m.StartBlocker(); why != "" {
 		body = body.Child(a.blockerLine(i, why))
@@ -173,7 +167,7 @@ func (a *App) versionsDisclosure(i *Installer) gk.DivEl {
 	if !open && m.Choice != nil && m.Mixer != nil {
 		summary = fmt.Sprintf("RØDE firmware %s with RC2FX %s", m.Choice.Version, m.Mixer.Version())
 		if m.Recommended() {
-			summary += " — recommended"
+			summary += " (recommended)"
 		}
 	}
 	chevron := gk.IconChevronRight
@@ -243,6 +237,86 @@ func (a *App) duoOptIn(id gk.ID) gk.DivEl {
 		Child(gk.Switch(id).Checked(a.allowDuo).
 			Disabled(a.installer != nil && (a.installer.busy() || a.installer.model.Run != nil)).
 			OnClick(func(cx *gk.Cx, value bool) { a.setAllowDuo(cx, value) }))
+}
+
+// storageFixOptIn offers the experimental storage fix in a quiet collapsible
+// row so the default install flow stays uncluttered unless opened or enabled.
+func (a *App) storageFixOptIn(i *Installer) gk.DivEl {
+	m := i.model
+	open := i.storageFixOpen
+	armed := m.StorageFixChosen
+	chevron := gk.IconChevronRight
+	if open {
+		chevron = gk.IconChevronDown
+	}
+	labelColor := Muted
+	if open || armed {
+		labelColor = Text
+	}
+	tag := gk.Div(s.TextXs, s.FontSemibold, s.RoundedFull, s.Border1).Px(px(8)).Py(px(1)).
+		TextColor(rgb(Faint)).BorderColor(rgb(surface().Line)).Bg(rgb(surface().Raised)).
+		Child(txt("Experimental"))
+	if open || armed {
+		tag = experimentalTag()
+	}
+	statusText, statusColor := "Off", Faint
+	status := gk.Div(s.Flex1, s.MinW0, s.Truncate, s.TextRight)
+	if armed {
+		statusText, statusColor = "On · ~10 min", Warn
+		status = status.Style(s.FontSemibold)
+	}
+	status = status.TextColor(rgb(statusColor)).Child(txt(statusText))
+	head := gk.HFlex(s.ItemsCenter, s.CursorPointer, s.TextSm).Gap(px(10)).Px(px(14)).Py(px(12)).
+		TextColor(rgb(labelColor)).Hover(hover().TextColor(rgb(Text))).
+		Child(gk.Icon(chevron).Xsmall()).
+		Child(txt("Also fix the Linux ext4 update bug")).
+		Child(tag).
+		Child(status).
+		ID("task-storage-fix-toggle").
+		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
+			if a.installer != nil {
+				a.installer.storageFixOpen = !a.installer.storageFixOpen
+			}
+			a.notify(cx)
+		})
+	detail := func(label, text string) gk.DivEl {
+		return gk.VFlex(s.TextSm).Gap(px(2)).LineHeight(gk.Relative(1.55)).
+			Child(gk.Div(s.FontSemibold).TextColor(rgb(Text)).Child(txt(label))).
+			Child(gk.Div().TextColor(rgb(Muted)).Child(txt(text)))
+	}
+	bar := gk.HFlex(s.ItemsCenter, s.JustifyBetween, s.FlexWrap, s.Gap3).Pt(px(10)).Style(s.BorderT1).
+		BorderColor(rgb(surface().Line)).
+		Child(gk.Switch("task-storage-fix").Checked(m.StorageFixChosen).Label("Include partition fix in this install").
+			Disabled(i.busy() || m.Run != nil).
+			OnClick(func(cx *gk.Cx, value bool) {
+				if a.installer != nil {
+					a.installer.model.ChooseStorageFix(value)
+				}
+				a.notify(cx)
+			})).
+		Child(gk.Link("task-update-bug").Child(txt("More about the bug")).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.explainUpdateBug(cx) }))
+	inner := gk.VFlex(s.Gap3).Px(px(14)).Pb(px(14)).Pt(px(2)).
+		Child(detail("What it does",
+			"Enlarges the first system partition during install to match the second, so updates format it with 4 KB ext4 blocks instead of 1 KB.")).
+		Child(detail("What changes",
+			"Adds an extra update before installing RC2FX (about 10 minutes total, with extra restarts) and modifies the partition table. Your original table is backed up to this computer first, settings are kept, and the enlarged partition stays after later updates or removing RC2FX.")).
+		Child(detail("Optional & experimental",
+			"RC2FX does not need this fix because it verifies the installation itself. This fix has had limited testing, so leave it off if you are unsure.")).
+		Child(bar)
+	borderColor := rgb(surface().Line)
+	if armed {
+		borderColor = rgbAlpha(Warn, 0.45)
+	}
+	return gk.VFlex(s.WFull, s.RoundedXl, s.Border1).Bg(rgb(surface().Panel)).BorderColor(borderColor).
+		Child(head).
+		Child(gk.Collapsible().Open(open).Content(inner))
+}
+
+func experimentalTag() gk.DivEl {
+	return gk.Div(s.TextXs, s.FontSemibold, s.RoundedFull, s.Border1).Px(px(8)).Py(px(1)).
+		TextColor(rgb(Warn)).BorderColor(rgbAlpha(Warn, 0.45)).Bg(rgbAlpha(Warn, 0.1)).
+		Child(txt("Experimental"))
 }
 
 func (a *App) setAllowDuo(cx *gk.Cx, value bool) {

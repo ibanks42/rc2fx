@@ -51,6 +51,9 @@ type Model struct {
 	inPlaceAsked  time.Time
 	inPlaceBefore inPlaceBaseline
 	FixPolicy     FixPolicy
+	// StorageFixChosen is the user's opt-in for the experimental storage fix
+	// (see StorageFixOffered). Off by default and not remembered between opens.
+	StorageFixChosen bool
 }
 
 func nowUnix() uint64 {

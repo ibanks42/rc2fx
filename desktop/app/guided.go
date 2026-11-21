@@ -17,6 +17,7 @@ type guidedTask struct {
 	count     string
 	steps     []installflow.TaskStep
 	body      gk.Element
+	bottom    gk.Element
 	scroll    gk.ScrollHandle
 	unplug    installflow.Unplug
 	secondary []gk.ButtonEl
@@ -36,14 +37,18 @@ func (a *App) guidedScreen(t guidedTask) gk.Element {
 		Px(px(taskInset)).Pt(px(26)).
 		Child(gk.Div(s.Text2xl, s.FontSemibold).Child(txt(t.title))).
 		Child(gk.Div(s.TextSm).TextColor(rgb(Faint)).Child(txt(t.count)))
-	body := gk.VFlex(s.Flex1, s.MinW0, s.HFull).Gap(px(16)).Pr(px(4)).Pb(px(20)).
+	scrollBody := gk.VFlex(s.Flex1, s.MinW0, s.MinH0).Gap(px(16)).Pr(px(4)).Pb(px(20)).
 		ID("task-body").TrackScroll(t.scroll).OverflowYScroll().
 		Child(t.body)
+	right := gk.VFlex(s.Flex1, s.MinW0, s.HFull).Child(scrollBody)
+	if t.bottom != nil {
+		right = right.Child(gk.Div(s.FlexShrink0).Pt(px(12)).Pb(px(20)).Pr(px(4)).Child(t.bottom))
+	}
 	middle := gk.HFlex(s.Flex1, s.MinH0, s.ItemsStart).Px(px(taskInset)).Pt(px(8)).
 		Child(gk.Div(s.FlexShrink0, s.HFull, s.BorderR1).W(px(taskSidebarWidth)).Pr(px(24)).Mr(px(32)).
 			BorderColor(rgb(surface().Line)).
 			Child(stepSidebar(t.steps))).
-		Child(body)
+		Child(right)
 	buttons := gk.HFlex(s.FlexShrink0, s.ItemsCenter).Gap(px(8))
 	for _, b := range t.secondary {
 		buttons = buttons.Child(b)
@@ -72,12 +77,16 @@ func unplugNote(u installflow.Unplug) gk.DivEl {
 	default:
 		color, answer = Warn, "no"
 	}
-	line := gk.HFlex(s.Flex1, s.MinW0, s.ItemsCenter, s.TextSm).Gap(px(9)).TextColor(rgb(Muted)).
-		Child(gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(7)).Bg(rgb(color))).
+	status := gk.HFlex(s.FlexShrink0, s.ItemsCenter).Gap(px(5)).
 		Child(txt("Safe to unplug:")).
 		Child(gk.Div(s.FontSemibold).TextColor(rgb(Text)).Child(txt(answer)))
+	line := gk.HFlex(s.Flex1, s.MinW0, s.ItemsCenter, s.TextSm).Gap(px(8)).TextColor(rgb(Muted)).
+		Child(gk.Div(s.FlexShrink0, s.RoundedFull).Size(px(7)).Bg(rgb(color))).
+		Child(status)
 	if u.Reason != "" {
-		line = line.Child(gk.Div(s.MinW0, s.Truncate).Child(txt("— " + u.Reason)))
+		line = line.
+			Child(gk.Div(s.FlexShrink0).TextColor(rgb(Faint)).Child(txt("·"))).
+			Child(gk.Div(s.MinW0, s.Truncate).Child(txt(u.Reason)))
 	}
 	return line
 }

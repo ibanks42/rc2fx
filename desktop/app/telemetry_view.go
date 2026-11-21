@@ -111,7 +111,7 @@ func channelRow(path *telemetry.PathView, sampleRate uint32, now time.Time, mono
 	meter := &path.Meter
 	delay, delayColor := telemetry.Delay(meter, sampleRate), Text
 	if delay == "" {
-		delay, delayColor = "—", Faint
+		delay, delayColor = "-", Faint
 	}
 	var issueCell gk.DivEl
 	if text, recent, ok := telemetry.Issues(path, now); ok {
@@ -123,7 +123,7 @@ func channelRow(path *telemetry.PathView, sampleRate uint32, now time.Time, mono
 			TextColor(rgb(color)).Child(txt(text)).
 			Tooltip(gk.NewKitTooltip(text)))
 	} else {
-		issueCell = gk.Div().Child(gk.Div().TextColor(rgb(Faint)).Child(txt("—")))
+		issueCell = gk.Div().Child(gk.Div().TextColor(rgb(Faint)).Child(txt("-")))
 	}
 	name := gk.HFlex(s.FlexShrink0, s.ItemsCenter, s.Gap2).W(px(nameWidth)).
 		Child(gk.Div(s.MinW0, s.Truncate, s.TextSm, s.FontSemibold).Child(txt(path.Name)))

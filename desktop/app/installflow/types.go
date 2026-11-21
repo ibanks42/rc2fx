@@ -347,7 +347,8 @@ const (
 	// FixNever is the zero value so models don't run the storage fix unless
 	// explicitly opted in (useful for hardware test loops).
 	FixNever FixPolicy = iota
-	// FixAuto runs the fix on a Pro II when RC2FX isn't running.
+	// FixAuto offers the fix as an experimental opt-in on a Pro II when RC2FX
+	// isn't running; it runs only when the user switches it on.
 	FixAuto
 	// FixAlways forces the fix on any normal-mode Pro II (dev/testing).
 	FixAlways

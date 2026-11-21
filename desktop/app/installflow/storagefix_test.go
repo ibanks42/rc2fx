@@ -26,8 +26,9 @@ func startedFix(t *testing.T) (*Model, *installer.Request) {
 	t.Helper()
 	m := setUp(status(gv1(false), absent(), false, false))
 	m.FixPolicy = FixAuto
+	m.ChooseStorageFix(true)
 	if !m.WantsStorageFix() {
-		t.Fatal("a mixer without RC2FX gets the fix")
+		t.Fatal("a mixer without RC2FX gets the fix once it is switched on")
 	}
 	prepare := selected(t, m, m.Start())
 	refresh := answer(t, m, prepare, installer.Reply{Kind: installer.ReplyPrepared})
@@ -44,6 +45,7 @@ func TestWhichInstallsFixTheStorage(t *testing.T) {
 		setup  func(m *Model)
 		want   bool
 	}{
+		"no RC2FX, not switched on":             {status(gv1(false), absent(), false, false), FixAuto, func(m *Model) { m.StorageFixChosen = false }, false},
 		"no RC2FX":                              {status(gv1(false), absent(), false, false), FixAuto, nil, true},
 		"RC2FX answers":                         {status(gv1(false), ready(), false, false), FixAuto, nil, false},
 		"RC2FX reported":                        {status(gv1(false), absent(), false, false), FixAuto, func(m *Model) { m.Installed = new("0.2.1") }, false},
@@ -57,6 +59,7 @@ func TestWhichInstallsFixTheStorage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m := setUp(tc.seen)
 			m.FixPolicy = tc.policy
+			m.ChooseStorageFix(true)
 			if tc.setup != nil {
 				tc.setup(m)
 			}
@@ -65,9 +68,23 @@ func TestWhichInstallsFixTheStorage(t *testing.T) {
 			}
 		})
 	}
+	// FixAuto only offers the fix: it never runs unless switched on.
+	offered := setUp(status(gv1(false), absent(), false, false))
+	offered.FixPolicy = FixAuto
+	if !offered.StorageFixOffered() || offered.WantsStorageFix() {
+		t.Fatal("the fix runs without being switched on, or isn't offered")
+	}
 	// A new model runs no fix until the app says it can.
 	if setUp(status(gv1(false), absent(), false, false)).WantsStorageFix() {
 		t.Fatal("the zero policy runs the fix")
+	}
+}
+
+func TestTheFixChoiceIsLockedOnceARunStarts(t *testing.T) {
+	m, _ := startedFix(t)
+	m.ChooseStorageFix(false)
+	if !m.StorageFixChosen {
+		t.Fatal("the fix was switched off part way through a run")
 	}
 }
 

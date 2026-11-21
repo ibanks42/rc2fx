@@ -189,7 +189,7 @@ func heroFacts() gk.DivEl {
 			Child(txt(text))
 	}
 	return gk.HFlex(s.ItemsCenter, s.TextSm).Gap(px(28)).TextColor(rgb(Faint)).
-		Child(fact("About 10 minutes the first time")).
+		Child(fact("About 3 minutes")).
 		Child(fact("Your settings are kept")).
 		Child(fact("Can be removed any time"))
 }
@@ -228,7 +228,7 @@ func (a *App) firstHero() hero {
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskInstall) })).
 				Child(heroFacts()).
 				// Standalone storage fix is Pro II only, which matches FirstFound.
-				Child(gk.Button("open-fix").Ghost().Label("Not installing RC2FX? Fix the update bug only").
+				Child(gk.Button("open-fix").Ghost().Label("Not installing RC2FX? Fix the update bug only (experimental)").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openFix(cx) })),
 			dot: Accent, status: status,
 		}

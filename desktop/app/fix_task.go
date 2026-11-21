@@ -80,7 +80,7 @@ func withVersion(version string) string {
 func (a *App) fixTask(i *Installer) guidedTask {
 	f := i.fix
 	t := guidedTask{
-		title:  "Fix RØDE’s update bug",
+		title:  "Fix the update bug",
 		count:  stepCount(f.Step(), installflow.FixStepCount),
 		steps:  f.Steps(),
 		scroll: i.controlsScroll,
@@ -105,13 +105,15 @@ func (a *App) fixBeforePage(i *Installer, t *guidedTask) {
 	seen := installflow.FixSeenOf(i.model)
 	body := gk.VFlex(s.WFull).Gap(px(16)).Child(taskHeading("Before you start")).
 		Child(bullets(
-			bullet(txt("This fixes a bug in RØDE’s firmware that can damage files during updates."),
+			bullet(txt("This works around a Linux ext4 driver bug on the mixer that can corrupt files during updates."),
 				gk.Link("task-update-bug").Child(txt("What is this?")).
-					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.explainUpdateBug(cx, false) })),
+					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.explainUpdateBug(cx) })),
 			bullet(txt(fmt.Sprintf("RC2FX is not installed. Your mixer keeps %s, exactly as RØDE ships it.", withVersion(fixVersion(i))))),
 			bullet(txt("The mixer’s audio is off for about 10 minutes, and the mixer restarts by itself several times.")),
 			bullet(txt("Your mixer’s settings are kept.")),
 			bullet(txt("The fix is permanent: it stays through later updates, whether from RØDE’s app or this one.")),
+			bullet(txt("It changes the mixer’s partition table, which RØDE’s own tools never change. The original table is saved on this computer first.")),
+			bullet(txt("The fix is experimental and has had limited testing. Nothing requires it."), experimentalTag()),
 			bullet(txt("Needs an internet connection: the app downloads the firmware from RØDE.")),
 		))
 	switch seen {
@@ -145,19 +147,13 @@ func (a *App) fixBeforePage(i *Installer, t *guidedTask) {
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.startFix(cx) })
 }
 
-func (a *App) explainUpdateBug(cx *gk.Cx, install bool) {
-	what := "The fix makes that area larger, which stops it from happening again."
-	if install {
-		what = "During the install the app makes that area larger, which stops it from happening again. It needs no action from you, keeps your settings, and stays fixed if you later remove RC2FX."
-	}
+func (a *App) explainUpdateBug(cx *gk.Cx) {
 	a.confirm(cx, confirmKindOther, Confirm{
-		Title: "A bug in RØDE’s firmware",
-		Detail: "This is a bug in RØDE’s own firmware, not in RC2FX. It can affect every second firmware update, including the ones RØDE’s app installs.\n\n" +
-			"The mixer keeps its system on a small storage area that is laid out in a way that can damage files during an update. Most of the time nothing happens; sometimes the mixer forgets its setup or does not start afterwards.\n\n" +
-			what,
-		Link:      rodeUpdateBugURL,
-		LinkLabel: "Learn more",
-		Action:    "Close",
+		Title: "Why firmware updates can corrupt files",
+		Detail: "The mixer alternates between two Linux system partitions on each firmware update. On factory mixers, the first partition is slightly under 512 MiB (smaller than the second), which causes the updater to format it with 1 KB ext4 blocks instead of 4 KB.\n\n" +
+			"A bug in the mixer’s Linux ext4 driver when writing to a 1 KB-block partition can leave unpacked system files zero-filled during every second update (including official updates from RØDE’s app). Depending on which files are hit, the damage can go unnoticed, break parts of the mixer, or prevent it from booting.\n\n" +
+			"RC2FX does not need this experimental fix because it verifies its own installed files and repairs any damage automatically. Enabling the fix protects future stock updates too.",
+		Action: "Close",
 	}, func(*gk.Cx) {}, func(*gk.Cx) {})
 }
 

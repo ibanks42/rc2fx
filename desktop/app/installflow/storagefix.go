@@ -6,7 +6,9 @@ package installflow
 // RØDE's updater formats the target system slot; because slot 1 is slightly
 // under 512 MiB it gets 1 KB ext4 blocks, which can lose file data under the
 // mixer's kernel. The fix grows slot 1 so future updates use 4 KB blocks.
-// Until RC2FX can report the partition table directly, FixAuto only runs on
+// It is experimental and never required: under FixAuto the Install page only
+// offers it, and it runs only when the user switches it on (StorageFixChosen).
+// Until RC2FX can report the partition table directly, it is only offered on
 // Pro II mixers that are not running RC2FX.
 
 import (
@@ -18,18 +20,34 @@ import (
 )
 
 // WantsStorageFix reports whether a run started now should run the storage fix
-// first (Pro II in normal mode only).
+// first (Pro II in normal mode only, and under FixAuto only when chosen).
 func (m *Model) WantsStorageFix() bool {
-	if m.Stock || m.Device != firmware.ModelProIi || m.usbOne(false) == nil {
-		return false
-	}
 	switch m.FixPolicy {
-	case FixNever:
-		return false
 	case FixAlways:
-		return true
+		return m.fixEligible()
+	case FixAuto:
+		return m.StorageFixChosen && m.StorageFixOffered()
 	}
-	return !m.Answering() && m.Installed == nil
+	return false
+}
+
+// StorageFixOffered reports whether the Install page should offer the
+// experimental storage fix as an opt-in.
+func (m *Model) StorageFixOffered() bool {
+	return m.FixPolicy == FixAuto && m.fixEligible() && !m.Answering() && m.Installed == nil
+}
+
+// ChooseStorageFix records the user's opt-in for the storage fix. It is ignored
+// once a run has started, so a run never changes plan part way.
+func (m *Model) ChooseStorageFix(on bool) {
+	if m.Run != nil || m.Busy() {
+		return
+	}
+	m.StorageFixChosen = on
+}
+
+func (m *Model) fixEligible() bool {
+	return !m.Stock && m.Device == firmware.ModelProIi && m.usbOne(false) != nil
 }
 
 func (m *Model) FixRunning() bool {

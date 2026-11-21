@@ -13,6 +13,7 @@ package app
 //	A5 storage mode           A6 two mixers           A7 RØDECaster Duo
 //	Aoff disconnected by user
 //	B1 before you start       B1v versions open       B1L Linux (password)
+//	B1x storage fix offered (off)                     B1xo storage fix switched on
 //	B2 updating the mixer     B3 waiting for it       B3L taking longer
 //	B3Lh taking longer, "What can I do?" open
 //	B4 failed while sending   B4b failed downloading  B4c access ended
@@ -157,6 +158,19 @@ func fixtureSince(i *Installer, d time.Duration) {
 
 var taskFixtures = map[string]func(a *App, cx *gk.Cx) *Installer{
 	"B1": func(a *App, cx *gk.Cx) *Installer { return a.fixtureInstaller(cx, taskInstall, fixtureModel(false)) },
+	"B1x": func(a *App, cx *gk.Cx) *Installer {
+		m := fixtureModel(false)
+		m.FixPolicy = installflow.FixAuto
+		return a.fixtureInstaller(cx, taskInstall, m)
+	},
+	"B1xo": func(a *App, cx *gk.Cx) *Installer {
+		m := fixtureModel(false)
+		m.FixPolicy = installflow.FixAuto
+		m.ChooseStorageFix(true)
+		i := a.fixtureInstaller(cx, taskInstall, m)
+		i.storageFixOpen = true
+		return i
+	},
 	"B1v": func(a *App, cx *gk.Cx) *Installer {
 		i := a.fixtureInstaller(cx, taskInstall, fixtureModel(false))
 		i.versionsOpen = true

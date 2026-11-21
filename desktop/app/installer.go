@@ -39,6 +39,7 @@ type Installer struct {
 	firmwareSelect *picker[installflow.Choice]
 	mixerSelect    *picker[installflow.MixerSource]
 	versionsOpen   bool
+	storageFixOpen bool
 	// Pending actions to trigger automatically once admin access is granted.
 	startOnGrant, retryOnGrant bool
 	// Close the task once an in-flight cancelable request finishes.
