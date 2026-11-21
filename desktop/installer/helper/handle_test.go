@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 			os.Exit(2)
 		}
 		writeLine(os.Stdout, message{Progress: &installer.Progress{Phase: "download", Completed: 1, Total: 2}})
-		writeLine(os.Stdout, message{Done: &done{Reply: &installer.Reply{Kind: installer.ReplyDone}}})
+		writeLine(os.Stdout, message{Reply: &installer.Reply{Kind: installer.ReplyDone}})
 		// Then wait for stdin to close, as Serve does.
 		lines.ReadString('\n')
 		os.Exit(0)

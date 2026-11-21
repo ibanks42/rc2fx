@@ -1048,7 +1048,7 @@
 	      "bypass": false,
 	      "channels": 2,
 	      "kind": "output",
-	      "name": "Chat — \"voice\" \\ mix",
+	      "name": "Chat · \"voice\" \\ mix",
 	      "id": "send-chat"
 	    },
 	    {

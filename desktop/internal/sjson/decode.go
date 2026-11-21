@@ -104,7 +104,7 @@ func decodeInto(tree Tree, target reflect.Value, strictMode bool) error {
 		if len(tree.raw) > 0 {
 			target.SetBytes(bytes.Clone(tree.raw))
 		} else {
-			target.SetBytes(appendTreeJSON(nil, tree, nil))
+			target.SetBytes(encodeTree(tree, false))
 		}
 		return nil
 	}
@@ -114,7 +114,7 @@ func decodeInto(tree Tree, target reflect.Value, strictMode bool) error {
 	if !strictMode && target.CanAddr() && reflect.PointerTo(t).Implements(jsonUnmarshalerType) {
 		raw := tree.raw
 		if len(raw) == 0 {
-			raw = appendTreeJSON(nil, tree, nil)
+			raw = encodeTree(tree, false)
 		}
 		return target.Addr().Interface().(json.Unmarshaler).UnmarshalJSON(raw)
 	}
@@ -476,30 +476,4 @@ func rustTypeName(t reflect.Type) string {
 		return "f64"
 	}
 	return t.String()
-}
-
-// enumUnmarshal validates that text matches one of the allowed string enum variants.
-func enumUnmarshal[T ~string](target *T, text []byte, variants []T) error {
-	for _, variant := range variants {
-		if string(variant) == string(text) {
-			*target = variant
-			return nil
-		}
-	}
-	message := "unknown variant `" + string(text) + "`, expected "
-	switch len(variants) {
-	case 1:
-		message += "`" + string(variants[0]) + "`"
-	case 2:
-		message += "`" + string(variants[0]) + "` or `" + string(variants[1]) + "`"
-	default:
-		message += "one of "
-		for i, variant := range variants {
-			if i > 0 {
-				message += ", "
-			}
-			message += "`" + string(variant) + "`"
-		}
-	}
-	return Error(message)
 }

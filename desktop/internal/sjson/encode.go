@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"encoding"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"math"
 	"reflect"
 	"slices"
 	"strconv"
-	"unicode/utf8"
 )
 
 // Encode serializes value as compact JSON matching serde_json: struct fields
@@ -17,23 +17,13 @@ import (
 // 1e-5..1e16), non-finite floats as null, and only `"`, `\` and control
 // characters escaped. See decode.go for tag rules.
 func Encode(value any) ([]byte, error) {
-	return appendAny(nil, reflect.ValueOf(value), nil)
+	return encodeAny(value, false)
 }
 
 // EncodePretty serializes value with two-space indentation and no trailing
 // newline, matching serde_json::to_vec_pretty.
 func EncodePretty(value any) ([]byte, error) {
-	return appendAny(nil, reflect.ValueOf(value), &indenter{})
-}
-
-type indenter struct{ depth int }
-
-func (in *indenter) newline(dst []byte) []byte {
-	dst = append(dst, '\n')
-	for i := 0; i < in.depth; i++ {
-		dst = append(dst, ' ', ' ')
-	}
-	return dst
+	return encodeAny(value, true)
 }
 
 // String writes a JSON string with serde_json's escaping.
@@ -60,108 +50,104 @@ var (
 	emptyCheckerType  = reflect.TypeFor[interface{ IsEmpty() bool }]()
 )
 
-func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error) {
+func newEncoder(buf *bytes.Buffer, pretty bool) *jsontext.Encoder {
+	if pretty {
+		return jsontext.NewEncoder(buf,
+			jsontext.AllowInvalidUTF8(true),
+			jsontext.AllowDuplicateNames(true),
+			jsontext.EscapeForHTML(false),
+			jsontext.EscapeForJS(false),
+			jsontext.WithIndent("  "),
+		)
+	}
+	return jsontext.NewEncoder(buf,
+		jsontext.AllowInvalidUTF8(true),
+		jsontext.AllowDuplicateNames(true),
+		jsontext.EscapeForHTML(false),
+		jsontext.EscapeForJS(false),
+	)
+}
+
+func encodeAny(value any, pretty bool) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := newEncoder(&buf, pretty)
+	if err := writeValue(enc, reflect.ValueOf(value)); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte{'\n'}), nil
+}
+
+func encodeTree(value Tree, pretty bool) []byte {
+	var buf bytes.Buffer
+	enc := newEncoder(&buf, pretty)
+	_ = writeTree(enc, value)
+	return bytes.TrimSuffix(buf.Bytes(), []byte{'\n'})
+}
+
+func writeValue(enc *jsontext.Encoder, value reflect.Value) error {
 	if !value.IsValid() {
-		return append(dst, "null"...), nil
+		return enc.WriteToken(jsontext.Null)
 	}
 	t := value.Type()
 	if t == treeType {
-		return appendTreeJSON(dst, value.Interface().(Tree), pretty), nil
+		return writeTree(enc, value.Interface().(Tree))
 	}
 	if t == rawMessageType {
-		// Pre-encoded JSON payload: compact as-is rather than encoding as a byte array.
+		// Pre-encoded JSON payload: compact or re-indent rather than encoding as bytes.
 		raw := value.Bytes()
 		if len(raw) == 0 {
-			return append(dst, "null"...), nil
+			return enc.WriteToken(jsontext.Null)
 		}
-		if pretty != nil {
-			tree, err := parseSerde(raw)
-			if err != nil {
-				return dst, err
-			}
-			return appendTreeJSON(dst, tree, pretty), nil
-		}
-		var buf bytes.Buffer
-		if err := json.Compact(&buf, raw); err != nil {
-			return dst, err
-		}
-		return append(dst, buf.Bytes()...), nil
+		return enc.WriteValue(jsontext.Value(raw))
 	}
 	if t == jsonNumberType {
-		return append(dst, value.String()...), nil
+		return enc.WriteValue(jsontext.Value(value.String()))
 	}
 	if t.Implements(jsonMarshalerType) && !(t.Kind() == reflect.Pointer && value.IsNil()) {
 		data, err := value.Interface().(json.Marshaler).MarshalJSON()
 		if err != nil {
-			return dst, err
+			return err
 		}
-		if pretty != nil {
-			tree, err := parseSerde(data)
-			if err != nil {
-				return dst, err
-			}
-			return appendTreeJSON(dst, tree, pretty), nil
-		}
-		var buf bytes.Buffer
-		if err := json.Compact(&buf, data); err != nil {
-			return dst, err
-		}
-		return append(dst, buf.Bytes()...), nil
+		return enc.WriteValue(jsontext.Value(data))
 	}
 	if t.Kind() != reflect.Pointer && value.CanAddr() && value.Addr().Type().Implements(jsonMarshalerType) {
-		return appendAny(dst, value.Addr(), pretty)
+		return writeValue(enc, value.Addr())
 	}
 	if t.Kind() != reflect.String && t.Kind() != reflect.Pointer && t.Implements(textMarshalerType) {
 		text, err := value.Interface().(encoding.TextMarshaler).MarshalText()
 		if err != nil {
-			return dst, err
+			return err
 		}
-		return appendJSONString(dst, string(text)), nil
+		return enc.WriteToken(jsontext.String(string(text)))
 	}
 	switch t.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		if value.IsNil() {
-			return append(dst, "null"...), nil
+			return enc.WriteToken(jsontext.Null)
 		}
-		return appendAny(dst, value.Elem(), pretty)
+		return writeValue(enc, value.Elem())
 	case reflect.Bool:
-		return strconv.AppendBool(dst, value.Bool()), nil
+		return enc.WriteToken(jsontext.Bool(value.Bool()))
 	case reflect.String:
-		return appendJSONString(dst, value.String()), nil
+		return enc.WriteToken(jsontext.String(value.String()))
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return strconv.AppendInt(dst, value.Int(), 10), nil
+		return enc.WriteToken(jsontext.Int(value.Int()))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return strconv.AppendUint(dst, value.Uint(), 10), nil
+		return enc.WriteToken(jsontext.Uint(value.Uint()))
 	case reflect.Float32:
-		return appendJSONFloat(dst, value.Float(), 32), nil
+		return enc.WriteValue(jsontext.Value(appendJSONFloat(nil, value.Float(), 32)))
 	case reflect.Float64:
-		return appendJSONFloat(dst, value.Float(), 64), nil
+		return enc.WriteValue(jsontext.Value(appendJSONFloat(nil, value.Float(), 64)))
 	case reflect.Slice, reflect.Array:
-		n := value.Len()
-		if n == 0 {
-			return append(dst, "[]"...), nil
+		if err := enc.WriteToken(jsontext.BeginArray); err != nil {
+			return err
 		}
-		dst = append(dst, '[')
-		if pretty != nil {
-			pretty.depth++
-		}
-		for i := 0; i < n; i++ {
-			if i > 0 {
-				dst = append(dst, ',')
-			}
-			if pretty != nil {
-				dst = pretty.newline(dst)
-			}
-			var err error
-			if dst, err = appendAny(dst, value.Index(i), pretty); err != nil {
-				return dst, err
+		for i := 0; i < value.Len(); i++ {
+			if err := writeValue(enc, value.Index(i)); err != nil {
+				return err
 			}
 		}
-		if pretty != nil {
-			pretty.depth--
-			dst = pretty.newline(dst)
-		}
-		return append(dst, ']'), nil
+		return enc.WriteToken(jsontext.EndArray)
 	case reflect.Map:
 		if t.Key().Kind() != reflect.String {
 			break
@@ -176,70 +162,38 @@ func appendAny(dst []byte, value reflect.Value, pretty *indenter) ([]byte, error
 			}
 			return 0
 		})
-		if len(keys) == 0 {
-			return append(dst, "{}"...), nil
+		if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+			return err
 		}
-		dst = append(dst, '{')
-		if pretty != nil {
-			pretty.depth++
-		}
-		for i, key := range keys {
-			dst = beginMember(dst, i, key.String(), pretty)
-			var err error
-			if dst, err = appendAny(dst, value.MapIndex(key), pretty); err != nil {
-				return dst, err
+		for _, key := range keys {
+			if err := enc.WriteToken(jsontext.String(key.String())); err != nil {
+				return err
+			}
+			if err := writeValue(enc, value.MapIndex(key)); err != nil {
+				return err
 			}
 		}
-		if pretty != nil {
-			pretty.depth--
-			dst = pretty.newline(dst)
-		}
-		return append(dst, '}'), nil
+		return enc.WriteToken(jsontext.EndObject)
 	case reflect.Struct:
 		info := structInfoFor(t)
-		written := 0
+		if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+			return err
+		}
 		for _, field := range info.fields {
 			item := value.Field(field.index)
 			if field.omitEmpty && isEmptyField(item) {
 				continue
 			}
-			if written == 0 {
-				dst = append(dst, '{')
-				if pretty != nil {
-					pretty.depth++
-				}
+			if err := enc.WriteToken(jsontext.String(field.name)); err != nil {
+				return err
 			}
-			dst = beginMember(dst, written, field.name, pretty)
-			written++
-			var err error
-			if dst, err = appendAny(dst, item, pretty); err != nil {
-				return dst, err
+			if err := writeValue(enc, item); err != nil {
+				return err
 			}
 		}
-		if written == 0 {
-			return append(dst, "{}"...), nil
-		}
-		if pretty != nil {
-			pretty.depth--
-			dst = pretty.newline(dst)
-		}
-		return append(dst, '}'), nil
+		return enc.WriteToken(jsontext.EndObject)
 	}
-	return dst, Error("JSON cannot encode " + t.String())
-}
-
-func beginMember(dst []byte, index int, key string, pretty *indenter) []byte {
-	if index > 0 {
-		dst = append(dst, ',')
-	}
-	if pretty != nil {
-		dst = pretty.newline(dst)
-	}
-	dst = appendJSONString(dst, key)
-	if pretty != nil {
-		return append(dst, ':', ' ')
-	}
-	return append(dst, ':')
+	return Error("JSON cannot encode " + t.String())
 }
 
 func isEmptyField(value reflect.Value) bool {
@@ -252,107 +206,44 @@ func isEmptyField(value reflect.Value) bool {
 	return value.IsZero()
 }
 
-func appendTreeJSON(dst []byte, value Tree, pretty *indenter) []byte {
+func writeTree(enc *jsontext.Encoder, value Tree) error {
 	switch value.kind {
 	case KindNull:
-		return append(dst, "null"...)
+		return enc.WriteToken(jsontext.Null)
 	case KindBool:
-		return strconv.AppendBool(dst, value.boolean)
+		return enc.WriteToken(jsontext.Bool(value.boolean))
 	case KindNumber:
-		return value.number.appendJSON(dst)
+		return enc.WriteValue(jsontext.Value(value.number.appendJSON(nil)))
 	case KindString:
-		return appendJSONString(dst, value.text)
+		return enc.WriteToken(jsontext.String(value.text))
 	case KindArray:
-		if len(value.items) == 0 {
-			return append(dst, "[]"...)
+		if err := enc.WriteToken(jsontext.BeginArray); err != nil {
+			return err
 		}
-		dst = append(dst, '[')
-		if pretty != nil {
-			pretty.depth++
-		}
-		for i, item := range value.items {
-			if i > 0 {
-				dst = append(dst, ',')
+		for _, item := range value.items {
+			if err := writeTree(enc, item); err != nil {
+				return err
 			}
-			if pretty != nil {
-				dst = pretty.newline(dst)
-			}
-			dst = appendTreeJSON(dst, item, pretty)
 		}
-		if pretty != nil {
-			pretty.depth--
-			dst = pretty.newline(dst)
+		return enc.WriteToken(jsontext.EndArray)
+	}
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+	for _, member := range value.members {
+		if err := enc.WriteToken(jsontext.String(member.Key)); err != nil {
+			return err
 		}
-		return append(dst, ']')
+		if err := writeTree(enc, member.Value); err != nil {
+			return err
+		}
 	}
-	if len(value.members) == 0 {
-		return append(dst, "{}"...)
-	}
-	dst = append(dst, '{')
-	if pretty != nil {
-		pretty.depth++
-	}
-	for i, member := range value.members {
-		dst = beginMember(dst, i, member.Key, pretty)
-		dst = appendTreeJSON(dst, member.Value, pretty)
-	}
-	if pretty != nil {
-		pretty.depth--
-		dst = pretty.newline(dst)
-	}
-	return append(dst, '}')
+	return enc.WriteToken(jsontext.EndObject)
 }
 
-const hexDigits = "0123456789abcdef"
-
-// appendJSONString escapes `"`, `\`, short escapes (\b \t \n \f \r), and other
-// bytes below 0x20 as \u00xx, matching serde_json (not `/`, `<`, DEL, or U+2028).
-// Invalid UTF-8 bytes are written as U+FFFD.
 func appendJSONString(dst []byte, text string) []byte {
-	dst = append(dst, '"')
-	start := 0
-	for i := 0; i < len(text); {
-		c := text[i]
-		if c >= utf8.RuneSelf {
-			r, size := utf8.DecodeRuneInString(text[i:])
-			if r == utf8.RuneError && size == 1 {
-				dst = append(dst, text[start:i]...)
-				dst = append(dst, "\uFFFD"...)
-				i++
-				start = i
-				continue
-			}
-			i += size
-			continue
-		}
-		if c >= 0x20 && c != '"' && c != '\\' {
-			i++
-			continue
-		}
-		dst = append(dst, text[start:i]...)
-		switch c {
-		case '"':
-			dst = append(dst, '\\', '"')
-		case '\\':
-			dst = append(dst, '\\', '\\')
-		case '\b':
-			dst = append(dst, '\\', 'b')
-		case '\t':
-			dst = append(dst, '\\', 't')
-		case '\n':
-			dst = append(dst, '\\', 'n')
-		case '\f':
-			dst = append(dst, '\\', 'f')
-		case '\r':
-			dst = append(dst, '\\', 'r')
-		default:
-			dst = append(dst, '\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0xf])
-		}
-		i++
-		start = i
-	}
-	dst = append(dst, text[start:]...)
-	return append(dst, '"')
+	out, _ := jsontext.AppendQuote(dst, text)
+	return out
 }
 
 // appendJSONFloat formats a float matching serde_json 1.0.154 (zmij):

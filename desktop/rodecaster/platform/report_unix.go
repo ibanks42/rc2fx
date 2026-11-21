@@ -7,12 +7,57 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
+
+// ReadReport reads name from a report disk: where it is already mounted, or
+// through a read-only mount that is removed again.
+func (host) ReadReport(v Volume, name string, limit int64) ([]byte, error) {
+	var data []byte
+	err := onReportDisk(v, name, false, func(path string) error {
+		var err error
+		data, err = readSmall(path, limit)
+		return err
+	})
+	return data, err
+}
+
+// WriteReport writes name to a report disk: where it is already mounted, or
+// through a mount that is removed again. The file (and its folder on Linux) is
+// flushed before it returns, and a mount of its own is unmounted, so the data
+// has reached the mixer.
+func (host) WriteReport(v Volume, name string, data []byte) error {
+	return onReportDisk(v, name, true, func(path string) error {
+		return writeSynced(path, data)
+	})
+}
+
+// onReportDisk validates name, ensures v is mounted via mountReportDisk
+// (read-only unless write), invokes do with the target file path, and unmounts
+// any temporary mount created for this call.
+func onReportDisk(v Volume, name string, write bool, do func(path string) error) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return platformError("invalid file name")
+	}
+	dir, unmount, err := mountReportDisk(v, write)
+	if err != nil {
+		return err
+	}
+	err = do(filepath.Join(dir, name))
+	if unmount != nil {
+		// Unmounting writes back whatever the filesystem still holds; a write
+		// counts only once that has worked.
+		if uerr := unmount(); uerr != nil && write && err == nil {
+			err = platformError(fmt.Sprintf("unmount the mixer's USB disk: %v", uerr))
+		}
+	}
+	return err
+}
 
 // writeSynced replaces path with data, not following a link, and flushes
 // the file and its folder.

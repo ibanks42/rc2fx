@@ -650,77 +650,47 @@ func (host) ReportDisks() ([]Volume, error) {
 	return result, nil
 }
 
-// ReadReport reads name from a report disk: where macOS has it mounted, or
-// through a read-only mount that is removed again.
-func (host) ReadReport(v Volume, name string, limit int64) ([]byte, error) {
-	var data []byte
-	err := onReportDisk(v, name, false, func(path string) error {
-		var err error
-		data, err = readSmall(path, limit)
-		return err
-	})
-	return data, err
-}
-
-// WriteReport writes name to a report disk: where macOS has it mounted, or
-// through a mount that is removed again. The file is flushed before it
-// returns, and a mount of its own is unmounted, so the data has reached the
-// mixer.
-func (host) WriteReport(v Volume, name string, data []byte) error {
-	return onReportDisk(v, name, true, func(path string) error {
-		return writeSynced(path, data)
-	})
-}
-
-// onReportDisk checks that v is still the mixer's report disk and calls do
-// with the path of name on it, mounting the disk (read-only unless write)
-// when nothing has it mounted, and unmounting it again afterwards.
-func onReportDisk(v Volume, name string, write bool, do func(path string) error) error {
-	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
-		return platformError("invalid file name")
-	}
+// mountReportDisk checks that v is still the mixer's report disk and returns
+// its mount path, mounting the disk (read-only unless write) when nothing has
+// it mounted and returning an unmount callback for temporary mounts.
+func mountReportDisk(v Volume, write bool) (string, func() error, error) {
 	devices, err := mixerDiskMap()
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	if d, ok := devices[v.Device]; !ok || d.Serial != v.Serial || d.Update {
-		return platformError("USB disk identity changed")
+		return "", nil, platformError("USB disk identity changed")
 	}
 	current, err := volume(v.Device, v.Serial)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	mounted := false
+	var unmount func() error
 	if current.Path == "" {
 		args := []string{"mount"}
 		if !write {
 			args = append(args, "readOnly")
 		}
 		if _, err := run("/usr/sbin/diskutil", append(args, v.Device)...); err != nil {
-			return platformError(fmt.Sprintf("mount the mixer's USB disk: %v", err))
+			return "", nil, platformError(fmt.Sprintf("mount the mixer's USB disk: %v", err))
 		}
-		mounted = true
+		unmount = func() error {
+			_, err := run("/usr/sbin/diskutil", "unmount", v.Device)
+			return err
+		}
 		if current, err = volume(v.Device, v.Serial); err != nil || current.Path == "" {
-			run("/usr/sbin/diskutil", "unmount", v.Device)
+			unmount()
 			if err == nil {
 				err = platformError("the mixer's USB disk did not mount")
 			}
-			return err
+			return "", nil, err
 		}
 	}
 	if current.FS != "FAT" {
-		if mounted {
-			run("/usr/sbin/diskutil", "unmount", v.Device)
+		if unmount != nil {
+			unmount()
 		}
-		return platformError("the mixer's USB disk is not FAT")
+		return "", nil, platformError("the mixer's USB disk is not FAT")
 	}
-	err = do(filepath.Join(current.Path, name))
-	if mounted {
-		// Unmounting writes back whatever the filesystem still holds; a
-		// write counts only once that has worked.
-		if _, uerr := run("/usr/sbin/diskutil", "unmount", v.Device); uerr != nil && write && err == nil {
-			err = platformError(fmt.Sprintf("unmount the mixer's USB disk: %v", uerr))
-		}
-	}
-	return err
+	return current.Path, unmount, nil
 }

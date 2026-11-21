@@ -406,9 +406,9 @@ func (v Tree) Equal(other Tree) bool {
 }
 
 // String is the compact JSON text, serde_json's Display / to_string.
-func (v Tree) String() string { return string(appendTreeJSON(nil, v, nil)) }
+func (v Tree) String() string { return string(encodeTree(v, false)) }
 
 // Pretty is serde_json's to_string_pretty: two-space indentation.
 func (v Tree) Pretty() string {
-	return string(appendTreeJSON(nil, v, &indenter{}))
+	return string(encodeTree(v, true))
 }

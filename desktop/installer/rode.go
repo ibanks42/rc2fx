@@ -284,6 +284,100 @@ func (e *Engine) imageFor(profile *Profile, serial string) ([]archive.Entry, str
 	return entries, runtime, digest, nil
 }
 
+func findRelease(releases []Release, channel, version string) (Release, bool) {
+	i := slices.IndexFunc(releases, func(r Release) bool {
+		return r.Channel == channel && r.Version == version
+	})
+	if i < 0 {
+		return Release{}, false
+	}
+	return releases[i], true
+}
+
+func (e *Engine) findCatalogProfile(version string, reverse bool) (*Profile, error) {
+	catalog, err := e.catalog()
+	if err != nil {
+		return nil, err
+	}
+	if reverse {
+		for i := len(catalog.Profiles) - 1; i >= 0; i-- {
+			if c := &catalog.Profiles[i]; c.Model == e.model.ID() && c.Version == version {
+				return c, nil
+			}
+		}
+		return nil, nil
+	}
+	for i := range catalog.Profiles {
+		if c := &catalog.Profiles[i]; c.Model == e.model.ID() && c.Version == version && supported(c) {
+			return c, nil
+		}
+	}
+	return nil, nil
+}
+
+func (e *Engine) reusablePrepared(saved *Saved, stock bool, channel, version, runtime, settings string) *Prepared {
+	old := saved.Prepared.clone()
+	if old == nil || old.Stock != stock || old.ModelOr(firmware.ModelProIi) != e.model ||
+		old.Version != version || old.Channel != channel {
+		return nil
+	}
+	if !stock && (old.Runtime != runtime || old.Settings != settings) {
+		return nil
+	}
+	if e.verifyPrepared(old) != nil {
+		return nil
+	}
+	return old
+}
+
+func (e *Engine) fetchMD5(digestURL string, checkHex bool) (string, error) {
+	raw, err := e.get(digestURL, 128)
+	if err != nil {
+		return "", err
+	}
+	md := strings.ToLower(strings.TrimSpace(strings.ToValidUTF8(string(raw), "�")))
+	if checkHex && (len(md) != 32 || !isHexText(md)) {
+		return "", Error("RØDE's checksum file is not an MD5")
+	}
+	return md, nil
+}
+
+func (e *Engine) downloadVerifiedRelease(selected Release, md string, pinned *Profile) (string, *string, error) {
+	if pinned != nil && md != pinned.ArchiveMD5 {
+		return "", nil, Error("RØDE's checksum differs from the inspected release")
+	}
+	var sha *string
+	if pinned != nil {
+		sha = &pinned.ArchiveSHA
+	}
+	src := filepath.Join(e.Work, "rode-original.tar.gz")
+	if err := e.download(selected.URL, src, sha, md); err != nil {
+		return "", nil, err
+	}
+	if e.model == firmware.ModelDuo {
+		// Shared executable hashes are NOT board identity. Verify the exact
+		// Duo archive, hostname and DTB before adding anything.
+		if _, err := InspectArchive(e.model, src); err != nil {
+			return "", nil, err
+		}
+	}
+	return src, sha, nil
+}
+
+func (e *Engine) commitPrepared(saved *Saved, prepared *Prepared, md5Text string) (*Prepared, error) {
+	if err := e.anchorPrepared(prepared); err != nil {
+		return nil, err
+	}
+	if err := archive.AtomicFile(filepath.Join(e.Work, "archive.md5"), []byte(md5Text)); err != nil {
+		return nil, err
+	}
+	saved.Prepared = prepared.clone()
+	if err := e.save(saved); err != nil {
+		return nil, err
+	}
+	return prepared, nil
+}
+
 // prepare downloads, verifies, and patches the selected release with RC2FX
 // and the latest backed-up settings for serial, reusing a verified cache match.
 func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared, error) {
@@ -298,23 +392,17 @@ func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared
 	if err != nil {
 		return nil, err
 	}
-	if !slices.ContainsFunc(releases, func(r Release) bool { return r.Channel == channel && r.Version == version }) {
+	selected, ok := findRelease(releases, channel, version)
+	if !ok {
 		return nil, Error("this firmware is not in this RC2FX build's qualified catalog")
 	}
 	saved, err := e.load()
 	if err != nil {
 		return nil, err
 	}
-	catalog, err := e.catalog()
+	p, err := e.findCatalogProfile(version, true)
 	if err != nil {
 		return nil, err
-	}
-	var p *Profile
-	for i := len(catalog.Profiles) - 1; i >= 0; i-- {
-		if c := &catalog.Profiles[i]; c.Model == e.model.ID() && c.Version == version {
-			p = c
-			break
-		}
 	}
 	if p == nil || !supported(p) {
 		return nil, Error("this firmware is not supported by RC2FX")
@@ -323,46 +411,20 @@ func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared
 	if err != nil {
 		return nil, err
 	}
-	if old := saved.Prepared.clone(); old != nil &&
-		!old.Stock &&
-		old.ModelOr(firmware.ModelProIi) == e.model &&
-		old.Version == version &&
-		old.Channel == channel &&
-		old.Runtime == runtime &&
-		old.Settings == settings &&
-		e.verifyPrepared(old) == nil {
+	if old := e.reusablePrepared(saved, false, channel, version, runtime, settings); old != nil {
 		return old, nil
 	}
-	releases, err = e.releases()
+	md, err := e.fetchMD5(selected.DigestURL, false)
 	if err != nil {
 		return nil, err
 	}
-	i := slices.IndexFunc(releases, func(r Release) bool { return r.Channel == channel && r.Version == version })
-	if i < 0 {
-		return nil, Error("firmware is not in the qualified catalog")
-	}
-	selected := releases[i]
-	md, err := e.get(selected.DigestURL, 128)
+	src, shaPin, err := e.downloadVerifiedRelease(selected, md, p)
 	if err != nil {
-		return nil, err
-	}
-	if strings.ToLower(strings.TrimSpace(strings.ToValidUTF8(string(md), "�"))) != p.ArchiveMD5 {
-		return nil, Error("RØDE's checksum differs from the inspected release")
-	}
-	src := filepath.Join(e.Work, "rode-original.tar.gz")
-	if err := e.download(selected.URL, src, &p.ArchiveSHA, p.ArchiveMD5); err != nil {
 		return nil, err
 	}
 	dst := filepath.Join(e.Work, "archive.tar.gz")
 	e.step("patch", "Building the firmware with RC2FX")
-	if e.model == firmware.ModelDuo {
-		// Shared executable hashes are NOT board identity. Verify the exact
-		// Duo archive, hostname and DTB before adding anything.
-		if _, err := InspectArchive(e.model, src); err != nil {
-			return nil, err
-		}
-	}
-	built, err := patchArchiveForModel(e.model, src, dst, entries, &p.ArchiveSHA)
+	built, err := patchArchiveForModel(e.model, src, dst, entries, shaPin)
 	if err != nil {
 		return nil, err
 	}
@@ -390,17 +452,7 @@ func (e *Engine) prepare(channel, version, serial string, stock bool) (*Prepared
 		Runtime:    runtime,
 		Settings:   settings,
 	}
-	if err := e.anchorPrepared(prepared); err != nil {
-		return nil, err
-	}
-	if err := archive.AtomicFile(filepath.Join(e.Work, "archive.md5"), []byte(prepared.ArchiveMD5)); err != nil {
-		return nil, err
-	}
-	saved.Prepared = prepared.clone()
-	if err := e.save(saved); err != nil {
-		return nil, err
-	}
-	return prepared, nil
+	return e.commitPrepared(saved, prepared, prepared.ArchiveMD5)
 }
 
 // prepareStock downloads, verifies, and stages an unmodified RØDE release.
@@ -414,53 +466,24 @@ func (e *Engine) prepareStock(channel, version string) (*Prepared, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := slices.IndexFunc(stock, func(r Release) bool { return r.Channel == channel && r.Version == version })
-	if i < 0 {
+	selected, ok := findRelease(stock, channel, version)
+	if !ok {
 		return nil, Error("RØDE doesn't list this firmware")
 	}
-	selected := stock[i]
-	if old := saved.Prepared.clone(); old != nil &&
-		old.Stock &&
-		old.ModelOr(firmware.ModelProIi) == e.model &&
-		old.Version == version &&
-		old.Channel == channel &&
-		e.verifyPrepared(old) == nil {
+	if old := e.reusablePrepared(saved, true, channel, version, "", ""); old != nil {
 		return old, nil
 	}
-	digest, err := e.get(selected.DigestURL, 128)
+	md, err := e.fetchMD5(selected.DigestURL, true)
 	if err != nil {
 		return nil, err
 	}
-	md := strings.ToLower(strings.TrimSpace(strings.ToValidUTF8(string(digest), "�")))
-	if len(md) != 32 || !isHexText(md) {
-		return nil, Error("RØDE's checksum file is not an MD5")
-	}
-	catalog, err := e.catalog()
+	pinned, err := e.findCatalogProfile(version, false)
 	if err != nil {
 		return nil, err
 	}
-	var pinned *Profile
-	for i := range catalog.Profiles {
-		if p := &catalog.Profiles[i]; p.Model == e.model.ID() && p.Version == version && supported(p) {
-			pinned = p
-			break
-		}
-	}
-	if pinned != nil && pinned.ArchiveMD5 != md {
-		return nil, Error("RØDE's checksum differs from the inspected release")
-	}
-	var sha *string
-	if pinned != nil {
-		sha = &pinned.ArchiveSHA
-	}
-	src := filepath.Join(e.Work, "rode-original.tar.gz")
-	if err := e.download(selected.URL, src, sha, md); err != nil {
+	src, sha, err := e.downloadVerifiedRelease(selected, md, pinned)
+	if err != nil {
 		return nil, err
-	}
-	if e.model == firmware.ModelDuo {
-		if _, err := InspectArchive(e.model, src); err != nil {
-			return nil, err
-		}
 	}
 	dst := filepath.Join(e.Work, "archive.tar.gz")
 	part := filepath.Join(e.Work, ".archive.tar.gz.part")
@@ -498,17 +521,7 @@ func (e *Engine) prepareStock(channel, version string) (*Prepared, error) {
 		ArchiveMD5: archiveMd5,
 		Stock:      true,
 	}
-	if err := e.anchorPrepared(prepared); err != nil {
-		return nil, err
-	}
-	if err := archive.AtomicFile(filepath.Join(e.Work, "archive.md5"), []byte(md)); err != nil {
-		return nil, err
-	}
-	saved.Prepared = prepared.clone()
-	if err := e.save(saved); err != nil {
-		return nil, err
-	}
-	return prepared, nil
+	return e.commitPrepared(saved, prepared, md)
 }
 
 func chownToInvoker(path string) error {

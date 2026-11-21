@@ -284,7 +284,7 @@ mic["eq"] = {"enabled": True, "inputGainDb": -1.5, "outputGainDb": 0.25, "bands"
 ]}
 mic["compressor"] = {"enabled": True, "threshold": -24.0, "ratio": 4.5, "attack": 0.1, "release": 2000.0, "makeup": 6.0}
 chat = E["targets"][idx(E, "send-chat")]
-chat["name"] = "Chat \u2014 \"voice\" \\ mix"
+chat["name"] = "Chat \u00b7 \"voice\" \\ mix"
 chat["eq"] = {"enabled": True, "inputGainDb": 0.0, "outputGainDb": 0.0, "bands": [], "rightBands": [
     {"id": "band-1", "enabled": True, "type": "low-pass", "mode": "apo-dr", "solo": False, "frequency": 18000.0, "gain": 0.0, "q": 0.5}]}
 chat["gain"] = {"enabled": True, "db": -3.0}

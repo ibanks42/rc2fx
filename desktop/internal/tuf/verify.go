@@ -8,6 +8,7 @@ package tuf
 // metadata the mixer accepts.
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -21,7 +22,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -65,12 +66,18 @@ func parseEnvelope(data []byte) (*envelope, error) {
 	return &envelope{canonical: canonical, signatures: doc.Signatures}, nil
 }
 
-// Canonical is securesystemslib-style canonical JSON: sorted keys, no
-// whitespace, integers only, and only `"` and `\` escaped in strings.
+// Canonical is OLPC / securesystemslib-style canonical JSON: object keys
+// sorted by encoded bytes, no whitespace, integers only, and only `"` and `\`
+// escaped in strings. Accepts both generic decoded values and sjson.Tree.
 func Canonical(value any) ([]byte, error) {
 	var out []byte
 	err := canonical(value, &out)
 	return out, err
+}
+
+type canonicalEntry struct {
+	key   []byte
+	value any
 }
 
 func canonical(value any, out *[]byte) error {
@@ -94,37 +101,82 @@ func canonical(value any, out *[]byte) error {
 	case string:
 		canonicalString(v, out)
 	case []any:
-		*out = append(*out, '[')
-		for i, item := range v {
-			if i > 0 {
-				*out = append(*out, ',')
-			}
-			if err := canonical(item, out); err != nil {
-				return err
-			}
-		}
-		*out = append(*out, ']')
+		return canonicalArray(len(v), func(i int) any { return v[i] }, out)
 	case map[string]any:
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
+		entries := make([]canonicalEntry, 0, len(v))
+		for k, item := range v {
+			var encoded []byte
+			canonicalString(k, &encoded)
+			entries = append(entries, canonicalEntry{key: encoded, value: item})
 		}
-		sort.Strings(keys)
-		*out = append(*out, '{')
-		for i, k := range keys {
-			if i > 0 {
-				*out = append(*out, ',')
+		return canonicalObject(entries, out)
+	case sjson.Tree:
+		switch v.Kind() {
+		case sjson.KindNull:
+			*out = append(*out, "null"...)
+		case sjson.KindBool:
+			b, _ := v.AsBool()
+			*out = strconv.AppendBool(*out, b)
+		case sjson.KindNumber:
+			n, _ := v.AsNumber()
+			if n.IsF64() {
+				return errors.New("canonical JSON allows integers only")
 			}
-			canonicalString(k, out)
-			*out = append(*out, ':')
-			if err := canonical(v[k], out); err != nil {
-				return err
+			*out = append(*out, n.String()...)
+		case sjson.KindString:
+			s, _ := v.AsString()
+			canonicalString(s, out)
+		case sjson.KindArray:
+			items, _ := v.AsArray()
+			return canonicalArray(len(items), func(i int) any { return items[i] }, out)
+		case sjson.KindObject:
+			members, _ := v.AsObject()
+			entries := make([]canonicalEntry, len(members))
+			for i, m := range members {
+				var encoded []byte
+				canonicalString(m.Key, &encoded)
+				entries[i] = canonicalEntry{key: encoded, value: m.Value}
 			}
+			return canonicalObject(entries, out)
+		default:
+			return errors.New("unknown JSON value")
 		}
-		*out = append(*out, '}')
 	default:
 		return fmt.Errorf("canonical JSON cannot hold %T", value)
 	}
+	return nil
+}
+
+func canonicalArray(n int, at func(int) any, out *[]byte) error {
+	*out = append(*out, '[')
+	for i := range n {
+		if i > 0 {
+			*out = append(*out, ',')
+		}
+		if err := canonical(at(i), out); err != nil {
+			return err
+		}
+	}
+	*out = append(*out, ']')
+	return nil
+}
+
+func canonicalObject(entries []canonicalEntry, out *[]byte) error {
+	slices.SortStableFunc(entries, func(a, b canonicalEntry) int {
+		return bytes.Compare(a.key, b.key)
+	})
+	*out = append(*out, '{')
+	for i, e := range entries {
+		if i > 0 {
+			*out = append(*out, ',')
+		}
+		*out = append(*out, e.key...)
+		*out = append(*out, ':')
+		if err := canonical(e.value, out); err != nil {
+			return err
+		}
+	}
+	*out = append(*out, '}')
 	return nil
 }
 

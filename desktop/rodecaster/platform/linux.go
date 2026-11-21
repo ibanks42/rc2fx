@@ -625,42 +625,17 @@ func (host) Eject(v *Volume) error {
 	return nil
 }
 
-// ReadReport reads name from a report disk: where it is already mounted, or
-// through a private read-only mount that is removed again.
-func (host) ReadReport(v Volume, name string, limit int64) ([]byte, error) {
-	var data []byte
-	err := onReportDisk(v, name, false, func(path string) error {
-		var err error
-		data, err = readSmall(path, limit)
-		return err
-	})
-	return data, err
-}
-
-// WriteReport writes name to a report disk: where it is already mounted, or
-// through a private read-write mount that is removed again. The file and
-// its folder are flushed before it returns, and a private mount is
-// unmounted, so the data has reached the mixer.
-func (host) WriteReport(v Volume, name string, data []byte) error {
-	return onReportDisk(v, name, true, func(path string) error {
-		return writeSynced(path, data)
-	})
-}
-
-// onReportDisk checks that v is still the mixer's report disk and calls do
-// with the path of name on it: where the disk is already mounted (once), or
-// on a private mount, read-only unless write, that is removed again.
-func onReportDisk(v Volume, name string, write bool, do func(path string) error) error {
-	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
-		return platformError("invalid file name")
-	}
+// mountReportDisk checks that v is still the mixer's report disk and returns
+// its mount path (reusing an existing mount or creating a private mount that
+// the returned unmount callback removes).
+func mountReportDisk(v Volume, write bool) (string, func() error, error) {
 	serial, _, err := reportIdentity(v.Device)
 	if err != nil || serial != v.Serial {
-		return platformError("USB disk identity changed")
+		return "", nil, platformError("USB disk identity changed")
 	}
 	all, err := mounts()
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	var paths []string
 	for _, m := range all {
@@ -673,41 +648,41 @@ func onReportDisk(v Volume, name string, write bool, do func(path string) error)
 	case 1:
 		v.Path = paths[0]
 		if _, err := capacity(v); err != nil {
-			return err
+			return "", nil, err
 		}
-		return do(filepath.Join(v.Path, name))
+		return v.Path, nil, nil
 	default:
-		return platformError("the mixer's USB disk has multiple mounts")
+		return "", nil, platformError("the mixer's USB disk has multiple mounts")
 	}
 	if !isRoot() {
-		return platformError("mounting requires administrator permission")
+		return "", nil, platformError("mounting requires administrator permission")
 	}
 	nonce := make([]byte, 6)
 	if _, err := rand.Read(nonce); err != nil {
-		return err
+		return "", nil, err
 	}
 	dir := "/run/rc2fx-media-" + hex.EncodeToString(nonce)
 	if err := os.Mkdir(dir, 0o700); err != nil {
-		return err
+		return "", nil, err
 	}
-	defer os.Remove(dir)
 	flags := uintptr(unix.MS_NODEV | unix.MS_NOSUID | unix.MS_NOEXEC)
 	if !write {
 		flags |= unix.MS_RDONLY
 	}
 	if err := mountSettled(v.Device, dir, flags); err != nil {
-		return platformError(fmt.Sprintf("mount the mixer's USB disk: %v", err))
+		os.Remove(dir)
+		return "", nil, platformError(fmt.Sprintf("mount the mixer's USB disk: %v", err))
 	}
 	v.Path = dir
 	if _, err := capacity(v); err != nil {
 		unix.Unmount(dir, 0)
+		os.Remove(dir)
+		return "", nil, err
+	}
+	unmount := func() error {
+		err := unix.Unmount(dir, 0)
+		os.Remove(dir)
 		return err
 	}
-	err = do(filepath.Join(dir, name))
-	// Unmounting writes back whatever the filesystem still holds; a write
-	// counts only once that has worked.
-	if uerr := unix.Unmount(dir, 0); uerr != nil && write && err == nil {
-		err = platformError(fmt.Sprintf("unmount the mixer's USB disk: %v", uerr))
-	}
-	return err
+	return dir, unmount, nil
 }

@@ -1,11 +1,12 @@
 // Package helper runs a privileged installer subprocess via pkexec for raw USB,
 // mounting, and ejection. Requests and replies are JSON lines over stdio; a
-// "cancel" line stops an in-flight download like Engine.Cancel.
+// cancel message stops an in-flight download like Engine.Cancel.
 package helper
 
 import (
 	"bufio"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
-	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
@@ -59,124 +59,21 @@ func privilegedLaunch() (*exec.Cmd, *stagedAppDir, error) {
 	return exec.Command("pkexec", executable), guard, nil
 }
 
-// Wire message from helper to desktop: {"progress": ...} or {"done": {"Ok"|"Err": ...}}.
+// Wire message from helper to desktop.
 type message struct {
-	Progress *installer.Progress
-	Done     *done
+	Progress *installer.Progress `json:"progress,omitempty"`
+	Reply    *installer.Reply    `json:"reply,omitempty"`
+	Error    *string             `json:"error,omitempty"`
 }
 
-type done struct {
-	Reply *installer.Reply
-	Error *string
-}
-
-func (m message) MarshalJSON() ([]byte, error) {
-	if m.Progress != nil {
-		return tagged("progress", m.Progress)
-	}
-	if m.Done.Reply != nil {
-		inner, err := tagged("Ok", m.Done.Reply)
-		if err != nil {
-			return nil, err
-		}
-		return tagged("done", rawJSON(inner))
-	}
-	inner, err := tagged("Err", m.Done.Error)
-	if err != nil {
-		return nil, err
-	}
-	return tagged("done", rawJSON(inner))
-}
-
-func (m *message) UnmarshalJSON(data []byte) error {
-	variant, payload, err := sjson.Tagged(data)
-	if err != nil {
-		return err
-	}
-	switch {
-	case variant == "progress" && payload != nil:
-		var p installer.Progress
-		if err := sjson.Unmarshal(payload, &p); err != nil {
-			return err
-		}
-		*m = message{Progress: &p}
-	case variant == "done" && payload != nil:
-		result, inner, err := sjson.Tagged(payload)
-		if err != nil {
-			return err
-		}
-		switch {
-		case result == "Ok" && inner != nil:
-			var r installer.Reply
-			if err := sjson.Unmarshal(inner, &r); err != nil {
-				return err
-			}
-			*m = message{Done: &done{Reply: &r}}
-		case result == "Err" && inner != nil:
-			var text string
-			if err := sjson.Unmarshal(inner, &text); err != nil {
-				return err
-			}
-			*m = message{Done: &done{Error: &text}}
-		default:
-			return fmt.Errorf("unknown variant `%s`, expected `Ok` or `Err`", result)
-		}
-	default:
-		return fmt.Errorf("unknown variant `%s`, expected `progress` or `done`", variant)
-	}
-	return nil
-}
-
-// Wire message from desktop to helper: {"request": ...} or "cancel".
+// Wire message from desktop to helper.
 type inbound struct {
-	Request *installer.Request
-	Cancel  bool
-}
-
-func (i inbound) MarshalJSON() ([]byte, error) {
-	if i.Cancel {
-		return []byte(`"cancel"`), nil
-	}
-	return tagged("request", i.Request)
-}
-
-func (i *inbound) UnmarshalJSON(data []byte) error {
-	variant, payload, err := sjson.Tagged(data)
-	if err != nil {
-		return err
-	}
-	switch {
-	case variant == "cancel" && payload == nil:
-		*i = inbound{Cancel: true}
-	case variant == "request" && payload != nil:
-		var r installer.Request
-		if err := sjson.Unmarshal(payload, &r); err != nil {
-			return err
-		}
-		*i = inbound{Request: &r}
-	default:
-		return fmt.Errorf("unknown variant `%s`, expected `request` or `cancel`", variant)
-	}
-	return nil
-}
-
-type rawJSON []byte
-
-func (r rawJSON) MarshalJSON() ([]byte, error) { return r, nil }
-
-func tagged(variant string, payload any) ([]byte, error) {
-	body, err := sjson.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	out := append([]byte{'{'}, sjson.String(variant)...)
-	out = append(out, ':')
-	out = append(out, body...)
-	return append(out, '}'), nil
+	Request *installer.Request `json:"request,omitempty"`
+	Cancel  bool               `json:"cancel,omitempty"`
 }
 
 func writeLine(w io.Writer, value any) error {
-	data, err := sjson.Marshal(value)
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
@@ -216,12 +113,16 @@ func Serve(root, work string) error {
 				return
 			}
 			var in inbound
-			if err := sjson.Unmarshal([]byte(trimNewline(line)), &in); err != nil {
+			if err := json.Unmarshal([]byte(trimNewline(line)), &in); err != nil {
 				requests <- parsed{err: err}
 				continue
 			}
 			if in.Cancel {
 				engine.Cancel.Store(true)
+				continue
+			}
+			if in.Request == nil {
+				requests <- parsed{err: errors.New("missing helper request")}
 				continue
 			}
 			requests <- parsed{request: *in.Request}
@@ -233,10 +134,10 @@ func Serve(root, work string) error {
 		}
 		engine.Cancel.Store(false)
 		reply, err := engine.Handle(p.request)
-		m := message{Done: &done{Reply: &reply}}
+		m := message{Reply: &reply}
 		if err != nil {
 			text := err.Error()
-			m = message{Done: &done{Error: &text}}
+			m = message{Error: &text}
 		}
 		if err := send(m); err != nil {
 			return err
@@ -384,17 +285,20 @@ func (h *Helper) Handle(request installer.Request, progress func(installer.Progr
 			return installer.Reply{}, h.stopped(fallback)
 		}
 		var m message
-		if err := sjson.Unmarshal([]byte(trimNewline(line)), &m); err != nil {
+		if err := json.Unmarshal([]byte(trimNewline(line)), &m); err != nil {
 			return installer.Reply{}, err
 		}
 		if m.Progress != nil {
 			progress(*m.Progress)
 			continue
 		}
-		if m.Done.Error != nil {
-			return installer.Reply{}, installer.Error(*m.Done.Error)
+		if m.Error != nil {
+			return installer.Reply{}, installer.Error(*m.Error)
 		}
-		return *m.Done.Reply, nil
+		if m.Reply == nil {
+			return installer.Reply{}, errors.New("missing helper reply")
+		}
+		return *m.Reply, nil
 	}
 }
 
