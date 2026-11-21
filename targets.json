@@ -2,17 +2,17 @@
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 1795239089,
+    "version": 1795242563,
     "expires": "2029-11-04T15:48:28.583715004Z",
     "targets": {
-      "mixer-v0.2.2/rc2fx-mixer-0.2.2.payload": {
-        "length": 13850461,
+      "mixer-v0.2.3/rc2fx-mixer-0.2.3.payload": {
+        "length": 13874886,
         "hashes": {
-          "sha256": "d4ed615e49612070cf49def71b993511f7caf05e3c7a434f6659ae59def6fb09"
+          "sha256": "78e7e0b73298f63fcccdff9f8f8ab80eec8286667c3ad06defc242c6ea4a4c15"
         },
         "custom": {
           "rc2fxMixer": {
-            "version": "0.2.2",
+            "version": "0.2.3",
             "payloadFormat": 1,
             "protocolVersion": 1,
             "minimumAppVersion": "0.1.1",
@@ -25,19 +25,19 @@
           }
         }
       },
-      "mixer-v0.2.2/THIRD-PARTY-NOTICES.html": {
+      "mixer-v0.2.3/THIRD-PARTY-NOTICES.html": {
         "length": 1775408,
         "hashes": {
           "sha256": "6e66c0a9ac3e6ff6b9d238b152ef2f2ecd603707424eb133a898b68f4dbbbcd0"
         }
       },
-      "mixer-v0.2.2/firmware-profiles.json": {
+      "mixer-v0.2.3/firmware-profiles.json": {
         "length": 6698,
         "hashes": {
           "sha256": "a2e9c1c1b5234bfba8e312e4bf67577ea9f2972a213839dc5afc8dd942343082"
         },
         "custom": {
-          "rc2fxCatalog": "0.2.2"
+          "rc2fxCatalog": "0.2.3"
         }
       }
     },
@@ -49,7 +49,7 @@
   "signatures": [
     {
       "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
-      "sig": "65903a6ed85c6c6ba0c54975d27e502d50c2091771b89ab224cdbdef9c2dde4216cbf7789a478f8b7ac1e40bb47ea707751d26d6b0052e4e397d673955c59f029f9cfd4ea5f83535d7b27f3cf51ecc0e82068e0d614cac5c01d8ef7631d5dd632ba86f220771ca9849872ee9575011d2e8dfc79c85d4abeee6ab8c0e19f842bd9da734533c9adfe3f2e3005ce5d1110a73f79a9a6b05101998433fe3b73db93391409a773564ca42fb2b423b37dd5bfaf0dc9c1f48348665533ebaf7192a40450f81d02b4fb714f61cf288ba04f1457dcc861781311cf2a199bf8e23888cf646f6073a5687a5f58bbfdaf309617334618636730c3f6139c53e4bbf18d9d3b8dc043d1fbe2bdc13e77767c3dea45448bcd672f94c8bd4e9fe739269b7b8c1cf1364e1075f838c84b0512b128404cd188df098f95c40032c5c5dee42b0edd3edd6dbc5c6cd0f1cd86b800a443edc1c3a406fa8dccc29afb3ee58f0fd1325fe06e31e7bf18ab4ea35b432491b2bbd497606660c7ff456c40b81bf3c185ce74f612c"
+      "sig": "6d4cce634d7ca86ab4fc387f27f253ebaad01ec9461d4007234db718ee43b15062c5ccfe6eefd67da8f869694828c62d8893f2b1b106ce43109bda17e0a8a61d7833411fefcea01424d4fd4d9b63b6949f2a5e22020f718d8ac456055b6d03fd15727c274285e24591220b0e4c8e91b6a26dc31075512a4dc3d395d723ce9737bf83560eb254e3078dbb1358b53a3d1e9f185d243fd5fd58122eb16d6c9314b31af0b53f6ae55195794f0e02c7a8d383aafd30ba7b50e0940c81afdebeecc860b73e9d2868aea3041eba117cea8bed650caa37fd4ccc14e5a18c7e1f9b156108310043d718fdd7de34989a74ef95e017eba3626a9cd685088b9f7b8de7c93c9a4f0f74708672aebf6247264acdfff50c9de58b99a53693243c6d5610b2dcfd894291cec2914b68b9bb8de4b972d295c89829eceb6c461bb8651b504ea8b918d033f5aee6ed07f8fd16f7a3e5b21c0f833e84c38468f6ab34538a6f7e5e18a06c6953727c789e8afe8c7a006c87d8dd2a8b5f55869d116f9b2c91afff6d47b949"
     }
   ]
 }
