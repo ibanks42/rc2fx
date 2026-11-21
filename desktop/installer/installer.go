@@ -28,7 +28,7 @@ import (
 
 // AppVersion is kept in sync with config/app-release.json by
 // .github/scripts/release.py.
-const AppVersion = "0.1.7"
+const AppVersion = "0.2.0"
 
 type DeviceModel = firmware.Model
 

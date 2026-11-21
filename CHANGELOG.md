@@ -2,6 +2,94 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.2.0] - 2026-11-21
+
+### Features
+
+- *(app)* Port the desktop app to Go
+- *(mixer)* Live editing, exact reset check, and click-free stage switches
+- *(app)* Storage fix, guided install tasks, live editing, and one save at a time
+- *(installer)* Make partition fix an opt-in experimental option
+
+### Bug fixes
+
+- *(docs)* Change base URL in VitePress
+- *(ci)* Go 1.27.4, installer tests off the real helper folder, and manifests for Windows test binaries
+- *(desktop)* Link velopack_libc through CGO_LDFLAGS, not a #cgo directive
+- *(mixer)* Verify a flash before RØDE's reboot and repair it from the archive
+- *(desktop)* Link Velopack beside static gpuikit on Linux; run the fix script's tests on Linux only
+- *(ci)* Libxkbcommon 1.7.0 in the AppImage build image
+- Installer, update, device, and app bugs
+- Resolve release script drift, DiagnosticsKind::Other, and just test
+- *(rodecaster)* Read storage-fix reports over USB on macOS and Windows
+- *(installer)* Block unsafe second updates, clear the p1 gap on restore, and fix the settings-save hang
+- *(mixer)* Set the previous image check result aside before a new check
+- *(ci)* Build the GUI pacing shim under fortify and allow pow's last bit in the gate fixture
+- Restore gui_launch.py comment anchor and apply rustfmt
+- *(licenses)* Accept repeated cargo-about JSON keys
+- *(app)* Keep the payload-mode marker in release builds
+- *(package)* Pack the universal macOS app as osx-arm64
+- *(package)* Leave freetype's libraries out of the AppImage
+
+### Refactoring
+
+- *(device)* Remove the in-process JACK runtime path
+- *(core)* Remove the desktop editor logic
+- Drop each side's copy of the other side's logic
+- Replace flag clusters with explicit state types
+- *(desktop)* Clean up after the Go port
+- Remove dead code and unneeded tests on the mixer side
+- *(desktop)* Remove dead code and unneeded tests
+- Remove dead code beside the realtime path
+- *(native)* Split pipeline.rs into modules by concern
+- Build the Rust side for Linux only
+- Remove the realtime path's unused branches and counters
+- Move pure-C mixer modules (gui, jackerr) out of crates/
+- *(rust)* Deduplicate helpers, normalize test layout, and tidy rc2fx-device
+- *(rust)* Split rc2fx-native monoliths and group rc2fx-device by domain
+- *(mixer)* Extract xrun-trace and experimental UI runners out of rc2fx.sh
+- *(go)* Unify strict serde JSON into desktop/internal/sjson
+- *(go)* Decompose installer, extract usbcontrol and appupdate, split large files
+- *(app)* Extract state and theme packages, split installer views, and consolidate dev tags
+- *(installer)* Share MBR parsing with rodecaster/fix
+- *(rodecaster)* Prune dead storage-mode fix, report, and disk code
+- *(ext2fs)* Replace vendored e2fsprogs cgo wrapper with pure-Go ext4
+- *(desktop)* Simplify sjson, helper IPC, and Go internal helpers
+
+### Documentation
+
+- Describe the code as it is now
+- Align installer, Duo, update, and release documentation with current behavior
+- Rewrite documentation and code comments to read naturally
+- Update EQ and noise suppression screenshots
+
+### Performance
+
+- *(app)* Pace spinners and ambient animations to cut GPU usage
+
+### Testing
+
+- Add shared payload list, gate, EQ, update, and udev fixtures
+- *(ci)* Use fixed zip timestamps in test_macos_release
+- *(appimage)* Allow the host's libfreetype
+- Avoid 108-byte Unix socket path limit under long TMPDIR
+
+### Maintenance
+
+- Choose the mixer version bump when running Mixer release
+- Build, lint, and test what ships; trim the release tooling
+- *(mixer)* Add unsigned release dry runs
+
+### Other
+
+- Main (v0.1.7, mixer 0.2.1 prep, and the mixer version bump workflow) into the Go port
+- *(desktop)* Gpuikit 0.0.2, linked into the app as a static library
+- Fold rc2fx-native into root Cargo workspace and tidy manifests
+- *(release)* Move app version to config, pin velopack config, and streamline CI
+- Merge pull request #4 from ibanks42/port/desktop-go
+
+feat: Go desktop app, live editing, and codebase cleanup
+
 ## [0.1.7] - 2026-11-16
 
 ### Features
