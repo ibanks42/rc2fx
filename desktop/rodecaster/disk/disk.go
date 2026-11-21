@@ -2,7 +2,7 @@
 // (hold power ~15s at boot; U-Boot exports the eMMC via `ums mmc 0` as USB
 // 1b8e:fada) and opens the whole disk for raw sector I/O.
 //
-// Partition table parsing and repair live in package fix.
+// Partition table parsing lives in package fix.
 package disk
 
 import (
