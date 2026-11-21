@@ -5,7 +5,9 @@ constructs a modified root filesystem archive on the host computer containing
 the RC2FX runtime, startup shims, and saved settings, then installs it through
 the mixer's USB update mode. Initial installs, repairs from a broken state, and
 RØDE firmware upgrades all use this full flash. When only RC2FX itself changes,
-the app instead installs the signed mixer payload in place over USB 1 (see
+the app instead updates the signed mixer payload in place: it copies the file
+through a temporary USB drive named `RC2FX` attached to RØDE's removable drive,
+falling back to USB 1 when that isn't possible (see
 [signed mixer releases](../developer/mixer-releases.md#in-place-updates)),
 keeping the full flash as the recovery path. Firmware archives are never stored
 in git.
@@ -55,7 +57,10 @@ folder at once.
   itself. Clicking **Grant access** on the installer page starts the helper
   through the system password prompt, and privileges remain active until the
   installer closes. Files written by the helper are chowned back to the
-  invoking user.
+  invoking user. For in-place updates, mounting and unmounting the temporary
+  `RC2FX` update drive runs directly in the unprivileged desktop session via
+  `udisksctl` with no password prompt (falling back to USB 1 if that isn't
+  available).
 
 All HTTPS requests rely on the operating system's certificate trust store.
 

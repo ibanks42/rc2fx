@@ -22,10 +22,14 @@ HID handle and serializes requests in order.
   reply on the mixer is recovered.
 - Events are polled via `GET api/v1/events`. Polling backs off on failure and
   resets once polls succeed steadily again.
-- In-place updates (`CommandMixerUpdate`) upload alongside normal requests, one
-  at a time (a second concurrent upload is rejected). If the USB session drops
-  mid-upload, the client reads the update session to reopen it and resumes from
-  the mixer's reported offset for up to 30 seconds.
+- In-place updates (`CommandMixerUpdate`) run alongside normal requests, one at
+  a time (a second concurrent upload is rejected). When a `DriveWriter` is
+  supplied, the client first asks the mixer to attach a temporary `RC2FX` USB
+  drive to RØDE's removable slot, copies the payload there, and has the mixer
+  read it back; if that isn't possible or fails, it falls back to streaming
+  chunks over USB 1. If the USB session drops mid-upload, the client reads the
+  update session to reopen it and resumes from the mixer's reported offset for
+  up to 30 seconds.
 - Event polling and in-place updates are tied to their connection. Both
   `CommandConnect` and `CommandDisconnect` cancel them and wait for them to
   release the USB session before continuing, preventing an old connection from

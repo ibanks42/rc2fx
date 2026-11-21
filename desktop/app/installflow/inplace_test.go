@@ -163,3 +163,22 @@ func TestTheMixerIsAskedHowItEndedEveryFewSecondsUntilItGivesUp(t *testing.T) {
 func inPlaceBundle(version string) installer.InPlaceBundle {
 	return installer.InPlaceBundle{Version: version, Size: 7}
 }
+
+func TestACopyThroughTheUpdateDriveIsShownUntilItFallsBackToUSB(t *testing.T) {
+	m := uploadingInPlace("0.2.0")
+	m.InPlaceCopying(7)
+	if in := m.InPlace(); !in.Drive || in.Total != 7 || in.Kind != InPlaceUploading {
+		t.Fatalf("%+v", in)
+	}
+	// Completing the drive copy keeps the drive flag set.
+	m.InPlaceProgress(7, 7)
+	if !m.InPlace().Drive {
+		t.Fatal("drive forgotten at the end of its copy")
+	}
+	// Falling back to USB 1 resets progress to zero and clears the drive flag.
+	m.InPlaceCopying(7)
+	m.InPlaceProgress(0, 7)
+	if m.InPlace().Drive {
+		t.Fatal("still shown as the drive")
+	}
+}

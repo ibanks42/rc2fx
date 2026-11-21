@@ -64,12 +64,9 @@ func (a *App) mixerSection(cx *gk.Cx) gk.DivEl {
 			ghost("disconnect", "Disconnect").Disabled(!a.session.Connected && !a.link.Connecting()).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.disconnect(cx) }))).
 		Child(row(labeled("RC2FX on this mixer",
-			"Update RC2FX to a newer version, or remove it and put RØDE’s stock firmware back. Your settings are saved first."),
-			gk.HFlex(s.Gap2).
-				Child(ghost("update-rc2fx", "Update RC2FX").
-					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskUpdate) })).
-				Child(ghost("remove-rc2fx", "Remove RC2FX").
-					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskRemove) }))))
+			"Remove RC2FX and put RØDE’s stock firmware back. Your settings are saved first."),
+			ghost("remove-rc2fx", "Remove RC2FX").
+				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskRemove) })))
 	if processing, ok := a.processingRow(cx); ok {
 		rows = rows.Child(processing)
 	}

@@ -73,6 +73,10 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	}
 	reinstall := taskButton("task-full-flash", "Reinstall firmware as well…", false).Disabled(i.busy()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
+			if a.installer != nil && a.installer.direct != nil {
+				a.switchToFlash(cx)
+				return
+			}
 			if a.installer != nil {
 				a.installer.preferFlash = true
 				a.installer.model.InPlaceDismiss()
@@ -110,7 +114,8 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 			Child(prose(fmt.Sprintf("Your mixer runs %s. Only the mixer software changes; RØDE firmware%s stays as it is.", installed, fw), Muted)).
 			Child(bullets(
 				bullet(txt("Takes about a minute.")),
-				bullet(txt("RC2FX restarts on the mixer, which interrupts its audio briefly.")),
+				bullet(txt("A drive named RC2FX may appear on your computer for a few seconds while the update is copied. Leave it be; it goes away by itself.")),
+				bullet(txt("Then the mixer restarts its audio, so it goes silent for a few seconds. Its screen may restart too.")),
 				bullet(txt("Nothing else changes: your channels, effects and mixer settings are kept.")),
 				bullet(txt(fmt.Sprintf("If %s doesn’t start, the mixer goes back to %s by itself.", version, installed)))))
 		t.unplug = installflow.Unplug{Kind: installflow.UnplugYes, Reason: "nothing has changed yet"}
@@ -125,7 +130,16 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 			Child(prose("The app downloads the update and checks its signature. Nothing on the mixer has changed yet.", Muted)).
 			Child(a.spinnerLine(fmt.Sprintf("Downloading and checking RC2FX %s…", p.Version))).
 			Child(soFar)
-	case installflow.InPlaceReady, installflow.InPlaceUploading:
+	case installflow.InPlaceUploading:
+		if p.Drive {
+			body = body.Child(taskHeading("Update RC2FX")).
+				Child(prose(fmt.Sprintf("Copying RC2FX %s to the mixer through a temporary drive named RC2FX. Leave it be; it goes away by itself.", p.Version), Muted)).
+				Child(a.spinnerLine("Copying…")).
+				Child(soFar)
+			break
+		}
+		fallthrough
+	case installflow.InPlaceReady:
 		version := p.Version
 		if p.Kind == installflow.InPlaceReady {
 			version = p.Bundle.Version
@@ -135,7 +149,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 			share = min(max(float32(p.Sent)/float32(p.Total)*100, 0), 100)
 		}
 		body = body.Child(taskHeading("Update RC2FX")).
-			Child(prose(fmt.Sprintf("Sending RC2FX %s to the mixer. The mixer then checks it and restarts RC2FX.", version), Muted)).
+			Child(prose(fmt.Sprintf("Sending RC2FX %s to the mixer. Its audio may stutter until this finishes.", version), Muted)).
 			Child(gk.VFlex(s.WFull).Gap(px(8)).
 				Child(gk.Progress("task-progress").Value(share)).
 				Child(gk.HFlex(s.ItemsCenter, s.JustifyBetween, s.TextSm).
@@ -143,7 +157,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 					Child(gk.Div().TextColor(rgb(Faint)).Child(txt(installflow.Elapsed(time.Since(i.stageSince)) + " so far")))))
 	case installflow.InPlaceInstalling:
 		body = body.Child(taskHeading("Check and finish")).
-			Child(prose("RC2FX restarts on the mixer, which interrupts its audio briefly. Keep the mixer on and connected.", Muted)).
+			Child(prose("The mixer is restarting its audio, so it’s silent until RC2FX is back. Keep the mixer on and connected.", Muted)).
 			Child(a.spinnerLine(fmt.Sprintf("The mixer is checking and installing RC2FX %s…", p.Version))).
 			Child(soFar)
 	case installflow.InPlaceDone:

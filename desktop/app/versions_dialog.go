@@ -202,7 +202,10 @@ func (a *App) versionsOverview() model.Overview {
 	if need, ok := model.NeedsNewerApp(signed, available); ok {
 		needsApp = &need
 	}
-	var profile, rode *string
+	var profile, rode, inPlace *string
+	if direct, ok := a.directInPlaceOffer(); ok {
+		inPlace = &direct.offer.Metadata.Version
+	}
 	var protocol *uint32
 	if a.deviceVersions != nil {
 		profile, protocol = a.deviceVersions.FirmwareProfile, a.deviceVersions.Protocol
@@ -220,6 +223,7 @@ func (a *App) versionsOverview() model.Overview {
 		NewestSupportedFirmware: newestFirmware,
 		RodeFirmware:            rode,
 		DeviceProtocol:          protocol,
+		InPlace:                 inPlace,
 	}, a.appUpdate.Standing(), mixer.State)
 }
 
@@ -264,8 +268,14 @@ func (a *App) versionsSection(cx *gk.Cx) gk.DivEl {
 		} else {
 			button = versionsPill(gk.Button("versions-installer").Primary()).FontSemibold()
 		}
-		actions = actions.Child(button.Label("Update RC2FX").
-			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskUpdate) }))
+		label, open := "Update RC2FX", func(cx *gk.Cx) { a.openTask(cx, taskUpdate) }
+		if _, ok := a.directInPlaceOffer(); ok {
+			label, open = "Update mixer software", a.openInPlaceUpdate
+		} else if firmwareUpdate(overview) {
+			label = "Update RØDE firmware"
+		}
+		actions = actions.Child(button.Label(label).
+			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { open(cx) }))
 		acting = true
 	}
 	if lead.Changes != nil {
@@ -413,4 +423,20 @@ func (a *App) openChanges(cx *gk.Cx, part model.Part) {
 		return
 	}
 	a.openChangesDialog(cx, spec)
+}
+
+// firmwareUpdate reports whether RØDE firmware is the only mixer component with
+// an update.
+func firmwareUpdate(o model.Overview) bool {
+	for _, l := range o.Lines {
+		if l.Tone == model.ToneUpdate && l.Part != model.PartFirmware && l.Part != model.PartApp {
+			return false
+		}
+	}
+	for _, l := range o.Lines {
+		if l.Part == model.PartFirmware && l.Tone == model.ToneUpdate {
+			return true
+		}
+	}
+	return false
 }

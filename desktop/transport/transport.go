@@ -462,7 +462,10 @@ func (c *mixerConnection) startUpdate(command CommandMixerUpdate, generation uin
 			emit(ctx, events, generation, EventKindMixerUpdate{MixerUpdateEventUploading{Sent: sent, Total: total}})
 		}
 		var kind MixerUpdateEvent = MixerUpdateEventInstalling{}
-		if failed := d.mixerUpdate(ctx, command.Start, command.Payload, command.Base, progress); failed != nil {
+		copying := func(total uint64) {
+			emit(ctx, events, generation, EventKindMixerUpdate{MixerUpdateEventCopying{Total: total}})
+		}
+		if failed := d.mixerUpdate(ctx, command.Start, command.Payload, command.Base, command.Drive, copying, progress); failed != nil {
 			kind = MixerUpdateEventFailed{failed.message()}
 		}
 		// Ended before it says so: once the app reads how it ended, another

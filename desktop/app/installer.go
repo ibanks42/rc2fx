@@ -20,6 +20,7 @@ import (
 	"gpuikit.dev/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
+	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/helper"
@@ -57,10 +58,13 @@ type Installer struct {
 	// User opted for a full flash instead of an available in-place update.
 	preferFlash     bool
 	imageCheckAsked time.Time
-	repair          *installflow.Repair
-	fix             *installflow.Fix
-	fixOnGrant      bool
-	fixStep         int
+	// direct holds the pre-selected offer when an in-place update is opened
+	// straight from Settings › Versions (see openInPlaceUpdate).
+	direct     *directInPlace
+	repair     *installflow.Repair
+	fix        *installflow.Fix
+	fixOnGrant bool
+	fixStep    int
 	// Original RC2FX version before an in-place update, for rollback messaging.
 	inPlaceFrom string
 	inPlaceKind installflow.InPlaceKind
@@ -123,20 +127,107 @@ const installerAutostartWait = 60 * time.Second
 const imageCheckEvery = 3 * time.Second
 
 func (a *App) openTask(cx *gk.Cx, kind taskKind) {
-	if a.installer != nil {
+	i, ok := a.newInstaller(cx, kind)
+	if !ok {
 		return
+	}
+	if kind == taskRemove {
+		i.model.SetStock(true)
+	}
+	first := i.model.SetAllowDuo(a.allowDuo)
+	i.send(first)
+	a.installer = i
+	a.notify(cx)
+}
+
+// directInPlace holds the pre-selected target for an in-place update chosen
+// before the task view opens.
+type directInPlace struct {
+	offer   installer.MixerOffer
+	profile string
+	// serial identifies the connected mixer this offer was selected for.
+	serial string
+}
+
+// directInPlaceOffer picks the newest compatible signed mixer update ahead of
+// the connected mixer's current runtime, using metadata the app already has.
+func (a *App) directInPlaceOffer() (directInPlace, bool) {
+	v := a.deviceVersions
+	if !a.session.Connected || a.connectedMixer == nil || v == nil || v.Runtime == nil ||
+		v.FirmwareProfile == nil || v.InPlaceUpdates == nil || *v.InPlaceUpdates == 0 {
+		return directInPlace{}, false
+	}
+	signed, _ := a.appUpdate.Signed()
+	profile := *v.FirmwareProfile
+	var best *installer.MixerOffer
+	for n := range signed {
+		o := &signed[n]
+		if !slices.Contains(o.Metadata.FirmwareProfiles, profile) || !model.OfferFits(*o, profile) {
+			continue
+		}
+		if c, ok := model.Compare(o.Metadata.Version, *v.Runtime); !ok || c <= 0 {
+			continue
+		}
+		if best == nil {
+			best = o
+		} else if c, ok := model.Compare(o.Metadata.Version, best.Metadata.Version); ok && c > 0 {
+			best = o
+		}
+	}
+	if best == nil {
+		return directInPlace{}, false
+	}
+	return directInPlace{offer: *best, profile: profile, serial: *a.connectedMixer}, true
+}
+
+// openInPlaceUpdate opens the in-place update flow directly when the connected
+// mixer already has a matching signed offer, bypassing the full installer's USB
+// and release checks. Falls back to the full flash task otherwise.
+func (a *App) openInPlaceUpdate(cx *gk.Cx) {
+	direct, ok := a.directInPlaceOffer()
+	if !ok {
+		a.openTask(cx, taskUpdate)
+		return
+	}
+	i, ok := a.newInstaller(cx, taskUpdate)
+	if !ok {
+		return
+	}
+	i.direct = &direct
+	i.model.SetInstalled(opt.Clone(a.deviceVersions.Runtime), opt.Clone(a.deviceVersions.Firmware))
+	a.installer = i
+	a.notify(cx)
+}
+
+// switchToFlash replaces the active in-place task with a full flash update and
+// sets preferFlash so the installer stays on the flash flow after its checks.
+func (a *App) switchToFlash(cx *gk.Cx) {
+	if a.installer == nil || a.installer.busy() {
+		return
+	}
+	a.discardInstaller(cx)
+	a.openTask(cx, taskUpdate)
+	if a.installer != nil {
+		a.installer.preferFlash = true
+	}
+	a.notify(cx)
+}
+
+func (a *App) newInstaller(cx *gk.Cx, kind taskKind) (*Installer, bool) {
+	if a.installer != nil {
+		return nil, false
 	}
 	// Prevent the real USB installer from acting on hardware during mock-mixer runs.
 	if mockMixer {
 		a.message = "The installer is off while using the mock mixer."
 		a.notify(cx)
-		return
+		return nil, false
 	}
 	work, ok := workDirectory()
 	if !ok {
 		a.message = "The installer has no folder for its downloads and backups. Set RC2FX_INSTALLER_WORK to one."
 		a.notify(cx)
-		return
+		return nil, false
 	}
 	access := installflow.Access{Kind: installflow.AccessNotNeeded}
 	if helper.Needed() {
@@ -154,13 +245,7 @@ func (a *App) openTask(cx *gk.Cx, kind taskKind) {
 	i.model.FixPolicy = installflow.FixAuto
 	i.model.Bundled = opt.Clone(a.bundledMixerSoftware)
 	i.model.SettledFlash = a.settledFlash
-	if kind == taskRemove {
-		i.model.SetStock(true)
-	}
-	first := i.model.SetAllowDuo(a.allowDuo)
-	i.send(first)
-	a.installer = i
-	a.notify(cx)
+	return i, true
 }
 
 func (a *App) grantInstallerAccess(cx *gk.Cx) {
@@ -303,7 +388,7 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 	if i == nil || i.fixture {
 		return false
 	}
-	sameMixer := i.model.IsSessionMixer(a.connectedMixer)
+	sameMixer := a.sameTaskMixer(i)
 	var engine *string
 	if a.session.Saved != nil && a.session.Connected && a.streamConnected && sameMixer {
 		if state, ok := engineState(a.session.Saved); ok {
@@ -392,7 +477,8 @@ func (a *App) pollInstaller(cx *gk.Cx) bool {
 		next := i.model.Finish(o.request, o.reply, o.err)
 		i.send(next)
 	}
-	if poll := i.model.Tick(time.Now()); poll != nil {
+	// Direct in-place updates don't need periodic USB polling.
+	if poll := i.model.Tick(time.Now()); poll != nil && i.direct == nil {
 		changed = true
 		i.send(poll)
 	}
@@ -517,8 +603,18 @@ func (a *App) mixerUpdateNotice(cx *gk.Cx) (gk.DivEl, bool) {
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.installMixerUpdate(cx) }))), true
 }
 
+// sameTaskMixer reports whether the currently connected mixer matches the one
+// this task targets. Because direct in-place tasks skip USB probing, they match
+// against the serial recorded when the task started.
+func (a *App) sameTaskMixer(i *Installer) bool {
+	if i.direct != nil {
+		return a.connectedMixer != nil && *a.connectedMixer == i.direct.serial
+	}
+	return i.model.IsSessionMixer(a.connectedMixer)
+}
+
 func (a *App) inPlaceSupport() installflow.InPlaceSupport {
-	sameMixer := a.installer != nil && a.installer.model.IsSessionMixer(a.connectedMixer)
+	sameMixer := a.installer != nil && a.sameTaskMixer(a.installer)
 	if !sameMixer || a.deviceVersions == nil {
 		return installflow.InPlaceSupport{}
 	}
@@ -532,6 +628,13 @@ func (a *App) inPlaceSupport() installflow.InPlaceSupport {
 func (a *App) inPlaceOffer() *installer.MixerOffer {
 	if a.installer == nil {
 		return nil
+	}
+	if d := a.installer.direct; d != nil {
+		if !a.inPlaceSupport().Supported {
+			return nil
+		}
+		c := d.offer
+		return &c
 	}
 	offer := a.installer.model.InPlaceOffer(a.inPlaceSupport())
 	if offer == nil {
@@ -593,6 +696,7 @@ func (a *App) driveInPlaceUpdate() bool {
 			Start:      start,
 			Payload:    bundle.Path,
 			Base:       bundle.Base,
+			Drive:      updateDriveWriter(a.connectedMixer),
 		})
 		if !sent {
 			why := a.message
@@ -621,6 +725,8 @@ func (a *App) inPlaceEvent(event transport.MixerUpdateEvent) {
 	switch e := event.(type) {
 	case transport.MixerUpdateEventUploading:
 		i.model.InPlaceProgress(e.Sent, e.Total)
+	case transport.MixerUpdateEventCopying:
+		i.model.InPlaceCopying(e.Total)
 	case transport.MixerUpdateEventInstalling:
 		i.model.InPlaceAccepted(time.Now())
 	case transport.MixerUpdateEventFailed:
@@ -696,7 +802,7 @@ func (a *App) confirmCloseInstaller(cx *gk.Cx) (verdict, ok bool) {
 }
 
 func (a *App) inPlaceShown(i *Installer) bool {
-	return i.model.InPlace().Kind != installflow.InPlaceIdle ||
+	return i.direct != nil || i.model.InPlace().Kind != installflow.InPlaceIdle ||
 		(!i.preferFlash && a.inPlaceOffer() != nil)
 }
 

@@ -5,8 +5,9 @@ builds fetch a signed mixer payload and firmware catalog from GitHub. The
 installer still patches that payload into official RØDE firmware and flashes
 the image over USB whenever you're doing a first install or changing the RØDE
 firmware version. If the underlying RØDE firmware isn't changing, the app can
-push that same signed payload over USB 1 and let the mixer update itself in
-place (see [In-place updates](#in-place-updates)).
+send that same signed payload for an in-place update through a temporary
+`RC2FX` USB drive attached to RØDE's removable drive, or over USB 1 when that
+isn't possible (see [In-place updates](#in-place-updates)).
 
 ## Build modes
 
@@ -179,10 +180,17 @@ rotation chain, and never overwrite an old numbered root with different bytes.
 ## In-place updates
 
 When an update only touches RC2FX, you don't need to reflash RØDE's firmware.
-The app streams the signed payload over USB 1, the mixer verifies it using the
-same trust root and metadata the desktop trusts, and swaps `/opt/rc2fx` in
+To transfer the signed payload quickly without the stuttering that sustained
+USB 1 HID traffic can cause, the mixer creates a temporary FAT disk image in
+RAM named `RC2FX` and attaches it to RØDE's removable USB drive
+(`rc2fx.sh update-drive`). The app copies `RC2FX.UPD` onto that drive and
+ejects it, and the mixer detaches the image and pulls the file into the session.
+When the drive can't be used (for example, RØDE is already using the slot, the
+mixer is running an older build, or the host can't mount it), the app falls
+back to streaming chunks over USB 1. The mixer then verifies the upload using
+the same trust root and metadata the desktop trusts and swaps `/opt/rc2fx` in
 place. RØDE's files, its audio engine binary, and the firmware stay untouched;
-only the audio engine restarts. See
+audio goes silent for a few seconds while the audio engine restarts. See
 [the controller API](../reference/api.md#in-place-updates) for the endpoints.
 
 Verification happens on the mixer itself against the root compiled into

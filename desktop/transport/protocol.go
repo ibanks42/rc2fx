@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -111,7 +112,16 @@ type CommandMixerUpdate struct {
 	Start      json.RawMessage
 	Payload    string
 	Base       *string
+	// Drive, when non-nil, copies the payload onto the temporary RC2FX USB drive
+	// attached by the mixer (see DriveWriter). If Drive is nil or fails, the
+	// upload falls back to USB 1 control.
+	Drive DriveWriter
 }
+
+// DriveWriter writes data as file name onto the mixer's temporary update drive
+// (identified by volume label) and ejects it. It runs on the transport
+// goroutine and must stop promptly if ctx is canceled.
+type DriveWriter func(ctx context.Context, label, name string, data []byte) error
 
 // CommandMixerUpdateLast reads how the last in-place update ended.
 type CommandMixerUpdateLast struct {
@@ -156,6 +166,12 @@ type MixerUpdateEventUploading struct {
 	Total uint64
 }
 
+// MixerUpdateEventCopying reports that the upload is being copied through the
+// temporary update drive.
+type MixerUpdateEventCopying struct {
+	Total uint64
+}
+
 // MixerUpdateEventInstalling: verified and accepted; the mixer is installing
 // and will restart.
 type MixerUpdateEventInstalling struct{}
@@ -166,6 +182,7 @@ type MixerUpdateEventFailed struct {
 
 func (MixerUpdateEventUploading) mixerUpdateEvent()  {}
 func (MixerUpdateEventInstalling) mixerUpdateEvent() {}
+func (MixerUpdateEventCopying) mixerUpdateEvent()    {}
 func (MixerUpdateEventFailed) mixerUpdateEvent()     {}
 
 type Event struct {

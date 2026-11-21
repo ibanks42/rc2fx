@@ -322,6 +322,33 @@ impl Api {
                     None => error(404, "In-place updates are not available here"),
                 }
             }
+            ("POST", path)
+                if update_path(path).is_some_and(|(_, a)| {
+                    matches!(a, Some("drive" | "drive/done" | "drive/release"))
+                }) =>
+            {
+                let (id, action) = update_path(path).expect("checked above");
+                match &self.options.mixer_update {
+                    Some(update) => {
+                        let update = update.clone();
+                        let id = id.to_owned();
+                        let action = action.unwrap_or_default().to_owned();
+                        // Run the drive script on a blocking thread since it creates, mounts, or copies disk images.
+                        let done = tokio::task::spawn_blocking(move || match action.as_str() {
+                            "drive" => update.attach_drive(&id).map(|o| reply(200, &o)),
+                            "drive/done" => update.take_drive(&id).map(|p| reply(200, &p)),
+                            _ => update.release_drive(&id).map(|p| reply(200, &p)),
+                        })
+                        .await;
+                        match done {
+                            Ok(Ok(answer)) => answer,
+                            Ok(Err(e)) => update_error(e),
+                            Err(_) => error(500, "The update drive did not run"),
+                        }
+                    }
+                    None => error(404, "In-place updates are not available here"),
+                }
+            }
             ("POST", path) if update_path(path).is_some_and(|(_, a)| a == Some("install")) => {
                 let (id, _) = update_path(path).expect("checked above");
                 match &self.options.mixer_update {

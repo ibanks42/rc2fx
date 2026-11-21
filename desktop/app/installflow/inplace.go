@@ -38,7 +38,18 @@ func (m *Model) InPlaceProgress(sent, total uint64) {
 	if m.inPlace.Kind != InPlaceUploading {
 		return
 	}
-	m.inPlace = InPlace{Kind: InPlaceUploading, Version: m.inPlace.Version, Sent: sent, Total: total}
+	// Drive uploads only report completion at the end; if we fall back to USB 1
+	// control, progress restarts from zero and clears the drive flag.
+	drive := m.inPlace.Drive && sent == total
+	m.inPlace = InPlace{Kind: InPlaceUploading, Version: m.inPlace.Version, Sent: sent, Total: total, Drive: drive}
+}
+
+// InPlaceCopying marks the active upload as copying through the temporary update drive.
+func (m *Model) InPlaceCopying(total uint64) {
+	if m.inPlace.Kind != InPlaceUploading {
+		return
+	}
+	m.inPlace = InPlace{Kind: InPlaceUploading, Version: m.inPlace.Version, Total: total, Drive: true}
 }
 
 // InPlaceAccepted marks the upload accepted by the mixer and starts polling
@@ -118,11 +129,10 @@ func (m *Model) InPlaceOutcome(record json.RawMessage) bool {
 	outcome, _ := str("outcome")
 	committed := outcome == "committed"
 	reason, _ := str("reason")
-	reboot, _ := fields["guiShimNeedsReboot"].(bool)
+	// Don't surface guiShimNeedsReboot to the user: the shim only launches RØDE's
+	// screen app, so nothing visible waits on a full reboot.
 	var detail string
 	switch {
-	case committed && reboot:
-		detail = "Part of the update applies the next time the mixer restarts."
 	case committed:
 		detail = ""
 	case reason != "":

@@ -104,11 +104,25 @@ asks you to update the app first. If a new mixer release was just published and
 its signed metadata isn't ready yet, **Settings › Versions** lets you know so
 you can check again later.
 
-Nothing is ever flashed automatically. To install or update the mixer, open the
-installer from **Settings › Versions** or **Settings › Mixer › Update RC2FX**,
-review the versions, and confirm. Choosing an older version asks for an
-explicit downgrade confirmation. See [Installing RC2FX](installing.md) for the
-full walkthrough.
+Nothing is ever updated or flashed automatically. When an update is available
+for your mixer, updates start only from **Settings › Versions**, where the
+button is labeled for what changes:
+
+- **Update mixer software** when the connected mixer accepts in-place updates
+  and a newer compatible signed mixer release is available. This opens the
+  in-place update directly, with no full flash needed: the app downloads and
+  verifies the release, copies it through a temporary USB drive named **RC2FX**
+  that the mixer attaches to RØDE's removable drive (falling back to USB 1 if
+  that isn't possible), and lets the mixer check it and restart RC2FX. Audio
+  goes silent for a few seconds during the restart, and it can stutter while
+  transferring if the update falls back to USB 1. The in-place page also offers
+  **Reinstall firmware as well…** to switch to a full flash.
+- **Update RØDE firmware** when only RØDE firmware changes (full flash).
+- **Update RC2FX** otherwise (full flash).
+
+For a full flash, review the versions and confirm; choosing an older version
+asks for an explicit downgrade confirmation. See
+[Installing RC2FX](installing.md) for the full walkthrough.
 
 ### App updates
 

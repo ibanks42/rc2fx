@@ -50,8 +50,8 @@ tracks each step, and the footer tells you whether it's safe to unplug. If a
 step fails, the page explains what state the mixer is currently in, and **Try
 again** resumes from whichever step matches that state rather than blindly
 repeating the failed step. If the mixer stops responding for a few minutes, an
-escape hatch appears. **Settings › Mixer** holds **Update RC2FX** and **Remove
-RC2FX**.
+escape hatch appears. Mixer updates start only from **Settings › Versions**,
+and **Settings › Mixer** holds **Remove RC2FX**.
 
 RØDE's updater formats whichever system slot it writes to, and the first slot
 is small enough that it gets formatted with 1 KB blocks, where the mixer can
@@ -88,10 +88,18 @@ it's no longer treated as updating. The backup of the original layout saved by
 the fix (`storage-fix-backups/` in the installer folder) is owned by the user
 running the app.
 
-On a mixer whose RC2FX supports signed in-place updates, **Update RC2FX** runs
-the fast in-place path: no full flash, just a brief audio pause while RC2FX
-restarts, with automatic rollback to the previous version if the new one fails
-to come up. **Reinstall firmware as well** switches back to a full flash.
+Mixer updates start only from **Settings › Versions**, where the button is
+labeled for what changes: **Update mixer software** when the connected mixer
+accepts signed in-place updates and a newer compatible signed release is
+available, **Update RØDE firmware** when only RØDE firmware changes, and
+**Update RC2FX** otherwise. **Update mixer software** opens the in-place flow
+directly with no full flash. To copy the file quickly, the mixer attaches a
+temporary USB drive named **RC2FX** to RØDE's removable drive; if that isn't
+possible, the app falls back to USB 1. Audio goes silent for a few seconds
+while RC2FX restarts (and can stutter during the transfer if it falls back to
+USB 1), and the mixer rolls back to the previous version automatically if the
+new one fails to come up. **Reinstall firmware as well…** switches to the full
+flash update.
 
 After a fresh install, **Open Mic N** jumps straight to that channel's noise
 suppression page with a one-time hint above the switch. Once dismissed or used,
@@ -189,9 +197,9 @@ stored on the mixer.
 
 **Settings** includes:
 
-- **Mixer:** connection details, **Update RC2FX**, **Remove RC2FX**, and the
-  global **Processing** switch.
-- **Versions:** app and mixer software versions, plus updates.
+- **Mixer:** connection details, **Remove RC2FX**, and the global
+  **Processing** switch.
+- **Versions:** app, mixer software, and RØDE firmware versions, plus updates.
 - **About:** licenses and third-party notices.
 - **Presets:** presets stored on the mixer.
 - **Files:** settings files on your computer.

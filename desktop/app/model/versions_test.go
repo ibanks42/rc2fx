@@ -626,3 +626,19 @@ func TestAPublishedMixerThatIsNotInstallableYetIsSaid(t *testing.T) {
 		t.Fatalf("details %q", o.Details)
 	}
 }
+
+func TestAnInPlaceMixerUpdateSaysNoFlashIsNeeded(t *testing.T) {
+	i := inputs(new("0.3.0"), new("1.8.0"))
+	i.AvailableRuntime = new("0.3.1")
+	i.InPlace = new("0.3.1")
+	o := OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerBundled, Version: "0.3.1"})
+	if o.Lead.Title != "Mixer software 0.3.1 is available" || o.Lead.Detail == nil || !strings.Contains(*o.Lead.Detail, "No flash") {
+		t.Fatalf("%+v", o.Lead)
+	}
+	// When RØDE firmware also has an update, a full flash is still required.
+	i.NewestSupportedFirmware = new("1.9.0")
+	o = OverviewOf(&i, current(), appupdate.MixerUpdateState{Kind: appupdate.MixerBundled, Version: "0.3.1"})
+	if o.Lead.Title != "A mixer update is ready" {
+		t.Fatalf("%+v", o.Lead)
+	}
+}

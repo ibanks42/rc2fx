@@ -1503,3 +1503,146 @@ fn a_session_state_carries_its_own_error() {
         assert_eq!(Upload::Delta { decoded }.encoding(), Some(DELTA_ENCODING));
     }
 }
+
+/// Stand-in for `rc2fx.sh update-drive` used in tests. `attach` creates the
+/// image file, `take` copies `<image>.content` to the destination unless
+/// `refuse-take` exists, and every call is appended to `drive.log`.
+fn fake_drive_script(paths: &install::Paths) -> PathBuf {
+    let bundle = paths.bundle();
+    fs::create_dir_all(&bundle).unwrap();
+    let log = paths.run.join("drive.log");
+    let script = format!(
+        r#"#!/bin/bash
+set -eu
+test "$1" = update-drive
+shift
+echo "$*" >> '{log}'
+case "$1" in
+  attach) test ! -e '{refuse_attach}' || {{ echo 'the USB drive is in use' >&2; exit 1; }}; : > "$2" ;;
+  take) test ! -e '{refuse_take}' || {{ echo 'the computer still holds the USB drive' >&2; exit 1; }}
+        cp "$2.content" "$3"; rm -f "$2" ;;
+  drop) rm -f "$2" ;;
+  drop-stale) ;;
+esac
+"#,
+        log = log.display(),
+        refuse_attach = paths.run.join("refuse-attach").display(),
+        refuse_take = paths.run.join("refuse-take").display(),
+    );
+    fs::write(bundle.join("rc2fx.sh"), script).unwrap();
+    log
+}
+
+#[test]
+fn an_upload_can_come_through_the_update_drive() {
+    let (_dir, paths) = test_paths();
+    let log = fake_drive_script(&paths);
+    let update = new_update(paths.clone());
+    let session = update.start(start_request(9)).unwrap();
+    let offer = update.attach_drive(&session.id).unwrap();
+    assert_eq!(
+        (offer.file, offer.label, offer.size),
+        (DRIVE_FILE, DRIVE_LABEL, 9)
+    );
+    let image = paths.run.join(&session.id).join("drive.img");
+    assert!(image.exists());
+    // USB 1 chunk uploads are rejected while the update drive is attached.
+    let chunk = Chunk {
+        offset: 0,
+        data: crate::mixer_update::encode_base64_for_test(b"abcd"),
+    };
+    assert!(matches!(
+        update.append(&session.id, chunk),
+        Err(UpdateError::Conflict(_))
+    ));
+    fs::write(image.with_extension("img.content"), b"123456789").unwrap();
+    let done = update.take_drive(&session.id).unwrap();
+    assert_eq!((done.state, done.received), ("complete", 9));
+    assert_eq!(
+        fs::read(paths.run.join(&session.id).join("payload")).unwrap(),
+        b"123456789"
+    );
+    assert!(!image.exists());
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.starts_with("attach "), "{calls}");
+    // The disk image includes the payload plus filesystem slack, rounded up to whole MiB.
+    assert!(
+        calls
+            .lines()
+            .next()
+            .unwrap()
+            .ends_with(&(5u64 << 20).to_string()),
+        "{calls}"
+    );
+}
+
+#[test]
+fn a_drive_that_fails_leaves_the_session_to_usb_control() {
+    let (_dir, paths) = test_paths();
+    fake_drive_script(&paths);
+    let update = new_update(paths.clone());
+    let session = update.start(start_request(4)).unwrap();
+    // If RØDE is already using the drive, attaching fails so the app can fall back to USB 1.
+    fs::write(paths.run.join("refuse-attach"), b"").unwrap();
+    assert!(matches!(
+        update.attach_drive(&session.id),
+        Err(UpdateError::Conflict(why)) if why.contains("in use")
+    ));
+    fs::remove_file(paths.run.join("refuse-attach")).unwrap();
+    update.attach_drive(&session.id).unwrap();
+    let image = paths.run.join(&session.id).join("drive.img");
+    fs::write(image.with_extension("img.content"), b"abcd").unwrap();
+    fs::write(paths.run.join("refuse-take"), b"").unwrap();
+    assert!(update.take_drive(&session.id).is_err());
+    assert!(!image.exists());
+    // A failed drive copy leaves no partial progress, so USB 1 chunks start from offset 0.
+    let chunk = Chunk {
+        offset: 0,
+        data: crate::mixer_update::encode_base64_for_test(b"abcd"),
+    };
+    let progress = update.append(&session.id, chunk).unwrap();
+    assert_eq!((progress.state, progress.received), ("complete", 4));
+    assert_eq!(
+        fs::read(paths.run.join(&session.id).join("payload")).unwrap(),
+        b"abcd"
+    );
+}
+
+#[test]
+fn the_drive_is_given_back_on_release_abort_and_replacement() {
+    let (_dir, paths) = test_paths();
+    let log = fake_drive_script(&paths);
+    let update = new_update(paths.clone());
+    for end in ["release", "abort", "replace"] {
+        let session = update.start(start_request(4)).unwrap();
+        update.attach_drive(&session.id).unwrap();
+        let image = paths.run.join(&session.id).join("drive.img");
+        match end {
+            "release" => {
+                update.release_drive(&session.id).unwrap();
+            }
+            "abort" => update.abort(&session.id).unwrap(),
+            _ => {
+                update.start(start_request(4)).unwrap();
+            }
+        }
+        assert!(!image.exists(), "{end}");
+    }
+    let drops = fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .filter(|l| l.starts_with("drop "))
+        .count();
+    assert_eq!(drops, 3);
+    // Once USB 1 chunks have started arriving, switching to the update drive is rejected.
+    let session = update.start(start_request(9)).unwrap();
+    let chunk = Chunk {
+        offset: 0,
+        data: crate::mixer_update::encode_base64_for_test(b"abcd"),
+    };
+    update.append(&session.id, chunk).unwrap();
+    assert!(matches!(
+        update.attach_drive(&session.id),
+        Err(UpdateError::Conflict(_))
+    ));
+}

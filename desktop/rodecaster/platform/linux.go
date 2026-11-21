@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -590,6 +591,16 @@ func (host) Eject(v *Volume) error {
 	if err != nil {
 		return err
 	}
+	if !isRoot() {
+		// Without root privileges, unmount through udisks so the OS releases the
+		// device and the mixer can detach the drive itself.
+		for _, m := range all {
+			if m.Device == v.Device {
+				return udisksUnmount(v.Device)
+			}
+		}
+		return nil
+	}
 	for _, m := range all {
 		if m.Device != v.Device {
 			continue
@@ -655,7 +666,18 @@ func mountReportDisk(v Volume, write bool) (string, func() error, error) {
 		return "", nil, platformError("the mixer's USB disk has multiple mounts")
 	}
 	if !isRoot() {
-		return "", nil, platformError("mounting requires administrator permission")
+		// Unprivileged desktop sessions can mount removable USB volumes via udisks
+		// without prompting for a password.
+		dir, err := udisksMount(v.Device)
+		if err != nil {
+			return "", nil, platformError(fmt.Sprintf("mount the mixer's USB disk: %v", err))
+		}
+		v.Path = dir
+		if _, err := capacity(v); err != nil {
+			udisksUnmount(v.Device)
+			return "", nil, err
+		}
+		return dir, func() error { return udisksUnmount(v.Device) }, nil
 	}
 	nonce := make([]byte, 6)
 	if _, err := rand.Read(nonce); err != nil {
@@ -685,4 +707,54 @@ func mountReportDisk(v Volume, write bool) (string, func() error, error) {
 		return err
 	}
 	return dir, unmount, nil
+}
+
+// udisksMount mounts a block device via udisksctl and returns its mount point.
+func udisksMount(device string) (string, error) {
+	out, err := exec.Command("udisksctl", "mount", "--no-user-interaction", "-b", device).CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		if strings.Contains(text, "AlreadyMounted") || strings.Contains(text, "already mounted") {
+			return mountedAt(device)
+		}
+		if text == "" {
+			text = err.Error()
+		}
+		return "", errors.New(text)
+	}
+	return mountedAt(device)
+}
+
+// mountedAt returns the single active mount point for device, or an error if it
+// isn't mounted exactly once.
+func mountedAt(device string) (string, error) {
+	all, err := mounts()
+	if err != nil {
+		return "", err
+	}
+	var paths []string
+	for _, m := range all {
+		if m.Device == device {
+			paths = append(paths, m.Path)
+		}
+	}
+	if len(paths) != 1 {
+		return "", fmt.Errorf("%s has %d mounts", device, len(paths))
+	}
+	return paths[0], nil
+}
+
+func udisksUnmount(device string) error {
+	out, err := exec.Command("udisksctl", "unmount", "--no-user-interaction", "-b", device).CombinedOutput()
+	if err != nil {
+		text := strings.TrimSpace(string(out))
+		if strings.Contains(text, "NotMounted") || strings.Contains(text, "not mounted") {
+			return nil
+		}
+		if text == "" {
+			text = err.Error()
+		}
+		return platformError("unmount the mixer's USB disk: " + text)
+	}
+	return nil
 }

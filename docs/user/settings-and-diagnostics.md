@@ -3,10 +3,12 @@
 Open **Settings** at the bottom of the sidebar to manage your mixer, presets,
 and app preferences:
 
-- **Mixer**: connection status, the firmware installer, and the master
-  **Processing** switch to bypass or re-enable all RC2FX effects at once.
+- **Mixer**: connection status, **Remove RC2FX** to go back to stock RØDE
+  firmware, and the master **Processing** switch to bypass or re-enable all
+  RC2FX effects at once.
 - **Versions**: check for updates to the desktop app, RC2FX mixer software, and
-  RØDE firmware. See [Versions and updates](getting-started.md#versions-and-updates).
+  RØDE firmware, and start mixer or app updates from here. See
+  [Versions and updates](getting-started.md#versions-and-updates).
 - **Presets** and **Files**: manage on-mixer presets or save/load backup files
   on your computer. See
   [Presets and settings files](using-the-app.md#presets-and-settings-files).

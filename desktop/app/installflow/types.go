@@ -44,10 +44,13 @@ type InPlace struct {
 	Version     string
 	Bundle      installer.InPlaceBundle
 	Sent, Total uint64
-	Since       time.Time
-	Committed   bool
-	Detail      string
-	Error       string
+	// Drive is true while the upload is copying through the temporary RC2FX USB
+	// drive rather than streaming over USB 1.
+	Drive     bool
+	Since     time.Time
+	Committed bool
+	Detail    string
+	Error     string
 }
 
 // Active reports whether an in-place update is in flight.

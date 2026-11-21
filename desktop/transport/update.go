@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/delta"
@@ -132,7 +133,7 @@ func installedFiles(value json.RawMessage) (map[string]string, bool) {
 // resuming where the mixer says it is, then asks it to verify and install.
 // Returns once the mixer has accepted the release; it then restarts by
 // itself.
-func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload string, base *string, progress func(sent, total uint64)) *requestError {
+func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload string, base *string, drive DriveWriter, copying func(total uint64), progress func(sent, total uint64)) *requestError {
 	envelope, err := os.ReadFile(payload)
 	if err != nil {
 		return usbError(fmt.Sprintf("Cannot read the mixer software: %s", readError(err)))
@@ -171,7 +172,10 @@ func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload 
 	// gets through.
 	var retryUntil time.Time
 	wait := uploadRetryFirst
-	progress(0, total)
+	if drive != nil && d.throughDrive(ctx, path, payloadBytes, drive, copying) {
+		offset = total
+	}
+	progress(offset, total)
 	for offset < total {
 		if ctx.Err() != nil {
 			return usbError(ctx.Err().Error())
@@ -324,4 +328,61 @@ func isHex(s string) bool {
 		}
 	}
 	return true
+}
+
+// driveTimeout limits how long the app waits to find the temporary update
+// drive, copy the payload, and eject it before falling back to USB 1.
+const driveTimeout = 90 * time.Second
+
+// throughDrive asks the mixer to attach its temporary update drive, writes the
+// payload with drive, and asks the mixer to read it back. Returns false (after
+// releasing the drive if needed) on any failure so the caller can fall back to
+// USB 1 control.
+func (d device) throughDrive(ctx context.Context, path string, upload []byte, drive DriveWriter, copying func(total uint64)) bool {
+	offer, failed := d.request(ctx, "POST", path+"/drive", nil)
+	if failed != nil {
+		return false
+	}
+	label, labelOK := stringField(offer, "label")
+	name, nameOK := stringField(offer, "file")
+	size, sizeOK := uintField(offer, "size")
+	release := func() { d.request(ctx, "POST", path+"/drive/release", nil) }
+	if !labelOK || !nameOK || !sizeOK || size != uint64(len(upload)) || !driveName(name) {
+		release()
+		return false
+	}
+	copying(size)
+	writeCtx, cancel := context.WithTimeout(ctx, driveTimeout)
+	err := drive(writeCtx, label, name, upload)
+	cancel()
+	if err != nil {
+		release()
+		return false
+	}
+	// If the mixer rejects the drive contents, it releases the drive itself and
+	// waits for USB 1 chunks instead.
+	taken, failed := d.request(ctx, "POST", path+"/drive/done", nil)
+	if failed != nil {
+		return false
+	}
+	received, ok := uintField(taken, "received")
+	return ok && received == size
+}
+
+// driveName validates an uppercase 8.3 FAT filename (letters and digits only),
+// matching what the mixer offers.
+func driveName(name string) bool {
+	base, ext, ok := strings.Cut(name, ".")
+	valid := func(s string, most int) bool {
+		if s == "" || len(s) > most {
+			return false
+		}
+		for _, r := range s {
+			if !(r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+				return false
+			}
+		}
+		return true
+	}
+	return ok && valid(base, 8) && valid(ext, 3)
 }

@@ -45,6 +45,16 @@ const RUN_HEADROOM: u64 = 8 << 20;
 const OPT_HEADROOM: u64 = 16 << 20;
 /// How long the detached driver waits for the new controller and audio.
 const RESTART_SECONDS: u64 = 300;
+/// Filename the desktop app writes to the temporary update drive (`rc2fx.sh update-drive`).
+pub const DRIVE_FILE: &str = "RC2FX.UPD";
+/// Volume label for the temporary update drive.
+pub const DRIVE_LABEL: &str = "RC2FX";
+/// Maximum payload size allowed on the update drive. The app only scans
+/// removable disks smaller than 64 MiB so it doesn't confuse this drive with
+/// the mixer's update-mode drive, leaving room for FAT overhead and slack.
+const DRIVE_MAX_UPLOAD: u64 = 48 << 20;
+/// Extra space reserved alongside the payload for the FAT filesystem and root directory.
+const DRIVE_SLACK: u64 = 4 << 20;
 
 /// Which installed copy a controller was started from, judged by the
 /// directory that holds its release manifest (`rc2fx.sh launch` passes
@@ -165,6 +175,18 @@ struct Session {
     state: SessionState,
     /// The envelope size is `request.size` either way.
     upload: Upload,
+    /// Path to the temporary update drive image while it's attached for this session.
+    drive: Option<PathBuf>,
+}
+
+/// Response for `POST api/v1/update/{id}/drive`, describing the temporary drive to copy into.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveOffer {
+    pub id: String,
+    pub label: &'static str,
+    pub file: &'static str,
+    pub size: u64,
 }
 
 /// The reply the upload endpoints return.
@@ -359,7 +381,7 @@ impl MixerUpdate {
         // abandoned (the app closed mid-upload) must not block the next: a new
         // start replaces any session that isn't installing yet, and frees its
         // upload in RAM before the space check below.
-        if let Some(session) = slot.as_ref() {
+        if let Some(session) = slot.as_mut() {
             if matches!(
                 session.state,
                 SessionState::Installing | SessionState::Restarting { .. }
@@ -368,6 +390,7 @@ impl MixerUpdate {
                     "an update is being installed; wait for it to finish".into(),
                 ));
             }
+            self.drop_drive(session);
             let _ = fs::remove_dir_all(self.paths.run.join(&session.id));
             *slot = None;
         }
@@ -419,6 +442,7 @@ impl MixerUpdate {
             } else {
                 Upload::Envelope
             },
+            drive: None,
         });
         Ok(Progress {
             id,
@@ -445,6 +469,11 @@ impl MixerUpdate {
             .as_mut()
             .filter(|s| s.id == id)
             .ok_or(UpdateError::NotFound)?;
+        if session.drive.is_some() {
+            return Err(UpdateError::Conflict(
+                "the upload is coming through the update drive".into(),
+            ));
+        }
         let expected = session.received;
         // A replay of a chunk whose reply was lost is answered while the
         // upload is still accepting and also once it is complete: the last
@@ -524,7 +553,7 @@ impl MixerUpdate {
 
     pub fn abort(&self, id: &str) -> Result<(), UpdateError> {
         let mut slot = self.session();
-        let Some(session) = slot.as_ref().filter(|s| s.id == id) else {
+        let Some(session) = slot.as_mut().filter(|s| s.id == id) else {
             return Err(UpdateError::NotFound);
         };
         if matches!(
@@ -535,9 +564,137 @@ impl MixerUpdate {
                 "the update is being installed and cannot be aborted".into(),
             ));
         }
+        self.drop_drive(session);
         let _ = fs::remove_dir_all(self.paths.run.join(id));
         *slot = None;
         Ok(())
+    }
+
+    /// Attaches a temporary FAT disk image in RAM to RØDE's removable USB drive
+    /// for a session that hasn't received any bytes yet. Copying the payload
+    /// over mass storage is much faster than streaming it over USB 1 control.
+    /// Fails if the drive is already in use or can't be created, in which case
+    /// the app falls back to USB 1.
+    pub fn attach_drive(&self, id: &str) -> Result<DriveOffer, UpdateError> {
+        let mut slot = self.session();
+        let session = slot
+            .as_mut()
+            .filter(|s| s.id == id)
+            .ok_or(UpdateError::NotFound)?;
+        if session.state != SessionState::Accepting || session.received != 0 {
+            return Err(UpdateError::Conflict(
+                "the update drive is only for an upload that has not started".into(),
+            ));
+        }
+        if session.drive.is_some() {
+            return Ok(drive_offer(session));
+        }
+        if session.upload_size > DRIVE_MAX_UPLOAD {
+            return Err(UpdateError::Conflict(
+                "the upload is too large for the update drive".into(),
+            ));
+        }
+        let disk = (session.upload_size + DRIVE_SLACK).next_multiple_of(1 << 20);
+        // Both the temporary disk image and the extracted payload live in RAM.
+        if let Some(free) = install::free_bytes(&self.paths.run)
+            && free < disk.saturating_add(RUN_HEADROOM)
+        {
+            return Err(UpdateError::Storage(format!(
+                "not enough RAM for the update drive: {free} bytes free, {disk} needed",
+            )));
+        }
+        let image = self.paths.run.join(id).join("drive.img");
+        self.drive_script(&[
+            "attach".as_ref(),
+            image.as_os_str(),
+            disk.to_string().as_ref(),
+        ])
+        .map_err(UpdateError::Conflict)?;
+        session.drive = Some(image);
+        Ok(drive_offer(session))
+    }
+
+    /// Detaches the temporary update drive and moves the uploaded file into the
+    /// session as if every chunk had arrived over USB 1. If reading the file
+    /// fails, the drive is released and the session falls back to accepting
+    /// USB 1 chunks.
+    pub fn take_drive(&self, id: &str) -> Result<Progress, UpdateError> {
+        let mut slot = self.session();
+        let session = slot
+            .as_mut()
+            .filter(|s| s.id == id)
+            .ok_or(UpdateError::NotFound)?;
+        let Some(image) = session.drive.take() else {
+            return Err(UpdateError::Conflict(
+                "this session has no update drive".into(),
+            ));
+        };
+        let payload = self.payload_path(id);
+        let taken = self.drive_script(&[
+            "take".as_ref(),
+            image.as_os_str(),
+            payload.as_os_str(),
+            session.upload_size.to_string().as_ref(),
+        ]);
+        if let Err(why) = taken {
+            self.drive_script_quiet(&["drop".as_ref(), image.as_os_str()]);
+            // Clear any partial file left by a failed copy so USB 1 fallback starts clean.
+            let _ = OpenOptions::new().write(true).truncate(true).open(&payload);
+            return Err(UpdateError::Conflict(why));
+        }
+        session.received = session.upload_size;
+        session.state = SessionState::Complete;
+        Ok(progress_of(id, session))
+    }
+
+    /// Detaches and removes the temporary update drive without taking any file from it.
+    pub fn release_drive(&self, id: &str) -> Result<Progress, UpdateError> {
+        let mut slot = self.session();
+        let session = slot
+            .as_mut()
+            .filter(|s| s.id == id)
+            .ok_or(UpdateError::NotFound)?;
+        self.drop_drive(session);
+        Ok(progress_of(id, session))
+    }
+
+    fn drop_drive(&self, session: &mut Session) {
+        if let Some(image) = session.drive.take() {
+            self.drive_script_quiet(&["drop".as_ref(), image.as_os_str()]);
+        }
+    }
+
+    /// Runs `rc2fx.sh update-drive` from the installed bundle and returns the
+    /// script's error output on failure.
+    fn drive_script(&self, args: &[&std::ffi::OsStr]) -> Result<(), String> {
+        let output = std::process::Command::new("/bin/bash")
+            .arg(self.paths.bundle().join("rc2fx.sh"))
+            .arg("update-drive")
+            .args(args)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("cannot run the update drive script: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let message = String::from_utf8_lossy(&output.stderr);
+        let message = message.trim();
+        Err(if message.is_empty() {
+            "the update drive could not be used".into()
+        } else {
+            format!(
+                "the update drive could not be used: {}",
+                message.lines().last().unwrap_or(message)
+            )
+        })
+    }
+
+    fn drive_script_quiet(&self, args: &[&std::ffi::OsStr]) {
+        if let Err(why) = self.drive_script(args) {
+            eprintln!("RC2FX update: {why}");
+        }
     }
 
     /// Verify the upload and start installing it. Verification is synchronous
@@ -928,6 +1085,11 @@ impl MixerUpdate {
     /// Finish or undo an update that did not commit, before serving. Runs at
     /// startup, when nothing can restart audio for us.
     pub fn recover(&self) {
+        // Clean up any temporary update drive left attached if a previous
+        // controller exited unexpectedly.
+        if self.offers_updates {
+            self.drive_script_quiet(&["drop-stale".as_ref()]);
+        }
         if install::driver_alive(&self.paths) {
             // The restart this update asked for is still being driven.
             return;
@@ -1035,6 +1197,15 @@ impl MixerUpdate {
                 let _ = fs::remove_file(entry.path());
             }
         }
+    }
+}
+
+fn drive_offer(session: &Session) -> DriveOffer {
+    DriveOffer {
+        id: session.id.clone(),
+        label: DRIVE_LABEL,
+        file: DRIVE_FILE,
+        size: session.upload_size,
     }
 }
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -34,6 +35,11 @@ type uploadMixer struct {
 	puts        int
 	reopens     int
 	installed   bool
+	// Simulated update-drive state: whether the mixer offers a drive, the bytes
+	// written to it, and the sequence of drive endpoints called.
+	drive      bool
+	onDrive    []byte
+	driveCalls []string
 }
 
 func (m *uploadMixer) IsOpen() bool {
@@ -113,6 +119,27 @@ func (m *uploadMixer) Request(request *usbproto.Request) (usbproto.Reply, error)
 			member{"state", jsonString(m.state())},
 			member{"received", jsonUint(uint64(len(m.data)))},
 		)
+	case request.Method == "POST" && request.Path == path+"/drive":
+		m.driveCalls = append(m.driveCalls, "drive")
+		if !m.drive {
+			return uploadReply(404, member{"error", jsonString("Unknown endpoint")})
+		}
+		return uploadReply(200,
+			member{"id", jsonString(uploadSession)},
+			member{"label", jsonString("RC2FX")},
+			member{"file", jsonString("RC2FX.UPD")},
+			member{"size", jsonUint(uint64(m.size))},
+		)
+	case request.Method == "POST" && request.Path == path+"/drive/done":
+		m.driveCalls = append(m.driveCalls, "done")
+		if len(m.onDrive) != m.size {
+			return uploadReply(409, member{"error", jsonString("not the declared size")})
+		}
+		m.data = m.onDrive
+		return uploadReply(200, member{"state", jsonString("complete")}, member{"received", jsonUint(uint64(m.size))})
+	case request.Method == "POST" && request.Path == path+"/drive/release":
+		m.driveCalls = append(m.driveCalls, "release")
+		return uploadReply(200, member{"state", jsonString("accepting")}, member{"received", jsonUint(0)})
 	case request.Method == "POST" && request.Path == path+"/install":
 		if len(m.data) != m.size {
 			return uploadReply(409, member{"error", jsonString("The upload is incomplete")})
@@ -138,6 +165,10 @@ func shortUploadRetries(t *testing.T, window time.Duration) {
 // failure once the session's goroutine has stopped, so the caller may read
 // session's fields.
 func uploadWith(t *testing.T, session Session, payload []byte) *requestError {
+	return uploadThrough(t, session, payload, nil)
+}
+
+func uploadThrough(t *testing.T, session Session, payload []byte, drive DriveWriter) *requestError {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "rc2fx.envelope")
 	if err := os.WriteFile(file, payload, 0o600); err != nil {
@@ -156,7 +187,7 @@ func uploadWith(t *testing.T, session Session, payload []byte) *requestError {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	start := object(member{"version", jsonString("0.2.0")})
-	failed := d.mixerUpdate(ctx, start, file, nil, func(sent, total uint64) {})
+	failed := d.mixerUpdate(ctx, start, file, nil, drive, func(uint64) {}, func(sent, total uint64) {})
 	d.release()
 	<-link.stopped
 	return failed
@@ -228,5 +259,58 @@ func TestAnUploadGivesUpWhenTheMixerStaysUnreachable(t *testing.T) {
 	}
 	if mixer.installed {
 		t.Fatal("an incomplete upload was installed")
+	}
+}
+
+func TestAnUploadGoesThroughTheUpdateDriveWhenTheMixerLendsIt(t *testing.T) {
+	payload := uploadPayload()
+	mixer := &uploadMixer{open: true, size: len(payload), drive: true}
+	var got string
+	write := func(ctx context.Context, label, name string, data []byte) error {
+		got = label + "/" + name
+		mixer.onDrive = bytes.Clone(data)
+		return nil
+	}
+	if failed := uploadThrough(t, mixer, payload, write); failed != nil {
+		t.Fatalf("the upload failed: %s", failed.message())
+	}
+	if got != "RC2FX/RC2FX.UPD" || mixer.puts != 0 || !mixer.installed || !bytes.Equal(mixer.data, payload) {
+		t.Fatalf("drive %q, %d chunks, installed %v", got, mixer.puts, mixer.installed)
+	}
+}
+
+func TestAnUploadFallsBackToUSBControlWhenTheDriveFails(t *testing.T) {
+	payload := uploadPayload()
+	for name, c := range map[string]struct {
+		lends bool
+		write DriveWriter
+		calls []string
+	}{
+		"an older mixer": {false, func(context.Context, string, string, []byte) error { return nil }, []string{"drive"}},
+		"the copy fails": {true, func(context.Context, string, string, []byte) error { return errors.New("no drive") }, []string{"drive", "release"}},
+		// When the mixer rejects the copied file, it releases the drive on its own.
+		"the mixer refuses it": {true, func(context.Context, string, string, []byte) error { return nil }, []string{"drive", "done"}},
+	} {
+		mixer := &uploadMixer{open: true, size: len(payload), drive: c.lends}
+		if failed := uploadThrough(t, mixer, payload, c.write); failed != nil {
+			t.Fatalf("%s: the upload failed: %s", name, failed.message())
+		}
+		if !bytes.Equal(mixer.data, payload) || !mixer.installed || mixer.puts != 4 {
+			t.Fatalf("%s: %d chunks, installed %v", name, mixer.puts, mixer.installed)
+		}
+		if !slices.Equal(mixer.driveCalls, c.calls) {
+			t.Fatalf("%s: calls %v", name, mixer.driveCalls)
+		}
+	}
+}
+
+func TestOnlyAPlainShortNameIsCopiedToTheDrive(t *testing.T) {
+	for name, ok := range map[string]bool{
+		"RC2FX.UPD": true, "A.B": true, "rc2fx.upd": false, "../X.UPD": false,
+		"RC2FX": false, "TOOLONGNAME.UPD": false, "RC2FX.UPDT": false, "": false, "A.B.C": false,
+	} {
+		if driveName(name) != ok {
+			t.Errorf("%q: %v", name, !ok)
+		}
 	}
 }

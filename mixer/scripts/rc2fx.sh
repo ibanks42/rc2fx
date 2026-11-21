@@ -22,6 +22,9 @@
 #                                    detached by rc2fxd, which it outlives
 #   rc2fx.sh image-check              check RØDE's files against the image the
 #                                    installer flashed; started by launch
+#   rc2fx.sh update-drive attach|take|drop IMAGE ...
+#                                    attach a temporary drive to RØDE's USB
+#                                    slot for in-place updates; called by rc2fxd
 #
 # developer-ssh toggles one marked line in root's authorized_keys.
 # arm-power-recovery sets the bootloader's one-shot power flag (never called at
@@ -1743,6 +1746,147 @@ update_commit() {
 }
 # ---- end of signed in-place updates ----------------------------------------
 
+# ---- update drive -----------------------------------------------------------
+# Fast path for uploading an in-place update payload. USB 1 control is capped at
+# roughly 300 KB/s by RØDE's HID thread, so when RØDE's removable USB mass
+# storage slot (normally used for SD card transfers) is idle, rc2fxd creates a
+# temporary FAT disk image in RAM and attaches it there. The desktop app copies
+# the payload onto the drive and ejects it, then rc2fxd detaches the image and
+# reads the file.
+#
+# Safety rules (matching the carrier script): only attach to an empty LUN on an
+# already-bound gadget, never bind or unbind the gadget or alter its functions
+# or read-only flag, and leave the LUN alone if RØDE attaches its own file.
+#
+#   update-drive attach IMAGE BYTES   create the FAT image and attach it
+#   update-drive take IMAGE DEST SIZE detach the image and copy the payload to
+#                                     DEST (must match SIZE bytes exactly)
+#   update-drive drop IMAGE           detach the image if still attached and delete it
+#   update-drive drop-stale           clean up any leftover update drive from a
+#                                     previous controller run
+update_drive_file=RC2FX.UPD
+update_drive_label=RC2FX
+
+update_drive_lun() {
+  local lun
+  for lun in "${RC2FX_GADGET_ROOT:-/sys/kernel/config/usb_gadget}"/*/functions/mass_storage.usb0/lun.0; do
+    test -d "$lun" && { printf '%s\n' "$lun"; return 0; }
+  done
+  return 1
+}
+
+# Only allow disk images inside the in-place update RAM directory.
+update_drive_image() {
+  local image=$1
+  case "$image" in
+    "$update_dir"/*/drive.img) ;;
+    *) return 1 ;;
+  esac
+  case "$image" in *..*) return 1 ;; esac
+}
+
+update_drive_attach() {
+  local image=$1 bytes=$2 lun gadget udc file
+  update_drive_image "$image" || { echo 'not an update disk path' >&2; return 2; }
+  [[ $bytes =~ ^[0-9]+$ ]] && test "$bytes" -ge 1048576 || { echo 'invalid disk size' >&2; return 2; }
+  lun=$(update_drive_lun) || { echo 'this mixer has no removable USB drive' >&2; return 1; }
+  gadget=${lun%/functions/*}
+  udc=$(cat "$gadget/UDC" 2>/dev/null) || udc=
+  test -n "$udc" || { echo 'the USB gadget is not bound' >&2; return 1; }
+  file=$(cat "$lun/file" 2>/dev/null) || { echo 'cannot read the USB drive' >&2; return 1; }
+  test -z "$file" || { echo 'the USB drive is in use' >&2; return 1; }
+  rm -f "$image"
+  truncate -s "$bytes" "$image" || return 1
+  if ! mkfs.vfat -n "$update_drive_label" "$image" > /dev/null; then
+    rm -f "$image"
+    return 1
+  fi
+  # Check again in case RØDE claimed the LUN while we were formatting the image.
+  file=$(cat "$lun/file" 2>/dev/null) || file=x
+  if test -n "$file" || ! printf '%s\n' "$image" > "$lun/file"; then
+    rm -f "$image"
+    echo 'the USB drive is in use' >&2
+    return 1
+  fi
+}
+
+# Detach IMAGE if the LUN still points to it. Leaves the LUN alone if it is
+# empty or points to another file (such as RØDE's), and fails if the host
+# computer still holds the disk open.
+update_drive_detach() {
+  local image=$1 lun file
+  lun=$(update_drive_lun) || return 0
+  file=$(cat "$lun/file" 2>/dev/null) || return 1
+  test "$file" = "$image" || return 0
+  printf '\n' > "$lun/file"
+}
+
+update_drive_take() {
+  local image=$1 dest=$2 size=$3 lun file mnt status=0 source
+  update_drive_image "$image" || { echo 'not an update disk path' >&2; return 2; }
+  [[ $size =~ ^[0-9]+$ ]] || { echo 'invalid payload size' >&2; return 2; }
+  lun=$(update_drive_lun) || { echo 'this mixer has no removable USB drive' >&2; return 1; }
+  file=$(cat "$lun/file" 2>/dev/null) || { echo 'cannot read the USB drive' >&2; return 1; }
+  # Ejecting from the host clears the LUN; any other path means RØDE took it over.
+  if test -n "$file" && test "$file" != "$image"; then
+    echo 'the USB drive was taken for something else' >&2
+    return 1
+  fi
+  if test "$file" = "$image" && ! printf '\n' > "$lun/file"; then
+    echo 'the computer still holds the USB drive' >&2
+    return 1
+  fi
+  test -f "$image" || { echo 'the update disk is gone' >&2; return 1; }
+  mnt=${image%/drive.img}/drive
+  mkdir -p -m 700 "$mnt" || return 1
+  if ! mount -t vfat -o ro,loop,nodev,nosuid,noexec "$image" "$mnt"; then
+    rmdir "$mnt" 2>/dev/null
+    echo 'cannot read the update disk' >&2
+    return 1
+  fi
+  source=$mnt/$update_drive_file
+  if ! test -f "$source" || test -L "$source"; then
+    echo "the update disk has no $update_drive_file" >&2; status=1
+  elif test "$(stat -c %s "$source")" != "$size"; then
+    echo "$update_drive_file on the update disk is not $size bytes" >&2; status=1
+  elif ! cp "$source" "$dest"; then
+    status=1
+  fi
+  umount "$mnt" || status=1
+  rmdir "$mnt" 2>/dev/null || true
+  rm -f "$image"
+  return "$status"
+}
+
+update_drive_drop() {
+  local image=$1 mnt
+  update_drive_image "$image" || return 2
+  update_drive_detach "$image" || true
+  mnt=${image%/drive.img}/drive
+  if grep -qs " $mnt " /proc/mounts; then umount "$mnt" || true; fi
+  rmdir "$mnt" 2>/dev/null || true
+  rm -f "$image"
+}
+
+update_drive_drop_stale() {
+  local lun file
+  lun=$(update_drive_lun) || return 0
+  file=$(cat "$lun/file" 2>/dev/null) || return 0
+  update_drive_image "$file" && update_drive_drop "$file"
+  return 0
+}
+
+update_drive() {
+  case "${1:-}" in
+    attach) test $# -eq 3 || return 2; update_drive_attach "$2" "$3" ;;
+    take) test $# -eq 4 || return 2; update_drive_take "$2" "$3" "$4" ;;
+    drop) test $# -eq 2 || return 2; update_drive_drop "$2" ;;
+    drop-stale) update_drive_drop_stale ;;
+    *) echo 'usage: update-drive attach|take|drop|drop-stale ...' >&2; return 2 ;;
+  esac
+}
+# ---- end of update drive ----------------------------------------------------
+
 case "${1:-}" in
   arm-power-recovery) arm_power_recovery ;;
   update-commit) shift; update_commit "$@" ;;
@@ -1759,5 +1903,6 @@ case "${1:-}" in
   developer-ssh) shift; developer_ssh "$@" ;;
   image-check) image_check ;;
   flash-verify) shift; flash_verify "$@" ;;
-  *) sed -n '2,24s/^# \{0,1\}//p' "$0"; exit 2 ;;
+  update-drive) shift; update_drive "$@" ;;
+  *) sed -n '2,27s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

@@ -14,6 +14,9 @@ You can poke the API from any computer plugged into USB 1 with `go -C desktop ru
 | `PUT /api/v1/ssh` | `{"enabled", "publicKey"}` | Add or remove RC2FX's developer SSH key; USB 1 only |
 | `POST /api/v1/update` | `{"version", "size", "sha256", "metadata": {"root", "timestamp", "snapshot", "targets"}, "encoding", "uploadSize"}` | Start a signed in-place update or delta upload; USB 1 only, see [In-place updates](#in-place-updates) |
 | `PUT /api/v1/update/{id}` | `{"offset", "data"}` | Append a base64 chunk to the upload; 409 returns `expectedOffset` |
+| `POST /api/v1/update/{id}/drive` | | Attach a temporary `RC2FX` FAT drive to RØDE's removable USB slot; returns `{"id", "label", "file", "size"}` |
+| `POST /api/v1/update/{id}/drive/done` | | Detach the temporary drive, read the copied upload, and mark the session complete |
+| `POST /api/v1/update/{id}/drive/release` | | Detach and remove the temporary drive without reading a file |
 | `POST /api/v1/update/{id}/install` | | Verify and install the upload, then restart and commit or roll back |
 | `GET /api/v1/update/{id}` | | Session state, progress, and any error |
 | `DELETE /api/v1/update/{id}` | | Abort the session and drop its upload |
@@ -88,7 +91,7 @@ Version info is kept out of `GET /api/v1/state` and state events so the strict s
 
 ## In-place updates
 
-When RØDE's firmware stays the same, you can update RC2FX itself without doing a full firmware flash. The desktop app pushes the signed release metadata and payload over USB 1; the mixer verifies everything on-device, swaps `/opt/rc2fx` in place while keeping a rollback copy, and restarts only RØDE's audio engine and `rc2fxd`. First installs and RØDE firmware upgrades still require a full flash. See [signed mixer releases](../developer/mixer-releases.md#in-place-updates) for the full design.
+When RØDE's firmware stays the same, you can update RC2FX itself without doing a full firmware flash. The desktop app starts a session over USB 1, copies the signed payload through a temporary USB drive named `RC2FX` attached to RØDE's removable drive (or falls back to USB 1 control chunks when that isn't possible), and lets the mixer verify everything on-device, swap `/opt/rc2fx` in place while keeping a rollback copy, and restart RØDE's audio engine and `rc2fxd`. Audio goes silent for a few seconds during the restart, and it can stutter while transferring if the upload falls back to USB 1. First installs and RØDE firmware upgrades still require a full flash. See [signed mixer releases](../developer/mixer-releases.md#in-place-updates) for the full design.
 
 These endpoints are only exposed over USB 1 and only when running from an installed `/opt/rc2fx`; the touchscreen socket and RAM runs return `404`. Check `inPlaceUpdates` in `GET /api/v1/version` to see if they're available.
 
@@ -125,6 +128,12 @@ To send a delta instead of a full archive, set `encoding: "delta-1"` and include
 ```
 
 `size`, `sha256`, and `metadata` still describe the full signed envelope that the delta rebuilds to. `uploadSize` is required whenever `encoding` is set (and rejected if `encoding` is absent), bounded to `1..67108864` bytes. With delta encoding active, `received`, completion checks, and chunks all count delta bytes, and session responses include `"encoding"` and `"uploadSize"`. Unknown encodings return `400`. At install time, the mixer reconstructs the full envelope from the live files and runs the exact same verification and swap path as a full upload; if the rebuilt envelope doesn't match the signed target, the session is marked `failed`. See [delta uploads](../developer/mixer-releases.md#delta-uploads).
+
+To copy the upload faster than USB 1 HID control allows, the client can request a temporary removable drive right after creating a session (before sending any chunks):
+
+- `POST /api/v1/update/{id}/drive` creates a temporary FAT disk image in RAM (up to a 48 MiB payload plus 4 MiB of filesystem slack, rounded up to whole MiB) and attaches it to RØDE's removable USB mass storage slot via `rc2fx.sh update-drive`. It returns `{"id", "label": "RC2FX", "file": "RC2FX.UPD", "size": N}`. If the slot is busy, the payload is too large, or RAM is too low, it returns `409` or `507` and the client falls back to `PUT /api/v1/update/{id}`. While the drive is attached, `PUT` chunk uploads return `409`.
+- `POST /api/v1/update/{id}/drive/done` detaches the image (after the host writes `RC2FX.UPD` and ejects the drive), verifies the file size, copies it into the session, deletes the image, and moves the session to `complete`. If detaching or reading fails, the mixer drops the drive, clears any partial file, and returns `409` so the client can fall back to USB 1 chunks from offset `0`.
+- `POST /api/v1/update/{id}/drive/release` detaches and deletes the temporary drive without taking a file, returning the session to `accepting` for USB 1 chunks. Aborting or replacing the session also drops the drive, and `rc2fxd` removes any stale update drive on startup.
 
 `PUT /api/v1/update/{id}` takes `{"offset": N, "data": "<base64>"}` with up to 256 KiB of raw bytes per call, appending at the current `offset`. Resending a chunk the mixer already has is accepted idempotently (even after the final chunk moves the session to `complete`), so a lost reply is easy to recover from. Any other offset fails with `409` and tells you where to resume:
 

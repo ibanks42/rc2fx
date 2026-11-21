@@ -217,6 +217,9 @@ type Inputs struct {
 	NewestSupportedFirmware *string
 	RodeFirmware            *string
 	DeviceProtocol          *uint32
+	// InPlace is the mixer software version available for a direct in-place
+	// update (no flash needed), or nil if none applies.
+	InPlace *string
 }
 
 // rodeAhead returns RØDE's newest firmware if it is ahead of both the mixer
@@ -556,6 +559,17 @@ func OverviewOf(i *Inputs, app AppStanding, mixer appupdate.MixerUpdateState) Ov
 		}
 	case app.Kind == AppStandingChecking:
 		lead = Lead{Title: "Checking for updates…"}
+	case waiting && i.InPlace != nil && s.Firmware != StandingUpdateAvailable:
+		lead = Lead{
+			Title:  fmt.Sprintf("Mixer software %s is available", *i.InPlace),
+			Detail: new("No flash needed. The mixer’s audio goes silent for a few seconds while it restarts."),
+		}
+		for _, l := range lines {
+			if l.Tone == ToneUpdate && l.ReadChanges {
+				lead.Changes = new(l.Part)
+				break
+			}
+		}
 	case waiting:
 		lead = Lead{
 			Title:  "A mixer update is ready",

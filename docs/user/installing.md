@@ -3,30 +3,52 @@
 The built-in installer downloads official RØDE firmware, adds RC2FX and any
 saved settings to it on your computer, and flashes the result using the mixer's
 USB update mode. Once installed, RC2FX starts automatically every time you turn
-the mixer on. First-time installs, updates, and repairs all follow the same
-flow.
+the mixer on. First-time installs and RØDE firmware updates use this full
+flash. When your mixer supports in-place updates and a newer compatible RC2FX
+mixer release is available, the app can update RC2FX without flashing by
+copying the signed file through a temporary USB drive named **RC2FX** (or over
+USB 1 if that isn't possible).
 
 If your mixer doesn't have RC2FX yet, the app offers **Install RC2FX** on the
-connection screen. If you're already running RC2FX, open the installer from
-**Settings › Mixer › Update RC2FX**.
+connection screen. Once RC2FX is installed, mixer updates start only from
+**Settings › Versions**, where the button label reflects what changes:
+
+- **Update mixer software** appears when the connected mixer accepts in-place
+  updates and a newer compatible signed mixer release is available. It opens
+  the in-place update directly: the app downloads and verifies the release,
+  copies it through a temporary USB drive named **RC2FX** that the mixer
+  attaches to RØDE's removable drive (falling back to USB 1 when that isn't
+  possible), and lets the mixer check it and restart RC2FX. No flash is needed.
+  Audio goes silent for a few seconds while RC2FX restarts, and it can stutter
+  during the transfer if the update goes over USB 1. You can still click
+  **Reinstall firmware as well…** on that page to switch to a full flash.
+- **Update RØDE firmware** appears when only RØDE firmware changes (full
+  flash).
+- **Update RC2FX** appears for other updates (full flash).
 
 ## Before you start
 
-- Audio stops during the update, and the whole process takes a few minutes.
-- Leave the mixer powered on and plugged into **USB 1** until the installer
-  says it's done.
+- A full flash stops audio for a few minutes. During an in-place update, audio
+  goes silent for a few seconds while RC2FX restarts, and it can stutter while
+  transferring if the update falls back to USB 1.
+- During an in-place update, a temporary USB drive named **RC2FX** may appear
+  on your computer for a few seconds while the file copies. Leave it alone; it
+  goes away on its own.
+- Leave the mixer powered on and plugged into **USB 1** until the update says
+  it's done.
 - You need an internet connection so the app can check signed RC2FX releases,
   download the mixer software from GitHub, and fetch official firmware from
   RØDE.
-- On Linux, click **Grant access** first and enter your password when prompted.
+- On Linux, a full flash needs administrator access: click **Grant access**
+  first and enter your password when prompted.
 
 ## Install steps
 
-Pick the RØDE firmware version and the RC2FX mixer software you want to
-install. The mixer software menu only shows signed releases that are compatible
-with your app and chosen firmware. If a release or firmware profile requires a
-newer desktop app, the installer tells you the minimum version and asks you to
-update the app first.
+For first-time installs and full-flash updates, pick the RØDE firmware version
+and the RC2FX mixer software you want to install. The mixer software menu only
+shows signed releases that are compatible with your app and chosen firmware. If
+a release or firmware profile requires a newer desktop app, the installer tells
+you the minimum version and asks you to update the app first.
 
 Double-check the installed and selected versions, click **Install…** (or
 **Update…**), and confirm. Picking an older version asks for an explicit
