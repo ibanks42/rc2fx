@@ -3,9 +3,9 @@
 //! Each band's coefficients and state live as `[left, right]` pairs in `Hot`,
 //! so loads and stores are single vector ops. Both lanes share identical
 //! coefficients (verified by the caller) while keeping independent state/peak.
-//! Arithmetic matches scalar `step` exactly (no FMA or reassociation unless
-//! `eq-fma` enables it on both paths), `vcalt`/`vbsl` implement `|next| < 1e-25`
-//! denormal flushing (including false for NaN), and `vmaxnm` matches `f64::max`.
+//! Arithmetic matches scalar `step` exactly (no FMA or reassociation),
+//! `vcalt`/`vbsl` implement `|next| < 1e-25` denormal flushing (including false
+//! for NaN), and `vmaxnm` matches `f64::max`.
 //!
 //! Samples are interleaved `[left, right]` before entering `chain` so each
 //! frame is one vector load/store. NEON is baseline on AArch64.
@@ -85,16 +85,9 @@ fn step(
 ) -> float64x2_t {
     // SAFETY: baseline NEON register ops; matches scalar `step` op-for-op.
     unsafe {
-        let (raw, next1, next2);
-        if cfg!(feature = "eq-fma") {
-            raw = vfmaq_f64(*z1, c.b0, input);
-            next1 = vfmsq_f64(vfmaq_f64(*z2, c.b1, input), c.a1, raw);
-            next2 = vfmsq_f64(vmulq_f64(c.b2, input), c.a2, raw);
-        } else {
-            raw = vaddq_f64(vmulq_f64(c.b0, input), *z1);
-            next1 = vaddq_f64(vsubq_f64(vmulq_f64(c.b1, input), vmulq_f64(c.a1, raw)), *z2);
-            next2 = vsubq_f64(vmulq_f64(c.b2, input), vmulq_f64(c.a2, raw));
-        }
+        let raw = vaddq_f64(vmulq_f64(c.b0, input), *z1);
+        let next1 = vaddq_f64(vsubq_f64(vmulq_f64(c.b1, input), vmulq_f64(c.a1, raw)), *z2);
+        let next2 = vsubq_f64(vmulq_f64(c.b2, input), vmulq_f64(c.a2, raw));
         let zero = vdupq_n_f64(0.0);
         let tiny = vdupq_n_f64(TINY);
         // `vcaltq(a, b)` is `abs(a) < abs(b)`; `TINY` is positive.

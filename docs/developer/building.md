@@ -97,8 +97,8 @@ source build works the same as described in the
 [user guide](../user/installing.md).
 
 `just test` fails on any Clippy warning, `go vet` issue, or unformatted Go
-file, even if all tests pass. On Linux it also lints the `eq-fma` and
-`bench-kernels` features; on Windows and macOS it runs only the Go checks
+file, even if all tests pass. On Linux it also lints the `bench-kernels`
+feature; on Windows and macOS it runs only the Go checks
 (`just test-rust` runs the Rust checks by themselves on Linux). The native
 library and benchmark crates are separate Cargo workspaces checked by
 `just test-mixer` alongside the Python and C test suites.

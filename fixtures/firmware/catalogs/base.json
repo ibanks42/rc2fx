@@ -17,7 +17,7 @@
         "sampleRate": 48000,
         "blockFrames": 112,
         "showPath": "/Application/update-staging/system-config-2026.bin",
-        "callback": { "offset": "0x618480", "expectedz": "5f2403d5211300b43f2303d5fd7bb9a9" },
+        "callback": { "offset": "0x618480", "expected": "5f2403d5211300b43f2303d5fd7bb9a9" },
         "jobLifetime": {
           "abi": "capture-values-v1",
           "enqueue": { "offset": "0x5c9120", "expected": "3f2303d5fd7bb8a9fd030091f55b02a9" },

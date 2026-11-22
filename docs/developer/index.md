@@ -57,7 +57,6 @@ See [Architecture](architecture.md) for how all the pieces fit together.
 | `config/firmware-profiles.json` | [Firmware catalog](../reference/firmware.md) |
 | `tools/firmware_audit` | Audits a new RØDE firmware against the hooks RC2FX relies on |
 | `tools/src_fast_check` | Compares the library's sample-rate converter (`src_fast_core.rs`) against real libsamplerate on AArch64 or under qemu |
-| `tools/xrun_trace` | Xrun flight recorder: bench runs and kernel scheduler traces on a mixer |
 | `experiments/` | Unfinished work outside the main build (currently the on-screen panel) |
 | `docs/` | This documentation |
 

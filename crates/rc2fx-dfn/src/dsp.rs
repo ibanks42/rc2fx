@@ -39,10 +39,6 @@ pub(crate) struct Dsp {
     scratch: Vec<Complex32>,
     mean_norm: Vec<f32>,
     unit_norm: Vec<f32>,
-    /// Proxy buffers for `realfft`'s internal twiddle tables (`fft / 2 + fft / 4`
-    /// complex entries each) so the traffic model can account for them.
-    #[cfg(test)]
-    twiddles: [Vec<Complex32>; 2],
 }
 
 /// Checks that the framing is valid: even FFT, `hop <= synthesis <= 2 * hop`
@@ -140,8 +136,6 @@ impl Dsp {
             scratch: vec![Complex32::default(); scratch_len],
             mean_norm: vec![0.; nb_erb],
             unit_norm: vec![0.; nb_df],
-            #[cfg(test)]
-            twiddles: [0, 1].map(|_| vec![Complex32::default(); fft / 2 + fft / 4]),
         };
         dsp.reset();
         dsp
@@ -180,21 +174,6 @@ impl Dsp {
         {
             *x = s * w;
         }
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            slice(Class::Param, &self.analysis_window);
-            slice(Class::Param, &self.twiddles[0]);
-            touch_n(Class::State, self.analysis_mem.as_ptr(), keep * 4, 2);
-            store(Class::State, self.analysis_mem.as_ptr(), keep * 4);
-            touch(Class::Act, input.as_ptr(), hop * 4);
-            store(Class::Act, self.time.as_ptr(), fft * 4);
-            touch(Class::Act, self.time.as_ptr(), fft * 4);
-            touch(Class::Act, self.scratch.as_ptr(), self.scratch.len() * 8);
-            store(Class::Act, self.scratch.as_ptr(), self.scratch.len() * 8);
-            touch(Class::Act, spec.as_ptr(), self.bins * 8);
-            store_n(Class::Act, spec.as_ptr(), self.bins * 8, 2);
-        }
         let split = keep - hop;
         self.analysis_mem.rotate_left(hop);
         self.analysis_mem[split..].copy_from_slice(input);
@@ -214,28 +193,6 @@ impl Dsp {
         // Zero imaginary DC/Nyquist for realfft (matches libDF).
         spec[0].im = 0.;
         spec[self.bins - 1].im = 0.;
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            slice(Class::Param, &self.synthesis_window);
-            slice(Class::Param, &self.twiddles[1]);
-            touch(Class::Act, spec.as_ptr(), self.bins * 8);
-            touch(Class::Act, self.scratch.as_ptr(), self.scratch.len() * 8);
-            store(Class::Act, self.scratch.as_ptr(), self.scratch.len() * 8);
-            store(Class::Act, self.time.as_ptr(), fft * 4);
-            touch(Class::Act, self.time.as_ptr(), fft * 4);
-            touch(
-                Class::State,
-                self.synthesis_mem.as_ptr(),
-                (synthesis - hop) * 4,
-            );
-            store(
-                Class::State,
-                self.synthesis_mem.as_ptr(),
-                (synthesis - hop) * 4,
-            );
-            store(Class::Act, output.as_ptr(), hop * 4);
-        }
         let _ = self
             .inverse
             .process_with_scratch(spec, &mut self.time, &mut self.scratch);
@@ -254,21 +211,6 @@ impl Dsp {
     /// Mean-normalized ERB band energies in dB, scaled by 1/40.
     pub(crate) fn feat_erb(&mut self, spec: &[Complex32], out: &mut [f32]) {
         debug_assert_eq!(out.len(), self.erb.len());
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            slice(Class::Param, &self.erb);
-            touch(
-                Class::State,
-                self.mean_norm.as_ptr(),
-                self.mean_norm.len() * 4,
-            );
-            store(
-                Class::State,
-                self.mean_norm.as_ptr(),
-                self.mean_norm.len() * 4,
-            );
-        }
         let mut start = 0;
         for ((o, &width), s) in out.iter_mut().zip(&self.erb).zip(&mut self.mean_norm) {
             let k = 1. / width as f32;
@@ -286,20 +228,6 @@ impl Dsp {
     /// Unit-normalized complex features for the lowest `nb_df` bins.
     pub(crate) fn feat_cplx(&mut self, spec: &[Complex32], re: &mut [f32], im: &mut [f32]) {
         debug_assert_eq!(spec.len(), self.unit_norm.len());
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            touch(
-                Class::State,
-                self.unit_norm.as_ptr(),
-                self.unit_norm.len() * 4,
-            );
-            store(
-                Class::State,
-                self.unit_norm.as_ptr(),
-                self.unit_norm.len() * 4,
-            );
-        }
         for (((x, s), r), i) in spec.iter().zip(&mut self.unit_norm).zip(re).zip(im) {
             *s = x.norm() * (1. - self.alpha) + *s * self.alpha;
             let y = *x / s.sqrt();
@@ -308,8 +236,6 @@ impl Dsp {
     }
 
     pub(crate) fn apply_gains(&self, spec: &mut [Complex32], gains: &[f32]) {
-        #[cfg(test)]
-        crate::traffic::slice(crate::traffic::Class::Param, &self.erb);
         let mut start = 0;
         for (&width, &g) in self.erb.iter().zip(gains) {
             for x in &mut spec[start..start + width] {

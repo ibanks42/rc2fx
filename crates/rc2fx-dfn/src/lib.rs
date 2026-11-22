@@ -16,8 +16,6 @@ mod glue;
 pub mod hold;
 mod kernels;
 mod net;
-#[cfg(test)]
-mod traffic;
 
 use dsp::Dsp;
 use net::{Dfn, Framing, Tensors};
@@ -150,29 +148,12 @@ impl DeepFilter {
     pub fn process(&mut self, frame: &mut [f32]) -> f32 {
         assert_eq!(frame.len(), self.frame());
         let nb_df = self.nb_df;
-        profile::start();
-        #[cfg(test)]
-        {
-            use traffic::*;
-            slice(Class::Act, &self.spec);
-            traffic::store(
-                Class::State,
-                self.masked[0].as_ptr(),
-                self.masked[0].len() * 8,
-            );
-            traffic::store(
-                Class::State,
-                self.noisy[0].as_ptr(),
-                self.noisy[0].len() * 8,
-            );
-        }
         self.dsp.analysis(frame, &mut self.spec);
         push(&mut self.masked, &self.spec);
         push(&mut self.noisy, &self.spec);
         self.dsp.feat_erb(&self.spec, &mut self.feat_erb);
         self.dsp
             .feat_cplx(&self.spec[..nb_df], &mut self.feat_re, &mut self.feat_im);
-        profile::mark(0);
         let lsnr = self
             .net
             .encode(&self.feat_erb, &self.feat_re, &self.feat_im);
@@ -182,20 +163,6 @@ impl DeepFilter {
         // Stage 1: apply ERB gains to the spectrum `lookahead` frames back.
         let at = self.masked.len() - 1 - self.framing.lookahead;
         let target = &mut self.masked[at];
-        #[cfg(test)]
-        {
-            use traffic::*;
-            touch_n(Class::State, target.as_ptr(), target.len() * 8, 1);
-            traffic::store(Class::State, target.as_ptr(), target.len() * 8);
-            slice(Class::Act, &self.enhanced);
-            for spec in self
-                .noisy
-                .range(self.noisy.len() - self.order..self.noisy.len())
-            {
-                slice(Class::State, &spec[..nb_df]);
-            }
-            slice(Class::Act, self.net.coefs());
-        }
         self.dsp.apply_gains(target, self.net.mask());
         self.enhanced.copy_from_slice(target);
         // Stage 2: replace the lowest `nb_df` bins with the `order`-tap complex
@@ -212,9 +179,7 @@ impl DeepFilter {
                 .map(|(spec, c)| spec[f] * Complex32::new(c[0], c[1]))
                 .sum();
         }
-        profile::mark(13);
         self.dsp.synthesis(&mut self.enhanced, frame);
-        profile::mark(14);
         lsnr
     }
 
@@ -334,89 +299,6 @@ fn push(ring: &mut VecDeque<Vec<Complex32>>, spec: &[Complex32]) {
     if let Some(mut oldest) = ring.pop_front() {
         oldest.copy_from_slice(spec);
         ring.push_back(oldest);
-    }
-}
-
-/// Per-stage `process` timing printed to stderr every 2,000 hops when built
-/// with `--cfg dfn_profile`; no-op otherwise.
-pub(crate) mod profile {
-    #[cfg(dfn_profile)]
-    use std::{
-        cell::Cell,
-        sync::atomic::{AtomicU64, Ordering},
-        time::Instant,
-    };
-    #[cfg(dfn_profile)]
-    const STAGES: usize = 15;
-    #[cfg(dfn_profile)]
-    const NAMES: [&str; STAGES] = [
-        "features",
-        "erb_conv0",
-        "erb_conv1-3",
-        "df_conv0+pw",
-        "df_conv1",
-        "df_fc_emb",
-        "enc_gru+lsnr",
-        "erb_gru",
-        "erb_pathways+convt",
-        "erb_out",
-        "df_gru+skip",
-        "df_out",
-        "df_convp",
-        "df_filter",
-        "apply+synthesis",
-    ];
-    #[cfg(dfn_profile)]
-    static TOTALS: [AtomicU64; STAGES] = [const { AtomicU64::new(0) }; STAGES];
-    #[cfg(dfn_profile)]
-    static FRAMES: AtomicU64 = AtomicU64::new(0);
-    #[cfg(dfn_profile)]
-    thread_local! { static LAST: Cell<Option<Instant>> = const { Cell::new(None) }; }
-
-    #[inline(always)]
-    pub(crate) fn start() {
-        #[cfg(test)]
-        crate::traffic::start();
-        #[cfg(dfn_profile)]
-        LAST.with(|l| l.set(Some(Instant::now())));
-    }
-
-    #[inline(always)]
-    pub(crate) fn mark(stage: usize) {
-        #[cfg(test)]
-        crate::traffic::mark(stage);
-        #[cfg(not(dfn_profile))]
-        let _ = stage;
-        #[cfg(dfn_profile)]
-        {
-            let now = Instant::now();
-            if let Some(last) = LAST.with(|l| l.replace(Some(now))) {
-                TOTALS[stage].fetch_add((now - last).as_nanos() as u64, Ordering::Relaxed);
-            }
-            if stage == STAGES - 1 {
-                let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-                if n.is_multiple_of(2000) {
-                    let total: u64 = TOTALS.iter().map(|t| t.load(Ordering::Relaxed)).sum();
-                    let line: Vec<String> = NAMES
-                        .iter()
-                        .zip(&TOTALS)
-                        .map(|(name, t)| {
-                            let t = t.load(Ordering::Relaxed);
-                            format!(
-                                "{name} {:.3} ms ({:.0}%)",
-                                t as f64 / n as f64 / 1e6,
-                                100. * t as f64 / total as f64
-                            )
-                        })
-                        .collect();
-                    eprintln!(
-                        "dfn profile after {n} hops, mean per hop {:.3} ms: {}",
-                        total as f64 / n as f64 / 1e6,
-                        line.join(", ")
-                    );
-                }
-            }
-        }
     }
 }
 

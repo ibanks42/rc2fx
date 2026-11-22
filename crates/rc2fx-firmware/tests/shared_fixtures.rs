@@ -1,6 +1,8 @@
 //! Shared firmware fixtures also run by the Go desktop port (`desktop/firmware`).
 //! USB identities in `models.json` are desktop-only (the mixer identifies itself
 //! from board files), so only Go checks those.
+mod common;
+
 use rc2fx_firmware::{Catalog, Model};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -66,21 +68,48 @@ fn models_match() {
 }
 
 #[test]
+fn catalog_fixture_base_parses_independently() {
+    // fixtures/firmware/catalogs/base.json is intentionally committed as a
+    // frozen copy separate from config/firmware-profiles.json so fixture edits
+    // do not change when config/firmware-profiles.json gains a profile.
+    let base = std::fs::read_to_string(fixtures().join("catalogs/base.json")).unwrap();
+    Catalog::parse(&base).expect("catalogs/base.json must parse as a valid catalog");
+}
+
+#[test]
+fn catalog_fixture_bases_parse_equally() {
+    let base_text = std::fs::read_to_string(fixtures().join("catalogs/base.json")).unwrap();
+    let compact_text =
+        std::fs::read_to_string(fixtures().join("catalogs/compact-reencoded.json")).unwrap();
+    let base = Catalog::parse(&base_text).expect("catalogs/base.json must parse");
+    let compact =
+        Catalog::parse(&compact_text).expect("catalogs/compact-reencoded.json must parse");
+    assert_eq!(
+        format!("{base:?}"),
+        format!("{compact:?}"),
+        "catalogs/base.json and catalogs/compact-reencoded.json must parse identically"
+    );
+}
+
+#[test]
 fn catalogs_parse_the_same_way() {
-    let fixtures = json(fixtures().join("catalogs.json"));
+    let dir = fixtures();
+    let fixtures = json(dir.join("catalogs.json"));
+    let default_base = text(&fixtures, "defaultBase");
     for case in list(&fixtures, "cases") {
-        let file = text(case, "file");
-        let catalog = std::fs::read_to_string(root().join(file)).unwrap();
+        let name = text(case, "name");
+        let catalog = common::resolve_case_text(&dir, default_base, case);
         let parsed = Catalog::parse(&catalog);
-        if case["ok"].as_bool().unwrap() {
-            assert!(parsed.is_ok(), "{file}: {:?}", parsed.err());
+        let expect = &case["expect"];
+        if expect["ok"].as_bool().unwrap() {
+            assert!(parsed.is_ok(), "{name}: {:?}", parsed.err());
         } else {
             let error = parsed
                 .err()
-                .unwrap_or_else(|| panic!("{file} was accepted"));
-            let want = text(case, "error");
+                .unwrap_or_else(|| panic!("{name} was accepted"));
+            let want = text(expect, "error");
             if want != "*" {
-                assert_eq!(error, want, "{file}");
+                assert_eq!(error, want, "{name}");
             }
         }
     }
@@ -90,10 +119,12 @@ fn catalogs_parse_the_same_way() {
 fn executables_are_selected_the_same_way() {
     let dir = fixtures().join("select");
     let fixtures = json(dir.join("cases.json"));
+    let default_base = text(&fixtures, "defaultBase");
     let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
     for case in list(&fixtures, "cases") {
-        let catalog =
-            Catalog::parse(&String::from_utf8(read(text(case, "catalog"))).unwrap()).unwrap();
+        let name = text(case, "name");
+        let catalog_text = common::resolve_case_text(&dir, default_base, case);
+        let catalog = Catalog::parse(&catalog_text).unwrap_or_else(|e| panic!("{name}: {e}"));
         let image = read(text(case, "image"));
         let model = case["model"].as_str().map(|id| Model::parse(id).unwrap());
         let experimental = case["experimentalDuo"].as_bool().unwrap_or(false);
@@ -101,7 +132,7 @@ fn executables_are_selected_the_same_way() {
         let result = match op {
             // The image verification every selection ends with.
             "select" => {
-                assert_eq!(catalog.profiles.len(), 1, "{}", text(case, "catalog"));
+                assert_eq!(catalog.profiles.len(), 1, "{name}");
                 catalog.profiles[0]
                     .verify_image(&image)
                     .map(|()| catalog.profiles[0].id.clone())
@@ -117,10 +148,10 @@ fn executables_are_selected_the_same_way() {
                 .map(|()| catalog.profiles[0].id.clone()),
             other => panic!("unknown op {other}"),
         };
-        let name = format!("{op} {} {}", text(case, "catalog"), text(case, "image"));
-        match case["profile"].as_str() {
+        let expect = &case["expect"];
+        match expect["profile"].as_str() {
             Some(profile) => assert_eq!(result.as_deref(), Ok(profile), "{name}"),
-            None => assert_eq!(result.unwrap_err(), text(case, "error"), "{name}"),
+            None => assert_eq!(result.unwrap_err(), text(expect, "error"), "{name}"),
         }
     }
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -91,33 +92,55 @@ func TestSharedModelFixtures(t *testing.T) {
 	}
 }
 
+func TestCatalogFixtureBasesParseEqually(t *testing.T) {
+	baseData, err := os.ReadFile(filepath.Join(fixtureDir, "catalogs/base.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactData, err := os.ReadFile(filepath.Join(fixtureDir, "catalogs/compact-reencoded.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := ParseCatalog(string(baseData))
+	if err != nil {
+		t.Fatalf("catalogs/base.json: %v", err)
+	}
+	compact, err := ParseCatalog(string(compactData))
+	if err != nil {
+		t.Fatalf("catalogs/compact-reencoded.json: %v", err)
+	}
+	if !reflect.DeepEqual(base, compact) {
+		t.Fatalf("catalogs/base.json and catalogs/compact-reencoded.json parsed differently:\nbase:    %+v\ncompact: %+v", base, compact)
+	}
+}
+
 func TestSharedCatalogFixtures(t *testing.T) {
 	var fixtures struct {
-		Cases []struct {
-			File  string
-			OK    bool
-			Error *string
-		}
+		DefaultBase string `json:"defaultBase"`
+		Cases       []struct {
+			fixtureCaseInput
+			Expect struct {
+				OK    bool    `json:"ok"`
+				Error *string `json:"error"`
+			} `json:"expect"`
+		} `json:"cases"`
 	}
 	readJSON(t, filepath.Join(fixtureDir, "catalogs.json"), &fixtures)
 	if len(fixtures.Cases) == 0 {
 		t.Fatal("no catalog cases")
 	}
 	for _, c := range fixtures.Cases {
-		text, err := os.ReadFile(filepath.Join(repoRoot, c.File))
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = ParseCatalog(string(text))
+		text := resolveCaseText(t, fixtureDir, fixtures.DefaultBase, c.fixtureCaseInput)
+		_, err := ParseCatalog(text)
 		switch {
-		case c.OK:
+		case c.Expect.OK:
 			if err != nil {
-				t.Errorf("%s: %v", c.File, err)
+				t.Errorf("%s: %v", c.Name, err)
 			}
 		case err == nil:
-			t.Errorf("%s accepted", c.File)
-		case *c.Error != "*" && err.Error() != *c.Error:
-			t.Errorf("%s: error %q, want %q", c.File, err, *c.Error)
+			t.Errorf("%s accepted", c.Name)
+		case *c.Expect.Error != "*" && err.Error() != *c.Expect.Error:
+			t.Errorf("%s: error %q, want %q", c.Name, err, *c.Expect.Error)
 		}
 	}
 }
@@ -125,11 +148,19 @@ func TestSharedCatalogFixtures(t *testing.T) {
 func TestSharedSelectFixtures(t *testing.T) {
 	dir := filepath.Join(fixtureDir, "select")
 	var fixtures struct {
-		Cases []struct {
-			Op, Catalog, Image, Model, Launcher string
-			ExperimentalDuo                     bool
-			Profile, Error                      *string
-		}
+		DefaultBase string `json:"defaultBase"`
+		Cases       []struct {
+			fixtureCaseInput
+			Op              string `json:"op"`
+			Image           string `json:"image"`
+			Model           string `json:"model"`
+			Launcher        string `json:"launcher"`
+			ExperimentalDuo bool   `json:"experimentalDuo"`
+			Expect          struct {
+				Profile *string `json:"profile"`
+				Error   *string `json:"error"`
+			} `json:"expect"`
+		} `json:"cases"`
 	}
 	readJSON(t, filepath.Join(dir, "cases.json"), &fixtures)
 	if len(fixtures.Cases) == 0 {
@@ -143,9 +174,10 @@ func TestSharedSelectFixtures(t *testing.T) {
 		return data
 	}
 	for _, c := range fixtures.Cases {
-		catalog, err := ParseCatalog(string(read(c.Catalog)))
+		catalogText := resolveCaseText(t, dir, fixtures.DefaultBase, c.fixtureCaseInput)
+		catalog, err := ParseCatalog(catalogText)
 		if err != nil {
-			t.Fatalf("%s: %v", c.Catalog, err)
+			t.Fatalf("%s: %v", c.Name, err)
 		}
 		image := read(c.Image)
 		var model Model
@@ -158,7 +190,7 @@ func TestSharedSelectFixtures(t *testing.T) {
 		switch c.Op {
 		case "select":
 			if len(catalog.Profiles) != 1 {
-				t.Fatalf("%s: a select catalog has one profile", c.Catalog)
+				t.Fatalf("%s: a select catalog has one profile", c.Name)
 			}
 			profile = &catalog.Profiles[0]
 			err = profile.VerifyImage(image)
@@ -172,14 +204,13 @@ func TestSharedSelectFixtures(t *testing.T) {
 		default:
 			t.Fatalf("unknown op %s", c.Op)
 		}
-		name := c.Op + " " + c.Catalog + " " + c.Image + " " + c.Model
 		switch {
-		case c.Profile != nil:
-			if err != nil || profile.ID != *c.Profile {
-				t.Errorf("%s: %v", name, err)
+		case c.Expect.Profile != nil:
+			if err != nil || profile.ID != *c.Expect.Profile {
+				t.Errorf("%s: %v", c.Name, err)
 			}
-		case err == nil || err.Error() != *c.Error:
-			t.Errorf("%s: error %v, want %q", name, err, *c.Error)
+		case err == nil || err.Error() != *c.Expect.Error:
+			t.Errorf("%s: error %v, want %q", c.Name, err, *c.Expect.Error)
 		}
 	}
 }

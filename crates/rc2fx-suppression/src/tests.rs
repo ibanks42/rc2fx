@@ -2,7 +2,7 @@ use super::*;
 use std::sync::{Condvar, Mutex};
 
 mod dsp_block;
-mod endpoint_bench;
+mod endpoint_paths;
 mod gru_prep;
 mod lead_phase;
 struct Identity;

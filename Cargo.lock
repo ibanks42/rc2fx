@@ -904,9 +904,7 @@ dependencies = [
 name = "rc2fx-dsp"
 version = "0.1.7"
 dependencies = [
- "libc",
  "rc2fx-core",
- "serde_json",
 ]
 
 [[package]]
@@ -961,7 +959,6 @@ dependencies = [
  "rc2fx-core",
  "rc2fx-dfn",
  "rc2fx-dsp",
- "serde_json",
 ]
 
 [[package]]
