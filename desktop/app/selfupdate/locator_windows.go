@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // VelopackLocator is unused on Windows because Velopack's default packages
@@ -21,9 +23,9 @@ func PackagesDir() (string, bool) {
 		return "", false
 	}
 	root := ""
-	if parent := filepath.Dir(exe); exists(filepath.Join(parent, "Update.exe")) {
+	if parent := filepath.Dir(exe); common.PathExists(filepath.Join(parent, "Update.exe")) {
 		root = parent
-	} else if i := strings.LastIndex(exe, `\current\`); i >= 0 && exists(filepath.Join(exe[:i], "Update.exe")) {
+	} else if i := strings.LastIndex(exe, `\current\`); i >= 0 && common.PathExists(filepath.Join(exe[:i], "Update.exe")) {
 		root = exe[:i]
 	}
 	if root == "" {

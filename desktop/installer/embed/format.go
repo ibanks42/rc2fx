@@ -4,8 +4,6 @@ package embed
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
@@ -52,11 +51,6 @@ func IsBinary(name string) bool { return slices.Contains(Binaries[:], name) }
 
 func IsScript(name string) bool { return slices.Contains(Scripts[:], name) }
 
-func Sum(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
-}
-
 func CRLFToLF(data []byte) []byte {
 	out := make([]byte, 0, len(data))
 	for i, b := range data {
@@ -70,20 +64,6 @@ func CRLFToLF(data []byte) []byte {
 type buildLine struct {
 	kind       string
 	start, end int
-}
-
-func splitInclusive(text string) []string {
-	var out []string
-	for len(text) > 0 {
-		i := strings.IndexByte(text, '\n')
-		if i < 0 {
-			out = append(out, text)
-			break
-		}
-		out = append(out, text[:i+1])
-		text = text[i+1:]
-	}
-	return out
 }
 
 func utf8Error(script []byte) error {
@@ -106,14 +86,14 @@ func parseBuildLine(script []byte) (buildLine, error) {
 	text := string(script)
 	var found *buildLine
 	at := 0
-	for _, raw := range splitInclusive(text) {
+	for _, raw := range common.SplitLinesInclusive(text) {
 		line := strings.TrimRight(raw, "\r\n")
 		trimmed := strings.TrimSpace(line)
 		if trimmed == BuildLine || trimmed == ReleaseLine {
 			if found != nil {
 				return buildLine{}, fmt.Errorf("rc2fx.sh must have exactly one `%s` line; found more than one", BuildLine)
 			}
-			indent := len(line) - len(strings.TrimLeftFunc(line, isSpace))
+			indent := len(line) - len(strings.TrimLeftFunc(line, common.IsSpace))
 			kind := Development
 			if trimmed == ReleaseLine {
 				kind = Release
@@ -128,14 +108,6 @@ func parseBuildLine(script []byte) (buildLine, error) {
 		return buildLine{}, fmt.Errorf("rc2fx.sh must have exactly one `%s` line; found none", BuildLine)
 	}
 	return *found, nil
-}
-
-func isSpace(r rune) bool {
-	switch r {
-	case '\t', '\n', '\v', '\f', '\r', ' ', 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:
-		return true
-	}
-	return r >= 0x2000 && r <= 0x200a
 }
 
 func BuildKind(script []byte) (string, error) {
@@ -268,7 +240,7 @@ func Validate(files Files) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&manifest, "%s  %s\n", Sum(data), name)
+		fmt.Fprintf(&manifest, "%s  %s\n", common.SHA256Hex(data), name)
 	}
 	sums, err := dataOf(files, "SHA256SUMS")
 	if err != nil {
@@ -391,7 +363,7 @@ func Body(files Files) []byte {
 	}
 	out := make([]byte, 0, total+96*len(files))
 	for _, f := range files {
-		out = fmt.Appendf(out, "%s  %d  %s\n", Sum(f.Data), len(f.Data), f.Name)
+		out = fmt.Appendf(out, "%s  %d  %s\n", common.SHA256Hex(f.Data), len(f.Data), f.Name)
 	}
 	for _, f := range files {
 		out = append(out, f.Data...)
@@ -404,7 +376,7 @@ func Wrap(body []byte) []byte {
 	out := make([]byte, 0, len(Magic)+96+len(body))
 	out = append(out, Magic...)
 	out = fmt.Appendf(out, "length %d\n", len(body))
-	out = fmt.Appendf(out, "sha256 %s\n", Sum(body))
+	out = fmt.Appendf(out, "sha256 %s\n", common.SHA256Hex(body))
 	return append(out, body...)
 }
 
@@ -500,7 +472,7 @@ func (e *Envelope) Files() (Files, error) {
 		if entry != name {
 			return nil, fmt.Errorf("the embedded payload has %s where %s belongs", entry, name)
 		}
-		if len(digest) != 64 || !isHex(digest) {
+		if len(digest) != 64 || !common.IsHex(digest) {
 			return nil, fmt.Errorf("%s's embedded checksum is malformed", name)
 		}
 		n, err := parseUsize(size)
@@ -515,7 +487,7 @@ func (e *Envelope) Files() (Files, error) {
 			return nil, fmt.Errorf("%s is truncated in the embedded payload", p.name)
 		}
 		data := rest[:p.size]
-		if Sum(data) != p.digest {
+		if common.SHA256Hex(data) != p.digest {
 			return nil, fmt.Errorf("%s does not match its embedded checksum", p.name)
 		}
 		files = append(files, File{Name: p.name, Data: data})
@@ -534,16 +506,6 @@ func parseUsize(text string) (int, error) {
 	}
 	n, err := strconv.ParseUint(digits, 10, 63)
 	return int(n), err
-}
-
-func isHex(text string) bool {
-	for i := range len(text) {
-		c := text[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
-			return false
-		}
-	}
-	return true
 }
 
 // Bundle validates the envelope and returns a copy of its files keyed by name.
@@ -620,7 +582,7 @@ func parseAt(data []byte, at int) (*Envelope, error) {
 	if size > maxBody {
 		return nil, fmt.Errorf("the embedded payload is implausibly large")
 	}
-	if len(digest) != 64 || !isHex(digest) {
+	if len(digest) != 64 || !common.IsHex(digest) {
 		return nil, fmt.Errorf("the embedded payload's digest is malformed")
 	}
 	bodyAt := offset + used
@@ -628,7 +590,7 @@ func parseAt(data []byte, at int) (*Envelope, error) {
 	if end > len(data) {
 		return nil, fmt.Errorf("the embedded payload is truncated")
 	}
-	if Sum(data[bodyAt:end]) != digest {
+	if common.SHA256Hex(data[bodyAt:end]) != digest {
 		return nil, fmt.Errorf("the embedded payload does not match its digest")
 	}
 	envelope := &Envelope{

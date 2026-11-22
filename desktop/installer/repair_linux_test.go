@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/ext2fs"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 
@@ -60,9 +60,9 @@ func bigFile() []byte {
 }
 
 func rootManifest(hostname string) string {
-	return line(archive.Sum([]byte(hostname+"\n")), "etc/hostname") +
-		line(archive.Sum(repairScript), "usr/bin/rode-init-update-env.sh") +
-		line(archive.Sum(bigFile()), "usr/bin/big")
+	return line(common.SHA256Hex([]byte(hostname+"\n")), "etc/hostname") +
+		line(common.SHA256Hex(repairScript), "usr/bin/rode-init-update-env.sh") +
+		line(common.SHA256Hex(bigFile()), "usr/bin/big")
 }
 
 func writeAt(t *testing.T, path string, offset uint64, data []byte) {
@@ -375,7 +375,7 @@ func TestADiskThatIsNotARodecasterIsRefusedBeforeAnythingIsWritten(t *testing.T)
 	disk := newDisk(t, [2]tree{other, other})
 	_, err := disk.engine().repair([]RepairTarget{target(1, initScript)})
 	contains(t, err, "RØDECaster")
-	if exists(filepath.Join(disk.dir, "work/repair")) {
+	if common.PathExists(filepath.Join(disk.dir, "work/repair")) {
 		t.Fatal("no backup either")
 	}
 	// A disk without a partition table.

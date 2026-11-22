@@ -59,12 +59,12 @@ const help = `./xtask <command>
                         documentation, licenses and SHA256SUMS in target/package
 
 Mixer connection: .rc2fx-mixer.conf (see .rc2fx-mixer.conf.example) or the
-RC2FX_MIXER_IP, RC2FX_MIXER_USER, RC2FX_MIXER_KEY and RC2FX_MIXER_KNOWN_HOSTS
-environment variables.
+RC2FX_MIXER_IP, RC2FX_MIXER_USER, RC2FX_MIXER_KEY, RC2FX_MIXER_KNOWN_HOSTS,
+RC2FX_MIXER_HOST_KEY_ALIAS and RC2FX_MIXER_PRE_COMMAND environment variables.
 
-bench and every mixer action except status, logs and api first arm the mixer's
-one-shot power recovery over SSH and refuse to run if they cannot
-(docs/developer/mixer-workflow.md). api uses USB 1 only and does not arm.`
+If pre_command is configured, bench and mutating mixer actions run it before
+touching the mixer over SSH and abort if it fails. status, logs and api do not
+run pre_command (api uses USB 1 only).`
 
 // Launcher working directory so relative path arguments resolve as expected.
 const cwdVariable = "RC2FX_XTASK_CWD"

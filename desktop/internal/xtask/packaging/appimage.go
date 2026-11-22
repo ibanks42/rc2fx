@@ -15,6 +15,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -88,7 +89,7 @@ func writeMember(path string, data []byte, mode os.FileMode) error {
 
 func licenseName(name string) (string, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || filepath.Base(name) != name {
-		return "", task.Errorf("invalid license file name %s", task.Debug(name))
+		return "", task.Errorf("invalid license file name %q", name)
 	}
 	return name, nil
 }
@@ -319,7 +320,7 @@ func checkRuntime(appimage []byte, notices core.Value) error {
 	if !ok {
 		return task.Error("AppImage notices do not identify the runtime")
 	}
-	if uint64(len(appimage)) >= size && task.Sha256(appimage[:size]) == expected {
+	if uint64(len(appimage)) >= size && common.SHA256Hex(appimage[:size]) == expected {
 		return nil
 	}
 	return task.Error("the AppImage runtime differs from the one covered by its notices and source bundle")
@@ -487,7 +488,7 @@ func packageAppImage(root, out, name, version string, executable []byte, license
 		if err != nil {
 			return nil, task.Error(task.IOError(err))
 		}
-		fmt.Printf("Package ready:\n  %s\n  sha256 %s\n", path, task.Sha256(data))
+		fmt.Printf("Package ready:\n  %s\n  sha256 %s\n", path, common.SHA256Hex(data))
 	}
 	return published, nil
 }

@@ -148,7 +148,7 @@ func mustHex(t *testing.T, text string) []byte {
 	return b
 }
 
-func TestRequestAndReplyJSONMatchSerde(t *testing.T) {
+func TestRequestAndReplyJSON(t *testing.T) {
 	request := Request{Method: "PUT", Path: "api/v1/x</> \x01", Body: json.RawMessage(`{ "a" : [1, 2] }`)}
 	// Call MarshalJSON directly since json.Marshal HTML-escapes the output.
 	got, err := request.MarshalJSON()

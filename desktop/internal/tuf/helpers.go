@@ -1,6 +1,9 @@
 package tuf
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"encoding/hex"
 	"fmt"
 	"net/url"
@@ -11,6 +14,25 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
+
+func canonicalKeyMaterial(key *metadata.Key) string {
+	pub := strings.TrimSpace(key.Value.PublicKey)
+	if strings.HasPrefix(pub, "-----BEGIN") {
+		if parsed, err := pemPublicKey(pub); err == nil {
+			switch k := parsed.(type) {
+			case *rsa.PublicKey:
+				return fmt.Sprintf("rsa:%x:%x", k.N, k.E)
+			case ed25519.PublicKey:
+				return fmt.Sprintf("ed25519:%x", []byte(k))
+			case *ecdsa.PublicKey:
+				return fmt.Sprintf("ecdsa:%s:%x:%x", k.Curve.Params().Name, k.X, k.Y)
+			}
+		}
+	} else if raw, err := hex.DecodeString(pub); err == nil && len(raw) == ed25519.PublicKeySize {
+		return fmt.Sprintf("ed25519:%x", raw)
+	}
+	return fmt.Sprintf("raw:%s:%s", key.Type, pub)
+}
 
 // DistinctKeys refuses a root that lists one key under two IDs for a role.
 // The client counts signatures by key ID, so such a root could meet a
@@ -24,13 +46,13 @@ func DistinctKeys(root *metadata.RootType) error {
 	}
 	sort.Strings(roles)
 	for _, role := range roles {
-		material := map[[2]string]bool{}
+		material := map[string]bool{}
 		for _, id := range root.Roles[role].KeyIDs {
 			key := root.Keys[id]
 			if key == nil {
 				continue
 			}
-			m := [2]string{key.Type, strings.TrimSpace(key.Value.PublicKey)}
+			m := canonicalKeyMaterial(key)
 			if material[m] {
 				return fmt.Errorf("the signed root lists one %s key under two IDs", role)
 			}

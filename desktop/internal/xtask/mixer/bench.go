@@ -15,10 +15,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
+	"github.com/ibanks42/rc2fx/desktop/internal/num"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/elfcheck"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/setup"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
@@ -97,7 +98,7 @@ func parseBenchFlags(flags []string) (passed []string, weightsPath string, err e
 			}
 			i++
 			value := flags[i]
-			if _, ok := task.ParseUint(value, 64); !ok {
+			if _, ok := common.ParseUint(value, 64); !ok {
 				return nil, "", task.Errorf("bad --pause-us value %s", value)
 			}
 			passed = append(passed, flag, value)
@@ -192,12 +193,11 @@ func benchIn(bench string, mixer func() (*Mixer, error), input string, flags []s
 	if err != nil {
 		return err
 	}
-	armed, err := m.ArmPowerRecovery("bench")
-	if err != nil {
+	if err := m.Prepare("bench"); err != nil {
 		return err
 	}
 	fmt.Println("Uploading to the mixer")
-	if err := armed.ssh("set -e; rm -rf /run/rc2fx-bench; mkdir -m 700 /run/rc2fx-bench; tar -xf - -C /run/rc2fx-bench", archive.Bytes()); err != nil {
+	if err := m.ssh("set -e; rm -rf /run/rc2fx-bench; mkdir -m 700 /run/rc2fx-bench; tar -xf - -C /run/rc2fx-bench", archive.Bytes()); err != nil {
 		return err
 	}
 	passedFlags := strings.Join(passed, " ")
@@ -216,19 +216,19 @@ func benchIn(bench string, mixer func() (*Mixer, error), input string, flags []s
 		script := fmt.Sprintf("cd /run/rc2fx-bench && ./rc2fx-bench %s input.wav %02d-%s.wav %s%s "+
 			"> %s.json 2> %s.log || echo \"  %s failed: $(tail -n 3 %s.log)\"",
 			model, index+1, model, passedFlags, extra, model, model, model, model)
-		if err := armed.ssh(script, nil); err != nil {
+		if err := m.ssh(script, nil); err != nil {
 			outcome = err
 			break
 		}
 		// The controller keeps only the last ~20 s, so read it right away.
-		window, _ := armed.capture("cat /run/rc2fx-bench/" + model + ".json")
+		window, _ := m.capture("cat /run/rc2fx-bench/" + model + ".json")
 		overruns = append(overruns, overrunsDuring(window))
 	}
 	// Bulk uncompressed SSH downloads disturb the live audio graph. Device
 	// comparisons found compressed downloads clean, at the cost of transfer
 	// time. Uploads did not benefit, so keep their existing path unchanged.
-	results, resultsErr := armed.capture("cd /run/rc2fx-bench && tar -czf - *.wav *.json *.log 2>/dev/null; true")
-	_ = armed.ssh("rm -rf /run/rc2fx-bench", nil)
+	results, resultsErr := m.capture("cd /run/rc2fx-bench && tar -czf - *.wav *.json *.log 2>/dev/null; true")
+	_ = m.ssh("rm -rf /run/rc2fx-bench", nil)
 	if outcome != nil {
 		return outcome
 	}
@@ -430,19 +430,6 @@ func wavHeader(data []byte) (uint32, uint64, error) {
 	return rate, size64 / uint64(byteRate), nil
 }
 
-// rustFloat is f64's Display: the shortest exact digits, never an exponent.
-func rustFloat(v float64) string {
-	switch {
-	case math.IsNaN(v):
-		return "NaN"
-	case math.IsInf(v, 1):
-		return "inf"
-	case math.IsInf(v, -1):
-		return "-inf"
-	}
-	return strconv.FormatFloat(v, 'f', -1, 64)
-}
-
 func report(out string, run []string, overruns []*overrun) error {
 	fmt.Printf("\n%-26s %8s %9s %9s %9s %9s %6s %5s %8s %6s %9s\n",
 		"model", "frame", "cpu mean", "cpu max", "wall p99", "wall max", "load", "late", "startup", "RSS", "mixer ovr")
@@ -476,7 +463,7 @@ func report(out string, run []string, overruns []*overrun) error {
 			number("wall", "p99Ms"),
 			number("wall", "maxMs"),
 			number("realtimeFactor")*100,
-			rustFloat(number("lateFrames")),
+			num.FormatDecimal(number("lateFrames")),
 			number("startupMs"),
 			number("peakRssKiB")/1024,
 			over,

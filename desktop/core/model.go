@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
@@ -311,7 +312,7 @@ func (e *EQSettings) AddBand(side Channel) (*Band, error) {
 	var highest uint64
 	for _, band := range *bands {
 		if suffix, ok := strings.CutPrefix(band.ID, "band-"); ok {
-			if n, ok := parseRustUint(suffix, 64); ok && n > highest {
+			if n, ok := common.ParseUint(suffix, 64); ok && n > highest {
 				highest = n
 			}
 		}
@@ -671,20 +672,4 @@ func DefaultConfig() Config {
 		SelectedTargets: []string{},
 		Targets:         targets,
 	}
-}
-
-// parseRustUint matches Rust's str::parse for unsigned integers (optional '+'
-// followed by ASCII digits).
-func parseRustUint(text string, bits int) (uint64, bool) {
-	text = strings.TrimPrefix(text, "+")
-	if text == "" {
-		return 0, false
-	}
-	for i := 0; i < len(text); i++ {
-		if text[i] < '0' || text[i] > '9' {
-			return 0, false
-		}
-	}
-	value, err := strconv.ParseUint(text, 10, bits)
-	return value, err == nil
 }

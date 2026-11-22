@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 const (
@@ -96,7 +98,7 @@ func TestMalformedOrMissingHostKeysChangeNothing(t *testing.T) {
 	if _, err := pinHostKeysIn(work, "  ", []string{hostKey}); err == nil {
 		t.Fatal("a blank serial was accepted")
 	}
-	if exists(filepath.Join(work, "known_hosts")) {
+	if common.PathExists(filepath.Join(work, "known_hosts")) {
 		t.Fatal("known_hosts was written")
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
@@ -73,7 +74,7 @@ func BuildTestPackage(outDir string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), name)
+		fmt.Fprintf(&sums, "%s  %s\n", common.SHA256Hex(data), name)
 	}
 	if err := writeBytes(filepath.Join(runtimeDir, "SHA256SUMS"), []byte(sums.String())); err != nil {
 		return nil, err

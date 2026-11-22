@@ -19,21 +19,6 @@ const (
 	RoleTimestamp = "timestamp"
 )
 
-// RoleDebug formats role like Rust's Debug for tough's RoleType.
-func RoleDebug(role string) string {
-	switch role {
-	case RoleRoot:
-		return "Root"
-	case RoleTargets:
-		return "Targets"
-	case RoleSnapshot:
-		return "Snapshot"
-	case RoleTimestamp:
-		return "Timestamp"
-	}
-	return role
-}
-
 const SpecVersion = "1.0.0"
 
 const (

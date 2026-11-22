@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -273,7 +274,7 @@ func pack(root, system, arch, version, name, packDir, out string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	if err := checkFeed(feed, version, pkg, task.Sha256(data)); err != nil {
+	if err := checkFeed(feed, version, pkg, common.SHA256Hex(data)); err != nil {
 		return nil, err
 	}
 	_ = os.RemoveAll(staging)

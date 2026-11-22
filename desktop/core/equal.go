@@ -2,9 +2,9 @@ package core
 
 import "reflect"
 
-// deepEqual mirrors Rust's derived PartialEq: field-by-field comparison with
-// IEEE float equality (NaN != NaN, -0 == 0), nil slices equal to empty slices,
-// pointer dereferencing, and Value.Equal for JSON Values.
+// deepEqual compares values field by field with IEEE float equality
+// (NaN != NaN, -0 == 0), nil slices equal to empty slices, pointer
+// dereferencing, and Value.Equal for JSON Values.
 func deepEqual(a, b any) bool {
 	return equalValues(reflect.ValueOf(a), reflect.ValueOf(b))
 }

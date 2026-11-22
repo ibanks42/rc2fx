@@ -9,7 +9,7 @@ import (
 )
 
 // Request is one control request. Body is raw JSON; nil is no body, which
-// is written as `null`, as serde writes `None`.
+// is written as `null`.
 type Request struct {
 	Method string
 	Path   string
@@ -23,9 +23,9 @@ type Reply struct {
 	Body   json.RawMessage
 }
 
-// MarshalJSON encodes the request matching serde_json (declaration field order,
-// compact, serde string escaping). Call it directly rather than json.Marshal,
-// which HTML-escapes <, >, &, U+2028, and U+2029.
+// MarshalJSON encodes the request in declaration field order, compactly, and
+// without HTML escaping. Call it directly rather than json.Marshal, which
+// HTML-escapes <, >, &, U+2028, and U+2029.
 func (r Request) MarshalJSON() ([]byte, error) {
 	out := []byte(`{"method":`)
 	out = sjson.AppendString(out, r.Method)
@@ -39,7 +39,7 @@ func (r Request) MarshalJSON() ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// MarshalJSON writes the reply exactly as serde_json writes the Rust struct.
+// MarshalJSON writes the reply in compact declaration field order.
 func (r Reply) MarshalJSON() ([]byte, error) {
 	out := []byte(`{"status":`)
 	out = strconv.AppendUint(out, uint64(r.Status), 10)
@@ -51,9 +51,9 @@ func (r Reply) MarshalJSON() ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// UnmarshalJSON reads a request as serde does with `deny_unknown_fields`:
-// unknown and duplicate fields are refused, `method` and `path` are
-// required, and a missing or null `body` is no body.
+// UnmarshalJSON reads a request strictly: unknown and duplicate fields are
+// refused, `method` and `path` are required, and a missing or null `body` is
+// no body.
 func (r *Request) UnmarshalJSON(data []byte) error {
 	var wire struct {
 		_      struct{}         `serde:"deny_unknown_fields"`
@@ -72,7 +72,7 @@ func (r *Request) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// UnmarshalJSON reads a reply as serde does with `deny_unknown_fields`.
+// UnmarshalJSON reads a reply strictly, refusing unknown and duplicate fields.
 // Both fields are required; a null body is the JSON value null.
 func (r *Reply) UnmarshalJSON(data []byte) error {
 	var wire struct {

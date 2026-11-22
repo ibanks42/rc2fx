@@ -26,6 +26,7 @@ import (
 
 	applicenses "github.com/ibanks42/rc2fx/desktop/app/licenses"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -472,7 +473,7 @@ func resourceScript(icon, version string) string {
 	for i := range numbers {
 		numbers[i] = "0"
 		if i < 3 && i < len(parts) {
-			if n, ok := task.ParseUint(parts[i], 16); ok {
+			if n, ok := common.ParseUint(parts[i], 16); ok {
 				numbers[i] = strconv.FormatUint(n, 10)
 			}
 		}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"slices"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 // Inline Go-side wire contract and backward-compatibility tests. Live
@@ -15,13 +17,13 @@ func jsonValuesEqual(a, b Value) bool {
 		return false
 	}
 	switch a.Kind() {
-	case ValueNumber:
+	case sjson.KindNumber:
 		return bytes.Equal(a.Raw(), b.Raw())
-	case ValueArray:
+	case sjson.KindArray:
 		ai, _ := a.AsArray()
 		bi, _ := b.AsArray()
 		return slices.EqualFunc(ai, bi, jsonValuesEqual)
-	case ValueObject:
+	case sjson.KindObject:
 		if a.Len() != b.Len() {
 			return false
 		}

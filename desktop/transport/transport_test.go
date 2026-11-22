@@ -180,7 +180,7 @@ func TestUpdateChunksAreStandardBase64(t *testing.T) {
 	}
 }
 
-func TestStringsAreWrittenAsSerdeWritesThem(t *testing.T) {
+func TestStringsEscapeMinimalJSON(t *testing.T) {
 	if got := string(jsonString("\"\\\b\f\n\r\t\x01\x7f é")); got != "\"\\\"\\\\\\b\\f\\n\\r\\t\\u0001\x7f é\"" {
 		t.Fatalf("got %s", got)
 	}

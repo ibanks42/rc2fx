@@ -17,6 +17,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf/tuftest"
@@ -76,7 +77,7 @@ func filesOf(bundle map[string][]byte) embed.Files {
 func resum(bundle map[string][]byte) {
 	var sums strings.Builder
 	for _, name := range embed.Pinned {
-		sums.WriteString(embed.Sum(bundle[name]) + "  " + name + "\n")
+		sums.WriteString(common.SHA256Hex(bundle[name]) + "  " + name + "\n")
 	}
 	bundle["SHA256SUMS"] = []byte(sums.String())
 }
@@ -374,7 +375,7 @@ func TestUpdatesComeOnlyFromTheTwoOfficialHosts(t *testing.T) {
 
 func TestPublishedMetadataBelongsTogetherOnlyWhenListedExactly(t *testing.T) {
 	snapshot := `{"signed":{"version":4}}`
-	hash := archive.Sum([]byte(snapshot))
+	hash := common.SHA256Hex([]byte(snapshot))
 	timestamp := `{"signed":{"meta":{"snapshot.json":{"length":` + itoa(len(snapshot)) + `,"hashes":{"sha256":"` + hash + `"}}}}}`
 	if !lists(timestamp, "snapshot.json", snapshot) {
 		t.Fatal("an exact listing refused")

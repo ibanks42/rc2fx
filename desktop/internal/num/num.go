@@ -6,7 +6,10 @@
 // argument instead of propagating.
 package num
 
-import "math"
+import (
+	"math"
+	"strconv"
+)
 
 type Float interface{ ~float32 | ~float64 }
 
@@ -58,3 +61,17 @@ func Sin32(x float32) float32    { return float32(math.Sin(float64(x))) }
 func Pow32(x, y float32) float32 { return float32(math.Pow(float64(x), float64(y))) }
 func Floor32(x float32) float32  { return float32(math.Floor(float64(x))) }
 func Abs32(x float32) float32    { return float32(math.Abs(float64(x))) }
+
+// FormatDecimal formats v with shortest round-trip decimal digits and no
+// scientific notation, returning "NaN", "inf", or "-inf" for non-finite values.
+func FormatDecimal(v float64) string {
+	switch {
+	case math.IsNaN(v):
+		return "NaN"
+	case math.IsInf(v, 1):
+		return "inf"
+	case math.IsInf(v, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}

@@ -20,9 +20,9 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/installer/trust"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
-	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 )
 
 // CatalogCache caches the most recently verified signed firmware catalog and
@@ -274,7 +274,7 @@ func lists(listing, name, content string) bool {
 	hashOK := true
 	if hashes, ok := object["hashes"].(map[string]any); ok {
 		if hash, ok := hashes["sha256"].(string); ok {
-			hashOK = equalFoldASCII(hash, archive.Sum([]byte(content)))
+			hashOK = common.ASCIIEqualFold(hash, common.SHA256Hex([]byte(content)))
 		}
 	}
 	return lengthOK && hashOK
@@ -291,25 +291,6 @@ func pointer(value any, path ...string) (any, bool) {
 		}
 	}
 	return value, true
-}
-
-func equalFoldASCII(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range len(a) {
-		x, y := a[i], b[i]
-		if 'A' <= x && x <= 'Z' {
-			x += 'a' - 'A'
-		}
-		if 'A' <= y && y <= 'Z' {
-			y += 'a' - 'A'
-		}
-		if x != y {
-			return false
-		}
-	}
-	return true
 }
 
 func checkRepositoryURL(u *url.URL, host string) error {

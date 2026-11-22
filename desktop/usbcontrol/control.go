@@ -494,7 +494,7 @@ func parseReply(data []byte, limit int) (*Reply, error) {
 		return nil, errors.New("invalid utf-8 sequence")
 	}
 	// core's parser applies the limits and refuses duplicate keys; the
-	// envelope's own decoder then applies serde's field rules.
+	// envelope's own decoder then applies strict field rules.
 	if _, err := core.ParseJSONLimited(string(data), limit, limit/bytesPerNode); err != nil {
 		return nil, err
 	}

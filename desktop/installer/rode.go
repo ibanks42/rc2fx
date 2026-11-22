@@ -18,6 +18,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
@@ -275,7 +276,7 @@ func (e *Engine) imageFor(profile *Profile, serial string) ([]archive.Entry, str
 	}
 	digest := ""
 	if settings != nil {
-		digest = archive.Sum(settings)
+		digest = common.SHA256Hex(settings)
 	}
 	entries, runtime, err := imageEntries(bundle, profile, settings)
 	if err != nil {
@@ -336,7 +337,7 @@ func (e *Engine) fetchMD5(digestURL string, checkHex bool) (string, error) {
 		return "", err
 	}
 	md := strings.ToLower(strings.TrimSpace(strings.ToValidUTF8(string(raw), "�")))
-	if checkHex && (len(md) != 32 || !isHexText(md)) {
+	if checkHex && (len(md) != 32 || !common.IsHex(md)) {
 		return "", Error("RØDE's checksum file is not an MD5")
 	}
 	return md, nil
@@ -531,16 +532,6 @@ func chownToInvoker(path string) error {
 	}
 	defer file.Close()
 	return archive.LocalOwner(file)
-}
-
-func isHexText(text string) bool {
-	for i := range len(text) {
-		c := text[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
-			return false
-		}
-	}
-	return true
 }
 
 // verifyPrepared checks the staged archive, checksums, helper anchor, and

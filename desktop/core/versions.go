@@ -3,7 +3,6 @@ package core
 import (
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -30,7 +29,7 @@ func ParseMixerRelease(data []byte) (MixerRelease, error) {
 			strconv.FormatUint(uint64(release.SchemaVersion), 10))
 	}
 	if _, ok := parseVersion(release.Version); !ok {
-		return MixerRelease{}, CoreError("mixer-release.json version " + rustDebugString(release.Version) +
+		return MixerRelease{}, CoreError("mixer-release.json version " + strconv.Quote(release.Version) +
 			" is not dotted numeric")
 	}
 	if release.ProtocolVersion == 0 {
@@ -72,6 +71,13 @@ func parseVersion(text string) ([]uint64, bool) {
 	return values, true
 }
 
+// ValidVersion reports whether text is a dotted numeric version accepted by
+// CompareVersions.
+func ValidVersion(text string) bool {
+	_, ok := parseVersion(text)
+	return ok
+}
+
 // CompareVersions compares dotted numeric versions (e.g. "1.7" == "1.7.0"),
 // returning (-1/0/1, true) or (0, false) for non-numeric/pre-release strings.
 func CompareVersions(a, b string) (int, bool) {
@@ -99,34 +105,4 @@ func CompareVersions(a, b string) (int, bool) {
 		}
 	}
 	return 0, true
-}
-
-// rustDebugString quotes like Rust's `{:?}` for a str.
-func rustDebugString(text string) string {
-	var out strings.Builder
-	out.WriteByte('"')
-	for _, c := range text {
-		switch c {
-		case '"':
-			out.WriteString(`\"`)
-		case '\\':
-			out.WriteString(`\\`)
-		case '\n':
-			out.WriteString(`\n`)
-		case '\r':
-			out.WriteString(`\r`)
-		case '\t':
-			out.WriteString(`\t`)
-		case 0:
-			out.WriteString(`\0`)
-		default:
-			if unicode.IsControl(c) || IsBidiControl(c) || !unicode.IsPrint(c) {
-				out.WriteString(`\u{` + strconv.FormatInt(int64(c), 16) + `}`)
-			} else {
-				out.WriteRune(c)
-			}
-		}
-	}
-	out.WriteByte('"')
-	return out.String()
 }

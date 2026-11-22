@@ -1,3 +1,5 @@
+//go:build mockmixer
+
 package app
 
 // Headless UI tests for the licenses dialog, driven by desktop/app/uitest.
@@ -19,7 +21,7 @@ var UITestModes = map[string]string{
 	"licenses-markup":  "license_words_and_markup_characters_survive_rich_text_rendering",
 	"licenses-long":    "long_notices_keep_a_bounded_viewport_and_copy_the_entire_text",
 	"licenses-lazy":    "sections_parse_lazily_and_keep_selection_when_reopened",
-	"licenses-measure": "measure_license_redraws (ignored in the Rust: a measurement)",
+	"licenses-measure": "measure_license_redraws (benchmark measurement)",
 }
 
 type uitest struct {

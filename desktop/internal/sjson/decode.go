@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-// Strict typed JSON decoding matching serde's derive semantics.
+// Strict typed JSON decoding.
 //
 // Struct fields use their `json` tag name (or the Go field name if untagged;
 // `json:"-"` skips the field). Key differences from encoding/json:
@@ -172,7 +172,7 @@ func decodeInto(tree Tree, target reflect.Value, strictMode bool) error {
 		return decodeUnsigned(tree, target)
 	case reflect.Float32, reflect.Float64:
 		if tree.kind != KindNumber {
-			return invalidType(tree, rustTypeName(t))
+			return invalidType(tree, t.String())
 		}
 		target.SetFloat(tree.number.AsF64())
 		return nil
@@ -235,24 +235,24 @@ func decodeInto(tree Tree, target reflect.Value, strictMode bool) error {
 func decodeSigned(tree Tree, target reflect.Value) error {
 	t := target.Type()
 	if tree.kind != KindNumber {
-		return invalidType(tree, rustTypeName(t))
+		return invalidType(tree, t.String())
 	}
 	bits := t.Bits()
 	low, high := int64(-1)<<(bits-1), int64(1)<<(bits-1)-1
 	switch tree.number.kind {
 	case numberU64:
 		if tree.number.bits > uint64(high) {
-			return invalidValue(tree, rustTypeName(t))
+			return invalidValue(tree, t.String())
 		}
 		target.SetInt(int64(tree.number.bits))
 	case numberI64:
 		value := int64(tree.number.bits)
 		if value < low {
-			return invalidValue(tree, rustTypeName(t))
+			return invalidValue(tree, t.String())
 		}
 		target.SetInt(value)
 	default:
-		return invalidType(tree, rustTypeName(t))
+		return invalidType(tree, t.String())
 	}
 	return nil
 }
@@ -260,19 +260,19 @@ func decodeSigned(tree Tree, target reflect.Value) error {
 func decodeUnsigned(tree Tree, target reflect.Value) error {
 	t := target.Type()
 	if tree.kind != KindNumber {
-		return invalidType(tree, rustTypeName(t))
+		return invalidType(tree, t.String())
 	}
 	switch tree.number.kind {
 	case numberU64:
 		bits := t.Bits()
 		if bits < 64 && tree.number.bits > uint64(1)<<bits-1 {
-			return invalidValue(tree, rustTypeName(t))
+			return invalidValue(tree, t.String())
 		}
 		target.SetUint(tree.number.bits)
 	case numberI64:
-		return invalidValue(tree, rustTypeName(t))
+		return invalidValue(tree, t.String())
 	default:
-		return invalidType(tree, rustTypeName(t))
+		return invalidType(tree, t.String())
 	}
 	return nil
 }
@@ -415,7 +415,7 @@ func unknownField(name string, info *structInfo) error {
 	return Error(message)
 }
 
-// unexpected formats a value description matching serde's error messages.
+// unexpected formats a short description of tree for decode errors.
 func unexpected(tree Tree) string {
 	switch tree.kind {
 	case KindNull:
@@ -446,34 +446,4 @@ func invalidType(tree Tree, expected string) error {
 
 func invalidValue(tree Tree, expected string) error {
 	return Error("invalid value: " + unexpected(tree) + ", expected " + expected)
-}
-
-func rustTypeName(t reflect.Type) string {
-	switch t.Kind() {
-	case reflect.Int8:
-		return "i8"
-	case reflect.Int16:
-		return "i16"
-	case reflect.Int32:
-		return "i32"
-	case reflect.Int64:
-		return "i64"
-	case reflect.Int:
-		return "isize"
-	case reflect.Uint8:
-		return "u8"
-	case reflect.Uint16:
-		return "u16"
-	case reflect.Uint32:
-		return "u32"
-	case reflect.Uint64:
-		return "u64"
-	case reflect.Uint, reflect.Uintptr:
-		return "usize"
-	case reflect.Float32:
-		return "f32"
-	case reflect.Float64:
-		return "f64"
-	}
-	return t.String()
 }

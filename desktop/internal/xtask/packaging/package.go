@@ -20,6 +20,7 @@ import (
 	applicenses "github.com/ibanks42/rc2fx/desktop/app/licenses"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -173,8 +174,8 @@ func executableImages(system string, executable []byte) ([]image, error) {
 	return out, nil
 }
 
-// hostTarget is this machine's target triple, in rustc's naming, from the
-// Go toolchain's GOOS and GOARCH.
+// hostTarget is this machine's target triple (such as x86_64-unknown-linux-gnu)
+// from the Go toolchain's GOOS and GOARCH.
 func hostTarget() (string, error) {
 	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
 	vendor := map[string]string{
@@ -300,7 +301,7 @@ func writeChecksums(out string, published []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), filepath.Base(path))
+		fmt.Fprintf(&sums, "%s  %s\n", common.SHA256Hex(data), filepath.Base(path))
 	}
 	path := filepath.Join(out, "SHA256SUMS")
 	if err := os.WriteFile(path, []byte(sums.String()), 0o666); err != nil {
@@ -494,14 +495,14 @@ func Run(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("  %s\n  sha256 %s\n", p, task.Sha256(data))
+		fmt.Printf("  %s\n  sha256 %s\n", p, common.SHA256Hex(data))
 	}
 	fmt.Printf("  unpacked app in %s\n", packDir)
 	return nil
 }
 
 // releaseDir is where the build puts the app: target/release, or
-// target/TRIPLE/release for --target, as cargo did.
+// target/TRIPLE/release when --target is set.
 func releaseDir(root string, target *string) string {
 	dir := filepath.Join(root, "target")
 	if target != nil {

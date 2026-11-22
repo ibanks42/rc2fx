@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 func TestABackupRecordCannotPointTheHelperOutsideTheCacheFolder(t *testing.T) {
@@ -140,7 +141,7 @@ func TestFlashCopiesVerifiesEjectsThenSendsU(t *testing.T) {
 	put(t, filepath.Join(usb, ".rc2fx-archive.tar.gz.part"), []byte("partial"))
 	must(t, x.engine.flash(""))
 	must(t, verifyArchive(usb, &x.prepared))
-	if exists(filepath.Join(usb, ".rc2fx-archive.tar.gz.part")) {
+	if common.PathExists(filepath.Join(usb, ".rc2fx-archive.tar.gz.part")) {
 		t.Fatal("partial file left")
 	}
 	if x.counts() != [3]int{1, 1, 1} {
@@ -175,7 +176,7 @@ func TestAMixerWithAPlaceholderSerialIsNeverSwitchedOrFlashed(t *testing.T) {
 	if x.counts() != [3]int{0, 0, 0} {
 		t.Fatalf("counts %v", x.counts())
 	}
-	if exists(filepath.Join(usb, "archive.tar.gz")) {
+	if common.PathExists(filepath.Join(usb, "archive.tar.gz")) {
 		t.Fatal("nothing is copied to the drive")
 	}
 }
@@ -217,7 +218,7 @@ func TestFlashNeverWritesAnotherDriveOrFlashesMountedMedia(t *testing.T) {
 	if x.engine.flash("") == nil {
 		t.Fatal("flashed another mixer's drive")
 	}
-	if exists(filepath.Join(usb, "archive.tar.gz")) {
+	if common.PathExists(filepath.Join(usb, "archive.tar.gz")) {
 		t.Fatal("wrong drive written")
 	}
 	if x.counts() != [3]int{} {
@@ -240,7 +241,7 @@ func TestFlashNeverWritesAnotherDriveOrFlashesMountedMedia(t *testing.T) {
 	if x.engine.flash("") == nil {
 		t.Fatal("normal mode is not update mode")
 	}
-	if exists(filepath.Join(usb, "archive.tar.gz")) {
+	if common.PathExists(filepath.Join(usb, "archive.tar.gz")) {
 		t.Fatal("written in normal mode")
 	}
 

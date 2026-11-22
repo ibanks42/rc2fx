@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 var (
@@ -28,7 +30,7 @@ func resum(t *testing.T, files Files) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(&manifest, "%s  %s\n", Sum(data), n)
+		fmt.Fprintf(&manifest, "%s  %s\n", common.SHA256Hex(data), n)
 	}
 	for i := range files {
 		if files[i].Name == "SHA256SUMS" {
@@ -234,13 +236,13 @@ func TestTheManifestPinsNamesOrderCountAndTrailingBytes(t *testing.T) {
 	_, err := Find(Wrap(extra))
 	wantError(t, err, "bytes after its last file")
 	last := files[len(files)-1]
-	old := fmt.Sprintf("%s  %d  %s\n", Sum(last.Data), len(last.Data), last.Name)
-	shorter := fmt.Sprintf("%s  %d  %s\n", Sum(last.Data), len(last.Data)-1, last.Name)
+	old := fmt.Sprintf("%s  %d  %s\n", common.SHA256Hex(last.Data), len(last.Data), last.Name)
+	shorter := fmt.Sprintf("%s  %d  %s\n", common.SHA256Hex(last.Data), len(last.Data)-1, last.Name)
 	sizes := bytes.Replace(Body(files), []byte(old), []byte(shorter), 1)
 	_, err = Find(Wrap(sizes))
 	wantError(t, err, "does not match its embedded checksum", "bytes after its last file")
 	// A size one byte too large cannot be met either.
-	longer := fmt.Sprintf("%s  %d  %s\n", Sum(last.Data), len(last.Data)+1, last.Name)
+	longer := fmt.Sprintf("%s  %d  %s\n", common.SHA256Hex(last.Data), len(last.Data)+1, last.Name)
 	sizes = bytes.Replace(Body(files), []byte(old), []byte(longer), 1)
 	if _, err := Find(Wrap(sizes)); err == nil {
 		t.Fatal("a size too large was met")

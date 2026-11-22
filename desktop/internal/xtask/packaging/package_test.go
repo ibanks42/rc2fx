@@ -10,7 +10,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 var scripts = []string{"rc2fx.sh", "rc2fx-shim.sh", "rc2fx-gui-shim.sh", "install.sh"}
@@ -26,7 +26,7 @@ func put(t *testing.T, root, name string, data []byte) {
 	}
 }
 
-func sha(data []byte) string { return task.Sha256(data) }
+func sha(data []byte) string { return common.SHA256Hex(data) }
 
 // fixture creates a temp checkout with a fake mixer build, scripts, and a
 // synthetic executable embedding that payload.

@@ -179,13 +179,13 @@ func decodeSPKI(text string) (crypto.PublicKey, error) {
 	return pub, nil
 }
 
-// verify checks a TUF signature (RSA-PSS/SHA-256 2048–8192 bit, Ed25519, or
+// verify checks a TUF signature (RSA-PSS/SHA-256 2048 to 4096 bit, Ed25519, or
 // ECDSA P-256 ASN.1).
 func (k Key) verify(message, signature []byte) bool {
 	digest := sha256.Sum256(message)
 	switch pub := k.public.(type) {
 	case *rsa.PublicKey:
-		if bits := pub.N.BitLen(); bits < 2048 || bits > 8192 {
+		if bits := pub.N.BitLen(); bits < 2048 || bits > 4096 {
 			return false
 		}
 		return rsa.VerifyPSS(pub, crypto.SHA256, digest[:], signature, &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash}) == nil
@@ -307,12 +307,12 @@ func ParseKeyPair(data []byte) (Signer, error) {
 	return nil, unrecognized
 }
 
-// rsaRejected enforces aws-lc-rs's 2048–8192 bit RSA key size bounds.
+// rsaRejected enforces the 2048 to 4096 bit RSA key size bounds the verifiers accept.
 func rsaRejected(key *rsa.PrivateKey) string {
 	switch bits := key.N.BitLen(); {
 	case bits < 2048:
 		return "TooSmall"
-	case bits > 8192:
+	case bits > 4096:
 		return "TooLarge"
 	}
 	return ""

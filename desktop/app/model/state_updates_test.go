@@ -268,8 +268,8 @@ func TestOldGenerationAndUnrelatedExactRevisionCannotHideChanges(t *testing.T) {
 }
 
 // A save's echo and reply with a value the mixer stored one unit in the last
-// place off (serde_json's default parser): the echo is ours, the reply is
-// accepted, and the draft takes the stored value, so nothing is left to save.
+// place off: the echo is ours, the reply is accepted, and the draft takes the
+// stored value, so nothing is left to save.
 func TestSaveStoredOneULPOffIsAcceptedAndLeavesNothingToSave(t *testing.T) {
 	for _, echoFirst := range []bool{false, true} {
 		session := core.DefaultSession()

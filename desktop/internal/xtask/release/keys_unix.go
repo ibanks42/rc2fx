@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
@@ -106,7 +107,7 @@ func createKeys(destination, checkout string) error {
 	if err := writePrivate(filepath.Join(destination, "public", "root.json"), buffer); err != nil {
 		return err
 	}
-	if err := writePrivate(filepath.Join(destination, "public", "root.sha256"), []byte(task.Sha256(buffer)+"  root.json\n")); err != nil {
+	if err := writePrivate(filepath.Join(destination, "public", "root.sha256"), []byte(common.SHA256Hex(buffer)+"  root.json\n")); err != nil {
 		return err
 	}
 	// Sentinel written last to distinguish a finished setup from a partial one.

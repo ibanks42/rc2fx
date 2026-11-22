@@ -22,6 +22,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 )
@@ -113,9 +114,8 @@ fi
 sync
 `
 
-// Every flag change ends in `sync`: the mixer is power-cycled through an
-// outlet, and a recent ext4 write that was never flushed can be lost
-// (measured on the device 2026-11-01).
+// Every flag change ends in `sync`: a sudden power loss can otherwise drop a
+// recent ext4 write that was never flushed (measured on the device 2026-11-01).
 const enableScript = `test -x /usr/sbin/rc_audio_mixer || { echo "RC2FX is not installed"; exit 1; }
 rm -f /opt/rc2fx/disabled
 sync
@@ -140,56 +140,51 @@ func Run(action string, rest []string) error {
 	return act(mixer, filepath.Join(task.Root(), "target", "mixer"), action, rest)
 }
 
-// act runs one action, with build as target/mixer. An action that changes
-// or runs something on the mixer arms power recovery first. `status` and
-// `logs` only read. `api` goes to the controller over USB 1 and never uses
+// act runs one action, with build as target/mixer. When pre_command is
+// configured, mutating actions run it first and abort if it fails. `status`
+// and `logs` only read. `api` goes to the controller over USB 1 and never uses
 // SSH.
 func act(mixer *Mixer, build, action string, rest []string) error {
-	armed := func() (*Armed, error) { return mixer.ArmPowerRecovery("mixer " + action) }
+	prepare := func() error { return mixer.Prepare("mixer " + action) }
 	switch {
 	case action == "run" && len(rest) == 0:
-		a, err := armed()
-		if err != nil {
+		if err := prepare(); err != nil {
 			return err
 		}
-		if err := a.upload(build); err != nil {
+		if err := mixer.upload(build); err != nil {
 			return err
 		}
-		return a.script(runScript)
+		return mixer.script(runScript)
 	case action == "install" && len(rest) == 0:
-		a, err := armed()
-		if err != nil {
+		if err := prepare(); err != nil {
 			return err
 		}
-		if err := a.upload(build); err != nil {
+		if err := mixer.upload(build); err != nil {
 			return err
 		}
 		install, err := script(installShPath)
 		if err != nil {
 			return err
 		}
-		if err := a.script(install); err != nil {
+		if err := mixer.script(install); err != nil {
 			return err
 		}
-		return a.script(commitScript)
+		return mixer.script(commitScript)
 	case action == "uninstall" && len(rest) == 0:
-		a, err := armed()
-		if err != nil {
+		if err := prepare(); err != nil {
 			return err
 		}
-		return a.script(uninstallScript)
+		return mixer.script(uninstallScript)
 	case action == "uninstall" && len(rest) == 1 && rest[0] == "--purge":
-		a, err := armed()
-		if err != nil {
+		if err := prepare(); err != nil {
 			return err
 		}
-		return a.script("PURGE=1\n" + uninstallScript)
+		return mixer.script("PURGE=1\n" + uninstallScript)
 	case action == "stop" && len(rest) == 0:
-		a, err := armed()
-		if err != nil {
+		if err := prepare(); err != nil {
 			return err
 		}
-		return a.script(onMixer(action))
+		return mixer.script(onMixer(action))
 	case (action == "status" || action == "logs") && len(rest) == 0:
 		return mixer.send("/bin/sh -s", []byte(onMixer(action)))
 	case action == "api" && len(rest) == 2:
@@ -197,35 +192,34 @@ func act(mixer *Mixer, build, action string, rest []string) error {
 	case action == "api" && len(rest) == 3:
 		return api(rest[0], rest[1], &rest[2])
 	case action == "enable" && len(rest) == 0:
-		a, err := armed()
-		if err != nil {
+		if err := prepare(); err != nil {
 			return err
 		}
-		return a.script(enableScript)
+		return mixer.script(enableScript)
 	case action == "xruns":
 		return xruns(mixer, rest)
 	case action == "disable" && len(rest) == 0:
-		a, err := armed()
-		if err != nil {
+		if err := prepare(); err != nil {
 			return err
 		}
-		return a.script(disableScript)
+		return mixer.script(disableScript)
 	}
 	return task.Errorf("unknown mixer action `%s`; see `./xtask help`", action)
 }
 
 // Mixer is how to reach the mixer over SSH.
 type Mixer struct {
-	host    string
-	options []string
+	ip           string
+	user         string
+	host         string
+	key          string
+	knownHosts   string
+	hostKeyAlias string
+	preCommand   string
+	options      []string
 	// program is `ssh`; only this package's tests put a stand-in here.
 	program string
 }
-
-// Armed is a mixer whose power recovery this command has armed and
-// verified. Only Mixer.ArmPowerRecovery makes one, and only it can upload or
-// run a script.
-type Armed struct{ *Mixer }
 
 // Load reads the mixer connection. Settings from the environment win over
 // .rc2fx-mixer.conf.
@@ -241,7 +235,7 @@ func Load() (*Mixer, error) {
 			ok = false
 		}
 		if !ok {
-			for _, line := range lines(file) {
+			for _, line := range common.Lines(file) {
 				name, v, found := strings.Cut(line, "=")
 				if found && strings.TrimSpace(name) == key {
 					value, ok = strings.Trim(strings.TrimSpace(v), `"`), true
@@ -260,42 +254,43 @@ func Load() (*Mixer, error) {
 		user = "root"
 	}
 	options := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
-	if key, ok := setting("key"); ok {
+	key, _ := setting("key")
+	if key != "" {
 		options = append(options, "-i", key, "-o", "IdentitiesOnly=yes")
 	}
-	if known, ok := setting("known_hosts"); ok {
+	known, _ := setting("known_hosts")
+	if known != "" {
 		options = append(options, "-o", "UserKnownHostsFile="+known)
 	}
 	// The app pins the mixer's host key under `rc2fx-<id>`, not its
 	// address, so the key stays trusted when the address changes.
-	if alias, ok := setting("host_key_alias"); ok {
+	alias, _ := setting("host_key_alias")
+	if alias != "" {
 		for i := 0; i < len(alias); i++ {
 			c := alias[i]
 			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
-				return nil, task.Errorf("host_key_alias %s is not an RC2FX alias", task.Debug(alias))
+				return nil, task.Errorf("host_key_alias %q is not an RC2FX alias", alias)
 			}
 		}
 		options = append(options, "-o", "HostKeyAlias="+alias)
 	}
-	return &Mixer{host: user + "@" + ip, options: options, program: "ssh"}, nil
-}
-
-// lines splits at '\n', drops a '\r' before it, and gives no empty line
-// after a final '\n'.
-func lines(text string) []string {
-	var out []string
-	for text != "" {
-		line, rest, found := strings.Cut(text, "\n")
-		if found {
-			line = strings.TrimSuffix(line, "\r")
-		}
-		out = append(out, line)
-		text = rest
-		if !found {
-			break
+	preCommand, _ := setting("pre_command")
+	if strings.HasPrefix(preCommand, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			preCommand = filepath.Join(home, preCommand[2:])
 		}
 	}
-	return out
+	return &Mixer{
+		ip:           ip,
+		user:         user,
+		host:         user + "@" + ip,
+		key:          key,
+		knownHosts:   known,
+		hostKeyAlias: alias,
+		preCommand:   preCommand,
+		options:      options,
+		program:      "ssh",
+	}, nil
 }
 
 func (m *Mixer) command(remote string) *exec.Cmd {
@@ -303,18 +298,32 @@ func (m *Mixer) command(remote string) *exec.Cmd {
 	return exec.Command(m.program, args...)
 }
 
-// ArmPowerRecovery sets and verifies the bootloader's one-shot power-recovery
-// flag before running any mutating action. A hung mixer must be reset by
-// cutting outlet power and would otherwise stay off until its power button is
-// pressed. This runs `rc2fx.sh arm-power-recovery` and checks that
-// reboot_pwr_button_bypass reads back as `1`.
-func (m *Mixer) ArmPowerRecovery(action string) (*Armed, error) {
-	if err := m.arm(); err != nil {
-		return nil, task.Errorf("`%s` was not started: power recovery could not be armed (%s).\n"+
-			"After a power cycle the mixer would stay off until its button is pressed.", action, err)
+// Prepare runs the optional local pre_command hook before a mutating mixer
+// action. If no pre_command is configured, it is a no-op.
+func (m *Mixer) Prepare(action string) error {
+	if m.preCommand == "" {
+		return nil
 	}
-	fmt.Println("Power recovery armed: after an outlet power cycle the mixer turns itself on (one boot only)")
-	return &Armed{m}, nil
+	cmd := exec.Command(m.preCommand, action)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(),
+		"RC2FX_MIXER_ACTION="+action,
+		"RC2FX_MIXER_IP="+m.ip,
+		"RC2FX_MIXER_USER="+m.user,
+		"RC2FX_MIXER_HOST="+m.host,
+		"RC2FX_MIXER_KEY="+m.key,
+		"RC2FX_MIXER_KNOWN_HOSTS="+m.knownHosts,
+		"RC2FX_MIXER_HOST_KEY_ALIAS="+m.hostKeyAlias,
+	)
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return task.Errorf("`%s` was not started: pre_command failed (%s)", action, task.Status(cmd.ProcessState))
+		}
+		return task.Errorf("`%s` was not started: could not run pre_command %q: %s", action, m.preCommand, task.IOError(err))
+	}
+	return nil
 }
 
 // runWithInput starts command, writes input to its stdin and waits. It
@@ -342,65 +351,6 @@ func runWithInput(command *exec.Cmd, input []byte) (started bool, writeErr, wait
 		waitErr = nil
 	}
 	return true, writeErr, waitErr
-}
-
-func (m *Mixer) arm() error {
-	failed := func(what string, command *exec.Cmd, stderr []byte) error {
-		said := strings.ToValidUTF8(string(stderr), "�")
-		text := fmt.Sprintf("%s failed (%s) %s", what, task.Status(command.ProcessState), strings.TrimSpace(said))
-		return task.Error(strings.TrimRightFunc(text, isSpace))
-	}
-	rc2fx, err := script(rc2fxShPath)
-	if err != nil {
-		return err
-	}
-	command := m.command("/bin/bash -s -- arm-power-recovery")
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	started, writeErr, waitErr := runWithInput(command, []byte(task.CRLFToLF(rc2fx)))
-	if !started {
-		return task.Errorf("could not start ssh: %s", task.IOError(waitErr))
-	}
-	if waitErr != nil {
-		return task.Error(task.IOError(waitErr))
-	}
-	if !command.ProcessState.Success() {
-		return failed("rc2fx.sh arm-power-recovery", command, stderr.Bytes())
-	}
-	// A script cut short would end without an error and without arming.
-	if writeErr != nil {
-		return task.Errorf("sending rc2fx.sh: %s", task.IOError(writeErr))
-	}
-	readback := m.command("fw_printenv -n reboot_pwr_button_bypass")
-	var out, errOut bytes.Buffer
-	readback.Stdout = &out
-	readback.Stderr = &errOut
-	if err := readback.Start(); err != nil {
-		return task.Errorf("could not start ssh: %s", task.IOError(err))
-	}
-	if err := readback.Wait(); err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
-			return task.Error(task.IOError(err))
-		}
-	}
-	if !readback.ProcessState.Success() {
-		return failed("reading the flag back", readback, errOut.Bytes())
-	}
-	value := strings.TrimSpace(strings.ToValidUTF8(out.String(), "�"))
-	if value != "1" {
-		return task.Errorf("reboot_pwr_button_bypass reads back as %s, not 1", task.Debug(value))
-	}
-	return nil
-}
-
-func isSpace(r rune) bool {
-	switch r {
-	case ' ', '\t', '\n', '\v', '\f', '\r', 0x85, 0xA0:
-		return true
-	}
-	return r > 0xff && strings.ContainsRune("                　", r)
 }
 
 // send runs remote on the mixer with input on its stdin.
@@ -447,12 +397,12 @@ func (m *Mixer) capture(remote string) ([]byte, error) {
 }
 
 // ssh runs remote on the mixer with input on its stdin.
-func (a *Armed) ssh(remote string, input []byte) error { return a.send(remote, input) }
+func (m *Mixer) ssh(remote string, input []byte) error { return m.send(remote, input) }
 
 // captureScript runs script with the mixer's shell and returns what it
 // writes to stdout; its stderr is passed through.
-func (a *Armed) captureScript(script string) ([]byte, error) {
-	command := a.command("/bin/sh -s")
+func (m *Mixer) captureScript(script string) ([]byte, error) {
+	command := m.command("/bin/sh -s")
 	var stdout bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = os.Stderr
@@ -472,7 +422,7 @@ func (a *Armed) captureScript(script string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-func (a *Armed) script(script string) error { return a.ssh("/bin/sh -s", []byte(script)) }
+func (m *Mixer) script(script string) error { return m.ssh("/bin/sh -s", []byte(script)) }
 
 // ustar appends one regular file to a tar archive with a ustar header:
 // mode, size, time 0, no owner.
@@ -508,7 +458,7 @@ func uploadMode(name string) int64 {
 // upload stages the build in RAM at /run/rc2fx-upload, verified on arrival.
 // The files are embed.PayloadNames: the pinned build from target/mixer, its
 // SHA256SUMS and the scripts from the repository.
-func (a *Armed) upload(build string) error {
+func (m *Mixer) upload(build string) error {
 	read := func(name string) ([]byte, error) {
 		data, err := os.ReadFile(filepath.Join(build, name))
 		if err != nil {
@@ -544,7 +494,7 @@ func (a *Armed) upload(build string) error {
 	}
 	var expected strings.Builder
 	for _, name := range embed.Pinned {
-		fmt.Fprintf(&expected, "%s  %s\n", task.Sha256(files[name]), name)
+		fmt.Fprintf(&expected, "%s  %s\n", common.SHA256Hex(files[name]), name)
 	}
 	if string(files["SHA256SUMS"]) != expected.String() {
 		return task.Error("target/mixer does not match its SHA256SUMS; rebuild it")
@@ -570,8 +520,8 @@ func (a *Armed) upload(build string) error {
 	if err := writer.Close(); err != nil {
 		return task.Error(err.Error())
 	}
-	fmt.Printf("Uploading to %s\n", a.host)
-	return a.ssh("set -e; rm -rf /run/rc2fx-upload; mkdir -m 700 /run/rc2fx-upload; "+
+	fmt.Printf("Uploading to %s\n", m.host)
+	return m.ssh("set -e; rm -rf /run/rc2fx-upload; mkdir -m 700 /run/rc2fx-upload; "+
 		"tar -xf - -C /run/rc2fx-upload; cd /run/rc2fx-upload; sha256sum -c SHA256SUMS > /dev/null", archive.Bytes())
 }
 

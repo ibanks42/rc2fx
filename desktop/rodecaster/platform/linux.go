@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
@@ -35,11 +36,6 @@ func readTrim(path string) string {
 }
 
 func isRoot() bool { return os.Geteuid() == 0 }
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
 
 // usbAncestor is the serial and product ID of the RØDE USB device above a
 // sysfs node.
@@ -234,7 +230,7 @@ func mixerDisk(device string) (string, bool, string, error) {
 		return "", false, "", platformError("block device is not a RØDECaster disk")
 	}
 	whole := device
-	if exists(filepath.Join(sys, "partition")) {
+	if common.PathExists(filepath.Join(sys, "partition")) {
 		resolved, err := filepath.EvalSymlinks(sys)
 		if err != nil {
 			return "", false, "", err
@@ -448,7 +444,7 @@ func disks(identity func(string) (string, string, error), fits func(uint64) bool
 		if !fits(sectors * 512) {
 			continue
 		}
-		if !exists(filepath.Join(sys, "partition")) {
+		if !common.PathExists(filepath.Join(sys, "partition")) {
 			// A whole disk with partitions is represented by its partition.
 			children, err := os.ReadDir(sys)
 			if err != nil {
@@ -456,7 +452,7 @@ func disks(identity func(string) (string, string, error), fits func(uint64) bool
 			}
 			hasChildren := false
 			for _, child := range children {
-				if strings.HasPrefix(child.Name(), name) && exists(filepath.Join(sys, child.Name(), "partition")) {
+				if strings.HasPrefix(child.Name(), name) && common.PathExists(filepath.Join(sys, child.Name(), "partition")) {
 					hasChildren = true
 				}
 			}

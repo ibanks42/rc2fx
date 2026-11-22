@@ -8,6 +8,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
@@ -54,14 +55,6 @@ type Model struct {
 	// StorageFixChosen is the user's opt-in for the experimental storage fix
 	// (see StorageFixOffered). Off by default and not remembered between opens.
 	StorageFixChosen bool
-}
-
-func nowUnix() uint64 {
-	now := time.Now().Unix()
-	if now < 0 {
-		return 0
-	}
-	return uint64(now)
 }
 
 func NewModel() *Model {
@@ -352,7 +345,7 @@ func (m *Model) Prepared() *installer.Prepared {
 
 func (m *Model) recentlyFlashed() bool {
 	return m.Status != nil &&
-		MayBeUpdating(FlashedRecently(&m.Status.Saved, m.SettledFlash, nowUnix()), m.USB(), m.Answering())
+		MayBeUpdating(FlashedRecently(&m.Status.Saved, m.SettledFlash, common.NowUnix()), m.USB(), m.Answering())
 }
 
 // MayBeUpdating reports whether a recently flashed mixer may still be updating.

@@ -14,12 +14,6 @@ import (
 	"path/filepath"
 )
 
-// Sum returns the hex-encoded SHA-256 digest of data.
-func Sum(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
-}
-
 type Algorithm int
 
 const (

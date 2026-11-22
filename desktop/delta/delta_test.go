@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 type testFile struct {
@@ -21,14 +23,14 @@ type testFile struct {
 func makeEnvelope(files []testFile) []byte {
 	var body []byte
 	for _, f := range files {
-		body = fmt.Appendf(body, "%s  %d  %s\n", sum(f.data), len(f.data), f.name)
+		body = fmt.Appendf(body, "%s  %d  %s\n", common.SHA256Hex(f.data), len(f.data), f.name)
 	}
 	for _, f := range files {
 		body = append(body, f.data...)
 	}
 	out := []byte("RC2FX-EMBEDDED-PAYLOAD 1\n")
 	out = fmt.Appendf(out, "length %d\n", len(body))
-	out = fmt.Appendf(out, "sha256 %s\n", sum(body))
+	out = fmt.Appendf(out, "sha256 %s\n", common.SHA256Hex(body))
 	return append(out, body...)
 }
 
@@ -43,7 +45,7 @@ func sampleFiles() (shared, old, updated, gui []byte) {
 }
 
 func installedFor(shared, old []byte) map[string]string {
-	return map[string]string{"librc2fx_native.so": sum(shared), "rc2fxd": sum(old)}
+	return map[string]string{"librc2fx_native.so": common.SHA256Hex(shared), "rc2fxd": common.SHA256Hex(old)}
 }
 
 func basesFor(old []byte) map[string][]byte {
@@ -109,7 +111,7 @@ func verifyDelta(t *testing.T, d []byte, installed map[string][]byte, wantEnvelo
 			opts := []zstd.DOption{zstd.WithDecoderMaxWindow(1 << windowLogMax)}
 			if fields[0] == "patch" {
 				base := installed[entry.Name]
-				if sum(base) != fields[1] {
+				if common.SHA256Hex(base) != fields[1] {
 					t.Fatalf("%s: patch base hash mismatch", entry.Name)
 				}
 				if len(base) > 0 {
@@ -190,7 +192,7 @@ func TestTheManifestIsReadWithoutAFixedFileCount(t *testing.T) {
 		t.Fatalf("head and files are %d bytes of %d", total, len(env))
 	}
 	for i, e := range entries {
-		if e.Name != files[i].name || e.Size != uint64(len(files[i].data)) || e.SHA256 != sum(files[i].data) {
+		if e.Name != files[i].name || e.Size != uint64(len(files[i].data)) || e.SHA256 != common.SHA256Hex(files[i].data) {
 			t.Errorf("entry %d: %+v", i, e)
 		}
 	}
@@ -237,7 +239,7 @@ func TestMalformedEnvelopesAreRefused(t *testing.T) {
 func TestAStaleBaseIsNotUsedEvenWhenTheNameMatches(t *testing.T) {
 	_, old, updated, _ := sampleFiles()
 	env := makeEnvelope([]testFile{{"rc2fxd", updated}})
-	installed := map[string]string{"rc2fxd": sum([]byte("something else"))}
+	installed := map[string]string{"rc2fxd": common.SHA256Hex([]byte("something else"))}
 	d := mustEncode(t, env, installed, basesFor(old), 19)
 	if !strings.Contains(string(d), "zstd ") {
 		t.Fatal("patched against a stale base")
@@ -257,7 +259,7 @@ func TestFramesSuitTheMixersDecoder(t *testing.T) {
 		{"empty-patch", empty},
 	})
 	installed := installedFor(shared, old)
-	installed["empty-patch"] = sum(old)
+	installed["empty-patch"] = common.SHA256Hex(old)
 	bases := basesFor(old)
 	bases["empty-patch"] = bytes.Clone(old)
 	for _, level := range []int{1, 3, 7, 19, 22} {

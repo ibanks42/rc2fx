@@ -4,6 +4,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // Equalizer APO / AutoEQ parametric text import. Data-only: commands like
@@ -14,30 +16,10 @@ func apoError(line int, message string) error {
 }
 
 func apoNumber(text string, line int) (float64, error) {
-	if value, ok := parseRustFloat(text); ok && !math.IsNaN(value) && !math.IsInf(value, 0) {
+	if value, ok := parseDecimalFloat(text); ok && !math.IsNaN(value) && !math.IsInf(value, 0) {
 		return value, nil
 	}
 	return 0, apoError(line, "Expected a finite number, found "+text)
-}
-
-// asciiEqualFold compares a and b ignoring the case of ASCII letters only.
-func asciiEqualFold(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		x, y := a[i], b[i]
-		if x >= 'A' && x <= 'Z' {
-			x += 'a' - 'A'
-		}
-		if y >= 'A' && y <= 'Z' {
-			y += 'a' - 'A'
-		}
-		if x != y {
-			return false
-		}
-	}
-	return true
 }
 
 func asciiUpper(text string) string {
@@ -50,25 +32,9 @@ func asciiUpper(text string) string {
 	return string(out)
 }
 
-// rustLines splits on \n, drops a \r before it, and gives no empty final
-// line after a trailing newline.
-func rustLines(text string) []string {
-	if text == "" {
-		return nil
-	}
-	lines := strings.Split(text, "\n")
-	if lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
-	}
-	return lines
-}
-
-// parseRustFloat matches Rust's f64::from_str (decimal floats plus inf/nan;
-// rejects hex floats and underscores).
-func parseRustFloat(text string) (float64, bool) {
+// parseDecimalFloat parses decimal floats plus inf/nan, rejecting hex floats
+// and underscore separators.
+func parseDecimalFloat(text string) (float64, bool) {
 	body := text
 	if body != "" && (body[0] == '+' || body[0] == '-') {
 		body = body[1:]
@@ -129,7 +95,7 @@ func ImportAPO(text string) (EQSettings, error) {
 	}
 	eq := DefaultEQSettings()
 	found := false
-	for index, raw := range rustLines(strings.TrimLeft(text, "\ufeff")) {
+	for index, raw := range common.Lines(strings.TrimLeft(text, "\ufeff")) {
 		line := index + 1
 		raw, _, _ = strings.Cut(raw, "#")
 		raw = strings.TrimSpace(raw)
@@ -142,8 +108,8 @@ func ImportAPO(text string) (EQSettings, error) {
 		}
 		command := strings.Fields(commandText)
 		words := strings.Fields(value)
-		if len(command) == 1 && asciiEqualFold(command[0], "Preamp") {
-			if len(words) != 2 || !asciiEqualFold(words[1], "dB") {
+		if len(command) == 1 && common.ASCIIEqualFold(command[0], "Preamp") {
+			if len(words) != 2 || !common.ASCIIEqualFold(words[1], "dB") {
 				return EQSettings{}, apoError(line, "Expected Preamp: <gain> dB")
 			}
 			gain, err := apoNumber(words[0], line)
@@ -154,11 +120,11 @@ func ImportAPO(text string) (EQSettings, error) {
 			found = true
 			continue
 		}
-		if len(command) == 0 || !asciiEqualFold(command[0], "Filter") || len(command) > 2 {
+		if len(command) == 0 || !common.ASCIIEqualFold(command[0], "Filter") || len(command) > 2 {
 			return EQSettings{}, apoError(line, "Only Preamp and parametric Filter commands are supported")
 		}
 		if len(command) == 2 {
-			if _, ok := parseRustUint(command[1], 32); !ok {
+			if _, ok := common.ParseUint(command[1], 32); !ok {
 				return EQSettings{}, apoError(line, "Only Preamp and parametric Filter commands are supported")
 			}
 		}
@@ -168,9 +134,9 @@ func ImportAPO(text string) (EQSettings, error) {
 		band := NewBand("band-" + strconv.Itoa(len(eq.Bands)+1))
 		band.Mode = BandModeApoDr
 		switch {
-		case len(words) > 0 && asciiEqualFold(words[0], "ON"):
+		case len(words) > 0 && common.ASCIIEqualFold(words[0], "ON"):
 			band.Enabled = true
-		case len(words) > 0 && asciiEqualFold(words[0], "OFF"):
+		case len(words) > 0 && common.ASCIIEqualFold(words[0], "OFF"):
 			band.Enabled = false
 		default:
 			return EQSettings{}, apoError(line, "Filter must start with ON or OFF")
@@ -206,7 +172,7 @@ func ImportAPO(text string) (EQSettings, error) {
 		for offset := 2; offset < len(words); {
 			field := words[offset]
 			switch {
-			case asciiEqualFold(field, "Fc") || asciiEqualFold(field, "Gain"):
+			case common.ASCIIEqualFold(field, "Fc") || common.ASCIIEqualFold(field, "Gain"):
 				if offset+1 >= len(words) {
 					return EQSettings{}, apoError(line, "Missing parameter value")
 				}
@@ -215,10 +181,10 @@ func ImportAPO(text string) (EQSettings, error) {
 				}
 				v, unit := words[offset+1], words[offset+2]
 				slot, expected := &gain, "dB"
-				if asciiEqualFold(field, "Fc") {
+				if common.ASCIIEqualFold(field, "Fc") {
 					slot, expected = &frequency, "Hz"
 				}
-				if *slot != nil || !asciiEqualFold(unit, expected) {
+				if *slot != nil || !common.ASCIIEqualFold(unit, expected) {
 					return EQSettings{}, apoError(line, "Repeated "+field+" or invalid unit (expected "+expected+")")
 				}
 				number, err := apoNumber(v, line)
@@ -227,7 +193,7 @@ func ImportAPO(text string) (EQSettings, error) {
 				}
 				*slot = &number
 				offset += 3
-			case asciiEqualFold(field, "Q"):
+			case common.ASCIIEqualFold(field, "Q"):
 				if q != nil {
 					return EQSettings{}, apoError(line, "Repeated Q parameter")
 				}

@@ -3,6 +3,8 @@ package core
 import (
 	"strconv"
 	"strings"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // EasyEffects IIR EQ preset import and export.
@@ -307,7 +309,7 @@ func readEqualizer(value Value) (easyEqualizer, error) {
 		}
 		for _, member := range channel {
 			suffix, ok := strings.CutPrefix(member.Key, "band")
-			n, parsed := parseRustUint(suffix, 64)
+			n, parsed := common.ParseUint(suffix, 64)
 			if !ok || !parsed || n >= MaxBands {
 				return easyEqualizer{}, CoreError("Unsupported channel field")
 			}

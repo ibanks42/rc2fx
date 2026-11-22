@@ -20,6 +20,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/delta"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/release"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
@@ -329,7 +330,7 @@ func runUpdateEnvelope() {
 		if err != nil {
 			fatalf("read %s: %v", name, err)
 		}
-		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), name)
+		fmt.Fprintf(&sums, "%s  %s\n", common.SHA256Hex(data), name)
 	}
 	if err := os.WriteFile(filepath.Join(runtimeDir, "SHA256SUMS"), []byte(sums.String()), 0o644); err != nil {
 		fatalf("write SHA256SUMS: %v", err)

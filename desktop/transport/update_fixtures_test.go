@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 func TestUpdateWireDTOContract(t *testing.T) {
@@ -56,7 +58,7 @@ func TestUpdateWireDTOContract(t *testing.T) {
 		{"failed", json.RawMessage(`{"id":"0123456789abcdef","state":"failed","version":"0.2.1","size":9403,"received":9403,"error":"verification failed"}`)},
 	} {
 		id, ok := stringField(c.raw, "id")
-		if !ok || len(id) != 16 || !isHex(id) {
+		if !ok || len(id) != 16 || !common.IsHex(id) {
 			t.Errorf("progress %s: bad id %q", c.name, id)
 		}
 		if _, ok := stringField(c.raw, "state"); !ok {
