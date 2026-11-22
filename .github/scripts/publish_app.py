@@ -28,47 +28,38 @@ Requires `gh` with GH_TOKEN and GH_REPO (or GITHUB_REPOSITORY). Exits 1 on refus
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
-import time
-import urllib.request
 from pathlib import Path
 
+from release_common import (
+    MetadataRepo,
+    Refused,
+    SIGNED_ROLES,
+    STABLE,
+    gh_api_get,
+    gh_repo,
+    require,
+    require_newer_versions,
+    sha256_file,
+)
+
 BRANCH = "app-metadata"
-REMOTE = "https://github.com/ibanks42/rc2fx.git"
-RAW_URL = f"https://raw.githubusercontent.com/ibanks42/rc2fx/{BRANCH}/"
 SUMS = "SHA256SUMS"
-SIGNED_ROLES = ["targets.json", "snapshot.json", "timestamp.json"]
-COMMITTER = "RC2FX release tooling"
-COMMITTER_EMAIL = "rc2fx-release@users.noreply.github.com"
 README = """# RC2FX app update metadata
 
 Signed TUF metadata for RC2FX desktop app updates, read by the app to check a
 downloaded update before applying it. This branch is written only by the release
 tooling; see docs/developer/releases.md on main.
 """
-STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 PLAIN = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]*")
 # Mixer metadata versions are Unix timestamps (>= 2026); keep app versions below them.
 MIXER_VERSIONS_FROM = 1_700_000_000
-# Exceeds raw.githubusercontent.com's 5-minute CDN cache TTL.
-SERVED_WAIT = 420
-SERVED_POLL = 15
-
-
-class Refused(Exception):
-    pass
-
-
-def require(condition, message):
-    if not condition:
-        raise Refused(message)
+META = MetadataRepo(BRANCH, README, error_cls=Refused)
 
 
 class Gh:
@@ -79,13 +70,8 @@ class Gh:
 
     def release(self, tag):
         """Return the published release for TAG, or None (drafts aren't returned by tag)."""
-        result = subprocess.run(["gh", "api", f"repos/{self.repo}/releases/tags/{tag}"],
-                                capture_output=True, text=True)
-        if result.returncode != 0:
-            if "HTTP 404" in result.stderr or "Not Found" in result.stderr:
-                return None
-            raise Refused(f"GitHub API releases/tags/{tag}: {result.stderr.strip()}")
-        return json.loads(result.stdout)
+        return gh_api_get(self.repo, f"releases/tags/{tag}", run=subprocess.run,
+                          label=f"releases/tags/{tag}")
 
     def download(self, asset_id, path):
         with open(path, "xb") as out:
@@ -97,12 +83,6 @@ class Gh:
             raise Refused(f"downloading asset {asset_id} failed: {result.stderr.decode().strip()}")
 
 
-def git(*args, cwd=None):
-    # Use gh as credential helper so tokens never appear in URLs or argv.
-    helper = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
-    return subprocess.check_output(["git", *helper, *map(str, args)], text=True, cwd=cwd)
-
-
 def version_of(tag):
     match = re.fullmatch("v" + STABLE, tag or "")
     require(match, f"{tag!r} is not a stable app tag")
@@ -111,14 +91,6 @@ def version_of(tag):
 
 def version_key(version):
     return tuple(map(int, version.split(".")))
-
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as stream:
-        for block in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def parse_sums(text):
@@ -220,38 +192,16 @@ def published_version(targets):
     return version
 
 
-class Branch:
-    """Checkout of the metadata branch at `path` (`tip` is None if the branch doesn't exist yet)."""
-
-    def __init__(self, path, tip):
-        self.path, self.tip = path, tip
-
-    def version(self, name):
-        return json.loads((self.path / name).read_text())["signed"]["version"]
-
-    def targets(self):
-        """Return signed targets from the branch, or None before the first release."""
-        path = self.path / "targets.json"
-        return signed_targets(path.read_text()) if self.tip and path.exists() else None
-
-
-def fetch_branch(path):
-    git("init", "-q", path)
-    git("remote", "add", "origin", REMOTE, cwd=path)
-    listed = git("ls-remote", "origin", f"refs/heads/{BRANCH}", cwd=path).split()
-    if not listed:
-        git("symbolic-ref", "HEAD", f"refs/heads/{BRANCH}", cwd=path)
-        return Branch(path, None)
-    tip = listed[0]
-    git("fetch", "-q", "--depth=1", "origin", tip, cwd=path)
-    git("checkout", "-q", "-B", BRANCH, tip, cwd=path)
-    return Branch(path, tip)
+def branch_targets(branch):
+    """Return signed targets from the branch, or None before the first release."""
+    path = branch.path / "targets.json"
+    return signed_targets(path.read_text()) if branch.tip and path.exists() else None
 
 
 def decide(branch, version, expected):
     """Return True if VERSION should be signed, False if already signed identically.
     Refuses rollbacks and conflicting assets for the same version."""
-    current = branch.targets()
+    current = branch_targets(branch)
     if current is None:
         return True
     published = published_version(current)
@@ -266,55 +216,8 @@ def decide(branch, version, expected):
 
 def require_newer(branch, metadata, names):
     """Ensure new metadata versions strictly increase and stay below mixer versions."""
-    for name in names:
-        new = json.loads((metadata / name).read_text())["signed"]["version"]
-        require(isinstance(new, int) and 0 < new < MIXER_VERSIONS_FROM,
-                f"{name} version {new} is not below the mixer's metadata versions")
-        if branch.tip is not None and (branch.path / name).exists():
-            require(new > branch.version(name), "Publication metadata version must increase")
-
-
-def read_raw(name):
-    request = urllib.request.Request(RAW_URL + name, headers={"Cache-Control": "no-cache"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read()
-
-
-def verify_served(files):
-    """Poll raw.githubusercontent.com until all pushed files are served (CDN caches for ~5m)."""
-    deadline = time.monotonic() + SERVED_WAIT
-    waiting = list(files)
-    while True:
-        remaining = []
-        for file in waiting:
-            try:
-                served = read_raw(file.name)
-            except OSError:
-                served = None
-            if served != file.read_bytes():
-                remaining.append(file)
-        waiting = remaining
-        if not waiting:
-            return
-        if time.monotonic() >= deadline:
-            names = ", ".join(file.name for file in waiting)
-            raise Refused(f"Pushed to {BRANCH}, but {RAW_URL} still does not serve the new {names}")
-        time.sleep(SERVED_POLL)
-
-
-def update_branch(branch, files, message):
-    """Commit all metadata files atomically and push with --force-with-lease."""
-    for file in files:
-        shutil.copyfile(file, branch.path / file.name)
-    readme = branch.path / "README.md"
-    if not readme.exists():
-        readme.write_text(README)
-    git("add", "--all", cwd=branch.path)
-    git("-c", f"user.name={COMMITTER}", "-c", f"user.email={COMMITTER_EMAIL}",
-        "commit", "-q", "-m", message, cwd=branch.path)
-    lease = f"--force-with-lease=refs/heads/{BRANCH}:{branch.tip or ''}"
-    git("push", "-q", lease, "origin", f"HEAD:refs/heads/{BRANCH}", cwd=branch.path)
-    verify_served(files)
+    require_newer_versions(branch, metadata, names, max_version=MIXER_VERSIONS_FROM,
+                           allow_missing=True, error_cls=Refused)
 
 
 def write_outputs(**values):
@@ -330,7 +233,7 @@ def prepare(gh, tag, directory, built=None):
     if built:
         require_built(directory, built)
     with tempfile.TemporaryDirectory() as temporary:
-        sign = decide(fetch_branch(Path(temporary)), version, expected_targets(version, files))
+        sign = decide(META.fetch(Path(temporary)), version, expected_targets(version, files))
     write_outputs(version=version, sign=str(sign).lower())
     return (f"Signing app {version}: {len(files)} assets\n" if sign
             else f"App {version} is already signed with these assets\n")
@@ -349,7 +252,7 @@ def publish(tag, directory, metadata):
     require(set(metadata.iterdir()) == set(roles) | set(roots), "unexpected file in signed metadata")
     # Re-fetch right before pushing in case another release was signed since prepare.
     with tempfile.TemporaryDirectory() as temporary:
-        branch = fetch_branch(Path(temporary))
+        branch = META.fetch(Path(temporary))
         if not decide(branch, version, expected):
             return f"App {version} is already signed with these assets\n"
         require_newer(branch, metadata, SIGNED_ROLES)
@@ -358,21 +261,18 @@ def publish(tag, directory, metadata):
             old = branch.path / root.name
             require(not old.exists() or old.read_bytes() == root.read_bytes(),
                     f"{root.name} on {BRANCH} differs from the signed root")
-        update_branch(branch, roles + roots, f"Sign app {version}")
+        META.update(branch, roles + roots, f"Sign app {version}")
     return f"Signed app {version} on {BRANCH}\n"
 
 
 def refresh(metadata):
-    metadata = Path(metadata)
-    with tempfile.TemporaryDirectory() as temporary:
-        branch = fetch_branch(Path(temporary))
-        require(branch.tip is not None and (branch.path / "targets.json").exists(),
-                "Only published app metadata can be renewed")
-        require((branch.path / "targets.json").read_bytes() == (metadata / "targets.json").read_bytes(),
-                "Targets changed since renewal; refresh from current metadata")
-        names = ["snapshot.json", "timestamp.json"]
-        require_newer(branch, metadata, names)
-        update_branch(branch, [metadata / name for name in names], "Renew app discovery metadata")
+    META.refresh(
+        metadata,
+        missing_message="Only published app metadata can be renewed",
+        commit_message="Renew app discovery metadata",
+        check_newer=require_newer,
+        require_targets_file=True,
+    )
     return "Renewed app discovery metadata\n"
 
 
@@ -392,9 +292,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == "prepare":
-            repo = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
-            require(re.fullmatch(r"[\w.-]+/[\w.-]+", repo), "GH_REPO or GITHUB_REPOSITORY is not set")
-            print(prepare(Gh(repo), args.tag, args.dir, args.built), end="")
+            print(prepare(Gh(gh_repo()), args.tag, args.dir, args.built), end="")
         elif args.command == "publish":
             print(publish(args.tag, args.assets, args.metadata), end="")
         else:

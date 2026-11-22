@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """Offline tests for macos_release.py using an in-memory fake for `gh`."""
 
-import hashlib
-import importlib.util
 import io
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 
-SCRIPT = Path(__file__).with_name("macos_release.py")
-spec = importlib.util.spec_from_file_location("macos_release", SCRIPT)
-mr = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mr)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import macos_release as mr  # noqa: E402
+from release_common import sha256 as sha  # noqa: E402
 
 REPO = "ibanks42/rc2fx"
 SOURCE = "a" * 40
@@ -27,10 +25,6 @@ PENDING = (
     "macOS download is pending. It will be added to this release when a macOS runner is available.\n"
     "<!-- /rc2fx:macos-pending -->\n"
 )
-
-
-def sha(data):
-    return hashlib.sha256(data).hexdigest()
 
 
 def raw_zip(entries):
