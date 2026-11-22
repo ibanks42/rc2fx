@@ -6,42 +6,24 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// Strict JSON limits shared with rc2fx-core.
+// Strict JSON limits shared with the mixer.
 const (
 	DefaultMaxJSONBytes = sjson.DefaultMaxJSONBytes
 	DefaultMaxJSONNodes = sjson.DefaultMaxJSONNodes
-	MaxJSONDepth        = sjson.MaxJSONDepth
-)
-
-type ValueKind = sjson.Kind
-
-const (
-	ValueNull   = sjson.KindNull
-	ValueBool   = sjson.KindBool
-	ValueNumber = sjson.KindNumber
-	ValueString = sjson.KindString
-	ValueArray  = sjson.KindArray
-	ValueObject = sjson.KindObject
 )
 
 type (
-	Number                   = sjson.Number
-	Member                   = sjson.Member
-	Value                    = sjson.Tree
-	StrictUnmarshaler        = sjson.StrictUnmarshaler
-	UnknownJSONFieldsAllowed = sjson.UnknownJSONFieldsAllowed
+	Member = sjson.Member
+	Value  = sjson.Tree
 )
 
-func NumberFromU64(value uint64) Number          { return sjson.NumberFromU64(value) }
-func NumberFromF64(value float64) (Number, bool) { return sjson.NumberFromF64(value) }
-func NullValue() Value                           { return sjson.NullTree() }
-func BoolValue(value bool) Value                 { return sjson.BoolTree(value) }
-func StringValue(value string) Value             { return sjson.StringTree(value) }
-func NumberValue(value Number) Value             { return sjson.NumberTree(value) }
-func U64Value(value uint64) Value                { return sjson.U64Tree(value) }
-func F64Value(value float64) Value               { return sjson.F64Tree(value) }
-func ArrayValue(items ...Value) Value            { return sjson.ArrayTree(items...) }
-func ObjectValue(members ...Member) Value        { return sjson.ObjectTree(members...) }
+func NullValue() Value                    { return sjson.NullTree() }
+func BoolValue(value bool) Value          { return sjson.BoolTree(value) }
+func StringValue(value string) Value      { return sjson.StringTree(value) }
+func U64Value(value uint64) Value         { return sjson.U64Tree(value) }
+func F64Value(value float64) Value        { return sjson.F64Tree(value) }
+func ArrayValue(items ...Value) Value     { return sjson.ArrayTree(items...) }
+func ObjectValue(members ...Member) Value { return sjson.ObjectTree(members...) }
 
 func wrapJSONError(err error) error {
 	if err == nil {
@@ -69,8 +51,6 @@ func ParseJSONBytes(data []byte, maximumBytes, maximumNodes int) (Value, error) 
 	return v, wrapJSONError(err)
 }
 
-// ParseJSONBytesLastKeyWins is ParseJSONBytes for tool output that repeats
-// keys: a repeated key replaces the earlier value.
 func ParseJSONBytesLastKeyWins(data []byte, maximumBytes, maximumNodes int) (Value, error) {
 	v, err := sjson.ParseJSONBytesLastKeyWins(data, maximumBytes, maximumNodes)
 	return v, wrapJSONError(err)
@@ -96,17 +76,13 @@ func FromJSONLimited[T any](text string, maximumBytes, maximumNodes int) (T, err
 	return v, wrapJSONError(err)
 }
 
-func DecodeValue(tree Value, out any) error {
-	return wrapJSONError(sjson.DecodeTree(tree, out))
-}
-
 func Encode(value any) ([]byte, error) {
-	b, err := sjson.Encode(value)
+	b, err := sjson.Marshal(value)
 	return b, wrapJSONError(err)
 }
 
 func EncodePretty(value any) ([]byte, error) {
-	b, err := sjson.EncodePretty(value)
+	b, err := sjson.MarshalPretty(value)
 	return b, wrapJSONError(err)
 }
 

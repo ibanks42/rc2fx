@@ -12,6 +12,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
@@ -54,7 +55,7 @@ func packageIn(root, destination string, writeLicenses func(string) error) error
 	if err := os.MkdirAll(parent, 0o777); err != nil {
 		return task.Error(task.IOError(err))
 	}
-	if exists(destination) {
+	if common.PathExists(destination) {
 		return task.Errorf("%s already exists; use a fresh output directory", destination)
 	}
 	staging, err := tufsign.StageDir(parent)
@@ -94,7 +95,7 @@ func packageIn(root, destination string, writeLicenses func(string) error) error
 		return err
 	}
 	sums := fmt.Sprintf("%s  %s\n%s  THIRD-PARTY-NOTICES.html\n%s  firmware-profiles.json\n",
-		task.Sha256(checked.AsBytes()), name, task.Sha256(notices), task.Sha256(bundle["firmware-profiles.json"]))
+		common.SHA256Hex(checked.AsBytes()), name, common.SHA256Hex(notices), common.SHA256Hex(bundle["firmware-profiles.json"]))
 	if err := write("SHA256SUMS", []byte(sums)); err != nil {
 		return err
 	}
@@ -145,15 +146,14 @@ func releaseKeys(root *tufsign.Root, roles [3][2]string) ([]tufsign.Signer, erro
 			}
 		}
 		if !root.RoleHas(role, id) {
-			return nil, task.Errorf("key is not authorized for %s", tufsign.RoleDebug(role))
+			return nil, task.Errorf("key is not authorized for %s", role)
 		}
 		signers = append(signers, signer)
 	}
 	return signers, nil
 }
 
-// MixerTargetValue encodes m to match the JSON shape expected by the Rust
-// MixerTarget deserializer.
+// MixerTargetValue encodes m into the JSON shape for TUF target custom metadata.
 func MixerTargetValue(m *installer.MixerTarget) core.Value {
 	profiles := make([]core.Value, len(m.FirmwareProfiles))
 	for i, p := range m.FirmwareProfiles {
@@ -176,7 +176,7 @@ func Sign(args []string) error {
 	}
 	rootFile, packageDir, out, sequenceText, expiresText := args[0], args[1], args[2], args[3], args[4]
 	targetsKey, snapshotKey, timestampKey := args[5], args[6], args[7]
-	sequence, ok := task.ParseUint(sequenceText, 64)
+	sequence, ok := common.ParseUint(sequenceText, 64)
 	if !ok || sequence == 0 {
 		return task.Error("sequence must be positive")
 	}
@@ -299,7 +299,7 @@ func Sign(args []string) error {
 	if err != nil {
 		return err
 	}
-	if exists(out) {
+	if common.PathExists(out) {
 		return task.Error("metadata output already exists; use a new directory")
 	}
 	if err := writeStaged(out, signed); err != nil {

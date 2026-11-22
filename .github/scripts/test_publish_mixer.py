@@ -1,16 +1,15 @@
-import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("publish_mixer", Path(__file__).with_name("publish_mixer.py"))
-publisher = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(publisher)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import publish_mixer as publisher  # noqa: E402
+from release_common import BareRemote, sha256  # noqa: E402
 
 
 class Publication(unittest.TestCase):
@@ -25,7 +24,7 @@ class Publication(unittest.TestCase):
         targets = {}
         for name, data in [("rc2fx-mixer-1.2.3.payload", b"verified payload"), ("THIRD-PARTY-NOTICES.html", b"notices")]:
             (self.package / name).write_bytes(data)
-            pin = {"length": len(data), "hashes": {"sha256": hashlib.sha256(data).hexdigest()}}
+            pin = {"length": len(data), "hashes": {"sha256": sha256(data)}}
             if name.endswith("payload"):
                 pin["custom"] = {"rc2fxMixer": {"version": "1.2.3"}}
             targets[self.tag + "/" + name] = pin
@@ -36,15 +35,12 @@ class Publication(unittest.TestCase):
         self.calls = []
         self.releases = {}
         # Use a local bare git repo to stand in for GitHub's metadata branch.
-        self.remote = Path(self.temp.name, "remote.git")
-        subprocess.check_call(["git", "init", "-q", "--bare", self.remote])
-        self.stale_reads = 0
-        self.reads = []
+        self.repo = BareRemote(self.temp.name, publisher.BRANCH)
         for patcher in [
             patch.object(publisher, "gh", self.gh),
-            patch.object(publisher, "REMOTE", str(self.remote)),
-            patch.object(publisher, "read_raw", self.read_raw),
-            patch.object(publisher.time, "sleep", lambda _: None),
+            patch.object(publisher.META, "remote", str(self.repo.remote)),
+            patch.object(publisher.META, "read_raw", self.repo.read_raw),
+            patch.object(publisher.META, "sleep", lambda _: None),
             patch.dict(os.environ, RELEASE_COMMIT="commit"),
         ]:
             patcher.start()
@@ -75,22 +71,13 @@ class Publication(unittest.TestCase):
         return ""
 
     def branch(self, *args):
-        return subprocess.check_output(["git", "-C", self.remote, *args], text=True)
+        return self.repo.git(*args)
 
     def commits(self):
-        if not self.branch("for-each-ref", "refs/heads/mixer-metadata"):
-            return []
-        return self.branch("log", "--format=%s", "mixer-metadata").splitlines()
+        return self.repo.commits()
 
     def served(self, name):
-        return subprocess.check_output(["git", "-C", self.remote, "show", f"mixer-metadata:{name}"])
-
-    def read_raw(self, name):
-        self.reads.append(name)
-        if self.stale_reads:
-            self.stale_reads -= 1
-            return b"stale"
-        return self.served(name)
+        return self.repo.served(name)
 
     def publish(self):
         publisher.publish(self.package, self.metadata)
@@ -104,8 +91,8 @@ class Publication(unittest.TestCase):
 
     def test_publishes_the_verified_payload_then_one_branch_commit(self):
         order = []
-        real = publisher.update_branch
-        with patch.object(publisher, "update_branch", lambda *a: (order.append(list(self.calls)), real(*a))):
+        real = publisher.META.update
+        with patch.object(publisher.META, "update", lambda *a: (order.append(list(self.calls)), real(*a))):
             self.publish()
         before_branch = order[0]
         payload_publish = next(i for i, c in enumerate(before_branch) if c[:3] == ("release", "edit", self.tag))
@@ -133,39 +120,35 @@ class Publication(unittest.TestCase):
         self.assertEqual(self.commits(), [])
 
     def test_stale_raw_content_is_retried_until_it_appears(self):
-        self.stale_reads = 5
+        self.repo.stale_reads = 5
         self.publish()
-        self.assertEqual(self.stale_reads, 0)
-        self.assertGreater(len(self.reads), 4)
+        self.assertEqual(self.repo.stale_reads, 0)
+        self.assertGreater(len(self.repo.reads), 4)
 
     def test_raw_content_that_never_appears_is_an_error_naming_the_files(self):
-        self.stale_reads = 10**6
-        with patch.object(publisher, "SERVED_WAIT", 0), self.assertRaisesRegex(ValueError, "still does not serve"):
+        self.repo.stale_reads = 10**6
+        with patch.object(publisher.META, "served_wait", 0), self.assertRaisesRegex(ValueError, "still does not serve"):
             self.publish()
         self.assertEqual(self.commits(), ["Publish mixer 1.2.3"], "the push itself stands")
 
     def test_a_concurrent_writer_fails_the_push_without_a_retry(self):
         self.publish()
         self.bump(["snapshot.json", "timestamp.json"])
-        real = publisher.fetch_branch
+        real = publisher.META.fetch
 
         def raced(path):
             branch = real(path)
-            other = Path(self.temp.name, "other")
-            subprocess.check_call(["git", "clone", "-q", "--branch", "mixer-metadata", self.remote, other])
-            subprocess.check_call(["git", "-C", other, "-c", "user.name=x", "-c", "user.email=x@example.com",
-                                   "commit", "-q", "--allow-empty", "-m", "concurrent"])
-            subprocess.check_call(["git", "-C", other, "push", "-q", "origin", "mixer-metadata"])
+            self.repo.push_concurrent(Path(self.temp.name, "other"))
             return branch
 
         pushes = []
-        real_git = publisher.git
+        real_git = publisher.META.git
 
         def counting(*args, cwd=None):
             pushes.extend(a for a in args if a == "push")
             return real_git(*args, cwd=cwd)
 
-        with patch.object(publisher, "fetch_branch", raced), patch.object(publisher, "git", counting), \
+        with patch.object(publisher.META, "fetch", raced), patch.object(publisher.META, "git", counting), \
                 self.assertRaises(subprocess.CalledProcessError):
             publisher.refresh(self.metadata)
         self.assertEqual(len(pushes), 1)
@@ -261,6 +244,49 @@ class Publication(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differs"):
             publisher.reauthorize(self.package, self.metadata)
         self.assertEqual(len(self.commits()), 1)
+
+    def remove_from_branch(self, name, work_name="remove"):
+        work = Path(self.temp.name, work_name)
+        subprocess.check_call(["git", "clone", "-q", "--branch", publisher.BRANCH, self.repo.remote, work])
+        subprocess.check_call(["git", "-C", work, "rm", "-q", name])
+        subprocess.check_call(["git", "-C", work, "-c", "user.name=x", "-c", "user.email=x@example.com",
+                               "commit", "-q", "-m", f"remove {name}"])
+        subprocess.check_call(["git", "-C", work, "push", "-q", "origin", publisher.BRANCH])
+
+    def test_missing_role_file_stops_publish_reauthorize_and_refresh(self):
+        self.publish()
+        self.remove_from_branch("snapshot.json")
+        self.bump(["targets.json", "snapshot.json", "timestamp.json"])
+        commits_before = self.commits()
+        with self.assertRaises(FileNotFoundError):
+            publisher.reauthorize(self.package, self.metadata)
+        self.assertEqual(self.commits(), commits_before)
+        del self.releases[self.tag]
+        self.calls.clear()
+        with self.assertRaises(FileNotFoundError):
+            publisher.publish(self.package, self.metadata)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.commits(), commits_before)
+        # Restore targets.json bytes to match the branch so refresh reaches the version check.
+        (self.metadata / "targets.json").write_bytes(self.served("targets.json"))
+        with self.assertRaises(FileNotFoundError):
+            publisher.refresh(self.metadata)
+        self.assertEqual(self.commits(), commits_before)
+
+    def test_refresh_missing_targets_on_existing_branch_raises_file_not_found(self):
+        self.publish()
+        self.remove_from_branch("targets.json")
+        self.bump(["snapshot.json", "timestamp.json"])
+        with self.assertRaises(FileNotFoundError):
+            publisher.refresh(self.metadata)
+
+    def test_require_newer_returns_without_reading_metadata_when_branch_is_missing(self):
+        empty = Path(self.temp.name, "empty-metadata")
+        empty.mkdir()
+        with tempfile.TemporaryDirectory() as temporary:
+            branch = publisher.META.fetch(Path(temporary))
+            self.assertIsNone(branch.tip)
+            publisher.require_newer(branch, empty, publisher.SIGNED_ROLES)
 
 
 if __name__ == "__main__":

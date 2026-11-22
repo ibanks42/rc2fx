@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
@@ -99,7 +100,7 @@ func Refresh(args []string) error {
 	if len(snapshotMeta) != 1 || targets.DelegatedRoles > 0 {
 		return task.Error("delegated metadata is not supported for renewal")
 	}
-	sequence, ok := task.ParseUint(sequenceText, 64)
+	sequence, ok := common.ParseUint(sequenceText, 64)
 	if !ok || sequence == 0 {
 		return task.Error("invalid sequence")
 	}
@@ -132,7 +133,7 @@ func Refresh(args []string) error {
 			}
 		}
 		if !root.RoleHas(key.role, id) {
-			return task.Errorf("key is not authorized for %s", tufsign.RoleDebug(key.role))
+			return task.Errorf("key is not authorized for %s", key.role)
 		}
 		signers = append(signers, signer)
 	}
@@ -149,7 +150,7 @@ func Refresh(args []string) error {
 	if err != nil {
 		return asTask(err)
 	}
-	if exists(output) {
+	if common.PathExists(output) {
 		return task.Error("renewal output already exists")
 	}
 	parent := outputParent(output)
@@ -200,11 +201,6 @@ func checkPin(meta map[string]tufsign.Metafile, name string, data []byte, versio
 func sha256Bytes(data []byte) []byte {
 	sum := sha256Sum(data)
 	return sum[:]
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func outputParent(output string) string {

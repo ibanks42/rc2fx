@@ -10,25 +10,7 @@ import (
 )
 
 // Managed developer SSH access over USB 1 (no reflashing required).
-//
-// RØDE's firmware runs OpenSSH with key-only root login. RC2FX adds/removes a
-// single tagged key in authorized_keys and leaves any other keys untouched.
-// Removing the key blocks new logins without killing active sessions.
-
-const MaxSSHPublicKey = 512
-
-// SSHStatus is returned by GET/PUT api/v1/ssh. Core fields are required so
-// malformed replies fail loudly; unknown extra fields are allowed.
-type SSHStatus struct {
-	Managed            bool     `json:"managed"`
-	ManagedFingerprint *string  `json:"managedFingerprint,omitempty"` // "SHA256:..." when installed
-	UnmanagedKeys      uint32   `json:"unmanagedKeys"`                // other authorized_keys entries left untouched
-	HostKeys           []string `json:"hostKeys"`                     // server public host keys for pinning
-	ServerRunning      *bool    `json:"serverRunning,omitempty"`      // nil if indeterminate
-	Detail             *string  `json:"detail,omitempty"`
-}
-
-func (SSHStatus) AllowUnknownJSONFields() {}
+// Wire types are generated from schema/core.go into schema_gen.go.
 
 const (
 	maxHostKeys    = 16
@@ -54,13 +36,6 @@ func (s SSHStatus) Validate() error {
 		return CoreError("Invalid SSH status")
 	}
 	return nil
-}
-
-// SSHRequest is `PUT api/v1/ssh`.
-type SSHRequest struct {
-	Enabled bool `json:"enabled"`
-	// Required when enabling: one plain `ssh-ed25519` public key line.
-	PublicKey *string `json:"publicKey,omitempty"`
 }
 
 // Ed25519PublicKey is an Ed25519 public key in its canonical

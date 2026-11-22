@@ -214,7 +214,7 @@ func TestSuppliedAutoEQAndFifteenBandPresetsPreserveTheirCurves(t *testing.T) {
 		{"sennheiser-hd-6xx.txt", 10, -8.46},
 		{"fifteen-band.txt", 15, -15.5},
 	} {
-		eq := must(ImportAPO(string(repoFile(t, "fixtures", "apo", preset.file))))
+		eq := must(ImportAPO(string(repoFile(t, "desktop", "core", "testdata", "apo", preset.file))))
 		check(t, len(eq.Bands) == preset.count, preset.file)
 		check(t, eq.InputGainDB == preset.preamp, preset.file, eq.InputGainDB)
 		check(t, eq.OutputGainDB == 0.)
@@ -233,7 +233,7 @@ func TestSuppliedAutoEQAndFifteenBandPresetsPreserveTheirCurves(t *testing.T) {
 			check(t, approx(ResponseDB(eq, ChannelLeft, hz, true), ResponseDB(restored.EQ, ChannelRight, hz, true), 1e-9), hz)
 		}
 	}
-	eq := must(ImportAPO(string(repoFile(t, "fixtures", "apo", "fifteen-band.txt"))))
+	eq := must(ImportAPO(string(repoFile(t, "desktop", "core", "testdata", "apo", "fifteen-band.txt"))))
 	check(t, eq.Bands[0].Frequency == 21. && eq.Bands[0].Gain == 15.31 && eq.Bands[0].Q == 0.475, eq.Bands[0])
 	check(t, eq.Bands[12].BandType == BandTypeHighShelf)
 	check(t, eq.Bands[14].Frequency == 12178. && eq.Bands[14].Q == 0.643, eq.Bands[14])

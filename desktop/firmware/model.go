@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
 // Model identifies a mixer hardware model. Board identity is distinct from the
 // mixer executable (Pro II and Duo 1.7.6 share the same binary but run
-// different board firmware). Zero value is ModelProIi to match Rust's Default.
+// different board firmware). Zero value is ModelProIi.
 type Model uint8
 
 const (
@@ -20,7 +21,7 @@ const (
 	ModelDuo
 )
 
-// ModelAll lists all models in the same order as the Rust crate.
+// ModelAll lists all supported models.
 var ModelAll = [2]Model{ModelProIi, ModelDuo}
 
 // VendorID is RØDE's USB vendor ID.
@@ -108,8 +109,8 @@ func ModelFromUSB(vendor, product uint16) (Model, bool) {
 // FDT entry, requiring both to agree with no overrides.
 func ModelFromBoard(hostname, extlinux string) (Model, error) {
 	var boards [][]string
-	for _, line := range rustLines(extlinux) {
-		words := strings.FieldsFunc(line, isRustWhitespace)
+	for _, line := range common.Lines(extlinux) {
+		words := strings.FieldsFunc(line, common.IsSpace)
 		if len(words) > 0 && strings.EqualFold(words[0], "FDT") && isASCII(words[0]) {
 			boards = append(boards, words[1:])
 		}
@@ -120,7 +121,7 @@ func ModelFromBoard(hostname, extlinux string) (Model, error) {
 	if len(boards) > 1 || len(boards[0]) != 1 {
 		return 0, errors.New("ambiguous boot board identity")
 	}
-	host := strings.TrimFunc(hostname, isRustWhitespace)
+	host := strings.TrimFunc(hostname, common.IsSpace)
 	for _, m := range ModelAll {
 		if m.Hostname() == host && m.BoardDTB() == boards[0][0] {
 			return m, nil
@@ -145,31 +146,6 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return fmt.Errorf("unknown variant `%s`, expected `rodecaster-pro-ii` or `rodecaster-duo`", id)
-}
-
-// rustLines matches Rust's str::lines: splits on \n, strips a preceding \r,
-// and omits a trailing empty line.
-func rustLines(text string) []string {
-	if text == "" {
-		return nil
-	}
-	ended := strings.HasSuffix(text, "\n")
-	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
-	for i, line := range lines {
-		if i < len(lines)-1 || ended {
-			lines[i] = strings.TrimSuffix(line, "\r")
-		}
-	}
-	return lines
-}
-
-// isRustWhitespace matches Rust's char::is_whitespace (Unicode White_Space).
-func isRustWhitespace(r rune) bool {
-	switch r {
-	case '\t', '\n', '\v', '\f', '\r', ' ', 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:
-		return true
-	}
-	return r >= 0x2000 && r <= 0x200a
 }
 
 func isASCII(s string) bool {

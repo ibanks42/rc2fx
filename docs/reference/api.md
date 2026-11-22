@@ -185,7 +185,7 @@ Because the session lives in RAM, the restart clears it. Once the app reconnects
 
 ## Developer SSH
 
-`GET /api/v1/ssh` and `PUT /api/v1/ssh` are USB 1 only; the touchscreen socket and older `rc2fxd` builds answer `404`. `rc2fxd` delegates the work to `rc2fx.sh developer-ssh` off its async executor, serialized one call at a time with bounded I/O and a 10-second timeout covering the script and any child processes.
+`GET /api/v1/ssh` and `PUT /api/v1/ssh` are USB 1 only; the touchscreen socket and older `rc2fxd` builds answer `404`. `rc2fxd` runs developer SSH management directly off its async executor (enabled by `--developer-ssh`), serialized one call at a time with `O_NOFOLLOW | O_DIRECTORY` path validation and atomic `renameat` updates.
 
 ```json
 {"managed": true, "managedFingerprint": "SHA256:…", "unmanagedKeys": 1,
@@ -208,7 +208,7 @@ Because the session lives in RAM, the restart clears it. Once the app reconnects
 | 400 | Invalid request or key |
 | 404 | Unavailable here (touchscreen socket or older `rc2fxd`) |
 | 409 | First boot after an update, another SSH change in flight, or `~/.ssh` isn't safe to modify |
-| 500 | Script failed, timed out, or returned unreadable output |
+| 500 | Filesystem or system error while reading or writing SSH state |
 
 ## On-device touchscreen control (in development)
 

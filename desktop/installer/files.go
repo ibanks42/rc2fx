@@ -12,11 +12,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 )
 
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 func privateDirs(dir string) error {
 	info, err := os.Stat(dir)
 	switch {

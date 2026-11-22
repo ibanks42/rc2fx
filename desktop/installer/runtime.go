@@ -4,16 +4,16 @@ package installer
 
 import (
 	"fmt"
-	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
+	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 )
 
 var PayloadNames = embed.PayloadNames
@@ -35,9 +35,9 @@ func BundleFiles(root string) (Bundle, error) {
 func digest(files Bundle) string {
 	var manifest strings.Builder
 	for _, n := range PayloadNames {
-		fmt.Fprintf(&manifest, "%s  %s\n", archive.Sum(files[n]), n)
+		fmt.Fprintf(&manifest, "%s  %s\n", common.SHA256Hex(files[n]), n)
 	}
-	return archive.Sum([]byte(manifest.String()))
+	return common.SHA256Hex([]byte(manifest.String()))
 }
 
 func view(files Bundle) embed.Files {
@@ -176,7 +176,7 @@ func backupSettings(work string, b *BackupRecord) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if archive.Sum(data) != b.SHA {
+	if common.SHA256Hex(data) != b.SHA {
 		return nil, Error("the settings backup changed since it was saved")
 	}
 	if err := checkSettings(data); err != nil {
@@ -217,12 +217,12 @@ func (e *Engine) saveSettings(serial, settings string) (*BackupRecord, error) {
 			stamp.WriteRune(r)
 		}
 	}
-	name := fmt.Sprintf("settings-%s-%s.json", archive.Sum([]byte(serial))[:12], stamp.String())
+	name := fmt.Sprintf("settings-%s-%s.json", common.SHA256Hex([]byte(serial))[:12], stamp.String())
 	dest := filepath.Join(e.Work, name)
 	if err := archive.AtomicFile(dest, data); err != nil {
 		return nil, err
 	}
-	record := BackupRecord{Serial: serial, File: dest, SHA: archive.Sum(data), Created: utc()}
+	record := BackupRecord{Serial: serial, File: dest, SHA: common.SHA256Hex(data), Created: utc()}
 	saved, err := e.load()
 	if err != nil {
 		return nil, err
@@ -277,38 +277,7 @@ func readinessError(body []byte, r *RuntimeProfile) string {
 		}
 		return strconv.FormatUint(*v, 10)
 	}
-	return fmt.Sprintf("engine mode=%s status=%s advancing=%t appliedRevision=%s configRevision=%s sampleRate=%d blockSize=%d (expected %d/%d)",
-		debugString(a.Mode), debugString(a.Status), a.AudioAdvancing, revision(a.AppliedRevision), revision(s.Config.Revision),
+	return fmt.Sprintf("engine mode=%q status=%q advancing=%t appliedRevision=%s configRevision=%s sampleRate=%d blockSize=%d (expected %d/%d)",
+		a.Mode, a.Status, a.AudioAdvancing, revision(a.AppliedRevision), revision(s.Config.Revision),
 		a.SampleRate, a.BlockSize, r.SampleRate, r.BlockFrames)
-}
-
-// debugString quotes s, escaping quotes, backslashes, \n \r \t \0, and other
-// unprintable runes as \u{hex}.
-func debugString(s string) string {
-	var out strings.Builder
-	out.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			out.WriteString(`\"`)
-		case '\\':
-			out.WriteString(`\\`)
-		case '\n':
-			out.WriteString(`\n`)
-		case '\r':
-			out.WriteString(`\r`)
-		case '\t':
-			out.WriteString(`\t`)
-		case 0:
-			out.WriteString(`\0`)
-		default:
-			if r == utf8.RuneError || unicode.IsControl(r) || (!unicode.IsPrint(r) && r != ' ') {
-				fmt.Fprintf(&out, `\u{%x}`, r)
-			} else {
-				out.WriteRune(r)
-			}
-		}
-	}
-	out.WriteByte('"')
-	return out.String()
 }

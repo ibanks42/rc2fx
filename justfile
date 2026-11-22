@@ -93,9 +93,14 @@ mixer-enable:
 mixer-disable:
     {{ xtask }} mixer disable
 
+# Regenerate shared Rust and Go wire types from schema/
+schema:
+    {{ xtask }} schema
+
 # Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and, on Linux, the Rust workspace
 [unix]
 test:
+    {{ xtask }} schema --check
     cd desktop && test -z "$(gofmt -l $(go list -e -f '{{ "{{" }}.Dir{{ "}}" }}' ./...))"
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && CGO_ENABLED=0 go vet $pkgs
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && if [ -e third_party/gpuikit ]; then CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go test ./...; else go test $pkgs; fi
@@ -107,7 +112,6 @@ test:
 test-rust:
     cargo test --locked --workspace
     cargo clippy --locked --workspace --all-targets -- -D warnings
-    cargo clippy --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
     cargo clippy --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
 
 # Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked). The Rust crates build for Linux only.
@@ -125,7 +129,6 @@ test-mixer:
     for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done
     python3 -m unittest discover -s mixer/jackerr/tests -p 'test_*.py'
     python3 mixer/gui/test_gui_pacing.py
-    python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
 
 # Cross-build the suppression benchmark
 bench-build:

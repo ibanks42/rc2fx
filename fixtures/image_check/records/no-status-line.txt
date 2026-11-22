@@ -1,2 +1,0 @@
-manifest=abc
-repaired=etc/hostname

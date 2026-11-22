@@ -5,6 +5,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // VelopackLocator is unused on macOS because Velopack's default cache path is
@@ -24,7 +26,7 @@ func PackagesDir() (string, bool) {
 	}
 	root := exe[:idx+4]
 	contents := filepath.Join(root, "Contents", "MacOS")
-	if !exists(filepath.Join(contents, "UpdateMac")) {
+	if !common.PathExists(filepath.Join(contents, "UpdateMac")) {
 		return "", false
 	}
 	m, err := readManifest(filepath.Join(contents, "sq.version"))

@@ -6,11 +6,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
 // Tests for the config model, wire round-trips, validation, EQ/gate curves,
-// EasyEffects interchange, and editor session state. The Rust side of the
-// schema is tested in crates/rc2fx-core/tests/core.rs.
+// EasyEffects interchange, and editor session state.
 
 func coreState(revision uint64) DeviceState {
 	selected := []string{"mic-1", "usb-main", "send-chat"}
@@ -187,7 +188,7 @@ func TestEasyEffectsWidthAndSlopeAreIgnoredOnImportAndNotExported(t *testing.T) 
 	var setEverywhere func(value *Value)
 	setEverywhere = func(value *Value) {
 		switch value.Kind() {
-		case ValueObject:
+		case sjson.KindObject:
 			if _, ok := value.Get("frequency"); ok {
 				value.Set("slope", StringValue("x4"))
 				value.Set("width", F64Value(11.0))
@@ -196,7 +197,7 @@ func TestEasyEffectsWidthAndSlopeAreIgnoredOnImportAndNotExported(t *testing.T) 
 			for i := range members {
 				setEverywhere(&members[i].Value)
 			}
-		case ValueArray:
+		case sjson.KindArray:
 			items, _ := value.AsArray()
 			for i := range items {
 				setEverywhere(&items[i])
@@ -297,7 +298,7 @@ func TestPerformanceReportsHelperCountersAndAcceptsPayloadsWithoutThem(t *testin
 		object.Remove(key)
 	}
 	var oldMeter Meter
-	ok(t, DecodeValue(old, &oldMeter))
+	ok(t, sjson.DecodeTree(old, &oldMeter))
 	p := oldMeter.Targets[0].Performance
 	check(t, p.HelperLate == nil && p.HelperStalls == nil)
 	check(t, p.CallbackRecentMaxNs == nil && p.WorkerRecentMaxNs == nil)
@@ -308,10 +309,10 @@ func TestMetersWithoutADiagnosticsEpochLoadAsZeroAndEventPagesRoundTrip(t *testi
 	// An older mixer sends no epoch: the app reads 0 and keeps working.
 	value := parse(t, `{"type": "meter", "revision": 1, "generation": 1, "synthetic": false, "targets": []}`)
 	var meter Meter
-	ok(t, DecodeValue(value, &meter))
+	ok(t, sjson.DecodeTree(value, &meter))
 	check(t, meter.DiagnosticsEpoch == 0)
 	value.Set("diagnosticsEpoch", U64Value(7))
-	ok(t, DecodeValue(value, &meter))
+	ok(t, sjson.DecodeTree(value, &meter))
 	check(t, meter.DiagnosticsEpoch == 7)
 
 	page := DiagnosticsEvents{

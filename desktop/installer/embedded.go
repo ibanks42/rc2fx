@@ -6,7 +6,6 @@ package installer
 
 import (
 	"bytes"
-	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
@@ -113,7 +113,7 @@ func identityOf(kind string, bundle Bundle) (Identity, error) {
 	identity := Identity{
 		Kind:     kind,
 		Build:    build,
-		Catalog:  archive.Sum(catalogData),
+		Catalog:  common.SHA256Hex(catalogData),
 		Release:  release.Version,
 		Runtime:  digest(bundle),
 		Files:    []FilePin{},
@@ -121,7 +121,7 @@ func identityOf(kind string, bundle Bundle) (Identity, error) {
 	}
 	for _, name := range embed.PayloadNames {
 		data := bundle[name]
-		identity.Files = append(identity.Files, FilePin{Name: name, SHA256: archive.Sum(data), Size: uint64(len(data))})
+		identity.Files = append(identity.Files, FilePin{Name: name, SHA256: common.SHA256Hex(data), Size: uint64(len(data))})
 	}
 	for i := range catalog.Profiles {
 		p := &catalog.Profiles[i]
@@ -247,10 +247,10 @@ func newestSupported(catalog *Catalog, firmwareProfile string) (string, bool) {
 	newest := ""
 	for i := range catalog.Profiles {
 		p := &catalog.Profiles[i]
-		if p.Model != model || !supported(p) || !appSupports(p, AppVersion) || !comparable(p.Version) {
+		if p.Model != model || !supported(p) || !appSupports(p, AppVersion) || !core.ValidVersion(p.Version) {
 			continue
 		}
-		// Keep the last entry on ties (matching Rust's max_by).
+		// Keep the last entry on ties.
 		if order, _ := core.CompareVersions(p.Version, newest); newest == "" || order >= 0 {
 			newest = p.Version
 		}
@@ -344,7 +344,7 @@ func parseCatalog(data []byte) (*Catalog, error) {
 		return nil, err
 	}
 	for i := range catalog.Profiles {
-		if p := &catalog.Profiles[i]; !comparable(p.Version) || !comparable(p.MinimumAppVersion) {
+		if p := &catalog.Profiles[i]; !core.ValidVersion(p.Version) || !core.ValidVersion(p.MinimumAppVersion) {
 			return nil, Error("invalid firmware catalog profile version")
 		}
 	}

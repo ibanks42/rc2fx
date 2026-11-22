@@ -7,7 +7,6 @@ use crate::convp::Convp;
 use crate::glue::{add_transposed, conv3x3, depthwise_t3, depthwise3, shift3_add, transpose};
 use crate::kernels::{QWeights, matvec_q8};
 use crate::kernels::{Weights, grouped, pack_pointwise, pointwise, sigmoid_slice, tanh_slice};
-use crate::profile;
 use std::collections::HashMap;
 
 /// Named f32 tensors from the binary export format: `u32` tensor count, then
@@ -148,15 +147,6 @@ impl Norm {
 
     /// x is [channels][f].
     fn apply(&self, x: &mut [f32], f: usize, act: Act) {
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            let ch = x.len() / f;
-            crate::traffic::touch(Class::Param, self.scale.as_ptr(), ch * 4);
-            crate::traffic::touch(Class::Param, self.shift.as_ptr(), ch * 4);
-            touch(Class::Act, x.as_ptr(), x.len() * 4);
-            crate::traffic::store(Class::Act, x.as_ptr(), x.len() * 4);
-        }
         for (c, row) in x.chunks_exact_mut(f).enumerate() {
             let (s, h) = (self.scale[c], self.shift[c]);
             for v in row {
@@ -275,20 +265,6 @@ impl Gru {
         let n = self.hidden;
         let gi = &mut self.gi[..3 * n];
         matvec_q8(&self.wih, 3 * n, x, &mut self.xq, gi);
-        // Biases, gate products and the hidden state the update reads and
-        // writes (the products' own inputs are counted by the kernels).
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            slice(Class::Param, &self.bih);
-            slice(Class::Param, &self.bhh);
-            touch_n(Class::Act, gi.as_ptr(), 3 * n * 4, 3);
-            store_n(Class::Act, gi.as_ptr(), 3 * n * 4, 2);
-            touch_n(Class::Act, self.gh.as_ptr(), 3 * n * 4, 2);
-            touch_n(Class::State, self.h.as_ptr(), n * 4, 2);
-            store(Class::State, self.h.as_ptr(), n * 4);
-            store(Class::Act, x.as_ptr(), n * 4);
-        }
         if self.gh_for != Some(self.h_gen) {
             self.gh_for = None;
             matvec_q8(&self.whh, 3 * n, &self.h, &mut self.xq, &mut self.gh);
@@ -411,10 +387,6 @@ impl SqueezedGru {
 }
 
 fn relu(x: &mut [f32]) {
-    #[cfg(test)]
-    crate::traffic::touch(crate::traffic::Class::Act, x.as_ptr(), x.len() * 4);
-    #[cfg(test)]
-    crate::traffic::store(crate::traffic::Class::Act, x.as_ptr(), x.len() * 4);
     x.iter_mut().for_each(|v| *v = v.max(0.));
 }
 
@@ -488,13 +460,6 @@ impl Pathway {
         })
     }
     fn run(&self, x: &[f32], f: usize, y: &mut [f32]) {
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            slice(Class::Param, &self.w);
-            touch(Class::Act, x.as_ptr(), x.len() * 4);
-            crate::traffic::store(Class::Act, y.as_ptr(), x.len() * 4);
-        }
         for (c, (xr, yr)) in x.chunks_exact(f).zip(y.chunks_exact_mut(f)).enumerate() {
             for (a, b) in xr.iter().zip(yr.iter_mut()) {
                 *b = a * self.w[c];
@@ -743,37 +708,6 @@ impl Dfn {
     /// dB.
     pub(crate) fn encode(&mut self, feat_erb: &[f32], feat_re: &[f32], feat_im: &[f32]) -> f32 {
         let (ch, nb_erb, nb_df) = (self.ch, self.nb_erb, self.nb_df);
-        #[cfg(test)]
-        {
-            // The histories are read by the 3x3 convs and shifted at the end.
-            use crate::traffic::*;
-            touch(
-                Class::State,
-                self.erb_hist.as_ptr(),
-                self.erb_hist.len() * 4,
-            );
-            touch(
-                Class::State,
-                self.spec_hist.as_ptr(),
-                self.spec_hist.len() * 4,
-            );
-            store_n(
-                Class::State,
-                self.erb_hist.as_ptr(),
-                self.erb_hist.len() * 4,
-                2,
-            );
-            store_n(
-                Class::State,
-                self.spec_hist.as_ptr(),
-                self.spec_hist.len() * 4,
-                2,
-            );
-            slice(Class::Act, feat_erb);
-            slice(Class::Act, feat_re);
-            slice(Class::Act, feat_im);
-            slice(Class::Param, &self.lsnr_w);
-        }
         // The new frame follows the last two of the previous call.
         self.erb_hist[2 * nb_erb..3 * nb_erb].copy_from_slice(feat_erb);
         let newest = &mut self.spec_hist[2 * 2 * nb_df..3 * 2 * nb_df];
@@ -785,11 +719,9 @@ impl Dfn {
         let e0 = &mut self.e0[..l0];
         conv3x3(&self.erb_conv0, ch, &self.erb_hist, 1, nb_erb, e0);
         self.erb_norm0.apply(e0, nb_erb, Act::Relu);
-        profile::mark(1);
         self.erb_conv[0].run(&self.e0, nb_erb, &mut self.tmp, &mut self.e1);
         self.erb_conv[1].run(&self.e1, nb_erb / 2, &mut self.tmp, &mut self.e2);
         self.erb_conv[2].run(&self.e2, nb_erb / 4, &mut self.tmp, &mut self.e3);
-        profile::mark(2);
         pause_for(self.pause);
 
         // df_conv0: 2 -> ch in two groups, 3x3, then pointwise, BN, ReLU.
@@ -804,10 +736,8 @@ impl Dfn {
         );
         pointwise(&self.df_pw0, ch, ch, &self.tmp, nb_df, &mut self.c0);
         self.df_norm0.apply(&mut self.c0[..big], nb_df, Act::Relu);
-        profile::mark(3);
         self.df_conv1
             .run(&self.c0, nb_df, &mut self.tmp, &mut self.c1);
-        profile::mark(4);
         pause_for(self.pause);
         // cemb: c1 flattened bin-major ([f][ch]), grouped linear, ReLU.
         let n = self.df_fc_emb.out();
@@ -815,7 +745,6 @@ impl Dfn {
         transpose(&self.c1[..big / 2], ch, nb_df / 2, &mut self.tmp[..ci]);
         self.df_fc_emb.run(&self.tmp[..ci], &mut self.cemb[..n]);
         relu(&mut self.cemb[..n]);
-        profile::mark(5);
         // emb = GRU(e3 flattened bin-major + cemb).
         let f3 = nb_erb / 4;
         transpose(&self.e3[..l3], ch, f3, &mut self.tmp);
@@ -833,7 +762,6 @@ impl Dfn {
         // Keep the last two frames for the next call.
         self.erb_hist.copy_within(nb_erb..3 * nb_erb, 0);
         self.spec_hist.copy_within(2 * nb_df..3 * 2 * nb_df, 0);
-        profile::mark(6);
         pause_for(self.pause);
         sigmoid(z) * 50. - 15.
     }
@@ -845,7 +773,6 @@ impl Dfn {
         let f3 = nb_erb / 4;
         let n = self.emb.len();
         self.erb_gru.step(&self.emb[..n], &mut self.erb_g[..n]);
-        profile::mark(7);
         pause_for(self.pause);
         let ld = ch * nb_erb;
         // d3 = convt3(conv3p(e3) + emb)
@@ -863,27 +790,17 @@ impl Dfn {
             self.convt[k].run(&self.tmp2[..len], f, &mut self.tmp, &mut self.dbuf);
             f *= 2;
         }
-        profile::mark(8);
         pause_for(self.pause);
         // m = conv0_out(conv0p(e0) + d1): ch -> 1, 1x3, BN, sigmoid.
         self.pathway[3].run(&self.e0[..ld], nb_erb, &mut self.tmp2);
         add(&mut self.tmp2[..ld], &self.dbuf[..ld]);
         let mask = &mut self.mask[..nb_erb];
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            slice(Class::Param, &self.out_w);
-            touch(Class::Act, self.tmp2.as_ptr(), ld * 4);
-            touch_n(Class::Act, mask.as_ptr(), nb_erb * 4, ch);
-            crate::traffic::store_n(Class::Act, mask.as_ptr(), nb_erb * 4, 1 + ch);
-        }
         mask.fill(0.);
         for (c, row) in self.tmp2[..ld].chunks_exact(nb_erb).enumerate() {
             let k = &self.out_w[c * 3..c * 3 + 3];
             shift3_add(k[0], k[1], k[2], row, mask);
         }
         self.out_norm.apply(mask, nb_erb, Act::Sigmoid);
-        profile::mark(9);
     }
 
     /// The gain mask from `erb_decode`.
@@ -900,34 +817,21 @@ impl Dfn {
         self.df_gru.step(&self.emb[..n], &mut self.df_g[..hidden]);
         self.df_skip.run(&self.emb[..n], &mut self.tmp2[..hidden]);
         add(&mut self.df_g[..hidden], &self.tmp2[..hidden]);
-        profile::mark(10);
         pause_for(self.pause);
         // df_out: grouped linear + tanh -> [nb_df][out]
         let out = self.convp_out;
         self.df_out
             .run(&self.df_g[..hidden], &mut self.coefs[..nb_df * out]);
         tanh_slice(&mut self.coefs[..nb_df * out]);
-        profile::mark(11);
         // df_convp over the c0 history: ch -> out in two groups, kt x 1
         // (`Convp`), then pointwise, BN, ReLU, added channels-last. The
         // frame's c0 joins the history just before the conv.
         let coefs = &mut self.coefs[..nb_df * out];
         self.convp.step(&self.c0[..ch * nb_df]);
-        // The 1x1 mix reads each of its weights over every bin.
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            slice(Class::Param, &self.convp_pw);
-            touch_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, out);
-            crate::traffic::store_n(Class::Act, self.tmp2.as_ptr(), out * nb_df * 4, 1 + out);
-            touch(Class::Act, coefs.as_ptr(), nb_df * out * 4);
-            crate::traffic::store(Class::Act, coefs.as_ptr(), nb_df * out * 4);
-        }
         let z = &mut self.tmp2[..out * nb_df];
         self.convp.mix(&self.convp_pw, z);
         self.convp_norm.apply(z, nb_df, Act::Relu);
         add_transposed(z, out, nb_df, coefs);
-        profile::mark(12);
     }
 
     /// The coefficients from `df_decode`, [nb_df][order * 2].
@@ -952,12 +856,5 @@ fn pause_for(pause: Option<crate::LayerPause>) {
 }
 
 fn add(a: &mut [f32], b: &[f32]) {
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Act, a.as_ptr(), a.len().min(b.len()) * 4);
-        crate::traffic::store(Class::Act, a.as_ptr(), a.len().min(b.len()) * 4);
-        touch(Class::Act, b.as_ptr(), a.len().min(b.len()) * 4);
-    }
     a.iter_mut().zip(b).for_each(|(a, b)| *a += b);
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 type DevPageKind int
@@ -126,30 +127,11 @@ func ParseDevPage(value string, allowFlows bool) (DevPage, error) {
 // (ASCII case-insensitive).
 func FindChannel(names [][2]string, wanted string) (int, bool) {
 	for i, n := range names {
-		if asciiEqualFold(n[0], wanted) || asciiEqualFold(n[1], wanted) {
+		if common.ASCIIEqualFold(n[0], wanted) || common.ASCIIEqualFold(n[1], wanted) {
 			return i, true
 		}
 	}
 	return 0, false
-}
-
-func asciiEqualFold(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		x, y := a[i], b[i]
-		if 'A' <= x && x <= 'Z' {
-			x += 'a' - 'A'
-		}
-		if 'A' <= y && y <= 'Z' {
-			y += 'a' - 'A'
-		}
-		if x != y {
-			return false
-		}
-	}
-	return true
 }
 
 func asciiLower(s string) string {

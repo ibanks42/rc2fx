@@ -251,6 +251,9 @@ func verifyKey(key *metadata.Key, data, sig []byte) error {
 	isPEM := strings.HasPrefix(public, "-----BEGIN")
 	switch key.Scheme {
 	case "ed25519":
+		if key.Type != "ed25519" {
+			return fmt.Errorf("key type %q does not match scheme %q", key.Type, key.Scheme)
+		}
 		var pub ed25519.PublicKey
 		if isPEM {
 			parsed, err := pemPublicKey(public)
@@ -277,6 +280,9 @@ func verifyKey(key *metadata.Key, data, sig []byte) error {
 		}
 		return nil
 	case "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384":
+		if key.Type != "ecdsa" && key.Type != key.Scheme {
+			return fmt.Errorf("key type %q does not match scheme %q", key.Type, key.Scheme)
+		}
 		if !isPEM {
 			return errors.New("public key is neither PEM nor a hex ed25519 key")
 		}
@@ -307,6 +313,9 @@ func verifyKey(key *metadata.Key, data, sig []byte) error {
 		}
 		return nil
 	case "rsassa-pss-sha256", "rsassa-pss-sha384", "rsassa-pss-sha512":
+		if key.Type != "rsa" {
+			return fmt.Errorf("key type %q does not match scheme %q", key.Type, key.Scheme)
+		}
 		if !isPEM {
 			return errors.New("public key is neither PEM nor a hex ed25519 key")
 		}
@@ -318,8 +327,8 @@ func verifyKey(key *metadata.Key, data, sig []byte) error {
 		if !ok {
 			return errors.New("not an RSA key")
 		}
-		if bits := pub.N.BitLen(); bits < 2048 || bits > 8192 {
-			return fmt.Errorf("RSA key size %d is outside 2048-8192 bits", bits)
+		if bits := pub.N.BitLen(); bits < 2048 || bits > 4096 {
+			return fmt.Errorf("RSA key size %d is outside 2048-4096 bits", bits)
 		}
 		var h crypto.Hash
 		switch key.Scheme {

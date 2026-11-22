@@ -271,15 +271,8 @@ mod neon {
 /// Depthwise convolution along frequency with a 3-tap kernel, padding 1.
 /// x [c][f] -> y [c][f / stride], `stride` 1 or 2.
 pub(crate) fn depthwise3(w: &[f32], x: &[f32], c: usize, f: usize, stride: usize, y: &mut [f32]) {
-    #[cfg(any(test, target_arch = "aarch64"))]
+    #[cfg(target_arch = "aarch64")]
     let fo = f / stride;
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Param, w.as_ptr(), c * 3 * 4);
-        touch(Class::Act, x.as_ptr(), c * f * 4);
-        crate::traffic::store(Class::Act, y.as_ptr(), c * fo * 4);
-    }
     #[cfg(target_arch = "aarch64")]
     {
         let wide = if stride == 1 {
@@ -326,13 +319,6 @@ pub(crate) fn shift3_add(k0: f32, k1: f32, k2: f32, x: &[f32], y: &mut [f32]) {
 /// padding 1, output padding 1. x [c][f] -> y [c][2f]:
 /// y[2i] = k1 x[i], y[2i+1] = k2 x[i] + k0 x[i+1].
 pub(crate) fn depthwise_t3(w: &[f32], x: &[f32], c: usize, f: usize, y: &mut [f32]) {
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Param, w.as_ptr(), c * 3 * 4);
-        touch(Class::Act, x.as_ptr(), c * f * 4);
-        crate::traffic::store(Class::Act, y.as_ptr(), c * 2 * f * 4);
-    }
     #[cfg(target_arch = "aarch64")]
     if f >= neon::T3_MIN && !reference::on() {
         assert!(w.len() >= c * 3 && x.len() >= c * f && y.len() >= c * 2 * f);
@@ -351,19 +337,11 @@ pub(crate) fn depthwise_t3(w: &[f32], x: &[f32], c: usize, f: usize, y: &mut [f3
 /// 3 frames of history: `x` is [3 frames][groups][f], oldest frame first.
 /// y is [ch][f].
 pub(crate) fn conv3x3(w: &[f32], ch: usize, x: &[f32], groups: usize, f: usize, y: &mut [f32]) {
-    #[cfg(any(test, target_arch = "aarch64"))]
+    #[cfg(target_arch = "aarch64")]
     let per = ch / groups;
     // Leave degenerate `per == 0` cases to the scalar fallback.
     #[cfg(target_arch = "aarch64")]
     if f >= neon::TAPS_MIN && per > 0 && !reference::on() {
-        // Each output reads its group's three frames and writes itself once.
-        #[cfg(test)]
-        {
-            use crate::traffic::*;
-            touch(Class::Param, w.as_ptr(), ch * 9 * 4);
-            touch_n(Class::Act, x.as_ptr(), 3 * groups * f * 4, per);
-            crate::traffic::store(Class::Act, y.as_ptr(), ch * f * 4);
-        }
         assert!(w.len() >= ch * 9 && x.len() >= 3 * groups * f && y.len() >= ch * f);
         for o in 0..ch {
             let g = o / per;
@@ -382,26 +360,11 @@ pub(crate) fn conv3x3(w: &[f32], ch: usize, x: &[f32], groups: usize, f: usize, 
         }
         return;
     }
-    // Each output reads its group's three frames and writes itself three times.
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Param, w.as_ptr(), ch * 9 * 4);
-        touch_n(Class::Act, x.as_ptr(), 3 * groups * f * 4, per);
-        touch_n(Class::Act, y.as_ptr(), ch * f * 4, 2);
-        crate::traffic::store_n(Class::Act, y.as_ptr(), ch * f * 4, 3);
-    }
     scalar::conv3x3(w, ch, x, groups, f, y);
 }
 
 /// [rows][cols] -> [cols][rows]
 pub(crate) fn transpose(x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Act, x.as_ptr(), rows * cols * 4);
-        crate::traffic::store(Class::Act, y.as_ptr(), rows * cols * 4);
-    }
     if reference::on() || rows == 0 || cols == 0 {
         return scalar::transpose(x, rows, cols, y);
     }
@@ -743,10 +706,16 @@ pub(crate) mod tests {
         }
     }
 
-    // Verify `reference::set(true)` actually hits the scalar path (checked via
-    // conv3x3's store count: 3 in scalar vs 1 in NEON).
+    // Verify `reference::set(true)` matches the scalar path.
     #[test]
     fn the_reference_switch_selects_the_scalar_forms() {
+        struct Off;
+        impl Drop for Off {
+            fn drop(&mut self) {
+                reference::set(false);
+            }
+        }
+        let _off = Off;
         let mut rng = Rng(7);
         let (c, f) = (4, 32);
         let w = rng.values(0, c * 3);
@@ -759,34 +728,27 @@ pub(crate) mod tests {
         reference::set(false);
         assert_same(&got, &want, "reference");
 
-        struct Off;
-        impl Drop for Off {
-            fn drop(&mut self) {
-                reference::set(false);
-                crate::traffic::disable();
-            }
-        }
-        let _off = Off;
+        // The fast form checks every length before it writes; the scalar form
+        // writes its first tap, then fails on the missing second frame.
         let (ch, f) = (8, 64);
         let w = rng.values(0, ch * 9);
-        let x = rng.values(0, 3 * f);
-        let mut y = vec![0.; ch * f];
-        let mut stores = |on: bool| {
-            crate::traffic::enable();
+        let x = rng.values(0, f); // one frame of the three
+        let wrote = |on: bool| {
+            let mut y = vec![SENTINEL; ch * f];
             reference::set(on);
-            conv3x3(&w, ch, &x, 1, f, &mut y);
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                conv3x3(&w, ch, &x, 1, f, &mut y);
+            }));
             reference::set(false);
-            let writes: Vec<u32> = crate::traffic::trace()
-                .iter()
-                .filter(|a| a.write)
-                .map(|a| a.times)
-                .collect();
-            crate::traffic::disable();
-            writes
+            assert!(failed.is_err());
+            y.iter().any(|v| v.to_bits() != SENTINEL.to_bits())
         };
-        assert_eq!(stores(true), [3], "the scalar form");
-        let vector = cfg!(target_arch = "aarch64");
-        assert_eq!(stores(false), [if vector { 1 } else { 3 }], "the fast form");
+        assert!(wrote(true), "the scalar form");
+        assert_eq!(
+            wrote(false),
+            !cfg!(target_arch = "aarch64"),
+            "the fast form"
+        );
     }
 
     /// `f32` buffer flanked by `PROT_NONE` guard pages, aligned to either the

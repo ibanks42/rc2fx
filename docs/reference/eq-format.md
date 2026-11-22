@@ -57,7 +57,7 @@ Q_RBJ = (1 + 2·storedQ) · √g / (2·√(1 + g²))
 
 For all other filter types, `Q_RBJ = (1 + storedQ) / 2`.
 
-Shelves compute alpha directly from Q; they don't use the shelf slope `S`. Pass and notch filters still store a `gain` field, but they ignore it. We always keep the original mode and Q on disk so changing gain later recomputes the converted Q properly. Reference formulas and independent test vectors live in `fixtures/easyeffects/`.
+Shelves compute alpha directly from Q; they don't use the shelf slope `S`. Pass and notch filters still store a `gain` field, but they ignore it. We always keep the original mode and Q on disk so changing gain later recomputes the converted Q properly. Reference formulas and independent test vectors live in `desktop/core/testdata/easyeffects/`.
 
 Adding, removing, or reordering bands won't restart noise suppression or any other effect in the chain, and bands that stay put keep their filter state.
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
@@ -626,8 +627,8 @@ func (e *Engine) probe() (*Status, error) {
 		usbError = driveError
 	}
 	present := saved.Prepared != nil &&
-		exists(filepath.Join(e.Work, "archive.tar.gz")) &&
-		exists(filepath.Join(e.Work, "archive.md5"))
+		common.PathExists(filepath.Join(e.Work, "archive.tar.gz")) &&
+		common.PathExists(filepath.Join(e.Work, "archive.md5"))
 	// Non-fatal: recovery disk absence just leaves the repair view waiting.
 	recoveryDisk, err := platform.RecoveryDiskOf(e.Platform)
 	if err != nil {
@@ -663,16 +664,8 @@ func LoadSaved(work string) (*Saved, error) {
 	return &saved, nil
 }
 
-func nowUnix() uint64 {
-	now := time.Now().Unix()
-	if now < 0 {
-		return 0
-	}
-	return uint64(now)
-}
-
 func utc() string {
-	return time.Unix(int64(nowUnix()), 0).UTC().Format("2006-01-02T15:04:05Z")
+	return time.Unix(int64(common.NowUnix()), 0).UTC().Format("2006-01-02T15:04:05Z")
 }
 
 // DefaultKey returns the default path for the developer SSH key.

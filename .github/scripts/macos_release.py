@@ -17,9 +17,7 @@ Requires `gh` with GH_TOKEN and GH_REPO (or GITHUB_REPOSITORY). Exits 1 on refus
 """
 
 import argparse
-import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
@@ -28,20 +26,11 @@ import zipfile
 from pathlib import Path
 
 import land_release
+from release_common import Refused, STABLE, gh_api_get, gh_repo, require, sha256
 
-STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 PENDING = re.compile(
     r"\n*<!-- rc2fx:macos-pending -->\n.*?\n<!-- /rc2fx:macos-pending -->\n*", re.S
 )
-
-
-class Refused(Exception):
-    pass
-
-
-def require(condition, message):
-    if not condition:
-        raise Refused(message)
 
 
 class Gh:
@@ -60,14 +49,7 @@ class Gh:
 
     def api(self, path):
         """Return parsed JSON for repos/REPO/PATH, or None on 404."""
-        result = subprocess.run(
-            ["gh", "api", f"repos/{self.repo}/{path}"], capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            if "HTTP 404" in result.stderr or "Not Found" in result.stderr:
-                return None
-            raise Refused(f"GitHub API repos/{self.repo}/{path}: {result.stderr.strip()}")
-        return json.loads(result.stdout)
+        return gh_api_get(self.repo, path, run=subprocess.run)
 
     def releases(self):
         """Return all releases including drafts, flattened across paginated responses."""
@@ -104,10 +86,6 @@ class Gh:
     def publish(self, release_id, tag):
         self._gh("api", "--method", "PATCH", f"repos/{self.repo}/releases/{release_id}",
                  "-f", f"tag_name={tag}", "-F", "draft=false", "-f", "make_latest=true")
-
-
-def sha256(data):
-    return hashlib.sha256(data).hexdigest()
 
 
 def safe_relative(name):
@@ -402,9 +380,7 @@ def main():
     u.add_argument("--package-dir", required=True, type=Path)
     args = parser.parse_args()
     try:
-        repo = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
-        require(re.fullmatch(r"[\w.-]+/[\w.-]+", repo), "GH_REPO or GITHUB_REPOSITORY is not set")
-        gh = Gh(repo)
+        gh = Gh(gh_repo())
         print(publish(gh, args.tag, args.source, args.package_dir), end="")
         return 0
     except (Refused, json.JSONDecodeError, KeyError, zipfile.BadZipFile, OSError) as error:

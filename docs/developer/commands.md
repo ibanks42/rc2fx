@@ -17,8 +17,8 @@ macOS. `just` wraps the most common ones. Run `just --list` for the recipes or
 | `just app-embedded-release` | Cross-build the mixer runtime, then run the release build with the optional embedded payload. |
 | `just mixer-build` | Cross-build the mixer runtime into `target/mixer` |
 | `just test` | Check Go formatting, run `go vet` and tests for the desktop app (including `transport` with the `mockmixer` tag), then on Linux run `just test-rust` |
-| `just test-rust` | Run Rust workspace tests and Clippy with warnings as errors, including the `eq-fma` and `bench-kernels` features (Linux only, matching all Rust crates here) |
-| `just test-mixer` | Run native library tests and Clippy, a benchmark build check, plus launcher, recorder, screen-module, and xrun flight recorder tests (Linux) |
+| `just test-rust` | Run Rust workspace tests and Clippy with warnings as errors, including the `bench-kernels` feature (Linux only, matching all Rust crates here) |
+| `just test-mixer` | Run native library tests and Clippy, a benchmark build check, plus launcher, recorder, and screen-module tests (Linux) |
 | `just package` | Build a release package for the current OS into `target/package` |
 | `just package-check` | Build the AppImage from your working tree inside the release container (AlmaLinux 8, glibc 2.28), then verify it in clean containers across several Linux distributions (x86-64 Linux with Podman or Docker) |
 | `just docs` / `just docs-serve` | Build / serve this documentation site |

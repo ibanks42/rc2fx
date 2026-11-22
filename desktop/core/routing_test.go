@@ -2,8 +2,7 @@ package core
 
 import "testing"
 
-// Global processing enable/disable tests; Rust-side state checks live in
-// crates/rc2fx-core/tests/routing.rs.
+// Global processing enable/disable tests.
 
 func routingState(enabled bool) DeviceState {
 	config := DefaultConfig()

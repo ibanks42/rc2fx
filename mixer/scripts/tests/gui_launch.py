@@ -3,46 +3,26 @@
 
   python3 mixer/scripts/tests/gui_launch.py
 
-Extracts the GUI functions from rc2fx.sh, stubs exec/stamp/sleep, and exercises
-fallback paths, the crash-loop guard, log rotation, and shim selection in a temp dir.
+Sources the real rc2fx.sh, intercepts exec via fake stock-gui/env binaries on
+PATH, stubs stamp/sleep/uptime_s/bundle_home, and exercises fallback paths, the
+crash-loop guard, log rotation, and shim selection in a temp dir.
 """
 import os
-import re
 import shutil
+import socket
 import subprocess
-import tempfile
+import sys
 import unittest
 from pathlib import Path
 
-SCRIPT = (Path(__file__).parents[1] / 'rc2fx.sh').read_text()
-SHIM = (Path(__file__).parents[1] / 'rc2fx-gui-shim.sh').read_text()
-GUI_SHA = 'aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import SCRIPTS_DIR, TempDirTestCase, sha256_bytes, source_rc2fx, write_executable, write_fake_bin  # noqa: E402
 
-WAIT_START = SCRIPT.index('# display-start.sh starts the GUI as soon as')
-START = SCRIPT.index('# Why the stock GUI is starting')
-END = SCRIPT.index('\ncase "${1:-}" in', START)
-# Put the mixer-wait helpers after the GUI block since they call gui_say.
-BLOCK = SCRIPT[START:END] + SCRIPT[WAIT_START:START]
-# Leave `exec 9>lock` untouched so fd redirections still work.
-BLOCK = BLOCK.replace('exec env LD_AUDIT', 'record env LD_AUDIT')
-BLOCK = BLOCK.replace('exec "$stock_gui"', 'record "$stock_gui"')
-BLOCK = BLOCK.replace('  exec "$@"', '  record "$@"')
+SHIM = (SCRIPTS_DIR / 'rc2fx-gui-shim.sh').read_text()
 
-HARNESS = '''set -euo pipefail
-say() { printf 'REASON %s\\n' "$*"; }
+HARNESS = '''say() { printf 'REASON %s\\n' "$*"; }
 stamp() { printf 'STAMP'; }
-gui_home=$RC2FX_GUI_HOME
 rc2fx_build=${RC2FX_TEST_BUILD:-development}
-data=$RC2FX_DATA
-home=$RC2FX_BUNDLE
-stock_gui=$RC2FX_STOCK_GUI
-gui_shim=$RC2FX_GUI_SHIM
-gui_sha=$GUI_SHA
-run=$RC2FX_RUN
-boot=$RC2FX_BOOT
-stock_mixer=$RC2FX_STOCK_MIXER
-audio_shim=$RC2FX_AUDIO_SHIM
-record() { printf 'EXEC %s\n' "$*"; exit 0; }
 # The real bundle_home() picks a RAM build over the install; the tests point
 # it at one directory.
 bundle_home() { printf '%s\\n' "$RC2FX_BUNDLE"; }
@@ -58,36 +38,35 @@ sleep() {
     appear)
       # The mixer writes native.pid one poll after the GUI has started.
       n=$(( ${n:-0} + 1 ))
-      if test "$n" -ge 2; then printf '%s\n' "$RC2FX_TEST_MIXER_PID" > "$RC2FX_RUN/native.pid"; fi
+      if test "$n" -ge 2; then printf '%s\\n' "$RC2FX_TEST_MIXER_PID" > "$RC2FX_RUN/native.pid"; fi
       printf '{"callbacks":%d}' $(( 4 + n )) > "$RC2FX_RUN/audit.json" ;;
   esac
 }
-flock() { "$RC2FX_FLOCK" "$@"; }
 uptime_s() { cat "$RC2FX_ROOT/uptime"; }
 '''
 
 
-def bash(body, root, env=None):
-    full = dict(os.environ, RC2FX_ROOT=str(root), **(env or {}))
-    script = HARNESS.replace('$GUI_SHA', f'"{GUI_SHA}"') + BLOCK + '\n' + body
-    return subprocess.run(['bash', '-c', script], capture_output=True, text=True, cwd=root, env=full,
-                          timeout=60)
-
-
-class GuiLaunch(unittest.TestCase):
+class GuiLaunch(TempDirTestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        super().setUp()
         (self.root / 'uptime').write_text('1000\n')
         self.gui_home = self.root / 'run-gui'
         self.data = self.root / 'data'
         self.data.mkdir()
         self.bundle = self.root / 'bundle'
         (self.bundle / 'bin').mkdir(parents=True)
-        self.stock = self.root / 'stock-gui'
-        self.stock.write_text('#!/bin/sh\nexit 0\n')
-        self.stock.chmod(0o755)
+        # Fake stock GUI and env binaries record the exec'd command instead of
+        # loading the dummy LD_AUDIT library.
+        self.bin = write_fake_bin(
+            self.root / 'bin',
+            {'env': 'printf \'EXEC env %s\\n\' "$*"'},
+            shebang='#!/bin/sh',
+        )
+        self.stock = write_executable(
+            self.root / 'stock-gui',
+            'printf \'EXEC %s%s\\n\' "$0" "${*:+ $*}"',
+            shebang='#!/bin/sh',
+        )
         self.make_bundle_module()
         self.run_dir = self.root / 'run'
         self.boot_dir = self.root / 'boot'
@@ -98,38 +77,38 @@ class GuiLaunch(unittest.TestCase):
         self.fake_mixer = self.root / 'rc_audio_mixer'
         shutil.copy(shutil.which('bash'), self.fake_mixer)
         self.env = {
+            'PATH': f'{self.bin}:{os.environ["PATH"]}',
+            'RC2FX_ROOT': str(self.root),
+            'RC2FX_HOME': str(self.bundle / 'bin'),
             'RC2FX_GUI_HOME': str(self.gui_home),
             'RC2FX_DATA': str(self.data),
             'RC2FX_BUNDLE': str(self.bundle / 'bin'),
             'RC2FX_STOCK_GUI': str(self.stock),
-            'RC2FX_FLOCK': '/usr/bin/flock',
             'RC2FX_GUI_SHIM': str(self.root / 'installed-gui-shim'),
             'RC2FX_RUN': str(self.run_dir),
             'RC2FX_BOOT': str(self.boot_dir),
-            'RC2FX_STOCK_MIXER': str(self.root / 'rc_audio_mixer'),
+            'RC2FX_STOCK_MIXER': str(self.fake_mixer),
             'RC2FX_GUI_WAIT_MAX': '1',  # two polls with stubbed sleep()
             'RC2FX_AUDIO_SHIM': str(self.root / 'audio-shim'),
             'RC2FX_GUI_BOOT_WINDOW': '180',
         }
-        # Override gui_sha with our dummy stock GUI's hash.
         (self.root / 'installed-gui-shim').write_text('#!/bin/sh\n')
-        self.stock_hash = subprocess.run(['sha256sum', str(self.stock)], capture_output=True,
-                                         text=True).stdout.split()[0]
+        self.stock_hash = sha256_bytes(self.stock.read_bytes())
         self.gui_hash = self.stock_hash
 
     def make_bundle_module(self):
         module = self.bundle / 'bin' / 'librc2fx_gui.so'
-        module.write_bytes(b'ELF-module')
-        sums = subprocess.run(['sha256sum', 'librc2fx_gui.so'], cwd=self.bundle / 'bin',
-                              capture_output=True, text=True).stdout
-        (self.bundle / 'bin' / 'SHA256SUMS').write_text(sums)
+        data = b'ELF-module'
+        module.write_bytes(data)
+        (self.bundle / 'bin' / 'SHA256SUMS').write_text(f'{sha256_bytes(data)}  librc2fx_gui.so\n')
 
     def run_gui(self, *args, env=None, body='gui_launch "$@"', hash_override=True):
         e = dict(self.env, **(env or {}))
-        script = f'set -- {" ".join(args) if args else ""}\n'
+        script = HARNESS
         if hash_override:
-            script = f'gui_sha={self.gui_hash}\n' + script
-        return bash(script + body, self.root, e)
+            script += f'gui_sha={self.gui_hash}\n'
+        script += f'set -- {" ".join(args) if args else ""}\n' + body
+        return source_rc2fx(script, env=e, cwd=self.root, timeout=60)
 
     def logged(self):
         log = self.gui_home / 'gui.log'
@@ -203,7 +182,6 @@ class GuiLaunch(unittest.TestCase):
 
     def start_mixer(self):
         """Start a dummy process whose /proc/<pid>/exe points to fake_mixer."""
-        import subprocess
         if not Path('/proc/self/exe').exists():
             self.skipTest('/proc/<pid>/exe is not on this host')
         # Block in bash's builtin read so no child process is spawned.
@@ -217,19 +195,14 @@ class GuiLaunch(unittest.TestCase):
 
     def control_socket(self):
         """Bind a real Unix socket at $run/control.sock."""
-        import socket
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(self.run_dir / 'control.sock'))
         server.listen(1)
         self.addCleanup(server.close)
 
-    def audit(self, callbacks):
-        (self.run_dir / 'audit.json').write_text('{"callbacks":%d}' % callbacks)
-
     def boot_fixture(self):
         """Set up a fresh boot state with the audio shim present and low uptime."""
-        (self.root / 'audio-shim').write_text('#!/bin/sh\n')
-        (self.root / 'audio-shim').chmod(0o755)
+        write_executable(self.root / 'audio-shim', '', shebang='#!/bin/sh')
         (self.root / 'uptime').write_text('5\n')
         self.control_socket()
 
@@ -276,8 +249,7 @@ class GuiLaunch(unittest.TestCase):
         self.assertNotIn('Waited', self.logged())
         self.assertNotIn('reported ready', self.logged())
         # Even with the shim installed, late uptime isn't treated as a boot start.
-        (self.root / 'audio-shim').write_text('#!/bin/sh\n')
-        (self.root / 'audio-shim').chmod(0o755)
+        write_executable(self.root / 'audio-shim', '', shebang='#!/bin/sh')
         r = self.run_gui('--x', env={'RC2FX_TEST_SLEEP_AUDIT': 'constant', 'RC2FX_GUI_WAIT_MAX': '5'})
         self.assertIn('EXEC ', r.stdout)
         self.assertNotIn('reported ready', self.logged())
@@ -331,6 +303,7 @@ class GuiLaunch(unittest.TestCase):
                 self.assertIn(f'GUI diagnostics: {expected}', r.stdout, r.stderr)
                 lines = [x for x in r.stdout.splitlines() if x.startswith('GUI diagnostics:')]
                 self.assertEqual(len(lines), 1, lines)
+
     def test_status_has_no_screen_conversion_setting(self):
         self.gui_home.mkdir()
         (self.gui_home / 'screen-conversion').write_text('hardware\n')
@@ -386,26 +359,23 @@ class GuiLaunch(unittest.TestCase):
         self.assertIn('GUI: stock until the next boot (the GUI module crashed it 3 times within 30 s)', r.stdout)
 
 
-class Shim(unittest.TestCase):
+class Shim(TempDirTestCase):
     """Tests for rc2fx-gui-shim.sh dispatching to rc2fx.sh gui-launch."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        super().setUp()
         self.shim = self.root / 'rc_gui_juce'
         text = SHIM.replace('/run/rc2fx-dev/rc2fx.sh', str(self.root / 'dev/rc2fx.sh'))
         text = text.replace('/opt/rc2fx/rc2fx.sh', str(self.root / 'opt/rc2fx.sh'))
         text = text.replace('/usr/bin/rc_gui_juce', str(self.root / 'stock-gui'))
         self.shim.write_text(text)
         self.shim.chmod(0o755)
-        (self.root / 'stock-gui').write_text('#!/bin/sh\nprintf "STOCK %s\\n" "$*"\n')
-        (self.root / 'stock-gui').chmod(0o755)
+        write_executable(self.root / 'stock-gui', 'printf "STOCK %s\\n" "$*"', shebang='#!/bin/sh')
 
     def test_hands_over_to_the_rc2fx_script_that_has_gui_launch(self):
         (self.root / 'opt').mkdir(exist_ok=True)
-        script = self.root / 'opt/rc2fx.sh'
-        script.write_text('#!/bin/bash\ncase "${1:-}" in\n  gui-launch) shift; printf "LAUNCH %s\\n" "$*"; exit 7;;\nesac\nexit 9\n')
+        (self.root / 'opt/rc2fx.sh').write_text(
+            '#!/bin/bash\ncase "${1:-}" in\n  gui-launch) shift; printf "LAUNCH %s\\n" "$*"; exit 7;;\nesac\nexit 9\n')
         r = subprocess.run([str(self.shim), '--a', 'b'], capture_output=True, text=True, timeout=30)
         self.assertEqual((r.returncode, r.stdout), (7, 'LAUNCH --a b\n'))
 

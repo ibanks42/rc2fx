@@ -1,30 +1,7 @@
 //! The saved RODE show is separate from RC2FX's processing configuration.
+pub use crate::schema_gen::{StockInventory, StockSource};
 use crate::{CoreError, Result, valid_id};
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StockSource {
-    pub id: String,
-    pub source_id: u16,
-    /// None for a known source that is not assigned to a show fader.
-    pub fader: Option<u8>,
-    pub name: String,
-    pub color: String,
-    /// Empty when the installed route profile does not process this source.
-    pub target_id: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StockInventory {
-    pub available: bool,
-    pub show_name: String,
-    pub revision: String,
-    pub message: String,
-    pub inputs: Vec<StockSource>,
-}
 
 impl StockInventory {
     pub fn validate(&self) -> Result<()> {

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// Extra strict-decoder and serde-compatible encoder tests beyond the shared fixtures.
+// Extra strict-decoder and encoder tests beyond the shared fixtures.
 
-func TestFloatsAreWrittenAsSerdeJSONWritesThem(t *testing.T) {
+func TestFloatJSONFormatting(t *testing.T) {
 	for _, c := range []struct {
 		value float64
 		want  string
@@ -38,13 +38,13 @@ func TestFloatsAreWrittenAsSerdeJSONWritesThem(t *testing.T) {
 	}
 }
 
-func TestStringsEscapeOnlyWhatSerdeJSONEscapes(t *testing.T) {
+func TestStringJSONEscaping(t *testing.T) {
 	got := encode(t, "\"\\/\b\f\n\r\t\x00\x1f\x7f<>&\u2028\u00e9")
 	check(t, got == `"\"\\/\b\f\n\r\t\u0000\u001f`+"\x7f<>&\u2028\u00e9"+`"`, got)
 	check(t, encode(t, "a\xffb") == "\"a\ufffdb\"", "invalid UTF-8 becomes U+FFFD")
 }
 
-func TestPrettyOutputMatchesSerdeJSON(t *testing.T) {
+func TestPrettyJSONOutput(t *testing.T) {
 	type inner struct {
 		List  []int          `json:"list"`
 		Empty []int          `json:"empty"`
@@ -94,7 +94,7 @@ func TestStrictDecoderRules(t *testing.T) {
 	check(t, err != nil && strings.HasPrefix(err.Error(), "Duplicate JSON key: required"), err)
 }
 
-func TestNumbersKeepTheirSerdeJSONKind(t *testing.T) {
+func TestNumberKindPreservation(t *testing.T) {
 	for _, c := range []struct {
 		text, want string
 	}{

@@ -1,12 +1,8 @@
 // Package task provides shared helpers for xtask commands: locating the repo
-// root, running subprocesses, hashing, and formatting exit statuses, I/O
-// errors, and quoted strings to match the Rust stdlib output from before the
-// Go port.
+// root, running subprocesses, and formatting exit statuses and I/O errors.
 package task
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,11 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
-	"unicode"
-	"unicode/utf8"
 )
 
 // Error is a user-facing error message printed by main after "error: ".
@@ -64,19 +57,19 @@ func Run(command *exec.Cmd) error {
 	}
 	program := Program(command)
 	if err := command.Start(); err != nil {
-		return Errorf("could not start %s: %s", Debug(program), IOError(err))
+		return Errorf("could not start %q: %s", program, IOError(err))
 	}
 	err := command.Wait()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {
-			return Errorf("could not start %s: %s", Debug(program), IOError(err))
+			return Errorf("could not start %q: %s", program, IOError(err))
 		}
 	}
 	if command.ProcessState.Success() {
 		return nil
 	}
-	return Errorf("%s failed (%s)", Debug(program), Status(command.ProcessState))
+	return Errorf("%q failed (%s)", program, Status(command.ProcessState))
 }
 
 // Program returns the invoked command name (Args[0]) rather than the resolved path.
@@ -85,11 +78,6 @@ func Program(command *exec.Cmd) string {
 		return command.Args[0]
 	}
 	return command.Path
-}
-
-func Sha256(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
 
 // Status formats a finished process's exit status (`exit status: 1`,
@@ -120,58 +108,6 @@ func IOError(err error) string {
 		return path.Err.Error()
 	}
 	return err.Error()
-}
-
-// Debug quotes text using Rust's `{:?}` escaping rules.
-func Debug(text string) string {
-	var out strings.Builder
-	out.WriteByte('"')
-	for len(text) > 0 {
-		r, size := utf8.DecodeRuneInString(text)
-		if r == utf8.RuneError && size == 1 {
-			fmt.Fprintf(&out, "\\x%02X", text[0])
-			text = text[1:]
-			continue
-		}
-		text = text[size:]
-		switch r {
-		case '"':
-			out.WriteString(`\"`)
-		case '\\':
-			out.WriteString(`\\`)
-		case '\n':
-			out.WriteString(`\n`)
-		case '\r':
-			out.WriteString(`\r`)
-		case '\t':
-			out.WriteString(`\t`)
-		case 0:
-			out.WriteString(`\0`)
-		default:
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && !unicode.IsPrint(r) && r != ' ') {
-				out.WriteString(`\u{` + strconv.FormatInt(int64(r), 16) + `}`)
-			} else {
-				out.WriteRune(r)
-			}
-		}
-	}
-	out.WriteByte('"')
-	return out.String()
-}
-
-// ParseUint parses an unsigned base-10 integer (allowing an optional leading '+').
-func ParseUint(text string, bits int) (uint64, bool) {
-	digits := strings.TrimPrefix(text, "+")
-	if digits == "" {
-		return 0, false
-	}
-	for i := 0; i < len(digits); i++ {
-		if digits[i] < '0' || digits[i] > '9' {
-			return 0, false
-		}
-	}
-	value, err := strconv.ParseUint(digits, 10, bits)
-	return value, err == nil
 }
 
 func CRLFToLF(text string) string { return strings.ReplaceAll(text, "\r\n", "\n") }

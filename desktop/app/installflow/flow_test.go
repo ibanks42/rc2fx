@@ -12,6 +12,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 )
 
@@ -385,7 +386,7 @@ func TestAReinstallRunsEndToEndAfterOneStart(t *testing.T) {
 	s := status(gv1(false), ready(), true, false)
 	s.status.Saved.Commands = append(s.status.Saved.Commands, installer.CommandRecord{
 		Command:      "usb-mode",
-		AtUnix:       nowUnix(),
+		AtUnix:       common.NowUnix(),
 		Acknowledged: true,
 	})
 	if report(t, m, refresh, s) != nil {
@@ -876,7 +877,7 @@ func TestALongWaitCanBeStopped(t *testing.T) {
 func recentFlash(s Seen) Seen {
 	s.status.Saved.Commands = append(s.status.Saved.Commands, installer.CommandRecord{
 		Command: "flash",
-		AtUnix:  nowUnix() - 60,
+		AtUnix:  common.NowUnix() - 60,
 	})
 	return s
 }
@@ -1831,7 +1832,7 @@ func TestReleasesDefaultToStableAndPreparedFirmwareWins(t *testing.T) {
 func flashedAgo(s Seen, secs uint64) Seen {
 	s.status.Saved.Commands = append(s.status.Saved.Commands, installer.CommandRecord{
 		Command: "flash",
-		AtUnix:  nowUnix() - secs,
+		AtUnix:  common.NowUnix() - secs,
 	})
 	return s
 }

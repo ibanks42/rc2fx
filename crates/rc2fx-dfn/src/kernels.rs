@@ -211,16 +211,6 @@ mod neon {
 pub(crate) fn pointwise(w: &Weights, out: usize, inp: usize, x: &[f32], f: usize, y: &mut [f32]) {
     debug_assert!(out.is_multiple_of(4) && f.is_multiple_of(8));
     debug_assert!(x.len() >= inp * f && y.len() >= out * f);
-    // Every 16-bin block (and the 8-bin tail) re-reads its four outputs'
-    // weights; every block of four outputs re-reads the whole input.
-    #[cfg(test)]
-    weights_traffic(w, out * inp, out / 4 * inp, f.div_ceil(16));
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch_n(Class::Act, x.as_ptr(), inp * f * 4, out / 4);
-        store(Class::Act, y.as_ptr(), out * f * 4);
-    }
     #[cfg(target_arch = "aarch64")]
     unsafe {
         debug_assert_eq!(w.row, 4);
@@ -276,23 +266,6 @@ pub(crate) fn pointwise_onto(
     let blocks = rows.div_ceil(4);
     assert!(f.is_multiple_of(8) && at + inp <= total);
     assert!(x.len() >= inp * f && y.len() >= rows * f);
-    // Every 16-bin block (and the 8-bin tail) re-reads the run's weights;
-    // every block of four outputs re-reads the run's input and updates its
-    // sums in place.
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        let times = f.div_ceil(16);
-        // Each run reads its own part of the weights and scales.
-        let part = (w as *const Weights as *const u8).wrapping_add(at);
-        touch_n(Class::Q8, part, blocks * inp * 4, times);
-        touch_n(Class::Scale, part, blocks * inp * 4, times);
-        touch_n(Class::Act, x.as_ptr(), inp * f * 4, blocks);
-        if !fresh {
-            touch(Class::State, y.as_ptr(), rows * f * 4);
-        }
-        store(Class::State, y.as_ptr(), rows * f * 4);
-    }
     #[cfg(target_arch = "aarch64")]
     {
         debug_assert_eq!(w.row, 4);
@@ -339,15 +312,6 @@ pub(crate) fn pointwise_onto(
     }
 }
 
-/// `Weights` traffic: `values` weights and, as int8, `scales` f32 scales,
-/// each read `times` over.
-#[cfg(test)]
-fn weights_traffic(w: &Weights, values: usize, scales: usize, times: usize) {
-    use crate::traffic::*;
-    touch_n(Class::Q8, w, values, times);
-    touch_n(Class::Scale, w, scales * 4, times);
-}
-
 /// Reorders a row-major [out][inp] matrix into blocks of four outputs per input.
 pub(crate) fn pack_pointwise(w: &[f32], out: usize, inp: usize) -> Vec<f32> {
     let mut p = vec![0f32; out * inp];
@@ -382,21 +346,6 @@ fn grouped_impl<const REGISTERS: bool>(
     y: &mut [f32],
 ) {
     debug_assert!(x.len() >= groups * ws && y.len() >= groups * hs);
-    // y is cleared, then every input row reads and writes its group's hs
-    // outputs back.
-    #[cfg(test)]
-    weights_traffic(w, groups * ws * hs, groups * ws, 1);
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        touch(Class::Act, x.as_ptr(), groups * ws * 4);
-        if REGISTERS && grouped_registers_enabled(hs) {
-            store(Class::Act, y.as_ptr(), groups * hs * 4);
-        } else {
-            touch_n(Class::Act, y.as_ptr(), groups * hs * 4, ws);
-            store_n(Class::Act, y.as_ptr(), groups * hs * 4, 1 + ws);
-        }
-    }
     #[cfg(target_arch = "aarch64")]
     if REGISTERS && grouped_registers_enabled(hs) {
         // SAFETY: dimensions are checked above; each supported width covers
@@ -580,11 +529,6 @@ impl QWeights {
             rows: q.to_vec(),
         }
     }
-
-    /// Weight and scale bytes one product reads.
-    fn stream_bytes(&self, rows: usize) -> (usize, usize) {
-        (rows * self.cols, rows * 4)
-    }
 }
 
 /// Quantize `x` to signed 12-bit integers (`[-2047, 2047]`) so a 1024-element
@@ -628,18 +572,6 @@ pub(crate) fn matvec_q8(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y:
     assert!(rows == w.scale.len() && w.q.len() == rows * cols);
     assert!(cols.is_multiple_of(16) && cols <= 1024);
     assert!(x.len() >= cols && xq.len() >= cols && y.len() >= rows);
-    // x is quantized once into xq, which every group of rows re-reads.
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        let (weights, scales) = w.stream_bytes(rows);
-        touch(Class::Q8, w, weights);
-        touch(Class::Scale, w, scales);
-        touch(Class::Act, x.as_ptr(), cols * 4);
-        store(Class::Act, xq.as_ptr(), cols * 2);
-        touch_n(Class::Act, xq.as_ptr(), cols * 2, rows.div_ceil(4));
-        store(Class::Act, y.as_ptr(), rows * 4);
-    }
     let xs = quantize_x(&x[..cols], &mut xq[..cols]);
     #[cfg(target_arch = "aarch64")]
     // SAFETY: the asserts above cover every load and store, with `rows` a
@@ -715,18 +647,6 @@ fn matvec_q8_rows(w: &QWeights, rows: usize, x: &[f32], xq: &mut [i16], y: &mut 
     let cols = w.cols;
     debug_assert!(cols.is_multiple_of(16) && cols <= 1024);
     debug_assert!(x.len() >= cols && xq.len() >= cols && y.len() >= rows);
-    // x is quantized once into xq, which every row re-reads.
-    #[cfg(test)]
-    {
-        use crate::traffic::*;
-        let (weights, scales) = w.stream_bytes(rows);
-        touch(Class::Q8, w, weights);
-        touch(Class::Scale, w, scales);
-        touch(Class::Act, x.as_ptr(), cols * 4);
-        store(Class::Act, xq.as_ptr(), cols * 2);
-        touch_n(Class::Act, xq.as_ptr(), cols * 2, rows);
-        store(Class::Act, y.as_ptr(), rows * 4);
-    }
     let xs = quantize_x(&x[..cols], &mut xq[..cols]);
     #[cfg(target_arch = "aarch64")]
     unsafe {
@@ -1071,43 +991,6 @@ mod tests {
                 assert_eq!(single[r].to_bits(), expected, "row={r}");
             }
         }
-    }
-
-    /// Runs the GRU's 384 x 128 product `RC2FX_Q8_ITERATIONS` times (10,000
-    /// by default) with the tiled kernel, or with the row-major one when
-    /// `RC2FX_Q8_KERNEL=rows`. Under QEMU the difference between two
-    /// iteration counts gives the instructions per product; the time it
-    /// prints is a host or QEMU figure, not the mixer's.
-    #[test]
-    #[ignore = "explicit local kernel timing observation"]
-    fn q8_kernel_benchmark() {
-        let (rows, cols) = (384, 128);
-        let iterations = std::env::var("RC2FX_Q8_ITERATIONS")
-            .map_or(10_000, |n| n.parse().expect("RC2FX_Q8_ITERATIONS"));
-        let row_major = std::env::var("RC2FX_Q8_KERNEL").is_ok_and(|k| k == "rows");
-        let w = QWeights::new(&values(rows * cols), rows, cols);
-        let x = values(cols);
-        let mut scratch = vec![0; cols];
-        let mut y = vec![0.; rows];
-        crate::reference::set(row_major);
-        let start = std::time::Instant::now();
-        for _ in 0..iterations {
-            matvec_q8(
-                std::hint::black_box(&w),
-                rows,
-                std::hint::black_box(&x),
-                &mut scratch,
-                &mut y,
-            );
-            std::hint::black_box(&y);
-        }
-        let elapsed = start.elapsed();
-        crate::reference::set(false);
-        eprintln!(
-            "q8 matvec {rows}x{cols} ({}), {iterations} products, ns/call={:.1}",
-            if row_major { "row-major" } else { "tiled" },
-            elapsed.as_nanos() as f64 / iterations.max(1) as f64
-        );
     }
 
     /// One class of int8 weights: 0 every value including -128, 1 the

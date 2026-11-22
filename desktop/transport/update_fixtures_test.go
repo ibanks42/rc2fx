@@ -3,100 +3,74 @@ package transport
 import (
 	"encoding/hex"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
-func TestUpdateWireDTOFixturesMatchRust(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "fixtures", "update", "dto.json"))
-	if err != nil {
-		t.Fatal(err)
+func TestUpdateWireDTOContract(t *testing.T) {
+	wholeStart := json.RawMessage(`{"version":"0.2.1","size":9403,"sha256":"8fb8f5ce993567895775f544a14450a6f9be0660f6ca146f04e6b75428a77a12","metadata":{"root":["{}"],"timestamp":"{}","snapshot":"{}","targets":"{}"}}`)
+	edited, ok := withMembers(wholeStart,
+		member{"encoding", jsonString("delta-1")},
+		member{"uploadSize", jsonUint(1024)},
+	)
+	if !ok {
+		t.Fatal("withMembers failed")
 	}
-	var doc struct {
-		StartRequests struct {
-			Accept []struct {
-				Name string          `json:"name"`
-				JSON json.RawMessage `json:"json"`
-			} `json:"accept"`
-		} `json:"startRequests"`
-		Chunks struct {
-			Accept []struct {
-				Name   string          `json:"name"`
-				RawHex string          `json:"rawHex"`
-				JSON   json.RawMessage `json:"json"`
-			} `json:"accept"`
-		} `json:"chunks"`
-		Progress []struct {
-			Name string          `json:"name"`
-			JSON json.RawMessage `json:"json"`
-		} `json:"progress"`
+	if enc, ok := stringField(edited, "encoding"); !ok || enc != "delta-1" {
+		t.Fatalf("encoding = %q (%v)", enc, ok)
 	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
+	if sz, ok := uintField(edited, "uploadSize"); !ok || sz != 1024 {
+		t.Fatalf("uploadSize = %d (%v)", sz, ok)
 	}
 
-	// Verify delta start request augmentation matches transport/update.go's withMembers format.
-	for _, c := range doc.StartRequests.Accept {
-		if c.Name != "whole-envelope" {
-			continue
-		}
-		edited, ok := withMembers(c.JSON,
-			member{"encoding", jsonString("delta-1")},
-			member{"uploadSize", jsonUint(1024)},
-		)
-		if !ok {
-			t.Fatalf("withMembers failed on %s", c.Name)
-		}
-		if enc, ok := stringField(edited, "encoding"); !ok || enc != "delta-1" {
-			t.Fatalf("encoding = %q (%v)", enc, ok)
-		}
-		if sz, ok := uintField(edited, "uploadSize"); !ok || sz != 1024 {
-			t.Fatalf("uploadSize = %d (%v)", sz, ok)
-		}
-	}
-
-	// Verify chunk encoding matches the shared fixture bytes bit-for-bit.
-	for _, c := range doc.Chunks.Accept {
-		raw, err := hex.DecodeString(c.RawHex)
+	for _, c := range []struct {
+		name   string
+		rawHex string
+		offset uint64
+		want   string
+	}{
+		{"first-chunk", "72633266782d7570646174652d6368756e6b", 0, "cmMyZngtdXBkYXRlLWNodW5r"},
+		{"offset-chunk", "0001feff", 196608, "AAH+/w=="},
+	} {
+		raw, err := hex.DecodeString(c.rawHex)
 		if err != nil {
-			t.Fatalf("chunk %s hex: %v", c.Name, err)
-		}
-		offset, ok := uintField(c.JSON, "offset")
-		if !ok {
-			t.Fatalf("chunk %s missing offset", c.Name)
-		}
-		wantData, ok := stringField(c.JSON, "data")
-		if !ok {
-			t.Fatalf("chunk %s missing data", c.Name)
+			t.Fatal(err)
 		}
 		body := object(
-			member{"offset", jsonUint(offset)},
+			member{"offset", jsonUint(c.offset)},
 			member{"data", jsonString(encodeBase64(raw))},
 		)
 		gotOffset, _ := uintField(body, "offset")
 		gotData, _ := stringField(body, "data")
-		if gotOffset != offset || gotData != wantData {
-			t.Errorf("chunk %s: got (%d, %q), want (%d, %q)", c.Name, gotOffset, gotData, offset, wantData)
+		if gotOffset != c.offset || gotData != c.want {
+			t.Errorf("chunk %s: got (%d, %q), want (%d, %q)", c.name, gotOffset, gotData, c.offset, c.want)
 		}
 	}
 
-	// Verify Progress fields transport reads (id, state, received, error) parse cleanly.
-	for _, c := range doc.Progress {
-		id, ok := stringField(c.JSON, "id")
-		if !ok || len(id) != 16 || !isHex(id) {
-			t.Errorf("progress %s: bad id %q", c.Name, id)
+	for _, c := range []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{"accepting-plain", json.RawMessage(`{"id":"0123456789abcdef","state":"accepting","version":"0.2.1","size":9403,"received":4096}`)},
+		{"accepting-delta", json.RawMessage(`{"id":"fedcba9876543210","state":"accepting","version":"0.2.1","size":9403,"received":512,"encoding":"delta-1","uploadSize":1024}`)},
+		{"restarting", json.RawMessage(`{"id":"0123456789abcdef","state":"restarting","version":"0.2.1","size":9403,"received":9403}`)},
+		{"failed", json.RawMessage(`{"id":"0123456789abcdef","state":"failed","version":"0.2.1","size":9403,"received":9403,"error":"verification failed"}`)},
+	} {
+		id, ok := stringField(c.raw, "id")
+		if !ok || len(id) != 16 || !common.IsHex(id) {
+			t.Errorf("progress %s: bad id %q", c.name, id)
 		}
-		if _, ok := stringField(c.JSON, "state"); !ok {
-			t.Errorf("progress %s: missing state", c.Name)
+		if _, ok := stringField(c.raw, "state"); !ok {
+			t.Errorf("progress %s: missing state", c.name)
 		}
-		if _, ok := uintField(c.JSON, "received"); !ok {
-			t.Errorf("progress %s: missing received", c.Name)
+		if _, ok := uintField(c.raw, "received"); !ok {
+			t.Errorf("progress %s: missing received", c.name)
 		}
-		if c.Name == "failed" {
-			detail := errorDetail(c.JSON)
+		if c.name == "failed" {
+			detail := errorDetail(c.raw)
 			if detail == nil || *detail != "verification failed" {
-				t.Errorf("progress %s: errorDetail = %v", c.Name, detail)
+				t.Errorf("progress %s: errorDetail = %v", c.name, detail)
 			}
 		}
 	}

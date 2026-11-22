@@ -824,10 +824,35 @@ mod tests {
                 .status,
             404
         );
-        // With it: a stand-in script reports, and bad input never runs it.
-        let script = dir.path().join("rc2fx.sh");
-        std::fs::write(&script, "echo 'unmanaged 2'\necho 'server stopped'\n").unwrap();
-        let ssh = Arc::new(crate::developer_ssh::DeveloperSsh::new(script));
+        // With it: an isolated fixture reports, and bad input never mutates it.
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let ssh_dir = root.join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        let proc_dir = root.join("proc");
+        std::fs::create_dir_all(&proc_dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&ssh_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::write(
+                ssh_dir.join("authorized_keys"),
+                "ssh-ed25519 AAAAone\nssh-ed25519 AAAAtwo\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                ssh_dir.join("authorized_keys"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        let ssh = Arc::new(crate::developer_ssh::DeveloperSsh::with_paths(
+            ssh_dir,
+            root.join("no-host-keys"),
+            root.join("no-first-boot"),
+            root.join("logs"),
+            proc_dir,
+        ));
         let mut with = Api::new(
             handle.clone(),
             Options {

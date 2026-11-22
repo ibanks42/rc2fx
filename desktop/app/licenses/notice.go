@@ -1,6 +1,10 @@
 package licenses
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
+)
 
 // NoticeMarkdown converts a plain-text license notice into safe Markdown for
 // the rich-text dialog. ASCII punctuation and leading whitespace are escaped so
@@ -9,7 +13,7 @@ import "strings"
 func NoticeMarkdown(text string) string {
 	var result strings.Builder
 	result.Grow(len(text) * 2)
-	for index, line := range lines(text) {
+	for index, line := range common.Lines(text) {
 		if index > 0 {
 			if index%32 == 0 {
 				result.WriteString("\n\n")
@@ -37,21 +41,4 @@ func NoticeMarkdown(text string) string {
 		}
 	}
 	return result.String()
-}
-
-// lines splits text on '\n', stripping '\r' and omitting any trailing empty line.
-func lines(text string) []string {
-	var out []string
-	for text != "" {
-		line, rest, found := strings.Cut(text, "\n")
-		if found {
-			line = strings.TrimSuffix(line, "\r")
-		}
-		out = append(out, line)
-		text = rest
-		if !found {
-			break
-		}
-	}
-	return out
 }

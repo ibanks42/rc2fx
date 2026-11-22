@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
@@ -77,6 +78,9 @@ func CheckBytes(data []byte, shared bool) error {
 	}
 	var requested *string
 	for _, segment := range file.Progs {
+		if segment.Type == elf.PT_TLS && shared && segment.Memsz > 512 {
+			return fmt.Errorf("TLS block is %d bytes, over the 512-byte static audit limit", segment.Memsz)
+		}
 		if segment.Type != elf.PT_INTERP {
 			continue
 		}
@@ -150,6 +154,31 @@ func CheckBytes(data []byte, shared bool) error {
 		}
 		if err := checkVersionNeeds(data, table, order); err != nil {
 			return err
+		}
+	}
+	// Reject any non-weak undefined dynamic symbol that is not bound to a
+	// supported firmware library version (prevents unresolved internal symbols
+	// slipping into shared objects).
+	dynsyms, err := file.DynamicSymbols()
+	if err != nil {
+		return fmt.Errorf("cannot read ELF dynamic symbols: %w", err)
+	}
+	weak := make(map[string]bool)
+	for _, sym := range dynsyms {
+		if elf.ST_BIND(sym.Info) == elf.STB_WEAK {
+			weak[sym.Name] = true
+		}
+	}
+	imports, err := file.ImportedSymbols()
+	if err != nil {
+		return fmt.Errorf("cannot read ELF imported symbols: %w", err)
+	}
+	for _, imp := range imports {
+		if weak[imp.Name] {
+			continue
+		}
+		if imp.Version == "" || !Supported(imp.Version) || (imp.Library != "" && !slices.Contains(libraries, imp.Library)) {
+			return fmt.Errorf("has unresolved symbol %s", imp.Name)
 		}
 	}
 	return nil
@@ -248,7 +277,7 @@ func Supported(version string) bool {
 		if index >= len(parts) {
 			return 0, false
 		}
-		value, ok := task.ParseUint(parts[index], 32)
+		value, ok := common.ParseUint(parts[index], 32)
 		return uint32(value), ok
 	}
 	if rest, ok := strings.CutPrefix(version, "GLIBC_"); ok {

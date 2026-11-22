@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/delta"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // updateChunk is the bytes per update chunk: base64 and the JSON around it
@@ -163,7 +164,7 @@ func (d device) mixerUpdate(ctx context.Context, start json.RawMessage, payload 
 		return failed
 	}
 	id, ok := stringField(session, "id")
-	if !ok || len(id) != 16 || !isHex(id) {
+	if !ok || len(id) != 16 || !common.IsHex(id) {
 		return errProtocol()
 	}
 	path := "api/v1/update/" + id
@@ -318,16 +319,6 @@ func readError(err error) error {
 		return pathError.Err
 	}
 	return err
-}
-
-func isHex(s string) bool {
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
-			return false
-		}
-	}
-	return true
 }
 
 // driveTimeout limits how long the app waits to find the temporary update

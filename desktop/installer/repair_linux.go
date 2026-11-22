@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/ext2fs"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/disk"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/fix"
@@ -134,38 +135,17 @@ func ext2(err error) error {
 	return errorf("libext2fs: %v", err)
 }
 
-func strLines(text string) []string {
-	parts := strings.Split(text, "\n")
-	last := len(parts) - 1
-	for i := range parts[:last] {
-		parts[i] = strings.TrimSuffix(parts[i], "\r")
-	}
-	if parts[last] == "" {
-		parts = parts[:last]
-	}
-	return parts
-}
-
-func isHex(s string) bool {
-	for _, b := range []byte(s) {
-		if !('0' <= b && b <= '9' || 'a' <= b && b <= 'f' || 'A' <= b && b <= 'F') {
-			return false
-		}
-	}
-	return true
-}
-
 // parseManifest parses "sha256  path" lines from the image manifest. Returns
 // ok=false if empty or any line is malformed/zeroed, so a truncated manifest
 // won't silently hide missing entries.
 func parseManifest(text string) ([][2]string, bool) {
 	var out [][2]string
-	for _, l := range strLines(text) {
+	for _, l := range common.Lines(text) {
 		if l == "" {
 			continue
 		}
 		sha, path, ok := strings.Cut(l, "  ")
-		if !ok || len(sha) != 64 || !isHex(sha) || path == "" || strings.Contains(path, "\x00") {
+		if !ok || len(sha) != 64 || !common.IsHex(sha) || path == "" || strings.Contains(path, "\x00") {
 			return nil, false
 		}
 		out = append(out, [2]string{sha, path})
@@ -292,7 +272,7 @@ func repairSources(other *ext2fs.Filesystem, saved *savedImage, unclean bool, su
 				return nil, nil, err
 			}
 		}
-		if entry != nil && archive.Sum(data) == s.want {
+		if entry != nil && common.SHA256Hex(data) == s.want {
 			found[s.path] = data
 		} else {
 			missing[s.path] = true
@@ -317,7 +297,7 @@ func repairSources(other *ext2fs.Filesystem, saved *savedImage, unclean bool, su
 		switch {
 		case unclean:
 			file.Why = why("the mixer wasn't shut down cleanly, so nothing is written to this system; start the mixer normally once, then check again")
-		case ok && archive.Sum(data) != s.want:
+		case ok && common.SHA256Hex(data) != s.want:
 			file.Why = why("no identical copy to restore it from")
 		case ok && uint64(len(data)) != s.size:
 			file.Why = why("its size changed; a repair only replaces contents of the same size")
@@ -355,7 +335,7 @@ func (e *Engine) compare(fs *ext2fs.Filesystem, index int, manifest [][2]string)
 		case !entry.Regular:
 			why := "it is no longer a regular file"
 			broken = append(broken, DamagedFile{Path: path, Why: &why})
-		case archive.Sum(data) != want:
+		case common.SHA256Hex(data) != want:
 			suspects = append(suspects, suspect{path: path, want: want, size: entry.Size})
 		}
 	}
@@ -364,7 +344,7 @@ func (e *Engine) compare(fs *ext2fs.Filesystem, index int, manifest [][2]string)
 
 func (e *Engine) savedImage() *savedImage {
 	archive := filepath.Join(e.Work, "archive.tar.gz")
-	if !exists(archive) {
+	if !common.PathExists(archive) {
 		return nil
 	}
 	e.step("repair-check", "Reading the firmware image saved on this computer")
@@ -604,7 +584,7 @@ func (e *Engine) writeRoot(layout *diskLayout, plan repairPlan, result *RepairRe
 		if err != nil {
 			return err
 		}
-		if entry != nil && archive.Sum(data) == fix.want {
+		if entry != nil && common.SHA256Hex(data) == fix.want {
 			result.Repaired = append(result.Repaired, fix.path)
 		} else {
 			notRepaired(fix.path, "the restored copy didn't read back identical")
@@ -621,7 +601,7 @@ func (e *Engine) backupSettings(layout *diskLayout) (string, error) {
 	if err := privateDirs(dir); err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("settings-partition-%d.img", nowUnix())
+	name := fmt.Sprintf("settings-partition-%d.img", common.NowUnix())
 	path := filepath.Join(dir, name)
 	disk, err := os.Open(layout.device)
 	if err != nil {

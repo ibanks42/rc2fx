@@ -1,7 +1,7 @@
 name: Check
 
 # Linux-only Rust workspace (including rc2fxd, standalone benchmark, and optional
-# eq-fma/bench-kernels features) runs in the AlmaLinux 8 release image. AArch64
+# bench-kernels feature) runs in the AlmaLinux 8 release image. AArch64
 # audio crates run natively on an Arm runner. Go desktop and xtask are vetted and
 # tested across all shipped platforms, plus an AlmaLinux cgo build. Tooling runs
 # the Python and C test suites on the host.
@@ -79,11 +79,9 @@ jobs:
           cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-delta --lib -- -D warnings
       - name: Test the workspace
         run: cargo test --config .github/cargo-ci.toml --locked --workspace
-      # Optional features used by rc2fx-bench or not yet enabled by default.
-      - name: Lint the eq-fma and bench-kernels features
-        run: |
-          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
-          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
+      # Optional feature used by rc2fx-bench.
+      - name: Lint the bench-kernels feature
+        run: cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
       # gauge_binding.py loads the host rc2fx-native build via LD_AUDIT (skipped in tooling).
       - name: Test the native library bindings
         run: |
@@ -118,11 +116,9 @@ jobs:
         run: cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dsp -p rc2fx-dfn -p rc2fx-suppression --all-targets -- -D warnings
       - name: Test the mixer's audio crates
         run: cargo test --config .github/cargo-ci.toml --locked -p rc2fx-dsp -p rc2fx-dfn -p rc2fx-suppression
-      # The eq-fma and bench-kernels arms of the NEON code.
-      - name: Lint the eq-fma and bench-kernels features
-        run: |
-          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dsp --features eq-fma --all-targets -- -D warnings
-          cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
+      # The bench-kernels arm of the NEON code.
+      - name: Lint the bench-kernels feature
+        run: cargo clippy --config .github/cargo-ci.toml --locked -p rc2fx-dfn --features bench-kernels --all-targets -- -D warnings
 
   # Host-side release, docs, mixer script, and C module tests.
   tooling:
@@ -165,8 +161,6 @@ jobs:
         run: |
           python3 -m unittest discover -s mixer/jackerr/tests -p 'test_*.py'
           python3 mixer/gui/test_gui_pacing.py
-      - name: Test the xrun flight recorder tools
-        run: python3 -m unittest discover -s tools/xrun_trace -p 'test_*.py'
 
   # Non-UI Go packages (everything that does not import gpuikit) plus CGO_ENABLED=0 xtask.
   desktop:
@@ -207,6 +201,8 @@ jobs:
         run: |
           unformatted=$(go list -e -f '{{.Dir}}' ./... | xargs gofmt -l)
           test -z "$unformatted" || { printf 'gofmt would change:\n%s\n' "$unformatted" >&2; exit 1; }
+      - name: Check generated schema
+        run: ../xtask schema --check
       - name: List everything but the UI
         run: ../xtask non-ui-packages > "$RUNNER_TEMP/non-ui-packages"
       - name: Vet and test everything but the UI

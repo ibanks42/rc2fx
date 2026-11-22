@@ -23,49 +23,8 @@ func checkedAddOne(value uint64) optU64 {
 	return someU64(value + 1)
 }
 
-type EngineMode string
-
-const (
-	EngineModeSimulation EngineMode = "simulation"
-	EngineModeJack       EngineMode = "jack"
-	EngineModeNative     EngineMode = "native"
-	EngineModeOffline    EngineMode = "offline"
-)
-
-var engineModes = []EngineMode{EngineModeSimulation, EngineModeJack, EngineModeNative, EngineModeOffline}
-
-func (m *EngineMode) UnmarshalText(text []byte) error { return enumUnmarshal(m, text, engineModes) }
-
 func (m EngineMode) HasProcessingControls() bool {
 	return m == EngineModeNative
-}
-
-type EnginePhase string
-
-const (
-	EnginePhaseStarting   EnginePhase = "starting"
-	EnginePhaseRestarting EnginePhase = "restarting"
-	EnginePhaseRunning    EnginePhase = "running"
-	EnginePhaseOffline    EnginePhase = "offline"
-	EnginePhaseError      EnginePhase = "error"
-)
-
-var enginePhases = []EnginePhase{
-	EnginePhaseStarting, EnginePhaseRestarting, EnginePhaseRunning, EnginePhaseOffline, EnginePhaseError,
-}
-
-func (p *EnginePhase) UnmarshalText(text []byte) error { return enumUnmarshal(p, text, enginePhases) }
-
-type EngineStatus struct {
-	Generation      uint64      `json:"generation"`
-	RestartAllowed  bool        `json:"restartAllowed"`
-	Mode            EngineMode  `json:"mode"`
-	Status          EnginePhase `json:"status"`
-	AppliedRevision uint64      `json:"appliedRevision"`
-	SampleRate      uint32      `json:"sampleRate"`
-	BlockSize       uint32      `json:"blockSize"`
-	Message         string      `json:"message"`
-	AudioAdvancing  bool        `json:"audioAdvancing"`
 }
 
 func (e EngineStatus) Validate() error {
@@ -73,14 +32,6 @@ func (e EngineStatus) Validate() error {
 		return CoreError("Invalid engine status message")
 	}
 	return nil
-}
-
-// RoutingRequest toggles global processing. ExpectedGeneration rejects
-// requests sent against a retired audio owner.
-type RoutingRequest struct {
-	Enabled            bool   `json:"enabled"`
-	ExpectedRevision   uint64 `json:"expectedRevision"`
-	ExpectedGeneration uint64 `json:"expectedGeneration"`
 }
 
 type routingRuntime struct {
@@ -125,129 +76,11 @@ func (p PendingRouting) ValidateAcknowledgement(state DeviceState) error {
 	return nil
 }
 
-type DeviceState struct {
-	Config    Config          `json:"config"`
-	Engine    EngineStatus    `json:"engine"`
-	Routing   RoutingStatus   `json:"routing"`
-	Selection SelectionStatus `json:"selection"`
-}
-
-type RoutingPhase string
-
-const (
-	RoutingPhaseUnmanaged RoutingPhase = "unmanaged"
-	RoutingPhaseStarting  RoutingPhase = "starting"
-	RoutingPhaseActive    RoutingPhase = "active"
-	RoutingPhaseBypassing RoutingPhase = "bypassing"
-	RoutingPhaseBypassed  RoutingPhase = "bypassed"
-	RoutingPhaseError     RoutingPhase = "error"
-)
-
-var routingPhases = []RoutingPhase{
-	RoutingPhaseUnmanaged, RoutingPhaseStarting, RoutingPhaseActive,
-	RoutingPhaseBypassing, RoutingPhaseBypassed, RoutingPhaseError,
-}
-
-func (p *RoutingPhase) UnmarshalText(text []byte) error { return enumUnmarshal(p, text, routingPhases) }
-
-type RoutingStatus struct {
-	Status    RoutingPhase `json:"status"`
-	Channels  uint32       `json:"channels"`
-	Recovered uint32       `json:"recovered"`
-	Message   string       `json:"message"`
-}
-
 func (r RoutingStatus) Validate() error {
 	if !ValidDisplayText(r.Message, MaxStatusText) {
 		return CoreError("Invalid routing status message")
 	}
 	return nil
-}
-
-type ConfigUpdate struct {
-	ExpectedRevision uint64   `json:"expectedRevision"`
-	Targets          []Target `json:"targets"`
-}
-
-type PresetSummary struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-type TargetMeter struct {
-	ID            string  `json:"id"`
-	InputPeak     float64 `json:"inputPeak"`
-	OutputPeak    float64 `json:"outputPeak"`
-	RMS           float64 `json:"rms"`
-	GainReduction float64 `json:"gainReduction"`
-	// Peak suppression voice score in the window [0, 1] (0 when suppression is off).
-	Voice float64 `json:"voice"`
-	// Peak gate openness in the window [0, 1] (1 when gate is off, 0 without suppression).
-	GateOpen          float64      `json:"gateOpen"`
-	Clipped           uint64       `json:"clipped"`
-	Spectrum          []float64    `json:"spectrum"`
-	Callbacks         uint64       `json:"callbacks"`
-	ProcessedFrames   uint64       `json:"processedFrames"`
-	SuppressionFrames uint64       `json:"suppressionFrames"`
-	MissedDeadlines   uint64       `json:"missedDeadlines"`
-	StaleResults      uint64       `json:"staleResults"`
-	InputDrops        uint64       `json:"inputDrops"`
-	OutputDrops       uint64       `json:"outputDrops"`
-	LatencySamples    uint32       `json:"latencySamples"`
-	WorkerFailed      bool         `json:"workerFailed"`
-	Performance       *Performance `json:"performance"`
-}
-
-type Timing struct {
-	Calls       uint64    `json:"calls"`
-	TotalNs     uint64    `json:"totalNs"`
-	MaxNs       uint64    `json:"maxNs"`
-	Overruns    uint64    `json:"overruns"`
-	ClockErrors uint64    `json:"clockErrors"`
-	Histogram   [8]uint64 `json:"histogram"`
-}
-
-// Performance allows unknown fields for forward compatibility with newer mixers.
-type Performance struct {
-	CallbackBudgetNs uint64 `json:"callbackBudgetNs"`
-	WorkerBudgetNs   uint64 `json:"workerBudgetNs"`
-	Xruns            uint64 `json:"xruns"`
-	// Calls == 0 means timing wasn't sampled, not zero duration.
-	Callback Timing `json:"callback"`
-	// Cumulative over the engine generation across worker rebuilds.
-	WorkerWall Timing `json:"workerWall"`
-	WorkerCPU  Timing `json:"workerCpu"`
-	// Nil on older mixers and on the JACK path.
-	HelperLate   *uint64 `json:"helperLate,omitempty"`
-	HelperStalls *uint64 `json:"helperStalls,omitempty"`
-	// Slowest callback and worker turnaround over roughly the last 10 s.
-	CallbackRecentMaxNs *uint64 `json:"callbackRecentMaxNs,omitempty"`
-	WorkerRecentMaxNs   *uint64 `json:"workerRecentMaxNs,omitempty"`
-}
-
-func (Performance) AllowUnknownJSONFields() {}
-
-// Meter allows unknown fields for forward compatibility with newer mixers.
-type Meter struct {
-	MessageType MeterType `json:"type"`
-	Revision    uint64    `json:"revision"`
-	Generation  uint64    `json:"generation"`
-	Synthetic   bool      `json:"synthetic"`
-	// Incremented on diagnostics reset so clients rebaseline fault counters (0 on older mixers).
-	DiagnosticsEpoch uint64 `json:"diagnosticsEpoch,default"`
-	// Engine generation uptime on the daemon's monotonic clock (nil on older mixers).
-	RunningForNs *uint64       `json:"runningForNs,omitempty"`
-	Targets      []TargetMeter `json:"targets"`
-}
-
-func (Meter) AllowUnknownJSONFields() {}
-
-type MeterType string
-
-const MeterTypeMeter MeterType = "meter"
-
-func (m *MeterType) UnmarshalText(text []byte) error {
-	return enumUnmarshal(m, text, []MeterType{MeterTypeMeter})
 }
 
 func (d DeviceState) ProcessingTransitionPending() bool {

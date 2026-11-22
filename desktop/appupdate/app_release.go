@@ -105,13 +105,8 @@ func verifyUpdatePackage(version, asset, file string) *VerifyError {
 	return verifyAppPackage(trustedRoot, tuf.NewHTTPRepository(metadataBase, targetsBase, appTimeout), version, asset, file)
 }
 
-func comparable(v string) bool {
-	_, ok := core.CompareVersions(v, v)
-	return ok
-}
-
 func verifyAppPackage(root []byte, repository tuf.Repository, version, asset, file string) *VerifyError {
-	if !comparable(version) || asset == "" || strings.ContainsAny(asset, `/\`) || strings.HasPrefix(asset, ".") {
+	if !core.ValidVersion(version) || asset == "" || strings.ContainsAny(asset, `/\`) || strings.HasPrefix(asset, ".") {
 		return rejected(fmt.Sprintf("%s %s is not an app update package.", asset, version))
 	}
 	name := "v" + version + "/" + asset

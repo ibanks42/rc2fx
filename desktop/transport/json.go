@@ -12,10 +12,10 @@ import (
 
 // Untyped JSON is a json.RawMessage, its keys in the order they came. These
 // helpers read and build it: field lookups, strings and unsigned integers,
-// and compact output escaped as the mixer's serde_json escapes it.
+// and compact output without HTML escaping.
 
-// marshal encodes a typed value: core.Encode writes field order, floats and
-// escapes as the mixer's serde_json does (including json.RawMessage values).
+// marshal encodes a typed value using core.Encode (declaration field order,
+// deterministic floats, and minimal string escaping, including json.RawMessage).
 func marshal(v any) (json.RawMessage, error) {
 	return core.Encode(v)
 }
@@ -27,7 +27,7 @@ func decode(value json.RawMessage, out any) error {
 	return core.DecodeStrictLimited(value, len(value), math.MaxInt, out)
 }
 
-// jsonString is s as a JSON string, escaped as serde_json escapes it.
+// jsonString encodes s as a compact JSON string without HTML escaping.
 func jsonString(s string) json.RawMessage {
 	return sjson.String(s)
 }

@@ -25,7 +25,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
@@ -205,7 +204,7 @@ func UncheckedSnapshot() UpdateSnapshot {
 }
 
 func optionalVersion(v *string) (string, bool) {
-	if v == nil || !comparable(*v) {
+	if v == nil || !core.ValidVersion(*v) {
 		return "", false
 	}
 	return *v, true
@@ -275,8 +274,8 @@ func CheckForUpdates(current string) UpdateSnapshot {
 }
 
 func snapshotAt(latestURL, listURL, feedURL, current string) UpdateSnapshot {
-	if !comparable(current) {
-		return SnapshotFromCheck(UpdateCheck{Kind: UpdateFailed, Error: otherError(fmt.Sprintf("this app's version %s is not a release version", debugString(current)))})
+	if !core.ValidVersion(current) {
+		return SnapshotFromCheck(UpdateCheck{Kind: UpdateFailed, Error: otherError(fmt.Sprintf("this app's version %q is not a release version", current))})
 	}
 	reply, err := fetch(latestURL, current, maxReleaseBody, updateTimeout)
 	if err != nil {
@@ -410,12 +409,12 @@ func parseHistory(r *reply, latest string) (*history, *UpdateError) {
 	for _, app := range apps {
 		mixerOK := app.MixerVersion == nil || strictVersion(*app.MixerVersion)
 		if !strictVersion(app.Version) || !mixerOK || (app.ProtocolVersion != nil && *app.ProtocolVersion == 0) {
-			return nil, bad(fmt.Sprintf("has an invalid release %s", debugString(app.Version)))
+			return nil, bad(fmt.Sprintf("has an invalid release %q", app.Version))
 		}
 	}
 	for _, m := range listed {
 		if !strictVersion(m.Version) {
-			return nil, bad(fmt.Sprintf("has an invalid release %s", debugString(m.Version)))
+			return nil, bad(fmt.Sprintf("has an invalid release %q", m.Version))
 		}
 	}
 	newestFirst := func(a, b string) int {
@@ -699,12 +698,12 @@ func evaluate(current string, r *reply) UpdateCheck {
 	}
 	latest, ok := appVersionOf(release.TagName)
 	if !ok {
-		return fail(fmt.Sprintf("the latest release %s is not an app release", debugString(release.TagName)))
+		return fail(fmt.Sprintf("the latest release %q is not an app release", release.TagName))
 	}
 	order, ok := core.CompareVersions(latest, current)
 	switch {
 	case !ok:
-		return fail(fmt.Sprintf("cannot compare %s with %s", debugString(latest), debugString(current)))
+		return fail(fmt.Sprintf("cannot compare %q with %q", latest, current))
 	case order > 0:
 		return UpdateCheck{
 			Kind:      UpdateAvailable,
@@ -797,35 +796,4 @@ func changelog(current, offered string, deadline time.Time, page func(uint32) (*
 		status.Kind = ChangelogComplete
 	}
 	return Changelog{Entries: entries, Status: status}
-}
-
-// debugString quotes s, escaping quotes, backslashes, \n \r \t \0, and other
-// unprintable runes as \u{hex}.
-func debugString(s string) string {
-	var out strings.Builder
-	out.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			out.WriteString(`\"`)
-		case '\\':
-			out.WriteString(`\\`)
-		case '\n':
-			out.WriteString(`\n`)
-		case '\r':
-			out.WriteString(`\r`)
-		case '\t':
-			out.WriteString(`\t`)
-		case 0:
-			out.WriteString(`\0`)
-		default:
-			if r == utf8.RuneError || unicode.IsControl(r) || (!unicode.IsPrint(r) && r != ' ') {
-				fmt.Fprintf(&out, `\u{%x}`, r)
-			} else {
-				out.WriteRune(r)
-			}
-		}
-	}
-	out.WriteByte('"')
-	return out.String()
 }

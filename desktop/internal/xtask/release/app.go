@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
@@ -37,13 +38,13 @@ func AppSign(args []string) error {
 	rootFile, assetsDir, version, out, sequenceText, expiresText := args[0], args[1], args[2], args[3], args[4], args[5]
 	targetsKey, snapshotKey, timestampKey := args[6], args[7], args[8]
 	if !stable(version) {
-		return task.Errorf("%s is not a stable app version", task.Debug(version))
+		return task.Errorf("%q is not a stable app version", version)
 	}
 	assets, names, err := checkedAssets(assetsDir)
 	if err != nil {
 		return err
 	}
-	sequence, ok := task.ParseUint(sequenceText, 64)
+	sequence, ok := common.ParseUint(sequenceText, 64)
 	if !ok || sequence == 0 {
 		return task.Error("sequence must be positive")
 	}
@@ -54,7 +55,7 @@ func AppSign(args []string) error {
 	if !expires.After(time.Now()) {
 		return task.Error("metadata expiry must be in the future")
 	}
-	if exists(out) {
+	if common.PathExists(out) {
 		return task.Error("metadata output already exists; use a new directory")
 	}
 	root, rootBytes, err := loadRoot(rootFile, func(err error) error {
@@ -152,32 +153,6 @@ func plain(name string) bool {
 	return true
 }
 
-func isHex(text string) bool {
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
-			return false
-		}
-	}
-	return true
-}
-
-func lines(text string) []string {
-	var out []string
-	for text != "" {
-		line, rest, found := strings.Cut(text, "\n")
-		if found {
-			line = strings.TrimSuffix(line, "\r")
-		}
-		out = append(out, line)
-		text = rest
-		if !found {
-			break
-		}
-	}
-	return out
-}
-
 // checkedAssets validates that dir's files match SHA256SUMS 1-to-1 and returns
 // their paths and sorted names.
 func checkedAssets(dir string) (map[string]string, []string, error) {
@@ -190,13 +165,13 @@ func checkedAssets(dir string) (map[string]string, []string, error) {
 		return nil, nil, task.Errorf("%s: %s", sumsPath, task.IOError(err))
 	}
 	listed := map[string]string{}
-	for _, line := range lines(string(data)) {
+	for _, line := range common.Lines(string(data)) {
 		hash, name, ok := strings.Cut(line, "  ")
 		if !ok {
-			return nil, nil, task.Errorf("malformed %s line %s", sums, task.Debug(line))
+			return nil, nil, task.Errorf("malformed %s line %q", sums, line)
 		}
-		if len(hash) != 64 || !isHex(hash) || !plain(name) {
-			return nil, nil, task.Errorf("malformed %s line %s", sums, task.Debug(line))
+		if len(hash) != 64 || !common.IsHex(hash) || !plain(name) {
+			return nil, nil, task.Errorf("malformed %s line %q", sums, line)
 		}
 		if _, dup := listed[name]; name == sums || dup {
 			return nil, nil, task.Errorf("%s lists %s more than once", sums, name)
@@ -211,7 +186,7 @@ func checkedAssets(dir string) (map[string]string, []string, error) {
 	for _, entry := range entries {
 		name := entry.Name()
 		if !utf8.ValidString(name) {
-			return nil, nil, task.Errorf("asset name %s is not UTF-8", task.Debug(name))
+			return nil, nil, task.Errorf("asset name %q is not UTF-8", name)
 		}
 		if name == sums {
 			continue
@@ -230,7 +205,7 @@ func checkedAssets(dir string) (map[string]string, []string, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		if !strings.EqualFold(task.Sha256(data), expected) {
+		if !strings.EqualFold(common.SHA256Hex(data), expected) {
 			return nil, nil, task.Errorf("%s does not match %s", name, sums)
 		}
 		assets[name] = path

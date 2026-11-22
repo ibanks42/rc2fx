@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // The mixer's firmware crate embeds this file as DEFAULT_CATALOG.
@@ -62,6 +64,20 @@ func errorContains(t *testing.T, err error, want string) {
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %v, want one containing %q", err, want)
 	}
+}
+
+func (c *Catalog) selectForModel(model Model, image []byte, experimentalDuo bool) (*Profile, error) {
+	if err := model.RequireRuntimeWith(experimentalDuo); err != nil {
+		return nil, err
+	}
+	profile, err := c.identify(model, image)
+	if err != nil {
+		return nil, err
+	}
+	if err := profile.VerifyImage(image); err != nil {
+		return nil, err
+	}
+	return profile, nil
 }
 
 func TestUSBModesAreModelSpecificAndSecondaryUSBIsNotControl(t *testing.T) {
@@ -157,14 +173,14 @@ func testImage(t *testing.T) (*Catalog, []byte) {
 		}
 		copy(image[0x200+index*16:], b[:])
 	}
-	catalog.Profiles[0].MixerSHA256 = sum(image)
+	catalog.Profiles[0].MixerSHA256 = common.SHA256Hex(image)
 	return catalog, image
 }
 
 func TestSharedExecutableIsNotADeviceIdentityOrRuntimeQualification(t *testing.T) {
 	catalog, image := testImage(t)
 	launcher := []byte("test launcher")
-	catalog.Profiles[0].LauncherSHA256 = sum(launcher)
+	catalog.Profiles[0].LauncherSHA256 = common.SHA256Hex(launcher)
 	duo := catalog.Profiles[0]
 	duo.ID = "rodecaster-duo-1.7.6"
 	duo.Model = ModelDuo.ID()
@@ -234,7 +250,7 @@ func TestResolvesExecutableVirtualOffsetsAndRefusesHashOrInstructionMismatches(t
 	}
 	image[0x200] ^= 1
 	errorContains(t, profile.VerifyImage(image), "differs from its profile hash")
-	profile.MixerSHA256 = sum(image)
+	profile.MixerSHA256 = common.SHA256Hex(image)
 	errorContains(t, profile.VerifyImage(image), "instructions differ")
 }
 
@@ -244,7 +260,7 @@ func TestKnownButUnqualifiedAndNonExecutableSitesAreRefused(t *testing.T) {
 	errorContains(t, catalog.Profiles[0].VerifyImage(image), "not runtime-qualified")
 	catalog, _ = testImage(t)
 	binary.LittleEndian.PutUint32(image[68:], 4) // data, no PF_X
-	catalog.Profiles[0].MixerSHA256 = sum(image)
+	catalog.Profiles[0].MixerSHA256 = common.SHA256Hex(image)
 	errorContains(t, catalog.Profiles[0].VerifyImage(image), "outside executable")
 }
 

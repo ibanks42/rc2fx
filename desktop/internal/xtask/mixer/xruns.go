@@ -10,7 +10,7 @@ package mixer
 // another, and prints the records that arrived in between. `0` prints
 // everything the ring still holds for this jackd instead. Nothing on the
 // mixer is changed; the snapshots live in a private /run directory that is
-// removed afterwards. It runs a program there, so it arms power recovery.
+// removed afterwards. It runs a program there, so it runs pre_command if set.
 
 import (
 	"archive/tar"
@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
@@ -39,7 +40,7 @@ func xruns(mixer *Mixer, args []string) error {
 	case 0:
 		seconds = DefaultSeconds
 	case 1:
-		value, ok := task.ParseUint(args[0], 32)
+		value, ok := common.ParseUint(args[0], 32)
 		if !ok {
 			return task.Error(usage)
 		}
@@ -50,14 +51,13 @@ func xruns(mixer *Mixer, args []string) error {
 	if seconds > maxSeconds {
 		return task.Errorf("SECONDS must be 0–%d", maxSeconds)
 	}
-	armed, err := mixer.ArmPowerRecovery("mixer xruns")
-	if err != nil {
+	if err := mixer.Prepare("mixer xruns"); err != nil {
 		return err
 	}
 	if seconds > 0 {
 		fmt.Fprintf(os.Stderr, "Watching the JACK recorder for %d s…\n", seconds)
 	}
-	archive, err := armed.captureScript(remoteScript(seconds))
+	archive, err := mixer.captureScript(remoteScript(seconds))
 	if err != nil {
 		return err
 	}

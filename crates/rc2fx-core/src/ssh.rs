@@ -5,44 +5,7 @@
 //! all other keys untouched (though still reported). Removing the key blocks
 //! new logins without killing active sessions.
 
-use serde::{Deserialize, Serialize};
-
-/// Comment marker identifying the single `authorized_keys` line managed by RC2FX.
-pub const SSH_MANAGED_MARKER: &str = "rc2fx-managed-developer-key";
-/// Maximum accepted public key line length (well above an Ed25519 key).
-pub const MAX_SSH_PUBLIC_KEY: usize = 512;
-
-/// Mixer SSH access state. `managed`, `unmanagedKeys`, and `hostKeys` are
-/// required so a malformed reply fails rather than reading as "off"; unknown
-/// extra fields are ignored.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SshStatus {
-    /// Whether the RC2FX-managed key is installed.
-    pub managed: bool,
-    /// `SHA256:...` fingerprint of the managed key, if installed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_fingerprint: Option<String>,
-    /// Count of other `authorized_keys` lines (e.g. baked into an earlier image).
-    pub unmanaged_keys: u32,
-    /// Mixer SSH server public host keys for host pinning.
-    pub host_keys: Vec<String>,
-    /// Whether sshd was observed running, or `None` if unknown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_running: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-/// Payload for `PUT api/v1/ssh`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SshRequest {
-    pub enabled: bool,
-    /// Required when enabling: a single `ssh-ed25519` public key line.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub public_key: Option<String>,
-}
+pub use crate::schema_gen::{MAX_SSH_PUBLIC_KEY, SSH_MANAGED_MARKER, SshRequest, SshStatus};
 
 /// Canonical `ssh-ed25519 BASE64` public key with options and comment stripped.
 #[derive(Clone, Debug, PartialEq, Eq)]
