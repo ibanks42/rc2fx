@@ -1,15 +1,20 @@
 package core
 
 import (
+	"bytes"
 	"math"
+	"slices"
 	"testing"
 	"unicode/utf8"
 )
 
 // Shared accept/reject fixtures in fixtures/core (also run by
-// crates/rc2fx-core/tests/shared_fixtures.rs). Accepted cases must re-encode
-// byte-for-byte to their canonical/pretty files; rejected cases with an
-// expected error must match that message exactly.
+// crates/rc2fx-core/tests/shared_fixtures.rs). Rust owns the canonical and
+// pretty byte encodings and exact error wording. Here Go checks that it reaches
+// the same accept or reject verdict, that accepted encodings parse to the same
+// JSON as the canonical golden (object key order ignored, numbers compared as
+// text), and that pretty encodings parse back to the same JSON as compact
+// encodings.
 
 type fixtureCase struct {
 	Name      string  `json:"name"`
@@ -25,6 +30,37 @@ type fixtureCase struct {
 type fixtureManifest struct {
 	Comment string        `json:"comment"`
 	Cases   []fixtureCase `json:"cases"`
+}
+
+// jsonValuesEqual reports whether two parsed trees are the same document apart
+// from object key order. Numbers compare by their text: the mixer treats 1 and
+// 1.0 as different kinds, and its float reader can give two spellings of one
+// number different doubles, so the app has to write the digits Rust writes.
+func jsonValuesEqual(a, b Value) bool {
+	if a.Kind() != b.Kind() {
+		return false
+	}
+	switch a.Kind() {
+	case ValueNumber:
+		return bytes.Equal(a.Raw(), b.Raw())
+	case ValueArray:
+		ai, _ := a.AsArray()
+		bi, _ := b.AsArray()
+		return slices.EqualFunc(ai, bi, jsonValuesEqual)
+	case ValueObject:
+		if a.Len() != b.Len() {
+			return false
+		}
+		am, _ := a.AsObject()
+		for _, member := range am {
+			match, ok := b.Get(member.Key)
+			if !ok || !jsonValuesEqual(member.Value, match) {
+				return false
+			}
+		}
+		return true
+	}
+	return a.Equal(b) // null, bool, string
 }
 
 func validated[T interface{ Validate() error }](data []byte) (any, error) {
@@ -90,29 +126,65 @@ func TestSharedFixturesVerdictsAndEncodings(t *testing.T) {
 			t.Errorf("%s: accepted, expected a rejection (%s)", c.Name, c.Why)
 			continue
 		case err != nil:
-			if c.Error != nil && err.Error() != *c.Error {
-				t.Errorf("%s: error differs\n got %s\nwant %s", c.Name, err, *c.Error)
-			}
 			continue
 		}
-		for _, want := range []struct {
-			file   *string
-			pretty bool
-		}{{c.Canonical, false}, {c.Pretty, true}} {
-			if want.file == nil {
-				continue
-			}
-			got, err := Encode(value)
-			if want.pretty {
-				got, err = EncodePretty(value)
-			}
+
+		got, err := Encode(value)
+		if err != nil {
+			t.Errorf("%s: encode: %v", c.Name, err)
+			continue
+		}
+		gotTree, err := ParseJSONBytes(got, DefaultMaxJSONBytes, DefaultMaxJSONNodes)
+		if err != nil {
+			t.Errorf("%s: parse encoded output: %v", c.Name, err)
+			continue
+		}
+
+		if c.Canonical != nil {
+			wantBytes := repoFile(t, "fixtures", "core", *c.Canonical)
+			wantTree, err := ParseJSONBytes(wantBytes, DefaultMaxJSONBytes, DefaultMaxJSONNodes)
 			if err != nil {
-				t.Errorf("%s: %v", c.Name, err)
-				continue
+				t.Errorf("%s: parse %s: %v", c.Name, *c.Canonical, err)
+			} else if !jsonValuesEqual(gotTree, wantTree) {
+				t.Errorf("%s: %s value differs\n got %s\nwant %s", c.Name, *c.Canonical, got, wantBytes)
 			}
-			if expected := string(repoFile(t, "fixtures", "core", *want.file)); string(got) != expected {
-				t.Errorf("%s: %s differs\n got %s\nwant %s", c.Name, *want.file, got, expected)
-			}
+		}
+
+		pretty, err := EncodePretty(value)
+		if err != nil {
+			t.Errorf("%s: encode pretty: %v", c.Name, err)
+			continue
+		}
+		prettyTree, err := ParseJSONBytes(pretty, DefaultMaxJSONBytes, DefaultMaxJSONNodes)
+		if err != nil {
+			t.Errorf("%s: parse pretty output: %v", c.Name, err)
+			continue
+		}
+		if !jsonValuesEqual(prettyTree, gotTree) {
+			t.Errorf("%s: pretty output differs in value from compact output\npretty  %s\ncompact %s", c.Name, pretty, got)
+		}
+	}
+}
+
+func TestJSONValuesEqual(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"key order ignored", `{"a":1,"b":[true,null,"x"]}`, `{"b":[true,null,"x"],"a":1}`, true},
+		{"array order differs", `[1,2]`, `[2,1]`, false},
+		{"integer vs float spelling", `1`, `1.0`, false},
+		{"positive zero vs negative zero", `0.0`, `-0.0`, false},
+		{"exponent vs decimal spelling", `1e2`, `100.0`, false},
+		{"scientific vs expanded float spelling", `1.2345678901234567e+20`, `123456789012345670000.0`, false},
+		{"null member vs missing member", `{"a":null}`, `{}`, false},
+		{"escaped slash matches unescaped slash", `"é\/"`, `"é/"`, true},
+		{"identical nested document", `{"a":[1,2.5,{"b":false,"c":null,"d":"ok"}]}`, `{"a":[1,2.5,{"b":false,"c":null,"d":"ok"}]}`, true},
+	}
+	for _, tc := range cases {
+		if got := jsonValuesEqual(parse(t, tc.a), parse(t, tc.b)); got != tc.want {
+			t.Errorf("%s: jsonValuesEqual(%s, %s) = %v, want %v", tc.name, tc.a, tc.b, got, tc.want)
 		}
 	}
 }

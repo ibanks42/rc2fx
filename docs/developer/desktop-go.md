@@ -72,17 +72,28 @@ can jump between the two easily:
 
 ## Behavior
 
-- Both copies must behave identically, including limits, bounds, ordering
-  rules, and user-facing error messages.
+- Both copies must behave identically, including limits, bounds, and ordering
+  rules. Both copies must accept and reject the same documents, while the
+  wording of an error belongs to each side.
 - Any JSON coming from outside the process must be decoded as strictly as
   `rc2fx-core`'s strict JSON and serde's `deny_unknown_fields`: reject unknown
   fields, missing required fields, duplicate keys, out-of-range integers,
   non-finite numbers, and overly deep or large payloads. Standard
   `encoding/json` lets most of those slip through, so always use
   `core.DecodeStrict` or `core.DecodeStrictLimited`.
-- JSON written by the app must be byte-identical to Rust's output wherever the
-  mixer or an on-disk file consumes it, including field order, number
-  formatting, and escaping.
+- JSON written by the app must decode on the mixer to the same values. Field
+  order and whitespace are not part of the contract; Rust owns the canonical
+  byte form, which the shared fixtures in `fixtures/core` pin on the Rust side.
+  Number text is part of the contract: the app must write every number with the
+  same characters as Rust. The mixer rejects `1.0` where it expects an integer,
+  and its `serde_json` is built without the `float_roundtrip` feature. That
+  build converts the leading digits and scales by a power-of-ten table, so the
+  result is not always the nearest double (it can be one or two units in the
+  last place away), and two spellings of the same number can read as different
+  doubles. For the same reason the app keeps a JSON tree that preserves numbers
+  exactly and reads number text the way the mixer does: do not swap the number
+  parser or the float writer in `desktop/internal/sjson` for the standard
+  library's.
 - Keep dependencies minimal and reach for the standard library first. The
   module currently uses `github.com/klauspost/compress` (zstd and gzip),
   `golang.org/x/crypto`, `golang.org/x/sys`,
