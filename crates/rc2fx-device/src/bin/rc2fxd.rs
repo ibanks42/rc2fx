@@ -38,8 +38,8 @@ Usage: rc2fxd --data ABSOLUTE_DIRECTORY --native-socket ABSOLUTE_SOCKET
   --firmware-catalog FILE  Firmware catalog the launcher validated against
   --firmware-profile ID    Profile the launcher selected; with the catalog,
                            reported as the RODE firmware version
-  --developer-ssh SCRIPT   Installed rc2fx.sh; enables developer SSH status
-                           and key management over USB 1 only
+  --developer-ssh          Enable developer SSH status and key management
+                           over USB 1 only
   --help                   Show help without starting or modifying anything
   --version                Print the build version
 
@@ -59,7 +59,7 @@ struct Arguments {
     release: Option<PathBuf>,
     firmware_catalog: Option<PathBuf>,
     firmware_profile: Option<String>,
-    developer_ssh: Option<PathBuf>,
+    developer_ssh: bool,
 }
 #[derive(Debug)]
 enum Command {
@@ -108,7 +108,7 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
     let mut release = None;
     let mut firmware_catalog = None;
     let mut firmware_profile = None;
-    let mut developer_ssh = None;
+    let mut developer_ssh = false;
     while let Some(key) = args.next() {
         let key = key.to_str().ok_or_else(|| invalid("option is not UTF-8"))?;
         if matches!(key, "--help" | "--version") {
@@ -138,6 +138,10 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
         if !seen.insert(key.to_owned()) {
             return Err(invalid(format!("duplicate option {key}")));
         }
+        if key == "--developer-ssh" {
+            developer_ssh = true;
+            continue;
+        }
         let value = args
             .next()
             .filter(|value| !value.is_empty())
@@ -150,7 +154,6 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
             "--ui-socket" => ui = Some(PathBuf::from(value)),
             "--release" => release = Some(PathBuf::from(value)),
             "--firmware-catalog" => firmware_catalog = Some(PathBuf::from(value)),
-            "--developer-ssh" => developer_ssh = Some(PathBuf::from(value)),
             "--firmware-profile" => {
                 firmware_profile = Some(
                     value
@@ -170,7 +173,6 @@ fn parse(args: impl Iterator<Item = OsString>) -> io::Result<Command> {
         .chain(ui.iter())
         .chain(release.iter())
         .chain(firmware_catalog.iter())
-        .chain(developer_ssh.iter())
         .any(|path| !path.is_absolute())
     {
         return Err(invalid("native controller paths must be absolute"));
@@ -398,9 +400,9 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn std::erro
             // check, or install a signed release in place.
             let usb_options = api::Options {
                 image_check_dir: image_check_dir.clone(),
-                developer_ssh: args.developer_ssh.clone().map(|script| {
-                    std::sync::Arc::new(rc2fx_device::developer_ssh::DeveloperSsh::new(script))
-                }),
+                developer_ssh: args
+                    .developer_ssh
+                    .then(|| std::sync::Arc::new(rc2fx_device::developer_ssh::DeveloperSsh::new())),
                 mixer_update: mixer_update.clone(),
                 ..options.clone()
             };
@@ -633,12 +635,20 @@ mod tests {
             args.firmware_profile.as_deref(),
             Some("rodecaster-pro-ii-1.7.7")
         );
-        assert!(matches!(command(&[]), Ok(Command::Start(a)) if a.release.is_none()));
+        assert!(
+            matches!(command(&[]), Ok(Command::Start(a)) if a.release.is_none() && !a.developer_ssh)
+        );
+        assert!(matches!(
+            command(&["--developer-ssh"]),
+            Ok(Command::Start(a)) if a.developer_ssh
+        ));
         for extra in [
             vec!["--release", "relative.json"],
             vec!["--firmware-profile", "rodecaster-pro-ii-1.7.7"],
             vec!["--firmware-catalog", "/opt/rc2fx/firmware-profiles.json"],
             vec!["--release", "/a", "--release", "/b"],
+            vec!["--developer-ssh", "--developer-ssh"],
+            vec!["--developer-ssh", "/opt/rc2fx/rc2fx.sh"],
         ] {
             assert!(command(&extra).is_err(), "{extra:?}");
         }

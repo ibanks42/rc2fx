@@ -30,21 +30,6 @@ launched_mixer() {
 }
 mixer_age() { echo $(( $(uptime_s) - $(start_time "$1") / $(getconf CLK_TCK) )); }
 
-arm_power_recovery() {
-  test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot || {
-    echo 'Refusing recovery arming during firmware first boot' >&2; return 4;
-  }
-  local current
-  current=$(fw_printenv -n reboot_pwr_button_bypass) || return 1
-  case "$current" in 0|1) ;; *) echo 'Unexpected power-button bypass value' >&2; return 1 ;; esac
-  if test "$current" != 1; then
-    fw_setenv reboot_pwr_button_bypass 1 || return 1
-  fi
-  test "$(fw_printenv -n reboot_pwr_button_bypass)" = 1 || return 1
-  echo 'Power recovery armed for the next boot; the bootloader consumes this flag'
-}
-
-
 # Isolated GUI preview (not part of normal boot/audio startup). Pauses the
 # stock display supervisor without modifying it; an independent watchdog
 # restores the stock UI even if the caller's SSH session drops.
@@ -160,9 +145,6 @@ ui_preview() {
     || { echo 'Preview duration must be 5–30 seconds' >&2; return 2; }
   test $# -le 2 && test -f "$library" && ! test -L "$library" || return 2
   test "$(id -u)" = 0 || { echo 'Preview requires root, as does the stock GUI' >&2; return 1; }
-  # Developer-only, and it can hang the mixer: arm, check, then run.
-  arm_power_recovery \
-    || { echo 'GUI experiment not started: power recovery could not be armed. After a power cycle the mixer would stay off until its button is pressed.' >&2; return 1; }
   test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot \
     || { echo 'Refusing GUI experiment during first/production boot' >&2; return 1; }
   test "$(tr -d '\0' < /proc/device-tree/model)" = 'RODECaster Pro II' \

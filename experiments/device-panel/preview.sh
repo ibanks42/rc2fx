@@ -22,7 +22,7 @@ setting() {
   fi
   printf '%s' "$value"
 }
-ip=$(setting ip); user=$(setting user); key=$(setting key); known=$(setting known_hosts); alias=$(setting host_key_alias)
+ip=$(setting ip); user=$(setting user); key=$(setting key); known=$(setting known_hosts); alias=$(setting host_key_alias); pre_command=$(setting pre_command)
 test -n "$ip" || { echo 'Set RC2FX_MIXER_IP or .rc2fx-mixer.conf' >&2; exit 2; }
 [[ "$ip" != -* && "$ip" != *[[:space:]]* ]] || exit 2
 user=${user:-root}
@@ -40,14 +40,20 @@ if [[ -n "$alias" ]]; then
   options+=(-o "HostKeyAlias=$alias")
 fi
 host="$user@$ip"
-# Arm and verify one-shot power recovery before touching the device.
-ssh "${options[@]}" "$host" '/bin/bash -s -- arm-power-recovery' < "$root/mixer/scripts/rc2fx.sh" > /dev/null \
-  && [[ "$(ssh "${options[@]}" "$host" 'fw_printenv -n reboot_pwr_button_bypass')" == 1 ]] || {
-  echo 'preview.sh was not started: power recovery could not be armed.' >&2
-  echo 'After a power cycle the mixer would stay off until its button is pressed.' >&2
-  exit 1
-}
-echo 'Power recovery armed: after an outlet power cycle the mixer turns itself on (one boot only)'
+if [[ -n "$pre_command" ]]; then
+  if [[ "$pre_command" == "~/"* ]]; then pre_command="$HOME/${pre_command#~/}"; fi
+  RC2FX_MIXER_ACTION=preview \
+  RC2FX_MIXER_IP="$ip" \
+  RC2FX_MIXER_USER="$user" \
+  RC2FX_MIXER_HOST="$host" \
+  RC2FX_MIXER_KEY="$key" \
+  RC2FX_MIXER_KNOWN_HOSTS="$known" \
+  RC2FX_MIXER_HOST_KEY_ALIAS="$alias" \
+    "$pre_command" preview || {
+    echo 'preview.sh was not started: pre_command failed.' >&2
+    exit 1
+  }
+fi
 bash "$root/experiments/device-panel/build.sh"
 # Verify device state before creating the RAM staging directory.
 stage=$(ssh "${options[@]}" "$host" 'set -e

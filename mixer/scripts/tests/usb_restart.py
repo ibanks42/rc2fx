@@ -2,14 +2,27 @@
 
   python3 mixer/scripts/tests/usb_restart.py
 
-Replaces `test -c` with `test -f` so the fixture works without mknod/root.
+Overrides `test -c` for the fake HID node so the fixture works without mknod/root.
 """
-from pathlib import Path
+import os
+import shlex
 import subprocess
+import sys
 import tempfile
+from pathlib import Path
 
-source = (Path(__file__).parents[1] / "rc2fx.sh").read_text()
-function = source.split("retire_usb_node() {", 1)[1].split("\n}\n", 1)[0]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import RC2FX_SH, source_rc2fx  # noqa: E402
+
+clean_env = {k: v for k, v in os.environ.items() if not k.startswith("RC2FX_")}
+defaults = subprocess.run(
+    ["bash", "-c", f'. {shlex.quote(str(RC2FX_SH))}\nprintf "%s\\n%s\\n" "$hidg0" "$proc"'],
+    env=clean_env, capture_output=True, text=True, timeout=30,
+)
+assert defaults.returncode == 0 and defaults.stdout.splitlines() == ["/dev/hidg0", "/proc"], (
+    defaults.stdout + defaults.stderr
+)
+
 with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     root = Path(directory)
     dev = root / "dev"
@@ -17,13 +30,20 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     dev.mkdir()
     proc.mkdir()
     node = dev / "hidg0"
-    function = "retire_usb_node() {" + function + "\n}\n"
-    function = function.replace("/dev/hidg0", str(node)).replace("/proc/", str(proc) + "/")
-    function = function.replace('test -c ', 'test -f ')
-    prefix = "set -euo pipefail\nsay() { printf '%s\\n' \"$*\"; }\n" + function
+    env = {"RC2FX_HIDG0": str(node), "RC2FX_PROC": str(proc)}
+    prefix = '''
+say() { printf '%s\\n' "$*"; }
+test() {
+  if [[ "${1:-}" == -c && "${2:-}" == "$hidg0" ]]; then
+    builtin test -f "$2"
+  else
+    builtin test "$@"
+  fi
+}
+'''
 
     def run(script, success=True):
-        result = subprocess.run(["bash", "-c", prefix + script], capture_output=True, text=True)
+        result = source_rc2fx(prefix + script, env=env)
         assert (result.returncode == 0) == success, result.stdout + result.stderr
         return result.stdout + result.stderr
 
@@ -34,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     (fd / "8").symlink_to(node)
     assert "another process (100)" in run("retire_usb_node 200", success=False)
     assert node.exists()
-    run("pid=999; retire_usb_node 100; test \"$pid\" = 999")
+    run('pid=999; retire_usb_node 100; test "$pid" = 999')
     assert not node.exists()  # Allowed owner; caller's PID variable is preserved.
     (fd / "8").unlink()
     if Path("/dev/full").exists():
@@ -55,12 +75,11 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     run("retire_usb_node 100", success=False)
     assert node.is_dir()
     node.rmdir()
-    quiesce = 'usb_quiesce() {' + source.split('usb_quiesce() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
-    quiesce = quiesce.replace('/dev/hidg0', str(node)).replace('/proc/', str(proc) + '/')
     state = root / 'run'
     state.mkdir()
     (state / 'native.pid').write_text('101')
-    prefix += f'run={state}\nsupervisor() {{ echo 200; }}\npgrep() {{ echo 100; }}\n' + quiesce
+    env["RC2FX_RUN"] = str(state)
+    prefix += 'supervisor() { echo 200; }\npgrep() { echo 100; }\n'
     node.write_text('fixture')
     (fd / '8').symlink_to(node)
     run(f'sleep() {{ rm -f {fd}/8; }}; usb_quiesce')

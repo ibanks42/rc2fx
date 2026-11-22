@@ -9,13 +9,60 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CC = os.environ.get('CC') or shutil.which('cc') or 'cc'
 CXX = os.environ.get('CXX') or shutil.which('c++') or 'c++'
+WARN = ['-Wall', '-Wextra', '-Werror']
+X86_ONLY = unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+
+
+def tool(*names):
+    """The first of these programs that is on PATH, or None."""
+    for name in names:
+        if path := shutil.which(name):
+            return path
+    return None
+
+
+ZIG = tool('zig')
+QEMU = tool('qemu-aarch64', 'qemu-aarch64-static')
+A64 = ['-target', 'aarch64-linux-musl', '-mcpu=cortex_a53', '-O2', '-static']
+
+
+def needs_qemu(test):
+    test = unittest.skipUnless(ZIG and QEMU, 'the NEON path needs zig and qemu-aarch64 (or an aarch64 host)')(test)
+    return unittest.skipIf(platform.machine() == 'aarch64', 'this host runs the NEON path in the tests above')(test)
+
+
+def compile_c(out_name, sources, *flags, compiler=(CC,), warn=True):
+    out = Path(BUILD.name) / out_name
+    if not out.exists():
+        cmd = [*compiler, *(WARN if warn else ()), *flags, *(str(s) for s in sources), '-o', str(out)]
+        subprocess.run(cmd, check=True)
+    return out
+
+
+def compile_module(out_name, *extra):
+    return compile_c(out_name, [HERE / 'gui_pacing.c'], '-O2', '-fPIC', '-shared',
+                     '-fno-omit-frame-pointer', *extra, '-ldl')
+
+
+def build_plan(name, *, aarch64=False):
+    flags = (*A64, '-Wno-unused-function') if aarch64 else ('-O2', '-Wno-unused-function')
+    compiler = (ZIG, 'cc') if aarch64 else (CC,)
+    return compile_c(f'plan-{name}', [HERE / 'partial_plan_test.c'], *flags, compiler=compiler)
+
+
+def parse_line(line):
+    parts = line.split()
+    return parts[0], dict(f.split('=', 1) for f in parts[1:])
+
+
+def fields_of(lines, kind):
+    return [fields for k, fields in lines if k == kind]
 
 
 def setUpModule():
@@ -23,27 +70,17 @@ def setUpModule():
     BUILD = tempfile.TemporaryDirectory()
     out = Path(BUILD.name)
     # The test build: sites matched by name, no executable hash.
-    subprocess.run([CC, '-O2', '-g', '-fPIC', '-shared', '-fno-omit-frame-pointer', '-Wall', '-Wextra', '-Werror',
-                    '-DRC2FX_PACING_TEST', str(HERE / 'gui_pacing.c'), '-o', str(out / 'gui.so'), '-ldl'],
-                   check=True)
+    compile_module('gui.so', '-g', '-DRC2FX_PACING_TEST')
     # The production build: pinned offsets and the GUI hash.
-    subprocess.run([CC, '-O2', '-fPIC', '-shared', '-fno-omit-frame-pointer', '-Wall', '-Wextra', '-Werror',
-                    str(HERE / 'gui_pacing.c'), '-o', str(out / 'production.so'), '-ldl'], check=True)
+    compile_module('production.so')
     # The same, told the test program is "the GUI" (so its hash must fail).
-    subprocess.run([CC, '-O2', '-fPIC', '-shared', '-fno-omit-frame-pointer', '-Wall', '-Wextra', '-Werror',
-                    f'-DGUI_PATH="{out / "program"}"', str(HERE / 'gui_pacing.c'), '-o', str(out / 'as-gui.so'),
-                    '-ldl'], check=True)
-    # A short conversion-line cap, only in this dedicated test build.
-    subprocess.run([CC, '-O2', '-g', '-fPIC', '-shared', '-fno-omit-frame-pointer', '-Wall', '-Wextra', '-Werror',
-                    '-DRC2FX_PACING_TEST', '-DRC2FX_TEST_PARTIAL_LINES=8', str(HERE / 'gui_pacing.c'),
-                    '-o', str(out / 'partial-short-log.so'), '-ldl'], check=True)
+    compile_module('as-gui.so', f'-DGUI_PATH="{out / "program"}"')
     # Stand-ins for libdrm's commit and the GE2D V4L2 device: imported calls,
     # as in the GUI.
-    subprocess.run([CC, '-O2', '-fPIC', '-shared', '-Wall', '-Wextra', '-Werror', str(HERE / 'fake_v4l2.c'),
-                    '-o', str(out / 'libfakedrm.so')], check=True)
-    subprocess.run([CXX, '-O1', '-g', '-rdynamic', '-fno-omit-frame-pointer', '-pthread', '-Wall', '-Werror',
-                    str(HERE / 'gui_pacing_test.cpp'), '-o', str(out / 'program'), f'-L{out}', '-lfakedrm',
-                    f'-Wl,-rpath,{out}'], check=True)
+    compile_c('libfakedrm.so', [HERE / 'fake_v4l2.c'], '-O2', '-fPIC', '-shared')
+    compile_c('program', [HERE / 'gui_pacing_test.cpp'], '-O1', '-g', '-rdynamic', '-fno-omit-frame-pointer',
+              '-pthread', '-Wall', '-Werror', f'-L{out}', '-lfakedrm', f'-Wl,-rpath,{out}',
+              compiler=(CXX,), warn=False)
 
 
 def tearDownModule():
@@ -62,11 +99,7 @@ def run(mode, *args, extra=None, module='gui.so'):
     r = subprocess.run([str(Path(BUILD.name) / 'program'), *args], env=env, capture_output=True, text=True,
                        timeout=60)
     assert r.returncode == 0, r.stderr
-    stats = []
-    if log.exists():
-        for line in log.read_text().splitlines():
-            fields = dict(f.split('=', 1) for f in line.split()[1:])
-            stats.append((line.split()[0], fields))
+    stats = [parse_line(line) for line in log.read_text().splitlines()] if log.exists() else []
     return r.stdout, stats
 
 
@@ -114,9 +147,7 @@ class PacingTests(unittest.TestCase):
     def test_each_frame_is_logged_with_its_stage_times(self):
         out, stats = run('observe', 'frames', '4')
         self.assertEqual(out.count('commit 0 errno 99'), 4, 'commit result and errno unchanged')
-        log = (Path(BUILD.name) / f'log-{os.getpid()}-{run.n - 1}').read_text().splitlines()
-        frames = [dict(f.split('=', 1) for f in line.split()[1:]) for line in log
-                  if line.startswith('frame ')]
+        frames = fields_of(stats, 'frame')
         self.assertEqual(len(frames), 4)
         for f in frames:
             t = [int(f[k]) for k in ('request', 'locked', 'converted', 'commit', 'committed')]
@@ -165,14 +196,13 @@ class PacingTests(unittest.TestCase):
                 self.assertRegex(r.stderr, r'^RC2FX GUI pacing: pid \d+ executable not admitted; inactive$')
                 self.assertEqual(len(passes(r.stdout)), 6)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_each_paint_and_destination_is_logged(self):
         out, stats = run('observe', 'dirty')
         self.assertIn('dirty done', out)
         self.assertIn('errno_after_paint 55', out, 'the GUI errno is unchanged')
-        log = (Path(BUILD.name) / f'log-{os.getpid()}-{run.n - 1}').read_text().splitlines()
-        paints = [dict(f.split('=', 1) for f in line.split()[1:]) for line in log if line.startswith('paint ')]
-        frames = [dict(f.split('=', 1) for f in line.split()[1:]) for line in log if line.startswith('frame ')]
+        paints = fields_of(stats, 'paint')
+        frames = fields_of(stats, 'frame')
         self.assertEqual(len(paints), 6, paints)  # 4 + the long list + the errno check; 3 rejected
         a = paints[0]
         self.assertEqual((a['path'], a['n'], a['bbox'], a['area'], a['outside']),
@@ -186,21 +216,19 @@ class PacingTests(unittest.TestCase):
         self.assertEqual(many['rects'].count(';'), 15, 'at most 16 rectangles are listed')
         self.assertEqual([(f['dest_fd'], f['dest_fb']) for f in frames],
                          [('41', '7'), ('42', '8'), ('41', '7'), ('42', '8')])
-        exit_line = [dict(f.split('=', 1) for f in line.split()[1:]) for line in log
-                     if line.startswith('dirty-exit ')][-1]
+        exit_line = fields_of(stats, 'dirty-exit')[-1]
         self.assertEqual((exit_line['paints'], exit_line['paint_rejects'], exit_line['paint_outside']),
                          ('9', '3', '3'))  # the three path-A paints include 1270:700:20:30
 
     def partial(self, mode, frames=40, module='gui.so', **env):
         out, stats = run(mode, 'partial', str(frames), module=module, extra=env)
-        log = (Path(BUILD.name) / f'log-{os.getpid()}-{run.n - 1}').read_text().splitlines()
-        converts = [dict(f.split('=', 1) for f in line.split()[1:]) for line in log if line.startswith('convert ')]
-        verifies = [dict(f.split('=', 1) for f in line.split()[1:]) for line in log if line.startswith('verify ')]
+        converts = fields_of(stats, 'convert')
+        verifies = fields_of(stats, 'verify')
         frames_out = [line.split() for line in out.splitlines() if line.startswith('frame ')]
         summary = [line.split() for line in out.splitlines() if line.startswith('partial frames')][0]
         return frames_out, converts, verifies, dict(zip(summary[1::2], summary[2::2]))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_partial_conversion_keeps_every_destination_identical_to_a_full_one(self):
         for direction in ('cw', 'ccw'):
             with self.subTest(direction):
@@ -215,7 +243,7 @@ class PacingTests(unittest.TestCase):
                 self.assertTrue(all(len(c['job_us'].split(',')) == int(c['jobs']) for c in partial))
                 self.assertLess(int(summary['pixels']), 3 * 921600, 'far fewer pixels than full frames')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_plan3_exact_notification_event_plans(self):
         cases = {
             'A': (1216, 2020, {'167:341:28:27', '411:444:28:28', '1010:45:16:30'}),
@@ -236,7 +264,7 @@ class PacingTests(unittest.TestCase):
                 self.assertTrue(all(set(p['rects'].split(';')) == expected for p in plans), plans)
                 self.assertEqual([(c['kind'], c['reason']) for c in converts[:2]], [('full', 'forced')] * 2)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_plan3_preserves_explicit_merge_override(self):
         for threshold, jobs, pixels in [('0', '3', '2020'), ('20000', '3', '2020'), ('80000', '2', '36112')]:
             with self.subTest(threshold=threshold):
@@ -248,7 +276,7 @@ class PacingTests(unittest.TestCase):
                 plans = [f for k, f in lines if k == 'test-plan']
                 self.assertEqual([(p['jobs'], p['px']) for p in plans], [(jobs, pixels)] * 2)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_plan3_random_pixels_capacity_and_soft_budget(self):
         for direction in ('cw', 'ccw'):
             for pattern in ('PARTIAL_RANDOM', 'PARTIAL_CAPACITY'):
@@ -274,14 +302,14 @@ class PacingTests(unittest.TestCase):
         self.assertEqual(int(counters[-1]['soft_budget_exceeded']), 2, 'one count per over-budget conversion')
         self.assertEqual(counters[-1]['budget_merged'], '0')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_plan3_rejected_paint_forces_full_and_keeps_pixels(self):
         _, converts, _, summary = self.partial('partial-cw', frames=8, PARTIAL_INVALID='1')
         self.assertEqual(summary['bad_frames'], '0')
         self.assertEqual((converts[4]['kind'], converts[4]['reason']), ('full', 'forced'))
         self.assertEqual((converts[5]['kind'], converts[5]['reason']), ('full', 'forced'))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_plan3_forced_full_dose_still_uses_full_hardware_job(self):
         with tempfile.TemporaryDirectory() as tmp:
             force = Path(tmp) / 'force-full'
@@ -292,7 +320,7 @@ class PacingTests(unittest.TestCase):
             self.assertTrue(forced)
             self.assertTrue(all(c['kind'] == 'full' and c['px'] == '921600' and c['jobs'] == '1' for c in forced))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_plan3_preserves_cpu_large_for_forced_full(self):
         with tempfile.TemporaryDirectory() as tmp:
             force = Path(tmp) / 'force-full'
@@ -302,7 +330,7 @@ class PacingTests(unittest.TestCase):
             self.assertEqual(summary['bad_frames'], '0')
             self.assertTrue(any(c['kind'] == 'cpu' and c['reason'] == 'forced-full' for c in converts))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_plan3_second_extra_job_failures_keep_existing_fallbacks(self):
         for fault, reason in [('FAKE_GE2D_FAIL_QBUF', 'selection-or-qbuf'), ('FAKE_GE2D_FAIL_DQBUF', 'job-failed')]:
             with self.subTest(fault=fault):
@@ -315,12 +343,12 @@ class PacingTests(unittest.TestCase):
                 self.assertTrue(counters)
                 self.assertGreater(int(counters[-1]['soft_budget_exceeded']), 0)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_the_wrong_orientation_is_caught_by_the_identity_check(self):
         _, _, _, summary = self.partial('partial-ccw', frames=6, FAKE_GE2D_DIR='cw')
         self.assertNotEqual(summary['bad_frames'], '0')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_no_periodic_full_frames_over_a_long_run(self):
         # 200 conversions, more than two seconds of fake time with jobs of
         # 6 ms; identity is checked after every one of them.
@@ -332,7 +360,7 @@ class PacingTests(unittest.TestCase):
         span = int(converts[-1]['t']) - int(converts[0]['t'])
         self.assertGreater(span, 2_000_000_000, 'more than 2 s of run time')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_the_kill_file_ends_partial_conversion_at_the_next_conversion(self):
         kill = Path(BUILD.name) / f'partial-off'
         kill.unlink(missing_ok=True)
@@ -345,7 +373,7 @@ class PacingTests(unittest.TestCase):
         self.assertTrue(all(c['kind'] == 'partial' for c in converts[2:10]))
         self.assertEqual({(c['kind'], c['reason']) for c in converts[10:]}, {('full', 'kill')})
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_a_failed_extra_job_falls_back_to_a_full_frame(self):
         # Output QBUFs: frames 0 and 1 are full (1, 2); frame 2's first extra job is 3.
         _, converts, _, summary = self.partial('partial-cw', frames=10, FAKE_GE2D_FAIL_QBUF='3')
@@ -353,7 +381,7 @@ class PacingTests(unittest.TestCase):
         self.assertEqual((converts[2]['kind'], converts[2]['reason']), ('full', 'selection-or-qbuf'))
         self.assertTrue(all(c['kind'] == 'partial' for c in converts[3:]), 'partial conversion resumes')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_a_failed_dequeue_drains_and_disables_partial_conversion(self):
         # Capture DQBUFs: frames 0 and 1 (1, 2); frame 2's extra job is 3.
         frames, converts, _, summary = self.partial('partial-cw', frames=10, FAKE_GE2D_FAIL_DQBUF='3')
@@ -361,7 +389,7 @@ class PacingTests(unittest.TestCase):
         self.assertTrue(all(f[5] == '0' for f in frames), 'the vendor sequence still succeeds')
         self.assertEqual({(c['kind'], c['reason']) for c in converts[2:]}, {('full', 'job-failed')})
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_verify_checks_the_first_four_partial_conversions_per_destination(self):
         frames, converts, verifies, summary = self.partial('partial-verify-cw', frames=30, FAKE_GE2D_DIR='cw')
         self.assertEqual(summary['bad_frames'], '0')
@@ -372,7 +400,7 @@ class PacingTests(unittest.TestCase):
             self.assertGreater(int(v['of']), 1000, 'enough points tell the rotations apart')
         self.assertTrue(all(c['kind'] == 'partial' for c in converts[2:]))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_verify_with_the_wrong_orientation_disables_and_names_the_right_one(self):
         frames, converts, verifies, summary = self.partial('partial-verify-ccw', frames=12, FAKE_GE2D_DIR='cw')
         self.assertEqual(len(verifies), 1, 'the first verified conversion fails; no partial conversion after it')
@@ -385,7 +413,7 @@ class PacingTests(unittest.TestCase):
         self.assertEqual({(c['kind'], c['reason']) for c in converts[3:]}, {('full', 'verify-fail')})
         self.assertEqual([f[7] for f in frames[-4:]], ['0'] * 4, 'full frames are identical again')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_verify_finds_a_pixel_written_outside_any_paint_and_stops(self):
         frames, converts, verifies, summary = self.partial('partial-verify-cw', frames=20, PARTIAL_ROGUE_AT='8',
                                                            RC2FX_TEST_PARTIAL_VERIFY_EVERY='1')
@@ -398,7 +426,7 @@ class PacingTests(unittest.TestCase):
         self.assertEqual({(c['kind'], c['reason']) for c in after}, {('full', 'verify-fail')})
         self.assertEqual([f[7] for f in frames[-4:]], ['0'] * 4)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_each_conversion_logs_every_jobs_pixels_and_time(self):
         _, converts, _, _ = self.partial('partial-cw', frames=12, FAKE_GE2D_DELAY_US='300')
         for c in converts:
@@ -408,7 +436,7 @@ class PacingTests(unittest.TestCase):
             self.assertTrue(all(int(u) >= 300 for u in us), 'each job is timed, the vendor job included')
         self.assertEqual(converts[0]['job_px'], '921600')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_every_verify_skip_reason_is_logged_with_its_values(self):
         cases = {
             'descriptor-null': dict(reason='descriptor-null', dfd='-1'),
@@ -425,9 +453,7 @@ class PacingTests(unittest.TestCase):
                 if case == 'mmap':
                     env['FAKE_GE2D_BAD_OFFSET'] = '1'
                 out, stats = run('partial-verify-cw', 'partial', '6', extra=env)
-                log = (Path(BUILD.name) / f'log-{os.getpid()}-{run.n - 1}').read_text().splitlines()
-                skips = [dict(f.split('=', 1) for f in line.split()[1:]) for line in log
-                         if line.startswith('verify-skip ')]
+                skips = fields_of(stats, 'verify-skip')
                 # 6 frames: 2 full, then 4 partial, all within the first 4 per destination.
                 self.assertEqual(len(skips), 4, 'every scheduled check skipped, once per conversion')
                 self.assertEqual([row['cap_dest'] for row in skips], ['9', '10', '9', '10'])
@@ -436,18 +462,17 @@ class PacingTests(unittest.TestCase):
                         self.assertEqual(row[key], value, row)
                 if case == 'dest-mismatch':  # the fd of the other destination
                     self.assertEqual([row['dfd'] != row['cap_dest'] for row in skips], [True] * 4)
-                self.assertFalse([line for line in log if line.startswith('verify ')], 'no check ran')
+                self.assertFalse(fields_of(stats, 'verify'), 'no check ran')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_verify_maps_the_source_writable_as_vb2_requires(self):
         # vb2 rejects an OUTPUT mapping without VM_WRITE; the test build
         # enforces that rule, so a read-only mapping would show as a skip.
-        out, stats = run('partial-verify-cw', 'partial', '6')
-        log = (Path(BUILD.name) / f'log-{os.getpid()}-{run.n - 1}').read_text().splitlines()
-        self.assertFalse([line for line in log if line.startswith('verify-skip ')], 'the mapping was accepted')
-        verifies = [line for line in log if line.startswith('verify ')]
+        _, stats = run('partial-verify-cw', 'partial', '6')
+        self.assertFalse(fields_of(stats, 'verify-skip'), 'the mapping was accepted')
+        verifies = fields_of(stats, 'verify')
         self.assertEqual(len(verifies), 4)
-        self.assertTrue(all('mismatches=0' in line for line in verifies))
+        self.assertTrue(all(v['mismatches'] == '0' for v in verifies))
 
     def test_off_or_unset_binds_nothing(self):
         # The presentation caps of an earlier trial ('30' ... '2') are not modes.
@@ -459,15 +484,14 @@ class PacingTests(unittest.TestCase):
                 self.assertEqual(stats, [])
 
 
-def log_lines():
-    """The last run's log as (kind, fields) pairs, in order."""
-    log = (Path(BUILD.name) / f'log-{os.getpid()}-{run.n - 1}').read_text().splitlines()
-    return [(line.split()[0], dict(f.split('=', 1) for f in line.split()[1:])) for line in log]
-
-
 def log_file():
     """The path of the last run's log."""
     return Path(BUILD.name) / f'log-{os.getpid()}-{run.n - 1}'
+
+
+def log_lines():
+    """The last run's log as (kind, fields) pairs, in order."""
+    return [parse_line(line) for line in log_file().read_text().splitlines()]
 
 
 def family():
@@ -485,7 +509,7 @@ def family():
 class RotationTests(unittest.TestCase):
     """Verify log rotation: full logs rotate to <log>.1 under single-rotator concurrency."""
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_a_full_log_rotates_and_every_line_survives(self):
         cap = 2000  # two counters lines (about 700 bytes each) fit; the third rotates the log
         out, _ = run('partial-cw', 'partial', '40',
@@ -506,14 +530,14 @@ class RotationTests(unittest.TestCase):
             self.assertTrue(fields[0].replace('-', '').isalpha(), line)
             for field in fields[1:]:
                 self.assertIn('=', field, line)
-        counters = [dict(f.split('=', 1) for f in line.split()[1:]) for line in lines if line.startswith('counters ')]
+        counters = [parse_line(line)[1] for line in lines if line.startswith('counters ')]
         self.assertTrue(counters, 'a counters line reached a file')
         self.assertGreaterEqual(int(counters[-1]['log_rotations']), 1)
         self.assertGreaterEqual(int(counters[-1]['log_dropped']), 0)
         # The log is reopened with the same name, append-only per rotation.
         self.assertEqual(base.parent, older.parent)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_two_threads_logging_at_once_rotate_and_write_whole_lines(self):
         # Paints here and committed frames on another thread: both log.
         cap = 900
@@ -533,7 +557,7 @@ class RotationTests(unittest.TestCase):
                 self.assertIn('=', field, line)
 
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_a_rotation_never_hands_its_descriptor_to_the_gui(self):
         # Rotation must not close log_fd while other GUI threads open files, or
         # the fd number could be reused and receive an in-flight log write.
@@ -564,9 +588,7 @@ class RotateTests(unittest.TestCase):
     """Test rotate/rotate.c against its scalar reference (NEON runs on aarch64 or under qemu)."""
 
     def test_rotation_matches_the_scalar_reference_whole_and_in_strips(self):
-        program = Path(BUILD.name) / 'test_rotate'
-        subprocess.run([CC, '-O2', '-Wall', '-Wextra', '-Werror', str(HERE / 'rotate' / 'test_rotate.c'),
-                        str(HERE / 'rotate' / 'rotate.c'), '-o', str(program)], check=True)
+        program = compile_c('test_rotate', [HERE / 'rotate' / 'test_rotate.c', HERE / 'rotate' / 'rotate.c'], '-O2')
         r = subprocess.run([str(program)], capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r'^\d{4,} cases, 0 failures$')
@@ -574,7 +596,7 @@ class RotateTests(unittest.TestCase):
 
 class CpuPathTests(unittest.TestCase):
     """CPU rotation for large redraws vs GE2D for small damage (gated by RC2FX_TEST_CPU_ROTATE on host)."""
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_failed_medium_token_refreshes_damage_on_reuse(self):
         for direction in ('cw', 'ccw'):
             out, lines = run('partial-' + direction, 'partial', '8',
@@ -592,7 +614,7 @@ class CpuPathTests(unittest.TestCase):
             frames = [line for line in out.splitlines() if line.startswith('frame ')]
             self.assertTrue(all(line.endswith('mismatches 0') for line in frames[3:]), out)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_cpu_regions_keep_offsets_edges_and_alternating_destinations(self):
         for direction in ('cw', 'ccw'):
             out, lines = run('partial-verify-' + direction, 'partial', '40',
@@ -608,7 +630,7 @@ class CpuPathTests(unittest.TestCase):
             self.assertTrue(verifies)
             self.assertTrue(all(v['mismatches'] == '0' for v in verifies))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_notification_redraw_avoids_large_ge2d_jobs_without_losing_pixels(self):
         for direction in ('cw', 'ccw'):
             for event in ('A', 'B'):
@@ -632,7 +654,7 @@ class CpuPathTests(unittest.TestCase):
                     else:
                         self.assertTrue(all(c['kind'] == 'partial' for c in updates), updates)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_fixed_cpu_rotation_is_pixel_identical_in_both_directions(self):
         for direction in ('cw', 'ccw'):
             with self.subTest(direction=direction):
@@ -651,7 +673,7 @@ class CpuPathTests(unittest.TestCase):
                 for removed in ('mode', 'cpu_share', 'split_frames', 'force_full', 'forced_full'):
                     self.assertNotIn(removed, counters)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_verify_covers_the_cpu_path(self):
         out, _ = run('partial-verify-cw', 'partial', '60',
                      extra={'RC2FX_TEST_CPU_ROTATE': '1', 'FAKE_GE2D_DELAY_US': '2000'})
@@ -660,7 +682,7 @@ class CpuPathTests(unittest.TestCase):
         self.assertTrue(verifies)
         self.assertTrue(all(v['mismatches'] == '0' for v in verifies))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_old_setting_files_and_overrides_have_no_effect(self):
         path = Path(BUILD.name) / 'obsolete-screen-setting'
         path.write_text('hardware\\n')
@@ -692,7 +714,7 @@ class CpuPathTests(unittest.TestCase):
         """Per conversion: its result and mismatch count, and the destination's hash."""
         return [line for line in out.splitlines() if line.startswith(('frame ', 'dest_hash '))]
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_the_cpu_path_leaves_the_same_image_as_ge2d_alone(self):
         # Every destination after every conversion, GE2D alone against the CPU
         # path, over meter paints, the captured events, random and clustered
@@ -740,7 +762,7 @@ class CpuPathTests(unittest.TestCase):
                     kinds |= {(c['kind'], c['reason']) for c in converts}
         self.assertLessEqual({('cpu', 'forced'), ('cpu', 'area'), ('cpu', 'medium'), ('partial', '-')}, kinds)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_only_plans_with_a_job_of_32768_pixels_or_more_move_to_the_cpu(self):
         cases = [
             ('100:100:256:128', ('cpu', 'medium', '1', '32768')),               # exactly the threshold
@@ -757,7 +779,7 @@ class CpuPathTests(unittest.TestCase):
                 updates = [f for k, f in lines if k == 'convert'][2:4]
                 self.assertEqual([(c['kind'], c['reason'], c['jobs'], c['cpu_px']) for c in updates], [want] * 2)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_a_failed_selection_on_any_path_is_a_full_frame_with_consistent_counts(self):
         # Clustered paints mix GE2D plans, large redraws on the CPU and full
         # frames, so the selection changes often. Whichever S_SELECTION fails,
@@ -777,7 +799,7 @@ class CpuPathTests(unittest.TestCase):
         # A plan's last job or the CPU path's token job; an extra job.
         self.assertEqual(reasons, {'selection', 'selection-or-qbuf'})
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_the_kill_file_ends_cpu_rotation(self):
         kill = Path(BUILD.name) / 'partial-off'
         kill.unlink(missing_ok=True)
@@ -792,7 +814,7 @@ class CpuPathTests(unittest.TestCase):
         self.assertEqual(converts[:10], [('cpu', 'forced')] * 2 + [('cpu', 'medium')] * 8)
         self.assertEqual(set(converts[10:]), {('full', 'kill')}, 'GE2D full frames, as RØDE converts them')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'x86-64 paint stand-ins')
+    @X86_ONLY
     def test_the_quiet_cpu_path_leaves_the_ge2d_image(self):
         # Quiet mode is how the mixer runs: no convert lines, only counters.
         quiet = {'RC2FX_GUI_PACING_QUIET': '1', 'RC2FX_TEST_COUNTERS_EVERY_MS': '1'}
@@ -825,41 +847,30 @@ class CpuPathTests(unittest.TestCase):
             self.assertNotIn(knob, data)
 
 
-def tool(*names):
-    """The first of these programs that is on PATH, or None."""
-    for name in names:
-        if shutil.which(name):
-            return shutil.which(name)
-    return None
-
-
-ZIG = tool('zig')
-QEMU = tool('qemu-aarch64', 'qemu-aarch64-static')
-A64 = ['-target', 'aarch64-linux-musl', '-mcpu=cortex_a53', '-O2', '-static']
+def plan_run(build, *args, runner=()):
+    """One run of a partial_plan_test build: exit status, the per-conversion
+    lines, the totals, the module's counters line, and all output."""
+    r = subprocess.run([*runner, str(Path(BUILD.name) / f'plan-{build}'), *args], capture_output=True, text=True,
+                       timeout=300)
+    lines = r.stdout.splitlines()
+    frames = [line for line in lines if line.startswith('frame ')]
+    totals = {name: int(value) for line in lines if not line.startswith(('frame ', 'counters '))
+              for name, value in re.findall(r'(\w+) (\d+)', line)}
+    counters = [parse_line(line)[1] for line in lines if line.startswith('counters ')]
+    return r.returncode, frames, totals, counters[-1] if counters else None, r.stdout + r.stderr
 
 
 class ProductionPlanTests(unittest.TestCase):
     """Test gui_partial.c built without RC2FX_PACING_TEST via partial_plan_test.c
     (CPU path always enabled; also runs NEON under qemu-aarch64 when available)."""
 
-    WARN = ['-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function']
-    BUILDS = {'plan3': []}
-
     @classmethod
     def setUpClass(cls):
-        for name, flags in cls.BUILDS.items():
-            subprocess.run([CC, *cls.WARN, *flags, str(HERE / 'partial_plan_test.c'),
-                            '-o', str(Path(BUILD.name) / f'plan-{name}')], check=True)
+        build_plan('plan3')
 
     def plan(self, build, *args, runner=()):
-        """One run: exit status, the per-conversion lines, and the totals."""
-        r = subprocess.run([*runner, str(Path(BUILD.name) / f'plan-{build}'), *args], capture_output=True, text=True,
-                           timeout=300)
-        lines = r.stdout.splitlines()
-        frames = [line for line in lines if line.startswith('frame ')]
-        totals = {name: int(value) for line in lines if not line.startswith(('frame ', 'counters '))
-                  for name, value in re.findall(r'(\w+) (\d+)', line)}
-        return r.returncode, frames, totals, r.stdout + r.stderr
+        status, frames, totals, _, out = plan_run(build, *args, runner=runner)
+        return status, frames, totals, out
 
     def test_every_conversion_leaves_the_rotated_source(self):
         for direction, seed in (('cw', '1'), ('ccw', '2'), ('cw', '3'), ('ccw', '4')):
@@ -891,15 +902,12 @@ class ProductionPlanTests(unittest.TestCase):
                         failed_tokens += sum('result -1 kind cpu' in line for line in frames)
         self.assertGreaterEqual(failed_tokens, 4, 'CPU conversions met a failed token QBUF')
 
-    @unittest.skipIf(platform.machine() == 'aarch64', 'this host runs the NEON path in the tests above')
-    @unittest.skipUnless(ZIG and QEMU, 'the NEON path needs zig and qemu-aarch64 (or an aarch64 host)')
+    @needs_qemu
     def test_the_neon_rotation_under_qemu_gives_the_same_images(self):
         # The mixer's CPU (Cortex-A53). The planner and the strip loop are the
         # real ones; rotate_rect is the NEON kernel with its scalar edges.
         qemu = (QEMU, '-cpu', 'cortex-a53')
-        program = Path(BUILD.name) / 'plan-plan3-aarch64'
-        subprocess.run([ZIG, 'cc', *A64, *self.WARN[1:], str(HERE / 'partial_plan_test.c'),
-                        '-o', str(program)], check=True)
+        build_plan('plan3-aarch64', aarch64=True)
         for direction, seed in (('cw', '1'), ('ccw', '2')):
             with self.subTest(direction=direction, seed=seed):
                 status, frames, totals, out = self.plan('plan3-aarch64', direction, seed, '250', runner=qemu)
@@ -913,9 +921,8 @@ class ProductionPlanTests(unittest.TestCase):
                 status, frames, totals, out = self.plan('plan3-aarch64', direction, '7', '80', what, nth, runner=qemu)
                 self.assertEqual(status, 0, out)
         # rotate_rect against its scalar reference, whole and in strips.
-        rotate = Path(BUILD.name) / 'test_rotate-aarch64'
-        subprocess.run([ZIG, 'cc', *A64, '-Wall', '-Wextra', '-Werror', str(HERE / 'rotate' / 'test_rotate.c'),
-                        str(HERE / 'rotate' / 'rotate.c'), '-o', str(rotate)], check=True)
+        rotate = compile_c('test_rotate-aarch64', [HERE / 'rotate' / 'test_rotate.c', HERE / 'rotate' / 'rotate.c'],
+                           *A64, compiler=(ZIG, 'cc'))
         r = subprocess.run([*qemu, str(rotate)], capture_output=True, text=True, timeout=600)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r'^\d{4,} cases, 0 failures$')
@@ -924,7 +931,7 @@ class ProductionPlanTests(unittest.TestCase):
 class QuietAndMergeTests(unittest.TestCase):
     QUIET = {'RC2FX_GUI_PACING_QUIET': '1'}
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_quiet_partial_logs_start_first_pass_and_periodic_counters_only(self):
         # 200 conversions with 6 ms jobs: more than 2 s, counters every 500 ms.
         out, _ = run('partial-cw', 'partial', '200',
@@ -947,7 +954,7 @@ class QuietAndMergeTests(unittest.TestCase):
         times = [int(f['t']) for k, f in lines if k == 'counters']
         self.assertTrue(all(b - a >= 500_000_000 for a, b in zip(times, times[1:])), 'at most one per interval')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_periodic_counters_include_effective_planner_settings(self):
         cases = [
             ({}, 'plan3', '20000', '8000000'),
@@ -964,12 +971,12 @@ class QuietAndMergeTests(unittest.TestCase):
                 self.assertTrue(all((c['planner_policy'], c['merge_px'], c['budget_ns']) ==
                                     (policy, pixels, budget) for c in counters))
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_quiet_counters_default_to_one_per_minute(self):
         run('partial-cw', 'partial', '40', extra=self.QUIET)
         self.assertEqual([k for k, _ in log_lines() if k != 'sha-ok'], ['start', 'first-pass'])
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_quiet_paints_format_nothing_and_still_feed_the_conversion(self):
         # Paints with rectangles outside the source, a long list and rejected
         # lists: quiet mode writes no paint or dirty- line for any of them.
@@ -988,7 +995,7 @@ class QuietAndMergeTests(unittest.TestCase):
         self.assertEqual(last['full_by_reason'], 'forced:4', 'two at the start, two after the rejected paint')
         self.assertGreater(int(last['partial']), 0)
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_quiet_logs_the_disable_once_with_its_reason(self):
         kill = Path(BUILD.name) / 'partial-off'
         kill.unlink(missing_ok=True)
@@ -1007,7 +1014,7 @@ class QuietAndMergeTests(unittest.TestCase):
         self.assertEqual(last['disabled'], 'kill')
         self.assertIn('kill:', last['full_by_reason'])
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_quiet_logs_each_transient_fallback_and_job_failure(self):
         run('partial-cw', 'partial', '10', extra=dict(self.QUIET, FAKE_GE2D_FAIL_QBUF='3'))
         events = [(k, f['reason']) for k, f in log_lines() if k in ('fallback', 'disable')]
@@ -1022,7 +1029,7 @@ class QuietAndMergeTests(unittest.TestCase):
         events = [(k, f['reason']) for k, f in log_lines() if k in ('fallback', 'disable')]
         self.assertEqual(events, [('disable', 'job-failed')], 'the disable once, then no fallback lines')
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_quiet_verify_failure_is_one_disable_line(self):
         run('partial-verify-ccw', 'partial', '12', extra=dict(self.QUIET, FAKE_GE2D_DIR='cw'))
         lines = log_lines()
@@ -1046,7 +1053,7 @@ class QuietAndMergeTests(unittest.TestCase):
                 self.assertEqual(kinds.count('frame'), 4)
                 self.assertEqual(kinds[-2:], ['exit', 'dirty-exit'])
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_the_merge_override_is_used_and_shown_on_the_start_line(self):
         for value, effective in (('0', '0'), ('1000000', '1000000'), ('0001234', '1234'), ('80000', '80000')):
             with self.subTest(value):
@@ -1057,7 +1064,7 @@ class QuietAndMergeTests(unittest.TestCase):
                 self.assertEqual((start['merge_px'], start['quiet']), (effective, '0'))
                 self.assertFalse([k for k, _ in lines if k == 'merge-px-invalid'])
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_the_merge_override_changes_the_jobs(self):
         # merge 0: only overlapping rectangles merge, so more jobs than the default.
         jobs = {}
@@ -1066,7 +1073,7 @@ class QuietAndMergeTests(unittest.TestCase):
             jobs[value] = sum(int(f['jobs']) for k, f in log_lines() if k == 'convert' and f['kind'] == 'partial')
         self.assertGreater(jobs['0'], jobs['1000000'])
 
-    @unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+    @X86_ONLY
     def test_an_invalid_merge_override_keeps_the_default_and_is_logged_once(self):
         for value, shown in (('1000001', '1000001'), ('-1', '-1'), ('', '-'), ('12a', '12a'), (' 5', '?5'),
                              ('99999999999999999999', '99999999999999999999'), ('1e5', '1e5'), ('+5', '+5'),
@@ -1228,7 +1235,7 @@ AT_EXIT = {'RC2FX_TEST_COUNTERS_AT_EXIT': '1'}
 QUIET_EXIT = dict(AT_EXIT, RC2FX_GUI_PACING_QUIET='1')
 
 
-@unittest.skipUnless(platform.machine() == 'x86_64', 'the paint frames are x86-64 stand-ins')
+@X86_ONLY
 class CounterTests(unittest.TestCase):
     """Verify counters-line fields in quiet mode; RC2FX_TEST_COUNTERS_AT_EXIT
     emits a final line on exit for exact comparison against fake GE2D totals."""
@@ -1421,7 +1428,7 @@ class CounterTests(unittest.TestCase):
         lines = [line for line in text.splitlines() if line.startswith('counters ')]
         self.assertIn(len(lines), (6, 7), 'every counters line was written: none was too long to write')
         for line in lines:
-            fields = dict(f.split('=', 1) for f in line.split()[1:])
+            _, fields = parse_line(line)
             self.assertEqual(tuple(fields), OLD_FIELDS + NEW_FIELDS)
             # Counters print as 20 digits, times (ns / 1000) as 17, and every reason is listed.
             huge = [key for key, value in fields.items() if re.fullmatch(r'1844674\d{13}', value)]
@@ -1447,20 +1454,6 @@ class CounterTests(unittest.TestCase):
             lengths.add(longest)
         self.assertEqual(fields['disabled'], 'kill', 'the last line, after the kill file was seen')
         self.assertLess(max(lengths), size // 2 + 256, f'about half the buffer at most: {sorted(lengths)}')
-        CounterTests.longest = sorted(lengths)
-
-
-def plan_run(build, *args, runner=()):
-    """One run of a partial_plan_test build: exit status, the per-conversion
-    lines, the totals, the module's counters line, and all output."""
-    r = subprocess.run([*runner, str(Path(BUILD.name) / f'plan-{build}'), *args], capture_output=True, text=True,
-                       timeout=300)
-    lines = r.stdout.splitlines()
-    frames = [line for line in lines if line.startswith('frame ')]
-    totals = {name: int(value) for line in lines if not line.startswith(('frame ', 'counters '))
-              for name, value in re.findall(r'(\w+) (\d+)', line)}
-    counters = [dict(f.split('=', 1) for f in line.split()[1:]) for line in lines if line.startswith('counters ')]
-    return r.returncode, frames, totals, counters[-1] if counters else None, r.stdout + r.stderr
 
 
 class ProductionCounterTests(unittest.TestCase):
@@ -1472,9 +1465,7 @@ class ProductionCounterTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        for name, flags in ProductionPlanTests.BUILDS.items():
-            subprocess.run([CC, *ProductionPlanTests.WARN, *flags, str(HERE / 'partial_plan_test.c'),
-                            '-o', str(Path(BUILD.name) / f'plan-{name}')], check=True)
+        build_plan('plan3')
 
     def check(self, totals, c, frames, clean=True):
         check_counters(self, c)
@@ -1562,14 +1553,11 @@ class ProductionCounterTests(unittest.TestCase):
         for knob in (b'RC2FX_TEST_COUNTERS_HUGE', b'RC2FX_TEST_COUNTERS_AT_EXIT'):
             self.assertNotIn(knob, data)
 
-    @unittest.skipIf(platform.machine() == 'aarch64', 'this host runs the aarch64 build in the tests above')
-    @unittest.skipUnless(ZIG and QEMU, 'the aarch64 build needs zig and qemu-aarch64 (or an aarch64 host)')
+    @needs_qemu
     def test_the_counts_under_qemu_are_those_of_the_host_run(self):
         # The mixer's CPU (Cortex-A53), with the NEON rotation.
         qemu = (QEMU, '-cpu', 'cortex-a53')
-        program = Path(BUILD.name) / 'plan-plan3-aarch64'
-        subprocess.run([ZIG, 'cc', *A64, *ProductionPlanTests.WARN[1:],
-                        str(HERE / 'partial_plan_test.c'), '-o', str(program)], check=True)
+        build_plan('plan3-aarch64', aarch64=True)
         for direction, seed in (('cw', '1'), ('ccw', '2')):
             with self.subTest(direction=direction, seed=seed):
                 status, frames, totals, c, out = plan_run('plan3-aarch64', direction, seed, '250', runner=qemu)

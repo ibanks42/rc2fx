@@ -8,15 +8,10 @@
 #   rc2fx.sh stop                     stop RC2FX; the launcher restarts stock audio
 #   rc2fx.sh status                   show what is running
 #   rc2fx.sh logs                     print the current and last-exit logs
-#   rc2fx.sh arm-power-recovery       explicitly arm one-shot power-on after
-#                                    outlet recovery; never part of startup
 #   rc2fx.sh launch                   entry used by /usr/sbin/rc_audio_mixer
 #   rc2fx.sh gui-launch               entry used by /usr/sbin/rc_gui_juce: the
 #                                    stock GUI, with the partial-conversion
 #                                    module when its checks pass
-#   rc2fx.sh developer-ssh status|enable|disable
-#                                    RC2FX's own developer SSH key; called by
-#                                    rc2fxd for the desktop app over USB 1
 #   rc2fx.sh update-commit ID         restart, verify and commit (or roll back)
 #                                    a signed in-place update; started
 #                                    detached by rc2fxd, which it outlives
@@ -26,9 +21,6 @@
 #                                    attach a temporary drive to RØDE's USB
 #                                    slot for in-place updates; called by rc2fxd
 #
-# developer-ssh toggles one marked line in root's authorized_keys.
-# arm-power-recovery sets the bootloader's one-shot power flag (never called at
-# startup; developer tools arm and verify it before running).
 # image-check repairs damaged RØDE files only from a hash-matched copy on the
 # other root partition.
 # /usr/sbin/rc_audio_mixer shadows /usr/bin/rc_audio_mixer in audio-start.sh so
@@ -43,9 +35,13 @@ rc2fx_build=development
 home=${RC2FX_HOME:-$(cd "$(dirname "$0")" && pwd)}
 data=${RC2FX_DATA:-/opt/rc2fx/data}
 logs=${RC2FX_LOGS:-/opt/rc2fx/logs}
-run=/run/rc2fx
+run=${RC2FX_RUN:-/run/rc2fx}
 # Per-boot state shared by every launch: a stock request and early exits.
-boot=/run/rc2fx-boot
+boot=${RC2FX_BOOT:-/run/rc2fx-boot}
+proc=${RC2FX_PROC:-/proc}
+hidg0=${RC2FX_HIDG0:-/dev/hidg0}
+first_boot=${RC2FX_FIRST_BOOT:-/usr/bin/first-boot}
+production_boot=${RC2FX_PRODUCTION_BOOT:-/usr/bin/production-boot}
 stock_mixer=${RC2FX_STOCK_MIXER:-/usr/bin/rc_audio_mixer}
 audio_shim=${RC2FX_AUDIO_SHIM:-/usr/sbin/rc_audio_mixer}
 # The display: display-start.sh starts rc_gui_juce by name with /usr/sbin
@@ -75,12 +71,23 @@ mixer_settle=60
 
 stamp() { date -u +%FT%TZ; }
 say() { printf '%s %s\n' "$(stamp)" "$*"; }
-start_time() { local record rest; local -a fields=(); IFS= read -r record 2>/dev/null < "/proc/$1/stat" || return 1; rest=${record##*) }; read -r -a fields <<< "$rest"; test "${#fields[@]}" -gt 19 || return 1; printf '%s\n' "${fields[19]}"; }
-alive() { local record rest; IFS= read -r record 2>/dev/null < "/proc/$1/stat" || return 1; rest=${record##*) }; test "${rest%% *}" != Z; }
-uptime_s() { cut -d. -f1 /proc/uptime; }
+start_time() { local record rest; local -a fields=(); IFS= read -r record 2>/dev/null < "$proc/$1/stat" || return 1; rest=${record##*) }; read -r -a fields <<< "$rest"; test "${#fields[@]}" -gt 19 || return 1; printf '%s\n' "${fields[19]}"; }
+alive() { local record rest; IFS= read -r record 2>/dev/null < "$proc/$1/stat" || return 1; rest=${record##*) }; test "${rest%% *}" != Z; }
+uptime_s() { cut -d. -f1 "$proc/uptime"; }
 supervisor() { local pid; pid=$(cat "$run/supervisor.pid" 2>/dev/null) && alive "$pid" && printf '%s\n' "$pid"; }
 # The bundle the shim starts next: a build in RAM wins over the installed one.
 bundle_home() { local d; for d in /run/rc2fx-dev /opt/rc2fx; do test -f "$d/rc2fx.sh" && { printf '%s\n' "$d"; return 0; }; done; return 1; }
+file_sha256() { sha256sum < "$1" | cut -d' ' -f1; }
+manifest_sha256() { awk -v n="$2" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$1"; }
+# Appends paths failing checksum verification under $1 to caller's `failed` array.
+manifest_check_failed() {
+  local root=$1 manifest=$2 line name; shift 2
+  while IFS= read -r line; do
+    name=${line%: FAILED*}
+    if test "$name" != "$line"; then failed+=("$name"); fi
+  done < <(cd "$root" && "$@" -c --quiet "$manifest" 2>/dev/null || true)
+  return 0
+}
 
 # Keep RODE's HID descriptor intact up to its final End Collection and add
 # RC2FX output report 5 / input report 6 inside that same collection. A second
@@ -91,7 +98,7 @@ bundle_home() { local d; for d in /run/rc2fx-dev /opt/rc2fx; do test -f "$d/rc2f
 # Lift RT throttling while RC2FX runs (restored on exit): hitting the 950 ms/s
 # kernel cap previously stalled CPU 0's USB gadget IRQ thread and wedged USB 1
 # until reboot. The suppression worker runs below all RØDE RT threads.
-rt_throttle=/proc/sys/kernel/sched_rt_runtime_us
+rt_throttle=$proc/sys/kernel/sched_rt_runtime_us
 rt_throttle_default=950000
 relax_rt_throttle() {
   test -w "$rt_throttle" || { say 'Real-time throttle: cannot write the sysctl, left as is'; return 0; }
@@ -136,9 +143,9 @@ usb_quiesce() {
   for ((n=0; n<40; n++)); do
     busy=0
     if test -n "$controller"; then
-      for fd in /proc/"$controller"/fd/*; do
+      for fd in "$proc/$controller"/fd/*; do
         target=$(readlink "$fd" 2>/dev/null) || continue
-        case "$target" in /dev/hidg0|'/dev/hidg0 (deleted)') busy=1;; esac
+        case "$target" in "$hidg0"|"$hidg0 (deleted)") busy=1;; esac
       done
     fi
     test "$busy" != 0 || return 0
@@ -153,22 +160,22 @@ usb_quiesce() {
 # the devtmpfs node before a full mixer restart (waiting briefly for transient
 # `sh -c` children); existing fds keep working and gadget setup recreates it.
 retire_usb_node() {
-  test -e /dev/hidg0 || return 0
-  if test -L /dev/hidg0 || ! test -c /dev/hidg0; then
+  test -e "$hidg0" || return 0
+  if test -L "$hidg0" || ! test -c "$hidg0"; then
     say 'Refusing restart: /dev/hidg0 is not the expected character device' >&2
     return 1
   fi
   local fd target owner permitted pid foreign comm n
   for ((n=0; n<30; n++)); do
     foreign=
-    for fd in /proc/[0-9]*/fd/*; do
+    for fd in "$proc"/[0-9]*/fd/*; do
       target=$(readlink "$fd" 2>/dev/null) || continue
-      test "$target" = /dev/hidg0 || continue
-      owner=${fd#/proc/}; owner=${owner%%/*}
+      test "$target" = "$hidg0" || continue
+      owner=${fd#"$proc"/}; owner=${owner%%/*}
       permitted=0
       for pid in "$@"; do test "$owner" != "$pid" || permitted=1; done
       test "$permitted" = 1 && continue
-      comm=$(cat "/proc/$owner/comm" 2>/dev/null || true)
+      comm=$(cat "$proc/$owner/comm" 2>/dev/null || true)
       foreign="$owner${comm:+ $comm}"
     done
     test -n "$foreign" || break
@@ -178,7 +185,7 @@ retire_usb_node() {
     say "Refusing restart: another process ($foreign) holds the USB HID device" >&2
     return 1
   fi
-  rm -- /dev/hidg0
+  rm -- "$hidg0"
   # The node is gone; a log write that fails must not refuse the restart.
   say 'Retired old USB HID node before mixer restart' || true
 }
@@ -193,16 +200,16 @@ launched_mixer() {
     found=$candidate
   done
   test -n "$found" || return 1
-  test "$(readlink "/proc/$found/exe")" = "$stock_mixer" || return 1
-  parent=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$found/status")
+  test "$(readlink "$proc/$found/exe")" = "$stock_mixer" || return 1
+  parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$proc/$found/status")
   # An RC2FX mixer is the child of its launch shell, itself the launcher's.
-  if grep -qa 'rc2fx.sh' "/proc/$parent/cmdline" 2>/dev/null; then
-    parent=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$parent/status")
+  if grep -qa 'rc2fx.sh' "$proc/$parent/cmdline" 2>/dev/null; then
+    parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$proc/$parent/status")
   fi
-  grep -qa 'audio-start.sh' "/proc/$parent/cmdline" || return 1
+  grep -qa 'audio-start.sh' "$proc/$parent/cmdline" || return 1
   # The launcher restarts USB, JACK and the mixer as one sequence, then waits
   # on the mixer. A mixer it is not waiting on is not one it would restart.
-  test "$(cat "/proc/$parent/wchan" 2>/dev/null)" = do_wait || return 1
+  test "$(cat "$proc/$parent/wchan" 2>/dev/null)" = do_wait || return 1
   printf '%s\n' "$found"
 }
 
@@ -212,17 +219,37 @@ mixer_age() { echo $(( $(uptime_s) - $(start_time "$1") / $(getconf CLK_TCK) ));
 # needs it: the PID can have gone to another process since it last looked.
 alive_as() { alive "$1" && { test -z "${2:-}" || test "$(start_time "$1" 2>/dev/null)" = "$2"; }; }
 
-# No wait after the kill: a blocked reap once left stock audio paused. Zombies
-# are reaped by their parent.
+# Stop $1 (only if its start time still matches $2, when given): TERM, then KILL.
+# With $3=strict, require a matching start time up front (counting a matching
+# zombie as stopped), fail if TERM fails, wait 20 iterations after KILL instead
+# of 30, and stay quiet on timeout (caller logs its own failure). No wait after
+# the kill: a blocked reap once left stock audio paused. Zombies are reaped by
+# their parent.
 stop_owned() {
-  local target=$1 started=${2:-}
-  alive_as "$target" "$started" || return 0
-  kill -TERM "$target" 2>/dev/null || true
+  local target=$1 started=${2:-} mode=${3:-} n kill_wait=30
+  if test "$mode" = strict; then
+    kill_wait=20
+    test -n "$started" && test "$(start_time "$target" 2>/dev/null)" = "$started" || return 1
+    alive "$target" || return 0
+    kill -TERM "$target" 2>/dev/null || return 1
+  else
+    alive_as "$target" "$started" || return 0
+    kill -TERM "$target" 2>/dev/null || true
+  fi
   for ((n=0; n<50; n++)); do alive_as "$target" "$started" || return 0; sleep 0.1; done
   alive_as "$target" "$started" || return 0
   kill -KILL "$target" 2>/dev/null || true
-  for ((n=0; n<30; n++)); do alive_as "$target" "$started" || return 0; sleep 0.1; done
-  say "Process $target would not exit; power-cycle the mixer if audio does not return"
+  for ((n=0; n<kill_wait; n++)); do alive_as "$target" "$started" || return 0; sleep 0.1; done
+  test "$mode" = strict || say "Process $target would not exit; power-cycle the mixer if audio does not return"
+  return 1
+}
+
+stop_supervisor() {
+  local pid=$1 n
+  touch "$run/stop" || return
+  for ((n=0; n<120; n++)); do alive "$pid" || return 0; sleep 0.25; done
+  alive "$pid" || return 0
+  echo "RC2FX supervisor $pid did not stop" >&2
   return 1
 }
 
@@ -232,7 +259,7 @@ stop_owned() {
 # gadget, so a handback retires the node first.
 gadget_kept() {
   # Not cmp -s: it trusts file sizes, and configfs reports none.
-  test -c /dev/hidg0 && ! test -L /dev/hidg0 \
+  test -c "$hidg0" && ! test -L "$hidg0" \
     && test "$(cat /sys/kernel/config/usb_gadget/g124/UDC 2>/dev/null)" = ff400000.usb \
     && cmp /sys/kernel/config/usb_gadget/g124/functions/hid.usb0/report_desc "$run/usb-report.bin" > /dev/null 2>&1
 }
@@ -263,7 +290,7 @@ wait_for_launch() {
       return 0
     fi
     if mixer=$(launched_mixer) && test "$mixer" != "$old" && test "$(mixer_age "$mixer")" -ge 3 \
-      && ! grep -qa 'LD_AUDIT=' "/proc/$mixer/environ"; then
+      && ! grep -qa 'LD_AUDIT=' "$proc/$mixer/environ"; then
       seen=$(cat "$boot/seen" 2>/dev/null || echo -1)
       if test "$seen" -ge $(( $(start_time "$mixer") / $(getconf CLK_TCK) - 1 )); then
         echo "RC2FX fell back to stock: $(tail -n 1 "$logs/rc2fx.log" 2>/dev/null)" >&2
@@ -284,7 +311,7 @@ wait_for_launch() {
 # librc2fx_jackerr.so. Restores exact thread cpusets, CPU affinities, PCM fds,
 # and audio IRQs; falls back to plain jackd on any mismatch. Never reruns
 # audio-start.sh (its top level can flash controllers or touch boot settings).
-blackbox_proc=/proc
+blackbox_proc=$proc
 blackbox_cpuset=/sys/fs/cgroup/cpuset
 blackbox_jackd=/usr/bin/jackd
 blackbox_callme=/etc/init.d/callme-t-service
@@ -379,16 +406,6 @@ bb_irq_restore() {
 # Seams for moving one thread; tests replace them.
 bb_move_task() { printf '%s\n' "$1" > "$blackbox_cpuset$2/tasks"; }
 bb_set_cpus() { taskset -p -c "$2" "$1" > /dev/null; }
-# Stop $1 if it is still the process that started at $2: TERM, then KILL.
-bb_stop() {
-  local pid=$1 started=$2 n
-  test "$(start_time "$pid")" = "$started" || return 1
-  kill -TERM "$pid" 2>/dev/null || return 1
-  for ((n=0; n<50; n++)); do alive "$pid" || return 0; sleep .1; done
-  test "$(start_time "$pid" 2>/dev/null)" = "$started" && kill -KILL "$pid" 2>/dev/null
-  for ((n=0; n<20; n++)); do alive "$pid" || return 0; sleep .1; done
-  return 1
-}
 # Start jackd as restartJack does: same argv/environment, from the root
 # cpuset with its CPUs, ordinary policy; $1 is the log, $2 a file for its
 # birth token ("pid start-time", taken at once), the rest extra environment
@@ -408,8 +425,6 @@ bb_start_server() {
   printf '%s %s\n' "$pid" "$started" > "$token"
   printf '%s %s\n' "$pid" "$started"
 }
-# Whether the server with birth token "$1 $2" is still that process.
-bb_alive_as() { alive "$1" && test "$(start_time "$1" 2>/dev/null)" = "$2"; }
 # Wait (bounded) until $1 has as many threads and the same PCM devices as the
 # old server, then give each thread its role's cpuset and CPUs and require
 # the old inventory exactly.
@@ -419,7 +434,7 @@ bb_ready_and_placed() {
   # Ready: as many threads with the same roles (policies come from -P and
   # are compared, never set), and the same PCM devices open.
   for ((n=0; n<50; n++)); do
-    bb_alive_as "$pid" "$started" || return 1
+    alive_as "$pid" "$started" || return 1
     if test "$(bb_tasks "$pid")" = "$bb_task_count" && test "$(bb_pcms "$pid")" = "$bb_pcm_list" \
        && test "$(bb_roles "$(bb_inventory "$pid")")" = "$roles"; then break; fi
     sleep .1
@@ -440,7 +455,7 @@ bb_ready_and_placed() {
     bb_set_cpus "$tid" "${want#*|}" || return 1
   done
   for ((n=0; n<20; n++)); do
-    bb_alive_as "$pid" "$started" || return 1
+    alive_as "$pid" "$started" || return 1
     test "$(bb_inventory "$pid")" = "$bb_inventory_old" && return 0
     sleep .1
   done
@@ -556,7 +571,7 @@ bb_replace_jack() {
   fi
   printf '%s\0' "${bb_argv[@]}" > "$dir/original-jack.argv"
   say "$bb_label: replacing jackd $pid: $(tr '\n' ';' <<< "$bb_inventory_old") pcms $(tr '\n' ' ' <<< "$bb_pcm_list")" >> "$logs/rc2fx.log"
-  if ! bb_stop "$pid" "$started"; then
+  if ! stop_owned "$pid" "$started" strict; then
     bb_fail "the old jackd ($pid) did not stop"
     "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
     return 1
@@ -570,8 +585,8 @@ bb_replace_jack() {
      || ! bb_irq_restore "$bb_irq_old"; then
     bb_fail "the logging jackd (${new_pid:-none}) was not ready, placed, recording or with the audio IRQs as before ($(bb_irq_placement | tr '\n' ';'))"
     # Only the process with this birth token; a pid reused since is not ours.
-    if test -n "$replacement" && bb_alive_as "$new_pid" "$new_started"; then
-      bb_stop "$new_pid" "$new_started" || true
+    if test -n "$replacement" && alive_as "$new_pid" "$new_started"; then
+      stop_owned "$new_pid" "$new_started" strict || true
     fi
     bb_fallback
     { bb_irq_placement; bb_irq_effective; } > "$dir/after-jack.irqs"
@@ -581,7 +596,7 @@ bb_replace_jack() {
   printf '%s\n' "$ring_dir" > "$dir/jackerr-dir"
   "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
   say "$bb_label running (pid $new_pid, ring $ring_dir)" >> "$logs/rc2fx.log"
-  bb_alive_as "$new_pid" "$new_started"
+  alive_as "$new_pid" "$new_started"
 }
 # Whether jackd $1 is the server started from attempt directory $3 with
 # library $2 and seen ready there: same birth token (pid and start time, so a
@@ -710,11 +725,10 @@ recorder_status_line() {
 # What the supervisor starts rc2fxd with, into the caller's `controller` array.
 # GET api/v1/version reports the installed release manifest and the profile
 # launch() selected after check-device verified the stock mixer; a bundle
-# without the manifest reports its version as unknown. Developer SSH over USB 1
-# is handled by this script's developer-ssh.
+# without the manifest reports its version as unknown.
 controller_arguments() {
   controller=(--data "$data" --native-socket "$run/control.sock" --usb-socket "$run/usb.sock"
-    --developer-ssh "$home/rc2fx.sh")
+    --developer-ssh)
   if test -n "${RC2FX_UI_SOCKET:-}"; then controller+=(--ui-socket "$run/ui.sock"); fi
   if test -r "$show"; then controller+=(--stock-config "$show"); fi
   if test -f "$home/mixer-release.json"; then controller+=(--release "$home/mixer-release.json"); fi
@@ -755,7 +769,7 @@ launch() {
   # profile_id and show are read by controller_arguments.
   local why= selected n profile_id show
   if test -e /opt/rc2fx/disabled; then why='autostart is disabled'
-  elif test -e /usr/bin/first-boot; then why='first boot after a firmware update'
+  elif test -e "$first_boot"; then why='first boot after a firmware update'
   elif test -e "$boot/stock"; then why="$(cat "$boot/stock")"
   elif ! (cd "$home" && sha256sum -c SHA256SUMS > /dev/null 2>&1); then why="binaries in $home fail their checksums"
   elif ! selected=$("$home/rc2fx-firmware" check-device "$home/firmware-profiles.json" "$stock_mixer" /usr/bin/audio-start.sh 2>> "$logs/rc2fx.log"); then why='this firmware is not a supported profile'
@@ -875,9 +889,7 @@ start() {
     else
       retire_usb_node "$mixer" "$(pgrep -P "$old" -x rc2fxd || true)" || return 1
     fi
-    touch "$run/stop"
-    for ((n=0; n<120; n++)); do alive "$old" || break; sleep 0.25; done
-    alive "$old" && { echo "RC2FX supervisor $old did not stop" >&2; return 1; }
+    stop_supervisor "$old" || return 1
     wait_for_launch "$wait" "$mixer"
     return
   fi
@@ -896,7 +908,7 @@ start() {
 }
 
 stop() {
-  local pid native controller n
+  local pid native controller
   mkdir -p -m 700 "$boot"
   echo 'stopped by rc2fx.sh stop' > "$boot/stock"
   if ! pid=$(supervisor); then echo 'RC2FX is not running'; return 0; fi
@@ -905,9 +917,7 @@ stop() {
   native=$(cat "$run/native.pid" 2>/dev/null || true)
   controller=$(pgrep -P "$pid" -x rc2fxd || true)
   retire_usb_node "$native" "$controller" || return 1
-  touch "$run/stop"
-  for ((n=0; n<120; n++)); do alive "$pid" || break; sleep 0.25; done
-  if alive "$pid"; then echo "RC2FX supervisor $pid did not stop" >&2; return 1; fi
+  stop_supervisor "$pid" || return 1
   if test -n "$native" && alive "$native"; then
     echo "RC2FX mixer $native is still running; see $logs/rc2fx.log" >&2
     return 1
@@ -920,7 +930,7 @@ status() {
   if pid=$(supervisor); then
     native=$(cat "$run/native.pid" 2>/dev/null || true)
     echo "RC2FX running from $(cat "$run/home" 2>/dev/null) (supervisor $pid, mixer ${native:-starting})"
-    if test -n "$native" && alive "$native"; then grep -E '^(Threads|VmRSS):' "/proc/$native/status"; fi
+    if test -n "$native" && alive "$native"; then grep -E '^(Threads|VmRSS):' "$proc/$native/status"; fi
   else
     echo 'RC2FX is not running; stock audio is in charge'
   fi
@@ -979,9 +989,6 @@ supervise_exit() {
 # own log, so a device log shows every reason without a diagnostic run.
 gui_say() { printf '%s %s\n' "$(stamp)" "$*" >> "$gui_home/gui.log"; }
 
-# The bundle whose module the GUI may use: a build in RAM wins, as for audio.
-gui_bundle() { bundle_home; }
-
 # Records this start; three within 30 s is a crash loop (the display loop
 # restarts a dead GUI after about three seconds), so the module is dropped
 # for the rest of the boot. Prints the number of starts in the window.
@@ -1016,7 +1023,7 @@ gui_mixer_in_charge() {
   read -r pid < "$run/native.pid" 2>/dev/null || return 1
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   local exe
-  exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || return 1
+  exe=$(readlink "$proc/$pid/exe" 2>/dev/null) || return 1
   test "$exe" = "$stock_mixer"
 }
 
@@ -1028,7 +1035,7 @@ gui_expects_rc2fx() {
   local window=${RC2FX_GUI_BOOT_WINDOW:-180}
   test -x "$audio_shim" || return 1
   test ! -e /opt/rc2fx/disabled || return 1
-  test ! -e /usr/bin/first-boot || return 1
+  test ! -e "$first_boot" || return 1
   local up
   up=$(uptime_s) || up=0
   [[ "$up" =~ ^[0-9]+$ ]] || up=0
@@ -1084,8 +1091,8 @@ gui_launch() {
   local why= module= selected= diagnostics=quiet
   local disabled="$data/gui-partial-disabled"
   # 1. The mixer is not fully booted yet.
-  if test -e /usr/bin/first-boot; then why='first boot after a firmware update'
-  elif test -e /usr/bin/production-boot; then why='production boot'
+  if test -e "$first_boot"; then why='first boot after a firmware update'
+  elif test -e "$production_boot"; then why='production boot'
   # 2. Switched off, by settings or for this boot (the crash guard's file).
   elif test -e "$disabled"; then why='partial conversion is disabled in settings'
   elif test -e "$gui_home/off"; then why='partial conversion is off for this boot'
@@ -1094,7 +1101,7 @@ gui_launch() {
   elif ! printf '%s  %s\n' "$gui_sha" "$stock_gui" | sha256sum -c - >/dev/null 2>&1; then
     why='this GUI is not the qualified one'
   # 4. The bundle's module, checked by the bundle's own manifest.
-  elif ! selected=$(gui_bundle) || test ! -f "$selected/librc2fx_gui.so"; then
+  elif ! selected=$(bundle_home) || test ! -f "$selected/librc2fx_gui.so"; then
     why='no bundle module is installed'
   elif ! (cd "$selected" && grep -E '  librc2fx_gui\.so$' SHA256SUMS | sha256sum -c - >/dev/null 2>&1); then
     why="the bundle module fails its checksum"
@@ -1108,9 +1115,6 @@ gui_launch() {
     chmod 600 "$gui_home/stock"
     why="$(cat "$gui_home/stock")"
   fi
-  # No check for a running display experiment: ui_preview SIGSTOPs
-  # display-start.sh for the whole session, so its loop cannot start a GUI
-  # (and so cannot reach this shim) while an experiment owns the screen.
   if test -n "$why"; then
     gui_say "Stock GUI started: $why"
     gui_wait_for_mixer
@@ -1151,8 +1155,8 @@ gui_status() {
     echo 'GUI: stock until the next boot (partial conversion is off)'
   elif test -e "$gui_home/stock"; then
     echo "GUI: stock until the next boot ($(cat "$gui_home/stock"))"
-  elif module=$(gui_bundle) && test -f "$module/librc2fx_gui.so"; then
-    profile=$(sha256sum "$module/librc2fx_gui.so" 2>/dev/null | cut -c1-12)
+  elif module=$(bundle_home) && test -f "$module/librc2fx_gui.so"; then
+    profile=$(file_sha256 "$module/librc2fx_gui.so" 2>/dev/null | cut -c1-12)
     echo "GUI: partial conversion, module ${profile:-unknown} from $module"
   else
     echo 'GUI: stock (no bundle module is installed)'
@@ -1162,164 +1166,6 @@ gui_status() {
   test -n "$counters" && echo "GUI counters: $counters"
   test -f "$gui_home/gui.log" && { echo '--- GUI'; tail -n 3 "$gui_home/gui.log"; }
   return 0
-}
-
-# Developer SSH access without reflashing. Manages a single line marked with
-# $ssh_marker in root's authorized_keys while preserving all other bytes; never
-# restarts sshd or drops open sessions. All checks from rc2fxd are repeated.
-# Exit codes: 0 ok, 2 bad input, 3 unsafe path, 4 first boot, 1 other error.
-ssh_dir=${RC2FX_SSH_DIR:-/home/root/.ssh}
-ssh_host_dir=${RC2FX_SSH_HOST_DIR:-/etc/ssh}
-ssh_first_boot=${RC2FX_FIRST_BOOT:-/usr/bin/first-boot}
-ssh_marker=rc2fx-managed-developer-key
-# An Ed25519 public key blob: its fixed 19-byte header encodes to these 25
-# characters, followed by 43 more for the 32-byte key.
-ssh_key_pattern='^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$'
-ssh_managed_pattern="^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43} $ssh_marker\$"
-ssh_max_keys_bytes=1048576
-
-ssh_unsafe() { echo "unsafe path: $*" >&2; return 3; }
-
-# `ssh_paths_safe create` may create a missing directory (0700); plain
-# `ssh_paths_safe` never changes anything. Refuses links, other owners,
-# group- or world-writable modes, extra hard links and oversized files.
-ssh_paths_safe() {
-  local keys=$ssh_dir/authorized_keys parent me mode owner
-  me=$(id -u)
-  # Every ancestor: a real directory, owned by root or this user, and not
-  # writable by anyone else unless it is root's sticky directory (like /tmp).
-  parent=$(dirname "$ssh_dir")
-  while :; do
-    if test -L "$parent" || ! test -d "$parent"; then ssh_unsafe "$parent"; return; fi
-    owner=$(stat -c %u "$parent"); mode=$(stat -c %a "$parent")
-    if test "$owner" != 0 && test "$owner" != "$me"; then ssh_unsafe "$parent owner"; return; fi
-    if (( 8#$mode & 8#022 )) && ! { test "$owner" = 0 && (( 8#$mode & 8#1000 )); }; then
-      ssh_unsafe "$parent is writable by others"; return
-    fi
-    test "$parent" != / || break
-    parent=$(dirname "$parent")
-  done
-  if test -L "$ssh_dir"; then ssh_unsafe "$ssh_dir is a link"; return; fi
-  if ! test -e "$ssh_dir"; then
-    test "${1:-}" = create || return 0
-    mkdir -m 700 "$ssh_dir" || { ssh_unsafe "cannot create $ssh_dir"; return; }
-  fi
-  if ! test -d "$ssh_dir"; then ssh_unsafe "$ssh_dir is not a directory"; return; fi
-  if test "$(stat -c %u "$ssh_dir")" != "$me"; then ssh_unsafe "$ssh_dir owner"; return; fi
-  mode=$(stat -c %a "$ssh_dir")
-  if (( 8#$mode & 8#022 )); then ssh_unsafe "$ssh_dir is writable by others"; return; fi
-  test -e "$keys" || test -L "$keys" || return 0
-  if test -L "$keys" || ! test -f "$keys"; then ssh_unsafe "$keys is not a regular file"; return; fi
-  if test "$(stat -c %h "$keys")" != 1; then ssh_unsafe "$keys has other links"; return; fi
-  if test "$(stat -c %u "$keys")" != "$me"; then ssh_unsafe "$keys owner"; return; fi
-  mode=$(stat -c %a "$keys")
-  if (( 8#$mode & 8#022 )); then ssh_unsafe "$keys is writable by others"; return; fi
-  if test "$(stat -c %s "$keys")" -gt "$ssh_max_keys_bytes"; then ssh_unsafe "$keys is too large"; return; fi
-  # The shell reader cannot keep NUL bytes, so such a file is never rewritten.
-  if ! tr -d '\000' < "$keys" | cmp -s - "$keys"; then ssh_unsafe "$keys contains NUL bytes"; return; fi
-}
-
-# Print authorized_keys without its managed lines, byte for byte (a last
-# line without a newline stays without one). Sets ssh_unmanaged to the number
-# of other key lines and ssh_managed to the managed key, if any.
-ssh_filter() {
-  local keys=$ssh_dir/authorized_keys line
-  ssh_unmanaged=0 ssh_managed=
-  test -f "$keys" || return 0
-  while IFS= read -r line; do ssh_line "$line" $'\n'; done < "$keys" || return 1
-  if test -n "$line"; then ssh_line "$line" ''; fi
-}
-ssh_line() {
-  if [[ $1 =~ $ssh_managed_pattern ]]; then
-    test -n "$ssh_managed" || ssh_managed=${1% "$ssh_marker"}
-    return 0
-  fi
-  [[ $1 =~ ^[[:space:]]*(#|$) ]] || ssh_unmanaged=$((ssh_unmanaged + 1))
-  printf '%s%s' "$1" "$2"
-}
-
-# Replace authorized_keys atomically with its unmanaged content, plus the
-# managed line `$1` when given.
-ssh_write_keys() {
-  local tmp
-  tmp=$(mktemp "$ssh_dir/.authorized_keys.XXXXXX") || return 1
-  if ! { ssh_filter > "$tmp" && ssh_append "$tmp" "${1:-}"; }; then rm -f "$tmp"; return 1; fi
-  chmod 600 "$tmp" && mv -f "$tmp" "$ssh_dir/authorized_keys" || { rm -f "$tmp"; return 1; }
-}
-ssh_append() {
-  test -n "$2" || return 0
-  if test -s "$1" && test "$(tail -c 1 "$1" | od -An -c | tr -d ' ')" != '\n'; then printf '\n' >> "$1"; fi
-  printf '%s\n' "$2" >> "$1"
-}
-
-ssh_status() {
-  local line pub
-  ssh_filter > /dev/null || { echo 'cannot read authorized_keys' >&2; return 1; }
-  test -z "$ssh_managed" || echo "managed $ssh_managed"
-  echo "unmanaged $ssh_unmanaged"
-  for pub in "$ssh_host_dir"/ssh_host_*_key.pub; do
-    test -f "$pub" && ! test -L "$pub" || continue
-    line=$(head -c 1024 "$pub" | head -n 1 | cut -d' ' -f1-2)
-    if [[ $line =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|ssh-rsa)\ [A-Za-z0-9+/=]{16,}$ ]]; then
-      echo "host $line"
-    fi
-  done
-  if ! command -v pgrep > /dev/null; then echo 'server unknown'
-  elif pgrep -x sshd > /dev/null 2>&1; then echo 'server running'
-  else echo 'server stopped'; fi
-}
-
-# Leaves a record of which key gained root access. Best effort: the key is
-# already in place, so nothing here may fail the request.
-ssh_log_added() {
-  local print=
-  if command -v ssh-keygen > /dev/null; then
-    print=$(printf '%s\n' "$1" | ssh-keygen -lf - 2> /dev/null | cut -d' ' -f2) || print=
-  fi
-  { mkdir -p "$logs" && say "Developer SSH key added: ${print:-fingerprint unavailable}" >> "$logs/rc2fx.log"; } 2> /dev/null || true
-}
-
-developer_ssh() {
-  local raw= key
-  case "${1:-}" in
-    status) ssh_paths_safe || return; ssh_status ;;
-    enable|disable)
-      if test -e "$ssh_first_boot"; then echo 'first boot after an update: try again once it finishes' >&2; return 4; fi
-      if test "$1" = enable; then
-        # Exactly one key line and at most one newline, nothing else. read
-        # succeeds only if it stopped early: at a NUL byte or after 513
-        # characters. Both are refused; reaching end of input is the normal case.
-        if IFS= read -r -d '' -n 513 raw; then echo 'invalid public key' >&2; return 2; fi
-        key=${raw%$'\n'}
-        if test "${#raw}" -gt 512 || ! [[ $key =~ $ssh_key_pattern ]]; then echo 'invalid public key' >&2; return 2; fi
-        ssh_paths_safe create || return
-        ssh_write_keys "$key $ssh_marker" || { echo 'could not write authorized_keys' >&2; return 1; }
-        ssh_log_added "$key"
-      else
-        ssh_paths_safe || return
-        ssh_filter > /dev/null || { echo 'cannot read authorized_keys' >&2; return 1; }
-        if test -n "$ssh_managed"; then
-          ssh_write_keys || { echo 'could not write authorized_keys' >&2; return 1; }
-        fi
-      fi
-      ssh_status ;;
-    *) echo 'usage: rc2fx.sh developer-ssh status|enable|disable' >&2; return 2 ;;
-  esac
-}
-
-# Explicit one-shot recovery authorization; never called by normal startup.
-arm_power_recovery() {
-  test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot || {
-    echo 'Refusing recovery arming during firmware first boot' >&2; return 4;
-  }
-  local current
-  current=$(fw_printenv -n reboot_pwr_button_bypass) || return 1
-  case "$current" in 0|1) ;; *) echo 'Unexpected power-button bypass value' >&2; return 1 ;; esac
-  if test "$current" != 1; then
-    fw_setenv reboot_pwr_button_bypass 1 || return 1
-  fi
-  test "$(fw_printenv -n reboot_pwr_button_bypass)" = 1 || return 1
-  echo 'Power recovery armed for the next boot; the bootloader consumes this flag'
 }
 
 # ---- flash evidence ----------------------------------------------------------
@@ -1361,19 +1207,27 @@ evidence_file() {
       && cp "$root/$name" "$dir/files/$name" 2> /dev/null || true
   fi
 }
+evidence_files() {
+  local dir=$1 root=$2 manifest=$3 name want; shift 3
+  for name in "$@"; do
+    [[ $name == /* || $name == *..* ]] && continue
+    want=$(manifest_sha256 "$manifest" "$name")
+    evidence_file "$dir" "$root" "$name" "$want"
+  done
+}
 # The storage picture: kernel messages, mounts, the eMMC and both roots'
 # superblock times and mount counts.
 evidence_storage() {
   local dir=$1 p
-  { uptime; cat /proc/cmdline; echo; findmnt -rn -o SOURCE,TARGET,FSTYPE,OPTIONS 2> /dev/null | grep -E 'mmcblk|update' || true
+  { uptime; cat "$proc/cmdline"; echo; findmnt -rn -o SOURCE,TARGET,FSTYPE,OPTIONS 2> /dev/null | grep -E 'mmcblk|update' || true
     echo; for p in name type manfid fwrev date; do printf '%s=%s ' "$p" "$(cat "/sys/block/mmcblk1/device/$p" 2> /dev/null)"; done
     printf 'write_cache=%s\n' "$(cat /sys/block/mmcblk1/queue/write_cache 2> /dev/null)"
     # What RC2FX's audio changes in scheduling, as it stands during the flash.
-    printf 'sched_rt_runtime_us=%s\n' "$(cat /proc/sys/kernel/sched_rt_runtime_us 2> /dev/null)"
-    grep -E 'mmc' /proc/interrupts 2> /dev/null | while read -r p _; do
-      p=${p%:}; printf 'irq %s affinity=%s effective=%s\n' "$p" "$(cat "/proc/irq/$p/smp_affinity_list" 2> /dev/null)" "$(cat "/proc/irq/$p/effective_affinity_list" 2> /dev/null)"
+    printf 'sched_rt_runtime_us=%s\n' "$(cat "$proc/sys/kernel/sched_rt_runtime_us" 2> /dev/null)"
+    grep -E 'mmc' "$proc/interrupts" 2> /dev/null | while read -r p _; do
+      p=${p%:}; printf 'irq %s affinity=%s effective=%s\n' "$p" "$(cat "$proc/irq/$p/smp_affinity_list" 2> /dev/null)" "$(cat "$proc/irq/$p/effective_affinity_list" 2> /dev/null)"
     done
-    for p in $blackbox_irqs; do printf 'audio irq %s affinity=%s\n' "$p" "$(cat "/proc/irq/$p/smp_affinity_list" 2> /dev/null)"; done
+    for p in $blackbox_irqs; do printf 'audio irq %s affinity=%s\n' "$p" "$(cat "$proc/irq/$p/smp_affinity_list" 2> /dev/null)"; done
     printf 'rc2fx running=%s\n' "$(pgrep -f '[r]c2fxd' > /dev/null && echo yes || echo no)"
     for p in 1 2; do
       # ext4 superblock at 1024: mount count (0x34), state (0x3A), feature
@@ -1420,7 +1274,7 @@ EOF
 }
 # After RØDE's update script: is what it wrote on the eMMC what the image has?
 flash_verify() {
-  local status=${1:-?} archive=${2:-} dir manifest failed=() line name want started round left
+  local status=${1:-?} archive=${2:-} dir manifest failed=() name want started round left
   started=$(uptime_s)
   dir=$(evidence_dir verify) || return 0
   exec > "$dir/verify.log" 2>&1
@@ -1433,16 +1287,9 @@ flash_verify() {
   fi
   sync
   # Reads must come from the eMMC, not from what the kernel still holds.
-  echo 3 > /proc/sys/vm/drop_caches 2> /dev/null || say 'Could not drop the page cache'
-  while IFS= read -r line; do
-    name=${line%: FAILED*}
-    test "$name" != "$line" && failed+=("$name")
-  done < <(cd "$update_partition" && sha256sum -c --quiet "$manifest" 2> /dev/null || true)
-  for name in "${failed[@]}"; do
-    [[ $name == /* || $name == *..* ]] && continue
-    want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$manifest")
-    evidence_file "$dir" "$update_partition" "$name" "$want"
-  done
+  echo 3 > "$proc/sys/vm/drop_caches" 2> /dev/null || say 'Could not drop the page cache'
+  manifest_check_failed "$update_partition" "$manifest" sha256sum
+  evidence_files "$dir" "$update_partition" "$manifest" ${failed[@]+"${failed[@]}"}
   evidence_storage "$dir"
   say "Checked $(wc -l < "$manifest") files in $(( $(uptime_s) - started )) s: ${#failed[@]} damaged"
   evidence_note "flash verify (before RØDE's reboot): ${#failed[@]} damaged${failed:+: ${failed[*]}} [$(basename "$dir")]"
@@ -1461,10 +1308,10 @@ flash_verify() {
     tar -xzf "$archive" -C "$update_partition" "${left[@]/#/./}" 2> /dev/null || true
     tar -xzf "$archive" -C "$update_partition" "${left[@]}" 2> /dev/null || true
     sync
-    echo 3 > /proc/sys/vm/drop_caches 2> /dev/null || true
+    echo 3 > "$proc/sys/vm/drop_caches" 2> /dev/null || true
     failed=()
     for name in "${left[@]}"; do
-      want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$manifest")
+      want=$(manifest_sha256 "$manifest" "$name")
       test "$(sha256sum < "$update_partition/$name" 2> /dev/null | cut -d' ' -f1)" = "$want" || failed+=("$name")
     done
     say "Repair round $round: $(( ${#left[@]} - ${#failed[@]} )) rewritten, ${#failed[@]} still damaged"
@@ -1487,10 +1334,10 @@ image_root_view=/run/rc2fx-root
 # Starts the check unless it has passed for this manifest or one is running.
 image_check_start() {
   test -f "$image_manifest" || return 0
-  test ! -e /usr/bin/first-boot || return 0
+  test ! -e "$first_boot" || return 0
   mkdir "$boot/image-check" 2> /dev/null || return 0
   local digest
-  digest=$(sha256sum < "$image_manifest" | cut -d' ' -f1)
+  digest=$(file_sha256 "$image_manifest")
   grep -qx "manifest=$digest" "$image_result" 2> /dev/null \
     && grep -qx 'status=ok' "$image_result" && return 0
   # Set aside before rc2fxd starts, so the app never reads an earlier
@@ -1504,7 +1351,7 @@ image_check_start() {
 image_other_root() {
   if test -n "${RC2FX_OTHER_ROOT:-}"; then echo "$RC2FX_OTHER_ROOT"; return; fi
   local root other
-  root=$(tr ' ' '\n' < /proc/cmdline | sed -n 's#^root=/dev/mmcblk1p\([12]\)$#\1#p')
+  root=$(tr ' ' '\n' < "$proc/cmdline" | sed -n 's#^root=/dev/mmcblk1p\([12]\)$#\1#p')
   case "$root" in 1) other=2 ;; 2) other=1 ;; *) return 1 ;; esac
   mkdir -p "$image_other_mount"
   mountpoint -q "$image_other_mount" \
@@ -1517,8 +1364,8 @@ image_check() {
   # still all `launch` starts.
   { exec 8> "$data/image-check.lock"; } 2> /dev/null || exec 8> /dev/null
   flock -n 8 || { echo 'another image check is running'; return 0; }
-  local digest started failed=() repaired=() damaged=() line name want other source tmp status
-  digest=$(sha256sum < "$image_manifest" | cut -d' ' -f1)
+  local digest started failed=() repaired=() damaged=() name want other source tmp status
+  digest=$(file_sha256 "$image_manifest")
   # A result from an earlier boot or flash must not answer for this one: the
   # manifest lists only RØDE's files, so a reflash of the same RØDE version
   # has the same digest, and an old "repaired" would ask for a restart this
@@ -1536,28 +1383,21 @@ image_check() {
   fi
   say "Checking $(wc -l < "$image_manifest") files listed in $image_manifest"
   # Only the listed files that do not match, as "path: FAILED ...".
-  while IFS= read -r line; do
-    name=${line%: FAILED*}
-    test "$name" != "$line" && failed+=("$name")
-  done < <(cd "$image_root" && nice -n 19 ionice -c3 sha256sum -c --quiet "$image_manifest" 2> /dev/null || true)
+  manifest_check_failed "$image_root" "$image_manifest" nice -n 19 ionice -c3 sha256sum
   # The damaged files as found, before any repair (flash evidence).
   local evidence=
   if test ${#failed[@]} -gt 0 && evidence=$(evidence_dir boot); then
     evidence_storage "$evidence"
-    for name in "${failed[@]}"; do
-      [[ $name == /* || $name == *..* ]] && continue
-      want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$image_manifest")
-      evidence_file "$evidence" "$image_root" "$name" "$want"
-    done
+    evidence_files "$evidence" "$image_root" "$image_manifest" "${failed[@]}"
   fi
   evidence_note "image check at boot: ${#failed[@]} damaged${failed:+: ${failed[*]}}${evidence:+ [$(basename "$evidence")]}"
   for name in "${failed[@]}"; do
     # The manifest's own paths, never one that leaves the root.
     if [[ $name == /* || $name == *..* ]]; then damaged+=("$name"); continue; fi
-    want=$(awk -v n="$name" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$image_manifest")
+    want=$(manifest_sha256 "$image_manifest" "$name")
     source=
     if test -n "$want" && other=$(image_other_root) && test -f "$other/$name" \
-       && test "$(sha256sum < "$other/$name" | cut -d' ' -f1)" = "$want"; then
+       && test "$(file_sha256 "$other/$name")" = "$want"; then
       source=$other/$name
     fi
     if test -z "$source"; then
@@ -1575,7 +1415,7 @@ image_check() {
       { cp -p "$source" "$tmp" && sync && mv -f "$tmp" "$image_root/$name"; } || rm -f "$tmp"
     fi
     sync
-    if test "$(sha256sum < "$image_root/$name" | cut -d' ' -f1)" = "$want"; then
+    if test "$(file_sha256 "$image_root/$name")" = "$want"; then
       say "Repaired from the other root partition: $name"
       repaired+=("$name")
     else
@@ -1863,7 +1703,7 @@ update_drive_drop() {
   update_drive_image "$image" || return 2
   update_drive_detach "$image" || true
   mnt=${image%/drive.img}/drive
-  if grep -qs " $mnt " /proc/mounts; then umount "$mnt" || true; fi
+  if grep -qs " $mnt " "$proc/mounts"; then umount "$mnt" || true; fi
   rmdir "$mnt" 2>/dev/null || true
   rm -f "$image"
 }
@@ -1887,8 +1727,10 @@ update_drive() {
 }
 # ---- end of update drive ----------------------------------------------------
 
+# Skip command dispatch when sourced (e.g. by tests).
+if (return 0 2>/dev/null); then return 0; fi
+
 case "${1:-}" in
-  arm-power-recovery) arm_power_recovery ;;
   update-commit) shift; update_commit "$@" ;;
   gui-launch) shift; gui_launch "$@" ;;
   start) shift; start "$@" ;;
@@ -1900,9 +1742,8 @@ case "${1:-}" in
   usb-quiesce) usb_quiesce ;;
   supervise-restart) shift; supervise_restart "$@" ;;
   supervise-exit) shift; supervise_exit "$@" ;;
-  developer-ssh) shift; developer_ssh "$@" ;;
   image-check) image_check ;;
   flash-verify) shift; flash_verify "$@" ;;
   update-drive) shift; update_drive "$@" ;;
-  *) sed -n '2,27s/^# \{0,1\}//p' "$0"; exit 2 ;;
+  *) sed -n '2,24s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

@@ -6,14 +6,16 @@
 Runs install.sh under /bin/sh with RC2FX_INSTALL_ROOT pointing to a temp dir
 and a stub rc2fx.sh whose `restart` exits 3 (next-power-on path).
 """
-import hashlib
 import os
 import subprocess
-import tempfile
+import sys
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).parents[1] / 'install.sh'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import SCRIPTS_DIR, TempDirTestCase, sha256_bytes, write_executable  # noqa: E402
+
+SCRIPT = SCRIPTS_DIR / 'install.sh'
 GUI_CASE = '  gui-launch) '
 BINARIES = ['librc2fx_native.so', 'rc2fxd', 'rc2fx-supervisor', 'rc2fx-firmware', 'firmware-profiles.json',
             'librc2fx_gui.so', 'librc2fx_jackerr.so',
@@ -31,10 +33,9 @@ exit 0
 OLD_RC2FX_SH = '#!/bin/bash\ncase "$1" in\n  start) exit 0 ;;\nesac\nexit 0\n'
 
 
-class Install(unittest.TestCase):
+class Install(TempDirTestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        super().setUp()
         self.opt = self.root / 'opt'
         self.up = self.root / 'run' / 'rc2fx-upload'
         self.up.mkdir(parents=True)
@@ -43,16 +44,13 @@ class Install(unittest.TestCase):
         self.bin.mkdir()
         self.upload(b'x' * 4096)
 
-    def tearDown(self):
-        self.tmp.cleanup()
-
     def upload(self, payload: bytes, marker='new'):
         self.up.mkdir(parents=True, exist_ok=True)
         sums = ''
         for name in BINARIES:
             data = b'#!/bin/sh\nexit 0\n' if name == 'rc2fx-firmware' else payload + name.encode()
             (self.up / name).write_bytes(data)
-            sums += f'{hashlib.sha256(data).hexdigest()}  {name}\n'
+            sums += f'{sha256_bytes(data)}  {name}\n'
         (self.up / 'SHA256SUMS').write_text(sums)
         (self.up / 'rc2fx.sh').write_text(RC2FX_SH + f'# {marker}\n')
         for name in ['rc2fx-shim.sh', 'rc2fx-gui-shim.sh']:
@@ -76,10 +74,12 @@ class Install(unittest.TestCase):
         return self.runtime(self.opt / f'.rc2fx-retained.{tag}', **kwargs)
 
     def fake_df(self, kib):
-        df = self.bin / 'df'
-        df.write_text('#!/bin/sh\necho "Filesystem 1024-blocks Used Available Capacity Mounted on"\n'
-                      f'echo "/dev/root 476000 0 {kib} 99% /"\n')
-        df.chmod(0o755)
+        write_executable(
+            self.bin / 'df',
+            'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"\n'
+            f'echo "/dev/root 476000 0 {kib} 99% /"',
+            shebang='#!/bin/sh',
+        )
 
     def install(self, *args):
         env = dict(os.environ, RC2FX_INSTALL_ROOT=str(self.root),
