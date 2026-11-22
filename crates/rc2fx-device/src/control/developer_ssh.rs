@@ -621,11 +621,14 @@ fn write_keys_at(dir_fd: &OwnedFd, data: &[u8], me: libc::uid_t) -> Result<(), S
     let fail = || SshError::Failed("could not write authorized_keys".into());
     let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     let pid = std::process::id();
+    let salt = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
 
     let mut opened = None;
     for _ in 0..8 {
         let seq = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let name = CString::new(format!(".authorized_keys.{pid}.{seq}")).unwrap();
+        let name = CString::new(format!(".authorized_keys.{pid}.{salt:x}.{seq}")).unwrap();
         match openat_raw(dir_fd.as_raw_fd(), &name, flags, 0o600) {
             Ok(fd) => {
                 opened = Some((fd, name));
@@ -772,11 +775,14 @@ fn read_host_keys(host_dir: &Path) -> Vec<String> {
         if got == 0 {
             continue;
         }
-        let Ok(text) = std::str::from_utf8(&raw[..got]) else {
+        // Split the first line and first two space-separated fields as raw
+        // bytes so a non-UTF-8 comment or a 1024-byte cut mid-character in the
+        // comment does not drop a valid host key.
+        let line = raw[..got].split(|&b| b == b'\n').next().unwrap_or(&[]);
+        let Some(sp1) = line.iter().position(|&b| b == b' ') else {
             continue;
         };
-        let line = text.split('\n').next().unwrap_or("");
-        let Some((kind, rest)) = line.split_once(' ') else {
+        let Ok(kind) = std::str::from_utf8(&line[..sp1]) else {
             continue;
         };
         if !matches!(
@@ -789,8 +795,12 @@ fn read_host_keys(host_dir: &Path) -> Vec<String> {
         ) {
             continue;
         }
-        let blob = rest.split_once(' ').map_or(rest, |(b, _)| b);
-        if blob.len() >= 16 && blob.bytes().all(|b| is_b64_char(b) || b == b'=') {
+        let rest = &line[sp1 + 1..];
+        let blob_bytes = rest.split(|&b| b == b' ').next().unwrap_or(rest);
+        if blob_bytes.len() >= 16
+            && blob_bytes.iter().all(|&b| is_b64_char(b) || b == b'=')
+            && let Ok(blob) = std::str::from_utf8(blob_bytes)
+        {
             hosts.push(format!("{kind} {blob}"));
         }
     }
@@ -1341,5 +1351,15 @@ mod tests {
         let st_after = f.disable().await.unwrap();
         assert!(!st_after.managed);
         assert_eq!(std::fs::read(&f.keys_path).unwrap().len(), exact_pad.len());
+    }
+
+    #[tokio::test]
+    async fn host_keys_ignore_non_utf8_comments() {
+        let f = Fixture::new();
+        let mut bytes = format!("{KEY} ").into_bytes();
+        bytes.extend_from_slice(&[0xff, 0xfe, b'\n']);
+        std::fs::write(f.host_dir.join("ssh_host_ed25519_key.pub"), &bytes).unwrap();
+        let st = f.dev.status().await.unwrap();
+        assert_eq!(st.host_keys, vec![KEY.to_string()]);
     }
 }

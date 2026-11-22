@@ -140,8 +140,9 @@ func Run(action string, rest []string) error {
 	return act(mixer, filepath.Join(task.Root(), "target", "mixer"), action, rest)
 }
 
-// act runs one action, with build as target/mixer. When pre_command is
-// configured, mutating actions run it first and abort if it fails. `status`
+// act runs one action, with build as target/mixer. Mutating actions first
+// verify the mixer is not in a first-boot or production-boot sequence and,
+// when pre_command is configured, run it before mutating the mixer. `status`
 // and `logs` only read. `api` goes to the controller over USB 1 and never uses
 // SSH.
 func act(mixer *Mixer, build, action string, rest []string) error {
@@ -298,9 +299,29 @@ func (m *Mixer) command(remote string) *exec.Cmd {
 	return exec.Command(m.program, args...)
 }
 
-// Prepare runs the optional local pre_command hook before a mutating mixer
-// action. If no pre_command is configured, it is a no-op.
+// firstBootCheck refuses mutating commands while the mixer is still in its
+// first boot or production boot after a firmware update (it flashes
+// controllers and restarts during that boot). Exit 4 distinguishes that
+// refusal from an SSH connection error.
+const firstBootCheck = "test ! -e /usr/bin/first-boot && test ! -e /usr/bin/production-boot || exit 4"
+
+// Prepare checks that the mixer is not in a first-boot or production-boot
+// sequence, then runs the optional local pre_command hook before a mutating
+// mixer action.
 func (m *Mixer) Prepare(action string) error {
+	check := m.command(firstBootCheck)
+	check.Stdout = os.Stdout
+	check.Stderr = os.Stderr
+	if err := check.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			if check.ProcessState.ExitCode() == 4 {
+				return task.Errorf("`%s` refused: mixer is in its first boot after an update; wait for it to finish and restart", action)
+			}
+			return task.Errorf("`%s` was not started: could not check mixer boot state (%s)", action, task.Status(check.ProcessState))
+		}
+		return task.Errorf("`%s` was not started: could not start ssh: %s", action, task.IOError(err))
+	}
 	if m.preCommand == "" {
 		return nil
 	}

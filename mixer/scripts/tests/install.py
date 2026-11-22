@@ -249,6 +249,19 @@ class Install(TempDirTestCase):
         self.assertTrue((self.opt / 'rc2fx' / 'data').is_dir(), 'settings follow the rollback')
         self.assertFalse((self.opt / '.rc2fx-install-pending').exists())
 
+    def test_refuses_during_first_boot_or_production_boot(self):
+        (self.root / 'usr' / 'bin').mkdir(parents=True, exist_ok=True)
+        for marker in ('first-boot', 'production-boot'):
+            path = self.root / 'usr' / 'bin' / marker
+            path.touch()
+            try:
+                result = self.install()
+                self.assertEqual(result.returncode, 4, result.stderr)
+                self.assertIn('first boot', result.stderr)
+                self.assertFalse((self.opt / 'rc2fx').exists())
+            finally:
+                path.unlink()
+
 
 if __name__ == '__main__':
     unittest.main()

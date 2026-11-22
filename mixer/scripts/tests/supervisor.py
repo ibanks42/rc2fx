@@ -63,6 +63,15 @@ class Tests(TempDirTestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(r.stdout, '')
 
+    def test_start_restart_and_stop_refuse_during_first_boot_or_production_boot(self):
+        marker = self.root / 'boot-marker'
+        marker.touch()
+        for var in ('RC2FX_FIRST_BOOT', 'RC2FX_PRODUCTION_BOOT'):
+            for action in ('start', 'restart', 'stop'):
+                r = run_rc2fx(action, env={**self.env, var: str(marker)})
+                self.assertEqual(r.returncode, 4, f'{var} {action}: {r.stderr}')
+                self.assertIn('Refusing:', r.stderr)
+
     def test_the_controller_always_gets_its_sockets_and_developer_ssh(self):
         self.assertEqual(self.arguments(''), [
             '--data', '/d', '--native-socket', '/r/control.sock', '--usb-socket', '/r/usb.sock',

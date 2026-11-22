@@ -32,4 +32,4 @@ cargo test -p rc2fx-core
 cargo clippy -p rc2fx-core --all-targets -- -D warnings
 ```
 
-The integration tests verify live Rust <-> Go wire parity (via `desktop/internal/interop`), EQ/gate agreement, RLC coefficient vectors in `desktop/core/testdata/easyeffects`, and strict parsing/validation rules. Everything runs offline with no mixer required.
+The integration tests verify live Rust <-> Go wire parity (via `go run ./internal/interop`, so Go must be on `PATH`), EQ/gate agreement, RLC coefficient vectors in `desktop/core/testdata/easyeffects`, and strict parsing/validation rules. Everything runs offline with no mixer required.

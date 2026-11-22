@@ -78,6 +78,10 @@ case "${1:-install}" in
  install) ;;
  *) exit 1 ;;
 esac
+if test -e "${RC2FX_FIRST_BOOT:-$root/usr/bin/first-boot}" || test -e "${RC2FX_PRODUCTION_BOOT:-$root/usr/bin/production-boot}"; then
+ echo 'Refusing install: mixer is in its first boot after a firmware update' >&2
+ exit 4
+fi
 for path in "$opt" "$home" "$home/data" "$home/logs" "$previous" "$pending" "$shim" "$gui_shim"; do
  if test -L "$path"; then echo "Linked install path refused: $path" >&2; exit 1; fi
 done

@@ -2,6 +2,3 @@ root = true
 
 [*]
 end_of_line = lf
-
-[fixtures/core/**]
-end_of_line = unset

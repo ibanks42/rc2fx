@@ -63,6 +63,7 @@ ip = 192.168.0.100
 # key = ~/.ssh/rc2fx_rodecaster_pro_ii
 # known_hosts = ~/.local/share/RC2FX/installer/known_hosts
 # host_key_alias = rc2fx-0123456789ab
+# pre_command = ~/.local/bin/rc2fx-pre-mixer
 ```
 
 Point `known_hosts` at the file inside your installer cache directory, and set
@@ -75,8 +76,13 @@ Point `known_hosts` at the file inside your installer cache directory, and set
 | Linux | `~/.local/share/RC2FX/installer` |
 
 You can override any of these with environment variables: `RC2FX_MIXER_IP`,
-`RC2FX_MIXER_USER`, `RC2FX_MIXER_KEY`, `RC2FX_MIXER_KNOWN_HOSTS`, and
-`RC2FX_MIXER_HOST_KEY_ALIAS`.
+`RC2FX_MIXER_USER`, `RC2FX_MIXER_KEY`, `RC2FX_MIXER_KNOWN_HOSTS`,
+`RC2FX_MIXER_HOST_KEY_ALIAS`, and `RC2FX_MIXER_PRE_COMMAND`.
+
+If `pre_command` is set (a leading `~/` expands to your home directory),
+mutating mixer commands run that executable with the action name as `$1` and
+`RC2FX_MIXER_*` environment variables after the first-boot safety check,
+aborting if it exits non-zero. Read-only commands (`status`, `logs`) skip it.
 
 Verify the connection:
 

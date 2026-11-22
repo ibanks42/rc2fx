@@ -27,26 +27,25 @@ Packaging assets live in `desktop/packaging`: the AppImage launcher, desktop
 entry, icons, and macOS entitlements. Scripts that run on the mixer live in
 `mixer/scripts`.
 
-## Shared fixtures
+## Shared schemas and interop tests
 
-Everything both sides must agree on (configuration JSON, presets, USB framing,
-delta payloads, release metadata, image check lists, payload file lists, and
-gate response shapes) has test cases in `fixtures/` at the repository root.
-Both Go and Rust tests read the exact same files: the Rust side in
-`crates/*/tests/shared_fixtures.rs`,
-`crates/rc2fx-core/tests/image_check_fixtures.rs`,
-`crates/rc2fx-core/tests/gate_fixtures.rs`,
-`crates/rc2fx-device/tests/xtask_tuf_fixtures.rs`, and the payload list test in
-`crates/rc2fx-device/src/mixer_update/tests.rs`, and the Go side in each
-matching package's tests.
+Wire structs, enums, constants, and payload file lists that both sides must
+agree on are defined once under `schema/` (`schema/core.go`,
+`schema/payload.go`) and generated into both Rust and Go via `./xtask schema`
+(CI verifies they stay in sync with `./xtask schema --check`).
+
+Cross-language behavior (configuration JSON, presets, USB framing, delta
+payloads, release metadata, image check lists, TUF repos, and EQ/gate math) is
+verified directly by live Rust-to-Go integration tests in `crates/*/tests/`
+calling `desktop/internal/interop`, alongside Rust-owned golden tests in
+`crates/rc2fx-core/tests/` and `desktop/core/testdata/easyeffects`.
 
 The gate shape matches bit-for-bit except where a value uses a power function:
 Go's `math.Pow` differs slightly from glibc's `pow`, so those values are
-allowed up to two ulps of difference. Each side verifies its own direction:
-Rust validates what the mixer writes and its verdicts on what it reads, while
-Go does the same for the desktop app, leaving one-sided cases to the side that
-reads them. Whenever you change shared behavior, update both implementations
-and add a case to `fixtures/` so Rust and Go cannot drift apart.
+allowed up to two ulps of difference. Whenever you change shared wire types,
+edit `schema/` and run `./xtask schema`; whenever you change shared behavior,
+update both implementations and cover it in the interop tests so Rust and Go
+cannot drift apart.
 
 ## Naming
 
@@ -83,7 +82,7 @@ can jump between the two easily:
   `core.DecodeStrict` or `core.DecodeStrictLimited`.
 - JSON written by the app must decode on the mixer to the same values. Field
   order and whitespace are not part of the contract; Rust owns the canonical
-  byte form, which the shared fixtures in `fixtures/core` pin on the Rust side.
+  byte form, which the golden tests in `crates/rc2fx-core/tests` pin on the Rust side.
   Number text is part of the contract: the app must write every number with the
   same characters as Rust. The mixer rejects `1.0` where it expects an integer,
   and its `serde_json` is built without the `float_roundtrip` feature. That

@@ -246,7 +246,10 @@ stop_owned() {
 
 stop_supervisor() {
   local pid=$1 n
-  touch "$run/stop" || return
+  if ! touch "$run/stop"; then
+    echo "RC2FX supervisor $pid did not stop (could not write $run/stop)" >&2
+    return 1
+  fi
   for ((n=0; n<120; n++)); do alive "$pid" || return 0; sleep 0.25; done
   alive "$pid" || return 0
   echo "RC2FX supervisor $pid did not stop" >&2
@@ -861,7 +864,19 @@ launch() {
   exit "$status"
 }
 
+refuse_first_boot() {
+  if test -e "$first_boot"; then
+    echo 'Refusing: mixer is in its first boot after a firmware update' >&2
+    return 4
+  fi
+  if test -e "$production_boot"; then
+    echo 'Refusing: mixer is in a production boot' >&2
+    return 4
+  fi
+}
+
 start() {
+  refuse_first_boot || return
   local wait=120 mixer= old= n force=0
   if test "${1:-}" = --force; then force=1; shift; fi
   if test "${1:-}" = --wait; then wait=${2:?--wait needs seconds}; fi
@@ -908,6 +923,7 @@ start() {
 }
 
 stop() {
+  refuse_first_boot || return
   local pid native controller
   mkdir -p -m 700 "$boot"
   echo 'stopped by rc2fx.sh stop' > "$boot/stock"
@@ -1728,7 +1744,7 @@ update_drive() {
 # ---- end of update drive ----------------------------------------------------
 
 # Skip command dispatch when sourced (e.g. by tests).
-if (return 0 2>/dev/null); then return 0; fi
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then return 0; fi
 
 case "${1:-}" in
   update-commit) shift; update_commit "$@" ;;
@@ -1745,5 +1761,5 @@ case "${1:-}" in
   image-check) image_check ;;
   flash-verify) shift; flash_verify "$@" ;;
   update-drive) shift; update_drive "$@" ;;
-  *) sed -n '2,24s/^# \{0,1\}//p' "$0"; exit 2 ;;
+  *) sed -n '2,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

@@ -206,7 +206,9 @@ release:
    and mirrors sigstore-tuf's refresh, rollback, and expiry rules in
    `desktop/internal/tuf` so both sides accept the exact same repos.
    Signing uses `./xtask` (`desktop/internal/xtask/tufsign`, matching `tough`'s
-   output) and `tuftool`, with shared signed fixtures in `fixtures/xtask`. A
+   output) and `tuftool`, verified against Rust in
+   `crates/rc2fx-device/tests/xtask_tuf_fixtures.rs` via
+   `desktop/internal/interop`. A
    root listing the same key under two IDs for a role is rejected because the
    verifier counts signatures by key ID.
 2. Exactly one target may carry `rc2fxMixer` compatibility claims, and its

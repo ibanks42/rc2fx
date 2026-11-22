@@ -2,9 +2,10 @@
 
 package mixer
 
-// Tests for the optional pre_command hook: mutating mixer commands run it
-// before sending any SSH command (and abort if it fails), skip it when
-// unconfigured, and read-only commands never run it.
+// Tests for the first-boot safety check and optional pre_command hook:
+// mutating mixer commands always verify the mixer is not in first boot before
+// running pre_command (if configured) and sending any mutating SSH command,
+// while read-only commands skip both.
 
 import (
 	"fmt"
@@ -23,6 +24,9 @@ import (
 const fakeSSH = `fake=$(dirname "$0"); remote=${!#}
 echo "ssh $remote" >> "$fake/events"
 cat > /dev/null
+if test -e "$fake/first-boot" && [[ $remote == *first-boot* ]]; then
+  exit 4
+fi
 `
 
 const fakeHook = `#!/bin/bash
@@ -123,29 +127,32 @@ func (f *fake) events() []string {
 }
 
 func TestMutatingCommandsSkipHookWhenUnconfigured(t *testing.T) {
+	wantCheck := "ssh " + firstBootCheck
 	for _, c := range mutatingCommands {
 		f := newFake(t, false)
 		_ = f.run(c.command, false)
 		events := f.events()
-		if !(len(events) >= 1 && strings.HasPrefix(events[0], c.first)) {
+		if !(len(events) >= 2 && events[0] == wantCheck && strings.HasPrefix(events[1], c.first)) {
 			t.Errorf("%v: %q", c.command, events)
 		}
 	}
 }
 
 func TestMutatingCommandsRunPreCommandBeforeSSH(t *testing.T) {
+	wantCheck := "ssh " + firstBootCheck
 	for _, c := range mutatingCommands {
 		f := newFake(t, false)
 		_ = f.run(c.command, true)
 		events := f.events()
 		wantHook := "hook " + c.action + " root@fake"
-		if !(len(events) >= 2 && events[0] == wantHook && strings.HasPrefix(events[1], c.first)) {
+		if !(len(events) >= 3 && events[0] == wantCheck && events[1] == wantHook && strings.HasPrefix(events[2], c.first)) {
 			t.Errorf("%v: %q", c.command, events)
 		}
 	}
 }
 
 func TestFailingPreCommandAbortsBeforeSSH(t *testing.T) {
+	wantCheck := "ssh " + firstBootCheck
 	for _, c := range mutatingCommands {
 		f := newFake(t, true)
 		err := f.run(c.command, true)
@@ -156,7 +163,27 @@ func TestFailingPreCommandAbortsBeforeSSH(t *testing.T) {
 			t.Errorf("%v: %s", c.command, err)
 		}
 		wantHook := "hook " + c.action + " root@fake"
-		if events := f.events(); !slices.Equal(events, []string{wantHook}) {
+		if events := f.events(); !slices.Equal(events, []string{wantCheck, wantHook}) {
+			t.Errorf("%v: %q", c.command, events)
+		}
+	}
+}
+
+func TestFirstBootRefusesMutatingCommandsBeforeHookAndAction(t *testing.T) {
+	wantCheck := "ssh " + firstBootCheck
+	for _, c := range mutatingCommands {
+		f := newFake(t, false)
+		if err := os.WriteFile(filepath.Join(f.dir, "first-boot"), nil, 0o666); err != nil {
+			t.Fatal(err)
+		}
+		err := f.run(c.command, true)
+		if err == nil {
+			t.Fatalf("%v: not refused on first boot", c.command)
+		}
+		if !strings.Contains(err.Error(), "first boot") {
+			t.Errorf("%v: %s", c.command, err)
+		}
+		if events := f.events(); !slices.Equal(events, []string{wantCheck}) {
 			t.Errorf("%v: %q", c.command, events)
 		}
 	}
@@ -165,6 +192,9 @@ func TestFailingPreCommandAbortsBeforeSSH(t *testing.T) {
 func TestStatusAndLogsNeverRunPreCommand(t *testing.T) {
 	for _, action := range []string{"status", "logs"} {
 		f := newFake(t, true)
+		if err := os.WriteFile(filepath.Join(f.dir, "first-boot"), nil, 0o666); err != nil {
+			t.Fatal(err)
+		}
 		if err := f.run([]string{"mixer", action}, true); err != nil {
 			t.Fatal(err)
 		}
