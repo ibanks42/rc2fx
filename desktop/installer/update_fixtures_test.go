@@ -2,62 +2,63 @@ package installer
 
 import (
 	"bytes"
-	"encoding/json"
-	"os"
-	"path/filepath"
+	"os/exec"
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-func TestMixerTargetFixturesMatchRust(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "fixtures", "update", "dto.json"))
-	if err != nil {
-		t.Fatal(err)
+func TestMixerTargetWireContract(t *testing.T) {
+	accept := []struct {
+		name string
+		raw  string
+	}{
+		{"pro-ii-and-duo", `{"version":"0.2.1","payloadFormat":1,"protocolVersion":1,"minimumAppVersion":"0.1.7","firmwareProfiles":["rodecaster-pro-ii-1.7.7","rodecaster-duo-1.7.7"]}`},
 	}
-	var doc struct {
-		MixerTargets struct {
-			Accept []struct {
-				Name string          `json:"name"`
-				JSON json.RawMessage `json:"json"`
-			} `json:"accept"`
-			Reject []struct {
-				Name string          `json:"name"`
-				JSON json.RawMessage `json:"json"`
-			} `json:"reject"`
-		} `json:"mixerTargets"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range doc.MixerTargets.Accept {
+	for _, c := range accept {
 		var target MixerTarget
-		if err := sjson.DecodeStrict(c.JSON, &target); err != nil {
-			t.Fatalf("accept %s: unmarshal: %v", c.Name, err)
+		if err := sjson.DecodeStrict([]byte(c.raw), &target); err != nil {
+			t.Fatalf("accept %s: unmarshal: %v", c.name, err)
 		}
 		if err := target.validate(); err != nil {
-			t.Fatalf("accept %s: validate: %v", c.Name, err)
+			t.Fatalf("accept %s: validate: %v", c.name, err)
 		}
 	}
-	for _, c := range doc.MixerTargets.Reject {
+
+	reject := []struct {
+		name string
+		raw  string
+	}{
+		{"unknown-field", `{"version":"0.2.1","payloadFormat":1,"protocolVersion":1,"minimumAppVersion":"0.1.7","firmwareProfiles":["rodecaster-pro-ii-1.7.7"],"extra":true}`},
+		{"missing-minimum-app", `{"version":"0.2.1","payloadFormat":1,"protocolVersion":1,"firmwareProfiles":["rodecaster-pro-ii-1.7.7"]}`},
+		{"empty-profiles", `{"version":"0.2.1","payloadFormat":1,"protocolVersion":1,"minimumAppVersion":"0.1.7","firmwareProfiles":[]}`},
+	}
+	for _, c := range reject {
 		var target MixerTarget
-		err := sjson.DecodeStrict(c.JSON, &target)
+		err := sjson.DecodeStrict([]byte(c.raw), &target)
 		if err == nil {
 			err = target.validate()
 		}
 		if err == nil {
-			t.Errorf("reject %s: unexpectedly accepted %+v", c.Name, target)
+			t.Errorf("reject %s: unexpectedly accepted %+v", c.name, target)
 		}
 	}
 }
 
-func TestPayloadEnvelopeFixturesMatchRust(t *testing.T) {
-	dir := filepath.Join("..", "..", "fixtures", "update")
-	valid, err := os.ReadFile(filepath.Join(dir, "envelope.bin"))
-	if err != nil {
-		t.Fatal(err)
+func TestPayloadEnvelopeContract(t *testing.T) {
+	runEnvelope := func(extra ...string) []byte {
+		args := append([]string{"run", "./internal/interop", "update-envelope"}, extra...)
+		cmd := exec.Command("go", args...)
+		cmd.Dir = ".."
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("interop update-envelope %v: %v", extra, err)
+		}
+		return out
 	}
+
+	valid := runEnvelope()
 	env, err := embed.Find(valid)
 	if err != nil {
 		t.Fatalf("embed.Find(valid): %v", err)
@@ -73,33 +74,40 @@ func TestPayloadEnvelopeFixturesMatchRust(t *testing.T) {
 		t.Fatalf("valid envelope rc2fx.sh missing release line")
 	}
 
-	entries, err := os.ReadDir(filepath.Join(dir, "bad-envelopes"))
+	devBytes := runEnvelope("--dev")
+	devEnv, err := embed.Find(devBytes)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("embed.Find(dev): %v", err)
 	}
-	if len(entries) == 0 {
-		t.Fatal("no bad-envelopes fixtures")
+	devBundle, err := devEnv.Bundle()
+	if err != nil {
+		t.Fatalf("devEnv.Bundle(): %v", err)
 	}
-	for _, entry := range entries {
-		raw, err := os.ReadFile(filepath.Join(dir, "bad-envelopes", entry.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		env, err := embed.Find(raw)
+	if bytes.Contains(devBundle["rc2fx.sh"], []byte("rc2fx_build=release\n")) {
+		t.Errorf("dev-build unexpectedly marked release")
+	}
+
+	badMagic := bytes.Clone(valid)
+	badMagic[0] = 'X'
+	badDigest := bytes.Clone(valid)
+	badDigest[len(badDigest)-1] ^= 0xff
+	truncated := valid[:len(valid)-1]
+
+	for _, c := range []struct {
+		name string
+		raw  []byte
+	}{
+		{"empty", nil},
+		{"bad-magic", badMagic},
+		{"bad-digest", badDigest},
+		{"truncated", truncated},
+	} {
+		env, err := embed.Find(c.raw)
 		if err == nil {
-			var b map[string][]byte
-			b, err = env.Bundle()
-			if err == nil && entry.Name() == "dev-build.bin" {
-				// embed.Find parses structurally; release policy check happens at
-				// install/packaging time. Confirm dev-build lacks release policy.
-				if bytes.Contains(b["rc2fx.sh"], []byte("rc2fx_build=release\n")) {
-					t.Errorf("%s unexpectedly marked release", entry.Name())
-				}
-				continue
-			}
+			_, err = env.Bundle()
 		}
 		if err == nil {
-			t.Errorf("bad envelope %s was unexpectedly accepted", entry.Name())
+			t.Errorf("bad envelope %s was unexpectedly accepted", c.name)
 		}
 	}
 }

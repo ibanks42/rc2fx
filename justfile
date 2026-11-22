@@ -93,9 +93,14 @@ mixer-enable:
 mixer-disable:
     {{ xtask }} mixer disable
 
+# Regenerate shared Rust and Go wire types from schema/
+schema:
+    {{ xtask }} schema
+
 # Tests and lints: the desktop app (Go; the UI packages only when the gpuikit download is linked) and, on Linux, the Rust workspace
 [unix]
 test:
+    {{ xtask }} schema --check
     cd desktop && test -z "$(gofmt -l $(go list -e -f '{{ "{{" }}.Dir{{ "}}" }}' ./...))"
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && CGO_ENABLED=0 go vet $pkgs
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && if [ -e third_party/gpuikit ]; then CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib" go test ./...; else go test $pkgs; fi

@@ -1,6 +1,6 @@
 # rc2fx-core
 
-This crate holds the mixer's copy of RC2FX's data models, covering settings, control API messages, and EQ coefficients. The desktop app keeps a matching Go implementation in `desktop/core` (along with editor-side logic like local edits, EQ response curves, and EasyEffects/APO import), and `fixtures/core` keeps the two in sync. Everything here is plain Rust with no audio processing, networking, file I/O, or GUI code.
+This crate holds the mixer's copy of RC2FX's data models, covering settings, control API messages, and EQ coefficients. Wire structs, enums, and constants are generated for both Rust and Go (`desktop/core`) from `schema/core.go` via `./xtask schema`, and live Rust <-> Go integration tests keep both sides in sync. Everything here is plain Rust with no audio processing, networking, file I/O, or GUI code.
 
 ## Configuration and device state
 
@@ -32,4 +32,4 @@ cargo test -p rc2fx-core
 cargo clippy -p rc2fx-core --all-targets -- -D warnings
 ```
 
-The integration tests cover the mixer's side of `fixtures/core` (encoding every document and verifying the mixer's verdicts on the ones it reads), the RLC coefficient vectors in `fixtures/easyeffects`, and strict parsing/validation rules. Everything runs offline with no mixer required.
+The integration tests verify live Rust <-> Go wire parity (via `desktop/internal/interop`), EQ/gate agreement, RLC coefficient vectors in `desktop/core/testdata/easyeffects`, and strict parsing/validation rules. Everything runs offline with no mixer required.

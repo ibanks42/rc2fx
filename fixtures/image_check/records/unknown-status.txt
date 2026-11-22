@@ -1,2 +1,0 @@
-status=bogus
-manifest=abc

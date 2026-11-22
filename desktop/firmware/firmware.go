@@ -4,7 +4,7 @@
 //
 // Ports the desktop-relevant parts of crates/rc2fx-firmware (catalog parsing
 // and offline inspection); runtime selection and the CLI stay in Rust on the
-// mixer. Shared fixtures live in fixtures/firmware.
+// mixer. Live Go <-> Rust parity is verified by crates/rc2fx-firmware/tests/shared_fixtures.rs.
 package firmware
 
 import (

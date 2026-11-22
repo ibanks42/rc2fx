@@ -1,3 +1,0 @@
-status=ok
-manifest=abc
-checked=x

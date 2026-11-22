@@ -1,76 +1,55 @@
 package core
 
-// Shared fixtures in fixtures/image_check. Rust tests `records` (mixer-side
-// report generation); Go tests `reports` (desktop-side decoding).
+// Inline desktop-side decoding contract tests for GET api/v1/image-check.
+// Both Rust and Go share ImageCheck / ImageStatus generated from schema/core.go.
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
 
-type imageReportCase struct {
-	Name      string  `json:"name"`
-	File      string  `json:"file"`
-	Accept    bool    `json:"accept"`
-	Canonical *string `json:"canonical"`
-	Why       string  `json:"why"`
-}
-
-type imageFixtures struct {
-	Reports []imageReportCase `json:"reports"`
-}
-
-func imageFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "fixtures", "image_check", name))
-	if err != nil {
-		t.Fatalf("%s: %v", name, err)
+func TestImageCheckReportContract(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		accept    bool
+		canonical string
+	}{
+		{"api-example", `{"status": "repaired", "checked": "2026-11-15T22:10:00Z", "repaired": ["usr/bin/rode-init-update-env.sh"]}`, true, `{"status":"repaired","checked":"2026-11-15T22:10:00Z","repaired":["usr/bin/rode-init-update-env.sh"]}`},
+		{"newer-fields", `{"status":"ok","later":1}`, true, `{"status":"ok"}`},
+		{"everything", `{"status":"damaged","checked":"2026-11-15T22:10:00Z","repaired":[],"damaged":["etc/hostname"],"unlisted":3}`, true, `{"status":"damaged","checked":"2026-11-15T22:10:00Z","damaged":["etc/hostname"],"unlisted":3}`},
+		{"empty", `{}`, true, `{"status":"none"}`},
+		{"null-checked", `{"status":"pending","checked":null}`, true, `{"status":"pending"}`},
+		{"each-status", `{"status":"ok","unlisted":0}`, true, `{"status":"ok"}`},
+		{"unknown-status", `{"status":"bogus"}`, false, ""},
+		{"status-case", `{"status":"Ok"}`, false, ""},
+		{"null-status", `{"status":null}`, false, ""},
+		{"negative-unlisted", `{"status":"ok","unlisted":-1}`, false, ""},
+		{"fractional-unlisted", `{"status":"ok","unlisted":1.5}`, false, ""},
+		{"null-list", `{"status":"ok","repaired":null}`, false, ""},
+		{"number-in-list", `{"status":"damaged","damaged":[1]}`, false, ""},
+		{"not-an-object", `"ok"`, false, ""},
 	}
-	return data
-}
-
-func loadImageFixtures(t *testing.T) imageFixtures {
-	t.Helper()
-	var fixtures imageFixtures
-	if err := json.Unmarshal(imageFixture(t, "cases.json"), &fixtures); err != nil {
-		t.Fatal(err)
-	}
-	if len(fixtures.Reports) == 0 {
-		t.Fatal("no image-check fixtures")
-	}
-	return fixtures
-}
-
-func TestImageCheckReportFixtures(t *testing.T) {
-	for _, c := range loadImageFixtures(t).Reports {
-		// What the transport does with the mixer's answer.
+	for _, c := range cases {
 		var check ImageCheck
-		err := DecodeStrict(imageFixture(t, c.File), &check)
-		if (err == nil) != c.Accept {
-			t.Errorf("%s (%s): accepted %t, want %t (%v)", c.Name, c.Why, err == nil, c.Accept, err)
+		err := DecodeStrict([]byte(c.input), &check)
+		if (err == nil) != c.accept {
+			t.Errorf("%s: accepted %t, want %t (%v)", c.name, err == nil, c.accept, err)
 			continue
 		}
-		if !c.Accept {
+		if !c.accept {
 			continue
-		}
-		if c.Canonical == nil {
-			t.Fatalf("%s: an accepted answer needs its canonical form", c.Name)
 		}
 		var canonical ImageCheck
-		if err := DecodeStrict([]byte(*c.Canonical), &canonical); err != nil {
-			t.Fatalf("%s: canonical: %v", c.Name, err)
+		if err := DecodeStrict([]byte(c.canonical), &canonical); err != nil {
+			t.Fatalf("%s: canonical: %v", c.name, err)
 		}
 		if !reflect.DeepEqual(normalImageCheck(check), normalImageCheck(canonical)) {
-			t.Errorf("%s:\n got %+v\nwant %+v", c.Name, check, canonical)
+			t.Errorf("%s:\n got %+v\nwant %+v", c.name, check, canonical)
 		}
 	}
 }
 
-// normalImageCheck treats an empty list as no list, as serde's
-// skip_serializing_if does when the mixer writes the report.
 func normalImageCheck(c ImageCheck) ImageCheck {
 	if len(c.Repaired) == 0 {
 		c.Repaired = nil

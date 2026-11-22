@@ -627,8 +627,8 @@ mod tests {
         }
     }
 
-    // Decoder rejection cases live in fixtures/delta/reject (shared with Go via
-    // tests/shared_fixtures.rs); this test covers envelope header parsing.
+    // Decoder rejection and live Go-interop cases live in
+    // tests/shared_fixtures.rs; this test covers envelope header parsing.
     #[test]
     fn malformed_envelope_heads_are_refused() {
         for bad in [

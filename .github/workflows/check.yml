@@ -201,6 +201,8 @@ jobs:
         run: |
           unformatted=$(go list -e -f '{{.Dir}}' ./... | xargs gofmt -l)
           test -z "$unformatted" || { printf 'gofmt would change:\n%s\n' "$unformatted" >&2; exit 1; }
+      - name: Check generated schema
+        run: ../xtask schema --check
       - name: List everything but the UI
         run: ../xtask non-ui-packages > "$RUNNER_TEMP/non-ui-packages"
       - name: Vet and test everything but the UI

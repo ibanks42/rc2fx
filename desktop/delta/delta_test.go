@@ -2,14 +2,45 @@ package delta
 
 import (
 	"bytes"
-	"errors"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/ibanks42/rc2fx/desktop/delta/internal/fixture"
+	"github.com/klauspost/compress/zstd"
 )
+
+type testFile struct {
+	name string
+	data []byte
+}
+
+func makeEnvelope(files []testFile) []byte {
+	var body []byte
+	for _, f := range files {
+		body = fmt.Appendf(body, "%s  %d  %s\n", sum(f.data), len(f.data), f.name)
+	}
+	for _, f := range files {
+		body = append(body, f.data...)
+	}
+	out := []byte("RC2FX-EMBEDDED-PAYLOAD 1\n")
+	out = fmt.Appendf(out, "length %d\n", len(body))
+	out = fmt.Appendf(out, "sha256 %s\n", sum(body))
+	return append(out, body...)
+}
+
+func sampleFiles() (shared, old, updated, gui []byte) {
+	shared = bytes.Repeat([]byte("a file the mixer already has\n"), 20)
+	old = bytes.Repeat([]byte("the previous rc2fxd build\n"), 200)
+	updated = bytes.Clone(old)
+	updated[7] ^= 1
+	updated = append(updated, bytes.Repeat([]byte("and its new tail\n"), 20)...)
+	gui = bytes.Repeat([]byte("compressible gui bytes "), 2000)
+	return
+}
 
 func installedFor(shared, old []byte) map[string]string {
 	return map[string]string{"librc2fx_native.so": sum(shared), "rc2fxd": sum(old)}
@@ -19,43 +50,99 @@ func basesFor(old []byte) map[string][]byte {
 	return map[string][]byte{"rc2fxd": bytes.Clone(old)}
 }
 
-func liveFiles(shared, old []byte) func(string) ([]byte, error) {
-	return func(name string) ([]byte, error) {
-		switch name {
-		case "librc2fx_native.so":
-			return bytes.Clone(shared), nil
-		case "rc2fxd":
-			return bytes.Clone(old), nil
-		}
-		return nil, fmt.Errorf("no installed %s", name)
-	}
-}
-
-func unreachable(string) ([]byte, error) { panic("the decoder read an installed file") }
-
-func decodeAll(delta []byte, installed func(string) ([]byte, error), max uint64) ([]byte, uint64, error) {
-	var restored bytes.Buffer
-	written, err := Decode(bytes.NewReader(delta), installed, &restored, max)
-	return restored.Bytes(), written, err
-}
-
 func mustEncode(t *testing.T, envelope []byte, installed map[string]string, bases map[string][]byte, level int) []byte {
 	t.Helper()
-	delta, err := Encode(envelope, installed, bases, level)
+	d, err := Encode(envelope, installed, bases, level)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return delta
+	return d
+}
+
+// verifyDelta parses a well-formed delta stream produced by Encode and
+// decompresses its frames using klauspost/zstd to check Go-side round-trips
+// on platforms where Rust isn't run (Windows/macOS). Full wire decoding and
+// hostile-input checks live in crates/rc2fx-delta.
+func verifyDelta(t *testing.T, d []byte, installed map[string][]byte, wantEnvelope []byte) {
+	t.Helper()
+	if !bytes.HasPrefix(d, []byte(Magic)) {
+		t.Fatal("missing delta magic")
+	}
+	rest := d[len(Magic):]
+	headLine, rest, ok := bytes.Cut(rest, []byte{'\n'})
+	if !ok {
+		t.Fatal("missing head line")
+	}
+	headLen, err := strconv.Atoi(strings.TrimPrefix(string(headLine), "head "))
+	if err != nil || headLen > len(rest) {
+		t.Fatalf("bad head line %q", headLine)
+	}
+	head := rest[:headLen]
+	rest = rest[headLen:]
+	_, entries, err := EnvelopeEntries(head)
+	if err != nil {
+		t.Fatalf("EnvelopeEntries(head): %v", err)
+	}
+	var rebuilt bytes.Buffer
+	rebuilt.Write(head)
+	for _, entry := range entries {
+		opLine, after, ok := bytes.Cut(rest, []byte{'\n'})
+		if !ok {
+			t.Fatalf("%s: missing op line", entry.Name)
+		}
+		rest = after
+		fields := strings.Fields(string(opLine))
+		switch fields[0] {
+		case "copy":
+			data, ok := installed[entry.Name]
+			if !ok {
+				t.Fatalf("%s: copy without installed file", entry.Name)
+			}
+			rebuilt.Write(data)
+		case "zstd", "patch":
+			n, err := strconv.Atoi(fields[len(fields)-1])
+			if err != nil || n > len(rest) {
+				t.Fatalf("%s: bad op %q", entry.Name, opLine)
+			}
+			frame := rest[:n]
+			rest = rest[n:]
+			opts := []zstd.DOption{zstd.WithDecoderMaxWindow(1 << windowLogMax)}
+			if fields[0] == "patch" {
+				base := installed[entry.Name]
+				if sum(base) != fields[1] {
+					t.Fatalf("%s: patch base hash mismatch", entry.Name)
+				}
+				if len(base) > 0 {
+					opts = append(opts, zstd.WithDecoderDictRaw(0, base))
+				}
+			}
+			dec, err := zstd.NewReader(bytes.NewReader(frame), opts...)
+			if err != nil {
+				t.Fatalf("%s: zstd.NewReader: %v", entry.Name, err)
+			}
+			plain, err := io.ReadAll(dec)
+			dec.Close()
+			if err != nil {
+				t.Fatalf("%s: decompress: %v", entry.Name, err)
+			}
+			rebuilt.Write(plain)
+		default:
+			t.Fatalf("%s: unknown op %q", entry.Name, opLine)
+		}
+	}
+	if len(rest) != 0 {
+		t.Fatalf("%d trailing bytes", len(rest))
+	}
+	if !bytes.Equal(rebuilt.Bytes(), wantEnvelope) {
+		t.Fatal("rebuilt envelope differs")
+	}
 }
 
 func TestCopyZstdAndPatchRoundTripToTheSameEnvelope(t *testing.T) {
-	shared, old, updated, gui := fixture.Sample()
-	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}, {Name: "librc2fx_gui.so", Data: gui}})
-	delta := mustEncode(t, env, installedFor(shared, old), basesFor(old), 19)
-	if !bytes.HasPrefix(delta, []byte(Magic)) {
-		t.Fatal("no magic")
-	}
-	text := string(delta)
+	shared, old, updated, gui := sampleFiles()
+	env := makeEnvelope([]testFile{{"librc2fx_native.so", shared}, {"rc2fxd", updated}, {"librc2fx_gui.so", gui}})
+	d := mustEncode(t, env, installedFor(shared, old), basesFor(old), 19)
+	text := string(d)
 	if !strings.Contains(text, "copy\n") {
 		t.Error("an unchanged file is copied")
 	}
@@ -65,41 +152,29 @@ func TestCopyZstdAndPatchRoundTripToTheSameEnvelope(t *testing.T) {
 	if !strings.Contains(text, "zstd ") {
 		t.Error("a file without a base is sent whole")
 	}
-	if len(delta) >= len(env) {
-		t.Errorf("delta %d bytes, envelope %d", len(delta), len(env))
+	if len(d) >= len(env) {
+		t.Errorf("delta %d bytes, envelope %d", len(d), len(env))
 	}
-	restored, written, err := decodeAll(delta, liveFiles(shared, old), uint64(len(env)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(restored, env) || written != uint64(len(env)) {
-		t.Fatal("the envelope was not rebuilt")
-	}
+	verifyDelta(t, d, map[string][]byte{"librc2fx_native.so": shared, "rc2fxd": old}, env)
 }
 
 func TestAFileTheMixerDoesNotHaveIsCompressedAlone(t *testing.T) {
-	_, _, _, gui := fixture.Sample()
-	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_gui.so", Data: gui}})
-	// Different hash from the envelope forces a full zstd upload.
+	_, _, _, gui := sampleFiles()
+	env := makeEnvelope([]testFile{{"librc2fx_gui.so", gui}})
 	installed := map[string]string{"librc2fx_gui.so": strings.Repeat("0", 64)}
-	delta := mustEncode(t, env, installed, nil, 19)
-	if !strings.Contains(string(delta), "zstd ") {
+	d := mustEncode(t, env, installed, nil, 19)
+	if !strings.Contains(string(d), "zstd ") {
 		t.Fatal("not sent whole")
 	}
-	restored, _, err := decodeAll(delta, func(string) ([]byte, error) {
-		return nil, errors.New("nothing is installed")
-	}, uint64(len(env)))
-	if err != nil || !bytes.Equal(restored, env) {
-		t.Fatalf("not rebuilt: %v", err)
-	}
+	verifyDelta(t, d, nil, env)
 }
 
 func TestTheManifestIsReadWithoutAFixedFileCount(t *testing.T) {
-	var files []fixture.File
+	var files []testFile
 	for index := range 20 {
-		files = append(files, fixture.File{Name: fmt.Sprintf("file-%d.bin", index), Data: bytes.Repeat([]byte{byte(index)}, index)})
+		files = append(files, testFile{fmt.Sprintf("file-%d.bin", index), bytes.Repeat([]byte{byte(index)}, index)})
 	}
-	env := fixture.Envelope(files)
+	env := makeEnvelope(files)
 	head, entries, err := EnvelopeEntries(env)
 	if err != nil {
 		t.Fatal(err)
@@ -115,53 +190,34 @@ func TestTheManifestIsReadWithoutAFixedFileCount(t *testing.T) {
 		t.Fatalf("head and files are %d bytes of %d", total, len(env))
 	}
 	for i, e := range entries {
-		if e.Name != files[i].Name || e.Size != uint64(len(files[i].Data)) || e.SHA256 != sum(files[i].Data) {
+		if e.Name != files[i].name || e.Size != uint64(len(files[i].data)) || e.SHA256 != sum(files[i].data) {
 			t.Errorf("entry %d: %+v", i, e)
 		}
 	}
 }
 
-func TestMalformedEnvelopesAndDeltasAreRefused(t *testing.T) {
-	shared, old, updated, _ := fixture.Sample()
-	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}})
-	valid := mustEncode(t, env, installedFor(shared, old), basesFor(old), 19)
-	live := liveFiles(shared, old)
-
-	badMagic := bytes.Clone(valid)
-	badMagic[0] = 'X'
-	if _, _, err := decodeAll(badMagic, live, math.MaxUint64); err == nil {
-		t.Error("bad magic accepted")
+func TestMalformedEnvelopesAreRefused(t *testing.T) {
+	shared, _, _, _ := sampleFiles()
+	env := makeEnvelope([]testFile{{"librc2fx_native.so", shared}})
+	if _, err := Encode(env, nil, nil, 19); err != nil {
+		t.Fatal(err)
 	}
-	if _, _, err := decodeAll(valid[:len(valid)-1], live, math.MaxUint64); err == nil {
-		t.Error("truncated delta accepted")
-	}
-	if _, _, err := decodeAll(append(bytes.Clone(valid), 0), live, math.MaxUint64); err == nil {
-		t.Error("trailing byte accepted")
-	}
-	unknown := bytes.Clone(valid)
-	at := bytes.Index(unknown, []byte("copy\n"))
-	copy(unknown[at:], "nope\n")
-	if _, _, err := decodeAll(unknown, live, math.MaxUint64); err == nil {
-		t.Error("unknown operation accepted")
-	}
-
-	// Trailing bytes after the last file must be rejected by Encode.
-	if _, err := Encode(append(bytes.Clone(env), 0), nil, nil, 3); err == nil {
+	if _, err := Encode(append(bytes.Clone(env), 0), nil, nil, 19); err == nil {
 		t.Error("padded envelope encoded")
 	}
-	_, _, err := decodeAll(valid, unreachable, uint64(len(env))-1)
-	if err == nil || !strings.Contains(err.Error(), "over") {
-		t.Errorf("limit: %v", err)
+	bad := bytes.Clone(env)
+	bad[0] = 'X'
+	if _, err := Encode(bad, nil, nil, 19); err == nil {
+		t.Error("bad magic encoded")
 	}
-
-	for _, bad := range []string{
+	for _, raw := range []string{
 		"",
 		"RC2FX-EMBEDDED-PAYLOAD 1\nlength 1\n",
 		"RC2FX-EMBEDDED-PAYLOAD 1\nlength 1\nsha256 x\n",
 		fmt.Sprintf("length 3\nsha256 %s\n", strings.Repeat("0", 64)),
 	} {
-		if _, _, err := EnvelopeEntries([]byte(bad)); err == nil {
-			t.Errorf("envelope %q accepted", bad)
+		if _, _, err := EnvelopeEntries([]byte(raw)); err == nil {
+			t.Errorf("envelope %q accepted", raw)
 		}
 	}
 	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
@@ -178,85 +234,39 @@ func TestMalformedEnvelopesAndDeltasAreRefused(t *testing.T) {
 	}
 }
 
-func TestAPatchAgainstTheWrongBaseIsRefused(t *testing.T) {
-	shared, old, updated, _ := fixture.Sample()
-	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}})
-	delta := mustEncode(t, env, installedFor(shared, old), basesFor(old), 19)
-	_, _, err := decodeAll(delta, func(name string) ([]byte, error) {
-		if name == "rc2fxd" {
-			return []byte("some other installed rc2fxd\n"), nil
-		}
-		return bytes.Clone(shared), nil
-	}, uint64(len(env)))
-	if err == nil || !strings.Contains(err.Error(), "base") {
-		t.Fatalf("wrong base: %v", err)
-	}
-}
-
-func TestACopyThatNoLongerMatchesTheEnvelopeIsRefused(t *testing.T) {
-	shared, _, _, _ := fixture.Sample()
-	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}})
-	delta := mustEncode(t, env, map[string]string{"librc2fx_native.so": sum(shared)}, nil, 19)
-	_, _, err := decodeAll(delta, func(string) ([]byte, error) {
-		return bytes.Repeat([]byte{'x'}, len(shared)), nil
-	}, uint64(len(env)))
-	if err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("stale copy: %v", err)
-	}
-}
-
-func TestAnEnvelopeWithoutFilesOrWithStaleBytesIsNotEncoded(t *testing.T) {
-	shared, _, _, _ := fixture.Sample()
-	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}})
-	if _, err := Encode(env, nil, nil, 19); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Encode(append(bytes.Clone(env), 0), nil, nil, 19); err == nil {
-		t.Error("longer envelope encoded")
-	}
-	bad := bytes.Clone(env)
-	bad[0] = 'X'
-	if _, err := Encode(bad, nil, nil, 19); err == nil {
-		t.Error("bad magic encoded")
-	}
-}
-
 func TestAStaleBaseIsNotUsedEvenWhenTheNameMatches(t *testing.T) {
-	_, old, updated, _ := fixture.Sample()
-	env := fixture.Envelope([]fixture.File{{Name: "rc2fxd", Data: updated}})
-	// Local base doesn't match the mixer's reported hash, so Encode must fall
-	// back to sending the full file.
+	_, old, updated, _ := sampleFiles()
+	env := makeEnvelope([]testFile{{"rc2fxd", updated}})
 	installed := map[string]string{"rc2fxd": sum([]byte("something else"))}
-	delta := mustEncode(t, env, installed, basesFor(old), 19)
-	if !strings.Contains(string(delta), "zstd ") {
+	d := mustEncode(t, env, installed, basesFor(old), 19)
+	if !strings.Contains(string(d), "zstd ") {
 		t.Fatal("patched against a stale base")
 	}
-	restored, _, err := decodeAll(delta, unreachable, uint64(len(env)))
-	if err != nil || !bytes.Equal(restored, env) {
-		t.Fatalf("not rebuilt: %v", err)
-	}
+	verifyDelta(t, d, nil, env)
 }
 
 // Verify encoded frames match the header flags the mixer's C decoder expects.
 func TestFramesSuitTheMixersDecoder(t *testing.T) {
-	shared, old, updated, gui := fixture.Sample()
+	shared, old, updated, gui := sampleFiles()
 	empty := []byte{}
-	env := fixture.Envelope([]fixture.File{{Name: "librc2fx_native.so", Data: shared}, {Name: "rc2fxd", Data: updated}, {Name: "librc2fx_gui.so", Data: gui}, {Name: "empty", Data: empty}, {Name: "empty-patch", Data: empty}})
+	env := makeEnvelope([]testFile{
+		{"librc2fx_native.so", shared},
+		{"rc2fxd", updated},
+		{"librc2fx_gui.so", gui},
+		{"empty", empty},
+		{"empty-patch", empty},
+	})
 	installed := installedFor(shared, old)
 	installed["empty-patch"] = sum(old)
 	bases := basesFor(old)
 	bases["empty-patch"] = bytes.Clone(old)
 	for _, level := range []int{1, 3, 7, 19, 22} {
-		delta := mustEncode(t, env, installed, bases, level)
-		restored, _, err := decodeAll(delta, func(name string) ([]byte, error) {
-			if name == "empty-patch" {
-				return bytes.Clone(old), nil
-			}
-			return liveFiles(shared, old)(name)
-		}, uint64(len(env)))
-		if err != nil || !bytes.Equal(restored, env) {
-			t.Fatalf("level %d: %v", level, err)
-		}
+		d := mustEncode(t, env, installed, bases, level)
+		verifyDelta(t, d, map[string][]byte{
+			"librc2fx_native.so": shared,
+			"rc2fxd":             old,
+			"empty-patch":        old,
+		}, env)
 	}
 	for _, c := range []struct {
 		data, prefix []byte
@@ -265,8 +275,8 @@ func TestFramesSuitTheMixersDecoder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(frame) == 0 {
-			t.Fatal("an empty frame")
+		if len(frame) < 5 || binary.LittleEndian.Uint32(frame) != 0xfd2fb528 {
+			t.Fatalf("bad zstd frame header (%d bytes)", len(frame))
 		}
 		descriptor := frame[4]
 		if descriptor&3 != 0 {
@@ -277,9 +287,6 @@ func TestFramesSuitTheMixersDecoder(t *testing.T) {
 		}
 		if descriptor&0x20 == 0 {
 			t.Error("the frame is not a single segment, which the C encoder writes when the window covers the file")
-		}
-		if n, err := frameLength(frame); err != nil || n != len(frame) {
-			t.Errorf("frame length %d of %d: %v", n, len(frame), err)
 		}
 	}
 }

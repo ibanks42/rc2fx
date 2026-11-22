@@ -8,25 +8,13 @@ import (
 )
 
 // Mixer runtime release metadata (distinct from both the desktop app version
-// and RØDE's stock firmware version). The mixer ships /opt/rc2fx/mixer-release.json
-// and exposes GET api/v1/version; older runtimes return 404.
-
-// MixerProtocolVersion is the USB 1 control protocol version. Bump only on
-// breaking changes.
-const MixerProtocolVersion uint32 = 1
+// and RØDE's stock firmware version). Wire types are generated from
+// schema/core.go into schema_gen.go.
 
 const (
-	MixerReleaseSchema uint32 = 1
-	maxReleaseBytes           = 4 * 1024
-	maxVersionText            = 128 // firmware profile IDs can be up to 96 bytes
+	maxReleaseBytes = 4 * 1024
+	maxVersionText  = 128 // firmware profile IDs can be up to 96 bytes
 )
-
-// MixerRelease models mixer-release.json.
-type MixerRelease struct {
-	SchemaVersion   uint32 `json:"schemaVersion"`
-	Version         string `json:"version"`
-	ProtocolVersion uint32 `json:"protocolVersion"`
-}
 
 // ParseMixerRelease strictly parses and validates a mixer-release.json file.
 func ParseMixerRelease(data []byte) (MixerRelease, error) {
@@ -50,21 +38,6 @@ func ParseMixerRelease(data []byte) (MixerRelease, error) {
 	}
 	return release, nil
 }
-
-// DeviceVersions is returned by GET api/v1/version. All fields are optional
-// and unknown fields are accepted for forward compatibility.
-type DeviceVersions struct {
-	Runtime         *string `json:"runtime,omitempty"`
-	Protocol        *uint32 `json:"protocol,omitempty"`
-	NativeProtocol  *uint32 `json:"nativeProtocol,omitempty"` // set when native lib protocol is older than daemon's
-	Firmware        *string `json:"firmware,omitempty"`
-	FirmwareProfile *string `json:"firmwareProfile,omitempty"`
-	// InPlaceUpdates is non-nil when the mixer supports USB 1 in-place updates:
-	// 1 = full uploads only, 2 = also supports delta uploads.
-	InPlaceUpdates *uint32 `json:"inPlaceUpdates,omitempty"`
-}
-
-func (DeviceVersions) AllowUnknownJSONFields() {}
 
 func (d DeviceVersions) Validate() error {
 	for _, text := range []*string{d.Runtime, d.Firmware, d.FirmwareProfile} {

@@ -8,8 +8,8 @@
 // signature verification runs.
 //
 // Port of crates/rc2fx-delta. The mixer runs the Rust decoder (libzstd with
-// --patch-from semantics and a 2^25 window cap), while Decode here mirrors it
-// for tests. Wire compatibility is pinned by shared fixtures in fixtures/delta.
+// --patch-from semantics and a 2^25 window cap); live Go-to-Rust wire
+// compatibility is verified directly by crates/rc2fx-delta/tests/shared_fixtures.rs.
 package delta
 
 import (
@@ -24,8 +24,6 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 )
-
-//go:generate go run ./internal/genfixtures -out ../../fixtures/delta
 
 const (
 	Magic         = "RC2FX-DELTA 1\n"

@@ -1,134 +1,15 @@
+pub use crate::schema_gen::{
+    Band, BandMode, BandType, Compressor, Config, DFN_HOP_SAMPLES, Effect, EqSettings,
+    GATE_HYSTERESIS, Gain, Highpass, Limiter, MAX_BANDS, MAX_TARGETS, SAMPLE_RATE, SCHEMA_VERSION,
+    Suppression, Target, TargetKind, VoiceGate,
+};
 use crate::{CoreError, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-pub const SCHEMA_VERSION: u32 = 9;
-pub const SAMPLE_RATE: f64 = 48_000.0;
-pub const MAX_TARGETS: usize = 32;
-pub const MAX_BANDS: usize = 32;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TargetKind {
-    Mic,
-    Playback,
-    Output,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Effect {
-    Highpass,
-    Suppression,
-    Eq,
-    Compressor,
-    Gain,
-    Limiter,
-}
-impl Effect {
-    pub const ALL: [Self; 6] = [
-        Self::Highpass,
-        Self::Suppression,
-        Self::Eq,
-        Self::Compressor,
-        Self::Gain,
-        Self::Limiter,
-    ];
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum BandType {
-    Off,
-    Bell,
-    LowShelf,
-    HighShelf,
-    LowPass,
-    HighPass,
-    Notch,
-}
-impl BandType {
-    pub const ALL: [Self; 7] = [
-        Self::Off,
-        Self::Bell,
-        Self::LowShelf,
-        Self::HighShelf,
-        Self::LowPass,
-        Self::HighPass,
-        Self::Notch,
-    ];
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum BandMode {
-    ApoDr,
-    RlcBt,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     Left,
     Right,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Config {
-    pub schema_version: u32,
-    pub revision: u64,
-    pub selected_targets: Vec<String>,
-    pub targets: Vec<Target>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Target {
-    pub id: String,
-    pub name: String,
-    pub kind: TargetKind,
-    pub channels: u8,
-    pub bypass: bool,
-    pub order: Vec<Effect>,
-    pub highpass: Highpass,
-    pub suppression: Suppression,
-    pub eq: EqSettings,
-    pub compressor: Compressor,
-    pub gain: Gain,
-    pub limiter: Limiter,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Highpass {
-    pub enabled: bool,
-    pub frequency: f64,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Suppression {
-    pub enabled: bool,
-    pub wet: f64,
-    /// DeepFilterNet3 lookahead in hops: 0 (default, also used for legacy configs)
-    /// or 1 (adds one hop of latency).
-    #[serde(default)]
-    pub lookahead: u8,
-    pub gate: VoiceGate,
-}
-/// Attenuates the suppressed microphone when the model detects no voice.
-/// Only active while suppression is enabled, since it reads the model's voice score.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct VoiceGate {
-    /// 0 (off) to 1 (strict); derives all parameters unless `advanced` is set.
-    pub strength: f64,
-    /// Use the explicit fields below instead of deriving them from `strength`.
-    pub advanced: bool,
-    /// Voice score (0..=1) at or above which the gate opens.
-    pub threshold: f64,
-    /// Attenuation when closed, in dB (0 disables the gate).
-    pub reduction: f64,
-    /// Opening time constant in ms.
-    pub attack: f64,
-    /// Time in ms the gate stays open after the voice score drops below threshold.
-    pub hold: f64,
-    /// Closing time constant after `hold`, in ms.
-    pub release: f64,
 }
 /// Resolved runtime gate parameters (smoothing operates in dB).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,7 +24,6 @@ pub struct GateShape {
     pub hold_ms: f64,
     pub release_ms: f64,
 }
-pub const GATE_HYSTERESIS: f64 = 0.15;
 impl GateShape {
     /// Maps a 0..=1 strength slider to concrete gate parameters.
     ///
@@ -239,8 +119,6 @@ impl Suppression {
         Ok(())
     }
 }
-/// DeepFilterNet3 STFT hop size in samples (5.0 ms at 48 kHz per lookahead step).
-pub const DFN_HOP_SAMPLES: u32 = 240;
 
 /// Model-defined buffering, excluding worker scheduling allowance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -281,61 +159,6 @@ impl Suppression {
             worker_lead_samples: 320,
         })
     }
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EqSettings {
-    pub enabled: bool,
-    pub input_gain_db: f64,
-    pub output_gain_db: f64,
-    pub bands: Vec<Band>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "present_bands"
-    )]
-    pub right_bands: Option<Vec<Band>>,
-}
-fn present_bands<'de, D: serde::Deserializer<'de>>(
-    decoder: D,
-) -> std::result::Result<Option<Vec<Band>>, D::Error> {
-    Vec::<Band>::deserialize(decoder).map(Some)
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Band {
-    pub id: String,
-    pub enabled: bool,
-    #[serde(rename = "type")]
-    pub band_type: BandType,
-    pub mode: BandMode,
-    pub solo: bool,
-    pub frequency: f64,
-    pub gain: f64,
-    pub q: f64,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Compressor {
-    pub enabled: bool,
-    pub threshold: f64,
-    pub ratio: f64,
-    pub attack: f64,
-    pub release: f64,
-    pub makeup: f64,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Gain {
-    pub enabled: bool,
-    pub db: f64,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Limiter {
-    pub enabled: bool,
-    pub ceiling: f64,
-    pub release: f64,
 }
 
 pub(crate) fn range(value: f64, min: f64, max: f64, name: &str) -> Result<()> {

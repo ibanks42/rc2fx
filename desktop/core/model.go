@@ -10,48 +10,6 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
-const (
-	SchemaVersion uint32  = 9
-	SampleRate    float64 = 48_000.0
-	MaxTargets            = 32
-	MaxBands              = 32
-)
-
-type TargetKind string
-
-const (
-	TargetKindMic      TargetKind = "mic"
-	TargetKindPlayback TargetKind = "playback"
-	TargetKindOutput   TargetKind = "output"
-)
-
-var targetKinds = []TargetKind{TargetKindMic, TargetKindPlayback, TargetKindOutput}
-
-func (k *TargetKind) UnmarshalText(text []byte) error { return enumUnmarshal(k, text, targetKinds) }
-
-type Effect string
-
-const (
-	EffectHighpass    Effect = "highpass"
-	EffectSuppression Effect = "suppression"
-	EffectEQ          Effect = "eq"
-	EffectCompressor  Effect = "compressor"
-	EffectGain        Effect = "gain"
-	EffectLimiter     Effect = "limiter"
-)
-
-// EffectAll lists all processing stages in default order.
-var EffectAll = [6]Effect{
-	EffectHighpass,
-	EffectSuppression,
-	EffectEQ,
-	EffectCompressor,
-	EffectGain,
-	EffectLimiter,
-}
-
-func (e *Effect) UnmarshalText(text []byte) error { return enumUnmarshal(e, text, EffectAll[:]) }
-
 func (e Effect) Label() string {
 	switch e {
 	case EffectHighpass:
@@ -69,30 +27,6 @@ func (e Effect) Label() string {
 	}
 	return string(e)
 }
-
-type BandType string
-
-const (
-	BandTypeOff       BandType = "off"
-	BandTypeBell      BandType = "bell"
-	BandTypeLowShelf  BandType = "low-shelf"
-	BandTypeHighShelf BandType = "high-shelf"
-	BandTypeLowPass   BandType = "low-pass"
-	BandTypeHighPass  BandType = "high-pass"
-	BandTypeNotch     BandType = "notch"
-)
-
-var BandTypeAll = [7]BandType{
-	BandTypeOff,
-	BandTypeBell,
-	BandTypeLowShelf,
-	BandTypeHighShelf,
-	BandTypeLowPass,
-	BandTypeHighPass,
-	BandTypeNotch,
-}
-
-func (b *BandType) UnmarshalText(text []byte) error { return enumUnmarshal(b, text, BandTypeAll[:]) }
 
 func (b BandType) Label() string {
 	switch b {
@@ -114,70 +48,12 @@ func (b BandType) Label() string {
 	return string(b)
 }
 
-type BandMode string
-
-const (
-	BandModeApoDr BandMode = "apo-dr"
-	BandModeRlcBt BandMode = "rlc-bt"
-)
-
-var bandModes = []BandMode{BandModeApoDr, BandModeRlcBt}
-
-func (m *BandMode) UnmarshalText(text []byte) error { return enumUnmarshal(m, text, bandModes) }
-
 type Channel uint8
 
 const (
 	ChannelLeft Channel = iota
 	ChannelRight
 )
-
-type Config struct {
-	SchemaVersion   uint32   `json:"schemaVersion"`
-	Revision        uint64   `json:"revision"`
-	SelectedTargets []string `json:"selectedTargets"`
-	Targets         []Target `json:"targets"`
-}
-
-type Target struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	Kind        TargetKind  `json:"kind"`
-	Channels    uint8       `json:"channels"`
-	Bypass      bool        `json:"bypass"`
-	Order       []Effect    `json:"order"`
-	Highpass    Highpass    `json:"highpass"`
-	Suppression Suppression `json:"suppression"`
-	EQ          EQSettings  `json:"eq"`
-	Compressor  Compressor  `json:"compressor"`
-	Gain        Gain        `json:"gain"`
-	Limiter     Limiter     `json:"limiter"`
-}
-
-type Highpass struct {
-	Enabled   bool    `json:"enabled"`
-	Frequency float64 `json:"frequency"`
-}
-
-type Suppression struct {
-	Enabled bool    `json:"enabled"`
-	Wet     float64 `json:"wet"`
-	// DeepFilterNet3 lookahead in hops: 0 (default) or 1 (+1 hop latency).
-	Lookahead uint8     `json:"lookahead,default"`
-	Gate      VoiceGate `json:"gate"`
-}
-
-// VoiceGate attenuates a suppressed mic when the model detects no voice.
-// Only active while suppression is enabled.
-type VoiceGate struct {
-	Strength  float64 `json:"strength"` // 0 (off) to 1 (strict); drives all params unless Advanced is set
-	Advanced  bool    `json:"advanced"`
-	Threshold float64 `json:"threshold"` // voice score [0, 1] to open the gate
-	Reduction float64 `json:"reduction"` // attenuation in dB (0 = off)
-	Attack    float64 `json:"attack"`    // ms
-	Hold      float64 `json:"hold"`      // ms
-	Release   float64 `json:"release"`   // ms
-}
 
 // GateShape holds the resolved runtime gate parameters (smoothed in dB).
 type GateShape struct {
@@ -188,8 +64,6 @@ type GateShape struct {
 	HoldMs         float64
 	ReleaseMs      float64
 }
-
-const GateHysteresis = 0.15
 
 // Correctly rounded log2(1.5) matching glibc; Go's math.Log2 can be 1 ULP off.
 const log2OnePointFive = 0.58496250072115618145373894394781650876
@@ -268,9 +142,6 @@ func (s Suppression) validateLookahead() error {
 	return nil
 }
 
-// DFNHopSamples is DeepFilterNet3's STFT hop (5.0 ms at 48 kHz).
-const DFNHopSamples uint32 = 240
-
 var Lookaheads = [2]uint8{0, 1}
 
 // ModelGeometry is model-inherent buffering, excluding worker scheduling lead.
@@ -309,46 +180,6 @@ func SuppressionAdmittedGeometry(lookahead uint8) (SuppressionGeometry, bool) {
 		IntrinsicDelaySamples: model.IntrinsicDelaySamples,
 		WorkerLeadSamples:     320,
 	}, true
-}
-
-type EQSettings struct {
-	Enabled      bool    `json:"enabled"`
-	InputGainDB  float64 `json:"inputGainDb"`
-	OutputGainDB float64 `json:"outputGainDb"`
-	Bands        []Band  `json:"bands"`
-	// Nil means the right channel follows the left; omitted on the wire (never null).
-	RightBands *[]Band `json:"rightBands,omitempty,nonnull"`
-}
-
-type Band struct {
-	ID        string   `json:"id"`
-	Enabled   bool     `json:"enabled"`
-	BandType  BandType `json:"type"`
-	Mode      BandMode `json:"mode"`
-	Solo      bool     `json:"solo"`
-	Frequency float64  `json:"frequency"`
-	Gain      float64  `json:"gain"`
-	Q         float64  `json:"q"`
-}
-
-type Compressor struct {
-	Enabled   bool    `json:"enabled"`
-	Threshold float64 `json:"threshold"`
-	Ratio     float64 `json:"ratio"`
-	Attack    float64 `json:"attack"`
-	Release   float64 `json:"release"`
-	Makeup    float64 `json:"makeup"`
-}
-
-type Gain struct {
-	Enabled bool    `json:"enabled"`
-	DB      float64 `json:"db"`
-}
-
-type Limiter struct {
-	Enabled bool    `json:"enabled"`
-	Ceiling float64 `json:"ceiling"`
-	Release float64 `json:"release"`
 }
 
 const MaxStatusText = 4096

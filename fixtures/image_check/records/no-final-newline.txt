@@ -1,2 +1,0 @@
-status=ok
-manifest=abc

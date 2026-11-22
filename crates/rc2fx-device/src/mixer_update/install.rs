@@ -23,56 +23,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The files a mixer payload carries, in its order. This and the three lists
-/// below match `fixtures/payload/lists.json`, as `PayloadNames`, `Pinned`,
-/// `Binaries` and `Scripts` in the desktop's
-/// `desktop/installer/embed/format.go` do; the test
-/// `the_payload_lists_match_the_shared_fixture` fails when they differ.
-pub const PAYLOAD_NAMES: [&str; 14] = [
-    "librc2fx_native.so",
-    "rc2fxd",
-    "rc2fx-supervisor",
-    "rc2fx-firmware",
-    "firmware-profiles.json",
-    "librc2fx_gui.so",
-    "librc2fx_jackerr.so",
-    "rc2fx_jackerr_snapshot",
-    "mixer-release.json",
-    "SHA256SUMS",
-    "rc2fx.sh",
-    "rc2fx-shim.sh",
-    "rc2fx-gui-shim.sh",
-    "install.sh",
-];
-/// The order of the bundle's `SHA256SUMS` lines.
-pub const PINNED: [&str; 9] = [
-    "librc2fx_native.so",
-    "rc2fxd",
-    "rc2fx-supervisor",
-    "rc2fx-firmware",
-    "firmware-profiles.json",
-    "librc2fx_gui.so",
-    "librc2fx_jackerr.so",
-    "rc2fx_jackerr_snapshot",
-    "mixer-release.json",
-];
-/// Files that are ARM64 ELF executables or libraries.
-pub const BINARIES: [&str; 7] = [
-    "librc2fx_native.so",
-    "rc2fxd",
-    "rc2fx-supervisor",
-    "rc2fx-firmware",
-    "librc2fx_gui.so",
-    "librc2fx_jackerr.so",
-    "rc2fx_jackerr_snapshot",
-];
-/// Files that live in the mixer's shell.
-pub const SCRIPTS: [&str; 4] = [
-    "rc2fx.sh",
-    "rc2fx-shim.sh",
-    "rc2fx-gui-shim.sh",
-    "install.sh",
-];
+pub use super::payload_lists_gen::{BINARIES, PAYLOAD_NAMES, PINNED, SCRIPTS};
 
 /// Payload files the running mixer process does not hold. The controller runs
 /// `rc2fxd`; the rest are read only by it, by an install or at the mixer's

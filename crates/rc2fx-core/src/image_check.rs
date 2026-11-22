@@ -6,58 +6,9 @@
 //! manifest, restores any damaged file from the inactive root partition if its
 //! hash matches, and writes the `key=value` result to `/opt/rc2fx/data/image-check`.
 
-use serde::{Deserialize, Serialize};
+pub use crate::schema_gen::{ImageCheck, ImageStatus, MAX_LISTED};
 
-/// Max file paths included in a report; overflow is counted in `unlisted`.
-pub const MAX_LISTED: usize = 32;
 const MAX_RECORD: usize = 64 * 1024;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ImageStatus {
-    /// No manifest in this image (pre-check install or in-place update).
-    None,
-    /// Manifest exists, but verification hasn't completed yet.
-    Pending,
-    /// All manifest files matched.
-    Ok,
-    /// Damaged files were restored from the inactive root; a reboot is needed
-    /// since RØDE's boot already loaded the damaged copies.
-    Repaired,
-    /// At least one file is damaged and couldn't be restored.
-    Damaged,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ImageCheck {
-    pub status: ImageStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub checked: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub repaired: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub damaged: Vec<String>,
-    /// Count of repaired/damaged files omitted due to [`MAX_LISTED`].
-    #[serde(skip_serializing_if = "is_zero")]
-    pub unlisted: usize,
-}
-
-fn is_zero(n: &usize) -> bool {
-    *n == 0
-}
-
-impl Default for ImageCheck {
-    fn default() -> Self {
-        Self {
-            status: ImageStatus::None,
-            checked: None,
-            repaired: Vec::new(),
-            damaged: Vec::new(),
-            unlisted: 0,
-        }
-    }
-}
 
 impl ImageCheck {
     /// Parses the on-disk record against the current image's manifest digest.

@@ -64,6 +64,20 @@ func errorContains(t *testing.T, err error, want string) {
 	}
 }
 
+func (c *Catalog) selectForModel(model Model, image []byte, experimentalDuo bool) (*Profile, error) {
+	if err := model.RequireRuntimeWith(experimentalDuo); err != nil {
+		return nil, err
+	}
+	profile, err := c.identify(model, image)
+	if err != nil {
+		return nil, err
+	}
+	if err := profile.VerifyImage(image); err != nil {
+		return nil, err
+	}
+	return profile, nil
+}
+
 func TestUSBModesAreModelSpecificAndSecondaryUSBIsNotControl(t *testing.T) {
 	for _, model := range ModelAll {
 		pids := model.NormalPIDs()

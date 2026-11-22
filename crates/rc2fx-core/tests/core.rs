@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/easyeffects")
+            .join("../../desktop/core/testdata/easyeffects")
             .join(name),
     )
     .unwrap()
