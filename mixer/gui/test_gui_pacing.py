@@ -37,17 +37,17 @@ def needs_qemu(test):
     return unittest.skipIf(platform.machine() == 'aarch64', 'this host runs the NEON path in the tests above')(test)
 
 
-def compile_c(out_name, sources, *flags, compiler=(CC,), warn=True):
+def compile_c(out_name, sources, *flags, compiler=(CC,), warn=True, libs=()):
     out = Path(BUILD.name) / out_name
     if not out.exists():
-        cmd = [*compiler, *(WARN if warn else ()), *flags, *(str(s) for s in sources), '-o', str(out)]
+        cmd = [*compiler, *(WARN if warn else ()), *flags, *(str(s) for s in sources), '-o', str(out), *libs]
         subprocess.run(cmd, check=True)
     return out
 
 
 def compile_module(out_name, *extra):
     return compile_c(out_name, [HERE / 'gui_pacing.c'], '-O2', '-fPIC', '-shared',
-                     '-fno-omit-frame-pointer', *extra, '-ldl')
+                     '-fno-omit-frame-pointer', *extra, libs=('-ldl',))
 
 
 def build_plan(name, *, aarch64=False):
@@ -79,8 +79,8 @@ def setUpModule():
     # as in the GUI.
     compile_c('libfakedrm.so', [HERE / 'fake_v4l2.c'], '-O2', '-fPIC', '-shared')
     compile_c('program', [HERE / 'gui_pacing_test.cpp'], '-O1', '-g', '-rdynamic', '-fno-omit-frame-pointer',
-              '-pthread', '-Wall', '-Werror', f'-L{out}', '-lfakedrm', f'-Wl,-rpath,{out}',
-              compiler=(CXX,), warn=False)
+              '-pthread', '-Wall', '-Werror', compiler=(CXX,), warn=False,
+              libs=(f'-L{out}', '-lfakedrm', f'-Wl,-rpath,{out}'))
 
 
 def tearDownModule():
