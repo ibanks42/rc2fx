@@ -94,6 +94,72 @@ class Binding(unittest.TestCase):
             self.assertEqual(set(callers.values()), {'./main'})
             self.assertEqual(results, ['500', '100', '7', '1'])
 
+    def test_plan_with_floating_point_parameters_parses_under_ld_audit(self):
+        import json
+        plan = {
+            'version': 1,
+            'sampleRate': 48000,
+            'frames': 112,
+            'paths': [{
+                'direction': 'input',
+                'ports': ['capture_1'],
+                'mode': 'processed',
+                'hardware': False,
+                'target': {
+                    'id': 'mic-1',
+                    'name': 'Mic 4',
+                    'kind': 'mic',
+                    'channels': 1,
+                    'bypass': False,
+                    'order': ['highpass', 'suppression', 'eq', 'compressor', 'gain', 'limiter'],
+                    'highpass': {'enabled': True, 'frequency': 80.5},
+                    'suppression': {
+                        'enabled': False, 'wet': 0.75, 'lookahead': 0,
+                        'gate': {
+                            'strength': 0.5, 'advanced': False,
+                            'threshold': 0.35, 'reduction': 12.5,
+                            'attack': 5.5, 'hold': 350.25, 'release': 164.3,
+                        },
+                    },
+                    'eq': {
+                        'enabled': True, 'inputGainDb': -1.5, 'outputGainDb': 0.75,
+                        'bands': [{
+                            'id': 'b1', 'enabled': True, 'type': 'bell', 'mode': 'apo-dr',
+                            'solo': False, 'frequency': 1000.5, 'gain': 2.25, 'q': 1.414,
+                        }],
+                    },
+                    'compressor': {
+                        'enabled': True, 'threshold': -18.5, 'ratio': 3.5,
+                        'attack': 10.5, 'release': 120.25, 'makeup': 2.5,
+                    },
+                    'gain': {'enabled': True, 'db': -3.5},
+                    'limiter': {'enabled': True, 'ceiling': -1.5, 'release': 45.5},
+                },
+            }],
+        }
+        plan_path = self.root / 'float-plan.json'
+        report_path = self.root / 'float-report.json'
+        plan_path.write_text(json.dumps(plan))
+        env = dict(os.environ, LD_AUDIT=str(LIBRARY),
+                   RC2FX_NATIVE_PROBE_PLAN=str(plan_path),
+                   RC2FX_NATIVE_PROBE_REPORT=str(report_path))
+        result = subprocess.run(['./main'], cwd=self.root, capture_output=True, text=True, timeout=20, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(report_path.exists(), f'no probe report written; stderr={result.stderr}')
+        report = json.loads(report_path.read_text())
+        self.assertEqual(report.get('planErrors'), 0, f'float plan refused: {result.stderr}')
+
+        # Also confirm stderr diagnostics are emitted under LD_AUDIT when a plan is invalid.
+        bad_path = self.root / 'bad-plan.json'
+        bad_report = self.root / 'bad-report.json'
+        bad_path.write_text('{"unknown": 1}')
+        bad_env = dict(os.environ, LD_AUDIT=str(LIBRARY),
+                       RC2FX_NATIVE_PROBE_PLAN=str(bad_path),
+                       RC2FX_NATIVE_PROBE_REPORT=str(bad_report))
+        bad_res = subprocess.run(['./main'], cwd=self.root, capture_output=True, text=True, timeout=20, env=bad_env)
+        self.assertEqual(bad_res.returncode, 0, bad_res.stderr)
+        self.assertIn('RC2FX native plan refused:', bad_res.stderr)
+
 
 class Launcher(unittest.TestCase):
     def test_the_flag_comes_only_from_the_ram_marker(self):

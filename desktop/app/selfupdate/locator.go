@@ -82,8 +82,3 @@ func readManifest(path string) (manifest, error) {
 	}
 	return m, nil
 }
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}

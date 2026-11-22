@@ -18,6 +18,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/elfcheck"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -202,7 +203,7 @@ func BuildMixer() error {
 				return task.Errorf("%s: %s", name, task.IOError(err))
 			}
 		}
-		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(data), name)
+		fmt.Fprintf(&sums, "%s  %s\n", common.SHA256Hex(data), name)
 	}
 	if err := os.WriteFile(filepath.Join(out, "SHA256SUMS"), []byte(sums.String()), 0o666); err != nil {
 		return task.Error(task.IOError(err))

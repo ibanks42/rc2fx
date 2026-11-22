@@ -1,7 +1,0 @@
-# comment
-schema=1
-noequals
-later=thing
-manifest=abc
-repaired=a=b
-status=ok

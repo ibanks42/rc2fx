@@ -4,26 +4,45 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
 )
 
-// Verify that TUF repositories signed by Go xtask (fixtures/xtask) pass the
-// desktop verifier as well as the mixer's (crates/rc2fx-device/tests/xtask_tuf_fixtures.rs).
+func generateLiveTUFRepos(t *testing.T) (string, []string) {
+	t.Helper()
+	dir := t.TempDir()
+	args := []string{"run", "./internal/interop", "xtask-tuf", dir}
+	repos := []string{"ed25519", "rsa"}
+	if runtime.GOOS == "windows" {
+		args = append(args, "--no-rsa")
+		repos = []string{"ed25519"}
+	}
+	cmd := exec.Command("go", args...)
+	cmd.Dir = ".."
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate live TUF repos: %v\n%s", err, out)
+	}
+	return dir, repos
+}
+
+// Verify that live TUF repositories signed by Go xtask pass the desktop verifier
+// as well as the mixer's (crates/rc2fx-device/tests/xtask_tuf_fixtures.rs).
 func TestTheAppAcceptsEveryRepositoryTheGoSignerWrote(t *testing.T) {
-	fixtures := filepath.Join("..", "..", "fixtures", "xtask")
-	targets := filepath.Join(fixtures, "targets")
-	for _, repo := range []string{"ed25519", "rsa"} {
-		root, err := os.ReadFile(filepath.Join(fixtures, repo, "root.json"))
+	dir, repos := generateLiveTUFRepos(t)
+	targets := filepath.Join(dir, "targets")
+	for _, repo := range repos {
+		root, err := os.ReadFile(filepath.Join(dir, repo, "root.json"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, metadata := range []string{"metadata", "refreshed"} {
 			name := repo + "/" + metadata
-			folders := tuf.Folders{Metadata: filepath.Join(fixtures, repo, metadata), Targets: targets}
+			folders := tuf.Folders{Metadata: filepath.Join(dir, repo, metadata), Targets: targets}
 			r, err := openMixerRepository(context.Background(), folders, root, t.TempDir())
 			if err != nil {
 				t.Fatalf("%s: %v", name, err)
@@ -50,13 +69,13 @@ func TestTheAppAcceptsEveryRepositoryTheGoSignerWrote(t *testing.T) {
 }
 
 func TestTheAppRefusesAnAlteredGoSignedRepository(t *testing.T) {
-	fixtures := filepath.Join("..", "..", "fixtures", "xtask")
-	root, err := os.ReadFile(filepath.Join(fixtures, "ed25519", "root.json"))
+	dir, repos := generateLiveTUFRepos(t)
+	root, err := os.ReadFile(filepath.Join(dir, "ed25519", "root.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	altered := t.TempDir()
-	source := filepath.Join(fixtures, "ed25519", "metadata")
+	source := filepath.Join(dir, "ed25519", "metadata")
 	entries, err := os.ReadDir(source)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +88,7 @@ func TestTheAppRefusesAnAlteredGoSignedRepository(t *testing.T) {
 		if entry.Name() == "targets.json" {
 			changed := bytes.Replace(data, []byte(`"1.0.1"`), []byte(`"1.0.2"`), 1)
 			if bytes.Equal(changed, data) {
-				t.Fatal("the fixture's targets.json no longer names 1.0.1; update this test")
+				t.Fatal("targets.json no longer names 1.0.1; update this test")
 			}
 			data = changed
 		}
@@ -77,17 +96,18 @@ func TestTheAppRefusesAnAlteredGoSignedRepository(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	folders := tuf.Folders{Metadata: altered, Targets: filepath.Join(fixtures, "targets")}
+	folders := tuf.Folders{Metadata: altered, Targets: filepath.Join(dir, "targets")}
 	if _, err := openMixerRepository(context.Background(), folders, root, t.TempDir()); err == nil {
 		t.Fatal("an altered targets.json was accepted")
 	}
-	// The other repository's root signs none of these.
-	other, err := os.ReadFile(filepath.Join(fixtures, "rsa", "root.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	folders.Metadata = source
-	if _, err := openMixerRepository(context.Background(), folders, other, t.TempDir()); err == nil {
-		t.Fatal("metadata was accepted under another repository's root")
+	if slices.Contains(repos, "rsa") {
+		other, err := os.ReadFile(filepath.Join(dir, "rsa", "root.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		folders.Metadata = source
+		if _, err := openMixerRepository(context.Background(), folders, other, t.TempDir()); err == nil {
+			t.Fatal("metadata was accepted under another repository's root")
+		}
 	}
 }

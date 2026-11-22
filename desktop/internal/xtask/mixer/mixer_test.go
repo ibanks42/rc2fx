@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/usbcontrol"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
@@ -99,7 +100,7 @@ func TestAPISessionPreservesOneRequesterAndFlushesEachReply(t *testing.T) {
 	if calls != 2 || output.flushes != 2 {
 		t.Fatalf("calls %d flushes %d", calls, output.flushes)
 	}
-	if n := len(lines(output.String())); n != 2 {
+	if n := len(common.Lines(output.String())); n != 2 {
 		t.Fatalf("%d lines", n)
 	}
 }
@@ -152,7 +153,7 @@ func staged(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	var printf string
-	for _, line := range lines(body) {
+	for _, line := range common.Lines(body) {
 		if strings.HasPrefix(strings.TrimLeft(line, " \t"), `printf '\x`) {
 			printf = line
 			break
@@ -218,7 +219,7 @@ func TestStagedDescriptorKeepsRodesItemsInOneCollection(t *testing.T) {
 
 func TestStagingOnlyAcceptsTheStockDescriptorItWasBuiltFrom(t *testing.T) {
 	body := prepareUSB(t)
-	if !strings.Contains(body, "sha256sum -c") || !strings.Contains(body, task.Sha256(stock)) ||
+	if !strings.Contains(body, "sha256sum -c") || !strings.Contains(body, common.SHA256Hex(stock)) ||
 		!strings.Contains(body, `> "$run/usb-report.bin"`) {
 		t.Fatal(body)
 	}

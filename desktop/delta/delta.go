@@ -8,24 +8,21 @@
 // signature verification runs.
 //
 // Port of crates/rc2fx-delta. The mixer runs the Rust decoder (libzstd with
-// --patch-from semantics and a 2^25 window cap), while Decode here mirrors it
-// for tests. Wire compatibility is pinned by shared fixtures in fixtures/delta.
+// --patch-from semantics and a 2^25 window cap); live Go-to-Rust wire
+// compatibility is verified directly by crates/rc2fx-delta/tests/shared_fixtures.rs.
 package delta
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"math/bits"
-	"strconv"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-)
 
-//go:generate go run ./internal/genfixtures -out ../../fixtures/delta
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
+)
 
 const (
 	Magic         = "RC2FX-DELTA 1\n"
@@ -65,7 +62,7 @@ func EnvelopeEntries(envelope []byte) (int, []Entry, error) {
 	if !ok {
 		return 0, nil, errors.New("the envelope has no length line")
 	}
-	length, ok := parseU64(text)
+	length, ok := common.ParseUint(text, 64)
 	if !ok {
 		return 0, nil, errors.New("the envelope's length is not a number")
 	}
@@ -108,14 +105,14 @@ func EnvelopeEntries(envelope []byte) (int, []Entry, error) {
 			return 0, nil, fmt.Errorf("%s's checksum in the envelope is malformed", name)
 		}
 		if !validName(name) {
-			return 0, nil, fmt.Errorf("%s is not a payload file name", rustDebug(name))
+			return 0, nil, fmt.Errorf("%q is not a payload file name", name)
 		}
 		for _, entry := range entries {
 			if entry.Name == name {
 				return 0, nil, fmt.Errorf("the envelope names %s twice", name)
 			}
 		}
-		size, ok := parseU64(sizeText)
+		size, ok := common.ParseUint(sizeText, 64)
 		if !ok {
 			return 0, nil, fmt.Errorf("%s's size in the envelope is not a number", name)
 		}
@@ -177,8 +174,8 @@ func Encode(envelope []byte, installed map[string]string, bases map[string][]byt
 			continue
 		}
 		base, haveBase := bases[entry.Name]
-		if haveBase && known && strings.EqualFold(current, sum(base)) {
-			hash := sum(base)
+		if haveBase && known && strings.EqualFold(current, common.SHA256Hex(base)) {
+			hash := common.SHA256Hex(base)
 			window := windowLog(uint64(len(base)) + uint64(size))
 			compressed, err := compress(data, base, level, window)
 			if err != nil {
@@ -272,21 +269,6 @@ func lineAt(b []byte, start int) (string, int, error) {
 	return "", 0, errors.New("an envelope header line is too long")
 }
 
-// parseU64 matches Rust's u64::from_str (optional leading '+', ASCII digits).
-func parseU64(text string) (uint64, bool) {
-	digits := strings.TrimPrefix(text, "+")
-	if digits == "" {
-		return 0, false
-	}
-	for i := 0; i < len(digits); i++ {
-		if digits[i] < '0' || digits[i] > '9' {
-			return 0, false
-		}
-	}
-	value, err := strconv.ParseUint(digits, 10, 64)
-	return value, err == nil
-}
-
 func saturatingAdd(a, b uint64) uint64 {
 	if sum, carry := bits.Add64(a, b, 0); carry == 0 {
 		return sum
@@ -299,49 +281,5 @@ func validName(name string) bool {
 }
 
 func validHash(text string) bool {
-	if len(text) != 64 {
-		return false
-	}
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
-			return false
-		}
-	}
-	return true
-}
-
-func sum(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
-}
-
-// rustDebug formats ASCII text like Rust's {:?} Debug formatter.
-func rustDebug(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			b.WriteString(`\"`)
-		case '\\':
-			b.WriteString(`\\`)
-		case '\t':
-			b.WriteString(`\t`)
-		case '\r':
-			b.WriteString(`\r`)
-		case '\n':
-			b.WriteString(`\n`)
-		case 0:
-			b.WriteString(`\0`)
-		default:
-			if r < 0x20 || r == 0x7f {
-				fmt.Fprintf(&b, `\u{%x}`, r)
-			} else {
-				b.WriteRune(r)
-			}
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
+	return len(text) == 64 && common.IsHex(text)
 }

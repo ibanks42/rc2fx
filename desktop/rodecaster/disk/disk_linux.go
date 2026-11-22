@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 const sysBlock = "/sys/class/block"
@@ -21,11 +23,6 @@ func readTrim(path string) string {
 	return strings.TrimSpace(string(b))
 }
 
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // usbDevice walks up sysfs from a block device to its enclosing USB device dir.
 func usbDevice(sys string) string {
 	current, err := filepath.EvalSymlinks(sys)
@@ -33,7 +30,7 @@ func usbDevice(sys string) string {
 		return ""
 	}
 	for current != "/" && current != "/sys" && current != "." {
-		if exists(filepath.Join(current, "idVendor")) {
+		if common.PathExists(filepath.Join(current, "idVendor")) {
 			return current
 		}
 		current = filepath.Dir(current)
@@ -51,7 +48,7 @@ func find() ([]Info, error) {
 	for _, e := range entries {
 		name := e.Name()
 		sys := filepath.Join(sysBlock, name)
-		if !strings.HasPrefix(name, "sd") || exists(filepath.Join(sys, "partition")) {
+		if !strings.HasPrefix(name, "sd") || common.PathExists(filepath.Join(sys, "partition")) {
 			continue
 		}
 		usb := usbDevice(sys)

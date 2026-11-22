@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 func testRelease(t *testing.T, dir string) string {
@@ -24,7 +24,7 @@ func testRelease(t *testing.T, dir string) string {
 		{"rc2fx-linux-x64.AppImage", "appimage"},
 	} {
 		mustWrite(t, filepath.Join(assets, a.name), []byte(a.data))
-		fmt.Fprintf(&list, "%s  %s\n", task.Sha256([]byte(a.data)), a.name)
+		fmt.Fprintf(&list, "%s  %s\n", common.SHA256Hex([]byte(a.data)), a.name)
 	}
 	mustWrite(t, filepath.Join(assets, sums), []byte(list.String()))
 	return assets
@@ -64,7 +64,7 @@ func TestEveryAssetButTheSumsBecomesAVersionedTarget(t *testing.T) {
 		}
 	}
 	appimage := repository.Targets.Entries["v1.2.3/rc2fx-linux-x64.AppImage"]
-	if appimage.Length != 8 || task.Sha256([]byte("appimage")) != hex.EncodeToString(appimage.SHA256) {
+	if appimage.Length != 8 || common.SHA256Hex([]byte("appimage")) != hex.EncodeToString(appimage.SHA256) {
 		t.Fatalf("%+v", appimage)
 	}
 	if !repository.Targets.Expires.Equal(repository.Root.Expires) {
@@ -105,7 +105,7 @@ func TestSigningRefusesAssetsTheSumsDoNotVouchFor(t *testing.T) {
 		t.Fatal(e)
 	}
 	for _, out := range []string{"a", "b", "c", "d"} {
-		if exists(filepath.Join(dir, out)) {
+		if common.PathExists(filepath.Join(dir, out)) {
 			t.Fatalf("%s written", out)
 		}
 	}

@@ -4,11 +4,10 @@
 //
 // Ports the desktop-relevant parts of crates/rc2fx-firmware (catalog parsing
 // and offline inspection); runtime selection and the CLI stay in Rust on the
-// mixer. Shared fixtures live in fixtures/firmware.
+// mixer. Live Go <-> Rust parity is verified by crates/rc2fx-firmware/tests/shared_fixtures.rs.
 package firmware
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // Catalog represents config/firmware-profiles.json. Decoded via core's strict
@@ -83,11 +83,6 @@ func isHex(text string, length int) bool {
 		}
 	}
 	return true
-}
-
-func sum(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
 }
 
 // OffsetValue parses s.Offset into an aligned executable-relative byte offset.
@@ -272,7 +267,7 @@ func profileIDBytes(id string) bool {
 }
 
 func (c *Catalog) identify(model Model, image []byte) (*Profile, error) {
-	hash := sum(image)
+	hash := common.SHA256Hex(image)
 	for i := range c.Profiles {
 		if p := &c.Profiles[i]; p.Model == model.ID() && p.MixerSHA256 == hash {
 			return p, nil
@@ -313,7 +308,7 @@ func (c *Catalog) InspectForModel(model Model, image, launcher []byte) (*Profile
 // VerifyImage checks the executable's hash and every hook site's original
 // instructions.
 func (p *Profile) VerifyImage(image []byte) error {
-	if sum(image) != p.MixerSHA256 {
+	if common.SHA256Hex(image) != p.MixerSHA256 {
 		return errors.New("mixer executable differs from its profile hash")
 	}
 	runtime := p.Runtime
@@ -352,7 +347,7 @@ func (p *Profile) VerifyImage(image []byte) error {
 
 // VerifyLauncher checks the audio launcher's hash.
 func (p *Profile) VerifyLauncher(launcher []byte) error {
-	if sum(launcher) != p.LauncherSHA256 {
+	if common.SHA256Hex(launcher) != p.LauncherSHA256 {
 		return fmt.Errorf("%s: audio launcher differs from its profile hash", p.ID)
 	}
 	return nil

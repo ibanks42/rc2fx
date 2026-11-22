@@ -11,6 +11,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/mixer"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/packaging"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/release"
+	"github.com/ibanks42/rc2fx/desktop/internal/xtask/schema"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/setup"
 )
 
@@ -47,6 +48,7 @@ const help = `./xtask <command>
   check-elf FILE [--shared]  Check a mixer binary against the mixer ABI baseline
   licenses [--base] FILE  Write consolidated license notices HTML (or --base JSON for release jobs)
   non-ui-packages       List desktop Go packages that do not depend on gpuikit
+  schema [--check]      Generate Rust and Go wire types from schema/ (--check fails if stale)
   check-ui-link [DIR]   Link ./cmd/rc2fx with release Velopack and gpuikit flags
   app [--release] [--mock] [--embedded] [--build-only] [-- ARGS...]
                         Build the desktop app for this machine into target/debug (a development
@@ -57,12 +59,12 @@ const help = `./xtask <command>
                         documentation, licenses and SHA256SUMS in target/package
 
 Mixer connection: .rc2fx-mixer.conf (see .rc2fx-mixer.conf.example) or the
-RC2FX_MIXER_IP, RC2FX_MIXER_USER, RC2FX_MIXER_KEY and RC2FX_MIXER_KNOWN_HOSTS
-environment variables.
+RC2FX_MIXER_IP, RC2FX_MIXER_USER, RC2FX_MIXER_KEY, RC2FX_MIXER_KNOWN_HOSTS,
+RC2FX_MIXER_HOST_KEY_ALIAS and RC2FX_MIXER_PRE_COMMAND environment variables.
 
-bench and every mixer action except status, logs and api first arm the mixer's
-one-shot power recovery over SSH and refuse to run if they cannot
-(docs/developer/mixer-workflow.md). api uses USB 1 only and does not arm.`
+If pre_command is configured, bench and mutating mixer actions run it before
+touching the mixer over SSH and abort if it fails. status, logs and api do not
+run pre_command (api uses USB 1 only).`
 
 // Launcher working directory so relative path arguments resolve as expected.
 const cwdVariable = "RC2FX_XTASK_CWD"
@@ -122,6 +124,10 @@ func dispatch(args []string) error {
 		return licenses.WriteBaseLicenses(rest[1])
 	case command == "non-ui-packages" && len(rest) == 0:
 		return packaging.NonUIPackages()
+	case command == "schema" && len(rest) == 0:
+		return schema.Run(false)
+	case command == "schema" && len(rest) == 1 && rest[0] == "--check":
+		return schema.Run(true)
 	case command == "check-ui-link" && len(rest) == 0:
 		return packaging.CheckUILink("")
 	case command == "check-ui-link" && len(rest) == 1:

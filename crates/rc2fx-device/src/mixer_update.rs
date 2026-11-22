@@ -12,6 +12,7 @@
 
 pub mod install;
 pub mod payload;
+mod payload_lists_gen;
 pub mod verify;
 
 use install::{LastOutcome, Paths, Pending, StoredState};

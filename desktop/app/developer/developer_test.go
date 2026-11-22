@@ -87,7 +87,7 @@ func TestUnknownOrPendingOffersNoAction(t *testing.T) {
 
 func TestTheLoginCommandQuotesPaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Rust: #[cfg(not(windows))]")
+		t.Skip("POSIX shell quoting only")
 	}
 	cmd := LoginCommand("/home/a b/.ssh/rc2fx", "/tmp/it's/known_hosts", "rc2fx-0123456789ab", "")
 	want := `ssh -i '/home/a b/.ssh/rc2fx' -o UserKnownHostsFile='/tmp/it'\''s/known_hosts' ` +
@@ -99,7 +99,7 @@ func TestTheLoginCommandQuotesPaths(t *testing.T) {
 
 func TestATypedAddressReplacesThePlaceholder(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Rust: #[cfg(not(windows))]")
+		t.Skip("POSIX shell quoting only")
 	}
 	cmd := LoginCommand("/k", "/k", "rc2fx-0", "192.168.1.20")
 	if !strings.HasSuffix(cmd, "root@192.168.1.20") || strings.Contains(cmd, "MIXER_IP") {

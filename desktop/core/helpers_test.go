@@ -18,7 +18,11 @@ func repoFile(t *testing.T, parts ...string) []byte {
 
 func easyFixture(t *testing.T, name string) string {
 	t.Helper()
-	return string(repoFile(t, "fixtures", "easyeffects", name))
+	data, err := os.ReadFile(filepath.Join("testdata", "easyeffects", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func parse(t *testing.T, text string) Value {

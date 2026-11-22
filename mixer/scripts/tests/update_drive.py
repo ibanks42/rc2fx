@@ -7,12 +7,23 @@ Stubs for mkfs.vfat, mount, and umount are placed first on PATH: the virtual
 disk is backed by a sibling directory that the mount stub copies into the mount
 point.
 """
-from pathlib import Path
 import os
-import subprocess
+import shlex
+import sys
 import tempfile
+from pathlib import Path
 
-script = Path(__file__).parents[1] / "rc2fx.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import source_rc2fx, write_fake_bin  # noqa: E402
+
+# Confirm update_dir is fixed to /run/rc2fx-update (the shims read it literally).
+default_check = source_rc2fx(
+    'printf "%s\\n" "$update_dir"',
+    env={"RC2FX_UPDATE_DIR": "/ignored/override"},
+)
+assert default_check.returncode == 0 and default_check.stdout == "/run/rc2fx-update\n", (
+    default_check.stdout + default_check.stderr
+)
 
 with tempfile.TemporaryDirectory(prefix="rc2fx-update-drive-") as directory:
     root = Path(directory)
@@ -25,29 +36,27 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-update-drive-") as directory:
     session = update / "0123456789abcdef"
     session.mkdir(parents=True)
     image = session / "drive.img"
-    bin_dir = root / "bin"
-    bin_dir.mkdir()
-    mounts = root / "mounts"
+    proc = root / "proc"
+    proc.mkdir()
+    mounts = proc / "mounts"
     mounts.write_text("")
-    stubs = {
-        "mkfs.vfat": 'test "$1" = -n && test "$2" = RC2FX && test -f "$3"; mkdir -p "$3.disk"',
-        "mount": f'img=${{@: -2:1}}; mnt=${{@: -1}}; cp -r "$img.disk/." "$mnt"; echo "x $mnt x" >> {mounts}',
-        "umount": f'rm -rf "$1"/*; : > {mounts}',
+    bin_dir = write_fake_bin(root / "bin", {
+        "mkfs.vfat": 'set -eu\ntest "$1" = -n && test "$2" = RC2FX && test -f "$3"; mkdir -p "$3.disk"',
+        "mount": f'set -eu\nimg=${{@: -2:1}}; mnt=${{@: -1}}; cp -r "$img.disk/." "$mnt"; echo "x $mnt x" >> {mounts}',
+        "umount": f'set -eu\nrm -rf "$1"/*; : > {mounts}',
+    })
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "RC2FX_GADGET_ROOT": str(root / "gadget"),
+        "RC2FX_PROC": str(proc),
+        "RC2FX_HOME": str(root),
+        "RC2FX_LOGS": str(root / "logs"),
+        "RC2FX_DATA": str(root / "data"),
     }
-    for name, body in stubs.items():
-        path = bin_dir / name
-        path.write_text("#!/bin/bash\nset -eu\n" + body + "\n")
-        path.chmod(0o755)
-    source = script.read_text()
-    source = source.replace("update_dir=/run/rc2fx-update", f"update_dir={update}")
-    source = source.replace("/proc/mounts", str(mounts))
-    patched = root / "rc2fx.sh"
-    patched.write_text(source)
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", RC2FX_GADGET_ROOT=str(root / "gadget"),
-               RC2FX_HOME=str(root), RC2FX_LOGS=str(root / "logs"), RC2FX_DATA=str(root / "data"))
 
     def run(*args, success=True):
-        result = subprocess.run(["bash", str(patched), "update-drive", *args], capture_output=True, text=True, env=env)
+        body = f"update_dir={shlex.quote(str(update))}\nupdate_drive {shlex.join(args)}\n"
+        result = source_rc2fx(body, env=env)
         assert (result.returncode == 0) == success, (args, result.stdout + result.stderr)
         return result.stdout + result.stderr
 

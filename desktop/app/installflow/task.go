@@ -9,6 +9,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/opt"
 )
 
 type Mark int
@@ -313,14 +314,7 @@ func (m *Model) StartBlocker() string {
 }
 
 func (m *Model) Recommended() bool {
-	return !m.mixerChosen && sameChoicePtr(m.Choice, defaultChoice(m.Releases))
-}
-
-func sameChoicePtr(a, b *Choice) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
+	return !m.mixerChosen && opt.Equal(m.Choice, defaultChoice(m.Releases))
 }
 
 func (m *Model) SettingsCarried() bool {

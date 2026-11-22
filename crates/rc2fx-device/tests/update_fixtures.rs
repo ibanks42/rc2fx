@@ -1,32 +1,48 @@
-//! Shared in-place update DTO and payload envelope fixtures (`fixtures/update/`).
-//! Go checks the same files in `desktop/installer/update_fixtures_test.go` and
-//! `desktop/transport/update_fixtures_test.go`.
+//! Inline in-place update wire-DTO contract tests and live Go-built payload
+//! envelope interoperability tests.
 
 use rc2fx_device::mixer_update::{Chunk, Progress, StartRequest, payload, verify::MixerTarget};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::PathBuf;
-
-fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/update")
-}
+use std::process::Command;
 
 #[test]
-fn update_dtos_match_shared_fixtures() {
-    let dto: Value =
-        serde_json::from_slice(&std::fs::read(dir().join("dto.json")).unwrap()).unwrap();
+fn update_dtos_match_wire_contract() {
+    let valid_target = json!({
+        "version": "0.2.1",
+        "payloadFormat": 1,
+        "protocolVersion": 1,
+        "minimumAppVersion": "0.1.7",
+        "firmwareProfiles": ["rodecaster-pro-ii-1.7.7", "rodecaster-duo-1.7.7"]
+    });
+    let target: MixerTarget = serde_json::from_value(valid_target.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&target).unwrap(), valid_target);
 
-    for case in dto["mixerTargets"]["accept"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let target: MixerTarget = serde_json::from_value(case["json"].clone())
-            .unwrap_or_else(|e| panic!("accept mixerTarget {name}: {e}"));
-        let roundtrip = serde_json::to_value(&target).unwrap();
-        assert_eq!(roundtrip, case["json"], "roundtrip mixerTarget {name}");
-    }
-    for case in dto["mixerTargets"]["reject"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        if let Ok(target) = serde_json::from_value::<MixerTarget>(case["json"].clone()) {
-            // Structural deserialization succeeded (e.g. empty profiles);
-            // semantic validation must reject it.
+    for (name, bad) in [
+        (
+            "unknown-field",
+            json!({
+                "version": "0.2.1", "payloadFormat": 1, "protocolVersion": 1,
+                "minimumAppVersion": "0.1.7", "firmwareProfiles": ["rodecaster-pro-ii-1.7.7"],
+                "extra": true
+            }),
+        ),
+        (
+            "missing-minimum-app",
+            json!({
+                "version": "0.2.1", "payloadFormat": 1, "protocolVersion": 1,
+                "firmwareProfiles": ["rodecaster-pro-ii-1.7.7"]
+            }),
+        ),
+        (
+            "empty-profiles",
+            json!({
+                "version": "0.2.1", "payloadFormat": 1, "protocolVersion": 1,
+                "minimumAppVersion": "0.1.7", "firmwareProfiles": []
+            }),
+        ),
+    ] {
+        if let Ok(target) = serde_json::from_value::<MixerTarget>(bad) {
             assert!(
                 target.firmware_profiles.is_empty(),
                 "expected reject for mixerTarget {name}, got {target:?}"
@@ -34,86 +50,192 @@ fn update_dtos_match_shared_fixtures() {
         }
     }
 
-    for case in dto["startRequests"]["accept"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let req: StartRequest = serde_json::from_value(case["json"].clone())
+    for (name, good) in [
+        (
+            "whole-envelope",
+            json!({
+                "version": "0.2.1",
+                "size": 9403,
+                "sha256": "8fb8f5ce993567895775f544a14450a6f9be0660f6ca146f04e6b75428a77a12",
+                "metadata": {"root": ["{}"], "timestamp": "{}", "snapshot": "{}", "targets": "{}"}
+            }),
+        ),
+        (
+            "delta-upload-with-downgrade",
+            json!({
+                "version": "0.2.0",
+                "size": 9403,
+                "sha256": "8fb8f5ce993567895775f544a14450a6f9be0660f6ca146f04e6b75428a77a12",
+                "metadata": {"root": ["{}", "{}"], "timestamp": "{}", "snapshot": "{}", "targets": "{}"},
+                "allowDowngrade": true,
+                "encoding": "delta-1",
+                "uploadSize": 1024
+            }),
+        ),
+    ] {
+        let req: StartRequest = serde_json::from_value(good.clone())
             .unwrap_or_else(|e| panic!("accept startRequest {name}: {e}"));
-        assert_eq!(req.version, case["json"]["version"].as_str().unwrap());
-        assert_eq!(req.size, case["json"]["size"].as_u64().unwrap());
+        assert_eq!(req.version, good["version"].as_str().unwrap());
+        assert_eq!(req.size, good["size"].as_u64().unwrap());
     }
-    for case in dto["startRequests"]["reject"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
+    for (name, bad) in [
+        (
+            "unknown-field",
+            json!({
+                "version": "0.2.1", "size": 100,
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "metadata": {"root": ["{}"], "timestamp": "{}", "snapshot": "{}", "targets": "{}"},
+                "unexpected": 1
+            }),
+        ),
+        (
+            "missing-metadata",
+            json!({
+                "version": "0.2.1", "size": 100,
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }),
+        ),
+    ] {
         assert!(
-            serde_json::from_value::<StartRequest>(case["json"].clone()).is_err(),
+            serde_json::from_value::<StartRequest>(bad).is_err(),
             "accepted invalid startRequest {name}"
         );
     }
 
-    for case in dto["chunks"]["accept"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let chunk: Chunk = serde_json::from_value(case["json"].clone())
-            .unwrap_or_else(|e| panic!("accept chunk {name}: {e}"));
-        assert_eq!(chunk.offset, case["json"]["offset"].as_u64().unwrap());
-        assert_eq!(chunk.data, case["json"]["data"].as_str().unwrap());
+    for (name, good) in [
+        (
+            "first-chunk",
+            json!({"offset": 0, "data": "cmMyZngtdXBkYXRlLWNodW5r"}),
+        ),
+        (
+            "offset-chunk",
+            json!({"offset": 196608, "data": "AAH+/w=="}),
+        ),
+    ] {
+        let chunk: Chunk = serde_json::from_value(good.clone()).unwrap();
+        assert_eq!(chunk.offset, good["offset"].as_u64().unwrap(), "{name}");
+        assert_eq!(chunk.data, good["data"].as_str().unwrap(), "{name}");
     }
-    for case in dto["chunks"]["reject"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
+    for (name, bad) in [
+        (
+            "unknown-field",
+            json!({"offset": 0, "data": "AA==", "extra": true}),
+        ),
+        ("missing-offset", json!({"data": "AA=="})),
+    ] {
         assert!(
-            serde_json::from_value::<Chunk>(case["json"].clone()).is_err(),
+            serde_json::from_value::<Chunk>(bad).is_err(),
             "accepted invalid chunk {name}"
         );
     }
 
-    for case in dto["progress"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let j = &case["json"];
-        let state: &'static str = match j["state"].as_str().unwrap() {
-            "accepting" => "accepting",
-            "complete" => "complete",
-            "installing" => "installing",
-            "restarting" => "restarting",
-            "failed" => "failed",
-            other => panic!("unexpected state {other}"),
-        };
-        let encoding: Option<&'static str> = match j.get("encoding").and_then(Value::as_str) {
-            None => None,
-            Some("delta-1") => Some("delta-1"),
-            Some(other) => panic!("unexpected encoding {other}"),
-        };
-        let progress = Progress {
-            id: j["id"].as_str().unwrap().to_owned(),
-            state,
-            version: j["version"].as_str().unwrap().to_owned(),
-            size: j["size"].as_u64().unwrap(),
-            received: j["received"].as_u64().unwrap(),
-            encoding,
-            upload_size: j.get("uploadSize").and_then(Value::as_u64),
-            error: j.get("error").and_then(Value::as_str).map(str::to_owned),
-        };
-        let serialized = serde_json::to_value(&progress).unwrap();
-        assert_eq!(serialized, *j, "progress {name}");
+    for (name, progress, want) in [
+        (
+            "accepting-plain",
+            Progress {
+                id: "0123456789abcdef".into(),
+                state: "accepting",
+                version: "0.2.1".into(),
+                size: 9403,
+                received: 4096,
+                encoding: None,
+                upload_size: None,
+                error: None,
+            },
+            json!({"id":"0123456789abcdef","state":"accepting","version":"0.2.1","size":9403,"received":4096}),
+        ),
+        (
+            "accepting-delta",
+            Progress {
+                id: "fedcba9876543210".into(),
+                state: "accepting",
+                version: "0.2.1".into(),
+                size: 9403,
+                received: 512,
+                encoding: Some("delta-1"),
+                upload_size: Some(1024),
+                error: None,
+            },
+            json!({"id":"fedcba9876543210","state":"accepting","version":"0.2.1","size":9403,"received":512,"encoding":"delta-1","uploadSize":1024}),
+        ),
+        (
+            "restarting",
+            Progress {
+                id: "0123456789abcdef".into(),
+                state: "restarting",
+                version: "0.2.1".into(),
+                size: 9403,
+                received: 9403,
+                encoding: None,
+                upload_size: None,
+                error: None,
+            },
+            json!({"id":"0123456789abcdef","state":"restarting","version":"0.2.1","size":9403,"received":9403}),
+        ),
+        (
+            "failed",
+            Progress {
+                id: "0123456789abcdef".into(),
+                state: "failed",
+                version: "0.2.1".into(),
+                size: 9403,
+                received: 9403,
+                encoding: None,
+                upload_size: None,
+                error: Some("verification failed".into()),
+            },
+            json!({"id":"0123456789abcdef","state":"failed","version":"0.2.1","size":9403,"received":9403,"error":"verification failed"}),
+        ),
+    ] {
+        let serialized: Value = serde_json::to_value(&progress).unwrap();
+        assert_eq!(serialized, want, "progress {name}");
     }
 }
 
 #[test]
-fn payload_envelope_roundtrips_and_rejects_bad_fixtures() {
-    let valid = std::fs::read(dir().join("envelope.bin")).unwrap();
-    let files = payload::read(&mut valid.as_slice()).expect("valid shared envelope must pass");
+fn go_built_payload_envelope_parses_and_bad_envelopes_are_rejected() {
+    let desktop = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../desktop");
+    let output = Command::new("go")
+        .args(["run", "./internal/interop", "update-envelope"])
+        .current_dir(&desktop)
+        .output()
+        .expect("spawn `go run ./internal/interop update-envelope`");
+    assert!(
+        output.status.success(),
+        "go interop update-envelope failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let valid = output.stdout;
+    let files = payload::read(&mut valid.as_slice()).expect("valid Go envelope must pass");
     assert!(!files.is_empty());
 
-    let bad_dir = dir().join("bad-envelopes");
-    let mut bad_files: Vec<PathBuf> = std::fs::read_dir(&bad_dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    bad_files.sort();
-    assert!(!bad_files.is_empty());
-    for path in bad_files {
-        let bytes = std::fs::read(&path).unwrap();
+    let dev_output = Command::new("go")
+        .args(["run", "./internal/interop", "update-envelope", "--dev"])
+        .current_dir(&desktop)
+        .output()
+        .expect("spawn `go run ./internal/interop update-envelope --dev`");
+    assert!(dev_output.status.success());
+
+    let mut bad_magic = valid.clone();
+    bad_magic[0] = b'X';
+    let mut bad_digest = valid.clone();
+    let tail = bad_digest.len() - 1;
+    bad_digest[tail] ^= 0xff;
+    let truncated = valid[..valid.len() - 1].to_vec();
+    let mut trailing = valid.clone();
+    trailing.push(0);
+
+    for (name, bytes) in [
+        ("empty", Vec::new()),
+        ("bad-magic", bad_magic),
+        ("bad-digest", bad_digest),
+        ("truncated", truncated),
+        ("trailing-byte", trailing),
+        ("dev-build", dev_output.stdout),
+    ] {
         assert!(
             payload::read(&mut bytes.as_slice()).is_err(),
-            "accepted malformed envelope {}",
-            path.display()
+            "accepted malformed envelope {name}"
         );
     }
 }

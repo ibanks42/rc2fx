@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // VelopackLocator builds Velopack's AppImage paths with a per-user packages
@@ -24,11 +26,11 @@ func VelopackLocator() (LocatorConfig, bool) {
 	contents := filepath.Join(exe[:idx], "usr", "bin")
 	update := filepath.Join(contents, "UpdateNix")
 	metadata := filepath.Join(contents, "sq.version")
-	if !exists(update) {
+	if !common.PathExists(update) {
 		return LocatorConfig{}, false
 	}
 	appimage := os.Getenv("APPIMAGE")
-	if appimage == "" || !exists(appimage) {
+	if appimage == "" || !common.PathExists(appimage) {
 		return LocatorConfig{}, false
 	}
 	if _, err := readManifest(metadata); err != nil {

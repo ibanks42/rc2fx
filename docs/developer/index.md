@@ -53,11 +53,10 @@ See [Architecture](architecture.md) for how all the pieces fit together.
 | `mixer/jackerr` | `librc2fx_jackerr.so` and `rc2fx_jackerr_snapshot` (C), the `jackd` error recorder and snapshot reader |
 | `xtask`, `desktop/cmd/xtask` | Build, deploy, and packaging tasks. `./xtask` at the root invokes the Go tool in `desktop/cmd/xtask` and `desktop/internal/xtask`. |
 | `mixer/scripts` | Launcher, shims, and installer scripts that run on the mixer, with tests in `mixer/scripts/tests` |
-| `fixtures/` | Shared accept/reject test cases read by both Rust and Go tests to keep both implementations in sync |
+| `schema/` | Shared wire schema definitions (`schema/core.go`, `schema/payload.go`) generated into both Rust and Go via `./xtask schema` |
 | `config/firmware-profiles.json` | [Firmware catalog](../reference/firmware.md) |
 | `tools/firmware_audit` | Audits a new RØDE firmware against the hooks RC2FX relies on |
 | `tools/src_fast_check` | Compares the library's sample-rate converter (`src_fast_core.rs`) against real libsamplerate on AArch64 or under qemu |
-| `tools/xrun_trace` | Xrun flight recorder: bench runs and kernel scheduler traces on a mixer |
 | `experiments/` | Unfinished work outside the main build (currently the on-screen panel) |
 | `docs/` | This documentation |
 
@@ -77,7 +76,7 @@ Rust; the desktop app lives in the Go module under `desktop/`.
 - [Architecture](architecture.md): startup flow, fallback to stock, and how
   settings are applied.
 - [The desktop app in Go](desktop-go.md): Go packages, naming conventions,
-  strict JSON handling, and fixtures shared with Rust.
+  strict JSON handling, and schemas shared with Rust.
 - [Releases](releases.md): how releases are cut and signed.
 - [Signed mixer releases](mixer-releases.md): standalone mixer releases,
   compatibility declarations, and in-place updates.

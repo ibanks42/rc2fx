@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf/tuftest"
 )
@@ -26,11 +27,6 @@ func put(t *testing.T, path string, data []byte) {
 	t.Helper()
 	must(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	must(t, os.WriteFile(path, data, 0o644))
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 type appFixture struct {
@@ -89,7 +85,7 @@ func TestACorrectlySignedPackageIsAccepted(t *testing.T) {
 	if err := f.verify("1.2.3", testPackage, file); err != nil {
 		t.Fatal(err)
 	}
-	if !exists(file) {
+	if !common.PathExists(file) {
 		t.Fatal("removed")
 	}
 }
@@ -102,7 +98,7 @@ func TestAPackageWithTheWrongBytesOrLengthIsRejectedAndRemoved(t *testing.T) {
 		if err == nil || !err.Rejected || err.Message != updateMismatch {
 			t.Fatalf("%q: %+v", data, err)
 		}
-		if exists(file) {
+		if common.PathExists(file) {
 			t.Fatal("a rejected download is discarded")
 		}
 	}
@@ -121,7 +117,7 @@ func TestAnUnsignedReleaseOrAssetIsRejectedAndSaysToTryAgainLater(t *testing.T) 
 			t.Fatalf("%v: %+v", c, err)
 		}
 	}
-	if !exists(file) {
+	if !common.PathExists(file) {
 		t.Fatal("nothing was compared, so the caller decides")
 	}
 }
@@ -162,7 +158,7 @@ func TestMetadataSignedByAKeyOutsideTheRootIsRejected(t *testing.T) {
 	if err == nil || err.Rejected || !strings.HasPrefix(err.Message, "Could not check") {
 		t.Fatalf("%+v", err)
 	}
-	if !exists(file) {
+	if !common.PathExists(file) {
 		t.Fatal("removed")
 	}
 }
@@ -174,7 +170,7 @@ func TestExpiredMetadataIsNotTrusted(t *testing.T) {
 	if err := f.verify("1.2.3", testPackage, file); err == nil || err.Rejected {
 		t.Fatalf("%+v", err)
 	}
-	if !exists(file) {
+	if !common.PathExists(file) {
 		t.Fatal("removed")
 	}
 }
@@ -241,7 +237,7 @@ func TestInvalidVersionsAndAssetNamesAreRefusedBeforeAnyFetch(t *testing.T) {
 			t.Fatalf("%v: %+v", c, err)
 		}
 	}
-	if exists(filepath.Join(dir, "nonexistent")) {
+	if common.PathExists(filepath.Join(dir, "nonexistent")) {
 		t.Fatal("fetched")
 	}
 }

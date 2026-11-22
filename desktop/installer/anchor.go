@@ -11,12 +11,12 @@ package installer
 
 import (
 	"errors"
-	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
@@ -38,7 +38,7 @@ func (e *Engine) anchorFile() (string, error) {
 	if dir == "" {
 		return "", nil
 	}
-	return filepath.Join(dir, archive.Sum([]byte(e.Work))), nil
+	return filepath.Join(dir, common.SHA256Hex([]byte(e.Work))), nil
 }
 
 func (e *Engine) anchorPrepared(prepared *Prepared) error {

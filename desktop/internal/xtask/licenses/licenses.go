@@ -17,6 +17,7 @@ import (
 
 	applicenses "github.com/ibanks42/rc2fx/desktop/app/licenses"
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
@@ -302,7 +303,7 @@ func decodeEntity(entity string) (rune, bool) {
 		value, err = strconv.ParseUint(entity[2:], 16, 32)
 	case strings.HasPrefix(entity, "#"):
 		var ok bool
-		value, ok = task.ParseUint(entity[1:], 32)
+		value, ok = common.ParseUint(entity[1:], 32)
 		if !ok {
 			err = errors.New("invalid")
 		}

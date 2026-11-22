@@ -20,9 +20,9 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
-	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"
 )
 
 const (
@@ -103,17 +103,12 @@ func (m *MixerTarget) RequireCompatible(appVersion string, protocol uint32, prof
 	return nil
 }
 
-func comparable(v string) bool {
-	_, ok := core.CompareVersions(v, v)
-	return ok
-}
-
 func (m *MixerTarget) validate() error {
 	unique := map[string]bool{}
 	for _, p := range m.FirmwareProfiles {
 		unique[p] = true
 	}
-	if !comparable(m.Version) || !comparable(m.MinimumAppVersion) || m.ProtocolVersion == 0 ||
+	if !core.ValidVersion(m.Version) || !core.ValidVersion(m.MinimumAppVersion) || m.ProtocolVersion == 0 ||
 		len(m.FirmwareProfiles) == 0 || slices.Contains(m.FirmwareProfiles, "") || len(unique) != len(m.FirmwareProfiles) {
 		return mixerError("invalid signed mixer compatibility metadata")
 	}
@@ -339,7 +334,7 @@ func (r *MixerRepository) AcceptCached(ctx context.Context, offer *MixerOffer, a
 		if err != nil {
 			return nil, err
 		}
-		if uint64(len(data)) == offer.Length && archive.Sum(data) == offer.SHA256 {
+		if uint64(len(data)) == offer.Length && common.SHA256Hex(data) == offer.SHA256 {
 			return verifyPayload(data, offer.Metadata.clone(), profile, &appVersion)
 		}
 		// Corrupt cache entry: fall through to re-fetch and atomically replace.
@@ -385,7 +380,7 @@ func (r *MixerRepository) BasePayload(ctx context.Context, version, cache string
 		return nil, err
 	}
 	path := filepath.Join(cache, sha+".payload")
-	if data, err := os.ReadFile(path); err == nil && int64(len(data)) == length && archive.Sum(data) == sha {
+	if data, err := os.ReadFile(path); err == nil && int64(len(data)) == length && common.SHA256Hex(data) == sha {
 		return &path, nil
 	}
 	data, err := r.read(ctx, name, signed)

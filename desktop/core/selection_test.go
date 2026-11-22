@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// Path selection, capacity, and session rebasing tests (mixer-side validation
-// lives in crates/rc2fx-core/tests/selection.rs).
+// Path selection, capacity, and session rebasing tests.
 
 func ids(values ...string) []string { return append([]string{}, values...) }
 

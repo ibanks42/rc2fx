@@ -8,19 +8,19 @@ in a temp directory. The replacement (and fallback) is a real child process that
 populates its own fake /proc entries; thread moves go through bb_move_task and
 bb_set_cpus stubs.
 """
-import hashlib
 import os
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-SCRIPT = (Path(__file__).parents[1] / 'rc2fx.sh').read_text()
-BLOCK = SCRIPT.split('# ---- JACK error recorder', 1)[1].split('\n', 1)[1].split(
-    '# ---- end of the JACK error recorder', 1)[0]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import RC2FX_SH, function_body, sha256_bytes, source_rc2fx, write_executable  # noqa: E402
+
 ORIGINAL = 555555
 CALLME = 666666
 FOREIGN = 777777
@@ -95,7 +95,6 @@ exec sleep 60
 '''
 
 PRELUDE = r'''
-set -uo pipefail
 say() { printf '%s\n' "$*"; }
 start_time() { local record rest f; record=$(cat "$blackbox_proc/$1/stat") || return 1; rest=${record##*) }; read -r -a f <<< "$rest"; printf '%s\n' "${f[19]}"; }
 alive() {
@@ -200,8 +199,7 @@ class Fixture:
         self.overrides = options
 
     def executable(self, path, body):
-        path.write_text('#!/bin/bash\n' + body)
-        path.chmod(0o700)
+        write_executable(path, body, mode=0o700)
 
     def process(self, pid, comm, argv, env, maps='', pcms=()):
         p = self.proc / str(pid)
@@ -217,21 +215,19 @@ class Fixture:
             (p / 'fd' / str(n)).symlink_to(target)
 
     def run(self, timeout=40, command='replace_in_test_dir'):
-        settings = '\n'.join([
-            f'home={self.home}', f'logs={self.logs}', f'data={self.data}',
-            f'export TEST_LOG={self.root} TEST_MODE={self.mode}',
-            f'export PATH={self.bin}:$PATH',
-        ])
         overrides = '\n'.join([
+            f'export PATH={self.bin}:$PATH',
             f'test_dir={self.diag}',
             f'blackbox_proc={self.proc}', f'blackbox_cpuset={self.cpuset}',
             f'blackbox_jackd={self.jackd}', f'blackbox_callme={self.bin / "callme"}', f'blackbox_owner={os.getuid()}',
             *(f'{name}={value}' for name, value in self.overrides.items()),
         ])
-        script = (settings + '\n' + PRELUDE + BLOCK + SEAMS + overrides
-                  + f'\n{command}; status=$?; wait; exit $status\n')
-        self.result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=timeout,
-                                     env=dict(os.environ, TEST_LOG=str(self.root), TEST_MODE=self.mode))
+        body = PRELUDE + SEAMS + overrides + f'\n{command}; status=$?; wait; exit $status\n'
+        env = {
+            'RC2FX_HOME': str(self.home), 'RC2FX_LOGS': str(self.logs), 'RC2FX_DATA': str(self.data),
+            'TEST_LOG': str(self.root), 'TEST_MODE': self.mode,
+        }
+        self.result = source_rc2fx(body, env=env, strict=False, timeout=timeout)
         return self.result.returncode
 
     def lines(self, name):
@@ -430,7 +426,7 @@ class RecorderTests(unittest.TestCase):
         lines = []
         for name in names:
             path = f.home / name
-            digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else '1' * 64
+            digest = sha256_bytes(path.read_bytes()) if path.exists() else '1' * 64
             lines.append(f'{digest}  {name}\n')
         (f.home / 'SHA256SUMS').write_text(''.join(lines))
         return f
@@ -620,9 +616,8 @@ class RecorderTests(unittest.TestCase):
         f = self.fixture()
         self.assertEqual(f.run(command='jack_recorder'), 0, f.log())
         # Run the real status() with supervisor and gui_status stubbed out.
-        status = 'status() {' + SCRIPT.split('\nstatus() {', 1)[1].split('\n}\n', 1)[0] + '\n}\n'
         self.assertEqual(f.run(command='boot=$TEST_LOG/boot run=$TEST_LOG/run\n'
-                               'supervisor() { return 1; }\ngui_status() { :; }\n' + status + 'status'), 0)
+                               'supervisor() { return 1; }\ngui_status() { :; }\nstatus'), 0)
         self.assertIn('RC2FX is not running', f.result.stdout)
         self.assertIn('JACK recorder: active pid', f.result.stdout)
 
@@ -631,15 +626,17 @@ class LaunchOrderTests(unittest.TestCase):
     """Static check that launch() runs all stock fallbacks before jack_recorder."""
 
     def test_stock_starts_and_first_boot_exit_before_the_recorder(self):
-        body = SCRIPT.split('\nlaunch() {\n', 1)[1].split('\n}\n', 1)[0]
+        script = RC2FX_SH.read_text()
+        body = function_body('launch', script)
         logging = body.index('jack_recorder')
-        for guard in ("test -e /opt/rc2fx/disabled", "test -e /usr/bin/first-boot",
+        self.assertIn('first_boot=${RC2FX_FIRST_BOOT:-/usr/bin/first-boot}', script)
+        for guard in ("test -e /opt/rc2fx/disabled", 'test -e "$first_boot"',
                       'sha256sum -c SHA256SUMS', "say 'Stock mixer started: the launch plan failed'"):
             self.assertLess(body.index(guard), logging, guard)
         self.assertEqual(body.count('exec "$stock_mixer" "$@"'), 2)
         self.assertLess(body.rindex('exec "$stock_mixer" "$@"'), logging)
-        self.assertNotIn('rm -rf "$recorder_dir', SCRIPT)
-        self.assertNotIn('bb_prune', SCRIPT, 'no evidence pruning anywhere')
+        self.assertNotIn('rm -rf "$recorder_dir', script)
+        self.assertNotIn('bb_prune', script, 'no evidence pruning anywhere')
 
 
 if __name__ == '__main__':

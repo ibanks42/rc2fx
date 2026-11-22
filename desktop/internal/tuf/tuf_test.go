@@ -1,7 +1,14 @@
 package tuf
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -67,5 +74,91 @@ func TestFileStoreRefusesNamesOutsideItsFolder(t *testing.T) {
 	}
 	if _, found, _ := store.Load("absent.json"); found {
 		t.Fatal("absent found")
+	}
+}
+
+func TestDistinctKeysRejectsRewrappedAndCrossEncodedKeys(t *testing.T) {
+	// 1. Re-wrapped RSA PEM (different whitespace/headers) under two key IDs.
+	rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spki, err := x509.MarshalPKIXPublicKey(&rsaPriv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemA := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki}))
+	pemB := strings.ReplaceAll(pemA, "\n", "\r\n")
+	rootRSA := &metadata.RootType{
+		Keys: map[string]*metadata.Key{
+			"k1": {Type: "rsa", Scheme: "rsassa-pss-sha256", Value: metadata.KeyVal{PublicKey: pemA}},
+			"k2": {Type: "rsa", Scheme: "rsassa-pss-sha256", Value: metadata.KeyVal{PublicKey: pemB}},
+		},
+		Roles: map[string]*metadata.Role{
+			"root": {KeyIDs: []string{"k1", "k2"}, Threshold: 2},
+		},
+	}
+	if err := DistinctKeys(rootRSA); err == nil {
+		t.Fatal("DistinctKeys accepted re-wrapped RSA PEM under two IDs")
+	}
+
+	// 2. Hex vs SPKI PEM Ed25519 under two key IDs, even with mismatched keytype.
+	edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edSPKI, err := x509.MarshalPKIXPublicKey(edPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: edSPKI}))
+	edHex := hex.EncodeToString(edPub)
+	rootEd := &metadata.RootType{
+		Keys: map[string]*metadata.Key{
+			"k1": {Type: "ed25519", Scheme: "ed25519", Value: metadata.KeyVal{PublicKey: edHex}},
+			"k2": {Type: "alias", Scheme: "ed25519", Value: metadata.KeyVal{PublicKey: edPEM}},
+		},
+		Roles: map[string]*metadata.Role{
+			"targets": {KeyIDs: []string{"k1", "k2"}, Threshold: 2},
+		},
+	}
+	if err := DistinctKeys(rootEd); err == nil {
+		t.Fatal("DistinctKeys accepted hex and PEM forms of the same Ed25519 key")
+	}
+
+	// 3. verifyKey rejects mismatched keytype vs scheme even for a valid signature.
+	msg := []byte("hello")
+	sig := ed25519.Sign(edPriv, msg)
+	badKey := &metadata.Key{Type: "rsa", Scheme: "ed25519", Value: metadata.KeyVal{PublicKey: edHex}}
+	if err := verifyKey(badKey, msg, sig); err == nil {
+		t.Fatal("verifyKey accepted keytype/scheme mismatch")
+	}
+}
+
+func TestVerifyKeyCapsRSAKeySizeAt4096Bits(t *testing.T) {
+	rsaKeyForBits := func(bits uint) *metadata.Key {
+		t.Helper()
+		n := new(big.Int).Lsh(big.NewInt(1), bits-1)
+		n.SetBit(n, 0, 1)
+		spki, err := x509.MarshalPKIXPublicKey(&rsa.PublicKey{N: n, E: 65537})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki}))
+		return &metadata.Key{Type: "rsa", Scheme: "rsassa-pss-sha256", Value: metadata.KeyVal{PublicKey: pemText}}
+	}
+
+	msg := []byte("hello")
+	for _, bits := range []uint{1024, 2047, 4097, 8192} {
+		err := verifyKey(rsaKeyForBits(bits), msg, make([]byte, (bits+7)/8))
+		if err == nil || !strings.Contains(err.Error(), "outside 2048-4096 bits") {
+			t.Errorf("%d-bit RSA key: got %v, want size rejection", bits, err)
+		}
+	}
+
+	// A 4096-bit key passes the size check and fails only on signature verification.
+	err := verifyKey(rsaKeyForBits(4096), msg, make([]byte, 512))
+	if err == nil || strings.Contains(err.Error(), "outside 2048-4096 bits") {
+		t.Errorf("4096-bit RSA key: got %v, want signature error rather than size rejection", err)
 	}
 }

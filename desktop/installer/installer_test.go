@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
@@ -344,7 +345,7 @@ func writeRuntime(t *testing.T, root string, catalog []byte) {
 	}
 	var manifest strings.Builder
 	for _, n := range []string{"librc2fx_native.so", "rc2fxd", "rc2fx-supervisor", "rc2fx-firmware", "firmware-profiles.json", "librc2fx_gui.so", "librc2fx_jackerr.so", "rc2fx_jackerr_snapshot", "mixer-release.json"} {
-		manifest.WriteString(archive.Sum(bundle[n]) + "  " + n + "\n")
+		manifest.WriteString(common.SHA256Hex(bundle[n]) + "  " + n + "\n")
 		put(t, filepath.Join(root, "runtime", n), bundle[n])
 	}
 	put(t, filepath.Join(root, "runtime", "SHA256SUMS"), []byte(manifest.String()))
@@ -382,7 +383,7 @@ func newFixture(t *testing.T) *fixture {
 		Version:    "1.7.7",
 		Channel:    "beta",
 		Profile:    "fixture",
-		ArchiveSHA: archive.Sum(data),
+		ArchiveSHA: common.SHA256Hex(data),
 		ArchiveMD5: md,
 		Runtime:    runtime,
 	}
@@ -539,7 +540,7 @@ func TestTheHelperRefusesAnImageRewrittenTogetherWithItsCacheRecord(t *testing.T
 	must(t, err)
 	put(t, filepath.Join(work, "archive.md5"), []byte(md))
 	saved := x.saved()
-	saved.Prepared.ArchiveSHA = archive.Sum(forged)
+	saved.Prepared.ArchiveSHA = common.SHA256Hex(forged)
 	saved.Prepared.ArchiveMD5 = md
 	must(t, x.engine.save(saved))
 	if x.engine.flash("") == nil {
@@ -548,7 +549,7 @@ func TestTheHelperRefusesAnImageRewrittenTogetherWithItsCacheRecord(t *testing.T
 	if x.counts() != [3]int{} {
 		t.Fatal("device accessed")
 	}
-	if exists(filepath.Join(usb, "archive.tar.gz")) {
+	if common.PathExists(filepath.Join(usb, "archive.tar.gz")) {
 		t.Fatal("forged image staged")
 	}
 

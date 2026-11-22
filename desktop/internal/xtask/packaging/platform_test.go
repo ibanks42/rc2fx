@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
@@ -314,7 +315,7 @@ func TestTheAppImageMustStartWithTheRuntimeItsNoticesCover(t *testing.T) {
 	runtimeBytes := []byte("\x7fELF vendored runtime")
 	notices := core.ObjectValue(
 		core.Member{Key: "schemaVersion", Value: core.U64Value(2)},
-		core.Member{Key: "runtimeSha256", Value: core.StringValue(task.Sha256(runtimeBytes))},
+		core.Member{Key: "runtimeSha256", Value: core.StringValue(common.SHA256Hex(runtimeBytes))},
 		core.Member{Key: "runtimeSize", Value: core.U64Value(uint64(len(runtimeBytes)))},
 	)
 	appimage := append(bytes.Clone(runtimeBytes), []byte("hsqs squashfs image")...)

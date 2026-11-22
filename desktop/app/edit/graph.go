@@ -60,14 +60,9 @@ func GraphPoint(originX, originY, width, height, x, y float32) (frequency, gain 
 // GridLabel formats a frequency grid label (e.g. "20", "500", "1k", "20k").
 func GridLabel(frequency float64) string {
 	if frequency >= 1000. {
-		return rustFloat(frequency/1000.) + "k"
+		return fmt.Sprint(frequency/1000.) + "k"
 	}
-	return rustFloat(frequency)
-}
-
-// rustFloat formats grid values without a trailing ".0".
-func rustFloat(v float64) string {
-	return fmt.Sprint(v)
+	return fmt.Sprint(frequency)
 }
 
 // DBLabel formats a gain grid label using a typographic minus sign (e.g. "+12", "−6").

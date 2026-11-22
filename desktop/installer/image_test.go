@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
@@ -201,7 +202,7 @@ func TestPatchChangesOnlyAuthorizedKeyAndKeepsLongNames(t *testing.T) {
 	put(t, src, out.Bytes())
 	mix, launcher, err := patchArchive(src, dst, nil)
 	must(t, err)
-	if mix != archive.Sum([]byte("mixer")) || launcher != archive.Sum([]byte("launcher")) {
+	if mix != common.SHA256Hex([]byte("mixer")) || launcher != common.SHA256Hex([]byte("launcher")) {
 		t.Fatal("hashes")
 	}
 	i := 0
@@ -373,7 +374,7 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 	expected := map[string]string{}
 	for _, e := range entries {
 		if e.Kind == archive.EntryFile {
-			expected[e.Path] = archive.Sum(e.Data)
+			expected[e.Path] = common.SHA256Hex(e.Data)
 		}
 	}
 	protected := func(archivePath string) (map[string]string, map[string]string) {
@@ -385,7 +386,7 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 				if err != nil {
 					return err
 				}
-				hashes[name] = fmt.Sprintf("%x %s", entry.Header[:], archive.Sum(contents))
+				hashes[name] = fmt.Sprintf("%x %s", entry.Header[:], common.SHA256Hex(contents))
 			} else if _, ok := expected[name]; ok {
 				contents, err := archive.ReadAll(entry)
 				if err != nil {
@@ -394,7 +395,7 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 				if _, dup := added[name]; dup {
 					t.Fatalf("%s twice", name)
 				}
-				added[name] = archive.Sum(contents)
+				added[name] = common.SHA256Hex(contents)
 			}
 			return nil
 		}))
@@ -408,7 +409,7 @@ func TestRealDuoImagePreservesBoardFilesAndCarriesExplicitRuntimeOptIn(t *testin
 	if len(originalAdded) != 0 || fmt.Sprint(patchedAdded) != fmt.Sprint(expected) {
 		t.Fatal("all runtime files, including the opt-in marker, must actually be in the image")
 	}
-	if patchedAdded["opt/rc2fx/experimental-duo"] != archive.Sum([]byte("1\n")) {
+	if patchedAdded["opt/rc2fx/experimental-duo"] != common.SHA256Hex([]byte("1\n")) {
 		t.Fatal("no opt-in marker")
 	}
 }
@@ -538,7 +539,7 @@ func TestAnRC2FXImageListsRodesFilesForTheMixerToCheck(t *testing.T) {
 		{"usr/bin/rc_audio_mixer", []byte("mixer")},
 		{"usr/bin/audio-start.sh", []byte("launcher")},
 	} {
-		fmt.Fprintf(&want, "%s  %s\n", archive.Sum(m.data), m.name)
+		fmt.Fprintf(&want, "%s  %s\n", common.SHA256Hex(m.data), m.name)
 	}
 	// RØDE files in archive order; excludes authorized_keys and RC2FX's own files.
 	if got := manifest(dst); got == nil || *got != want.String() {
@@ -704,8 +705,8 @@ func TestRecorderPayloadsAreRequiredAndMustBeARM64ELFs(t *testing.T) {
 		sumsPath := filepath.Join(x.root, "runtime", "SHA256SUMS")
 		sums, err := os.ReadFile(sumsPath)
 		must(t, err)
-		old := archive.Sum(good) + "  " + name + "\n"
-		replaced := archive.Sum(corrupt) + "  " + name + "\n"
+		old := common.SHA256Hex(good) + "  " + name + "\n"
+		replaced := common.SHA256Hex(corrupt) + "  " + name + "\n"
 		if !strings.Contains(string(sums), old) {
 			t.Fatalf("%s manifest line", name)
 		}
@@ -721,7 +722,7 @@ func TestSettingsReadOverUSBAreKeptPerMixerAndUsedForTheImage(t *testing.T) {
 	body := `{"config":{"revision":7},"presets":[]}`
 	saved, err := x.engine.saveSettings(serial, body)
 	must(t, err)
-	if saved.SHA != archive.Sum([]byte(body)) {
+	if saved.SHA != common.SHA256Hex([]byte(body)) {
 		t.Fatal("sha")
 	}
 	data, err := backupSettings(x.engine.Work, x.saved().BackupFor(serial))
@@ -815,7 +816,7 @@ func TestPatchingHashesWhatItReadAndWroteNotWhatThePathsHold(t *testing.T) {
 	if _, err := patch(strings.Repeat("0", 64)); err == nil {
 		t.Fatal("a swapped source produced an image")
 	}
-	if exists(dst) {
+	if common.PathExists(dst) {
 		t.Fatal("a swapped source must not produce an image")
 	}
 }

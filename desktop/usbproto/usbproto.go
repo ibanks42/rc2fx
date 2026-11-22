@@ -2,8 +2,8 @@
 // Framing is stop-and-wait with no unsolicited writes or automatic mutation
 // replay.
 //
-// This is a Go port of crates/rc2fx-usb (still used on the mixer); both sides
-// share test fixtures under fixtures/usb.
+// This is a Go port of crates/rc2fx-usb (still used on the mixer); live
+// Go <-> Rust wire parity is verified by crates/rc2fx-usb/tests/shared_fixtures.rs.
 package usbproto
 
 import (

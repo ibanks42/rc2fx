@@ -6,24 +6,7 @@ import (
 	"unicode"
 )
 
-// Stock RØDE show inventory (separate from RC2FX's processing config).
-
-type StockSource struct {
-	ID       string `json:"id"`
-	SourceID uint16 `json:"sourceId"`
-	Fader    *uint8 `json:"fader"` // nil if not assigned to a show fader
-	Name     string `json:"name"`
-	Color    string `json:"color"`
-	TargetID string `json:"targetId"` // empty if unprocessed by the active route profile
-}
-
-type StockInventory struct {
-	Available bool          `json:"available"`
-	ShowName  string        `json:"showName"`
-	Revision  string        `json:"revision"`
-	Message   string        `json:"message"`
-	Inputs    []StockSource `json:"inputs"`
-}
+// Stock RØDE show inventory (wire types generated from schema/core.go).
 
 func (s StockInventory) Validate() error {
 	text := func(value string, maximum int) bool {

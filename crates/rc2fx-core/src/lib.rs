@@ -4,6 +4,7 @@ pub mod eq;
 pub mod image_check;
 pub mod inputs;
 pub mod model;
+mod schema_gen;
 pub mod selection;
 pub mod session;
 pub mod ssh;

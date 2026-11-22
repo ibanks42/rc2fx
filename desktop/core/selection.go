@@ -5,31 +5,7 @@ import (
 	"strconv"
 )
 
-// Selection topology types; effects saves never modify path selection.
-
-type SelectionPhase string
-
-const (
-	SelectionPhaseIdle     SelectionPhase = "idle"
-	SelectionPhaseChanging SelectionPhase = "changing"
-	SelectionPhaseError    SelectionPhase = "error"
-)
-
-var selectionPhases = []SelectionPhase{SelectionPhaseIdle, SelectionPhaseChanging, SelectionPhaseError}
-
-func (p *SelectionPhase) UnmarshalText(text []byte) error {
-	return enumUnmarshal(p, text, selectionPhases)
-}
-
-type SelectionStatus struct {
-	ChannelCapacity    *uint32        `json:"channelCapacity"` // observed stock-graph channel cap, nil if unknown
-	Status             SelectionPhase `json:"status"`
-	Allowed            bool           `json:"allowed"`
-	QualifiedTargetIDs []string       `json:"qualifiedTargetIds"`
-	ActiveTargetIDs    []string       `json:"activeTargetIds"` // allocated by engine; Routing tracks wet edges separately
-	PendingTargetIDs   []string       `json:"pendingTargetIds"`
-	Message            string         `json:"message"`
-}
+// Selection topology helpers (wire types generated from schema/core.go).
 
 func (s SelectionStatus) CheckCapacity(config Config, ids []string) (uint32, error) {
 	if err := config.ValidateSelection(ids); err != nil {
@@ -100,12 +76,6 @@ func (s SelectionStatus) Clone() SelectionStatus {
 
 // Equal compares field by field (deepEqual).
 func (s SelectionStatus) Equal(other SelectionStatus) bool { return deepEqual(s, other) }
-
-type SelectionRequest struct {
-	ExpectedRevision   uint64   `json:"expectedRevision"`
-	ExpectedGeneration uint64   `json:"expectedGeneration"`
-	TargetIDs          []string `json:"targetIds"`
-}
 
 type PendingSelection struct {
 	Request SelectionRequest

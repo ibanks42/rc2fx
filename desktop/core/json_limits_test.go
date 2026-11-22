@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Strict JSON parser limits (mirrors crates/rc2fx-core/tests/json_limits.rs).
+// Strict JSON parser limits.
 
 func TestExplicitLimitsRetainDuplicateDepthAndTrailingGuards(t *testing.T) {
 	ok(t, must2(FromJSONLimited[Value]("[1,2]", 5, 3)))
@@ -50,7 +50,6 @@ func TestTypedStorageParserPreservesExactNumericAndStructuralAcceptance(t *testi
 		{`{"integer":1,"signed":0,"float":1,"values":[],"other":1}`, false},
 		{`{"integer":1,"signed":0,"float":1,"values":[],"integer":2}`, false},
 	}
-	// These are serde's verdicts.
 	for _, fixture := range fixtures {
 		_, err := FromJSON[numericFixture](fixture.text)
 		check(t, (err == nil) == fixture.accept, fixture.text, err)

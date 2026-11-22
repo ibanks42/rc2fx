@@ -7,6 +7,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/appupdate"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // EntryHeading formats a changelog entry title, flagging versions newer than
@@ -29,7 +30,7 @@ func SafeMarkdown(notes string) string {
 	fenced := false
 	var open rune
 	var length int
-	for _, line := range splitInclusive(notes) {
+	for _, line := range common.SplitLinesInclusive(notes) {
 		text := strings.TrimLeftFunc(line, unicode.IsSpace)
 		var marker rune
 		run := 0
@@ -56,20 +57,6 @@ func SafeMarkdown(notes string) string {
 		}
 	}
 	return out.String()
-}
-
-func splitInclusive(s string) []string {
-	var lines []string
-	for s != "" {
-		i := strings.IndexByte(s, '\n')
-		if i < 0 {
-			lines = append(lines, s)
-			break
-		}
-		lines = append(lines, s[:i+1])
-		s = s[i+1:]
-	}
-	return lines
 }
 
 func escapeLine(line string, out *strings.Builder) {

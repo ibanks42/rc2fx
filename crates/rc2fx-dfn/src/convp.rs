@@ -118,12 +118,6 @@ impl Convp {
                 pointwise_onto(w, half, total, 0, gin, new, f, y, true);
             } else {
                 let old = &mut ring[pos * slot..(pos + 1) * slot];
-                #[cfg(test)]
-                {
-                    use crate::traffic::*;
-                    touch(Class::State, old.as_ptr(), slot * 4);
-                    store(Class::State, old.as_ptr(), slot * 4);
-                }
                 pointwise_onto(w, half, total, (kt - 1) * gin, gin, old, f, y, false);
                 old.copy_from_slice(new);
             }
@@ -147,11 +141,6 @@ impl Convp {
         let (half, f) = (self.half, self.f);
         let out = 2 * half;
         let y = [self.out(0), self.out(1)];
-        #[cfg(test)]
-        for y in y {
-            use crate::traffic::*;
-            touch_n(Class::State, y.as_ptr(), half * f * 4, out);
-        }
         z[..out * f].fill(0.);
         for (o, z) in z[..out * f].chunks_exact_mut(f).enumerate() {
             for i in 0..out {
@@ -358,17 +347,13 @@ mod tests {
     }
 
     // Verify that `reference::set(true)` actually dispatches to the reference
-    // path. Since both paths produce identical sums, we check via state-store
-    // traffic accounting (the running-sum path writes `Class::State`; the
-    // reference path doesn't).
+    // path (leaving `pos` and the running sums untouched).
     #[test]
     fn the_reference_switch_selects_the_original_form() {
-        use crate::traffic::{self, Class};
         struct Off;
         impl Drop for Off {
             fn drop(&mut self) {
                 crate::reference::set(false);
-                traffic::disable();
             }
         }
         let _off = Off;
@@ -377,21 +362,20 @@ mod tests {
         let w = rng.values(0, 2 * half * gin * kt);
         let c0 = rng.values(0, 2 * gin * f);
         let mut c = Convp::new(&w, half, gin, kt, f);
-        let mut state_stores = |on: bool| {
-            traffic::enable();
-            crate::reference::set(on);
-            c.step(&c0);
-            crate::reference::set(false);
-            let stores = traffic::trace()
-                .iter()
-                .filter(|a| a.write && a.key.0 == Class::State)
-                .count();
-            traffic::disable();
-            stores
-        };
-        assert_eq!(state_stores(true), 0, "the original form");
-        // Per group: one state store per tap plus the ring slot write.
-        assert_eq!(state_stores(false), 2 * (kt + 1), "the running sums");
+        crate::reference::set(true);
+        c.step(&c0);
+        crate::reference::set(false);
+        assert_eq!(c.pos, 0, "the original form");
+        assert!(
+            c.sums.iter().flatten().all(|&v| v == 0.),
+            "the original form"
+        );
+        assert!(
+            c.reference.out(0).iter().any(|&v| v != 0.),
+            "the original form"
+        );
+        c.step(&c0);
+        assert_eq!(c.pos, 1, "the running sums");
     }
 
     // Guard-page check that `step` never reads past either end of `c0`.

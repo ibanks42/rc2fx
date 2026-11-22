@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
 """Offline tests for publish_app.py using a fake `gh` and a local bare git remote."""
 
-import hashlib
-import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("publish_app", Path(__file__).with_name("publish_app.py"))
-app = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(app)
-
-
-def sha(data):
-    return hashlib.sha256(data).hexdigest()
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import publish_app as app  # noqa: E402
+from release_common import BareRemote, sha256 as sha  # noqa: E402
 
 
 def assets(version):
@@ -68,14 +63,12 @@ class Publication(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.temp = Path(temp.name)
         self.gh = FakeGh()
-        self.remote = self.temp / "remote.git"
-        subprocess.check_call(["git", "init", "-q", "--bare", self.remote])
-        self.stale_reads = 0
+        self.repo = BareRemote(self.temp, app.BRANCH)
         self.outputs = self.temp / "outputs"
         for patcher in [
-            patch.object(app, "REMOTE", str(self.remote)),
-            patch.object(app, "read_raw", self.read_raw),
-            patch.object(app.time, "sleep", lambda _: None),
+            patch.object(app.META, "remote", str(self.repo.remote)),
+            patch.object(app.META, "read_raw", self.repo.read_raw),
+            patch.object(app.META, "sleep", lambda _: None),
             patch.dict(os.environ, GITHUB_OUTPUT=str(self.outputs)),
         ]:
             patcher.start()
@@ -83,21 +76,13 @@ class Publication(unittest.TestCase):
         self.sequence = 100
 
     def branch(self, *args):
-        return subprocess.check_output(["git", "-C", self.remote, *args], text=True)
+        return self.repo.git(*args)
 
     def commits(self):
-        if not self.branch("for-each-ref", f"refs/heads/{app.BRANCH}"):
-            return []
-        return self.branch("log", "--format=%s", app.BRANCH).splitlines()
+        return self.repo.commits()
 
     def served(self, name):
-        return subprocess.check_output(["git", "-C", self.remote, "show", f"{app.BRANCH}:{name}"])
-
-    def read_raw(self, name):
-        if self.stale_reads:
-            self.stale_reads -= 1
-            return b"stale"
-        return self.served(name)
+        return self.repo.served(name)
 
     def prepare(self, tag, name=None):
         directory = self.temp / (name or f"assets-{tag}")
@@ -327,13 +312,13 @@ class Publication(unittest.TestCase):
         self.assertEqual(self.gh.downloads, [])
 
     def test_stale_raw_content_is_waited_for_and_then_reported(self):
-        self.stale_reads = 5
+        self.repo.stale_reads = 5
         self.release("1.2.3")
-        self.assertEqual(self.stale_reads, 0)
-        self.stale_reads = 10**6
+        self.assertEqual(self.repo.stale_reads, 0)
+        self.repo.stale_reads = 10**6
         self.gh.add("v1.3.0", assets("1.3.0"))
         directory, _ = self.prepare("v1.3.0")
-        with patch.object(app, "SERVED_WAIT", 0), self.assertRaisesRegex(app.Refused, "still does not serve"):
+        with patch.object(app.META, "served_wait", 0), self.assertRaisesRegex(app.Refused, "still does not serve"):
             app.publish("v1.3.0", directory, self.sign("v1.3.0", directory))
         self.assertEqual(self.commits()[0], "Sign app 1.3.0", "the push itself stands")
 
@@ -342,18 +327,14 @@ class Publication(unittest.TestCase):
         self.gh.add("v1.3.0", assets("1.3.0"))
         directory, _ = self.prepare("v1.3.0")
         signed = self.sign("v1.3.0", directory)
-        real = app.fetch_branch
+        real = app.META.fetch
 
         def raced(path):
             branch = real(path)
-            other = self.temp / "other"
-            subprocess.check_call(["git", "clone", "-q", "--branch", app.BRANCH, self.remote, other])
-            subprocess.check_call(["git", "-C", other, "-c", "user.name=x", "-c", "user.email=x@example.com",
-                                   "commit", "-q", "--allow-empty", "-m", "concurrent"])
-            subprocess.check_call(["git", "-C", other, "push", "-q", "origin", app.BRANCH])
+            self.repo.push_concurrent(self.temp / "other")
             return branch
 
-        with patch.object(app, "fetch_branch", raced), self.assertRaises(subprocess.CalledProcessError):
+        with patch.object(app.META, "fetch", raced), self.assertRaises(subprocess.CalledProcessError):
             app.publish("v1.3.0", directory, signed)
         self.assertEqual(self.commits()[0], "concurrent", "the other writer's commit survives")
 
@@ -387,6 +368,37 @@ class Publication(unittest.TestCase):
             (renewed / name).write_text(json.dumps({"signed": {"version": 1}}))
         with self.assertRaisesRegex(app.Refused, "published"):
             app.refresh(renewed)
+
+    def test_missing_role_file_on_branch_still_allows_app_publish(self):
+        self.release("1.2.3")
+        work = self.temp / "remove-snapshot"
+        subprocess.check_call(["git", "clone", "-q", "--branch", app.BRANCH, self.repo.remote, work])
+        subprocess.check_call(["git", "-C", work, "rm", "-q", "snapshot.json"])
+        subprocess.check_call(["git", "-C", work, "-c", "user.name=x", "-c", "user.email=x@example.com",
+                               "commit", "-q", "-m", "remove snapshot"])
+        subprocess.check_call(["git", "-C", work, "push", "-q", "origin", app.BRANCH])
+        self.release("1.3.0")
+        self.assertEqual(self.commits()[0], "Sign app 1.3.0")
+
+    def test_gh_release_honors_patched_subprocess_run_and_error_format(self):
+        replies = [
+            subprocess.CompletedProcess(["gh"], 0, '{"tag_name": "v1.2.3"}', ""),
+            subprocess.CompletedProcess(["gh"], 1, "", "gh: Not Found (HTTP 404)\n"),
+            subprocess.CompletedProcess(["gh"], 1, "", "gh: Server Error (HTTP 500)\n"),
+        ]
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            return replies.pop(0)
+
+        gh = app.Gh("ibanks42/rc2fx")
+        with patch.object(subprocess, "run", fake_run):
+            self.assertEqual(gh.release("v1.2.3"), {"tag_name": "v1.2.3"})
+            self.assertIsNone(gh.release("v1.2.3"))
+            with self.assertRaisesRegex(app.Refused, r"^GitHub API releases/tags/v1\.2\.3: gh: Server Error"):
+                gh.release("v1.2.3")
+        self.assertEqual(len(calls), 3)
 
 
 if __name__ == "__main__":

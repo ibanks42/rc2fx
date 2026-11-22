@@ -12,6 +12,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 
 	"github.com/ibanks42/rc2fx/desktop/firmware"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 func allowedModels(allow bool) flash.Allowed {
@@ -73,7 +74,7 @@ func (e *Engine) recordCommand(command, serial string) (int, error) {
 		Command: command,
 		Serial:  serial,
 		At:      utc(),
-		AtUnix:  nowUnix(),
+		AtUnix:  common.NowUnix(),
 	})
 	if excess := len(saved.Commands) - 50; excess > 0 {
 		saved.Commands = saved.Commands[excess:]

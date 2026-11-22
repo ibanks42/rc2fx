@@ -234,7 +234,7 @@ func TestPendingChangesIncludeOtherChannelsWhenTheEditorSwitches(t *testing.T) {
 
 func TestImportDetectsAutoEQTextAndNativeEasyEffectsWithoutAFormatPicker(t *testing.T) {
 	options := core.ImportOptions{Stereo: true}
-	apo := repoFile(t, "fixtures", "apo", "sennheiser-hd-6xx.txt")
+	apo := repoFile(t, "desktop", "core", "testdata", "apo", "sennheiser-hd-6xx.txt")
 	result, err := ParseImport(apo, options)
 	if err != nil || result.Kind != core.ImportResultReady {
 		t.Fatalf("apo: %v %v", result.Kind, err)
@@ -242,7 +242,7 @@ func TestImportDetectsAutoEQTextAndNativeEasyEffectsWithoutAFormatPicker(t *test
 	if len(result.EQ.Bands) != 10 || result.EQ.InputGainDB != -8.46 || result.EQ.Bands[0].Frequency != 105. {
 		t.Fatalf("apo eq: %+v", result.EQ)
 	}
-	json := repoFile(t, "fixtures", "easyeffects", "output-split-different.json")
+	json := repoFile(t, "desktop", "core", "testdata", "easyeffects", "output-split-different.json")
 	result, err = ParseImport(json, options)
 	if err != nil || result.Kind != core.ImportResultReady {
 		t.Fatalf("json: %v %v", result.Kind, err)
@@ -294,7 +294,7 @@ func TestNativeFileRoundtripPreservesSplitEQAndReplacesExportAtomically(t *testi
 	}
 	defer os.RemoveAll(directory)
 	path := filepath.Join(directory, "eq.json")
-	text := repoFile(t, "fixtures", "easyeffects", "output-split-different.json")
+	text := repoFile(t, "desktop", "core", "testdata", "easyeffects", "output-split-different.json")
 	if err := WriteExport(path, text); err != nil {
 		t.Fatal(err)
 	}

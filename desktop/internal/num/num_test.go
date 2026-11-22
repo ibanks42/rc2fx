@@ -44,3 +44,20 @@ func TestSatSub(t *testing.T) {
 		t.Error("saturating subtraction")
 	}
 }
+
+func TestFormatDecimal(t *testing.T) {
+	for _, c := range []struct {
+		v    float64
+		want string
+	}{
+		{0, "0"},
+		{1.5, "1.5"},
+		{math.NaN(), "NaN"},
+		{math.Inf(1), "inf"},
+		{math.Inf(-1), "-inf"},
+	} {
+		if got := FormatDecimal(c.v); got != c.want {
+			t.Errorf("FormatDecimal(%v) = %q, want %q", c.v, got, c.want)
+		}
+	}
+}

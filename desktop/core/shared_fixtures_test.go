@@ -1,118 +1,110 @@
 package core
 
 import (
-	"math"
+	"bytes"
+	"slices"
 	"testing"
-	"unicode/utf8"
+
+	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 )
 
-// Shared accept/reject fixtures in fixtures/core (also run by
-// crates/rc2fx-core/tests/shared_fixtures.rs). Accepted cases must re-encode
-// byte-for-byte to their canonical/pretty files; rejected cases with an
-// expected error must match that message exactly.
+// Inline Go-side wire contract and backward-compatibility tests. Live
+// Rust <-> Go byte-for-byte JSON parity across all document kinds is verified
+// by crates/rc2fx-core/tests/shared_fixtures.rs.
 
-type fixtureCase struct {
-	Name      string  `json:"name"`
-	Type      string  `json:"type"`
-	File      string  `json:"file"`
-	Accept    bool    `json:"accept"`
-	Canonical *string `json:"canonical"`
-	Pretty    *string `json:"pretty"`
-	Error     *string `json:"error"`
-	Why       string  `json:"why"`
-}
-
-type fixtureManifest struct {
-	Comment string        `json:"comment"`
-	Cases   []fixtureCase `json:"cases"`
-}
-
-func validated[T interface{ Validate() error }](data []byte) (any, error) {
-	value, err := FromJSON[T](string(data))
-	if err != nil {
-		return nil, err
+func jsonValuesEqual(a, b Value) bool {
+	if a.Kind() != b.Kind() {
+		return false
 	}
-	return value, value.Validate()
-}
-
-func decoded[T any](data []byte) (any, error) {
-	return FromJSON[T](string(data))
-}
-
-// decodeFixture is how the desktop reads each kind of document.
-func decodeFixture(t *testing.T, kind string, data []byte) (any, error) {
-	if kind == "mixerRelease" {
-		return ParseMixerRelease(data)
-	}
-	if !utf8.Valid(data) {
-		// The Rust test reads text with str::from_utf8 first.
-		return nil, CoreError("not UTF-8")
-	}
-	switch kind {
-	case "config":
-		return ConfigFromJSON(string(data))
-	case "deviceState":
-		return DeviceStateFromJSON(string(data))
-	case "configUpdate":
-		return decoded[ConfigUpdate](data)
-	case "presetSummaries":
-		return decoded[[]PresetSummary](data)
-	case "deviceVersions":
-		return validated[DeviceVersions](data)
-	case "sshStatus":
-		return validated[SSHStatus](data)
-	case "meter":
-		return decoded[Meter](data)
-	case "diagnosticsEvents":
-		return decoded[DiagnosticsEvents](data)
-	case "stockInventory":
-		return validated[StockInventory](data)
-	case "json":
-		return decoded[Value](data)
-	}
-	t.Fatalf("unknown fixture type %s", kind)
-	return nil, nil
-}
-
-func TestSharedFixturesVerdictsAndEncodings(t *testing.T) {
-	var manifest fixtureManifest
-	ok(t, DecodeStrictLimited(repoFile(t, "fixtures", "core", "cases.json"), math.MaxInt, math.MaxInt, &manifest))
-	if len(manifest.Cases) <= 100 {
-		t.Fatalf("%d cases", len(manifest.Cases))
-	}
-	for _, c := range manifest.Cases {
-		value, err := decodeFixture(t, c.Type, repoFile(t, "fixtures", "core", c.File))
-		switch {
-		case err != nil && c.Accept:
-			t.Errorf("%s: rejected: %v", c.Name, err)
-			continue
-		case err == nil && !c.Accept:
-			t.Errorf("%s: accepted, expected a rejection (%s)", c.Name, c.Why)
-			continue
-		case err != nil:
-			if c.Error != nil && err.Error() != *c.Error {
-				t.Errorf("%s: error differs\n got %s\nwant %s", c.Name, err, *c.Error)
-			}
-			continue
+	switch a.Kind() {
+	case sjson.KindNumber:
+		return bytes.Equal(a.Raw(), b.Raw())
+	case sjson.KindArray:
+		ai, _ := a.AsArray()
+		bi, _ := b.AsArray()
+		return slices.EqualFunc(ai, bi, jsonValuesEqual)
+	case sjson.KindObject:
+		if a.Len() != b.Len() {
+			return false
 		}
-		for _, want := range []struct {
-			file   *string
-			pretty bool
-		}{{c.Canonical, false}, {c.Pretty, true}} {
-			if want.file == nil {
-				continue
+		am, _ := a.AsObject()
+		for _, member := range am {
+			match, ok := b.Get(member.Key)
+			if !ok || !jsonValuesEqual(member.Value, match) {
+				return false
 			}
-			got, err := Encode(value)
-			if want.pretty {
-				got, err = EncodePretty(value)
-			}
-			if err != nil {
-				t.Errorf("%s: %v", c.Name, err)
-				continue
-			}
-			if expected := string(repoFile(t, "fixtures", "core", *want.file)); string(got) != expected {
-				t.Errorf("%s: %s differs\n got %s\nwant %s", c.Name, *want.file, got, expected)
-			}
+		}
+		return true
+	}
+	return a.Equal(b)
+}
+
+func TestWireBackwardCompatAndStrictRejections(t *testing.T) {
+	// Forward-compatible structs accept unknown future fields.
+	ver, err := FromJSON[DeviceVersions](`{"runtime":"0.2.3","protocol":1,"inPlaceUpdates":2,"futureField":true}`)
+	ok(t, err)
+	ok(t, ver.Validate())
+	if ver.Runtime == nil || *ver.Runtime != "0.2.3" {
+		t.Fatalf("unexpected versions: %+v", ver)
+	}
+
+	ssh, err := FromJSON[SSHStatus](`{"managed":false,"unmanagedKeys":0,"hostKeys":[],"future":1}`)
+	ok(t, err)
+	ok(t, ssh.Validate())
+	// Missing required fields must fail.
+	_, err = FromJSON[SSHStatus](`{"managed":false}`)
+	fails(t, err, "missing required sshStatus fields")
+
+	// Older mixer meter without diagnosticsEpoch or runningForNs, plus future fields.
+	meter, err := FromJSON[Meter](`{"type":"meter","revision":1,"generation":2,"synthetic":false,"future":true,"targets":[]}`)
+	ok(t, err)
+	if meter.DiagnosticsEpoch != 0 || meter.RunningForNs != nil {
+		t.Fatalf("unexpected legacy meter defaults: %+v", meter)
+	}
+
+	// Unknown diagnostics event kind from newer firmware decodes as Other.
+	ev, err := FromJSON[DiagnosticsEvents](`{"nowNs":10,"nextSeq":2,"lost":0,"more":false,"events":[{"seq":1,"kind":"brandNewKind","atNs":5,"message":"hi"}]}`)
+	ok(t, err)
+	if len(ev.Events) != 1 || ev.Events[0].Kind != DiagnosticsKindOther {
+		t.Fatalf("unknown diagnostics kind did not fall back to Other: %+v", ev.Events)
+	}
+
+	// Strict structs reject unknown fields and duplicate keys.
+	_, err = FromJSON[ConfigUpdate](`{"expectedRevision":1,"targets":[],"extra":true}`)
+	fails(t, err, "unknown field in ConfigUpdate")
+	_, err = ParseMixerRelease([]byte(`{"schemaVersion":1,"version":"0.2.3","version":"0.2.4","protocolVersion":1}`))
+	fails(t, err, "duplicate key in MixerRelease")
+
+	// Compact and pretty encodings parse to equal JSON trees with matching number spellings.
+	cfg := DefaultConfig()
+	compact, err := Encode(cfg)
+	ok(t, err)
+	pretty, err := EncodePretty(cfg)
+	ok(t, err)
+	if !jsonValuesEqual(parse(t, string(compact)), parse(t, string(pretty))) {
+		t.Fatal("pretty encoding differs from compact encoding")
+	}
+}
+
+func TestJSONValuesEqual(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"key order ignored", `{"a":1,"b":[true,null,"x"]}`, `{"b":[true,null,"x"],"a":1}`, true},
+		{"array order differs", `[1,2]`, `[2,1]`, false},
+		{"integer vs float spelling", `1`, `1.0`, false},
+		{"positive zero vs negative zero", `0.0`, `-0.0`, false},
+		{"exponent vs decimal spelling", `1e2`, `100.0`, false},
+		{"scientific vs expanded float spelling", `1.2345678901234567e+20`, `123456789012345670000.0`, false},
+		{"null member vs missing member", `{"a":null}`, `{}`, false},
+		{"escaped slash matches unescaped slash", `"é\/"`, `"é/"`, true},
+		{"identical nested document", `{"a":[1,2.5,{"b":false,"c":null,"d":"ok"}]}`, `{"a":[1,2.5,{"b":false,"c":null,"d":"ok"}]}`, true},
+	}
+	for _, tc := range cases {
+		if got := jsonValuesEqual(parse(t, tc.a), parse(t, tc.b)); got != tc.want {
+			t.Errorf("%s: jsonValuesEqual(%s, %s) = %v, want %v", tc.name, tc.a, tc.b, got, tc.want)
 		}
 	}
 }

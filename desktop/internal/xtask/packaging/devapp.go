@@ -1,10 +1,9 @@
 package packaging
 
 // `app`: build the desktop app for this machine and run it, for `just app`
-// and the recipes beside it (cargo run/build -p rc2fx-app before). Unlike
-// `package` it needs neither Velopack nor the license notices: a build
-// without the `velopack` tag does not update itself, and the checkout's
-// placeholder notices are compiled in.
+// and the recipes beside it. Unlike `package`, it needs neither Velopack nor
+// the license notices: a build without the `velopack` tag does not update
+// itself, and the checkout's placeholder notices are compiled in.
 //
 //	(default)    development build (-tags rc2fxdev) in
 //	             target/debug

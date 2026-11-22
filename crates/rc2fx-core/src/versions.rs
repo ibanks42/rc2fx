@@ -5,25 +5,12 @@
 //! `/opt/rc2fx/mixer-release.json`) and exposes installed versions via
 //! `GET api/v1/version` as [`DeviceVersions`]. Older runtimes return 404.
 
-use serde::{Deserialize, Serialize};
+pub use crate::schema_gen::{
+    DeviceVersions, MIXER_PROTOCOL_VERSION, MIXER_RELEASE_SCHEMA, MixerRelease,
+};
 use std::cmp::Ordering;
 
-/// USB 1 control protocol version. Bump when older desktop apps can no longer
-/// talk to the mixer.
-pub const MIXER_PROTOCOL_VERSION: u32 = 1;
-
-pub const MIXER_RELEASE_SCHEMA: u32 = 1;
-
 const MAX_RELEASE_BYTES: usize = 4 * 1024;
-
-/// Contents of `mixer-release.json`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MixerRelease {
-    pub schema_version: u32,
-    pub version: String,
-    pub protocol_version: u32,
-}
 
 impl MixerRelease {
     /// Parses and validates a `mixer-release.json` manifest.
@@ -50,33 +37,6 @@ impl MixerRelease {
         }
         Ok(release)
     }
-}
-
-/// Response payload for `GET api/v1/version`. Unknown fields are ignored for
-/// forward compatibility, and any version the mixer can't determine is omitted.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct DeviceVersions {
-    /// Installed RC2FX mixer release version.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub runtime: Option<String>,
-    /// Installed runtime's control protocol version.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<u32>,
-    /// Native library's control protocol version, when older than the daemon's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_protocol: Option<u32>,
-    /// RØDE firmware version from the launcher-validated profile.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub firmware: Option<String>,
-    /// Validated firmware profile ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub firmware_profile: Option<String>,
-    /// In-place USB 1 update capability (see `docs/developer/mixer-releases.md`),
-    /// omitted if unsupported. 1 supports full uploads; 2 adds file listing and
-    /// delta uploads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_place_updates: Option<u32>,
 }
 
 fn parse_version(text: &str) -> Option<Vec<u64>> {

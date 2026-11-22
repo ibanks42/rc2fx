@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// Suppression eligibility and single-target budget tests (mirrors
-// crates/rc2fx-core/tests/suppression_policy.rs).
+// Suppression eligibility and single-target budget tests.
 
 func enabledTarget(id string, kind TargetKind, channels uint8) Target {
 	target := NewTarget(id, id, kind, channels)

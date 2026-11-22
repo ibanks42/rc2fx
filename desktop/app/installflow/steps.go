@@ -9,6 +9,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/num"
 )
 
@@ -190,7 +191,7 @@ func (m *Model) usbModeSent() bool {
 		return false
 	}
 	c := m.Status.Saved.LastCommand()
-	return c != nil && c.Command == "usb-mode" && num.SatSub(nowUnix(), c.AtUnix) < 120
+	return c != nil && c.Command == "usb-mode" && num.SatSub(common.NowUnix(), c.AtUnix) < 120
 }
 
 // Tick returns a background probe request when due (every 3s while waiting or

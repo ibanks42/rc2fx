@@ -36,7 +36,7 @@ func TestBandColorsRunFromCyanToViolet(t *testing.T) {
 	}
 }
 
-func TestReadoutsFormatAsTheRustDid(t *testing.T) {
+func TestReadoutFormatting(t *testing.T) {
 	for _, c := range []struct {
 		peak float64
 		want string

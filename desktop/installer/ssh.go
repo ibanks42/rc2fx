@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 func authorizedLine(key ssh.PublicKey) []byte {
@@ -93,10 +94,10 @@ func ensureKey(value string) (string, []byte, error) {
 		return "", nil, err
 	}
 	public := private + ".pub"
-	if exists(private) != exists(public) {
+	if common.PathExists(private) != common.PathExists(public) {
 		return "", nil, Error("only one half of the SSH key pair exists; preserve it and inspect the key path")
 	}
-	if !exists(private) {
+	if !common.PathExists(private) {
 		if err := privateDirs(filepath.Dir(private)); err != nil {
 			return "", nil, err
 		}
@@ -183,7 +184,7 @@ func MixerHostAlias(serial string) (string, error) {
 	if strings.TrimSpace(serial) == "" {
 		return "", Error("connect the mixer so its SSH identity can be matched to it")
 	}
-	return "rc2fx-" + archive.Sum([]byte(serial))[:12], nil
+	return "rc2fx-" + common.SHA256Hex([]byte(serial))[:12], nil
 }
 
 // PinMixerHostKeys replaces this mixer's alias entries in known_hosts with the

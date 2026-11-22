@@ -11,36 +11,30 @@ import (
 	"strconv"
 )
 
-// Encode serializes value as compact JSON matching serde_json: struct fields
-// in declaration order, maps in sorted key order, floats formatted with
-// shortest round-trip digits (`.0` on integral values, exponent outside
-// 1e-5..1e16), non-finite floats as null, and only `"`, `\` and control
-// characters escaped. See decode.go for tag rules.
-func Encode(value any) ([]byte, error) {
+// Marshal serializes value as compact JSON: struct fields in declaration order,
+// maps in sorted key order, floats formatted with shortest round-trip digits
+// (`.0` on integral values, exponent outside 1e-5..1e16), non-finite floats as
+// null, and only `"`, `\`, and control characters escaped. See decode.go for
+// tag rules.
+func Marshal(value any) ([]byte, error) {
 	return encodeAny(value, false)
 }
 
-// EncodePretty serializes value with two-space indentation and no trailing
-// newline, matching serde_json::to_vec_pretty.
-func EncodePretty(value any) ([]byte, error) {
+// MarshalPretty serializes value with two-space indentation and no trailing
+// newline.
+func MarshalPretty(value any) ([]byte, error) {
 	return encodeAny(value, true)
 }
 
-// String writes a JSON string with serde_json's escaping.
+// String writes a compact JSON string without HTML escaping.
 func String(s string) []byte {
 	return appendJSONString(nil, s)
 }
 
-// AppendString appends s as a JSON string with serde_json's escaping.
+// AppendString appends s as a compact JSON string without HTML escaping.
 func AppendString(dst []byte, s string) []byte {
 	return appendJSONString(dst, s)
 }
-
-// Marshal writes v as serde_json::to_vec does.
-func Marshal(v any) ([]byte, error) { return Encode(v) }
-
-// MarshalPretty writes v as serde_json::to_vec_pretty does.
-func MarshalPretty(v any) ([]byte, error) { return EncodePretty(v) }
 
 var (
 	rawMessageType    = reflect.TypeFor[json.RawMessage]()
@@ -246,10 +240,10 @@ func appendJSONString(dst []byte, text string) []byte {
 	return out
 }
 
-// appendJSONFloat formats a float matching serde_json 1.0.154 (zmij):
-// exponents in -5..=15 (f32: -6..=12) use plain decimal (`1000.0`, `0.00012`),
-// others use scientific notation (`d.ddde+X`, `de-X`). Zero is `0.0`/`-0.0`;
-// NaN and infinities encode as `null`.
+// appendJSONFloat formats a float with plain decimal notation for exponents in
+// -5..=15 (f32: -6..=12), using `.0` on integral values (`1000.0`, `0.00012`),
+// and scientific notation (`d.ddde+X`, `de-X`) outside that range. Zero is
+// `0.0` or `-0.0`; NaN and infinities encode as `null`.
 func appendJSONFloat(dst []byte, value float64, bitSize int) []byte {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return append(dst, "null"...)

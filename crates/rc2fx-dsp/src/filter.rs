@@ -275,28 +275,15 @@ impl Filter {
             self.c.a1 += COEFF_SMOOTH * (target.a1 - self.c.a1);
             self.c.a2 += COEFF_SMOOTH * (target.a2 - self.c.a2);
         }
-        // Under `eq-fma`, fuse the recurrence multiply-adds to match the NEON
-        // kernel (fewer ops on A53, minor LSB difference vs default build).
-        #[cfg(not(feature = "eq-fma"))]
         let raw = self.c.b0 * x + self.z1;
-        #[cfg(feature = "eq-fma")]
-        let raw = self.c.b0.mul_add(x, self.z1);
         let y = safe(raw, limit, m);
         if y != raw {
             self.z1 = 0.0;
             self.z2 = 0.0;
             return y;
         }
-        #[cfg(not(feature = "eq-fma"))]
-        {
-            self.z1 = self.c.b1 * x - self.c.a1 * y + self.z2;
-            self.z2 = self.c.b2 * x - self.c.a2 * y;
-        }
-        #[cfg(feature = "eq-fma")]
-        {
-            self.z1 = (-self.c.a1).mul_add(y, self.c.b1.mul_add(x, self.z2));
-            self.z2 = (-self.c.a2).mul_add(y, self.c.b2 * x);
-        }
+        self.z1 = self.c.b1 * x - self.c.a1 * y + self.z2;
+        self.z2 = self.c.b2 * x - self.c.a2 * y;
         if !self.z1.is_finite() || !self.z2.is_finite() {
             self.z1 = 0.0;
             self.z2 = 0.0;
@@ -320,18 +307,10 @@ fn clean(z1: f64, z2: f64, peak: f64, limit: f64) -> bool {
 /// Branchless steady-state biquad step (no clipping/NaN handling).
 #[inline(always)]
 fn step(c: &Coefficients, z: &mut [f64; 2], input: f64, peak: &mut f64) -> f64 {
-    #[cfg(not(feature = "eq-fma"))]
     let (raw, next1, next2) = {
         let raw = c.b0 * input + z[0];
         let next1 = c.b1 * input - c.a1 * raw + z[1];
         let next2 = c.b2 * input - c.a2 * raw;
-        (raw, next1, next2)
-    };
-    #[cfg(feature = "eq-fma")]
-    let (raw, next1, next2) = {
-        let raw = c.b0.mul_add(input, z[0]);
-        let next1 = (-c.a1).mul_add(raw, c.b1.mul_add(input, z[1]));
-        let next2 = (-c.a2).mul_add(raw, c.b2 * input);
         (raw, next1, next2)
     };
     z[0] = if next1.abs() < 1e-25 { 0.0 } else { next1 };

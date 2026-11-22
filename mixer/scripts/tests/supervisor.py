@@ -2,37 +2,35 @@
 """Host tests for the rc2fx.sh helpers invoked by rc2fx-supervisor."""
 import os
 import subprocess
-import tempfile
+import sys
 import time
 import unittest
 from pathlib import Path
 
-PATH = Path(__file__).parents[1] / 'rc2fx.sh'
-SCRIPT = PATH.read_text()
-
-
-def function(name):
-    start = SCRIPT.index(f'\n{name}() {{\n') + 1
-    return SCRIPT[start:SCRIPT.index('\n}\n', start) + 3]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import (  # noqa: E402
+    RC2FX_SH,
+    TempDirTestCase,
+    function_body,
+    run_rc2fx,
+    source_rc2fx,
+    write_executable,
+)
 
 
 @unittest.skipUnless(Path('/proc/self/stat').exists(), '/proc/<pid>/stat is not on this host')
-class Tests(unittest.TestCase):
+class Tests(TempDirTestCase):
     def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
-        self.env = dict(os.environ, RC2FX_LOGS=str(self.root), RC2FX_DATA=str(self.root))
+        super().setUp()
+        self.env = {'RC2FX_LOGS': str(self.root), 'RC2FX_DATA': str(self.root)}
 
     def script(self, *args):
-        return subprocess.run(['bash', str(PATH), *args], capture_output=True, text=True,
-                              env=self.env, timeout=30)
+        return run_rc2fx(*args, env=self.env)
 
     def arguments(self, setup):
         body = (f'home={self.root}\ndata=/d\nrun=/r\nshow=\nprofile_id=\n{setup}\n'
-                + function('controller_arguments')
-                + 'controller_arguments\nprintf "%s\\n" "${controller[@]}"\n')
-        r = subprocess.run(['bash', '-euc', body], capture_output=True, text=True, timeout=30)
+                'controller_arguments\nprintf "%s\\n" "${controller[@]}"\n')
+        r = source_rc2fx(body)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout.split('\n')[:-1]
 
@@ -53,51 +51,56 @@ class Tests(unittest.TestCase):
         self.assertLess(time.monotonic() - began, 5)
 
     def test_restart_keeps_the_gadget_only_when_asked(self):
-        body = ('mixer_start=\nretire_usb_node() { echo "retire $*"; }\nstop_owned() { echo "stop $*"; }\n'
-                + function('restart_mixer') + function('supervise_restart'))
+        stubs = 'mixer_start=\nretire_usb_node() { echo "retire $*"; }\nstop_owned() { echo "stop $*"; }\n'
         for keep, expected in [('0', 'retire 10 20\nstop 20\nstop 10 99\n'), ('1', 'stop 20\nstop 10 99\n')]:
-            r = subprocess.run(['bash', '-euc', body + f'supervise_restart {keep} 10 99 20\n'],
-                               capture_output=True, text=True, timeout=30)
+            r = source_rc2fx(stubs + f'supervise_restart {keep} 10 99 20\n')
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout, expected)
 
     def test_a_refused_usb_retirement_fails_the_restart_and_stops_nothing(self):
-        body = ('retire_usb_node() { return 1; }\nstop_owned() { echo stopped; }\n'
-                + function('restart_mixer') + function('supervise_restart'))
-        r = subprocess.run(['bash', '-uc', 'mixer_start=\n' + body + 'supervise_restart 0 10 99 20\n'],
-                           capture_output=True, text=True, timeout=30)
+        stubs = 'mixer_start=\nretire_usb_node() { return 1; }\nstop_owned() { echo stopped; }\n'
+        r = source_rc2fx(stubs + 'supervise_restart 0 10 99 20\n', strict=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(r.stdout, '')
+
+    def test_start_restart_and_stop_refuse_during_first_boot_or_production_boot(self):
+        marker = self.root / 'boot-marker'
+        marker.touch()
+        for var in ('RC2FX_FIRST_BOOT', 'RC2FX_PRODUCTION_BOOT'):
+            for action in ('start', 'restart', 'stop'):
+                r = run_rc2fx(action, env={**self.env, var: str(marker)})
+                self.assertEqual(r.returncode, 4, f'{var} {action}: {r.stderr}')
+                self.assertIn('Refusing:', r.stderr)
 
     def test_the_controller_always_gets_its_sockets_and_developer_ssh(self):
         self.assertEqual(self.arguments(''), [
             '--data', '/d', '--native-socket', '/r/control.sock', '--usb-socket', '/r/usb.sock',
-            '--developer-ssh', f'{self.root}/rc2fx.sh'])
+            '--developer-ssh'])
         self.assertEqual(self.arguments('RC2FX_UI_SOCKET=1'), [
             '--data', '/d', '--native-socket', '/r/control.sock', '--usb-socket', '/r/usb.sock',
-            '--developer-ssh', f'{self.root}/rc2fx.sh', '--ui-socket', '/r/ui.sock'])
+            '--developer-ssh', '--ui-socket', '/r/ui.sock'])
 
     def test_optional_controller_arguments_follow_what_exists(self):
         (self.root / 'mixer-release.json').write_text('{}')
         show = self.root / 'show'
         show.write_text('{}')
         args = self.arguments(f'show={show}\nprofile_id=p1')
-        self.assertEqual(args[8:], [
+        self.assertEqual(args[7:], [
             '--stock-config', str(show), '--release', f'{self.root}/mixer-release.json',
             '--firmware-catalog', f'{self.root}/firmware-profiles.json', '--firmware-profile', 'p1'])
 
     def test_the_supervisor_gets_a_script_that_outlives_its_bundle(self):
         # An install removes a RAM bundle, then asks the running supervisor to
         # stop. Its exit steps must work with nothing left of that bundle.
-        launch = function('launch')
+        launch = function_body('launch')
         self.assertIn('cp "$home/rc2fx.sh" "$run/rc2fx.sh"', launch)
         self.assertIn('--script "$run/rc2fx.sh"', launch)
         self.assertLess(launch.index('cp "$home/rc2fx.sh"'), launch.index('setsid env'))
         run = self.root / 'run'
         run.mkdir()
-        (run / 'rc2fx.sh').write_text(SCRIPT)
+        (run / 'rc2fx.sh').write_text(RC2FX_SH.read_text())
         r = subprocess.run(['bash', str(run / 'rc2fx.sh'), 'supervise-exit'], capture_output=True,
-                           text=True, env=self.env, cwd=run, timeout=30)
+                           text=True, env=dict(os.environ, **self.env), cwd=run, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('--- kernel', (self.root / 'last-exit.log').read_text())
 
@@ -115,10 +118,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(passed[passed.index('--') + 1:][:2], ['--data', f'{self.root}/data'])
 
     def stop_owned(self, target, started):
-        body = ''.join(line + '\n' for line in SCRIPT.split('\n')
-                       if line.startswith(('start_time() ', 'alive() ', 'alive_as() ', 'stamp() ', 'say() ')))
-        body += function('stop_owned') + f'stop_owned {target} {started}\n'
-        return subprocess.run(['bash', '-euc', body], capture_output=True, text=True, timeout=30)
+        return source_rc2fx(f'stop_owned {target} {started}\n')
 
     def test_a_pid_that_has_moved_on_is_not_stopped(self):
         child = subprocess.Popen(['sleep', '60'])
@@ -142,31 +142,26 @@ class Tests(unittest.TestCase):
         home.mkdir()
         for name, text in {'rc2fx-supervisor': supervisor, 'rc2fxd': 'exit 0',
                            'rc2fx-firmware': 'echo profile show', 'stock': mixer}.items():
-            (home / name).write_text(f'#!/bin/bash\n{text}\n')
-            (home / name).chmod(0o755)
-        (home / 'rc2fx.sh').write_text(SCRIPT)
+            write_executable(home / name, text)
+        (home / 'rc2fx.sh').write_text(RC2FX_SH.read_text())
         subprocess.run('sha256sum rc2fxd > SHA256SUMS', shell=True, cwd=home, check=True)
-        helpers = ''.join(line + '\n' for line in SCRIPT.split('\n') if line.startswith(
-            ('stamp() ', 'say() ', 'start_time() ', 'alive() ', 'alive_as() ', 'uptime_s() ', 'supervisor() ')))
-        stubbed = ['prepare_usb', 'jack_recorder', 'retire_usb_node']
-        throttle = ['relax_rt_throttle', 'restore_rt_throttle']
+        stubbed = ['image_check_start', 'flash_watch_start', 'prepare_usb', 'jack_recorder', 'retire_usb_node']
         if full_log:
             (self.root / 'rc2fx.log').symlink_to('/dev/full')
             (self.root / 'rt').write_text('950000\n')
         else:
-            stubbed += throttle
+            stubbed += ['relax_rt_throttle', 'restore_rt_throttle']
         stubs = ''.join(f'{name}() {{ :; }}\n' for name in stubbed)
-        body = (f'home={home}\ndata={self.root}/data\nlogs={self.root}\nrun={run}\nboot={boot}\n'
-                f'stock_mixer={home}/stock\nshow=\nprofile_id=\nvendor_log=/nonexistent\n'
+        body = (f'show=\nprofile_id=\nvendor_log=/nonexistent\n'
                 f'rt_throttle={self.root}/rt\nrt_throttle_default=950000\n'
-                'keep_usb=0\nmixer_start=\nredact() { cat; }\n'
-                'pgrep() { return 1; }\n'
-                + helpers + stubs
-                + ''.join(function(name) for name in (
-                    'stop_owned', 'restart_mixer', 'supervise_exit', 'controller_arguments',
-                    'supervisor_lost', 'launch', *(throttle if full_log else [])))
-                + 'launch\n')
-        r = subprocess.run(['bash', '-euc', body], capture_output=True, text=True, timeout=30)
+                'keep_usb=0\nmixer_start=\nredact() { cat; }\npgrep() { return 1; }\n'
+                + stubs + 'launch\n')
+        env = {
+            'RC2FX_HOME': str(home), 'RC2FX_DATA': str(self.root / 'data'),
+            'RC2FX_LOGS': str(self.root), 'RC2FX_RUN': str(run), 'RC2FX_BOOT': str(boot),
+            'RC2FX_STOCK_MIXER': str(home / 'stock'),
+        }
+        r = source_rc2fx(body, env=env)
         if full_log:
             return r.returncode, ''
         return r.returncode, (self.root / 'rc2fx.log').read_text()
@@ -218,21 +213,22 @@ class Tests(unittest.TestCase):
         self.assertEqual(code, 7)
 
     def launch_with(self, supervisor):
-        """Runs the real launch from a copied bundle with its paths in the fixture."""
+        """Runs the real launch against a temporary bundle with its paths in the fixture."""
         home = self.root / 'home'
         home.mkdir()
-        copy = SCRIPT.replace('run=/run/rc2fx\n', f'run={self.root}/run\n')
-        copy = copy.replace('boot=/run/rc2fx-boot\n', f'boot={self.root}/boot\n')
-        (home / 'rc2fx.sh').write_text(copy)
         stubs = {'rc2fx-firmware': 'echo profile show', 'rc2fx-supervisor': supervisor,
                  'stock': f'printf "%s\\n" "${{LD_AUDIT:-none}}" "$*" > {self.root}/stock-ran'}
         for name, text in stubs.items():
-            (home / name).write_text(f'#!/bin/bash\n{text}\n')
-            (home / name).chmod(0o755)
+            write_executable(home / name, text)
         subprocess.run('sha256sum rc2fx-firmware > SHA256SUMS', shell=True, cwd=home, check=True)
-        env = dict(self.env, RC2FX_STOCK_MIXER=str(home / 'stock'))
-        r = subprocess.run(['bash', str(home / 'rc2fx.sh'), 'launch', '--arg'],
-                           capture_output=True, text=True, env=env, timeout=30)
+        env = dict(
+            self.env,
+            RC2FX_HOME=str(home),
+            RC2FX_RUN=str(self.root / 'run'),
+            RC2FX_BOOT=str(self.root / 'boot'),
+            RC2FX_STOCK_MIXER=str(home / 'stock'),
+        )
+        r = run_rc2fx('launch', '--arg', env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
         return (self.root / 'stock-ran').read_text().splitlines()
 
@@ -240,6 +236,208 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.launch_with('exit 1'), ['none', '--arg'])
         self.assertIn('Stock mixer started: the supervisor cannot run',
                       (self.root / 'rc2fx.log').read_text())
+
+    def test_stop_supervisor_fails_immediately_when_touch_fails(self):
+        body = f'''
+run={self.root}/missing-run
+sleeps=0
+alive() {{ return 0; }}
+sleep() {{ sleeps=$((sleeps + 1)); }}
+rc=0
+stop_supervisor 4242 || rc=$?
+printf 'rc=%d sleeps=%d\\n' "$rc" "$sleeps"
+'''
+        r = source_rc2fx(body)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('sleeps=0', r.stdout)
+        self.assertNotIn('rc=0 ', r.stdout)
+        self.assertTrue(r.stderr.strip(), 'touch error message must be preserved')
+
+    def test_update_reload_matches_manifest_lines(self):
+        home = self.root / 'home'
+        run = self.root / 'run'
+        logs = self.root / 'logs'
+        for d in (home, run, logs):
+            d.mkdir()
+        (home / 'rc2fx.sh').write_text('# same\n')
+        (run / 'rc2fx.sh').write_text('# same\n')
+        (run / 'home').write_text(f'{home}\n')
+        (run / 'supervisor.features').write_text('reload\n')
+        names = [
+            'librc2fx_native.so', 'rc2fx-supervisor', 'librc2fx_gui.so',
+            'librc2fx_jackerr.so', 'rc2fx_jackerr_snapshot',
+        ]
+        good = ''.join(f'{"a" * 64}  {n}\n' for n in names)
+
+        def run_reload(bundle_sums, home_sums):
+            (run / 'bundle.sums').write_text(bundle_sums)
+            (home / 'SHA256SUMS').write_text(home_sums)
+            (run / 'reload').unlink(missing_ok=True)
+            body = f'''
+supervisor() {{ echo 123; }}
+uptime_s() {{ echo 100; }}
+update_ready() {{ return 0; }}
+sleep() {{ :; }}
+update_reload 1.2.3 200
+'''
+            return source_rc2fx(body, env={'RC2FX_HOME': str(home), 'RC2FX_RUN': str(run), 'RC2FX_LOGS': str(logs)},
+                                strict=False)
+
+        self.assertEqual(run_reload(good, good).returncode, 0)
+        star = good.replace('  librc2fx_native.so', ' *librc2fx_native.so')
+        self.assertNotEqual(run_reload(good, star).returncode, 0)
+        dup = good + f'{"b" * 64}  librc2fx_native.so\n'
+        self.assertNotEqual(run_reload(good, dup).returncode, 0)
+
+
+class StopOwnedTests(TempDirTestCase):
+    """Tests for stop_owned() in both normal and strict modes against a fake /proc."""
+
+    def run_stop(self, *, mode='', setup='', target='4242', started='100'):
+        proc = self.root / 'proc'
+        proc.mkdir(exist_ok=True)
+        body = f'''
+write_stat() {{
+  local p=$1 st=$2 t=$3
+  mkdir -p "$proc/$p"
+  printf '%s (fake) %s 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0 0\\n' "$p" "$st" "$t" > "$proc/$p/stat"
+}}
+sleeps=0
+kills=()
+logs=()
+say() {{ logs+=("$*"); }}
+on_kill() {{ return 0; }}
+on_sleep() {{ :; }}
+kill() {{
+  kills+=("$1 $2")
+  on_kill "$1" "$2"
+}}
+sleep() {{
+  sleeps=$((sleeps + 1))
+  on_sleep "$sleeps"
+}}
+{setup}
+rc=0
+stop_owned {target} {started} {mode} || rc=$?
+printf 'RC=%d\\n' "$rc"
+printf 'SLEEPS=%d\\n' "$sleeps"
+for k in "${{kills[@]}}"; do printf 'KILL=%s\\n' "$k"; done
+for l in "${{logs[@]}}"; do printf 'LOG=%s\\n' "$l"; done
+'''
+        r = source_rc2fx(body, env={'RC2FX_PROC': str(proc)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        parsed = {'rc': None, 'sleeps': None, 'kills': [], 'logs': []}
+        for line in r.stdout.splitlines():
+            key, val = line.split('=', 1)
+            if key == 'RC':
+                parsed['rc'] = int(val)
+            elif key == 'SLEEPS':
+                parsed['sleeps'] = int(val)
+            elif key == 'KILL':
+                parsed['kills'].append(val)
+            elif key == 'LOG':
+                parsed['logs'].append(val)
+        return parsed
+
+    def test_process_gone_before_call(self):
+        normal = self.run_stop()
+        self.assertEqual((normal['rc'], normal['kills'], normal['sleeps']), (0, [], 0))
+        strict = self.run_stop(mode='strict')
+        self.assertEqual((strict['rc'], strict['kills'], strict['sleeps']), (1, [], 0))
+
+    def test_zombie_with_matching_start_time_counts_as_stopped(self):
+        setup = 'write_stat 4242 Z 100'
+        for mode in ('', 'strict'):
+            with self.subTest(mode=mode or 'normal'):
+                out = self.run_stop(mode=mode, setup=setup)
+                self.assertEqual((out['rc'], out['kills'], out['sleeps']), (0, [], 0))
+
+    def test_term_fails(self):
+        setup = '''
+write_stat 4242 S 100
+on_kill() {
+  if test "$1" = -TERM; then return 1; fi
+  rm -f "$proc/$2/stat"
+  return 0
+}
+'''
+        normal = self.run_stop(setup=setup)
+        self.assertEqual(normal['rc'], 0)
+        self.assertEqual(normal['kills'], ['-TERM 4242', '-KILL 4242'])
+        self.assertEqual(normal['sleeps'], 50)
+        strict = self.run_stop(mode='strict', setup=setup)
+        self.assertEqual((strict['rc'], strict['kills'], strict['sleeps']), (1, ['-TERM 4242'], 0))
+
+    def test_dies_during_term_wait(self):
+        for final_state in ('gone', 'zombie'):
+            die = 'rm -f "$proc/4242/stat"' if final_state == 'gone' else 'write_stat 4242 Z 100'
+            setup = f'''
+write_stat 4242 S 100
+on_sleep() {{ if test "$1" -eq 3; then {die}; fi; }}
+'''
+            for mode in ('', 'strict'):
+                with self.subTest(mode=mode or 'normal', final_state=final_state):
+                    out = self.run_stop(mode=mode, setup=setup)
+                    self.assertEqual((out['rc'], out['kills'], out['sleeps']), (0, ['-TERM 4242'], 3))
+
+    def test_dies_during_kill_wait_and_strict_waits_twenty_iterations(self):
+        # Dies at iteration 15 after KILL (sleep 65): both modes succeed.
+        setup_15 = '''
+write_stat 4242 S 100
+on_sleep() { if test "$1" -eq 65; then rm -f "$proc/4242/stat"; fi; }
+'''
+        for mode in ('', 'strict'):
+            with self.subTest(when='iter15', mode=mode or 'normal'):
+                out = self.run_stop(mode=mode, setup=setup_15)
+                self.assertEqual(out['rc'], 0)
+                self.assertEqual(out['kills'], ['-TERM 4242', '-KILL 4242'])
+                self.assertEqual(out['sleeps'], 65)
+        # Dies at iteration 25 after KILL (sleep 75): normal succeeds, strict times out at 20.
+        setup_25 = '''
+write_stat 4242 S 100
+on_sleep() { if test "$1" -eq 75; then rm -f "$proc/4242/stat"; fi; }
+'''
+        normal = self.run_stop(setup=setup_25)
+        self.assertEqual((normal['rc'], normal['sleeps']), (0, 75))
+        strict = self.run_stop(mode='strict', setup=setup_25)
+        self.assertEqual((strict['rc'], strict['sleeps'], strict['logs']), (1, 70, []))
+
+    def test_never_dies(self):
+        setup = 'write_stat 4242 S 100'
+        normal = self.run_stop(setup=setup)
+        self.assertEqual((normal['rc'], normal['kills'], normal['sleeps']),
+                         (1, ['-TERM 4242', '-KILL 4242'], 80))
+        self.assertTrue(any('Process 4242 would not exit' in line for line in normal['logs']))
+        strict = self.run_stop(mode='strict', setup=setup)
+        self.assertEqual((strict['rc'], strict['kills'], strict['sleeps'], strict['logs']),
+                         (1, ['-TERM 4242', '-KILL 4242'], 70, []))
+
+    def test_pid_reused(self):
+        # Reused before the call: normal returns 0, strict returns 1; neither sends signals.
+        before = 'write_stat 4242 S 200'
+        normal = self.run_stop(setup=before)
+        self.assertEqual((normal['rc'], normal['kills'], normal['sleeps']), (0, [], 0))
+        strict = self.run_stop(mode='strict', setup=before)
+        self.assertEqual((strict['rc'], strict['kills'], strict['sleeps']), (1, [], 0))
+        # Reused during TERM wait: both return 0 immediately without sending KILL.
+        during_term = '''
+write_stat 4242 S 100
+on_sleep() { if test "$1" -eq 2; then write_stat 4242 S 200; fi; }
+'''
+        for mode in ('', 'strict'):
+            with self.subTest(when='term', mode=mode or 'normal'):
+                out = self.run_stop(mode=mode, setup=during_term)
+                self.assertEqual((out['rc'], out['kills'], out['sleeps']), (0, ['-TERM 4242'], 2))
+        # Reused during KILL wait: both return 0 immediately.
+        during_kill = '''
+write_stat 4242 S 100
+on_sleep() { if test "$1" -eq 52; then write_stat 4242 S 200; fi; }
+'''
+        for mode in ('', 'strict'):
+            with self.subTest(when='kill', mode=mode or 'normal'):
+                out = self.run_stop(mode=mode, setup=during_kill)
+                self.assertEqual((out['rc'], out['kills'], out['sleeps']),
+                                 (0, ['-TERM 4242', '-KILL 4242'], 52))
 
 
 if __name__ == '__main__':

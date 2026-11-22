@@ -1453,25 +1453,6 @@ fn the_image_check_follows_the_launchers_record_for_this_image() {
     assert_eq!(check.damaged, ["etc/hostname"]);
 }
 
-/// The payload's file lists, shared with the desktop's
-/// `desktop/installer/embed/format.go`, which checks its copy against the
-/// same file.
-fn shared_list(name: &str) -> Vec<String> {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payload/lists.json");
-    let lists: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    serde_json::from_value(lists[name].clone())
-        .unwrap_or_else(|e| panic!("fixtures/payload/lists.json {name}: {e}"))
-}
-
-#[test]
-fn the_payload_lists_match_the_shared_fixture() {
-    assert_eq!(install::PAYLOAD_NAMES[..], shared_list("payloadNames")[..]);
-    assert_eq!(install::PINNED[..], shared_list("pinned")[..]);
-    assert_eq!(install::BINARIES[..], shared_list("binaries")[..]);
-    assert_eq!(install::SCRIPTS[..], shared_list("scripts")[..]);
-}
-
 /// Only a failed or restarting session reports an error, and a restart
 /// reports one only when the previous version is being restored.
 #[test]

@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/model"
 )
 
@@ -181,7 +181,7 @@ func Patch(src, dst string, o PatchOptions) (*Patched, error) {
 			if n == hostnameMember {
 				hostOK = string(TrimASCII(data)) == o.Model.Hostname()
 			}
-			if err := member(Copied{Name: n, Header: header, Size: entry.Size, Data: data, SHA256: Sum(data)}); err != nil {
+			if err := member(Copied{Name: n, Header: header, Size: entry.Size, Data: data, SHA256: common.SHA256Hex(data)}); err != nil {
 				return err
 			}
 			return builder.Append(&header, bytes.NewReader(data))
@@ -198,7 +198,7 @@ func Patch(src, dst string, o PatchOptions) (*Patched, error) {
 			if err != nil {
 				return err
 			}
-			digest := Sum(data)
+			digest := common.SHA256Hex(data)
 			if err := member(Copied{Name: n, Header: header, Size: entry.Size, SHA256: digest}); err != nil {
 				return err
 			}
@@ -291,7 +291,7 @@ func appendEntry(builder *Writer, entry Entry) error {
 		}
 		kind, size, link = TypeSymlink, 0, entry.Target
 	}
-	header, err := gnuHeader(path, kind, entry.Mode, size, nowUnix(), link)
+	header, err := gnuHeader(path, kind, entry.Mode, size, common.NowUnix(), link)
 	if err != nil {
 		return err
 	}
@@ -300,12 +300,4 @@ func appendEntry(builder *Writer, entry Entry) error {
 		data = bytes.NewReader(nil)
 	}
 	return builder.Append(header, data)
-}
-
-func nowUnix() uint64 {
-	now := time.Now().Unix()
-	if now < 0 {
-		return 0
-	}
-	return uint64(now)
 }

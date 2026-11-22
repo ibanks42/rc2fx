@@ -12,6 +12,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
+	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
@@ -44,7 +45,7 @@ func fixturePackage(t *testing.T, base string) []byte {
 		"librc2fx_native.so", "rc2fxd", "rc2fx-supervisor", "rc2fx-firmware", "firmware-profiles.json",
 		"librc2fx_gui.so", "librc2fx_jackerr.so", "rc2fx_jackerr_snapshot", "mixer-release.json",
 	} {
-		fmt.Fprintf(&sums, "%s  %s\n", task.Sha256(mustRead(t, filepath.Join(runtimeDir, name))), name)
+		fmt.Fprintf(&sums, "%s  %s\n", common.SHA256Hex(mustRead(t, filepath.Join(runtimeDir, name))), name)
 	}
 	mustWrite(t, filepath.Join(runtimeDir, "SHA256SUMS"), []byte(sums.String()))
 	for _, name := range []string{"rc2fx.sh", "rc2fx-shim.sh", "rc2fx-gui-shim.sh", "install.sh"} {
@@ -82,7 +83,7 @@ func TestSigningOutputVerifiesAndPreservesTheInstallerPayloadContract(t *testing
 	if err := Sign(arguments("rejected", "root.pk8")); err == nil || !strings.Contains(err.Error(), "root private keys") {
 		t.Fatalf("%v", err)
 	}
-	if exists(filepath.Join(base, "rejected")) {
+	if common.PathExists(filepath.Join(base, "rejected")) {
 		t.Fatal("rejected output written")
 	}
 	late := arguments("rejected", "targets.pk8")
@@ -90,7 +91,7 @@ func TestSigningOutputVerifiesAndPreservesTheInstallerPayloadContract(t *testing
 	if err := Sign(late); err == nil || !strings.Contains(err.Error(), "expire before") {
 		t.Fatalf("%v", err)
 	}
-	if exists(filepath.Join(base, "rejected")) {
+	if common.PathExists(filepath.Join(base, "rejected")) {
 		t.Fatal("rejected output written")
 	}
 	if err := Sign(arguments("metadata", "targets.pk8")); err != nil {
@@ -152,7 +153,7 @@ func TestSigningOutputVerifiesAndPreservesTheInstallerPayloadContract(t *testing
 	if err := Sign(arguments("bad-catalog", "targets.pk8")); err == nil || !strings.Contains(err.Error(), "catalog differs") {
 		t.Fatalf("%v", err)
 	}
-	if exists(filepath.Join(base, "bad-catalog")) {
+	if common.PathExists(filepath.Join(base, "bad-catalog")) {
 		t.Fatal("bad-catalog output written")
 	}
 	if runtime.GOOS == "windows" {
