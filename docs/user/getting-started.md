@@ -5,18 +5,16 @@
 Grab the app from the [latest release](https://github.com/ibanks42/rc2fx/releases/latest).
 Pick the download that matches your operating system:
 
-| System | Installer | Portable |
-| --- | --- | --- |
-| Windows (x64) | `rc2fx-windows-x64-setup.exe` | `rc2fx-windows-x64.zip` |
-| macOS 13 or later (Apple silicon and Intel) | `rc2fx-macos-universal.pkg` | `rc2fx-macos-universal.zip` |
-| Linux (x64) | - | `rc2fx-linux-x64.AppImage` |
+| System | Download |
+| --- | --- |
+| Windows (x64) | `rc2fx-windows-x64-setup.exe` |
+| macOS 13 or later (Apple silicon and Intel) | `rc2fx-macos-universal.pkg` |
+| Linux (x64) | `rc2fx-linux-x64.AppImage` |
 
 Because the filenames don't include a version number, a link like
 `https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage`
 always points to the newest release. The macOS download is universal and runs
-natively on both Apple silicon and Intel Macs. (Releases also keep the older
-`rc2fx-macos-arm64.pkg` and `rc2fx-macos-arm64.zip` filenames around so old
-bookmarks don't break.)
+natively on both Apple silicon and Intel Macs.
 
 The mixer installer is built right into the app and fetches official RØDE
 firmware when needed. Updating the desktop app is completely separate from
@@ -27,12 +25,10 @@ To get the app running:
 - **Windows:** Run `rc2fx-windows-x64-setup.exe`. It installs for your user
   account without needing an administrator prompt (into
   `%LOCALAPPDATA%\io.github.ibanks42.rc2fx`), and adds RC2FX to the Start menu
-  and **Settings › Apps › Installed apps**. For the portable version, unzip it
-  somewhere writable and run `RC2FX.exe`.
+  and **Settings › Apps › Installed apps**.
 - **macOS:** Open the `.pkg` and follow the prompts. It installs `RC2FX.app`
   into **Applications**, or `~/Applications` if you choose **Install for me
-  only**. For the portable copy, unzip it, move `RC2FX.app` to **Applications**,
-  and open it.
+  only**.
 - **Linux:** Make the AppImage executable (`chmod +x rc2fx-linux-x64.AppImage`)
   and run it. Keep it in a folder you can write to (such as your home folder)
   so it can update itself later. Linux also needs a quick one-time setup,
@@ -53,7 +49,7 @@ RC2FX from the mixer itself, flash stock RØDE firmware first; see
   pair `~/.ssh/rc2fx_rodecaster_pro_ii` and
   `~/.ssh/rc2fx_rodecaster_pro_ii.pub`). **No** is the default in case you
   reinstall later, and if the prompt isn't answered within a minute it keeps
-  your files. For the portable copy, just delete its folder.
+  your files.
 - **macOS:** Drag `RC2FX.app` from **Applications** (or `~/Applications`) to
   the Trash. Your local data in `~/Library/Application Support/RC2FX` and the
   SSH key pair `~/.ssh/rc2fx_rodecaster_pro_ii` and
@@ -138,7 +134,7 @@ or browse the full histories online at
 
 The check only notifies you; nothing downloads or installs until you start it:
 
-- **Installed app, portable zip, or AppImage:** Click **Update app** in
+- **Installed app or AppImage:** Click **Update app** in
   **Settings › Versions**. RC2FX downloads the package, verifies its checksum
   and cryptographic signature, and then restarts on its own to install the new
   version and relaunch. Your mixer's audio isn't affected while the app updates

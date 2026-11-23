@@ -214,9 +214,9 @@ mode.
 
 `just package` (or `./xtask package`) builds release packages for the current
 OS into `target/package` (see [packaging](../developer/building.md#3-package-it)):
-on Windows and macOS, an installer, a portable zip, and the Velopack update
-package and feed; on Linux, an AppImage plus its update package and feed, all
-created by Velopack's `vpk`. Each package includes:
+on Windows and macOS, an installer and the Velopack update package and feed; on
+Linux, an AppImage plus its update package and feed, all created by Velopack's
+`vpk`. Each package includes:
 
 - the self-contained desktop executable, and
 - the project license, third-party notices, training-data credits, and license

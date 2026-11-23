@@ -1,6 +1,6 @@
 // Package selfupdate manages in-place desktop updates via Velopack (Windows
-// installer, macOS pkg, portable zips, and Linux AppImage). Dev and source
-// builds fall back to linking to the GitHub release page.
+// installer, macOS pkg, and Linux AppImage). Dev and source builds fall back
+// to linking to the GitHub release page.
 //
 // Updates never start or apply unasked: the user starts the update, and the
 // app restarts on its own once the package is verified and nothing holds it

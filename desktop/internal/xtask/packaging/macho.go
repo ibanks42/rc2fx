@@ -1,6 +1,6 @@
 package packaging
 
-// Pure-Go verification of universal macOS binaries, bundles, portable zips,
+// Pure-Go verification of universal macOS binaries, bundles, update packages,
 // and installer .pkg archives (so tests run on non-macOS hosts without lipo or
 // otool). Checks that every Mach-O contains arm64 + x86_64 slices targeting
 // macOS <= LSMinimumSystemVersion, loads only system or co-located libraries,
@@ -303,16 +303,18 @@ func checkMacBundle(files Files) error {
 	return nil
 }
 
-// checkPortableZip validates the .app bundle inside vpk's portable zip,
-// including Velopack's UpdateMac binary.
-func checkPortableZip(name string, data []byte) error {
+// checkMacUpdatePackage validates the .app bundle inside vpk's macOS update
+// .nupkg (under lib/app/), including Velopack's UpdateMac binary.
+func checkMacUpdatePackage(name string, data []byte) error {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return task.Errorf("%s: %s", name, err)
 	}
 	files := Files{}
+	const prefix = "lib/app/"
 	for _, entry := range archive.File {
-		if !strings.HasPrefix(entry.Name, app+"/") || !entry.Mode().IsRegular() {
+		rel, ok := strings.CutPrefix(entry.Name, prefix)
+		if !ok || !entry.Mode().IsRegular() {
 			continue
 		}
 		if entry.UncompressedSize64 > 1<<30 {
@@ -327,10 +329,10 @@ func checkPortableZip(name string, data []byte) error {
 		if err != nil {
 			return task.Errorf("%s: %s: %s", name, entry.Name, err)
 		}
-		files[entry.Name] = Member{Data: content, Mode: entry.Mode() & fs.ModePerm}
+		files[app+"/"+rel] = Member{Data: content, Mode: entry.Mode() & fs.ModePerm}
 	}
 	if _, ok := files[app+"/Contents/MacOS/UpdateMac"]; !ok {
-		return task.Errorf("%s has no %s/Contents/MacOS/UpdateMac", name, app)
+		return task.Errorf("%s has no %sContents/MacOS/UpdateMac", name, prefix)
 	}
 	if err := checkMacBundle(files); err != nil {
 		return task.Errorf("%s: %s", name, err)

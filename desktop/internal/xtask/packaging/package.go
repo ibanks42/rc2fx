@@ -1,8 +1,8 @@
 // Package packaging builds the self-contained desktop app and legal notices
-// for release via Velopack (AppImage on Linux, installer + portable zip on
-// Windows and macOS, plus update packages and feeds). Release executables
-// download the mixer payload unless built with --embedded; packaging verifies
-// the executable's payload mode even with --skip-build.
+// for release via Velopack (AppImage on Linux, installers on Windows and
+// macOS, plus update packages and feeds). Release executables download the
+// mixer payload unless built with --embedded; packaging verifies the
+// executable's payload mode even with --skip-build.
 package packaging
 
 import (
@@ -292,24 +292,6 @@ func writeFolder(dir string, files Files) error {
 	return nil
 }
 
-// writeChecksums writes SHA256SUMS for every published Linux file, beside
-// them.
-func writeChecksums(out string, published []string) error {
-	var sums strings.Builder
-	for _, path := range published {
-		data, err := read(path)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(&sums, "%s  %s\n", common.SHA256Hex(data), filepath.Base(path))
-	}
-	path := filepath.Join(out, "SHA256SUMS")
-	if err := os.WriteFile(path, []byte(sums.String()), 0o666); err != nil {
-		return task.Errorf("%s: %s", path, task.IOError(err))
-	}
-	return nil
-}
-
 func usage() error {
 	return task.Error("usage: ./xtask package [--target TRIPLE] [--build-only | --skip-build] [--embedded]\n" +
 		"--build-only stops after the build; --skip-build then packages that build.\n" +
@@ -445,14 +427,11 @@ func Run(args []string) error {
 		if err != nil {
 			return err
 		}
-		published, err := packageAppImage(root, out, name, version, executable,
-			[]licenseFile{{"LICENSES.html", document.HTML}}, libraries, arch, tools)
-		if err != nil {
+		if _, err := packageAppImage(root, out, name, version, executable,
+			[]licenseFile{{"LICENSES.html", document.HTML}}, libraries, arch, tools); err != nil {
 			return err
 		}
-		// prepare-appimage-notices.py wrote the runtime's corresponding source.
-		published = append(published, filepath.Join(out, "rc2fx-"+version+"-appimage-runtime-sources.tar.gz"))
-		return writeChecksums(out, published)
+		return nil
 	}
 	// These apps carry the notices in their Settings dialog. collectWith
 	// checks one image's payload (all were checked above, and a universal

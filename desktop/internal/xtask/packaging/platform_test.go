@@ -57,12 +57,12 @@ func TestPublishedNamesFollowTheProjectAndTheFeedKeepsVpkNames(t *testing.T) {
 	for _, o := range testTarget("windows", "x64").outputs() {
 		windows = append(windows, o.publishAs)
 	}
-	if !slices.Equal(windows, []string{"rc2fx-x-setup.exe", "rc2fx-x.zip", "io.github.ibanks42.rc2fx-1.2.3-full.nupkg", "releases.win.json"}) {
+	if !slices.Equal(windows, []string{"rc2fx-x-setup.exe", "io.github.ibanks42.rc2fx-1.2.3-full.nupkg", "releases.win.json"}) {
 		t.Fatalf("%v", windows)
 	}
 	macos := testTarget("macos", "universal").outputs()
 	if macos[0] != (output{"io.github.ibanks42.rc2fx-osx-Setup.pkg", "rc2fx-x.pkg"}) ||
-		macos[2].publishAs != "io.github.ibanks42.rc2fx-1.2.3-osx-full.nupkg" || macos[3].publishAs != "releases.osx.json" {
+		macos[1].publishAs != "io.github.ibanks42.rc2fx-1.2.3-osx-full.nupkg" || macos[2].publishAs != "releases.osx.json" {
 		t.Fatalf("%v", macos)
 	}
 	if r := testTarget("macos", "universal").runtime(); r != "osx-arm64" {
@@ -115,7 +115,8 @@ func TestLinuxPacksTheAppDirUnsignedWithNoDeltas(t *testing.T) {
 	args := packArgs("/r", testTarget("linux", "x64"), "/w/rc2fx.AppDir", "/s")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--packDir /w/rc2fx.AppDir") || !strings.Contains(joined, "--runtime linux-x64") ||
-		!strings.Contains(joined, "--delta None") || strings.Contains(joined, "--icon") || strings.Contains(joined, "--sign") {
+		!strings.Contains(joined, "--delta None") || strings.Contains(joined, "--icon") || strings.Contains(joined, "--sign") ||
+		strings.Contains(joined, "--noPortable") {
 		t.Fatal(joined)
 	}
 	if !strings.Contains(joined, "--mainExe rc2fx") || strings.Contains(joined, "--mainExe rc2fx.exe") {
@@ -125,7 +126,7 @@ func TestLinuxPacksTheAppDirUnsignedWithNoDeltas(t *testing.T) {
 
 func TestWindowsPacksAnExeWithAStartMenuShortcutAndNoDeltas(t *testing.T) {
 	joined := strings.Join(packArgs("/r", testTarget("windows", "x64"), "/p", "/s"), " ")
-	for _, want := range []string{"--packId io.github.ibanks42.rc2fx", "--mainExe rc2fx.exe", "--shortcuts StartMenuRoot", "--delta None", "--runtime win-x64"} {
+	for _, want := range []string{"--packId io.github.ibanks42.rc2fx", "--noPortable", "--mainExe rc2fx.exe", "--shortcuts StartMenuRoot", "--delta None", "--runtime win-x64"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("%s missing: %s", want, joined)
 		}

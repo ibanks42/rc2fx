@@ -3,15 +3,14 @@
 
 App updates use their own orphan branch (`app-metadata`) served via
 raw.githubusercontent.com, sharing the mixer's TUF root and release keys. Every
-release asset except SHA256SUMS is recorded as target `vVERSION/ASSET`.
+release asset is recorded as target `vVERSION/ASSET`.
 
   prepare --tag TAG --dir DIR [--built DIR]...
       Download all assets of TAG into DIR and verify them against GitHub's
-      digests and SHA256SUMS. With --built, also require the release assets to
-      match the build outputs byte for byte (excluding SHA256SUMS). Checks the
-      current branch to skip already-signed identical assets and refuse
-      downgrades or conflicting re-signs. Writes `version` and `sign` to
-      GITHUB_OUTPUT when set.
+      digests. With --built, also require the release assets to match the build
+      outputs byte for byte. Checks the current branch to skip already-signed
+      identical assets and refuse downgrades or conflicting re-signs. Writes
+      `version` and `sign` to GITHUB_OUTPUT when set.
 
   publish --tag TAG DIR METADATA
       Verify METADATA matches DIR, push it in a single commit using
@@ -49,7 +48,6 @@ from release_common import (
 )
 
 BRANCH = "app-metadata"
-SUMS = "SHA256SUMS"
 README = """# RC2FX app update metadata
 
 Signed TUF metadata for RC2FX desktop app updates, read by the app to check a
@@ -93,33 +91,14 @@ def version_key(version):
     return tuple(map(int, version.split(".")))
 
 
-def parse_sums(text):
-    """Parse SHA256SUMS into {name: sha256}, rejecting malformed or duplicate entries."""
-    sums = {}
-    for line in text.splitlines():
-        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
-        require(match and PLAIN.fullmatch(match[2]) and match[2] != SUMS,
-                f"malformed {SUMS} line {line!r}")
-        require(match[2] not in sums, f"{SUMS} lists {match[2]} more than once")
-        sums[match[2]] = match[1]
-    return sums
-
-
 def asset_files(directory):
-    """Verify all files in DIRECTORY against SHA256SUMS and return {name: (size, sha256)}."""
+    """Validate all files in DIRECTORY and return {name: (size, sha256)}."""
     directory = Path(directory)
-    sums = parse_sums((directory / SUMS).read_text())
     files = {}
     for path in sorted(directory.iterdir()):
-        if path.name == SUMS:
-            continue
+        require(PLAIN.fullmatch(path.name), f"unsafe asset name {path.name!r}")
         require(path.is_file() and not path.is_symlink(), f"{path.name} is not a regular file")
-        require(path.name in sums, f"{path.name} is not listed in {SUMS}")
-        digest = sha256_file(path)
-        require(digest == sums[path.name], f"{path.name} does not match {SUMS}")
-        files[path.name] = (path.stat().st_size, digest)
-    missing = sorted(set(sums) - set(files))
-    require(not missing, f"{SUMS} lists {', '.join(missing)}, which the release does not hold")
+        files[path.name] = (path.stat().st_size, sha256_file(path))
     require(files, "the release has no assets to sign")
     return files
 
@@ -134,7 +113,6 @@ def download_release(gh, tag, directory):
     assets = release.get("assets") or []
     names = [a.get("name") for a in assets]
     require(len(set(names)) == len(names), "the release repeats an asset name")
-    require(SUMS in names, f"release {tag} has no {SUMS}")
     directory = Path(directory)
     directory.mkdir(parents=True)
     for asset in assets:
@@ -151,16 +129,14 @@ def download_release(gh, tag, directory):
 
 
 def require_built(downloaded, built_dirs):
-    """Ensure downloaded release assets match the run's build outputs byte for byte (excluding SHA256SUMS)."""
+    """Ensure downloaded release assets match the run's build outputs byte for byte."""
     built = {}
     for directory in map(Path, built_dirs):
         for path in sorted(directory.iterdir()):
-            if path.name == SUMS:
-                continue
             require(path.is_file() and not path.is_symlink(), f"built {path.name} is not a regular file")
             require(path.name not in built, f"{path.name} was built more than once")
             built[path.name] = path
-    published = {path.name: path for path in Path(downloaded).iterdir() if path.name != SUMS}
+    published = {path.name: path for path in Path(downloaded).iterdir()}
     extra = sorted(set(published) - set(built))
     require(not extra, f"the release holds {', '.join(extra)}, which this run did not build")
     missing = sorted(set(built) - set(published))

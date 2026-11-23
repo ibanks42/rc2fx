@@ -256,7 +256,7 @@ func TestTheBundleIsUniversalForItsMinimumMacOS(t *testing.T) {
 	}
 }
 
-func portableZip(t *testing.T, files Files, extra map[string][]byte) []byte {
+func macUpdatePackage(t *testing.T, files Files, extra map[string][]byte) []byte {
 	t.Helper()
 	var out bytes.Buffer
 	w := zip.NewWriter(&out)
@@ -270,7 +270,8 @@ func portableZip(t *testing.T, files Files, extra map[string][]byte) []byte {
 		}
 	}
 	for _, name := range files.sortedNames() {
-		add(name, files[name].Data)
+		rel := strings.TrimPrefix(name, app+"/")
+		add("lib/app/"+rel, files[name].Data)
 	}
 	for name, data := range extra {
 		add(name, data)
@@ -281,24 +282,24 @@ func portableZip(t *testing.T, files Files, extra map[string][]byte) []byte {
 	return out.Bytes()
 }
 
-func TestThePortableZipChecksVelopacksUpdaterToo(t *testing.T) {
+func TestTheMacUpdatePackageChecksVelopacksUpdaterToo(t *testing.T) {
 	updater := fatMachO(thinMachO(macho.CpuAmd64, macho.TypeExec, versionMinMacOS("10.12")),
 		thinMachO(macho.CpuArm64, macho.TypeExec, buildVersion(platformMacOS, "11.0")))
-	sequestered := map[string][]byte{"__MACOSX/._RC2FX.app": {0, 5, 0x16, 7}}
+	metadata := map[string][]byte{"io.github.ibanks42.rc2fx.nuspec": []byte("<package/>")}
 	good := testBundle(t)
 	good["RC2FX.app/Contents/MacOS/UpdateMac"] = Member{Data: updater}
-	if err := checkPortableZip("p.zip", portableZip(t, good, sequestered)); err != nil {
+	if err := checkMacUpdatePackage("p.nupkg", macUpdatePackage(t, good, metadata)); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkPortableZip("p.zip", portableZip(t, testBundle(t), nil)); err == nil || !strings.Contains(err.Error(), "UpdateMac") {
+	if err := checkMacUpdatePackage("p.nupkg", macUpdatePackage(t, testBundle(t), nil)); err == nil || !strings.Contains(err.Error(), "UpdateMac") {
 		t.Fatalf("%v", err)
 	}
 	thinUpdater := testBundle(t)
 	thinUpdater["RC2FX.app/Contents/MacOS/UpdateMac"] = Member{Data: thinMachO(macho.CpuArm64, macho.TypeExec, buildVersion(platformMacOS, "11.0"))}
-	if err := checkPortableZip("p.zip", portableZip(t, thinUpdater, nil)); err == nil {
+	if err := checkMacUpdatePackage("p.nupkg", macUpdatePackage(t, thinUpdater, nil)); err == nil {
 		t.Fatal("an arm64-only updater was accepted")
 	}
-	if err := checkPortableZip("p.zip", []byte("not a zip")); err == nil {
+	if err := checkMacUpdatePackage("p.nupkg", []byte("not a zip")); err == nil {
 		t.Fatal("not a zip")
 	}
 }
@@ -479,12 +480,12 @@ func TestTheMacPackageKeepsTheOsxChannelUnderUniversalNames(t *testing.T) {
 	for _, o := range mac.outputs() {
 		published = append(published, o.publishAs)
 	}
-	if !slices.Equal(published, []string{"rc2fx-macos-universal.pkg", "rc2fx-macos-universal.zip",
+	if !slices.Equal(published, []string{"rc2fx-macos-universal.pkg",
 		"io.github.ibanks42.rc2fx-1.2.3-osx-full.nupkg", "releases.osx.json"}) {
 		t.Fatalf("%v", published)
 	}
 	joined := strings.Join(packArgs("/r", mac, "/p/RC2FX.app", "/s"), " ")
-	if !strings.Contains(joined, "--runtime osx-arm64 --") || strings.Contains(joined, "--channel") {
+	if !strings.Contains(joined, "--runtime osx-arm64 --") || !strings.Contains(joined, "--noPortable") || strings.Contains(joined, "--channel") {
 		t.Fatal(joined)
 	}
 }

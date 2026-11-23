@@ -92,7 +92,7 @@ jobs:
           path: target/release-input/
           if-no-files-found: error
 
-  build:
+  windows:
     needs: prepare
     runs-on: windows-latest
     timeout-minutes: 90
@@ -163,14 +163,15 @@ jobs:
         if: steps.windows-signing.outputs.enabled == 'true'
         shell: pwsh
         run: |
-          $zip = @(Get-ChildItem target/package/rc2fx-windows-x64.zip)
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $nupkg = @(Get-ChildItem target/package/io.github.ibanks42.rc2fx-*-full.nupkg)
           $setup = @(Get-ChildItem target/package/rc2fx-windows-x64-setup.exe)
-          if ($zip.Count -ne 1 -or $setup.Count -ne 1) { throw "Expected one Windows zip and one setup, found $($zip.Count) and $($setup.Count)" }
+          if ($nupkg.Count -ne 1 -or $setup.Count -ne 1) { throw "Expected one Windows nupkg and one setup, found $($nupkg.Count) and $($setup.Count)" }
           $dir = Join-Path $env:RUNNER_TEMP rc2fx-signature-check
           Remove-Item -Recurse -Force $dir -ErrorAction Ignore
-          Expand-Archive $zip[0].FullName -DestinationPath $dir
-          # Verify launcher, updater, app binary, Velopack DLL, and setup executable.
-          $files = @('RC2FX.exe', 'Update.exe', 'current/rc2fx.exe', 'current/velopack_libc.dll' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($nupkg[0].FullName, $dir)
+          # Verify launcher stub, updater, app binary, Velopack DLL, and setup executable.
+          $files = @('lib/app/RC2FX_ExecutionStub.exe', 'lib/app/Squirrel.exe', 'lib/app/rc2fx.exe', 'lib/app/velopack_libc.dll' | ForEach-Object { Get-Item (Join-Path $dir $_) }) + $setup
           foreach ($file in $files) {
             $signature = Get-AuthenticodeSignature $file.FullName
             if ($signature.Status -ne 'Valid') { throw "$($file.Name) signature is $($signature.Status): $($signature.StatusMessage)" }
@@ -181,7 +182,6 @@ jobs:
         with:
           name: rc2fx-package-windows
           path: |
-            target/package/rc2fx-windows-x64.zip
             target/package/rc2fx-windows-x64-setup.exe
             target/package/io.github.ibanks42.rc2fx-*-full.nupkg
             target/package/releases.win.json
@@ -237,7 +237,7 @@ jobs:
             target/package-check/target/package/rc2fx-*-appimage-runtime-sources.tar.gz
           if-no-files-found: error
 
-  # Runs in parallel with Windows/Linux; publish waits for all three.
+  # Runs in parallel with Windows/Linux; release waits for all three.
   macos:
     needs: prepare
     runs-on: macos-latest
@@ -283,26 +283,17 @@ jobs:
           RC2FX_RELEASE_BUILD: "1"
           RC2FX_BASE_LICENSES: .release-input/base-licenses.json
         run: ./xtask package
-      # Keep legacy rc2fx-macos-arm64.* aliases for pre-0.1.8 download links
-      # (macos_release.py verifies they are byte-identical to universal).
-      - name: Keep the earlier macOS download names
-        run: |
-          cp target/package/rc2fx-macos-universal.zip target/package/rc2fx-macos-arm64.zip
-          cp target/package/rc2fx-macos-universal.pkg target/package/rc2fx-macos-arm64.pkg
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: macos-package
+          name: rc2fx-package-macos
           path: |
-            target/package/rc2fx-macos-universal.zip
             target/package/rc2fx-macos-universal.pkg
-            target/package/rc2fx-macos-arm64.zip
-            target/package/rc2fx-macos-arm64.pkg
             target/package/io.github.ibanks42.rc2fx-*-osx-full.nupkg
             target/package/releases.osx.json
           if-no-files-found: error
 
   release:
-    needs: [prepare, build, linux]
+    needs: [prepare, windows, linux, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -320,68 +311,8 @@ jobs:
           pattern: rc2fx-package-*
           merge-multiple: true
           path: target/release-assets
-      - name: Check archives and generate SHA256SUMS
-        run: |
-          python3 - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-          import zipfile
-          import tarfile
-
-          directory = Path('target/release-assets')
-          archives = sorted(directory.iterdir())
-          version = json.loads(Path('config/app-release.json').read_text())['version']
-          prefix = f'rc2fx-{version}'
-          sources_name = f'{prefix}-appimage-runtime-sources.tar.gz'
-          pack = 'io.github.ibanks42.rc2fx'
-          # Velopack update feeds and versioned nupkgs.
-          feeds = {'releases.win.json': f'{pack}-{version}-full.nupkg',
-                   'releases.linux.json': f'{pack}-{version}-linux-full.nupkg'}
-          # Unversioned asset names keep releases/latest/download/ URLs stable.
-          appimage = 'rc2fx-linux-x64.AppImage'
-          expected = {appimage, 'rc2fx-windows-x64.zip', 'rc2fx-windows-x64-setup.exe', sources_name,
-                      *feeds, *feeds.values()}
-          names = {p.name for p in archives}
-          assert names == expected, f'Missing or unexpected release packages: {sorted(names ^ expected)}'
-          for archive in archives:
-              if archive.name == sources_name:
-                  with tarfile.open(archive, 'r:gz') as sources:
-                      assert sources.getmembers(), 'Empty runtime source archive'
-              elif archive.suffix == '.AppImage':
-                  with archive.open('rb') as stream:
-                      header = stream.read(11)
-                  assert header[:4] == b'\x7fELF' and header[8:11] == b'AI\x02', 'Invalid AppImage'
-              elif archive.suffix == '.exe':
-                  with archive.open('rb') as stream:
-                      assert stream.read(2) == b'MZ', 'Invalid Windows installer'
-              elif archive.suffix == '.json':
-                  # Verify the feed entry matches the nupkg filename and SHA-256.
-                  package_name = feeds[archive.name]
-                  assets = json.loads(archive.read_text())['Assets']
-                  package = (directory / package_name).read_bytes()
-                  assert [(a['PackageId'], a['Version'], a['Type'], a['FileName'], a['SHA256'].lower()) for a in assets] == [
-                      (pack, version, 'Full', package_name, hashlib.sha256(package).hexdigest())
-                  ], f'{archive.name} does not describe its update package'
-              else:
-                  assert archive.suffix in {'.zip', '.nupkg'}, archive
-                  with zipfile.ZipFile(archive) as package:
-                      assert package.testzip() is None
-                      members = set(package.namelist())
-                      if archive.name == feeds['releases.linux.json']:
-                          # Verify the Linux update nupkg wraps this exact AppImage.
-                          inside = package.read(f'lib/app/{pack}.AppImage')
-                          assert inside == (directory / appimage).read_bytes(), f'{archive.name} holds another AppImage'
-                          continue
-                  # Required Windows app binary and sibling Velopack DLL.
-                  app = ('rc2fx.exe', 'velopack_libc.dll')
-                  needed = ({f'lib/app/{name}' for name in app} if archive.suffix == '.nupkg'
-                            else {'RC2FX.exe', 'Update.exe', *(f'current/{name}' for name in app)})
-                  assert needed <= members, f'{archive.name} lacks {sorted(needed - members)}'
-          sums = ''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in archives)
-          (directory / 'SHA256SUMS').write_text(sums)
-          print(sums)
-          PY
+      - name: Check release packages
+        run: python3 .github/scripts/release.py verify --dir target/release-assets
       - name: Commit version and create local tag
         run: python3 .github/scripts/release.py commit
       - uses: actions/upload-artifact@v7.0.2
@@ -397,52 +328,23 @@ jobs:
         # Rebase over a mixer version commit that landed during the build; any
         # other change to main stops the release.
         run: python3 .github/scripts/land_release.py --kind app --source "$SOURCE_SHA" --tag "$TAG"
-      - name: Create draft release and upload Linux and Windows packages
+      - name: Create and publish release
         if: ${{ !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
+        # Upload everything into a draft first so any upload failure leaves the
+        # release unpublished (and safe with immutable releases enabled).
         run: |
-          cat >> target/release-input/release-notes.md <<'EOF'
-
-          <!-- rc2fx:macos-pending -->
-          macOS build is pending. This draft will publish only after all platform packages are verified.
-          <!-- /rc2fx:macos-pending -->
-          EOF
-          gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file target/release-input/release-notes.md
-          gh release upload "$TAG" target/release-assets/*
-
-  # Attach macOS assets, verify all packages/checksums, and publish the release.
-  publish:
-    needs: [prepare, macos, release]
-    if: ${{ !inputs.dry-run }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: release-publication
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v8.0.2
-        with:
-          name: macos-package
-          path: target/macos-assets
-      - name: Complete, verify and publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_SOURCE: ${{ github.sha }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-        run: python3 .github/scripts/macos_release.py publish --tag "$RELEASE_TAG" --source "$RELEASE_SOURCE" --package-dir target/macos-assets
+          gh release create "$TAG" --verify-tag --draft --title "$TAG" \
+            --notes-file target/release-input/release-notes.md \
+            target/release-assets/*
+          gh release edit "$TAG" --tag "$TAG" --draft=false --latest
 
   # Separate job so a docs dispatch failure never blocks update-metadata signing.
   docs:
-    needs: [publish]
+    needs: [release]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -457,7 +359,7 @@ jobs:
 
   # Sign the published release into the app update metadata.
   app-metadata:
-    needs: [prepare, publish]
+    needs: [prepare, release]
     if: ${{ !inputs.dry-run }}
     permissions:
       contents: write

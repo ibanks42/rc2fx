@@ -23,7 +23,7 @@ var sha256Sum = sha256.Sum256
 const mixerSignUsage = "usage: ./xtask mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY TIMESTAMP_KEY"
 
 // Package implements `xtask mixer-package DIR`, writing the standalone mixer
-// payload, compatibility metadata, notices, and SHA256SUMS into a new directory.
+// payload, compatibility metadata, and notices into a new directory.
 func Package(destination string) error {
 	return packageIn(task.Root(), destination, licenses.WriteLicenses)
 }
@@ -88,15 +88,6 @@ func packageIn(root, destination string, writeLicenses func(string) error) error
 		return err
 	}
 	if err := writeLicenses(filepath.Join(staging, "THIRD-PARTY-NOTICES.html")); err != nil {
-		return err
-	}
-	notices, err := readAll(filepath.Join(staging, "THIRD-PARTY-NOTICES.html"))
-	if err != nil {
-		return err
-	}
-	sums := fmt.Sprintf("%s  %s\n%s  THIRD-PARTY-NOTICES.html\n%s  firmware-profiles.json\n",
-		common.SHA256Hex(checked.AsBytes()), name, common.SHA256Hex(notices), common.SHA256Hex(bundle["firmware-profiles.json"]))
-	if err := write("SHA256SUMS", []byte(sums)); err != nil {
 		return err
 	}
 	if err := os.Rename(staging, destination); err != nil {

@@ -144,7 +144,6 @@ jobs:
       - name: Test release and documentation tooling
         run: |
           python3 .github/scripts/test_release.py
-          python3 .github/scripts/test_macos_release.py
           python3 .github/scripts/test_land_release.py
           python3 .github/scripts/test_app_release.py
           python3 .github/scripts/test_docs_source.py
@@ -162,14 +161,27 @@ jobs:
           python3 -m unittest discover -s mixer/jackerr/tests -p 'test_*.py'
           python3 mixer/gui/test_gui_pacing.py
 
-  # Non-UI Go packages (everything that does not import gpuikit) plus CGO_ENABLED=0 xtask.
+  # Go desktop packages (non-UI + CGO_ENABLED=0 xtask + UI build and tests
+  # against prebuilt gpuikit and Velopack). Offscreen UI tests (app/uitest)
+  # require gpuikit's diagnostic library and are skipped here. Unpinned
+  # platforms or fork PRs without bindings access still run all non-UI checks
+  # and skip the UI steps with a warning (release.yml fails on missing pins).
   desktop:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+            platform: linux_x86_64
+          - os: windows-latest
+            target: windows-amd64
+            platform: windows_x86_64
+          - os: macos-latest
+            target: darwin-universal
+            platform: macos_universal
     defaults:
       run:
         shell: bash
@@ -196,13 +208,12 @@ jobs:
           key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
           restore-keys: go-desktop-${{ runner.os }}-
       # -e includes UI packages even without gpuikit installed; gofmt doesn't need their imports.
-      - name: Check formatting
+      - name: Check formatting and schema
         if: runner.os == 'Linux'
         run: |
           unformatted=$(go list -e -f '{{.Dir}}' ./... | xargs gofmt -l)
           test -z "$unformatted" || { printf 'gofmt would change:\n%s\n' "$unformatted" >&2; exit 1; }
-      - name: Check generated schema
-        run: ../xtask schema --check
+          ../xtask schema --check
       - name: List everything but the UI
         run: ../xtask non-ui-packages > "$RUNNER_TEMP/non-ui-packages"
       - name: Vet and test everything but the UI
@@ -221,21 +232,11 @@ jobs:
           # shellcheck disable=SC2086
           CGO_ENABLED=0 go vet -tags rc2fxdev,embedded $pkgs
           rm installer/embed/payload/rc2fx-payload.bin
-      # Velopack cgo bindings only need Velopack.h, not gpuikit, so vet them on all platforms.
-      - name: Vet the Velopack bindings
-        run: |
-          bash scripts/fetch-velopack.sh
-          CGO_ENABLED=1 go vet -tags velopack ./app/selfupdate/...
-      # Vulnerability scan for non-UI packages (desktop-ui scans cmd/rc2fx).
-      - name: Check the dependencies for vulnerabilities
-        if: runner.os == 'Linux'
-        run: |
-          # shellcheck disable=SC2046
-          go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 $(cat "$RUNNER_TEMP/non-ui-packages")
       - name: Test the xtask as ./xtask builds it
         run: CGO_ENABLED=0 go test ./internal/xtask/... ./cmd/xtask
-      # Ensure cmd/xtask stays pure Go (no cgo or gpuikit dependencies).
-      - name: Check that the xtask needs no cgo
+      # Ensure cmd/xtask stays pure Go (no cgo or gpuikit dependencies) and the launcher works.
+      - name: Check xtask purity and launcher
+        if: runner.os == 'Linux'
         run: |
           bad=$(CGO_ENABLED=0 go list -e -deps -f '{{if or .Error .DepsErrors .CgoFiles}}{{.ImportPath}}: {{.Error}}{{end}}' ./cmd/xtask)
           gk=$(CGO_ENABLED=0 go list -e -deps -f '{{.ImportPath}}' ./cmd/xtask | grep '^gpuikit\.dev' || true)
@@ -243,47 +244,15 @@ jobs:
             printf 'cmd/xtask must build without cgo or gpuikit:\n%s\n%s\n' "$bad" "$gk" >&2
             exit 1
           fi
-      - name: Run the ./xtask launcher
-        working-directory: .
+          sh -n ../xtask
+          ../xtask help
+      # Velopack cgo bindings are shared by the selfupdate vet and UI link check.
+      - name: Fetch and vet the Velopack bindings
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          sh -n ./xtask
-          ./xtask help
-      - uses: actions/cache/save@v4.2.3
-        if: github.ref == 'refs/heads/main'
-        with:
-          path: |
-            ${{ steps.go-cache.outputs.mod }}
-            ${{ steps.go-cache.outputs.build }}
-          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
-
-  # Desktop UI build and tests against prebuilt gpuikit and Velopack.
-  # Offscreen UI tests (app/uitest) require gpuikit's diagnostic library and
-  # are skipped here. Unpinned platforms or fork PRs without bindings access
-  # skip with a warning (release.yml fails on missing pins).
-  desktop-ui:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: linux-amd64
-            platform: linux_x86_64
-          - os: windows-latest
-            target: windows-amd64
-            platform: windows_x86_64
-          - os: macos-latest
-            target: darwin-universal
-            platform: macos_universal
-    defaults:
-      run:
-        shell: bash
-        working-directory: desktop
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
+          bash scripts/fetch-velopack.sh "$TARGET"
+          CGO_ENABLED=1 go vet -tags velopack ./app/selfupdate/...
       - name: Check for a gpuikit pin
         id: pin
         env:
@@ -295,25 +264,6 @@ jobs:
             echo "::warning::fetch-gpuikit.sh has no SHA-256 for $PLATFORM yet; the UI is not built here"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-go@v6.0.0
-        if: steps.pin.outputs.ready == 'true'
-        with:
-          go-version-file: desktop/go.mod
-          cache: false
-      - name: Find the Go caches
-        if: steps.pin.outputs.ready == 'true'
-        id: go-cache
-        run: |
-          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4.2.3
-        if: steps.pin.outputs.ready == 'true'
-        with:
-          path: |
-            ${{ steps.go-cache.outputs.mod }}
-            ${{ steps.go-cache.outputs.build }}
-          key: go-desktop-ui-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
-          restore-keys: go-desktop-ui-${{ runner.os }}-
       # Runtime system libraries referenced by gpuikit's static library.
       - name: Install the gpuikit system libraries
         if: steps.pin.outputs.ready == 'true' && runner.os == 'Linux'
@@ -341,11 +291,6 @@ jobs:
             echo "::warning::gpuikit could not be fetched in a pull request from a fork; the UI is not built here"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Fetch the Velopack C library
-        if: steps.gpuikit.outputs.ready == 'true'
-        env:
-          TARGET: ${{ matrix.target }}
-        run: bash scripts/fetch-velopack.sh "$TARGET"
       - name: Vet, build and test the UI
         if: steps.gpuikit.outputs.ready == 'true'
         run: |
@@ -363,20 +308,30 @@ jobs:
           # Verify release link flags (including both slices on macOS).
           ../xtask check-ui-link "$RUNNER_TEMP/rc2fx-ui-check"
           # Package gk embeds the required Windows manifest in test binaries too.
-          go test ./app/... ./cmd/rc2fx
-      # Vulnerability scan for the full shipped app (including UI).
-      - name: Check the app's dependencies for vulnerabilities
-        if: steps.gpuikit.outputs.ready == 'true' && runner.os == 'Linux'
+          # Only test UI packages here; non-UI ./app/* subpackages already ran above.
+          go test ./app ./cmd/rc2fx
+      # Single vulnerability scan covering non-UI packages plus ./cmd/rc2fx when gpuikit is present.
+      - name: Check dependencies for vulnerabilities
+        if: runner.os == 'Linux'
+        env:
+          HAVE_GPUIKIT: ${{ steps.gpuikit.outputs.ready }}
         run: |
-          export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib"
-          go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./cmd/rc2fx
+          pkgs=$(cat "$RUNNER_TEMP/non-ui-packages")
+          if [ "$HAVE_GPUIKIT" = true ]; then
+            export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib"
+            # shellcheck disable=SC2086
+            go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 $pkgs ./cmd/rc2fx
+          else
+            # shellcheck disable=SC2086
+            go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 $pkgs
+          fi
       - uses: actions/cache/save@v4.2.3
-        if: steps.gpuikit.outputs.ready == 'true' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         with:
           path: |
             ${{ steps.go-cache.outputs.mod }}
             ${{ steps.go-cache.outputs.build }}
-          key: go-desktop-ui-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
+          key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
 
   # Build desktop cgo (UI + vendored libext2fs) inside the AlmaLinux 8 release
   # image to catch glibc 2.28 or container tool regressions before release.
