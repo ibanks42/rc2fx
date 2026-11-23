@@ -2,6 +2,36 @@
 
 All notable changes to RC2FX are documented here.
 
+## [0.2.3] - 2026-11-23
+
+### Bug fixes
+
+- *(mixer)* Restore first-boot interlock and address review audit findings
+
+### Refactoring
+
+- Generate shared wire schemas and replace fixtures/ with live Go-Rust interop tests
+- *(desktop)* Share Go helpers, harden TUF/ELF checks, and add mixer pre_command hook
+- *(mixer)* Move developer-ssh into rc2fxd, deduplicate scripts, and drop built-in power recovery
+- *(ci)* Share release script helpers in release_common.py
+
+### Testing
+
+- *(core)* Let Rust own the fixture goldens and drop the Python generator
+- *(mixer)* Place linker libraries after sources in gui pacing tests
+
+### Maintenance
+
+- *(mixer-release)* 0.2.3
+- Remove xrun_trace, unused bench code, and per-case firmware fixtures
+- *(deps)* Bump url to 2.5.9 for RUSTSEC-2026-0592
+
+### Other
+
+- Merge pull request #5 from ibanks42/chore/trim-research-and-fixtures
+
+refactor: streamline fixtures, mixer tooling, and release scripts
+
 ## [0.2.2] - 2026-11-21
 
 ### Features
