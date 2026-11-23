@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           ref: main
-          fetch-depth: 0
+          fetch-depth: ${{ inputs.source == 'latest-release' && 1 || 0 }}
           persist-credentials: false
       - name: Resolve the current documentation source
         id: source
@@ -46,6 +46,7 @@ jobs:
           DOCS_SOURCE: ${{ inputs.source }}
         run: python3 .github/scripts/docs_source.py
       - uses: actions/checkout@v7.0.1
+        if: steps.source.outputs.ref != 'refs/heads/main'
         with:
           ref: ${{ steps.source.outputs.ref }}
           fetch-depth: 0

@@ -78,8 +78,8 @@ def publish(package, metadata):
     # Never overwrite an existing release (even a draft); fixes require a new version.
     gh("release", "create", tag, "--draft", "--latest=false", "--target", os.environ["RELEASE_COMMIT"],
        "--title", f"RC2FX mixer {version}", "--notes", f"RC2FX mixer software {version}. Install through the RC2FX desktop app's USB firmware installer.")
-    gh("release", "upload", tag, *files, package / "SHA256SUMS")
-    verify_upload(tag, files + [package / "SHA256SUMS"])
+    gh("release", "upload", tag, *files)
+    verify_upload(tag, files)
     release = state(tag)
     if not release["isDraft"] or release["tagName"] != tag:
         raise ValueError("Release state changed before publication")

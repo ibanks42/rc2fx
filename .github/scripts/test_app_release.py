@@ -31,9 +31,7 @@ class FakeGh:
         self.downloads = []
         self.ids = iter(range(1, 10**6))
 
-    def add(self, tag, files, sums=None, **fields):
-        listing = sums if sums is not None else "".join(f"{sha(d)}  {n}\n" for n, d in sorted(files.items()))
-        files = {**files, "SHA256SUMS": listing.encode()}
+    def add(self, tag, files, **fields):
         self.releases[tag] = {
             "tag_name": tag, "draft": False, "prerelease": False,
             "assets": [{"id": next(self.ids), "name": n, "size": len(d), "state": "uploaded",
@@ -98,10 +96,9 @@ class Publication(unittest.TestCase):
         out.mkdir()
         targets = {}
         for path in sorted(directory.iterdir()):
-            if path.name != "SHA256SUMS":
-                data = path.read_bytes()
-                targets[f"v{version}/{path.name}"] = {
-                    "length": len(data), "hashes": {"sha256": sha(data)}, "custom": {"version": version}}
+            data = path.read_bytes()
+            targets[f"v{version}/{path.name}"] = {
+                "length": len(data), "hashes": {"sha256": sha(data)}, "custom": {"version": version}}
         (out / "targets.json").write_text(json.dumps({"signed": {"version": self.sequence, "targets": targets}}))
         for name in ["snapshot.json", "timestamp.json"]:
             (out / name).write_text(json.dumps({"signed": {"version": self.sequence}}))
@@ -122,7 +119,7 @@ class Publication(unittest.TestCase):
     def test_a_release_is_downloaded_checked_signed_and_published_in_one_commit(self):
         directory, signed = self.release("1.2.3")
         self.assertEqual(self.outputs.read_text(), "version=1.2.3\nsign=true\n")
-        self.assertEqual(sorted(p.name for p in directory.iterdir()), sorted([*assets("1.2.3"), "SHA256SUMS"]))
+        self.assertEqual(sorted(p.name for p in directory.iterdir()), sorted(assets("1.2.3")))
         self.assertEqual(self.commits(), ["Sign app 1.2.3"])
         names = self.branch("ls-tree", "--name-only", app.BRANCH).split()
         self.assertEqual(names, ["1.root.json", "README.md", "snapshot.json", "targets.json", "timestamp.json"])
@@ -214,7 +211,7 @@ class Publication(unittest.TestCase):
                 app.publish("v1.2.3", directory, signed)
         self.assertEqual(self.commits(), [])
 
-    def test_downloads_are_checked_against_github_and_the_release_sums(self):
+    def test_downloads_are_checked_against_github_digests(self):
         files = assets("1.2.3")
         cases = {
             "digest": lambda r: r["assets"][0].update(digest="sha256:" + "0" * 64),
@@ -222,41 +219,26 @@ class Publication(unittest.TestCase):
             "size": lambda r: r["assets"][0].update(size=1),
             "partial upload": lambda r: r["assets"][0].update(state="starter"),
             "unsafe name": lambda r: r["assets"][0].update(name="../x"),
-            "no sums": lambda r: r.update(assets=[a for a in r["assets"] if a["name"] != "SHA256SUMS"]),
+            "no assets": lambda r: r.update(assets=[]),
         }
         for number, (case, damage) in enumerate(cases.items()):
             with self.subTest(case):
                 damage(self.gh.add("v1.2.3", files))
-                with self.assertRaises(app.Refused) as refused:
-                    self.prepare("v1.2.3", f"case-{number}")
-                if case == "no sums":
-                    self.assertIn("has no SHA256SUMS", str(refused.exception))
-        listed = "".join(f"{sha(d)}  {n}\n" for n, d in sorted(files.items()))
-        for number, sums in enumerate([
-            listed.replace(sha(files["releases.linux.json"]), "0" * 64),
-            listed + f"{'0' * 64}  missing.deb\n",
-            "".join(line + "\n" for line in listed.splitlines()[1:]),
-            listed + listed.splitlines()[0] + "\n",
-            listed.replace("  ", " "),
-        ]):
-            with self.subTest(sums=number):
-                self.gh.add("v1.2.3", files, sums=sums)
                 with self.assertRaises(app.Refused):
-                    self.prepare("v1.2.3", f"sums-{number}")
+                    self.prepare("v1.2.3", f"case-{number}")
         self.assertEqual(self.commits(), [])
 
     def built(self, files, name="built"):
-        """Stage fake build artifacts (release-assets with pre-macOS SHA256SUMS, plus macos-package)."""
+        """Stage fake build artifacts."""
         assets, macos = self.temp / name / "release-assets", self.temp / name / "macos-package"
         for directory in (assets, macos):
             directory.mkdir(parents=True)
         for file, data in files.items():
             ((macos if "macos" in file else assets) / file).write_bytes(data)
-        (assets / "SHA256SUMS").write_text("written before the macOS packages\n")
         return [assets, macos]
 
     def test_a_release_run_signs_only_the_packages_it_built(self):
-        files = {**assets("1.2.3"), "rc2fx-macos-universal.zip": b"mac", "rc2fx-macos-arm64.zip": b"mac"}
+        files = {**assets("1.2.3"), "rc2fx-macos-universal.pkg": b"mac"}
         self.gh.add("v1.2.3", files)
         built = self.built(files)
         directory = self.temp / "bound"

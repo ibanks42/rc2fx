@@ -3,7 +3,6 @@ package release
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,15 +17,12 @@ import (
 func testRelease(t *testing.T, dir string) string {
 	t.Helper()
 	assets := filepath.Join(dir, "assets")
-	var list strings.Builder
 	for _, a := range []struct{ name, data string }{
 		{"io.github.ibanks42.rc2fx-1.2.3-full.nupkg", "package"},
 		{"rc2fx-linux-x64.AppImage", "appimage"},
 	} {
 		mustWrite(t, filepath.Join(assets, a.name), []byte(a.data))
-		fmt.Fprintf(&list, "%s  %s\n", common.SHA256Hex([]byte(a.data)), a.name)
 	}
-	mustWrite(t, filepath.Join(assets, sums), []byte(list.String()))
 	return assets
 }
 
@@ -38,7 +34,7 @@ func signInto(dir, out, version, targetsKey string) error {
 	})
 }
 
-func TestEveryAssetButTheSumsBecomesAVersionedTarget(t *testing.T) {
+func TestEveryAssetBecomesAVersionedTarget(t *testing.T) {
 	dir := t.TempDir()
 	testRoot(t, dir)
 	testRelease(t, dir)
@@ -75,7 +71,7 @@ func TestEveryAssetButTheSumsBecomesAVersionedTarget(t *testing.T) {
 	}
 }
 
-func TestSigningRefusesAssetsTheSumsDoNotVouchFor(t *testing.T) {
+func TestSigningRefusesInvalidDirectoriesAndEntries(t *testing.T) {
 	dir := t.TempDir()
 	testRoot(t, dir)
 	assets := testRelease(t, dir)
@@ -86,25 +82,25 @@ func TestSigningRefusesAssetsTheSumsDoNotVouchFor(t *testing.T) {
 		}
 		return err.Error()
 	}
-	mustWrite(t, filepath.Join(assets, "rc2fx-linux-x64.AppImage"), []byte("replaced"))
-	if e := refused("a"); !strings.Contains(e, "does not match") {
+	mustWrite(t, filepath.Join(assets, ".hidden"), []byte("x"))
+	if e := refused("a"); !strings.Contains(e, "unsafe asset name") {
 		t.Fatal(e)
 	}
-	mustWrite(t, filepath.Join(assets, "rc2fx-linux-x64.AppImage"), []byte("appimage"))
-	mustWrite(t, filepath.Join(assets, "extra.zip"), []byte("extra"))
-	if e := refused("b"); !strings.Contains(e, "not listed") {
+	_ = os.Remove(filepath.Join(assets, ".hidden"))
+	if err := os.Mkdir(filepath.Join(assets, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if e := refused("b"); !strings.Contains(e, "not a regular file") {
 		t.Fatal(e)
 	}
-	_ = os.Remove(filepath.Join(assets, "extra.zip"))
-	_ = os.Remove(filepath.Join(assets, "rc2fx-linux-x64.AppImage"))
-	if e := refused("c"); !strings.Contains(e, "missing") {
+	_ = os.RemoveAll(assets)
+	if err := os.Mkdir(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if e := refused("c"); !strings.Contains(e, "no assets") {
 		t.Fatal(e)
 	}
-	_ = os.Remove(filepath.Join(assets, sums))
-	if e := refused("d"); !strings.Contains(e, sums) {
-		t.Fatal(e)
-	}
-	for _, out := range []string{"a", "b", "c", "d"} {
+	for _, out := range []string{"a", "b", "c"} {
 		if common.PathExists(filepath.Join(dir, out)) {
 			t.Fatalf("%s written", out)
 		}

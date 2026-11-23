@@ -13,11 +13,11 @@ app.
 
 ## Download
 
-| System | Installer | Portable |
-| --- | --- | --- |
-| Windows (x64) | [Setup (.exe)](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64-setup.exe) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64.zip) |
-| macOS 13+ (Apple silicon & Intel) | [.pkg](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.pkg) | [.zip](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.zip) |
-| Linux (x64) | - | [AppImage](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage) |
+| System | Download |
+| --- | --- |
+| Windows (x64) | [Setup (.exe)](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-windows-x64-setup.exe) |
+| macOS 13+ (Apple silicon & Intel) | [Installer (.pkg)](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-macos-universal.pkg) |
+| Linux (x64) | [AppImage](https://github.com/ibanks42/rc2fx/releases/latest/download/rc2fx-linux-x64.AppImage) |
 
 Release notes and checksums are on the
 [latest release](https://github.com/ibanks42/rc2fx/releases/latest) page. Once

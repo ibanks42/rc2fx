@@ -84,7 +84,6 @@ APPIMAGE=$ARTIFACTS/rc2fx-linux-x64.AppImage
 NUPKG=$ARTIFACTS/io.github.ibanks42.rc2fx-$VERSION-linux-full.nupkg
 FEED=$ARTIFACTS/releases.linux.json
 SOURCES=$ARTIFACTS/rc2fx-$VERSION-appimage-runtime-sources.tar.gz
-SUMS=$ARTIFACTS/SHA256SUMS
 
 check_artifact() {
     path=$1
@@ -111,21 +110,6 @@ magic() {
 [ "$(magic "$APPIMAGE" 4)" = '7f454c46' ] || fail "AppImage does not start with an ELF header"
 [ "$(magic "$APPIMAGE" 11 | cut -c17-22)" = '414902' ] \
     || fail "AppImage is not type 2"
-[ -f "$SUMS" ] || fail "missing SHA256SUMS beside the artifacts"
-
-verify_sum() {
-    name=$1
-    path=$2
-    lines=$(awk -v name="$name" '$2 == name { print $1 }' "$SUMS")
-    [ -n "$lines" ] || fail "SHA256SUMS has no entry for $name"
-    [ "$(printf '%s\n' "$lines" | grep -c .)" -eq 1 ] \
-        || fail "SHA256SUMS has more than one entry for $name"
-    actual=$(sha256sum "$path" | awk '{ print $1 }')
-    [ "$actual" = "$lines" ] || fail "SHA256SUMS does not match $name"
-}
-verify_sum "$(basename "$APPIMAGE")" "$APPIMAGE"
-verify_sum "$(basename "$NUPKG")" "$NUPKG"
-verify_sum "$(basename "$FEED")" "$FEED"
 # Verify the feed points to this nupkg and the nupkg contains this exact AppImage.
 python3 - "$FEED" "$NUPKG" "$APPIMAGE" "$VERSION" <<'PY' || fail "the update feed or package does not match the AppImage"
 import hashlib, json, sys, zipfile
@@ -139,7 +123,6 @@ with zipfile.ZipFile(nupkg) as package:
     assert package.read("lib/app/io.github.ibanks42.rc2fx.AppImage") == Path(appimage).read_bytes()
 PY
 check_artifact "$SOURCES"
-verify_sum "$(basename "$SOURCES")" "$SOURCES"
 tar -tzf "$SOURCES" | grep -Eq '(^|/)SOURCES\.json$' \
     || fail "AppImage runtime sources have no SOURCES.json"
 

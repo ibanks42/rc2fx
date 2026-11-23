@@ -18,7 +18,7 @@ on:
         required: false
         type: boolean
         default: false
-  # Manual dispatch verifies the release against GitHub digests and SHA256SUMS only.
+  # Manual dispatch verifies the release against GitHub digests only.
   workflow_dispatch:
     inputs:
       tag:
@@ -63,11 +63,6 @@ jobs:
         with:
           name: release-assets
           path: target/built/release-assets
-      - uses: actions/download-artifact@v8.0.2
-        if: inputs.expect-artifacts
-        with:
-          name: macos-package
-          path: target/built/macos-package
       - name: Download and check the published release
         id: release
         env:
@@ -79,7 +74,7 @@ jobs:
           rm -rf target/app-release target/app-metadata
           built=()
           if [ "$EXPECT_ARTIFACTS" = true ]; then
-            built=(--built target/built/release-assets --built target/built/macos-package)
+            built=(--built target/built/release-assets)
           fi
           python3 .github/scripts/publish_app.py prepare --tag "$TAG" --dir target/app-release "${built[@]}"
       - name: Build signing tool without signing credentials

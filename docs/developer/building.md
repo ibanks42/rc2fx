@@ -116,13 +116,13 @@ This builds self-contained release packages for the current OS into
 
 | System | Files |
 | --- | --- |
-| Windows | `rc2fx-windows-x64-setup.exe` (installer), `rc2fx-windows-x64.zip` (portable), `io.github.ibanks42.rc2fx-VERSION-full.nupkg` and `releases.win.json` (update package and feed) |
-| macOS | `rc2fx-macos-universal.pkg` (installer), `rc2fx-macos-universal.zip` (portable), `io.github.ibanks42.rc2fx-VERSION-osx-full.nupkg` and `releases.osx.json` (update package and feed), all universal (Apple silicon and Intel) |
+| Windows | `rc2fx-windows-x64-setup.exe` (installer), `io.github.ibanks42.rc2fx-VERSION-full.nupkg` and `releases.win.json` (update package and feed) |
+| macOS | `rc2fx-macos-universal.pkg` (installer), `io.github.ibanks42.rc2fx-VERSION-osx-full.nupkg` and `releases.osx.json` (update package and feed), all universal (Apple silicon and Intel) |
 | Linux | `rc2fx-linux-x64.AppImage`, `io.github.ibanks42.rc2fx-VERSION-linux-full.nupkg` and `releases.linux.json` (update package and feed) |
 
-All packages are produced by Velopack's `vpk`. Installers, portable zips, and
-the AppImage omit the version number from their filenames so latest-release
-URLs never change and AppImage self-updates can replace the file in place. The
+All packages are produced by Velopack's `vpk`. Installers and the AppImage omit
+the version number from their filenames so latest-release URLs never change and
+AppImage self-updates can replace the file in place. The
 `.nupkg` files and feeds keep vpk's naming because the feed references the
 package by name; packaging verifies that the feed lists that exact package and
 SHA-256. The unpacked app remains in `target/package/rc2fx-OS-ARCH/rc2fx`. See

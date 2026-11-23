@@ -21,16 +21,13 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/tufsign"
 )
 
-// SHA256SUMS verifies the other release assets and is not itself signed as a target.
-const sums = "SHA256SUMS"
-
 const (
 	appSignUsage    = "usage: ./xtask app-sign ROOT ASSETS VERSION OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY TIMESTAMP_KEY"
 	appRefreshUsage = "usage: ./xtask app-refresh ROOT METADATA OUT SEQUENCE EXPIRES SNAPSHOT_KEY TIMESTAMP_KEY"
 )
 
-// AppSign implements `xtask app-sign`, verifying every file in ASSETS against
-// SHA256SUMS and signing them into OUT.
+// AppSign implements `xtask app-sign`, validating every file in ASSETS and
+// signing them into OUT.
 func AppSign(args []string) error {
 	if len(args) != 9 {
 		return task.Error(appSignUsage)
@@ -153,31 +150,8 @@ func plain(name string) bool {
 	return true
 }
 
-// checkedAssets validates that dir's files match SHA256SUMS 1-to-1 and returns
-// their paths and sorted names.
+// checkedAssets validates every file in dir and returns their paths and sorted names.
 func checkedAssets(dir string) (map[string]string, []string, error) {
-	sumsPath := filepath.Join(dir, sums)
-	data, err := os.ReadFile(sumsPath)
-	if err == nil && !utf8.Valid(data) {
-		return nil, nil, task.Errorf("%s: stream did not contain valid UTF-8", sumsPath)
-	}
-	if err != nil {
-		return nil, nil, task.Errorf("%s: %s", sumsPath, task.IOError(err))
-	}
-	listed := map[string]string{}
-	for _, line := range common.Lines(string(data)) {
-		hash, name, ok := strings.Cut(line, "  ")
-		if !ok {
-			return nil, nil, task.Errorf("malformed %s line %q", sums, line)
-		}
-		if len(hash) != 64 || !common.IsHex(hash) || !plain(name) {
-			return nil, nil, task.Errorf("malformed %s line %q", sums, line)
-		}
-		if _, dup := listed[name]; name == sums || dup {
-			return nil, nil, task.Errorf("%s lists %s more than once", sums, name)
-		}
-		listed[name] = hash
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, nil, task.Error(task.IOError(err))
@@ -188,35 +162,14 @@ func checkedAssets(dir string) (map[string]string, []string, error) {
 		if !utf8.ValidString(name) {
 			return nil, nil, task.Errorf("asset name %q is not UTF-8", name)
 		}
-		if name == sums {
-			continue
+		if !plain(name) {
+			return nil, nil, task.Errorf("unsafe asset name %q", name)
 		}
 		// Refuse symlinks so we never sign files outside the release directory.
 		if !entry.Type().IsRegular() {
 			return nil, nil, task.Errorf("%s is not a regular file", name)
 		}
-		expected, ok := listed[name]
-		if !ok {
-			return nil, nil, task.Errorf("%s is not listed in %s", name, sums)
-		}
-		delete(listed, name)
-		path := filepath.Join(dir, name)
-		data, err := readAll(path)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !strings.EqualFold(common.SHA256Hex(data), expected) {
-			return nil, nil, task.Errorf("%s does not match %s", name, sums)
-		}
-		assets[name] = path
-	}
-	if len(listed) > 0 {
-		missing := make([]string, 0, len(listed))
-		for name := range listed {
-			missing = append(missing, name)
-		}
-		sort.Strings(missing)
-		return nil, nil, task.Errorf("%s lists %s, which is missing", sums, missing[0])
+		assets[name] = filepath.Join(dir, name)
 	}
 	if len(assets) == 0 {
 		return nil, nil, task.Error("the release has no assets to sign")

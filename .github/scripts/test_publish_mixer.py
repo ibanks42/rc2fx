@@ -28,7 +28,6 @@ class Publication(unittest.TestCase):
             if name.endswith("payload"):
                 pin["custom"] = {"rc2fxMixer": {"version": "1.2.3"}}
             targets[self.tag + "/" + name] = pin
-        (self.package / "SHA256SUMS").write_text("checksums")
         (self.metadata / "targets.json").write_text(json.dumps({"signed": {"version": 2, "targets": targets}}))
         for name in ["1.root.json", "snapshot.json", "timestamp.json"]:
             (self.metadata / name).write_text(json.dumps({"signed": {"version": 2}}))

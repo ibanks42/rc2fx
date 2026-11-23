@@ -34,8 +34,8 @@ tag, and never downloads binaries on its own. Because the repository and feed
 URLs are hardcoded in that file's constants, builds from forks still check the
 official releases.
 
-Copies managed by Velopack (the Windows and macOS installers, portable zips,
-and the Linux AppImage) can also self-update in place. `desktop/app/selfupdate`
+Copies managed by Velopack (the Windows and macOS installers and the Linux
+AppImage) can also self-update in place. `desktop/app/selfupdate`
 calls Velopack's C library (`desktop/app/selfupdate/vpkc`) to fetch
 `releases.win.json`, `releases.osx.json`, or `releases.linux.json` from
 `releases/latest/download`, downloads the referenced package when the user
@@ -163,8 +163,8 @@ On GitHub, the published app release is marked latest and includes:
 
   | Platform | Files |
   | --- | --- |
-  | Windows x64 | `rc2fx-windows-x64-setup.exe`, `rc2fx-windows-x64.zip` |
-  | macOS (universal) | `rc2fx-macos-universal.pkg`, `rc2fx-macos-universal.zip`, plus identical copies named `rc2fx-macos-arm64.pkg` and `rc2fx-macos-arm64.zip` |
+  | Windows x64 | `rc2fx-windows-x64-setup.exe` |
+  | macOS (universal) | `rc2fx-macos-universal.pkg` |
   | Linux x64 | `rc2fx-linux-x64.AppImage` |
 
   All packages are built with Velopack's `vpk`. Their names have no version
@@ -173,14 +173,8 @@ On GitHub, the published app release is marked latest and includes:
   user without UAC into `%LOCALAPPDATA%\io.github.ibanks42.rc2fx`, adding a
   Start menu shortcut and an **Installed apps** entry. The `.pkg` installs
   `RC2FX.app` into `/Applications` (or `~/Applications` with **Install for me
-  only**). The zips are portable copies that still support self-updates. The
-  macOS app is universal (Apple silicon and Intel, macOS 13+), built on an
-  Apple silicon runner. Releases through 0.1.7 shipped Apple silicon-only
-  assets as `rc2fx-macos-arm64.*`, so the Release workflow also uploads
-  byte-identical copies under those names so existing
-  `releases/latest/download/` links keep working (`macos_release.py` verifies
-  they are byte-identical). Remove `LEGACY_ALIASES` in `macos_release.py` and
-  the copy step in `release.yml` once those old links are no longer needed.
+  only**). The macOS app is universal (Apple silicon and Intel, macOS 13+),
+  built on an Apple silicon runner.
 - The Velopack update packages and feeds:
   `io.github.ibanks42.rc2fx-VERSION-full.nupkg` and `releases.win.json` for
   Windows, `io.github.ibanks42.rc2fx-VERSION-osx-full.nupkg` and
@@ -193,11 +187,11 @@ On GitHub, the published app release is marked latest and includes:
   AppImage type 2 runtime prepended to the AppImage and its statically linked
   libraries, including its modified LGPL-2.1 libfuse. See
   [AppImage runtime sources](#appimage-runtime-sources).
-- `SHA256SUMS` covering every asset above.
 - The release notes.
 
-That totals twelve packages plus `SHA256SUMS`. A release is never published
-until every single file is present and verified.
+That totals ten release assets (GitHub displays each file's SHA-256 digest on
+the release page). A release is never published until every single file is
+present and verified.
 
 App packages do not embed a mixer payload. Release builds are download-only and
 fetch signed mixer software during installation. See
@@ -288,8 +282,8 @@ the firmware installer.` Users can check their installed mixer version in
 
 ## Workflow jobs
 
-**Release** (`.github/workflows/release.yml`) executes five jobs. Nothing
-becomes public until every package is verified.
+**Release** (`.github/workflows/release.yml`) runs the platform builds in
+parallel and publishes only once every package is verified.
 
 1. **prepare** (Ubuntu) calculates the next app version and updates the version
    files and changelog via `.github/scripts/release.py prepare`. It validates
@@ -297,19 +291,20 @@ becomes public until every package is verified.
    (only published history enters the site build). It passes the updated
    version files to downstream jobs; mixer payloads are handled separately by
    **Mixer release**.
-2. **build** (Windows), **linux**, and **macos** run concurrently. **build**
-   and **macos** apply the prepare output, install the Go version from
+2. **windows**, **linux**, and **macos** run concurrently. **windows** and
+   **macos** apply the prepare output, install the Go version from
    `desktop/go.mod`, fetch gpuikit (`desktop/scripts/fetch-gpuikit.sh`, using
    `GPUIKIT_TOKEN` or falling back to the workflow token) and Velopack's C
    library (`desktop/scripts/fetch-velopack.sh`) verified against pinned
    SHA-256s, install .NET and a checksummed vpk (`.github/scripts/setup-vpk.sh`),
-   and run `./xtask package` in download-only mode. **build** also sets up
+   and run `./xtask package` in download-only mode. **windows** also sets up
    MinGW-w64 gcc for cgo and `windres` for the icon, running `--build-only`
    first, authenticating to Azure only right before signing so the token is
    fresh, and finishing with `--skip-build`. When signing is configured, it
-   verifies that `RC2FX.exe`, `Update.exe`, `current/rc2fx.exe` inside the zip,
-   and `-setup.exe` all carry valid, timestamped Authenticode signatures (see
-   [Signing](#signing)). **macos** signs and notarizes the macOS artifacts.
+   verifies that `RC2FX_ExecutionStub.exe`, `Squirrel.exe`, `rc2fx.exe`, and
+   `velopack_libc.dll` inside the `.nupkg`, plus `-setup.exe`, all carry valid,
+   timestamped Authenticode signatures (see [Signing](#signing)). **macos**
+   signs and notarizes the macOS artifacts.
    Packaging verifies the binary's payload mode even with `--skip-build` and
    rejects mismatches; explicit `--embedded` packaging also checks the embedded
    payload against current inputs and rejects stale binaries.
@@ -326,80 +321,61 @@ becomes public until every package is verified.
    Ubuntu 22.04, Debian 12, Ubuntu 24.04, Debian 13, and Fedora 44, checking
    shared libraries, metadata, permissions, payload mode, and a headless smoke
    test (desktop sessions, FUSE mounts, and USB access aren't exercised here).
-3. **release** (Ubuntu) validates the Linux and Windows artifacts, generates
-   their checksums, creates the release commit and tag (`release.py commit`),
-   pushes them with `.github/scripts/land_release.py`, and opens a draft GitHub
-   release containing those packages plus a temporary macOS-pending notice in
-   the notes. It enforces strict asset checks: on Linux, the AppImage must begin
-   with a type 2 header, the `.nupkg` must contain that exact AppImage, and
-   `releases.linux.json` must reference this version's package with its real
-   SHA-256; on Windows, `-setup.exe` must begin with `MZ`, the zip must contain
-   `RC2FX.exe`, `Update.exe`, and `current/rc2fx.exe`, the `.nupkg` must
-   contain `lib/app/rc2fx.exe`, and `releases.win.json` must list this
-   version's package and actual SHA-256. If `main` advanced during the build
-   only by a mixer version commit (`chore(mixer-release): ...` touching only
-   `config/mixer-release.json`), `land_release.py` rebases the release commit
-   on top of it and moves the tag; any other change to `main` aborts without
-   pushing so you can start a new run.
-4. **publish** (Ubuntu) waits for both **release** and **macos**, then runs
-   `.github/scripts/macos_release.py publish`: it checks the release tag
-   (allowing mixer version commits between the build source and the rebased
-   release commit), verifies the macOS files, uploads them to the draft,
-   rebuilds `SHA256SUMS` from the draft's actual assets, strips the pending
-   notice, re-verifies the complete draft, and publishes it as latest as its
-   final step. It re-reads the release before every mutation. Any upload error,
-   digest mismatch, or missing/extra asset leaves the draft unpublished, and it
-   never overwrites a different macOS asset already on the draft. Re-running it
-   on an already-published release merely verifies completeness and makes no
-   changes. Publish jobs are serialized, and an older draft cannot replace a
-   newer stable release as latest. Once published, a final step dispatches
-   **Docs** with `source=latest-release` to build the docs site from the new
-   release tag.
-5. **app-metadata** invokes **Sign app release metadata** after **publish**
+3. **release** (Ubuntu) waits for **windows**, **linux**, and **macos**, then
+   validates all ten packages via `.github/scripts/release.py verify`. It
+   enforces strict asset checks across all three platforms: on Linux, the
+   AppImage must begin with a type 2 header, the `.nupkg` must contain that
+   exact AppImage, and `releases.linux.json` must reference this version's
+   package with its real SHA-256; on Windows, `-setup.exe` must begin with
+   `MZ`, the `.nupkg` must contain `lib/app/rc2fx.exe` and
+   `lib/app/velopack_libc.dll`, and `releases.win.json` must list this
+   version's package and actual SHA-256; on macOS, `.pkg` must begin with
+   `xar!`, the `.nupkg` must contain a root `.nuspec` plus
+   `lib/app/Contents/MacOS/rc2fx`, `lib/app/Contents/MacOS/UpdateMac`, and
+   `lib/app/Contents/Info.plist`, and `releases.osx.json` must match its
+   SHA-256. It then creates the release commit and tag (`release.py commit`),
+   pushes them with `.github/scripts/land_release.py` (rebasing over a mixer
+   version commit that landed during the build, and aborting on any other
+   change to `main`), uploads all ten files into a draft GitHub release, and
+   publishes it as latest once every upload succeeds.
+4. **docs** dispatches **Docs** with `source=latest-release` after **release**
+   publishes, in a separate job so a docs dispatch failure never blocks
+   update-metadata signing.
+5. **app-metadata** invokes **Sign app release metadata** after **release**
    succeeds, signing the release for in-app updates (see
    [Signed app updates](#signed-app-updates)). It passes
    `expect-artifacts: true` so only the exact packages built by this run can be
    signed. It requires reviewer approval in the `mixer-signing` environment and
    is skipped unless `APP_UPDATES_ENABLED` is `true`.
 
-Dry runs build all packages without pushing, creating a draft, publishing, or
+Dry runs build and verify all packages without pushing, creating a release, or
 signing. Only one Release workflow runs at a time; concurrent runs queue.
 
-If **macos** fails or no macOS runner is available, the draft remains safely
-unpublished. Click **Re-run failed jobs** on the **Release** run to retry
-**macos** and **publish**.
-
-If someone manually publishes the draft before **publish** runs, the release
-will be live but incomplete until **publish** finishes adding the missing
-assets (without re-publishing or changing latest). Never publish drafts by hand
-once GitHub immutable releases are enabled, because an incomplete immutable
-release can't be edited afterward.
+If any platform build fails, nothing is pushed or created. Click **Re-run
+failed jobs** on the **Release** run to retry it.
 
 Immutable releases can be enabled once mixer metadata has moved to its own
 branch (see [Where metadata lives](mixer-releases.md#where-metadata-lives)).
-Nothing else mutates a published release: app releases stay editable drafts
-until **publish** finishes attaching macOS assets, and mixer payload releases
-are published once. Fixing either one requires cutting a new version.
+Nothing mutates a published release: app releases upload all assets into a
+draft before publishing once, and mixer payload releases are published once.
+Fixing either one requires cutting a new version.
 
 The **Check** workflow lints, tests, and audits pushes and pull requests to
 `main` (skipping docs-only changes) and runs the release script tests:
 
-- **desktop** checks the Go app on Ubuntu, Windows, and macOS: `gofmt` on
-  Linux, `go vet` and `go test` on all non-UI packages (everything except
-  `app`, `app/uitest`, and `cmd/rc2fx`), `transport` tests with `mockmixer`, a
-  vet pass with `rc2fxdev` and `embedded` (using an empty stand-in payload),
-  and `govulncheck` on Linux. It also fetches Velopack's C library and vets
-  `app/selfupdate/...` with `-tags velopack` and cgo on every OS without
-  needing gpuikit.
-- **desktop-ui** fetches gpuikit and Velopack's C library on all three OSes,
-  vets the UI with and without `mockmixer` and with `rc2fxdev` and `embedded`,
-  builds with `-tags velopack` and release link flags, runs
-  `go test ./app/... ./cmd/rc2fx`, and runs `govulncheck` over `cmd/rc2fx` on
-  Linux. Offscreen UI tests in `app/uitest` skip here because prebuilt gpuikit
+- **desktop** checks the Go app on Ubuntu, Windows, and macOS: `gofmt`, schema
+  check, and `xtask` purity/launcher checks on Linux; `go vet` and `go test` on
+  all non-UI packages (everything except `app` and `cmd/rc2fx`), `transport`
+  tests with `mockmixer`, a vet pass with `rc2fxdev` and `embedded` (using an
+  empty stand-in payload), and Velopack cgo vetting (`app/selfupdate/...`). It
+  then fetches gpuikit to vet the UI (with and without `mockmixer` and with
+  `rc2fxdev,embedded`), link `cmd/rc2fx` with release flags, run
+  `go test ./app ./cmd/rc2fx`, and run a single `govulncheck` pass on Linux.
+  Offscreen UI tests in `app/uitest` skip here because prebuilt gpuikit
   downloads don't include the diagnostic library. If an OS's gpuikit SHA-256
-  isn't pinned in `desktop/scripts/fetch-gpuikit.sh` yet, it skips with a
-  warning (though Release's **prepare** refuses to run until all three are
-  pinned).
+  isn't pinned in `desktop/scripts/fetch-gpuikit.sh` yet, or on fork PRs without
+  bindings access, the UI steps skip with a warning while all non-UI checks
+  still run (Release's **prepare** refuses to run until all three are pinned).
 - **desktop-alma** builds the app and tests the installer (with vendored
   libext2fs) inside the same AlmaLinux 8 container used for AppImage builds.
 
@@ -434,7 +410,7 @@ AppImage self-updates are verified against signed app release metadata (see
 ### Windows
 
 Windows packages are signed via Azure Artifact Signing, covering `rc2fx.exe`,
-its launcher, the updater, and `-setup.exe`. The **build** job authenticates
+its launcher, the updater, and `-setup.exe`. The **windows** job authenticates
 using GitHub OIDC via `azure/login` (no stored secret required) and reads five
 repository variables:
 
@@ -498,8 +474,8 @@ contains only numbered root files, `targets.json`, `snapshot.json`,
 `timestamp.json`, and a short README. The app fetches metadata only from
 `https://raw.githubusercontent.com/ibanks42/rc2fx/app-metadata/` and packages
 only from `https://github.com/ibanks42/rc2fx/releases/download/`, rejecting any
-other host. Every asset of the latest app release except `SHA256SUMS` is a
-target, and only the latest release is listed.
+other host. Every asset of the latest app release is a target, and only the
+latest release is listed.
 
 Each verification run starts fresh from the compiled-in root with no persisted
 TUF state (using a temporary folder inside the installer work directory that is
@@ -522,25 +498,23 @@ Once **Release** publishes an app release, its **app-metadata** job calls
 **Sign app release metadata** (`app-metadata-sign.yml`) in the `mixer-signing`
 environment, which pauses for reviewer approval. The workflow downloads every
 asset of the published release (`publish_app.py prepare`) and checks each
-against GitHub's asset digest and the release's `SHA256SUMS` (which must list
-exactly the other assets). When triggered by **Release**
-(`expect-artifacts: true`), it also pulls that run's `release-assets` and
-`macos-package` artifacts and passes them via `--built`, refusing to sign
-unless the published release (excluding `SHA256SUMS`) contains those exact
-files with identical sizes and SHA-256s. That guarantees it only signs what
-that workflow run built, not anything modified on the release afterward. It
-then signs targets, snapshot, and timestamp with `./xtask app-sign` and pushes
-them to `app-metadata` in a single commit (`publish_app.py publish`). Targets
-expire with the root (matching mixer releases), while snapshot and timestamp
-expire after seven days. Until signing completes, apps checking for updates
-refuse the new release with "This update has not been signed yet. Try again
-later."
+against GitHub's asset digest. When triggered by **Release**
+(`expect-artifacts: true`), it also pulls that run's `release-assets` artifact
+and passes it via `--built`, refusing to sign unless the published release
+contains those exact files with identical sizes and SHA-256s. That guarantees
+it only signs what that workflow run built, not anything modified on the
+release afterward. It then signs targets, snapshot, and timestamp with
+`./xtask app-sign` and pushes them to `app-metadata` in a single commit
+(`publish_app.py publish`). Targets expire with the root (matching mixer
+releases), while snapshot and timestamp expire after seven days. Until signing
+completes, apps checking for updates refuse the new release with "This update
+has not been signed yet. Try again later."
 
 You can also trigger **Sign app release metadata** manually (**Run workflow**
 with a published tag) if automatic signing was skipped. The same gates apply
 (`APP_UPDATES_ENABLED`, `main` only, `mixer-signing` reviewer approval, and the
-shared concurrency group), except manual runs have no build artifacts to cross-check
-and verify only against GitHub's digests and `SHA256SUMS`.
+shared concurrency group), except manual runs have no build artifacts to
+cross-check and verify only against GitHub's digests.
 
 Both app workflows set metadata versions to UTC Unix time minus 10⁹. Because
 app and mixer metadata share one root, either repository's metadata is
@@ -591,9 +565,8 @@ the new keys.
   push still succeeded and apps will see the update once caches expire.
 - **Refusals:** Signing refuses older versions than what's already signed
   (rollbacks), the same version with different assets (cut a new version
-  instead), drafts or prereleases, assets lacking a GitHub digest, any
-  `SHA256SUMS` mismatch, and (when called by **Release**) any discrepancy from
-  the run's built artifacts.
+  instead), drafts or prereleases, assets lacking a GitHub digest, and (when
+  called by **Release**) any discrepancy from the run's built artifacts.
 
 ## Publishing documentation
 
@@ -632,8 +605,7 @@ live.
 All release scripts have offline test suites that **Check** runs in CI:
 
 ```bash
-python3 .github/scripts/test_release.py          # versioning; needs git-cliff 2.14.1
-python3 .github/scripts/test_macos_release.py    # finishing and publishing the draft
+python3 .github/scripts/test_release.py          # versioning and asset verification; needs git-cliff 2.14.1
 python3 .github/scripts/test_land_release.py     # landing release commits and tags on main
 python3 .github/scripts/test_app_release.py      # signing app releases for in-app updates
 python3 .github/scripts/test_docs_source.py

@@ -1,9 +1,9 @@
 package packaging
 
 // The Windows, macOS and Linux AppImage packages, made by Velopack's `vpk`
-// (`RC2FX_VPK`, or `vpk` on the PATH): an installer (Setup.exe, Setup.pkg),
-// a portable zip or the AppImage, which can update themselves too, and the
-// update package and feed the app downloads from the latest release.
+// (`RC2FX_VPK`, or `vpk` on the PATH): an installer (Setup.exe, Setup.pkg)
+// or the AppImage, which can update themselves too, and the update package
+// and feed the app downloads from the latest release.
 //
 // On Linux vpk packages the finished AppDir as it is (its name ends in
 // `.AppDir`), adding only its updater and version file under usr/bin, and
@@ -99,14 +99,12 @@ func (t target) outputs() []output {
 	case "windows":
 		outputs = []output{
 			{fmt.Sprintf("%s-%s-Setup.exe", PackID, channel), t.name + "-setup.exe"},
-			{fmt.Sprintf("%s-%s-Portable.zip", PackID, channel), t.name + ".zip"},
 		}
 	case "linux":
 		outputs = []output{{PackID + ".AppImage", t.name + ".AppImage"}}
 	default:
 		outputs = []output{
 			{fmt.Sprintf("%s-%s-Setup.pkg", PackID, channel), t.name + ".pkg"},
-			{fmt.Sprintf("%s-%s-Portable.zip", PackID, channel), t.name + ".zip"},
 		}
 	}
 	// The feed names the package, so both keep vpk's names.
@@ -176,6 +174,7 @@ func packArgs(root string, t target, packDir, staging string) []string {
 	args = append(args, "--outputDir", staging)
 	switch t.os {
 	case "windows":
+		args = append(args, "--noPortable")
 		args = append(args, "--mainExe", "rc2fx.exe")
 		args = append(args, "--icon", filepath.Join(root, filepath.FromSlash(task.AssetsDir), "rc2fx.ico"))
 		args = append(args, "--shortcuts", "StartMenuRoot")
@@ -186,6 +185,7 @@ func packArgs(root string, t target, packDir, staging string) []string {
 		// makes every start slower.
 		args = append(args, "--mainExe", "rc2fx")
 	default:
+		args = append(args, "--noPortable")
 		args = append(args, "--mainExe", "rc2fx")
 		// The app needs no hardened-runtime exceptions; vpk's default grants
 		// .NET's.
@@ -248,27 +248,24 @@ func pack(root, system, arch, version, name, packDir, out string) ([]string, err
 		}
 		published = append(published, to)
 	}
-	if system == "macos" {
-		// What vpk made: the bundle with its updater, and the installer.
-		for _, o := range t.outputs()[:2] {
-			path := filepath.Join(out, o.publishAs)
-			data, err := read(path)
-			if err != nil {
-				return nil, err
-			}
-			check := checkPortableZip
-			if strings.HasSuffix(path, ".pkg") {
-				check = checkInstaller
-			}
-			if err := check(o.publishAs, data); err != nil {
-				return nil, err
-			}
-		}
-	}
 	pkg := t.packageName()
 	data, err := read(filepath.Join(out, pkg))
 	if err != nil {
 		return nil, err
+	}
+	if system == "macos" {
+		// What vpk made: the installer, and the bundle with its updater in the nupkg.
+		installer := t.outputs()[0].publishAs
+		installerData, err := read(filepath.Join(out, installer))
+		if err != nil {
+			return nil, err
+		}
+		if err := checkInstaller(installer, installerData); err != nil {
+			return nil, err
+		}
+		if err := checkMacUpdatePackage(pkg, data); err != nil {
+			return nil, err
+		}
 	}
 	feed, err := read(filepath.Join(out, t.feed()))
 	if err != nil {
