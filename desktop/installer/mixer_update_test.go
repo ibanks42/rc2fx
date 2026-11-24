@@ -15,12 +15,12 @@ import (
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
-	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
-	"github.com/ibanks42/rc2fx/desktop/internal/tuf/tuftest"
+	"github.com/ibanks42/rc2fx/desktop/tuf"
+	"github.com/ibanks42/rc2fx/desktop/tuf/tuftest"
 )
 
 func TestTheEmbeddedTrustRootIsTheConfiguredOne(t *testing.T) {

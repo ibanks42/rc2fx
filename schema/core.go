@@ -3,7 +3,7 @@
 //
 // It is written in standard Go syntax so normal Go tooling (gofmt, editors,
 // go/parser) works directly with zero custom language or external compilers.
-// Regenerate both sides with `./xtask schema` (or `just schema`).
+// Regenerate both sides with `go -C tools/xtask run . schema` (or `just schema`).
 package schema
 
 const (

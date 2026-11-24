@@ -75,4 +75,4 @@ See the [settings format](api.md#settings) for the exact stored fields and valid
 just bench recording.wav
 ```
 
-This runs every model on the mixer against a 48 kHz recording under the production scheduling policy and pulls the processed audio back so you can listen to it. Flags let you run unpaced or override the scheduling policy, CPUs, priority, or weights file; check `./xtask help` for the full list.
+This runs every model on the mixer against a 48 kHz recording under the production scheduling policy and pulls the processed audio back so you can listen to it. Flags let you run unpaced or override the scheduling policy, CPUs, priority, or weights file; check `go -C tools/xtask run . help` for the full list.

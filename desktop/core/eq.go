@@ -3,7 +3,7 @@ package core
 import (
 	"math"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 // Analytical biquad frequency response for plotting (not DSP audio processing).

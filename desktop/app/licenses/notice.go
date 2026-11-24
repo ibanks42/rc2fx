@@ -3,7 +3,7 @@ package licenses
 import (
 	"strings"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
+	"github.com/ibanks42/rc2fx/desktop/common"
 )
 
 // NoticeMarkdown converts a plain-text license notice into safe Markdown for

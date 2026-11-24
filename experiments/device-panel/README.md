@@ -26,9 +26,9 @@ Under the hood, the panel shares the same settings store, revision/generation gu
 None of these touch a mixer:
 
 ```sh
-bash experiments/device-panel/build.sh
-bash experiments/device-panel/check.sh
-CC=clang SANITIZE=1 bash experiments/device-panel/check.sh
+go -C tools/xtask run . device-panel build
+go -C tools/xtask run . device-panel check
+CC=clang SANITIZE=1 go -C tools/xtask run . device-panel check
 cargo test --locked -p rc2fx-device ui_control --lib
 ```
 
@@ -43,12 +43,12 @@ Running a trial restarts the mixer's GUI (not audio). Only run it when a GUI res
 ```sh
 export RC2FX_MIXER_KEY="$HOME/.ssh/rc2fx_rodecaster_pro_ii"
 export RC2FX_MIXER_KNOWN_HOSTS="$PWD/.deps/flash-pro-ii/known_hosts"
-bash experiments/device-panel/preview.sh --restart-gui 30
+go -C tools/xtask run . device-panel preview --restart-gui 30
 # Or keep the launcher running from RAM:
-bash experiments/device-panel/preview.sh --restart-gui --keep-running
+go -C tools/xtask run . device-panel preview --restart-gui --keep-running
 ```
 
-With `--keep-running`, the script prints a PID-checked stop command. **Close** hides the panel while leaving the launcher button active. Timed trials start their countdown after the first real page-flip ack, with a 30-second cap on startup itself.
+With `--keep-running`, the command prints a PID-checked stop command. **Close** hides the panel while leaving the launcher button active. Timed trials start their countdown after the first real page-flip ack, with a 30-second cap on startup itself.
 
 Before touching anything, the script verifies:
 

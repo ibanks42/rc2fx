@@ -13,34 +13,25 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/delta"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/release"
-	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 	"github.com/ibanks42/rc2fx/desktop/usbproto"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: interop <delta|xtask-tuf|eq-gate|usb|update-envelope|core|firmware> ...")
+		fatalf("usage: interop <delta|eq-gate|usb|update-envelope|core|firmware> ...")
 	}
 	switch os.Args[1] {
 	case "delta":
 		runDelta()
-	case "xtask-tuf":
-		if len(os.Args) < 3 {
-			fatalf("usage: interop xtask-tuf <out-dir> [--no-rsa]")
-		}
-		includeRSA := len(os.Args) < 4 || os.Args[3] != "--no-rsa"
-		if err := release.GenerateTestRepos(os.Args[2], includeRSA); err != nil {
-			fatalf("xtask-tuf: %v", err)
-		}
 	case "eq-gate":
 		runEQGate()
 	case "usb":
@@ -54,6 +45,16 @@ func main() {
 	default:
 		fatalf("unknown interop subcommand %q", os.Args[1])
 	}
+}
+
+// repoRoot is the checkout this file belongs to.
+func repoRoot() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(file) {
+		fatalf("cannot locate the repository root")
+	}
+	// Walk up from desktop/internal/interop/main.go.
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file))))
 }
 
 func readU32(r io.Reader) uint32 {
@@ -291,7 +292,7 @@ func runUpdateEnvelope() {
 	}
 	defer os.RemoveAll(base)
 
-	root := task.Root()
+	root := repoRoot()
 	runtimeDir := filepath.Join(base, "runtime")
 	scriptsDir := filepath.Join(base, "mixer", "scripts")
 	configDir := filepath.Join(base, "config")

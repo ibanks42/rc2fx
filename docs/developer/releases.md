@@ -15,9 +15,10 @@ RC2FX. Both GitHub workflows are triggered manually.
 | RØDE firmware | Versions pinned in `config/firmware-profiles.json` | RØDE's own releases; RC2FX does not publish firmware |
 
 Desktop release builds download signed mixer payloads and firmware profiles by
-default. The `embedded` build tag (`./xtask package --embedded`) adds an
-optional bundled payload for offline use. `config/mixer-release.json` names the
-mixer runtime version and its control protocol version. **Settings › Versions**
+default. The `embedded` build tag (`go -C tools/xtask run . package --embedded`)
+adds an optional bundled payload for offline use. `config/mixer-release.json`
+names the mixer runtime version and its control protocol version. **Settings ›
+Versions**
 displays installed versions and compatible signed offers, including when a
 newer desktop app is required. See [Mixer releases](mixer-releases.md) for
 signing, publishing, and renewal, and
@@ -130,12 +131,13 @@ independently of desktop releases; a desktop-only release needs no mixer bump
 or mixer notes. `protocolVersion` must match `rc2fx_core::MIXER_PROTOCOL_VERSION`;
 only bump it when older desktop apps can no longer talk to the mixer.
 
-`./xtask mixer-build` copies `config/mixer-release.json` into `target/mixer`
-and includes it in `SHA256SUMS`. Embedded builds, packaging, and
-`./xtask mixer install` all reject a runtime whose `mixer-release.json` doesn't
-match `config/mixer-release.json`, so rebuild the runtime after any bump. The
-installer writes this file to `/opt/rc2fx/mixer-release.json` (covered by the
-bundle's `SHA256SUMS`). The mixer reports its runtime, protocol, firmware, and
+`go -C tools/xtask run . mixer-build` copies `config/mixer-release.json` into
+`target/mixer` and includes it in `SHA256SUMS`. Embedded builds, packaging, and
+`go -C tools/xtask run . mixer install` all reject a runtime whose
+`mixer-release.json` doesn't match `config/mixer-release.json`, so rebuild the
+runtime after any bump. The installer writes this file to
+`/opt/rc2fx/mixer-release.json` (covered by the bundle's `SHA256SUMS`). The
+mixer reports its runtime, protocol, firmware, and
 firmware profile via [`GET api/v1/version`](../reference/api.md#versions),
 omitting unknown fields. Older runtimes that don't implement that endpoint
 return 404, which the app shows as **Unknown** rather than proposing an update
@@ -157,7 +159,7 @@ prepends the new release section to `CHANGELOG.md`.
 
 On GitHub, the published app release is marked latest and includes:
 
-- The app packages built by `./xtask package` (see
+- The app packages built by `go -C tools/xtask run . package` (see
   [packaging](building.md#3-package-it)), each with license notices embedded in
   the app:
 
@@ -205,15 +207,16 @@ mimalloc. `vpk` embeds its own copy of that runtime
 (`vendor/appimagekit-runtime-x86_64` inside the vpk NuGet package), which is a
 continuous build of `type2-runtime` commit `3d17002` from 2026-03-07 (no tagged
 release holds that binary; the commit only differs from release `20251108` in
-CI files). Before Linux packaging,
+CI files). During Linux setup and release builds,
 `.github/scripts/prepare-appimage-notices.py` writes the runtime's license
 notices to `target/appimage-legal/notices.json` (which packaging merges into
 the app's notices) and creates `rc2fx-VERSION-appimage-runtime-sources.tar.gz`
 in `target/package` to upload alongside the AppImage.
 
 The script extracts the runtime from the vpk package and verifies the package's
-pinned SHA-256 (matching `setup-vpk.sh`), the runtime binary's SHA-256, and the
-commit string reported by the binary. It then fetches the runtime source at
+pinned SHA-256 (from `config/velopack.json`, shared with
+`go -C tools/xtask run . fetch-vpk`), the runtime binary's SHA-256, and the commit
+string reported by the binary. It then fetches the runtime source at
 that git commit, libfuse and squashfuse at the SHA-256 hashes pinned in the
 runtime's own build recipe, and Alpine build recipes for zstd, zlib, musl, and
 mimalloc from a pinned commit on `alpinelinux/aports` (verified by git), with
@@ -228,10 +231,11 @@ byte-identical binary. The generated notices record the runtime's exact SHA-256
 and size, and packaging rejects any AppImage that doesn't start with that exact
 runtime.
 
-Whenever vpk is updated, update `VPK_VERSION` and `VPK_SHA256` in
-`prepare-appimage-notices.py` alongside `setup-vpk.sh`, and check if the
-embedded runtime changed; if so, update `RUNTIME_SHA256`, `RUNTIME_COMMIT`, and
-`APORTS_COMMIT` together. Run its offline tests with
+Whenever vpk is updated, update `config/velopack.json` (shared by
+`go -C tools/xtask run . fetch-vpk` and `prepare-appimage-notices.py`) and check
+if the embedded runtime changed; if so, update `RUNTIME_SHA256`,
+`RUNTIME_COMMIT`, and `APORTS_COMMIT` in `prepare-appimage-notices.py`
+together. Run its offline tests with
 `python3 .github/scripts/test_prepare_appimage_notices.py`.
 
 ## Release notes
@@ -293,24 +297,26 @@ parallel and publishes only once every package is verified.
    **Mixer release**.
 2. **windows**, **linux**, and **macos** run concurrently. **windows** and
    **macos** apply the prepare output, install the Go version from
-   `desktop/go.mod`, fetch goui-kit (`./xtask fetch-goui-kit TARGET`) and
-   Velopack's C library (`./xtask fetch-velopack TARGET`) verified against
-   pinned SHA-256s in `config/goui-kit.json` and `config/velopack.json`,
-   install .NET and a checksummed vpk (`.github/scripts/setup-vpk.sh`), and
-   run `./xtask package` in download-only mode. **windows** also sets up MinGW-w64 gcc for cgo and `windres` for the
-   icon, running `--build-only` first, authenticating to Azure only right before
-   signing so the token is fresh, and finishing with `--skip-build`. When
-   signing is configured, it verifies that `RC2FX_ExecutionStub.exe`,
-   `Squirrel.exe`, `rc2fx.exe`, and `velopack_libc.dll` inside the `.nupkg`,
-   plus `-setup.exe`, all carry valid, timestamped Authenticode signatures (see
-   [Signing](#signing)). **macos** signs and notarizes the macOS artifacts.
-   Packaging verifies the binary's payload mode even with `--skip-build` and
-   rejects mismatches; explicit `--embedded` packaging also checks the embedded
-   payload against current inputs and rejects stale binaries.
+   `desktop/go.mod`, fetch goui-kit (`go -C tools/xtask run . fetch-goui-kit TARGET`)
+   and Velopack's C library (`go -C tools/xtask run . fetch-velopack TARGET`)
+   verified against pinned SHA-256s in `config/goui-kit.json` and
+   `config/velopack.json`, install .NET and a checksummed vpk
+   (`go -C tools/xtask run . fetch-vpk`), and run `go -C tools/xtask run . package`
+   in download-only mode. **windows** also sets up MinGW-w64 gcc for cgo and
+   `windres` for the icon, running `--build-only` first, authenticating to Azure
+   only right before signing so the token is fresh, and finishing with
+   `--skip-build`. When signing is configured, it verifies that
+   `RC2FX_ExecutionStub.exe`, `Squirrel.exe`, `rc2fx.exe`, and
+   `velopack_libc.dll` inside the `.nupkg`, plus `-setup.exe`, all carry valid,
+   timestamped Authenticode signatures (see [Signing](#signing)). **macos**
+   signs and notarizes the macOS artifacts. Packaging verifies the binary's
+   payload mode even with `--skip-build` and rejects mismatches; explicit
+   `--embedded` packaging also checks the embedded payload against current
+   inputs and rejects stale binaries.
 
    **linux** applies the prepare output and runs
-   `bash .github/scripts/package-check.sh` under Docker (the same script
-   `just package-check` runs, see
+   `go -C tools/xtask run . package-check` under Docker (the same command
+   `just package-check` runs; see
    [local package checks](building.md#check-the-linux-packages-before-a-release)),
    pulling the prebuilt AlmaLinux 8 build image instead of building it locally.
    Building inside AlmaLinux 8 keeps the glibc requirement at 2.28 regardless
@@ -362,11 +368,14 @@ Fixing either one requires cutting a new version.
 The **Check** workflow lints, tests, and audits pushes and pull requests to
 `main` (skipping docs-only changes) and runs the release script tests:
 
-- **desktop** checks the Go app on Ubuntu, Windows, and macOS: `gofmt`, schema
-  check, and `xtask` purity/launcher checks on Linux; `go vet` and `go test` on
-  all non-UI packages (everything except `app` and `cmd/rc2fx`), `transport`
-  tests with `mockmixer`, a vet pass with `rc2fxdev` and `embedded` (using an
-  empty stand-in payload), and Velopack cgo vetting (`app/selfupdate/...`). It
+- **desktop** checks the Go app and `tools/xtask` on Ubuntu, Windows, and
+  macOS: `gofmt` across both modules, schema check, and a check that
+  `tools/xtask` stays pure Go and runs on Linux; `go vet` and `go test` on all
+  non-UI `desktop/` packages
+  (everything except `app` and `cmd/rc2fx`), `transport` tests with
+  `mockmixer`, a vet pass with `rc2fxdev` and `embedded` (using an empty
+  stand-in payload), `CGO_ENABLED=0` `go vet` and `go test` on `tools/xtask`,
+  and Velopack cgo vetting (`app/selfupdate/...`). It
   then fetches goui-kit to vet the UI with `gkstatic` (plain, with `mockmixer`,
   and with `rc2fxdev,embedded`), link `cmd/rc2fx` with release flags, run
   `go test -tags gkstatic ./app ./cmd/rc2fx`, and run a single `govulncheck`
@@ -388,7 +397,7 @@ twice-weekly scheduled run keeps caches warm.
 The **Build image** workflow builds and pushes
 `.github/scripts/package-check.Containerfile` to
 `ghcr.io/ibanks42/rc2fx-build`. Its tag is derived from a digest of the
-Containerfile and `rust-toolchain.toml` (`.github/scripts/build-image-tag.sh`),
+Containerfile and `rust-toolchain.toml` (`go -C tools/xtask run . build-image-tag`),
 so **Check** and **Release** only rebuild it when one of those changes. A
 weekly scheduled run (or manual dispatch) refreshes the current tag so system
 packages and bundled AppImage libraries pick up updates. Release preparation
@@ -420,7 +429,7 @@ repository variables:
 | `ARTIFACT_SIGNING_ACCOUNT` | Artifact Signing account name |
 | `ARTIFACT_SIGNING_PROFILE` | Certificate profile name |
 
-Set all five variables or none. `.github/scripts/windows-signing.ps1` generates
+Set all five variables or none. `go -C tools/xtask run . windows-signing` generates
 the Artifact Signing metadata JSON for `vpk`, scoped to the Azure CLI session
 created by `azure/login`. To sign a local build, create a matching metadata
 file, sign in with `az login`, and point `RC2FX_ARTIFACT_SIGNING_METADATA` at
@@ -428,10 +437,11 @@ the file.
 
 ### macOS
 
-`./xtask package` builds `RC2FX.app`, then `vpk` signs the app bundle with the
-Developer ID Application certificate, signs the `.pkg` with the Developer ID
-Installer certificate, and notarizes and staples both so Gatekeeper opens them
-cleanly. The **macos** job expects seven repository secrets:
+`go -C tools/xtask run . package` builds `RC2FX.app`, then `vpk` signs the app
+bundle with the Developer ID Application certificate, signs the `.pkg` with the
+Developer ID Installer certificate, and notarizes and staples both so
+Gatekeeper opens them cleanly. The **macos** job expects seven repository
+secrets:
 
 | Secret | Value |
 | --- | --- |
@@ -443,7 +453,7 @@ cleanly. The **macos** job expects seven repository secrets:
 | `MACOS_NOTARY_KEY_ID` | Key ID |
 | `MACOS_NOTARY_ISSUER` | App Store Connect issuer ID |
 
-Set all seven secrets or none. `.github/scripts/macos-signing.sh` imports the
+Set all seven secrets or none. `go -C tools/xtask run . macos-signing` imports the
 certificates into a temporary keychain and saves the API key as a `notarytool`
 profile. A failed notarization fails the **macos** job and keeps the release in
 draft. For local signing, set `RC2FX_MACOS_IDENTITY` and
@@ -502,8 +512,8 @@ and passes it via `--built`, refusing to sign unless the published release
 contains those exact files with identical sizes and SHA-256s. That guarantees
 it only signs what that workflow run built, not anything modified on the
 release afterward. It then signs targets, snapshot, and timestamp with
-`./xtask app-sign` and pushes them to `app-metadata` in a single commit
-(`publish_app.py publish`). Targets expire with the root (matching mixer
+`go -C tools/xtask run . app-sign` and pushes them to `app-metadata` in a single
+commit (`publish_app.py publish`). Targets expire with the root (matching mixer
 releases), while snapshot and timestamp expire after seven days. Until signing
 completes, apps checking for updates refuse the new release with "This update
 has not been signed yet. Try again later."
@@ -539,8 +549,9 @@ shipping the first release after an app version that checks signed updates.
 
 **Renew app metadata** (`app-metadata.yml`) runs twice weekly in the
 `mixer-renewal` environment and can also be triggered manually. It runs
-`./xtask app-refresh` to re-sign only snapshot and timestamp (for seven days)
-while leaving `targets.json` untouched, so it cannot authorize new assets or
+`go -C tools/xtask run . app-refresh` to re-sign only snapshot and timestamp (for
+seven days) while leaving `targets.json` untouched, so it cannot authorize new
+assets or
 extend past the root's expiry. If renewal fails, investigate before the
 seven-day window runs out. Both signing and renewal run only from `main` and
 share one concurrency group so they never race on `app-metadata`.

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/delta"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // updateChunk is the bytes per update chunk: base64 and the JSON around it

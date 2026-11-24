@@ -10,14 +10,16 @@ entitlements) live in `packaging/`.
 
 You'll need Go 1.27 (matching `go.mod`), a C compiler (cgo is used for the UI,
 storage repair, and Velopack), and the goui-kit static library. Run `just setup`
-from the repository root to download goui-kit and Velopack's C library for your
-platform (alongside the mixer build tools and formatting hook). Running
-`just setup` again skips the goui-kit download if it is already current. To
+from the repository root to install everything needed to build, package, and run
+the app (goui-kit, Velopack's C library, `cargo-about`, `vpk`, and on Linux the
+AppImage tools and notices, alongside the mixer build tools and formatting
+hook). Running `just setup` again skips downloads and tools that are already
+current. To
 fetch goui-kit on its own (for CI or another platform, such as
 `darwin-universal`), run:
 
 ```sh
-./xtask fetch-goui-kit TARGET
+go -C tools/xtask run . fetch-goui-kit TARGET
 ```
 
 (Omit `TARGET` to fetch for the current machine.) This downloads the version
@@ -27,9 +29,10 @@ Passing `-tags gkstatic` selects the static library so nothing needs to ship
 alongside the app; without it, package `gk` looks for the shared library at
 runtime. On macOS, the download is universal (`darwin-universal`, containing
 both `arm64` and `x86_64` slices): the macOS app ships universal, built once
-per architecture and merged with `lipo` by `./xtask package`. If you have a
+per architecture and merged with `lipo` by `just package`. If you have a
 local build of goui-kit, symlink it instead (re-running `just setup` or
-`./xtask fetch-goui-kit` replaces a symlink with the downloaded archive):
+`go -C tools/xtask run . fetch-goui-kit` replaces a symlink with the downloaded
+archive):
 
 ```sh
 ln -sfn /path/to/goui-kit-0.11.0-linux-x86_64 desktop/third_party/goui-kit
@@ -38,10 +41,10 @@ ln -sfn /path/to/goui-kit-0.11.0-linux-x86_64 desktop/third_party/goui-kit
 From the repository root, use the standard entry points:
 
 ```sh
-just app              # ./xtask app: development build in target/debug, then run it
-just app-mock         # ./xtask app --mock: against a simulated mixer
+just app              # go -C tools/xtask run . app: development build in target/debug, then run it
+just app-mock         # go -C tools/xtask run . app --mock: against a simulated mixer
 just test             # Go vet and tests, then the Rust workspace (on Linux)
-./xtask package       # release packages in target/package
+just package          # go -C tools/xtask run . package: release packages in target/package
 ```
 
 Or run the Go commands directly from `desktop/`:
@@ -56,7 +59,7 @@ CGO_LDFLAGS="-L$PWD/third_party/goui-kit/lib" \
 The `-ldflags` flag strips goui-kit component families the app never calls. On
 macOS that flag is `-Wl,-dead_strip`, and on Windows it requires LLVM's linker
 (`'-extldflags=-fuse-ld=lld -Wl,--gc-sections,-Xlink=-force:multipleres'`,
-which `./xtask` sets automatically). A plain build without those flags still
+which `go -C tools/xtask run .` sets automatically). A plain build without those flags still
 works, just with every component family linked in:
 
 ```sh
@@ -67,18 +70,18 @@ Build tags: `gkstatic` links the goui-kit static library (without it, package
 `gk` looks for the shared library at runtime), `rc2fxdev` enables development
 builds, `mockmixer` swaps USB 1 for an in-process simulated mixer, and
 `embedded` compiles in the mixer payload staged from `target/mixer` by
-`go run ./cmd/stage-payload -root ..` (`./xtask app --embedded` handles both
+`go run ./cmd/stage-payload -root ..` (`go -C tools/xtask run . app --embedded` handles both
 steps).
 
 Self-update only links Velopack's C library when built with the `velopack` tag.
 `just setup` downloads and verifies it into the gitignored
-`third_party/velopack` (or run `./xtask fetch-velopack TARGET` in CI or for
+`third_party/velopack` (or run `go -C tools/xtask run . fetch-velopack TARGET` in CI or for
 another platform). To link it manually, add `velopack` to `-tags` (for
 example `-tags gkstatic,velopack`) and add
 `-L$PWD/third_party/velopack/GOOS-GOARCH -lvelopack_libc` to
 `CGO_LDFLAGS`. (This has to go in `CGO_LDFLAGS` rather than a `#cgo` directive
 because Velopack's static libraries contain LLVM bitcode, which Go rejects in
-`#cgo`; `./xtask` sets it for you.) Release packaging always requires this tag;
+`#cgo`; `go -C tools/xtask run .` sets it for you.) Release packaging always requires this tag;
 builds without it can't self-update and ignore Velopack's install/uninstall
 hooks.
 

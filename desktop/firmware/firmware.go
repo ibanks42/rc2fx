@@ -16,8 +16,8 @@ import (
 	"math/bits"
 	"strings"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/core"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
 )
 
 // Catalog represents config/firmware-profiles.json. Decoded via core's strict

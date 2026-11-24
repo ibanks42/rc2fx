@@ -7,7 +7,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/appupdate"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
+	"github.com/ibanks42/rc2fx/desktop/common"
 )
 
 // EntryHeading formats a changelog entry title, flagging versions newer than

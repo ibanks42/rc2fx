@@ -4,7 +4,7 @@
  * Accepts a ring file or a directory (picks newest ring-<pid>-<created>.ring).
  * Reads slots read-only via their seqlock (counting unpublished, overwritten,
  * or torn slots instead of copying them) and atomically renames OUT.partial
- * to OUT. Decode with `./xtask mixer xruns` or tests/jackerr_ring.py.
+ * to OUT. Decode with `go -C tools/xtask run . mixer xruns` or tests/jackerr_ring.py.
  *
  * Output format: 128-byte header ("RC2FXJS1", version 1, record_size 96, ring
  * counters, snapshot_ns or 0 on clock error, window indices, slot counts)

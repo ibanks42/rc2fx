@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/common"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 func (e Effect) Label() string {

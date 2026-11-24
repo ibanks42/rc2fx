@@ -72,7 +72,7 @@ jobs:
           go-version-file: desktop/go.mod
           cache-dependency-path: desktop/go.sum
       - name: Generate base license notices
-        run: ./xtask licenses --base target/release-input/base-licenses.json
+        run: go -C tools/xtask run . licenses --base target/release-input/base-licenses.json
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
@@ -117,9 +117,9 @@ jobs:
           go-version-file: desktop/go.mod
           cache-dependency-path: desktop/go.sum
       - name: Fetch goui-kit
-        run: ./xtask fetch-goui-kit windows-amd64
+        run: go -C tools/xtask run . fetch-goui-kit windows-amd64
       - name: Fetch the Velopack C library
-        run: ./xtask fetch-velopack windows-amd64
+        run: go -C tools/xtask run . fetch-velopack windows-amd64
       # MinGW gcc + lld strips unused goui-kit components; windres embeds icon/version info.
       - name: Check the C toolchain
         run: gcc --version && ld.lld --version && windres --version
@@ -128,23 +128,22 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Set up verified vpk
-        run: bash .github/scripts/setup-vpk.sh
+        run: go -C tools/xtask run . fetch-vpk
       - name: Check the Windows signing settings
         id: windows-signing
-        shell: pwsh
         env:
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
           ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
           ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-        run: .github/scripts/windows-signing.ps1
+        run: go -C tools/xtask run . windows-signing
       # Delay Azure login until after the build so the OIDC token is fresh for signing.
       - name: Build the Windows release executable
         env:
           RC2FX_RELEASE_BUILD: "1"
           RC2FX_BASE_LICENSES: .release-input/base-licenses.json
-        run: ./xtask package --build-only
+        run: go -C tools/xtask run . package --build-only
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         if: steps.windows-signing.outputs.enabled == 'true'
         with:
@@ -156,7 +155,7 @@ jobs:
         env:
           RC2FX_RELEASE_BUILD: "1"
           RC2FX_BASE_LICENSES: .release-input/base-licenses.json
-        run: ./xtask package --skip-build
+        run: go -C tools/xtask run . package --skip-build
       - name: Verify the Windows signatures
         if: steps.windows-signing.outputs.enabled == 'true'
         shell: pwsh
@@ -213,6 +212,10 @@ jobs:
         env:
           RELEASE_INPUT: ${{ runner.temp }}/release-input
         run: tar -xf "$RELEASE_INPUT/versioned.tar"
+      - uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
       - name: Sign in to the container registry
         env:
           ACTOR: ${{ github.actor }}
@@ -222,7 +225,7 @@ jobs:
         env:
           CONTAINER_ENGINE: docker
           RC2FX_BUILD_IMAGE: ${{ needs.image.outputs.image }}
-        run: bash .github/scripts/package-check.sh
+        run: go -C tools/xtask run . package-check
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: rc2fx-package-linux
@@ -254,14 +257,14 @@ jobs:
           go-version-file: desktop/go.mod
           cache-dependency-path: desktop/go.sum
       - name: Fetch goui-kit
-        run: ./xtask fetch-goui-kit darwin-universal
+        run: go -C tools/xtask run . fetch-goui-kit darwin-universal
       - name: Fetch the Velopack C library
-        run: ./xtask fetch-velopack darwin-universal
+        run: go -C tools/xtask run . fetch-velopack darwin-universal
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: 10.0.x
       - name: Set up verified vpk
-        run: bash .github/scripts/setup-vpk.sh
+        run: go -C tools/xtask run . fetch-vpk
       - name: Load the Apple signing credentials
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -271,12 +274,12 @@ jobs:
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
-        run: bash .github/scripts/macos-signing.sh
+        run: go -C tools/xtask run . macos-signing
       - name: Build macOS release package
         env:
           RC2FX_RELEASE_BUILD: "1"
           RC2FX_BASE_LICENSES: .release-input/base-licenses.json
-        run: ./xtask package
+        run: go -C tools/xtask run . package
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: rc2fx-package-macos

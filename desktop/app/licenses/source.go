@@ -15,7 +15,7 @@ const Placeholder = `{"schemaVersion":1,"sections":[{"title":"Licenses not bundl
 func Resolve(release bool, path string) (string, error) {
 	if path == "" {
 		if release {
-			return "", errors.New("RC2FX_LICENSES_JSON is not set; release builds must embed the generated license file (run `./xtask package`)")
+			return "", errors.New("RC2FX_LICENSES_JSON is not set; release builds must embed the generated license file (run `go -C tools/xtask run . package`)")
 		}
 		return Placeholder, nil
 	}

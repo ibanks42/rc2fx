@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 // Capacity is the maximum number of diagnostic event rows retained in memory.

@@ -3,7 +3,7 @@
 
     jackerr_ring.py SNAPSHOT
 
-Reference decoder for tests (matches `./xtask mixer xruns`). Refuses raw live
+Reference decoder for tests (matches `go -C tools/xtask run . mixer xruns`). Refuses raw live
 ring files because they lack per-slot seqlock consistency checks.
 """
 import json

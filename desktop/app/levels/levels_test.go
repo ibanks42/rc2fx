@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 func f(v float32) *float32 { return &v }

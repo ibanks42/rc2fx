@@ -1,6 +1,6 @@
 # rc2fx-core
 
-This crate holds the mixer's copy of RC2FX's data models, covering settings, control API messages, and EQ coefficients. Wire structs, enums, and constants are generated for both Rust and Go (`desktop/core`) from `schema/core.go` via `./xtask schema`, and live Rust <-> Go integration tests keep both sides in sync. Everything here is plain Rust with no audio processing, networking, file I/O, or GUI code.
+This crate holds the mixer's copy of RC2FX's data models, covering settings, control API messages, and EQ coefficients. Wire structs, enums, and constants are generated for both Rust and Go (`desktop/core`) from `schema/core.go` via `go -C tools/xtask run . schema`, and live Rust <-> Go integration tests keep both sides in sync. Everything here is plain Rust with no audio processing, networking, file I/O, or GUI code.
 
 ## Configuration and device state
 

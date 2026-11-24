@@ -22,29 +22,41 @@ sync.
 | `transport` | none | USB 1 control client for the app, plus the simulated mixer behind the `mockmixer` tag |
 | `app` (and subpackages), `cmd/rc2fx` | none | The UI. The only packages that import `github.com/ibanks42/goui-kit/gk` and its subpackages. |
 | `cmd/usb-probe` | none | Probe tool for the controller API over USB 1 |
-| `cmd/xtask`, `internal/xtask/...` | none | Development and release automation invoked via `./xtask` |
+| `tuf` (and `tuf/tuftest`), `common`, `num` | none | TUF repository verification (mirroring the mixer's `sigstore-tuf` rules) and small shared helpers; kept outside `internal/` so `tools/xtask` can import them |
 
-Packaging assets live in `desktop/packaging`: the AppImage launcher, desktop
-entry, icons, and macOS entitlements. Scripts that run on the mixer live in
-`mixer/scripts`.
+Development and release automation lives in its own Go module at `tools/xtask`
+(`github.com/ibanks42/rc2fx/tools/xtask`, replacing
+`github.com/ibanks42/rc2fx/desktop` with `../../desktop`). Run xtask from the
+repository root as `go -C tools/xtask run . <command>`, or point `-C` at
+`tools/xtask` from a subfolder (for example,
+`go -C ../tools/xtask run . <command>` from `desktop/`). Because it builds
+outside the desktop module, xtask works before goui-kit is downloaded, and it
+switches to the repository root on startup so relative path arguments always
+resolve from the repository root. Packaging assets live in `desktop/packaging`:
+the AppImage launcher, desktop entry, icons, and macOS entitlements. Scripts
+that run on the mixer live in `mixer/scripts`.
 
 ## Shared schemas and interop tests
 
 Wire structs, enums, constants, and payload file lists that both sides must
 agree on are defined once under `schema/` (`schema/core.go`,
-`schema/payload.go`) and generated into both Rust and Go via `./xtask schema`
-(CI verifies they stay in sync with `./xtask schema --check`).
+`schema/payload.go`) and generated into both Rust and Go via
+`go -C tools/xtask run . schema` (or `just schema`; CI verifies they stay in sync
+with `go -C tools/xtask run . schema --check`).
 
 Cross-language behavior (configuration JSON, presets, USB framing, delta
-payloads, release metadata, image check lists, TUF repos, and EQ/gate math) is
-verified directly by live Rust-to-Go integration tests in `crates/*/tests/`
-calling `desktop/internal/interop`, alongside Rust-owned golden tests in
-`crates/rc2fx-core/tests/` and `desktop/core/testdata/easyeffects`.
+payloads, release metadata, image check lists, and EQ/gate math) is verified
+directly by live Rust-to-Go integration tests in `crates/*/tests/` calling
+`desktop/internal/interop`, while TUF repository interop tests in
+`crates/rc2fx-device/tests/xtask_tuf_fixtures.rs` and
+`desktop/installer/xtask_fixtures_test.go` generate live repositories via
+`go -C tools/xtask run . tuf-test-repos`. These run alongside Rust-owned golden
+tests in `crates/rc2fx-core/tests/` and `desktop/core/testdata/easyeffects`.
 
 The gate shape matches bit-for-bit except where a value uses a power function:
 Go's `math.Pow` differs slightly from glibc's `pow`, so those values are
 allowed up to two ulps of difference. Whenever you change shared wire types,
-edit `schema/` and run `./xtask schema`; whenever you change shared behavior,
+edit `schema/` and run `just schema`; whenever you change shared behavior,
 update both implementations and cover it in the interop tests so Rust and Go
 cannot drift apart.
 
@@ -113,8 +125,9 @@ Everything in the module builds without cgo except:
 - macOS platform code in `installer/platform`, which links IOKit and
   DiskArbitration (also has a stub without cgo).
 
-`./xtask` always builds with `CGO_ENABLED=0` so it starts fast and doesn't need
-a C compiler; subcommands that compile the app re-enable cgo for that build.
+`tools/xtask` itself is pure Go (no cgo or goui-kit dependencies, enforced in CI
+with `CGO_ENABLED=0`), so `go -C tools/xtask run .` starts fast and doesn't need a
+C compiler; subcommands that compile the app enable cgo for that build.
 OS-specific code uses file suffixes and build constraints (`_linux.go`,
 `_windows.go`, `_darwin.go`) and must compile across all three targets. You can
 cross-check all non-UI packages with `CGO_ENABLED=0`:
@@ -133,10 +146,10 @@ GOOS=darwin CGO_ENABLED=0 go vet $nocgo
 | `embedded` | Compiles in the mixer payload staged by `cmd/stage-payload` | the `embedded` feature |
 | `velopack` | Enables self-update via Velopack's C library. Without it, the app cannot self-update, ignores Velopack install hooks, and accepts `RC2FX_DEV_UPDATE`. | always on |
 
-`./xtask app` always enables `gkstatic` and adds `rc2fxdev` unless `--release`
-is passed. Packaging always enables `gkstatic` and `velopack` (plus `embedded`
-when `--embedded` is given) and refuses any binary built with `mockmixer` or
-`rc2fxdev`.
+`go -C tools/xtask run . app` always enables `gkstatic` and adds `rc2fxdev` unless
+`--release` is passed. Packaging always enables `gkstatic` and `velopack` (plus
+`embedded` when `--embedded` is given) and refuses any binary built with
+`mockmixer` or `rc2fxdev`.
 
 ## Tests
 
@@ -155,5 +168,5 @@ covers the UI packages as well. `app/uitest` runs offscreen UI tests when
 `RC2FX_GOUIKIT_DIAG` points to a directory containing goui-kit's diagnostic
 library, and skips them otherwise. Prebuilt downloads don't include that
 library; build it from the `goui-kit` repository (`make lib`, then its
-`lib/diag`). `just test` runs the full Go suite followed by the Rust workspace
-tests on Linux.
+`lib/diag`). `just test` runs the full Go suite (including `gofmt`, `go vet`,
+and `go test` on `tools/xtask`) followed by the Rust workspace tests on Linux.

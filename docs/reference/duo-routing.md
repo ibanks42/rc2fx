@@ -132,5 +132,5 @@ Offline checks run when this layout was added (no physical device involved):
 
 - Firmware, device, and installer unit tests all pass.
 - Native library tests pass, including cases where a stereo output only sees one channel (leaving both untouched) and where `out_6` is missing (verifying it doesn't shift onto `out_7`).
-- `./xtask mixer-build` passes its AArch64, glibc 2.35, and GCC 11 checks.
+- `go -C tools/xtask run . mixer-build` passes its AArch64, glibc 2.35, and GCC 11 checks.
 - A temporary image built from the official Duo 1.7.7 archive preserves the Duo boot and controller files and headers, keeps the exact mixer and launcher hashes and Duo device tree, includes the runtime opt-in marker, and stays under the 275 MiB size limit.
