@@ -1,6 +1,6 @@
 # USB control
 
-The desktop app talks to RC2FX over USB 1, the same cable RØDE's own app uses. There's no Wi-Fi, Ethernet, IP addressing, or USB networking involved, and `rc2fxd` doesn't open any network sockets.
+The desktop app talks to RC2FX over USB 1, the same cable RØDE's own app uses; `rc2fxd` accepts control requests only on that USB link.
 
 This has been tested on Windows with a Pro II on 1.7.7: settings writes, telemetry, running side-by-side with RØDE's app and virtual device driver, engine restarts, cable unplugs, and USB mode switches. Running alongside RØDE's software on Linux and macOS hasn't been tested on hardware yet. Pro II 1.7.6 ships an identical gadget script and HID descriptor, so the same setup applies, though it hasn't been hardware-tested either.
 
@@ -13,7 +13,7 @@ USB 1 exposes a vendor HID interface. RØDE's 46-byte report descriptor defines 
 09 04 85 03 95 ff 91 02 09 05 85 04 95 ff 81 02  09 06 85 05 95 ff 91 02  09 07 85 06 95 ff 81 02  c0
 ```
 
-We don't add any audio endpoints, channel layouts, or extra USB functions. Every reader on the collection sees report 6: RØDE's software filters by report ID and ignores it, while RC2FX only picks up its own marked reports. The desktop app recognizes a mixer as running RC2FX only when the collection advertises reports 5 and 6. On Windows, the app also bumps its HID input queue to 512 reports so heavy RØDE traffic can't evict RC2FX replies.
+Every reader on the collection sees report 6: RØDE's software filters by report ID and ignores it, while RC2FX only picks up its own marked reports. The desktop app recognizes a mixer as running RC2FX only when the collection advertises reports 5 and 6. On Windows, the app also bumps its HID input queue to 512 reports so heavy RØDE traffic can't evict RC2FX replies.
 
 ### Rejected alternatives
 
@@ -45,7 +45,7 @@ Payloads are JSON, zlib-compressed whenever compression actually shrinks them. B
 
 ### Negotiation
 
-A client's Hello carries empty data for protocol 3 or `RC2FX USB 4` for protocol 4. The mixer replies with `RC2FX USB 3` or `RC2FX USB 4 <window>`, where `<window>` is how many reports the client can keep in flight. Anything else gets rejected with `Invalid USB hello`. An older mixer rejects a protocol 4 hello with that error, so the app simply falls back to an empty hello and speaks protocol 3 with zero behavior changes.
+A client's Hello carries empty data for protocol 3 or `RC2FX USB 4` for protocol 4. The mixer replies with `RC2FX USB 3` or `RC2FX USB 4 <window>`, where `<window>` is how many reports the client can keep in flight. Anything else gets rejected with `Invalid USB hello`. An older mixer rejects a protocol 4 hello with that error, so the app falls back to an empty hello and speaks protocol 3.
 
 The mixer advertises a window of 32. The app caps fetches at 16 reply reports at a time because macOS only queues around 30 input reports and Linux's hidraw queues 64 (shared with RØDE's traffic). Benchmarked on a Pro II (1.7.7) from Linux, uploads hit ~285 KB/s on protocol 4 versus ~21 KB/s on protocol 3, and small round trips drop from ~21 ms to ~6 ms, with no xruns introduced during transfers.
 

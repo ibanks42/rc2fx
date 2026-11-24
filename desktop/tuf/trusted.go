@@ -32,7 +32,8 @@ import (
 // ErrEqualVersion is the "nothing changed" signal of a timestamp update.
 var ErrEqualVersion = errors.New("timestamp version equals the trusted one")
 
-// Trusted is the set of currently trusted TUF metadata. It performs no I/O.
+// Trusted holds verified TUF metadata in memory and validates incoming role
+// updates.
 type Trusted struct {
 	root      *metadata.Metadata[metadata.RootType]
 	rootBytes []byte

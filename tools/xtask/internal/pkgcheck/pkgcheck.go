@@ -1,6 +1,6 @@
 // Package pkgcheck builds the Linux AppImage in the AlmaLinux 8 build
 // container and checks it across distribution containers, for releases and
-// `just package-check`. It needs no hardware, display, or GitHub Actions.
+// `just package-check`.
 package pkgcheck
 
 import (

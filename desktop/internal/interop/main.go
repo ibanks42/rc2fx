@@ -1,6 +1,5 @@
-// Command interop is a small pure-Go test bridge invoked by Rust integration
-// tests (and cross-package Go tests) to verify live Go <-> Rust wire
-// compatibility without committed fixtures.
+// Command interop is a Go test bridge invoked by Rust integration tests (and
+// cross-package Go tests) to verify live Go <-> Rust wire compatibility.
 package main
 
 import (

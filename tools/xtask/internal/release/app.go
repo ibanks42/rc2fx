@@ -136,7 +136,7 @@ func stable(version string) bool {
 	return true
 }
 
-// plain reports whether name is a safe single path segment (no leading dot or separators).
+// plain reports whether name is a single path segment using [A-Za-z0-9._+-] without a leading dot.
 func plain(name string) bool {
 	if name == "" || name[0] == '.' {
 		return false

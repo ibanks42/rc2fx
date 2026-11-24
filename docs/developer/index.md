@@ -97,8 +97,7 @@ apply everywhere:
   behavior in `mixer/scripts/rc2fx.sh`.
 - The audio callback must never lock, allocate, or wait. Push slow work onto
   another thread.
-- Whenever a check fails or state is uncertain, fall back to stock and let
-  RØDE's code run untouched.
+- Whenever a check fails or state is uncertain, fall back to stock audio.
 - Firmware support is pinned to file hashes. See
   [Firmware support](../reference/firmware.md).
 - Leave the mixer alone during its first boot after an update, and only restart

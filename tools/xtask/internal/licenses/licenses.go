@@ -234,9 +234,8 @@ func rustStandardLibrary() (string, error) {
 	return HTMLText(string(html))
 }
 
-// HTMLText reads the pinned toolchain's simple copyright HTML as character
-// data. Fail on an unfamiliar entity instead of silently dropping
-// attribution text.
+// HTMLText extracts character data from the pinned toolchain's copyright HTML.
+// Fails on an unfamiliar entity instead of silently dropping attribution text.
 func HTMLText(html string) (string, error) {
 	_, afterBody, ok := strings.Cut(html, "<body>")
 	if !ok {

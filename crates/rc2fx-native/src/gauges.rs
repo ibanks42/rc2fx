@@ -10,8 +10,8 @@
 //! (in) are the only callers of `snd_pcm_avail`, `jack_frames_since_cycle_start`,
 //! and `src_process`. Each calls the first two back-to-back, then `src_process`
 //! per channel. Fill levels are `ring - avail - frames` (playback) and
-//! `avail - frames` (capture). Wrappers forward unchanged with no allocations
-//! or locks.
+//! `avail - frames` (capture). Wrappers record atomic counters and forward
+//! calls directly on the audio thread.
 use super::{probe, timing};
 use std::{
     cell::Cell,

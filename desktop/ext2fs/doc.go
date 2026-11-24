@@ -1,11 +1,10 @@
-// Package ext2fs implements offline ext4 filesystem access in pure Go so the
-// desktop app can repair a RØDECaster mixer's ext4 root partitions without
-// mounting them or requiring cgo.
+// Package ext2fs reads and patches ext4 filesystems directly from raw disk or
+// image bytes so the desktop app can repair a RØDECaster mixer's ext4 root
+// partitions offline.
 //
-// It exposes only the minimal surface needed for repair: open a filesystem at a
-// byte offset, check whether journal recovery is pending, look up a path, read
-// a regular file, and overwrite a regular file in place with the same byte
-// length.
+// Supported operations: open a filesystem at a byte offset, check whether
+// journal recovery is pending, look up a path, read a regular file, and
+// overwrite a regular file in place with the same byte length.
 package ext2fs
 
 import "fmt"

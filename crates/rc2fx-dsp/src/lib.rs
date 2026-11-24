@@ -373,8 +373,7 @@ struct Stages {
     limiter_scratch: Option<f64>,
 }
 
-/// One owner serializes processing and snapshot handoff. No shared reference
-/// counts, mutexes or service callbacks are part of this processor.
+/// Single-owner audio processor; the caller serializes processing and snapshot handoff.
 pub struct Dsp {
     signature: Signature,
     retired: bool,

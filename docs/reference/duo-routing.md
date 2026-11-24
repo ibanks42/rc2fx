@@ -111,7 +111,7 @@ As a runtime safety net, the native pipeline binds every path by port name with 
 
 ## Reproducing
 
-Both commands only read the official archives and don't modify anything. Create a virtualenv with `tools/firmware_audit/requirements.txt` first:
+Both commands are read-only against the official archives. Create a virtualenv with `tools/firmware_audit/requirements.txt` first:
 
 ```sh
 python -m tools.firmware_audit \
@@ -128,7 +128,7 @@ Either script aborts on any hash, instruction, or fixture mismatch, and writes a
 
 ## Verification receipt
 
-Offline checks run when this layout was added (no physical device involved):
+Offline checks run when this layout was added:
 
 - Firmware, device, and installer unit tests all pass.
 - Native library tests pass, including cases where a stereo output only sees one channel (leaving both untouched) and where `out_6` is missing (verifying it doesn't shift onto `out_7`).

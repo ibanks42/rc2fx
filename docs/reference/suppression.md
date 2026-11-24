@@ -45,7 +45,7 @@ You can only enable suppression on a single target at once: either one mono micr
 
 ## Chat Mix Out
 
-On Chat Mix Out, the native library taps only the microphone feeds going into the Chat send. It reads them out of RØDE's routing functions after per-source processing and fader gains (covering main, custom, solo, and mix-minus routing), using four hash-pinned detours that leave RØDE's routing objects untouched.
+On Chat Mix Out, the native library taps only the microphone feeds going into the Chat send. It reads them out of RØDE's routing functions after per-source processing and fader gains (covering main, custom, solo, and mix-minus routing), using four hash-pinned detours that treat RØDE's routing objects as read-only.
 
 A single mono denoiser and voice gate process that microphone stem. SMART Pads and other playback skip both, stay stereo, and get matched delay. RC2FX then sums the two halves back together and runs the regular stereo output effects on the combined signal. Because of that structure, suppression on Chat always runs first no matter where it sits in `order`; the rest of the effects keep their relative order.
 

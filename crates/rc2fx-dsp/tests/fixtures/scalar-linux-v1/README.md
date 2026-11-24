@@ -2,7 +2,7 @@
 
 These golden fixtures were generated on 2026-10-23 by the independent C scalar DSP before its test driver was retired. They were **not** produced by the Rust implementation. A clean rebuild and two fresh renders matched the earlier oracle output byte for byte, with an identical executable hash.
 
-The Rust test suite embeds these binary files directly. No C compilation, subprocesses, legacy source reads, or fixture regeneration happen during `cargo test`.
+The Rust test suite embeds these binary files directly and compares against them during `cargo test`.
 
 ## Qualified targets
 

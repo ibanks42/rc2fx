@@ -136,10 +136,9 @@ target/la0-export/dfref-build/release/dfref \
 ```
 
 The reference therefore comes from the **same LA0 epoch-120 checkpoint**. It
-was produced by libDF from that checkpoint's ONNX export, without engine
-output, LA1 weights, or any time shift. Matching it shows the engine's
-inference agrees with libDF. Suppression quality has to be judged separately,
-on a device and by listening.
+was produced directly by libDF from that checkpoint's ONNX export. Matching it
+shows the engine's inference agrees with libDF. Suppression quality has to be
+judged separately, on a device and by listening.
 
 Source hashes:
 

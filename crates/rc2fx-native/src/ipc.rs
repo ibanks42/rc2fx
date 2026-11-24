@@ -1,5 +1,5 @@
-//! Unix datagram control server running inside the audit namespace.
-//! No audio buffers or raw pointers cross IPC.
+//! Unix datagram control server running inside the audit namespace,
+//! exchanging JSON control messages.
 use rc2fx_core::Target;
 use rc2fx_native_control::{
     ContextStatus, ErrorCode, MAX_REQUEST, MAX_RESPONSE, MIN_VERSION, Operation, PathMode,

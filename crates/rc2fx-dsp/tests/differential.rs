@@ -1,5 +1,5 @@
-//! Linux-only frozen scalar-oracle regression. No compiler, child process or C
-//! runtime dependency; fixture provenance is in fixtures/scalar-linux-v1/README.md.
+//! Linux-only frozen scalar-oracle regression against checked-in binary
+//! fixtures; fixture provenance is in fixtures/scalar-linux-v1/README.md.
 use rc2fx_core::{Band, BandMode, BandType, Target, TargetKind};
 use rc2fx_dsp::{Dsp, Prepared};
 
@@ -122,9 +122,8 @@ fn frozen_scalar_oracle_matches_ordered_effects_stereo_and_live_eq_handoffs() {
              Qualify this target against the pinned oracle before adding it; do not skip or relax exact audio checks."
         );
     }
-    // Exact bytes are SHA256-pinned in the fixture manifest. This lightweight
-    // noncryptographic fingerprint also rejects accidental fixture edits in
-    // ordinary tests without adding a hashing/library dependency to the DSP.
+    // Exact bytes are SHA256-pinned in the fixture manifest. This FNV-1a
+    // fingerprint catches accidental fixture edits during normal test runs.
     fn fingerprint(bytes: &[u8]) -> u64 {
         bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
             (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)

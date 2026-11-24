@@ -14,7 +14,7 @@ import (
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/licenses"
 )
 
-// Minimal synthetic Mach-O builders (header + load commands) for debug/macho.
+// Synthetic Mach-O builders (header + load commands) for debug/macho.
 
 type loadCommand []byte
 

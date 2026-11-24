@@ -21,7 +21,7 @@ app:
 app-release:
     {{ xtask }} app --release
 
-# Run the desktop app against a simulated mixer: no hardware, development build only
+# Run the desktop app against a simulated mixer (development build only)
 app-mock:
     {{ xtask }} app --mock
 
@@ -53,7 +53,7 @@ desktop-embedded: mixer-build
 package-check:
     {{ xtask }} package-check
 
-# Cross-build the mixer side into target/mixer (unchanged files are left as they are)
+# Cross-build the mixer side into target/mixer, updating only changed outputs
 mixer-build:
     {{ xtask }} mixer-build
 

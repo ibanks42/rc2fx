@@ -2,7 +2,7 @@
 
 The `pro-ii-25-v1` route layout adds six paths on top of the original 19 Pro II paths: four virtual USB inputs and two USB sends. `duo-23-v1` adds the same four virtual inputs to the Duo's 19 paths (the Duo already had all three USB sends).
 
-Everything here rides on the existing JACK buffer hooks; no new instruction hooks were needed. Source labels come from the [stock source-name evidence](source-name-evidence.md).
+Everything here rides on the existing JACK buffer hooks. Source labels come from the [stock source-name evidence](source-name-evidence.md).
 
 ## Path identities
 
@@ -56,7 +56,7 @@ A read-only check on a Pro II running 1.7.7 (on 2026-11-04) confirmed:
 - Game, Music, Virtual A, and Virtual B were connected to the exact USB input ports in the table.
 - Main and Chat sends were connected, while Secondary's two mixer ports were registered but unconnected (USB 2 wasn't plugged in).
 
-That check didn't modify any ports, show settings, processing settings, or live audio, and didn't install a new runtime. It confirms the JACK graph, but audio quality and latency on the new paths still haven't been tested on hardware, other USB modes and reconnect sequences need checking, and no Duo has been tested yet.
+That read-only check confirms the JACK graph, but audio quality and latency on the new paths still haven't been tested on hardware, other USB modes and reconnect sequences need checking, and no Duo has been tested yet.
 
 Before starting up, the native pipeline insists that every planned port is registered once and only once; a missing or duplicate port causes the plan to be rejected. If a registered stereo path's two buffers don't show up in the callback, that path stays unobserved and unprocessed. We've verified the registration loop offline, though its caller's array sizes haven't been confirmed across every USB mode.
 

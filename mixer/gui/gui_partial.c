@@ -718,8 +718,8 @@ static int cpu_rotate_regions(int fd, const struct rot_rect *regions,
   return 0;
 }
 
-/* Large deliberate redraws use the CPU; errors retain the vendor fallback.
- * The threshold is fixed, with no runtime mode or share selector. */
+/* Large deliberate redraws use the CPU above fixed thresholds; errors fall
+ * back to the vendor GE2D path. */
 static bool cpu_eligible(const char *reason, long long pending_px) {
 #ifdef RC2FX_PACING_TEST
   if (!test_cpu_rotation)

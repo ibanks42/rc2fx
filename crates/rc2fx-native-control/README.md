@@ -2,7 +2,7 @@
 
 Protocol messages and a Linux control client for talking to the native library running inside the mixer process. The message types themselves are platform-independent; the client talks over a Unix datagram socket on the mixer. The desktop app never uses this directly; it only talks to `rc2fxd` over USB 1.
 
-The receiving side lives in `crates/rc2fx-native`. This crate doesn't start any service, defines no global allocator, and has no dependency on the DSP or ELF audit code. Linking it has no side effects.
+The receiving side lives in `crates/rc2fx-native`. This crate provides the protocol message types and the Unix datagram socket client.
 
 ## Settings transactions
 

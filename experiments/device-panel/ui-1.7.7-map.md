@@ -13,7 +13,7 @@ A C-import shim looked viable on paper, though offline evidence alone wasn't eno
 
 Touch input could be intercepted around the GUI's imported `read` (opening a second evdev reader won't work). Any filter has to claim a contact before stock code sees any of its events and suppress the entire gesture. Since the stock callback dispatches before a full `SYN_REPORT` frame arrives, passing single records through behaves differently from the host prototype's complete-contact gate.
 
-Although `AGENTS.md` and `rodecaster-on-device-ui.md` were consulted for context, every address below was derived directly from UI-B's bytes, relocations, RTTI, unwind FDEs, and verified PLT/GOT entries. Nothing touched a device, emulated firmware, ran SSH, or modified existing sources; only the three audit files were written, and no JUCE objects or live adapters were built.
+Although `AGENTS.md` and `rodecaster-on-device-ui.md` were consulted for context, every address below was derived directly from UI-B's bytes, relocations, RTTI, unwind FDEs, and verified PLT/GOT entries. The audit ran offline and wrote only the three audit files.
 
 ## Reproducing
 
@@ -29,7 +29,7 @@ From the repo root with Python 3.11+:
   .deps/downloads/rodecaster-pro-ii-1.7.7-beta-os.tar.gz --out /tmp/ui-b-audit.json
 ```
 
-Tested with Capstone 5.0.7 and pyelftools 0.33 (`tools/firmware_audit/requirements.txt` pins Capstone 5.0.9, pyelftools 0.33, and Unicorn 2.1.4, though this audit doesn't use Unicorn). No extra packages were installed and no mixer `Image` was touched.
+Tested with Capstone 5.0.7 and pyelftools 0.33 (`tools/firmware_audit/requirements.txt` pins Capstone 5.0.9, pyelftools 0.33, and Unicorn 2.1.4, though this audit doesn't use Unicorn).
 
 What the auditor does:
 
@@ -39,7 +39,7 @@ What the auditor does:
 - cross-checks every AArch64 PLT stub against its `R_AARCH64_JUMP_SLOT` GOT relocation,
 - locates function boundaries via `.eh_frame`.
 
-It outputs deterministic JSON containing tool versions, archive/member metadata, RTTI and vtables, imports, every imported call site inside the selected functions, direct call edges, function SHA-256 hashes, and disassembly snippets, keeping analyst labels separate from raw observations. It's strictly an offline auditor, not a hook installer or general analyzer.
+It outputs deterministic JSON containing tool versions, archive/member metadata, RTTI and vtables, imports, every imported call site inside the selected functions, direct call edges, function SHA-256 hashes, and disassembly snippets, keeping analyst labels separate from raw observations. It is an offline auditor.
 
 Target binary: `/usr/bin/rc_gui_juce` (19,761,224 bytes, ELF64 LE AArch64 PIE, entry `0x400f40`), from archive SHA-256 `29028734fb2fcc26433bd9f519004c58526c195392ad704826df2fc2909fe57e`. All addresses below are ELF virtual addresses (live pointers add the PIE load bias). File offsets for writable RTTI/vtables are tracked separately, and no offsets were ported over from UI-A. `/etc/rotation` in this archive is `270\n`.
 

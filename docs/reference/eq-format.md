@@ -36,14 +36,14 @@ Here's how a channel's EQ is stored, how the filter coefficients are calculated,
 | `inputGainDb`, `outputGainDb` | −36 to +36 dB, applied inside the EQ |
 
 - Band IDs stay stable across edits. Reordering or deleting a band doesn't touch the remaining bands' IDs, which lets the mixer preserve each surviving band's filter state without glitches.
-- Stereo targets can include an optional `rightBands` array for split-channel EQ. If it's omitted, both channels share `bands`. An empty `rightBands` array means the right channel is independent and simply has no bands.
+- Stereo targets can include an optional `rightBands` array for split-channel EQ. If it's omitted, both channels share `bands`. An empty `rightBands` array means the right channel is independent with zero bands.
 - If any band has `solo: true`, only soloed bands run. Disabled bands and `off` bands are skipped.
 - Turning the EQ off bypasses its bands and both gains. An enabled EQ with zero bands still applies `inputGainDb` and `outputGainDb`.
 - Fresh channels start with the EQ disabled and no bands. Adding a band defaults to an enabled bell in `apo-dr` mode at 1 kHz, Q 1, 0 dB.
 
 Every numeric field has to be finite and the right type. Unknown fields, duplicate keys or band IDs, and out-of-range values are rejected outright; nothing gets silently clamped or fixed up.
 
-## Filter maths
+## Filter math
 
 Everything runs at 48 kHz. A band's frequency is saved as entered, and the filter itself is designed at `min(frequency, 0.49 × 48000)`.
 
@@ -63,7 +63,7 @@ Adding, removing, or reordering bands won't restart noise suppression or any oth
 
 ## EasyEffects presets
 
-Import and export live in a standalone pure module under `desktop/core`. Importing a preset only touches the currently selected channel's EQ.
+Import and export live in `desktop/core`. Importing a preset updates only the currently selected channel's EQ.
 
 ### Export
 

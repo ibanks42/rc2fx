@@ -1,8 +1,7 @@
 # transport
 
 Package `transport` (in `desktop/`) handles RC2FX control over USB 1 for the
-desktop app. It runs in-process with no background listener, external helper,
-or network sockets.
+desktop app, in-process.
 
 `CommandConnect` opens the single connected RØDECaster Pro II on USB 1 using
 the USB control client (`usbcontrol`). Framing details are documented in

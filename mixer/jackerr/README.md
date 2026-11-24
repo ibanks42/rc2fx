@@ -1,21 +1,20 @@
 # JACK error recorder
 
 `librc2fx_jackerr.so` is an interposer for the mixer's stock `jackd` that only
-records errors. In RØDE's stock build, `jack_error` is a no-op; this library
-captures calls to it into a fixed 4096-slot ring buffer in shared memory. It
-does not capture audio, open JACK ports, register a processing callback, or
-enable jackd's callback or ALSA tracing.
+records errors. In RØDE's stock build, `jack_error` is a no-op; this library interposes only
+`jack_error` and captures calls to it into a fixed 4096-slot ring buffer in
+shared memory.
 
 Standard mixer builds compile both `librc2fx_jackerr.so` and
 `rc2fx_jackerr_snapshot`. Both are required, checksummed artifacts in the SSH
-installer, release packages, and firmware-image installer. RØDE's binaries stay
-untouched, and launcher integration lives in `mixer/scripts/rc2fx.sh`.
+installer, release packages, and firmware-image installer. Launcher integration
+lives in `mixer/scripts/rc2fx.sh`.
 
 ## Startup
 
 Whenever both binaries are present and pass verification, the launcher attaches
-the recorder automatically during normal mixer startup, including at boot. No
-RAM marker or developer toggle is needed. The launcher preloads the library
+the recorder automatically during normal mixer startup, including at boot. The
+launcher preloads the library
 from the active bundle (typically `/opt/rc2fx`). It stays off on the first boot
 after a firmware update and under any other condition that triggers a stock
 fallback.

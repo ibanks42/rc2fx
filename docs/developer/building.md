@@ -274,10 +274,9 @@ just package-check
 
 This builds the AppImage the same way a release does, then extracts and tests
 it inside clean containers for AlmaLinux 8, Ubuntu 22.04, Debian 12, Ubuntu
-24.04, Debian 13, and Fedora 44. It requires x86-64 Linux with Podman or Docker
-and network access, with no mixer or GitHub Actions run needed. Set
-`CONTAINER_ENGINE` to `podman` or `docker` to force one; otherwise it defaults
-to Podman when available.
+24.04, Debian 13, and Fedora 44. It runs locally on x86-64 Linux with Podman or
+Docker and network access. Set `CONTAINER_ENGINE` to `podman` or `docker` to
+force one; otherwise it defaults to Podman when available.
 
 Because the container checks are headless, they don't exercise a graphical
 session, FUSE mounting, or USB mixer communication; test those manually.

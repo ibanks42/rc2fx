@@ -11,7 +11,7 @@ const END: usize = 256;
 #[inline(always)]
 fn line(address: *const u8, write: bool) {
     #[cfg(target_arch = "aarch64")]
-    // SAFETY: `prfm` is a pure cache hint; it never faults or mutates memory/flags/stack.
+    // SAFETY: `prfm` is a cache hint that does not fault or modify memory, flags, or stack.
     unsafe {
         use std::arch::asm;
         if write {

@@ -1,6 +1,5 @@
 // Package core implements the RC2FX configuration schema, session and editor
-// state, EQ response math, and preset import/export, with no audio, network,
-// or GUI dependencies.
+// state, EQ response math, and preset import/export.
 //
 // External JSON is parsed with this package's strict decoder (DecodeStrict,
 // FromJSON, and friends), and outgoing JSON uses Encode / EncodePretty.

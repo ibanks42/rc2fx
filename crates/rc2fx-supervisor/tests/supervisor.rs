@@ -1,6 +1,5 @@
 //! Integration tests for `rc2fx-supervisor` using real child processes with
-//! stub `rc2fx.sh` and controller scripts. No mixer, USB device, or system
-//! files are touched.
+//! stub `rc2fx.sh` and controller scripts in a temporary directory.
 use std::{
     fs,
     os::unix::{fs::PermissionsExt, net::UnixDatagram},

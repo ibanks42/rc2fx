@@ -1,5 +1,5 @@
-//! Control protocol types and blocking client for the native audio library.
-//! Kept free of ELF audit hooks, audio callbacks, and DSP dependencies.
+//! Control protocol types and blocking Unix datagram client for the native
+//! audio library.
 #[cfg(not(target_os = "linux"))]
 compile_error!("rc2fx's mixer crates build for Linux only");
 use rc2fx_core::Target;

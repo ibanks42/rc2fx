@@ -40,9 +40,8 @@ func failf(format string, args ...any) error {
 
 // TestLinuxPackages is `test-linux-packages`. It checks the Linux release
 // artifacts on the host, then streams a copy of the AppImage and a static
-// xtask into each container, so no artifact is modified, nothing on the
-// host is mounted, and no device, display, or FUSE access is needed. The
-// containers need network access to install inspection tools.
+// xtask into each container over stdin so the host artifacts stay isolated.
+// The containers need network access to install inspection tools.
 func TestLinuxPackages(args []string) error {
 	root := task.Root()
 	artifacts, version, runtime := "", "", os.Getenv("CONTAINER_ENGINE")

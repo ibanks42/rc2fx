@@ -1,7 +1,7 @@
 package installer
 
-// Offline firmware archive inspection. Read-only: never extracts files,
-// prepares images, touches USB, or enables experimental boards.
+// Offline firmware archive inspection. Hashes an archive and verifies its
+// pinned catalog entry, board identity, and mixer executable in memory.
 
 import (
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/archive"

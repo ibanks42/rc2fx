@@ -9,13 +9,12 @@ every frame has to be rotated before it hits the screen. Stock firmware asks
 the GE2D hardware converter to rotate the entire frame every time, and that
 memory traffic can disturb audio. This module converts only the regions that
 actually changed (up to three jobs per frame) and handles large redraws on the
-CPU instead. The size threshold is fixed with no runtime toggle. The module
-doesn't patch any instructions or draw anything itself.
+CPU instead. The size threshold is fixed with no runtime toggle.
 
 ## Building
 
 This is a standalone C module built outside Cargo. `go -C tools/xtask run . mixer-build`
-compiles `gui_pacing.c` for the mixer using zig, with no feature flags.
+compiles `gui_pacing.c` for the mixer using zig.
 
 `gui_pacing.c` includes `gui_partial.c` (partial-region conversion) and
 `rotate/` (CPU rotation). The header comment in each file documents its pinned
@@ -56,8 +55,7 @@ python3 mixer/gui/test_gui_pacing.py
 This builds the module with `-DRC2FX_PACING_TEST` so call sites are resolved by
 symbol name instead of pinned addresses, then runs it under `LD_AUDIT` against
 `gui_pacing_test.cpp` (a mock GUI frame pump) and `fake_v4l2.c` (a mock GE2D
-device). It runs locally with no mixer needed and is included in
-`just test-mixer`.
+device). It runs locally and is included in `just test-mixer`.
 
 Setting `RC2FX_GUI_PACING=observe` counts and times frames and paints without
 performing conversions; on the mixer it runs in `partial-cw` mode. The test

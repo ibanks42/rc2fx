@@ -164,8 +164,8 @@ func TestCopiedLauncherLoadsBundledLibraryAndForwardsLiteralArguments(t *testing
 		t.Skip("no C compiler")
 	}
 	temp, root, exe := layout(t)
-	// Real ELF fixtures ensure this tests dynamic loading, not merely an
-	// environment variable. No pkexec, GUI, USB, or privileged process.
+	// Real ELF fixtures test dynamic loading of bundled shared libraries in
+	// the staged AppDir rather than only checking an environment variable.
 	library := filepath.Join(temp, "library.c")
 	os.WriteFile(library, []byte("int fixture(void) { return 42; }\n"), 0o644)
 	main := filepath.Join(temp, "main.c")

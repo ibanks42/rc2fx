@@ -2,7 +2,7 @@
 
 The noise suppression worker crate. It implements `rc2fx_dsp::Suppression` and handles audio-frame adaptation, startup warm-up, worker lifecycle, bounded queues, dry/wet alignment, and telemetry.
 
-`VendorModel` wraps DeepFilterNet3 from `rc2fx-dfn`. It is pure Rust and compiled into every build.
+`VendorModel` wraps DeepFilterNet3 from `rc2fx-dfn` and is compiled into every build.
 
 ## Models and delay
 
@@ -13,7 +13,7 @@ The noise suppression worker crate. It implements `rc2fx_dsp::Suppression` and h
 
 `Endpoint::new` pulls its geometry from the admitted geometry in `rc2fx-core`, and every endpoint runs inference on the threaded `Worker`.
 
-The worker allowance is an integer multiple of the 112-sample device period, sized from the model's worst-case frame time on hardware. If a frame misses its deadline, the callback plays dry audio until the result shows up; the mixer's period stays untouched. `deep_filter_from_weights`, used for benchmarking candidate models, sets up a zero-lead geometry.
+The worker allowance is an integer multiple of the 112-sample device period, sized from the model's worst-case frame time on hardware. If a frame misses its deadline, the callback plays dry audio until the result shows up, keeping the mixer's period fixed. `deep_filter_from_weights`, used for benchmarking candidate models, sets up a zero-lead geometry.
 
 ## Threaded worker
 
@@ -50,7 +50,7 @@ An already-exited worker joins immediately with zero wait. When waiting, complet
 
 Whenever a result is missing, stale, invalidated by recovery, nonfinite, or errored, the callback substitutes dry audio at the exact same delay. If a worker result shows up partway through its frame, it's used for the remainder of that frame and counted as both a late result and a missed deadline. Disabling wet processing leaves both model history and latency intact.
 
-Normalization clamps finite samples to ±1 and applies the vendor's 32768 scaling. Offline, entire frames are validated before touching model or output state, rejecting wrong lengths or nonfinite samples. Inside the audio callback, nonfinite inputs are simply zeroed out.
+Normalization clamps finite samples to ±1 and applies the vendor's 32768 scaling. Offline, entire frames are validated before touching model or output state, rejecting wrong lengths or nonfinite samples. Inside the audio callback, nonfinite inputs are zeroed out.
 
 ## Measurements
 

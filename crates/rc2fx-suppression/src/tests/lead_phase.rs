@@ -1,10 +1,9 @@
-//! Deterministic endpoint deadlines, not a scheduler or device qualification.
+//! Deterministic endpoint deadline tests driven by a synchronous fake service.
 use super::*;
 use std::collections::VecDeque;
 
-/// Fake model service publishes at the beginning of the third native block
-/// after submission. The real endpoint still assembles, queues, selects and
-/// accounts for each sample; no sleeps or OS scheduling determine the result.
+/// Drives the real endpoint synchronously against a fake service that publishes
+/// at the start of the third native block after submission.
 fn three_block_service(lead: usize) -> (Snapshot, Vec<usize>) {
     let (mut worker, mut input, mut output) = endpoint();
     assert_eq!(worker.geometry.frame_samples, 240);

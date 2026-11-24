@@ -1,4 +1,4 @@
-//! DeepFilterNet3 speech enhancement in pure Rust.
+//! DeepFilterNet3 speech enhancement in Rust.
 //!
 //! Streaming port of DeepFilterNet inference: libDF STFT framing and features
 //! (`dsp`) feeding the three networks (`net`), with large weight matrices
@@ -187,7 +187,7 @@ impl DeepFilter {
     /// (encoder convs, the three GRUs, ERB decoder paths) so DRAM streaming
     /// bursts stay under ~0.4 ms. On the mixer, >1 ms continuous streaming on
     /// the shared DRAM bus caused JACK xruns whereas 0.5 ms bursts didn't
-    /// (2026-10-29). Output is unchanged; `None` disables pausing.
+    /// (2026-10-29). Audio output is identical; `None` disables pausing.
     pub fn set_layer_pause(&mut self, pause: Option<LayerPause>) {
         self.net.set_pause(pause);
     }
@@ -196,8 +196,8 @@ impl DeepFilter {
     ///
     /// When enabled, [`prepare_step`](Self::prepare_step) precomputes one GRU
     /// layer's recurrent matvec (`W_hh * h`) ahead of the next `process` call.
-    /// The math and kernels are identical, so output is bit-for-bit unchanged;
-    /// work is shifted in time, not reduced. Resetting, processing a frame, or
+    /// The math and kernels are identical, producing bit-exact output while
+    /// shifting work earlier in time. Resetting, processing a frame, or
     /// disabling this discards any prepared products.
     pub fn set_gru_prep(&mut self, on: bool) {
         self.gru_prep = on;
@@ -288,7 +288,7 @@ pub mod bench_kernels {
 
     /// Returns mean ns per 384x128 matvec for `[row_major, tiled]` on a
     /// cache-resident matrix after verifying bit-exact equality. Measures
-    /// compute only (no DRAM streaming).
+    /// cache-resident compute only.
     pub fn resident_product_ns(iterations: usize) -> [f64; 2] {
         crate::kernels::bench_resident_products(iterations)
     }

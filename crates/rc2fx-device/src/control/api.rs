@@ -1,6 +1,6 @@
 //! The control API, served over USB 1 (see `usb_control`). Requests name a
 //! method and an `api/v1/...` path with an optional JSON body; replies carry a
-//! status code and a JSON body. This is not an audio runtime.
+//! status code and a JSON body.
 use crate::{
     coordinator::{Error, Handle, receive},
     events::{EventError, Subscription},

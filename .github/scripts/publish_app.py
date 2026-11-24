@@ -61,7 +61,7 @@ META = MetadataRepo(BRANCH, README, error_cls=Refused)
 
 
 class Gh:
-    """Minimal GitHub CLI wrapper (replaced by a fake in tests)."""
+    """Calls `gh api` to fetch release metadata and download assets (replaced by a fake in tests)."""
 
     def __init__(self, repo):
         self.repo = repo

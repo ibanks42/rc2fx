@@ -1,5 +1,6 @@
-//! Persistent, control-only read front door. It owns no Store, DSP, callback or
-//! native registration. A snapshot and subscription are captured under one lock.
+//! Published control-side read facade holding the latest device state, preset
+//! list, event hub, and diagnostics history. Captures snapshots and
+//! subscriptions atomically under one lock.
 use crate::diagnostic_history::{ExportError, History, process_resources};
 use crate::events::{Event, EventError, EventKind, Hub, Subscription};
 use rc2fx_core::{DeviceState, PresetSummary};

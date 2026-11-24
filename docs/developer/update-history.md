@@ -114,9 +114,8 @@ Release preparation validates the pending app release on its own:
 `release.py prepare` parses the new app section with `parse_changelog` and
 doesn't expect mixer changes or mixer notes, since app releases don't bundle
 the mixer runtime. The workflow then runs the normal published-only docs build
-(`npm run build`), so a prepared-but-unpublished release never leaks into the
-site or `updates.json`, and there's no synthetic candidate output to manage or
-clean up.
+(`npm run build`), so a prepared-but-unpublished release never enters the site
+or `updates.json`.
 
 ## Feed contract
 
@@ -189,7 +188,7 @@ just docs                                        # generate and build the site
 ```
 
 The unit tests feed in a mocked GitHub release list and tag map, so they run
-offline with no git tags needed. Building the real docs site does need API
+offline. Building the real docs site does need API
 access (or `GH_TOKEN`) and the release tags so it knows what's published and
 what each older app bundled.
 

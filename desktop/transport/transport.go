@@ -1,5 +1,5 @@
 // Package transport handles RC2FX control over USB 1 directly from the desktop
-// process (no local daemon, network, or credentials).
+// process.
 //
 // With -tags mockmixer, a simulated mixer stands in for USB 1 during
 // development; release builds always talk to a real mixer.

@@ -1,8 +1,8 @@
 // Package schema is the single source of truth for RC2FX's shared wire types
 // and constants across Rust (crates/rc2fx-core) and Go (desktop/core).
 //
-// It is written in standard Go syntax so normal Go tooling (gofmt, editors,
-// go/parser) works directly with zero custom language or external compilers.
+// It is written in standard Go syntax so gofmt, editors, and go/parser work on
+// it directly.
 // Regenerate both sides with `go -C tools/xtask run . schema` (or `just schema`).
 package schema
 
@@ -528,8 +528,8 @@ const (
 
 //schema:copy
 type USBStatus struct {
-	// Pro II USB 1 only. This does not describe USB 2, network connectivity,
-	// host playback activity, or whether a configured link carries audio.
+	// Link state of the Pro II's USB 1 gadget port (hardware link state only,
+	// not audio activity).
 	USB1 USBLinkState `json:"usb1"`
 }
 

@@ -1,4 +1,4 @@
-// Package levels implements the pure geometry and frame-skipping logic for
+// Package levels computes curve geometry and frame-skipping decisions for
 // Home's live level indicators. Level history lives in desktop/app/model.
 package levels
 

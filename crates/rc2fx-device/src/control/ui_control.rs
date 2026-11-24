@@ -1,8 +1,8 @@
 //! Private, owner-only AF_UNIX adapter for the hardware touchscreen.
 //!
 //! The small versioned wire image avoids putting a JSON parser or Rust/C++ ABI
-//! into RODE's GUI. Every mutation still goes through the SAME Api/coordinator
-//! as USB; there is no second Store, native client, or audio runtime.
+//! into RODE's GUI. Every mutation goes through the same `Api` and coordinator
+//! as USB.
 //!
 //! Each packet has a u32 big-endian byte length. Request: RCUI, version=1,
 //! opcode (0 snapshot, 1 apply preset, 2 processing), enabled (0/1), id length,
@@ -278,8 +278,8 @@ async fn connection(
     }
 }
 
-/// One optional device-local listener, sharing the USB controller owner.
-/// Does not unlink an existing socket, open a Store, or touch audio devices.
+/// Optional device-local listener sharing the USB controller owner.
+/// Fails if the socket path already exists rather than unlinking it.
 pub async fn serve(path: &Path, controller: Handle, options: Options) -> io::Result<()> {
     let listener = UnixListener::bind(path)?;
     let metadata = std::fs::symlink_metadata(path)?;

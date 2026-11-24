@@ -1,5 +1,5 @@
-//! RC2FX control framing over RØDE's vendor HID reports (stop-and-wait, no
-//! unsolicited writes or automatic mutation replay).
+//! Stop-and-wait RC2FX control framing over RØDE's vendor HID reports. Every
+//! reply answers a host request; callers retry failed mutations explicitly.
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 

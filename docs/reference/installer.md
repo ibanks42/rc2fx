@@ -12,9 +12,9 @@ falling back to USB 1 when that isn't possible (see
 keeping the full flash as the recovery path. Firmware archives are never stored
 in git.
 
-The core engine lives in `desktop/installer`, written in pure Go with no
-external CLI dependencies; Repair mixer reads and writes ext4 via libext2fs,
-vendored under `desktop/ext2fs` and linked through cgo. The UI lives in
+The core engine lives in `desktop/installer`, written in Go; Repair mixer reads
+and writes ext4 via libext2fs, vendored under `desktop/ext2fs` and linked
+through cgo. The UI lives in
 `desktop/app/installer.go` with state transitions in `desktop/app/installflow`.
 
 ## Inputs

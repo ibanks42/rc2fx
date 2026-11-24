@@ -125,9 +125,9 @@ Everything in the module builds without cgo except:
 - macOS platform code in `installer/platform`, which links IOKit and
   DiskArbitration (also has a stub without cgo).
 
-`tools/xtask` itself is pure Go (no cgo or goui-kit dependencies, enforced in CI
-with `CGO_ENABLED=0`), so `go -C tools/xtask run .` starts fast and doesn't need a
-C compiler; subcommands that compile the app enable cgo for that build.
+`tools/xtask` builds with `CGO_ENABLED=0` (enforced in CI) and does not depend
+on goui-kit, so `go -C tools/xtask run .` runs without a C compiler or the UI
+library; subcommands that compile the app enable cgo for that build.
 OS-specific code uses file suffixes and build constraints (`_linux.go`,
 `_windows.go`, `_darwin.go`) and must compile across all three targets. You can
 cross-check all non-UI packages with `CGO_ENABLED=0`:

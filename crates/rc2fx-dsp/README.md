@@ -1,6 +1,6 @@
 # rc2fx-dsp
 
-The audio effects library used by the device service. It has no dependencies on an audio server, HTTP, the filesystem, thread spawning, or vendor FFI, and the legacy C DSP is no longer linked or called.
+The audio effects library used by the device service. It processes 48 kHz audio buffers through high-pass, suppression, EQ, compressor, gain, and limiter stages.
 
 ## Model
 
@@ -28,15 +28,15 @@ The delay reported at construction stays fixed for the endpoint's entire lifetim
 
 Construction verifies the provider's core algorithm and all four resolved geometry fields (sample rate, frame size, intrinsic delay, and worker allowance). Two models with the same total delay but different algorithms or frame geometry are treated as incompatible. `Prepared::new` always verifies that the target is admitted.
 
-After the audio callback has stopped, control code can call `Dsp::drain_suppression` with a single overall timeout. That invokes each provider's control-side drain hook and permanently retires the DSP, even if the drain times out. Any subsequent call to either processing entry point returns `DspError::Retired` without touching the audio buffers. Draining adds zero overhead to the callback path (no drain checks, clock reads, locks, or receipt publishing). If a `Dsp` is dropped without draining, teardown falls back to the provider's `Drop` implementation.
+After the audio callback has stopped, control code can call `Dsp::drain_suppression` with a single overall timeout. That invokes each provider's control-side drain hook and permanently retires the DSP, even if the drain times out. Any subsequent call to either processing entry point returns `DspError::Retired` without touching the audio buffers. Draining runs strictly on the control thread, adding no work to the audio callback. If a `Dsp` is dropped without draining, teardown falls back to the provider's `Drop` implementation.
 
-Microphone states always require a real suppression provider (suppression only runs on mono mics) even when suppression is switched off, because the mic path holds the suppression delay constant. Missing or mismatched providers fail construction. This crate contains no inference code and no fake denoiser, only a test-only delay endpoint to exercise the contract, which says nothing about model quality or real-time performance. The real worker endpoint lives in `rc2fx-suppression`.
+Microphone states always require a real suppression provider (suppression only runs on mono mics) even when suppression is switched off, because the mic path holds the suppression delay constant. Missing or mismatched providers fail construction. This crate provides a test-only delay endpoint to exercise the suppression contract; the real worker endpoint lives in `rc2fx-suppression`.
 
 ## Tests
 
 `cargo test -p rc2fx-dsp --locked` runs the behavior and zero-allocation tests.
 
-On Linux x86_64 it also checks 43,280 samples per channel (mono and stereo) against frozen binary fixtures from an independent scalar oracle. The test embeds those fixtures directly and never invokes a C compiler, child process, or legacy DSP source. On other Linux architectures the build intentionally fails with a message noting that the fixtures haven't been qualified for that architecture yet.
+On Linux x86_64 it also checks 43,280 samples per channel (mono and stereo) against embedded binary fixtures from an independent scalar oracle. On other Linux architectures the build intentionally fails with a message noting that the fixtures haven't been qualified for that architecture yet.
 
 The oracle suite covers every EQ type and mode, independent right-channel bands, coefficient updates, band reordering, soloing and removal, rapid structural edits, bypass, EQ and dynamics toggles, compensated 32-band cascades, arbitrary chunk sizes, NaNs, infinities, and headroom guards.
 

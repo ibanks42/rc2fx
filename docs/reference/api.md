@@ -85,7 +85,7 @@ The reverse isn't true: the desktop app doesn't trust the mixer beyond what it d
 | `firmware`, `firmwareProfile` | Firmware profile selected by the launcher after `rc2fx-firmware check-device` verified the stock mixer, looked up in the installed catalog for this model |
 | `inPlaceUpdates` | `2` when the controller supports signed in-place updates over USB 1 plus delta uploads; `1` for earlier in-place-only builds; omitted if unsupported. Clients should treat any value `> 0` as in-place capable. |
 
-`rc2fxd` loads these once at startup from `--release`, `--firmware-catalog`, and `--firmware-profile` (passed by `rc2fx.sh`). Any field it can't read or verify is simply omitted (never guessed), with the reason logged in `rc2fx.sh`'s controller log. If nothing can be read, it returns `{}`. Older builds without this endpoint answer `404`, and the app displays those versions as **Unknown**.
+`rc2fxd` loads these once at startup from `--release`, `--firmware-catalog`, and `--firmware-profile` (passed by `rc2fx.sh`). Any field it can't read or verify is omitted (never guessed), with the reason logged in `rc2fx.sh`'s controller log. If nothing can be read, it returns `{}`. Older builds without this endpoint answer `404`, and the app displays those versions as **Unknown**.
 
 Version info is kept out of `GET /api/v1/state` and state events so the strict state schema doesn't have to change. Since versions can't change without a restart, the app re-fetches them on every reconnect. Clients should ignore unknown fields.
 
@@ -212,7 +212,7 @@ Because the session lives in RAM, the restart clears it. Once the app reconnects
 
 ## On-device touchscreen control (in development)
 
-`rc2fxd --ui-socket /run/rc2fx/ui.sock` serves the hardware touchscreen panel over a local Unix stream socket (`0600`, same-UID peers only, max 4 clients). The mixer supervisor only turns it on if the controller advertises the flag; older controllers stay USB-only. It doesn't open a TCP port or change anything about USB 1.
+`rc2fxd --ui-socket /run/rc2fx/ui.sock` serves the hardware touchscreen panel over a local Unix stream socket (`0600`, same-UID peers only, max 4 clients). The mixer supervisor only turns it on if the controller advertises the flag; older controllers stay USB-only.
 
 The wire protocol is compact, versioned, and documented in `crates/rc2fx-device/src/control/ui_control.rs`. It exposes state and preset summaries, preset apply, and toggling processing on or off. All actions route through the exact same API and coordinator as USB requests, keeping revision/generation checks and save/publish behavior identical. There's only one settings store, and the panel never talks to the DSP directly. Eligibility separates presets, ON, and an explicit OFF during a fault, and a dropped reply never allows a write to be replayed.
 

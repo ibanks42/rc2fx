@@ -103,9 +103,9 @@ func devicePanelBuild() error {
 	return nil
 }
 
-// devicePanelCheck builds and runs the host-only input unit tests and compiles
-// client_test (no device or runtime needed). CC picks the compiler; SANITIZE=1
-// adds ASan and UBSan.
+// devicePanelCheck builds and runs the host input unit tests and compiles
+// client_test on the local machine. CC picks the compiler; SANITIZE=1 adds
+// ASan and UBSan.
 func devicePanelCheck() error {
 	root := task.Root()
 	cc := os.Getenv("CC")

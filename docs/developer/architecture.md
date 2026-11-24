@@ -126,10 +126,9 @@ newer update.
 The mixer already exposes a vendor HID interface on USB 1 for RØDE's own app.
 RC2FX adds report IDs 5 and 6 to that HID collection by staging a modified
 descriptor in RAM. A hook on the engine's HID read lets RØDE's reports pass
-through untouched and routes RC2FX's reports to `rc2fxd`, without adding any new
-USB function, endpoint, or audio channel. See
-[USB control](../reference/usb-control.md) for the protocol and how it survives
-restarts.
+through and routes RC2FX's reports to `rc2fxd` over that same vendor HID
+interface. See [USB control](../reference/usb-control.md) for the protocol and
+how it survives restarts.
 
 ## Installing
 

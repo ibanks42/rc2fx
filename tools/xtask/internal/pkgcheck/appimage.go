@@ -53,8 +53,8 @@ func output(name string, args ...string) (string, error) {
 }
 
 // CheckAppImage is `check-appimage`, which test-linux-packages runs in each
-// throwaway container: it unpacks the AppImage (no FUSE mount, GUI launch,
-// or device access) and inspects what it holds.
+// throwaway container: it unpacks the AppImage directly and inspects its
+// contents, ELF dependencies, and startup path.
 func CheckAppImage(appimage, version string) error {
 	if !inContainer() {
 		return task.Error("check-appimage installs packages, so it only runs inside a throwaway container; run `go -C tools/xtask run . test-linux-packages`")
@@ -270,9 +270,9 @@ func checkELF64(file string) error {
 }
 
 // expectInstallerHelperExit2 runs the AppImage with --installer-helper and
-// no arguments, which exits 2 at once without output and without touching
-// devices, files, or the GUI. A shell error in AppRun also exits 2, but
-// writes something.
+// no arguments, exercising AppRun and the executable's argument parser until
+// it exits 2 silently. A shell error in AppRun also exits 2, but writes
+// output.
 func expectInstallerHelperExit2(app string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

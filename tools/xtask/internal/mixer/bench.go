@@ -226,7 +226,7 @@ func benchIn(bench string, mixer func() (*Mixer, error), input string, flags []s
 	}
 	// Bulk uncompressed SSH downloads disturb the live audio graph. Device
 	// comparisons found compressed downloads clean, at the cost of transfer
-	// time. Uploads did not benefit, so keep their existing path unchanged.
+	// time. Uploads did not benefit, so they stay uncompressed.
 	results, resultsErr := m.capture("cd /run/rc2fx-bench && tar -czf - *.wav *.json *.log 2>/dev/null; true")
 	_ = m.ssh("rm -rf /run/rc2fx-bench", nil)
 	if outcome != nil {

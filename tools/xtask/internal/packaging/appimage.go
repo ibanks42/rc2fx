@@ -103,7 +103,7 @@ func asset(path string) ([]byte, error) {
 	return data, nil
 }
 
-// stage populates the minimal AppDir before linuxdeploy runs.
+// stage populates the AppDir with the executable, desktop entry, icon, and license files before linuxdeploy runs.
 func stage(appdir string, executable []byte, licenseFiles []licenseFile) error {
 	if _, err := os.Lstat(appdir); err == nil {
 		if err := os.RemoveAll(appdir); err != nil {

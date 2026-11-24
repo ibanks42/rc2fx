@@ -1,5 +1,5 @@
-// Command inspect-firmware audits an official firmware archive against a
-// firmware-profiles.json catalog without needing a device or extracted rootfs.
+// Command inspect-firmware audits an official firmware archive offline against
+// a firmware-profiles.json catalog.
 //
 //	go -C desktop run ./cmd/inspect-firmware MODEL OS.tar.gz [CATALOG]
 package main

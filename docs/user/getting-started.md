@@ -39,7 +39,7 @@ If there isn't a prebuilt download for your system, you can
 
 ### Removing the app
 
-Uninstalling the desktop app leaves your mixer untouched. If you want to remove
+Uninstalling the desktop app does not remove RC2FX from your mixer. If you want to remove
 RC2FX from the mixer itself, flash stock RØDE firmware first; see
 [Installing RC2FX](installing.md#going-back-to-stock).
 
@@ -163,7 +163,7 @@ The check only notifies you; nothing downloads or installs until you start it:
 
 On macOS, if you installed RC2FX for all users in `/Applications`, macOS will
 ask for an administrator password to replace the app. If you cancel that
-prompt, the current version simply starts back up.
+prompt, the current version starts back up.
 
 ## Linux
 

@@ -1,6 +1,6 @@
 # Stock input-source names (Pro II and Duo, 1.7.6 and 1.7.7)
 
-This doc lays out the evidence behind the stock `INPUTSOURCE` `inputId` labels and explains whether the firmware supports custom per-source names. Everything here was gathered offline on 2026-11-04 without touching a mixer.
+This doc lays out the evidence behind the stock `INPUTSOURCE` `inputId` labels and explains whether the firmware supports custom per-source names. Everything here was gathered offline on 2026-11-04.
 
 The primary evidence is the pinned-firmware audit in `tools/firmware_audit/source_names.py`, backed up by public protocol projects and RØDE's own documentation.
 

@@ -1,10 +1,10 @@
 package packaging
 
-// Pure-Go verification of universal macOS binaries, bundles, update packages,
-// and installer .pkg archives (so tests run on non-macOS hosts without lipo or
-// otool). Checks that every Mach-O contains arm64 + x86_64 slices targeting
-// macOS <= LSMinimumSystemVersion, loads only system or co-located libraries,
-// and that the .pkg advertises both architectures.
+// Verifies universal macOS binaries, bundles, update packages, and installer
+// .pkg archives in Go using debug/macho so tests run on non-macOS hosts too.
+// Checks that every Mach-O contains arm64 + x86_64 slices targeting macOS <=
+// LSMinimumSystemVersion, loads only system or co-located libraries, and that
+// the .pkg advertises both architectures.
 
 import (
 	"archive/zip"

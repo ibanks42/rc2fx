@@ -1,7 +1,7 @@
 package platform
 
 // macOS update-disk identification from `ioreg` and `diskutil` property
-// lists. Pure parsing, so it is tested on every platform.
+// lists. Parses command output directly, so tests run on every platform.
 
 import (
 	"math"

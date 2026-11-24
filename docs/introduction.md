@@ -31,7 +31,7 @@ you want to tweak something.
   clicks in mind, paired with an optional voice gate that quiets your mic
   between phrases.
 - **Chat Mix Out noise suppression**, so people on Discord or Zoom hear every
-  mic in the room cleaned up while your Smart Pads and music stay untouched.
+  mic in the room cleaned up while Smart Pads and music bypass suppression.
 - **Compressor, limiter, high-pass filter, and gain**, which you can drag into
   any order.
 - **Effects on outputs too**, including all four headphone outputs, monitors,
@@ -60,7 +60,7 @@ RC2FX works on 25 channels on the Pro II:
   port.
 - The **RC2FX desktop app** ([Getting started](user/getting-started.md)).
 
-You don't need to connect the mixer to Wi-Fi, set up SSH, or touch a terminal.
+Everything runs over USB 1 from the desktop app.
 
 ## Getting started
 

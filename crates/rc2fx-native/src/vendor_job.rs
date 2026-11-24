@@ -4,8 +4,7 @@
 //! The vendor lambda captures three stack locals by reference even though it
 //! runs asynchronously after `Mixer::Process` returns. We intercept enqueue,
 //! copy those values into the vendor's existing 32-byte lambda allocation, and
-//! pass pointers to the owned copy when the body runs. No extra allocations or
-//! threads are introduced.
+//! pass pointers to the owned copy when the body runs.
 #![cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
 use rc2fx_firmware::Profile;
 use std::{

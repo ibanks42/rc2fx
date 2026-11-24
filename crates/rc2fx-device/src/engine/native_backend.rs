@@ -1,5 +1,5 @@
-//! The controller's front door for a device-local native callback owner.
-//! This module neither loads the audit library nor launches/restarts vendor audio.
+//! Control-socket client connecting the controller to an already-running
+//! device-local native audio owner.
 use crate::{coordinator::Error, recent::PathRecent, store::PreparedSave};
 use rc2fx_core::{Config, Meter, MeterType, TargetKind, TargetMeter};
 use rc2fx_native_control::{

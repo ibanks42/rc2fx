@@ -1,4 +1,4 @@
-//! Pure device configuration and control API types (no audio, network, or GUI runtime).
+//! Device configuration, control API types, and EQ coefficient calculation.
 pub mod diagnostics;
 pub mod eq;
 pub mod image_check;

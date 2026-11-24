@@ -69,8 +69,8 @@ The target directory must not exist yet, must sit outside any git checkout, and
 must have an existing parent directory. Put it on an encrypted local disk, not
 in a cloud-synced folder. The command creates owner-only directories and files,
 four separate RSA-3072 PEM keys, and a signed public root with one signer per
-role and a three-year expiry. It verifies the root before writing `COMPLETE`,
-and never touches the repo, calls GitHub, or publishes anything. If it errors
+role and a three-year expiry. It writes only to the target directory and
+verifies the root before writing `COMPLETE`. If it errors
 out, it leaves the partial directory private. Don't use it unless `COMPLETE`
 is there.
 
@@ -121,9 +121,9 @@ once the first signed release and its metadata are live.
    `mise.toml` via `jdx/mise-action` (alongside `cargo-zigbuild` and
    `cargo-about`), builds and tests the mixer, packs the
    fixed-file envelope, firmware catalog, and license notices, and uploads an
-   unsigned artifact with no signing keys in sight.
-   With **dry-run** enabled, the run stops here: it never asks for the
-   `mixer-signing` approval, signs nothing, and pushes or publishes nothing.
+   unsigned artifact.
+   With **dry-run** enabled, the run stops here before the `mixer-signing`
+   approval step.
 3. Inspect the artifact and approve the `mixer-signing` job. It re-validates
    the entire payload and catalog, then signs the TUF `targets`, `snapshot`,
    and `timestamp` metadata.
@@ -192,8 +192,8 @@ When the drive can't be used (for example, RØDE is already using the slot, the
 mixer is running an older build, or the host can't mount it), the app falls
 back to streaming chunks over USB 1. The mixer then verifies the upload using
 the same trust root and metadata the desktop trusts and swaps `/opt/rc2fx` in
-place. RØDE's files, its audio engine binary, and the firmware stay untouched;
-audio goes silent for a few seconds while the audio engine restarts. See
+place. Only `/opt/rc2fx` and its shims are updated; audio goes silent for a few
+seconds while the audio engine restarts. See
 [the controller API](../reference/api.md#in-place-updates) for the endpoints.
 
 Verification happens on the mixer itself against the root compiled into
@@ -285,7 +285,7 @@ under 1 MiB. Mixers advertising `inPlaceUpdates: 2` expose
 `GET api/v1/update/installed` with a digest for every payload file under
 `/opt/rc2fx`. The app diffs the signed envelope against that list and uploads a
 delta with `"encoding": "delta-1"` and its byte length as `uploadSize`. Older
-mixers respond with `400`, and the app simply falls back to uploading the full
+mixers respond with `400`, and the app falls back to uploading the full
 envelope.
 
 The delta format (crate `rc2fx-delta`) is a series of ASCII headers followed by

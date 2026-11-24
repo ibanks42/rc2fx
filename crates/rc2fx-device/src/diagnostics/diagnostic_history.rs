@@ -1,5 +1,5 @@
-//! Bounded main-service history. Only control/manager threads call this module.
-//! Records contain no audio and are never relabeled across generation changes.
+//! Bounded control-thread diagnostics history of telemetry samples and events,
+//! keyed by engine generation.
 use rc2fx_core::{
     DeviceState, EngineStatus, Meter, Performance, RoutingStatus, SelectionStatus, TargetMeter,
 };

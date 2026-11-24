@@ -10,7 +10,7 @@ audio passes through RØDE's audio engine in 2.3 ms blocks (about 430 times a
 second).
 
 RC2FX loads into that engine as a shared library when the mixer starts. On each
-block, it runs your enabled effects and leaves every other channel untouched.
+block, it runs your enabled effects and passes every other channel through.
 Because it runs directly inside RØDE's engine, there are no extra virtual
 routing hops and zero CPU load on your computer.
 
@@ -49,5 +49,5 @@ in the desktop app, changes are sent over USB 1 and saved automatically. Most
 updates swap in cleanly between two audio blocks with no dropout or restart.
 
 RC2FX shares the same USB 1 control link that RØDE's app uses, in a format
-RØDE's software ignores. You don't need Wi-Fi, Ethernet, or extra drivers, and
-USB audio isn't affected.
+RØDE's software ignores, running over the existing USB 1 cable alongside USB
+audio.

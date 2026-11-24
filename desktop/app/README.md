@@ -1,9 +1,9 @@
 # Desktop app
 
 This is the RC2FX desktop app, written in Go on GPUI-kit through goui-kit
-(packages `app`, its subpackages, and `cmd/rc2fx`). It communicates
-with `rc2fxd` on the mixer over USB 1 with no background daemon. Once you close
-the app, audio processing keeps running on the mixer.
+(packages `app`, its subpackages, and `cmd/rc2fx`). It communicates directly
+with `rc2fxd` on the mixer over USB 1. Once you close the app, audio
+processing keeps running on the mixer.
 
 ```sh
 just app        # go -C tools/xtask run . app: development build in target/debug, then run it
@@ -108,8 +108,8 @@ suppression page with a one-time hint above the switch. Once dismissed or used,
 the hint never comes back.
 
 In `rc2fxdev` builds, `RC2FX_DEV_PAGE=flow:<state>` opens any task state using
-synthetic data with no mixer, helper, or network required; valid states are
-listed in `flow_fixtures_on.go` (for example `flow:B4`).
+synthetic data offline; valid states are listed in `flow_fixtures_on.go` (for
+example `flow:B4`).
 `RC2FX_DEV_AUTOFLASH_FIX=on|off` controls whether unattended autopilot flashes
 (`RC2FX_DEV_AUTOFLASH`) run the storage fix first; when unset, it follows the
 normal Install rule (only when RC2FX isn't running).
@@ -122,8 +122,7 @@ the middle, and keeps **Settings** at the bottom.
 Channels are ordered with processed channels first, then inputs assigned to
 faders in the current show, then headphones and outputs. SMART Pads (source ID
 11) are excluded from source lists and editor lookups, including cached
-inventories, since RC2FX doesn't process pads and leaves RØDE's pad playback
-untouched.
+inventories, since RØDE handles pad playback directly.
 
 Clicking a channel opens its editor. The effect chain runs left to right: click
 a stage to edit it, or drag one onto another to reorder. The **Processing**
@@ -157,7 +156,7 @@ If two consecutive complete assignment readings agree that an input is no
 longer in the show, the runtime turns processing off for that input while
 preserving its effect settings. The same check runs at startup. Moving a source
 to a different fader preserves its identity, and failed or partial readings
-leave processing untouched.
+keep the current processing state.
 
 When a removed source returns to the show, it stays off until you re-enable it.
 If you manually turn on an absent source, the runtime turns it back off once

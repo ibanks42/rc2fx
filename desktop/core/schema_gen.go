@@ -659,8 +659,8 @@ func (v *USBLinkState) UnmarshalText(text []byte) error {
 }
 
 type USBStatus struct {
-	// Pro II USB 1 only. This does not describe USB 2, network connectivity,
-	// host playback activity, or whether a configured link carries audio.
+	// Link state of the Pro II's USB 1 gadget port (hardware link state only,
+	// not audio activity).
 	USB1 USBLinkState `json:"usb1"`
 }
 

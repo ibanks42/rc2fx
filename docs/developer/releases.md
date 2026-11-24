@@ -90,8 +90,7 @@ A full run packages the app for Linux, Windows, and macOS, pushes a
 GitHub release, and publishes it once every artifact passes verification (see
 [Workflow jobs](#workflow-jobs)).
 
-Dry runs build everything without pushing commits, creating tags, or publishing
-anything.
+Dry runs stop after building and verifying packages.
 
 ## Version selection
 
@@ -355,8 +354,8 @@ parallel and publishes only once every package is verified.
    signed. It requires reviewer approval in the `mixer-signing` environment and
    is skipped unless `APP_UPDATES_ENABLED` is `true`.
 
-Dry runs build and verify all packages without pushing, creating a release, or
-signing. Only one Release workflow runs at a time; concurrent runs queue.
+Dry runs stop after building and verifying all packages. Only one Release
+workflow runs at a time; concurrent runs queue.
 
 If any platform build fails, nothing is pushed or created. Click **Re-run
 failed jobs** on the **Release** run to retry it.
@@ -377,8 +376,7 @@ The **Check** workflow lints, tests, and audits pushes and pull requests to
   Rust, Python, C, shell, and GitHub workflows (failing if any tool is
   missing).
 - **desktop** checks the Go app and `tools/xtask` on Ubuntu, Windows, and
-  macOS: schema check and a check that
-  `tools/xtask` stays pure Go and runs on Linux; `go vet` and `go test` on all
+  macOS: schema check and a `CGO_ENABLED=0` check on `tools/xtask` on Linux; `go vet` and `go test` on all
   non-UI `desktop/` packages
   (everything except `app` and `cmd/rc2fx`), `transport` tests with
   `mockmixer`, a vet pass with `rc2fxdev` and `embedded` (using an empty
@@ -562,10 +560,9 @@ shipping the first release after an app version that checks signed updates.
 
 **Renew app metadata** (`app-metadata.yml`) runs twice weekly in the
 `mixer-renewal` environment and can also be triggered manually. It runs
-`go -C tools/xtask run . app-refresh` to re-sign only snapshot and timestamp (for
-seven days) while leaving `targets.json` untouched, so it cannot authorize new
-assets or
-extend past the root's expiry. If renewal fails, investigate before the
+`go -C tools/xtask run . app-refresh` to re-sign only `snapshot.json` and
+`timestamp.json` (for seven days), so it cannot authorize new assets or extend
+past the root's expiry. If renewal fails, investigate before the
 seven-day window runs out. Both signing and renewal run only from `main` and
 share one concurrency group so they never race on `app-metadata`.
 
@@ -635,8 +632,7 @@ python3 .github/scripts/test_update_history.py
 ```
 
 The GitHub Actions workflows themselves only execute on GitHub. Use a
-**Release** dry run to exercise full packaging without pushing, publishing, or
-signing.
+**Release** dry run to test full packaging without publishing.
 
 ## Before the first release
 

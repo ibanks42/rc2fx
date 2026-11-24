@@ -2,9 +2,9 @@
 
 package app
 
-// Synthetic guided-flow states for dev builds (`RC2FX_DEV_PAGE=flow:<state>`),
-// with no mixer, helper, or network activity. Fixture installers have a closed
-// runner so requests are no-ops.
+// Synthetic guided-flow states for dev builds (`RC2FX_DEV_PAGE=flow:<state>`).
+// Each fixture populates an in-memory installer state with a closed runner so
+// UI requests return immediately as no-ops.
 //
 // Supported states:
 //

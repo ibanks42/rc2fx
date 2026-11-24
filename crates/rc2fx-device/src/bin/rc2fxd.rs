@@ -1,4 +1,5 @@
-//! Device entry point. No native work, storage mutation, or threads on --help.
+//! Device controller entry point (`rc2fxd`). `--help` and `--version` exit
+//! immediately after argument parsing.
 use rc2fx_device::{
     api, controller::Controller, coordinator::Coordinator, native_backend::Runtime, store::Store,
 };
@@ -240,7 +241,7 @@ fn signals() -> io::Result<()> {
     }
     Ok(())
 }
-/// Async wait handle for SIGINT/SIGTERM backed by an eventfd (no polling timer).
+/// Async wait handle for SIGINT/SIGTERM backed by an eventfd.
 struct Stop(std::os::fd::RawFd);
 impl Stop {
     /// Creates the eventfd before installing handlers so no signal fires without it.

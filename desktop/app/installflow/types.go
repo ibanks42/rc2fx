@@ -11,8 +11,8 @@
 // RC2FX without reflashing when staying on the same RØDE firmware; Model.InPlace
 // tracks that path (see inplace.go).
 //
-// Model is purely a decision engine: methods return the next installer.Request
-// to run (or nil). The UI runs each returned request once, in order, via
+// Model is a decision engine: methods return the next installer.Request to run
+// (or nil). The UI runs each returned request once, in order, via
 // installer.Engine.Handle on a worker and feeds the result back to Model.Finish.
 package installflow
 

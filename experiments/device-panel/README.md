@@ -38,7 +38,7 @@ The Rust tests drive the actual C client against a local `rc2fxd` controller soc
 
 ## RAM trial
 
-Running a trial restarts the mixer's GUI (not audio). Only run it when a GUI restart is expected and no other mixer experiment is active. It leaves the desktop app and any unsaved drafts untouched.
+Running a trial restarts only the mixer's GUI (not audio). Only run it when a GUI restart is expected and no other mixer experiment is active.
 
 ```sh
 export RC2FX_MIXER_KEY="$HOME/.ssh/rc2fx_rodecaster_pro_ii"
@@ -66,7 +66,7 @@ Clean restoration depends on the vendor process exiting and its supervisor behav
 
 ## Controller socket
 
-Passing `--ui-socket /run/rc2fx/ui.sock` to `rc2fxd` (which the standard mixer supervisor does) opens an owner-only local Unix socket handled by the same coordinator as USB control. It introduces no TCP ports, separate store, direct native-transaction client, vendor SyncTree writes, or direct config file edits. See `crates/rc2fx-device/src/control/ui_control.rs` for the versioned wire format; both sides enforce packet and client limits.
+Passing `--ui-socket /run/rc2fx/ui.sock` to `rc2fxd` (which the standard mixer supervisor does) opens an owner-only local Unix socket handled by the same coordinator and settings store as USB control. See `crates/rc2fx-device/src/control/ui_control.rs` for the versioned wire format; both sides enforce packet and client limits.
 
 A dedicated C worker thread handles all socket I/O off the render and input threads, sending the revision, generation, and exact target value from whatever screen the user tapped. Replies can indicate a change is saved on disk but not yet applied to audio. Lost write replies aren't replayed; only read-only snapshots auto-resume. If the socket is down, the launcher and **Close** still function while settings buttons disable themselves. `rc2fx-ui-status` queries the same socket read-only.
 
@@ -74,7 +74,7 @@ Updating `rc2fxd` itself normally restarts audio through the supervisor, so alwa
 
 ## Rendering and input
 
-The module only attaches to the Pro II GUI matching SHA-256 `aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca`. Imported call sites are pinned to the firmware map with zero instruction patching and no separately compiled JUCE widgets.
+The module only attaches to the Pro II GUI matching SHA-256 `aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca`. Imported call sites are pinned to the firmware map and intercepted through C import hooks.
 
 ### Drawing
 

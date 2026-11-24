@@ -161,7 +161,8 @@ static uintptr_t call_site(void *address) {
   return (uintptr_t)__builtin_extract_return_addr(address) - main_base;
 }
 
-/* Minimal standalone SHA-256 to avoid pulling in OpenSSL or libjuce. */
+/* Inline SHA-256 implementation so the audit module does not link OpenSSL or
+ * libjuce. */
 struct sha256 {
   uint32_t h[8];
   uint64_t bytes;

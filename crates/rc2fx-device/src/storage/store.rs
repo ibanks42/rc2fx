@@ -1,5 +1,5 @@
-//! Saved effects and presets. The controller serializes mutations and owns all
-//! engine admission/lifecycle work; Store never starts or controls audio.
+//! Durable saved effects and presets. The controller serializes mutations and
+//! coordinates engine admission and lifecycle around store commits.
 use crate::persistence::{CommitError, Directory, random_id};
 use rc2fx_core::{Config, ConfigUpdate, PresetSummary, SCHEMA_VERSION, Target};
 use serde::{Deserialize, Serialize};

@@ -779,8 +779,8 @@ pub enum UsbLinkState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UsbStatus {
-    /// Pro II USB 1 only. This does not describe USB 2, network connectivity,
-    /// host playback activity, or whether a configured link carries audio.
+    /// Link state of the Pro II's USB 1 gadget port (hardware link state only,
+    /// not audio activity).
     pub usb1: UsbLinkState,
 }
 
