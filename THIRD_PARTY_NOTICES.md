@@ -100,7 +100,7 @@ can rebuild the runtime with a modified libfuse.
 
 ## Full license texts
 
-`./xtask package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+`go -C tools/xtask run . package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
 for the mixer workspace and the mixer library and combines its reports with
 these notices, the training-data credits, the project license texts, the Go
 standard library's and Go modules' licenses, and libgouikit's notices. The
@@ -112,7 +112,7 @@ notices, which only packaging adds, install cargo-about
 (`cargo install --locked cargo-about`) and run:
 
 ```sh
-./xtask licenses LICENSES.html
+go -C tools/xtask run . licenses LICENSES.html
 ```
 
 ## RØDE

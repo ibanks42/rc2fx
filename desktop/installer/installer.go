@@ -20,9 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/internal/sjson"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
@@ -48,7 +48,7 @@ func PayloadMode() string {
 }
 
 // KeepPayloadMode keeps the payload-mode marker in the executable, where
-// `./xtask package` looks for it. Call it once from main. A discarded call
+// `go -C tools/xtask run . package` looks for it. Call it once from main. A discarded call
 // such as `_ = PayloadMode()` is inlined and removed by the compiler, and the
 // linker then drops the marker.
 func KeepPayloadMode() {

@@ -79,7 +79,7 @@ jobs:
           python3 .github/scripts/publish_app.py prepare --tag "$TAG" --dir target/app-release "${built[@]}"
       - name: Build signing tool without signing credentials
         if: steps.release.outputs.sign == 'true'
-        run: CGO_ENABLED=0 go -C desktop build -o "$RUNNER_TEMP/rc2fx-xtask" ./cmd/xtask
+        run: CGO_ENABLED=0 go -C tools/xtask build -o "$RUNNER_TEMP/rc2fx-xtask" .
       - name: Sign the release assets
         if: steps.release.outputs.sign == 'true'
         env:

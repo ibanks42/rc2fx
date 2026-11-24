@@ -31,7 +31,7 @@ import (
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer/trust"
-	"github.com/ibanks42/rc2fx/desktop/internal/tuf"
+	"github.com/ibanks42/rc2fx/desktop/tuf"
 )
 
 var trustedRoot = trust.Root()

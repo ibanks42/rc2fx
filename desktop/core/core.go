@@ -9,7 +9,7 @@ package core
 import (
 	"math"
 
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 // CoreError is a user-facing error returned by core operations.

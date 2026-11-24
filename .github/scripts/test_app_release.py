@@ -89,7 +89,7 @@ class Publication(unittest.TestCase):
         return directory, message
 
     def sign(self, tag, directory, version=None, roots=None):
-        """Write stub metadata matching `./xtask app-sign` output (without real signatures)."""
+        """Write stub metadata matching `go -C tools/xtask run . app-sign` output (without real signatures)."""
         self.sequence += 1
         version = version or tag[1:]
         out = self.temp / f"signed-{self.sequence}"

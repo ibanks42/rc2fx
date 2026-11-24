@@ -1,18 +1,18 @@
 //go:build velopack
 
 // Package vpkc wraps Velopack's C library (velopack_libc 1.3.39-g8d2844f,
-// matching .github/scripts/setup-vpk.sh) for startup hooks and UpdateManager
-// backed by selfupdate.SignedFeed.
+// matching config/velopack.json and `go -C tools/xtask run . fetch-vpk`) for
+// startup hooks and UpdateManager backed by selfupdate.SignedFeed.
 //
-// Enabled with the `velopack` build tag after `./xtask fetch-velopack` (or
-// `just setup`) populates desktop/third_party/velopack. Linux and macOS link
-// statically; Windows links velopack_libc.dll (shipped beside rc2fx.exe) via a
-// MinGW import library.
+// Enabled with the `velopack` build tag after
+// `go -C tools/xtask run . fetch-velopack` (or `just setup`) populates
+// desktop/third_party/velopack. Linux and macOS link statically; Windows links
+// velopack_libc.dll (shipped beside rc2fx.exe) via a MinGW import library.
 //
-// -lvelopack_libc is passed via CGO_LDFLAGS by ./xtask app and ./xtask package
-// instead of a #cgo directive here, because the static archives include LLVM
-// bitcode that Go's #cgo loader rejects. The #cgo directives below supply the
-// required system libraries.
+// -lvelopack_libc is passed via CGO_LDFLAGS by `go -C tools/xtask run . app` and
+// `go -C tools/xtask run . package` instead of a #cgo directive here, because the
+// static archives include LLVM bitcode that Go's #cgo loader rejects. The #cgo
+// directives below supply the required system libraries.
 package vpkc
 
 /*

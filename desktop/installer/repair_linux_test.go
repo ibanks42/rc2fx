@@ -16,8 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/ext2fs"
-	"github.com/ibanks42/rc2fx/desktop/internal/common"
 	"github.com/ibanks42/rc2fx/desktop/rodecaster/platform"
 )
 

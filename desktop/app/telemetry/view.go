@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 // Snapshot captures the app state needed to render the Telemetry section.

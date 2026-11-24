@@ -13,12 +13,12 @@ isn't possible (see [In-place updates](#in-place-updates)).
 
 `just app` and `just desktop` don't need a staged mixer runtime. If you want an
 optional offline payload baked in, use `just app-embedded`,
-`just desktop-embedded`, or `./xtask app --embedded` (which sets the `embedded`
-build tag) after running `./xtask mixer-build`. Package that mode with
-`./xtask package --embedded`. Plain `just package` builds download-only, and
-`--skip-build` still checks that the binary matches the requested mode. Using
-an embedded payload is always an explicit choice in the installer, never an
-automatic fallback when the network fails.
+`just desktop-embedded`, or `go -C tools/xtask run . app --embedded` (which sets
+the `embedded` build tag) after running `just mixer-build`. Package that mode
+with `go -C tools/xtask run . package --embedded`. Plain `just package` builds
+download-only, and `--skip-build` still checks that the binary matches the
+requested mode. Using an embedded payload is always an explicit choice in the
+installer, never an automatic fallback when the network fails.
 
 Download-only builds ship with the public update trust root and installer
 logic, but no firmware catalog or mixer binaries. Until a signed catalog is
@@ -62,7 +62,7 @@ Generate the production root on the machine that will hold the offline root
 private key. For a single custodian on Linux or macOS:
 
 ```sh
-./xtask mixer-keys "$HOME/rc2fx-signing"
+go -C tools/xtask run . mixer-keys "$HOME/rc2fx-signing"
 ```
 
 The target directory must not exist yet, must sit outside any git checkout, and
@@ -154,8 +154,9 @@ python3 .github/scripts/publish_mixer.py --resume PACKAGE SIGNED_METADATA
 If it failed before the payload was published, just delete the draft
 `mixer-vVERSION` release and dispatch **Mixer release** again.
 
-Locally, the equivalents are `./xtask mixer-package NEW_DIRECTORY` and
-`./xtask mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY TIMESTAMP_KEY`.
+Locally, the equivalents are `go -C tools/xtask run . mixer-package NEW_DIRECTORY`
+and
+`go -C tools/xtask run . mixer-sign ROOT PACKAGE OUT SEQUENCE EXPIRES TARGETS_KEY SNAPSHOT_KEY TIMESTAMP_KEY`.
 Sequence numbers have to strictly increase (CI uses UTC Unix seconds), `EXPIRES`
 is an RFC 3339 timestamp, and all key arguments are file paths, not raw PEM
 strings.
@@ -165,10 +166,10 @@ To test a mixer release locally without publishing, build the app with
 `RC2FX_DEV_MIXER_REPOSITORY=FOLDER`, where `FOLDER` mirrors the published
 layout (`FOLDER/metadata/` for the role files and `FOLDER/mixer-vVERSION/` for
 the targets). Build the app and mixer against a throwaway root from
-`./xtask mixer-keys` in `config/mixer-update-root.json` and sign with its
-throwaway keys (never production keys). Builds without `rc2fxdev` ignore that
-env var. Since flashing runs inside the `pkexec` helper (which doesn't see the
-env var), you can only test in-place updates this way.
+`go -C tools/xtask run . mixer-keys` in `config/mixer-update-root.json` and sign
+with its throwaway keys (never production keys). Builds without `rc2fxdev`
+ignore that env var. Since flashing runs inside the `pkexec` helper (which
+doesn't see the env var), you can only test in-place updates this way.
 
 Fixing a broken payload always means cutting a new mixer version. The publisher
 refuses to overwrite an existing mixer release, and GitHub enforces the same
@@ -204,13 +205,13 @@ release:
    [sigstore-tuf](https://github.com/sigstore/sigstore-rust); the desktop app
    parses metadata with [go-tuf](https://github.com/theupdateframework/go-tuf)
    and mirrors sigstore-tuf's refresh, rollback, and expiry rules in
-   `desktop/internal/tuf` so both sides accept the exact same repos.
-   Signing uses `./xtask` (`desktop/internal/xtask/tufsign`, matching `tough`'s
-   output) and `tuftool`, verified against Rust in
-   `crates/rc2fx-device/tests/xtask_tuf_fixtures.rs` via
-   `desktop/internal/interop`. A
-   root listing the same key under two IDs for a role is rejected because the
-   verifier counts signatures by key ID.
+   `desktop/tuf` so both sides accept the exact same repos. Signing uses
+   `tools/xtask` (`tools/xtask/internal/tufsign`, matching `tough`'s output) and
+   `tuftool`, verified against Rust
+   (`crates/rc2fx-device/tests/xtask_tuf_fixtures.rs`) and Go
+   (`desktop/installer/xtask_fixtures_test.go`) using test repositories built
+   by `go -C tools/xtask run . tuf-test-repos`. A root listing the same key under two IDs for
+   a role is rejected because the verifier counts signatures by key ID.
 2. Exactly one target may carry `rc2fxMixer` compatibility claims, and its
    version, length, and SHA-256 have to match the request and uploaded bytes.
 3. Its `firmwareProfiles` must include the profile validated for this running
@@ -386,10 +387,10 @@ already-published release without bumping the version (for instance, right
 after a key rotation).
 
 Keep the original package directory (including its compatibility file), run
-`./xtask mixer-sign` with that package, the current trusted root, a clean
-output directory, and a sequence number higher than the currently published
-targets, snapshot, and timestamp versions. Inspect the signed metadata, then
-run:
+`go -C tools/xtask run . mixer-sign` with that package, the current trusted root,
+a clean output directory, and a sequence number higher than the currently
+published targets, snapshot, and timestamp versions. Inspect the signed
+metadata, then run:
 
 ```sh
 python3 .github/scripts/publish_mixer.py --reauthorize PACKAGE SIGNED_METADATA

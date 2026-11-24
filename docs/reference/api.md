@@ -2,7 +2,7 @@
 
 `rc2fxd` serves the desktop app over USB 1. Every request carries a method, an `api/v1/...` path, and an optional JSON body up to 512 KiB, framed inside the RC2FX HID reports documented in [USB control](usb-control.md). Replies come back as a status code and a JSON body. There's no network listener.
 
-You can poke the API from any computer plugged into USB 1 with `go -C desktop run ./cmd/usb-probe`, or fire off a single request using `./xtask mixer api METHOD PATH [BODY|@file]`.
+You can poke the API from any computer plugged into USB 1 with `go -C desktop run ./cmd/usb-probe`, or fire off a single request using `go -C tools/xtask run . mixer api METHOD PATH [BODY|@file]`.
 
 | Method and path | Body | Result |
 | --- | --- | --- |

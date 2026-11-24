@@ -47,9 +47,9 @@ func fail(why string) {
 		"In a source checkout the payload is target/mixer (runtime) and\n"+
 		"mixer/scripts (scripts), with config/firmware-profiles.json and\n"+
 		"config/mixer-release.json:\n"+
-		"- `./xtask mixer-build` builds and stages it;\n"+
+		"- `go -C tools/xtask run . mixer-build` builds and stages it;\n"+
 		"- if target/mixer is a promoted link to a verified bundle, keep it and\n"+
-		"  do not run a generic rebuild: `./xtask mixer install` deploys the\n"+
+		"  do not run a generic rebuild: `go -C tools/xtask run . mixer install` deploys the\n"+
 		"  staged bundle, and the build refuses to replace the link.\n"+
 		"In a release folder the same files are runtime/ and mixer/scripts.\n"+
 		"Then run `go run ./cmd/stage-payload` in desktop/ and\n"+

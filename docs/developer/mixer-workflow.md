@@ -186,6 +186,6 @@ past that boundary and can be carved from a read-only image of p4.
 
 `target/mixer` is normally a build output directory. If you replace it with a
 symlink pointing to another bundle, the build refuses to overwrite it, and any
-recipe that rebuilds first stops at that guard. Run `./xtask mixer install` to
-deploy the symlinked bundle as-is, or remove the symlink to go back to normal
-builds.
+recipe that rebuilds first stops at that guard. Run
+`go -C tools/xtask run . mixer install` to deploy the symlinked bundle as-is, or
+remove the symlink to go back to normal builds.

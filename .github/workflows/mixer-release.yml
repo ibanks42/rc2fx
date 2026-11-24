@@ -43,9 +43,11 @@ jobs:
       - uses: actions/setup-go@v6.0.0
         with:
           go-version-file: desktop/go.mod
-          cache-dependency-path: desktop/go.sum
+          cache-dependency-path: |
+            desktop/go.sum
+            tools/xtask/go.sum
       - name: Set up verified Zig
-        run: bash .github/scripts/setup-release-tools.sh zig
+        run: go -C tools/xtask run . fetch-zig "$RUNNER_TEMP/rc2fx-tools"
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2
         with:
           tool: cargo-zigbuild@0.24.0,cargo-about@0.8.4
@@ -54,13 +56,13 @@ jobs:
         run: |
           rustup component add rust-docs
           python3 .github/scripts/test_publish_mixer.py
-          (cd desktop && CGO_ENABLED=0 go test ./internal/xtask/...)
+          (cd tools/xtask && CGO_ENABLED=0 go test ./...)
           # Run installer tests with cgo enabled since storage repair links libext2fs.
           (cd desktop && go test ./installer/...)
-          ./xtask mixer-build
+          go -C tools/xtask run . mixer-build
           # Clear any cached target/mixer-release since mixer-package expects a fresh directory.
           rm -rf target/mixer-release
-          ./xtask mixer-package target/mixer-release
+          go -C tools/xtask run . mixer-package target/mixer-release
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: unsigned-mixer
@@ -99,7 +101,7 @@ jobs:
           name: unsigned-mixer
           path: target/mixer-release
       - name: Build signing tool without signing credentials
-        run: CGO_ENABLED=0 go -C desktop build -o "$RUNNER_TEMP/rc2fx-xtask" ./cmd/xtask
+        run: CGO_ENABLED=0 go -C tools/xtask build -o "$RUNNER_TEMP/rc2fx-xtask" .
       - name: Sign verified release payload
         env:
           MIXER_TARGETS_KEY: ${{ secrets.MIXER_TARGETS_KEY }}

@@ -14,7 +14,7 @@ doesn't patch any instructions or draw anything itself.
 
 ## Building
 
-This is a standalone C module built outside Cargo. `./xtask mixer-build`
+This is a standalone C module built outside Cargo. `go -C tools/xtask run . mixer-build`
 compiles `gui_pacing.c` for the mixer using zig, with no feature flags.
 
 `gui_pacing.c` includes `gui_partial.c` (partial-region conversion) and

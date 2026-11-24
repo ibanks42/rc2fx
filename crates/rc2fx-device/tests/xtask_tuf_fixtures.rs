@@ -17,16 +17,16 @@ fn generated_repos() -> &'static Path {
         let dir = std::env::temp_dir().join(format!("rc2fx-xtask-tuf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let desktop = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../desktop");
+        let xtask = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/xtask");
         let output = Command::new("go")
-            .args(["run", "./internal/interop", "xtask-tuf"])
+            .args(["run", ".", "tuf-test-repos"])
             .arg(&dir)
-            .current_dir(&desktop)
+            .current_dir(&xtask)
             .output()
-            .expect("spawn `go run ./internal/interop xtask-tuf`");
+            .expect("spawn `go run . tuf-test-repos` in tools/xtask");
         assert!(
             output.status.success(),
-            "go interop xtask-tuf failed: {}",
+            "xtask tuf-test-repos failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         dir

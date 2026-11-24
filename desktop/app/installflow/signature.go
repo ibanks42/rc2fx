@@ -8,7 +8,7 @@ import (
 	"math"
 
 	"github.com/ibanks42/rc2fx/desktop/installer"
-	"github.com/ibanks42/rc2fx/desktop/internal/num"
+	"github.com/ibanks42/rc2fx/desktop/num"
 )
 
 type SignatureKind int
