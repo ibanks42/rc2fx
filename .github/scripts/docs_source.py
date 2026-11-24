@@ -2,10 +2,9 @@
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
-
+from pathlib import Path
 
 STABLE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 

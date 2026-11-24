@@ -123,7 +123,9 @@ class Run:
         if background:
             self.process = subprocess.Popen(command, env=env)
         else:
-            self.code = subprocess.run(command, env=env, timeout=60).returncode
+            self.code = subprocess.run(
+                command, env=env, timeout=60, check=False
+            ).returncode
 
     def rings(self):
         return (

@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import TempDirTestCase, run_rc2fx, sha256_bytes as sha, source_rc2fx  # noqa: E402
+from _common import TempDirTestCase, run_rc2fx, source_rc2fx
+from _common import sha256_bytes as sha
 
 FILES = {
     "usr/bin/rode-init-update-env.sh": b"#!/bin/sh\n# mounts the settings partition\n",

@@ -4,7 +4,6 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tarfile
@@ -12,12 +11,12 @@ import tempfile
 import unittest
 import warnings
 import zipfile
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".github/scripts/release.py"
 sys.path.insert(0, str(ROOT / ".github/scripts"))
-import release as rel  # noqa: E402
+import release as rel
 
 
 def _raw_zip(entries):
@@ -146,13 +145,15 @@ class ReleaseTests(unittest.TestCase):
         import release
 
         current = release.current_app_version(ROOT)
-        for rel, declaration in release.GO_VERSIONS.items():
-            text = (ROOT / rel).read_text()
+        for path, declaration in release.GO_VERSIONS.items():
+            text = (ROOT / path).read_text()
             found = re.findall(
-                rf'^({re.escape(declaration)} = )"([^"\n]*)"$', text, flags=re.M
+                rf'^({re.escape(declaration)} = )"([^"\n]*)"$', text, flags=re.MULTILINE
             )
-            self.assertEqual(len(found), 1, f"{rel}: {declaration}")
-            self.assertEqual(found[0][1], current, f"{rel}: {declaration} != {current}")
+            self.assertEqual(len(found), 1, f"{path}: {declaration}")
+            self.assertEqual(
+                found[0][1], current, f"{path}: {declaration} != {current}"
+            )
 
     def test_existing_tag_and_changelog(self):
         self.git("tag", "v0.1.0")

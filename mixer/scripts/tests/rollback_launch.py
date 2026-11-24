@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import RC2FX_SH, SCRIPTS_DIR, TempDirTestCase  # noqa: E402
+from _common import RC2FX_SH, SCRIPTS_DIR, TempDirTestCase
 
 SHIM = (SCRIPTS_DIR / "rc2fx-shim.sh").read_text()
 
@@ -42,7 +42,7 @@ class RollbackLaunch(TempDirTestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("RC2FX_")}
         env["RC2FX_DUO_MARKER"] = str(opt / "rc2fx" / "experimental-duo")
         result = subprocess.run(
-            ["bash", "-c", shim], env=env, capture_output=True, text=True
+            ["bash", "-c", shim], env=env, capture_output=True, text=True, check=False
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return opt, result.stdout
@@ -111,6 +111,7 @@ class RollbackLaunch(TempDirTestCase):
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "/opt/rc2fx/experimental-duo\n")

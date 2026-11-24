@@ -59,6 +59,7 @@ def source_rc2fx(
         cwd=cwd,
         env=full_env,
         timeout=timeout,
+        check=False,
     )
 
 
@@ -79,6 +80,7 @@ def run_rc2fx(
         cwd=cwd,
         env=full_env,
         timeout=timeout,
+        check=False,
     )
 
 

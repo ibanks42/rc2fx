@@ -18,16 +18,15 @@ Outputs:
 import argparse
 import json
 import os
-from dataclasses import dataclass, field
-from datetime import date as Date
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tomllib
 import urllib.error
 import urllib.request
-
+from dataclasses import dataclass, field
+from datetime import date as Date
+from pathlib import Path
 
 REPOSITORY = "ibanks42/rc2fx"
 FEED_SCHEMA_VERSION = 1
@@ -207,6 +206,7 @@ def tag_mapping(root, version):
             ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", ref],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         )
     except OSError as error:
         raise Problem(f"cannot run git: {error}") from error
@@ -220,6 +220,7 @@ def tag_mapping(root, version):
         ["git", "-C", str(root), "cat-file", "-e", f"{ref}:desktop/go.mod"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        check=False,
     )
     if go_desktop.returncode == 0:
         return Mapping(None, None, downloads_mixer=True)
@@ -628,14 +629,18 @@ def render_mixer_page(mixers, mappings_missing, notes_missing):
         when = f", released {release.date}" if release.date else ""
         if release.first_app_version is None:
             lines += [
-                f"Standalone mixer release{when}. "
-                f"[GitHub release](https://github.com/{REPOSITORY}/releases/tag/mixer-v{release.version}).",
+                (
+                    f"Standalone mixer release{when}. "
+                    f"[GitHub release](https://github.com/{REPOSITORY}/releases/tag/mixer-v{release.version})."
+                ),
                 "",
             ]
         else:
             lines += [
-                f"First bundled in RC2FX [{release.first_app_version}]"
-                f"(app.md#v{release.first_app_version}). First published {release.date}.",
+                (
+                    f"First bundled in RC2FX [{release.first_app_version}]"
+                    f"(app.md#v{release.first_app_version}). First published {release.date}."
+                ),
                 "",
             ]
         if release.notes is None:

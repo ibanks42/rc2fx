@@ -6,11 +6,11 @@ constants remain part of the comparison. LSDA exception paths participate in
 the register data-flow analysis.
 """
 
-from collections import deque
 import hashlib
 import json
+from collections import deque
 
-from capstone.arm64 import ARM64_OP_REG, ARM64_OP_IMM, ARM64_OP_MEM
+from capstone.arm64 import ARM64_OP_IMM, ARM64_OP_MEM, ARM64_OP_REG
 
 
 def reg_name(image, register):

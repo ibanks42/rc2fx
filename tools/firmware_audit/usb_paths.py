@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import struct
+from pathlib import Path
+
+from unicorn import arm64_const as regs
 
 from .__main__ import ROOT, checked_image
 from .canonical import canonical
 from .duo_routes import Machine, call_at, counterpart, source_table
-from unicorn import arm64_const as regs
 
 FRAMES = 112
 # Per-binary ELF addresses; cross_check() verifies relocation-normalized equivalence.
@@ -137,7 +138,7 @@ MIXER = 0xC0000  # the mixer object's second page group, x28 in Process
 
 
 def popcount_below(mask, bit):
-    return bin(mask & ((1 << bit) - 1)).count("1")
+    return (mask & ((1 << bit) - 1)).bit_count()
 
 
 def port_connections(image, port_events):
@@ -241,7 +242,7 @@ def input_gather(image, process, board, mask):
     assert mask & 0xF == 0xF, "the gather reads the first four inputs unconditionally"
     m = ProcessMachine(image, process)
     m.stubs[call_at(image, process + CALLS["board"])] = lambda: board
-    inputs = m.pointer_table(bin(mask).count("1"))
+    inputs = m.pointer_table((mask).bit_count())
     packed = m.allocate(8 * len(inputs))
     m.words(packed, *inputs)
     silence_table, silence = m.allocate(16), m.allocate(0x40)
@@ -291,7 +292,7 @@ def input_gather(image, process, board, mask):
 def output_gather(image, process, mask, hardware_count, owned_mask):
     """Emulate the assignment of packed outputs to fixed stack slots."""
     m = ProcessMachine(image, process)
-    outputs = m.pointer_table(bin(mask).count("1"))
+    outputs = m.pointer_table((mask).bit_count())
     packed = m.allocate(8 * len(outputs))
     m.words(packed, *outputs)
     scratch_table = m.allocate(16)
@@ -734,29 +735,41 @@ def audit(catalog, archives):
         "and processors replaced by recording vtables; static instruction checks for the bridge, "
         "active-mask source, registration loop and queued job.",
         "findings": [
-            "Source IDs 12-15 and 22-25 share internal slots 22-29, which the gather fills from JUCEJack in_13..in_20 "
-            "when those channels are active; the port-event handler connects usb1in:capture_3..10 to exactly those ports. "
-            "These are four physical stereo pairs, not eight independent paths: IDs 12/22, 13/23, 14/24, 15/25 alias.",
-            "Slots 30-37 (IDs 26-29) are in_21..in_28 (usb1in:capture_11..18). Slots 12-13 (ID 11, SMART Pads) are two "
-            "mixer-internal buffer channels (object mixer+0xc73c8, channel-table pointer at +0x10), never a JACK port.",
-            "JUCEJack out_15/16 (usb1out:playback_1/2) and out_19/20 (usb2out:playback_1/2) are written inside Mixer::Process, "
-            "before it returns, by the processor members at mixer+0xc2080 and mixer+0xc2090; the queued job only writes the "
-            "monitor outputs. Inactive (unconnected) outputs receive a mixer scratch buffer instead. In raw-strip multitrack "
-            "mode, the first source strip is copied to out_15/16 instead of the main mix processor running: the port is "
-            "still callback-owned, but its audio is not the stereo main mix in that mode. The synchronous Chat output "
-            "processor dispatch is also skipped in that branch; Secondary continues to be dispatched.",
-            "The active channel masks are rebuilt from jack_port_connected: an unconnected port is neither requested from "
-            "jackd nor processed by the mixer in that period, so a path bound to it stays unobserved.",
+            (
+                "Source IDs 12-15 and 22-25 share internal slots 22-29, which the gather fills from JUCEJack in_13..in_20 "
+                "when those channels are active; the port-event handler connects usb1in:capture_3..10 to exactly those ports. "
+                "These are four physical stereo pairs, not eight independent paths: IDs 12/22, 13/23, 14/24, 15/25 alias."
+            ),
+            (
+                "Slots 30-37 (IDs 26-29) are in_21..in_28 (usb1in:capture_11..18). Slots 12-13 (ID 11, SMART Pads) are two "
+                "mixer-internal buffer channels (object mixer+0xc73c8, channel-table pointer at +0x10), never a JACK port."
+            ),
+            (
+                "JUCEJack out_15/16 (usb1out:playback_1/2) and out_19/20 (usb2out:playback_1/2) are written inside Mixer::Process, "
+                "before it returns, by the processor members at mixer+0xc2080 and mixer+0xc2090; the queued job only writes the "
+                "monitor outputs. Inactive (unconnected) outputs receive a mixer scratch buffer instead. In raw-strip multitrack "
+                "mode, the first source strip is copied to out_15/16 instead of the main mix processor running: the port is "
+                "still callback-owned, but its audio is not the stereo main mix in that mode. The synchronous Chat output "
+                "processor dispatch is also skipped in that branch; Secondary continues to be dispatched."
+            ),
+            (
+                "The active channel masks are rebuilt from jack_port_connected: an unconnected port is neither requested from "
+                "jackd nor processed by the mixer in that period, so a path bound to it stays unobserved."
+            ),
         ],
         "limitations": [
-            "The bridge consumes up to 36 input / 46 output bits; the engine construction of the channel-name arrays passed "
-            "to JACK device open was not located. Sequential registration of old catalog in_35/36 implies registration of "
-            "in_13..20 whenever the old plan successfully binds. Old out_18 does not by itself prove out_19/20 exists. "
-            "The native pipeline requires every plan port registered before it can attach; absent new ports would prevent "
-            "the whole pipeline from attaching, not merely skip those paths. Live port counts and USB-mode startup tests "
-            "remain separate evidence.",
-            "Both raw-strip and table-copy multitrack branches are emulated with synthetic active masks; the writer of the "
-            "mask at mixer+0xc7d48 and its relationship to GUI multitrack mode settings were not located.",
+            (
+                "The bridge consumes up to 36 input / 46 output bits; the engine construction of the channel-name arrays passed "
+                "to JACK device open was not located. Sequential registration of old catalog in_35/36 implies registration of "
+                "in_13..20 whenever the old plan successfully binds. Old out_18 does not by itself prove out_19/20 exists. "
+                "The native pipeline requires every plan port registered before it can attach; absent new ports would prevent "
+                "the whole pipeline from attaching, not merely skip those paths. Live port counts and USB-mode startup tests "
+                "remain separate evidence."
+            ),
+            (
+                "Both raw-strip and table-copy multitrack branches are emulated with synthetic active masks; the writer of the "
+                "mask at mixer+0xc7d48 and its relationship to GUI multitrack mode settings were not located."
+            ),
             "Fixtures stub buffer constructors, processors, allocation, printf and memcpy; PAC/BTI hints are skipped.",
             "No device was flashed, probed or used for audio; live port snapshots are separate evidence.",
         ],

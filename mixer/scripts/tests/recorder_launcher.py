@@ -26,7 +26,7 @@ from _common import (
     sha256_bytes,
     source_rc2fx,
     write_executable,
-)  # noqa: E402
+)
 
 ORIGINAL = 555555
 CALLME = 666666
@@ -592,6 +592,7 @@ class RecorderTests(unittest.TestCase):
                 ["sha256sum", "-c", "--quiet", "SHA256SUMS"],
                 cwd=f.home,
                 capture_output=True,
+                check=False,
             ).returncode
             == 0
         )
@@ -657,9 +658,9 @@ class RecorderTests(unittest.TestCase):
 
     def test_a_corrupt_recorder_bundle_never_reaches_jackd(self):
         cases = {
-            "listed, missing": dict(files=("rc2fx_jackerr_snapshot",)),
-            "one listed": dict(listed=("librc2fx_jackerr.so",)),
-            "unlisted file": dict(listed=("rc2fx_jackerr_snapshot",)),
+            "listed, missing": {"files": ("rc2fx_jackerr_snapshot",)},
+            "one listed": {"listed": ("librc2fx_jackerr.so",)},
+            "unlisted file": {"listed": ("rc2fx_jackerr_snapshot",)},
         }
         for name, options in cases.items():
             with self.subTest(name):

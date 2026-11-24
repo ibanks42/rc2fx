@@ -14,7 +14,6 @@ from .canonical import canonical
 from .elf import Image
 from .emulate import exercise
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

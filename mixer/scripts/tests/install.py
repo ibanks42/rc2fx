@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import SCRIPTS_DIR, TempDirTestCase, sha256_bytes, write_executable  # noqa: E402
+from _common import SCRIPTS_DIR, TempDirTestCase, sha256_bytes, write_executable
 
 SCRIPT = SCRIPTS_DIR / "install.sh"
 GUI_CASE = "  gui-launch) "
@@ -106,6 +106,7 @@ class Install(TempDirTestCase):
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
 
     def retained_dirs(self):

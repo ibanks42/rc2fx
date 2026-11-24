@@ -121,6 +121,7 @@ class Binding(unittest.TestCase):
                 RC2FX_GAUGES=gauges,
                 RC2FX_SRC_MODE=src_mode,
             ),
+            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = [line.split() for line in result.stdout.splitlines()]
@@ -235,6 +236,7 @@ class Binding(unittest.TestCase):
             text=True,
             timeout=20,
             env=env,
+            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(
@@ -262,6 +264,7 @@ class Binding(unittest.TestCase):
             text=True,
             timeout=20,
             env=bad_env,
+            check=False,
         )
         self.assertEqual(bad_res.returncode, 0, bad_res.stderr)
         self.assertIn("RC2FX native plan refused:", bad_res.stderr)
@@ -291,6 +294,7 @@ class Required(unittest.TestCase):
             env=dict(
                 os.environ, RC2FX_REQUIRE_NATIVE="1", RC2FX_NATIVE_LIBRARY=str(missing)
             ),
+            check=False,
         )
         self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertIn(missing.name, result.stderr)

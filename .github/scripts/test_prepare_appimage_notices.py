@@ -207,8 +207,10 @@ class Runtime(unittest.TestCase):
         for runtime in [
             b"https://github.com/AppImage/type2-runtime/commit/0000000",
             b"no version string",
-            b"https://github.com/AppImage/type2-runtime/commit/3d17002 "
-            b"https://github.com/AppImage/type2-runtime/commit/dd6cebe",
+            (
+                b"https://github.com/AppImage/type2-runtime/commit/3d17002 "
+                b"https://github.com/AppImage/type2-runtime/commit/dd6cebe"
+            ),
         ]:
             with self.assertRaises(notices.Failure, msg=runtime):
                 notices.check_runtime_commit(runtime)
@@ -254,7 +256,7 @@ class Runtime(unittest.TestCase):
         # Keep the AlmaLinux build container's Go toolchain in sync with desktop/go.mod.
         root = SCRIPT.parent.parent.parent
         gomod = (root / "desktop/go.mod").read_text()
-        match = re.search(r"^toolchain go(\d+\.\d+\.\d+)$", gomod, re.M)
+        match = re.search(r"^toolchain go(\d+\.\d+\.\d+)$", gomod, re.MULTILINE)
         self.assertIsNotNone(match, "desktop/go.mod has no toolchain line")
         version = match[1]
         image = SCRIPT.with_name("package-check.Containerfile").read_text()

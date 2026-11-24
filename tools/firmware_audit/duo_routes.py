@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import struct
+from pathlib import Path
 
 from capstone.arm64 import ARM64_OP_MEM
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
+from unicorn import UC_ARCH_ARM64, UC_HOOK_CODE, UC_MODE_ARM, Uc
 from unicorn import arm64_const as regs
 
+from .__main__ import ROOT, checked_image
 from .canonical import canonical
-from .__main__ import checked_image, ROOT
 
 
 class Machine:
@@ -208,7 +208,7 @@ def monitor_fields(image, board):
         m.cpu.mem_write(mixer + 0xC7D40, struct.pack("<I", 7))
         m.register(29, m.stack)
         m.words(m.stack + sequence[2].operands[1].mem.disp, mixer + 0xC4000)
-        m.stubs[board] = lambda: model
+        m.stubs[board] = lambda model=model: model
         m.run(sequence[0].address, sequence[-1].address + 4)
         values[model] = struct.unpack("<III", m.cpu.mem_read(mixer + 0xC7D38, 12))
     assert values == {0: (10, 4, 7), 1: (8, 4, 5)}, values

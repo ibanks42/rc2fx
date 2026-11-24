@@ -4,15 +4,14 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tarfile
 import zipfile
+from pathlib import Path
 
 from update_history import parse_changelog
-
 
 STABLE = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 PACK_ID = "io.github.ibanks42.rc2fx"
@@ -40,7 +39,7 @@ def current_app_version(root=Path(".")):
     data = json.loads((root / APP_RELEASE).read_text())
     version = data.get("version")
     if not isinstance(version, str):
-        raise ValueError(f"{APP_RELEASE} has no version")
+        raise TypeError(f"{APP_RELEASE} has no version")
     version_tuple(version)
     return version
 
@@ -61,7 +60,7 @@ def update_versions(version):
     for path, declaration in GO_VERSIONS.items():
         text = path.read_text()
         pattern = rf'^({re.escape(declaration)} = )"([^"\n]*)"$'
-        found = re.findall(pattern, text, flags=re.M)
+        found = re.findall(pattern, text, flags=re.MULTILINE)
         if len(found) != 1:
             raise ValueError(f"Expected one {declaration} in {path}, got {len(found)}")
         if found[0][1] != current:
@@ -69,7 +68,7 @@ def update_versions(version):
                 f"{path}: {declaration} differs from {APP_RELEASE} version"
             )
         updates[path] = re.sub(
-            pattern, lambda m: m[1] + json.dumps(version), text, flags=re.M
+            pattern, lambda m: m[1] + json.dumps(version), text, flags=re.MULTILINE
         )
     for path, text in updates.items():
         path.write_text(text)
@@ -158,7 +157,7 @@ def commit():
     git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
     git("add", "--", *plan["files"])
     changed = subprocess.run(
-        ["git", "diff", "--cached", "--quiet", "--", *plan["files"]]
+        ["git", "diff", "--cached", "--quiet", "--", *plan["files"]], check=False
     ).returncode
     if changed == 1:
         print(

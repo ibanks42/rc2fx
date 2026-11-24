@@ -35,7 +35,7 @@ class Refused(Exception):
 
 
 def git(*args):
-    done = subprocess.run(["git", *args], capture_output=True, text=True)
+    done = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
     if done.returncode != 0:
         # Don't echo the arguments: a remote URL can carry a token.
         raise Refused(f"git {args[0]} failed: {done.stderr.strip()}")

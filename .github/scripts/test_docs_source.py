@@ -44,7 +44,7 @@ class DocsSourceTests(unittest.TestCase):
             {"tag_name": "v1.1.0\nref=main"},
         ]:
             with self.subTest(change=change), self.assertRaises(ValueError):
-                source_ref("latest-release", lambda: valid | change)
+                source_ref("latest-release", lambda change=change: valid | change)
         with self.assertRaises(ValueError):
             source_ref("v1.0.0", lambda: valid)
 

@@ -134,7 +134,8 @@ def read(data):
 
 def main():
     try:
-        print(json.dumps(read(open(sys.argv[1], "rb").read()), indent=2))
+        with open(sys.argv[1], "rb") as file:
+            print(json.dumps(read(file.read()), indent=2))
     except (RingError, OSError, struct.error) as error:
         print(f"jackerr_ring: {error}", file=sys.stderr)
         return 2

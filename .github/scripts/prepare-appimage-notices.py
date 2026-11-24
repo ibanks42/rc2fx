@@ -32,8 +32,8 @@ import sys
 import tarfile
 import tempfile
 import time
-import zipfile
 import urllib.request
+import zipfile
 from pathlib import Path
 
 RUNTIME_REPO = "https://github.com/AppImage/type2-runtime"
@@ -126,7 +126,7 @@ def require(algorithm: str, data: bytes, expected: str, what: str) -> None:
 
 def apkbuild_field(apkbuild: str, name: str) -> str:
     """Read a simple `name=value` or `name="value"` field from an APKBUILD."""
-    match = re.search(rf'^{name}="?([^"\n]*)"?$', apkbuild, re.M)
+    match = re.search(rf'^{name}="?([^"\n]*)"?$', apkbuild, re.MULTILINE)
     if not match:
         raise Failure(f"APKBUILD has no {name}")
     return match.group(1)
@@ -134,7 +134,7 @@ def apkbuild_field(apkbuild: str, name: str) -> str:
 
 def parse_sums(apkbuild: str) -> list[tuple[str, str]]:
     """Parse (sha512, filename) pairs from an APKBUILD sha512sums block."""
-    match = re.search(r'^sha512sums="(.*?)"', apkbuild, re.S | re.M)
+    match = re.search(r'^sha512sums="(.*?)"', apkbuild, re.DOTALL | re.MULTILINE)
     if not match:
         raise Failure("APKBUILD has no sha512sums")
     pairs = []

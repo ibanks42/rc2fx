@@ -2,12 +2,12 @@
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-from release_common import MetadataRepo, SIGNED_ROLES, require_newer_versions, sha256
+from release_common import SIGNED_ROLES, MetadataRepo, require_newer_versions, sha256
 
 # Discovery metadata is mutable so it lives on its own branch while releases stay immutable.
 BRANCH = "mixer-metadata"

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import io
-from pathlib import Path
 import struct
 import tarfile
+from pathlib import Path
 
-from capstone import Cs, CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN
-from elftools.elf.elffile import ELFFile
+from capstone import CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN, Cs
 from elftools.dwarf.callframe import FDE
+from elftools.elf.elffile import ELFFile
 
 
 class Image:

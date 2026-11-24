@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import RC2FX_SH, source_rc2fx  # noqa: E402
+from _common import RC2FX_SH, source_rc2fx
 
 clean_env = {k: v for k, v in os.environ.items() if not k.startswith("RC2FX_")}
 defaults = subprocess.run(
@@ -26,6 +26,7 @@ defaults = subprocess.run(
     capture_output=True,
     text=True,
     timeout=30,
+    check=False,
 )
 assert defaults.returncode == 0 and defaults.stdout.splitlines() == [
     "/dev/hidg0",

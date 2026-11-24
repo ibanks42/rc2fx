@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import source_rc2fx, write_fake_bin  # noqa: E402
+from _common import source_rc2fx, write_fake_bin
 
 # Confirm update_dir is fixed to /run/rc2fx-update (the shims read it literally).
 default_check = source_rc2fx(

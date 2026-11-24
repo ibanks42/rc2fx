@@ -1,15 +1,15 @@
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import publish_mixer as publisher  # noqa: E402
-from release_common import BareRemote, sha256  # noqa: E402
+import publish_mixer as publisher
+from release_common import BareRemote, sha256
 
 
 class Publication(unittest.TestCase):

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import (  # noqa: E402
+from _common import (
     RC2FX_SH,
     TempDirTestCase,
     function_body,
@@ -144,6 +144,7 @@ class Tests(TempDirTestCase):
             env=dict(os.environ, **self.env),
             cwd=run,
             timeout=30,
+            check=False,
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("--- kernel", (self.root / "last-exit.log").read_text())
@@ -243,7 +244,7 @@ class Tests(TempDirTestCase):
         self.assertEqual(code, 143)
 
     def test_a_supervisor_killed_later_leaves_stock_behind(self):
-        code, log = self.injected_launch(
+        code, _log = self.injected_launch(
             'test "${1:-}" = --version && exit 0\nsleep 1\nkill -KILL $$'
         )
         self.assertIn(
@@ -362,11 +363,11 @@ printf 'rc=%d sleeps=%d\\n' "$rc" "$sleeps"
             (run / "bundle.sums").write_text(bundle_sums)
             (home / "SHA256SUMS").write_text(home_sums)
             (run / "reload").unlink(missing_ok=True)
-            body = f"""
-supervisor() {{ echo 123; }}
-uptime_s() {{ echo 100; }}
-update_ready() {{ return 0; }}
-sleep() {{ :; }}
+            body = """
+supervisor() { echo 123; }
+uptime_s() { echo 100; }
+update_ready() { return 0; }
+sleep() { :; }
 update_reload 1.2.3 200
 """
             return source_rc2fx(

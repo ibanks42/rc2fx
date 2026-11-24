@@ -11,8 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import publish_app as app  # noqa: E402
-from release_common import BareRemote, sha256 as sha  # noqa: E402
+import publish_app as app
+from release_common import BareRemote
+from release_common import sha256 as sha
 
 
 def assets(version):
@@ -158,7 +159,7 @@ class Publication(unittest.TestCase):
         )
 
     def test_running_again_for_the_same_release_changes_nothing(self):
-        directory, signed = self.release("1.2.3")
+        _directory, _signed = self.release("1.2.3")
         again, message = self.prepare("v1.2.3", "again")
         self.assertIn("already signed", message)
         self.assertIn("sign=false", self.outputs.read_text())
@@ -204,7 +205,7 @@ class Publication(unittest.TestCase):
             app.publish("v1.2.3", directory, signed)
 
     def test_stale_metadata_versions_are_refused(self):
-        _, signed = self.release("1.2.3")
+        _, _signed = self.release("1.2.3")
         self.gh.add("v1.3.0", assets("1.3.0"))
         directory, _ = self.prepare("v1.3.0")
         stale = self.sign("v1.3.0", directory)

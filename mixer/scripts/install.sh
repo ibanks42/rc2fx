@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2174 # -m applies to the last directory, as intended
 set -eu
 # Override root for tests (see mixer/scripts/tests/install.py).
 root=${RC2FX_INSTALL_ROOT:-}
@@ -22,6 +23,7 @@ installed_at() { if test -f "$1/rc2fx.sh"; then echo "$1/rc2fx.sh"; else echo "$
 original() {
 	keep=
 	for dir in "$opt"/.rc2fx-retained.*; do
+		# shellcheck disable=SC2015 # skip the entry when any test or pre_gui fails
 		test -d "$dir" && ! test -L "$dir" && pre_gui "$dir" || continue
 		if test -z "$keep" || test "$(installed_at "$dir")" -ot "$(installed_at "$keep")"; then keep=$dir; fi
 	done
@@ -148,6 +150,7 @@ touch "$pending"
 # Free the uploaded bundle from /run (tmpfs) now that the new copy and rollback
 # are on disk.
 rm -rf "$up"
+# shellcheck disable=SC2154 # code is set inside the trap itself
 trap 'code=$?; if test "$code" -ne 0; then rollback || echo "Rollback needs attention" >&2; fi; exit "$code"' EXIT
 for name in data logs; do test ! -d "$previous/$name" || mv "$previous/$name" "$home/$name"; done
 mkdir -p -m 700 "$home/logs"

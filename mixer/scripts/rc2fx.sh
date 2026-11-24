@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2174 # -m applies to the last directory, as intended
 # Runs on the RODECaster Pro II. Has RØDE's audio launcher start the stock
 # mixer with the RC2FX native library injected, from the first start of a boot,
 # and hands audio back to stock when RC2FX stops.
@@ -221,7 +222,7 @@ retire_usb_node() {
 # The mixer (stock or RC2FX) running under the launcher, which is waiting on
 # it; prints its PID. Between the launcher's restarts there is none.
 launched_mixer() {
-	local found= candidate parent
+	local found='' candidate parent
 	for candidate in $(pgrep -x rc_audio_mixer); do
 		alive "$candidate" || continue
 		test -z "$found" || return 1
@@ -519,7 +520,7 @@ bb_ready_and_placed() {
 # restore it, so nothing is stopped.
 bb_own_nice() { nice; }
 bb_stock_policies() {
-	local own priority= line policy prio niceness i
+	local own priority='' line policy prio niceness i
 	own=$(bb_own_nice) || return 1
 	# Server options only: after -d come the driver's (alsa's -P is a device).
 	for ((i = 1; i < ${#bb_argv[@]}; i++)); do
@@ -586,6 +587,7 @@ bb_replace_jack() {
 		bb_irq_placement
 		bb_irq_effective
 	} >"$dir/preflight-jack.inventory"
+	# shellcheck disable=SC2015 # skip when there is no inventory or the policies differ
 	test -n "$bb_inventory_old" && bb_stock_policies "$bb_inventory_old" || {
 		say "$bb_label skipped: jackd's threads are not as a stock start leaves them ($(tr '\n' ';' <<<"$bb_inventory_old"))" >>"$logs/rc2fx.log"
 		return 1
@@ -832,6 +834,7 @@ supervisor_lost() {
 launch() {
 	local fallback="exec $stock_mixer"
 	if test $# -gt 0; then fallback+=$(printf ' %q' "$@"); fi
+	# shellcheck disable=SC2064 # the fallback command is fixed when the trap is set
 	trap "$fallback" EXIT
 	mkdir -p -m 700 "$boot" "$data" "$logs"
 	# Records that the shim ran for this start, whatever it decides.
@@ -841,7 +844,7 @@ launch() {
 	# Wraps RØDE's update script so a flash is checked before RØDE reboots.
 	flash_watch_start || true
 	# profile_id and show are read by controller_arguments.
-	local why= selected n profile_id show
+	local why='' selected n profile_id show
 	if test -e /opt/rc2fx/disabled; then
 		why='autostart is disabled'
 	elif test -e "$first_boot"; then
@@ -957,7 +960,7 @@ refuse_first_boot() {
 
 start() {
 	refuse_first_boot || return
-	local wait=120 mixer= old= n force=0
+	local wait=120 mixer='' old='' n force=0
 	if test "${1:-}" = --force; then
 		force=1
 		shift
@@ -1166,7 +1169,7 @@ gui_expects_rc2fx() {
 }
 
 gui_wait_for_mixer() {
-	local max=${RC2FX_GUI_WAIT_MAX:-30} polls=0 last= now ready=0
+	local max=${RC2FX_GUI_WAIT_MAX:-30} polls=0 last='' now ready=0
 	test -e "$boot/stock" && return 0
 	if gui_expects_rc2fx; then
 		: # keep polling: the mixer may still be starting
@@ -1208,10 +1211,11 @@ gui_launch() {
 	local fallback="gui_unexpected_exit"
 	local argument
 	for argument in "$@"; do fallback+=$(printf ' %q' "$argument"); done
+	# shellcheck disable=SC2064 # the fallback command is fixed when the trap is set
 	trap "$fallback" EXIT
 	# No state (and so no log) means no module: the stock GUI still starts.
 	mkdir -p -m 700 "$gui_home" 2>/dev/null || exec "$stock_gui" "$@"
-	local why= module= selected= diagnostics=quiet
+	local why='' module='' selected='' diagnostics=quiet
 	local disabled="$data/gui-partial-disabled"
 	# 1. The mixer is not fully booted yet.
 	if test -e "$first_boot"; then
@@ -1276,7 +1280,7 @@ gui_diagnostics() {
 
 # The GUI half of `status`: module or stock, why, and its last counters line.
 gui_status() {
-	local module= profile= counters=
+	local module='' profile='' counters=
 	if ! test -e "$gui_shim"; then
 		echo 'GUI: not installed'
 	elif test -e "$data/gui-partial-disabled"; then
@@ -1588,6 +1592,7 @@ image_check() {
 		status=ok
 	fi
 	tmp=$data/.image-check.$$
+	# shellcheck disable=SC2015 # report a failure of any step
 	{
 		echo schema=1
 		echo "status=$status"
@@ -1674,7 +1679,7 @@ update_reload() {
 update_commit() {
 	local id=${1:?update session id}
 	local req=$update_dir/commit-$id.request
-	local mode= target= from= deadline= gui=0 restart=mixer status=0 ok=0 stop_at
+	local mode='' target='' from='' deadline='' gui=0 restart=mixer status=0 ok=0 stop_at
 	test -f "$req" || {
 		echo "no update request $req" >&2
 		return 2

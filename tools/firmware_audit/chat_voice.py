@@ -6,12 +6,14 @@ capture path.
 """
 
 from __future__ import annotations
+
 import argparse
 import json
-from pathlib import Path
 import struct
-from .elf import Image
+from pathlib import Path
+
 from .duo_routes import Machine, counterpart
+from .elf import Image
 
 FRAMES = 112
 PINS = {

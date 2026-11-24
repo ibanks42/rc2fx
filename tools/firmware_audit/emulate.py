@@ -6,7 +6,7 @@ and allocations, strings, events, and thread-pool submission use deterministic s
 
 import struct
 
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
+from unicorn import UC_ARCH_ARM64, UC_HOOK_CODE, UC_MODE_ARM, Uc
 from unicorn import arm64_const as regs
 
 from .canonical import canonical

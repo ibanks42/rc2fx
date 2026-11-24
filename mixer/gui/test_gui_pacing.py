@@ -4,6 +4,7 @@ Compiles the module with -DRC2FX_PACING_TEST (matching sites by symbol name
 in gui_pacing_test.cpp instead of pinned offsets) and runs it under LD_AUDIT.
 """
 
+import itertools
 import os
 import platform
 import re
@@ -12,6 +13,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 HERE = Path(__file__).resolve().parent
 CC = os.environ.get("CC") or shutil.which("cc") or "cc"
@@ -145,6 +147,7 @@ def run(mode, *args, extra=None, module="gui.so"):
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
     assert r.returncode == 0, r.stderr
     stats = (
@@ -159,7 +162,7 @@ run.n = 0
 
 
 def passes(stdout):
-    return [int(x) for x in re.findall(r"^pass (\d+)$", stdout, re.M)]
+    return [int(x) for x in re.findall(r"^pass (\d+)$", stdout, re.MULTILINE)]
 
 
 def stats_lines(stats):
@@ -182,7 +185,7 @@ class PacingTests(unittest.TestCase):
         self.assertTrue(lines[0][1]["pid"].isdigit())
 
     def test_the_message_thread_waits_are_counted_only_from_repaint(self):
-        out, stats = run("observe", "wait")
+        _out, stats = run("observe", "wait")
         last = stats_lines(stats)[-1][1]
         # repaint_a (~30 ms) and repaint_b (~10 ms) blocked; the already-
         # signaled repaint does not reach the condition wait at all; the
@@ -220,7 +223,7 @@ class PacingTests(unittest.TestCase):
             self.assertEqual(f["result"], "0")
 
     def test_a_clock_failure_is_counted(self):
-        out, stats = run(
+        _out, stats = run(
             "observe", "pump", "6", "0", extra={"RC2FX_GUI_PACING_TEST_FAIL_CLOCK": "1"}
         )
         last = stats_lines(stats)[-1][1]
@@ -261,6 +264,7 @@ class PacingTests(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
         self.assertEqual(r.returncode, 0)
         self.assertNotIn("RC2FX GUI pacing", r.stderr)
@@ -280,6 +284,7 @@ class PacingTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     timeout=60,
+                    check=False,
                 )
                 self.assertEqual(r.returncode, 0)
                 self.assertRegex(
@@ -335,11 +340,11 @@ class PacingTests(unittest.TestCase):
         frames_out = [
             line.split() for line in out.splitlines() if line.startswith("frame ")
         ]
-        summary = [
+        summary = next(
             line.split()
             for line in out.splitlines()
             if line.startswith("partial frames")
-        ][0]
+        )
         return frames_out, converts, verifies, dict(zip(summary[1::2], summary[2::2]))
 
     @X86_ONLY
@@ -570,7 +575,7 @@ class PacingTests(unittest.TestCase):
     def test_no_periodic_full_frames_over_a_long_run(self):
         # 200 conversions, more than two seconds of fake time with jobs of
         # 6 ms; identity is checked after every one of them.
-        frames, converts, _, summary = self.partial(
+        _frames, converts, _, summary = self.partial(
             "partial-cw", frames=200, FAKE_GE2D_DELAY_US="6000"
         )
         self.assertEqual(summary["bad_frames"], "0")
@@ -587,7 +592,7 @@ class PacingTests(unittest.TestCase):
 
     @X86_ONLY
     def test_the_kill_file_ends_partial_conversion_at_the_next_conversion(self):
-        kill = Path(BUILD.name) / f"partial-off"
+        kill = Path(BUILD.name) / "partial-off"
         kill.unlink(missing_ok=True)
         try:
             _, converts, _, summary = self.partial(
@@ -635,7 +640,7 @@ class PacingTests(unittest.TestCase):
 
     @X86_ONLY
     def test_verify_checks_the_first_four_partial_conversions_per_destination(self):
-        frames, converts, verifies, summary = self.partial(
+        _frames, converts, verifies, summary = self.partial(
             "partial-verify-cw", frames=30, FAKE_GE2D_DIR="cw"
         )
         self.assertEqual(summary["bad_frames"], "0")
@@ -656,7 +661,7 @@ class PacingTests(unittest.TestCase):
 
     @X86_ONLY
     def test_verify_with_the_wrong_orientation_disables_and_names_the_right_one(self):
-        frames, converts, verifies, summary = self.partial(
+        frames, converts, verifies, _summary = self.partial(
             "partial-verify-ccw", frames=12, FAKE_GE2D_DIR="cw"
         )
         self.assertEqual(
@@ -685,7 +690,7 @@ class PacingTests(unittest.TestCase):
 
     @X86_ONLY
     def test_verify_finds_a_pixel_written_outside_any_paint_and_stops(self):
-        frames, converts, verifies, summary = self.partial(
+        frames, converts, verifies, _summary = self.partial(
             "partial-verify-cw",
             frames=20,
             PARTIAL_ROGUE_AT="8",
@@ -727,13 +732,13 @@ class PacingTests(unittest.TestCase):
     @X86_ONLY
     def test_every_verify_skip_reason_is_logged_with_its_values(self):
         cases = {
-            "descriptor-null": dict(reason="descriptor-null", dfd="-1"),
-            "dest-mismatch": dict(reason="dest-mismatch"),
-            "dst-null": dict(reason="dst-null", dst="0"),
-            "querybuf": dict(
-                reason="querybuf"
-            ),  # errno comes from the fake's libc instance
-            "mmap": dict(reason="mmap", errno="22"),
+            "descriptor-null": {"reason": "descriptor-null", "dfd": "-1"},
+            "dest-mismatch": {"reason": "dest-mismatch"},
+            "dst-null": {"reason": "dst-null", "dst": "0"},
+            "querybuf": {
+                "reason": "querybuf"
+            },  # errno comes from the fake's libc instance
+            "mmap": {"reason": "mmap", "errno": "22"},
         }
         for case, want in cases.items():
             with self.subTest(case):
@@ -742,7 +747,7 @@ class PacingTests(unittest.TestCase):
                     env["FAKE_GE2D_FAIL_QUERYBUF"] = "1"
                 if case == "mmap":
                     env["FAKE_GE2D_BAD_OFFSET"] = "1"
-                out, stats = run("partial-verify-cw", "partial", "6", extra=env)
+                _out, stats = run("partial-verify-cw", "partial", "6", extra=env)
                 skips = fields_of(stats, "verify-skip")
                 # 6 frames: 2 full, then 4 partial, all within the first 4 per destination.
                 self.assertEqual(
@@ -827,12 +832,12 @@ class RotationTests(unittest.TestCase):
             "partial-cw",
             "partial",
             "40",
-            extra=dict(
-                RC2FX_GUI_PACING_QUIET="1",
-                FAKE_GE2D_DELAY_US="2000",
-                RC2FX_TEST_COUNTERS_EVERY_MS="1",
-                RC2FX_GUI_PACING_TEST_LOG_CAP=str(cap),
-            ),
+            extra={
+                "RC2FX_GUI_PACING_QUIET": "1",
+                "FAKE_GE2D_DELAY_US": "2000",
+                "RC2FX_TEST_COUNTERS_EVERY_MS": "1",
+                "RC2FX_GUI_PACING_TEST_LOG_CAP": str(cap),
+            },
         )
         self.assertIn("bad_frames 0", out)
         base = log_file()
@@ -923,7 +928,9 @@ class RotateTests(unittest.TestCase):
             [HERE / "rotate" / "test_rotate.c", HERE / "rotate" / "rotate.c"],
             "-O2",
         )
-        r = subprocess.run([str(program)], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(
+            [str(program)], capture_output=True, text=True, timeout=120, check=False
+        )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r"^\d{4,} cases, 0 failures$")
 
@@ -934,7 +941,7 @@ class CpuPathTests(unittest.TestCase):
     @X86_ONLY
     def test_failed_medium_token_refreshes_damage_on_reuse(self):
         for direction in ("cw", "ccw"):
-            out, lines = run(
+            out, _lines = run(
                 "partial-" + direction,
                 "partial",
                 "8",
@@ -1367,6 +1374,7 @@ def plan_run(build, *args, runner=()):
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
     lines = r.stdout.splitlines()
     frames = [line for line in lines if line.startswith("frame ")]
@@ -1480,14 +1488,18 @@ class ProductionPlanTests(unittest.TestCase):
             compiler=(ZIG, "cc"),
         )
         r = subprocess.run(
-            [*qemu, str(rotate)], capture_output=True, text=True, timeout=600
+            [*qemu, str(rotate)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r"^\d{4,} cases, 0 failures$")
 
 
 class QuietAndMergeTests(unittest.TestCase):
-    QUIET = {"RC2FX_GUI_PACING_QUIET": "1"}
+    QUIET: ClassVar[dict[str, str]] = {"RC2FX_GUI_PACING_QUIET": "1"}
 
     @X86_ONLY
     def test_quiet_partial_logs_start_first_pass_and_periodic_counters_only(self):
@@ -1526,7 +1538,7 @@ class QuietAndMergeTests(unittest.TestCase):
         self.assertGreater(int(last["ge2d_us"]), int(last["conversions"]) * 5000)
         times = [int(f["t"]) for k, f in lines if k == "counters"]
         self.assertTrue(
-            all(b - a >= 500_000_000 for a, b in zip(times, times[1:])),
+            all(b - a >= 500_000_000 for a, b in itertools.pairwise(times)),
             "at most one per interval",
         )
 
@@ -1737,7 +1749,7 @@ class QuietAndMergeTests(unittest.TestCase):
                 )
                 self.assertIn("bad_frames 0", out)
                 lines = log_lines()
-                start = [f for k, f in lines if k == "start"][0]
+                start = next(f for k, f in lines if k == "start")
                 self.assertEqual((start["merge_px"], start["quiet"]), (effective, "0"))
                 self.assertFalse([k for k, _ in lines if k == "merge-px-invalid"])
 
@@ -1786,7 +1798,7 @@ class QuietAndMergeTests(unittest.TestCase):
                 self.assertEqual(
                     (invalid[0]["value"], invalid[0]["using"]), (shown, "20000")
                 )
-                start = [f for k, f in lines if k == "start"][0]
+                start = next(f for k, f in lines if k == "start")
                 self.assertEqual(start["merge_px"], "20000")
 
 
@@ -1994,9 +2006,9 @@ def event_rects(event):
 
 def fake_totals(out):
     """The fake GE2D's own count of the jobs it ran and the pixels it wrote."""
-    summary = [
+    summary = next(
         line.split() for line in out.splitlines() if line.startswith("partial frames")
-    ][0]
+    )
     return int(summary[summary.index("jobs") + 1]), int(
         summary[summary.index("pixels") + 1]
     )
@@ -2348,7 +2360,9 @@ class CounterTests(unittest.TestCase):
     def test_the_line_fits_its_buffer_with_every_counter_at_its_largest(self):
         source = (HERE / "gui_partial.c").read_text()
         size = int(
-            re.search(r"^#define COUNTERS_LINE_MAX (\d+)$", source, re.M).group(1)
+            re.search(r"^#define COUNTERS_LINE_MAX (\d+)$", source, re.MULTILINE).group(
+                1
+            )
         )
         self.assertIn("static char line[COUNTERS_LINE_MAX];", source)
         kill = Path(BUILD.name) / "partial-off"
@@ -2453,7 +2467,7 @@ class ProductionCounterTests(unittest.TestCase):
     """Verify counters-line totals from partial_plan_test.c with the CPU path always enabled."""
 
     # The fields that hold a clock reading, a duration or the process id.
-    TIMED = {
+    TIMED: ClassVar[set[str]] = {
         "pid",
         "t",
         "ge2d_us",
@@ -2499,7 +2513,7 @@ class ProductionCounterTests(unittest.TestCase):
     def test_the_sums_hold_with_the_cpu_rule_always_on(self):
         for direction, seed in (("cw", "1"), ("ccw", "2"), ("cw", "3"), ("ccw", "4")):
             with self.subTest(direction=direction, seed=seed):
-                status, frames, totals, c, out = plan_run(
+                status, _frames, totals, c, out = plan_run(
                     "plan3", direction, seed, "250"
                 )
                 self.assertEqual(status, 0, out)
@@ -2532,7 +2546,7 @@ class ProductionCounterTests(unittest.TestCase):
             ):
                 for nth in nths:
                     with self.subTest(direction=direction, what=what, nth=nth):
-                        status, frames, totals, c, out = plan_run(
+                        status, _frames, totals, c, out = plan_run(
                             "plan3", direction, "7", "80", what, str(nth)
                         )
                         self.assertEqual(status, 0, out)
@@ -2544,7 +2558,7 @@ class ProductionCounterTests(unittest.TestCase):
         # rotation lasts 1 ms more than its strips. A full frame is 45 strips.
         for direction, seed in (("cw", "1"), ("ccw", "2")):
             with self.subTest(direction=direction, seed=seed):
-                status, frames, totals, c, out = plan_run(
+                status, frames, _totals, c, out = plan_run(
                     "plan3", direction, seed, "120", "stage-clock", "1"
                 )
                 self.assertEqual(status, 0, out)

@@ -36,10 +36,10 @@ import tempfile
 from pathlib import Path
 
 from release_common import (
-    MetadataRepo,
-    Refused,
     SIGNED_ROLES,
     STABLE,
+    MetadataRepo,
+    Refused,
     gh_api_get,
     gh_repo,
     require,
@@ -88,6 +88,7 @@ class Gh:
                 stdout=out,
                 stderr=subprocess.PIPE,
                 text=False,
+                check=False,
             )
         if result.returncode != 0:
             raise Refused(

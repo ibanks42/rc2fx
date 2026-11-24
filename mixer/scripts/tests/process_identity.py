@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import TempDirTestCase, source_rc2fx  # noqa: E402
+from _common import TempDirTestCase, source_rc2fx
 
 
 class Identity(TempDirTestCase):

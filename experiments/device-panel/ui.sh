@@ -82,6 +82,7 @@ ui_preview_cleanup() {
 	for entry in /proc/[0-9]*/environ; do
 		candidate=${entry#/proc/}
 		candidate=${candidate%/environ}
+		# shellcheck disable=SC2016 # $1 belongs to the inner sh
 		timeout -k 1s 1s /bin/sh -c 'tr "\000" "\n" < "$1"' sh "$entry" 2>/dev/null |
 			grep -Fx "RC2FX_UI_CLOSE=$dir/close" >/dev/null || continue
 		actual=$(start_time "$candidate" 2>/dev/null) || continue
@@ -254,6 +255,7 @@ ui_preview() {
 	guard=$!
 	# From this point every ordinary exit asks the independent watchdog to
 	# retire our child, then resume the exact stock supervisor process.
+	# shellcheck disable=SC2064 # the paths are fixed when the trap is set
 	trap "touch -- $(printf '%q' "$dir/done"); flock -u 8; wait $guard 2>/dev/null || true; if ! test -e $(printf '%q' "$dir/restored") && ! test -e $(printf '%q' "$dir/recovery-failed"); then ui_preview_cleanup $(printf '%q' "$dir"); fi" EXIT
 	trap 'exit 130' INT TERM HUP
 	for ((n = 0; n < 30; n++)); do
@@ -300,6 +302,7 @@ ui_preview() {
 		renice -n "$gui_nice" -p "$child_pid" >/dev/null
 		exec taskset -c "$gui_affinity" env -i "${environment[@]}" "${injected[@]}" /usr/bin/rc_gui_juce
 	) </dev/null >"$dir/gui.log" 2>&1 &
+	# shellcheck disable=SC2155 # under set -e, a failed uptime read must not exit
 	local child=$! child_start began=$(uptime_s)
 	child_start=$(start_time "$child" 2>/dev/null) || child_start=
 	printf '%s\n' "$((began + 30 + seconds + 5))" >"$dir/deadline.new"

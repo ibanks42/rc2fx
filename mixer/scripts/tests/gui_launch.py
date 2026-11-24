@@ -24,7 +24,7 @@ from _common import (
     source_rc2fx,
     write_executable,
     write_fake_bin,
-)  # noqa: E402
+)
 
 SHIM = (SCRIPTS_DIR / "rc2fx-gui-shim.sh").read_text()
 
@@ -199,7 +199,7 @@ class GuiLaunch(TempDirTestCase):
     def test_the_module_starts_with_the_production_environment(self):
         r = self.run_gui("--x", env={"RC2FX_TEST_BUILD": "release"})
         self.assertEqual(r.returncode, 0, r.stderr)
-        line = [l for l in r.stdout.splitlines() if l.startswith("EXEC ")][0]
+        line = next(l for l in r.stdout.splitlines() if l.startswith("EXEC "))
         self.assertIn(f"LD_AUDIT={self.bundle}/bin/librc2fx_gui.so", line)
         self.assertIn("RC2FX_GUI_PACING=partial-cw", line)
         self.assertIn("RC2FX_GUI_PACING_QUIET=1", line)
@@ -464,7 +464,11 @@ class Shim(TempDirTestCase):
             '#!/bin/bash\ncase "${1:-}" in\n  gui-launch) shift; printf "LAUNCH %s\\n" "$*"; exit 7;;\nesac\nexit 9\n'
         )
         r = subprocess.run(
-            [str(self.shim), "--a", "b"], capture_output=True, text=True, timeout=30
+            [str(self.shim), "--a", "b"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
         self.assertEqual((r.returncode, r.stdout), (7, "LAUNCH --a b\n"))
 
@@ -479,7 +483,11 @@ class Shim(TempDirTestCase):
             '#!/bin/bash\ncase "${1:-}" in\n  gui-launch) printf "INSTALLED\\n"; exit 6;;\nesac\n'
         )
         r = subprocess.run(
-            [str(self.shim), "x"], capture_output=True, text=True, timeout=30
+            [str(self.shim), "x"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
         self.assertEqual((r.returncode, r.stdout), (5, "RAM x\n"))
 
@@ -489,7 +497,11 @@ class Shim(TempDirTestCase):
             "#!/bin/bash\nexit 9\n"
         )  # no gui-launch case
         r = subprocess.run(
-            [str(self.shim), "--q"], capture_output=True, text=True, timeout=30
+            [str(self.shim), "--q"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
         self.assertEqual(r.stdout, "STOCK --q\n")
 

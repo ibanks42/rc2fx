@@ -9,21 +9,21 @@ curated analyst mappings.
 from __future__ import annotations
 
 import argparse
-from bisect import bisect_right
 import hashlib
 import io
 import json
-from pathlib import Path
 import struct
 import sys
 import tarfile
+from bisect import bisect_right
+from pathlib import Path
 
 try:
     import capstone
     import elftools
-    from capstone import Cs, CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN
-    from elftools.elf.elffile import ELFFile
+    from capstone import CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN, Cs
     from elftools.dwarf.callframe import FDE
+    from elftools.elf.elffile import ELFFile
 except ImportError as error:
     raise SystemExit(
         "Host audit dependencies missing: install tools/firmware_audit/requirements.txt "

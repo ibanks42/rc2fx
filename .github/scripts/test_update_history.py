@@ -4,13 +4,12 @@
 import importlib.util
 import io
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest import mock
-
 
 SCRIPT = Path(__file__).with_name("update_history.py")
 spec = importlib.util.spec_from_file_location("update_history", SCRIPT)
@@ -362,9 +361,11 @@ class HistoryTests(unittest.TestCase):
             self.build(release("1.0.0"), release("1.2.0"))
 
     def test_a_feed_over_the_client_limit_stops_the_build(self):
-        with mock.patch.object(uh, "MAX_FEED_BYTES", 10):
-            with self.assertRaisesRegex(uh.Problem, "updates.json is"):
-                self.build(release("1.0.0"))
+        with (
+            mock.patch.object(uh, "MAX_FEED_BYTES", 10),
+            self.assertRaisesRegex(uh.Problem, "updates.json is"),
+        ):
+            self.build(release("1.0.0"))
 
     def test_duplicate_and_non_stable_sections_fail(self):
         self.put("CHANGELOG.md", CHANGELOG + "\n## [1.0.0] - 2026-11-09\n\n- Again\n")

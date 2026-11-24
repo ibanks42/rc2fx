@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import mixer_version as mv  # noqa: E402
+import mixer_version as mv
 
 SCRIPT = Path(__file__).with_name("mixer_version.py")
 
@@ -89,6 +89,7 @@ class Script(unittest.TestCase):
                 env=env,
                 capture_output=True,
                 text=True,
+                check=False,
             )
             return (
                 done,
