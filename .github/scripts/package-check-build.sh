@@ -5,11 +5,9 @@
 set -euo pipefail
 cd /work/src
 
-# Prebuilt gpuikit and velopack_libc are gitignored and absent from the snapshot.
-bash desktop/scripts/fetch-gpuikit.sh linux-amd64
-bash desktop/scripts/fetch-velopack.sh linux-amd64
-# Drop auth tokens right after fetching gpuikit so later build/packaging steps can't read them.
-unset GPUIKIT_TOKEN GH_TOKEN GITHUB_TOKEN
+# Prebuilt goui-kit and velopack_libc are gitignored and absent from the snapshot.
+./xtask fetch-goui-kit linux-amd64
+./xtask fetch-velopack linux-amd64
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT

@@ -5,8 +5,9 @@ package app
 import (
 	"math"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/chart"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 )
@@ -33,11 +34,11 @@ func signaturePaint(state installflow.SignatureState, phase float32) gk.Element 
 			}
 			signatureSize = bounds[0].Size
 		}).
-		Child(gk.Plot(parts...))
+		Child(chart.Plot(parts...))
 }
 
 func signatureStroke(path [][2]float32, width float32, start, end uint32, alpha float32) gk.PlotPart {
-	return gk.NewPlotLine(path, width, gk.NewLinearGradient(90,
+	return chart.NewPlotLine(path, width, gk.NewLinearGradient(90,
 		gk.NewLinearColorStop(rgbAlpha(start, alpha), 0),
 		gk.NewLinearColorStop(rgbAlpha(end, alpha), 1)))
 }
@@ -100,7 +101,7 @@ func signatureParts(state installflow.SignatureState, phase, width, height float
 	var parts []gk.PlotPart
 	for _, pass := range [][2]float32{{8. / 2, gray * 0.25}, {2.5 / 2, gray}} {
 		if line := stroke(1); len(line) > 0 {
-			parts = append(parts, gk.NewPlotLine(line, pass[0], rgbAlpha(grayColor, pass[1])))
+			parts = append(parts, chart.NewPlotLine(line, pass[0], rgbAlpha(grayColor, pass[1])))
 		}
 	}
 	if fill != nil && *fill > 0 {

@@ -3,8 +3,8 @@ package app
 // Status banner shown while the mixer's audio processing is transitioning state.
 
 import (
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 )

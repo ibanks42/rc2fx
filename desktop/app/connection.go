@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/firmware"
@@ -181,8 +183,8 @@ func (a *App) connectionScreen(cx *gk.Cx) gk.Element {
 		Child(status)
 }
 
-func heroButton(id gk.ID, label string) gk.ButtonEl {
-	return gk.Button(id).Primary().Large().H(px(LargeButtonHeight)).Px(px(28)).FontSemibold().
+func heroButton(id gk.ID, label string) kit.ButtonEl {
+	return kit.Button(id).Primary().Large().H(px(LargeButtonHeight)).Px(px(28)).FontSemibold().
 		Rounded(float32(26)).Label(label)
 }
 
@@ -232,7 +234,7 @@ func (a *App) firstHero() hero {
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openTask(cx, taskInstall) })).
 				Child(heroFacts()).
 				// Standalone storage fix is Pro II only, which matches FirstFound.
-				Child(gk.Button("open-fix").Ghost().Label("Not installing RC2FX? Fix the update bug only (experimental)").
+				Child(kit.Button("open-fix").Ghost().Label("Not installing RC2FX? Fix the update bug only (experimental)").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.openFix(cx) })),
 			dot: Accent, status: status,
 		}
@@ -273,7 +275,7 @@ func (a *App) firstHero() hero {
 			act: gk.VFlex(s.ItemsCenter).Gap(px(12)).
 				Child(heroButton("continue-install", "Continue the install").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.continueInstall(cx) })).
-				Child(gk.Button("leave-update-mode").Ghost().Label("Leave update mode…").
+				Child(kit.Button("leave-update-mode").Ghost().Label("Leave update mode…").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 						a.confirm(cx, confirmKindOther, Confirm{
 							Title: "Leave update mode without installing",
@@ -285,7 +287,7 @@ func (a *App) firstHero() hero {
 			dot: Warn, status: label + " · in update mode",
 		}
 	case installflow.FirstStorage:
-		leave := gk.Button("leave-storage-mode").Ghost().Label("How to leave storage mode").
+		leave := kit.Button("leave-storage-mode").Ghost().Label("How to leave storage mode").
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				a.confirm(cx, confirmKindOther, Confirm{
 					Title:  "How to leave storage mode",
@@ -384,14 +386,14 @@ func (a *App) usbAccessScreen(cx *gk.Cx) gk.Element {
 			}))
 	if open {
 		card = card.Child(codeBox(mono).Mt(px(10)).
-			Child(gk.Textarea(a.usbRuleText).Readonly(true).Appearance(false).H(px(220)).
+			Child(editor.Textarea(a.usbRuleText).Readonly(true).Appearance(false).H(px(220)).
 				AriaLabel("The udev rule RC2FX installs")).
 			Child(gk.Div(s.Absolute).Top(px(8)).Right(px(8)).
 				Child(a.copyButton("copy-usb-rule", helper.USBRule, cx))))
 	}
 	card = card.Child(gk.Div().Mt(px(18)).TextSize(px(13)).Child(txt("To undo it later:"))).
 		Child(codeBox(mono).Mt(px(6)).Pr(px(76)).
-			Child(gk.Input(a.usbUndoText).Readonly(true).Appearance(false)).
+			Child(editor.Input(a.usbUndoText).Readonly(true).Appearance(false)).
 			Child(gk.Div(s.Absolute, s.Top0, s.Bottom0, s.Flex, s.ItemsCenter).Right(px(8)).
 				Child(a.copyButton("copy-usb-undo", USBUndo, cx))))
 	if a.usbRule.Kind == USBRuleFailed {
@@ -407,7 +409,7 @@ func (a *App) usbAccessScreen(cx *gk.Cx) gk.Element {
 	}
 	card = card.Child(gk.HFlex(s.ItemsCenter, s.JustifyEnd, s.Gap4).Mt(px(24)).
 		Child(gk.Div().TextSize(px(13)).TextColor(rgb(Faint)).Child(txt(prompt))).
-		Child(gk.Button("allow-usb").Primary().Large().H(px(LargeButtonHeight)).Px(px(28)).
+		Child(kit.Button("allow-usb").Primary().Large().H(px(LargeButtonHeight)).Px(px(28)).
 			Rounded(float32(26)).FontSemibold().Label(allow).Disabled(asking).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.allowUSB(cx) })))
 	return gk.VFlex(s.SizeFull, s.Relative).FontFamily("Inter").Bg(background()).

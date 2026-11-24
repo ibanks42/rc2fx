@@ -9,19 +9,20 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/xtask/deps"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
 
 const (
 	// Covered by RC2FX's own license.
 	mainModule = "github.com/ibanks42/rc2fx/desktop"
-	// Covered by libgpuikit's THIRD_PARTY.md.
-	gpuikitModule = "gpuikit.dev"
+	// Covered by libgouikit's THIRD_PARTY.md.
+	gouikitModule = "github.com/ibanks42/goui-kit"
 )
 
 // GoApp collects notices for the Go desktop app for the given target and build
-// tags: the Go stdlib, linked Go modules, and libgpuikit under
-// desktop/third_party/gpuikit.
+// tags: the Go stdlib, linked Go modules, and libgouikit under
+// desktop/third_party/goui-kit.
 func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 	desktop := filepath.Join(root, "desktop")
 	goEnv := func(args ...string) *exec.Cmd {
@@ -65,7 +66,7 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 			continue
 		}
 		path, version, dir := parts[0], parts[1], parts[2]
-		if path == mainModule || path == gpuikitModule {
+		if path == mainModule || path == gouikitModule {
 			continue
 		}
 		user := path
@@ -92,11 +93,11 @@ func GoApp(root, goos, goarch string, tags []string) ([]Section, error) {
 	}
 	sections = append(sections, groups.Sections("Dependencies: ")...)
 
-	gpuikit, err := Gpuikit(filepath.Join(desktop, "third_party", "gpuikit"))
+	gouikit, err := GouiKit(deps.GouiKitDir(root))
 	if err != nil {
 		return nil, err
 	}
-	return append(sections, gpuikit...), nil
+	return append(sections, gouikit...), nil
 }
 
 func licenseFiles(dir string) ([]string, error) {
@@ -121,18 +122,18 @@ func licenseFiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-// Gpuikit reads THIRD_PARTY.md and all license texts under licences/texts/
-// from an unpacked gpuikit download, deduplicating identical texts.
-func Gpuikit(dir string) ([]Section, error) {
+// GouiKit reads THIRD_PARTY.md and all license texts under licences/texts/
+// from an unpacked goui-kit download, deduplicating identical texts.
+func GouiKit(dir string) ([]Section, error) {
 	listing, err := os.ReadFile(filepath.Join(dir, "THIRD_PARTY.md"))
 	if err != nil {
-		return nil, task.Errorf("%s: %s; link desktop/third_party/gpuikit to the gpuikit download (desktop/README.md)",
+		return nil, task.Errorf("%s: %s; link desktop/third_party/goui-kit to the goui-kit download (desktop/README.md)",
 			filepath.Join(dir, "THIRD_PARTY.md"), task.IOError(err))
 	}
 	if !utf8.Valid(listing) {
 		return nil, task.Errorf("%s: stream did not contain valid UTF-8", filepath.Join(dir, "THIRD_PARTY.md"))
 	}
-	sections := []Section{{"GPUI-kit library (libgpuikit): third-party software", string(listing)}}
+	sections := []Section{{"GPUI-kit library (libgouikit): third-party software", string(listing)}}
 	texts := filepath.Join(dir, "licences", "texts")
 	crates, err := os.ReadDir(texts)
 	if err != nil {
@@ -162,7 +163,7 @@ func Gpuikit(dir string) ([]Section, error) {
 			if strings.TrimSpace(string(text)) == "" {
 				continue
 			}
-			groups.add("libgpuikit license texts", string(text), crate.Name()+" ("+file.Name()+")")
+			groups.add("libgouikit license texts", string(text), crate.Name()+" ("+file.Name()+")")
 		}
 	}
 	if len(groups) == 0 {

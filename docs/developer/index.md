@@ -20,8 +20,8 @@ The mixer side consists of three components:
 The library and controller are written in Rust and cross-compiled with zig for
 the mixer's ARM processor.
 
-The desktop side is a Go app under `desktop/`, built on GPUI-kit via the
-gpuikit Go bindings. It edits settings over USB 1 and includes the built-in
+The desktop side is a Go app under `desktop/`, built on GPUI-kit via goui-kit.
+It edits settings over USB 1 and includes the built-in
 installer that patches and flashes RC2FX firmware. See
 [The desktop app in Go](desktop-go.md) for its package structure and the rules
 that keep it aligned with the mixer's Rust code.

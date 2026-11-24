@@ -2,7 +2,7 @@
 
 Here are the system packages you need to build and run the desktop app on
 Debian/Ubuntu, Fedora, or Arch. The app is written in Go with a C compiler for
-cgo; its UI library, gpuikit, comes prebuilt (see
+cgo; its UI library, goui-kit, comes prebuilt (see
 [Building from source](building.md)) and links straight into the binary, which
 pulls in the graphics and windowing libraries below. All audio DSP runs on the
 mixer itself, so you don't need any audio dev packages on your PC.
@@ -48,7 +48,7 @@ Make sure you also have the Vulkan driver for your GPU (`vulkan-radeon`,
 
 ## Notes
 
-- The UI (gpuikit over GPUI) requires a graphical session and a working Vulkan
+- The UI (goui-kit over GPUI) requires a graphical session and a working Vulkan
   driver.
 - The installer elevates via `pkexec`. If you're on a minimal desktop or window
   manager, make sure a polkit authentication agent is running.

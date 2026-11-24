@@ -19,6 +19,7 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/firmware"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
 	"github.com/ibanks42/rc2fx/desktop/internal/common"
+	"github.com/ibanks42/rc2fx/desktop/internal/xtask/deps"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/elfcheck"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/task"
 )
@@ -32,6 +33,12 @@ const ZigTarget = "aarch64-unknown-linux-gnu.2.35"
 
 // Run installs the Rust target and cargo-zigbuild, and checks for zig.
 func Run() error {
+	if err := deps.FetchGouiKit(""); err != nil {
+		return err
+	}
+	if err := deps.FetchVelopack(nil); err != nil {
+		return err
+	}
 	fmt.Printf("Adding the Rust %s target\n", Target)
 	if err := task.Run(exec.Command("rustup", "target", "add", Target)); err != nil {
 		return err

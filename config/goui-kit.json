@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "version": "0.11.0",
+  "sha256": {
+    "linux-x86_64": "18fc90a2dc9cd35fcec44d73d53beb7a947d1e2eb9264c3306b6f65f92a0c554",
+    "macos-universal": "1193e806cea44a97da89b6b7cea9855be62e01e147315dc338803cd09d63b7a8",
+    "windows-x86_64": "648c4e86cdc434ea6e15a2a10103df6a751491a7a03b8323d5fbdf20066b1540"
+  }
+}

@@ -209,10 +209,10 @@ class Runtime(unittest.TestCase):
         self.assertEqual(extracted, [notices.VPK_VERSION, notices.VPK_SHA256])
 
     def test_the_app_links_the_velopack_that_vpk_packs_with(self):
-        # Packaging, fetch-velopack.sh, and prepare-appimage-notices.py all share config/velopack.json.
+        # Packaging, ./xtask fetch-velopack, and prepare-appimage-notices.py all share config/velopack.json.
         root = SCRIPT.parent.parent.parent
-        fetch = (root / "desktop/scripts/fetch-velopack.sh").read_text()
-        self.assertIn("config/velopack.json", fetch)
+        fetch = (root / "desktop/internal/xtask/deps/velopack.go").read_text()
+        self.assertIn('"config", "velopack.json"', fetch)
         licenses = (root / "desktop/internal/xtask/licenses/licenses.go").read_text()
         self.assertIn("config", licenses)
         self.assertIn("velopack.json", licenses)

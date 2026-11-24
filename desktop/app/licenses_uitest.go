@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/licenses"
 )
@@ -90,12 +91,12 @@ func RunUITest(mode string) bool {
 	return !t.failed
 }
 
-func noticeRoot(cx *gk.Cx, text string, frame func(cx *gk.Cx, state gk.TextViewState)) {
-	var state gk.TextViewState
+func noticeRoot(cx *gk.Cx, text string, frame func(cx *gk.Cx, state editor.TextViewState)) {
+	var state editor.TextViewState
 	var theme gk.BaseTheme
 	root := gk.NewView(func(cx *gk.Cx) {
 		gk.ThemeChange(cx, gk.ThemeModeDark)
-		state = gk.NewTextViewStateMarkdown(cx, licenses.NoticeMarkdown(text)).Build()
+		state = editor.NewTextViewStateMarkdown(cx, licenses.NoticeMarkdown(text)).Build()
 		theme = gk.NewBaseThemeGlobal(cx)
 		gk.OnFrame(cx, func(cx *gk.Cx) { frame(cx, state) })
 	}, func(cx *gk.Cx) gk.Element {
@@ -107,7 +108,7 @@ func noticeRoot(cx *gk.Cx, text string, frame func(cx *gk.Cx, state gk.TextViewS
 func (t *uitest) markup() (string, func(cx *gk.Cx)) {
 	text := "# License <AUTHORS> & copyright ©\n\n    * This is not emphasis or code.\n1. [text](https://example.com)\n![image](https://example.com/image.png)\n<script>hello</script>\n`code` | ~~strike~~ \\ slash\n\tIndented notice"
 	return "size 700 420\nframe\nframe\nframe\n", func(cx *gk.Cx) {
-		noticeRoot(cx, text, func(cx *gk.Cx, state gk.TextViewState) {
+		noticeRoot(cx, text, func(cx *gk.Cx, state editor.TextViewState) {
 			t.frame++
 			switch t.frame {
 			case 1:
@@ -140,7 +141,7 @@ func (t *uitest) long() (string, func(cx *gk.Cx)) {
 		"scroll 320 200 -10000000\nframe\nframe\n" +
 		"shot " + shots + "/licenses-long-end.png\nframe\nframe\n"
 	return script, func(cx *gk.Cx) {
-		noticeRoot(cx, text, func(cx *gk.Cx, state gk.TextViewState) {
+		noticeRoot(cx, text, func(cx *gk.Cx, state editor.TextViewState) {
 			t.frame++
 			switch t.frame {
 			case 2:
@@ -158,7 +159,7 @@ func (t *uitest) long() (string, func(cx *gk.Cx)) {
 func (t *uitest) lazy() (string, func(cx *gk.Cx)) {
 	return "size 800 600\n" + strings.Repeat("frame\n", 7), func(cx *gk.Cx) {
 		var l *licensesView
-		var original gk.TextViewState
+		var original editor.TextViewState
 		root := gk.NewView(func(cx *gk.Cx) {
 			gk.ThemeChange(cx, gk.ThemeModeDark)
 			l = newLicensesView(cx)

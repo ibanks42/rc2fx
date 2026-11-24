@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"gpuikit.dev/gk"
+	"github.com/ibanks42/goui-kit/gk"
 )
 
 // Opening a second confirm dialog while one is active must be rejected so the

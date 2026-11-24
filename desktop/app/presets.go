@@ -8,8 +8,10 @@ import (
 	"strings"
 	"unicode"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/transport"
@@ -32,13 +34,13 @@ type presetPending struct {
 
 type PresetLibrary struct {
 	items         []core.PresetSummary
-	name          gk.InputState
+	name          editor.InputState
 	pending       *presetPending
 	confirmDelete *string
 }
 
 func newPresetLibrary(cx *gk.Cx) PresetLibrary {
-	return PresetLibrary{name: gk.NewInputState(cx).Placeholder("Preset name").Build()}
+	return PresetLibrary{name: editor.NewInputState(cx).Placeholder("Preset name").Build()}
 }
 
 func (p *PresetLibrary) reset() {
@@ -215,7 +217,7 @@ func (a *App) presetReply(cx *gk.Cx, reply transport.PresetReply, err *transport
 func (a *App) presetPanel(cx *gk.Cx) gk.Element {
 	ready := a.presetsReady()
 	canSnapshot := ready && !a.session.Dirty() && !a.session.Conflict
-	refresh := gk.Button("refresh-presets").Ghost().Small().Icon(gk.IconRefreshCw).Tooltip("Refresh").
+	refresh := kit.Button("refresh-presets").Ghost().Small().Icon(gk.IconRefreshCw).Tooltip("Refresh").
 		Disabled(!a.session.Connected || a.presets.busy()).
 		OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 			a.listPresets()
@@ -227,8 +229,8 @@ func (a *App) presetPanel(cx *gk.Cx) gk.Element {
 	if !a.session.Connected {
 		return settingsSection("PRESETS", refresh, gk.Div().Child(muted("Not connected.")))
 	}
-	body := gk.Div().Child(row(gk.Div().Child(gk.Input(a.presets.name)),
-		gk.Button("create-preset").Label("Save preset").
+	body := gk.Div().Child(row(gk.Div().Child(editor.Input(a.presets.name)),
+		kit.Button("create-preset").Label("Save preset").
 			Disabled(!canSnapshot || len(a.presets.items) >= 128).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.createPreset(cx) })))
 	if a.session.Dirty() || a.session.Conflict {
@@ -251,20 +253,20 @@ func (a *App) presetPanel(cx *gk.Cx) gk.Element {
 		actions := gk.HFlex(s.Gap1, s.ItemsCenter)
 		if confirm {
 			actions = actions.
-				Child(gk.Button(gk.Key("cancel-delete", index)).Ghost().Label("Cancel").
+				Child(kit.Button(gk.Key("cancel-delete", index)).Ghost().Label("Cancel").
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 						a.presets.confirmDelete = nil
 						a.notify(cx)
 					})).
-				Child(gk.Button(gk.Key("delete-preset", index)).Danger().Label("Delete").
+				Child(kit.Button(gk.Key("delete-preset", index)).Danger().Label("Delete").
 					Disabled(!ready).
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.deletePreset(cx, id) }))
 		} else {
 			actions = actions.
-				Child(gk.Button(gk.Key("load-preset", index)).Label("Load").
+				Child(kit.Button(gk.Key("load-preset", index)).Label("Load").
 					Disabled(!canSnapshot).
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.loadPreset(cx, id) })).
-				Child(gk.Button(gk.Key("delete-preset", index)).Ghost().Icon(gk.IconDelete).Tooltip("Delete").
+				Child(kit.Button(gk.Key("delete-preset", index)).Ghost().Icon(gk.IconDelete).Tooltip("Delete").
 					Disabled(!ready).
 					OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 						a.presets.confirmDelete = &id

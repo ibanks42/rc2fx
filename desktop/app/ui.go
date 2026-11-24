@@ -5,8 +5,10 @@ package app
 import (
 	"strings"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/overlay"
+	"github.com/ibanks42/goui-kit/gk/s"
 )
 
 func rgb(hex uint32) gk.Color { return rgba(hex<<8 | 0xff) }
@@ -226,7 +228,7 @@ func (a *App) confirm(cx *gk.Cx, kind confirmKind, spec Confirm, onOK, onClose f
 	if !a.claimConfirm(kind, spec, onOK, onClose) {
 		return false
 	}
-	gk.OpenDialog(cx, a.confirmDialog)
+	overlay.OpenDialog(cx, a.confirmDialog)
 	return true
 }
 
@@ -254,18 +256,18 @@ func (a *App) restartAsked() bool { return a.confirmShowing(confirmKindRestart) 
 
 func (a *App) closingPrompt() bool { return a.confirmShowing(confirmKindClose) }
 
-func (a *App) confirmView(cx *gk.Cx) gk.DialogEl {
+func (a *App) confirmView(cx *gk.Cx) overlay.DialogEl {
 	c := a.confirmOpen
 	if c == nil {
 		c = &confirmState{}
 	}
 	spec := c.spec
-	footer := gk.DialogFooter(s.Pt5)
+	footer := overlay.DialogFooter(s.Pt5)
 	if spec.Cancel != "" {
-		footer = footer.Child(gk.DialogClose().Trigger(gk.Button("dialog-close").Ghost().Large().
+		footer = footer.Child(overlay.DialogClose().Trigger(kit.Button("dialog-close").Ghost().Large().
 			H(px(44)).Style(s.Px5).Rounded(float32(22)).Label(spec.Cancel)))
 	}
-	footer = footer.Child(gk.DialogAction().Child(gk.Button("dialog-action").Primary().Large().
+	footer = footer.Child(overlay.DialogAction().Child(kit.Button("dialog-action").Primary().Large().
 		H(px(44)).Style(s.Px5).Rounded(float32(22)).FontSemibold().Label(spec.Action)))
 	title := gk.VFlex(s.Gap1).Pr(px(40))
 	if spec.Eyebrow != "" {
@@ -275,9 +277,9 @@ func (a *App) confirmView(cx *gk.Cx) gk.DialogEl {
 	detail := gk.VFlex(s.Gap3).
 		Child(gk.Div(s.TextSm).LineHeight(gk.Relative(1.6)).TextColor(rgb(Muted)).Child(txt(spec.Detail)))
 	if spec.Link != "" {
-		detail = detail.Child(gk.Div(s.TextSm).Child(gk.Link("dialog-link").Href(spec.Link).Child(txt(spec.LinkLabel))))
+		detail = detail.Child(gk.Div(s.TextSm).Child(kit.Link("dialog-link").Href(spec.Link).Child(txt(spec.LinkLabel))))
 	}
-	return gk.Dialog(s.P6, s.Border1).W(560).Rounded(px(20)).Bg(rgb(surface().Panel)).
+	return overlay.Dialog(s.P6, s.Border1).W(560).Rounded(px(20)).Bg(rgb(surface().Panel)).
 		BorderColor(rgb(surface().LineStrong)).TextColor(rgb(Text)).FontFamily("Inter").
 		OverlayClosable(false).
 		Title(title).

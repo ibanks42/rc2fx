@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"gpuikit.dev/gk"
-	"gpuikit.dev/gk/s"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/kit"
+	"github.com/ibanks42/goui-kit/gk/s"
 
 	"github.com/ibanks42/rc2fx/desktop/app/installflow"
 	"github.com/ibanks42/rc2fx/desktop/installer"
@@ -62,7 +63,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	if failed && p.Kind == installflow.InPlaceDone {
 		t.count = "Step 3 of 3"
 	}
-	closeAs := func(id gk.ID, label string, primary, overview bool) gk.ButtonEl {
+	closeAs := func(id gk.ID, label string, primary, overview bool) kit.ButtonEl {
 		return taskButton(id, label, primary).Disabled(i.busy()).
 			OnClick(func(cx *gk.Cx, _ gk.ClickEvent) {
 				if a.installer != nil {
@@ -119,7 +120,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 				bullet(txt("Nothing else changes: your channels, effects and mixer settings are kept.")),
 				bullet(txt(fmt.Sprintf("If %s doesn’t start, the mixer goes back to %s by itself.", version, installed)))))
 		t.unplug = installflow.Unplug{Kind: installflow.UnplugYes, Reason: "nothing has changed yet"}
-		t.secondary = []gk.ButtonEl{reinstall,
+		t.secondary = []kit.ButtonEl{reinstall,
 			taskButton("task-not-now", "Not now", false).Disabled(i.busy()).
 				OnClick(func(cx *gk.Cx, _ gk.ClickEvent) { a.closeTask(cx, false) })}
 		t.primary = taskButton("task-start", "Update RC2FX", true).Disabled(i.busy() || offer == nil).
@@ -151,7 +152,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 		body = body.Child(taskHeading("Update RC2FX")).
 			Child(prose(fmt.Sprintf("Sending RC2FX %s to the mixer. Its audio may stutter until this finishes.", version), Muted)).
 			Child(gk.VFlex(s.WFull).Gap(px(8)).
-				Child(gk.Progress("task-progress").Value(share)).
+				Child(kit.Progress("task-progress").Value(share)).
 				Child(gk.HFlex(s.ItemsCenter, s.JustifyBetween, s.TextSm).
 					Child(gk.Div().TextColor(rgb(Text)).Child(txt("Sending"))).
 					Child(gk.Div().TextColor(rgb(Faint)).Child(txt(installflow.Elapsed(time.Since(i.stageSince)) + " so far")))))
@@ -180,7 +181,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 		body = body.Child(inPlaceSeen(m, answering)).
 			Child(prose(fmt.Sprintf("If it doesn’t start again, “Reinstall firmware as well” installs RC2FX %s together with RØDE’s firmware.", p.Version), Faint))
 		t.body = body
-		t.secondary = []gk.ButtonEl{reinstall, closeAs("task-close", "Close", false, false)}
+		t.secondary = []kit.ButtonEl{reinstall, closeAs("task-close", "Close", false, false)}
 		t.primary = retry
 		return t
 	default: // InPlaceFailed
@@ -190,7 +191,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 			Child(inPlaceSeen(m, answering))
 		t.body = body
 		if offer != nil {
-			t.secondary = []gk.ButtonEl{closeAs("task-close", "Close", false, false)}
+			t.secondary = []kit.ButtonEl{closeAs("task-close", "Close", false, false)}
 			t.primary = retry
 		} else {
 			t.primary = closeAs("task-close", "Close", true, false)
@@ -199,7 +200,7 @@ func (a *App) inPlaceTask(i *Installer) guidedTask {
 	}
 	t.body = body
 	t.unplug = installflow.Unplug{Reason: "RC2FX is being replaced"}
-	t.secondary = []gk.ButtonEl{taskButton("task-stop", "Stop", false).Disabled(true)}
+	t.secondary = []kit.ButtonEl{taskButton("task-stop", "Stop", false).Disabled(true)}
 	t.primary = taskButton("task-done", "Done", true).Disabled(true)
 	return t
 }

@@ -339,7 +339,7 @@ func Run(args []string) error {
 	// The notices cover every slice's Go dependencies.
 	var perArch [][]licenses.Section
 	for _, a := range goArches(goos, goarch) {
-		sections, err := licenses.GoApp(root, goos, a, []string{"velopack"})
+		sections, err := licenses.GoApp(root, goos, a, []string{"velopack", StaticTag})
 		if err != nil {
 			return err
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ibanks42/rc2fx/desktop/internal/xtask/deps"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/elfcheck"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/licenses"
 	"github.com/ibanks42/rc2fx/desktop/internal/xtask/mixer"
@@ -17,8 +18,13 @@ import (
 
 const help = `./xtask <command>
 
-  setup                 Install the Rust target and cargo-zigbuild, and check
-                        for zig
+  setup                 Fetch goui-kit and Velopack's C library, install the Rust
+                        target and cargo-zigbuild, and check for zig
+  fetch-goui-kit [TARGET]
+                        Download the pinned goui-kit library (GOOS-GOARCH or
+                        darwin-universal; default: this machine)
+  fetch-velopack [TARGET...]
+                        Download the pinned velopack_libc for each target (default: this machine)
   mixer-build           Cross-build the mixer binaries and profile checker into target/mixer
   mixer-package DIR     Package a standalone release payload and notices in a new directory
   mixer-keys DIR        Create signing keys and a public trust root outside the checkout
@@ -47,9 +53,9 @@ const help = `./xtask <command>
                         recording and fetch the denoised audio
   check-elf FILE [--shared]  Check a mixer binary against the mixer ABI baseline
   licenses [--base] FILE  Write consolidated license notices HTML (or --base JSON for release jobs)
-  non-ui-packages       List desktop Go packages that do not depend on gpuikit
+  non-ui-packages       List desktop Go packages that do not depend on goui-kit
   schema [--check]      Generate Rust and Go wire types from schema/ (--check fails if stale)
-  check-ui-link [DIR]   Link ./cmd/rc2fx with release Velopack and gpuikit flags
+  check-ui-link [DIR]   Link ./cmd/rc2fx with release Velopack and goui-kit flags
   app [--release] [--mock] [--embedded] [--build-only] [-- ARGS...]
                         Build the desktop app for this machine into target/debug (a development
                         build), target/release (--release) or target/mock (--mock: the simulated
@@ -94,6 +100,14 @@ func dispatch(args []string) error {
 	switch {
 	case command == "setup" && len(rest) == 0:
 		return setup.Run()
+	case command == "fetch-goui-kit" && len(rest) <= 1:
+		target := ""
+		if len(rest) == 1 {
+			target = rest[0]
+		}
+		return deps.FetchGouiKit(target)
+	case command == "fetch-velopack":
+		return deps.FetchVelopack(rest)
 	case command == "mixer-build" && len(rest) == 0:
 		return setup.BuildMixer()
 	case command == "mixer-package" && len(rest) == 1:

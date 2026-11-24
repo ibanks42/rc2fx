@@ -1,4 +1,4 @@
-// Package app implements the RC2FX desktop UI on gpuikit.dev/gk.
+// Package app implements the RC2FX desktop UI on github.com/ibanks42/goui-kit/gk.
 // Non-UI logic lives in cgo-free subpackages (model, installflow, state, theme, ...).
 package app
 
@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"gpuikit.dev/gk"
+	"github.com/ibanks42/goui-kit/gk"
+	"github.com/ibanks42/goui-kit/gk/editor"
+	"github.com/ibanks42/goui-kit/gk/overlay"
 
 	"github.com/ibanks42/rc2fx/desktop/app/model"
 	"github.com/ibanks42/rc2fx/desktop/app/selfupdate"
@@ -70,8 +72,8 @@ type usbRuleUI struct {
 	usbRule     USBRule
 	usbRuleOpen bool
 	copied      string
-	usbRuleText gk.TextareaState
-	usbUndoText gk.InputState
+	usbRuleText editor.TextareaState
+	usbUndoText editor.InputState
 }
 
 // firstHintUI groups the post-install first-channel onboarding hint state.
@@ -112,7 +114,7 @@ type eqGraphUI struct {
 
 // confirmUI groups the modal confirm dialog and drag-preview caches.
 type confirmUI struct {
-	confirmDialog gk.Built[gk.DialogEl]
+	confirmDialog gk.Built[overlay.DialogEl]
 	confirmOpen   *confirmState
 	stagePreviews map[core.Effect]gk.View
 	bandPreviews  []gk.View
@@ -141,7 +143,7 @@ type App struct {
 	developerMode        bool
 	devPage              *DevPage
 	ssh                  SSH
-	sshAddress           gk.InputState
+	sshAddress           editor.InputState
 	bundledMixerSoftware *string
 
 	// Channel editor selection and import state.
@@ -247,8 +249,8 @@ func (a *App) init(cx *gk.Cx) {
 	setAppearance(cx, rememberedAppearance())
 	makeHalo(cx)
 	a.sshAddress = addressInput(cx)
-	a.usbRuleText = gk.NewTextareaState(cx).DefaultValue(helper.USBRule).Build()
-	a.usbUndoText = gk.NewInputState(cx).DefaultValue(USBUndo).Build()
+	a.usbRuleText = editor.NewTextareaState(cx).DefaultValue(helper.USBRule).Build()
+	a.usbUndoText = editor.NewInputState(cx).DefaultValue(USBUndo).Build()
 	a.presets = newPresetLibrary(cx)
 	a.contentScroll = gk.NewScrollHandle(cx)
 	a.focus = gk.NewFocusHandle(cx)
@@ -933,7 +935,7 @@ func (a *App) toastMessage(cx *gk.Cx) {
 	}
 	a.toasted = a.message
 	if a.session.Connected && a.message != "" && !progressMessage(a.message) {
-		gk.PushNotification(cx, a.message)
+		overlay.PushNotification(cx, a.message)
 	}
 }
 

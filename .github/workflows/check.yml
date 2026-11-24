@@ -150,7 +150,7 @@ jobs:
           python3 .github/scripts/test_update_history.py
           python3 .github/scripts/test_mixer_version.py
           python3 .github/scripts/test_publish_mixer.py
-          # Also verifies vpk, fetch-velopack.sh, and the packager agree on the Velopack pin.
+          # Also verifies vpk, ./xtask fetch-velopack, and the packager agree on the Velopack pin.
           python3 .github/scripts/test_prepare_appimage_notices.py
       # gauge_binding.py skips here (no host rc2fx-native build); linux runs it.
       - name: Test the mixer scripts
@@ -162,10 +162,9 @@ jobs:
           python3 mixer/gui/test_gui_pacing.py
 
   # Go desktop packages (non-UI + CGO_ENABLED=0 xtask + UI build and tests
-  # against prebuilt gpuikit and Velopack). Offscreen UI tests (app/uitest)
-  # require gpuikit's diagnostic library and are skipped here. Unpinned
-  # platforms or fork PRs without bindings access still run all non-UI checks
-  # and skip the UI steps with a warning (release.yml fails on missing pins).
+  # against prebuilt goui-kit and Velopack). Offscreen UI tests (app/uitest)
+  # require goui-kit's diagnostic library and are skipped here. Unpinned
+  # platforms still run all non-UI checks and skip the UI steps with a warning (release.yml fails on missing pins).
   desktop:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -207,7 +206,7 @@ jobs:
             ${{ steps.go-cache.outputs.build }}
           key: go-desktop-${{ runner.os }}-${{ hashFiles('desktop/go.sum') }}
           restore-keys: go-desktop-${{ runner.os }}-
-      # -e includes UI packages even without gpuikit installed; gofmt doesn't need their imports.
+      # -e includes UI packages even without goui-kit installed; gofmt doesn't need their imports.
       - name: Check formatting and schema
         if: runner.os == 'Linux'
         run: |
@@ -234,14 +233,14 @@ jobs:
           rm installer/embed/payload/rc2fx-payload.bin
       - name: Test the xtask as ./xtask builds it
         run: CGO_ENABLED=0 go test ./internal/xtask/... ./cmd/xtask
-      # Ensure cmd/xtask stays pure Go (no cgo or gpuikit dependencies) and the launcher works.
+      # Ensure cmd/xtask stays pure Go (no cgo or goui-kit dependencies) and the launcher works.
       - name: Check xtask purity and launcher
         if: runner.os == 'Linux'
         run: |
           bad=$(CGO_ENABLED=0 go list -e -deps -f '{{if or .Error .DepsErrors .CgoFiles}}{{.ImportPath}}: {{.Error}}{{end}}' ./cmd/xtask)
-          gk=$(CGO_ENABLED=0 go list -e -deps -f '{{.ImportPath}}' ./cmd/xtask | grep '^gpuikit\.dev' || true)
+          gk=$(CGO_ENABLED=0 go list -e -deps -f '{{.ImportPath}}' ./cmd/xtask | grep '^github\.com/ibanks42/goui-kit' || true)
           if [ -n "$bad$gk" ]; then
-            printf 'cmd/xtask must build without cgo or gpuikit:\n%s\n%s\n' "$bad" "$gk" >&2
+            printf 'cmd/xtask must build without cgo or goui-kit:\n%s\n%s\n' "$bad" "$gk" >&2
             exit 1
           fi
           sh -n ../xtask
@@ -251,21 +250,21 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          bash scripts/fetch-velopack.sh "$TARGET"
+          ../xtask fetch-velopack "$TARGET"
           CGO_ENABLED=1 go vet -tags velopack ./app/selfupdate/...
-      - name: Check for a gpuikit pin
+      - name: Check for a goui-kit pin
         id: pin
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
-          if grep -Eq "^sha_${PLATFORM}=[0-9a-f]{64}\$" scripts/fetch-gpuikit.sh; then
+          if grep -Eq "\"${PLATFORM}\": *\"[0-9a-f]{64}\"" ../config/goui-kit.json; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::fetch-gpuikit.sh has no SHA-256 for $PLATFORM yet; the UI is not built here"
+            echo "::warning::config/goui-kit.json has no SHA-256 for $PLATFORM yet; the UI is not built here"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
-      # Runtime system libraries referenced by gpuikit's static library.
-      - name: Install the gpuikit system libraries
+      # Runtime system libraries referenced by goui-kit's static library.
+      - name: Install the goui-kit system libraries
         if: steps.pin.outputs.ready == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
@@ -274,53 +273,42 @@ jobs:
       - name: Check the C toolchain
         if: steps.pin.outputs.ready == 'true' && runner.os == 'Windows'
         run: gcc --version && ld.lld --version
-      # Fork PRs lack secrets for private bindings repos; warn and skip there, fail elsewhere.
-      - name: Fetch gpuikit
-        id: gpuikit
+      - name: Fetch goui-kit
         if: steps.pin.outputs.ready == 'true'
         env:
-          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
-          FORK: ${{ github.event.pull_request.head.repo.fork == true }}
           TARGET: ${{ matrix.target }}
-        run: |
-          if bash scripts/fetch-gpuikit.sh "$TARGET"; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          elif [ "$FORK" != true ]; then
-            exit 1
-          else
-            echo "::warning::gpuikit could not be fetched in a pull request from a fork; the UI is not built here"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: ../xtask fetch-goui-kit "$TARGET"
       - name: Vet, build and test the UI
-        if: steps.gpuikit.outputs.ready == 'true'
+        if: steps.pin.outputs.ready == 'true'
         run: |
-          # Link path for gpuikit's static library (used by package gk and tests).
-          lib=$PWD/third_party/gpuikit/lib
+          # Link path for goui-kit's static library (used by package gk and tests).
+          lib=$PWD/third_party/goui-kit/lib
           [ "$RUNNER_OS" != Windows ] || lib=$(cygpath -m "$lib")
           export CGO_LDFLAGS="-L$lib"
           export CGO_ENABLED=1
-          go vet ./app/... ./cmd/rc2fx
-          go vet -tags mockmixer ./app/... ./cmd/rc2fx
+          # Pass gkstatic so package gk links the static library instead of loading the shared library at runtime.
+          go vet -tags gkstatic ./app/... ./cmd/rc2fx
+          go vet -tags gkstatic,mockmixer ./app/... ./cmd/rc2fx
           # Placeholder payload so go:embed passes vet under -tags embedded.
           : > installer/embed/payload/rc2fx-payload.bin
-          go vet -tags rc2fxdev,embedded ./app/... ./cmd/rc2fx ./installer/...
+          go vet -tags gkstatic,rc2fxdev,embedded ./app/... ./cmd/rc2fx ./installer/...
           rm installer/embed/payload/rc2fx-payload.bin
           # Verify release link flags (including both slices on macOS).
           ../xtask check-ui-link "$RUNNER_TEMP/rc2fx-ui-check"
           # Package gk embeds the required Windows manifest in test binaries too.
           # Only test UI packages here; non-UI ./app/* subpackages already ran above.
-          go test ./app ./cmd/rc2fx
-      # Single vulnerability scan covering non-UI packages plus ./cmd/rc2fx when gpuikit is present.
+          go test -tags gkstatic ./app ./cmd/rc2fx
+      # Single vulnerability scan covering non-UI packages plus ./cmd/rc2fx when goui-kit is present.
       - name: Check dependencies for vulnerabilities
         if: runner.os == 'Linux'
         env:
-          HAVE_GPUIKIT: ${{ steps.gpuikit.outputs.ready }}
+          HAVE_GOUIKIT: ${{ steps.pin.outputs.ready }}
         run: |
           pkgs=$(cat "$RUNNER_TEMP/non-ui-packages")
-          if [ "$HAVE_GPUIKIT" = true ]; then
-            export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/gpuikit/lib"
+          if [ "$HAVE_GOUIKIT" = true ]; then
+            export CGO_ENABLED=1 CGO_LDFLAGS="-L$PWD/third_party/goui-kit/lib"
             # shellcheck disable=SC2086
-            go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 $pkgs ./cmd/rc2fx
+            go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 -tags gkstatic $pkgs ./cmd/rc2fx
           else
             # shellcheck disable=SC2086
             go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 $pkgs
@@ -371,26 +359,11 @@ jobs:
             ${{ steps.go-cache.outputs.build }}
           key: go-desktop-alma-${{ hashFiles('desktop/go.sum', '.github/scripts/package-check.Containerfile') }}
           restore-keys: go-desktop-alma-
-      # Skip app build on fork PRs without bindings access; installer tests still run.
-      - name: Fetch gpuikit
-        id: gpuikit
-        env:
-          GPUIKIT_TOKEN: ${{ secrets.GPUIKIT_TOKEN || github.token }}
-          FORK: ${{ github.event.pull_request.head.repo.fork == true }}
-        run: |
-          if bash scripts/fetch-gpuikit.sh linux-amd64; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          elif [ "$FORK" != true ]; then
-            exit 1
-          else
-            echo "::warning::gpuikit could not be fetched in a pull request from a fork; the app is not built here"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Fetch goui-kit
+        run: ../xtask fetch-goui-kit linux-amd64
       - name: Fetch the Velopack C library
-        if: steps.gpuikit.outputs.ready == 'true'
-        run: bash scripts/fetch-velopack.sh linux-amd64
+        run: ../xtask fetch-velopack linux-amd64
       - name: Build the app
-        if: steps.gpuikit.outputs.ready == 'true'
         run: ../xtask check-ui-link "$RUNNER_TEMP/rc2fx-alma-check"
       - name: Test the installer
         run: CGO_ENABLED=1 go test ./installer/... ./ext2fs/...

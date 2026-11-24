@@ -32,9 +32,9 @@ The mixer's programs (`rc2fxd`, `rc2fx-supervisor`, `rc2fx-firmware`, and
 Apache-2.0; a few use other permissive licenses (BSD-2/3, ISC, Zlib,
 Unicode-3.0, CC0, 0BSD).
 
-The desktop app is written in Go. Its interface library, libgpuikit, is built
+The desktop app is written in Go. Its interface library, libgouikit, is built
 from Rust crates, including GPUI and gpui-component, and is linked into the
-app; the gpuikit download lists those crates with their licenses, and the
+app; the goui-kit download lists those crates with their licenses, and the
 app's license notices include that list and its license texts.
 
 ## Go
@@ -46,7 +46,7 @@ notices include each module's license text.
 ## Rust standard library
 
 The mixer's programs include the Rust standard library from Rust 1.100.0 (the
-toolchain pinned in `rust-toolchain.toml`); libgpuikit and Velopack's C
+toolchain pinned in `rust-toolchain.toml`); libgouikit and Velopack's C
 library in the desktop app include it from the toolchains they were built
 with. It is dual-licensed under MIT or
 Apache-2.0; copyrights are retained by its contributors
@@ -59,7 +59,7 @@ with their license texts; the app's license notices include its full text.
 ## Lucide icons
 
 The desktop app embeds icons from [Lucide](https://lucide.dev) through
-the gpuikit library. ISC License, Copyright (c) 2026 Lucide Icons and
+the goui-kit library. ISC License, Copyright (c) 2026 Lucide Icons and
 Contributors. The icons Lucide derives from Feather are also under the MIT
 License, Copyright (c) 2013-present Cole Bemis. Full text:
 [licenses/LICENSE-LUCIDE](licenses/LICENSE-LUCIDE).
@@ -103,11 +103,11 @@ can rebuild the runtime with a modified libfuse.
 `./xtask package` runs [cargo-about](https://github.com/EmbarkStudios/cargo-about)
 for the mixer workspace and the mixer library and combines its reports with
 these notices, the training-data credits, the project license texts, the Go
-standard library's and Go modules' licenses, and libgpuikit's notices. The
+standard library's and Go modules' licenses, and libgouikit's notices. The
 result is built into the app, under **Settings › About › Licenses › View
 licenses**. The AppImage also carries it as `LICENSES.html` in its system
 license directory. To write
-the same document as HTML without packaging, less the Go and libgpuikit
+the same document as HTML without packaging, less the Go and libgouikit
 notices, which only packaging adds, install cargo-about
 (`cargo install --locked cargo-about`) and run:
 

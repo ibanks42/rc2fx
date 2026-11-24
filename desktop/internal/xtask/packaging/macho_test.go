@@ -411,7 +411,7 @@ func TestEachMacSliceIsBuiltForItsArchitectureAndTheMinimum(t *testing.T) {
 		envValue(env, "CGO_CFLAGS") != "" || envValue(env, "MACOSX_DEPLOYMENT_TARGET") != "" {
 		t.Fatalf("%v", env)
 	}
-	// Static libgpuikit with linker dead-stripping; no @executable_path rpath needed.
+	// Static libgouikit with linker dead-stripping; no @executable_path rpath needed.
 	if ld, cgo := appLinkFlags("darwin", "/g/lib", "-s -w"); !strings.HasSuffix(cgo, "-L/g/lib") || ld != "-s -w -extldflags=-Wl,-dead_strip" {
 		t.Fatal(ld, cgo)
 	}
