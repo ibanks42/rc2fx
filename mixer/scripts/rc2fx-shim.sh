@@ -14,10 +14,10 @@ driver_alive() {
 	grep -qa 'update-commit' "/proc/$p/cmdline" 2>/dev/null
 }
 if test -f /opt/.rc2fx-update-pending && test -f "$previous/rc2fx.sh" &&
-	grep -q '^  launch) ' "$previous/rc2fx.sh" && ! driver_alive; then
+	grep -Eq '^[[:space:]]*launch\)' "$previous/rc2fx.sh" && ! driver_alive; then
 	exec /bin/bash "$previous/rc2fx.sh" launch "$@"
 fi
 for s in /run/rc2fx-dev/rc2fx.sh /opt/rc2fx/rc2fx.sh; do
-	if test -f "$s" && grep -q '^  launch) ' "$s"; then exec /bin/bash "$s" launch "$@"; fi
+	if test -f "$s" && grep -Eq '^[[:space:]]*launch\)' "$s"; then exec /bin/bash "$s" launch "$@"; fi
 done
 exec /usr/bin/rc_audio_mixer "$@"

@@ -14,10 +14,10 @@ driver_alive() {
 	grep -qa 'update-commit' "/proc/$p/cmdline" 2>/dev/null
 }
 if test -f /opt/.rc2fx-update-pending && test -f "$previous/rc2fx.sh" &&
-	grep -q '^  gui-launch) ' "$previous/rc2fx.sh" && ! driver_alive; then
+	grep -Eq '^[[:space:]]*gui-launch\)' "$previous/rc2fx.sh" && ! driver_alive; then
 	exec /bin/bash "$previous/rc2fx.sh" gui-launch "$@"
 fi
 for s in /run/rc2fx-dev/rc2fx.sh /opt/rc2fx/rc2fx.sh; do
-	if test -f "$s" && grep -q '^  gui-launch) ' "$s"; then exec /bin/bash "$s" gui-launch "$@"; fi
+	if test -f "$s" && grep -Eq '^[[:space:]]*gui-launch\)' "$s"; then exec /bin/bash "$s" gui-launch "$@"; fi
 done
 exec /usr/bin/rc_gui_juce "$@"

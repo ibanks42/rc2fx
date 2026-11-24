@@ -18,7 +18,7 @@ files="librc2fx_native.so rc2fxd rc2fx-supervisor rc2fx-firmware firmware-profil
 # Keep only .rc2fx-previous for rollback. Older installers archived every
 # previous copy under .rc2fx-retained.* and eventually filled rootfs; prune
 # those, sparing the oldest pre-GUI-shim install and anything with a data/ dir.
-pre_gui() { ! grep -qF '  gui-launch) ' "$1/rc2fx.sh" 2>/dev/null; }
+pre_gui() { ! grep -Eq '^[[:space:]]*gui-launch\)' "$1/rc2fx.sh" 2>/dev/null; }
 installed_at() { if test -f "$1/rc2fx.sh"; then echo "$1/rc2fx.sh"; else echo "$1"; fi; }
 original() {
 	keep=
