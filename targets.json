@@ -2,133 +2,97 @@
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 795410818,
+    "version": 795560777,
     "expires": "2029-11-04T15:48:28.583715004Z",
     "targets": {
-      "v0.2.3/io.github.ibanks42.rc2fx-0.2.3-full.nupkg": {
-        "length": 30585923,
+      "v0.2.4/io.github.ibanks42.rc2fx-0.2.4-full.nupkg": {
+        "length": 31398834,
         "hashes": {
-          "sha256": "112d87ad20b4198925f77140a6a12302ae11c715f785429cfca9e654b7618178"
+          "sha256": "22aedceef8d0cd86354eddd1328f834076ee88612bf621612de7cb00e4d71289"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/io.github.ibanks42.rc2fx-0.2.3-linux-full.nupkg": {
-        "length": 55797825,
+      "v0.2.4/io.github.ibanks42.rc2fx-0.2.4-linux-full.nupkg": {
+        "length": 55086727,
         "hashes": {
-          "sha256": "ae01a9add4e179ce3907ae25edbf8fe2f636cc9211d0567a77e9083464908a82"
+          "sha256": "78fbde87db79a18d2a8dd66ad572dd17e3129f9a2fee55f4ee9fc7eaa775293b"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/io.github.ibanks42.rc2fx-0.2.3-osx-full.nupkg": {
-        "length": 45999247,
+      "v0.2.4/io.github.ibanks42.rc2fx-0.2.4-osx-full.nupkg": {
+        "length": 47047715,
         "hashes": {
-          "sha256": "bed1a7cb4de020b7b27a7903af44fab96bfcbe7fad06569ec40b8288e749f567"
+          "sha256": "89d3433f804e7c2f66fb651b943e669c5f0ae0c115b72a872d687c11d1f3129b"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/rc2fx-0.2.3-appimage-runtime-sources.tar.gz": {
+      "v0.2.4/rc2fx-0.2.4-appimage-runtime-sources.tar.gz": {
         "length": 10922294,
         "hashes": {
           "sha256": "eb8c6e9673d744e3eb6277af416211d4786dbe7b8aae5efeea7bbf2381c320fc"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/rc2fx-linux-x64.AppImage": {
-        "length": 56453624,
+      "v0.2.4/rc2fx-linux-x64.AppImage": {
+        "length": 55740920,
         "hashes": {
-          "sha256": "5818354eabc163bad22c0dcf426c8a08cbed91f3d22d635e834c7cf432658195"
+          "sha256": "18a61ef30f405477bee2389e168742240002f40943b85c639e51c69386bf59fa"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/rc2fx-macos-arm64.pkg": {
-        "length": 44467700,
+      "v0.2.4/rc2fx-macos-universal.pkg": {
+        "length": 45475871,
         "hashes": {
-          "sha256": "e290e4ca792ca00cda706e7fd87e64b893677094d841a638e2951b0f22a0139f"
+          "sha256": "9e933f8d03d88e36bea65b2fcd35f900b558fde09b859d03f1835d4843ebd65a"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/rc2fx-macos-arm64.zip": {
-        "length": 44445067,
+      "v0.2.4/rc2fx-windows-x64-setup.exe": {
+        "length": 39881138,
         "hashes": {
-          "sha256": "09a9d885906d9cc66bf1593c5067c0f94e3f7985f7eb1a34edbf55bd718bc5fe"
+          "sha256": "cf286f8e6b84dabc3fa0008d860d7b60746b4389806dc834fb5c33b672606451"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/rc2fx-macos-universal.pkg": {
-        "length": 44467700,
-        "hashes": {
-          "sha256": "e290e4ca792ca00cda706e7fd87e64b893677094d841a638e2951b0f22a0139f"
-        },
-        "custom": {
-          "version": "0.2.3"
-        }
-      },
-      "v0.2.3/rc2fx-macos-universal.zip": {
-        "length": 44445067,
-        "hashes": {
-          "sha256": "09a9d885906d9cc66bf1593c5067c0f94e3f7985f7eb1a34edbf55bd718bc5fe"
-        },
-        "custom": {
-          "version": "0.2.3"
-        }
-      },
-      "v0.2.3/rc2fx-windows-x64-setup.exe": {
-        "length": 39068227,
-        "hashes": {
-          "sha256": "c6329dca500a402ac7b338a9ca6d1df82189c435c31d0cab1411093ecda85496"
-        },
-        "custom": {
-          "version": "0.2.3"
-        }
-      },
-      "v0.2.3/rc2fx-windows-x64.zip": {
-        "length": 30574366,
-        "hashes": {
-          "sha256": "665218fb592b51a1c8625c112ceed2a67e5f0ea4ad834ff386a0e812ba4b1de7"
-        },
-        "custom": {
-          "version": "0.2.3"
-        }
-      },
-      "v0.2.3/releases.linux.json": {
+      "v0.2.4/releases.linux.json": {
         "length": 288,
         "hashes": {
-          "sha256": "603ba9b6b3eb422352b79b0e6b37d64106b73526032486de7515f4f56e2d0441"
+          "sha256": "c7de7435edc9d19fd7e8e2ba1595951b4fcd7d2d541442b50c37df1456e0267d"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/releases.osx.json": {
+      "v0.2.4/releases.osx.json": {
         "length": 286,
         "hashes": {
-          "sha256": "a8075d0cd68df588f82aed3e36821e593e9c54530d8a4d3e14353ae76a279df7"
+          "sha256": "c32221458937e53719af8d96f8faeea9bc1bbdfce04892c30201e18a63deb7dc"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       },
-      "v0.2.3/releases.win.json": {
+      "v0.2.4/releases.win.json": {
         "length": 282,
         "hashes": {
-          "sha256": "07e5213a8833a6a8258d9027aa66a5483fa22922dcd89f589a6bcc1d6c5ba4a8"
+          "sha256": "5ae5e2295763fc0b7e252390577faa2126d7afed38f42acf0951d53359addba3"
         },
         "custom": {
-          "version": "0.2.3"
+          "version": "0.2.4"
         }
       }
     },
@@ -140,7 +104,7 @@
   "signatures": [
     {
       "keyid": "24ae112575393b1874a6533143c28206115abb8a9d386d84e04f28570fbaf6d4",
-      "sig": "36e8862d30830c03194f073d378187b9efd671ecbe1b4d9a14e97e4dc83a65f3d94a31bde0adfd394dc888df1e1e26ad87a74cb667f8904069e62533110535b3ef46e17059e137b2a96e59d5791d13e6616c1644269e70ada422a720a543e180b8c51a752a8af3a17402afcb217edb4d4606745e6b32964903ef84c3cfba4055cc13f6d8c32e2e3a9fb3c6f34b4229588495f381abe443b7b73f9a61095c68819a04c0368c90bd2cac4d99168fab350db1d9882bfd8aec38e1b4a7e56252fdb63ad4c65d54e706fe26a738449c3181cd09a7344193a39e80a0ca485ccda212ab629b75ede96c5cee1bc583786000e41f38376c26a6612f6d1a1cbe8e3509f6dc0efe5ccb1e5a4a5c877ed76de3bdf73ad2f108d9667fe3f0b4e284e3136f21b0da7a9dfacfbf812b62a261c0ad65c0679f1bca3dde7f7dc72c6118c31a6acb03271f67b9e6d1f012134a5251e86a656e1c883ba5074fef283d400e4409b280a22e334f7baae3b7fa682efc08341c7ee348324d1006389f0b40211223f07d41a5"
+      "sig": "bd185e565423ecd77145625e9d251a3e88912af54f088009603839c752ba3d53e2332150d5acb895fdbce329c29e48bc566bc0f0dd33bc34a53f30fe5d31bfdf78140af6ca31d2fb3a741ed5dda3b2897cd1092f7406446e6d13f331abb3cae44b5b1428c19b71fa221557fb641281bd7bb7a45efb760b2cd0764125a52f8361c68648508789a74b58b7cc5de02175d6dc6319a6fa2c051c869d7f503916618140cdeaff87555add6fafde93e7950bc592708f1962772b447e43b623e1d53b03e6bdf806f18edb81ce5bbbec205d0a92c7a87d64f5520740d8e2f939b0e456bf7308377664aa228861c0172a07f725de33819aded7ad2625b3d8abe4c8f09580002e26b9d07eafdce1b08783cb7fb183caa2c79faba7bf66ec0e1d10edb815729b1b0f53821561356df3d82f84007f151b00b2ffe881029f6bbc101820f6e0049db40bef3ad8e48eb48b33bbaca240fbf2bdcaf691faed03bfd5aa447efb649550b2dad106fa1dca05ea28ea49761897528401f25a3b320099440d02149fdcad"
     }
   ]
 }
