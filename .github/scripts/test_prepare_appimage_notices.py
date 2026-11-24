@@ -47,39 +47,65 @@ class Paths(unittest.TestCase):
             recipe.parent.mkdir(parents=True)
             recipe.write_text("pkgver=1.5.6\n")
             (root / "unrelated").write_text("not bundled")
+
             def git(*args):
-                return subprocess.check_output(["git", "-C", tmp, *args], text=True).strip()
+                return subprocess.check_output(
+                    ["git", "-C", tmp, *args], text=True
+                ).strip()
+
             git("init", "-q")
             git("add", ".")
-            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                "commit", "-qm", "fixture")
+            git(
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            )
             commit = git("rev-parse", "HEAD")
             archive = notices.git_source(tmp, commit, "aports-test", ("main/zstd",))
-            self.assertEqual(notices.aport_files(archive, "main/zstd"),
-                             {"APKBUILD": b"pkgver=1.5.6\n"})
+            self.assertEqual(
+                notices.aport_files(archive, "main/zstd"),
+                {"APKBUILD": b"pkgver=1.5.6\n"},
+            )
             with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
                 self.assertFalse(any("unrelated" in name for name in tar.getnames()))
             with self.assertRaises(notices.Failure):
                 notices.git_source(tmp, "HEAD", "aports-test")
 
     def test_unsafe_names_are_refused(self):
-        for name in ["../x", "a/../../x", "/etc/passwd", "a//b", "./a", "a\\b", "", "a/."]:
+        for name in [
+            "../x",
+            "a/../../x",
+            "/etc/passwd",
+            "a//b",
+            "./a",
+            "a\\b",
+            "",
+            "a/.",
+        ]:
             with self.assertRaises(notices.Failure, msg=name):
                 notices.safe_relative(name)
         self.assertEqual(notices.safe_relative("a/b.patch"), "a/b.patch")
 
     def test_aport_archives_with_escaping_or_linked_entries_are_refused(self):
-        good = tarball([
-            ("aports-c/main/zlib", None, tarfile.DIRTYPE),
-            ("aports-c/main/zlib/APKBUILD", b"pkgver=1\n", tarfile.REGTYPE),
-            ("aports-c/main/zlib/fix.patch", b"--- a\n", tarfile.REGTYPE),
-            ("aports-c/main/zstd/APKBUILD", b"other\n", tarfile.REGTYPE),
-        ])
+        good = tarball(
+            [
+                ("aports-c/main/zlib", None, tarfile.DIRTYPE),
+                ("aports-c/main/zlib/APKBUILD", b"pkgver=1\n", tarfile.REGTYPE),
+                ("aports-c/main/zlib/fix.patch", b"--- a\n", tarfile.REGTYPE),
+                ("aports-c/main/zstd/APKBUILD", b"other\n", tarfile.REGTYPE),
+            ]
+        )
         self.assertEqual(
             notices.aport_files(good, "main/zlib"),
             {"APKBUILD": b"pkgver=1\n", "fix.patch": b"--- a\n"},
         )
-        escaping = tarball([("aports-c/main/zlib/../../../evil", b"x", tarfile.REGTYPE)])
+        escaping = tarball(
+            [("aports-c/main/zlib/../../../evil", b"x", tarfile.REGTYPE)]
+        )
         with self.assertRaises(notices.Failure):
             notices.aport_files(escaping, "main/zlib")
         linked = tarball([("aports-c/main/zlib/APKBUILD", None, tarfile.SYMTYPE)])
@@ -92,7 +118,9 @@ class Checksums(unittest.TestCase):
         data = b"payload"
         notices.require("sha256", data, notices.digest("sha256", data), "ok")
         with self.assertRaises(notices.Failure) as caught:
-            notices.require("sha256", data + b"!", notices.digest("sha256", data), "https://x/y")
+            notices.require(
+                "sha256", data + b"!", notices.digest("sha256", data), "https://x/y"
+            )
         self.assertIn("https://x/y", str(caught.exception))
         with self.assertRaises(notices.Failure):
             notices.require("sha512", data, SHA, "z")
@@ -104,7 +132,7 @@ class Checksums(unittest.TestCase):
             [(SHA, "zlib-1.3.1.tar.gz"), ("b" * 128, "fix.patch")],
         )
         for bad in [
-            'pkgver=1\n',
+            "pkgver=1\n",
             f'sha512sums="\n{SHA[:-1]}  short\n"\n',
             f'sha512sums="\n{SHA}  two names\n"\n',
         ]:
@@ -123,16 +151,20 @@ class Checksums(unittest.TestCase):
             {"fuse-3.15.0.tar.xz": "c" * 64, "0.5.2.tar.gz": "d" * 64},
         )
         self.assertEqual(
-            notices.recipe_url(script, "0.5.2.tar.gz"), "https://example.org/archive/0.5.2.tar.gz"
+            notices.recipe_url(script, "0.5.2.tar.gz"),
+            "https://example.org/archive/0.5.2.tar.gz",
         )
         with self.assertRaises(notices.Failure):
             notices.recipe_url(script, "missing.tar.gz")
 
     def test_apkbuild_fields(self):
-        apkbuild = 'pkgver=1.5.6\npkgrel=2\nlicense="BSD-3-Clause OR GPL-2.0-or-later"\n'
+        apkbuild = (
+            'pkgver=1.5.6\npkgrel=2\nlicense="BSD-3-Clause OR GPL-2.0-or-later"\n'
+        )
         self.assertEqual(notices.apkbuild_field(apkbuild, "pkgver"), "1.5.6")
         self.assertEqual(
-            notices.apkbuild_field(apkbuild, "license"), "BSD-3-Clause OR GPL-2.0-or-later"
+            notices.apkbuild_field(apkbuild, "license"),
+            "BSD-3-Clause OR GPL-2.0-or-later",
         )
         with self.assertRaises(notices.Failure):
             notices.apkbuild_field(apkbuild, "pkgdesc")
@@ -156,8 +188,11 @@ class Runtime(unittest.TestCase):
         self.addCleanup(lambda: setattr(notices, "RUNTIME_SHA256", saved[1]))
 
     def test_the_vendored_runtime_is_read_from_the_checked_package(self):
-        runtime = (b"\x7fELF runtime https://github.com/AppImage/type2-runtime/commit/"
-                   + notices.RUNTIME_COMMIT[:7].encode() + b"\0")
+        runtime = (
+            b"\x7fELF runtime https://github.com/AppImage/type2-runtime/commit/"
+            + notices.RUNTIME_COMMIT[:7].encode()
+            + b"\0"
+        )
         package = self.nupkg(runtime)
         self.pinned(package, runtime)
         with tempfile.TemporaryDirectory() as tmp:
@@ -198,7 +233,10 @@ class Runtime(unittest.TestCase):
         self.assertIn('"config", "velopack.json"', fetch)
         self.assertIn('`json:"vpkSha256"`', fetch)
         pins = json.loads(config.read_text())
-        self.assertEqual([pins["version"], pins["vpkSha256"]], [notices.VPK_VERSION, notices.VPK_SHA256])
+        self.assertEqual(
+            [pins["version"], pins["vpkSha256"]],
+            [notices.VPK_VERSION, notices.VPK_SHA256],
+        )
 
     def test_the_app_links_the_velopack_that_vpk_packs_with(self):
         # Packaging, go -C tools/xtask run . fetch-velopack, and prepare-appimage-notices.py all share config/velopack.json.
@@ -208,7 +246,9 @@ class Runtime(unittest.TestCase):
         licenses = (root / "tools/xtask/internal/licenses/licenses.go").read_text()
         self.assertIn("config", licenses)
         self.assertIn("velopack.json", licenses)
-        self.assertTrue((root / f"licenses/velopack-{notices.VPK_VERSION}.json").is_file())
+        self.assertTrue(
+            (root / f"licenses/velopack-{notices.VPK_VERSION}.json").is_file()
+        )
 
     def test_the_build_image_has_the_go_go_mod_pins(self):
         # Keep the AlmaLinux build container's Go toolchain in sync with desktop/go.mod.
@@ -224,10 +264,12 @@ class Runtime(unittest.TestCase):
 
 class Licenses(unittest.TestCase):
     def test_license_files_are_taken_from_the_top_of_the_source(self):
-        source = tarball([
-            ("zlib-1.3.1/LICENSE", b"top", tarfile.REGTYPE),
-            ("zlib-1.3.1/contrib/x/LICENSE", b"nested", tarfile.REGTYPE),
-        ])
+        source = tarball(
+            [
+                ("zlib-1.3.1/LICENSE", b"top", tarfile.REGTYPE),
+                ("zlib-1.3.1/contrib/x/LICENSE", b"nested", tarfile.REGTYPE),
+            ]
+        )
         self.assertEqual(notices.member(source, "LICENSE"), b"top")
         with self.assertRaises(notices.Failure):
             notices.member(source, "COPYRIGHT")
@@ -245,9 +287,14 @@ class Bundle(unittest.TestCase):
                 members = tar.getmembers()
             self.assertEqual(
                 [m.name for m in members],
-                ["rc2fx-appimage-runtime-sources/a/x.txt", "rc2fx-appimage-runtime-sources/b.txt"],
+                [
+                    "rc2fx-appimage-runtime-sources/a/x.txt",
+                    "rc2fx-appimage-runtime-sources/b.txt",
+                ],
             )
-            self.assertTrue(all(m.mtime == 0 and m.uid == 0 and m.mode == 0o644 for m in members))
+            self.assertTrue(
+                all(m.mtime == 0 and m.uid == 0 and m.mode == 0o644 for m in members)
+            )
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@ APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export APPDIR
 
 case "${LD_LIBRARY_PATH:-}" in
-    "") LD_LIBRARY_PATH="$APPDIR/usr/lib" ;;
-    *) LD_LIBRARY_PATH="$APPDIR/usr/lib:$LD_LIBRARY_PATH" ;;
+"") LD_LIBRARY_PATH="$APPDIR/usr/lib" ;;
+*) LD_LIBRARY_PATH="$APPDIR/usr/lib:$LD_LIBRARY_PATH" ;;
 esac
 export LD_LIBRARY_PATH
 

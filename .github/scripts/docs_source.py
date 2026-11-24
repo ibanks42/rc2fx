@@ -16,8 +16,12 @@ def source_ref(source, latest):
     if source != "latest-release":
         raise ValueError(f"unsupported documentation source: {source!r}")
     release = latest()
-    if (not isinstance(release, dict) or release.get("draft") is not False
-            or release.get("prerelease") is not False or not release.get("published_at")):
+    if (
+        not isinstance(release, dict)
+        or release.get("draft") is not False
+        or release.get("prerelease") is not False
+        or not release.get("published_at")
+    ):
         raise ValueError("latest release is not a published stable release")
     tag = release.get("tag_name")
     if not isinstance(tag, str) or not STABLE_TAG.fullmatch(tag):
@@ -27,9 +31,11 @@ def source_ref(source, latest):
 
 def latest_release():
     repo = os.environ["GH_REPO"]
-    return json.loads(subprocess.check_output(
-        ["gh", "api", f"repos/{repo}/releases/latest"], text=True
-    ))
+    return json.loads(
+        subprocess.check_output(
+            ["gh", "api", f"repos/{repo}/releases/latest"], text=True
+        )
+    )
 
 
 if __name__ == "__main__":

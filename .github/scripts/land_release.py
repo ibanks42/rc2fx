@@ -12,6 +12,7 @@ change to main still stops the release.
 
 Writes `sha=` (the commit the release points at) to $GITHUB_OUTPUT if set.
 """
+
 import argparse
 import os
 import re
@@ -20,7 +21,9 @@ import subprocess
 # What each workflow's version commit looks like. A release accepts only the
 # other workflow's commits between its source and main.
 APP_SUBJECT = re.compile(r"chore\(release\): v\d+\.\d+\.\d+")
-APP_FILES = frozenset({"CHANGELOG.md", "config/app-release.json", "desktop/installer/installer.go"})
+APP_FILES = frozenset(
+    {"CHANGELOG.md", "config/app-release.json", "desktop/installer/installer.go"}
+)
 MIXER_SUBJECT = re.compile(r"chore\(mixer-release\): \d+\.\d+\.\d+")
 MIXER_FILES = frozenset({"config/mixer-release.json"})
 
@@ -52,7 +55,9 @@ def foreign_commit_problem(kind, subject, files):
 
 def check_moved(kind, source, head):
     if git("merge-base", source, head) != source:
-        raise Refused(f"main no longer contains {source}. Start a new {kind} release run.")
+        raise Refused(
+            f"main no longer contains {source}. Start a new {kind} release run."
+        )
     for commit in git("rev-list", "--reverse", f"{source}..{head}").split():
         subject = git("show", "-s", "--format=%s", commit)
         files = git("diff-tree", "--no-commit-id", "--name-only", "-r", commit).split()

@@ -150,7 +150,9 @@ def recipe_pins(script: str) -> dict[str, str]:
     """Extract `sha256  filename` pins from install-dependencies.sh."""
     return {
         name: sha
-        for sha, name in re.findall(r'echo "([0-9a-f]{64})  ([^"\s]+)" \| sha256sum -c', script)
+        for sha, name in re.findall(
+            r'echo "([0-9a-f]{64})  ([^"\s]+)" \| sha256sum -c', script
+        )
     }
 
 
@@ -165,8 +167,10 @@ def member(archive: bytes, suffix: str) -> bytes:
     """Read the unique top-level file in a tarball ending with `suffix`."""
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
         found = [
-            m for m in tar.getmembers()
-            if m.isfile() and (m.name == suffix or m.name.endswith("/" + suffix))
+            m
+            for m in tar.getmembers()
+            if m.isfile()
+            and (m.name == suffix or m.name.endswith("/" + suffix))
             and m.name.count("/") <= 1 + suffix.count("/")
         ]
         if len(found) != 1:
@@ -190,7 +194,9 @@ def aport_files(archive: bytes, path: str) -> dict[str, bytes]:
     return files
 
 
-def git_source(repo: str, commit: str, prefix: str, paths: tuple[str, ...] = ()) -> bytes:
+def git_source(
+    repo: str, commit: str, prefix: str, paths: tuple[str, ...] = ()
+) -> bytes:
     """Fetch `commit` from `repo` and return its `git archive` tarball.
 
     Uncached so git verifies the commit object on every run.
@@ -200,7 +206,10 @@ def git_source(repo: str, commit: str, prefix: str, paths: tuple[str, ...] = ())
         subprocess.run(["git", "init", "-q", work], check=True)
         subprocess.run(git + ["fetch", "-q", "--depth", "1", repo, commit], check=True)
         head = subprocess.run(
-            git + ["rev-parse", "FETCH_HEAD"], check=True, capture_output=True, text=True
+            git + ["rev-parse", "FETCH_HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
         if head != commit:
             raise Failure(f"fetched commit {head}, expected {commit}")
@@ -229,7 +238,11 @@ def vendored_runtime(vpk_package: Path | None, cache: Path | None) -> bytes:
 
 def check_runtime_commit(binary: bytes) -> None:
     """Verify the runtime binary's embedded version string matches RUNTIME_COMMIT."""
-    found = set(re.findall(rb"github\.com/AppImage/type2-runtime/commit/([0-9a-f]{7,40})", binary))
+    found = set(
+        re.findall(
+            rb"github\.com/AppImage/type2-runtime/commit/([0-9a-f]{7,40})", binary
+        )
+    )
     if len(found) != 1 or not RUNTIME_COMMIT.startswith(found.pop().decode()):
         raise Failure(f"the vendored runtime does not report commit {RUNTIME_COMMIT}")
 
@@ -243,27 +256,35 @@ def collect(
     sections: list[dict] = []
 
     binary = vendored_runtime(vpk_package, cache)
-    runtime = git_source(RUNTIME_REPO, RUNTIME_COMMIT, f"type2-runtime-{RUNTIME_COMMIT}")
+    runtime = git_source(
+        RUNTIME_REPO, RUNTIME_COMMIT, f"type2-runtime-{RUNTIME_COMMIT}"
+    )
     files[f"type2-runtime-{RUNTIME_COMMIT}.tar"] = runtime
     script = member(runtime, "scripts/common/install-dependencies.sh").decode()
     dockerfile = member(runtime, "scripts/docker/Dockerfile").decode()
     if f"FROM alpine:{ALPINE_BRANCH[1:]}" not in dockerfile:
-        raise Failure(f"the runtime's Dockerfile no longer builds on alpine:{ALPINE_BRANCH[1:]}")
-    manifest.append({
-        "component": "AppImage type 2 runtime",
-        "source": f"{RUNTIME_REPO}/tree/{RUNTIME_COMMIT}",
-        "file": f"type2-runtime-{RUNTIME_COMMIT}.tar",
-        "sha256": digest("sha256", runtime),
-        "verification": (
-            f"git commit id, the one the runtime binary reports; vpk {VPK_VERSION} vendors that "
-            f"binary as {VPK_RUNTIME}, sha256 {RUNTIME_SHA256}, in its package with sha256 "
-            f"{VPK_SHA256}"
-        ),
-    })
-    sections.append({
-        "title": "AppImage type 2 runtime",
-        "text": member(runtime, "LICENSE").decode(),
-    })
+        raise Failure(
+            f"the runtime's Dockerfile no longer builds on alpine:{ALPINE_BRANCH[1:]}"
+        )
+    manifest.append(
+        {
+            "component": "AppImage type 2 runtime",
+            "source": f"{RUNTIME_REPO}/tree/{RUNTIME_COMMIT}",
+            "file": f"type2-runtime-{RUNTIME_COMMIT}.tar",
+            "sha256": digest("sha256", runtime),
+            "verification": (
+                f"git commit id, the one the runtime binary reports; vpk {VPK_VERSION} vendors that "
+                f"binary as {VPK_RUNTIME}, sha256 {RUNTIME_SHA256}, in its package with sha256 "
+                f"{VPK_SHA256}"
+            ),
+        }
+    )
+    sections.append(
+        {
+            "title": "AppImage type 2 runtime",
+            "text": member(runtime, "LICENSE").decode(),
+        }
+    )
 
     pins = recipe_pins(script)
     for name, title, licenses in [
@@ -277,13 +298,15 @@ def collect(
         require("sha256", data, pins[name], url)
         stored = "squashfuse-0.5.2.tar.gz" if name == "0.5.2.tar.gz" else name
         files[stored] = data
-        manifest.append({
-            "component": title,
-            "source": url,
-            "file": stored,
-            "sha256": pins[name],
-            "verification": "sha256 pinned by the runtime's install-dependencies.sh",
-        })
+        manifest.append(
+            {
+                "component": title,
+                "source": url,
+                "file": stored,
+                "sha256": pins[name],
+                "verification": "sha256 pinned by the runtime's install-dependencies.sh",
+            }
+        )
         text = "\n\n".join(member(data, f).decode() for f in licenses)
         if name.startswith("fuse-"):
             text = (
@@ -297,7 +320,10 @@ def collect(
         sections.append({"title": title, "text": text})
 
     aport = git_source(
-        APORTS_REPO, APORTS_COMMIT, f"aports-{APORTS_COMMIT}", tuple(ALPINE_PACKAGES.values())
+        APORTS_REPO,
+        APORTS_COMMIT,
+        f"aports-{APORTS_COMMIT}",
+        tuple(ALPINE_PACKAGES.values()),
     )
     for component, path in ALPINE_PACKAGES.items():
         commit = APORTS_COMMIT
@@ -321,27 +347,31 @@ def collect(
             data = fetch(url, cache)
             require("sha512", data, sha512, url)
             files[f"{prefix}/{safe_relative(name)}"] = data
-            manifest.append({
-                "component": f"{component} (Alpine {origin} {version})",
-                "source": url,
-                "file": f"{prefix}/{name}",
-                "sha512": sha512,
-                "verification": (
-                    f"sha512 from Alpine aports {commit} ({path}/APKBUILD); Alpine "
-                    f"{ALPINE_BRANCH} at the runtime's build time, inferred, NOT verified to be "
-                    "the revision linked into the runtime"
-                ),
-            })
+            manifest.append(
+                {
+                    "component": f"{component} (Alpine {origin} {version})",
+                    "source": url,
+                    "file": f"{prefix}/{name}",
+                    "sha512": sha512,
+                    "verification": (
+                        f"sha512 from Alpine aports {commit} ({path}/APKBUILD); Alpine "
+                        f"{ALPINE_BRANCH} at the runtime's build time, inferred, NOT verified to be "
+                        "the revision linked into the runtime"
+                    ),
+                }
+            )
             if license_text is None and re.search(r"\.tar\.(gz|xz|bz2|zst)$", name):
                 license_text = "\n\n".join(
                     member(data, f).decode() for f in LICENSE_FILES[component]
                 )
         if license_text is None:
             raise Failure(f"no source archive with a license for {component}")
-        sections.append({
-            "title": f"{component} {version.rsplit('-r', 1)[0]} (AppImage runtime)",
-            "text": f"License: {license}\n\n{license_text}",
-        })
+        sections.append(
+            {
+                "title": f"{component} {version.rsplit('-r', 1)[0]} (AppImage runtime)",
+                "text": f"License: {license}\n\n{license_text}",
+            }
+        )
     return files, manifest, sections, len(binary)
 
 
@@ -439,22 +469,33 @@ def write_bundle(path: Path, files: dict[str, bytes]) -> None:
             info.uname = info.gname = ""
             tar.addfile(info, io.BytesIO(files[name]))
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as out, gzip.GzipFile(fileobj=out, mode="wb", mtime=SOURCE_DATE, filename="") as gz:
+    with (
+        open(path, "wb") as out,
+        gzip.GzipFile(fileobj=out, mode="wb", mtime=SOURCE_DATE, filename="") as gz,
+    ):
         gz.write(raw.getvalue())
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[2]
+    )
     parser.add_argument("--cache", type=Path, help="reuse downloads across runs")
     parser.add_argument(
-        "--vpk-package", type=Path, help="the vpk NuGet package already downloaded by go -C tools/xtask run . fetch-vpk"
+        "--vpk-package",
+        type=Path,
+        help="the vpk NuGet package already downloaded by go -C tools/xtask run . fetch-vpk",
     )
     args = parser.parse_args()
     try:
         files, manifest, sections, size = collect(args.cache, args.vpk_package)
     except (
-        Failure, OSError, subprocess.CalledProcessError, tarfile.TarError, UnicodeDecodeError
+        Failure,
+        OSError,
+        subprocess.CalledProcessError,
+        tarfile.TarError,
+        UnicodeDecodeError,
     ) as error:
         print(f"prepare-appimage-notices: {error}", file=sys.stderr)
         return 1
@@ -467,19 +508,34 @@ def main() -> int:
         "sections": sections,
     }
     files["README.md"] = README.format(
-        repo=RUNTIME_REPO, commit=RUNTIME_COMMIT, alpine=ALPINE_BRANCH[1:], aports=APORTS_COMMIT,
-        vpk=VPK_VERSION, runtime_sha=RUNTIME_SHA256,
+        repo=RUNTIME_REPO,
+        commit=RUNTIME_COMMIT,
+        alpine=ALPINE_BRANCH[1:],
+        aports=APORTS_COMMIT,
+        vpk=VPK_VERSION,
+        runtime_sha=RUNTIME_SHA256,
     ).encode()
     files["SOURCES.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
-    files["LICENSES.json"] = (json.dumps(notices, indent=2, ensure_ascii=False) + "\n").encode()
+    files["LICENSES.json"] = (
+        json.dumps(notices, indent=2, ensure_ascii=False) + "\n"
+    ).encode()
     legal = args.root / "target" / "appimage-legal"
     legal.mkdir(parents=True, exist_ok=True)
     (legal / "notices.json").write_bytes(files["LICENSES.json"])
-    version = json.loads((args.root / "config" / "app-release.json").read_text())["version"]
-    bundle = args.root / "target" / "package" / f"rc2fx-{version}-appimage-runtime-sources.tar.gz"
+    version = json.loads((args.root / "config" / "app-release.json").read_text())[
+        "version"
+    ]
+    bundle = (
+        args.root
+        / "target"
+        / "package"
+        / f"rc2fx-{version}-appimage-runtime-sources.tar.gz"
+    )
     write_bundle(bundle, files)
     print(f"wrote {legal / 'notices.json'} ({len(sections)} sections)")
-    print(f"wrote {bundle} ({bundle.stat().st_size} bytes, sha256 {digest('sha256', bundle.read_bytes())})")
+    print(
+        f"wrote {bundle} ({bundle.stat().st_size} bytes, sha256 {digest('sha256', bundle.read_bytes())})"
+    )
     return 0
 
 

@@ -21,6 +21,7 @@ Run: python -m tools.firmware_audit.usb_paths --archive A.tar.gz [--archive ...]
 The output contains addresses, hashes and fixture results, never vendor code.
 No device is contacted.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,12 +38,16 @@ FRAMES = 112
 # Per-binary ELF addresses; cross_check() verifies relocation-normalized equivalence.
 ROLES = {
     "897b9e25919d826ade563cad89a5acd140541b274b74524f655273488089f48c": {  # 1.7.6
-        "callbackBridge": 0x370A70, "portEvents": 0x3716E0,
-        "sourceChange": 0x40A360, "activeMask": 0x61CC90,
+        "callbackBridge": 0x370A70,
+        "portEvents": 0x3716E0,
+        "sourceChange": 0x40A360,
+        "activeMask": 0x61CC90,
     },
     "5151d0eb843dab46f441da4c2cca66f1636bfe522b2302345c17f28ecbffd0dd": {  # 1.7.7
-        "callbackBridge": 0x3737A0, "portEvents": 0x374410,
-        "sourceChange": 0x40CFD0, "activeMask": 0x61D900,
+        "callbackBridge": 0x3737A0,
+        "portEvents": 0x374410,
+        "sourceChange": 0x40CFD0,
+        "activeMask": 0x61D900,
     },
 }
 # Offsets within Mixer::Process (identical across both releases).
@@ -50,39 +55,83 @@ INPUT_GATHER = (0x270, 0xB94)
 OUTPUT_GATHER = (0x12D4, 0x14CC)
 OUTPUT_DISPATCH = (0x1BA4, 0x1A68)
 CALLS = {
-    "prepareA": 0x2FC, "prepareB": 0x364, "prepareC": 0x378, "board": 0x448,
-    "property": 0xB90, "dispatchWrapper": 0x1D24,
+    "prepareA": 0x2FC,
+    "prepareB": 0x364,
+    "prepareC": 0x378,
+    "board": 0x448,
+    "property": 0xB90,
+    "dispatchWrapper": 0x1D24,
 }
 # Internal slot -> 1-based JUCEJack input port, read from the gather.
-SLOT_PORTS = {0: 1, 1: 2, 2: 3, 3: 4, 10: 5, 11: 6, 4: 7, 5: 8, 8: 9, 9: 10, 6: 11, 7: 12,
-              **{22 + i: 13 + i for i in range(16)}, **{14 + i: 29 + i for i in range(6)},
-              20: 35, 21: 36}
+SLOT_PORTS = {
+    0: 1,
+    1: 2,
+    2: 3,
+    3: 4,
+    10: 5,
+    11: 6,
+    4: 7,
+    5: 8,
+    8: 9,
+    9: 10,
+    6: 11,
+    7: 12,
+    **{22 + i: 13 + i for i in range(16)},
+    **{14 + i: 29 + i for i in range(6)},
+    20: 35,
+    21: 36,
+}
 PAD_SLOTS = (12, 13)
 # Stack slot pairs of the output gather -> 1-based JUCEJack output ports.
-OUTPUT_SLOTS = {(0x148, 0x150): (13, 14), (0x108, 0x110): (15, 16), (0x130, 0x138): (17, 18),
-                (0xC8, 0xD0): (19, 20), (0xD8, 0xE0): (21, 22), (0xE8, 0xF0): (23, 24),
-                (0xF8, 0x100): (25, 26)}
+OUTPUT_SLOTS = {
+    (0x148, 0x150): (13, 14),
+    (0x108, 0x110): (15, 16),
+    (0x130, 0x138): (17, 18),
+    (0xC8, 0xD0): (19, 20),
+    (0xD8, 0xE0): (21, 22),
+    (0xE8, 0xF0): (23, 24),
+    (0xF8, 0x100): (25, 26),
+}
 # Named port connections the handler must produce (direction follows the handler).
 INPUT_CONNECTIONS = {
-    **{f"usb1in:capture_{i}": (7, 8)[i - 1] if i <= 2 else 10 + i for i in range(1, 19)},
-    "usb2in:capture_1": 9, "usb2in:capture_2": 10, "usb2dev:capture_1": 9, "usb2dev:capture_2": 10,
-    "usb1-chat-in:capture_1": 11, "usb1-chat-in:capture_2": 12,
-    "btphone:capture_1": 5, "btphone:capture_2": 6,
+    **{
+        f"usb1in:capture_{i}": (7, 8)[i - 1] if i <= 2 else 10 + i for i in range(1, 19)
+    },
+    "usb2in:capture_1": 9,
+    "usb2in:capture_2": 10,
+    "usb2dev:capture_1": 9,
+    "usb2dev:capture_2": 10,
+    "usb1-chat-in:capture_1": 11,
+    "usb1-chat-in:capture_2": 12,
+    "btphone:capture_1": 5,
+    "btphone:capture_2": 6,
     **{f"sip-audio-in:capture_{i}": 28 + i for i in range(1, 7)},
-    "RodeRfSPI:TX1": 35, "RodeRfSPI:TX2": 36,
+    "RodeRfSPI:TX1": 35,
+    "RodeRfSPI:TX2": 36,
 }
 OUTPUT_CONNECTIONS = {
-    "usb1out:playback_1": 15, "usb1out:playback_2": 16,
+    "usb1out:playback_1": 15,
+    "usb1out:playback_2": 16,
     **{f"usb1out:playback_{i}": 24 + i for i in range(3, 21)},
-    "usb2out:playback_1": 19, "usb2out:playback_2": 20,
-    "usb1-chat-out:playback_1": 17, "usb1-chat-out:playback_2": 18,
-    "btspeaker:playback_1": 13, "btspeaker:playback_2": 14,
+    "usb2out:playback_1": 19,
+    "usb2out:playback_2": 20,
+    "usb1-chat-out:playback_1": 17,
+    "usb1-chat-out:playback_2": 18,
+    "btspeaker:playback_1": 13,
+    "btspeaker:playback_2": 14,
     **{f"sip-audio-out:playback_{i}": 20 + i for i in range(1, 7)},
-    "sip-audio-out:playback_7": 45, "sip-audio-out:playback_8": 46,
+    "sip-audio-out:playback_7": 45,
+    "sip-audio-out:playback_8": 46,
 }
 # Processor members of the mixer that receive each output pair in the dispatch.
-EXPECTED_DISPATCH = {0x2088: (17, 18), 0x2080: (15, 16), 0x2090: (19, 20),
-                     0x2098: (21, 22), 0x20A0: (23, 24), 0x20A8: (25, 26)}
+EXPECTED_DISPATCH = {
+    0x2088: (17, 18),
+    0x2080: (15, 16),
+    0x2090: (19, 20),
+    0x2098: (21, 22),
+    0x20A0: (23, 24),
+    0x20A8: (25, 26),
+}
 BT_DISPATCH = {0x2078: (13, 14)}
 MIXER = 0xC0000  # the mixer object's second page group, x28 in Process
 
@@ -94,11 +143,21 @@ def popcount_below(mask, bit):
 def port_connections(image, port_events):
     """Run the real port-event handler once per named port and record connects."""
     m = Machine(image)
-    starts, compare = call_at(image, port_events + 0x1C), call_at(image, port_events + 0x3C)
-    construct, to_string = call_at(image, port_events + 0x68), call_at(image, port_events + 0x74)
+    starts, compare = (
+        call_at(image, port_events + 0x1C),
+        call_at(image, port_events + 0x3C),
+    )
+    construct, to_string = (
+        call_at(image, port_events + 0x68),
+        call_at(image, port_events + 0x74),
+    )
     destroy = call_at(image, port_events + 0x9C)
-    m.stubs[starts] = lambda: int(m.string(m.word(m.register(0))).startswith(m.string(m.register(1))))
-    m.stubs[compare] = lambda: 0 if m.string(m.word(m.register(0))) == m.string(m.register(1)) else 1
+    m.stubs[starts] = lambda: int(
+        m.string(m.word(m.register(0))).startswith(m.string(m.register(1)))
+    )
+    m.stubs[compare] = lambda: (
+        0 if m.string(m.word(m.register(0))) == m.string(m.register(1)) else 1
+    )
     m.stubs[construct] = lambda: m.words(m.register(0), m.register(1))
     m.stubs[to_string] = lambda: m.words(m.register(8), m.word(m.register(0)))
     m.stubs[destroy] = lambda: 0
@@ -108,7 +167,8 @@ def port_connections(image, port_events):
     connections = []
     connect = m.stop + 0x100
     m.stubs[connect] = lambda: connections.append(
-        [m.string(m.word(m.register(1))), m.string(m.word(m.register(2)))])
+        [m.string(m.word(m.register(1))), m.string(m.word(m.register(2)))]
+    )
     closure, callback, manager = m.allocate(24), m.allocate(0x30), m.allocate(0xE0)
     device, vtable = m.allocate(8), m.allocate(0xE0)
     m.words(closure + 16, callback)
@@ -126,9 +186,13 @@ def port_connections(image, port_events):
         assert len(made) == 1, (name, made)
         source, sink = made[0]
         if name in INPUT_CONNECTIONS:
-            assert source == name and sink == f"JUCEJack:in_{INPUT_CONNECTIONS[name]}", made
+            assert (
+                source == name and sink == f"JUCEJack:in_{INPUT_CONNECTIONS[name]}"
+            ), made
         else:
-            assert sink == name and source == f"JUCEJack:out_{OUTPUT_CONNECTIONS[name]}", made
+            assert (
+                sink == name and source == f"JUCEJack:out_{OUTPUT_CONNECTIONS[name]}"
+            ), made
         result[name] = made[0]
     return result
 
@@ -256,8 +320,14 @@ def output_gather(image, process, mask, hardware_count, owned_mask):
             else:
                 index = outputs.index(value)
                 label = f"out_{active[index] + 1}"
-                assert mask >> (port - 1) & 1 and label == f"out_{port}", (offset, label, port)
-                assert index == hardware_count + popcount_below(mask >> 12, port - 13), (port, index)
+                assert mask >> (port - 1) & 1 and label == f"out_{port}", (
+                    offset,
+                    label,
+                    port,
+                )
+                assert index == hardware_count + popcount_below(
+                    mask >> 12, port - 13
+                ), (port, index)
             pair.append(label)
         assignment[f"out_{ports[0]}/out_{ports[1]}"] = pair
     next_index = m.register(19)
@@ -269,13 +339,17 @@ def output_gather(image, process, mask, hardware_count, owned_mask):
     }
     assert flags["ownedOutputsActive"] == int(mask & owned_mask != 0)
     assert flags["usb1Channel18Active"] == bool(mask >> 41 & 1)
-    assert flags["rawStripCopyMode"] == (flags["usb1Channel18Active"] and not flags["ownedOutputsActive"])
+    assert flags["rawStripCopyMode"] == (
+        flags["usb1Channel18Active"] and not flags["ownedOutputsActive"]
+    )
     return m, outputs, active, assignment, flags
 
 
 def output_dispatch(image, process, mask, hardware_count, owned_mask):
     """Continue after the gather: record which processor member gets which pair."""
-    m, outputs, active, assignment, flags = output_gather(image, process, mask, hardware_count, owned_mask)
+    m, outputs, active, assignment, flags = output_gather(
+        image, process, mask, hardware_count, owned_mask
+    )
     wrappers = {}
 
     def wrapper():
@@ -295,7 +369,15 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
     def recorder(index):
         def record():
             # Wrapper objects are stack-reused, so resolve their buffer pointers immediately.
-            calls.append((members[m.register(0)], index, wrappers.get(m.register(1)), m.register(2)))
+            calls.append(
+                (
+                    members[m.register(0)],
+                    index,
+                    wrappers.get(m.register(1)),
+                    m.register(2),
+                )
+            )
+
         return record
 
     for index in range(32):
@@ -326,18 +408,22 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
         stream = m.allocate(0x480)
         m.words(m.mixer + MIXER + 0x1FB0, stream)
         for index in range(9):
-            entry, strip, source, table = (m.allocate(n) for n in (0x350, 0x858, 0x480, 16))
+            entry, strip, source, table = (
+                m.allocate(n) for n in (0x350, 0x858, 0x480, 16)
+            )
             m.words(stream + 0x438 + index * 8, entry)
             m.words(entry + 8, strip)
             m.words(strip + 0x460, source)
             m.words(source + 0x360, table)
-            m.words(table, *multitrack[2 * index:2 * index + 2])
+            m.words(table, *multitrack[2 * index : 2 * index + 2])
         m.run(process + 0x16F0, process + OUTPUT_DISPATCH[1])
     else:
         m.run(process + OUTPUT_DISPATCH[0], process + OUTPUT_DISPATCH[1])
 
     def ports(pointers):
-        return tuple(active[outputs.index(p)] + 1 if p in outputs else None for p in pointers)
+        return tuple(
+            active[outputs.index(p)] + 1 if p in outputs else None for p in pointers
+        )
 
     dispatch = {}
     other = []
@@ -357,15 +443,23 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
         expected.update(BT_DISPATCH)
     for member, pair in expected.items():
         if all(mask >> (port - 1) & 1 for port in pair):
-            assert dispatch.get(member) == pair, (hex(member), dispatch.get(member), pair)
+            assert dispatch.get(member) == pair, (
+                hex(member),
+                dispatch.get(member),
+                pair,
+            )
         else:
-            assert dispatch.get(member) == tuple(port if mask >> (port - 1) & 1 else None for port in pair), (hex(member), dispatch.get(member))
+            assert dispatch.get(member) == tuple(
+                port if mask >> (port - 1) & 1 else None for port in pair
+            ), (hex(member), dispatch.get(member))
     copies = []
     if flags["ownedOutputsActive"] or flags["rawStripCopyMode"]:
         first = hardware_count + popcount_below(mask >> 12, 14)
-        destinations = list(outputs[first:first + 18])
+        destinations = list(outputs[first : first + 18])
         if flags["rawStripCopyMode"]:
-            destinations = [outputs[active.index(p - 1)] for p in (15, 16)] + destinations[:16]
+            destinations = [
+                outputs[active.index(p - 1)] for p in (15, 16)
+            ] + destinations[:16]
         for i, (destination, source, size) in enumerate(m.copies):
             assert size == FRAMES * 4 and source == multitrack[i], (i, hex(source))
             assert destination == destinations[i], (i, hex(destination))
@@ -375,8 +469,12 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
     else:
         assert not m.copies
     return {
-        "assignment": assignment, "flags": flags,
-        "dispatch": {hex(member): [f"out_{p}" if p is not None else "scratch" for p in pair] for member, pair in dispatch.items()},
+        "assignment": assignment,
+        "flags": flags,
+        "dispatch": {
+            hex(member): [f"out_{p}" if p is not None else "scratch" for p in pair]
+            for member, pair in dispatch.items()
+        },
         "otherVirtualCalls": other,
         "multitrackCopies": copies,
     }
@@ -385,14 +483,26 @@ def output_dispatch(image, process, mask, hardware_count, owned_mask):
 def bridge_masks(image, bridge):
     """The caller of Mixer::Process folds exactly 36 input and 46 output channel bits."""
     instructions = image.instructions(bridge)
-    bounds = [i.op_str for i in instructions if i.mnemonic == "cmp" and i.op_str in ("x0, #0x24", "x0, #0x2e")]
+    bounds = [
+        i.op_str
+        for i in instructions
+        if i.mnemonic == "cmp" and i.op_str in ("x0, #0x24", "x0, #0x2e")
+    ]
     assert bounds == ["x0, #0x24", "x0, #0x2e"], bounds
-    virtual = [i.op_str for i in instructions if i.mnemonic == "ldr" and i.op_str in ("x1, [x1, #0x90]", "x1, [x1, #0x88]")]
+    virtual = [
+        i.op_str
+        for i in instructions
+        if i.mnemonic == "ldr" and i.op_str in ("x1, [x1, #0x90]", "x1, [x1, #0x88]")
+    ]
     assert virtual == ["x1, [x1, #0x90]", "x1, [x1, #0x88]"], virtual
     calls = [i for i in instructions if i.mnemonic == "bl"]
     assert calls[0].operands[0].imm == image.function_at(calls[0].operands[0].imm)[0]
-    return {"inputBits": 36, "outputBits": 46, "process": hex(calls[0].operands[0].imm),
-            "activeChannelGetters": ["vtable+0x90", "vtable+0x88"]}
+    return {
+        "inputBits": 36,
+        "outputBits": 46,
+        "process": hex(calls[0].operands[0].imm),
+        "activeChannelGetters": ["vtable+0x90", "vtable+0x88"],
+    }
 
 
 def string_address(image, text):
@@ -409,7 +519,10 @@ def string_address(image, text):
 
 def referenced_by(image, text, function):
     address = string_address(image, text)
-    functions = {image.function_at(reference)[0] for reference, _ in image.address_references(address)}
+    functions = {
+        image.function_at(reference)[0]
+        for reference, _ in image.address_references(address)
+    }
     assert function in functions, (text, hex(function), sorted(map(hex, functions)))
     return hex(address)
 
@@ -417,35 +530,68 @@ def referenced_by(image, text, function):
 def active_mask_source(image, active_mask, registration):
     """The active channel sets are rebuilt from jack_port_connected after registration."""
     connected = referenced_by(image, "jack_port_connected", active_mask)
-    callers = [i.address for i in image.instructions(registration)
-               if i.mnemonic == "bl" and i.operands[0].imm == active_mask]
+    callers = [
+        i.address
+        for i in image.instructions(registration)
+        if i.mnemonic == "bl" and i.operands[0].imm == active_mask
+    ]
     assert len(callers) == 1, callers
     return {"dlsym": connected, "calledFromRegistration": hex(callers[0])}
 
 
 def registration(image, function):
     """in_N / out_N are registered sequentially as 32-bit float mono audio ports."""
-    strings = {text: referenced_by(image, text, function) for text in ("in_", "out_", "32 bit float mono audio")}
+    strings = {
+        text: referenced_by(image, text, function)
+        for text in ("in_", "out_", "32 bit float mono audio")
+    }
     instructions = image.instructions(function)
-    flags = [i.op_str for i in instructions if i.mnemonic == "mov" and i.op_str in ("x3, #1", "x3, #2")]
+    flags = [
+        i.op_str
+        for i in instructions
+        if i.mnemonic == "mov" and i.op_str in ("x3, #1", "x3, #2")
+    ]
     assert flags == ["x3, #1", "x3, #2"], flags
-    increments = [i.op_str for i in instructions if i.mnemonic == "str" and i.op_str in ("w0, [x19, #0x88]", "w0, [x19, #0x8c]")]
+    increments = [
+        i.op_str
+        for i in instructions
+        if i.mnemonic == "str" and i.op_str in ("w0, [x19, #0x88]", "w0, [x19, #0x8c]")
+    ]
     assert increments == ["w0, [x19, #0x88]", "w0, [x19, #0x8c]"], increments
-    return {"strings": strings, "portFlags": {"in_": 1, "out_": 2},
-            "note": "Registers in_<n>/out_<n> for n = registered+1 .. size of the channel-name array passed to open; the array sizes are not pinned offline."}
+    return {
+        "strings": strings,
+        "portFlags": {"in_": 1, "out_": 2},
+        "note": "Registers in_<n>/out_<n> for n = registered+1 .. size of the channel-name array passed to open; the array sizes are not pinned offline.",
+    }
 
 
 def job_output_use(image, body):
     """The queued job reads the output table once, for the two monitor indices."""
     instructions = image.instructions(body)
-    expected = ["ldp x3, x4, [x19]", "ldrsw x5, [x3, #0x3d3c]", "ldrsw x6, [x3, #0x3d40]",
-                "ldr x5, [x4, x5, lsl #3]", "ldr x4, [x4, x6, lsl #3]"]
-    seen = [f"{i.mnemonic} {i.op_str}" for i in instructions if f"{i.mnemonic} {i.op_str}" in expected]
+    expected = [
+        "ldp x3, x4, [x19]",
+        "ldrsw x5, [x3, #0x3d3c]",
+        "ldrsw x6, [x3, #0x3d40]",
+        "ldr x5, [x4, x5, lsl #3]",
+        "ldr x4, [x4, x6, lsl #3]",
+    ]
+    seen = [
+        f"{i.mnemonic} {i.op_str}"
+        for i in instructions
+        if f"{i.mnemonic} {i.op_str}" in expected
+    ]
     assert seen == expected, seen
-    table_reads = [i for i in instructions if "[x19, #8]" in i.op_str or i.op_str.startswith("x3, x4, [x19]")]
+    table_reads = [
+        i
+        for i in instructions
+        if "[x19, #8]" in i.op_str or i.op_str.startswith("x3, x4, [x19]")
+    ]
     assert len(table_reads) == 1, [hex(i.address) for i in table_reads]
-    return {"outputTableReads": 1, "indices": ["mixer+0xc7d3c", "mixer+0xc7d40"],
-            "note": "Monitor left/right packed indices only; the USB sends are written in Mixer::Process before it returns."}
+    return {
+        "outputTableReads": 1,
+        "indices": ["mixer+0xc7d3c", "mixer+0xc7d40"],
+        "note": "Monitor left/right packed indices only; the USB sends are written in Mixer::Process before it returns.",
+    }
 
 
 def source_chain(image, source_change):
@@ -465,8 +611,11 @@ def source_chain(image, source_change):
         chain[source] = {"slots": slots, "ports": ports}
     for source, alias in zip(range(12, 16), range(22, 26)):
         assert chain[source] == chain[alias], (source, alias)
-    return {"table": table, "sourceToPorts": chain,
-            "aliases": {str(source): source + 10 for source in range(12, 16)}}
+    return {
+        "table": table,
+        "sourceToPorts": chain,
+        "aliases": {str(source): source + 10 for source in range(12, 16)},
+    }
 
 
 def analyze(image, sites, roles):
@@ -481,32 +630,52 @@ def analyze(image, sites, roles):
     inputs = {
         "allInputsProII": input_gather(image, process, 0, full_in),
         "stereoUsbProII": input_gather(image, process, 0, stereo_in),
-        "noBluetoothNoUsb2ProII": input_gather(image, process, 0, full_in & ~(0x3 << 4) & ~(0x3 << 8)),
+        "noBluetoothNoUsb2ProII": input_gather(
+            image, process, 0, full_in & ~(0x3 << 4) & ~(0x3 << 8)
+        ),
         "micsOnlyProII": input_gather(image, process, 0, 0xF),
         "allInputsDuo": input_gather(image, process, 1, full_in),
     }
     outputs = {
         "stereoUsbProII": output_dispatch(image, process, stereo_out, 10, owned),
-        "stereoUsbNoUsb2ProII": output_dispatch(image, process, stereo_out & ~(0x3 << 18), 10, owned),
-        "stereoUsbWithBluetoothSpeakerProII": output_dispatch(image, process, stereo_out | (0x3 << 12), 10, owned),
-        "multitrackUsbProII": output_dispatch(image, process, multitrack_out, 10, owned),
+        "stereoUsbNoUsb2ProII": output_dispatch(
+            image, process, stereo_out & ~(0x3 << 18), 10, owned
+        ),
+        "stereoUsbWithBluetoothSpeakerProII": output_dispatch(
+            image, process, stereo_out | (0x3 << 12), 10, owned
+        ),
+        "multitrackUsbProII": output_dispatch(
+            image, process, multitrack_out, 10, owned
+        ),
         "multitrackRawUsbProII": output_dispatch(image, process, multitrack_out, 10, 0),
-        "stereoUsbDuo": output_dispatch(image, process, (stereo_out & ~0xFFF) | 0xFF, 8, owned),
+        "stereoUsbDuo": output_dispatch(
+            image, process, (stereo_out & ~0xFFF) | 0xFF, 8, owned
+        ),
     }
     return {
         "mixerSha256": image.sha256,
-        "locations": {"mixerProcess": hex(process), "jobBody": hex(sites["body"]),
-                      "jackRegistrationActive": hex(sites["jackRegistrationActive"]),
-                      **{name: hex(value) for name, value in roles.items()}},
-        "processOffsets": {"inputGather": [hex(o) for o in INPUT_GATHER],
-                           "outputGather": [hex(o) for o in OUTPUT_GATHER],
-                           "outputDispatch": [hex(o) for o in OUTPUT_DISPATCH]},
+        "locations": {
+            "mixerProcess": hex(process),
+            "jobBody": hex(sites["body"]),
+            "jackRegistrationActive": hex(sites["jackRegistrationActive"]),
+            **{name: hex(value) for name, value in roles.items()},
+        },
+        "processOffsets": {
+            "inputGather": [hex(o) for o in INPUT_GATHER],
+            "outputGather": [hex(o) for o in OUTPUT_GATHER],
+            "outputDispatch": [hex(o) for o in OUTPUT_DISPATCH],
+        },
         "portConnections": port_connections(image, roles["portEvents"]),
-        "slotPorts": {str(slot): f"JUCEJack:in_{port}" for slot, port in sorted(SLOT_PORTS.items())},
+        "slotPorts": {
+            str(slot): f"JUCEJack:in_{port}"
+            for slot, port in sorted(SLOT_PORTS.items())
+        },
         "inputGather": inputs,
         "outputGather": outputs,
         "bridge": bridge_masks(image, roles["callbackBridge"]),
-        "activeMask": active_mask_source(image, roles["activeMask"], sites["jackRegistrationActive"]),
+        "activeMask": active_mask_source(
+            image, roles["activeMask"], sites["jackRegistrationActive"]
+        ),
         "registration": registration(image, sites["jackRegistrationActive"]),
         "jobOutputUse": job_output_use(image, sites["body"]),
         "sources": source_chain(image, roles["sourceChange"]),
@@ -521,15 +690,23 @@ def cross_check(images):
     if len(by_sha) < 2:
         return {"compared": False}
     (old, old_sites, old_roles), (new, new_sites, new_roles) = sorted(
-        by_sha.values(), key=lambda item: item[2]["portEvents"])
+        by_sha.values(), key=lambda item: item[2]["portEvents"]
+    )
     mapped = {}
     for name, address in old_roles.items():
         mapped[name] = counterpart(old, new, address)
         assert mapped[name] == new_roles[name], (name, hex(mapped[name]))
     for name in ("mixerProcess", "body", "jackRegistrationActive"):
-        assert canonical(old, old_sites[name])["sha256"] == canonical(new, new_sites[name])["sha256"], name
-    return {"compared": True, "baseline": old.sha256, "candidate": new.sha256,
-            "roles": {name: hex(value) for name, value in mapped.items()}}
+        assert (
+            canonical(old, old_sites[name])["sha256"]
+            == canonical(new, new_sites[name])["sha256"]
+        ), name
+    return {
+        "compared": True,
+        "baseline": old.sha256,
+        "candidate": new.sha256,
+        "roles": {name: hex(value) for name, value in mapped.items()},
+    }
 
 
 def audit(catalog, archives):
@@ -539,6 +716,7 @@ def audit(catalog, archives):
     images, report = [], {}
     for archive in archives:
         import hashlib
+
         sha = hashlib.sha256(archive.read_bytes()).hexdigest()
         profile = profiles.get(sha)
         if profile is None:
@@ -552,9 +730,9 @@ def audit(catalog, archives):
         "profiles": report,
         "crossRelease": cross_check(images),
         "method": "Unicorn execution of the vendor port-event handler and of three excerpts of Mixer::Process "
-                  "(input gather, output gather, output dispatch) with buffers replaced by recognizable pointers "
-                  "and processors replaced by recording vtables; static instruction checks for the bridge, "
-                  "active-mask source, registration loop and queued job.",
+        "(input gather, output gather, output dispatch) with buffers replaced by recognizable pointers "
+        "and processors replaced by recording vtables; static instruction checks for the bridge, "
+        "active-mask source, registration loop and queued job.",
         "findings": [
             "Source IDs 12-15 and 22-25 share internal slots 22-29, which the gather fills from JUCEJack in_13..in_20 "
             "when those channels are active; the port-event handler connects usb1in:capture_3..10 to exactly those ports. "
@@ -586,15 +764,27 @@ def audit(catalog, archives):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--archive", type=Path, action="append", required=True, help="official os.tar.gz (repeatable)")
-    parser.add_argument("--catalog", type=Path, default=ROOT / "config/firmware-profiles.json")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--archive",
+        type=Path,
+        action="append",
+        required=True,
+        help="official os.tar.gz (repeatable)",
+    )
+    parser.add_argument(
+        "--catalog", type=Path, default=ROOT / "config/firmware-profiles.json"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     report = audit(json.loads(args.catalog.read_text(encoding="utf-8")), args.archive)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"PASS: {len(report['profiles'])} profiles; USB virtual paths and sends mapped. Report: {args.output}")
+    print(
+        f"PASS: {len(report['profiles'])} profiles; USB virtual paths and sends mapped. Report: {args.output}"
+    )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ locations are normalized. Stack sizes, capture offsets, widths and operation
 constants remain part of the comparison. LSDA exception paths participate in
 the register data-flow analysis.
 """
+
 from collections import deque
 import hashlib
 import json
@@ -18,7 +19,14 @@ def reg_name(image, register):
 
 
 def is_branch(instruction):
-    return instruction.mnemonic in ("b", "bl", "cbz", "cbnz", "tbz", "tbnz") or instruction.mnemonic.startswith("b.")
+    return instruction.mnemonic in (
+        "b",
+        "bl",
+        "cbz",
+        "cbnz",
+        "tbz",
+        "tbnz",
+    ) or instruction.mnemonic.startswith("b.")
 
 
 def register_states(image, address, instructions):
@@ -50,13 +58,25 @@ def register_states(image, address, instructions):
         assignments = {}
         if instruction.mnemonic in ("adr", "adrp"):
             assignments[reg_name(image, operands[0].reg)] = (
-                "page" if instruction.mnemonic == "adrp" else "address", operands[1].imm)
-        elif instruction.mnemonic == "add" and len(operands) == 3 and operands[2].type == ARM64_OP_IMM:
+                "page" if instruction.mnemonic == "adrp" else "address",
+                operands[1].imm,
+            )
+        elif (
+            instruction.mnemonic == "add"
+            and len(operands) == 3
+            and operands[2].type == ARM64_OP_IMM
+        ):
             source = state.get(reg_name(image, operands[1].reg))
             if source:
                 assignments[reg_name(image, operands[0].reg)] = (
-                    "address", source[1] + (operands[2].imm << operands[2].shift.value))
-        elif instruction.mnemonic == "mov" and len(operands) == 2 and operands[1].type == ARM64_OP_REG:
+                    "address",
+                    source[1] + (operands[2].imm << operands[2].shift.value),
+                )
+        elif (
+            instruction.mnemonic == "mov"
+            and len(operands) == 2
+            and operands[1].type == ARM64_OP_REG
+        ):
             source = state.get(reg_name(image, operands[1].reg))
             if source:
                 assignments[reg_name(image, operands[0].reg)] = source
@@ -69,9 +89,20 @@ def register_states(image, address, instructions):
                 outgoing.pop(f"x{register}", None)
             for start, end, landing in exceptions:
                 if start <= pc < end:
-                    merge(landing, {k: v for k, v in state.items() if k in {f"x{r}" for r in range(19, 29)}})
+                    merge(
+                        landing,
+                        {
+                            k: v
+                            for k, v in state.items()
+                            if k in {f"x{r}" for r in range(19, 29)}
+                        },
+                    )
             if instruction.mnemonic == "bl" and image.plt.get(operands[-1].imm) in {
-                "_Unwind_Resume", "__cxa_throw", "__stack_chk_fail", "abort", "_ZSt9terminatev",
+                "_Unwind_Resume",
+                "__cxa_throw",
+                "__stack_chk_fail",
+                "abort",
+                "_ZSt9terminatev",
             }:
                 continue
         if is_branch(instruction) and instruction.mnemonic != "bl":
@@ -94,7 +125,11 @@ def canonical(image, address):
         state = states.get(instruction.address, {})
         operands = instruction.operands
         address_add = None
-        if instruction.mnemonic == "add" and len(operands) == 3 and operands[2].type == ARM64_OP_IMM:
+        if (
+            instruction.mnemonic == "add"
+            and len(operands) == 3
+            and operands[2].type == ARM64_OP_IMM
+        ):
             source = state.get(reg_name(image, operands[1].reg))
             if source:
                 target = source[1] + (operands[2].imm << operands[2].shift.value)
@@ -119,7 +154,14 @@ def canonical(image, address):
                         immediate = ("internal", immediate - address)
                     else:
                         symbol = image.plt.get(immediate)
-                        calls.append((instruction.address - address, instruction.mnemonic, immediate, symbol))
+                        calls.append(
+                            (
+                                instruction.address - address,
+                                instruction.mnemonic,
+                                immediate,
+                                symbol,
+                            )
+                        )
                         immediate = ("external", symbol)
                 elif instruction.mnemonic.startswith("ldr") and index == 1:
                     globals_.append((instruction.address - address, immediate))
@@ -129,15 +171,42 @@ def canonical(image, address):
                 displacement = operand.mem.disp
                 base = state.get(reg_name(image, operand.mem.base))
                 if base and base[0] == "page":
-                    globals_.append((instruction.address - address, base[1] + displacement))
+                    globals_.append(
+                        (instruction.address - address, base[1] + displacement)
+                    )
                     displacement = "page-relative-address"
-                value = ("mem", image.disassembler.reg_name(operand.mem.base),
-                         image.disassembler.reg_name(operand.mem.index), displacement)
+                value = (
+                    "mem",
+                    image.disassembler.reg_name(operand.mem.base),
+                    image.disassembler.reg_name(operand.mem.index),
+                    displacement,
+                )
             else:
                 value = ("other", instruction.op_str)
-            values.append((value, operand.shift.type, operand.shift.value, operand.ext,
-                           operand.vector_index, operand.vas))
-        output.append((instruction.mnemonic, instruction.cc, instruction.update_flags,
-                       instruction.writeback, tuple(values)))
-    return {"instructions": output, "calls": calls, "globals": globals_,
-            "sha256": hashlib.sha256(json.dumps(output, separators=(",", ":")).encode()).hexdigest()}
+            values.append(
+                (
+                    value,
+                    operand.shift.type,
+                    operand.shift.value,
+                    operand.ext,
+                    operand.vector_index,
+                    operand.vas,
+                )
+            )
+        output.append(
+            (
+                instruction.mnemonic,
+                instruction.cc,
+                instruction.update_flags,
+                instruction.writeback,
+                tuple(values),
+            )
+        )
+    return {
+        "instructions": output,
+        "calls": calls,
+        "globals": globals_,
+        "sha256": hashlib.sha256(
+            json.dumps(output, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }

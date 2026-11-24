@@ -57,8 +57,13 @@ class ReleaseTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.env = {k: v for k, v in os.environ.items() if k not in ("ACT", "GITHUB_OUTPUT")}
-        self.put("config/app-release.json", '{\n  "schemaVersion": 1,\n  "version": "0.1.0"\n}\n')
+        self.env = {
+            k: v for k, v in os.environ.items() if k not in ("ACT", "GITHUB_OUTPUT")
+        }
+        self.put(
+            "config/app-release.json",
+            '{\n  "schemaVersion": 1,\n  "version": "0.1.0"\n}\n',
+        )
         self.put("cliff.toml", (ROOT / "cliff.toml").read_text())
         self.put_go_desktop()
         self.git("init", "-b", "main")
@@ -73,15 +78,26 @@ class ReleaseTests(unittest.TestCase):
         path.write_text(text)
 
     def git(self, *args):
-        return subprocess.check_output(["git", *args], cwd=self.root, env=self.env, text=True).strip()
+        return subprocess.check_output(
+            ["git", *args], cwd=self.root, env=self.env, text=True
+        ).strip()
 
     def prepare(self, bump="patch", check=True):
-        return subprocess.run(["python3", str(SCRIPT), "prepare", "--bump", bump], cwd=self.root,
-                              env=self.env, check=check, capture_output=True, text=True)
+        return subprocess.run(
+            ["python3", str(SCRIPT), "prepare", "--bump", bump],
+            cwd=self.root,
+            env=self.env,
+            check=check,
+            capture_output=True,
+            text=True,
+        )
 
     def put_go_desktop(self, version="0.1.0"):
         self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
-        self.put("desktop/installer/installer.go", f'package installer\n\nconst AppVersion = "{version}"\n')
+        self.put(
+            "desktop/installer/installer.go",
+            f'package installer\n\nconst AppVersion = "{version}"\n',
+        )
 
     def test_go_desktop_release_downloads_mixer_and_bumps_the_app_versions(self):
         self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":1}')
@@ -95,9 +111,14 @@ class ReleaseTests(unittest.TestCase):
         notes = (self.root / "target/release-input/release-notes.md").read_text()
         self.assertIn("Mixer software is downloaded separately", notes)
         self.assertNotIn("Bundled RC2FX", notes)
-        self.assertEqual(json.loads((self.root / "config/app-release.json").read_text())["version"], "0.1.1")
+        self.assertEqual(
+            json.loads((self.root / "config/app-release.json").read_text())["version"],
+            "0.1.1",
+        )
         version_files = ["config/app-release.json", "desktop/installer/installer.go"]
-        self.assertIn('= "0.1.1"\n', (self.root / "desktop/installer/installer.go").read_text())
+        self.assertIn(
+            '= "0.1.1"\n', (self.root / "desktop/installer/installer.go").read_text()
+        )
         plan = json.loads((self.root / "target/release-input/plan.json").read_text())
         self.assertLessEqual(set(version_files), set(plan["files"]))
         with tarfile.open(self.root / "target/release-input/versioned.tar") as archive:
@@ -105,22 +126,31 @@ class ReleaseTests(unittest.TestCase):
 
     def test_go_version_that_differs_from_app_release_is_refused(self):
         self.git("tag", "v0.1.0")
-        self.put("desktop/installer/installer.go", 'package installer\n\nconst AppVersion = "0.0.9"\n')
+        self.put(
+            "desktop/installer/installer.go",
+            'package installer\n\nconst AppVersion = "0.0.9"\n',
+        )
         self.git("add", ".")
         self.git("commit", "-m", "feat: go desktop")
         result = self.prepare(check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("AppVersion differs from config/app-release.json version", result.stderr)
+        self.assertIn(
+            "AppVersion differs from config/app-release.json version", result.stderr
+        )
 
     def test_real_repository_go_versions_match_app_release(self):
         import re
         import sys
+
         sys.path.insert(0, str(ROOT / ".github/scripts"))
         import release
+
         current = release.current_app_version(ROOT)
         for rel, declaration in release.GO_VERSIONS.items():
             text = (ROOT / rel).read_text()
-            found = re.findall(rf'^({re.escape(declaration)} = )"([^"\n]*)"$', text, flags=re.M)
+            found = re.findall(
+                rf'^({re.escape(declaration)} = )"([^"\n]*)"$', text, flags=re.M
+            )
             self.assertEqual(len(found), 1, f"{rel}: {declaration}")
             self.assertEqual(found[0][1], current, f"{rel}: {declaration} != {current}")
 
@@ -133,18 +163,29 @@ class ReleaseTests(unittest.TestCase):
         plan = json.loads((self.root / "target/release-input/plan.json").read_text())
         self.assertEqual(plan["tag"], "v0.1.1")
         changelog = (self.root / "CHANGELOG.md").read_text()
-        self.assertLess(changelog.index("Repair release"), changelog.index("Older entry"))
-        self.assertNotIn("Initial project", (self.root / "target/release-input/release-notes.md").read_text())
+        self.assertLess(
+            changelog.index("Repair release"), changelog.index("Older entry")
+        )
+        self.assertNotIn(
+            "Initial project",
+            (self.root / "target/release-input/release-notes.md").read_text(),
+        )
 
     def test_subsequent_release_uses_selected_bump(self):
         self.git("tag", "v0.1.0")
         self.put("extra", "new")
         self.git("add", ".")
         self.git("commit", "-m", "feat: add feature")
-        for bump, expected in (("patch", "v0.1.1"), ("minor", "v0.2.0"), ("major", "v1.0.0")):
+        for bump, expected in (
+            ("patch", "v0.1.1"),
+            ("minor", "v0.2.0"),
+            ("major", "v1.0.0"),
+        ):
             with self.subTest(bump=bump):
                 self.prepare(bump)
-                plan = json.loads((self.root / "target/release-input/plan.json").read_text())
+                plan = json.loads(
+                    (self.root / "target/release-input/plan.json").read_text()
+                )
                 self.assertEqual(plan["tag"], expected)
                 self.git("restore", ".")
 
@@ -156,11 +197,19 @@ class ReleaseTests(unittest.TestCase):
         self.prepare()
         self.put(".git/index.lock", "copied host lock")
         env = dict(self.env, ACT="true")
-        subprocess.run(["python3", str(SCRIPT), "commit"], cwd=self.root, env=env,
-                       check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["python3", str(SCRIPT), "commit"],
+            cwd=self.root,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(self.git("tag", "--list", "v0.1.1"), "v0.1.1")
         self.assertEqual(self.git("log", "-1", "--format=%s"), "chore(release): v0.1.1")
-        self.assertEqual((self.root / ".git/index.lock").read_text(), "copied host lock")
+        self.assertEqual(
+            (self.root / ".git/index.lock").read_text(), "copied host lock"
+        )
 
     def test_missing_current_version_tag_rejected(self):
         result = self.prepare(check=False)
@@ -195,32 +244,44 @@ class VerifyAssetsTests(unittest.TestCase):
     def _valid_files(self):
         v = self.VERSION
         appimage = b"\x7fELF\x02\x01\x01\x00AI\x02rest"
-        win_nupkg = _raw_zip([
-            ("io.github.ibanks42.rc2fx.nuspec", b"<package/>"),
-            ("lib/app/rc2fx.exe", b"MZapp"),
-            ("lib/app/velopack_libc.dll", b"MZdll"),
-        ])
-        linux_nupkg = _raw_zip([
-            ("io.github.ibanks42.rc2fx.nuspec", b"<package/>"),
-            (f"lib/app/{rel.PACK_ID}.AppImage", appimage),
-        ])
-        mac_nupkg = _raw_zip([
-            ("io.github.ibanks42.rc2fx.nuspec", b"<package/>"),
-            ("lib/app/Contents/MacOS/rc2fx", b"bin"),
-            ("lib/app/Contents/MacOS/UpdateMac", b"upd"),
-            ("lib/app/Contents/Info.plist", b"plist"),
-        ])
+        win_nupkg = _raw_zip(
+            [
+                ("io.github.ibanks42.rc2fx.nuspec", b"<package/>"),
+                ("lib/app/rc2fx.exe", b"MZapp"),
+                ("lib/app/velopack_libc.dll", b"MZdll"),
+            ]
+        )
+        linux_nupkg = _raw_zip(
+            [
+                ("io.github.ibanks42.rc2fx.nuspec", b"<package/>"),
+                (f"lib/app/{rel.PACK_ID}.AppImage", appimage),
+            ]
+        )
+        mac_nupkg = _raw_zip(
+            [
+                ("io.github.ibanks42.rc2fx.nuspec", b"<package/>"),
+                ("lib/app/Contents/MacOS/rc2fx", b"bin"),
+                ("lib/app/Contents/MacOS/UpdateMac", b"upd"),
+                ("lib/app/Contents/Info.plist", b"plist"),
+            ]
+        )
         return {
             "rc2fx-linux-x64.AppImage": appimage,
-            f"rc2fx-{v}-appimage-runtime-sources.tar.gz": _raw_tar_gz([("README", b"ok")]),
+            f"rc2fx-{v}-appimage-runtime-sources.tar.gz": _raw_tar_gz(
+                [("README", b"ok")]
+            ),
             f"{rel.PACK_ID}-{v}-linux-full.nupkg": linux_nupkg,
-            "releases.linux.json": _feed(v, f"{rel.PACK_ID}-{v}-linux-full.nupkg", linux_nupkg),
+            "releases.linux.json": _feed(
+                v, f"{rel.PACK_ID}-{v}-linux-full.nupkg", linux_nupkg
+            ),
             "rc2fx-windows-x64-setup.exe": b"MZsetup",
             f"{rel.PACK_ID}-{v}-full.nupkg": win_nupkg,
             "releases.win.json": _feed(v, f"{rel.PACK_ID}-{v}-full.nupkg", win_nupkg),
             "rc2fx-macos-universal.pkg": b"xar!installer",
             f"{rel.PACK_ID}-{v}-osx-full.nupkg": mac_nupkg,
-            "releases.osx.json": _feed(v, f"{rel.PACK_ID}-{v}-osx-full.nupkg", mac_nupkg),
+            "releases.osx.json": _feed(
+                v, f"{rel.PACK_ID}-{v}-osx-full.nupkg", mac_nupkg
+            ),
         }
 
     def _stage(self, files, name="assets"):
@@ -234,7 +295,9 @@ class VerifyAssetsTests(unittest.TestCase):
         files = self._valid_files()
         directory = self._stage(files)
         sums = rel.verify_assets(directory, self.VERSION)
-        expected = "".join(f"{hashlib.sha256(files[n]).hexdigest()}  {n}\n" for n in sorted(files))
+        expected = "".join(
+            f"{hashlib.sha256(files[n]).hexdigest()}  {n}\n" for n in sorted(files)
+        )
         self.assertEqual(sums, expected)
         self.assertFalse((directory / "SHA256SUMS").exists())
 
@@ -270,59 +333,159 @@ class VerifyAssetsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, pattern):
                     rel.verify_assets(self._stage(files, f"bad-{label}"), v)
 
-        bad_case("empty-sources", lambda f: f.update({f"rc2fx-{v}-appimage-runtime-sources.tar.gz": _raw_tar_gz([])}), "Empty runtime")
-        bad_case("bad-appimage", lambda f: (
-            f.update({"rc2fx-linux-x64.AppImage": b"not-elf"}),
-            f.update({linux_nupkg: _raw_zip([(f"lib/app/{rel.PACK_ID}.AppImage", b"not-elf")])}),
-            f.update({"releases.linux.json": _feed(v, linux_nupkg, f[linux_nupkg])}),
-        ), "Invalid AppImage")
-        bad_case("bad-exe", lambda f: f.update({"rc2fx-windows-x64-setup.exe": b"PK"}), "Invalid Windows")
-        bad_case("bad-pkg", lambda f: f.update({"rc2fx-macos-universal.pkg": b"PK"}), "Invalid macOS")
-        bad_case("mismatched-linux-nupkg", lambda f: (
-            f.update({linux_nupkg: _raw_zip([(f"lib/app/{rel.PACK_ID}.AppImage", b"other")])}),
-            f.update({"releases.linux.json": _feed(v, linux_nupkg, f[linux_nupkg])}),
-        ), "holds another AppImage")
-        bad_case("missing-win-dll", lambda f: (
-            f.update({win_nupkg: _raw_zip([("lib/app/rc2fx.exe", b"MZ")])}),
-            f.update({"releases.win.json": _feed(v, win_nupkg, f[win_nupkg])}),
-        ), "velopack_libc.dll")
-        bad_case("missing-mac-nuspec", lambda f: (
-            f.update({mac_nupkg: _raw_zip([("lib/app/Contents/MacOS/rc2fx", b"b"),
-                                           ("lib/app/Contents/MacOS/UpdateMac", b"u"),
-                                           ("lib/app/Contents/Info.plist", b"p")])}),
-            f.update({"releases.osx.json": _feed(v, mac_nupkg, f[mac_nupkg])}),
-        ), "no .nuspec")
-        bad_case("missing-mac-updater", lambda f: (
-            f.update({mac_nupkg: _raw_zip([("io.github.ibanks42.rc2fx.nuspec", b"<p/>"),
-                                           ("lib/app/Contents/MacOS/rc2fx", b"b"),
-                                           ("lib/app/Contents/Info.plist", b"p")])}),
-            f.update({"releases.osx.json": _feed(v, mac_nupkg, f[mac_nupkg])}),
-        ), "UpdateMac")
-        bad_case("unsafe-zip-path", lambda f: (
-            f.update({mac_nupkg: _raw_zip([("io.github.ibanks42.rc2fx.nuspec", b"<p/>"),
-                                           ("lib/app/../evil", b"x"),
-                                           ("lib/app/Contents/MacOS/rc2fx", b"b"),
-                                           ("lib/app/Contents/MacOS/UpdateMac", b"u"),
-                                           ("lib/app/Contents/Info.plist", b"p")])}),
-            f.update({"releases.osx.json": _feed(v, mac_nupkg, f[mac_nupkg])}),
-        ), "unsafe path")
-        bad_case("bad-feed-digest", lambda f: f.update({
-            "releases.osx.json": _feed(v, mac_nupkg, b"different"),
-        }), "does not describe")
-        bad_case("delta-feed", lambda f: f.update({
-            "releases.win.json": _feed(v, win_nupkg, f[win_nupkg], Type="Delta"),
-        }), "does not describe")
+        bad_case(
+            "empty-sources",
+            lambda f: f.update(
+                {f"rc2fx-{v}-appimage-runtime-sources.tar.gz": _raw_tar_gz([])}
+            ),
+            "Empty runtime",
+        )
+        bad_case(
+            "bad-appimage",
+            lambda f: (
+                f.update({"rc2fx-linux-x64.AppImage": b"not-elf"}),
+                f.update(
+                    {
+                        linux_nupkg: _raw_zip(
+                            [(f"lib/app/{rel.PACK_ID}.AppImage", b"not-elf")]
+                        )
+                    }
+                ),
+                f.update(
+                    {"releases.linux.json": _feed(v, linux_nupkg, f[linux_nupkg])}
+                ),
+            ),
+            "Invalid AppImage",
+        )
+        bad_case(
+            "bad-exe",
+            lambda f: f.update({"rc2fx-windows-x64-setup.exe": b"PK"}),
+            "Invalid Windows",
+        )
+        bad_case(
+            "bad-pkg",
+            lambda f: f.update({"rc2fx-macos-universal.pkg": b"PK"}),
+            "Invalid macOS",
+        )
+        bad_case(
+            "mismatched-linux-nupkg",
+            lambda f: (
+                f.update(
+                    {
+                        linux_nupkg: _raw_zip(
+                            [(f"lib/app/{rel.PACK_ID}.AppImage", b"other")]
+                        )
+                    }
+                ),
+                f.update(
+                    {"releases.linux.json": _feed(v, linux_nupkg, f[linux_nupkg])}
+                ),
+            ),
+            "holds another AppImage",
+        )
+        bad_case(
+            "missing-win-dll",
+            lambda f: (
+                f.update({win_nupkg: _raw_zip([("lib/app/rc2fx.exe", b"MZ")])}),
+                f.update({"releases.win.json": _feed(v, win_nupkg, f[win_nupkg])}),
+            ),
+            "velopack_libc.dll",
+        )
+        bad_case(
+            "missing-mac-nuspec",
+            lambda f: (
+                f.update(
+                    {
+                        mac_nupkg: _raw_zip(
+                            [
+                                ("lib/app/Contents/MacOS/rc2fx", b"b"),
+                                ("lib/app/Contents/MacOS/UpdateMac", b"u"),
+                                ("lib/app/Contents/Info.plist", b"p"),
+                            ]
+                        )
+                    }
+                ),
+                f.update({"releases.osx.json": _feed(v, mac_nupkg, f[mac_nupkg])}),
+            ),
+            "no .nuspec",
+        )
+        bad_case(
+            "missing-mac-updater",
+            lambda f: (
+                f.update(
+                    {
+                        mac_nupkg: _raw_zip(
+                            [
+                                ("io.github.ibanks42.rc2fx.nuspec", b"<p/>"),
+                                ("lib/app/Contents/MacOS/rc2fx", b"b"),
+                                ("lib/app/Contents/Info.plist", b"p"),
+                            ]
+                        )
+                    }
+                ),
+                f.update({"releases.osx.json": _feed(v, mac_nupkg, f[mac_nupkg])}),
+            ),
+            "UpdateMac",
+        )
+        bad_case(
+            "unsafe-zip-path",
+            lambda f: (
+                f.update(
+                    {
+                        mac_nupkg: _raw_zip(
+                            [
+                                ("io.github.ibanks42.rc2fx.nuspec", b"<p/>"),
+                                ("lib/app/../evil", b"x"),
+                                ("lib/app/Contents/MacOS/rc2fx", b"b"),
+                                ("lib/app/Contents/MacOS/UpdateMac", b"u"),
+                                ("lib/app/Contents/Info.plist", b"p"),
+                            ]
+                        )
+                    }
+                ),
+                f.update({"releases.osx.json": _feed(v, mac_nupkg, f[mac_nupkg])}),
+            ),
+            "unsafe path",
+        )
+        bad_case(
+            "bad-feed-digest",
+            lambda f: f.update(
+                {
+                    "releases.osx.json": _feed(v, mac_nupkg, b"different"),
+                }
+            ),
+            "does not describe",
+        )
+        bad_case(
+            "delta-feed",
+            lambda f: f.update(
+                {
+                    "releases.win.json": _feed(
+                        v, win_nupkg, f[win_nupkg], Type="Delta"
+                    ),
+                }
+            ),
+            "does not describe",
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            dup = _raw_zip([("io.github.ibanks42.rc2fx.nuspec", b"<p/>"),
-                            ("lib/app/Contents/MacOS/rc2fx", b"b"),
-                            ("lib/app/Contents/MacOS/rc2fx", b"b"),
-                            ("lib/app/Contents/MacOS/UpdateMac", b"u"),
-                            ("lib/app/Contents/Info.plist", b"p")])
-        bad_case("dup-zip-entry", lambda f: (
-            f.update({mac_nupkg: dup}),
-            f.update({"releases.osx.json": _feed(v, mac_nupkg, dup)}),
-        ), "repeats an entry name")
+            dup = _raw_zip(
+                [
+                    ("io.github.ibanks42.rc2fx.nuspec", b"<p/>"),
+                    ("lib/app/Contents/MacOS/rc2fx", b"b"),
+                    ("lib/app/Contents/MacOS/rc2fx", b"b"),
+                    ("lib/app/Contents/MacOS/UpdateMac", b"u"),
+                    ("lib/app/Contents/Info.plist", b"p"),
+                ]
+            )
+        bad_case(
+            "dup-zip-entry",
+            lambda f: (
+                f.update({mac_nupkg: dup}),
+                f.update({"releases.osx.json": _feed(v, mac_nupkg, dup)}),
+            ),
+            "repeats an entry name",
+        )
 
 
 if __name__ == "__main__":

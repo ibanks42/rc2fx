@@ -7,6 +7,7 @@ Stubs for mkfs.vfat, mount, and umount are placed first on PATH: the virtual
 disk is backed by a sibling directory that the mount stub copies into the mount
 point.
 """
+
 import os
 import shlex
 import sys
@@ -21,9 +22,9 @@ default_check = source_rc2fx(
     'printf "%s\\n" "$update_dir"',
     env={"RC2FX_UPDATE_DIR": "/ignored/override"},
 )
-assert default_check.returncode == 0 and default_check.stdout == "/run/rc2fx-update\n", (
-    default_check.stdout + default_check.stderr
-)
+assert (
+    default_check.returncode == 0 and default_check.stdout == "/run/rc2fx-update\n"
+), default_check.stdout + default_check.stderr
 
 with tempfile.TemporaryDirectory(prefix="rc2fx-update-drive-") as directory:
     root = Path(directory)
@@ -40,11 +41,14 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-update-drive-") as directory:
     proc.mkdir()
     mounts = proc / "mounts"
     mounts.write_text("")
-    bin_dir = write_fake_bin(root / "bin", {
-        "mkfs.vfat": 'set -eu\ntest "$1" = -n && test "$2" = RC2FX && test -f "$3"; mkdir -p "$3.disk"',
-        "mount": f'set -eu\nimg=${{@: -2:1}}; mnt=${{@: -1}}; cp -r "$img.disk/." "$mnt"; echo "x $mnt x" >> {mounts}',
-        "umount": f'set -eu\nrm -rf "$1"/*; : > {mounts}',
-    })
+    bin_dir = write_fake_bin(
+        root / "bin",
+        {
+            "mkfs.vfat": 'set -eu\ntest "$1" = -n && test "$2" = RC2FX && test -f "$3"; mkdir -p "$3.disk"',
+            "mount": f'set -eu\nimg=${{@: -2:1}}; mnt=${{@: -1}}; cp -r "$img.disk/." "$mnt"; echo "x $mnt x" >> {mounts}',
+            "umount": f'set -eu\nrm -rf "$1"/*; : > {mounts}',
+        },
+    )
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "RC2FX_GADGET_ROOT": str(root / "gadget"),
@@ -55,17 +59,26 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-update-drive-") as directory:
     }
 
     def run(*args, success=True):
-        body = f"update_dir={shlex.quote(str(update))}\nupdate_drive {shlex.join(args)}\n"
+        body = (
+            f"update_dir={shlex.quote(str(update))}\nupdate_drive {shlex.join(args)}\n"
+        )
         result = source_rc2fx(body, env=env)
-        assert (result.returncode == 0) == success, (args, result.stdout + result.stderr)
+        assert (result.returncode == 0) == success, (
+            args,
+            result.stdout + result.stderr,
+        )
         return result.stdout + result.stderr
 
     def attached():
         return (lun / "file").read_text().strip()
 
     # Reject disk paths outside the update session directory.
-    assert "not an update disk path" in run("attach", str(root / "elsewhere.img"), "8388608", success=False)
-    assert "not an update disk path" in run("attach", f"{update}/../x/drive.img", "8388608", success=False)
+    assert "not an update disk path" in run(
+        "attach", str(root / "elsewhere.img"), "8388608", success=False
+    )
+    assert "not an update disk path" in run(
+        "attach", f"{update}/../x/drive.img", "8388608", success=False
+    )
     # If RØDE is already using the LUN or the gadget isn't bound, don't create an image.
     (lun / "file").write_text("/mnt/sd.img\n")
     assert "in use" in run("attach", str(image), "8388608", success=False)
@@ -103,7 +116,11 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-update-drive-") as directory:
             (lun / "file").write_text("/mnt/sd.img\n")
         dest.unlink(missing_ok=True)
         out = run("take", str(image), str(dest), "8", success=False)
-        assert {"size": "not 8 bytes", "missing": "has no RC2FX.UPD", "taken": "taken for something else"}[case] in out, out
+        assert {
+            "size": "not 8 bytes",
+            "missing": "has no RC2FX.UPD",
+            "taken": "taken for something else",
+        }[case] in out, out
         if case == "taken":
             assert attached() == "/mnt/sd.img"  # Leave RØDE's backing file untouched.
             run("drop", str(image))

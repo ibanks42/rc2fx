@@ -22,13 +22,18 @@ class Publication(unittest.TestCase):
         self.metadata.mkdir()
         self.tag = "mixer-v1.2.3"
         targets = {}
-        for name, data in [("rc2fx-mixer-1.2.3.payload", b"verified payload"), ("THIRD-PARTY-NOTICES.html", b"notices")]:
+        for name, data in [
+            ("rc2fx-mixer-1.2.3.payload", b"verified payload"),
+            ("THIRD-PARTY-NOTICES.html", b"notices"),
+        ]:
             (self.package / name).write_bytes(data)
             pin = {"length": len(data), "hashes": {"sha256": sha256(data)}}
             if name.endswith("payload"):
                 pin["custom"] = {"rc2fxMixer": {"version": "1.2.3"}}
             targets[self.tag + "/" + name] = pin
-        (self.metadata / "targets.json").write_text(json.dumps({"signed": {"version": 2, "targets": targets}}))
+        (self.metadata / "targets.json").write_text(
+            json.dumps({"signed": {"version": 2, "targets": targets}})
+        )
         for name in ["1.root.json", "snapshot.json", "timestamp.json"]:
             (self.metadata / name).write_text(json.dumps({"signed": {"version": 2}}))
         self.calls = []
@@ -66,7 +71,14 @@ class Publication(unittest.TestCase):
         elif operation == "edit":
             self.releases[tag]["isDraft"] = False
         elif operation == "view":
-            return json.dumps({"id": "1", "tagName": tag, "isDraft": self.releases[tag]["isDraft"], "targetCommitish": "commit"})
+            return json.dumps(
+                {
+                    "id": "1",
+                    "tagName": tag,
+                    "isDraft": self.releases[tag]["isDraft"],
+                    "targetCommitish": "commit",
+                }
+            )
         return ""
 
     def branch(self, *args):
@@ -91,18 +103,43 @@ class Publication(unittest.TestCase):
     def test_publishes_the_verified_payload_then_one_branch_commit(self):
         order = []
         real = publisher.META.update
-        with patch.object(publisher.META, "update", lambda *a: (order.append(list(self.calls)), real(*a))):
+        with patch.object(
+            publisher.META,
+            "update",
+            lambda *a: (order.append(list(self.calls)), real(*a)),
+        ):
             self.publish()
         before_branch = order[0]
-        payload_publish = next(i for i, c in enumerate(before_branch) if c[:3] == ("release", "edit", self.tag))
-        verification = [i for i, c in enumerate(before_branch) if c[:3] == ("release", "download", self.tag)]
+        payload_publish = next(
+            i
+            for i, c in enumerate(before_branch)
+            if c[:3] == ("release", "edit", self.tag)
+        )
+        verification = [
+            i
+            for i, c in enumerate(before_branch)
+            if c[:3] == ("release", "download", self.tag)
+        ]
         self.assertTrue(verification and all(i < payload_publish for i in verification))
         self.assertFalse(self.releases[self.tag]["isDraft"])
         self.assertEqual(self.commits(), ["Publish mixer 1.2.3"])
         names = self.branch("ls-tree", "--name-only", "mixer-metadata").split()
-        self.assertEqual(names, ["1.root.json", "README.md", "snapshot.json", "targets.json", "timestamp.json"])
-        self.assertEqual(self.served("targets.json"), (self.metadata / "targets.json").read_bytes())
-        self.assertFalse("mixer-metadata" in self.releases, "no release is created for metadata")
+        self.assertEqual(
+            names,
+            [
+                "1.root.json",
+                "README.md",
+                "snapshot.json",
+                "targets.json",
+                "timestamp.json",
+            ],
+        )
+        self.assertEqual(
+            self.served("targets.json"), (self.metadata / "targets.json").read_bytes()
+        )
+        self.assertFalse(
+            "mixer-metadata" in self.releases, "no release is created for metadata"
+        )
 
     def test_a_failed_payload_check_stops_before_the_branch_is_written(self):
         real = self.gh
@@ -110,10 +147,15 @@ class Publication(unittest.TestCase):
         def corrupting(*args):
             result = real(*args)
             if args[:2] == ("release", "upload"):
-                self.releases[self.tag]["assets"]["rc2fx-mixer-1.2.3.payload"] = b"damaged"
+                self.releases[self.tag]["assets"]["rc2fx-mixer-1.2.3.payload"] = (
+                    b"damaged"
+                )
             return result
 
-        with patch.object(publisher, "gh", corrupting), self.assertRaisesRegex(ValueError, "differs"):
+        with (
+            patch.object(publisher, "gh", corrupting),
+            self.assertRaisesRegex(ValueError, "differs"),
+        ):
             self.publish()
         self.assertTrue(self.releases[self.tag]["isDraft"])
         self.assertEqual(self.commits(), [])
@@ -126,9 +168,14 @@ class Publication(unittest.TestCase):
 
     def test_raw_content_that_never_appears_is_an_error_naming_the_files(self):
         self.repo.stale_reads = 10**6
-        with patch.object(publisher.META, "served_wait", 0), self.assertRaisesRegex(ValueError, "still does not serve"):
+        with (
+            patch.object(publisher.META, "served_wait", 0),
+            self.assertRaisesRegex(ValueError, "still does not serve"),
+        ):
             self.publish()
-        self.assertEqual(self.commits(), ["Publish mixer 1.2.3"], "the push itself stands")
+        self.assertEqual(
+            self.commits(), ["Publish mixer 1.2.3"], "the push itself stands"
+        )
 
     def test_a_concurrent_writer_fails_the_push_without_a_retry(self):
         self.publish()
@@ -147,15 +194,24 @@ class Publication(unittest.TestCase):
             pushes.extend(a for a in args if a == "push")
             return real_git(*args, cwd=cwd)
 
-        with patch.object(publisher.META, "fetch", raced), patch.object(publisher.META, "git", counting), \
-                self.assertRaises(subprocess.CalledProcessError):
+        with (
+            patch.object(publisher.META, "fetch", raced),
+            patch.object(publisher.META, "git", counting),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
             publisher.refresh(self.metadata)
         self.assertEqual(len(pushes), 1)
-        self.assertEqual(self.commits()[0], "concurrent", "the other writer's commit survives")
+        self.assertEqual(
+            self.commits()[0], "concurrent", "the other writer's commit survives"
+        )
 
     def test_a_publication_stopped_after_the_payload_can_be_resumed(self):
-        with patch.object(publisher, "publish_discovery", side_effect=RuntimeError("stopped")), \
-                self.assertRaises(RuntimeError):
+        with (
+            patch.object(
+                publisher, "publish_discovery", side_effect=RuntimeError("stopped")
+            ),
+            self.assertRaises(RuntimeError),
+        ):
             self.publish()
         self.assertEqual(self.commits(), [])
         with self.assertRaisesRegex(RuntimeError, "already exists"):
@@ -174,7 +230,12 @@ class Publication(unittest.TestCase):
         self.releases[self.tag] = {"assets": {}, "isDraft": False}
         with self.assertRaisesRegex(RuntimeError, "already exists"):
             self.publish()
-        self.assertFalse(any(c[:2] in [("release", "upload"), ("release", "edit")] for c in self.calls))
+        self.assertFalse(
+            any(
+                c[:2] in [("release", "upload"), ("release", "edit")]
+                for c in self.calls
+            )
+        )
 
     def test_stale_publication_does_not_create_or_modify_any_release(self):
         self.publish()
@@ -183,7 +244,13 @@ class Publication(unittest.TestCase):
         self.calls.clear()
         with self.assertRaisesRegex(ValueError, "must increase"):
             self.publish()
-        self.assertFalse(any(c[:2] in [("release", "create"), ("release", "upload"), ("release", "edit")] for c in self.calls))
+        self.assertFalse(
+            any(
+                c[:2]
+                in [("release", "create"), ("release", "upload"), ("release", "edit")]
+                for c in self.calls
+            )
+        )
 
     def test_refresh_commits_snapshot_and_timestamp_and_keeps_targets(self):
         self.publish()
@@ -191,8 +258,13 @@ class Publication(unittest.TestCase):
         self.bump(["snapshot.json", "timestamp.json"])
         self.calls.clear()
         publisher.refresh(self.metadata)
-        self.assertEqual(self.commits(), ["Renew discovery metadata", "Publish mixer 1.2.3"])
-        self.assertEqual(self.served("timestamp.json"), (self.metadata / "timestamp.json").read_bytes())
+        self.assertEqual(
+            self.commits(), ["Renew discovery metadata", "Publish mixer 1.2.3"]
+        )
+        self.assertEqual(
+            self.served("timestamp.json"),
+            (self.metadata / "timestamp.json").read_bytes(),
+        )
         self.assertEqual(self.served("targets.json"), targets)
         self.assertEqual(self.calls, [], "renewal touches no release")
         with self.assertRaisesRegex(ValueError, "increase"):
@@ -218,8 +290,12 @@ class Publication(unittest.TestCase):
         self.renewed_authorization()
         assets = dict(self.releases[self.tag]["assets"])
         publisher.reauthorize(self.package, self.metadata)
-        self.assertEqual(self.commits(), ["Reauthorize mixer 1.2.3", "Publish mixer 1.2.3"])
-        self.assertEqual(self.served("targets.json"), (self.metadata / "targets.json").read_bytes())
+        self.assertEqual(
+            self.commits(), ["Reauthorize mixer 1.2.3", "Publish mixer 1.2.3"]
+        )
+        self.assertEqual(
+            self.served("targets.json"), (self.metadata / "targets.json").read_bytes()
+        )
         self.assertFalse(any(c[:2] == ("release", "upload") for c in self.calls))
         self.assertEqual(self.releases[self.tag]["assets"], assets)
 
@@ -246,11 +322,28 @@ class Publication(unittest.TestCase):
 
     def remove_from_branch(self, name, work_name="remove"):
         work = Path(self.temp.name, work_name)
-        subprocess.check_call(["git", "clone", "-q", "--branch", publisher.BRANCH, self.repo.remote, work])
+        subprocess.check_call(
+            ["git", "clone", "-q", "--branch", publisher.BRANCH, self.repo.remote, work]
+        )
         subprocess.check_call(["git", "-C", work, "rm", "-q", name])
-        subprocess.check_call(["git", "-C", work, "-c", "user.name=x", "-c", "user.email=x@example.com",
-                               "commit", "-q", "-m", f"remove {name}"])
-        subprocess.check_call(["git", "-C", work, "push", "-q", "origin", publisher.BRANCH])
+        subprocess.check_call(
+            [
+                "git",
+                "-C",
+                work,
+                "-c",
+                "user.name=x",
+                "-c",
+                "user.email=x@example.com",
+                "commit",
+                "-q",
+                "-m",
+                f"remove {name}",
+            ]
+        )
+        subprocess.check_call(
+            ["git", "-C", work, "push", "-q", "origin", publisher.BRANCH]
+        )
 
     def test_missing_role_file_stops_publish_reauthorize_and_refresh(self):
         self.publish()
@@ -279,7 +372,9 @@ class Publication(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             publisher.refresh(self.metadata)
 
-    def test_require_newer_returns_without_reading_metadata_when_branch_is_missing(self):
+    def test_require_newer_returns_without_reading_metadata_when_branch_is_missing(
+        self,
+    ):
         empty = Path(self.temp.name, "empty-metadata")
         empty.mkdir()
         with tempfile.TemporaryDirectory() as temporary:

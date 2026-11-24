@@ -4,6 +4,7 @@
 
 Overrides `test -c` for the fake HID node so the fixture works without mknod/root.
 """
+
 import os
 import shlex
 import subprocess
@@ -16,12 +17,20 @@ from _common import RC2FX_SH, source_rc2fx  # noqa: E402
 
 clean_env = {k: v for k, v in os.environ.items() if not k.startswith("RC2FX_")}
 defaults = subprocess.run(
-    ["bash", "-c", f'. {shlex.quote(str(RC2FX_SH))}\nprintf "%s\\n%s\\n" "$hidg0" "$proc"'],
-    env=clean_env, capture_output=True, text=True, timeout=30,
+    [
+        "bash",
+        "-c",
+        f'. {shlex.quote(str(RC2FX_SH))}\nprintf "%s\\n%s\\n" "$hidg0" "$proc"',
+    ],
+    env=clean_env,
+    capture_output=True,
+    text=True,
+    timeout=30,
 )
-assert defaults.returncode == 0 and defaults.stdout.splitlines() == ["/dev/hidg0", "/proc"], (
-    defaults.stdout + defaults.stderr
-)
+assert defaults.returncode == 0 and defaults.stdout.splitlines() == [
+    "/dev/hidg0",
+    "/proc",
+], defaults.stdout + defaults.stderr
 
 with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     root = Path(directory)
@@ -31,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="rc2fx-usb-restart-") as directory:
     proc.mkdir()
     node = dev / "hidg0"
     env = {"RC2FX_HIDG0": str(node), "RC2FX_PROC": str(proc)}
-    prefix = '''
+    prefix = """
 say() { printf '%s\\n' "$*"; }
 test() {
   if [[ "${1:-}" == -c && "${2:-}" == "$hidg0" ]]; then
@@ -40,7 +49,7 @@ test() {
     builtin test "$@"
   fi
 }
-'''
+"""
 
     def run(script, success=True):
         result = source_rc2fx(prefix + script, env=env)
@@ -68,25 +77,31 @@ test() {
     other = dev / "other"
     other.write_text("untouched")
     node.symlink_to(other)
-    assert "not the expected character device" in run("retire_usb_node 100", success=False)
+    assert "not the expected character device" in run(
+        "retire_usb_node 100", success=False
+    )
     assert other.read_text() == "untouched"
     node.unlink()
     node.mkdir()
     run("retire_usb_node 100", success=False)
     assert node.is_dir()
     node.rmdir()
-    state = root / 'run'
+    state = root / "run"
     state.mkdir()
-    (state / 'native.pid').write_text('101')
+    (state / "native.pid").write_text("101")
     env["RC2FX_RUN"] = str(state)
-    prefix += 'supervisor() { echo 200; }\npgrep() { echo 100; }\n'
-    node.write_text('fixture')
-    (fd / '8').symlink_to(node)
-    run(f'sleep() {{ rm -f {fd}/8; }}; usb_quiesce')
-    assert not node.exists() and not (fd / '8').is_symlink()
-    node.write_text('fixture')
-    (fd / '8').symlink_to(node)
-    assert 'controller still holds' in run('sleep() { :; }; usb_quiesce', success=False)
-    assert not node.exists() and (fd / '8').is_symlink()
-print("USB restart guard: absent, foreign owner, allowed owner, PID scope, symlink and wrong type passed")
-print('USB mode guard: waits for writer close and refuses teardown while writer remains')
+    prefix += "supervisor() { echo 200; }\npgrep() { echo 100; }\n"
+    node.write_text("fixture")
+    (fd / "8").symlink_to(node)
+    run(f"sleep() {{ rm -f {fd}/8; }}; usb_quiesce")
+    assert not node.exists() and not (fd / "8").is_symlink()
+    node.write_text("fixture")
+    (fd / "8").symlink_to(node)
+    assert "controller still holds" in run("sleep() { :; }; usb_quiesce", success=False)
+    assert not node.exists() and (fd / "8").is_symlink()
+print(
+    "USB restart guard: absent, foreign owner, allowed owner, PID scope, symlink and wrong type passed"
+)
+print(
+    "USB mode guard: waits for writer close and refuses teardown while writer remains"
+)

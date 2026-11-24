@@ -20,7 +20,9 @@ spec.loader.exec_module(release)
 
 
 def run(cwd, *args):
-    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 class LandTests(unittest.TestCase):
@@ -35,8 +37,16 @@ class LandTests(unittest.TestCase):
             run(root, "clone", "-q", str(self.remote), str(path))
             run(path, "config", "user.name", "Test")
             run(path, "config", "user.email", "test@example.invalid")
-        self.commit(self.seed, "base", {"config/mixer-release.json": "1\n", "config/app-release.json": "1\n",
-                                        "CHANGELOG.md": "1\n", "src.rs": "1\n"})
+        self.commit(
+            self.seed,
+            "base",
+            {
+                "config/mixer-release.json": "1\n",
+                "config/app-release.json": "1\n",
+                "CHANGELOG.md": "1\n",
+                "src.rs": "1\n",
+            },
+        )
         run(self.seed, "push", "-q", "origin", "HEAD:main")
         run(self.work, "fetch", "-q", "origin")
         run(self.work, "checkout", "-q", "--detach", "origin/main")
@@ -66,39 +76,64 @@ class LandTests(unittest.TestCase):
         return run(self.remote, "rev-parse", "main")
 
     def test_an_unmoved_main_gets_the_version_commit_as_is(self):
-        ours = self.commit(self.work, "chore(mixer-release): 0.2.2", {"config/mixer-release.json": "2\n"})
+        ours = self.commit(
+            self.work,
+            "chore(mixer-release): 0.2.2",
+            {"config/mixer-release.json": "2\n"},
+        )
         self.assertEqual(lr.land("mixer", self.source, "origin", []), ours)
         self.assertEqual(self.remote_main(), ours)
 
     def test_a_mixer_release_lands_on_top_of_the_app_version_commit(self):
-        ours = self.commit(self.work, "chore(mixer-release): 0.2.2", {"config/mixer-release.json": "2\n"})
-        self.land_elsewhere("chore(release): v0.2.0", {"CHANGELOG.md": "2\n", "config/app-release.json": "2\n"})
+        ours = self.commit(
+            self.work,
+            "chore(mixer-release): 0.2.2",
+            {"config/mixer-release.json": "2\n"},
+        )
+        self.land_elsewhere(
+            "chore(release): v0.2.0",
+            {"CHANGELOG.md": "2\n", "config/app-release.json": "2\n"},
+        )
         app = self.remote_main()
         landed = lr.land("mixer", self.source, "origin", [])
         self.assertNotEqual(landed, ours)
         self.assertEqual(self.remote_main(), landed)
         self.assertEqual(run(self.work, "rev-parse", f"{landed}^"), app)
         self.assertEqual(run(self.work, "show", f"{landed}:CHANGELOG.md"), "2")
-        self.assertEqual(run(self.work, "show", f"{landed}:config/mixer-release.json"), "2")
+        self.assertEqual(
+            run(self.work, "show", f"{landed}:config/mixer-release.json"), "2"
+        )
 
-    def test_an_app_release_lands_on_top_of_the_mixer_version_commit_and_moves_its_tag(self):
-        self.commit(self.work, "chore(release): v0.2.0", {"config/app-release.json": "2\n"})
+    def test_an_app_release_lands_on_top_of_the_mixer_version_commit_and_moves_its_tag(
+        self,
+    ):
+        self.commit(
+            self.work, "chore(release): v0.2.0", {"config/app-release.json": "2\n"}
+        )
         run(self.work, "tag", "v0.2.0")
-        self.land_elsewhere("chore(mixer-release): 0.2.2", {"config/mixer-release.json": "2\n"})
+        self.land_elsewhere(
+            "chore(mixer-release): 0.2.2", {"config/mixer-release.json": "2\n"}
+        )
         landed = lr.land("app", self.source, "origin", ["v0.2.0"])
         self.assertEqual(self.remote_main(), landed)
         self.assertEqual(run(self.remote, "rev-parse", "v0.2.0^{commit}"), landed)
 
     def test_an_initial_release_without_a_version_commit_only_pushes_its_tag(self):
         run(self.work, "tag", "v0.1.0")
-        self.land_elsewhere("chore(mixer-release): 0.2.2", {"config/mixer-release.json": "2\n"})
+        self.land_elsewhere(
+            "chore(mixer-release): 0.2.2", {"config/mixer-release.json": "2\n"}
+        )
         moved = self.remote_main()
         self.assertEqual(lr.land("app", self.source, "origin", ["v0.1.0"]), self.source)
         self.assertEqual(self.remote_main(), moved)
         self.assertEqual(run(self.remote, "rev-parse", "v0.1.0^{commit}"), self.source)
 
     def test_any_other_change_to_main_stops_the_release(self):
-        self.commit(self.work, "chore(mixer-release): 0.2.2", {"config/mixer-release.json": "2\n"})
+        self.commit(
+            self.work,
+            "chore(mixer-release): 0.2.2",
+            {"config/mixer-release.json": "2\n"},
+        )
         cases = [
             ("fix: something", {"src.rs": "2\n"}),
             # Right subject, but it reaches into the mixer build.
@@ -107,7 +142,14 @@ class LandTests(unittest.TestCase):
             ("chore(mixer-release): 0.2.3", {"config/mixer-release.json": "3\n"}),
         ]
         for subject, files in cases:
-            run(self.seed, "push", "-q", "-f", "origin", f"{self.source}:refs/heads/main")
+            run(
+                self.seed,
+                "push",
+                "-q",
+                "-f",
+                "origin",
+                f"{self.source}:refs/heads/main",
+            )
             self.land_elsewhere(subject, files)
             moved = self.remote_main()
             with self.subTest(subject):
@@ -116,7 +158,10 @@ class LandTests(unittest.TestCase):
                 self.assertEqual(self.remote_main(), moved)
 
     def test_app_version_files_match_what_release_py_writes(self):
-        written = {str(path) for path in release.GO_VERSIONS} | {str(release.APP_RELEASE), "CHANGELOG.md"}
+        written = {str(path) for path in release.GO_VERSIONS} | {
+            str(release.APP_RELEASE),
+            "CHANGELOG.md",
+        }
         self.assertEqual(written, lr.APP_FILES)
 
 

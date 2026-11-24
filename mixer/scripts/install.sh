@@ -20,96 +20,121 @@ files="librc2fx_native.so rc2fxd rc2fx-supervisor rc2fx-firmware firmware-profil
 pre_gui() { ! grep -qF '  gui-launch) ' "$1/rc2fx.sh" 2>/dev/null; }
 installed_at() { if test -f "$1/rc2fx.sh"; then echo "$1/rc2fx.sh"; else echo "$1"; fi; }
 original() {
- keep=
- for dir in "$opt"/.rc2fx-retained.*; do
-  test -d "$dir" && ! test -L "$dir" && pre_gui "$dir" || continue
-  if test -z "$keep" || test "$(installed_at "$dir")" -ot "$(installed_at "$keep")"; then keep=$dir; fi
- done
- echo "$keep"
+	keep=
+	for dir in "$opt"/.rc2fx-retained.*; do
+		test -d "$dir" && ! test -L "$dir" && pre_gui "$dir" || continue
+		if test -z "$keep" || test "$(installed_at "$dir")" -ot "$(installed_at "$keep")"; then keep=$dir; fi
+	done
+	echo "$keep"
 }
 prune_retained() {
- kept=$(original)
- for dir in "$opt"/.rc2fx-retained.*; do
-  test -e "$dir" || test -L "$dir" || continue
-  test "$dir" != "$kept" || continue
-  if test -L "$dir" || ! test -d "$dir"; then echo "Left alone, not a directory: $dir" >&2; continue; fi
-  if test -e "$dir/data"; then echo "Kept, it holds saved settings: $dir" >&2; continue; fi
-  rm -rf "$dir"
- done
+	kept=$(original)
+	for dir in "$opt"/.rc2fx-retained.*; do
+		test -e "$dir" || test -L "$dir" || continue
+		test "$dir" != "$kept" || continue
+		if test -L "$dir" || ! test -d "$dir"; then
+			echo "Left alone, not a directory: $dir" >&2
+			continue
+		fi
+		if test -e "$dir/data"; then
+			echo "Kept, it holds saved settings: $dir" >&2
+			continue
+		fi
+		rm -rf "$dir"
+	done
 }
 # Once the pending marker is cleared, nothing launches .rc2fx-previous. Drop it
 # unless it holds saved settings or is the only pre-GUI-shim copy we have.
 retire_previous() {
- test -d "$previous" && ! test -L "$previous" || return 0
- if test -e "$previous/data" || { pre_gui "$previous" && test -z "$(original)"; }; then
-  test ! -e "$previous/data" || echo "Kept, it holds saved settings: $previous" >&2
-  retained=$(mktemp -d "$opt/.rc2fx-retained.XXXXXX"); rmdir "$retained"; mv "$previous" "$retained"
- else
-  rm -rf "$previous"
- fi
+	test -d "$previous" && ! test -L "$previous" || return 0
+	if test -e "$previous/data" || { pre_gui "$previous" && test -z "$(original)"; }; then
+		test ! -e "$previous/data" || echo "Kept, it holds saved settings: $previous" >&2
+		retained=$(mktemp -d "$opt/.rc2fx-retained.XXXXXX")
+		rmdir "$retained"
+		mv "$previous" "$retained"
+	else
+		rm -rf "$previous"
+	fi
 }
 rollback() {
- test -f "$pending" || return 0
- /bin/bash "$home/rc2fx.sh" stop || return 1
- if test -d "$previous"; then
-  for name in data logs; do test ! -e "$home/$name" || mv "$home/$name" "$previous/$name"; done
-  failed=$(mktemp -d "$opt/.rc2fx-failed.XXXXXX"); rmdir "$failed"
-  mv "$home" "$failed"
-  mv "$previous" "$home"
-  if test -f "$home/.installer-autostart" && test -f "$home/rc2fx-shim.sh"; then
-   cp "$home/rc2fx-shim.sh" "$shim"; chmod 755 "$shim"
-   if test -f "$home/rc2fx-gui-shim.sh"; then
-    cp "$home/rc2fx-gui-shim.sh" "$gui_shim"; chmod 755 "$gui_shim"
-   else
-    rm -f "$gui_shim"
-   fi
-  else
-   rm -f "$shim" "$gui_shim"
-  fi
-  rm -f "$pending"
-  if test -f "$home/rc2fx.sh" && test -x "$shim"; then /bin/bash "$home/rc2fx.sh" start --wait 240; fi
- else
-  rm -f "$shim" "$gui_shim" "$pending"
- fi
+	test -f "$pending" || return 0
+	/bin/bash "$home/rc2fx.sh" stop || return 1
+	if test -d "$previous"; then
+		for name in data logs; do test ! -e "$home/$name" || mv "$home/$name" "$previous/$name"; done
+		failed=$(mktemp -d "$opt/.rc2fx-failed.XXXXXX")
+		rmdir "$failed"
+		mv "$home" "$failed"
+		mv "$previous" "$home"
+		if test -f "$home/.installer-autostart" && test -f "$home/rc2fx-shim.sh"; then
+			cp "$home/rc2fx-shim.sh" "$shim"
+			chmod 755 "$shim"
+			if test -f "$home/rc2fx-gui-shim.sh"; then
+				cp "$home/rc2fx-gui-shim.sh" "$gui_shim"
+				chmod 755 "$gui_shim"
+			else
+				rm -f "$gui_shim"
+			fi
+		else
+			rm -f "$shim" "$gui_shim"
+		fi
+		rm -f "$pending"
+		if test -f "$home/rc2fx.sh" && test -x "$shim"; then /bin/bash "$home/rc2fx.sh" start --wait 240; fi
+	else
+		rm -f "$shim" "$gui_shim" "$pending"
+	fi
 }
 case "${1:-install}" in
- rollback) rollback; exit ;;
- commit) test -f "$pending" || exit 0; rm -f "$pending"; retire_previous; exit ;;
- install) ;;
- *) exit 1 ;;
+rollback)
+	rollback
+	exit
+	;;
+commit)
+	test -f "$pending" || exit 0
+	rm -f "$pending"
+	retire_previous
+	exit
+	;;
+install) ;;
+*) exit 1 ;;
 esac
 if test -e "${RC2FX_FIRST_BOOT:-$root/usr/bin/first-boot}" || test -e "${RC2FX_PRODUCTION_BOOT:-$root/usr/bin/production-boot}"; then
- echo 'Refusing install: mixer is in its first boot after a firmware update' >&2
- exit 4
+	echo 'Refusing install: mixer is in its first boot after a firmware update' >&2
+	exit 4
 fi
 for path in "$opt" "$home" "$home/data" "$home/logs" "$previous" "$pending" "$shim" "$gui_shim"; do
- if test -L "$path"; then echo "Linked install path refused: $path" >&2; exit 1; fi
+	if test -L "$path"; then
+		echo "Linked install path refused: $path" >&2
+		exit 1
+	fi
 done
 mkdir -p "$opt"
-if test -f "$pending"; then echo 'Earlier runtime transaction needs readiness checks or rollback' >&2; exit 1; fi
+if test -f "$pending"; then
+	echo 'Earlier runtime transaction needs readiness checks or rollback' >&2
+	exit 1
+fi
 prune_retained
 bytes=0
 for name in $files; do
- test -f "$up/$name" && ! test -L "$up/$name"
- bytes=$((bytes + $(wc -c < "$up/$name")))
+	test -f "$up/$name" && ! test -L "$up/$name"
+	bytes=$((bytes + $(wc -c <"$up/$name")))
 done
 # Check space for the staged bundle plus 16 MiB headroom (the existing runtime
 # is renamed to .rc2fx-previous, not copied).
-bundle=$(( (bytes + 1023) / 1024 ))
+bundle=$(((bytes + 1023) / 1024))
 headroom=16384
 free=$(df -Pk "$opt" | awk 'NR == 2 {print $4}')
 if test "$free" -lt $((bundle + headroom)); then
- echo "Not enough free space to install: $free KiB free on the filesystem of $opt, $((bundle + headroom)) KiB needed (the $bundle KiB bundle and $headroom KiB to spare)" >&2
- exit 1
+	echo "Not enough free space to install: $free KiB free on the filesystem of $opt, $((bundle + headroom)) KiB needed (the $bundle KiB bundle and $headroom KiB to spare)" >&2
+	exit 1
 fi
 stage=$(mktemp -d "$opt/.rc2fx-stage.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 for name in $files; do
- cp "$up/$name" "$stage/$name"
+	cp "$up/$name" "$stage/$name"
 done
 if test -f "$up/bundle.sha256"; then cp "$up/bundle.sha256" "$stage/bundle.sha256"; fi
 chmod 700 "$stage/rc2fxd" "$stage/rc2fx-supervisor" "$stage/rc2fx-firmware" "$stage/rc2fx_jackerr_snapshot" "$stage/rc2fx.sh" \
- "$stage/rc2fx-shim.sh" "$stage/rc2fx-gui-shim.sh" "$stage/install.sh"
+	"$stage/rc2fx-shim.sh" "$stage/rc2fx-gui-shim.sh" "$stage/install.sh"
 (cd "$stage" && sha256sum -c SHA256SUMS >/dev/null)
 "$stage/rc2fx-firmware" check-device "$stage/firmware-profiles.json" "$root/usr/bin/rc_audio_mixer" "$root/usr/bin/audio-start.sh" >/dev/null
 # Remember whether the current install had autostart enabled. A running RC2FX
@@ -142,16 +167,20 @@ sync
 status=0
 /bin/bash "$home/rc2fx.sh" restart --wait 240 || status=$?
 if test "$status" -eq 3; then
- # Existing audio-start.sh already hashed /usr/bin/rc_audio_mixer and won't
- # pick up the new shim until a reboot; commit the install as-is.
- rm -f "$pending"
- echo 'Installed; RC2FX starts with the mixer at the next power-on'
- exit 0
+	# Existing audio-start.sh already hashed /usr/bin/rc_audio_mixer and won't
+	# pick up the new shim until a reboot; commit the install as-is.
+	rm -f "$pending"
+	echo 'Installed; RC2FX starts with the mixer at the next power-on'
+	exit 0
 fi
 test "$status" -eq 0
 n=0
 until test -S "$root/run/rc2fx/control.sock" && pgrep -x rc2fxd >/dev/null; do
- n=$((n+1)); if test "$n" -ge 90; then echo 'New runtime startup failed; rolling back' >&2; exit 1; fi
- sleep 1
+	n=$((n + 1))
+	if test "$n" -ge 90; then
+		echo 'New runtime startup failed; rolling back' >&2
+		exit 1
+	fi
+	sleep 1
 done
 echo 'Runtime started; readiness verification must commit the transaction'

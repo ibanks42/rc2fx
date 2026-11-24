@@ -37,8 +37,17 @@ def main():
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "velopack"
         subprocess.run(
-            ["git", "clone", "--quiet", "--depth", "1", "--branch", version,
-             "https://github.com/velopack/velopack", str(source)],
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--depth",
+                "1",
+                "--branch",
+                version,
+                "https://github.com/velopack/velopack",
+                str(source),
+            ],
             check=True,
         )
         config = Path(work) / "about.toml"
@@ -51,19 +60,41 @@ def main():
             f"accepted = {json.dumps(accepted)}\n"
             'workarounds = ["ring"]\n'
         )
-        report = json.loads(subprocess.run(
-            ["cargo", "about", "generate", "--locked", "--format", "json",
-             "--config", str(config), "--manifest-path", str(source / "src/bins/Cargo.toml"),
-             "--features", "windows"],
-            check=True, capture_output=True, text=True,
-        ).stdout)
+        report = json.loads(
+            subprocess.run(
+                [
+                    "cargo",
+                    "about",
+                    "generate",
+                    "--locked",
+                    "--format",
+                    "json",
+                    "--config",
+                    str(config),
+                    "--manifest-path",
+                    str(source / "src/bins/Cargo.toml"),
+                    "--features",
+                    "windows",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
     licenses = [
         {
             "name": license["name"],
             "text": license["text"],
             "used_by": sorted(
-                ({"crate": {"name": u["crate"]["name"], "version": u["crate"]["version"]}}
-                 for u in license["used_by"]),
+                (
+                    {
+                        "crate": {
+                            "name": u["crate"]["name"],
+                            "version": u["crate"]["version"],
+                        }
+                    }
+                    for u in license["used_by"]
+                ),
                 key=lambda u: (u["crate"]["name"], u["crate"]["version"]),
             ),
         }
@@ -73,7 +104,9 @@ def main():
     if not licenses:
         sys.exit("cargo-about found no licenses")
     out = ROOT / "licenses" / f"velopack-{version}.json"
-    out.write_text(json.dumps({"velopack": version, "licenses": licenses}, indent=1) + "\n")
+    out.write_text(
+        json.dumps({"velopack": version, "licenses": licenses}, indent=1) + "\n"
+    )
     print(f"wrote {out.relative_to(ROOT)}: {len(licenses)} license texts")
 
 
