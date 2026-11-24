@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2174 # -m applies to the last directory, as intended
 # Runs on the RODECaster Pro II. Has RØDE's audio launcher start the stock
 # mixer with the RC2FX native library injected, from the first start of a boot,
 # and hands audio back to stock when RC2FX stops.
@@ -60,9 +61,9 @@ vendor_log=/var/volatile/log/rc_audio_mixer
 duo_marker=${RC2FX_DUO_MARKER:-/opt/rc2fx/experimental-duo}
 RC2FX_EXPERIMENTAL_DUO=0
 for marker in "$duo_marker" "$home/experimental-duo"; do
-  if [[ -f "$marker" && $(< "$marker") == 1 ]]; then
-    RC2FX_EXPERIMENTAL_DUO=1
-  fi
+	if [[ -f "$marker" && $(<"$marker") == 1 ]]; then
+		RC2FX_EXPERIMENTAL_DUO=1
+	fi
 done
 export RC2FX_EXPERIMENTAL_DUO
 # Restart a mixer only once it has run this long: its USB audio gadget comes
@@ -71,22 +72,46 @@ mixer_settle=60
 
 stamp() { date -u +%FT%TZ; }
 say() { printf '%s %s\n' "$(stamp)" "$*"; }
-start_time() { local record rest; local -a fields=(); IFS= read -r record 2>/dev/null < "$proc/$1/stat" || return 1; rest=${record##*) }; read -r -a fields <<< "$rest"; test "${#fields[@]}" -gt 19 || return 1; printf '%s\n' "${fields[19]}"; }
-alive() { local record rest; IFS= read -r record 2>/dev/null < "$proc/$1/stat" || return 1; rest=${record##*) }; test "${rest%% *}" != Z; }
+start_time() {
+	local record rest
+	local -a fields=()
+	IFS= read -r record 2>/dev/null <"$proc/$1/stat" || return 1
+	rest=${record##*) }
+	read -r -a fields <<<"$rest"
+	test "${#fields[@]}" -gt 19 || return 1
+	printf '%s\n' "${fields[19]}"
+}
+alive() {
+	local record rest
+	IFS= read -r record 2>/dev/null <"$proc/$1/stat" || return 1
+	rest=${record##*) }
+	test "${rest%% *}" != Z
+}
 uptime_s() { cut -d. -f1 "$proc/uptime"; }
-supervisor() { local pid; pid=$(cat "$run/supervisor.pid" 2>/dev/null) && alive "$pid" && printf '%s\n' "$pid"; }
+supervisor() {
+	local pid
+	pid=$(cat "$run/supervisor.pid" 2>/dev/null) && alive "$pid" && printf '%s\n' "$pid"
+}
 # The bundle the shim starts next: a build in RAM wins over the installed one.
-bundle_home() { local d; for d in /run/rc2fx-dev /opt/rc2fx; do test -f "$d/rc2fx.sh" && { printf '%s\n' "$d"; return 0; }; done; return 1; }
-file_sha256() { sha256sum < "$1" | cut -d' ' -f1; }
+bundle_home() {
+	local d
+	for d in /run/rc2fx-dev /opt/rc2fx; do test -f "$d/rc2fx.sh" && {
+		printf '%s\n' "$d"
+		return 0
+	}; done
+	return 1
+}
+file_sha256() { sha256sum <"$1" | cut -d' ' -f1; }
 manifest_sha256() { awk -v n="$2" 'substr($0, 67) == n { print substr($0, 1, 64); exit }' "$1"; }
 # Appends paths failing checksum verification under $1 to caller's `failed` array.
 manifest_check_failed() {
-  local root=$1 manifest=$2 line name; shift 2
-  while IFS= read -r line; do
-    name=${line%: FAILED*}
-    if test "$name" != "$line"; then failed+=("$name"); fi
-  done < <(cd "$root" && "$@" -c --quiet "$manifest" 2>/dev/null || true)
-  return 0
+	local root=$1 manifest=$2 line name
+	shift 2
+	while IFS= read -r line; do
+		name=${line%: FAILED*}
+		if test "$name" != "$line"; then failed+=("$name"); fi
+	done < <(cd "$root" && "$@" -c --quiet "$manifest" 2>/dev/null || true)
+	return 0
 }
 
 # Keep RODE's HID descriptor intact up to its final End Collection and add
@@ -101,58 +126,61 @@ manifest_check_failed() {
 rt_throttle=$proc/sys/kernel/sched_rt_runtime_us
 rt_throttle_default=950000
 relax_rt_throttle() {
-  test -w "$rt_throttle" || { say 'Real-time throttle: cannot write the sysctl, left as is'; return 0; }
-  echo -1 > "$rt_throttle" && say "Real-time throttle off (sched_rt_runtime_us -1, was $rt_throttle_default)"
+	test -w "$rt_throttle" || {
+		say 'Real-time throttle: cannot write the sysctl, left as is'
+		return 0
+	}
+	echo -1 >"$rt_throttle" && say "Real-time throttle off (sched_rt_runtime_us -1, was $rt_throttle_default)"
 }
 restore_rt_throttle() {
-  test -w "$rt_throttle" && echo "$rt_throttle_default" > "$rt_throttle" 2>/dev/null || true
+	test -w "$rt_throttle" && echo "$rt_throttle_default" >"$rt_throttle" 2>/dev/null || true
 }
 
 prepare_usb() {
-  local script=/etc/init.d/uac2_gadget.sh descriptor=/etc/init.d/rc-hid-descriptor.bin
-  if ! printf '%s  %s\n' \
-    18d1860f3fd67bf19797804c77eb4f9411cf144ba1da7d71ed1ff1cf0b74bec2 "$script" \
-    0aabe2ce89359fa5f6c5f45d2419e82051111c9c4f45ea5ded5068e9b9bc7647 "$descriptor" \
-    | sha256sum -c - >/dev/null 2>&1; then
-    say 'USB control unavailable: vendor gadget files do not match the qualified layout'
-    return 0
-  fi
-  # The qualified descriptor is 46 bytes and ends with End Collection (c0).
-  head -c 45 "$descriptor" > "$run/usb-report.bin"
-  printf '\x09\x06\x85\x05\x95\xff\x91\x02\x09\x07\x85\x06\x95\xff\x81\x02\xc0' >> "$run/usb-report.bin"
-  sed "s|^HID_REPORT_DESC=/etc/init.d/rc-hid-descriptor.bin |HID_REPORT_DESC=$run/usb-report.bin |" "$script" > "$run/usb-gadget.sh"
-  # Without both staged scripts the native hook leaves stock USB setup alone.
-  if ! grep -q "^HID_REPORT_DESC=$run/usb-report.bin " "$run/usb-gadget.sh"; then
-    rm -f "$run/usb-report.bin" "$run/usb-gadget.sh"
-    say 'USB control unavailable: the vendor gadget script did not take the new descriptor'
-    return 0
-  fi
-  printf '#!/bin/bash\n/bin/bash %q usb-quiesce || exit\nexec /bin/bash /etc/init.d/uac2_gadget.sh "$@"\n' "$home/rc2fx.sh" > "$run/usb-stop.sh"
-  chmod 600 "$run/usb-report.bin" "$run/usb-gadget.sh" "$run/usb-stop.sh"
+	local script=/etc/init.d/uac2_gadget.sh descriptor=/etc/init.d/rc-hid-descriptor.bin
+	if ! printf '%s  %s\n' \
+		18d1860f3fd67bf19797804c77eb4f9411cf144ba1da7d71ed1ff1cf0b74bec2 "$script" \
+		0aabe2ce89359fa5f6c5f45d2419e82051111c9c4f45ea5ded5068e9b9bc7647 "$descriptor" |
+		sha256sum -c - >/dev/null 2>&1; then
+		say 'USB control unavailable: vendor gadget files do not match the qualified layout'
+		return 0
+	fi
+	# The qualified descriptor is 46 bytes and ends with End Collection (c0).
+	head -c 45 "$descriptor" >"$run/usb-report.bin"
+	printf '\x09\x06\x85\x05\x95\xff\x91\x02\x09\x07\x85\x06\x95\xff\x81\x02\xc0' >>"$run/usb-report.bin"
+	sed "s|^HID_REPORT_DESC=/etc/init.d/rc-hid-descriptor.bin |HID_REPORT_DESC=$run/usb-report.bin |" "$script" >"$run/usb-gadget.sh"
+	# Without both staged scripts the native hook leaves stock USB setup alone.
+	if ! grep -q "^HID_REPORT_DESC=$run/usb-report.bin " "$run/usb-gadget.sh"; then
+		rm -f "$run/usb-report.bin" "$run/usb-gadget.sh"
+		say 'USB control unavailable: the vendor gadget script did not take the new descriptor'
+		return 0
+	fi
+	printf '#!/bin/bash\n/bin/bash %q usb-quiesce || exit\nexec /bin/bash /etc/init.d/uac2_gadget.sh "$@"\n' "$home/rc2fx.sh" >"$run/usb-stop.sh"
+	chmod 600 "$run/usb-report.bin" "$run/usb-gadget.sh" "$run/usb-stop.sh"
 }
 
 # A vendor USB mode change also rebuilds the gadget. Retiring the name prevents
 # new response handles; give an in-flight bounded write time to close before
 # stock teardown. Never unbind the gadget while the controller holds it open.
 usb_quiesce() {
-  local native controller owner fd target busy n
-  native=$(cat "$run/native.pid" 2>/dev/null || true)
-  owner=$(supervisor || true)
-  controller=$(test -z "$owner" || pgrep -P "$owner" -x rc2fxd || true)
-  retire_usb_node "$native" "$controller" || return 1
-  for ((n=0; n<40; n++)); do
-    busy=0
-    if test -n "$controller"; then
-      for fd in "$proc/$controller"/fd/*; do
-        target=$(readlink "$fd" 2>/dev/null) || continue
-        case "$target" in "$hidg0"|"$hidg0 (deleted)") busy=1;; esac
-      done
-    fi
-    test "$busy" != 0 || return 0
-    sleep 0.1
-  done
-  say 'Refusing USB teardown: controller still holds the HID device' >&2
-  return 1
+	local native controller owner fd target busy n
+	native=$(cat "$run/native.pid" 2>/dev/null || true)
+	owner=$(supervisor || true)
+	controller=$(test -z "$owner" || pgrep -P "$owner" -x rc2fxd || true)
+	retire_usb_node "$native" "$controller" || return 1
+	for ((n = 0; n < 40; n++)); do
+		busy=0
+		if test -n "$controller"; then
+			for fd in "$proc/$controller"/fd/*; do
+				target=$(readlink "$fd" 2>/dev/null) || continue
+				case "$target" in "$hidg0" | "$hidg0 (deleted)") busy=1 ;; esac
+			done
+		fi
+		test "$busy" != 0 || return 0
+		sleep 0.1
+	done
+	say 'Refusing USB teardown: controller still holds the HID device' >&2
+	return 1
 }
 
 # Vendor's HID thread opens /dev/hidg0 without O_CLOEXEC, so teardown shells
@@ -160,60 +188,61 @@ usb_quiesce() {
 # the devtmpfs node before a full mixer restart (waiting briefly for transient
 # `sh -c` children); existing fds keep working and gadget setup recreates it.
 retire_usb_node() {
-  test -e "$hidg0" || return 0
-  if test -L "$hidg0" || ! test -c "$hidg0"; then
-    say 'Refusing restart: /dev/hidg0 is not the expected character device' >&2
-    return 1
-  fi
-  local fd target owner permitted pid foreign comm n
-  for ((n=0; n<30; n++)); do
-    foreign=
-    for fd in "$proc"/[0-9]*/fd/*; do
-      target=$(readlink "$fd" 2>/dev/null) || continue
-      test "$target" = "$hidg0" || continue
-      owner=${fd#"$proc"/}; owner=${owner%%/*}
-      permitted=0
-      for pid in "$@"; do test "$owner" != "$pid" || permitted=1; done
-      test "$permitted" = 1 && continue
-      comm=$(cat "$proc/$owner/comm" 2>/dev/null || true)
-      foreign="$owner${comm:+ $comm}"
-    done
-    test -n "$foreign" || break
-    sleep 0.1
-  done
-  if test -n "$foreign"; then
-    say "Refusing restart: another process ($foreign) holds the USB HID device" >&2
-    return 1
-  fi
-  rm -- "$hidg0"
-  # The node is gone; a log write that fails must not refuse the restart.
-  say 'Retired old USB HID node before mixer restart' || true
+	test -e "$hidg0" || return 0
+	if test -L "$hidg0" || ! test -c "$hidg0"; then
+		say 'Refusing restart: /dev/hidg0 is not the expected character device' >&2
+		return 1
+	fi
+	local fd target owner permitted pid foreign comm n
+	for ((n = 0; n < 30; n++)); do
+		foreign=
+		for fd in "$proc"/[0-9]*/fd/*; do
+			target=$(readlink "$fd" 2>/dev/null) || continue
+			test "$target" = "$hidg0" || continue
+			owner=${fd#"$proc"/}
+			owner=${owner%%/*}
+			permitted=0
+			for pid in "$@"; do test "$owner" != "$pid" || permitted=1; done
+			test "$permitted" = 1 && continue
+			comm=$(cat "$proc/$owner/comm" 2>/dev/null || true)
+			foreign="$owner${comm:+ $comm}"
+		done
+		test -n "$foreign" || break
+		sleep 0.1
+	done
+	if test -n "$foreign"; then
+		say "Refusing restart: another process ($foreign) holds the USB HID device" >&2
+		return 1
+	fi
+	rm -- "$hidg0"
+	# The node is gone; a log write that fails must not refuse the restart.
+	say 'Retired old USB HID node before mixer restart' || true
 }
 
 # The mixer (stock or RC2FX) running under the launcher, which is waiting on
 # it; prints its PID. Between the launcher's restarts there is none.
 launched_mixer() {
-  local found= candidate parent
-  for candidate in $(pgrep -x rc_audio_mixer); do
-    alive "$candidate" || continue
-    test -z "$found" || return 1
-    found=$candidate
-  done
-  test -n "$found" || return 1
-  test "$(readlink "$proc/$found/exe")" = "$stock_mixer" || return 1
-  parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$proc/$found/status")
-  # An RC2FX mixer is the child of its launch shell, itself the launcher's.
-  if grep -qa 'rc2fx.sh' "$proc/$parent/cmdline" 2>/dev/null; then
-    parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$proc/$parent/status")
-  fi
-  grep -qa 'audio-start.sh' "$proc/$parent/cmdline" || return 1
-  # The launcher restarts USB, JACK and the mixer as one sequence, then waits
-  # on the mixer. A mixer it is not waiting on is not one it would restart.
-  test "$(cat "$proc/$parent/wchan" 2>/dev/null)" = do_wait || return 1
-  printf '%s\n' "$found"
+	local found='' candidate parent
+	for candidate in $(pgrep -x rc_audio_mixer); do
+		alive "$candidate" || continue
+		test -z "$found" || return 1
+		found=$candidate
+	done
+	test -n "$found" || return 1
+	test "$(readlink "$proc/$found/exe")" = "$stock_mixer" || return 1
+	parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$proc/$found/status")
+	# An RC2FX mixer is the child of its launch shell, itself the launcher's.
+	if grep -qa 'rc2fx.sh' "$proc/$parent/cmdline" 2>/dev/null; then
+		parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$proc/$parent/status")
+	fi
+	grep -qa 'audio-start.sh' "$proc/$parent/cmdline" || return 1
+	# The launcher restarts USB, JACK and the mixer as one sequence, then waits
+	# on the mixer. A mixer it is not waiting on is not one it would restart.
+	test "$(cat "$proc/$parent/wchan" 2>/dev/null)" = do_wait || return 1
+	printf '%s\n' "$found"
 }
 
-mixer_age() { echo $(( $(uptime_s) - $(start_time "$1") / $(getconf CLK_TCK) )); }
+mixer_age() { echo $(($(uptime_s) - $(start_time "$1") / $(getconf CLK_TCK))); }
 
 # $2, when known, is the process's start time. A caller that is not its parent
 # needs it: the PID can have gone to another process since it last looked.
@@ -226,34 +255,43 @@ alive_as() { alive "$1" && { test -z "${2:-}" || test "$(start_time "$1" 2>/dev/
 # the kill: a blocked reap once left stock audio paused. Zombies are reaped by
 # their parent.
 stop_owned() {
-  local target=$1 started=${2:-} mode=${3:-} n kill_wait=30
-  if test "$mode" = strict; then
-    kill_wait=20
-    test -n "$started" && test "$(start_time "$target" 2>/dev/null)" = "$started" || return 1
-    alive "$target" || return 0
-    kill -TERM "$target" 2>/dev/null || return 1
-  else
-    alive_as "$target" "$started" || return 0
-    kill -TERM "$target" 2>/dev/null || true
-  fi
-  for ((n=0; n<50; n++)); do alive_as "$target" "$started" || return 0; sleep 0.1; done
-  alive_as "$target" "$started" || return 0
-  kill -KILL "$target" 2>/dev/null || true
-  for ((n=0; n<kill_wait; n++)); do alive_as "$target" "$started" || return 0; sleep 0.1; done
-  test "$mode" = strict || say "Process $target would not exit; power-cycle the mixer if audio does not return"
-  return 1
+	local target=$1 started=${2:-} mode=${3:-} n kill_wait=30
+	if test "$mode" = strict; then
+		kill_wait=20
+		test -n "$started" && test "$(start_time "$target" 2>/dev/null)" = "$started" || return 1
+		alive "$target" || return 0
+		kill -TERM "$target" 2>/dev/null || return 1
+	else
+		alive_as "$target" "$started" || return 0
+		kill -TERM "$target" 2>/dev/null || true
+	fi
+	for ((n = 0; n < 50; n++)); do
+		alive_as "$target" "$started" || return 0
+		sleep 0.1
+	done
+	alive_as "$target" "$started" || return 0
+	kill -KILL "$target" 2>/dev/null || true
+	for ((n = 0; n < kill_wait; n++)); do
+		alive_as "$target" "$started" || return 0
+		sleep 0.1
+	done
+	test "$mode" = strict || say "Process $target would not exit; power-cycle the mixer if audio does not return"
+	return 1
 }
 
 stop_supervisor() {
-  local pid=$1 n
-  if ! touch "$run/stop"; then
-    echo "RC2FX supervisor $pid did not stop (could not write $run/stop)" >&2
-    return 1
-  fi
-  for ((n=0; n<120; n++)); do alive "$pid" || return 0; sleep 0.25; done
-  alive "$pid" || return 0
-  echo "RC2FX supervisor $pid did not stop" >&2
-  return 1
+	local pid=$1 n
+	if ! touch "$run/stop"; then
+		echo "RC2FX supervisor $pid did not stop (could not write $run/stop)" >&2
+		return 1
+	fi
+	for ((n = 0; n < 120; n++)); do
+		alive "$pid" || return 0
+		sleep 0.25
+	done
+	alive "$pid" || return 0
+	echo "RC2FX supervisor $pid did not stop" >&2
+	return 1
 }
 
 # The gadget is bound with RC2FX's descriptor. A restarted RC2FX mixer keeps
@@ -261,10 +299,10 @@ stop_supervisor() {
 # sees a disconnect and the HID node must stay for it. Stock rebuilds the
 # gadget, so a handback retires the node first.
 gadget_kept() {
-  # Not cmp -s: it trusts file sizes, and configfs reports none.
-  test -c "$hidg0" && ! test -L "$hidg0" \
-    && test "$(cat /sys/kernel/config/usb_gadget/g124/UDC 2>/dev/null)" = ff400000.usb \
-    && cmp /sys/kernel/config/usb_gadget/g124/functions/hid.usb0/report_desc "$run/usb-report.bin" > /dev/null 2>&1
+	# Not cmp -s: it trusts file sizes, and configfs reports none.
+	test -c "$hidg0" && ! test -L "$hidg0" &&
+		test "$(cat /sys/kernel/config/usb_gadget/g124/UDC 2>/dev/null)" = ff400000.usb &&
+		cmp /sys/kernel/config/usb_gadget/g124/functions/hid.usb0/report_desc "$run/usb-report.bin" >/dev/null 2>&1
 }
 
 # Ends the mixer so that the launcher restarts it. Unless $keep_usb is 1, the
@@ -273,11 +311,12 @@ gadget_kept() {
 keep_usb=0
 mixer_start=
 restart_mixer() {
-  local mixer=$1; shift
-  test "$keep_usb" = 1 || retire_usb_node "$mixer" "$@" || return 1
-  local pid
-  for pid in "$@"; do stop_owned "$pid" || true; done
-  stop_owned "$mixer" "$mixer_start"
+	local mixer=$1
+	shift
+	test "$keep_usb" = 1 || retire_usb_node "$mixer" "$@" || return 1
+	local pid
+	for pid in "$@"; do stop_owned "$pid" || true; done
+	stop_owned "$mixer" "$mixer_start"
 }
 
 # Waits up to $1 s for the launcher to start a mixer other than $2 and for
@@ -286,26 +325,26 @@ restart_mixer() {
 # first lookup, so a launcher already running when the shim was added keeps
 # starting /usr/bin/rc_audio_mixer until the mixer is power-cycled.
 wait_for_launch() {
-  local deadline=$(( $(uptime_s) + $1 )) old=${2:-} pid mixer seen
-  while test "$(uptime_s)" -lt "$deadline"; do
-    if pid=$(supervisor) && test "$(cat "$run/native.pid" 2>/dev/null)" != "$old"; then
-      echo "RC2FX starting from $(cat "$run/home" 2>/dev/null) (supervisor $pid); the desktop app connects over USB 1"
-      return 0
-    fi
-    if mixer=$(launched_mixer) && test "$mixer" != "$old" && test "$(mixer_age "$mixer")" -ge 3 \
-      && ! grep -qa 'LD_AUDIT=' "$proc/$mixer/environ"; then
-      seen=$(cat "$boot/seen" 2>/dev/null || echo -1)
-      if test "$seen" -ge $(( $(start_time "$mixer") / $(getconf CLK_TCK) - 1 )); then
-        echo "RC2FX fell back to stock: $(tail -n 1 "$logs/rc2fx.log" 2>/dev/null)" >&2
-        return 1
-      fi
-      echo 'The launcher started the stock mixer by the path it remembered from before the shim existed. Power-cycle the mixer; RC2FX then starts with it.' >&2
-      return 3
-    fi
-    sleep 1
-  done
-  echo 'The launcher did not start RC2FX; see rc2fx.sh status' >&2
-  return 1
+	local deadline=$(($(uptime_s) + $1)) old=${2:-} pid mixer seen
+	while test "$(uptime_s)" -lt "$deadline"; do
+		if pid=$(supervisor) && test "$(cat "$run/native.pid" 2>/dev/null)" != "$old"; then
+			echo "RC2FX starting from $(cat "$run/home" 2>/dev/null) (supervisor $pid); the desktop app connects over USB 1"
+			return 0
+		fi
+		if mixer=$(launched_mixer) && test "$mixer" != "$old" && test "$(mixer_age "$mixer")" -ge 3 &&
+			! grep -qa 'LD_AUDIT=' "$proc/$mixer/environ"; then
+			seen=$(cat "$boot/seen" 2>/dev/null || echo -1)
+			if test "$seen" -ge $(($(start_time "$mixer") / $(getconf CLK_TCK) - 1)); then
+				echo "RC2FX fell back to stock: $(tail -n 1 "$logs/rc2fx.log" 2>/dev/null)" >&2
+				return 1
+			fi
+			echo 'The launcher started the stock mixer by the path it remembered from before the shim existed. Power-cycle the mixer; RC2FX then starts with it.' >&2
+			return 3
+		fi
+		sleep 1
+	done
+	echo 'The launcher did not start RC2FX; see rc2fx.sh status' >&2
+	return 1
 }
 
 # ---- JACK error recorder ----------------------------------------------------
@@ -335,135 +374,145 @@ recorder_evidence_limit=8388608
 # (a fresh server's main thread is in /audio while its real-time and other
 # threads are still in the root cpuset). Fails if anything is unreadable.
 bb_thread_line() {
-  local task="$blackbox_proc/$1/task/$2" role=thread record rest fields comm cpuset cpus
-  test "$1" = "$2" && role=main
-  test -d "$task" || return 1
-  comm=$(cat "$task/comm" 2>/dev/null) && test -n "$comm" || return 1
-  cpuset=$(awk -F: '$2=="cpuset" {print $3}' "$task/cgroup" 2>/dev/null) && test -n "$cpuset" || return 1
-  cpus=$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null) && test -n "$cpus" || return 1
-  record=$(cat "$task/stat" 2>/dev/null) && test -n "$record" || return 1
-  rest=${record##*) }; read -r -a fields <<< "$rest"
-  ((${#fields[@]} > 38)) || return 1
-  printf '%s|%s|%s|%s|%s|%s|%s\n' "$role" "$comm" "${fields[38]}" "${fields[37]}" "${fields[16]}" "$cpuset" "$cpus"
+	local task="$blackbox_proc/$1/task/$2" role=thread record rest fields comm cpuset cpus
+	test "$1" = "$2" && role=main
+	test -d "$task" || return 1
+	comm=$(cat "$task/comm" 2>/dev/null) && test -n "$comm" || return 1
+	cpuset=$(awk -F: '$2=="cpuset" {print $3}' "$task/cgroup" 2>/dev/null) && test -n "$cpuset" || return 1
+	cpus=$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null) && test -n "$cpus" || return 1
+	record=$(cat "$task/stat" 2>/dev/null) && test -n "$record" || return 1
+	rest=${record##*) }
+	read -r -a fields <<<"$rest"
+	((${#fields[@]} > 38)) || return 1
+	printf '%s|%s|%s|%s|%s|%s|%s\n' "$role" "$comm" "${fields[38]}" "${fields[37]}" "${fields[16]}" "$cpuset" "$cpus"
 }
 # Every thread of $1, sorted, so two servers compare by role, not thread id.
 # Fails (no output) if any thread cannot be read completely.
 bb_inventory() {
-  local task line lines=
-  for task in "$blackbox_proc/$1"/task/*; do
-    line=$(bb_thread_line "$1" "${task##*/}") || return 1
-    lines+="$line"$'\n'
-  done
-  test -n "$lines" || return 1
-  sort <<< "${lines%$'\n'}"
+	local task line lines=
+	for task in "$blackbox_proc/$1"/task/*; do
+		line=$(bb_thread_line "$1" "${task##*/}") || return 1
+		lines+="$line"$'\n'
+	done
+	test -n "$lines" || return 1
+	sort <<<"${lines%$'\n'}"
 }
 # The role keys alone (role|comm|policy|priority|nice), with repeats.
-bb_roles() { cut -d'|' -f1-5 <<< "$1" | sort; }
+bb_roles() { cut -d'|' -f1-5 <<<"$1" | sort; }
 # Role keys with more than one placement: they cannot be matched.
-bb_ambiguous() { cut -d'|' -f1-4,6-7 <<< "$1" | sort -u | cut -d'|' -f1-4 | uniq -d; }
-bb_tasks() { local t n=0; for t in "$blackbox_proc/$1"/task/*; do test -e "$t" && n=$((n + 1)); done; echo "$n"; }
+bb_ambiguous() { cut -d'|' -f1-4,6-7 <<<"$1" | sort -u | cut -d'|' -f1-4 | uniq -d; }
+bb_tasks() {
+	local t n=0
+	for t in "$blackbox_proc/$1"/task/*; do test -e "$t" && n=$((n + 1)); done
+	echo "$n"
+}
 # The PCM devices $1 has open, sorted.
 bb_pcms() {
-  local fd target
-  for fd in "$blackbox_proc/$1"/fd/*; do
-    target=$(readlink "$fd" 2>/dev/null) || continue
-    case "$target" in */snd/pcmC*) printf '%s\n' "$target";; esac
-  done | sort -u
+	local fd target
+	for fd in "$blackbox_proc/$1"/fd/*; do
+		target=$(readlink "$fd" 2>/dev/null) || continue
+		case "$target" in */snd/pcmC*) printf '%s\n' "$target" ;; esac
+	done | sort -u
 }
 # Processes other than $1 (jackd) and callme-t that map libjack.
 bb_foreign_clients() {
-  local maps pid comm
-  for maps in "$blackbox_proc"/[0-9]*/maps; do
-    pid=${maps%/maps}; pid=${pid##*/}
-    test "$pid" = "$1" && continue
-    grep -q 'libjack\.so' "$maps" 2>/dev/null || continue
-    comm=$(cat "$blackbox_proc/$pid/comm" 2>/dev/null) || continue
-    test "$comm" = callme-t || printf '%s(%s)\n' "$pid" "$comm"
-  done
+	local maps pid comm
+	for maps in "$blackbox_proc"/[0-9]*/maps; do
+		pid=${maps%/maps}
+		pid=${pid##*/}
+		test "$pid" = "$1" && continue
+		grep -q 'libjack\.so' "$maps" 2>/dev/null || continue
+		comm=$(cat "$blackbox_proc/$pid/comm" 2>/dev/null) || continue
+		test "$comm" = callme-t || printf '%s(%s)\n' "$pid" "$comm"
+	done
 }
 # The IRQ threads' placement (for the log and the before/after check).
 bb_irq_placement() {
-  local irq
-  for irq in $blackbox_irqs; do
-    printf 'irq %s %s\n' "$irq" "$(cat "$blackbox_proc/irq/$irq/smp_affinity_list" 2>/dev/null || echo ?)"
-  done
+	local irq
+	for irq in $blackbox_irqs; do
+		printf 'irq %s %s\n' "$irq" "$(cat "$blackbox_proc/irq/$irq/smp_affinity_list" 2>/dev/null || echo ?)"
+	done
 }
 # Where the kernel actually delivers them (metadata only: read, never set).
 bb_irq_effective() {
-  local irq
-  for irq in $blackbox_irqs; do
-    printf 'effective %s %s\n' "$irq" "$(cat "$blackbox_proc/irq/$irq/effective_affinity_list" 2>/dev/null || echo ?)"
-  done
+	local irq
+	for irq in $blackbox_irqs; do
+		printf 'effective %s %s\n' "$irq" "$(cat "$blackbox_proc/irq/$irq/effective_affinity_list" 2>/dev/null || echo ?)"
+	done
 }
 # Put the audio IRQs back exactly as recorded in $1 (lines "irq N CPUS");
 # fails unless they then read back the same.
 bb_irq_restore() {
-  local tag irq cpus
-  while read -r tag irq cpus; do
-    test "$tag" = irq || continue
-    test "$(cat "$blackbox_proc/irq/$irq/smp_affinity_list" 2>/dev/null)" = "$cpus" && continue
-    printf '%s\n' "$cpus" > "$blackbox_proc/irq/$irq/smp_affinity_list" 2>/dev/null || true
-  done <<< "$1"
-  test "$(bb_irq_placement)" = "$(grep '^irq ' <<< "$1")"
+	local tag irq cpus
+	while read -r tag irq cpus; do
+		test "$tag" = irq || continue
+		test "$(cat "$blackbox_proc/irq/$irq/smp_affinity_list" 2>/dev/null)" = "$cpus" && continue
+		printf '%s\n' "$cpus" >"$blackbox_proc/irq/$irq/smp_affinity_list" 2>/dev/null || true
+	done <<<"$1"
+	test "$(bb_irq_placement)" = "$(grep '^irq ' <<<"$1")"
 }
 # Seams for moving one thread; tests replace them.
-bb_move_task() { printf '%s\n' "$1" > "$blackbox_cpuset$2/tasks"; }
-bb_set_cpus() { taskset -p -c "$2" "$1" > /dev/null; }
+bb_move_task() { printf '%s\n' "$1" >"$blackbox_cpuset$2/tasks"; }
+bb_set_cpus() { taskset -p -c "$2" "$1" >/dev/null; }
 # Start jackd as restartJack does: same argv/environment, from the root
 # cpuset with its CPUs, ordinary policy; $1 is the log, $2 a file for its
 # birth token ("pid start-time", taken at once), the rest extra environment
 # (the preload). Prints the token; every later check and stop uses it, so a
 # server that died is never confused with whatever reuses its pid.
 bb_start_server() {
-  local log=$1 token=$2; shift 2
-  local root_cpus pid started n
-  root_cpus=$(cat "$blackbox_cpuset/cpuset.cpus" 2>/dev/null) || return 1
-  (
-    printf '%s\n' "$BASHPID" > "$blackbox_cpuset/tasks" || exit 1
-    exec taskset -c "$root_cpus" chrt -o 0 env -i "${bb_env[@]}" "$@" "$blackbox_jackd" "${bb_argv[@]:1}"
-  ) >> "$log" 2>&1 < /dev/null &
-  pid=$!
-  for ((n=0; n<20; n++)); do started=$(start_time "$pid" 2>/dev/null) && break; sleep .05; done
-  test -n "${started:-}" || return 1
-  printf '%s %s\n' "$pid" "$started" > "$token"
-  printf '%s %s\n' "$pid" "$started"
+	local log=$1 token=$2
+	shift 2
+	local root_cpus pid started n
+	root_cpus=$(cat "$blackbox_cpuset/cpuset.cpus" 2>/dev/null) || return 1
+	(
+		printf '%s\n' "$BASHPID" >"$blackbox_cpuset/tasks" || exit 1
+		exec taskset -c "$root_cpus" chrt -o 0 env -i "${bb_env[@]}" "$@" "$blackbox_jackd" "${bb_argv[@]:1}"
+	) >>"$log" 2>&1 </dev/null &
+	pid=$!
+	for ((n = 0; n < 20; n++)); do
+		started=$(start_time "$pid" 2>/dev/null) && break
+		sleep .05
+	done
+	test -n "${started:-}" || return 1
+	printf '%s %s\n' "$pid" "$started" >"$token"
+	printf '%s %s\n' "$pid" "$started"
 }
 # Wait (bounded) until $1 has as many threads and the same PCM devices as the
 # old server, then give each thread its role's cpuset and CPUs and require
 # the old inventory exactly.
 bb_ready_and_placed() {
-  local pid=$1 started=$2 n tid line key want roles
-  roles=$(bb_roles "$bb_inventory_old")
-  # Ready: as many threads with the same roles (policies come from -P and
-  # are compared, never set), and the same PCM devices open.
-  for ((n=0; n<50; n++)); do
-    alive_as "$pid" "$started" || return 1
-    if test "$(bb_tasks "$pid")" = "$bb_task_count" && test "$(bb_pcms "$pid")" = "$bb_pcm_list" \
-       && test "$(bb_roles "$(bb_inventory "$pid")")" = "$roles"; then break; fi
-    sleep .1
-  done
-  test "$(bb_tasks "$pid")" = "$bb_task_count" && test "$(bb_pcms "$pid")" = "$bb_pcm_list" || return 1
-  test "$(bb_roles "$(bb_inventory "$pid")")" = "$roles" || {
-    say "Diagnostic JACK roles differ: $(bb_inventory "$pid" | tr '\n' ';') vs $(tr '\n' ';' <<< "$bb_inventory_old")" >> "$logs/rc2fx.log"
-    return 1
-  }
-  for tid in "$blackbox_proc/$pid"/task/*; do
-    tid=${tid##*/}
-    line=$(bb_thread_line "$pid" "$tid") || return 1
-    key=$(cut -d'|' -f1-4 <<< "$line")
-    # The role's placement (unique: ambiguous roles were refused).
-    want=$(awk -F'|' -v k="$key" '$1"|"$2"|"$3"|"$4==k {print $6"|"$7}' <<< "$bb_inventory_old" | sort -u)
-    test -n "$want" && test "$(wc -l <<< "$want")" = 1 || return 1
-    bb_move_task "$tid" "${want%%|*}" || return 1
-    bb_set_cpus "$tid" "${want#*|}" || return 1
-  done
-  for ((n=0; n<20; n++)); do
-    alive_as "$pid" "$started" || return 1
-    test "$(bb_inventory "$pid")" = "$bb_inventory_old" && return 0
-    sleep .1
-  done
-  say "Diagnostic JACK placement differs: $(bb_inventory "$pid" | tr '\n' ';') vs $(tr '\n' ';' <<< "$bb_inventory_old")" >> "$logs/rc2fx.log"
-  return 1
+	local pid=$1 started=$2 n tid line key want roles
+	roles=$(bb_roles "$bb_inventory_old")
+	# Ready: as many threads with the same roles (policies come from -P and
+	# are compared, never set), and the same PCM devices open.
+	for ((n = 0; n < 50; n++)); do
+		alive_as "$pid" "$started" || return 1
+		if test "$(bb_tasks "$pid")" = "$bb_task_count" && test "$(bb_pcms "$pid")" = "$bb_pcm_list" &&
+			test "$(bb_roles "$(bb_inventory "$pid")")" = "$roles"; then break; fi
+		sleep .1
+	done
+	test "$(bb_tasks "$pid")" = "$bb_task_count" && test "$(bb_pcms "$pid")" = "$bb_pcm_list" || return 1
+	test "$(bb_roles "$(bb_inventory "$pid")")" = "$roles" || {
+		say "Diagnostic JACK roles differ: $(bb_inventory "$pid" | tr '\n' ';') vs $(tr '\n' ';' <<<"$bb_inventory_old")" >>"$logs/rc2fx.log"
+		return 1
+	}
+	for tid in "$blackbox_proc/$pid"/task/*; do
+		tid=${tid##*/}
+		line=$(bb_thread_line "$pid" "$tid") || return 1
+		key=$(cut -d'|' -f1-4 <<<"$line")
+		# The role's placement (unique: ambiguous roles were refused).
+		want=$(awk -F'|' -v k="$key" '$1"|"$2"|"$3"|"$4==k {print $6"|"$7}' <<<"$bb_inventory_old" | sort -u)
+		test -n "$want" && test "$(wc -l <<<"$want")" = 1 || return 1
+		bb_move_task "$tid" "${want%%|*}" || return 1
+		bb_set_cpus "$tid" "${want#*|}" || return 1
+	done
+	for ((n = 0; n < 20; n++)); do
+		alive_as "$pid" "$started" || return 1
+		test "$(bb_inventory "$pid")" = "$bb_inventory_old" && return 0
+		sleep .1
+	done
+	say "Diagnostic JACK placement differs: $(bb_inventory "$pid" | tr '\n' ';') vs $(tr '\n' ';' <<<"$bb_inventory_old")" >>"$logs/rc2fx.log"
+	return 1
 }
 # Whether every thread of inventory $1 is what a stock-style start gives back:
 # the nice value this shell passes on, and SCHED_OTHER 0 or the -P priority
@@ -471,40 +520,40 @@ bb_ready_and_placed() {
 # restore it, so nothing is stopped.
 bb_own_nice() { nice; }
 bb_stock_policies() {
-  local own priority= line policy prio niceness i
-  own=$(bb_own_nice) || return 1
-  # Server options only: after -d come the driver's (alsa's -P is a device).
-  for ((i=1; i<${#bb_argv[@]}; i++)); do
-    case "${bb_argv[i]}" in
-      -d|-d?*|--driver|--driver=*) break;;
-      -P|--realtime-priority) priority=${bb_argv[i+1]:-};;
-      --realtime-priority=*) priority=${bb_argv[i]#*=};;
-      -P?*) priority=${bb_argv[i]#-P};;
-    esac
-  done
-  [[ $priority =~ ^[0-9]+$ ]] || return 1
-  while IFS='|' read -r _ _ policy prio niceness _; do
-    test "$niceness" = "$own" || return 1
-    case "$policy:$prio" in 0:0|1:"$priority"|2:"$priority") ;; *) return 1;; esac
-  done <<< "$1"
+	local own priority='' line policy prio niceness i
+	own=$(bb_own_nice) || return 1
+	# Server options only: after -d come the driver's (alsa's -P is a device).
+	for ((i = 1; i < ${#bb_argv[@]}; i++)); do
+		case "${bb_argv[i]}" in
+		-d | -d?* | --driver | --driver=*) break ;;
+		-P | --realtime-priority) priority=${bb_argv[i + 1]:-} ;;
+		--realtime-priority=*) priority=${bb_argv[i]#*=} ;;
+		-P?*) priority=${bb_argv[i]#-P} ;;
+		esac
+	done
+	[[ $priority =~ ^[0-9]+$ ]] || return 1
+	while IFS='|' read -r _ _ policy prio niceness _; do
+		test "$niceness" = "$own" || return 1
+		case "$policy:$prio" in 0:0 | 1:"$priority" | 2:"$priority") ;; *) return 1 ;; esac
+	done <<<"$1"
 }
 # bb_dir and bb_label are the replacing caller's (bb_replace_jack).
 bb_fail() {
-  touch "$bb_dir/failed"
-  say "$bb_label failed: $*" >> "$logs/rc2fx.log"
+	touch "$bb_dir/failed"
+	say "$bb_label failed: $*" >>"$logs/rc2fx.log"
 }
 # A plain server the same way; loud if even that fails (the vendor loop's
 # restartJack then restarts stock jackd once the mixer exits).
 bb_fallback() {
-  local plain
-  plain=$(bb_start_server "$bb_dir/fallback-jackd.log" "$bb_dir/fallback-jackd.pid") || plain=none
-  # shellcheck disable=SC2086 # the token is "pid start-time"
-  if test "$plain" != none && bb_ready_and_placed $plain && bb_irq_restore "$bb_irq_old"; then
-    say "Plain jackd restored (pid ${plain% *})" >> "$logs/rc2fx.log"
-  else
-    say "PLAIN JACKD DID NOT COME UP CORRECTLY (pid ${plain%% *}); the vendor loop restarts JACK when the mixer exits" >> "$logs/rc2fx.log"
-  fi
-  "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
+	local plain
+	plain=$(bb_start_server "$bb_dir/fallback-jackd.log" "$bb_dir/fallback-jackd.pid") || plain=none
+	# shellcheck disable=SC2086 # the token is "pid start-time"
+	if test "$plain" != none && bb_ready_and_placed $plain && bb_irq_restore "$bb_irq_old"; then
+		say "Plain jackd restored (pid ${plain% *})" >>"$logs/rc2fx.log"
+	else
+		say "PLAIN JACKD DID NOT COME UP CORRECTLY (pid ${plain%% *}); the vendor loop restarts JACK when the mixer exits" >>"$logs/rc2fx.log"
+	fi
+	"$blackbox_callme" start >>"$logs/rc2fx.log" 2>&1 &
 }
 
 # Replaces jackd $5 with one preloading library $2, its rings and logs in
@@ -512,116 +561,140 @@ bb_fallback() {
 # log. The caller has checked the library, the evidence already kept, and
 # that $5 is the stock jackd without it.
 bb_replace_jack() {
-  local bb_dir=$1 lib=$2 snapshot=$3 bb_label=$4 pid=$5
-  local dir=$1 value replacement ring_dir started foreign
-  local -a bb_argv bb_env
-  mapfile -d '' -t bb_argv < "$blackbox_proc/$pid/cmdline" || return 1
-  mapfile -d '' -t bb_env < "$blackbox_proc/$pid/environ" || return 1
-  for value in "${bb_env[@]}"; do
-    case "$value" in LD_PRELOAD=?*|LD_AUDIT=?*) return 1;; esac
-  done
-  ((${#bb_argv[@]} > 1)) || return 1
-  foreign=$(bb_foreign_clients "$pid")
-  if test -n "$foreign"; then
-    say "$bb_label skipped: other JACK clients $(tr '\n' ' ' <<< "$foreign")" >> "$logs/rc2fx.log"
-    return 1
-  fi
-  started=$(start_time "$pid") && test -n "$started" || return 1
-  local bb_inventory_old bb_task_count bb_pcm_list bb_irq_old ambiguous
-  # Checked before anything stops: a server this start cannot reproduce, or
-  # IRQs that cannot be read, are left alone.
-  # Kept before any decision, so a refusal leaves its evidence.
-  bb_inventory_old=$(bb_inventory "$pid") || bb_inventory_old=
-  { printf 'pid %s\n' "$pid"; printf '%s\n' "${bb_inventory_old:-unreadable}"; bb_irq_placement; bb_irq_effective; } > "$dir/preflight-jack.inventory"
-  test -n "$bb_inventory_old" && bb_stock_policies "$bb_inventory_old" || {
-    say "$bb_label skipped: jackd's threads are not as a stock start leaves them ($(tr '\n' ';' <<< "$bb_inventory_old"))" >> "$logs/rc2fx.log"
-    return 1
-  }
-  bb_irq_old=$(bb_irq_placement)
-  if grep -q ' ?$' <<< "$bb_irq_old"; then
-    say "$bb_label skipped: unreadable audio IRQ placement ($(tr '\n' ';' <<< "$bb_irq_old"))" >> "$logs/rc2fx.log"
-    return 1
-  fi
-  # The inventory without callme connected: what the new server is compared
-  # with before callme starts again. A failed stop may have stopped part of
-  # the service, so it is started again either way.
-  if ! "$blackbox_callme" stop >> "$logs/rc2fx.log" 2>&1; then
-    say "$bb_label skipped: callme-t did not stop cleanly" >> "$logs/rc2fx.log"
-    "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
-    return 1
-  fi
-  bb_inventory_old=$(bb_inventory "$pid") || bb_inventory_old=
-  bb_task_count=$(bb_tasks "$pid")
-  bb_pcm_list=$(bb_pcms "$pid")
-  { printf 'pid %s\n' "$pid"; printf '%s\n' "${bb_inventory_old:-unreadable}"; printf '%s\n' "$bb_pcm_list"; bb_irq_placement; bb_irq_effective; } > "$dir/original-jack.inventory"
-  ambiguous=$(test -z "$bb_inventory_old" || bb_ambiguous "$bb_inventory_old")
-  local why=
-  if test -z "$bb_inventory_old"; then why="an unreadable thread"
-  elif test -z "$bb_pcm_list"; then why="no PCM devices open"
-  elif test -n "$ambiguous"; then why="roles with two placements: $(tr '\n' ' ' <<< "$ambiguous")"
-  elif ! bb_stock_policies "$bb_inventory_old"; then why="policies not as a stock start leaves them"
-  elif test "$(bb_irq_placement)" != "$bb_irq_old"; then why="the audio IRQs moved"
-  fi
-  if test -n "$why"; then
-    say "$bb_label skipped: $why ($(tr '\n' ';' <<< "$bb_inventory_old"))" >> "$logs/rc2fx.log"
-    "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
-    return 1
-  fi
-  if ! ring_dir=$(mktemp -d "$dir/jackerr.XXXXXX"); then
-    say "$bb_label skipped: no ring directory" >> "$logs/rc2fx.log"
-    "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
-    return 1
-  fi
-  printf '%s\0' "${bb_argv[@]}" > "$dir/original-jack.argv"
-  say "$bb_label: replacing jackd $pid: $(tr '\n' ';' <<< "$bb_inventory_old") pcms $(tr '\n' ' ' <<< "$bb_pcm_list")" >> "$logs/rc2fx.log"
-  if ! stop_owned "$pid" "$started" strict; then
-    bb_fail "the old jackd ($pid) did not stop"
-    "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
-    return 1
-  fi
-  # The birth token is saved by bb_start_server the moment the server exists.
-  replacement=$(bb_start_server "$dir/jackd.log" "$dir/jackd.pid" LD_PRELOAD="$lib" RC2FX_JACKERR_DIR="$ring_dir") || replacement=
-  local new_pid=${replacement% *} new_started=${replacement#* }
-  if test -z "$replacement" || ! bb_ready_and_placed "$new_pid" "$new_started" \
-     || ! grep -Fq "$lib" "$blackbox_proc/$new_pid/maps" \
-     || ! "$snapshot" "$ring_dir" "$dir/ready.snapshot" >> "$logs/rc2fx.log" 2>&1 \
-     || ! bb_irq_restore "$bb_irq_old"; then
-    bb_fail "the logging jackd (${new_pid:-none}) was not ready, placed, recording or with the audio IRQs as before ($(bb_irq_placement | tr '\n' ';'))"
-    # Only the process with this birth token; a pid reused since is not ours.
-    if test -n "$replacement" && alive_as "$new_pid" "$new_started"; then
-      stop_owned "$new_pid" "$new_started" strict || true
-    fi
-    bb_fallback
-    { bb_irq_placement; bb_irq_effective; } > "$dir/after-jack.irqs"
-    return 1
-  fi
-  { bb_irq_placement; bb_irq_effective; } > "$dir/after-jack.irqs"
-  printf '%s\n' "$ring_dir" > "$dir/jackerr-dir"
-  "$blackbox_callme" start >> "$logs/rc2fx.log" 2>&1 &
-  say "$bb_label running (pid $new_pid, ring $ring_dir)" >> "$logs/rc2fx.log"
-  alive_as "$new_pid" "$new_started"
+	local bb_dir=$1 lib=$2 snapshot=$3 bb_label=$4 pid=$5
+	local dir=$1 value replacement ring_dir started foreign
+	local -a bb_argv bb_env
+	mapfile -d '' -t bb_argv <"$blackbox_proc/$pid/cmdline" || return 1
+	mapfile -d '' -t bb_env <"$blackbox_proc/$pid/environ" || return 1
+	for value in "${bb_env[@]}"; do
+		case "$value" in LD_PRELOAD=?* | LD_AUDIT=?*) return 1 ;; esac
+	done
+	((${#bb_argv[@]} > 1)) || return 1
+	foreign=$(bb_foreign_clients "$pid")
+	if test -n "$foreign"; then
+		say "$bb_label skipped: other JACK clients $(tr '\n' ' ' <<<"$foreign")" >>"$logs/rc2fx.log"
+		return 1
+	fi
+	started=$(start_time "$pid") && test -n "$started" || return 1
+	local bb_inventory_old bb_task_count bb_pcm_list bb_irq_old ambiguous
+	# Checked before anything stops: a server this start cannot reproduce, or
+	# IRQs that cannot be read, are left alone.
+	# Kept before any decision, so a refusal leaves its evidence.
+	bb_inventory_old=$(bb_inventory "$pid") || bb_inventory_old=
+	{
+		printf 'pid %s\n' "$pid"
+		printf '%s\n' "${bb_inventory_old:-unreadable}"
+		bb_irq_placement
+		bb_irq_effective
+	} >"$dir/preflight-jack.inventory"
+	# shellcheck disable=SC2015 # skip when there is no inventory or the policies differ
+	test -n "$bb_inventory_old" && bb_stock_policies "$bb_inventory_old" || {
+		say "$bb_label skipped: jackd's threads are not as a stock start leaves them ($(tr '\n' ';' <<<"$bb_inventory_old"))" >>"$logs/rc2fx.log"
+		return 1
+	}
+	bb_irq_old=$(bb_irq_placement)
+	if grep -q ' ?$' <<<"$bb_irq_old"; then
+		say "$bb_label skipped: unreadable audio IRQ placement ($(tr '\n' ';' <<<"$bb_irq_old"))" >>"$logs/rc2fx.log"
+		return 1
+	fi
+	# The inventory without callme connected: what the new server is compared
+	# with before callme starts again. A failed stop may have stopped part of
+	# the service, so it is started again either way.
+	if ! "$blackbox_callme" stop >>"$logs/rc2fx.log" 2>&1; then
+		say "$bb_label skipped: callme-t did not stop cleanly" >>"$logs/rc2fx.log"
+		"$blackbox_callme" start >>"$logs/rc2fx.log" 2>&1 &
+		return 1
+	fi
+	bb_inventory_old=$(bb_inventory "$pid") || bb_inventory_old=
+	bb_task_count=$(bb_tasks "$pid")
+	bb_pcm_list=$(bb_pcms "$pid")
+	{
+		printf 'pid %s\n' "$pid"
+		printf '%s\n' "${bb_inventory_old:-unreadable}"
+		printf '%s\n' "$bb_pcm_list"
+		bb_irq_placement
+		bb_irq_effective
+	} >"$dir/original-jack.inventory"
+	ambiguous=$(test -z "$bb_inventory_old" || bb_ambiguous "$bb_inventory_old")
+	local why=
+	if test -z "$bb_inventory_old"; then
+		why="an unreadable thread"
+	elif test -z "$bb_pcm_list"; then
+		why="no PCM devices open"
+	elif test -n "$ambiguous"; then
+		why="roles with two placements: $(tr '\n' ' ' <<<"$ambiguous")"
+	elif ! bb_stock_policies "$bb_inventory_old"; then
+		why="policies not as a stock start leaves them"
+	elif test "$(bb_irq_placement)" != "$bb_irq_old"; then
+		why="the audio IRQs moved"
+	fi
+	if test -n "$why"; then
+		say "$bb_label skipped: $why ($(tr '\n' ';' <<<"$bb_inventory_old"))" >>"$logs/rc2fx.log"
+		"$blackbox_callme" start >>"$logs/rc2fx.log" 2>&1 &
+		return 1
+	fi
+	if ! ring_dir=$(mktemp -d "$dir/jackerr.XXXXXX"); then
+		say "$bb_label skipped: no ring directory" >>"$logs/rc2fx.log"
+		"$blackbox_callme" start >>"$logs/rc2fx.log" 2>&1 &
+		return 1
+	fi
+	printf '%s\0' "${bb_argv[@]}" >"$dir/original-jack.argv"
+	say "$bb_label: replacing jackd $pid: $(tr '\n' ';' <<<"$bb_inventory_old") pcms $(tr '\n' ' ' <<<"$bb_pcm_list")" >>"$logs/rc2fx.log"
+	if ! stop_owned "$pid" "$started" strict; then
+		bb_fail "the old jackd ($pid) did not stop"
+		"$blackbox_callme" start >>"$logs/rc2fx.log" 2>&1 &
+		return 1
+	fi
+	# The birth token is saved by bb_start_server the moment the server exists.
+	replacement=$(bb_start_server "$dir/jackd.log" "$dir/jackd.pid" LD_PRELOAD="$lib" RC2FX_JACKERR_DIR="$ring_dir") || replacement=
+	local new_pid=${replacement% *} new_started=${replacement#* }
+	if test -z "$replacement" || ! bb_ready_and_placed "$new_pid" "$new_started" ||
+		! grep -Fq "$lib" "$blackbox_proc/$new_pid/maps" ||
+		! "$snapshot" "$ring_dir" "$dir/ready.snapshot" >>"$logs/rc2fx.log" 2>&1 ||
+		! bb_irq_restore "$bb_irq_old"; then
+		bb_fail "the logging jackd (${new_pid:-none}) was not ready, placed, recording or with the audio IRQs as before ($(bb_irq_placement | tr '\n' ';'))"
+		# Only the process with this birth token; a pid reused since is not ours.
+		if test -n "$replacement" && alive_as "$new_pid" "$new_started"; then
+			stop_owned "$new_pid" "$new_started" strict || true
+		fi
+		bb_fallback
+		{
+			bb_irq_placement
+			bb_irq_effective
+		} >"$dir/after-jack.irqs"
+		return 1
+	fi
+	{
+		bb_irq_placement
+		bb_irq_effective
+	} >"$dir/after-jack.irqs"
+	printf '%s\n' "$ring_dir" >"$dir/jackerr-dir"
+	"$blackbox_callme" start >>"$logs/rc2fx.log" 2>&1 &
+	say "$bb_label running (pid $new_pid, ring $ring_dir)" >>"$logs/rc2fx.log"
+	alive_as "$new_pid" "$new_started"
 }
 # Whether jackd $1 is the server started from attempt directory $3 with
 # library $2 and seen ready there: same birth token (pid and start time, so a
 # reused pid is not mistaken for it), a ring directory of that attempt, the
 # ready snapshot, and the library mapped. A library merely mapped is not that.
 recorder_verified() {
-  local pid=$1 lib=$2 attempt=$3 token ring
-  test -d "$attempt" && test ! -L "$attempt" || return 1
-  grep -Fq "$lib" "$blackbox_proc/$pid/maps" || return 1
-  read -r token < "$attempt/jackd.pid" 2>/dev/null || return 1
-  test "$token" = "$pid $(start_time "$pid" 2>/dev/null)" || return 1
-  read -r ring < "$attempt/jackerr-dir" 2>/dev/null || return 1
-  test "${ring%/*}" = "$attempt" && test -d "$ring" && test ! -L "$ring" || return 1
-  test -f "$attempt/ready.snapshot"
+	local pid=$1 lib=$2 attempt=$3 token ring
+	test -d "$attempt" && test ! -L "$attempt" || return 1
+	grep -Fq "$lib" "$blackbox_proc/$pid/maps" || return 1
+	read -r token <"$attempt/jackd.pid" 2>/dev/null || return 1
+	test "$token" = "$pid $(start_time "$pid" 2>/dev/null)" || return 1
+	read -r ring <"$attempt/jackerr-dir" 2>/dev/null || return 1
+	test "${ring%/*}" = "$attempt" && test -d "$ring" && test ! -L "$ring" || return 1
+	test -f "$attempt/ready.snapshot"
 }
 # The recorder's state for `rc2fx.sh status` and the log: $recorder_dir/status
 # holds one line, "<state> <detail>"; it is control state, rewritten each start.
 recorder_note() {
-  local state=$1; shift
-  say "JACK recorder $state: $*" >> "$logs/rc2fx.log"
-  test -d "$recorder_dir" && test ! -L "$recorder_dir" || return 0
-  printf '%s %s\n' "$state" "$*" > "$recorder_dir/status.new" && mv -f "$recorder_dir/status.new" "$recorder_dir/status"
+	local state=$1
+	shift
+	say "JACK recorder $state: $*" >>"$logs/rc2fx.log"
+	test -d "$recorder_dir" && test ! -L "$recorder_dir" || return 0
+	printf '%s %s\n' "$state" "$*" >"$recorder_dir/status.new" && mv -f "$recorder_dir/status.new" "$recorder_dir/status"
 }
 # The persistent recorder (see recorder_dir). Each replacement attempt gets a
 # new private directory $recorder_dir/run.XXXXXX holding all its evidence
@@ -632,96 +705,96 @@ recorder_note() {
 # server it verified; every other outcome leaves audio as it is (or, after a
 # failed replacement, plain jackd).
 jack_recorder() {
-  local lib=$home/librc2fx_jackerr.so snapshot=$home/rc2fx_jackerr_snapshot root=$recorder_dir
-  local name listed=0 pid attempt bytes active_attempt active_pid active_started started
-  if test -L "$root" || { test -e "$root" && test ! -d "$root"; }; then
-    say "JACK recorder not started: $root is not a directory; plain JACK" >> "$logs/rc2fx.log"
-    return 1
-  fi
-  test -d "$root" || mkdir -m 700 "$root" || return 1
-  if test "$(stat -c %u:%a "$root")" != "$blackbox_owner:700"; then
-    say "JACK recorder not started: $root is not private; plain JACK" >> "$logs/rc2fx.log"
-    return 1
-  fi
-  if test -e "$recorder_off"; then
-    recorder_note off "$recorder_off exists; plain JACK"
-    return 1
-  fi
-  for name in librc2fx_jackerr.so rc2fx_jackerr_snapshot; do
-    grep -Eq "^[0-9a-f]{64}  $name\$" "$home/SHA256SUMS" && listed=$((listed + 1))
-  done
-  # A bundle built before the recorder lists neither: RC2FX runs as before.
-  if test "$listed" = 0; then
-    recorder_note not-bundled "this bundle has no recorder; plain JACK"
-    return 1
-  fi
-  # Only the bundle's own checksummed files are ever put into jackd.
-  if test "$listed" != 2 || test -L "$lib" || test -L "$snapshot" || test ! -f "$lib" \
-     || test ! -f "$snapshot" || test ! -x "$snapshot" \
-     || ! (cd "$home" && grep -E '  (librc2fx_jackerr\.so|rc2fx_jackerr_snapshot)$' SHA256SUMS \
-           | sha256sum -c --quiet > /dev/null 2>&1); then
-    recorder_note corrupt "its bundle files are missing, unlisted or fail their checksums; plain JACK"
-    return 1
-  fi
-  # One attempt per boot: a failed replacement is not repeated at every start.
-  if test -e "$root/failed"; then
-    recorder_note failed "a replacement failed earlier this boot ($(cat "$root/failed" 2>/dev/null)); plain JACK"
-    return 1
-  fi
-  if ! pid=$(pgrep -x jackd) || ! [[ $pid =~ ^[0-9]+$ ]] \
-     || test "$(readlink "$blackbox_proc/$pid/exe")" != "$blackbox_jackd"; then
-    recorder_note refused "no single stock jackd to replace"
-    return 1
-  fi
-  # A server that already preloads a JACK error logger is never preloaded
-  # again or restarted for this; mapped alone is only "present".
-  if grep -q 'librc2fx_jackerr\.so' "$blackbox_proc/$pid/maps"; then
-    active_attempt='' active_pid='' active_started=''
-    read -r active_attempt active_pid active_started < "$root/active" 2>/dev/null || true
-    started=$(start_time "$pid" 2>/dev/null) || started=
-    if test "${active_attempt%/*}" = "$root" && test "$active_pid $active_started" = "$pid $started" \
-       && recorder_verified "$pid" "$lib" "$active_attempt"; then
-      recorder_note active "pid $pid, attempt $active_attempt, ring $(cat "$active_attempt/jackerr-dir")"
-      return 0
-    else
-      recorder_note present-unverified "jackd ($pid) maps a JACK error logger that cannot be verified; left as it is"
-    fi
-    return 1
-  fi
-  # Admission only (see recorder_evidence_limit): every byte under the root
-  # counts; nothing is deleted, and a running server is never limited.
-  bytes=$(du -sb "$root" 2>/dev/null | cut -f1) || bytes=
-  if ! [[ $bytes =~ ^[0-9]+$ ]] || ((bytes > recorder_evidence_limit)); then
-    recorder_note quota "${bytes:-unreadable} bytes of evidence in $root (admission limit $recorder_evidence_limit); not started, nothing deleted"
-    return 1
-  fi
-  if ! attempt=$(mktemp -d "$root/run.XXXXXX"); then
-    recorder_note refused "no attempt directory"
-    return 1
-  fi
-  if bb_replace_jack "$attempt" "$lib" "$snapshot" 'JACK recorder' "$pid"; then
-    read -r active_pid active_started < "$attempt/jackd.pid"
-    printf '%s %s %s\n' "$attempt" "$active_pid" "$active_started" > "$root/active.new" \
-      && mv -f "$root/active.new" "$root/active"
-    recorder_note active "pid $active_pid, attempt $attempt, ring $(cat "$attempt/jackerr-dir")"
-    return 0
-  fi
-  if test -e "$attempt/failed"; then
-    printf '%s\n' "$attempt" > "$root/failed"
-    recorder_note failed "replacement failed in $attempt; plain jackd (see the log)"
-  else
-    recorder_note refused "jackd left as it was; see $attempt and the log"
-  fi
-  return 1
+	local lib=$home/librc2fx_jackerr.so snapshot=$home/rc2fx_jackerr_snapshot root=$recorder_dir
+	local name listed=0 pid attempt bytes active_attempt active_pid active_started started
+	if test -L "$root" || { test -e "$root" && test ! -d "$root"; }; then
+		say "JACK recorder not started: $root is not a directory; plain JACK" >>"$logs/rc2fx.log"
+		return 1
+	fi
+	test -d "$root" || mkdir -m 700 "$root" || return 1
+	if test "$(stat -c %u:%a "$root")" != "$blackbox_owner:700"; then
+		say "JACK recorder not started: $root is not private; plain JACK" >>"$logs/rc2fx.log"
+		return 1
+	fi
+	if test -e "$recorder_off"; then
+		recorder_note off "$recorder_off exists; plain JACK"
+		return 1
+	fi
+	for name in librc2fx_jackerr.so rc2fx_jackerr_snapshot; do
+		grep -Eq "^[0-9a-f]{64}  $name\$" "$home/SHA256SUMS" && listed=$((listed + 1))
+	done
+	# A bundle built before the recorder lists neither: RC2FX runs as before.
+	if test "$listed" = 0; then
+		recorder_note not-bundled "this bundle has no recorder; plain JACK"
+		return 1
+	fi
+	# Only the bundle's own checksummed files are ever put into jackd.
+	if test "$listed" != 2 || test -L "$lib" || test -L "$snapshot" || test ! -f "$lib" ||
+		test ! -f "$snapshot" || test ! -x "$snapshot" ||
+		! (cd "$home" && grep -E '  (librc2fx_jackerr\.so|rc2fx_jackerr_snapshot)$' SHA256SUMS |
+			sha256sum -c --quiet >/dev/null 2>&1); then
+		recorder_note corrupt "its bundle files are missing, unlisted or fail their checksums; plain JACK"
+		return 1
+	fi
+	# One attempt per boot: a failed replacement is not repeated at every start.
+	if test -e "$root/failed"; then
+		recorder_note failed "a replacement failed earlier this boot ($(cat "$root/failed" 2>/dev/null)); plain JACK"
+		return 1
+	fi
+	if ! pid=$(pgrep -x jackd) || ! [[ $pid =~ ^[0-9]+$ ]] ||
+		test "$(readlink "$blackbox_proc/$pid/exe")" != "$blackbox_jackd"; then
+		recorder_note refused "no single stock jackd to replace"
+		return 1
+	fi
+	# A server that already preloads a JACK error logger is never preloaded
+	# again or restarted for this; mapped alone is only "present".
+	if grep -q 'librc2fx_jackerr\.so' "$blackbox_proc/$pid/maps"; then
+		active_attempt='' active_pid='' active_started=''
+		read -r active_attempt active_pid active_started <"$root/active" 2>/dev/null || true
+		started=$(start_time "$pid" 2>/dev/null) || started=
+		if test "${active_attempt%/*}" = "$root" && test "$active_pid $active_started" = "$pid $started" &&
+			recorder_verified "$pid" "$lib" "$active_attempt"; then
+			recorder_note active "pid $pid, attempt $active_attempt, ring $(cat "$active_attempt/jackerr-dir")"
+			return 0
+		else
+			recorder_note present-unverified "jackd ($pid) maps a JACK error logger that cannot be verified; left as it is"
+		fi
+		return 1
+	fi
+	# Admission only (see recorder_evidence_limit): every byte under the root
+	# counts; nothing is deleted, and a running server is never limited.
+	bytes=$(du -sb "$root" 2>/dev/null | cut -f1) || bytes=
+	if ! [[ $bytes =~ ^[0-9]+$ ]] || ((bytes > recorder_evidence_limit)); then
+		recorder_note quota "${bytes:-unreadable} bytes of evidence in $root (admission limit $recorder_evidence_limit); not started, nothing deleted"
+		return 1
+	fi
+	if ! attempt=$(mktemp -d "$root/run.XXXXXX"); then
+		recorder_note refused "no attempt directory"
+		return 1
+	fi
+	if bb_replace_jack "$attempt" "$lib" "$snapshot" 'JACK recorder' "$pid"; then
+		read -r active_pid active_started <"$attempt/jackd.pid"
+		printf '%s %s %s\n' "$attempt" "$active_pid" "$active_started" >"$root/active.new" &&
+			mv -f "$root/active.new" "$root/active"
+		recorder_note active "pid $active_pid, attempt $attempt, ring $(cat "$attempt/jackerr-dir")"
+		return 0
+	fi
+	if test -e "$attempt/failed"; then
+		printf '%s\n' "$attempt" >"$root/failed"
+		recorder_note failed "replacement failed in $attempt; plain jackd (see the log)"
+	else
+		recorder_note refused "jackd left as it was; see $attempt and the log"
+	fi
+	return 1
 }
 # For `rc2fx.sh status`: the state the last RC2FX start recorded.
 recorder_status_line() {
-  if test -f "$recorder_dir/status" && test ! -L "$recorder_dir/status"; then
-    echo "JACK recorder: $(head -n 1 "$recorder_dir/status")"
-  elif test -e "$recorder_off"; then
-    echo 'JACK recorder: off'
-  fi
-  return 0
+	if test -f "$recorder_dir/status" && test ! -L "$recorder_dir/status"; then
+		echo "JACK recorder: $(head -n 1 "$recorder_dir/status")"
+	elif test -e "$recorder_off"; then
+		echo 'JACK recorder: off'
+	fi
+	return 0
 }
 # ---- end of the JACK error recorder -----------------------------------------
 
@@ -730,14 +803,14 @@ recorder_status_line() {
 # launch() selected after check-device verified the stock mixer; a bundle
 # without the manifest reports its version as unknown.
 controller_arguments() {
-  controller=(--data "$data" --native-socket "$run/control.sock" --usb-socket "$run/usb.sock"
-    --developer-ssh)
-  if test -n "${RC2FX_UI_SOCKET:-}"; then controller+=(--ui-socket "$run/ui.sock"); fi
-  if test -r "$show"; then controller+=(--stock-config "$show"); fi
-  if test -f "$home/mixer-release.json"; then controller+=(--release "$home/mixer-release.json"); fi
-  if test -n "$profile_id"; then
-    controller+=(--firmware-catalog "$home/firmware-profiles.json" --firmware-profile "$profile_id")
-  fi
+	controller=(--data "$data" --native-socket "$run/control.sock" --usb-socket "$run/usb.sock"
+		--developer-ssh)
+	if test -n "${RC2FX_UI_SOCKET:-}"; then controller+=(--ui-socket "$run/ui.sock"); fi
+	if test -r "$show"; then controller+=(--stock-config "$show"); fi
+	if test -f "$home/mixer-release.json"; then controller+=(--release "$home/mixer-release.json"); fi
+	if test -n "$profile_id"; then
+		controller+=(--firmware-catalog "$home/firmware-profiles.json" --firmware-profile "$profile_id")
+	fi
 }
 
 # The supervisor catches its own panics and failures and exits 0 once it has
@@ -745,232 +818,265 @@ controller_arguments() {
 # crash or a kill, with the mixer still injected and nothing watching it: go
 # back to stock from here, as the supervisor would have. $2 is its exit status.
 supervisor_lost() {
-  local mixer=$1 reason="Supervisor died with status $2; restoring stock audio" controllers
-  say "$reason" >> "$logs/rc2fx.log"
-  printf '%s\n' "$reason" > "$boot/stock"
-  # It left its controller behind, on the HID node.
-  controllers=$(pgrep -x rc2fxd || true)
-  # shellcheck disable=SC2086
-  restart_mixer "$mixer" $controllers >> "$logs/rc2fx.log" 2>&1 \
-    || say 'Leaving the mixer running without RC2FX control; rc2fx.sh start recovers it' >> "$logs/rc2fx.log"
-  (supervise_exit) >> "$logs/rc2fx.log" 2>&1
+	local mixer=$1 reason="Supervisor died with status $2; restoring stock audio" controllers
+	say "$reason" >>"$logs/rc2fx.log"
+	printf '%s\n' "$reason" >"$boot/stock"
+	# It left its controller behind, on the HID node.
+	controllers=$(pgrep -x rc2fxd || true)
+	# shellcheck disable=SC2086
+	restart_mixer "$mixer" $controllers >>"$logs/rc2fx.log" 2>&1 ||
+		say 'Leaving the mixer running without RC2FX control; rc2fx.sh start recovers it' >>"$logs/rc2fx.log"
+	(supervise_exit) >>"$logs/rc2fx.log" 2>&1
 }
 
 # Runs as the launcher's child in place of the stock executable, so it must
 # end in an exec of it: on any failure the stock mixer runs unchanged.
 launch() {
-  local fallback="exec $stock_mixer"
-  if test $# -gt 0; then fallback+=$(printf ' %q' "$@"); fi
-  trap "$fallback" EXIT
-  mkdir -p -m 700 "$boot" "$data" "$logs"
-  # Records that the shim ran for this start, whatever it decides.
-  uptime_s > "$boot/seen"
-  # Checks the flashed image's RØDE files in the background (image check).
-  image_check_start || true
-  # Wraps RØDE's update script so a flash is checked before RØDE reboots.
-  flash_watch_start || true
-  # profile_id and show are read by controller_arguments.
-  local why= selected n profile_id show
-  if test -e /opt/rc2fx/disabled; then why='autostart is disabled'
-  elif test -e "$first_boot"; then why='first boot after a firmware update'
-  elif test -e "$boot/stock"; then why="$(cat "$boot/stock")"
-  elif ! (cd "$home" && sha256sum -c SHA256SUMS > /dev/null 2>&1); then why="binaries in $home fail their checksums"
-  elif ! selected=$("$home/rc2fx-firmware" check-device "$home/firmware-profiles.json" "$stock_mixer" /usr/bin/audio-start.sh 2>> "$logs/rc2fx.log"); then why='this firmware is not a supported profile'
-  # Nothing would watch the mixer without it, so prove it runs before injecting.
-  elif ! "$home/rc2fx-supervisor" --version > /dev/null 2>> "$logs/rc2fx.log"; then why='the supervisor cannot run'
-  fi
-  if test -n "$why"; then
-    # Stock rebuilds the gadget, and a mixer that finds a live HID node before
-    # it has started crashes on early host reports; give it the boot picture.
-    retire_usb_node >> "$logs/rc2fx.log" 2>&1 || true
-    say "Stock mixer started: $why" >> "$logs/rc2fx.log"
-    exec "$stock_mixer" "$@"
-  fi
-  read -r profile_id show <<< "$selected"
-  # The supervisor of the mixer that just exited may still be writing its
-  # last-exit log.
-  for ((n=0; n<50; n++)); do supervisor > /dev/null || break; sleep 0.1; done
-  rm -rf "$run"
-  mkdir -p -m 700 "$run"
-  test -f "$logs/rc2fx.log" && mv -f "$logs/rc2fx.log" "$logs/rc2fx.prev.log"
-  test -f "$logs/audio-events.log" && mv -f "$logs/audio-events.log" "$logs/audio-events.prev.log"
-  # The mixer keeps the launcher's stdout (its own log), so nothing here
-  # redirects the shell's; each step logs on its own.
-  prepare_usb >> "$logs/rc2fx.log" 2>&1
-  # Bind every mixer path from the saved settings (defaults if none exist yet).
-  if ! "$home/rc2fxd" plan --data "$data" --out "$run/plan.json" >> "$logs/rc2fx.log" 2>&1; then
-    say 'Stock mixer started: the launch plan failed' >> "$logs/rc2fx.log"
-    exec "$stock_mixer" "$@"
-  fi
-  printf '%s\n' "$home" > "$run/home"
-  cp "$home/SHA256SUMS" "$run/bundle.sums"
-  # The supervisor's own copy: an install removes a RAM bundle, or replaces this
-  # one, while the supervisor it must then stop is still running.
-  cp "$home/rc2fx.sh" "$run/rc2fx.sh"
-  # The mixer runs as this shell's child so that its exit status or signal
-  # gets logged: the launcher records neither. No taskset: stock starts
-  # unpinned and pins its own threads. RC2FX's diagnostics go to stderr.
-  trap - EXIT
-  # From here on nothing falls back to stock, so no failed step may end this
-  # shell: a log write that fails (a full root) would leave no mixer at all.
-  set +e
-  relax_rt_throttle >> "$logs/rc2fx.log"
-  jack_recorder || true
-  # Explicit RAM-only measurement switch. Never inherit a caller's probe flag;
-  # removal takes effect at the next mixer start, reboot clears the marker.
-  local client_timing=0 gauges=0
-  local -a controller=()
-  controller_arguments
-  test -f /run/rc2fx-client-timing && client_timing=1
-  test -f /run/rc2fx-gauges && gauges=1
-  # fast unless a bench chose verify or stock; see crates/rc2fx-native/src/src_fast.rs.
-  local src_mode=fast
-  test -f /run/rc2fx-src-mode && src_mode=$(cat /run/rc2fx-src-mode)
-  env RC2FX_CLIENT_TIMING="$client_timing" RC2FX_GAUGES="$gauges" RC2FX_SRC_MODE="$src_mode" LD_AUDIT="$home/librc2fx_native.so" \
-    RC2FX_NATIVE_PROBE_REPORT_SELECTED_ONLY=1 \
-    RC2FX_FIRMWARE_PROFILE="$profile_id" RC2FX_FIRMWARE_PROFILES="$home/firmware-profiles.json" \
-    RC2FX_NATIVE_PROBE_PLAN="$run/plan.json" RC2FX_USB_SOCKET="$run/usb.sock" \
-    RC2FX_NATIVE_PROBE_CONTROL_SOCKET="$run/control.sock" RC2FX_NATIVE_PROBE_REPORT="$run/audit.json" \
-    RC2FX_NATIVE_PROBE_EVENTS="$logs/audio-events.log" \
-    "$stock_mixer" "$@" 2>> "$run/mixer.log" &
-  local mixer=$!
-  printf '%s\n' "$mixer" > "$run/native.pid"
-  # The supervisor keeps this PID through setsid and env, so supervisor.pid is
-  # its own.
-  setsid env RC2FX_DATA="$data" RC2FX_LOGS="$logs" \
-    "$home/rc2fx-supervisor" --mixer "$mixer" --mixer-start "$(start_time "$mixer")" \
-    --script "$run/rc2fx.sh" --controller "$home/rc2fxd" --run "$run" --boot "$boot" \
-    -- "${controller[@]}" < /dev/null >> "$logs/rc2fx.log" 2>&1 &
-  local watcher=$!
-  printf '%s\n' "$watcher" > "$run/supervisor.pid"
-  say "RC2FX mixer started (PID $mixer) from $home under the launcher" >> "$logs/rc2fx.log"
-  # Whoever ends this shell ends the mixer.
-  trap 'kill -TERM "$mixer" 2>/dev/null' TERM INT HUP
-  # Waits for whichever ends first. A trapped signal ends the wait with neither
-  # and leaves $ended unset.
-  local status=0 ended=
-  until test -n "${ended:-}"; do
-    status=0
-    wait -n -p ended "$mixer" "$watcher" || status=$?
-  done
-  if test "$ended" = "$watcher"; then
-    if test "$status" != 0 && alive "$mixer"; then supervisor_lost "$mixer" "$status"; fi
-    status=0
-    wait "$mixer" || status=$?
-    while alive "$mixer"; do wait "$mixer" || status=$?; done
-  fi
-  say "Mixer exited with status $status$(test "$status" -le 128 || echo " (signal $((status - 128)))"); jackd now $(pgrep -x jackd | tr '\n' ' ')" >> "$logs/rc2fx.log"
-  restore_rt_throttle
-  exit "$status"
+	local fallback="exec $stock_mixer"
+	if test $# -gt 0; then fallback+=$(printf ' %q' "$@"); fi
+	# shellcheck disable=SC2064 # the fallback command is fixed when the trap is set
+	trap "$fallback" EXIT
+	mkdir -p -m 700 "$boot" "$data" "$logs"
+	# Records that the shim ran for this start, whatever it decides.
+	uptime_s >"$boot/seen"
+	# Checks the flashed image's RØDE files in the background (image check).
+	image_check_start || true
+	# Wraps RØDE's update script so a flash is checked before RØDE reboots.
+	flash_watch_start || true
+	# profile_id and show are read by controller_arguments.
+	local why='' selected n profile_id show
+	if test -e /opt/rc2fx/disabled; then
+		why='autostart is disabled'
+	elif test -e "$first_boot"; then
+		why='first boot after a firmware update'
+	elif test -e "$boot/stock"; then
+		why="$(cat "$boot/stock")"
+	elif ! (cd "$home" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
+		why="binaries in $home fail their checksums"
+	elif ! selected=$("$home/rc2fx-firmware" check-device "$home/firmware-profiles.json" "$stock_mixer" /usr/bin/audio-start.sh 2>>"$logs/rc2fx.log"); then
+		why='this firmware is not a supported profile'
+	# Nothing would watch the mixer without it, so prove it runs before injecting.
+	elif ! "$home/rc2fx-supervisor" --version >/dev/null 2>>"$logs/rc2fx.log"; then
+		why='the supervisor cannot run'
+	fi
+	if test -n "$why"; then
+		# Stock rebuilds the gadget, and a mixer that finds a live HID node before
+		# it has started crashes on early host reports; give it the boot picture.
+		retire_usb_node >>"$logs/rc2fx.log" 2>&1 || true
+		say "Stock mixer started: $why" >>"$logs/rc2fx.log"
+		exec "$stock_mixer" "$@"
+	fi
+	read -r profile_id show <<<"$selected"
+	# The supervisor of the mixer that just exited may still be writing its
+	# last-exit log.
+	for ((n = 0; n < 50; n++)); do
+		supervisor >/dev/null || break
+		sleep 0.1
+	done
+	rm -rf "$run"
+	mkdir -p -m 700 "$run"
+	test -f "$logs/rc2fx.log" && mv -f "$logs/rc2fx.log" "$logs/rc2fx.prev.log"
+	test -f "$logs/audio-events.log" && mv -f "$logs/audio-events.log" "$logs/audio-events.prev.log"
+	# The mixer keeps the launcher's stdout (its own log), so nothing here
+	# redirects the shell's; each step logs on its own.
+	prepare_usb >>"$logs/rc2fx.log" 2>&1
+	# Bind every mixer path from the saved settings (defaults if none exist yet).
+	if ! "$home/rc2fxd" plan --data "$data" --out "$run/plan.json" >>"$logs/rc2fx.log" 2>&1; then
+		say 'Stock mixer started: the launch plan failed' >>"$logs/rc2fx.log"
+		exec "$stock_mixer" "$@"
+	fi
+	printf '%s\n' "$home" >"$run/home"
+	cp "$home/SHA256SUMS" "$run/bundle.sums"
+	# The supervisor's own copy: an install removes a RAM bundle, or replaces this
+	# one, while the supervisor it must then stop is still running.
+	cp "$home/rc2fx.sh" "$run/rc2fx.sh"
+	# The mixer runs as this shell's child so that its exit status or signal
+	# gets logged: the launcher records neither. No taskset: stock starts
+	# unpinned and pins its own threads. RC2FX's diagnostics go to stderr.
+	trap - EXIT
+	# From here on nothing falls back to stock, so no failed step may end this
+	# shell: a log write that fails (a full root) would leave no mixer at all.
+	set +e
+	relax_rt_throttle >>"$logs/rc2fx.log"
+	jack_recorder || true
+	# Explicit RAM-only measurement switch. Never inherit a caller's probe flag;
+	# removal takes effect at the next mixer start, reboot clears the marker.
+	local client_timing=0 gauges=0
+	local -a controller=()
+	controller_arguments
+	test -f /run/rc2fx-client-timing && client_timing=1
+	test -f /run/rc2fx-gauges && gauges=1
+	# fast unless a bench chose verify or stock; see crates/rc2fx-native/src/src_fast.rs.
+	local src_mode=fast
+	test -f /run/rc2fx-src-mode && src_mode=$(cat /run/rc2fx-src-mode)
+	env RC2FX_CLIENT_TIMING="$client_timing" RC2FX_GAUGES="$gauges" RC2FX_SRC_MODE="$src_mode" LD_AUDIT="$home/librc2fx_native.so" \
+		RC2FX_NATIVE_PROBE_REPORT_SELECTED_ONLY=1 \
+		RC2FX_FIRMWARE_PROFILE="$profile_id" RC2FX_FIRMWARE_PROFILES="$home/firmware-profiles.json" \
+		RC2FX_NATIVE_PROBE_PLAN="$run/plan.json" RC2FX_USB_SOCKET="$run/usb.sock" \
+		RC2FX_NATIVE_PROBE_CONTROL_SOCKET="$run/control.sock" RC2FX_NATIVE_PROBE_REPORT="$run/audit.json" \
+		RC2FX_NATIVE_PROBE_EVENTS="$logs/audio-events.log" \
+		"$stock_mixer" "$@" 2>>"$run/mixer.log" &
+	local mixer=$!
+	printf '%s\n' "$mixer" >"$run/native.pid"
+	# The supervisor keeps this PID through setsid and env, so supervisor.pid is
+	# its own.
+	setsid env RC2FX_DATA="$data" RC2FX_LOGS="$logs" \
+		"$home/rc2fx-supervisor" --mixer "$mixer" --mixer-start "$(start_time "$mixer")" \
+		--script "$run/rc2fx.sh" --controller "$home/rc2fxd" --run "$run" --boot "$boot" \
+		-- "${controller[@]}" </dev/null >>"$logs/rc2fx.log" 2>&1 &
+	local watcher=$!
+	printf '%s\n' "$watcher" >"$run/supervisor.pid"
+	say "RC2FX mixer started (PID $mixer) from $home under the launcher" >>"$logs/rc2fx.log"
+	# Whoever ends this shell ends the mixer.
+	trap 'kill -TERM "$mixer" 2>/dev/null' TERM INT HUP
+	# Waits for whichever ends first. A trapped signal ends the wait with neither
+	# and leaves $ended unset.
+	local status=0 ended=
+	until test -n "${ended:-}"; do
+		status=0
+		wait -n -p ended "$mixer" "$watcher" || status=$?
+	done
+	if test "$ended" = "$watcher"; then
+		if test "$status" != 0 && alive "$mixer"; then supervisor_lost "$mixer" "$status"; fi
+		status=0
+		wait "$mixer" || status=$?
+		while alive "$mixer"; do wait "$mixer" || status=$?; done
+	fi
+	say "Mixer exited with status $status$(test "$status" -le 128 || echo " (signal $((status - 128)))"); jackd now $(pgrep -x jackd | tr '\n' ' ')" >>"$logs/rc2fx.log"
+	restore_rt_throttle
+	exit "$status"
 }
 
 refuse_first_boot() {
-  if test -e "$first_boot"; then
-    echo 'Refusing: mixer is in its first boot after a firmware update' >&2
-    return 4
-  fi
-  if test -e "$production_boot"; then
-    echo 'Refusing: mixer is in a production boot' >&2
-    return 4
-  fi
+	if test -e "$first_boot"; then
+		echo 'Refusing: mixer is in its first boot after a firmware update' >&2
+		return 4
+	fi
+	if test -e "$production_boot"; then
+		echo 'Refusing: mixer is in a production boot' >&2
+		return 4
+	fi
 }
 
 start() {
-  refuse_first_boot || return
-  local wait=120 mixer= old= n force=0
-  if test "${1:-}" = --force; then force=1; shift; fi
-  if test "${1:-}" = --wait; then wait=${2:?--wait needs seconds}; fi
-  test -x /usr/sbin/rc_audio_mixer || { echo 'RC2FX is not installed: /usr/sbin/rc_audio_mixer is missing' >&2; return 1; }
-  (cd "$home" && sha256sum -c SHA256SUMS > /dev/null) || { echo "Binaries in $home fail their checksums" >&2; return 1; }
-  "$home/rc2fx-firmware" check-device "$home/firmware-profiles.json" "$stock_mixer" /usr/bin/audio-start.sh > /dev/null || return 1
-  mkdir -p -m 700 "$boot"
-  rm -f "$boot/stock" "$boot/exits"
-  local next; next=$(bundle_home)
-  if old=$(supervisor); then
-    if test "$force" = 0 && test "$(cat "$run/home" 2>/dev/null)" = "$next" && cmp -s "$next/SHA256SUMS" "$run/bundle.sums"; then
-      echo "RC2FX is already running from $next (supervisor $old)"; return 0
-    fi
-    mixer=$(cat "$run/native.pid")
-    # A kept gadget has nothing in progress to wait for.
-    local deadline=$(( $(uptime_s) + wait ))
-    until gadget_kept || test "$(mixer_age "$mixer")" -ge "$mixer_settle"; do
-      if test "$(uptime_s)" -ge "$deadline"; then echo 'The running mixer has not settled yet' >&2; return 1; fi
-      sleep 2
-    done
-    echo "Restarting the mixer into $next"
-    if gadget_kept; then
-      echo 'The USB gadget stays up across the restart'
-      touch "$run/keep-usb"
-    else
-      retire_usb_node "$mixer" "$(pgrep -P "$old" -x rc2fxd || true)" || return 1
-    fi
-    stop_supervisor "$old" || return 1
-    wait_for_launch "$wait" "$mixer"
-    return
-  fi
-  local deadline=$(( $(uptime_s) + wait )) told=
-  until mixer=$(launched_mixer) && test "$(mixer_age "$mixer")" -ge "$mixer_settle"; do
-    if test "$(uptime_s)" -ge "$deadline"; then
-      echo 'Stock audio is not running under its launcher or has not finished starting' >&2
-      return 1
-    fi
-    test -n "$told" || { echo 'Waiting for stock audio to finish starting...'; told=1; }
-    sleep 2
-  done
-  echo "Restarting the stock mixer ($mixer) into $next"
-  restart_mixer "$mixer" || return 1
-  wait_for_launch "$wait" "$mixer"
+	refuse_first_boot || return
+	local wait=120 mixer='' old='' n force=0
+	if test "${1:-}" = --force; then
+		force=1
+		shift
+	fi
+	if test "${1:-}" = --wait; then wait=${2:?--wait needs seconds}; fi
+	test -x /usr/sbin/rc_audio_mixer || {
+		echo 'RC2FX is not installed: /usr/sbin/rc_audio_mixer is missing' >&2
+		return 1
+	}
+	(cd "$home" && sha256sum -c SHA256SUMS >/dev/null) || {
+		echo "Binaries in $home fail their checksums" >&2
+		return 1
+	}
+	"$home/rc2fx-firmware" check-device "$home/firmware-profiles.json" "$stock_mixer" /usr/bin/audio-start.sh >/dev/null || return 1
+	mkdir -p -m 700 "$boot"
+	rm -f "$boot/stock" "$boot/exits"
+	local next
+	next=$(bundle_home)
+	if old=$(supervisor); then
+		if test "$force" = 0 && test "$(cat "$run/home" 2>/dev/null)" = "$next" && cmp -s "$next/SHA256SUMS" "$run/bundle.sums"; then
+			echo "RC2FX is already running from $next (supervisor $old)"
+			return 0
+		fi
+		mixer=$(cat "$run/native.pid")
+		# A kept gadget has nothing in progress to wait for.
+		local deadline=$(($(uptime_s) + wait))
+		until gadget_kept || test "$(mixer_age "$mixer")" -ge "$mixer_settle"; do
+			if test "$(uptime_s)" -ge "$deadline"; then
+				echo 'The running mixer has not settled yet' >&2
+				return 1
+			fi
+			sleep 2
+		done
+		echo "Restarting the mixer into $next"
+		if gadget_kept; then
+			echo 'The USB gadget stays up across the restart'
+			touch "$run/keep-usb"
+		else
+			retire_usb_node "$mixer" "$(pgrep -P "$old" -x rc2fxd || true)" || return 1
+		fi
+		stop_supervisor "$old" || return 1
+		wait_for_launch "$wait" "$mixer"
+		return
+	fi
+	local deadline=$(($(uptime_s) + wait)) told=
+	until mixer=$(launched_mixer) && test "$(mixer_age "$mixer")" -ge "$mixer_settle"; do
+		if test "$(uptime_s)" -ge "$deadline"; then
+			echo 'Stock audio is not running under its launcher or has not finished starting' >&2
+			return 1
+		fi
+		test -n "$told" || {
+			echo 'Waiting for stock audio to finish starting...'
+			told=1
+		}
+		sleep 2
+	done
+	echo "Restarting the stock mixer ($mixer) into $next"
+	restart_mixer "$mixer" || return 1
+	wait_for_launch "$wait" "$mixer"
 }
 
 stop() {
-  refuse_first_boot || return
-  local pid native controller
-  mkdir -p -m 700 "$boot"
-  echo 'stopped by rc2fx.sh stop' > "$boot/stock"
-  if ! pid=$(supervisor); then echo 'RC2FX is not running'; return 0; fi
-  # Retire the HID node first: the supervisor ends the mixer only after the
-  # controller has exited.
-  native=$(cat "$run/native.pid" 2>/dev/null || true)
-  controller=$(pgrep -P "$pid" -x rc2fxd || true)
-  retire_usb_node "$native" "$controller" || return 1
-  stop_supervisor "$pid" || return 1
-  if test -n "$native" && alive "$native"; then
-    echo "RC2FX mixer $native is still running; see $logs/rc2fx.log" >&2
-    return 1
-  fi
-  echo 'RC2FX stopped; the launcher is restarting stock audio'
+	refuse_first_boot || return
+	local pid native controller
+	mkdir -p -m 700 "$boot"
+	echo 'stopped by rc2fx.sh stop' >"$boot/stock"
+	if ! pid=$(supervisor); then
+		echo 'RC2FX is not running'
+		return 0
+	fi
+	# Retire the HID node first: the supervisor ends the mixer only after the
+	# controller has exited.
+	native=$(cat "$run/native.pid" 2>/dev/null || true)
+	controller=$(pgrep -P "$pid" -x rc2fxd || true)
+	retire_usb_node "$native" "$controller" || return 1
+	stop_supervisor "$pid" || return 1
+	if test -n "$native" && alive "$native"; then
+		echo "RC2FX mixer $native is still running; see $logs/rc2fx.log" >&2
+		return 1
+	fi
+	echo 'RC2FX stopped; the launcher is restarting stock audio'
 }
 
 status() {
-  local pid native
-  if pid=$(supervisor); then
-    native=$(cat "$run/native.pid" 2>/dev/null || true)
-    echo "RC2FX running from $(cat "$run/home" 2>/dev/null) (supervisor $pid, mixer ${native:-starting})"
-    if test -n "$native" && alive "$native"; then grep -E '^(Threads|VmRSS):' "$proc/$native/status"; fi
-  else
-    echo 'RC2FX is not running; stock audio is in charge'
-  fi
-  if test -x /usr/sbin/rc_audio_mixer; then
-    if test -e /opt/rc2fx/disabled; then echo 'Autostart: installed, disabled'; else echo 'Autostart: installed, enabled'; fi
-  else
-    echo 'Autostart: not installed'
-  fi
-  test -e "$boot/stock" && echo "This boot: stock until the next start ($(cat "$boot/stock"))"
-  gui_status
-  recorder_status_line
-  test -f "$logs/rc2fx.log" && { echo '--- recent'; tail -n 8 "$logs/rc2fx.log"; }
-  return 0
+	local pid native
+	if pid=$(supervisor); then
+		native=$(cat "$run/native.pid" 2>/dev/null || true)
+		echo "RC2FX running from $(cat "$run/home" 2>/dev/null) (supervisor $pid, mixer ${native:-starting})"
+		if test -n "$native" && alive "$native"; then grep -E '^(Threads|VmRSS):' "$proc/$native/status"; fi
+	else
+		echo 'RC2FX is not running; stock audio is in charge'
+	fi
+	if test -x /usr/sbin/rc_audio_mixer; then
+		if test -e /opt/rc2fx/disabled; then echo 'Autostart: installed, disabled'; else echo 'Autostart: installed, enabled'; fi
+	else
+		echo 'Autostart: not installed'
+	fi
+	test -e "$boot/stock" && echo "This boot: stock until the next start ($(cat "$boot/stock"))"
+	gui_status
+	recorder_status_line
+	test -f "$logs/rc2fx.log" && {
+		echo '--- recent'
+		tail -n 8 "$logs/rc2fx.log"
+	}
+	return 0
 }
 
 # The stock mixer logs Wi-Fi credentials; never show or keep those lines.
 redact() { grep -v -i -E 'password|psk|WPA Configuration' || true; }
 
 logs() {
-  for file in "$logs/rc2fx.log" "$run/controller.log" "$run/mixer.log" "$vendor_log" "$logs/audio-events.log" "$logs/last-exit.log"; do
-    test -f "$file" || continue
-    echo "=== $file"
-    tail -n 40 "$file" | redact
-  done
+	for file in "$logs/rc2fx.log" "$run/controller.log" "$run/mixer.log" "$vendor_log" "$logs/audio-events.log" "$logs/last-exit.log"; do
+		test -f "$file" || continue
+		echo "=== $file"
+		tail -n 40 "$file" | redact
+	done
 }
 
 # rc2fx-supervisor (crates/rc2fx-supervisor) runs beside the
@@ -982,45 +1088,49 @@ logs() {
 # Ends a mixer for the supervisor: $1 is 1 to keep the USB gadget, then the
 # mixer, its start time and any controller.
 supervise_restart() {
-  keep_usb=$1 mixer_start=$3
-  restart_mixer "$2" "${@:4}"
+	keep_usb=$1 mixer_start=$3
+	restart_mixer "$2" "${@:4}"
 }
 
 # The supervisor's last step: $1 is a controller still running, if any.
 supervise_exit() {
-  set +e
-  say 'Supervisor stopping'
-  test -z "${1:-}" || stop_owned "$1"
-  {
-    tail -n 30 "$logs/rc2fx.log"
-    echo '--- controller'; tail -n 40 "$run/controller.log"
-    echo '--- mixer'; tail -n 40 "$run/mixer.log" | redact
-    echo '--- vendor'; tail -n 40 "$vendor_log" | redact
-    echo '--- kernel'; dmesg | tail -n 40
-  } > "$logs/last-exit.log" 2>&1
-  return 0
+	set +e
+	say 'Supervisor stopping'
+	test -z "${1:-}" || stop_owned "$1"
+	{
+		tail -n 30 "$logs/rc2fx.log"
+		echo '--- controller'
+		tail -n 40 "$run/controller.log"
+		echo '--- mixer'
+		tail -n 40 "$run/mixer.log" | redact
+		echo '--- vendor'
+		tail -n 40 "$vendor_log" | redact
+		echo '--- kernel'
+		dmesg | tail -n 40
+	} >"$logs/last-exit.log" 2>&1
+	return 0
 }
 
 # Why the stock GUI is starting instead of the module: one line in the GUI's
 # own log, so a device log shows every reason without a diagnostic run.
-gui_say() { printf '%s %s\n' "$(stamp)" "$*" >> "$gui_home/gui.log"; }
+gui_say() { printf '%s %s\n' "$(stamp)" "$*" >>"$gui_home/gui.log"; }
 
 # Records this start; three within 30 s is a crash loop (the display loop
 # restarts a dead GUI after about three seconds), so the module is dropped
 # for the rest of the boot. Prints the number of starts in the window.
 gui_starts() {
-  local now line kept=()
-  now=$(uptime_s)
-  if test -f "$gui_home/starts"; then
-    while read -r line; do
-      [[ "$line" =~ ^[0-9]+$ ]] || continue
-      test "$line" -ge $((now - 30)) || continue
-      kept+=("$line")
-    done < "$gui_home/starts"
-  fi
-  kept+=("$now")
-  printf '%s\n' "${kept[@]}" > "$gui_home/starts"
-  printf '%s\n' "${#kept[@]}"
+	local now line kept=()
+	now=$(uptime_s)
+	if test -f "$gui_home/starts"; then
+		while read -r line; do
+			[[ "$line" =~ ^[0-9]+$ ]] || continue
+			test "$line" -ge $((now - 30)) || continue
+			kept+=("$line")
+		done <"$gui_home/starts"
+	fi
+	kept+=("$now")
+	printf '%s\n' "${kept[@]}" >"$gui_home/starts"
+	printf '%s\n' "${#kept[@]}"
 }
 
 # display-start.sh starts the GUI as soon as `pidof rc_audio_mixer` succeeds,
@@ -1028,19 +1138,19 @@ gui_starts() {
 # breaks meter setup, so wait up to 30 s (RC2FX_GUI_WAIT_MAX) for callbacks
 # to advance when RC2FX audio is active. Never fails under set -eo pipefail.
 audit_callbacks() {
-  { grep -o '"callbacks":[0-9]*' "$run/audit.json" 2>/dev/null || true; } | head -n 1 | tr -dc 0-9
-  return 0
+	{ grep -o '"callbacks":[0-9]*' "$run/audit.json" 2>/dev/null || true; } | head -n 1 | tr -dc 0-9
+	return 0
 }
 
 # Is an RC2FX mixer running, as "$run/native.pid" says?
 gui_mixer_in_charge() {
-  local pid
-  test -f "$run/native.pid" || return 1
-  read -r pid < "$run/native.pid" 2>/dev/null || return 1
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  local exe
-  exe=$(readlink "$proc/$pid/exe" 2>/dev/null) || return 1
-  test "$exe" = "$stock_mixer"
+	local pid
+	test -f "$run/native.pid" || return 1
+	read -r pid <"$run/native.pid" 2>/dev/null || return 1
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+	local exe
+	exe=$(readlink "$proc/$pid/exe" 2>/dev/null) || return 1
+	test "$exe" = "$stock_mixer"
 }
 
 # This boot may start one but has not written native.pid yet: the audio shim
@@ -1048,44 +1158,44 @@ gui_mixer_in_charge() {
 # display-start.sh's `pidof rc_audio_mixer` matches the shim's own bash while
 # launch() is still setting the runtime directory up, which is the boot case.
 gui_expects_rc2fx() {
-  local window=${RC2FX_GUI_BOOT_WINDOW:-180}
-  test -x "$audio_shim" || return 1
-  test ! -e /opt/rc2fx/disabled || return 1
-  test ! -e "$first_boot" || return 1
-  local up
-  up=$(uptime_s) || up=0
-  [[ "$up" =~ ^[0-9]+$ ]] || up=0
-  test "$up" -lt "$window"
+	local window=${RC2FX_GUI_BOOT_WINDOW:-180}
+	test -x "$audio_shim" || return 1
+	test ! -e /opt/rc2fx/disabled || return 1
+	test ! -e "$first_boot" || return 1
+	local up
+	up=$(uptime_s) || up=0
+	[[ "$up" =~ ^[0-9]+$ ]] || up=0
+	test "$up" -lt "$window"
 }
 
 gui_wait_for_mixer() {
-  local max=${RC2FX_GUI_WAIT_MAX:-30} polls=0 last= now ready=0
-  test -e "$boot/stock" && return 0
-  if gui_expects_rc2fx; then
-    : # keep polling: the mixer may still be starting
-  elif gui_mixer_in_charge; then
-    : # a later GUI start while RC2FX runs
-  else
-    return 0
-  fi
-  while test "$polls" -lt $(( max * 2 )); do
-    sleep 0.5
-    polls=$((polls + 1))
-    gui_mixer_in_charge || continue
-    test -S "$run/control.sock" || continue
-    now=$(audit_callbacks) || now=
-    if test -n "$last" && test -n "$now" && test "$now" -gt "$last"; then
-      ready=1
-      break
-    fi
-    last=$now
-  done
-  if test "$ready" = 0; then
-    gui_say "GUI started before the mixer reported ready (${max} s)"
-  elif test "$polls" -gt 1; then
-    gui_say "Waited $(( polls / 2 )) s for the mixer before starting the GUI"
-  fi
-  return 0
+	local max=${RC2FX_GUI_WAIT_MAX:-30} polls=0 last='' now ready=0
+	test -e "$boot/stock" && return 0
+	if gui_expects_rc2fx; then
+		: # keep polling: the mixer may still be starting
+	elif gui_mixer_in_charge; then
+		: # a later GUI start while RC2FX runs
+	else
+		return 0
+	fi
+	while test "$polls" -lt $((max * 2)); do
+		sleep 0.5
+		polls=$((polls + 1))
+		gui_mixer_in_charge || continue
+		test -S "$run/control.sock" || continue
+		now=$(audit_callbacks) || now=
+		if test -n "$last" && test -n "$now" && test "$now" -gt "$last"; then
+			ready=1
+			break
+		fi
+		last=$now
+	done
+	if test "$ready" = 0; then
+		gui_say "GUI started before the mixer reported ready (${max} s)"
+	elif test "$polls" -gt 1; then
+		gui_say "Waited $((polls / 2)) s for the mixer before starting the GUI"
+	fi
+	return 0
 }
 
 # Entry used by /usr/sbin/rc_gui_juce: ALWAYS ends in an exec of the stock
@@ -1093,95 +1203,106 @@ gui_wait_for_mixer() {
 # The EXIT trap's path: an unexpected abort must never be silent (device
 # 2026-11-01: the GUI started stock 2 s after the mixer with nothing logged).
 gui_unexpected_exit() {
-  gui_say "GUI launch failed unexpectedly; stock GUI started" || true
-  exec "$stock_gui" "$@"
+	gui_say "GUI launch failed unexpectedly; stock GUI started" || true
+	exec "$stock_gui" "$@"
 }
 
 gui_launch() {
-  local fallback="gui_unexpected_exit"
-  local argument
-  for argument in "$@"; do fallback+=$(printf ' %q' "$argument"); done
-  trap "$fallback" EXIT
-  # No state (and so no log) means no module: the stock GUI still starts.
-  mkdir -p -m 700 "$gui_home" 2>/dev/null || exec "$stock_gui" "$@"
-  local why= module= selected= diagnostics=quiet
-  local disabled="$data/gui-partial-disabled"
-  # 1. The mixer is not fully booted yet.
-  if test -e "$first_boot"; then why='first boot after a firmware update'
-  elif test -e "$production_boot"; then why='production boot'
-  # 2. Switched off, by settings or for this boot (the crash guard's file).
-  elif test -e "$disabled"; then why='partial conversion is disabled in settings'
-  elif test -e "$gui_home/off"; then why='partial conversion is off for this boot'
-  elif test -e "$gui_home/stock"; then why="$(cat "$gui_home/stock")"
-  # 3. The GUI binary this module was qualified against.
-  elif ! printf '%s  %s\n' "$gui_sha" "$stock_gui" | sha256sum -c - >/dev/null 2>&1; then
-    why='this GUI is not the qualified one'
-  # 4. The bundle's module, checked by the bundle's own manifest.
-  elif ! selected=$(bundle_home) || test ! -f "$selected/librc2fx_gui.so"; then
-    why='no bundle module is installed'
-  elif ! (cd "$selected" && grep -E '  librc2fx_gui\.so$' SHA256SUMS | sha256sum -c - >/dev/null 2>&1); then
-    why="the bundle module fails its checksum"
-  fi
-  if test -z "$why"; then module=$selected/librc2fx_gui.so; fi
-  # 5. Crash guard: recorded for every start, module or not.
-  local n
-  n=$(gui_starts)
-  if test -z "$why" && test "$n" -ge 3; then
-    printf 'the GUI module crashed it %s times within 30 s\n' "$n" > "$gui_home/stock"
-    chmod 600 "$gui_home/stock"
-    why="$(cat "$gui_home/stock")"
-  fi
-  if test -n "$why"; then
-    gui_say "Stock GUI started: $why"
-    gui_wait_for_mixer
-    exec "$stock_gui" "$@"
-  fi
-  diagnostics=$(gui_diagnostics)
-  diagnostics=${diagnostics%% *}
-  # A quiet log would otherwise grow over many starts: keep the last one.
-  test -f "$gui_home/pacing.log" && mv -f "$gui_home/pacing.log" "$gui_home/pacing.prev.log"
-  gui_wait_for_mixer
-  if test "$diagnostics" = verbose; then
-    gui_say "GUI module starting from $module (verbose diagnostics)"
-  else
-    gui_say "GUI module starting from $module"
-  fi
-  trap - EXIT
-  local -a quiet_env=("RC2FX_GUI_PACING_QUIET=1")
-  if test "$diagnostics" = verbose; then quiet_env=(); fi
-  exec env LD_AUDIT="$module" RC2FX_GUI_PACING=partial-cw "${quiet_env[@]}" \
-    RC2FX_GUI_PACING_LOG="$gui_home/pacing.log" "$stock_gui" "$@"
+	local fallback="gui_unexpected_exit"
+	local argument
+	for argument in "$@"; do fallback+=$(printf ' %q' "$argument"); done
+	# shellcheck disable=SC2064 # the fallback command is fixed when the trap is set
+	trap "$fallback" EXIT
+	# No state (and so no log) means no module: the stock GUI still starts.
+	mkdir -p -m 700 "$gui_home" 2>/dev/null || exec "$stock_gui" "$@"
+	local why='' module='' selected='' diagnostics=quiet
+	local disabled="$data/gui-partial-disabled"
+	# 1. The mixer is not fully booted yet.
+	if test -e "$first_boot"; then
+		why='first boot after a firmware update'
+	elif test -e "$production_boot"; then
+		why='production boot'
+	# 2. Switched off, by settings or for this boot (the crash guard's file).
+	elif test -e "$disabled"; then
+		why='partial conversion is disabled in settings'
+	elif test -e "$gui_home/off"; then
+		why='partial conversion is off for this boot'
+	elif test -e "$gui_home/stock"; then
+		why="$(cat "$gui_home/stock")"
+	# 3. The GUI binary this module was qualified against.
+	elif ! printf '%s  %s\n' "$gui_sha" "$stock_gui" | sha256sum -c - >/dev/null 2>&1; then
+		why='this GUI is not the qualified one'
+	# 4. The bundle's module, checked by the bundle's own manifest.
+	elif ! selected=$(bundle_home) || test ! -f "$selected/librc2fx_gui.so"; then
+		why='no bundle module is installed'
+	elif ! (cd "$selected" && grep -E '  librc2fx_gui\.so$' SHA256SUMS | sha256sum -c - >/dev/null 2>&1); then
+		why="the bundle module fails its checksum"
+	fi
+	if test -z "$why"; then module=$selected/librc2fx_gui.so; fi
+	# 5. Crash guard: recorded for every start, module or not.
+	local n
+	n=$(gui_starts)
+	if test -z "$why" && test "$n" -ge 3; then
+		printf 'the GUI module crashed it %s times within 30 s\n' "$n" >"$gui_home/stock"
+		chmod 600 "$gui_home/stock"
+		why="$(cat "$gui_home/stock")"
+	fi
+	if test -n "$why"; then
+		gui_say "Stock GUI started: $why"
+		gui_wait_for_mixer
+		exec "$stock_gui" "$@"
+	fi
+	diagnostics=$(gui_diagnostics)
+	diagnostics=${diagnostics%% *}
+	# A quiet log would otherwise grow over many starts: keep the last one.
+	test -f "$gui_home/pacing.log" && mv -f "$gui_home/pacing.log" "$gui_home/pacing.prev.log"
+	gui_wait_for_mixer
+	if test "$diagnostics" = verbose; then
+		gui_say "GUI module starting from $module (verbose diagnostics)"
+	else
+		gui_say "GUI module starting from $module"
+	fi
+	trap - EXIT
+	local -a quiet_env=("RC2FX_GUI_PACING_QUIET=1")
+	if test "$diagnostics" = verbose; then quiet_env=(); fi
+	exec env LD_AUDIT="$module" RC2FX_GUI_PACING=partial-cw "${quiet_env[@]}" \
+		RC2FX_GUI_PACING_LOG="$gui_home/pacing.log" "$stock_gui" "$@"
 }
 
 # Verbose or quiet GUI diagnostics, and why: the kind of build.
 gui_diagnostics() {
-  if test "$rc2fx_build" = release; then echo 'quiet (release build)'
-  else echo 'verbose (development build)'
-  fi
+	if test "$rc2fx_build" = release; then
+		echo 'quiet (release build)'
+	else
+		echo 'verbose (development build)'
+	fi
 }
 
 # The GUI half of `status`: module or stock, why, and its last counters line.
 gui_status() {
-  local module= profile= counters=
-  if ! test -e "$gui_shim"; then
-    echo 'GUI: not installed'
-  elif test -e "$data/gui-partial-disabled"; then
-    echo 'GUI: stock (partial conversion is disabled in settings)'
-  elif test -e "$gui_home/off"; then
-    echo 'GUI: stock until the next boot (partial conversion is off)'
-  elif test -e "$gui_home/stock"; then
-    echo "GUI: stock until the next boot ($(cat "$gui_home/stock"))"
-  elif module=$(bundle_home) && test -f "$module/librc2fx_gui.so"; then
-    profile=$(file_sha256 "$module/librc2fx_gui.so" 2>/dev/null | cut -c1-12)
-    echo "GUI: partial conversion, module ${profile:-unknown} from $module"
-  else
-    echo 'GUI: stock (no bundle module is installed)'
-  fi
-  echo "GUI diagnostics: $(gui_diagnostics)"
-  counters=$(tail -n 400 "$gui_home/pacing.log" 2>/dev/null | grep '^counters ' | tail -n 1 || true)
-  test -n "$counters" && echo "GUI counters: $counters"
-  test -f "$gui_home/gui.log" && { echo '--- GUI'; tail -n 3 "$gui_home/gui.log"; }
-  return 0
+	local module='' profile='' counters=
+	if ! test -e "$gui_shim"; then
+		echo 'GUI: not installed'
+	elif test -e "$data/gui-partial-disabled"; then
+		echo 'GUI: stock (partial conversion is disabled in settings)'
+	elif test -e "$gui_home/off"; then
+		echo 'GUI: stock until the next boot (partial conversion is off)'
+	elif test -e "$gui_home/stock"; then
+		echo "GUI: stock until the next boot ($(cat "$gui_home/stock"))"
+	elif module=$(bundle_home) && test -f "$module/librc2fx_gui.so"; then
+		profile=$(file_sha256 "$module/librc2fx_gui.so" 2>/dev/null | cut -c1-12)
+		echo "GUI: partial conversion, module ${profile:-unknown} from $module"
+	else
+		echo 'GUI: stock (no bundle module is installed)'
+	fi
+	echo "GUI diagnostics: $(gui_diagnostics)"
+	counters=$(tail -n 400 "$gui_home/pacing.log" 2>/dev/null | grep '^counters ' | tail -n 1 || true)
+	test -n "$counters" && echo "GUI counters: $counters"
+	test -f "$gui_home/gui.log" && {
+		echo '--- GUI'
+		tail -n 3 "$gui_home/gui.log"
+	}
+	return 0
 }
 
 # ---- flash evidence ----------------------------------------------------------
@@ -1197,75 +1318,85 @@ rode_update=${RC2FX_RODE_UPDATE:-/usr/bin/rode-update.sh}
 update_partition=${RC2FX_UPDATE_PARTITION:-/Application/update-partition}
 # A new evidence folder named for now and why, printed; nothing on failure.
 evidence_dir() {
-  local dir
-  dir="$evidence_root/$(date -u +%Y%m%dT%H%M%SZ)-$1"
-  mkdir -p "$dir" 2> /dev/null && printf '%s\n' "$dir"
+	local dir
+	dir="$evidence_root/$(date -u +%Y%m%dT%H%M%SZ)-$1"
+	mkdir -p "$dir" 2>/dev/null && printf '%s\n' "$dir"
 }
 # Appends one line to the evidence history.
 evidence_note() {
-  mkdir -p "$evidence_root" 2> /dev/null && say "$*" >> "$evidence_root/history.log" 2> /dev/null || true
+	mkdir -p "$evidence_root" 2>/dev/null && say "$*" >>"$evidence_root/history.log" 2>/dev/null || true
 }
 # Copies the damaged file root/name into dir and describes it: size, inode,
 # how many of its bytes are NUL, and its digest against the one wanted.
 evidence_file() {
-  local dir=$1 root=$2 name=$3 want=$4 size nonnul
-  test -f "$root/$name" || { printf '%s missing\n' "$name" >> "$dir/files.txt"; return 0; }
-  size=$(stat -c %s "$root/$name" 2> /dev/null || echo ?)
-  nonnul=$(tr -d '\000' < "$root/$name" 2> /dev/null | wc -c || echo ?)
-  printf '%s size=%s nul=%s inode=%s mtime=%s got=%s want=%s\n' "$name" "$size" \
-    "$(( ${size:-0} - ${nonnul:-0} ))" "$(stat -c %i "$root/$name" 2> /dev/null || echo ?)" \
-    "$(stat -c %Y "$root/$name" 2> /dev/null || echo ?)" \
-    "$(sha256sum < "$root/$name" 2> /dev/null | cut -d' ' -f1)" "$want" >> "$dir/files.txt"
-  # Small enough to keep whole: RØDE's damaged files so far were scripts,
-  # headers and small binaries.
-  if test "${size:-0}" -le 16777216 2> /dev/null; then
-    mkdir -p "$dir/files/$(dirname "$name")" 2> /dev/null \
-      && cp "$root/$name" "$dir/files/$name" 2> /dev/null || true
-  fi
+	local dir=$1 root=$2 name=$3 want=$4 size nonnul
+	test -f "$root/$name" || {
+		printf '%s missing\n' "$name" >>"$dir/files.txt"
+		return 0
+	}
+	size=$(stat -c %s "$root/$name" 2>/dev/null || echo ?)
+	nonnul=$(tr -d '\000' <"$root/$name" 2>/dev/null | wc -c || echo ?)
+	printf '%s size=%s nul=%s inode=%s mtime=%s got=%s want=%s\n' "$name" "$size" \
+		"$((${size:-0} - ${nonnul:-0}))" "$(stat -c %i "$root/$name" 2>/dev/null || echo ?)" \
+		"$(stat -c %Y "$root/$name" 2>/dev/null || echo ?)" \
+		"$(sha256sum <"$root/$name" 2>/dev/null | cut -d' ' -f1)" "$want" >>"$dir/files.txt"
+	# Small enough to keep whole: RØDE's damaged files so far were scripts,
+	# headers and small binaries.
+	if test "${size:-0}" -le 16777216 2>/dev/null; then
+		mkdir -p "$dir/files/$(dirname "$name")" 2>/dev/null &&
+			cp "$root/$name" "$dir/files/$name" 2>/dev/null || true
+	fi
 }
 evidence_files() {
-  local dir=$1 root=$2 manifest=$3 name want; shift 3
-  for name in "$@"; do
-    [[ $name == /* || $name == *..* ]] && continue
-    want=$(manifest_sha256 "$manifest" "$name")
-    evidence_file "$dir" "$root" "$name" "$want"
-  done
+	local dir=$1 root=$2 manifest=$3 name want
+	shift 3
+	for name in "$@"; do
+		[[ $name == /* || $name == *..* ]] && continue
+		want=$(manifest_sha256 "$manifest" "$name")
+		evidence_file "$dir" "$root" "$name" "$want"
+	done
 }
 # The storage picture: kernel messages, mounts, the eMMC and both roots'
 # superblock times and mount counts.
 evidence_storage() {
-  local dir=$1 p
-  { uptime; cat "$proc/cmdline"; echo; findmnt -rn -o SOURCE,TARGET,FSTYPE,OPTIONS 2> /dev/null | grep -E 'mmcblk|update' || true
-    echo; for p in name type manfid fwrev date; do printf '%s=%s ' "$p" "$(cat "/sys/block/mmcblk1/device/$p" 2> /dev/null)"; done
-    printf 'write_cache=%s\n' "$(cat /sys/block/mmcblk1/queue/write_cache 2> /dev/null)"
-    # What RC2FX's audio changes in scheduling, as it stands during the flash.
-    printf 'sched_rt_runtime_us=%s\n' "$(cat "$proc/sys/kernel/sched_rt_runtime_us" 2> /dev/null)"
-    grep -E 'mmc' "$proc/interrupts" 2> /dev/null | while read -r p _; do
-      p=${p%:}; printf 'irq %s affinity=%s effective=%s\n' "$p" "$(cat "$proc/irq/$p/smp_affinity_list" 2> /dev/null)" "$(cat "$proc/irq/$p/effective_affinity_list" 2> /dev/null)"
-    done
-    for p in $blackbox_irqs; do printf 'audio irq %s affinity=%s\n' "$p" "$(cat "$proc/irq/$p/smp_affinity_list" 2> /dev/null)"; done
-    printf 'rc2fx running=%s\n' "$(pgrep -f '[r]c2fxd' > /dev/null && echo yes || echo no)"
-    for p in 1 2; do
-      # ext4 superblock at 1024: mount count (0x34), state (0x3A), feature
-      # flags (0x5C..), mkfs time (0x108).
-      printf 'p%s superblock: %s\n' "$p" "$(dd if=/dev/mmcblk1p$p bs=1024 skip=1 count=1 status=none 2> /dev/null | od -An -tx1 -j52 -N48 | tr -s ' \n' ' ')"
-    done
-  } > "$dir/storage.txt" 2>&1 || true
-  dmesg > "$dir/dmesg.txt" 2> /dev/null || true
+	local dir=$1 p
+	{
+		uptime
+		cat "$proc/cmdline"
+		echo
+		findmnt -rn -o SOURCE,TARGET,FSTYPE,OPTIONS 2>/dev/null | grep -E 'mmcblk|update' || true
+		echo
+		for p in name type manfid fwrev date; do printf '%s=%s ' "$p" "$(cat "/sys/block/mmcblk1/device/$p" 2>/dev/null)"; done
+		printf 'write_cache=%s\n' "$(cat /sys/block/mmcblk1/queue/write_cache 2>/dev/null)"
+		# What RC2FX's audio changes in scheduling, as it stands during the flash.
+		printf 'sched_rt_runtime_us=%s\n' "$(cat "$proc/sys/kernel/sched_rt_runtime_us" 2>/dev/null)"
+		grep -E 'mmc' "$proc/interrupts" 2>/dev/null | while read -r p _; do
+			p=${p%:}
+			printf 'irq %s affinity=%s effective=%s\n' "$p" "$(cat "$proc/irq/$p/smp_affinity_list" 2>/dev/null)" "$(cat "$proc/irq/$p/effective_affinity_list" 2>/dev/null)"
+		done
+		for p in $blackbox_irqs; do printf 'audio irq %s affinity=%s\n' "$p" "$(cat "$proc/irq/$p/smp_affinity_list" 2>/dev/null)"; done
+		printf 'rc2fx running=%s\n' "$(pgrep -f '[r]c2fxd' >/dev/null && echo yes || echo no)"
+		for p in 1 2; do
+			# ext4 superblock at 1024: mount count (0x34), state (0x3A), feature
+			# flags (0x5C..), mkfs time (0x108).
+			printf 'p%s superblock: %s\n' "$p" "$(dd if=/dev/mmcblk1p$p bs=1024 skip=1 count=1 status=none 2>/dev/null | od -An -tx1 -j52 -N48 | tr -s ' \n' ' ')"
+		done
+	} >"$dir/storage.txt" 2>&1 || true
+	dmesg >"$dir/dmesg.txt" 2>/dev/null || true
 }
 # Wraps rode-update.sh for this boot (from launch). Idempotent: a later
 # launch (a new bundle installed without a reboot) rewrites the wrapper in
 # place, which the bind mount shows at once; RØDE's original is copied only
 # while nothing is mounted over it.
 flash_watch_start() {
-  local mounted=0
-  test -f "$rode_update" && test -d "$boot" || return 0
-  mountpoint -q "$rode_update" 2> /dev/null && mounted=1
-  if test $mounted = 0; then
-    cp -p "$rode_update" "$boot/rode-update.sh" || return 0
-  fi
-  test -f "$boot/rode-update.sh" || return 0
-  cat > "$boot/rode-update.wrap.sh" << EOF || return 0
+	local mounted=0
+	test -f "$rode_update" && test -d "$boot" || return 0
+	mountpoint -q "$rode_update" 2>/dev/null && mounted=1
+	if test $mounted = 0; then
+		cp -p "$rode_update" "$boot/rode-update.sh" || return 0
+	fi
+	test -f "$boot/rode-update.sh" || return 0
+	cat >"$boot/rode-update.wrap.sh" <<EOF || return 0
 #!/bin/sh
 # RC2FX: runs RØDE's rode-update.sh unchanged, then checks what it wrote
 # (rc2fx.sh flash-verify) before RØDE reboots, rewriting any file that did not
@@ -1285,56 +1416,56 @@ timeout 900 /bin/bash $(printf %q "$home/rc2fx.sh") flash-verify "\$status" "\$a
 test -n "\$keeper" && kill "\$keeper" 2> /dev/null
 exit \$status
 EOF
-  chmod 755 "$boot/rode-update.wrap.sh" || return 0
-  test $mounted = 1 || mount --bind "$boot/rode-update.wrap.sh" "$rode_update" || return 0
+	chmod 755 "$boot/rode-update.wrap.sh" || return 0
+	test $mounted = 1 || mount --bind "$boot/rode-update.wrap.sh" "$rode_update" || return 0
 }
 # After RØDE's update script: is what it wrote on the eMMC what the image has?
 flash_verify() {
-  local status=${1:-?} archive=${2:-} dir manifest failed=() name want started round left
-  started=$(uptime_s)
-  dir=$(evidence_dir verify) || return 0
-  exec > "$dir/verify.log" 2>&1
-  say "rode-update.sh exited $status"
-  manifest=$update_partition/opt/rc2fx/image.sha256
-  if ! test -f "$manifest"; then
-    say "No image.sha256 on $update_partition; nothing to check"
-    evidence_note "flash verify: no manifest on the new partition (rode-update.sh exit $status)"
-    return 0
-  fi
-  sync
-  # Reads must come from the eMMC, not from what the kernel still holds.
-  echo 3 > "$proc/sys/vm/drop_caches" 2> /dev/null || say 'Could not drop the page cache'
-  manifest_check_failed "$update_partition" "$manifest" sha256sum
-  evidence_files "$dir" "$update_partition" "$manifest" ${failed[@]+"${failed[@]}"}
-  evidence_storage "$dir"
-  say "Checked $(wc -l < "$manifest") files in $(( $(uptime_s) - started )) s: ${#failed[@]} damaged"
-  evidence_note "flash verify (before RØDE's reboot): ${#failed[@]} damaged${failed:+: ${failed[*]}} [$(basename "$dir")]"
-  test ${#failed[@]} -gt 0 || return 0
-  # Writes the damaged files again from the archive RØDE unpacked, as RØDE's
-  # tar did, and checks them again, until they read back right.
-  if test -z "$archive" || ! test -r "$archive"; then
-    say 'The archive is gone; the image check at boot will repair what it can'
-    evidence_note "flash repair: no archive to repair from"
-    return 0
-  fi
-  left=("${failed[@]}")
-  for round in 1 2 3; do
-    # The archive names most files ./path and RØDE's additions path; tar
-    # takes the members that exist under either name.
-    tar -xzf "$archive" -C "$update_partition" "${left[@]/#/./}" 2> /dev/null || true
-    tar -xzf "$archive" -C "$update_partition" "${left[@]}" 2> /dev/null || true
-    sync
-    echo 3 > "$proc/sys/vm/drop_caches" 2> /dev/null || true
-    failed=()
-    for name in "${left[@]}"; do
-      want=$(manifest_sha256 "$manifest" "$name")
-      test "$(sha256sum < "$update_partition/$name" 2> /dev/null | cut -d' ' -f1)" = "$want" || failed+=("$name")
-    done
-    say "Repair round $round: $(( ${#left[@]} - ${#failed[@]} )) rewritten, ${#failed[@]} still damaged"
-    left=("${failed[@]}")
-    test ${#left[@]} -eq 0 && break
-  done
-  evidence_note "flash repair (before RØDE's reboot): ${#left[@]} still damaged after round $round${left:+: ${left[*]}}"
+	local status=${1:-?} archive=${2:-} dir manifest failed=() name want started round left
+	started=$(uptime_s)
+	dir=$(evidence_dir verify) || return 0
+	exec >"$dir/verify.log" 2>&1
+	say "rode-update.sh exited $status"
+	manifest=$update_partition/opt/rc2fx/image.sha256
+	if ! test -f "$manifest"; then
+		say "No image.sha256 on $update_partition; nothing to check"
+		evidence_note "flash verify: no manifest on the new partition (rode-update.sh exit $status)"
+		return 0
+	fi
+	sync
+	# Reads must come from the eMMC, not from what the kernel still holds.
+	echo 3 >"$proc/sys/vm/drop_caches" 2>/dev/null || say 'Could not drop the page cache'
+	manifest_check_failed "$update_partition" "$manifest" sha256sum
+	evidence_files "$dir" "$update_partition" "$manifest" ${failed[@]+"${failed[@]}"}
+	evidence_storage "$dir"
+	say "Checked $(wc -l <"$manifest") files in $(($(uptime_s) - started)) s: ${#failed[@]} damaged"
+	evidence_note "flash verify (before RØDE's reboot): ${#failed[@]} damaged${failed:+: ${failed[*]}} [$(basename "$dir")]"
+	test ${#failed[@]} -gt 0 || return 0
+	# Writes the damaged files again from the archive RØDE unpacked, as RØDE's
+	# tar did, and checks them again, until they read back right.
+	if test -z "$archive" || ! test -r "$archive"; then
+		say 'The archive is gone; the image check at boot will repair what it can'
+		evidence_note "flash repair: no archive to repair from"
+		return 0
+	fi
+	left=("${failed[@]}")
+	for round in 1 2 3; do
+		# The archive names most files ./path and RØDE's additions path; tar
+		# takes the members that exist under either name.
+		tar -xzf "$archive" -C "$update_partition" "${left[@]/#/./}" 2>/dev/null || true
+		tar -xzf "$archive" -C "$update_partition" "${left[@]}" 2>/dev/null || true
+		sync
+		echo 3 >"$proc/sys/vm/drop_caches" 2>/dev/null || true
+		failed=()
+		for name in "${left[@]}"; do
+			want=$(manifest_sha256 "$manifest" "$name")
+			test "$(sha256sum <"$update_partition/$name" 2>/dev/null | cut -d' ' -f1)" = "$want" || failed+=("$name")
+		done
+		say "Repair round $round: $((${#left[@]} - ${#failed[@]})) rewritten, ${#failed[@]} still damaged"
+		left=("${failed[@]}")
+		test ${#left[@]} -eq 0 && break
+	done
+	evidence_note "flash repair (before RØDE's reboot): ${#left[@]} still damaged after round $round${left:+: ${left[*]}}"
 }
 # ---- end of flash evidence ----------------------------------------------------
 
@@ -1349,113 +1480,132 @@ image_other_mount=/run/rc2fx-other-root
 image_root_view=/run/rc2fx-root
 # Starts the check unless it has passed for this manifest or one is running.
 image_check_start() {
-  test -f "$image_manifest" || return 0
-  test ! -e "$first_boot" || return 0
-  mkdir "$boot/image-check" 2> /dev/null || return 0
-  local digest
-  digest=$(file_sha256 "$image_manifest")
-  grep -qx "manifest=$digest" "$image_result" 2> /dev/null \
-    && grep -qx 'status=ok' "$image_result" && return 0
-  # Set aside before rc2fxd starts, so the app never reads an earlier
-  # result while this boot's check runs (see image_check).
-  mv -f "$image_result" "$image_result.previous" 2> /dev/null || true
-  # The log stays in RAM: a damaged image can leave the root full, and the
-  # check must not stop at its first message.
-  setsid nohup /bin/bash "$home/rc2fx.sh" image-check < /dev/null >> "$boot/image-check.log" 2>&1 &
+	test -f "$image_manifest" || return 0
+	test ! -e "$first_boot" || return 0
+	mkdir "$boot/image-check" 2>/dev/null || return 0
+	local digest
+	digest=$(file_sha256 "$image_manifest")
+	grep -qx "manifest=$digest" "$image_result" 2>/dev/null &&
+		grep -qx 'status=ok' "$image_result" && return 0
+	# Set aside before rc2fxd starts, so the app never reads an earlier
+	# result while this boot's check runs (see image_check).
+	mv -f "$image_result" "$image_result.previous" 2>/dev/null || true
+	# The log stays in RAM: a damaged image can leave the root full, and the
+	# check must not stop at its first message.
+	setsid nohup /bin/bash "$home/rc2fx.sh" image-check </dev/null >>"$boot/image-check.log" 2>&1 &
 }
 # The root partition this boot did not mount, read-only, or nothing.
 image_other_root() {
-  if test -n "${RC2FX_OTHER_ROOT:-}"; then echo "$RC2FX_OTHER_ROOT"; return; fi
-  local root other
-  root=$(tr ' ' '\n' < "$proc/cmdline" | sed -n 's#^root=/dev/mmcblk1p\([12]\)$#\1#p')
-  case "$root" in 1) other=2 ;; 2) other=1 ;; *) return 1 ;; esac
-  mkdir -p "$image_other_mount"
-  mountpoint -q "$image_other_mount" \
-    || mount -o ro,noload "/dev/mmcblk1p$other" "$image_other_mount" || return 1
-  echo "$image_other_mount"
+	if test -n "${RC2FX_OTHER_ROOT:-}"; then
+		echo "$RC2FX_OTHER_ROOT"
+		return
+	fi
+	local root other
+	root=$(tr ' ' '\n' <"$proc/cmdline" | sed -n 's#^root=/dev/mmcblk1p\([12]\)$#\1#p')
+	case "$root" in 1) other=2 ;; 2) other=1 ;; *) return 1 ;; esac
+	mkdir -p "$image_other_mount"
+	mountpoint -q "$image_other_mount" ||
+		mount -o ro,noload "/dev/mmcblk1p$other" "$image_other_mount" || return 1
+	echo "$image_other_mount"
 }
 image_check() {
-  test -f "$image_manifest" || { echo "no image manifest at $image_manifest"; return 0; }
-  # On a full root the lock file may not be creatable; one check per boot is
-  # still all `launch` starts.
-  { exec 8> "$data/image-check.lock"; } 2> /dev/null || exec 8> /dev/null
-  flock -n 8 || { echo 'another image check is running'; return 0; }
-  local digest started failed=() repaired=() damaged=() name want other source tmp status
-  digest=$(file_sha256 "$image_manifest")
-  # A result from an earlier boot or flash must not answer for this one: the
-  # manifest lists only RØDE's files, so a reflash of the same RØDE version
-  # has the same digest, and an old "repaired" would ask for a restart this
-  # flash never needed. Until this check records its own result the API
-  # answers pending. The old record stays beside it for diagnosis.
-  mv -f "$image_result" "$image_result.previous" 2> /dev/null || true
-  started=$(stamp)
-  # The real root's files, not what is mounted over them: this boot's flash
-  # watch binds a wrapper over rode-update.sh, which must neither read as
-  # damage nor take a repair. A bind of / without its submounts shows the
-  # files on the eMMC.
-  if test "$image_root" = / && mkdir -p "$image_root_view" \
-     && { mountpoint -q "$image_root_view" || mount --bind / "$image_root_view"; }; then
-    image_root=$image_root_view
-  fi
-  say "Checking $(wc -l < "$image_manifest") files listed in $image_manifest"
-  # Only the listed files that do not match, as "path: FAILED ...".
-  manifest_check_failed "$image_root" "$image_manifest" nice -n 19 ionice -c3 sha256sum
-  # The damaged files as found, before any repair (flash evidence).
-  local evidence=
-  if test ${#failed[@]} -gt 0 && evidence=$(evidence_dir boot); then
-    evidence_storage "$evidence"
-    evidence_files "$evidence" "$image_root" "$image_manifest" "${failed[@]}"
-  fi
-  evidence_note "image check at boot: ${#failed[@]} damaged${failed:+: ${failed[*]}}${evidence:+ [$(basename "$evidence")]}"
-  for name in "${failed[@]}"; do
-    # The manifest's own paths, never one that leaves the root.
-    if [[ $name == /* || $name == *..* ]]; then damaged+=("$name"); continue; fi
-    want=$(manifest_sha256 "$image_manifest" "$name")
-    source=
-    if test -n "$want" && other=$(image_other_root) && test -f "$other/$name" \
-       && test "$(file_sha256 "$other/$name")" = "$want"; then
-      source=$other/$name
-    fi
-    if test -z "$source"; then
-      say "Damaged and not repairable: $name"
-      damaged+=("$name")
-      continue
-    fi
-    # The same size rewrites the file's own blocks, which works on a full
-    # root; another size goes through a copy beside it.
-    if test -f "$image_root/$name" \
-       && test "$(stat -c %s "$image_root/$name")" = "$(stat -c %s "$source")"; then
-      dd if="$source" of="$image_root/$name" conv=notrunc,fsync status=none || true
-    else
-      tmp="$image_root/$name.rc2fx-repair"
-      { cp -p "$source" "$tmp" && sync && mv -f "$tmp" "$image_root/$name"; } || rm -f "$tmp"
-    fi
-    sync
-    if test "$(file_sha256 "$image_root/$name")" = "$want"; then
-      say "Repaired from the other root partition: $name"
-      repaired+=("$name")
-    else
-      say "Repair did not take: $name"
-      damaged+=("$name")
-    fi
-  done
-  if mountpoint -q "$image_other_mount" 2> /dev/null; then umount "$image_other_mount" || true; fi
-  if test "$image_root" = "$image_root_view"; then umount "$image_root_view" 2> /dev/null || true; fi
-  if test ${#damaged[@]} -gt 0; then status=damaged
-  elif test ${#repaired[@]} -gt 0; then status=repaired
-  else status=ok
-  fi
-  tmp=$data/.image-check.$$
-  {
-    echo schema=1
-    echo "status=$status"
-    echo "manifest=$digest"
-    echo "checked=$started"
-    for name in "${repaired[@]}"; do echo "repaired=$name"; done
-    for name in "${damaged[@]}"; do echo "damaged=$name"; done
-  } > "$tmp" 2> /dev/null && chmod 600 "$tmp" && mv -f "$tmp" "$image_result" \
-    || { rm -f "$tmp"; say "Could not record the result in $image_result; is the root full?"; }
-  say "Image check: $status (${#repaired[@]} repaired, ${#damaged[@]} damaged)"
+	test -f "$image_manifest" || {
+		echo "no image manifest at $image_manifest"
+		return 0
+	}
+	# On a full root the lock file may not be creatable; one check per boot is
+	# still all `launch` starts.
+	{ exec 8>"$data/image-check.lock"; } 2>/dev/null || exec 8>/dev/null
+	flock -n 8 || {
+		echo 'another image check is running'
+		return 0
+	}
+	local digest started failed=() repaired=() damaged=() name want other source tmp status
+	digest=$(file_sha256 "$image_manifest")
+	# A result from an earlier boot or flash must not answer for this one: the
+	# manifest lists only RØDE's files, so a reflash of the same RØDE version
+	# has the same digest, and an old "repaired" would ask for a restart this
+	# flash never needed. Until this check records its own result the API
+	# answers pending. The old record stays beside it for diagnosis.
+	mv -f "$image_result" "$image_result.previous" 2>/dev/null || true
+	started=$(stamp)
+	# The real root's files, not what is mounted over them: this boot's flash
+	# watch binds a wrapper over rode-update.sh, which must neither read as
+	# damage nor take a repair. A bind of / without its submounts shows the
+	# files on the eMMC.
+	if test "$image_root" = / && mkdir -p "$image_root_view" &&
+		{ mountpoint -q "$image_root_view" || mount --bind / "$image_root_view"; }; then
+		image_root=$image_root_view
+	fi
+	say "Checking $(wc -l <"$image_manifest") files listed in $image_manifest"
+	# Only the listed files that do not match, as "path: FAILED ...".
+	manifest_check_failed "$image_root" "$image_manifest" nice -n 19 ionice -c3 sha256sum
+	# The damaged files as found, before any repair (flash evidence).
+	local evidence=
+	if test ${#failed[@]} -gt 0 && evidence=$(evidence_dir boot); then
+		evidence_storage "$evidence"
+		evidence_files "$evidence" "$image_root" "$image_manifest" "${failed[@]}"
+	fi
+	evidence_note "image check at boot: ${#failed[@]} damaged${failed:+: ${failed[*]}}${evidence:+ [$(basename "$evidence")]}"
+	for name in "${failed[@]}"; do
+		# The manifest's own paths, never one that leaves the root.
+		if [[ $name == /* || $name == *..* ]]; then
+			damaged+=("$name")
+			continue
+		fi
+		want=$(manifest_sha256 "$image_manifest" "$name")
+		source=
+		if test -n "$want" && other=$(image_other_root) && test -f "$other/$name" &&
+			test "$(file_sha256 "$other/$name")" = "$want"; then
+			source=$other/$name
+		fi
+		if test -z "$source"; then
+			say "Damaged and not repairable: $name"
+			damaged+=("$name")
+			continue
+		fi
+		# The same size rewrites the file's own blocks, which works on a full
+		# root; another size goes through a copy beside it.
+		if test -f "$image_root/$name" &&
+			test "$(stat -c %s "$image_root/$name")" = "$(stat -c %s "$source")"; then
+			dd if="$source" of="$image_root/$name" conv=notrunc,fsync status=none || true
+		else
+			tmp="$image_root/$name.rc2fx-repair"
+			{ cp -p "$source" "$tmp" && sync && mv -f "$tmp" "$image_root/$name"; } || rm -f "$tmp"
+		fi
+		sync
+		if test "$(file_sha256 "$image_root/$name")" = "$want"; then
+			say "Repaired from the other root partition: $name"
+			repaired+=("$name")
+		else
+			say "Repair did not take: $name"
+			damaged+=("$name")
+		fi
+	done
+	if mountpoint -q "$image_other_mount" 2>/dev/null; then umount "$image_other_mount" || true; fi
+	if test "$image_root" = "$image_root_view"; then umount "$image_root_view" 2>/dev/null || true; fi
+	if test ${#damaged[@]} -gt 0; then
+		status=damaged
+	elif test ${#repaired[@]} -gt 0; then
+		status=repaired
+	else
+		status=ok
+	fi
+	tmp=$data/.image-check.$$
+	# shellcheck disable=SC2015 # report a failure of any step
+	{
+		echo schema=1
+		echo "status=$status"
+		echo "manifest=$digest"
+		echo "checked=$started"
+		for name in "${repaired[@]}"; do echo "repaired=$name"; done
+		for name in "${damaged[@]}"; do echo "damaged=$name"; done
+	} >"$tmp" 2>/dev/null && chmod 600 "$tmp" && mv -f "$tmp" "$image_result" ||
+		{
+			rm -f "$tmp"
+			say "Could not record the result in $image_result; is the root full?"
+		}
+	say "Image check: $status (${#repaired[@]} repaired, ${#damaged[@]} damaged)"
 }
 # ---- end of the image check --------------------------------------------------
 
@@ -1470,26 +1620,28 @@ update_dir=/run/rc2fx-update
 # One record for `GET api/v1/update/last`, in the same key=value form rc2fxd
 # writes when it restores a bundle itself.
 update_record() {
-  local outcome=$1 from=${2:-} to=${3:-} reason=${4:-} gui=${5:-0} dir=/opt/rc2fx/data tmp
-  mkdir -p -m 700 "$dir" || return 0
-  tmp=$dir/.update-last.$$
-  if printf 'schema=1\noutcome=%s\nfrom=%s\nto=%s\nreason=%s\ngui=%s\n' \
-      "$outcome" "$from" "$to" "$reason" "$gui" > "$tmp"; then
-    chmod 600 "$tmp" && mv -f "$tmp" "$dir/update-last"
-  else
-    rm -f "$tmp"
-  fi
+	local outcome=$1 from=${2:-} to=${3:-} reason=${4:-} gui=${5:-0} dir=/opt/rc2fx/data tmp
+	mkdir -p -m 700 "$dir" || return 0
+	tmp=$dir/.update-last.$$
+	if printf 'schema=1\noutcome=%s\nfrom=%s\nto=%s\nreason=%s\ngui=%s\n' \
+		"$outcome" "$from" "$to" "$reason" "$gui" >"$tmp"; then
+		chmod 600 "$tmp" && mv -f "$tmp" "$dir/update-last"
+	else
+		rm -f "$tmp"
+	fi
 }
 
 # Whether the restarted controller is the target release and its audio is
 # advancing. audit.json is the native library's own report.
 update_ready() {
-  local target=$1 first second
-  test -f "$update_dir/started" || return 1
-  grep -qx "version=$target" "$update_dir/started" || return 1
-  pgrep -x rc2fxd > /dev/null || return 1
-  first=$(audit_callbacks); sleep 2; second=$(audit_callbacks)
-  test -n "$first" && test -n "$second" && test "$second" -gt "$first"
+	local target=$1 first second
+	test -f "$update_dir/started" || return 1
+	grep -qx "version=$target" "$update_dir/started" || return 1
+	pgrep -x rc2fxd >/dev/null || return 1
+	first=$(audit_callbacks)
+	sleep 2
+	second=$(audit_callbacks)
+	test -n "$first" && test -n "$second" && test "$second" -gt "$first"
 }
 
 # Applies an update that changed only the controller's side (restart=controller)
@@ -1500,105 +1652,121 @@ update_ready() {
 # ones (Runtime::connect); if it is not ready within a minute, the caller
 # restarts the mixer as for any other update.
 update_reload() {
-  local target=$1 stop_at=$2 name until
-  supervisor > /dev/null || return 1
-  grep -qx reload "$run/supervisor.features" 2>/dev/null || return 1
-  test "$(cat "$run/home" 2>/dev/null)" = "$home" || return 1
-  cmp -s "$run/rc2fx.sh" "$home/rc2fx.sh" || return 1
-  for name in librc2fx_native.so rc2fx-supervisor librc2fx_gui.so librc2fx_jackerr.so rc2fx_jackerr_snapshot; do
-    test "$(awk -v n="$name" '$2 == n' "$run/bundle.sums" 2>/dev/null)" \
-      = "$(awk -v n="$name" '$2 == n' "$home/SHA256SUMS")" || return 1
-  done
-  say "Restarting the controller alone; audio keeps running" >> "$logs/update.log"
-  touch "$run/reload"
-  until=$(( $(uptime_s) + 60 ))
-  test "$until" -le "$stop_at" || until=$stop_at
-  while test "$(uptime_s)" -lt "$until"; do
-    if update_ready "$target"; then
-      # What the running mixer was launched with, as far as `start` compares.
-      cp "$home/SHA256SUMS" "$run/bundle.sums"
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
+	local target=$1 stop_at=$2 name until
+	supervisor >/dev/null || return 1
+	grep -qx reload "$run/supervisor.features" 2>/dev/null || return 1
+	test "$(cat "$run/home" 2>/dev/null)" = "$home" || return 1
+	cmp -s "$run/rc2fx.sh" "$home/rc2fx.sh" || return 1
+	for name in librc2fx_native.so rc2fx-supervisor librc2fx_gui.so librc2fx_jackerr.so rc2fx_jackerr_snapshot; do
+		test "$(awk -v n="$name" '$2 == n' "$run/bundle.sums" 2>/dev/null)" \
+			= "$(awk -v n="$name" '$2 == n' "$home/SHA256SUMS")" || return 1
+	done
+	say "Restarting the controller alone; audio keeps running" >>"$logs/update.log"
+	touch "$run/reload"
+	until=$(($(uptime_s) + 60))
+	test "$until" -le "$stop_at" || until=$stop_at
+	while test "$(uptime_s)" -lt "$until"; do
+		if update_ready "$target"; then
+			# What the running mixer was launched with, as far as `start` compares.
+			cp "$home/SHA256SUMS" "$run/bundle.sums"
+			return 0
+		fi
+		sleep 1
+	done
+	return 1
 }
 
 update_commit() {
-  local id=${1:?update session id}
-  local req=$update_dir/commit-$id.request
-  local mode= target= from= deadline= gui=0 restart=mixer status=0 ok=0 stop_at
-  test -f "$req" || { echo "no update request $req" >&2; return 2; }
-  while IFS='=' read -r key value; do
-    case "$key" in
-      mode) mode=$value;;
-      target) target=$value;;
-      from) from=$value;;
-      deadline) deadline=$value;;
-      gui) gui=$value;;
-      restart) restart=$value;;
-    esac
-  done < "$req"
-  case "$mode" in commit|rollback) ;; *) echo "unknown update mode ${mode:-}" >&2; return 2;; esac
-  [[ $target =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo 'invalid update target' >&2; return 2; }
-  [[ $deadline =~ ^[0-9]+$ ]] || deadline=300
-  [[ $gui =~ ^[01]$ ]] || gui=0
-  mkdir -p -m 700 "$update_dir" "$logs"
-  # One driver at a time: the lock is held across the restart.
-  exec 9>"$update_dir/driver.lock" || return 1
-  flock -n 9 || { echo 'another update driver is running' >&2; return 1; }
-  say "Update $id: $mode to $target (from ${from:-unknown})" >> "$logs/update.log"
-  if test "$mode" = commit; then
-    # The launchers start the new bundle while this runs; without this record
-    # they would take the pending marker for a power cut and use the old one.
-    printf '%s %s\n' "$$" "$(start_time "$$")" > "$update_dir/driver"
-  else
-    rm -f "$update_dir/driver"
-  fi
-  rm -f "$update_dir/started"
-  stop_at=$(( $(uptime_s) + deadline ))
-  if test "$mode" = commit && test "$restart" = controller; then
-    if update_reload "$target" "$stop_at"; then
-      ok=1
-    else
-      say "Update $id: the controller alone could not apply it; restarting the mixer" >> "$logs/update.log"
-    fi
-  fi
-  if test "$ok" = 0; then
-    start --force --wait "$deadline" || status=$?
-    say "Update $id: restart finished with status $status" >> "$logs/update.log"
-    if test "$mode" = commit && test "$status" -eq 0; then
-      while test "$(uptime_s)" -lt "$stop_at"; do
-        if update_ready "$target"; then ok=1; break; fi
-        sleep 2
-      done
-    fi
-  fi
-  if test "$ok" = 1; then
-    update_record committed "$from" "$target" '' "$gui"
-    rm -f /opt/.rc2fx-update-pending
-    rm -f "$update_dir/driver"
-    # Nothing starts the rollback copy once the marker is gone. Its files are
-    # the old release's, kept alive by their hard links, so it would hold that
-    # space until the next update. One holding settings or logs is kept.
-    if test -d /opt/.rc2fx-previous && ! test -L /opt/.rc2fx-previous \
-        && ! test -e /opt/.rc2fx-previous/data && ! test -e /opt/.rc2fx-previous/logs; then
-      rm -rf /opt/.rc2fx-previous
-    fi
-    say "Update $id: committed $target" >> "$logs/update.log"
-    return 0
-  fi
-  say "Update $id: $target did not become ready; restoring the previous version" >> "$logs/update.log"
-  if test "$mode" = commit; then
-    # With the driver record gone, the launchers prefer .rc2fx-previous; its
-    # controller restores the files and records the outcome.
-    rm -f "$update_dir/driver"
-    status=0
-    start --force --wait "$deadline" || status=$?
-    say "Update $id: rollback restart finished with status $status" >> "$logs/update.log"
-  fi
-  # An interrupted rollback is finished by the next boot's controller.
-  return 0
+	local id=${1:?update session id}
+	local req=$update_dir/commit-$id.request
+	local mode='' target='' from='' deadline='' gui=0 restart=mixer status=0 ok=0 stop_at
+	test -f "$req" || {
+		echo "no update request $req" >&2
+		return 2
+	}
+	while IFS='=' read -r key value; do
+		case "$key" in
+		mode) mode=$value ;;
+		target) target=$value ;;
+		from) from=$value ;;
+		deadline) deadline=$value ;;
+		gui) gui=$value ;;
+		restart) restart=$value ;;
+		esac
+	done <"$req"
+	case "$mode" in commit | rollback) ;; *)
+		echo "unknown update mode ${mode:-}" >&2
+		return 2
+		;;
+	esac
+	[[ $target =~ ^[0-9]+(\.[0-9]+)*$ ]] || {
+		echo 'invalid update target' >&2
+		return 2
+	}
+	[[ $deadline =~ ^[0-9]+$ ]] || deadline=300
+	[[ $gui =~ ^[01]$ ]] || gui=0
+	mkdir -p -m 700 "$update_dir" "$logs"
+	# One driver at a time: the lock is held across the restart.
+	exec 9>"$update_dir/driver.lock" || return 1
+	flock -n 9 || {
+		echo 'another update driver is running' >&2
+		return 1
+	}
+	say "Update $id: $mode to $target (from ${from:-unknown})" >>"$logs/update.log"
+	if test "$mode" = commit; then
+		# The launchers start the new bundle while this runs; without this record
+		# they would take the pending marker for a power cut and use the old one.
+		printf '%s %s\n' "$$" "$(start_time "$$")" >"$update_dir/driver"
+	else
+		rm -f "$update_dir/driver"
+	fi
+	rm -f "$update_dir/started"
+	stop_at=$(($(uptime_s) + deadline))
+	if test "$mode" = commit && test "$restart" = controller; then
+		if update_reload "$target" "$stop_at"; then
+			ok=1
+		else
+			say "Update $id: the controller alone could not apply it; restarting the mixer" >>"$logs/update.log"
+		fi
+	fi
+	if test "$ok" = 0; then
+		start --force --wait "$deadline" || status=$?
+		say "Update $id: restart finished with status $status" >>"$logs/update.log"
+		if test "$mode" = commit && test "$status" -eq 0; then
+			while test "$(uptime_s)" -lt "$stop_at"; do
+				if update_ready "$target"; then
+					ok=1
+					break
+				fi
+				sleep 2
+			done
+		fi
+	fi
+	if test "$ok" = 1; then
+		update_record committed "$from" "$target" '' "$gui"
+		rm -f /opt/.rc2fx-update-pending
+		rm -f "$update_dir/driver"
+		# Nothing starts the rollback copy once the marker is gone. Its files are
+		# the old release's, kept alive by their hard links, so it would hold that
+		# space until the next update. One holding settings or logs is kept.
+		if test -d /opt/.rc2fx-previous && ! test -L /opt/.rc2fx-previous &&
+			! test -e /opt/.rc2fx-previous/data && ! test -e /opt/.rc2fx-previous/logs; then
+			rm -rf /opt/.rc2fx-previous
+		fi
+		say "Update $id: committed $target" >>"$logs/update.log"
+		return 0
+	fi
+	say "Update $id: $target did not become ready; restoring the previous version" >>"$logs/update.log"
+	if test "$mode" = commit; then
+		# With the driver record gone, the launchers prefer .rc2fx-previous; its
+		# controller restores the files and records the outcome.
+		rm -f "$update_dir/driver"
+		status=0
+		start --force --wait "$deadline" || status=$?
+		say "Update $id: rollback restart finished with status $status" >>"$logs/update.log"
+	fi
+	# An interrupted rollback is finished by the next boot's controller.
+	return 0
 }
 # ---- end of signed in-place updates ----------------------------------------
 
@@ -1624,122 +1792,172 @@ update_drive_file=RC2FX.UPD
 update_drive_label=RC2FX
 
 update_drive_lun() {
-  local lun
-  for lun in "${RC2FX_GADGET_ROOT:-/sys/kernel/config/usb_gadget}"/*/functions/mass_storage.usb0/lun.0; do
-    test -d "$lun" && { printf '%s\n' "$lun"; return 0; }
-  done
-  return 1
+	local lun
+	for lun in "${RC2FX_GADGET_ROOT:-/sys/kernel/config/usb_gadget}"/*/functions/mass_storage.usb0/lun.0; do
+		test -d "$lun" && {
+			printf '%s\n' "$lun"
+			return 0
+		}
+	done
+	return 1
 }
 
 # Only allow disk images inside the in-place update RAM directory.
 update_drive_image() {
-  local image=$1
-  case "$image" in
-    "$update_dir"/*/drive.img) ;;
-    *) return 1 ;;
-  esac
-  case "$image" in *..*) return 1 ;; esac
+	local image=$1
+	case "$image" in
+	"$update_dir"/*/drive.img) ;;
+	*) return 1 ;;
+	esac
+	case "$image" in *..*) return 1 ;; esac
 }
 
 update_drive_attach() {
-  local image=$1 bytes=$2 lun gadget udc file
-  update_drive_image "$image" || { echo 'not an update disk path' >&2; return 2; }
-  [[ $bytes =~ ^[0-9]+$ ]] && test "$bytes" -ge 1048576 || { echo 'invalid disk size' >&2; return 2; }
-  lun=$(update_drive_lun) || { echo 'this mixer has no removable USB drive' >&2; return 1; }
-  gadget=${lun%/functions/*}
-  udc=$(cat "$gadget/UDC" 2>/dev/null) || udc=
-  test -n "$udc" || { echo 'the USB gadget is not bound' >&2; return 1; }
-  file=$(cat "$lun/file" 2>/dev/null) || { echo 'cannot read the USB drive' >&2; return 1; }
-  test -z "$file" || { echo 'the USB drive is in use' >&2; return 1; }
-  rm -f "$image"
-  truncate -s "$bytes" "$image" || return 1
-  if ! mkfs.vfat -n "$update_drive_label" "$image" > /dev/null; then
-    rm -f "$image"
-    return 1
-  fi
-  # Check again in case RØDE claimed the LUN while we were formatting the image.
-  file=$(cat "$lun/file" 2>/dev/null) || file=x
-  if test -n "$file" || ! printf '%s\n' "$image" > "$lun/file"; then
-    rm -f "$image"
-    echo 'the USB drive is in use' >&2
-    return 1
-  fi
+	local image=$1 bytes=$2 lun gadget udc file
+	update_drive_image "$image" || {
+		echo 'not an update disk path' >&2
+		return 2
+	}
+	[[ $bytes =~ ^[0-9]+$ ]] && test "$bytes" -ge 1048576 || {
+		echo 'invalid disk size' >&2
+		return 2
+	}
+	lun=$(update_drive_lun) || {
+		echo 'this mixer has no removable USB drive' >&2
+		return 1
+	}
+	gadget=${lun%/functions/*}
+	udc=$(cat "$gadget/UDC" 2>/dev/null) || udc=
+	test -n "$udc" || {
+		echo 'the USB gadget is not bound' >&2
+		return 1
+	}
+	file=$(cat "$lun/file" 2>/dev/null) || {
+		echo 'cannot read the USB drive' >&2
+		return 1
+	}
+	test -z "$file" || {
+		echo 'the USB drive is in use' >&2
+		return 1
+	}
+	rm -f "$image"
+	truncate -s "$bytes" "$image" || return 1
+	if ! mkfs.vfat -n "$update_drive_label" "$image" >/dev/null; then
+		rm -f "$image"
+		return 1
+	fi
+	# Check again in case RØDE claimed the LUN while we were formatting the image.
+	file=$(cat "$lun/file" 2>/dev/null) || file=x
+	if test -n "$file" || ! printf '%s\n' "$image" >"$lun/file"; then
+		rm -f "$image"
+		echo 'the USB drive is in use' >&2
+		return 1
+	fi
 }
 
 # Detach IMAGE if the LUN still points to it. Leaves the LUN alone if it is
 # empty or points to another file (such as RØDE's), and fails if the host
 # computer still holds the disk open.
 update_drive_detach() {
-  local image=$1 lun file
-  lun=$(update_drive_lun) || return 0
-  file=$(cat "$lun/file" 2>/dev/null) || return 1
-  test "$file" = "$image" || return 0
-  printf '\n' > "$lun/file"
+	local image=$1 lun file
+	lun=$(update_drive_lun) || return 0
+	file=$(cat "$lun/file" 2>/dev/null) || return 1
+	test "$file" = "$image" || return 0
+	printf '\n' >"$lun/file"
 }
 
 update_drive_take() {
-  local image=$1 dest=$2 size=$3 lun file mnt status=0 source
-  update_drive_image "$image" || { echo 'not an update disk path' >&2; return 2; }
-  [[ $size =~ ^[0-9]+$ ]] || { echo 'invalid payload size' >&2; return 2; }
-  lun=$(update_drive_lun) || { echo 'this mixer has no removable USB drive' >&2; return 1; }
-  file=$(cat "$lun/file" 2>/dev/null) || { echo 'cannot read the USB drive' >&2; return 1; }
-  # Ejecting from the host clears the LUN; any other path means RØDE took it over.
-  if test -n "$file" && test "$file" != "$image"; then
-    echo 'the USB drive was taken for something else' >&2
-    return 1
-  fi
-  if test "$file" = "$image" && ! printf '\n' > "$lun/file"; then
-    echo 'the computer still holds the USB drive' >&2
-    return 1
-  fi
-  test -f "$image" || { echo 'the update disk is gone' >&2; return 1; }
-  mnt=${image%/drive.img}/drive
-  mkdir -p -m 700 "$mnt" || return 1
-  if ! mount -t vfat -o ro,loop,nodev,nosuid,noexec "$image" "$mnt"; then
-    rmdir "$mnt" 2>/dev/null
-    echo 'cannot read the update disk' >&2
-    return 1
-  fi
-  source=$mnt/$update_drive_file
-  if ! test -f "$source" || test -L "$source"; then
-    echo "the update disk has no $update_drive_file" >&2; status=1
-  elif test "$(stat -c %s "$source")" != "$size"; then
-    echo "$update_drive_file on the update disk is not $size bytes" >&2; status=1
-  elif ! cp "$source" "$dest"; then
-    status=1
-  fi
-  umount "$mnt" || status=1
-  rmdir "$mnt" 2>/dev/null || true
-  rm -f "$image"
-  return "$status"
+	local image=$1 dest=$2 size=$3 lun file mnt status=0 source
+	update_drive_image "$image" || {
+		echo 'not an update disk path' >&2
+		return 2
+	}
+	[[ $size =~ ^[0-9]+$ ]] || {
+		echo 'invalid payload size' >&2
+		return 2
+	}
+	lun=$(update_drive_lun) || {
+		echo 'this mixer has no removable USB drive' >&2
+		return 1
+	}
+	file=$(cat "$lun/file" 2>/dev/null) || {
+		echo 'cannot read the USB drive' >&2
+		return 1
+	}
+	# Ejecting from the host clears the LUN; any other path means RØDE took it over.
+	if test -n "$file" && test "$file" != "$image"; then
+		echo 'the USB drive was taken for something else' >&2
+		return 1
+	fi
+	if test "$file" = "$image" && ! printf '\n' >"$lun/file"; then
+		echo 'the computer still holds the USB drive' >&2
+		return 1
+	fi
+	test -f "$image" || {
+		echo 'the update disk is gone' >&2
+		return 1
+	}
+	mnt=${image%/drive.img}/drive
+	mkdir -p -m 700 "$mnt" || return 1
+	if ! mount -t vfat -o ro,loop,nodev,nosuid,noexec "$image" "$mnt"; then
+		rmdir "$mnt" 2>/dev/null
+		echo 'cannot read the update disk' >&2
+		return 1
+	fi
+	source=$mnt/$update_drive_file
+	if ! test -f "$source" || test -L "$source"; then
+		echo "the update disk has no $update_drive_file" >&2
+		status=1
+	elif test "$(stat -c %s "$source")" != "$size"; then
+		echo "$update_drive_file on the update disk is not $size bytes" >&2
+		status=1
+	elif ! cp "$source" "$dest"; then
+		status=1
+	fi
+	umount "$mnt" || status=1
+	rmdir "$mnt" 2>/dev/null || true
+	rm -f "$image"
+	return "$status"
 }
 
 update_drive_drop() {
-  local image=$1 mnt
-  update_drive_image "$image" || return 2
-  update_drive_detach "$image" || true
-  mnt=${image%/drive.img}/drive
-  if grep -qs " $mnt " "$proc/mounts"; then umount "$mnt" || true; fi
-  rmdir "$mnt" 2>/dev/null || true
-  rm -f "$image"
+	local image=$1 mnt
+	update_drive_image "$image" || return 2
+	update_drive_detach "$image" || true
+	mnt=${image%/drive.img}/drive
+	if grep -qs " $mnt " "$proc/mounts"; then umount "$mnt" || true; fi
+	rmdir "$mnt" 2>/dev/null || true
+	rm -f "$image"
 }
 
 update_drive_drop_stale() {
-  local lun file
-  lun=$(update_drive_lun) || return 0
-  file=$(cat "$lun/file" 2>/dev/null) || return 0
-  update_drive_image "$file" && update_drive_drop "$file"
-  return 0
+	local lun file
+	lun=$(update_drive_lun) || return 0
+	file=$(cat "$lun/file" 2>/dev/null) || return 0
+	update_drive_image "$file" && update_drive_drop "$file"
+	return 0
 }
 
 update_drive() {
-  case "${1:-}" in
-    attach) test $# -eq 3 || return 2; update_drive_attach "$2" "$3" ;;
-    take) test $# -eq 4 || return 2; update_drive_take "$2" "$3" "$4" ;;
-    drop) test $# -eq 2 || return 2; update_drive_drop "$2" ;;
-    drop-stale) update_drive_drop_stale ;;
-    *) echo 'usage: update-drive attach|take|drop|drop-stale ...' >&2; return 2 ;;
-  esac
+	case "${1:-}" in
+	attach)
+		test $# -eq 3 || return 2
+		update_drive_attach "$2" "$3"
+		;;
+	take)
+		test $# -eq 4 || return 2
+		update_drive_take "$2" "$3" "$4"
+		;;
+	drop)
+		test $# -eq 2 || return 2
+		update_drive_drop "$2"
+		;;
+	drop-stale) update_drive_drop_stale ;;
+	*)
+		echo 'usage: update-drive attach|take|drop|drop-stale ...' >&2
+		return 2
+		;;
+	esac
 }
 # ---- end of update drive ----------------------------------------------------
 
@@ -1747,19 +1965,49 @@ update_drive() {
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then return 0; fi
 
 case "${1:-}" in
-  update-commit) shift; update_commit "$@" ;;
-  gui-launch) shift; gui_launch "$@" ;;
-  start) shift; start "$@" ;;
-  restart) shift; start --force "$@" ;;
-  stop) stop ;;
-  status) status ;;
-  logs) logs ;;
-  launch) shift; launch "$@" ;;
-  usb-quiesce) usb_quiesce ;;
-  supervise-restart) shift; supervise_restart "$@" ;;
-  supervise-exit) shift; supervise_exit "$@" ;;
-  image-check) image_check ;;
-  flash-verify) shift; flash_verify "$@" ;;
-  update-drive) shift; update_drive "$@" ;;
-  *) sed -n '2,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
+update-commit)
+	shift
+	update_commit "$@"
+	;;
+gui-launch)
+	shift
+	gui_launch "$@"
+	;;
+start)
+	shift
+	start "$@"
+	;;
+restart)
+	shift
+	start --force "$@"
+	;;
+stop) stop ;;
+status) status ;;
+logs) logs ;;
+launch)
+	shift
+	launch "$@"
+	;;
+usb-quiesce) usb_quiesce ;;
+supervise-restart)
+	shift
+	supervise_restart "$@"
+	;;
+supervise-exit)
+	shift
+	supervise_exit "$@"
+	;;
+image-check) image_check ;;
+flash-verify)
+	shift
+	flash_verify "$@"
+	;;
+update-drive)
+	shift
+	update_drive "$@"
+	;;
+*)
+	sed -n '2,22s/^# \{0,1\}//p' "$0"
+	exit 2
+	;;
 esac

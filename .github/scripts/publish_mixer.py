@@ -1,12 +1,13 @@
 """Publish a signed mixer release, then update discovery metadata on `mixer-metadata`."""
+
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-from release_common import MetadataRepo, SIGNED_ROLES, require_newer_versions, sha256
+from release_common import SIGNED_ROLES, MetadataRepo, require_newer_versions, sha256
 
 # Discovery metadata is mutable so it lives on its own branch while releases stay immutable.
 BRANCH = "mixer-metadata"
@@ -23,7 +24,9 @@ def gh(*args):
 
 
 def state(tag):
-    return json.loads(gh("release", "view", tag, "--json", "id,tagName,isDraft,targetCommitish"))
+    return json.loads(
+        gh("release", "view", tag, "--json", "id,tagName,isDraft,targetCommitish")
+    )
 
 
 def verify_upload(tag, files):
@@ -32,12 +35,18 @@ def verify_upload(tag, files):
             gh("release", "download", tag, "--pattern", file.name, "--dir", temporary)
             actual = Path(temporary, file.name).read_bytes()
             if sha256(actual) != sha256(file.read_bytes()):
-                raise ValueError(f"Uploaded {tag}/{file.name} differs from signed local bytes")
+                raise ValueError(
+                    f"Uploaded {tag}/{file.name} differs from signed local bytes"
+                )
 
 
 def package_targets(package, metadata):
     targets = json.loads((metadata / "targets.json").read_text())["signed"]["targets"]
-    mixers = [(name, target) for name, target in targets.items() if "rc2fxMixer" in target.get("custom", {})]
+    mixers = [
+        (name, target)
+        for name, target in targets.items()
+        if "rc2fxMixer" in target.get("custom", {})
+    ]
     if len(mixers) != 1:
         raise ValueError("Expected exactly one mixer release")
     name, target = mixers[0]
@@ -76,8 +85,19 @@ def publish(package, metadata):
     with tempfile.TemporaryDirectory() as temporary:
         require_newer(META.fetch(Path(temporary)), metadata, SIGNED_ROLES)
     # Never overwrite an existing release (even a draft); fixes require a new version.
-    gh("release", "create", tag, "--draft", "--latest=false", "--target", os.environ["RELEASE_COMMIT"],
-       "--title", f"RC2FX mixer {version}", "--notes", f"RC2FX mixer software {version}. Install through the RC2FX desktop app's USB firmware installer.")
+    gh(
+        "release",
+        "create",
+        tag,
+        "--draft",
+        "--latest=false",
+        "--target",
+        os.environ["RELEASE_COMMIT"],
+        "--title",
+        f"RC2FX mixer {version}",
+        "--notes",
+        f"RC2FX mixer software {version}. Install through the RC2FX desktop app's USB firmware installer.",
+    )
     gh("release", "upload", tag, *files)
     verify_upload(tag, files)
     release = state(tag)
@@ -111,10 +131,16 @@ def reauthorize(package, metadata):
         old = json.loads((branch.path / "targets.json").read_text())["signed"]
         new = json.loads((metadata / "targets.json").read_text())["signed"]
         if new["targets"] != old["targets"]:
-            raise ValueError("Reauthorization cannot change target identities, pins or compatibility")
+            raise ValueError(
+                "Reauthorization cannot change target identities, pins or compatibility"
+            )
         verify_upload(tag, files)
         # Only update the signed role files (leave roots/payloads untouched).
-        META.update(branch, [metadata / name for name in SIGNED_ROLES], f"Reauthorize mixer {version}")
+        META.update(
+            branch,
+            [metadata / name for name in SIGNED_ROLES],
+            f"Reauthorize mixer {version}",
+        )
 
 
 def refresh(metadata):

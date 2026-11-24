@@ -38,11 +38,14 @@ func Build() error {
 	if err := deps.FetchVelopack([]string{"linux-amd64"}); err != nil {
 		return err
 	}
-	tools := filepath.Join(containerCache, "tools")
-	appimage, err := deps.FetchAppImageTools(tools)
-	if err != nil {
+	// linuxdeploy and patchelf at mise.toml's pins, checked against
+	// mise.lock; packaging then finds them through mise.
+	install := exec.Command("mise", "install", "--locked", "github:linuxdeploy/linuxdeploy", "github:NixOS/patchelf")
+	install.Dir = root
+	if err := task.Run(install); err != nil {
 		return err
 	}
+	tools := filepath.Join(containerCache, "tools")
 	vpk, err := deps.FetchVPK(tools)
 	if err != nil {
 		return err
@@ -52,8 +55,6 @@ func Build() error {
 		return err
 	}
 	for name, value := range map[string]string{
-		"RC2FX_LINUXDEPLOY":   appimage.Linuxdeploy,
-		"RC2FX_PATCHELF":      appimage.Patchelf,
 		"RC2FX_VPK":           vpk,
 		"RC2FX_RELEASE_BUILD": "1",
 	} {

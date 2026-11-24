@@ -21,8 +21,11 @@ sudo apt install git curl build-essential golang-go \
   libvulkan1 mesa-vulkan-drivers policykit-1
 ```
 
-On some releases `policykit-1` is named `pkexec` instead. Install `just` and
-`zig` from your distro repos if they're new enough, or grab them upstream.
+On some releases `policykit-1` is named `pkexec` instead. To install `just`,
+`zig`, the linters, and Linux packaging tools (`linuxdeploy` and `patchelf`) at
+the versions pinned in `mise.toml`, install [mise](https://mise.jdx.dev) and
+run `mise install` (or let `just setup` run it). Without `mise`, install `just`
+and `zig` from your distro repos if they're new enough, or grab them upstream.
 
 ### Fedora
 
@@ -41,7 +44,9 @@ sudo pacman -S --needed git curl base-devel go \
 ```
 
 You'll need the Go version specified in `desktop/go.mod`. If your distro ships
-an older release, install Go directly from [go.dev](https://go.dev/dl/).
+an older release, install Go directly from [go.dev](https://go.dev/dl/). If you
+use [mise](https://mise.jdx.dev) for the pinned tools in `mise.toml`, you can
+omit `just` and `zig` from the package commands above.
 
 Make sure you also have the Vulkan driver for your GPU (`vulkan-radeon`,
 `vulkan-intel`, or NVIDIA's driver packages).
@@ -52,9 +57,10 @@ Make sure you also have the Vulkan driver for your GPU (`vulkan-radeon`,
   driver.
 - The installer elevates via `pkexec`. If you're on a minimal desktop or window
   manager, make sure a polkit authentication agent is running.
-- Fedora's zig 0.16 with cargo-zigbuild 0.24 is known to work for the mixer
-  cross-build. Other pairings probably work fine, they just haven't all been
-  verified.
+- `mise.toml` pins `zig` 0.16.0, which works with `cargo-zigbuild` 0.24 for the
+  mixer cross-build (Fedora's `zig` 0.16 works as well). Other versions
+  probably work fine, though `xtask` warns when a tool on `PATH` differs from
+  the pinned version.
 
 From here, continue with [Building from source](building.md).
 

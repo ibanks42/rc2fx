@@ -21,15 +21,31 @@ the Rust tests won't run locally.
   collecting mixer crate license notices during `just package`. The toolchain
   version is pinned in `rust-toolchain.toml` and installs automatically on
   first use.
-- [just](https://just.systems): install via `cargo install --locked just`,
-  `winget install Casey.Just`, `brew install just`, or your system package
-  manager.
-- [zig](https://ziglang.org/download/) 0.13 or newer: `winget install zig.zig`,
-  `brew install zig`, `pip install ziglang`, or your package manager. Zig acts
-  as the C compiler and linker for the mixer build, targeting the mixer's
-  glibc 2.35 directly with no separate sysroot.
+- [mise](https://mise.jdx.dev) (optional, recommended): `mise.toml` and
+  `mise.lock` pin the repository's command-line tools with checksums for
+  Linux (x64), macOS (arm64 and x64), and Windows (x64): `just`, `zig`, `ruff`,
+  `shellcheck`, `shfmt`, `actionlint`, `clang-format` (from conda-forge), and
+  on Linux `linuxdeploy` and `patchelf`. Run `mise install` (or let `just setup`
+  run it) to install those exact versions. `mise` is optional: `xtask` looks for
+  each tool on `PATH` first, falls back to `mise which` when `mise` is
+  installed without shell activation, and prints a warning if a tool's version
+  differs from the pin in `mise.toml`.
+- Without `mise`, install the command-line tools you need on `PATH` yourself:
+  - [just](https://just.systems): `cargo install --locked just`,
+    `winget install Casey.Just`, `brew install just`, or your system package
+    manager.
+  - [zig](https://ziglang.org/download/) matching the version pinned in
+    `mise.toml` (`0.16.0`): `winget install zig.zig`, `brew install zig`,
+    `pip install ziglang`, or your package manager. Zig acts as the C compiler
+    and linker for the mixer build, targeting the mixer's glibc 2.35 directly
+    with no separate sysroot.
+  - On Linux, `linuxdeploy` and `patchelf` for packaging, plus the linters
+    (`ruff`, `shellcheck`, `shfmt`, `actionlint`, and `clang-format`) for full
+    `just lint` coverage.
 - [.NET SDK](https://dotnet.microsoft.com/download) 8 or newer, needed by
-  `just setup` and `just package` to install and run Velopack's `vpk`.
+  `just setup` and `just package` to install and run Velopack's `vpk`. Neither
+  `.NET` nor `vpk` is in `mise.toml` because `mise` cannot record checksums for
+  them.
 - A C compiler for the desktop app's cgo dependencies (the UI and storage
   repair libraries):
   - **Windows:** MinGW-w64 gcc on `PATH` (for example via
@@ -39,7 +55,9 @@ the Rust tests won't run locally.
   - **Linux:** see [Linux setup](linux.md).
   - **macOS:** Xcode command-line tools.
 
-Once those are installed, run the following from the repository root:
+Once those are installed, run the following from the repository root (if you
+installed `mise` instead of a global `just`, run `mise install` first or invoke
+`go -C tools/xtask run . setup` and `git config core.hooksPath .githooks`):
 
 ```sh
 just setup
@@ -48,14 +66,15 @@ just setup
 `just setup` installs everything needed to build, package, and run the desktop
 app and to build the mixer runtime: it downloads the pinned goui-kit static
 library and Velopack's C library for your platform, adds the mixer's Rust
-target (`aarch64-unknown-linux-gnu`), installs `cargo-zigbuild` and
-`cargo-about` 0.8.4, checks that `zig` is on `PATH`, installs the pinned `vpk`
-into `desktop/third_party/tools/rc2fx-vpk`, and activates the pre-commit
-formatting hook in `.githooks`. On x86-64 Linux, it also installs the pinned
-`linuxdeploy` and `patchelf` into `desktop/third_party/tools/appimage`,
-installs `mksquashfs` via your system package manager (with `sudo`) when
-missing, and generates the AppImage runtime notices and source archive. Running
-`just setup` again skips downloads and tools that are already current.
+target (`aarch64-unknown-linux-gnu`), runs `mise install` when `mise` is
+installed (or lists any missing pinned tools and how to install them without
+`mise`), installs `cargo-zigbuild` and `cargo-about` 0.8.4, checks for `zig`,
+installs the pinned `vpk` into `desktop/third_party/tools/rc2fx-vpk`, and
+activates the pre-commit lint hook in `.githooks`. On Linux, it also verifies
+that `linuxdeploy` and `patchelf` are available, installs `mksquashfs` via your
+system package manager (with `sudo`) when missing, and generates the AppImage
+runtime notices and source archive. Running `just setup` again skips downloads
+and tools that are already current.
 
 For CI or fetching another platform's build, run
 `go -C tools/xtask run . fetch-goui-kit TARGET` (for example
@@ -75,7 +94,8 @@ for every other package run without it.
 
 ```sh
 just app           # run the desktop app (development build; `just app-release` for release)
-just test          # Go formatting, vet, and tests for the desktop app and tools/xtask, then (on Linux) the Rust workspace tests and Clippy
+just lint          # check formatting and lints across every language
+just test          # schema check, lints, Go vet and tests, then (on Linux) the Rust workspace tests and Clippy
 just test-mixer    # mixer-side tests (Linux, with python3 and a C compiler)
 ```
 
@@ -112,14 +132,45 @@ and matching the configuration measured on hardware. Installing and running a
 source build works the same as described in the
 [user guide](../user/installing.md).
 
-`just test` checks `desktop/` and `tools/xtask/`, and fails on any Clippy
-warning, `go vet` issue, or unformatted Go file, even if all tests pass. On Linux it also lints the `bench-kernels`
+`just test` runs `schema --check` and `just lint`, checks `desktop/` and
+`tools/xtask/`, and fails on any formatting or lint error, Clippy warning, or
+`go vet` issue, even if all tests pass. On Linux it also lints the `bench-kernels`
 feature; on Windows and macOS it runs only the Go checks
 (`just test-rust` runs the Rust checks by themselves on Linux). The Rust
 workspace tests invoke `go run ./internal/interop` to verify Rust/Go wire
 parity, so Go must be on `PATH` when running `cargo test --workspace`. The
 native library and benchmark crates are separate Cargo workspaces checked by
 `just test-mixer` alongside the Python and C test suites.
+
+### Formatting and lints
+
+```sh
+just lint   # go -C tools/xtask run . lint
+just fmt    # go -C tools/xtask run . lint --fix
+```
+
+`just lint` checks every language in the repository in one pass: Go (`gofmt`),
+Rust (`cargo fmt` across all three Rust workspaces: `Cargo.toml`,
+`crates/rc2fx-bench`, and `tools/src_fast_check`), Python (`ruff format` and
+`ruff check`), C (`clang-format`), shell (`shfmt` and `shellcheck`), and GitHub
+workflows (`actionlint`, passing `shellcheck` for `run:` scripts when
+available). `just fmt` formats every language and applies safe `ruff` lint
+fixes.
+
+Every language uses its tool's standard style: `.clang-format` is plain LLVM
+style, and `shfmt` and `ruff` use their defaults (`ruff.toml` exists only so a
+personal ruff config outside the repository does not apply).
+
+`gofmt` and `rustfmt` come from your Go and Rust toolchains; the rest come from
+`mise` (pinned in `mise.toml` and `mise.lock`) or `PATH`. When a tool on `PATH`
+differs from the pinned version, `xtask` prints a warning that its output may
+differ from CI. Locally, any missing tool is skipped with a warning; in CI
+(when the `CI` environment variable is set), a missing tool fails the run.
+
+The pre-commit hook in `.githooks/pre-commit` (enabled by `just setup`) runs
+`go -C tools/xtask run . lint --staged` on staged files before each commit.
+Pass `git commit --no-verify` to skip it once. `just test` also runs `lint`
+across the whole repository.
 
 ## 3. Package it
 
@@ -184,22 +235,22 @@ not have to install them by hand:
 - **Velopack (`vpk`):** `just setup` (or `go -C tools/xtask run . fetch-vpk` on its
   own) installs the pinned `vpk` (`1.3.39-g8d2844f`, requiring the .NET SDK)
   into `desktop/third_party/tools/rc2fx-vpk`, where packaging finds it
-  automatically when `RC2FX_VPK` is unset. On Windows, release builds
+  automatically when `RC2FX_VPK` is unset. (`vpk` and the .NET SDK stay outside
+  `mise.toml` because `mise` cannot record checksums for them.) On Windows, release builds
   (`RC2FX_RELEASE_BUILD=1`) also require MinGW-w64's `windres`
   (`RC2FX_WINDRES`, or `x86_64-w64-mingw32-windres` / `windres` on `PATH`) to
   embed the icon and version metadata in `rc2fx.exe`; non-release builds skip
   resources if `windres` is absent.
-- **Linux AppImage tools and notices:** On x86-64 Linux, `just setup` installs
-  the pinned `linuxdeploy` and `patchelf` into
-  `desktop/third_party/tools/appimage` (also available via
-  `go -C tools/xtask run . fetch-appimage-tools`), installs `mksquashfs` via your
-  system package manager if it is missing, and runs
-  `.github/scripts/prepare-appimage-notices.py` to generate the AppImage
+- **Linux AppImage tools and notices:** On Linux, `linuxdeploy` and `patchelf`
+  are pinned in `mise.toml` and installed by `mise` during `just setup` (or
+  found on `PATH` without `mise`). `just setup` verifies both are available,
+  installs `mksquashfs` via your system package manager if it is missing, and
+  runs `.github/scripts/prepare-appimage-notices.py` to generate the AppImage
   runtime's license notices and source archive (see
   [AppImage runtime sources](releases.md#appimage-runtime-sources)). Packaging
-  uses the installed `linuxdeploy` and `patchelf` automatically when
-  `RC2FX_LINUXDEPLOY` and `RC2FX_PATCHELF` are unset. Since `vpk` prepends its
-  own AppImage runtime, you don't need a separate runtime or `appimagetool`.
+  finds `linuxdeploy` and `patchelf` on `PATH` or through `mise` automatically
+  when `RC2FX_LINUXDEPLOY` and `RC2FX_PATCHELF` are unset. Since `vpk` prepends
+  its own AppImage runtime, you don't need a separate runtime or `appimagetool`.
 - **glibc compatibility:** An AppImage requires at least the glibc version it
   was built against. Release builds run inside the AlmaLinux 8 container
   described [below](#check-the-linux-packages-before-a-release) (glibc 2.28).
@@ -233,8 +284,10 @@ session, FUSE mounting, or USB mixer communication; test those manually.
 
 The build runs against a snapshot of your working tree (including uncommitted
 and untracked files, excluding gitignored ones) inside the AlmaLinux 8
-container defined by `.github/scripts/package-check.Containerfile`. Release
-builds use the same container, and the **Check** workflow runs lints and tests
+container defined by `.github/scripts/package-check.Containerfile`, which
+includes checksum-verified `mise` and runs `mise install --locked` to fetch
+`linuxdeploy` and `patchelf` at the pins in `mise.lock`. Release
+builds use the same container, and the **Check** workflow runs Rust lints and tests
 in it. AlmaLinux 8 provides glibc 2.28, keeping the AppImage compatible with
 Debian 10, Ubuntu 20.04, RHEL 8, Fedora 29, and newer. Because the AppImage
 doesn't bundle the mixer runtime, no mixer cross-build runs here. Local runs

@@ -54,6 +54,8 @@ See [Architecture](architecture.md) for how all the pieces fit together.
 | `mixer/scripts` | Launcher, shims, and installer scripts that run on the mixer, with tests in `mixer/scripts/tests` |
 | `schema/` | Shared wire schema definitions (`schema/core.go`, `schema/payload.go`) generated into both Rust and Go via `just schema` (`go -C tools/xtask run . schema`) |
 | `config/firmware-profiles.json` | [Firmware catalog](../reference/firmware.md) |
+| `mise.toml`, `mise.lock` | Pinned command-line tool versions and per-platform checksums (`just`, `zig`, linters, and Linux packaging tools; `mise` is optional) |
+| `.clang-format`, `ruff.toml` | Style config for C (plain LLVM style) and Python (`ruff` defaults, overriding any personal config) |
 | `tools/xtask` | Build, deploy, and packaging tasks (`github.com/ibanks42/rc2fx/tools/xtask`), run via `just` or `go -C tools/xtask run . <command>` |
 | `tools/firmware_audit` | Audits a new RØDE firmware against the hooks RC2FX relies on |
 | `tools/src_fast_check` | Compares the library's sample-rate converter (`src_fast_core.rs`) against real libsamplerate on AArch64 or under qemu |

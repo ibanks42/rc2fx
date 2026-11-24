@@ -117,7 +117,9 @@ once the first signed release and its metadata are live.
    `.github/scripts/mixer_version.py` writes the bumped version to
    `config/mixer-release.json` before building. If `config/mixer-release.json`
    was already bumped to that exact version in git, it's kept; any other
-   mismatch stops the run. The first job builds and tests the mixer, packs the
+   mismatch stops the run. The first job installs the pinned `zig` from
+   `mise.toml` via `jdx/mise-action` (alongside `cargo-zigbuild` and
+   `cargo-about`), builds and tests the mixer, packs the
    fixed-file envelope, firmware catalog, and license notices, and uploads an
    unsigned artifact with no signing keys in sight.
    With **dry-run** enabled, the run stops here: it never asks for the

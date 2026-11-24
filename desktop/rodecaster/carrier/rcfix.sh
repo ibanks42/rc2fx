@@ -801,6 +801,7 @@ rcfix_attr() {
 	cat "$1" 2>/dev/null
 }
 
+# shellcheck disable=SC2329 # called through rcfix_act
 rcfix_set_attr() {
 	printf '%s\n' "$2" 2>/dev/null >"$1"
 }

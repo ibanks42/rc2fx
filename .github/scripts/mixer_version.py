@@ -7,6 +7,7 @@ If config/mixer-release.json already matches the target version (e.g. bumped man
 it is kept; any other mismatch is rejected. If no mixer tags exist yet, the checked-in
 version is used as-is. Writes `version=` and `changed=` to $GITHUB_OUTPUT if set.
 """
+
 import argparse
 import json
 import os
@@ -35,7 +36,9 @@ def bumped(version, bump):
 
 
 def latest(tags):
-    versions = [tuple(int(p) for p in m.groups()) for m in map(STABLE.fullmatch, tags) if m]
+    versions = [
+        tuple(int(p) for p in m.groups()) for m in map(STABLE.fullmatch, tags) if m
+    ]
     return max(versions, default=None)
 
 
@@ -60,7 +63,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bump", choices=["patch", "minor", "major"], required=True)
     args = parser.parse_args()
-    tags = subprocess.check_output(["git", "tag", "--list", "mixer-v*"], text=True).split()
+    tags = subprocess.check_output(
+        ["git", "tag", "--list", "mixer-v*"], text=True
+    ).split()
     manifest = json.loads(MANIFEST.read_text())
     version, changed = next_version(parse(manifest["version"]), latest(tags), args.bump)
     text = ".".join(map(str, version))

@@ -16,9 +16,9 @@ import (
 	"github.com/ibanks42/rc2fx/desktop/common"
 	"github.com/ibanks42/rc2fx/desktop/core"
 	"github.com/ibanks42/rc2fx/desktop/installer/embed"
-	"github.com/ibanks42/rc2fx/tools/xtask/internal/deps"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/licenses"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/task"
+	"github.com/ibanks42/rc2fx/tools/xtask/internal/toolpins"
 )
 
 const (
@@ -35,28 +35,24 @@ type tools struct {
 	patchelf    string
 }
 
-// toolsFromEnv reads the pinned tool paths from the environment when set,
-// or else the ones `go -C tools/xtask run . setup` installed, so tool versions
-// stay defined in tools/xtask/internal/deps/tools.go.
-func toolsFromEnv(root string) (tools, error) {
-	linuxdeploy, err := tool("RC2FX_LINUXDEPLOY", deps.LocalLinuxdeploy(root))
+// toolsFromEnv reads the AppImage tool paths from RC2FX_LINUXDEPLOY and
+// RC2FX_PATCHELF when set, or else finds the versions mise.toml pins.
+func toolsFromEnv() (tools, error) {
+	linuxdeploy, err := tool("RC2FX_LINUXDEPLOY", toolpins.Linuxdeploy)
 	if err != nil {
 		return tools{}, err
 	}
-	patchelf, err := tool("RC2FX_PATCHELF", deps.LocalPatchelf(root))
+	patchelf, err := tool("RC2FX_PATCHELF", toolpins.Patchelf)
 	if err != nil {
 		return tools{}, err
 	}
 	return tools{linuxdeploy, patchelf}, nil
 }
 
-func tool(variable, local string) (string, error) {
+func tool(variable string, pinned toolpins.Tool) (string, error) {
 	path, ok := os.LookupEnv(variable)
-	if !ok && local != "" {
-		return local, nil
-	}
 	if !ok {
-		return "", task.Errorf("%s must point to the pinned AppImage tool; run `just setup` to install it", variable)
+		return toolpins.Find(pinned)
 	}
 	if !filepath.IsAbs(path) {
 		return "", task.Errorf("%s must be an absolute path: %s", variable, path)
@@ -412,7 +408,13 @@ func deploy(appdir, arch string, t tools) error {
 		"--exclude-library", "libpcre2-8.so*",
 	)
 	command.Dir = filepath.Dir(appdir)
-	command.Env = append(os.Environ(), "ARCH="+machine, "APPIMAGE_EXTRACT_AND_RUN=1", "NO_STRIP=1", "PATCHELF="+t.patchelf)
+	// linuxdeploy is an AppImage that unpacks itself into TMPDIR on each run.
+	unpack := filepath.Join(filepath.Dir(appdir), "linuxdeploy-tmp")
+	if err := os.MkdirAll(unpack, 0o777); err != nil {
+		return task.Error(task.IOError(err))
+	}
+	defer os.RemoveAll(unpack)
+	command.Env = append(os.Environ(), "ARCH="+machine, "APPIMAGE_EXTRACT_AND_RUN=1", "NO_STRIP=1", "PATCHELF="+t.patchelf, "TMPDIR="+unpack)
 	if err := task.Run(command); err != nil {
 		return err
 	}

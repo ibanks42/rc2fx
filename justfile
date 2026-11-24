@@ -8,7 +8,7 @@ xtask := "go -C tools/xtask run ."
 default:
     @just --list --unsorted
 
-# One-time setup for building, packaging, and running the app and building the mixer: the goui-kit and Velopack libraries, the Rust target, cargo-zigbuild, cargo-about, vpk, the Linux AppImage tools and notices, a zig check, and the pre-commit formatting hook
+# One-time setup for building, packaging, and running the app and building the mixer: the goui-kit and Velopack libraries, the Rust target, pinned tools via mise (when installed), cargo-zigbuild, cargo-about, vpk, a zig check, Linux packaging checks/mksquashfs/notices, and the pre-commit lint hook
 setup:
     {{ xtask }} setup
     git config core.hooksPath .githooks
@@ -97,15 +97,23 @@ mixer-disable:
 schema:
     {{ xtask }} schema
 
+# Check formatting and lints for Go, Rust, Python, C, shell, and GitHub workflows (tools from mise.toml; missing ones are skipped)
+lint:
+    {{ xtask }} lint
+
+# Format every language and apply safe lint fixes
+fmt:
+    {{ xtask }} lint --fix
+
 # Tests and lints: the desktop app and tools/xtask (Go; the UI packages only when the goui-kit download is linked) and, on Linux, the Rust workspace
 [unix]
 test:
     {{ xtask }} schema --check
-    cd desktop && test -z "$(gofmt -l $(go list -e -f '{{ "{{" }}.Dir{{ "}}" }}' ./...))"
+    {{ xtask }} lint
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && CGO_ENABLED=0 go vet $pkgs
     pkgs=$({{ xtask }} non-ui-packages) && cd desktop && if [ -e third_party/goui-kit ]; then CGO_LDFLAGS="-L$PWD/third_party/goui-kit/lib" go test -tags gkstatic ./...; else go test $pkgs; fi
     go -C desktop test -tags mockmixer ./transport/...
-    cd tools/xtask && test -z "$(gofmt -l .)" && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...
+    cd tools/xtask && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...
     if [ "$(uname -s)" = Linux ]; then {{ just_executable() }} test-rust; else echo "Rust tests skipped: the Rust crates build for Linux only"; fi
 
 # Tests and lints of the Rust workspace, warnings as errors (the Rust crates build for Linux only)
@@ -121,11 +129,10 @@ test:
     $nocgo = & { {{ xtask }} non-ui-packages }; $pkgs = if (Test-Path desktop/third_party/goui-kit) { './...' } else { $nocgo }; $env:CGO_ENABLED='0'; go -C desktop vet $nocgo; if (-not $?) { exit 1 }; Remove-Item Env:CGO_ENABLED; if (Test-Path desktop/third_party/goui-kit) { $env:CGO_LDFLAGS = "-L$((Resolve-Path desktop/third_party/goui-kit/lib).Path)" }; go -C desktop test -tags gkstatic $pkgs; if (-not $?) { exit 1 }
     go -C desktop test -tags mockmixer ./transport/...
     $env:CGO_ENABLED='0'; go -C tools/xtask vet ./...; if (-not $?) { exit 1 }; go -C tools/xtask test ./...; if (-not $?) { exit 1 }
+    {{ xtask }} lint
 
 # Tests of the mixer side: the native library binding check, launcher scripts and C modules (Linux, with python3 and cc)
 test-mixer:
-    cargo fmt --all --manifest-path crates/rc2fx-bench/Cargo.toml -- --check
-    cargo fmt --all --manifest-path tools/src_fast_check/Cargo.toml -- --check
     cargo check --locked --manifest-path crates/rc2fx-bench/Cargo.toml --all-targets
     cargo build --locked -p rc2fx-native
     for t in mixer/scripts/tests/*.py; do python3 "$t" || exit 1; done

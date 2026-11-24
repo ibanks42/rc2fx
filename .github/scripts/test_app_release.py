@@ -11,8 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import publish_app as app  # noqa: E402
-from release_common import BareRemote, sha256 as sha  # noqa: E402
+import publish_app as app
+from release_common import BareRemote
+from release_common import sha256 as sha
 
 
 def assets(version):
@@ -33,10 +34,20 @@ class FakeGh:
 
     def add(self, tag, files, **fields):
         self.releases[tag] = {
-            "tag_name": tag, "draft": False, "prerelease": False,
-            "assets": [{"id": next(self.ids), "name": n, "size": len(d), "state": "uploaded",
-                        "digest": f"sha256:{sha(d)}", "data": d}
-                       for n, d in sorted(files.items())],
+            "tag_name": tag,
+            "draft": False,
+            "prerelease": False,
+            "assets": [
+                {
+                    "id": next(self.ids),
+                    "name": n,
+                    "size": len(d),
+                    "state": "uploaded",
+                    "digest": f"sha256:{sha(d)}",
+                    "data": d,
+                }
+                for n, d in sorted(files.items())
+            ],
             **fields,
         }
         return self.releases[tag]
@@ -98,8 +109,13 @@ class Publication(unittest.TestCase):
         for path in sorted(directory.iterdir()):
             data = path.read_bytes()
             targets[f"v{version}/{path.name}"] = {
-                "length": len(data), "hashes": {"sha256": sha(data)}, "custom": {"version": version}}
-        (out / "targets.json").write_text(json.dumps({"signed": {"version": self.sequence, "targets": targets}}))
+                "length": len(data),
+                "hashes": {"sha256": sha(data)},
+                "custom": {"version": version},
+            }
+        (out / "targets.json").write_text(
+            json.dumps({"signed": {"version": self.sequence, "targets": targets}})
+        )
         for name in ["snapshot.json", "timestamp.json"]:
             (out / name).write_text(json.dumps({"signed": {"version": self.sequence}}))
         for name, data in (roots or {"1.root.json": b'{"root": 1}'}).items():
@@ -119,21 +135,38 @@ class Publication(unittest.TestCase):
     def test_a_release_is_downloaded_checked_signed_and_published_in_one_commit(self):
         directory, signed = self.release("1.2.3")
         self.assertEqual(self.outputs.read_text(), "version=1.2.3\nsign=true\n")
-        self.assertEqual(sorted(p.name for p in directory.iterdir()), sorted(assets("1.2.3")))
+        self.assertEqual(
+            sorted(p.name for p in directory.iterdir()), sorted(assets("1.2.3"))
+        )
         self.assertEqual(self.commits(), ["Sign app 1.2.3"])
         names = self.branch("ls-tree", "--name-only", app.BRANCH).split()
-        self.assertEqual(names, ["1.root.json", "README.md", "snapshot.json", "targets.json", "timestamp.json"])
-        self.assertEqual(self.served("targets.json"), (signed / "targets.json").read_bytes())
+        self.assertEqual(
+            names,
+            [
+                "1.root.json",
+                "README.md",
+                "snapshot.json",
+                "targets.json",
+                "timestamp.json",
+            ],
+        )
+        self.assertEqual(
+            self.served("targets.json"), (signed / "targets.json").read_bytes()
+        )
         targets = json.loads(self.served("targets.json"))["signed"]["targets"]
-        self.assertEqual(sorted(targets), sorted(f"v1.2.3/{n}" for n in assets("1.2.3")))
+        self.assertEqual(
+            sorted(targets), sorted(f"v1.2.3/{n}" for n in assets("1.2.3"))
+        )
 
     def test_running_again_for_the_same_release_changes_nothing(self):
-        directory, signed = self.release("1.2.3")
+        _directory, _signed = self.release("1.2.3")
         again, message = self.prepare("v1.2.3", "again")
         self.assertIn("already signed", message)
         self.assertIn("sign=false", self.outputs.read_text())
         # Racing an identical publish should succeed as a no-op.
-        self.assertIn("already signed", app.publish("v1.2.3", again, self.sign("v1.2.3", again)))
+        self.assertIn(
+            "already signed", app.publish("v1.2.3", again, self.sign("v1.2.3", again))
+        )
         self.assertEqual(self.commits(), ["Sign app 1.2.3"])
 
     def test_a_newer_release_replaces_the_signed_targets(self):
@@ -172,7 +205,7 @@ class Publication(unittest.TestCase):
             app.publish("v1.2.3", directory, signed)
 
     def test_stale_metadata_versions_are_refused(self):
-        _, signed = self.release("1.2.3")
+        _, _signed = self.release("1.2.3")
         self.gh.add("v1.3.0", assets("1.3.0"))
         directory, _ = self.prepare("v1.3.0")
         stale = self.sign("v1.3.0", directory)
@@ -200,7 +233,9 @@ class Publication(unittest.TestCase):
         self.gh.add("v1.2.3", assets("1.2.3"))
         directory, _ = self.prepare("v1.2.3")
         for change in ["version", "target", "extra file"]:
-            signed = self.sign("v1.2.3", directory, version="1.2.4" if change == "version" else None)
+            signed = self.sign(
+                "v1.2.3", directory, version="1.2.4" if change == "version" else None
+            )
             if change == "target":
                 document = json.loads((signed / "targets.json").read_text())
                 document["signed"]["targets"].popitem()
@@ -230,7 +265,10 @@ class Publication(unittest.TestCase):
 
     def built(self, files, name="built"):
         """Stage fake build artifacts."""
-        assets, macos = self.temp / name / "release-assets", self.temp / name / "macos-package"
+        assets, macos = (
+            self.temp / name / "release-assets",
+            self.temp / name / "macos-package",
+        )
         for directory in (assets, macos):
             directory.mkdir(parents=True)
         for file, data in files.items():
@@ -246,7 +284,10 @@ class Publication(unittest.TestCase):
         app.prepare(self.gh, "v1.2.3", directory, built)
         self.assertIn("sign=true", self.outputs.read_text())
         cases = {
-            "replaced": ({**files, "rc2fx-linux-x64.AppImage": b"other"}, "not the one this run built"),
+            "replaced": (
+                {**files, "rc2fx-linux-x64.AppImage": b"other"},
+                "not the one this run built",
+            ),
             "added": ({**files, "extra.deb": b"x"}, "did not build"),
             "removed": ({n: d for n, d in files.items() if "macos" not in n}, "lacks"),
         }
@@ -257,7 +298,9 @@ class Publication(unittest.TestCase):
                     app.prepare(self.gh, "v1.2.3", self.temp / f"bound-{number}", built)
         self.gh.add("v1.2.3", files)
         twice = self.built(files, "twice")
-        (twice[1] / "rc2fx-linux-x64.AppImage").write_bytes(files["rc2fx-linux-x64.AppImage"])
+        (twice[1] / "rc2fx-linux-x64.AppImage").write_bytes(
+            files["rc2fx-linux-x64.AppImage"]
+        )
         with self.assertRaisesRegex(app.Refused, "more than once"):
             app.prepare(self.gh, "v1.2.3", self.temp / "bound-twice", twice)
         self.assertEqual(self.commits(), [])
@@ -277,7 +320,9 @@ class Publication(unittest.TestCase):
         _, signed = self.release("1.2.3")
         renewed = self.renewed(signed)
         for name in ["snapshot.json", "timestamp.json"]:
-            (renewed / name).write_text(json.dumps({"signed": {"version": app.MIXER_VERSIONS_FROM}}))
+            (renewed / name).write_text(
+                json.dumps({"signed": {"version": app.MIXER_VERSIONS_FROM}})
+            )
         with self.assertRaisesRegex(app.Refused, "below the mixer"):
             app.refresh(renewed)
 
@@ -300,7 +345,10 @@ class Publication(unittest.TestCase):
         self.repo.stale_reads = 10**6
         self.gh.add("v1.3.0", assets("1.3.0"))
         directory, _ = self.prepare("v1.3.0")
-        with patch.object(app.META, "served_wait", 0), self.assertRaisesRegex(app.Refused, "still does not serve"):
+        with (
+            patch.object(app.META, "served_wait", 0),
+            self.assertRaisesRegex(app.Refused, "still does not serve"),
+        ):
             app.publish("v1.3.0", directory, self.sign("v1.3.0", directory))
         self.assertEqual(self.commits()[0], "Sign app 1.3.0", "the push itself stands")
 
@@ -316,9 +364,14 @@ class Publication(unittest.TestCase):
             self.repo.push_concurrent(self.temp / "other")
             return branch
 
-        with patch.object(app.META, "fetch", raced), self.assertRaises(subprocess.CalledProcessError):
+        with (
+            patch.object(app.META, "fetch", raced),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
             app.publish("v1.3.0", directory, signed)
-        self.assertEqual(self.commits()[0], "concurrent", "the other writer's commit survives")
+        self.assertEqual(
+            self.commits()[0], "concurrent", "the other writer's commit survives"
+        )
 
     def renewed(self, signed):
         renewed = self.temp / f"renewed-{self.sequence}"
@@ -326,7 +379,9 @@ class Publication(unittest.TestCase):
         self.sequence += 1
         (renewed / "targets.json").write_bytes((signed / "targets.json").read_bytes())
         for name in ["snapshot.json", "timestamp.json"]:
-            (renewed / name).write_text(json.dumps({"signed": {"version": self.sequence}}))
+            (renewed / name).write_text(
+                json.dumps({"signed": {"version": self.sequence}})
+            )
         return renewed
 
     def test_renewal_commits_snapshot_and_timestamp_and_keeps_targets(self):
@@ -334,8 +389,12 @@ class Publication(unittest.TestCase):
         targets = self.served("targets.json")
         renewed = self.renewed(signed)
         app.refresh(renewed)
-        self.assertEqual(self.commits(), ["Renew app discovery metadata", "Sign app 1.2.3"])
-        self.assertEqual(self.served("timestamp.json"), (renewed / "timestamp.json").read_bytes())
+        self.assertEqual(
+            self.commits(), ["Renew app discovery metadata", "Sign app 1.2.3"]
+        )
+        self.assertEqual(
+            self.served("timestamp.json"), (renewed / "timestamp.json").read_bytes()
+        )
         self.assertEqual(self.served("targets.json"), targets)
         with self.assertRaisesRegex(app.Refused, "increase"):
             app.refresh(renewed)
@@ -354,10 +413,25 @@ class Publication(unittest.TestCase):
     def test_missing_role_file_on_branch_still_allows_app_publish(self):
         self.release("1.2.3")
         work = self.temp / "remove-snapshot"
-        subprocess.check_call(["git", "clone", "-q", "--branch", app.BRANCH, self.repo.remote, work])
+        subprocess.check_call(
+            ["git", "clone", "-q", "--branch", app.BRANCH, self.repo.remote, work]
+        )
         subprocess.check_call(["git", "-C", work, "rm", "-q", "snapshot.json"])
-        subprocess.check_call(["git", "-C", work, "-c", "user.name=x", "-c", "user.email=x@example.com",
-                               "commit", "-q", "-m", "remove snapshot"])
+        subprocess.check_call(
+            [
+                "git",
+                "-C",
+                work,
+                "-c",
+                "user.name=x",
+                "-c",
+                "user.email=x@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "remove snapshot",
+            ]
+        )
         subprocess.check_call(["git", "-C", work, "push", "-q", "origin", app.BRANCH])
         self.release("1.3.0")
         self.assertEqual(self.commits()[0], "Sign app 1.3.0")
@@ -378,7 +452,9 @@ class Publication(unittest.TestCase):
         with patch.object(subprocess, "run", fake_run):
             self.assertEqual(gh.release("v1.2.3"), {"tag_name": "v1.2.3"})
             self.assertIsNone(gh.release("v1.2.3"))
-            with self.assertRaisesRegex(app.Refused, r"^GitHub API releases/tags/v1\.2\.3: gh: Server Error"):
+            with self.assertRaisesRegex(
+                app.Refused, r"^GitHub API releases/tags/v1\.2\.3: gh: Server Error"
+            ):
                 gh.release("v1.2.3")
         self.assertEqual(len(calls), 3)
 

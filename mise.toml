@@ -1,0 +1,10 @@
+[tools]
+just = "1.59.0"
+zig = "0.16.0"
+ruff = "0.17.6"
+shellcheck = "0.11.0"
+shfmt = "3.14.1"
+actionlint = "1.7.12"
+"conda:clang-format" = "23.1.6"
+"github:NixOS/patchelf" = { version = "0.19.3", os = ["linux"] }
+"github:linuxdeploy/linuxdeploy" = { version = "1-alpha-20251107-1", os = ["linux"], bin = "linuxdeploy" }

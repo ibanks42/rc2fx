@@ -18,16 +18,15 @@ Outputs:
 import argparse
 import json
 import os
-from dataclasses import dataclass, field
-from datetime import date as Date
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tomllib
 import urllib.error
 import urllib.request
-
+from dataclasses import dataclass, field
+from datetime import date as Date
+from pathlib import Path
 
 REPOSITORY = "ibanks42/rc2fx"
 FEED_SCHEMA_VERSION = 1
@@ -207,6 +206,7 @@ def tag_mapping(root, version):
             ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", ref],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         )
     except OSError as error:
         raise Problem(f"cannot run git: {error}") from error
@@ -218,7 +218,9 @@ def tag_mapping(root, version):
     # Go desktop releases always download mixer software separately.
     go_desktop = subprocess.run(
         ["git", "-C", str(root), "cat-file", "-e", f"{ref}:desktop/go.mod"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
     )
     if go_desktop.returncode == 0:
         return Mapping(None, None, downloads_mixer=True)
@@ -226,7 +228,8 @@ def tag_mapping(root, version):
     try:
         app_manifest = subprocess.check_output(
             ["git", "-C", str(root), "show", f"{ref}:crates/rc2fx-app/Cargo.toml"],
-            stderr=subprocess.DEVNULL, text=True,
+            stderr=subprocess.DEVNULL,
+            text=True,
         )
     except subprocess.CalledProcessError:
         app_manifest = None
@@ -258,7 +261,9 @@ def tag_mapping(root, version):
     if protocol is not None and (
         not isinstance(protocol, int) or isinstance(protocol, bool) or protocol < 1
     ):
-        raise Problem(f"v{version}: config/mixer-release.json has an invalid protocolVersion")
+        raise Problem(
+            f"v{version}: config/mixer-release.json has an invalid protocolVersion"
+        )
     return Mapping(mixer, protocol)
 
 
@@ -274,7 +279,7 @@ def normalize_published(entries, source):
         if not isinstance(tag, str):
             continue
         if tag.startswith("mixer-v"):
-            kind, version = "mixer", tag[len("mixer-v"):]
+            kind, version = "mixer", tag[len("mixer-v") :]
         elif tag.startswith("v"):
             kind, version = "app", tag[1:]
         else:
@@ -291,7 +296,9 @@ def normalize_published(entries, source):
         if (kind, version) in by_version:
             raise Problem(f"{source}: {tag} appears more than once")
         by_version[kind, version] = Published(version, published_at[:10], kind)
-    return sorted(by_version.values(), key=lambda p: version_tuple(p.version), reverse=True)
+    return sorted(
+        by_version.values(), key=lambda p: version_tuple(p.version), reverse=True
+    )
 
 
 def fetch_published(repository=REPOSITORY):
@@ -332,7 +339,9 @@ def fetch_published(repository=REPOSITORY):
         entries.extend(batch)
         if len(batch) < API_PAGE_SIZE:
             return normalize_published(entries, "GitHub releases API")
-    raise Problem(f"GitHub releases API has more than {API_PAGE_SIZE * MAX_API_PAGES} releases")
+    raise Problem(
+        f"GitHub releases API has more than {API_PAGE_SIZE * MAX_API_PAGES} releases"
+    )
 
 
 def sections_between(sections, lower, upper):
@@ -391,7 +400,9 @@ def build_bundle(root, published, mappings=None):
     changelog = parse_changelog(root / "CHANGELOG.md")
     mixer_notes = parse_mixer_notes(root / "docs/updates/source/mixer-notes.md")
     warnings = []
-    standalone = {release.version: release for release in published if release.kind == "mixer"}
+    standalone = {
+        release.version: release for release in published if release.kind == "mixer"
+    }
     published = [release for release in published if release.kind == "app"]
 
     apps = []
@@ -402,9 +413,7 @@ def build_bundle(root, published, mappings=None):
         else:
             mapping = tag_mapping(root, release.version)
         if mapping.mixer_version is None and not mapping.downloads_mixer:
-            warnings.append(
-                f"v{release.version} has no recorded bundled mixer version"
-            )
+            warnings.append(f"v{release.version} has no recorded bundled mixer version")
         apps.append(
             AppRelease(
                 release.version,
@@ -423,10 +432,14 @@ def build_bundle(root, published, mappings=None):
         )
         if mapping.mixer_version is not None:
             first = first_app_for_mixer.get(mapping.mixer_version)
-            if first is None or version_tuple(release.version) < version_tuple(first.version):
+            if first is None or version_tuple(release.version) < version_tuple(
+                first.version
+            ):
                 first_app_for_mixer[mapping.mixer_version] = release
 
-    shipped_ascending = sorted(first_app_for_mixer.keys() | standalone.keys(), key=version_tuple)
+    shipped_ascending = sorted(
+        first_app_for_mixer.keys() | standalone.keys(), key=version_tuple
+    )
     mixers = []
     folded_mixer_versions = set()
     for index, version in enumerate(shipped_ascending):
@@ -447,10 +460,18 @@ def build_bundle(root, published, mappings=None):
             notes = composed_notes(
                 own, folded, "mixer ", "docs/updates/source/mixer-notes.md"
             )
-        date = min(release.date for release in (first, independent) if release is not None)
-        mixers.append(MixerRelease(
-            version, date, notes, first.version if first else None, independent is not None
-        ))
+        date = min(
+            release.date for release in (first, independent) if release is not None
+        )
+        mixers.append(
+            MixerRelease(
+                version,
+                date,
+                notes,
+                first.version if first else None,
+                independent is not None,
+            )
+        )
 
     for version in mixer_notes:
         if version not in shipped_ascending and version not in folded_mixer_versions:
@@ -460,7 +481,10 @@ def build_bundle(root, published, mappings=None):
 
     mixers.sort(key=lambda m: version_tuple(m.version), reverse=True)
     app_complete = all(release.notes is not None for release in apps)
-    mappings_missing = any(release.mixer_version is None and not release.downloads_mixer for release in apps)
+    mappings_missing = any(
+        release.mixer_version is None and not release.downloads_mixer
+        for release in apps
+    )
     notes_missing = any(release.notes is None for release in mixers)
     app_latest = apps[0].version if apps else None
     app_history_start = apps[-1].version if apps else None
@@ -529,10 +553,12 @@ def render_app_page(apps, complete):
             bundled = f"[{release.mixer_version}](mixer.md#v{release.mixer_version})"
         lines += [
             f"Released {release.date}. "
-            + ("Mixer software is downloaded separately. " if release.downloads_mixer
-               else f"Bundled RC2FX mixer software: {bundled}. ")
-            +
-            f"[GitHub release]({release_url(release.version)}).",
+            + (
+                "Mixer software is downloaded separately. "
+                if release.downloads_mixer
+                else f"Bundled RC2FX mixer software: {bundled}. "
+            )
+            + f"[GitHub release]({release_url(release.version)}).",
             "",
         ]
         if release.notes is None:
@@ -557,7 +583,10 @@ def render_mixer_page(mixers, mappings_missing, notes_missing):
         "",
     ]
     if not mixers:
-        lines += ["No RC2FX mixer software history is known from published releases.", ""]
+        lines += [
+            "No RC2FX mixer software history is known from published releases.",
+            "",
+        ]
         return "\n".join(lines)
     if len(mixers) == 1:
         if mappings_missing:
@@ -599,12 +628,19 @@ def render_mixer_page(mixers, mappings_missing, notes_missing):
         lines += [f"## v{release.version}", ""]
         when = f", released {release.date}" if release.date else ""
         if release.first_app_version is None:
-            lines += [f"Standalone mixer release{when}. "
-                      f"[GitHub release](https://github.com/{REPOSITORY}/releases/tag/mixer-v{release.version}).", ""]
+            lines += [
+                (
+                    f"Standalone mixer release{when}. "
+                    f"[GitHub release](https://github.com/{REPOSITORY}/releases/tag/mixer-v{release.version})."
+                ),
+                "",
+            ]
         else:
             lines += [
-                f"First bundled in RC2FX [{release.first_app_version}]"
-                f"(app.md#v{release.first_app_version}). First published {release.date}.",
+                (
+                    f"First bundled in RC2FX [{release.first_app_version}]"
+                    f"(app.md#v{release.first_app_version}). First published {release.date}."
+                ),
                 "",
             ]
         if release.notes is None:

@@ -220,7 +220,7 @@ func TestStagedDescriptorKeepsRodesItemsInOneCollection(t *testing.T) {
 func TestStagingOnlyAcceptsTheStockDescriptorItWasBuiltFrom(t *testing.T) {
 	body := prepareUSB(t)
 	if !strings.Contains(body, "sha256sum -c") || !strings.Contains(body, common.SHA256Hex(stock)) ||
-		!strings.Contains(body, `> "$run/usb-report.bin"`) {
+		!strings.Contains(body, `>"$run/usb-report.bin"`) {
 		t.Fatal(body)
 	}
 }

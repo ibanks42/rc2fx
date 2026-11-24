@@ -10,14 +10,16 @@ import (
 
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/deps"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/task"
+	"github.com/ibanks42/rc2fx/tools/xtask/internal/toolpins"
 )
 
 // CargoAboutVersion is the cargo-about version pinned by the release workflows.
 const CargoAboutVersion = "0.8.4"
 
-// packagingTools installs what `go -C tools/xtask run . package` needs beyond the
-// libraries: cargo-about, vpk, and on Linux linuxdeploy, patchelf, mksquashfs,
-// and the AppImage runtime notices, at the versions the release workflows use.
+// packagingTools prepares what `go -C tools/xtask run . package` needs beyond
+// the libraries: it installs cargo-about and vpk, and on Linux checks for
+// linuxdeploy and patchelf (pinned in mise.toml), installs mksquashfs when
+// missing, and generates the AppImage runtime notices.
 func packagingTools(root string) error {
 	if err := installCargoAbout(); err != nil {
 		return err
@@ -29,13 +31,47 @@ func packagingTools(root string) error {
 	if runtime.GOOS != "linux" {
 		return nil
 	}
-	if _, err := deps.FetchAppImageTools(tools); err != nil {
-		return err
+	for _, tool := range []toolpins.Tool{toolpins.Linuxdeploy, toolpins.Patchelf} {
+		if _, err := toolpins.Find(tool); err != nil {
+			return err
+		}
 	}
 	if err := installMksquashfs(); err != nil {
 		return err
 	}
 	return prepareNotices(root, tools)
+}
+
+// installPinnedTools installs the tools mise.toml pins when mise is
+// installed. Without mise it lists the pinned tools that are missing; the
+// build fails later on the ones it needs, and lint skips the rest.
+func installPinnedTools(root string) error {
+	if _, err := exec.LookPath("mise"); err == nil {
+		fmt.Println("Installing the tools in mise.toml with mise")
+		trust := exec.Command("mise", "trust", "--quiet", filepath.Join(root, "mise.toml"))
+		if err := task.Run(trust); err != nil {
+			return err
+		}
+		install := exec.Command("mise", "install", "--yes")
+		install.Dir = root
+		return task.Run(install)
+	}
+	tools := []toolpins.Tool{toolpins.Just, toolpins.Zig, toolpins.Ruff, toolpins.Shellcheck, toolpins.Shfmt,
+		toolpins.Actionlint, toolpins.ClangFormat}
+	if runtime.GOOS == "linux" {
+		tools = append(tools, toolpins.Linuxdeploy, toolpins.Patchelf)
+	}
+	var missing []string
+	for _, tool := range tools {
+		if _, err := toolpins.Find(tool); err != nil {
+			missing = append(missing, "  "+err.Error())
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Printf("mise is not installed (https://mise.jdx.dev), and these pinned tools are missing:\n%s\n",
+			strings.Join(missing, "\n"))
+	}
+	return nil
 }
 
 func installCargoAbout() error {

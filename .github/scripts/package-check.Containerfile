@@ -94,4 +94,10 @@ RUN dnf install -y bzip2 cpio \
     && test -s /usr/share/licenses/libxcb/COPYING \
     && cd / && rm -rf "$work" && dnf clean all
 # The build runs as the calling user, with its caches on a mounted directory.
+# mise installs the AppImage tools pinned in mise.toml, checked against
+# mise.lock. The static (musl) build runs on AlmaLinux 8's old glibc.
+RUN curl --fail --location --proto '=https' -o /usr/local/bin/mise \
+        https://github.com/jdx/mise/releases/download/v2026.11.7/mise-v2026.11.7-linux-x64-musl \
+    && echo '81e8f878fd59b78c257bf72b65239ab3e14981e8c59c1cd93fd1761f5d813e4a  /usr/local/bin/mise' | sha256sum -c - \
+    && chmod 755 /usr/local/bin/mise && mise --version
 RUN mkdir -p /work/src /work/cache && chmod -R 1777 /work

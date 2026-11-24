@@ -3,9 +3,10 @@
 Checks closure copy and invocation semantics offline; PAC/BTI hints are skipped
 and allocations, strings, events, and thread-pool submission use deterministic stubs.
 """
+
 import struct
 
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
+from unicorn import UC_ARCH_ARM64, UC_HOOK_CODE, UC_MODE_ARM, Uc
 from unicorn import arm64_const as regs
 
 from .canonical import canonical
@@ -18,7 +19,12 @@ class Harness:
         end = max(p["p_vaddr"] + p["p_memsz"] for p in image.loads)
         self.cpu.mem_map(0, (end + 4095) & ~4095)
         for segment in image.loads:
-            self.cpu.mem_write(segment["p_vaddr"], image.data[segment["p_offset"]:segment["p_offset"] + segment["p_filesz"]])
+            self.cpu.mem_write(
+                segment["p_vaddr"],
+                image.data[
+                    segment["p_offset"] : segment["p_offset"] + segment["p_filesz"]
+                ],
+            )
         self.heap, self.stack, self.stop = 0x10000000, 0x20008000, 0x30000000
         self.cpu.mem_map(self.heap, 0x100000)
         self.cpu.mem_map(0x20000000, 0x10000)
@@ -36,7 +42,9 @@ class Harness:
         globals_ = dict(enqueue["globals"])
         self.empty_string = globals_[0x5C]
         self.stubs[calls[0x40]] = lambda: self.empty_string + 16
-        self.stubs[calls[0x84]] = lambda: 0  # WaitableEvent init is irrelevant to the copy ABI.
+        self.stubs[calls[0x84]] = lambda: (
+            0
+        )  # WaitableEvent init is irrelevant to the copy ABI.
         self.stubs[calls[0xF0]] = self.add_job
         self.cpu.hook_add(UC_HOOK_CODE, self.instruction)
 
@@ -52,7 +60,9 @@ class Harness:
         return address
 
     def words(self, address, count=4):
-        return struct.unpack("<" + "Q" * count, bytes(self.cpu.mem_read(address, count * 8)))
+        return struct.unpack(
+            "<" + "Q" * count, bytes(self.cpu.mem_read(address, count * 8))
+        )
 
     def write_words(self, address, *words):
         self.cpu.mem_write(address, struct.pack("<" + "Q" * len(words), *words))
@@ -95,13 +105,19 @@ class Harness:
         for index, value in enumerate(arguments):
             self.cpu.reg_write(getattr(regs, f"UC_ARM64_REG_X{index}"), value)
         self.cpu.emu_start(address, self.stop, count=10000)
-        assert self.cpu.reg_read(regs.UC_ARM64_REG_PC) == self.stop, "fixture did not return"
+        assert self.cpu.reg_read(regs.UC_ARM64_REG_PC) == self.stop, (
+            "fixture did not return"
+        )
         return self.read_register(0)
 
 
 def exercise(image, sites):
     machine = Harness(image, sites)
-    source, payload, destination = machine.allocate(32), machine.allocate(32), machine.allocate(32)
+    source, payload, destination = (
+        machine.allocate(32),
+        machine.allocate(32),
+        machine.allocate(32),
+    )
     seed = bytes(range(32))
     machine.cpu.mem_write(payload, seed)
     machine.write_words(source, payload, 0, sites["manager"], sites["invoker"])
@@ -129,7 +145,13 @@ def exercise(image, sites):
     assert [size for _, size in machine.allocations] == [32, 128, 32]
     queued_pool, job, automatic, function = machine.queued[-1]
     capture, unused, manager, invoker = function
-    assert (queued_pool, automatic, unused, manager, invoker) == (pool, 1, 0, sites["manager"], sites["invoker"])
+    assert (queued_pool, automatic, unused, manager, invoker) == (
+        pool,
+        1,
+        0,
+        sites["manager"],
+        sites["invoker"],
+    )
     assert bytes(machine.cpu.mem_read(capture, 32)) == seed
     assert machine.frees == [machine.allocations[0]]
     machine.call(sites["manager"], job + 0x60, job + 0x60, 3)
@@ -167,7 +189,12 @@ def exercise(image, sites):
     function_address, function, captures = observed[0]
     assert function_address == machine.stack + 0x220
     assert function[2:] == (sites["manager"], sites["invoker"])
-    assert captures == (mixer, machine.stack + 0x1B8, machine.stack + 0x1B4, machine.stack + 0x1CF)
+    assert captures == (
+        mixer,
+        machine.stack + 0x1B8,
+        machine.stack + 0x1B4,
+        machine.stack + 0x1CF,
+    )
     return {
         "managerCopies32Bytes": True,
         "managerSizedDelete32Bytes": True,
@@ -178,7 +205,12 @@ def exercise(image, sites):
         "invokerPassesCaptureToMappedBody": True,
         "callbackNullContextReturnsZero": True,
         "constructorCaptureOffsets": [0, 8, 16, 24],
-        "constructorCaptureReferences": ["mixer", "output-table-u64", "frame-count-u32", "flag-u8"],
+        "constructorCaptureReferences": [
+            "mixer",
+            "output-table-u64",
+            "frame-count-u32",
+            "flag-u8",
+        ],
         "constructorFunctionOffsets": {"manager": 16, "invoker": 24},
         "constructorCallSite": hex(materialization + 0x2C),
         "constructorParent": hex(image.function_at(materialization)[0]),

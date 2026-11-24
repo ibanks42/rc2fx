@@ -4,13 +4,12 @@
 import importlib.util
 import io
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest import mock
-
 
 SCRIPT = Path(__file__).with_name("update_history.py")
 spec = importlib.util.spec_from_file_location("update_history", SCRIPT)
@@ -105,14 +104,27 @@ class HistoryTests(unittest.TestCase):
         )
 
     def init_git(self):
-        subprocess.run(["git", "init", "-b", "main"], cwd=self.root, check=True,
-                       capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.root, check=True)
-        subprocess.run(["git", "config", "user.email", "test@example.invalid"],
-                       cwd=self.root, check=True)
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=self.root, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=self.root,
+            check=True,
+        )
         subprocess.run(["git", "add", "."], cwd=self.root, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial"], cwd=self.root, check=True,
-                       capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial"],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
 
     def tag(self, version):
         subprocess.run(["git", "tag", f"v{version}"], cwd=self.root, check=True)
@@ -151,7 +163,9 @@ class HistoryTests(unittest.TestCase):
         self.assertIsNone(entries["1.0.0"]["notesMarkdown"])
         self.assertFalse(bundle.feed["app"]["historyComplete"])
         self.assertIn("Notes for some releases are unavailable", bundle.app_page)
-        self.assertIn("No published notes are available for this release.", bundle.app_page)
+        self.assertIn(
+            "No published notes are available for this release.", bundle.app_page
+        )
 
     def test_unknown_mixer_mapping_is_null_and_never_guessed(self):
         bundle = self.build(release("1.0.0"), mappings={})
@@ -164,7 +178,9 @@ class HistoryTests(unittest.TestCase):
         self.assertFalse(bundle.feed["mixer"]["historyComplete"])
         self.assertIn("Bundled RC2FX mixer software: unknown", bundle.app_page)
         self.assertIn("No RC2FX mixer software history is known", bundle.mixer_page)
-        self.assertTrue(any("no recorded bundled mixer version" in w for w in bundle.warnings))
+        self.assertTrue(
+            any("no recorded bundled mixer version" in w for w in bundle.warnings)
+        )
 
     def test_mixer_notes_are_never_invented_and_first_app_is_the_oldest(self):
         bundle = self.build(
@@ -191,7 +207,10 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(mixer["historyStart"], "1.0.0")
         self.assertFalse(mixer["historyComplete"])
         self.assertIn("notes for some versions are unavailable", bundle.mixer_page)
-        self.assertIn("No published notes are available for this mixer version.", bundle.mixer_page)
+        self.assertIn(
+            "No published notes are available for this mixer version.",
+            bundle.mixer_page,
+        )
 
     def test_app_prepared_versions_fold_into_the_next_published_release(self):
         bundle = self.build(release("1.0.0"), release("1.2.0"))
@@ -203,7 +222,7 @@ class HistoryTests(unittest.TestCase):
         self.assertIn("Add the second thing", notes)
         self.assertIn("Add the third thing", notes)
         self.assertNotIn("Add the fourth thing", notes)
-        self.assertNotIn("1.1.0\"", json.dumps(bundle.feed["app"]["releases"]))
+        self.assertNotIn('1.1.0"', json.dumps(bundle.feed["app"]["releases"]))
         self.assertIn("**Prepared as v1.1.0, not published.**", bundle.app_page)
 
     def test_multiple_prepared_versions_fold_in_chronological_order(self):
@@ -217,7 +236,9 @@ class HistoryTests(unittest.TestCase):
         )
         bundle = self.build(release("1.0.0"), release("1.2.0"))
         notes = bundle.feed["app"]["releases"][0]["notesMarkdown"]
-        self.assertLess(notes.index("Prepared as v1.1.0"), notes.index("Prepared as v1.1.1"))
+        self.assertLess(
+            notes.index("Prepared as v1.1.0"), notes.index("Prepared as v1.1.1")
+        )
         self.assertLess(notes.index("Prepared as v1.1.1"), notes.index("Third"))
         self.assertLess(notes.index("Earlier"), notes.index("Middle"))
 
@@ -236,7 +257,8 @@ class HistoryTests(unittest.TestCase):
             + "\n## [1.2.0]\n\n- Shipped mixer change.\n",
         )
         bundle = self.build(
-            release("1.0.0"), release("1.2.0"),
+            release("1.0.0"),
+            release("1.2.0"),
             mappings=mappings(("1.0.0", "1.0.0", 1), ("1.2.0", "1.2.0", 2)),
         )
         mixer = bundle.feed["mixer"]["releases"]
@@ -254,12 +276,18 @@ class HistoryTests(unittest.TestCase):
             MIXER_NOTES + "\n## [1.1.0]\n\n- Prepared mixer change.\n",
         )
         bundle = self.build(
-            release("1.0.0"), release("1.2.0"),
+            release("1.0.0"),
+            release("1.2.0"),
             mappings=mappings(("1.0.0", "1.0.0", 1), ("1.2.0", "1.2.0", 2)),
         )
-        entry = next(r for r in bundle.feed["mixer"]["releases"] if r["version"] == "1.2.0")
+        entry = next(
+            r for r in bundle.feed["mixer"]["releases"] if r["version"] == "1.2.0"
+        )
         self.assertIsNone(entry["notesMarkdown"])
-        self.assertIn("No published notes are available for this mixer version.", bundle.mixer_page)
+        self.assertIn(
+            "No published notes are available for this mixer version.",
+            bundle.mixer_page,
+        )
         self.assertNotIn("Prepared mixer change", bundle.mixer_page)
         self.assertTrue(any("could not be attached" in w for w in bundle.warnings))
 
@@ -269,9 +297,15 @@ class HistoryTests(unittest.TestCase):
             MIXER_NOTES + "\n## [9.9.9]\n\n- Never shipped.\n",
         )
         bundle = self.build(release("1.0.0"))
-        self.assertEqual([r["version"] for r in bundle.feed["mixer"]["releases"]], ["1.0.0"])
+        self.assertEqual(
+            [r["version"] for r in bundle.feed["mixer"]["releases"]], ["1.0.0"]
+        )
         self.assertNotIn("Never shipped", bundle.mixer_page)
-        self.assertTrue(any("no published mixer release or app bundle" in w for w in bundle.warnings))
+        self.assertTrue(
+            any(
+                "no published mixer release or app bundle" in w for w in bundle.warnings
+            )
+        )
 
     def test_pages_have_version_headings_and_cumulative_notes(self):
         bundle = self.build(
@@ -283,7 +317,9 @@ class HistoryTests(unittest.TestCase):
         self.assertIn("Add the second thing", bundle.app_page)
         self.assertIn("Add the first thing", bundle.app_page)
         self.assertIn("[1.0.0](mixer.md#v1.0.0)", bundle.app_page)
-        self.assertIn("lists every published app release from v1.0.0 to v1.1.0", bundle.app_page)
+        self.assertIn(
+            "lists every published app release from v1.0.0 to v1.1.0", bundle.app_page
+        )
         self.assertIn("## v1.0.0", bundle.mixer_page)
         self.assertIn("[1.0.0](app.md#v1.0.0)", bundle.mixer_page)
         self.assertTrue(bundle.feed["app"]["historyComplete"])
@@ -291,7 +327,9 @@ class HistoryTests(unittest.TestCase):
 
     def test_the_single_release_wording_is_not_a_range(self):
         bundle = self.build(release("1.0.0"))
-        self.assertIn("This history lists the published app release: v1.0.0.", bundle.app_page)
+        self.assertIn(
+            "This history lists the published app release: v1.0.0.", bundle.app_page
+        )
         self.assertIn(
             "This history records the mixer version in published releases: v1.0.0.",
             bundle.mixer_page,
@@ -323,15 +361,19 @@ class HistoryTests(unittest.TestCase):
             self.build(release("1.0.0"), release("1.2.0"))
 
     def test_a_feed_over_the_client_limit_stops_the_build(self):
-        with mock.patch.object(uh, "MAX_FEED_BYTES", 10):
-            with self.assertRaisesRegex(uh.Problem, "updates.json is"):
-                self.build(release("1.0.0"))
+        with (
+            mock.patch.object(uh, "MAX_FEED_BYTES", 10),
+            self.assertRaisesRegex(uh.Problem, "updates.json is"),
+        ):
+            self.build(release("1.0.0"))
 
     def test_duplicate_and_non_stable_sections_fail(self):
         self.put("CHANGELOG.md", CHANGELOG + "\n## [1.0.0] - 2026-11-09\n\n- Again\n")
         with self.assertRaisesRegex(uh.Problem, "more than once"):
             self.build(release("1.0.0"))
-        self.put("CHANGELOG.md", "# Changelog\n\n## [1.0] - 2026-11-04\n\n- Short version\n")
+        self.put(
+            "CHANGELOG.md", "# Changelog\n\n## [1.0] - 2026-11-04\n\n- Short version\n"
+        )
         with self.assertRaisesRegex(uh.Problem, "stable MAJOR.MINOR.PATCH"):
             self.build(release("1.0.0"))
 
@@ -342,8 +384,15 @@ class HistoryTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(uh.Problem, "invalid publication date"):
             uh.normalize_published(
-                [{"tag_name": "v1.0.0", "draft": False, "prerelease": False,
-                  "published_at": "not-a-date"}], "test"
+                [
+                    {
+                        "tag_name": "v1.0.0",
+                        "draft": False,
+                        "prerelease": False,
+                        "published_at": "not-a-date",
+                    }
+                ],
+                "test",
             )
         with self.assertRaisesRegex(uh.Problem, "appears more than once"):
             uh.normalize_published([release("1.0.0"), release("1.0.0")], "test")
@@ -373,10 +422,14 @@ class HistoryTests(unittest.TestCase):
 
     def test_download_only_tag_does_not_claim_a_bundled_mixer(self):
         self.put("config/mixer-release.json", '{"version":"9.9.9","protocolVersion":2}')
-        self.put("crates/rc2fx-app/Cargo.toml", '[features]\ndefault = []\nembedded = []\n')
+        self.put(
+            "crates/rc2fx-app/Cargo.toml", "[features]\ndefault = []\nembedded = []\n"
+        )
         self.init_git()
         self.tag("1.0.0")
-        bundle = self.build(release("1.0.0"), release("1.0.0", tag="mixer-v1.0.0"), use_git=True)
+        bundle = self.build(
+            release("1.0.0"), release("1.0.0", tag="mixer-v1.0.0"), use_git=True
+        )
         app = bundle.feed["app"]["releases"][0]
         self.assertIsNone(app["mixerVersion"])
         self.assertTrue(app["downloadsMixer"])
@@ -390,7 +443,9 @@ class HistoryTests(unittest.TestCase):
         self.put("desktop/go.mod", "module github.com/ibanks42/rc2fx/desktop\n")
         self.init_git()
         self.tag("1.0.0")
-        bundle = self.build(release("1.0.0"), release("1.0.0", tag="mixer-v1.0.0"), use_git=True)
+        bundle = self.build(
+            release("1.0.0"), release("1.0.0", tag="mixer-v1.0.0"), use_git=True
+        )
         app = bundle.feed["app"]["releases"][0]
         self.assertIsNone(app["mixerVersion"])
         self.assertTrue(app["downloadsMixer"])
@@ -398,8 +453,10 @@ class HistoryTests(unittest.TestCase):
         self.assertIn("downloaded separately", bundle.app_page)
 
     def test_standalone_and_legacy_bundle_share_one_mixer_history_entry(self):
-        bundle = self.build(release("1.0.0", date="2026-11-04"),
-                            release("1.0.0", tag="mixer-v1.0.0", date="2026-11-05"))
+        bundle = self.build(
+            release("1.0.0", date="2026-11-04"),
+            release("1.0.0", tag="mixer-v1.0.0", date="2026-11-05"),
+        )
         entries = bundle.feed["mixer"]["releases"]
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["firstAppVersion"], "1.0.0")
@@ -411,7 +468,9 @@ class HistoryTests(unittest.TestCase):
         self.tag("1.0.0")
         bundle = self.build(release("1.0.0"), use_git=True)
         self.assertIsNone(bundle.feed["app"]["releases"][0]["mixerVersion"])
-        self.assertTrue(any("no recorded bundled mixer version" in w for w in bundle.warnings))
+        self.assertTrue(
+            any("no recorded bundled mixer version" in w for w in bundle.warnings)
+        )
 
     def test_a_missing_tag_is_an_error(self):
         self.init_git()
@@ -433,7 +492,9 @@ class HistoryTests(unittest.TestCase):
         published.write_text(json.dumps([release("1.0.0")]))
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = uh.main(["--root", str(self.root), "--published-json", str(published)])
+            code = uh.main(
+                ["--root", str(self.root), "--published-json", str(published)]
+            )
         self.assertEqual(code, 0)
         self.assertIn("1 app releases and 1 mixer versions", out.getvalue())
         feed = json.loads((self.root / "docs/public/updates.json").read_text())
@@ -448,7 +509,9 @@ class HistoryTests(unittest.TestCase):
         published.write_text(json.dumps([release("2.0.0")]))
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = uh.main(["--root", str(self.root), "--published-json", str(published)])
+            code = uh.main(
+                ["--root", str(self.root), "--published-json", str(published)]
+            )
         self.assertEqual(code, 1)
         self.assertIn("newest published release", err.getvalue())
         self.assertFalse((self.root / "docs/public/updates.json").exists())

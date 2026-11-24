@@ -15,20 +15,23 @@ underlying commands.
 
 | Command | Description |
 | --- | --- |
-| `just setup` | One-time setup for building, packaging, and running the app and building the mixer: downloads the pinned goui-kit and Velopack libraries, adds the mixer's Rust target, installs `cargo-zigbuild` and `cargo-about` 0.8.4, checks for `zig`, installs the pinned `vpk` (needs the .NET SDK), installs `linuxdeploy`, `patchelf`, `mksquashfs`, and the AppImage runtime notices on Linux, and enables the pre-commit formatting hook |
+| `just setup` | One-time setup for building, packaging, and running the app and building the mixer: downloads the pinned goui-kit and Velopack libraries, adds the mixer's Rust target, runs `mise install` for the tools pinned in `mise.toml` (or lists missing ones without `mise`), installs `cargo-zigbuild` and `cargo-about` 0.8.4, checks for `zig`, installs the pinned `vpk` (needs the .NET SDK), checks for `linuxdeploy` and `patchelf` and installs `mksquashfs` and the AppImage runtime notices on Linux, and enables the pre-commit lint hook |
 | `just app` / `just desktop` | Run a development build / compile a release build of the desktop app using signed mixer downloads. No mixer cross-build needed. Both require goui-kit in `desktop/third_party/goui-kit` ([Building](building.md)). |
 | `just app-release` | Run the optimized release build as shipped. Slower to compile; handy for verifying changes before a release. |
 | `just app-mock` | Run the desktop app against an in-process simulated mixer with no hardware. See [below](#without-a-mixer). |
 | `just app-embedded` / `just desktop-embedded` | Cross-build the mixer runtime, then run a development build / compile a release build of the app with the optional embedded payload. |
 | `just app-embedded-release` | Cross-build the mixer runtime, then run the release build with the optional embedded payload. |
 | `just mixer-build` | Cross-build the mixer runtime into `target/mixer` |
-| `just test` | Check Go formatting and run `go vet` and tests for the desktop app (including `transport` with the `mockmixer` tag) and `tools/xtask`, then on Linux run `just test-rust` |
+| `just lint` | Check formatting and lints for Go, Rust, Python, C, shell, and GitHub workflows using tools from `mise.toml` or `PATH` (missing tools are skipped with a warning locally and fail in CI) |
+| `just fmt` | Format every language and apply safe lint fixes (`go -C tools/xtask run . lint --fix`) |
+| `just test` | Run `schema --check`, `just lint`, `go vet`, and tests for the desktop app (including `transport` with the `mockmixer` tag) and `tools/xtask`, then on Linux run `just test-rust` |
 | `just test-rust` | Run Rust workspace tests and Clippy with warnings as errors, including the `bench-kernels` feature (Linux only, matching all Rust crates here) |
 | `just test-mixer` | Run native library tests and Clippy, a benchmark build check, plus launcher, recorder, and screen-module tests (Linux) |
 | `just package` | Build a release package for the current OS into `target/package` |
 | `just package-check` | Build the AppImage from your working tree inside the release container (AlmaLinux 8, glibc 2.28), then verify it in clean containers across several Linux distributions (x86-64 Linux with Podman or Docker) |
 | `just docs` / `just docs-serve` | Build / serve this documentation site |
 | `go -C tools/xtask run . app [--release] [--mock] [--embedded] [--build-only]` | Underlying command for the app recipes: builds into `target/debug`, `target/release`, or `target/mock`, and launches it unless `--build-only` is passed |
+| `go -C tools/xtask run . lint [--fix] [--staged]` | Underlying command for `just lint` and `just fmt`: checks formatting and lints across all languages (`--fix` formats and applies safe fixes; `--staged` checks only staged files, as used by `.githooks/pre-commit`) |
 | `go -C tools/xtask run . test-linux-packages [DIR] [--artifacts DIR] [--version VERSION] [--runtime auto\|podman\|docker]` | Verify built Linux release artifacts and inspect the AppImage inside throwaway distribution containers |
 | `go -C tools/xtask run . check-elf FILE [--shared]` | Verify a mixer binary against the mixer's ABI (glibc 2.35, GCC 11) |
 

@@ -9,6 +9,7 @@ import (
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/deps"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/elfcheck"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/licenses"
+	"github.com/ibanks42/rc2fx/tools/xtask/internal/lint"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/mixer"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/packaging"
 	"github.com/ibanks42/rc2fx/tools/xtask/internal/pkgcheck"
@@ -31,8 +32,6 @@ const help = `go -C tools/xtask run . <command>
   fetch-velopack [TARGET...]
                         Download the pinned velopack_libc for each target (default: this machine)
   fetch-vpk             Install the pinned vpk into desktop/third_party/tools (needs the .NET SDK)
-  fetch-appimage-tools  Install the pinned linuxdeploy and patchelf (x86-64 Linux)
-  fetch-zig [DIR]       Install the pinned zig (x86-64 Linux; default: desktop/third_party/tools)
   mixer-build           Cross-build the mixer binaries and profile checker into target/mixer
   mixer-package DIR     Package a standalone release payload and notices in a new directory
   mixer-keys DIR        Create signing keys and a public trust root outside the checkout
@@ -74,7 +73,8 @@ const help = `go -C tools/xtask run . <command>
   build-image-tag       Print the tag of the package-check build image
   device-panel build | check | preview --restart-gui [SECONDS | --keep-running]
                         Build, unit test, or preview from RAM the experimental touchscreen UI
-  pre-commit            The formatting checks the git hook runs before each commit
+  lint [--fix] [--staged]  Check formatting and lints for Go, Rust, Python, C, shell, and workflows
+                        (--fix applies them; --staged checks only staged files)
   package [--target TRIPLE] [--skip-build] [--embedded]
                         Build the download-only desktop app (or embed the mixer with --embedded) and
                         package it with Velopack into target/package
@@ -127,16 +127,6 @@ func dispatch(args []string) error {
 	case command == "fetch-vpk" && len(rest) == 0:
 		_, err := deps.FetchVPK("")
 		return err
-	case command == "fetch-appimage-tools" && len(rest) == 0:
-		_, err := deps.FetchAppImageTools("")
-		return err
-	case command == "fetch-zig" && len(rest) <= 1:
-		dir := ""
-		if len(rest) == 1 {
-			dir = rest[0]
-		}
-		_, err := deps.FetchZig(dir)
-		return err
 	case command == "package-check" && len(rest) == 0:
 		return pkgcheck.Check()
 	case command == "package-check-build" && len(rest) == 0:
@@ -155,8 +145,8 @@ func dispatch(args []string) error {
 		return mixer.DevicePanel(rest)
 	case command == "tuf-test-repos" && (len(rest) == 1 || len(rest) == 2 && rest[1] == "--no-rsa"):
 		return release.GenerateTestRepos(rest[0], len(rest) == 1)
-	case command == "pre-commit" && len(rest) == 0:
-		return setup.PreCommit()
+	case command == "lint":
+		return lint.Run(rest)
 	case command == "mixer-build" && len(rest) == 0:
 		return setup.BuildMixer()
 	case command == "mixer-package" && len(rest) == 1:

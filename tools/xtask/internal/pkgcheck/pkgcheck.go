@@ -183,6 +183,8 @@ func Check() error {
 		"-v", filepath.Join(check, "cache")+":/work/cache",
 		"-e", "CARGO_HOME=/work/cache/cargo", "-e", "HOME=/work/cache/home",
 		"-e", "DOTNET_CLI_HOME=/work/cache/home",
+		"-e", "MISE_DATA_DIR=/work/cache/mise", "-e", "MISE_CACHE_DIR=/work/cache/mise-cache",
+		"-e", "MISE_TRUSTED_CONFIG_PATHS=/work/src", "-e", "MISE_YES=1",
 		"-e", "GOCACHE=/work/cache/go-build", "-e", "GOMODCACHE=/work/cache/gomod",
 		"-e", "GOFLAGS=-modcacherw", "-e", "GOTOOLCHAIN=local",
 		"-w", "/work/src", image, "sh", "-ec",

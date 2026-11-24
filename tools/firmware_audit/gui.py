@@ -5,27 +5,30 @@ Requires capstone and pyelftools (see requirements.txt). All addresses are
 link-time ELF virtual addresses; function labels and snippets are manually
 curated analyst mappings.
 """
+
 from __future__ import annotations
 
 import argparse
-from bisect import bisect_right
 import hashlib
 import io
 import json
-from pathlib import Path
 import struct
 import sys
 import tarfile
+from bisect import bisect_right
+from pathlib import Path
 
 try:
     import capstone
     import elftools
-    from capstone import Cs, CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN
-    from elftools.elf.elffile import ELFFile
+    from capstone import CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN, Cs
     from elftools.dwarf.callframe import FDE
+    from elftools.elf.elffile import ELFFile
 except ImportError as error:
-    raise SystemExit("Host audit dependencies missing: install tools/firmware_audit/requirements.txt "
-                     "in a host virtualenv; no firmware execution is needed.") from error
+    raise SystemExit(
+        "Host audit dependencies missing: install tools/firmware_audit/requirements.txt "
+        "in a host virtualenv; no firmware execution is needed."
+    ) from error
 
 GUI_SHA256 = "aa92a92d384bdb24bc1cdb01615ac280d4d4867e661158df5c7f86ff98b605ca"
 TYPES = (
@@ -94,29 +97,47 @@ def hx(address):
 
 class GuiImage:
     """ELF reader pinned to the 1.7.7 rc_gui_juce binary."""
+
     def __init__(self, archive_path):
         archive_path = Path(archive_path)
         with archive_path.open("rb") as stream:
             self.archive_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
         with tarfile.open(archive_path, "r:gz") as archive:
-            members = [m for m in archive.getmembers()
-                       if m.name.removeprefix("./").lstrip("/") == "usr/bin/rc_gui_juce"]
+            members = [
+                m
+                for m in archive.getmembers()
+                if m.name.removeprefix("./").lstrip("/") == "usr/bin/rc_gui_juce"
+            ]
             if len(members) != 1 or not members[0].isfile():
-                raise ValueError("expected one regular usr/bin/rc_gui_juce archive member")
+                raise ValueError(
+                    "expected one regular usr/bin/rc_gui_juce archive member"
+                )
             self.data = archive.extractfile(members[0]).read()
             self.rotation = None
             for m in archive.getmembers():
-                if m.name.removeprefix("./").lstrip("/") == "etc/rotation" and m.isfile():
+                if (
+                    m.name.removeprefix("./").lstrip("/") == "etc/rotation"
+                    and m.isfile()
+                ):
                     self.rotation = archive.extractfile(m).read()
         self.sha256 = sha(self.data)
         if self.sha256 != GUI_SHA256:
-            raise ValueError(f"unqualified GUI SHA256 {self.sha256}; expected {GUI_SHA256}")
+            raise ValueError(
+                f"unqualified GUI SHA256 {self.sha256}; expected {GUI_SHA256}"
+            )
         self.elf = ELFFile(io.BytesIO(self.data))
-        if self.elf["e_machine"] != "EM_AARCH64" or not self.elf.little_endian or self.elf.elfclass != 64:
+        if (
+            self.elf["e_machine"] != "EM_AARCH64"
+            or not self.elf.little_endian
+            or self.elf.elfclass != 64
+        ):
             raise ValueError("expected little-endian ELF64 AArch64")
         self.loads = [p for p in self.elf.iter_segments() if p["p_type"] == "PT_LOAD"]
-        self.functions = {e["initial_location"]: e["address_range"]
-                          for e in self.elf.get_dwarf_info().EH_CFI_entries() if isinstance(e, FDE)}
+        self.functions = {
+            e["initial_location"]: e["address_range"]
+            for e in self.elf.get_dwarf_info().EH_CFI_entries()
+            if isinstance(e, FDE)
+        }
         self.starts = sorted(self.functions)
         self.cs = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
         self.relocs = {}
@@ -125,9 +146,12 @@ class GuiImage:
                 continue
             symbols = self.elf.get_section(section["sh_link"])
             for r in section.iter_relocations():
-                symbol = symbols.get_symbol(r["r_info_sym"]) if r["r_info_sym"] else None
+                symbol = (
+                    symbols.get_symbol(r["r_info_sym"]) if r["r_info_sym"] else None
+                )
                 self.relocs[r["r_offset"]] = {
-                    "symbol": symbol.name if symbol else "", "addend": r["r_addend"],
+                    "symbol": symbol.name if symbol else "",
+                    "addend": r["r_addend"],
                     "type": r["r_info_type"],
                 }
         self.plt = {}
@@ -140,8 +164,12 @@ class GuiImage:
             data = self.code(address, 16)
             adrp, ldr, add, branch = struct.unpack("<4I", data)
             # Validate the AArch64 PLT stub pattern directly instead of assuming slot order.
-            if (adrp & 0x9F00001F != 0x90000010 or ldr & 0xFFC003FF != 0xF9400211
-                    or add & 0xFFC003FF != 0x91000210 or branch != 0xD61F0220):
+            if (
+                adrp & 0x9F00001F != 0x90000010
+                or ldr & 0xFFC003FF != 0xF9400211
+                or add & 0xFFC003FF != 0x91000210
+                or branch != 0xD61F0220
+            ):
                 raise ValueError(f"unexpected PLT instructions at {address:#x}")
             immediate = ((adrp >> 29) & 3) | (((adrp >> 5) & 0x7FFFF) << 2)
             if immediate & (1 << 20):
@@ -152,9 +180,13 @@ class GuiImage:
             symbol = symbols.get_symbol(r["r_info_sym"])
             self.plt[address] = symbol.name
             self.plt_evidence[symbol.name] = {
-                "plt_va": hx(address), "got_va": hx(got), "plt_bytes": data.hex(),
-                "relocation_type": "R_AARCH64_JUMP_SLOT", "relocation_type_number": 1026,
-                "symbol_type": symbol["st_info"]["type"], "binding": symbol["st_info"]["bind"],
+                "plt_va": hx(address),
+                "got_va": hx(got),
+                "plt_bytes": data.hex(),
+                "relocation_type": "R_AARCH64_JUMP_SLOT",
+                "relocation_type_number": 1026,
+                "symbol_type": symbol["st_info"]["type"],
+                "binding": symbol["st_info"]["bind"],
                 "section_index": symbol["st_shndx"],
             }
         self.calls = []
@@ -167,7 +199,9 @@ class GuiImage:
                 if immediate & (1 << 25):
                     immediate -= 1 << 26
                 address = base + offset
-                self.calls.append((address, address + immediate * 4, "bl" if word >> 31 else "b"))
+                self.calls.append(
+                    (address, address + immediate * 4, "bl" if word >> 31 else "b")
+                )
 
     def file_offset(self, address):
         for p in self.loads:
@@ -179,7 +213,7 @@ class GuiImage:
         start = self.file_offset(address)
         if size and self.file_offset(address + size - 1) != start + size - 1:
             raise ValueError("range crosses load mapping")
-        return self.data[start:start + size]
+        return self.data[start : start + size]
 
     def function_at(self, address):
         index = bisect_right(self.starts, address) - 1
@@ -190,11 +224,17 @@ class GuiImage:
         return None
 
     def disasm(self, address, size=None):
-        return list(self.cs.disasm(self.code(address, size or self.functions[address]), address))
+        return list(
+            self.cs.disasm(self.code(address, size or self.functions[address]), address)
+        )
 
     def instruction_record(self, instruction):
-        result = {"va": hx(instruction.address), "bytes": instruction.bytes.hex(),
-                  "mnemonic": instruction.mnemonic, "operands": instruction.op_str}
+        result = {
+            "va": hx(instruction.address),
+            "bytes": instruction.bytes.hex(),
+            "mnemonic": instruction.mnemonic,
+            "operands": instruction.op_str,
+        }
         if instruction.mnemonic in ("b", "bl") and instruction.op_str.startswith("#"):
             target = int(instruction.op_str[1:], 16)
             if target in self.plt:
@@ -203,20 +243,35 @@ class GuiImage:
 
     def range_record(self, address, size):
         data = self.code(address, size)
-        return {"va": hx(address), "file_offset": hx(self.file_offset(address)),
-                "size": size, "sha256": sha(data), "bytes": data.hex()}
+        return {
+            "va": hx(address),
+            "file_offset": hx(self.file_offset(address)),
+            "size": size,
+            "sha256": sha(data),
+            "bytes": data.hex(),
+        }
 
     def relocation_record(self, address):
         r = self.relocs[address]
-        return {"slot_va": hx(address), "slot_file_offset": hx(self.file_offset(address)),
-                "raw_bytes": self.code(address, 8).hex(), "symbol": r["symbol"],
-                "addend": hx(r["addend"]), "type_number": r["type"],
-                "type": {1027: "R_AARCH64_RELATIVE", 257: "R_AARCH64_ABS64"}.get(r["type"], "other")}
+        return {
+            "slot_va": hx(address),
+            "slot_file_offset": hx(self.file_offset(address)),
+            "raw_bytes": self.code(address, 8).hex(),
+            "symbol": r["symbol"],
+            "addend": hx(r["addend"]),
+            "type_number": r["type"],
+            "type": {1027: "R_AARCH64_RELATIVE", 257: "R_AARCH64_ABS64"}.get(
+                r["type"], "other"
+            ),
+        }
 
     def type_map(self):
         result = []
         for address, r in sorted(self.relocs.items()):
-            if not (r["symbol"].startswith("_ZTVN10__cxxabiv1") and "type_info" in r["symbol"]):
+            if not (
+                r["symbol"].startswith("_ZTVN10__cxxabiv1")
+                and "type_info" in r["symbol"]
+            ):
                 continue
             name_r = self.relocs.get(address + 8)
             if not name_r or name_r["symbol"]:
@@ -237,13 +292,27 @@ class GuiImage:
                         break
                     entries.append(self.relocation_record(cursor))
                     cursor += 8
-                vtables.append({"rtti_reference": self.relocation_record(slot),
-                                "preceding_offset_to_top_bytes": self.code(slot - 8, 8).hex(),
-                                "entries": entries})
-            result.append({"name": name, "name_evidence": self.range_record(name_r["addend"], len(name_bytes) + 1),
-                           "typeinfo_va": hx(address),
-                           "typeinfo_relocations": [self.relocation_record(address), self.relocation_record(address + 8)],
-                           "vtables": vtables})
+                vtables.append(
+                    {
+                        "rtti_reference": self.relocation_record(slot),
+                        "preceding_offset_to_top_bytes": self.code(slot - 8, 8).hex(),
+                        "entries": entries,
+                    }
+                )
+            result.append(
+                {
+                    "name": name,
+                    "name_evidence": self.range_record(
+                        name_r["addend"], len(name_bytes) + 1
+                    ),
+                    "typeinfo_va": hx(address),
+                    "typeinfo_relocations": [
+                        self.relocation_record(address),
+                        self.relocation_record(address + 8),
+                    ],
+                    "vtables": vtables,
+                }
+            )
         if {t["name"] for t in result} != set(TYPES):
             raise ValueError("required GUI RTTI anchors not recovered")
         return result
@@ -259,17 +328,27 @@ def build_report(image):
         instructions = image.disasm(address, size)
         if sum(i.size for i in instructions) != size:
             raise ValueError(f"incomplete disassembly: {name}")
-        snippets.append({"name": name, **image.range_record(address, size),
-                         "instructions": [image.instruction_record(i) for i in instructions]})
+        snippets.append(
+            {
+                "name": name,
+                **image.range_record(address, size),
+                "instructions": [image.instruction_record(i) for i in instructions],
+            }
+        )
     imported_calls = []
     local_edges = []
     for site, target, mnemonic in image.calls:
         start = image.function_at(site)
         if start not in FUNCTIONS:
             continue
-        record = {"site_va": hx(site), "function_va": hx(start), "target_va": hx(target),
-                  "branch": mnemonic, "bytes": image.code(site, 4).hex(),
-                  "sha256": sha(image.code(site, 4))}
+        record = {
+            "site_va": hx(site),
+            "function_va": hx(start),
+            "target_va": hx(target),
+            "branch": mnemonic,
+            "bytes": image.code(site, 4).hex(),
+            "sha256": sha(image.code(site, 4)),
+        }
         if target in image.plt:
             imported_calls.append({**record, "import": image.plt[target]})
         elif target in FUNCTIONS:
@@ -277,74 +356,154 @@ def build_report(image):
     used_imports = {c["import"] for c in imported_calls}
     dynsym = image.elf.get_section_by_name(".dynsym")
     strings = []
-    for address in (0xBD7770, 0xBD7788, 0xB41CA0, 0xB42318, 0xB42300, 0xB42308,
-                    0xB42120, 0xB420A8, 0xB42128, 0xB42130, 0xB42138, 0xB42140,
-                    0xB42148, 0xB42150, 0xB42158, 0xB42160):
+    for address in (
+        0xBD7770,
+        0xBD7788,
+        0xB41CA0,
+        0xB42318,
+        0xB42300,
+        0xB42308,
+        0xB42120,
+        0xB420A8,
+        0xB42128,
+        0xB42130,
+        0xB42138,
+        0xB42140,
+        0xB42148,
+        0xB42150,
+        0xB42158,
+        0xB42160,
+    ):
         data = image.code(address, 256).split(b"\0", 1)[0]
-        strings.append({"text": data.decode("ascii"), **image.range_record(address, len(data) + 1)})
+        strings.append(
+            {"text": data.decode("ascii"), **image.range_record(address, len(data) + 1)}
+        )
     return {
         "schema": "rc2fx.offline-gui-audit.v1",
         "scope": "UI-B only; one frame and one input chain; no device I/O, firmware execution or emulation",
         "address_basis": "link-time ELF virtual addresses; apply no UI-A offsets; ASLR base unknown",
-        "identity": {"archive_sha256": image.archive_sha256, "member": "/usr/bin/rc_gui_juce",
-                     "gui_sha256": image.sha256, "gui_size": len(image.data),
-                     "machine": image.elf["e_machine"], "elf_type": image.elf["e_type"],
-                     "entry_va": hx(image.elf["e_entry"]),
-                     "rotation_member": None if image.rotation is None else {
-                         "bytes": image.rotation.hex(), "sha256": sha(image.rotation)}},
-        "host_tools": {"capstone": capstone.__version__, "pyelftools": elftools.__version__,
-                       "unicorn": "not used"},
-        "elf": {"needed": [t.needed for t in image.elf.get_section_by_name(".dynamic").iter_tags()
-                            if t.entry.d_tag == "DT_NEEDED"],
-                "has_symtab": image.elf.get_section_by_name(".symtab") is not None,
-                "dynsym_entries": dynsym.num_symbols(),
-                "defined_dynamic_functions": [s.name for s in dynsym.iter_symbols()
-                                              if s["st_info"]["type"] == "STT_FUNC" and s["st_shndx"] != "SHN_UNDEF"],
-                "unwind_fde_count": len(image.functions)},
+        "identity": {
+            "archive_sha256": image.archive_sha256,
+            "member": "/usr/bin/rc_gui_juce",
+            "gui_sha256": image.sha256,
+            "gui_size": len(image.data),
+            "machine": image.elf["e_machine"],
+            "elf_type": image.elf["e_type"],
+            "entry_va": hx(image.elf["e_entry"]),
+            "rotation_member": None
+            if image.rotation is None
+            else {"bytes": image.rotation.hex(), "sha256": sha(image.rotation)},
+        },
+        "host_tools": {
+            "capstone": capstone.__version__,
+            "pyelftools": elftools.__version__,
+            "unicorn": "not used",
+        },
+        "elf": {
+            "needed": [
+                t.needed
+                for t in image.elf.get_section_by_name(".dynamic").iter_tags()
+                if t.entry.d_tag == "DT_NEEDED"
+            ],
+            "has_symtab": image.elf.get_section_by_name(".symtab") is not None,
+            "dynsym_entries": dynsym.num_symbols(),
+            "defined_dynamic_functions": [
+                s.name
+                for s in dynsym.iter_symbols()
+                if s["st_info"]["type"] == "STT_FUNC" and s["st_shndx"] != "SHN_UNDEF"
+            ],
+            "unwind_fde_count": len(image.functions),
+        },
         "rtti": types,
-        "functions": [{"va": hx(a), "label_inferred": label, "extent_source": ".eh_frame FDE",
-                       "size": image.functions[a], "end_exclusive_va": hx(a + image.functions[a]),
-                       "file_offset": hx(image.file_offset(a)), "sha256": sha(image.code(a, image.functions[a])),
-                       "first_16_bytes": image.code(a, min(16, image.functions[a])).hex()}
-                      for a, label in sorted(FUNCTIONS.items())],
+        "functions": [
+            {
+                "va": hx(a),
+                "label_inferred": label,
+                "extent_source": ".eh_frame FDE",
+                "size": image.functions[a],
+                "end_exclusive_va": hx(a + image.functions[a]),
+                "file_offset": hx(image.file_offset(a)),
+                "sha256": sha(image.code(a, image.functions[a])),
+                "first_16_bytes": image.code(a, min(16, image.functions[a])).hex(),
+            }
+            for a, label in sorted(FUNCTIONS.items())
+        ],
         "imports": {name: image.plt_evidence[name] for name in sorted(used_imports)},
         "imported_calls_in_selected_functions": imported_calls,
         "direct_edges_between_selected_functions": local_edges,
         "strings": strings,
-        "data_constants": [image.range_record(0xBD7E50, 16), image.range_record(0xB423C0, 32),
-                           image.range_record(0xB411D0, 8), image.range_record(0xB303E8, 8)],
+        "data_constants": [
+            image.range_record(0xBD7E50, 16),
+            image.range_record(0xB423C0, 32),
+            image.range_record(0xB411D0, 8),
+            image.range_record(0xB303E8, 8),
+        ],
         "snippets": snippets,
         "boundary_annotations": [
-            {"sites": ["0x7e075c", "0x7e07cc"], "import": "read",
-             "observed": "x0 from WindowSystem+8; x1=sp+0x98; x2=0x18; type/code/value read at +16/+18/+20",
-             "uapi_interpretation": "one AArch64 Linux input_event, not an array batch; repeated calls drain/dispatch"},
-            {"sites": ["0x7cfd4c"], "import": "ioctl", "request": "0xc008561c",
-             "observed": "control id 0x00980922; value from rotation argument (fixed path 270)",
-             "uapi_interpretation": "VIDIOC_S_CTRL / V4L2_CID_ROTATE"},
-            {"sites": ["0x7cfdfc", "0x7cff00", "0x7d02d4"], "import": "ioctl", "request": "0xc0d05605",
-             "observed": "BA24=0x34324142; output width*4 stride; capture swaps dimensions for 90 or 270",
-             "uapi_interpretation": "VIDIOC_S_FMT, V4L2_PIX_FMT_ARGB32 (not the same naming convention as DRM XR24)"},
-            {"sites": ["0x7d0048"], "import": "mmap",
-             "observed": "x0=0, x1=queried output length, w2=3, w3=1, w4=video FD, w5=queried offset; result stored at global+0xb8 and returned to pixel-data object",
-             "uapi_interpretation": "PROT_READ|PROT_WRITE, MAP_SHARED; establishes mapping, not exclusive DMA ownership"},
-            {"sites": ["0x7d05bc", "0x7d0634"], "import": "ioctl", "request": "0xc058560f",
-             "observed": "first copy from global+0x60, substitute destination export FD at buffer+0x40; second copy from global+8",
-             "uapi_interpretation": "VIDIOC_QBUF: CAPTURE type1 DMABUF memory4, then OUTPUT type2 MMAP memory1"},
-            {"sites": ["0x7d0808", "0x7d081c"], "import": "ioctl", "request": "0xc0585611",
-             "observed": "capture then output dequeue after positive select; these return codes are not checked by the caller here",
-             "uapi_interpretation": "VIDIOC_DQBUF; only successful output dequeue is a candidate source restore boundary"},
-            {"sites": ["0x7d7770", "0x7d77a0", "0x7d7834"], "import": "drmIoctl",
-             "requests_in_site_order": ["0xc02064b2", "0xc01064b3", "0xc00c642d"],
-             "uapi_interpretation": "CREATE_DUMB (bpp32), MAP_DUMB, PRIME_HANDLE_TO_FD (flags0)"},
-            {"sites": ["0x7d77c4"], "import": "mmap",
-             "observed": "size from CREATE_DUMB; offset from MAP_DUMB; protection3; flags1; result saved at destination+0x18",
-             "uapi_interpretation": "shared read/write CPU mapping of a dumb buffer; no ownership conclusion"},
-            {"sites": ["0x7d7810"], "import": "drmModeAddFB2",
-             "observed": "dimensions from mode globals; format from global+0x130 (XR24=0x34325258); first handles/pitches from CREATE_DUMB; offsets zero; flags0",
-             "uapi_interpretation": "single-plane DRM_FORMAT_XRGB8888; byte order/driver acceptance still needs validation"},
-            {"sites": ["0x7d0ae4"], "import": "drmModeAtomicCommit",
-             "observed": "w0=DRM FD; x1=request; w2=1 or 0x401; x3=0; conversion has returned",
-             "uapi_interpretation": "PAGE_FLIP_EVENT, optionally ALLOW_MODESET; not NONBLOCK; not a pointer-bearing CPU-write API"},
+            {
+                "sites": ["0x7e075c", "0x7e07cc"],
+                "import": "read",
+                "observed": "x0 from WindowSystem+8; x1=sp+0x98; x2=0x18; type/code/value read at +16/+18/+20",
+                "uapi_interpretation": "one AArch64 Linux input_event, not an array batch; repeated calls drain/dispatch",
+            },
+            {
+                "sites": ["0x7cfd4c"],
+                "import": "ioctl",
+                "request": "0xc008561c",
+                "observed": "control id 0x00980922; value from rotation argument (fixed path 270)",
+                "uapi_interpretation": "VIDIOC_S_CTRL / V4L2_CID_ROTATE",
+            },
+            {
+                "sites": ["0x7cfdfc", "0x7cff00", "0x7d02d4"],
+                "import": "ioctl",
+                "request": "0xc0d05605",
+                "observed": "BA24=0x34324142; output width*4 stride; capture swaps dimensions for 90 or 270",
+                "uapi_interpretation": "VIDIOC_S_FMT, V4L2_PIX_FMT_ARGB32 (not the same naming convention as DRM XR24)",
+            },
+            {
+                "sites": ["0x7d0048"],
+                "import": "mmap",
+                "observed": "x0=0, x1=queried output length, w2=3, w3=1, w4=video FD, w5=queried offset; result stored at global+0xb8 and returned to pixel-data object",
+                "uapi_interpretation": "PROT_READ|PROT_WRITE, MAP_SHARED; establishes mapping, not exclusive DMA ownership",
+            },
+            {
+                "sites": ["0x7d05bc", "0x7d0634"],
+                "import": "ioctl",
+                "request": "0xc058560f",
+                "observed": "first copy from global+0x60, substitute destination export FD at buffer+0x40; second copy from global+8",
+                "uapi_interpretation": "VIDIOC_QBUF: CAPTURE type1 DMABUF memory4, then OUTPUT type2 MMAP memory1",
+            },
+            {
+                "sites": ["0x7d0808", "0x7d081c"],
+                "import": "ioctl",
+                "request": "0xc0585611",
+                "observed": "capture then output dequeue after positive select; these return codes are not checked by the caller here",
+                "uapi_interpretation": "VIDIOC_DQBUF; only successful output dequeue is a candidate source restore boundary",
+            },
+            {
+                "sites": ["0x7d7770", "0x7d77a0", "0x7d7834"],
+                "import": "drmIoctl",
+                "requests_in_site_order": ["0xc02064b2", "0xc01064b3", "0xc00c642d"],
+                "uapi_interpretation": "CREATE_DUMB (bpp32), MAP_DUMB, PRIME_HANDLE_TO_FD (flags0)",
+            },
+            {
+                "sites": ["0x7d77c4"],
+                "import": "mmap",
+                "observed": "size from CREATE_DUMB; offset from MAP_DUMB; protection3; flags1; result saved at destination+0x18",
+                "uapi_interpretation": "shared read/write CPU mapping of a dumb buffer; no ownership conclusion",
+            },
+            {
+                "sites": ["0x7d7810"],
+                "import": "drmModeAddFB2",
+                "observed": "dimensions from mode globals; format from global+0x130 (XR24=0x34325258); first handles/pitches from CREATE_DUMB; offsets zero; flags0",
+                "uapi_interpretation": "single-plane DRM_FORMAT_XRGB8888; byte order/driver acceptance still needs validation",
+            },
+            {
+                "sites": ["0x7d0ae4"],
+                "import": "drmModeAtomicCommit",
+                "observed": "w0=DRM FD; x1=request; w2=1 or 0x401; x3=0; conversion has returned",
+                "uapi_interpretation": "PAGE_FLIP_EVENT, optionally ALLOW_MODESET; not NONBLOCK; not a pointer-bearing CPU-write API",
+            },
         ],
         "interpretations_not_runtime_proofs": {
             "input": [
@@ -392,7 +551,9 @@ def build_report(image):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
-    parser.add_argument("--out", type=Path, help="new JSON file; existing files are never overwritten")
+    parser.add_argument(
+        "--out", type=Path, help="new JSON file; existing files are never overwritten"
+    )
     args = parser.parse_args(argv)
     try:
         report = build_report(GuiImage(args.archive))
